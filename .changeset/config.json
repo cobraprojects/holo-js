@@ -1,8 +1,5 @@
 {
-  "changelog": [
-    "@changesets/changelog-github",
-    { "repo": "cobraprojects/strata" }
-  ],
+  "changelog": false,
   "commit": false,
   "fixed": [
     [

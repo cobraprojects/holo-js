@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/cli",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Holo-JS Framework - project creation, discovery, and operational CLI",
   "type": "module",
   "license": "MIT",

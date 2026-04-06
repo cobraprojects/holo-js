@@ -80,7 +80,6 @@
     "clean": "rm -rf node_modules packages/*/node_modules apps/*/node_modules playground/node_modules packages/*/dist apps/*/dist playground/.output .nuxt apps/*/.nuxt playground/.nuxt"
   },
   "devDependencies": {
-    "@changesets/changelog-github": "^0.6.0",
     "@changesets/cli": "^2.30.0",
     "@eslint/js": "catalog:",
     "@types/better-sqlite3": "catalog:",

@@ -5,7 +5,6 @@
     "": {
       "name": "strata-monorepo",
       "devDependencies": {
-        "@changesets/changelog-github": "^0.6.0",
         "@changesets/cli": "^2.30.0",
         "@eslint/js": "catalog:",
         "@holo-js/cli": "workspace:*",
@@ -103,7 +102,7 @@
     },
     "packages/adapter-next": {
       "name": "@holo-js/adapter-next",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@holo-js/config": "workspace:*",
         "@holo-js/core": "workspace:*",
@@ -118,7 +117,7 @@
     },
     "packages/adapter-nuxt": {
       "name": "@holo-js/adapter-nuxt",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@holo-js/config": "workspace:*",
         "@holo-js/core": "workspace:*",
@@ -137,7 +136,7 @@
     },
     "packages/adapter-sveltekit": {
       "name": "@holo-js/adapter-sveltekit",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@holo-js/config": "workspace:*",
         "@holo-js/core": "workspace:*",
@@ -152,7 +151,7 @@
     },
     "packages/cli": {
       "name": "@holo-js/cli",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "bin": {
         "holo": "./dist/bin/holo.mjs",
         "holo-js": "./dist/bin/holo.mjs",
@@ -175,7 +174,7 @@
     },
     "packages/config": {
       "name": "@holo-js/config",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@holo-js/db": "workspace:*",
         "@holo-js/queue": "workspace:*",
@@ -188,7 +187,7 @@
     },
     "packages/core": {
       "name": "@holo-js/core",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@holo-js/config": "workspace:*",
         "@holo-js/db": "workspace:*",
@@ -207,7 +206,7 @@
     },
     "packages/create-holo-js": {
       "name": "create-holo-js",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "bin": {
         "create-holo-js": "./dist/bin/create-holo-js.mjs",
       },
@@ -222,7 +221,7 @@
     },
     "packages/db": {
       "name": "@holo-js/db",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "better-sqlite3": "catalog:",
         "mysql2": "^3.17.1",
@@ -239,7 +238,7 @@
     },
     "packages/events": {
       "name": "@holo-js/events",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@holo-js/db": "workspace:*",
         "@holo-js/queue": "workspace:*",
@@ -253,7 +252,7 @@
     },
     "packages/forms": {
       "name": "@holo-js/forms",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@holo-js/validation": "workspace:*",
       },
@@ -266,7 +265,7 @@
     },
     "packages/media": {
       "name": "@holo-js/media",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@holo-js/db": "workspace:*",
         "@holo-js/queue": "workspace:*",
@@ -281,7 +280,7 @@
     },
     "packages/queue": {
       "name": "@holo-js/queue",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "bullmq": "^5.71.0",
       },
@@ -294,7 +293,7 @@
     },
     "packages/queue-db": {
       "name": "@holo-js/queue-db",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@holo-js/db": "workspace:*",
         "@holo-js/queue": "workspace:*",
@@ -308,7 +307,7 @@
     },
     "packages/storage": {
       "name": "@holo-js/storage",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "@holo-js/config": "workspace:*",
       },
@@ -321,7 +320,7 @@
     },
     "packages/validation": {
       "name": "@holo-js/validation",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "dependencies": {
         "valibot": "^1.1.0",
       },
@@ -471,8 +470,6 @@
 
     "@changesets/changelog-git": ["@changesets/changelog-git@0.2.1", "", { "dependencies": { "@changesets/types": "^6.1.0" } }, "sha512-x/xEleCFLH28c3bQeQIyeZf8lFXyDFVn1SgcBiR2Tw/r4IAWlk1fzxCEZ6NxQAjF2Nwtczoen3OA2qR+UawQ8Q=="],
 
-    "@changesets/changelog-github": ["@changesets/changelog-github@0.6.0", "", { "dependencies": { "@changesets/get-github-info": "^0.8.0", "@changesets/types": "^6.1.0", "dotenv": "^8.1.0" } }, "sha512-wA2/y4hR/A1K411cCT75rz0d46Iezxp1WYRFoFJDIUpkQ6oDBAIUiU7BZkDCmYgz0NBl94X1lgcZO+mHoiHnFg=="],
-
     "@changesets/cli": ["@changesets/cli@2.30.0", "", { "dependencies": { "@changesets/apply-release-plan": "^7.1.0", "@changesets/assemble-release-plan": "^6.0.9", "@changesets/changelog-git": "^0.2.1", "@changesets/config": "^3.1.3", "@changesets/errors": "^0.2.0", "@changesets/get-dependents-graph": "^2.1.3", "@changesets/get-release-plan": "^4.0.15", "@changesets/git": "^3.0.4", "@changesets/logger": "^0.1.1", "@changesets/pre": "^2.0.2", "@changesets/read": "^0.6.7", "@changesets/should-skip-package": "^0.1.2", "@changesets/types": "^6.1.0", "@changesets/write": "^0.4.0", "@inquirer/external-editor": "^1.0.2", "@manypkg/get-packages": "^1.1.3", "ansi-colors": "^4.1.3", "enquirer": "^2.4.1", "fs-extra": "^7.0.1", "mri": "^1.2.0", "package-manager-detector": "^0.2.0", "picocolors": "^1.1.0", "resolve-from": "^5.0.0", "semver": "^7.5.3", "spawndamnit": "^3.0.1", "term-size": "^2.1.0" }, "bin": { "changeset": "bin.js" } }, "sha512-5D3Nk2JPqMI1wK25pEymeWRSlSMdo5QOGlyfrKg0AOufrUcjEE3RQgaCpHoBiM31CSNrtSgdJ0U6zL1rLDDfBA=="],
 
     "@changesets/config": ["@changesets/config@3.1.3", "", { "dependencies": { "@changesets/errors": "^0.2.0", "@changesets/get-dependents-graph": "^2.1.3", "@changesets/logger": "^0.1.1", "@changesets/should-skip-package": "^0.1.2", "@changesets/types": "^6.1.0", "@manypkg/get-packages": "^1.1.3", "fs-extra": "^7.0.1", "micromatch": "^4.0.8" } }, "sha512-vnXjcey8YgBn2L1OPWd3ORs0bGC4LoYcK/ubpgvzNVr53JXV5GiTVj7fWdMRsoKUH7hhhMAQnsJUqLr21EncNw=="],
@@ -480,8 +477,6 @@
     "@changesets/errors": ["@changesets/errors@0.2.0", "", { "dependencies": { "extendable-error": "^0.1.5" } }, "sha512-6BLOQUscTpZeGljvyQXlWOItQyU71kCdGz7Pi8H8zdw6BI0g3m43iL4xKUVPWtG+qrrL9DTjpdn8eYuCQSRpow=="],
 
     "@changesets/get-dependents-graph": ["@changesets/get-dependents-graph@2.1.3", "", { "dependencies": { "@changesets/types": "^6.1.0", "@manypkg/get-packages": "^1.1.3", "picocolors": "^1.1.0", "semver": "^7.5.3" } }, "sha512-gphr+v0mv2I3Oxt19VdWRRUxq3sseyUpX9DaHpTUmLj92Y10AGy+XOtV+kbM6L/fDcpx7/ISDFK6T8A/P3lOdQ=="],
-
-    "@changesets/get-github-info": ["@changesets/get-github-info@0.8.0", "", { "dependencies": { "dataloader": "^1.4.0", "node-fetch": "^2.5.0" } }, "sha512-cRnC+xdF0JIik7coko3iUP9qbnfi1iJQ3sAa6dE+Tx3+ET8bjFEm63PA4WEohgjYcmsOikPHWzPsMWWiZmntOQ=="],
 
     "@changesets/get-release-plan": ["@changesets/get-release-plan@4.0.15", "", { "dependencies": { "@changesets/assemble-release-plan": "^6.0.9", "@changesets/config": "^3.1.3", "@changesets/pre": "^2.0.2", "@changesets/read": "^0.6.7", "@changesets/types": "^6.1.0", "@manypkg/get-packages": "^1.1.3" } }, "sha512-Q04ZaRPuEVZtA+auOYgFaVQQSA98dXiVe/yFaZfY7hoSmQICHGvP0TF4u3EDNHWmmCS4ekA/XSpKlSM2PyTS2g=="],
 
@@ -1381,8 +1376,6 @@
 
     "csstype": ["csstype@3.2.3", "", {}, "sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ=="],
 
-    "dataloader": ["dataloader@1.4.0", "", {}, "sha512-68s5jYdlvasItOJnCuI2Q9s4q98g0pCyL3HrcKJu8KNugUl8ahgmZYg38ysLTgQjjXX3H8CJLkAvWrclWfcalw=="],
-
     "db0": ["db0@0.3.4", "", { "peerDependencies": { "@electric-sql/pglite": "*", "@libsql/client": "*", "better-sqlite3": "*", "drizzle-orm": "*", "mysql2": "*", "sqlite3": "*" }, "optionalPeers": ["@electric-sql/pglite", "@libsql/client", "better-sqlite3", "drizzle-orm", "mysql2", "sqlite3"] }, "sha512-RiXXi4WaNzPTHEOu8UPQKMooIbqOEyqA1t7Z6MsdxSCeb8iUC9ko3LcmsLmeUt2SM5bctfArZKkRQggKZz7JNw=="],
 
     "debug": ["debug@4.4.3", "", { "dependencies": { "ms": "^2.1.3" } }, "sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA=="],
@@ -1437,7 +1430,7 @@
 
     "dot-prop": ["dot-prop@10.1.0", "", { "dependencies": { "type-fest": "^5.0.0" } }, "sha512-MVUtAugQMOff5RnBy2d9N31iG0lNwg1qAoAOn7pOK5wf94WIaE3My2p3uwTQuvS2AcqchkcR3bHByjaM0mmi7Q=="],
 
-    "dotenv": ["dotenv@8.6.0", "", {}, "sha512-IrPdXQsk2BbzvCBGBOTmmSH5SodmqZNt4ERAZDmW4CT+tL8VtvinqywuANaFu4bOMWki16nqf0e4oC0QIaDr/g=="],
+    "dotenv": ["dotenv@17.3.1", "", {}, "sha512-IO8C/dzEb6O3F9/twg6ZLXz164a2fhTnEWb95H23Dm4OuN+92NmEAlTrupP9VW6Jm3sO26tQlqyvyi4CsnY9GA=="],
 
     "duplexer": ["duplexer@0.1.2", "", {}, "sha512-jtD6YG370ZCIi/9GTaJKQxWTZD045+4R4hTk/x1UyoqadyJ9x9CgSi1RlVDQF8U2sxLLSnFkCaMihqljHIWgMg=="],
 
@@ -2622,8 +2615,6 @@
     "bullmq/uuid": ["uuid@11.1.0", "", { "bin": { "uuid": "dist/esm/bin/uuid" } }, "sha512-0/A9rDy9P7cJ+8w1c9WD9V//9Wj15Ce2MPz8Ri6032usz+NfePxx5AcN3bN+r6ZL6jEo066/yNYB3tn4pQEx+A=="],
 
     "c12/chokidar": ["chokidar@5.0.0", "", { "dependencies": { "readdirp": "^5.0.0" } }, "sha512-TQMmc3w+5AxjpL8iIiwebF73dRDF4fBIieAqGn9RGCWaEVwQ6Fb2cGe31Yns0RRIzii5goJ1Y7xbMwo1TxMplw=="],
-
-    "c12/dotenv": ["dotenv@17.3.1", "", {}, "sha512-IO8C/dzEb6O3F9/twg6ZLXz164a2fhTnEWb95H23Dm4OuN+92NmEAlTrupP9VW6Jm3sO26tQlqyvyi4CsnY9GA=="],
 
     "c12/giget": ["giget@2.0.0", "", { "dependencies": { "citty": "^0.1.6", "consola": "^3.4.0", "defu": "^6.1.4", "node-fetch-native": "^1.6.6", "nypm": "^0.6.0", "pathe": "^2.0.3" }, "bin": { "giget": "dist/cli.mjs" } }, "sha512-L5bGsVkxJbJgdnwyuheIunkGatUF/zssUoxxjACCseZYAVbaqdh9Tsmmlkl8vYan09H7sbvKt4pS8GqKLBrEzA=="],
 

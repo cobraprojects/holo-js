@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/queue-db",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Holo-JS Framework - DB-backed integrations for @holo-js/queue",
   "type": "module",
   "license": "MIT",
