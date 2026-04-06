@@ -29,18 +29,29 @@ across database drivers, storage drivers, and deployment targets.
 Interactive:
 
 ```bash
-bunx holo-js new my-app
+bun create holo-js my-app
 ```
 
 Non-interactive:
 
 ```bash
-bunx holo-js new my-app \
+bun create holo-js my-app \
   --framework next \
   --database sqlite \
   --package-manager bun \
   --storage-default-disk public
 ```
+
+Equivalent create-package entrypoints:
+
+```bash
+npm create holo-js@latest my-app
+bunx create-holo-js my-app
+```
+
+Do not use `bunx create holo-js`.
+`bunx` treats `create` as the package name in that form, so it installs and runs the npm package named `create`
+instead of resolving `create-holo-js`.
 
 That scaffold writes the framework glue once. After that, the user-facing setup surface is:
 

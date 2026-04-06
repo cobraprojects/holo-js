@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/adapter-nuxt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Holo-JS Framework - Nuxt adapter",
   "type": "module",
   "license": "MIT",
@@ -30,18 +30,18 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@nuxt/kit": "catalog:",
-    "@holo-js/config": "workspace:*",
-    "@holo-js/core": "workspace:*",
-    "@holo-js/db": "workspace:*",
-    "@holo-js/forms": "workspace:*",
-    "@holo-js/storage": "workspace:*"
+    "@nuxt/kit": "^4.0.0",
+    "@holo-js/config": "^0.1.1",
+    "@holo-js/core": "^0.1.1",
+    "@holo-js/db": "^0.1.1",
+    "@holo-js/forms": "^0.1.1",
+    "@holo-js/storage": "^0.1.1"
   },
   "devDependencies": {
-    "@nuxt/module-builder": "catalog:",
-    "@types/node": "catalog:",
-    "nuxt": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "@nuxt/module-builder": "^1.0.2",
+    "@types/node": "^22.10.2",
+    "nuxt": "^4.0.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }

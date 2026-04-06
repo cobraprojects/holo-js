@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/media",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Holo-JS Framework - media collections and conversions for Holo-JS models",
   "type": "module",
   "license": "MIT",
@@ -22,14 +22,14 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/db": "workspace:*",
-    "@holo-js/queue": "workspace:*",
-    "@holo-js/storage": "workspace:*",
+    "@holo-js/db": "^0.1.1",
+    "@holo-js/queue": "^0.1.1",
+    "@holo-js/storage": "^0.1.1",
     "sharp": "^0.34.4"
   },
   "devDependencies": {
-    "tsup": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }

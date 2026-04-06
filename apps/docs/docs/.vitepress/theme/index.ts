@@ -4,27 +4,59 @@ import { defineComponent, h, nextTick, onMounted, watch } from 'vue'
 
 import './custom.css'
 
-const FRAMEWORK_TABS = new Set(['Next.js', 'Nuxt', 'SvelteKit'])
-const FRAMEWORK_TAB_STORAGE_KEY = 'holo-docs-framework-tab'
-let isSyncingFrameworkTabs = false
+const TAB_GROUPS = [
+  {
+    storageKey: 'holo-docs-framework-tab',
+    tabs: ['Next.js', 'Nuxt', 'SvelteKit'],
+  },
+  {
+    storageKey: 'holo-docs-package-manager-tab',
+    tabs: ['Bun', 'npm', 'pnpm', 'Yarn', 'Direct'],
+  },
+] as const
 
-function normalizeFrameworkTab(title: string | null | undefined): string | null {
+type TabGroup = typeof TAB_GROUPS[number]
+
+let isSyncingTabs = false
+
+function normalizeTab(title: string | null | undefined, group: TabGroup): string | null {
   if (!title) {
     return null
   }
 
-  for (const framework of FRAMEWORK_TABS) {
-    if (title === framework || title.startsWith(`${framework} `)) {
-      return framework
+  for (const tab of group.tabs) {
+    if (
+      title === tab
+      || title.startsWith(`${tab} `)
+      || title.startsWith(`${tab} -`)
+      || title.startsWith(`${tab} —`)
+    ) {
+      return tab
     }
   }
 
   return null
 }
 
-function setCodeGroupTab(group: Element, framework: string): void {
-  const labels = Array.from(group.querySelectorAll<HTMLLabelElement>('.tabs label'))
-  const matchedLabel = labels.find((label) => normalizeFrameworkTab(label.dataset.title ?? label.textContent) === framework)
+function getCodeGroupLabels(group: Element): HTMLLabelElement[] {
+  return Array.from(group.querySelectorAll<HTMLLabelElement>('.tabs label'))
+}
+
+function getMatchingTabGroup(group: Element): TabGroup | null {
+  const labels = getCodeGroupLabels(group)
+
+  for (const tabGroup of TAB_GROUPS) {
+    if (labels.some((label) => normalizeTab(label.dataset.title ?? label.textContent, tabGroup))) {
+      return tabGroup
+    }
+  }
+
+  return null
+}
+
+function setCodeGroupTab(group: Element, tabGroup: TabGroup, tab: string): void {
+  const labels = getCodeGroupLabels(group)
+  const matchedLabel = labels.find((label) => normalizeTab(label.dataset.title ?? label.textContent, tabGroup) === tab)
 
   if (!matchedLabel) {
     return
@@ -45,9 +77,13 @@ function setCodeGroupTab(group: Element, framework: string): void {
   input.checked = true
 }
 
-function syncFrameworkTabs(framework: string): void {
+function syncTabs(tabGroup: TabGroup, tab: string): void {
   document.querySelectorAll('.vp-code-group').forEach((group) => {
-    setCodeGroupTab(group, framework)
+    if (getMatchingTabGroup(group) !== tabGroup) {
+      return
+    }
+
+    setCodeGroupTab(group, tabGroup, tab)
   })
 }
 
@@ -56,16 +92,18 @@ const ThemeLayout = defineComponent({
   setup() {
     const route = useRoute()
 
-    const applyStoredFramework = () => {
-      const stored = window.localStorage.getItem(FRAMEWORK_TAB_STORAGE_KEY)
+    const applyStoredTabs = () => {
+      for (const tabGroup of TAB_GROUPS) {
+        const stored = window.localStorage.getItem(tabGroup.storageKey)
 
-      if (stored) {
-        syncFrameworkTabs(stored)
+        if (stored) {
+          syncTabs(tabGroup, stored)
+        }
       }
     }
 
     const handleChange = (event: Event) => {
-      if (isSyncingFrameworkTabs) {
+      if (isSyncingTabs) {
         return
       }
 
@@ -80,32 +118,44 @@ const ThemeLayout = defineComponent({
       }
 
       const label = document.querySelector<HTMLLabelElement>(`label[for="${CSS.escape(target.id)}"]`)
-      const framework = normalizeFrameworkTab(label?.dataset.title ?? label?.textContent)
+      const group = target.closest('.vp-code-group')
 
-      if (!framework) {
+      if (!group) {
         return
       }
 
-      window.localStorage.setItem(FRAMEWORK_TAB_STORAGE_KEY, framework)
-      isSyncingFrameworkTabs = true
+      const tabGroup = getMatchingTabGroup(group)
+
+      if (!tabGroup) {
+        return
+      }
+
+      const tab = normalizeTab(label?.dataset.title ?? label?.textContent, tabGroup)
+
+      if (!tab) {
+        return
+      }
+
+      window.localStorage.setItem(tabGroup.storageKey, tab)
+      isSyncingTabs = true
 
       try {
-        syncFrameworkTabs(framework)
+        syncTabs(tabGroup, tab)
       }
       finally {
-        isSyncingFrameworkTabs = false
+        isSyncingTabs = false
       }
     }
 
     onMounted(() => {
-      applyStoredFramework()
+      applyStoredTabs()
       document.addEventListener('change', handleChange)
 
       watch(
         () => route.path,
         async () => {
           await nextTick()
-          applyStoredFramework()
+          applyStoredTabs()
         },
       )
     })

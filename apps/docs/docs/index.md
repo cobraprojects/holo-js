@@ -22,12 +22,33 @@ seeders, storage, media, and typed runtime access. Nuxt, Next.js, and SvelteKit 
 rendering, and deployment output. The result is a configurable backend layer that stays flexible across
 database drivers, storage drivers, and hosting targets.
 
-```bash
-bunx @holo-js/cli new my-app
+::: code-group
 
+```bash [Bun]
+bun create holo-js my-app
 cd my-app
-holo dev
+bun run dev
 ```
+
+```bash [npm]
+npm create holo-js@latest my-app
+cd my-app
+npm run dev
+```
+
+```bash [pnpm]
+pnpm create holo-js@latest my-app
+cd my-app
+pnpm dev
+```
+
+```bash [Yarn]
+yarn create holo-js my-app
+cd my-app
+yarn dev
+```
+
+:::
 
 ```ts
 // config/database.ts
@@ -83,7 +104,7 @@ If you are contributing to the framework packages inside this repository, use:
 
 ## Backend workflow
 
-- `@holo-js/cli new` scaffolds the project and asks for framework, database, package manager, and storage defaults.
+- `bun create holo-js` scaffolds the project and asks for framework, database, package manager, and storage defaults.
 - `holo prepare` scans Holo-JS-owned directories and regenerates typed registries under `.holo-js/generated`.
 - `config/queue.ts` is scaffolded by default and starts on the `sync` driver.
 - `holo dev` reruns discovery, watches Holo-JS files, and then starts the selected framework.

@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Holo-JS Framework - Portable runtime core",
   "type": "module",
   "license": "MIT",
@@ -28,18 +28,18 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "workspace:*",
-    "@holo-js/db": "workspace:*",
-    "@holo-js/events": "workspace:*",
-    "@holo-js/queue": "workspace:*",
-    "@holo-js/queue-db": "workspace:*",
-    "@holo-js/storage": "workspace:*",
-    "esbuild": "catalog:"
+    "@holo-js/config": "^0.1.1",
+    "@holo-js/db": "^0.1.1",
+    "@holo-js/events": "^0.1.1",
+    "@holo-js/queue": "^0.1.1",
+    "@holo-js/queue-db": "^0.1.1",
+    "@holo-js/storage": "^0.1.1",
+    "esbuild": "^0.27.4"
   },
   "devDependencies": {
-    "@types/node": "catalog:",
-    "tsup": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }

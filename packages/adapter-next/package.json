@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/adapter-next",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Holo-JS Framework - Next.js adapter",
   "type": "module",
   "license": "MIT",
@@ -28,14 +28,14 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "workspace:*",
-    "@holo-js/core": "workspace:*",
-    "@holo-js/forms": "workspace:*"
+    "@holo-js/config": "^0.1.1",
+    "@holo-js/core": "^0.1.1",
+    "@holo-js/forms": "^0.1.1"
   },
   "devDependencies": {
-    "@types/node": "catalog:",
-    "tsup": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }

@@ -1,8 +1,8 @@
 # Installation
 
-The primary installation path is `@holo-js/cli new`. It creates the project, asks the setup questions up
-front, writes the hidden framework glue once, and leaves the user with configurable server-side config files plus
-Holo-JS-owned server directories.
+The primary installation path is the package manager's `create` flow. It creates the project, asks the setup
+questions up front, writes the hidden framework glue once, and leaves the user with configurable server-side config
+files plus Holo-JS-owned server directories.
 
 ## Requirements
 
@@ -13,9 +13,29 @@ Holo-JS-owned server directories.
 
 ## Create a project interactively
 
-```bash
-bunx @holo-js/cli new my-app
+::: code-group
+
+```bash [Bun]
+bun create holo-js my-app
 ```
+
+```bash [npm]
+npm create holo-js@latest my-app
+```
+
+```bash [pnpm]
+pnpm create holo-js@latest my-app
+```
+
+```bash [Yarn]
+yarn create holo-js my-app
+```
+
+```bash [Direct]
+bunx create-holo-js my-app
+```
+
+:::
 
 The interactive flow asks for:
 
@@ -28,14 +48,58 @@ The interactive flow asks for:
 
 ## Create a project non-interactively
 
-```bash
-bunx @holo-js/cli new my-app \
+::: code-group
+
+```bash [Bun]
+bun create holo-js my-app \
   --framework next \
   --database sqlite \
   --package-manager bun \
   --storage-default-disk public \
   --package forms,validation
 ```
+
+```bash [npm]
+npm create holo-js@latest my-app -- \
+  --framework next \
+  --database sqlite \
+  --package-manager npm \
+  --storage-default-disk public \
+  --package forms,validation
+```
+
+```bash [pnpm]
+pnpm create holo-js@latest my-app -- \
+  --framework next \
+  --database sqlite \
+  --package-manager pnpm \
+  --storage-default-disk public \
+  --package forms,validation
+```
+
+```bash [Yarn]
+yarn create holo-js my-app \
+  --framework next \
+  --database sqlite \
+  --package-manager yarn \
+  --storage-default-disk public \
+  --package forms,validation
+```
+
+```bash [Direct]
+bunx create-holo-js my-app \
+  --framework next \
+  --database sqlite \
+  --package-manager bun \
+  --storage-default-disk public \
+  --package forms,validation
+```
+
+:::
+
+Do not use `bunx create holo-js`.
+`bunx` treats `create` as the package name in that form, so it installs and runs the npm package named `create`
+instead of resolving `create-holo-js`.
 
 Use the non-interactive flags for CI, templates, or internal automation.
 
@@ -51,7 +115,7 @@ The generated project contains:
 - canonical Holo-JS directories such as `server/models`, `server/db`, `server/commands`, `server/jobs`, `server/events`, and `server/listeners`
 - first-party queue scaffold including `config/queue.ts` with `sync` as the default driver
 - machine-owned generated output under `.holo-js/generated`
-- `holo:dev` and `holo:build` scripts wired to the selected framework
+- framework lifecycle scripts such as `dev` and `build`
 
 The generated framework glue is not the user-edited setup surface. After scaffolding, the normal places
 to work are:
@@ -73,7 +137,7 @@ bun install
 bun run dev
 ```
 
-`holo dev` already runs discovery first, refreshes `.holo-js/generated`, watches relevant files, and then
+`bun run dev` already runs discovery first, refreshes `.holo-js/generated`, watches relevant files, and then
 starts Nuxt, Next.js, or SvelteKit. Run `holo prepare` directly only when you want to regenerate discovery
 artifacts without starting the dev server.
 
@@ -81,24 +145,59 @@ artifacts without starting the dev server.
 
 Use normal package scripts for framework lifecycle commands:
 
-```bash
+::: code-group
+
+```bash [Bun]
 bun run dev
 bun run build
 ```
 
+```bash [npm]
+npm run dev
+npm run build
+```
+
+```bash [pnpm]
+pnpm dev
+pnpm build
+```
+
+```bash [Yarn]
+yarn dev
+yarn build
+```
+
+:::
+
 Use your package manager's exec wrapper for direct Holo-JS CLI commands:
 
-```bash
+::: code-group
+
+```bash [Bun]
 bunx holo make:model User
 bunx holo migrate
 bunx holo seed
 ```
 
-Equivalent forms:
+```bash [npm]
+npx holo make:model User
+npx holo migrate
+npx holo seed
+```
 
-- `npx holo ...`
-- `pnpm dlx holo ...`
-- `yarn dlx holo ...`
+```bash [pnpm]
+pnpm dlx holo make:model User
+pnpm dlx holo migrate
+pnpm dlx holo seed
+```
+
+```bash [Yarn]
+yarn dlx holo make:model User
+yarn dlx holo migrate
+yarn dlx holo seed
+```
+
+:::
 
 `holo ...` by itself is not expected to be on your global shell path unless you install it globally.
 
