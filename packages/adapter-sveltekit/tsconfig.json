@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "baseUrl": ".",
+    "paths": {
+      "@holo-js/forms": ["../forms/src/index.ts"],
+      "@holo-js/forms/client": ["../forms/src/client.ts"],
+      "@holo-js/validation": ["../validation/src/index.ts"]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.d.ts",
+    "tests/**/*.ts"
+  ]
+}

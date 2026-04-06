@@ -1,0 +1,16 @@
+{
+  "name": "docs-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Holo-JS Framework - multi-framework documentation site",
+  "scripts": {
+    "dev": "vitepress dev docs --host",
+    "build": "vitepress build docs",
+    "preview": "vitepress preview docs"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitepress": "catalog:"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "name": "@holo-js/cli",
+  "version": "0.0.0",
+  "description": "Holo-JS Framework - project creation, discovery, and operational CLI",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "holo": "./dist/bin/holo.mjs",
+    "holo-js": "./dist/bin/holo.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "stub": "tsup --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest --run"
+  },
+  "dependencies": {
+    "@holo-js/config": "workspace:*",
+    "@holo-js/core": "workspace:*",
+    "@holo-js/db": "workspace:*",
+    "@holo-js/events": "workspace:*",
+    "@holo-js/queue": "workspace:*",
+    "@holo-js/queue-db": "workspace:*",
+    "esbuild": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

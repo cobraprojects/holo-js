@@ -1,0 +1,13 @@
+import { configureStorageRuntime, type StorageBackend } from '@holo-js/storage/runtime'
+import type { HoloStorageRuntimeConfig } from '@holo-js/storage'
+import { useRuntimeConfig, useStorage as useNitroStorage } from '#imports'
+
+export default defineNitroPlugin(() => {
+  configureStorageRuntime({
+    getRuntimeConfig: () => useRuntimeConfig() as {
+      holoStorage: HoloStorageRuntimeConfig
+      holo?: { appUrl?: string }
+    },
+    getStorage: (base: string) => useNitroStorage(base) as StorageBackend,
+  })
+})

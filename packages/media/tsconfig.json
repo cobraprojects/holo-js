@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "outDir": "./dist",
+    "declaration": true,
+    "declarationMap": true,
+    "paths": {
+      "@holo-js/db": [
+        "../db/src/index.ts"
+      ],
+      "@holo-js/queue": [
+        "../queue/src/index.ts"
+      ],
+      "@holo-js/storage/runtime": [
+        "../storage/src/runtime/composables/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*",
+    "tests/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

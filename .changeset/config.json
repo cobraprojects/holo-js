@@ -1,0 +1,37 @@
+{
+  "changelog": [
+    "@changesets/changelog-github",
+    { "repo": "cobraprojects/strata" }
+  ],
+  "commit": false,
+  "fixed": [
+    [
+      "create-holo-js",
+      "@holo-js/cli",
+      "@holo-js/adapter-next",
+      "@holo-js/adapter-nuxt",
+      "@holo-js/adapter-sveltekit",
+      "@holo-js/config",
+      "@holo-js/core",
+      "@holo-js/db",
+      "@holo-js/events",
+      "@holo-js/forms",
+      "@holo-js/media",
+      "@holo-js/queue",
+      "@holo-js/queue-db",
+      "@holo-js/storage",
+      "@holo-js/validation"
+    ]
+  ],
+  "linked": [],
+  "access": "public",
+  "baseBranch": "main",
+  "updateInternalDependencies": "patch",
+  "ignore": [
+    "playground",
+    "docs-app",
+    "next_test_app",
+    "nuxt_test_app",
+    "svelte_test_app"
+  ]
+}

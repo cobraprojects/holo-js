@@ -1,0 +1,45 @@
+{
+  "name": "@holo-js/core",
+  "version": "0.0.0",
+  "description": "Holo-JS Framework - Portable runtime core",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "import": "./dist/runtime/index.mjs",
+      "default": "./dist/runtime/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "stub": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest --run"
+  },
+  "dependencies": {
+    "@holo-js/config": "workspace:*",
+    "@holo-js/db": "workspace:*",
+    "@holo-js/events": "workspace:*",
+    "@holo-js/queue": "workspace:*",
+    "@holo-js/queue-db": "workspace:*",
+    "@holo-js/storage": "workspace:*",
+    "esbuild": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

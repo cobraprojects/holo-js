@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "baseUrl": ".",
+    "paths": {
+      "@holo-js/config": ["../config/src/index.ts"],
+      "@holo-js/db": ["../db/src/index.ts"],
+      "@holo-js/events": ["../events/src/index.ts"],
+      "@holo-js/queue": ["../queue/src/index.ts"],
+      "@holo-js/queue-db": ["../queue-db/src/index.ts"]
+    }
+  },
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

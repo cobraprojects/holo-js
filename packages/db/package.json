@@ -1,0 +1,38 @@
+{
+  "name": "@holo-js/db",
+  "version": "0.0.0",
+  "description": "Holo-JS Framework - portable database, ORM, migrations, factories, and seeders",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "stub": "tsup --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest --run"
+  },
+  "dependencies": {
+    "better-sqlite3": "catalog:",
+    "mysql2": "^3.17.1",
+    "pg": "^8.13.0",
+    "ulid": "catalog:",
+    "uuid": "catalog:"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "catalog:",
+    "@types/pg": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:"
+  }
+}

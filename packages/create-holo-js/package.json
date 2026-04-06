@@ -1,0 +1,29 @@
+{
+  "name": "create-holo-js",
+  "version": "0.0.0",
+  "description": "Holo-JS project scaffolder",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "create-holo-js": "./dist/bin/create-holo-js.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "stub": "tsup --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@holo-js/cli": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

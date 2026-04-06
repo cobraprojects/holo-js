@@ -1,0 +1,53 @@
+# Dependencies
+node_modules
+bun.lockb
+
+# Build outputs
+dist
+packages/core/src/runtime/*.d.ts
+packages/core/src/runtime/*.mjs
+*.log
+
+# Nuxt
+.nuxt
+.output
+.nitro
+
+# VitePress
+apps/docs/docs/.vitepress/cache
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Holo-JS CLI generated
+.holo-js
+.holo-cli
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+
+# Testing
+coverage
+.nyc_output
+.vitest-builds
+/docs
+/apps/Nuxt_test_app
+/apps/Next_test_app
+/apps/svelte_test_app
