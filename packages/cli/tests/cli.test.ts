@@ -444,8 +444,6 @@ export default {
       'postgres',
       '--package-manager',
       'pnpm',
-      '--storage-default-disk',
-      'public',
     ])
 
     expect(result.status).toBe(0)
@@ -472,29 +470,29 @@ export default {
         'react': '^19.0.0',
         'react-dom': '^19.0.0',
         '@holo-js/adapter-next': expectedHoloPackageRange,
-        '@holo-js/events': expectedHoloPackageRange,
-        '@holo-js/queue': expectedHoloPackageRange,
+        '@holo-js/cli': expectedHoloPackageRange,
+        '@holo-js/config': expectedHoloPackageRange,
+        '@holo-js/core': expectedHoloPackageRange,
+        '@holo-js/db': expectedHoloPackageRange,
       },
     })
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('.env.production')
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('DB_PASSWORD=')
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('DB_DRIVER=postgres')
-    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('STORAGE_DEFAULT_DISK=public')
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).not.toContain('STORAGE_DEFAULT_DISK=')
     expect(await readFile(join(projectRoot, 'config/app.ts'), 'utf8')).toContain('server/models')
     expect(await readFile(join(projectRoot, 'config/app.ts'), 'utf8')).toContain('server/jobs')
     expect(await readFile(join(projectRoot, 'config/app.ts'), 'utf8')).toContain('server/events')
     expect(await readFile(join(projectRoot, 'config/app.ts'), 'utf8')).toContain('server/listeners')
     expect(await readFile(join(projectRoot, 'config/database.ts'), 'utf8')).toContain('driver: \'postgres\'')
-    expect(await readFile(join(projectRoot, 'config/queue.ts'), 'utf8')).toContain('defineQueueConfig')
-    expect(await readFile(join(projectRoot, 'config/queue.ts'), 'utf8')).toContain('default: \'sync\'')
-    expect(await readFile(join(projectRoot, 'config/queue.ts'), 'utf8')).toContain('connection: \'main\'')
-    expect(await readFile(join(projectRoot, 'config/storage.ts'), 'utf8')).toContain('defineStorageConfig')
-    expect(await readFile(join(projectRoot, 'config/media.ts'), 'utf8')).toContain('defineMediaConfig')
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).not.toContain('REDIS_HOST=')
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).not.toContain('REDIS_HOST=')
-    await expect(stat(join(projectRoot, 'server/jobs'))).resolves.toBeDefined()
-    await expect(stat(join(projectRoot, 'server/events'))).resolves.toBeDefined()
-    await expect(stat(join(projectRoot, 'server/listeners'))).resolves.toBeDefined()
+    await expect(stat(join(projectRoot, 'config/queue.ts'))).rejects.toThrow()
+    await expect(stat(join(projectRoot, 'config/storage.ts'))).rejects.toThrow()
+    await expect(stat(join(projectRoot, 'config/media.ts'))).rejects.toThrow()
+    await expect(stat(join(projectRoot, 'server/jobs'))).rejects.toThrow()
+    await expect(stat(join(projectRoot, 'server/events'))).rejects.toThrow()
+    await expect(stat(join(projectRoot, 'server/listeners'))).rejects.toThrow()
     expect(await readFile(join(projectRoot, '.holo-js/framework/project.json'), 'utf8')).toContain('"framework": "next"')
     expect(await readFile(join(projectRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain('Missing framework binary')
     expect(await readFile(join(projectRoot, 'app/api/holo/health/route.ts'), 'utf8')).toContain('holo.getApp')
@@ -513,8 +511,6 @@ export default {
       'postgres',
       '--package-manager',
       'pnpm',
-      '--storage-default-disk',
-      'public',
     ])
     expect(duplicateResult.status).toBe(1)
     expect(duplicateResult.stderr).toContain('Refusing to scaffold into a non-empty directory')
@@ -530,8 +526,6 @@ export default {
       'postgres',
       '--package-manager',
       'pnpm',
-      '--storage-default-disk',
-      'public',
     ])
     expect(secondResult.status).toBe(0)
 
@@ -553,8 +547,6 @@ export default {
       'mysql',
       '--package-manager',
       'npm',
-      '--storage-default-disk',
-      'public',
     ], io.io))).resolves.toBe(0)
 
     const coveredRoot = join(baseRoot, 'covered-app')
@@ -598,6 +590,38 @@ export default {
       storageDefaultDisk: 'local',
       optionalPackages: ['validation'],
     })).not.toContain(`"@holo-js/forms": "${expectedHoloPackageRange}"`)
+    expect(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Optional Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'public',
+      optionalPackages: ['storage', 'events', 'queue'],
+    })).toContain(`"@holo-js/storage": "${expectedHoloPackageRange}"`)
+    expect(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Optional Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'public',
+      optionalPackages: ['storage', 'events', 'queue'],
+    })).toContain(`"@holo-js/events": "${expectedHoloPackageRange}"`)
+    expect(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Optional Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'public',
+      optionalPackages: ['storage', 'events', 'queue'],
+    })).toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
+    expect(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Optional Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'public',
+      optionalPackages: ['storage', 'events', 'queue'],
+    })).toContain(`"@holo-js/queue-db": "${expectedHoloPackageRange}"`)
     expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain('import type { HoloAppEnv }')
     expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain('env<HoloAppEnv>(\'APP_ENV\', \'development\')')
     expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain('env<boolean>(\'APP_DEBUG\', true)')
@@ -654,6 +678,7 @@ export default {
       databaseDriver: 'sqlite',
       packageManager: 'bun',
       storageDefaultDisk: 'local',
+      optionalPackages: ['storage'],
     }).find(file => file.path === 'next.config.mjs')?.contents).toContain('STORAGE_ROUTE_PREFIX')
     expect(projectInternals.renderFrameworkFiles({
       projectName: 'Next App',
@@ -661,6 +686,7 @@ export default {
       databaseDriver: 'sqlite',
       packageManager: 'bun',
       storageDefaultDisk: 'local',
+      optionalPackages: ['storage'],
     }).find(file => file.path === 'next.config.mjs')?.contents).toContain("destination: '/storage/:path*'")
     expect(projectInternals.renderFrameworkFiles({
       projectName: 'Svelte App',
@@ -682,6 +708,7 @@ export default {
       databaseDriver: 'sqlite',
       packageManager: 'bun',
       storageDefaultDisk: 'local',
+      optionalPackages: ['storage'],
     }).find(file => file.path === 'src/hooks.server.ts')?.contents).toContain('STORAGE_ROUTE_PREFIX')
     expect(projectInternals.renderFrameworkFiles({
       projectName: 'Svelte App',
@@ -689,6 +716,7 @@ export default {
       databaseDriver: 'sqlite',
       packageManager: 'bun',
       storageDefaultDisk: 'local',
+      optionalPackages: ['storage'],
     }).find(file => file.path === 'src/hooks.server.ts')?.contents).toContain("event.url.pathname = `/storage")
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'Svelte App',
@@ -704,7 +732,7 @@ export default {
       databaseDriver: 'sqlite',
       packageManager: 'bun',
       storageDefaultDisk: 'local',
-      optionalPackages: [],
+      optionalPackages: ['storage'],
     })).toContain(`"@holo-js/storage": "${expectedHoloPackageRange}"`)
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'Svelte App',
@@ -748,8 +776,16 @@ export default {
     expect(projectInternals.isSupportedScaffoldStorageDisk('public')).toBe(true)
     expect(projectInternals.isSupportedScaffoldStorageDisk('s3')).toBe(false)
     expect(projectInternals.isSupportedScaffoldOptionalPackage('forms')).toBe(true)
+    expect(projectInternals.isSupportedScaffoldOptionalPackage('storage')).toBe(true)
     expect(projectInternals.isSupportedScaffoldOptionalPackage('auth')).toBe(false)
     expect(projectInternals.normalizeScaffoldOptionalPackages(['validation', 'forms', 'validation'])).toEqual(['forms', 'validation'])
+    expect(projectInternals.normalizeScaffoldOptionalPackages(['validate', 'form', 'storage', 'queue', 'events'])).toEqual([
+      'events',
+      'forms',
+      'queue',
+      'storage',
+      'validation',
+    ])
     expect(() => projectInternals.normalizeScaffoldOptionalPackages(['auth'])).toThrow('Unsupported optional package')
 
     await writeProjectFile(baseRoot, 'occupied-direct/file.txt', 'taken')
@@ -1405,6 +1441,13 @@ export default defineAppConfig({
     expect(() => cliInternals.normalizeChoice(undefined, ['nuxt', 'next'], 'Framework')).toThrow('(empty)')
     expect(() => cliInternals.normalizeOptionalPackages(['weird-package'])).toThrow('Unsupported optional package')
     expect(cliInternals.normalizeOptionalPackages(['forms', 'validation', 'forms'])).toEqual(['forms', 'validation'])
+    expect(cliInternals.normalizeOptionalPackages(['form', 'validate', 'storage', 'queue', 'events'])).toEqual([
+      'events',
+      'forms',
+      'queue',
+      'storage',
+      'validation',
+    ])
     expect(cliInternals.normalizeOptionalPackages(['none'])).toEqual([])
   }, 30000)
 

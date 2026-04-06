@@ -162,7 +162,7 @@ const SUPPORTED_NEW_FRAMEWORKS = ['nuxt', 'next', 'sveltekit'] as const
 const SUPPORTED_NEW_DATABASE_DRIVERS = ['sqlite', 'mysql', 'postgres'] as const
 const SUPPORTED_NEW_PACKAGE_MANAGERS = ['bun', 'npm', 'pnpm', 'yarn'] as const
 const SUPPORTED_NEW_STORAGE_DISKS = ['local', 'public'] as const
-const SUPPORTED_NEW_OPTIONAL_PACKAGES = ['validation', 'forms'] as const
+const SUPPORTED_NEW_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms'] as const
 const SUPPORTED_INSTALL_TARGETS = ['queue', 'events'] as const
 const SUPPORTED_QUEUE_INSTALL_DRIVERS = ['sync', 'redis', 'database'] as const
 const QUEUE_LISTEN_SOURCE_EXTENSIONS = new Set([
@@ -1440,6 +1440,19 @@ async function promptChoice<TValue extends string>(
 }
 /* v8 ignore stop */
 
+function normalizeOptionalPackageName(value: string): string {
+  const current = value.trim().toLowerCase()
+  if (current === 'validate') {
+    return 'validation'
+  }
+
+  if (current === 'form') {
+    return 'forms'
+  }
+
+  return current
+}
+
 function normalizeOptionalPackages(value: readonly string[] | undefined): readonly SupportedScaffoldOptionalPackage[] {
   if (!value || value.length === 0) {
     return []
@@ -1447,7 +1460,7 @@ function normalizeOptionalPackages(value: readonly string[] | undefined): readon
 
   const normalized = new Set<SupportedScaffoldOptionalPackage>()
   for (const raw of value) {
-    const current = raw.trim().toLowerCase()
+    const current = normalizeOptionalPackageName(raw)
     if (current === 'none') {
       continue
     }
@@ -1517,12 +1530,6 @@ async function resolveNewProjectInput(
       ? await prompts.choose('Package manager', SUPPORTED_NEW_PACKAGE_MANAGERS, 'bun')
       : 'bun'
 
-  const storageDefaultDisk = resolveStringFlag(input.flags, 'storage-default-disk')
-    ? normalizeChoice(resolveStringFlag(input.flags, 'storage-default-disk'), SUPPORTED_NEW_STORAGE_DISKS, 'storage default disk')
-    : interactive
-      ? await prompts.choose('Default storage disk', SUPPORTED_NEW_STORAGE_DISKS, 'local')
-      : 'local'
-
   const requestedOptionalPackages = collectMultiStringFlag(input.flags, 'package')
   let optionalPackages: readonly SupportedScaffoldOptionalPackage[]
   if (requestedOptionalPackages) {
@@ -1536,6 +1543,14 @@ async function resolveNewProjectInput(
   } else {
     optionalPackages = []
   }
+
+  const storageDefaultDisk = optionalPackages.includes('storage')
+    ? (resolveStringFlag(input.flags, 'storage-default-disk')
+        ? normalizeChoice(resolveStringFlag(input.flags, 'storage-default-disk'), SUPPORTED_NEW_STORAGE_DISKS, 'storage default disk')
+        : interactive
+          ? await prompts.choose('Default storage disk', SUPPORTED_NEW_STORAGE_DISKS, 'local')
+          : 'local')
+    : 'local'
 
   return {
     projectName,
@@ -2924,7 +2939,7 @@ function createInternalCommands(
     {
       name: 'new',
       description: 'Scaffold a new Holo project',
-      usage: 'holo-js new <name> [--framework <nuxt|next|sveltekit>] [--database <sqlite|mysql|postgres>] [--package-manager <bun|npm|pnpm|yarn>] [--storage-default-disk <local|public>] [--package <validation|forms>]',
+      usage: 'holo-js new <name> [--framework <nuxt|next|sveltekit>] [--database <sqlite|mysql|postgres>] [--package-manager <bun|npm|pnpm|yarn>] [--package <storage|events|queue|validation|forms>] [--storage-default-disk <local|public>]',
       source: 'internal',
       async prepare(input) {
         const resolved = await resolveNewProjectInput(context, input)

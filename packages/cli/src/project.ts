@@ -135,7 +135,7 @@ export type SupportedScaffoldFramework = 'nuxt' | 'next' | 'sveltekit'
 export type SupportedScaffoldPackageManager = 'bun' | 'npm' | 'pnpm' | 'yarn'
 
 export type SupportedScaffoldStorageDisk = 'local' | 'public'
-export type SupportedScaffoldOptionalPackage = 'validation' | 'forms'
+export type SupportedScaffoldOptionalPackage = 'storage' | 'events' | 'queue' | 'validation' | 'forms'
 export type SupportedQueueInstallerDriver = 'sync' | 'redis' | 'database'
 
 export type ProjectScaffoldOptions = {
@@ -212,7 +212,7 @@ const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIORITY)
 const SUPPORTED_SCAFFOLD_FRAMEWORKS = ['nuxt', 'next', 'sveltekit'] as const
 const SUPPORTED_SCAFFOLD_PACKAGE_MANAGERS = ['bun', 'npm', 'pnpm', 'yarn'] as const
 const SUPPORTED_SCAFFOLD_STORAGE_DISKS = ['local', 'public'] as const
-const SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES = ['validation', 'forms'] as const
+const SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms'] as const
 const SUPPORTED_QUEUE_INSTALLER_DRIVERS = ['sync', 'redis', 'database'] as const
 let projectModuleBundler: ProjectModuleBundler = build
 const HOLO_EVENT_DEFINITION_MARKER = Symbol.for('holo-js.events.definition')
@@ -259,6 +259,19 @@ function isSupportedScaffoldOptionalPackage(value: string): value is SupportedSc
   return (SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES as readonly string[]).includes(value)
 }
 
+function normalizeScaffoldOptionalPackageName(value: string): string {
+  const current = value.trim().toLowerCase()
+  if (current === 'validate') {
+    return 'validation'
+  }
+
+  if (current === 'form') {
+    return 'forms'
+  }
+
+  return current
+}
+
 function normalizeScaffoldOptionalPackages(
   value: readonly string[] | readonly SupportedScaffoldOptionalPackage[] | undefined,
 ): readonly SupportedScaffoldOptionalPackage[] {
@@ -268,7 +281,7 @@ function normalizeScaffoldOptionalPackages(
 
   const normalized = new Set<SupportedScaffoldOptionalPackage>()
   for (const entry of value) {
-    const current = entry.trim().toLowerCase()
+    const current = normalizeScaffoldOptionalPackageName(entry)
     if (!isSupportedScaffoldOptionalPackage(current)) {
       throw new Error(
         `Unsupported optional package: ${entry}. Expected one of ${SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES.join(', ')}.`,
@@ -760,7 +773,7 @@ function renderScaffoldDatabaseConfig(
 }
 
 function renderScaffoldEnvFiles(
-  options: Pick<ProjectScaffoldOptions, 'databaseDriver' | 'projectName' | 'storageDefaultDisk'>,
+  options: Pick<ProjectScaffoldOptions, 'databaseDriver' | 'projectName' | 'storageDefaultDisk' | 'optionalPackages'>,
 ): { env: string, example: string } {
   const baseLines = [
     `APP_NAME=${JSON.stringify(options.projectName)}`,
@@ -782,10 +795,12 @@ function renderScaffoldEnvFiles(
         `DB_DATABASE=${sanitizePackageName(options.projectName) || 'holo_app'}`,
         ...(options.databaseDriver === 'postgres' ? ['DB_SCHEMA=public'] : []),
       ]
-  const storageLines = [
-    `STORAGE_DEFAULT_DISK=${options.storageDefaultDisk}`,
-    'STORAGE_ROUTE_PREFIX=/storage',
-  ]
+  const storageLines = normalizeScaffoldOptionalPackages(options.optionalPackages).includes('storage')
+    ? [
+        `STORAGE_DEFAULT_DISK=${options.storageDefaultDisk}`,
+        'STORAGE_ROUTE_PREFIX=/storage',
+      ]
+    : []
   const env = [...baseLines, ...driverLines, ...storageLines, ''].join('\n')
   const example = [
     '# Copy this file to .env and fill in your local values.',
@@ -1202,7 +1217,17 @@ function renderNuxtHealthRoute(): string {
   ].join('\n')
 }
 
-function renderNextConfig(): string {
+function renderNextConfig(storageEnabled: boolean): string {
+  if (!storageEnabled) {
+    return [
+      '/** @type {import(\'next\').NextConfig} */',
+      'const nextConfig = {}',
+      '',
+      'export default nextConfig',
+      '',
+    ].join('\n')
+  }
+
   return [
     'const storageRoutePrefix = (() => {',
     '  const raw = process.env.STORAGE_ROUTE_PREFIX?.trim() ?? \'/storage\'',
@@ -1562,7 +1587,21 @@ function renderSvelteHooksServer(): string {
   ].join('\n')
 }
 
-function renderSvelteViteConfig(): string {
+function renderSvelteViteConfig(storageEnabled: boolean): string {
+  const externals = [
+    '      \'@holo-js/adapter-sveltekit\',',
+    '      \'@holo-js/config\',',
+    '      \'@holo-js/core\',',
+    '      \'@holo-js/db\',',
+    ...(storageEnabled
+      ? [
+          '      \'@holo-js/storage\',',
+          '      \'@holo-js/storage/runtime\',',
+        ]
+      : []),
+    '      \'better-sqlite3\',',
+  ]
+
   return [
     'import { sveltekit } from \'@sveltejs/kit/vite\'',
     'import { defineConfig } from \'vite\'',
@@ -1571,14 +1610,7 @@ function renderSvelteViteConfig(): string {
     '  plugins: [sveltekit()],',
     '  ssr: {',
     '    external: [',
-    '      \'@holo-js/adapter-sveltekit\',',
-    '      \'@holo-js/config\',',
-    '      \'@holo-js/core\',',
-    '      \'@holo-js/db\',',
-    '      \'@holo-js/media\',',
-    '      \'@holo-js/storage\',',
-    '      \'@holo-js/storage/runtime\',',
-    '      \'better-sqlite3\',',
+    ...externals,
     '    ],',
     '  },',
     '})',
@@ -1682,6 +1714,9 @@ function renderSvelteStorageRoute(): string {
 }
 
 function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly ScaffoldedFile[] {
+  const optionalPackages = normalizeScaffoldOptionalPackages(options.optionalPackages)
+  const storageEnabled = optionalPackages.includes('storage')
+
   if (options.framework === 'nuxt') {
     return [
       { path: 'app.vue', contents: renderNuxtAppVue(options.projectName) },
@@ -1692,27 +1727,37 @@ function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly Scaffol
 
   if (options.framework === 'next') {
     return [
-      { path: 'next.config.mjs', contents: renderNextConfig() },
+      { path: 'next.config.mjs', contents: renderNextConfig(storageEnabled) },
       { path: 'next-env.d.ts', contents: renderNextEnvDts() },
       { path: 'app/layout.tsx', contents: renderNextLayout(options.projectName) },
       { path: 'app/page.tsx', contents: renderNextPage(options.projectName) },
       { path: 'app/api/holo/health/route.ts', contents: renderNextHealthRoute() },
-      { path: 'app/storage/[[...path]]/route.ts', contents: renderNextStorageRoute() },
-      { path: 'server/lib/public-storage.ts', contents: renderPublicStorageHelper() },
+      ...(storageEnabled
+        ? [
+            { path: 'app/storage/[[...path]]/route.ts', contents: renderNextStorageRoute() },
+            { path: 'server/lib/public-storage.ts', contents: renderPublicStorageHelper() },
+          ]
+        : []),
       { path: 'server/holo.ts', contents: renderNextHoloHelper() },
     ]
   }
 
   return [
     { path: 'svelte.config.js', contents: renderSvelteConfig() },
-    { path: 'vite.config.ts', contents: renderSvelteViteConfig() },
-    { path: 'src/hooks.server.ts', contents: renderSvelteHooksServer() },
+    { path: 'vite.config.ts', contents: renderSvelteViteConfig(storageEnabled) },
+    ...(storageEnabled
+      ? [{ path: 'src/hooks.server.ts', contents: renderSvelteHooksServer() }]
+      : []),
     { path: 'src/app.html', contents: renderSvelteAppHtml() },
     { path: 'src/routes/+page.svelte', contents: renderSveltePage(options.projectName) },
     { path: 'src/routes/api/holo/+server.ts', contents: renderSvelteHealthRoute() },
-    { path: 'src/routes/storage/[...path]/+server.ts', contents: renderSvelteStorageRoute() },
+    ...(storageEnabled
+      ? [{ path: 'src/routes/storage/[...path]/+server.ts', contents: renderSvelteStorageRoute() }]
+      : []),
     { path: 'src/lib/server/holo.ts', contents: renderSvelteHoloHelper() },
-    { path: 'server/lib/public-storage.ts', contents: renderPublicStorageHelper() },
+    ...(storageEnabled
+      ? [{ path: 'server/lib/public-storage.ts', contents: renderPublicStorageHelper() }]
+      : []),
   ]
 }
 
@@ -1781,10 +1826,8 @@ function renderScaffoldPackageJson(options: ProjectScaffoldOptions): string {
   const dependencies: Record<string, string> = {
     '@holo-js/cli': `^${HOLO_PACKAGE_VERSION}`,
     '@holo-js/config': `^${HOLO_PACKAGE_VERSION}`,
+    '@holo-js/core': `^${HOLO_PACKAGE_VERSION}`,
     '@holo-js/db': `^${HOLO_PACKAGE_VERSION}`,
-    '@holo-js/events': `^${HOLO_PACKAGE_VERSION}`,
-    '@holo-js/queue': `^${HOLO_PACKAGE_VERSION}`,
-    '@holo-js/queue-db': `^${HOLO_PACKAGE_VERSION}`,
     'esbuild': ESBUILD_PACKAGE_VERSION,
   }
   const devDependencies: Record<string, string> = {
@@ -1795,7 +1838,6 @@ function renderScaffoldPackageJson(options: ProjectScaffoldOptions): string {
   if (options.framework === 'nuxt') {
     dependencies['nuxt'] = SCAFFOLD_FRAMEWORK_VERSIONS.nuxt
     dependencies['@holo-js/adapter-nuxt'] = SCAFFOLD_FRAMEWORK_ADAPTER_VERSIONS.nuxt
-    dependencies['@holo-js/storage'] = SCAFFOLD_FRAMEWORK_RUNTIME_VERSIONS.nuxt['@holo-js/storage']
   }
 
   if (options.framework === 'next') {
@@ -1803,19 +1845,30 @@ function renderScaffoldPackageJson(options: ProjectScaffoldOptions): string {
     dependencies['react'] = '^19.0.0'
     dependencies['react-dom'] = '^19.0.0'
     dependencies['@holo-js/adapter-next'] = SCAFFOLD_FRAMEWORK_ADAPTER_VERSIONS.next
-    dependencies['@holo-js/storage'] = SCAFFOLD_FRAMEWORK_RUNTIME_VERSIONS.next['@holo-js/storage']
     devDependencies['@types/react'] = '^19.0.0'
     devDependencies['@types/react-dom'] = '^19.0.0'
   }
 
   if (options.framework === 'sveltekit') {
     dependencies['@holo-js/adapter-sveltekit'] = SCAFFOLD_FRAMEWORK_ADAPTER_VERSIONS.sveltekit
-    dependencies['@holo-js/storage'] = SCAFFOLD_FRAMEWORK_RUNTIME_VERSIONS.sveltekit['@holo-js/storage']
     dependencies['@sveltejs/adapter-node'] = '^5.0.0'
     dependencies['@sveltejs/kit'] = SCAFFOLD_FRAMEWORK_VERSIONS.sveltekit
     dependencies['@sveltejs/vite-plugin-svelte'] = '^4.0.0'
     dependencies['svelte'] = '^5.0.0'
     dependencies['vite'] = '^5.0.0'
+  }
+
+  if (optionalPackages.includes('storage')) {
+    dependencies['@holo-js/storage'] = SCAFFOLD_FRAMEWORK_RUNTIME_VERSIONS[options.framework]['@holo-js/storage']
+  }
+
+  if (optionalPackages.includes('events')) {
+    dependencies['@holo-js/events'] = `^${HOLO_PACKAGE_VERSION}`
+  }
+
+  if (optionalPackages.includes('queue')) {
+    dependencies['@holo-js/queue'] = `^${HOLO_PACKAGE_VERSION}`
+    dependencies['@holo-js/queue-db'] = `^${HOLO_PACKAGE_VERSION}`
   }
 
   if (optionalPackages.includes('validation')) {
@@ -1871,21 +1924,32 @@ export async function scaffoldProject(
   const { env, example } = renderScaffoldEnvFiles(options)
   const config = normalizeHoloProjectConfig()
   const generatedSchemaPath = resolveGeneratedSchemaPath(projectRoot, config)
+  const optionalPackages = normalizeScaffoldOptionalPackages(options.optionalPackages)
+  const storageEnabled = optionalPackages.includes('storage')
+  const queueEnabled = optionalPackages.includes('queue')
+  const eventsEnabled = optionalPackages.includes('events')
 
   await mkdir(projectRoot, { recursive: true })
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })
   await mkdir(join(projectRoot, '.holo-js', 'framework'), { recursive: true })
   await mkdir(resolve(projectRoot, config.paths.models), { recursive: true })
   await mkdir(resolve(projectRoot, config.paths.commands), { recursive: true })
-  await mkdir(resolve(projectRoot, config.paths.jobs), { recursive: true })
-  await mkdir(resolve(projectRoot, config.paths.events), { recursive: true })
-  await mkdir(resolve(projectRoot, config.paths.listeners), { recursive: true })
+  if (queueEnabled) {
+    await mkdir(resolve(projectRoot, config.paths.jobs), { recursive: true })
+  }
+  if (eventsEnabled) {
+    await mkdir(resolve(projectRoot, config.paths.events), { recursive: true })
+    await mkdir(resolve(projectRoot, config.paths.listeners), { recursive: true })
+  }
   await mkdir(resolve(projectRoot, 'server/db/factories'), { recursive: true })
   await mkdir(resolve(projectRoot, 'server/db/migrations'), { recursive: true })
   await mkdir(resolve(projectRoot, 'server/db/seeders'), { recursive: true })
   await mkdir(resolve(projectRoot, 'server/db/schema'), { recursive: true })
   await mkdir(resolve(projectRoot, config.paths.observers), { recursive: true })
-  await mkdir(resolve(projectRoot, 'storage/app/public'), { recursive: true })
+  await mkdir(resolve(projectRoot, 'storage'), { recursive: true })
+  if (storageEnabled) {
+    await mkdir(resolve(projectRoot, 'storage/app/public'), { recursive: true })
+  }
 
   await writeFile(resolve(projectRoot, 'package.json'), renderScaffoldPackageJson(options), 'utf8')
   await writeFile(resolve(projectRoot, '.gitignore'), renderScaffoldGitignore(), 'utf8')
@@ -1893,12 +1957,15 @@ export async function scaffoldProject(
   await writeFile(resolve(projectRoot, '.env.example'), example, 'utf8')
   await writeFile(resolve(projectRoot, 'config/app.ts'), renderScaffoldAppConfig(options.projectName), 'utf8')
   await writeFile(resolve(projectRoot, 'config/database.ts'), renderScaffoldDatabaseConfig(options), 'utf8')
-  await writeFile(resolve(projectRoot, 'config/queue.ts'), renderQueueConfig({
-    driver: 'sync',
-    defaultDatabaseConnection: 'main',
-  }), 'utf8')
-  await writeFile(resolve(projectRoot, 'config/storage.ts'), renderStorageConfig(), 'utf8')
-  await writeFile(resolve(projectRoot, 'config/media.ts'), renderMediaConfig(), 'utf8')
+  if (queueEnabled) {
+    await writeFile(resolve(projectRoot, 'config/queue.ts'), renderQueueConfig({
+      driver: 'sync',
+      defaultDatabaseConnection: 'main',
+    }), 'utf8')
+  }
+  if (storageEnabled) {
+    await writeFile(resolve(projectRoot, 'config/storage.ts'), renderStorageConfig(), 'utf8')
+  }
   await writeFile(resolve(projectRoot, '.holo-js/framework/run.mjs'), renderFrameworkRunner(options), 'utf8')
   await writeFile(resolve(projectRoot, '.holo-js/framework/project.json'), `${JSON.stringify(options, null, 2)}\n`, 'utf8')
   await writeFile(resolve(projectRoot, 'tsconfig.json'), renderScaffoldTsconfig(options), 'utf8')
