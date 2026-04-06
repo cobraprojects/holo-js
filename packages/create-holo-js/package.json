@@ -5,7 +5,7 @@
   "type": "module",
   "license": "MIT",
   "bin": {
-    "create-holo-js": "./dist/bin/create-holo-js.mjs"
+    "create-holo-js": "dist/bin/create-holo-js.mjs"
   },
   "files": [
     "dist"

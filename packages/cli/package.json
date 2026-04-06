@@ -5,8 +5,8 @@
   "type": "module",
   "license": "MIT",
   "bin": {
-    "holo": "./dist/bin/holo.mjs",
-    "holo-js": "./dist/bin/holo.mjs"
+    "holo": "dist/bin/holo.mjs",
+    "holo-js": "dist/bin/holo.mjs"
   },
   "exports": {
     ".": {
