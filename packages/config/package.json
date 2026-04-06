@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/config",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Holo-JS Framework - typed config loading, env layering, and runtime access",
   "type": "module",
   "license": "MIT",
@@ -22,8 +22,8 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/db": "^0.1.1",
-    "@holo-js/queue": "^0.1.1"
+    "@holo-js/db": "^0.1.2",
+    "@holo-js/queue": "^0.1.2"
   },
   "devDependencies": {
     "tsup": "^8.3.5",

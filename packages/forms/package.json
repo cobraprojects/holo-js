@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/forms",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Holo-JS Framework - forms-first validation and submission contracts",
   "type": "module",
   "license": "MIT",
@@ -28,7 +28,7 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/validation": "^0.1.1"
+    "@holo-js/validation": "^0.1.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

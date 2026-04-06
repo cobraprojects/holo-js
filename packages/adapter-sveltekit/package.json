@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/adapter-sveltekit",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Holo-JS Framework - SvelteKit adapter",
   "type": "module",
   "license": "MIT",
@@ -28,9 +28,9 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "^0.1.1",
-    "@holo-js/core": "^0.1.1",
-    "@holo-js/forms": "^0.1.1"
+    "@holo-js/config": "^0.1.2",
+    "@holo-js/core": "^0.1.2",
+    "@holo-js/forms": "^0.1.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

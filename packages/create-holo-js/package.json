@@ -1,6 +1,6 @@
 {
   "name": "create-holo-js",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Holo-JS project scaffolder",
   "type": "module",
   "license": "MIT",
@@ -16,7 +16,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@holo-js/cli": "^0.1.1"
+    "@holo-js/cli": "^0.1.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
