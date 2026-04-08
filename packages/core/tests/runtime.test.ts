@@ -25,6 +25,7 @@ import {
   registerQueueJob,
   resetQueueRegistry,
 } from '@holo-js/queue'
+import type * as HoloConfigModule from '@holo-js/config'
 import type * as HoloQueueModule from '@holo-js/queue'
 import type * as PortableHoloModule from '../src/portable/holo'
 import { createHoloAdapterProject, createHoloFrameworkAdapter, initializeHoloAdapterProject } from '../src'
@@ -1565,7 +1566,7 @@ export default defineQueueConfig({
 
     vi.resetModules()
     vi.doMock('@holo-js/config', async () => {
-      const actual = await vi.importActual('@holo-js/config') as typeof import('@holo-js/config')
+      const actual = await vi.importActual('@holo-js/config') as typeof HoloConfigModule
       return {
         ...actual,
         loadConfigDirectory: vi.fn(async () => ({
@@ -1631,7 +1632,7 @@ export default defineQueueConfig({
 
     vi.resetModules()
     vi.doMock('@holo-js/config', async () => {
-      const actual = await vi.importActual('@holo-js/config') as typeof import('@holo-js/config')
+      const actual = await vi.importActual('@holo-js/config') as typeof HoloConfigModule
       return {
         ...actual,
         loadConfigDirectory: vi.fn(async () => ({

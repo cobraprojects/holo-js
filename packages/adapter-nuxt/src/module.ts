@@ -279,6 +279,7 @@ export default defineNuxtModule<ModuleOptions>({
 
 export const moduleInternals = {
   hasLoadedConfigFile,
+  importOptionalStorageS3Module,
 }
 
 export const adapterNuxtInternals = {

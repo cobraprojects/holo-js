@@ -14,11 +14,16 @@ import type * as HoloConfigModule from '@holo-js/config'
 import type * as HoloCoreModule from '@holo-js/core'
 import type * as HoloDbModule from '@holo-js/db'
 import type * as ProjectModule from '../src/project'
+import type * as ProjectConfigInternalModule from '../src/project/config'
+import type * as ProjectDiscoveryInternalModule from '../src/project/discovery'
+import type * as ProjectRuntimeInternalModule from '../src/project/runtime'
+import type * as ProjectScaffoldInternalModule from '../src/project/scaffold'
+import type * as DevInternalModule from '../src/dev'
 import type * as HoloQueueModule from '@holo-js/queue'
 import type * as HoloQueueDbModule from '@holo-js/queue-db'
 import type { QueueWorkerRunOptions } from '@holo-js/queue'
 import { defineCommand } from '../src'
-import { cliInternals } from '../src/cli'
+import { cliInternals } from '../src/cli-internals'
 import {
   bundleProjectModule,
   defaultProjectConfig,
@@ -3852,6 +3857,8 @@ export default {
     expect(cliInternals.resolvePackageManagerDevCommand('pnpm')).toBe('pnpm dev')
     expect(cliInternals.resolvePackageManagerInstallCommand('yarn')).toBe('yarn install')
     expect(cliInternals.resolvePackageManagerDevCommand('yarn')).toBe('yarn dev')
+    expect(projectInternals.resolveNamedExport('nope', (_value): _value is { ok: true } => false)).toBeUndefined()
+    expect(projectInternals.resolveNamedExportEntry('nope', (_value): _value is { ok: true } => false)).toBeUndefined()
     expect(cliInternals.createEnvRuntimeConfig()).toMatchObject({
       db: {
         defaultConnection: 'default',
@@ -4928,6 +4935,308 @@ export default defineEvent({ name: 'audit.activity' })
     expect(seederCommandIo.read().stdout).toContain('Created seeder: server/db/seeders/LessonSeeder.ts')
     expect(observerCommandIo.read().stdout).toContain('Created observer: server/db/observers/CourseObserver.ts')
     expect(factoryCommandIo.read().stdout).toContain('Created factory: server/db/factories/CourseFactory.ts')
+  })
+
+  it('lazy-loads project, dev, runtime, queue, queue migration, and generator modules when executors are not injected', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const baseContext = {
+      ...io.io,
+      projectRoot,
+      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    }
+
+    const queueRestart = vi.fn(async () => {})
+    const queueListen = vi.fn(async () => {})
+    const queueRetry = vi.fn(async () => {})
+    const queueClear = vi.fn(async () => {})
+    const queueFailed = vi.fn(async () => {})
+    const queueFailedTable = vi.fn(async () => {})
+    const queueFlush = vi.fn(async () => {})
+    const queueForget = vi.fn(async () => {})
+    const queueWork = vi.fn(async () => {})
+    const queueTable = vi.fn(async () => {})
+    const cacheProjectConfig = vi.fn(async () => '/tmp/holo-config-cache.json')
+    const withRuntimeEnvironment = vi.fn(async (_projectRoot: string, _kind: string, _options: Record<string, unknown>, callback: (stdout: string) => Promise<void>) => {
+      await callback('')
+    })
+    const runMakeSeeder = vi.fn(async () => {})
+    const scaffoldProject = vi.fn(async () => {})
+    const installEventsIntoProject = vi.fn(async () => ({
+      updatedPackageJson: true,
+      createdEventsDirectory: true,
+      createdListenersDirectory: true,
+    }))
+    const installQueueIntoProject = vi.fn(async () => ({
+      createdQueueConfig: true,
+      updatedPackageJson: true,
+      updatedEnv: false,
+      updatedEnvExample: false,
+      createdJobsDirectory: true,
+    }))
+    const runProjectPrepare = vi.fn(async () => {})
+    const runProjectDevServer = vi.fn(async () => {})
+    const runProjectLifecycleScript = vi.fn(async () => {})
+    const findProjectRoot = vi.fn(async () => projectRoot)
+    const loadProjectConfig = vi.fn(async () => ({ config: defaultProjectConfig() }))
+    const discoverAppCommands = vi.fn(async () => [])
+
+    vi.resetModules()
+    vi.doMock('../src/queue', () => ({
+      runQueueClearCommand: queueClear,
+      runQueueFailedCommand: queueFailed,
+      runQueueFlushCommand: queueFlush,
+      runQueueForgetCommand: queueForget,
+      runQueueListen: queueListen,
+      runQueueRestartCommand: queueRestart,
+      runQueueRetryCommand: queueRetry,
+      runQueueWorkCommand: queueWork,
+    }))
+    vi.doMock('../src/queue-migrations', () => ({
+      runQueueFailedTableCommand: queueFailedTable,
+      runQueueTableCommand: queueTable,
+    }))
+    vi.doMock('../src/runtime', () => ({
+      cacheProjectConfig,
+      withRuntimeEnvironment,
+    }))
+    vi.doMock('../src/generators', () => ({
+      runMakeSeeder,
+    }))
+    vi.doMock('../src/project/scaffold', async () => {
+      const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
+      return {
+        ...actual,
+        installEventsIntoProject,
+        installQueueIntoProject,
+        scaffoldProject,
+      }
+    })
+    vi.doMock('../src/dev', async () => {
+      const actual = await vi.importActual('../src/dev') as typeof DevInternalModule
+      return {
+        ...actual,
+        runProjectPrepare,
+        runProjectDevServer,
+        runProjectLifecycleScript,
+      }
+    })
+    vi.doMock('../src/project/runtime', async () => {
+      const actual = await vi.importActual('../src/project/runtime') as typeof ProjectRuntimeInternalModule
+      return {
+        ...actual,
+        findProjectRoot,
+      }
+    })
+    vi.doMock('../src/project/config', async () => {
+      const actual = await vi.importActual('../src/project/config') as typeof ProjectConfigInternalModule
+      return {
+        ...actual,
+        loadProjectConfig,
+      }
+    })
+    vi.doMock('../src/project/discovery', async () => {
+      const actual = await vi.importActual('../src/project/discovery') as typeof ProjectDiscoveryInternalModule
+      return {
+        ...actual,
+        discoverAppCommands,
+      }
+    })
+
+    try {
+      const isolatedCli = await import('../src/cli')
+      const commands = isolatedCli.createInternalCommands(baseContext as never)
+
+      await commands.find(command => command.name === 'queue:restart')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'queue:failed-table')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'queue:work')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'queue:listen')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'queue:failed')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'queue:retry')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: ['failed-1'],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'queue:forget')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: ['failed-2'],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'queue:flush')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'queue:clear')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'queue:table')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'config:cache')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'migrate')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'make:seeder')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: ['DemoSeeder'],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'install')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: ['events'],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'install')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: ['queue'],
+        flags: { driver: 'sync' },
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'prepare')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'dev')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'build')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+
+      const listedIo = createIo(projectRoot)
+      await expect(isolatedCli.runCli(['list'], listedIo.io)).resolves.toBe(0)
+
+      const newIo = createIo(projectRoot)
+      await expect(isolatedCli.runCli(['new', 'LazyProject'], newIo.io)).resolves.toBe(0)
+
+      expect(queueRestart).toHaveBeenCalledWith(baseContext, projectRoot)
+      expect(queueFailedTable).toHaveBeenCalledWith(baseContext, projectRoot)
+      expect(queueWork).toHaveBeenCalledWith(baseContext, projectRoot, {
+        once: false,
+        stopWhenEmpty: false,
+      })
+      expect(queueListen).toHaveBeenCalledWith(baseContext, projectRoot, {})
+      expect(queueFailed).toHaveBeenCalledWith(baseContext, projectRoot)
+      expect(queueRetry).toHaveBeenCalledWith(baseContext, projectRoot, 'failed-1')
+      expect(queueForget).toHaveBeenCalledWith(baseContext, projectRoot, 'failed-2')
+      expect(queueFlush).toHaveBeenCalledWith(baseContext, projectRoot)
+      expect(queueClear).toHaveBeenCalledWith(baseContext, projectRoot, undefined, undefined)
+      expect(queueTable).toHaveBeenCalledWith(baseContext, projectRoot)
+      expect(cacheProjectConfig).toHaveBeenCalledWith(projectRoot)
+      expect(withRuntimeEnvironment).toHaveBeenCalledWith(
+        projectRoot,
+        'migrate',
+        {},
+        expect.any(Function),
+      )
+      expect(runMakeSeeder).toHaveBeenCalledWith(baseContext, projectRoot, {
+        args: ['DemoSeeder'],
+        flags: {},
+      })
+      expect(installEventsIntoProject).toHaveBeenCalledWith(projectRoot)
+      expect(installQueueIntoProject).toHaveBeenCalledWith(projectRoot, { driver: 'sync' })
+      expect(runProjectPrepare).toHaveBeenCalledWith(projectRoot, baseContext)
+      expect(runProjectDevServer).toHaveBeenCalledWith(baseContext, projectRoot)
+      expect(runProjectLifecycleScript).toHaveBeenCalledWith(baseContext, projectRoot, 'holo:build')
+      expect(findProjectRoot).toHaveBeenCalledTimes(1)
+      expect(findProjectRoot).toHaveBeenCalledWith(projectRoot)
+      expect(loadProjectConfig).toHaveBeenCalledTimes(1)
+      expect(loadProjectConfig).toHaveBeenCalledWith(projectRoot)
+      expect(discoverAppCommands).toHaveBeenCalledTimes(1)
+      expect(discoverAppCommands).toHaveBeenCalledWith(projectRoot, defaultProjectConfig())
+      expect(scaffoldProject).toHaveBeenCalledWith(resolve(projectRoot, 'LazyProject'), {
+        projectName: 'LazyProject',
+        framework: 'nuxt',
+        databaseDriver: 'sqlite',
+        packageManager: 'bun',
+        storageDefaultDisk: 'local',
+        optionalPackages: [],
+      })
+    } finally {
+      vi.doUnmock('../src/queue')
+      vi.doUnmock('../src/queue-migrations')
+      vi.doUnmock('../src/runtime')
+      vi.doUnmock('../src/generators')
+      vi.doUnmock('../src/project/scaffold')
+      vi.doUnmock('../src/dev')
+      vi.doUnmock('../src/project/runtime')
+      vi.doUnmock('../src/project/config')
+      vi.doUnmock('../src/project/discovery')
+      vi.resetModules()
+    }
   })
 
   it('covers command and template helper utilities', () => {
@@ -6517,7 +6826,7 @@ export default defineJob({
     } as unknown as Awaited<ReturnType<typeof initializeHolo>>
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli')
+      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
       const queueModule = await import('@holo-js/queue')
       mockedRuntime.shutdown = vi.fn(async () => {
         queueModule.resetQueueRuntime()
@@ -6844,7 +7153,7 @@ export default defineJob({
     })
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli')
+      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
       await expect(isolatedCliInternals.runQueueClearCommand(io.io, projectRoot, 'redis', undefined, {
         initialize: async () => ({ shutdown }) as never,
       })).resolves.toBeUndefined()
@@ -6875,7 +7184,7 @@ export default defineJob({
     })
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli')
+      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
       const clear = vi.fn(async () => 0)
       const list = vi.fn(async () => [])
       const retry = vi.fn(async () => 0)
@@ -6966,7 +7275,7 @@ export default defineJob({
     })
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli')
+      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
       await expect(isolatedCliInternals.runQueueClearCommand(io.io, projectRoot, 'redis', ['emails'])).resolves.toBeUndefined()
 
       const queueModule = await import(queueModuleSpecifier)
@@ -7058,7 +7367,7 @@ export default defineJob({
     }))
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli')
+      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
       await expect(isolatedCliInternals.runQueueClearCommand(io.io, projectRoot, 'database', undefined)).resolves.toBeUndefined()
 
       const dbModule = await import('@holo-js/db') as typeof HoloDbModule
@@ -7167,7 +7476,7 @@ export default defineJob({
     }))
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli')
+      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
       await expect(
         isolatedCliInternals.runQueueClearCommand(io.io, projectRoot, 'database', undefined),
       ).rejects.toThrow('database queue init failed')
@@ -7441,7 +7750,7 @@ export default defineDatabaseConfig({
     })
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli')
+      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
       const environment = await withFakeBun(async () => isolatedCliInternals.getQueueRuntimeEnvironment(projectRoot))
       expect(environment.bundledJobs).toEqual([])
       await environment.cleanup()
@@ -7560,7 +7869,7 @@ export default defineJob({
     })
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli')
+      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
       await expect(isolatedCliInternals.getQueueRuntimeEnvironment(projectRoot)).rejects.toThrow(
         'Discovered job "server/jobs/broken.mjs" does not export a Holo job.',
       )
@@ -7625,7 +7934,7 @@ export default defineJob({
     })
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli')
+      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
       await withFakeBun(async () => {
         const environment = await isolatedCliInternals.getQueueRuntimeEnvironment(projectRoot)
         try {

@@ -415,6 +415,25 @@ export default defineStorageConfig({
     } as never, 'storage')).toBe(true)
   })
 
+  it('rethrows non-missing optional storage-s3 import errors', async () => {
+    vi.resetModules()
+    vi.doMock('../src/runtime/drivers/s3', () => {
+      return {
+        get default() {
+          throw new Error('boom')
+        },
+      }
+    })
+
+    try {
+      const mod = await import('../src/module')
+      await expect(mod.moduleInternals.importOptionalStorageS3Module()).rejects.toThrow('boom')
+    } finally {
+      vi.doUnmock('../src/runtime/drivers/s3')
+      vi.resetModules()
+    }
+  })
+
   it('prefers cached config artifacts for production module setup', async () => {
     const root = await createProject()
     const loadConfigDirectory = vi.fn(async () => ({
