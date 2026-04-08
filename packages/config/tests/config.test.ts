@@ -123,6 +123,175 @@ describe('@holo-js/config', () => {
     })
     expect(Object.isFrozen(queue)).toBe(true)
     expect(normalizeQueueConfigForHolo().default).toBe('sync')
+    expect(normalizeQueueConfigForHolo({
+      failed: false,
+    }).failed).toBe(false)
+    expect(() => normalizeQueueConfigForHolo({
+      failed: {
+        driver: 'redis' as never,
+      },
+    })).toThrow('Unsupported failed job store driver "redis"')
+    expect(() => normalizeQueueConfigForHolo({
+      default: 'missing',
+      connections: {
+        sync: {
+          driver: 'sync',
+        },
+      },
+    })).toThrow('default queue connection "missing" is not configured')
+
+    expect(normalizeQueueConfigForHolo({
+      connections: {
+        redis: {
+          driver: 'redis',
+          queue: 'emails',
+          retryAfter: '120',
+          blockFor: 0,
+          redis: {
+            host: ' redis.internal ',
+            port: '6380',
+            db: '4',
+          },
+        },
+        database: {
+          driver: 'database',
+          connection: 'main',
+          table: 'jobs',
+          queue: 'reports',
+          retryAfter: '30',
+          sleep: '2',
+        },
+      },
+    }).connections).toMatchObject({
+      redis: {
+        driver: 'redis',
+        queue: 'emails',
+        retryAfter: 120,
+        blockFor: 0,
+        redis: {
+          host: 'redis.internal',
+          port: 6380,
+          db: 4,
+        },
+      },
+      database: {
+        driver: 'database',
+        connection: 'main',
+        table: 'jobs',
+        queue: 'reports',
+        retryAfter: 30,
+        sleep: 2,
+      },
+    })
+    expect(normalizeQueueConfigForHolo({
+      failed: {
+        driver: 'database',
+      },
+      connections: {
+        redis: {
+          driver: 'redis',
+          redis: {
+            username: ' worker ',
+            password: ' secret ',
+          },
+        },
+      },
+    })).toMatchObject({
+      failed: {
+        connection: 'default',
+        table: 'failed_jobs',
+      },
+      connections: {
+        redis: {
+          redis: {
+            username: 'worker',
+            password: 'secret',
+          },
+        },
+      },
+    })
+    expect(normalizeQueueConfigForHolo({
+      failed: {
+        driver: 'database',
+        connection: '',
+        table: '',
+      },
+      connections: {
+        redis: {
+          driver: 'redis',
+          redis: {
+            password: '',
+            username: '',
+          },
+        },
+      },
+    })).toMatchObject({
+      failed: {
+        connection: 'default',
+        table: 'failed_jobs',
+      },
+      connections: {
+        redis: {
+          redis: {
+            username: undefined,
+            password: undefined,
+          },
+        },
+      },
+    })
+    expect(normalizeQueueConfigForHolo({
+      failed: {
+        driver: 'database',
+        connection: ' main ',
+        table: ' failed_jobs_archive ',
+      },
+      connections: {
+        database: {
+          driver: 'database',
+        },
+      },
+    })).toMatchObject({
+      failed: {
+        connection: 'main',
+        table: 'failed_jobs_archive',
+      },
+      connections: {
+        database: {
+          connection: 'default',
+          table: 'jobs',
+        },
+      },
+    })
+    expect(() => normalizeQueueConfigForHolo({
+      connections: {
+        broken: {
+          driver: 'redis',
+          retryAfter: 'abc',
+        } as never,
+      },
+    })).toThrow('must be an integer')
+    expect(() => normalizeQueueConfigForHolo({
+      connections: {
+        broken: {
+          driver: 'redis',
+          blockFor: -1,
+        },
+      },
+    })).toThrow('must be greater than or equal to 0')
+    expect(() => normalizeQueueConfigForHolo({
+      connections: {
+        ' ': {
+          driver: 'sync',
+        },
+      },
+    })).toThrow('must be a non-empty string')
+    expect(() => normalizeQueueConfigForHolo({
+      connections: {
+        broken: {
+          driver: 'sqs' as never,
+        },
+      },
+    })).toThrow('Unsupported queue driver "sqs"')
   })
 
   it('normalizes string debug flags in app config', () => {

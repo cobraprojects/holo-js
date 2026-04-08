@@ -14,6 +14,7 @@ import {
   defineEvent,
   defineListener,
   dispatchEvent,
+  ensureEventsQueueJobRegistered,
   eventQueueInternals,
   registerEvent,
   registerListener,
@@ -380,5 +381,10 @@ describe('@holo-js/events queue integration', () => {
     }, 'user.registered')).toThrow(
       'Queued listener "listener" is not registered for event "user.registered".',
     )
+  })
+
+  it('supports the synchronous registration wrapper', () => {
+    ensureEventsQueueJobRegistered()
+    expect(getRegisteredQueueJob(EVENTS_INVOKE_LISTENER_JOB)?.name).toBe(EVENTS_INVOKE_LISTENER_JOB)
   })
 })

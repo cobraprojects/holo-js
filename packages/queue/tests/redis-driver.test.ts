@@ -345,10 +345,84 @@ async function loadRedisQueueModule() {
 
 afterEach(() => {
   vi.doUnmock('bullmq')
+  vi.doUnmock('@holo-js/queue-redis')
   vi.resetModules()
 })
 
 describe('@holo-js/queue redis driver', () => {
+  it('exports the standalone config helper and supports closing unresolved redis drivers', async () => {
+    const { queue } = await loadRedisQueueModule()
+    const config = queue.defineQueueConfig({
+      connections: {
+        sync: {
+          driver: 'sync',
+        },
+      },
+    })
+
+    expect(config).toEqual({
+      connections: {
+        sync: {
+          driver: 'sync',
+        },
+      },
+    })
+    expect(Object.isFrozen(config)).toBe(true)
+
+    const driver = queue.redisQueueDriverFactory.create({
+      name: 'redis',
+      driver: 'redis',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 5,
+      redis: {
+        host: '127.0.0.1',
+        port: 6379,
+        db: 0,
+      },
+    }, queue.queueRuntimeInternals.createQueueDriverFactoryContext())
+
+    await expect(driver.close()).resolves.toBeUndefined()
+  })
+
+  it('rejects split drivers that do not implement the async contract', async () => {
+    vi.resetModules()
+    vi.doMock('@holo-js/queue-redis', () => ({
+      redisQueueDriverFactory: {
+        create() {
+          return {
+            mode: 'sync' as const,
+          }
+        },
+      },
+    }))
+
+    const queue = await import('../src')
+    const driver = queue.redisQueueDriverFactory.create({
+      name: 'redis',
+      driver: 'redis',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 5,
+      redis: {
+        host: '127.0.0.1',
+        port: 6379,
+        db: 0,
+      },
+    }, queue.queueRuntimeInternals.createQueueDriverFactoryContext())
+
+    await expect(driver.dispatch({
+      id: 'job-1',
+      name: 'redis.contract',
+      connection: 'redis',
+      queue: 'default',
+      payload: null,
+      attempts: 0,
+      maxAttempts: 1,
+      createdAt: 0,
+    })).rejects.toThrow('Redis queue driver must be async.')
+  })
+
   it('dispatches, reserves, acknowledges, releases, deletes, clears, and closes through the async driver contract', async () => {
     const { queue, state } = await loadRedisQueueModule()
     queue.registerQueueJob({

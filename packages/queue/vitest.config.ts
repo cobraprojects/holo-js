@@ -1,6 +1,12 @@
+import { resolve } from 'node:path'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@holo-js/queue-redis': resolve(__dirname, '../queue-redis/src/index.ts'),
+    },
+  },
   test: {
     name: '@holo-js/queue',
     environment: 'node',

@@ -5,8 +5,8 @@
   "type": "module",
   "license": "MIT",
   "bin": {
-    "holo": "dist/bin/holo.mjs",
-    "holo-js": "dist/bin/holo.mjs"
+    "holo": "./dist/bin/holo.mjs",
+    "holo-js": "./dist/bin/holo.mjs"
   },
   "exports": {
     ".": {
@@ -29,12 +29,12 @@
     "@holo-js/config": "^0.1.2",
     "@holo-js/core": "^0.1.2",
     "@holo-js/db": "^0.1.2",
-    "@holo-js/events": "^0.1.2",
-    "@holo-js/queue": "^0.1.2",
-    "@holo-js/queue-db": "^0.1.2",
     "esbuild": "^0.27.4"
   },
   "devDependencies": {
+    "@holo-js/events": "^0.1.2",
+    "@holo-js/queue": "^0.1.2",
+    "@holo-js/queue-db": "^0.1.2",
     "@types/node": "^22.10.2",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",

@@ -35,7 +35,16 @@
   "dependencies": {
     "@holo-js/config": "^0.1.2"
   },
+  "peerDependencies": {
+    "@holo-js/storage-s3": "^0.1.2"
+  },
+  "peerDependenciesMeta": {
+    "@holo-js/storage-s3": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@holo-js/storage-s3": "workspace:*",
     "@types/node": "^22.10.2",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",

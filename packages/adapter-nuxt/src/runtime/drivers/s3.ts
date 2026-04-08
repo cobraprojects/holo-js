@@ -1,1 +1,1 @@
-export { default } from '@holo-js/storage/runtime/drivers/s3'
+export { default } from '@holo-js/storage-s3'

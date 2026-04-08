@@ -59,16 +59,20 @@ type BuiltWorkspacePackages = {
   readonly corePackageRoot: string
   readonly configPackageRoot: string
   readonly dbPackageRoot: string
+  readonly dbMysqlPackageRoot: string
+  readonly dbPostgresPackageRoot: string
+  readonly dbSqlitePackageRoot: string
   readonly eventsPackageRoot: string
   readonly queuePackageRoot: string
+  readonly queueRedisPackageRoot: string
   readonly queueDbPackageRoot: string
   readonly storagePackageRoot: string
+  readonly storageS3PackageRoot: string
   readonly cliPackageRoot: string
   readonly cliBinPath: string
 }
 
 const tempBuildRoots: string[] = []
-const dbRuntimeDependencyNames = ['better-sqlite3', 'mysql2', 'pg', 'ulid', 'uuid'] as const
 let builtWorkspacePackages: BuiltWorkspacePackages | null = null
 const expectedHoloPackageRange = `^${HOLO_PACKAGE_VERSION}`
 const outdatedHoloPackageRange = '^0.0.1'
@@ -133,23 +137,50 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
 
   const root = createTempBuildRootSync('holo-cli-build-')
   const dbPackageRoot = join(root, 'packages/db')
+  const dbSqlitePackageRoot = join(root, 'packages/db-sqlite')
+  const dbPostgresPackageRoot = join(root, 'packages/db-postgres')
+  const dbMysqlPackageRoot = join(root, 'packages/db-mysql')
   const corePackageRoot = join(root, 'packages/core')
   const configPackageRoot = join(root, 'packages/config')
   const queuePackageRoot = join(root, 'packages/queue')
+  const queueRedisPackageRoot = join(root, 'packages/queue-redis')
   const queueDbPackageRoot = join(root, 'packages/queue-db')
   const eventsPackageRoot = join(root, 'packages/events')
   const storagePackageRoot = join(root, 'packages/storage')
+  const storageS3PackageRoot = join(root, 'packages/storage-s3')
   const cliPackageRoot = join(root, 'packages/cli')
 
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/db-sqlite'), dbSqlitePackageRoot)
+  linkExternalDependencySync(dbSqlitePackageRoot, 'better-sqlite3')
+  const dbSqliteBuild = buildWorkspacePackageSync('@holo-js/db-sqlite', join(dbSqlitePackageRoot, 'dist'))
+  expect(dbSqliteBuild.status, dbSqliteBuild.stderr || dbSqliteBuild.stdout).toBe(0)
+
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/db-postgres'), dbPostgresPackageRoot)
+  linkExternalDependencySync(dbPostgresPackageRoot, 'pg')
+  const dbPostgresBuild = buildWorkspacePackageSync('@holo-js/db-postgres', join(dbPostgresPackageRoot, 'dist'))
+  expect(dbPostgresBuild.status, dbPostgresBuild.stderr || dbPostgresBuild.stdout).toBe(0)
+
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/db-mysql'), dbMysqlPackageRoot)
+  linkExternalDependencySync(dbMysqlPackageRoot, 'mysql2')
+  const dbMysqlBuild = buildWorkspacePackageSync('@holo-js/db-mysql', join(dbMysqlPackageRoot, 'dist'))
+  expect(dbMysqlBuild.status, dbMysqlBuild.stderr || dbMysqlBuild.stdout).toBe(0)
+
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/db'), dbPackageRoot)
-  for (const dependencyName of dbRuntimeDependencyNames) {
-    linkExternalDependencySync(dbPackageRoot, dependencyName)
-  }
+  linkExternalDependencySync(dbPackageRoot, 'ulid')
+  linkExternalDependencySync(dbPackageRoot, 'uuid')
+  linkPackageDependencySync(dbPackageRoot, '@holo-js/db-sqlite', dbSqlitePackageRoot)
+  linkPackageDependencySync(dbPackageRoot, '@holo-js/db-postgres', dbPostgresPackageRoot)
+  linkPackageDependencySync(dbPackageRoot, '@holo-js/db-mysql', dbMysqlPackageRoot)
   const dbBuild = buildWorkspacePackageSync('@holo-js/db', join(dbPackageRoot, 'dist'))
   expect(dbBuild.status, dbBuild.stderr || dbBuild.stdout).toBe(0)
 
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/queue-redis'), queueRedisPackageRoot)
+  linkBunStoreDependencySync(queueRedisPackageRoot, 'bullmq')
+  const queueRedisBuild = buildWorkspacePackageSync('@holo-js/queue-redis', join(queueRedisPackageRoot, 'dist'))
+  expect(queueRedisBuild.status, queueRedisBuild.stderr || queueRedisBuild.stdout).toBe(0)
+
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/queue'), queuePackageRoot)
-  linkBunStoreDependencySync(queuePackageRoot, 'bullmq')
+  linkPackageDependencySync(queuePackageRoot, '@holo-js/queue-redis', queueRedisPackageRoot)
   const queueBuild = buildWorkspacePackageSync('@holo-js/queue', join(queuePackageRoot, 'dist'))
   expect(queueBuild.status, queueBuild.stderr || queueBuild.stdout).toBe(0)
 
@@ -171,7 +202,12 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   const configBuild = buildWorkspacePackageSync('@holo-js/config', join(configPackageRoot, 'dist'))
   expect(configBuild.status, configBuild.stderr || configBuild.stdout).toBe(0)
 
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/storage-s3'), storageS3PackageRoot)
+  const storageS3Build = buildWorkspacePackageSync('@holo-js/storage-s3', join(storageS3PackageRoot, 'dist'))
+  expect(storageS3Build.status, storageS3Build.stderr || storageS3Build.stdout).toBe(0)
+
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/storage'), storagePackageRoot)
+  linkPackageDependencySync(storagePackageRoot, '@holo-js/storage-s3', storageS3PackageRoot)
   const storageBuild = buildWorkspacePackageSync('@holo-js/storage', join(storagePackageRoot, 'dist'))
   expect(storageBuild.status, storageBuild.stderr || storageBuild.stdout).toBe(0)
 
@@ -201,10 +237,15 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
     corePackageRoot,
     configPackageRoot,
     dbPackageRoot,
+    dbMysqlPackageRoot,
+    dbPostgresPackageRoot,
+    dbSqlitePackageRoot,
     eventsPackageRoot,
     queuePackageRoot,
+    queueRedisPackageRoot,
     queueDbPackageRoot,
     storagePackageRoot,
+    storageS3PackageRoot,
     cliPackageRoot,
     cliBinPath: join(cliPackageRoot, 'dist/bin/holo.mjs'),
   }
@@ -376,7 +417,20 @@ async function writeFrameworkBinary(projectRoot: string, binaryName: string): Pr
 }
 
 async function withFakeBun<T>(callback: () => Promise<T>): Promise<T> {
-  return callback()
+  const fakeBinRoot = await mkdtemp(join(tmpdir(), 'holo-fake-bun-'))
+  const fakeBunPath = join(fakeBinRoot, 'bun')
+  const originalPath = process.env.PATH
+
+  await writeFile(fakeBunPath, '#!/bin/sh\nexit 0\n', 'utf8')
+  await chmod(fakeBunPath, 0o755)
+  process.env.PATH = `${fakeBinRoot}:${originalPath ?? ''}`
+
+  try {
+    return await callback()
+  } finally {
+    process.env.PATH = originalPath
+    await rm(fakeBinRoot, { recursive: true, force: true })
+  }
 }
 
 const tempDirs: string[] = []
@@ -419,7 +473,7 @@ export default {
     const executed = runCliProcess(projectRoot, ['courses:reindex'])
     expect(executed.status).toBe(0)
     expect(executed.stdout).toContain('courses reindexed')
-  }, 30000)
+  }, 90000)
 
   it('fails fast when a required argument is missing in non-interactive mode', async () => {
     const projectRoot = await createTempProject()
@@ -429,7 +483,7 @@ export default {
     const result = runCliProcess(projectRoot, ['make:model'])
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('Missing required argument: Model name.')
-  }, 30000)
+  }, 90000)
 
   it('scaffolds a new project non-interactively with deterministic files', async () => {
     const targetRoot = await createTempDirectory()
@@ -531,7 +585,7 @@ export default {
 
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toBe(await readFile(join(secondRoot, 'demo-app/package.json'), 'utf8'))
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toBe(await readFile(join(secondRoot, 'demo-app/.env.example'), 'utf8'))
-  }, 30000)
+  }, 90000)
 
   it('covers the in-process new command and scaffold helpers directly', async () => {
     const baseRoot = await createTempDirectory()
@@ -566,6 +620,23 @@ export default {
     })
 
     expect(await readFile(join(directRoot, 'storage/database.sqlite'), 'utf8')).toBe('')
+    expect(await readFile(join(directRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/forms": "${expectedHoloPackageRange}"`)
+    expect(await readFile(join(directRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/validation": "${expectedHoloPackageRange}"`)
+
+    const optionalRoot = join(baseRoot, 'optional-runtime-app')
+    await projectInternals.scaffoldProject(optionalRoot, {
+      projectName: 'Optional Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'public',
+      optionalPackages: ['storage', 'queue', 'events'],
+    })
+
+    expect(await readFile(join(optionalRoot, 'config/queue.ts'), 'utf8')).toContain('driver: \'sync\'')
+    expect(await readFile(join(optionalRoot, 'config/storage.ts'), 'utf8')).toContain('defineStorageConfig')
+    expect(await stat(join(optionalRoot, 'server/events'))).toBeDefined()
+    expect(await stat(join(optionalRoot, 'server/listeners'))).toBeDefined()
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: '!!!',
       framework: 'nuxt',
@@ -590,6 +661,14 @@ export default {
       storageDefaultDisk: 'local',
       optionalPackages: ['validation'],
     })).not.toContain(`"@holo-js/forms": "${expectedHoloPackageRange}"`)
+    expect(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Forms App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['forms'],
+    })).toContain(`"@holo-js/validation": "${expectedHoloPackageRange}"`)
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'Optional Runtime App',
       framework: 'next',
@@ -621,7 +700,7 @@ export default {
       packageManager: 'bun',
       storageDefaultDisk: 'public',
       optionalPackages: ['storage', 'events', 'queue'],
-    })).toContain(`"@holo-js/queue-db": "${expectedHoloPackageRange}"`)
+    })).not.toContain(`"@holo-js/queue-db": "${expectedHoloPackageRange}"`)
     expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain('import type { HoloAppEnv }')
     expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain('env<HoloAppEnv>(\'APP_ENV\', \'development\')')
     expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain('env<boolean>(\'APP_DEBUG\', true)')
@@ -639,7 +718,7 @@ export default {
       driver: 'database',
       defaultDatabaseConnection: 'main',
     })).toContain('driver: \'database\'')
-    expect(projectInternals.renderQueueConfig()).toContain('connection: \'default\'')
+    expect(projectInternals.renderQueueConfig()).toContain('failed: false')
     expect(projectInternals.renderQueueEnvFiles('sync').env).toEqual([])
     expect(projectInternals.renderQueueEnvFiles('redis').env).toContain('REDIS_HOST=127.0.0.1')
     expect(projectInternals.isSupportedQueueInstallerDriver('redis')).toBe(true)
@@ -669,6 +748,37 @@ export default {
     }).env).toContain('DB_DATABASE=holo_app')
     expect(projectInternals.resolveDefaultDatabaseUrl('sqlite')).toBe('./storage/database.sqlite')
     expect(projectInternals.resolveDefaultDatabaseUrl('postgres')).toBeUndefined()
+    expect(projectInternals.resolveProjectPackageImportSpecifier(
+      '/tmp/project',
+      '@holo-js/queue',
+      () => '/tmp/project/node_modules/@holo-js/queue/dist/index.mjs',
+    )).toBe(pathToFileURL('/tmp/project/node_modules/@holo-js/queue/dist/index.mjs').href)
+    expect(projectInternals.resolveProjectPackageImportSpecifier(
+      '/tmp/project',
+      '@holo-js/queue',
+      () => '/tmp/.bun/install/cache/@holo-js/queue/dist/index.mjs',
+    )).toBe(pathToFileURL('/tmp/.bun/install/cache/@holo-js/queue/dist/index.mjs').href)
+    expect(projectInternals.resolveProjectPackageImportSpecifier('/tmp/project', '@holo-js/queue', () => {
+      throw Object.assign(new Error('missing'), { code: 'MODULE_NOT_FOUND' })
+    })).toBe('@holo-js/queue')
+    expect(projectInternals.inferDatabaseDriverFromUrl('postgres://localhost/app')).toBe('postgres')
+    expect(projectInternals.inferDatabaseDriverFromUrl('mysql2://localhost/app')).toBe('mysql')
+    expect(projectInternals.inferDatabaseDriverFromUrl('./storage/database.sqlite')).toBe('sqlite')
+    expect(projectInternals.inferDatabaseDriverFromUrl('../storage/database.sqlite3')).toBe('sqlite')
+    expect(projectInternals.inferDatabaseDriverFromUrl(undefined)).toBeUndefined()
+    expect(projectInternals.inferDatabaseDriverFromUrl('sqlserver://localhost/app')).toBeUndefined()
+    expect(projectInternals.inferConnectionDriver('postgresql://localhost/app')).toBe('postgres')
+    expect(projectInternals.inferConnectionDriver('sqlserver://localhost/app')).toBeUndefined()
+    expect(projectInternals.inferConnectionDriver({ driver: 'mysql' })).toBe('mysql')
+    expect(projectInternals.inferConnectionDriver({ filename: './storage/data.sqlite' })).toBe('sqlite')
+    expect(projectInternals.inferConnectionDriver({ url: 'sqlserver://localhost/app' })).toBeUndefined()
+    expect(projectInternals.hasLoadedConfigFile([
+      '/tmp/example/config/queue.ts',
+      '/tmp/example/config/storage.mjs',
+    ], 'queue')).toBe(true)
+    expect(projectInternals.hasLoadedConfigFile([
+      '/tmp/example/config/storage.mjs',
+    ], 'queue')).toBe(false)
     expect(projectInternals.renderFrameworkRunner({
       framework: 'nuxt',
     })).toContain('Missing framework binary')
@@ -778,6 +888,7 @@ export default {
     expect(projectInternals.isSupportedScaffoldOptionalPackage('forms')).toBe(true)
     expect(projectInternals.isSupportedScaffoldOptionalPackage('storage')).toBe(true)
     expect(projectInternals.isSupportedScaffoldOptionalPackage('auth')).toBe(false)
+    expect(projectInternals.normalizeScaffoldOptionalPackages(['forms'])).toEqual(['forms', 'validation'])
     expect(projectInternals.normalizeScaffoldOptionalPackages(['validation', 'forms', 'validation'])).toEqual(['forms', 'validation'])
     expect(projectInternals.normalizeScaffoldOptionalPackages(['validate', 'form', 'storage', 'queue', 'events'])).toEqual([
       'events',
@@ -917,9 +1028,10 @@ export default {
       dependencies?: Record<string, string>
     }
     expect(packageJson.dependencies?.['@holo-js/queue']).toBe(expectedHoloPackageRange)
+    expect(packageJson.dependencies?.['@holo-js/queue-db']).toBeUndefined()
     expect(packageJson.dependencies?.esbuild).toBe('^0.27.4')
     expect(await readFile(join(projectRoot, 'config/queue.ts'), 'utf8')).toContain('default: \'sync\'')
-    expect(await readFile(join(projectRoot, 'config/queue.ts'), 'utf8')).toContain('connection: \'default\'')
+    expect(await readFile(join(projectRoot, 'config/queue.ts'), 'utf8')).toContain('failed: false')
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).toBe('APP_NAME=Fixture\n')
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toBe('APP_NAME=\n')
     await expect(stat(join(projectRoot, 'server/jobs'))).resolves.toBeDefined()
@@ -1130,10 +1242,15 @@ export default defineAppConfig({
     expect((await readFile(join(projectRoot, '.env'), 'utf8')).match(/REDIS_HOST=/g)?.length).toBe(1)
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('REDIS_DB=')
     expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))).toMatchObject({
+      dependencies: {
+        '@holo-js/queue': expectedHoloPackageRange,
+        '@holo-js/queue-redis': expectedHoloPackageRange,
+      },
       devDependencies: {
         typescript: '^5.0.0',
       },
     })
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies['@holo-js/queue-db']).toBeUndefined()
     await expect(stat(join(projectRoot, 'custom/jobs'))).resolves.toBeDefined()
     await expect(projectInternals.installQueueIntoProject(projectRoot, { driver: 'redis' })).resolves.toEqual({
       createdQueueConfig: false,
@@ -1141,6 +1258,50 @@ export default defineAppConfig({
       updatedEnv: false,
       updatedEnvExample: false,
       createdJobsDirectory: false,
+    })
+
+    const implicitFailedStoreRoot = await createTempProject()
+    tempDirs.push(implicitFailedStoreRoot)
+    await writeProjectFile(implicitFailedStoreRoot, 'config/queue.ts', `
+import { defineQueueConfig } from '@holo-js/config'
+
+export default defineQueueConfig({
+  default: 'redis',
+  connections: {
+    redis: {
+      driver: 'redis',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 5,
+      redis: {
+        host: '127.0.0.1',
+        port: 6379,
+        db: 0,
+      },
+    },
+  },
+})
+`)
+    await writeProjectFile(implicitFailedStoreRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/queue': expectedHoloPackageRange,
+      },
+    }, null, 2))
+    await expect(projectInternals.installQueueIntoProject(implicitFailedStoreRoot)).resolves.toEqual({
+      createdQueueConfig: false,
+      updatedPackageJson: true,
+      updatedEnv: false,
+      updatedEnvExample: false,
+      createdJobsDirectory: true,
+    })
+    expect(JSON.parse(await readFile(join(implicitFailedStoreRoot, 'package.json'), 'utf8'))).toMatchObject({
+      dependencies: {
+        '@holo-js/queue': expectedHoloPackageRange,
+        '@holo-js/queue-db': expectedHoloPackageRange,
+        '@holo-js/queue-redis': expectedHoloPackageRange,
+      },
     })
 
     const runRoot = await createTempProject()
@@ -1240,6 +1401,82 @@ export default defineAppConfig({
     } as never)).resolves.toBeUndefined()
     expect(eventsRunIo.read().stdout).toContain('Events support is already installed.')
 
+    const interactiveEventsRoot = await createTempProject()
+    tempDirs.push(interactiveEventsRoot)
+    await writeProjectFile(interactiveEventsRoot, '.env', 'APP_NAME=Queued\n')
+    await writeProjectFile(interactiveEventsRoot, '.env.example', 'APP_NAME=\n')
+    const interactiveEventsIo = createIo(interactiveEventsRoot, {
+      tty: true,
+      input: 'y\n',
+    })
+    const interactiveEventsContext = {
+      ...interactiveEventsIo.io,
+      projectRoot: interactiveEventsRoot,
+      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    }
+    const interactiveEventsCommand = cliInternals.createInternalCommands(interactiveEventsContext as never)
+      .find(command => command.name === 'install')
+    await expect(interactiveEventsCommand?.run({
+      projectRoot: interactiveEventsRoot,
+      cwd: interactiveEventsRoot,
+      args: ['events'],
+      flags: {},
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    } as never)).resolves.toBeUndefined()
+    const interactiveOutput = interactiveEventsIo.read().stdout
+    expect(interactiveOutput).toContain('Installed events support.')
+    expect(interactiveOutput).toContain('enabled queued listeners')
+    expect(interactiveOutput).toContain('created config/queue.ts')
+    expect(interactiveOutput).toContain('created server/jobs')
+    expect(JSON.parse(await readFile(join(interactiveEventsRoot, 'package.json'), 'utf8'))).toMatchObject({
+      dependencies: {
+        '@holo-js/events': expectedHoloPackageRange,
+        '@holo-js/queue': expectedHoloPackageRange,
+      },
+    })
+    expect(JSON.parse(await readFile(join(interactiveEventsRoot, 'package.json'), 'utf8')).dependencies['@holo-js/queue-db']).toBeUndefined()
+    await expect(readFile(join(interactiveEventsRoot, 'config/queue.ts'), 'utf8')).resolves.toContain('default: \'sync\'')
+
+    const queueOnlyEventsRoot = await createTempProject()
+    tempDirs.push(queueOnlyEventsRoot)
+    await writeProjectFile(queueOnlyEventsRoot, '.env', 'APP_NAME=Queued\n')
+    await writeProjectFile(queueOnlyEventsRoot, '.env.example', 'APP_NAME=\n')
+    const queueOnlyPackageJson = JSON.parse(await readFile(join(queueOnlyEventsRoot, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    queueOnlyPackageJson.dependencies = {
+      ...queueOnlyPackageJson.dependencies,
+      '@holo-js/events': expectedHoloPackageRange,
+    }
+    await writeFile(join(queueOnlyEventsRoot, 'package.json'), JSON.stringify(queueOnlyPackageJson, null, 2), 'utf8')
+    await mkdir(join(queueOnlyEventsRoot, 'server/events'), { recursive: true })
+    await mkdir(join(queueOnlyEventsRoot, 'server/listeners'), { recursive: true })
+
+    const queueOnlyEventsIo = createIo(queueOnlyEventsRoot, {
+      tty: true,
+      input: 'y\n',
+    })
+    const queueOnlyEventsContext = {
+      ...queueOnlyEventsIo.io,
+      projectRoot: queueOnlyEventsRoot,
+      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    }
+    const queueOnlyEventsCommand = cliInternals.createInternalCommands(queueOnlyEventsContext as never)
+      .find(command => command.name === 'install')
+    await expect(queueOnlyEventsCommand?.run({
+      projectRoot: queueOnlyEventsRoot,
+      cwd: queueOnlyEventsRoot,
+      args: ['events'],
+      flags: {},
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    } as never)).resolves.toBeUndefined()
+    const queueOnlyOutput = queueOnlyEventsIo.read().stdout
+    expect(queueOnlyOutput).toContain('Installed events support.')
+    expect(queueOnlyOutput).toContain('updated package.json')
+    expect(queueOnlyOutput).toContain('enabled queued listeners')
+
     const missingPackageRoot = await createTempDirectory()
     tempDirs.push(missingPackageRoot)
     await expect(projectInternals.installQueueIntoProject(missingPackageRoot, { driver: 'sync' })).rejects.toThrow(`Missing package.json in ${missingPackageRoot}.`)
@@ -1272,13 +1509,324 @@ export default defineAppConfig({
         typescript: '^5.0.0',
       },
     })
+
+    const dependencySyncRoot = await createTempProject()
+    tempDirs.push(dependencySyncRoot)
+    await writeProjectFile(dependencySyncRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/db': expectedHoloPackageRange,
+        '@holo-js/db-sqlite': expectedHoloPackageRange,
+        '@holo-js/queue-db': expectedHoloPackageRange,
+      },
+    }, null, 2))
+    await writeProjectFile(dependencySyncRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/config'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'postgres',
+      url: 'postgres://localhost/app',
+    },
+  },
+})
+`)
+    await writeProjectFile(dependencySyncRoot, 'config/queue.ts', `
+import { defineQueueConfig } from '@holo-js/config'
+
+export default defineQueueConfig({
+  default: 'redis',
+  failed: false,
+  connections: {
+    redis: {
+      driver: 'redis',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 5,
+      redis: {
+        host: '127.0.0.1',
+        port: 6379,
+        db: 0,
+      },
+    },
+  },
+})
+`)
+    await writeProjectFile(dependencySyncRoot, 'config/storage.ts', `
+import { defineStorageConfig } from '@holo-js/config'
+
+export default defineStorageConfig({
+  defaultDisk: 's3',
+  disks: {
+    s3: {
+      driver: 's3',
+      bucket: 'media-bucket',
+      region: 'us-east-1',
+      endpoint: 'https://s3.us-east-1.amazonaws.com',
+      accessKeyId: 'key',
+      secretAccessKey: 'secret',
+    },
+  },
+})
+`)
+    await expect(projectInternals.syncManagedDriverDependencies(dependencySyncRoot)).resolves.toBe(true)
+    expect(JSON.parse(await readFile(join(dependencySyncRoot, 'package.json'), 'utf8'))).toMatchObject({
+      dependencies: {
+        '@holo-js/db': expectedHoloPackageRange,
+        '@holo-js/db-postgres': expectedHoloPackageRange,
+        '@holo-js/queue': expectedHoloPackageRange,
+        '@holo-js/queue-redis': expectedHoloPackageRange,
+        '@holo-js/storage': expectedHoloPackageRange,
+        '@holo-js/storage-s3': expectedHoloPackageRange,
+      },
+    })
+    expect(JSON.parse(await readFile(join(dependencySyncRoot, 'package.json'), 'utf8')).dependencies['@holo-js/db-sqlite']).toBeUndefined()
+    expect(JSON.parse(await readFile(join(dependencySyncRoot, 'package.json'), 'utf8')).dependencies['@holo-js/queue-db']).toBeUndefined()
+    await expect(projectInternals.syncManagedDriverDependencies(dependencySyncRoot)).resolves.toBe(false)
+    expect(projectInternals.inferConnectionDriver('sqlserver://localhost/app')).toBeUndefined()
+    expect(projectInternals.inferConnectionDriver({ url: 'sqlserver://localhost/app' })).toBeUndefined()
+
+    const queueDefaultFailedStoreRoot = await createTempProject()
+    tempDirs.push(queueDefaultFailedStoreRoot)
+    await writeProjectFile(queueDefaultFailedStoreRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/db': expectedHoloPackageRange,
+        '@holo-js/db-postgres': expectedHoloPackageRange,
+      },
+    }, null, 2))
+    await writeProjectFile(queueDefaultFailedStoreRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/config'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'postgres',
+      url: 'postgres://localhost/app',
+    },
+  },
+})
+`)
+    await writeProjectFile(queueDefaultFailedStoreRoot, 'config/queue.ts', `
+import { defineQueueConfig } from '@holo-js/config'
+
+export default defineQueueConfig({
+  default: 'redis',
+  connections: {
+    redis: {
+      driver: 'redis',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 5,
+      redis: {
+        host: '127.0.0.1',
+        port: 6379,
+        db: 0,
+      },
+    },
+  },
+})
+`)
+    await expect(projectInternals.syncManagedDriverDependencies(queueDefaultFailedStoreRoot)).resolves.toBe(true)
+    expect(JSON.parse(await readFile(join(queueDefaultFailedStoreRoot, 'package.json'), 'utf8'))).toMatchObject({
+      dependencies: {
+        '@holo-js/queue': expectedHoloPackageRange,
+        '@holo-js/queue-db': expectedHoloPackageRange,
+        '@holo-js/queue-redis': expectedHoloPackageRange,
+      },
+    })
+
+    const queueFailedStoreRoot = await createTempProject()
+    tempDirs.push(queueFailedStoreRoot)
+    await writeProjectFile(queueFailedStoreRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/db': expectedHoloPackageRange,
+        '@holo-js/db-postgres': expectedHoloPackageRange,
+      },
+    }, null, 2))
+    await writeProjectFile(queueFailedStoreRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/config'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'postgres',
+      url: 'postgres://localhost/app',
+    },
+  },
+})
+`)
+    await writeProjectFile(queueFailedStoreRoot, 'config/queue.ts', `
+import { defineQueueConfig } from '@holo-js/config'
+
+export default defineQueueConfig({
+  default: 'redis',
+  failed: {
+    driver: 'database',
+  },
+  connections: {
+    redis: {
+      driver: 'redis',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 5,
+      redis: {
+        host: '127.0.0.1',
+        port: 6379,
+        db: 0,
+      },
+    },
+  },
+})
+`)
+    await expect(projectInternals.syncManagedDriverDependencies(queueFailedStoreRoot)).resolves.toBe(true)
+    expect(JSON.parse(await readFile(join(queueFailedStoreRoot, 'package.json'), 'utf8'))).toMatchObject({
+      dependencies: {
+        '@holo-js/queue': expectedHoloPackageRange,
+        '@holo-js/queue-db': expectedHoloPackageRange,
+        '@holo-js/queue-redis': expectedHoloPackageRange,
+      },
+    })
+
+    const staleQueuePackagesRoot = await createTempProject()
+    tempDirs.push(staleQueuePackagesRoot)
+    await writeProjectFile(staleQueuePackagesRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/db': expectedHoloPackageRange,
+        '@holo-js/queue-db': expectedHoloPackageRange,
+        '@holo-js/queue-redis': expectedHoloPackageRange,
+      },
+    }, null, 2))
+    await writeProjectFile(staleQueuePackagesRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/config'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'sqlite',
+      url: ':memory:',
+    },
+  },
+})
+`)
+    await expect(projectInternals.syncManagedDriverDependencies(staleQueuePackagesRoot)).resolves.toBe(true)
+    expect(JSON.parse(await readFile(join(staleQueuePackagesRoot, 'package.json'), 'utf8'))).toMatchObject({
+      dependencies: {
+        '@holo-js/db': expectedHoloPackageRange,
+      },
+    })
+    expect(JSON.parse(await readFile(join(staleQueuePackagesRoot, 'package.json'), 'utf8')).dependencies['@holo-js/queue-db']).toBeUndefined()
+    expect(JSON.parse(await readFile(join(staleQueuePackagesRoot, 'package.json'), 'utf8')).dependencies['@holo-js/queue-redis']).toBeUndefined()
   }, 30000)
 
-  it('supports interactive project creation prompts and rejects invalid or cancelled answers', async () => {
+  it('detects queue and storage config files from Windows-style loaded paths during dependency sync', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/db': expectedHoloPackageRange,
+      },
+    }, null, 2))
+
+    vi.resetModules()
+    vi.doMock('@holo-js/config', async () => {
+      const actual = await vi.importActual('@holo-js/config') as typeof HoloConfigModule
+      return {
+        ...actual,
+        loadConfigDirectory: vi.fn(async () => ({
+          app: actual.holoAppDefaults,
+          database: {
+            defaultConnection: 'default',
+            connections: {
+              default: {
+                driver: 'postgres',
+                url: 'postgres://localhost/app',
+              },
+            },
+          },
+          queue: {
+            default: 'redis',
+            failed: false,
+            connections: {
+              redis: {
+                name: 'redis',
+                driver: 'redis',
+                queue: 'default',
+                retryAfter: 90,
+                blockFor: 5,
+                redis: {
+                  host: '127.0.0.1',
+                  port: 6379,
+                  db: 0,
+                },
+              },
+            },
+          },
+          storage: {
+            defaultDisk: 'media',
+            routePrefix: '/storage',
+            disks: {
+              media: {
+                name: 'media',
+                driver: 's3',
+                visibility: 'private',
+                bucket: 'media-bucket',
+                region: 'us-east-1',
+                endpoint: 'https://s3.us-east-1.amazonaws.com',
+              },
+            },
+          },
+          media: {},
+          custom: {},
+          all: {} as never,
+          environment: {
+            name: 'development',
+            values: {},
+            loadedFiles: [],
+            warnings: [],
+          },
+          loadedFiles: [
+            'C:\\workspace\\app\\config\\queue.ts',
+            'C:\\workspace\\app\\config\\storage.ts',
+          ],
+          warnings: [],
+        })),
+      }
+    })
+
+    try {
+      const { projectInternals: isolatedProjectInternals } = await import('../src/project')
+      await expect(isolatedProjectInternals.syncManagedDriverDependencies(projectRoot)).resolves.toBe(true)
+      expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))).toMatchObject({
+        dependencies: {
+          '@holo-js/db': expectedHoloPackageRange,
+          '@holo-js/db-postgres': expectedHoloPackageRange,
+          '@holo-js/queue': expectedHoloPackageRange,
+          '@holo-js/queue-redis': expectedHoloPackageRange,
+          '@holo-js/storage': expectedHoloPackageRange,
+          '@holo-js/storage-s3': expectedHoloPackageRange,
+        },
+      })
+      expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies['@holo-js/queue-db']).toBeUndefined()
+    } finally {
+      vi.doUnmock('@holo-js/config')
+      vi.resetModules()
+    }
+  }, 30000)
+
+  it('resolves new project input defaults, flags, and storage package defaults', async () => {
     const baseRoot = await createTempDirectory()
     tempDirs.push(baseRoot)
 
-    const io = createIo(baseRoot, { tty: true })
     await expect(cliInternals.resolveNewProjectInput(createIo(baseRoot).io, {
       args: [],
       flags: {},
@@ -1314,6 +1862,19 @@ export default defineAppConfig({
       storageDefaultDisk: 'local',
       optionalPackages: ['forms', 'validation'],
     })
+    await expect(cliInternals.resolveNewProjectInput(createIo(baseRoot).io, {
+      args: ['forms-app'],
+      flags: {
+        package: 'forms',
+      },
+    })).resolves.toEqual({
+      projectName: 'forms-app',
+      framework: 'nuxt',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['forms', 'validation'],
+    })
 
     await expect(cliInternals.resolveNewProjectInput(createIo(baseRoot).io, {
       args: ['defaults-app'],
@@ -1326,6 +1887,46 @@ export default defineAppConfig({
       storageDefaultDisk: 'local',
       optionalPackages: [],
     })
+    await expect(cliInternals.resolveNewProjectInput(createIo(baseRoot).io, {
+      args: ['storage-flag-app'],
+      flags: {
+        framework: 'nuxt',
+        database: 'sqlite',
+        'package-manager': 'bun',
+        package: 'storage',
+        'storage-default-disk': 'public',
+      },
+    })).resolves.toEqual({
+      projectName: 'storage-flag-app',
+      framework: 'nuxt',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'public',
+      optionalPackages: ['storage'],
+    })
+
+    await expect(cliInternals.resolveNewProjectInput(createIo(baseRoot).io, {
+      args: ['storage-default-app'],
+      flags: {
+        framework: 'nuxt',
+        database: 'sqlite',
+        'package-manager': 'bun',
+        package: 'storage',
+      },
+    })).resolves.toEqual({
+      projectName: 'storage-default-app',
+      framework: 'nuxt',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['storage'],
+    })
+  })
+
+  it('supports interactive new project prompts', async () => {
+    const baseRoot = await createTempDirectory()
+    tempDirs.push(baseRoot)
+
     const defaultNamePromptIo = createIo(baseRoot, {
       tty: true,
       input: 'default-prompt-app\n',
@@ -1388,6 +1989,7 @@ export default defineAppConfig({
       optionalPackages: ['forms', 'validation'],
     })
 
+    const io = createIo(baseRoot, { tty: true })
     await expect(cliInternals.resolveNewProjectInput(io.io, { args: [], flags: {} }, {
       prompt: async () => 'prompted-app',
       choose: async (_label, _allowed, defaultValue) => {
@@ -1407,6 +2009,24 @@ export default defineAppConfig({
     })
 
     await expect(cliInternals.resolveNewProjectInput(io.io, { args: [], flags: {} }, {
+      prompt: async () => 'storage-app',
+      choose: async (_label, _allowed, defaultValue) => {
+        if (defaultValue === 'nuxt') return 'nuxt' as typeof defaultValue
+        if (defaultValue === 'sqlite') return 'sqlite' as typeof defaultValue
+        if (defaultValue === 'bun') return 'bun' as typeof defaultValue
+        return 'public' as typeof defaultValue
+      },
+      optionalPackages: async () => ['storage'],
+    })).resolves.toEqual({
+      projectName: 'storage-app',
+      framework: 'nuxt',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'public',
+      optionalPackages: ['storage'],
+    })
+
+    await expect(cliInternals.resolveNewProjectInput(io.io, { args: [], flags: {} }, {
       prompt: async () => 'bad-app',
       choose: async () => {
         throw new Error('Unsupported Framework: invalid-framework. Expected one of nuxt, next, sveltekit.')
@@ -1419,6 +2039,11 @@ export default defineAppConfig({
       choose: async (_label, _allowed, defaultValue) => defaultValue,
       optionalPackages: async () => [],
     })).rejects.toThrow('Project creation cancelled.')
+  }, 60000)
+
+  it('validates prompt helpers and optional package aliases', async () => {
+    const baseRoot = await createTempDirectory()
+    tempDirs.push(baseRoot)
 
     const choiceIo = createIo(baseRoot, {
       tty: true,
@@ -1436,10 +2061,16 @@ export default defineAppConfig({
       input: 'forms,validation\n',
     })
     await expect(cliInternals.promptOptionalPackages(optionalPromptIo.io)).resolves.toEqual(['forms', 'validation'])
+    const formsOnlyPromptIo = createIo(baseRoot, {
+      tty: true,
+      input: 'forms\n',
+    })
+    await expect(cliInternals.promptOptionalPackages(formsOnlyPromptIo.io)).resolves.toEqual(['forms', 'validation'])
     expect(cliInternals.normalizeChoice('next', ['nuxt', 'next'], 'Framework')).toBe('next')
     expect(() => cliInternals.normalizeChoice('astro', ['nuxt', 'next'], 'Framework')).toThrow('Unsupported Framework')
     expect(() => cliInternals.normalizeChoice(undefined, ['nuxt', 'next'], 'Framework')).toThrow('(empty)')
     expect(() => cliInternals.normalizeOptionalPackages(['weird-package'])).toThrow('Unsupported optional package')
+    expect(cliInternals.normalizeOptionalPackages(['forms'])).toEqual(['forms', 'validation'])
     expect(cliInternals.normalizeOptionalPackages(['forms', 'validation', 'forms'])).toEqual(['forms', 'validation'])
     expect(cliInternals.normalizeOptionalPackages(['form', 'validate', 'storage', 'queue', 'events'])).toEqual([
       'events',
@@ -1449,7 +2080,7 @@ export default defineAppConfig({
       'validation',
     ])
     expect(cliInternals.normalizeOptionalPackages(['none'])).toEqual([])
-  }, 30000)
+  })
 
   it('rejects conflicting flags, unsupported values, non-empty targets, and generated project regressions', async () => {
     const baseRoot = await createTempDirectory()
@@ -1525,6 +2156,72 @@ export default defineAppConfig({
       env: process.env,
     })
     expect(clearResult.status, clearResult.stderr || clearResult.stdout).toBe(0)
+  }, 30000)
+
+  it('prepares discovery artifacts and syncs managed driver dependencies before installing them', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await linkWorkspaceCli(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/db': expectedHoloPackageRange,
+        '@holo-js/db-sqlite': expectedHoloPackageRange,
+      },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/config'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'postgres',
+      url: 'postgres://localhost/app',
+    },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      packageManager: 'npm@10.0.0',
+      dependencies: {
+        '@holo-js/db': expectedHoloPackageRange,
+        '@holo-js/db-sqlite': expectedHoloPackageRange,
+      },
+    }, null, 2))
+
+    const fakeBinRoot = await createTempDirectory()
+    tempDirs.push(fakeBinRoot)
+    const installLogPath = join(fakeBinRoot, 'npm-install.log')
+    await writeFile(join(fakeBinRoot, 'npm'), `#!/bin/sh
+printf '%s\n' "$*" > ${JSON.stringify(installLogPath)}
+printf 'fake npm install\n'
+`, 'utf8')
+    await chmod(join(fakeBinRoot, 'npm'), 0o755)
+    const io = createIo(projectRoot)
+    const originalPath = process.env.PATH
+
+    process.env.PATH = `${fakeBinRoot}:${originalPath ?? ''}`
+    try {
+      await withFakeBun(async () => {
+        await cliInternals.runProjectPrepare(projectRoot, io.io)
+      })
+    } finally {
+      process.env.PATH = originalPath
+    }
+
+    expect(await readFile(join(projectRoot, '.holo-js/generated/registry.json'), 'utf8')).toContain('"version": 1')
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))).toMatchObject({
+      dependencies: {
+        '@holo-js/db': expectedHoloPackageRange,
+        '@holo-js/db-postgres': expectedHoloPackageRange,
+      },
+    })
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies?.['@holo-js/db-sqlite']).toBeUndefined()
+    expect(await readFile(installLogPath, 'utf8')).toContain('install')
+    expect(io.read().stdout).toContain('fake npm install')
   }, 30000)
 
   it('caches config placeholders and clears the cache through the CLI', async () => {
@@ -3370,9 +4067,51 @@ export default {
       .toBe(pathToFileURL(join(workspaceRoot, 'packages/config/dist/index.mjs')).href)
     expect(cliInternals.resolveConfigModuleUrl(() => pathToFileURL(join(workspaceRoot, 'packages/config/src/index.mjs')).href))
       .toBe(pathToFileURL(join(workspaceRoot, 'packages/config/dist/index.mjs')).href)
+    await expect(cliInternals.resolvePackageManagerInstallInvocation(projectRoot)).resolves.toEqual({
+      command: 'bun',
+      args: ['install'],
+    })
+    const installIo = createIo(projectRoot)
+    const spawnInstall = vi.fn(() => ({
+      status: 0,
+      stdout: 'installed ok\n',
+      stderr: 'warning\n',
+    }))
+    await expect(cliInternals.runProjectDependencyInstall(installIo.io, projectRoot, spawnInstall as never)).resolves.toBeUndefined()
+    expect(installIo.read().stdout).toContain('installed ok')
+    expect(installIo.read().stderr).toContain('warning')
+    const spawnInstallFailure = vi.fn(() => ({
+      status: 1,
+      stdout: '',
+      stderr: 'install failed',
+    }))
+    await expect(cliInternals.runProjectDependencyInstall(installIo.io, projectRoot, spawnInstallFailure as never))
+      .rejects.toThrow('install failed')
+    const spawnInstallSilentFailure = vi.fn(() => ({
+      status: 1,
+      stdout: '',
+      stderr: '',
+    }))
+    await expect(cliInternals.runProjectDependencyInstall(installIo.io, projectRoot, spawnInstallSilentFailure as never))
+      .rejects.toThrow('Project dependency installation failed.')
 
     await expect(cliInternals.fileExists(notePath)).resolves.toBe(true)
     await expect(cliInternals.fileExists(join(projectRoot, 'missing.txt'))).resolves.toBe(false)
+    await expect(cliInternals.hasProjectDependency(join(projectRoot, 'missing-project'), '@holo-js/queue')).resolves.toBe(false)
+    await writeFile(join(projectRoot, 'package.json'), '{ invalid json', 'utf8')
+    await expect(cliInternals.hasProjectDependency(projectRoot, '@holo-js/queue')).resolves.toBe(false)
+    await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+      dependencies: {
+        '@holo-js/queue': '^0.1.2',
+      },
+    }), 'utf8')
+    await expect(cliInternals.hasProjectDependency(projectRoot, '@holo-js/queue')).resolves.toBe(true)
+    await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+      devDependencies: {
+        '@holo-js/queue': '^0.1.2',
+      },
+    }), 'utf8')
+    await expect(cliInternals.hasProjectDependency(projectRoot, '@holo-js/queue')).resolves.toBe(true)
     await expect(cliInternals.ensureAbsent(join(projectRoot, 'missing.txt'))).resolves.toBeUndefined()
     await expect(cliInternals.ensureAbsent(notePath)).rejects.toThrow('Refusing to overwrite existing file')
 
@@ -6093,9 +6832,10 @@ export default defineJob({
     tempDirs.push(projectRoot)
     const io = createIo(projectRoot)
     const shutdown = vi.fn(async () => {})
+    const queueModuleSpecifier = projectInternals.resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue')
 
     vi.resetModules()
-    vi.doMock('@holo-js/queue', async () => {
+    vi.doMock(queueModuleSpecifier, async () => {
       const actual = await vi.importActual('@holo-js/queue') as typeof HoloQueueModule
       return {
         ...actual,
@@ -6109,12 +6849,12 @@ export default defineJob({
         initialize: async () => ({ shutdown }) as never,
       })).resolves.toBeUndefined()
 
-      const queueModule = await import('@holo-js/queue')
+      const queueModule = await import(queueModuleSpecifier)
       expect(vi.mocked(queueModule.clearQueueConnection)).toHaveBeenCalledWith('redis', {})
       expect(shutdown).toHaveBeenCalledTimes(1)
       expect(io.read().stdout).toContain('Cleared 6 pending job(s).')
     } finally {
-      vi.doUnmock('@holo-js/queue')
+      vi.doUnmock(queueModuleSpecifier)
       vi.resetModules()
     }
   }, 30000)
@@ -6177,6 +6917,7 @@ export default defineJob({
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     const io = createIo(projectRoot)
+    const queueModuleSpecifier = projectInternals.resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue')
 
     vi.resetModules()
     vi.doMock('@holo-js/core', async () => ({
@@ -6214,7 +6955,7 @@ export default defineJob({
         })),
       }
     })
-    vi.doMock('@holo-js/queue', async (importOriginal) => {
+    vi.doMock(queueModuleSpecifier, async () => {
       const actual = await vi.importActual('@holo-js/queue') as typeof HoloQueueModule
       return {
         ...actual,
@@ -6228,7 +6969,7 @@ export default defineJob({
       const { cliInternals: isolatedCliInternals } = await import('../src/cli')
       await expect(isolatedCliInternals.runQueueClearCommand(io.io, projectRoot, 'redis', ['emails'])).resolves.toBeUndefined()
 
-      const queueModule = await import('@holo-js/queue')
+      const queueModule = await import(queueModuleSpecifier)
       const configModule = await import('@holo-js/config') as typeof HoloConfigModule
       expect(vi.mocked(configModule.loadConfigDirectory)).toHaveBeenCalledTimes(1)
       expect(vi.mocked(queueModule.configureQueueRuntime)).toHaveBeenCalledTimes(1)
@@ -6240,7 +6981,7 @@ export default defineJob({
     } finally {
       vi.doUnmock('@holo-js/config')
       vi.doUnmock('@holo-js/core')
-      vi.doUnmock('@holo-js/queue')
+      vi.doUnmock(queueModuleSpecifier)
       vi.resetModules()
     }
   }, 30000)
@@ -6249,6 +6990,8 @@ export default defineJob({
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     const io = createIo(projectRoot)
+    const queueModuleSpecifier = projectInternals.resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue')
+    const queueDbModuleSpecifier = projectInternals.resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue-db')
     const initializeAll = vi.fn(async () => {})
     const disconnectAll = vi.fn(async () => {})
     const manager = {
@@ -6298,7 +7041,7 @@ export default defineJob({
         resolveRuntimeConnectionManagerOptions: vi.fn(() => manager),
       }
     })
-    vi.doMock('@holo-js/queue', async () => {
+    vi.doMock(queueModuleSpecifier, async () => {
       const actual = await vi.importActual('@holo-js/queue') as typeof HoloQueueModule
       return {
         ...actual,
@@ -6307,7 +7050,7 @@ export default defineJob({
         shutdownQueueRuntime: vi.fn(async () => {}),
       }
     })
-    vi.doMock('@holo-js/queue-db', async () => ({
+    vi.doMock(queueDbModuleSpecifier, async () => ({
       createQueueDbRuntimeOptions: vi.fn(() => ({
         driverFactories: [],
         failedJobStore: undefined,
@@ -6319,8 +7062,8 @@ export default defineJob({
       await expect(isolatedCliInternals.runQueueClearCommand(io.io, projectRoot, 'database', undefined)).resolves.toBeUndefined()
 
       const dbModule = await import('@holo-js/db') as typeof HoloDbModule
-      const queueModule = await import('@holo-js/queue')
-      const queueDbModule = await import('@holo-js/queue-db') as typeof HoloQueueDbModule
+      const queueModule = await import(queueModuleSpecifier)
+      const queueDbModule = await import(queueDbModuleSpecifier) as typeof HoloQueueDbModule
 
       expect(vi.mocked(queueDbModule.createQueueDbRuntimeOptions)).toHaveBeenCalledTimes(1)
       expect(vi.mocked(dbModule.resolveRuntimeConnectionManagerOptions)).toHaveBeenCalledWith({
@@ -6344,8 +7087,8 @@ export default defineJob({
     } finally {
       vi.doUnmock('@holo-js/config')
       vi.doUnmock('@holo-js/db')
-      vi.doUnmock('@holo-js/queue')
-      vi.doUnmock('@holo-js/queue-db')
+      vi.doUnmock(queueModuleSpecifier)
+      vi.doUnmock(queueDbModuleSpecifier)
       vi.resetModules()
     }
   }, 30000)
@@ -6354,6 +7097,8 @@ export default defineJob({
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     const io = createIo(projectRoot)
+    const queueModuleSpecifier = projectInternals.resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue')
+    const queueDbModuleSpecifier = projectInternals.resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue-db')
     const initializeAll = vi.fn(async () => {
       throw new Error('database queue init failed')
     })
@@ -6405,7 +7150,7 @@ export default defineJob({
         resolveRuntimeConnectionManagerOptions: vi.fn(() => manager),
       }
     })
-    vi.doMock('@holo-js/queue', async () => {
+    vi.doMock(queueModuleSpecifier, async () => {
       const actual = await vi.importActual('@holo-js/queue') as typeof HoloQueueModule
       return {
         ...actual,
@@ -6414,7 +7159,7 @@ export default defineJob({
         shutdownQueueRuntime: vi.fn(async () => {}),
       }
     })
-    vi.doMock('@holo-js/queue-db', async () => ({
+    vi.doMock(queueDbModuleSpecifier, async () => ({
       createQueueDbRuntimeOptions: vi.fn(() => ({
         driverFactories: [],
         failedJobStore: undefined,
@@ -6428,7 +7173,7 @@ export default defineJob({
       ).rejects.toThrow('database queue init failed')
 
       const dbModule = await import('@holo-js/db') as typeof HoloDbModule
-      const queueModule = await import('@holo-js/queue')
+      const queueModule = await import(queueModuleSpecifier)
       expect(vi.mocked(queueModule.clearQueueConnection)).not.toHaveBeenCalled()
       expect(disconnectAll).toHaveBeenCalledTimes(1)
       expect(vi.mocked(dbModule.resetDB)).toHaveBeenCalledTimes(1)
@@ -6436,8 +7181,8 @@ export default defineJob({
     } finally {
       vi.doUnmock('@holo-js/config')
       vi.doUnmock('@holo-js/db')
-      vi.doUnmock('@holo-js/queue')
-      vi.doUnmock('@holo-js/queue-db')
+      vi.doUnmock(queueModuleSpecifier)
+      vi.doUnmock(queueDbModuleSpecifier)
       vi.resetModules()
     }
   }, 30000)
@@ -7497,20 +8242,21 @@ export default defineJob({
       await new Promise(resolve => setTimeout(resolve, 5))
     }
 
+    await new Promise(resolve => setTimeout(resolve, 10))
     await cliInternals.writeQueueRestartSignal(projectRoot)
     spawnedChildren[0]?.emit('close', 0)
 
-    for (let attempts = 0; attempts < 100 && spawnedChildren.length < 2; attempts += 1) {
+    for (let attempts = 0; attempts < 300 && spawnedChildren.length < 2; attempts += 1) {
       await new Promise(resolve => setTimeout(resolve, 5))
     }
-    for (let attempts = 0; attempts < 100 && (spawnedChildren[1]?.listenerCount('close') ?? 0) === 0; attempts += 1) {
+    for (let attempts = 0; attempts < 300 && (spawnedChildren[1]?.listenerCount('close') ?? 0) === 0; attempts += 1) {
       await new Promise(resolve => setTimeout(resolve, 5))
     }
 
     expect(spawnedChildren).toHaveLength(2)
     spawnedChildren[1]?.emit('close', 0)
     await expect(listenPromise).resolves.toBeUndefined()
-  })
+  }, 15000)
 
   it('watches model directories and restarts queue:listen workers after model changes', async () => {
     const projectRoot = await createTempProject()

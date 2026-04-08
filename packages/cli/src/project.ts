@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { basename, dirname, extname, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { build, type BuildOptions, type BuildResult } from 'esbuild'
@@ -9,14 +10,6 @@ import {
   holoStorageDefaults,
   type SupportedDatabaseDriver,
 } from '@holo-js/config'
-import {
-  isEventDefinition,
-  isListenerDefinition,
-  type ListenerDefinition,
-  normalizeEventDefinition,
-  normalizeListenerDefinition,
-} from '@holo-js/events'
-import { isQueueJobDefinition, normalizeQueueJobDefinition } from '@holo-js/queue'
 import {
   DEFAULT_HOLO_PROJECT_PATHS,
   type MigrationDefinition,
@@ -152,6 +145,36 @@ type ScaffoldedFile = {
   readonly contents: string
 }
 
+type QueueDiscoveryModule = {
+  isQueueJobDefinition(value: unknown): boolean
+  normalizeQueueJobDefinition(value: unknown): NormalizedDiscoveredQueueJob
+}
+
+type EventsDiscoveryModule = {
+  isEventDefinition(value: unknown): boolean
+  isListenerDefinition(value: unknown): boolean
+  normalizeEventDefinition(value: unknown): { name?: string }
+  normalizeListenerDefinition(value: unknown): NormalizedDiscoveredListener
+}
+
+type NormalizedDiscoveredQueueJob = {
+  readonly connection?: string
+  readonly queue?: string
+  readonly tries?: number
+  readonly backoff?: number | readonly number[]
+  readonly timeout?: number
+}
+
+type DiscoveryListenerReference = string | { readonly name?: string }
+
+type MinimalListenerDefinition = {
+  readonly listensTo: readonly DiscoveryListenerReference[]
+}
+
+type NormalizedDiscoveredListener = MinimalListenerDefinition & {
+  readonly name?: string
+}
+
 export type QueueInstallResult = {
   readonly createdQueueConfig: boolean
   readonly updatedPackageJson: boolean
@@ -187,6 +210,12 @@ const QUEUE_CONFIG_FILE_NAMES = [
   'config/queue.mjs',
 ] as const
 
+const DB_DRIVER_PACKAGE_NAMES = {
+  sqlite: '@holo-js/db-sqlite',
+  postgres: '@holo-js/db-postgres',
+  mysql: '@holo-js/db-mysql',
+} as const satisfies Record<SupportedDatabaseDriver, string>
+
 const COMMAND_FILE_PATTERN = /\.(?:[cm]?ts|[cm]?js)$/
 const MIGRATION_NAME_PATTERN = /^\d{4}_\d{2}_\d{2}_\d{6}_[a-z0-9_]+$/
 export const HOLO_RUNTIME_ROOT = join('.holo-js', 'runtime')
@@ -217,6 +246,28 @@ const SUPPORTED_QUEUE_INSTALLER_DRIVERS = ['sync', 'redis', 'database'] as const
 let projectModuleBundler: ProjectModuleBundler = build
 const HOLO_EVENT_DEFINITION_MARKER = Symbol.for('holo-js.events.definition')
 const HOLO_LISTENER_DEFINITION_MARKER = Symbol.for('holo-js.events.listener')
+
+export function resolveProjectPackageImportSpecifier(
+  projectRoot: string,
+  specifier: string,
+  resolveSpecifier?: (specifier: string) => string,
+): string {
+  try {
+    const projectRequire = createRequire(join(projectRoot, 'package.json'))
+    const resolved = (resolveSpecifier ?? projectRequire.resolve.bind(projectRequire))(specifier)
+    return pathToFileURL(resolved).href
+  } catch {
+    return specifier
+  }
+}
+
+async function loadQueueDiscoveryModule(projectRoot: string): Promise<QueueDiscoveryModule> {
+  return await import(resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue')) as QueueDiscoveryModule
+}
+
+async function loadEventsDiscoveryModule(projectRoot: string): Promise<EventsDiscoveryModule> {
+  return await import(resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/events')) as EventsDiscoveryModule
+}
 
 function toPosixPath(value: string): string {
   return value.replace(/\\/g, '/')
@@ -289,6 +340,9 @@ function normalizeScaffoldOptionalPackages(
     }
 
     normalized.add(current)
+    if (current === 'forms') {
+      normalized.add('validation')
+    }
   }
 
   return [...normalized].sort((left, right) => left.localeCompare(right))
@@ -625,11 +679,7 @@ function renderQueueConfig(
       '',
       'export default defineQueueConfig({',
       '  default: \'redis\',',
-      '  failed: {',
-      '    driver: \'database\',',
-      `    connection: '${defaultDatabaseConnection}',`,
-      '    table: \'failed_jobs\',',
-      '  },',
+      '  failed: false,',
       '  connections: {',
       '    redis: {',
       '      driver: \'redis\',',
@@ -681,11 +731,7 @@ function renderQueueConfig(
     '',
     'export default defineQueueConfig({',
     '  default: \'sync\',',
-    '  failed: {',
-    '    driver: \'database\',',
-    `    connection: '${defaultDatabaseConnection}',`,
-    '    table: \'failed_jobs\',',
-    '  },',
+    '  failed: false,',
     '  connections: {',
     '    sync: {',
     '      driver: \'sync\',',
@@ -907,7 +953,12 @@ function normalizeDependencyMap(
   )
 }
 
-async function upsertQueuePackageDependency(projectRoot: string): Promise<boolean> {
+async function readPackageJsonDependencyState(projectRoot: string): Promise<{
+  packageJsonPath: string
+  parsed: Record<string, unknown>
+  dependencies: Record<string, string>
+  devDependencies: Record<string, string>
+}> {
   const packageJsonPath = resolve(projectRoot, 'package.json')
   const existing = await readTextFile(packageJsonPath)
   if (!existing) {
@@ -921,35 +972,20 @@ async function upsertQueuePackageDependency(projectRoot: string): Promise<boolea
     throw new Error(`Invalid package.json in ${projectRoot}.`)
   }
 
-  const dependencies = normalizeDependencyMap(parsed.dependencies)
-  const devDependencies = normalizeDependencyMap(parsed.devDependencies)
-  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
-  const nextEsbuildVersion = ESBUILD_PACKAGE_VERSION
-  const currentVersion = dependencies['@holo-js/queue']
-  const currentQueueDbVersion = dependencies['@holo-js/queue-db']
-  const currentDevVersion = devDependencies['@holo-js/queue']
-  const currentDevQueueDbVersion = devDependencies['@holo-js/queue-db']
-  const currentEsbuildVersion = dependencies.esbuild
-  const currentDevEsbuildVersion = devDependencies.esbuild
-
-  if (
-    currentVersion === nextVersion
-    && currentQueueDbVersion === nextVersion
-    && typeof currentDevVersion === 'undefined'
-    && typeof currentDevQueueDbVersion === 'undefined'
-    && currentEsbuildVersion === nextEsbuildVersion
-    && typeof currentDevEsbuildVersion === 'undefined'
-  ) {
-    return false
+  return {
+    packageJsonPath,
+    parsed,
+    dependencies: normalizeDependencyMap(parsed.dependencies),
+    devDependencies: normalizeDependencyMap(parsed.devDependencies),
   }
+}
 
-  dependencies['@holo-js/queue'] = nextVersion
-  dependencies['@holo-js/queue-db'] = nextVersion
-  dependencies.esbuild = nextEsbuildVersion
-  delete devDependencies['@holo-js/queue']
-  delete devDependencies['@holo-js/queue-db']
-  delete devDependencies.esbuild
-
+async function writePackageJsonDependencyState(
+  packageJsonPath: string,
+  parsed: Record<string, unknown>,
+  dependencies: Record<string, string>,
+  devDependencies: Record<string, string>,
+): Promise<void> {
   parsed.dependencies = Object.fromEntries(
     Object.entries(dependencies).sort(([left], [right]) => left.localeCompare(right)),
   )
@@ -963,25 +999,229 @@ async function upsertQueuePackageDependency(projectRoot: string): Promise<boolea
   }
 
   await writeTextFile(packageJsonPath, `${JSON.stringify(parsed, null, 2)}\n`)
+}
+
+function hasLoadedConfigFile(
+  loadedFiles: readonly string[],
+  configName: string,
+): boolean {
+  return loadedFiles.some((filePath) => {
+    const normalizedPath = filePath.replaceAll('\\', '/')
+    return normalizedPath.endsWith(`/config/${configName}.ts`)
+      || normalizedPath.endsWith(`/config/${configName}.mts`)
+      || normalizedPath.endsWith(`/config/${configName}.js`)
+      || normalizedPath.endsWith(`/config/${configName}.mjs`)
+      || normalizedPath.endsWith(`/config/${configName}.cts`)
+      || normalizedPath.endsWith(`/config/${configName}.cjs`)
+  })
+}
+
+function inferDatabaseDriverFromUrl(value: string | undefined): SupportedDatabaseDriver | undefined {
+  if (!value) {
+    return undefined
+  }
+
+  const normalized = value.trim().toLowerCase()
+  if (normalized.startsWith('postgres://') || normalized.startsWith('postgresql://')) {
+    return 'postgres'
+  }
+
+  if (normalized.startsWith('mysql://') || normalized.startsWith('mysql2://')) {
+    return 'mysql'
+  }
+
+  if (
+    normalized === ':memory:'
+    || normalized.startsWith('file:')
+    || normalized.startsWith('/')
+    || normalized.startsWith('./')
+    || normalized.startsWith('../')
+    || normalized.endsWith('.db')
+    || normalized.endsWith('.sqlite')
+    || normalized.endsWith('.sqlite3')
+  ) {
+    return 'sqlite'
+  }
+
+  return undefined
+}
+
+function inferConnectionDriver(
+  connection: {
+    driver?: string
+    url?: string
+    filename?: string
+  } | string,
+): SupportedDatabaseDriver | undefined {
+  if (typeof connection === 'string') {
+    return inferDatabaseDriverFromUrl(connection)
+  }
+
+  const explicitDriver = connection.driver
+  if (explicitDriver === 'sqlite' || explicitDriver === 'postgres' || explicitDriver === 'mysql') {
+    return explicitDriver
+  }
+
+  return inferDatabaseDriverFromUrl(connection.url ?? connection.filename)
+}
+
+export async function syncManagedDriverDependencies(projectRoot: string): Promise<boolean> {
+  const loaded = await loadConfigDirectory(projectRoot, {
+    preferCache: false,
+    processEnv: process.env,
+  })
+  const queueConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'queue')
+  const storageConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'storage')
+  const requiredPackages = new Set<string>()
+
+  for (const connection of Object.values(loaded.database.connections)) {
+    const inferredDriver = inferConnectionDriver(connection)
+    if (inferredDriver) {
+      requiredPackages.add(DB_DRIVER_PACKAGE_NAMES[inferredDriver])
+    }
+  }
+
+  if (queueConfigured) {
+    requiredPackages.add('@holo-js/queue')
+
+    const queueConnections = Object.values(loaded.queue.connections)
+    if (queueConnections.some(connection => connection.driver === 'redis')) {
+      requiredPackages.add('@holo-js/queue-redis')
+    }
+
+    if (
+      queueConnections.some(connection => connection.driver === 'database')
+      || loaded.queue.failed !== false
+    ) {
+      requiredPackages.add('@holo-js/queue-db')
+    }
+  }
+
+  if (storageConfigured) {
+    requiredPackages.add('@holo-js/storage')
+
+    if (Object.values(loaded.storage.disks).some(disk => disk.driver === 's3')) {
+      requiredPackages.add('@holo-js/storage-s3')
+    }
+  }
+
+  const {
+    packageJsonPath,
+    parsed,
+    dependencies,
+    devDependencies,
+  } = await readPackageJsonDependencyState(projectRoot)
+
+  let changed = false
+  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
+  const removableManagedPackages = new Set<string>([
+    ...Object.values(DB_DRIVER_PACKAGE_NAMES),
+    '@holo-js/queue-db',
+    '@holo-js/queue-redis',
+    '@holo-js/storage-s3',
+  ])
+
+  for (const packageName of requiredPackages) {
+    if (dependencies[packageName] !== nextVersion || typeof devDependencies[packageName] !== 'undefined') {
+      dependencies[packageName] = nextVersion
+      delete devDependencies[packageName]
+      changed = true
+    }
+  }
+
+  for (const packageName of removableManagedPackages) {
+    if (requiredPackages.has(packageName)) {
+      continue
+    }
+
+    if (typeof dependencies[packageName] !== 'undefined' || typeof devDependencies[packageName] !== 'undefined') {
+      delete dependencies[packageName]
+      delete devDependencies[packageName]
+      changed = true
+    }
+  }
+
+  if (!changed) {
+    return false
+  }
+
+  await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
+  return true
+}
+
+async function upsertQueuePackageDependency(
+  projectRoot: string,
+  driver?: SupportedQueueInstallerDriver,
+): Promise<boolean> {
+  const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  const queueConfigPath = await resolveFirstExistingPath(projectRoot, QUEUE_CONFIG_FILE_NAMES)
+  const loadedQueueConfig = queueConfigPath
+    ? loadConfigDirectory(projectRoot, {
+        preferCache: false,
+        processEnv: process.env,
+      }).then(config => config.queue)
+        /* v8 ignore next -- existing malformed queue config falls back to explicit driver handling in installer tests */
+        .catch(() => undefined)
+    /* v8 ignore next -- exercised by dependency-sync tests, but v8 does not attribute the ternary fallback line */
+    : Promise.resolve(undefined)
+  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
+  const nextEsbuildVersion = ESBUILD_PACKAGE_VERSION
+  const queueConfig = typeof driver === 'undefined'
+    ? await loadedQueueConfig
+    : undefined
+  const resolvedQueueDriver = driver && driver !== 'sync'
+    ? driver
+    : queueConfig?.connections[queueConfig.default]?.driver ?? driver
+  const requiresQueueDb = resolvedQueueDriver === 'database'
+    || (queueConfig?.failed ?? false) !== false
+    || Object.values(queueConfig?.connections ?? {}).some(connection => connection.driver === 'database')
+  const requiresQueueRedis = resolvedQueueDriver === 'redis'
+    || Object.values(queueConfig?.connections ?? {}).some(connection => connection.driver === 'redis')
+  const currentVersion = dependencies['@holo-js/queue']
+  const currentQueueDbVersion = dependencies['@holo-js/queue-db']
+  const currentQueueRedisVersion = dependencies['@holo-js/queue-redis']
+  const currentDevVersion = devDependencies['@holo-js/queue']
+  const currentDevQueueDbVersion = devDependencies['@holo-js/queue-db']
+  const currentDevQueueRedisVersion = devDependencies['@holo-js/queue-redis']
+  const currentEsbuildVersion = dependencies.esbuild
+  const currentDevEsbuildVersion = devDependencies.esbuild
+
+  if (
+    currentVersion === nextVersion
+    && (requiresQueueDb ? currentQueueDbVersion === nextVersion : typeof currentQueueDbVersion === 'undefined')
+    && (requiresQueueRedis ? currentQueueRedisVersion === nextVersion : typeof currentQueueRedisVersion === 'undefined')
+    && typeof currentDevVersion === 'undefined'
+    && typeof currentDevQueueDbVersion === 'undefined'
+    && typeof currentDevQueueRedisVersion === 'undefined'
+    && currentEsbuildVersion === nextEsbuildVersion
+    && typeof currentDevEsbuildVersion === 'undefined'
+  ) {
+    return false
+  }
+
+  dependencies['@holo-js/queue'] = nextVersion
+  if (requiresQueueDb) {
+    dependencies['@holo-js/queue-db'] = nextVersion
+  } else {
+    delete dependencies['@holo-js/queue-db']
+  }
+  if (requiresQueueRedis) {
+    dependencies['@holo-js/queue-redis'] = nextVersion
+  } else {
+    delete dependencies['@holo-js/queue-redis']
+  }
+  dependencies.esbuild = nextEsbuildVersion
+  delete devDependencies['@holo-js/queue']
+  delete devDependencies['@holo-js/queue-db']
+  delete devDependencies['@holo-js/queue-redis']
+  delete devDependencies.esbuild
+
+  await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
   return true
 }
 
 async function upsertEventsPackageDependency(projectRoot: string): Promise<boolean> {
-  const packageJsonPath = resolve(projectRoot, 'package.json')
-  const existing = await readTextFile(packageJsonPath)
-  if (!existing) {
-    throw new Error(`Missing package.json in ${projectRoot}.`)
-  }
-
-  let parsed: Record<string, unknown>
-  try {
-    parsed = JSON.parse(existing) as Record<string, unknown>
-  } catch {
-    throw new Error(`Invalid package.json in ${projectRoot}.`)
-  }
-
-  const dependencies = normalizeDependencyMap(parsed.dependencies)
-  const devDependencies = normalizeDependencyMap(parsed.devDependencies)
+  const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
   const nextVersion = `^${HOLO_PACKAGE_VERSION}`
   const currentVersion = dependencies['@holo-js/events']
   const currentDevVersion = devDependencies['@holo-js/events']
@@ -996,19 +1236,7 @@ async function upsertEventsPackageDependency(projectRoot: string): Promise<boole
   dependencies['@holo-js/events'] = nextVersion
   delete devDependencies['@holo-js/events']
 
-  parsed.dependencies = Object.fromEntries(
-    Object.entries(dependencies).sort(([left], [right]) => left.localeCompare(right)),
-  )
-
-  if (Object.keys(devDependencies).length > 0) {
-    parsed.devDependencies = Object.fromEntries(
-      Object.entries(devDependencies).sort(([left], [right]) => left.localeCompare(right)),
-    )
-  } else {
-    delete parsed.devDependencies
-  }
-
-  await writeTextFile(packageJsonPath, `${JSON.stringify(parsed, null, 2)}\n`)
+  await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
   return true
 }
 
@@ -1040,7 +1268,10 @@ export async function installQueueIntoProject(
 
   await mkdir(jobsRoot, { recursive: true })
 
-  const updatedPackageJson = await upsertQueuePackageDependency(projectRoot)
+  const updatedPackageJson = await upsertQueuePackageDependency(
+    projectRoot,
+    !queueConfigExists || driver !== 'sync' ? driver : undefined,
+  )
   const envPath = resolve(projectRoot, '.env')
   const envExamplePath = resolve(projectRoot, '.env.example')
   const nextEnv = upsertEnvContents(await readTextFile(envPath), queueEnvFiles.env)
@@ -1828,6 +2059,7 @@ function renderScaffoldPackageJson(options: ProjectScaffoldOptions): string {
     '@holo-js/config': `^${HOLO_PACKAGE_VERSION}`,
     '@holo-js/core': `^${HOLO_PACKAGE_VERSION}`,
     '@holo-js/db': `^${HOLO_PACKAGE_VERSION}`,
+    [DB_DRIVER_PACKAGE_NAMES[options.databaseDriver]]: `^${HOLO_PACKAGE_VERSION}`,
     'esbuild': ESBUILD_PACKAGE_VERSION,
   }
   const devDependencies: Record<string, string> = {
@@ -1868,7 +2100,6 @@ function renderScaffoldPackageJson(options: ProjectScaffoldOptions): string {
 
   if (optionalPackages.includes('queue')) {
     dependencies['@holo-js/queue'] = `^${HOLO_PACKAGE_VERSION}`
-    dependencies['@holo-js/queue-db'] = `^${HOLO_PACKAGE_VERSION}`
   }
 
   if (optionalPackages.includes('validation')) {
@@ -2055,10 +2286,15 @@ export const projectInternals = {
   installEventsIntoProject,
   installQueueIntoProject,
   collectImportedBindingsBySource,
+  resolveProjectPackageImportSpecifier,
   resolveListenerEventNamesForDiscovery,
   resolveListenerEventNamesFromSource,
   extractListensToItems,
+  hasLoadedConfigFile,
+  inferConnectionDriver,
+  inferDatabaseDriverFromUrl,
   upsertEventsPackageDependency,
+  syncManagedDriverDependencies,
   resolveDefaultDatabaseUrl,
   resolvePackageManagerVersion,
   isSupportedQueueInstallerDriver,
@@ -2150,7 +2386,7 @@ function deriveListenerIdFromPath(listenersRoot: string, sourcePath: string): st
 }
 
 function resolveDiscoveredJobMetadata(
-  job: ReturnType<typeof normalizeQueueJobDefinition>,
+  job: NormalizedDiscoveredQueueJob,
   sourcePath: string,
   derivedName: string,
   queueConfig: Awaited<ReturnType<typeof loadConfigDirectory>>['queue'],
@@ -2672,7 +2908,7 @@ function isSeederDefinition(value: unknown): value is SeederDefinition {
 }
 
 function resolveListenerEventNamesForDiscovery(
-  listener: ListenerDefinition,
+  listener: MinimalListenerDefinition,
   eventNamesByReference: ReadonlyMap<object, string> = new Map(),
 ): readonly string[] {
   return Object.freeze([...new Set(listener.listensTo.map((reference: string | { name?: string }) => {
@@ -2942,15 +3178,21 @@ export async function prepareProjectDiscovery(
   assertUniqueCommandTokens(commands)
 
   const jobs: GeneratedJobRegistryEntry[] = []
+  const queueDiscovery = jobFiles.length > 0
+    ? await loadQueueDiscoveryModule(projectRoot)
+    : undefined
   for (const filePath of jobFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
     const moduleValue = await importProjectModule(projectRoot, filePath)
-    const exportedJob = resolveNamedExportEntry(moduleValue, isQueueJobDefinition)
+    const exportedJob = resolveNamedExportEntry(
+      moduleValue,
+      (value): value is unknown => queueDiscovery!.isQueueJobDefinition(value),
+    )
     if (!exportedJob) {
       throw new Error(`Discovered job "${relativePath}" does not export a Holo job.`)
     }
 
-    const normalizedJob = normalizeQueueJobDefinition(exportedJob.value)
+    const normalizedJob = queueDiscovery!.normalizeQueueJobDefinition(exportedJob.value)
     jobs.push({
       ...resolveDiscoveredJobMetadata(
         normalizedJob,
@@ -2964,6 +3206,9 @@ export async function prepareProjectDiscovery(
   assertUniqueEntries('job', jobs)
 
   const events: GeneratedEventRegistryEntry[] = []
+  const eventsDiscovery = (eventFiles.length > 0 || listenerFiles.length > 0)
+    ? await loadEventsDiscoveryModule(projectRoot)
+    : undefined
   const eventNamesByReference = new Map<object, string>()
   const discoveredEventNamesBySourcePath = new Map<string, string>()
   for (const filePath of eventFiles) {
@@ -2972,11 +3217,11 @@ export async function prepareProjectDiscovery(
       await importProjectModule(projectRoot, filePath),
       (value): value is object => hasEventDefinitionMarker(value),
     )
-    if (!exportedEvent || !isEventDefinition(exportedEvent.value)) {
+    if (!exportedEvent || !eventsDiscovery!.isEventDefinition(exportedEvent.value)) {
       throw new Error(`Discovered event "${relativePath}" does not export a Holo event.`)
     }
 
-    const normalizedEvent = normalizeEventDefinition(exportedEvent.value)
+    const normalizedEvent = eventsDiscovery!.normalizeEventDefinition(exportedEvent.value)
     const name = normalizedEvent.name?.trim() || deriveEventNameFromPath(eventsRoot, filePath)
     eventNamesByReference.set(exportedEvent.value, name)
     discoveredEventNamesBySourcePath.set(relativePath, name)
@@ -2996,13 +3241,16 @@ export async function prepareProjectDiscovery(
       await importProjectModule(projectRoot, filePath),
       (value): value is object => hasListenerDefinitionMarker(value),
     )
-    if (!exportedListener || !isListenerDefinition(exportedListener.value)) {
+    if (!exportedListener || !eventsDiscovery!.isListenerDefinition(exportedListener.value)) {
       throw new Error(`Discovered listener "${relativePath}" does not export a Holo listener.`)
     }
 
     let eventNames: readonly string[]
     try {
-      eventNames = resolveListenerEventNamesForDiscovery(exportedListener.value, eventNamesByReference)
+      eventNames = resolveListenerEventNamesForDiscovery(
+        exportedListener.value as MinimalListenerDefinition,
+        eventNamesByReference,
+      )
     } catch (error) {
       if (
         !(error instanceof Error)
@@ -3014,7 +3262,7 @@ export async function prepareProjectDiscovery(
 
       eventNames = await resolveListenerEventNamesFromSource(projectRoot, filePath, discoveredEventNamesBySourcePath)
     }
-    const normalizedListener = normalizeListenerDefinition(exportedListener.value)
+    const normalizedListener = eventsDiscovery!.normalizeListenerDefinition(exportedListener.value)
     const listenerId = normalizedListener.name?.trim() || deriveListenerIdFromPath(listenersRoot, filePath)
     for (const eventName of eventNames) {
       if (!discoveredEventNames.has(eventName)) {

@@ -211,6 +211,8 @@ describe('@holo-js/adapter-nuxt module setup', () => {
 
     expect(existsSync(resolve(build.adapterOutDir, 'runtime/composables/index.js'))).toBe(true)
     expect(existsSync(resolve(build.adapterOutDir, 'runtime/composables/index.d.ts'))).toBe(true)
+    expect(existsSync(resolve(build.adapterOutDir, 'runtime/composables/storage.js'))).toBe(true)
+    expect(existsSync(resolve(build.adapterOutDir, 'runtime/composables/storage.d.ts'))).toBe(true)
   }, 60000)
 
   it('publishes a runtime declaration that type-checks under NodeNext resolution', async () => {
@@ -222,7 +224,7 @@ describe('@holo-js/adapter-nuxt module setup', () => {
     try {
       await writeFile(
         entryPath,
-        `import { Storage } from ${JSON.stringify(resolve(build.adapterOutDir, 'runtime/composables/index.js'))}\nvoid Storage\n`,
+        `import { Storage } from ${JSON.stringify(resolve(build.adapterOutDir, 'runtime/composables/storage.js'))}\nvoid Storage\n`,
       )
 
       expect(() => execFileSync(
@@ -299,14 +301,17 @@ describe('@holo-js/adapter-nuxt module setup', () => {
     const build = await runAdapterStub()
 
     const runtimeEntry = resolve(build.adapterOutDir, 'runtime/composables/index.js')
+    const storageEntry = resolve(build.adapterOutDir, 'runtime/composables/storage.js')
     const output = execFileSync(
       'node',
       [
         '--input-type=module',
         '--eval',
         `const runtime = await import(${JSON.stringify(runtimeEntry)});`
-        + `console.log(typeof runtime.Storage.disk);`
-        + `try { runtime.Storage.path('example.txt') } catch (error) { console.log(error instanceof Error ? error.message : String(error)) }`,
+        + `const storage = await import(${JSON.stringify(storageEntry)});`
+        + `console.log(typeof runtime.holo);`
+        + `console.log(typeof storage.Storage.disk);`
+        + `try { storage.Storage.path('example.txt') } catch (error) { console.log(error instanceof Error ? error.message : String(error)) }`,
       ],
       {
         cwd: repoRoot,
@@ -385,8 +390,8 @@ export default defineStorageConfig({
     expect(addImports.mock.calls[0]?.[0]).toHaveLength(6)
     expect(addImports.mock.calls[0]?.[0]).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'holo', as: 'holo', from: './runtime/composables' }),
-      expect.objectContaining({ name: 'useStorage', as: 'useStorage', from: './runtime/composables' }),
-      expect.objectContaining({ name: 'Storage', as: 'Storage', from: './runtime/composables' }),
+      expect.objectContaining({ name: 'useStorage', as: 'useStorage', from: './runtime/composables/storage' }),
+      expect.objectContaining({ name: 'Storage', as: 'Storage', from: './runtime/composables/storage' }),
     ]))
     expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/imports')
     expect(addServerImportsDir).toHaveBeenCalledWith(resolve(root, 'server/models'))

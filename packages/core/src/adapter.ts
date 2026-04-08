@@ -5,6 +5,8 @@ import {
   ensureHolo,
   resetHoloRuntime,
   peekHolo,
+  reconfigureOptionalHoloSubsystems,
+  resetOptionalHoloSubsystems,
   type CreateHoloOptions,
   type HoloRuntime,
 } from './portable/holo'
@@ -16,16 +18,11 @@ import type {
   ValueAtPath,
 } from '@holo-js/config'
 import { configureDB } from '@holo-js/db'
-import { configureQueueRuntime } from '@holo-js/queue'
-import { createQueueDbRuntimeOptions } from '@holo-js/queue-db'
-import {
-  resetStorageRuntime,
-} from '@holo-js/storage/runtime'
 import {
   loadGeneratedProjectRegistry,
   type GeneratedProjectRegistry,
 } from './portable/registry'
-import { configurePlainNodeStorageRuntime, resolveStorageKeyPath } from './storageRuntime'
+import { resolveStorageKeyPath } from './storageRuntime'
 
 export interface HoloAdapterProject<TCustom extends HoloConfigMap = HoloConfigMap> {
   readonly projectRoot: string
@@ -222,11 +219,7 @@ async function initializeSingletonFrameworkProject<
 
       configureConfigRuntime(currentRuntime.loadedConfig.all)
       configureDB(currentRuntime.manager)
-      configureQueueRuntime({
-        config: currentRuntime.loadedConfig.queue,
-        ...createQueueDbRuntimeOptions(),
-      })
-      configurePlainNodeStorageRuntime(state.project.projectRoot, currentRuntime.loadedConfig)
+      await reconfigureOptionalHoloSubsystems(state.project.projectRoot, currentRuntime.loadedConfig)
 
       if (state.project.runtime !== currentRuntime) {
         ;(state as { project?: TProject }).project = {
@@ -257,7 +250,7 @@ export async function resetSingletonFrameworkProject(stateKey: string): Promise<
   ;(state as { project?: HoloAdapterProject }).project = undefined
   ;(state as { projectRoot?: string }).projectRoot = undefined
   ;(state as { sourceSignature?: string }).sourceSignature = undefined
-  resetStorageRuntime()
+  await resetOptionalHoloSubsystems()
   await resetHoloRuntime()
 }
 
@@ -335,7 +328,7 @@ export async function initializeHoloAdapterProject<TCustom extends HoloConfigMap
 ): Promise<HoloAdapterProject<TCustom>> {
   const project = await createHoloAdapterProject<TCustom>(projectRoot, options)
   const runtime = await ensureHolo<TCustom>(project.projectRoot, options)
-  configurePlainNodeStorageRuntime(project.projectRoot, runtime.loadedConfig)
+  await reconfigureOptionalHoloSubsystems(project.projectRoot, runtime.loadedConfig)
 
   return {
     ...project,

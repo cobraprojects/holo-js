@@ -1,5 +1,4 @@
 import type { DEFAULT_HOLO_PROJECT_PATHS } from '@holo-js/db'
-import type { NormalizedHoloQueueConfig, HoloQueueConfig } from '@holo-js/queue'
 
 export interface HoloProjectPaths {
   models: string
@@ -91,7 +90,98 @@ export interface HoloMediaConfig {
   [key: string]: unknown
 }
 
-export type { HoloQueueConfig, NormalizedHoloQueueConfig }
+export interface QueueRedisConnectionConfig {
+  readonly driver: 'redis'
+  readonly queue?: string
+  readonly retryAfter?: number | string
+  readonly blockFor?: number | string
+  readonly redis?: {
+    readonly host?: string
+    readonly port?: number | string
+    readonly password?: string
+    readonly username?: string
+    readonly db?: number | string
+  }
+}
+
+export interface QueueDatabaseConnectionConfig {
+  readonly driver: 'database'
+  readonly queue?: string
+  readonly retryAfter?: number | string
+  readonly sleep?: number | string
+  readonly connection?: string
+  readonly table?: string
+}
+
+export interface QueueFailedStoreConfig {
+  readonly driver?: 'database'
+  readonly connection?: string
+  readonly table?: string
+}
+
+export interface QueueSyncConnectionConfig {
+  readonly driver: 'sync'
+  readonly queue?: string
+}
+
+export type QueueConnectionConfig
+  = QueueSyncConnectionConfig
+  | QueueRedisConnectionConfig
+  | QueueDatabaseConnectionConfig
+
+export interface HoloQueueConfig {
+  readonly default?: string
+  readonly failed?: false | QueueFailedStoreConfig
+  readonly connections?: Readonly<Record<string, QueueConnectionConfig>>
+}
+
+export interface NormalizedQueueFailedStoreConfig {
+  readonly driver: 'database'
+  readonly connection: string
+  readonly table: string
+}
+
+export interface NormalizedQueueSyncConnectionConfig {
+  readonly name: string
+  readonly driver: 'sync'
+  readonly queue: string
+}
+
+export interface NormalizedQueueRedisConnectionConfig {
+  readonly name: string
+  readonly driver: 'redis'
+  readonly queue: string
+  readonly retryAfter: number
+  readonly blockFor: number
+  readonly redis: {
+    readonly host: string
+    readonly port: number
+    readonly password?: string
+    readonly username?: string
+    readonly db: number
+  }
+}
+
+export interface NormalizedQueueDatabaseConnectionConfig {
+  readonly name: string
+  readonly driver: 'database'
+  readonly queue: string
+  readonly retryAfter: number
+  readonly sleep: number
+  readonly connection: string
+  readonly table: string
+}
+
+export type NormalizedQueueConnectionConfig
+  = NormalizedQueueSyncConnectionConfig
+  | NormalizedQueueRedisConnectionConfig
+  | NormalizedQueueDatabaseConnectionConfig
+
+export interface NormalizedHoloQueueConfig {
+  readonly default: string
+  readonly failed: false | NormalizedQueueFailedStoreConfig
+  readonly connections: Readonly<Record<string, NormalizedQueueConnectionConfig>>
+}
 
 export interface NormalizedHoloAppConfig {
   readonly name: string

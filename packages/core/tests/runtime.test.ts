@@ -236,6 +236,26 @@ describe('@holo-js/core portable runtime', () => {
     expect(() => getHolo()).toThrow('Holo runtime is not initialized.')
   })
 
+  it('does not require @holo-js/queue-db for the implicit default sync queue runtime', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+
+    const importOptionalModule = vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(
+      async <TModule>(specifier: string): Promise<TModule | undefined> => {
+        if (specifier === '@holo-js/queue-db') {
+          return undefined
+        }
+
+        return await import(specifier) as TModule
+      },
+    )
+
+    const runtime = await initializeHolo(root)
+    expect(runtime.queue.config.default).toBe('sync')
+    await runtime.shutdown()
+    importOptionalModule.mockRestore()
+  })
+
   it('does not import discovered queue jobs during default runtime initialization', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
@@ -1146,6 +1166,150 @@ export default defineQueueConfig({
     await databaseRuntime.shutdown()
   })
 
+  it('loads the database failed-job store when queue config relies on the default failed setting', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeFile(join(root, 'config/database.ts'), `
+import { defineDatabaseConfig } from ${packageEntry}
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'sqlite',
+      url: ':memory:',
+      logging: false,
+    },
+  },
+})
+`, 'utf8')
+    await writeQueueConfig(root, `
+import { defineQueueConfig } from ${packageEntry}
+
+export default defineQueueConfig({
+  default: 'sync',
+  connections: {
+    sync: {
+      driver: 'sync',
+      queue: 'default',
+    },
+  },
+})
+`)
+
+    const runtime = await initializeHolo(root)
+    registerQueueJob({
+      connection: 'sync',
+      queue: 'default',
+      async handle() {},
+    }, {
+      name: 'jobs.default-failed-store',
+    })
+
+    await createSchemaService(DB.connection()).createTable('failed_jobs', (table) => {
+      table.string('id').primaryKey()
+      table.string('job_id')
+      table.string('job')
+      table.string('connection')
+      table.string('queue')
+      table.text('payload')
+      table.text('exception')
+      table.bigInteger('failed_at')
+    })
+
+    const persisted = await persistFailedQueueJob({
+      reservationId: 'reservation-default-failed-store',
+      reservedAt: 150,
+      envelope: {
+        id: 'job-default-failed-store',
+        name: 'jobs.default-failed-store',
+        connection: 'sync',
+        queue: 'default',
+        payload: { ok: true },
+        attempts: 1,
+        maxAttempts: 2,
+        createdAt: 100,
+      },
+    }, new Error('boom'))
+
+    expect(persisted).toEqual(expect.objectContaining({
+      jobId: 'job-default-failed-store',
+      job: expect.objectContaining({
+        name: 'jobs.default-failed-store',
+        connection: 'sync',
+        queue: 'default',
+      }),
+      exception: expect.stringContaining('Error: boom'),
+    }))
+    expect(await listFailedQueueJobs()).toEqual([
+      expect.objectContaining({
+        jobId: 'job-default-failed-store',
+      }),
+    ])
+
+    await runtime.shutdown()
+  })
+
+  it('loads the implicit database failed-job store when queue config is omitted', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeFile(join(root, 'config/database.ts'), `
+import { defineDatabaseConfig } from ${packageEntry}
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'sqlite',
+      url: ':memory:',
+      logging: false,
+    },
+  },
+})
+`, 'utf8')
+
+    const runtime = await initializeHolo(root)
+
+    await createSchemaService(DB.connection()).createTable('failed_jobs', (table) => {
+      table.string('id').primaryKey()
+      table.string('job_id')
+      table.string('job')
+      table.string('connection')
+      table.string('queue')
+      table.text('payload')
+      table.text('exception')
+      table.bigInteger('failed_at')
+    })
+
+    await persistFailedQueueJob({
+      reservationId: 'reservation-implicit-failed-store',
+      reservedAt: 150,
+      envelope: {
+        id: 'job-implicit-failed-store',
+        name: 'jobs.implicit-failed-store',
+        connection: 'sync',
+        queue: 'default',
+        payload: { ok: true },
+        attempts: 1,
+        maxAttempts: 2,
+        createdAt: 100,
+      },
+    }, new Error('implicit boom'))
+
+    expect(await listFailedQueueJobs()).toEqual([
+      expect.objectContaining({
+        id: expect.any(String),
+        jobId: 'job-implicit-failed-store',
+        job: expect.objectContaining({
+          name: 'jobs.implicit-failed-store',
+          connection: 'sync',
+          queue: 'default',
+        }),
+        exception: expect.stringContaining('Error: implicit boom'),
+      }),
+    ])
+
+    await runtime.shutdown()
+  })
+
   it('fails closed on malformed queue config before runtime boot begins', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
@@ -1318,6 +1482,215 @@ export default defineQueueConfig({
       expect(() => useConfig('app')).toThrow('Holo config runtime is not configured.')
     } finally {
       vi.doUnmock('@holo-js/queue')
+      vi.resetModules()
+    }
+  })
+
+  it('fails runtime initialization when queue config is present but the queue package is missing', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeQueueConfig(root, `
+import { defineQueueConfig } from ${packageEntry}
+
+export default defineQueueConfig({
+  default: 'sync',
+})
+`)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
+        if (specifier === '@holo-js/queue') {
+          return undefined
+        }
+
+        return await originalImportOptionalModule(specifier)
+      })
+
+      const runtime = await portable.createHolo(root)
+
+      await expect(runtime.initialize()).rejects.toThrow(
+        '[@holo-js/core] Queue support requires @holo-js/queue to be installed.',
+      )
+      expect(runtime.manager.connection().isConnected()).toBe(false)
+      expect(() => portable.getHolo()).toThrow('Holo runtime is not initialized.')
+      expect(() => useConfig('app')).toThrow('Holo config runtime is not configured.')
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
+  it('keeps runtime.queue readable when queue support is not installed and no queue config is present', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
+        if (specifier === '@holo-js/queue') {
+          return undefined
+        }
+
+        return await originalImportOptionalModule(specifier)
+      })
+
+      const runtime = await portable.createHolo(root)
+      await runtime.initialize()
+
+      expect(runtime.queue.config.default).toBe('sync')
+      expect(runtime.queue.config.failed).toEqual(expect.objectContaining({
+        driver: 'database',
+        connection: 'default',
+        table: 'failed_jobs',
+      }))
+      expect([...runtime.queue.drivers.values()]).toEqual([])
+
+      await runtime.shutdown()
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
+  it('treats Windows-style queue config paths as configured when queue support is missing', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+
+    vi.resetModules()
+    vi.doMock('@holo-js/config', async () => {
+      const actual = await vi.importActual('@holo-js/config') as typeof import('@holo-js/config')
+      return {
+        ...actual,
+        loadConfigDirectory: vi.fn(async () => ({
+          app: actual.holoAppDefaults,
+          database: {
+            defaultConnection: 'default',
+            connections: {
+              default: {
+                driver: 'sqlite',
+                url: ':memory:',
+                logging: false,
+              },
+            },
+          },
+          storage: actual.holoStorageDefaults,
+          queue: actual.normalizeQueueConfigForHolo({
+            default: 'sync',
+            failed: false,
+          }),
+          media: {},
+          custom: {},
+          all: {} as never,
+          environment: {
+            name: 'development',
+            values: {},
+            loadedFiles: [],
+            warnings: [],
+          },
+          loadedFiles: [
+            'C:\\workspace\\app\\config\\queue.ts',
+          ],
+          warnings: [],
+        })),
+      }
+    })
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
+        if (specifier === '@holo-js/queue') {
+          return undefined
+        }
+
+        return await originalImportOptionalModule(specifier)
+      })
+
+      const runtime = await portable.createHolo(root)
+
+      await expect(runtime.initialize()).rejects.toThrow(
+        '[@holo-js/core] Queue support requires @holo-js/queue to be installed.',
+      )
+    } finally {
+      vi.doUnmock('@holo-js/config')
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
+  it('treats Windows-style storage config paths as configured when storage support is missing', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+
+    vi.resetModules()
+    vi.doMock('@holo-js/config', async () => {
+      const actual = await vi.importActual('@holo-js/config') as typeof import('@holo-js/config')
+      return {
+        ...actual,
+        loadConfigDirectory: vi.fn(async () => ({
+          app: actual.holoAppDefaults,
+          database: {
+            defaultConnection: 'default',
+            connections: {
+              default: {
+                driver: 'sqlite',
+                url: ':memory:',
+                logging: false,
+              },
+            },
+          },
+          storage: actual.normalizeStorageConfig({
+            disks: {
+              local: {
+                driver: 'local',
+                root: './storage/app',
+              },
+            },
+          }),
+          queue: actual.holoQueueDefaultsNormalized,
+          media: {},
+          custom: {},
+          all: {} as never,
+          environment: {
+            name: 'development',
+            values: {},
+            loadedFiles: [],
+            warnings: [],
+          },
+          loadedFiles: [
+            'C:\\workspace\\app\\config\\storage.ts',
+          ],
+          warnings: [],
+        })),
+      }
+    })
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
+        if (specifier === '@holo-js/storage') {
+          return undefined
+        }
+
+        return await originalImportOptionalModule(specifier)
+      })
+
+      const runtime = await portable.createHolo(root)
+
+      await expect(runtime.initialize()).rejects.toThrow(
+        '[@holo-js/core] Storage support requires @holo-js/storage to be installed.',
+      )
+    } finally {
+      vi.doUnmock('@holo-js/config')
+      vi.restoreAllMocks()
       vi.resetModules()
     }
   })

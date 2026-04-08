@@ -29,8 +29,15 @@
   },
   "dependencies": {
     "@holo-js/config": "^0.1.2",
-    "@holo-js/core": "^0.1.2",
+    "@holo-js/core": "^0.1.2"
+  },
+  "peerDependencies": {
     "@holo-js/forms": "^0.1.2"
+  },
+  "peerDependenciesMeta": {
+    "@holo-js/forms": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

@@ -1,6 +1,14 @@
+import { resolve } from 'node:path'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@holo-js/db-mysql': resolve(__dirname, '../db-mysql/src/index.ts'),
+      '@holo-js/db-postgres': resolve(__dirname, '../db-postgres/src/index.ts'),
+      '@holo-js/db-sqlite': resolve(__dirname, '../db-sqlite/src/index.ts'),
+    },
+  },
   test: {
     name: '@holo-js/db',
     globals: true,
@@ -14,6 +22,10 @@ export default defineConfig({
       exclude: [
         'src/**/types.ts',
         'src/migrations/templates/**',
+        'src/drivers/index.ts',
+        'src/drivers/SQLiteAdapter.ts',
+        'src/drivers/PostgresAdapter.ts',
+        'src/drivers/MySQLAdapter.ts',
         '**/node_modules/**',
         'packages/core/**',
         'packages/storage/**',

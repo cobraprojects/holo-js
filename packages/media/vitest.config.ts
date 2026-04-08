@@ -5,8 +5,13 @@ export default defineConfig({
   resolve: {
     alias: {
       '@holo-js/db': resolve(__dirname, '../db/src/index.ts'),
+      '@holo-js/db-mysql': resolve(__dirname, '../db-mysql/src/index.ts'),
+      '@holo-js/db-postgres': resolve(__dirname, '../db-postgres/src/index.ts'),
+      '@holo-js/db-sqlite': resolve(__dirname, '../db-sqlite/src/index.ts'),
       '@holo-js/queue': resolve(__dirname, '../queue/src/index.ts'),
+      '@holo-js/queue-redis': resolve(__dirname, '../queue-redis/src/index.ts'),
       '@holo-js/storage/runtime': resolve(__dirname, '../storage/src/runtime/composables/index.ts'),
+      '@holo-js/storage-s3': resolve(__dirname, '../storage-s3/src/index.ts'),
     },
   },
   test: {

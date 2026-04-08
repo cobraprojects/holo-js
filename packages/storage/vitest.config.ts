@@ -6,6 +6,7 @@ export default defineConfig({
     alias: {
       '@holo-js/config': resolve(__dirname, '../config/src/index.ts'),
       '@holo-js/db': resolve(__dirname, '../db/src/index.ts'),
+      '@holo-js/storage-s3': resolve(__dirname, '../storage-s3/src/index.ts'),
     },
   },
   test: {

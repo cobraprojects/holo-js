@@ -1,11 +1,4 @@
-import {
-  defineJob,
-  dispatch as dispatchQueueJob,
-  getRegisteredQueueJob,
-  registerQueueJob,
-  type QueueJobDefinition,
-  type QueueJsonValue,
-} from '@holo-js/queue'
+import type { QueueJobDefinition, QueueJsonValue } from '@holo-js/queue'
 import type { EventQueuedListenerDispatch, EventEnvelope, RegisteredListener } from './contracts'
 import { getRegisteredListener } from './registry'
 
@@ -23,6 +16,64 @@ declare module '@holo-js/queue' {
     'holo.events.invoke-listener': QueueJobDefinition<EventsInvokeListenerPayload, void>
   }
 }
+
+type QueueModule = {
+  defineJob(definition: QueueJobDefinition<EventsInvokeListenerPayload, void>): QueueJobDefinition<EventsInvokeListenerPayload, void>
+  dispatch(
+    jobName: string,
+    payload: EventsInvokeListenerPayload,
+  ): QueuePendingDispatchChain
+  getRegisteredQueueJob(name: string): unknown
+  registerQueueJob(
+    definition: QueueJobDefinition<EventsInvokeListenerPayload, void>,
+    options: { name: string },
+  ): void
+}
+
+type QueuePendingDispatchChain = {
+  onConnection(name: string): QueuePendingDispatchChain
+  onQueue(name: string): QueuePendingDispatchChain
+  delay(value: number | Date): QueuePendingDispatchChain
+  dispatch(): Promise<unknown>
+}
+
+type QueueRegistryState = {
+  jobs: Map<string, {
+    name: string
+    definition: QueueJobDefinition<EventsInvokeListenerPayload, void>
+  }>
+}
+
+function getQueueRegistryState(): QueueRegistryState {
+  const runtime = globalThis as typeof globalThis & {
+    __holoQueueRegistry__?: QueueRegistryState
+  }
+
+  runtime.__holoQueueRegistry__ ??= {
+    jobs: new Map(),
+  }
+
+  return runtime.__holoQueueRegistry__
+}
+
+/* v8 ignore start -- optional-peer absence is validated in published-package integration, not in this monorepo test graph */
+async function loadQueueModule(): Promise<QueueModule> {
+  try {
+    return await import('@holo-js/queue') as QueueModule
+  } catch (error) {
+    if (
+      error
+      && typeof error === 'object'
+      && 'code' in error
+      && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
+    ) {
+      throw new Error('[@holo-js/events] Queued listeners require @holo-js/queue to be installed.')
+    }
+
+    throw error
+  }
+}
+/* v8 ignore stop */
 
 function createQueuedListenerEventEnvelope(
   payload: EventsInvokeListenerPayload,
@@ -63,25 +114,33 @@ export async function runQueuedListenerInvocation(
 }
 
 export function ensureEventsQueueJobRegistered(): void {
-  if (getRegisteredQueueJob(EVENTS_INVOKE_LISTENER_JOB)) {
+  const registry = getQueueRegistryState().jobs
+  if (registry.has(EVENTS_INVOKE_LISTENER_JOB)) {
     return
   }
 
-  registerQueueJob(defineJob({
-    async handle(payload: EventsInvokeListenerPayload) {
-      await runQueuedListenerInvocation(payload)
-    },
-  }), {
+  registry.set(EVENTS_INVOKE_LISTENER_JOB, Object.freeze({
     name: EVENTS_INVOKE_LISTENER_JOB,
-  })
+    definition: Object.freeze({
+      async handle(payload: EventsInvokeListenerPayload) {
+        await runQueuedListenerInvocation(payload)
+      },
+    }),
+  }))
+}
+
+export async function ensureEventsQueueJobRegisteredAsync(): Promise<void> {
+  await loadQueueModule()
+  ensureEventsQueueJobRegistered()
 }
 
 export async function dispatchQueuedListenerViaQueue(
   dispatch: EventQueuedListenerDispatch,
 ): Promise<void> {
-  ensureEventsQueueJobRegistered()
+  const queueModule = await loadQueueModule()
+  await ensureEventsQueueJobRegisteredAsync()
 
-  let pending = dispatchQueueJob(EVENTS_INVOKE_LISTENER_JOB, {
+  let pending = queueModule.dispatch(EVENTS_INVOKE_LISTENER_JOB, {
     listenerId: dispatch.listenerId,
     eventName: dispatch.event.name,
     occurredAt: dispatch.event.occurredAt,
@@ -106,5 +165,6 @@ export async function dispatchQueuedListenerViaQueue(
 export const eventQueueInternals = {
   assertQueuedListenerMatchesEvent,
   createQueuedListenerEventEnvelope,
+  loadQueueModule,
   requireQueuedListener,
 }

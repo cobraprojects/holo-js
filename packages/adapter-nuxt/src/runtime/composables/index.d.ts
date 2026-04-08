@@ -1,16 +1,3 @@
-export {
-  Storage,
-  configureStorageRuntime,
-  resetStorageRuntime,
-  useStorage,
-  type StorageBackend,
-  type StorageContent,
-  type StorageDisk,
-  type StorageInstance,
-  type StorageRuntimeBindings,
-  type TemporaryUrlOptions,
-} from '@holo-js/storage/runtime'
-
 export interface HoloRuntimeConnection {
   driver?: 'sqlite' | 'postgres' | 'mysql'
   url?: string

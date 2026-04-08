@@ -20,23 +20,6 @@ import {
   resolveRuntimeConnectionManagerOptions,
 } from '@holo-js/db'
 import {
-  DEFAULT_DATABASE_QUEUE_TABLE,
-  DEFAULT_FAILED_JOBS_TABLE,
-  clearQueueConnection,
-  configureQueueRuntime,
-  flushFailedQueueJobs,
-  forgetFailedQueueJob,
-  getRegisteredQueueJob,
-  isQueueJobDefinition,
-  listFailedQueueJobs,
-  normalizeQueueJobDefinition,
-  registerQueueJob,
-  retryFailedQueueJobs,
-  runQueueWorker,
-  shutdownQueueRuntime,
-  type QueueWorkerRunOptions,
-} from '@holo-js/queue'
-import {
   CLI_RUNTIME_ROOT,
   HOLO_RUNTIME_ROOT,
   ensureGeneratedSchemaPlaceholder,
@@ -51,9 +34,11 @@ import {
   installEventsIntoProject,
   prepareProjectDiscovery,
   readTextFile,
+  resolveProjectPackageImportSpecifier,
   resolveGeneratedSchemaPath,
   resolveDefaultArtifactPath,
   scaffoldProject,
+  syncManagedDriverDependencies,
   writeTextFile,
 } from './project'
 import {
@@ -84,6 +69,7 @@ import type {
   SupportedScaffoldStorageDisk,
 } from './project'
 import type { HoloRuntime } from '@holo-js/core'
+import type { QueueWorkerRunOptions } from '@holo-js/queue'
 
 type IoStreams = {
   readonly cwd: string
@@ -158,6 +144,46 @@ type NewProjectInput = {
   readonly optionalPackages: readonly SupportedScaffoldOptionalPackage[]
 }
 
+type QueueCliModule = {
+  clearQueueConnection(
+    connectionName?: string,
+    options?: { queueNames?: readonly string[] },
+  ): Promise<number>
+  configureQueueRuntime(options: { config: Awaited<ReturnType<typeof loadConfigDirectory>>['queue'] } & Record<string, unknown>): void
+  flushFailedQueueJobs(): Promise<number>
+  forgetFailedQueueJob(identifier: string): Promise<boolean>
+  getRegisteredQueueJob(name: string): { sourcePath?: string } | undefined
+  isQueueJobDefinition(value: unknown): boolean
+  listFailedQueueJobs(): Promise<readonly {
+    id: string
+    failedAt: number
+    job: {
+      name: string
+      connection: string
+      queue: string
+    }
+  }[]>
+  normalizeQueueJobDefinition(value: unknown): {
+    connection?: string
+    queue?: string
+    tries?: number
+    backoff?: number | readonly number[]
+    timeout?: number
+  }
+  registerQueueJob(
+    definition: unknown,
+    options: { name: string, sourcePath?: string },
+  ): void
+  retryFailedQueueJobs(identifier: string): Promise<number>
+  runQueueWorker(options: QueueWorkerRunOptions): Promise<{
+    stoppedBecause: string
+    processed: number
+    released: number
+    failed: number
+  }>
+  shutdownQueueRuntime(): Promise<void>
+}
+
 const SUPPORTED_NEW_FRAMEWORKS = ['nuxt', 'next', 'sveltekit'] as const
 const SUPPORTED_NEW_DATABASE_DRIVERS = ['sqlite', 'mysql', 'postgres'] as const
 const SUPPORTED_NEW_PACKAGE_MANAGERS = ['bun', 'npm', 'pnpm', 'yarn'] as const
@@ -165,6 +191,8 @@ const SUPPORTED_NEW_STORAGE_DISKS = ['local', 'public'] as const
 const SUPPORTED_NEW_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms'] as const
 const SUPPORTED_INSTALL_TARGETS = ['queue', 'events'] as const
 const SUPPORTED_QUEUE_INSTALL_DRIVERS = ['sync', 'redis', 'database'] as const
+const DEFAULT_DATABASE_QUEUE_TABLE = 'jobs'
+const DEFAULT_FAILED_JOBS_TABLE = 'failed_jobs'
 const QUEUE_LISTEN_SOURCE_EXTENSIONS = new Set([
   '.cjs',
   '.cts',
@@ -192,6 +220,10 @@ const QUEUE_LISTEN_IGNORED_PATH_PREFIXES = [
 
 const runtimeImportMeta = import.meta as ImportMeta & {
   resolve?: (specifier: string) => string
+}
+
+async function loadQueueCliModule(projectRoot: string): Promise<QueueCliModule> {
+  return await import(resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue')) as QueueCliModule
 }
 
 function resolveConfigModuleUrl(
@@ -270,7 +302,7 @@ type SpawnProcessLike = {
 type WatchFactory = typeof watch
 type WatchHandle = ReturnType<WatchFactory>
 
-async function resolvePackageManagerCommand(projectRoot: string, scriptName: string): Promise<PackageManagerCommand> {
+async function resolveProjectPackageManager(projectRoot: string): Promise<SupportedScaffoldPackageManager> {
   const packageJsonPath = join(projectRoot, 'package.json')
   const packageJson = await readTextFile(packageJsonPath)
 
@@ -280,10 +312,7 @@ async function resolvePackageManagerCommand(projectRoot: string, scriptName: str
       const packageManager = typeof parsed.packageManager === 'string' ? parsed.packageManager.split('@')[0] : undefined
 
       if (packageManager === 'bun' || packageManager === 'npm' || packageManager === 'pnpm' || packageManager === 'yarn') {
-        return {
-          command: packageManager,
-          args: ['run', scriptName],
-        }
+        return packageManager
       }
     } catch {
       // Fall back to lockfile detection below.
@@ -291,22 +320,38 @@ async function resolvePackageManagerCommand(projectRoot: string, scriptName: str
   }
 
   if (await fileExists(join(projectRoot, 'bun.lock'))) {
-    return { command: 'bun', args: ['run', scriptName] }
+    return 'bun'
   }
 
   if (await fileExists(join(projectRoot, 'pnpm-lock.yaml'))) {
-    return { command: 'pnpm', args: ['run', scriptName] }
+    return 'pnpm'
   }
 
   if (await fileExists(join(projectRoot, 'yarn.lock'))) {
-    return { command: 'yarn', args: ['run', scriptName] }
+    return 'yarn'
   }
 
   if (await fileExists(join(projectRoot, 'package-lock.json'))) {
-    return { command: 'npm', args: ['run', scriptName] }
+    return 'npm'
   }
 
-  return { command: 'bun', args: ['run', scriptName] }
+  return 'bun'
+}
+
+async function resolvePackageManagerCommand(projectRoot: string, scriptName: string): Promise<PackageManagerCommand> {
+  const packageManager = await resolveProjectPackageManager(projectRoot)
+  return {
+    command: packageManager,
+    args: ['run', scriptName],
+  }
+}
+
+async function resolvePackageManagerInstallInvocation(projectRoot: string): Promise<PackageManagerCommand> {
+  const packageManager = await resolveProjectPackageManager(projectRoot)
+  return {
+    command: packageManager,
+    args: ['install'],
+  }
 }
 
 async function runProjectLifecycleScript(
@@ -335,8 +380,37 @@ async function runProjectLifecycleScript(
   }
 }
 
-async function runProjectPrepare(projectRoot: string): Promise<void> {
+async function runProjectDependencyInstall(
+  io: IoStreams,
+  projectRoot: string,
+  spawn: typeof spawnSync = spawnSync,
+): Promise<void> {
+  const invocation = await resolvePackageManagerInstallInvocation(projectRoot)
+  const result = spawn(invocation.command, [...invocation.args], {
+    cwd: projectRoot,
+    encoding: 'utf8',
+    env: process.env,
+  })
+
+  if (result.stdout) {
+    io.stdout.write(result.stdout)
+  }
+
+  if (result.stderr) {
+    io.stderr.write(result.stderr)
+  }
+
+  if (result.status !== 0) {
+    throw new Error(result.stderr?.trim() || result.stdout?.trim() || 'Project dependency installation failed.')
+  }
+}
+
+async function runProjectPrepare(projectRoot: string, io?: IoStreams): Promise<void> {
   const project = await ensureProjectConfig(projectRoot)
+  const updatedDependencies = await syncManagedDriverDependencies(projectRoot)
+  if (updatedDependencies && io) {
+    await runProjectDependencyInstall(io, projectRoot)
+  }
   await prepareProjectDiscovery(projectRoot, project.config)
 }
 
@@ -641,14 +715,14 @@ async function runProjectDevServer(
   projectRoot: string,
   spawnProcess: typeof spawn = spawn,
   createWatcher: WatchFactory = watch,
-  prepare: (projectRoot: string) => Promise<void> = runProjectPrepare,
+  prepare: (projectRoot: string, io?: IoStreams) => Promise<void> = runProjectPrepare,
 ): Promise<void> {
   let project = await ensureProjectConfig(projectRoot)
   let refreshNonRecursiveWatchers: (() => Promise<void>) | undefined
   let requestChildRestart: (() => void) | undefined
 
   const prepareDiscovery = async (): Promise<void> => {
-    await prepare(projectRoot)
+    await prepare(projectRoot, io)
     project = await ensureProjectConfig(projectRoot)
     await refreshNonRecursiveWatchers?.()
   }
@@ -830,6 +904,10 @@ async function getQueueRuntimeEnvironment(projectRoot: string): Promise<QueueRun
   const bundledJobs: Array<Awaited<ReturnType<typeof bundleProjectModule>>> = []
 
   try {
+    const queueModule = jobEntries.length > 0
+      ? await loadQueueCliModule(projectRoot)
+      : undefined
+
     for (const entry of modelEntries) {
       bundledModels.push(await bundleProjectModule(
         projectRoot,
@@ -838,7 +916,7 @@ async function getQueueRuntimeEnvironment(projectRoot: string): Promise<QueueRun
     }
 
     for (const entry of jobEntries) {
-      if (getRegisteredQueueJob(entry.name)) {
+      if (queueModule?.getRegisteredQueueJob(entry.name)) {
         continue
       }
 
@@ -857,7 +935,7 @@ async function getQueueRuntimeEnvironment(projectRoot: string): Promise<QueueRun
     let bundledJobIndex = 0
     for (let index = 0; index < jobEntries.length; index += 1) {
       const entry = jobEntries[index]!
-      if (getRegisteredQueueJob(entry.name)) {
+      if (queueModule?.getRegisteredQueueJob(entry.name)) {
         continue
       }
 
@@ -865,13 +943,13 @@ async function getQueueRuntimeEnvironment(projectRoot: string): Promise<QueueRun
       bundledJobIndex += 1
 
       const moduleValue = await import(`${pathToFileURL(bundledEntry.path).href}?t=${Date.now()}-${index}`)
-      const job = resolveModuleExport(moduleValue, isQueueJobDefinition)
+      const job = resolveModuleExport(moduleValue, (value): value is unknown => queueModule!.isQueueJobDefinition(value))
       if (!job) {
         throw new Error(`Discovered job "${entry.sourcePath}" does not export a Holo job.`)
       }
 
-      if (!getRegisteredQueueJob(entry.name)) {
-        registerQueueJob(normalizeQueueJobDefinition(job), {
+      if (!queueModule?.getRegisteredQueueJob(entry.name)) {
+        queueModule!.registerQueueJob(queueModule!.normalizeQueueJobDefinition(job), {
           name: entry.name,
           sourcePath: entry.sourcePath,
         })
@@ -901,14 +979,15 @@ async function runQueueWorkCommand(
   dependencies: {
     getEnvironment?: typeof getQueueRuntimeEnvironment
     hasRestartSignal?: typeof hasQueueRestartSignalSince
-    runWorker?: typeof runQueueWorker
+    runWorker?: QueueCliModule['runQueueWorker']
   } = {},
 ): Promise<void> {
   const startedAt = Date.now()
   const environment = await (dependencies.getEnvironment ?? getQueueRuntimeEnvironment)(projectRoot)
 
   try {
-    const result = await (dependencies.runWorker ?? runQueueWorker)({
+    const queueModule = dependencies.runWorker ? undefined : await loadQueueCliModule(projectRoot)
+    const result = await (dependencies.runWorker ?? queueModule!.runQueueWorker)({
       ...options,
       shouldStop: async () => {
         if (await options.shouldStop?.()) {
@@ -937,22 +1016,23 @@ async function initializeQueueMaintenanceEnvironment(
   connectionName?: string,
 ): Promise<QueueMaintenanceEnvironment> {
   const loadedConfig = await loadConfigDirectory(projectRoot)
+  const queueModule = await loadQueueCliModule(projectRoot)
   const resolvedConnectionName = connectionName?.trim() || loadedConfig.queue.default
   const connection = loadedConfig.queue.connections[resolvedConnectionName]
   if (!connection || connection.driver !== 'database') {
-    configureQueueRuntime({
+    queueModule.configureQueueRuntime({
       config: loadedConfig.queue,
     })
 
     return {
       async cleanup() {
-        await shutdownQueueRuntime()
+        await queueModule.shutdownQueueRuntime()
       },
     }
   }
 
-  const { createQueueDbRuntimeOptions } = await import('@holo-js/queue-db')
-  configureQueueRuntime({
+  const { createQueueDbRuntimeOptions } = await import(resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue-db'))
+  queueModule.configureQueueRuntime({
     config: loadedConfig.queue,
     ...createQueueDbRuntimeOptions(),
   })
@@ -967,7 +1047,7 @@ async function initializeQueueMaintenanceEnvironment(
   } catch (error) {
     await manager.disconnectAll().catch(() => {})
     resetDB()
-    await shutdownQueueRuntime()
+    await queueModule.shutdownQueueRuntime()
     throw error
   }
 
@@ -977,7 +1057,7 @@ async function initializeQueueMaintenanceEnvironment(
         await manager.disconnectAll()
       } finally {
         resetDB()
-        await shutdownQueueRuntime()
+        await queueModule.shutdownQueueRuntime()
       }
     },
   }
@@ -994,14 +1074,15 @@ async function runQueueClearCommand(
       projectRoot: string,
       connectionName?: string,
     ) => Promise<QueueMaintenanceEnvironment>
-    clear?: typeof clearQueueConnection
+    clear?: QueueCliModule['clearQueueConnection']
   } = {},
 ): Promise<void> {
   if (dependencies.initialize) {
     const runtime = await dependencies.initialize(projectRoot)
+    const queueModule = dependencies.clear ? undefined : await loadQueueCliModule(projectRoot)
 
     try {
-      const cleared = await (dependencies.clear ?? clearQueueConnection)(connectionName, {
+      const cleared = await (dependencies.clear ?? queueModule!.clearQueueConnection)(connectionName, {
         ...(queueNames && queueNames.length > 0 ? { queueNames } : {}),
       })
       writeLine(io.stdout, `[queue] Cleared ${cleared} pending job(s).`)
@@ -1018,7 +1099,8 @@ async function runQueueClearCommand(
   )
 
   try {
-    const cleared = await (dependencies.clear ?? clearQueueConnection)(connectionName, {
+    const queueModule = dependencies.clear ? undefined : await loadQueueCliModule(projectRoot)
+    const cleared = await (dependencies.clear ?? queueModule!.clearQueueConnection)(connectionName, {
       ...(queueNames && queueNames.length > 0 ? { queueNames } : {}),
     })
     writeLine(io.stdout, `[queue] Cleared ${cleared} pending job(s).`)
@@ -1041,7 +1123,7 @@ async function runQueueListen(
   flags: Readonly<Record<string, CommandFlagValue>>,
   spawnProcess: typeof spawn = spawn,
   createWatcher: WatchFactory = watch,
-  prepare: (projectRoot: string) => Promise<void> = runProjectPrepare,
+  prepare: (projectRoot: string, io?: IoStreams) => Promise<void> = runProjectPrepare,
 ): Promise<void> {
   let project = await ensureProjectConfig(projectRoot)
   let refreshNonRecursiveWatchers: (() => Promise<void>) | undefined
@@ -1051,7 +1133,7 @@ async function runQueueListen(
 
   try {
     const prepareDiscovery = async (): Promise<void> => {
-      await prepare(projectRoot)
+      await prepare(projectRoot, io)
       project = await ensureProjectConfig(projectRoot)
       await refreshNonRecursiveWatchers?.()
     }
@@ -1467,6 +1549,9 @@ function normalizeOptionalPackages(value: readonly string[] | undefined): readon
 
     if (SUPPORTED_NEW_OPTIONAL_PACKAGES.includes(current as SupportedScaffoldOptionalPackage)) {
       normalized.add(current as SupportedScaffoldOptionalPackage)
+      if (current === 'forms') {
+        normalized.add('validation')
+      }
       continue
     }
 
@@ -1760,6 +1845,24 @@ async function fileExists(path: string): Promise<boolean> {
   try {
     await stat(path)
     return true
+  } catch {
+    return false
+  }
+}
+
+async function hasProjectDependency(projectRoot: string, packageName: string): Promise<boolean> {
+  const packageJson = await readTextFile(join(projectRoot, 'package.json'))
+  if (!packageJson) {
+    return false
+  }
+
+  try {
+    const parsed = JSON.parse(packageJson) as {
+      dependencies?: Record<string, unknown>
+      devDependencies?: Record<string, unknown>
+    }
+    return typeof parsed.dependencies?.[packageName] === 'string'
+      || typeof parsed.devDependencies?.[packageName] === 'string'
   } catch {
     return false
   }
@@ -2559,7 +2662,7 @@ async function runQueueFailedCommand(
   projectRoot: string,
   dependencies: {
     initialize?: (projectRoot: string) => Promise<HoloRuntime>
-    list?: typeof listFailedQueueJobs
+    list?: QueueCliModule['listFailedQueueJobs']
   } = {},
 ): Promise<void> {
   const runtime = await (dependencies.initialize ?? initializeProjectRuntime)(projectRoot, {
@@ -2567,7 +2670,8 @@ async function runQueueFailedCommand(
   })
 
   try {
-    const failedJobs = await (dependencies.list ?? listFailedQueueJobs)()
+    const queueModule = dependencies.list ? undefined : await loadQueueCliModule(projectRoot)
+    const failedJobs = await (dependencies.list ?? queueModule!.listFailedQueueJobs)()
     if (failedJobs.length === 0) {
       writeLine(io.stdout, '[queue] No failed jobs.')
       return
@@ -2590,7 +2694,7 @@ async function runQueueRetryCommand(
   identifier: 'all' | string,
   dependencies: {
     initialize?: (projectRoot: string) => Promise<HoloRuntime>
-    retry?: typeof retryFailedQueueJobs
+    retry?: QueueCliModule['retryFailedQueueJobs']
   } = {},
 ): Promise<void> {
   const runtime = await (dependencies.initialize ?? initializeProjectRuntime)(projectRoot, {
@@ -2598,7 +2702,8 @@ async function runQueueRetryCommand(
   })
 
   try {
-    const retried = await (dependencies.retry ?? retryFailedQueueJobs)(identifier)
+    const queueModule = dependencies.retry ? undefined : await loadQueueCliModule(projectRoot)
+    const retried = await (dependencies.retry ?? queueModule!.retryFailedQueueJobs)(identifier)
     writeLine(io.stdout, `[queue] Retried ${retried} failed job(s).`)
   } finally {
     await runtime.shutdown()
@@ -2611,7 +2716,7 @@ async function runQueueForgetCommand(
   identifier: string,
   dependencies: {
     initialize?: (projectRoot: string) => Promise<HoloRuntime>
-    forget?: typeof forgetFailedQueueJob
+    forget?: QueueCliModule['forgetFailedQueueJob']
   } = {},
 ): Promise<void> {
   const runtime = await (dependencies.initialize ?? initializeProjectRuntime)(projectRoot, {
@@ -2619,7 +2724,8 @@ async function runQueueForgetCommand(
   })
 
   try {
-    const forgotten = await (dependencies.forget ?? forgetFailedQueueJob)(identifier)
+    const queueModule = dependencies.forget ? undefined : await loadQueueCliModule(projectRoot)
+    const forgotten = await (dependencies.forget ?? queueModule!.forgetFailedQueueJob)(identifier)
     writeLine(io.stdout, forgotten
       ? `[queue] Forgot failed job ${identifier}.`
       : `[queue] Failed job ${identifier} was not found.`)
@@ -2633,7 +2739,7 @@ async function runQueueFlushCommand(
   projectRoot: string,
   dependencies: {
     initialize?: (projectRoot: string) => Promise<HoloRuntime>
-    flush?: typeof flushFailedQueueJobs
+    flush?: QueueCliModule['flushFailedQueueJobs']
   } = {},
 ): Promise<void> {
   const runtime = await (dependencies.initialize ?? initializeProjectRuntime)(projectRoot, {
@@ -2641,7 +2747,8 @@ async function runQueueFlushCommand(
   })
 
   try {
-    const flushed = await (dependencies.flush ?? flushFailedQueueJobs)()
+    const queueModule = dependencies.flush ? undefined : await loadQueueCliModule(projectRoot)
+    const flushed = await (dependencies.flush ?? queueModule!.flushFailedQueueJobs)()
     writeLine(io.stdout, `[queue] Flushed ${flushed} failed job(s).`)
   } finally {
     await runtime.shutdown()
@@ -3018,15 +3125,50 @@ function createInternalCommands(
         const target = String(commandContext.args[0] ?? '')
 
         if (target === 'events') {
-          const result = await installEventsIntoProject(context.projectRoot)
-          const changed = result.updatedPackageJson
-            || result.createdEventsDirectory
-            || result.createdListenersDirectory
+          const eventsResult = await installEventsIntoProject(context.projectRoot)
+          let queueResult:
+            | Awaited<ReturnType<typeof installQueueIntoProject>>
+            | undefined
+
+          const queueConfigured = await hasProjectDependency(context.projectRoot, '@holo-js/queue')
+            || await fileExists(resolve(context.projectRoot, 'config/queue.ts'))
+            || await fileExists(resolve(context.projectRoot, 'config/queue.mts'))
+            || await fileExists(resolve(context.projectRoot, 'config/queue.js'))
+            || await fileExists(resolve(context.projectRoot, 'config/queue.mjs'))
+
+          if (
+            !queueConfigured
+            && isInteractive(context, commandContext.flags as Record<string, string | boolean | readonly string[]>)
+          ) {
+            const enableQueuedListeners = await confirm(
+              context,
+              'Enable queued listeners too?',
+              false,
+            )
+
+            if (enableQueuedListeners) {
+              queueResult = await installQueueIntoProject(context.projectRoot, { driver: 'sync' })
+            }
+          }
+
+          const changed = eventsResult.updatedPackageJson
+            || eventsResult.createdEventsDirectory
+            || eventsResult.createdListenersDirectory
+            || !!queueResult
 
           writeLine(context.stdout, changed ? 'Installed events support.' : 'Events support is already installed.')
-          if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
-          if (result.createdEventsDirectory) writeLine(context.stdout, '  - created server/events')
-          if (result.createdListenersDirectory) writeLine(context.stdout, '  - created server/listeners')
+          if (eventsResult.updatedPackageJson || queueResult?.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
+          if (eventsResult.createdEventsDirectory) writeLine(context.stdout, '  - created server/events')
+          if (eventsResult.createdListenersDirectory) writeLine(context.stdout, '  - created server/listeners')
+          if (queueResult) {
+            writeLine(context.stdout, '  - enabled queued listeners')
+            if (queueResult.createdQueueConfig) writeLine(context.stdout, '  - created config/queue.ts')
+            /* v8 ignore next 2 -- queued listeners are auto-enabled with the sync driver in this flow */
+            if (queueResult.updatedEnv) writeLine(context.stdout, '  - updated .env')
+            /* v8 ignore next 2 -- queued listeners are auto-enabled with the sync driver in this flow */
+            if (queueResult.updatedEnvExample) writeLine(context.stdout, '  - updated .env.example')
+            if (queueResult.createdJobsDirectory) writeLine(context.stdout, '  - created server/jobs')
+          }
           return
         }
 
@@ -3061,7 +3203,7 @@ function createInternalCommands(
         return { args: [], flags: {} }
       },
       async run() {
-        await projectCommandExecutors.runProjectPrepare(context.projectRoot)
+        await projectCommandExecutors.runProjectPrepare(context.projectRoot, context)
         writeLine(context.stdout, 'Prepared Holo discovery artifacts.')
       },
     },
@@ -3086,7 +3228,7 @@ function createInternalCommands(
         return { args: [], flags: {} }
       },
       async run() {
-        await projectCommandExecutors.runProjectPrepare(context.projectRoot)
+        await projectCommandExecutors.runProjectPrepare(context.projectRoot, context)
         await projectCommandExecutors.runProjectLifecycleScript(context, context.projectRoot, 'holo:build')
       },
     },
@@ -3833,6 +3975,7 @@ export const cliInternals = {
   commandTokens,
   ensureAbsent,
   fileExists,
+  hasProjectDependency,
   findCommandConflict,
   findCommand,
   isInteractive,
@@ -3848,6 +3991,7 @@ export const cliInternals = {
   resolveNewProjectInput,
   resolvePackageManagerDevCommand,
   resolvePackageManagerInstallCommand,
+  resolvePackageManagerInstallInvocation,
   resolvePackageManagerCommand,
   resolveConfigModuleUrl,
   resolveBooleanFlag,
@@ -3857,6 +4001,7 @@ export const cliInternals = {
   resolveStringFlag,
   resolveQueueRestartSignalPath,
   runProjectDevServer,
+  runProjectDependencyInstall,
   runProjectLifecycleScript,
   runProjectPrepare,
   runQueueClearCommand,

@@ -16,6 +16,10 @@
     "./runtime": {
       "types": "./dist/runtime/composables/index.d.ts",
       "import": "./dist/runtime/composables/index.js"
+    },
+    "./storage": {
+      "types": "./dist/runtime/composables/storage.d.ts",
+      "import": "./dist/runtime/composables/storage.js"
     }
   },
   "main": "./dist/module.mjs",
@@ -33,9 +37,19 @@
     "@nuxt/kit": "^4.0.0",
     "@holo-js/config": "^0.1.2",
     "@holo-js/core": "^0.1.2",
-    "@holo-js/db": "^0.1.2",
+    "@holo-js/db": "^0.1.2"
+  },
+  "peerDependencies": {
     "@holo-js/forms": "^0.1.2",
     "@holo-js/storage": "^0.1.2"
+  },
+  "peerDependenciesMeta": {
+    "@holo-js/forms": {
+      "optional": true
+    },
+    "@holo-js/storage": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@nuxt/module-builder": "^1.0.2",

@@ -1,0 +1,38 @@
+{
+  "name": "@holo-js/db-sqlite",
+  "version": "0.1.2",
+  "description": "Holo-JS Framework - SQLite database adapter",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "stub": "tsup --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest --run"
+  },
+  "peerDependencies": {
+    "@holo-js/db": "^0.1.2"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0"
+  },
+  "devDependencies": {
+    "@holo-js/db": "workspace:*",
+    "@types/better-sqlite3": "^7.6.12",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

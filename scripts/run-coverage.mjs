@@ -216,16 +216,24 @@ async function mergeCoverageReports() {
 
 await cleanupCoverageRoot()
 
-const results = await Promise.allSettled(coverageJobs.map(job => runCoverageScript(job.scriptName)))
-const failed = results
-  .map((result, index) => ({ result, scriptName: coverageJobs[index].scriptName }))
-  .filter((entry) => entry.result.status === 'rejected')
+const failed = []
+
+for (const job of coverageJobs) {
+  try {
+    await runCoverageScript(job.scriptName)
+  } catch (error) {
+    failed.push({
+      scriptName: job.scriptName,
+      reason: error,
+    })
+  }
+}
 
 if (failed.length > 0) {
   for (const entry of failed) {
     console.error(
-      entry.result.reason instanceof Error
-        ? entry.result.reason.message
+      entry.reason instanceof Error
+        ? entry.reason.message
         : `Coverage script "${entry.scriptName}" failed.`,
     )
   }

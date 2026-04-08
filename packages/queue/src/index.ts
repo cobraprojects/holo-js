@@ -1,3 +1,13 @@
+import type { HoloQueueConfig } from './contracts'
+
+function defineConfig<TConfig extends object>(config: TConfig): Readonly<TConfig> {
+  return Object.freeze({ ...config })
+}
+
+export function defineQueueConfig<TConfig extends HoloQueueConfig>(config: TConfig): Readonly<TConfig> {
+  return defineConfig(config)
+}
+
 export { defineJob, isQueueJobDefinition, normalizeQueueJobDefinition, queueJobInternals } from './contracts'
 export type {
   ExportedQueueJobDefinition,

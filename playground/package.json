@@ -12,6 +12,7 @@
   },
   "devDependencies": {
     "nuxt": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vue-tsc": "catalog:"
   }
 }

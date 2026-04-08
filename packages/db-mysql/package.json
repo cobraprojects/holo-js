@@ -1,0 +1,37 @@
+{
+  "name": "@holo-js/db-mysql",
+  "version": "0.1.2",
+  "description": "Holo-JS Framework - MySQL database adapter",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "stub": "tsup --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest --run"
+  },
+  "peerDependencies": {
+    "@holo-js/db": "^0.1.2"
+  },
+  "dependencies": {
+    "mysql2": "^3.17.1"
+  },
+  "devDependencies": {
+    "@holo-js/db": "workspace:*",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

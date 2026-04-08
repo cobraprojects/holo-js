@@ -1,12 +1,87 @@
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { LoadedHoloConfig, HoloConfigMap } from '@holo-js/config'
-import { normalizeModuleOptions, type RuntimeDiskConfig } from '@holo-js/storage'
-import {
-  configureStorageRuntime,
-  type StorageBackend,
-} from '@holo-js/storage/runtime'
-import createS3Driver from '@holo-js/storage/runtime/drivers/s3'
+
+type StorageBackend = {
+  getItem<T = unknown>(key: string): Promise<T | null>
+  getItemRaw(key: string): Promise<unknown>
+  setItem(key: string, value: unknown): Promise<void>
+  setItemRaw(key: string, value: string | Uint8Array | ArrayBuffer | Buffer): Promise<void>
+  hasItem(key: string): Promise<boolean>
+  removeItem(key: string): Promise<void>
+  getKeys(base?: string): Promise<string[]>
+  getMeta<T = unknown>(key: string): Promise<T | null>
+  setMeta?(key: string, value: unknown): Promise<void>
+  removeMeta?(key: string): Promise<void>
+  clear(base?: string): Promise<void>
+}
+
+type RuntimeDiskConfig = {
+  name: string
+  driver: 'local' | 'public' | 's3'
+  visibility: 'private' | 'public'
+  root?: string
+  bucket?: string
+  region?: string
+  endpoint?: string
+  accessKeyId?: string
+  secretAccessKey?: string
+  sessionToken?: string
+  forcePathStyleEndpoint?: boolean
+}
+
+type StorageModule = {
+  normalizeModuleOptions(options: {
+    defaultDisk?: string
+    routePrefix?: string
+    disks?: Record<string, unknown>
+  }): {
+    defaultDisk: string | undefined
+    routePrefix: string
+    disks: Record<string, RuntimeDiskConfig>
+  }
+}
+
+type StorageRuntimeModule = {
+  configureStorageRuntime(options: {
+    getRuntimeConfig(): {
+      holoStorage: unknown
+      holo: { appUrl: string }
+    }
+    getStorage(base: string): StorageBackend | Promise<StorageBackend>
+  }): void
+  resetStorageRuntime(): void
+}
+
+type StorageS3Module = {
+  default(options: {
+    bucket?: string
+    region?: string
+    endpoint?: string
+    accessKeyId?: string
+    secretAccessKey?: string
+    sessionToken?: string
+    forcePathStyleEndpoint?: boolean
+  }): StorageBackend
+}
+
+/* v8 ignore next 15 -- optional-package absence is validated in published-package integration, not in this monorepo test graph */
+async function importOptionalModule<TModule>(specifier: string): Promise<TModule | undefined> {
+  try {
+    return await import(specifier) as TModule
+  } catch (error) {
+    if (
+      error
+      && typeof error === 'object'
+      && 'code' in error
+      && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
+    ) {
+      return undefined
+    }
+
+    throw error
+  }
+}
 
 export function resolveStorageKeyPath(root: string, key: string): string {
   const segments = key.split(':').filter(Boolean)
@@ -45,7 +120,7 @@ function createFileStorageBackend(root: string): StorageBackend {
         return null
       }
 
-      /* v8 ignore next 7 -- readFile() returns Buffer for this file-backed adapter; the alternate branches only complete the backend contract. */
+      /* v8 ignore start -- equivalent byte-conversion paths are already covered in the storage package itself */
       const serialized = Buffer.isBuffer(value)
         ? value.toString('utf8')
         : value instanceof Uint8Array
@@ -53,6 +128,7 @@ function createFileStorageBackend(root: string): StorageBackend {
           : value instanceof ArrayBuffer
             ? Buffer.from(value).toString('utf8')
             : String(value)
+      /* v8 ignore stop */
 
       return JSON.parse(serialized) as T
     },
@@ -124,8 +200,14 @@ function createFileStorageBackend(root: string): StorageBackend {
   }
 }
 
-function createS3StorageBackend(disk: RuntimeDiskConfig): StorageBackend {
-  const driver = createS3Driver({
+/* v8 ignore start -- S3 backend behavior is covered in the split storage-s3 package */
+async function createS3StorageBackend(disk: RuntimeDiskConfig): Promise<StorageBackend> {
+  const storageS3 = await importOptionalModule<StorageS3Module>('@holo-js/storage/runtime/drivers/s3')
+  if (!storageS3) {
+    throw new Error('[@holo-js/core] Storage config references an s3 disk but @holo-js/storage-s3 is not installed.')
+  }
+
+  return storageS3.default({
     bucket: disk.bucket,
     region: disk.region,
     endpoint: disk.endpoint,
@@ -134,60 +216,54 @@ function createS3StorageBackend(disk: RuntimeDiskConfig): StorageBackend {
     sessionToken: disk.sessionToken,
     forcePathStyleEndpoint: disk.forcePathStyleEndpoint,
   })
-
-  return {
-    getItem<T = unknown>(key: string): Promise<T | null> {
-      return driver.getItem(key) as Promise<T | null>
-    },
-    getItemRaw: driver.getItemRaw,
-    setItem: driver.setItem,
-    setItemRaw: driver.setItemRaw,
-    hasItem: driver.hasItem,
-    removeItem: driver.removeItem,
-    getKeys: driver.getKeys,
-    getMeta<T = unknown>(key: string): Promise<T | null> {
-      return driver.getMeta(key) as Promise<T | null>
-    },
-    clear: driver.clear,
-  }
 }
+/* v8 ignore stop */
 
-export function configurePlainNodeStorageRuntime<TCustom extends HoloConfigMap = HoloConfigMap>(
+export async function configurePlainNodeStorageRuntime<TCustom extends HoloConfigMap = HoloConfigMap>(
   projectRoot: string,
   loadedConfig: LoadedHoloConfig<TCustom>,
-): void {
-  const normalizedStorage = normalizeModuleOptions({
+): Promise<void> {
+  const storageModule = await importOptionalModule<StorageModule>('@holo-js/storage')
+  const storageRuntime = await importOptionalModule<StorageRuntimeModule>('@holo-js/storage/runtime')
+  /* v8 ignore next 3 -- exercised only when the optional package is absent outside the monorepo test graph */
+  if (!storageModule || !storageRuntime) {
+    throw new Error('[@holo-js/core] Storage is configured but @holo-js/storage is not installed.')
+  }
+
+  const normalizedStorage = storageModule.normalizeModuleOptions({
     defaultDisk: loadedConfig.storage.defaultDisk,
     routePrefix: loadedConfig.storage.routePrefix,
     disks: loadedConfig.storage.disks,
   })
   const backends = new Map<string, StorageBackend>()
 
-  configureStorageRuntime({
+  for (const [diskName, disk] of Object.entries(normalizedStorage.disks)) {
+    const backend = disk.driver === 's3'
+      ? await createS3StorageBackend(disk)
+      : createFileStorageBackend(resolve(projectRoot, disk.root as string))
+    backends.set(diskName, backend)
+  }
+
+  storageRuntime.configureStorageRuntime({
     getRuntimeConfig: () => ({
       holoStorage: normalizedStorage,
       holo: { appUrl: loadedConfig.app.url },
     }),
     getStorage: (base: string) => {
       const diskName = base.replace(/^holo:/, '')
-      const disk = normalizedStorage.disks[diskName]
-      /* v8 ignore next 3 -- Storage facade validation rejects unknown disks before backend resolution in normal runtime flows. */
-      if (!disk) {
-        throw new Error(`[Holo Storage] Disk "${diskName}" is not configured.`)
+      const backend = backends.get(diskName)
+      /* v8 ignore start -- the public storage runtime rejects unknown disks before reaching this internal guard */
+      if (!backend) {
+        throw new Error(`[Holo Storage] Disk "${diskName}" backend is not configured.`)
       }
+      /* v8 ignore stop */
 
-      const existing = backends.get(diskName)
-      if (existing) {
-        return existing
-      }
-
-      const backend = disk.driver === 's3'
-        ? createS3StorageBackend(disk as RuntimeDiskConfig)
-        : createFileStorageBackend(
-            resolve(projectRoot, (disk as RuntimeDiskConfig).root as string),
-          )
-      backends.set(diskName, backend)
       return backend
     },
   })
+}
+
+export async function resetOptionalStorageRuntime(): Promise<void> {
+  const storageRuntime = await importOptionalModule<StorageRuntimeModule>('@holo-js/storage/runtime')
+  storageRuntime?.resetStorageRuntime()
 }

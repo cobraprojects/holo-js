@@ -5,6 +5,7 @@ import {
   useHoloDebug as useRuntimeHoloDebug,
   useHoloEnv as useRuntimeHoloEnv,
 } from '../src/runtime/composables'
+import { Storage as AdapterStorage, useStorage as useAdapterStorage } from '../src/runtime/composables/storage'
 import { Storage as RuntimeStorage, useStorage as useRuntimeStorage } from '@holo-js/storage/runtime'
 import {
   holo,
@@ -18,6 +19,11 @@ describe('server utils', () => {
   it('re-exports the storage facade and composable', () => {
     expect(Storage).toBe(RuntimeStorage)
     expect(useStorage).toBe(useRuntimeStorage)
+  })
+
+  it('re-exports the dedicated storage runtime entry', () => {
+    expect(AdapterStorage).toBe(RuntimeStorage)
+    expect(useAdapterStorage).toBe(useRuntimeStorage)
   })
 
   it('re-exports the Holo runtime composables for server auto-imports', () => {

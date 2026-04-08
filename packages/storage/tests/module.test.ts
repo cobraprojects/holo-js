@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   applyEnvOverrides,
   buildStorageConfig,
+  defineStorageConfig,
   normalizeDiskConfig,
   normalizeModuleOptions,
   normalizeStorageDriver,
@@ -14,6 +15,29 @@ describe('normalizeStorageDriver', () => {
     expect(normalizeStorageDriver('local')).toBe('local')
     expect(normalizeStorageDriver('public')).toBe('public')
     expect(normalizeStorageDriver('s3')).toBe('s3')
+  })
+})
+
+describe('defineStorageConfig', () => {
+  it('returns a frozen copy for standalone package usage', () => {
+    const config = defineStorageConfig({
+      defaultDisk: 'local',
+      disks: {
+        local: {
+          driver: 'local',
+        },
+      },
+    })
+
+    expect(config).toEqual({
+      defaultDisk: 'local',
+      disks: {
+        local: {
+          driver: 'local',
+        },
+      },
+    })
+    expect(Object.isFrozen(config)).toBe(true)
   })
 })
 

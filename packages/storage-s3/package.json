@@ -1,0 +1,31 @@
+{
+  "name": "@holo-js/storage-s3",
+  "version": "0.1.2",
+  "description": "Holo-JS Framework - S3 storage driver",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "stub": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest --run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

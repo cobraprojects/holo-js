@@ -50,11 +50,12 @@ describe('@holo-js/events package boundaries', () => {
     const packageJsonPath = resolve(import.meta.dirname, '../package.json')
     const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8')) as {
       dependencies?: Record<string, string>
+      peerDependencies?: Record<string, string>
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>
     }
 
-    expect(Object.keys(packageJson.dependencies ?? {}).sort((left, right) => left.localeCompare(right))).toEqual([
-      '@holo-js/db',
-      '@holo-js/queue',
-    ])
+    expect(Object.keys(packageJson.dependencies ?? {})).toEqual(['@holo-js/db'])
+    expect(packageJson.peerDependencies?.['@holo-js/queue']).toBeDefined()
+    expect(packageJson.peerDependenciesMeta?.['@holo-js/queue']?.optional).toBe(true)
   })
 })

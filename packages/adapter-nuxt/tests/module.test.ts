@@ -169,6 +169,7 @@ afterEach(() => {
   vi.doUnmock('@holo-js/config')
   vi.doUnmock('@holo-js/db')
   vi.doUnmock('@holo-js/core')
+  vi.doUnmock('@holo-js/storage')
   vi.doUnmock('../src/runtime/composables')
   vi.unstubAllGlobals()
 
@@ -322,8 +323,8 @@ export default defineDatabaseConfig({
     expect(addImports.mock.calls[0]?.[0]).toHaveLength(6)
     expect(addImports.mock.calls[0]?.[0]).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'holo', as: 'holo', from: './runtime/composables' }),
-      expect.objectContaining({ name: 'useStorage', as: 'useStorage', from: './runtime/composables' }),
-      expect.objectContaining({ name: 'Storage', as: 'Storage', from: './runtime/composables' }),
+      expect.objectContaining({ name: 'useStorage', as: 'useStorage', from: './runtime/composables/storage' }),
+      expect.objectContaining({ name: 'Storage', as: 'Storage', from: './runtime/composables/storage' }),
     ]))
     expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/imports')
     expect(addServerImportsDir).toHaveBeenCalledWith(resolve(root, 'server/models'))
@@ -371,6 +372,47 @@ export default defineStorageConfig({
       region: 'us-east-1',
       endpoint: 'https://s3.us-east-1.amazonaws.com',
     })
+  })
+
+  it('fails early when an s3 storage disk is configured without @holo-js/storage-s3', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'config/storage.ts'), `
+import { defineStorageConfig } from ${packageEntry}
+
+export default defineStorageConfig({
+  disks: {
+    media: {
+      driver: 's3',
+      bucket: 'media-bucket',
+      region: 'us-east-1',
+    },
+  },
+})
+`, 'utf8')
+
+    vi.doMock('../src/runtime/drivers/s3', () => ({
+      default: undefined,
+    }))
+
+    try {
+      const { module } = await loadAdapterModule()
+      const nuxt = createNuxtHarness(root)
+      await expect(module.setup({}, nuxt as never)).rejects.toThrow(
+        '[@holo-js/adapter-nuxt] S3 storage disks require @holo-js/storage-s3 to be installed.',
+      )
+    } finally {
+      vi.doUnmock('../src/runtime/drivers/s3')
+    }
+  })
+
+  it('detects Windows-style storage config paths', async () => {
+    const mod = await import('../src/module')
+
+    expect(mod.moduleInternals.hasLoadedConfigFile({
+      loadedFiles: [
+        'C:\\workspace\\app\\config\\storage.ts',
+      ],
+    } as never, 'storage')).toBe(true)
   })
 
   it('prefers cached config artifacts for production module setup', async () => {

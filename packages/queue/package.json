@@ -22,10 +22,16 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest --run"
   },
-  "dependencies": {
-    "bullmq": "^5.71.0"
+  "peerDependencies": {
+    "@holo-js/queue-redis": "^0.1.2"
+  },
+  "peerDependenciesMeta": {
+    "@holo-js/queue-redis": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@holo-js/queue-redis": "workspace:*",
     "@types/node": "^22.10.2",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",

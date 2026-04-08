@@ -23,8 +23,15 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/db": "^0.1.2",
+    "@holo-js/db": "^0.1.2"
+  },
+  "peerDependencies": {
     "@holo-js/queue": "^0.1.2"
+  },
+  "peerDependenciesMeta": {
+    "@holo-js/queue": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

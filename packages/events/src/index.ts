@@ -56,6 +56,7 @@ export {
   eventQueueInternals,
   EVENTS_INVOKE_LISTENER_JOB,
   ensureEventsQueueJobRegistered,
+  ensureEventsQueueJobRegisteredAsync,
   runQueuedListenerInvocation,
 } from './queue'
 export type {

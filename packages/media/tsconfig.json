@@ -12,6 +12,9 @@
       "@holo-js/queue": [
         "../queue/src/index.ts"
       ],
+      "@holo-js/queue-redis": [
+        "../queue/src/queue-redis.d.ts"
+      ],
       "@holo-js/storage/runtime": [
         "../storage/src/runtime/composables/index.ts"
       ]

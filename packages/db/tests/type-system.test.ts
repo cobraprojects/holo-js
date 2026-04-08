@@ -1,4 +1,6 @@
 import { describe, expectTypeOf, it } from 'vitest'
+import type { PoolConfig } from 'pg'
+import type { PoolOptions } from 'mysql2/promise'
 import {
   HasUlids,
   TableDefinitionBuilder,
@@ -18,9 +20,11 @@ import {
   type InferInsert,
   type InferSelect,
   type InferUpdate,
+  type MySQLAdapterOptions,
   type ModelCollection,
   type ModelQueryBuilder,
   type PaginatedResult,
+  type PostgresAdapterOptions,
   type SimplePaginatedResult } from '../src'
 import type { AnyModelDefinition, BelongsToRelationDefinition, ModelRelationPath } from '../src/model/types'
 import { defineModelFromTable, defineTable } from './support/internal'
@@ -876,5 +880,50 @@ describe('type system contracts', () => {
       const morphNestedRootOnly: Assert<IsEqual<MorphNestedImageable, Entity | null>> = true
       void morphNestedRootOnly
     }
+  })
+
+  it('preserves inferred driver config extensions for split postgres and mysql adapters', () => {
+    const postgresConfig = {
+      host: 'localhost',
+      max: 10,
+      statement_timeout: 5000,
+    } satisfies PoolConfig
+
+    const mysqlConfig = {
+      host: 'localhost',
+      connectionLimit: 10,
+      enableKeepAlive: true,
+    } satisfies PoolOptions
+
+    const postgresOptions: PostgresAdapterOptions<typeof postgresConfig> = {
+      config: postgresConfig,
+      createPool(config) {
+        expectTypeOf(config).toEqualTypeOf<typeof postgresConfig | undefined>()
+        return {
+          query: async () => ({ rows: [] }),
+          connect: async () => ({
+            query: async () => ({ rows: [] }),
+          }),
+          end: async () => {},
+        }
+      },
+    }
+
+    const mysqlOptions: MySQLAdapterOptions<typeof mysqlConfig> = {
+      config: mysqlConfig,
+      createPool(config) {
+        expectTypeOf(config).toEqualTypeOf<typeof mysqlConfig>()
+        return {
+          query: async () => [[], []] as const,
+          getConnection: async () => ({
+            query: async () => [[], []] as const,
+          }),
+          end: async () => {},
+        }
+      },
+    }
+
+    expectTypeOf(postgresOptions.config).toEqualTypeOf<typeof postgresConfig | undefined>()
+    expectTypeOf(mysqlOptions.config).toEqualTypeOf<typeof mysqlConfig | undefined>()
   })
 })

@@ -1,5 +1,5 @@
 import { describe, it } from 'vitest'
-import type { HoloAdapterProjectAccessors } from '../src'
+import type { HoloAdapterProjectAccessors, HoloQueueRuntimeBinding } from '../src'
 
 type CustomConfig = {
   services: {
@@ -38,5 +38,21 @@ describe('@holo-js/core adapter typing', () => {
     void services
     void nestedUseConfigSecret
     void secret
+  })
+
+  it('preserves a typed queue driver surface on the public runtime binding', () => {
+    type DriverValue = HoloQueueRuntimeBinding['drivers'] extends ReadonlyMap<string, infer TResult>
+      ? TResult
+      : never
+
+    const mode: DriverValue['mode'] = 'sync'
+    const asyncMode: DriverValue['mode'] = 'async'
+    const name: DriverValue['name'] = 'default'
+    const driver: DriverValue['driver'] = 'redis'
+
+    void mode
+    void asyncMode
+    void name
+    void driver
   })
 })
