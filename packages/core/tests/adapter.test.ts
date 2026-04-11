@@ -181,6 +181,8 @@ describe('@holo-js/core adapter helpers', () => {
 
     await expect(accessors.getApp()).resolves.toBe(project)
     await expect(accessors.getProject()).resolves.toBe(project)
+    await expect(accessors.getSession()).resolves.toBeUndefined()
+    await expect(accessors.getAuth()).resolves.toBeUndefined()
     await expect(accessors.useConfig('services')).resolves.toEqual({
       mailgun: {
         secret: 'typed-secret',
@@ -231,6 +233,8 @@ describe('@holo-js/core adapter helpers', () => {
 
     await expect(helpers.getApp()).resolves.toBe(project)
     await expect(helpers.getProject()).resolves.toBe(project)
+    await expect(helpers.getSession()).resolves.toBeUndefined()
+    await expect(helpers.getAuth()).resolves.toBeUndefined()
     await expect(helpers.useConfig('services')).resolves.toEqual({
       services: {
         secret: 'adapter-secret',
@@ -622,6 +626,138 @@ export default defineJob({
 
     expect(second).not.toBe(first)
     await expect(Queue.dispatchSync<Record<string, never>, string>('report', {})).resolves.toBe('second')
+  })
+
+  it('picks up auth provider model changes in dev mode without restarting the process', async () => {
+    const adapter = createHoloFrameworkAdapter({
+      stateKey: '__holoTestAdapter__',
+      displayName: 'Test',
+    })
+    const root = await createProjectRoot()
+
+    await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${configEntry}
+
+export default defineSessionConfig({
+  driver: 'file',
+  stores: {
+    file: {
+      driver: 'file',
+      path: './storage/framework/sessions',
+    },
+  },
+})
+`, 'utf8')
+    await writeFile(join(root, 'config/auth.ts'), `
+import { defineAuthConfig } from ${configEntry}
+
+export default defineAuthConfig({
+  defaults: {
+    guard: 'web',
+    passwords: 'users',
+  },
+  guards: {
+    web: {
+      driver: 'session',
+      provider: 'users',
+    },
+  },
+  providers: {
+    users: {
+      model: 'User',
+    },
+  },
+})
+`, 'utf8')
+    await writeFile(join(root, 'server/models/User.ts'), `
+let nextId = 1
+
+export default {
+  async find(id) {
+    return id
+  },
+  where() {
+    return {
+      async first() {
+        return null
+      },
+    }
+  },
+  async create(values) {
+    return {
+      id: nextId++,
+      role: 'first',
+      ...values,
+    }
+  },
+  async update(id, values) {
+    return {
+      id,
+      role: 'first',
+      ...values,
+    }
+  },
+}
+`, 'utf8')
+
+    const first = await adapter.initializeProject({
+      projectRoot: root,
+      preferCache: false,
+    })
+
+    await expect(first.runtime.auth?.register({
+      email: 'first@app.test',
+      password: 'secret',
+      passwordConfirmation: 'secret',
+    })).resolves.toMatchObject({
+      role: 'first',
+    })
+
+    await new Promise(resolvePromise => setTimeout(resolvePromise, 25))
+
+    await writeFile(join(root, 'server/models/User.ts'), `
+let nextId = 1
+
+export default {
+  async find(id) {
+    return id
+  },
+  where() {
+    return {
+      async first() {
+        return null
+      },
+    }
+  },
+  async create(values) {
+    return {
+      id: nextId++,
+      role: 'second',
+      ...values,
+    }
+  },
+  async update(id, values) {
+    return {
+      id,
+      role: 'second',
+      ...values,
+    }
+  },
+}
+`, 'utf8')
+
+    const second = await adapter.initializeProject({
+      projectRoot: root,
+      preferCache: false,
+    })
+
+    await expect(second.runtime.auth?.register({
+      email: 'second@app.test',
+      password: 'secret',
+      passwordConfirmation: 'secret',
+    })).resolves.toMatchObject({
+      role: 'second',
+    })
   })
 
   it('mounts the plain-node storage runtime and refreshes stale adapter runtime references', async () => {

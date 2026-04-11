@@ -4,8 +4,15 @@
     "outDir": "dist",
     "baseUrl": ".",
     "paths": {
+      "@holo-js/auth": ["../auth/src/index.ts"],
+      "@holo-js/auth-clerk": ["../auth-clerk/src/index.ts"],
+      "@holo-js/auth-social": ["../auth-social/src/index.ts"],
+      "@holo-js/auth-workos": ["../auth-workos/src/index.ts"],
+      "@holo-js/config": ["../config/src/index.ts"],
+      "@holo-js/core": ["../core/src/index.ts"],
       "@holo-js/forms": ["../forms/src/index.ts"],
       "@holo-js/forms/client": ["../forms/src/client.ts"],
+      "@holo-js/session": ["../session/src/index.ts"],
       "@holo-js/validation": ["../validation/src/index.ts"]
     }
   },

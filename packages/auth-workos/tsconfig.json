@@ -1,0 +1,24 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "paths": {
+      "@holo-js/auth": [
+        "../auth/src/index.ts"
+      ],
+      "@holo-js/config": [
+        "../config/src/index.ts"
+      ],
+      "@holo-js/session": [
+        "../session/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

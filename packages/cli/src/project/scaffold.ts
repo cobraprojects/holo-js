@@ -8,6 +8,7 @@ import {
 import {
   normalizeHoloProjectConfig,
   renderGeneratedSchemaPlaceholder,
+  createMigrationFileName,
 } from '@holo-js/db'
 import {
   ESBUILD_PACKAGE_VERSION,
@@ -19,11 +20,17 @@ import {
 } from '../metadata'
 import { loadProjectConfig, resolveGeneratedSchemaPath } from './config'
 import {
+  AUTH_SOCIAL_PROVIDER_PACKAGE_NAMES,
+  AUTH_CONFIG_FILE_NAMES,
   DB_DRIVER_PACKAGE_NAMES,
   QUEUE_CONFIG_FILE_NAMES,
+  SESSION_CONFIG_FILE_NAMES,
+  SUPPORTED_AUTH_SOCIAL_PROVIDERS,
+  type AuthInstallResult,
   type EventsInstallResult,
   type ProjectScaffoldOptions,
   type QueueInstallResult,
+  type SupportedAuthSocialProvider,
   type SupportedQueueInstallerDriver,
   type SupportedScaffoldPackageManager,
   isSupportedQueueInstallerDriver,
@@ -36,11 +43,32 @@ import {
   resolveFirstExistingPath,
   writeTextFile,
 } from './runtime'
+import { relativeImportPath } from '../templates'
 
 type ScaffoldedFile = {
   readonly path: string
   readonly contents: string
 }
+
+type AuthInstallFeatures = {
+  readonly social?: boolean
+  readonly socialProviders?: readonly SupportedAuthSocialProvider[]
+  readonly workos?: boolean
+  readonly clerk?: boolean
+}
+
+type ConfigModuleFormat = 'esm' | 'cjs'
+
+const AUTH_MIGRATION_SLUGS = [
+  'create_users',
+  'create_sessions',
+  'create_auth_identities',
+  'create_personal_access_tokens',
+  'create_password_reset_tokens',
+  'create_email_verification_tokens',
+] as const
+
+type AuthMigrationSlug = typeof AUTH_MIGRATION_SLUGS[number]
 
 function renderStorageConfig(): string {
   return [
@@ -153,6 +181,483 @@ function renderQueueConfig(
   ].join('\n')
 }
 
+function renderSessionConfig(defaultDatabaseConnection = 'default'): string {
+  return [
+    'import { defineSessionConfig, env } from \'@holo-js/config\'',
+    '',
+    'export default defineSessionConfig({',
+    '  driver: env(\'SESSION_DRIVER\', \'file\'),',
+    '  stores: {',
+    '    database: {',
+    '      driver: \'database\',',
+    `      connection: env('SESSION_CONNECTION', '${defaultDatabaseConnection}'),`,
+    '      table: \'sessions\',',
+    '    },',
+    '    file: {',
+    '      driver: \'file\',',
+    '      path: \'./storage/framework/sessions\',',
+    '    },',
+    '  },',
+    '  cookie: {',
+    '    name: env(\'SESSION_COOKIE\', \'holo_session\'),',
+    '    path: env(\'SESSION_PATH\', \'/\'),',
+    '    domain: env(\'SESSION_DOMAIN\'),',
+    '    secure: env<boolean>(\'SESSION_SECURE\', false),',
+    '    httpOnly: true,',
+    '    sameSite: env<\'lax\' | \'strict\' | \'none\'>(\'SESSION_SAME_SITE\', \'lax\'),',
+    '  },',
+    '  idleTimeout: env(\'SESSION_IDLE_TIMEOUT\', 120),',
+    '  absoluteLifetime: env(\'SESSION_LIFETIME\', 120),',
+    '  rememberMeLifetime: env(\'SESSION_REMEMBER_ME_LIFETIME\', 43200),',
+    '})',
+    '',
+  ].join('\n')
+}
+
+function renderAuthConfig(
+  features: AuthInstallFeatures = {},
+  moduleFormat: ConfigModuleFormat = 'esm',
+): string {
+  const envValue = (name: string, fallback?: string): string => {
+    if (moduleFormat === 'cjs') {
+      return typeof fallback === 'string'
+        ? `process.env.${name} || ${JSON.stringify(fallback)}`
+        : `process.env.${name}`
+    }
+
+    return typeof fallback === 'string'
+      ? `env('${name}', ${JSON.stringify(fallback)})`
+      : `env('${name}')`
+  }
+  const socialEnabled = features.social === true || (features.socialProviders?.length ?? 0) > 0
+  const socialProviders = features.socialProviders && features.socialProviders.length > 0
+    ? features.socialProviders
+    : socialEnabled
+      ? ['google']
+      : []
+  const lines = [
+    moduleFormat === 'cjs'
+      ? 'module.exports = {'
+      : 'import { defineAuthConfig, env } from \'@holo-js/config\'',
+    '',
+    ...(moduleFormat === 'cjs' ? [] : ['export default defineAuthConfig({']),
+    '  defaults: {',
+    '    guard: \'web\',',
+    '    passwords: \'users\',',
+    '  },',
+    '  guards: {',
+    '    web: {',
+    '      driver: \'session\',',
+    '      provider: \'users\',',
+    '    },',
+    '    // admin: {',
+    '    //   driver: \'session\',',
+    '    //   provider: \'admins\',',
+    '    // },',
+    '  },',
+    '  providers: {',
+    '    users: {',
+    '      model: \'User\',',
+    '    },',
+    '    // admins: {',
+    '    //   model: \'Admin\',',
+    '    // },',
+    '  },',
+    '  passwords: {',
+    '    users: {',
+    '      provider: \'users\',',
+    '      table: \'password_reset_tokens\',',
+    '      expire: 60,',
+    '      throttle: 60,',
+    '    },',
+    '  },',
+    '  emailVerification: {',
+    '    required: false,',
+    '  },',
+    '  personalAccessTokens: {',
+    '    defaultAbilities: [],',
+    '  },',
+    `  socialEncryptionKey: ${envValue('AUTH_SOCIAL_ENCRYPTION_KEY')},`,
+  ]
+
+  if (socialProviders.length > 0) {
+    lines.push('  social: {')
+    for (const provider of socialProviders) {
+      const upper = provider.toUpperCase()
+      const defaultScopes = provider === 'google'
+        ? ['openid', 'email', 'profile']
+        : provider === 'github'
+          ? ['read:user', 'user:email']
+          : provider === 'discord'
+            ? ['identify', 'email']
+            : provider === 'facebook'
+              ? ['email', 'public_profile']
+              : provider === 'apple'
+                ? ['name', 'email']
+                : ['openid', 'profile', 'email']
+      lines.push(
+        `    ${provider}: {`,
+        `      clientId: ${envValue(`AUTH_${upper}_CLIENT_ID`)},`,
+        `      clientSecret: ${envValue(`AUTH_${upper}_CLIENT_SECRET`)},`,
+        `      redirectUri: ${envValue(`AUTH_${upper}_REDIRECT_URI`)},`,
+        `      scopes: [${defaultScopes.map(scope => `'${scope}'`).join(', ')}],`,
+        '    },',
+      )
+    }
+    lines.push('  },')
+  }
+
+  if (features.workos) {
+    lines.push(
+      '  workos: {',
+      '    dashboard: {',
+      `      clientId: ${envValue('WORKOS_CLIENT_ID')},`,
+      `      apiKey: ${envValue('WORKOS_API_KEY')},`,
+      `      cookiePassword: ${envValue('WORKOS_COOKIE_PASSWORD')},`,
+      `      redirectUri: ${envValue('WORKOS_REDIRECT_URI')},`,
+      `      sessionCookie: ${envValue('WORKOS_SESSION_COOKIE', 'wos-session')},`,
+      '    },',
+      '  },',
+      '  // Add a dedicated guard and provider if WorkOS users should resolve through a different model.',
+    )
+  }
+
+  if (features.clerk) {
+    lines.push(
+      '  clerk: {',
+      '    app: {',
+      `      publishableKey: ${envValue('CLERK_PUBLISHABLE_KEY')},`,
+      `      secretKey: ${envValue('CLERK_SECRET_KEY')},`,
+      `      jwtKey: ${envValue('CLERK_JWT_KEY')},`,
+      `      apiUrl: ${envValue('CLERK_API_URL')},`,
+      `      frontendApi: ${envValue('CLERK_FRONTEND_API')},`,
+      `      sessionCookie: ${envValue('CLERK_SESSION_COOKIE', '__session')},`,
+      '    },',
+      '  },',
+      '  // Add a dedicated guard and provider if Clerk users should resolve through a different model.',
+    )
+  }
+
+  lines.push(moduleFormat === 'cjs' ? '}' : '})', '')
+  return lines.join('\n')
+}
+
+function authFeaturesRequireConfigUpdate(features: AuthInstallFeatures): boolean {
+  return features.workos === true
+    || features.clerk === true
+    || features.social === true
+    || (features.socialProviders?.length ?? 0) > 0
+}
+
+function detectAuthInstallFeaturesFromConfig(contents: string): AuthInstallFeatures {
+  const socialProviders = SUPPORTED_AUTH_SOCIAL_PROVIDERS.filter(provider => {
+    const pattern = new RegExp(`\\b${provider}\\s*:\\s*\\{`)
+    return pattern.test(contents)
+  })
+
+  return Object.freeze({
+    ...(socialProviders.length > 0 ? { social: true, socialProviders } : {}),
+    ...(contents.includes('  workos: {') ? { workos: true } : {}),
+    ...(contents.includes('  clerk: {') ? { clerk: true } : {}),
+  })
+}
+
+function mergeAuthInstallFeatures(
+  current: AuthInstallFeatures,
+  requested: AuthInstallFeatures,
+): AuthInstallFeatures {
+  const socialProviders = Array.from(new Set([
+    ...(current.socialProviders ?? []),
+    ...(requested.socialProviders ?? []),
+  ]))
+
+  return Object.freeze({
+    ...(current.social === true || requested.social === true || socialProviders.length > 0
+      ? { social: true }
+      : {}),
+    ...(socialProviders.length > 0 ? { socialProviders } : {}),
+    ...(current.workos === true || requested.workos === true ? { workos: true } : {}),
+    ...(current.clerk === true || requested.clerk === true ? { clerk: true } : {}),
+  })
+}
+
+function canSafelyRewriteAuthConfig(
+  currentContents: string,
+  currentFeatures: AuthInstallFeatures,
+  moduleFormat: ConfigModuleFormat,
+): boolean {
+  const stripLegacyCurrentUserEndpoint = (value: string): string => value.replace(
+    /(^|\n)\s*currentUserEndpoint:\s*\{\n\s*path:\s*.*,\n\s*\},/m,
+    '',
+  )
+
+  return stripLegacyCurrentUserEndpoint(currentContents) === stripLegacyCurrentUserEndpoint(
+    renderAuthConfig(currentFeatures, moduleFormat),
+  )
+}
+
+function resolveConfigModuleFormat(
+  filePath: string | undefined,
+  contents: string,
+): ConfigModuleFormat {
+  if (
+    filePath?.endsWith('.cjs')
+    || filePath?.endsWith('.cts')
+    || contents.includes('module.exports =')
+  ) {
+    return 'cjs'
+  }
+
+  return 'esm'
+}
+
+export function renderAuthEnvFiles(
+  features: AuthInstallFeatures = {},
+  defaultDatabaseConnection = 'default',
+): { env: readonly string[], example: readonly string[] } {
+  const socialEnabled = features.social === true || (features.socialProviders?.length ?? 0) > 0
+  const socialProviders = features.socialProviders && features.socialProviders.length > 0
+    ? features.socialProviders
+    : socialEnabled
+      ? ['google']
+      : []
+  const env = [
+    'AUTH_SOCIAL_ENCRYPTION_KEY=',
+    'SESSION_DRIVER=file',
+    `SESSION_CONNECTION=${defaultDatabaseConnection}`,
+    'SESSION_COOKIE=holo_session',
+    'SESSION_PATH=/',
+    'SESSION_DOMAIN=',
+    'SESSION_SECURE=false',
+    'SESSION_SAME_SITE=lax',
+    'SESSION_IDLE_TIMEOUT=120',
+    'SESSION_LIFETIME=120',
+    'SESSION_REMEMBER_ME_LIFETIME=43200',
+  ]
+
+  for (const provider of socialProviders) {
+    const upper = provider.toUpperCase()
+    env.push(
+      `AUTH_${upper}_CLIENT_ID=`,
+      `AUTH_${upper}_CLIENT_SECRET=`,
+      `AUTH_${upper}_REDIRECT_URI=`,
+    )
+  }
+
+  if (features.workos) {
+    env.push(
+      'WORKOS_CLIENT_ID=',
+      'WORKOS_API_KEY=',
+      'WORKOS_COOKIE_PASSWORD=',
+      'WORKOS_REDIRECT_URI=',
+      'WORKOS_SESSION_COOKIE=wos-session',
+    )
+  }
+
+  if (features.clerk) {
+    env.push(
+      'CLERK_PUBLISHABLE_KEY=',
+      'CLERK_SECRET_KEY=',
+      'CLERK_JWT_KEY=',
+      'CLERK_API_URL=',
+      'CLERK_FRONTEND_API=',
+      'CLERK_SESSION_COOKIE=__session',
+    )
+  }
+
+  return {
+    env,
+    example: env.map(line => `${line.split('=')[0]}=`),
+  }
+}
+
+function renderAuthUserModel(generatedSchemaImportPath = '../db/schema.generated'): string {
+  return [
+    `import { tables as holoGeneratedTables } from '${generatedSchemaImportPath}'`,
+    'import { defineModel, type TableDefinition } from \'@holo-js/db\'',
+    '',
+    'const holoModelTable = (holoGeneratedTables as Partial<Record<string, TableDefinition>>).users',
+    'export const holoModelPendingSchema = typeof holoModelTable === \'undefined\'',
+    '',
+    'export default holoModelPendingSchema',
+    '  ? undefined',
+    '  : defineModel(holoModelTable, {',
+    '      fillable: [\'name\', \'email\', \'password\', \'avatar\', \'email_verified_at\'],',
+    '      hidden: [\'password\'],',
+    '    })',
+    '',
+  ].join('\n')
+}
+
+function resolveAuthUserModelSchemaImportPath(
+  userModelPath: string,
+  generatedSchemaPath: string,
+): string {
+  return relativeImportPath(userModelPath, generatedSchemaPath)
+}
+
+function renderAuthMigration(slug: AuthMigrationSlug): string {
+  switch (slug) {
+    case 'create_users':
+      return [
+        'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
+        '',
+        'export default defineMigration({',
+        '  async up({ schema }: MigrationContext) {',
+        '    await schema.createTable(\'users\', (table) => {',
+        '      table.id()',
+        '      table.string(\'name\')',
+        '      table.string(\'email\').unique()',
+        '      table.string(\'password\').nullable()',
+        '      table.string(\'avatar\').nullable()',
+        '      table.timestamp(\'email_verified_at\').nullable()',
+        '      table.timestamps()',
+        '    })',
+        '  },',
+        '  async down({ schema }: MigrationContext) {',
+        '    await schema.dropTable(\'users\')',
+        '  },',
+        '})',
+        '',
+      ].join('\n')
+    case 'create_sessions':
+      return [
+        'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
+        '',
+        'export default defineMigration({',
+        '  async up({ schema }: MigrationContext) {',
+        '    await schema.createTable(\'sessions\', (table) => {',
+        '      table.string(\'id\').primaryKey()',
+        '      table.string(\'store\').default(\'database\')',
+        '      table.json(\'data\').default({})',
+        '      table.timestamp(\'created_at\')',
+        '      table.timestamp(\'last_activity_at\')',
+        '      table.timestamp(\'expires_at\')',
+        '      table.timestamp(\'invalidated_at\').nullable()',
+        '      table.string(\'remember_token_hash\').nullable()',
+        '      table.index([\'expires_at\'])',
+        '    })',
+        '  },',
+        '  async down({ schema }: MigrationContext) {',
+        '    await schema.dropTable(\'sessions\')',
+        '  },',
+        '})',
+        '',
+      ].join('\n')
+    case 'create_auth_identities':
+      return [
+        'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
+        '',
+        'export default defineMigration({',
+        '  async up({ schema }: MigrationContext) {',
+        '    await schema.createTable(\'auth_identities\', (table) => {',
+        '      table.id()',
+        '      table.string(\'user_id\')',
+        '      table.string(\'guard\').default(\'web\')',
+        '      table.string(\'auth_provider\').default(\'users\')',
+        '      table.string(\'provider\')',
+        '      table.string(\'provider_user_id\')',
+        '      table.string(\'email\').nullable()',
+        '      table.boolean(\'email_verified\').default(false)',
+        '      table.json(\'profile\').default({})',
+        '      table.json(\'tokens\').default({})',
+        '      table.timestamps()',
+        '      table.index([\'user_id\'])',
+        '      table.unique([\'provider\', \'provider_user_id\'], \'auth_identities_provider_user_unique\')',
+        '    })',
+        '  },',
+        '  async down({ schema }: MigrationContext) {',
+        '    await schema.dropTable(\'auth_identities\')',
+        '  },',
+        '})',
+        '',
+      ].join('\n')
+    case 'create_personal_access_tokens':
+      return [
+        'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
+        '',
+        'export default defineMigration({',
+        '  async up({ schema }: MigrationContext) {',
+        '    await schema.createTable(\'personal_access_tokens\', (table) => {',
+        '      table.uuid(\'id\').primaryKey()',
+        '      table.string(\'provider\').default(\'users\')',
+        '      table.string(\'user_id\')',
+        '      table.string(\'name\')',
+        '      table.string(\'token_hash\').unique()',
+        '      table.json(\'abilities\').default([])',
+        '      table.timestamp(\'last_used_at\').nullable()',
+        '      table.timestamp(\'expires_at\').nullable()',
+        '      table.timestamps()',
+        '      table.index([\'provider\'])',
+        '      table.index([\'user_id\'])',
+        '    })',
+        '  },',
+        '  async down({ schema }: MigrationContext) {',
+        '    await schema.dropTable(\'personal_access_tokens\')',
+        '  },',
+        '})',
+        '',
+      ].join('\n')
+    case 'create_password_reset_tokens':
+      return [
+        'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
+        '',
+        'export default defineMigration({',
+        '  async up({ schema }: MigrationContext) {',
+        '    await schema.createTable(\'password_reset_tokens\', (table) => {',
+        '      table.uuid(\'id\').primaryKey()',
+        '      table.string(\'provider\').default(\'users\')',
+        '      table.string(\'email\')',
+        '      table.string(\'token_hash\')',
+        '      table.timestamp(\'expires_at\')',
+        '      table.timestamp(\'used_at\').nullable()',
+        '      table.timestamps()',
+        '      table.index([\'provider\'])',
+        '      table.index([\'email\'])',
+        '    })',
+        '  },',
+        '  async down({ schema }: MigrationContext) {',
+        '    await schema.dropTable(\'password_reset_tokens\')',
+        '  },',
+        '})',
+        '',
+      ].join('\n')
+    case 'create_email_verification_tokens':
+      return [
+        'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
+        '',
+        'export default defineMigration({',
+        '  async up({ schema }: MigrationContext) {',
+        '    await schema.createTable(\'email_verification_tokens\', (table) => {',
+        '      table.uuid(\'id\').primaryKey()',
+        '      table.string(\'provider\').default(\'users\')',
+        '      table.string(\'user_id\')',
+        '      table.string(\'email\')',
+        '      table.string(\'token_hash\')',
+        '      table.timestamp(\'expires_at\')',
+        '      table.timestamp(\'used_at\').nullable()',
+        '      table.timestamps()',
+        '      table.index([\'provider\'])',
+        '      table.index([\'user_id\'])',
+        '      table.index([\'email\'])',
+        '    })',
+        '  },',
+        '  async down({ schema }: MigrationContext) {',
+        '    await schema.dropTable(\'email_verification_tokens\')',
+        '  },',
+        '})',
+        '',
+      ].join('\n')
+  }
+}
+
+function createAuthMigrationFiles(date = new Date()): readonly ScaffoldedFile[] {
+  return AUTH_MIGRATION_SLUGS.map((slug, index) => ({
+    path: createMigrationFileName(slug, new Date(date.getTime() + (index * 1000))),
+    contents: renderAuthMigration(slug),
+  }))
+}
+
 function renderScaffoldAppConfig(projectName: string): string {
   return [
     'import type { HoloAppEnv } from \'@holo-js/config\'',
@@ -231,6 +736,7 @@ function renderScaffoldDatabaseConfig(
 function renderScaffoldEnvFiles(
   options: Pick<ProjectScaffoldOptions, 'databaseDriver' | 'projectName' | 'storageDefaultDisk' | 'optionalPackages'>,
 ): { env: string, example: string } {
+  const defaultDatabaseConnection = 'main'
   const baseLines = [
     `APP_NAME=${JSON.stringify(options.projectName)}`,
     'APP_KEY=',
@@ -257,11 +763,14 @@ function renderScaffoldEnvFiles(
         'STORAGE_ROUTE_PREFIX=/storage',
       ]
     : []
-  const env = [...baseLines, ...driverLines, ...storageLines, ''].join('\n')
+  const authLines = normalizeScaffoldOptionalPackages(options.optionalPackages).includes('auth')
+    ? [...renderAuthEnvFiles({}, defaultDatabaseConnection).env]
+    : []
+  const env = [...baseLines, ...driverLines, ...storageLines, ...authLines, ''].join('\n')
   const example = [
     '# Copy this file to .env and fill in your local values.',
     '# Supported layered env files: .env.local, .env.development, .env.production, .env.prod, .env.test',
-    ...[...baseLines, ...driverLines, ...storageLines].map(line => `${line.split('=')[0]}=`),
+    ...[...baseLines, ...driverLines, ...storageLines, ...authLines].map(line => `${line.split('=')[0]}=`),
     '',
   ].join('\n')
 
@@ -646,6 +1155,233 @@ async function upsertEventsPackageDependency(projectRoot: string): Promise<boole
 
   await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
   return true
+}
+
+async function upsertAuthPackageDependencies(
+  projectRoot: string,
+  features: AuthInstallFeatures = {},
+): Promise<boolean> {
+  const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
+  const socialEnabled = features.social === true || (features.socialProviders?.length ?? 0) > 0
+  const requestedPackages = {
+    '@holo-js/auth': true,
+    '@holo-js/session': true,
+    '@holo-js/auth-social': socialEnabled,
+    '@holo-js/auth-workos': features.workos === true,
+    '@holo-js/auth-clerk': features.clerk === true,
+  } as const
+  const requestedSocialProviders = new Set(features.socialProviders ?? (socialEnabled ? ['google'] : []))
+
+  let changed = false
+
+  for (const [packageName, enabled] of Object.entries(requestedPackages)) {
+    const currentDependency = dependencies[packageName]
+    const currentDevDependency = devDependencies[packageName]
+
+    if (enabled) {
+      if (currentDependency !== nextVersion || typeof currentDevDependency !== 'undefined') {
+        dependencies[packageName] = nextVersion
+        delete devDependencies[packageName]
+        changed = true
+      }
+      continue
+    }
+
+    if (typeof currentDevDependency !== 'undefined') {
+      delete devDependencies[packageName]
+      changed = true
+    }
+  }
+
+  for (const [providerName, packageName] of Object.entries(AUTH_SOCIAL_PROVIDER_PACKAGE_NAMES)) {
+    const enabled = requestedSocialProviders.has(providerName as SupportedAuthSocialProvider)
+    const currentDependency = dependencies[packageName]
+    const currentDevDependency = devDependencies[packageName]
+
+    if (enabled) {
+      if (currentDependency !== nextVersion || typeof currentDevDependency !== 'undefined') {
+        dependencies[packageName] = nextVersion
+        delete devDependencies[packageName]
+        changed = true
+      }
+      continue
+    }
+
+    if (typeof currentDevDependency !== 'undefined') {
+      delete devDependencies[packageName]
+      changed = true
+    }
+  }
+
+  if (!changed) {
+    return false
+  }
+
+  await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
+  return true
+}
+
+async function resolveExistingModelPath(modelsRoot: string, modelName: string): Promise<string | undefined> {
+  const supportedExtensions = ['.ts', '.mts', '.js', '.mjs', '.cts', '.cjs']
+
+  for (const extension of supportedExtensions) {
+    const candidate = resolve(modelsRoot, `${modelName}${extension}`)
+    if (await pathExists(candidate)) {
+      return candidate
+    }
+  }
+
+  return undefined
+}
+
+async function resolveExistingAuthMigrationFiles(migrationsRoot: string): Promise<Map<AuthMigrationSlug, string>> {
+  const entries = await readdir(migrationsRoot).catch(() => [] as string[])
+  const resolved = new Map<AuthMigrationSlug, string>()
+
+  for (const entry of entries) {
+    for (const slug of AUTH_MIGRATION_SLUGS) {
+      if (
+        entry.endsWith(`_${slug}.ts`)
+        || entry.endsWith(`_${slug}.mts`)
+        || entry.endsWith(`_${slug}.js`)
+        || entry.endsWith(`_${slug}.mjs`)
+        || entry.endsWith(`_${slug}.cts`)
+        || entry.endsWith(`_${slug}.cjs`)
+      ) {
+        resolved.set(slug, resolve(migrationsRoot, entry))
+      }
+    }
+  }
+
+  return resolved
+}
+
+export async function installAuthIntoProject(
+  projectRoot: string,
+  features: AuthInstallFeatures = {},
+): Promise<AuthInstallResult> {
+  const project = await loadProjectConfig(projectRoot)
+  const modelsRoot = resolve(projectRoot, project.config.paths.models)
+  const migrationsRoot = resolve(projectRoot, project.config.paths.migrations)
+  const defaultDatabaseConnection = project.config.database?.defaultConnection ?? 'default'
+  const authConfigPath = await resolveFirstExistingPath(projectRoot, AUTH_CONFIG_FILE_NAMES)
+  const sessionConfigPath = await resolveFirstExistingPath(projectRoot, SESSION_CONFIG_FILE_NAMES)
+  const userModelPath = await resolveExistingModelPath(modelsRoot, 'User')
+  const existingMigrationFiles = await resolveExistingAuthMigrationFiles(migrationsRoot)
+  const hasAllAuthMigrations = AUTH_MIGRATION_SLUGS.every(slug => existingMigrationFiles.has(slug))
+  const existingAuthArtifacts = [
+    authConfigPath,
+    userModelPath,
+    ...AUTH_MIGRATION_SLUGS.map(slug => existingMigrationFiles.get(slug)),
+  ].filter((value): value is string => typeof value === 'string')
+
+  if (authConfigPath && userModelPath && hasAllAuthMigrations) {
+    const envPath = resolve(projectRoot, '.env')
+    const envExamplePath = resolve(projectRoot, '.env.example')
+    const currentAuthConfig = (await readTextFile(authConfigPath)) ?? ''
+    const currentAuthFeatures = detectAuthInstallFeaturesFromConfig(currentAuthConfig)
+    const nextAuthFeatures = mergeAuthInstallFeatures(currentAuthFeatures, features)
+    const authConfigModuleFormat = resolveConfigModuleFormat(authConfigPath, currentAuthConfig)
+    const nextAuthConfig = renderAuthConfig(nextAuthFeatures, authConfigModuleFormat)
+    const authEnvFiles = renderAuthEnvFiles(nextAuthFeatures, defaultDatabaseConnection)
+    const nextEnv = upsertEnvContents(await readTextFile(envPath), authEnvFiles.env)
+    const nextEnvExample = upsertEnvContents(await readTextFile(envExamplePath), authEnvFiles.example)
+    const authConfigChanged = authFeaturesRequireConfigUpdate(features) && currentAuthConfig !== nextAuthConfig
+
+    if (authConfigChanged) {
+      if (!canSafelyRewriteAuthConfig(currentAuthConfig, currentAuthFeatures, authConfigModuleFormat)) {
+        throw new Error(
+          `Auth support is already installed in ${projectRoot}, but ${authConfigPath} contains manual changes. `
+          + 'Refusing to overwrite the existing auth config automatically.',
+        )
+      }
+      await writeTextFile(authConfigPath, nextAuthConfig)
+    }
+
+    if (nextEnv.changed && typeof nextEnv.contents === 'string') {
+      await writeTextFile(envPath, nextEnv.contents)
+    }
+
+    if (nextEnvExample.changed && typeof nextEnvExample.contents === 'string') {
+      await writeTextFile(envExamplePath, nextEnvExample.contents)
+    }
+
+    return {
+      updatedPackageJson: await upsertAuthPackageDependencies(projectRoot, nextAuthFeatures),
+      createdAuthConfig: authConfigChanged,
+      createdSessionConfig: false,
+      createdUserModel: false,
+      createdMigrationFiles: [],
+      updatedEnv: nextEnv.changed,
+      updatedEnvExample: nextEnvExample.changed,
+    }
+  }
+
+  const collisions = sessionConfigPath && existingAuthArtifacts.length === 0
+    ? []
+    : [
+        ...existingAuthArtifacts,
+        ...(sessionConfigPath && existingAuthArtifacts.length > 0 ? [sessionConfigPath] : []),
+      ]
+
+  if (collisions.length > 0) {
+    throw new Error(
+      `Auth support is partially installed. Refusing to overwrite existing files in ${projectRoot}: ${collisions.join(', ')}`,
+    )
+  }
+
+  const authConfigTargetPath = resolve(projectRoot, 'config/auth.ts')
+  const sessionConfigTargetPath = resolve(projectRoot, 'config/session.ts')
+  const userModelTargetPath = resolve(modelsRoot, 'User.ts')
+  const generatedSchemaPath = resolveGeneratedSchemaPath(projectRoot, project.config)
+  const migrationFiles = createAuthMigrationFiles()
+  const authEnvFiles = renderAuthEnvFiles(features, defaultDatabaseConnection)
+
+  await mkdir(resolve(projectRoot, 'config'), { recursive: true })
+  await mkdir(modelsRoot, { recursive: true })
+  await mkdir(migrationsRoot, { recursive: true })
+  await writeTextFile(authConfigTargetPath, renderAuthConfig(features))
+  if (!sessionConfigPath) {
+    await writeTextFile(sessionConfigTargetPath, renderSessionConfig(defaultDatabaseConnection))
+  }
+  await writeTextFile(
+    userModelTargetPath,
+    renderAuthUserModel(resolveAuthUserModelSchemaImportPath(
+      userModelTargetPath,
+      generatedSchemaPath,
+    )),
+  )
+
+  const createdMigrationFiles: string[] = []
+  for (const migrationFile of migrationFiles) {
+    const migrationPath = resolve(migrationsRoot, migrationFile.path)
+    await writeTextFile(migrationPath, migrationFile.contents)
+    createdMigrationFiles.push(migrationPath)
+  }
+
+  const envPath = resolve(projectRoot, '.env')
+  const envExamplePath = resolve(projectRoot, '.env.example')
+  const nextEnv = upsertEnvContents(await readTextFile(envPath), authEnvFiles.env)
+  const nextEnvExample = upsertEnvContents(await readTextFile(envExamplePath), authEnvFiles.example)
+
+  if (nextEnv.changed && typeof nextEnv.contents === 'string') {
+    await writeTextFile(envPath, nextEnv.contents)
+  }
+
+  if (nextEnvExample.changed && typeof nextEnvExample.contents === 'string') {
+    await writeTextFile(envExamplePath, nextEnvExample.contents)
+  }
+
+  return {
+    updatedPackageJson: await upsertAuthPackageDependencies(projectRoot, features),
+    createdAuthConfig: true,
+    createdSessionConfig: !sessionConfigPath,
+    createdUserModel: true,
+    createdMigrationFiles,
+    updatedEnv: nextEnv.changed,
+    updatedEnvExample: nextEnvExample.changed,
+  }
 }
 
 export async function installQueueIntoProject(
@@ -1530,6 +2266,11 @@ function renderScaffoldPackageJson(options: ProjectScaffoldOptions): string {
     dependencies['@holo-js/forms'] = `^${HOLO_PACKAGE_VERSION}`
   }
 
+  if (optionalPackages.includes('auth')) {
+    dependencies['@holo-js/auth'] = `^${HOLO_PACKAGE_VERSION}`
+    dependencies['@holo-js/session'] = `^${HOLO_PACKAGE_VERSION}`
+  }
+
   return `${JSON.stringify({
     name: packageName,
     private: true,
@@ -1568,6 +2309,7 @@ export async function scaffoldProject(
   const storageEnabled = optionalPackages.includes('storage')
   const queueEnabled = optionalPackages.includes('queue')
   const eventsEnabled = optionalPackages.includes('events')
+  const authEnabled = optionalPackages.includes('auth')
 
   await mkdir(projectRoot, { recursive: true })
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })
@@ -1603,6 +2345,23 @@ export async function scaffoldProject(
       defaultDatabaseConnection: 'main',
     }), 'utf8')
   }
+  if (authEnabled) {
+    await writeFile(resolve(projectRoot, 'config/auth.ts'), renderAuthConfig(), 'utf8')
+    await writeFile(resolve(projectRoot, 'config/session.ts'), renderSessionConfig('main'), 'utf8')
+    const userModelPath = resolve(projectRoot, config.paths.models, 'User.ts')
+    await writeFile(
+      userModelPath,
+      renderAuthUserModel(resolveAuthUserModelSchemaImportPath(
+        userModelPath,
+        generatedSchemaPath,
+      )),
+      'utf8',
+    )
+
+    for (const migrationFile of createAuthMigrationFiles()) {
+      await writeFile(resolve(projectRoot, config.paths.migrations, migrationFile.path), migrationFile.contents, 'utf8')
+    }
+  }
   if (storageEnabled) {
     await writeFile(resolve(projectRoot, 'config/storage.ts'), renderStorageConfig(), 'utf8')
   }
@@ -1625,6 +2384,10 @@ export {
   inferConnectionDriver,
   inferDatabaseDriverFromUrl,
   isSupportedQueueInstallerDriver,
+  renderAuthConfig,
+  renderAuthMigration,
+  renderAuthUserModel,
+  renderSessionConfig,
   normalizeScaffoldOptionalPackages,
   renderFrameworkFiles,
   renderFrameworkRunner,
@@ -1641,5 +2404,6 @@ export {
   resolveDefaultDatabaseUrl,
   resolvePackageManagerVersion,
   sanitizePackageName,
+  upsertAuthPackageDependencies,
   upsertEventsPackageDependency,
 }

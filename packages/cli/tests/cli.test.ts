@@ -14,6 +14,7 @@ import type * as HoloConfigModule from '@holo-js/config'
 import type * as HoloCoreModule from '@holo-js/core'
 import type * as HoloDbModule from '@holo-js/db'
 import type * as ProjectModule from '../src/project'
+import type * as ParsingInternalModule from '../src/parsing'
 import type * as ProjectConfigInternalModule from '../src/project/config'
 import type * as ProjectDiscoveryInternalModule from '../src/project/discovery'
 import type * as ProjectRuntimeInternalModule from '../src/project/runtime'
@@ -642,6 +643,25 @@ export default {
     expect(await readFile(join(optionalRoot, 'config/storage.ts'), 'utf8')).toContain('defineStorageConfig')
     expect(await stat(join(optionalRoot, 'server/events'))).toBeDefined()
     expect(await stat(join(optionalRoot, 'server/listeners'))).toBeDefined()
+
+    const authRoot = join(baseRoot, 'auth-runtime-app')
+    await projectInternals.scaffoldProject(authRoot, {
+      projectName: 'Auth Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['auth'],
+    })
+
+    expect(await readFile(join(authRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/auth": "${expectedHoloPackageRange}"`)
+    expect(await readFile(join(authRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/session": "${expectedHoloPackageRange}"`)
+    expect(await readFile(join(authRoot, 'config/auth.ts'), 'utf8')).toContain('guard: \'web\'')
+    expect(await readFile(join(authRoot, 'config/session.ts'), 'utf8')).toContain('defineSessionConfig')
+    expect(await readFile(join(authRoot, '.env'), 'utf8')).toContain('SESSION_CONNECTION=main')
+    expect(await readFile(join(authRoot, 'server/models/User.ts'), 'utf8')).toContain('hidden: [\'password\']')
+    expect((await readdir(join(authRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(6)
+
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: '!!!',
       framework: 'nuxt',
@@ -706,9 +726,53 @@ export default {
       storageDefaultDisk: 'public',
       optionalPackages: ['storage', 'events', 'queue'],
     })).not.toContain(`"@holo-js/queue-db": "${expectedHoloPackageRange}"`)
+    expect(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Auth Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['auth'],
+    })).toContain(`"@holo-js/auth": "${expectedHoloPackageRange}"`)
+    expect(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Auth Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['auth'],
+    })).toContain(`"@holo-js/session": "${expectedHoloPackageRange}"`)
     expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain('import type { HoloAppEnv }')
     expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain('env<HoloAppEnv>(\'APP_ENV\', \'development\')')
     expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain('env<boolean>(\'APP_DEBUG\', true)')
+    expect(projectInternals.renderAuthConfig()).toContain('guard: \'web\'')
+    expect(projectInternals.renderAuthConfig({ social: true })).toContain('AUTH_GOOGLE_CLIENT_ID')
+    expect(projectInternals.renderAuthConfig({ socialProviders: ['linkedin'] })).toContain('AUTH_LINKEDIN_CLIENT_ID')
+    expect(projectInternals.renderAuthConfig({ socialProviders: ['github', 'discord', 'facebook', 'apple'] })).toContain('read:user')
+    expect(projectInternals.renderAuthConfig({ socialProviders: ['github', 'discord', 'facebook', 'apple'] })).toContain('identify')
+    expect(projectInternals.renderAuthConfig({ socialProviders: ['github', 'discord', 'facebook', 'apple'] })).toContain('public_profile')
+    expect(projectInternals.renderAuthConfig({ socialProviders: ['github', 'discord', 'facebook', 'apple'] })).toContain('\'name\', \'email\'')
+    expect(projectInternals.renderAuthMigration('create_personal_access_tokens')).toContain('table.uuid(\'id\').primaryKey()')
+    expect(projectInternals.renderAuthMigration('create_personal_access_tokens')).toContain('table.string(\'provider\').default(\'users\')')
+    expect(projectInternals.renderAuthMigration('create_personal_access_tokens')).toContain('table.string(\'user_id\')')
+    expect(projectInternals.renderAuthMigration('create_password_reset_tokens')).toContain('table.uuid(\'id\').primaryKey()')
+    expect(projectInternals.renderAuthMigration('create_password_reset_tokens')).toContain('table.string(\'provider\').default(\'users\')')
+    expect(projectInternals.renderAuthMigration('create_email_verification_tokens')).toContain('table.uuid(\'id\').primaryKey()')
+    expect(projectInternals.renderAuthMigration('create_email_verification_tokens')).toContain('table.string(\'provider\').default(\'users\')')
+    expect(projectInternals.renderAuthMigration('create_email_verification_tokens')).toContain('table.string(\'user_id\')')
+    expect(projectInternals.renderAuthMigration('create_auth_identities')).toContain('table.string(\'user_id\')')
+    expect(projectInternals.renderAuthConfig({ workos: true })).toContain('WORKOS_CLIENT_ID')
+    expect(projectInternals.renderAuthConfig({ clerk: true })).toContain('CLERK_PUBLISHABLE_KEY')
+    expect(projectInternals.renderAuthConfig()).toContain('socialEncryptionKey: env(\'AUTH_SOCIAL_ENCRYPTION_KEY\')')
+    expect(projectInternals.renderAuthConfig()).not.toContain('currentUserEndpoint')
+    expect(projectInternals.renderAuthEnvFiles({ socialProviders: ['linkedin'] }).env).toContain('AUTH_LINKEDIN_CLIENT_ID=')
+    expect(projectInternals.renderAuthEnvFiles().env).toContain('AUTH_SOCIAL_ENCRYPTION_KEY=')
+    expect(projectInternals.renderAuthEnvFiles().env).not.toContain('AUTH_CURRENT_USER_ENDPOINT=/api/auth/user')
+    expect(projectInternals.renderAuthEnvFiles({}, 'primary').env).toContain('SESSION_CONNECTION=primary')
+    expect(projectInternals.renderAuthEnvFiles().env).toContain('SESSION_DRIVER=file')
+    expect(projectInternals.renderSessionConfig()).toContain('defineSessionConfig')
+    expect(projectInternals.renderSessionConfig()).toContain('driver: env(\'SESSION_DRIVER\', \'file\')')
+    expect(projectInternals.renderAuthUserModel()).toContain('defineModel(holoModelTable')
     expect(projectInternals.renderStorageConfig()).toContain('defineStorageConfig')
     expect(projectInternals.renderMediaConfig()).toContain('defineMediaConfig')
     expect(projectInternals.renderQueueConfig({
@@ -751,6 +815,12 @@ export default {
       databaseDriver: 'mysql',
       storageDefaultDisk: 'local',
     }).env).toContain('DB_DATABASE=holo_app')
+    expect(projectInternals.renderScaffoldEnvFiles({
+      projectName: 'Auth App',
+      databaseDriver: 'sqlite',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['auth'],
+    }).env).toContain('SESSION_CONNECTION=main')
     expect(projectInternals.resolveDefaultDatabaseUrl('sqlite')).toBe('./storage/database.sqlite')
     expect(projectInternals.resolveDefaultDatabaseUrl('postgres')).toBeUndefined()
     expect(projectInternals.resolveProjectPackageImportSpecifier(
@@ -892,17 +962,18 @@ export default {
     expect(projectInternals.isSupportedScaffoldStorageDisk('s3')).toBe(false)
     expect(projectInternals.isSupportedScaffoldOptionalPackage('forms')).toBe(true)
     expect(projectInternals.isSupportedScaffoldOptionalPackage('storage')).toBe(true)
-    expect(projectInternals.isSupportedScaffoldOptionalPackage('auth')).toBe(false)
+    expect(projectInternals.isSupportedScaffoldOptionalPackage('auth')).toBe(true)
     expect(projectInternals.normalizeScaffoldOptionalPackages(['forms'])).toEqual(['forms', 'validation'])
     expect(projectInternals.normalizeScaffoldOptionalPackages(['validation', 'forms', 'validation'])).toEqual(['forms', 'validation'])
-    expect(projectInternals.normalizeScaffoldOptionalPackages(['validate', 'form', 'storage', 'queue', 'events'])).toEqual([
+    expect(projectInternals.normalizeScaffoldOptionalPackages(['validate', 'form', 'storage', 'queue', 'events', 'auth'])).toEqual([
+      'auth',
       'events',
       'forms',
       'queue',
       'storage',
       'validation',
     ])
-    expect(() => projectInternals.normalizeScaffoldOptionalPackages(['auth'])).toThrow('Unsupported optional package')
+    expect(() => projectInternals.normalizeScaffoldOptionalPackages(['wat'])).toThrow('Unsupported optional package: wat.')
 
     await writeProjectFile(baseRoot, 'occupied-direct/file.txt', 'taken')
     await expect(projectInternals.scaffoldProject(join(baseRoot, 'occupied-direct'), {
@@ -1100,6 +1171,413 @@ export default defineAppConfig({
     expect((await readFile(join(projectRoot, '.env.example'), 'utf8')).match(/REDIS_HOST=/g)?.length).toBe(1)
   }, 30000)
 
+  it('installs auth support into an existing project with local defaults', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    const result = runCliProcess(projectRoot, ['install', 'auth'])
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('Installed auth support.')
+    expect(result.stdout).toContain('created config/auth.ts')
+    expect(result.stdout).toContain('created config/session.ts')
+    expect(result.stdout).toContain('created server/models/User.ts')
+    expect(result.stdout).toContain('created 6 auth migrations')
+
+    const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    expect(packageJson.dependencies?.['@holo-js/auth']).toBe(expectedHoloPackageRange)
+    expect(packageJson.dependencies?.['@holo-js/session']).toBe(expectedHoloPackageRange)
+    expect(packageJson.dependencies?.['@holo-js/auth-social']).toBeUndefined()
+    expect(packageJson.dependencies?.['@holo-js/auth-social-google']).toBeUndefined()
+    expect(await readFile(join(projectRoot, 'config/auth.ts'), 'utf8')).toContain('provider: \'users\'')
+    expect(await readFile(join(projectRoot, 'config/session.ts'), 'utf8')).toContain('driver: env(\'SESSION_DRIVER\', \'file\')')
+    expect(await readFile(join(projectRoot, 'server/models/User.ts'), 'utf8')).toContain('fillable: [\'name\', \'email\', \'password\', \'avatar\', \'email_verified_at\']')
+    expect((await readdir(join(projectRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(6)
+
+    const rerun = runCliProcess(projectRoot, ['install', 'auth'])
+    expect(rerun.status).toBe(0)
+    expect(rerun.stdout).toContain('Auth support is already installed.')
+  }, 30000)
+
+  it('reuses an existing standalone session config when installing auth support', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const existingSessionConfig = `
+import { defineSessionConfig } from '@holo-js/config'
+
+export default defineSessionConfig({
+  driver: 'file',
+  cookie: {
+    name: 'existing_session',
+  },
+  stores: {
+    file: {
+      driver: 'file',
+      path: './storage/custom-sessions',
+    },
+  },
+})
+`
+
+    await writeProjectFile(projectRoot, 'config/session.ts', existingSessionConfig)
+
+    await expect(projectInternals.installAuthIntoProject(projectRoot)).resolves.toMatchObject({
+      createdAuthConfig: true,
+      createdSessionConfig: false,
+      createdUserModel: true,
+      updatedPackageJson: true,
+    })
+
+    expect(await readFile(join(projectRoot, 'config/session.ts'), 'utf8')).toBe(existingSessionConfig)
+    expect(await readFile(join(projectRoot, 'config/auth.ts'), 'utf8')).toContain('guard: \'web\'')
+  })
+
+  it('installs auth provider packages without overwriting existing auth files and rejects collisions', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    const initial = await projectInternals.installAuthIntoProject(projectRoot, { social: true })
+    expect(initial).toMatchObject({
+      updatedPackageJson: true,
+      createdAuthConfig: true,
+      createdSessionConfig: true,
+      createdUserModel: true,
+    })
+    expect(initial.createdMigrationFiles).toHaveLength(6)
+    expect(await readFile(join(projectRoot, 'config/auth.ts'), 'utf8')).toContain('AUTH_GOOGLE_CLIENT_ID')
+
+    await expect(projectInternals.installAuthIntoProject(projectRoot, { workos: true, clerk: true })).resolves.toEqual({
+      updatedPackageJson: true,
+      createdAuthConfig: true,
+      createdSessionConfig: false,
+      createdUserModel: false,
+      createdMigrationFiles: [],
+      updatedEnv: true,
+      updatedEnvExample: true,
+    })
+    const rerunAuthConfig = await readFile(join(projectRoot, 'config/auth.ts'), 'utf8')
+    expect(rerunAuthConfig).toContain('AUTH_GOOGLE_CLIENT_ID')
+    expect(rerunAuthConfig).toContain('WORKOS_CLIENT_ID')
+    expect(rerunAuthConfig).toContain('CLERK_PUBLISHABLE_KEY')
+    const rerunEnv = await readFile(join(projectRoot, '.env'), 'utf8')
+    expect(rerunEnv).toContain('AUTH_GOOGLE_CLIENT_ID=')
+    expect(rerunEnv).toContain('WORKOS_CLIENT_ID=')
+    expect(rerunEnv).toContain('CLERK_PUBLISHABLE_KEY=')
+
+    const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    expect(packageJson.dependencies?.['@holo-js/auth-social']).toBe(expectedHoloPackageRange)
+    expect(packageJson.dependencies?.['@holo-js/auth-social-google']).toBe(expectedHoloPackageRange)
+    expect(packageJson.dependencies?.['@holo-js/auth-workos']).toBe(expectedHoloPackageRange)
+    expect(packageJson.dependencies?.['@holo-js/auth-clerk']).toBe(expectedHoloPackageRange)
+
+    const collisionRoot = await createTempProject()
+    tempDirs.push(collisionRoot)
+    await writeProjectFile(collisionRoot, 'server/models/User.ts', 'export default null\n')
+    await expect(projectInternals.installAuthIntoProject(collisionRoot)).rejects.toThrow('Auth support is partially installed.')
+  })
+
+  it('refuses to overwrite manually edited auth config when adding auth features', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await expect(projectInternals.installAuthIntoProject(projectRoot, { social: true })).resolves.toMatchObject({
+      createdAuthConfig: true,
+    })
+
+    await writeProjectFile(projectRoot, 'config/auth.ts', `
+import { defineAuthConfig } from '@holo-js/config'
+
+export default defineAuthConfig({
+  defaults: {
+    guard: 'admin',
+    passwords: 'users',
+  },
+  guards: {
+    admin: {
+      driver: 'session',
+      provider: 'users',
+    },
+  },
+  providers: {
+    users: {
+      model: 'User',
+    },
+  },
+  passwords: {
+    users: {
+      provider: 'users',
+      table: 'password_reset_tokens',
+      expire: 60,
+      throttle: 60,
+    },
+  },
+})
+`)
+
+    await expect(projectInternals.installAuthIntoProject(projectRoot, { workos: true })).rejects.toThrow(
+      'Refusing to overwrite the existing auth config automatically.',
+    )
+    expect(await readFile(join(projectRoot, 'config/auth.ts'), 'utf8')).toContain('guard: \'admin\'')
+  })
+
+  it('moves auth packages from devDependencies and no-ops when auth dependencies already match', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      devDependencies: {
+        '@holo-js/auth': outdatedHoloPackageRange,
+        '@holo-js/session': outdatedHoloPackageRange,
+        '@holo-js/auth-social': outdatedHoloPackageRange,
+        '@holo-js/auth-social-google': outdatedHoloPackageRange,
+        '@holo-js/auth-social-discord': outdatedHoloPackageRange,
+        '@holo-js/auth-clerk': outdatedHoloPackageRange,
+      },
+    }, null, 2))
+
+    await expect(projectInternals.installAuthIntoProject(projectRoot, { social: true })).resolves.toMatchObject({
+      updatedPackageJson: true,
+      updatedEnv: true,
+      updatedEnvExample: true,
+    })
+
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))).toMatchObject({
+      dependencies: {
+        '@holo-js/auth': expectedHoloPackageRange,
+        '@holo-js/session': expectedHoloPackageRange,
+        '@holo-js/auth-social': expectedHoloPackageRange,
+        '@holo-js/auth-social-google': expectedHoloPackageRange,
+      },
+    })
+    const packageJsonAfterInstall = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+      devDependencies?: Record<string, string>
+    }
+    expect(packageJsonAfterInstall.dependencies?.['@holo-js/auth-clerk']).toBeUndefined()
+    expect(packageJsonAfterInstall.devDependencies?.['@holo-js/auth-clerk']).toBeUndefined()
+    expect(packageJsonAfterInstall.dependencies?.['@holo-js/auth-social-discord']).toBeUndefined()
+    expect(packageJsonAfterInstall.devDependencies?.['@holo-js/auth-social-discord']).toBeUndefined()
+
+    await expect(projectInternals.installAuthIntoProject(projectRoot, { social: true })).resolves.toEqual({
+      updatedPackageJson: false,
+      createdAuthConfig: false,
+      createdSessionConfig: false,
+      createdUserModel: false,
+      createdMigrationFiles: [],
+      updatedEnv: false,
+      updatedEnvExample: false,
+    })
+  }, 20_000)
+
+  it('uses the project default database connection when updating auth env files', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/config'
+
+export default defineDatabaseConfig({
+  defaultConnection: 'primary',
+  connections: {
+    primary: {
+      driver: 'sqlite',
+      url: ':memory:',
+    },
+  },
+})
+`)
+
+    await expect(projectInternals.installAuthIntoProject(projectRoot)).resolves.toMatchObject({
+      updatedEnv: true,
+      updatedEnvExample: true,
+    })
+
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('SESSION_CONNECTION=primary')
+    expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('SESSION_CONNECTION=')
+  })
+
+  it('recognizes existing CommonJS auth config and auth migrations as already installed', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await rm(join(projectRoot, 'config', 'auth.ts'), { force: true })
+    await rm(join(projectRoot, 'config', 'session.ts'), { force: true })
+    await writeProjectFile(projectRoot, 'config/auth.cjs', `
+module.exports = {
+  defaults: {
+    guard: 'web',
+    passwords: 'users',
+  },
+  guards: {
+    web: {
+      driver: 'session',
+      provider: 'users',
+    },
+  },
+  providers: {
+    users: {
+      model: 'User',
+    },
+  },
+  passwords: {
+    users: {
+      provider: 'users',
+      table: 'password_reset_tokens',
+      expire: 60,
+      throttle: 60,
+    },
+  },
+}
+`)
+    await writeProjectFile(projectRoot, 'config/session.cjs', `
+module.exports = {
+  driver: 'file',
+  stores: {
+    database: {
+      driver: 'database',
+      connection: 'main',
+      table: 'sessions',
+    },
+    file: {
+      driver: 'file',
+      path: './storage/framework/sessions',
+    },
+  },
+}
+`)
+    await writeProjectFile(projectRoot, 'server/models/User.ts', projectInternals.renderAuthUserModel('../db/schema.generated'))
+    await rm(join(projectRoot, 'server/db/migrations'), { recursive: true, force: true })
+    await mkdir(join(projectRoot, 'server/db/migrations'), { recursive: true })
+
+    let index = 0
+    for (const slug of [
+      'create_users',
+      'create_sessions',
+      'create_auth_identities',
+      'create_personal_access_tokens',
+      'create_password_reset_tokens',
+      'create_email_verification_tokens',
+    ] as const) {
+      const timestamp = `2026_01_01_00000${index + 1}`
+      await writeProjectFile(
+        projectRoot,
+        `server/db/migrations/${timestamp}_${slug}.cjs`,
+        projectInternals.renderAuthMigration(slug),
+      )
+      index += 1
+    }
+
+    await expect(projectInternals.installAuthIntoProject(projectRoot)).resolves.toEqual({
+      updatedPackageJson: true,
+      createdAuthConfig: false,
+      createdSessionConfig: false,
+      createdUserModel: false,
+      createdMigrationFiles: [],
+      updatedEnv: true,
+      updatedEnvExample: true,
+    })
+
+    await expect(stat(join(projectRoot, 'config/auth.ts'))).rejects.toThrow()
+    await expect(stat(join(projectRoot, 'config/session.ts'))).rejects.toThrow()
+  })
+
+  it('updates generated CommonJS auth configs when enabling additional auth features', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await expect(projectInternals.installAuthIntoProject(projectRoot)).resolves.toMatchObject({
+      createdAuthConfig: true,
+      createdSessionConfig: true,
+      createdUserModel: true,
+    })
+
+    await rm(join(projectRoot, 'config', 'auth.ts'), { force: true })
+    await writeProjectFile(projectRoot, 'config/auth.cjs', projectInternals.renderAuthConfig({}, 'cjs'))
+
+    await expect(projectInternals.installAuthIntoProject(projectRoot, {
+      social: true,
+      workos: true,
+      clerk: true,
+    })).resolves.toEqual({
+      updatedPackageJson: true,
+      createdAuthConfig: true,
+      createdSessionConfig: false,
+      createdUserModel: false,
+      createdMigrationFiles: [],
+      updatedEnv: true,
+      updatedEnvExample: true,
+    })
+
+    const authConfig = await readFile(join(projectRoot, 'config/auth.cjs'), 'utf8')
+    expect(authConfig).toContain('module.exports = {')
+    expect(authConfig).toContain('AUTH_GOOGLE_CLIENT_ID')
+    expect(authConfig).toContain('WORKOS_CLIENT_ID')
+    expect(authConfig).toContain('CLERK_PUBLISHABLE_KEY')
+  })
+
+  it('updates auth features even when auth relies on the default session runtime config', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await expect(projectInternals.installAuthIntoProject(projectRoot)).resolves.toMatchObject({
+      createdAuthConfig: true,
+      createdSessionConfig: true,
+      createdUserModel: true,
+    })
+
+    await rm(join(projectRoot, 'config', 'session.ts'), { force: true })
+
+    await expect(projectInternals.installAuthIntoProject(projectRoot, {
+      social: true,
+      workos: true,
+      clerk: true,
+    })).resolves.toEqual({
+      updatedPackageJson: true,
+      createdAuthConfig: true,
+      createdSessionConfig: false,
+      createdUserModel: false,
+      createdMigrationFiles: [],
+      updatedEnv: true,
+      updatedEnvExample: true,
+    })
+
+    const authConfig = await readFile(join(projectRoot, 'config/auth.ts'), 'utf8')
+    expect(authConfig).toContain('AUTH_GOOGLE_CLIENT_ID')
+    expect(authConfig).toContain('WORKOS_CLIENT_ID')
+    expect(authConfig).toContain('CLERK_PUBLISHABLE_KEY')
+    await expect(stat(join(projectRoot, 'config/session.ts'))).rejects.toThrow()
+  }, 20_000)
+
+  it('uses configured project paths when scaffolding the auth User model', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+import { defineAppConfig } from '@holo-js/config'
+
+export default defineAppConfig({
+  paths: {
+    models: 'app/models',
+    generatedSchema: 'app/db/schema.generated.ts',
+  },
+})
+`)
+
+    await expect(projectInternals.installAuthIntoProject(projectRoot)).resolves.toMatchObject({
+      createdUserModel: true,
+    })
+
+    expect(await readFile(join(projectRoot, 'app/models/User.ts'), 'utf8')).toContain(
+      "import { tables as holoGeneratedTables } from '../db/schema.generated'",
+    )
+  })
+
   it('rejects unsupported or missing install targets and invalid queue drivers', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
@@ -1110,7 +1588,7 @@ export default defineAppConfig({
 
     const unsupportedTarget = runCliProcess(projectRoot, ['install', 'mail'])
     expect(unsupportedTarget.status).toBe(1)
-    expect(unsupportedTarget.stderr).toContain('Unsupported install target: mail. Expected one of queue, events.')
+    expect(unsupportedTarget.stderr).toContain('Unsupported install target: mail. Expected one of queue, events, auth.')
 
     const unsupportedDriver = runCliProcess(projectRoot, ['install', 'queue', '--driver', 'sqs'])
     expect(unsupportedDriver.status).toBe(1)
@@ -1119,6 +1597,10 @@ export default defineAppConfig({
     const eventsDriver = runCliProcess(projectRoot, ['install', 'events', '--driver', 'redis'])
     expect(eventsDriver.status).toBe(1)
     expect(eventsDriver.stderr).toContain('The events installer does not support --driver.')
+
+    const authDriver = runCliProcess(projectRoot, ['install', 'auth', '--driver', 'redis'])
+    expect(authDriver.status).toBe(1)
+    expect(authDriver.stderr).toContain('The auth installer does not support --driver.')
   }, 30000)
 
   it('covers the install command and queue installer helpers in-process', async () => {
@@ -1163,6 +1645,31 @@ export default defineAppConfig({
       args: ['events'],
       flags: { driver: 'redis' },
     }, commandContext as never)).rejects.toThrow('The events installer does not support --driver.')
+    await expect(installCommand?.prepare?.({
+      args: ['auth'],
+      flags: { social: true, workos: true },
+    }, commandContext as never)).resolves.toEqual({
+      args: ['auth'],
+      flags: { social: true, workos: true },
+    })
+    await expect(installCommand?.prepare?.({
+      args: ['auth'],
+      flags: { provider: ['google,github'] },
+    }, commandContext as never)).resolves.toEqual({
+      args: ['auth'],
+      flags: { social: true, provider: ['google', 'github'] },
+    })
+    await expect(installCommand?.prepare?.({
+      args: ['auth'],
+      flags: { provider: [''] },
+    }, commandContext as never)).resolves.toEqual({
+      args: ['auth'],
+      flags: {},
+    })
+    await expect(installCommand?.prepare?.({
+      args: ['auth'],
+      flags: { driver: 'redis' },
+    }, commandContext as never)).rejects.toThrow('The auth installer does not support --driver.')
     await expect(installCommand?.run({
       projectRoot,
       cwd: projectRoot,
@@ -1203,6 +1710,12 @@ export default defineAppConfig({
       updatedEnv: false,
       updatedEnvExample: false,
       createdJobsDirectory: true,
+    })
+    await expect(projectInternals.installAuthIntoProject(projectRoot, { social: true })).resolves.toMatchObject({
+      updatedPackageJson: true,
+      createdAuthConfig: true,
+      createdSessionConfig: true,
+      createdUserModel: true,
     })
     await expect(projectInternals.installQueueIntoProject(projectRoot)).resolves.toEqual({
       createdQueueConfig: false,
@@ -1374,6 +1887,28 @@ export default defineQueueConfig({
     expect(redisRunIo.read().stdout).toContain('updated .env')
     expect(redisRunIo.read().stdout).toContain('updated .env.example')
     expect(await readFile(join(redisRunRoot, '.env'), 'utf8')).toContain('APP_NAME=Redis\n\nREDIS_HOST=127.0.0.1')
+
+    const authProviderRunRoot = await createTempProject()
+    tempDirs.push(authProviderRunRoot)
+    await writeProjectFile(authProviderRunRoot, '.env', 'APP_NAME=Auth\n')
+    await writeProjectFile(authProviderRunRoot, '.env.example', 'APP_NAME=\n')
+    const authProviderRunIo = createIo(authProviderRunRoot)
+    const authProviderRunContext = {
+      ...authProviderRunIo.io,
+      projectRoot: authProviderRunRoot,
+      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    }
+    const authProviderInstallCommand = cliInternals.createInternalCommands(authProviderRunContext as never)
+      .find(command => command.name === 'install')
+    await expect(authProviderInstallCommand?.run({
+      projectRoot: authProviderRunRoot,
+      cwd: authProviderRunRoot,
+      args: ['auth'],
+      flags: { provider: ['google,github'] },
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    } as never)).resolves.toBeUndefined()
+    expect(authProviderRunIo.read().stdout).toContain('Installed auth support.')
 
     const eventsRunRoot = await createTempProject()
     tempDirs.push(eventsRunRoot)
@@ -4964,6 +5499,15 @@ export default defineEvent({ name: 'audit.activity' })
     })
     const runMakeSeeder = vi.fn(async () => {})
     const scaffoldProject = vi.fn(async () => {})
+    const installAuthIntoProject = vi.fn(async () => ({
+      updatedPackageJson: true,
+      createdAuthConfig: true,
+      createdSessionConfig: true,
+      createdUserModel: true,
+      createdMigrationFiles: ['server/db/migrations/2026_01_01_000001_create_users.ts'],
+      updatedEnv: true,
+      updatedEnvExample: true,
+    }))
     const installEventsIntoProject = vi.fn(async () => ({
       updatedPackageJson: true,
       createdEventsDirectory: true,
@@ -5009,6 +5553,7 @@ export default defineEvent({ name: 'audit.activity' })
       const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
       return {
         ...actual,
+        installAuthIntoProject,
         installEventsIntoProject,
         installQueueIntoProject,
         scaffoldProject,
@@ -5150,6 +5695,13 @@ export default defineEvent({ name: 'audit.activity' })
       await commands.find(command => command.name === 'install')!.run({
         projectRoot,
         cwd: projectRoot,
+        args: ['auth'],
+        flags: { social: true },
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'install')!.run({
+        projectRoot,
+        cwd: projectRoot,
         args: ['queue'],
         flags: { driver: 'sync' },
         loadProject: baseContext.loadProject,
@@ -5206,6 +5758,11 @@ export default defineEvent({ name: 'audit.activity' })
         args: ['DemoSeeder'],
         flags: {},
       })
+      expect(installAuthIntoProject).toHaveBeenCalledWith(projectRoot, {
+        social: true,
+        workos: false,
+        clerk: false,
+      })
       expect(installEventsIntoProject).toHaveBeenCalledWith(projectRoot)
       expect(installQueueIntoProject).toHaveBeenCalledWith(projectRoot, { driver: 'sync' })
       expect(runProjectPrepare).toHaveBeenCalledWith(projectRoot, baseContext)
@@ -5217,6 +5774,8 @@ export default defineEvent({ name: 'audit.activity' })
       expect(loadProjectConfig).toHaveBeenCalledWith(projectRoot)
       expect(discoverAppCommands).toHaveBeenCalledTimes(1)
       expect(discoverAppCommands).toHaveBeenCalledWith(projectRoot, defaultProjectConfig())
+      expect(io.read().stdout).toContain('  - updated .env')
+      expect(io.read().stdout).toContain('  - updated .env.example')
       expect(scaffoldProject).toHaveBeenCalledWith(resolve(projectRoot, 'LazyProject'), {
         projectName: 'LazyProject',
         framework: 'nuxt',
@@ -5236,6 +5795,177 @@ export default defineEvent({ name: 'audit.activity' })
       vi.doUnmock('../src/project/config')
       vi.doUnmock('../src/project/discovery')
       vi.resetModules()
+    }
+  })
+
+  it('prints auth install output when only env files changed', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const installAuthIntoProject = vi.fn(async () => ({
+      updatedPackageJson: false,
+      createdAuthConfig: false,
+      createdSessionConfig: false,
+      createdUserModel: false,
+      createdMigrationFiles: [],
+      updatedEnv: true,
+      updatedEnvExample: true,
+    }))
+
+    vi.resetModules()
+    vi.doMock('../src/project/scaffold', async () => {
+      const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
+      return {
+        ...actual,
+        installAuthIntoProject,
+      }
+    })
+
+    try {
+      const isolatedCli = await import('../src/cli')
+      const installCommand = isolatedCli.createInternalCommands({
+        ...io.io,
+        projectRoot,
+        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never).find(command => command.name === 'install')
+
+      await installCommand?.run({
+        ...io.io,
+        projectRoot,
+        cwd: projectRoot,
+        args: ['auth'],
+        flags: {},
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never)
+
+      expect(io.read().stdout).toContain('Installed auth support.')
+      expect(io.read().stdout).toContain('  - updated .env')
+      expect(io.read().stdout).toContain('  - updated .env.example')
+    } finally {
+      vi.resetModules()
+      vi.doUnmock('../src/project/scaffold')
+    }
+  })
+
+  it('covers auth install provider parsing fallback when CSV splitting yields no values', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const installAuthIntoProject = vi.fn(async () => ({
+      updatedPackageJson: false,
+      createdAuthConfig: false,
+      createdSessionConfig: false,
+      createdUserModel: false,
+      createdMigrationFiles: [],
+      updatedEnv: false,
+      updatedEnvExample: false,
+    }))
+
+    vi.resetModules()
+    vi.doMock('../src/parsing', async () => {
+      const actual = await vi.importActual('../src/parsing') as typeof ParsingInternalModule
+      return {
+        ...actual,
+        splitCsv: vi.fn(() => undefined),
+      }
+    })
+    vi.doMock('../src/project/scaffold', async () => {
+      const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
+      return {
+        ...actual,
+        installAuthIntoProject,
+      }
+    })
+
+    try {
+      const isolatedCli = await import('../src/cli')
+      const installCommand = isolatedCli.createInternalCommands({
+        ...io.io,
+        projectRoot,
+        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never).find(command => command.name === 'install')
+
+      await expect(installCommand?.prepare?.({
+        args: ['auth'],
+        flags: { provider: ['google'] },
+      }, {
+        ...io.io,
+        projectRoot,
+        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never)).resolves.toEqual({
+        args: ['auth'],
+        flags: {},
+      })
+
+      await expect(installCommand?.run({
+        ...io.io,
+        projectRoot,
+        cwd: projectRoot,
+        args: ['auth'],
+        flags: { provider: ['google'] },
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never)).resolves.toBeUndefined()
+
+      expect(installAuthIntoProject).toHaveBeenCalledWith(projectRoot, {
+        social: false,
+        workos: false,
+        clerk: false,
+      })
+    } finally {
+      vi.resetModules()
+      vi.doUnmock('../src/parsing')
+      vi.doUnmock('../src/project/scaffold')
+    }
+  })
+
+  it('prints the already-installed auth message when auth install makes no changes', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const installAuthIntoProject = vi.fn(async () => ({
+      updatedPackageJson: false,
+      createdAuthConfig: false,
+      createdSessionConfig: false,
+      createdUserModel: false,
+      createdMigrationFiles: [],
+      updatedEnv: false,
+      updatedEnvExample: false,
+    }))
+
+    vi.resetModules()
+    vi.doMock('../src/project/scaffold', async () => {
+      const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
+      return {
+        ...actual,
+        installAuthIntoProject,
+      }
+    })
+
+    try {
+      const isolatedCli = await import('../src/cli')
+      const installCommand = isolatedCli.createInternalCommands({
+        ...io.io,
+        projectRoot,
+        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never).find(command => command.name === 'install')
+
+      await installCommand?.run({
+        ...io.io,
+        projectRoot,
+        cwd: projectRoot,
+        args: ['auth'],
+        flags: {},
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never)
+
+      expect(io.read().stdout).toContain('Auth support is already installed.')
+    } finally {
+      vi.resetModules()
+      vi.doUnmock('../src/project/scaffold')
     }
   })
 

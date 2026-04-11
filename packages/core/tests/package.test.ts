@@ -17,11 +17,20 @@ describe('@holo-js/core package boundaries', () => {
     expect(runtimeTypes).not.toContain('ReadonlyMap<string, unknown>')
     expect(runtimeTypes).toContain("readonly mode: 'async' | 'sync';")
     expect(runtimeTypes).toContain('readonly driver: string;')
-    expect(packageJson.dependencies?.['@holo-js/queue']).toBeUndefined()
-    expect(packageJson.dependencies?.['@holo-js/storage']).toBeUndefined()
-    expect(packageJson.peerDependencies?.['@holo-js/queue']).toBeDefined()
-    expect(packageJson.peerDependencies?.['@holo-js/storage']).toBeDefined()
-    expect(packageJson.peerDependenciesMeta?.['@holo-js/queue']?.optional).toBe(true)
-    expect(packageJson.peerDependenciesMeta?.['@holo-js/storage']?.optional).toBe(true)
+    const optionalRuntimePackages = [
+      '@holo-js/auth',
+      '@holo-js/auth-clerk',
+      '@holo-js/auth-social',
+      '@holo-js/auth-workos',
+      '@holo-js/queue',
+      '@holo-js/session',
+      '@holo-js/storage',
+    ] as const
+
+    for (const packageName of optionalRuntimePackages) {
+      expect(packageJson.dependencies?.[packageName]).toBeUndefined()
+      expect(packageJson.peerDependencies?.[packageName]).toBeDefined()
+      expect(packageJson.peerDependenciesMeta?.[packageName]?.optional).toBe(true)
+    }
   })
 })

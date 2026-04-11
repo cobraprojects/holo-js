@@ -3,8 +3,10 @@ import { dirname, extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   normalizeAppConfig,
+  normalizeAuthConfig,
   normalizeDatabaseConfig,
   normalizeQueueConfigForHolo,
+  normalizeSessionConfig,
   normalizeStorageConfig,
 } from './defaults'
 import {
@@ -21,7 +23,9 @@ import type {
   HoloConfigMap,
   HoloDatabaseConfig,
   HoloMediaConfig,
+  HoloAuthConfig,
   HoloQueueConfig,
+  HoloSessionConfig,
   HoloStorageConfig,
 } from './types'
 
@@ -211,9 +215,11 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
   const storage = normalizeStorageConfig(resolvedRawConfig.storage as HoloStorageConfig | undefined)
   const queue = normalizeQueueConfigForHolo(resolvedRawConfig.queue as HoloQueueConfig | undefined)
   const media = Object.freeze({ ...((resolvedRawConfig.media as HoloMediaConfig | undefined) ?? {}) })
+  const session = normalizeSessionConfig(resolvedRawConfig.session as HoloSessionConfig | undefined)
+  const auth = normalizeAuthConfig(resolvedRawConfig.auth as HoloAuthConfig | undefined)
 
   const customEntries = Object.entries(resolvedRawConfig).filter(([key]) => {
-    return key !== 'app' && key !== 'database' && key !== 'storage' && key !== 'queue' && key !== 'media'
+    return key !== 'app' && key !== 'database' && key !== 'storage' && key !== 'queue' && key !== 'media' && key !== 'session' && key !== 'auth'
   })
   const custom = Object.freeze(Object.fromEntries(customEntries)) as Readonly<TCustom>
   const all = Object.freeze({
@@ -222,6 +228,8 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
     storage,
     queue,
     media,
+    session,
+    auth,
     ...custom,
   }) as Readonly<LoadedHoloConfig<TCustom>['all']>
 
@@ -231,6 +239,8 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
     storage,
     queue,
     media,
+    session,
+    auth,
     custom,
     all,
     environment: options.environment,
@@ -400,6 +410,14 @@ export function defineQueueConfig<TConfig extends HoloQueueConfig>(config: TConf
 }
 
 export function defineMediaConfig<TConfig extends HoloMediaConfig>(config: TConfig): DefineConfigValue<TConfig> {
+  return defineConfig(config)
+}
+
+export function defineSessionConfig<TConfig extends HoloSessionConfig>(config: TConfig): DefineConfigValue<TConfig> {
+  return defineConfig(config)
+}
+
+export function defineAuthConfig<TConfig extends HoloAuthConfig>(config: TConfig): DefineConfigValue<TConfig> {
   return defineConfig(config)
 }
 

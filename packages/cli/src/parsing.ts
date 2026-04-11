@@ -6,8 +6,8 @@ export const SUPPORTED_NEW_FRAMEWORKS = ['nuxt', 'next', 'sveltekit'] as const
 export const SUPPORTED_NEW_DATABASE_DRIVERS = ['sqlite', 'mysql', 'postgres'] as const
 export const SUPPORTED_NEW_PACKAGE_MANAGERS = ['bun', 'npm', 'pnpm', 'yarn'] as const
 export const SUPPORTED_NEW_STORAGE_DISKS = ['local', 'public'] as const
-export const SUPPORTED_NEW_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms'] as const
-export const SUPPORTED_INSTALL_TARGETS = ['queue', 'events'] as const
+export const SUPPORTED_NEW_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms', 'auth'] as const
+export const SUPPORTED_INSTALL_TARGETS = ['queue', 'events', 'auth'] as const
 export const SUPPORTED_QUEUE_INSTALL_DRIVERS = ['sync', 'redis', 'database'] as const
 
 export function parseTokens(tokens: readonly string[]): RawParsedInput {

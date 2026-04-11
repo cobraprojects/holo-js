@@ -1,8 +1,10 @@
 export * from './adapter'
 export type {
   CreateHoloOptions,
+  HoloAuthRuntimeBinding,
   HoloQueueRuntimeBinding,
   HoloRuntime,
+  HoloSessionRuntimeBinding,
 } from './portable/holo'
 export {
   createHolo,

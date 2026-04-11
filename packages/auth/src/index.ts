@@ -1,0 +1,76 @@
+import { check, currentAccessToken, getAuthRuntime, id, login, logout, passwords, refreshUser, register, tokens, user, verification } from './runtime'
+
+export { defineAuthConfig } from './contracts'
+export {
+  authRuntimeInternals,
+  check,
+  configureAuthRuntime,
+  createAsyncAuthContext,
+  currentAccessToken,
+  getAuthRuntime,
+  id,
+  login,
+  logout,
+  passwords,
+  refreshUser,
+  register,
+  resetAuthRuntime,
+  tokens,
+  user,
+  verification,
+} from './runtime'
+export type {
+  AuthClientConfig,
+  AuthClientRequestOptions,
+  AuthCredentials,
+  AuthCurrentAccessToken,
+  AuthDeliveryHook,
+  AuthEmailVerificationFacade,
+  AuthEstablishedSession,
+  AuthFacade,
+  AuthGuardFacade,
+  AuthPasswordHasher,
+  AuthPasswordResetFacade,
+  AuthTokenFacade,
+  AuthTokenStore,
+  AuthUser,
+  AuthGuardConfig,
+  AuthProviderConfig,
+  AuthProviderAdapter,
+  AuthRegistrationInput,
+  AuthRuntimeBindings,
+  AuthRuntimeContext,
+  AuthUserLike,
+  CurrentAuthResponse,
+  EmailVerificationTokenRecord,
+  EmailVerificationTokenResult,
+  EmailVerificationTokenStore,
+  HoloAuthTypeRegistry,
+  HoloAuthConfig,
+  NormalizedHoloAuthConfig,
+  PersonalAccessTokenCreationOptions,
+  PersonalAccessTokenRecord,
+  PersonalAccessTokenResult,
+  PasswordResetTokenRecord,
+  PasswordResetTokenResult,
+  PasswordResetTokenStore,
+} from './contracts'
+
+const auth = Object.freeze({
+  check,
+  user,
+  refreshUser,
+  id,
+  currentAccessToken,
+  login,
+  logout,
+  register,
+  tokens,
+  verification,
+  passwords,
+  guard(name: string) {
+    return getAuthRuntime().guard(name)
+  },
+})
+
+export default auth

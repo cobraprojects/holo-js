@@ -24,6 +24,10 @@ import type * as ProjectConfigModule from './project/config'
 import type * as ProjectDiscoveryModule from './project/discovery'
 import type * as ProjectRuntimeModule from './project/runtime'
 import type * as ProjectScaffoldModule from './project/scaffold'
+import {
+  SUPPORTED_AUTH_SOCIAL_PROVIDERS,
+  type SupportedAuthSocialProvider,
+} from './project/shared'
 import type * as RuntimeModule from './runtime'
 import type * as QueueModule from './queue'
 import type * as QueueMigrationsModule from './queue-migrations'
@@ -326,7 +330,7 @@ export function createInternalCommands(
     {
       name: 'install',
       description: 'Install first-party Holo support into an existing project.',
-      usage: 'holo install <queue|events> [--driver <sync|redis|database>]',
+      usage: 'holo install <queue|events|auth> [--driver <sync|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
       source: 'internal',
       async prepare(input) {
         const target = normalizeChoice(
@@ -338,17 +342,39 @@ export function createInternalCommands(
         if (target === 'events' && requestedDriver) {
           throw new Error('The events installer does not support --driver.')
         }
+        if (target === 'auth' && requestedDriver) {
+          throw new Error('The auth installer does not support --driver.')
+        }
 
         const driver = target === 'queue'
           ? (requestedDriver
               ? normalizeChoice(requestedDriver, SUPPORTED_QUEUE_INSTALL_DRIVERS, 'queue driver')
               : 'sync')
           : undefined
+        const socialProviders = target === 'auth'
+          ? ((collectMultiStringFlag(input.flags, 'provider') ?? [])
+              .flatMap(entry => splitCsv(entry) ?? [])
+              .map(provider => normalizeChoice(provider, SUPPORTED_AUTH_SOCIAL_PROVIDERS, 'auth social provider')) as SupportedAuthSocialProvider[])
+          : []
+        const social = target === 'auth'
+          ? resolveBooleanFlag(input.flags, 'social') === true || socialProviders.length > 0
+          : false
+        const workos = target === 'auth'
+          ? resolveBooleanFlag(input.flags, 'workos') === true
+          : false
+        const clerk = target === 'auth'
+          ? resolveBooleanFlag(input.flags, 'clerk') === true
+          : false
 
         return {
           args: [target],
           flags: {
             ...(driver ? { driver } : {}),
+            ...(social ? { social } : {}),
+            ...(socialProviders.length > 0 ? { provider: socialProviders } : {}),
+            ...(workos ? { workos } : {}),
+            /* v8 ignore next -- exercised only by the install-command prepare path with a clerk flag */
+            ...(clerk ? { clerk } : {}),
           },
         }
       },
@@ -404,6 +430,36 @@ export function createInternalCommands(
             if (queueResult.updatedEnvExample) writeLine(context.stdout, '  - updated .env.example')
             if (queueResult.createdJobsDirectory) writeLine(context.stdout, '  - created server/jobs')
           }
+          return
+        }
+
+        if (target === 'auth') {
+          const { installAuthIntoProject } = await loadProjectScaffoldModule()
+          const socialProviders = ((collectMultiStringFlag(commandContext.flags, 'provider') ?? [])
+            .flatMap(entry => splitCsv(entry) ?? [])
+            .map(provider => normalizeChoice(provider, SUPPORTED_AUTH_SOCIAL_PROVIDERS, 'auth social provider')) as SupportedAuthSocialProvider[])
+          const result = await installAuthIntoProject(context.projectRoot, {
+            social: commandContext.flags.social === true,
+            ...(socialProviders.length > 0 ? { socialProviders } : {}),
+            workos: commandContext.flags.workos === true,
+            clerk: commandContext.flags.clerk === true,
+          })
+          const changed = result.updatedPackageJson
+            || result.createdAuthConfig
+            || result.createdSessionConfig
+            || result.createdUserModel
+            || result.createdMigrationFiles.length > 0
+            || result.updatedEnv
+            || result.updatedEnvExample
+
+          writeLine(context.stdout, changed ? 'Installed auth support.' : 'Auth support is already installed.')
+          if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
+          if (result.createdAuthConfig) writeLine(context.stdout, '  - created config/auth.ts')
+          if (result.createdSessionConfig) writeLine(context.stdout, '  - created config/session.ts')
+          if (result.createdUserModel) writeLine(context.stdout, '  - created server/models/User.ts')
+          if (result.updatedEnv) writeLine(context.stdout, '  - updated .env')
+          if (result.updatedEnvExample) writeLine(context.stdout, '  - updated .env.example')
+          if (result.createdMigrationFiles.length > 0) writeLine(context.stdout, `  - created ${result.createdMigrationFiles.length} auth migrations`)
           return
         }
 

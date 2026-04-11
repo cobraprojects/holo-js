@@ -103,8 +103,10 @@ export type SupportedScaffoldFramework = 'nuxt' | 'next' | 'sveltekit'
 export type SupportedScaffoldPackageManager = 'bun' | 'npm' | 'pnpm' | 'yarn'
 
 export type SupportedScaffoldStorageDisk = 'local' | 'public'
-export type SupportedScaffoldOptionalPackage = 'storage' | 'events' | 'queue' | 'validation' | 'forms'
+export type SupportedScaffoldOptionalPackage = 'storage' | 'events' | 'queue' | 'validation' | 'forms' | 'auth'
 export type SupportedQueueInstallerDriver = 'sync' | 'redis' | 'database'
+export type SupportedAuthSocialProvider = 'google' | 'github' | 'discord' | 'facebook' | 'apple' | 'linkedin'
+export type AuthInstallerFeature = 'social' | 'workos' | 'clerk'
 
 export type ProjectScaffoldOptions = {
   readonly projectName: string
@@ -159,6 +161,34 @@ export type EventsInstallResult = {
   readonly createdListenersDirectory: boolean
 }
 
+export type AuthInstallResult = {
+  readonly updatedPackageJson: boolean
+  readonly createdAuthConfig: boolean
+  readonly createdSessionConfig: boolean
+  readonly createdUserModel: boolean
+  readonly createdMigrationFiles: readonly string[]
+  readonly updatedEnv: boolean
+  readonly updatedEnvExample: boolean
+}
+
+export const SUPPORTED_AUTH_SOCIAL_PROVIDERS = [
+  'google',
+  'github',
+  'discord',
+  'facebook',
+  'apple',
+  'linkedin',
+] as const satisfies readonly SupportedAuthSocialProvider[]
+
+export const AUTH_SOCIAL_PROVIDER_PACKAGE_NAMES = {
+  google: '@holo-js/auth-social-google',
+  github: '@holo-js/auth-social-github',
+  discord: '@holo-js/auth-social-discord',
+  facebook: '@holo-js/auth-social-facebook',
+  apple: '@holo-js/auth-social-apple',
+  linkedin: '@holo-js/auth-social-linkedin',
+} as const satisfies Record<SupportedAuthSocialProvider, string>
+
 export const APP_CONFIG_FILE_NAMES = [
   'config/app.ts',
   'config/app.mts',
@@ -171,6 +201,24 @@ export const DATABASE_CONFIG_FILE_NAMES = [
   'config/database.mts',
   'config/database.js',
   'config/database.mjs',
+] as const
+
+export const AUTH_CONFIG_FILE_NAMES = [
+  'config/auth.ts',
+  'config/auth.mts',
+  'config/auth.js',
+  'config/auth.mjs',
+  'config/auth.cts',
+  'config/auth.cjs',
+] as const
+
+export const SESSION_CONFIG_FILE_NAMES = [
+  'config/session.ts',
+  'config/session.mts',
+  'config/session.js',
+  'config/session.mjs',
+  'config/session.cts',
+  'config/session.cjs',
 ] as const
 
 export const QUEUE_CONFIG_FILE_NAMES = [
@@ -211,7 +259,7 @@ export const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIO
 export const SUPPORTED_SCAFFOLD_FRAMEWORKS = ['nuxt', 'next', 'sveltekit'] as const
 export const SUPPORTED_SCAFFOLD_PACKAGE_MANAGERS = ['bun', 'npm', 'pnpm', 'yarn'] as const
 export const SUPPORTED_SCAFFOLD_STORAGE_DISKS = ['local', 'public'] as const
-export const SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms'] as const
+export const SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms', 'auth'] as const
 export const SUPPORTED_QUEUE_INSTALLER_DRIVERS = ['sync', 'redis', 'database'] as const
 export const HOLO_EVENT_DEFINITION_MARKER = Symbol.for('holo-js.events.definition')
 export const HOLO_LISTENER_DEFINITION_MARKER = Symbol.for('holo-js.events.listener')

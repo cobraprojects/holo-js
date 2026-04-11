@@ -23,6 +23,7 @@ import {
   type GeneratedProjectRegistry,
 } from './portable/registry'
 import { resolveStorageKeyPath } from './storageRuntime'
+import type { HoloAuthRuntimeBinding, HoloSessionRuntimeBinding } from './portable/holo'
 
 export interface HoloAdapterProject<TCustom extends HoloConfigMap = HoloConfigMap> {
   readonly projectRoot: string
@@ -45,6 +46,8 @@ export interface HoloAdapterProjectAccessors<
 > {
   getApp(): Promise<HoloAdapterProject<TCustom>>
   getProject(): Promise<HoloAdapterProject<TCustom>>
+  getSession(): Promise<HoloSessionRuntimeBinding | undefined>
+  getAuth(): Promise<HoloAuthRuntimeBinding | undefined>
   useConfig<TKey extends Extract<keyof LoadedHoloConfig<TCustom>['all'], string>>(
     key: TKey,
   ): Promise<LoadedHoloConfig<TCustom>['all'][TKey]>
@@ -170,6 +173,14 @@ export function createHoloProjectAccessors<
   return {
     getApp: resolveProject,
     getProject: resolveProject,
+    async getSession() {
+      const project = await resolveProject()
+      return project.runtime.session
+    },
+    async getAuth() {
+      const project = await resolveProject()
+      return project.runtime.auth
+    },
     useConfig,
     async config<TPath extends DotPath<LoadedHoloConfig<TCustom>['all']>>(
       path: TPath,

@@ -1,5 +1,14 @@
 import { describe, it } from 'vitest'
-import { createConfigAccessors, defineConfig, defineQueueConfig, type DotPath, type HoloAppEnv, type HoloConfigRegistry } from '../src'
+import {
+  createConfigAccessors,
+  defineAuthConfig,
+  defineConfig,
+  defineQueueConfig,
+  defineSessionConfig,
+  type DotPath,
+  type HoloAppEnv,
+  type HoloConfigRegistry,
+} from '../src'
 
 declare module '../src/types' {
   interface HoloConfigRegistry {
@@ -26,12 +35,57 @@ describe('@holo-js/config typing', () => {
         },
       },
     })
+    const session = defineSessionConfig({
+      driver: 'database',
+      cookie: {
+        path: '/',
+      },
+    })
+    const auth = defineAuthConfig({
+      guards: {
+        web: {
+          driver: 'session',
+          provider: 'users',
+        },
+      },
+      providers: {
+        users: {
+          model: 'User',
+        },
+      },
+      social: {
+        google: {
+          runtime: '@holo-js/auth-social-google',
+          clientId: 'google-client',
+          redirectUri: 'https://app.test/auth/google/callback',
+          scopes: ['openid', 'email'],
+          guard: 'web',
+          encryptTokens: true,
+        },
+      },
+      workos: {
+        dashboard: {
+          clientId: 'workos-client',
+          sessionCookie: 'workos-session',
+          guard: 'web',
+        },
+      },
+      clerk: {
+        admin: {
+          publishableKey: 'pk_test',
+          sessionCookie: '__session',
+          guard: 'web',
+        },
+      },
+    })
     const accessors = createConfigAccessors({
       app: {} as HoloConfigRegistry['app'],
       database: {} as HoloConfigRegistry['database'],
       storage: {} as HoloConfigRegistry['storage'],
       queue: queue as unknown as HoloConfigRegistry['queue'],
       media: {} as HoloConfigRegistry['media'],
+      session: session as unknown as HoloConfigRegistry['session'],
+      auth: auth as unknown as HoloConfigRegistry['auth'],
       services,
     })
 
@@ -42,12 +96,19 @@ describe('@holo-js/config typing', () => {
     } = accessors.useConfig('services')
     const nestedSecret: string = accessors.useConfig('services.mailgun.secret')
     const secret: string = accessors.config('services.mailgun.secret')
+    const sessionDriver: string = accessors.useConfig('session.driver')
+    const authDefaultGuard: string = accessors.useConfig('auth.defaults.guard')
+    const socialRedirectUri = accessors.useConfig('auth.social.google.redirectUri') as string | undefined
+    const workosSessionCookie = accessors.useConfig('auth.workos.dashboard.sessionCookie') as string | undefined
+    const clerkSessionCookie = accessors.useConfig('auth.clerk.admin.sessionCookie') as string | undefined
     const nestedPath: DotPath<{
       app: HoloConfigRegistry['app']
       database: HoloConfigRegistry['database']
       storage: HoloConfigRegistry['storage']
       queue: HoloConfigRegistry['queue']
       media: HoloConfigRegistry['media']
+      session: HoloConfigRegistry['session']
+      auth: HoloConfigRegistry['auth']
       services: typeof services
     }> = 'services.mailgun.secret'
     const queueDefault: string = accessors.useConfig('queue.default')
@@ -59,6 +120,11 @@ describe('@holo-js/config typing', () => {
     void loadedServices
     void nestedSecret
     void secret
+    void sessionDriver
+    void authDefaultGuard
+    void socialRedirectUri
+    void workosSessionCookie
+    void clerkSessionCookie
     void nestedPath
     void queueDefault
     void testEnv

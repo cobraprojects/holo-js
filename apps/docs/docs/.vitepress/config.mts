@@ -56,6 +56,22 @@ const frameworkSidebar = [
     ],
   },
   {
+    text: 'Auth',
+    items: [
+      { text: 'Overview', link: '/auth/' },
+      { text: 'Session And Cookies', link: '/auth/session-and-cookies' },
+      { text: 'Local Auth', link: '/auth/local-auth' },
+      { text: 'Guards And Providers', link: '/auth/guards-and-providers' },
+      { text: 'Personal Access Tokens', link: '/auth/personal-access-tokens' },
+      { text: 'Social Login', link: '/auth/social-login' },
+      { text: 'WorkOS', link: '/auth/workos' },
+      { text: 'Clerk', link: '/auth/clerk' },
+      { text: 'Email Verification', link: '/auth/email-verification' },
+      { text: 'Password Reset', link: '/auth/password-reset' },
+      { text: 'Current Auth Client', link: '/auth/current-auth-client' },
+    ],
+  },
+  {
     text: 'Queue',
     items: [
       { text: 'Getting Started', link: '/queue/' },

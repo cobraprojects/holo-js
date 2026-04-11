@@ -9,9 +9,11 @@ import {
   config,
   configureConfigRuntime,
   configureEnvRuntime,
+  defineAuthConfig,
   defineConfig,
   defineMediaConfig,
   defineQueueConfig,
+  defineSessionConfig,
   defineStorageConfig,
   env,
   isEnvPlaceholder,
@@ -20,8 +22,10 @@ import {
   loadEnvironment,
   normalizeAppConfig,
   normalizeAppEnv,
+  normalizeAuthConfig,
   normalizeDatabaseConfig,
   normalizeQueueConfigForHolo,
+  normalizeSessionConfig,
   resetConfigRuntime,
   resolveConfigCachePath,
   resolveEnvPlaceholders,
@@ -488,6 +492,8 @@ export default defineAppConfig({
         name: 'Holo',
       },
       queue: normalizeQueueConfigForHolo(),
+      session: normalizeSessionConfig(),
+      auth: normalizeAuthConfig(),
       services: {
         mailgun: {
           secret: 'secret',
@@ -499,6 +505,8 @@ export default defineAppConfig({
 
     expect(useConfig('app')).toEqual({ name: 'Holo' })
     expect(useConfig('queue.default' as never)).toBe('sync')
+    expect(useConfig('session.driver' as never)).toBe('file')
+    expect(useConfig('auth.defaults.guard' as never)).toBe('web')
     expect(useConfig('services.mailgun.secret' as never)).toBe('secret')
     expect(config('services.mailgun.secret' as never)).toBe('secret')
   })
@@ -1044,6 +1052,547 @@ export default defineConfig({
     expect(loaded.custom).toEqual({
       services: {
         transports: ['mailgun', 'ses'],
+      },
+    })
+  })
+
+  it('normalizes session and auth defaults and freezes their config helpers', () => {
+    const session = defineSessionConfig({
+      driver: 'file',
+      stores: {
+        file: {
+          driver: 'file',
+          path: ' ./tmp/sessions ',
+        },
+      },
+      cookie: {
+        path: '/',
+        sameSite: 'strict',
+        maxAge: '45',
+      },
+    })
+    expect(Object.isFrozen(session)).toBe(true)
+    expect(normalizeSessionConfig().driver).toBe('file')
+    expect(normalizeSessionConfig(session)).toMatchObject({
+      driver: 'file',
+      stores: {
+        file: {
+          driver: 'file',
+          path: './tmp/sessions',
+        },
+      },
+      cookie: {
+        path: '/',
+        sameSite: 'strict',
+        maxAge: 45,
+      },
+    })
+    expect(() => normalizeSessionConfig({
+      driver: 'missing',
+      stores: {
+        file: {
+          driver: 'file',
+        },
+      },
+    })).toThrow('default session driver "missing" is not configured')
+    expect(() => normalizeSessionConfig({
+      cookie: {
+        sameSite: 'weird' as never,
+      },
+    })).toThrow('cookie sameSite')
+
+    const auth = defineAuthConfig({
+      defaults: {
+        guard: 'admin',
+        passwords: 'admins',
+      },
+      guards: {
+        admin: {
+          driver: 'session',
+          provider: 'admins',
+        },
+      },
+      providers: {
+        admins: {
+          model: 'Admin',
+        },
+      },
+      passwords: {
+        admins: {
+          provider: 'admins',
+          table: 'admin_resets',
+          expire: '30',
+          throttle: '15',
+        },
+      },
+      emailVerification: true,
+      socialEncryptionKey: ' phase-6-encryption-key ',
+      social: {
+        google: {
+          clientId: ' google-client ',
+          clientSecret: ' google-secret ',
+          redirectUri: ' https://app.test/auth/google/callback ',
+          scopes: ['openid', 'email'],
+          guard: 'admin',
+          mapToProvider: 'admins',
+          encryptTokens: true,
+        },
+      },
+      workos: {
+        dashboard: {
+          clientId: ' workos-client ',
+          apiKey: ' workos-key ',
+          cookiePassword: ' cookie-secret ',
+          redirectUri: ' https://app.test/auth/workos/callback ',
+          sessionCookie: ' workos-session ',
+          guard: 'admin',
+          mapToProvider: 'admins',
+        },
+      },
+      clerk: {
+        admin: {
+          publishableKey: ' pk_test ',
+          secretKey: ' sk_test ',
+          jwtKey: ' jwt-key ',
+          apiUrl: ' https://api.clerk.test ',
+          frontendApi: ' https://clerk.test ',
+          sessionCookie: ' __clerk_session ',
+          authorizedParties: [' https://app.test ', 'https://admin.test'],
+          guard: 'admin',
+          mapToProvider: 'admins',
+        },
+      },
+    })
+    expect(Object.isFrozen(auth)).toBe(true)
+    expect(normalizeAuthConfig()).toMatchObject({
+      defaults: {
+        guard: 'web',
+      },
+    })
+    expect(normalizeAuthConfig()).not.toHaveProperty('currentUserEndpoint')
+    expect(normalizeAuthConfig(auth)).toMatchObject({
+      defaults: {
+        guard: 'admin',
+      },
+      guards: {
+        admin: {
+          driver: 'session',
+          provider: 'admins',
+        },
+      },
+      providers: {
+        admins: {
+          model: 'Admin',
+        },
+      },
+      passwords: {
+        admins: {
+          provider: 'admins',
+          table: 'admin_resets',
+          expire: 30,
+          throttle: 15,
+        },
+      },
+      emailVerification: {
+        required: true,
+      },
+      socialEncryptionKey: 'phase-6-encryption-key',
+      social: {
+        google: {
+          name: 'google',
+          clientId: 'google-client',
+          clientSecret: 'google-secret',
+          redirectUri: 'https://app.test/auth/google/callback',
+          scopes: ['openid', 'email'],
+          guard: 'admin',
+          mapToProvider: 'admins',
+          encryptTokens: true,
+        },
+      },
+      workos: {
+        dashboard: {
+          name: 'dashboard',
+          clientId: 'workos-client',
+          apiKey: 'workos-key',
+          cookiePassword: 'cookie-secret',
+          redirectUri: 'https://app.test/auth/workos/callback',
+          sessionCookie: 'workos-session',
+          guard: 'admin',
+          mapToProvider: 'admins',
+        },
+      },
+      clerk: {
+        admin: {
+          name: 'admin',
+          publishableKey: 'pk_test',
+          secretKey: 'sk_test',
+          jwtKey: 'jwt-key',
+          apiUrl: 'https://api.clerk.test',
+          frontendApi: 'https://clerk.test',
+          sessionCookie: '__clerk_session',
+          authorizedParties: ['https://app.test', 'https://admin.test'],
+          guard: 'admin',
+          mapToProvider: 'admins',
+        },
+      },
+    })
+    expect(() => normalizeAuthConfig({
+      defaults: {
+        guard: 'missing',
+      },
+    })).toThrow('default auth guard "missing" is not configured')
+    expect(() => normalizeAuthConfig({
+      defaults: {
+        passwords: 'admins',
+      },
+    })).toThrow('default password broker "admins" is not configured')
+    expect(() => normalizeAuthConfig({
+      guards: {
+        web: {
+          driver: 'session',
+          provider: 'users',
+        },
+      },
+      providers: {
+        users: {
+          model: 'User',
+        },
+      },
+      passwords: {
+        users: {
+          provider: 'admins',
+        },
+      },
+    })).toThrow('password broker "users" references unknown provider "admins"')
+    expect(() => normalizeAuthConfig({
+      guards: {
+        web: {
+          driver: 'session',
+          provider: 'admins',
+        },
+      },
+      providers: {
+        users: {
+          model: 'User',
+        },
+      },
+    })).toThrow('references unknown provider "admins"')
+    expect(() => normalizeAuthConfig({
+      providers: {
+        users: {
+          model: '   ',
+        },
+      },
+    })).toThrow('model must be a non-empty string')
+    expect(() => normalizeAuthConfig({
+      guards: {
+        web: {
+          driver: 'cookie' as never,
+          provider: 'users',
+        },
+      },
+    })).toThrow('Unsupported auth guard driver "cookie"')
+    expect(() => normalizeAuthConfig({
+      social: {
+        google: {
+          guard: 'admin',
+        },
+      },
+    })).toThrow('references unknown guard "admin"')
+    expect(() => normalizeAuthConfig({
+      social: {
+        google: {
+          mapToProvider: 'admins',
+        },
+      },
+    })).toThrow('references unknown provider "admins"')
+    expect(() => normalizeAuthConfig({
+      workos: {
+        dashboard: {
+          guard: 'admin',
+        },
+      },
+    })).toThrow('references unknown guard "admin"')
+    expect(() => normalizeAuthConfig({
+      workos: {
+        dashboard: {
+          mapToProvider: 'admins',
+        },
+      },
+    })).toThrow('references unknown provider "admins"')
+    expect(() => normalizeAuthConfig({
+      clerk: {
+        admin: {
+          guard: 'admin',
+        },
+      },
+    })).toThrow('references unknown guard "admin"')
+    expect(() => normalizeAuthConfig({
+      clerk: {
+        admin: {
+          mapToProvider: 'admins',
+        },
+      },
+    })).toThrow('references unknown provider "admins"')
+    expect(() => normalizeAuthConfig({
+      providers: {
+        admins: {
+          model: 'Admin',
+        },
+      },
+    })).toThrow('guard "web" references unknown provider "users"')
+    expect(() => normalizeAuthConfig({
+      providers: {
+        admins: {
+          model: 'Admin',
+        },
+      },
+      guards: {
+        admin: {
+          driver: 'session',
+          provider: 'admins',
+        },
+      },
+    })).toThrow('password broker "users" references unknown provider "users"')
+    expect(normalizeSessionConfig({
+      driver: 'database',
+      stores: {
+        database: {
+          driver: 'database',
+          connection: 'audit',
+          table: 'custom_sessions',
+        },
+        file: {
+          driver: 'file',
+          path: './tmp/sessions',
+        },
+      },
+    })).toMatchObject({
+      stores: {
+        database: {
+          driver: 'database',
+          connection: 'audit',
+          table: 'custom_sessions',
+        },
+        file: {
+          driver: 'file',
+          path: './tmp/sessions',
+        },
+      },
+    })
+    expect(() => normalizeSessionConfig({
+      stores: {
+        cache: {
+          driver: 'redis',
+          connection: 'cache',
+          prefix: 'custom:sessions:',
+        },
+      },
+    })).toThrow('Redis-backed session stores are not supported by the portable runtime yet')
+    expect(() => normalizeSessionConfig({
+      stores: {
+        invalid: {
+          driver: 'memory' as never,
+        },
+      },
+    })).toThrow('Unsupported session store driver "memory"')
+    expect(normalizeSessionConfig({
+      stores: {
+        first: {
+          driver: 'database',
+          connection: 'audit',
+          table: 'custom_sessions',
+        },
+      },
+      cookie: {
+        name: ' holo_session ',
+        path: ' /app ',
+        domain: ' example.com ',
+        secure: true,
+        httpOnly: false,
+        sameSite: 'strict',
+      },
+    })).toMatchObject({
+      driver: 'first',
+      cookie: {
+        name: 'holo_session',
+        path: '/app',
+        domain: 'example.com',
+        secure: true,
+        httpOnly: false,
+        sameSite: 'strict',
+      },
+      stores: {
+        first: {
+          connection: 'audit',
+          table: 'custom_sessions',
+        },
+      },
+    })
+    expect(normalizeSessionConfig({
+      absoluteLifetime: '45',
+      stores: {
+        first: {
+          driver: 'database',
+          connection: 'audit',
+          table: 'custom_sessions',
+        },
+      },
+    })).toMatchObject({
+      absoluteLifetime: 45,
+      cookie: {
+        maxAge: 45,
+      },
+    })
+    expect(normalizeAuthConfig({
+      social: {
+        custom: {
+          runtime: ' @acme/holo-auth-social-custom ',
+        },
+      },
+    })).toMatchObject({
+      social: {
+        custom: {
+          runtime: '@acme/holo-auth-social-custom',
+        },
+      },
+    })
+    expect(normalizeAuthConfig({
+      socialEncryptionKey: '  social-secret  ',
+      emailVerification: {
+        required: true,
+      },
+      personalAccessTokens: {
+        defaultAbilities: ['projects.read'],
+      },
+      providers: {
+        users: {
+          model: 'User',
+        },
+      },
+      passwords: {
+        users: {
+          provider: 'users',
+          table: 'password_reset_tokens_custom',
+          expire: 90,
+          throttle: 5,
+        },
+      },
+      social: {
+        google: {
+          clientId: ' client-id ',
+          clientSecret: ' secret ',
+          redirectUri: ' https://example.com/callback ',
+          scopes: ['openid'],
+        },
+      },
+      workos: {
+        dashboard: {
+          clientId: ' client ',
+          apiKey: ' api ',
+          cookiePassword: ' cookie ',
+          redirectUri: ' https://example.com/workos ',
+          sessionCookie: ' custom-workos ',
+        },
+      },
+      clerk: {
+        app: {
+          publishableKey: ' pk ',
+          secretKey: ' sk ',
+          jwtKey: ' jwt ',
+          apiUrl: ' https://api.example.com ',
+          frontendApi: ' https://clerk.example.com ',
+          sessionCookie: ' custom-clerk ',
+        },
+      },
+    })).toMatchObject({
+      socialEncryptionKey: 'social-secret',
+      emailVerification: {
+        required: true,
+      },
+      personalAccessTokens: {
+        defaultAbilities: ['projects.read'],
+      },
+      providers: {
+        users: {
+          model: 'User',
+        },
+      },
+      passwords: {
+        users: {
+          table: 'password_reset_tokens_custom',
+          expire: 90,
+          throttle: 5,
+        },
+      },
+      social: {
+        google: {
+          clientId: 'client-id',
+          clientSecret: 'secret',
+          redirectUri: 'https://example.com/callback',
+          scopes: ['openid'],
+        },
+      },
+      workos: {
+        dashboard: {
+          clientId: 'client',
+          apiKey: 'api',
+          cookiePassword: 'cookie',
+          redirectUri: 'https://example.com/workos',
+          sessionCookie: 'custom-workos',
+        },
+      },
+      clerk: {
+        app: {
+          publishableKey: 'pk',
+          secretKey: 'sk',
+          jwtKey: 'jwt',
+          apiUrl: 'https://api.example.com',
+          frontendApi: 'https://clerk.example.com',
+          sessionCookie: 'custom-clerk',
+        },
+      },
+    })
+    expect(normalizeAuthConfig({
+      social: {
+        google: {},
+      },
+      workos: {
+        dashboard: {},
+      },
+      clerk: {
+        app: {},
+      },
+    })).toMatchObject({
+      socialEncryptionKey: undefined,
+      social: {
+        google: {
+          runtime: undefined,
+          clientId: undefined,
+          clientSecret: undefined,
+          redirectUri: undefined,
+          scopes: [],
+        },
+      },
+      workos: {
+        dashboard: {
+          clientId: undefined,
+          apiKey: undefined,
+          cookiePassword: undefined,
+          redirectUri: undefined,
+          sessionCookie: 'wos-session',
+        },
+      },
+      clerk: {
+        app: {
+          publishableKey: undefined,
+          secretKey: undefined,
+          jwtKey: undefined,
+          apiUrl: undefined,
+          frontendApi: undefined,
+          sessionCookie: '__session',
+          authorizedParties: [],
+        },
       },
     })
   })

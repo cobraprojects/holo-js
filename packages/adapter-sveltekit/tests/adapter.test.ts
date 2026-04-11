@@ -215,6 +215,8 @@ describe('@holo-js/adapter-sveltekit', () => {
 
     await expect(helpers.getApp()).resolves.toBe(project)
     await expect(helpers.getProject()).resolves.toBe(project)
+    await expect(helpers.getSession()).resolves.toBeUndefined()
+    await expect(helpers.getAuth()).resolves.toBeUndefined()
     await expect(helpers.useConfig('services')).resolves.toEqual({
       services: {
         secret: 'svelte-secret',
