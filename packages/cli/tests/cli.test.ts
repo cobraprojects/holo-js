@@ -766,6 +766,14 @@ export default {
     expect(projectInternals.renderAuthMigration('create_auth_identities')).toContain('table.string(\'user_id\')')
     expect(projectInternals.renderAuthConfig({ workos: true })).toContain('WORKOS_CLIENT_ID')
     expect(projectInternals.renderAuthConfig({ clerk: true })).toContain('CLERK_PUBLISHABLE_KEY')
+    expect(projectInternals.authFeaturesRequireConfigUpdate({ socialProviders: ['google'] })).toBe(true)
+    expect(projectInternals.detectAuthInstallFeaturesFromConfig(projectInternals.renderAuthConfig({
+      workos: true,
+      clerk: true,
+    }))).toMatchObject({
+      workos: true,
+      clerk: true,
+    })
     expect(projectInternals.renderAuthConfig()).toContain('socialEncryptionKey: env(\'AUTH_SOCIAL_ENCRYPTION_KEY\')')
     expect(projectInternals.renderAuthConfig()).not.toContain('currentUserEndpoint')
     expect(projectInternals.renderAuthEnvFiles({ socialProviders: ['linkedin'] }).env).toContain('AUTH_LINKEDIN_CLIENT_ID=')
@@ -1281,6 +1289,22 @@ export default defineSessionConfig({
     tempDirs.push(collisionRoot)
     await writeProjectFile(collisionRoot, 'server/models/User.ts', 'export default null\n')
     await expect(projectInternals.installAuthIntoProject(collisionRoot)).rejects.toThrow('Auth support is partially installed.')
+  })
+
+  it('treats an existing session config as part of partial auth collisions once auth artifacts already exist', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, 'config/session.ts', `
+import { defineSessionConfig } from '@holo-js/config'
+
+export default defineSessionConfig({
+  driver: 'file',
+})
+`)
+    await writeProjectFile(projectRoot, 'server/models/User.ts', 'export default null\n')
+
+    await expect(projectInternals.installAuthIntoProject(projectRoot)).rejects.toThrow('config/session.ts')
   })
 
   it('refuses to overwrite manually edited auth config when adding auth features', async () => {

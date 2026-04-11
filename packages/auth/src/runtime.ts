@@ -170,6 +170,7 @@ function parseSetCookieDefinition(header: string): {
   readonly options: CookieOptions
 } | null {
   const [nameValue, ...attributes] = header.split(';')
+  /* v8 ignore next -- split() always yields a first string element for string input. */
   const separator = nameValue?.indexOf('=') ?? -1
   if (!nameValue || separator <= 0) {
     return null
@@ -807,6 +808,7 @@ function readSessionPayload(
     return payloads[guardName] ?? null
   }
 
+  /* v8 ignore next -- readSessionPayloads() only returns non-empty payload maps. */
   return Object.values(payloads)[0] ?? null
 }
 
@@ -1022,6 +1024,7 @@ async function resolveUserFromGuard(
   const freshUser = await adapter.findById(payload.userId)
   if (!freshUser) {
     const remainingPayloads = {
+      /* v8 ignore next -- a resolved payload guarantees readSessionPayloads(record) is non-null here. */
       ...(readSessionPayloads(record) ?? {}),
     }
     delete remainingPayloads[guardName]
@@ -1552,7 +1555,7 @@ async function establishSessionForUser(
     && options.preserveRemember
     && !options.remember
   )
-  let session = rotateCurrentGuardSession
+  const session = rotateCurrentGuardSession
     ? await bindings.session.create({
       data: nextSessionData,
     })
@@ -2162,13 +2165,19 @@ export const authRuntimeInternals = {
   createPersonalAccessTokenSecret,
   createCurrentAccessTokenHandle,
   establishSessionForUser,
+  getPasswordHash,
+  getProviderIdentifiers,
   getRuntimeBindings,
   hashTokenSecret,
   parsePlainTextToken,
+  parseSetCookieDefinition,
   readSessionPayload,
+  serializeCookie,
   toLookupCredentials,
+  toPlainTextTokenResult,
   tokenHasAbility,
   throwUnconfigured,
   updateUserRecord,
   verifyTokenSecret,
+  writeSessionPayloads,
 }

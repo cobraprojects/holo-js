@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { DB } from '@holo-js/db'
 import type { DatabaseContext } from '@holo-js/db'
+import { connectionAsyncContext } from '@holo-js/db'
 import type {
   NormalizedQueueDatabaseConnectionConfig,
   QueueAsyncDriver,
@@ -80,6 +81,15 @@ function createPlaceholders(
   return queueDatabaseInternals.createPlaceholderList(connection.getDialect(), count, startIndex).split(', ')
 }
 
+function resolveDatabaseConnection(name: string): DatabaseContext {
+  const active = connectionAsyncContext.getActive()?.connection
+  if (active && active.getConnectionName() === name) {
+    return active
+  }
+
+  return DB.connection(name)
+}
+
 export class DatabaseQueueDriver implements QueueAsyncDriver {
   readonly name: string
   readonly driver = 'database' as const
@@ -96,7 +106,7 @@ export class DatabaseQueueDriver implements QueueAsyncDriver {
   }
 
   private async getConnection(): Promise<DatabaseContext> {
-    return queueDatabaseInternals.ensureConnectionReady(DB.connection(this.connection.connection))
+    return queueDatabaseInternals.ensureConnectionReady(resolveDatabaseConnection(this.connection.connection))
   }
 
   private getQuotedTable(connection: DatabaseContext): string {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   MySQLAdapter,
   PostgresAdapter,
@@ -296,6 +296,75 @@ describe('driver adapters', () => {
       affectedRows: 2,
       lastInsertId: 12 })
     expect(executed).toEqual([])
+  })
+
+  it('loads split driver packages through indirect imports outside Vitest', async () => {
+    const originalVitest = process.env.VITEST
+    const concreteAdapter = {
+      async initialize() {},
+      async disconnect() {},
+      isConnected() {
+        return true
+      },
+      async query() {
+        return {
+          rows: [],
+          rowCount: 0,
+        }
+      },
+      async execute() {
+        return {}
+      },
+      async beginTransaction() {},
+      async commit() {},
+      async rollback() {},
+    }
+
+    process.env.VITEST = ''
+
+    try {
+      const evalSpy = vi.spyOn(globalThis, 'eval').mockImplementation((source: string) => {
+        expect(source).toBe(`import(${JSON.stringify('@holo-js/db-sqlite')})`)
+        return Promise.resolve({
+          createSQLiteAdapter() {
+            return concreteAdapter
+          },
+        }) as never
+      })
+
+      const adapter = new SQLiteAdapter()
+      await adapter.initialize()
+
+      expect(evalSpy).toHaveBeenCalledTimes(1)
+      expect(adapter.isConnected()).toBe(true)
+    } finally {
+      if (typeof originalVitest === 'undefined') {
+        delete process.env.VITEST
+      } else {
+        process.env.VITEST = originalVitest
+      }
+    }
+  })
+
+  it('wraps missing split driver packages with installation guidance', async () => {
+    const originalVitest = process.env.VITEST
+
+    process.env.VITEST = ''
+
+    try {
+      vi.spyOn(globalThis, 'eval').mockRejectedValueOnce(Object.assign(new Error('missing sqlite driver'), {
+        code: 'ERR_MODULE_NOT_FOUND',
+      }))
+
+      const adapter = new SQLiteAdapter()
+      await expect(adapter.initialize()).rejects.toThrow('[@holo-js/db] SQLite support requires @holo-js/db-sqlite to be installed.')
+    } finally {
+      if (typeof originalVitest === 'undefined') {
+        delete process.env.VITEST
+      } else {
+        process.env.VITEST = originalVitest
+      }
+    }
   })
 
   it('falls back to array-based SQLite bindings when spread bindings trigger an arity error', async () => {

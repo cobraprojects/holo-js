@@ -1238,4 +1238,32 @@ describe('@holo-js/queue redis driver', () => {
     const existing = new queue.RedisQueueDriverError('redis', 'reserve job', new Error('already wrapped'))
     expect(queue.redisQueueDriverInternals.wrapRedisError('redis', 'reserve job', existing)).toBe(existing)
   })
+
+  it('loads the redis driver package through the indirect loader outside Vitest', async () => {
+    const { queue } = await loadRedisQueueModule()
+    const originalVitest = process.env.VITEST
+    const redisModule = {
+      Queue: class FakeQueue {},
+      Worker: class FakeWorker {},
+      Job: class FakeJob {},
+    }
+
+    process.env.VITEST = ''
+
+    try {
+      const evalSpy = vi.spyOn(globalThis, 'eval').mockImplementation((source: string) => {
+        expect(source).toBe(`import(${JSON.stringify('@holo-js/queue-redis')})`)
+        return Promise.resolve(redisModule) as never
+      })
+
+      await expect(queue.redisQueueDriverInternals.loadRedisDriverModule()).resolves.toBe(redisModule)
+      expect(evalSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      if (typeof originalVitest === 'undefined') {
+        delete process.env.VITEST
+      } else {
+        process.env.VITEST = originalVitest
+      }
+    }
+  })
 })

@@ -1,11 +1,21 @@
 import { randomUUID } from 'node:crypto'
 import { DB } from '@holo-js/db'
 import type { DatabaseContext } from '@holo-js/db'
+import { connectionAsyncContext } from '@holo-js/db'
 import { getQueueRuntime, type QueueFailedJobRecord, type QueueFailedJobStore, type QueueReservedJob } from '@holo-js/queue'
 import { queueDatabaseInternals, type StoredFailedQueueJobRow } from './database'
 
 function getFailedStoreConfig() {
   return getQueueRuntime().config.failed
+}
+
+function resolveDatabaseConnection(name: string): DatabaseContext {
+  const active = connectionAsyncContext.getActive()?.connection
+  if (active && active.getConnectionName() === name) {
+    return active
+  }
+
+  return DB.connection(name)
 }
 
 async function getFailedStoreConnection(): Promise<{ connection: DatabaseContext, tableName: string } | null> {
@@ -15,7 +25,7 @@ async function getFailedStoreConnection(): Promise<{ connection: DatabaseContext
   }
 
   const tableName = queueDatabaseInternals.normalizeIdentifierPath(config.table, 'Failed jobs table name')
-  const connection = await queueDatabaseInternals.ensureConnectionReady(DB.connection(config.connection))
+  const connection = await queueDatabaseInternals.ensureConnectionReady(resolveDatabaseConnection(config.connection))
   return {
     connection,
     tableName,

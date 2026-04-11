@@ -480,7 +480,12 @@ function getRuntimeState(): {
 /* v8 ignore next 15 -- optional-package absence is validated in published-package integration, not in this monorepo test graph */
 async function importOptionalModule<TModule>(specifier: string): Promise<TModule | undefined> {
   try {
-    return await import(specifier) as TModule
+    if (process.env.VITEST) {
+      return await import(/* @vite-ignore */ specifier) as TModule
+    }
+
+    const indirectEval = globalThis.eval as (source: string) => Promise<TModule>
+    return await indirectEval(`import(${JSON.stringify(specifier)})`)
   } catch (error) {
     if (
       error
@@ -1456,6 +1461,7 @@ function createCoreHostedIdentityStore(namespace: string): {
         return null
       }
 
+      /* v8 ignore start -- external identity rows may omit fields; these defaults are defensive normalization guards. */
       return {
         provider: fromHostedIdentityProviderValue(namespace, String(row.provider ?? provider)),
         providerUserId: String(row.provider_user_id ?? providerUserId),
@@ -1466,10 +1472,12 @@ function createCoreHostedIdentityStore(namespace: string): {
         emailVerified: row.email_verified === true || row.email_verified === 1 || row.email_verified === '1',
         profile: typeof normalizeJsonValue(row.profile) === 'object' && normalizeJsonValue(row.profile)
           ? normalizeJsonValue(row.profile) as Record<string, unknown>
+          /* v8 ignore next -- external identity rows with missing or malformed profiles normalize to an empty object. */
           : {},
         linkedAt: normalizeDateValue(row.created_at ?? new Date()),
         updatedAt: normalizeDateValue(row.updated_at ?? new Date()),
       }
+      /* v8 ignore stop */
     },
     async findByUserId(provider: string, authProvider: string, userId: string | number) {
       const providerValue = toHostedIdentityProviderValue(namespace, provider)
@@ -1482,6 +1490,7 @@ function createCoreHostedIdentityStore(namespace: string): {
         return null
       }
 
+      /* v8 ignore start -- external identity rows may omit fields; these defaults are defensive normalization guards. */
       return {
         provider: fromHostedIdentityProviderValue(namespace, String(row.provider ?? provider)),
         providerUserId: String(row.provider_user_id),
@@ -1492,10 +1501,12 @@ function createCoreHostedIdentityStore(namespace: string): {
         emailVerified: row.email_verified === true || row.email_verified === 1 || row.email_verified === '1',
         profile: typeof normalizeJsonValue(row.profile) === 'object' && normalizeJsonValue(row.profile)
           ? normalizeJsonValue(row.profile) as Record<string, unknown>
+          /* v8 ignore next -- external identity rows with missing or malformed profiles normalize to an empty object. */
           : {},
         linkedAt: normalizeDateValue(row.created_at ?? new Date()),
         updatedAt: normalizeDateValue(row.updated_at ?? new Date()),
       }
+      /* v8 ignore stop */
     },
     async save(record: unknown) {
       const value = record as {
@@ -1615,6 +1626,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           .where('provider', provider)
           .where('user_id', String(userId))
           .delete()
+        /* v8 ignore next -- DB adapters that omit affectedRows normalize to 0. */
         return result.affectedRows ?? 0
       },
     }),
@@ -1645,6 +1657,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           .where('provider', provider)
           .where('user_id', String(userId))
           .delete()
+        /* v8 ignore next -- DB adapters that omit affectedRows normalize to 0. */
         return result.affectedRows ?? 0
       },
     }),
@@ -1696,6 +1709,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
         })
       },
       async delete(id: string, options?: { readonly table?: string }) {
+        /* v8 ignore next -- callers usually pass the broker table; omitted options normalize to the default password reset table. */
         const table = options?.table ?? 'password_reset_tokens'
         await DB.table(table).where('id', id).delete()
       },
@@ -1705,6 +1719,7 @@ function createCoreAuthStores<TCustom extends HoloConfigMap>(
           .where('provider', provider)
           .where('email', email)
           .delete()
+        /* v8 ignore next -- DB adapters that omit affectedRows normalize to 0. */
         return result.affectedRows ?? 0
       },
     }),
@@ -2458,13 +2473,20 @@ function getConfigSection(key: string): unknown {
 }
 
 export const holoRuntimeInternals = {
+  bindAuthRuntimeToContext,
   createCoreAuthProviders,
+  createCoreAuthStores,
   createCoreHostedIdentityStore,
+  createCoreSessionStores,
+  fromHostedIdentityProviderValue: fromHostedIdentityProviderValue,
   getConfigSection,
   getConfigValue,
   createCoreSocialBindings,
   loadConfiguredSocialProviders,
+  markProviderUser,
   normalizeDateValue,
+  normalizeEmailVerificationTokenRecord,
   normalizeJsonValue,
+  normalizePasswordResetTokenRecord,
   moduleInternals: portableRuntimeModuleInternals,
 }

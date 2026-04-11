@@ -6,15 +6,22 @@ export interface ActiveConnectionScope {
   connection: DatabaseContext
 }
 
-export class AsyncConnectionContext {
-  private readonly storage = new AsyncLocalStorage<ActiveConnectionScope>()
+function getAsyncConnectionStorage(): AsyncLocalStorage<ActiveConnectionScope> {
+  const runtime = globalThis as typeof globalThis & {
+    __holoAsyncConnectionStorage__?: AsyncLocalStorage<ActiveConnectionScope>
+  }
 
+  runtime.__holoAsyncConnectionStorage__ ??= new AsyncLocalStorage<ActiveConnectionScope>()
+  return runtime.__holoAsyncConnectionStorage__
+}
+
+export class AsyncConnectionContext {
   run<T>(scope: ActiveConnectionScope, callback: () => T): T {
-    return this.storage.run(scope, callback)
+    return getAsyncConnectionStorage().run(scope, callback)
   }
 
   getActive(): ActiveConnectionScope | undefined {
-    return this.storage.getStore()
+    return getAsyncConnectionStorage().getStore()
   }
 }
 

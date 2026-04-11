@@ -2067,6 +2067,394 @@ export default {
     expect(identityRows[0]?.user_id).toBe('user-1')
   })
 
+  it('covers core auth store helpers, provider markers, and pending auth providers directly', async () => {
+    const root = await createProject({
+      auth: true,
+      session: 'database',
+    })
+    const runtime = await createHolo(root, {
+      environment: 'development',
+    })
+    await runtime.initialize()
+
+    const schema = createSchemaService(DB.connection())
+    await schema.createTable('sessions', (table) => {
+      table.string('id').primaryKey()
+      table.string('store')
+      table.json('data')
+      table.timestamp('created_at')
+      table.timestamp('last_activity_at')
+      table.timestamp('expires_at')
+      table.timestamp('invalidated_at').nullable()
+      table.string('remember_token_hash').nullable()
+    })
+    await schema.createTable('personal_access_tokens', (table) => {
+      table.uuid('id').primaryKey()
+      table.string('provider').default('users')
+      table.string('user_id')
+      table.string('name')
+      table.string('token_hash').unique()
+      table.json('abilities').default([])
+      table.timestamp('last_used_at').nullable()
+      table.timestamp('expires_at').nullable()
+      table.timestamps()
+    })
+    await schema.createTable('email_verification_tokens', (table) => {
+      table.uuid('id').primaryKey()
+      table.string('provider').default('users')
+      table.string('user_id')
+      table.string('email')
+      table.string('token_hash')
+      table.timestamp('expires_at')
+      table.timestamp('used_at').nullable()
+      table.timestamps()
+    })
+    await schema.createTable('password_reset_tokens', (table) => {
+      table.uuid('id').primaryKey()
+      table.string('provider').default('users')
+      table.string('email')
+      table.string('token_hash')
+      table.timestamp('created_at')
+      table.timestamp('expires_at')
+      table.timestamp('used_at').nullable()
+      table.timestamp('updated_at')
+    })
+    await schema.createTable('admin_password_reset_tokens', (table) => {
+      table.uuid('id').primaryKey()
+      table.string('provider').default('users')
+      table.string('email')
+      table.string('token_hash')
+      table.timestamp('created_at')
+      table.timestamp('expires_at')
+      table.timestamp('used_at').nullable()
+      table.timestamp('updated_at')
+    })
+    await schema.createTable('auth_identities', (table) => {
+      table.id()
+      table.string('user_id')
+      table.string('guard').default('web')
+      table.string('auth_provider').default('users')
+      table.string('provider')
+      table.string('provider_user_id')
+      table.string('email').nullable()
+      table.boolean('email_verified').default(false)
+      table.json('profile').default({})
+      table.timestamps()
+    })
+
+    const stores = holoRuntimeInternals.createCoreAuthStores(runtime.loadedConfig)
+    await stores.tokens.create({
+      id: 'token-1',
+      provider: 'users',
+      userId: 'user-1',
+      name: 'browser',
+      abilities: ['orders.read'],
+      tokenHash: 'sha256$hash',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      lastUsedAt: new Date('2026-01-02T00:00:00.000Z'),
+      expiresAt: null,
+    })
+    await expect(stores.tokens.findById('token-1')).resolves.toMatchObject({
+      id: 'token-1',
+      userId: 'user-1',
+      lastUsedAt: new Date('2026-01-02T00:00:00.000Z'),
+    })
+    await expect(stores.tokens.listByUserId('users', 'user-1')).resolves.toHaveLength(1)
+    await stores.tokens.update({
+      id: 'token-1',
+      provider: 'users',
+      userId: 'user-1',
+      name: 'mobile',
+      abilities: ['*'],
+      tokenHash: 'sha256$hash',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      expiresAt: new Date('2026-01-03T00:00:00.000Z'),
+    })
+    await expect(stores.tokens.findById('token-1')).resolves.toMatchObject({
+      name: 'mobile',
+      expiresAt: new Date('2026-01-03T00:00:00.000Z'),
+    })
+    await expect(stores.tokens.deleteByUserId('users', 'user-1')).resolves.toBe(1)
+    await stores.tokens.create({
+      id: 'token-2',
+      provider: 'users',
+      userId: 'user-2',
+      name: 'browser',
+      abilities: [],
+      tokenHash: 'sha256$hash',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      expiresAt: null,
+    })
+    await stores.tokens.delete('token-2')
+    await expect(stores.tokens.findById('token-2')).resolves.toBeNull()
+
+    await stores.emailVerificationTokens.create({
+      id: 'verify-1',
+      provider: 'users',
+      userId: 'user-1',
+      email: 'ava@example.com',
+      tokenHash: 'sha256$verify',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      expiresAt: new Date('2026-01-02T00:00:00.000Z'),
+    })
+    await expect(stores.emailVerificationTokens.findById('verify-1')).resolves.toMatchObject({
+      userId: 'user-1',
+      email: 'ava@example.com',
+    })
+    await expect(stores.emailVerificationTokens.deleteByUserId('users', 'user-1')).resolves.toBe(1)
+    await stores.emailVerificationTokens.create({
+      id: 'verify-2',
+      provider: 'users',
+      userId: 'user-2',
+      email: 'mina@example.com',
+      tokenHash: 'sha256$verify',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      expiresAt: new Date('2026-01-02T00:00:00.000Z'),
+    })
+    await stores.emailVerificationTokens.delete('verify-2')
+    await expect(stores.emailVerificationTokens.findById('verify-2')).resolves.toBeNull()
+
+    await stores.passwordResetTokens.create({
+      id: 'reset-1',
+      provider: 'users',
+      email: 'ava@example.com',
+      tokenHash: 'sha256$reset',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      expiresAt: new Date('2026-01-02T00:00:00.000Z'),
+    })
+    await expect(stores.passwordResetTokens.findById('reset-1')).resolves.toMatchObject({
+      provider: 'users',
+    })
+    await stores.passwordResetTokens.create({
+      id: 'reset-admin-1',
+      provider: 'users',
+      email: 'ava@example.com',
+      table: 'admin_password_reset_tokens',
+      tokenHash: 'sha256$reset',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      expiresAt: new Date('2026-01-02T00:00:00.000Z'),
+    })
+    await expect(stores.passwordResetTokens.findLatestByEmail('users', 'ava@example.com', {
+      table: 'admin_password_reset_tokens',
+    })).resolves.toMatchObject({
+      id: 'reset-admin-1',
+      email: 'ava@example.com',
+      table: 'admin_password_reset_tokens',
+    })
+    await expect(stores.passwordResetTokens.deleteByEmail('users', 'ava@example.com', {
+      table: 'admin_password_reset_tokens',
+    })).resolves.toBe(1)
+    await stores.passwordResetTokens.create({
+      id: 'reset-2',
+      provider: 'users',
+      email: 'ava@example.com',
+      tokenHash: 'sha256$reset',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      expiresAt: new Date('2026-01-02T00:00:00.000Z'),
+    })
+    await stores.passwordResetTokens.delete('reset-2')
+    await expect(stores.passwordResetTokens.findById('reset-2')).resolves.toBeNull()
+
+    expect(holoRuntimeInternals.normalizeEmailVerificationTokenRecord({
+      id: 'verify-row',
+      provider: 'users',
+      user_id: 'user-1',
+      email: 'ava@example.com',
+      token_hash: 'sha256$row',
+      created_at: '2026-01-01T00:00:00.000Z',
+      expires_at: '2026-01-02T00:00:00.000Z',
+    })).toMatchObject({
+      id: 'verify-row',
+      userId: 'user-1',
+    })
+    expect(holoRuntimeInternals.normalizePasswordResetTokenRecord({
+      id: 'reset-row',
+      email: 'ava@example.com',
+      token_hash: 'sha256$row',
+      created_at: '2026-01-01T00:00:00.000Z',
+      expires_at: '2026-01-02T00:00:00.000Z',
+    })).toMatchObject({
+      provider: 'users',
+      table: undefined,
+    })
+
+    const frozenUser = Object.freeze({ id: 1 })
+    expect(holoRuntimeInternals.markProviderUser('user-1', 'users')).toBe('user-1')
+    expect(holoRuntimeInternals.markProviderUser(frozenUser, 'users')).toBe(frozenUser)
+    expect(holoRuntimeInternals.fromHostedIdentityProviderValue('workos', 'google')).toBe('google')
+
+    await writeFile(join(root, 'server/models/User.ts'), `
+export default undefined
+export const holoModelPendingSchema = true
+`, 'utf8')
+    const pendingProviders = await holoRuntimeInternals.createCoreAuthProviders(root, runtime.loadedConfig)
+    const pendingAdapter = pendingProviders.users as {
+      findById(id: string | number): Promise<unknown>
+      findByCredentials(credentials: Record<string, unknown>): Promise<unknown>
+      create(input: Record<string, unknown>): Promise<unknown>
+      update(id: unknown, input: Record<string, unknown>): Promise<unknown>
+      matchesUser(user: unknown): boolean
+      getId(user: unknown): string | number
+      getPasswordHash(user: unknown): string | null | undefined
+      getEmailVerifiedAt(user: unknown): Date | string | null | undefined
+      serialize(user: unknown): unknown
+    }
+
+    await expect(pendingAdapter.findById(1)).rejects.toThrow('pending generated schema output')
+    await expect(pendingAdapter.findByCredentials({ email: 'ava@example.com' })).rejects.toThrow('pending generated schema output')
+    await expect(pendingAdapter.create({ email: 'ava@example.com' })).rejects.toThrow('pending generated schema output')
+    await expect(pendingAdapter.update(1, { email: 'ava@example.com' })).rejects.toThrow('pending generated schema output')
+    expect(pendingAdapter.matchesUser({})).toBe(false)
+    expect(() => pendingAdapter.getId({})).toThrow('pending generated schema output')
+    expect(() => pendingAdapter.getPasswordHash({})).toThrow('pending generated schema output')
+    expect(() => pendingAdapter.getEmailVerifiedAt({})).toThrow('pending generated schema output')
+    expect(() => pendingAdapter.serialize({})).toThrow('pending generated schema output')
+  })
+
+  it('covers hosted identity fallback values and default auth-store branches', async () => {
+    const root = await createProject({
+      auth: true,
+      session: 'database',
+      workos: true,
+    })
+    const runtime = await createHolo(root, {
+      environment: 'development',
+    })
+    await runtime.initialize()
+
+    const schema = createSchemaService(DB.connection())
+    await schema.createTable('auth_identities', (table) => {
+      table.id()
+      table.string('user_id')
+      table.string('guard').default('web')
+      table.string('auth_provider').default('users')
+      table.string('provider')
+      table.string('provider_user_id')
+      table.string('email').nullable()
+      table.boolean('email_verified').default(false)
+      table.json('profile').default({})
+      table.timestamps()
+    })
+    await schema.createTable('email_verification_tokens', (table) => {
+      table.uuid('id').primaryKey()
+      table.string('provider').default('users')
+      table.string('user_id')
+      table.string('email')
+      table.string('token_hash')
+      table.timestamp('expires_at')
+      table.timestamp('used_at').nullable()
+      table.timestamps()
+    })
+    await schema.createTable('password_reset_tokens', (table) => {
+      table.uuid('id').primaryKey()
+      table.string('provider').default('users')
+      table.string('email')
+      table.string('token_hash')
+      table.timestamp('created_at')
+      table.timestamp('expires_at')
+      table.timestamp('used_at').nullable()
+      table.timestamp('updated_at')
+    })
+    await schema.createTable('personal_access_tokens', (table) => {
+      table.uuid('id').primaryKey()
+      table.string('provider').default('users')
+      table.string('user_id')
+      table.string('name')
+      table.string('token_hash').unique()
+      table.json('abilities').default([])
+      table.timestamp('last_used_at').nullable()
+      table.timestamp('expires_at').nullable()
+      table.timestamps()
+    })
+
+    const hostedIdentityStore = holoRuntimeInternals.createCoreHostedIdentityStore('workos')
+    await expect(hostedIdentityStore.findByUserId('default', 'users', 999)).resolves.toBeNull()
+    await DB.table('auth_identities').insert({
+      user_id: 'user-1',
+      provider: 'workos:default',
+      provider_user_id: 'provider-user-1',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-02T00:00:00.000Z',
+    })
+    await expect(hostedIdentityStore.findByProviderUserId('default', 'provider-user-1')).resolves.toMatchObject({
+      provider: 'default',
+      providerUserId: 'provider-user-1',
+      guard: 'web',
+      authProvider: 'users',
+      userId: 'user-1',
+      profile: {},
+    })
+    await hostedIdentityStore.save({
+      provider: 'default',
+      providerUserId: 'provider-user-1',
+      guard: 'admin',
+      authProvider: 'users',
+      userId: 'user-1',
+      email: undefined,
+      emailVerified: false,
+      profile: {},
+      linkedAt: new Date('2026-01-03T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-04T00:00:00.000Z'),
+    })
+    const updatedIdentityRows = await DB.table('auth_identities')
+      .where('provider', 'workos:default')
+      .where('provider_user_id', 'provider-user-1')
+      .get<Record<string, unknown>>()
+    expect(updatedIdentityRows).toHaveLength(1)
+    expect(updatedIdentityRows[0]?.guard).toBe('admin')
+
+    const stores = holoRuntimeInternals.createCoreAuthStores(runtime.loadedConfig)
+    await DB.table('personal_access_tokens').insert({
+      id: 'token-invalid',
+      provider: 'users',
+      user_id: 'user-1',
+      name: 'browser',
+      token_hash: 'sha256$hash',
+      abilities: '{}',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    })
+    await expect(stores.tokens.findById('token-invalid')).resolves.toMatchObject({
+      abilities: [],
+    })
+    await expect(stores.tokens.deleteByUserId('users', 'missing')).resolves.toBe(0)
+    await expect(stores.emailVerificationTokens.deleteByUserId('users', 'missing')).resolves.toBe(0)
+
+    await stores.passwordResetTokens.create({
+      id: 'reset-default',
+      provider: 'users',
+      email: 'ava@example.com',
+      tokenHash: 'sha256$reset',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      expiresAt: new Date('2026-01-02T00:00:00.000Z'),
+    })
+    await expect(stores.passwordResetTokens.findLatestByEmail('users', 'ava@example.com')).resolves.toMatchObject({
+      id: 'reset-default',
+      table: 'password_reset_tokens',
+    })
+    await stores.passwordResetTokens.delete('reset-default')
+    await expect(stores.passwordResetTokens.deleteByEmail('users', 'missing@example.com')).resolves.toBe(0)
+  })
+
+  it('fails session store boot when the configured default store is unavailable', async () => {
+    const root = await createProject({
+      auth: true,
+      session: 'database',
+    })
+    const runtime = await createHolo(root, {
+      environment: 'development',
+    })
+    const sessionModule = await import('../../session/src/index.ts')
+
+    await expect(holoRuntimeInternals.createCoreSessionStores(root, {
+      ...runtime.loadedConfig,
+      session: {
+        ...runtime.loadedConfig.session,
+        driver: 'missing' as never,
+      },
+    }, sessionModule)).rejects.toThrow('runtime cannot boot it automatically')
+  })
+
   it('resolves model entities through toAttributes() and throws when a configured model file is missing', async () => {
     const root = await createProject({
       auth: true,

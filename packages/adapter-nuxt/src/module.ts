@@ -122,7 +122,15 @@ async function importOptionalStorageModule(): Promise<StorageModule | undefined>
 /* v8 ignore next 15 -- optional-package absence is validated in published-package integration, not in this monorepo test graph */
 async function importOptionalStorageS3Module(): Promise<StorageS3Module | undefined> {
   try {
-    const storageS3 = await import('./runtime/drivers/s3') as Partial<StorageS3Module>
+    if (process.env.VITEST) {
+      const storageS3 = await import(/* @vite-ignore */ '@holo-js/storage-s3') as Partial<StorageS3Module>
+      return typeof storageS3.default === 'undefined'
+        ? undefined
+        : storageS3 as StorageS3Module
+    }
+
+    const indirectEval = globalThis.eval as (source: string) => Promise<Partial<StorageS3Module>>
+    const storageS3 = await indirectEval(`import(${JSON.stringify('@holo-js/storage-s3')})`)
     return typeof storageS3.default === 'undefined'
       ? undefined
       : storageS3 as StorageS3Module

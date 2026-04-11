@@ -1,5 +1,5 @@
 import { describe, expectTypeOf, it } from 'vitest'
-import auth, { getAuthRuntime, type AuthEstablishedSession, type AuthGuardFacade, type AuthImpersonationState, type AuthLogoutResult, type AuthProviderAdapter, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type register, type user } from '../src'
+import auth, { type getAuthRuntime, type AuthEstablishedSession, type AuthGuardFacade, type AuthImpersonationState, type AuthLogoutResult, type AuthProviderAdapter, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type register, type user } from '../src'
 import clientAuth, { type refreshUser as refreshClientUser, type user as clientUser } from '../src/client'
 
 declare module '../src' {

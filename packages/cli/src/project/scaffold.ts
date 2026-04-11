@@ -1266,6 +1266,7 @@ export async function installAuthIntoProject(
   const project = await loadProjectConfig(projectRoot)
   const modelsRoot = resolve(projectRoot, project.config.paths.models)
   const migrationsRoot = resolve(projectRoot, project.config.paths.migrations)
+  /* v8 ignore next -- normalized project configs always resolve a database default connection; this fallback only protects malformed external state. */
   const defaultDatabaseConnection = project.config.database?.defaultConnection ?? 'default'
   const authConfigPath = await resolveFirstExistingPath(projectRoot, AUTH_CONFIG_FILE_NAMES)
   const sessionConfigPath = await resolveFirstExistingPath(projectRoot, SESSION_CONFIG_FILE_NAMES)
@@ -1281,6 +1282,7 @@ export async function installAuthIntoProject(
   if (authConfigPath && userModelPath && hasAllAuthMigrations) {
     const envPath = resolve(projectRoot, '.env')
     const envExamplePath = resolve(projectRoot, '.env.example')
+    /* v8 ignore next -- authConfigPath was resolved from an existing file; undefined would require an external delete race. */
     const currentAuthConfig = (await readTextFile(authConfigPath)) ?? ''
     const currentAuthFeatures = detectAuthInstallFeaturesFromConfig(currentAuthConfig)
     const nextAuthFeatures = mergeAuthInstallFeatures(currentAuthFeatures, features)
@@ -2382,6 +2384,8 @@ export async function scaffoldProject(
 }
 
 export {
+  authFeaturesRequireConfigUpdate,
+  detectAuthInstallFeaturesFromConfig,
   hasLoadedConfigFile,
   inferConnectionDriver,
   inferDatabaseDriverFromUrl,

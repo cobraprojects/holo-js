@@ -237,6 +237,114 @@ describe('@holo-js/core portable runtime', () => {
     expect(() => getHolo()).toThrow('Holo runtime is not initialized.')
   })
 
+  it('binds auth runtimes to the async auth context for every facade method', async () => {
+    const activate = vi.fn()
+    const guard = {
+      check: vi.fn(async () => true),
+      user: vi.fn(async () => ({ id: 1 })),
+      refreshUser: vi.fn(async () => ({ id: 2 })),
+      id: vi.fn(async () => 3),
+      currentAccessToken: vi.fn(async () => ({ id: 'token' })),
+      login: vi.fn(async () => ({ guard: 'web', user: { id: 1 }, sessionId: 'session', cookies: [] })),
+      loginUsing: vi.fn(async () => ({ guard: 'web', user: { id: 1 }, sessionId: 'session', cookies: [] })),
+      loginUsingId: vi.fn(async () => ({ guard: 'web', user: { id: 1 }, sessionId: 'session', cookies: [] })),
+      impersonate: vi.fn(async () => ({ guard: 'web', user: { id: 2 }, sessionId: 'session', cookies: [] })),
+      impersonateById: vi.fn(async () => ({ guard: 'web', user: { id: 2 }, sessionId: 'session', cookies: [] })),
+      impersonation: vi.fn(async () => ({ active: true })),
+      stopImpersonating: vi.fn(async () => ({ id: 1 })),
+      logout: vi.fn(async () => ({ guard: 'web', cookies: [] })),
+    }
+    const runtime = {
+      check: vi.fn(async () => true),
+      user: vi.fn(async () => ({ id: 1 })),
+      refreshUser: vi.fn(async () => ({ id: 2 })),
+      id: vi.fn(async () => 1),
+      currentAccessToken: vi.fn(async () => ({ id: 'token' })),
+      hashPassword: vi.fn(async () => 'digest'),
+      verifyPassword: vi.fn(async () => true),
+      needsPasswordRehash: vi.fn(async () => false),
+      login: vi.fn(async () => ({ guard: 'web', user: { id: 1 }, sessionId: 'session', cookies: [] })),
+      loginUsing: vi.fn(async () => ({ guard: 'web', user: { id: 1 }, sessionId: 'session', cookies: [] })),
+      loginUsingId: vi.fn(async () => ({ guard: 'web', user: { id: 1 }, sessionId: 'session', cookies: [] })),
+      impersonate: vi.fn(async () => ({ guard: 'web', user: { id: 2 }, sessionId: 'session', cookies: [] })),
+      impersonateById: vi.fn(async () => ({ guard: 'web', user: { id: 2 }, sessionId: 'session', cookies: [] })),
+      impersonation: vi.fn(async () => ({ active: true })),
+      stopImpersonating: vi.fn(async () => ({ id: 1 })),
+      logout: vi.fn(async () => ({ guard: 'web', cookies: [] })),
+      register: vi.fn(async () => ({ id: 4 })),
+      logoutAll: vi.fn(async () => [{ guard: 'web', cookies: [] }]),
+      guard: vi.fn(() => guard),
+      tokens: {
+        create: vi.fn(async () => ({ id: 'created' })),
+        list: vi.fn(async () => [{ id: 'listed' }]),
+        revoke: vi.fn(async () => {}),
+        revokeAll: vi.fn(async () => 2),
+        authenticate: vi.fn(async () => ({ id: 1 })),
+        can: vi.fn(async () => true),
+      },
+      verification: {
+        create: vi.fn(async () => ({ id: 'verify' })),
+        consume: vi.fn(async () => ({ id: 1 })),
+      },
+      passwords: {
+        request: vi.fn(async () => {}),
+        consume: vi.fn(async () => ({ id: 1 })),
+      },
+    }
+
+    const bound = holoRuntimeInternals.bindAuthRuntimeToContext(runtime, { activate })
+
+    await expect(bound.id()).resolves.toBe(1)
+    await expect(bound.hashPassword('secret')).resolves.toBe('digest')
+    await expect(bound.verifyPassword('secret', 'digest')).resolves.toBe(true)
+    await expect(bound.needsPasswordRehash('digest')).resolves.toBe(false)
+    await expect(bound.loginUsing({ id: 1 }, { remember: true })).resolves.toMatchObject({ guard: 'web' })
+    await expect(bound.loginUsingId(1, { remember: true })).resolves.toMatchObject({ guard: 'web' })
+    await expect(bound.impersonate({ id: 2 }, { actorGuard: 'admin' })).resolves.toMatchObject({ guard: 'web' })
+    await expect(bound.impersonateById(2, { actorGuard: 'admin' })).resolves.toMatchObject({ guard: 'web' })
+    await expect(bound.impersonation()).resolves.toEqual({ active: true })
+    await expect(bound.stopImpersonating()).resolves.toEqual({ id: 1 })
+    await expect(bound.check()).resolves.toBe(true)
+    await expect(bound.user()).resolves.toEqual({ id: 1 })
+    await expect(bound.refreshUser()).resolves.toEqual({ id: 2 })
+    await expect(bound.currentAccessToken()).resolves.toEqual({ id: 'token' })
+    await expect(bound.login({ email: 'ava@example.com', password: 'secret' })).resolves.toMatchObject({ guard: 'web' })
+    await expect(bound.logout()).resolves.toEqual({ guard: 'web', cookies: [] })
+    await expect(bound.register({ email: 'ava@example.com', password: 'secret', passwordConfirmation: 'secret' })).resolves.toEqual({ id: 4 })
+    await expect(bound.logoutAll('web')).resolves.toEqual([{ guard: 'web', cookies: [] }])
+    await expect(bound.tokens.revoke()).resolves.toBeUndefined()
+    await expect(bound.tokens.revokeAll({ id: 1 }, { guard: 'web' })).resolves.toBe(2)
+    await expect(bound.tokens.authenticate('plain-text')).resolves.toEqual({ id: 1 })
+    await expect(bound.tokens.can('plain-text', 'orders.read')).resolves.toBe(true)
+    await expect(bound.verification.consume('verify-token')).resolves.toEqual({ id: 1 })
+    await expect(bound.passwords.consume({
+      token: 'reset-token',
+      password: 'secret',
+      passwordConfirmation: 'secret',
+    })).resolves.toEqual({ id: 1 })
+
+    const boundGuard = bound.guard('admin')
+    await expect(boundGuard.check()).resolves.toBe(true)
+    await expect(boundGuard.user()).resolves.toEqual({ id: 1 })
+    await expect(boundGuard.refreshUser()).resolves.toEqual({ id: 2 })
+    await expect(boundGuard.id()).resolves.toBe(3)
+    await expect(boundGuard.currentAccessToken()).resolves.toEqual({ id: 'token' })
+    await expect(boundGuard.login({ email: 'admin@example.com', password: 'secret' })).resolves.toMatchObject({ guard: 'web' })
+    await expect(boundGuard.loginUsing({ id: 1 }, { remember: true })).resolves.toMatchObject({ guard: 'web' })
+    await expect(boundGuard.loginUsingId(1, { remember: true })).resolves.toMatchObject({ guard: 'web' })
+    await expect(boundGuard.impersonate({ id: 2 }, { actorGuard: 'web' })).resolves.toMatchObject({ guard: 'web' })
+    await expect(boundGuard.impersonateById(2, { actorGuard: 'web' })).resolves.toMatchObject({ guard: 'web' })
+    await expect(boundGuard.impersonation()).resolves.toEqual({ active: true })
+    await expect(boundGuard.stopImpersonating()).resolves.toEqual({ id: 1 })
+    await expect(boundGuard.logout()).resolves.toEqual({ guard: 'web', cookies: [] })
+
+    expect(activate).toHaveBeenCalled()
+    await expect(bound.tokens.create({ id: 1 }, { name: 'browser' })).resolves.toEqual({ id: 'created' })
+    await expect(bound.tokens.list({ id: 1 }, { guard: 'web' })).resolves.toEqual([{ id: 'listed' }])
+    await expect(bound.verification.create({ id: 1 }, { guard: 'web' })).resolves.toEqual({ id: 'verify' })
+    await expect(bound.passwords.request('ava@example.com', { broker: 'users' })).resolves.toBeUndefined()
+  })
+
   it('does not require @holo-js/queue-db for the implicit default sync queue runtime', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
@@ -255,6 +363,42 @@ describe('@holo-js/core portable runtime', () => {
     expect(runtime.queue.config.default).toBe('sync')
     await runtime.shutdown()
     importOptionalModule.mockRestore()
+  })
+
+  it('rethrows non-module-resolution errors from optional imports', async () => {
+    const root = await createProject()
+    const brokenModulePath = join(root, 'broken-optional-module.mjs')
+    await writeFile(brokenModulePath, 'export default {\n', 'utf8')
+
+    await expect(
+      holoRuntimeInternals.moduleInternals.importOptionalModule(pathToFileURL(brokenModulePath).href),
+    ).rejects.toThrow()
+  })
+
+  it('treats ERR_MODULE_NOT_FOUND optional imports as absent modules', async () => {
+    const originalVitest = process.env.VITEST
+    let evalSpy: ReturnType<typeof vi.spyOn> | undefined
+
+    process.env.VITEST = ''
+
+    try {
+      evalSpy = vi.spyOn(globalThis, 'eval').mockRejectedValueOnce(Object.assign(new Error('missing optional module'), {
+        code: 'ERR_MODULE_NOT_FOUND',
+      }))
+
+      await expect(
+        holoRuntimeInternals.moduleInternals.importOptionalModule('missing-optional-module'),
+      ).resolves.toBeUndefined()
+
+      expect(evalSpy).toHaveBeenCalledWith(`import(${JSON.stringify('missing-optional-module')})`)
+    } finally {
+      evalSpy?.mockRestore?.()
+      if (typeof originalVitest === 'undefined') {
+        delete process.env.VITEST
+      } else {
+        process.env.VITEST = originalVitest
+      }
+    }
   })
 
   it('does not import discovered queue jobs during default runtime initialization', async () => {

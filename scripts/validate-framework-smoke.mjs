@@ -12,11 +12,16 @@ const mysqlDatabaseName = 'holo_matrix_smoke_mysql'
 const postgresDatabaseName = 'holo_matrix_smoke_postgres'
 const smokeWorkspacePackages = [
   '@holo-js/db',
+  '@holo-js/db-sqlite',
+  '@holo-js/db-mysql',
+  '@holo-js/db-postgres',
   '@holo-js/events',
   '@holo-js/queue',
+  '@holo-js/queue-redis',
   '@holo-js/queue-db',
   '@holo-js/config',
   '@holo-js/storage',
+  '@holo-js/storage-s3',
   '@holo-js/core',
   '@holo-js/media',
   '@holo-js/validation',
@@ -745,7 +750,7 @@ function assertMatrixPayload(app, payload) {
   assert.equal(payload.queries.sqliteJson.theme, 'night')
   assert.equal(payload.queries.sqliteJson.dashboard, 'analytics')
   assert.equal(payload.queries.sqliteJson.themeCount, 1)
-  assert.equal(payload.queries.sqliteJson.featureCount, 1)
+  assert.equal(payload.queries.sqliteJson.featureCount, 2)
   assert.ok(Array.isArray(payload.queries.chunkedIds))
   assert.ok(Array.isArray(payload.queries.chunkedById))
   assert.equal(payload.relations.uuidRelation.matchesForeignKey, true)

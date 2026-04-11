@@ -68,7 +68,12 @@ type StorageS3Module = {
 /* v8 ignore next 15 -- optional-package absence is validated in published-package integration, not in this monorepo test graph */
 async function importOptionalModule<TModule>(specifier: string): Promise<TModule | undefined> {
   try {
-    return await import(specifier) as TModule
+    if (process.env.VITEST) {
+      return await import(/* @vite-ignore */ specifier) as TModule
+    }
+
+    const indirectEval = globalThis.eval as (source: string) => Promise<TModule>
+    return await indirectEval(`import(${JSON.stringify(specifier)})`)
   } catch (error) {
     if (
       error

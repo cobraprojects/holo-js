@@ -31,11 +31,16 @@
         "@holo-js/cli": "workspace:*",
         "@holo-js/config": "workspace:*",
         "@holo-js/db": "workspace:*",
+        "@holo-js/db-mysql": "^0.1.2",
+        "@holo-js/db-postgres": "^0.1.2",
+        "@holo-js/db-sqlite": "^0.1.2",
         "@holo-js/events": "workspace:*",
         "@holo-js/media": "workspace:*",
-        "@holo-js/queue": "workspace:*",
-        "@holo-js/queue-db": "workspace:*",
-        "@holo-js/storage": "workspace:*",
+        "@holo-js/queue": "^0.1.2",
+        "@holo-js/queue-db": "^0.1.2",
+        "@holo-js/queue-redis": "^0.1.2",
+        "@holo-js/storage": "^0.1.2",
+        "@holo-js/storage-s3": "^0.1.2",
         "esbuild": "^0.27.4",
         "next": "^16.0.0",
         "react": "^19.0.0",
@@ -55,11 +60,16 @@
         "@holo-js/cli": "workspace:*",
         "@holo-js/config": "workspace:*",
         "@holo-js/db": "workspace:*",
+        "@holo-js/db-mysql": "^0.1.2",
+        "@holo-js/db-postgres": "^0.1.2",
+        "@holo-js/db-sqlite": "^0.1.2",
         "@holo-js/events": "workspace:*",
         "@holo-js/media": "workspace:*",
-        "@holo-js/queue": "workspace:*",
-        "@holo-js/queue-db": "workspace:*",
-        "@holo-js/storage": "workspace:*",
+        "@holo-js/queue": "^0.1.2",
+        "@holo-js/queue-db": "^0.1.2",
+        "@holo-js/queue-redis": "^0.1.2",
+        "@holo-js/storage": "^0.1.2",
+        "@holo-js/storage-s3": "^0.1.2",
         "esbuild": "^0.27.4",
         "nuxt": "^4.0.0",
       },
@@ -83,11 +93,16 @@
         "@holo-js/cli": "workspace:*",
         "@holo-js/config": "workspace:*",
         "@holo-js/db": "workspace:*",
+        "@holo-js/db-mysql": "^0.1.2",
+        "@holo-js/db-postgres": "^0.1.2",
+        "@holo-js/db-sqlite": "^0.1.2",
         "@holo-js/events": "workspace:*",
         "@holo-js/media": "workspace:*",
-        "@holo-js/queue": "workspace:*",
-        "@holo-js/queue-db": "workspace:*",
-        "@holo-js/storage": "workspace:*",
+        "@holo-js/queue": "^0.1.2",
+        "@holo-js/queue-db": "^0.1.2",
+        "@holo-js/queue-redis": "^0.1.2",
+        "@holo-js/storage": "^0.1.2",
+        "@holo-js/storage-s3": "^0.1.2",
         "@sveltejs/adapter-node": "^5.0.0",
         "@sveltejs/kit": "^2.0.0",
         "@sveltejs/vite-plugin-svelte": "^4.0.0",
@@ -130,6 +145,7 @@
         "@nuxt/kit": "^4.0.0",
       },
       "devDependencies": {
+        "@holo-js/storage-s3": "workspace:*",
         "@nuxt/module-builder": "^1.0.2",
         "@types/node": "^22.10.2",
         "nuxt": "^4.0.0",
@@ -139,10 +155,12 @@
       "peerDependencies": {
         "@holo-js/forms": "^0.1.2",
         "@holo-js/storage": "^0.1.2",
+        "@holo-js/storage-s3": "^0.1.2",
       },
       "optionalPeers": [
         "@holo-js/forms",
         "@holo-js/storage",
+        "@holo-js/storage-s3",
       ],
     },
     "packages/adapter-sveltekit": {
@@ -164,6 +182,147 @@
       "optionalPeers": [
         "@holo-js/forms",
       ],
+    },
+    "packages/auth": {
+      "name": "@holo-js/auth",
+      "version": "0.1.2",
+      "dependencies": {
+        "@holo-js/config": "^0.1.2",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.2",
+        "tsup": "^8.3.5",
+        "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
+      },
+    },
+    "packages/auth-clerk": {
+      "name": "@holo-js/auth-clerk",
+      "version": "0.1.2",
+      "dependencies": {
+        "@holo-js/auth": "workspace:*",
+        "@holo-js/config": "workspace:*",
+        "@holo-js/session": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.2",
+        "tsup": "^8.3.5",
+        "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
+      },
+    },
+    "packages/auth-social": {
+      "name": "@holo-js/auth-social",
+      "version": "0.1.2",
+      "dependencies": {
+        "@holo-js/auth": "^0.1.2",
+        "@holo-js/config": "^0.1.2",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.2",
+        "tsup": "^8.3.5",
+        "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
+      },
+    },
+    "packages/auth-social-apple": {
+      "name": "@holo-js/auth-social-apple",
+      "version": "0.1.2",
+      "dependencies": {
+        "@holo-js/auth-social": "workspace:*",
+        "@holo-js/config": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.2",
+        "tsup": "^8.3.5",
+        "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
+      },
+    },
+    "packages/auth-social-discord": {
+      "name": "@holo-js/auth-social-discord",
+      "version": "0.1.2",
+      "dependencies": {
+        "@holo-js/auth-social": "workspace:*",
+        "@holo-js/config": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.2",
+        "tsup": "^8.3.5",
+        "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
+      },
+    },
+    "packages/auth-social-facebook": {
+      "name": "@holo-js/auth-social-facebook",
+      "version": "0.1.2",
+      "dependencies": {
+        "@holo-js/auth-social": "workspace:*",
+        "@holo-js/config": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.2",
+        "tsup": "^8.3.5",
+        "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
+      },
+    },
+    "packages/auth-social-github": {
+      "name": "@holo-js/auth-social-github",
+      "version": "0.1.2",
+      "dependencies": {
+        "@holo-js/auth-social": "workspace:*",
+        "@holo-js/config": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.2",
+        "tsup": "^8.3.5",
+        "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
+      },
+    },
+    "packages/auth-social-google": {
+      "name": "@holo-js/auth-social-google",
+      "version": "0.1.2",
+      "dependencies": {
+        "@holo-js/auth-social": "workspace:*",
+        "@holo-js/config": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.2",
+        "tsup": "^8.3.5",
+        "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
+      },
+    },
+    "packages/auth-social-linkedin": {
+      "name": "@holo-js/auth-social-linkedin",
+      "version": "0.1.2",
+      "dependencies": {
+        "@holo-js/auth-social": "workspace:*",
+        "@holo-js/config": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.2",
+        "tsup": "^8.3.5",
+        "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
+      },
+    },
+    "packages/auth-workos": {
+      "name": "@holo-js/auth-workos",
+      "version": "0.1.2",
+      "dependencies": {
+        "@holo-js/auth": "workspace:*",
+        "@holo-js/config": "workspace:*",
+        "@holo-js/session": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.2",
+        "tsup": "^8.3.5",
+        "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
+      },
     },
     "packages/cli": {
       "name": "@holo-js/cli",
@@ -209,8 +368,10 @@
         "esbuild": "^0.27.4",
       },
       "devDependencies": {
+        "@holo-js/auth": "^0.1.2",
         "@holo-js/events": "^0.1.2",
         "@holo-js/queue-db": "^0.1.2",
+        "@holo-js/session": "^0.1.2",
         "@holo-js/storage": "^0.1.2",
         "@types/node": "^22.10.2",
         "tsup": "^8.3.5",
@@ -218,10 +379,22 @@
         "vitest": "^2.1.8",
       },
       "peerDependencies": {
+        "@holo-js/auth": "^0.1.2",
+        "@holo-js/auth-clerk": "^0.1.2",
+        "@holo-js/auth-social": "^0.1.2",
+        "@holo-js/auth-workos": "^0.1.2",
         "@holo-js/queue": "^0.1.2",
+        "@holo-js/session": "^0.1.2",
+        "@holo-js/storage": "^0.1.2",
       },
       "optionalPeers": [
+        "@holo-js/auth",
+        "@holo-js/auth-clerk",
+        "@holo-js/auth-social",
+        "@holo-js/auth-workos",
         "@holo-js/queue",
+        "@holo-js/session",
+        "@holo-js/storage",
       ],
     },
     "packages/create-holo-js": {
@@ -410,6 +583,19 @@
       },
       "peerDependencies": {
         "@holo-js/queue": "^0.1.2",
+      },
+    },
+    "packages/session": {
+      "name": "@holo-js/session",
+      "version": "0.1.2",
+      "dependencies": {
+        "@holo-js/config": "^0.1.2",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.2",
+        "tsup": "^8.3.5",
+        "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
       },
     },
     "packages/storage": {
@@ -723,6 +909,26 @@
 
     "@holo-js/adapter-sveltekit": ["@holo-js/adapter-sveltekit@workspace:packages/adapter-sveltekit"],
 
+    "@holo-js/auth": ["@holo-js/auth@workspace:packages/auth"],
+
+    "@holo-js/auth-clerk": ["@holo-js/auth-clerk@workspace:packages/auth-clerk"],
+
+    "@holo-js/auth-social": ["@holo-js/auth-social@workspace:packages/auth-social"],
+
+    "@holo-js/auth-social-apple": ["@holo-js/auth-social-apple@workspace:packages/auth-social-apple"],
+
+    "@holo-js/auth-social-discord": ["@holo-js/auth-social-discord@workspace:packages/auth-social-discord"],
+
+    "@holo-js/auth-social-facebook": ["@holo-js/auth-social-facebook@workspace:packages/auth-social-facebook"],
+
+    "@holo-js/auth-social-github": ["@holo-js/auth-social-github@workspace:packages/auth-social-github"],
+
+    "@holo-js/auth-social-google": ["@holo-js/auth-social-google@workspace:packages/auth-social-google"],
+
+    "@holo-js/auth-social-linkedin": ["@holo-js/auth-social-linkedin@workspace:packages/auth-social-linkedin"],
+
+    "@holo-js/auth-workos": ["@holo-js/auth-workos@workspace:packages/auth-workos"],
+
     "@holo-js/cli": ["@holo-js/cli@workspace:packages/cli"],
 
     "@holo-js/config": ["@holo-js/config@workspace:packages/config"],
@@ -748,6 +954,8 @@
     "@holo-js/queue-db": ["@holo-js/queue-db@workspace:packages/queue-db"],
 
     "@holo-js/queue-redis": ["@holo-js/queue-redis@workspace:packages/queue-redis"],
+
+    "@holo-js/session": ["@holo-js/session@workspace:packages/session"],
 
     "@holo-js/storage": ["@holo-js/storage@workspace:packages/storage"],
 

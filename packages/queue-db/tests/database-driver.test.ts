@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DB } from '@holo-js/db'
 import type { DatabaseContext, Dialect } from '@holo-js/db'
+import { connectionAsyncContext } from '@holo-js/db'
 import { configureQueueRuntime, queueRuntimeInternals } from '@holo-js/queue'
 import {
   createQueueDbRuntimeOptions,
@@ -438,6 +439,49 @@ describe('@holo-js/queue-db database driver', () => {
       sleep: 1,
     }, {} as never)
     await expect(driver.clear()).resolves.toBe(0)
+
+    spy.mockRestore()
+  })
+
+  it('reuses the active async-context connection when it matches the configured database connection', async () => {
+    const executeCompiled = vi.fn(async () => ({}))
+    const initialize = vi.fn(async () => {})
+    const activeConnection = {
+      async initialize() {
+        await initialize()
+      },
+      getConnectionName() {
+        return 'default'
+      },
+      getDialect() {
+        return createDialect('sqlite', '?')
+      },
+      async executeCompiled(statement: unknown) {
+        return await executeCompiled(statement)
+      },
+    } as unknown as DatabaseContext
+
+    const spy = vi.spyOn(DB, 'connection').mockImplementation(() => {
+      throw new Error('DB.connection() should not be used when an active matching connection exists.')
+    })
+
+    const driver = new DatabaseQueueDriver({
+      name: 'database',
+      driver: 'database',
+      connection: 'default',
+      table: 'jobs',
+      queue: 'default',
+      retryAfter: 1,
+      sleep: 1,
+    }, {} as never)
+
+    await expect(connectionAsyncContext.run({
+      connectionName: 'default',
+      connection: activeConnection,
+    }, async () => driver.clear())).resolves.toBe(0)
+
+    expect(initialize).toHaveBeenCalledTimes(1)
+    expect(executeCompiled).toHaveBeenCalledTimes(1)
 
     spy.mockRestore()
   })

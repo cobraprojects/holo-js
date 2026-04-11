@@ -13,23 +13,35 @@ import type {
 } from '../core/types'
 import type { TableDefinition } from '../schema/types'
 
-class DatabaseFacade {
-  private manager?: ConnectionManager
+function getDatabaseFacadeState(): {
+  manager?: ConnectionManager
+} {
+  const runtime = globalThis as typeof globalThis & {
+    __holoDatabaseFacade__?: {
+      manager?: ConnectionManager
+    }
+  }
 
+  runtime.__holoDatabaseFacade__ ??= {}
+  return runtime.__holoDatabaseFacade__
+}
+
+class DatabaseFacade {
   configure(manager: ConnectionManager): void {
-    this.manager = manager
+    getDatabaseFacadeState().manager = manager
   }
 
   reset(): void {
-    this.manager = undefined
+    getDatabaseFacadeState().manager = undefined
   }
 
   getManager(): ConnectionManager {
-    if (!this.manager) {
+    const manager = getDatabaseFacadeState().manager
+    if (!manager) {
       throw new ConfigurationError('DB facade is not configured with a ConnectionManager.')
     }
 
-    return this.manager
+    return manager
   }
 
   connection(name?: string): DatabaseContext {

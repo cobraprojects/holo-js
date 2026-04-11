@@ -30,6 +30,7 @@ import auth, {
   verifyPassword,
 } from '../src'
 import clientAuth, {
+  authClientInternals,
   check as clientCheck,
   configureAuthClient,
   refreshUser as clientRefreshUser,
@@ -2890,5 +2891,1084 @@ describe('@holo-js/auth package runtime', () => {
     expect(warn.mock.calls[0]?.[0]).not.toContain(verifyToken.plainTextToken)
     expect(warn.mock.calls[1]?.[0]).toContain(resetRecord?.id ?? '')
     expect(warn.mock.calls[1]?.[0]).not.toContain(resetRecord?.tokenHash ?? '')
+  })
+
+  it('covers runtime helper branches for cookies, tokens, payloads, and async context', async () => {
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    const digest = await hasher.hash('secret-secret')
+
+    await expect(hasher.verify('secret-secret', 'invalid')).resolves.toBe(false)
+    expect(authRuntimeInternals.verifyTokenSecret('secret', 'invalid')).toBe(false)
+    expect(authRuntimeInternals.parsePlainTextToken('invalid')).toBeNull()
+    expect(authRuntimeInternals.tokenHasAbility({
+      id: 'token-1',
+      provider: 'users',
+      userId: 1,
+      name: 'api',
+      abilities: ['orders.read'],
+      tokenHash: 'sha256$hash',
+      createdAt: new Date(),
+      expiresAt: null,
+    }, '   ')).toBe(false)
+    expect(authRuntimeInternals.toPlainTextTokenResult({
+      id: 'token-2',
+      provider: 'users',
+      userId: 1,
+      name: 'api',
+      abilities: ['orders.read'],
+      tokenHash: 'sha256$hash',
+      createdAt: new Date('2024-01-01T00:00:00.000Z'),
+      lastUsedAt: new Date('2024-01-02T00:00:00.000Z'),
+      expiresAt: null,
+    }, 'token-2.secret').lastUsedAt).toEqual(new Date('2024-01-02T00:00:00.000Z'))
+    await expect(configureRuntime({
+      passwordHasher: {
+        hash: hasher.hash,
+        verify: hasher.verify,
+      },
+    }) && needsPasswordRehash(digest)).resolves.toBe(false)
+
+    expect(authRuntimeInternals.parseSetCookieDefinition('invalid')).toBeNull()
+    expect(authRuntimeInternals.parseSetCookieDefinition(
+      'session=value; ; Path=/app; Domain=example.com; Secure; HttpOnly; SameSite=None; Partitioned',
+    )).toEqual({
+      name: 'session',
+      options: {
+        path: '/app',
+        domain: 'example.com',
+        secure: true,
+        httpOnly: true,
+        sameSite: 'none',
+        partitioned: true,
+      },
+    })
+    expect(authRuntimeInternals.serializeCookie('session', 'value', {
+      path: '/app',
+      domain: 'example.com',
+      maxAge: 60,
+      expires: new Date('2024-01-01T00:00:00.000Z'),
+      secure: true,
+      httpOnly: true,
+      sameSite: 'strict',
+      partitioned: true,
+    })).toContain('Max-Age=60')
+    expect(authRuntimeInternals.serializeCookie('session', 'value')).toBe('session=value; Path=/')
+    expect(authRuntimeInternals.getPasswordHash({
+      getId(user: UserRecord) {
+        return user.id
+      },
+      async findById() {
+        return null
+      },
+      async findByCredentials() {
+        return null
+      },
+      async create() {
+        throw new Error('not implemented')
+      },
+    }, {
+      id: 1,
+      email: 'ava@example.com',
+      password: null,
+    })).toBeNull()
+    expect(authRuntimeInternals.writeSessionPayloads({
+      keep: true,
+      auth: 'remove-me',
+    }, {} as never)).toEqual(Object.freeze({
+      keep: true,
+    }))
+
+    const payload = Object.freeze({
+      guard: 'web',
+      provider: 'users',
+      userId: 1,
+      user: Object.freeze({
+        id: 1,
+        email: 'ava@example.com',
+      }),
+    })
+    const record = {
+      id: 'session-1',
+      store: 'database',
+      data: {
+        auth: {
+          admin: Object.freeze({
+            guard: 'admin',
+            provider: 'admins',
+            userId: 2,
+            user: Object.freeze({
+              id: 2,
+              email: 'admin@example.com',
+            }),
+          }),
+          web: payload,
+        },
+      },
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+      expiresAt: new Date(Date.now() + 60_000),
+    }
+
+    expect(authRuntimeInternals.readSessionPayload(null)).toBeNull()
+    expect(authRuntimeInternals.readSessionPayload({
+      ...record,
+      data: {},
+    })).toBeNull()
+    expect(authRuntimeInternals.readSessionPayload({
+      ...record,
+      data: {
+        auth: 'invalid',
+      },
+    })).toBeNull()
+    expect(authRuntimeInternals.readSessionPayload({
+      ...record,
+      data: {
+        auth: {
+          invalid: 1,
+        },
+      },
+    })).toBeNull()
+    expect(authRuntimeInternals.readSessionPayload(record)).toEqual(
+      (record.data.auth as Record<string, unknown>).admin,
+    )
+    expect(authRuntimeInternals.readSessionPayload(record, 'web')).toEqual(payload)
+    expect(authRuntimeInternals.readSessionPayload(record, 'missing')).toBeNull()
+
+    const context = authRuntimeInternals.createAsyncAuthContext()
+    expect(context.getSessionId('web')).toBeUndefined()
+    context.activate()
+    context.setSessionId('web', 'session-1')
+    context.setCachedUser('web', {
+      id: 1,
+      email: 'ava@example.com',
+    })
+    context.setAccessToken?.('api', 'token-value')
+    context.setRememberToken?.('web', 'remember-value')
+    expect(context.getSessionId('web')).toBe('session-1')
+    expect(context.getCachedUser('web')).toEqual({
+      id: 1,
+      email: 'ava@example.com',
+    })
+    expect(context.getAccessToken?.('api')).toBe('token-value')
+    expect(context.getRememberToken?.('web')).toBe('remember-value')
+  })
+
+  it('covers client internal fallback and tuple-header branches', async () => {
+    vi.stubGlobal('fetch', undefined)
+    expect(() => authClientInternals.resolveClientConfig()).toThrow('Fetch is not available')
+
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            authenticated: true,
+            guard: 'admin',
+            user: {
+              id: 2,
+              email: 'admin@example.com',
+              header: init?.headers instanceof Headers ? init.headers.get('x-auth') : null,
+            },
+          }
+        },
+      } satisfies Partial<Response> as Response
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+    resetAuthClient()
+    expect(authClientInternals.resolveClientConfig().fetchImpl).toBe(fetchMock)
+    expect(authClientInternals.resolveClientConfig({
+      guard: 'admin',
+    }).fetchImpl).toBe(fetchMock)
+
+    configureAuthClient({
+      fetch: fetchMock as typeof fetch,
+    })
+
+    expect(authClientInternals.createRequestUrl({
+      endpoint: 'https://example.com/api/auth/user#hash',
+      guard: 'admin',
+      headers: undefined,
+      fetchImpl: fetchMock as typeof fetch,
+    })).toBe('https://example.com/api/auth/user?guard=admin#hash')
+
+    await expect(authClientInternals.fetchCurrentUser({
+      endpoint: 'https://example.com/api/auth/user',
+      guard: 'admin',
+      headers: [['x-auth', 'token-a']],
+    })).resolves.toMatchObject({
+      authenticated: true,
+      guard: 'admin',
+      user: {
+        id: 2,
+        header: 'token-a',
+      },
+    })
+  })
+
+  it('covers missing store, provider config, and non-session guard failures', async () => {
+    const runtime = configureRuntime()
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    configureAuthRuntime({
+      config: defineAuthConfig({
+        guards: {
+          web: {
+            driver: 'session',
+            provider: 'users',
+          },
+          api: {
+            driver: 'token',
+            provider: 'users',
+          },
+        },
+      }),
+      session: getSessionRuntime(),
+      providers: {
+        users: runtime.usersProvider,
+      },
+      context: runtime.context,
+    })
+
+    await expect(tokens.list(created, {
+      guard: 'api',
+    })).rejects.toThrow('Personal access token runtime is not configured yet')
+    await expect(verification.create(created, {
+      guard: 'web',
+    })).rejects.toThrow('Email verification token runtime is not configured yet')
+    await expect(passwords.request('ava@example.com')).rejects.toThrow('Password reset token runtime is not configured yet')
+    await expect(auth.guard('api').loginUsing(created)).rejects.toThrow('does not support session login')
+
+    configureAuthRuntime({
+      config: defineAuthConfig({
+        guards: {
+          web: {
+            driver: 'session',
+            provider: 'users',
+          },
+          api: {
+            driver: 'token',
+            provider: 'users',
+          },
+        },
+        providers: {
+          users: {
+            model: 'User',
+          },
+        },
+      }),
+      session: getSessionRuntime(),
+      providers: {
+        users: runtime.usersProvider,
+      },
+      tokens: runtime.tokenStore,
+      context: runtime.context,
+    })
+
+    runtime.tokenStore.records.set('orphan-token', {
+      id: 'orphan-token',
+      provider: 'missing',
+      userId: created.id,
+      name: 'orphan',
+      abilities: ['*'],
+      tokenHash: authRuntimeInternals.hashTokenSecret('secret'),
+      createdAt: new Date(),
+      expiresAt: null,
+    })
+
+    await expect(tokens.authenticate('orphan-token.secret')).rejects.toThrow(
+      'Auth provider "missing" is not configured',
+    )
+  })
+
+  it('covers trusted-login compatibility and provider marker edge cases', async () => {
+    const runtime = configureRuntime()
+    const userRecord = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const adminRecord = await runtime.adminsProvider.create({
+      name: 'Admin Ava',
+      email: 'admin@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    const markedAdmin = (await auth.guard('admin').loginUsing(adminRecord)).user
+    await expect(auth.guard('web').loginUsing(markedAdmin)).rejects.toThrow(
+      'requires a user from provider "users", received "admins"',
+    )
+    await expect(auth.guard('web').loginUsing(null as never)).rejects.toThrow(
+      'Trusted login requires a user or user id',
+    )
+    await expect(auth.guard('web').loginUsingId(999)).rejects.toThrow(
+      'Auth user "users:999" was not found for trusted login.',
+    )
+    await expect(loginUsing({
+      id: userRecord.id,
+      email: userRecord.email,
+      ignored: undefined,
+    })).resolves.toMatchObject({
+      user: {
+        id: userRecord.id,
+        email: userRecord.email,
+      },
+    })
+    await expect(loginUsing({
+      id: userRecord.id,
+      email: userRecord.email,
+      extra: 'mismatch',
+    } as never)).rejects.toThrow(
+      'Pass a user id, a serialized auth user, or implement matchesUser() on the provider adapter.',
+    )
+    await expect(loginUsing({
+      nope: true,
+    } as never)).rejects.toThrow(
+      'Trusted login for guard "web" requires a user value compatible with provider "users".',
+    )
+
+    const originalGetId = runtime.usersProvider.getId.bind(runtime.usersProvider)
+    const candidateWithFallbackId = {
+      id: userRecord.id,
+      email: userRecord.email,
+    }
+
+    runtime.usersProvider.getId = ((user: UserRecord) => {
+      if (user === candidateWithFallbackId) {
+        throw new Error('cannot-read-id')
+      }
+      return originalGetId(user)
+    }) as typeof runtime.usersProvider.getId
+    runtime.usersProvider.matchesUser = (() => false) as typeof runtime.usersProvider.matchesUser
+
+    await expect(loginUsing(candidateWithFallbackId)).resolves.toMatchObject({
+      user: {
+        id: userRecord.id,
+        email: userRecord.email,
+      },
+    })
+
+    runtime.usersProvider.matchesUser = (() => true) as typeof runtime.usersProvider.matchesUser
+
+    await expect(loginUsing({
+      email: userRecord.email,
+    } as never)).rejects.toThrow(
+      'Trusted login for guard "web" requires a user value compatible with provider "users".',
+    )
+  })
+
+  it('covers refresh, impersonation, wrapper, and reset edge cases', async () => {
+    const runtime = configureRuntime()
+    const actor = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const target = await runtime.usersProvider.create({
+      name: 'Mina',
+      email: 'mina@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const admin = await runtime.adminsProvider.create({
+      name: 'Admin Ava',
+      email: 'admin@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    await expect(auth.guard('web').refreshUser()).resolves.toBeNull()
+    await expect(auth.guard('web').id()).resolves.toBeNull()
+    await expect(auth.guard('web').stopImpersonating()).resolves.toBeNull()
+    await expect(auth.guard('web').impersonateById(target.id)).rejects.toThrow(
+      'requires an authenticated actor',
+    )
+
+    await auth.guard('web').loginUsingId(actor.id)
+    await expect(auth.guard('web').impersonate(target)).resolves.toMatchObject({
+      user: {
+        id: target.id,
+      },
+    })
+    await expect(impersonateById(actor.id)).rejects.toThrow('Nested impersonation is not supported')
+
+    await stopImpersonating()
+    runtime.usersProvider.users.delete(actor.id)
+    runtime.usersProvider.usersByEmail.delete(actor.email)
+    await expect(refreshUser()).resolves.toBeNull()
+    expect(runtime.context.getSessionId('web')).toBeUndefined()
+
+    await auth.guard('admin').loginUsing(admin)
+    const impersonated = await auth.guard('web').impersonateById(target.id, {
+      actorGuard: 'admin',
+    })
+    const sessionRecord = runtime.sessionStore.records.get(impersonated.sessionId)
+    expect(sessionRecord).toBeTruthy()
+    if (sessionRecord) {
+      const webPayload = (sessionRecord.data.auth as Record<string, unknown>).web
+      runtime.sessionStore.records.set(sessionRecord.id, {
+        ...sessionRecord,
+        data: {
+          ...sessionRecord.data,
+          auth: {
+            web: webPayload,
+          },
+        },
+      })
+    }
+    await expect(auth.guard('web').stopImpersonating()).resolves.toBeNull()
+    expect(runtime.sessionStore.records.has(impersonated.sessionId)).toBe(false)
+
+    const adminSession = await auth.guard('admin').loginUsing(admin)
+    runtime.context.setSessionId('web', adminSession.sessionId)
+    await auth.guard('web').logout()
+    expect(runtime.sessionStore.records.has(adminSession.sessionId)).toBe(false)
+
+    await auth.guard('admin').loginUsing(admin)
+    await getAuthRuntime().impersonateById(target.id, {
+      actorGuard: 'admin',
+    })
+
+    configureAuthRuntime()
+    await expect(check()).rejects.toThrow('Auth runtime is not configured yet')
+  })
+
+  it('covers provider fallbacks and password or verification edge cases', async () => {
+    const runtime = configureRuntime()
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    await expect(authRuntimeInternals.updateUserRecord('users', 999, {
+      email: 'missing@example.com',
+    })).rejects.toThrow('Auth user "users:999" no longer exists.')
+
+    const noEmail = await runtime.usersProvider.create({
+      name: 'No Email',
+      email: '',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    await expect(verification.create(noEmail, {
+      guard: 'web',
+    })).rejects.toThrow('Email verification requires a user with an email address.')
+    await expect(passwords.request('   ')).rejects.toThrow('Email is required to request a password reset.')
+    await expect(passwords.request('ava@example.com', {
+      broker: 'missing',
+    })).rejects.toThrow('Password broker "missing" is not configured.')
+    await expect(passwords.request('missing@example.com')).resolves.toBeUndefined()
+
+    await passwords.request('ava@example.com')
+    const resetDelivery = runtime.deliveries.find(entry => entry.type === 'password-reset')
+    runtime.usersProvider.users.delete(created.id)
+    runtime.usersProvider.usersByEmail.delete(created.email)
+    await expect(passwords.consume({
+      token: resetDelivery!.tokenValue,
+      password: 'new-secret',
+      passwordConfirmation: 'new-secret',
+    })).rejects.toThrow('Password reset token user no longer exists.')
+
+    const listedUser = await runtime.usersProvider.create({
+      name: 'List Me',
+      email: 'list@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    await tokens.create(listedUser, {
+      guard: 'api',
+      name: 'list-token',
+    })
+    await expect(tokens.list(listedUser, {
+      guard: 'api',
+    })).resolves.toHaveLength(1)
+    await expect(tokens.revokeAll(listedUser, {
+      guard: 'api',
+    })).resolves.toBe(1)
+    await expect(tokens.create(1 as never, {
+      name: 'primitive-user',
+    })).rejects.toThrow('Unable to resolve a provider for the given user.')
+  })
+
+  it('supports provider adapters without explicit serialize or credential helper hooks', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const users = new Map<number, {
+      id: number
+      email: string
+      password: string
+      email_verified_at: Date
+    }>()
+
+    configureSessionRuntime({
+      config: {
+        driver: 'database',
+        stores: {
+          database: {
+            name: 'database',
+            driver: 'database',
+            connection: 'main',
+            table: 'sessions',
+          },
+        },
+        cookie: {
+          name: 'holo_session',
+          path: '/',
+          secure: false,
+          httpOnly: true,
+          sameSite: 'lax',
+          partitioned: false,
+          maxAge: 120,
+        },
+        idleTimeout: 120,
+        absoluteLifetime: 120,
+        rememberMeLifetime: 43200,
+      },
+      stores: {
+        database: sessionStore,
+      },
+    })
+
+    const hashedPassword = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    users.set(1, {
+      id: 1,
+      email: 'ava@example.com',
+      password: hashedPassword,
+      email_verified_at: new Date(),
+    })
+
+    configureAuthRuntime({
+      config: defineAuthConfig({
+        defaults: {
+          guard: 'web',
+        },
+        guards: {
+          web: {
+            driver: 'session',
+            provider: 'users',
+          },
+        },
+        providers: {
+          users: {
+            model: 'User',
+          },
+        },
+        emailVerification: {
+          required: true,
+        },
+      }),
+      session: getSessionRuntime(),
+      providers: {
+        users: {
+          async findById(id) {
+            return users.get(Number(id)) ?? null
+          },
+          async findByCredentials(credentials) {
+            return typeof credentials.email === 'string'
+              ? [...users.values()].find(user => user.email === credentials.email) ?? null
+              : null
+          },
+          async create() {
+            throw new Error('not implemented')
+          },
+          getId(user) {
+            return user.id
+          },
+        },
+      },
+      context: authRuntimeInternals.createMemoryAuthContext(),
+    })
+
+    await expect(login({
+      email: 'ava@example.com',
+      password: 'secret-secret',
+    })).resolves.toMatchObject({
+      user: {
+        id: 1,
+        email: 'ava@example.com',
+        password: hashedPassword,
+      },
+    })
+  })
+
+  it('covers session renewal without write support', async () => {
+    const runtime = configureRuntime()
+    const context = authRuntimeInternals.createMemoryAuthContext()
+    const existingRecord = Object.freeze({
+      id: 'shared-session',
+      store: 'database',
+      data: Object.freeze({
+        auth: Object.freeze({
+          guard: 'admin',
+          provider: 'admins',
+          userId: 9,
+          user: Object.freeze({
+            id: 9,
+            email: 'admin@example.com',
+          }),
+        }),
+      }),
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+      expiresAt: new Date(Date.now() + 60_000),
+      rememberTokenHash: 'remember-hash',
+    })
+    const createdSessions: string[] = []
+
+    context.setSessionId('admin', existingRecord.id)
+
+    configureAuthRuntime({
+      config: defineAuthConfig({
+        guards: {
+          web: {
+            driver: 'session',
+            provider: 'users',
+          },
+          admin: {
+            driver: 'session',
+            provider: 'admins',
+          },
+        },
+        providers: {
+          users: {
+            model: 'User',
+          },
+          admins: {
+            model: 'Admin',
+          },
+        },
+      }),
+      session: {
+        async create(input = {}) {
+          const record = Object.freeze({
+            id: input.id ?? `session-${createdSessions.length + 1}`,
+            store: 'database',
+            data: input.data ?? {},
+            createdAt: new Date(),
+            lastActivityAt: new Date(),
+            expiresAt: new Date(Date.now() + 60_000),
+          })
+          createdSessions.push(record.id)
+          return record
+        },
+        async read(sessionId) {
+          return sessionId === existingRecord.id ? existingRecord : null
+        },
+        async touch(sessionId) {
+          return sessionId === existingRecord.id ? existingRecord : null
+        },
+        async invalidate() {},
+        async issueRememberMeToken(sessionId) {
+          return `${sessionId}.remember`
+        },
+        sessionCookie(value) {
+          return `holo_session=${value}; Path=/`
+        },
+        rememberMeCookie(value) {
+          return `holo_session_remember=${value}; Path=/`
+        },
+      },
+      providers: {
+        users: runtime.usersProvider,
+        admins: runtime.adminsProvider,
+      },
+      context,
+    })
+
+    await expect(authRuntimeInternals.establishSessionForUser({
+      id: 1,
+      email: 'ava@example.com',
+    }, {
+      guard: 'web',
+      provider: 'users',
+    })).resolves.toMatchObject({
+      sessionId: existingRecord.id,
+      user: {
+        id: 1,
+        email: 'ava@example.com',
+      },
+    })
+    expect(createdSessions).toEqual([existingRecord.id])
+  })
+
+  it('covers remaining token and shared-session edge branches', async () => {
+    const runtime = configureRuntime()
+    const ava = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const admin = await runtime.adminsProvider.create({
+      name: 'Admin Ava',
+      email: 'admin@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    const token = await tokens.create(ava, {
+      guard: 'api',
+      name: 'edge-token',
+    })
+    runtime.usersProvider.users.delete(ava.id)
+    runtime.usersProvider.usersByEmail.delete(ava.email)
+    await expect(tokens.authenticate(token.plainTextToken)).resolves.toBeNull()
+
+    runtime.context.setAccessToken('api', 'malformed-token')
+    await expect(auth.guard('api').currentAccessToken()).resolves.toBeNull()
+
+    runtime.context.setAccessToken('api', `${token.id}.wrong-secret`)
+    await expect(auth.guard('api').currentAccessToken()).resolves.toBeNull()
+    runtime.context.setAccessToken('api')
+    await expect(auth.guard('api').refreshUser()).resolves.toBeNull()
+
+    const adminSession = await auth.guard('admin').loginUsing(admin)
+    runtime.context.setSessionId('web', adminSession.sessionId)
+    runtime.sessionStore.records.delete(adminSession.sessionId)
+    await expect(auth.guard('web').impersonation()).resolves.toBeNull()
+
+    const restoredAdminSession = await auth.guard('admin').loginUsing(admin)
+    const restoredAdminRecord = runtime.sessionStore.records.get(restoredAdminSession.sessionId)
+    expect(restoredAdminRecord).toBeTruthy()
+    if (restoredAdminRecord) {
+      runtime.sessionStore.records.set(restoredAdminRecord.id, {
+        ...restoredAdminRecord,
+        data: {
+          ...restoredAdminRecord.data,
+          auth: {},
+        },
+      })
+    }
+    runtime.context.setSessionId('web', restoredAdminSession.sessionId)
+    await expect(auth.guard('web').impersonation()).resolves.toBeNull()
+  })
+
+  it('writes remaining shared-session payloads when a fresh user disappears', async () => {
+    const runtime = configureRuntime()
+    const ava = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const admin = await runtime.adminsProvider.create({
+      name: 'Admin Ava',
+      email: 'admin@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    const adminSession = await auth.guard('admin').loginUsing(admin)
+    await loginUsing(ava)
+
+    runtime.usersProvider.users.delete(ava.id)
+    runtime.usersProvider.usersByEmail.delete(ava.email)
+
+    await expect(auth.guard('web').refreshUser()).resolves.toBeNull()
+
+    const record = runtime.sessionStore.records.get(adminSession.sessionId)
+    expect(record).toBeTruthy()
+    expect(record?.data.auth).toEqual({
+      guard: 'admin',
+      provider: 'admins',
+      userId: admin.id,
+      user: expect.objectContaining({
+        id: admin.id,
+        email: admin.email,
+      }),
+    })
+  })
+
+  it('covers remaining trusted-login compatibility branches', async () => {
+    const runtime = configureRuntime()
+    const userRecord = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    await expect(loginUsing(true as never)).rejects.toThrow(
+      'Trusted login for guard "web" requires a user value compatible with provider "users".',
+    )
+
+    const originalGetId = runtime.usersProvider.getId.bind(runtime.usersProvider)
+    runtime.usersProvider.getId = ((user: UserRecord | boolean) => {
+      if (user === true) {
+        return userRecord.id
+      }
+      return originalGetId(user as UserRecord)
+    }) as typeof runtime.usersProvider.getId
+
+    await expect(loginUsing(true as never)).rejects.toThrow(
+      'Pass a user id, a serialized auth user, or implement matchesUser() on the provider adapter.',
+    )
+  })
+
+  it('preserves remember hashes when renewing shared sessions with write support', async () => {
+    const runtime = configureRuntime()
+    const context = authRuntimeInternals.createMemoryAuthContext()
+    const existingRecord = Object.freeze({
+      id: 'shared-session',
+      store: 'database',
+      data: Object.freeze({
+        auth: Object.freeze({
+          guard: 'admin',
+          provider: 'admins',
+          userId: 9,
+          user: Object.freeze({
+            id: 9,
+            email: 'admin@example.com',
+          }),
+        }),
+      }),
+      createdAt: new Date(),
+      lastActivityAt: new Date(),
+      expiresAt: new Date(Date.now() + 60_000),
+      rememberTokenHash: 'remember-hash',
+    })
+    const writtenRecords: Array<{ readonly id: string, readonly rememberTokenHash?: string }> = []
+
+    context.setSessionId('admin', existingRecord.id)
+
+    configureAuthRuntime({
+      config: defineAuthConfig({
+        guards: {
+          web: {
+            driver: 'session',
+            provider: 'users',
+          },
+          admin: {
+            driver: 'session',
+            provider: 'admins',
+          },
+        },
+        providers: {
+          users: {
+            model: 'User',
+          },
+          admins: {
+            model: 'Admin',
+          },
+        },
+      }),
+      session: {
+        async create(input = {}) {
+          return Object.freeze({
+            id: input.id ?? 'new-session',
+            store: 'database',
+            data: input.data ?? {},
+            createdAt: new Date(),
+            lastActivityAt: new Date(),
+            expiresAt: new Date(Date.now() + 60_000),
+          })
+        },
+        async write(record) {
+          writtenRecords.push({
+            id: record.id,
+            rememberTokenHash: record.rememberTokenHash,
+          })
+          return record
+        },
+        async read(sessionId) {
+          return sessionId === existingRecord.id ? existingRecord : null
+        },
+        async touch(sessionId) {
+          return sessionId === existingRecord.id ? existingRecord : null
+        },
+        async invalidate() {},
+        async issueRememberMeToken(sessionId) {
+          return `${sessionId}.remember`
+        },
+        sessionCookie(value) {
+          return `holo_session=${value}; Path=/`
+        },
+        rememberMeCookie(value) {
+          return `holo_session_remember=${value}; Path=/`
+        },
+      },
+      providers: {
+        users: runtime.usersProvider,
+        admins: runtime.adminsProvider,
+      },
+      context,
+    })
+
+    await authRuntimeInternals.establishSessionForUser({
+      id: 1,
+      email: 'ava@example.com',
+    }, {
+      guard: 'web',
+      provider: 'users',
+    })
+
+    expect(writtenRecords).toEqual([{
+      id: existingRecord.id,
+      rememberTokenHash: 'remember-hash',
+    }])
+  })
+
+  it('covers remaining branch-only auth paths', async () => {
+    const runtime = configureRuntime({
+      authConfig: {
+        clerk: {
+          app: {
+            sessionCookie: '__session',
+          },
+        },
+        workos: {
+          dashboard: {
+            sessionCookie: 'wos-session',
+          },
+        },
+      },
+    })
+    const userRecord = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    await loginUsing(userRecord, {
+      remember: true,
+    })
+    await expect(auth.guard('web').id()).resolves.toBe(userRecord.id)
+    await expect(tokens.can('bad-token', 'orders.read')).resolves.toBe(false)
+    await expect(verification.create({
+      id: userRecord.id,
+    } as never, {
+      guard: 'web',
+    })).rejects.toThrow('Email verification requires a user with an email address.')
+
+    const loggedOut = await getAuthRuntime().logoutAll('web')
+    expect(loggedOut[0]?.cookies).toEqual(expect.arrayContaining([
+      expect.stringContaining('__session=;'),
+      expect.stringContaining('wos-session=;'),
+    ]))
+  })
+
+  it('covers identifier selection and missing-auth logout branches', async () => {
+    const defaultRuntime = configureRuntime()
+    expect(authRuntimeInternals.getProviderIdentifiers('users')).toEqual(['email'])
+    expect(authRuntimeInternals.getProviderIdentifiers('missing')).toEqual(['email'])
+
+    const created = await defaultRuntime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const established = await loginUsing(created)
+    const sessionRecord = defaultRuntime.sessionStore.records.get(established.sessionId)
+    expect(sessionRecord).toBeTruthy()
+    if (sessionRecord) {
+      defaultRuntime.sessionStore.records.set(sessionRecord.id, {
+        ...sessionRecord,
+        data: {},
+      })
+    }
+    await logout()
+    expect(defaultRuntime.sessionStore.records.has(established.sessionId)).toBe(false)
+
+    const phoneRuntime = configureRuntime({
+      authConfig: defineAuthConfig({
+        providers: {
+          users: {
+            model: 'User',
+            identifiers: ['phone'],
+          },
+          admins: {
+            model: 'Admin',
+          },
+        },
+      }),
+    })
+    expect(authRuntimeInternals.getProviderIdentifiers('users')).toEqual(['phone'])
+
+    void phoneRuntime
+  })
+
+  it('creates a default auth context when one is not provided', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const usersProvider = new InMemoryProviderAdapter()
+
+    configureSessionRuntime({
+      config: {
+        driver: 'database',
+        stores: {
+          database: {
+            name: 'database',
+            driver: 'database',
+            connection: 'main',
+            table: 'sessions',
+          },
+        },
+        cookie: {
+          name: 'holo_session',
+          path: '/',
+          secure: false,
+          httpOnly: true,
+          sameSite: 'lax',
+          partitioned: false,
+          maxAge: 120,
+        },
+        idleTimeout: 120,
+        absoluteLifetime: 120,
+        rememberMeLifetime: 43200,
+      },
+      stores: {
+        database: sessionStore,
+      },
+    })
+
+    const hashedPassword = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: hashedPassword,
+      email_verified_at: new Date(),
+    })
+
+    configureAuthRuntime({
+      config: defineAuthConfig({
+        guards: {
+          web: {
+            driver: 'session',
+            provider: 'users',
+          },
+        },
+        providers: {
+          users: {
+            model: 'User',
+          },
+        },
+      }),
+      session: getSessionRuntime(),
+      providers: {
+        users: usersProvider,
+      },
+    })
+
+    await expect(login({
+      email: 'ava@example.com',
+      password: 'secret-secret',
+    })).resolves.toMatchObject({
+      user: {
+        email: 'ava@example.com',
+      },
+    })
+    expect(authRuntimeInternals.getRuntimeBindings().context.getSessionId('web')).toBeTypeOf('string')
   })
 })

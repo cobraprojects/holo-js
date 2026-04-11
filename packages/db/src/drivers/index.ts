@@ -8,9 +8,18 @@ function isModuleNotFoundError(error: unknown): boolean {
     && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
 }
 
+function dynamicImport<TModule>(specifier: string): Promise<TModule> {
+  if (process.env.VITEST) {
+    return import(/* @vite-ignore */ specifier) as Promise<TModule>
+  }
+
+  const indirectEval = globalThis.eval as (source: string) => Promise<TModule>
+  return indirectEval(`import(${JSON.stringify(specifier)})`)
+}
+
 async function importDriverModule<TModule>(specifier: string, errorMessage: string): Promise<TModule> {
   try {
-    return await import(specifier) as TModule
+    return await dynamicImport<TModule>(specifier)
   } catch (error) {
     if (isModuleNotFoundError(error)) {
       throw new Error(errorMessage, { cause: error })

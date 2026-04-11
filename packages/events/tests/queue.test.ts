@@ -387,4 +387,32 @@ describe('@holo-js/events queue integration', () => {
     ensureEventsQueueJobRegistered()
     expect(getRegisteredQueueJob(EVENTS_INVOKE_LISTENER_JOB)?.name).toBe(EVENTS_INVOKE_LISTENER_JOB)
   })
+
+  it('loads the queue package through the indirect loader outside Vitest', async () => {
+    const originalVitest = process.env.VITEST
+    const queueModule = {
+      defineJob: vi.fn(),
+      dispatch: vi.fn(),
+      getRegisteredQueueJob: vi.fn(),
+      registerQueueJob: vi.fn(),
+    }
+
+    process.env.VITEST = ''
+
+    try {
+      const evalSpy = vi.spyOn(globalThis, 'eval').mockImplementation((source: string) => {
+        expect(source).toBe(`import(${JSON.stringify('@holo-js/queue')})`)
+        return Promise.resolve(queueModule) as never
+      })
+
+      await expect(eventQueueInternals.loadQueueModule()).resolves.toBe(queueModule)
+      expect(evalSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      if (typeof originalVitest === 'undefined') {
+        delete process.env.VITEST
+      } else {
+        process.env.VITEST = originalVitest
+      }
+    }
+  })
 })

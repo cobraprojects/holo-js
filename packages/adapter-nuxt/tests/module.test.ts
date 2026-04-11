@@ -390,7 +390,7 @@ export default defineStorageConfig({
 })
 `, 'utf8')
 
-    vi.doMock('../src/runtime/drivers/s3', () => ({
+    vi.doMock('@holo-js/storage-s3', () => ({
       default: undefined,
     }))
 
@@ -401,7 +401,7 @@ export default defineStorageConfig({
         '[@holo-js/adapter-nuxt] S3 storage disks require @holo-js/storage-s3 to be installed.',
       )
     } finally {
-      vi.doUnmock('../src/runtime/drivers/s3')
+      vi.doUnmock('@holo-js/storage-s3')
     }
   })
 
@@ -415,9 +415,31 @@ export default defineStorageConfig({
     } as never, 'storage')).toBe(true)
   })
 
+  it('treats ERR_MODULE_NOT_FOUND storage-s3 imports as absent optional modules', async () => {
+    const originalVitest = process.env.VITEST
+
+    process.env.VITEST = ''
+
+    try {
+      const mod = await import('../src/module')
+      const evalSpy = vi.spyOn(globalThis, 'eval').mockRejectedValueOnce(Object.assign(new Error('missing'), {
+        code: 'ERR_MODULE_NOT_FOUND',
+      }))
+
+      await expect(mod.moduleInternals.importOptionalStorageS3Module()).resolves.toBeUndefined()
+      expect(evalSpy).toHaveBeenCalledWith(`import(${JSON.stringify('@holo-js/storage-s3')})`)
+    } finally {
+      if (typeof originalVitest === 'undefined') {
+        delete process.env.VITEST
+      } else {
+        process.env.VITEST = originalVitest
+      }
+    }
+  })
+
   it('rethrows non-missing optional storage-s3 import errors', async () => {
     vi.resetModules()
-    vi.doMock('../src/runtime/drivers/s3', () => {
+    vi.doMock('@holo-js/storage-s3', () => {
       return {
         get default() {
           throw new Error('boom')
@@ -429,7 +451,7 @@ export default defineStorageConfig({
       const mod = await import('../src/module')
       await expect(mod.moduleInternals.importOptionalStorageS3Module()).rejects.toThrow('boom')
     } finally {
-      vi.doUnmock('../src/runtime/drivers/s3')
+      vi.doUnmock('@holo-js/storage-s3')
       vi.resetModules()
     }
   })

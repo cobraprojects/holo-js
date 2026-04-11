@@ -1295,6 +1295,14 @@ export default defineConfig({
       providers: {
         users: {
           model: 'User',
+          identifiers: [],
+        },
+      },
+    })).toThrow('must declare at least one identifier')
+    expect(() => normalizeAuthConfig({
+      providers: {
+        users: {
+          model: 'User',
           identifiers: ['   '],
         },
       },

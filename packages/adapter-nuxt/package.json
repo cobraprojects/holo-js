@@ -41,7 +41,8 @@
   },
   "peerDependencies": {
     "@holo-js/forms": "^0.1.2",
-    "@holo-js/storage": "^0.1.2"
+    "@holo-js/storage": "^0.1.2",
+    "@holo-js/storage-s3": "^0.1.2"
   },
   "peerDependenciesMeta": {
     "@holo-js/forms": {
@@ -49,9 +50,13 @@
     },
     "@holo-js/storage": {
       "optional": true
+    },
+    "@holo-js/storage-s3": {
+      "optional": true
     }
   },
   "devDependencies": {
+    "@holo-js/storage-s3": "workspace:*",
     "@nuxt/module-builder": "^1.0.2",
     "@types/node": "^22.10.2",
     "nuxt": "^4.0.0",

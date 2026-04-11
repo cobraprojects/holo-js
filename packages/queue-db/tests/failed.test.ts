@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DB } from '@holo-js/db'
+import type { DatabaseContext, Dialect } from '@holo-js/db'
+import { connectionAsyncContext } from '@holo-js/db'
 import {
   configureQueueRuntime,
   flushFailedQueueJobs,
@@ -26,6 +28,27 @@ function createEnvelope(name: string, id = `${name}-id`) {
     maxAttempts: 2,
     createdAt: Date.now(),
   })
+}
+
+function createDialect(name: string, placeholderPrefix: '$' | '?'): Dialect {
+  return {
+    name,
+    capabilities: {
+      concurrentQueries: false,
+      jsonOperations: true,
+      lateralJoins: false,
+      workerThreadExecution: false,
+      pessimisticLocking: false,
+      savepoints: true,
+      vectorColumns: false,
+    },
+    quoteIdentifier(identifier: string) {
+      return `"${identifier}"`
+    },
+    createPlaceholder(index: number) {
+      return placeholderPrefix === '$' ? `$${index}` : '?'
+    },
+  }
 }
 
 afterEach(async () => {
@@ -294,5 +317,69 @@ describe('@holo-js/queue-db failed job store', () => {
       table: 'failed_jobs',
     })
     expect(await queueDbFailedStoreInternals.getFailedStoreConnection()).not.toBeNull()
+  })
+
+  it('reuses the active async-context connection for the failed-job store when names match', async () => {
+    const executeCompiled = vi.fn(async () => ({}))
+    const activeConnection = {
+      async initialize() {},
+      getConnectionName() {
+        return 'default'
+      },
+      getDialect() {
+        return createDialect('sqlite', '?')
+      },
+      async executeCompiled(statement: unknown) {
+        return await executeCompiled(statement)
+      },
+      async queryCompiled() {
+        return {
+          rows: [],
+          rowCount: 0,
+        }
+      },
+    } as unknown as DatabaseContext
+
+    const spy = vi.spyOn(DB, 'connection').mockImplementation(() => {
+      throw new Error('DB.connection() should not be used when an active matching connection exists.')
+    })
+
+    configureQueueRuntime({
+      config: {
+        default: 'database',
+        failed: {
+          driver: 'database',
+          connection: 'default',
+          table: 'failed_jobs',
+        },
+        connections: {
+          database: {
+            driver: 'database',
+            connection: 'default',
+            table: 'jobs',
+          },
+        },
+      },
+      ...createQueueDbRuntimeOptions(),
+    })
+
+    const error = new Error('active-context failure')
+    error.stack = ''
+
+    await expect(connectionAsyncContext.run({
+      connectionName: 'default',
+      connection: activeConnection,
+    }, async () => persistFailedQueueJob({
+      reservationId: 'reservation-1',
+      reservedAt: 1,
+      envelope: createEnvelope('jobs.active-context', 'active-context-job'),
+    }, error))).resolves.toMatchObject({
+      jobId: 'active-context-job',
+      exception: 'active-context failure',
+    })
+
+    expect(executeCompiled).toHaveBeenCalledTimes(1)
+
+    spy.mockRestore()
   })
 })
