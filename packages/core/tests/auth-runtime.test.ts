@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSchemaService, DB } from '@holo-js/db'
+import { authRuntimeInternals } from '../../auth/src'
 import { createHolo, holoRuntimeInternals, resetHoloRuntime } from '../src'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
@@ -182,7 +183,12 @@ describe('@holo-js/core auth/session boot', () => {
     expect(typeof runtime.session?.sessionCookie('example')).toBe('string')
     expect(typeof runtime.auth?.check).toBe('function')
     await expect(runtime.auth?.currentAccessToken()).resolves.toBeNull()
-    await expect(runtime.auth?.logoutAll()).resolves.toBeUndefined()
+    await expect(runtime.auth?.logoutAll()).resolves.toEqual([
+      {
+        guard: 'web',
+        cookies: [],
+      },
+    ])
   })
 
   it('does not leak hidden password fields from model-backed auth users', async () => {
@@ -273,6 +279,212 @@ export default {
       password: 'supersecret',
     })
     await expect(runtime.auth?.user()).resolves.not.toHaveProperty('password')
+  })
+
+  it('accepts trusted login for normal model instances on named guards', async () => {
+    const root = await createProject({
+      auth: true,
+    })
+    await writeFile(join(root, 'config/auth.ts'), `
+import { defineAuthConfig } from ${configEntry}
+
+export default defineAuthConfig({
+  defaults: {
+    guard: 'web',
+    passwords: 'users',
+  },
+  guards: {
+    web: {
+      driver: 'session',
+      provider: 'users',
+    },
+    admin: {
+      driver: 'session',
+      provider: 'admins',
+    },
+  },
+  providers: {
+    users: {
+      model: 'User',
+    },
+    admins: {
+      model: 'Admin',
+    },
+  },
+})
+`, 'utf8')
+    await writeFile(join(root, 'server/models/User.ts'), `
+class UserEntity {
+  constructor(attributes) {
+    this.attributes = { ...attributes }
+  }
+
+  toAttributes() {
+    return { ...this.attributes }
+  }
+}
+
+const users = new Map()
+let nextId = 1
+
+export default class User extends UserEntity {
+  static async find(id) {
+    return users.get(Number(id)) ?? null
+  }
+
+  static where(column, value) {
+    return {
+      async first() {
+        for (const record of users.values()) {
+          if (record.toAttributes()?.[column] === value) {
+            return record
+          }
+        }
+
+        return null
+      },
+    }
+  }
+
+  static async create(values) {
+    const record = new User({
+      id: nextId++,
+      ...values,
+    })
+    users.set(record.toAttributes().id, record)
+    return record
+  }
+
+  static async update(id, values) {
+    const current = users.get(Number(id))
+    const record = new User({
+      ...(current?.toAttributes() ?? { id: Number(id) }),
+      ...values,
+    })
+    users.set(record.toAttributes().id, record)
+    return record
+  }
+}
+`, 'utf8')
+    await writeFile(join(root, 'server/models/Admin.ts'), `
+class AdminEntity {
+  constructor(attributes) {
+    this.attributes = { ...attributes }
+  }
+
+  toAttributes() {
+    return { ...this.attributes }
+  }
+}
+
+const admins = new Map()
+let nextId = 1
+
+export default class Admin extends AdminEntity {
+  static async find(id) {
+    return admins.get(Number(id)) ?? null
+  }
+
+  static where(column, value) {
+    return {
+      async first() {
+        for (const record of admins.values()) {
+          if (record.toAttributes()?.[column] === value) {
+            return record
+          }
+        }
+
+        return null
+      },
+    }
+  }
+
+  static async create(values) {
+    const record = new Admin({
+      id: nextId++,
+      ...values,
+    })
+    admins.set(record.toAttributes().id, record)
+    return record
+  }
+
+  static async update(id, values) {
+    const current = admins.get(Number(id))
+    const record = new Admin({
+      ...(current?.toAttributes() ?? { id: Number(id) }),
+      ...values,
+    })
+    admins.set(record.toAttributes().id, record)
+    return record
+  }
+}
+`, 'utf8')
+    const runtime = await createHolo(root, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    await runtime.initialize()
+
+    const providers = await holoRuntimeInternals.createCoreAuthProviders(root, runtime.loadedConfig)
+    const users = providers.users as {
+      create(input: Readonly<Record<string, unknown>>): Promise<unknown>
+    }
+    const admins = providers.admins as {
+      create(input: Readonly<Record<string, unknown>>): Promise<unknown>
+      matchesUser(user: unknown): boolean
+    }
+    const runtimeAdmins = authRuntimeInternals.getRuntimeBindings().providers.admins as {
+      create(input: Readonly<Record<string, unknown>>): Promise<unknown>
+      matchesUser(user: unknown): boolean
+    }
+
+    await users.create({
+      email: 'user@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const crossRuntimeAdminUser = await admins.create({
+      email: 'admin@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const runtimeAdminUser = await runtimeAdmins.create({
+      email: 'runtime-admin@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    expect(admins.matchesUser(crossRuntimeAdminUser)).toBe(true)
+    expect(runtimeAdmins.matchesUser(runtimeAdminUser)).toBe(true)
+
+    await expect(runtime.auth?.guard('admin').loginUsing(runtimeAdminUser)).resolves.toMatchObject({
+      guard: 'admin',
+      user: {
+        email: 'runtime-admin@example.com',
+      },
+    })
+    await expect(runtime.auth?.guard('admin').user()).resolves.toMatchObject({
+      email: 'runtime-admin@example.com',
+    })
+    await expect(runtime.auth?.guard('admin').loginUsing(crossRuntimeAdminUser)).resolves.toMatchObject({
+      guard: 'admin',
+      user: {
+        email: 'runtime-admin@example.com',
+      },
+    })
+    await expect(runtime.auth?.guard('admin').loginUsing({
+      id: 1,
+      email: 'admin@example.com',
+      constructor: {
+        name: 'Admin',
+      },
+    })).rejects.toThrow(
+      'Pass a user id, a serialized auth user, or implement matchesUser()',
+    )
+    await expect(runtime.auth?.guard('web').loginUsing(runtimeAdminUser)).rejects.toThrow(
+      'requires a user from provider "users"',
+    )
   })
 
   it('isolates the default auth context between async request chains', async () => {

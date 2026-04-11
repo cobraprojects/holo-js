@@ -10,10 +10,14 @@ import type {
   AuthEstablishedSession,
   AuthFacade,
   AuthGuardFacade,
+  AuthImpersonationOptions,
+  AuthImpersonationState,
+  AuthLogoutResult,
   AuthPasswordResetFacade,
   AuthPasswordHasher,
   AuthProviderAdapter,
   AuthRegistrationInput,
+  AuthSessionLoginOptions,
   AuthTokenFacade,
   AuthTokenStore,
   AuthUser,
@@ -41,11 +45,21 @@ type SerializedAuthUser = AuthUserLike & {
   readonly id: string | number
 }
 
-type SessionAuthPayload = {
+type SessionIdentityPayload = {
   readonly guard: string
   readonly provider: string
   readonly userId: string | number
   readonly user: SerializedAuthUser
+}
+
+type SessionImpersonationPayload = {
+  readonly actor: SessionIdentityPayload
+  readonly original?: SessionIdentityPayload
+  readonly startedAt: string
+}
+
+type SessionAuthPayload = SessionIdentityPayload & {
+  readonly impersonation?: SessionImpersonationPayload
 }
 
 type SessionAuthPayloadMap = Readonly<Record<string, SessionAuthPayload>>
@@ -105,11 +119,39 @@ function createDefaultPasswordHasher(): AuthPasswordHasher {
       const derived = await scrypt(password, salt, expected.length) as Buffer
       return derived.length === expected.length && timingSafeEqual(derived, expected)
     },
+    needsRehash() {
+      return false
+    },
   }
+}
+
+async function resolveNeedsPasswordRehash(
+  hasher: AuthPasswordHasher,
+  digest: string,
+): Promise<boolean> {
+  if (!hasher.needsRehash) {
+    return false
+  }
+
+  return await hasher.needsRehash(digest)
 }
 
 function hashTokenSecret(secret: string): string {
   return `${TOKEN_HASH_PREFIX}$${createHash('sha256').update(secret).digest('hex')}`
+}
+
+type CookieOptions = {
+  readonly path?: string
+  readonly domain?: string
+  readonly secure?: boolean
+  readonly httpOnly?: boolean
+  readonly sameSite?: 'lax' | 'strict' | 'none'
+  readonly partitioned?: boolean
+}
+
+type CookieSerializationOptions = CookieOptions & {
+  readonly expires?: Date
+  readonly maxAge?: number
 }
 
 function verifyTokenSecret(secret: string, digest: string): boolean {
@@ -121,6 +163,168 @@ function verifyTokenSecret(secret: string, digest: string): boolean {
   const expected = Buffer.from(hashHex, 'hex')
   const actual = createHash('sha256').update(secret).digest()
   return actual.length === expected.length && timingSafeEqual(actual, expected)
+}
+
+function parseSetCookieDefinition(header: string): {
+  readonly name: string
+  readonly options: CookieOptions
+} | null {
+  const [nameValue, ...attributes] = header.split(';')
+  const separator = nameValue?.indexOf('=') ?? -1
+  if (!nameValue || separator <= 0) {
+    return null
+  }
+
+  const options: {
+    path?: string
+    domain?: string
+    secure?: boolean
+    httpOnly?: boolean
+    sameSite?: 'lax' | 'strict' | 'none'
+    partitioned?: boolean
+  } = {}
+
+  for (const rawAttribute of attributes) {
+    const attribute = rawAttribute.trim()
+    if (!attribute) {
+      continue
+    }
+
+    const attributeSeparator = attribute.indexOf('=')
+    const key = (attributeSeparator === -1 ? attribute : attribute.slice(0, attributeSeparator)).trim().toLowerCase()
+    const value = attributeSeparator === -1 ? '' : attribute.slice(attributeSeparator + 1).trim()
+
+    switch (key) {
+      case 'path':
+        options.path = value
+        break
+      case 'domain':
+        options.domain = value
+        break
+      case 'secure':
+        options.secure = true
+        break
+      case 'httponly':
+        options.httpOnly = true
+        break
+      case 'samesite':
+        if (value.toLowerCase() === 'lax' || value.toLowerCase() === 'strict' || value.toLowerCase() === 'none') {
+          options.sameSite = value.toLowerCase() as CookieOptions['sameSite']
+        }
+        break
+      case 'partitioned':
+        options.partitioned = true
+        break
+    }
+  }
+
+  return {
+    name: decodeURIComponent(nameValue.slice(0, separator)),
+    options,
+  }
+}
+
+function serializeCookie(
+  name: string,
+  value: string,
+  options: CookieSerializationOptions = {},
+): string {
+  const attributes = [
+    `${encodeURIComponent(name)}=${encodeURIComponent(value)}`,
+    `Path=${options.path ?? '/'}`,
+  ]
+
+  if (options.domain) {
+    attributes.push(`Domain=${options.domain}`)
+  }
+  if ((options.maxAge ?? 0) > 0) {
+    attributes.push(`Max-Age=${options.maxAge}`)
+  }
+  if (options.expires) {
+    attributes.push(`Expires=${options.expires.toUTCString()}`)
+  }
+  if (options.secure) {
+    attributes.push('Secure')
+  }
+  if (options.httpOnly) {
+    attributes.push('HttpOnly')
+  }
+  if (options.sameSite) {
+    attributes.push(`SameSite=${options.sameSite[0]!.toUpperCase()}${options.sameSite.slice(1)}`)
+  }
+  if (options.partitioned) {
+    attributes.push('Partitioned')
+  }
+
+  return attributes.join('; ')
+}
+
+function forgetCookie(
+  bindings: RuntimeBindings,
+  name: string,
+  options: CookieOptions = {},
+): string {
+  const cookieOptions = {
+    ...options,
+    expires: new Date(0),
+    maxAge: 0,
+  } satisfies CookieSerializationOptions
+
+  if (bindings.session.cookie) {
+    return bindings.session.cookie(name, '', cookieOptions)
+  }
+
+  return serializeCookie(name, '', cookieOptions)
+}
+
+function getHostedSessionCookieNamesForGuard(
+  config: RuntimeBindings['config'],
+  guardName: string,
+): readonly string[] {
+  const names = new Set<string>()
+  for (const provider of Object.values(config.workos)) {
+    if ((provider.guard ?? config.defaults.guard) === guardName) {
+      names.add(provider.sessionCookie)
+    }
+  }
+  for (const provider of Object.values(config.clerk)) {
+    if ((provider.guard ?? config.defaults.guard) === guardName) {
+      names.add(provider.sessionCookie)
+    }
+  }
+
+  return [...names]
+}
+
+function buildLogoutCookies(
+  bindings: RuntimeBindings,
+  guardName: string,
+  options: {
+    readonly clearSessionCookies: boolean
+  },
+): readonly string[] {
+  const cookies: string[] = []
+  const defaultSessionCookie = parseSetCookieDefinition(bindings.session.sessionCookie(''))
+  const defaultRememberCookie = parseSetCookieDefinition(bindings.session.rememberMeCookie(''))
+
+  if (options.clearSessionCookies) {
+    if (defaultSessionCookie) {
+      cookies.push(forgetCookie(bindings, defaultSessionCookie.name, defaultSessionCookie.options))
+    }
+    if (defaultRememberCookie) {
+      cookies.push(forgetCookie(bindings, defaultRememberCookie.name, defaultRememberCookie.options))
+    }
+  }
+
+  const hostedCookieOptions: CookieOptions = {
+    path: '/',
+    domain: '',
+  }
+  for (const cookieName of getHostedSessionCookieNamesForGuard(bindings.config, guardName)) {
+    cookies.push(forgetCookie(bindings, cookieName, hostedCookieOptions))
+  }
+
+  return Object.freeze([...new Set(cookies)])
 }
 
 function createPersonalAccessTokenId(): string {
@@ -319,30 +523,92 @@ function getProviderAdapter(
   }
 }
 
+function readMarkedProvider(user: unknown): string | undefined {
+  if (!user || typeof user !== 'object') {
+    return undefined
+  }
+
+  const marker = (user as Record<PropertyKey, unknown>)[AUTH_PROVIDER_MARKER]
+  return typeof marker === 'string' ? marker : undefined
+}
+
+function getGuardProviderAdapter(
+  guardName: string,
+): {
+  readonly guard: RuntimeBindings['config']['guards'][string]
+  readonly adapter: AuthProviderAdapter
+  readonly provider: string
+} {
+  const guard = getGuardConfig(guardName)
+  if (guard.driver !== 'session') {
+    throw new Error(`[@holo-js/auth] Auth guard "${guardName}" does not support session login.`)
+  }
+
+  const provider = guard.provider
+  const { adapter } = getProviderAdapter(provider)
+
+  return {
+    guard,
+    adapter,
+    provider,
+  }
+}
+
 function ensurePasswordConfirmation(input: AuthRegistrationInput): void {
   if (input.password !== input.passwordConfirmation) {
     throw new Error('[@holo-js/auth] Password confirmation does not match.')
   }
 }
 
-function toLookupCredentials(input: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+function getProviderIdentifiers(providerName: string): readonly string[] {
+  const bindings = getRuntimeBindings()
+  return bindings.config.providers[providerName]?.identifiers ?? ['email']
+}
+
+function toLookupCredentials(
+  input: Readonly<Record<string, unknown>>,
+  identifiers: readonly string[],
+): Readonly<Record<string, unknown>> {
+  const allowed = new Set(identifiers)
   const credentials = Object.fromEntries(
     Object.entries(input).filter(([key, value]) => (
-      key !== 'password'
-      && key !== 'passwordConfirmation'
-      && key !== 'remember'
-      && key !== 'name'
-      && key !== 'avatar'
-      && key !== 'email_verified_at'
+      allowed.has(key)
       && typeof value !== 'undefined'
+      && value !== null
     )),
   )
 
   if (Object.keys(credentials).length === 0) {
-    throw new Error('[@holo-js/auth] Auth credentials must include at least one identifier field.')
+    throw new Error(
+      `[@holo-js/auth] Auth credentials must include at least one configured identifier field: ${identifiers.join(', ')}.`,
+    )
   }
 
   return Object.freeze(credentials)
+}
+
+async function findUserByConfiguredIdentifiers(
+  adapter: AuthProviderAdapter,
+  credentials: Readonly<Record<string, unknown>>,
+  identifiers: readonly string[],
+): Promise<unknown | null> {
+  const lookup = toLookupCredentials(credentials, identifiers)
+
+  for (const identifier of identifiers) {
+    const value = lookup[identifier]
+    if (typeof value === 'undefined') {
+      continue
+    }
+
+    const user = await adapter.findByCredentials({
+      [identifier]: value,
+    })
+    if (user) {
+      return user
+    }
+  }
+
+  return null
 }
 
 function toRegistrationRecord(input: AuthRegistrationInput, password: string): Readonly<Record<string, unknown>> {
@@ -428,11 +694,11 @@ function isEmailVerificationRequired(): boolean {
   return getRuntimeBindings().config.emailVerification.required === true
 }
 
-function toSessionPayload(
+function toSessionIdentityPayload(
   guard: string,
   provider: string,
   user: SerializedAuthUser,
-): SessionAuthPayload {
+): SessionIdentityPayload {
   return Object.freeze({
     guard,
     provider,
@@ -441,7 +707,19 @@ function toSessionPayload(
   })
 }
 
-function isSessionAuthPayload(value: unknown): value is SessionAuthPayload {
+function toSessionPayload(
+  guard: string,
+  provider: string,
+  user: SerializedAuthUser,
+  impersonation?: SessionImpersonationPayload,
+): SessionAuthPayload {
+  return Object.freeze({
+    ...toSessionIdentityPayload(guard, provider, user),
+    ...(impersonation ? { impersonation } : {}),
+  })
+}
+
+function isSessionIdentityPayload(value: unknown): value is SessionIdentityPayload {
   return !!(
     value
     && typeof value === 'object'
@@ -458,6 +736,31 @@ function isSessionAuthPayload(value: unknown): value is SessionAuthPayload {
     && (value as { user?: unknown }).user !== null
     && typeof (value as { user?: unknown }).user === 'object'
   )
+}
+
+function isSessionImpersonationPayload(value: unknown): value is SessionImpersonationPayload {
+  return !!(
+    value
+    && typeof value === 'object'
+    && 'actor' in value
+    && isSessionIdentityPayload((value as { actor?: unknown }).actor)
+    && (
+      !('original' in value)
+      || typeof (value as { original?: unknown }).original === 'undefined'
+      || isSessionIdentityPayload((value as { original?: unknown }).original)
+    )
+    && 'startedAt' in value
+    && typeof (value as { startedAt?: unknown }).startedAt === 'string'
+  )
+}
+
+function isSessionAuthPayload(value: unknown): value is SessionAuthPayload {
+  return isSessionIdentityPayload(value)
+    && (
+      !('impersonation' in (value as Record<string, unknown>))
+      || typeof (value as { impersonation?: unknown }).impersonation === 'undefined'
+      || isSessionImpersonationPayload((value as { impersonation?: unknown }).impersonation)
+    )
 }
 
 function readSessionPayloads(record: AuthSessionRecord | null | undefined): SessionAuthPayloadMap | null {
@@ -522,6 +825,32 @@ function writeSessionPayloads(
   }
 
   return Object.freeze(nextData)
+}
+
+function stripImpersonation(
+  payload: SessionAuthPayload,
+): SessionIdentityPayload {
+  return toSessionIdentityPayload(payload.guard, payload.provider, payload.user)
+}
+
+function createImpersonationState(
+  payload: SessionAuthPayload,
+): AuthImpersonationState | null {
+  const impersonation = payload.impersonation
+  if (!impersonation) {
+    return null
+  }
+
+  return Object.freeze({
+    guard: payload.guard,
+    actorGuard: impersonation.actor.guard,
+    user: rehydrateSerializedUser(payload.user, payload.provider),
+    actor: rehydrateSerializedUser(impersonation.actor.user, impersonation.actor.provider),
+    originalUser: impersonation.original
+      ? rehydrateSerializedUser(impersonation.original.user, impersonation.original.provider)
+      : null,
+    startedAt: new Date(impersonation.startedAt),
+  })
 }
 
 function normalizeTokenRecord(record: PersonalAccessTokenRecord): PersonalAccessTokenRecord {
@@ -699,10 +1028,7 @@ async function resolveUserFromGuard(
     if (Object.keys(remainingPayloads).length === 0) {
       await bindings.session.invalidate(sessionId)
     } else {
-      await bindings.session.create({
-        id: sessionId,
-        data: writeSessionPayloads(record.data, remainingPayloads),
-      })
+      await writeExistingSession(bindings, record, writeSessionPayloads(record.data, remainingPayloads))
     }
     bindings.context.setSessionId(guardName)
     bindings.context.setCachedUser(guardName, null)
@@ -717,12 +1043,8 @@ async function resolveUserFromGuard(
 
 async function loginForGuard(guardName: string, credentials: AuthCredentials): Promise<AuthEstablishedSession> {
   const bindings = getRuntimeBindings()
-  const guard = getGuardConfig(guardName)
-  if (guard.driver !== 'session') {
-    throw new Error(`[@holo-js/auth] Auth guard "${guardName}" does not support credential login.`)
-  }
-  const { adapter } = getProviderAdapter(guard.provider)
-  const user = await adapter.findByCredentials(toLookupCredentials(credentials))
+  const { guard, adapter } = getGuardProviderAdapter(guardName)
+  const user = await findUserByConfiguredIdentifiers(adapter, credentials, getProviderIdentifiers(guard.provider))
   if (!user) {
     throw new Error('[@holo-js/auth] Invalid credentials.')
   }
@@ -747,16 +1069,364 @@ async function loginForGuard(guardName: string, credentials: AuthCredentials): P
   })
 }
 
-async function logoutForGuard(guardName: string): Promise<void> {
+function assertTrustedUserProvider(
+  guardName: string,
+  providerName: string,
+  user: unknown,
+): void {
+  const markedProvider = readMarkedProvider(user)
+  if (markedProvider && markedProvider !== providerName) {
+    throw new Error(
+      `[@holo-js/auth] Trusted login for guard "${guardName}" requires a user from provider "${providerName}", `
+      + `received "${markedProvider}".`,
+    )
+  }
+
+  const bindings = getRuntimeBindings()
+  for (const [candidateProviderName, adapter] of Object.entries(bindings.providers)) {
+    if (candidateProviderName === providerName) {
+      continue
+    }
+
+    if (adapter.matchesUser?.(user) === true) {
+      throw new Error(
+        `[@holo-js/auth] Trusted login for guard "${guardName}" requires a user from provider "${providerName}", `
+        + `received "${candidateProviderName}".`,
+      )
+    }
+  }
+}
+
+function extractUserId(
+  adapter: AuthProviderAdapter,
+  user: unknown,
+): string | number | undefined {
+  try {
+    const resolved = adapter.getId(user as never)
+    if (typeof resolved === 'string' || typeof resolved === 'number') {
+      return resolved
+    }
+  } catch {
+    // Fall through to plain-object id extraction.
+  }
+
+  if (!user || typeof user !== 'object') {
+    return undefined
+  }
+
+  const value = (user as { id?: unknown }).id
+  return typeof value === 'string' || typeof value === 'number'
+    ? value
+    : undefined
+}
+
+function isCompatibleSerializedUserCandidate(
+  candidate: unknown,
+  serialized: SerializedAuthUser,
+): boolean {
+  if (!candidate || typeof candidate !== 'object') {
+    return false
+  }
+
+  for (const [key, value] of Object.entries(candidate)) {
+    if (typeof value === 'undefined') {
+      continue
+    }
+
+    if (!(key in serialized)) {
+      return false
+    }
+
+    if (serialized[key] !== value) {
+      return false
+    }
+  }
+
+  return true
+}
+
+async function resolveTrustedUserForGuard(
+  guardName: string,
+  candidate: unknown,
+): Promise<{
+  readonly provider: string
+  readonly adapter: AuthProviderAdapter
+  readonly user: unknown
+}> {
+  const { provider, adapter } = getGuardProviderAdapter(guardName)
+
+  if (candidate === null || typeof candidate === 'undefined') {
+    throw new Error('[@holo-js/auth] Trusted login requires a user or user id.')
+  }
+
+  if (typeof candidate === 'string' || typeof candidate === 'number') {
+    const user = await adapter.findById(candidate)
+    if (!user) {
+      throw new Error(
+        `[@holo-js/auth] Auth user "${provider}:${String(candidate)}" was not found for trusted login.`,
+      )
+    }
+
+    return {
+      provider,
+      adapter,
+      user,
+    }
+  }
+
+  assertTrustedUserProvider(guardName, provider, candidate)
+  const markedProvider = readMarkedProvider(candidate)
+
+  if (adapter.matchesUser?.(candidate) === true) {
+    const userId = extractUserId(adapter, candidate)
+    if (typeof userId !== 'string' && typeof userId !== 'number') {
+      throw new Error(
+        `[@holo-js/auth] Trusted login for guard "${guardName}" requires a user value compatible with provider "${provider}".`,
+      )
+    }
+
+    const user = await adapter.findById(userId)
+    if (!user) {
+      throw new Error(
+        `[@holo-js/auth] Auth user "${provider}:${String(userId)}" was not found for trusted login.`,
+      )
+    }
+
+    return {
+      provider,
+      adapter,
+      user,
+    }
+  }
+
+  const userId = extractUserId(adapter, candidate)
+  if (typeof userId === 'string' || typeof userId === 'number') {
+    const user = await adapter.findById(userId)
+    if (user) {
+      if (
+        Object.keys(getRuntimeBindings().providers).length > 1
+        && !markedProvider
+        && !isCompatibleSerializedUserCandidate(candidate, serializeUser(adapter, user, provider))
+      ) {
+        throw new Error(
+          `[@holo-js/auth] Trusted login for guard "${guardName}" requires a user from provider "${provider}". `
+          + 'Pass a user id, a serialized auth user, or implement matchesUser() on the provider adapter.',
+        )
+      }
+
+      return {
+        provider,
+        adapter,
+        user,
+      }
+    }
+  }
+
+  throw new Error(
+    `[@holo-js/auth] Trusted login for guard "${guardName}" requires a user value compatible with provider "${provider}".`,
+  )
+}
+
+async function loginUsingForGuard(
+  guardName: string,
+  user: unknown,
+  options: AuthSessionLoginOptions = {},
+): Promise<AuthEstablishedSession> {
+  const resolved = await resolveTrustedUserForGuard(guardName, user)
+  const serialized = serializeUser(resolved.adapter, resolved.user, resolved.provider)
+
+  return establishSessionForUser(serialized, {
+    guard: guardName,
+    provider: resolved.provider,
+    remember: options.remember === true,
+  })
+}
+
+async function loginUsingIdForGuard(
+  guardName: string,
+  userId: string | number,
+  options: AuthSessionLoginOptions = {},
+): Promise<AuthEstablishedSession> {
+  return loginUsingForGuard(guardName, userId, options)
+}
+
+async function readGuardSessionState(
+  guardName: string,
+): Promise<{
+  readonly sessionId: string
+  readonly record: AuthSessionRecord
+  readonly payloads: SessionAuthPayloadMap
+  readonly payload: SessionAuthPayload
+} | null> {
+  const bindings = getRuntimeBindings()
+  const sessionId = bindings.context.getSessionId(guardName)
+  if (!sessionId) {
+    return null
+  }
+
+  const record = await bindings.session.read(sessionId)
+  if (!record) {
+    return null
+  }
+
+  const payloads = readSessionPayloads(record)
+  const payload = payloads?.[guardName]
+  if (!payloads || !payload) {
+    return null
+  }
+
+  return {
+    sessionId,
+    record,
+    payloads,
+    payload,
+  }
+}
+
+async function writeExistingSession(
+  bindings: RuntimeBindings,
+  record: AuthSessionRecord,
+  data: Readonly<Record<string, unknown>>,
+): Promise<AuthSessionRecord> {
+  if (!bindings.session.write) {
+    return bindings.session.create({
+      id: record.id,
+      data,
+    })
+  }
+
+  return bindings.session.write(Object.freeze({
+    ...record,
+    data,
+  }))
+}
+
+async function renewExistingSession(
+  bindings: RuntimeBindings,
+  record: AuthSessionRecord,
+  data: Readonly<Record<string, unknown>>,
+): Promise<AuthSessionRecord> {
+  const renewed = await bindings.session.create({
+    id: record.id,
+    data,
+  })
+
+  if (!record.rememberTokenHash) {
+    return renewed
+  }
+
+  if (!bindings.session.write) {
+    return renewed
+  }
+
+  return bindings.session.write(Object.freeze({
+    ...renewed,
+    rememberTokenHash: record.rememberTokenHash,
+  }))
+}
+
+async function impersonateForGuard(
+  guardName: string,
+  user: unknown,
+  options: AuthImpersonationOptions = {},
+): Promise<AuthEstablishedSession> {
+  const actorGuard = options.actorGuard ?? guardName
+  const actorState = await readGuardSessionState(actorGuard)
+  if (!actorState) {
+    throw new Error(`[@holo-js/auth] Impersonation for guard "${guardName}" requires an authenticated actor on guard "${actorGuard}".`)
+  }
+
+  if (actorState.payload.impersonation) {
+    throw new Error(`[@holo-js/auth] Nested impersonation is not supported for guard "${actorGuard}".`)
+  }
+
+  const targetState = await readGuardSessionState(guardName)
+  if (targetState?.payload.impersonation) {
+    throw new Error(`[@holo-js/auth] Guard "${guardName}" is already impersonating another user.`)
+  }
+
+  const resolved = await resolveTrustedUserForGuard(guardName, user)
+  const serialized = serializeUser(resolved.adapter, resolved.user, resolved.provider)
+  const impersonation = Object.freeze({
+    actor: stripImpersonation(actorState.payload),
+    ...(targetState?.payload ? { original: stripImpersonation(targetState.payload) } : {}),
+    startedAt: new Date().toISOString(),
+  }) satisfies SessionImpersonationPayload
+
+  return establishSessionForUser(serialized, {
+    guard: guardName,
+    provider: resolved.provider,
+    remember: options.remember === true,
+    preserveRemember: true,
+    payload: toSessionPayload(guardName, resolved.provider, serialized, impersonation),
+  })
+}
+
+async function impersonateByIdForGuard(
+  guardName: string,
+  userId: string | number,
+  options: AuthImpersonationOptions = {},
+): Promise<AuthEstablishedSession> {
+  return impersonateForGuard(guardName, userId, options)
+}
+
+async function impersonationForGuard(guardName: string): Promise<AuthImpersonationState | null> {
+  const state = await readGuardSessionState(guardName)
+  if (!state) {
+    return null
+  }
+
+  return createImpersonationState(state.payload)
+}
+
+async function stopImpersonatingForGuard(guardName: string): Promise<AuthUser | null> {
+  const bindings = getRuntimeBindings()
+  const state = await readGuardSessionState(guardName)
+  if (!state || !state.payload.impersonation) {
+    return null
+  }
+
+  const nextPayloads = { ...state.payloads }
+  const original = state.payload.impersonation.original
+  if (original) {
+    nextPayloads[guardName] = toSessionPayload(original.guard, original.provider, original.user)
+  } else {
+    delete nextPayloads[guardName]
+  }
+
+  if (Object.keys(nextPayloads).length === 0) {
+    await bindings.session.invalidate(state.sessionId)
+  } else {
+    await writeExistingSession(bindings, state.record, writeSessionPayloads(state.record.data, nextPayloads))
+  }
+
+  bindings.context.setRememberToken?.(guardName)
+  if (!original) {
+    bindings.context.setSessionId(guardName)
+    bindings.context.setCachedUser(guardName, null)
+    return null
+  }
+
+  const restored = rehydrateSerializedUser(original.user, original.provider)
+  bindings.context.setSessionId(guardName, state.sessionId)
+  bindings.context.setCachedUser(guardName, restored)
+  return restored
+}
+
+async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
   const bindings = getRuntimeBindings()
   const guard = getGuardConfig(guardName)
 
   if (guard.driver === 'token') {
     bindings.context.setAccessToken?.(guardName)
     bindings.context.setCachedUser(guardName, null)
-    return
+    return Object.freeze({
+      guard: guardName,
+      cookies: Object.freeze([]),
+    })
   }
 
+  let clearSessionCookies = false
   const sessionId = bindings.context.getSessionId(guardName)
   if (sessionId) {
     const record = await bindings.session.read(sessionId)
@@ -765,15 +1435,14 @@ async function logoutForGuard(guardName: string): Promise<void> {
     }
     if (!(guardName in payloads)) {
       await bindings.session.invalidate(sessionId)
+      clearSessionCookies = true
     } else {
       delete payloads[guardName]
       if (Object.keys(payloads).length === 0) {
         await bindings.session.invalidate(sessionId)
+        clearSessionCookies = true
       } else if (record) {
-        await bindings.session.create({
-          id: sessionId,
-          data: writeSessionPayloads(record.data, payloads),
-        })
+        await writeExistingSession(bindings, record, writeSessionPayloads(record.data, payloads))
       }
     }
   }
@@ -781,6 +1450,11 @@ async function logoutForGuard(guardName: string): Promise<void> {
   bindings.context.setSessionId(guardName)
   bindings.context.setCachedUser(guardName, null)
   bindings.context.setRememberToken?.(guardName)
+
+  return Object.freeze({
+    guard: guardName,
+    cookies: buildLogoutCookies(bindings, guardName, { clearSessionCookies }),
+  })
 }
 
 async function registerDefaultUser(input: AuthRegistrationInput): Promise<AuthUser> {
@@ -790,9 +1464,15 @@ async function registerDefaultUser(input: AuthRegistrationInput): Promise<AuthUs
   const defaultGuard = bindings.config.defaults.guard
   const guard = getGuardConfig(defaultGuard)
   const { adapter } = getProviderAdapter(guard.provider)
-  const existing = await adapter.findByCredentials(toLookupCredentials(input))
-  if (existing) {
-    throw new Error('[@holo-js/auth] A user with these credentials already exists.')
+  const identifiers = getProviderIdentifiers(guard.provider)
+  const lookup = toLookupCredentials(input, identifiers)
+  for (const [identifier, value] of Object.entries(lookup)) {
+    const existing = await adapter.findByCredentials({
+      [identifier]: value,
+    })
+    if (existing) {
+      throw new Error(`[@holo-js/auth] A user with this ${identifier} already exists.`)
+    }
   }
 
   const password = await bindings.passwordHasher.hash(input.password)
@@ -834,6 +1514,8 @@ async function establishSessionForUser(
     readonly guard: string
     readonly provider: string
     readonly remember?: boolean
+    readonly preserveRemember?: boolean
+    readonly payload?: SessionAuthPayload
   },
 ): Promise<AuthEstablishedSession> {
   const bindings = getRuntimeBindings()
@@ -857,15 +1539,28 @@ async function establishSessionForUser(
     currentGuardSessionId
     && existingPayloads[options.guard]
   )
-  const sessionPayload = toSessionPayload(options.guard, options.provider, user as SerializedAuthUser)
+  const sessionPayload = options.payload
+    ?? toSessionPayload(options.guard, options.provider, user as SerializedAuthUser)
   const sessionPayloads = {
     ...existingPayloads,
     [options.guard]: sessionPayload,
   }
-  const session = await bindings.session.create({
-    ...(!rotateCurrentGuardSession && sharedSessionId ? { id: sharedSessionId } : {}),
-    data: writeSessionPayloads(existingSession?.data ?? {}, sessionPayloads),
-  })
+  const nextSessionData = writeSessionPayloads(existingSession?.data ?? {}, sessionPayloads)
+  const preserveRememberSession = !!(
+    rotateCurrentGuardSession
+    && existingSession?.rememberTokenHash
+    && options.preserveRemember
+    && !options.remember
+  )
+  let session = rotateCurrentGuardSession
+    ? await bindings.session.create({
+      data: nextSessionData,
+    })
+    : existingSession
+      ? await renewExistingSession(bindings, existingSession, nextSessionData)
+      : await bindings.session.create({
+        data: nextSessionData,
+      })
 
   if (rotateCurrentGuardSession && currentGuardSessionId && currentGuardSessionId !== session.id) {
     await bindings.session.invalidate(currentGuardSessionId)
@@ -878,6 +1573,9 @@ async function establishSessionForUser(
   bindings.context.setCachedUser(options.guard, user)
   let rememberToken: string | undefined
   if (options.remember) {
+    rememberToken = await bindings.session.issueRememberMeToken(session.id)
+    bindings.context.setRememberToken?.(options.guard, rememberToken)
+  } else if (preserveRememberSession) {
     rememberToken = await bindings.session.issueRememberMeToken(session.id)
     bindings.context.setRememberToken?.(options.guard, rememberToken)
   } else {
@@ -1189,6 +1887,24 @@ function createGuardFacade(guardName: string): AuthGuardFacade {
     login(credentials: AuthCredentials) {
       return loginForGuard(guardName, credentials)
     },
+    loginUsing(user: unknown, options?: AuthSessionLoginOptions) {
+      return loginUsingForGuard(guardName, user, options)
+    },
+    loginUsingId(userId: string | number, options?: AuthSessionLoginOptions) {
+      return loginUsingIdForGuard(guardName, userId, options)
+    },
+    impersonate(user: unknown, options?: AuthImpersonationOptions) {
+      return impersonateForGuard(guardName, user, options)
+    },
+    impersonateById(userId: string | number, options?: AuthImpersonationOptions) {
+      return impersonateByIdForGuard(guardName, userId, options)
+    },
+    impersonation() {
+      return impersonationForGuard(guardName)
+    },
+    stopImpersonating() {
+      return stopImpersonatingForGuard(guardName)
+    },
     logout() {
       return logoutForGuard(guardName)
     },
@@ -1239,11 +1955,38 @@ export function getAuthRuntime(): AuthRuntimeFacade {
     login(credentials) {
       return loginForGuard(getDefaultGuardName(), credentials)
     },
+    loginUsing(user, options) {
+      return loginUsingForGuard(getDefaultGuardName(), user, options)
+    },
+    loginUsingId(userId, options) {
+      return loginUsingIdForGuard(getDefaultGuardName(), userId, options)
+    },
+    impersonate(user, options) {
+      return impersonateForGuard(getDefaultGuardName(), user, options)
+    },
+    impersonateById(userId, options) {
+      return impersonateByIdForGuard(getDefaultGuardName(), userId, options)
+    },
+    impersonation() {
+      return impersonationForGuard(getDefaultGuardName())
+    },
+    stopImpersonating() {
+      return stopImpersonatingForGuard(getDefaultGuardName())
+    },
     logout() {
       return logoutForGuard(getDefaultGuardName())
     },
     register(input) {
       return registerDefaultUser(input)
+    },
+    hashPassword(password: string) {
+      return getRuntimeBindings().passwordHasher.hash(password)
+    },
+    verifyPassword(password: string, digest: string) {
+      return getRuntimeBindings().passwordHasher.verify(password, digest)
+    },
+    needsPasswordRehash(digest: string) {
+      return resolveNeedsPasswordRehash(getRuntimeBindings().passwordHasher, digest)
     },
     guard(name: string) {
       return createGuardFacade(name)
@@ -1257,12 +2000,17 @@ export function getAuthRuntime(): AuthRuntimeFacade {
     ...facade,
     logoutAll(guardName?: string) {
       if (guardName) {
-        return logoutForGuard(guardName)
+        return logoutForGuard(guardName).then(result => Object.freeze([result]))
       }
 
-      return Promise.all(
-        Object.keys(getRuntimeBindings().config.guards).map(name => logoutForGuard(name)),
-      ).then(() => undefined)
+      return Object.keys(getRuntimeBindings().config.guards).reduce<Promise<AuthLogoutResult[]>>(
+        async (resultsPromise, name) => {
+          const results = await resultsPromise
+          results.push(await logoutForGuard(name))
+          return results
+        },
+        Promise.resolve([]),
+      ).then(results => Object.freeze(results))
     },
   })
 }
@@ -1307,7 +2055,55 @@ export async function login(credentials: AuthCredentials): Promise<AuthEstablish
   return getAuthRuntime().login(credentials)
 }
 
-export async function logout(): Promise<void> {
+export async function loginUsing(
+  user: unknown,
+  options?: AuthSessionLoginOptions,
+): Promise<AuthEstablishedSession> {
+  return getAuthRuntime().loginUsing(user, options)
+}
+
+export async function loginUsingId(
+  userId: string | number,
+  options?: AuthSessionLoginOptions,
+): Promise<AuthEstablishedSession> {
+  return getAuthRuntime().loginUsingId(userId, options)
+}
+
+export async function impersonate(
+  user: unknown,
+  options?: AuthImpersonationOptions,
+): Promise<AuthEstablishedSession> {
+  return getAuthRuntime().impersonate(user, options)
+}
+
+export async function impersonateById(
+  userId: string | number,
+  options?: AuthImpersonationOptions,
+): Promise<AuthEstablishedSession> {
+  return getAuthRuntime().impersonateById(userId, options)
+}
+
+export async function impersonation(): Promise<AuthImpersonationState | null> {
+  return getAuthRuntime().impersonation()
+}
+
+export async function stopImpersonating(): Promise<AuthUser | null> {
+  return getAuthRuntime().stopImpersonating()
+}
+
+export async function hashPassword(password: string): Promise<string> {
+  return getAuthRuntime().hashPassword(password)
+}
+
+export async function verifyPassword(password: string, digest: string): Promise<boolean> {
+  return getAuthRuntime().verifyPassword(password, digest)
+}
+
+export async function needsPasswordRehash(digest: string): Promise<boolean> {
+  return getAuthRuntime().needsPasswordRehash(digest)
+}
+
+export async function logout(): Promise<AuthLogoutResult> {
   return getAuthRuntime().logout()
 }
 

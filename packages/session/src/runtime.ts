@@ -251,6 +251,21 @@ export async function createSession(input: CreateSessionInput = {}): Promise<Ses
   return record
 }
 
+export async function writeSession(record: SessionRecord): Promise<SessionRecord> {
+  const { name, store } = getStore(record.store)
+  const nextRecord: SessionRecord = Object.freeze({
+    ...record,
+    store: name,
+    data: Object.freeze({ ...(record.data ?? {}) }),
+    createdAt: ensureDate(record.createdAt),
+    lastActivityAt: ensureDate(record.lastActivityAt),
+    expiresAt: ensureDate(record.expiresAt),
+  })
+
+  await store.write(nextRecord)
+  return nextRecord
+}
+
 export async function readSession(sessionId: string, options?: ReadSessionOptions): Promise<SessionRecord | null> {
   return readRecord(sessionId, options)
 }
@@ -384,6 +399,7 @@ export function configureSessionRuntime(bindings?: SessionRuntimeBindings): void
 export function getSessionRuntime(): SessionRuntimeFacade {
   return {
     create: createSession,
+    write: writeSession,
     read: readSession,
     rotate: rotateSession,
     invalidate: invalidateSession,

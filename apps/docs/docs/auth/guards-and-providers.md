@@ -39,8 +39,8 @@ export default defineAuthConfig({
     },
   },
   providers: {
-    users: { model: 'User' },
-    admins: { model: 'Admin' },
+    users: { model: 'User', identifiers: ['email'] },
+    admins: { model: 'Admin', identifiers: ['email'] },
   },
 })
 ```
@@ -56,12 +56,26 @@ Providers stay intentionally small:
 
 ```ts
 providers: {
-  users: { model: 'User' },
-  admins: { model: 'Admin' },
+  users: { model: 'User', identifiers: ['email'] },
+  admins: { model: 'Admin', identifiers: ['email'] },
 }
 ```
 
-The provider points at the local model. Auth lookup then uses the validated payload you pass at runtime.
+The provider points at the local model and declares which fields are auth identifiers.
+
+Example:
+
+```ts
+providers: {
+  users: {
+    model: 'User',
+    identifiers: ['email', 'phone'],
+  },
+}
+```
+
+That means auth may look users up by `email` or `phone`, while other fields on the user model remain plain profile
+attributes.
 
 ## Using Multiple Guards
 

@@ -163,6 +163,7 @@ class InMemoryIdentityStore {
 function configureRuntime(options: {
   emailVerificationRequired?: boolean
   socialGuard?: 'web' | 'admin' | 'api'
+  socialMapToProvider?: 'users' | 'admins'
   encryptTokens?: boolean
 } = {}) {
   const sessionStore = new InMemorySessionStore()
@@ -223,6 +224,7 @@ function configureRuntime(options: {
           redirectUri: 'https://app.test/auth/google/callback',
           scopes: ['openid', 'email', 'profile'],
           guard: options.socialGuard,
+          mapToProvider: options.socialMapToProvider,
           encryptTokens: options.encryptTokens === true,
         },
       },
@@ -436,6 +438,55 @@ describe('@holo-js/auth-social', () => {
       provider: 'admins',
       userId: 1,
     })
+  })
+
+  it('keeps mapToProvider sessions on the mapped auth provider during callback login', async () => {
+    const runtime = configureRuntime({
+      socialMapToProvider: 'admins',
+    })
+
+    const redirectResponse = await redirect('google', new Request('https://app.test/auth/google'))
+    const state = new URL(redirectResponse.headers.get('location')!).searchParams.get('state')!
+    runtime.exchangeProfiles.set('code-map-to-provider', {
+      profile: {
+        id: 'google-admin-web',
+        email: 'admin@example.com',
+        emailVerified: true,
+        name: 'Mapped Admin',
+      },
+      tokens: {
+        accessToken: 'mapped-admin-token',
+      },
+    })
+
+    const response = await callback('google', new Request(`https://app.test/auth/google/callback?state=${state}&code=code-map-to-provider`))
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      authenticated: true,
+      provider: 'google',
+      guard: 'web',
+      user: {
+        email: 'admin@example.com',
+      },
+    })
+    expect(runtime.context.getSessionId('web')).toBeTypeOf('string')
+
+    const storedIdentity = await runtime.identityStore.findByProviderUserId('google', 'google-admin-web')
+    expect(storedIdentity).toMatchObject({
+      guard: 'web',
+      authProvider: 'admins',
+      userId: 1,
+    })
+
+    const sessionId = runtime.context.getSessionId('web')
+    const record = sessionId ? await runtime.sessionStore.read(sessionId) : null
+    expect(authRuntimeInternals.readSessionPayload(record, 'web')).toMatchObject({
+      guard: 'web',
+      provider: 'admins',
+      userId: 1,
+    })
+    expect(runtime.usersProvider.users.size).toBe(0)
+    expect(runtime.adminsProvider.users.size).toBe(1)
   })
 
   it('does not bind an unverified social email onto an existing local account', async () => {

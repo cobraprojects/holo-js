@@ -1,4 +1,4 @@
-import { check, currentAccessToken, getAuthRuntime, id, login, logout, passwords, refreshUser, register, tokens, user, verification } from './runtime'
+import { check, currentAccessToken, getAuthRuntime, hashPassword, id, impersonate, impersonateById, impersonation, login, loginUsing, loginUsingId, logout, needsPasswordRehash, passwords, refreshUser, register, stopImpersonating, tokens, user, verification, verifyPassword } from './runtime'
 
 export { defineAuthConfig } from './contracts'
 export {
@@ -8,16 +8,25 @@ export {
   createAsyncAuthContext,
   currentAccessToken,
   getAuthRuntime,
+  hashPassword,
   id,
+  impersonate,
+  impersonateById,
+  impersonation,
   login,
+  loginUsing,
+  loginUsingId,
   logout,
+  needsPasswordRehash,
   passwords,
   refreshUser,
   register,
   resetAuthRuntime,
+  stopImpersonating,
   tokens,
   user,
   verification,
+  verifyPassword,
 } from './runtime'
 export type {
   AuthClientConfig,
@@ -29,6 +38,10 @@ export type {
   AuthEstablishedSession,
   AuthFacade,
   AuthGuardFacade,
+  AuthImpersonationOptions,
+  AuthImpersonationState,
+  AuthLogoutResult,
+  AuthSessionLoginOptions,
   AuthPasswordHasher,
   AuthPasswordResetFacade,
   AuthTokenFacade,
@@ -62,11 +75,20 @@ const auth = Object.freeze({
   refreshUser,
   id,
   currentAccessToken,
+  hashPassword,
   login,
+  loginUsing,
+  loginUsingId,
+  impersonate,
+  impersonateById,
+  impersonation,
   logout,
+  needsPasswordRehash,
   register,
+  stopImpersonating,
   tokens,
   verification,
+  verifyPassword,
   passwords,
   guard(name: string) {
     return getAuthRuntime().guard(name)

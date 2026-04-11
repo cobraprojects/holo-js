@@ -27,6 +27,7 @@ export interface ClerkUserProfile {
 export interface ClerkVerifiedSession {
   readonly sessionId: string
   readonly user: ClerkUserProfile
+  readonly accessToken?: string
   readonly actor?: {
     readonly id?: string
     readonly type?: string
@@ -425,6 +426,7 @@ function createDefaultProviderRuntime(providerName: string, config: AuthClerkPro
       return Object.freeze({
         sessionId,
         user: profile,
+        accessToken: token,
         raw: Object.freeze({
           claims,
           user: profile.raw,

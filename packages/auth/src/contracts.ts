@@ -28,6 +28,28 @@ export interface AuthRegistrationInput extends AuthCredentials {
   readonly passwordConfirmation: string
 }
 
+export interface AuthSessionLoginOptions {
+  readonly remember?: boolean
+}
+
+export interface AuthImpersonationOptions extends AuthSessionLoginOptions {
+  readonly actorGuard?: string
+}
+
+export interface AuthImpersonationState {
+  readonly guard: string
+  readonly actorGuard: string
+  readonly user: AuthUser
+  readonly actor: AuthUser
+  readonly originalUser: AuthUser | null
+  readonly startedAt: Date
+}
+
+export interface AuthLogoutResult {
+  readonly guard: string
+  readonly cookies: readonly string[]
+}
+
 export interface AuthGuardFacade {
   check(): Promise<boolean>
   user(): Promise<AuthUser | null>
@@ -35,11 +57,20 @@ export interface AuthGuardFacade {
   id(): Promise<string | number | null>
   currentAccessToken(): Promise<AuthCurrentAccessToken | null>
   login(credentials: AuthCredentials): Promise<AuthEstablishedSession>
-  logout(): Promise<void>
+  loginUsing(user: unknown, options?: AuthSessionLoginOptions): Promise<AuthEstablishedSession>
+  loginUsingId(userId: string | number, options?: AuthSessionLoginOptions): Promise<AuthEstablishedSession>
+  impersonate(user: unknown, options?: AuthImpersonationOptions): Promise<AuthEstablishedSession>
+  impersonateById(userId: string | number, options?: AuthImpersonationOptions): Promise<AuthEstablishedSession>
+  impersonation(): Promise<AuthImpersonationState | null>
+  stopImpersonating(): Promise<AuthUser | null>
+  logout(): Promise<AuthLogoutResult>
 }
 
 export interface AuthFacade extends AuthGuardFacade {
   register(input: AuthRegistrationInput): Promise<AuthUser>
+  hashPassword(password: string): Promise<string>
+  verifyPassword(password: string, digest: string): Promise<boolean>
+  needsPasswordRehash(digest: string): Promise<boolean>
   guard(name: string): AuthGuardFacade
   tokens: AuthTokenFacade
   verification: AuthEmailVerificationFacade
@@ -61,6 +92,7 @@ export interface AuthProviderAdapter<TUser = unknown> {
 export interface AuthPasswordHasher {
   hash(password: string): Promise<string>
   verify(password: string, digest: string): Promise<boolean>
+  needsRehash?(digest: string): boolean | Promise<boolean>
 }
 
 export interface PersonalAccessTokenRecord {
@@ -222,6 +254,7 @@ export interface AuthSessionRuntime {
     readonly data?: Readonly<Record<string, unknown>>
     readonly id?: string
   }): Promise<AuthSessionRecord>
+  write?(record: AuthSessionRecord): Promise<AuthSessionRecord>
   read(
     sessionId: string,
     options?: { readonly store?: string },
@@ -238,6 +271,11 @@ export interface AuthSessionRuntime {
     sessionId: string,
     options?: { readonly store?: string },
   ): Promise<string>
+  cookie?(
+    name: string,
+    value: string,
+    options?: Record<string, unknown>,
+  ): string
   sessionCookie(
     value: string,
     options?: Record<string, unknown>,
@@ -272,7 +310,7 @@ export interface AuthRuntimeBindings {
 }
 
 export interface AuthRuntimeFacade extends AuthFacade {
-  logoutAll(guardName?: string): Promise<void>
+  logoutAll(guardName?: string): Promise<readonly AuthLogoutResult[]>
 }
 
 export interface AuthEstablishedSession {

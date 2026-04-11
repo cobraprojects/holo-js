@@ -1,7 +1,7 @@
 import { generateKeyPairSync, sign as signData } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src/runtime'
-import { authRuntimeInternals, configureAuthRuntime, defineAuthConfig, resetAuthRuntime } from '../../auth/src'
+import { authRuntimeInternals, configureAuthRuntime, defineAuthConfig, logout, resetAuthRuntime } from '../../auth/src'
 import type { AuthProviderAdapter } from '../../auth/src'
 import {
   ClerkAuthConflictError,
@@ -341,7 +341,15 @@ function configureRuntime(options: {
       providers: {
         app: {
           async verifySession({ token }) {
-            return sessions.get(token) ?? null
+            const session = sessions.get(token)
+            if (!session) {
+              return null
+            }
+
+            return {
+              ...session,
+              accessToken: token,
+            }
           },
         },
       },
@@ -1033,6 +1041,7 @@ describe('@holo-js/auth-clerk', () => {
 
     await expect(verifySession('bearer-token')).resolves.toMatchObject({
       sessionId: 'sess_1',
+      accessToken: 'bearer-token',
       user: {
         id: 'user_1',
       },
@@ -1044,6 +1053,7 @@ describe('@holo-js/auth-clerk', () => {
       },
     }))).resolves.toMatchObject({
       sessionId: 'sess_1',
+      accessToken: 'bearer-token',
     })
 
     await expect(verifyRequest(new Request('https://app.test/me', {
@@ -1052,6 +1062,7 @@ describe('@holo-js/auth-clerk', () => {
       },
     }))).resolves.toMatchObject({
       sessionId: 'sess_2',
+      accessToken: 'cookie-token',
     })
 
     await expect(verifyRequest(new Request('https://app.test/me', {
@@ -1090,6 +1101,10 @@ describe('@holo-js/auth-clerk', () => {
       guard: 'web',
       authProvider: 'users',
       status: 'created',
+      session: {
+        sessionId: 'sess_create',
+        accessToken: 'create-token',
+      },
       authSession: {
         guard: 'web',
         sessionId: expect.any(String),
@@ -1150,6 +1165,30 @@ describe('@holo-js/auth-clerk', () => {
     })
     expect(runtime.sessionStore.records.size).toBe(1)
     expect(firstSessionId ? runtime.sessionStore.records.has(firstSessionId) : false).toBe(true)
+  })
+
+  it('clears the Clerk hosted session cookie through the shared logout api', async () => {
+    const runtime = configureRuntime()
+    runtime.sessions.set('logout-token', {
+      sessionId: 'sess_logout',
+      user: {
+        id: 'user_logout',
+        email: 'logout@app.test',
+        emailVerified: true,
+        name: 'Logout User',
+      },
+    })
+
+    await authenticate(new Request('https://app.test/me', {
+      headers: {
+        authorization: 'Bearer logout-token',
+      },
+    }))
+
+    const loggedOut = await logout()
+
+    expect(loggedOut.cookies).toContainEqual(expect.stringContaining('holo_session=;'))
+    expect(loggedOut.cookies).toContainEqual(expect.stringContaining('__session=;'))
   })
 
   it('updates existing linked users on subsequent Clerk syncs and relinks missing local rows', async () => {

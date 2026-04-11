@@ -11,6 +11,18 @@ owned by your application and returns:
 - `refreshUser()`
 - `check()`
 
+It is read-only on purpose.
+
+The client package does not expose:
+
+- `login()` or `register()`
+- `loginUsing()` or `loginUsingId()`
+- `hashPassword()`, `verifyPassword()`, or `needsPasswordRehash()`
+- `impersonate()` or `stopImpersonating()`
+
+Those operations stay in `@holo-js/auth` because they require trusted server runtime access to your providers,
+sessions, password hasher, and cookies.
+
 ## Configuration
 
 ```ts

@@ -1115,6 +1115,7 @@ export default defineConfig({
       providers: {
         admins: {
           model: 'Admin',
+          identifiers: [' email ', 'phone', 'email'],
         },
       },
       passwords: {
@@ -1168,6 +1169,11 @@ export default defineConfig({
       defaults: {
         guard: 'web',
       },
+      providers: {
+        users: {
+          identifiers: ['email'],
+        },
+      },
     })
     expect(normalizeAuthConfig()).not.toHaveProperty('currentUserEndpoint')
     expect(normalizeAuthConfig(auth)).toMatchObject({
@@ -1183,6 +1189,7 @@ export default defineConfig({
       providers: {
         admins: {
           model: 'Admin',
+          identifiers: ['email', 'phone'],
         },
       },
       passwords: {
@@ -1284,6 +1291,14 @@ export default defineConfig({
         },
       },
     })).toThrow('model must be a non-empty string')
+    expect(() => normalizeAuthConfig({
+      providers: {
+        users: {
+          model: 'User',
+          identifiers: ['   '],
+        },
+      },
+    })).toThrow('identifier entries must be non-empty strings')
     expect(() => normalizeAuthConfig({
       guards: {
         web: {

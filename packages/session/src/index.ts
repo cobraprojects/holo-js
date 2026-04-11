@@ -10,6 +10,7 @@ import {
   rotateSession,
   sessionCookie,
   touchSession,
+  writeSession,
 } from './runtime'
 
 export { defineSessionConfig } from './contracts'
@@ -53,6 +54,7 @@ export {
   sessionCookie,
   sessionRuntimeInternals,
   touchSession,
+  writeSession,
 } from './runtime'
 export {
   createDatabaseSessionStore,
@@ -75,6 +77,7 @@ const session = Object.assign(
   (input?: CreateSessionInput) => createSession(input),
   {
     create: createSession,
+    write: writeSession,
     read: readSession,
     rotate: rotateSession,
     invalidate: invalidateSession,

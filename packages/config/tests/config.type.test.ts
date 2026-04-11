@@ -51,6 +51,7 @@ describe('@holo-js/config typing', () => {
       providers: {
         users: {
           model: 'User',
+          identifiers: ['email', 'phone'],
         },
       },
       social: {

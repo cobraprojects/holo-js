@@ -24,6 +24,7 @@ import session, {
   sessionCookie,
   touchSession,
   type SessionRecord,
+  writeSession,
 } from '../src'
 import type { SessionFacade } from '../src'
 
@@ -103,11 +104,13 @@ describe('@holo-js/session package surface', () => {
       },
     })
     expect(session.create).toBe(createSession)
+    expect(session.write).toBe(writeSession)
     expect(session.read).toBe(readSession)
     expect(session.rotate).toBe(rotateSession)
     expect(session.invalidate).toBe(invalidateSession)
     expect(session.touch).toBe(touchSession)
     expect(getSessionRuntime().create).toBe(createSession)
+    expect(getSessionRuntime().write).toBe(writeSession)
     expect(created.id).toBe('session_1')
     expect((await readSession('session_1'))?.data).toEqual({ cartId: 'cart_1' })
 
@@ -124,6 +127,25 @@ describe('@holo-js/session package surface', () => {
     const rememberToken = await issueRememberMeToken('session_2')
     expect((await consumeRememberMeToken(rememberToken))?.id).toBe('session_2')
     expect(await consumeRememberMeToken('bad-token')).toBeNull()
+
+    const updated = await writeSession({
+      ...rotated,
+      data: Object.freeze({ cartId: 'cart_2' }),
+      rememberTokenHash: 'remember-hash',
+    })
+    expect(updated).toMatchObject({
+      id: 'session_2',
+      data: {
+        cartId: 'cart_2',
+      },
+      rememberTokenHash: 'remember-hash',
+    })
+    expect(await readSession('session_2')).toMatchObject({
+      data: {
+        cartId: 'cart_2',
+      },
+      rememberTokenHash: 'remember-hash',
+    })
 
     expect(cookie('custom', 'value', { httpOnly: false })).toContain('custom=value')
     expect(sessionCookie('session_2')).toContain('holo_session=session_2')

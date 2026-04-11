@@ -29,6 +29,7 @@ type PortableRuntimeConfig<TCustom extends HoloConfigMap> = {
 
 export interface HoloSessionRuntimeBinding {
   create(input?: { readonly store?: string, readonly data?: Readonly<Record<string, unknown>>, readonly id?: string }): Promise<unknown>
+  write(record: unknown): Promise<unknown>
   read(sessionId: string, options?: { readonly store?: string }): Promise<unknown | null>
   rotate(sessionId: string, options?: { readonly store?: string, readonly newId?: string }): Promise<unknown>
   invalidate(sessionId: string, options?: { readonly store?: string }): Promise<void>
@@ -46,6 +47,9 @@ export interface HoloAuthRuntimeBinding {
   refreshUser(): Promise<unknown | null>
   id(): Promise<string | number | null>
   currentAccessToken(): Promise<unknown | null>
+  hashPassword(password: string): Promise<string>
+  verifyPassword(password: string, digest: string): Promise<boolean>
+  needsPasswordRehash(digest: string): Promise<boolean>
   login(credentials: Readonly<Record<string, unknown>> & {
     readonly password: string
     readonly remember?: boolean
@@ -56,13 +60,71 @@ export interface HoloAuthRuntimeBinding {
     readonly rememberToken?: string
     readonly cookies: readonly string[]
   }>
-  logout(): Promise<void>
+  loginUsing(
+    user: unknown,
+    options?: {
+      readonly remember?: boolean
+    },
+  ): Promise<{
+    readonly guard: string
+    readonly user: unknown
+    readonly sessionId: string
+    readonly rememberToken?: string
+    readonly cookies: readonly string[]
+  }>
+  loginUsingId(
+    userId: string | number,
+    options?: {
+      readonly remember?: boolean
+    },
+  ): Promise<{
+    readonly guard: string
+    readonly user: unknown
+    readonly sessionId: string
+    readonly rememberToken?: string
+    readonly cookies: readonly string[]
+  }>
+  impersonate(
+    user: unknown,
+    options?: {
+      readonly remember?: boolean
+      readonly actorGuard?: string
+    },
+  ): Promise<{
+    readonly guard: string
+    readonly user: unknown
+    readonly sessionId: string
+    readonly rememberToken?: string
+    readonly cookies: readonly string[]
+  }>
+  impersonateById(
+    userId: string | number,
+    options?: {
+      readonly remember?: boolean
+      readonly actorGuard?: string
+    },
+  ): Promise<{
+    readonly guard: string
+    readonly user: unknown
+    readonly sessionId: string
+    readonly rememberToken?: string
+    readonly cookies: readonly string[]
+  }>
+  impersonation(): Promise<unknown | null>
+  stopImpersonating(): Promise<unknown | null>
+  logout(): Promise<{
+    readonly guard: string
+    readonly cookies: readonly string[]
+  }>
   register(input: Readonly<Record<string, unknown>> & {
     readonly password: string
     readonly passwordConfirmation: string
     readonly remember?: boolean
   }): Promise<unknown>
-  logoutAll(guardName?: string): Promise<void>
+  logoutAll(guardName?: string): Promise<readonly {
+    readonly guard: string
+    readonly cookies: readonly string[]
+  }[]>
   guard(name: string): {
     check(): Promise<boolean>
     user(): Promise<unknown | null>
@@ -79,7 +141,62 @@ export interface HoloAuthRuntimeBinding {
       readonly rememberToken?: string
       readonly cookies: readonly string[]
     }>
-    logout(): Promise<void>
+    loginUsing(
+      user: unknown,
+      options?: {
+        readonly remember?: boolean
+      },
+    ): Promise<{
+      readonly guard: string
+      readonly user: unknown
+      readonly sessionId: string
+      readonly rememberToken?: string
+      readonly cookies: readonly string[]
+    }>
+    loginUsingId(
+      userId: string | number,
+      options?: {
+        readonly remember?: boolean
+      },
+    ): Promise<{
+      readonly guard: string
+      readonly user: unknown
+      readonly sessionId: string
+      readonly rememberToken?: string
+      readonly cookies: readonly string[]
+    }>
+    impersonate(
+      user: unknown,
+      options?: {
+        readonly remember?: boolean
+        readonly actorGuard?: string
+      },
+    ): Promise<{
+      readonly guard: string
+      readonly user: unknown
+      readonly sessionId: string
+      readonly rememberToken?: string
+      readonly cookies: readonly string[]
+    }>
+    impersonateById(
+      userId: string | number,
+      options?: {
+        readonly remember?: boolean
+        readonly actorGuard?: string
+      },
+    ): Promise<{
+      readonly guard: string
+      readonly user: unknown
+      readonly sessionId: string
+      readonly rememberToken?: string
+      readonly cookies: readonly string[]
+    }>
+    impersonation(): Promise<unknown | null>
+    stopImpersonating(): Promise<unknown | null>
+    logout(): Promise<{
+      readonly guard: string
+      readonly cookies: readonly string[]
+    }>
   }
   tokens: {
     create(user: unknown, options: {
@@ -478,9 +595,60 @@ function bindAuthRuntimeToContext(
       activate()
       return runtime.currentAccessToken()
     },
+    hashPassword(password: Parameters<HoloAuthRuntimeBinding['hashPassword']>[0]) {
+      activate()
+      return runtime.hashPassword(password)
+    },
+    verifyPassword(
+      password: Parameters<HoloAuthRuntimeBinding['verifyPassword']>[0],
+      digest: Parameters<HoloAuthRuntimeBinding['verifyPassword']>[1],
+    ) {
+      activate()
+      return runtime.verifyPassword(password, digest)
+    },
+    needsPasswordRehash(digest: Parameters<HoloAuthRuntimeBinding['needsPasswordRehash']>[0]) {
+      activate()
+      return runtime.needsPasswordRehash(digest)
+    },
     login(credentials: Parameters<HoloAuthRuntimeBinding['login']>[0]) {
       activate()
       return runtime.login(credentials)
+    },
+    loginUsing(
+      user: Parameters<HoloAuthRuntimeBinding['loginUsing']>[0],
+      options?: Parameters<HoloAuthRuntimeBinding['loginUsing']>[1],
+    ) {
+      activate()
+      return runtime.loginUsing(user, options)
+    },
+    loginUsingId(
+      userId: Parameters<HoloAuthRuntimeBinding['loginUsingId']>[0],
+      options?: Parameters<HoloAuthRuntimeBinding['loginUsingId']>[1],
+    ) {
+      activate()
+      return runtime.loginUsingId(userId, options)
+    },
+    impersonate(
+      user: Parameters<HoloAuthRuntimeBinding['impersonate']>[0],
+      options?: Parameters<HoloAuthRuntimeBinding['impersonate']>[1],
+    ) {
+      activate()
+      return runtime.impersonate(user, options)
+    },
+    impersonateById(
+      userId: Parameters<HoloAuthRuntimeBinding['impersonateById']>[0],
+      options?: Parameters<HoloAuthRuntimeBinding['impersonateById']>[1],
+    ) {
+      activate()
+      return runtime.impersonateById(userId, options)
+    },
+    impersonation() {
+      activate()
+      return runtime.impersonation()
+    },
+    stopImpersonating() {
+      activate()
+      return runtime.stopImpersonating()
     },
     logout() {
       activate()
@@ -521,6 +689,42 @@ function bindAuthRuntimeToContext(
         login(credentials: Parameters<GuardRuntime['login']>[0]) {
           activate()
           return guard.login(credentials)
+        },
+        loginUsing(
+          user: Parameters<GuardRuntime['loginUsing']>[0],
+          options?: Parameters<GuardRuntime['loginUsing']>[1],
+        ) {
+          activate()
+          return guard.loginUsing(user, options)
+        },
+        loginUsingId(
+          userId: Parameters<GuardRuntime['loginUsingId']>[0],
+          options?: Parameters<GuardRuntime['loginUsingId']>[1],
+        ) {
+          activate()
+          return guard.loginUsingId(userId, options)
+        },
+        impersonate(
+          user: Parameters<GuardRuntime['impersonate']>[0],
+          options?: Parameters<GuardRuntime['impersonate']>[1],
+        ) {
+          activate()
+          return guard.impersonate(user, options)
+        },
+        impersonateById(
+          userId: Parameters<GuardRuntime['impersonateById']>[0],
+          options?: Parameters<GuardRuntime['impersonateById']>[1],
+        ) {
+          activate()
+          return guard.impersonateById(userId, options)
+        },
+        impersonation() {
+          activate()
+          return guard.impersonation()
+        },
+        stopImpersonating() {
+          activate()
+          return guard.stopImpersonating()
         },
         logout() {
           activate()
@@ -806,6 +1010,24 @@ function getEntityAttributes(value: unknown): Record<string, unknown> {
   return {}
 }
 /* v8 ignore stop */
+
+function markProviderUser<T>(value: T, providerName: string): T {
+  if (!value || typeof value !== 'object') {
+    return value
+  }
+
+  try {
+    Object.defineProperty(value, HOLO_AUTH_PROVIDER_MARKER, {
+      value: providerName,
+      enumerable: false,
+      configurable: true,
+    })
+  } catch {
+    // Non-extensible user objects can still fall back to id-based resolution.
+  }
+
+  return value
+}
 
 /* v8 ignore next -- helper body is covered through runtime initialization; this declaration line itself is a coverage artifact */
 async function createCoreSessionStores<TCustom extends HoloConfigMap>(
@@ -1595,7 +1817,7 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
       async findById(id: string | number) {
         const resolved = await model.find(id)
         /* v8 ignore next -- model.find() may return undefined in loose userland adapters; core normalizes it to null */
-        return resolved ?? null
+        return resolved ? markProviderUser(resolved, providerName) : null
       },
       async findByCredentials(credentials: Readonly<Record<string, unknown>>) {
         const entries = Object.entries(credentials)
@@ -1609,7 +1831,7 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
             query = query.where(column, value)
           }
           const resolved = await query.first()
-          return resolved ?? null
+          return resolved ? markProviderUser(resolved, providerName) : null
         }
 
         let query = model.where(entries[0]![0], entries[0]![1])
@@ -1620,16 +1842,31 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
           query = query.where(column, value)
         }
         const resolved = await query.first()
-        return resolved ?? null
+        return resolved ? markProviderUser(resolved, providerName) : null
       },
       async create(input: Readonly<Record<string, unknown>>) {
-        return model.create(input as Record<string, unknown>)
+        return markProviderUser(await model.create(input as Record<string, unknown>), providerName)
       },
       /* v8 ignore start -- adapter shape mirrors the auth package contract; core tests cover the wired runtime behavior */
       async update(user: unknown, input: Readonly<Record<string, unknown>>) {
-        return model.update(getEntityAttributes(user).id, input as Record<string, unknown>)
+        return markProviderUser(
+          await model.update(getEntityAttributes(user).id, input as Record<string, unknown>),
+          providerName,
+        )
       },
       matchesUser(user: unknown) {
+        if (typeof model === 'function' && user instanceof model) {
+          return true
+        }
+
+        if (
+          user
+          && typeof user === 'object'
+          && (user as Record<PropertyKey, unknown>)[HOLO_AUTH_PROVIDER_MARKER] === providerName
+        ) {
+          return true
+        }
+
         return (getEntityAttributes(user) as Record<PropertyKey, unknown>)[HOLO_AUTH_PROVIDER_MARKER] === providerName
       },
       getId(user: unknown) {

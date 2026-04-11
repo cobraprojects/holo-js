@@ -66,6 +66,7 @@ export interface SessionRuntimeBindings {
 
 export interface SessionRuntimeFacade {
   create(input?: CreateSessionInput): Promise<SessionRecord>
+  write(record: SessionRecord): Promise<SessionRecord>
   read(sessionId: string, options?: ReadSessionOptions): Promise<SessionRecord | null>
   rotate(sessionId: string, options?: RotateSessionOptions): Promise<SessionRecord>
   invalidate(sessionId: string, options?: ReadSessionOptions): Promise<void>
@@ -85,6 +86,7 @@ export interface SessionCookieHelpers {
 export interface SessionFacade {
   (input?: CreateSessionInput): Promise<SessionRecord>
   create(input?: CreateSessionInput): Promise<SessionRecord>
+  write(record: SessionRecord): Promise<SessionRecord>
   read(sessionId: string, options?: ReadSessionOptions): Promise<SessionRecord | null>
   rotate(sessionId: string, options?: RotateSessionOptions): Promise<SessionRecord>
   invalidate(sessionId: string, options?: ReadSessionOptions): Promise<void>

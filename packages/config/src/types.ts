@@ -188,6 +188,7 @@ export interface AuthGuardConfig {
 
 export interface AuthProviderConfig {
   readonly model: string
+  readonly identifiers?: readonly string[]
 }
 
 export interface AuthPasswordBrokerConfig {
@@ -263,6 +264,7 @@ export interface NormalizedAuthGuardConfig {
 export interface NormalizedAuthProviderConfig {
   readonly name: string
   readonly model: string
+  readonly identifiers: readonly string[]
 }
 
 export interface NormalizedAuthPasswordBrokerConfig {

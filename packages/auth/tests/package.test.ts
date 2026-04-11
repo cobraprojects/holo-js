@@ -9,16 +9,25 @@ import auth, {
   currentAccessToken,
   defineAuthConfig,
   getAuthRuntime,
+  hashPassword,
   id,
+  impersonate,
+  impersonateById,
+  impersonation,
   login,
+  loginUsing,
+  loginUsingId,
   logout,
+  needsPasswordRehash,
   passwords,
   refreshUser,
   register,
   resetAuthRuntime,
+  stopImpersonating,
   tokens,
   user,
   verification,
+  verifyPassword,
 } from '../src'
 import clientAuth, {
   check as clientCheck,
@@ -45,6 +54,8 @@ type UserRecord = {
   name?: string
   email: string
   phone?: string
+  country?: string
+  dob?: string
   password?: string | null
   avatar?: string | null
   email_verified_at?: Date | null
@@ -107,6 +118,12 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
     }
     if (typeof input.phone === 'string') {
       record.phone = input.phone
+    }
+    if (typeof input.country === 'string') {
+      record.country = input.country
+    }
+    if (typeof input.dob === 'string') {
+      record.dob = input.dob
     }
     this.nextId += 1
     this.users.set(record.id, record)
@@ -172,6 +189,8 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
       name: user.name,
       email: user.email,
       phone: user.phone,
+      country: user.country,
+      dob: user.dob,
       avatar: user.avatar ?? null,
       email_verified_at: user.email_verified_at ?? null,
     }
@@ -364,6 +383,7 @@ function configureRuntime(options: {
   emailVerificationRequired?: boolean
   adminProvider?: InMemoryProviderAdapter
   authConfig?: HoloAuthConfig
+  passwordHasher?: Parameters<typeof configureAuthRuntime>[0]['passwordHasher']
 } = {}) {
   const sessionStore = new InMemorySessionStore()
   const tokenStore = new InMemoryTokenStore()
@@ -487,6 +507,7 @@ function configureRuntime(options: {
     passwordResetTokens: passwordResetTokenStore,
     delivery,
     context,
+    passwordHasher: options.passwordHasher,
   })
 
   return {
@@ -501,6 +522,51 @@ function configureRuntime(options: {
   }
 }
 
+function reconfigureAuthRuntimeWithSession(
+  runtime: ReturnType<typeof configureRuntime>,
+  session: unknown,
+) {
+  configureAuthRuntime({
+    config: defineAuthConfig({
+      defaults: {
+        guard: 'web',
+        passwords: 'users',
+      },
+      guards: {
+        web: {
+          driver: 'session',
+          provider: 'users',
+        },
+        admin: {
+          driver: 'session',
+          provider: 'admins',
+        },
+        api: {
+          driver: 'token',
+          provider: 'users',
+        },
+      },
+      providers: {
+        users: {
+          model: 'User',
+        },
+        admins: {
+          model: 'Admin',
+        },
+      },
+    }),
+    session: session as Parameters<typeof configureAuthRuntime>[0]['session'],
+    providers: {
+      users: runtime.usersProvider,
+      admins: runtime.adminsProvider,
+    },
+    tokens: runtime.tokenStore,
+    emailVerificationTokens: runtime.emailVerificationTokenStore,
+    passwordResetTokens: runtime.passwordResetTokenStore,
+    context: runtime.context,
+  })
+}
+
 afterEach(() => {
   resetAuthRuntime()
   resetSessionRuntime()
@@ -509,13 +575,38 @@ afterEach(() => {
 })
 
 describe('@holo-js/auth package runtime', () => {
+  it('keeps the client auth entry read-only', () => {
+    expect(clientAuth.user).toBeTypeOf('function')
+    expect(clientAuth.check).toBeTypeOf('function')
+    expect(clientAuth.refreshUser).toBeTypeOf('function')
+    expect('login' in clientAuth).toBe(false)
+    expect('loginUsing' in clientAuth).toBe(false)
+    expect('loginUsingId' in clientAuth).toBe(false)
+    expect('hashPassword' in clientAuth).toBe(false)
+    expect('verifyPassword' in clientAuth).toBe(false)
+    expect('needsPasswordRehash' in clientAuth).toBe(false)
+    expect('impersonate' in clientAuth).toBe(false)
+    expect('impersonateById' in clientAuth).toBe(false)
+    expect('impersonation' in clientAuth).toBe(false)
+    expect('stopImpersonating' in clientAuth).toBe(false)
+  })
+
   it('supports default and named exports for default-guard operations', async () => {
     const runtime = configureRuntime()
 
     expect(auth.check).toBe(check)
+    expect(auth.hashPassword).toBe(hashPassword)
+    expect(auth.verifyPassword).toBe(verifyPassword)
+    expect(auth.needsPasswordRehash).toBe(needsPasswordRehash)
+    expect(auth.impersonate).toBe(impersonate)
+    expect(auth.impersonateById).toBe(impersonateById)
+    expect(auth.impersonation).toBe(impersonation)
     expect(auth.login).toBe(login)
+    expect(auth.loginUsing).toBe(loginUsing)
+    expect(auth.loginUsingId).toBe(loginUsingId)
     expect(auth.logout).toBe(logout)
     expect(auth.register).toBe(register)
+    expect(auth.stopImpersonating).toBe(stopImpersonating)
     expect(auth.refreshUser).toBe(refreshUser)
     expect(auth.currentAccessToken).toBe(currentAccessToken)
     expect(typeof auth.guard('web').check).toBe('function')
@@ -585,13 +676,397 @@ describe('@holo-js/auth package runtime', () => {
     expect(runtime.context.getRememberToken('web')).toMatch(/\./)
     expect(runtime.sessionStore.records.size).toBe(1)
 
-    await logout()
+    const loggedOut = await logout()
 
     expect(await check()).toBe(false)
     expect(await id()).toBeNull()
     expect(await user()).toBeNull()
     expect(runtime.context.getSessionId('web')).toBeUndefined()
     expect(runtime.sessionStore.records.size).toBe(0)
+    expect(loggedOut).toMatchObject({
+      guard: 'web',
+    })
+    expect(loggedOut.cookies).toHaveLength(2)
+    expect(loggedOut.cookies).toContainEqual(expect.stringContaining('holo_session=;'))
+    expect(loggedOut.cookies).toContainEqual(expect.stringContaining('holo_session_remember=;'))
+  })
+
+  it('supports trusted session login with a user object or user id', async () => {
+    const runtime = configureRuntime()
+
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    const establishedByUser = await loginUsing(created, {
+      remember: true,
+    })
+
+    expect(establishedByUser).toMatchObject({
+      guard: 'web',
+      sessionId: expect.any(String),
+      rememberToken: expect.stringMatching(/\./),
+      user: {
+        id: created.id,
+        email: created.email,
+      },
+    })
+    expect(establishedByUser.cookies).toHaveLength(2)
+    expect(await check()).toBe(true)
+    expect(await id()).toBe(created.id)
+    expect(runtime.context.getSessionId('web')).toBe(establishedByUser.sessionId)
+    expect(runtime.sessionStore.records.size).toBe(1)
+
+    await logout()
+
+    const establishedById = await loginUsingId(created.id)
+    expect(establishedById).toMatchObject({
+      guard: 'web',
+      sessionId: expect.any(String),
+      user: {
+        id: created.id,
+        email: created.email,
+      },
+    })
+    expect(establishedById.cookies).toHaveLength(1)
+    expect(await user()).toMatchObject({
+      id: created.id,
+      email: created.email,
+    })
+  })
+
+  it('rejects trusted login for provider-matched users that no longer exist', async () => {
+    const runtime = configureRuntime()
+
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    Object.assign(runtime.usersProvider, {
+      matchesUser(user: unknown) {
+        return user === created
+      },
+    })
+
+    runtime.usersProvider.users.delete(created.id)
+    runtime.usersProvider.usersByEmail.delete(created.email)
+
+    await expect(loginUsing(created)).rejects.toThrow(
+      `Auth user "users:${created.id}" was not found for trusted login.`,
+    )
+    await expect(check()).resolves.toBe(false)
+  })
+
+  it('supports trusted login on named guards and rejects provider mismatches', async () => {
+    const runtime = configureRuntime()
+    const admin = await runtime.adminsProvider.create({
+      name: 'Admin Ava',
+      email: 'admin@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    const established = await auth.guard('admin').loginUsing(admin, {
+      remember: true,
+    })
+
+    expect(established).toMatchObject({
+      guard: 'admin',
+      sessionId: expect.any(String),
+      rememberToken: expect.stringMatching(/\./),
+      user: {
+        id: admin.id,
+        email: admin.email,
+      },
+    })
+    expect(await auth.guard('admin').user()).toMatchObject({
+      id: admin.id,
+      email: admin.email,
+    })
+
+    await expect(auth.guard('web').loginUsing(admin)).rejects.toThrow('requires a user from provider "users"')
+  })
+
+  it('accepts serialized trusted users in multi-provider apps', async () => {
+    const runtime = configureRuntime()
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    await expect(loginUsing({
+      id: created.id,
+      email: created.email,
+    })).resolves.toMatchObject({
+      guard: 'web',
+      user: {
+        id: created.id,
+        email: created.email,
+      },
+    })
+
+    await logout()
+
+    await loginUsing(created)
+
+    await expect(impersonate({
+      id: created.id,
+      email: created.email,
+    })).resolves.toMatchObject({
+      guard: 'web',
+      user: {
+        id: created.id,
+        email: created.email,
+      },
+    })
+  })
+
+  it('rejects ambiguous trusted user objects when multiple providers are configured', async () => {
+    const runtime = configureRuntime()
+    Object.assign(runtime.adminsProvider, {
+      matchesUser: undefined,
+    })
+
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const admin = await runtime.adminsProvider.create({
+      name: 'Admin Ava',
+      email: 'admin@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    await expect(auth.guard('web').loginUsing(admin)).rejects.toThrow(
+      'Pass a user id, a serialized auth user, or implement matchesUser() on the provider adapter.',
+    )
+    await expect(auth.guard('web').check()).resolves.toBe(false)
+  })
+
+  it('exposes public password hashing helpers', async () => {
+    configureRuntime()
+
+    const digest = await hashPassword('secret-secret')
+
+    expect(digest).toMatch(/^scrypt\$/)
+    await expect(verifyPassword('secret-secret', digest)).resolves.toBe(true)
+    await expect(verifyPassword('wrong-secret', digest)).resolves.toBe(false)
+    await expect(needsPasswordRehash(digest)).resolves.toBe(false)
+  })
+
+  it('supports impersonation within the same guard and restores the original user', async () => {
+    const runtime = configureRuntime()
+    const actor = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const target = await runtime.usersProvider.create({
+      name: 'Mina',
+      email: 'mina@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    await loginUsing(actor)
+
+    const established = await impersonate(target, {
+      remember: true,
+    })
+
+    expect(established).toMatchObject({
+      guard: 'web',
+      user: {
+        id: target.id,
+        email: target.email,
+      },
+    })
+    expect(await user()).toMatchObject({
+      id: target.id,
+      email: target.email,
+    })
+    expect(await impersonation()).toMatchObject({
+      guard: 'web',
+      actorGuard: 'web',
+      user: {
+        id: target.id,
+        email: target.email,
+      },
+      actor: {
+        id: actor.id,
+        email: actor.email,
+      },
+      originalUser: {
+        id: actor.id,
+        email: actor.email,
+      },
+    })
+
+    const restored = await stopImpersonating()
+    expect(restored).toMatchObject({
+      id: actor.id,
+      email: actor.email,
+    })
+    expect(await user()).toMatchObject({
+      id: actor.id,
+      email: actor.email,
+    })
+    expect(await impersonation()).toBeNull()
+  })
+
+  it('preserves remember-me session state when impersonation stops', async () => {
+    const runtime = configureRuntime()
+    const actor = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const target = await runtime.usersProvider.create({
+      name: 'Mina',
+      email: 'mina@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    await loginUsing(actor, {
+      remember: true,
+    })
+
+    const originalSessionId = runtime.context.getSessionId('web')
+    const originalRecord = originalSessionId
+      ? runtime.sessionStore.records.get(originalSessionId)
+      : null
+    expect(originalRecord?.rememberTokenHash).toBeTypeOf('string')
+
+    const impersonated = await impersonate(target)
+
+    const duringImpersonation = runtime.sessionStore.records.get(impersonated.sessionId)
+    expect(duringImpersonation).toMatchObject({
+      id: impersonated.sessionId,
+    })
+    expect(duringImpersonation?.rememberTokenHash).toBeTypeOf('string')
+    expect(duringImpersonation?.rememberTokenHash).not.toBe(originalRecord?.rememberTokenHash)
+    expect(impersonated.rememberToken).toMatch(/\./)
+    expect(impersonated.cookies).toContainEqual(expect.stringContaining('holo_session_remember='))
+    expect(impersonated.cookies).toHaveLength(2)
+
+    await stopImpersonating()
+
+    const afterStop = runtime.sessionStore.records.get(impersonated.sessionId)
+    expect(afterStop).toMatchObject({
+      id: impersonated.sessionId,
+    })
+    expect(afterStop?.rememberTokenHash).toBe(duringImpersonation?.rememberTokenHash)
+    expect(afterStop?.createdAt).toEqual(duringImpersonation?.createdAt)
+    expect(afterStop?.expiresAt).toEqual(duringImpersonation?.expiresAt)
+  })
+
+  it('does not keep remember-me state when a normal login opts out of remember', async () => {
+    const runtime = configureRuntime()
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+
+    const remembered = await login({
+      email: 'ava@example.com',
+      password: 'secret-secret',
+      remember: true,
+    })
+
+    const rememberedRecord = runtime.sessionStore.records.get(remembered.sessionId)
+    expect(rememberedRecord?.rememberTokenHash).toBeTypeOf('string')
+
+    const loggedInAgain = await login({
+      email: 'ava@example.com',
+      password: 'secret-secret',
+    })
+
+    const nextRecord = runtime.sessionStore.records.get(loggedInAgain.sessionId)
+    expect(loggedInAgain.cookies).toHaveLength(1)
+    expect(loggedInAgain.rememberToken).toBeUndefined()
+    expect(runtime.context.getRememberToken('web')).toBeUndefined()
+    expect(nextRecord?.rememberTokenHash).toBeUndefined()
+  })
+
+  it('supports impersonation across guards and removes the impersonated guard on stop', async () => {
+    const runtime = configureRuntime()
+    const admin = await runtime.adminsProvider.create({
+      name: 'Admin Ava',
+      email: 'admin@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const target = await runtime.usersProvider.create({
+      name: 'Mina',
+      email: 'mina@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    await auth.guard('admin').loginUsing(admin)
+
+    const established = await auth.guard('web').impersonateById(target.id, {
+      actorGuard: 'admin',
+    })
+
+    expect(established).toMatchObject({
+      guard: 'web',
+      user: {
+        id: target.id,
+        email: target.email,
+      },
+    })
+    expect(await auth.guard('web').user()).toMatchObject({
+      id: target.id,
+      email: target.email,
+    })
+    expect(await auth.guard('admin').user()).toMatchObject({
+      id: admin.id,
+      email: admin.email,
+    })
+    expect(await auth.guard('web').impersonation()).toMatchObject({
+      guard: 'web',
+      actorGuard: 'admin',
+      actor: {
+        id: admin.id,
+        email: admin.email,
+      },
+      user: {
+        id: target.id,
+        email: target.email,
+      },
+      originalUser: null,
+    })
+
+    await expect(auth.guard('web').impersonateById(target.id, {
+      actorGuard: 'admin',
+    })).rejects.toThrow('already impersonating')
+
+    const stopped = await auth.guard('web').stopImpersonating()
+    expect(stopped).toBeNull()
+    expect(await auth.guard('web').user()).toBeNull()
+    expect(await auth.guard('web').impersonation()).toBeNull()
+    expect(await auth.guard('admin').user()).toMatchObject({
+      id: admin.id,
+      email: admin.email,
+    })
   })
 
   it('rejects duplicate registration and mismatched password confirmation', async () => {
@@ -620,7 +1095,19 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('accepts non-email credentials when the application passes validated input', async () => {
-    const runtime = configureRuntime()
+    const runtime = configureRuntime({
+      authConfig: defineAuthConfig({
+        providers: {
+          users: {
+            model: 'User',
+            identifiers: ['phone'],
+          },
+          admins: {
+            model: 'Admin',
+          },
+        },
+      }),
+    })
 
     const created = await register({
       phone: '45545454',
@@ -637,6 +1124,111 @@ describe('@holo-js/auth package runtime', () => {
 
     expect(await check()).toBe(true)
     expect(runtime.usersProvider.usersByPhone.get('45545454')).toBe(1)
+  })
+
+  it('uses configured provider identifiers instead of arbitrary profile fields', async () => {
+    const runtime = configureRuntime({
+      authConfig: defineAuthConfig({
+        providers: {
+          users: {
+            model: 'User',
+            identifiers: ['email', 'phone'],
+          },
+          admins: {
+            model: 'Admin',
+          },
+        },
+      }),
+    })
+    const findByCredentials = runtime.usersProvider.findByCredentials.bind(runtime.usersProvider)
+    Object.assign(runtime.usersProvider, {
+      async findByCredentials(credentials: Readonly<Record<string, unknown>>) {
+        return Object.keys(credentials).length === 1
+          ? findByCredentials(credentials)
+          : null
+      },
+    })
+
+    await register({
+      name: 'Ava',
+      email: 'ava@example.com',
+      phone: '45545454',
+      country: 'EG',
+      dob: '1995-02-20',
+      password: 'secret-secret',
+      passwordConfirmation: 'secret-secret',
+    })
+
+    await expect(register({
+      name: 'Mina',
+      email: 'ava@example.com',
+      phone: '99999999',
+      country: 'US',
+      password: 'secret-secret',
+      passwordConfirmation: 'secret-secret',
+    })).rejects.toThrow('email already exists')
+
+    await expect(register({
+      name: 'Noor',
+      email: 'noor@example.com',
+      phone: '45545454',
+      country: 'SA',
+      password: 'secret-secret',
+      passwordConfirmation: 'secret-secret',
+    })).rejects.toThrow('phone already exists')
+
+    await login({
+      email: 'ava@example.com',
+      password: 'secret-secret',
+    })
+    expect(await check()).toBe(true)
+
+    await logout()
+
+    await login({
+      email: 'ava@example.com',
+      phone: '00000000',
+      password: 'secret-secret',
+    })
+    expect(await check()).toBe(true)
+
+    await logout()
+
+    await login({
+      phone: '45545454',
+      password: 'secret-secret',
+    })
+    expect(await check()).toBe(true)
+    expect(runtime.usersProvider.usersByEmail.get('ava@example.com')).toBe(1)
+    expect(runtime.usersProvider.usersByPhone.get('45545454')).toBe(1)
+  })
+
+  it('rejects registration and login when none of the configured identifiers are present', async () => {
+    configureRuntime({
+      authConfig: defineAuthConfig({
+        providers: {
+          users: {
+            model: 'User',
+            identifiers: ['email', 'phone'],
+          },
+          admins: {
+            model: 'Admin',
+          },
+        },
+      }),
+    })
+
+    await expect(register({
+      name: 'Ava',
+      country: 'EG',
+      password: 'secret-secret',
+      passwordConfirmation: 'secret-secret',
+    })).rejects.toThrow('configured identifier field: email, phone')
+
+    await expect(login({
+      country: 'EG',
+      password: 'secret-secret',
+    })).rejects.toThrow('configured identifier field: email, phone')
   })
 
   it('rejects missing users, bad passwords, and unverified logins when verification is required', async () => {
@@ -1130,9 +1722,149 @@ describe('@holo-js/auth package runtime', () => {
       name: 'User Ava',
     })
 
-    await auth.guard('admin').logout()
+    const loggedOut = await auth.guard('admin').logout()
     expect(await auth.guard('admin').check()).toBe(false)
     expect(await auth.guard('web').check()).toBe(true)
+    expect(loggedOut.cookies).toHaveLength(0)
+  })
+
+  it('clears configured hosted provider cookies through the same logout api', async () => {
+    const runtime = configureRuntime({
+      authConfig: {
+        clerk: {
+          app: {
+            sessionCookie: '__session',
+            guard: 'web',
+          },
+        },
+        workos: {
+          dashboard: {
+            sessionCookie: 'wos-session',
+            guard: 'web',
+          },
+        },
+      },
+    })
+
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    await loginUsing(created, {
+      remember: true,
+    })
+
+    const loggedOut = await logout()
+
+    expect(loggedOut.cookies).toHaveLength(4)
+    expect(loggedOut.cookies).toContainEqual(expect.stringContaining('holo_session=;'))
+    expect(loggedOut.cookies).toContainEqual(expect.stringContaining('holo_session_remember=;'))
+    expect(loggedOut.cookies).toContainEqual(expect.stringContaining('__session=;'))
+    expect(loggedOut.cookies).toContainEqual(expect.stringContaining('wos-session=;'))
+  })
+
+  it('supports logout with legacy session bindings that only expose named cookie helpers', async () => {
+    const runtime = configureRuntime()
+    const session = getSessionRuntime()
+    const legacySession = {
+      create: session.create,
+      read: session.read,
+      touch: session.touch,
+      invalidate: session.invalidate,
+      issueRememberMeToken: session.issueRememberMeToken,
+      sessionCookie: session.sessionCookie,
+      rememberMeCookie: session.rememberMeCookie,
+    }
+    reconfigureAuthRuntimeWithSession(runtime, legacySession)
+
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    await loginUsing(created, {
+      remember: true,
+    })
+
+    await expect(logout()).resolves.toMatchObject({
+      guard: 'web',
+    })
+  })
+
+  it('clears hosted provider cookies without inheriting custom app session scope', async () => {
+    const runtime = configureRuntime({
+      authConfig: {
+        clerk: {
+          app: {
+            sessionCookie: '__session',
+            guard: 'web',
+          },
+        },
+        workos: {
+          dashboard: {
+            sessionCookie: 'wos-session',
+            guard: 'web',
+          },
+        },
+      },
+    })
+
+    configureSessionRuntime({
+      config: {
+        driver: 'database',
+        stores: {
+          database: {
+            name: 'database',
+            driver: 'database',
+            connection: 'main',
+            table: 'sessions',
+          },
+        },
+        cookie: {
+          name: 'holo_session',
+          path: '/app',
+          domain: 'app.test',
+          secure: false,
+          httpOnly: true,
+          sameSite: 'lax',
+          partitioned: false,
+          maxAge: 120,
+        },
+        idleTimeout: 120,
+        absoluteLifetime: 120,
+        rememberMeLifetime: 43200,
+      },
+      stores: {
+        database: runtime.sessionStore,
+      },
+    })
+
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    await loginUsing(created, {
+      remember: true,
+    })
+
+    const loggedOut = await logout()
+    const clerkCookie = loggedOut.cookies.find(cookie => cookie.includes('__session=;'))
+    const workosCookie = loggedOut.cookies.find(cookie => cookie.includes('wos-session=;'))
+
+    expect(clerkCookie).toContain('Path=/')
+    expect(clerkCookie).not.toContain('Path=/app')
+    expect(clerkCookie).not.toContain('Domain=app.test')
+    expect(workosCookie).toContain('Path=/')
+    expect(workosCookie).not.toContain('Path=/app')
+    expect(workosCookie).not.toContain('Domain=app.test')
   })
 
   it('keeps multiple session guards authenticated when they share the same browser session cookie', async () => {
@@ -1156,6 +1888,21 @@ describe('@holo-js/auth package runtime', () => {
       password: 'secret-secret',
     })
 
+    const originalRecord = runtime.sessionStore.records.get(webSession.sessionId)
+    expect(originalRecord).toBeTruthy()
+    const agedCreatedAt = new Date(Date.now() - (110 * 60 * 1000))
+    const agedLastActivityAt = new Date(Date.now() - (109 * 60 * 1000))
+    const agedExpiresAt = new Date(Date.now() + (60 * 1000))
+
+    if (originalRecord) {
+      runtime.sessionStore.records.set(webSession.sessionId, Object.freeze({
+        ...originalRecord,
+        createdAt: agedCreatedAt,
+        lastActivityAt: agedLastActivityAt,
+        expiresAt: agedExpiresAt,
+      }))
+    }
+
     runtime.context.setSessionId('admin', webSession.sessionId)
 
     const adminSession = await auth.guard('admin').login({
@@ -1165,6 +1912,14 @@ describe('@holo-js/auth package runtime', () => {
 
     expect(adminSession.sessionId).toBe(webSession.sessionId)
     expect(runtime.sessionStore.records).toHaveLength(1)
+    const renewedRecord = runtime.sessionStore.records.get(adminSession.sessionId)
+    expect(renewedRecord).toBeTruthy()
+    expect(renewedRecord?.createdAt.getTime()).not.toBe(agedCreatedAt.getTime())
+    expect(renewedRecord?.lastActivityAt.getTime()).not.toBe(agedLastActivityAt.getTime())
+    expect(renewedRecord?.expiresAt.getTime()).not.toBe(agedExpiresAt.getTime())
+    expect(renewedRecord?.createdAt.getTime()).toBeGreaterThan(agedCreatedAt.getTime())
+    expect(renewedRecord?.expiresAt.getTime()).toBeGreaterThan(agedExpiresAt.getTime())
+    expect((renewedRecord?.expiresAt.getTime() ?? 0) - Date.now()).toBeGreaterThan(60 * 60 * 1000)
 
     resetAuthRuntime()
     const restartedContext = authRuntimeInternals.createMemoryAuthContext()
@@ -1247,10 +2002,273 @@ describe('@holo-js/auth package runtime', () => {
       password: 'admin-secret',
     })
 
-    await getAuthRuntime().logoutAll()
+    const loggedOut = await getAuthRuntime().logoutAll()
 
     expect(await auth.guard('web').check()).toBe(false)
     expect(await auth.guard('admin').check()).toBe(false)
+    expect(loggedOut).toEqual([
+      {
+        guard: 'web',
+        cookies: [],
+      },
+      {
+        guard: 'admin',
+        cookies: [
+          expect.stringContaining('holo_session=;'),
+          expect.stringContaining('holo_session_remember=;'),
+        ],
+      },
+      {
+        guard: 'api',
+        cookies: [],
+      },
+    ])
+  })
+
+  it('removes shared-session auth payloads when logoutAll logs out every guard', async () => {
+    const runtime = configureRuntime()
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    await runtime.usersProvider.create({
+      name: 'User Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+    await runtime.adminsProvider.create({
+      name: 'Admin Mina',
+      email: 'admin@example.com',
+      password: await hasher.hash('admin-secret'),
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    const webSession = await auth.guard('web').login({
+      email: 'ava@example.com',
+      password: 'secret-secret',
+    })
+
+    runtime.context.setSessionId('admin', webSession.sessionId)
+
+    const adminSession = await auth.guard('admin').login({
+      email: 'admin@example.com',
+      password: 'admin-secret',
+    })
+
+    expect(adminSession.sessionId).toBe(webSession.sessionId)
+
+    await getAuthRuntime().logoutAll()
+
+    expect(runtime.sessionStore.records.size).toBe(0)
+
+    resetAuthRuntime()
+    const restartedContext = authRuntimeInternals.createMemoryAuthContext()
+    restartedContext.setSessionId('web', webSession.sessionId)
+    restartedContext.setSessionId('admin', webSession.sessionId)
+    configureAuthRuntime({
+      config: defineAuthConfig({
+        defaults: {
+          guard: 'web',
+          passwords: 'users',
+        },
+        guards: {
+          web: {
+            driver: 'session',
+            provider: 'users',
+          },
+          admin: {
+            driver: 'session',
+            provider: 'admins',
+          },
+          api: {
+            driver: 'token',
+            provider: 'users',
+          },
+        },
+        providers: {
+          users: {
+            model: 'User',
+          },
+          admins: {
+            model: 'Admin',
+          },
+        },
+      }),
+      session: getSessionRuntime(),
+      providers: {
+        users: runtime.usersProvider,
+        admins: runtime.adminsProvider,
+      },
+      tokens: runtime.tokenStore,
+      emailVerificationTokens: runtime.emailVerificationTokenStore,
+      passwordResetTokens: runtime.passwordResetTokenStore,
+      delivery: {
+        async sendEmailVerification() {},
+        async sendPasswordReset() {},
+      },
+      context: restartedContext,
+    })
+
+    await expect(auth.guard('web').user()).resolves.toBeNull()
+    await expect(auth.guard('admin').user()).resolves.toBeNull()
+  })
+
+  it('supports shared-session logout with legacy session bindings that do not expose write()', async () => {
+    const runtime = configureRuntime()
+    const session = getSessionRuntime()
+    const legacySession = {
+      create: session.create,
+      read: session.read,
+      touch: session.touch,
+      invalidate: session.invalidate,
+      issueRememberMeToken: session.issueRememberMeToken,
+      cookie: session.cookie,
+      sessionCookie: session.sessionCookie,
+      rememberMeCookie: session.rememberMeCookie,
+    }
+    reconfigureAuthRuntimeWithSession(runtime, legacySession)
+
+    const createdUser = await runtime.usersProvider.create({
+      name: 'User Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const createdAdmin = await runtime.adminsProvider.create({
+      name: 'Admin Mina',
+      email: 'admin@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    const webSession = await auth.guard('web').loginUsing(createdUser)
+    runtime.context.setSessionId('admin', webSession.sessionId)
+    await auth.guard('admin').loginUsing(createdAdmin)
+
+    await expect(auth.guard('admin').logout()).resolves.toMatchObject({
+      guard: 'admin',
+      cookies: [],
+    })
+    await expect(auth.guard('web').user()).resolves.toMatchObject({
+      id: createdUser.id,
+      email: createdUser.email,
+    })
+  })
+
+  it('preserves hasher instance context when checking whether a password needs rehashing', async () => {
+    const passwordHasher = {
+      marker: 'rehash-digest',
+      async hash(password: string) {
+        return `hash:${password}`
+      },
+      async verify(password: string, digest: string) {
+        return digest === `hash:${password}`
+      },
+      needsRehash(digest: string) {
+        return digest === this.marker
+      },
+    }
+
+    configureRuntime({
+      passwordHasher,
+    })
+
+    await expect(needsPasswordRehash('rehash-digest')).resolves.toBe(true)
+    await expect(needsPasswordRehash('other-digest')).resolves.toBe(false)
+  })
+
+  it('returns hosted-provider cookie clears from logoutAll for a named guard', async () => {
+    const runtime = configureRuntime({
+      authConfig: {
+        clerk: {
+          app: {
+            sessionCookie: '__session',
+            guard: 'web',
+          },
+        },
+        workos: {
+          dashboard: {
+            sessionCookie: 'wos-session',
+            guard: 'web',
+          },
+        },
+      },
+    })
+
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    await loginUsing(created, {
+      remember: true,
+    })
+
+    const loggedOut = await getAuthRuntime().logoutAll('web')
+
+    expect(loggedOut).toEqual([
+      expect.objectContaining({
+        guard: 'web',
+        cookies: expect.arrayContaining([
+          expect.stringContaining('holo_session=;'),
+          expect.stringContaining('holo_session_remember=;'),
+          expect.stringContaining('__session=;'),
+          expect.stringContaining('wos-session=;'),
+        ]),
+      }),
+    ])
+  })
+
+  it('returns hosted-provider cookie clears from logoutAll when logging out every guard', async () => {
+    const runtime = configureRuntime({
+      authConfig: {
+        clerk: {
+          app: {
+            sessionCookie: '__session',
+            guard: 'web',
+          },
+        },
+        workos: {
+          dashboard: {
+            sessionCookie: 'wos-session',
+            guard: 'web',
+          },
+        },
+      },
+    })
+
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    await loginUsing(created, {
+      remember: true,
+    })
+
+    const loggedOut = await getAuthRuntime().logoutAll()
+
+    expect(loggedOut).toEqual([
+      expect.objectContaining({
+        guard: 'web',
+        cookies: expect.arrayContaining([
+          expect.stringContaining('holo_session=;'),
+          expect.stringContaining('holo_session_remember=;'),
+          expect.stringContaining('__session=;'),
+          expect.stringContaining('wos-session=;'),
+        ]),
+      }),
+      {
+        guard: 'admin',
+        cookies: [],
+      },
+      {
+        guard: 'api',
+        cookies: [],
+      },
+    ])
   })
 
   it('preserves the auth provider marker when a user is rehydrated from session storage', async () => {
@@ -1344,17 +2362,44 @@ describe('@holo-js/auth package runtime', () => {
       password: 'secret-secret',
     })
     const firstSessionId = runtime.context.getSessionId('web')
+    const firstRecord = firstSessionId
+      ? runtime.sessionStore.records.get(firstSessionId)
+      : null
+
+    expect(firstRecord).toBeTruthy()
+    const agedCreatedAt = new Date(Date.now() - (110 * 60 * 1000))
+    const agedLastActivityAt = new Date(Date.now() - (109 * 60 * 1000))
+    const agedExpiresAt = new Date(Date.now() + (60 * 1000))
+
+    if (firstRecord && firstSessionId) {
+      runtime.sessionStore.records.set(firstSessionId, Object.freeze({
+        ...firstRecord,
+        createdAt: agedCreatedAt,
+        lastActivityAt: agedLastActivityAt,
+        expiresAt: agedExpiresAt,
+      }))
+    }
 
     await login({
       email: 'ava@example.com',
       password: 'secret-secret',
     })
     const secondSessionId = runtime.context.getSessionId('web')
+    const secondRecord = secondSessionId
+      ? runtime.sessionStore.records.get(secondSessionId)
+      : null
 
     expect(secondSessionId).toBeTypeOf('string')
     expect(secondSessionId).not.toBe(firstSessionId)
     expect(firstSessionId ? runtime.sessionStore.records.has(firstSessionId) : false).toBe(false)
     expect(secondSessionId ? runtime.sessionStore.records.has(secondSessionId) : false).toBe(true)
+    expect(secondRecord).toBeTruthy()
+    expect(secondRecord?.createdAt.getTime()).not.toBe(agedCreatedAt.getTime())
+    expect(secondRecord?.lastActivityAt.getTime()).not.toBe(agedLastActivityAt.getTime())
+    expect(secondRecord?.expiresAt.getTime()).not.toBe(agedExpiresAt.getTime())
+    expect(secondRecord?.createdAt.getTime()).toBeGreaterThan(agedCreatedAt.getTime())
+    expect(secondRecord?.expiresAt.getTime()).toBeGreaterThan(agedExpiresAt.getTime())
+    expect((secondRecord?.expiresAt.getTime() ?? 0) - Date.now()).toBeGreaterThan(60 * 60 * 1000)
 
     await auth.logout()
     expect(runtime.context.getSessionId('web')).toBeUndefined()

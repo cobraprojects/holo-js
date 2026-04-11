@@ -126,6 +126,7 @@ export const holoSessionDefaults: Readonly<NormalizedHoloSessionConfig> = Object
 
 export const DEFAULT_AUTH_GUARD = 'web'
 export const DEFAULT_AUTH_PROVIDER = 'users'
+export const DEFAULT_AUTH_IDENTIFIERS = Object.freeze(['email'] as const)
 export const DEFAULT_AUTH_PASSWORD_BROKER = 'users'
 export const DEFAULT_AUTH_PASSWORD_RESET_TABLE = 'password_reset_tokens'
 export const DEFAULT_AUTH_PASSWORD_EXPIRE = 60
@@ -149,6 +150,7 @@ export const holoAuthDefaults: Readonly<NormalizedHoloAuthConfig> = Object.freez
     users: Object.freeze({
       name: 'users',
       model: 'User',
+      identifiers: DEFAULT_AUTH_IDENTIFIERS,
     }),
   }),
   passwords: Object.freeze({
@@ -493,9 +495,19 @@ function normalizeAuthProvider(
   name: string,
   config: AuthProviderConfig,
 ): NormalizedAuthProviderConfig {
+  const identifiers = Object.freeze(
+    Array.from(new Set((config.identifiers ?? DEFAULT_AUTH_IDENTIFIERS)
+      .map(value => normalizeNonEmptyString(value, `[Holo Auth] provider "${name}" identifier entries must be non-empty strings.`)))),
+  )
+
+  if (identifiers.length === 0) {
+    throw new Error(`[Holo Auth] provider "${name}" must declare at least one identifier.`)
+  }
+
   return Object.freeze({
     name,
     model: normalizeNonEmptyString(config.model, `[Holo Auth] provider "${name}" model must be a non-empty string.`),
+    identifiers,
   })
 }
 

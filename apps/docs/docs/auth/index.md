@@ -11,6 +11,19 @@ Authentication in Holo is built from a small set of composable packages:
 The application owns the route, request parsing, validation, and response shape. Holo exposes the authentication
 operations and runtime services that your routes call.
 
+## Server vs Client
+
+`@holo-js/auth` is the server package.
+
+Use it inside your server routes, actions, loaders, RPC handlers, jobs, and any other trusted backend code. It owns
+operations that can create sessions, verify passwords, hash passwords, impersonate users, issue tokens, and mutate
+auth state.
+
+`@holo-js/auth/client` is the browser-friendly package.
+
+Use it only to read current-auth state from your own endpoint. It does not expose login, trusted login, password
+hashing, password verification, token creation, or impersonation helpers.
+
 ## Introduction
 
 At the core of the auth system are two concepts: guards and providers.
@@ -74,6 +87,7 @@ export default defineAuthConfig({
   providers: {
     users: {
       model: 'User',
+      identifiers: ['email'],
     },
   },
 })
@@ -219,7 +233,7 @@ Session logout:
 ```ts
 import { logout } from '@holo-js/auth'
 
-await logout()
+const signedOut = await logout()
 ```
 
 Guard-specific logout:
@@ -227,8 +241,14 @@ Guard-specific logout:
 ```ts
 import auth from '@holo-js/auth'
 
-await auth.guard('admin').logout()
+const signedOut = await auth.guard('admin').logout()
 ```
+
+`logout()` is still the only user-facing API. It clears the selected Holo auth guard and returns serialized
+forget-cookie headers in `signedOut.cookies`.
+
+When the guard is backed by Clerk or WorkOS, the same `logout()` call also clears the configured hosted-provider session
+cookie for that guard so the next request does not transparently re-authenticate from the hosted cookie alone.
 
 Token logout and revocation are covered in the personal access token guide.
 
