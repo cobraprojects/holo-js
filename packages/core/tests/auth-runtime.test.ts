@@ -1022,6 +1022,14 @@ export default undefined
     expect(holoRuntimeInternals.normalizeJsonValue('{')).toBe('{')
   })
 
+  it('returns no social providers when loaded with only a project root', async () => {
+    const root = await createProject({
+      auth: true,
+    })
+
+    await expect(holoRuntimeInternals.loadConfiguredSocialProviders(root)).resolves.toEqual({})
+  })
+
   it('loads custom social providers from an explicit runtime package', async () => {
     const root = await createProject({
       auth: true,
@@ -1494,6 +1502,247 @@ export default {
     await expect(chainedUsers.findByCredentials({ email: 'chain@example.com', role: 'editor' })).resolves.toMatchObject({
       email: 'chain@example.com',
       role: 'editor',
+    })
+  })
+
+  it('filters hosted-auth profile writes and honors model auth input hooks', async () => {
+    const root = await createProject({
+      auth: true,
+    })
+
+    await writeFile(join(root, 'server/models/User.ts'), `
+const records = new Map()
+
+export async function prepareAuthCreateInput(input) {
+  return {
+    ...input,
+    public_id: 'generated-public-id',
+    team_id: 7,
+  }
+}
+
+export async function prepareAuthUpdateInput(_user, input) {
+  return {
+    ...input,
+    ignored_column: 'ignored',
+  }
+}
+
+export default {
+  definition: {
+    table: {
+      columns: {
+        id: {},
+        public_id: {},
+        team_id: {},
+        email: {},
+        name: {},
+        password: {},
+        email_verified_at: {},
+      },
+    },
+    fillable: ['email', 'name', 'password', 'email_verified_at'],
+    guarded: ['id'],
+    hasExplicitFillable: true,
+  },
+  async find(id) {
+    return records.get(Number(id)) ?? null
+  },
+  where() {
+    return {
+      async first() {
+        return null
+      },
+    }
+  },
+  async create(values) {
+    records.set(1, { id: 1, ...values })
+    return { id: 1, ...values }
+  },
+  async update(id, values) {
+    records.set(Number(id), { id: Number(id), ...values })
+    return { id: Number(id), ...values }
+  },
+}
+`, 'utf8')
+
+    const runtime = await createHolo(root, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+    const providers = await holoRuntimeInternals.createCoreAuthProviders(root, runtime.loadedConfig)
+    const users = providers.users as {
+      create(input: Record<string, unknown>): Promise<Record<string, unknown>>
+      update(user: unknown, input: Record<string, unknown>): Promise<Record<string, unknown>>
+    }
+
+    await expect(users.create({
+      email: 'hosted@example.com',
+      name: 'Hosted User',
+      avatar: 'https://cdn.test/avatar.png',
+      email_verified_at: new Date('2026-04-11T00:00:00.000Z'),
+    })).resolves.toEqual({
+      id: 1,
+      public_id: 'generated-public-id',
+      team_id: 7,
+      email: 'hosted@example.com',
+      name: 'Hosted User',
+      email_verified_at: new Date('2026-04-11T00:00:00.000Z'),
+    })
+
+    await expect(users.update({ id: 1 }, {
+      name: 'Updated Hosted User',
+      avatar: 'https://cdn.test/avatar-2.png',
+      email_verified_at: new Date('2026-04-12T00:00:00.000Z'),
+    })).resolves.toEqual({
+      id: 1,
+      name: 'Updated Hosted User',
+      email_verified_at: new Date('2026-04-12T00:00:00.000Z'),
+    })
+  })
+
+  it('allows wildcard fillable auth writes and falls back when no update hook is exported', async () => {
+    const root = await createProject({
+      auth: true,
+    })
+
+    await writeFile(join(root, 'server/models/User.ts'), `
+const records = new Map()
+
+export default {
+  definition: {
+    table: {
+      columns: {
+        id: {},
+        email: {},
+        name: {},
+        password: {},
+        role: {},
+      },
+    },
+    fillable: ['*'],
+    guarded: ['id'],
+  },
+  async find(id) {
+    return records.get(Number(id)) ?? null
+  },
+  where() {
+    return {
+      async first() {
+        return null
+      },
+    }
+  },
+  async create(values) {
+    records.set(1, { id: 1, ...values })
+    return { id: 1, ...values }
+  },
+  async update(id, values) {
+    const next = { ...(records.get(Number(id)) ?? { id: Number(id) }), ...values }
+    records.set(Number(id), next)
+    return next
+  },
+}
+`, 'utf8')
+
+    const runtime = await createHolo(root, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+    const providers = await holoRuntimeInternals.createCoreAuthProviders(root, runtime.loadedConfig)
+    const users = providers.users as {
+      create(input: Record<string, unknown>): Promise<Record<string, unknown>>
+      update(user: unknown, input: Record<string, unknown>): Promise<Record<string, unknown>>
+    }
+
+    await expect(users.create({
+      email: 'wildcard@example.com',
+      name: 'Wildcard User',
+      role: 'admin',
+      ignored_column: 'nope',
+    })).resolves.toEqual({
+      id: 1,
+      email: 'wildcard@example.com',
+      name: 'Wildcard User',
+      role: 'admin',
+    })
+
+    await expect(users.update({ id: 1 }, {
+      name: 'Wildcard Updated',
+      role: 'owner',
+      ignored_column: 'still-nope',
+    })).resolves.toEqual({
+      id: 1,
+      email: 'wildcard@example.com',
+      name: 'Wildcard Updated',
+      role: 'owner',
+    })
+  })
+
+  it('drops all hosted-auth profile writes when the model guards every column', async () => {
+    const root = await createProject({
+      auth: true,
+    })
+
+    await writeFile(join(root, 'server/models/User.ts'), `
+const records = new Map()
+
+export default {
+  definition: {
+    table: {
+      columns: {
+        id: {},
+        email: {},
+        name: {},
+      },
+    },
+    fillable: ['*'],
+    guarded: ['*'],
+  },
+  async find(id) {
+    return records.get(Number(id)) ?? null
+  },
+  where() {
+    return {
+      async first() {
+        return null
+      },
+    }
+  },
+  async create(values) {
+    records.set(1, { id: 1, ...values })
+    return { id: 1, ...values }
+  },
+  async update(id, values) {
+    const next = { ...(records.get(Number(id)) ?? { id: Number(id) }), ...values }
+    records.set(Number(id), next)
+    return next
+  },
+}
+`, 'utf8')
+
+    const runtime = await createHolo(root, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+    const providers = await holoRuntimeInternals.createCoreAuthProviders(root, runtime.loadedConfig)
+    const users = providers.users as {
+      create(input: Record<string, unknown>): Promise<Record<string, unknown>>
+      update(user: unknown, input: Record<string, unknown>): Promise<Record<string, unknown>>
+    }
+
+    await expect(users.create({
+      email: 'guarded@example.com',
+      name: 'Guarded User',
+    })).resolves.toEqual({
+      id: 1,
+    })
+
+    await expect(users.update({ id: 1 }, {
+      email: 'still-guarded@example.com',
+      name: 'Still Guarded',
+    })).resolves.toEqual({
+      id: 1,
     })
   })
 

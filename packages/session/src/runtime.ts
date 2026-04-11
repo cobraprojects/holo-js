@@ -12,14 +12,26 @@ import type {
   TouchSessionOptions,
 } from './contracts'
 
-let sessionRuntimeBindings: SessionRuntimeBindings | undefined
+function getSessionRuntimeState(): {
+  bindings?: SessionRuntimeBindings
+} {
+  const runtime = globalThis as typeof globalThis & {
+    __holoSessionRuntime__?: {
+      bindings?: SessionRuntimeBindings
+    }
+  }
+
+  runtime.__holoSessionRuntime__ ??= {}
+  return runtime.__holoSessionRuntime__
+}
 
 function getSessionRuntimeBindings(): SessionRuntimeBindings {
-  if (!sessionRuntimeBindings) {
+  const bindings = getSessionRuntimeState().bindings
+  if (!bindings) {
     throw new Error('[@holo-js/session] Session runtime is not configured yet.')
   }
 
-  return sessionRuntimeBindings
+  return bindings
 }
 
 function getStore(name?: string): { name: string, store: SessionStore, config: SessionRuntimeBindings['config'] } {
@@ -113,7 +125,7 @@ function parseRememberMeToken(
 }
 
 function normalizeCookieOptions(options: CookieSerializeOptions = {}): Required<Omit<CookieSerializeOptions, 'domain' | 'expires'>> & Pick<CookieSerializeOptions, 'domain' | 'expires'> {
-  const config = sessionRuntimeBindings?.config.cookie
+  const config = getSessionRuntimeState().bindings?.config.cookie
   return {
     path: options.path ?? config?.path ?? '/',
     domain: options.domain ?? config?.domain,
@@ -379,13 +391,14 @@ export function cookie(name: string, value: string, options?: CookieSerializeOpt
 }
 
 export function sessionCookie(value: string, options?: CookieSerializeOptions): string {
-  const name = sessionRuntimeBindings?.config.cookie.name ?? 'holo_session'
+  const name = getSessionRuntimeState().bindings?.config.cookie.name ?? 'holo_session'
   return cookie(name, value, options)
 }
 
 export function rememberMeCookie(value: string, options?: CookieSerializeOptions): string {
-  const name = `${sessionRuntimeBindings?.config.cookie.name ?? 'holo_session'}_remember`
-  const maxAge = options?.maxAge ?? ((sessionRuntimeBindings?.config.rememberMeLifetime ?? 0) * 60)
+  const bindings = getSessionRuntimeState().bindings
+  const name = `${bindings?.config.cookie.name ?? 'holo_session'}_remember`
+  const maxAge = options?.maxAge ?? ((bindings?.config.rememberMeLifetime ?? 0) * 60)
   return cookie(name, value, {
     ...options,
     maxAge,
@@ -393,7 +406,7 @@ export function rememberMeCookie(value: string, options?: CookieSerializeOptions
 }
 
 export function configureSessionRuntime(bindings?: SessionRuntimeBindings): void {
-  sessionRuntimeBindings = bindings
+  getSessionRuntimeState().bindings = bindings
 }
 
 export function getSessionRuntime(): SessionRuntimeFacade {
@@ -413,7 +426,7 @@ export function getSessionRuntime(): SessionRuntimeFacade {
 }
 
 export function resetSessionRuntime(): void {
-  sessionRuntimeBindings = undefined
+  getSessionRuntimeState().bindings = undefined
 }
 
 export const sessionRuntimeInternals = {

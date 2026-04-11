@@ -1,4 +1,6 @@
+import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   config as globalConfig,
   configureConfigRuntime,
@@ -477,15 +479,39 @@ function getRuntimeState(): {
   return runtime.__holoRuntime__
 }
 
+const portableRuntimeRequire = createRequire(import.meta.url)
+
+function resolveOptionalImportSpecifier(specifier: string, projectRoot?: string): string {
+  if (!projectRoot) {
+    return specifier
+  }
+
+  try {
+    const resolved = portableRuntimeRequire.resolve(specifier, {
+      paths: [projectRoot],
+    })
+    return pathToFileURL(resolved).href
+  } catch {
+    return specifier
+  }
+}
+
 /* v8 ignore next 15 -- optional-package absence is validated in published-package integration, not in this monorepo test graph */
-async function importOptionalModule<TModule>(specifier: string): Promise<TModule | undefined> {
+async function importOptionalModule<TModule>(
+  specifier: string,
+  options: {
+    readonly projectRoot?: string
+  } = {},
+): Promise<TModule | undefined> {
+  const resolvedSpecifier = resolveOptionalImportSpecifier(specifier, options.projectRoot)
+
   try {
     if (process.env.VITEST) {
-      return await import(/* @vite-ignore */ specifier) as TModule
+      return await import(/* @vite-ignore */ resolvedSpecifier) as TModule
     }
 
     const indirectEval = globalThis.eval as (source: string) => Promise<TModule>
-    return await indirectEval(`import(${JSON.stringify(specifier)})`)
+    return await indirectEval(`import(${JSON.stringify(resolvedSpecifier)})`)
   } catch (error) {
     if (
       error
@@ -501,6 +527,9 @@ async function importOptionalModule<TModule>(specifier: string): Promise<TModule
         error.message.includes(`Cannot find package '${specifier}'`)
         || error.message.includes(`Cannot find module '${specifier}'`)
         || error.message.includes(`Failed to load url ${specifier}`)
+        || error.message.includes(`Cannot find package '${resolvedSpecifier}'`)
+        || error.message.includes(`Cannot find module '${resolvedSpecifier}'`)
+        || error.message.includes(`Failed to load url ${resolvedSpecifier}`)
       )
     ) {
       return undefined
@@ -1107,15 +1136,25 @@ async function createCoreSessionStores<TCustom extends HoloConfigMap>(
 }
 
 async function loadConfiguredSocialProviders<TCustom extends HoloConfigMap>(
-  loadedConfig: LoadedHoloConfig<TCustom>,
+  projectRootOrLoadedConfig: string | LoadedHoloConfig<TCustom>,
+  maybeLoadedConfig?: LoadedHoloConfig<TCustom>,
 ): Promise<Readonly<Record<string, unknown>>> {
+  const projectRoot = typeof projectRootOrLoadedConfig === 'string'
+    ? projectRootOrLoadedConfig
+    : process.cwd()
+  const loadedConfig = (typeof projectRootOrLoadedConfig === 'string'
+    ? maybeLoadedConfig
+    : projectRootOrLoadedConfig) as LoadedHoloConfig<TCustom> | undefined
+  const socialConfig = loadedConfig?.auth?.social ?? {}
   const providers: Record<string, unknown> = {}
 
-  for (const providerName of Object.keys(loadedConfig.auth.social)) {
-    const configuredRuntime = loadedConfig.auth.social[providerName]?.runtime?.trim()
+  for (const providerName of Object.keys(socialConfig)) {
+    const configuredRuntime = socialConfig[providerName]?.runtime?.trim()
     const packageName = configuredRuntime || `@holo-js/auth-social-${providerName}`
 
-    const moduleValue = await portableRuntimeModuleInternals.importOptionalModule<Record<string, unknown>>(packageName)
+    const moduleValue = await portableRuntimeModuleInternals.importOptionalModule<Record<string, unknown>>(packageName, {
+      projectRoot,
+    })
     if (!moduleValue) {
       throw new Error(`[@holo-js/core] Social provider "${providerName}" requires ${packageName} to be installed.`)
     }
@@ -1287,8 +1326,9 @@ function serializePasswordResetTokenRecord(record: {
 }
 
 async function createCoreSocialBindings<TCustom extends HoloConfigMap>(
-  loadedConfig: LoadedHoloConfig<TCustom>,
-  sessionModule: SessionModule,
+  projectRootOrLoadedConfig: string | LoadedHoloConfig<TCustom>,
+  loadedConfigOrSessionModule: LoadedHoloConfig<TCustom> | SessionModule,
+  maybeSessionModule?: SessionModule,
 ): Promise<{
   readonly providers: Readonly<Record<string, unknown>>
   readonly stateStore: {
@@ -1313,7 +1353,16 @@ async function createCoreSocialBindings<TCustom extends HoloConfigMap>(
     save(record: unknown): Promise<void>
   }
 }> {
-  const providers = await loadConfiguredSocialProviders(loadedConfig)
+  const projectRoot = typeof projectRootOrLoadedConfig === 'string'
+    ? projectRootOrLoadedConfig
+    : process.cwd()
+  const loadedConfig = (typeof projectRootOrLoadedConfig === 'string'
+    ? loadedConfigOrSessionModule
+    : projectRootOrLoadedConfig) as LoadedHoloConfig<TCustom>
+  const sessionModule = (typeof projectRootOrLoadedConfig === 'string'
+    ? maybeSessionModule
+    : loadedConfigOrSessionModule) as SessionModule
+  const providers = await loadConfiguredSocialProviders(projectRoot, loadedConfig)
   const sessionRuntime = sessionModule.getSessionRuntime()
   const stateStore = Object.freeze({
     async create(record: {
@@ -1779,8 +1828,21 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
     const resolvedModule = await resolveAuthProviderRuntime(projectRoot, loadedConfig, providerConfig.model) as {
       default?: unknown
       holoModelPendingSchema?: boolean
+      prepareAuthCreateInput?: (input: Readonly<Record<string, unknown>>) => Promise<Readonly<Record<string, unknown>>> | Readonly<Record<string, unknown>>
+      prepareAuthUpdateInput?: (
+        user: unknown,
+        input: Readonly<Record<string, unknown>>,
+      ) => Promise<Readonly<Record<string, unknown>>> | Readonly<Record<string, unknown>>
     }
     const model = resolvedModule.default as {
+      definition?: {
+        readonly table?: {
+          readonly columns?: Readonly<Record<string, unknown>>
+        }
+        readonly fillable?: readonly string[]
+        readonly guarded?: readonly string[]
+        readonly hasExplicitFillable?: boolean
+      }
       query?(): AuthModelQuery
       find(value: unknown): Promise<unknown>
       where(column: string, value: unknown): AuthModelQuery
@@ -1828,6 +1890,70 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
       return [providerName, pendingAdapter] as const
     }
 
+    const sanitizeAuthWriteInput = (
+      input: Readonly<Record<string, unknown>>,
+      options: {
+        readonly enforceFillable?: boolean
+      } = {},
+    ): Record<string, unknown> => {
+      const definition = model.definition
+      const knownColumns = new Set(Object.keys(definition?.table?.columns ?? {}))
+      const fillable = new Set(definition?.fillable ?? [])
+      const guarded = new Set(definition?.guarded ?? [])
+      const hasKnownColumns = knownColumns.size > 0
+      const enforceFillable = options.enforceFillable !== false
+      const output: Record<string, unknown> = {}
+
+      for (const [column, value] of Object.entries(input)) {
+        if (hasKnownColumns && !knownColumns.has(column)) {
+          continue
+        }
+
+        if (guarded.has('*')) {
+          continue
+        }
+
+        const writable = !enforceFillable
+          ? !guarded.has(column)
+          : fillable.has('*')
+            ? !guarded.has(column)
+            : definition?.hasExplicitFillable === true || fillable.size > 0
+              ? fillable.has(column) && !guarded.has(column)
+              : !guarded.has(column)
+
+        if (writable) {
+          output[column] = value
+        }
+      }
+
+      return output
+    }
+
+    const prepareAuthCreateInput = async (input: Readonly<Record<string, unknown>>): Promise<Record<string, unknown>> => {
+      const sanitizedInput = sanitizeAuthWriteInput(input)
+      if (typeof resolvedModule.prepareAuthCreateInput !== 'function') {
+        return sanitizedInput
+      }
+
+      return sanitizeAuthWriteInput(await resolvedModule.prepareAuthCreateInput(sanitizedInput), {
+        enforceFillable: false,
+      })
+    }
+
+    const prepareAuthUpdateInput = async (
+      user: unknown,
+      input: Readonly<Record<string, unknown>>,
+    ): Promise<Record<string, unknown>> => {
+      const sanitizedInput = sanitizeAuthWriteInput(input)
+      if (typeof resolvedModule.prepareAuthUpdateInput !== 'function') {
+        return sanitizedInput
+      }
+
+      return sanitizeAuthWriteInput(await resolvedModule.prepareAuthUpdateInput(user, sanitizedInput), {
+        enforceFillable: false,
+      })
+    }
+
     const adapter = {
       async findById(id: string | number) {
         const resolved = await model.find(id)
@@ -1860,12 +1986,12 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
         return resolved ? markProviderUser(resolved, providerName) : null
       },
       async create(input: Readonly<Record<string, unknown>>) {
-        return markProviderUser(await model.create(input as Record<string, unknown>), providerName)
+        return markProviderUser(await model.create(await prepareAuthCreateInput(input)), providerName)
       },
       /* v8 ignore start -- adapter shape mirrors the auth package contract; core tests cover the wired runtime behavior */
       async update(user: unknown, input: Readonly<Record<string, unknown>>) {
         return markProviderUser(
-          await model.update(getEntityAttributes(user).id, input as Record<string, unknown>),
+          await model.update(getEntityAttributes(user).id, await prepareAuthUpdateInput(user, input)),
           providerName,
         )
       },
@@ -2177,7 +2303,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
 
     if (socialModule) {
       socialModule.configureSocialAuthRuntime({
-        ...(await createCoreSocialBindings(loadedConfig, sessionModule)),
+        ...(await createCoreSocialBindings(projectRoot, loadedConfig, sessionModule)),
         encryptionKey: loadedConfig.auth.socialEncryptionKey,
       })
     }

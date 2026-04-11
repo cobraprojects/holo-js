@@ -401,6 +401,48 @@ describe('@holo-js/core portable runtime', () => {
     }
   })
 
+  it('treats resolved optional-import load failures as absent modules', async () => {
+    const root = await createProject()
+    const packageDir = join(root, 'node_modules', 'resolved-optional-module')
+    const modulePath = join(packageDir, 'index.mjs')
+    const originalVitest = process.env.VITEST
+    let evalSpy: ReturnType<typeof vi.spyOn> | undefined
+
+    await mkdir(packageDir, { recursive: true })
+    await writeFile(join(packageDir, 'package.json'), JSON.stringify({
+      name: 'resolved-optional-module',
+      type: 'module',
+      exports: './index.mjs',
+    }), 'utf8')
+    await writeFile(modulePath, 'export default { ok: true }\n', 'utf8')
+
+    process.env.VITEST = ''
+
+    try {
+      const resolvedSpecifier = pathToFileURL(modulePath).href
+      evalSpy = vi.spyOn(globalThis, 'eval').mockImplementationOnce(async (source: string) => {
+        const importedSpecifier = JSON.parse(source.slice('import('.length, -1)) as string
+        throw new Error(`Failed to load url ${importedSpecifier}`)
+      })
+
+      await expect(
+        holoRuntimeInternals.moduleInternals.importOptionalModule('resolved-optional-module', {
+          projectRoot: root,
+        }),
+      ).resolves.toBeUndefined()
+
+      expect(evalSpy).toHaveBeenCalledTimes(1)
+      expect(evalSpy.mock.calls[0]?.[0]).toContain('resolved-optional-module/index.mjs')
+    } finally {
+      evalSpy?.mockRestore?.()
+      if (typeof originalVitest === 'undefined') {
+        delete process.env.VITEST
+      } else {
+        process.env.VITEST = originalVitest
+      }
+    }
+  })
+
   it('does not import discovered queue jobs during default runtime initialization', async () => {
     const root = await createProject()
     await writeBaseConfig(root)

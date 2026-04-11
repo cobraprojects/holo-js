@@ -87,18 +87,30 @@ type RuntimeBindings = {
   readonly passwordHasher: AuthPasswordHasher
 }
 
-let authRuntimeBindings: RuntimeBindings | undefined
+function getAuthRuntimeState(): {
+  bindings?: RuntimeBindings
+} {
+  const runtime = globalThis as typeof globalThis & {
+    __holoAuthRuntime__?: {
+      bindings?: RuntimeBindings
+    }
+  }
+
+  runtime.__holoAuthRuntime__ ??= {}
+  return runtime.__holoAuthRuntime__
+}
 
 function throwUnconfigured(): never {
   throw new Error('[@holo-js/auth] Auth runtime is not configured yet.')
 }
 
 function getRuntimeBindings(): RuntimeBindings {
-  if (!authRuntimeBindings) {
+  const bindings = getAuthRuntimeState().bindings
+  if (!bindings) {
     throwUnconfigured()
   }
 
-  return authRuntimeBindings
+  return bindings
 }
 
 function createDefaultPasswordHasher(): AuthPasswordHasher {
@@ -1916,11 +1928,11 @@ function createGuardFacade(guardName: string): AuthGuardFacade {
 
 export function configureAuthRuntime(bindings?: AuthRuntimeBindings): void {
   if (!bindings) {
-    authRuntimeBindings = undefined
+    getAuthRuntimeState().bindings = undefined
     return
   }
 
-  authRuntimeBindings = {
+  getAuthRuntimeState().bindings = {
     config: normalizeAuthConfig(bindings.config),
     session: bindings.session,
     providers: bindings.providers,
@@ -2019,7 +2031,7 @@ export function getAuthRuntime(): AuthRuntimeFacade {
 }
 
 export function resetAuthRuntime(): void {
-  authRuntimeBindings = undefined
+  getAuthRuntimeState().bindings = undefined
 }
 
 export async function checkForGuard(guardName: string): Promise<boolean> {
