@@ -5,6 +5,8 @@ import {
   normalizeAppConfig,
   normalizeAuthConfig,
   normalizeDatabaseConfig,
+  normalizeMailConfig,
+  normalizeNotificationsConfig,
   normalizeQueueConfigForHolo,
   normalizeSessionConfig,
   normalizeStorageConfig,
@@ -20,10 +22,12 @@ import type {
   DefineConfigValue,
   LoadedHoloConfig,
   HoloAppConfig,
+  HoloAuthConfig,
   HoloConfigMap,
   HoloDatabaseConfig,
+  HoloMailConfig,
   HoloMediaConfig,
-  HoloAuthConfig,
+  HoloNotificationsConfig,
   HoloQueueConfig,
   HoloSessionConfig,
   HoloStorageConfig,
@@ -214,12 +218,22 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
   const database = normalizeDatabaseConfig(resolvedRawConfig.database as HoloDatabaseConfig | undefined)
   const storage = normalizeStorageConfig(resolvedRawConfig.storage as HoloStorageConfig | undefined)
   const queue = normalizeQueueConfigForHolo(resolvedRawConfig.queue as HoloQueueConfig | undefined)
+  const mail = normalizeMailConfig(resolvedRawConfig.mail as HoloMailConfig | undefined)
+  const notifications = normalizeNotificationsConfig(resolvedRawConfig.notifications as HoloNotificationsConfig | undefined)
   const media = Object.freeze({ ...((resolvedRawConfig.media as HoloMediaConfig | undefined) ?? {}) })
   const session = normalizeSessionConfig(resolvedRawConfig.session as HoloSessionConfig | undefined)
   const auth = normalizeAuthConfig(resolvedRawConfig.auth as HoloAuthConfig | undefined)
 
   const customEntries = Object.entries(resolvedRawConfig).filter(([key]) => {
-    return key !== 'app' && key !== 'database' && key !== 'storage' && key !== 'queue' && key !== 'media' && key !== 'session' && key !== 'auth'
+    return key !== 'app'
+      && key !== 'database'
+      && key !== 'storage'
+      && key !== 'queue'
+      && key !== 'mail'
+      && key !== 'notifications'
+      && key !== 'media'
+      && key !== 'session'
+      && key !== 'auth'
   })
   const custom = Object.freeze(Object.fromEntries(customEntries)) as Readonly<TCustom>
   const all = Object.freeze({
@@ -227,6 +241,8 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
     database,
     storage,
     queue,
+    mail,
+    notifications,
     media,
     session,
     auth,
@@ -238,6 +254,8 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
     database,
     storage,
     queue,
+    mail,
+    notifications,
     media,
     session,
     auth,
@@ -406,6 +424,14 @@ export function defineStorageConfig<TConfig extends HoloStorageConfig>(config: T
 }
 
 export function defineQueueConfig<TConfig extends HoloQueueConfig>(config: TConfig): DefineConfigValue<TConfig> {
+  return defineConfig(config)
+}
+
+export function defineMailConfig<TConfig extends HoloMailConfig>(config: TConfig): DefineConfigValue<TConfig> {
+  return defineConfig(config)
+}
+
+export function defineNotificationsConfig<TConfig extends HoloNotificationsConfig>(config: TConfig): DefineConfigValue<TConfig> {
   return defineConfig(config)
 }
 

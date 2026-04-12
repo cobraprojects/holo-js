@@ -1,3 +1,4 @@
+/* v8 ignore file -- executable wrapper only */
 import { runCli } from '../cli'
 
 const exitCode = await runCli(process.argv.slice(2), {

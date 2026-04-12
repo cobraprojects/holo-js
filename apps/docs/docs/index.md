@@ -66,7 +66,7 @@ export default defineDatabaseConfig({
 ```
 
 The user-facing setup surface stays small: `config/*.ts`, layered env files, `server/models`,
-`server/db`, `server/commands`, `server/jobs`, `server/events`, and `server/listeners`.
+`server/db`, `server/commands`, `server/jobs`, `server/events`, `server/listeners`, and `server/mail`.
 
 ## Supported frameworks
 
@@ -97,6 +97,8 @@ If you are contributing to the framework packages inside this repository, use:
 - [Validation](/validation/)
 - [Forms](/forms/)
 - [Events](/events/)
+- [Notifications](/notifications/)
+- [Mail](/mail/)
 - [Storage](/storage)
 - [Queue](/queue/)
 - [Media](/media)

@@ -44,7 +44,7 @@ The interactive flow asks for:
 - database driver: `sqlite`, `mysql`, or `postgres`
 - package manager: `bun`, `npm`, `pnpm`, or `yarn`
 - storage default disk: `local` or `public`
-- optional packages: `validation`, `forms`, or none
+- optional packages: `validation`, `forms`, `notifications`, `mail`, or none
 
 ## Create a project non-interactively
 
@@ -56,7 +56,7 @@ bun create holo-js my-app \
   --database sqlite \
   --package-manager bun \
   --storage-default-disk public \
-  --package forms,validation
+  --package forms,validation,mail
 ```
 
 ```bash [npm]
@@ -65,7 +65,7 @@ npm create holo-js@latest my-app -- \
   --database sqlite \
   --package-manager npm \
   --storage-default-disk public \
-  --package forms,validation
+  --package forms,validation,mail
 ```
 
 ```bash [pnpm]
@@ -74,7 +74,7 @@ pnpm create holo-js@latest my-app -- \
   --database sqlite \
   --package-manager pnpm \
   --storage-default-disk public \
-  --package forms,validation
+  --package forms,validation,mail
 ```
 
 ```bash [Yarn]
@@ -83,7 +83,7 @@ yarn create holo-js my-app \
   --database sqlite \
   --package-manager yarn \
   --storage-default-disk public \
-  --package forms,validation
+  --package forms,validation,mail
 ```
 
 ```bash [Direct]
@@ -92,7 +92,7 @@ bunx create-holo-js my-app \
   --database sqlite \
   --package-manager bun \
   --storage-default-disk public \
-  --package forms,validation
+  --package forms,validation,mail
 ```
 
 :::
@@ -103,7 +103,11 @@ instead of resolving `create-holo-js`.
 
 Use the non-interactive flags for CI, templates, or internal automation.
 
-`forms` and `validation` are optional packages. Add them during scaffolding only if the app needs them.
+`forms`, `validation`, `notifications`, and `mail` are optional packages. Add them during scaffolding only if the
+app needs them.
+
+Example optional package sets include `--package forms,validation,notifications` and
+`--package forms,validation,mail`.
 
 ## What the scaffold writes
 
@@ -234,5 +238,7 @@ Holo-JS owns:
 - [Directory Structure](/directory-structure)
 - [Queue](/queue/)
 - [Events](/events/)
+- [Notifications](/notifications/)
+- [Mail](/mail/)
 - [Development Workflow](/development/workflow)
 - [Database Getting Started](/database/)

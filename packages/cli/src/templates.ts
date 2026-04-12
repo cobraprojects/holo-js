@@ -213,6 +213,134 @@ export function renderMultiListenerTemplate(
   ].join('\n')
 }
 
+export function renderMarkdownMailTemplate(mailName: string, inputTypeName: string): string {
+  return [
+    'import { defineMail } from \'@holo-js/mail\'',
+    '',
+    `export type ${inputTypeName} = {`,
+    '  readonly to: string',
+    '  readonly name: string',
+    '}',
+    '',
+    `function ${mailName}(input: ${inputTypeName}) {`,
+    '  return defineMail({',
+    '    to: input.to,',
+    '    subject: `Welcome, ${input.name}`,',
+    '    markdown: [',
+    '      \'# Welcome\',',
+    '      \'\',',
+    '      `Hello ${input.name},`,',
+    '      \'\',',
+    '      \'Your mail definition is ready.\',',
+    '    ].join(\'\\n\'),',
+    '  })',
+    '}',
+    '',
+    `export default ${mailName}`,
+    '',
+  ].join('\n')
+}
+
+export function renderViewMailTemplate(
+  mailName: string,
+  inputTypeName: string,
+  viewIdentifier: string,
+): string {
+  return [
+    'import { defineMail } from \'@holo-js/mail\'',
+    '',
+    `export type ${inputTypeName} = {`,
+    '  readonly to: string',
+    '  readonly name: string',
+    '}',
+    '',
+    `function ${mailName}(input: ${inputTypeName}) {`,
+    '  return defineMail({',
+    '    to: input.to,',
+    '    subject: `Welcome, ${input.name}`,',
+    '    render: {',
+    `      view: '${viewIdentifier}',`,
+    '      props: input,',
+    '    },',
+    '  })',
+    '}',
+    '',
+    `export default ${mailName}`,
+    '',
+  ].join('\n')
+}
+
+export function renderNextMailViewTemplate(mailName: string, inputTypeName: string, factoryImportPath: string): string {
+  return [
+    `import type { ${inputTypeName} } from '${factoryImportPath}'`,
+    '',
+    `export default function ${mailName}View(input: ${inputTypeName}) {`,
+    '  return (',
+    '    <div>',
+    '      <h1>Welcome</h1>',
+    '      <p>Hello {input.name},</p>',
+    '      <p>This message is addressed to {input.to}.</p>',
+    '    </div>',
+    '  )',
+    '}',
+    '',
+  ].join('\n')
+}
+
+export function renderNuxtMailViewTemplate(inputTypeName: string, factoryImportPath: string): string {
+  return [
+    '<script setup lang="ts">',
+    `import type { ${inputTypeName} } from '${factoryImportPath}'`,
+    '',
+    `defineProps<${inputTypeName}>()`,
+    '</script>',
+    '',
+    '<template>',
+    '  <div>',
+    '    <h1>Welcome</h1>',
+    '    <p>Hello {{ name }},</p>',
+    '    <p>This message is addressed to {{ to }}.</p>',
+    '  </div>',
+    '</template>',
+    '',
+  ].join('\n')
+}
+
+export function renderSvelteMailViewTemplate(inputTypeName: string, factoryImportPath: string): string {
+  return [
+    '<script lang="ts">',
+    `  import type { ${inputTypeName} } from '${factoryImportPath}'`,
+    '',
+    `  export let to: ${inputTypeName}['to']`,
+    `  export let name: ${inputTypeName}['name']`,
+    '</script>',
+    '',
+    '<div>',
+    '  <h1>Welcome</h1>',
+    '  <p>Hello {name},</p>',
+    '  <p>This message is addressed to {to}.</p>',
+    '</div>',
+    '',
+  ].join('\n')
+}
+
+export function renderGenericMailViewTemplate(mailName: string, inputTypeName: string, factoryImportPath: string): string {
+  return [
+    `import type { ${inputTypeName} } from '${factoryImportPath}'`,
+    '',
+    `export default function ${mailName}View(input: ${inputTypeName}) {`,
+    '  return [',
+    '    \'<div>\',',
+    '    \'  <h1>Welcome</h1>\',',
+    '    `  <p>Hello ${input.name},</p>`,',
+    '    `  <p>This message is addressed to ${input.to}.</p>`,',
+    '    \'</div>\',',
+    '  ].join(\'\\n\')',
+    '}',
+    '',
+  ].join('\n')
+}
+
 export function resolveNameInfo(requestedName: string, options: { suffix?: string } = {}) {
   const parts = splitRequestedName(requestedName)
   const baseName = ensureSuffix(toPascalCase(parts.rawBaseName), options.suffix ?? '')

@@ -20,6 +20,8 @@ export default defineConfig({
       '@holo-js/db-postgres': resolve(__dirname, '../db-postgres/src/index.ts'),
       '@holo-js/db-sqlite': resolve(__dirname, '../db-sqlite/src/index.ts'),
       '@holo-js/events': resolve(__dirname, '../events/src/index.ts'),
+      '@holo-js/mail': resolve(__dirname, '../mail/src/index.ts'),
+      '@holo-js/notifications': resolve(__dirname, '../notifications/src/index.ts'),
       '@holo-js/queue': resolve(__dirname, '../queue/src/index.ts'),
       '@holo-js/queue-redis': resolve(__dirname, '../queue-redis/src/index.ts'),
       '@holo-js/queue-db': resolve(__dirname, '../queue-db/src/index.ts'),
@@ -37,7 +39,9 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
+      reportsDirectory: resolve(__dirname, '../../coverage/core'),
       exclude: [
+        'src/runtime/**/*.mjs',
         'src/**/types.ts',
         '**/*.d.ts',
         '**/node_modules/**',

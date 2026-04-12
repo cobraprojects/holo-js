@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { normalizeMigrationSlug } from '@holo-js/db'
 import {
@@ -10,11 +11,13 @@ import {
   writeTextFile,
 } from './project'
 import {
+  ensureSuffix,
   relativeImportPath,
   renderEventTemplate,
   renderFactoryTemplate,
   renderJobTemplate,
   renderListenerTemplate,
+  renderMarkdownMailTemplate,
   renderMultiListenerTemplate,
   renderModelTemplate,
   renderObserverTemplate,
@@ -36,6 +39,11 @@ import {
 } from './migrations'
 import { writeLine } from './io'
 import type { IoStreams, PreparedInput } from './cli-types'
+
+type MailTemplateType = 'markdown' | 'view'
+type KnownMailViewFramework = 'nuxt' | 'next' | 'sveltekit'
+const MAIL_VIEW_SCAFFOLDING_UNAVAILABLE_MESSAGE
+  = 'View-backed mail scaffolding requires a renderView runtime binding, which the first-party app scaffolds do not configure yet. Use "--markdown" instead.'
 
 export function hasRegisteredModelName(
   registry: Awaited<ReturnType<typeof loadGeneratedProjectRegistry>> | undefined,
@@ -63,6 +71,36 @@ export function hasRegisteredListenerId(
   listenerId: string,
 ): boolean {
   return Boolean(registry?.listeners.some(entry => entry.id === listenerId))
+}
+
+async function resolveProjectMailViewFramework(projectRoot: string): Promise<KnownMailViewFramework | 'generic'> {
+  try {
+    const packageJson = await readFile(resolve(projectRoot, 'package.json'), 'utf8')
+    const parsed = JSON.parse(packageJson) as {
+      dependencies?: Record<string, unknown>
+      devDependencies?: Record<string, unknown>
+    }
+    const dependencies = {
+      ...(parsed.dependencies ?? {}),
+      ...(parsed.devDependencies ?? {}),
+    }
+
+    if (typeof dependencies.nuxt === 'string') {
+      return 'nuxt'
+    }
+
+    if (typeof dependencies.next === 'string') {
+      return 'next'
+    }
+
+    if (typeof dependencies['@sveltejs/kit'] === 'string') {
+      return 'sveltekit'
+    }
+  } catch {
+    return 'generic'
+  }
+
+  return 'generic'
 }
 
 export async function runMakeModel(
@@ -388,4 +426,37 @@ export async function runMakeFactory(
   await runProjectPrepare(projectRoot)
 
   writeLine(io.stdout, `Created factory: ${makeProjectRelativePath(projectRoot, filePath)}`)
+}
+
+export async function runMakeMail(
+  io: IoStreams,
+  projectRoot: string,
+  input: PreparedInput,
+): Promise<void> {
+  await ensureProjectConfig(projectRoot)
+  const requestedName = String(input.args[0] ?? '')
+  const templateType: MailTemplateType = input.flags.type === 'view' ? 'view' : 'markdown'
+  if (templateType === 'view') {
+    throw new Error(MAIL_VIEW_SCAFFOLDING_UNAVAILABLE_MESSAGE)
+  }
+  const nameParts = splitRequestedName(requestedName)
+  const directory = nameParts.directory
+    .split('/')
+    .filter(Boolean)
+    .map(segment => toKebabCase(segment))
+    .join('/')
+  const fileStem = toKebabCase(nameParts.rawBaseName)
+  const mailName = ensureSuffix(toPascalCase(nameParts.rawBaseName), 'Mail')
+  const inputTypeName = `${mailName}Input`
+  const mailFilePath = resolveArtifactPath(projectRoot, 'server/mail', directory, `${fileStem}.ts`)
+
+  await ensureAbsent(mailFilePath)
+
+  await writeTextFile(mailFilePath, renderMarkdownMailTemplate(mailName, inputTypeName))
+  await runProjectPrepare(projectRoot)
+  writeLine(io.stdout, `Created mail: ${makeProjectRelativePath(projectRoot, mailFilePath)}`)
+}
+
+export const generatorInternals = {
+  resolveProjectMailViewFramework,
 }

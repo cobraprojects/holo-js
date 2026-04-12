@@ -41,11 +41,32 @@ The verification flow marks the local user as verified and invalidates the token
 
 ## Registration Flow
 
-After registration succeeds, the application can request a verification token and deliver it through its own
-notification layer:
+After registration succeeds, the application should request a verification token and deliver it through
+notifications or direct mail:
 
 ```ts
 import { register, verification } from '@holo-js/auth'
+import { defineNotification, notify } from '@holo-js/notifications'
+
+const verificationCreated = (token: { plainTextToken: string }) => defineNotification({
+  type: 'auth.email-verification',
+  via() {
+    return ['email'] as const
+  },
+  build: {
+    email(user: { name?: string }) {
+      return {
+        subject: 'Verify your email address',
+        greeting: `Hello ${user.name ?? 'there'},`,
+        lines: ['Please verify your email address to continue.'],
+        action: {
+          label: 'Verify email',
+          url: `https://app.test/verify-email?token=${encodeURIComponent(token.plainTextToken)}`,
+        },
+      }
+    },
+  },
+})
 
 const created = await register({
   email: body.email,
@@ -53,14 +74,23 @@ const created = await register({
   passwordConfirmation: body.passwordConfirmation,
 })
 
-await verification.create(created)
+const token = await verification.create(created)
+
+await notify(created, verificationCreated(token))
 ```
 
 ## Delivery
 
-The current default delivery behavior is temporary. Until the notification package is in place, production
-applications should configure a delivery hook and send the verification token through their own mail or notification
-system.
+If `@holo-js/auth` and `@holo-js/notifications` are both installed, core bridges auth delivery through
+notifications automatically. If notifications are absent but `@holo-js/mail` is installed, core falls back to
+direct mail delivery instead.
+
+Install notifications or mail into an existing project with:
+
+```bash
+bunx holo install notifications
+bunx holo install mail
+```
 
 ## Protecting Application Routes
 

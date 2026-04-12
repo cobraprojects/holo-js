@@ -388,6 +388,8 @@
       "devDependencies": {
         "@holo-js/auth": "^0.1.2",
         "@holo-js/events": "^0.1.2",
+        "@holo-js/mail": "^0.1.2",
+        "@holo-js/notifications": "^0.1.2",
         "@holo-js/queue-db": "^0.1.2",
         "@holo-js/session": "^0.1.2",
         "@holo-js/storage": "^0.1.2",
@@ -401,6 +403,8 @@
         "@holo-js/auth-clerk": "^0.1.2",
         "@holo-js/auth-social": "^0.1.2",
         "@holo-js/auth-workos": "^0.1.2",
+        "@holo-js/mail": "^0.1.2",
+        "@holo-js/notifications": "^0.1.2",
         "@holo-js/queue": "^0.1.2",
         "@holo-js/session": "^0.1.2",
         "@holo-js/storage": "^0.1.2",
@@ -410,6 +414,8 @@
         "@holo-js/auth-clerk",
         "@holo-js/auth-social",
         "@holo-js/auth-workos",
+        "@holo-js/mail",
+        "@holo-js/notifications",
         "@holo-js/queue",
         "@holo-js/session",
         "@holo-js/storage",
@@ -539,6 +545,28 @@
         "vitest": "^2.1.8",
       },
     },
+    "packages/mail": {
+      "name": "@holo-js/mail",
+      "version": "0.1.2",
+      "dependencies": {
+        "@holo-js/config": "^0.1.2",
+        "nodemailer": "^6.10.1",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.2",
+        "tsup": "^8.3.5",
+        "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
+      },
+      "peerDependencies": {
+        "@holo-js/queue": "^0.1.2",
+        "@holo-js/storage": "^0.1.2",
+      },
+      "optionalPeers": [
+        "@holo-js/queue",
+        "@holo-js/storage",
+      ],
+    },
     "packages/media": {
       "name": "@holo-js/media",
       "version": "0.1.2",
@@ -553,6 +581,25 @@
         "typescript": "^5.7.2",
         "vitest": "^2.1.8",
       },
+    },
+    "packages/notifications": {
+      "name": "@holo-js/notifications",
+      "version": "0.1.2",
+      "dependencies": {
+        "@holo-js/config": "^0.1.2",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.2",
+        "tsup": "^8.3.5",
+        "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
+      },
+      "peerDependencies": {
+        "@holo-js/queue": "^0.1.2",
+      },
+      "optionalPeers": [
+        "@holo-js/queue",
+      ],
     },
     "packages/queue": {
       "name": "@holo-js/queue",
@@ -965,7 +1012,11 @@
 
     "@holo-js/forms": ["@holo-js/forms@workspace:packages/forms"],
 
+    "@holo-js/mail": ["@holo-js/mail@workspace:packages/mail"],
+
     "@holo-js/media": ["@holo-js/media@workspace:packages/media"],
+
+    "@holo-js/notifications": ["@holo-js/notifications@workspace:packages/notifications"],
 
     "@holo-js/queue": ["@holo-js/queue@workspace:packages/queue"],
 
@@ -2258,6 +2309,8 @@
     "node-mock-http": ["node-mock-http@1.0.4", "", {}, "sha512-8DY+kFsDkNXy1sJglUfuODx1/opAGJGyrTuFqEoN90oRc2Vk0ZbD4K2qmKXBBEhZQzdKHIVfEJpDU8Ak2NJEvQ=="],
 
     "node-releases": ["node-releases@2.0.36", "", {}, "sha512-TdC8FSgHz8Mwtw9g5L4gR/Sh9XhSP/0DEkQxfEFXOpiul5IiHgHan2VhYYb6agDSfp4KuvltmGApc8HMgUrIkA=="],
+
+    "nodemailer": ["nodemailer@6.10.1", "", {}, "sha512-Z+iLaBGVaSjbIzQ4pX6XV41HrooLsQ10ZWPUehGmuantvzWoDVBnmsdUcOIDM1t+yPor5pDhVlDESgOMEGxhHA=="],
 
     "nopt": ["nopt@8.1.0", "", { "dependencies": { "abbrev": "^3.0.0" }, "bin": { "nopt": "bin/nopt.js" } }, "sha512-ieGu42u/Qsa4TFktmaKEwM6MQH0pOWnaB3htzh0JRtx84+Mebc0cbZYN5bC+6WTZ4+77xrL9Pn5m7CV6VIkV7A=="],
 

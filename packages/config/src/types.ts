@@ -447,11 +447,166 @@ export interface NormalizedHoloStorageConfig {
   readonly disks: Readonly<Record<string, DiskConfig>>
 }
 
+export interface HoloNotificationsConfig {
+  readonly table?: string
+  readonly queue?: {
+    readonly connection?: string
+    readonly queue?: string
+    readonly afterCommit?: boolean
+  }
+}
+
+export interface NormalizedHoloNotificationsConfig {
+  readonly table: string
+  readonly queue: {
+    readonly connection?: string
+    readonly queue?: string
+    readonly afterCommit: boolean
+  }
+}
+
+export interface HoloMailAddressConfig {
+  readonly email: string
+  readonly name?: string
+}
+
+export interface HoloMailQueueConfig {
+  readonly queued?: boolean
+  readonly connection?: string
+  readonly queue?: string
+  readonly afterCommit?: boolean
+}
+
+export interface HoloMailPreviewConfig {
+  readonly allowedEnvironments?: readonly HoloAppEnv[]
+}
+
+export interface HoloMailMarkdownConfig {
+  readonly wrapper?: string
+}
+
+export interface BaseMailDriverConfig {
+  readonly driver: string
+  readonly from?: HoloMailAddressConfig
+  readonly replyTo?: HoloMailAddressConfig
+  readonly queue?: HoloMailQueueConfig
+}
+
+export interface PreviewMailDriverConfig extends BaseMailDriverConfig {
+  readonly driver: 'preview'
+  readonly path?: string
+}
+
+export interface LogMailDriverConfig extends BaseMailDriverConfig {
+  readonly driver: 'log'
+  readonly logBodies?: boolean
+}
+
+export interface FakeMailDriverConfig extends BaseMailDriverConfig {
+  readonly driver: 'fake'
+}
+
+export interface SmtpMailDriverConfig extends BaseMailDriverConfig {
+  readonly driver: 'smtp'
+  readonly host?: string
+  readonly port?: number | string
+  readonly secure?: boolean
+  readonly user?: string
+  readonly password?: string
+}
+
+export type HoloMailMailerConfig
+  = PreviewMailDriverConfig
+  | LogMailDriverConfig
+  | FakeMailDriverConfig
+  | SmtpMailDriverConfig
+  | (BaseMailDriverConfig & Record<string, unknown>)
+
+export interface HoloMailConfig {
+  readonly default?: string
+  readonly from?: HoloMailAddressConfig
+  readonly replyTo?: HoloMailAddressConfig
+  readonly queue?: HoloMailQueueConfig
+  readonly preview?: HoloMailPreviewConfig
+  readonly markdown?: HoloMailMarkdownConfig
+  readonly mailers?: Readonly<Record<string, HoloMailMailerConfig>>
+}
+
+export interface NormalizedHoloMailAddressConfig {
+  readonly email: string
+  readonly name?: string
+}
+
+export interface NormalizedHoloMailQueueConfig {
+  readonly queued: boolean
+  readonly connection?: string
+  readonly queue?: string
+  readonly afterCommit: boolean
+}
+
+export interface NormalizedHoloMailPreviewConfig {
+  readonly allowedEnvironments: readonly HoloAppEnv[]
+}
+
+export interface NormalizedHoloMailMarkdownConfig {
+  readonly wrapper?: string
+}
+
+export interface NormalizedBaseMailDriverConfig {
+  readonly name: string
+  readonly driver: string
+  readonly from?: NormalizedHoloMailAddressConfig
+  readonly replyTo?: NormalizedHoloMailAddressConfig
+  readonly queue: NormalizedHoloMailQueueConfig
+}
+
+export interface NormalizedPreviewMailDriverConfig extends NormalizedBaseMailDriverConfig {
+  readonly driver: 'preview'
+  readonly path: string
+}
+
+export interface NormalizedLogMailDriverConfig extends NormalizedBaseMailDriverConfig {
+  readonly driver: 'log'
+  readonly logBodies: boolean
+}
+
+export interface NormalizedFakeMailDriverConfig extends NormalizedBaseMailDriverConfig {
+  readonly driver: 'fake'
+}
+
+export interface NormalizedSmtpMailDriverConfig extends NormalizedBaseMailDriverConfig {
+  readonly driver: 'smtp'
+  readonly host: string
+  readonly port: number
+  readonly secure: boolean
+  readonly user?: string
+  readonly password?: string
+}
+
+export type NormalizedHoloMailMailerConfig
+  = NormalizedPreviewMailDriverConfig
+  | NormalizedLogMailDriverConfig
+  | NormalizedFakeMailDriverConfig
+  | NormalizedSmtpMailDriverConfig
+  | NormalizedBaseMailDriverConfig
+
+export interface NormalizedHoloMailConfig {
+  readonly default: string
+  readonly from?: NormalizedHoloMailAddressConfig
+  readonly replyTo?: NormalizedHoloMailAddressConfig
+  readonly queue: NormalizedHoloMailQueueConfig
+  readonly preview: NormalizedHoloMailPreviewConfig
+  readonly markdown: NormalizedHoloMailMarkdownConfig
+  readonly mailers: Readonly<Record<string, NormalizedHoloMailMailerConfig>>
+}
+
 export interface HoloConfigRegistry {
   app: NormalizedHoloAppConfig
   database: NormalizedHoloDatabaseConfig
   storage: NormalizedHoloStorageConfig
   queue: NormalizedHoloQueueConfig
+  mail: NormalizedHoloMailConfig
+  notifications: NormalizedHoloNotificationsConfig
   media: HoloMediaConfig
   session: NormalizedHoloSessionConfig
   auth: NormalizedHoloAuthConfig
@@ -471,6 +626,8 @@ export interface LoadedHoloConfig<TCustom extends HoloConfigMap = HoloConfigMap>
   readonly database: NormalizedHoloDatabaseConfig
   readonly storage: NormalizedHoloStorageConfig
   readonly queue: NormalizedHoloQueueConfig
+  readonly mail: NormalizedHoloMailConfig
+  readonly notifications: NormalizedHoloNotificationsConfig
   readonly media: HoloMediaConfig
   readonly session: NormalizedHoloSessionConfig
   readonly auth: NormalizedHoloAuthConfig

@@ -3,6 +3,8 @@ import {
   createConfigAccessors,
   defineAuthConfig,
   defineConfig,
+  defineMailConfig,
+  defineNotificationsConfig,
   defineQueueConfig,
   defineSessionConfig,
   type DotPath,
@@ -32,6 +34,23 @@ describe('@holo-js/config typing', () => {
       connections: {
         sync: {
           driver: 'sync',
+        },
+      },
+    })
+    const notifications = defineNotificationsConfig({
+      table: 'notifications',
+      queue: {
+        connection: 'redis',
+        queue: 'notifications',
+        afterCommit: true,
+      },
+    })
+    const mail = defineMailConfig({
+      default: 'preview',
+      mailers: {
+        preview: {
+          driver: 'preview',
+          path: '.holo-js/runtime/mail-preview',
         },
       },
     })
@@ -84,6 +103,8 @@ describe('@holo-js/config typing', () => {
       database: {} as HoloConfigRegistry['database'],
       storage: {} as HoloConfigRegistry['storage'],
       queue: queue as unknown as HoloConfigRegistry['queue'],
+      mail: mail as unknown as HoloConfigRegistry['mail'],
+      notifications: notifications as unknown as HoloConfigRegistry['notifications'],
       media: {} as HoloConfigRegistry['media'],
       session: session as unknown as HoloConfigRegistry['session'],
       auth: auth as unknown as HoloConfigRegistry['auth'],
@@ -107,12 +128,16 @@ describe('@holo-js/config typing', () => {
       database: HoloConfigRegistry['database']
       storage: HoloConfigRegistry['storage']
       queue: HoloConfigRegistry['queue']
+      mail: HoloConfigRegistry['mail']
+      notifications: HoloConfigRegistry['notifications']
       media: HoloConfigRegistry['media']
       session: HoloConfigRegistry['session']
       auth: HoloConfigRegistry['auth']
       services: typeof services
     }> = 'services.mailgun.secret'
     const queueDefault: string = accessors.useConfig('queue.default')
+    const mailDefault: string = accessors.useConfig('mail.default')
+    const notificationsTable: string = accessors.useConfig('notifications.table')
     const testEnv: HoloAppEnv = 'test'
 
     // @ts-expect-error Arrays should be treated as terminal values for dot-path autocomplete.
@@ -128,6 +153,8 @@ describe('@holo-js/config typing', () => {
     void clerkSessionCookie
     void nestedPath
     void queueDefault
+    void mailDefault
+    void notificationsTable
     void testEnv
     void arrayMethodPath
   })

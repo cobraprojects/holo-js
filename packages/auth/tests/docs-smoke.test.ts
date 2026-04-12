@@ -71,7 +71,7 @@ describe('auth documentation smoke checks', () => {
     expect(clerk).toContain('authenticate')
   })
 
-  it('covers current-user client helpers and lifecycle-token delivery limitations', async () => {
+  it('covers current-user client helpers and lifecycle-token delivery through notifications and mail', async () => {
     const client = await readDoc('current-auth-client.md')
     const verification = await readDoc('email-verification.md')
     const reset = await readDoc('password-reset.md')
@@ -85,8 +85,12 @@ describe('auth documentation smoke checks', () => {
     expect(client).toContain('impersonate()')
     expect(verification).toContain('verification.create')
     expect(verification).toContain('verification.consume')
-    expect(verification).toContain('temporary')
+    expect(verification).toContain('@holo-js/notifications')
+    expect(verification).toContain('bunx holo install mail')
+    expect(verification).toContain('notify(created, verificationCreated(token))')
     expect(reset).toContain('passwords.request')
     expect(reset).toContain('passwords.consume')
+    expect(reset).toContain('notifyUsing()')
+    expect(reset).toContain('@holo-js/mail')
   })
 })

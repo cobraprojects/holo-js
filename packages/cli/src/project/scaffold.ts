@@ -22,12 +22,16 @@ import { loadProjectConfig, resolveGeneratedSchemaPath } from './config'
 import {
   AUTH_SOCIAL_PROVIDER_PACKAGE_NAMES,
   AUTH_CONFIG_FILE_NAMES,
+  MAIL_CONFIG_FILE_NAMES,
   DB_DRIVER_PACKAGE_NAMES,
+  NOTIFICATIONS_CONFIG_FILE_NAMES,
   QUEUE_CONFIG_FILE_NAMES,
   SESSION_CONFIG_FILE_NAMES,
   SUPPORTED_AUTH_SOCIAL_PROVIDERS,
   type AuthInstallResult,
   type EventsInstallResult,
+  type MailInstallResult,
+  type NotificationsInstallResult,
   type ProjectScaffoldOptions,
   type QueueInstallResult,
   type SupportedAuthSocialProvider,
@@ -174,6 +178,55 @@ function renderQueueConfig(
     '    sync: {',
     '      driver: \'sync\',',
     '      queue: \'default\',',
+    '    },',
+    '  },',
+    '})',
+    '',
+  ].join('\n')
+}
+
+function renderNotificationsConfig(): string {
+  return [
+    'import { defineNotificationsConfig } from \'@holo-js/config\'',
+    '',
+    'export default defineNotificationsConfig({',
+    '  table: \'notifications\',',
+    '  queue: {',
+    '    afterCommit: false,',
+    '  },',
+    '})',
+    '',
+  ].join('\n')
+}
+
+function renderMailConfig(): string {
+  return [
+    'import { defineMailConfig, env } from \'@holo-js/config\'',
+    '',
+    'export default defineMailConfig({',
+    '  default: env(\'MAIL_MAILER\', \'preview\'),',
+    '  from: {',
+    '    email: env(\'MAIL_FROM_ADDRESS\', \'hello@app.test\'),',
+    '    name: env(\'MAIL_FROM_NAME\', \'Holo App\'),',
+    '  },',
+    '  preview: {',
+    '    allowedEnvironments: [\'development\'],',
+    '  },',
+    '  mailers: {',
+    '    preview: {',
+    '      driver: \'preview\',',
+    '    },',
+    '    log: {',
+    '      driver: \'log\',',
+    '    },',
+    '    fake: {',
+    '      driver: \'fake\',',
+    '    },',
+    '    smtp: {',
+    '      driver: \'smtp\',',
+    '      host: env(\'MAIL_HOST\', \'127.0.0.1\'),',
+    '      port: env(\'MAIL_PORT\', 1025),',
+    '      secure: env<boolean>(\'MAIL_SECURE\', false),',
     '    },',
     '  },',
     '})',
@@ -658,6 +711,40 @@ function createAuthMigrationFiles(date = new Date()): readonly ScaffoldedFile[] 
     path: createMigrationFileName(slug, new Date(date.getTime() + (index * 1000))),
     contents: renderAuthMigration(slug),
   }))
+}
+
+function renderNotificationsMigration(): string {
+  return [
+    'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
+    '',
+    'export default defineMigration({',
+    '  async up({ schema }: MigrationContext) {',
+    '    await schema.createTable(\'notifications\', (table) => {',
+    '      table.string(\'id\').primaryKey()',
+    '      table.string(\'type\').nullable()',
+    '      table.string(\'notifiable_type\')',
+    '      table.string(\'notifiable_id\')',
+    '      table.json(\'data\').default({})',
+    '      table.timestamp(\'read_at\').nullable()',
+    '      table.timestamp(\'created_at\')',
+    '      table.timestamp(\'updated_at\')',
+    '      table.index([\'notifiable_type\', \'notifiable_id\'])',
+    '      table.index([\'read_at\'])',
+    '    })',
+    '  },',
+    '  async down({ schema }: MigrationContext) {',
+    '    await schema.dropTable(\'notifications\')',
+    '  },',
+    '})',
+    '',
+  ].join('\n')
+}
+
+function createNotificationsMigrationFiles(date = new Date()): readonly ScaffoldedFile[] {
+  return [{
+    path: createMigrationFileName('create_notifications', date),
+    contents: renderNotificationsMigration(),
+  }]
 }
 
 function renderScaffoldAppConfig(projectName: string): string {
@@ -1159,6 +1246,38 @@ async function upsertEventsPackageDependency(projectRoot: string): Promise<boole
   return true
 }
 
+async function upsertNotificationsPackageDependency(projectRoot: string): Promise<boolean> {
+  const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
+  const currentVersion = dependencies['@holo-js/notifications']
+  const currentDevVersion = devDependencies['@holo-js/notifications']
+
+  if (currentVersion === nextVersion && typeof currentDevVersion === 'undefined') {
+    return false
+  }
+
+  dependencies['@holo-js/notifications'] = nextVersion
+  delete devDependencies['@holo-js/notifications']
+  await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
+  return true
+}
+
+async function upsertMailPackageDependency(projectRoot: string): Promise<boolean> {
+  const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
+  const currentVersion = dependencies['@holo-js/mail']
+  const currentDevVersion = devDependencies['@holo-js/mail']
+
+  if (currentVersion === nextVersion && typeof currentDevVersion === 'undefined') {
+    return false
+  }
+
+  dependencies['@holo-js/mail'] = nextVersion
+  delete devDependencies['@holo-js/mail']
+  await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
+  return true
+}
+
 async function upsertAuthPackageDependencies(
   projectRoot: string,
   features: AuthInstallFeatures = {},
@@ -1257,6 +1376,21 @@ async function resolveExistingAuthMigrationFiles(migrationsRoot: string): Promis
   }
 
   return resolved
+}
+
+async function resolveExistingNotificationsMigrationFiles(migrationsRoot: string): Promise<readonly string[]> {
+  const entries = await readdir(migrationsRoot).catch(() => [] as string[])
+
+  return entries
+    .filter(entry => (
+      entry.endsWith('_create_notifications.ts')
+      || entry.endsWith('_create_notifications.mts')
+      || entry.endsWith('_create_notifications.js')
+      || entry.endsWith('_create_notifications.mjs')
+      || entry.endsWith('_create_notifications.cts')
+      || entry.endsWith('_create_notifications.cjs')
+    ))
+    .map(entry => resolve(migrationsRoot, entry))
 }
 
 export async function installAuthIntoProject(
@@ -1458,6 +1592,59 @@ export async function installEventsIntoProject(
     updatedPackageJson: await upsertEventsPackageDependency(projectRoot),
     createdEventsDirectory: !eventsDirectoryExists,
     createdListenersDirectory: !listenersDirectoryExists,
+  }
+}
+
+export async function installNotificationsIntoProject(
+  projectRoot: string,
+): Promise<NotificationsInstallResult> {
+  const project = await loadProjectConfig(projectRoot)
+  const migrationsRoot = resolve(projectRoot, project.config.paths.migrations)
+  const notificationsConfigPath = await resolveFirstExistingPath(projectRoot, NOTIFICATIONS_CONFIG_FILE_NAMES)
+  const existingMigrationFiles = await resolveExistingNotificationsMigrationFiles(migrationsRoot)
+
+  await mkdir(resolve(projectRoot, 'config'), { recursive: true })
+  await mkdir(migrationsRoot, { recursive: true })
+
+  if (!notificationsConfigPath) {
+    await writeTextFile(resolve(projectRoot, 'config/notifications.ts'), renderNotificationsConfig())
+  }
+
+  const createdMigrationFiles: string[] = []
+  if (existingMigrationFiles.length === 0) {
+    for (const migrationFile of createNotificationsMigrationFiles()) {
+      const migrationPath = resolve(migrationsRoot, migrationFile.path)
+      await writeTextFile(migrationPath, migrationFile.contents)
+      createdMigrationFiles.push(migrationPath)
+    }
+  }
+
+  return {
+    updatedPackageJson: await upsertNotificationsPackageDependency(projectRoot),
+    createdNotificationsConfig: !notificationsConfigPath,
+    createdMigrationFiles,
+  }
+}
+
+export async function installMailIntoProject(
+  projectRoot: string,
+): Promise<MailInstallResult> {
+  await loadProjectConfig(projectRoot, { required: true })
+  const mailConfigPath = await resolveFirstExistingPath(projectRoot, MAIL_CONFIG_FILE_NAMES)
+  const mailRoot = resolve(projectRoot, 'server/mail')
+  const mailDirectoryExists = await pathExists(mailRoot)
+
+  await mkdir(resolve(projectRoot, 'config'), { recursive: true })
+  await mkdir(mailRoot, { recursive: true })
+
+  if (!mailConfigPath) {
+    await writeTextFile(resolve(projectRoot, 'config/mail.ts'), renderMailConfig())
+  }
+
+  return {
+    updatedPackageJson: await upsertMailPackageDependency(projectRoot),
+    createdMailConfig: !mailConfigPath,
+    createdMailDirectory: !mailDirectoryExists,
   }
 }
 
@@ -2275,6 +2462,14 @@ function renderScaffoldPackageJson(options: ProjectScaffoldOptions): string {
     dependencies['@holo-js/session'] = `^${HOLO_PACKAGE_VERSION}`
   }
 
+  if (optionalPackages.includes('notifications')) {
+    dependencies['@holo-js/notifications'] = `^${HOLO_PACKAGE_VERSION}`
+  }
+
+  if (optionalPackages.includes('mail')) {
+    dependencies['@holo-js/mail'] = `^${HOLO_PACKAGE_VERSION}`
+  }
+
   return `${JSON.stringify({
     name: packageName,
     private: true,
@@ -2314,6 +2509,8 @@ export async function scaffoldProject(
   const queueEnabled = optionalPackages.includes('queue')
   const eventsEnabled = optionalPackages.includes('events')
   const authEnabled = optionalPackages.includes('auth')
+  const notificationsEnabled = optionalPackages.includes('notifications')
+  const mailEnabled = optionalPackages.includes('mail')
 
   await mkdir(projectRoot, { recursive: true })
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })
@@ -2326,6 +2523,9 @@ export async function scaffoldProject(
   if (eventsEnabled) {
     await mkdir(resolve(projectRoot, config.paths.events), { recursive: true })
     await mkdir(resolve(projectRoot, config.paths.listeners), { recursive: true })
+  }
+  if (mailEnabled) {
+    await mkdir(resolve(projectRoot, 'server/mail'), { recursive: true })
   }
   await mkdir(resolve(projectRoot, 'server/db/factories'), { recursive: true })
   await mkdir(resolve(projectRoot, 'server/db/migrations'), { recursive: true })
@@ -2348,6 +2548,15 @@ export async function scaffoldProject(
       driver: 'sync',
       defaultDatabaseConnection: 'main',
     }), 'utf8')
+  }
+  if (notificationsEnabled) {
+    await writeFile(resolve(projectRoot, 'config/notifications.ts'), renderNotificationsConfig(), 'utf8')
+    for (const migrationFile of createNotificationsMigrationFiles()) {
+      await writeFile(resolve(projectRoot, config.paths.migrations, migrationFile.path), migrationFile.contents, 'utf8')
+    }
+  }
+  if (mailEnabled) {
+    await writeFile(resolve(projectRoot, 'config/mail.ts'), renderMailConfig(), 'utf8')
   }
   if (authEnabled) {
     await writeFile(resolve(projectRoot, 'config/auth.ts'), renderAuthConfig(), 'utf8')
@@ -2398,6 +2607,9 @@ export {
   renderFrameworkFiles,
   renderFrameworkRunner,
   renderMediaConfig,
+  renderMailConfig,
+  renderNotificationsConfig,
+  renderNotificationsMigration,
   renderQueueConfig,
   renderQueueEnvFiles,
   renderScaffoldAppConfig,
@@ -2412,4 +2624,6 @@ export {
   sanitizePackageName,
   upsertAuthPackageDependencies,
   upsertEventsPackageDependency,
+  upsertMailPackageDependency,
+  upsertNotificationsPackageDependency,
 }

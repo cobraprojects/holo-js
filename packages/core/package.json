@@ -37,6 +37,8 @@
     "@holo-js/auth-clerk": "^0.1.2",
     "@holo-js/auth-social": "^0.1.2",
     "@holo-js/auth-workos": "^0.1.2",
+    "@holo-js/mail": "^0.1.2",
+    "@holo-js/notifications": "^0.1.2",
     "@holo-js/queue": "^0.1.2",
     "@holo-js/session": "^0.1.2",
     "@holo-js/storage": "^0.1.2"
@@ -54,6 +56,12 @@
     "@holo-js/auth-workos": {
       "optional": true
     },
+    "@holo-js/mail": {
+      "optional": true
+    },
+    "@holo-js/notifications": {
+      "optional": true
+    },
     "@holo-js/queue": {
       "optional": true
     },
@@ -67,6 +75,8 @@
   "devDependencies": {
     "@holo-js/auth": "^0.1.2",
     "@holo-js/events": "^0.1.2",
+    "@holo-js/mail": "^0.1.2",
+    "@holo-js/notifications": "^0.1.2",
     "@holo-js/queue-db": "^0.1.2",
     "@holo-js/session": "^0.1.2",
     "@holo-js/storage": "^0.1.2",

@@ -32,9 +32,13 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
+      reportsDirectory: resolve(__dirname, '../../coverage/cli'),
       exclude: [
+        'src/cli-types.ts',
         'src/**/types.ts',
+        'src/bin/holo.ts',
         'src/bin/**',
+        '**/src/bin/**',
         '**/node_modules/**',
       ],
       thresholds: {

@@ -57,5 +57,38 @@ await passwords.request('admin@example.com', {
 
 ## Delivery
 
-As with email verification, the default delivery behavior is temporary. Production applications should wire password
-reset delivery into their own notification or mail layer.
+Password reset delivery works the same way as email verification: auth creates the token, and notifications or
+direct mail can own delivery.
+
+For explicit delivery, send on-demand email routes through `notifyUsing()`:
+
+```ts
+import { defineNotification, notifyUsing } from '@holo-js/notifications'
+
+const passwordResetRequested = (token: { plainTextToken: string }) => defineNotification({
+  type: 'auth.password-reset',
+  via() {
+    return ['email'] as const
+  },
+  build: {
+    email() {
+      return {
+        subject: 'Reset your password',
+        lines: ['Use the link below to reset your password.'],
+        action: {
+          label: 'Reset password',
+          url: `https://app.test/reset-password?token=${encodeURIComponent(token.plainTextToken)}`,
+        },
+      }
+    },
+  },
+})
+
+await notifyUsing()
+  .channel('email', { email: 'ava@example.com', name: 'Ava' })
+  .notify(passwordResetRequested(token))
+```
+
+If `@holo-js/auth` and `@holo-js/notifications` are both installed, core bridges the built-in auth delivery hook
+through notifications automatically. If notifications are absent but `@holo-js/mail` is installed, core falls
+back to direct mail delivery.

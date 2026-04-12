@@ -1,0 +1,52 @@
+{
+  "name": "@holo-js/mail",
+  "version": "0.1.2",
+  "description": "Holo-JS Framework - mail contracts, preview helpers, and fluent send helpers",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./contracts": {
+      "types": "./dist/contracts.d.ts",
+      "import": "./dist/contracts.mjs",
+      "default": "./dist/contracts.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "stub": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest --run"
+  },
+  "dependencies": {
+    "@holo-js/config": "^0.1.2",
+    "nodemailer": "^6.10.1"
+  },
+  "peerDependencies": {
+    "@holo-js/queue": "^0.1.2",
+    "@holo-js/storage": "^0.1.2"
+  },
+  "peerDependenciesMeta": {
+    "@holo-js/queue": {
+      "optional": true
+    },
+    "@holo-js/storage": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

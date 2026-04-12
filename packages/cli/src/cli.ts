@@ -132,6 +132,7 @@ type GeneratorCommandKey =
   | 'runMakeModel'
   | 'runMakeMigration'
   | 'runMakeSeeder'
+  | 'runMakeMail'
   | 'runMakeJob'
   | 'runMakeEvent'
   | 'runMakeListener'
@@ -280,7 +281,7 @@ export function createInternalCommands(
     {
       name: 'new',
       description: 'Scaffold a new Holo project',
-      usage: 'holo-js new <name> [--framework <nuxt|next|sveltekit>] [--database <sqlite|mysql|postgres>] [--package-manager <bun|npm|pnpm|yarn>] [--package <storage|events|queue|validation|forms>] [--storage-default-disk <local|public>]',
+      usage: 'holo-js new <name> [--framework <nuxt|next|sveltekit>] [--database <sqlite|mysql|postgres>] [--package-manager <bun|npm|pnpm|yarn>] [--package <storage|events|queue|validation|forms|notifications|mail>] [--storage-default-disk <local|public>]',
       source: 'internal',
       async prepare(input) {
         const resolved = await resolveNewProjectInput(context, input)
@@ -330,7 +331,7 @@ export function createInternalCommands(
     {
       name: 'install',
       description: 'Install first-party Holo support into an existing project.',
-      usage: 'holo install <queue|events|auth> [--driver <sync|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
+      usage: 'holo install <queue|events|auth|notifications|mail> [--driver <sync|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
       source: 'internal',
       async prepare(input) {
         const target = normalizeChoice(
@@ -344,6 +345,12 @@ export function createInternalCommands(
         }
         if (target === 'auth' && requestedDriver) {
           throw new Error('The auth installer does not support --driver.')
+        }
+        if (target === 'notifications' && requestedDriver) {
+          throw new Error('The notifications installer does not support --driver.')
+        }
+        if (target === 'mail' && requestedDriver) {
+          throw new Error('The mail installer does not support --driver.')
         }
 
         const driver = target === 'queue'
@@ -460,6 +467,36 @@ export function createInternalCommands(
           if (result.updatedEnv) writeLine(context.stdout, '  - updated .env')
           if (result.updatedEnvExample) writeLine(context.stdout, '  - updated .env.example')
           if (result.createdMigrationFiles.length > 0) writeLine(context.stdout, `  - created ${result.createdMigrationFiles.length} auth migrations`)
+          return
+        }
+
+        if (target === 'notifications') {
+          const { installNotificationsIntoProject } = await loadProjectScaffoldModule()
+          const result = await installNotificationsIntoProject(context.projectRoot)
+          const changed = result.updatedPackageJson
+            || result.createdNotificationsConfig
+            || result.createdMigrationFiles.length > 0
+
+          writeLine(context.stdout, changed ? 'Installed notifications support.' : 'Notifications support is already installed.')
+          if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
+          if (result.createdNotificationsConfig) writeLine(context.stdout, '  - created config/notifications.ts')
+          if (result.createdMigrationFiles.length > 0) {
+            writeLine(context.stdout, `  - created ${result.createdMigrationFiles.length} notifications migration`)
+          }
+          return
+        }
+
+        if (target === 'mail') {
+          const { installMailIntoProject } = await loadProjectScaffoldModule()
+          const result = await installMailIntoProject(context.projectRoot)
+          const changed = result.updatedPackageJson
+            || result.createdMailConfig
+            || result.createdMailDirectory
+
+          writeLine(context.stdout, changed ? 'Installed mail support.' : 'Mail support is already installed.')
+          if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
+          if (result.createdMailConfig) writeLine(context.stdout, '  - created config/mail.ts')
+          if (result.createdMailDirectory) writeLine(context.stdout, '  - created server/mail')
           return
         }
 
@@ -856,6 +893,38 @@ export function createInternalCommands(
       async run(commandContext) {
         const runMakeSeeder = await resolveGeneratorCommand('runMakeSeeder')
         await runMakeSeeder(context, context.projectRoot, {
+          args: commandContext.args,
+          flags: { ...commandContext.flags },
+        })
+      },
+    },
+    {
+      name: 'make:mail',
+      description: 'Create a mail definition file.',
+      usage: 'holo make:mail <name> [--markdown]',
+      source: 'internal',
+      async prepare(input) {
+        const markdown = resolveBooleanFlag(input.flags, 'markdown') === true
+        const view = resolveBooleanFlag(input.flags, 'view') === true
+
+        if (markdown && view) {
+          throw new Error('Use either "--markdown" or "--view", not both.')
+        }
+
+        if (view) {
+          throw new Error(
+            'View-backed mail scaffolding requires a renderView runtime binding, which the first-party app scaffolds do not configure yet. Use "--markdown" instead.',
+          )
+        }
+
+        return {
+          args: [await ensureRequiredArg(context, input, 0, 'Mail name')],
+          flags: { type: 'markdown' },
+        }
+      },
+      async run(commandContext) {
+        const runMakeMail = await resolveGeneratorCommand('runMakeMail')
+        await runMakeMail(context, context.projectRoot, {
           args: commandContext.args,
           flags: { ...commandContext.flags },
         })

@@ -11,7 +11,9 @@ import {
   configureEnvRuntime,
   defineAuthConfig,
   defineConfig,
+  defineMailConfig,
   defineMediaConfig,
+  defineNotificationsConfig,
   defineQueueConfig,
   defineSessionConfig,
   defineStorageConfig,
@@ -24,6 +26,8 @@ import {
   normalizeAppEnv,
   normalizeAuthConfig,
   normalizeDatabaseConfig,
+  normalizeMailConfig,
+  normalizeNotificationsConfig,
   normalizeQueueConfigForHolo,
   normalizeSessionConfig,
   resetConfigRuntime,
@@ -67,7 +71,7 @@ describe('@holo-js/config', () => {
     expect(normalizeAppEnv('staging', 'production')).toBe('production')
   })
 
-  it('normalizes database defaults and freezes media and queue config values', () => {
+  it('normalizes database defaults and freezes media, mail, notifications, and queue config values', () => {
     expect(normalizeDatabaseConfig().defaultConnection).toBe('default')
     expect(normalizeDatabaseConfig({
       defaultConnection: 'primary',
@@ -117,6 +121,44 @@ describe('@holo-js/config', () => {
         },
       },
     })
+    const mail = defineMailConfig({
+      default: 'smtp',
+      from: {
+        email: 'Hello@Example.com',
+        name: ' Hello ',
+      },
+      replyTo: {
+        email: 'Support@Example.com',
+      },
+      queue: {
+        queued: true,
+        connection: 'redis',
+        queue: 'mail',
+        afterCommit: true,
+      },
+      preview: {
+        allowedEnvironments: ['development', 'test'],
+      },
+      markdown: {
+        wrapper: 'emails/layout',
+      },
+      mailers: {
+        smtp: {
+          driver: 'smtp',
+          host: ' smtp.internal ',
+          port: '2525',
+          secure: true,
+        },
+      },
+    })
+    const notifications = defineNotificationsConfig({
+      table: 'app_notifications',
+      queue: {
+        connection: 'redis',
+        queue: 'notifications',
+        afterCommit: true,
+      },
+    })
 
     expect(queue).toEqual({
       connections: {
@@ -126,6 +168,291 @@ describe('@holo-js/config', () => {
       },
     })
     expect(Object.isFrozen(queue)).toBe(true)
+    expect(mail).toEqual({
+      default: 'smtp',
+      from: {
+        email: 'Hello@Example.com',
+        name: ' Hello ',
+      },
+      replyTo: {
+        email: 'Support@Example.com',
+      },
+      queue: {
+        queued: true,
+        connection: 'redis',
+        queue: 'mail',
+        afterCommit: true,
+      },
+      preview: {
+        allowedEnvironments: ['development', 'test'],
+      },
+      markdown: {
+        wrapper: 'emails/layout',
+      },
+      mailers: {
+        smtp: {
+          driver: 'smtp',
+          host: ' smtp.internal ',
+          port: '2525',
+          secure: true,
+        },
+      },
+    })
+    expect(Object.isFrozen(mail)).toBe(true)
+    expect(normalizeMailConfig()).toEqual({
+      default: 'preview',
+      from: undefined,
+      replyTo: undefined,
+      queue: {
+        queued: false,
+        connection: undefined,
+        queue: undefined,
+        afterCommit: false,
+      },
+      preview: {
+        allowedEnvironments: ['development'],
+      },
+      markdown: {
+        wrapper: undefined,
+      },
+      mailers: {
+        preview: {
+          name: 'preview',
+          driver: 'preview',
+          from: undefined,
+          replyTo: undefined,
+          queue: {
+            queued: false,
+            connection: undefined,
+            queue: undefined,
+            afterCommit: false,
+          },
+          path: '.holo-js/runtime/mail-preview',
+        },
+        log: {
+          name: 'log',
+          driver: 'log',
+          from: undefined,
+          replyTo: undefined,
+          queue: {
+            queued: false,
+            connection: undefined,
+            queue: undefined,
+            afterCommit: false,
+          },
+          logBodies: false,
+        },
+        fake: {
+          name: 'fake',
+          driver: 'fake',
+          from: undefined,
+          replyTo: undefined,
+          queue: {
+            queued: false,
+            connection: undefined,
+            queue: undefined,
+            afterCommit: false,
+          },
+        },
+        smtp: {
+          name: 'smtp',
+          driver: 'smtp',
+          from: undefined,
+          replyTo: undefined,
+          queue: {
+            queued: false,
+            connection: undefined,
+            queue: undefined,
+            afterCommit: false,
+          },
+          host: '127.0.0.1',
+          port: 1025,
+          secure: false,
+          user: undefined,
+          password: undefined,
+        },
+      },
+    })
+    expect(normalizeMailConfig({
+      default: 'smtp',
+      from: {
+        email: ' NoReply@Example.com ',
+        name: ' No Reply ',
+      },
+      queue: {
+        queued: true,
+        connection: ' redis ',
+        queue: ' mail ',
+        afterCommit: true,
+      },
+      preview: {
+        allowedEnvironments: ['development', 'test'],
+      },
+      markdown: {
+        wrapper: ' emails/layout ',
+      },
+      mailers: {
+        smtp: {
+          driver: 'smtp',
+          host: ' smtp.internal ',
+          port: '2525',
+          secure: true,
+          user: ' api-user ',
+          password: ' secret ',
+        },
+      },
+    })).toEqual({
+      default: 'smtp',
+      from: {
+        email: 'noreply@example.com',
+        name: 'No Reply',
+      },
+      replyTo: undefined,
+      queue: {
+        queued: true,
+        connection: 'redis',
+        queue: 'mail',
+        afterCommit: true,
+      },
+      preview: {
+        allowedEnvironments: ['development', 'test'],
+      },
+      markdown: {
+        wrapper: 'emails/layout',
+      },
+      mailers: {
+        preview: {
+          name: 'preview',
+          driver: 'preview',
+          from: undefined,
+          replyTo: undefined,
+          queue: {
+            queued: false,
+            connection: undefined,
+            queue: undefined,
+            afterCommit: false,
+          },
+          path: '.holo-js/runtime/mail-preview',
+        },
+        log: {
+          name: 'log',
+          driver: 'log',
+          from: undefined,
+          replyTo: undefined,
+          queue: {
+            queued: false,
+            connection: undefined,
+            queue: undefined,
+            afterCommit: false,
+          },
+          logBodies: false,
+        },
+        fake: {
+          name: 'fake',
+          driver: 'fake',
+          from: undefined,
+          replyTo: undefined,
+          queue: {
+            queued: false,
+            connection: undefined,
+            queue: undefined,
+            afterCommit: false,
+          },
+        },
+        smtp: {
+          name: 'smtp',
+          driver: 'smtp',
+          from: undefined,
+          replyTo: undefined,
+          queue: {
+            queued: false,
+            connection: undefined,
+            queue: undefined,
+            afterCommit: false,
+          },
+          host: 'smtp.internal',
+          port: 2525,
+          secure: true,
+          user: 'api-user',
+          password: 'secret',
+        },
+      },
+    })
+    expect(() => normalizeMailConfig({
+      default: 'missing',
+    })).toThrow('default mailer "missing" is not configured')
+    expect(() => normalizeMailConfig({
+      from: {
+        email: 'broken',
+      },
+    })).toThrow('must be a valid email address')
+    expect(() => normalizeMailConfig({
+      preview: {
+        allowedEnvironments: ['staging' as never],
+      },
+    })).toThrow('Mail preview environments must be development, production, or test')
+    expect(normalizeMailConfig({
+      preview: {
+        allowedEnvironments: [],
+      },
+    })).toMatchObject({
+      preview: {
+        allowedEnvironments: [],
+      },
+    })
+    expect(() => normalizeMailConfig({
+      mailers: {
+        smtp: {
+          driver: 'smtp',
+          port: '0',
+        },
+      },
+    })).toThrow('SMTP port must be a positive number')
+    expect(notifications).toEqual({
+      table: 'app_notifications',
+      queue: {
+        connection: 'redis',
+        queue: 'notifications',
+        afterCommit: true,
+      },
+    })
+    expect(Object.isFrozen(notifications)).toBe(true)
+    expect(normalizeNotificationsConfig()).toEqual({
+      table: 'notifications',
+      queue: {
+        connection: undefined,
+        queue: undefined,
+        afterCommit: false,
+      },
+    })
+    expect(normalizeNotificationsConfig({
+      table: ' custom_notifications ',
+      queue: {
+        connection: ' redis ',
+        queue: ' high ',
+        afterCommit: true,
+      },
+    })).toEqual({
+      table: 'custom_notifications',
+      queue: {
+        connection: 'redis',
+        queue: 'high',
+        afterCommit: true,
+      },
+    })
+    expect(() => normalizeNotificationsConfig({
+      table: '   ',
+    })).toThrow('Notifications table must be a non-empty string')
+    expect(() => normalizeNotificationsConfig({
+      queue: {
+        connection: '   ',
+      },
+    })).toThrow('Notifications queue connection must be a non-empty string')
+    expect(() => normalizeNotificationsConfig({
+      queue: {
+        queue: '   ',
+      },
+    })).toThrow('Notifications queue name must be a non-empty string')
     expect(normalizeQueueConfigForHolo().default).toBe('sync')
     expect(normalizeQueueConfigForHolo({
       failed: false,
@@ -296,6 +623,200 @@ describe('@holo-js/config', () => {
         },
       },
     })).toThrow('Unsupported queue driver "sqs"')
+  })
+
+  it('covers remaining mail config normalization branches', () => {
+    expect(() => normalizeMailConfig({
+      mailers: {
+        preview: {
+          driver: undefined as never,
+        },
+      },
+    })).toThrow('Mailers must define a name and driver')
+    expect(() => normalizeMailConfig({
+      from: {
+        email: 'hello @example.com',
+      },
+    })).toThrow('must be a valid email address')
+    expect(() => normalizeMailConfig({
+      mailers: {
+        preview: {
+          driver: '   ' as never,
+        },
+      },
+    })).toThrow('must be a non-empty string when provided')
+
+    expect(normalizeMailConfig({
+      default: 'custom',
+      mailers: {
+        preview: {
+          driver: 'preview',
+          path: ' /tmp/mail-preview ',
+        },
+        log: {
+          driver: 'log',
+          logBodies: true,
+        },
+        fake: {
+          driver: 'fake',
+        },
+        smtp: {
+          driver: 'smtp',
+          port: 2526,
+        },
+        custom: {
+          driver: 'custom-driver',
+          from: {
+            email: ' custom@example.com ',
+          },
+          region: 'us',
+          apiKey: 'secret-key',
+        },
+      },
+    })).toEqual({
+      default: 'custom',
+      from: undefined,
+      replyTo: undefined,
+      queue: {
+        queued: false,
+        connection: undefined,
+        queue: undefined,
+        afterCommit: false,
+      },
+      preview: {
+        allowedEnvironments: ['development'],
+      },
+      markdown: {
+        wrapper: undefined,
+      },
+      mailers: {
+        preview: {
+          name: 'preview',
+          driver: 'preview',
+          from: undefined,
+          replyTo: undefined,
+          queue: {
+            queued: false,
+            connection: undefined,
+            queue: undefined,
+            afterCommit: false,
+          },
+          path: '/tmp/mail-preview',
+        },
+        log: {
+          name: 'log',
+          driver: 'log',
+          from: undefined,
+          replyTo: undefined,
+          queue: {
+            queued: false,
+            connection: undefined,
+            queue: undefined,
+            afterCommit: false,
+          },
+          logBodies: true,
+        },
+        fake: {
+          name: 'fake',
+          driver: 'fake',
+          from: undefined,
+          replyTo: undefined,
+          queue: {
+            queued: false,
+            connection: undefined,
+            queue: undefined,
+            afterCommit: false,
+          },
+        },
+        smtp: {
+          name: 'smtp',
+          driver: 'smtp',
+          from: undefined,
+          replyTo: undefined,
+          queue: {
+            queued: false,
+            connection: undefined,
+            queue: undefined,
+            afterCommit: false,
+          },
+          host: '127.0.0.1',
+          port: 2526,
+          secure: false,
+          user: undefined,
+          password: undefined,
+        },
+        custom: {
+          name: 'custom',
+          driver: 'custom-driver',
+          from: {
+            email: 'custom@example.com',
+          },
+          replyTo: undefined,
+          queue: {
+            queued: false,
+            connection: undefined,
+            queue: undefined,
+            afterCommit: false,
+          },
+          region: 'us',
+          apiKey: 'secret-key',
+        },
+      },
+    })
+
+    expect(normalizeMailConfig({
+      default: 'alt-smtp',
+      mailers: {
+        preview: {
+          driver: 'preview',
+        },
+        'alt-preview': {
+          driver: 'preview',
+        },
+        log: {
+          driver: 'log',
+        },
+        'alt-log': {
+          driver: 'log',
+        },
+        smtp: {
+          driver: 'smtp',
+        },
+        'alt-smtp': {
+          driver: 'smtp',
+        },
+      },
+    })).toMatchObject({
+      default: 'alt-smtp',
+      mailers: {
+        preview: {
+          path: '.holo-js/runtime/mail-preview',
+        },
+        'alt-preview': {
+          path: '.holo-js/runtime/mail-preview',
+        },
+        log: {
+          logBodies: false,
+        },
+        'alt-log': {
+          logBodies: false,
+        },
+        smtp: {
+          host: '127.0.0.1',
+          port: 1025,
+          secure: false,
+          user: undefined,
+          password: undefined,
+        },
+        'alt-smtp': {
+          host: '127.0.0.1',
+          port: 1025,
+          secure: false,
+          user: undefined,
+          password: undefined,
+        },
+      },
+    })
   })
 
   it('normalizes string debug flags in app config', () => {

@@ -4,6 +4,8 @@ import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSchemaService, DB } from '@holo-js/db'
 import { authRuntimeInternals } from '../../auth/src'
+import { listFakeSentMails, resetFakeSentMails } from '@holo-js/mail'
+import { configureNotificationsRuntime } from '@holo-js/notifications'
 import { createHolo, holoRuntimeInternals, resetHoloRuntime } from '../src'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
@@ -12,6 +14,8 @@ const tempDirs: string[] = []
 async function createProject(options: {
   session?: 'file' | 'database' | false
   auth?: boolean
+  mail?: boolean
+  notifications?: boolean
   social?: boolean
   socialEncryptionKey?: string
   workos?: boolean
@@ -144,11 +148,41 @@ export default {
 `, 'utf8')
   }
 
+  if (options.notifications) {
+    await writeFile(join(root, 'config/notifications.ts'), `
+import { defineNotificationsConfig } from ${configEntry}
+
+export default defineNotificationsConfig({
+  table: 'notifications',
+})
+`, 'utf8')
+  }
+
+  if (options.mail) {
+    await writeFile(join(root, 'config/mail.ts'), `
+import { defineMailConfig } from ${configEntry}
+
+export default defineMailConfig({
+  default: 'fake',
+  from: {
+    email: 'noreply@app.test',
+    name: 'Core Auth App',
+  },
+  mailers: {
+    fake: {
+      driver: 'fake',
+    },
+  },
+})
+`, 'utf8')
+  }
+
   return root
 }
 
 afterEach(async () => {
   vi.restoreAllMocks()
+  resetFakeSentMails()
   await resetHoloRuntime()
   await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
 })
@@ -189,6 +223,470 @@ describe('@holo-js/core auth/session boot', () => {
         cookies: [],
       },
     ])
+  })
+
+  it('bridges auth delivery through notifications when notifications are installed', async () => {
+    const root = await createProject({
+      auth: true,
+      notifications: true,
+      mail: true,
+    })
+    await writeFile(join(root, 'server/models/User.ts'), `
+const users = new Map()
+let nextId = 1
+
+export default {
+  async find(id) {
+    return users.get(Number(id)) ?? null
+  },
+  where(column, value) {
+    return {
+      async first() {
+        for (const record of users.values()) {
+          if (record?.[column] === value) {
+            return record
+          }
+        }
+
+        return null
+      },
+    }
+  },
+  async create(values) {
+    const record = {
+      id: nextId++,
+      ...values,
+    }
+    users.set(record.id, record)
+    return record
+  },
+  async update(id, values) {
+    const record = {
+      ...(users.get(Number(id)) ?? { id: Number(id) }),
+      ...values,
+    }
+    users.set(record.id, record)
+    return record
+  },
+}
+`, 'utf8')
+    const runtime = await createHolo(root, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+    const mailer = {
+      send: vi.fn(async () => {}),
+    }
+
+    await runtime.initialize()
+    configureNotificationsRuntime({
+      config: runtime.loadedConfig.notifications,
+      store: holoRuntimeInternals.createCoreNotificationStore(runtime.loadedConfig),
+      mailer,
+    })
+    await createSchemaService(DB.connection()).createTable('email_verification_tokens', (table) => {
+      table.uuid('id').primaryKey()
+      table.string('provider').default('users')
+      table.string('user_id')
+      table.string('email')
+      table.string('token_hash')
+      table.timestamp('expires_at')
+      table.timestamp('used_at').nullable()
+      table.timestamps()
+      table.index(['provider'])
+      table.index(['user_id'])
+      table.index(['email'])
+    })
+    await createSchemaService(DB.connection()).createTable('password_reset_tokens', (table) => {
+      table.uuid('id').primaryKey()
+      table.string('provider').default('users')
+      table.string('email')
+      table.string('token_hash')
+      table.timestamp('expires_at')
+      table.timestamp('used_at').nullable()
+      table.timestamps()
+      table.index(['provider'])
+      table.index(['email'])
+    })
+
+    const registered = await runtime.auth?.register({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: 'supersecret',
+      passwordConfirmation: 'supersecret',
+    })
+
+    const verificationToken = await runtime.auth?.verification.create(registered!)
+    await runtime.auth?.passwords.request('ava@example.com')
+
+    expect(mailer.send).toHaveBeenCalledTimes(2)
+    expect(mailer.send).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      subject: 'Verify your email address',
+      lines: expect.arrayContaining([
+        'Use this token to verify your email address:',
+        verificationToken?.plainTextToken,
+      ]),
+      metadata: {
+        provider: 'users',
+        tokenId: verificationToken?.id,
+      },
+    }), expect.objectContaining({
+      channel: 'email',
+      route: {
+        email: 'ava@example.com',
+        name: 'Ava',
+      },
+    }))
+    expect(mailer.send).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      subject: 'Reset your password',
+      lines: expect.arrayContaining([
+        'Use this token to reset your password:',
+      ]),
+      metadata: expect.objectContaining({
+        provider: 'users',
+      }),
+    }), expect.objectContaining({
+      channel: 'email',
+      route: 'ava@example.com',
+      anonymous: true,
+    }))
+  })
+
+  it('bridges auth delivery through notifications without requiring mail to be installed', async () => {
+    const root = await createProject({
+      auth: true,
+      notifications: true,
+    })
+    await writeFile(join(root, 'server/models/User.ts'), `
+const users = new Map()
+let nextId = 1
+
+export default {
+  async find(id) {
+    return users.get(Number(id)) ?? null
+  },
+  where(column, value) {
+    return {
+      async first() {
+        for (const record of users.values()) {
+          if (record?.[column] === value) {
+            return record
+          }
+        }
+
+        return null
+      },
+    }
+  },
+  async create(values) {
+    const record = {
+      id: nextId++,
+      ...values,
+    }
+    users.set(record.id, record)
+    return record
+  },
+  async update(id, values) {
+    const record = {
+      ...(users.get(Number(id)) ?? { id: Number(id) }),
+      ...values,
+    }
+    users.set(record.id, record)
+    return record
+  },
+}
+`, 'utf8')
+    const runtime = await createHolo(root, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+    const mailer = {
+      send: vi.fn(async () => {}),
+    }
+
+    configureNotificationsRuntime({
+      mailer,
+    })
+    await runtime.initialize()
+    await createSchemaService(DB.connection()).createTable('email_verification_tokens', (table) => {
+      table.uuid('id').primaryKey()
+      table.string('provider').default('users')
+      table.string('user_id')
+      table.string('email')
+      table.string('token_hash')
+      table.timestamp('expires_at')
+      table.timestamp('used_at').nullable()
+      table.timestamps()
+      table.index(['provider'])
+      table.index(['user_id'])
+      table.index(['email'])
+    })
+    await createSchemaService(DB.connection()).createTable('password_reset_tokens', (table) => {
+      table.uuid('id').primaryKey()
+      table.string('provider').default('users')
+      table.string('email')
+      table.string('token_hash')
+      table.timestamp('expires_at')
+      table.timestamp('used_at').nullable()
+      table.timestamps()
+      table.index(['provider'])
+      table.index(['email'])
+    })
+
+    const registered = await runtime.auth?.register({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: 'supersecret',
+      passwordConfirmation: 'supersecret',
+    })
+
+    const verificationToken = await runtime.auth?.verification.create(registered!)
+    await runtime.auth?.passwords.request('ava@example.com')
+
+    expect(mailer.send).toHaveBeenCalledTimes(2)
+    expect(mailer.send).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      subject: 'Verify your email address',
+      lines: expect.arrayContaining([
+        'Use this token to verify your email address:',
+        verificationToken?.plainTextToken,
+      ]),
+    }), expect.objectContaining({
+      channel: 'email',
+      route: {
+        email: 'ava@example.com',
+        name: 'Ava',
+      },
+    }))
+    expect(mailer.send).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      subject: 'Reset your password',
+      lines: expect.arrayContaining([
+        'Use this token to reset your password:',
+      ]),
+    }), expect.objectContaining({
+      channel: 'email',
+      route: 'ava@example.com',
+      anonymous: true,
+    }))
+  })
+
+  it('keeps auth delivery on the default hook when notifications are absent', async () => {
+    const root = await createProject({
+      auth: true,
+    })
+
+    const originalWarn = console.warn
+    const warn = vi.fn()
+    console.warn = warn
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
+        if (specifier === '@holo-js/notifications') {
+          return undefined
+        }
+
+        return await originalImportOptionalModule(specifier)
+      })
+
+      const runtime = await portable.createHolo(root, {
+        processEnv: process.env,
+        preferCache: false,
+      })
+      await runtime.initialize()
+      await createSchemaService(DB.connection()).createTable('email_verification_tokens', (table) => {
+        table.uuid('id').primaryKey()
+        table.string('provider').default('users')
+        table.string('user_id')
+        table.string('email')
+        table.string('token_hash')
+        table.timestamp('expires_at')
+        table.timestamp('used_at').nullable()
+        table.timestamps()
+        table.index(['provider'])
+        table.index(['user_id'])
+        table.index(['email'])
+      })
+
+      const registered = await runtime.auth?.register({
+        name: 'Ava',
+        email: 'ava@example.com',
+        password: 'supersecret',
+        passwordConfirmation: 'supersecret',
+      })
+
+      await expect(runtime.auth?.verification.create(registered!)).resolves.toMatchObject({
+        email: 'ava@example.com',
+      })
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Email verification delivery is not configured'))
+    } finally {
+      console.warn = originalWarn
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
+  it('keeps auth delivery on the default hook when notifications are installed without mail', async () => {
+    const root = await createProject({
+      auth: true,
+      notifications: true,
+    })
+
+    const originalWarn = console.warn
+    const warn = vi.fn()
+    console.warn = warn
+
+    try {
+      const runtime = await createHolo(root, {
+        processEnv: process.env,
+        preferCache: false,
+      })
+      await runtime.initialize()
+      await createSchemaService(DB.connection()).createTable('email_verification_tokens', (table) => {
+        table.uuid('id').primaryKey()
+        table.string('provider').default('users')
+        table.string('user_id')
+        table.string('email')
+        table.string('token_hash')
+        table.timestamp('expires_at')
+        table.timestamp('used_at').nullable()
+        table.timestamps()
+        table.index(['provider'])
+        table.index(['user_id'])
+        table.index(['email'])
+      })
+
+      const registered = await runtime.auth?.register({
+        name: 'Ava',
+        email: 'ava@example.com',
+        password: 'supersecret',
+        passwordConfirmation: 'supersecret',
+      })
+
+      await expect(runtime.auth?.verification.create(registered!)).resolves.toMatchObject({
+        email: 'ava@example.com',
+      })
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Email verification delivery is not configured'))
+    } finally {
+      console.warn = originalWarn
+    }
+  })
+
+  it('falls back to mail delivery when mail is installed and notifications are absent', async () => {
+    const root = await createProject({
+      auth: true,
+      mail: true,
+    })
+    await writeFile(join(root, 'server/models/User.ts'), `
+const users = new Map()
+let nextId = 1
+
+export default {
+  async find(id) {
+    return users.get(Number(id)) ?? null
+  },
+  where(column, value) {
+    return {
+      async first() {
+        for (const record of users.values()) {
+          if (record?.[column] === value) {
+            return record
+          }
+        }
+
+        return null
+      },
+    }
+  },
+  async create(values) {
+    const record = {
+      id: nextId++,
+      ...values,
+    }
+    users.set(record.id, record)
+    return record
+  },
+  async update(id, values) {
+    const record = {
+      ...(users.get(Number(id)) ?? { id: Number(id) }),
+      ...values,
+    }
+    users.set(record.id, record)
+    return record
+  },
+}
+`, 'utf8')
+
+    const runtime = await createHolo(root, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    await runtime.initialize()
+    await createSchemaService(DB.connection()).createTable('email_verification_tokens', (table) => {
+      table.uuid('id').primaryKey()
+      table.string('provider').default('users')
+      table.string('user_id')
+      table.string('email')
+      table.string('token_hash')
+      table.timestamp('expires_at')
+      table.timestamp('used_at').nullable()
+      table.timestamps()
+      table.index(['provider'])
+      table.index(['user_id'])
+      table.index(['email'])
+    })
+    await createSchemaService(DB.connection()).createTable('password_reset_tokens', (table) => {
+      table.uuid('id').primaryKey()
+      table.string('provider').default('users')
+      table.string('email')
+      table.string('token_hash')
+      table.timestamp('expires_at')
+      table.timestamp('used_at').nullable()
+      table.timestamps()
+      table.index(['provider'])
+      table.index(['email'])
+    })
+
+    const registered = await runtime.auth?.register({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: 'supersecret',
+      passwordConfirmation: 'supersecret',
+    })
+
+    const verificationToken = await runtime.auth?.verification.create(registered!)
+    await runtime.auth?.passwords.request('ava@example.com')
+
+    expect(listFakeSentMails()).toHaveLength(2)
+    expect(listFakeSentMails()[0]!.mail).toMatchObject({
+      subject: 'Verify your email address',
+      to: [
+        {
+          email: 'ava@example.com',
+          name: 'Ava',
+        },
+      ],
+      text: expect.stringContaining(verificationToken?.plainTextToken ?? ''),
+      metadata: expect.objectContaining({
+        provider: 'users',
+        tokenId: verificationToken?.id,
+      }),
+    })
+    expect(listFakeSentMails()[1]!.mail).toMatchObject({
+      subject: 'Reset your password',
+      to: [
+        {
+          email: 'ava@example.com',
+        },
+      ],
+      text: expect.stringContaining('Use this token to reset your password:'),
+      metadata: expect.objectContaining({
+        provider: 'users',
+      }),
+    })
   })
 
   it('does not leak hidden password fields from model-backed auth users', async () => {

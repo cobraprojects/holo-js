@@ -160,4 +160,15 @@ export default defineConfig({
       process.env.NODE_ENV = previousNodeEnv
     }
   })
+
+  it('preserves renderView when resolving framework runtime options', () => {
+    const renderView = async ({ view }: { view: string }) => `<div>${view}</div>`
+
+    const resolved = adapterNextInternals.resolveOptions({
+      projectRoot: '/tmp/holo-next-render',
+      renderView,
+    })
+
+    expect(resolved.runtime.renderView).toBe(renderView)
+  })
 })

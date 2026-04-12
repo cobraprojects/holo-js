@@ -220,7 +220,7 @@ function renderGeneratedConfigTypes(
   projectRoot: string,
   entries: readonly { configName: string, filePath: string }[],
 ): string {
-  const customEntries = entries.filter(entry => !['app', 'database', 'storage', 'queue', 'media'].includes(entry.configName))
+  const customEntries = entries.filter(entry => !['app', 'database', 'storage', 'queue', 'notifications', 'mail', 'media'].includes(entry.configName))
 
   if (customEntries.length === 0) {
     return [

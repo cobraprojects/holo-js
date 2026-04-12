@@ -25,6 +25,7 @@ import type * as HoloQueueDbModule from '@holo-js/queue-db'
 import type { QueueWorkerRunOptions } from '@holo-js/queue'
 import { defineCommand } from '../src'
 import { cliInternals } from '../src/cli-internals'
+import { generatorInternals } from '../src/generators'
 import {
   bundleProjectModule,
   defaultProjectConfig,
@@ -49,7 +50,10 @@ import {
   ensureSuffix,
   pluralize,
   relativeImportPath,
+  renderGenericMailViewTemplate,
   renderModelTemplate,
+  renderNuxtMailViewTemplate,
+  renderSvelteMailViewTemplate,
   resolveNameInfo,
   splitRequestedName,
   toPascalCase,
@@ -69,6 +73,8 @@ type BuiltWorkspacePackages = {
   readonly dbPostgresPackageRoot: string
   readonly dbSqlitePackageRoot: string
   readonly eventsPackageRoot: string
+  readonly mailPackageRoot: string
+  readonly notificationsPackageRoot: string
   readonly queuePackageRoot: string
   readonly queueRedisPackageRoot: string
   readonly queueDbPackageRoot: string
@@ -152,6 +158,8 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   const queueRedisPackageRoot = join(root, 'packages/queue-redis')
   const queueDbPackageRoot = join(root, 'packages/queue-db')
   const eventsPackageRoot = join(root, 'packages/events')
+  const mailPackageRoot = join(root, 'packages/mail')
+  const notificationsPackageRoot = join(root, 'packages/notifications')
   const storagePackageRoot = join(root, 'packages/storage')
   const storageS3PackageRoot = join(root, 'packages/storage-s3')
   const cliPackageRoot = join(root, 'packages/cli')
@@ -208,6 +216,12 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   const configBuild = buildWorkspacePackageSync('@holo-js/config', join(configPackageRoot, 'dist'))
   expect(configBuild.status, configBuild.stderr || configBuild.stdout).toBe(0)
 
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/notifications'), notificationsPackageRoot)
+  linkPackageDependencySync(notificationsPackageRoot, '@holo-js/config', configPackageRoot)
+  linkPackageDependencySync(notificationsPackageRoot, '@holo-js/queue', queuePackageRoot)
+  const notificationsBuild = buildWorkspacePackageSync('@holo-js/notifications', join(notificationsPackageRoot, 'dist'))
+  expect(notificationsBuild.status, notificationsBuild.stderr || notificationsBuild.stdout).toBe(0)
+
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/storage-s3'), storageS3PackageRoot)
   const storageS3Build = buildWorkspacePackageSync('@holo-js/storage-s3', join(storageS3PackageRoot, 'dist'))
   expect(storageS3Build.status, storageS3Build.stderr || storageS3Build.stdout).toBe(0)
@@ -217,10 +231,20 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   const storageBuild = buildWorkspacePackageSync('@holo-js/storage', join(storagePackageRoot, 'dist'))
   expect(storageBuild.status, storageBuild.stderr || storageBuild.stdout).toBe(0)
 
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/mail'), mailPackageRoot)
+  linkPackageDependencySync(mailPackageRoot, '@holo-js/config', configPackageRoot)
+  linkPackageDependencySync(mailPackageRoot, '@holo-js/queue', queuePackageRoot)
+  linkPackageDependencySync(mailPackageRoot, '@holo-js/storage', storagePackageRoot)
+  linkExternalDependencySync(mailPackageRoot, 'nodemailer')
+  const mailBuild = buildWorkspacePackageSync('@holo-js/mail', join(mailPackageRoot, 'dist'))
+  expect(mailBuild.status, mailBuild.stderr || mailBuild.stdout).toBe(0)
+
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/core'), corePackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/config', configPackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/db', dbPackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/events', eventsPackageRoot)
+  linkPackageDependencySync(corePackageRoot, '@holo-js/mail', mailPackageRoot)
+  linkPackageDependencySync(corePackageRoot, '@holo-js/notifications', notificationsPackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/queue', queuePackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/queue-db', queueDbPackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/storage', storagePackageRoot)
@@ -232,6 +256,8 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   linkPackageDependencySync(cliPackageRoot, '@holo-js/config', configPackageRoot)
   linkPackageDependencySync(cliPackageRoot, '@holo-js/db', dbPackageRoot)
   linkPackageDependencySync(cliPackageRoot, '@holo-js/events', eventsPackageRoot)
+  linkPackageDependencySync(cliPackageRoot, '@holo-js/mail', mailPackageRoot)
+  linkPackageDependencySync(cliPackageRoot, '@holo-js/notifications', notificationsPackageRoot)
   linkPackageDependencySync(cliPackageRoot, '@holo-js/queue', queuePackageRoot)
   linkPackageDependencySync(cliPackageRoot, '@holo-js/queue-db', queueDbPackageRoot)
   linkPackageDependencySync(cliPackageRoot, 'esbuild', resolve(workspaceRoot, 'packages/cli/node_modules/esbuild'))
@@ -247,6 +273,8 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
     dbPostgresPackageRoot,
     dbSqlitePackageRoot,
     eventsPackageRoot,
+    mailPackageRoot,
+    notificationsPackageRoot,
     queuePackageRoot,
     queueRedisPackageRoot,
     queueDbPackageRoot,
@@ -472,6 +500,7 @@ export default {
     expect(listed.status).toBe(0)
     expect(listed.stdout).toContain('Internal Commands')
     expect(listed.stdout).toContain('holo make:job <name>')
+    expect(listed.stdout).toContain('holo make:mail <name> [--markdown]')
     expect(listed.stdout).toContain('holo make:model <name>')
     expect(listed.stdout).toContain('App Commands')
     expect(listed.stdout).toContain('holo courses:reindex')
@@ -662,6 +691,19 @@ export default {
     expect(await readFile(join(authRoot, '.env'), 'utf8')).toContain('SESSION_CONNECTION=main')
     expect(await readFile(join(authRoot, 'server/models/User.ts'), 'utf8')).toContain('hidden: [\'password\']')
     expect((await readdir(join(authRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(6)
+
+    const mailRoot = join(baseRoot, 'mail-runtime-app')
+    await projectInternals.scaffoldProject(mailRoot, {
+      projectName: 'Mail Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['mail', 'notifications'],
+    })
+
+    expect(await readFile(join(mailRoot, 'config/mail.ts'), 'utf8')).toContain('defineMailConfig')
+    expect(await readFile(join(mailRoot, 'config/notifications.ts'), 'utf8')).toContain('defineNotificationsConfig')
 
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: '!!!',
@@ -1613,9 +1655,9 @@ export default defineAppConfig({
     expect(missingTarget.status).toBe(1)
     expect(missingTarget.stderr).toContain('Missing required argument: Install target.')
 
-    const unsupportedTarget = runCliProcess(projectRoot, ['install', 'mail'])
+    const unsupportedTarget = runCliProcess(projectRoot, ['install', 'mailer'])
     expect(unsupportedTarget.status).toBe(1)
-    expect(unsupportedTarget.stderr).toContain('Unsupported install target: mail. Expected one of queue, events, auth.')
+    expect(unsupportedTarget.stderr).toContain('Unsupported install target: mailer. Expected one of queue, events, auth, notifications, mail.')
 
     const unsupportedDriver = runCliProcess(projectRoot, ['install', 'queue', '--driver', 'sqs'])
     expect(unsupportedDriver.status).toBe(1)
@@ -1628,6 +1670,14 @@ export default defineAppConfig({
     const authDriver = runCliProcess(projectRoot, ['install', 'auth', '--driver', 'redis'])
     expect(authDriver.status).toBe(1)
     expect(authDriver.stderr).toContain('The auth installer does not support --driver.')
+
+    const notificationsDriver = runCliProcess(projectRoot, ['install', 'notifications', '--driver', 'redis'])
+    expect(notificationsDriver.status).toBe(1)
+    expect(notificationsDriver.stderr).toContain('The notifications installer does not support --driver.')
+
+    const mailDriver = runCliProcess(projectRoot, ['install', 'mail', '--driver', 'redis'])
+    expect(mailDriver.status).toBe(1)
+    expect(mailDriver.stderr).toContain('The mail installer does not support --driver.')
   }, 30000)
 
   it('covers the install command and queue installer helpers in-process', async () => {
@@ -1697,13 +1747,35 @@ export default defineAppConfig({
       args: ['auth'],
       flags: { driver: 'redis' },
     }, commandContext as never)).rejects.toThrow('The auth installer does not support --driver.')
+    await expect(installCommand?.prepare?.({
+      args: ['notifications'],
+      flags: {},
+    }, commandContext as never)).resolves.toEqual({
+      args: ['notifications'],
+      flags: {},
+    })
+    await expect(installCommand?.prepare?.({
+      args: ['notifications'],
+      flags: { driver: 'redis' },
+    }, commandContext as never)).rejects.toThrow('The notifications installer does not support --driver.')
+    await expect(installCommand?.prepare?.({
+      args: ['mail'],
+      flags: {},
+    }, commandContext as never)).resolves.toEqual({
+      args: ['mail'],
+      flags: {},
+    })
+    await expect(installCommand?.prepare?.({
+      args: ['mail'],
+      flags: { driver: 'redis' },
+    }, commandContext as never)).rejects.toThrow('The mail installer does not support --driver.')
     await expect(installCommand?.run({
       projectRoot,
       cwd: projectRoot,
-      args: ['mail'],
+      args: ['mailer'],
       flags: { driver: 'sync' },
       loadProject: async () => ({ config: defaultProjectConfig() }),
-    } as never)).rejects.toThrow('Unsupported install target: mail.')
+    } as never)).rejects.toThrow('Unsupported install target: mailer.')
     await expect(installCommand?.run({
       projectRoot,
       cwd: projectRoot,
@@ -1743,6 +1815,25 @@ export default defineAppConfig({
       createdAuthConfig: true,
       createdSessionConfig: true,
       createdUserModel: true,
+    })
+    await expect(projectInternals.installNotificationsIntoProject(projectRoot)).resolves.toMatchObject({
+      updatedPackageJson: true,
+      createdNotificationsConfig: true,
+    })
+    await expect(projectInternals.installNotificationsIntoProject(projectRoot)).resolves.toMatchObject({
+      updatedPackageJson: false,
+      createdNotificationsConfig: false,
+      createdMigrationFiles: [],
+    })
+    await expect(projectInternals.installMailIntoProject(projectRoot)).resolves.toMatchObject({
+      updatedPackageJson: true,
+      createdMailConfig: true,
+      createdMailDirectory: true,
+    })
+    await expect(projectInternals.installMailIntoProject(projectRoot)).resolves.toMatchObject({
+      updatedPackageJson: false,
+      createdMailConfig: false,
+      createdMailDirectory: false,
     })
     await expect(projectInternals.installQueueIntoProject(projectRoot)).resolves.toEqual({
       createdQueueConfig: false,
@@ -2048,9 +2139,17 @@ export default defineQueueConfig({
     tempDirs.push(missingPackageRoot)
     await expect(projectInternals.installQueueIntoProject(missingPackageRoot, { driver: 'sync' })).rejects.toThrow(`Missing package.json in ${missingPackageRoot}.`)
     await expect(projectInternals.installEventsIntoProject(missingPackageRoot)).rejects.toThrow(`Missing package.json in ${missingPackageRoot}.`)
+    await expect(projectInternals.installMailIntoProject(missingPackageRoot)).rejects.toThrow(
+      `Missing config/app.(ts|mts|js|mjs) in ${missingPackageRoot}.`,
+    )
+    await expect(stat(join(missingPackageRoot, 'config/mail.ts'))).rejects.toThrow()
+    await expect(stat(join(missingPackageRoot, 'server/mail'))).rejects.toThrow()
     await writeProjectFile(missingPackageRoot, 'package.json', '{ invalid json')
     await expect(projectInternals.installQueueIntoProject(missingPackageRoot, { driver: 'sync' })).rejects.toThrow(`Invalid package.json in ${missingPackageRoot}.`)
     await expect(projectInternals.installEventsIntoProject(missingPackageRoot)).rejects.toThrow(`Invalid package.json in ${missingPackageRoot}.`)
+    await expect(projectInternals.installMailIntoProject(missingPackageRoot)).rejects.toThrow(
+      `Missing config/app.(ts|mts|js|mjs) in ${missingPackageRoot}.`,
+    )
     await expect(projectInternals.installQueueIntoProject(missingPackageRoot, { driver: 'bad' as never })).rejects.toThrow('Unsupported queue driver: bad.')
 
     const eventsDevDependencyRoot = await createTempProject()
@@ -2490,6 +2589,20 @@ export default defineDatabaseConfig({
     })
   })
 
+  it('installs mail support through the CLI', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    const result = runCliProcess(projectRoot, ['install', 'mail'])
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('Installed mail support.')
+    expect(result.stdout).toContain('  - created config/mail.ts')
+    expect(result.stdout).toContain('  - created server/mail')
+    expect(await readFile(join(projectRoot, 'config/mail.ts'), 'utf8')).toContain('defineMailConfig')
+    expect((await stat(join(projectRoot, 'server/mail'))).isDirectory()).toBe(true)
+    expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/mail": "${expectedHoloPackageRange}"`)
+  }, 30000)
+
   it('supports interactive new project prompts', async () => {
     const baseRoot = await createTempDirectory()
     tempDirs.push(baseRoot)
@@ -2687,6 +2800,28 @@ export default defineDatabaseConfig({
     expect(optionalCliResult.status).toBe(0)
     expect(await readFile(join(baseRoot, 'optional-cli-app/package.json'), 'utf8')).toContain(`"@holo-js/forms": "${expectedHoloPackageRange}"`)
     expect(await readFile(join(baseRoot, 'optional-cli-app/package.json'), 'utf8')).toContain(`"@holo-js/validation": "${expectedHoloPackageRange}"`)
+
+    const notificationsCliResult = runCliProcess(baseRoot, [
+      'new',
+      'notifications-cli-app',
+      '--package',
+      'notifications',
+    ])
+    expect(notificationsCliResult.status).toBe(0)
+    expect(await readFile(join(baseRoot, 'notifications-cli-app/package.json'), 'utf8')).toContain(`"@holo-js/notifications": "${expectedHoloPackageRange}"`)
+    expect(await readFile(join(baseRoot, 'notifications-cli-app/config/notifications.ts'), 'utf8')).toContain('defineNotificationsConfig')
+    expect((await readdir(join(baseRoot, 'notifications-cli-app/server/db/migrations'))).some(name => name.endsWith('_create_notifications.ts'))).toBe(true)
+
+    const mailCliResult = runCliProcess(baseRoot, [
+      'new',
+      'mail-cli-app',
+      '--package',
+      'mail',
+    ])
+    expect(mailCliResult.status).toBe(0)
+    expect(await readFile(join(baseRoot, 'mail-cli-app/package.json'), 'utf8')).toContain(`"@holo-js/mail": "${expectedHoloPackageRange}"`)
+    expect(await readFile(join(baseRoot, 'mail-cli-app/config/mail.ts'), 'utf8')).toContain('defineMailConfig')
+    expect((await stat(join(baseRoot, 'mail-cli-app/server/mail'))).isDirectory()).toBe(true)
 
     await linkWorkspaceCli(projectRoot)
     await writeProjectFile(projectRoot, '.nuxt/tsconfig.json', JSON.stringify({
@@ -5212,6 +5347,38 @@ export default defineMigration({
     }))
     expect(seederIo.read().stdout).toContain('Created seeder: server/db/seeders/RoleSeeder.ts')
 
+    const markdownMailProjectRoot = await createTempProject()
+    tempDirs.push(markdownMailProjectRoot)
+    const markdownMailIo = createIo(markdownMailProjectRoot)
+    await withFakeBun(async () => cliInternals.runMakeMail(markdownMailIo.io, markdownMailProjectRoot, {
+      args: ['auth/verify-email'],
+      flags: { type: 'markdown' },
+    }))
+    expect(markdownMailIo.read().stdout).toContain('Created mail: server/mail/auth/verify-email.ts')
+    await expect(readFile(join(markdownMailProjectRoot, 'server/mail/auth/verify-email.ts'), 'utf8')).resolves.toContain('defineMail')
+    await expect(withFakeBun(async () => cliInternals.runMakeMail(markdownMailIo.io, markdownMailProjectRoot, {
+      args: ['auth/verify-email'],
+      flags: { type: 'markdown' },
+    }))).rejects.toThrow('Refusing to overwrite existing file')
+
+    const viewMailProjectRoot = await createTempProject()
+    tempDirs.push(viewMailProjectRoot)
+    const viewMailIo = createIo(viewMailProjectRoot)
+    await expect(withFakeBun(async () => cliInternals.runMakeMail(viewMailIo.io, viewMailProjectRoot, {
+      args: ['billing/invoice-paid'],
+      flags: { type: 'view' },
+    }))).rejects.toThrow('View-backed mail scaffolding requires a renderView runtime binding')
+    await expect(stat(join(viewMailProjectRoot, 'server/mail/billing/invoice-paid.ts'))).rejects.toThrow()
+    await expect(stat(join(viewMailProjectRoot, 'server/mail/billing/invoice-paid.view.ts'))).rejects.toThrow()
+    expect(renderNuxtMailViewTemplate('ExampleMailInput', './example')).toContain('defineProps<ExampleMailInput>()')
+    expect(renderSvelteMailViewTemplate('ExampleMailInput', './example')).toContain('export let to: ExampleMailInput[\'to\']')
+    expect(renderGenericMailViewTemplate('ExampleMail', 'ExampleMailInput', './example')).toContain('ExampleMailInput')
+
+    const brokenPackageMailProjectRoot = await createTempProject()
+    tempDirs.push(brokenPackageMailProjectRoot)
+    await writeProjectFile(brokenPackageMailProjectRoot, 'package.json', '{')
+    await expect(generatorInternals.resolveProjectMailViewFramework(brokenPackageMailProjectRoot)).resolves.toBe('generic')
+
     const jobProjectRoot = await createTempProject()
     tempDirs.push(jobProjectRoot)
     const jobIo = createIo(jobProjectRoot)
@@ -5407,8 +5574,26 @@ export default defineEvent({ name: 'user.registered' })
     const makeEvent = jobCommands.find(command => command.name === 'make:event')
     const makeJob = jobCommands.find(command => command.name === 'make:job')
     const makeListener = jobCommands.find(command => command.name === 'make:listener')
+    const makeMail = jobCommands.find(command => command.name === 'make:mail')
     const preparedEvent = await makeEvent?.prepare?.({ args: ['user/registered'], flags: {} }, jobCommandContext as never)
     const preparedJob = await makeJob?.prepare?.({ args: ['SendEmail'], flags: {} }, jobCommandContext as never)
+    const preparedMarkdownMail = await makeMail?.prepare?.({ args: ['billing/receipt'], flags: { markdown: true } }, jobCommandContext as never)
+    const preparedDefaultMail = await makeMail?.prepare?.({ args: ['welcome'], flags: {} }, jobCommandContext as never)
+    const promptedMailIo = createIo(jobCommandRoot, {
+      tty: true,
+      input: '\n',
+    })
+    const promptedMailContext = {
+      ...promptedMailIo.io,
+      projectRoot: jobCommandRoot,
+      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    }
+    const promptedMakeMail = cliInternals.createInternalCommands(
+      promptedMailContext,
+      async (_projectRoot, _kind, _options, callback) => callback(''),
+    ).find(command => command.name === 'make:mail')
+    const preparedPromptedMail = await promptedMakeMail?.prepare?.({ args: ['prompted-mail'], flags: {} }, promptedMailContext as never)
     const preparedListener = await makeListener?.prepare?.({
       args: ['SendWelcomeEmail'],
       flags: { event: ['user.registered', 'audit.activity'] },
@@ -5427,9 +5612,54 @@ export default defineEvent({ name: 'user.registered' })
       flags: preparedJob?.flags ?? {},
       loadProject: jobCommandContext.loadProject,
     } as never))).resolves.toBeUndefined()
+    await expect(preparedDefaultMail).toEqual({
+      args: ['welcome'],
+      flags: { type: 'markdown' },
+    })
+    await expect(preparedMarkdownMail).toEqual({
+      args: ['billing/receipt'],
+      flags: { type: 'markdown' },
+    })
+    await expect(preparedPromptedMail).toEqual({
+      args: ['prompted-mail'],
+      flags: { type: 'markdown' },
+    })
+    await expect(makeMail?.prepare?.({
+      args: ['billing/invoice-paid'],
+      flags: { view: true },
+    }, jobCommandContext as never)).rejects.toThrow('View-backed mail scaffolding requires a renderView runtime binding')
+    await expect(withFakeBun(async () => makeMail?.run({
+      projectRoot: jobCommandRoot,
+      cwd: jobCommandRoot,
+      args: preparedDefaultMail?.args ?? [],
+      flags: preparedDefaultMail?.flags ?? {},
+      loadProject: jobCommandContext.loadProject,
+    } as never))).resolves.toBeUndefined()
+    const interactiveMailIo = createIo(jobCommandRoot, {
+      tty: true,
+      input: 'view\n',
+    })
+    const interactiveMailContext = {
+      ...interactiveMailIo.io,
+      projectRoot: jobCommandRoot,
+      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    }
+    await expect(makeMail?.prepare?.({
+      args: ['billing/interactive'],
+      flags: {},
+    }, interactiveMailContext as never)).resolves.toMatchObject({
+      flags: {
+        type: 'markdown',
+      },
+    })
     await expect(makeListener?.prepare?.({ args: ['SendWelcomeEmail'], flags: {} }, jobCommandContext as never)).rejects.toThrow(
       'Listener event name is required. Use "--event <event-name>".',
     )
+    await expect(makeMail?.prepare?.({
+      args: ['bad'],
+      flags: { markdown: true, view: true },
+    }, jobCommandContext as never)).rejects.toThrow('Use either "--markdown" or "--view", not both.')
     await expect(withFakeBun(async () => cliInternals.runMakeListener(jobCommandIo.io, jobCommandRoot, {
       args: ['SendWelcomeEmail'],
       flags: { event: 'missing.event' },
@@ -5437,6 +5667,10 @@ export default defineEvent({ name: 'user.registered' })
     await expect(withFakeBun(async () => cliInternals.runMakeJob(jobCommandIo.io, jobCommandRoot, {
       args: [],
       flags: {},
+    }))).rejects.toThrow('A name is required.')
+    await expect(withFakeBun(async () => cliInternals.runMakeMail(jobCommandIo.io, jobCommandRoot, {
+      args: [],
+      flags: { type: 'markdown' },
     }))).rejects.toThrow('A name is required.')
     await writeProjectFile(jobCommandRoot, 'server/events/audit/activity.ts', `
 import { defineEvent } from '@holo-js/events'
@@ -5495,6 +5729,7 @@ export default defineEvent({ name: 'audit.activity' })
 
     expect(migrationCommandIo.read().stdout).toContain('Created migration: server/db/migrations/')
     expect(seederCommandIo.read().stdout).toContain('Created seeder: server/db/seeders/LessonSeeder.ts')
+    expect(jobCommandIo.read().stdout).toContain('Created mail: server/mail/welcome.ts')
     expect(observerCommandIo.read().stdout).toContain('Created observer: server/db/observers/CourseObserver.ts')
     expect(factoryCommandIo.read().stdout).toContain('Created factory: server/db/factories/CourseFactory.ts')
   })
@@ -5525,6 +5760,7 @@ export default defineEvent({ name: 'audit.activity' })
       await callback('')
     })
     const runMakeSeeder = vi.fn(async () => {})
+    const runMakeMail = vi.fn(async () => {})
     const scaffoldProject = vi.fn(async () => {})
     const installAuthIntoProject = vi.fn(async () => ({
       updatedPackageJson: true,
@@ -5539,6 +5775,16 @@ export default defineEvent({ name: 'audit.activity' })
       updatedPackageJson: true,
       createdEventsDirectory: true,
       createdListenersDirectory: true,
+    }))
+    const installNotificationsIntoProject = vi.fn(async () => ({
+      updatedPackageJson: true,
+      createdNotificationsConfig: true,
+      createdMigrationFiles: ['server/db/migrations/2026_01_01_000001_create_notifications.ts'],
+    }))
+    const installMailIntoProject = vi.fn(async () => ({
+      updatedPackageJson: true,
+      createdMailConfig: true,
+      createdMailDirectory: true,
     }))
     const installQueueIntoProject = vi.fn(async () => ({
       createdQueueConfig: true,
@@ -5574,6 +5820,7 @@ export default defineEvent({ name: 'audit.activity' })
       withRuntimeEnvironment,
     }))
     vi.doMock('../src/generators', () => ({
+      runMakeMail,
       runMakeSeeder,
     }))
     vi.doMock('../src/project/scaffold', async () => {
@@ -5582,6 +5829,8 @@ export default defineEvent({ name: 'audit.activity' })
         ...actual,
         installAuthIntoProject,
         installEventsIntoProject,
+        installMailIntoProject,
+        installNotificationsIntoProject,
         installQueueIntoProject,
         scaffoldProject,
       }
@@ -5712,6 +5961,13 @@ export default defineEvent({ name: 'audit.activity' })
         flags: {},
         loadProject: baseContext.loadProject,
       })
+      await commands.find(command => command.name === 'make:mail')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: ['WelcomeMail'],
+        flags: { type: 'markdown' },
+        loadProject: baseContext.loadProject,
+      })
       await commands.find(command => command.name === 'install')!.run({
         projectRoot,
         cwd: projectRoot,
@@ -5724,6 +5980,20 @@ export default defineEvent({ name: 'audit.activity' })
         cwd: projectRoot,
         args: ['auth'],
         flags: { social: true },
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'install')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: ['notifications'],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'install')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: ['mail'],
+        flags: {},
         loadProject: baseContext.loadProject,
       })
       await commands.find(command => command.name === 'install')!.run({
@@ -5785,12 +6055,18 @@ export default defineEvent({ name: 'audit.activity' })
         args: ['DemoSeeder'],
         flags: {},
       })
+      expect(runMakeMail).toHaveBeenCalledWith(baseContext, projectRoot, {
+        args: ['WelcomeMail'],
+        flags: { type: 'markdown' },
+      })
       expect(installAuthIntoProject).toHaveBeenCalledWith(projectRoot, {
         social: true,
         workos: false,
         clerk: false,
       })
       expect(installEventsIntoProject).toHaveBeenCalledWith(projectRoot)
+      expect(installMailIntoProject).toHaveBeenCalledWith(projectRoot)
+      expect(installNotificationsIntoProject).toHaveBeenCalledWith(projectRoot)
       expect(installQueueIntoProject).toHaveBeenCalledWith(projectRoot, { driver: 'sync' })
       expect(runProjectPrepare).toHaveBeenCalledWith(projectRoot, baseContext)
       expect(runProjectDevServer).toHaveBeenCalledWith(baseContext, projectRoot)
@@ -5803,6 +6079,8 @@ export default defineEvent({ name: 'audit.activity' })
       expect(discoverAppCommands).toHaveBeenCalledWith(projectRoot, defaultProjectConfig())
       expect(io.read().stdout).toContain('  - updated .env')
       expect(io.read().stdout).toContain('  - updated .env.example')
+      expect(io.read().stdout).toContain('  - created config/mail.ts')
+      expect(io.read().stdout).toContain('  - created config/notifications.ts')
       expect(scaffoldProject).toHaveBeenCalledWith(resolve(projectRoot, 'LazyProject'), {
         projectName: 'LazyProject',
         framework: 'nuxt',
@@ -5990,6 +6268,65 @@ export default defineEvent({ name: 'audit.activity' })
       } as never)
 
       expect(io.read().stdout).toContain('Auth support is already installed.')
+    } finally {
+      vi.resetModules()
+      vi.doUnmock('../src/project/scaffold')
+    }
+  })
+
+  it('prints already-installed messages when notifications and mail installs make no changes', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const installNotificationsIntoProject = vi.fn(async () => ({
+      updatedPackageJson: false,
+      createdNotificationsConfig: false,
+      createdMigrationFiles: [],
+    }))
+    const installMailIntoProject = vi.fn(async () => ({
+      updatedPackageJson: false,
+      createdMailConfig: false,
+      createdMailDirectory: false,
+    }))
+
+    vi.resetModules()
+    vi.doMock('../src/project/scaffold', async () => {
+      const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
+      return {
+        ...actual,
+        installNotificationsIntoProject,
+        installMailIntoProject,
+      }
+    })
+
+    try {
+      const isolatedCli = await import('../src/cli')
+      const installCommand = isolatedCli.createInternalCommands({
+        ...io.io,
+        projectRoot,
+        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never).find(command => command.name === 'install')
+
+      await installCommand?.run({
+        ...io.io,
+        projectRoot,
+        cwd: projectRoot,
+        args: ['notifications'],
+        flags: {},
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never)
+      await installCommand?.run({
+        ...io.io,
+        projectRoot,
+        cwd: projectRoot,
+        args: ['mail'],
+        flags: {},
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never)
+
+      expect(io.read().stdout).toContain('Notifications support is already installed.')
+      expect(io.read().stdout).toContain('Mail support is already installed.')
     } finally {
       vi.resetModules()
       vi.doUnmock('../src/project/scaffold')

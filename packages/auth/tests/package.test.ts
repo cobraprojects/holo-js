@@ -692,6 +692,23 @@ describe('@holo-js/auth package runtime', () => {
     expect(loggedOut.cookies).toContainEqual(expect.stringContaining('holo_session_remember=;'))
   })
 
+  it('does not auto-start email verification during registration', async () => {
+    const runtime = configureRuntime()
+
+    await expect(register({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: 'secret-secret',
+      passwordConfirmation: 'secret-secret',
+    })).resolves.toMatchObject({
+      id: 1,
+      email: 'ava@example.com',
+    })
+
+    expect(runtime.deliveries).toEqual([])
+    expect(runtime.emailVerificationTokenStore.records.size).toBe(0)
+  })
+
   it('supports trusted session login with a user object or user id', async () => {
     const runtime = configureRuntime()
 

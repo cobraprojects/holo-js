@@ -4,14 +4,18 @@ export type {
   HoloAuthRuntimeBinding,
   HoloQueueRuntimeBinding,
   HoloRuntime,
+  HoloServerViewRenderInput,
+  HoloServerViewRenderer,
   HoloSessionRuntimeBinding,
 } from './portable/holo'
 export {
+  configureHoloRenderingRuntime,
   createHolo,
   ensureHolo,
   getHolo,
   initializeHolo,
   peekHolo,
+  resetHoloRenderingRuntime,
   resetHoloRuntime,
   holoRuntimeInternals,
 } from './portable/holo'

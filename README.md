@@ -137,6 +137,8 @@ holo-js/
 │   ├── adapter-sveltekit/  # @holo-js/adapter-sveltekit - SvelteKit adapter
 │   ├── db/                 # @holo-js/db - database, ORM, migrations, seeders, factories
 │   ├── events/             # @holo-js/events - event contracts, listeners, dispatch, runtime orchestration
+│   ├── mail/               # @holo-js/mail - mail definitions, preview, attachments, and fluent delivery
+│   ├── notifications/      # @holo-js/notifications - notification contracts, channels, and fluent delivery
 │   ├── storage/            # @holo-js/storage - storage runtime and config
 │   ├── media/              # @holo-js/media - media collections and conversions
 │   └── cli/                # holo-js - project creation and operational commands

@@ -103,7 +103,7 @@ export type SupportedScaffoldFramework = 'nuxt' | 'next' | 'sveltekit'
 export type SupportedScaffoldPackageManager = 'bun' | 'npm' | 'pnpm' | 'yarn'
 
 export type SupportedScaffoldStorageDisk = 'local' | 'public'
-export type SupportedScaffoldOptionalPackage = 'storage' | 'events' | 'queue' | 'validation' | 'forms' | 'auth'
+export type SupportedScaffoldOptionalPackage = 'storage' | 'events' | 'queue' | 'validation' | 'forms' | 'auth' | 'notifications' | 'mail'
 export type SupportedQueueInstallerDriver = 'sync' | 'redis' | 'database'
 export type SupportedAuthSocialProvider = 'google' | 'github' | 'discord' | 'facebook' | 'apple' | 'linkedin'
 export type AuthInstallerFeature = 'social' | 'workos' | 'clerk'
@@ -171,6 +171,18 @@ export type AuthInstallResult = {
   readonly updatedEnvExample: boolean
 }
 
+export type NotificationsInstallResult = {
+  readonly updatedPackageJson: boolean
+  readonly createdNotificationsConfig: boolean
+  readonly createdMigrationFiles: readonly string[]
+}
+
+export type MailInstallResult = {
+  readonly updatedPackageJson: boolean
+  readonly createdMailConfig: boolean
+  readonly createdMailDirectory: boolean
+}
+
 export const SUPPORTED_AUTH_SOCIAL_PROVIDERS = [
   'google',
   'github',
@@ -228,6 +240,24 @@ export const QUEUE_CONFIG_FILE_NAMES = [
   'config/queue.mjs',
 ] as const
 
+export const NOTIFICATIONS_CONFIG_FILE_NAMES = [
+  'config/notifications.ts',
+  'config/notifications.mts',
+  'config/notifications.js',
+  'config/notifications.mjs',
+  'config/notifications.cts',
+  'config/notifications.cjs',
+] as const
+
+export const MAIL_CONFIG_FILE_NAMES = [
+  'config/mail.ts',
+  'config/mail.mts',
+  'config/mail.js',
+  'config/mail.mjs',
+  'config/mail.cts',
+  'config/mail.cjs',
+] as const
+
 export const DB_DRIVER_PACKAGE_NAMES = {
   sqlite: '@holo-js/db-sqlite',
   postgres: '@holo-js/db-postgres',
@@ -259,7 +289,7 @@ export const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIO
 export const SUPPORTED_SCAFFOLD_FRAMEWORKS = ['nuxt', 'next', 'sveltekit'] as const
 export const SUPPORTED_SCAFFOLD_PACKAGE_MANAGERS = ['bun', 'npm', 'pnpm', 'yarn'] as const
 export const SUPPORTED_SCAFFOLD_STORAGE_DISKS = ['local', 'public'] as const
-export const SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms', 'auth'] as const
+export const SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms', 'auth', 'notifications', 'mail'] as const
 export const SUPPORTED_QUEUE_INSTALLER_DRIVERS = ['sync', 'redis', 'database'] as const
 export const HOLO_EVENT_DEFINITION_MARKER = Symbol.for('holo-js.events.definition')
 export const HOLO_LISTENER_DEFINITION_MARKER = Symbol.for('holo-js.events.listener')

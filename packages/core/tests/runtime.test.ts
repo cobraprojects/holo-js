@@ -6,6 +6,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { config, useConfig } from '@holo-js/config'
 import { createSchemaService, DB } from '@holo-js/db'
 import {
+  configureNotificationsRuntime,
+  defineNotification,
+  getNotificationsRuntimeBindings,
+  notify,
+  resetNotificationsRuntime,
+} from '@holo-js/notifications'
+import { configureMailRuntime, listFakeSentMails, mailRuntimeInternals, previewMail, resetFakeSentMails } from '@holo-js/mail'
+import {
   Event,
   defineEvent,
   defineListener,
@@ -30,6 +38,7 @@ import type * as HoloQueueModule from '@holo-js/queue'
 import type * as PortableHoloModule from '../src/portable/holo'
 import { createHoloAdapterProject, createHoloFrameworkAdapter, initializeHoloAdapterProject } from '../src'
 import {
+  configureHoloRenderingRuntime,
   createHolo,
   getHolo,
   ensureHolo,
@@ -105,6 +114,113 @@ async function writeQueueConfig(root: string, contents: string): Promise<void> {
   await writeFile(join(root, 'config/queue.ts'), contents, 'utf8')
 }
 
+async function writeNotificationsConfig(root: string, contents?: string): Promise<void> {
+  await writeFile(join(root, 'config/notifications.ts'), contents ?? `
+import { defineNotificationsConfig } from '@holo-js/notifications'
+
+export default defineNotificationsConfig({
+  table: 'notifications',
+})
+`, 'utf8')
+}
+
+async function writeMailConfig(root: string, contents?: string): Promise<void> {
+  await writeFile(join(root, 'config/mail.ts'), contents ?? `
+import { defineMailConfig } from ${packageEntry}
+
+export default defineMailConfig({
+  default: 'fake',
+  from: {
+    email: 'noreply@app.test',
+    name: 'Runtime App',
+  },
+  mailers: {
+    fake: {
+      driver: 'fake',
+    },
+  },
+})
+`, 'utf8')
+}
+
+async function writeAuthConfig(root: string): Promise<void> {
+  await writeFile(join(root, 'config/auth.ts'), `
+import { defineAuthConfig } from ${packageEntry}
+
+export default defineAuthConfig({
+  defaults: {
+    guard: 'web',
+    passwords: 'users',
+  },
+  guards: {
+    web: {
+      driver: 'session',
+      provider: 'users',
+    },
+  },
+  providers: {
+    users: {
+      model: 'User',
+    },
+  },
+})
+`, 'utf8')
+  await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${packageEntry}
+
+export default defineSessionConfig({
+  driver: 'file',
+  stores: {
+    file: {
+      driver: 'file',
+      path: './storage/framework/sessions',
+    },
+  },
+})
+`, 'utf8')
+}
+
+async function writeUserModel(root: string): Promise<void> {
+  await writeFile(join(root, 'server/models/User.ts'), `
+const users = new Map()
+
+export default {
+  async find(id) {
+    return users.get(Number(id)) ?? null
+  },
+  where(column, value) {
+    return {
+      async first() {
+        for (const record of users.values()) {
+          if (record?.[column] === value) {
+            return record
+          }
+        }
+
+        return null
+      },
+    }
+  },
+  async create(values) {
+    const record = {
+      id: users.size + 1,
+      ...values,
+    }
+    users.set(record.id, record)
+    return record
+  },
+  async update(id, values) {
+    const record = {
+      ...(users.get(Number(id)) ?? { id: Number(id) }),
+      ...values,
+    }
+    users.set(record.id, record)
+    return record
+  },
+}
+`, 'utf8')
+}
+
 async function writeRegistry(
   root: string,
   options: {
@@ -153,6 +269,8 @@ async function writeRegistry(
 
 afterEach(async () => {
   await resetHoloRuntime()
+  resetFakeSentMails()
+  resetNotificationsRuntime()
   resetQueueRegistry()
   resetEventsRegistry()
   await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
@@ -363,6 +481,26 @@ describe('@holo-js/core portable runtime', () => {
     expect(runtime.queue.config.default).toBe('sync')
     await runtime.shutdown()
     importOptionalModule.mockRestore()
+  })
+
+  it('does not load notifications support when notifications config is absent', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+
+    const importOptionalModule = vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(
+      async <TModule>(specifier: string, options?: { readonly projectRoot?: string }): Promise<TModule | undefined> => {
+        if (specifier === '@holo-js/notifications') {
+          throw new Error('notifications should not load without config')
+        }
+
+        return await import(specifier) as TModule
+      },
+    )
+
+    const runtime = await initializeHolo(root)
+    expect(runtime.initialized).toBe(true)
+    importOptionalModule.mockRestore()
+    await runtime.shutdown()
   })
 
   it('rethrows non-module-resolution errors from optional imports', async () => {
@@ -1711,6 +1849,571 @@ export default defineQueueConfig({
     }
   })
 
+  it('fails runtime initialization when notifications config is present but the notifications package is missing', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeNotificationsConfig(root)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
+        if (specifier === '@holo-js/notifications') {
+          return undefined
+        }
+
+        return await originalImportOptionalModule(specifier)
+      })
+
+      const runtime = await portable.createHolo(root)
+
+      await expect(runtime.initialize()).rejects.toThrow(
+        '[@holo-js/core] Notifications support requires @holo-js/notifications to be installed.',
+      )
+      expect(runtime.manager.connection().isConnected()).toBe(false)
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
+  it('fails runtime initialization when mail config is present but the mail package is missing', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeMailConfig(root)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
+        if (specifier === '@holo-js/mail') {
+          return undefined
+        }
+
+        return await originalImportOptionalModule(specifier)
+      })
+
+      const runtime = await portable.createHolo(root)
+
+      await expect(runtime.initialize()).rejects.toThrow(
+        '[@holo-js/core] Mail support requires @holo-js/mail to be installed.',
+      )
+      expect(runtime.manager.connection().isConnected()).toBe(false)
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
+  it('boots mail when configured and forwards the render-view seam into the mail runtime', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeMailConfig(root)
+
+    const renderView = vi.fn(async ({ view, props }: { view: string, props?: Record<string, unknown> }) => {
+      return `<section data-view="${view}">${String(props?.title ?? '')}</section>`
+    })
+
+    const runtime = await createHolo(root, {
+      renderView,
+    })
+
+    await runtime.initialize()
+
+    const preview = await previewMail({
+      to: 'ava@example.com',
+      subject: 'Rendered',
+      render: {
+        view: 'emails/welcome',
+        props: {
+          title: 'Welcome',
+        },
+      },
+    })
+
+    expect(preview.html).toBe('<section data-view="emails/welcome">Welcome</section>')
+    expect(renderView).toHaveBeenCalledWith({
+      view: 'emails/welcome',
+      props: {
+        title: 'Welcome',
+      },
+    })
+  })
+
+  it('boots auth with mail delivery when mail is configured without notifications', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeMailConfig(root)
+    await writeAuthConfig(root)
+    await writeUserModel(root)
+
+    const runtime = await createHolo(root)
+    await runtime.initialize()
+
+    expect(runtime.auth).toBeDefined()
+    await expect(runtime.auth?.register({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: 'supersecret',
+      passwordConfirmation: 'supersecret',
+    })).resolves.toBeDefined()
+  })
+
+  it('resets the rendering runtime when initialization fails after render bindings are configured', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeMailConfig(root)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
+        if (specifier === '@holo-js/mail') {
+          return undefined
+        }
+
+        return await originalImportOptionalModule(specifier)
+      })
+
+      const runtime = await portable.createHolo(root, {
+        renderView: async () => '<p>Rendered</p>',
+      })
+      await expect(runtime.initialize()).rejects.toThrow(
+        '[@holo-js/core] Mail support requires @holo-js/mail to be installed.',
+      )
+      await expect(previewMail({
+        from: 'noreply@app.test',
+        to: 'ava@example.com',
+        subject: 'Missing renderer after reset',
+        render: {
+          view: 'emails/welcome',
+        },
+      })).rejects.toThrow('renderView runtime binding')
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
+  it('bridges notification email delivery into mail when notifications and mail are both installed', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeMailConfig(root)
+    await writeNotificationsConfig(root)
+
+    const runtime = await initializeHolo(root)
+
+    const notification = defineNotification({
+      type: 'invoice-paid',
+      via() {
+        return ['email'] as const
+      },
+      build: {
+        email() {
+          return {
+            subject: 'Invoice paid',
+            lines: [
+              'Your invoice was paid.',
+            ],
+            metadata: {
+              invoiceId: 'inv-1',
+            },
+          }
+        },
+      },
+    })
+
+    await notify({
+      email: 'ava@example.com',
+      name: 'Ava',
+    }, notification)
+
+    expect(listFakeSentMails()).toHaveLength(1)
+    expect(listFakeSentMails()[0]!.mail).toMatchObject({
+      subject: 'Invoice paid',
+      to: [
+        {
+          email: 'ava@example.com',
+          name: 'Ava',
+        },
+      ],
+      text: 'Your invoice was paid.',
+      metadata: {
+        invoiceId: 'inv-1',
+      },
+    })
+    expect(runtime.initialized).toBe(true)
+  })
+
+  it('preserves existing mail and notification runtime bindings when core reconfigures them', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeMailConfig(root)
+    await writeNotificationsConfig(root)
+
+    const customSend = vi.fn(async (input: unknown) => ({
+      messageId: 'custom-mail-send',
+      mailer: 'fake',
+      driver: 'fake',
+      queued: false,
+      provider: {
+        input,
+      },
+    }))
+    const broadcaster = {
+      send: vi.fn(async () => {}),
+    }
+    const customNotificationMailer = {
+      send: vi.fn(async () => {}),
+    }
+    const store = {
+      create: vi.fn(async () => {}),
+      list: vi.fn(async () => []),
+      unread: vi.fn(async () => []),
+      markAsRead: vi.fn(async () => 0),
+      markAsUnread: vi.fn(async () => 0),
+      delete: vi.fn(async () => 0),
+    }
+
+    configureMailRuntime({
+      send: customSend,
+    })
+    configureNotificationsRuntime({
+      broadcaster,
+      mailer: customNotificationMailer,
+      store,
+    })
+
+    const runtime = await createHolo(root)
+    await runtime.initialize()
+
+    await notify({
+      id: 'user-1',
+      type: 'users',
+      email: 'ava@example.com',
+      routeNotificationForBroadcast: () => ['private-users.user-1'],
+    }, defineNotification({
+      type: 'invoice-paid',
+      via() {
+        return ['broadcast'] as const
+      },
+      build: {
+        broadcast() {
+          return {
+            event: 'invoice.paid',
+            data: {
+              invoiceId: 'inv-1',
+            },
+          }
+        },
+      },
+    }))
+    await notify({
+      email: 'ava@example.com',
+      name: 'Ava',
+    }, defineNotification({
+      type: 'invoice-paid-email',
+      via() {
+        return ['email'] as const
+      },
+      build: {
+        email() {
+          return {
+            subject: 'Invoice paid email',
+          }
+        },
+      },
+    }))
+    await notify({
+      id: 'user-1',
+      type: 'users',
+    }, defineNotification({
+      type: 'invoice-paid-database',
+      via() {
+        return ['database'] as const
+      },
+      build: {
+        database() {
+          return {
+            data: {
+              invoiceId: 'inv-1',
+            },
+          }
+        },
+      },
+    }))
+
+    expect(broadcaster.send).toHaveBeenCalledWith({
+      event: 'invoice.paid',
+      data: {
+        invoiceId: 'inv-1',
+      },
+    }, expect.objectContaining({
+      channel: 'broadcast',
+      route: ['private-users.user-1'],
+    }))
+    expect(customNotificationMailer.send).toHaveBeenCalledWith({
+      subject: 'Invoice paid email',
+    }, expect.objectContaining({
+      channel: 'email',
+      route: {
+        email: 'ava@example.com',
+        name: 'Ava',
+      },
+    }))
+    expect(store.create).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'invoice-paid-database',
+      notifiableType: 'users',
+      notifiableId: 'user-1',
+    }))
+    expect(mailRuntimeInternals.getRuntimeBindings().send).toBe(customSend)
+    expect(getNotificationsRuntimeBindings().mailer).toBe(customNotificationMailer)
+    expect(getNotificationsRuntimeBindings().store).toBe(store)
+    expect(customSend).toHaveBeenCalledTimes(0)
+    expect(listFakeSentMails()).toHaveLength(0)
+  })
+
+  it('restores existing mail and notification runtime bindings after shutdown', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeMailConfig(root)
+    await writeNotificationsConfig(root)
+
+    const customSend = vi.fn(async () => ({
+      messageId: 'custom-mail-send',
+      mailer: 'fake',
+      driver: 'fake',
+      queued: false,
+    }))
+    const broadcaster = {
+      send: vi.fn(async () => {}),
+    }
+    const customNotificationMailer = {
+      send: vi.fn(async () => {}),
+    }
+    const store = {
+      create: vi.fn(async () => {}),
+      list: vi.fn(async () => []),
+      unread: vi.fn(async () => []),
+      markAsRead: vi.fn(async () => 0),
+      markAsUnread: vi.fn(async () => 0),
+      delete: vi.fn(async () => 0),
+    }
+
+    configureMailRuntime({
+      send: customSend,
+    })
+    configureNotificationsRuntime({
+      broadcaster,
+      mailer: customNotificationMailer,
+      store,
+    })
+
+    const runtime = await createHolo(root)
+    await runtime.initialize()
+    await runtime.shutdown()
+
+    expect(mailRuntimeInternals.getRuntimeBindings()).toMatchObject({
+      send: customSend,
+    })
+    expect(getNotificationsRuntimeBindings()).toMatchObject({
+      broadcaster,
+      mailer: customNotificationMailer,
+      store,
+    })
+  })
+
+  it('restores existing mail and notification runtime bindings after failed initialization', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeMailConfig(root)
+    await writeNotificationsConfig(root)
+    await mkdir(join(root, 'server/events/user'), { recursive: true })
+    await writeFile(join(root, 'server/events/user/bad.ts'), 'export default { nope: true }\n', 'utf8')
+    await writeRegistry(root, {
+      events: [{
+        sourcePath: 'server/events/user/bad.ts',
+        name: 'user.bad',
+        exportName: 'default',
+      }],
+    })
+
+    const customSend = vi.fn(async () => ({
+      messageId: 'custom-mail-send',
+      mailer: 'fake',
+      driver: 'fake',
+      queued: false,
+    }))
+    const broadcaster = {
+      send: vi.fn(async () => {}),
+    }
+    const customNotificationMailer = {
+      send: vi.fn(async () => {}),
+    }
+    const store = {
+      create: vi.fn(async () => {}),
+      list: vi.fn(async () => []),
+      unread: vi.fn(async () => []),
+      markAsRead: vi.fn(async () => 0),
+      markAsUnread: vi.fn(async () => 0),
+      delete: vi.fn(async () => 0),
+    }
+
+    configureMailRuntime({
+      send: customSend,
+    })
+    configureNotificationsRuntime({
+      broadcaster,
+      mailer: customNotificationMailer,
+      store,
+    })
+
+    await expect(initializeHolo(root)).rejects.toThrow(
+      'Discovered event "server/events/user/bad.ts" does not export a Holo event.',
+    )
+
+    expect(mailRuntimeInternals.getRuntimeBindings()).toMatchObject({
+      send: customSend,
+    })
+    expect(getNotificationsRuntimeBindings()).toMatchObject({
+      broadcaster,
+      mailer: customNotificationMailer,
+      store,
+    })
+  })
+
+  it('creates a DB-backed notification store for configured notifications tables', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeNotificationsConfig(root)
+
+    const runtime = await initializeHolo(root)
+
+    await createSchemaService(DB.connection()).createTable('notifications', (table) => {
+      table.string('id').primaryKey()
+      table.string('type').nullable()
+      table.string('notifiable_type')
+      table.string('notifiable_id')
+      table.json('data').default({})
+      table.timestamp('read_at').nullable()
+      table.timestamp('created_at')
+      table.timestamp('updated_at')
+      table.index(['notifiable_type', 'notifiable_id'])
+      table.index(['read_at'])
+    })
+
+    const store = holoRuntimeInternals.createCoreNotificationStore(runtime.loadedConfig)
+    await store.create({
+      id: 'notif-1',
+      type: 'invoice-paid',
+      notifiableType: 'users',
+      notifiableId: 'user-1',
+      data: { invoiceId: 'inv-1' },
+      readAt: null,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    })
+
+    await expect(store.list({ id: 'user-1', type: 'users' })).resolves.toEqual([
+      {
+        id: 'notif-1',
+        type: 'invoice-paid',
+        notifiableType: 'users',
+        notifiableId: 'user-1',
+        data: { invoiceId: 'inv-1' },
+        readAt: null,
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    ])
+    await expect(store.unread({ id: 'user-1', type: 'users' })).resolves.toHaveLength(1)
+    await expect(store.markAsRead(['notif-1'])).resolves.toBe(1)
+    await expect(store.unread({ id: 'user-1', type: 'users' })).resolves.toHaveLength(0)
+    await expect(store.markAsUnread(['notif-1'])).resolves.toBe(1)
+    await expect(store.unread({ id: 'user-1', type: 'users' })).resolves.toHaveLength(1)
+    await expect(store.delete(['notif-1'])).resolves.toBe(1)
+    await expect(store.list({ id: 'user-1', type: 'users' })).resolves.toEqual([])
+
+    await runtime.shutdown()
+  })
+
+  it('normalizes numeric notification route ids to strings for writes and reads', async () => {
+    const tableCalls: Array<{
+      method: 'insert' | 'where'
+      column?: string
+      value?: unknown
+      payload?: Record<string, unknown>
+    }> = []
+    const builder = {
+      insert(payload: Record<string, unknown>) {
+        tableCalls.push({
+          method: 'insert',
+          payload,
+        })
+        return Promise.resolve()
+      },
+      where(column: string, value: unknown) {
+        tableCalls.push({
+          method: 'where',
+          column,
+          value,
+        })
+        return this
+      },
+      orderBy() {
+        return this
+      },
+      whereNull() {
+        return this
+      },
+      async get() {
+        return []
+      },
+    }
+    const tableSpy = vi.spyOn(DB, 'table').mockReturnValue(builder as never)
+    const store = holoRuntimeInternals.createCoreNotificationStore({
+      notifications: {
+        table: 'notifications',
+      },
+      database: {
+        defaultConnection: 'main',
+      },
+    } as never)
+
+    await store.create({
+      id: 'notif-1',
+      type: 'invoice-paid',
+      notifiableType: 'users',
+      notifiableId: 42,
+      data: { invoiceId: 'inv-1' },
+      readAt: null,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    })
+    await store.list({ id: 42, type: 'users' })
+    await store.unread({ id: 42, type: 'users' })
+
+    expect(tableCalls).toContainEqual({
+      method: 'insert',
+      payload: expect.objectContaining({
+        notifiable_id: '42',
+      }),
+    })
+    expect(tableCalls).toContainEqual({
+      method: 'where',
+      column: 'notifiable_id',
+      value: '42',
+    })
+
+    tableSpy.mockRestore()
+  })
+
   it('keeps runtime.queue readable when queue support is not installed and no queue config is present', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
@@ -1976,6 +2679,384 @@ export default defineDatabaseConfig({
     await expect(createHolo(root)).rejects.toThrow(
       'Connection "main" must declare a database driver when using host, port, username, password, or ssl settings.',
     )
+  })
+})
+
+describe('@holo-js/core helper coverage', () => {
+  it('covers mail and notification integration helpers directly', async () => {
+    expect(holoRuntimeInternals.normalizeNotificationRecordFromRow({
+      id: 1,
+      type: null,
+      notifiable_type: 'User',
+      notifiable_id: 42,
+      data: { ok: true },
+      read_at: '2026-04-12T10:00:00.000Z',
+      created_at: '2026-04-12T09:00:00.000Z',
+      updated_at: '2026-04-12T11:00:00.000Z',
+    })).toMatchObject({
+      id: '1',
+      type: undefined,
+      notifiableType: 'User',
+      notifiableId: 42,
+      data: { ok: true },
+      readAt: new Date('2026-04-12T10:00:00.000Z'),
+    })
+
+    expect(holoRuntimeInternals.serializeNotificationRecordForRow({
+      id: 'note-1',
+      notifiableType: 'User',
+      notifiableId: '42',
+      data: undefined,
+      readAt: new Date('2026-04-12T10:00:00.000Z'),
+      createdAt: new Date('2026-04-12T09:00:00.000Z'),
+      updatedAt: new Date('2026-04-12T11:00:00.000Z'),
+    })).toMatchObject({
+      id: 'note-1',
+      type: null,
+      notifiable_type: 'User',
+      notifiable_id: '42',
+      data: 'null',
+      read_at: '2026-04-12T10:00:00.000Z',
+    })
+
+    const notificationStore = holoRuntimeInternals.createCoreNotificationStore({
+      notifications: {
+        table: 'notifications',
+      },
+      database: {
+        defaultConnection: 'main',
+      },
+    } as never)
+    await expect(notificationStore.markAsRead([])).resolves.toBe(0)
+    await expect(notificationStore.markAsUnread([])).resolves.toBe(0)
+    await expect(notificationStore.delete([])).resolves.toBe(0)
+    const updateBuilder = {
+      whereIn() {
+        return this
+      },
+      async update() {
+        return {}
+      },
+      async delete() {
+        return {}
+      },
+    }
+    const tableSpy = vi.spyOn(DB, 'table').mockReturnValue(updateBuilder as never)
+    await expect(notificationStore.markAsRead(['note-1'])).resolves.toBe(0)
+    await expect(notificationStore.markAsUnread(['note-1'])).resolves.toBe(0)
+    await expect(notificationStore.delete(['note-1'])).resolves.toBe(0)
+    tableSpy.mockRestore()
+
+    expect(holoRuntimeInternals.createNotificationMailText({})).toBeUndefined()
+    expect(holoRuntimeInternals.createNotificationMailText({
+      greeting: ' Hello Ava, ',
+      lines: [' First line ', ' ', 'Second line'],
+      action: {
+        label: 'Open',
+        url: 'https://example.com',
+      },
+    })).toBe([
+      'Hello Ava,',
+      'First line',
+      'Second line',
+      'Open: https://example.com',
+    ].join('\n\n'))
+
+    const bridgedMailSends: unknown[] = []
+    const notificationMailer = holoRuntimeInternals.createCoreNotificationMailSender({
+      async sendMail(message) {
+        bridgedMailSends.push(message)
+      },
+    } as never)
+
+    await expect(notificationMailer.send({
+      subject: 'Missing route',
+    }, {} as never)).rejects.toThrow('resolved email route')
+
+    await notificationMailer.send({
+      subject: 'HTML message',
+      html: '<p>Hello</p>',
+      metadata: {
+        kind: 'html',
+      },
+    }, {
+      route: 'ava@example.com',
+    } as never)
+
+    await notificationMailer.send({
+      subject: 'Fallback message',
+      lines: [' One line '],
+    }, {
+      route: {
+        email: 'ava@example.com',
+        name: 'Ava',
+      },
+    } as never)
+
+    expect(bridgedMailSends[0]).toMatchObject({
+      to: 'ava@example.com',
+      subject: 'HTML message',
+      html: '<p>Hello</p>',
+      metadata: {
+        kind: 'html',
+      },
+    })
+    expect(bridgedMailSends[1]).toMatchObject({
+      to: {
+        email: 'ava@example.com',
+        name: 'Ava',
+      },
+      subject: 'Fallback message',
+      text: 'One line',
+    })
+
+    const authMailSends: unknown[] = []
+    const authMailHook = holoRuntimeInternals.createAuthMailDeliveryHook({
+      async sendMail(message) {
+        authMailSends.push(message)
+      },
+    } as never)
+    const verificationToken = {
+      id: 'verify-token',
+      plainTextToken: 'verify-plain',
+      expiresAt: new Date('2026-04-12T12:00:00.000Z'),
+    }
+
+    await authMailHook.sendEmailVerification({
+      provider: 'users',
+      user: { name: ' Ava ' },
+      email: 'ava@example.com',
+      token: verificationToken,
+    })
+    await authMailHook.sendEmailVerification({
+      provider: 'users',
+      user: {},
+      email: 'no-name@example.com',
+      token: verificationToken,
+    })
+    await authMailHook.sendPasswordReset({
+      provider: 'users',
+      email: 'reset@example.com',
+      token: {
+        id: 'reset-token',
+        plainTextToken: 'reset-plain',
+        expiresAt: new Date('2026-04-12T13:00:00.000Z'),
+      },
+    })
+
+    expect(authMailSends[0]).toMatchObject({
+      to: {
+        email: 'ava@example.com',
+        name: 'Ava',
+      },
+      subject: 'Verify your email address',
+    })
+    expect((authMailSends[0] as { text: string }).text).toContain('Hello Ava,')
+    expect(authMailSends[1]).toMatchObject({
+      to: {
+        email: 'no-name@example.com',
+      },
+      subject: 'Verify your email address',
+    })
+    expect((authMailSends[1] as { text: string }).text).not.toContain('Hello')
+    expect(authMailSends[2]).toMatchObject({
+      to: 'reset@example.com',
+      subject: 'Reset your password',
+    })
+
+    const notificationDeliveries: unknown[] = []
+    let emailVerificationRoute: unknown
+    let passwordResetRoute: unknown
+    const authNotificationsHook = holoRuntimeInternals.createAuthNotificationsDeliveryHook({
+      defineNotification(definition) {
+        return definition
+      },
+      notifyUsing() {
+        return {
+          channel(_channel, route) {
+            if (typeof emailVerificationRoute === 'undefined') {
+              emailVerificationRoute = route
+            } else {
+              passwordResetRoute = route
+            }
+            return this
+          },
+          async notify(notification) {
+            notificationDeliveries.push({
+              route: typeof passwordResetRoute === 'undefined'
+                ? emailVerificationRoute
+                : passwordResetRoute,
+              message: notification.build.email({
+                name: ' Ava ',
+              }),
+            })
+          },
+        }
+      },
+    } as never)
+
+    await authNotificationsHook.sendEmailVerification({
+      provider: 'users',
+      user: { name: ' Ava ' },
+      email: 'ava@example.com',
+      token: verificationToken,
+    })
+    await authNotificationsHook.sendEmailVerification({
+      provider: 'users',
+      user: {},
+      email: 'no-name@example.com',
+      token: verificationToken,
+    })
+    await authNotificationsHook.sendPasswordReset({
+      provider: 'users',
+      email: 'reset@example.com',
+      token: {
+        id: 'reset-token',
+        plainTextToken: 'reset-plain',
+        expiresAt: new Date('2026-04-12T13:00:00.000Z'),
+      },
+    })
+
+    expect(notificationDeliveries[0]).toMatchObject({
+      route: {
+        email: 'ava@example.com',
+        name: 'Ava',
+      },
+      message: {
+        greeting: 'Hello Ava,',
+      },
+    })
+    expect(notificationDeliveries[1]).toMatchObject({
+      route: 'no-name@example.com',
+      message: {
+        subject: 'Verify your email address',
+      },
+    })
+    expect((notificationDeliveries[1] as { message: { greeting?: string } }).message.greeting).toBeUndefined()
+    expect(notificationDeliveries[2]).toMatchObject({
+      route: 'reset@example.com',
+      message: {
+        subject: 'Reset your password',
+      },
+    })
+  })
+
+  it('boots mail with the shared render runtime when no explicit render option is passed', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeMailConfig(root)
+
+    configureHoloRenderingRuntime({
+      renderView: async ({ view }) => `<div data-view="${view}">shared</div>`,
+    })
+
+    const runtime = await createHolo(root)
+    await runtime.initialize()
+
+    const preview = await previewMail({
+      to: 'ava@example.com',
+      subject: 'Shared render runtime',
+      render: {
+        view: 'emails/shared',
+      },
+    })
+
+    expect(preview.html).toBe('<div data-view="emails/shared">shared</div>')
+  })
+
+  it('restores the previous shared render runtime after shutting down an override runtime', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeMailConfig(root)
+
+    configureHoloRenderingRuntime({
+      renderView: async ({ view }) => `<div data-view="${view}">shared</div>`,
+    })
+
+    const overriddenRuntime = await createHolo(root, {
+      renderView: async ({ view }) => `<div data-view="${view}">override</div>`,
+    })
+    await overriddenRuntime.initialize()
+
+    await expect(previewMail({
+      to: 'ava@example.com',
+      subject: 'Override render runtime',
+      render: {
+        view: 'emails/shared',
+      },
+    })).resolves.toMatchObject({
+      html: '<div data-view="emails/shared">override</div>',
+    })
+
+    await overriddenRuntime.shutdown()
+
+    const restoredRuntime = await createHolo(root)
+    await restoredRuntime.initialize()
+
+    await expect(previewMail({
+      to: 'ava@example.com',
+      subject: 'Shared render runtime restored',
+      render: {
+        view: 'emails/shared',
+      },
+    })).resolves.toMatchObject({
+      html: '<div data-view="emails/shared">shared</div>',
+    })
+  })
+
+  it('clears the shared render runtime when resetting an initialized runtime', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeMailConfig(root)
+
+    configureHoloRenderingRuntime({
+      renderView: async ({ view }) => `<div data-view="${view}">shared</div>`,
+    })
+
+    const runtime = await createHolo(root)
+    await runtime.initialize()
+    await resetHoloRuntime()
+
+    const freshRuntime = await createHolo(root)
+    await freshRuntime.initialize()
+
+    await expect(previewMail({
+      to: 'ava@example.com',
+      subject: 'Shared render runtime cleared',
+      render: {
+        view: 'emails/shared',
+      },
+    })).rejects.toThrow('renderView runtime binding')
+  })
+
+  it('boots auth with mail delivery when notifications cannot be loaded', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeMailConfig(root)
+    await writeAuthConfig(root)
+    await writeUserModel(root)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
+        if (specifier === '@holo-js/notifications') {
+          return undefined
+        }
+
+        return await originalImportOptionalModule(specifier, options)
+      })
+
+      const runtime = await portable.createHolo(root)
+      await runtime.initialize()
+
+      expect(runtime.auth).toBeDefined()
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
   })
 })
 

@@ -5,6 +5,11 @@
       "source": "mikecann/agent-skills",
       "sourceType": "github",
       "computedHash": "a238a8b75519a21b5d99223b927461a32fc311dcca145ff4f56c6cd55d97e860"
+    },
+    "grill-me": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "computedHash": "784f0dbb7403b0f00324bce9a112f715342777a0daee7bbb7385f9c6f0a170ea"
     }
   }
 }

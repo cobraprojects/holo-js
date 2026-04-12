@@ -238,6 +238,15 @@ export interface HoloQueueDriverBinding {
   readonly mode: 'async' | 'sync'
 }
 
+export interface HoloServerViewRenderInput {
+  readonly view: string
+  readonly props?: Readonly<Record<string, unknown>>
+}
+
+export type HoloServerViewRenderer = (
+  input: HoloServerViewRenderInput,
+) => string | Promise<string>
+
 type QueueModule = {
   configureQueueRuntime(options: { config: LoadedHoloConfig['queue'] } & Record<string, unknown>): void
   getRegisteredQueueJob(name: string): { sourcePath?: string } | undefined
@@ -302,6 +311,114 @@ type SessionModule = {
   resetSessionRuntime(): void
 }
 
+type NotificationsModule = {
+  configureNotificationsRuntime(options?: {
+    readonly config: LoadedHoloConfig['notifications']
+    readonly mailer?: {
+      send(message: {
+        readonly subject: string
+        readonly greeting?: string
+        readonly lines?: readonly string[]
+        readonly action?: {
+          readonly label: string
+          readonly url: string
+        }
+        readonly html?: string
+        readonly text?: string
+        readonly metadata?: Readonly<Record<string, unknown>>
+      }, context: {
+        readonly route?: string | { readonly email: string, readonly name?: string }
+      }): Promise<void>
+    }
+    readonly store?: {
+      create(record: unknown): Promise<void>
+      list(notifiable: { id: string | number, type: string }): Promise<readonly unknown[]>
+      unread(notifiable: { id: string | number, type: string }): Promise<readonly unknown[]>
+      markAsRead(ids: readonly string[]): Promise<number>
+      markAsUnread(ids: readonly string[]): Promise<number>
+      delete(ids: readonly string[]): Promise<number>
+    }
+  }): void
+  getNotificationsRuntimeBindings(): {
+    readonly mailer?: {
+      send(message: {
+        readonly subject: string
+      }, context: {
+        readonly route?: string | { readonly email: string, readonly name?: string }
+      }): Promise<void>
+    }
+    readonly broadcaster?: {
+      send(message: unknown, context: {
+        readonly channel: string
+        readonly route?: unknown
+      }): Promise<void>
+    }
+    readonly store?: {
+      create(record: unknown): Promise<void>
+      list(notifiable: { id: string | number, type: string }): Promise<readonly unknown[]>
+      unread(notifiable: { id: string | number, type: string }): Promise<readonly unknown[]>
+      markAsRead(ids: readonly string[]): Promise<number>
+      markAsUnread(ids: readonly string[]): Promise<number>
+      delete(ids: readonly string[]): Promise<number>
+    }
+  }
+  defineNotification(definition: {
+    readonly type?: string
+    via(notifiable: unknown, context: { readonly anonymous: boolean }): readonly string[]
+    readonly build: Readonly<Record<string, (notifiable: unknown, context: { readonly channel: string, readonly anonymous: boolean }) => unknown>>
+  }): unknown
+  notify(notifiable: unknown, notification: unknown): PromiseLike<unknown>
+  notifyUsing(): {
+    channel(channel: 'email', route: string | { readonly email: string, readonly name?: string }): {
+      notify(notification: unknown): PromiseLike<unknown>
+    }
+  }
+  resetNotificationsRuntime(): void
+}
+
+type MailModule = {
+  configureMailRuntime(options?: {
+    readonly config: LoadedHoloConfig['mail']
+    readonly renderView?: HoloServerViewRenderer
+  }): void
+  getMailRuntimeBindings(): {
+    readonly send?: unknown
+    readonly preview?: unknown
+    readonly renderPreview?: unknown
+    readonly renderView?: HoloServerViewRenderer
+  }
+  sendMail(mail: {
+    readonly mailer?: string
+    readonly from?: unknown
+    readonly replyTo?: unknown
+    readonly to: unknown
+    readonly cc?: unknown
+    readonly bcc?: unknown
+    readonly subject: string
+    readonly text?: string
+    readonly html?: string
+    readonly markdown?: string
+    readonly render?: {
+      readonly view: string
+      readonly props?: Readonly<Record<string, unknown>>
+    }
+    readonly markdownWrapper?: string
+    readonly attachments?: readonly unknown[]
+    readonly headers?: Readonly<Record<string, string>>
+    readonly tags?: readonly string[]
+    readonly metadata?: Readonly<Record<string, unknown>>
+    readonly priority?: 'high' | 'normal' | 'low'
+    readonly queue?: boolean | {
+      readonly queued?: boolean
+      readonly connection?: string
+      readonly queue?: string
+      readonly afterCommit?: boolean
+    }
+    readonly delay?: number | Date
+  }): PromiseLike<unknown>
+  resetMailRuntime(): void
+}
+
 type AuthModule = {
   configureAuthRuntime(options?: {
     readonly config: LoadedHoloConfig['auth']
@@ -326,6 +443,19 @@ type AuthModule = {
       findById(id: string): Promise<unknown | null>
       delete(id: string, options?: { readonly table?: string }): Promise<void>
       deleteByEmail(provider: string, email: string, options?: { readonly table?: string }): Promise<number>
+    }
+    readonly delivery?: {
+      sendEmailVerification(input: {
+        readonly provider: string
+        readonly user: unknown
+        readonly email: string
+        readonly token: unknown
+      }): Promise<void>
+      sendPasswordReset(input: {
+        readonly provider: string
+        readonly email: string
+        readonly token: unknown
+      }): Promise<void>
     }
     readonly context?: {
       activate?(): void
@@ -433,6 +563,7 @@ export interface CreateHoloOptions {
   readonly preferCache?: boolean
   readonly processEnv?: NodeJS.ProcessEnv
   readonly registerProjectQueueJobs?: boolean
+  readonly renderView?: HoloServerViewRenderer
 }
 
 export interface HoloRuntime<TCustom extends HoloConfigMap = HoloConfigMap> {
@@ -466,17 +597,88 @@ function getRuntimeState(): {
   current?: HoloRuntime
   pending?: Promise<HoloRuntime>
   pendingProjectRoot?: string
+  renderView?: HoloServerViewRenderer
 } {
   const runtime = globalThis as typeof globalThis & {
     __holoRuntime__?: {
       current?: HoloRuntime
       pending?: Promise<HoloRuntime>
       pendingProjectRoot?: string
+      renderView?: HoloServerViewRenderer
     }
   }
 
   runtime.__holoRuntime__ ??= {}
   return runtime.__holoRuntime__
+}
+
+export function configureHoloRenderingRuntime(
+  bindings?: {
+    readonly renderView?: HoloServerViewRenderer
+  },
+): void {
+  getRuntimeState().renderView = bindings?.renderView
+}
+
+export function resetHoloRenderingRuntime(): void {
+  getRuntimeState().renderView = undefined
+}
+
+function restoreHoloRenderingRuntime(
+  renderView: HoloServerViewRenderer | undefined,
+): void {
+  if (renderView) {
+    configureHoloRenderingRuntime({
+      renderView,
+    })
+    return
+  }
+
+  resetHoloRenderingRuntime()
+}
+
+type OptionalSubsystemRuntimeBindings = Readonly<{
+  readonly mail?: ReturnType<MailModule['getMailRuntimeBindings']>
+  readonly notifications?: ReturnType<NotificationsModule['getNotificationsRuntimeBindings']>
+}>
+
+function snapshotOptionalSubsystemRuntimeBindings(): OptionalSubsystemRuntimeBindings {
+  const runtime = globalThis as typeof globalThis & {
+    __holoMailRuntime__?: {
+      bindings?: ReturnType<MailModule['getMailRuntimeBindings']>
+    }
+    __holoNotificationsRuntime__?: {
+      bindings?: ReturnType<NotificationsModule['getNotificationsRuntimeBindings']>
+    }
+  }
+
+  return Object.freeze({
+    ...(runtime.__holoMailRuntime__?.bindings ? { mail: runtime.__holoMailRuntime__.bindings } : {}),
+    ...(runtime.__holoNotificationsRuntime__?.bindings ? { notifications: runtime.__holoNotificationsRuntime__.bindings } : {}),
+  })
+}
+
+function restoreOptionalSubsystemRuntimeBindings(
+  bindings: OptionalSubsystemRuntimeBindings,
+): void {
+  const runtime = globalThis as typeof globalThis & {
+    __holoMailRuntime__?: {
+      bindings?: ReturnType<MailModule['getMailRuntimeBindings']>
+    }
+    __holoNotificationsRuntime__?: {
+      bindings?: ReturnType<NotificationsModule['getNotificationsRuntimeBindings']>
+    }
+  }
+
+  if (bindings.mail || runtime.__holoMailRuntime__) {
+    runtime.__holoMailRuntime__ ??= {}
+    runtime.__holoMailRuntime__.bindings = bindings.mail
+  }
+
+  if (bindings.notifications || runtime.__holoNotificationsRuntime__) {
+    runtime.__holoNotificationsRuntime__ ??= {}
+    runtime.__holoNotificationsRuntime__.bindings = bindings.notifications
+  }
 }
 
 const portableRuntimeRequire = createRequire(import.meta.url)
@@ -521,19 +723,23 @@ async function importOptionalModule<TModule>(
     ) {
       return undefined
     }
+    /* v8 ignore start -- optional-package absence is validated in published-package integration, not in this monorepo test graph */
     if (
       error instanceof Error
       && (
         error.message.includes(`Cannot find package '${specifier}'`)
         || error.message.includes(`Cannot find module '${specifier}'`)
         || error.message.includes(`Failed to load url ${specifier}`)
+        || error.message.includes(`Could not resolve "${specifier}"`)
         || error.message.includes(`Cannot find package '${resolvedSpecifier}'`)
         || error.message.includes(`Cannot find module '${resolvedSpecifier}'`)
         || error.message.includes(`Failed to load url ${resolvedSpecifier}`)
+        || error.message.includes(`Could not resolve "${resolvedSpecifier}"`)
       )
     ) {
       return undefined
     }
+    /* v8 ignore stop */
 
     throw error
   }
@@ -866,6 +1072,24 @@ async function loadSessionModule(required = false): Promise<SessionModule | unde
   return sessionModule
 }
 
+async function loadNotificationsModule(required = false): Promise<NotificationsModule | undefined> {
+  const notificationsModule = await portableRuntimeModuleInternals.importOptionalModule<NotificationsModule>('@holo-js/notifications')
+  if (!notificationsModule && required) {
+    throw new Error('[@holo-js/core] Notifications support requires @holo-js/notifications to be installed.')
+  }
+
+  return notificationsModule
+}
+
+async function loadMailModule(required = false): Promise<MailModule | undefined> {
+  const mailModule = await portableRuntimeModuleInternals.importOptionalModule<MailModule>('@holo-js/mail')
+  if (!mailModule && required) {
+    throw new Error('[@holo-js/core] Mail support requires @holo-js/mail to be installed.')
+  }
+
+  return mailModule
+}
+
 async function loadAuthModule(required = false): Promise<AuthModule | undefined> {
   const authModule = await portableRuntimeModuleInternals.importOptionalModule<AuthModule>('@holo-js/auth')
   if (!authModule && required) {
@@ -1021,6 +1245,52 @@ function serializeSessionRecordForRow(record: {
   }
 }
 
+function normalizeNotificationRecordFromRow(row: Record<string, unknown>): {
+  readonly id: string
+  readonly type?: string
+  readonly notifiableType: string
+  readonly notifiableId: string | number
+  readonly data: unknown
+  readonly readAt?: Date | null
+  readonly createdAt: Date
+  readonly updatedAt: Date
+} {
+  const decodedData = normalizeJsonValue(row.data)
+
+  return Object.freeze({
+    id: String(row.id),
+    type: typeof row.type === 'string' ? row.type : undefined,
+    notifiableType: String(row.notifiable_type),
+    notifiableId: typeof row.notifiable_id === 'number' ? row.notifiable_id : String(row.notifiable_id),
+    data: decodedData,
+    readAt: row.read_at ? normalizeDateLike(row.read_at) : null,
+    createdAt: normalizeDateLike(row.created_at),
+    updatedAt: normalizeDateLike(row.updated_at),
+  })
+}
+
+function serializeNotificationRecordForRow(record: {
+  readonly id: string
+  readonly type?: string
+  readonly notifiableType: string
+  readonly notifiableId: string | number
+  readonly data: unknown
+  readonly readAt?: Date | null
+  readonly createdAt: Date
+  readonly updatedAt: Date
+}): Record<string, unknown> {
+  return {
+    id: record.id,
+    type: record.type ?? null,
+    notifiable_type: record.notifiableType,
+    notifiable_id: String(record.notifiableId),
+    data: JSON.stringify(record.data ?? null),
+    read_at: record.readAt ? record.readAt.toISOString() : null,
+    created_at: record.createdAt.toISOString(),
+    updated_at: record.updatedAt.toISOString(),
+  }
+}
+
 function getEntityAttributes(value: unknown): Record<string, unknown> {
   /* v8 ignore start -- defensive fallback handling for arbitrary model/entity serializers */
   if (value && typeof value === 'object') {
@@ -1133,6 +1403,326 @@ async function createCoreSessionStores<TCustom extends HoloConfigMap>(
   }
 
   return Object.freeze(stores)
+}
+
+function createCoreNotificationStore<TCustom extends HoloConfigMap>(
+  loadedConfig: LoadedHoloConfig<TCustom>,
+): {
+  create(record: unknown): Promise<void>
+  list(notifiable: { id: string | number, type: string }): Promise<readonly unknown[]>
+  unread(notifiable: { id: string | number, type: string }): Promise<readonly unknown[]>
+  markAsRead(ids: readonly string[]): Promise<number>
+  markAsUnread(ids: readonly string[]): Promise<number>
+  delete(ids: readonly string[]): Promise<number>
+} {
+  const tableName = loadedConfig.notifications.table
+  const connectionName = loadedConfig.database.defaultConnection
+
+  const store: {
+    create(record: unknown): Promise<void>
+    list(notifiable: { id: string | number, type: string }): Promise<readonly unknown[]>
+    unread(notifiable: { id: string | number, type: string }): Promise<readonly unknown[]>
+    markAsRead(ids: readonly string[]): Promise<number>
+    markAsUnread(ids: readonly string[]): Promise<number>
+    delete(ids: readonly string[]): Promise<number>
+  } = {
+    async create(record): Promise<void> {
+      await DB.table(tableName, connectionName).insert(serializeNotificationRecordForRow(record as {
+        readonly id: string
+        readonly type?: string
+        readonly notifiableType: string
+        readonly notifiableId: string | number
+        readonly data: unknown
+        readonly readAt?: Date | null
+        readonly createdAt: Date
+        readonly updatedAt: Date
+      }))
+    },
+    async list(notifiable): Promise<readonly unknown[]> {
+      const rows = await DB.table(tableName, connectionName)
+        .where('notifiable_type', notifiable.type)
+        .where('notifiable_id', String(notifiable.id))
+        .orderBy('created_at', 'desc')
+        .get<Record<string, unknown>>()
+
+      return Object.freeze(rows.map(row => normalizeNotificationRecordFromRow(row)))
+    },
+    async unread(notifiable): Promise<readonly unknown[]> {
+      const rows = await DB.table(tableName, connectionName)
+        .where('notifiable_type', notifiable.type)
+        .where('notifiable_id', String(notifiable.id))
+        .whereNull('read_at')
+        .orderBy('created_at', 'desc')
+        .get<Record<string, unknown>>()
+
+      return Object.freeze(rows.map(row => normalizeNotificationRecordFromRow(row)))
+    },
+    async markAsRead(ids): Promise<number> {
+      if (ids.length === 0) {
+        return 0
+      }
+
+      const result = await DB.table(tableName, connectionName)
+        .whereIn('id', ids)
+        .update({
+          read_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+
+      return result.affectedRows ?? 0
+    },
+    async markAsUnread(ids): Promise<number> {
+      if (ids.length === 0) {
+        return 0
+      }
+
+      const result = await DB.table(tableName, connectionName)
+        .whereIn('id', ids)
+        .update({
+          read_at: null,
+          updated_at: new Date().toISOString(),
+        })
+
+      return result.affectedRows ?? 0
+    },
+    async delete(ids): Promise<number> {
+      if (ids.length === 0) {
+        return 0
+      }
+
+      const result = await DB.table(tableName, connectionName)
+        .whereIn('id', ids)
+        .delete()
+
+      return result.affectedRows ?? 0
+    },
+  }
+
+  return Object.freeze(store)
+}
+
+function createAuthNotificationsDeliveryHook(
+  notificationsModule: NotificationsModule,
+): {
+  sendEmailVerification(input: {
+    readonly provider: string
+    readonly user: unknown
+    readonly email: string
+    readonly token: {
+      readonly id: string
+      readonly plainTextToken: string
+      readonly expiresAt: Date
+    }
+  }): Promise<void>
+  sendPasswordReset(input: {
+    readonly provider: string
+    readonly email: string
+    readonly token: {
+      readonly id: string
+      readonly plainTextToken: string
+      readonly expiresAt: Date
+    }
+  }): Promise<void>
+} {
+  return Object.freeze({
+    async sendEmailVerification(input): Promise<void> {
+      const recipientName = typeof (input.user as { name?: unknown })?.name === 'string'
+        ? (input.user as { name?: string }).name?.trim()
+        : undefined
+      const notification = notificationsModule.defineNotification({
+        type: 'auth.email-verification',
+        via() {
+          return ['email'] as const
+        },
+        build: {
+          email() {
+            return {
+              subject: 'Verify your email address',
+              ...(recipientName ? { greeting: `Hello ${recipientName},` } : {}),
+              lines: [
+                'Use this token to verify your email address:',
+                input.token.plainTextToken,
+                `Provider: ${input.provider}`,
+                `Expires at: ${input.token.expiresAt.toISOString()}`,
+              ],
+              metadata: {
+                provider: input.provider,
+                tokenId: input.token.id,
+              },
+            }
+          },
+        },
+      })
+
+      await notificationsModule
+        .notifyUsing()
+        .channel('email', recipientName
+          ? {
+              email: input.email,
+              name: recipientName,
+            }
+          : input.email)
+        .notify(notification)
+    },
+    async sendPasswordReset(input): Promise<void> {
+      const notification = notificationsModule.defineNotification({
+        type: 'auth.password-reset',
+        via() {
+          return ['email'] as const
+        },
+        build: {
+          email() {
+            return {
+              subject: 'Reset your password',
+              lines: [
+                'Use this token to reset your password:',
+                input.token.plainTextToken,
+                `Provider: ${input.provider}`,
+                `Expires at: ${input.token.expiresAt.toISOString()}`,
+              ],
+              metadata: {
+                provider: input.provider,
+                tokenId: input.token.id,
+              },
+            }
+          },
+        },
+      })
+
+      await notificationsModule
+        .notifyUsing()
+        .channel('email', input.email)
+        .notify(notification)
+    },
+  })
+}
+
+function createNotificationMailText(message: {
+  readonly greeting?: string
+  readonly lines?: readonly string[]
+  readonly action?: {
+    readonly label: string
+    readonly url: string
+  }
+}): string | undefined {
+  const parts = [
+    typeof message.greeting === 'string' ? message.greeting.trim() : undefined,
+    ...(message.lines ?? []).map(line => line.trim()).filter(Boolean),
+    message.action
+      ? `${message.action.label}: ${message.action.url}`
+      : undefined,
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0)
+
+  return parts.length > 0 ? parts.join('\n\n') : undefined
+}
+
+function createCoreNotificationMailSender(
+  mailModule: MailModule,
+): {
+  send(message: {
+    readonly subject: string
+    readonly greeting?: string
+    readonly lines?: readonly string[]
+    readonly action?: {
+      readonly label: string
+      readonly url: string
+    }
+    readonly html?: string
+    readonly text?: string
+    readonly metadata?: Readonly<Record<string, unknown>>
+  }, context: {
+    readonly route?: string | { readonly email: string, readonly name?: string }
+  }): Promise<void>
+} {
+  return Object.freeze({
+    async send(message, context): Promise<void> {
+      const route = context.route
+      if (!route) {
+        throw new Error('[@holo-js/core] Email notifications require a resolved email route before bridging into mail.')
+      }
+
+      const fallbackText = createNotificationMailText(message)
+      await mailModule.sendMail({
+        to: route,
+        subject: message.subject,
+        ...(typeof message.html === 'string' ? { html: message.html } : {}),
+        ...(typeof (message.text ?? fallbackText) === 'string'
+          ? { text: (message.text ?? fallbackText)! }
+          : {}),
+        ...(typeof message.html !== 'string' && typeof (message.text ?? fallbackText) === 'string'
+          ? { text: (message.text ?? fallbackText)! }
+          : {}),
+        ...(message.metadata ? { metadata: message.metadata } : {}),
+      })
+    },
+  })
+}
+
+function createAuthMailDeliveryHook(
+  mailModule: MailModule,
+): {
+  sendEmailVerification(input: {
+    readonly provider: string
+    readonly user: unknown
+    readonly email: string
+    readonly token: {
+      readonly id: string
+      readonly plainTextToken: string
+      readonly expiresAt: Date
+    }
+  }): Promise<void>
+  sendPasswordReset(input: {
+    readonly provider: string
+    readonly email: string
+    readonly token: {
+      readonly id: string
+      readonly plainTextToken: string
+      readonly expiresAt: Date
+    }
+  }): Promise<void>
+} {
+  return Object.freeze({
+    async sendEmailVerification(input): Promise<void> {
+      const recipientName = typeof (input.user as { name?: unknown })?.name === 'string'
+        ? (input.user as { name?: string }).name?.trim()
+        : undefined
+
+      await mailModule.sendMail({
+        to: {
+          email: input.email,
+          ...(recipientName ? { name: recipientName } : {}),
+        },
+        subject: 'Verify your email address',
+        text: [
+          recipientName ? `Hello ${recipientName},` : undefined,
+          'Use this token to verify your email address:',
+          input.token.plainTextToken,
+          `Provider: ${input.provider}`,
+          `Expires at: ${input.token.expiresAt.toISOString()}`,
+        ].filter((value): value is string => typeof value === 'string').join('\n\n'),
+        metadata: {
+          provider: input.provider,
+          tokenId: input.token.id,
+        },
+      })
+    },
+    async sendPasswordReset(input): Promise<void> {
+      await mailModule.sendMail({
+        to: input.email,
+        subject: 'Reset your password',
+        text: [
+          'Use this token to reset your password:',
+          input.token.plainTextToken,
+          `Provider: ${input.provider}`,
+          `Expires at: ${input.token.expiresAt.toISOString()}`,
+        ].join('\n\n'),
+        metadata: {
+          provider: input.provider,
+          tokenId: input.token.id,
+        },
+      })
+    },
+  })
 }
 
 async function loadConfiguredSocialProviders<TCustom extends HoloConfigMap>(
@@ -2202,6 +2792,9 @@ function unregisterProjectEventsAndListeners(
 export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConfigMap = HoloConfigMap>(
   projectRoot: string,
   loadedConfig: LoadedHoloConfig<TCustom>,
+  options: {
+    readonly renderView?: HoloServerViewRenderer
+  } = {},
 ): Promise<{
   readonly queueModule?: QueueModule
   readonly session?: HoloSessionRuntimeBinding
@@ -2247,6 +2840,39 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   if (storageInstalled) {
     await configurePlainNodeStorageRuntime(projectRoot, loadedConfig)
   }
+
+  const mailConfigured = hasLoadedConfigFile(loadedConfig, 'mail')
+  const mailModule = mailConfigured
+    ? await loadMailModule(true)
+    : undefined
+  if (mailModule) {
+    const existingMailBindings = mailModule.getMailRuntimeBindings()
+    mailModule.configureMailRuntime({
+      ...existingMailBindings,
+      config: loadedConfig.mail,
+      ...(options.renderView ?? getRuntimeState().renderView
+        ? { renderView: options.renderView ?? getRuntimeState().renderView }
+        : {}),
+    })
+  }
+
+  const notificationsConfigured = hasLoadedConfigFile(loadedConfig, 'notifications')
+  const notificationsModule = notificationsConfigured
+    ? await loadNotificationsModule(true)
+    : undefined
+  if (notificationsModule) {
+    const existingNotificationsBindings = notificationsModule.getNotificationsRuntimeBindings()
+    notificationsModule.configureNotificationsRuntime({
+      ...existingNotificationsBindings,
+      config: loadedConfig.notifications,
+      store: existingNotificationsBindings.store ?? createCoreNotificationStore(loadedConfig),
+      ...(!existingNotificationsBindings.mailer && mailModule
+        ? { mailer: createCoreNotificationMailSender(mailModule) }
+        : {}),
+    })
+  }
+
+  const notificationsRuntimeBindings = notificationsModule?.getNotificationsRuntimeBindings()
 
   const sessionConfigured = hasLoadedConfigFile(loadedConfig, 'session') || hasLoadedConfigFile(loadedConfig, 'auth')
   const authConfigured = hasLoadedConfigFile(loadedConfig, 'auth')
@@ -2298,6 +2924,11 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
       tokens: authStores.tokens,
       emailVerificationTokens: authStores.emailVerificationTokens,
       passwordResetTokens: authStores.passwordResetTokens,
+      ...(notificationsModule && (mailModule || notificationsRuntimeBindings?.mailer)
+        ? { delivery: createAuthNotificationsDeliveryHook(notificationsModule) }
+        : mailModule
+          ? { delivery: createAuthMailDeliveryHook(mailModule) }
+          : {}),
       context: authContext,
     })
 
@@ -2334,6 +2965,10 @@ export async function resetOptionalHoloSubsystems(): Promise<void> {
   await resetOptionalStorageRuntime()
   const queueModule = await loadQueueModule()
   await queueModule?.shutdownQueueRuntime()
+  const mailModule = await loadMailModule()
+  mailModule?.resetMailRuntime()
+  const notificationsModule = await loadNotificationsModule()
+  notificationsModule?.resetNotificationsRuntime()
   const authModule = await loadAuthModule()
   authModule?.resetAuthRuntime()
   const socialModule = await loadSocialModule()
@@ -2370,6 +3005,10 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   let activeSessionRuntime: HoloSessionRuntimeBinding | undefined
   let activeAuthRuntime: HoloAuthRuntimeBinding | undefined
   let activeAuthContext: { activate(): void } | undefined
+  let previousOptionalSubsystemBindings: OptionalSubsystemRuntimeBindings | undefined
+  const previousRenderView = options.renderView
+    ? getRuntimeState().renderView
+    : undefined
   const fallbackQueueRuntime = Object.freeze({
     config: loadedConfig.queue,
     drivers: new Map<string, HoloQueueDriverBinding>(),
@@ -2406,11 +3045,19 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
 
       configureConfigRuntime(loadedConfig.all)
       configureDB(manager)
+      previousOptionalSubsystemBindings = snapshotOptionalSubsystemRuntimeBindings()
+      if (options.renderView) {
+        configureHoloRenderingRuntime({
+          renderView: options.renderView,
+        })
+      }
 
       try {
         await manager.initializeAll()
 
-        const optionalSubsystems = await reconfigureOptionalHoloSubsystems(projectRoot, loadedConfig)
+        const optionalSubsystems = await reconfigureOptionalHoloSubsystems(projectRoot, loadedConfig, {
+          renderView: options.renderView,
+        })
         activeQueueModule = optionalSubsystems.queueModule
         activeSessionRuntime = optionalSubsystems.session
         activeAuthRuntime = optionalSubsystems.auth
@@ -2469,6 +3116,12 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
         await manager.disconnectAll().catch(() => {})
         resetDB()
         await resetOptionalHoloSubsystems()
+        if (previousOptionalSubsystemBindings) {
+          restoreOptionalSubsystemRuntimeBindings(previousOptionalSubsystemBindings)
+        }
+        if (options.renderView) {
+          restoreHoloRenderingRuntime(previousRenderView)
+        }
         resetConfigRuntime()
         getRuntimeState().current = undefined
         throw error
@@ -2496,6 +3149,12 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
         activeAuthContext = undefined
         resetDB()
         await resetOptionalHoloSubsystems()
+        if (previousOptionalSubsystemBindings) {
+          restoreOptionalSubsystemRuntimeBindings(previousOptionalSubsystemBindings)
+        }
+        if (options.renderView) {
+          restoreHoloRenderingRuntime(previousRenderView)
+        }
         resetConfigRuntime()
       }
     },
@@ -2583,11 +3242,17 @@ export async function resetHoloRuntime(): Promise<void> {
   if (!current) {
     resetDB()
     await resetOptionalHoloSubsystems()
+    resetHoloRenderingRuntime()
     resetConfigRuntime()
     return
   }
 
   await current.shutdown()
+  const mailModule = await loadMailModule()
+  mailModule?.resetMailRuntime()
+  const notificationsModule = await loadNotificationsModule()
+  notificationsModule?.resetNotificationsRuntime()
+  resetHoloRenderingRuntime()
 }
 
 function getConfigValue(path: string): unknown {
@@ -2599,20 +3264,27 @@ function getConfigSection(key: string): unknown {
 }
 
 export const holoRuntimeInternals = {
+  createAuthMailDeliveryHook,
+  createAuthNotificationsDeliveryHook,
+  createCoreNotificationMailSender,
   bindAuthRuntimeToContext,
   createCoreAuthProviders,
   createCoreAuthStores,
   createCoreHostedIdentityStore,
+  createCoreNotificationStore,
+  createNotificationMailText,
   createCoreSessionStores,
   fromHostedIdentityProviderValue: fromHostedIdentityProviderValue,
   getConfigSection,
   getConfigValue,
   createCoreSocialBindings,
+  normalizeNotificationRecordFromRow,
   loadConfiguredSocialProviders,
   markProviderUser,
   normalizeDateValue,
   normalizeEmailVerificationTokenRecord,
   normalizeJsonValue,
   normalizePasswordResetTokenRecord,
+  serializeNotificationRecordForRow,
   moduleInternals: portableRuntimeModuleInternals,
 }
