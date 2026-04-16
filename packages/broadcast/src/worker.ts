@@ -1511,12 +1511,15 @@ function decodeNodeWebSocketMessage(message: string | Uint8Array | Buffer | read
 /* v8 ignore stop */
 
 async function handleSubscribeFailure(
-  adapter: BroadcastScalingAdapter,
   runtime: BroadcastWorkerRuntime,
   subscribeError: unknown,
 ): Promise<never> {
-  await adapter.close()
-  await runtime.close()
+  try {
+    await runtime.close()
+  } catch {
+    // Suppress — runtime.close() already closes the adapter;
+    // the original subscribeError is the meaningful failure.
+  }
   throw subscribeError
 }
 
@@ -1569,7 +1572,7 @@ export async function startBroadcastWorker(
       void runtime.receiveScalingMessage(payload).catch((error) => {
         logScalingMessageError(error)
       })
-    }).catch((subscribeError: unknown) => handleSubscribeFailure(scalingConfig.adapter, runtime, subscribeError))
+    }).catch((subscribeError: unknown) => handleSubscribeFailure(runtime, subscribeError))
   }
   const bun = (globalThis as { Bun?: BroadcastWorkerBunGlobal }).Bun
   const appsByKey = buildWorkerApps(config)

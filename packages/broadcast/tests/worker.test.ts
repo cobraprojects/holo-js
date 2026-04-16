@@ -2766,6 +2766,44 @@ describe('@holo-js/broadcast worker runtime', () => {
     })).rejects.toThrow('subscribe cleanup test')
     expect(subscribeFailAdapter.close).toHaveBeenCalled()
 
+    // --- Test subscribe failure when runtime.close() also throws (line 1522) ---
+    const doubleFailAdapter = {
+      publish: vi.fn(async () => {}),
+      subscribe: vi.fn(async () => {
+        throw new Error('subscribe double-fail')
+      }),
+      hashSet: vi.fn(async () => {}),
+      hashDelete: vi.fn(async () => {}),
+      hashGetAll: vi.fn(async () => ({})),
+      close: vi.fn(async () => { throw new Error('close also failed') }),
+    }
+
+    await expect(startBroadcastWorker({
+      config: normalizeBroadcastConfig({
+        ...createRawConfig(),
+        worker: {
+          ...createRawConfig().worker,
+          scaling: {
+            driver: 'redis',
+            connection: 'broadcast',
+          },
+        },
+      }),
+      queue: normalizeQueueConfigForHolo({
+        default: 'broadcast',
+        connections: {
+          broadcast: {
+            driver: 'redis',
+            redis: {
+              host: '127.0.0.1',
+              port: 6379,
+            },
+          },
+        },
+      }),
+      createScalingAdapter: async () => doubleFailAdapter,
+    })).rejects.toThrow('subscribe double-fail')
+
     // --- Test Bun websocket message error handler (lines 1612-1614) ---
     const bun = (globalThis as { Bun?: { serve?: unknown } }).Bun
     const originalServe = bun?.serve
