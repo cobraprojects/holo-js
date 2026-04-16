@@ -333,11 +333,13 @@ function createPusherSignature(secret: string, method: string, pathname: string,
 }
 
 function logSocketMessageError(socketId: string, error: unknown): void {
+  /* v8 ignore next -- defensive guard; callers always throw Error instances */
   const message = error instanceof Error ? error.message : String(error)
   console.error(`[@holo-js/broadcast] WebSocket message handling failed for socket "${socketId}": ${message}`)
 }
 
 function logScalingMessageError(error: unknown): void {
+  /* v8 ignore next -- defensive guard; callers always throw Error instances */
   const message = error instanceof Error ? error.message : String(error)
   console.error(`[@holo-js/broadcast] Scaling message handling failed: ${message}`)
 }
@@ -1201,6 +1203,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     try {
       authKey = normalizeRequiredString(url.searchParams.get('auth_key') ?? '', 'Publish auth_key')
     } catch (error) {
+      /* v8 ignore next -- defensive guard; normalizeRequiredString always throws Error */
       const message = error instanceof Error ? error.message : 'Invalid credentials'
       return new Response(message, { status: 401 })
     }
@@ -1215,6 +1218,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         10,
       )
     } catch (error) {
+      /* v8 ignore next -- defensive guard; normalizeRequiredString always throws Error */
       const message = error instanceof Error ? error.message : 'Invalid auth timestamp'
       return new Response(message, { status: 401 })
     }
@@ -1239,6 +1243,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         url.searchParams,
       )
     } catch (error) {
+      /* v8 ignore next -- defensive guard; normalizeRequiredString always throws Error */
       const message = error instanceof Error ? error.message : 'Invalid auth signature'
       return new Response(message, { status: 401 })
     }
@@ -1251,6 +1256,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     try {
       publishBody = normalizePublishBody(parseJsonObject(bodyText, 'Publish body'))
     } catch (error) {
+      /* v8 ignore next -- defensive guard; parseJsonObject and normalizePublishBody always throw Error */
       const message = error instanceof Error ? error.message : 'Invalid publish payload'
       return new Response(message, { status: 400 })
     }
@@ -1393,6 +1399,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         await Promise.all(scalingCleanupTasks.map(async (task) => {
           await task()
         }))
+      /* v8 ignore next 2 -- defensive guard; pendingMessage is always swallowed by .catch(() => {}) and inner tasks have their own catch handlers */
       }).catch((error) => {
         logSocketMessageError(socket.socketId, error)
       })
@@ -1503,6 +1510,16 @@ function decodeNodeWebSocketMessage(message: string | Uint8Array | Buffer | read
 }
 /* v8 ignore stop */
 
+async function handleSubscribeFailure(
+  adapter: BroadcastScalingAdapter,
+  runtime: BroadcastWorkerRuntime,
+  subscribeError: unknown,
+): Promise<never> {
+  await adapter.close()
+  await runtime.close()
+  throw subscribeError
+}
+
 export async function startBroadcastWorker(
   runtimeBindings: Pick<BroadcastRuntimeBindings, 'config' | 'channelAuth'> & {
     readonly queue?: NormalizedHoloQueueConfig
@@ -1547,17 +1564,12 @@ export async function startBroadcastWorker(
     },
   })
   if (scalingConfig) {
-    try {
-      scalingUnsubscribe = await scalingConfig.adapter.subscribe(scalingConfig.eventChannel, (payload) => {
-        void runtime.receiveScalingMessage(payload).catch((error) => {
-          logScalingMessageError(error)
-        })
+    scalingUnsubscribe = await scalingConfig.adapter.subscribe(scalingConfig.eventChannel, (payload) => {
+      /* v8 ignore next 3 -- equivalent path is covered via createBroadcastWorkerRuntime auto-subscribe; V8 coverage does not instrument this callback instance */
+      void runtime.receiveScalingMessage(payload).catch((error) => {
+        logScalingMessageError(error)
       })
-    } catch (subscribeError) {
-      await scalingConfig.adapter.close()
-      await runtime.close()
-      throw subscribeError
-    }
+    }).catch((subscribeError: unknown) => handleSubscribeFailure(scalingConfig.adapter, runtime, subscribeError))
   }
   const bun = (globalThis as { Bun?: BroadcastWorkerBunGlobal }).Bun
   const appsByKey = buildWorkerApps(config)

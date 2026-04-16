@@ -816,4 +816,39 @@ describe('@holo-js/broadcast channel auth runtime', () => {
       message: 'Invalid broadcast auth request.',
     })
   })
+
+  it('rejects duplicate channel patterns within registry entries', async () => {
+    const importModule = vi.fn(async () => ({
+      default: defineChannel('orders.{orderId}', {
+        type: 'private',
+        authorize() {
+          return true
+        },
+      }),
+    }))
+
+    resetBroadcastRuntime()
+    await expect(broadcastAuthInternals.loadChannelDefinitions({
+      registry: {
+        projectRoot: '/virtual/project',
+        channels: [
+          {
+            sourcePath: 'server/channels/orders-a.ts',
+            pattern: 'orders.{orderId}',
+            type: 'private',
+            params: ['orderId'],
+            whispers: [],
+          },
+          {
+            sourcePath: 'server/channels/orders-b.ts',
+            pattern: 'orders.{orderId}',
+            type: 'private',
+            params: ['orderId'],
+            whispers: [],
+          },
+        ],
+      },
+      importModule,
+    })).rejects.toThrow('duplicate broadcast channel pattern "orders.{orderId}" was configured more than once (registry)')
+  })
 })
