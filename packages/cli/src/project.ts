@@ -1,6 +1,7 @@
 import { normalizeHoloProjectConfig, type NormalizedHoloProjectConfig } from '@holo-js/db'
 export type {
   AuthInstallResult,
+  BroadcastInstallResult,
   CliModelReference,
   DiscoveredAppCommand,
   EventsInstallResult,
@@ -67,6 +68,7 @@ import {
 } from './project/runtime'
 import {
   installAuthIntoProject,
+  installBroadcastIntoProject,
   installEventsIntoProject,
   installMailIntoProject,
   installNotificationsIntoProject,
@@ -74,6 +76,7 @@ import {
   inferConnectionDriver,
   inferDatabaseDriverFromUrl,
   hasLoadedConfigFile,
+  injectBroadcastAuthEndpoint,
   isSupportedQueueInstallerDriver,
   authFeaturesRequireConfigUpdate,
   detectAuthInstallFeaturesFromConfig,
@@ -96,6 +99,7 @@ import {
   renderScaffoldTsconfig,
   renderSessionConfig,
   renderStorageConfig,
+  resolveBroadcastConfigTargetPath,
   resolveDefaultDatabaseUrl,
   resolvePackageManagerVersion,
   sanitizePackageName,
@@ -148,6 +152,7 @@ export {
   findProjectRoot,
   HOLO_RUNTIME_ROOT,
   installAuthIntoProject,
+  installBroadcastIntoProject,
   installEventsIntoProject,
   installMailIntoProject,
   installNotificationsIntoProject,
@@ -202,6 +207,7 @@ export const projectInternals = {
   renderMediaConfig,
   renderMailConfig,
   installAuthIntoProject,
+  installBroadcastIntoProject,
   installEventsIntoProject,
   installMailIntoProject,
   installNotificationsIntoProject,
@@ -214,6 +220,8 @@ export const projectInternals = {
   hasLoadedConfigFile,
   inferConnectionDriver,
   inferDatabaseDriverFromUrl,
+  injectBroadcastAuthEndpoint,
+  resolveBroadcastConfigTargetPath,
   upsertEventsPackageDependency,
   upsertMailPackageDependency,
   upsertAuthPackageDependencies,

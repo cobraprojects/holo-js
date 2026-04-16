@@ -90,6 +90,151 @@ export interface HoloMediaConfig {
   [key: string]: unknown
 }
 
+export type BroadcastConnectionDriver = 'holo' | 'pusher' | 'log' | 'null'
+export type BroadcastConnectionScheme = 'http' | 'https'
+
+export interface BroadcastConnectionOptionsConfig {
+  readonly host?: string
+  readonly port?: number | string
+  readonly scheme?: BroadcastConnectionScheme
+  readonly useTLS?: boolean
+  readonly cluster?: string
+}
+
+export interface BroadcastWorkerScalingConfig {
+  readonly driver: 'redis'
+  readonly connection?: string
+}
+
+export interface BroadcastWorkerConfig {
+  readonly host?: string
+  readonly port?: number | string
+  readonly path?: string
+  readonly publicHost?: string
+  readonly publicPort?: number | string
+  readonly publicScheme?: BroadcastConnectionScheme
+  readonly healthPath?: string
+  readonly statsPath?: string
+  readonly scaling?: false | BroadcastWorkerScalingConfig
+}
+
+export type BroadcastConnectionConfigValue =
+  | string
+  | number
+  | boolean
+  | object
+  | undefined
+
+export interface BaseBroadcastConnectionConfig {
+  readonly driver: BroadcastConnectionDriver | (string & {})
+  readonly options?: BroadcastConnectionOptionsConfig
+  readonly clientOptions?: Readonly<Record<string, unknown>>
+  readonly [key: string]: BroadcastConnectionConfigValue
+}
+
+export interface HoloBroadcastConnectionConfig extends BaseBroadcastConnectionConfig {
+  readonly driver: 'holo'
+  readonly key?: string
+  readonly secret?: string
+  readonly appId?: string | number
+}
+
+export interface PusherBroadcastConnectionConfig extends BaseBroadcastConnectionConfig {
+  readonly driver: 'pusher'
+  readonly key?: string
+  readonly secret?: string
+  readonly appId?: string | number
+}
+
+export interface LogBroadcastConnectionConfig extends BaseBroadcastConnectionConfig {
+  readonly driver: 'log'
+}
+
+export interface NullBroadcastConnectionConfig extends BaseBroadcastConnectionConfig {
+  readonly driver: 'null'
+}
+
+export type HoloBroadcastConnection
+  = HoloBroadcastConnectionConfig
+  | PusherBroadcastConnectionConfig
+  | LogBroadcastConnectionConfig
+  | NullBroadcastConnectionConfig
+  | BaseBroadcastConnectionConfig
+
+export interface HoloBroadcastConfig {
+  readonly default?: string
+  readonly connections?: Readonly<Record<string, HoloBroadcastConnection>>
+  readonly worker?: BroadcastWorkerConfig
+}
+
+export interface NormalizedBroadcastConnectionOptionsConfig {
+  readonly host: string
+  readonly port: number
+  readonly scheme: BroadcastConnectionScheme
+  readonly useTLS: boolean
+  readonly cluster?: string
+}
+
+export interface NormalizedBroadcastWorkerScalingConfig {
+  readonly driver: 'redis'
+  readonly connection: string
+}
+
+export interface NormalizedBroadcastWorkerConfig {
+  readonly host: string
+  readonly port: number
+  readonly path: string
+  readonly publicHost?: string
+  readonly publicPort?: number
+  readonly publicScheme: BroadcastConnectionScheme
+  readonly healthPath: string
+  readonly statsPath: string
+  readonly scaling: false | NormalizedBroadcastWorkerScalingConfig
+}
+
+export interface NormalizedBaseBroadcastConnectionConfig {
+  readonly name: string
+  readonly driver: string
+  readonly clientOptions: Readonly<Record<string, unknown>>
+}
+
+export interface NormalizedHoloBroadcastConnectionConfig extends NormalizedBaseBroadcastConnectionConfig {
+  readonly driver: 'holo'
+  readonly key: string
+  readonly secret: string
+  readonly appId: string
+  readonly options: NormalizedBroadcastConnectionOptionsConfig
+}
+
+export interface NormalizedPusherBroadcastConnectionConfig extends NormalizedBaseBroadcastConnectionConfig {
+  readonly driver: 'pusher'
+  readonly key: string
+  readonly secret: string
+  readonly appId: string
+  readonly options: NormalizedBroadcastConnectionOptionsConfig
+}
+
+export interface NormalizedLogBroadcastConnectionConfig extends NormalizedBaseBroadcastConnectionConfig {
+  readonly driver: 'log'
+}
+
+export interface NormalizedNullBroadcastConnectionConfig extends NormalizedBaseBroadcastConnectionConfig {
+  readonly driver: 'null'
+}
+
+export type NormalizedHoloBroadcastConnection
+  = NormalizedHoloBroadcastConnectionConfig
+  | NormalizedPusherBroadcastConnectionConfig
+  | NormalizedLogBroadcastConnectionConfig
+  | NormalizedNullBroadcastConnectionConfig
+  | NormalizedBaseBroadcastConnectionConfig
+
+export interface NormalizedHoloBroadcastConfig {
+  readonly default: string
+  readonly connections: Readonly<Record<string, NormalizedHoloBroadcastConnection>>
+  readonly worker: NormalizedBroadcastWorkerConfig
+}
+
 export type SessionCookieSameSite = 'lax' | 'strict' | 'none'
 
 export interface HoloSessionCookieConfig {
@@ -605,6 +750,7 @@ export interface HoloConfigRegistry {
   database: NormalizedHoloDatabaseConfig
   storage: NormalizedHoloStorageConfig
   queue: NormalizedHoloQueueConfig
+  broadcast: NormalizedHoloBroadcastConfig
   mail: NormalizedHoloMailConfig
   notifications: NormalizedHoloNotificationsConfig
   media: HoloMediaConfig
@@ -626,6 +772,7 @@ export interface LoadedHoloConfig<TCustom extends HoloConfigMap = HoloConfigMap>
   readonly database: NormalizedHoloDatabaseConfig
   readonly storage: NormalizedHoloStorageConfig
   readonly queue: NormalizedHoloQueueConfig
+  readonly broadcast: NormalizedHoloBroadcastConfig
   readonly mail: NormalizedHoloMailConfig
   readonly notifications: NormalizedHoloNotificationsConfig
   readonly media: HoloMediaConfig

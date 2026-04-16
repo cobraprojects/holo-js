@@ -16,6 +16,11 @@ const coverageJobs = [
   { scriptName: 'test:adapter-next:coverage', directoryName: 'adapter-next' },
   { scriptName: 'test:adapter-nuxt:coverage', directoryName: 'adapter-nuxt' },
   { scriptName: 'test:adapter-sveltekit:coverage', directoryName: 'adapter-sveltekit' },
+  { scriptName: 'test:broadcast:coverage', directoryName: 'broadcast' },
+  { scriptName: 'test:flux:coverage', directoryName: 'flux' },
+  { scriptName: 'test:flux-react:coverage', directoryName: 'flux-react' },
+  { scriptName: 'test:flux-vue:coverage', directoryName: 'flux-vue' },
+  { scriptName: 'test:flux-svelte:coverage', directoryName: 'flux-svelte' },
   { scriptName: 'test:media:coverage', directoryName: 'media' },
 ]
 

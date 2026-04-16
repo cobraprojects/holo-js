@@ -1,67 +1,66 @@
 # Sending Notifications
 
-Use `notify(...)` for model-backed or object-backed notifiables, `notifyMany(...)` for collections, and
-`notifyUsing()` for anonymous/on-demand delivery.
+## Basic Usage
 
-## Send to one notifiable
+Notifications are sent using the `notify` function, which returns a fluent API for configuring delivery options.
 
 ```ts
 import { notify } from '@holo-js/notifications'
+import { invoicePaid } from './notifications'
 
-await notify(user, invoicePaid(invoice))
+await notify(user, invoicePaid)
 ```
 
-## Send to many notifiables
+## Sending to Multiple Users
+
+Use `notifyMany` to fan out a notification to an array of notifiables:
 
 ```ts
 import { notifyMany } from '@holo-js/notifications'
 
-await notifyMany(users, invoicePaid(invoice))
+await notifyMany(users, invoicePaid)
 ```
 
-## Delayed and queued delivery
+## Fluent Configuration Options
 
-Notification dispatches are lazy and fluent. Awaiting the chain triggers delivery.
+The `notify` function returns a fluent builder that allows you to configure various aspects of the notification delivery:
+
+### Queueing
 
 ```ts
-await notify(user, invoicePaid(invoice))
-  .onConnection('redis')
+await notify(user, invoicePaid)
   .onQueue('notifications')
-  .delay(30)
-  .delayFor('email', 300)
+```
+
+### Delayed Delivery
+
+```ts
+// Delay all channels by 5 minutes
+await notify(user, invoicePaid)
+  .delay(300)
+
+// Delay specific channels
+await notify(user, invoicePaid)
+  .delayFor('email', 300)      // Email delayed 5 minutes
+  .delayFor('broadcast', 0)    // Broadcast immediately
+```
+
+### Transaction Awareness
+
+```ts
+await notify(user, invoicePaid)
   .afterCommit()
 ```
 
-Queueing fans out one queued job per target and per channel.
+## Anonymous Notifications
 
-## Anonymous and on-demand delivery
-
-Use `notifyUsing()` when there is no model-backed notifiable:
+Use `notifyUsing()` to send notifications without a notifiable model by providing routes directly:
 
 ```ts
 import { notifyUsing } from '@holo-js/notifications'
 
 await notifyUsing()
-  .channel('email', { email: 'barrett@example.com', name: 'Barrett Blair' })
-  .channel('broadcast', { channels: ['private-users.barrett'] })
-  .notify(invoicePaid(invoice))
+  .channel('email', { email: 'ava@example.com', name: 'Ava' })
+  .channel('database', { id: 'user-1', type: 'users' })
+  .notify(invoicePaid)
 ```
-
-Built-in anonymous route shapes are:
-
-- `email`: `'user@example.com'` or `{ email, name? }`
-- `database`: `{ id, type }`
-- `broadcast`: `'channel'`, `['channel']`, or `{ channels: [...] }`
-
-## Results
-
-Dispatch returns a per-channel result summary:
-
-```ts
-const result = await notify(user, invoicePaid(invoice))
-
-result.totalTargets
-result.channels
-```
-
-Channel failures do not stop other channels from running. The result object reports partial success per channel.

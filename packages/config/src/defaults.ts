@@ -9,6 +9,11 @@ import type {
   AuthProviderConfig,
   AuthSocialProviderConfig,
   AuthWorkosProviderConfig,
+  BaseBroadcastConnectionConfig,
+  BroadcastConnectionOptionsConfig,
+  BroadcastWorkerConfig,
+  HoloBroadcastConfig,
+  HoloBroadcastConnection,
   HoloAuthConfig,
   HoloMailAddressConfig,
   HoloMailConfig,
@@ -21,6 +26,10 @@ import type {
   NormalizedAuthProviderConfig,
   NormalizedAuthSocialProviderConfig,
   NormalizedAuthWorkosProviderConfig,
+  NormalizedBroadcastConnectionOptionsConfig,
+  NormalizedBroadcastWorkerConfig,
+  NormalizedHoloBroadcastConfig,
+  NormalizedHoloBroadcastConnection,
   NormalizedHoloAuthConfig,
   NormalizedHoloMailAddressConfig,
   NormalizedHoloMailConfig,
@@ -95,6 +104,16 @@ export const holoStorageDefaults: Readonly<NormalizedHoloStorageConfig> = Object
 })
 
 export const DEFAULT_NOTIFICATIONS_TABLE = 'notifications'
+export const DEFAULT_BROADCAST_CONNECTION = 'null'
+export const DEFAULT_BROADCAST_HOST = '127.0.0.1'
+export const DEFAULT_BROADCAST_HTTP_PORT = 80
+export const DEFAULT_BROADCAST_HTTPS_PORT = 443
+export const DEFAULT_BROADCAST_PORT = DEFAULT_BROADCAST_HTTPS_PORT
+export const DEFAULT_BROADCAST_WORKER_HOST = '0.0.0.0'
+export const DEFAULT_BROADCAST_WORKER_PORT = 8080
+export const DEFAULT_BROADCAST_WORKER_PATH = '/app'
+export const DEFAULT_BROADCAST_HEALTH_PATH = '/health'
+export const DEFAULT_BROADCAST_STATS_PATH = '/stats'
 
 export const holoNotificationsDefaults: Readonly<NormalizedHoloNotificationsConfig> = Object.freeze({
   table: DEFAULT_NOTIFICATIONS_TABLE,
@@ -102,6 +121,33 @@ export const holoNotificationsDefaults: Readonly<NormalizedHoloNotificationsConf
     connection: undefined,
     queue: undefined,
     afterCommit: false,
+  }),
+})
+
+export const holoBroadcastDefaults: Readonly<NormalizedHoloBroadcastConfig> = Object.freeze({
+  default: DEFAULT_BROADCAST_CONNECTION,
+  connections: Object.freeze({
+    log: Object.freeze({
+      name: 'log',
+      driver: 'log',
+      clientOptions: Object.freeze({}),
+    }),
+    null: Object.freeze({
+      name: 'null',
+      driver: 'null',
+      clientOptions: Object.freeze({}),
+    }),
+  }),
+  worker: Object.freeze({
+    host: DEFAULT_BROADCAST_WORKER_HOST,
+    port: DEFAULT_BROADCAST_WORKER_PORT,
+    path: DEFAULT_BROADCAST_WORKER_PATH,
+    publicHost: undefined,
+    publicPort: undefined,
+    publicScheme: 'https',
+    healthPath: DEFAULT_BROADCAST_HEALTH_PATH,
+    statsPath: DEFAULT_BROADCAST_STATS_PATH,
+    scaling: false,
   }),
 })
 
@@ -851,6 +897,225 @@ export function normalizeStorageConfig(
       ...(holoStorageDefaults.disks as Record<string, unknown>),
       ...(config.disks ?? {}),
     }) as NormalizedHoloStorageConfig['disks'],
+  })
+}
+
+function normalizeOptionalBroadcastString(
+  value: string | number | undefined,
+  label: string,
+): string | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  const normalized = String(value).trim()
+  if (!normalized) {
+    throw new Error(`[Holo Broadcast] ${label} must be a non-empty string when provided.`)
+  }
+
+  return normalized
+}
+
+function normalizeBroadcastPort(
+  value: string | number | undefined,
+  fallback: number,
+  label: string,
+): number {
+  const normalized = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && value.trim()
+      ? Number(value.trim())
+      : fallback
+
+  if (!Number.isInteger(normalized) || normalized <= 0) {
+    throw new Error(`[Holo Broadcast] ${label} must be a positive integer.`)
+  }
+
+  return normalized
+}
+
+function normalizeBroadcastScheme(
+  value: string | undefined,
+  fallback: 'http' | 'https',
+  label: string,
+): 'http' | 'https' {
+  const normalized = normalizeOptionalBroadcastString(value, label)?.toLowerCase()
+  if (typeof normalized === 'undefined') {
+    return fallback
+  }
+
+  if (normalized !== 'http' && normalized !== 'https') {
+    throw new Error(`[Holo Broadcast] ${label} must be "http" or "https".`)
+  }
+
+  return normalized
+}
+
+function normalizeBroadcastConnectionOptions(
+  options: BroadcastConnectionOptionsConfig | undefined,
+  fallbackHost: string,
+  label: string,
+): NormalizedBroadcastConnectionOptionsConfig {
+  const scheme = normalizeBroadcastScheme(
+    options?.scheme,
+    options?.useTLS === false ? 'http' : 'https',
+    `${label} scheme`,
+  )
+  const resolvedFallbackPort = scheme === 'http' ? DEFAULT_BROADCAST_HTTP_PORT : DEFAULT_BROADCAST_HTTPS_PORT
+
+  return Object.freeze({
+    host: normalizeOptionalBroadcastString(options?.host, `${label} host`) ?? fallbackHost,
+    port: normalizeBroadcastPort(options?.port, resolvedFallbackPort, `${label} port`),
+    scheme,
+    useTLS: options?.useTLS ?? scheme === 'https',
+    cluster: normalizeOptionalBroadcastString(options?.cluster, `${label} cluster`) ?? undefined,
+  })
+}
+
+function normalizeBroadcastWorkerConfig(
+  worker: BroadcastWorkerConfig | undefined,
+): NormalizedBroadcastWorkerConfig {
+  const scaling = worker?.scaling
+  const publicScheme = normalizeBroadcastScheme(worker?.publicScheme, 'https', 'Broadcast worker public scheme')
+  if (scaling && scaling.driver !== 'redis') {
+    throw new Error('[Holo Broadcast] Broadcast worker scaling driver must be "redis".')
+  }
+
+  return Object.freeze({
+    host: normalizeOptionalBroadcastString(worker?.host, 'Broadcast worker host') ?? DEFAULT_BROADCAST_WORKER_HOST,
+    port: normalizeBroadcastPort(worker?.port, DEFAULT_BROADCAST_WORKER_PORT, 'Broadcast worker port'),
+    path: normalizeOptionalBroadcastString(worker?.path, 'Broadcast worker path') ?? DEFAULT_BROADCAST_WORKER_PATH,
+    publicHost: normalizeOptionalBroadcastString(worker?.publicHost, 'Broadcast worker public host') ?? undefined,
+    publicPort: typeof worker?.publicPort === 'undefined'
+      ? (publicScheme === 'http' ? DEFAULT_BROADCAST_HTTP_PORT : undefined)
+      : normalizeBroadcastPort(
+          worker.publicPort,
+          /* v8 ignore next -- defensive HTTPS port default; tests only exercise HTTP scheme */
+          publicScheme === 'http' ? DEFAULT_BROADCAST_HTTP_PORT : DEFAULT_BROADCAST_HTTPS_PORT,
+          'Broadcast worker public port',
+        ),
+    publicScheme,
+    healthPath: normalizeOptionalBroadcastString(worker?.healthPath, 'Broadcast worker health path') ?? DEFAULT_BROADCAST_HEALTH_PATH,
+    statsPath: normalizeOptionalBroadcastString(worker?.statsPath, 'Broadcast worker stats path') ?? DEFAULT_BROADCAST_STATS_PATH,
+    scaling: scaling && typeof scaling === 'object'
+        ? Object.freeze({
+            driver: 'redis' as const,
+            connection: normalizeOptionalBroadcastString(scaling.connection, 'Broadcast worker scaling connection') ?? 'default',
+          })
+        : holoBroadcastDefaults.worker.scaling,
+  })
+}
+
+function normalizeBroadcastConnection(
+  name: string,
+  connection: HoloBroadcastConnection,
+): NormalizedHoloBroadcastConnection {
+  const normalizedName = normalizeOptionalBroadcastString(name, 'Broadcast connection name')
+  const driver = normalizeOptionalBroadcastString(connection.driver, `Broadcast connection "${name}" driver`)
+
+  if (!normalizedName || !driver) {
+    throw new Error('[Holo Broadcast] Broadcast connections must define a name and driver.')
+  }
+
+  const clientOptions = Object.freeze({
+    ...((connection.clientOptions as Record<string, unknown> | undefined) ?? {}),
+  })
+
+  if (driver === 'holo') {
+    return Object.freeze({
+      name: normalizedName,
+      driver: 'holo' as const,
+      key: normalizeOptionalBroadcastString((connection as { key?: string }).key, `Broadcast connection "${name}" key`)
+        ?? (() => { throw new Error(`[Holo Broadcast] Broadcast connection "${name}" must define a key.`) })(),
+      secret: normalizeOptionalBroadcastString((connection as { secret?: string }).secret, `Broadcast connection "${name}" secret`)
+        ?? (() => { throw new Error(`[Holo Broadcast] Broadcast connection "${name}" must define a secret.`) })(),
+      appId: normalizeOptionalBroadcastString((connection as { appId?: string | number }).appId, `Broadcast connection "${name}" appId`)
+        ?? (() => { throw new Error(`[Holo Broadcast] Broadcast connection "${name}" must define an appId.`) })(),
+      options: normalizeBroadcastConnectionOptions(connection.options, DEFAULT_BROADCAST_HOST, `Broadcast connection "${name}" options`),
+      clientOptions,
+    })
+  }
+
+  if (driver === 'pusher') {
+    const cluster = normalizeOptionalBroadcastString(connection.options?.cluster, `Broadcast connection "${name}" cluster`) ?? undefined
+
+    return Object.freeze({
+      name: normalizedName,
+      driver: 'pusher' as const,
+      key: normalizeOptionalBroadcastString((connection as { key?: string }).key, `Broadcast connection "${name}" key`)
+        ?? (() => { throw new Error(`[Holo Broadcast] Broadcast connection "${name}" must define a key.`) })(),
+      secret: normalizeOptionalBroadcastString((connection as { secret?: string }).secret, `Broadcast connection "${name}" secret`)
+        ?? (() => { throw new Error(`[Holo Broadcast] Broadcast connection "${name}" must define a secret.`) })(),
+      appId: normalizeOptionalBroadcastString((connection as { appId?: string | number }).appId, `Broadcast connection "${name}" appId`)
+        ?? (() => { throw new Error(`[Holo Broadcast] Broadcast connection "${name}" must define an appId.`) })(),
+      options: normalizeBroadcastConnectionOptions(
+        {
+          ...connection.options,
+          cluster,
+        },
+        normalizeOptionalBroadcastString(connection.options?.host, `Broadcast connection "${name}" host`) ?? (cluster ? `api-${cluster}.pusher.com` : 'api-mt1.pusher.com'),
+        `Broadcast connection "${name}" options`,
+      ),
+      clientOptions,
+    })
+  }
+
+  if (driver === 'log') {
+    return Object.freeze({
+      name: normalizedName,
+      driver: 'log' as const,
+      clientOptions,
+    })
+  }
+
+  if (driver === 'null') {
+    return Object.freeze({
+      name: normalizedName,
+      driver: 'null' as const,
+      clientOptions,
+    })
+  }
+
+  if (driver === 'ably') {
+    throw new Error('[Holo Broadcast] Broadcast driver "ably" is not supported yet.')
+  }
+
+  const {
+    driver: _ignoredDriver,
+    clientOptions: _ignoredClientOptions,
+    ...customConfig
+  } = connection as BaseBroadcastConnectionConfig
+
+  return Object.freeze({
+    driver,
+    clientOptions,
+    ...customConfig,
+    name: normalizedName,
+  })
+}
+
+export function normalizeBroadcastConfig(
+  config: HoloBroadcastConfig = {},
+): NormalizedHoloBroadcastConfig {
+  const normalizedConnections = Object.fromEntries(
+    Object.entries(config.connections ?? holoBroadcastDefaults.connections)
+      .map(([name, connection]) => [name, normalizeBroadcastConnection(name, connection)]),
+  ) as Record<string, NormalizedHoloBroadcastConnection>
+
+  const defaultConnection = normalizeOptionalBroadcastString(config.default, 'Default broadcast connection')
+    ?? holoBroadcastDefaults.default
+
+  if (!normalizedConnections[defaultConnection]) {
+    throw new Error(
+      `[Holo Broadcast] default broadcast connection "${defaultConnection}" is not configured. `
+      + `Available connections: ${Object.keys(normalizedConnections).join(', ')}`,
+    )
+  }
+
+  return Object.freeze({
+    default: defaultConnection,
+    connections: Object.freeze(normalizedConnections),
+    worker: normalizeBroadcastWorkerConfig(config.worker),
   })
 }
 

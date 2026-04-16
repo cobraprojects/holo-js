@@ -63,6 +63,11 @@
     "test:adapter-next:coverage": "rm -rf coverage/adapter-next && vitest --run --project @holo-js/adapter-next --coverage --coverage.clean=false --coverage.reportsDirectory='coverage/adapter-next' --coverage.include='packages/adapter-next/src/**/*.ts' --coverage.exclude='packages/adapter-next/src/**/*.d.ts'",
     "test:adapter-nuxt:coverage": "rm -rf coverage/adapter-nuxt && vitest --run --project @holo-js/adapter-nuxt --coverage --coverage.clean=false --coverage.reportsDirectory='coverage/adapter-nuxt' --coverage.include='packages/adapter-nuxt/src/**/*.ts' --coverage.exclude='packages/adapter-nuxt/src/**/*.d.ts'",
     "test:adapter-sveltekit:coverage": "rm -rf coverage/adapter-sveltekit && vitest --run --project @holo-js/adapter-sveltekit --coverage --coverage.clean=false --coverage.reportsDirectory='coverage/adapter-sveltekit' --coverage.include='packages/adapter-sveltekit/src/**/*.ts' --coverage.exclude='packages/adapter-sveltekit/src/**/*.d.ts'",
+    "test:broadcast:coverage": "rm -rf coverage/broadcast && vitest --run --project @holo-js/broadcast --coverage --coverage.clean=false --coverage.reportsDirectory='coverage/broadcast' --coverage.include='packages/broadcast/src/**/*.ts' --coverage.exclude='packages/broadcast/src/**/*.d.ts'",
+    "test:flux:coverage": "rm -rf coverage/flux && vitest --run --project @holo-js/flux --coverage --coverage.clean=false --coverage.reportsDirectory='coverage/flux' --coverage.include='packages/flux/src/**/*.ts' --coverage.exclude='packages/flux/src/**/*.d.ts'",
+    "test:flux-react:coverage": "rm -rf coverage/flux-react && vitest --run --project @holo-js/flux-react --coverage --coverage.clean=false --coverage.reportsDirectory='coverage/flux-react' --coverage.include='packages/flux-react/src/**/*.ts' --coverage.exclude='packages/flux-react/src/**/*.d.ts'",
+    "test:flux-vue:coverage": "rm -rf coverage/flux-vue && vitest --run --project @holo-js/flux-vue --coverage --coverage.clean=false --coverage.reportsDirectory='coverage/flux-vue' --coverage.include='packages/flux-vue/src/**/*.ts' --coverage.exclude='packages/flux-vue/src/**/*.d.ts'",
+    "test:flux-svelte:coverage": "rm -rf coverage/flux-svelte && vitest --run --project @holo-js/flux-svelte --coverage --coverage.clean=false --coverage.reportsDirectory='coverage/flux-svelte' --coverage.include='packages/flux-svelte/src/**/*.ts' --coverage.exclude='packages/flux-svelte/src/**/*.d.ts'",
     "test:auth:coverage": "rm -rf coverage/auth && vitest --run --project @holo-js/auth --coverage --coverage.clean=false --coverage.reportsDirectory='coverage/auth' --coverage.include='packages/auth/src/**/*.ts'",
     "test:auth-social:coverage": "rm -rf coverage/auth-social && vitest --run --project @holo-js/auth-social --coverage --coverage.clean=false --coverage.reportsDirectory='coverage/auth-social' --coverage.include='packages/auth-social/src/**/*.ts'",
     "test:auth-workos:coverage": "rm -rf coverage/auth-workos && vitest --run --project @holo-js/auth-workos --coverage --coverage.clean=false --coverage.reportsDirectory='coverage/auth-workos' --coverage.include='packages/auth-workos/src/**/*.ts'",
@@ -106,7 +111,7 @@
     "vitest": "catalog:"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.11.0"
   },
   "packageManager": "bun@1.3.9",
   "trustedDependencies": [

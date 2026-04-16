@@ -3,6 +3,7 @@ import { dirname, extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   normalizeAppConfig,
+  normalizeBroadcastConfig,
   normalizeAuthConfig,
   normalizeDatabaseConfig,
   normalizeMailConfig,
@@ -22,6 +23,7 @@ import type {
   DefineConfigValue,
   LoadedHoloConfig,
   HoloAppConfig,
+  HoloBroadcastConfig,
   HoloAuthConfig,
   HoloConfigMap,
   HoloDatabaseConfig,
@@ -218,6 +220,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
   const database = normalizeDatabaseConfig(resolvedRawConfig.database as HoloDatabaseConfig | undefined)
   const storage = normalizeStorageConfig(resolvedRawConfig.storage as HoloStorageConfig | undefined)
   const queue = normalizeQueueConfigForHolo(resolvedRawConfig.queue as HoloQueueConfig | undefined)
+  const broadcast = normalizeBroadcastConfig(resolvedRawConfig.broadcast as HoloBroadcastConfig | undefined)
   const mail = normalizeMailConfig(resolvedRawConfig.mail as HoloMailConfig | undefined)
   const notifications = normalizeNotificationsConfig(resolvedRawConfig.notifications as HoloNotificationsConfig | undefined)
   const media = Object.freeze({ ...((resolvedRawConfig.media as HoloMediaConfig | undefined) ?? {}) })
@@ -229,6 +232,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
       && key !== 'database'
       && key !== 'storage'
       && key !== 'queue'
+      && key !== 'broadcast'
       && key !== 'mail'
       && key !== 'notifications'
       && key !== 'media'
@@ -241,6 +245,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
     database,
     storage,
     queue,
+    broadcast,
     mail,
     notifications,
     media,
@@ -254,6 +259,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
     database,
     storage,
     queue,
+    broadcast,
     mail,
     notifications,
     media,
@@ -424,6 +430,10 @@ export function defineStorageConfig<TConfig extends HoloStorageConfig>(config: T
 }
 
 export function defineQueueConfig<TConfig extends HoloQueueConfig>(config: TConfig): DefineConfigValue<TConfig> {
+  return defineConfig(config)
+}
+
+export function defineBroadcastConfig<TConfig extends HoloBroadcastConfig>(config: TConfig): DefineConfigValue<TConfig> {
   return defineConfig(config)
 }
 

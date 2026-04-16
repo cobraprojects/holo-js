@@ -2,6 +2,7 @@ import { describe, it } from 'vitest'
 import {
   createConfigAccessors,
   defineAuthConfig,
+  defineBroadcastConfig,
   defineConfig,
   defineMailConfig,
   defineNotificationsConfig,
@@ -34,6 +35,14 @@ describe('@holo-js/config typing', () => {
       connections: {
         sync: {
           driver: 'sync',
+        },
+      },
+    })
+    const broadcast = defineBroadcastConfig({
+      default: 'null',
+      connections: {
+        null: {
+          driver: 'null',
         },
       },
     })
@@ -103,6 +112,7 @@ describe('@holo-js/config typing', () => {
       database: {} as HoloConfigRegistry['database'],
       storage: {} as HoloConfigRegistry['storage'],
       queue: queue as unknown as HoloConfigRegistry['queue'],
+      broadcast: broadcast as unknown as HoloConfigRegistry['broadcast'],
       mail: mail as unknown as HoloConfigRegistry['mail'],
       notifications: notifications as unknown as HoloConfigRegistry['notifications'],
       media: {} as HoloConfigRegistry['media'],
@@ -128,6 +138,7 @@ describe('@holo-js/config typing', () => {
       database: HoloConfigRegistry['database']
       storage: HoloConfigRegistry['storage']
       queue: HoloConfigRegistry['queue']
+      broadcast: HoloConfigRegistry['broadcast']
       mail: HoloConfigRegistry['mail']
       notifications: HoloConfigRegistry['notifications']
       media: HoloConfigRegistry['media']
@@ -136,6 +147,7 @@ describe('@holo-js/config typing', () => {
       services: typeof services
     }> = 'services.mailgun.secret'
     const queueDefault: string = accessors.useConfig('queue.default')
+    const broadcastDefault: string = accessors.useConfig('broadcast.default')
     const mailDefault: string = accessors.useConfig('mail.default')
     const notificationsTable: string = accessors.useConfig('notifications.table')
     const testEnv: HoloAppEnv = 'test'
@@ -153,6 +165,7 @@ describe('@holo-js/config typing', () => {
     void clerkSessionCookie
     void nestedPath
     void queueDefault
+    void broadcastDefault
     void mailDefault
     void notificationsTable
     void testEnv

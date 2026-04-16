@@ -159,6 +159,8 @@ export function isDiscoveryRelevantPath(
     project.config.paths.jobs,
     project.config.paths.events,
     project.config.paths.listeners,
+    'server/broadcast',
+    'server/channels',
     project.config.paths.generatedSchema,
     'config',
     '.holo-js/generated',
@@ -221,6 +223,8 @@ export async function collectDiscoveryWatchRoots(
     resolve(projectRoot, project.config.paths.jobs),
     resolve(projectRoot, project.config.paths.events),
     resolve(projectRoot, project.config.paths.listeners),
+    resolve(projectRoot, 'server/broadcast'),
+    resolve(projectRoot, 'server/channels'),
     dirname(resolve(projectRoot, project.config.paths.generatedSchema)),
   ]
 

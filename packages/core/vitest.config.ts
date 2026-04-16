@@ -15,6 +15,7 @@ export default defineConfig({
       '@holo-js/auth-workos': resolve(__dirname, '../auth-workos/src/index.ts'),
       '@holo-js/auth-clerk': resolve(__dirname, '../auth-clerk/src/index.ts'),
       '@holo-js/config': resolve(__dirname, '../config/src/index.ts'),
+      '@holo-js/broadcast': resolve(__dirname, '../broadcast/src/index.ts'),
       '@holo-js/db': resolve(__dirname, '../db/src/index.ts'),
       '@holo-js/db-mysql': resolve(__dirname, '../db-mysql/src/index.ts'),
       '@holo-js/db-postgres': resolve(__dirname, '../db-postgres/src/index.ts'),

@@ -20,6 +20,7 @@ export {
   holoRuntimeInternals,
 } from './portable/holo'
 export {
+  loadGeneratedBroadcastManifest,
   loadGeneratedProjectRegistry,
   registryInternals,
   resolveGeneratedProjectRegistryPath,

@@ -1,5 +1,5 @@
 import { mkdir, readdir, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { extname, resolve } from 'node:path'
 import {
   loadConfigDirectory,
   holoStorageDefaults,
@@ -22,6 +22,8 @@ import { loadProjectConfig, resolveGeneratedSchemaPath } from './config'
 import {
   AUTH_SOCIAL_PROVIDER_PACKAGE_NAMES,
   AUTH_CONFIG_FILE_NAMES,
+  BROADCAST_CONFIG_FILE_NAMES,
+  type BroadcastInstallResult,
   MAIL_CONFIG_FILE_NAMES,
   DB_DRIVER_PACKAGE_NAMES,
   NOTIFICATIONS_CONFIG_FILE_NAMES,
@@ -232,6 +234,315 @@ function renderMailConfig(): string {
     '})',
     '',
   ].join('\n')
+}
+
+function renderBroadcastConfig(
+  moduleFormat: ConfigModuleFormat,
+  includeAuthEndpoint: boolean,
+  useTypeScriptSyntax: boolean,
+): string {
+  const renderBroadcastScheme = (): string => {
+    return useTypeScriptSyntax
+      ? 'env<\'http\' | \'https\'>(\'BROADCAST_SCHEME\', \'http\')'
+      : 'env(\'BROADCAST_SCHEME\', \'http\')'
+  }
+
+  if (moduleFormat === 'cjs') {
+    return [
+      'const { defineBroadcastConfig, env } = require(\'@holo-js/config\')',
+      '',
+      'module.exports = defineBroadcastConfig({',
+      '  default: env(\'BROADCAST_CONNECTION\', \'holo\'),',
+      '  connections: {',
+      '    holo: {',
+      '      driver: \'holo\',',
+      '      appId: env(\'BROADCAST_APP_ID\', \'app-id\'),',
+      '      key: env(\'BROADCAST_APP_KEY\', \'app-key\'),',
+      '      secret: env(\'BROADCAST_APP_SECRET\', \'app-secret\'),',
+      '      options: {',
+      '        host: env(\'BROADCAST_HOST\', \'127.0.0.1\'),',
+      '        port: env(\'BROADCAST_PORT\', 8080),',
+      `        scheme: ${renderBroadcastScheme()},`,
+      '        useTLS: env(\'BROADCAST_SCHEME\', \'http\') === \'https\',',
+      '      },',
+      /* v8 ignore next 6 -- authEndpoint injection is tested through the install auth flow */
+      ...(includeAuthEndpoint
+        ? [
+            '      clientOptions: {',
+            '        authEndpoint: `${env(\'APP_URL\', \'http://localhost:3000\')}/broadcasting/auth`,',
+            '      },',
+          ]
+        : []),
+      '    },',
+      '    log: {',
+      '      driver: \'log\',',
+      '    },',
+      '    null: {',
+      '      driver: \'null\',',
+      '    },',
+      '  },',
+      '})',
+      '',
+    ].join('\n')
+  }
+
+  return [
+    'import { defineBroadcastConfig, env } from \'@holo-js/config\'',
+    '',
+    'export default defineBroadcastConfig({',
+    '  default: env(\'BROADCAST_CONNECTION\', \'holo\'),',
+    '  connections: {',
+      '    holo: {',
+      '      driver: \'holo\',',
+      '      appId: env(\'BROADCAST_APP_ID\', \'app-id\'),',
+      '      key: env(\'BROADCAST_APP_KEY\', \'app-key\'),',
+      '      secret: env(\'BROADCAST_APP_SECRET\', \'app-secret\'),',
+      '      options: {',
+      '        host: env(\'BROADCAST_HOST\', \'127.0.0.1\'),',
+      '        port: env(\'BROADCAST_PORT\', 8080),',
+      `        scheme: ${renderBroadcastScheme()},`,
+      '        useTLS: env(\'BROADCAST_SCHEME\', \'http\') === \'https\',',
+      '      },',
+      ...(includeAuthEndpoint
+        ? [
+            '      clientOptions: {',
+            '        authEndpoint: `${env(\'APP_URL\', \'http://localhost:3000\')}/broadcasting/auth`,',
+            '      },',
+          ]
+        : []),
+    '    },',
+    '    log: {',
+    '      driver: \'log\',',
+    '    },',
+    '    null: {',
+    '      driver: \'null\',',
+    '    },',
+    '  },',
+    '})',
+    '',
+  ].join('\n')
+}
+
+function stripBroadcastAuthEndpointBlock(value: string): string {
+  return value.replace(
+    /(^|\n)\s*clientOptions:\s*\{\n\s*authEndpoint:\s*.*,\n\s*\},/m,
+    '',
+  )
+}
+
+function injectBroadcastAuthEndpoint(value: string): string | undefined {
+  /* v8 ignore next 3 -- defensive early return when authEndpoint already exists */
+  if (value.includes('authEndpoint:')) {
+    return value
+  }
+
+  const nextValue = value.replace(
+    /(holo:\s*\{[\s\S]*?options:\s*\{[\s\S]*?\n)([ \t]*)\},/m,
+    (_match, prefix: string, indent: string) => {
+      return [
+        `${prefix}${indent}},`,
+        `${indent}clientOptions: {`,
+        `${indent}  authEndpoint: \`\${env('APP_URL', 'http://localhost:3000')}/broadcasting/auth\`,`,
+        `${indent}},`,
+      ].join('\n')
+    },
+  )
+
+  return nextValue === value ? undefined : nextValue
+}
+
+function canSafelyRewriteBroadcastConfig(
+  currentContents: string,
+  moduleFormat: ConfigModuleFormat,
+  useTypeScriptSyntax: boolean,
+): boolean {
+  return stripBroadcastAuthEndpointBlock(currentContents) === stripBroadcastAuthEndpointBlock(
+    renderBroadcastConfig(moduleFormat, false, useTypeScriptSyntax),
+  )
+}
+
+function resolveBroadcastConfigTargetPath(
+  projectRoot: string,
+  manifestPath: string,
+  moduleFormat: ConfigModuleFormat,
+): string {
+  const extension = extname(manifestPath)
+  /* v8 ignore next 2 -- defensive extension matching for uncommon manifest file extensions */
+  const targetExtension = extension === '.cjs' || extension === '.cts' || extension === '.mjs' || extension === '.mts'
+    ? extension
+    : moduleFormat === 'cjs'
+      ? '.cjs'
+      : (extension === '.ts' || extension === '.js' ? extension : '.ts')
+
+  return resolve(projectRoot, `config/broadcast${targetExtension}`)
+}
+
+function renderBroadcastEnvFiles(): { env: readonly string[], example: readonly string[] } {
+  const env = [
+    'BROADCAST_CONNECTION=holo',
+  ]
+  const example = [
+    'BROADCAST_CONNECTION=holo',
+    'BROADCAST_APP_ID=',
+    'BROADCAST_APP_KEY=',
+    'BROADCAST_APP_SECRET=',
+  ]
+
+  return {
+    env,
+    example,
+  }
+}
+
+function renderNextBroadcastAuthRoute(): string {
+  return [
+    'import { renderBroadcastAuthResponse } from \'@holo-js/broadcast/auth\'',
+    'import { holo } from \'@/server/holo\'',
+    '',
+    'export async function POST(request: Request) {',
+    '  const app = await holo.getApp()',
+    '  const auth = await holo.getAuth()',
+    '',
+    '  return await renderBroadcastAuthResponse(request, {',
+    '    resolveUser: async () => await auth?.user(),',
+    '    channelAuth: {',
+    '      registry: {',
+    '        projectRoot: app.projectRoot,',
+    '        channels: app.registry?.channels ?? [],',
+    '      },',
+    '    },',
+    '  })',
+    '}',
+    '',
+  ].join('\n')
+}
+
+function renderNuxtBroadcastAuthRoute(): string {
+  return [
+    'import { defineEventHandler, getHeaders, getRequestURL, readRawBody } from \'h3\'',
+    'import { renderBroadcastAuthResponse } from \'@holo-js/broadcast/auth\'',
+    'import { holo } from \'#imports\'',
+    '',
+    'export default defineEventHandler(async (event) => {',
+    '  const app = await holo.getApp()',
+    '  const auth = await holo.getAuth()',
+    '  const request = new Request(getRequestURL(event), {',
+    '    method: event.method,',
+    '    headers: getHeaders(event),',
+    '    body: await readRawBody(event),',
+    '  })',
+    '',
+    '  return await renderBroadcastAuthResponse(request, {',
+    '    resolveUser: async () => await auth?.user(),',
+    '    channelAuth: {',
+    '      registry: {',
+    '        projectRoot: app.projectRoot,',
+    '        channels: app.registry?.channels ?? [],',
+    '      },',
+    '    },',
+    '  })',
+    '})',
+    '',
+  ].join('\n')
+}
+
+function renderSvelteBroadcastAuthRoute(): string {
+  return [
+    'import { renderBroadcastAuthResponse } from \'@holo-js/broadcast/auth\'',
+    'import { holo } from \'$lib/server/holo\'',
+    '',
+    'export async function POST({ request }: { request: Request }) {',
+    '  const app = await holo.getApp()',
+    '  const auth = await holo.getAuth()',
+    '',
+    '  return await renderBroadcastAuthResponse(request, {',
+    '    resolveUser: async () => await auth?.user(),',
+    '    channelAuth: {',
+    '      registry: {',
+    '        projectRoot: app.projectRoot,',
+    '        channels: app.registry?.channels ?? [],',
+    '      },',
+    '    },',
+    '  })',
+    '}',
+    '',
+  ].join('\n')
+}
+
+async function syncBroadcastAuthSupportAfterAuthInstall(projectRoot: string): Promise<{
+  readonly updatedBroadcastConfig: boolean
+  readonly createdBroadcastAuthRoute: boolean
+}> {
+  const { dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  const framework = detectProjectFrameworkFromPackageJson(dependencies, devDependencies)
+  const canCreateBroadcastAuthRoute = framework === 'next' || framework === 'nuxt' || framework === 'sveltekit'
+  const authConfigPath = await resolveFirstExistingPath(projectRoot, AUTH_CONFIG_FILE_NAMES)
+  const broadcastConfigPath = await resolveFirstExistingPath(projectRoot, BROADCAST_CONFIG_FILE_NAMES)
+  if (!authConfigPath || !broadcastConfigPath || !canCreateBroadcastAuthRoute) {
+    return {
+      updatedBroadcastConfig: false,
+      createdBroadcastAuthRoute: false,
+    }
+  }
+
+  const currentBroadcastConfig = (await readTextFile(broadcastConfigPath))!
+  let updatedBroadcastConfig = false
+  let createdBroadcastAuthRoute = false
+  if (!currentBroadcastConfig.includes('authEndpoint:')) {
+    const broadcastConfigModuleFormat = resolveConfigModuleFormat(broadcastConfigPath, currentBroadcastConfig)
+    const broadcastConfigIsTypeScript = ['.ts', '.mts', '.cts'].includes(extname(broadcastConfigPath))
+    const rewrittenBroadcastConfig = canSafelyRewriteBroadcastConfig(
+      currentBroadcastConfig,
+      broadcastConfigModuleFormat,
+      broadcastConfigIsTypeScript,
+    )
+      ? renderBroadcastConfig(broadcastConfigModuleFormat, true, broadcastConfigIsTypeScript)
+      : injectBroadcastAuthEndpoint(currentBroadcastConfig)
+    if (rewrittenBroadcastConfig) {
+      await writeTextFile(
+        broadcastConfigPath,
+        rewrittenBroadcastConfig,
+      )
+      updatedBroadcastConfig = true
+    }
+  }
+
+  if (framework === 'next') {
+    const authRoutePath = resolve(projectRoot, 'app/broadcasting/auth/route.ts')
+    if (!(await pathExists(authRoutePath))) {
+      await writeTextFile(authRoutePath, renderNextBroadcastAuthRoute())
+      createdBroadcastAuthRoute = true
+    }
+    return {
+      updatedBroadcastConfig,
+      createdBroadcastAuthRoute,
+    }
+  }
+
+  if (framework === 'nuxt') {
+    const authRoutePath = resolve(projectRoot, 'server/routes/broadcasting/auth.post.ts')
+    if (!(await pathExists(authRoutePath))) {
+      await writeTextFile(authRoutePath, renderNuxtBroadcastAuthRoute())
+      createdBroadcastAuthRoute = true
+    }
+    return {
+      updatedBroadcastConfig,
+      createdBroadcastAuthRoute,
+    }
+  }
+
+  if (framework === 'sveltekit') {
+    const authRoutePath = resolve(projectRoot, 'src/routes/broadcasting/auth/+server.ts')
+    if (!(await pathExists(authRoutePath))) {
+      await writeTextFile(authRoutePath, renderSvelteBroadcastAuthRoute())
+      createdBroadcastAuthRoute = true
+    }
+  }
+
+  return {
+    updatedBroadcastConfig,
+    createdBroadcastAuthRoute,
+  }
 }
 
 function renderSessionConfig(defaultDatabaseConnection = 'default'): string {
@@ -1278,6 +1589,72 @@ async function upsertMailPackageDependency(projectRoot: string): Promise<boolean
   return true
 }
 
+function detectProjectFrameworkFromPackageJson(
+  dependencies: Record<string, string>,
+  devDependencies: Record<string, string>,
+): 'next' | 'nuxt' | 'sveltekit' | undefined {
+  if (dependencies.next || devDependencies.next) {
+    return 'next'
+  }
+
+  if (dependencies.nuxt || devDependencies.nuxt) {
+    return 'nuxt'
+  }
+
+  if (dependencies['@sveltejs/kit'] || devDependencies['@sveltejs/kit']) {
+    return 'sveltekit'
+  }
+
+  return undefined
+}
+
+async function upsertBroadcastPackageDependencies(projectRoot: string): Promise<{
+  readonly updated: boolean
+  readonly framework: 'next' | 'nuxt' | 'sveltekit' | undefined
+}> {
+  const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
+  const framework = detectProjectFrameworkFromPackageJson(dependencies, devDependencies)
+  let changed = false
+
+  const requestedPackages = new Set<string>([
+    '@holo-js/broadcast',
+    '@holo-js/flux',
+  ])
+
+  if (framework === 'next') {
+    requestedPackages.add('@holo-js/flux-react')
+    requestedPackages.add('@holo-js/adapter-next')
+  } else if (framework === 'nuxt') {
+    requestedPackages.add('@holo-js/flux-vue')
+    requestedPackages.add('@holo-js/adapter-nuxt')
+  } else if (framework === 'sveltekit') {
+    requestedPackages.add('@holo-js/flux-svelte')
+    requestedPackages.add('@holo-js/adapter-sveltekit')
+  }
+
+  for (const packageName of requestedPackages) {
+    if (dependencies[packageName] !== nextVersion || typeof devDependencies[packageName] !== 'undefined') {
+      dependencies[packageName] = nextVersion
+      delete devDependencies[packageName]
+      changed = true
+    }
+  }
+
+  if (!changed) {
+    return {
+      updated: false,
+      framework,
+    }
+  }
+
+  await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
+  return {
+    updated: true,
+    framework,
+  }
+}
+
 async function upsertAuthPackageDependencies(
   projectRoot: string,
   features: AuthInstallFeatures = {},
@@ -1445,6 +1822,8 @@ export async function installAuthIntoProject(
       await writeTextFile(envExamplePath, nextEnvExample.contents)
     }
 
+    await syncBroadcastAuthSupportAfterAuthInstall(projectRoot)
+
     return {
       updatedPackageJson: await upsertAuthPackageDependencies(projectRoot, nextAuthFeatures),
       createdAuthConfig: authConfigChanged,
@@ -1510,6 +1889,8 @@ export async function installAuthIntoProject(
   if (nextEnvExample.changed && typeof nextEnvExample.contents === 'string') {
     await writeTextFile(envExamplePath, nextEnvExample.contents)
   }
+
+  await syncBroadcastAuthSupportAfterAuthInstall(projectRoot)
 
   return {
     updatedPackageJson: await upsertAuthPackageDependencies(projectRoot, features),
@@ -1645,6 +2026,86 @@ export async function installMailIntoProject(
     updatedPackageJson: await upsertMailPackageDependency(projectRoot),
     createdMailConfig: !mailConfigPath,
     createdMailDirectory: !mailDirectoryExists,
+  }
+}
+
+export async function installBroadcastIntoProject(
+  projectRoot: string,
+): Promise<BroadcastInstallResult> {
+  const project = await loadProjectConfig(projectRoot, { required: true })
+  const manifestPath = project.manifestPath!
+  const manifestContents = (await readTextFile(manifestPath))!
+  const manifestFormat = resolveConfigModuleFormat(manifestPath, manifestContents)
+  const broadcastConfigTargetPath = resolveBroadcastConfigTargetPath(projectRoot, manifestPath, manifestFormat)
+  const broadcastConfigIsTypeScript = ['.ts', '.mts', '.cts'].includes(extname(broadcastConfigTargetPath))
+  const broadcastConfigPath = await resolveFirstExistingPath(projectRoot, BROADCAST_CONFIG_FILE_NAMES)
+  const authConfigPath = await resolveFirstExistingPath(projectRoot, AUTH_CONFIG_FILE_NAMES)
+  const { dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  const framework = detectProjectFrameworkFromPackageJson(dependencies, devDependencies)
+  const canCreateBroadcastAuthRoute = framework === 'next' || framework === 'nuxt' || framework === 'sveltekit'
+  const broadcastRoot = resolve(projectRoot, 'server/broadcast')
+  const channelsRoot = resolve(projectRoot, 'server/channels')
+  const broadcastDirectoryExists = await pathExists(broadcastRoot)
+  const channelsDirectoryExists = await pathExists(channelsRoot)
+
+  await mkdir(resolve(projectRoot, 'config'), { recursive: true })
+  await mkdir(broadcastRoot, { recursive: true })
+  await mkdir(channelsRoot, { recursive: true })
+
+  if (!broadcastConfigPath) {
+    await writeTextFile(
+      broadcastConfigTargetPath,
+      renderBroadcastConfig(
+        manifestFormat,
+        Boolean(authConfigPath) && canCreateBroadcastAuthRoute,
+        broadcastConfigIsTypeScript,
+      ),
+    )
+  }
+
+  const broadcastEnvFiles = renderBroadcastEnvFiles()
+  const envPath = resolve(projectRoot, '.env')
+  const envExamplePath = resolve(projectRoot, '.env.example')
+  const nextEnv = upsertEnvContents(await readTextFile(envPath), broadcastEnvFiles.env)
+  const nextEnvExample = upsertEnvContents(await readTextFile(envExamplePath), broadcastEnvFiles.example)
+
+  const dependencyResult = await upsertBroadcastPackageDependencies(projectRoot)
+  let createdFrameworkSetup = false
+
+  if (framework === 'next') {
+    const holoHelperPath = resolve(projectRoot, 'server/holo.ts')
+    if (!(await pathExists(holoHelperPath))) {
+      await writeTextFile(holoHelperPath, renderNextHoloHelper())
+      createdFrameworkSetup = true
+    }
+  } else if (framework === 'nuxt') {
+    // no framework-specific setup needed for Nuxt
+  } else if (framework === 'sveltekit') {
+    const holoHelperPath = resolve(projectRoot, 'src/lib/server/holo.ts')
+    if (!(await pathExists(holoHelperPath))) {
+      await writeTextFile(holoHelperPath, renderSvelteHoloHelper())
+      createdFrameworkSetup = true
+    }
+  }
+  const broadcastAuthSupport = await syncBroadcastAuthSupportAfterAuthInstall(projectRoot)
+
+  if (nextEnv.changed && typeof nextEnv.contents === 'string') {
+    await writeTextFile(envPath, nextEnv.contents)
+  }
+
+  if (nextEnvExample.changed && typeof nextEnvExample.contents === 'string') {
+    await writeTextFile(envExamplePath, nextEnvExample.contents)
+  }
+
+  return {
+    updatedPackageJson: dependencyResult.updated,
+    createdBroadcastConfig: !broadcastConfigPath,
+    createdBroadcastDirectory: !broadcastDirectoryExists,
+    createdChannelsDirectory: !channelsDirectoryExists,
+    createdBroadcastAuthRoute: broadcastAuthSupport.createdBroadcastAuthRoute,
+    createdFrameworkSetup,
+    updatedEnv: nextEnv.changed,
+    updatedEnvExample: nextEnvExample.changed,
   }
 }
 
@@ -2599,6 +3060,7 @@ export {
   inferConnectionDriver,
   inferDatabaseDriverFromUrl,
   isSupportedQueueInstallerDriver,
+  injectBroadcastAuthEndpoint,
   renderAuthConfig,
   renderAuthMigration,
   renderAuthUserModel,
@@ -2621,6 +3083,7 @@ export {
   renderStorageConfig,
   resolveDefaultDatabaseUrl,
   resolvePackageManagerVersion,
+  resolveBroadcastConfigTargetPath,
   sanitizePackageName,
   upsertAuthPackageDependencies,
   upsertEventsPackageDependency,

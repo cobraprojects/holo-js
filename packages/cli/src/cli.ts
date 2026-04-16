@@ -32,6 +32,7 @@ import type * as RuntimeModule from './runtime'
 import type * as QueueModule from './queue'
 import type * as QueueMigrationsModule from './queue-migrations'
 import type * as GeneratorsModule from './generators'
+import type * as BroadcastModule from './broadcast'
 import type { LoadedProjectConfig, CommandFlagValue, CommandExecutionContext } from './types'
 import type {
   IoStreams,
@@ -64,11 +65,15 @@ type QueueCommandExecutors = {
   runQueueTableCommand?: typeof QueueMigrationsModule.runQueueTableCommand
   runQueueClearCommand?: typeof QueueModule.runQueueClearCommand
 }
+type BroadcastCommandExecutors = {
+  runBroadcastWorkCommand?: typeof BroadcastModule.runBroadcastWorkCommand
+}
 
 let runtimeModulePromise: Promise<typeof RuntimeModule> | undefined
 let queueModulePromise: Promise<typeof QueueModule> | undefined
 let queueMigrationsModulePromise: Promise<typeof QueueMigrationsModule> | undefined
 let generatorsModulePromise: Promise<typeof GeneratorsModule> | undefined
+let broadcastModulePromise: Promise<typeof BroadcastModule> | undefined
 let devModulePromise: Promise<typeof DevModule> | undefined
 let projectConfigModulePromise: Promise<typeof ProjectConfigModule> | undefined
 let projectDiscoveryModulePromise: Promise<typeof ProjectDiscoveryModule> | undefined
@@ -93,6 +98,11 @@ function loadQueueMigrationsModule(): Promise<typeof QueueMigrationsModule> {
 function loadGeneratorsModule(): Promise<typeof GeneratorsModule> {
   generatorsModulePromise ??= import('./generators')
   return generatorsModulePromise
+}
+
+function loadBroadcastModule(): Promise<typeof BroadcastModule> {
+  broadcastModulePromise ??= import('./broadcast')
+  return broadcastModulePromise
 }
 
 function loadDevModule(): Promise<typeof DevModule> {
@@ -135,9 +145,15 @@ type GeneratorCommandKey =
   | 'runMakeMail'
   | 'runMakeJob'
   | 'runMakeEvent'
+  | 'runMakeBroadcast'
+  | 'runMakeChannel'
   | 'runMakeListener'
   | 'runMakeObserver'
   | 'runMakeFactory'
+type BroadcastExecutorKey = keyof BroadcastCommandExecutors
+type BroadcastExecutorLoaderMap = {
+  [TKey in BroadcastExecutorKey]: () => Promise<NonNullable<BroadcastCommandExecutors[TKey]>>
+}
 
 async function resolveRuntimeExecutor(runtimeExecutor?: RuntimeExecutor): Promise<RuntimeExecutor> {
   return runtimeExecutor ?? (await loadRuntimeModule()).withRuntimeEnvironment
@@ -174,6 +190,10 @@ const queueExecutorLoaders: QueueExecutorLoaderMap = {
   runQueueClearCommand: async () => (await loadQueueModule()).runQueueClearCommand,
 }
 
+const broadcastExecutorLoaders: BroadcastExecutorLoaderMap = {
+  runBroadcastWorkCommand: async () => (await loadBroadcastModule()).runBroadcastWorkCommand,
+}
+
 async function resolveQueueExecutor<TKey extends QueueExecutorKey>(
   queueExecutors: QueueCommandExecutors,
   key: TKey,
@@ -184,6 +204,18 @@ async function resolveQueueExecutor<TKey extends QueueExecutorKey>(
   }
 
   return queueExecutorLoaders[key]()
+}
+
+async function resolveBroadcastExecutor<TKey extends BroadcastExecutorKey>(
+  broadcastExecutors: BroadcastCommandExecutors,
+  key: TKey,
+): Promise<NonNullable<BroadcastCommandExecutors[TKey]>> {
+  const existing = broadcastExecutors[key]
+  if (existing) {
+    return existing as NonNullable<BroadcastCommandExecutors[TKey]>
+  }
+
+  return broadcastExecutorLoaders[key]()
 }
 
 async function resolveGeneratorCommand<TKey extends GeneratorCommandKey>(
@@ -264,6 +296,7 @@ export function createInternalCommands(
   runtimeExecutor?: RuntimeExecutor,
   queueExecutors: QueueCommandExecutors = {},
   projectExecutors: ProjectCommandExecutors = {},
+  broadcastExecutors: BroadcastCommandExecutors = {},
 ): CommandDefinition[] {
   return [
     {
@@ -331,7 +364,7 @@ export function createInternalCommands(
     {
       name: 'install',
       description: 'Install first-party Holo support into an existing project.',
-      usage: 'holo install <queue|events|auth|notifications|mail> [--driver <sync|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
+      usage: 'holo install <queue|events|auth|notifications|mail|broadcast> [--driver <sync|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
       source: 'internal',
       async prepare(input) {
         const target = normalizeChoice(
@@ -351,6 +384,9 @@ export function createInternalCommands(
         }
         if (target === 'mail' && requestedDriver) {
           throw new Error('The mail installer does not support --driver.')
+        }
+        if (target === 'broadcast' && requestedDriver) {
+          throw new Error('The broadcast installer does not support --driver.')
         }
 
         const driver = target === 'queue'
@@ -500,6 +536,30 @@ export function createInternalCommands(
           return
         }
 
+        if (target === 'broadcast') {
+          const { installBroadcastIntoProject } = await loadProjectScaffoldModule()
+          const result = await installBroadcastIntoProject(context.projectRoot)
+          const changed = result.updatedPackageJson
+            || result.createdBroadcastConfig
+            || result.createdBroadcastDirectory
+            || result.createdChannelsDirectory
+            || result.createdBroadcastAuthRoute
+            || result.createdFrameworkSetup
+            || result.updatedEnv
+            || result.updatedEnvExample
+
+          writeLine(context.stdout, changed ? 'Installed broadcast support.' : 'Broadcast support is already installed.')
+          if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
+          if (result.updatedEnv) writeLine(context.stdout, '  - updated .env')
+          if (result.updatedEnvExample) writeLine(context.stdout, '  - updated .env.example')
+          if (result.createdBroadcastConfig) writeLine(context.stdout, '  - created config/broadcast.ts')
+          if (result.createdBroadcastDirectory) writeLine(context.stdout, '  - created server/broadcast')
+          if (result.createdChannelsDirectory) writeLine(context.stdout, '  - created server/channels')
+          if (result.createdBroadcastAuthRoute) writeLine(context.stdout, '  - created /broadcasting/auth route')
+          if (result.createdFrameworkSetup) writeLine(context.stdout, '  - created framework Flux setup')
+          return
+        }
+
         if (target !== 'queue') {
           throw new Error(`Unsupported install target: ${target || '(empty)'}.`)
         }
@@ -563,6 +623,19 @@ export function createInternalCommands(
         const runProjectLifecycleScript = await resolveProjectExecutor(projectExecutors, 'runProjectLifecycleScript')
         await runProjectPrepare(context.projectRoot, context)
         await runProjectLifecycleScript(context, context.projectRoot, 'holo:build')
+      },
+    },
+    {
+      name: 'broadcast:work',
+      description: 'Run the self-hosted broadcast worker.',
+      usage: 'holo broadcast:work',
+      source: 'internal',
+      async prepare() {
+        return { args: [], flags: {} }
+      },
+      async run() {
+        const runBroadcastWorkCommand = await resolveBroadcastExecutor(broadcastExecutors, 'runBroadcastWorkCommand')
+        await runBroadcastWorkCommand(context, context.projectRoot)
       },
     },
     {
@@ -950,6 +1023,44 @@ export function createInternalCommands(
       },
     },
     {
+      name: 'make:broadcast',
+      description: 'Create and register a broadcast definition file.',
+      usage: 'holo make:broadcast <name>',
+      source: 'internal',
+      async prepare(input) {
+        return {
+          args: [await ensureRequiredArg(context, input, 0, 'Broadcast name')],
+          flags: {},
+        }
+      },
+      async run(commandContext) {
+        const runMakeBroadcast = await resolveGeneratorCommand('runMakeBroadcast')
+        await runMakeBroadcast(context, context.projectRoot, {
+          args: commandContext.args,
+          flags: { ...commandContext.flags },
+        })
+      },
+    },
+    {
+      name: 'make:channel',
+      description: 'Create and register a channel authorization definition file.',
+      usage: 'holo make:channel <pattern>',
+      source: 'internal',
+      async prepare(input) {
+        return {
+          args: [await ensureRequiredArg(context, input, 0, 'Channel pattern')],
+          flags: {},
+        }
+      },
+      async run(commandContext) {
+        const runMakeChannel = await resolveGeneratorCommand('runMakeChannel')
+        await runMakeChannel(context, context.projectRoot, {
+          args: commandContext.args,
+          flags: { ...commandContext.flags },
+        })
+      },
+    },
+    {
       name: 'make:job',
       description: 'Create and register a queue job file.',
       usage: 'holo make:job <name>',
@@ -1274,6 +1385,7 @@ export async function runCli(argv: readonly string[], io: IoStreams): Promise<nu
       || requestedCommandName === 'prepare'
       || requestedCommandName === 'dev'
       || requestedCommandName === 'build'
+      || requestedCommandName === 'broadcast:work'
       || requestedCommandName === 'queue:table'
       || requestedCommandName === 'queue:failed-table'
       || requestedCommandName === 'queue:work'

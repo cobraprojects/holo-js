@@ -48,6 +48,9 @@ import {
   writeQueueRestartSignal,
 } from './queue'
 import {
+  runBroadcastWorkCommand,
+} from './broadcast'
+import {
   renderFailedJobsTableMigration,
   renderQueueTableMigration,
   resolveDatabaseQueueTables,
@@ -64,6 +67,8 @@ import {
   isIgnorableWatchError,
 } from './dev'
 import {
+  runMakeBroadcast,
+  runMakeChannel,
   runMakeEvent,
   runMakeFactory,
   runMakeJob,
@@ -151,6 +156,8 @@ export const cliInternals = {
   resolveQueueRestartSignalPath,
   resolveRunnableCliEntrypoint,
   resolveStringFlag,
+  runMakeBroadcast,
+  runMakeChannel,
   runMakeEvent,
   runMakeFactory,
   runMakeJob,
@@ -174,6 +181,7 @@ export const cliInternals = {
   runQueueRetryCommand,
   runQueueTableCommand,
   runQueueWorkCommand,
+  runBroadcastWorkCommand,
   splitCsv,
   withRuntimeEnvironment,
   writeQueueRestartSignal,
