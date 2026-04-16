@@ -410,6 +410,79 @@ describe('@holo-js/broadcast worker runtime', () => {
     })
   })
 
+  it('tracks whisper permissions per socket for the same channel', async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      const authorization = request.headers.get('authorization')
+      return new Response(JSON.stringify({
+        ok: true,
+        type: 'private',
+        whispers: authorization === 'Bearer socket-two'
+          ? ['typing.stop']
+          : ['typing.start'],
+      }), { status: 200 })
+    }) as typeof globalThis.fetch
+
+    const runtime = createBroadcastWorkerRuntime({
+      config: createConfig(),
+      now: () => FIXED_NOW_MS,
+      fetch,
+    })
+    const app = workerInternals.buildWorkerApps(createConfig())['key-main']!
+    const first = createSocket(app)
+    const second = createSocket(app)
+    second.socket.socketId = `${app.key}.2`
+    second.socket.headers = new Headers({
+      authorization: 'Bearer socket-two',
+      cookie: 'sid=def',
+    })
+    runtime.connectWebSocket(first.socket)
+    runtime.connectWebSocket(second.socket)
+
+    await runtime.receiveWebSocketMessage(first.socket.socketId, JSON.stringify({
+      event: 'pusher:subscribe',
+      data: {
+        channel: 'private-orders.ord_2',
+      },
+    }))
+    await runtime.receiveWebSocketMessage(second.socket.socketId, JSON.stringify({
+      event: 'pusher:subscribe',
+      data: {
+        channel: 'private-orders.ord_2',
+      },
+    }))
+
+    await runtime.receiveWebSocketMessage(first.socket.socketId, JSON.stringify({
+      event: 'client-typing.start',
+      channel: 'private-orders.ord_2',
+      data: {
+        editing: true,
+      },
+    }))
+    await expect(runtime.receiveWebSocketMessage(second.socket.socketId, JSON.stringify({
+      event: 'client-typing.start',
+      channel: 'private-orders.ord_2',
+      data: {
+        editing: true,
+      },
+    }))).rejects.toThrow('not allowed')
+
+    await runtime.receiveWebSocketMessage(second.socket.socketId, JSON.stringify({
+      event: 'client-typing.stop',
+      channel: 'private-orders.ord_2',
+      data: {
+        editing: false,
+      },
+    }))
+    await expect(runtime.receiveWebSocketMessage(first.socket.socketId, JSON.stringify({
+      event: 'client-typing.stop',
+      channel: 'private-orders.ord_2',
+      data: {
+        editing: false,
+      },
+    }))).rejects.toThrow('not allowed')
+  })
+
   it('emits presence member add and remove events to existing subscribers', async () => {
     const runtime = createBroadcastWorkerRuntime({
       config: createConfig(),
@@ -1944,33 +2017,39 @@ describe('@holo-js/broadcast worker runtime', () => {
     expect(invalidCredentials.status).toBe(401)
 
     publishUrl.searchParams.delete('auth_key')
-    await expect(runtime.fetch(new Request(publishUrl, {
+    const missingAuthKey = await runtime.fetch(new Request(publishUrl, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
       },
       body: publishPayload,
-    }))).rejects.toThrow('Publish auth_key')
+    }))
+    expect(missingAuthKey.status).toBe(401)
+    await expect(missingAuthKey.text()).resolves.toContain('Publish auth_key')
 
     publishUrl.searchParams.set('auth_key', 'key-no-auth')
     publishUrl.searchParams.delete('auth_signature')
-    await expect(runtime.fetch(new Request(publishUrl, {
+    const missingAuthSignature = await runtime.fetch(new Request(publishUrl, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
       },
       body: publishPayload,
-    }))).rejects.toThrow('Publish auth_signature')
+    }))
+    expect(missingAuthSignature.status).toBe(401)
+    await expect(missingAuthSignature.text()).resolves.toContain('Publish auth_signature')
 
     publishUrl.searchParams.set('auth_signature', 'x')
     publishUrl.searchParams.delete('auth_timestamp')
-    await expect(runtime.fetch(new Request(publishUrl, {
+    const missingAuthTimestamp = await runtime.fetch(new Request(publishUrl, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
       },
       body: publishPayload,
-    }))).rejects.toThrow('Publish auth_timestamp')
+    }))
+    expect(missingAuthTimestamp.status).toBe(401)
+    await expect(missingAuthTimestamp.text()).resolves.toContain('Publish auth_timestamp')
 
     const unknownApp = await runtime.fetch(new Request('http://worker.test/apps/app-unknown/events', {
       method: 'POST',

@@ -255,6 +255,47 @@ export default defineChannel('orders.{orderId}', {
     await expect(readFile(join(root, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('"orders.{orderId}": import(\'@holo-js/broadcast\').ChannelDefinition')
   })
 
+  it('discovers broadcast artifacts from configured custom paths', async () => {
+    const root = await createProject()
+    await mkdir(join(root, 'app/broadcast'), { recursive: true })
+    await mkdir(join(root, 'app/channels'), { recursive: true })
+    await writeFile(join(root, 'app/broadcast/orders.ts'), `
+import { defineBroadcast, privateChannel } from ${JSON.stringify(broadcastContractsModulePath)}
+
+export default defineBroadcast({
+  channels: [
+    privateChannel('orders.{orderId}', { orderId: 'ord_1' }),
+  ],
+  payload: {
+    orderId: 'ord_1',
+  },
+})
+`, 'utf8')
+    await writeFile(join(root, 'app/channels/orders.ts'), `
+import { defineChannel } from ${JSON.stringify(broadcastContractsModulePath)}
+
+export default defineChannel('orders.{orderId}', {
+  type: 'private',
+  authorize() {
+    return true
+  },
+  whispers: {},
+})
+`, 'utf8')
+
+    const registry = await prepareProjectDiscovery(root, normalizeHoloProjectConfig({
+      paths: {
+        broadcast: 'app/broadcast',
+        channels: 'app/channels',
+      } as never,
+    }))
+
+    expect(registry.paths.broadcast).toBe('app/broadcast')
+    expect(registry.paths.channels).toBe('app/channels')
+    expect(registry.broadcast[0]?.sourcePath).toBe('app/broadcast/orders.ts')
+    expect(registry.channels[0]?.sourcePath).toBe('app/channels/orders.ts')
+  })
+
   it('throws a clear error when discovered broadcast files export no broadcast definition', async () => {
     const root = await createProject()
     await writeFile(join(root, 'server/broadcast/orders/updated.ts'), 'export const nope = { ok: true }\n', 'utf8')

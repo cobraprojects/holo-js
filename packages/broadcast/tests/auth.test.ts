@@ -259,6 +259,67 @@ describe('@holo-js/broadcast channel auth runtime', () => {
     })).rejects.toThrow('duplicate broadcast channel pattern')
   })
 
+  it('prefers exact literal channel definitions over wildcard matches and rejects registry overlaps', async () => {
+    configureBroadcastRuntime({
+      channelAuth: {
+        definitions: [
+          defineChannel('orders.{orderId}', {
+            type: 'private',
+            authorize() {
+              return false
+            },
+          }),
+          defineChannel('orders.admin', {
+            type: 'private',
+            authorize() {
+              return true
+            },
+          }),
+        ],
+      },
+    })
+
+    await expect(authorizeBroadcastChannel({
+      channel: 'orders.admin',
+      user: {
+        id: 'user_1',
+      },
+    })).resolves.toMatchObject({
+      ok: true,
+      pattern: 'orders.admin',
+      params: {},
+    })
+
+    await expect(broadcastAuthInternals.loadChannelDefinitions({
+      definitions: [
+        defineChannel('orders.admin', {
+          type: 'private',
+          authorize() {
+            return true
+          },
+        }),
+      ],
+      registry: {
+        projectRoot: '/virtual/project',
+        channels: [{
+          sourcePath: 'server/channels/orders-admin.ts',
+          pattern: 'orders.admin',
+          type: 'private',
+          params: [],
+          whispers: [],
+        }],
+      },
+      importModule: vi.fn(async () => ({
+        default: defineChannel('orders.admin', {
+          type: 'private',
+          authorize() {
+            return true
+          },
+        }),
+      })),
+    })).rejects.toThrow('duplicate broadcast channel pattern')
+  })
+
   it('renders framework-agnostic broadcast auth responses for endpoint handlers', async () => {
     configureBroadcastRuntime({
       channelAuth: {

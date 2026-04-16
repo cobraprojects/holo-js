@@ -486,7 +486,7 @@ function normalizeQueueOptions(queue: boolean | BroadcastQueueOptions | undefine
   const afterCommit = queue.afterCommit === true
   const queued = queue.queued === true
 
-  if (!queued && (connection || queueName || afterCommit)) {
+  if (!queued && (connection || queueName)) {
     throw new Error('[Holo Broadcast] Broadcast queue metadata requires queued: true.')
   }
 

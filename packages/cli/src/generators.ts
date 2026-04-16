@@ -130,6 +130,20 @@ function resolveChannelArtifactPath(
   return resolveArtifactPath(projectRoot, channelsPath, '', `${fileStem}-${suffix}.ts`)
 }
 
+function resolveConfiguredBroadcastPath(project: Awaited<ReturnType<typeof ensureProjectConfig>>): string {
+  const configuredPaths = project.config.paths as typeof project.config.paths & {
+    readonly broadcast?: string
+  }
+  return configuredPaths.broadcast ?? 'server/broadcast'
+}
+
+function resolveConfiguredChannelsPath(project: Awaited<ReturnType<typeof ensureProjectConfig>>): string {
+  const configuredPaths = project.config.paths as typeof project.config.paths & {
+    readonly channels?: string
+  }
+  return configuredPaths.channels ?? 'server/channels'
+}
+
 async function resolveProjectMailViewFramework(projectRoot: string): Promise<KnownMailViewFramework | 'generic'> {
   try {
     const packageJson = await readFile(resolve(projectRoot, 'package.json'), 'utf8')
@@ -396,7 +410,7 @@ export async function runMakeBroadcast(
     .map(segment => toKebabCase(segment))
     .join('/')
   const fileStem = toKebabCase(nameParts.rawBaseName)
-  const broadcastPath = registry.paths.broadcast
+  const broadcastPath = resolveConfiguredBroadcastPath(project)
   const filePath = resolveArtifactPath(projectRoot, broadcastPath, directory, `${fileStem}.ts`)
   const eventName = [...(directory ? directory.split('/') : []), fileStem].join('.')
 
@@ -428,7 +442,7 @@ export async function runMakeChannel(
     throw new Error(`Channel with the same pattern already exists: ${pattern}.`)
   }
 
-  const channelsPath = registry.paths.channels
+  const channelsPath = resolveConfiguredChannelsPath(project)
   const filePath = resolveChannelArtifactPath(projectRoot, channelsPath, pattern, registry)
 
   await ensureAbsent(filePath)

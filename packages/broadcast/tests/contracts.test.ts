@@ -184,7 +184,7 @@ describe('@holo-js/broadcast contracts', () => {
         queue: 'realtime',
       },
     })).toThrow('requires queued: true')
-    expect(() => defineBroadcast({
+    expect(defineBroadcast({
       channels: [channel('dashboard')],
       payload: {
         ok: true,
@@ -192,7 +192,10 @@ describe('@holo-js/broadcast contracts', () => {
       queue: {
         afterCommit: true,
       },
-    })).toThrow('requires queued: true')
+    }).queue).toEqual({
+      queued: false,
+      afterCommit: true,
+    })
 
     expect(() => defineBroadcast({
       channels: [channel('dashboard')],

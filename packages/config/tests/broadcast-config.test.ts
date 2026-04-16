@@ -282,7 +282,7 @@ describe('@holo-js/config broadcast normalization', () => {
       worker: {
         port: 'zero',
       },
-    })).toThrow('Broadcast worker port must be a positive number')
+    })).toThrow('Broadcast worker port must be a positive integer')
 
     expect(() => normalizeBroadcastConfig({
       worker: {
@@ -468,5 +468,48 @@ describe('@holo-js/config broadcast normalization', () => {
         publicScheme: 'http',
       },
     })
+  })
+
+  it('derives scheme from useTLS and rejects non-integer ports when scheme is omitted', () => {
+    expect(normalizeBroadcastConfig({
+      default: 'reverb',
+      connections: {
+        reverb: {
+          driver: 'holo',
+          key: 'app-key',
+          secret: 'app-secret',
+          appId: 'app-id',
+          options: {
+            host: 'broadcast.example.test',
+            useTLS: false,
+          },
+        },
+      },
+    })).toMatchObject({
+      connections: {
+        reverb: {
+          options: {
+            scheme: 'http',
+            port: 80,
+            useTLS: false,
+          },
+        },
+      },
+    })
+
+    expect(() => normalizeBroadcastConfig({
+      default: 'reverb',
+      connections: {
+        reverb: {
+          driver: 'holo',
+          key: 'app-key',
+          secret: 'app-secret',
+          appId: 'app-id',
+          options: {
+            port: '443.5',
+          },
+        },
+      },
+    })).toThrow('must be a positive integer')
   })
 })

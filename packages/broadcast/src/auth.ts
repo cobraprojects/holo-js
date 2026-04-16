@@ -196,6 +196,13 @@ async function loadRegistryDefinitions(
     const definition = await importChannelDefinition(entry, bindings)
     return [definition.pattern, definition] as const
   }))
+  const seenPatterns = new Set<string>()
+  for (const [pattern] of definitions) {
+    if (seenPatterns.has(pattern)) {
+      throw new Error(`[@holo-js/broadcast] duplicate broadcast channel pattern "${pattern}" was configured more than once (registry).`)
+    }
+    seenPatterns.add(pattern)
+  }
 
   return Object.freeze(Object.fromEntries(definitions))
 }
@@ -211,6 +218,10 @@ async function loadChannelDefinitions(
   const pending = (async () => {
     const inlineDefinitions = normalizeDefinitionMap(bindings)
     const registryDefinitions = await loadRegistryDefinitions(bindings)
+    const duplicatePattern = Object.keys(inlineDefinitions).find(pattern => Object.hasOwn(registryDefinitions, pattern))
+    if (duplicatePattern) {
+      throw new Error(`[@holo-js/broadcast] duplicate broadcast channel pattern "${duplicatePattern}" was configured in both inline definitions and registry definitions.`)
+    }
 
     const merged = Object.freeze({
       ...inlineDefinitions,
@@ -255,6 +266,20 @@ function resolveChannelMatch(
   channel: string,
   definitions: LoadedChannelDefinitions,
 ): MatchedChannelDefinition | null {
+  for (const definition of Object.values(definitions)) {
+    const params = matchPattern(definition.pattern, channel)
+    if (!params) {
+      continue
+    }
+
+    if (definition.pattern === channel || Object.keys(params).length === 0) {
+      return Object.freeze({
+        definition,
+        params,
+      })
+    }
+  }
+
   for (const definition of Object.values(definitions)) {
     const params = matchPattern(definition.pattern, channel)
     if (!params) {

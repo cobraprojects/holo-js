@@ -462,6 +462,17 @@ async function resolveListenerEventNamesFromSource(
   return Object.freeze([...new Set(resolvedEventNames)])
 }
 
+function resolveBroadcastArtifactsPath(
+  config: NormalizedHoloProjectConfig,
+  key: 'broadcast' | 'channels',
+): string {
+  const configuredPaths = config.paths as typeof config.paths & {
+    readonly broadcast?: string
+    readonly channels?: string
+  }
+  return configuredPaths[key] ?? `server/${key}`
+}
+
 export async function prepareProjectDiscovery(
   projectRoot: string,
   config: NormalizedHoloProjectConfig = normalizeHoloProjectConfig(),
@@ -476,8 +487,10 @@ export async function prepareProjectDiscovery(
   const jobsRoot = resolve(projectRoot, config.paths.jobs)
   const eventsRoot = resolve(projectRoot, config.paths.events)
   const listenersRoot = resolve(projectRoot, config.paths.listeners)
-  const broadcastRoot = resolve(projectRoot, 'server/broadcast')
-  const channelsRoot = resolve(projectRoot, 'server/channels')
+  const broadcastPath = resolveBroadcastArtifactsPath(config, 'broadcast')
+  const channelsPath = resolveBroadcastArtifactsPath(config, 'channels')
+  const broadcastRoot = resolve(projectRoot, broadcastPath)
+  const channelsRoot = resolve(projectRoot, channelsPath)
 
   const [modelFiles, migrationFiles, seederFiles, commandFiles, jobFiles, eventFiles, listenerFiles, broadcastFiles, channelFiles] = await Promise.all([
     collectFiles(modelsRoot),
@@ -710,6 +723,7 @@ export async function prepareProjectDiscovery(
     })
   }
   assertUniqueEntries('broadcast', broadcast)
+  broadcast.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath))
 
   const channels: GeneratedChannelRegistryEntry[] = []
   for (const filePath of channelFiles) {
@@ -741,6 +755,7 @@ export async function prepareProjectDiscovery(
     name: entry.pattern,
     sourcePath: entry.sourcePath,
   })))
+  channels.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath))
 
   const registry: GeneratedProjectRegistry = {
     version: 1,
@@ -753,8 +768,8 @@ export async function prepareProjectDiscovery(
       jobs: config.paths.jobs,
       events: config.paths.events,
       listeners: config.paths.listeners,
-      broadcast: 'server/broadcast',
-      channels: 'server/channels',
+      broadcast: broadcastPath,
+      channels: channelsPath,
       generatedSchema: config.paths.generatedSchema,
     },
     models,

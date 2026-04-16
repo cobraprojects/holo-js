@@ -70,6 +70,7 @@ const workspaceRoot = resolve(import.meta.dirname, '../../..')
 const bunStoreNodeModulesRoot = join(workspaceRoot, 'node_modules/.bun/node_modules')
 type BuiltWorkspacePackages = {
   readonly root: string
+  readonly broadcastPackageRoot: string
   readonly corePackageRoot: string
   readonly configPackageRoot: string
   readonly dbPackageRoot: string
@@ -162,6 +163,7 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   const queueRedisPackageRoot = join(root, 'packages/queue-redis')
   const queueDbPackageRoot = join(root, 'packages/queue-db')
   const eventsPackageRoot = join(root, 'packages/events')
+  const broadcastPackageRoot = join(root, 'packages/broadcast')
   const mailPackageRoot = join(root, 'packages/mail')
   const notificationsPackageRoot = join(root, 'packages/notifications')
   const storagePackageRoot = join(root, 'packages/storage')
@@ -220,6 +222,13 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   const configBuild = buildWorkspacePackageSync('@holo-js/config', join(configPackageRoot, 'dist'))
   expect(configBuild.status, configBuild.stderr || configBuild.stdout).toBe(0)
 
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/broadcast'), broadcastPackageRoot)
+  linkPackageDependencySync(broadcastPackageRoot, '@holo-js/config', configPackageRoot)
+  linkPackageDependencySync(broadcastPackageRoot, '@holo-js/validation', resolve(workspaceRoot, 'packages/validation'))
+  linkExternalDependencySync(broadcastPackageRoot, 'ws')
+  const broadcastBuild = buildWorkspacePackageSync('@holo-js/broadcast', join(broadcastPackageRoot, 'dist'))
+  expect(broadcastBuild.status, broadcastBuild.stderr || broadcastBuild.stdout).toBe(0)
+
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/notifications'), notificationsPackageRoot)
   linkPackageDependencySync(notificationsPackageRoot, '@holo-js/config', configPackageRoot)
   linkPackageDependencySync(notificationsPackageRoot, '@holo-js/queue', queuePackageRoot)
@@ -270,6 +279,7 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
 
   builtWorkspacePackages = {
     root,
+    broadcastPackageRoot,
     corePackageRoot,
     configPackageRoot,
     dbPackageRoot,
@@ -448,10 +458,11 @@ async function linkWorkspaceEvents(projectRoot: string): Promise<void> {
 }
 
 async function linkWorkspaceBroadcast(projectRoot: string): Promise<void> {
+  const { broadcastPackageRoot } = ensureBuiltWorkspacePackagesSync()
   const targetDir = join(projectRoot, 'node_modules', '@holo-js')
   await mkdir(targetDir, { recursive: true })
   await rm(join(targetDir, 'broadcast'), { recursive: true, force: true }).catch(() => {})
-  await symlink(join(workspaceRoot, 'packages/broadcast'), join(targetDir, 'broadcast')).catch(() => {})
+  await symlink(broadcastPackageRoot, join(targetDir, 'broadcast')).catch(() => {})
 }
 
 async function writeFrameworkBinary(projectRoot: string, binaryName: string): Promise<void> {
@@ -9709,6 +9720,13 @@ export default defineJob({
     try {
       const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
       const io = createIo(projectRoot)
+      let sigintHandler: (() => void) | undefined
+      const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((event: string, listener: (...args: unknown[]) => void) => {
+        if (event === 'SIGINT') {
+          sigintHandler = listener as () => void
+        }
+        return process
+      }) as typeof process.on)
       const workPromise = withFakeBun(async () => isolatedCliInternals.runBroadcastWorkCommand(io.io, projectRoot, {
         loadConfig: async () => ({
           broadcast: { default: 'null', connections: {}, worker: {} },
@@ -9724,7 +9742,8 @@ export default defineJob({
         await new Promise(resolve => setTimeout(resolve, 5))
       }
 
-      process.emit('SIGINT')
+      expect(sigintHandler).toBeTypeOf('function')
+      sigintHandler?.()
       await expect(workPromise).resolves.toBeUndefined()
       expect(prepareProjectDiscovery).toHaveBeenCalledTimes(1)
       expect(startBroadcastWorker).toHaveBeenCalledWith(expect.objectContaining({
@@ -9737,6 +9756,7 @@ export default defineJob({
         },
       }))
       expect(stop).toHaveBeenCalledTimes(1)
+      processOnSpy.mockRestore()
     } finally {
       vi.doUnmock('../src/project')
       vi.resetModules()

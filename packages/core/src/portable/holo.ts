@@ -339,6 +339,7 @@ type NotificationsModule = {
       markAsUnread(ids: readonly string[]): Promise<number>
       delete(ids: readonly string[]): Promise<number>
     }
+    readonly broadcaster?: ReturnType<typeof createCoreNotificationBroadcaster>
   }): void
   getNotificationsRuntimeBindings(): {
     readonly mailer?: {
@@ -743,6 +744,8 @@ function restoreOptionalSubsystemRuntimeBindings(
     runtime.__holoBroadcastRuntime__.bindings = bindings.broadcast
   }
 }
+
+const BROADCAST_PUBLISH_TIMEOUT_MS = 10_000
 
 const portableRuntimeRequire = createRequire(import.meta.url)
 
@@ -1801,13 +1804,26 @@ function createCoreBroadcastPublisher(
       ).digest('hex'),
     )
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
-      body,
-    })
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), BROADCAST_PUBLISH_TIMEOUT_MS)
+    let response: Response
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body,
+        signal: controller.signal,
+      })
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(`[@holo-js/core] Broadcast publish request timed out after ${BROADCAST_PUBLISH_TIMEOUT_MS}ms.`)
+      }
+      throw error
+    } finally {
+      clearTimeout(timeout)
+    }
 
     if (!response.ok) {
       throw new Error(`[@holo-js/core] Broadcast publish request failed with status ${response.status}.`)
@@ -3227,6 +3243,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
 }
 
 export async function resetOptionalHoloSubsystems(): Promise<void> {
+  const projectRoot = getRuntimeState().current?.projectRoot ?? getRuntimeState().pendingProjectRoot
   await resetOptionalStorageRuntime()
   const queueModule = await loadQueueModule()
   await queueModule?.shutdownQueueRuntime()
@@ -3234,7 +3251,7 @@ export async function resetOptionalHoloSubsystems(): Promise<void> {
   mailModule?.resetMailRuntime()
   const notificationsModule = await loadNotificationsModule()
   notificationsModule?.resetNotificationsRuntime()
-  const broadcastModule = await loadBroadcastModule()
+  const broadcastModule = await loadBroadcastModule(false, projectRoot)
   broadcastModule?.resetBroadcastRuntime()
   const authModule = await loadAuthModule()
   authModule?.resetAuthRuntime()
@@ -3504,6 +3521,7 @@ export function getHolo<TCustom extends HoloConfigMap = HoloConfigMap>(): HoloRu
 
 export async function resetHoloRuntime(): Promise<void> {
   const current = getRuntimeState().current
+  const projectRoot = current?.projectRoot ?? getRuntimeState().pendingProjectRoot
   getRuntimeState().pending = undefined
   getRuntimeState().pendingProjectRoot = undefined
   if (!current) {
@@ -3519,7 +3537,7 @@ export async function resetHoloRuntime(): Promise<void> {
   mailModule?.resetMailRuntime()
   const notificationsModule = await loadNotificationsModule()
   notificationsModule?.resetNotificationsRuntime()
-  const broadcastModule = await loadBroadcastModule()
+  const broadcastModule = await loadBroadcastModule(false, projectRoot)
   broadcastModule?.resetBroadcastRuntime()
   resetHoloRenderingRuntime()
 }

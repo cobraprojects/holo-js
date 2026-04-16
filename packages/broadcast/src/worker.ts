@@ -329,6 +329,11 @@ function createPusherSignature(secret: string, method: string, pathname: string,
   return createHmac('sha256', secret).update(payload).digest('hex')
 }
 
+function logSocketMessageError(socketId: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  console.error(`[@holo-js/broadcast] WebSocket message handling failed for socket "${socketId}": ${message}`)
+}
+
 function parseChannelKind(channel: string): { readonly kind: 'public' | 'private' | 'presence', readonly canonical: string } {
   if (channel.startsWith('private-')) {
     return Object.freeze({
@@ -652,7 +657,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   const appsByKey = buildWorkerApps(options.config)
   const connectedSockets = new Map<string, SocketState>()
   const channels = new Map<string, Set<string>>()
-  const channelWhispers = new Map<string, Set<string>>()
+  const channelWhispers = new Map<string, Map<string, Set<string>>>()
   const presenceMembers = new Map<string, Map<string, PresenceMember>>()
   const presenceSockets = new Map<string, Map<string, string>>()
   const scaling = options.scaling
@@ -762,9 +767,12 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       }
     }
 
-    const whispers = channelWhispers.get(key)
-    if (whispers && (!sockets || sockets.size === 0)) {
-      channelWhispers.delete(key)
+    const whispersBySocket = channelWhispers.get(key)
+    if (whispersBySocket) {
+      whispersBySocket.delete(socketId)
+      if (whispersBySocket.size === 0) {
+        channelWhispers.delete(key)
+      }
     }
 
     return Object.freeze({
@@ -1034,11 +1042,19 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     const key = composeSubscriptionKey(socket.app.appId, channel)
     channels.set(key, new Set([...(channels.get(key) ?? []), socket.socketId]))
 
-    const { kind } = parseChannelKind(channel)
     if (authorization.whispers.length > 0) {
-      channelWhispers.set(key, new Set(authorization.whispers))
+      const whispersBySocket = channelWhispers.get(key) ?? new Map<string, Set<string>>()
+      whispersBySocket.set(socket.socketId, new Set(authorization.whispers))
+      channelWhispers.set(key, whispersBySocket)
+    } else {
+      const whispersBySocket = channelWhispers.get(key)
+      whispersBySocket?.delete(socket.socketId)
+      if (whispersBySocket && whispersBySocket.size === 0) {
+        channelWhispers.delete(key)
+      }
     }
 
+    const { kind } = parseChannelKind(channel)
     if (kind === 'presence') {
       const member = authorization.member ?? Object.freeze({ id: socket.socketId })
       const synchronized = await synchronizePresenceChannel(
@@ -1087,7 +1103,9 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     }
 
     const whisperName = message.event.replace(/^client-/, '')
-    const allowedWhispers = channelWhispers.get(composeSubscriptionKey(socket.app.appId, channel))
+    const allowedWhispers = channelWhispers
+      .get(composeSubscriptionKey(socket.app.appId, channel))
+      ?.get(socket.socketId)
     if (!allowedWhispers || !allowedWhispers.has(whisperName)) {
       throw new Error(`[@holo-js/broadcast] Whisper "${whisperName}" is not allowed for "${channel}".`)
     }
@@ -1155,15 +1173,27 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       return new Response('Invalid body signature', { status: 401 })
     }
 
-    const authKey = normalizeRequiredString(url.searchParams.get('auth_key') ?? '', 'Publish auth_key')
+    let authKey: string
+    try {
+      authKey = normalizeRequiredString(url.searchParams.get('auth_key') ?? '', 'Publish auth_key')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid credentials'
+      return new Response(message, { status: 401 })
+    }
     if (authKey !== app.key) {
       return new Response('Invalid credentials', { status: 401 })
     }
 
-    const authTimestamp = Number.parseInt(
-      normalizeRequiredString(url.searchParams.get('auth_timestamp') ?? '', 'Publish auth_timestamp'),
-      10,
-    )
+    let authTimestamp: number
+    try {
+      authTimestamp = Number.parseInt(
+        normalizeRequiredString(url.searchParams.get('auth_timestamp') ?? '', 'Publish auth_timestamp'),
+        10,
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid auth timestamp'
+      return new Response(message, { status: 401 })
+    }
     /* v8 ignore next 3 -- defensive guard; parseInt with radix 10 on a non-empty string always returns an integer or NaN */
     if (!Number.isInteger(authTimestamp)) {
       return new Response('Invalid auth timestamp', { status: 401 })
@@ -1174,19 +1204,32 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       return new Response('Publish auth timestamp is stale', { status: 401 })
     }
 
-    const providedSignature = normalizeRequiredString(url.searchParams.get('auth_signature') ?? '', 'Publish auth_signature')
-    const expectedSignature = createPusherSignature(
-      app.secret,
-      request.method,
-      url.pathname,
-      url.searchParams,
-    )
+    let providedSignature: string
+    let expectedSignature: string
+    try {
+      providedSignature = normalizeRequiredString(url.searchParams.get('auth_signature') ?? '', 'Publish auth_signature')
+      expectedSignature = createPusherSignature(
+        app.secret,
+        request.method,
+        url.pathname,
+        url.searchParams,
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid auth signature'
+      return new Response(message, { status: 401 })
+    }
 
     if (providedSignature !== expectedSignature) {
       return new Response('Invalid auth signature', { status: 401 })
     }
 
-    const publishBody = normalizePublishBody(parseJsonObject(bodyText, 'Publish body'))
+    let publishBody: PublishBody
+    try {
+      publishBody = normalizePublishBody(parseJsonObject(bodyText, 'Publish body'))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid publish payload'
+      return new Response(message, { status: 400 })
+    }
     let result: PublishDelivery
     try {
       result = await publishToChannels({
@@ -1502,7 +1545,11 @@ export async function startBroadcastWorker(
           const value = typeof message === 'string'
             ? message
             : new TextDecoder().decode(message)
-          void runtime.receiveWebSocketMessage(socket.data.socketId, value)
+          void runtime.receiveWebSocketMessage(socket.data.socketId, value).catch((error) => {
+            logSocketMessageError(socket.data.socketId, error)
+            runtime.disconnectWebSocket(socket.data.socketId)
+            socket.close(4001, 'Protocol error')
+          })
         },
         close(socket) {
           runtime.disconnectWebSocket(socket.data.socketId)
@@ -1555,7 +1602,11 @@ export async function startBroadcastWorker(
     })
     socket.on('message', (message) => {
       const value = decodeNodeWebSocketMessage(message)
-      void runtime.receiveWebSocketMessage(socketId, value)
+      void runtime.receiveWebSocketMessage(socketId, value).catch((error) => {
+        logSocketMessageError(socketId, error)
+        runtime.disconnectWebSocket(socketId)
+        socket.close(4001, 'Protocol error')
+      })
     })
     socket.on('close', () => {
       runtime.disconnectWebSocket(socketId)

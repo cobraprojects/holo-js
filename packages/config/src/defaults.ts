@@ -926,8 +926,8 @@ function normalizeBroadcastPort(
       ? Number(value.trim())
       : fallback
 
-  if (!Number.isFinite(normalized) || normalized <= 0) {
-    throw new Error(`[Holo Broadcast] ${label} must be a positive number.`)
+  if (!Number.isInteger(normalized) || normalized <= 0) {
+    throw new Error(`[Holo Broadcast] ${label} must be a positive integer.`)
   }
 
   return normalized
@@ -953,11 +953,14 @@ function normalizeBroadcastScheme(
 function normalizeBroadcastConnectionOptions(
   options: BroadcastConnectionOptionsConfig | undefined,
   fallbackHost: string,
-  fallbackPort: number,
   label: string,
 ): NormalizedBroadcastConnectionOptionsConfig {
-  const scheme = normalizeBroadcastScheme(options?.scheme, 'https', `${label} scheme`)
-  const resolvedFallbackPort = scheme === 'http' ? DEFAULT_BROADCAST_HTTP_PORT : fallbackPort
+  const scheme = normalizeBroadcastScheme(
+    options?.scheme,
+    options?.useTLS === false ? 'http' : 'https',
+    `${label} scheme`,
+  )
+  const resolvedFallbackPort = scheme === 'http' ? DEFAULT_BROADCAST_HTTP_PORT : DEFAULT_BROADCAST_HTTPS_PORT
 
   return Object.freeze({
     host: normalizeOptionalBroadcastString(options?.host, `${label} host`) ?? fallbackHost,
@@ -1027,7 +1030,7 @@ function normalizeBroadcastConnection(
         ?? (() => { throw new Error(`[Holo Broadcast] Broadcast connection "${name}" must define a secret.`) })(),
       appId: normalizeOptionalBroadcastString((connection as { appId?: string | number }).appId, `Broadcast connection "${name}" appId`)
         ?? (() => { throw new Error(`[Holo Broadcast] Broadcast connection "${name}" must define an appId.`) })(),
-      options: normalizeBroadcastConnectionOptions(connection.options, DEFAULT_BROADCAST_HOST, DEFAULT_BROADCAST_HTTPS_PORT, `Broadcast connection "${name}" options`),
+      options: normalizeBroadcastConnectionOptions(connection.options, DEFAULT_BROADCAST_HOST, `Broadcast connection "${name}" options`),
       clientOptions,
     })
   }
@@ -1050,7 +1053,6 @@ function normalizeBroadcastConnection(
           cluster,
         },
         normalizeOptionalBroadcastString(connection.options?.host, `Broadcast connection "${name}" host`) ?? (cluster ? `api-${cluster}.pusher.com` : 'api-mt1.pusher.com'),
-        DEFAULT_BROADCAST_HTTPS_PORT,
         `Broadcast connection "${name}" options`,
       ),
       clientOptions,

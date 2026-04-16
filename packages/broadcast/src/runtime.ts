@@ -104,6 +104,7 @@ function dynamicImport<TModule>(specifier: string): Promise<TModule> {
     return import(/* @vite-ignore */ specifier) as Promise<TModule>
   }
 
+  // biome-ignore security/noGlobalEval: dynamic import via indirectEval/globalThis.eval is required for non-Vitest dynamic loading.
   const indirectEval = globalThis.eval as (source: string) => Promise<TModule>
   return indirectEval(`import(${JSON.stringify(specifier)})`)
 }

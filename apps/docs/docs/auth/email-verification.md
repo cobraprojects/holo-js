@@ -48,7 +48,11 @@ the notifications system (which automatically integrates with mail when both pac
 import { register, verification } from '@holo-js/auth'
 import { defineNotification, notify } from '@holo-js/notifications'
 
-const verificationCreated = (token: { plainTextToken: string }) => defineNotification({
+const verificationCreated = (token: {
+  id: string
+  plainTextToken: string
+  expiresAt: Date
+}) => defineNotification({
   type: 'auth.email-verification',
   via() {
     return ['email'] as const
@@ -139,8 +143,8 @@ const verificationCreated = (token: { plainTextToken: string }) => defineNotific
     },
     database() {
       return {
-        verificationToken: token.plainTextToken,
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+        verificationTokenId: token.id,
+        expiresAt: token.expiresAt,
         purpose: 'email-verification'
       }
     }
