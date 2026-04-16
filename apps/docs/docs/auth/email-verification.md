@@ -125,7 +125,7 @@ You can fully customize the verification notification by modifying the `build.em
 const verificationCreated = (token: {
   id: string
   plainTextToken: string
-  expiresAt: string | Date
+  expiresAt: Date
 }) => defineNotification({
   type: 'auth.email-verification',
   via() {
@@ -233,7 +233,7 @@ import { defineNotification, notify } from '@holo-js/notifications'
 const verificationCreated = (token: {
   id: string
   plainTextToken: string
-  expiresAt: string | Date
+  expiresAt: Date
 }) => defineNotification({
   type: 'auth.email-verification',
   via() {

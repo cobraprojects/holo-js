@@ -971,6 +971,12 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         return
       }
 
+      const socketId = typeof message.socketId === 'string'
+        ? message.socketId
+        : typeof (message as Record<string, unknown>).socket_id === 'string'
+          ? (message as Record<string, unknown>).socket_id as string
+          : undefined
+
       for (const channel of message.channels) {
         if (typeof channel !== 'string') {
           continue
@@ -980,6 +986,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
           channel,
           message.name,
           message.data,
+          socketId,
         )
       }
       return
@@ -1540,11 +1547,17 @@ export async function startBroadcastWorker(
     },
   })
   if (scalingConfig) {
-    scalingUnsubscribe = await scalingConfig.adapter.subscribe(scalingConfig.eventChannel, (payload) => {
-      void runtime.receiveScalingMessage(payload).catch((error) => {
-        logScalingMessageError(error)
+    try {
+      scalingUnsubscribe = await scalingConfig.adapter.subscribe(scalingConfig.eventChannel, (payload) => {
+        void runtime.receiveScalingMessage(payload).catch((error) => {
+          logScalingMessageError(error)
+        })
       })
-    })
+    } catch (subscribeError) {
+      await scalingConfig.adapter.close()
+      await runtime.close()
+      throw subscribeError
+    }
   }
   const bun = (globalThis as { Bun?: BroadcastWorkerBunGlobal }).Bun
   const appsByKey = buildWorkerApps(config)
