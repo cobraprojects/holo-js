@@ -111,7 +111,7 @@
     "vitest": "catalog:"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.11.0"
   },
   "packageManager": "bun@1.3.9",
   "trustedDependencies": [

@@ -672,6 +672,54 @@ describe('@holo-js/broadcast runtime', () => {
       messageId: 'msg_1',
     })
 
+    const concurrentQueueModule = {
+      registered: undefined as unknown,
+      defineJob(definition: { handle(payload: unknown): Promise<unknown> | unknown }) {
+        return definition
+      },
+      getRegisteredQueueJob() {
+        return this.registered
+      },
+      registerQueueJob: vi.fn(function (definition: unknown) {
+        concurrentQueueModule.registered = definition
+      }),
+      dispatch: vi.fn(),
+    }
+    const loadQueueModule = vi.fn(async () => concurrentQueueModule as never)
+    broadcastRuntimeInternals.setLoadQueueModuleForTesting(loadQueueModule)
+
+    const [firstQueueModule, secondQueueModule] = await Promise.all([
+      broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered(),
+      broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered(),
+    ])
+
+    expect(loadQueueModule).toHaveBeenCalledTimes(1)
+    expect(concurrentQueueModule.registerQueueJob).toHaveBeenCalledTimes(1)
+    expect(firstQueueModule).toBe(concurrentQueueModule)
+    expect(secondQueueModule).toBe(concurrentQueueModule)
+
+    let failOnce = true
+    const retryQueueModule = {
+      registered: undefined as unknown,
+      defineJob(definition: { handle(payload: unknown): Promise<unknown> | unknown }) {
+        return definition
+      },
+      getRegisteredQueueJob() {
+        return this.registered
+      },
+      registerQueueJob: vi.fn(function () {
+        if (failOnce) {
+          failOnce = false
+          throw new Error('register failed')
+        }
+        retryQueueModule.registered = {}
+      }),
+      dispatch: vi.fn(),
+    }
+    broadcastRuntimeInternals.setLoadQueueModuleForTesting(async () => retryQueueModule as never)
+    await expect(broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered()).rejects.toThrow('register failed')
+    await expect(broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered()).resolves.toBe(retryQueueModule)
+
     configureBroadcastRuntime({
       config: createConfig(),
     })

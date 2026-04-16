@@ -41,8 +41,9 @@ The verification flow marks the local user as verified and invalidates the token
 
 ## Registration Flow
 
-After registration succeeds, the application should request a verification token and deliver it through
-the notifications system (which automatically integrates with mail when both packages are installed):
+After registration succeeds, the application should request a verification token and deliver it. This
+example sends through `@holo-js/notifications` directly; auth-managed delivery only works after the
+auth runtime has a delivery hook configured. See [Runtime Delivery Hook Configuration](#runtime-delivery-hook-configuration).
 
 ```ts
 import { register, verification } from '@holo-js/auth'
@@ -80,17 +81,18 @@ const created = await register({
 
 const token = await verification.create(created)
 
-// When both @holo-js/auth and @holo-js/notifications are installed,
-// core automatically bridges the notification through the notifications system
+// This sends through notifications directly.
+// Auth-managed delivery requires a configured AuthDeliveryHook.
 await notify(created, verificationCreated(token))
 ```
 
 ## Delivery Integration
 
-While the application still needs to call notify to trigger delivery, the integration between packages happens automatically:
+Package installation alone does not enable auth email delivery. The auth runtime must have an
+`AuthDeliveryHook` bound before auth-managed verification emails can be sent.
 
-### Automatic Package Bridging
-When both @holo-js/auth and @holo-js/notifications are installed, the framework automatically handles the integration between them - you don't need to write any glue code to connect auth tokens to notifications.
+See [Runtime Delivery Hook Configuration](#runtime-delivery-hook-configuration) for the runtime binding
+you need when routing auth delivery through notifications or mail.
 
 ### Flexible Delivery Options
 Once you call notify, you can send the verification through any available channel:
@@ -120,7 +122,11 @@ await notify(created, verificationCreated(token))
 You can fully customize the verification notification by modifying the `build.email()` function:
 
 ```ts
-const verificationCreated = (token: { plainTextToken: string }) => defineNotification({
+const verificationCreated = (token: {
+  id: string
+  plainTextToken: string
+  expiresAt: string | Date
+}) => defineNotification({
   type: 'auth.email-verification',
   via() {
     return ['email', 'database'] as const // Send to both email and database
@@ -157,13 +163,13 @@ const verificationCreated = (token: { plainTextToken: string }) => defineNotific
 When the `notify()` function is called for email verification:
 
 1. **If `@holo-js/notifications` is installed**: The notification is sent through the notifications system
-2. **Notifications → Mail Bridge**: If `@holo-js/mail` is also installed, notifications email channel automatically uses the mail system
-3. **Direct Mail Fallback**: If only `@holo-js/mail` is installed (no notifications), core falls back to direct mail delivery
-4. **No Packages**: If neither is installed, verification tokens are created but not automatically delivered
+2. **Notifications → Mail**: If the notifications email channel is configured to use mail, the email is sent through the mailer
+3. **Auth Runtime Delivery Hook**: Built-in auth delivery requires a configured `AuthDeliveryHook`; otherwise auth logs a warning and skips delivery
+4. **No Delivery Binding**: If no delivery hook is bound, verification tokens are created but are not sent automatically
 
 ## Installation
 
-To enable automatic email verification delivery:
+To enable email verification delivery through notifications or mail:
 
 ```bash
 # For full notifications + mail integration (recommended)
@@ -216,14 +222,19 @@ The verification flow marks the local user as verified and invalidates the token
 
 ## Registration Flow
 
-After registration succeeds, the application should request a verification token and deliver it through
-notifications or direct mail:
+After registration succeeds, the application should request a verification token and deliver it. This
+example again uses notifications directly; use [Runtime Delivery Hook Configuration](#runtime-delivery-hook-configuration)
+if you want auth-managed delivery through notifications or mail.
 
 ```ts
 import { register, verification } from '@holo-js/auth'
 import { defineNotification, notify } from '@holo-js/notifications'
 
-const verificationCreated = (token: { plainTextToken: string }) => defineNotification({
+const verificationCreated = (token: {
+  id: string
+  plainTextToken: string
+  expiresAt: string | Date
+}) => defineNotification({
   type: 'auth.email-verification',
   via() {
     return ['email'] as const
@@ -256,9 +267,9 @@ await notify(created, verificationCreated(token))
 
 ## Delivery
 
-If `@holo-js/auth` and `@holo-js/notifications` are both installed, core bridges auth delivery through
-notifications automatically. If notifications are absent but `@holo-js/mail` is installed, core falls back to
-direct mail delivery instead.
+Auth delivery requires runtime configuration. Bind an `AuthDeliveryHook` through auth runtime bindings,
+or follow [Runtime Delivery Hook Configuration](#runtime-delivery-hook-configuration), before relying on
+notifications or mail for auth-managed verification emails.
 
 Install notifications or mail into an existing project with:
 
@@ -266,6 +277,15 @@ Install notifications or mail into an existing project with:
 bunx holo install notifications
 bunx holo install mail
 ```
+
+## Runtime Delivery Hook Configuration
+
+Auth delivery is disabled until the auth runtime is given a delivery hook. Bind `delivery` with
+`configureAuthRuntime({ delivery: ... })`, or follow the runtime bootstrap that wires auth, notifications,
+and mail together before relying on the built-in auth delivery flows.
+
+The manual `notify(created, verificationCreated(token))` example above does not use `AuthDeliveryHook`;
+it sends through notifications directly.
 
 ## Protecting Application Routes
 

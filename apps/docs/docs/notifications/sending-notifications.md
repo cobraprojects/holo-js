@@ -11,6 +11,16 @@ import { invoicePaid } from './notifications'
 await notify(user, invoicePaid)
 ```
 
+## Sending to Multiple Users
+
+Use `notifyMany` to fan out a notification to an array of notifiables:
+
+```ts
+import { notifyMany } from '@holo-js/notifications'
+
+await notifyMany(users, invoicePaid)
+```
+
 ## Fluent Configuration Options
 
 The `notify` function returns a fluent builder that allows you to configure various aspects of the notification delivery:
@@ -27,12 +37,12 @@ await notify(user, invoicePaid)
 ```ts
 // Delay all channels by 5 minutes
 await notify(user, invoicePaid)
-  .delay(5 * 60)
+  .delay(300)
 
 // Delay specific channels
 await notify(user, invoicePaid)
-  .delayFor('email', 10 * 60) // Email delayed 10 minutes
-  .delayFor('broadcast', 0)   // Broadcast immediately
+  .delayFor('email', 300)      // Email delayed 5 minutes
+  .delayFor('broadcast', 0)    // Broadcast immediately
 ```
 
 ### Transaction Awareness
@@ -40,4 +50,17 @@ await notify(user, invoicePaid)
 ```ts
 await notify(user, invoicePaid)
   .afterCommit()
+```
+
+## Anonymous Notifications
+
+Use `notifyUsing()` to send notifications without a notifiable model by providing routes directly:
+
+```ts
+import { notifyUsing } from '@holo-js/notifications'
+
+await notifyUsing()
+  .channel('email', { email: 'ava@example.com', name: 'Ava' })
+  .channel('database', { id: 'user-1', type: 'users' })
+  .notify(invoicePaid)
 ```

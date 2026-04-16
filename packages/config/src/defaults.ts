@@ -9,6 +9,7 @@ import type {
   AuthProviderConfig,
   AuthSocialProviderConfig,
   AuthWorkosProviderConfig,
+  BaseBroadcastConnectionConfig,
   BroadcastConnectionOptionsConfig,
   BroadcastWorkerConfig,
   HoloBroadcastConfig,
@@ -1083,7 +1084,7 @@ function normalizeBroadcastConnection(
     driver: _ignoredDriver,
     clientOptions: _ignoredClientOptions,
     ...customConfig
-  } = connection as Record<string, unknown>
+  } = connection as BaseBroadcastConnectionConfig
 
   return Object.freeze({
     driver,

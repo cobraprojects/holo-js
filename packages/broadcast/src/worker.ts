@@ -66,6 +66,8 @@ type WorkerRuntimeOptions = {
   readonly fetch?: typeof fetch
   readonly now?: () => number
   readonly scaling?: BroadcastWorkerScalingRuntime
+  readonly scalingAutoSubscribe?: boolean
+  readonly scalingUnsubscribe?: () => Promise<void> | void
 }
 
 type BunServerLike = {
@@ -78,6 +80,7 @@ export interface BroadcastWorkerRuntime {
   readonly fetch: (request: Request) => Promise<Response>
   readonly connectWebSocket: (connection: WorkerWebSocketConnection) => void
   readonly receiveWebSocketMessage: (socketId: string, rawMessage: string) => Promise<void>
+  readonly receiveScalingMessage: (payload: string) => Promise<void>
   readonly disconnectWebSocket: (socketId: string) => void
   readonly getStats: () => BroadcastWorkerStats
   readonly close: () => Promise<void>
@@ -332,6 +335,16 @@ function createPusherSignature(secret: string, method: string, pathname: string,
 function logSocketMessageError(socketId: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error)
   console.error(`[@holo-js/broadcast] WebSocket message handling failed for socket "${socketId}": ${message}`)
+}
+
+function logScalingMessageError(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  console.error(`[@holo-js/broadcast] Scaling message handling failed: ${message}`)
+}
+
+function logSocketCleanupError(socketId: string, channel: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  console.error(`[@holo-js/broadcast] Socket cleanup failed for socket "${socketId}" on "${channel}": ${message}`)
 }
 
 function parseChannelKind(channel: string): { readonly kind: 'public' | 'private' | 'presence', readonly canonical: string } {
@@ -662,10 +675,14 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   const presenceSockets = new Map<string, Map<string, string>>()
   const scaling = options.scaling
   const startedAt = options.now?.() ?? Date.now()
-  const scalingUnsubscribe = scaling
-    ? scaling.adapter.subscribe(scaling.eventChannel, (payload) => {
-      void handleScalingMessage(payload)
-    })
+  const scalingUnsubscribe = options.scalingUnsubscribe
+    ? Promise.resolve(options.scalingUnsubscribe)
+    : scaling && options.scalingAutoSubscribe !== false
+      ? scaling.adapter.subscribe(scaling.eventChannel, (payload) => {
+        void handleScalingMessage(payload).catch((error) => {
+          logScalingMessageError(error)
+        })
+      })
     : Promise.resolve(async () => {})
 
   function createPresenceSocketRef(channel: string, socketId: string): string {
@@ -1335,6 +1352,9 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       socket.pendingMessage = task.catch(() => {})
       await task
     },
+    async receiveScalingMessage(payload: string): Promise<void> {
+      await handleScalingMessage(payload)
+    },
     disconnectWebSocket(socketId: string): void {
       const socket = connectedSockets.get(socketId)
       if (!socket) {
@@ -1343,15 +1363,33 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
 
       socket.active = false
       connectedSockets.delete(socketId)
-      for (const channel of socket.subscribedChannels) {
+      const channelsToCleanup = [...socket.subscribedChannels]
+      const scalingCleanupTasks = channelsToCleanup.map((channel) => {
         const removedPresenceMember = removeSubscriptionLocal(socket.app.appId, socket.socketId, channel)
         if (removedPresenceMember.removed && removedPresenceMember.member) {
           deliverPresenceMemberRemovedLocal(socket.app.appId, channel, removedPresenceMember.member, socket.socketId)
-          void publishScalingPresenceMemberRemoved(socket.app, channel, socket.socketId, removedPresenceMember.member)
         }
-        void removePresenceMemberFromScaling(socket.app, socket.socketId, channel)
-      }
+
+        return async () => {
+          if (removedPresenceMember.removed && removedPresenceMember.member) {
+            await publishScalingPresenceMemberRemoved(socket.app, channel, socket.socketId, removedPresenceMember.member).catch((error) => {
+              logSocketCleanupError(socket.socketId, channel, error)
+            })
+          }
+          await removePresenceMemberFromScaling(socket.app, socket.socketId, channel).catch((error) => {
+            logSocketCleanupError(socket.socketId, channel, error)
+          })
+        }
+      })
       socket.subscribedChannels.clear()
+      const cleanupTask = socket.pendingMessage.then(async () => {
+        await Promise.all(scalingCleanupTasks.map(async (task) => {
+          await task()
+        }))
+      }).catch((error) => {
+        logSocketMessageError(socket.socketId, error)
+      })
+      socket.pendingMessage = cleanupTask.catch(() => {})
     },
     getStats(): BroadcastWorkerStats {
       return Object.freeze({
@@ -1490,12 +1528,24 @@ export async function startBroadcastWorker(
       })
     : undefined
 
+  let scalingUnsubscribe: (() => Promise<void> | void) | undefined
   const runtime = createBroadcastWorkerRuntime({
     config,
     channelAuth: runtimeBindings.channelAuth,
     fetch: runtimeBindings.fetch ?? fetch,
     scaling: scalingConfig,
+    scalingAutoSubscribe: false,
+    scalingUnsubscribe: async () => {
+      await scalingUnsubscribe?.()
+    },
   })
+  if (scalingConfig) {
+    scalingUnsubscribe = await scalingConfig.adapter.subscribe(scalingConfig.eventChannel, (payload) => {
+      void runtime.receiveScalingMessage(payload).catch((error) => {
+        logScalingMessageError(error)
+      })
+    })
+  }
   const bun = (globalThis as { Bun?: BroadcastWorkerBunGlobal }).Bun
   const appsByKey = buildWorkerApps(config)
   const pathPrefix = config.worker.path.replace(/\/$/, '')

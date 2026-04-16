@@ -411,7 +411,7 @@ describe('@holo-js/broadcast worker runtime', () => {
   })
 
   it('tracks whisper permissions per socket for the same channel', async () => {
-    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetch = vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
       const request = input instanceof Request ? input : new Request(input, init)
       const authorization = request.headers.get('authorization')
       return new Response(JSON.stringify({
@@ -529,7 +529,8 @@ describe('@holo-js/broadcast worker runtime', () => {
     }))
 
     const addedMessage = decodeMessages(first.messages)
-      .findLast(message => message.event === 'pusher_internal:member_added' && message.channel === 'presence-chat.room_1')
+      .filter(message => message.event === 'pusher_internal:member_added' && message.channel === 'presence-chat.room_1')
+      .at(-1)
     expect(addedMessage).toBeDefined()
     expect(JSON.parse(addedMessage!.data)).toEqual({
       id: 'user_2',
@@ -544,7 +545,8 @@ describe('@holo-js/broadcast worker runtime', () => {
     }))
 
     const removedMessage = decodeMessages(first.messages)
-      .findLast(message => message.event === 'pusher_internal:member_removed' && message.channel === 'presence-chat.room_1')
+      .filter(message => message.event === 'pusher_internal:member_removed' && message.channel === 'presence-chat.room_1')
+      .at(-1)
     expect(removedMessage).toBeDefined()
     expect(JSON.parse(removedMessage!.data)).toEqual({
       user_id: 'user_2',
@@ -608,7 +610,8 @@ describe('@holo-js/broadcast worker runtime', () => {
     }))
 
     const firstPresenceSucceeded = decodeMessages(first.messages)
-      .findLast(message => message.event === 'pusher_internal:subscription_succeeded' && message.channel === 'presence-chat.room_1')
+      .filter(message => message.event === 'pusher_internal:subscription_succeeded' && message.channel === 'presence-chat.room_1')
+      .at(-1)
     expect(firstPresenceSucceeded).toBeDefined()
     expect(JSON.parse(firstPresenceSucceeded!.data)).toEqual({
       presence: {
@@ -628,7 +631,8 @@ describe('@holo-js/broadcast worker runtime', () => {
     })
 
     const secondPresenceSucceeded = decodeMessages(second.messages)
-      .findLast(message => message.event === 'pusher_internal:subscription_succeeded' && message.channel === 'presence-chat.room_1')
+      .filter(message => message.event === 'pusher_internal:subscription_succeeded' && message.channel === 'presence-chat.room_1')
+      .at(-1)
     expect(secondPresenceSucceeded).toBeDefined()
     expect(JSON.parse(secondPresenceSucceeded!.data)).toEqual({
       presence: {
@@ -1366,16 +1370,16 @@ describe('@holo-js/broadcast worker runtime', () => {
   it('starts with Bun integration and handles websocket upgrades through the runtime adapter', async () => {
     const bun = (globalThis as { Bun?: { serve?: unknown } }).Bun
     const stop = vi.fn()
-    let captured: Parameters<NonNullable<{ serve: (options: unknown) => unknown }['serve']>>[0] | undefined
-    const serve = (options: unknown) => {
-      captured = options as {
-        fetch: (request: Request, server: { upgrade(request: Request, options?: { data?: unknown }): boolean }) => Promise<Response>
-        websocket: {
-          open: (socket: { data: { socketId: string, app: unknown, headers: Headers }, send(value: string): void, close(code?: number, reason?: string): void }) => void
-          message: (socket: { data: { socketId: string } }, message: string | Uint8Array) => void
-          close: (socket: { data: { socketId: string } }) => void
-        }
+    let captured: {
+      fetch: (request: Request, server: { upgrade(request: Request, options?: { data?: unknown }): boolean }) => Promise<Response>
+      websocket: {
+        open: (socket: { data: { socketId: string, app: unknown, headers: Headers }, send(value: string): void, close(code?: number, reason?: string): void }) => void
+        message: (socket: { data: { socketId: string } }, message: string | Uint8Array) => void
+        close: (socket: { data: { socketId: string } }) => void
       }
+    } | undefined
+    const serve = (options: unknown) => {
+      captured = options as NonNullable<typeof captured>
       return {
         hostname: '0.0.0.0',
         port: 8080,
@@ -1437,7 +1441,7 @@ describe('@holo-js/broadcast worker runtime', () => {
       expect(upgraded.status).toBe(200)
       expect(upgrade).toHaveBeenCalledOnce()
 
-      const wsData = (upgrade.mock.calls[0]?.[1] as { data: { socketId: string, app: { key: string }, headers: Headers } }).data
+      const wsData = ((upgrade.mock.calls as unknown as Array<[Request, { data: { socketId: string, app: { key: string }, headers: Headers } }]>)[0]![1]).data
       expect(wsData.app.key).toBe('key-main')
 
       const unknownUpgraded = await captured!.fetch(new Request('http://worker.test/app/missing-key', {
@@ -1582,6 +1586,45 @@ describe('@holo-js/broadcast worker runtime', () => {
         bun.serve = originalServe
       }
     }
+  })
+
+  it('fails startup when scaling subscription cannot be established', async () => {
+    const scalingAdapter = {
+      publish: vi.fn(async () => {}),
+      subscribe: vi.fn(async () => {
+        throw new Error('subscribe failed')
+      }),
+      hashSet: vi.fn(async () => {}),
+      hashDelete: vi.fn(async () => {}),
+      hashGetAll: vi.fn(async () => ({})),
+      close: vi.fn(async () => {}),
+    }
+
+    await expect(startBroadcastWorker({
+      config: normalizeBroadcastConfig({
+        ...createConfig(),
+        worker: {
+          ...createConfig().worker,
+          scaling: {
+            driver: 'redis',
+            connection: 'broadcast',
+          },
+        },
+      }),
+      queue: normalizeQueueConfigForHolo({
+        default: 'broadcast',
+        connections: {
+          broadcast: {
+            driver: 'redis',
+            redis: {
+              host: '127.0.0.1',
+              port: 6379,
+            },
+          },
+        },
+      }),
+      createScalingAdapter: async () => scalingAdapter,
+    })).rejects.toThrow('subscribe failed')
   })
 
   it('starts and stops with Node websocket fallback when Bun serve is unavailable', async () => {

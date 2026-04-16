@@ -27,6 +27,7 @@ type RuntimeState = {
   bindings?: BroadcastRuntimeBindings
   loadQueueModule?: () => Promise<QueueModule>
   loadDbModule?: () => Promise<DbModule | null>
+  queueJobRegistration?: Promise<QueueModule>
 }
 
 type MutableDispatchOptions = {
@@ -473,21 +474,39 @@ async function runQueuedBroadcastDelivery(payload: QueuedBroadcastPayload): Prom
 }
 
 async function ensureBroadcastQueueJobRegistered(queueModule?: QueueModule): Promise<QueueModule> {
-  const resolvedQueueModule = queueModule ?? await loadQueueModule()
-  if (resolvedQueueModule.getRegisteredQueueJob(HOLO_BROADCAST_DELIVER_JOB)) {
-    return resolvedQueueModule
+  const state = getRuntimeState()
+  if (queueModule?.getRegisteredQueueJob(HOLO_BROADCAST_DELIVER_JOB)) {
+    return queueModule
   }
 
-  resolvedQueueModule.registerQueueJob(
-    resolvedQueueModule.defineJob({
-      async handle(payload: QueuedBroadcastPayload) {
-        return await runQueuedBroadcastDelivery(payload)
-      },
-    }),
-    { name: HOLO_BROADCAST_DELIVER_JOB },
-  )
+  if (state.queueJobRegistration) {
+    return await state.queueJobRegistration
+  }
 
-  return resolvedQueueModule
+  const registration = (async () => {
+    const resolvedQueueModule = queueModule ?? await loadQueueModule()
+    if (!resolvedQueueModule.getRegisteredQueueJob(HOLO_BROADCAST_DELIVER_JOB)) {
+      resolvedQueueModule.registerQueueJob(
+        resolvedQueueModule.defineJob({
+          async handle(payload: QueuedBroadcastPayload) {
+            return await runQueuedBroadcastDelivery(payload)
+          },
+        }),
+        { name: HOLO_BROADCAST_DELIVER_JOB },
+      )
+    }
+
+    return resolvedQueueModule
+  })()
+
+  state.queueJobRegistration = registration
+  try {
+    return await registration
+  } finally {
+    if (state.queueJobRegistration === registration) {
+      state.queueJobRegistration = undefined
+    }
+  }
 }
 
 function createQueuedPayload(
@@ -687,6 +706,7 @@ export function resetBroadcastRuntime(): void {
   state.bindings = undefined
   state.loadQueueModule = undefined
   state.loadDbModule = undefined
+  state.queueJobRegistration = undefined
 }
 
 export function broadcast(

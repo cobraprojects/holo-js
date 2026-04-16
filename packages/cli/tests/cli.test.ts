@@ -85,6 +85,7 @@ type BuiltWorkspacePackages = {
   readonly queueDbPackageRoot: string
   readonly storagePackageRoot: string
   readonly storageS3PackageRoot: string
+  readonly validationPackageRoot: string
   readonly cliPackageRoot: string
   readonly cliBinPath: string
 }
@@ -168,6 +169,7 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   const notificationsPackageRoot = join(root, 'packages/notifications')
   const storagePackageRoot = join(root, 'packages/storage')
   const storageS3PackageRoot = join(root, 'packages/storage-s3')
+  const validationPackageRoot = join(root, 'packages/validation')
   const cliPackageRoot = join(root, 'packages/cli')
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/db-sqlite'), dbSqlitePackageRoot)
@@ -222,9 +224,14 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   const configBuild = buildWorkspacePackageSync('@holo-js/config', join(configPackageRoot, 'dist'))
   expect(configBuild.status, configBuild.stderr || configBuild.stdout).toBe(0)
 
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/validation'), validationPackageRoot)
+  linkBunStoreDependencySync(validationPackageRoot, 'valibot')
+  const validationBuild = buildWorkspacePackageSync('@holo-js/validation', join(validationPackageRoot, 'dist'))
+  expect(validationBuild.status, validationBuild.stderr || validationBuild.stdout).toBe(0)
+
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/broadcast'), broadcastPackageRoot)
   linkPackageDependencySync(broadcastPackageRoot, '@holo-js/config', configPackageRoot)
-  linkPackageDependencySync(broadcastPackageRoot, '@holo-js/validation', resolve(workspaceRoot, 'packages/validation'))
+  linkPackageDependencySync(broadcastPackageRoot, '@holo-js/validation', validationPackageRoot)
   linkExternalDependencySync(broadcastPackageRoot, 'ws')
   const broadcastBuild = buildWorkspacePackageSync('@holo-js/broadcast', join(broadcastPackageRoot, 'dist'))
   expect(broadcastBuild.status, broadcastBuild.stderr || broadcastBuild.stdout).toBe(0)
@@ -294,6 +301,7 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
     queueDbPackageRoot,
     storagePackageRoot,
     storageS3PackageRoot,
+    validationPackageRoot,
     cliPackageRoot,
     cliBinPath: join(cliPackageRoot, 'dist/bin/holo.mjs'),
   }
@@ -422,6 +430,19 @@ async function writeProjectFile(projectRoot: string, relativePath: string, conte
   await writeFile(target, contents)
 }
 
+async function linkWorkspaceExternalDependency(projectRoot: string, dependencyName: string): Promise<void> {
+  const dependencyPath = join(projectRoot, 'node_modules', ...dependencyName.split('/'))
+  const workspaceDependencyPath = join(workspaceRoot, 'node_modules', ...dependencyName.split('/'))
+  const bunStoreDependencyPath = join(bunStoreNodeModulesRoot, ...dependencyName.split('/'))
+  const dependencyRoot = await stat(workspaceDependencyPath)
+    .then(() => workspaceDependencyPath)
+    .catch(async () => await stat(bunStoreDependencyPath)
+      .then(() => bunStoreDependencyPath))
+  await mkdir(dirname(dependencyPath), { recursive: true })
+  await rm(dependencyPath, { recursive: true, force: true }).catch(() => {})
+  await symlink(dependencyRoot, dependencyPath).catch(() => {})
+}
+
 async function linkWorkspaceConfig(projectRoot: string): Promise<void> {
   const { configPackageRoot } = ensureBuiltWorkspacePackagesSync()
   const targetDir = join(projectRoot, 'node_modules', '@holo-js')
@@ -463,6 +484,7 @@ async function linkWorkspaceBroadcast(projectRoot: string): Promise<void> {
   await mkdir(targetDir, { recursive: true })
   await rm(join(targetDir, 'broadcast'), { recursive: true, force: true }).catch(() => {})
   await symlink(broadcastPackageRoot, join(targetDir, 'broadcast')).catch(() => {})
+  await linkWorkspaceExternalDependency(projectRoot, 'valibot')
 }
 
 async function writeFrameworkBinary(projectRoot: string, binaryName: string): Promise<void> {
@@ -9727,36 +9749,39 @@ export default defineJob({
         }
         return process
       }) as typeof process.on)
-      const workPromise = withFakeBun(async () => isolatedCliInternals.runBroadcastWorkCommand(io.io, projectRoot, {
-        loadConfig: async () => ({
-          broadcast: { default: 'null', connections: {}, worker: {} },
-          queue: { default: 'default', connections: {} },
-        }) as never,
-        loadModule: async () => ({
-          startBroadcastWorker,
-        }),
-        loadRegistry: async () => staleRegistry as never,
-      }))
+      try {
+        const workPromise = withFakeBun(async () => isolatedCliInternals.runBroadcastWorkCommand(io.io, projectRoot, {
+          loadConfig: async () => ({
+            broadcast: { default: 'null', connections: {}, worker: {} },
+            queue: { default: 'default', connections: {} },
+          }) as never,
+          loadModule: async () => ({
+            startBroadcastWorker,
+          }),
+          loadRegistry: async () => staleRegistry as never,
+        }))
 
-      while (startBroadcastWorker.mock.calls.length === 0) {
-        await new Promise(resolve => setTimeout(resolve, 5))
-      }
+        while (startBroadcastWorker.mock.calls.length === 0) {
+          await new Promise(resolve => setTimeout(resolve, 5))
+        }
 
-      expect(sigintHandler).toBeTypeOf('function')
-      sigintHandler?.()
-      await expect(workPromise).resolves.toBeUndefined()
-      expect(prepareProjectDiscovery).toHaveBeenCalledTimes(1)
-      expect(startBroadcastWorker).toHaveBeenCalledWith(expect.objectContaining({
-        channelAuth: {
-          registry: {
-            projectRoot,
-            channels: freshRegistry.channels,
+        expect(sigintHandler).toBeTypeOf('function')
+        sigintHandler?.()
+        await expect(workPromise).resolves.toBeUndefined()
+        expect(prepareProjectDiscovery).toHaveBeenCalledTimes(1)
+        expect(startBroadcastWorker).toHaveBeenCalledWith(expect.objectContaining({
+          channelAuth: {
+            registry: {
+              projectRoot,
+              channels: freshRegistry.channels,
+            },
+            importModule: expect.any(Function),
           },
-          importModule: expect.any(Function),
-        },
-      }))
-      expect(stop).toHaveBeenCalledTimes(1)
-      processOnSpy.mockRestore()
+        }))
+        expect(stop).toHaveBeenCalledTimes(1)
+      } finally {
+        processOnSpy.mockRestore()
+      }
     } finally {
       vi.doUnmock('../src/project')
       vi.resetModules()

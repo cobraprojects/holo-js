@@ -118,10 +118,18 @@ export interface BroadcastWorkerConfig {
   readonly scaling?: false | BroadcastWorkerScalingConfig
 }
 
+export type BroadcastConnectionConfigValue =
+  | string
+  | number
+  | boolean
+  | object
+  | undefined
+
 export interface BaseBroadcastConnectionConfig {
   readonly driver: BroadcastConnectionDriver | (string & {})
   readonly options?: BroadcastConnectionOptionsConfig
   readonly clientOptions?: Readonly<Record<string, unknown>>
+  readonly [key: string]: BroadcastConnectionConfigValue
 }
 
 export interface HoloBroadcastConnectionConfig extends BaseBroadcastConnectionConfig {
@@ -151,7 +159,7 @@ export type HoloBroadcastConnection
   | PusherBroadcastConnectionConfig
   | LogBroadcastConnectionConfig
   | NullBroadcastConnectionConfig
-  | (BaseBroadcastConnectionConfig & Record<string, unknown>)
+  | BaseBroadcastConnectionConfig
 
 export interface HoloBroadcastConfig {
   readonly default?: string

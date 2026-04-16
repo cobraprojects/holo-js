@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { defineSchema, field } from '@holo-js/validation'
 import {
@@ -143,7 +143,7 @@ describe('@holo-js/broadcast channel auth runtime', () => {
 
   it('loads channel definitions from generated registry entries and validates whispers', async () => {
     const importModule = vi.fn(async (absolutePath: string) => {
-      if (absolutePath.endsWith('/orders-channel.ts')) {
+      if (basename(absolutePath) === 'orders-channel.ts') {
         return {
           default: defineChannel('orders.{orderId}', {
             type: 'private',
@@ -157,7 +157,7 @@ describe('@holo-js/broadcast channel auth runtime', () => {
         }
       }
 
-      if (absolutePath.endsWith('/chat-channel.ts')) {
+      if (basename(absolutePath) === 'chat-channel.ts') {
         return {
           named: defineChannel('chat.{roomId}', {
             type: 'presence',
@@ -534,7 +534,7 @@ describe('@holo-js/broadcast channel auth runtime', () => {
         defineChannel('chat.{roomId}', {
           type: 'presence',
           authorize() {
-            return false
+            return false as const
           },
         }),
       ],
