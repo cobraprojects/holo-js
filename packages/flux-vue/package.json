@@ -1,0 +1,39 @@
+{
+  "name": "@holo-js/flux-vue",
+  "version": "0.1.2",
+  "description": "Holo-JS Framework - Vue and Nuxt composable skeletons for Flux",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "stub": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest --run"
+  },
+  "dependencies": {
+    "@holo-js/broadcast": "^0.1.2",
+    "@holo-js/flux": "^0.1.2"
+  },
+  "peerDependencies": {
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vue": "^3.5.13",
+    "vitest": "^2.1.8"
+  }
+}

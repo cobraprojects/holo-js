@@ -181,6 +181,35 @@ export function renderEventTemplate(eventName: string): string {
   ].join('\n')
 }
 
+export function renderBroadcastTemplate(eventName: string): string {
+  return [
+    'import { channel, defineBroadcast } from \'@holo-js/broadcast\'',
+    '',
+    'export default defineBroadcast({',
+    `  name: '${eventName}',`,
+    '  channels: [',
+    `    channel('${eventName}'),`,
+    '  ],',
+    '  payload: {},',
+    '})',
+    '',
+  ].join('\n')
+}
+
+export function renderChannelTemplate(pattern: string): string {
+  return [
+    'import { defineChannel } from \'@holo-js/broadcast\'',
+    '',
+    `export default defineChannel('${pattern}', {`,
+    '  type: \'private\',',
+    '  authorize() {',
+    '    return false',
+    '  },',
+    '})',
+    '',
+  ].join('\n')
+}
+
 export function renderListenerTemplate(eventImportStatement: string, eventName: string): string {
   return [
     'import { defineListener } from \'@holo-js/events\'',

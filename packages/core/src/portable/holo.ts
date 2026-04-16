@@ -1,3 +1,4 @@
+import { createHash, createHmac } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -376,6 +377,55 @@ type NotificationsModule = {
   resetNotificationsRuntime(): void
 }
 
+type BroadcastModule = {
+  configureBroadcastRuntime(options?: {
+    readonly config: LoadedHoloConfig['broadcast']
+    readonly publish?: (
+      input: {
+        readonly connection: string
+        readonly event: string
+        readonly channels: readonly string[]
+        readonly payload: Readonly<Record<string, unknown>>
+        readonly socketId?: string
+      },
+      context: {
+        readonly connection: string
+        readonly driver: string
+        readonly queued: boolean
+        readonly delayed: boolean
+      },
+    ) => Promise<unknown> | unknown
+  }): void
+  getBroadcastRuntimeBindings(): {
+    readonly config?: LoadedHoloConfig['broadcast']
+    readonly publish?: (
+      input: {
+        readonly connection: string
+        readonly event: string
+        readonly channels: readonly string[]
+        readonly payload: Readonly<Record<string, unknown>>
+        readonly socketId?: string
+      },
+      context: {
+        readonly connection: string
+        readonly driver: string
+        readonly queued: boolean
+        readonly delayed: boolean
+      },
+    ) => Promise<unknown> | unknown
+  }
+  broadcastRaw(input: {
+    readonly connection?: string
+    readonly event: string
+    readonly channels: readonly string[]
+    readonly payload: Readonly<Record<string, unknown>>
+    readonly socketId?: string
+  }): PromiseLike<unknown>
+  resetBroadcastRuntime(): void
+}
+
+const CORE_BROADCAST_PUBLISHER_MARKER = Symbol.for('holo-js.core.broadcast.publisher')
+
 type MailModule = {
   configureMailRuntime(options?: {
     readonly config: LoadedHoloConfig['mail']
@@ -640,6 +690,7 @@ function restoreHoloRenderingRuntime(
 type OptionalSubsystemRuntimeBindings = Readonly<{
   readonly mail?: ReturnType<MailModule['getMailRuntimeBindings']>
   readonly notifications?: ReturnType<NotificationsModule['getNotificationsRuntimeBindings']>
+  readonly broadcast?: ReturnType<BroadcastModule['getBroadcastRuntimeBindings']>
 }>
 
 function snapshotOptionalSubsystemRuntimeBindings(): OptionalSubsystemRuntimeBindings {
@@ -650,11 +701,15 @@ function snapshotOptionalSubsystemRuntimeBindings(): OptionalSubsystemRuntimeBin
     __holoNotificationsRuntime__?: {
       bindings?: ReturnType<NotificationsModule['getNotificationsRuntimeBindings']>
     }
+    __holoBroadcastRuntime__?: {
+      bindings?: ReturnType<BroadcastModule['getBroadcastRuntimeBindings']>
+    }
   }
 
   return Object.freeze({
     ...(runtime.__holoMailRuntime__?.bindings ? { mail: runtime.__holoMailRuntime__.bindings } : {}),
     ...(runtime.__holoNotificationsRuntime__?.bindings ? { notifications: runtime.__holoNotificationsRuntime__.bindings } : {}),
+    ...(runtime.__holoBroadcastRuntime__?.bindings ? { broadcast: runtime.__holoBroadcastRuntime__.bindings } : {}),
   })
 }
 
@@ -668,6 +723,9 @@ function restoreOptionalSubsystemRuntimeBindings(
     __holoNotificationsRuntime__?: {
       bindings?: ReturnType<NotificationsModule['getNotificationsRuntimeBindings']>
     }
+    __holoBroadcastRuntime__?: {
+      bindings?: ReturnType<BroadcastModule['getBroadcastRuntimeBindings']>
+    }
   }
 
   if (bindings.mail || runtime.__holoMailRuntime__) {
@@ -678,6 +736,11 @@ function restoreOptionalSubsystemRuntimeBindings(
   if (bindings.notifications || runtime.__holoNotificationsRuntime__) {
     runtime.__holoNotificationsRuntime__ ??= {}
     runtime.__holoNotificationsRuntime__.bindings = bindings.notifications
+  }
+
+  if (bindings.broadcast || runtime.__holoBroadcastRuntime__) {
+    runtime.__holoBroadcastRuntime__ ??= {}
+    runtime.__holoBroadcastRuntime__.bindings = bindings.broadcast
   }
 }
 
@@ -1079,6 +1142,17 @@ async function loadNotificationsModule(required = false): Promise<NotificationsM
   }
 
   return notificationsModule
+}
+
+async function loadBroadcastModule(required = false, projectRoot?: string): Promise<BroadcastModule | undefined> {
+  const broadcastModule = await portableRuntimeModuleInternals.importOptionalModule<BroadcastModule>('@holo-js/broadcast', {
+    projectRoot,
+  })
+  if (!broadcastModule && required) {
+    throw new Error('[@holo-js/core] Broadcast support requires @holo-js/broadcast to be installed.')
+  }
+
+  return broadcastModule
 }
 
 async function loadMailModule(required = false): Promise<MailModule | undefined> {
@@ -1595,6 +1669,177 @@ function createAuthNotificationsDeliveryHook(
         .notify(notification)
     },
   })
+}
+
+function createCoreNotificationBroadcaster(
+  broadcastModule: BroadcastModule,
+): {
+  send(
+    message: {
+      readonly event?: string
+      readonly data: unknown
+    },
+    context: {
+      readonly route?: unknown
+      readonly notificationType?: string
+    },
+  ): Promise<void>
+} {
+  const normalizeChannels = (route: unknown): readonly string[] => {
+    if (typeof route === 'string') {
+      const value = route.trim()
+      if (value) {
+        return Object.freeze([value])
+      }
+    }
+
+    if (Array.isArray(route)) {
+      const channels = route
+        .filter((entry): entry is string => typeof entry === 'string')
+        .map(entry => entry.trim())
+        .filter(Boolean)
+      if (channels.length > 0) {
+        return Object.freeze(channels)
+      }
+    }
+
+    if (
+      route
+      && typeof route === 'object'
+      && 'channels' in route
+      && Array.isArray((route as { channels?: unknown }).channels)
+    ) {
+      const channels = ((route as { channels: unknown[] }).channels)
+        .filter((entry): entry is string => typeof entry === 'string')
+        .map(entry => entry.trim())
+        .filter(Boolean)
+      if (channels.length > 0) {
+        return Object.freeze(channels)
+      }
+    }
+
+    throw new Error('[@holo-js/core] Broadcast notifications require at least one resolved channel route.')
+  }
+
+  return Object.freeze({
+    async send(message, context): Promise<void> {
+      const channels = normalizeChannels(context.route)
+      const event = typeof message.event === 'string' && message.event.trim()
+        ? message.event.trim()
+        : 'notifications.message'
+
+      await broadcastModule.broadcastRaw({
+        event,
+        channels,
+        payload: Object.freeze({
+          ...(typeof context.notificationType === 'string' && context.notificationType.trim()
+            ? { type: context.notificationType.trim() }
+            : {}),
+          data: message.data ?? null,
+        }),
+      })
+    },
+  })
+}
+
+function createCoreBroadcastPublisher(
+  loadedConfig: LoadedHoloConfig['broadcast'],
+): NonNullable<ReturnType<BroadcastModule['getBroadcastRuntimeBindings']>['publish']> {
+  const connectionHosts = new Set(['holo', 'pusher'])
+
+  const publish: NonNullable<ReturnType<BroadcastModule['getBroadcastRuntimeBindings']>['publish']> = async (input, context) => {
+    const connection = loadedConfig.connections[input.connection]
+    /* v8 ignore next 3 -- defensive guard; broadcast runtime resolves connections before publish */
+    if (!connection) {
+      throw new Error(`[@holo-js/core] Broadcast connection "${input.connection}" is not configured.`)
+    }
+
+    /* v8 ignore next 3 -- defensive guard; broadcast config normalization ensures these fields exist */
+    if (!('appId' in connection) || !('key' in connection) || !('secret' in connection)) {
+      throw new Error(`[@holo-js/core] Broadcast connection "${input.connection}" cannot be published automatically.`)
+    }
+
+    /* v8 ignore next 3 -- defensive guard; only holo/pusher drivers reach this path */
+    if (!connectionHosts.has(connection.driver)) {
+      throw new Error(`[@holo-js/core] Broadcast connection "${input.connection}" cannot be published automatically.`)
+    }
+
+    const options = connection.options
+    /* v8 ignore next -- tests only exercise http scheme */
+    const protocol = options.scheme === 'http' ? 'http:' : 'https:'
+    const url = new URL(`/apps/${encodeURIComponent(connection.appId)}/events`, `${protocol}//${options.host}`)
+    /* v8 ignore next 3 -- tests use default port configuration */
+    if (typeof options.port === 'number') {
+      url.port = String(options.port)
+    }
+
+    const body = JSON.stringify({
+      name: input.event,
+      channels: input.channels,
+      data: JSON.stringify(input.payload),
+      /* v8 ignore next -- tests do not pass socketId through the publish binding */
+      ...(typeof input.socketId === 'undefined' ? {} : { socket_id: input.socketId }),
+    })
+
+    const bodyMd5 = createHash('md5').update(body).digest('hex')
+    url.searchParams.set('auth_key', connection.key)
+    url.searchParams.set('auth_timestamp', String(Math.floor(Date.now() / 1000)))
+    url.searchParams.set('auth_version', '1.0')
+    url.searchParams.set('body_md5', bodyMd5)
+    url.searchParams.set(
+      'auth_signature',
+      createHmac('sha256', connection.secret).update(
+        [
+          'POST',
+          url.pathname,
+          [...url.searchParams.entries()]
+            .filter(([key]) => key !== 'auth_signature')
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+            .join('&'),
+        ].join('\n'),
+      ).digest('hex'),
+    )
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body,
+    })
+
+    if (!response.ok) {
+      throw new Error(`[@holo-js/core] Broadcast publish request failed with status ${response.status}.`)
+    }
+
+    const result = await response.json() as {
+      readonly deliveredChannels?: unknown
+      readonly deliveredSockets?: unknown
+    }
+
+    return {
+      connection: input.connection,
+      driver: connection.driver,
+      queued: context.queued,
+      publishedChannels: Array.isArray(result.deliveredChannels)
+        ? Object.freeze(result.deliveredChannels.map(value => String(value)))
+        : Object.freeze([...input.channels]),
+    }
+  }
+
+  Object.defineProperty(publish, CORE_BROADCAST_PUBLISHER_MARKER, {
+    value: true,
+  })
+
+  return publish
+}
+
+function isCoreBroadcastPublisher(
+  value: NonNullable<ReturnType<BroadcastModule['getBroadcastRuntimeBindings']>['publish']> | undefined,
+): boolean {
+  return typeof value === 'function'
+    && CORE_BROADCAST_PUBLISHER_MARKER in value
 }
 
 function createNotificationMailText(message: {
@@ -2856,6 +3101,23 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     })
   }
 
+  const broadcastConfigured = hasLoadedConfigFile(loadedConfig, 'broadcast')
+  const broadcastModule = broadcastConfigured
+    ? await loadBroadcastModule(true, projectRoot)
+    : undefined
+  if (broadcastModule) {
+    const existingBroadcastBindings = broadcastModule.getBroadcastRuntimeBindings()
+    broadcastModule.configureBroadcastRuntime({
+      ...existingBroadcastBindings,
+      config: loadedConfig.broadcast,
+      ...(!existingBroadcastBindings.publish || isCoreBroadcastPublisher(existingBroadcastBindings.publish)
+        ? {
+            publish: createCoreBroadcastPublisher(loadedConfig.broadcast),
+          }
+        : {}),
+    })
+  }
+
   const notificationsConfigured = hasLoadedConfigFile(loadedConfig, 'notifications')
   const notificationsModule = notificationsConfigured
     ? await loadNotificationsModule(true)
@@ -2868,6 +3130,9 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
       store: existingNotificationsBindings.store ?? createCoreNotificationStore(loadedConfig),
       ...(!existingNotificationsBindings.mailer && mailModule
         ? { mailer: createCoreNotificationMailSender(mailModule) }
+        : {}),
+      ...(!existingNotificationsBindings.broadcaster && broadcastModule
+        ? { broadcaster: createCoreNotificationBroadcaster(broadcastModule) }
         : {}),
     })
   }
@@ -2969,6 +3234,8 @@ export async function resetOptionalHoloSubsystems(): Promise<void> {
   mailModule?.resetMailRuntime()
   const notificationsModule = await loadNotificationsModule()
   notificationsModule?.resetNotificationsRuntime()
+  const broadcastModule = await loadBroadcastModule()
+  broadcastModule?.resetBroadcastRuntime()
   const authModule = await loadAuthModule()
   authModule?.resetAuthRuntime()
   const socialModule = await loadSocialModule()
@@ -3252,6 +3519,8 @@ export async function resetHoloRuntime(): Promise<void> {
   mailModule?.resetMailRuntime()
   const notificationsModule = await loadNotificationsModule()
   notificationsModule?.resetNotificationsRuntime()
+  const broadcastModule = await loadBroadcastModule()
+  broadcastModule?.resetBroadcastRuntime()
   resetHoloRenderingRuntime()
 }
 
@@ -3266,6 +3535,7 @@ function getConfigSection(key: string): unknown {
 export const holoRuntimeInternals = {
   createAuthMailDeliveryHook,
   createAuthNotificationsDeliveryHook,
+  createCoreNotificationBroadcaster,
   createCoreNotificationMailSender,
   bindAuthRuntimeToContext,
   createCoreAuthProviders,

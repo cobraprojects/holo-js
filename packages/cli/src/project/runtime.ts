@@ -4,6 +4,7 @@ import { basename, dirname, extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 import type {
+  BroadcastDiscoveryModule,
   EventsDiscoveryModule,
   ProjectModuleBundler,
   QueueDiscoveryModule,
@@ -36,6 +37,10 @@ export async function loadQueueDiscoveryModule(projectRoot: string): Promise<Que
 
 export async function loadEventsDiscoveryModule(projectRoot: string): Promise<EventsDiscoveryModule> {
   return await import(resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/events')) as EventsDiscoveryModule
+}
+
+export async function loadBroadcastDiscoveryModule(projectRoot: string): Promise<BroadcastDiscoveryModule> {
+  return await import(resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/broadcast')) as BroadcastDiscoveryModule
 }
 
 export async function resolveFirstExistingPath(

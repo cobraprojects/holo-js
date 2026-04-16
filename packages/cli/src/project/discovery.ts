@@ -10,6 +10,7 @@ import {
 import type { HoloAppCommand } from '../types'
 import { loadGeneratedProjectRegistry, writeGeneratedProjectRegistry } from './registry'
 import {
+  loadBroadcastDiscoveryModule,
   importProjectModule,
   loadEventsDiscoveryModule,
   loadQueueDiscoveryModule,
@@ -21,6 +22,8 @@ import {
   type CliModelReference,
   type DiscoveredAppCommand,
   type GeneratedCommandRegistryEntry,
+  type GeneratedBroadcastRegistryEntry,
+  type GeneratedChannelRegistryEntry,
   type GeneratedEventRegistryEntry,
   type GeneratedJobRegistryEntry,
   type GeneratedListenerRegistryEntry,
@@ -111,6 +114,38 @@ function deriveListenerIdFromPath(listenersRoot: string, sourcePath: string): st
   return derived
 }
 
+function deriveBroadcastNameFromPath(root: string, sourcePath: string): string {
+  const relativePath = toPosixPath(relative(root, sourcePath)).replace(COMMAND_FILE_PATTERN, '')
+  const derived = relativePath
+    .split('/')
+    .map(part => part.trim())
+    .filter(Boolean)
+    .join('.')
+
+  /* v8 ignore next 3 -- discovered file paths always produce a non-empty derived broadcast name */
+  if (!derived) {
+    throw new Error('[Holo Broadcast] Derived broadcast names require a non-empty source path.')
+  }
+
+  return derived
+}
+
+function deriveChannelPatternFromPath(root: string, sourcePath: string): string {
+  const relativePath = toPosixPath(relative(root, sourcePath)).replace(COMMAND_FILE_PATTERN, '')
+  const derived = relativePath
+    .split('/')
+    .map(part => part.trim())
+    .filter(Boolean)
+    .join('.')
+
+  /* v8 ignore next 3 -- discovered file paths always produce a non-empty derived channel pattern */
+  if (!derived) {
+    throw new Error('[Holo Broadcast] Derived channel patterns require a non-empty source path.')
+  }
+
+  return derived
+}
+
 function resolveDiscoveredJobMetadata(
   job: NormalizedDiscoveredQueueJob,
   sourcePath: string,
@@ -168,7 +203,7 @@ function normalizeCommandAliases(value: readonly string[] | undefined): readonly
 }
 
 function assertUniqueEntries(
-  kind: 'model' | 'migration' | 'seeder' | 'command' | 'job' | 'event' | 'listener',
+  kind: 'model' | 'migration' | 'seeder' | 'command' | 'job' | 'event' | 'listener' | 'broadcast' | 'channel',
   entries: readonly { name: string, sourcePath: string }[],
 ): void {
   const seen = new Map<string, string>()
@@ -441,8 +476,10 @@ export async function prepareProjectDiscovery(
   const jobsRoot = resolve(projectRoot, config.paths.jobs)
   const eventsRoot = resolve(projectRoot, config.paths.events)
   const listenersRoot = resolve(projectRoot, config.paths.listeners)
+  const broadcastRoot = resolve(projectRoot, 'server/broadcast')
+  const channelsRoot = resolve(projectRoot, 'server/channels')
 
-  const [modelFiles, migrationFiles, seederFiles, commandFiles, jobFiles, eventFiles, listenerFiles] = await Promise.all([
+  const [modelFiles, migrationFiles, seederFiles, commandFiles, jobFiles, eventFiles, listenerFiles, broadcastFiles, channelFiles] = await Promise.all([
     collectFiles(modelsRoot),
     collectFiles(migrationsRoot),
     collectFiles(seedersRoot),
@@ -450,6 +487,8 @@ export async function prepareProjectDiscovery(
     collectFiles(jobsRoot),
     collectFiles(eventsRoot),
     collectFiles(listenersRoot),
+    collectFiles(broadcastRoot),
+    collectFiles(channelsRoot),
   ])
 
   const models: GeneratedModelRegistryEntry[] = []
@@ -638,6 +677,71 @@ export async function prepareProjectDiscovery(
   })))
   listeners.sort((left, right) => left.id.localeCompare(right.id))
 
+  const broadcastDiscovery = (broadcastFiles.length > 0 || channelFiles.length > 0)
+    ? await loadBroadcastDiscoveryModule(projectRoot)
+    : undefined
+
+  const broadcast: GeneratedBroadcastRegistryEntry[] = []
+  for (const filePath of broadcastFiles) {
+    const relativePath = makeProjectRelativePath(projectRoot, filePath)
+    const exportedBroadcast = resolveNamedExportEntry(
+      await importProjectModule(projectRoot, filePath),
+      (value): value is object => broadcastDiscovery!.isBroadcastDefinition(value),
+    )
+    if (!exportedBroadcast) {
+      throw new Error(`Discovered broadcast "${relativePath}" does not export a Holo broadcast definition.`)
+    }
+
+    const normalizedBroadcast = exportedBroadcast.value as {
+      readonly name?: string
+      readonly channels: readonly {
+        readonly type: 'public' | 'private' | 'presence'
+        readonly pattern: string
+      }[]
+    }
+    broadcast.push({
+      sourcePath: relativePath,
+      name: normalizedBroadcast.name?.trim() || deriveBroadcastNameFromPath(broadcastRoot, filePath),
+      exportName: exportedBroadcast.exportName,
+      channels: normalizedBroadcast.channels.map(channel => ({
+        type: channel.type,
+        pattern: channel.pattern,
+      })),
+    })
+  }
+  assertUniqueEntries('broadcast', broadcast)
+
+  const channels: GeneratedChannelRegistryEntry[] = []
+  for (const filePath of channelFiles) {
+    const relativePath = makeProjectRelativePath(projectRoot, filePath)
+    const exportedChannel = resolveNamedExportEntry(
+      await importProjectModule(projectRoot, filePath),
+      (value): value is object => broadcastDiscovery!.isChannelDefinition(value),
+    )
+    if (!exportedChannel) {
+      throw new Error(`Discovered channel "${relativePath}" does not export a Holo channel definition.`)
+    }
+
+    const normalizedChannel = exportedChannel.value as {
+      readonly pattern: string
+      readonly type: 'private' | 'presence'
+      readonly whispers: Readonly<Record<string, unknown>>
+    }
+    const pattern = normalizedChannel.pattern || deriveChannelPatternFromPath(channelsRoot, filePath)
+    channels.push({
+      sourcePath: relativePath,
+      pattern,
+      exportName: exportedChannel.exportName,
+      type: normalizedChannel.type,
+      params: broadcastDiscovery!.broadcastInternals.extractChannelPatternParamNames(pattern),
+      whispers: Object.freeze(Object.keys(normalizedChannel.whispers)),
+    })
+  }
+  assertUniqueEntries('channel', channels.map(entry => ({
+    name: entry.pattern,
+    sourcePath: entry.sourcePath,
+  })))
+
   const registry: GeneratedProjectRegistry = {
     version: 1,
     generatedAt: new Date().toISOString(),
@@ -649,6 +753,8 @@ export async function prepareProjectDiscovery(
       jobs: config.paths.jobs,
       events: config.paths.events,
       listeners: config.paths.listeners,
+      broadcast: 'server/broadcast',
+      channels: 'server/channels',
       generatedSchema: config.paths.generatedSchema,
     },
     models,
@@ -658,6 +764,8 @@ export async function prepareProjectDiscovery(
     jobs,
     events,
     listeners,
+    broadcast,
+    channels,
   }
 
   await writeGeneratedProjectRegistry(projectRoot, registry)

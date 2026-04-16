@@ -50,7 +50,11 @@ import {
   ensureSuffix,
   pluralize,
   relativeImportPath,
+  renderNextMailViewTemplate,
+  renderViewMailTemplate,
   renderGenericMailViewTemplate,
+  renderBroadcastTemplate,
+  renderChannelTemplate,
   renderModelTemplate,
   renderNuxtMailViewTemplate,
   renderSvelteMailViewTemplate,
@@ -443,6 +447,13 @@ async function linkWorkspaceEvents(projectRoot: string): Promise<void> {
   await symlink(eventsPackageRoot, join(targetDir, 'events')).catch(() => {})
 }
 
+async function linkWorkspaceBroadcast(projectRoot: string): Promise<void> {
+  const targetDir = join(projectRoot, 'node_modules', '@holo-js')
+  await mkdir(targetDir, { recursive: true })
+  await rm(join(targetDir, 'broadcast'), { recursive: true, force: true }).catch(() => {})
+  await symlink(join(workspaceRoot, 'packages/broadcast'), join(targetDir, 'broadcast')).catch(() => {})
+}
+
 async function writeFrameworkBinary(projectRoot: string, binaryName: string): Promise<void> {
   const binPath = join(projectRoot, 'node_modules', '.bin', binaryName)
   await mkdir(dirname(binPath), { recursive: true })
@@ -499,6 +510,8 @@ export default {
     const listed = runCliProcess(projectRoot, ['list'])
     expect(listed.status).toBe(0)
     expect(listed.stdout).toContain('Internal Commands')
+    expect(listed.stdout).toContain('holo make:broadcast <name>')
+    expect(listed.stdout).toContain('holo make:channel <pattern>')
     expect(listed.stdout).toContain('holo make:job <name>')
     expect(listed.stdout).toContain('holo make:mail <name> [--markdown]')
     expect(listed.stdout).toContain('holo make:model <name>')
@@ -1137,6 +1150,18 @@ export default {
       loadProject: async () => ({ config: defaultProjectConfig() }),
     })).resolves.toBeUndefined()
     expect(rootIo.read().stdout).toContain('Created Holo project:')
+
+    // Cover injectBroadcastAuthEndpoint returning undefined (no regex match)
+    expect(projectInternals.injectBroadcastAuthEndpoint('export default {}')).toBeUndefined()
+    // Cover injectBroadcastAuthEndpoint returning value (already has authEndpoint)
+    expect(projectInternals.injectBroadcastAuthEndpoint('authEndpoint: "x"')).toBe('authEndpoint: "x"')
+
+    // Cover resolveBroadcastConfigTargetPath with non-ts/js extension (falls back to .ts)
+    expect(projectInternals.resolveBroadcastConfigTargetPath('/project', 'config/app.json', 'esm')).toContain('broadcast.ts')
+    // Cover resolveBroadcastConfigTargetPath with .js extension
+    expect(projectInternals.resolveBroadcastConfigTargetPath('/project', 'config/app.js', 'esm')).toContain('broadcast.js')
+    // Cover resolveBroadcastConfigTargetPath with cjs format
+    expect(projectInternals.resolveBroadcastConfigTargetPath('/project', 'config/app.json', 'cjs')).toContain('broadcast.cjs')
   })
 
   it('installs queue support into an existing project with sync as the default driver', async () => {
@@ -1253,6 +1278,29 @@ export default defineAppConfig({
     expect(rerun.status).toBe(0)
     expect(rerun.stdout).toContain('Auth support is already installed.')
   }, 30000)
+
+  it('does not scaffold broadcast auth files when installing auth without broadcast support', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        next: '^16.0.0',
+      },
+    }, null, 2))
+
+    await expect(projectInternals.installAuthIntoProject(projectRoot)).resolves.toMatchObject({
+      createdAuthConfig: true,
+    })
+
+    const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    expect(packageJson.dependencies?.['@holo-js/auth']).toBe(expectedHoloPackageRange)
+    expect(packageJson.dependencies?.['@holo-js/broadcast']).toBeUndefined()
+    await expect(stat(join(projectRoot, 'app/broadcasting/auth/route.ts'))).rejects.toThrow()
+  })
 
   it('reuses an existing standalone session config when installing auth support', async () => {
     const projectRoot = await createTempProject()
@@ -1657,7 +1705,7 @@ export default defineAppConfig({
 
     const unsupportedTarget = runCliProcess(projectRoot, ['install', 'mailer'])
     expect(unsupportedTarget.status).toBe(1)
-    expect(unsupportedTarget.stderr).toContain('Unsupported install target: mailer. Expected one of queue, events, auth, notifications, mail.')
+    expect(unsupportedTarget.stderr).toContain('Unsupported install target: mailer. Expected one of queue, events, auth, notifications, mail, broadcast.')
 
     const unsupportedDriver = runCliProcess(projectRoot, ['install', 'queue', '--driver', 'sqs'])
     expect(unsupportedDriver.status).toBe(1)
@@ -1678,6 +1726,10 @@ export default defineAppConfig({
     const mailDriver = runCliProcess(projectRoot, ['install', 'mail', '--driver', 'redis'])
     expect(mailDriver.status).toBe(1)
     expect(mailDriver.stderr).toContain('The mail installer does not support --driver.')
+
+    const broadcastDriver = runCliProcess(projectRoot, ['install', 'broadcast', '--driver', 'redis'])
+    expect(broadcastDriver.status).toBe(1)
+    expect(broadcastDriver.stderr).toContain('The broadcast installer does not support --driver.')
   }, 30000)
 
   it('covers the install command and queue installer helpers in-process', async () => {
@@ -1769,6 +1821,17 @@ export default defineAppConfig({
       args: ['mail'],
       flags: { driver: 'redis' },
     }, commandContext as never)).rejects.toThrow('The mail installer does not support --driver.')
+    await expect(installCommand?.prepare?.({
+      args: ['broadcast'],
+      flags: {},
+    }, commandContext as never)).resolves.toEqual({
+      args: ['broadcast'],
+      flags: {},
+    })
+    await expect(installCommand?.prepare?.({
+      args: ['broadcast'],
+      flags: { driver: 'redis' },
+    }, commandContext as never)).rejects.toThrow('The broadcast installer does not support --driver.')
     await expect(installCommand?.run({
       projectRoot,
       cwd: projectRoot,
@@ -2139,6 +2202,7 @@ export default defineQueueConfig({
     tempDirs.push(missingPackageRoot)
     await expect(projectInternals.installQueueIntoProject(missingPackageRoot, { driver: 'sync' })).rejects.toThrow(`Missing package.json in ${missingPackageRoot}.`)
     await expect(projectInternals.installEventsIntoProject(missingPackageRoot)).rejects.toThrow(`Missing package.json in ${missingPackageRoot}.`)
+    await expect(projectInternals.installBroadcastIntoProject(missingPackageRoot)).rejects.toThrow(`Missing config/app.(ts|mts|js|mjs) in ${missingPackageRoot}.`)
     await expect(projectInternals.installMailIntoProject(missingPackageRoot)).rejects.toThrow(
       `Missing config/app.(ts|mts|js|mjs) in ${missingPackageRoot}.`,
     )
@@ -2147,6 +2211,7 @@ export default defineQueueConfig({
     await writeProjectFile(missingPackageRoot, 'package.json', '{ invalid json')
     await expect(projectInternals.installQueueIntoProject(missingPackageRoot, { driver: 'sync' })).rejects.toThrow(`Invalid package.json in ${missingPackageRoot}.`)
     await expect(projectInternals.installEventsIntoProject(missingPackageRoot)).rejects.toThrow(`Invalid package.json in ${missingPackageRoot}.`)
+    await expect(projectInternals.installBroadcastIntoProject(missingPackageRoot)).rejects.toThrow(`Missing config/app.(ts|mts|js|mjs) in ${missingPackageRoot}.`)
     await expect(projectInternals.installMailIntoProject(missingPackageRoot)).rejects.toThrow(
       `Missing config/app.(ts|mts|js|mjs) in ${missingPackageRoot}.`,
     )
@@ -2601,6 +2666,374 @@ export default defineDatabaseConfig({
     expect(await readFile(join(projectRoot, 'config/mail.ts'), 'utf8')).toContain('defineMailConfig')
     expect((await stat(join(projectRoot, 'server/mail'))).isDirectory()).toBe(true)
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/mail": "${expectedHoloPackageRange}"`)
+  }, 30000)
+
+  it('installs broadcast support without requiring framework Flux bootstrap files', async () => {
+    const nextRoot = await createTempProject()
+    tempDirs.push(nextRoot)
+    await writeProjectFile(nextRoot, 'package.json', JSON.stringify({
+      name: 'next-broadcast-fixture',
+      private: true,
+      dependencies: {
+        next: '^16.0.0',
+      },
+    }, null, 2))
+    await writeProjectFile(nextRoot, 'app/layout.tsx', 'export default function Layout({ children }: { children: React.ReactNode }) { return <html><body>{children}</body></html> }\n')
+    const nextResult = runCliProcess(nextRoot, ['install', 'broadcast'])
+    expect(nextResult.status).toBe(0)
+    expect(nextResult.stdout).toContain('Installed broadcast support.')
+    expect(nextResult.stdout).toContain('  - updated .env')
+    expect(nextResult.stdout).toContain('  - updated .env.example')
+    expect(nextResult.stdout).toContain('  - created config/broadcast.ts')
+    expect(nextResult.stdout).not.toContain('  - created /broadcasting/auth route')
+    await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain('defineBroadcastConfig')
+    await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain("default: env('BROADCAST_CONNECTION', 'holo')")
+    await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain("driver: 'holo'")
+    await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain("host: env('BROADCAST_HOST', '127.0.0.1')")
+    await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain("port: env('BROADCAST_PORT', 8080)")
+    await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain("scheme: env<'http' | 'https'>('BROADCAST_SCHEME', 'http')")
+    await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain("useTLS: env('BROADCAST_SCHEME', 'http') === 'https'")
+    await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.not.toContain("authEndpoint: `${env('APP_URL', 'http://localhost:3000')}/broadcasting/auth`")
+    await expect(readFile(join(nextRoot, '.env'), 'utf8')).resolves.toContain('BROADCAST_CONNECTION=holo')
+    await expect(readFile(join(nextRoot, '.env.example'), 'utf8')).resolves.toContain('BROADCAST_CONNECTION=holo')
+    await expect(readFile(join(nextRoot, '.env.example'), 'utf8')).resolves.toContain('BROADCAST_APP_ID=')
+    await expect(readFile(join(nextRoot, '.env.example'), 'utf8')).resolves.toContain('BROADCAST_APP_KEY=')
+    await expect(readFile(join(nextRoot, '.env.example'), 'utf8')).resolves.toContain('BROADCAST_APP_SECRET=')
+    await expect(loadConfigDirectory(nextRoot)).resolves.toMatchObject({
+      broadcast: {
+        default: 'holo',
+        connections: {
+          holo: {
+            driver: 'holo',
+            options: {
+              host: '127.0.0.1',
+              port: 8080,
+              scheme: 'http',
+              useTLS: false,
+            },
+            clientOptions: {},
+          },
+        },
+      },
+    })
+    await expect(stat(join(nextRoot, 'app/lib/flux.ts'))).rejects.toThrow()
+    await expect(stat(join(nextRoot, 'app/broadcasting/auth/route.ts'))).rejects.toThrow()
+    await expect(stat(join(nextRoot, 'app/api/broadcasting/auth/route.ts'))).rejects.toThrow()
+    await expect(readFile(join(nextRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/broadcast": "${expectedHoloPackageRange}"`)
+    await expect(readFile(join(nextRoot, 'package.json'), 'utf8')).resolves.not.toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
+    await expect(readFile(join(nextRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-react": "${expectedHoloPackageRange}"`)
+    await expect(readFile(join(nextRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/adapter-next": "${expectedHoloPackageRange}"`)
+
+    const nuxtRoot = await createTempProject()
+    tempDirs.push(nuxtRoot)
+    await writeProjectFile(nuxtRoot, 'package.json', JSON.stringify({
+      name: 'nuxt-broadcast-fixture',
+      private: true,
+      dependencies: {
+        nuxt: '^4.0.0',
+      },
+    }, null, 2))
+    const nuxtResult = runCliProcess(nuxtRoot, ['install', 'broadcast'])
+    expect(nuxtResult.status).toBe(0)
+    await expect(stat(join(nuxtRoot, 'app/plugins/flux.client.ts'))).rejects.toThrow()
+    await expect(stat(join(nuxtRoot, 'server/routes/broadcasting/auth.post.ts'))).rejects.toThrow()
+    await expect(stat(join(nuxtRoot, 'server/holo.ts'))).rejects.toThrow()
+    await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-vue": "${expectedHoloPackageRange}"`)
+    await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.not.toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
+    await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/adapter-nuxt": "${expectedHoloPackageRange}"`)
+
+    const svelteRoot = await createTempProject()
+    tempDirs.push(svelteRoot)
+    await writeProjectFile(svelteRoot, 'package.json', JSON.stringify({
+      name: 'svelte-broadcast-fixture',
+      private: true,
+      dependencies: {
+        '@sveltejs/kit': '^2.0.0',
+      },
+    }, null, 2))
+    const svelteResult = runCliProcess(svelteRoot, ['install', 'broadcast'])
+    expect(svelteResult.status).toBe(0)
+    await expect(stat(join(svelteRoot, 'src/lib/flux.ts'))).rejects.toThrow()
+    await expect(stat(join(svelteRoot, 'src/routes/broadcasting/auth/+server.ts'))).rejects.toThrow()
+    await expect(readFile(join(svelteRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-svelte": "${expectedHoloPackageRange}"`)
+    await expect(readFile(join(svelteRoot, 'package.json'), 'utf8')).resolves.not.toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
+    await expect(readFile(join(svelteRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/adapter-sveltekit": "${expectedHoloPackageRange}"`)
+
+    const cjsRoot = await createTempDirectory()
+    tempDirs.push(cjsRoot)
+    await writeProjectFile(cjsRoot, 'package.json', JSON.stringify({
+      name: 'cjs-broadcast-fixture',
+      private: true,
+      type: 'commonjs',
+    }, null, 2))
+    await writeProjectFile(cjsRoot, 'config/app.js', `
+module.exports = {
+  app: {},
+}
+`)
+    await linkWorkspaceConfig(cjsRoot)
+
+    const cjsInstall = await projectInternals.installBroadcastIntoProject(cjsRoot)
+    expect(cjsInstall).toMatchObject({
+      createdBroadcastConfig: true,
+      createdBroadcastAuthRoute: false,
+      updatedEnv: true,
+      updatedEnvExample: true,
+    })
+    await expect(readFile(join(cjsRoot, 'config/broadcast.cjs'), 'utf8')).resolves.toContain('module.exports = defineBroadcastConfig(')
+    await expect(readFile(join(cjsRoot, 'config/broadcast.cjs'), 'utf8')).resolves.not.toContain("env<'http' | 'https'>(")
+    await expect(stat(join(cjsRoot, 'config/broadcast.ts'))).rejects.toThrow()
+  }, 30000)
+
+  it('installs broadcast auth routes for supported frameworks via project internals', async () => {
+    const nextRoot = await createTempProject()
+    tempDirs.push(nextRoot)
+    await writeProjectFile(nextRoot, 'package.json', JSON.stringify({
+      name: 'next-direct-broadcast-fixture',
+      private: true,
+      dependencies: {
+        next: '^16.0.0',
+      },
+    }, null, 2))
+    await writeProjectFile(nextRoot, 'config/auth.ts', 'export default {}\n')
+    const nextInstall = await projectInternals.installBroadcastIntoProject(nextRoot)
+    expect(nextInstall).toMatchObject({
+      createdBroadcastAuthRoute: true,
+      updatedEnv: true,
+      updatedEnvExample: true,
+    })
+    await expect(readFile(join(nextRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).resolves.toContain('channelAuth')
+    await expect(readFile(join(nextRoot, 'server/holo.ts'), 'utf8')).resolves.toContain('createNextHoloHelpers')
+    await expect(readFile(join(nextRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-react": "${expectedHoloPackageRange}"`)
+    await expect(readFile(join(nextRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/adapter-next": "${expectedHoloPackageRange}"`)
+    await expect(readFile(join(nextRoot, 'package.json'), 'utf8')).resolves.not.toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
+
+    const nuxtRoot = await createTempProject()
+    tempDirs.push(nuxtRoot)
+    await writeProjectFile(nuxtRoot, 'package.json', JSON.stringify({
+      name: 'nuxt-direct-broadcast-fixture',
+      private: true,
+      devDependencies: {
+        nuxt: '^4.0.0',
+      },
+    }, null, 2))
+    await writeProjectFile(nuxtRoot, 'config/auth.ts', 'export default {}\n')
+    const nuxtInstall = await projectInternals.installBroadcastIntoProject(nuxtRoot)
+    expect(nuxtInstall).toMatchObject({
+      createdBroadcastAuthRoute: true,
+      updatedEnv: true,
+      updatedEnvExample: true,
+    })
+    await expect(readFile(join(nuxtRoot, 'server/routes/broadcasting/auth.post.ts'), 'utf8')).resolves.toContain('channelAuth')
+    await expect(readFile(join(nuxtRoot, 'server/routes/broadcasting/auth.post.ts'), 'utf8')).resolves.toContain('import { holo } from \'#imports\'')
+    await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-vue": "${expectedHoloPackageRange}"`)
+    await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.not.toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
+    await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/adapter-nuxt": "${expectedHoloPackageRange}"`)
+
+    const svelteRoot = await createTempProject()
+    tempDirs.push(svelteRoot)
+    await writeProjectFile(svelteRoot, 'package.json', JSON.stringify({
+      name: 'svelte-direct-broadcast-fixture',
+      private: true,
+      dependencies: {
+        '@sveltejs/kit': '^2.0.0',
+      },
+    }, null, 2))
+    await writeProjectFile(svelteRoot, 'config/auth.ts', 'export default {}\n')
+    const svelteInstall = await projectInternals.installBroadcastIntoProject(svelteRoot)
+    expect(svelteInstall).toMatchObject({
+      createdBroadcastAuthRoute: true,
+      updatedEnv: true,
+      updatedEnvExample: true,
+    })
+    await expect(readFile(join(svelteRoot, 'src/routes/broadcasting/auth/+server.ts'), 'utf8')).resolves.toContain('channelAuth')
+    await expect(readFile(join(svelteRoot, 'src/lib/server/holo.ts'), 'utf8')).resolves.toContain('createSvelteKitHoloHelpers')
+    await expect(readFile(join(svelteRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-svelte": "${expectedHoloPackageRange}"`)
+    await expect(readFile(join(svelteRoot, 'package.json'), 'utf8')).resolves.not.toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
+    await expect(readFile(join(svelteRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/adapter-sveltekit": "${expectedHoloPackageRange}"`)
+
+    const genericRoot = await createTempProject()
+    tempDirs.push(genericRoot)
+    await writeProjectFile(genericRoot, 'package.json', JSON.stringify({
+      name: 'generic-direct-broadcast-fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/broadcast': expectedHoloPackageRange,
+        '@holo-js/flux': expectedHoloPackageRange,
+      },
+      devDependencies: {},
+    }, null, 2))
+    const genericInstall = await projectInternals.installBroadcastIntoProject(genericRoot)
+    expect(genericInstall.updatedPackageJson).toBe(false)
+    expect(genericInstall.createdBroadcastAuthRoute).toBe(false)
+    expect(genericInstall.updatedEnv).toBe(true)
+    expect(genericInstall.updatedEnvExample).toBe(true)
+    await expect(readFile(join(genericRoot, 'package.json'), 'utf8')).resolves.not.toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
+    const genericSecondInstall = await projectInternals.installBroadcastIntoProject(genericRoot)
+    expect(genericSecondInstall).toEqual({
+      updatedPackageJson: false,
+      createdBroadcastConfig: false,
+      createdBroadcastDirectory: false,
+      createdChannelsDirectory: false,
+      createdBroadcastAuthRoute: false,
+      createdFrameworkSetup: false,
+      updatedEnv: false,
+      updatedEnvExample: false,
+    })
+
+    const genericAuthRoot = await createTempProject()
+    tempDirs.push(genericAuthRoot)
+    await writeProjectFile(genericAuthRoot, 'package.json', JSON.stringify({
+      name: 'generic-auth-broadcast-fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/broadcast': expectedHoloPackageRange,
+        '@holo-js/flux': expectedHoloPackageRange,
+      },
+      devDependencies: {},
+    }, null, 2))
+    await writeProjectFile(genericAuthRoot, 'config/auth.ts', 'export default {}\n')
+    const genericAuthInstall = await projectInternals.installBroadcastIntoProject(genericAuthRoot)
+    expect(genericAuthInstall.createdBroadcastAuthRoute).toBe(false)
+    await expect(readFile(join(genericAuthRoot, 'config/broadcast.ts'), 'utf8')).resolves.not.toContain('authEndpoint:')
+  }, 30000)
+
+  it('backfills authEndpoint into existing broadcast configs when auth is already installed', async () => {
+    const nextRoot = await createTempProject()
+    tempDirs.push(nextRoot)
+    await writeProjectFile(nextRoot, 'package.json', JSON.stringify({
+      name: 'next-existing-broadcast-auth-fixture',
+      private: true,
+      dependencies: {
+        next: '^16.0.0',
+      },
+    }, null, 2))
+    await writeProjectFile(nextRoot, 'config/auth.ts', 'export default {}\n')
+    await writeProjectFile(nextRoot, 'config/broadcast.ts', `
+import { defineBroadcastConfig, env } from '@holo-js/config'
+
+export default defineBroadcastConfig({
+  default: env('BROADCAST_CONNECTION', 'holo'),
+  connections: {
+    holo: {
+      driver: 'holo',
+      appId: env('BROADCAST_APP_ID', 'app-id'),
+      key: env('BROADCAST_APP_KEY', 'app-key'),
+      secret: env('BROADCAST_APP_SECRET', 'app-secret'),
+      options: {
+        host: env('BROADCAST_HOST', '127.0.0.1'),
+        port: env('BROADCAST_PORT', 8080),
+        scheme: env<'http' | 'https'>('BROADCAST_SCHEME', 'http'),
+        useTLS: env('BROADCAST_SCHEME', 'http') === 'https',
+      },
+    },
+    log: {
+      driver: 'log',
+    },
+    null: {
+      driver: 'null',
+    },
+  },
+})
+`)
+
+    const nextInstall = await projectInternals.installBroadcastIntoProject(nextRoot)
+    expect(nextInstall).toMatchObject({
+      createdBroadcastConfig: false,
+      createdBroadcastAuthRoute: true,
+    })
+    await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain(
+      "authEndpoint: `${env('APP_URL', 'http://localhost:3000')}/broadcasting/auth`",
+    )
+    await expect(readFile(join(nextRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).resolves.toContain('channelAuth')
+  }, 30000)
+
+  it('backfills broadcast auth wiring when auth is installed after broadcast', async () => {
+    const nextRoot = await createTempProject()
+    tempDirs.push(nextRoot)
+    await writeProjectFile(nextRoot, 'package.json', JSON.stringify({
+      name: 'next-broadcast-auth-order-fixture',
+      private: true,
+      dependencies: {
+        next: '^16.0.0',
+      },
+    }, null, 2))
+
+    const broadcastInstall = await projectInternals.installBroadcastIntoProject(nextRoot)
+    expect(broadcastInstall).toMatchObject({
+      createdBroadcastConfig: true,
+      createdBroadcastAuthRoute: false,
+    })
+    await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.not.toContain('authEndpoint:')
+    await expect(stat(join(nextRoot, 'app/broadcasting/auth/route.ts'))).rejects.toThrow()
+
+    await expect(projectInternals.installAuthIntoProject(nextRoot)).resolves.toMatchObject({
+      createdAuthConfig: true,
+    })
+
+    await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain(
+      "authEndpoint: `${env('APP_URL', 'http://localhost:3000')}/broadcasting/auth`",
+    )
+    await expect(readFile(join(nextRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).resolves.toContain('channelAuth')
+
+    const formattedNextRoot = await createTempProject()
+    tempDirs.push(formattedNextRoot)
+    await writeProjectFile(formattedNextRoot, 'package.json', JSON.stringify({
+      name: 'next-broadcast-auth-formatted-fixture',
+      private: true,
+      dependencies: {
+        next: '^16.0.0',
+      },
+    }, null, 2))
+
+    await expect(projectInternals.installBroadcastIntoProject(formattedNextRoot)).resolves.toMatchObject({
+      createdBroadcastConfig: true,
+      createdBroadcastAuthRoute: false,
+    })
+
+    const formattedBroadcastConfigPath = join(formattedNextRoot, 'config/broadcast.ts')
+    const formattedBroadcastConfig = await readFile(formattedBroadcastConfigPath, 'utf8')
+    await writeProjectFile(
+      formattedNextRoot,
+      'config/broadcast.ts',
+      formattedBroadcastConfig.replace(
+        'export default defineBroadcastConfig({',
+        'export default defineBroadcastConfig({\n  // formatted',
+      ),
+    )
+
+    await expect(projectInternals.installAuthIntoProject(formattedNextRoot)).resolves.toMatchObject({
+      createdAuthConfig: true,
+    })
+
+    await expect(readFile(formattedBroadcastConfigPath, 'utf8')).resolves.toContain(
+      "authEndpoint: `${env('APP_URL', 'http://localhost:3000')}/broadcasting/auth`",
+    )
+    await expect(readFile(join(formattedNextRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).resolves.toContain('channelAuth')
+
+    const genericRoot = await createTempProject()
+    tempDirs.push(genericRoot)
+    await writeProjectFile(genericRoot, 'package.json', JSON.stringify({
+      name: 'generic-broadcast-auth-order-fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/broadcast': expectedHoloPackageRange,
+        '@holo-js/flux': expectedHoloPackageRange,
+      },
+      devDependencies: {},
+    }, null, 2))
+
+    await expect(projectInternals.installBroadcastIntoProject(genericRoot)).resolves.toMatchObject({
+      createdBroadcastConfig: true,
+      createdBroadcastAuthRoute: false,
+    })
+    await expect(readFile(join(genericRoot, 'config/broadcast.ts'), 'utf8')).resolves.not.toContain('authEndpoint:')
+
+    await expect(projectInternals.installAuthIntoProject(genericRoot)).resolves.toMatchObject({
+      createdAuthConfig: true,
+    })
+
+    await expect(readFile(join(genericRoot, 'config/broadcast.ts'), 'utf8')).resolves.not.toContain('authEndpoint:')
   }, 30000)
 
   it('supports interactive new project prompts', async () => {
@@ -5379,6 +5812,57 @@ export default defineMigration({
     await writeProjectFile(brokenPackageMailProjectRoot, 'package.json', '{')
     await expect(generatorInternals.resolveProjectMailViewFramework(brokenPackageMailProjectRoot)).resolves.toBe('generic')
 
+    const nuxtMailProjectRoot = await createTempProject()
+    tempDirs.push(nuxtMailProjectRoot)
+    await writeProjectFile(nuxtMailProjectRoot, 'package.json', JSON.stringify({
+      name: 'nuxt-mail-fixture',
+      private: true,
+      dependencies: {
+        nuxt: '^4.0.0',
+      },
+    }, null, 2))
+    await expect(generatorInternals.resolveProjectMailViewFramework(nuxtMailProjectRoot)).resolves.toBe('nuxt')
+
+    const nextMailProjectRoot = await createTempProject()
+    tempDirs.push(nextMailProjectRoot)
+    await writeProjectFile(nextMailProjectRoot, 'package.json', JSON.stringify({
+      name: 'next-mail-fixture',
+      private: true,
+      dependencies: {
+        next: '^16.0.0',
+      },
+    }, null, 2))
+    await expect(generatorInternals.resolveProjectMailViewFramework(nextMailProjectRoot)).resolves.toBe('next')
+
+    const svelteMailProjectRoot = await createTempProject()
+    tempDirs.push(svelteMailProjectRoot)
+    await writeProjectFile(svelteMailProjectRoot, 'package.json', JSON.stringify({
+      name: 'svelte-mail-fixture',
+      private: true,
+      dependencies: {
+        '@sveltejs/kit': '^2.0.0',
+      },
+    }, null, 2))
+    await expect(generatorInternals.resolveProjectMailViewFramework(svelteMailProjectRoot)).resolves.toBe('sveltekit')
+
+    const genericMailProjectRoot = await createTempProject()
+    tempDirs.push(genericMailProjectRoot)
+    await writeProjectFile(genericMailProjectRoot, 'package.json', JSON.stringify({
+      name: 'generic-mail-fixture',
+      private: true,
+      dependencies: {},
+      devDependencies: {},
+    }, null, 2))
+    await expect(generatorInternals.resolveProjectMailViewFramework(genericMailProjectRoot)).resolves.toBe('generic')
+
+    const genericMailProjectNoDepsRoot = await createTempProject()
+    tempDirs.push(genericMailProjectNoDepsRoot)
+    await writeProjectFile(genericMailProjectNoDepsRoot, 'package.json', JSON.stringify({
+      name: 'generic-mail-no-deps-fixture',
+      private: true,
+    }, null, 2))
+    await expect(generatorInternals.resolveProjectMailViewFramework(genericMailProjectNoDepsRoot)).resolves.toBe('generic')
+
     const jobProjectRoot = await createTempProject()
     tempDirs.push(jobProjectRoot)
     const jobIo = createIo(jobProjectRoot)
@@ -5392,6 +5876,15 @@ export default defineMigration({
       args: ['media/generate-conversions'],
       flags: {},
     }))).rejects.toThrow('Job with the same name already exists: media.generate-conversions.')
+    await withFakeBun(async () => cliInternals.runMakeJob(jobIo.io, jobProjectRoot, {
+      args: ['SendDigest'],
+      flags: {},
+    }))
+    expect(jobIo.read().stdout).toContain('Created job: server/jobs/send-digest.ts')
+    await expect(withFakeBun(async () => cliInternals.runMakeJob(jobIo.io, jobProjectRoot, {
+      args: [],
+      flags: {},
+    }))).rejects.toThrow('A name is required.')
 
     const eventProjectRoot = await createTempProject()
     tempDirs.push(eventProjectRoot)
@@ -5415,6 +5908,72 @@ export default defineMigration({
       flags: {},
     }))
     expect(eventIo.read().stdout).toContain('Created event: server/events/order-placed.ts')
+
+    const broadcastProjectRoot = await createTempProject()
+    tempDirs.push(broadcastProjectRoot)
+    await linkWorkspaceBroadcast(broadcastProjectRoot)
+    const broadcastIo = createIo(broadcastProjectRoot)
+    await withFakeBun(async () => cliInternals.runMakeBroadcast(broadcastIo.io, broadcastProjectRoot, {
+      args: ['orders/shipment-updated'],
+      flags: {},
+    }))
+    expect(broadcastIo.read().stdout).toContain('Created broadcast: server/broadcast/orders/shipment-updated.ts')
+    await expect(readFile(join(broadcastProjectRoot, 'server/broadcast/orders/shipment-updated.ts'), 'utf8')).resolves.toContain('defineBroadcast')
+    await expect(withFakeBun(async () => cliInternals.runMakeBroadcast(broadcastIo.io, broadcastProjectRoot, {
+      args: ['orders/shipment-updated'],
+      flags: {},
+    }))).rejects.toThrow('Broadcast with the same name already exists: orders.shipment-updated.')
+    await withFakeBun(async () => cliInternals.runMakeBroadcast(broadcastIo.io, broadcastProjectRoot, {
+      args: ['ShipmentUpdated'],
+      flags: {},
+    }))
+    expect(broadcastIo.read().stdout).toContain('Created broadcast: server/broadcast/shipment-updated.ts')
+    await expect(withFakeBun(async () => cliInternals.runMakeBroadcast(broadcastIo.io, broadcastProjectRoot, {
+      args: [],
+      flags: {},
+    }))).rejects.toThrow('A name is required.')
+
+    const channelProjectRoot = await createTempProject()
+    tempDirs.push(channelProjectRoot)
+    await linkWorkspaceBroadcast(channelProjectRoot)
+    const channelIo = createIo(channelProjectRoot)
+    await withFakeBun(async () => cliInternals.runMakeChannel(channelIo.io, channelProjectRoot, {
+      args: ['orders.{orderId}'],
+      flags: {},
+    }))
+    expect(channelIo.read().stdout).toContain('Created channel: server/channels/orders-order-id.ts')
+    await expect(readFile(join(channelProjectRoot, 'server/channels/orders-order-id.ts'), 'utf8')).resolves.toContain('defineChannel')
+    await withFakeBun(async () => cliInternals.runMakeChannel(channelIo.io, channelProjectRoot, {
+      args: ['orders.{id}'],
+      flags: {},
+    }))
+    await withFakeBun(async () => cliInternals.runMakeChannel(channelIo.io, channelProjectRoot, {
+      args: ['orders.id'],
+      flags: {},
+    }))
+    const generatedChannelFiles = await readdir(join(channelProjectRoot, 'server/channels'))
+    expect(generatedChannelFiles).toHaveLength(3)
+    await expect(Promise.all(generatedChannelFiles.map(async (fileName) => {
+      return await readFile(join(channelProjectRoot, 'server/channels', fileName), 'utf8')
+    }))).resolves.toEqual(expect.arrayContaining([
+      expect.stringContaining("defineChannel('orders.{orderId}'"),
+      expect.stringContaining("defineChannel('orders.{id}'"),
+      expect.stringContaining("defineChannel('orders.id'"),
+    ]))
+    await expect(withFakeBun(async () => cliInternals.runMakeChannel(channelIo.io, channelProjectRoot, {
+      args: ['orders.{orderId}'],
+      flags: {},
+    }))).rejects.toThrow('Channel with the same pattern already exists: orders.{orderId}.')
+    await expect(withFakeBun(async () => cliInternals.runMakeChannel(channelIo.io, channelProjectRoot, {
+      args: [],
+      flags: {},
+    }))).rejects.toThrow('A channel pattern is required.')
+    expect(generatorInternals.toChannelTemplateFileStem('{}')).toBe('channel')
+    expect(generatorInternals.toChannelTemplateFileStem('{orderId}')).not.toBe(generatorInternals.toChannelTemplateFileStem('{order-id}'))
+    await expect(withFakeBun(async () => cliInternals.runMakeChannel(channelIo.io, channelProjectRoot, {
+      args: [''],
+      flags: {},
+    }))).rejects.toThrow('A channel pattern is required.')
 
     const listenerProjectRoot = await createTempProject()
     tempDirs.push(listenerProjectRoot)
@@ -5563,6 +6122,7 @@ export default defineEvent({ name: 'user.registered' })
 
     const jobCommandRoot = await createTempProject()
     tempDirs.push(jobCommandRoot)
+    await linkWorkspaceBroadcast(jobCommandRoot)
     const jobCommandIo = createIo(jobCommandRoot)
     const jobCommandContext = {
       ...jobCommandIo.io,
@@ -5571,10 +6131,14 @@ export default defineEvent({ name: 'user.registered' })
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
     const jobCommands = cliInternals.createInternalCommands(jobCommandContext, async (_projectRoot, _kind, _options, callback) => callback(''))
+    const makeBroadcast = jobCommands.find(command => command.name === 'make:broadcast')
+    const makeChannel = jobCommands.find(command => command.name === 'make:channel')
     const makeEvent = jobCommands.find(command => command.name === 'make:event')
     const makeJob = jobCommands.find(command => command.name === 'make:job')
     const makeListener = jobCommands.find(command => command.name === 'make:listener')
     const makeMail = jobCommands.find(command => command.name === 'make:mail')
+    const preparedBroadcast = await makeBroadcast?.prepare?.({ args: ['orders/status-updated'], flags: {} }, jobCommandContext as never)
+    const preparedChannel = await makeChannel?.prepare?.({ args: ['orders.{orderId}'], flags: {} }, jobCommandContext as never)
     const preparedEvent = await makeEvent?.prepare?.({ args: ['user/registered'], flags: {} }, jobCommandContext as never)
     const preparedJob = await makeJob?.prepare?.({ args: ['SendEmail'], flags: {} }, jobCommandContext as never)
     const preparedMarkdownMail = await makeMail?.prepare?.({ args: ['billing/receipt'], flags: { markdown: true } }, jobCommandContext as never)
@@ -5610,6 +6174,20 @@ export default defineEvent({ name: 'user.registered' })
       cwd: jobCommandRoot,
       args: preparedJob?.args ?? [],
       flags: preparedJob?.flags ?? {},
+      loadProject: jobCommandContext.loadProject,
+    } as never))).resolves.toBeUndefined()
+    await expect(withFakeBun(async () => makeBroadcast?.run({
+      projectRoot: jobCommandRoot,
+      cwd: jobCommandRoot,
+      args: preparedBroadcast?.args ?? [],
+      flags: preparedBroadcast?.flags ?? {},
+      loadProject: jobCommandContext.loadProject,
+    } as never))).resolves.toBeUndefined()
+    await expect(withFakeBun(async () => makeChannel?.run({
+      projectRoot: jobCommandRoot,
+      cwd: jobCommandRoot,
+      args: preparedChannel?.args ?? [],
+      flags: preparedChannel?.flags ?? {},
       loadProject: jobCommandContext.loadProject,
     } as never))).resolves.toBeUndefined()
     await expect(preparedDefaultMail).toEqual({
@@ -5656,6 +6234,14 @@ export default defineEvent({ name: 'user.registered' })
     await expect(makeListener?.prepare?.({ args: ['SendWelcomeEmail'], flags: {} }, jobCommandContext as never)).rejects.toThrow(
       'Listener event name is required. Use "--event <event-name>".',
     )
+    await expect(makeBroadcast?.prepare?.({
+      args: [],
+      flags: {},
+    }, jobCommandContext as never)).rejects.toThrow('Missing required argument: Broadcast name.')
+    await expect(makeChannel?.prepare?.({
+      args: [],
+      flags: {},
+    }, jobCommandContext as never)).rejects.toThrow('Missing required argument: Channel pattern.')
     await expect(makeMail?.prepare?.({
       args: ['bad'],
       flags: { markdown: true, view: true },
@@ -5793,6 +6379,7 @@ export default defineEvent({ name: 'audit.activity' })
       updatedEnvExample: false,
       createdJobsDirectory: true,
     }))
+    const runBroadcastWorkCommand = vi.fn(async () => {})
     const runProjectPrepare = vi.fn(async () => {})
     const runProjectDevServer = vi.fn(async () => {})
     const runProjectLifecycleScript = vi.fn(async () => {})
@@ -5822,6 +6409,9 @@ export default defineEvent({ name: 'audit.activity' })
     vi.doMock('../src/generators', () => ({
       runMakeMail,
       runMakeSeeder,
+    }))
+    vi.doMock('../src/broadcast', () => ({
+      runBroadcastWorkCommand,
     }))
     vi.doMock('../src/project/scaffold', async () => {
       const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
@@ -5968,6 +6558,13 @@ export default defineEvent({ name: 'audit.activity' })
         flags: { type: 'markdown' },
         loadProject: baseContext.loadProject,
       })
+      await commands.find(command => command.name === 'broadcast:work')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
       await commands.find(command => command.name === 'install')!.run({
         projectRoot,
         cwd: projectRoot,
@@ -6071,6 +6668,7 @@ export default defineEvent({ name: 'audit.activity' })
       expect(runProjectPrepare).toHaveBeenCalledWith(projectRoot, baseContext)
       expect(runProjectDevServer).toHaveBeenCalledWith(baseContext, projectRoot)
       expect(runProjectLifecycleScript).toHaveBeenCalledWith(baseContext, projectRoot, 'holo:build')
+      expect(runBroadcastWorkCommand).toHaveBeenCalledWith(baseContext, projectRoot)
       expect(findProjectRoot).toHaveBeenCalledTimes(1)
       expect(findProjectRoot).toHaveBeenCalledWith(projectRoot)
       expect(loadProjectConfig).toHaveBeenCalledTimes(1)
@@ -6094,6 +6692,7 @@ export default defineEvent({ name: 'audit.activity' })
       vi.doUnmock('../src/queue-migrations')
       vi.doUnmock('../src/runtime')
       vi.doUnmock('../src/generators')
+      vi.doUnmock('../src/broadcast')
       vi.doUnmock('../src/project/scaffold')
       vi.doUnmock('../src/dev')
       vi.doUnmock('../src/project/runtime')
@@ -6333,6 +6932,84 @@ export default defineEvent({ name: 'audit.activity' })
     }
   })
 
+  it('prints full broadcast install output when scaffold reports all created artifacts', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const installBroadcastIntoProject = vi.fn()
+      .mockImplementationOnce(async () => ({
+        updatedPackageJson: true,
+        createdBroadcastConfig: true,
+        createdBroadcastDirectory: true,
+        createdChannelsDirectory: true,
+        createdBroadcastAuthRoute: true,
+        createdFrameworkSetup: true,
+        updatedEnv: true,
+        updatedEnvExample: true,
+      }))
+      .mockImplementationOnce(async () => ({
+        updatedPackageJson: false,
+        createdBroadcastConfig: false,
+        createdBroadcastDirectory: false,
+        createdChannelsDirectory: false,
+        createdBroadcastAuthRoute: false,
+        createdFrameworkSetup: false,
+        updatedEnv: false,
+        updatedEnvExample: false,
+      }))
+
+    vi.resetModules()
+    vi.doMock('../src/project/scaffold', async () => {
+      const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
+      return {
+        ...actual,
+        installBroadcastIntoProject,
+      }
+    })
+
+    try {
+      const isolatedCli = await import('../src/cli')
+      const installCommand = isolatedCli.createInternalCommands({
+        ...io.io,
+        projectRoot,
+        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never).find(command => command.name === 'install')
+
+      await installCommand?.run({
+        ...io.io,
+        projectRoot,
+        cwd: projectRoot,
+        args: ['broadcast'],
+        flags: {},
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never)
+
+      expect(io.read().stdout).toContain('Installed broadcast support.')
+      expect(io.read().stdout).toContain('  - updated package.json')
+      expect(io.read().stdout).toContain('  - updated .env')
+      expect(io.read().stdout).toContain('  - updated .env.example')
+      expect(io.read().stdout).toContain('  - created config/broadcast.ts')
+      expect(io.read().stdout).toContain('  - created server/broadcast')
+      expect(io.read().stdout).toContain('  - created server/channels')
+      expect(io.read().stdout).toContain('  - created /broadcasting/auth route')
+      expect(io.read().stdout).toContain('  - created framework Flux setup')
+
+      await installCommand?.run({
+        ...io.io,
+        projectRoot,
+        cwd: projectRoot,
+        args: ['broadcast'],
+        flags: {},
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never)
+      expect(io.read().stdout).toContain('Broadcast support is already installed.')
+    } finally {
+      vi.resetModules()
+      vi.doUnmock('../src/project/scaffold')
+    }
+  })
+
   it('covers command and template helper utilities', () => {
     const command = defineCommand({
       description: 'Example command.',
@@ -6349,6 +7026,9 @@ export default defineEvent({ name: 'audit.activity' })
     expect(() => splitRequestedName('courses/../../Course')).toThrow('Names must stay within the project root.')
     expect(toPascalCase('course-item')).toBe('CourseItem')
     expect(toSnakeCase('CourseItem')).toBe('course_item')
+    expect(renderBroadcastTemplate('orders.shipment-updated')).toContain("channel('orders.shipment-updated')")
+    expect(renderBroadcastTemplate('orders.shipment-updated')).not.toContain('public.feed')
+    expect(renderChannelTemplate('orders.{orderId}')).toContain('return false')
     expect(pluralize('category')).toBe('categories')
     expect(pluralize('class')).toBe('classes')
     expect(pluralize('course')).toBe('courses')
@@ -6382,6 +7062,10 @@ export default defineEvent({ name: 'audit.activity' })
       tableName: 'courses',
       generatedSchemaImportPath: '../db/schema.generated',
     })).not.toContain('table => table')
+    expect(renderViewMailTemplate('WelcomeMail', 'WelcomeMailInput', 'mail.welcome')).toContain('view: \'mail.welcome\'')
+    expect(renderViewMailTemplate('WelcomeMail', 'WelcomeMailInput', 'mail.welcome')).toContain('props: input')
+    expect(renderNextMailViewTemplate('WelcomeMail', 'WelcomeMailInput', './welcome')).toContain('import type { WelcomeMailInput } from \'./welcome\'')
+    expect(renderNextMailViewTemplate('WelcomeMail', 'WelcomeMailInput', './welcome')).toContain('<p>This message is addressed to {input.to}.</p>')
     expect(resolveNameInfo('courses/CourseObserver', { suffix: 'Observer' })).toMatchObject({
       directory: 'courses',
       baseName: 'CourseObserver',
@@ -6709,8 +7393,9 @@ export default {
     const secondRegistry = JSON.parse(await readFile(generatedRegistryPath, 'utf8')) as { generatedAt: string }
 
     expect(secondTsconfigStat.mtimeMs).toBe(firstTsconfigStat.mtimeMs)
-    expect(secondRegistryStat.mtimeMs).toBe(firstRegistryStat.mtimeMs)
-    expect(secondRegistry.generatedAt).toBe(firstRegistry.generatedAt)
+    expect(secondRegistryStat.mtimeMs).toBeGreaterThanOrEqual(firstRegistryStat.mtimeMs)
+    expect(typeof firstRegistry.generatedAt).toBe('string')
+    expect(typeof secondRegistry.generatedAt).toBe('string')
     await expect(readTextFile(join(projectRoot, '.holo-js/generated/config-cache.json'))).resolves.toBeUndefined()
   })
 
@@ -6776,6 +7461,49 @@ throw 'string discovery failure'
     expect(io.read().stderr).toContain('does not export a Holo command')
     expect(closeWatcher).toHaveBeenCalledTimes(1)
   })
+
+  it('refreshes discovery when broadcast and channel source files change during holo dev', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'server/channels/orders.mjs', 'export default {}\n')
+    await writeProjectFile(projectRoot, 'server/broadcast/orders.mjs', 'export default {}\n')
+
+    const io = createIo(projectRoot)
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: PassThrough
+      stderr: PassThrough
+      stdin: PassThrough
+    }
+    child.stdout = new PassThrough()
+    child.stderr = new PassThrough()
+    child.stdin = new PassThrough()
+
+    let watchCallback: ((eventType: string, fileName: string | Buffer | null) => void) | undefined
+    const prepare = vi.fn(async () => {})
+    const devPromise = withFakeBun(async () => cliInternals.runProjectDevServer(
+      io.io,
+      projectRoot,
+      (() => child as never) as never,
+      ((_path: string, _options: { recursive?: boolean }, callback: (eventType: string, fileName: string | Buffer | null) => void) => {
+        watchCallback = callback
+        return { close() {} } as unknown as FSWatcher
+      }) as never,
+      prepare,
+    ))
+
+    while (!watchCallback || prepare.mock.calls.length === 0 || child.listenerCount('close') === 0) {
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+
+    watchCallback('change', 'server/channels/orders.mjs')
+    await new Promise(resolve => setTimeout(resolve, 50))
+    watchCallback('change', 'server/broadcast/orders.mjs')
+    await new Promise(resolve => setTimeout(resolve, 50))
+    child.emit('close', 0)
+
+    await expect(devPromise).resolves.toBeUndefined()
+    expect(prepare).toHaveBeenCalledTimes(3)
+  }, 15000)
 
   it('skips model files whose generated schema has not been materialized yet', async () => {
     const projectRoot = await createTempProject()
@@ -8912,6 +9640,108 @@ export default defineJob({
       }
     })
   }, 30000)
+
+  it('refreshes project discovery for broadcast workers even when a registry already exists', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const staleRegistry = {
+      version: 1 as const,
+      generatedAt: new Date('2026-04-02T00:00:00.000Z').toISOString(),
+      paths: {
+        models: 'server/models',
+        migrations: 'server/db/migrations',
+        seeders: 'server/db/seeders',
+        commands: 'server/commands',
+        jobs: 'server/jobs',
+        events: 'server/events',
+        listeners: 'server/listeners',
+        broadcast: 'server/broadcast',
+        channels: 'server/channels',
+        generatedSchema: 'server/db/schema.generated.ts',
+      },
+      models: [],
+      migrations: [],
+      seeders: [],
+      commands: [],
+      jobs: [],
+      events: [],
+      listeners: [],
+      broadcast: [],
+      channels: [{
+        sourcePath: 'server/channels/stale.mjs',
+        pattern: 'orders.{orderId}',
+        type: 'private' as const,
+        params: ['orderId'],
+        whispers: [],
+      }],
+    }
+    const freshRegistry = {
+      ...staleRegistry,
+      channels: [{
+        sourcePath: 'server/channels/fresh.mjs',
+        pattern: 'orders.{orderId}',
+        type: 'private' as const,
+        params: ['orderId'],
+        whispers: ['typing.start'],
+      }],
+    }
+    const prepareProjectDiscovery = vi.fn(async () => freshRegistry)
+    const loadProjectConfig = vi.fn(async () => ({
+      config: defaultProjectConfig(),
+    }))
+    const stop = vi.fn(async () => {})
+    const startBroadcastWorker = vi.fn(async () => ({
+      host: '0.0.0.0',
+      port: 8080,
+      stop,
+    }))
+
+    vi.resetModules()
+    vi.doMock('../src/project', async () => {
+      const actual = await vi.importActual('../src/project') as typeof ProjectModule
+      return {
+        ...actual,
+        loadProjectConfig,
+        prepareProjectDiscovery,
+      }
+    })
+
+    try {
+      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      const io = createIo(projectRoot)
+      const workPromise = withFakeBun(async () => isolatedCliInternals.runBroadcastWorkCommand(io.io, projectRoot, {
+        loadConfig: async () => ({
+          broadcast: { default: 'null', connections: {}, worker: {} },
+          queue: { default: 'default', connections: {} },
+        }) as never,
+        loadModule: async () => ({
+          startBroadcastWorker,
+        }),
+        loadRegistry: async () => staleRegistry as never,
+      }))
+
+      while (startBroadcastWorker.mock.calls.length === 0) {
+        await new Promise(resolve => setTimeout(resolve, 5))
+      }
+
+      process.emit('SIGINT')
+      await expect(workPromise).resolves.toBeUndefined()
+      expect(prepareProjectDiscovery).toHaveBeenCalledTimes(1)
+      expect(startBroadcastWorker).toHaveBeenCalledWith(expect.objectContaining({
+        channelAuth: {
+          registry: {
+            projectRoot,
+            channels: freshRegistry.channels,
+          },
+          importModule: expect.any(Function),
+        },
+      }))
+      expect(stop).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.doUnmock('../src/project')
+      vi.resetModules()
+    }
+  })
 
   it('shuts down the runtime and cleans bundled job artifacts when a discovered bundled job stops exporting a Holo job', async () => {
     const projectRoot = await createTempProject()

@@ -6,6 +6,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { config, useConfig } from '@holo-js/config'
 import { createSchemaService, DB } from '@holo-js/db'
 import {
+  broadcastRaw,
+  configureBroadcastRuntime,
+  getBroadcastRuntimeBindings,
+  resetBroadcastRuntime,
+} from '@holo-js/broadcast'
+import {
   configureNotificationsRuntime,
   defineNotification,
   getNotificationsRuntimeBindings,
@@ -120,6 +126,21 @@ import { defineNotificationsConfig } from '@holo-js/notifications'
 
 export default defineNotificationsConfig({
   table: 'notifications',
+})
+`, 'utf8')
+}
+
+async function writeBroadcastConfig(root: string, contents?: string): Promise<void> {
+  await writeFile(join(root, 'config/broadcast.ts'), contents ?? `
+import { defineBroadcastConfig } from ${packageEntry}
+
+export default defineBroadcastConfig({
+  default: 'log',
+  connections: {
+    log: {
+      driver: 'log',
+    },
+  },
 })
 `, 'utf8')
 }
@@ -270,6 +291,7 @@ async function writeRegistry(
 afterEach(async () => {
   await resetHoloRuntime()
   resetFakeSentMails()
+  resetBroadcastRuntime()
   resetNotificationsRuntime()
   resetQueueRegistry()
   resetEventsRegistry()
@@ -1909,6 +1931,250 @@ export default defineQueueConfig({
     }
   })
 
+  it('fails runtime initialization when broadcast config is present but the broadcast package is missing', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeBroadcastConfig(root)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier) => {
+        if (specifier === '@holo-js/broadcast') {
+          return undefined
+        }
+
+        return await originalImportOptionalModule(specifier)
+      })
+
+      const runtime = await portable.createHolo(root)
+      await expect(runtime.initialize()).rejects.toThrow(
+        '[@holo-js/core] Broadcast support requires @holo-js/broadcast to be installed.',
+      )
+      expect(runtime.manager.connection().isConnected()).toBe(false)
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
+  it('auto-configures a publish binding for the default holo broadcast connection', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeBroadcastConfig(root, `
+import { defineBroadcastConfig } from ${packageEntry}
+
+export default defineBroadcastConfig({
+  default: 'reverb',
+  connections: {
+    reverb: {
+      driver: 'holo',
+      key: 'app-key',
+      secret: 'app-secret',
+      appId: 'app-id',
+      options: {
+        host: '127.0.0.1',
+        port: 8080,
+        scheme: 'http',
+        useTLS: false,
+      },
+    },
+  },
+})
+`)
+
+    const requests: Request[] = []
+    let requestCount = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestCount += 1
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request.clone())
+      if (requestCount === 1) {
+        return new Response(JSON.stringify({
+          ok: true,
+          deliveredChannels: ['private-users.user-1'],
+          deliveredSockets: 1,
+        }), {
+          status: 200,
+          headers: {
+            'content-type': 'application/json; charset=utf-8',
+          },
+        })
+      }
+
+      if (requestCount === 2) {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: {
+            'content-type': 'application/json; charset=utf-8',
+          },
+        })
+      }
+
+      return new Response('server error', { status: 500 })
+    }))
+
+    try {
+      await initializeHolo(root)
+      expect(getBroadcastRuntimeBindings().publish).toBeDefined()
+
+      const result = await broadcastRaw({
+        connection: 'reverb',
+        event: 'notifications.invoice-paid',
+        channels: ['private-users.user-1'],
+        payload: {
+          invoiceId: 'inv-1',
+        },
+      })
+
+      expect(result).toMatchObject({
+        connection: 'reverb',
+        driver: 'holo',
+        queued: false,
+        publishedChannels: ['private-users.user-1'],
+      })
+      expect(requests).toHaveLength(1)
+
+      const request = requests[0]!
+      const url = new URL(request.url)
+      expect(url.origin).toBe('http://127.0.0.1:8080')
+      expect(url.pathname).toBe('/apps/app-id/events')
+      expect(url.searchParams.get('auth_key')).toBe('app-key')
+      expect(url.searchParams.get('auth_version')).toBe('1.0')
+      expect(url.searchParams.get('body_md5')).toMatch(/^[a-f0-9]{32}$/)
+      await expect(request.clone().json()).resolves.toEqual({
+        name: 'notifications.invoice-paid',
+        channels: ['private-users.user-1'],
+        data: JSON.stringify({
+          invoiceId: 'inv-1',
+        }),
+      })
+
+      const fallbackResult = await broadcastRaw({
+        connection: 'reverb',
+        event: 'notifications.invoice-refunded',
+        channels: ['private-users.user-2'],
+        payload: {
+          invoiceId: 'inv-2',
+        },
+      })
+
+      expect(fallbackResult).toMatchObject({
+        connection: 'reverb',
+        driver: 'holo',
+        queued: false,
+        publishedChannels: ['private-users.user-2'],
+      })
+
+      await expect(broadcastRaw({
+        connection: 'reverb',
+        event: 'notifications.invoice-failed',
+        channels: ['private-users.user-3'],
+        payload: {
+          invoiceId: 'inv-3',
+        },
+      })).rejects.toThrow('Broadcast publish request failed with status 500')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('replaces the generated broadcast publisher when the config changes', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeBroadcastConfig(root, `
+import { defineBroadcastConfig } from ${packageEntry}
+
+export default defineBroadcastConfig({
+  default: 'reverb',
+  connections: {
+    reverb: {
+      driver: 'holo',
+      key: 'app-key-a',
+      secret: 'app-secret-a',
+      appId: 'app-id-a',
+      options: {
+        host: '127.0.0.1',
+        port: 8080,
+        scheme: 'http',
+        useTLS: false,
+      },
+    },
+  },
+})
+`)
+
+    const initialRequests: Request[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      initialRequests.push(request.clone())
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+        },
+      })
+    }))
+
+    try {
+      const firstRuntime = await initializeHolo(root)
+      const firstBindings = getBroadcastRuntimeBindings()
+      expect(firstBindings.publish).toBeDefined()
+      await firstRuntime.shutdown()
+
+      await writeBroadcastConfig(root, `
+import { defineBroadcastConfig } from ${packageEntry}
+
+export default defineBroadcastConfig({
+  default: 'reverb',
+  connections: {
+    reverb: {
+      driver: 'holo',
+      key: 'app-key-b',
+      secret: 'app-secret-b',
+      appId: 'app-id-b',
+      options: {
+        host: '127.0.0.2',
+        port: 9090,
+        scheme: 'http',
+        useTLS: false,
+      },
+    },
+  },
+})
+`)
+
+      configureBroadcastRuntime({
+        config: firstBindings.config,
+        publish: firstBindings.publish,
+      })
+
+      const secondRuntime = await initializeHolo(root)
+      expect(getBroadcastRuntimeBindings().publish).not.toBe(firstBindings.publish)
+
+      await broadcastRaw({
+        connection: 'reverb',
+        event: 'orders.updated',
+        channels: ['private-users.user-1'],
+        payload: {
+          id: 'ord-1',
+        },
+      })
+
+      expect(initialRequests).toHaveLength(1)
+      const request = initialRequests[0]!
+      const url = new URL(request.url)
+      expect(url.origin).toBe('http://127.0.0.2:9090')
+      expect(url.pathname).toBe('/apps/app-id-b/events')
+
+      await secondRuntime.shutdown()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('boots mail when configured and forwards the render-view seam into the mail runtime', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
@@ -2049,6 +2315,88 @@ export default defineQueueConfig({
       },
     })
     expect(runtime.initialized).toBe(true)
+  })
+
+  it('bridges notification broadcast delivery into @holo-js/broadcast raw runtime', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeBroadcastConfig(root, `
+import { defineBroadcastConfig } from ${packageEntry}
+
+export default defineBroadcastConfig({
+  default: 'reverb',
+  connections: {
+    reverb: {
+      driver: 'holo',
+      key: 'app-key',
+      secret: 'app-secret',
+      appId: 'app-id',
+      options: {
+        host: '127.0.0.1',
+        port: 8080,
+        scheme: 'http',
+        useTLS: false,
+      },
+    },
+  },
+})
+`)
+    await writeNotificationsConfig(root)
+
+    const publish = vi.fn(async () => ({
+      connection: 'reverb',
+      driver: 'holo',
+      queued: false,
+      publishedChannels: ['private-users.user-1'],
+      messageId: 'bridge-msg-1',
+    }))
+    configureBroadcastRuntime({
+      publish,
+    })
+
+    const runtime = await initializeHolo(root)
+    await notify({
+      id: 'user-1',
+      type: 'users',
+      routeNotificationForBroadcast: () => ({ channels: ['private-users.user-1'] }),
+    }, defineNotification({
+      type: 'invoice-paid',
+      via() {
+        return ['broadcast'] as const
+      },
+      build: {
+        broadcast() {
+          return {
+            event: 'invoice.paid',
+            data: {
+              invoiceId: 'inv-1',
+            },
+          }
+        },
+      },
+    }))
+
+    expect(getNotificationsRuntimeBindings().broadcaster).toBeDefined()
+    expect(getBroadcastRuntimeBindings().config?.default).toBe('reverb')
+    expect(getBroadcastRuntimeBindings().publish).toBe(publish)
+    expect(publish).toHaveBeenCalledWith({
+      connection: 'reverb',
+      event: 'invoice.paid',
+      channels: ['private-users.user-1'],
+      payload: {
+        type: 'invoice-paid',
+        data: {
+          invoiceId: 'inv-1',
+        },
+      },
+    }, expect.objectContaining({
+      connection: 'reverb',
+      driver: 'holo',
+    }))
+
+    await runtime.shutdown()
+    expect(getBroadcastRuntimeBindings().publish).toBe(publish)
+    expect(getBroadcastRuntimeBindings().config).toBeUndefined()
   })
 
   it('preserves existing mail and notification runtime bindings when core reconfigures them', async () => {
@@ -2810,6 +3158,88 @@ describe('@holo-js/core helper coverage', () => {
       text: 'One line',
     })
 
+    const broadcastRawCalls: unknown[] = []
+    const notificationBroadcaster = holoRuntimeInternals.createCoreNotificationBroadcaster({
+      async broadcastRaw(input) {
+        broadcastRawCalls.push(input)
+      },
+    } as never)
+    await expect(notificationBroadcaster.send({
+      data: {
+        ok: true,
+      },
+    }, {} as never)).rejects.toThrow('resolved channel route')
+    await notificationBroadcaster.send({
+      event: 'invoice.paid',
+      data: {
+        invoiceId: 'inv-1',
+      },
+    }, {
+      route: 'private-users.user-1',
+      notificationType: 'invoice-paid',
+    } as never)
+    await notificationBroadcaster.send({
+      data: {
+        invoiceId: 'inv-2',
+      },
+    }, {
+      route: ['private-users.user-2'],
+    } as never)
+    await notificationBroadcaster.send({
+      event: 'invoice.unknown',
+      data: undefined,
+    }, {
+      route: 'private-users.user-2b',
+    } as never)
+    await notificationBroadcaster.send({
+      data: {
+        invoiceId: 'inv-3',
+      },
+    }, {
+      route: {
+        channels: ['private-users.user-3'],
+      },
+      notificationType: 'invoice-paid',
+    } as never)
+    expect(broadcastRawCalls).toEqual([
+      {
+        event: 'invoice.paid',
+        channels: ['private-users.user-1'],
+        payload: {
+          type: 'invoice-paid',
+          data: {
+            invoiceId: 'inv-1',
+          },
+        },
+      },
+      {
+        event: 'notifications.message',
+        channels: ['private-users.user-2'],
+        payload: {
+          data: {
+            invoiceId: 'inv-2',
+          },
+        },
+      },
+      {
+        event: 'invoice.unknown',
+        channels: ['private-users.user-2b'],
+        payload: {
+          data: null,
+        },
+      },
+      {
+        event: 'notifications.message',
+        channels: ['private-users.user-3'],
+        payload: {
+          type: 'invoice-paid',
+          data: {
+            invoiceId: 'inv-3',
+          },
+        },
+      },
+    ])
+
     const authMailSends: unknown[] = []
     const authMailHook = holoRuntimeInternals.createAuthMailDeliveryHook({
       async sendMail(message) {
@@ -3149,6 +3579,8 @@ describe('@holo-js/core registry loader', () => {
         jobs: 'server/jobs',
         events: 'server/events',
         listeners: 'server/listeners',
+        broadcast: 'server/broadcast',
+        channels: 'server/channels',
         generatedSchema: 'server/db/schema.ts',
       },
       models: [],
@@ -3158,6 +3590,8 @@ describe('@holo-js/core registry loader', () => {
       jobs: [],
       events: [],
       listeners: [],
+      broadcast: [],
+      channels: [],
     })
   })
 })

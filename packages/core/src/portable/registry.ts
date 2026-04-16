@@ -49,6 +49,25 @@ export interface GeneratedListenerRegistryEntry {
   readonly exportName?: string
 }
 
+export interface GeneratedBroadcastRegistryEntry {
+  readonly sourcePath: string
+  readonly name: string
+  readonly exportName?: string
+  readonly channels: readonly {
+    readonly type: 'public' | 'private' | 'presence'
+    readonly pattern: string
+  }[]
+}
+
+export interface GeneratedChannelRegistryEntry {
+  readonly sourcePath: string
+  readonly pattern: string
+  readonly exportName?: string
+  readonly type: 'private' | 'presence'
+  readonly params: readonly string[]
+  readonly whispers: readonly string[]
+}
+
 export interface GeneratedProjectRegistry {
   readonly version: 1
   readonly generatedAt: string
@@ -60,6 +79,8 @@ export interface GeneratedProjectRegistry {
     readonly jobs: string
     readonly events: string
     readonly listeners: string
+    readonly broadcast: string
+    readonly channels: string
     readonly generatedSchema: string
   }
   readonly models: readonly GeneratedModelRegistryEntry[]
@@ -69,6 +90,32 @@ export interface GeneratedProjectRegistry {
   readonly jobs: readonly GeneratedJobRegistryEntry[]
   readonly events: readonly GeneratedEventRegistryEntry[]
   readonly listeners: readonly GeneratedListenerRegistryEntry[]
+  readonly broadcast: readonly GeneratedBroadcastRegistryEntry[]
+  readonly channels: readonly GeneratedChannelRegistryEntry[]
+}
+
+export interface GeneratedBroadcastManifestEvent {
+  readonly name: string
+  readonly channels: readonly {
+    readonly type: 'public' | 'private' | 'presence'
+    readonly pattern: string
+  }[]
+}
+
+export interface GeneratedBroadcastManifestChannel {
+  readonly name: string
+  readonly pattern: string
+  readonly type: 'private' | 'presence'
+  readonly params: readonly string[]
+  readonly whispers: readonly string[]
+  readonly member?: Readonly<Record<string, unknown>>
+}
+
+export interface GeneratedBroadcastManifest {
+  readonly version: 1
+  readonly generatedAt: string
+  readonly events: readonly GeneratedBroadcastManifestEvent[]
+  readonly channels: readonly GeneratedBroadcastManifestChannel[]
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -89,6 +136,14 @@ function normalizeLegacyGeneratedProjectRegistry(value: Record<string, unknown>)
     paths.listeners = DEFAULT_HOLO_PROJECT_PATHS.listeners
   }
 
+  if (paths && typeof paths.broadcast !== 'string') {
+    paths.broadcast = 'server/broadcast'
+  }
+
+  if (paths && typeof paths.channels !== 'string') {
+    paths.channels = 'server/channels'
+  }
+
   if (!Array.isArray(value.jobs)) {
     value.jobs = []
   }
@@ -99,6 +154,14 @@ function normalizeLegacyGeneratedProjectRegistry(value: Record<string, unknown>)
 
   if (!Array.isArray(value.listeners)) {
     value.listeners = []
+  }
+
+  if (!Array.isArray(value.broadcast)) {
+    value.broadcast = []
+  }
+
+  if (!Array.isArray(value.channels)) {
+    value.channels = []
   }
 }
 
@@ -117,6 +180,8 @@ function isGeneratedProjectRegistry(value: unknown): value is GeneratedProjectRe
     && Array.isArray(value.jobs)
     && Array.isArray(value.events)
     && Array.isArray(value.listeners)
+    && Array.isArray(value.broadcast)
+    && Array.isArray(value.channels)
 }
 
 export function resolveGeneratedProjectRegistryPath(projectRoot: string): string {
@@ -140,7 +205,42 @@ export async function loadGeneratedProjectRegistry(
   }
 }
 
+export function createGeneratedBroadcastManifest(
+  registry: Pick<GeneratedProjectRegistry, 'generatedAt' | 'broadcast' | 'channels'>,
+): GeneratedBroadcastManifest {
+  return Object.freeze({
+    version: 1,
+    generatedAt: registry.generatedAt,
+    events: Object.freeze(registry.broadcast.map(entry => Object.freeze({
+      name: entry.name,
+      channels: Object.freeze(entry.channels.map(channel => Object.freeze({
+        type: channel.type,
+        pattern: channel.pattern,
+      }))),
+    }))),
+    channels: Object.freeze(registry.channels.map(entry => Object.freeze({
+      name: entry.pattern,
+      pattern: entry.pattern,
+      type: entry.type,
+      params: Object.freeze([...entry.params]),
+      whispers: Object.freeze([...entry.whispers]),
+    }))),
+  })
+}
+
+export async function loadGeneratedBroadcastManifest(
+  projectRoot: string,
+): Promise<GeneratedBroadcastManifest | undefined> {
+  const registry = await loadGeneratedProjectRegistry(projectRoot)
+  if (!registry) {
+    return undefined
+  }
+
+  return createGeneratedBroadcastManifest(registry)
+}
+
 export const registryInternals = {
+  createGeneratedBroadcastManifest,
   isGeneratedProjectRegistry,
   normalizeLegacyGeneratedProjectRegistry,
 }

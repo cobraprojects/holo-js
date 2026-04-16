@@ -76,6 +76,25 @@ export type GeneratedListenerRegistryEntry = {
   readonly exportName?: string
 }
 
+export type GeneratedBroadcastRegistryEntry = {
+  readonly sourcePath: string
+  readonly name: string
+  readonly exportName?: string
+  readonly channels: readonly {
+    readonly type: 'public' | 'private' | 'presence'
+    readonly pattern: string
+  }[]
+}
+
+export type GeneratedChannelRegistryEntry = {
+  readonly sourcePath: string
+  readonly pattern: string
+  readonly exportName?: string
+  readonly type: 'private' | 'presence'
+  readonly params: readonly string[]
+  readonly whispers: readonly string[]
+}
+
 export type GeneratedProjectRegistry = {
   readonly version: 1
   readonly generatedAt: string
@@ -87,6 +106,8 @@ export type GeneratedProjectRegistry = {
     readonly jobs: string
     readonly events: string
     readonly listeners: string
+    readonly broadcast: string
+    readonly channels: string
     readonly generatedSchema: string
   }
   readonly models: readonly GeneratedModelRegistryEntry[]
@@ -96,6 +117,8 @@ export type GeneratedProjectRegistry = {
   readonly jobs: readonly GeneratedJobRegistryEntry[]
   readonly events: readonly GeneratedEventRegistryEntry[]
   readonly listeners: readonly GeneratedListenerRegistryEntry[]
+  readonly broadcast: readonly GeneratedBroadcastRegistryEntry[]
+  readonly channels: readonly GeneratedChannelRegistryEntry[]
 }
 
 export type SupportedScaffoldFramework = 'nuxt' | 'next' | 'sveltekit'
@@ -127,6 +150,14 @@ export type EventsDiscoveryModule = {
   isListenerDefinition(value: unknown): boolean
   normalizeEventDefinition(value: unknown): { name?: string }
   normalizeListenerDefinition(value: unknown): NormalizedDiscoveredListener
+}
+
+export type BroadcastDiscoveryModule = {
+  isBroadcastDefinition(value: unknown): boolean
+  isChannelDefinition(value: unknown): boolean
+  broadcastInternals: {
+    extractChannelPatternParamNames(pattern: string): readonly string[]
+  }
 }
 
 export type NormalizedDiscoveredQueueJob = {
@@ -181,6 +212,17 @@ export type MailInstallResult = {
   readonly updatedPackageJson: boolean
   readonly createdMailConfig: boolean
   readonly createdMailDirectory: boolean
+}
+
+export type BroadcastInstallResult = {
+  readonly updatedPackageJson: boolean
+  readonly createdBroadcastConfig: boolean
+  readonly createdBroadcastDirectory: boolean
+  readonly createdChannelsDirectory: boolean
+  readonly createdBroadcastAuthRoute: boolean
+  readonly createdFrameworkSetup: boolean
+  readonly updatedEnv: boolean
+  readonly updatedEnvExample: boolean
 }
 
 export const SUPPORTED_AUTH_SOCIAL_PROVIDERS = [
@@ -258,6 +300,15 @@ export const MAIL_CONFIG_FILE_NAMES = [
   'config/mail.cjs',
 ] as const
 
+export const BROADCAST_CONFIG_FILE_NAMES = [
+  'config/broadcast.ts',
+  'config/broadcast.mts',
+  'config/broadcast.js',
+  'config/broadcast.mjs',
+  'config/broadcast.cts',
+  'config/broadcast.cjs',
+] as const
+
 export const DB_DRIVER_PACKAGE_NAMES = {
   sqlite: '@holo-js/db-sqlite',
   postgres: '@holo-js/db-postgres',
@@ -278,9 +329,13 @@ export const GENERATED_COMMANDS_PATH = join(GENERATED_ROOT, 'commands.ts')
 export const GENERATED_JOBS_PATH = join(GENERATED_ROOT, 'jobs.ts')
 export const GENERATED_EVENTS_PATH = join(GENERATED_ROOT, 'events.ts')
 export const GENERATED_LISTENERS_PATH = join(GENERATED_ROOT, 'listeners.ts')
+export const GENERATED_BROADCAST_PATH = join(GENERATED_ROOT, 'broadcast.ts')
+export const GENERATED_CHANNELS_PATH = join(GENERATED_ROOT, 'channels.ts')
+export const GENERATED_BROADCAST_MANIFEST_PATH = join(GENERATED_ROOT, 'broadcast-manifest.ts')
 export const GENERATED_CONFIG_TYPES_PATH = join(GENERATED_ROOT, 'config.d.ts')
 export const GENERATED_QUEUE_TYPES_PATH = join(GENERATED_ROOT, 'queue.d.ts')
 export const GENERATED_EVENT_TYPES_PATH = join(GENERATED_ROOT, 'events.d.ts')
+export const GENERATED_BROADCAST_TYPES_PATH = join(GENERATED_ROOT, 'broadcast.d.ts')
 export const GENERATED_REGISTRY_JSON_PATH = join(GENERATED_ROOT, 'registry.json')
 export const GENERATED_TSCONFIG_PATH = join(GENERATED_ROOT, 'tsconfig.json')
 export const GENERATED_GITIGNORE_PATH = join(GENERATED_ROOT, '.gitignore')

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { normalizeMigrationSlug } from '@holo-js/db'
@@ -13,6 +14,8 @@ import {
 import {
   ensureSuffix,
   relativeImportPath,
+  renderBroadcastTemplate,
+  renderChannelTemplate,
   renderEventTemplate,
   renderFactoryTemplate,
   renderJobTemplate,
@@ -71,6 +74,60 @@ export function hasRegisteredListenerId(
   listenerId: string,
 ): boolean {
   return Boolean(registry?.listeners.some(entry => entry.id === listenerId))
+}
+
+function toChannelTemplateFileStem(pattern: string): string {
+  const rawSegments = pattern
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.+/, '')
+    .split(/[/.]/)
+    .map(segment => segment.trim())
+    .filter(Boolean)
+  const hasOnlyWildcardSegments = rawSegments.length > 0 && rawSegments.every(segment => /^\{[^}]+\}$/.test(segment))
+
+  const normalized = pattern
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.+/, '')
+    .replace(/\{([^}]+)\}/g, '$1')
+    .replace(/[^a-z0-9/]+/gi, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-/]+|[-/]+$/g, '')
+
+  const fileStem = normalized
+    .split('/')
+    .filter(Boolean)
+    .map(segment => toKebabCase(segment))
+    .join('/') || 'channel'
+
+  if (!hasOnlyWildcardSegments) {
+    return fileStem
+  }
+
+  const suffix = createHash('sha1').update(pattern.trim()).digest('hex').slice(0, 8)
+  return `${fileStem}-${suffix}`
+}
+
+function resolveChannelArtifactPath(
+  projectRoot: string,
+  channelsPath: string,
+  pattern: string,
+  registry: NonNullable<Awaited<ReturnType<typeof loadGeneratedProjectRegistry>>>,
+): string {
+  const fileStem = toChannelTemplateFileStem(pattern)
+  const filePath = resolveArtifactPath(projectRoot, channelsPath, '', `${fileStem}.ts`)
+  const relativePath = makeProjectRelativePath(projectRoot, filePath)
+  const collidesWithDifferentRegisteredPattern = registry.channels.some(entry => {
+    return entry.sourcePath === relativePath && entry.pattern !== pattern
+  })
+
+  if (!collidesWithDifferentRegisteredPattern) {
+    return filePath
+  }
+
+  const suffix = createHash('sha1').update(pattern.trim()).digest('hex').slice(0, 8)
+  return resolveArtifactPath(projectRoot, channelsPath, '', `${fileStem}-${suffix}.ts`)
 }
 
 async function resolveProjectMailViewFramework(projectRoot: string): Promise<KnownMailViewFramework | 'generic'> {
@@ -323,6 +380,64 @@ export async function runMakeEvent(
   writeLine(io.stdout, `Created event: ${makeProjectRelativePath(projectRoot, filePath)}`)
 }
 
+export async function runMakeBroadcast(
+  io: IoStreams,
+  projectRoot: string,
+  input: PreparedInput,
+): Promise<void> {
+  const project = await ensureProjectConfig(projectRoot)
+  const registry = await loadGeneratedProjectRegistry(projectRoot)
+    ?? await prepareProjectDiscovery(projectRoot, project.config)
+  const requestedName = String(input.args[0] ?? '')
+  const nameParts = splitRequestedName(requestedName)
+  const directory = nameParts.directory
+    .split('/')
+    .filter(Boolean)
+    .map(segment => toKebabCase(segment))
+    .join('/')
+  const fileStem = toKebabCase(nameParts.rawBaseName)
+  const broadcastPath = registry.paths.broadcast
+  const filePath = resolveArtifactPath(projectRoot, broadcastPath, directory, `${fileStem}.ts`)
+  const eventName = [...(directory ? directory.split('/') : []), fileStem].join('.')
+
+  if (await fileExists(filePath) || registry.broadcast.some(entry => entry.name === eventName)) {
+    throw new Error(`Broadcast with the same name already exists: ${eventName}.`)
+  }
+
+  await ensureAbsent(filePath)
+  await writeTextFile(filePath, renderBroadcastTemplate(eventName))
+  await runProjectPrepare(projectRoot)
+
+  writeLine(io.stdout, `Created broadcast: ${makeProjectRelativePath(projectRoot, filePath)}`)
+}
+
+export async function runMakeChannel(
+  io: IoStreams,
+  projectRoot: string,
+  input: PreparedInput,
+): Promise<void> {
+  const project = await ensureProjectConfig(projectRoot)
+  const registry = await loadGeneratedProjectRegistry(projectRoot)
+    ?? await prepareProjectDiscovery(projectRoot, project.config)
+  const pattern = String(input.args[0] ?? '').trim()
+  if (!pattern) {
+    throw new Error('A channel pattern is required.')
+  }
+
+  if (registry.channels.some(entry => entry.pattern === pattern)) {
+    throw new Error(`Channel with the same pattern already exists: ${pattern}.`)
+  }
+
+  const channelsPath = registry.paths.channels
+  const filePath = resolveChannelArtifactPath(projectRoot, channelsPath, pattern, registry)
+
+  await ensureAbsent(filePath)
+  await writeTextFile(filePath, renderChannelTemplate(pattern))
+  await runProjectPrepare(projectRoot)
+
+  writeLine(io.stdout, `Created channel: ${makeProjectRelativePath(projectRoot, filePath)}`)
+}
+
 export async function runMakeListener(
   io: IoStreams,
   projectRoot: string,
@@ -459,4 +574,5 @@ export async function runMakeMail(
 
 export const generatorInternals = {
   resolveProjectMailViewFramework,
+  toChannelTemplateFileStem,
 }

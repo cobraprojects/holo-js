@@ -11,7 +11,7 @@ across database drivers, storage drivers, and deployment targets.
 
 - configurable server-side config files such as `config/app.ts`, `config/database.ts`, and `config/storage.ts`
 - layered env loading through `.env`, `.env.local`, `.env.development`, `.env.production`, `.env.prod`, and `.env.test`
-- canonical server directories such as `server/models`, `server/db`, `server/commands`, `server/jobs`, `server/events`, and `server/listeners`
+- canonical server directories such as `server/models`, `server/db`, `server/commands`, `server/jobs`, `server/events`, `server/listeners`, `server/broadcast`, and `server/channels`
 - typed discovery artifacts under `.holo-js/generated`
 - internal runtime and CLI scratch files under `.holo-js/runtime`
 - database commands, migrations, seeders, factories, storage, and media workflows
@@ -63,6 +63,8 @@ That scaffold writes the framework glue once. After that, the user-facing setup 
 - `server/jobs`
 - `server/events`
 - `server/listeners`
+- `server/broadcast`
+- `server/channels`
 
 ## Typical app shape
 
@@ -137,6 +139,11 @@ holo-js/
 │   ├── adapter-sveltekit/  # @holo-js/adapter-sveltekit - SvelteKit adapter
 │   ├── db/                 # @holo-js/db - database, ORM, migrations, seeders, factories
 │   ├── events/             # @holo-js/events - event contracts, listeners, dispatch, runtime orchestration
+│   ├── broadcast/          # @holo-js/broadcast - broadcast definitions, channels, worker runtime, drivers
+│   ├── flux/               # @holo-js/flux - framework-agnostic realtime client
+│   ├── flux-react/         # @holo-js/flux-react - React/Next helpers for Flux
+│   ├── flux-vue/           # @holo-js/flux-vue - Vue/Nuxt composables for Flux
+│   ├── flux-svelte/        # @holo-js/flux-svelte - Svelte/SvelteKit helpers for Flux
 │   ├── mail/               # @holo-js/mail - mail definitions, preview, attachments, and fluent delivery
 │   ├── notifications/      # @holo-js/notifications - notification contracts, channels, and fluent delivery
 │   ├── storage/            # @holo-js/storage - storage runtime and config

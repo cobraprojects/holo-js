@@ -11,6 +11,7 @@ const rootDir = resolve(import.meta.dirname, '..')
 const mysqlDatabaseName = 'holo_matrix_smoke_mysql'
 const postgresDatabaseName = 'holo_matrix_smoke_postgres'
 const smokeWorkspacePackages = [
+  '@holo-js/broadcast',
   '@holo-js/auth',
   '@holo-js/auth-social',
   '@holo-js/auth-social-google',
@@ -420,6 +421,41 @@ async function runEventSmokeCheck(app, baseUrl, env) {
   ], env)
 
   assertEventSmokeRecord(app, 'queued', report, await readEventSmokeRecord(app, report.key, 'queued'))
+}
+
+async function runBroadcastSmokeCheck(app, baseUrl) {
+  const report = await fetchJson(`${baseUrl}/api/holo/broadcast`)
+  assert.equal(report.ok, true)
+  assert.equal(report.framework, app.framework)
+  assert.equal(report.authStatus, 200)
+  assert.equal(report.authBody?.ok, true)
+  assert.equal(report.authBody?.channel, 'orders.ord_smoke')
+  assert.equal(report.authBody?.type, 'private')
+  assert.equal(report.dispatch?.connection, 'log')
+  assert.equal(report.dispatch?.driver, 'log')
+  assert.equal(report.dispatch?.queued, false)
+  assert.deepEqual(report.dispatch?.publishedChannels, ['private-orders.ord_smoke'])
+
+  const authResponse = await fetch(`${baseUrl}/broadcasting/auth`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      channel_name: 'orders.ord_smoke',
+      socket_id: 'smoke.1',
+    }),
+  })
+  assert.ok([200, 401].includes(authResponse.status), `Unexpected /broadcasting/auth status: ${authResponse.status}`)
+  const authPayload = await authResponse.json()
+  if (authResponse.status === 200) {
+    assert.equal(authPayload.ok, true)
+    assert.equal(authPayload.channel, 'orders.ord_smoke')
+    return
+  }
+
+  assert.equal(authPayload.ok, false)
+  assert.equal(authPayload.error, 'unauthenticated')
 }
 
 function updateManifestDependencySections(manifest, dependencyOverrides) {
@@ -1133,6 +1169,7 @@ async function validateFrameworkApp(app) {
 
     const auth = await fetchJson(`${baseUrl}/api/holo/auth`)
     assertAuthSmokePayload(app, auth)
+    await runBroadcastSmokeCheck(app, baseUrl)
   } finally {
     await server.stop()
     await cleanupAppStorage(app)
