@@ -2131,6 +2131,50 @@ export default defineBroadcastConfig({
     }
   }, 15_000)
 
+  it('rethrows non-AbortError fetch failures from broadcast publish', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeBroadcastConfig(root, `
+import { defineBroadcastConfig } from ${packageEntry}
+
+export default defineBroadcastConfig({
+  default: 'reverb',
+  connections: {
+    reverb: {
+      driver: 'holo',
+      key: 'app-key',
+      secret: 'app-secret',
+      appId: 'app-id',
+      options: {
+        host: '127.0.0.1',
+        port: 8080,
+        scheme: 'http',
+        useTLS: false,
+      },
+    },
+  },
+})
+`)
+
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('ECONNREFUSED')
+    }))
+
+    try {
+      await initializeHolo(root)
+      await expect(broadcastRaw({
+        connection: 'reverb',
+        event: 'notifications.invoice-paid',
+        channels: ['private-users.user-1'],
+        payload: {
+          invoiceId: 'inv-1',
+        },
+      })).rejects.toThrow('ECONNREFUSED')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('replaces the generated broadcast publisher when the config changes', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
