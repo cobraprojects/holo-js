@@ -30,6 +30,20 @@ import {
 
 const execFileAsync = promisify(execFile)
 
+async function runBun(args: string[]): Promise<{ stdout: string, stderr: string } | undefined> {
+  try {
+    return await execFileAsync('bun', args, {
+      timeout: 30_000,
+    })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined
+    }
+
+    throw error
+  }
+}
+
 function createAsyncDriverFactory(
   driverName: 'redis' | 'database',
   dispatched: ReturnType<typeof vi.fn>,
@@ -80,7 +94,7 @@ describe('@holo-js/events queue integration', () => {
     const outdir = await mkdtemp(join(tmpdir(), 'holo-events-queue-bundle-'))
 
     try {
-      await execFileAsync('bun', [
+      const result = await runBun([
         'build',
         resolve(import.meta.dirname, '../src/queue.ts'),
         '--target=node',
@@ -88,6 +102,9 @@ describe('@holo-js/events queue integration', () => {
         '--external=@holo-js/queue',
         `--outdir=${outdir}`,
       ])
+      if (!result) {
+        return
+      }
 
       const output = await readFile(join(outdir, 'queue.js'), 'utf8')
 

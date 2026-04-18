@@ -26,6 +26,7 @@ export function configureSecurityRuntime(bindings?: SecurityRuntimeBindings): vo
         config: normalizeSecurityConfig(bindings.config),
         rateLimitStore: bindings.rateLimitStore,
         csrfSigningKey: bindings.csrfSigningKey,
+        defaultKeyResolver: bindings.defaultKeyResolver,
       })
     : undefined
 }

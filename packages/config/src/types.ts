@@ -352,7 +352,7 @@ export interface SecurityRateLimitContext<
 export interface SecurityRateLimitKeyResolver<
   TValues extends Readonly<Record<string, unknown>> | undefined = Readonly<Record<string, unknown>> | undefined,
 > {
-  (context: SecurityRateLimitContext<TValues>): string
+  (context: SecurityRateLimitContext<TValues>): string | Promise<string>
 }
 
 export interface SecurityLimiterConfig<

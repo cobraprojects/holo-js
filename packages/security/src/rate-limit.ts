@@ -1,6 +1,7 @@
 import type { NormalizedSecurityLimiterConfig } from '@holo-js/config'
 import {
   SecurityRateLimitError,
+  ip,
   type SecurityClearRateLimitOptions,
   type SecurityRateLimitCallOptions,
   type SecurityRateLimitHitResult,
@@ -37,11 +38,35 @@ function resolveLimiterConfig(name: string): NormalizedSecurityLimiterConfig {
   return limiter
 }
 
-function resolveLimiterKey(
+function normalizeResolvedLimiterKey(
+  value: string | number | null | undefined,
+  label: string,
+): string {
+  if (typeof value === 'string' && value.length > 0) {
+    return value
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value)
+  }
+
+  throw new TypeError(`[@holo-js/security] ${label} must resolve a non-empty string key.`)
+}
+
+export async function defaultRateLimitKey(request: Request): Promise<string> {
+  const runtimeDefaultKey = await getSecurityRuntime().defaultKeyResolver?.(request)
+  if (typeof runtimeDefaultKey !== 'undefined' && runtimeDefaultKey !== null) {
+    return normalizeResolvedLimiterKey(runtimeDefaultKey, 'Default rate limiter key resolver')
+  }
+
+  return `ip:${ip(request, true)}`
+}
+
+async function resolveLimiterKey(
   name: string,
   limiter: NormalizedSecurityLimiterConfig,
   options: SecurityRateLimitCallOptions,
-): string {
+): Promise<string> {
   if (typeof options.key === 'string' && options.key.length > 0) {
     return options.key
   }
@@ -51,23 +76,23 @@ function resolveLimiterKey(
       throw new TypeError(`[@holo-js/security] Rate limiter "${name}" requires a request when using its configured key resolver.`)
     }
 
-    const resolved = limiter.key({
+    const resolved = await limiter.key({
       request: options.request,
       values: options.values,
     })
-    if (typeof resolved !== 'string' || resolved.length === 0) {
-      throw new TypeError(`[@holo-js/security] Rate limiter "${name}" must resolve a non-empty string key.`)
-    }
-
-    return resolved
+    return normalizeResolvedLimiterKey(resolved, `Rate limiter "${name}"`)
   }
 
-  throw new TypeError(`[@holo-js/security] Rate limiter "${name}" requires either an explicit key or a configured key resolver.`)
+  if (options.request) {
+    return await defaultRateLimitKey(options.request)
+  }
+
+  throw new TypeError(`[@holo-js/security] Rate limiter "${name}" requires either an explicit key or a request for the default key resolver.`)
 }
 
 export async function rateLimit(name: string, options: SecurityRateLimitCallOptions): Promise<SecurityRateLimitHitResult> {
   const limiter = resolveLimiterConfig(name)
-  const resolvedKey = resolveLimiterKey(name, limiter, options)
+  const resolvedKey = await resolveLimiterKey(name, limiter, options)
   const bucketKey = createBucketKey(name, resolvedKey)
   const result = await getRateLimitStore().hit(bucketKey, {
     maxAttempts: limiter.maxAttempts,
@@ -124,7 +149,9 @@ export const rateLimitInternals = {
   createBucketKey,
   createLimiterPrefix,
   encodeBucketPart,
+  defaultRateLimitKey,
   getRateLimitStore,
+  normalizeResolvedLimiterKey,
   resolveLimiterConfig,
   resolveLimiterKey,
 }

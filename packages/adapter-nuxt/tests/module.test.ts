@@ -416,19 +416,35 @@ export default defineStorageConfig({
   })
 
   it('treats ERR_MODULE_NOT_FOUND storage-s3 imports as absent optional modules', async () => {
-    vi.resetModules()
-    vi.doMock('@holo-js/storage-s3', () => {
-      throw Object.assign(new Error('missing'), {
+    const mod = await import('../src/module')
+
+    expect(mod.moduleInternals.hasModuleNotFoundCode(
+      Object.assign(new Error('Cannot find package "@holo-js/storage-s3" imported from "/tmp/app.mjs"'), {
         code: 'ERR_MODULE_NOT_FOUND',
-      })
-    })
-    try {
-      const mod = await import('../src/module')
-      await expect(mod.moduleInternals.importOptionalStorageS3Module()).resolves.toBeUndefined()
-    } finally {
-      vi.doUnmock('@holo-js/storage-s3')
-      vi.resetModules()
-    }
+      }),
+      '@holo-js/storage-s3',
+    )).toBe(true)
+  })
+
+  it('only matches missing-module errors for the expected optional package specifier', async () => {
+    const mod = await import('../src/module')
+
+    expect(mod.moduleInternals.hasModuleNotFoundCode(
+      Object.assign(new Error('Cannot find package "@holo-js/storage-s3" imported from "/tmp/app.mjs"'), {
+        code: 'ERR_MODULE_NOT_FOUND',
+      }),
+      '@holo-js/storage-s3',
+    )).toBe(true)
+
+    expect(mod.moduleInternals.hasModuleNotFoundCode(
+      Object.assign(new Error('Failed to initialize storage-s3.'), {
+        code: 'ERR_MODULE_NOT_FOUND',
+        cause: Object.assign(new Error('Cannot find module "sharp" imported from "@holo-js/storage-s3".'), {
+          code: 'ERR_MODULE_NOT_FOUND',
+        }),
+      }),
+      '@holo-js/storage-s3',
+    )).toBe(false)
   })
 
   it('rethrows non-missing optional storage-s3 import errors', async () => {

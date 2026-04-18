@@ -9,10 +9,10 @@ type EsbuildModule = {
 
 async function importModule<TModule>(specifier: string): Promise<TModule> {
   if (process.env.VITEST) {
-    return import(/* @vite-ignore */ specifier as string) as Promise<TModule>
+    return import(/* @vite-ignore */ specifier) as Promise<TModule>
   }
 
-  return import(/* webpackIgnore: true */ specifier as string) as Promise<TModule>
+  return import(/* webpackIgnore: true */ specifier) as Promise<TModule>
 }
 
 async function pathExists(path: string): Promise<boolean> {

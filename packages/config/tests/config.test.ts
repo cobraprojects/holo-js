@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -43,7 +44,32 @@ import {
 
 const tempDirs: string[] = []
 const packageEntry = JSON.stringify(resolve(import.meta.dirname, '../src/index.ts'))
-const securityPackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../security/src/index.ts'))
+
+function resolveWorkspacePackageEntry(packageName: '@holo-js/security'): string {
+  const packagesRoot = resolve(import.meta.dirname, '../..')
+
+  for (const entry of readdirSync(packagesRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue
+    }
+
+    const packageRoot = resolve(packagesRoot, entry.name)
+    const packageJsonPath = resolve(packageRoot, 'package.json')
+
+    try {
+      const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { name?: string }
+      if (packageJson.name === packageName) {
+        return resolve(packageRoot, 'src/index.ts')
+      }
+    } catch {
+      continue
+    }
+  }
+
+  throw new Error(`Unable to resolve workspace package entry for ${packageName}.`)
+}
+
+const securityPackageEntry = JSON.stringify(resolveWorkspacePackageEntry('@holo-js/security'))
 
 async function createProject(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-config-'))
@@ -1713,6 +1739,7 @@ export default defineSecurityConfig({
 })
 `, 'utf8')
 
+    // Non-deferred config files stay cached until the cache is cleared or envName changes, while deferred security config reloads from disk.
     await writeConfigCache(root, {
       envName: 'production',
       processEnv: {},

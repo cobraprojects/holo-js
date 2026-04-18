@@ -75,17 +75,30 @@ type StorageS3Module = {
   default: unknown
 }
 
-function hasModuleNotFoundCode(error: unknown): boolean {
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function hasModuleNotFoundCode(error: unknown, expectedSpecifier: string): boolean {
   if (!error || typeof error !== 'object') {
     return false
   }
 
   if ('code' in error && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND') {
-    return true
+    const message = 'message' in error && typeof (error as { message?: unknown }).message === 'string'
+      ? (error as { message: string }).message
+      : ''
+    const escapedSpecifier = escapeRegExp(expectedSpecifier)
+    return [
+      new RegExp(`Cannot find package ['"]${escapedSpecifier}['"]`),
+      new RegExp(`Cannot find module ['"]${escapedSpecifier}['"]`),
+      new RegExp(`Could not resolve ['"]${escapedSpecifier}['"]`),
+      new RegExp(`Failed to load url ['"]${escapedSpecifier}['"]`),
+    ].some(pattern => pattern.test(message))
   }
 
   if ('cause' in error) {
-    return hasModuleNotFoundCode((error as { cause?: unknown }).cause)
+    return hasModuleNotFoundCode((error as { cause?: unknown }).cause, expectedSpecifier)
   }
 
   return false
@@ -122,7 +135,7 @@ async function importOptionalStorageModule(): Promise<StorageModule | undefined>
   try {
     return await import('@holo-js/storage') as StorageModule
   } catch (error) {
-    if (hasModuleNotFoundCode(error)) {
+    if (hasModuleNotFoundCode(error, '@holo-js/storage')) {
       return undefined
     }
 
@@ -138,7 +151,7 @@ async function importOptionalStorageS3Module(): Promise<StorageS3Module | undefi
       ? undefined
       : storageS3 as StorageS3Module
   } catch (error) {
-    if (hasModuleNotFoundCode(error)) {
+    if (hasModuleNotFoundCode(error, '@holo-js/storage-s3')) {
       return undefined
     }
 

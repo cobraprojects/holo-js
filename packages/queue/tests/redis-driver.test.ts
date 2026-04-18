@@ -7,6 +7,21 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const execFileAsync = promisify(execFile)
 
+async function hasBun(): Promise<boolean> {
+  try {
+    await execFileAsync('bun', ['--version'], {
+      timeout: 30_000,
+    })
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return false
+    }
+
+    throw error
+  }
+}
+
 type StoredJobState = 'waiting' | 'active' | 'delayed' | 'completed' | 'failed' | 'removed'
 
 type StoredJob = {
@@ -358,6 +373,10 @@ afterEach(() => {
 
 describe('@holo-js/queue redis driver', () => {
   it('keeps the optional redis driver import visible to bundlers without a bare package specifier', async () => {
+    if (!await hasBun()) {
+      return
+    }
+
     const outdir = await mkdtemp(join(tmpdir(), 'holo-queue-redis-bundle-'))
 
     try {
@@ -368,12 +387,14 @@ describe('@holo-js/queue redis driver', () => {
         '--format=esm',
         '--external=@holo-js/queue-redis',
         `--outdir=${outdir}`,
-      ])
+      ], {
+        timeout: 30_000,
+      })
 
       const output = await readFile(join(outdir, 'redis.js'), 'utf8')
 
-      expect(output).toContain('const specifier = "@holo-js/queue-redis"')
-      expect(output).toContain('import(specifier)')
+      expect(output).toMatch(/\b(?:const|let|var)\s+specifier\s*=\s*['"]@holo-js\/queue-redis['"]/)
+      expect(output).toMatch(/\bimport\s*\(\s*specifier\s*\)/)
       expect(output).not.toContain('import("@holo-js/queue-redis")')
     } finally {
       await rm(outdir, { recursive: true, force: true })

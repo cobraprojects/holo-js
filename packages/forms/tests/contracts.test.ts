@@ -17,6 +17,10 @@ function createSecurityModule() {
   return {
     csrf: {
       async verify(request: Request) {
+        if (request.method !== 'GET' && !request.bodyUsed) {
+          await request.formData()
+        }
+
         const cookie = request.headers.get('cookie') ?? ''
         const header = request.headers.get('X-CSRF-TOKEN') ?? ''
         const token = cookie

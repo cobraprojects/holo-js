@@ -11,12 +11,6 @@ type StoredFileRateLimitBucket = {
   expiresAt: string
 }
 
-type StoredLegacyFileRateLimitBucket = {
-  key: string
-  attempts: number
-  expiresAt: string
-}
-
 type FileRateLimitBucket = {
   namespace: string
   keyHash: string
@@ -66,29 +60,18 @@ function serializeBucket(bucket: FileRateLimitBucket): string {
 }
 
 function deserializeBucket(raw: string): FileRateLimitBucket {
-  const parsed = JSON.parse(raw) as Partial<StoredFileRateLimitBucket & StoredLegacyFileRateLimitBucket>
-  const legacyKey = typeof parsed.key === 'string' && parsed.key.length > 0
-    ? parsed.key
-    : undefined
+  const parsed = JSON.parse(raw) as Partial<StoredFileRateLimitBucket>
   const namespace = typeof parsed.namespace === 'string' && parsed.namespace.length > 0
     ? parsed.namespace
-    : legacyKey
-      ? createBucketNamespace(legacyKey)
-      : undefined
+    : undefined
   const keyHash = typeof parsed.keyHash === 'string' && parsed.keyHash.length > 0
     ? parsed.keyHash
-    : legacyKey
-      ? createBucketHash(legacyKey)
-      : undefined
+    : undefined
   const prefixHashes = Array.isArray(parsed.prefixHashes) && parsed.prefixHashes.every(
     value => typeof value === 'string' && value.length > 0,
   )
     ? parsed.prefixHashes
-    : legacyKey
-      ? createBucketPrefixHashes(legacyKey)
-      : namespace
-        ? createBucketPrefixHashes(namespace)
-      : undefined
+    : undefined
   const { attempts, expiresAt: expiresAtValue } = parsed
 
   if (typeof namespace !== 'string' || namespace.length === 0) {
@@ -273,7 +256,7 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
         const existing = await readBucket(path)
 
         if (existing && existing.keyHash !== createBucketHash(key)) {
-          throw new Error(`[@holo-js/security] File rate-limit bucket collision detected for key "${key}".`)
+          throw new Error(`[@holo-js/security] File rate-limit bucket hash collision detected for stored bucket ${existing.keyHash}.`)
         }
 
         if (existing && isExpired(existing, now)) {

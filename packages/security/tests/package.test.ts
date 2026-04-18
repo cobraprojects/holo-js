@@ -13,6 +13,7 @@ import security, {
   createRedisRateLimitStore,
   createRedisRateLimitStoreConfig,
   csrf,
+  defaultRateLimitKey,
   defineRateLimiter,
   defineSecurityConfig,
   fileRateLimitDriverInternals,
@@ -791,6 +792,31 @@ describe('@holo-js/security rate-limit drivers', () => {
       await expect(store.clearByPrefix('limiter:login|')).resolves.toBe(1)
     })
 
+    it('does not leak raw limiter keys when file bucket hashes collide', async () => {
+      const harness = await createHarness()
+      const store = harness.createStore()
+      const key = 'limiter:login|user:pii@example.com'
+      const bucketPath = fileRateLimitDriverInternals.getBucketPath(harness.root, key)
+
+      await mkdir(dirname(bucketPath), { recursive: true })
+      await writeFile(bucketPath, JSON.stringify({
+        namespace: 'limiter:login|',
+        keyHash: 'different-hash',
+        prefixHashes: ['different-prefix-hash'],
+        attempts: 1,
+        expiresAt: '2026-04-16T12:01:00.000Z',
+      }), 'utf8')
+
+      await expect(store.hit(key, {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })).rejects.toThrow('bucket hash collision')
+      await expect(store.hit(key, {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })).rejects.not.toThrow('pii@example.com')
+    })
+
     it('clears file buckets with prefixes narrower than the limiter namespace', async () => {
       const harness = await createHarness()
       const store = harness.createStore()
@@ -817,33 +843,6 @@ describe('@holo-js/security rate-limit drivers', () => {
 
       expect(alpha.snapshot.attempts).toBe(1)
       expect(beta.snapshot.attempts).toBe(2)
-    })
-
-    it('reads legacy file buckets written with plaintext keys', async () => {
-      const harness = await createHarness()
-      const store = harness.createStore()
-      const key = 'limiter:login|user:legacy@example.com'
-      const bucketPath = fileRateLimitDriverInternals.getBucketPath(harness.root, key)
-
-      await mkdir(dirname(bucketPath), { recursive: true })
-      await writeFile(bucketPath, JSON.stringify({
-        key,
-        attempts: 1,
-        expiresAt: '2026-04-16T12:01:00.000Z',
-      }), 'utf8')
-
-      const hit = await store.hit(key, {
-        maxAttempts: 3,
-        decaySeconds: 60,
-      })
-
-      expect(hit.snapshot.attempts).toBe(2)
-      const serialized = await readFile(bucketPath, 'utf8')
-      expect(serialized).not.toContain('"key":"')
-      expect(serialized).toContain('"namespace":"limiter:login|"')
-      expect(serialized).toContain('"keyHash":"')
-      expect(serialized).toContain('"prefixHashes":[')
-      await expect(store.clearByPrefix('limiter:login|')).resolves.toBe(1)
     })
 
     it('serializes concurrent hits on the same bucket so attempts are not lost', async () => {
@@ -1271,6 +1270,83 @@ describe('@holo-js/security rate limiting', () => {
     expect(result.retryAfterSeconds).toBe(3600)
   })
 
+  it('uses the default guest request key when no limiter resolver is configured', async () => {
+    configureSecurityRuntime({
+      config: defineSecurityConfig({
+        rateLimit: {
+          limiters: {
+            invites: limit.perHour(3).define(),
+          },
+        },
+      }),
+      rateLimitStore: createMockRateLimitStore(),
+    })
+
+    const result = await rateLimit('invites', {
+      request: new Request('https://app.test/invites', {
+        headers: {
+          'x-forwarded-for': '203.0.113.11',
+        },
+      }),
+    })
+
+    expect(result.snapshot).toMatchObject({
+      limiter: 'invites',
+      key: 'ip:203.0.113.11',
+      attempts: 1,
+      maxAttempts: 3,
+      remainingAttempts: 2,
+    })
+  })
+
+  it('prefers the configured runtime default key resolver for authenticated requests', async () => {
+    const defaultKeyResolver = vi.fn(async () => 'user:42')
+
+    configureSecurityRuntime({
+      config: defineSecurityConfig({
+        rateLimit: {
+          limiters: {
+            invites: limit.perHour(3).define(),
+          },
+        },
+      }),
+      rateLimitStore: createMockRateLimitStore(),
+      defaultKeyResolver,
+    })
+
+    const request = new Request('https://app.test/invites')
+    const result = await rateLimit('invites', { request })
+
+    expect(result.snapshot.key).toBe('user:42')
+    expect(defaultKeyResolver).toHaveBeenCalledWith(request)
+  })
+
+  it('supports async limiter key resolvers that compose with the default helper', async () => {
+    configureSecurityRuntime({
+      config: defineSecurityConfig({
+        rateLimit: {
+          limiters: {
+            login: limit.perMinute(2).by(async ({ request, values }) => {
+              const email = String(values?.email ?? 'guest').toLowerCase()
+              return `${await defaultRateLimitKey(request)}:email:${email}`
+            }),
+          },
+        },
+      }),
+      rateLimitStore: createMockRateLimitStore(),
+      defaultKeyResolver: async () => 'user:7',
+    })
+
+    const result = await rateLimit('login', {
+      request: new Request('https://app.test/login'),
+      values: {
+        email: 'Ava@Example.com',
+      },
+    })
+
+    expect(result.snapshot.key).toBe('user:7:email:ava@example.com')
+  })
+
   it('throws stable rate-limit metadata after the bucket exceeds its limit', async () => {
     configureSecurityRuntime({
       config: defineSecurityConfig({
@@ -1376,7 +1452,7 @@ describe('@holo-js/security rate limiting', () => {
       key: 'abc',
     })).rejects.toThrow('Rate limiter "missing" is not defined')
 
-    await expect(rateLimit('invites', {})).rejects.toThrow('requires either an explicit key or a configured key resolver')
+    await expect(rateLimit('invites', {})).rejects.toThrow('requires either an explicit key or a request for the default key resolver')
 
     await expect(clearRateLimit({
       key: 'abc',

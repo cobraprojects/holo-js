@@ -2549,6 +2549,98 @@ export default defineSecurityConfig({
     }
   })
 
+  it('provides the security runtime with an auth-aware default rate-limit key resolver', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeSecurityConfig(root)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      const configureSecurityRuntime = vi.fn()
+      const authId = vi.fn(async () => 123)
+
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
+        if (specifier === '@holo-js/security') {
+          return {
+            configureSecurityRuntime,
+            defineSecurityConfig(config: unknown) {
+              return config
+            },
+            createRateLimitStoreFromConfig() {
+              return {
+                hit: vi.fn(async () => ({
+                  limited: false,
+                  snapshot: {
+                    limiter: '',
+                    key: 'custom',
+                    attempts: 1,
+                    maxAttempts: 5,
+                    remainingAttempts: 4,
+                    expiresAt: new Date('2026-04-16T12:01:00.000Z'),
+                  },
+                  retryAfterSeconds: 60,
+                })),
+                clear: vi.fn(async () => true),
+                clearByPrefix: vi.fn(async () => 0),
+                clearAll: vi.fn(async () => 0),
+              }
+            },
+            getSecurityRuntimeBindings: () => undefined,
+            ip() {
+              return '203.0.113.7'
+            },
+            limit: {
+              perMinute() {
+                return {
+                  by(resolver: unknown) {
+                    return {
+                      maxAttempts: 5,
+                      decaySeconds: 60,
+                      key: resolver,
+                    }
+                  },
+                }
+              },
+            },
+            resetSecurityRuntime: vi.fn(),
+          } as never
+        }
+
+        if (specifier === '@holo-js/auth') {
+          return {
+            getAuthRuntime() {
+              return {
+                id: authId,
+              }
+            },
+            resetAuthRuntime: vi.fn(),
+          } as never
+        }
+
+        return await originalImportOptionalModule(specifier, options)
+      })
+
+      const runtime = await portable.createHolo(root)
+      await runtime.initialize()
+
+      const bindings = configureSecurityRuntime.mock.calls[0]?.[0] as
+        | { readonly defaultKeyResolver?: (request: Request) => Promise<string | number | null | undefined> }
+        | undefined
+
+      expect(typeof bindings?.defaultKeyResolver).toBe('function')
+      await expect(bindings?.defaultKeyResolver?.(new Request('https://app.test/login'))).resolves.toBe('user:123')
+      expect(authId).toHaveBeenCalledTimes(1)
+
+      await runtime.shutdown()
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
   it('closes a newly created redis security adapter when runtime boot fails', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
@@ -2835,6 +2927,7 @@ export default defineSecurityConfig({
         clear: vi.fn(async () => true),
         clearByPrefix: vi.fn(async () => 0),
         clearAll: vi.fn(async () => 0),
+        close: vi.fn(async () => {}),
       }
       const nextStore = {
         hit: vi.fn(async () => ({
@@ -2852,6 +2945,7 @@ export default defineSecurityConfig({
         clear: vi.fn(async () => true),
         clearByPrefix: vi.fn(async () => 0),
         clearAll: vi.fn(async () => 0),
+        close: vi.fn(async () => {}),
       }
       const closePreviousRedisAdapter = vi.fn(async () => {})
       const closeNextRedisAdapter = vi.fn(async () => {})
@@ -2955,9 +3049,118 @@ export default defineSecurityConfig({
         rateLimitStore: previousStore,
       }))
       expect(closePreviousRedisAdapter).toHaveBeenCalledTimes(1)
+      expect(previousStore.close).toHaveBeenCalledTimes(1)
 
       await runtime.shutdown()
       expect(closeNextRedisAdapter).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
+  it('closes a newly created managed security store when security reconfiguration fails after store creation', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeSecurityConfig(root, `
+import { defineSecurityConfig, ip, limit } from '@holo-js/security'
+
+export default defineSecurityConfig({
+  rateLimit: {
+    driver: 'redis',
+    redis: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:rate-limit:',
+    },
+    limiters: {
+      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
+    },
+  },
+})
+`)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      const closeRedisAdapter = vi.fn(async () => {})
+      const nextStore = {
+        hit: vi.fn(async () => ({
+          limited: false,
+          snapshot: {
+            limiter: '',
+            key: 'next',
+            attempts: 1,
+            maxAttempts: 5,
+            remainingAttempts: 4,
+            expiresAt: new Date('2026-04-16T12:01:00.000Z'),
+          },
+          retryAfterSeconds: 60,
+        })),
+        clear: vi.fn(async () => true),
+        clearByPrefix: vi.fn(async () => 0),
+        clearAll: vi.fn(async () => 0),
+        close: vi.fn(async () => {}),
+      }
+      const createSecurityRedisAdapter = vi.fn(() => ({
+        increment: vi.fn(async () => ({ attempts: 1, ttlSeconds: 60 })),
+        del: vi.fn(async () => 0),
+        clearByPrefix: vi.fn(async () => 0),
+        clearAll: vi.fn(async () => 0),
+        close: closeRedisAdapter,
+      }))
+
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
+        if (specifier === '@holo-js/security') {
+          return {
+            configureSecurityRuntime() {
+              throw new Error('configure security failed')
+            },
+            defineSecurityConfig(config: unknown) {
+              return config
+            },
+            createRateLimitStoreFromConfig() {
+              return nextStore
+            },
+            getSecurityRuntimeBindings: () => undefined,
+            ip() {
+              return '203.0.113.7'
+            },
+            limit: {
+              perMinute() {
+                return {
+                  by(resolver: unknown) {
+                    return {
+                      maxAttempts: 5,
+                      decaySeconds: 60,
+                      key: resolver,
+                    }
+                  },
+                }
+              },
+            },
+            resetSecurityRuntime: vi.fn(),
+          } as never
+        }
+
+        if (specifier === '@holo-js/security/drivers/redis-adapter') {
+          return {
+            createSecurityRedisAdapter,
+          } as never
+        }
+
+        return await originalImportOptionalModule(specifier, options)
+      })
+
+      const runtime = await portable.createHolo(root)
+
+      await expect(runtime.initialize()).rejects.toThrow('configure security failed')
+      expect(nextStore.close).toHaveBeenCalledTimes(1)
+      expect(closeRedisAdapter).toHaveBeenCalled()
     } finally {
       vi.restoreAllMocks()
       vi.resetModules()

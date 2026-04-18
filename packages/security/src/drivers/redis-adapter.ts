@@ -36,6 +36,8 @@ function escapeRedisGlob(value: string): string {
   return value.replace(/[\\*?[\]]/g, match => `\\${match}`)
 }
 
+type RedisCommandTuple = readonly [unknown, unknown]
+
 function createRedisClientOptions(
   config: NormalizedSecurityRateLimitRedisConfig,
 ): RedisClientOptions {
@@ -76,7 +78,7 @@ export class RedisSecurityAdapter implements SecurityRateLimitRedisDriverAdapter
   }
 
   private qualifyPattern(pattern: string): string {
-    return `${this.prefix}${pattern}`
+    return `${escapeRedisGlob(this.prefix)}${pattern}`
   }
 
   private normalizeScanResponse(
@@ -138,6 +140,24 @@ export class RedisSecurityAdapter implements SecurityRateLimitRedisDriverAdapter
     return score
   }
 
+  private getCommandValue(result: readonly RedisCommandTuple[], index: number, operation: string): unknown {
+    const entry = result[index]
+    if (!entry) {
+      throw new Error(`[@holo-js/security] Redis transaction failed to return the ${operation}.`)
+    }
+
+    const [error, value] = entry
+    if (error instanceof Error) {
+      throw error
+    }
+
+    if (error) {
+      throw new Error(`[@holo-js/security] Redis transaction failed for ${operation}: ${String(error)}`)
+    }
+
+    return value
+  }
+
   async connect(): Promise<void> {
     await this.client.connect()
   }
@@ -162,8 +182,12 @@ export class RedisSecurityAdapter implements SecurityRateLimitRedisDriverAdapter
       throw new Error('[@holo-js/security] Redis transaction failed for increment.')
     }
 
-    const attempts = result[2]?.[1] as number
-    const oldestScore = this.parseOldestScore(result[3]?.[1])
+    const attemptsValue = this.getCommandValue(result as readonly RedisCommandTuple[], 2, 'attempt count')
+    if (typeof attemptsValue !== 'number') {
+      throw new Error('[@holo-js/security] Redis transaction returned an invalid attempt count.')
+    }
+    const attempts = attemptsValue
+    const oldestScore = this.parseOldestScore(this.getCommandValue(result as readonly RedisCommandTuple[], 3, 'oldest rate-limit hit'))
     await this.client.pexpireat(qualifiedKey, oldestScore + ttlMs)
     const ttlSeconds = Math.max(0, Math.ceil(((oldestScore + ttlMs) - now) / 1000))
 

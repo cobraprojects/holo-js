@@ -28,12 +28,14 @@ export interface SecurityRuntimeBindings {
   readonly config: HoloSecurityConfig | NormalizedHoloSecurityConfig
   readonly rateLimitStore?: SecurityRateLimitStore
   readonly csrfSigningKey?: string
+  readonly defaultKeyResolver?: SecurityDefaultRateLimitKeyResolver
 }
 
 export interface SecurityRuntimeFacade {
   readonly config: NormalizedHoloSecurityConfig
   readonly rateLimitStore?: SecurityRateLimitStore
   readonly csrfSigningKey?: string
+  readonly defaultKeyResolver?: SecurityDefaultRateLimitKeyResolver
 }
 
 export interface SecurityClientConfig {
@@ -99,6 +101,10 @@ export interface SecurityRateLimitStore {
   clearByPrefix(prefix: string): Promise<number>
   clearAll(): Promise<number>
   close?(): Promise<void> | void
+}
+
+export interface SecurityDefaultRateLimitKeyResolver {
+  (request: Request): string | number | null | undefined | Promise<string | number | null | undefined>
 }
 
 export class SecurityCsrfError extends Error {
@@ -268,11 +274,17 @@ export function defineRateLimiter<
 
 export function defineSecurityRuntimeBindings(
   bindings: SecurityRuntimeBindings,
-): Readonly<{ config: NormalizedHoloSecurityConfig, rateLimitStore?: SecurityRateLimitStore, csrfSigningKey?: string }> {
+): Readonly<{
+  config: NormalizedHoloSecurityConfig
+  rateLimitStore?: SecurityRateLimitStore
+  csrfSigningKey?: string
+  defaultKeyResolver?: SecurityDefaultRateLimitKeyResolver
+}> {
   return Object.freeze({
     config: normalizeSecurityConfig(bindings.config),
     rateLimitStore: bindings.rateLimitStore,
     csrfSigningKey: bindings.csrfSigningKey,
+    defaultKeyResolver: bindings.defaultKeyResolver,
   })
 }
 

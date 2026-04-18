@@ -19,6 +19,7 @@ import {
 } from './csrf'
 import {
   clearRateLimit,
+  defaultRateLimitKey,
   rateLimit,
   rateLimitInternals,
 } from './rate-limit'
@@ -79,6 +80,7 @@ export {
   createCsrfToken,
   defineRateLimiter,
   defineSecurityRuntimeBindings,
+  defaultRateLimitKey,
   ip,
   limit,
   protect,
@@ -99,6 +101,7 @@ export type {
   SecurityClientConfig,
   SecurityCsrfFacade,
   SecurityCsrfField,
+  SecurityDefaultRateLimitKeyResolver,
   SecurityProtectOptions,
   SecurityRateLimitCallOptions,
   SecurityRateLimitBucketSnapshot,
@@ -129,6 +132,7 @@ const security = Object.freeze({
   resetSecurityRuntime,
   csrf,
   protect,
+  defaultRateLimitKey,
   rateLimit,
   clearRateLimit,
   limit,

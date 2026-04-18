@@ -35,7 +35,7 @@ function createMissingSecurityPackageError(): FormContractError {
 async function importSecurityModule(): Promise<SecurityModule> {
   const specifier = ['@holo-js', 'security'].join('/') as string
 
-  if (process.env.VITEST) {
+  if (typeof process !== 'undefined' && process.env && process.env.VITEST) {
     return await import(/* @vite-ignore */ specifier)
   }
 

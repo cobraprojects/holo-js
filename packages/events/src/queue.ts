@@ -59,7 +59,8 @@ function getQueueRegistryState(): QueueRegistryState {
 /* v8 ignore start -- optional-peer absence is validated in published-package integration, not in this monorepo test graph */
 async function loadQueueModule(): Promise<QueueModule> {
   try {
-    const specifier = '@holo-js/queue' as string
+    // Keep the optional peer as a runtime string so bundlers do not eagerly resolve @holo-js/queue.
+    const specifier = '@holo-js/queue'
     return await import(specifier) as QueueModule
   } catch (error) {
     if (

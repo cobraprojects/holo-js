@@ -354,6 +354,7 @@ type SecurityModule = {
       close?(): Promise<void> | void
     }
     readonly csrfSigningKey?: string
+    readonly defaultKeyResolver?: (request: Request) => Promise<string | number | null | undefined> | string | number | null | undefined
   }): void
   createRateLimitStoreFromConfig(
     config: LoadedHoloConfig['security'],
@@ -378,6 +379,7 @@ type SecurityModule = {
       close?(): Promise<void> | void
     }
     readonly csrfSigningKey?: string
+    readonly defaultKeyResolver?: (request: Request) => Promise<string | number | null | undefined> | string | number | null | undefined
   } | undefined
   resetSecurityRuntime(): void
 }
@@ -2759,14 +2761,12 @@ async function resolveAuthProviderRuntime<TCustom extends HoloConfigMap>(
       if (error instanceof Error && /Could not resolve|Cannot find module|ENOENT/.test(error.message)) {
         const normalizedCandidate = candidate.replaceAll('\\', '/')
         const normalizedMessage = error.message.replaceAll('\\', '/')
+        const escapedCandidate = normalizedCandidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const missingModulePattern = new RegExp(`(?:Cannot find module|Could not resolve|Failed to load url)\\s+['"]${escapedCandidate}['"]`)
+        const enotentPathMatch = normalizedMessage.match(/ENOENT.*?(?:open|scandir|stat).*?['"]([^'"]+)['"]/)
         if (
-          normalizedMessage.includes(normalizedCandidate)
-          || normalizedMessage.includes(`${modelName}.ts`)
-          || normalizedMessage.includes(`${modelName}.mts`)
-          || normalizedMessage.includes(`${modelName}.js`)
-          || normalizedMessage.includes(`${modelName}.mjs`)
-          || normalizedMessage.includes(`${modelName}.cts`)
-          || normalizedMessage.includes(`${modelName}.cjs`)
+          missingModulePattern.test(normalizedMessage)
+          || enotentPathMatch?.[1]?.endsWith(normalizedCandidate)
         ) {
           continue
         }
@@ -3284,7 +3284,15 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     const shouldReuseExistingSecurityStore = !!existingSecurityBindings?.rateLimitStore
       && !existingManagedSecurityRedisAdapter
       && getRuntimeState().securityRateLimitStoreManaged !== true
+    const shouldCloseExistingManagedSecurityStore = !shouldReuseExistingSecurityStore
+      && !!existingSecurityBindings?.rateLimitStore
+      && (
+        !!existingManagedSecurityRedisAdapter
+        || getRuntimeState().securityRateLimitStoreManaged === true
+      )
     let nextManagedSecurityRedisAdapter: SecurityRedisAdapter | undefined
+    let rateLimitStore: ReturnType<typeof securityModule.createRateLimitStoreFromConfig> | undefined
+    let configuredSecurityRuntime = false
 
     try {
       if (
@@ -3297,12 +3305,20 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
         )
       }
 
-      const rateLimitStore = shouldReuseExistingSecurityStore
+      rateLimitStore = shouldReuseExistingSecurityStore
         ? existingSecurityBindings.rateLimitStore
         : securityModule.createRateLimitStoreFromConfig(loadedConfig.security, {
           projectRoot,
           ...(nextManagedSecurityRedisAdapter ? { redisAdapter: nextManagedSecurityRedisAdapter } : {}),
         })
+
+      if (
+        shouldCloseExistingManagedSecurityStore
+        && existingSecurityBindings?.rateLimitStore
+        && existingSecurityBindings.rateLimitStore !== rateLimitStore
+      ) {
+        await existingSecurityBindings.rateLimitStore.close?.()
+      }
 
       if (
         existingManagedSecurityRedisAdapter
@@ -3318,8 +3334,34 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
         config: loadedConfig.security,
         rateLimitStore,
         csrfSigningKey: loadedConfig.app.key,
+        defaultKeyResolver: async () => {
+          const authModule = await loadAuthModule()
+          if (!authModule) {
+            return undefined
+          }
+
+          try {
+            const authId = await authModule.getAuthRuntime().id()
+            if (authId !== null && typeof authId !== 'undefined') {
+              return `user:${String(authId)}`
+            }
+          } catch {
+            return undefined
+          }
+
+          return undefined
+        },
       })
+      configuredSecurityRuntime = true
     } catch (error) {
+      if (
+        !configuredSecurityRuntime
+        && rateLimitStore
+        && rateLimitStore !== existingSecurityBindings?.rateLimitStore
+      ) {
+        await rateLimitStore.close?.()
+      }
+
       if (
         nextManagedSecurityRedisAdapter
         && nextManagedSecurityRedisAdapter !== existingManagedSecurityRedisAdapter

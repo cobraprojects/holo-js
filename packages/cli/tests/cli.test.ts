@@ -763,10 +763,12 @@ export default {
     })
 
     expect(await readFile(join(securityRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/security": "${expectedHoloPackageRange}"`)
-    expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain(`import { defineSecurityConfig, ip, limit } from '@holo-js/security'`)
-    expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain('login: limit.perMinute(5).by(({ request }) => ip(request, true))')
-    expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain('register: limit.perHour(10).by(({ request }) => ip(request, true))')
+    expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain(`import { defineSecurityConfig, limit } from '@holo-js/security'`)
+    expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain('connection: \'redis\'')
+    expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain('login: limit.perMinute(5).define()')
+    expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain('register: limit.perHour(10).define()')
     expect(await stat(join(securityRoot, 'storage/framework/rate-limits'))).toBeDefined()
+    await expect(readFile(join(securityRoot, 'storage/framework/rate-limits/.gitignore'), 'utf8')).resolves.toBe('*\n!.gitignore\n')
 
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: '!!!',
@@ -1968,6 +1970,7 @@ export default defineAppConfig({
       createdSecurityConfig: false,
     })
     expect((await stat(join(projectRoot, 'storage/framework/rate-limits'))).isDirectory()).toBe(true)
+    await expect(readFile(join(projectRoot, 'storage/framework/rate-limits/.gitignore'), 'utf8')).resolves.toBe('*\n!.gitignore\n')
     await expect(projectInternals.installQueueIntoProject(projectRoot)).resolves.toEqual({
       createdQueueConfig: false,
       updatedPackageJson: false,
@@ -2810,8 +2813,8 @@ export const limit = Object.freeze({
       preferCache: false,
       processEnv: {},
     })
-    expect(typeof loaded.security.rateLimit.limiters.login?.key).toBe('function')
-    expect(typeof loaded.security.rateLimit.limiters.register?.key).toBe('function')
+    expect(loaded.security.rateLimit.limiters.login?.key).toBeUndefined()
+    expect(loaded.security.rateLimit.limiters.register?.key).toBeUndefined()
 
     const cached = runCliProcess(projectRoot, ['config:cache'], {
       env: {

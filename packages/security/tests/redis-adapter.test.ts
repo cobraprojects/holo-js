@@ -523,6 +523,24 @@ describe('security redis adapter', () => {
     ])
   })
 
+  it('escapes redis glob metacharacters in configured prefixes before clearing', async () => {
+    const adapter = createSecurityRedisAdapter({
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:*:rate-limit[prod]?:',
+    })
+
+    redisMock.scanResponses.push(['0', []])
+
+    await expect(adapter.clearAll()).resolves.toBe(0)
+
+    expect(redisMock.calls.scan).toEqual([
+      ['0', 'MATCH', 'holo:\\*:rate-limit\\[prod\\]\\?:*', 'COUNT', 100],
+    ])
+  })
+
   it('rejects malformed scan replies from redis while clearing buckets', async () => {
     const adapter = createSecurityRedisAdapter({
       host: '127.0.0.1',
@@ -582,6 +600,28 @@ describe('security redis adapter', () => {
     await expect(adapter.increment('limiter:login|user%3A1', {
       decaySeconds: 60,
     })).rejects.toThrow('invalid oldest-hit score')
+  })
+
+  it('rejects redis transaction tuples that contain command errors', async () => {
+    const adapter = createSecurityRedisAdapter({
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:rate-limit:',
+    })
+
+    redisMock.execResponses.push([
+      [null, 1],
+      [null, 0],
+      [new Error('zcard failed'), null],
+      [null, ['member', '1713240000000']],
+    ] as never)
+
+    await expect(adapter.increment('limiter:login|user%3A1', {
+      decaySeconds: 60,
+    })).rejects.toThrow('zcard failed')
+    expect(redisMock.calls.pexpireat).toEqual([])
   })
 
   it('accepts numeric oldest-hit scores returned by redis transactions', async () => {

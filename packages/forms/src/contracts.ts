@@ -490,9 +490,16 @@ export async function validate<TShape extends SchemaInputShape>(
 
     try {
       const security = await loadSecurityModule()
+      const verificationRequest = (() => {
+        try {
+          return request.clone()
+        } catch {
+          return request
+        }
+      })()
 
       if (options.csrf === true) {
-        await security.csrf.verify(request)
+        await security.csrf.verify(verificationRequest)
       }
 
       if (typeof options.throttle === 'string') {

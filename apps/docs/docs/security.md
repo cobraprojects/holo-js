@@ -27,7 +27,7 @@ it is installed.
 `config/security.ts` is the single config entrypoint:
 
 ```ts
-import { defineSecurityConfig, ip, limit } from '@holo-js/security'
+import { defineSecurityConfig, limit } from '@holo-js/security'
 
 export default defineSecurityConfig({
   csrf: {
@@ -49,12 +49,9 @@ export default defineSecurityConfig({
       prefix: 'holo:rate-limit:',
     },
     limiters: {
-      login: limit.perMinute(5).by(({ request, values }) => {
-        const email = typeof values?.email === 'string' ? values.email.toLowerCase() : 'guest'
-        return `${ip(request, true)}:${email}`
-      }),
-      register: limit.perHour(10).by(({ request }) => ip(request, true)),
-      api: limit.perMinute(60).by(({ request }) => ip(request, true)),
+      login: limit.perMinute(5).define(),
+      register: limit.perHour(10).define(),
+      api: limit.perMinute(60).define(),
     },
   },
 })
@@ -70,6 +67,11 @@ export default defineSecurityConfig({
 - `rateLimit.driver` must be `memory`, `file`, or `redis`.
 - `rateLimit.limiters` is the named limiter registry used by `validate(...)`, `protect(...)`, and
   `rateLimit(...)`.
+- When a limiter uses `define()` instead of `by(...)`, the package uses its default key strategy.
+- The default key is `user:<id>` when the current Holo auth runtime can resolve an authenticated user.
+- Otherwise the default key falls back to `ip:<client-ip>` from the incoming request headers.
+- If your app sits behind trusted proxies or needs additional identifier scoping, override the limiter
+  key with `by(...)`.
 
 ## Forms
 
@@ -257,16 +259,44 @@ export async function POST(request: Request) {
 Named limiters are the normal path:
 
 ```ts
-import { defineSecurityConfig, ip, limit } from '@holo-js/security'
+import { defineSecurityConfig, limit } from '@holo-js/security'
 
 export default defineSecurityConfig({
   rateLimit: {
     driver: 'file',
     limiters: {
-      login: limit.perMinute(5).by(({ request, values }) => {
-        return `${ip(request, true)}:${String(values?.email ?? 'guest')}`
+      login: limit.perMinute(5).define(),
+      register: limit.perHour(10).define(),
+    },
+  },
+})
+```
+
+`define()` is the default path. It gives you Laravel-style behavior without repeating a key resolver on
+every limiter: authenticated requests use `user:<id>` and guest requests fall back to `ip:<client-ip>`.
+
+### Overriding the default key
+
+Override the key when a limiter needs more than the built-in user-or-IP fallback. A common case is login:
+keep the default base key, then add an opaque identifier so one email cannot be hammered across many IPs
+and raw email addresses never land in rate-limit storage.
+
+```ts
+import { defaultRateLimitKey, defineSecurityConfig, limit } from '@holo-js/security'
+
+function getOpaqueKeyFromEmail(email: string): string {
+  return createStableEmailHash(email)
+}
+
+export default defineSecurityConfig({
+  rateLimit: {
+    driver: 'file',
+    limiters: {
+      login: limit.perMinute(5).by(async ({ request, values }) => {
+        const email = typeof values?.email === 'string' ? values.email.toLowerCase() : 'guest'
+        return `${await defaultRateLimitKey(request)}:email:${getOpaqueKeyFromEmail(email)}`
       }),
-      register: limit.perHour(10).by(({ request }) => ip(request, true)),
+      register: limit.perHour(10).define(),
     },
   },
 })
@@ -305,7 +335,8 @@ Programmatic helper:
 ```ts
 import { clearRateLimit } from '@holo-js/security'
 
-await clearRateLimit({ limiter: 'login', key: '203.0.113.7:ava@example.com' })
+await clearRateLimit({ limiter: 'api', key: 'user:42' })
+await clearRateLimit({ limiter: 'api', key: 'ip:203.0.113.7' })
 await clearRateLimit({ limiter: 'login' })
 await clearRateLimit({ all: true })
 ```
@@ -313,7 +344,8 @@ await clearRateLimit({ all: true })
 CLI helper:
 
 ```bash
-bunx holo rate-limit:clear --limiter login --key "203.0.113.7:ava@example.com"
+bunx holo rate-limit:clear --limiter api --key "user:42"
+bunx holo rate-limit:clear --limiter api --key "ip:203.0.113.7"
 bunx holo rate-limit:clear --limiter login
 bunx holo rate-limit:clear --all
 ```

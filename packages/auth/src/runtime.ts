@@ -1956,11 +1956,18 @@ function createPasswordResetFacade(): AuthPasswordResetFacade {
         })
         await store.create(record)
         const result = createLifecycleTokenResult(record, `${id}.${secret}`)
-        await bindings.delivery.sendPasswordReset({
-          provider: broker.provider,
-          email: normalizedEmail,
-          token: result,
-        })
+        try {
+          await bindings.delivery.sendPasswordReset({
+            provider: broker.provider,
+            email: normalizedEmail,
+            token: result,
+          })
+        } catch (error) {
+          await store.delete(record.id, {
+            table: broker.table,
+          })
+          throw error
+        }
         if (sharedReservation?.bypassed) {
           getAuthRuntimeState().sharedPasswordResetThrottleFailures?.delete(sharedReservation.key)
         }

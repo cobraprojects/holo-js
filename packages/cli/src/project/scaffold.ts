@@ -240,7 +240,7 @@ function renderMailConfig(): string {
 
 function renderSecurityConfig(): string {
   return [
-    `import { defineSecurityConfig, ip, limit } from '@holo-js/security'`,
+    `import { defineSecurityConfig, limit } from '@holo-js/security'`,
     '',
     'export default defineSecurityConfig({',
     '  csrf: {',
@@ -256,17 +256,23 @@ function renderSecurityConfig(): string {
     '      path: \'./storage/framework/rate-limits\',',
     '    },',
     '    redis: {',
-    '      connection: \'default\',',
+    '      connection: \'redis\',',
     '      prefix: \'holo:rate-limit:\',',
     '    },',
     '    limiters: {',
-    '      login: limit.perMinute(5).by(({ request }) => ip(request, true)),',
-    '      register: limit.perHour(10).by(({ request }) => ip(request, true)),',
+    '      login: limit.perMinute(5).define(),',
+    '      register: limit.perHour(10).define(),',
     '    },',
     '  },',
     '})',
     '',
   ].join('\n')
+}
+
+async function ensureRateLimitStorageIgnore(projectRoot: string): Promise<void> {
+  const rateLimitRoot = resolve(projectRoot, 'storage/framework/rate-limits')
+  await mkdir(rateLimitRoot, { recursive: true })
+  await writeTextFile(resolve(rateLimitRoot, '.gitignore'), '*\n!.gitignore\n')
 }
 
 function renderBroadcastConfig(
@@ -2085,7 +2091,7 @@ export async function installSecurityIntoProject(
   const securityConfigPath = await resolveFirstExistingPath(projectRoot, SECURITY_CONFIG_FILE_NAMES)
 
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })
-  await mkdir(resolve(projectRoot, 'storage/framework/rate-limits'), { recursive: true })
+  await ensureRateLimitStorageIgnore(projectRoot)
 
   if (!securityConfigPath) {
     await writeTextFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig())
@@ -3094,7 +3100,7 @@ export async function scaffoldProject(
   }
   if (securityEnabled) {
     await writeFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig(), 'utf8')
-    await mkdir(resolve(projectRoot, 'storage/framework/rate-limits'), { recursive: true })
+    await ensureRateLimitStorageIgnore(projectRoot)
   }
   if (authEnabled) {
     await writeFile(resolve(projectRoot, 'config/auth.ts'), renderAuthConfig(), 'utf8')

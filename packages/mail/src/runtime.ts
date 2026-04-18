@@ -299,7 +299,7 @@ function getRuntimeBindings(): MailRuntimeBindings {
 }
 
 function dynamicImport<TModule>(specifier: string): Promise<TModule> {
-  return import(specifier as string) as Promise<TModule>
+  return import(/* webpackIgnore: true */ specifier) as Promise<TModule>
 }
 
 async function loadQueueModule(): Promise<QueueModule> {

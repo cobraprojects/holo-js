@@ -1825,6 +1825,43 @@ describe('@holo-js/auth package runtime', () => {
     expect(runtime.deliveries).toHaveLength(1)
   })
 
+  it('deletes freshly created password reset tokens when delivery fails', async () => {
+    const runtime = configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 60,
+          },
+        },
+      },
+    })
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const originalSendPasswordReset = bindings.delivery.sendPasswordReset
+    bindings.delivery.sendPasswordReset = vi.fn(async () => {
+      throw new Error('delivery failed')
+    })
+
+    await expect(passwords.request('ava@example.com')).rejects.toThrow('delivery failed')
+    expect(runtime.passwordResetTokenStore.records.size).toBe(0)
+
+    bindings.delivery.sendPasswordReset = originalSendPasswordReset
+
+    await expect(passwords.request('ava@example.com')).resolves.toBeUndefined()
+    expect(runtime.deliveries).toHaveLength(1)
+    expect(runtime.passwordResetTokenStore.records.size).toBe(1)
+  })
+
   it('keeps a failed password reset reserved when clearing the throttle entry throws', async () => {
     const attempts = new Map<string, number>()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

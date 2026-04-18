@@ -2,13 +2,14 @@ import { describe, it } from 'vitest'
 import {
   clearRateLimit,
   csrf,
-  protect,
   createFileRateLimitStore,
   createFileRateLimitStoreConfig,
   createMemoryRateLimitStore,
+  defaultRateLimitKey,
   defineSecurityConfig,
   ip,
   limit,
+  protect,
   rateLimit,
   createRedisRateLimitStore,
   type HoloSecurityConfig,
@@ -33,6 +34,9 @@ describe('@holo-js/security typing', () => {
       void derivedIp
       return `${derivedIp}:${String(email ?? 'guest')}`
     })
+    const register = limit.perMinute(3).by(async ({ request }) => {
+      return await defaultRateLimitKey(request)
+    })
     const config = defineSecurityConfig({
       csrf: {
         enabled: true,
@@ -44,6 +48,7 @@ describe('@holo-js/security typing', () => {
         }),
         limiters: {
           login,
+          register,
         },
       },
     })
@@ -57,6 +62,7 @@ describe('@holo-js/security typing', () => {
         file: Readonly<SecurityRateLimitFileConfig>
         limiters: {
           login: SecurityLimiterConfig
+          register: SecurityLimiterConfig
         }
       }
     }>>>

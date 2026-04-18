@@ -2012,6 +2012,42 @@ export default {
     })
   })
 
+  it('rethrows dependency import failures from an existing auth model file', async () => {
+    const root = await createProject({
+      auth: true,
+    })
+
+    await writeFile(join(root, 'server/models/User.ts'), `
+import './missing-dependency'
+
+export default {
+  async find() {
+    return null
+  },
+  where() {
+    return {
+      async first() {
+        return null
+      },
+    }
+  },
+  async create(values) {
+    return values
+  },
+  async update(_id, values) {
+    return values
+  },
+}
+`, 'utf8')
+
+    const runtime = await createHolo(root, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    await expect(holoRuntimeInternals.createCoreAuthProviders(root, runtime.loadedConfig)).rejects.toThrow('missing-dependency')
+  })
+
   it('filters hosted-auth profile writes and honors model auth input hooks', async () => {
     const root = await createProject({
       auth: true,

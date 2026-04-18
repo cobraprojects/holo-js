@@ -12,6 +12,24 @@ const execFileAsync = promisify(execFile)
 const formsNodeModulesRoot = resolve(import.meta.dirname, '../node_modules')
 const securityPackageRoot = join(formsNodeModulesRoot, '@holo-js/security')
 
+async function runBun(
+  args: string[],
+  options: Parameters<typeof execFileAsync>[2] = {},
+): Promise<{ stdout: string, stderr: string } | undefined> {
+  try {
+    return await execFileAsync('bun', args, {
+      timeout: 30_000,
+      ...options,
+    })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined
+    }
+
+    throw error
+  }
+}
+
 afterEach(() => {
   delete (globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__
   delete (globalThis as typeof globalThis & { __holoFormsSecurityClientModule__?: unknown }).__holoFormsSecurityClientModule__
@@ -59,7 +77,7 @@ describe('@holo-js/forms security helpers', () => {
 }
 `, 'utf8')
 
-      await execFileAsync('bun', [
+      const result = await runBun([
         'build',
         resolve(import.meta.dirname, '../src/client-security.ts'),
         '--target=browser',
@@ -70,6 +88,9 @@ describe('@holo-js/forms security helpers', () => {
       ], {
         cwd: projectDir,
       })
+      if (!result) {
+        return
+      }
 
       const output = await readFile(join(outdir, 'client-security.js'), 'utf8')
 
@@ -193,7 +214,7 @@ export function getSecurityClientConfig() {
 `,
     })
 
-    const { stdout } = await execFileAsync('bun', [
+    const result = await runBun([
       '--eval',
       `
 const securityMod = await import(${JSON.stringify(resolve(import.meta.dirname, '../src/security.ts'))})
@@ -214,12 +235,42 @@ console.log(JSON.stringify({
         VITEST: '',
       },
     })
+    if (!result) {
+      return
+    }
 
-    expect(JSON.parse(stdout)).toEqual({
+    expect(JSON.parse(result.stdout)).toEqual({
       hasVerify: true,
       hasRateLimit: true,
       hasClientConfig: true,
     })
+  })
+
+  it('loads the optional security module when process is unavailable', async () => {
+    vi.resetModules()
+    vi.doMock('@holo-js/security', () => ({
+      csrf: {
+        async verify() {},
+      },
+      async rateLimit() {
+        return { limited: false }
+      },
+    }))
+    vi.stubGlobal('process', undefined)
+
+    try {
+      await expect(loadSecurityModule()).resolves.toMatchObject({
+        csrf: {
+          verify: expect.any(Function),
+        },
+        rateLimit: expect.any(Function),
+      })
+    } finally {
+      vi.doUnmock('@holo-js/security')
+      vi.resetModules()
+      vi.unstubAllGlobals()
+      formsSecurityInternals.resetSecurityModuleCache()
+    }
   })
 
   it('parses cookie headers and recognizes optional-package errors', () => {

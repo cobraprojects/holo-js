@@ -68,10 +68,10 @@ type StorageS3Module = {
 async function importOptionalModule<TModule>(specifier: string): Promise<TModule | undefined> {
   try {
     if (process.env.VITEST) {
-      return await import(/* @vite-ignore */ specifier as string) as TModule
+      return await import(/* @vite-ignore */ specifier) as TModule
     }
 
-    return await import(/* webpackIgnore: true */ specifier as string) as TModule
+    return await import(/* webpackIgnore: true */ specifier) as TModule
   } catch (error) {
     if (
       error
