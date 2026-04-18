@@ -13,6 +13,7 @@ import {
   createRedisRateLimitStore,
   type HoloSecurityConfig,
   type SecurityLimiterConfig,
+  type SecurityRateLimitFileConfig,
   type SecurityRateLimitHitResult,
   type SecurityRateLimitRedisDriverAdapter,
   type SecurityRateLimitStore,
@@ -27,7 +28,7 @@ describe('@holo-js/security typing', () => {
         : false
 
     const login = limit.perMinute(5).by(({ request, values }) => {
-      const derivedIp: string = ip(request)
+      const derivedIp: string = ip(request, true)
       const email = values?.email
       void derivedIp
       return `${derivedIp}:${String(email ?? 'guest')}`
@@ -53,9 +54,7 @@ describe('@holo-js/security typing', () => {
       }
       rateLimit: {
         driver: 'file'
-        file: {
-          path: string
-        }
+        file: Readonly<SecurityRateLimitFileConfig>
         limiters: {
           login: SecurityLimiterConfig
         }
@@ -108,11 +107,7 @@ describe('@holo-js/security typing', () => {
     }
 
     // @ts-expect-error Unsupported drivers must fail typing.
-    defineSecurityConfig({
-      rateLimit: {
-        driver: 'database',
-      },
-    })
+    defineSecurityConfig({ rateLimit: { driver: 'database' } })
 
     void exported
     void tokenPromiseFactory

@@ -416,24 +416,18 @@ export default defineStorageConfig({
   })
 
   it('treats ERR_MODULE_NOT_FOUND storage-s3 imports as absent optional modules', async () => {
-    const originalVitest = process.env.VITEST
-
-    process.env.VITEST = ''
-
+    vi.resetModules()
+    vi.doMock('@holo-js/storage-s3', () => {
+      throw Object.assign(new Error('missing'), {
+        code: 'ERR_MODULE_NOT_FOUND',
+      })
+    })
     try {
       const mod = await import('../src/module')
-      const evalSpy = vi.spyOn(globalThis, 'eval').mockRejectedValueOnce(Object.assign(new Error('missing'), {
-        code: 'ERR_MODULE_NOT_FOUND',
-      }))
-
       await expect(mod.moduleInternals.importOptionalStorageS3Module()).resolves.toBeUndefined()
-      expect(evalSpy).toHaveBeenCalledWith(`import(${JSON.stringify('@holo-js/storage-s3')})`)
     } finally {
-      if (typeof originalVitest === 'undefined') {
-        delete process.env.VITEST
-      } else {
-        process.env.VITEST = originalVitest
-      }
+      vi.doUnmock('@holo-js/storage-s3')
+      vi.resetModules()
     }
   })
 

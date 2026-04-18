@@ -33,7 +33,7 @@ export function createRateLimitStoreFromConfig(
 
       return createRedisRateLimitStore(options.redisAdapter)
     default:
-      return createMemoryRateLimitStore()
+      throw new Error(`[@holo-js/security] Unsupported rate limit driver "${normalized.rateLimit.driver}".`)
   }
 }
 

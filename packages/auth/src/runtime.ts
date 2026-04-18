@@ -69,6 +69,10 @@ type MemoryAuthContext = AuthRuntimeContext & {
   readonly cachedUsers: Map<string, AuthUser | null>
   readonly accessTokens: Map<string, string>
   readonly rememberTokens: Map<string, string>
+  getAccessToken(guardName: string): string | undefined
+  setAccessToken(guardName: string, token?: string): void
+  getRememberToken(guardName: string): string | undefined
+  setRememberToken(guardName: string, token?: string): void
 }
 
 type AsyncAuthContext = AuthRuntimeContext & {
@@ -140,11 +144,16 @@ function isMissingOptionalPackageError(error: unknown): boolean {
     return false
   }
 
-  return error.message.includes('Cannot find package')
-    || error.message.includes('Cannot find module')
-    || error.message.includes('Failed to resolve module specifier')
-    || error.message.includes('Failed to load url')
-    || error.message.includes('Could not resolve')
+  const message = error.message
+  const mentionsSecurityPackage = message.includes('@holo-js/security')
+
+  return mentionsSecurityPackage && (
+    message.includes('Cannot find package')
+    || message.includes('Cannot find module')
+    || message.includes('Failed to resolve module specifier')
+    || message.includes('Failed to load url')
+    || message.includes('Could not resolve')
+  )
 }
 
 async function loadOptionalSecurityModule(): Promise<OptionalSecurityModule | undefined> {
@@ -256,7 +265,30 @@ function createPasswordResetThrottleKey(
   email: string,
 ): string {
   const namespacePrefix = namespace ? `${namespace}:` : ''
-  return `auth:password-reset:${namespacePrefix}${brokerName}:${provider}:${table}:${email.toLowerCase()}`
+  const canonicalEmail = email.trim().toLowerCase()
+  const emailHash = createHash('sha256').update(canonicalEmail).digest('hex')
+  return `auth:password-reset:${namespacePrefix}${brokerName}:${provider}:${table}:${emailHash}`
+}
+
+async function clearSharedPasswordResetThrottleReservation(
+  sharedReservation: {
+    readonly key: string
+    readonly limited: boolean
+    readonly store: OptionalSecurityRateLimitStore
+    readonly bypassed: boolean
+  } | undefined,
+): Promise<'cleared' | 'unsupported' | 'failed'> {
+  if (!sharedReservation?.store.clear) {
+    return 'unsupported'
+  }
+
+  try {
+    await sharedReservation.store.clear(sharedReservation.key)
+    return 'cleared'
+  } catch (error) {
+    console.warn('[@holo-js/auth] Failed to clear a password reset reservation after use.', error)
+    return 'failed'
+  }
 }
 
 function createPasswordResetThrottleNamespace(csrfSigningKey: string | undefined): string | undefined {
@@ -297,7 +329,7 @@ async function reserveSharedPasswordResetThrottle(
     email,
   )
   const failures = getAuthRuntimeState().sharedPasswordResetThrottleFailures ??= new Set<string>()
-  if (!store.clear && failures.has(key)) {
+  if (failures.has(key)) {
     return {
       key,
       limited: false,
@@ -1904,10 +1936,7 @@ function createPasswordResetFacade(): AuthPasswordResetFacade {
           email: normalizedEmail,
         })
         if (!user) {
-          if (sharedReservation?.store.clear) {
-            await sharedReservation.store.clear(sharedReservation.key)
-          }
-
+          await clearSharedPasswordResetThrottleReservation(sharedReservation)
           return
         }
 
@@ -1932,15 +1961,14 @@ function createPasswordResetFacade(): AuthPasswordResetFacade {
           email: normalizedEmail,
           token: result,
         })
-        if (!sharedReservation?.store.clear && sharedReservation?.bypassed) {
+        if (sharedReservation?.bypassed) {
           getAuthRuntimeState().sharedPasswordResetThrottleFailures?.delete(sharedReservation.key)
         }
       } catch (error) {
-        if (sharedReservation?.store.clear) {
-          await sharedReservation.store.clear(sharedReservation.key)
-        } else if (sharedReservation) {
-          getAuthRuntimeState().sharedPasswordResetThrottleFailures ??= new Set<string>()
-          getAuthRuntimeState().sharedPasswordResetThrottleFailures.add(sharedReservation.key)
+        const cleared = await clearSharedPasswordResetThrottleReservation(sharedReservation)
+        if (cleared === 'unsupported' && sharedReservation) {
+          const failures = getAuthRuntimeState().sharedPasswordResetThrottleFailures ??= new Set<string>()
+          failures.add(sharedReservation.key)
         }
 
         throw error
@@ -2203,6 +2231,7 @@ export function resetAuthRuntime(): void {
   const state = getAuthRuntimeState()
   state.bindings = undefined
   state.sharedPasswordResetThrottleFailures = undefined
+  optionalSecurityModulePromise = undefined
 }
 
 export async function checkForGuard(guardName: string): Promise<boolean> {

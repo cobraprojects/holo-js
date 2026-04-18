@@ -24,6 +24,7 @@ const loginForm = schema({
 
 export async function POST(request: Request) {
   const submission = await validate(request, loginForm, {
+    // Optional: requires @holo-js/security.
     csrf: true,
     throttle: 'login',
   })
@@ -37,7 +38,7 @@ export async function POST(request: Request) {
 ```
 
 ```ts [Nuxt — server/api/login.post.ts]
-import { defineEventHandler, getHeaders, getRequestURL, readRawBody } from 'h3'
+import { defineEventHandler } from 'h3'
 import { field, schema, validate } from '@holo-js/forms'
 
 const loginForm = schema({
@@ -46,12 +47,8 @@ const loginForm = schema({
 })
 
 export default defineEventHandler(async (event) => {
-  const request = new Request(getRequestURL(event), {
-    method: event.method,
-    headers: getHeaders(event),
-    body: await readRawBody(event) ?? undefined,
-  })
-  const submission = await validate(request, loginForm, {
+  const submission = await validate(event, loginForm, {
+    // Optional: requires @holo-js/security.
     csrf: true,
     throttle: 'login',
   })
@@ -75,6 +72,7 @@ const loginForm = schema({
 export const actions = {
   default: async ({ request }) => {
     const submission = await validate(request, loginForm, {
+      // Optional: requires @holo-js/security.
       csrf: true,
       throttle: 'login',
     })
@@ -106,6 +104,14 @@ export const login = form(loginForm, async (data, invalid) => {
 ```
 
 :::
+
+`csrf` and `throttle` in these examples are optional security features. Use them only when
+`@holo-js/security` is installed and configured. Without that package, call `validate(...)` without those
+options.
+
+Use the framework-native request input with `validate(...)`: `request` in Next.js and SvelteKit, `event` in
+Nuxt `server/api/*`. `useRequestHeaders()` is a Nuxt app-context composable for pages, components, and plugins,
+not h3 route handlers.
 
 ## Client submit examples
 

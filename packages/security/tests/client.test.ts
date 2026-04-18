@@ -7,12 +7,16 @@ afterEach(() => {
 
 describe('@holo-js/security client config', () => {
   it('returns default browser csrf settings when no client override is configured', () => {
-    expect(getSecurityClientConfig()).toEqual({
+    const config = getSecurityClientConfig()
+
+    expect(config).toEqual({
       csrf: {
         field: '_token',
         cookie: 'XSRF-TOKEN',
       },
     })
+    expect(Object.isFrozen(config)).toBe(true)
+    expect(Object.isFrozen(config.csrf)).toBe(true)
   })
 
   it('normalizes and resets browser client config overrides', () => {

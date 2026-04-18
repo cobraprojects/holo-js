@@ -98,6 +98,7 @@ export interface SecurityRateLimitStore {
   clear(key: string): Promise<boolean>
   clearByPrefix(prefix: string): Promise<number>
   clearAll(): Promise<number>
+  close?(): Promise<void> | void
 }
 
 export class SecurityCsrfError extends Error {
@@ -201,7 +202,11 @@ export const limit = Object.freeze({
   },
 })
 
-export function ip(request: Request): string {
+export function ip(request: Request, trustedProxy = true): string {
+  if (!trustedProxy) {
+    return 'unknown'
+  }
+
   const forwarded = request.headers.get('x-forwarded-for')?.split(',', 1)[0]?.trim()
   if (forwarded) {
     return forwarded
@@ -215,11 +220,49 @@ export function ip(request: Request): string {
   return 'unknown'
 }
 
+function normalizeLimiterIntegerInput(value: number | string | undefined, label: string): number {
+  if (typeof value === 'undefined') {
+    throw new TypeError(`[@holo-js/security] ${label} is required.`)
+  }
+
+  const normalized = typeof value === 'number'
+    ? value
+    : (() => {
+        const trimmed = value.trim()
+        if (!trimmed) {
+          return Number.NaN
+        }
+
+        return Number(trimmed)
+      })()
+
+  if (!Number.isFinite(normalized) || !Number.isInteger(normalized)) {
+    throw new TypeError(`[@holo-js/security] ${label} must be an integer greater than or equal to 1.`)
+  }
+
+  if (normalized < 1) {
+    throw new TypeError(`[@holo-js/security] ${label} must be an integer greater than or equal to 1.`)
+  }
+
+  return normalized
+}
+
 export function defineRateLimiter<
   TValues extends Readonly<Record<string, unknown>> | undefined = Readonly<Record<string, unknown>> | undefined,
 >(
   definition: SecurityLimiterConfig<TValues>,
 ): SecurityLimiterConfig<TValues> {
+  if (!definition || typeof definition !== 'object') {
+    throw new TypeError('[@holo-js/security] Rate limiter definitions must be objects.')
+  }
+
+  normalizeLimiterIntegerInput(definition.maxAttempts, 'Rate limiter maxAttempts')
+  normalizeLimiterIntegerInput(definition.decaySeconds, 'Rate limiter decaySeconds')
+
+  if (definition.key !== undefined && typeof definition.key !== 'function') {
+    throw new TypeError('[@holo-js/security] Rate limiter key resolvers must be functions.')
+  }
+
   return Object.freeze({ ...definition })
 }
 

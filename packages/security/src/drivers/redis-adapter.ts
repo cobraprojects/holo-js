@@ -32,6 +32,10 @@ function isRedisSocketConnectionTarget(value: string): boolean {
     || value.startsWith('/')
 }
 
+function escapeRedisGlob(value: string): string {
+  return value.replace(/[\\*?[\]]/g, match => `\\${match}`)
+}
+
 function createRedisClientOptions(
   config: NormalizedSecurityRateLimitRedisConfig,
 ): RedisClientOptions {
@@ -171,7 +175,10 @@ export class RedisSecurityAdapter implements SecurityRateLimitRedisDriverAdapter
   }
 
   async clearByPrefix(prefix: string): Promise<number> {
-    const pattern = this.qualifyPattern(prefix.endsWith('*') ? prefix : `${prefix}*`)
+    const basePrefix = prefix.endsWith('*')
+      ? prefix.slice(0, -1)
+      : prefix
+    const pattern = this.qualifyPattern(`${escapeRedisGlob(basePrefix)}*`)
     return await this.clearMatchingKeys(pattern)
   }
 

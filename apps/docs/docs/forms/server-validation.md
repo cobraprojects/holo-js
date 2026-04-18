@@ -23,6 +23,7 @@ const loginForm = schema({
 
 export async function POST(request: Request) {
   const submission = await validate(request, loginForm, {
+    // Optional: requires @holo-js/security.
     csrf: true,
     throttle: 'login',
   })
@@ -40,7 +41,7 @@ export async function POST(request: Request) {
 ```
 
 ```ts [Nuxt — server/api/login.post.ts]
-import { defineEventHandler, getHeaders, getRequestURL, readRawBody } from 'h3'
+import { defineEventHandler } from 'h3'
 import { field, schema, validate } from '@holo-js/forms'
 
 const loginForm = schema({
@@ -50,12 +51,8 @@ const loginForm = schema({
 })
 
 export default defineEventHandler(async (event) => {
-  const request = new Request(getRequestURL(event), {
-    method: event.method,
-    headers: getHeaders(event),
-    body: await readRawBody(event) ?? undefined,
-  })
-  const submission = await validate(request, loginForm, {
+  const submission = await validate(event, loginForm, {
+    // Optional: requires @holo-js/security.
     csrf: true,
     throttle: 'login',
   })
@@ -82,6 +79,7 @@ const loginForm = schema({
 export const actions = {
   default: async ({ request }) => {
     const submission = await validate(request, loginForm, {
+      // Optional: requires @holo-js/security.
       csrf: true,
       throttle: 'login',
     })
@@ -99,8 +97,12 @@ export const actions = {
 
 :::
 
-When you add `csrf` or `throttle`, pass a real web `Request` into `validate(...)`. In Nuxt that means building
-one from the event instead of validating only the parsed body.
+`csrf` and `throttle` in these examples are optional security features. Use them only when
+`@holo-js/security` is installed and configured. Without that package, call `validate(...)` without those
+options.
+
+When you add `csrf` or `throttle`, pass a real web `Request` or request-like event into `validate(...)`. In
+Nuxt `server/api/*`, you can pass the h3 event directly instead of validating only the parsed body.
 
 ## SvelteKit remote functions
 
@@ -419,6 +421,7 @@ export const registerUser = schema({
 
 export async function POST(request: Request) {
   const submission = await validate(request, registerUser, {
+    // Optional: requires @holo-js/security.
     csrf: true,
     throttle: 'register',
   })
@@ -434,7 +437,7 @@ export async function POST(request: Request) {
 ```
 
 ```ts [Nuxt — server/api/register.post.ts]
-import { defineEventHandler, getHeaders, getRequestURL, readRawBody } from 'h3'
+import { defineEventHandler } from 'h3'
 import { field, schema, validate } from '@holo-js/forms'
 
 const registerUser = schema({
@@ -445,12 +448,8 @@ const registerUser = schema({
 })
 
 export default defineEventHandler(async (event) => {
-  const request = new Request(getRequestURL(event), {
-    method: event.method,
-    headers: getHeaders(event),
-    body: await readRawBody(event) ?? undefined,
-  })
-  const submission = await validate(request, registerUser, {
+  const submission = await validate(event, registerUser, {
+    // Optional: requires @holo-js/security.
     csrf: true,
     throttle: 'register',
   })

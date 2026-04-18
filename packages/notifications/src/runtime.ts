@@ -8,7 +8,6 @@ import {
   type NotificationBroadcastMessage,
   type NotificationBroadcastRoute,
   type NotificationBuildContext,
-  type NotificationBuildFactories,
   type NotificationChannel,
   type NotificationChannelDispatchResult,
   type NotificationChannelName,
@@ -96,12 +95,7 @@ function getDispatchHandler() {
 }
 
 function dynamicImport<TModule>(specifier: string): Promise<TModule> {
-  if (process.env.VITEST) {
-    return import(/* @vite-ignore */ specifier) as Promise<TModule>
-  }
-
-  const indirectEval = globalThis.eval as (source: string) => Promise<TModule>
-  return indirectEval(`import(${JSON.stringify(specifier)})`)
+  return import(specifier as string) as Promise<TModule>
 }
 
 async function loadQueueModule(): Promise<QueueModule> {
@@ -142,7 +136,20 @@ async function loadQueueModule(): Promise<QueueModule> {
 async function loadDbModule(): Promise<DbModule | null> {
   const override = getRuntimeState().loadDbModule
   if (override) {
-    return await override()
+    try {
+      return await override()
+    } catch (error) {
+      if (
+        error
+        && typeof error === 'object'
+        && 'code' in error
+        && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
+      ) {
+        return null
+      }
+
+      throw error
+    }
   }
 
   try {
@@ -914,7 +921,8 @@ class PendingDispatch<TResult = NotificationDispatchResult> implements PendingNo
 
   constructor(
     private readonly target: DispatchTargetInput,
-    private readonly notification: NotificationDefinition,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- must accept any NotificationDefinition variant
+    private readonly notification: NotificationDefinition<any, any>,
     private readonly options: MutableDispatchOptions = {},
   ) {}
 
@@ -1008,7 +1016,8 @@ class AnonymousNotificationBuilder<
     } as TRoutes & { readonly [TKey in TChannel]: NotificationRouteFor<TChannel> })
   }
 
-  notify<TNotification extends NotificationDefinition>(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- must accept any NotificationDefinition variant
+  notify<TNotification extends NotificationDefinition<any, any>>(
     notification: TNotification,
   ): PendingNotificationDispatch<NotificationDispatchResult> {
     return new PendingDispatch({
@@ -1019,11 +1028,13 @@ class AnonymousNotificationBuilder<
 }
 
 export interface NotificationRuntimeFacade {
-  notify<TNotification extends NotificationDefinition<unknown, NotificationBuildFactories<unknown>>>(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- notify must accept any NotificationDefinition variant without TBuild variance issues
+  notify<TNotification extends NotificationDefinition<any, any>>(
     notifiable: InferNotificationNotifiable<TNotification>,
     notification: TNotification,
   ): PendingNotificationDispatch<NotificationDispatchResult>
-  notifyMany<TNotification extends NotificationDefinition<unknown, NotificationBuildFactories<unknown>>>(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- notifyMany must accept any NotificationDefinition variant without TBuild variance issues
+  notifyMany<TNotification extends NotificationDefinition<any, any>>(
     notifiables: readonly InferNotificationNotifiable<TNotification>[] | Iterable<InferNotificationNotifiable<TNotification>>,
     notification: TNotification,
   ): PendingNotificationDispatch<NotificationDispatchResult>
@@ -1050,7 +1061,8 @@ export function resetNotificationsRuntime(): void {
   state.loadDbModule = undefined
 }
 
-export function notify<TNotification extends NotificationDefinition<unknown, NotificationBuildFactories<unknown>>>(
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- notify must accept any NotificationDefinition variant without TBuild variance issues
+export function notify<TNotification extends NotificationDefinition<any, any>>(
   notifiable: InferNotificationNotifiable<TNotification>,
   notification: TNotification,
 ): PendingNotificationDispatch<NotificationDispatchResult> {
@@ -1060,7 +1072,8 @@ export function notify<TNotification extends NotificationDefinition<unknown, Not
   }, notification)
 }
 
-export function notifyMany<TNotification extends NotificationDefinition<unknown, NotificationBuildFactories<unknown>>>(
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- notifyMany must accept any NotificationDefinition variant without TBuild variance issues
+export function notifyMany<TNotification extends NotificationDefinition<any, any>>(
   notifiables: readonly InferNotificationNotifiable<TNotification>[] | Iterable<InferNotificationNotifiable<TNotification>>,
   notification: TNotification,
 ): PendingNotificationDispatch<NotificationDispatchResult> {

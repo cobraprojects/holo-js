@@ -3,9 +3,10 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FormContractError } from '../src'
-import { formsSecurityInternals, getClientCsrfField, loadSecurityClientModule, loadSecurityModule } from '../src/security'
+import { getClientCsrfField, clientSecurityInternals, loadSecurityClientModule } from '../src/client-security'
+import { formsSecurityInternals, loadSecurityModule } from '../src/security'
 
 const execFileAsync = promisify(execFile)
 const formsNodeModulesRoot = resolve(import.meta.dirname, '../node_modules')
@@ -18,10 +19,11 @@ afterEach(() => {
   delete (globalThis as typeof globalThis & { __holoFormsSecurityClientImport__?: unknown }).__holoFormsSecurityClientImport__
   delete (globalThis as typeof globalThis & { document?: Document }).document
   formsSecurityInternals.resetSecurityModuleCache()
+  clientSecurityInternals.resetSecurityClientModuleCache()
 })
 
 afterEach(async () => {
-  await rm(formsNodeModulesRoot, { recursive: true, force: true })
+  await rm(securityPackageRoot, { recursive: true, force: true })
 })
 
 async function writeSecurityPackage(files: Record<string, string>): Promise<void> {
@@ -33,6 +35,12 @@ async function writeSecurityPackage(files: Record<string, string>): Promise<void
 }
 
 describe('@holo-js/forms security helpers', () => {
+  it('avoids opting the security client import out of browser bundling', async () => {
+    const source = await readFile(resolve(import.meta.dirname, '../src/client-security.ts'), 'utf8')
+
+    expect(source).not.toContain('webpackIgnore')
+  })
+
   it('keeps the security client import visible to browser bundlers', async () => {
     const outdir = await mkdtemp(join(tmpdir(), 'holo-forms-security-bundle-'))
     const projectDir = await mkdtemp(join(tmpdir(), 'holo-forms-security-project-'))
@@ -53,25 +61,165 @@ describe('@holo-js/forms security helpers', () => {
 
       await execFileAsync('bun', [
         'build',
-        resolve(import.meta.dirname, '../src/security.ts'),
+        resolve(import.meta.dirname, '../src/client-security.ts'),
         '--target=browser',
         '--format=esm',
         '--splitting',
-        '--external=@holo-js/validation',
-        '--external=@holo-js/security',
         '--external=@holo-js/security/client',
         `--outdir=${outdir}`,
       ], {
         cwd: projectDir,
       })
 
-      const output = await readFile(join(outdir, 'security.js'), 'utf8')
+      const output = await readFile(join(outdir, 'client-security.js'), 'utf8')
 
       expect(output).toContain('import("@holo-js/security/client")')
+      expect(output).not.toContain('const specifier = ["@holo-js", "security", "client"].join("/")')
     } finally {
       await rm(outdir, { recursive: true, force: true })
       await rm(projectDir, { recursive: true, force: true })
     }
+  })
+
+  it('loads the optional security entrypoints through literal imports during Vitest', async () => {
+    vi.resetModules()
+    vi.doMock('@holo-js/security', () => ({
+      csrf: {
+        async verify() {},
+      },
+      async rateLimit() {
+        return { limited: false }
+      },
+    }))
+    vi.doMock('@holo-js/security/client', () => ({
+      getSecurityClientConfig() {
+        return {
+          csrf: {
+            field: '_token',
+            cookie: 'XSRF-TOKEN',
+          },
+        }
+      },
+    }))
+
+    try {
+      const mod = await import('../src/client-security')
+
+      await expect(mod.loadSecurityClientModule()).resolves.toMatchObject({
+        getSecurityClientConfig: expect.any(Function),
+      })
+    } finally {
+      vi.doUnmock('@holo-js/security')
+      vi.doUnmock('@holo-js/security/client')
+      vi.resetModules()
+    }
+  })
+
+  it('loads the optional security entrypoints through literal imports outside the Vitest branch', async () => {
+    const originalVitest = process.env.VITEST
+
+    vi.resetModules()
+    vi.doMock('@holo-js/security', () => ({
+      csrf: {
+        async verify() {},
+      },
+      async rateLimit() {
+        return { limited: false }
+      },
+    }))
+    vi.doMock('@holo-js/security/client', () => ({
+      getSecurityClientConfig() {
+        return {
+          csrf: {
+            field: '_token',
+            cookie: 'XSRF-TOKEN',
+          },
+        }
+      },
+    }))
+
+    if (typeof originalVitest === 'undefined') {
+      delete process.env.VITEST
+    } else {
+      process.env.VITEST = ''
+    }
+
+    try {
+      const mod = await import('../src/client-security')
+
+      await expect(mod.loadSecurityClientModule()).resolves.toMatchObject({
+        getSecurityClientConfig: expect.any(Function),
+      })
+    } finally {
+      vi.doUnmock('@holo-js/security')
+      vi.doUnmock('@holo-js/security/client')
+      vi.resetModules()
+      if (typeof originalVitest === 'undefined') {
+        delete process.env.VITEST
+      } else {
+        process.env.VITEST = originalVitest
+      }
+    }
+  })
+
+  it('loads the optional security entrypoints without bundler escape hatches outside Vitest', async () => {
+    await writeSecurityPackage({
+      'package.json': JSON.stringify({
+        name: '@holo-js/security',
+        type: 'module',
+        exports: {
+          '.': './index.js',
+          './client': './client.js',
+        },
+      }, null, 2),
+      'index.js': `
+export const csrf = {
+  async verify() {},
+}
+
+export async function rateLimit() {
+  return { limited: false }
+}
+`,
+      'client.js': `
+export function getSecurityClientConfig() {
+  return {
+    csrf: {
+      field: '_token',
+      cookie: 'XSRF-TOKEN',
+    },
+  }
+}
+`,
+    })
+
+    const { stdout } = await execFileAsync('bun', [
+      '--eval',
+      `
+const securityMod = await import(${JSON.stringify(resolve(import.meta.dirname, '../src/security.ts'))})
+const clientMod = await import(${JSON.stringify(resolve(import.meta.dirname, '../src/client-security.ts'))})
+const security = await securityMod.loadSecurityModule()
+const client = await clientMod.loadSecurityClientModule()
+
+console.log(JSON.stringify({
+  hasVerify: typeof security.csrf?.verify === 'function',
+  hasRateLimit: typeof security.rateLimit === 'function',
+  hasClientConfig: typeof client.getSecurityClientConfig === 'function',
+}))
+      `,
+    ], {
+      cwd: resolve(import.meta.dirname, '..'),
+      env: {
+        ...process.env,
+        VITEST: '',
+      },
+    })
+
+    expect(JSON.parse(stdout)).toEqual({
+      hasVerify: true,
+      hasRateLimit: true,
+      hasClientConfig: true,
+    })
   })
 
   it('parses cookie headers and recognizes optional-package errors', () => {
@@ -101,7 +249,7 @@ describe('@holo-js/forms security helpers', () => {
       },
     }
 
-    globalThis.document = {
+    ;(globalThis as typeof globalThis & { document?: Document }).document = {
       cookie: 'tracking=%; XSRF-TOKEN=client-token',
     } as Document
 
@@ -112,6 +260,13 @@ describe('@holo-js/forms security helpers', () => {
   })
 
   it('fails clearly when csrf helpers run without a browser document or a test override', async () => {
+    ;(globalThis as typeof globalThis & { __holoFormsSecurityImport__?: () => Promise<unknown> }).__holoFormsSecurityImport__ = async () => {
+      throw new Error('Cannot find package @holo-js/security')
+    }
+    ;(globalThis as typeof globalThis & { __holoFormsSecurityClientImport__?: () => Promise<unknown> }).__holoFormsSecurityClientImport__ = async () => {
+      throw new Error('Cannot find package @holo-js/security')
+    }
+
     await expect(getClientCsrfField()).rejects.toBeInstanceOf(FormContractError)
     await expect(loadSecurityModule()).rejects.toBeInstanceOf(FormContractError)
     await expect(loadSecurityClientModule()).rejects.toBeInstanceOf(FormContractError)

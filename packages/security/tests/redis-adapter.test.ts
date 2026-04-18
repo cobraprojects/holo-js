@@ -505,6 +505,24 @@ describe('security redis adapter', () => {
     ])
   })
 
+  it('escapes redis glob metacharacters before clearing by prefix', async () => {
+    const adapter = createSecurityRedisAdapter({
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:rate-limit:',
+    })
+
+    redisMock.scanResponses.push(['0', []])
+
+    await expect(adapter.clearByPrefix('limiter:logi?n[1]*')).resolves.toBe(0)
+
+    expect(redisMock.calls.scan).toEqual([
+      ['0', 'MATCH', 'holo:rate-limit:limiter:logi\\?n\\[1\\]*', 'COUNT', 100],
+    ])
+  })
+
   it('rejects malformed scan replies from redis while clearing buckets', async () => {
     const adapter = createSecurityRedisAdapter({
       host: '127.0.0.1',

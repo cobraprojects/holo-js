@@ -193,11 +193,11 @@ export interface NotificationDefinition<
     context: NotificationContext,
   ): readonly Extract<keyof TBuild, string>[]
   readonly build: TBuild
-  readonly queue?: boolean | NotificationQueueOptions | NotificationQueueResolver<TNotifiable, Extract<keyof TBuild, string>>
+  readonly queue?: boolean | NotificationQueueOptions | NotificationQueueResolver<TNotifiable, string>
   readonly delay?:
     | NotificationDelayValue
     | Partial<Record<Extract<keyof TBuild, string>, NotificationDelayValue>>
-    | NotificationDelayResolver<TNotifiable, Extract<keyof TBuild, string>>
+    | NotificationDelayResolver<TNotifiable, string>
 }
 
 export type InferNotificationNotifiable<TNotification>

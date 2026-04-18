@@ -1,6 +1,7 @@
 # Dependencies
 node_modules
 bun.lockb
+AGENTS.md
 
 # Build outputs
 dist

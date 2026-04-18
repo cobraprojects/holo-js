@@ -5,6 +5,7 @@ import {
   createSuccessfulSubmission,
   defineSchema,
   field,
+  formsInternals,
   isFormSchema,
   schema,
   validate,
@@ -18,7 +19,11 @@ function createSecurityModule() {
       async verify(request: Request) {
         const cookie = request.headers.get('cookie') ?? ''
         const header = request.headers.get('X-CSRF-TOKEN') ?? ''
-        const token = cookie.split('XSRF-TOKEN=', 2)[1]?.split(';', 1)[0] ?? ''
+        const token = cookie
+          .split(';')
+          .map(segment => segment.trim())
+          .find(segment => segment.startsWith('XSRF-TOKEN='))
+          ?.slice('XSRF-TOKEN='.length) ?? ''
 
         if (!token || token !== header) {
           const error = new Error('CSRF token mismatch.') as Error & { status: number }
@@ -71,7 +76,7 @@ describe('@holo-js/forms contracts', () => {
     }))
 
     expect(direct.mode).toBe('form')
-    expect(direct.fields.email.definition.rules.map(rule => rule.name)).toEqual(['required', 'email'])
+    expect(direct.fields.email.definition.rules.map((rule: { name: string }) => rule.name)).toEqual(['required', 'email'])
     expect(nested.fields.profile.city.definition.kind).toBe('string')
     expect(isFormSchema(direct)).toBe(true)
     expect(isFormSchema(defineSchema({ email: field.string() }))).toBe(false)
@@ -145,6 +150,11 @@ describe('@holo-js/forms contracts', () => {
       },
     })
     expect(failure.fail(409).status).toBe(409)
+    expect(() => createFailedSubmission(registerUser, {
+      email: 'broken',
+    }, {
+      email: ['Email must be valid.'],
+    }, 99)).toThrow('HTTP status codes must be integers greater than or equal to 100.')
   })
 
   it('submits form input through the shared validation engine and preserves failure values', async () => {
@@ -211,6 +221,34 @@ describe('@holo-js/forms contracts', () => {
         },
       },
       errors: failure.errors.flatten(),
+    })
+  })
+
+  it('does not coerce plain form objects with request-like field names into Request inputs', async () => {
+    const requestMeta = schema({
+      method: field.string().required(),
+      url: field.string().required(),
+      headers: field.string().required(),
+      path: field.string().required(),
+    })
+
+    const submission = await validate({
+      method: 'POST',
+      url: '/login',
+      headers: 'content-type: application/x-www-form-urlencoded',
+      path: '/login',
+    }, requestMeta)
+
+    expect(submission.valid).toBe(true)
+    if (!submission.valid) {
+      throw new Error('Expected form submission success.')
+    }
+
+    expect(submission.data).toEqual({
+      method: 'POST',
+      url: '/login',
+      headers: 'content-type: application/x-www-form-urlencoded',
+      path: '/login',
     })
   })
 
@@ -338,7 +376,128 @@ describe('@holo-js/forms contracts', () => {
       email: 'ava@example.com',
     }, login, {
       csrf: true,
-    })).rejects.toThrow('Security-aware validate() options require a Request input.')
+    })).rejects.toThrow('Security-aware validate() options require a Request or request-like event input.')
+  })
+
+  it('accepts h3-style event objects for security-aware validation', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+
+    ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
+
+    const event = {
+      method: 'POST',
+      path: '/login',
+      node: {
+        req: {
+          method: 'POST',
+          headers: {
+            cookie: 'XSRF-TOKEN=login-token',
+            'X-CSRF-TOKEN': 'login-token',
+            'x-forwarded-for': '203.0.113.7',
+            host: 'app.test',
+          },
+          body: new URLSearchParams({
+            email: 'ava@example.com',
+          }),
+        },
+      },
+    }
+
+    const firstAllowed = await validate(event, login, {
+      csrf: true,
+      throttle: 'login',
+    })
+    expect(firstAllowed.valid).toBe(true)
+
+    const throttled = await validate(event, login, {
+      throttle: 'login',
+    })
+    expect(throttled.valid).toBe(false)
+    if (throttled.valid) {
+      throw new Error('Expected throttle failure.')
+    }
+
+    expect(throttled.values).toEqual({
+      email: 'ava@example.com',
+    })
+    expect(throttled.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
+  })
+
+  it('preserves cookie semantics for request-like header arrays during csrf validation', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+
+    ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
+
+    const submission = await validate({
+      method: 'POST',
+      path: '/login',
+      headers: {
+        cookie: [
+          'tracking=1',
+          'XSRF-TOKEN=login-token',
+        ],
+        'X-CSRF-TOKEN': 'login-token',
+        host: 'app.test',
+      },
+      body: new URLSearchParams({
+        email: 'ava@example.com',
+      }),
+    }, login, {
+      csrf: true,
+    })
+
+    expect(submission.valid).toBe(true)
+    if (!submission.valid) {
+      throw new Error('Expected csrf validation success.')
+    }
+
+    expect(submission.data).toEqual({
+      email: 'ava@example.com',
+    })
+  })
+
+  it('reuses embedded Request instances when normalizing request-like inputs', () => {
+    const webRequest = new Request('https://app.test/web', {
+      method: 'POST',
+    })
+    const nodeRequest = new Request('https://app.test/node', {
+      method: 'PATCH',
+    })
+
+    expect(formsInternals.normalizeRequestLikeInput({
+      web: {
+        request: webRequest,
+      },
+    })).toBe(webRequest)
+    expect(formsInternals.normalizeRequestLikeInput({
+      req: nodeRequest,
+    })).toBe(nodeRequest)
+  })
+
+  it('marks streamed request-like bodies as duplex requests', async () => {
+    const body = {
+      async *[Symbol.asyncIterator]() {
+        yield new TextEncoder().encode('email=ava@example.com')
+      },
+    }
+
+    const request = formsInternals.normalizeRequestLikeInput({
+      method: 'POST',
+      path: '/streamed-login',
+      headers: {
+        host: 'app.test',
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body,
+    })
+
+    expect(request).toBeInstanceOf(Request)
+    expect(request?.duplex).toBe('half')
+    await expect(request?.text()).resolves.toBe('email=ava@example.com')
   })
 
   it('falls back to empty values when request inspection cannot be replayed after a security failure', async () => {
@@ -560,7 +719,7 @@ describe('@holo-js/forms contracts', () => {
     const packageJson = JSON.parse(await import('node:fs/promises').then(module => module.readFile(
       new URL('../package.json', import.meta.url),
       'utf8',
-    ))) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> }
+    ))) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string>; peerDependencies?: Record<string, string>; peerDependenciesMeta?: Record<string, { optional?: boolean }> }
 
     expect(Object.keys(packageJson.dependencies ?? {})).not.toContain('@holo-js/adapter-next')
     expect(Object.keys(packageJson.dependencies ?? {})).not.toContain('@holo-js/adapter-nuxt')

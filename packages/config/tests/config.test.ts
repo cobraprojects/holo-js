@@ -1630,7 +1630,7 @@ import { defineSecurityConfig, ip, limit } from ${securityPackageEntry}
 export default defineSecurityConfig({
   rateLimit: {
     limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request)),
+      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
     },
   },
 })
@@ -1707,7 +1707,7 @@ export default defineSecurityConfig({
   },
   rateLimit: {
     limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request)),
+      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
     },
   },
 })
@@ -1738,7 +1738,7 @@ import { defineSecurityConfig, ip, limit } from ${securityPackageEntry}
 export default defineSecurityConfig({
   rateLimit: {
     limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request)),
+      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
     },
   },
 })

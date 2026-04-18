@@ -10,7 +10,7 @@ import {
   validate,
 } from './contracts'
 import { createErrorBag, type InferSchemaData, type SchemaInputShape, type ValidationErrorBag, type WebFileLike } from '@holo-js/validation'
-import { getClientCsrfField } from './security'
+import { getClientCsrfField } from './client-security'
 
 type PrimitiveLike = string | number | boolean | bigint | symbol | null | undefined | Date | Blob | WebFileLike
 

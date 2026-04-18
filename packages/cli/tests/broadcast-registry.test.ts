@@ -131,10 +131,13 @@ export default defineChannel('chat.{roomId}', {
     await expect(readFile(join(root, '.holo-js/generated/channels.ts'), 'utf8')).resolves.toContain('"whispers": [')
     await expect(readFile(join(root, '.holo-js/generated/broadcast-manifest.ts'), 'utf8')).resolves.toContain('events: [')
     await expect(readFile(join(root, '.holo-js/generated/broadcast-manifest.ts'), 'utf8')).resolves.toContain('"typing.start"')
-    await expect(readFile(join(root, '.holo-js/generated/broadcast-manifest.ts'), 'utf8')).resolves.toContain('member: undefined as unknown as import(\'@holo-js/broadcast\').ChannelPresenceMemberFor<"chat.{roomId}">')
+    await expect(readFile(join(root, '.holo-js/generated/broadcast-manifest.ts'), 'utf8')).resolves.toContain('import type { ChannelPresenceMemberFor, GeneratedBroadcastManifest } from \'@holo-js/broadcast\'')
+    await expect(readFile(join(root, '.holo-js/generated/broadcast-manifest.ts'), 'utf8')).resolves.toContain('member: undefined as unknown as ChannelPresenceMemberFor<"chat.{roomId}">')
     await expect(readFile(join(root, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('declare module \'@holo-js/broadcast\'')
-    await expect(readFile(join(root, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('"orders.updated": import(\'@holo-js/broadcast\').ExportedBroadcastDefinition')
-    await expect(readFile(join(root, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('"orders.{orderId}": import(\'@holo-js/broadcast\').ExportedChannelDefinition')
+    await expect(readFile(join(root, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('ExportedBroadcastDefinition')
+    await expect(readFile(join(root, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('ExportedChannelDefinition')
+    await expect(readFile(join(root, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('"orders.updated": ExportedBroadcastDefinition')
+    await expect(readFile(join(root, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('"orders.{orderId}": ExportedChannelDefinition')
     await expect(readFile(join(root, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.not.toContain('authorize()')
   })
 
@@ -251,8 +254,10 @@ export default defineChannel('orders.{orderId}', {
 
     await prepareProjectDiscovery(root, normalizeHoloProjectConfig())
 
-    await expect(readFile(join(root, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('"orders.updated": import(\'@holo-js/broadcast\').BroadcastDefinition')
-    await expect(readFile(join(root, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('"orders.{orderId}": import(\'@holo-js/broadcast\').ChannelDefinition')
+    await expect(readFile(join(root, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('BroadcastDefinition')
+    await expect(readFile(join(root, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('ChannelDefinition')
+    await expect(readFile(join(root, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('"orders.updated": BroadcastDefinition')
+    await expect(readFile(join(root, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('"orders.{orderId}": ChannelDefinition')
   })
 
   it('discovers broadcast artifacts from configured custom paths', async () => {

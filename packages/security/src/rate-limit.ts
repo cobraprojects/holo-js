@@ -101,6 +101,10 @@ export async function rateLimit(name: string, options: SecurityRateLimitCallOpti
 export async function clearRateLimit(options: SecurityClearRateLimitOptions): Promise<boolean | number> {
   const store = getRateLimitStore()
 
+  if (options.all && (options.limiter || options.key)) {
+    throw new TypeError('[@holo-js/security] clearRateLimit(...) must use either { all: true } or a scoped limiter/key pair, not both.')
+  }
+
   if (options.all) {
     return await store.clearAll()
   }

@@ -679,6 +679,11 @@ export function dispatchSync<TJobName extends Extract<keyof HoloQueueJobRegistry
   payload: QueuePayloadFor<TJobName>,
   options?: QueueDispatchOptions,
 ): Promise<QueueResultFor<TJobName>>
+export function dispatchSync<TPayload extends QueueJsonValue = QueueJsonValue, TResult = unknown>(
+  jobName: string,
+  payload: TPayload,
+  options?: QueueDispatchOptions,
+): Promise<TResult>
 export async function dispatchSync<TPayload extends QueueJsonValue = QueueJsonValue, TResult = unknown>(
   jobName: string,
   payload: TPayload,

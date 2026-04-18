@@ -10,15 +10,16 @@ type RuntimeSecurityClientState = {
   bindings?: SecurityClientConfig
 }
 
-function getDefaultSecurityClientConfig(): SecurityClientConfig {
-  const config = normalizeSecurityConfig({})
+const DEFAULT_SECURITY_CONFIG = normalizeSecurityConfig({})
+const DEFAULT_SECURITY_CLIENT_CONFIG: SecurityClientConfig = Object.freeze({
+  csrf: Object.freeze({
+    field: DEFAULT_SECURITY_CONFIG.csrf.field,
+    cookie: DEFAULT_SECURITY_CONFIG.csrf.cookie,
+  }),
+})
 
-  return Object.freeze({
-    csrf: {
-      field: config.csrf.field,
-      cookie: config.csrf.cookie,
-    },
-  })
+function getDefaultSecurityClientConfig(): SecurityClientConfig {
+  return DEFAULT_SECURITY_CLIENT_CONFIG
 }
 
 function getSecurityClientState(): RuntimeSecurityClientState {
@@ -32,12 +33,13 @@ function getSecurityClientState(): RuntimeSecurityClientState {
 
 function normalizeSecurityClientConfig(bindings?: SecurityClientBindings): SecurityClientConfig {
   const defaults = getDefaultSecurityClientConfig()
+  const csrf = Object.freeze({
+    field: bindings?.config?.csrf?.field ?? defaults.csrf.field,
+    cookie: bindings?.config?.csrf?.cookie ?? defaults.csrf.cookie,
+  })
 
   return Object.freeze({
-    csrf: {
-      field: bindings?.config?.csrf?.field ?? defaults.csrf.field,
-      cookie: bindings?.config?.csrf?.cookie ?? defaults.csrf.cookie,
-    },
+    csrf,
   })
 }
 
@@ -48,7 +50,7 @@ export function configureSecurityClient(bindings?: SecurityClientBindings): void
 }
 
 export function getSecurityClientConfig(): SecurityClientConfig {
-  return getSecurityClientState().bindings ?? getDefaultSecurityClientConfig()
+  return getSecurityClientState().bindings ?? DEFAULT_SECURITY_CLIENT_CONFIG
 }
 
 export function resetSecurityClient(): void {

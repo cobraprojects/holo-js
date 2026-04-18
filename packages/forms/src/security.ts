@@ -7,26 +7,11 @@ type SecurityModule = {
   rateLimit(name: string, options: { readonly request?: Request, readonly key?: string, readonly values?: Readonly<Record<string, unknown>> }): Promise<unknown>
 }
 
-type SecurityClientModule = {
-  getSecurityClientConfig(): {
-    readonly csrf: {
-      readonly field: string
-      readonly cookie: string
-    }
-  }
-}
-
 let securityModulePromise: Promise<SecurityModule> | undefined
-let securityClientModulePromise: Promise<SecurityClientModule> | undefined
 
 type BrowserLikeGlobal = typeof globalThis & {
-  document?: {
-    cookie?: string
-  }
   __holoFormsSecurityModule__?: SecurityModule
-  __holoFormsSecurityClientModule__?: SecurityClientModule
   __holoFormsSecurityImport__?: () => Promise<unknown>
-  __holoFormsSecurityClientImport__?: () => Promise<unknown>
 }
 
 function isMissingOptionalPackageError(error: unknown): boolean {
@@ -47,6 +32,16 @@ function createMissingSecurityPackageError(): FormContractError {
   )
 }
 
+async function importSecurityModule(): Promise<SecurityModule> {
+  const specifier = ['@holo-js', 'security'].join('/') as string
+
+  if (process.env.VITEST) {
+    return await import(/* @vite-ignore */ specifier)
+  }
+
+  return await import(specifier)
+}
+
 export async function loadSecurityModule(): Promise<SecurityModule> {
   const runtime = globalThis as BrowserLikeGlobal
   if (runtime.__holoFormsSecurityModule__) {
@@ -55,7 +50,7 @@ export async function loadSecurityModule(): Promise<SecurityModule> {
 
   securityModulePromise ??= (runtime.__holoFormsSecurityImport__
     ? runtime.__holoFormsSecurityImport__()
-    : import('@holo-js/security'))
+    : importSecurityModule())
     .then(module => module as SecurityModule)
     .catch(async (error) => {
       securityModulePromise = undefined
@@ -70,32 +65,8 @@ export async function loadSecurityModule(): Promise<SecurityModule> {
   return await securityModulePromise
 }
 
-export async function loadSecurityClientModule(): Promise<SecurityClientModule> {
-  const runtime = globalThis as BrowserLikeGlobal
-  if (runtime.__holoFormsSecurityClientModule__) {
-    return runtime.__holoFormsSecurityClientModule__
-  }
-
-  securityClientModulePromise ??= (runtime.__holoFormsSecurityClientImport__
-    ? runtime.__holoFormsSecurityClientImport__()
-    : import('@holo-js/security/client'))
-    .then(module => module as SecurityClientModule)
-    .catch(async (error) => {
-      securityClientModulePromise = undefined
-
-      if (isMissingOptionalPackageError(error)) {
-        throw createMissingSecurityPackageError()
-      }
-
-      throw error
-    })
-
-  return await securityClientModulePromise
-}
-
 export function resetSecurityModuleCache(): void {
   securityModulePromise = undefined
-  securityClientModulePromise = undefined
 }
 
 function parseCookieHeader(header: string): Readonly<Record<string, string>> {
@@ -139,31 +110,6 @@ function isRootSecurityError(error: unknown): error is Error & { readonly status
   return error instanceof Error
     && typeof candidate?.status === 'number'
     && (candidate.status === 419 || candidate.status === 429)
-}
-
-export async function getClientCsrfField(): Promise<{ readonly name: string, readonly value: string }> {
-  const runtime = globalThis as BrowserLikeGlobal
-
-  if (!runtime.document || typeof runtime.document.cookie !== 'string') {
-    throw new FormContractError(
-      '[@holo-js/forms] useForm({ csrf: true }) requires a browser-like document.cookie environment.',
-    )
-  }
-
-  const security = await loadSecurityClientModule()
-  const config = security.getSecurityClientConfig().csrf
-  const value = parseCookieHeader(runtime.document.cookie)[config.cookie]
-
-  if (!value) {
-    throw new FormContractError(
-      `[@holo-js/forms] Missing CSRF cookie "${config.cookie}" required by useForm({ csrf: true }).`,
-    )
-  }
-
-  return Object.freeze({
-    name: config.field,
-    value,
-  })
 }
 
 export const formsSecurityInternals = {

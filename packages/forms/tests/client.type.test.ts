@@ -30,9 +30,7 @@ describe('@holo-js/forms client typing', () => {
     })
 
     // @ts-expect-error Throttling is intentionally server-only.
-    useForm(registerUser, {
-      throttle: 'login',
-    })
+    useForm(registerUser, { throttle: 'login' })
 
     type ClientAssertion = Expect<Equal<
       typeof client,

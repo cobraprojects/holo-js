@@ -260,8 +260,8 @@ function renderSecurityConfig(): string {
     '      prefix: \'holo:rate-limit:\',',
     '    },',
     '    limiters: {',
-    '      login: limit.perMinute(5).by(({ request }) => ip(request)),',
-    '      register: limit.perHour(10).by(({ request }) => ip(request)),',
+    '      login: limit.perMinute(5).by(({ request }) => ip(request, true)),',
+    '      register: limit.perHour(10).by(({ request }) => ip(request, true)),',
     '    },',
     '  },',
     '})',
@@ -3094,6 +3094,7 @@ export async function scaffoldProject(
   }
   if (securityEnabled) {
     await writeFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig(), 'utf8')
+    await mkdir(resolve(projectRoot, 'storage/framework/rate-limits'), { recursive: true })
   }
   if (authEnabled) {
     await writeFile(resolve(projectRoot, 'config/auth.ts'), renderAuthConfig(), 'utf8')

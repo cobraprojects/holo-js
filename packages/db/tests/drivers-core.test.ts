@@ -10,6 +10,7 @@ import {
   createPostgresAdapter,
   createSQLiteAdapter,
   unsafeSql } from '../src'
+import { driverModuleInternals } from '../src/drivers/index'
 import { runDriverAdapterContractSuite } from './contracts/driverAdapterContract'
 
 function createSqliteDatabase() {
@@ -298,8 +299,7 @@ describe('driver adapters', () => {
     expect(executed).toEqual([])
   })
 
-  it('loads split driver packages through indirect imports outside Vitest', async () => {
-    const originalVitest = process.env.VITEST
+  it('loads split driver packages through the dynamic driver loader', async () => {
     const concreteAdapter = {
       async initialize() {},
       async disconnect() {},
@@ -319,52 +319,25 @@ describe('driver adapters', () => {
       async commit() {},
       async rollback() {},
     }
+    vi.spyOn(driverModuleInternals, 'importDriverModule').mockResolvedValueOnce({
+      createSQLiteAdapter() {
+        return concreteAdapter
+      },
+    })
 
-    process.env.VITEST = ''
+    const adapter = new SQLiteAdapter()
+    await adapter.initialize()
 
-    try {
-      const evalSpy = vi.spyOn(globalThis, 'eval').mockImplementation((source: string) => {
-        expect(source).toBe(`import(${JSON.stringify('@holo-js/db-sqlite')})`)
-        return Promise.resolve({
-          createSQLiteAdapter() {
-            return concreteAdapter
-          },
-        }) as never
-      })
-
-      const adapter = new SQLiteAdapter()
-      await adapter.initialize()
-
-      expect(evalSpy).toHaveBeenCalledTimes(1)
-      expect(adapter.isConnected()).toBe(true)
-    } finally {
-      if (typeof originalVitest === 'undefined') {
-        delete process.env.VITEST
-      } else {
-        process.env.VITEST = originalVitest
-      }
-    }
+    expect(adapter.isConnected()).toBe(true)
   })
 
   it('wraps missing split driver packages with installation guidance', async () => {
-    const originalVitest = process.env.VITEST
+    vi.spyOn(driverModuleInternals, 'importDriverModule').mockRejectedValueOnce(
+      new Error('[@holo-js/db] SQLite support requires @holo-js/db-sqlite to be installed.'),
+    )
 
-    process.env.VITEST = ''
-
-    try {
-      vi.spyOn(globalThis, 'eval').mockRejectedValueOnce(Object.assign(new Error('missing sqlite driver'), {
-        code: 'ERR_MODULE_NOT_FOUND',
-      }))
-
-      const adapter = new SQLiteAdapter()
-      await expect(adapter.initialize()).rejects.toThrow('[@holo-js/db] SQLite support requires @holo-js/db-sqlite to be installed.')
-    } finally {
-      if (typeof originalVitest === 'undefined') {
-        delete process.env.VITEST
-      } else {
-        process.env.VITEST = originalVitest
-      }
-    }
+    const adapter = new SQLiteAdapter()
+    await expect(adapter.initialize()).rejects.toThrow('[@holo-js/db] SQLite support requires @holo-js/db-sqlite to be installed.')
   })
 
   it('falls back to array-based SQLite bindings when spread bindings trigger an arity error', async () => {

@@ -44,15 +44,6 @@ type QueueRegistryState = {
   }>
 }
 
-function dynamicImport<TModule>(specifier: string): Promise<TModule> {
-  if (process.env.VITEST) {
-    return import(/* @vite-ignore */ specifier) as Promise<TModule>
-  }
-
-  const indirectEval = globalThis.eval as (source: string) => Promise<TModule>
-  return indirectEval(`import(${JSON.stringify(specifier)})`)
-}
-
 function getQueueRegistryState(): QueueRegistryState {
   const runtime = globalThis as typeof globalThis & {
     __holoQueueRegistry__?: QueueRegistryState
@@ -68,7 +59,8 @@ function getQueueRegistryState(): QueueRegistryState {
 /* v8 ignore start -- optional-peer absence is validated in published-package integration, not in this monorepo test graph */
 async function loadQueueModule(): Promise<QueueModule> {
   try {
-    return await dynamicImport<QueueModule>('@holo-js/queue')
+    const specifier = '@holo-js/queue' as string
+    return await import(specifier) as QueueModule
   } catch (error) {
     if (
       error

@@ -764,8 +764,9 @@ export default {
 
     expect(await readFile(join(securityRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/security": "${expectedHoloPackageRange}"`)
     expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain(`import { defineSecurityConfig, ip, limit } from '@holo-js/security'`)
-    expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain('login: limit.perMinute(5).by(({ request }) => ip(request))')
-    expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain('register: limit.perHour(10).by(({ request }) => ip(request))')
+    expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain('login: limit.perMinute(5).by(({ request }) => ip(request, true))')
+    expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain('register: limit.perHour(10).by(({ request }) => ip(request, true))')
+    expect(await stat(join(securityRoot, 'storage/framework/rate-limits'))).toBeDefined()
 
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: '!!!',
@@ -2759,7 +2760,11 @@ export function defineSecurityConfig(config) {
   return Object.freeze({ ...config })
 }
 
-export function ip(request) {
+export function ip(request, trustedProxy = false) {
+  if (!trustedProxy) {
+    return 'unknown'
+  }
+
   return request.headers.get('x-forwarded-for') ?? 'unknown'
 }
 
@@ -7327,8 +7332,10 @@ export default defineConfig({
     await expect(readFile(join(projectRoot, '.holo-js/generated', 'config.d.ts'), 'utf8')).resolves.toContain('"services": typeof')
     await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('interface HoloQueueJobRegistry')
     await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('import type * as holoQueueJobModule0 from')
-    await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('"reports.daily": import(\'@holo-js/queue\').ExportedQueueJobDefinition<typeof holoQueueJobModule0["dailyJob"]>')
-    await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('"send-email": import(\'@holo-js/queue\').QueueJobDefinition')
+    await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('ExportedQueueJobDefinition')
+    await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('QueueJobDefinition')
+    await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('"reports.daily": ExportedQueueJobDefinition<typeof holoQueueJobModule0["dailyJob"]>')
+    await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('"send-email": QueueJobDefinition')
     await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.not.toContain('server/jobs/send-email')
 
     const pnpmResolution = await cliInternals.resolvePackageManagerCommand(projectRoot, 'holo:build')
@@ -10200,51 +10207,55 @@ export function createSecurityRedisAdapter(config) {
 
     vi.stubGlobal('__holoCliSecurityCalls', [])
 
-    await expect(cliInternals.runRateLimitClearCommand(io.io, projectRoot, {
-      limiter: 'login',
-      key: 'user-1',
-    })).resolves.toBeUndefined()
+    try {
+      await expect(cliInternals.runRateLimitClearCommand(io.io, projectRoot, {
+        limiter: 'login',
+        key: 'user-1',
+      })).resolves.toBeUndefined()
 
-    expect(io.read().stdout).toContain('Cleared 2 rate-limit bucket(s).')
-    expect((globalThis as typeof globalThis & { __holoCliSecurityCalls?: Array<{ type: string, options?: unknown }> }).__holoCliSecurityCalls).toEqual([
-      {
-        type: 'adapter',
-        config: expect.objectContaining({
-          prefix: 'holo:rate-limit:',
-        }),
-      },
-      { type: 'connect' },
-      {
-        type: 'store',
-        config: expect.objectContaining({
-          rateLimit: expect.objectContaining({
-            driver: 'redis',
+      expect(io.read().stdout).toContain('Cleared 2 rate-limit bucket(s).')
+      expect((globalThis as typeof globalThis & { __holoCliSecurityCalls?: Array<{ type: string, options?: unknown }> }).__holoCliSecurityCalls).toEqual([
+        {
+          type: 'adapter',
+          config: expect.objectContaining({
+            prefix: 'holo:rate-limit:',
           }),
-        }),
-        options: expect.objectContaining({
-          projectRoot,
-        }),
-      },
-      {
-        type: 'configure',
-        options: expect.objectContaining({
+        },
+        { type: 'connect' },
+        {
+          type: 'store',
           config: expect.objectContaining({
             rateLimit: expect.objectContaining({
               driver: 'redis',
             }),
           }),
-        }),
-      },
-      {
-        type: 'clear',
-        options: {
-          limiter: 'login',
-          key: 'user-1',
+          options: expect.objectContaining({
+            projectRoot,
+          }),
         },
-      },
-      { type: 'close' },
-      { type: 'reset' },
-    ])
+        {
+          type: 'configure',
+          options: expect.objectContaining({
+            config: expect.objectContaining({
+              rateLimit: expect.objectContaining({
+                driver: 'redis',
+              }),
+            }),
+          }),
+        },
+        {
+          type: 'clear',
+          options: {
+            limiter: 'login',
+            key: 'user-1',
+          },
+        },
+        { type: 'close' },
+        { type: 'reset' },
+      ])
+    } finally {
+      vi.unstubAllGlobals()
+    }
   }, 30000)
 
   it('refreshes project discovery for queue runtime environments even when a registry already exists', async () => {

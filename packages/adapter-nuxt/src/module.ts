@@ -75,6 +75,22 @@ type StorageS3Module = {
   default: unknown
 }
 
+function hasModuleNotFoundCode(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false
+  }
+
+  if ('code' in error && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND') {
+    return true
+  }
+
+  if ('cause' in error) {
+    return hasModuleNotFoundCode((error as { cause?: unknown }).cause)
+  }
+
+  return false
+}
+
 interface NuxtHookContext {
   hook: (
     name: string,
@@ -106,12 +122,7 @@ async function importOptionalStorageModule(): Promise<StorageModule | undefined>
   try {
     return await import('@holo-js/storage') as StorageModule
   } catch (error) {
-    if (
-      error
-      && typeof error === 'object'
-      && 'code' in error
-      && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-    ) {
+    if (hasModuleNotFoundCode(error)) {
       return undefined
     }
 
@@ -122,25 +133,12 @@ async function importOptionalStorageModule(): Promise<StorageModule | undefined>
 /* v8 ignore next 15 -- optional-package absence is validated in published-package integration, not in this monorepo test graph */
 async function importOptionalStorageS3Module(): Promise<StorageS3Module | undefined> {
   try {
-    if (process.env.VITEST) {
-      const storageS3 = await import(/* @vite-ignore */ '@holo-js/storage-s3') as Partial<StorageS3Module>
-      return typeof storageS3.default === 'undefined'
-        ? undefined
-        : storageS3 as StorageS3Module
-    }
-
-    const indirectEval = globalThis.eval as (source: string) => Promise<Partial<StorageS3Module>>
-    const storageS3 = await indirectEval(`import(${JSON.stringify('@holo-js/storage-s3')})`)
+    const storageS3 = await import('@holo-js/storage-s3' as string) as Partial<StorageS3Module>
     return typeof storageS3.default === 'undefined'
       ? undefined
       : storageS3 as StorageS3Module
   } catch (error) {
-    if (
-      error
-      && typeof error === 'object'
-      && 'code' in error
-      && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-    ) {
+    if (hasModuleNotFoundCode(error)) {
       return undefined
     }
 
@@ -286,6 +284,7 @@ export default defineNuxtModule<ModuleOptions>({
 })
 
 export const moduleInternals = {
+  hasModuleNotFoundCode,
   hasLoadedConfigFile,
   importOptionalStorageS3Module,
 }

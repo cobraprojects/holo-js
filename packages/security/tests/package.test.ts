@@ -1,7 +1,7 @@
 import { access, mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { dirname, join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as securityExports from '../src'
 import security, {
   clearRateLimit,
@@ -159,7 +159,7 @@ describe('@holo-js/security package surface', () => {
 
   it('exports the package helpers and runtime seam', async () => {
     const limiter = limit.perMinute(5).by(({ request, values }) => {
-      return `${ip(request)}:${String(values?.email ?? 'guest')}`
+      return `${ip(request, true)}:${String(values?.email ?? 'guest')}`
     })
     const config = defineSecurityConfig({
       csrf: {
@@ -184,6 +184,15 @@ describe('@holo-js/security package surface', () => {
       prefix: 'holo:',
     })
     expect(defineRateLimiter(limiter)).toEqual(limiter)
+    expect(() => defineRateLimiter({
+      maxAttempts: 0,
+      decaySeconds: 60,
+    } as never)).toThrow('Rate limiter maxAttempts must be an integer greater than or equal to 1.')
+    expect(() => defineRateLimiter({
+      maxAttempts: 1,
+      decaySeconds: '60',
+      key: 'ip' as never,
+    } as never)).toThrow('Rate limiter key resolvers must be functions.')
     expect(typeof security.configureSecurityRuntime).toBe('function')
     expect(typeof security.getSecurityRuntime).toBe('function')
     expect(typeof security.csrf.token).toBe('function')
@@ -241,6 +250,7 @@ describe('@holo-js/security package surface', () => {
     })
 
     expect(ip(request)).toBe('203.0.113.7')
+    expect(ip(request, true)).toBe('203.0.113.7')
     expect(limit.perHour(10).define()).toEqual({
       maxAttempts: 10,
       decaySeconds: 3600,
@@ -554,7 +564,7 @@ describe('@holo-js/security csrf', () => {
         },
         rateLimit: {
           limiters: {
-            login: limit.perMinute(1).by(({ request }) => ip(request)),
+            login: limit.perMinute(1).by(({ request }) => ip(request, true)),
           },
         },
       }),
@@ -612,6 +622,84 @@ describe('@holo-js/security rate-limit drivers', () => {
       decaySeconds: 60,
     })
     expect(isolated.snapshot.attempts).toBe(1)
+  })
+
+  it('clones snapshot expiry dates, evicts oldest buckets, and closes the pruning timer', async () => {
+    const now = new Date('2026-04-16T12:00:00.000Z')
+    const store = createMemoryRateLimitStore({
+      now: () => now,
+      maxBuckets: 2,
+      pruneIntervalMs: 10_000,
+    })
+
+    const first = await store.hit('limiter:login|user:first', {
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })
+    first.snapshot.expiresAt.setFullYear(2000)
+
+    await store.hit('limiter:login|user:second', {
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })
+    await store.hit('limiter:login|user:third', {
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })
+
+    const recycled = await store.hit('limiter:login|user:first', {
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })
+
+    expect(recycled.snapshot.attempts).toBe(1)
+    expect(first.snapshot.expiresAt.getFullYear()).toBe(2000)
+    await store.close?.()
+  })
+
+  it('does not evict active buckets from the default memory store', async () => {
+    const store = createMemoryRateLimitStore()
+
+    for (let index = 0; index <= 1000; index += 1) {
+      await store.hit(`limiter:login|user:${index}`, {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+    }
+
+    const repeated = await store.hit('limiter:login|user:0', {
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })
+
+    expect(repeated.snapshot.attempts).toBe(2)
+    await store.close?.()
+  })
+
+  it('prunes expired memory buckets on a timer', async () => {
+    vi.useFakeTimers()
+
+    try {
+      let now = new Date('2026-04-16T12:00:00.000Z')
+      const store = createMemoryRateLimitStore({
+        now: () => now,
+        maxBuckets: 4,
+        pruneIntervalMs: 10,
+      })
+
+      await store.hit('limiter:login|user:pruned', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+      now = new Date('2026-04-16T12:02:00.000Z')
+
+      await vi.advanceTimersByTimeAsync(10)
+
+      await expect(store.clear('limiter:login|user:pruned')).resolves.toBe(false)
+      await store.close?.()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   describe('file rate-limit driver contract', () => {
@@ -682,6 +770,80 @@ describe('@holo-js/security rate-limit drivers', () => {
       })
       harness.setNow(new Date('2026-04-16T12:04:00.000Z'))
       await expect(store.clearByPrefix('limiter:login|')).resolves.toBe(0)
+    })
+
+    it('stores opaque file bucket metadata and still clears by prefix', async () => {
+      const harness = await createHarness()
+      const store = harness.createStore()
+      const key = 'limiter:login|user:pii@example.com'
+      const bucketPath = fileRateLimitDriverInternals.getBucketPath(harness.root, key)
+
+      await store.hit(key, {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+
+      const serialized = await readFile(bucketPath, 'utf8')
+      expect(serialized).not.toContain('pii@example.com')
+      expect(serialized).toContain('"namespace":"limiter:login|"')
+      expect(serialized).toContain('"keyHash":"')
+      expect(serialized).toContain('"prefixHashes":[')
+      await expect(store.clearByPrefix('limiter:login|')).resolves.toBe(1)
+    })
+
+    it('clears file buckets with prefixes narrower than the limiter namespace', async () => {
+      const harness = await createHarness()
+      const store = harness.createStore()
+
+      await store.hit('limiter:login|user:alpha@example.com', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+      await store.hit('limiter:login|user:beta@example.com', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+
+      await expect(store.clearByPrefix('limiter:login|user:alpha')).resolves.toBe(1)
+
+      const alpha = await store.hit('limiter:login|user:alpha@example.com', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+      const beta = await store.hit('limiter:login|user:beta@example.com', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+
+      expect(alpha.snapshot.attempts).toBe(1)
+      expect(beta.snapshot.attempts).toBe(2)
+    })
+
+    it('reads legacy file buckets written with plaintext keys', async () => {
+      const harness = await createHarness()
+      const store = harness.createStore()
+      const key = 'limiter:login|user:legacy@example.com'
+      const bucketPath = fileRateLimitDriverInternals.getBucketPath(harness.root, key)
+
+      await mkdir(dirname(bucketPath), { recursive: true })
+      await writeFile(bucketPath, JSON.stringify({
+        key,
+        attempts: 1,
+        expiresAt: '2026-04-16T12:01:00.000Z',
+      }), 'utf8')
+
+      const hit = await store.hit(key, {
+        maxAttempts: 3,
+        decaySeconds: 60,
+      })
+
+      expect(hit.snapshot.attempts).toBe(2)
+      const serialized = await readFile(bucketPath, 'utf8')
+      expect(serialized).not.toContain('"key":"')
+      expect(serialized).toContain('"namespace":"limiter:login|"')
+      expect(serialized).toContain('"keyHash":"')
+      expect(serialized).toContain('"prefixHashes":[')
+      await expect(store.clearByPrefix('limiter:login|')).resolves.toBe(1)
     })
 
     it('serializes concurrent hits on the same bucket so attempts are not lost', async () => {
@@ -1050,7 +1212,7 @@ describe('@holo-js/security rate limiting', () => {
         rateLimit: {
           limiters: {
             login: limit.perMinute(2).by(({ request, values }) => {
-              return `${ip(request)}:${String(values?.email ?? 'guest')}`
+              return `${ip(request, true)}:${String(values?.email ?? 'guest')}`
             }),
           },
         },
@@ -1114,7 +1276,7 @@ describe('@holo-js/security rate limiting', () => {
       config: defineSecurityConfig({
         rateLimit: {
           limiters: {
-            login: limit.perMinute(2).by(({ request }) => ip(request)),
+            login: limit.perMinute(2).by(({ request }) => ip(request, true)),
           },
         },
       }),
@@ -1174,6 +1336,10 @@ describe('@holo-js/security rate limiting', () => {
     await expect(clearRateLimit({
       all: true,
     })).resolves.toBe(1)
+    await expect(clearRateLimit({
+      all: true,
+      limiter: 'login',
+    })).rejects.toThrow('must use either { all: true } or a scoped limiter/key pair, not both')
   })
 
   it('rejects invalid limiter usage and missing runtime store wiring', async () => {

@@ -432,15 +432,20 @@ function parseSecurityInteger(
   label: string,
   options: { minimum?: number } = {},
 ): number {
-  if (typeof value === 'undefined') {
-    return fallback
-  }
+  const normalized = typeof value === 'undefined'
+    ? fallback
+    : typeof value === 'number'
+      ? value
+      : (() => {
+          const trimmed = value.trim()
+          if (!trimmed) {
+            return Number.NaN
+          }
 
-  const normalized = typeof value === 'number'
-    ? value
-    : Number.parseInt(value, 10)
+          return Number(trimmed)
+        })()
 
-  if (!Number.isInteger(normalized)) {
+  if (!Number.isFinite(normalized) || !Number.isInteger(normalized)) {
     throw new Error(`[Holo Security] ${label} must be an integer.`)
   }
 

@@ -24,19 +24,11 @@ function isModuleNotFoundError(error: unknown): boolean {
     && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
 }
 
-function dynamicImport<TModule>(specifier: string): Promise<TModule> {
-  if (process.env.VITEST) {
-    return import(/* @vite-ignore */ specifier) as Promise<TModule>
-  }
-
-  const indirectEval = globalThis.eval as (source: string) => Promise<TModule>
-  return indirectEval(`import(${JSON.stringify(specifier)})`)
-}
-
-/* v8 ignore next 12 -- optional-peer absence is validated in published-package integration, not in this monorepo test graph */
+/* v8 ignore next 14 -- optional-peer absence is validated in published-package integration, not in this monorepo test graph */
 async function loadRedisDriverModule(): Promise<RedisDriverModule> {
   try {
-    return await dynamicImport<RedisDriverModule>('@holo-js/queue-redis')
+    const specifier = '@holo-js/queue-redis' as string
+    return await import(specifier) as RedisDriverModule
   } catch (error) {
     if (isModuleNotFoundError(error)) {
       throw new Error('[@holo-js/queue] Redis queue support requires @holo-js/queue-redis to be installed.', {

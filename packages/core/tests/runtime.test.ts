@@ -184,7 +184,7 @@ export default defineSecurityConfig({
       path: './storage/framework/rate-limits',
     },
     limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request)),
+      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
     },
   },
 })
@@ -564,71 +564,27 @@ describe('@holo-js/core portable runtime', () => {
   })
 
   it('treats ERR_MODULE_NOT_FOUND optional imports as absent modules', async () => {
-    const originalVitest = process.env.VITEST
-    let evalSpy: ReturnType<typeof vi.spyOn> | undefined
-
-    process.env.VITEST = ''
-
-    try {
-      evalSpy = vi.spyOn(globalThis, 'eval').mockRejectedValueOnce(Object.assign(new Error('missing optional module'), {
-        code: 'ERR_MODULE_NOT_FOUND',
-      }))
-
-      await expect(
-        holoRuntimeInternals.moduleInternals.importOptionalModule('missing-optional-module'),
-      ).resolves.toBeUndefined()
-
-      expect(evalSpy).toHaveBeenCalledWith(`import(${JSON.stringify('missing-optional-module')})`)
-    } finally {
-      evalSpy?.mockRestore?.()
-      if (typeof originalVitest === 'undefined') {
-        delete process.env.VITEST
-      } else {
-        process.env.VITEST = originalVitest
-      }
-    }
+    await expect(
+      holoRuntimeInternals.moduleInternals.importOptionalModule('missing-optional-module'),
+    ).resolves.toBeUndefined()
   })
 
   it('treats resolved optional-import load failures as absent modules', async () => {
     const root = await createProject()
     const packageDir = join(root, 'node_modules', 'resolved-optional-module')
-    const modulePath = join(packageDir, 'index.mjs')
-    const originalVitest = process.env.VITEST
-    let evalSpy: ReturnType<typeof vi.spyOn> | undefined
 
     await mkdir(packageDir, { recursive: true })
     await writeFile(join(packageDir, 'package.json'), JSON.stringify({
       name: 'resolved-optional-module',
       type: 'module',
-      exports: './index.mjs',
+      exports: './missing.mjs',
     }), 'utf8')
-    await writeFile(modulePath, 'export default { ok: true }\n', 'utf8')
 
-    process.env.VITEST = ''
-
-    try {
-      const resolvedSpecifier = pathToFileURL(modulePath).href
-      evalSpy = vi.spyOn(globalThis, 'eval').mockImplementationOnce(async (source: string) => {
-        const importedSpecifier = JSON.parse(source.slice('import('.length, -1)) as string
-        throw new Error(`Failed to load url ${importedSpecifier}`)
-      })
-
-      await expect(
-        holoRuntimeInternals.moduleInternals.importOptionalModule('resolved-optional-module', {
-          projectRoot: root,
-        }),
-      ).resolves.toBeUndefined()
-
-      expect(evalSpy).toHaveBeenCalledTimes(1)
-      expect(evalSpy.mock.calls[0]?.[0]).toContain('resolved-optional-module/index.mjs')
-    } finally {
-      evalSpy?.mockRestore?.()
-      if (typeof originalVitest === 'undefined') {
-        delete process.env.VITEST
-      } else {
-        process.env.VITEST = originalVitest
-      }
-    }
+    await expect(
+      holoRuntimeInternals.moduleInternals.importOptionalModule('resolved-optional-module', {
+        projectRoot: root,
+      }),
+    ).resolves.toBeUndefined()
   })
 
   it('does not import discovered queue jobs during default runtime initialization', async () => {
@@ -2021,6 +1977,15 @@ export default defineQueueConfig({
     const root = await createProject()
     await writeBaseConfig(root)
     await writeSecurityConfig(root)
+    const originalConfig = {
+      csrf: {
+        enabled: false,
+        cookie: 'PREEXISTING-XSRF',
+      },
+      rateLimit: {
+        driver: 'memory' as const,
+      },
+    }
 
     const customStore = {
       hit: vi.fn(async () => ({
@@ -2041,11 +2006,7 @@ export default defineQueueConfig({
     }
 
     configureSecurityRuntime({
-      config: {
-        csrf: {
-          enabled: false,
-        },
-      },
+      config: originalConfig,
       rateLimitStore: customStore,
     })
 
@@ -2057,7 +2018,246 @@ export default defineQueueConfig({
 
     await runtime.shutdown()
 
-    expect(getSecurityRuntimeBindings()).toBeUndefined()
+    expect(getSecurityRuntimeBindings()).toEqual(expect.objectContaining({
+      config: expect.objectContaining({
+        csrf: expect.objectContaining({
+          enabled: false,
+          cookie: 'PREEXISTING-XSRF',
+        }),
+      }),
+      rateLimitStore: customStore,
+    }))
+    expect(getSecurityRuntimeBindings()?.csrfSigningKey).toBeUndefined()
+  })
+
+  it('closes managed security stores on shutdown instead of restoring them', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeSecurityConfig(root, `
+import { defineSecurityConfig, ip, limit } from '@holo-js/security'
+
+export default defineSecurityConfig({
+  csrf: {
+    enabled: true,
+  },
+  rateLimit: {
+    driver: 'memory',
+    limiters: {
+      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
+    },
+  },
+})
+`)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      const closeManagedStore = vi.fn(async () => {})
+      let configuredSecurityBindings: {
+        config: unknown
+        rateLimitStore?: unknown
+        csrfSigningKey?: string
+      } | undefined
+      const createRateLimitStoreFromConfig = vi.fn(() => ({
+        hit: vi.fn(async () => ({
+          limited: false,
+          snapshot: {
+            limiter: '',
+            key: 'custom',
+            attempts: 1,
+            maxAttempts: 5,
+            remainingAttempts: 4,
+            expiresAt: new Date('2026-04-16T12:01:00.000Z'),
+          },
+          retryAfterSeconds: 60,
+        })),
+        clear: vi.fn(async () => true),
+        clearByPrefix: vi.fn(async () => 0),
+        clearAll: vi.fn(async () => 0),
+        close: closeManagedStore,
+      }))
+      const configureSecurityRuntime = vi.fn((bindings?: {
+        config: unknown
+        rateLimitStore?: unknown
+        csrfSigningKey?: string
+      }) => {
+        configuredSecurityBindings = bindings ? {
+          config: bindings.config,
+          rateLimitStore: bindings.rateLimitStore,
+          csrfSigningKey: bindings.csrfSigningKey,
+        } : undefined
+      })
+      const resetSecurityRuntime = vi.fn(() => {
+        configuredSecurityBindings = undefined
+      })
+
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
+        if (specifier === '@holo-js/security') {
+          return {
+            configureSecurityRuntime,
+            defineSecurityConfig(config: unknown) {
+              return config
+            },
+            createRateLimitStoreFromConfig,
+            getSecurityRuntimeBindings: () => configuredSecurityBindings,
+            ip() {
+              return '203.0.113.7'
+            },
+            limit: {
+              perMinute() {
+                return {
+                  by(resolver: unknown) {
+                    return {
+                      maxAttempts: 5,
+                      decaySeconds: 60,
+                      key: resolver,
+                    }
+                  },
+                }
+              },
+            },
+            resetSecurityRuntime,
+          } as never
+        }
+
+        return await originalImportOptionalModule(specifier, options)
+      })
+
+      const runtime = await portable.createHolo(root)
+      await runtime.initialize()
+      expect(configuredSecurityBindings).toBeDefined()
+
+      await runtime.shutdown()
+
+      expect(closeManagedStore).toHaveBeenCalledTimes(1)
+      expect(configuredSecurityBindings).toBeUndefined()
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
+  it('closes a managed security store when security config is removed', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      const closeManagedStore = vi.fn(async () => {})
+      const runtimeState = globalThis as typeof globalThis & {
+        __holoRuntime__?: {
+          securityRateLimitStoreManaged?: boolean
+        }
+        __holoSecurityRuntime__?: {
+          bindings?: {
+            config: unknown
+            rateLimitStore?: unknown
+            csrfSigningKey?: string
+          }
+        }
+      }
+      const resetSecurityRuntime = vi.fn(() => {
+        runtimeState.__holoSecurityRuntime__ = undefined
+      })
+      const configuredSecurityBindings = {
+        config: {
+          csrf: {
+            enabled: true,
+          },
+          rateLimit: {
+            driver: 'memory',
+          },
+        },
+        rateLimitStore: {
+          hit: vi.fn(async () => ({
+            limited: false,
+            snapshot: {
+              limiter: '',
+              key: 'custom',
+              attempts: 1,
+              maxAttempts: 5,
+              remainingAttempts: 4,
+              expiresAt: new Date('2026-04-16T12:01:00.000Z'),
+            },
+            retryAfterSeconds: 60,
+          })),
+          clear: vi.fn(async () => true),
+          clearByPrefix: vi.fn(async () => 0),
+          clearAll: vi.fn(async () => 0),
+          close: closeManagedStore,
+        },
+      }
+
+      runtimeState.__holoRuntime__ = {
+        ...(runtimeState.__holoRuntime__ ?? {}),
+        securityRateLimitStoreManaged: true,
+      }
+      runtimeState.__holoSecurityRuntime__ = {
+        bindings: configuredSecurityBindings,
+      }
+
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
+        if (specifier === '@holo-js/security') {
+          return {
+            configureSecurityRuntime(bindings?: {
+              config: unknown
+              rateLimitStore?: unknown
+              csrfSigningKey?: string
+            }) {
+              runtimeState.__holoSecurityRuntime__ = bindings
+                ? { bindings }
+                : undefined
+            },
+            defineSecurityConfig(config: unknown) {
+              return config
+            },
+            createRateLimitStoreFromConfig() {
+              return configuredSecurityBindings.rateLimitStore as never
+            },
+            getSecurityRuntimeBindings: () => runtimeState.__holoSecurityRuntime__?.bindings,
+            ip() {
+              return '203.0.113.7'
+            },
+            limit: {
+              perMinute() {
+                return {
+                  by(resolver: unknown) {
+                    return {
+                      maxAttempts: 5,
+                      decaySeconds: 60,
+                      key: resolver,
+                    }
+                  },
+                }
+              },
+            },
+            resetSecurityRuntime,
+          } as never
+        }
+
+        return await originalImportOptionalModule(specifier, options)
+      })
+
+      const runtime = await portable.createHolo(root)
+      await runtime.initialize()
+
+      expect(closeManagedStore).toHaveBeenCalledTimes(1)
+
+      await runtime.shutdown()
+
+      expect(resetSecurityRuntime).toHaveBeenCalled()
+      expect(runtimeState.__holoRuntime__?.securityRateLimitStoreManaged).toBe(true)
+      runtimeState.__holoRuntime__ = undefined
+      runtimeState.__holoSecurityRuntime__ = undefined
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
   })
 
   it('preserves externally configured security bindings when no security config file exists', async () => {
@@ -2161,7 +2361,7 @@ export default defineSecurityConfig({
       path: './storage/framework/first-rate-limits',
     },
     limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request)),
+      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
     },
   },
 })
@@ -2189,7 +2389,7 @@ export default defineSecurityConfig({
   rateLimit: {
     driver: 'memory',
     limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request)),
+      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
     },
   },
 })
@@ -2253,7 +2453,7 @@ export default defineSecurityConfig({
       prefix: 'holo:rate-limit:',
     },
     limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request)),
+      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
     },
   },
 })
@@ -2366,7 +2566,7 @@ export default defineSecurityConfig({
       prefix: 'holo:rate-limit:',
     },
     limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request)),
+      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
     },
   },
 })
@@ -2447,13 +2647,15 @@ export default defineSecurityConfig({
       const portable = await import('../src/portable')
       const closeRedisAdapter = vi.fn(async () => {})
 
-      ;(globalThis as typeof globalThis & {
+      const runtimeState = globalThis as typeof globalThis & {
         __holoRuntime__?: {
           securityRedisAdapter?: {
             close?(): Promise<void>
           }
         }
-      }).__holoRuntime__ = {
+      }
+      runtimeState.__holoRuntime__ = {
+        ...(runtimeState.__holoRuntime__ ?? {}),
         securityRedisAdapter: {
           close: closeRedisAdapter,
         },
@@ -2486,7 +2688,7 @@ export default defineSecurityConfig({
       prefix: 'holo:rate-limit:',
     },
     limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request)),
+      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
     },
   },
 })
@@ -2507,13 +2709,15 @@ export default defineSecurityConfig({
         close: closeNextRedisAdapter,
       }))
 
-      ;(globalThis as typeof globalThis & {
+      const runtimeState = globalThis as typeof globalThis & {
         __holoRuntime__?: {
           securityRedisAdapter?: {
             close?(): Promise<void>
           }
         }
-      }).__holoRuntime__ = {
+      }
+      runtimeState.__holoRuntime__ = {
+        ...(runtimeState.__holoRuntime__ ?? {}),
         securityRedisAdapter: {
           close: closePreviousRedisAdapter,
         },
@@ -2604,7 +2808,7 @@ export default defineSecurityConfig({
       prefix: 'holo:rate-limit:',
     },
     limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request)),
+      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
     },
   },
 })
@@ -2661,13 +2865,15 @@ export default defineSecurityConfig({
         close: closeNextRedisAdapter,
       }))
 
-      ;(globalThis as typeof globalThis & {
+      const runtimeState = globalThis as typeof globalThis & {
         __holoRuntime__?: {
           securityRedisAdapter?: {
             close?(): Promise<void>
           }
         }
-      }).__holoRuntime__ = {
+      }
+      runtimeState.__holoRuntime__ = {
+        ...(runtimeState.__holoRuntime__ ?? {}),
         securityRedisAdapter: {
           close: closePreviousRedisAdapter,
         },
@@ -2775,7 +2981,7 @@ export default defineSecurityConfig({
       prefix: 'holo:rate-limit:',
     },
     limiters: {
-      login: limit.perMinute(5).by(({ request }) => ip(request)),
+      login: limit.perMinute(5).by(({ request }) => ip(request, true)),
     },
   },
 })
@@ -2858,7 +3064,7 @@ export default defineBroadcastConfig({
 
     const requests: Request[] = []
     let requestCount = 0
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
       requestCount += 1
       const request = input instanceof Request ? input : new Request(input, init)
       requests.push(request.clone())
@@ -2977,7 +3183,7 @@ export default defineBroadcastConfig({
 })
 `)
 
-    vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+    vi.stubGlobal('fetch', vi.fn((_input: Request | string | URL, init?: RequestInit) => {
       return new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener('abort', () => {
           reject(Object.assign(new Error('Aborted'), {
@@ -3072,7 +3278,7 @@ export default defineBroadcastConfig({
 `)
 
     const initialRequests: Request[] = []
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
       const request = input instanceof Request ? input : new Request(input, init)
       initialRequests.push(request.clone())
       return new Response(JSON.stringify({ ok: true }), {
@@ -4077,7 +4283,7 @@ describe('@holo-js/core helper coverage', () => {
 
     const bridgedMailSends: unknown[] = []
     const notificationMailer = holoRuntimeInternals.createCoreNotificationMailSender({
-      async sendMail(message) {
+      async sendMail(message: unknown) {
         bridgedMailSends.push(message)
       },
     } as never)
@@ -4125,7 +4331,7 @@ describe('@holo-js/core helper coverage', () => {
 
     const broadcastRawCalls: unknown[] = []
     const notificationBroadcaster = holoRuntimeInternals.createCoreNotificationBroadcaster({
-      async broadcastRaw(input) {
+      async broadcastRaw(input: unknown) {
         broadcastRawCalls.push(input)
       },
     } as never)
@@ -4207,7 +4413,7 @@ describe('@holo-js/core helper coverage', () => {
 
     const authMailSends: unknown[] = []
     const authMailHook = holoRuntimeInternals.createAuthMailDeliveryHook({
-      async sendMail(message) {
+      async sendMail(message: unknown) {
         authMailSends.push(message)
       },
     } as never)
@@ -4263,12 +4469,12 @@ describe('@holo-js/core helper coverage', () => {
     let emailVerificationRoute: unknown
     let passwordResetRoute: unknown
     const authNotificationsHook = holoRuntimeInternals.createAuthNotificationsDeliveryHook({
-      defineNotification(definition) {
+      defineNotification(definition: unknown) {
         return definition
       },
       notifyUsing() {
         return {
-          channel(_channel, route) {
+          channel(_channel: string, route: unknown) {
             if (typeof emailVerificationRoute === 'undefined') {
               emailVerificationRoute = route
             } else {
@@ -4276,7 +4482,7 @@ describe('@holo-js/core helper coverage', () => {
             }
             return this
           },
-          async notify(notification) {
+          async notify(notification: { build: { email: (context: { name: string }) => unknown } }) {
             notificationDeliveries.push({
               route: typeof passwordResetRoute === 'undefined'
                 ? emailVerificationRoute

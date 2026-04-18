@@ -10,6 +10,15 @@ import { createHolo, holoRuntimeInternals, resetHoloRuntime } from '../src'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
 const tempDirs: string[] = []
+type VerificationTokenLike = {
+  readonly id: string
+  readonly plainTextToken: string
+}
+type SessionRecordLike = {
+  readonly id: string
+  readonly store: string
+  readonly rememberTokenHash?: string
+}
 
 async function createProject(options: {
   session?: 'file' | 'database' | false
@@ -316,7 +325,7 @@ export default {
       passwordConfirmation: 'supersecret',
     })
 
-    const verificationToken = await runtime.auth?.verification.create(registered!)
+    const verificationToken = await runtime.auth?.verification.create(registered!) as VerificationTokenLike | undefined
     await runtime.auth?.passwords.request('ava@example.com')
 
     expect(mailer.send).toHaveBeenCalledTimes(2)
@@ -440,7 +449,7 @@ export default {
       passwordConfirmation: 'supersecret',
     })
 
-    const verificationToken = await runtime.auth?.verification.create(registered!)
+    const verificationToken = await runtime.auth?.verification.create(registered!) as VerificationTokenLike | undefined
     await runtime.auth?.passwords.request('ava@example.com')
 
     expect(mailer.send).toHaveBeenCalledTimes(2)
@@ -657,7 +666,7 @@ export default {
       passwordConfirmation: 'supersecret',
     })
 
-    const verificationToken = await runtime.auth?.verification.create(registered!)
+    const verificationToken = await runtime.auth?.verification.create(registered!) as VerificationTokenLike | undefined
     await runtime.auth?.passwords.request('ava@example.com')
 
     expect(listFakeSentMails()).toHaveLength(2)
@@ -1177,7 +1186,7 @@ export default {
       session: false,
     })
     const runtime = await createHolo(root, {
-      environment: 'development',
+      envName: 'development',
     })
 
     await runtime.initialize()
@@ -1191,7 +1200,7 @@ export default {
           provider: 'users',
         },
       },
-    })
+    }) as SessionRecordLike | undefined
 
     expect(createdSession?.store).toBe('file')
   })
@@ -1214,7 +1223,7 @@ export default defineSessionConfig({
 })
 `, 'utf8')
     const runtime = await createHolo(root, {
-      environment: 'development',
+      envName: 'development',
     })
 
     await runtime.initialize()
@@ -1233,7 +1242,7 @@ export default defineSessionConfig({
       data: {
         source: 'default-database-connection',
       },
-    })
+    }) as SessionRecordLike | undefined
 
     expect(createdSession?.store).toBe('database')
     await expect(runtime.session?.read(String(createdSession?.id))).resolves.toMatchObject({
@@ -1395,7 +1404,7 @@ export default undefined
 
     await runtime.initialize()
 
-    const socialBindings = await holoRuntimeInternals.createCoreSocialBindings(runtime.loadedConfig, await import('../../session/src/index.ts'))
+    const socialBindings = await holoRuntimeInternals.createCoreSocialBindings(runtime.loadedConfig, await import('@holo-js/session'))
 
     await socialBindings.stateStore.create({
       provider: 'google',
@@ -1584,7 +1593,7 @@ export default undefined
 
     await runtime.initialize()
 
-    const socialBindings = await holoRuntimeInternals.createCoreSocialBindings(runtime.loadedConfig, await import('../../session/src/index.ts'))
+    const socialBindings = await holoRuntimeInternals.createCoreSocialBindings(runtime.loadedConfig, await import('@holo-js/session'))
     const sessionRuntime = runtime.session!
 
     await sessionRuntime.create({
@@ -1686,7 +1695,7 @@ export default undefined
           },
         },
       },
-    }, await import('../../session/src/index.ts'))
+    }, await import('@holo-js/session'))
     const originalTable = DB.table.bind(DB)
     const tableSpy = vi.spyOn(DB, 'table')
       .mockImplementation(((tableName: string) => {
@@ -1727,7 +1736,7 @@ export default undefined
         ...runtime.loadedConfig.auth,
         guards: {} as never,
       },
-    }, await import('../../session/src/index.ts'))
+    }, await import('@holo-js/session'))
     tableSpy.mockImplementation(((tableName: string) => {
       if (tableName !== 'auth_identities') {
         return originalTable(tableName as never)
@@ -1845,7 +1854,7 @@ export default undefined
 
     await runtime.initialize()
 
-    const socialModule = await import('../../auth-social/src/index.ts')
+    const socialModule = await import('@holo-js/auth-social')
     expect(socialModule.socialAuthInternals.getBindings().encryptionKey).toBe('phase-6-encryption-key')
   })
 
@@ -2531,7 +2540,7 @@ export default {
       data: {
         guard: 'web',
       },
-    })
+    }) as SessionRecordLike | undefined
     expect(createdSession?.store).toBe('database')
     expect(await runtime.session?.read(String(createdSession?.id))).toMatchObject({
       id: createdSession?.id,
@@ -2635,7 +2644,7 @@ export default {
 `, 'utf8')
 
     const runtime = await createHolo(root, {
-      environment: 'development',
+      envName: 'development',
     })
     await runtime.initialize()
 
@@ -2828,7 +2837,7 @@ export default {
 `, 'utf8')
 
     const runtime = await createHolo(root, {
-      environment: 'development',
+      envName: 'development',
     })
     await runtime.initialize()
 
@@ -2889,7 +2898,7 @@ export default {
       },
     ])
 
-    const verificationToken = await runtime.auth?.verification.create(registered!)
+    const verificationToken = await runtime.auth?.verification.create(registered!) as VerificationTokenLike | undefined
     expect(verificationToken).toMatchObject({
       userId: 'user-1',
     })
@@ -2926,7 +2935,7 @@ export default {
       session: 'database',
     })
     const runtime = await createHolo(root, {
-      environment: 'development',
+      envName: 'development',
     })
     await runtime.initialize()
 
@@ -3171,7 +3180,7 @@ export const holoModelPendingSchema = true
       workos: true,
     })
     const runtime = await createHolo(root, {
-      environment: 'development',
+      envName: 'development',
     })
     await runtime.initialize()
 
@@ -3295,9 +3304,9 @@ export const holoModelPendingSchema = true
       session: 'database',
     })
     const runtime = await createHolo(root, {
-      environment: 'development',
+      envName: 'development',
     })
-    const sessionModule = await import('../../session/src/index.ts')
+    const sessionModule = await import('@holo-js/session')
 
     await expect(holoRuntimeInternals.createCoreSessionStores(root, {
       ...runtime.loadedConfig,

@@ -155,6 +155,27 @@ describe('@holo-js/config security normalization', () => {
       rateLimit: {
         limiters: {
           login: {
+            maxAttempts: '5abc',
+            decaySeconds: 60,
+          },
+        },
+      },
+    })).toThrow('maxAttempts must be an integer')
+
+    expect(() => normalizeSecurityConfig({
+      rateLimit: {
+        limiters: {
+          login: {
+            decaySeconds: 60,
+          } as never,
+        },
+      },
+    })).toThrow('maxAttempts must be greater than or equal to 1')
+
+    expect(() => normalizeSecurityConfig({
+      rateLimit: {
+        limiters: {
+          login: {
             maxAttempts: 5,
             decaySeconds: 60,
             key: 'ip' as never,

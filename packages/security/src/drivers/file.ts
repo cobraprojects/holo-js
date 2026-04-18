@@ -4,13 +4,23 @@ import { dirname, join } from 'node:path'
 import type { SecurityRateLimitHitResult, SecurityRateLimitStore } from '../contracts'
 
 type StoredFileRateLimitBucket = {
+  namespace: string
+  keyHash: string
+  prefixHashes: string[]
+  attempts: number
+  expiresAt: string
+}
+
+type StoredLegacyFileRateLimitBucket = {
   key: string
   attempts: number
   expiresAt: string
 }
 
 type FileRateLimitBucket = {
-  key: string
+  namespace: string
+  keyHash: string
+  prefixHashes: readonly string[]
   attempts: number
   expiresAt: Date
 }
@@ -25,6 +35,21 @@ function createBucketHash(key: string): string {
   return createHash('sha256').update(key).digest('hex')
 }
 
+function createBucketNamespace(key: string): string {
+  const separatorIndex = key.indexOf('|')
+  return separatorIndex >= 0 ? key.slice(0, separatorIndex + 1) : key
+}
+
+function createBucketPrefixHashes(key: string): string[] {
+  const prefixHashes: string[] = []
+
+  for (let index = 1; index <= key.length; index += 1) {
+    prefixHashes.push(createBucketHash(key.slice(0, index)))
+  }
+
+  return prefixHashes
+}
+
 function getBucketPath(root: string, key: string): string {
   const hash = createBucketHash(key)
   return join(root, hash.slice(0, 2), hash.slice(2, 4), `${hash}.json`)
@@ -32,18 +57,50 @@ function getBucketPath(root: string, key: string): string {
 
 function serializeBucket(bucket: FileRateLimitBucket): string {
   return JSON.stringify({
-    key: bucket.key,
+    namespace: bucket.namespace,
+    keyHash: bucket.keyHash,
+    prefixHashes: [...bucket.prefixHashes],
     attempts: bucket.attempts,
     expiresAt: bucket.expiresAt.toISOString(),
   } satisfies StoredFileRateLimitBucket)
 }
 
 function deserializeBucket(raw: string): FileRateLimitBucket {
-  const parsed = JSON.parse(raw) as Partial<StoredFileRateLimitBucket>
-  const { key, attempts, expiresAt: expiresAtValue } = parsed
+  const parsed = JSON.parse(raw) as Partial<StoredFileRateLimitBucket & StoredLegacyFileRateLimitBucket>
+  const legacyKey = typeof parsed.key === 'string' && parsed.key.length > 0
+    ? parsed.key
+    : undefined
+  const namespace = typeof parsed.namespace === 'string' && parsed.namespace.length > 0
+    ? parsed.namespace
+    : legacyKey
+      ? createBucketNamespace(legacyKey)
+      : undefined
+  const keyHash = typeof parsed.keyHash === 'string' && parsed.keyHash.length > 0
+    ? parsed.keyHash
+    : legacyKey
+      ? createBucketHash(legacyKey)
+      : undefined
+  const prefixHashes = Array.isArray(parsed.prefixHashes) && parsed.prefixHashes.every(
+    value => typeof value === 'string' && value.length > 0,
+  )
+    ? parsed.prefixHashes
+    : legacyKey
+      ? createBucketPrefixHashes(legacyKey)
+      : namespace
+        ? createBucketPrefixHashes(namespace)
+      : undefined
+  const { attempts, expiresAt: expiresAtValue } = parsed
 
-  if (typeof key !== 'string' || key.length === 0) {
-    throw new TypeError('[@holo-js/security] File rate-limit buckets must contain a non-empty string key.')
+  if (typeof namespace !== 'string' || namespace.length === 0) {
+    throw new TypeError('[@holo-js/security] File rate-limit buckets must contain a non-empty string namespace.')
+  }
+
+  if (typeof keyHash !== 'string' || keyHash.length === 0) {
+    throw new TypeError('[@holo-js/security] File rate-limit buckets must contain a non-empty string key hash.')
+  }
+
+  if (!Array.isArray(prefixHashes) || prefixHashes.length === 0) {
+    throw new TypeError('[@holo-js/security] File rate-limit buckets must contain non-empty prefix hashes.')
   }
 
   if (typeof attempts !== 'number' || !Number.isInteger(attempts) || attempts < 1) {
@@ -61,7 +118,9 @@ function deserializeBucket(raw: string): FileRateLimitBucket {
   }
 
   return Object.freeze({
-    key,
+    namespace,
+    keyHash,
+    prefixHashes: Object.freeze([...prefixHashes]),
     attempts: normalizedAttempts,
     expiresAt,
   })
@@ -186,13 +245,15 @@ function createSnapshot(
   bucket: FileRateLimitBucket,
   maxAttempts: number,
 ): SecurityRateLimitHitResult['snapshot'] {
+  const expiresAt = new Date(bucket.expiresAt.getTime())
+
   return Object.freeze({
     limiter: '',
     key,
     attempts: bucket.attempts,
     maxAttempts,
     remainingAttempts: Math.max(0, maxAttempts - bucket.attempts),
-    expiresAt: bucket.expiresAt,
+    expiresAt,
   })
 }
 
@@ -211,7 +272,7 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
       }, async () => {
         const existing = await readBucket(path)
 
-        if (existing && existing.key !== key) {
+        if (existing && existing.keyHash !== createBucketHash(key)) {
           throw new Error(`[@holo-js/security] File rate-limit bucket collision detected for key "${key}".`)
         }
 
@@ -225,7 +286,9 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
               attempts: existing.attempts + 1,
             }
           : {
-              key,
+              namespace: createBucketNamespace(key),
+              keyHash: createBucketHash(key),
+              prefixHashes: Object.freeze(createBucketPrefixHashes(key)),
               attempts: 1,
               expiresAt: new Date(now.getTime() + hitOptions.decaySeconds * 1000),
             }
@@ -246,7 +309,7 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
         timeoutMs: lockTimeoutMs,
       }, async () => {
         const existing = await readBucket(path)
-        if (!existing || existing.key !== key) {
+        if (!existing || existing.keyHash !== createBucketHash(key)) {
           return false
         }
 
@@ -274,7 +337,7 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
             return false
           }
 
-          if (!bucket.key.startsWith(prefix)) {
+          if (!bucket.prefixHashes.includes(createBucketHash(prefix))) {
             return false
           }
 

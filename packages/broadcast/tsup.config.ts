@@ -9,6 +9,7 @@ export default defineConfig({
     contracts: 'src/contracts.ts',
     runtime: 'src/runtime.ts',
   },
+  external: ['ioredis'],
   format: ['esm'],
   dts: true,
   clean: true,

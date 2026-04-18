@@ -1,3 +1,8 @@
+import { execFile } from 'node:child_process'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { QueueDriverFactory, QueueJobEnvelope, QueueJsonValue } from '@holo-js/queue'
 import {
@@ -22,6 +27,8 @@ import {
   resetEventsRuntime,
   unregisterListener,
 } from '../src'
+
+const execFileAsync = promisify(execFile)
 
 function createAsyncDriverFactory(
   driverName: 'redis' | 'database',
@@ -69,6 +76,29 @@ afterEach(() => {
 })
 
 describe('@holo-js/events queue integration', () => {
+  it('keeps the optional queue import visible to bundlers without a bare package specifier', async () => {
+    const outdir = await mkdtemp(join(tmpdir(), 'holo-events-queue-bundle-'))
+
+    try {
+      await execFileAsync('bun', [
+        'build',
+        resolve(import.meta.dirname, '../src/queue.ts'),
+        '--target=node',
+        '--format=esm',
+        '--external=@holo-js/queue',
+        `--outdir=${outdir}`,
+      ])
+
+      const output = await readFile(join(outdir, 'queue.js'), 'utf8')
+
+      expect(output).toContain('const specifier = "@holo-js/queue"')
+      expect(output).toContain('import(specifier)')
+      expect(output).not.toContain('import("@holo-js/queue")')
+    } finally {
+      await rm(outdir, { recursive: true, force: true })
+    }
+  })
+
   it('auto-registers the internal listener job and executes queued listeners through the sync queue driver', async () => {
     registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
       name: 'user.registered',
@@ -388,31 +418,14 @@ describe('@holo-js/events queue integration', () => {
     expect(getRegisteredQueueJob(EVENTS_INVOKE_LISTENER_JOB)?.name).toBe(EVENTS_INVOKE_LISTENER_JOB)
   })
 
-  it('loads the queue package through the indirect loader outside Vitest', async () => {
-    const originalVitest = process.env.VITEST
-    const queueModule = {
-      defineJob: vi.fn(),
-      dispatch: vi.fn(),
-      getRegisteredQueueJob: vi.fn(),
-      registerQueueJob: vi.fn(),
-    }
+  it('loads the queue package through the dynamic loader', async () => {
+    const queueModule = await eventQueueInternals.loadQueueModule()
 
-    process.env.VITEST = ''
-
-    try {
-      const evalSpy = vi.spyOn(globalThis, 'eval').mockImplementation((source: string) => {
-        expect(source).toBe(`import(${JSON.stringify('@holo-js/queue')})`)
-        return Promise.resolve(queueModule) as never
-      })
-
-      await expect(eventQueueInternals.loadQueueModule()).resolves.toBe(queueModule)
-      expect(evalSpy).toHaveBeenCalledTimes(1)
-    } finally {
-      if (typeof originalVitest === 'undefined') {
-        delete process.env.VITEST
-      } else {
-        process.env.VITEST = originalVitest
-      }
-    }
+    expect(queueModule).toMatchObject({
+      defineJob: expect.any(Function),
+      dispatch: expect.any(Function),
+      getRegisteredQueueJob: expect.any(Function),
+      registerQueueJob: expect.any(Function),
+    })
   })
 })

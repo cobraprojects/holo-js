@@ -467,8 +467,8 @@ async function loadRedisScalingModule(
   try {
     /* v8 ignore next 4 -- exercised only when ioredis is installed and no test loader override is provided. */
     const loadDefaultModule = async (): Promise<unknown> => {
-      const specifier = 'ioredis'
-      return await import(specifier)
+      const specifier = 'ioredis' as string
+      return await import(/* webpackIgnore: true */ specifier)
     }
     /* v8 ignore next -- covered in integration when ioredis is installed in consumer apps; unit tests inject loadModule for deterministic behavior. */
     const loaded = (await (loadModule ? loadModule() : loadDefaultModule())) as RedisScalingModuleLike

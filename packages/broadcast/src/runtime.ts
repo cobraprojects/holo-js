@@ -100,14 +100,7 @@ function getRuntimeBindings(): BroadcastRuntimeBindings {
 }
 
 function dynamicImport<TModule>(specifier: string): Promise<TModule> {
-  /* v8 ignore next 3 -- exercised indirectly by the test runner's own module loader */
-  if (process.env.VITEST) {
-    return import(/* @vite-ignore */ specifier) as Promise<TModule>
-  }
-
-  // biome-ignore security/noGlobalEval: dynamic import via indirectEval/globalThis.eval is required for non-Vitest dynamic loading.
-  const indirectEval = globalThis.eval as (source: string) => Promise<TModule>
-  return indirectEval(`import(${JSON.stringify(specifier)})`)
+  return import(specifier as string) as Promise<TModule>
 }
 
 async function loadQueueModule(): Promise<QueueModule> {
@@ -148,7 +141,20 @@ async function loadQueueModule(): Promise<QueueModule> {
 async function loadDbModule(): Promise<DbModule | null> {
   const override = getRuntimeState().loadDbModule
   if (override) {
-    return await override()
+    try {
+      return await override()
+    } catch (error) {
+      if (
+        error
+        && typeof error === 'object'
+        && 'code' in error
+        && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
+      ) {
+        return null
+      }
+
+      throw error
+    }
   }
 
   try {

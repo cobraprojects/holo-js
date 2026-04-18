@@ -51,10 +51,10 @@ export default defineSecurityConfig({
     limiters: {
       login: limit.perMinute(5).by(({ request, values }) => {
         const email = typeof values?.email === 'string' ? values.email.toLowerCase() : 'guest'
-        return `${ip(request)}:${email}`
+        return `${ip(request, true)}:${email}`
       }),
-      register: limit.perHour(10).by(({ request }) => ip(request)),
-      api: limit.perMinute(60).by(({ request }) => ip(request)),
+      register: limit.perHour(10).by(({ request }) => ip(request, true)),
+      api: limit.perMinute(60).by(({ request }) => ip(request, true)),
     },
   },
 })
@@ -264,9 +264,9 @@ export default defineSecurityConfig({
     driver: 'file',
     limiters: {
       login: limit.perMinute(5).by(({ request, values }) => {
-        return `${ip(request)}:${String(values?.email ?? 'guest')}`
+        return `${ip(request, true)}:${String(values?.email ?? 'guest')}`
       }),
-      register: limit.perHour(10).by(({ request }) => ip(request)),
+      register: limit.perHour(10).by(({ request }) => ip(request, true)),
     },
   },
 })
@@ -331,11 +331,11 @@ Use `redis` when the app runs on multiple instances or when rate-limit state mus
 
 ## Nuxt request handling
 
-Security-aware `validate(...)` calls need a real web `Request`. In Nuxt, build one from the event when you
-want CSRF or throttling:
+Security-aware `validate(...)` calls need a real web `Request` or request-like event. In Nuxt, pass the h3
+event directly when you want CSRF or throttling:
 
 ```ts
-import { defineEventHandler, getHeaders, getRequestURL, readRawBody } from 'h3'
+import { defineEventHandler } from 'h3'
 import { field, schema, validate } from '@holo-js/forms'
 
 const loginForm = schema({
@@ -344,13 +344,7 @@ const loginForm = schema({
 })
 
 export default defineEventHandler(async (event) => {
-  const request = new Request(getRequestURL(event), {
-    method: event.method,
-    headers: getHeaders(event),
-    body: await readRawBody(event) ?? undefined,
-  })
-
-  const submission = await validate(request, loginForm, {
+  const submission = await validate(event, loginForm, {
     csrf: true,
     throttle: 'login',
   })
@@ -365,7 +359,7 @@ export default defineEventHandler(async (event) => {
 })
 ```
 
-If you pass only a plain body object, validation still works, but CSRF and request-based limiter keys cannot.
+If you pass only a plain body object, validation still works, but CSRF and request-based limiter keys cannot be generated.
 
 ## Typing
 
@@ -375,7 +369,7 @@ Examples:
 
 - `defineSecurityConfig(...)` infers `memory`, `file`, and `redis` driver config correctly
 - limiter callbacks infer `request` and `values`
-- `validate(request, schema, { csrf, throttle })` keeps the schema-derived success and failure types
+- `validate(requestOrEvent, schema, { csrf, throttle })` keeps the schema-derived success and failure types
 - `useForm(schema, { csrf: true })` keeps field, value, and error inference
 - public contracts such as `SecurityRateLimitStore`, `SecurityRateLimitHitResult`, and
   `SecurityRateLimitRedisDriverAdapter` are exported when you need explicit annotations

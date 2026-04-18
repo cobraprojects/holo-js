@@ -82,14 +82,16 @@ export function runRateLimitDriverContractSuite(options: RateLimitDriverContract
       })
       expect(first.snapshot.attempts).toBe(1)
 
-      await options.advancePastExpiry?.()
+      if (options.advancePastExpiry) {
+        await options.advancePastExpiry()
+      }
 
       const expired = await store.hit('limiter:login|user:expiry', {
         maxAttempts: 2,
         decaySeconds: 60,
       })
 
-      expect(expired.snapshot.attempts).toBe(1)
+      expect(expired.snapshot.attempts).toBe(options.advancePastExpiry ? 1 : 2)
       await options.cleanup?.()
     })
 

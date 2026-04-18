@@ -2,6 +2,7 @@ import { describe, it } from 'vitest'
 import {
   type FormSubmissionFailure,
   type FormSubmissionSuccess,
+  type FormRequestLikeInput,
   createFailedSubmission,
   createSuccessfulSubmission,
   field,
@@ -98,6 +99,21 @@ describe('@holo-js/forms typing', () => {
       }
     }
 
+    async function expectsTypedEventSubmission(event: FormRequestLikeInput) {
+      const submission = await validate(event, registerUser, {
+        csrf: false,
+        throttle: 'login',
+      })
+
+      if (submission.valid) {
+        const typedEmail: string = submission.data.email
+        void typedEmail
+      } else {
+        const typedEmailErrors: readonly string[] | undefined = submission.errors.email
+        void typedEmailErrors
+      }
+    }
+
     // @ts-expect-error Missing required fields must fail type checking for successful submissions.
     createSuccessfulSubmission(registerUser, {
       email: 'ava@example.com',
@@ -108,6 +124,7 @@ describe('@holo-js/forms typing', () => {
     void emailErrors
     void expectsTypedSubmission
     void expectsTypedSecuritySubmission
+    void expectsTypedEventSubmission
     void (0 as unknown as RegisterUserErrors)
     void (0 as unknown as DataAssertion)
     void (0 as unknown as SuccessAssertion)
