@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src'
 import type { SessionRecord, SessionStore } from '../../session/src'
@@ -576,6 +577,16 @@ afterEach(() => {
 })
 
 describe('@holo-js/auth package runtime', () => {
+  it('declares the optional security package peer dependency', async () => {
+    const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
+      readonly peerDependencies?: Record<string, string>
+      readonly peerDependenciesMeta?: Record<string, { readonly optional?: boolean }>
+    }
+
+    expect(packageJson.peerDependencies?.['@holo-js/security']).toBe('^0.1.2')
+    expect(packageJson.peerDependenciesMeta?.['@holo-js/security']?.optional).toBe(true)
+  })
+
   it('keeps the client auth entry read-only', () => {
     expect(clientAuth.user).toBeTypeOf('function')
     expect(clientAuth.check).toBeTypeOf('function')
@@ -1676,6 +1687,636 @@ describe('@holo-js/auth package runtime', () => {
     expect(runtime.passwordResetTokenStore.records.get(firstDelivery.tokenId)).toBe(firstRecord)
   })
 
+  it('prefers the shared security rate-limit store for password reset throttling when available', async () => {
+    const attempts = new Map<string, number>()
+    const hit = vi.fn(async (key: string, options: { readonly maxAttempts: number }) => {
+      const next = (attempts.get(key) ?? 0) + 1
+      attempts.set(key, next)
+
+      return {
+        limited: next > options.maxAttempts,
+      }
+    })
+
+    vi.stubGlobal('__holoAuthSecurityModule__', {
+      getSecurityRuntimeBindings() {
+        return {
+          rateLimitStore: {
+            hit,
+            clear: vi.fn(async (key: string) => {
+              attempts.delete(key)
+              return true
+            }),
+          },
+        }
+      },
+    })
+
+    const runtime = configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 60,
+          },
+        },
+      },
+    })
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    await passwords.request('ava@example.com')
+    expect(runtime.deliveries).toHaveLength(1)
+
+    const firstDelivery = runtime.deliveries[0]
+    if (!firstDelivery) {
+      throw new Error('Expected first password reset delivery.')
+    }
+
+    const activeRecord = runtime.passwordResetTokenStore.records.get(firstDelivery.tokenId)
+    if (!activeRecord) {
+      throw new Error('Expected active password reset token record.')
+    }
+
+    runtime.passwordResetTokenStore.records.set(firstDelivery.tokenId, Object.freeze({
+      ...activeRecord,
+      createdAt: new Date(Date.now() - (2 * 60 * 60 * 1000)),
+    }))
+
+    await passwords.request('ava@example.com')
+
+    expect(hit).toHaveBeenCalledTimes(2)
+    expect(hit).toHaveBeenNthCalledWith(1, 'auth:password-reset:users:users:password_reset_tokens:ava@example.com', {
+      maxAttempts: 1,
+      decaySeconds: 3600,
+    })
+    expect(runtime.deliveries).toHaveLength(1)
+    expect(runtime.passwordResetTokenStore.records).toHaveLength(1)
+  })
+
+  it('releases shared password reset reservations when token persistence fails', async () => {
+    const attempts = new Map<string, number>()
+    const hit = vi.fn(async (key: string, options: { readonly maxAttempts: number }) => {
+      const next = (attempts.get(key) ?? 0) + 1
+      attempts.set(key, next)
+
+      return {
+        limited: next > options.maxAttempts,
+      }
+    })
+
+    vi.stubGlobal('__holoAuthSecurityModule__', {
+      getSecurityRuntimeBindings() {
+        return {
+          rateLimitStore: {
+            hit,
+            clear: vi.fn(async (key: string) => {
+              attempts.delete(key)
+              return true
+            }),
+          },
+        }
+      },
+    })
+
+    const runtime = configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 60,
+          },
+        },
+      },
+    })
+    const findByCredentials = vi.spyOn(runtime.usersProvider, 'findByCredentials')
+    const create = vi.spyOn(runtime.passwordResetTokenStore, 'create')
+    create.mockRejectedValueOnce(new Error('token persistence failed'))
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    await expect(passwords.request('ava@example.com')).rejects.toThrow('token persistence failed')
+
+    await expect(passwords.request('ava@example.com')).resolves.toBeUndefined()
+
+    expect(findByCredentials).toHaveBeenCalledTimes(2)
+    expect(runtime.deliveries).toHaveLength(1)
+  })
+
+  it('keeps a failed password reset from blocking the next valid request when the security store cannot clear reservations', async () => {
+    const attempts = new Map<string, number>()
+    const hit = vi.fn(async (key: string, options: { readonly maxAttempts: number }) => {
+      const next = (attempts.get(key) ?? 0) + 1
+      attempts.set(key, next)
+
+      return {
+        limited: next > options.maxAttempts,
+      }
+    })
+
+    vi.stubGlobal('__holoAuthSecurityModule__', {
+      getSecurityRuntimeBindings() {
+        return {
+          rateLimitStore: {
+            hit,
+          },
+        }
+      },
+    })
+
+    const runtime = configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 60,
+          },
+        },
+      },
+    })
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    const findByCredentials = vi.spyOn(runtime.usersProvider, 'findByCredentials')
+    findByCredentials.mockRejectedValueOnce(new Error('provider lookup failed'))
+
+    await expect(passwords.request('ava@example.com')).rejects.toThrow('provider lookup failed')
+    expect(hit).toHaveBeenCalledTimes(1)
+    expect((globalThis as typeof globalThis & {
+      __holoAuthRuntime__?: { sharedPasswordResetThrottleFailures?: Set<string> }
+    }).__holoAuthRuntime__?.sharedPasswordResetThrottleFailures?.size).toBe(1)
+
+    await expect(passwords.request('ava@example.com')).resolves.toBeUndefined()
+
+    expect(findByCredentials).toHaveBeenCalledTimes(2)
+    expect(runtime.deliveries).toHaveLength(1)
+  })
+
+  it('does not let unknown-email probes consume the shared password reset limiter', async () => {
+    const attempts = new Map<string, number>()
+    const hit = vi.fn(async (key: string, options: { readonly maxAttempts: number }) => {
+      const next = (attempts.get(key) ?? 0) + 1
+      attempts.set(key, next)
+
+      return {
+        limited: next > options.maxAttempts,
+      }
+    })
+
+    vi.stubGlobal('__holoAuthSecurityModule__', {
+      getSecurityRuntimeBindings() {
+        return {
+          rateLimitStore: {
+            hit,
+            clear: vi.fn(async () => true),
+          },
+        }
+      },
+    })
+
+    const runtime = configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 60,
+          },
+        },
+      },
+    })
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    await passwords.request('missing@example.com')
+    expect(runtime.deliveries).toHaveLength(0)
+
+    await passwords.request('ava@example.com')
+
+    expect(runtime.deliveries).toHaveLength(1)
+    expect(hit).toHaveBeenCalledTimes(2)
+    expect(hit).toHaveBeenNthCalledWith(1, 'auth:password-reset:users:users:password_reset_tokens:missing@example.com', {
+      maxAttempts: 1,
+      decaySeconds: 3600,
+    })
+    expect(hit).toHaveBeenNthCalledWith(2, 'auth:password-reset:users:users:password_reset_tokens:ava@example.com', {
+      maxAttempts: 1,
+      decaySeconds: 3600,
+    })
+  })
+
+  it('stops password reset delivery when the shared limiter is already active for a known user without a local token', async () => {
+    const attempts = new Map<string, number>([
+      ['auth:password-reset:users:users:password_reset_tokens:ava@example.com', 1],
+    ])
+    const hit = vi.fn(async (key: string, options: { readonly maxAttempts: number }) => {
+      const next = (attempts.get(key) ?? 0) + 1
+      attempts.set(key, next)
+
+      return {
+        limited: next > options.maxAttempts,
+      }
+    })
+
+    vi.stubGlobal('__holoAuthSecurityModule__', {
+      getSecurityRuntimeBindings() {
+        return {
+          rateLimitStore: {
+            hit,
+            clear: vi.fn(async () => true),
+          },
+        }
+      },
+    })
+
+    const runtime = configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 60,
+          },
+        },
+      },
+    })
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    await passwords.request('ava@example.com')
+
+    expect(runtime.deliveries).toHaveLength(0)
+    expect(runtime.passwordResetTokenStore.records).toHaveLength(0)
+    expect(hit).toHaveBeenCalledTimes(1)
+    expect(hit).toHaveBeenCalledWith('auth:password-reset:users:users:password_reset_tokens:ava@example.com', {
+      maxAttempts: 1,
+      decaySeconds: 3600,
+    })
+  })
+
+  it('namespaces shared password reset limiter buckets across apps using the same store', async () => {
+    const hit = vi.fn(async () => ({
+      limited: false,
+    }))
+
+    const sharedBindings = new Map<string, {
+      readonly rateLimitStore: {
+        hit: typeof hit
+        clear: () => Promise<boolean>
+      }
+      readonly csrfSigningKey: string
+    }>([
+      ['app-a', { rateLimitStore: { hit, clear: vi.fn(async () => true) }, csrfSigningKey: 'app-a' }],
+      ['app-b', { rateLimitStore: { hit, clear: vi.fn(async () => true) }, csrfSigningKey: 'app-b' }],
+    ])
+
+    vi.stubGlobal('__holoAuthSecurityModule__', {
+      getSecurityRuntimeBindings() {
+        return sharedBindings.get((globalThis as typeof globalThis & { __holoActiveAppKey__?: string }).__holoActiveAppKey__ ?? 'app-a')
+      },
+    })
+
+    ;(globalThis as typeof globalThis & { __holoActiveAppKey__?: string }).__holoActiveAppKey__ = 'app-a'
+    const firstRuntime = configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 60,
+          },
+        },
+      },
+    })
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await firstRuntime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    await passwords.request('ava@example.com')
+
+    resetAuthRuntime()
+    resetSessionRuntime()
+
+    ;(globalThis as typeof globalThis & { __holoActiveAppKey__?: string }).__holoActiveAppKey__ = 'app-b'
+    const secondRuntime = configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 60,
+          },
+        },
+      },
+    })
+    await secondRuntime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    await passwords.request('ava@example.com')
+
+    expect(hit).toHaveBeenCalledTimes(2)
+    expect(hit).toHaveBeenNthCalledWith(1, expect.stringMatching(/^auth:password-reset:[0-9a-f]{16}:users:users:password_reset_tokens:ava@example\.com$/), {
+      maxAttempts: 1,
+      decaySeconds: 3600,
+    })
+    expect(hit).toHaveBeenNthCalledWith(2, expect.stringMatching(/^auth:password-reset:[0-9a-f]{16}:users:users:password_reset_tokens:ava@example\.com$/), {
+      maxAttempts: 1,
+      decaySeconds: 3600,
+    })
+    expect(hit.mock.calls[0]?.[0]).not.toBe(hit.mock.calls[1]?.[0])
+  })
+
+  it('skips provider lookups once password reset throttling is active in the shared security store', async () => {
+    const attempts = new Map<string, number>()
+    const hit = vi.fn(async (key: string, options: { readonly maxAttempts: number }) => {
+      const next = (attempts.get(key) ?? 0) + 1
+      attempts.set(key, next)
+
+      return {
+        limited: next > options.maxAttempts,
+      }
+    })
+
+    vi.stubGlobal('__holoAuthSecurityModule__', {
+      getSecurityRuntimeBindings() {
+        return {
+          rateLimitStore: {
+            hit,
+            clear: vi.fn(async () => true),
+          },
+        }
+      },
+    })
+
+    const runtime = configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 60,
+          },
+        },
+      },
+    })
+    const findByCredentials = vi.spyOn(runtime.usersProvider, 'findByCredentials')
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    await passwords.request('ava@example.com')
+    expect(findByCredentials).toHaveBeenCalledTimes(1)
+
+    const firstDelivery = runtime.deliveries[0]
+    if (!firstDelivery) {
+      throw new Error('Expected first password reset delivery.')
+    }
+
+    const activeRecord = runtime.passwordResetTokenStore.records.get(firstDelivery.tokenId)
+    if (!activeRecord) {
+      throw new Error('Expected active password reset token record.')
+    }
+
+    runtime.passwordResetTokenStore.records.set(firstDelivery.tokenId, Object.freeze({
+      ...activeRecord,
+      createdAt: new Date(Date.now() - (2 * 60 * 60 * 1000)),
+    }))
+
+    await passwords.request('ava@example.com')
+
+    expect(hit).toHaveBeenCalledTimes(2)
+    expect(findByCredentials).toHaveBeenCalledTimes(1)
+    expect(runtime.deliveries).toHaveLength(1)
+  })
+
+  it('falls back to the provider lookup path when no shared rate-limit store is configured', async () => {
+    vi.stubGlobal('__holoAuthSecurityModule__', {
+      getSecurityRuntimeBindings() {
+        return undefined
+      },
+    })
+
+    const runtime = configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 60,
+          },
+        },
+      },
+    })
+    const findByCredentials = vi.spyOn(runtime.usersProvider, 'findByCredentials')
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    await passwords.request('ava@example.com')
+
+    expect(findByCredentials).toHaveBeenCalledTimes(1)
+    expect(runtime.deliveries).toHaveLength(1)
+  })
+
+  it('skips shared limiter checks when an existing password reset token has no shared store available', async () => {
+    vi.stubGlobal('__holoAuthSecurityModule__', {
+      getSecurityRuntimeBindings() {
+        return {
+          rateLimitStore: undefined,
+        }
+      },
+    })
+
+    const runtime = configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 60,
+          },
+        },
+      },
+    })
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    await passwords.request('ava@example.com')
+    const firstDelivery = runtime.deliveries[0]
+    if (!firstDelivery) {
+      throw new Error('Expected first password reset delivery.')
+    }
+
+    const activeRecord = runtime.passwordResetTokenStore.records.get(firstDelivery.tokenId)
+    if (!activeRecord) {
+      throw new Error('Expected active password reset token record.')
+    }
+
+    runtime.passwordResetTokenStore.records.set(firstDelivery.tokenId, Object.freeze({
+      ...activeRecord,
+      createdAt: new Date(Date.now() - (2 * 60 * 60 * 1000)),
+    }))
+
+    await passwords.request('ava@example.com')
+
+    expect(runtime.deliveries).toHaveLength(2)
+  })
+
+  it('skips provider lookups when the shared password reset limiter is already active without a token row', async () => {
+    const hit = vi.fn(async () => ({
+      limited: true,
+    }))
+
+    vi.stubGlobal('__holoAuthSecurityModule__', {
+      getSecurityRuntimeBindings() {
+        return {
+          rateLimitStore: {
+            hit,
+            clear: vi.fn(async () => true),
+          },
+        }
+      },
+    })
+
+    const runtime = configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 60,
+          },
+        },
+      },
+    })
+    const findByCredentials = vi.spyOn(runtime.usersProvider, 'findByCredentials')
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    await passwords.request('ava@example.com')
+
+    expect(hit).toHaveBeenCalledTimes(1)
+    expect(findByCredentials).not.toHaveBeenCalled()
+    expect(runtime.deliveries).toHaveLength(0)
+  })
+
+  it('rethrows unexpected optional security import failures during password reset throttling', async () => {
+    const runtime = configureRuntime()
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    vi.stubGlobal('__holoAuthSecurityImport__', async () => {
+      throw 'boom'
+    })
+
+    await expect(passwords.request('ava@example.com')).rejects.toBe('boom')
+
+    vi.stubGlobal('__holoAuthSecurityImport__', async () => {
+      throw new Error('security import exploded')
+    })
+
+    await expect(passwords.request('ava@example.com')).rejects.toThrow('security import exploded')
+  })
+
+  it('treats resolver-style optional security import failures as missing packages during password reset throttling', async () => {
+    const runtime = configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 60,
+          },
+        },
+      },
+    })
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    vi.stubGlobal('__holoAuthSecurityImport__', async () => {
+      throw new Error('Could not resolve "@holo-js/security"')
+    })
+
+    await expect(passwords.request('ava@example.com')).resolves.toBeUndefined()
+    expect(runtime.deliveries).toHaveLength(1)
+  })
+
   it('returns cached users from user() and refetches with refreshUser()', async () => {
     const runtime = configureRuntime()
     const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
@@ -1703,6 +2344,73 @@ describe('@holo-js/auth package runtime', () => {
     expect(await refreshUser()).toMatchObject({
       name: 'Ava Updated',
     })
+  })
+
+  it('releases shared password reset probes when an expired-token retry fails', async () => {
+    const attempts = new Map<string, number>()
+    const clear = vi.fn(async (key: string) => {
+      attempts.delete(key)
+      return true
+    })
+    const hit = vi.fn(async (key: string, options: { readonly maxAttempts: number }) => {
+      const next = (attempts.get(key) ?? 0) + 1
+      attempts.set(key, next)
+
+      return {
+        limited: next > options.maxAttempts,
+      }
+    })
+
+    vi.stubGlobal('__holoAuthSecurityModule__', {
+      getSecurityRuntimeBindings() {
+        return {
+          rateLimitStore: {
+            hit,
+            clear,
+          },
+        }
+      },
+    })
+
+    const runtime = configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 60,
+          },
+        },
+      },
+    })
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+    runtime.passwordResetTokenStore.records.set('reset-1', Object.freeze({
+      id: 'reset-1',
+      provider: 'users',
+      email: 'ava@example.com',
+      table: 'password_reset_tokens',
+      tokenHash: 'expired-token-hash',
+      createdAt: new Date(Date.now() - (2 * 60 * 60 * 1000)),
+      expiresAt: new Date(Date.now() - (60 * 1000)),
+    }))
+
+    const findByCredentials = vi.spyOn(runtime.usersProvider, 'findByCredentials')
+    findByCredentials.mockRejectedValueOnce(new Error('provider lookup failed'))
+
+    await expect(passwords.request('ava@example.com')).rejects.toThrow('provider lookup failed')
+    expect(clear).toHaveBeenCalledTimes(1)
+    expect(attempts.size).toBe(0)
+    await expect(passwords.request('ava@example.com')).resolves.toBeUndefined()
+
+    expect(findByCredentials).toHaveBeenCalledTimes(2)
+    expect(runtime.deliveries).toHaveLength(1)
   })
 
   it('supports multiple guards and distinct providers safely', async () => {

@@ -9,7 +9,8 @@
       "@holo-js/events": ["../events/src/index.ts"],
       "@holo-js/queue": ["../queue/src/index.ts"],
       "@holo-js/queue-redis": ["../queue/src/queue-redis.d.ts"],
-      "@holo-js/queue-db": ["../queue-db/src/index.ts"]
+      "@holo-js/queue-db": ["../queue-db/src/index.ts"],
+      "@holo-js/security": ["../security/src/index.ts"]
     }
   },
   "include": [

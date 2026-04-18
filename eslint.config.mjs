@@ -23,6 +23,8 @@ export default defineConfig(
       '**/*.vue',
       '**/*.svelte',
       'bun.lock',
+      'coverage/**',
+      'docs/**',
     ],
   },
   js.configs.recommended,

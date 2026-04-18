@@ -324,6 +324,124 @@ export interface NormalizedHoloSessionConfig {
   readonly rememberMeLifetime: number
 }
 
+export type SecurityRateLimitDriver = 'memory' | 'file' | 'redis'
+
+export interface HoloSecurityCsrfConfig {
+  readonly enabled?: boolean
+  readonly field?: string
+  readonly header?: string
+  readonly cookie?: string
+  readonly except?: readonly string[]
+}
+
+export interface NormalizedHoloSecurityCsrfConfig {
+  readonly enabled: boolean
+  readonly field: string
+  readonly header: string
+  readonly cookie: string
+  readonly except: readonly string[]
+}
+
+export interface SecurityRateLimitContext<
+  TValues extends Readonly<Record<string, unknown>> | undefined = Readonly<Record<string, unknown>> | undefined,
+> {
+  readonly request: Request
+  readonly values?: TValues
+}
+
+export interface SecurityRateLimitKeyResolver<
+  TValues extends Readonly<Record<string, unknown>> | undefined = Readonly<Record<string, unknown>> | undefined,
+> {
+  (context: SecurityRateLimitContext<TValues>): string
+}
+
+export interface SecurityLimiterConfig<
+  TValues extends Readonly<Record<string, unknown>> | undefined = Readonly<Record<string, unknown>> | undefined,
+> {
+  readonly maxAttempts: number | string
+  readonly decaySeconds: number | string
+  readonly key?: SecurityRateLimitKeyResolver<TValues>
+}
+
+export interface NormalizedSecurityLimiterConfig<
+  TValues extends Readonly<Record<string, unknown>> | undefined = Readonly<Record<string, unknown>> | undefined,
+> {
+  readonly name: string
+  readonly maxAttempts: number
+  readonly decaySeconds: number
+  readonly key?: SecurityRateLimitKeyResolver<TValues>
+}
+
+export interface SecurityRateLimitMemoryConfig {
+  readonly driver?: 'memory'
+}
+
+export interface SecurityRateLimitFileConfig {
+  readonly path?: string
+}
+
+export interface SecurityRateLimitRedisConnectionConfig {
+  readonly host?: string
+  readonly port?: number | string
+  readonly password?: string
+  readonly username?: string
+  readonly db?: number | string
+}
+
+export interface SecurityRateLimitRedisConfig {
+  readonly host?: string
+  readonly port?: number | string
+  readonly password?: string
+  readonly username?: string
+  readonly db?: number | string
+  readonly connection?: string
+  readonly prefix?: string
+}
+
+export interface HoloSecurityRateLimitConfig {
+  readonly driver?: SecurityRateLimitDriver
+  readonly memory?: SecurityRateLimitMemoryConfig
+  readonly file?: SecurityRateLimitFileConfig
+  readonly redis?: SecurityRateLimitRedisConfig
+  readonly limiters?: Readonly<Record<string, SecurityLimiterConfig>>
+}
+
+export interface NormalizedSecurityRateLimitMemoryConfig {
+  readonly driver: 'memory'
+}
+
+export interface NormalizedSecurityRateLimitFileConfig {
+  readonly path: string
+}
+
+export interface NormalizedSecurityRateLimitRedisConfig {
+  readonly host: string
+  readonly port: number
+  readonly password?: string
+  readonly username?: string
+  readonly db: number
+  readonly connection: string
+  readonly prefix: string
+}
+
+export interface NormalizedHoloSecurityRateLimitConfig {
+  readonly driver: SecurityRateLimitDriver
+  readonly memory: NormalizedSecurityRateLimitMemoryConfig
+  readonly file: NormalizedSecurityRateLimitFileConfig
+  readonly redis: NormalizedSecurityRateLimitRedisConfig
+  readonly limiters: Readonly<Record<string, NormalizedSecurityLimiterConfig>>
+}
+
+export interface HoloSecurityConfig {
+  readonly csrf?: boolean | HoloSecurityCsrfConfig
+  readonly rateLimit?: HoloSecurityRateLimitConfig
+}
+
+export interface NormalizedHoloSecurityConfig {
+  readonly csrf: NormalizedHoloSecurityCsrfConfig
+  readonly rateLimit: NormalizedHoloSecurityRateLimitConfig
+}
+
 export type AuthGuardDriver = 'session' | 'token'
 
 export interface AuthGuardConfig {
@@ -755,6 +873,7 @@ export interface HoloConfigRegistry {
   notifications: NormalizedHoloNotificationsConfig
   media: HoloMediaConfig
   session: NormalizedHoloSessionConfig
+  security: NormalizedHoloSecurityConfig
   auth: NormalizedHoloAuthConfig
 }
 
@@ -777,6 +896,7 @@ export interface LoadedHoloConfig<TCustom extends HoloConfigMap = HoloConfigMap>
   readonly notifications: NormalizedHoloNotificationsConfig
   readonly media: HoloMediaConfig
   readonly session: NormalizedHoloSessionConfig
+  readonly security: NormalizedHoloSecurityConfig
   readonly auth: NormalizedHoloAuthConfig
   readonly custom: Readonly<TCustom>
   readonly all: Readonly<HoloConfigRegistry & TCustom>

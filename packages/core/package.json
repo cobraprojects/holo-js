@@ -40,6 +40,7 @@
     "@holo-js/mail": "^0.1.2",
     "@holo-js/notifications": "^0.1.2",
     "@holo-js/queue": "^0.1.2",
+    "@holo-js/security": "^0.1.2",
     "@holo-js/session": "^0.1.2",
     "@holo-js/storage": "^0.1.2"
   },
@@ -63,6 +64,9 @@
       "optional": true
     },
     "@holo-js/queue": {
+      "optional": true
+    },
+    "@holo-js/security": {
       "optional": true
     },
     "@holo-js/session": {

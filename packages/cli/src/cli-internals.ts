@@ -51,6 +51,9 @@ import {
   runBroadcastWorkCommand,
 } from './broadcast'
 import {
+  runRateLimitClearCommand,
+} from './security'
+import {
   renderFailedJobsTableMigration,
   renderQueueTableMigration,
   resolveDatabaseQueueTables,
@@ -172,6 +175,7 @@ export const cliInternals = {
   runProjectLifecycleScript,
   runProjectPrepare,
   runQueueClearCommand,
+  runRateLimitClearCommand,
   runQueueFailedCommand,
   runQueueFailedTableCommand,
   runQueueFlushCommand,

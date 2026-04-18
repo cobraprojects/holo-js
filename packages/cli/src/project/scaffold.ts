@@ -28,6 +28,7 @@ import {
   DB_DRIVER_PACKAGE_NAMES,
   NOTIFICATIONS_CONFIG_FILE_NAMES,
   QUEUE_CONFIG_FILE_NAMES,
+  SECURITY_CONFIG_FILE_NAMES,
   SESSION_CONFIG_FILE_NAMES,
   SUPPORTED_AUTH_SOCIAL_PROVIDERS,
   type AuthInstallResult,
@@ -36,6 +37,7 @@ import {
   type NotificationsInstallResult,
   type ProjectScaffoldOptions,
   type QueueInstallResult,
+  type SecurityInstallResult,
   type SupportedAuthSocialProvider,
   type SupportedQueueInstallerDriver,
   type SupportedScaffoldPackageManager,
@@ -229,6 +231,37 @@ function renderMailConfig(): string {
     '      host: env(\'MAIL_HOST\', \'127.0.0.1\'),',
     '      port: env(\'MAIL_PORT\', 1025),',
     '      secure: env<boolean>(\'MAIL_SECURE\', false),',
+    '    },',
+    '  },',
+    '})',
+    '',
+  ].join('\n')
+}
+
+function renderSecurityConfig(): string {
+  return [
+    `import { defineSecurityConfig, ip, limit } from '@holo-js/security'`,
+    '',
+    'export default defineSecurityConfig({',
+    '  csrf: {',
+    '    enabled: true,',
+    '    field: \'_token\',',
+    '    header: \'X-CSRF-TOKEN\',',
+    '    cookie: \'XSRF-TOKEN\',',
+    '    except: [],',
+    '  },',
+    '  rateLimit: {',
+    '    driver: \'file\',',
+    '    file: {',
+    '      path: \'./storage/framework/rate-limits\',',
+    '    },',
+    '    redis: {',
+    '      connection: \'default\',',
+    '      prefix: \'holo:rate-limit:\',',
+    '    },',
+    '    limiters: {',
+    '      login: limit.perMinute(5).by(({ request }) => ip(request)),',
+    '      register: limit.perHour(10).by(({ request }) => ip(request)),',
     '    },',
     '  },',
     '})',
@@ -1589,6 +1622,22 @@ async function upsertMailPackageDependency(projectRoot: string): Promise<boolean
   return true
 }
 
+async function upsertSecurityPackageDependency(projectRoot: string): Promise<boolean> {
+  const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
+  const currentVersion = dependencies['@holo-js/security']
+  const currentDevVersion = devDependencies['@holo-js/security']
+
+  if (currentVersion === nextVersion && typeof currentDevVersion === 'undefined') {
+    return false
+  }
+
+  dependencies['@holo-js/security'] = nextVersion
+  delete devDependencies['@holo-js/security']
+  await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
+  return true
+}
+
 function detectProjectFrameworkFromPackageJson(
   dependencies: Record<string, string>,
   devDependencies: Record<string, string>,
@@ -2026,6 +2075,25 @@ export async function installMailIntoProject(
     updatedPackageJson: await upsertMailPackageDependency(projectRoot),
     createdMailConfig: !mailConfigPath,
     createdMailDirectory: !mailDirectoryExists,
+  }
+}
+
+export async function installSecurityIntoProject(
+  projectRoot: string,
+): Promise<SecurityInstallResult> {
+  await loadProjectConfig(projectRoot, { required: true })
+  const securityConfigPath = await resolveFirstExistingPath(projectRoot, SECURITY_CONFIG_FILE_NAMES)
+
+  await mkdir(resolve(projectRoot, 'config'), { recursive: true })
+  await mkdir(resolve(projectRoot, 'storage/framework/rate-limits'), { recursive: true })
+
+  if (!securityConfigPath) {
+    await writeTextFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig())
+  }
+
+  return {
+    updatedPackageJson: await upsertSecurityPackageDependency(projectRoot),
+    createdSecurityConfig: !securityConfigPath,
   }
 }
 
@@ -2931,6 +2999,10 @@ function renderScaffoldPackageJson(options: ProjectScaffoldOptions): string {
     dependencies['@holo-js/mail'] = `^${HOLO_PACKAGE_VERSION}`
   }
 
+  if (optionalPackages.includes('security')) {
+    dependencies['@holo-js/security'] = `^${HOLO_PACKAGE_VERSION}`
+  }
+
   return `${JSON.stringify({
     name: packageName,
     private: true,
@@ -2972,6 +3044,7 @@ export async function scaffoldProject(
   const authEnabled = optionalPackages.includes('auth')
   const notificationsEnabled = optionalPackages.includes('notifications')
   const mailEnabled = optionalPackages.includes('mail')
+  const securityEnabled = optionalPackages.includes('security')
 
   await mkdir(projectRoot, { recursive: true })
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })
@@ -3018,6 +3091,9 @@ export async function scaffoldProject(
   }
   if (mailEnabled) {
     await writeFile(resolve(projectRoot, 'config/mail.ts'), renderMailConfig(), 'utf8')
+  }
+  if (securityEnabled) {
+    await writeFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig(), 'utf8')
   }
   if (authEnabled) {
     await writeFile(resolve(projectRoot, 'config/auth.ts'), renderAuthConfig(), 'utf8')
@@ -3070,6 +3146,7 @@ export {
   renderFrameworkRunner,
   renderMediaConfig,
   renderMailConfig,
+  renderSecurityConfig,
   renderNotificationsConfig,
   renderNotificationsMigration,
   renderQueueConfig,
@@ -3089,4 +3166,5 @@ export {
   upsertEventsPackageDependency,
   upsertMailPackageDependency,
   upsertNotificationsPackageDependency,
+  upsertSecurityPackageDependency,
 }

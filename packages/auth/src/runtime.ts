@@ -87,17 +87,88 @@ type RuntimeBindings = {
   readonly passwordHasher: AuthPasswordHasher
 }
 
+type OptionalSecurityRateLimitStore = {
+  hit(
+    key: string,
+    options: { readonly maxAttempts: number, readonly decaySeconds: number },
+  ): Promise<{ readonly limited: boolean }>
+  clear?(key: string): Promise<boolean>
+}
+
+type OptionalSecurityModule = {
+  getSecurityRuntimeBindings?(): {
+    readonly rateLimitStore?: OptionalSecurityRateLimitStore
+    readonly csrfSigningKey?: string
+  } | undefined
+}
+
+let optionalSecurityModulePromise: Promise<OptionalSecurityModule | undefined> | undefined
+
 function getAuthRuntimeState(): {
   bindings?: RuntimeBindings
+  sharedPasswordResetThrottleFailures?: Set<string>
 } {
   const runtime = globalThis as typeof globalThis & {
     __holoAuthRuntime__?: {
       bindings?: RuntimeBindings
+      sharedPasswordResetThrottleFailures?: Set<string>
     }
   }
 
   runtime.__holoAuthRuntime__ ??= {}
   return runtime.__holoAuthRuntime__
+}
+
+function getOptionalSecurityModuleOverride(): OptionalSecurityModule | undefined {
+  const runtime = globalThis as typeof globalThis & {
+    __holoAuthSecurityModule__?: OptionalSecurityModule
+  }
+
+  return runtime.__holoAuthSecurityModule__
+}
+
+function getOptionalSecurityImportOverride(): (() => Promise<unknown>) | undefined {
+  const runtime = globalThis as typeof globalThis & {
+    __holoAuthSecurityImport__?: () => Promise<unknown>
+  }
+
+  return runtime.__holoAuthSecurityImport__
+}
+
+function isMissingOptionalPackageError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  return error.message.includes('Cannot find package')
+    || error.message.includes('Cannot find module')
+    || error.message.includes('Failed to resolve module specifier')
+    || error.message.includes('Failed to load url')
+    || error.message.includes('Could not resolve')
+}
+
+async function loadOptionalSecurityModule(): Promise<OptionalSecurityModule | undefined> {
+  const override = getOptionalSecurityModuleOverride()
+  if (override) {
+    return override
+  }
+
+  const importOverride = getOptionalSecurityImportOverride()
+  optionalSecurityModulePromise ??= (importOverride
+    ? importOverride()
+    : import('@holo-js/security' as string))
+    .then(module => module as OptionalSecurityModule)
+    .catch(async (error) => {
+      optionalSecurityModulePromise = undefined
+
+      if (isMissingOptionalPackageError(error)) {
+        return undefined
+      }
+
+      throw error
+    })
+
+  return await optionalSecurityModulePromise
 }
 
 function throwUnconfigured(): never {
@@ -175,6 +246,77 @@ function verifyTokenSecret(secret: string, digest: string): boolean {
   const expected = Buffer.from(hashHex, 'hex')
   const actual = createHash('sha256').update(secret).digest()
   return actual.length === expected.length && timingSafeEqual(actual, expected)
+}
+
+function createPasswordResetThrottleKey(
+  namespace: string | undefined,
+  brokerName: string,
+  provider: string,
+  table: string,
+  email: string,
+): string {
+  const namespacePrefix = namespace ? `${namespace}:` : ''
+  return `auth:password-reset:${namespacePrefix}${brokerName}:${provider}:${table}:${email.toLowerCase()}`
+}
+
+function createPasswordResetThrottleNamespace(csrfSigningKey: string | undefined): string | undefined {
+  const normalized = csrfSigningKey?.trim()
+  if (!normalized) {
+    return undefined
+  }
+
+  return createHash('sha256').update(normalized).digest('hex').slice(0, 16)
+}
+
+async function reserveSharedPasswordResetThrottle(
+  brokerName: string,
+  broker: { readonly provider: string, readonly table: string, readonly throttle: number },
+  email: string,
+): Promise<{
+  readonly key: string
+  readonly limited: boolean
+  readonly store: OptionalSecurityRateLimitStore
+  readonly bypassed: boolean
+} | undefined> {
+  if (broker.throttle < 1) {
+    return undefined
+  }
+
+  const security = await loadOptionalSecurityModule()
+  const bindings = security?.getSecurityRuntimeBindings?.()
+  const store = bindings?.rateLimitStore
+  if (!store) {
+    return undefined
+  }
+
+  const key = createPasswordResetThrottleKey(
+    createPasswordResetThrottleNamespace(bindings?.csrfSigningKey),
+    brokerName,
+    broker.provider,
+    broker.table,
+    email,
+  )
+  const failures = getAuthRuntimeState().sharedPasswordResetThrottleFailures ??= new Set<string>()
+  if (!store.clear && failures.has(key)) {
+    return {
+      key,
+      limited: false,
+      store,
+      bypassed: true,
+    }
+  }
+
+  const result = await store.hit(key, {
+    maxAttempts: 1,
+    decaySeconds: broker.throttle * 60,
+  })
+
+  return {
+    key,
+    limited: result.limited,
+    store,
+    bypassed: false,
+  }
 }
 
 function parseSetCookieDefinition(header: string): {
@@ -1740,42 +1882,69 @@ function createPasswordResetFacade(): AuthPasswordResetFacade {
       const existing = await store.findLatestByEmail(broker.provider, normalizedEmail, {
         table: broker.table,
       })
-      if (existing) {
-        const throttleWindowEnd = existing.createdAt.getTime() + (broker.throttle * 60 * 1000)
-        if (throttleWindowEnd > Date.now()) {
-          return
-        }
-      }
-
-      const { adapter } = getProviderAdapter(broker.provider)
-      const user = await adapter.findByCredentials({
-        email: normalizedEmail,
-      })
-      if (!user) {
+      if (existing && (existing.createdAt.getTime() + (broker.throttle * 60 * 1000)) > Date.now()) {
         return
       }
 
-      const id = createPersonalAccessTokenId()
-      const secret = createPersonalAccessTokenSecret()
-      const record: PasswordResetTokenRecord = Object.freeze({
-        id,
-        provider: broker.provider,
-        email: normalizedEmail,
-        table: broker.table,
-        tokenHash: hashTokenSecret(secret),
-        createdAt: new Date(),
-        expiresAt: options.expiresAt ?? new Date(Date.now() + broker.expire * 60 * 1000),
-      })
-      await store.deleteByEmail(broker.provider, normalizedEmail, {
-        table: broker.table,
-      })
-      await store.create(record)
-      const result = createLifecycleTokenResult(record, `${id}.${secret}`)
-      await bindings.delivery.sendPasswordReset({
-        provider: broker.provider,
-        email: normalizedEmail,
-        token: result,
-      })
+      let sharedReservation: {
+        readonly key: string
+        readonly limited: boolean
+        readonly store: OptionalSecurityRateLimitStore
+        readonly bypassed: boolean
+      } | undefined
+
+      try {
+        sharedReservation = await reserveSharedPasswordResetThrottle(brokerName, broker, normalizedEmail)
+        if (sharedReservation?.limited) {
+          return
+        }
+
+        const { adapter } = getProviderAdapter(broker.provider)
+        const user = await adapter.findByCredentials({
+          email: normalizedEmail,
+        })
+        if (!user) {
+          if (sharedReservation?.store.clear) {
+            await sharedReservation.store.clear(sharedReservation.key)
+          }
+
+          return
+        }
+
+        const id = createPersonalAccessTokenId()
+        const secret = createPersonalAccessTokenSecret()
+        const record: PasswordResetTokenRecord = Object.freeze({
+          id,
+          provider: broker.provider,
+          email: normalizedEmail,
+          table: broker.table,
+          tokenHash: hashTokenSecret(secret),
+          createdAt: new Date(),
+          expiresAt: options.expiresAt ?? new Date(Date.now() + broker.expire * 60 * 1000),
+        })
+        await store.deleteByEmail(broker.provider, normalizedEmail, {
+          table: broker.table,
+        })
+        await store.create(record)
+        const result = createLifecycleTokenResult(record, `${id}.${secret}`)
+        await bindings.delivery.sendPasswordReset({
+          provider: broker.provider,
+          email: normalizedEmail,
+          token: result,
+        })
+        if (!sharedReservation?.store.clear && sharedReservation?.bypassed) {
+          getAuthRuntimeState().sharedPasswordResetThrottleFailures?.delete(sharedReservation.key)
+        }
+      } catch (error) {
+        if (sharedReservation?.store.clear) {
+          await sharedReservation.store.clear(sharedReservation.key)
+        } else if (sharedReservation) {
+          getAuthRuntimeState().sharedPasswordResetThrottleFailures ??= new Set<string>()
+          getAuthRuntimeState().sharedPasswordResetThrottleFailures.add(sharedReservation.key)
+        }
+
+        throw error
+      }
     },
     async consume(input: {
       readonly token: string
@@ -2031,7 +2200,9 @@ export function getAuthRuntime(): AuthRuntimeFacade {
 }
 
 export function resetAuthRuntime(): void {
-  getAuthRuntimeState().bindings = undefined
+  const state = getAuthRuntimeState()
+  state.bindings = undefined
+  state.sharedPasswordResetThrottleFailures = undefined
 }
 
 export async function checkForGuard(guardName: string): Promise<boolean> {

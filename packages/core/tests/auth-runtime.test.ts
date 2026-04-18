@@ -2675,6 +2675,112 @@ export default {
     expect(rows).toHaveLength(1)
   })
 
+  it('uses the shared security limiter for password reset throttling when security is configured', async () => {
+    const root = await createProject({
+      session: 'database',
+      auth: true,
+      notifications: true,
+      mail: true,
+    })
+    await writeFile(join(root, 'config/security.ts'), `
+import { defineSecurityConfig } from '@holo-js/security'
+
+export default defineSecurityConfig({
+  rateLimit: {
+    driver: 'memory',
+  },
+})
+`, 'utf8')
+    await writeFile(join(root, 'server/models/User.ts'), `
+const users = new Map()
+let nextId = 1
+
+export default {
+  async find(id) {
+    return users.get(Number(id)) ?? null
+  },
+  where(column, value) {
+    return {
+      async first() {
+        for (const record of users.values()) {
+          if (record?.[column] === value) {
+            return record
+          }
+        }
+
+        return null
+      },
+    }
+  },
+  async create(values) {
+    const record = {
+      id: nextId++,
+      ...values,
+    }
+    users.set(record.id, record)
+    return record
+  },
+  async update(id, values) {
+    const record = users.get(Number(id))
+    if (!record) {
+      return null
+    }
+
+    Object.assign(record, values)
+    return record
+  },
+}
+`, 'utf8')
+
+    const runtime = await createHolo(root, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    await runtime.initialize()
+    await createSchemaService(DB.connection()).createTable('password_reset_tokens', (table) => {
+      table.uuid('id').primaryKey()
+      table.string('provider').default('users')
+      table.string('email')
+      table.string('token_hash')
+      table.timestamp('created_at')
+      table.timestamp('expires_at')
+      table.timestamp('used_at').nullable()
+      table.timestamp('updated_at')
+    })
+
+    const registered = await runtime.auth?.register({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: 'supersecret',
+      passwordConfirmation: 'supersecret',
+    })
+
+    expect(registered).toMatchObject({
+      email: 'ava@example.com',
+    })
+
+    await runtime.auth?.passwords.request('ava@example.com')
+    expect(listFakeSentMails()).toHaveLength(1)
+
+    const firstTokenRows = await DB.table('password_reset_tokens').get<Record<string, unknown>>()
+    expect(firstTokenRows).toHaveLength(1)
+
+    const firstTokenId = firstTokenRows[0]?.id
+    expect(typeof firstTokenId).toBe('string')
+
+    await DB.table('password_reset_tokens').where('id', firstTokenId as string).update({
+      created_at: '2000-01-01T00:00:00.000Z',
+    })
+
+    await runtime.auth?.passwords.request('ava@example.com')
+
+    expect(listFakeSentMails()).toHaveLength(1)
+    const finalTokenRows = await DB.table('password_reset_tokens').get<Record<string, unknown>>()
+    expect(finalTokenRows).toHaveLength(1)
+    expect(finalTokenRows[0]?.id).toBe(firstTokenId)
+  })
+
   it('persists auth user references through string user_id columns', async () => {
     const root = await createProject({
       auth: true,

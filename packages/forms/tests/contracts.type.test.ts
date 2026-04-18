@@ -70,11 +70,28 @@ describe('@holo-js/forms typing', () => {
     const emailErrors = failure.errors.email
 
     async function expectsTypedSubmission(request: Request) {
-      const submission = await validate(request, registerUser)
+      const submission = await validate(request, registerUser, {
+        csrf: false,
+      })
 
       if (submission.valid) {
         const typedName: string = submission.data.name
         void typedName
+      } else {
+        const typedEmailErrors: readonly string[] | undefined = submission.errors.email
+        void typedEmailErrors
+      }
+    }
+
+    async function expectsTypedSecuritySubmission(request: Request) {
+      const submission = await validate(request, registerUser, {
+        csrf: false,
+        throttle: 'login',
+      })
+
+      if (submission.valid) {
+        const typedEmail: string = submission.data.email
+        void typedEmail
       } else {
         const typedEmailErrors: readonly string[] | undefined = submission.errors.email
         void typedEmailErrors
@@ -90,6 +107,7 @@ describe('@holo-js/forms typing', () => {
     void data
     void emailErrors
     void expectsTypedSubmission
+    void expectsTypedSecuritySubmission
     void (0 as unknown as RegisterUserErrors)
     void (0 as unknown as DataAssertion)
     void (0 as unknown as SuccessAssertion)

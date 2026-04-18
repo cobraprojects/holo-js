@@ -126,7 +126,7 @@ export type SupportedScaffoldFramework = 'nuxt' | 'next' | 'sveltekit'
 export type SupportedScaffoldPackageManager = 'bun' | 'npm' | 'pnpm' | 'yarn'
 
 export type SupportedScaffoldStorageDisk = 'local' | 'public'
-export type SupportedScaffoldOptionalPackage = 'storage' | 'events' | 'queue' | 'validation' | 'forms' | 'auth' | 'notifications' | 'mail'
+export type SupportedScaffoldOptionalPackage = 'storage' | 'events' | 'queue' | 'validation' | 'forms' | 'auth' | 'notifications' | 'mail' | 'security'
 export type SupportedQueueInstallerDriver = 'sync' | 'redis' | 'database'
 export type SupportedAuthSocialProvider = 'google' | 'github' | 'discord' | 'facebook' | 'apple' | 'linkedin'
 export type AuthInstallerFeature = 'social' | 'workos' | 'clerk'
@@ -212,6 +212,11 @@ export type MailInstallResult = {
   readonly updatedPackageJson: boolean
   readonly createdMailConfig: boolean
   readonly createdMailDirectory: boolean
+}
+
+export type SecurityInstallResult = {
+  readonly updatedPackageJson: boolean
+  readonly createdSecurityConfig: boolean
 }
 
 export type BroadcastInstallResult = {
@@ -300,6 +305,15 @@ export const MAIL_CONFIG_FILE_NAMES = [
   'config/mail.cjs',
 ] as const
 
+export const SECURITY_CONFIG_FILE_NAMES = [
+  'config/security.ts',
+  'config/security.mts',
+  'config/security.js',
+  'config/security.mjs',
+  'config/security.cts',
+  'config/security.cjs',
+] as const
+
 export const BROADCAST_CONFIG_FILE_NAMES = [
   'config/broadcast.ts',
   'config/broadcast.mts',
@@ -344,7 +358,7 @@ export const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIO
 export const SUPPORTED_SCAFFOLD_FRAMEWORKS = ['nuxt', 'next', 'sveltekit'] as const
 export const SUPPORTED_SCAFFOLD_PACKAGE_MANAGERS = ['bun', 'npm', 'pnpm', 'yarn'] as const
 export const SUPPORTED_SCAFFOLD_STORAGE_DISKS = ['local', 'public'] as const
-export const SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms', 'auth', 'notifications', 'mail'] as const
+export const SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms', 'auth', 'notifications', 'mail', 'security'] as const
 export const SUPPORTED_QUEUE_INSTALLER_DRIVERS = ['sync', 'redis', 'database'] as const
 export const HOLO_EVENT_DEFINITION_MARKER = Symbol.for('holo-js.events.definition')
 export const HOLO_LISTENER_DEFINITION_MARKER = Symbol.for('holo-js.events.listener')

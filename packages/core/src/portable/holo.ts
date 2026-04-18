@@ -312,6 +312,54 @@ type SessionModule = {
   resetSessionRuntime(): void
 }
 
+type SecurityModule = {
+  configureSecurityRuntime(options?: {
+    readonly config: LoadedHoloConfig['security']
+    readonly rateLimitStore?: {
+      hit(key: string, options: { readonly maxAttempts: number, readonly decaySeconds: number }): Promise<unknown>
+      clear(key: string): Promise<boolean>
+      clearByPrefix(prefix: string): Promise<number>
+      clearAll(): Promise<number>
+    }
+    readonly csrfSigningKey?: string
+  }): void
+  createRateLimitStoreFromConfig(
+    config: LoadedHoloConfig['security'],
+    options?: {
+      readonly projectRoot?: string
+      readonly redisAdapter?: unknown
+    },
+  ): {
+    hit(key: string, options: { readonly maxAttempts: number, readonly decaySeconds: number }): Promise<unknown>
+    clear(key: string): Promise<boolean>
+    clearByPrefix(prefix: string): Promise<number>
+    clearAll(): Promise<number>
+  }
+  getSecurityRuntimeBindings(): {
+    readonly config?: LoadedHoloConfig['security']
+    readonly rateLimitStore?: {
+      hit(key: string, options: { readonly maxAttempts: number, readonly decaySeconds: number }): Promise<unknown>
+      clear(key: string): Promise<boolean>
+      clearByPrefix(prefix: string): Promise<number>
+      clearAll(): Promise<number>
+    }
+  } | undefined
+  resetSecurityRuntime(): void
+}
+
+type SecurityRedisAdapter = {
+  connect?(): Promise<void>
+  increment(key: string, options: { readonly decaySeconds: number }): Promise<unknown>
+  del(key: string): Promise<number>
+  clearByPrefix?(prefix: string): Promise<number>
+  clearAll?(): Promise<number>
+  close?(): Promise<void>
+}
+
+type SecurityRedisAdapterModule = {
+  createSecurityRedisAdapter(config: LoadedHoloConfig['security']['rateLimit']['redis']): SecurityRedisAdapter
+}
+
 type NotificationsModule = {
   configureNotificationsRuntime(options?: {
     readonly config: LoadedHoloConfig['notifications']
@@ -649,6 +697,8 @@ function getRuntimeState(): {
   pending?: Promise<HoloRuntime>
   pendingProjectRoot?: string
   renderView?: HoloServerViewRenderer
+  securityRedisAdapter?: SecurityRedisAdapter
+  securityRateLimitStoreManaged?: boolean
 } {
   const runtime = globalThis as typeof globalThis & {
     __holoRuntime__?: {
@@ -656,6 +706,8 @@ function getRuntimeState(): {
       pending?: Promise<HoloRuntime>
       pendingProjectRoot?: string
       renderView?: HoloServerViewRenderer
+      securityRedisAdapter?: SecurityRedisAdapter
+      securityRateLimitStoreManaged?: boolean
     }
   }
 
@@ -1136,6 +1188,26 @@ async function loadSessionModule(required = false): Promise<SessionModule | unde
   }
 
   return sessionModule
+}
+
+async function loadSecurityModule(required = false): Promise<SecurityModule | undefined> {
+  const securityModule = await portableRuntimeModuleInternals.importOptionalModule<SecurityModule>('@holo-js/security')
+  if (!securityModule && required) {
+    throw new Error('[@holo-js/core] Security support requires @holo-js/security to be installed.')
+  }
+
+  return securityModule
+}
+
+async function loadSecurityRedisAdapterModule(required: true): Promise<SecurityRedisAdapterModule>
+async function loadSecurityRedisAdapterModule(required?: false): Promise<SecurityRedisAdapterModule | undefined>
+async function loadSecurityRedisAdapterModule(required = false): Promise<SecurityRedisAdapterModule | undefined> {
+  const securityRedisAdapterModule = await portableRuntimeModuleInternals.importOptionalModule<SecurityRedisAdapterModule>('@holo-js/security/drivers/redis-adapter')
+  if (!securityRedisAdapterModule && required) {
+    throw new Error('[@holo-js/core] Redis-backed security rate limits require @holo-js/security/drivers/redis-adapter to be installed.')
+  }
+
+  return securityRedisAdapterModule
 }
 
 async function loadNotificationsModule(required = false): Promise<NotificationsModule | undefined> {
@@ -3157,6 +3229,72 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
 
   const sessionConfigured = hasLoadedConfigFile(loadedConfig, 'session') || hasLoadedConfigFile(loadedConfig, 'auth')
   const authConfigured = hasLoadedConfigFile(loadedConfig, 'auth')
+  const securityConfigured = hasLoadedConfigFile(loadedConfig, 'security')
+  const securityModule = securityConfigured
+    ? await loadSecurityModule(true)
+    : undefined
+  const existingManagedSecurityRedisAdapter = getRuntimeState().securityRedisAdapter
+
+  if (securityModule) {
+    const existingSecurityBindings = securityModule.getSecurityRuntimeBindings()
+    const shouldReuseExistingSecurityStore = !!existingSecurityBindings?.rateLimitStore
+      && !existingManagedSecurityRedisAdapter
+      && getRuntimeState().securityRateLimitStoreManaged !== true
+    let nextManagedSecurityRedisAdapter: SecurityRedisAdapter | undefined
+
+    try {
+      if (
+        !shouldReuseExistingSecurityStore
+        && loadedConfig.security.rateLimit.driver === 'redis'
+      ) {
+        const securityRedisAdapterModule = await loadSecurityRedisAdapterModule(true)
+        nextManagedSecurityRedisAdapter = securityRedisAdapterModule.createSecurityRedisAdapter(
+          loadedConfig.security.rateLimit.redis,
+        )
+      }
+
+      const rateLimitStore = shouldReuseExistingSecurityStore
+        ? existingSecurityBindings.rateLimitStore
+        : securityModule.createRateLimitStoreFromConfig(loadedConfig.security, {
+          projectRoot,
+          ...(nextManagedSecurityRedisAdapter ? { redisAdapter: nextManagedSecurityRedisAdapter } : {}),
+        })
+
+      if (
+        existingManagedSecurityRedisAdapter
+        && existingManagedSecurityRedisAdapter !== nextManagedSecurityRedisAdapter
+      ) {
+        await existingManagedSecurityRedisAdapter.close?.()
+      }
+
+      getRuntimeState().securityRedisAdapter = nextManagedSecurityRedisAdapter
+      getRuntimeState().securityRateLimitStoreManaged = !shouldReuseExistingSecurityStore
+
+      securityModule.configureSecurityRuntime({
+        config: loadedConfig.security,
+        rateLimitStore,
+        csrfSigningKey: loadedConfig.app.key,
+      })
+    } catch (error) {
+      if (
+        nextManagedSecurityRedisAdapter
+        && nextManagedSecurityRedisAdapter !== existingManagedSecurityRedisAdapter
+      ) {
+        await nextManagedSecurityRedisAdapter.close?.()
+      }
+
+      throw error
+    }
+  } else if (existingManagedSecurityRedisAdapter || getRuntimeState().securityRateLimitStoreManaged === true) {
+    await existingManagedSecurityRedisAdapter?.close?.()
+    getRuntimeState().securityRedisAdapter = undefined
+    getRuntimeState().securityRateLimitStoreManaged = undefined
+    const existingSecurityModule = await loadSecurityModule()
+    existingSecurityModule?.resetSecurityRuntime()
+  } else {
+    getRuntimeState().securityRateLimitStoreManaged = undefined
+  }
+
   const sessionModule = sessionConfigured || authConfigured
     ? await loadSessionModule(true)
     : undefined
@@ -3263,6 +3401,12 @@ export async function resetOptionalHoloSubsystems(): Promise<void> {
   clerkModule?.resetClerkAuthRuntime()
   const sessionModule = await loadSessionModule()
   sessionModule?.resetSessionRuntime()
+  const securityRedisAdapter = getRuntimeState().securityRedisAdapter
+  getRuntimeState().securityRedisAdapter = undefined
+  getRuntimeState().securityRateLimitStoreManaged = undefined
+  await securityRedisAdapter?.close?.()
+  const securityModule = await loadSecurityModule()
+  securityModule?.resetSecurityRuntime()
 }
 
 export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(

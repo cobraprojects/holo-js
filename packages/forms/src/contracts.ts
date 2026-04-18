@@ -9,6 +9,7 @@ import {
   isValidationSchema,
   validate as validateInput,
 } from '@holo-js/validation'
+import { formsSecurityInternals, loadSecurityModule } from './security'
 
 export interface FormSchema<TShape extends SchemaInputShape = SchemaInputShape> extends ValidationSchema<TShape> {
   readonly mode: 'form'
@@ -34,6 +35,11 @@ export interface SerializedFormSubmission<TData> {
   readonly submitted: true
   readonly values: Partial<TData> | TData
   readonly errors: Record<string, readonly string[]>
+}
+
+export interface FormSecurityOptions {
+  readonly csrf?: boolean
+  readonly throttle?: string
 }
 
 export interface FormSubmissionSuccess<TData> {
@@ -116,12 +122,13 @@ function createSubmission<TData>(
   valid: boolean,
   values: Partial<TData> | TData,
   errors: ValidationErrorBag<TData>,
+  failureStatus = 422,
 ): FormSubmissionResult<TData> {
   const serialize = () => serializeSubmissionState(valid, values, errors)
 
   const failure = (): FormFailurePayload<TData> => ({
     ok: false,
-    status: 422,
+    status: failureStatus,
     valid: false as const,
     values: values as Partial<TData>,
     errors: errors.flatten(),
@@ -185,19 +192,128 @@ export function createFailedSubmission<TShape extends SchemaInputShape, TSchema 
   schemaDefinition: TSchema,
   values: Partial<InferSchemaData<TShape>>,
   flattenedErrors: Record<string, readonly string[]>,
+  status = 422,
 ): FormSubmissionFailure<InferSchemaData<TShape>> {
   void schemaDefinition
   return createSubmission<InferSchemaData<TShape>>(
     false,
     values,
     createErrorBag<InferSchemaData<TShape>>(flattenedErrors),
+    status,
   ) as FormSubmissionFailure<InferSchemaData<TShape>>
+}
+
+function isRequestInput(input: FormLikeValidationInput): input is Request {
+  return typeof Request !== 'undefined' && input instanceof Request
+}
+
+async function createSecurityFailureSubmission<TShape extends SchemaInputShape, TSchema extends FormSchema<TShape>>(
+  input: Request,
+  schemaDefinition: TSchema,
+  error: Error & { readonly status: number },
+): Promise<FormSubmissionFailure<InferSchemaData<TShape>>> {
+  let values = {} as Partial<InferSchemaData<TShape>>
+  let flattenedErrors: Record<string, readonly string[]> = {}
+
+  try {
+    const inspection = await validateInput(input.clone(), schemaDefinition as ValidationSchema<TShape>)
+
+    if (inspection.valid) {
+      values = inspection.data
+    } else {
+      values = inspection.values
+      flattenedErrors = inspection.errors.flatten()
+    }
+  } catch {
+    values = {} as Partial<InferSchemaData<TShape>>
+    flattenedErrors = {}
+  }
+
+  return createFailedSubmission(
+    schemaDefinition,
+    values,
+    {
+      ...flattenedErrors,
+      _root: [
+        ...(flattenedErrors._root ?? []),
+        error.message,
+      ],
+    },
+    error.status,
+  )
 }
 
 export async function validate<TShape extends SchemaInputShape, TSchema extends FormSchema<TShape>>(
   input: FormLikeValidationInput,
   schemaDefinition: TSchema,
+  options: FormSecurityOptions = {},
 ): Promise<FormSubmissionResult<InferSchemaData<TShape>>> {
+  let validatedSubmission:
+    | FormSubmissionResult<InferSchemaData<TShape>>
+    | undefined
+  const usesSecurityOptions = options.csrf === true || typeof options.throttle === 'string'
+
+  if (usesSecurityOptions && !isRequestInput(input)) {
+    throw new FormContractError(
+      'Security-aware validate() options require a Request input.',
+    )
+  }
+
+  if (usesSecurityOptions) {
+    const request = input as Request
+
+    try {
+      const security = await loadSecurityModule()
+
+      if (options.csrf === true) {
+        await security.csrf.verify(request)
+      }
+
+      if (typeof options.throttle === 'string') {
+        const inspection = await validateInput(request.clone(), schemaDefinition as ValidationSchema<TShape>)
+        const throttleValues = inspection.valid ? inspection.data : inspection.values
+        validatedSubmission = inspection.valid
+          ? createSuccessfulSubmission(schemaDefinition, inspection.data)
+          : createFailedSubmission(schemaDefinition, inspection.values, inspection.errors.flatten())
+        await security.rateLimit(options.throttle, {
+          request,
+          values: throttleValues,
+        })
+      }
+    } catch (error) {
+      if (formsSecurityInternals.isRootSecurityError(error)) {
+        if (validatedSubmission) {
+          return createFailedSubmission(
+            schemaDefinition,
+            validatedSubmission.valid
+              ? validatedSubmission.data
+              : validatedSubmission.values,
+            {
+              ...(validatedSubmission.valid
+                ? {}
+                : validatedSubmission.errors.flatten()),
+              _root: [
+                ...(!validatedSubmission.valid
+                  ? (validatedSubmission.errors.flatten()._root ?? [])
+                  : []),
+                error.message,
+              ],
+            },
+            error.status,
+          )
+        }
+
+        return await createSecurityFailureSubmission(request, schemaDefinition, error)
+      }
+
+      throw error
+    }
+  }
+
+  if (validatedSubmission) {
+    return validatedSubmission
+  }
+
   const result = await validateInput(input, schemaDefinition as ValidationSchema<TShape>)
 
   if (result.valid) {

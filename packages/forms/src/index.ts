@@ -10,6 +10,7 @@ export {
 export type {
   FormFailurePayload,
   FormSchema,
+  FormSecurityOptions,
   FormSubmissionFailure,
   FormSubmissionResult,
   FormSubmissionSuccess,

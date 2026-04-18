@@ -739,6 +739,21 @@
         "@holo-js/queue": "^0.1.2",
       },
     },
+    "packages/security": {
+      "name": "@holo-js/security",
+      "version": "0.1.2",
+      "dependencies": {
+        "@holo-js/config": "^0.1.2",
+        "ioredis": "^5.4.2",
+      },
+      "devDependencies": {
+        "@types/ioredis": "^4.28.10",
+        "@types/node": "^22.10.2",
+        "tsup": "^8.3.5",
+        "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
+      },
+    },
     "packages/session": {
       "name": "@holo-js/session",
       "version": "0.1.2",
@@ -1122,6 +1137,8 @@
     "@holo-js/queue-db": ["@holo-js/queue-db@workspace:packages/queue-db"],
 
     "@holo-js/queue-redis": ["@holo-js/queue-redis@workspace:packages/queue-redis"],
+
+    "@holo-js/security": ["@holo-js/security@workspace:packages/security"],
 
     "@holo-js/session": ["@holo-js/session@workspace:packages/session"],
 
@@ -1560,6 +1577,8 @@
     "@types/estree": ["@types/estree@1.0.8", "", {}, "sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w=="],
 
     "@types/hast": ["@types/hast@3.0.4", "", { "dependencies": { "@types/unist": "*" } }, "sha512-WPs+bbQw5aCj+x6laNGWLH3wviHtoCv/P3+otBhbOhJgG8qtpdAMlTCxLtsTWA7LH1Oh/bFCHsBn0TPS5m30EQ=="],
+
+    "@types/ioredis": ["@types/ioredis@4.28.10", "", { "dependencies": { "@types/node": "*" } }, "sha512-69LyhUgrXdgcNDv7ogs1qXZomnfOEnSmrmMFqKgt1XMJxmoOSG/u3wYy13yACIfKuMJ8IhKgHafDO3sx19zVQQ=="],
 
     "@types/json-schema": ["@types/json-schema@7.0.15", "", {}, "sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA=="],
 

@@ -44,7 +44,7 @@ The interactive flow asks for:
 - database driver: `sqlite`, `mysql`, or `postgres`
 - package manager: `bun`, `npm`, `pnpm`, or `yarn`
 - storage default disk: `local` or `public`
-- optional packages: `validation`, `forms`, `notifications`, `mail`, `storage`, `events`, `queue`, `auth`, or none
+- optional packages: `validation`, `forms`, `security`, `notifications`, `mail`, `storage`, `events`, `queue`, `auth`, or none
 
 ## Create a project non-interactively
 
@@ -103,11 +103,11 @@ instead of resolving `create-holo-js`.
 
 Use the non-interactive flags for CI, templates, or internal automation.
 
-`forms`, `validation`, `notifications`, `mail`, `storage`, `events`, `queue`, and `auth` are optional packages. Add them during scaffolding only if the
+`forms`, `validation`, `security`, `notifications`, `mail`, `storage`, `events`, `queue`, and `auth` are optional packages. Add them during scaffolding only if the
 app needs them.
 
-Example optional package sets include `--package forms,validation,notifications` and
-`--package forms,validation,mail`.
+Example optional package sets include `--package forms,validation,notifications`,
+`--package forms,validation,mail`, and `--package forms,validation,security`.
 
 Broadcast setup is installed after scaffolding:
 

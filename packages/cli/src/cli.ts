@@ -33,6 +33,7 @@ import type * as QueueModule from './queue'
 import type * as QueueMigrationsModule from './queue-migrations'
 import type * as GeneratorsModule from './generators'
 import type * as BroadcastModule from './broadcast'
+import type * as SecurityModule from './security'
 import type { LoadedProjectConfig, CommandFlagValue, CommandExecutionContext } from './types'
 import type {
   IoStreams,
@@ -68,12 +69,16 @@ type QueueCommandExecutors = {
 type BroadcastCommandExecutors = {
   runBroadcastWorkCommand?: typeof BroadcastModule.runBroadcastWorkCommand
 }
+type SecurityCommandExecutors = {
+  runRateLimitClearCommand?: typeof SecurityModule.runRateLimitClearCommand
+}
 
 let runtimeModulePromise: Promise<typeof RuntimeModule> | undefined
 let queueModulePromise: Promise<typeof QueueModule> | undefined
 let queueMigrationsModulePromise: Promise<typeof QueueMigrationsModule> | undefined
 let generatorsModulePromise: Promise<typeof GeneratorsModule> | undefined
 let broadcastModulePromise: Promise<typeof BroadcastModule> | undefined
+let securityModulePromise: Promise<typeof SecurityModule> | undefined
 let devModulePromise: Promise<typeof DevModule> | undefined
 let projectConfigModulePromise: Promise<typeof ProjectConfigModule> | undefined
 let projectDiscoveryModulePromise: Promise<typeof ProjectDiscoveryModule> | undefined
@@ -103,6 +108,11 @@ function loadGeneratorsModule(): Promise<typeof GeneratorsModule> {
 function loadBroadcastModule(): Promise<typeof BroadcastModule> {
   broadcastModulePromise ??= import('./broadcast')
   return broadcastModulePromise
+}
+
+function loadSecurityModule(): Promise<typeof SecurityModule> {
+  securityModulePromise ??= import('./security')
+  return securityModulePromise
 }
 
 function loadDevModule(): Promise<typeof DevModule> {
@@ -297,6 +307,7 @@ export function createInternalCommands(
   queueExecutors: QueueCommandExecutors = {},
   projectExecutors: ProjectCommandExecutors = {},
   broadcastExecutors: BroadcastCommandExecutors = {},
+  securityExecutors: SecurityCommandExecutors = {},
 ): CommandDefinition[] {
   return [
     {
@@ -364,7 +375,7 @@ export function createInternalCommands(
     {
       name: 'install',
       description: 'Install first-party Holo support into an existing project.',
-      usage: 'holo install <queue|events|auth|notifications|mail|broadcast> [--driver <sync|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
+      usage: 'holo install <queue|events|auth|notifications|mail|broadcast|security> [--driver <sync|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
       source: 'internal',
       async prepare(input) {
         const target = normalizeChoice(
@@ -387,6 +398,9 @@ export function createInternalCommands(
         }
         if (target === 'broadcast' && requestedDriver) {
           throw new Error('The broadcast installer does not support --driver.')
+        }
+        if (target === 'security' && requestedDriver) {
+          throw new Error('The security installer does not support --driver.')
         }
 
         const driver = target === 'queue'
@@ -557,6 +571,17 @@ export function createInternalCommands(
           if (result.createdChannelsDirectory) writeLine(context.stdout, '  - created server/channels')
           if (result.createdBroadcastAuthRoute) writeLine(context.stdout, '  - created /broadcasting/auth route')
           if (result.createdFrameworkSetup) writeLine(context.stdout, '  - created framework Flux setup')
+          return
+        }
+
+        if (target === 'security') {
+          const { installSecurityIntoProject } = await loadProjectScaffoldModule()
+          const result = await installSecurityIntoProject(context.projectRoot)
+          const changed = result.updatedPackageJson || result.createdSecurityConfig
+
+          writeLine(context.stdout, changed ? 'Installed security support.' : 'Security support is already installed.')
+          if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
+          if (result.createdSecurityConfig) writeLine(context.stdout, '  - created config/security.ts')
           return
         }
 
@@ -736,6 +761,40 @@ export function createInternalCommands(
       async run(commandContext) {
         const runQueueListen = await resolveQueueExecutor(queueExecutors, 'runQueueListen')
         await runQueueListen(context, context.projectRoot, commandContext.flags)
+      },
+    },
+    {
+      name: 'rate-limit:clear',
+      description: 'Clear rate-limit buckets for the configured security driver.',
+      usage: 'holo rate-limit:clear [--limiter <name>] [--key <value>] [--all]',
+      source: 'internal',
+      async prepare(input) {
+        const limiter = resolveStringFlag(input.flags, 'limiter')
+        const key = resolveStringFlag(input.flags, 'key')
+        const all = resolveBooleanFlag(input.flags, 'all')
+
+        if (!all && !limiter) {
+          throw new Error('rate-limit:clear requires --limiter <name> unless --all is used.')
+        }
+
+        return {
+          args: [],
+          flags: {
+            ...(limiter ? { limiter } : {}),
+            ...(key ? { key } : {}),
+            ...(all ? { all } : {}),
+          },
+        }
+      },
+      async run(commandContext) {
+        const runRateLimitClearCommand = securityExecutors.runRateLimitClearCommand
+          ?? (await loadSecurityModule()).runRateLimitClearCommand
+
+        await runRateLimitClearCommand(context, context.projectRoot, {
+          ...(typeof commandContext.flags.limiter === 'string' ? { limiter: commandContext.flags.limiter } : {}),
+          ...(typeof commandContext.flags.key === 'string' ? { key: commandContext.flags.key } : {}),
+          ...(commandContext.flags.all === true ? { all: true } : {}),
+        })
       },
     },
     {
@@ -1396,6 +1455,7 @@ export async function runCli(argv: readonly string[], io: IoStreams): Promise<nu
       || requestedCommandName === 'queue:flush'
       || requestedCommandName === 'queue:restart'
       || requestedCommandName === 'queue:clear'
+      || requestedCommandName === 'rate-limit:clear'
 
     if (!canSkipAppDiscovery) {
       const initialProject = await loadProject()

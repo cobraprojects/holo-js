@@ -15,6 +15,7 @@ import {
   defineMediaConfig,
   defineNotificationsConfig,
   defineQueueConfig,
+  defineSecurityConfig,
   defineSessionConfig,
   defineStorageConfig,
   env,
@@ -29,6 +30,7 @@ import {
   normalizeMailConfig,
   normalizeNotificationsConfig,
   normalizeQueueConfigForHolo,
+  normalizeSecurityConfig,
   normalizeSessionConfig,
   resetConfigRuntime,
   resolveConfigCachePath,
@@ -41,6 +43,7 @@ import {
 
 const tempDirs: string[] = []
 const packageEntry = JSON.stringify(resolve(import.meta.dirname, '../src/index.ts'))
+const securityPackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../security/src/index.ts'))
 
 async function createProject(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-config-'))
@@ -71,7 +74,7 @@ describe('@holo-js/config', () => {
     expect(normalizeAppEnv('staging', 'production')).toBe('production')
   })
 
-  it('normalizes database defaults and freezes media, mail, notifications, and queue config values', () => {
+  it('normalizes database defaults and freezes media, mail, notifications, queue, and security config values', () => {
     expect(normalizeDatabaseConfig().defaultConnection).toBe('default')
     expect(normalizeDatabaseConfig({
       defaultConnection: 'primary',
@@ -159,6 +162,17 @@ describe('@holo-js/config', () => {
         afterCommit: true,
       },
     })
+    const security = defineSecurityConfig({
+      csrf: {
+        enabled: true,
+      },
+      rateLimit: {
+        driver: 'file',
+        file: {
+          path: './storage/framework/rate-limits',
+        },
+      },
+    })
 
     expect(queue).toEqual({
       connections: {
@@ -199,6 +213,19 @@ describe('@holo-js/config', () => {
       },
     })
     expect(Object.isFrozen(mail)).toBe(true)
+    expect(security).toEqual({
+      csrf: {
+        enabled: true,
+      },
+      rateLimit: {
+        driver: 'file',
+        file: {
+          path: './storage/framework/rate-limits',
+        },
+      },
+    })
+    expect(Object.isFrozen(security)).toBe(true)
+    expect(normalizeSecurityConfig(security).rateLimit.driver).toBe('file')
     expect(normalizeMailConfig()).toEqual({
       default: 'preview',
       from: undefined,
@@ -623,6 +650,62 @@ describe('@holo-js/config', () => {
         },
       },
     })).toThrow('Unsupported queue driver "sqs"')
+  })
+
+  it('loads security config files through the shared config loader', async () => {
+    const projectRoot = await createProject()
+    await writeFile(join(projectRoot, 'config', 'security.ts'), [
+      `export default {`,
+      `  csrf: { enabled: true },`,
+      `  rateLimit: {`,
+      `    driver: 'redis',`,
+      `    redis: { connection: 'cache', prefix: 'holo:test:' },`,
+      `    limiters: {`,
+      `      login: { maxAttempts: 5, decaySeconds: 60 },`,
+      `    },`,
+      `  },`,
+      `}`,
+    ].join('\n'), 'utf8')
+
+    const loaded = await loadConfigDirectory(projectRoot, {
+      envName: 'test',
+    })
+
+    expect(loaded.security).toEqual({
+      csrf: {
+        enabled: true,
+        field: '_token',
+        header: 'X-CSRF-TOKEN',
+        cookie: 'XSRF-TOKEN',
+        except: [],
+      },
+      rateLimit: {
+        driver: 'redis',
+        memory: {
+          driver: 'memory',
+        },
+        file: {
+          path: './storage/framework/rate-limits',
+        },
+        redis: {
+          host: '127.0.0.1',
+          port: 6379,
+          password: undefined,
+          username: undefined,
+          db: 0,
+          connection: 'cache',
+          prefix: 'holo:test:',
+        },
+        limiters: {
+          login: {
+            name: 'login',
+            maxAttempts: 5,
+            decaySeconds: 60,
+          },
+        },
+      },
+    })
+    expect(loaded.all.security.rateLimit.driver).toBe('redis')
   })
 
   it('covers remaining mail config normalization branches', () => {
@@ -1536,6 +1619,187 @@ export default defineConfig({
 `, 'utf8')
 
     await expect(writeConfigCache(root, { processEnv: {} })).rejects.toThrow('JSON-serializable')
+  })
+
+  it('caches security configs that use keyed rate limiters', async () => {
+    const root = await createProject()
+
+    await writeFile(join(root, 'config/security.ts'), `
+import { defineSecurityConfig, ip, limit } from ${securityPackageEntry}
+
+export default defineSecurityConfig({
+  rateLimit: {
+    limiters: {
+      login: limit.perMinute(5).by(({ request }) => ip(request)),
+    },
+  },
+})
+`, 'utf8')
+
+    await expect(writeConfigCache(root, {
+      envName: 'production',
+      processEnv: {},
+    })).resolves.toBe(resolveConfigCachePath(root))
+
+    const loaded = await loadConfigDirectory(root, {
+      envName: 'production',
+      processEnv: {},
+    })
+
+    expect(typeof loaded.security.rateLimit.limiters.login?.key).toBe('function')
+    expect(loaded.security.rateLimit.limiters.login?.key?.({
+      request: new Request('https://app.test/login', {
+        headers: {
+          'x-forwarded-for': '203.0.113.10',
+        },
+      }),
+    })).toBe('203.0.113.10')
+  })
+
+  it('tracks deferred security cache entries and falls back when legacy metadata is missing', () => {
+    expect(loaderInternals.splitCacheableConfig({
+      app: {
+        name: 'Cached App',
+      },
+      security: {
+        rateLimit: {
+          limiters: {
+            login: {
+              maxAttempts: 5,
+              decaySeconds: 60,
+              key() {
+                return '203.0.113.10'
+              },
+            },
+          },
+        },
+      },
+    })).toEqual({
+      cacheableConfig: {
+        app: {
+          name: 'Cached App',
+        },
+      },
+      deferredConfigNames: ['security'],
+    })
+
+    expect(loaderInternals.getDeferredConfigNames({
+      version: 1,
+      environment: {
+        name: 'production',
+        loadedFiles: [],
+        warnings: [],
+      },
+      configFiles: [],
+      config: {},
+    } as never)).toEqual([])
+  })
+
+  it('drops deferred security config from cached loads when the live file is removed', async () => {
+    const root = await createProject()
+
+    await writeFile(join(root, 'config/security.ts'), `
+import { defineSecurityConfig, ip, limit } from ${securityPackageEntry}
+
+export default defineSecurityConfig({
+  csrf: {
+    enabled: true,
+  },
+  rateLimit: {
+    limiters: {
+      login: limit.perMinute(5).by(({ request }) => ip(request)),
+    },
+  },
+})
+`, 'utf8')
+
+    await writeConfigCache(root, {
+      envName: 'production',
+      processEnv: {},
+    })
+    await rm(join(root, 'config/security.ts'))
+
+    const loaded = await loadConfigDirectory(root, {
+      envName: 'production',
+      processEnv: {},
+    })
+
+    expect(loaded.security).toEqual(normalizeSecurityConfig())
+    expect(loaded.loadedFiles.some(filePath => filePath.endsWith('/config/security.ts'))).toBe(false)
+  })
+
+  it('keeps cached config values aligned with loaded files when deferred security entries exist', async () => {
+    const root = await createProject()
+    const queuePath = join(root, 'config/queue.ts')
+
+    await writeFile(join(root, 'config/security.ts'), `
+import { defineSecurityConfig, ip, limit } from ${securityPackageEntry}
+
+export default defineSecurityConfig({
+  rateLimit: {
+    limiters: {
+      login: limit.perMinute(5).by(({ request }) => ip(request)),
+    },
+  },
+})
+`, 'utf8')
+
+    await writeFile(queuePath, `
+import { defineQueueConfig } from ${packageEntry}
+
+export default defineQueueConfig({
+  connections: {
+    redis: {
+      driver: 'redis',
+      connection: 'cache',
+      retryAfter: 90,
+      blockFor: 5,
+    },
+  },
+})
+`, 'utf8')
+
+    await writeConfigCache(root, {
+      envName: 'production',
+      processEnv: {},
+    })
+
+    await writeFile(queuePath, `
+import { defineQueueConfig } from ${packageEntry}
+
+export default defineQueueConfig({
+  connections: {
+    redis: {
+      driver: 'redis',
+      connection: 'cache',
+      retryAfter: 15,
+      blockFor: 1,
+    },
+  },
+})
+`, 'utf8')
+
+    const loaded = await loadConfigDirectory(root, {
+      envName: 'production',
+      processEnv: {},
+    })
+
+    expect(loaded.loadedFiles.some(filePath => filePath.endsWith('/config/queue.ts'))).toBe(true)
+    expect(loaded.loadedFiles.some(filePath => filePath.endsWith('/config/security.ts'))).toBe(true)
+    expect(loaded.queue.connections.redis).toEqual({
+      name: 'redis',
+      driver: 'redis',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 5,
+      redis: {
+        host: '127.0.0.1',
+        port: 6379,
+        password: undefined,
+        username: undefined,
+        db: 0,
+      },
+    })
   })
 
   it('caches serializable array config values and resolves production aliases without warnings when canonical file is absent', async () => {

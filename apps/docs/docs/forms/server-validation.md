@@ -22,7 +22,10 @@ const loginForm = schema({
 })
 
 export async function POST(request: Request) {
-  const submission = await validate(request, loginForm)
+  const submission = await validate(request, loginForm, {
+    csrf: true,
+    throttle: 'login',
+  })
 
   if (!submission.valid) {
     return Response.json(submission.fail(), {
@@ -37,6 +40,7 @@ export async function POST(request: Request) {
 ```
 
 ```ts [Nuxt — server/api/login.post.ts]
+import { defineEventHandler, getHeaders, getRequestURL, readRawBody } from 'h3'
 import { field, schema, validate } from '@holo-js/forms'
 
 const loginForm = schema({
@@ -46,8 +50,15 @@ const loginForm = schema({
 })
 
 export default defineEventHandler(async (event) => {
-  const body = await readBody(event)
-  const submission = await validate(body, loginForm)
+  const request = new Request(getRequestURL(event), {
+    method: event.method,
+    headers: getHeaders(event),
+    body: await readRawBody(event) ?? undefined,
+  })
+  const submission = await validate(request, loginForm, {
+    csrf: true,
+    throttle: 'login',
+  })
 
   if (!submission.valid) {
     return submission.fail()
@@ -70,7 +81,10 @@ const loginForm = schema({
 
 export const actions = {
   default: async ({ request }) => {
-    const submission = await validate(request, loginForm)
+    const submission = await validate(request, loginForm, {
+      csrf: true,
+      throttle: 'login',
+    })
 
     if (!submission.valid) {
       return submission.fail()
@@ -84,6 +98,9 @@ export const actions = {
 ```
 
 :::
+
+When you add `csrf` or `throttle`, pass a real web `Request` into `validate(...)`. In Nuxt that means building
+one from the event instead of validating only the parsed body.
 
 ## SvelteKit remote functions
 
@@ -183,6 +200,7 @@ in other frameworks:
 
   const form = useForm(registerUser, {
     validateOn: 'blur',
+    csrf: true,
     initialValues: { name: '', email: '', password: '', passwordConfirmation: '' },
     async submitter({ formData }) {
       const response = await fetch('/api/register', { method: 'POST', body: formData })
@@ -222,6 +240,7 @@ import { loginForm } from '@/lib/schemas/login'
 
 export default function LoginPage() {
   const form = useForm(loginForm, {
+    csrf: true,
     initialValues: { email: '', password: '', remember: false },
     async submitter({ formData }) {
       const response = await fetch('/api/login', { method: 'POST', body: formData })
@@ -275,6 +294,7 @@ import { useForm } from '@holo-js/adapter-nuxt/client'
 import { loginForm } from '~/lib/schemas/login'
 
 const form = useForm(loginForm, {
+  csrf: true,
   initialValues: { email: '', password: '', remember: false },
   async submitter({ formData }) {
     return await $fetch('/api/login', { method: 'POST', body: formData })
@@ -398,7 +418,10 @@ export const registerUser = schema({
 })
 
 export async function POST(request: Request) {
-  const submission = await validate(request, registerUser)
+  const submission = await validate(request, registerUser, {
+    csrf: true,
+    throttle: 'register',
+  })
 
   if (!submission.valid) {
     return Response.json(submission.fail(), { status: submission.fail().status })
@@ -411,6 +434,7 @@ export async function POST(request: Request) {
 ```
 
 ```ts [Nuxt — server/api/register.post.ts]
+import { defineEventHandler, getHeaders, getRequestURL, readRawBody } from 'h3'
 import { field, schema, validate } from '@holo-js/forms'
 
 const registerUser = schema({
@@ -421,8 +445,15 @@ const registerUser = schema({
 })
 
 export default defineEventHandler(async (event) => {
-  const body = await readBody(event)
-  const submission = await validate(body, registerUser)
+  const request = new Request(getRequestURL(event), {
+    method: event.method,
+    headers: getHeaders(event),
+    body: await readRawBody(event) ?? undefined,
+  })
+  const submission = await validate(request, registerUser, {
+    csrf: true,
+    throttle: 'register',
+  })
 
   if (!submission.valid) {
     return submission.fail()
@@ -446,7 +477,10 @@ const registerUser = schema({
 
 export const actions = {
   default: async ({ request }) => {
-    const submission = await validate(request, registerUser)
+    const submission = await validate(request, registerUser, {
+      csrf: true,
+      throttle: 'register',
+    })
 
     if (!submission.valid) {
       return submission.fail()

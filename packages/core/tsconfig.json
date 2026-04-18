@@ -13,6 +13,7 @@
       "@holo-js/events": ["../events/src/index.ts"],
       "@holo-js/queue": ["../queue/src/index.ts"],
       "@holo-js/queue-db": ["../queue-db/src/index.ts"],
+      "@holo-js/security": ["../security/src/index.ts"],
       "@holo-js/session": ["../session/src/index.ts"]
     }
   },

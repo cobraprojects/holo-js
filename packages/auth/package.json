@@ -30,6 +30,14 @@
   "dependencies": {
     "@holo-js/config": "^0.1.2"
   },
+  "peerDependencies": {
+    "@holo-js/security": "^0.1.2"
+  },
+  "peerDependenciesMeta": {
+    "@holo-js/security": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "tsup": "^8.3.5",
