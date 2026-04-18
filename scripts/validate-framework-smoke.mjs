@@ -1,5 +1,5 @@
 import { access, readFile, rm, writeFile } from 'node:fs/promises'
-import { constants as fsConstants } from 'node:fs'
+import { constants as fsConstants, readFileSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 import assert from 'node:assert/strict'
@@ -10,7 +10,7 @@ import pg from 'pg'
 const rootDir = resolve(import.meta.dirname, '..')
 const mysqlDatabaseName = 'holo_matrix_smoke_mysql'
 const postgresDatabaseName = 'holo_matrix_smoke_postgres'
-const smokeWorkspacePackages = [
+const frameworkMatrixSmokePackages = [
   '@holo-js/broadcast',
   '@holo-js/auth',
   '@holo-js/auth-social',
@@ -26,19 +26,67 @@ const smokeWorkspacePackages = [
   '@holo-js/queue-redis',
   '@holo-js/queue-db',
   '@holo-js/config',
-  '@holo-js/security',
-  '@holo-js/storage',
-  '@holo-js/storage-s3',
   '@holo-js/core',
+  '@holo-js/forms',
   '@holo-js/media',
   '@holo-js/session',
+  '@holo-js/storage',
+  '@holo-js/storage-s3',
   '@holo-js/validation',
-  '@holo-js/forms',
   '@holo-js/adapter-next',
   '@holo-js/adapter-sveltekit',
   '@holo-js/adapter-nuxt',
   '@holo-js/cli',
 ]
+const additionalRuntimeSmokePackages = [
+  '@holo-js/auth-social-apple',
+  '@holo-js/auth-social-discord',
+  '@holo-js/auth-social-facebook',
+  '@holo-js/auth-social-github',
+  '@holo-js/auth-social-linkedin',
+  '@holo-js/security',
+  '@holo-js/flux',
+  '@holo-js/mail',
+  '@holo-js/notifications',
+]
+const frameworkHelperSmokePackages = [
+  '@holo-js/flux-react',
+  '@holo-js/flux-vue',
+  '@holo-js/flux-svelte',
+]
+const indirectSmokeCoveragePackages = [
+  'create-holo-js',
+]
+const smokeWorkspacePackages = [
+  ...new Set([
+    ...frameworkMatrixSmokePackages,
+    ...additionalRuntimeSmokePackages,
+    ...frameworkHelperSmokePackages,
+  ]),
+]
+
+function readWorkspacePackageNames() {
+  return readdirSync(resolve(rootDir, 'packages'), { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map((entry) => {
+      const manifestPath = join(rootDir, 'packages', entry.name, 'package.json')
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+      return manifest.name
+    })
+    .sort()
+}
+
+function assertSmokeCoverageDefinitions() {
+  const workspacePackages = readWorkspacePackageNames()
+  const coveredPackages = new Set([
+    ...smokeWorkspacePackages,
+    ...indirectSmokeCoveragePackages,
+  ])
+  const uncoveredPackages = workspacePackages.filter(packageName => !coveredPackages.has(packageName))
+  if (uncoveredPackages.length > 0) {
+    throw new Error(`Smoke package coverage is missing classifications for: ${uncoveredPackages.join(', ')}`)
+  }
+}
 
 const frameworkApps = [
   {
@@ -764,6 +812,846 @@ console.log(JSON.stringify({ framework: ${JSON.stringify(app.framework)}, reques
   await runCommand(app.cwd, 'node', ['--input-type=module', '--eval', script], env)
 }
 
+function createAdditionalPackageSmokeScript(app) {
+  return `
+import assert from 'node:assert/strict'
+import {
+  configureMailRuntime,
+  defineMail,
+  previewMail,
+  renderMailPreview,
+  sendMail,
+} from '@holo-js/mail'
+import {
+  configureNotificationsRuntime,
+  deleteNotifications,
+  listNotifications,
+  markNotificationsAsRead,
+  markNotificationsAsUnread,
+  notify,
+  unreadNotifications,
+} from '@holo-js/notifications'
+import {
+  SecurityCsrfError,
+  SecurityRateLimitError,
+  clearRateLimit,
+  configureSecurityRuntime,
+  createMemoryRateLimitStore,
+  csrf,
+  defaultRateLimitKey,
+  defineSecurityConfig,
+  ip,
+  limit,
+  protect,
+  rateLimit,
+} from '@holo-js/security'
+import { createFluxClient, fluxInternals } from '@holo-js/flux'
+import appleSocialProvider from '@holo-js/auth-social-apple'
+import discordSocialProvider from '@holo-js/auth-social-discord'
+import facebookSocialProvider from '@holo-js/auth-social-facebook'
+import githubSocialProvider from '@holo-js/auth-social-github'
+import linkedinSocialProvider from '@holo-js/auth-social-linkedin'
+
+const framework = ${JSON.stringify(app.framework)}
+const originalFetch = globalThis.fetch
+
+function createJwt(payload) {
+  const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url')
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url')
+  return \`\${header}.\${body}.\`
+}
+
+function installMockFetch(responses) {
+  let index = 0
+  globalThis.fetch = async () => {
+    const response = responses[index]
+    index += 1
+    if (!response) {
+      throw new Error(\`Unexpected fetch call \${index} during \${framework} package smoke.\`)
+    }
+    return response
+  }
+}
+
+try {
+  process.env.APP_ENV = 'development'
+
+  configureMailRuntime({
+    renderView: async ({ view, props }) => {
+      if (view === 'emails/layout') {
+        return \`<article data-wrapper="true">\${String(props?.html ?? '')}</article>\`
+      }
+
+      return \`<section data-view="\${view}">\${String(props?.subject ?? '')}</section>\`
+    },
+    send: async () => ({
+      messageId: \`\${framework}-mail-1\`,
+      mailer: 'smoke',
+      driver: 'smoke',
+      queued: false,
+    }),
+    config: {
+      default: 'smoke',
+      from: {
+        email: 'smoke@example.com',
+        name: 'Smoke',
+      },
+      mailers: {
+        smoke: {
+          driver: 'preview',
+          queue: {},
+        },
+      },
+      queue: {},
+      preview: {
+        allowedEnvironments: ['development', 'test', 'production'],
+      },
+    },
+  })
+
+  const smokeMail = defineMail({
+    to: 'ava@example.com',
+    subject: \`\${framework} smoke mail\`,
+    markdown: '# Smoke',
+    markdownWrapper: 'emails/layout',
+  })
+  const preview = await previewMail(smokeMail)
+  assert.equal(preview.subject, \`\${framework} smoke mail\`)
+  assert.match(preview.html ?? '', /<article data-wrapper="true">/)
+  const previewResponse = await renderMailPreview(smokeMail)
+  assert.equal(previewResponse.status, 200)
+  assert.match(await previewResponse.text(), /<h1>Smoke<\\/h1>/)
+  const sentMail = await sendMail(smokeMail)
+  assert.equal(sentMail.messageId, \`\${framework}-mail-1\`)
+  assert.equal(sentMail.queued, false)
+
+  const mailDeliveries = []
+  const broadcastDeliveries = []
+  const notificationRecords = []
+  let notificationCounter = 0
+
+  configureNotificationsRuntime({
+    mailer: {
+      async send(message, context) {
+        mailDeliveries.push({ message, context })
+      },
+    },
+    broadcaster: {
+      async send(message, context) {
+        broadcastDeliveries.push({ message, context })
+      },
+    },
+    store: {
+      async create(record) {
+        notificationCounter += 1
+        notificationRecords.push({
+          ...record,
+          id: \`notif-\${notificationCounter}\`,
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+        })
+      },
+      async list(target) {
+        return notificationRecords.filter(record => (
+          String(record.notifiableId) === String(target.id)
+          && record.notifiableType === target.type
+        ))
+      },
+      async unread(target) {
+        return notificationRecords.filter(record => (
+          String(record.notifiableId) === String(target.id)
+          && record.notifiableType === target.type
+          && record.readAt === null
+        ))
+      },
+      async markAsRead(ids) {
+        let updated = 0
+        for (const record of notificationRecords) {
+          if (ids.includes(record.id) && record.readAt === null) {
+            record.readAt = new Date('2026-01-02T00:00:00.000Z')
+            updated += 1
+          }
+        }
+
+        return updated
+      },
+      async markAsUnread(ids) {
+        let updated = 0
+        for (const record of notificationRecords) {
+          if (ids.includes(record.id) && record.readAt !== null) {
+            record.readAt = null
+            updated += 1
+          }
+        }
+
+        return updated
+      },
+      async delete(ids) {
+        let removed = 0
+        for (let index = notificationRecords.length - 1; index >= 0; index -= 1) {
+          if (ids.includes(notificationRecords[index].id)) {
+            notificationRecords.splice(index, 1)
+            removed += 1
+          }
+        }
+
+        return removed
+      },
+    },
+  })
+
+  const invoicePaid = {
+    type: 'invoice-paid',
+    via() {
+      return ['email', 'database', 'broadcast']
+    },
+    build: {
+      email(user) {
+        return {
+          subject: \`Invoice paid for \${user.email}\`,
+        }
+      },
+      database() {
+        return {
+          data: {
+            invoiceId: \`inv-\${framework}\`,
+          },
+        }
+      },
+      broadcast() {
+        return {
+          event: 'notifications.invoice-paid',
+          data: {
+            invoiceId: \`inv-\${framework}\`,
+          },
+        }
+      },
+    },
+  }
+
+  const notificationResult = await notify({
+    id: 'user-1',
+    type: 'users',
+    email: 'ava@example.com',
+    name: 'Ava',
+    routeNotificationForBroadcast() {
+      return ['private-users.user-1']
+    },
+  }, invoicePaid)
+
+  assert.equal(notificationResult.totalTargets, 1)
+  assert.deepEqual(notificationResult.channels.map(entry => ({
+    channel: entry.channel,
+    success: entry.success,
+    queued: entry.queued,
+  })), [
+    { channel: 'email', success: true, queued: false },
+    { channel: 'database', success: true, queued: false },
+    { channel: 'broadcast', success: true, queued: false },
+  ])
+  assert.equal(mailDeliveries.length, 1)
+  assert.equal(broadcastDeliveries.length, 1)
+
+  const listedNotifications = await listNotifications({ id: 'user-1', type: 'users' })
+  assert.equal(listedNotifications.length, 1)
+  assert.equal((await unreadNotifications({ id: 'user-1', type: 'users' })).length, 1)
+  assert.equal(await markNotificationsAsRead([listedNotifications[0].id]), 1)
+  assert.equal((await unreadNotifications({ id: 'user-1', type: 'users' })).length, 0)
+  assert.equal(await markNotificationsAsUnread([listedNotifications[0].id]), 1)
+  assert.equal((await unreadNotifications({ id: 'user-1', type: 'users' })).length, 1)
+  assert.equal(await deleteNotifications([listedNotifications[0].id]), 1)
+  assert.equal((await listNotifications({ id: 'user-1', type: 'users' })).length, 0)
+
+  process.env.HOLO_SECURITY_TRUST_PROXY = 'true'
+  configureSecurityRuntime({
+    config: defineSecurityConfig({
+      csrf: {
+        enabled: true,
+      },
+      rateLimit: {
+        driver: 'memory',
+        limiters: {
+          login: limit.perMinute(1).by(({ request, values }) => {
+            return \`\${ip(request, true)}:\${String(values?.email ?? 'guest')}\`
+          }),
+          api: limit.perMinute(1).define(),
+        },
+      },
+    }),
+    rateLimitStore: createMemoryRateLimitStore(),
+    csrfSigningKey: 'smoke-security-key',
+  })
+
+  const csrfSeedRequest = new Request('https://app.test/login')
+  const csrfToken = await csrf.token(csrfSeedRequest)
+  const csrfField = await csrf.field(csrfSeedRequest)
+  const csrfCookie = await csrf.cookie(csrfSeedRequest, csrfToken)
+  assert.equal(csrfField.value, csrfToken)
+  assert.match(csrfCookie, /XSRF-TOKEN=/)
+
+  const verifiedRequest = new Request('https://app.test/login', {
+    method: 'POST',
+    headers: {
+      cookie: csrfCookie,
+      'content-type': 'application/x-www-form-urlencoded',
+      'x-forwarded-for': '203.0.113.7',
+    },
+    body: new URLSearchParams({
+      [csrfField.name]: csrfToken,
+    }),
+  })
+  await csrf.verify(verifiedRequest)
+  await protect(new Request('https://app.test/login', {
+    method: 'POST',
+    headers: {
+      cookie: csrfCookie,
+      'content-type': 'application/x-www-form-urlencoded',
+      'x-forwarded-for': '203.0.113.7',
+    },
+    body: new URLSearchParams({
+      [csrfField.name]: csrfToken,
+    }),
+  }), { csrf: true })
+
+  let csrfError = null
+  try {
+    await protect(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        cookie: csrfCookie,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        [csrfField.name]: 'invalid-token',
+      }),
+    }), { csrf: true })
+  } catch (error) {
+    csrfError = error
+  }
+  assert.ok(csrfError instanceof SecurityCsrfError)
+
+  assert.equal(await defaultRateLimitKey(new Request('https://app.test/api', {
+    headers: {
+      'x-forwarded-for': '198.51.100.20',
+    },
+  })), 'ip:198.51.100.20')
+
+  const loginRequest = new Request('https://app.test/login', {
+    headers: {
+      'x-forwarded-for': '203.0.113.7',
+    },
+  })
+  const loginRate = await rateLimit('login', {
+    request: loginRequest,
+    values: {
+      email: 'ava@example.com',
+    },
+  })
+  assert.equal(loginRate.limited, false)
+  assert.equal(loginRate.snapshot.key, '203.0.113.7:ava@example.com')
+
+  let rateLimitError = null
+  try {
+    await rateLimit('login', {
+      request: loginRequest,
+      values: {
+        email: 'ava@example.com',
+      },
+    })
+  } catch (error) {
+    rateLimitError = error
+  }
+  assert.ok(rateLimitError instanceof SecurityRateLimitError)
+  assert.equal(rateLimitError.status, 429)
+  assert.equal(await clearRateLimit({
+    limiter: 'login',
+    key: '203.0.113.7:ava@example.com',
+  }), true)
+  assert.equal((await rateLimit('login', {
+    request: loginRequest,
+    values: {
+      email: 'ava@example.com',
+    },
+  })).limited, false)
+
+  const throttleRequest = new Request('https://app.test/api/orders', {
+    headers: {
+      'x-forwarded-for': '198.51.100.20',
+    },
+  })
+  await protect(throttleRequest, { throttle: 'api' })
+  let throttleError = null
+  try {
+    await protect(new Request('https://app.test/api/orders', {
+      headers: {
+        'x-forwarded-for': '198.51.100.20',
+      },
+    }), { throttle: 'api' })
+  } catch (error) {
+    throttleError = error
+  }
+  assert.ok(throttleError instanceof SecurityRateLimitError)
+  assert.equal(await clearRateLimit({ limiter: 'api' }), 1)
+
+  const fluxClient = createFluxClient({
+    connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+  })
+  const fluxDebug = fluxClient.__debug
+  assert.ok(fluxDebug, 'Flux smoke did not expose the mock connector debug API.')
+  const fluxEvents = []
+  const fluxNotifications = []
+  const fluxPresence = fluxClient.presence('chat.1')
+  fluxClient.private('orders.1')
+    .listen('orders.updated', payload => {
+      fluxEvents.push(payload)
+    })
+    .notification(payload => {
+      fluxNotifications.push(payload)
+    })
+  await fluxClient.connect()
+  fluxDebug.emitEvent('orders.1', 'orders.updated', { id: 'ord_1', framework })
+  fluxDebug.emitNotification('orders.1', { type: 'order.updated', framework })
+  fluxDebug.updatePresenceMembers('chat.1', [{ id: \`\${framework}-user\` }])
+  assert.deepEqual(fluxEvents, [{ id: 'ord_1', framework }])
+  assert.deepEqual(fluxNotifications, [{ type: 'order.updated', framework }])
+  assert.deepEqual(fluxPresence.members, [{ id: \`\${framework}-user\` }])
+  await fluxClient.disconnect()
+  assert.deepEqual(fluxDebug.getJoinedChannels(), [])
+
+  const baseContext = {
+    state: 'state-1',
+    codeChallenge: 'challenge',
+    codeVerifier: 'verifier',
+    code: 'test-code',
+  }
+
+  const appleAuthorizationUrl = await appleSocialProvider.buildAuthorizationUrl({
+    provider: 'apple',
+    request: new Request('https://app.test/auth/apple'),
+    state: baseContext.state,
+    codeVerifier: baseContext.codeVerifier,
+    codeChallenge: baseContext.codeChallenge,
+    config: {
+      clientId: 'client',
+      clientSecret: 'secret',
+      redirectUri: 'https://app.test/auth/apple/callback',
+      scopes: [],
+      encryptTokens: false,
+    },
+  })
+  assert.match(appleAuthorizationUrl, /appleid\\.apple\\.com\\/auth\\/authorize/)
+  installMockFetch([
+    new Response(JSON.stringify({
+      access_token: 'apple-access',
+      refresh_token: 'apple-refresh',
+      expires_in: 3600,
+      id_token: createJwt({
+        sub: 'apple-user',
+        email: 'apple@example.com',
+        email_verified: 'true',
+        given_name: 'Apple',
+        family_name: 'User',
+      }),
+    }), { status: 200 }),
+  ])
+  const appleExchange = await appleSocialProvider.exchangeCode({
+    provider: 'apple',
+    request: new Request('https://app.test/auth/apple/callback?code=test-code'),
+    code: baseContext.code,
+    codeVerifier: baseContext.codeVerifier,
+    config: {
+      clientId: 'client',
+      clientSecret: 'secret',
+      redirectUri: 'https://app.test/auth/apple/callback',
+      scopes: [],
+      encryptTokens: false,
+    },
+  })
+  assert.equal(appleExchange.profile.id, 'apple-user')
+  assert.equal(appleExchange.profile.email, 'apple@example.com')
+
+  const discordAuthorizationUrl = await discordSocialProvider.buildAuthorizationUrl({
+    provider: 'discord',
+    request: new Request('https://app.test/auth/discord'),
+    state: baseContext.state,
+    codeVerifier: baseContext.codeVerifier,
+    codeChallenge: baseContext.codeChallenge,
+    config: {
+      clientId: 'client',
+      clientSecret: 'secret',
+      redirectUri: 'https://app.test/auth/discord/callback',
+      scopes: [],
+      encryptTokens: false,
+    },
+  })
+  assert.match(discordAuthorizationUrl, /discord\\.com\\/oauth2\\/authorize/)
+  installMockFetch([
+    new Response(JSON.stringify({
+      access_token: 'discord-access',
+      refresh_token: 'discord-refresh',
+      expires_in: 3600,
+    }), { status: 200 }),
+    new Response(JSON.stringify({
+      id: 'discord-user',
+      username: 'octo',
+      global_name: 'Octo',
+      email: 'discord@example.com',
+      verified: true,
+      avatar: 'avatar-hash',
+    }), { status: 200 }),
+  ])
+  const discordExchange = await discordSocialProvider.exchangeCode({
+    provider: 'discord',
+    request: new Request('https://app.test/auth/discord/callback?code=test-code'),
+    code: baseContext.code,
+    codeVerifier: baseContext.codeVerifier,
+    config: {
+      clientId: 'client',
+      clientSecret: 'secret',
+      redirectUri: 'https://app.test/auth/discord/callback',
+      scopes: [],
+      encryptTokens: false,
+    },
+  })
+  assert.equal(discordExchange.profile.id, 'discord-user')
+  assert.equal(discordExchange.profile.email, 'discord@example.com')
+
+  const facebookAuthorizationUrl = await facebookSocialProvider.buildAuthorizationUrl({
+    provider: 'facebook',
+    request: new Request('https://app.test/auth/facebook'),
+    state: baseContext.state,
+    codeVerifier: baseContext.codeVerifier,
+    codeChallenge: baseContext.codeChallenge,
+    config: {
+      clientId: 'client',
+      clientSecret: 'secret',
+      redirectUri: 'https://app.test/auth/facebook/callback',
+      scopes: [],
+      encryptTokens: false,
+    },
+  })
+  assert.match(facebookAuthorizationUrl, /facebook\\.com\\/dialog\\/oauth/)
+  installMockFetch([
+    new Response(JSON.stringify({
+      access_token: 'facebook-access',
+      expires_in: 3600,
+    }), { status: 200 }),
+    new Response(JSON.stringify({
+      id: 'facebook-user',
+      name: 'Face Book',
+      email: 'facebook@example.com',
+      picture: {
+        data: {
+          url: 'https://example.com/avatar.png',
+        },
+      },
+    }), { status: 200 }),
+  ])
+  const facebookExchange = await facebookSocialProvider.exchangeCode({
+    provider: 'facebook',
+    request: new Request('https://app.test/auth/facebook/callback?code=test-code'),
+    code: baseContext.code,
+    codeVerifier: baseContext.codeVerifier,
+    config: {
+      clientId: 'client',
+      clientSecret: 'secret',
+      redirectUri: 'https://app.test/auth/facebook/callback',
+      scopes: [],
+      encryptTokens: false,
+    },
+  })
+  assert.equal(facebookExchange.profile.id, 'facebook-user')
+  assert.equal(facebookExchange.profile.email, 'facebook@example.com')
+
+  const githubAuthorizationUrl = await githubSocialProvider.buildAuthorizationUrl({
+    provider: 'github',
+    request: new Request('https://app.test/auth/github'),
+    state: baseContext.state,
+    codeVerifier: baseContext.codeVerifier,
+    codeChallenge: baseContext.codeChallenge,
+    config: {
+      clientId: 'client',
+      clientSecret: 'secret',
+      redirectUri: 'https://app.test/auth/github/callback',
+      scopes: [],
+      encryptTokens: false,
+    },
+  })
+  assert.match(githubAuthorizationUrl, /github\\.com\\/login\\/oauth\\/authorize/)
+  installMockFetch([
+    new Response(JSON.stringify({
+      access_token: 'github-access',
+      refresh_token: 'github-refresh',
+    }), { status: 200 }),
+    new Response(JSON.stringify({
+      id: 42,
+      login: 'octocat',
+      name: 'Octo Cat',
+      avatar_url: 'https://example.com/octo.png',
+    }), { status: 200 }),
+    new Response(JSON.stringify([
+      { email: 'private@example.com', verified: false, primary: true },
+      { email: 'verified@example.com', verified: true, primary: false },
+    ]), { status: 200 }),
+  ])
+  const githubExchange = await githubSocialProvider.exchangeCode({
+    provider: 'github',
+    request: new Request('https://app.test/auth/github/callback?code=test-code'),
+    code: baseContext.code,
+    codeVerifier: baseContext.codeVerifier,
+    config: {
+      clientId: 'client',
+      clientSecret: 'secret',
+      redirectUri: 'https://app.test/auth/github/callback',
+      scopes: [],
+      encryptTokens: false,
+    },
+  })
+  assert.equal(githubExchange.profile.id, '42')
+  assert.equal(githubExchange.profile.email, 'verified@example.com')
+
+  const linkedinAuthorizationUrl = await linkedinSocialProvider.buildAuthorizationUrl({
+    provider: 'linkedin',
+    request: new Request('https://app.test/auth/linkedin'),
+    state: baseContext.state,
+    codeVerifier: baseContext.codeVerifier,
+    codeChallenge: baseContext.codeChallenge,
+    config: {
+      clientId: 'client',
+      clientSecret: 'secret',
+      redirectUri: 'https://app.test/auth/linkedin/callback',
+      scopes: [],
+      encryptTokens: false,
+    },
+  })
+  assert.match(linkedinAuthorizationUrl, /linkedin\\.com\\/oauth\\/v2\\/authorization/)
+  installMockFetch([
+    new Response(JSON.stringify({
+      access_token: 'linkedin-access',
+      expires_in: 3600,
+    }), { status: 200 }),
+    new Response(JSON.stringify({
+      sub: 'linkedin-user',
+      email: 'linkedin@example.com',
+      email_verified: true,
+      name: 'Linked In',
+      picture: 'https://example.com/linkedin.png',
+    }), { status: 200 }),
+  ])
+  const linkedinExchange = await linkedinSocialProvider.exchangeCode({
+    provider: 'linkedin',
+    request: new Request('https://app.test/auth/linkedin/callback?code=test-code'),
+    code: baseContext.code,
+    codeVerifier: baseContext.codeVerifier,
+    config: {
+      clientId: 'client',
+      clientSecret: 'secret',
+      redirectUri: 'https://app.test/auth/linkedin/callback',
+      scopes: [],
+      encryptTokens: false,
+    },
+  })
+  assert.equal(linkedinExchange.profile.id, 'linkedin-user')
+  assert.equal(linkedinExchange.profile.email, 'linkedin@example.com')
+
+  console.log(JSON.stringify({
+    framework,
+    mail: sentMail.messageId,
+    notifications: notificationResult.channels.length,
+    providers: ['apple', 'discord', 'facebook', 'github', 'linkedin'],
+  }))
+} finally {
+  globalThis.fetch = originalFetch
+}
+`
+}
+
+function createFrameworkFluxHelperSmokeScript(app) {
+  if (app.framework === 'next') {
+    return `
+import assert from 'node:assert/strict'
+import { createElement } from 'react'
+import { act, create } from 'react-test-renderer'
+import { createFluxClient, fluxInternals } from '@holo-js/flux'
+import {
+  useFluxConnectionStatus,
+  useFluxPresence,
+  useFluxPublic,
+} from '@holo-js/flux-react'
+
+const client = createFluxClient({
+  connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+})
+const debug = client.__debug
+const events = []
+const statusChanges = []
+let controls
+let presenceState
+let renderer
+
+function Probe() {
+  controls = useFluxPublic('feed.1', 'feed.updated', payload => {
+    events.push(payload)
+  }, { client })
+  presenceState = useFluxPresence('chat.1', {}, { client })
+  useFluxConnectionStatus({
+    client,
+    onChange(status) {
+      statusChanges.push(status)
+    },
+  })
+  return createElement('div')
+}
+
+await act(async () => {
+  renderer = create(createElement(Probe))
+})
+debug.emitEvent('feed.1', 'feed.updated', { id: 'evt_1' })
+debug.updatePresenceMembers('chat.1', [{ id: 'react-user' }])
+await act(async () => undefined)
+await act(async () => {
+  await client.connect()
+  await client.disconnect()
+})
+assert.deepEqual(events, [{ id: 'evt_1' }])
+assert.deepEqual(presenceState.members, [{ id: 'react-user' }])
+assert.deepEqual(statusChanges, ['connecting', 'connected', 'disconnected'])
+controls.leaveChannel()
+presenceState.leaveChannel()
+await act(async () => {
+  renderer.unmount()
+})
+assert.deepEqual(debug.getJoinedChannels(), [])
+console.log(JSON.stringify({ framework: 'next', helper: '@holo-js/flux-react' }))
+`
+  }
+
+  if (app.framework === 'nuxt') {
+    return `
+import assert from 'node:assert/strict'
+import { effectScope, nextTick } from 'vue'
+import { createFluxClient, fluxInternals } from '@holo-js/flux'
+import {
+  useFluxConnectionStatus,
+  useFluxPresence,
+  useFluxPublic,
+} from '@holo-js/flux-vue'
+
+const client = createFluxClient({
+  connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+})
+const debug = client.__debug
+const events = []
+const statusChanges = []
+const scope = effectScope()
+let controls
+let presenceState
+let status
+
+scope.run(() => {
+  controls = useFluxPublic('feed.1', 'feed.updated', payload => {
+    events.push(payload)
+  }, { client })
+  presenceState = useFluxPresence('chat.1', {}, { client })
+  status = useFluxConnectionStatus({
+    client,
+    onChange(next) {
+      statusChanges.push(next)
+    },
+  })
+})
+
+debug.emitEvent('feed.1', 'feed.updated', { id: 'evt_1' })
+debug.updatePresenceMembers('chat.1', [{ id: 'vue-user' }])
+await nextTick()
+await client.connect()
+await client.disconnect()
+await nextTick()
+assert.deepEqual(events, [{ id: 'evt_1' }])
+assert.deepEqual(presenceState.members, [{ id: 'vue-user' }])
+assert.equal(status.value, 'disconnected')
+assert.deepEqual(statusChanges, ['connecting', 'connected', 'disconnected'])
+controls.leaveChannel()
+presenceState.leaveChannel()
+scope.stop()
+assert.deepEqual(debug.getJoinedChannels(), [])
+console.log(JSON.stringify({ framework: 'nuxt', helper: '@holo-js/flux-vue' }))
+`
+  }
+
+  return `
+import assert from 'node:assert/strict'
+import { get } from 'svelte/store'
+import { createFluxClient, fluxInternals } from '@holo-js/flux'
+import {
+  useFluxConnectionStatus,
+  useFluxPresence,
+  useFluxPublic,
+} from '@holo-js/flux-svelte'
+
+const client = createFluxClient({
+  connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+})
+const debug = client.__debug
+const events = []
+const statusChanges = []
+const unmounts = []
+const controls = useFluxPublic('feed.1', 'feed.updated', payload => {
+  events.push(payload)
+}, {
+  client,
+  onUnmount(cleanup) {
+    unmounts.push(cleanup)
+  },
+})
+const presenceState = useFluxPresence('chat.1', {}, {
+  client,
+  onUnmount(cleanup) {
+    unmounts.push(cleanup)
+  },
+})
+const status = useFluxConnectionStatus({
+  client,
+  onChange(next) {
+    statusChanges.push(next)
+  },
+  onUnmount(cleanup) {
+    unmounts.push(cleanup)
+  },
+})
+
+debug.emitEvent('feed.1', 'feed.updated', { id: 'evt_1' })
+debug.updatePresenceMembers('chat.1', [{ id: 'svelte-user' }])
+await client.connect()
+await client.disconnect()
+assert.deepEqual(events, [{ id: 'evt_1' }])
+assert.deepEqual(get(presenceState.members), [{ id: 'svelte-user' }])
+assert.equal(get(status), 'disconnected')
+assert.deepEqual(statusChanges, ['connecting', 'connected', 'disconnected'])
+controls.leaveChannel()
+presenceState.leaveChannel()
+for (const cleanup of unmounts) {
+  cleanup()
+}
+assert.deepEqual(debug.getJoinedChannels(), [])
+console.log(JSON.stringify({ framework: 'sveltekit', helper: '@holo-js/flux-svelte' }))
+`
+}
+
+async function runAdditionalPackageSmokeCheck(app) {
+  await runCommand(app.cwd, 'node', ['--input-type=module', '--eval', createAdditionalPackageSmokeScript(app)])
+}
+
+async function runFrameworkFluxHelperSmokeCheck(app) {
+  const helperCwd = app.framework === 'next'
+    ? resolve(rootDir, 'packages/flux-react')
+    : app.framework === 'nuxt'
+      ? resolve(rootDir, 'packages/flux-vue')
+      : resolve(rootDir, 'packages/flux-svelte')
+
+  await runCommand(helperCwd, 'node', ['--input-type=module', '--eval', createFrameworkFluxHelperSmokeScript(app)])
+}
+
 function assertHealthPayload(app, payload) {
   assert.equal(payload.ok, true)
   assert.equal(payload.framework, app.framework)
@@ -1143,6 +2031,8 @@ async function validateFrameworkApp(app) {
   assert.equal(reportPayload.registry.models, 16)
   assert.equal(reportPayload.registry.commands, 1)
   await runPortableStorageSmokeCheck(app, env)
+  await runAdditionalPackageSmokeCheck(app)
+  await runFrameworkFluxHelperSmokeCheck(app)
 
   await runCommand(app.cwd, 'bun', ['run', 'build'], env)
 
@@ -1198,6 +2088,7 @@ function resolveAppsToValidate(options) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2))
+  assertSmokeCoverageDefinitions()
 
   if (options.help) {
     printUsage()
