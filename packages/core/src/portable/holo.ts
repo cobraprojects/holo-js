@@ -899,14 +899,6 @@ async function importOptionalModule<TModule>(
   try {
     return await import(/* webpackIgnore: true */ resolvedSpecifier as string) as TModule
   } catch (error) {
-    if (
-      error
-      && typeof error === 'object'
-      && 'code' in error
-      && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-    ) {
-      return undefined
-    }
     /* v8 ignore start -- optional-package absence is validated in published-package integration, not in this monorepo test graph */
     if (
       error instanceof Error
@@ -3786,6 +3778,8 @@ export async function resetHoloRuntime(): Promise<void> {
   mailModule?.resetMailRuntime()
   const notificationsModule = await loadNotificationsModule()
   notificationsModule?.resetNotificationsRuntime()
+  const securityModule = await loadSecurityModule()
+  securityModule?.resetSecurityRuntime()
   const broadcastModule = await loadBroadcastModule(false, projectRoot)
   broadcastModule?.resetBroadcastRuntime()
   resetHoloRenderingRuntime()

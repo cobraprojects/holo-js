@@ -587,6 +587,29 @@ describe('@holo-js/core portable runtime', () => {
     ).resolves.toBeUndefined()
   })
 
+  it('rethrows optional imports when the missing module is only a transitive dependency', async () => {
+    const root = await createProject()
+    const packageDir = join(root, 'node_modules', 'resolved-optional-module')
+
+    await mkdir(packageDir, { recursive: true })
+    await writeFile(join(packageDir, 'package.json'), JSON.stringify({
+      name: 'resolved-optional-module',
+      type: 'module',
+      exports: './index.mjs',
+    }), 'utf8')
+    await writeFile(join(packageDir, 'index.mjs'), `
+import 'missing-transitive-dependency'
+
+export default {}
+`, 'utf8')
+
+    await expect(
+      holoRuntimeInternals.moduleInternals.importOptionalModule('resolved-optional-module', {
+        projectRoot: root,
+      }),
+    ).rejects.toThrow(/missing-transitive-dependency/)
+  })
+
   it('does not import discovered queue jobs during default runtime initialization', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
@@ -4831,6 +4854,48 @@ describe('@holo-js/core helper coverage', () => {
         view: 'emails/shared',
       },
     })).rejects.toThrow('renderView runtime binding')
+  })
+
+  it('clears the shared security runtime when resetting an initialized runtime', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeSecurityConfig(root)
+
+    const customStore = {
+      hit: vi.fn(async () => ({
+        limited: false,
+        snapshot: {
+          limiter: 'login',
+          key: 'user:7',
+          attempts: 1,
+          maxAttempts: 5,
+          remainingAttempts: 4,
+          expiresAt: new Date('2026-04-16T12:01:00.000Z'),
+        },
+        retryAfterSeconds: 60,
+      })),
+      clear: vi.fn(async () => true),
+      clearByPrefix: vi.fn(async () => 0),
+      clearAll: vi.fn(async () => 0),
+    }
+
+    configureSecurityRuntime({
+      config: {
+        csrf: {
+          enabled: false,
+        },
+        rateLimit: {
+          driver: 'memory',
+        },
+      },
+      rateLimitStore: customStore,
+    })
+
+    const runtime = await createHolo(root)
+    await runtime.initialize()
+    await resetHoloRuntime()
+
+    expect(getSecurityRuntimeBindings()).toBeUndefined()
   })
 
   it('boots auth with mail delivery when notifications cannot be loaded', async () => {

@@ -208,7 +208,7 @@ export const limit = Object.freeze({
   },
 })
 
-export function ip(request: Request, trustedProxy = true): string {
+export function ip(request: Request, trustedProxy = false): string {
   if (!trustedProxy) {
     return 'unknown'
   }
@@ -262,14 +262,17 @@ export function defineRateLimiter<
     throw new TypeError('[@holo-js/security] Rate limiter definitions must be objects.')
   }
 
-  normalizeLimiterIntegerInput(definition.maxAttempts, 'Rate limiter maxAttempts')
-  normalizeLimiterIntegerInput(definition.decaySeconds, 'Rate limiter decaySeconds')
+  const normalizedDefinition = {
+    ...definition,
+    maxAttempts: normalizeLimiterIntegerInput(definition.maxAttempts, 'Rate limiter maxAttempts'),
+    decaySeconds: normalizeLimiterIntegerInput(definition.decaySeconds, 'Rate limiter decaySeconds'),
+  }
 
-  if (definition.key !== undefined && typeof definition.key !== 'function') {
+  if (normalizedDefinition.key !== undefined && typeof normalizedDefinition.key !== 'function') {
     throw new TypeError('[@holo-js/security] Rate limiter key resolvers must be functions.')
   }
 
-  return Object.freeze({ ...definition })
+  return Object.freeze(normalizedDefinition)
 }
 
 export function defineSecurityRuntimeBindings(

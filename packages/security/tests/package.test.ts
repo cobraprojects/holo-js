@@ -250,13 +250,23 @@ describe('@holo-js/security package surface', () => {
       },
     })
 
-    expect(ip(request)).toBe('203.0.113.7')
+    expect(ip(request)).toBe('unknown')
     expect(ip(request, true)).toBe('203.0.113.7')
     expect(limit.perHour(10).define()).toEqual({
       maxAttempts: 10,
       decaySeconds: 3600,
     })
     expect(() => limit.perMinute(0)).toThrow('greater than or equal to 1')
+  })
+
+  it('normalizes numeric string limiter definitions before freezing them', () => {
+    expect(defineRateLimiter({
+      maxAttempts: '2',
+      decaySeconds: '60',
+    } as never)).toEqual({
+      maxAttempts: 2,
+      decaySeconds: 60,
+    })
   })
 })
 
@@ -1292,11 +1302,45 @@ describe('@holo-js/security rate limiting', () => {
 
     expect(result.snapshot).toMatchObject({
       limiter: 'invites',
-      key: 'ip:203.0.113.11',
+      key: 'ip:unknown',
       attempts: 1,
       maxAttempts: 3,
       remainingAttempts: 2,
     })
+  })
+
+  it('opts into trusted proxy headers for the default request key only when explicitly enabled', async () => {
+    const original = process.env.HOLO_SECURITY_TRUST_PROXY
+    process.env.HOLO_SECURITY_TRUST_PROXY = 'true'
+
+    try {
+      configureSecurityRuntime({
+        config: defineSecurityConfig({
+          rateLimit: {
+            limiters: {
+              invites: limit.perHour(3).define(),
+            },
+          },
+        }),
+        rateLimitStore: createMockRateLimitStore(),
+      })
+
+      const result = await rateLimit('invites', {
+        request: new Request('https://app.test/invites', {
+          headers: {
+            'x-forwarded-for': '203.0.113.11',
+          },
+        }),
+      })
+
+      expect(result.snapshot.key).toBe('ip:203.0.113.11')
+    } finally {
+      if (typeof original === 'undefined') {
+        delete process.env.HOLO_SECURITY_TRUST_PROXY
+      } else {
+        process.env.HOLO_SECURITY_TRUST_PROXY = original
+      }
+    }
   })
 
   it('prefers the configured runtime default key resolver for authenticated requests', async () => {

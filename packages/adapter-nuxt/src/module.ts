@@ -89,12 +89,14 @@ function hasModuleNotFoundCode(error: unknown, expectedSpecifier: string): boole
       ? (error as { message: string }).message
       : ''
     const escapedSpecifier = escapeRegExp(expectedSpecifier)
-    return [
+    if ([
       new RegExp(`Cannot find package ['"]${escapedSpecifier}['"]`),
       new RegExp(`Cannot find module ['"]${escapedSpecifier}['"]`),
       new RegExp(`Could not resolve ['"]${escapedSpecifier}['"]`),
       new RegExp(`Failed to load url ['"]${escapedSpecifier}['"]`),
-    ].some(pattern => pattern.test(message))
+    ].some(pattern => pattern.test(message))) {
+      return true
+    }
   }
 
   if ('cause' in error) {

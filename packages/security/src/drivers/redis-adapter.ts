@@ -188,7 +188,7 @@ export class RedisSecurityAdapter implements SecurityRateLimitRedisDriverAdapter
     }
     const attempts = attemptsValue
     const oldestScore = this.parseOldestScore(this.getCommandValue(result as readonly RedisCommandTuple[], 3, 'oldest rate-limit hit'))
-    await this.client.pexpireat(qualifiedKey, oldestScore + ttlMs)
+    await this.client.pexpireat(qualifiedKey, now + ttlMs)
     const ttlSeconds = Math.max(0, Math.ceil(((oldestScore + ttlMs) - now) / 1000))
 
     return { attempts, ttlSeconds }

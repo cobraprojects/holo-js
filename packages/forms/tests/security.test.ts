@@ -283,6 +283,12 @@ console.log(JSON.stringify({
     })
     expect(formsSecurityInternals.isMissingOptionalPackageError('boom')).toBe(false)
     expect(formsSecurityInternals.isMissingOptionalPackageError(new Error('Cannot find package @holo-js/security'))).toBe(true)
+    expect(formsSecurityInternals.isMissingOptionalPackageError(new Error('Could not resolve "@holo-js/security"'))).toBe(true)
+    expect(
+      formsSecurityInternals.isMissingOptionalPackageError(
+        new Error('Cannot find module "sharp" imported from "@holo-js/security".'),
+      ),
+    ).toBe(false)
     expect(formsSecurityInternals.isMissingOptionalPackageError(new Error('boom'))).toBe(false)
     expect(formsSecurityInternals.isRootSecurityError(Object.assign(new Error('CSRF token mismatch.'), { status: 419 }))).toBe(true)
     expect(formsSecurityInternals.isRootSecurityError(Object.assign(new Error('nope'), { status: 500 }))).toBe(false)

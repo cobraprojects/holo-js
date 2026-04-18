@@ -395,7 +395,7 @@ describe('@holo-js/queue redis driver', () => {
 
       expect(output).toMatch(/\b(?:const|let|var)\s+specifier\s*=\s*['"]@holo-js\/queue-redis['"]/)
       expect(output).toMatch(/\bimport\s*\(\s*specifier\s*\)/)
-      expect(output).not.toContain('import("@holo-js/queue-redis")')
+      expect(output).not.toMatch(/import\(\s*['"]@holo-js\/queue-redis['"]\s*\)/)
     } finally {
       await rm(outdir, { recursive: true, force: true })
     }

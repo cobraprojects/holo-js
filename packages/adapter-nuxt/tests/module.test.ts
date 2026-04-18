@@ -445,6 +445,16 @@ export default defineStorageConfig({
       }),
       '@holo-js/storage-s3',
     )).toBe(false)
+
+    expect(mod.moduleInternals.hasModuleNotFoundCode(
+      Object.assign(new Error('Failed to initialize storage-s3.'), {
+        code: 'ERR_MODULE_NOT_FOUND',
+        cause: Object.assign(new Error('Cannot find package "@holo-js/storage-s3" imported from "/tmp/app.mjs"'), {
+          code: 'ERR_MODULE_NOT_FOUND',
+        }),
+      }),
+      '@holo-js/storage-s3',
+    )).toBe(true)
   })
 
   it('rethrows non-missing optional storage-s3 import errors', async () => {

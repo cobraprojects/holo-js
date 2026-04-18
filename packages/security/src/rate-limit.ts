@@ -53,13 +53,24 @@ function normalizeResolvedLimiterKey(
   throw new TypeError(`[@holo-js/security] ${label} must resolve a non-empty string key.`)
 }
 
+function shouldTrustProxyHeaders(): boolean {
+  const trustedProxy = typeof process !== 'undefined'
+    ? process.env.HOLO_SECURITY_TRUST_PROXY?.trim().toLowerCase()
+    : undefined
+
+  return trustedProxy === '1'
+    || trustedProxy === 'true'
+    || trustedProxy === 'yes'
+    || trustedProxy === 'on'
+}
+
 export async function defaultRateLimitKey(request: Request): Promise<string> {
   const runtimeDefaultKey = await getSecurityRuntime().defaultKeyResolver?.(request)
   if (typeof runtimeDefaultKey !== 'undefined' && runtimeDefaultKey !== null) {
     return normalizeResolvedLimiterKey(runtimeDefaultKey, 'Default rate limiter key resolver')
   }
 
-  return `ip:${ip(request, true)}`
+  return `ip:${ip(request, shouldTrustProxyHeaders())}`
 }
 
 async function resolveLimiterKey(

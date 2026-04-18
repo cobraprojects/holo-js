@@ -282,10 +282,18 @@ keep the default base key, then add an opaque identifier so one email cannot be 
 and raw email addresses never land in rate-limit storage.
 
 ```ts
+import { createHmac } from 'node:crypto'
 import { defaultRateLimitKey, defineSecurityConfig, limit } from '@holo-js/security'
 
 function getOpaqueKeyFromEmail(email: string): string {
-  return createStableEmailHash(email)
+  const appKey = process.env.APP_KEY
+  if (!appKey) {
+    throw new Error('APP_KEY must be set before deriving opaque rate-limit keys.')
+  }
+
+  return createHmac('sha256', appKey)
+    .update(email.trim().toLowerCase())
+    .digest('hex')
 }
 
 export default defineSecurityConfig({

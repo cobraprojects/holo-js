@@ -375,7 +375,7 @@ describe('security redis adapter', () => {
     ])
   })
 
-  it('keeps redis bucket expiry anchored to the first hit time instead of the wall-clock boundary', async () => {
+  it('keeps ttlSeconds anchored to the oldest hit while expiring the bucket from the latest hit', async () => {
     const adapter = createSecurityRedisAdapter({
       host: '127.0.0.1',
       port: 6379,
@@ -390,7 +390,7 @@ describe('security redis adapter', () => {
       [null, 1],
       [null, 0],
       [null, 2],
-      [null, ['17665', '1776517199500']],
+      [null, ['17665', '1776517198500']],
       [null, 1],
     ] as never)
 
@@ -399,7 +399,7 @@ describe('security redis adapter', () => {
       decaySeconds: 3600,
     })).resolves.toEqual({
       attempts: 2,
-      ttlSeconds: 3600,
+      ttlSeconds: 3599,
     })
 
     expect(redisMock.calls.pexpireat).toEqual([
@@ -410,7 +410,7 @@ describe('security redis adapter', () => {
     ])
   })
 
-  it('does not extend redis bucket expiry when a later hit lands in the same window', async () => {
+  it('extends redis bucket expiry when a later hit lands in the same window', async () => {
     const adapter = createSecurityRedisAdapter({
       host: '127.0.0.1',
       port: 6379,
@@ -425,7 +425,7 @@ describe('security redis adapter', () => {
       [null, 1],
       [null, 0],
       [null, 2],
-      [null, ['17665', '1776517199500']],
+      [null, ['17665', '1776516899500']],
     ] as never)
 
     await adapter.connect()
@@ -433,7 +433,7 @@ describe('security redis adapter', () => {
       decaySeconds: 3600,
     })).resolves.toEqual({
       attempts: 2,
-      ttlSeconds: 3600,
+      ttlSeconds: 3300,
     })
 
     expect(redisMock.calls.pexpireat).toEqual([

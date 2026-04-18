@@ -19,11 +19,13 @@ function isMissingOptionalPackageError(error: unknown): boolean {
     return false
   }
 
-  return error.message.includes('Cannot find package')
-    || error.message.includes('Cannot find module')
-    || error.message.includes('Failed to resolve module specifier')
-    || error.message.includes('Failed to load url')
-    || error.message.includes('Could not resolve')
+  return [
+    /Cannot find package ['"]?@holo-js\/security['"]?/,
+    /Cannot find module ['"]?@holo-js\/security['"]?/,
+    /Failed to resolve module specifier ['"]?@holo-js\/security['"]?/,
+    /Failed to load url ['"]?@holo-js\/security['"]?/,
+    /Could not resolve ['"]?@holo-js\/security['"]?/,
+  ].some(pattern => pattern.test(error.message))
 }
 
 function createMissingSecurityPackageError(): FormContractError {

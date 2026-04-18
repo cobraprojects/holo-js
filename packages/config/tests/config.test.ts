@@ -71,6 +71,10 @@ function resolveWorkspacePackageEntry(packageName: '@holo-js/security'): string 
 
 const securityPackageEntry = JSON.stringify(resolveWorkspacePackageEntry('@holo-js/security'))
 
+function normalizeTestPath(path: string): string {
+  return path.replaceAll('\\', '/')
+}
+
 async function createProject(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-config-'))
   tempDirs.push(root)
@@ -1752,7 +1756,7 @@ export default defineSecurityConfig({
     })
 
     expect(loaded.security).toEqual(normalizeSecurityConfig())
-    expect(loaded.loadedFiles.some(filePath => filePath.endsWith('/config/security.ts'))).toBe(false)
+    expect(loaded.loadedFiles.some(filePath => normalizeTestPath(filePath).endsWith('/config/security.ts'))).toBe(false)
   })
 
   it('keeps cached config values aligned with loaded files when deferred security entries exist', async () => {
@@ -1811,8 +1815,8 @@ export default defineQueueConfig({
       processEnv: {},
     })
 
-    expect(loaded.loadedFiles.some(filePath => filePath.endsWith('/config/queue.ts'))).toBe(true)
-    expect(loaded.loadedFiles.some(filePath => filePath.endsWith('/config/security.ts'))).toBe(true)
+    expect(loaded.loadedFiles.some(filePath => normalizeTestPath(filePath).endsWith('/config/queue.ts'))).toBe(true)
+    expect(loaded.loadedFiles.some(filePath => normalizeTestPath(filePath).endsWith('/config/security.ts'))).toBe(true)
     expect(loaded.queue.connections.redis).toEqual({
       name: 'redis',
       driver: 'redis',

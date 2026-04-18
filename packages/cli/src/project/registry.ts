@@ -317,8 +317,8 @@ export function renderGeneratedQueueTypes(
     return `import type * as holoQueueJobModule${index} from '${relativeImportPath(GENERATED_QUEUE_TYPES_PATH, entry.sourcePath)}'`
   })
   const queueTypeImports: string[] = []
-  if (needsExportedQueueJobDefinitionType) queueTypeImports.push('ExportedQueueJobDefinition')
   if (needsQueueJobDefinitionType) queueTypeImports.push('QueueJobDefinition')
+  if (needsExportedQueueJobDefinitionType) queueTypeImports.push('ExportedQueueJobDefinition')
 
   const members = jobs.map((entry) => {
     const importName = typeImportNameByJob.get(entry.name)
@@ -335,7 +335,7 @@ export function renderGeneratedQueueTypes(
     ...(queueTypeImports.length > 0
       ? ['import type {', ...queueTypeImports.map(typeName => `  ${typeName},`), '} from \'@holo-js/queue\'']
       : []),
-    ...((queueTypeImports.length > 0 && imports.length > 0) ? [''] : []),
+    ...(queueTypeImports.length > 0 ? [''] : []),
     ...imports,
     ...(imports.length > 0 ? [''] : []),
     'declare module \'@holo-js/queue\' {',

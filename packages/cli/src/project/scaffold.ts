@@ -1,4 +1,4 @@
-import { mkdir, readdir, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, writeFile } from 'node:fs/promises'
 import { extname, resolve } from 'node:path'
 import {
   loadConfigDirectory,
@@ -271,8 +271,30 @@ function renderSecurityConfig(): string {
 
 async function ensureRateLimitStorageIgnore(projectRoot: string): Promise<void> {
   const rateLimitRoot = resolve(projectRoot, 'storage/framework/rate-limits')
+  const ignorePath = resolve(rateLimitRoot, '.gitignore')
   await mkdir(rateLimitRoot, { recursive: true })
-  await writeTextFile(resolve(rateLimitRoot, '.gitignore'), '*\n!.gitignore\n')
+
+  if (!(await pathExists(ignorePath))) {
+    await writeTextFile(ignorePath, '*\n!.gitignore\n')
+    return
+  }
+
+  const currentContents = (await readTextFile(ignorePath)) ?? ''
+  const existingLines = new Set(currentContents.split(/\r?\n/))
+  const missingLines = [
+    '*',
+    '!.gitignore',
+  ].filter(line => !existingLines.has(line))
+
+  if (missingLines.length === 0) {
+    return
+  }
+
+  await appendFile(
+    ignorePath,
+    `${currentContents.length > 0 && !currentContents.endsWith('\n') ? '\n' : ''}${missingLines.join('\n')}\n`,
+    'utf8',
+  )
 }
 
 function renderBroadcastConfig(

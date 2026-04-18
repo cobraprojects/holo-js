@@ -1963,9 +1963,13 @@ function createPasswordResetFacade(): AuthPasswordResetFacade {
             token: result,
           })
         } catch (error) {
-          await store.delete(record.id, {
-            table: broker.table,
-          })
+          try {
+            await store.delete(record.id, {
+              table: broker.table,
+            })
+          } catch (cleanupError) {
+            void cleanupError
+          }
           throw error
         }
         if (sharedReservation?.bypassed) {
