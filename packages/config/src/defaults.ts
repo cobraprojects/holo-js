@@ -41,6 +41,9 @@ import type {
   NormalizedHoloDatabaseConfig,
   NormalizedHoloNotificationsConfig,
   NormalizedHoloQueueConfig,
+  NormalizedHoloSecurityConfig,
+  NormalizedHoloSecurityCsrfConfig,
+  NormalizedHoloSecurityRateLimitConfig,
   NormalizedHoloSessionConfig,
   NormalizedHoloStorageConfig,
   HoloAppConfig,
@@ -49,13 +52,19 @@ import type {
   HoloNotificationsConfig,
   HoloSessionConfig,
   HoloQueueConfig,
+  HoloSecurityConfig,
+  HoloSecurityRateLimitConfig,
   HoloStorageConfig,
   QueueConnectionConfig,
   QueueDatabaseConnectionConfig,
   QueueFailedStoreConfig,
   QueueRedisConnectionConfig,
   QueueSyncConnectionConfig,
+  SecurityLimiterConfig,
+  SecurityRateLimitDriver,
   SessionCookieSameSite,
+  SecurityRateLimitFileConfig,
+  SecurityRateLimitRedisConfig,
   SessionDatabaseStoreConfig,
   SessionFileStoreConfig,
   SessionStoreConfig,
@@ -251,6 +260,50 @@ export const holoSessionDefaults: Readonly<NormalizedHoloSessionConfig> = Object
   rememberMeLifetime: DEFAULT_SESSION_REMEMBER_ME_LIFETIME,
 })
 
+export const DEFAULT_SECURITY_CSRF_FIELD = '_token'
+export const DEFAULT_SECURITY_CSRF_HEADER = 'X-CSRF-TOKEN'
+export const DEFAULT_SECURITY_CSRF_COOKIE = 'XSRF-TOKEN'
+export const DEFAULT_SECURITY_RATE_LIMIT_DRIVER: SecurityRateLimitDriver = 'memory'
+export const DEFAULT_SECURITY_RATE_LIMIT_FILE_PATH = './storage/framework/rate-limits'
+export const DEFAULT_SECURITY_RATE_LIMIT_REDIS_HOST = '127.0.0.1'
+export const DEFAULT_SECURITY_RATE_LIMIT_REDIS_PORT = 6379
+export const DEFAULT_SECURITY_RATE_LIMIT_REDIS_DB = 0
+export const DEFAULT_SECURITY_RATE_LIMIT_REDIS_CONNECTION = 'default'
+export const DEFAULT_SECURITY_RATE_LIMIT_REDIS_PREFIX = 'holo:rate-limit:'
+
+const DEFAULT_SECURITY_CSRF_CONFIG: Readonly<NormalizedHoloSecurityCsrfConfig> = Object.freeze({
+  enabled: false,
+  field: DEFAULT_SECURITY_CSRF_FIELD,
+  header: DEFAULT_SECURITY_CSRF_HEADER,
+  cookie: DEFAULT_SECURITY_CSRF_COOKIE,
+  except: Object.freeze([]),
+})
+
+const DEFAULT_SECURITY_RATE_LIMIT_CONFIG: Readonly<NormalizedHoloSecurityRateLimitConfig> = Object.freeze({
+  driver: DEFAULT_SECURITY_RATE_LIMIT_DRIVER,
+  memory: Object.freeze({
+    driver: 'memory',
+  }),
+  file: Object.freeze({
+    path: DEFAULT_SECURITY_RATE_LIMIT_FILE_PATH,
+  }),
+  redis: Object.freeze({
+    host: DEFAULT_SECURITY_RATE_LIMIT_REDIS_HOST,
+    port: DEFAULT_SECURITY_RATE_LIMIT_REDIS_PORT,
+    password: undefined,
+    username: undefined,
+    db: DEFAULT_SECURITY_RATE_LIMIT_REDIS_DB,
+    connection: DEFAULT_SECURITY_RATE_LIMIT_REDIS_CONNECTION,
+    prefix: DEFAULT_SECURITY_RATE_LIMIT_REDIS_PREFIX,
+  }),
+  limiters: Object.freeze({}),
+})
+
+export const holoSecurityDefaults: Readonly<NormalizedHoloSecurityConfig> = Object.freeze({
+  csrf: DEFAULT_SECURITY_CSRF_CONFIG,
+  rateLimit: DEFAULT_SECURITY_RATE_LIMIT_CONFIG,
+})
+
 export const DEFAULT_AUTH_GUARD = 'web'
 export const DEFAULT_AUTH_PROVIDER = 'users'
 export const DEFAULT_AUTH_IDENTIFIERS = Object.freeze(['email'] as const)
@@ -371,6 +424,50 @@ function normalizeConnectionName(value: string | undefined, label: string): stri
 
 function normalizeQueueName(value: string | undefined): string {
   return value?.trim() || DEFAULT_QUEUE_NAME
+}
+
+function parseSecurityInteger(
+  value: number | string | undefined,
+  fallback: number,
+  label: string,
+  options: { minimum?: number } = {},
+): number {
+  const normalized = typeof value === 'undefined'
+    ? fallback
+    : typeof value === 'number'
+      ? value
+      : (() => {
+          const trimmed = value.trim()
+          if (!trimmed) {
+            return Number.NaN
+          }
+
+          return Number(trimmed)
+        })()
+
+  if (!Number.isFinite(normalized) || !Number.isInteger(normalized)) {
+    throw new Error(`[Holo Security] ${label} must be an integer.`)
+  }
+
+  if (typeof options.minimum === 'number' && normalized < options.minimum) {
+    throw new Error(`[Holo Security] ${label} must be greater than or equal to ${options.minimum}.`)
+  }
+
+  return normalized
+}
+
+function normalizeSecurityName(value: string | undefined, label: string): string {
+  const normalized = value?.trim()
+  if (!normalized) {
+    throw new Error(`[Holo Security] ${label} must be a non-empty string.`)
+  }
+
+  return normalized
+}
+
+function normalizeSecurityOptionalString(value: string | undefined): string | undefined {
+  const normalized = value?.trim()
+  return normalized || undefined
 }
 
 function normalizeSyncConnection(
@@ -615,6 +712,98 @@ export function normalizeSessionConfig(
     idleTimeout,
     absoluteLifetime,
     rememberMeLifetime,
+  })
+}
+
+function normalizeSecurityLimiter(
+  name: string,
+  config: SecurityLimiterConfig,
+): NormalizedHoloSecurityRateLimitConfig['limiters'][string] {
+  const key = typeof config.key === 'function'
+    ? config.key
+    : undefined
+
+  if (typeof config.key !== 'undefined' && typeof config.key !== 'function') {
+    throw new Error(`[Holo Security] rate limiter "${name}" key resolver must be a function when provided.`)
+  }
+
+  return Object.freeze({
+    name,
+    maxAttempts: parseSecurityInteger(config.maxAttempts, 0, `rate limiter "${name}" maxAttempts`, {
+      minimum: 1,
+    }),
+    decaySeconds: parseSecurityInteger(config.decaySeconds, 0, `rate limiter "${name}" decaySeconds`, {
+      minimum: 1,
+    }),
+    ...(key ? { key } : {}),
+  })
+}
+
+function normalizeSecurityRateLimitConfig(
+  config: HoloSecurityRateLimitConfig | undefined,
+): NormalizedHoloSecurityRateLimitConfig {
+  const driver = normalizeSecurityOptionalString(config?.driver) || DEFAULT_SECURITY_RATE_LIMIT_DRIVER
+  if (driver !== 'memory' && driver !== 'file' && driver !== 'redis') {
+    throw new Error(`[Holo Security] Unsupported rate limit driver "${driver}".`)
+  }
+
+  const file = (config?.file ?? {}) as SecurityRateLimitFileConfig
+  const redis = (config?.redis ?? {}) as SecurityRateLimitRedisConfig
+  const limiters = !config?.limiters || Object.keys(config.limiters).length === 0
+    ? holoSecurityDefaults.rateLimit.limiters
+    : Object.freeze(Object.fromEntries(Object.entries(config.limiters).map(([name, limiter]) => {
+      const normalizedName = normalizeSecurityName(name, 'Rate limiter name')
+      return [normalizedName, normalizeSecurityLimiter(normalizedName, limiter)]
+    })))
+
+  return Object.freeze({
+    driver,
+    memory: Object.freeze({
+      driver: 'memory',
+    }),
+    file: Object.freeze({
+      path: normalizeSecurityOptionalString(file.path) || DEFAULT_SECURITY_RATE_LIMIT_FILE_PATH,
+    }),
+    redis: Object.freeze({
+      host: normalizeSecurityOptionalString(redis.host) || DEFAULT_SECURITY_RATE_LIMIT_REDIS_HOST,
+      port: parseSecurityInteger(redis.port, DEFAULT_SECURITY_RATE_LIMIT_REDIS_PORT, 'rate limit redis.port', { minimum: 1 }),
+      password: normalizeSecurityOptionalString(redis.password),
+      username: normalizeSecurityOptionalString(redis.username),
+      db: parseSecurityInteger(redis.db, DEFAULT_SECURITY_RATE_LIMIT_REDIS_DB, 'rate limit redis.db', { minimum: 0 }),
+      connection: normalizeSecurityOptionalString(redis.connection) || DEFAULT_SECURITY_RATE_LIMIT_REDIS_CONNECTION,
+      prefix: normalizeSecurityOptionalString(redis.prefix) || DEFAULT_SECURITY_RATE_LIMIT_REDIS_PREFIX,
+    }),
+    limiters,
+  })
+}
+
+export function normalizeSecurityConfig(
+  config: HoloSecurityConfig = {},
+): NormalizedHoloSecurityConfig {
+  const csrf = typeof config.csrf === 'boolean'
+    ? { enabled: config.csrf }
+    : (config.csrf ?? {})
+
+  const except = csrf.except
+    ? Object.freeze(csrf.except.map((value, index) => {
+      const normalized = value.trim()
+      if (!normalized) {
+        throw new Error(`[Holo Security] csrf except entry at index ${index} must be a non-empty string.`)
+      }
+
+      return normalized
+    }))
+    : DEFAULT_SECURITY_CSRF_CONFIG.except
+
+  return Object.freeze({
+    csrf: Object.freeze({
+      enabled: csrf.enabled ?? DEFAULT_SECURITY_CSRF_CONFIG.enabled,
+      field: normalizeSecurityOptionalString(csrf.field) || DEFAULT_SECURITY_CSRF_FIELD,
+      header: normalizeSecurityOptionalString(csrf.header) || DEFAULT_SECURITY_CSRF_HEADER,
+      cookie: normalizeSecurityOptionalString(csrf.cookie) || DEFAULT_SECURITY_CSRF_COOKIE,
+      except,
+    }),
+    rateLimit: normalizeSecurityRateLimitConfig(config.rateLimit),
   })
 }
 

@@ -26,6 +26,7 @@ const smokeWorkspacePackages = [
   '@holo-js/queue-redis',
   '@holo-js/queue-db',
   '@holo-js/config',
+  '@holo-js/security',
   '@holo-js/storage',
   '@holo-js/storage-s3',
   '@holo-js/core',

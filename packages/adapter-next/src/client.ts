@@ -53,6 +53,7 @@ function areEqual(left: unknown, right: unknown): boolean {
 function areOptionsEqual<TData>(left: UseFormOptions<TData>, right: UseFormOptions<TData>): boolean {
   return left.action === right.action
     && left.method === right.method
+    && left.csrf === right.csrf
     && left.validateOn === right.validateOn
     && Boolean(left.submitter) === Boolean(right.submitter)
     && areEqual(left.initialValues, right.initialValues)

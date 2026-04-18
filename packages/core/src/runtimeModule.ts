@@ -7,15 +7,12 @@ type EsbuildModule = {
   build(options: BuildOptions): Promise<BuildResult>
 }
 
-const ESBUILD_MODULE_ID = 'esbuild'
-
 async function importModule<TModule>(specifier: string): Promise<TModule> {
   if (process.env.VITEST) {
     return import(/* @vite-ignore */ specifier) as Promise<TModule>
   }
 
-  const indirectEval = globalThis.eval as (source: string) => Promise<TModule>
-  return indirectEval(`import(${JSON.stringify(specifier)})`)
+  return import(/* webpackIgnore: true */ specifier) as Promise<TModule>
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -128,7 +125,15 @@ export async function importBundledRuntimeModule(
 }
 
 async function loadEsbuild(): Promise<EsbuildModule> {
-  return importModule<EsbuildModule>(ESBUILD_MODULE_ID)
+  const module = await import(/* webpackIgnore: true */ 'esbuild') as
+    | EsbuildModule
+    | { default: EsbuildModule }
+
+  if ('build' in module) {
+    return module
+  }
+
+  return module.default
 }
 
 async function runEsbuild(options: BuildOptions): Promise<BuildResult> {

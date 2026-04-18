@@ -45,6 +45,7 @@
         "@holo-js/queue": "^0.1.2",
         "@holo-js/queue-db": "^0.1.2",
         "@holo-js/queue-redis": "^0.1.2",
+        "@holo-js/security": "workspace:*",
         "@holo-js/session": "workspace:*",
         "@holo-js/storage": "^0.1.2",
         "@holo-js/storage-s3": "^0.1.2",
@@ -81,6 +82,7 @@
         "@holo-js/queue": "^0.1.2",
         "@holo-js/queue-db": "^0.1.2",
         "@holo-js/queue-redis": "^0.1.2",
+        "@holo-js/security": "workspace:*",
         "@holo-js/session": "workspace:*",
         "@holo-js/storage": "^0.1.2",
         "@holo-js/storage-s3": "^0.1.2",
@@ -121,6 +123,7 @@
         "@holo-js/queue": "^0.1.2",
         "@holo-js/queue-db": "^0.1.2",
         "@holo-js/queue-redis": "^0.1.2",
+        "@holo-js/security": "workspace:*",
         "@holo-js/session": "workspace:*",
         "@holo-js/storage": "^0.1.2",
         "@holo-js/storage-s3": "^0.1.2",
@@ -216,6 +219,12 @@
         "typescript": "^5.7.2",
         "vitest": "^2.1.8",
       },
+      "peerDependencies": {
+        "@holo-js/security": "^0.1.2",
+      },
+      "optionalPeers": [
+        "@holo-js/security",
+      ],
     },
     "packages/auth-clerk": {
       "name": "@holo-js/auth-clerk",
@@ -356,10 +365,17 @@
       "devDependencies": {
         "@types/node": "^22.10.2",
         "@types/ws": "^8.18.1",
+        "ioredis": "^5.4.2",
         "tsup": "^8.3.5",
         "typescript": "^5.7.2",
         "vitest": "^2.1.8",
       },
+      "peerDependencies": {
+        "ioredis": "^5.4.2",
+      },
+      "optionalPeers": [
+        "ioredis",
+      ],
     },
     "packages/cli": {
       "name": "@holo-js/cli",
@@ -425,6 +441,7 @@
         "@holo-js/mail": "^0.1.2",
         "@holo-js/notifications": "^0.1.2",
         "@holo-js/queue": "^0.1.2",
+        "@holo-js/security": "^0.1.2",
         "@holo-js/session": "^0.1.2",
         "@holo-js/storage": "^0.1.2",
       },
@@ -436,6 +453,7 @@
         "@holo-js/mail",
         "@holo-js/notifications",
         "@holo-js/queue",
+        "@holo-js/security",
         "@holo-js/session",
         "@holo-js/storage",
       ],
@@ -625,7 +643,7 @@
       "name": "@holo-js/forms",
       "version": "0.1.2",
       "dependencies": {
-        "@holo-js/validation": "^0.1.0",
+        "@holo-js/validation": "^0.1.2",
       },
       "devDependencies": {
         "@types/node": "^22.10.2",
@@ -633,6 +651,12 @@
         "typescript": "^5.7.2",
         "vitest": "^2.1.8",
       },
+      "peerDependencies": {
+        "@holo-js/security": "^0.1.2",
+      },
+      "optionalPeers": [
+        "@holo-js/security",
+      ],
     },
     "packages/mail": {
       "name": "@holo-js/mail",
@@ -738,6 +762,26 @@
       "peerDependencies": {
         "@holo-js/queue": "^0.1.2",
       },
+    },
+    "packages/security": {
+      "name": "@holo-js/security",
+      "version": "0.1.2",
+      "dependencies": {
+        "@holo-js/config": "^0.1.2",
+      },
+      "devDependencies": {
+        "@types/node": "^22.10.2",
+        "ioredis": "^5.4.2",
+        "tsup": "^8.3.5",
+        "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
+      },
+      "peerDependencies": {
+        "ioredis": "^5.4.2",
+      },
+      "optionalPeers": [
+        "ioredis",
+      ],
     },
     "packages/session": {
       "name": "@holo-js/session",
@@ -1122,6 +1166,8 @@
     "@holo-js/queue-db": ["@holo-js/queue-db@workspace:packages/queue-db"],
 
     "@holo-js/queue-redis": ["@holo-js/queue-redis@workspace:packages/queue-redis"],
+
+    "@holo-js/security": ["@holo-js/security@workspace:packages/security"],
 
     "@holo-js/session": ["@holo-js/session@workspace:packages/session"],
 

@@ -10,6 +10,7 @@ import {
   validate,
 } from './contracts'
 import { createErrorBag, type InferSchemaData, type SchemaInputShape, type ValidationErrorBag, type WebFileLike } from '@holo-js/validation'
+import { getClientCsrfField } from './client-security'
 
 type PrimitiveLike = string | number | boolean | bigint | symbol | null | undefined | Date | Blob | WebFileLike
 
@@ -31,6 +32,7 @@ export type ClientSubmitResult<TData>
 export interface UseFormOptions<TData> {
   readonly action?: string
   readonly method?: string
+  readonly csrf?: boolean
   readonly validateOn?: ValidateOnMode
   readonly initialValues?: Partial<TData>
   readonly initialState?: SerializedFormSubmission<TData>
@@ -515,11 +517,20 @@ async function defaultSubmitter<TData>(context: ClientSubmitContext<TData>): Pro
   return await normalizeFetchResponse(response, context.values)
 }
 
+function isSafeMethod(method: string): boolean {
+  const normalized = method.trim().toUpperCase()
+  return normalized === 'GET'
+    || normalized === 'HEAD'
+    || normalized === 'OPTIONS'
+    || normalized === 'TRACE'
+}
+
 export function useForm<TSchema extends FormSchema<SchemaInputShape>>(
   schemaDefinition: TSchema,
   options: UseFormOptions<InferSchemaData<TSchema['fields']>> = {},
 ): UseFormResult<InferSchemaData<TSchema['fields']>> {
   type TData = InferSchemaData<TSchema['fields']>
+
   const initialValues = mergeValues(
     normalizeObject<TData>(options.initialState?.values),
     options.initialValues,
@@ -593,11 +604,19 @@ export function useForm<TSchema extends FormSchema<SchemaInputShape>>(
         }
 
         const submitter = options.submitter ?? defaultSubmitter<TData>
+        const method = options.method ?? 'POST'
+        const formData = buildFormData(state.values)
+
+        if (options.csrf === true && !isSafeMethod(method)) {
+          const csrfField = await getClientCsrfField()
+          formData.set(csrfField.name, csrfField.value)
+        }
+
         const response = await submitter({
           action: options.action,
-          method: options.method ?? 'POST',
+          method,
           values: state.values,
-          formData: buildFormData(state.values),
+          formData,
         })
 
         return this.applyServerState(response)

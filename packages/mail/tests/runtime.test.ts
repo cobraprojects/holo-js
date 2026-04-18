@@ -1223,12 +1223,7 @@ describe('@holo-js/mail runtime', () => {
   })
 
   it('covers runtime helper branches and internal fallbacks', async () => {
-    const originalVitest = process.env.VITEST
-    const originalEval = globalThis.eval
-
     try {
-      process.env.VITEST = ''
-
       const queueModule = { ok: 'queue' }
       const dbModule = { ok: 'db' }
       const nodemailerModule = {
@@ -1246,20 +1241,21 @@ describe('@holo-js/mail runtime', () => {
         },
       }
 
-      const evalMock = vi.fn()
-      ;(globalThis as typeof globalThis & { eval: typeof eval }).eval = evalMock as never
-
-      evalMock.mockResolvedValueOnce(queueModule)
+      mailRuntimeInternals.setQueueModuleLoader(async () => queueModule as never)
       await expect(mailRuntimeInternals.loadQueueModule()).resolves.toBe(queueModule as never)
 
       const missingQueue = Object.assign(new Error('missing queue'), { code: 'ERR_MODULE_NOT_FOUND' })
-      evalMock.mockRejectedValueOnce(missingQueue)
+      mailRuntimeInternals.setQueueModuleLoader(async () => {
+        throw missingQueue
+      })
       await expect(mailRuntimeInternals.loadQueueModule()).rejects.toMatchObject({
         code: 'MAIL_QUEUE_MODULE_MISSING',
       })
 
       const queueFailure = new Error('queue failed')
-      evalMock.mockRejectedValueOnce(queueFailure)
+      mailRuntimeInternals.setQueueModuleLoader(async () => {
+        throw queueFailure
+      })
       await expect(mailRuntimeInternals.loadQueueModule()).rejects.toBe(queueFailure)
       mailRuntimeInternals.setQueueModuleLoader(async () => {
         throw new Error('override queue failed')
@@ -1267,15 +1263,19 @@ describe('@holo-js/mail runtime', () => {
       await expect(mailRuntimeInternals.loadQueueModule()).rejects.toThrow('override queue failed')
       mailRuntimeInternals.setQueueModuleLoader(undefined)
 
-      evalMock.mockResolvedValueOnce(dbModule)
+      mailRuntimeInternals.setDbModuleLoader(async () => dbModule as never)
       await expect(mailRuntimeInternals.loadDbModule()).resolves.toBe(dbModule as never)
 
       const missingDb = Object.assign(new Error('missing db'), { code: 'ERR_MODULE_NOT_FOUND' })
-      evalMock.mockRejectedValueOnce(missingDb)
+      mailRuntimeInternals.setDbModuleLoader(async () => {
+        throw missingDb
+      })
       await expect(mailRuntimeInternals.loadDbModule()).resolves.toBeNull()
 
       const dbFailure = new Error('db failed')
-      evalMock.mockRejectedValueOnce(dbFailure)
+      mailRuntimeInternals.setDbModuleLoader(async () => {
+        throw dbFailure
+      })
       await expect(mailRuntimeInternals.loadDbModule()).rejects.toBe(dbFailure)
 
       expect(mailRuntimeInternals.resolveNodemailerModule({
@@ -1283,41 +1283,47 @@ describe('@holo-js/mail runtime', () => {
       })).toBe(nodemailerModule as never)
       expect(() => mailRuntimeInternals.resolveNodemailerModule({})).toThrow('Nodemailer could not be loaded')
 
-      evalMock.mockResolvedValueOnce(nodemailerModule)
+      mailRuntimeInternals.setNodemailerModuleLoader(async () => nodemailerModule as never)
       await expect(mailRuntimeInternals.loadNodemailerModule()).resolves.toBe(nodemailerModule as never)
 
       const missingNodemailer = Object.assign(new Error('missing nodemailer'), { code: 'ERR_MODULE_NOT_FOUND' })
-      evalMock.mockRejectedValueOnce(missingNodemailer)
+      mailRuntimeInternals.setNodemailerModuleLoader(async () => {
+        throw missingNodemailer
+      })
       await expect(mailRuntimeInternals.loadNodemailerModule()).rejects.toMatchObject({
         code: 'MAIL_SMTP_MODULE_MISSING',
       })
 
       const nodemailerFailure = new Error('nodemailer failed')
-      evalMock.mockRejectedValueOnce(nodemailerFailure)
+      mailRuntimeInternals.setNodemailerModuleLoader(async () => {
+        throw nodemailerFailure
+      })
       await expect(mailRuntimeInternals.loadNodemailerModule()).rejects.toBe(nodemailerFailure)
 
       expect(mailRuntimeInternals.resolveStorageModule(storageModule)).toBe(storageModule as never)
       expect(() => mailRuntimeInternals.resolveStorageModule({})).toThrow('storage runtime could not be loaded')
 
-      evalMock.mockResolvedValueOnce(storageModule)
+      mailRuntimeInternals.setStorageModuleLoader(async () => storageModule as never)
       await expect(mailRuntimeInternals.loadStorageModule()).resolves.toBe(storageModule as never)
 
       const missingStorage = Object.assign(new Error('missing storage'), { code: 'ERR_MODULE_NOT_FOUND' })
-      evalMock.mockRejectedValueOnce(missingStorage)
+      mailRuntimeInternals.setStorageModuleLoader(async () => {
+        throw missingStorage
+      })
       await expect(mailRuntimeInternals.loadStorageModule()).rejects.toMatchObject({
         code: 'MAIL_STORAGE_MODULE_MISSING',
       })
 
       const storageFailure = new Error('storage failed')
-      evalMock.mockRejectedValueOnce(storageFailure)
+      mailRuntimeInternals.setStorageModuleLoader(async () => {
+        throw storageFailure
+      })
       await expect(mailRuntimeInternals.loadStorageModule()).rejects.toBe(storageFailure)
     } finally {
-      if (typeof originalVitest === 'string') {
-        process.env.VITEST = originalVitest
-      } else {
-        Reflect.deleteProperty(process.env, 'VITEST')
-      }
-      ;(globalThis as typeof globalThis & { eval: typeof eval }).eval = originalEval
+      mailRuntimeInternals.setDbModuleLoader(undefined)
+      mailRuntimeInternals.setNodemailerModuleLoader(undefined)
+      mailRuntimeInternals.setQueueModuleLoader(undefined)
+      mailRuntimeInternals.setStorageModuleLoader(undefined)
     }
 
     const barePreview = {

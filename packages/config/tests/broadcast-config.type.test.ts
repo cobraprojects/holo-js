@@ -37,6 +37,7 @@ describe('@holo-js/config broadcast typing', () => {
       notifications: {} as HoloConfigRegistry['notifications'],
       media: {} as HoloConfigRegistry['media'],
       session: {} as HoloConfigRegistry['session'],
+      security: {} as HoloConfigRegistry['security'],
       auth: {} as HoloConfigRegistry['auth'],
       services: {} as HoloConfigRegistry['services'],
     })

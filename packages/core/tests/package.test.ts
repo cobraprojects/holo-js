@@ -25,6 +25,7 @@ describe('@holo-js/core package boundaries', () => {
       '@holo-js/mail',
       '@holo-js/notifications',
       '@holo-js/queue',
+      '@holo-js/security',
       '@holo-js/session',
       '@holo-js/storage',
     ] as const

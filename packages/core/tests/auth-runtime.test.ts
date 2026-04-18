@@ -10,6 +10,15 @@ import { createHolo, holoRuntimeInternals, resetHoloRuntime } from '../src'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
 const tempDirs: string[] = []
+type VerificationTokenLike = {
+  readonly id: string
+  readonly plainTextToken: string
+}
+type SessionRecordLike = {
+  readonly id: string
+  readonly store: string
+  readonly rememberTokenHash?: string
+}
 
 async function createProject(options: {
   session?: 'file' | 'database' | false
@@ -316,7 +325,7 @@ export default {
       passwordConfirmation: 'supersecret',
     })
 
-    const verificationToken = await runtime.auth?.verification.create(registered!)
+    const verificationToken = await runtime.auth?.verification.create(registered!) as VerificationTokenLike | undefined
     await runtime.auth?.passwords.request('ava@example.com')
 
     expect(mailer.send).toHaveBeenCalledTimes(2)
@@ -440,7 +449,7 @@ export default {
       passwordConfirmation: 'supersecret',
     })
 
-    const verificationToken = await runtime.auth?.verification.create(registered!)
+    const verificationToken = await runtime.auth?.verification.create(registered!) as VerificationTokenLike | undefined
     await runtime.auth?.passwords.request('ava@example.com')
 
     expect(mailer.send).toHaveBeenCalledTimes(2)
@@ -657,7 +666,7 @@ export default {
       passwordConfirmation: 'supersecret',
     })
 
-    const verificationToken = await runtime.auth?.verification.create(registered!)
+    const verificationToken = await runtime.auth?.verification.create(registered!) as VerificationTokenLike | undefined
     await runtime.auth?.passwords.request('ava@example.com')
 
     expect(listFakeSentMails()).toHaveLength(2)
@@ -1177,7 +1186,7 @@ export default {
       session: false,
     })
     const runtime = await createHolo(root, {
-      environment: 'development',
+      envName: 'development',
     })
 
     await runtime.initialize()
@@ -1191,7 +1200,7 @@ export default {
           provider: 'users',
         },
       },
-    })
+    }) as SessionRecordLike | undefined
 
     expect(createdSession?.store).toBe('file')
   })
@@ -1214,7 +1223,7 @@ export default defineSessionConfig({
 })
 `, 'utf8')
     const runtime = await createHolo(root, {
-      environment: 'development',
+      envName: 'development',
     })
 
     await runtime.initialize()
@@ -1233,7 +1242,7 @@ export default defineSessionConfig({
       data: {
         source: 'default-database-connection',
       },
-    })
+    }) as SessionRecordLike | undefined
 
     expect(createdSession?.store).toBe('database')
     await expect(runtime.session?.read(String(createdSession?.id))).resolves.toMatchObject({
@@ -1395,7 +1404,7 @@ export default undefined
 
     await runtime.initialize()
 
-    const socialBindings = await holoRuntimeInternals.createCoreSocialBindings(runtime.loadedConfig, await import('../../session/src/index.ts'))
+    const socialBindings = await holoRuntimeInternals.createCoreSocialBindings(runtime.loadedConfig, await import('@holo-js/session'))
 
     await socialBindings.stateStore.create({
       provider: 'google',
@@ -1584,7 +1593,7 @@ export default undefined
 
     await runtime.initialize()
 
-    const socialBindings = await holoRuntimeInternals.createCoreSocialBindings(runtime.loadedConfig, await import('../../session/src/index.ts'))
+    const socialBindings = await holoRuntimeInternals.createCoreSocialBindings(runtime.loadedConfig, await import('@holo-js/session'))
     const sessionRuntime = runtime.session!
 
     await sessionRuntime.create({
@@ -1686,7 +1695,7 @@ export default undefined
           },
         },
       },
-    }, await import('../../session/src/index.ts'))
+    }, await import('@holo-js/session'))
     const originalTable = DB.table.bind(DB)
     const tableSpy = vi.spyOn(DB, 'table')
       .mockImplementation(((tableName: string) => {
@@ -1727,7 +1736,7 @@ export default undefined
         ...runtime.loadedConfig.auth,
         guards: {} as never,
       },
-    }, await import('../../session/src/index.ts'))
+    }, await import('@holo-js/session'))
     tableSpy.mockImplementation(((tableName: string) => {
       if (tableName !== 'auth_identities') {
         return originalTable(tableName as never)
@@ -1845,7 +1854,7 @@ export default undefined
 
     await runtime.initialize()
 
-    const socialModule = await import('../../auth-social/src/index.ts')
+    const socialModule = await import('@holo-js/auth-social')
     expect(socialModule.socialAuthInternals.getBindings().encryptionKey).toBe('phase-6-encryption-key')
   })
 
@@ -2001,6 +2010,42 @@ export default {
       email: 'chain@example.com',
       role: 'editor',
     })
+  })
+
+  it('rethrows dependency import failures from an existing auth model file', async () => {
+    const root = await createProject({
+      auth: true,
+    })
+
+    await writeFile(join(root, 'server/models/User.ts'), `
+import './missing-dependency'
+
+export default {
+  async find() {
+    return null
+  },
+  where() {
+    return {
+      async first() {
+        return null
+      },
+    }
+  },
+  async create(values) {
+    return values
+  },
+  async update(_id, values) {
+    return values
+  },
+}
+`, 'utf8')
+
+    const runtime = await createHolo(root, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    await expect(holoRuntimeInternals.createCoreAuthProviders(root, runtime.loadedConfig)).rejects.toThrow('missing-dependency')
   })
 
   it('filters hosted-auth profile writes and honors model auth input hooks', async () => {
@@ -2531,7 +2576,7 @@ export default {
       data: {
         guard: 'web',
       },
-    })
+    }) as SessionRecordLike | undefined
     expect(createdSession?.store).toBe('database')
     expect(await runtime.session?.read(String(createdSession?.id))).toMatchObject({
       id: createdSession?.id,
@@ -2635,7 +2680,7 @@ export default {
 `, 'utf8')
 
     const runtime = await createHolo(root, {
-      environment: 'development',
+      envName: 'development',
     })
     await runtime.initialize()
 
@@ -2673,6 +2718,112 @@ export default {
     await runtime.auth?.passwords.request('ava@example.com')
     const rows = await DB.table('admin_password_reset_tokens').get<Record<string, unknown>>()
     expect(rows).toHaveLength(1)
+  })
+
+  it('uses the shared security limiter for password reset throttling when security is configured', async () => {
+    const root = await createProject({
+      session: 'database',
+      auth: true,
+      notifications: true,
+      mail: true,
+    })
+    await writeFile(join(root, 'config/security.ts'), `
+import { defineSecurityConfig } from '@holo-js/security'
+
+export default defineSecurityConfig({
+  rateLimit: {
+    driver: 'memory',
+  },
+})
+`, 'utf8')
+    await writeFile(join(root, 'server/models/User.ts'), `
+const users = new Map()
+let nextId = 1
+
+export default {
+  async find(id) {
+    return users.get(Number(id)) ?? null
+  },
+  where(column, value) {
+    return {
+      async first() {
+        for (const record of users.values()) {
+          if (record?.[column] === value) {
+            return record
+          }
+        }
+
+        return null
+      },
+    }
+  },
+  async create(values) {
+    const record = {
+      id: nextId++,
+      ...values,
+    }
+    users.set(record.id, record)
+    return record
+  },
+  async update(id, values) {
+    const record = users.get(Number(id))
+    if (!record) {
+      return null
+    }
+
+    Object.assign(record, values)
+    return record
+  },
+}
+`, 'utf8')
+
+    const runtime = await createHolo(root, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    await runtime.initialize()
+    await createSchemaService(DB.connection()).createTable('password_reset_tokens', (table) => {
+      table.uuid('id').primaryKey()
+      table.string('provider').default('users')
+      table.string('email')
+      table.string('token_hash')
+      table.timestamp('created_at')
+      table.timestamp('expires_at')
+      table.timestamp('used_at').nullable()
+      table.timestamp('updated_at')
+    })
+
+    const registered = await runtime.auth?.register({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: 'supersecret',
+      passwordConfirmation: 'supersecret',
+    })
+
+    expect(registered).toMatchObject({
+      email: 'ava@example.com',
+    })
+
+    await runtime.auth?.passwords.request('ava@example.com')
+    expect(listFakeSentMails()).toHaveLength(1)
+
+    const firstTokenRows = await DB.table('password_reset_tokens').get<Record<string, unknown>>()
+    expect(firstTokenRows).toHaveLength(1)
+
+    const firstTokenId = firstTokenRows[0]?.id
+    expect(typeof firstTokenId).toBe('string')
+
+    await DB.table('password_reset_tokens').where('id', firstTokenId as string).update({
+      created_at: '2000-01-01T00:00:00.000Z',
+    })
+
+    await runtime.auth?.passwords.request('ava@example.com')
+
+    expect(listFakeSentMails()).toHaveLength(1)
+    const finalTokenRows = await DB.table('password_reset_tokens').get<Record<string, unknown>>()
+    expect(finalTokenRows).toHaveLength(1)
+    expect(finalTokenRows[0]?.id).toBe(firstTokenId)
   })
 
   it('persists auth user references through string user_id columns', async () => {
@@ -2722,7 +2873,7 @@ export default {
 `, 'utf8')
 
     const runtime = await createHolo(root, {
-      environment: 'development',
+      envName: 'development',
     })
     await runtime.initialize()
 
@@ -2783,7 +2934,7 @@ export default {
       },
     ])
 
-    const verificationToken = await runtime.auth?.verification.create(registered!)
+    const verificationToken = await runtime.auth?.verification.create(registered!) as VerificationTokenLike | undefined
     expect(verificationToken).toMatchObject({
       userId: 'user-1',
     })
@@ -2820,7 +2971,7 @@ export default {
       session: 'database',
     })
     const runtime = await createHolo(root, {
-      environment: 'development',
+      envName: 'development',
     })
     await runtime.initialize()
 
@@ -3065,7 +3216,7 @@ export const holoModelPendingSchema = true
       workos: true,
     })
     const runtime = await createHolo(root, {
-      environment: 'development',
+      envName: 'development',
     })
     await runtime.initialize()
 
@@ -3189,9 +3340,9 @@ export const holoModelPendingSchema = true
       session: 'database',
     })
     const runtime = await createHolo(root, {
-      environment: 'development',
+      envName: 'development',
     })
-    const sessionModule = await import('../../session/src/index.ts')
+    const sessionModule = await import('@holo-js/session')
 
     await expect(holoRuntimeInternals.createCoreSessionStores(root, {
       ...runtime.loadedConfig,
@@ -3366,5 +3517,61 @@ export default defineAuthConfig({
     })
 
     await expect(missingRuntime.initialize()).rejects.toThrow('Auth provider model "MissingUser" could not be resolved')
+  })
+
+  it('falls back to alternate auth provider extensions when missing imports are reported as unquoted urls', async () => {
+    const root = await createProject({
+      auth: true,
+    })
+
+    await rm(join(root, 'server/models/User.ts'))
+    await writeFile(join(root, 'server/models/User.js'), `
+const users = new Map()
+
+export default {
+  async find(id) {
+    return users.get(id)
+  },
+  where(column, value) {
+    return {
+      async first() {
+        for (const record of users.values()) {
+          if (record?.[column] === value) {
+            return record
+          }
+        }
+
+        return undefined
+      },
+    }
+  },
+  async create(values) {
+    return values
+  },
+  async update(_id, values) {
+    return values
+  },
+}
+`, 'utf8')
+
+    const runtime = await createHolo(root, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    await runtime.initialize()
+
+    const registered = await runtime.auth?.register({
+      name: 'Fallback User',
+      email: 'fallback@example.com',
+      password: 'supersecret',
+      passwordConfirmation: 'supersecret',
+    })
+
+    expect(registered).toMatchObject({
+      email: 'fallback@example.com',
+    })
+
+    await runtime.shutdown()
   })
 })

@@ -22,6 +22,21 @@ import { configureStorageRuntime, resetStorageRuntime, useStorage } from '@holo-
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
 const tempDirs: string[] = []
+type FetchInput = Request | URL | string
+type StrictStorageRuntime = {
+  getItemRaw(key: string): Promise<Uint8Array | ArrayBuffer | Buffer | null>
+  setItemRaw(key: string, value: Uint8Array | ArrayBuffer | Buffer): Promise<void>
+  getMeta<T = unknown>(key: string): Promise<T | null>
+  setMeta(key: string, value: unknown): Promise<void>
+  removeMeta(key: string): Promise<void>
+  getKeys(base?: string): Promise<string[]>
+  clear(base?: string): Promise<void>
+  hasItem(key: string): Promise<boolean>
+  getItem(key: string): Promise<unknown>
+  setItem(key: string, value: unknown): Promise<void>
+  removeItem(key: string): Promise<void>
+  put(key: string, value: unknown): Promise<boolean>
+}
 
 async function createProjectRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-core-adapter-'))
@@ -766,7 +781,7 @@ export default {
       displayName: 'Test',
     })
     const root = await createProjectRoot()
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: FetchInput) => {
       const request = input instanceof Request ? input : new Request(input)
       const key = decodeURIComponent(new URL(request.url).pathname.replace(/^\/+/, ''))
 
@@ -818,17 +833,7 @@ export default defineStorageConfig({
     })
 
     const { useStorage } = await import('@holo-js/storage/runtime')
-    const storage = useStorage('local') as typeof useStorage extends (...args: never[]) => infer T ? T : never
-      & {
-        getItemRaw(key: string): Promise<Uint8Array | null>
-        setItemRaw(key: string, value: ArrayBuffer): Promise<void>
-        getMeta<T = unknown>(key: string): Promise<T | null>
-        setMeta(key: string, value: unknown): Promise<void>
-        removeMeta(key: string): Promise<void>
-        getKeys(base?: string): Promise<string[]>
-        clear(base?: string): Promise<void>
-        hasItem(key: string): Promise<boolean>
-      }
+    const storage = useStorage('local') as StrictStorageRuntime
 
     await expect(storage.getItemRaw('legacy:missing.bin')).resolves.toBeNull()
 
@@ -850,9 +855,14 @@ export default defineStorageConfig({
     expect(await storage.getItem('legacy:buffer.bin')).toEqual({ buffer: true })
 
     const raw = await storage.getItemRaw('legacy:data.bin')
-    expect(Buffer.from(raw ?? new Uint8Array())).toEqual(Buffer.from([1, 2, 3, 4]))
+    const normalizedRaw = raw instanceof Uint8Array
+      ? raw
+      : raw instanceof ArrayBuffer
+        ? new Uint8Array(raw)
+        : raw ?? new Uint8Array()
+    expect(Buffer.from(normalizedRaw)).toEqual(Buffer.from([1, 2, 3, 4]))
     expect(useStorage('local')).toBe(storage)
-    const mediaStorage = useStorage('media')
+    const mediaStorage = useStorage('media') as StrictStorageRuntime
     await expect(mediaStorage.setItem('remote:payload.json', { ok: true })).resolves.toBeUndefined()
     await expect(mediaStorage.getItem('remote:payload.json')).resolves.toEqual({
       ok: true,

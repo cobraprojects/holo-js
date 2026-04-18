@@ -299,12 +299,7 @@ function getRuntimeBindings(): MailRuntimeBindings {
 }
 
 function dynamicImport<TModule>(specifier: string): Promise<TModule> {
-  if (process.env.VITEST) {
-    return import(/* @vite-ignore */ specifier) as Promise<TModule>
-  }
-
-  const indirectEval = globalThis.eval as (source: string) => Promise<TModule>
-  return indirectEval(`import(${JSON.stringify(specifier)})`)
+  return import(/* webpackIgnore: true */ specifier) as Promise<TModule>
 }
 
 async function loadQueueModule(): Promise<QueueModule> {
@@ -351,7 +346,20 @@ async function loadQueueModule(): Promise<QueueModule> {
 async function loadDbModule(): Promise<DbModule | null> {
   const override = getRuntimeState().loadDbModule
   if (override) {
-    return await override()
+    try {
+      return await override()
+    } catch (error) {
+      if (
+        error
+        && typeof error === 'object'
+        && 'code' in error
+        && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
+      ) {
+        return null
+      }
+
+      throw error
+    }
   }
 
   try {
@@ -399,7 +407,24 @@ function resolveNodemailerModule(module: unknown): NodemailerModule {
 async function loadNodemailerModule(): Promise<NodemailerModule> {
   const override = getRuntimeState().loadNodemailerModule
   if (override) {
-    return resolveNodemailerModule(await override())
+    try {
+      return resolveNodemailerModule(await override())
+    } catch (error) {
+      if (
+        error
+        && typeof error === 'object'
+        && 'code' in error
+        && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
+      ) {
+        throw new MailError(
+          '[@holo-js/mail] SMTP delivery requires nodemailer to be installed.',
+          'MAIL_SMTP_MODULE_MISSING',
+          { cause: error },
+        )
+      }
+
+      throw error
+    }
   }
 
   try {
@@ -442,7 +467,24 @@ function resolveStorageModule(module: unknown): StorageModule {
 async function loadStorageModule(): Promise<StorageModule> {
   const override = getRuntimeState().loadStorageModule
   if (override) {
-    return resolveStorageModule(await override())
+    try {
+      return resolveStorageModule(await override())
+    } catch (error) {
+      if (
+        error
+        && typeof error === 'object'
+        && 'code' in error
+        && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
+      ) {
+        throw new MailError(
+          '[@holo-js/mail] Storage-backed attachments require @holo-js/storage to be installed.',
+          'MAIL_STORAGE_MODULE_MISSING',
+          { cause: error },
+        )
+      }
+
+      throw error
+    }
   }
 
   try {

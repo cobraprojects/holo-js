@@ -26,6 +26,7 @@ import type { QueueWorkerRunOptions } from '@holo-js/queue'
 import { defineCommand } from '../src'
 import { cliInternals } from '../src/cli-internals'
 import { generatorInternals } from '../src/generators'
+import { loadSecurityCliModule } from '../src/security'
 import {
   bundleProjectModule,
   defaultProjectConfig,
@@ -750,6 +751,24 @@ export default {
 
     expect(await readFile(join(mailRoot, 'config/mail.ts'), 'utf8')).toContain('defineMailConfig')
     expect(await readFile(join(mailRoot, 'config/notifications.ts'), 'utf8')).toContain('defineNotificationsConfig')
+
+    const securityRoot = join(baseRoot, 'security-runtime-app')
+    await projectInternals.scaffoldProject(securityRoot, {
+      projectName: 'Security Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['security'],
+    })
+
+    expect(await readFile(join(securityRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/security": "${expectedHoloPackageRange}"`)
+    expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain(`import { defineSecurityConfig, limit } from '@holo-js/security'`)
+    expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain('connection: \'redis\'')
+    expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain('login: limit.perMinute(5).define()')
+    expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain('register: limit.perHour(10).define()')
+    expect(await stat(join(securityRoot, 'storage/framework/rate-limits'))).toBeDefined()
+    await expect(readFile(join(securityRoot, 'storage/framework/rate-limits/.gitignore'), 'utf8')).resolves.toBe('*\n!.gitignore\n')
 
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: '!!!',
@@ -1738,7 +1757,7 @@ export default defineAppConfig({
 
     const unsupportedTarget = runCliProcess(projectRoot, ['install', 'mailer'])
     expect(unsupportedTarget.status).toBe(1)
-    expect(unsupportedTarget.stderr).toContain('Unsupported install target: mailer. Expected one of queue, events, auth, notifications, mail, broadcast.')
+    expect(unsupportedTarget.stderr).toContain('Unsupported install target: mailer. Expected one of queue, events, auth, notifications, mail, broadcast, security.')
 
     const unsupportedDriver = runCliProcess(projectRoot, ['install', 'queue', '--driver', 'sqs'])
     expect(unsupportedDriver.status).toBe(1)
@@ -1865,6 +1884,17 @@ export default defineAppConfig({
       args: ['broadcast'],
       flags: { driver: 'redis' },
     }, commandContext as never)).rejects.toThrow('The broadcast installer does not support --driver.')
+    await expect(installCommand?.prepare?.({
+      args: ['security'],
+      flags: {},
+    }, commandContext as never)).resolves.toEqual({
+      args: ['security'],
+      flags: {},
+    })
+    await expect(installCommand?.prepare?.({
+      args: ['security'],
+      flags: { driver: 'redis' },
+    }, commandContext as never)).rejects.toThrow('The security installer does not support --driver.')
     await expect(installCommand?.run({
       projectRoot,
       cwd: projectRoot,
@@ -1931,6 +1961,16 @@ export default defineAppConfig({
       createdMailConfig: false,
       createdMailDirectory: false,
     })
+    await expect(projectInternals.installSecurityIntoProject(projectRoot)).resolves.toMatchObject({
+      updatedPackageJson: true,
+      createdSecurityConfig: true,
+    })
+    await expect(projectInternals.installSecurityIntoProject(projectRoot)).resolves.toMatchObject({
+      updatedPackageJson: false,
+      createdSecurityConfig: false,
+    })
+    expect((await stat(join(projectRoot, 'storage/framework/rate-limits'))).isDirectory()).toBe(true)
+    await expect(readFile(join(projectRoot, 'storage/framework/rate-limits/.gitignore'), 'utf8')).resolves.toBe('*\n!.gitignore\n')
     await expect(projectInternals.installQueueIntoProject(projectRoot)).resolves.toEqual({
       createdQueueConfig: false,
       updatedPackageJson: false,
@@ -2701,6 +2741,91 @@ export default defineDatabaseConfig({
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/mail": "${expectedHoloPackageRange}"`)
   }, 30000)
 
+  it('installs security support through the CLI', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    const result = runCliProcess(projectRoot, ['install', 'security'])
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('Installed security support.')
+    expect(result.stdout).toContain('  - created config/security.ts')
+    expect(await readFile(join(projectRoot, 'config/security.ts'), 'utf8')).toContain('defineSecurityConfig')
+    expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/security": "${expectedHoloPackageRange}"`)
+    await writeProjectFile(projectRoot, 'node_modules/@holo-js/security/package.json', JSON.stringify({
+      name: '@holo-js/security',
+      type: 'module',
+      exports: {
+        '.': './index.mjs',
+      },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'node_modules/@holo-js/security/index.mjs', `
+export function defineSecurityConfig(config) {
+  return Object.freeze({ ...config })
+}
+
+export function ip(request, trustedProxy = false) {
+  if (!trustedProxy) {
+    return 'unknown'
+  }
+
+  return request.headers.get('x-forwarded-for') ?? 'unknown'
+}
+
+export const limit = Object.freeze({
+  perMinute(maxAttempts) {
+    return {
+      by(key) {
+        return Object.freeze({
+          maxAttempts,
+          decaySeconds: 60,
+          key,
+        })
+      },
+      define() {
+        return Object.freeze({
+          maxAttempts,
+          decaySeconds: 60,
+        })
+      },
+    }
+  },
+  perHour(maxAttempts) {
+    return {
+      by(key) {
+        return Object.freeze({
+          maxAttempts,
+          decaySeconds: 3600,
+          key,
+        })
+      },
+      define() {
+        return Object.freeze({
+          maxAttempts,
+          decaySeconds: 3600,
+        })
+      },
+    }
+  },
+})
+`)
+
+    const loaded = await loadConfigDirectory(projectRoot, {
+      preferCache: false,
+      processEnv: {},
+    })
+    expect(loaded.security.rateLimit.limiters.login?.key).toBeUndefined()
+    expect(loaded.security.rateLimit.limiters.register?.key).toBeUndefined()
+
+    const cached = runCliProcess(projectRoot, ['config:cache'], {
+      env: {
+        APP_ENV: 'production',
+        APP_KEY: 'super-secret',
+      },
+    })
+    expect(cached.status, cached.stderr || cached.stdout).toBe(0)
+    expect(cached.stdout).toContain('Config cached:')
+  }, 30000)
+
   it('installs broadcast support without requiring framework Flux bootstrap files', async () => {
     const nextRoot = await createTempProject()
     tempDirs.push(nextRoot)
@@ -3207,6 +3332,11 @@ export default defineBroadcastConfig({
       input: 'forms,validation\n',
     })
     await expect(cliInternals.promptOptionalPackages(optionalPromptIo.io)).resolves.toEqual(['forms', 'validation'])
+    const securityPromptIo = createIo(baseRoot, {
+      tty: true,
+      input: 'security\n',
+    })
+    await expect(cliInternals.promptOptionalPackages(securityPromptIo.io)).resolves.toEqual(['security'])
     const formsOnlyPromptIo = createIo(baseRoot, {
       tty: true,
       input: 'forms\n',
@@ -3216,6 +3346,7 @@ export default defineBroadcastConfig({
     expect(() => cliInternals.normalizeChoice('astro', ['nuxt', 'next'], 'Framework')).toThrow('Unsupported Framework')
     expect(() => cliInternals.normalizeChoice(undefined, ['nuxt', 'next'], 'Framework')).toThrow('(empty)')
     expect(() => cliInternals.normalizeOptionalPackages(['weird-package'])).toThrow('Unsupported optional package')
+    expect(cliInternals.normalizeOptionalPackages(['security'])).toEqual(['security'])
     expect(cliInternals.normalizeOptionalPackages(['forms'])).toEqual(['forms', 'validation'])
     expect(cliInternals.normalizeOptionalPackages(['forms', 'validation', 'forms'])).toEqual(['forms', 'validation'])
     expect(cliInternals.normalizeOptionalPackages(['form', 'validate', 'storage', 'queue', 'events'])).toEqual([
@@ -6405,6 +6536,10 @@ export default defineEvent({ name: 'audit.activity' })
       createdMailConfig: true,
       createdMailDirectory: true,
     }))
+    const installSecurityIntoProject = vi.fn(async () => ({
+      updatedPackageJson: true,
+      createdSecurityConfig: true,
+    }))
     const installQueueIntoProject = vi.fn(async () => ({
       createdQueueConfig: true,
       updatedPackageJson: true,
@@ -6455,6 +6590,7 @@ export default defineEvent({ name: 'audit.activity' })
         installMailIntoProject,
         installNotificationsIntoProject,
         installQueueIntoProject,
+        installSecurityIntoProject,
         scaffoldProject,
       }
     })
@@ -6633,6 +6769,13 @@ export default defineEvent({ name: 'audit.activity' })
         flags: { driver: 'sync' },
         loadProject: baseContext.loadProject,
       })
+      await commands.find(command => command.name === 'install')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: ['security'],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
       await commands.find(command => command.name === 'prepare')!.run({
         projectRoot,
         cwd: projectRoot,
@@ -6673,6 +6816,7 @@ export default defineEvent({ name: 'audit.activity' })
       expect(queueForget).toHaveBeenCalledWith(baseContext, projectRoot, 'failed-2')
       expect(queueFlush).toHaveBeenCalledWith(baseContext, projectRoot)
       expect(queueClear).toHaveBeenCalledWith(baseContext, projectRoot, undefined, undefined)
+      expect(installSecurityIntoProject).toHaveBeenCalledWith(projectRoot)
       expect(queueTable).toHaveBeenCalledWith(baseContext, projectRoot)
       expect(cacheProjectConfig).toHaveBeenCalledWith(projectRoot)
       expect(withRuntimeEnvironment).toHaveBeenCalledWith(
@@ -7191,8 +7335,10 @@ export default defineConfig({
     await expect(readFile(join(projectRoot, '.holo-js/generated', 'config.d.ts'), 'utf8')).resolves.toContain('"services": typeof')
     await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('interface HoloQueueJobRegistry')
     await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('import type * as holoQueueJobModule0 from')
-    await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('"reports.daily": import(\'@holo-js/queue\').ExportedQueueJobDefinition<typeof holoQueueJobModule0["dailyJob"]>')
-    await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('"send-email": import(\'@holo-js/queue\').QueueJobDefinition')
+    await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('ExportedQueueJobDefinition')
+    await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('QueueJobDefinition')
+    await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('"reports.daily": ExportedQueueJobDefinition<typeof holoQueueJobModule0["dailyJob"]>')
+    await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('"send-email": QueueJobDefinition')
     await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.not.toContain('server/jobs/send-email')
 
     const pnpmResolution = await cliInternals.resolvePackageManagerCommand(projectRoot, 'holo:build')
@@ -9615,6 +9761,506 @@ export default defineDatabaseConfig({
     }
   })
 
+  it('runs rate-limit clear with lightweight security runtime dependencies', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const configureSecurityRuntime = vi.fn()
+    const resetSecurityRuntime = vi.fn()
+    const clearRateLimit = vi.fn(async () => 3)
+    const createRateLimitStoreFromConfig = vi.fn(() => ({
+      hit: vi.fn(),
+      clear: vi.fn(),
+      clearByPrefix: vi.fn(),
+      clearAll: vi.fn(),
+    }))
+
+    await expect(cliInternals.runRateLimitClearCommand(io.io, projectRoot, {
+      limiter: 'login',
+    }, {
+      loadConfig: async () => ({
+        security: {
+          csrf: {
+            enabled: true,
+            field: '_token',
+            header: 'X-CSRF-TOKEN',
+            cookie: 'XSRF-TOKEN',
+            except: [],
+          },
+          rateLimit: {
+            driver: 'file',
+            memory: { driver: 'memory' },
+            file: { path: './storage/framework/rate-limits' },
+            redis: { host: '127.0.0.1', port: 6379, db: 0, connection: 'default', prefix: 'holo:rate-limit:' },
+            limiters: {},
+          },
+        },
+      } as never),
+      loadSecurityModule: async () => ({
+        configureSecurityRuntime,
+        resetSecurityRuntime,
+        createRateLimitStoreFromConfig,
+        clearRateLimit,
+      } as never),
+    })).resolves.toBeUndefined()
+
+    expect(createRateLimitStoreFromConfig).toHaveBeenCalled()
+    expect(configureSecurityRuntime).toHaveBeenCalledTimes(1)
+    expect(clearRateLimit).toHaveBeenCalledWith({
+      limiter: 'login',
+    })
+    expect(resetSecurityRuntime).toHaveBeenCalledTimes(1)
+    expect(io.read().stdout).toContain('Cleared 3 rate-limit bucket(s).')
+  })
+
+  it('formats boolean rate-limit clear results as bucket counts', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const createDependencies = (cleared: boolean) => ({
+      loadConfig: async () => ({
+        security: {
+          csrf: {
+            enabled: true,
+            field: '_token',
+            header: 'X-CSRF-TOKEN',
+            cookie: 'XSRF-TOKEN',
+            except: [],
+          },
+          rateLimit: {
+            driver: 'file',
+            memory: { driver: 'memory' },
+            file: { path: './storage/framework/rate-limits' },
+            redis: { host: '127.0.0.1', port: 6379, db: 0, connection: 'default', prefix: 'holo:rate-limit:' },
+            limiters: {},
+          },
+        },
+      } as never),
+      loadSecurityModule: async () => ({
+        configureSecurityRuntime: vi.fn(),
+        resetSecurityRuntime: vi.fn(),
+        createRateLimitStoreFromConfig: vi.fn(() => ({
+          hit: vi.fn(),
+          clear: vi.fn(),
+          clearByPrefix: vi.fn(),
+          clearAll: vi.fn(),
+        })),
+        clearRateLimit: vi.fn(async () => cleared),
+      } as never),
+    })
+
+    await expect(cliInternals.runRateLimitClearCommand(io.io, projectRoot, {
+      limiter: 'login',
+    }, createDependencies(true))).resolves.toBeUndefined()
+    expect(io.read().stdout).toContain('Cleared 1 rate-limit bucket(s).')
+
+    const emptyIo = createIo(projectRoot)
+    await expect(cliInternals.runRateLimitClearCommand(emptyIo.io, projectRoot, {
+      limiter: 'login',
+    }, createDependencies(false))).resolves.toBeUndefined()
+    expect(emptyIo.read().stdout).toContain('Cleared 0 rate-limit bucket(s).')
+  })
+
+  it('rejects CLI rate-limit clearing for unsupported driver modes and validates the internal command flags', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+
+    await expect(cliInternals.runRateLimitClearCommand(io.io, projectRoot, {
+      limiter: 'login',
+    }, {
+      loadConfig: async () => ({
+        security: {
+          csrf: {
+            enabled: true,
+            field: '_token',
+            header: 'X-CSRF-TOKEN',
+            cookie: 'XSRF-TOKEN',
+            except: [],
+          },
+          rateLimit: {
+            driver: 'memory',
+            memory: { driver: 'memory' },
+            file: { path: './storage/framework/rate-limits' },
+            redis: { host: '127.0.0.1', port: 6379, db: 0, connection: 'default', prefix: 'holo:rate-limit:' },
+            limiters: {},
+          },
+        },
+      } as never),
+      loadSecurityModule: async () => ({
+        configureSecurityRuntime: vi.fn(),
+        resetSecurityRuntime: vi.fn(),
+        createRateLimitStoreFromConfig: vi.fn(),
+        clearRateLimit: vi.fn(),
+      } as never),
+    })).rejects.toThrow('memory rate-limit driver is process-local')
+
+    const internalContext = {
+      ...io.io,
+      projectRoot,
+      registry: [] as never[],
+      loadProject: vi.fn(async () => await loadProjectConfig(projectRoot, { required: true })),
+    }
+    const rateLimitExecutor = vi.fn(async () => {})
+    const commands = cliInternals.createInternalCommands(
+      internalContext as never,
+      undefined,
+      {},
+      {},
+      {},
+      { runRateLimitClearCommand: rateLimitExecutor as never },
+    )
+    const rateLimitClear = commands.find(command => command.name === 'rate-limit:clear')
+
+    await expect(rateLimitClear?.prepare?.({ args: [], flags: {} } as never, internalContext as never)).rejects.toThrow(
+      'rate-limit:clear requires --limiter <name> unless --all is used.',
+    )
+
+    const prepared = await rateLimitClear!.prepare!({
+      args: [],
+      flags: {
+        limiter: 'login',
+        key: 'user-1',
+      },
+    } as never, internalContext as never)
+    await rateLimitClear!.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: prepared.args,
+      flags: prepared.flags,
+      loadProject: internalContext.loadProject,
+    })
+
+    expect(rateLimitExecutor).toHaveBeenCalledWith(internalContext, projectRoot, {
+      limiter: 'login',
+      key: 'user-1',
+    })
+
+    await expect(rateLimitClear?.prepare?.({
+      args: [],
+      flags: {
+        all: true,
+      },
+    } as never, internalContext as never)).resolves.toEqual({
+      args: [],
+      flags: {
+        all: true,
+      },
+    })
+  })
+
+  it('loads the security module through createInternalCommands when no executor override is provided', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const runRateLimitClearCommand = vi.fn(async () => {})
+
+    vi.resetModules()
+    vi.doMock('../src/security', () => ({
+      runRateLimitClearCommand,
+    }))
+
+    try {
+      const { createInternalCommands } = await import('../src/cli')
+      const internalContext = {
+        ...io.io,
+        projectRoot,
+        registry: [] as never[],
+        loadProject: vi.fn(async () => await loadProjectConfig(projectRoot, { required: true })),
+      }
+      const commands = createInternalCommands(internalContext as never)
+      const rateLimitClear = commands.find(command => command.name === 'rate-limit:clear')
+
+      await rateLimitClear!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {
+          all: true,
+        },
+        loadProject: internalContext.loadProject,
+      })
+
+      expect(runRateLimitClearCommand).toHaveBeenCalledWith(internalContext, projectRoot, {
+        all: true,
+      })
+    } finally {
+      vi.doUnmock('../src/security')
+      vi.resetModules()
+    }
+  })
+
+  it('reports when security support is already installed through createInternalCommands', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const installSecurityIntoProject = vi.fn(async () => ({
+      updatedPackageJson: false,
+      createdSecurityConfig: false,
+    }))
+
+    vi.resetModules()
+    vi.doMock('../src/project/scaffold', async () => {
+      const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
+      return {
+        ...actual,
+        installSecurityIntoProject,
+      }
+    })
+
+    try {
+      const isolatedCli = await import('../src/cli')
+      const commands = isolatedCli.createInternalCommands({
+        ...io.io,
+        projectRoot,
+        registry: [] as never[],
+        loadProject: vi.fn(async () => ({ config: defaultProjectConfig() })),
+      } as never)
+      const install = commands.find(command => command.name === 'install')
+
+      await install!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: ['security'],
+        flags: {},
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never)
+
+      expect(installSecurityIntoProject).toHaveBeenCalledWith(projectRoot)
+      expect(io.read().stdout).toContain('Security support is already installed.')
+    } finally {
+      vi.doUnmock('../src/project/scaffold')
+      vi.resetModules()
+    }
+  })
+
+  it('closes the redis adapter when rate-limit clear setup fails before runtime cleanup starts', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const connect = vi.fn(async () => {})
+    const close = vi.fn(async () => {})
+    const resetSecurityRuntime = vi.fn()
+
+    await expect(cliInternals.runRateLimitClearCommand(io.io, projectRoot, {
+      limiter: 'login',
+    }, {
+      loadConfig: async () => ({
+        security: {
+          csrf: {
+            enabled: true,
+            field: '_token',
+            header: 'X-CSRF-TOKEN',
+            cookie: 'XSRF-TOKEN',
+            except: [],
+          },
+          rateLimit: {
+            driver: 'redis',
+            memory: { driver: 'memory' },
+            file: { path: './storage/framework/rate-limits' },
+            redis: { host: '127.0.0.1', port: 6379, db: 0, connection: 'default', prefix: 'holo:rate-limit:' },
+            limiters: {},
+          },
+        },
+      } as never),
+      loadSecurityModule: async () => ({
+        configureSecurityRuntime: vi.fn(),
+        resetSecurityRuntime,
+        createRateLimitStoreFromConfig: vi.fn(() => {
+          throw new Error('store setup failed')
+        }),
+        clearRateLimit: vi.fn(),
+      } as never),
+      loadRedisAdapter: async () => ({
+        createSecurityRedisAdapter: vi.fn(() => ({
+          connect,
+          close,
+        })),
+      }),
+    } as never)).rejects.toThrow('store setup failed')
+
+    expect(connect).toHaveBeenCalledTimes(1)
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(resetSecurityRuntime).toHaveBeenCalledTimes(1)
+  }, 30000)
+
+  it('closes the redis adapter when rate-limit clear fails during redis connect', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const connect = vi.fn(async () => {
+      throw new Error('redis connect failed')
+    })
+    const close = vi.fn(async () => {})
+    const resetSecurityRuntime = vi.fn()
+
+    await expect(cliInternals.runRateLimitClearCommand(io.io, projectRoot, {
+      limiter: 'login',
+    }, {
+      loadConfig: async () => ({
+        security: {
+          csrf: {
+            enabled: true,
+            field: '_token',
+            header: 'X-CSRF-TOKEN',
+            cookie: 'XSRF-TOKEN',
+            except: [],
+          },
+          rateLimit: {
+            driver: 'redis',
+            memory: { driver: 'memory' },
+            file: { path: './storage/framework/rate-limits' },
+            redis: { host: '127.0.0.1', port: 6379, db: 0, connection: 'default', prefix: 'holo:rate-limit:' },
+            limiters: {},
+          },
+        },
+      } as never),
+      loadSecurityModule: async () => ({
+        configureSecurityRuntime: vi.fn(),
+        resetSecurityRuntime,
+        createRateLimitStoreFromConfig: vi.fn(),
+        clearRateLimit: vi.fn(),
+      } as never),
+      loadRedisAdapter: async () => ({
+        createSecurityRedisAdapter: vi.fn(() => ({
+          connect,
+          close,
+        })),
+      }),
+    } as never)).rejects.toThrow('redis connect failed')
+
+    expect(connect).toHaveBeenCalledTimes(1)
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(resetSecurityRuntime).toHaveBeenCalledTimes(1)
+  }, 30000)
+
+  it('loads the default security package entrypoints when clearing redis rate limits', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+
+    await writeProjectFile(projectRoot, 'config/security.ts', `
+export default {
+  csrf: {
+    enabled: true,
+  },
+  rateLimit: {
+    driver: 'redis',
+    redis: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:rate-limit:',
+    },
+    limiters: {},
+  },
+}
+`)
+
+    await writeProjectFile(projectRoot, 'node_modules/@holo-js/security/package.json', JSON.stringify({
+      name: '@holo-js/security',
+      type: 'module',
+      exports: {
+        '.': './index.mjs',
+        './drivers/redis-adapter': './drivers/redis-adapter.mjs',
+      },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'node_modules/@holo-js/security/index.mjs', `
+globalThis.__holoCliSecurityCalls ??= []
+
+export function configureSecurityRuntime(options) {
+  globalThis.__holoCliSecurityCalls.push({ type: 'configure', options })
+}
+
+export function resetSecurityRuntime() {
+  globalThis.__holoCliSecurityCalls.push({ type: 'reset' })
+}
+
+export function createRateLimitStoreFromConfig(config, options) {
+  globalThis.__holoCliSecurityCalls.push({ type: 'store', config, options })
+  return {
+    async hit() { return { limited: false, snapshot: { attempts: 1, expiresAt: new Date() }, retryAfterSeconds: 0 } },
+    async clear() { return true },
+    async clearByPrefix() { return 0 },
+    async clearAll() { return 0 },
+  }
+}
+
+export async function clearRateLimit(options) {
+  globalThis.__holoCliSecurityCalls.push({ type: 'clear', options })
+  return 2
+}
+`)
+    await writeProjectFile(projectRoot, 'node_modules/@holo-js/security/drivers/redis-adapter.mjs', `
+globalThis.__holoCliSecurityCalls ??= []
+
+export function createSecurityRedisAdapter(config) {
+  globalThis.__holoCliSecurityCalls.push({ type: 'adapter', config })
+  return {
+    async connect() {
+      globalThis.__holoCliSecurityCalls.push({ type: 'connect' })
+    },
+    async close() {
+      globalThis.__holoCliSecurityCalls.push({ type: 'close' })
+    },
+  }
+}
+`)
+
+    vi.stubGlobal('__holoCliSecurityCalls', [])
+
+    try {
+      await expect(cliInternals.runRateLimitClearCommand(io.io, projectRoot, {
+        limiter: 'login',
+        key: 'user-1',
+      })).resolves.toBeUndefined()
+
+      expect(io.read().stdout).toContain('Cleared 2 rate-limit bucket(s).')
+      expect((globalThis as typeof globalThis & { __holoCliSecurityCalls?: Array<{ type: string, options?: unknown }> }).__holoCliSecurityCalls).toEqual([
+        {
+          type: 'adapter',
+          config: expect.objectContaining({
+            prefix: 'holo:rate-limit:',
+          }),
+        },
+        { type: 'connect' },
+        {
+          type: 'store',
+          config: expect.objectContaining({
+            rateLimit: expect.objectContaining({
+              driver: 'redis',
+            }),
+          }),
+          options: expect.objectContaining({
+            projectRoot,
+          }),
+        },
+        {
+          type: 'configure',
+          options: expect.objectContaining({
+            config: expect.objectContaining({
+              rateLimit: expect.objectContaining({
+                driver: 'redis',
+              }),
+            }),
+          }),
+        },
+        {
+          type: 'clear',
+          options: {
+            limiter: 'login',
+            key: 'user-1',
+          },
+        },
+        { type: 'close' },
+        { type: 'reset' },
+      ])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  }, 30000)
+
   it('refreshes project discovery for queue runtime environments even when a registry already exists', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
@@ -11315,5 +11961,43 @@ export default {
     expect(listed.stdout).toContain('Internal Commands')
     expect(help.status, help.stderr || help.stdout).toBe(0)
     expect(help.stdout).toContain('Create a model and optionally related database artifacts.')
+  })
+
+  it('surfaces a helpful install hint when the security package cannot be loaded', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'node_modules/@holo-js/security/package.json', JSON.stringify({
+      name: '@holo-js/security',
+      type: 'module',
+      exports: {
+        '.': './broken.mjs',
+      },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'node_modules/@holo-js/security/broken.mjs', `
+throw new Error('broken security package')
+`)
+
+    await expect(loadSecurityCliModule(projectRoot)).rejects.toThrow(
+      `Unable to load @holo-js/security from ${projectRoot}. Install it with "holo install security". broken security package`,
+    )
+  })
+
+  it('surfaces a helpful install hint when the security package throws a non-Error value', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'node_modules/@holo-js/security/package.json', JSON.stringify({
+      name: '@holo-js/security',
+      type: 'module',
+      exports: {
+        '.': './broken.mjs',
+      },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'node_modules/@holo-js/security/broken.mjs', `
+throw 42
+`)
+
+    await expect(loadSecurityCliModule(projectRoot)).rejects.toThrow(
+      `Unable to load @holo-js/security from ${projectRoot}. Install it with "holo install security". 42`,
+    )
   })
 })

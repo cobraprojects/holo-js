@@ -7,6 +7,7 @@ import {
   defineMailConfig,
   defineNotificationsConfig,
   defineQueueConfig,
+  defineSecurityConfig,
   defineSessionConfig,
   type DotPath,
   type HoloAppEnv,
@@ -69,6 +70,14 @@ describe('@holo-js/config typing', () => {
         path: '/',
       },
     })
+    const security = defineSecurityConfig({
+      csrf: {
+        enabled: true,
+      },
+      rateLimit: {
+        driver: 'memory',
+      },
+    })
     const auth = defineAuthConfig({
       guards: {
         web: {
@@ -117,6 +126,7 @@ describe('@holo-js/config typing', () => {
       notifications: notifications as unknown as HoloConfigRegistry['notifications'],
       media: {} as HoloConfigRegistry['media'],
       session: session as unknown as HoloConfigRegistry['session'],
+      security: security as unknown as HoloConfigRegistry['security'],
       auth: auth as unknown as HoloConfigRegistry['auth'],
       services,
     })
@@ -129,6 +139,7 @@ describe('@holo-js/config typing', () => {
     const nestedSecret: string = accessors.useConfig('services.mailgun.secret')
     const secret: string = accessors.config('services.mailgun.secret')
     const sessionDriver: string = accessors.useConfig('session.driver')
+    const csrfField: string = accessors.useConfig('security.csrf.field')
     const authDefaultGuard: string = accessors.useConfig('auth.defaults.guard')
     const socialRedirectUri = accessors.useConfig('auth.social.google.redirectUri') as string | undefined
     const workosSessionCookie = accessors.useConfig('auth.workos.dashboard.sessionCookie') as string | undefined
@@ -143,6 +154,7 @@ describe('@holo-js/config typing', () => {
       notifications: HoloConfigRegistry['notifications']
       media: HoloConfigRegistry['media']
       session: HoloConfigRegistry['session']
+      security: HoloConfigRegistry['security']
       auth: HoloConfigRegistry['auth']
       services: typeof services
     }> = 'services.mailgun.secret'
@@ -159,6 +171,7 @@ describe('@holo-js/config typing', () => {
     void nestedSecret
     void secret
     void sessionDriver
+    void csrfField
     void authDefaultGuard
     void socialRedirectUri
     void workosSessionCookie

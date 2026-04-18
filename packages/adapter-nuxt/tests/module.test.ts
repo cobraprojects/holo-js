@@ -416,25 +416,52 @@ export default defineStorageConfig({
   })
 
   it('treats ERR_MODULE_NOT_FOUND storage-s3 imports as absent optional modules', async () => {
-    const originalVitest = process.env.VITEST
+    const mod = await import('../src/module')
 
-    process.env.VITEST = ''
-
-    try {
-      const mod = await import('../src/module')
-      const evalSpy = vi.spyOn(globalThis, 'eval').mockRejectedValueOnce(Object.assign(new Error('missing'), {
+    expect(mod.moduleInternals.hasModuleNotFoundCode(
+      Object.assign(new Error('Cannot find package "@holo-js/storage-s3" imported from "/tmp/app.mjs"'), {
         code: 'ERR_MODULE_NOT_FOUND',
-      }))
+      }),
+      '@holo-js/storage-s3',
+    )).toBe(true)
 
-      await expect(mod.moduleInternals.importOptionalStorageS3Module()).resolves.toBeUndefined()
-      expect(evalSpy).toHaveBeenCalledWith(`import(${JSON.stringify('@holo-js/storage-s3')})`)
-    } finally {
-      if (typeof originalVitest === 'undefined') {
-        delete process.env.VITEST
-      } else {
-        process.env.VITEST = originalVitest
-      }
-    }
+    expect(mod.moduleInternals.hasModuleNotFoundCode(
+      Object.assign(new Error('Failed to load url `@holo-js/storage-s3` (resolved id: `@holo-js/storage-s3`). Does the file exist?'), {
+        code: 'ERR_MODULE_NOT_FOUND',
+      }),
+      '@holo-js/storage-s3',
+    )).toBe(true)
+  })
+
+  it('only matches missing-module errors for the expected optional package specifier', async () => {
+    const mod = await import('../src/module')
+
+    expect(mod.moduleInternals.hasModuleNotFoundCode(
+      Object.assign(new Error('Cannot find package "@holo-js/storage-s3" imported from "/tmp/app.mjs"'), {
+        code: 'ERR_MODULE_NOT_FOUND',
+      }),
+      '@holo-js/storage-s3',
+    )).toBe(true)
+
+    expect(mod.moduleInternals.hasModuleNotFoundCode(
+      Object.assign(new Error('Failed to initialize storage-s3.'), {
+        code: 'ERR_MODULE_NOT_FOUND',
+        cause: Object.assign(new Error('Cannot find module "sharp" imported from "@holo-js/storage-s3".'), {
+          code: 'ERR_MODULE_NOT_FOUND',
+        }),
+      }),
+      '@holo-js/storage-s3',
+    )).toBe(false)
+
+    expect(mod.moduleInternals.hasModuleNotFoundCode(
+      Object.assign(new Error('Failed to initialize storage-s3.'), {
+        code: 'ERR_MODULE_NOT_FOUND',
+        cause: Object.assign(new Error('Cannot find package "@holo-js/storage-s3" imported from "/tmp/app.mjs"'), {
+          code: 'ERR_MODULE_NOT_FOUND',
+        }),
+      }),
+      '@holo-js/storage-s3',
+    )).toBe(true)
   })
 
   it('rethrows non-missing optional storage-s3 import errors', async () => {

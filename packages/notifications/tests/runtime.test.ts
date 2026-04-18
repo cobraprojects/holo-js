@@ -1066,18 +1066,17 @@ describe('@holo-js/notifications runtime', () => {
 
     const dbMissing = new Error('db missing') as Error & { code?: string }
     dbMissing.code = 'ERR_MODULE_NOT_FOUND'
-    notificationsRuntimeInternals.setDbModuleLoader(undefined)
-    const originalVitest = process.env.VITEST
-    const originalEval = globalThis.eval
-    process.env.VITEST = ''
-    globalThis.eval = (() => Promise.reject(dbMissing)) as typeof globalThis.eval
+    notificationsRuntimeInternals.setDbModuleLoader(async () => {
+      throw dbMissing
+    })
     await expect(notificationsRuntimeInternals.loadDbModule()).resolves.toBeNull()
 
     const dbFailure = new Error('db failure')
-    globalThis.eval = (() => Promise.reject(dbFailure)) as typeof globalThis.eval
+    notificationsRuntimeInternals.setDbModuleLoader(async () => {
+      throw dbFailure
+    })
     await expect(notificationsRuntimeInternals.loadDbModule()).rejects.toBe(dbFailure)
-    globalThis.eval = originalEval
-    process.env.VITEST = originalVitest
+    notificationsRuntimeInternals.setDbModuleLoader(undefined)
 
     expect(() => notificationsRuntimeInternals.normalizeOptionalString('   ', 'label')).toThrow('non-empty string')
     expect(() => notificationsRuntimeInternals.normalizeDelayValue(-1, 'delay')).toThrow('greater than or equal to 0')
@@ -1248,27 +1247,25 @@ describe('@holo-js/notifications runtime', () => {
   })
 
   it('covers internal dispatch planning, queue job, and route helper branches', async () => {
-    const originalVitest = process.env.VITEST
-    const originalEval = globalThis.eval
-
     try {
-      process.env.VITEST = ''
-
       const queueModule = createQueueModuleStub().module
-      globalThis.eval = (() => Promise.resolve(queueModule)) as typeof globalThis.eval
+      notificationsRuntimeInternals.setQueueModuleLoader(async () => queueModule)
       await expect(notificationsRuntimeInternals.loadQueueModule()).resolves.toBe(queueModule)
 
       const queueMissing = new Error('queue missing') as Error & { code?: string }
       queueMissing.code = 'ERR_MODULE_NOT_FOUND'
-      globalThis.eval = (() => Promise.reject(queueMissing)) as typeof globalThis.eval
+      notificationsRuntimeInternals.setQueueModuleLoader(async () => {
+        throw queueMissing
+      })
       await expect(notificationsRuntimeInternals.loadQueueModule()).rejects.toThrow('@holo-js/queue')
 
       const queueFailure = new Error('queue failure')
-      globalThis.eval = (() => Promise.reject(queueFailure)) as typeof globalThis.eval
+      notificationsRuntimeInternals.setQueueModuleLoader(async () => {
+        throw queueFailure
+      })
       await expect(notificationsRuntimeInternals.loadQueueModule()).rejects.toBe(queueFailure)
     } finally {
-      process.env.VITEST = originalVitest
-      globalThis.eval = originalEval
+      notificationsRuntimeInternals.setQueueModuleLoader(undefined)
     }
 
     expect(notificationsRuntimeInternals.normalizeDelayValue(new Date('2026-01-01T00:00:00.000Z'), 'delay'))

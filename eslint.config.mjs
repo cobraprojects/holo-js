@@ -7,8 +7,15 @@ import tseslint from 'typescript-eslint'
 export default defineConfig(
   {
     ignores: [
+      '.agents/**',
+      '.claude/**',
+      '.holo-js/**',
+      '.kiro/**',
+      '.vitest-builds/**',
+      '.vscode/**',
       '**/dist/**',
       '**/.holo-cli/**',
+      '**/.holo-js/**',
       '**/.holo-js/runtime/**',
       '**/.holo-js/generated/**',
       '**/.nuxt/**',
@@ -23,6 +30,9 @@ export default defineConfig(
       '**/*.vue',
       '**/*.svelte',
       'bun.lock',
+      'coverage/**',
+      '**/coverage/**',
+      'docs/**',
     ],
   },
   js.configs.recommended,

@@ -1,0 +1,123 @@
+import { FormContractError } from './contracts'
+
+type SecurityModule = {
+  csrf: {
+    verify(request: Request): Promise<void>
+  }
+  rateLimit(name: string, options: { readonly request?: Request, readonly key?: string, readonly values?: Readonly<Record<string, unknown>> }): Promise<unknown>
+}
+
+let securityModulePromise: Promise<SecurityModule> | undefined
+
+type BrowserLikeGlobal = typeof globalThis & {
+  __holoFormsSecurityModule__?: SecurityModule
+  __holoFormsSecurityImport__?: () => Promise<unknown>
+}
+
+function isMissingOptionalPackageError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  return [
+    /Cannot find package ['"]?@holo-js\/security['"]?/,
+    /Cannot find module ['"]?@holo-js\/security['"]?/,
+    /Failed to resolve module specifier ['"]?@holo-js\/security['"]?/,
+    /Failed to load url ['"]?@holo-js\/security['"]?/,
+    /Could not resolve ['"]?@holo-js\/security['"]?/,
+  ].some(pattern => pattern.test(error.message))
+}
+
+function createMissingSecurityPackageError(): FormContractError {
+  return new FormContractError(
+    '[@holo-js/forms] Security-aware form options require the optional @holo-js/security package to be installed.',
+  )
+}
+
+async function importSecurityModule(): Promise<SecurityModule> {
+  const specifier = ['@holo-js', 'security'].join('/') as string
+
+  if (typeof process !== 'undefined' && process.env && process.env.VITEST) {
+    return await import(/* @vite-ignore */ specifier)
+  }
+
+  return await import(specifier)
+}
+
+export async function loadSecurityModule(): Promise<SecurityModule> {
+  const runtime = globalThis as BrowserLikeGlobal
+  if (runtime.__holoFormsSecurityModule__) {
+    return runtime.__holoFormsSecurityModule__
+  }
+
+  securityModulePromise ??= (runtime.__holoFormsSecurityImport__
+    ? runtime.__holoFormsSecurityImport__()
+    : importSecurityModule())
+    .then(module => module as SecurityModule)
+    .catch(async (error) => {
+      securityModulePromise = undefined
+
+      if (isMissingOptionalPackageError(error)) {
+        throw createMissingSecurityPackageError()
+      }
+
+      throw error
+    })
+
+  return await securityModulePromise
+}
+
+export function resetSecurityModuleCache(): void {
+  securityModulePromise = undefined
+}
+
+function parseCookieHeader(header: string): Readonly<Record<string, string>> {
+  const decodeCookiePart = (value: string): string | undefined => {
+    try {
+      return decodeURIComponent(value)
+    } catch {
+      return undefined
+    }
+  }
+
+  return Object.freeze(Object.fromEntries(
+    header
+      .split(';')
+      .map(segment => segment.trim())
+      .filter(Boolean)
+      .map((segment) => {
+        const separator = segment.indexOf('=')
+        if (separator <= 0) {
+          return undefined
+        }
+
+        const key = decodeCookiePart(segment.slice(0, separator))
+        const value = decodeCookiePart(segment.slice(separator + 1))
+        if (!key || typeof value === 'undefined') {
+          return undefined
+        }
+
+        return [
+          key,
+          value,
+        ] as const
+      })
+      .filter((entry): entry is readonly [string, string] => !!entry),
+  ))
+}
+
+function isRootSecurityError(error: unknown): error is Error & { readonly status: number } {
+  const candidate = error as { status?: unknown } | undefined
+
+  return error instanceof Error
+    && typeof candidate?.status === 'number'
+    && (candidate.status === 419 || candidate.status === 429)
+}
+
+export const formsSecurityInternals = {
+  createMissingSecurityPackageError,
+  isMissingOptionalPackageError,
+  isRootSecurityError,
+  parseCookieHeader,
+  resetSecurityModuleCache,
+}

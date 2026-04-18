@@ -60,42 +60,6 @@ describe('@holo-js/core runtime module helpers', () => {
     expect(loaded.value).toBe(42)
   })
 
-  it('imports runtime modules through the indirect loader outside Vitest', async () => {
-    const entryUrl = 'file:///tmp/runtime-module.mjs'
-    const originalVitest = process.env.VITEST
-
-    if (typeof originalVitest === 'undefined') {
-      delete process.env.VITEST
-    } else {
-      process.env.VITEST = ''
-    }
-
-    try {
-      const evalSpy = vi.spyOn(globalThis, 'eval').mockImplementation((source: string) => {
-        expect(source).toBe(`import(${JSON.stringify(entryUrl)})`)
-        return Promise.resolve({
-          default: 'loaded-via-eval',
-          value: 99,
-        }) as never
-      })
-
-      const loaded = await runtimeModuleInternals.importModule<{
-        default: string
-        value: number
-      }>(entryUrl)
-
-      expect(loaded.default).toBe('loaded-via-eval')
-      expect(loaded.value).toBe(99)
-      expect(evalSpy).toHaveBeenCalledTimes(1)
-    } finally {
-      if (typeof originalVitest === 'undefined') {
-        delete process.env.VITEST
-      } else {
-        process.env.VITEST = originalVitest
-      }
-    }
-  })
-
   it('surfaces bundled runtime build failures clearly', async () => {
     const projectRoot = await createTempProject()
     const entryPath = join(projectRoot, 'server/jobs/report.ts')

@@ -1,5 +1,5 @@
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { dirname, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   normalizeAppConfig,
@@ -9,6 +9,7 @@ import {
   normalizeMailConfig,
   normalizeNotificationsConfig,
   normalizeQueueConfigForHolo,
+  normalizeSecurityConfig,
   normalizeSessionConfig,
   normalizeStorageConfig,
 } from './defaults'
@@ -31,13 +32,14 @@ import type {
   HoloMediaConfig,
   HoloNotificationsConfig,
   HoloQueueConfig,
+  HoloSecurityConfig,
   HoloSessionConfig,
   HoloStorageConfig,
 } from './types'
 
 const CONFIG_EXTENSION_PRIORITY = ['.ts', '.mts', '.js', '.mjs', '.cts', '.cjs'] as const
 const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIORITY)
-const HOLO_CONFIG_CACHE_VERSION = 1
+const HOLO_CONFIG_CACHE_VERSION = 2
 const HOLO_CONFIG_CACHE_PATH = join('.holo-js', 'generated', 'config-cache.json')
 const TRANSIENT_CONFIG_IMPORT_MARKER = '.__holo_import_'
 const LEGACY_TRANSIENT_CONFIG_IMPORT_MARKERS = [TRANSIENT_CONFIG_IMPORT_MARKER, '.__native_test__']
@@ -55,6 +57,7 @@ type ConfigCachePayload = {
   }
   readonly configFiles: readonly string[]
   readonly config: RawConfigMap
+  readonly deferredConfigNames: readonly ConfigFileName[]
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -163,11 +166,17 @@ async function collectConfigEntries(configDir: string): Promise<Array<{ configNa
 async function collectRawConfig(
   configDir: string,
   environmentValues: Readonly<Record<string, string>>,
-  options: { captureEnvPlaceholders?: boolean } = {},
+  options: {
+    captureEnvPlaceholders?: boolean
+    onlyConfigNames?: readonly ConfigFileName[]
+  } = {},
 ): Promise<{ rawConfig: RawConfigMap, loadedFiles: readonly string[] }> {
   const rawConfig: RawConfigMap = {}
   const loadedFiles: string[] = []
   const configEntries = await collectConfigEntries(configDir)
+  const allowedConfigNames = options.onlyConfigNames
+    ? new Set(options.onlyConfigNames)
+    : undefined
 
   const previousEnvEntries = new Map<string, string | undefined>()
 
@@ -187,6 +196,10 @@ async function collectRawConfig(
     }
 
     for (const entry of configEntries) {
+      if (allowedConfigNames && !allowedConfigNames.has(entry.configName)) {
+        continue
+      }
+
       rawConfig[entry.configName] = resolveConfigExport(await importConfigModule(entry.filePath))
       loadedFiles.push(entry.filePath)
     }
@@ -208,6 +221,22 @@ async function collectRawConfig(
   }
 }
 
+function mergeLoadedFiles(
+  cachedFiles: readonly string[],
+  liveFiles: readonly string[],
+  deferredConfigNames: readonly ConfigFileName[],
+): readonly string[] {
+  const deferredNames = new Set(deferredConfigNames)
+  const retainedCachedFiles = cachedFiles.filter((filePath) => {
+    return !deferredNames.has(getConfigName(basename(filePath)))
+  })
+
+  return Object.freeze([
+    ...retainedCachedFiles,
+    ...liveFiles,
+  ])
+}
+
 function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
   rawConfig: RawConfigMap,
   options: {
@@ -225,6 +254,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
   const notifications = normalizeNotificationsConfig(resolvedRawConfig.notifications as HoloNotificationsConfig | undefined)
   const media = Object.freeze({ ...((resolvedRawConfig.media as HoloMediaConfig | undefined) ?? {}) })
   const session = normalizeSessionConfig(resolvedRawConfig.session as HoloSessionConfig | undefined)
+  const security = normalizeSecurityConfig(resolvedRawConfig.security as HoloSecurityConfig | undefined)
   const auth = normalizeAuthConfig(resolvedRawConfig.auth as HoloAuthConfig | undefined)
 
   const customEntries = Object.entries(resolvedRawConfig).filter(([key]) => {
@@ -237,6 +267,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
       && key !== 'notifications'
       && key !== 'media'
       && key !== 'session'
+      && key !== 'security'
       && key !== 'auth'
   })
   const custom = Object.freeze(Object.fromEntries(customEntries)) as Readonly<TCustom>
@@ -250,6 +281,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
     notifications,
     media,
     session,
+    security,
     auth,
     ...custom,
   }) as Readonly<LoadedHoloConfig<TCustom>['all']>
@@ -264,6 +296,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
     notifications,
     media,
     session,
+    security,
     auth,
     custom,
     all,
@@ -294,21 +327,49 @@ function isSerializableConfigValue(value: unknown): boolean {
   return false
 }
 
-function assertSerializableConfig(rawConfig: RawConfigMap): void {
-  if (!isSerializableConfigValue(rawConfig)) {
+function splitCacheableConfig(rawConfig: RawConfigMap): {
+  readonly cacheableConfig: RawConfigMap
+  readonly deferredConfigNames: readonly ConfigFileName[]
+} {
+  const cacheableConfig: RawConfigMap = {}
+  const deferredConfigNames: ConfigFileName[] = []
+
+  for (const [name, value] of Object.entries(rawConfig) as Array<[ConfigFileName, unknown]>) {
+    if (isSerializableConfigValue(value)) {
+      cacheableConfig[name] = value
+      continue
+    }
+
+    if (name === 'security') {
+      deferredConfigNames.push(name)
+      continue
+    }
+
     throw new TypeError('Holo config cache only supports plain JSON-serializable config values.')
   }
+
+  return {
+    cacheableConfig,
+    deferredConfigNames: Object.freeze([...deferredConfigNames]),
+  }
+}
+
+function getDeferredConfigNames(payload: ConfigCachePayload): readonly ConfigFileName[] {
+  return Array.isArray(payload.deferredConfigNames)
+    ? payload.deferredConfigNames
+    : Object.freeze([])
 }
 
 function isCachePayload(value: unknown): value is ConfigCachePayload {
   return isObject(value)
-    && value.version === HOLO_CONFIG_CACHE_VERSION
+    && (value.version === 1 || value.version === HOLO_CONFIG_CACHE_VERSION)
     && isObject(value.environment)
     && typeof value.environment.name === 'string'
     && Array.isArray(value.environment.loadedFiles)
     && Array.isArray(value.environment.warnings)
     && Array.isArray(value.configFiles)
     && isObject(value.config)
+    && (typeof value.deferredConfigNames === 'undefined' || Array.isArray(value.deferredConfigNames))
 }
 
 export function resolveConfigCachePath(projectRoot: string): string {
@@ -344,8 +405,10 @@ export async function writeConfigCache(
   const { rawConfig, loadedFiles } = await collectRawConfig(configDir, environment.values, {
     captureEnvPlaceholders: true,
   })
-
-  assertSerializableConfig(rawConfig)
+  const {
+    cacheableConfig,
+    deferredConfigNames,
+  } = splitCacheableConfig(rawConfig)
 
   const cachePath = resolveConfigCachePath(root)
   const contents = `${JSON.stringify({
@@ -356,7 +419,8 @@ export async function writeConfigCache(
       warnings: environment.warnings,
     },
     configFiles: loadedFiles,
-    config: rawConfig,
+    config: cacheableConfig,
+    deferredConfigNames,
   } satisfies ConfigCachePayload, null, 2)}\n`
   await writeFileIfChanged(cachePath, contents)
 
@@ -392,10 +456,24 @@ export async function loadConfigDirectory<TCustom extends HoloConfigMap = HoloCo
         envName,
         processEnv: options.processEnv,
       })
+      const deferredConfigNames = getDeferredConfigNames(cached)
+      let rawConfig = cached.config
+      let loadedFiles = cached.configFiles
 
-      return normalizeLoadedConfig<TCustom>(cached.config, {
+      if (deferredConfigNames.length > 0) {
+        const live = await collectRawConfig(configDir, environment.values, {
+          onlyConfigNames: deferredConfigNames,
+        })
+        rawConfig = {
+          ...cached.config,
+          ...live.rawConfig,
+        }
+        loadedFiles = mergeLoadedFiles(cached.configFiles, live.loadedFiles, deferredConfigNames)
+      }
+
+      return normalizeLoadedConfig<TCustom>(rawConfig, {
         environment,
-        loadedFiles: cached.configFiles,
+        loadedFiles,
       })
     }
   }
@@ -453,11 +531,17 @@ export function defineSessionConfig<TConfig extends HoloSessionConfig>(config: T
   return defineConfig(config)
 }
 
+export function defineSecurityConfig<TConfig extends HoloSecurityConfig>(config: TConfig): DefineConfigValue<TConfig> {
+  return defineConfig(config)
+}
+
 export function defineAuthConfig<TConfig extends HoloAuthConfig>(config: TConfig): DefineConfigValue<TConfig> {
   return defineConfig(config)
 }
 
 export const loaderInternals = {
+  getDeferredConfigNames,
   getConfigExtensionPriority,
   resolveConfigExport,
+  splitCacheableConfig,
 }

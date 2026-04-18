@@ -9,12 +9,7 @@ function isModuleNotFoundError(error: unknown): boolean {
 }
 
 function dynamicImport<TModule>(specifier: string): Promise<TModule> {
-  if (process.env.VITEST) {
-    return import(/* @vite-ignore */ specifier) as Promise<TModule>
-  }
-
-  const indirectEval = globalThis.eval as (source: string) => Promise<TModule>
-  return indirectEval(`import(${JSON.stringify(specifier)})`)
+  return import(/* webpackIgnore: true */ specifier) as Promise<TModule>
 }
 
 async function importDriverModule<TModule>(specifier: string, errorMessage: string): Promise<TModule> {
@@ -27,6 +22,10 @@ async function importDriverModule<TModule>(specifier: string, errorMessage: stri
 
     throw error
   }
+}
+
+export const driverModuleInternals = {
+  importDriverModule,
 }
 
 function unsupportedDriverMethod(name: string, method: string): Error {
@@ -185,7 +184,7 @@ export class SQLiteAdapter extends LazyDriverAdapter {
   }
 
   protected async createConcreteAdapter(): Promise<DriverAdapter> {
-    const module = await importDriverModule<SQLiteDriverModule>(
+    const module = await driverModuleInternals.importDriverModule<SQLiteDriverModule>(
       '@holo-js/db-sqlite',
       '[@holo-js/db] SQLite support requires @holo-js/db-sqlite to be installed.',
     )
@@ -272,7 +271,7 @@ export class PostgresAdapter<TConfig extends PostgresConnectionConfig = Postgres
   }
 
   protected async createConcreteAdapter(): Promise<DriverAdapter> {
-    const module = await importDriverModule<PostgresDriverModule<TConfig>>(
+    const module = await driverModuleInternals.importDriverModule<PostgresDriverModule<TConfig>>(
       '@holo-js/db-postgres',
       '[@holo-js/db] Postgres support requires @holo-js/db-postgres to be installed.',
     )
@@ -373,7 +372,7 @@ export class MySQLAdapter<TConfig extends MySQLConnectionConfig = MySQLConnectio
   }
 
   protected async createConcreteAdapter(): Promise<DriverAdapter> {
-    const module = await importDriverModule<MySQLDriverModule<TConfig>>(
+    const module = await driverModuleInternals.importDriverModule<MySQLDriverModule<TConfig>>(
       '@holo-js/db-mysql',
       '[@holo-js/db] MySQL support requires @holo-js/db-mysql to be installed.',
     )

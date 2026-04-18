@@ -7,6 +7,11 @@ export default defineConfig({
     index: 'src/index.ts',
   },
   format: ['esm'],
+  external: [
+    '@holo-js/db-sqlite',
+    '@holo-js/db-postgres',
+    '@holo-js/db-mysql',
+  ],
   dts: true,
   clean: true,
   outDir,

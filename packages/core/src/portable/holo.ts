@@ -30,6 +30,37 @@ type PortableRuntimeConfig<TCustom extends HoloConfigMap> = {
   readonly queue: LoadedHoloConfig<TCustom>['queue']
 }
 
+type CoreNotificationJsonPrimitive = string | number | boolean | null
+type CoreNotificationJsonValue
+  = CoreNotificationJsonPrimitive
+  | readonly CoreNotificationJsonValue[]
+  | { readonly [key: string]: CoreNotificationJsonValue }
+
+interface CoreNotificationDatabaseRoute {
+  readonly id: string | number
+  readonly type: string
+}
+
+interface CoreNotificationRecord<TData extends CoreNotificationJsonValue = CoreNotificationJsonValue> {
+  readonly id: string
+  readonly type?: string
+  readonly notifiableType: string
+  readonly notifiableId: string | number
+  readonly data: TData
+  readonly readAt?: Date | null
+  readonly createdAt: Date
+  readonly updatedAt: Date
+}
+
+interface CoreNotificationStore {
+  create(record: CoreNotificationRecord): Promise<void>
+  list(notifiable: CoreNotificationDatabaseRoute): Promise<readonly CoreNotificationRecord[]>
+  unread(notifiable: CoreNotificationDatabaseRoute): Promise<readonly CoreNotificationRecord[]>
+  markAsRead(ids: readonly string[]): Promise<number>
+  markAsUnread(ids: readonly string[]): Promise<number>
+  delete(ids: readonly string[]): Promise<number>
+}
+
 export interface HoloSessionRuntimeBinding {
   create(input?: { readonly store?: string, readonly data?: Readonly<Record<string, unknown>>, readonly id?: string }): Promise<unknown>
   write(record: unknown): Promise<unknown>
@@ -310,6 +341,60 @@ type SessionModule = {
   }
   getSessionRuntime(): HoloSessionRuntimeBinding
   resetSessionRuntime(): void
+}
+
+type SecurityModule = {
+  configureSecurityRuntime(options?: {
+    readonly config: LoadedHoloConfig['security']
+    readonly rateLimitStore?: {
+      hit(key: string, options: { readonly maxAttempts: number, readonly decaySeconds: number }): Promise<unknown>
+      clear(key: string): Promise<boolean>
+      clearByPrefix(prefix: string): Promise<number>
+      clearAll(): Promise<number>
+      close?(): Promise<void> | void
+    }
+    readonly csrfSigningKey?: string
+    readonly defaultKeyResolver?: (request: Request) => Promise<string | number | null | undefined> | string | number | null | undefined
+  }): void
+  createRateLimitStoreFromConfig(
+    config: LoadedHoloConfig['security'],
+    options?: {
+      readonly projectRoot?: string
+      readonly redisAdapter?: unknown
+    },
+  ): {
+    hit(key: string, options: { readonly maxAttempts: number, readonly decaySeconds: number }): Promise<unknown>
+    clear(key: string): Promise<boolean>
+    clearByPrefix(prefix: string): Promise<number>
+    clearAll(): Promise<number>
+    close?(): Promise<void> | void
+  }
+  getSecurityRuntimeBindings(): {
+    readonly config?: LoadedHoloConfig['security']
+    readonly rateLimitStore?: {
+      hit(key: string, options: { readonly maxAttempts: number, readonly decaySeconds: number }): Promise<unknown>
+      clear(key: string): Promise<boolean>
+      clearByPrefix(prefix: string): Promise<number>
+      clearAll(): Promise<number>
+      close?(): Promise<void> | void
+    }
+    readonly csrfSigningKey?: string
+    readonly defaultKeyResolver?: (request: Request) => Promise<string | number | null | undefined> | string | number | null | undefined
+  } | undefined
+  resetSecurityRuntime(): void
+}
+
+type SecurityRedisAdapter = {
+  connect?(): Promise<void>
+  increment(key: string, options: { readonly decaySeconds: number }): Promise<unknown>
+  del(key: string): Promise<number>
+  clearByPrefix?(prefix: string): Promise<number>
+  clearAll?(): Promise<number>
+  close?(): Promise<void>
+}
+
+type SecurityRedisAdapterModule = {
+  createSecurityRedisAdapter(config: LoadedHoloConfig['security']['rateLimit']['redis']): SecurityRedisAdapter
 }
 
 type NotificationsModule = {
@@ -649,6 +734,8 @@ function getRuntimeState(): {
   pending?: Promise<HoloRuntime>
   pendingProjectRoot?: string
   renderView?: HoloServerViewRenderer
+  securityRedisAdapter?: SecurityRedisAdapter
+  securityRateLimitStoreManaged?: boolean
 } {
   const runtime = globalThis as typeof globalThis & {
     __holoRuntime__?: {
@@ -656,6 +743,8 @@ function getRuntimeState(): {
       pending?: Promise<HoloRuntime>
       pendingProjectRoot?: string
       renderView?: HoloServerViewRenderer
+      securityRedisAdapter?: SecurityRedisAdapter
+      securityRateLimitStoreManaged?: boolean
     }
   }
 
@@ -692,9 +781,15 @@ type OptionalSubsystemRuntimeBindings = Readonly<{
   readonly mail?: ReturnType<MailModule['getMailRuntimeBindings']>
   readonly notifications?: ReturnType<NotificationsModule['getNotificationsRuntimeBindings']>
   readonly broadcast?: ReturnType<BroadcastModule['getBroadcastRuntimeBindings']>
+  readonly security?: Readonly<{
+    readonly bindings?: ReturnType<SecurityModule['getSecurityRuntimeBindings']>
+    readonly securityRedisAdapter?: SecurityRedisAdapter
+    readonly securityRateLimitStoreManaged?: boolean
+  }>
 }>
 
 function snapshotOptionalSubsystemRuntimeBindings(): OptionalSubsystemRuntimeBindings {
+  const state = getRuntimeState()
   const runtime = globalThis as typeof globalThis & {
     __holoMailRuntime__?: {
       bindings?: ReturnType<MailModule['getMailRuntimeBindings']>
@@ -704,6 +799,9 @@ function snapshotOptionalSubsystemRuntimeBindings(): OptionalSubsystemRuntimeBin
     }
     __holoBroadcastRuntime__?: {
       bindings?: ReturnType<BroadcastModule['getBroadcastRuntimeBindings']>
+    }
+    __holoSecurityRuntime__?: {
+      bindings?: ReturnType<SecurityModule['getSecurityRuntimeBindings']>
     }
   }
 
@@ -711,12 +809,28 @@ function snapshotOptionalSubsystemRuntimeBindings(): OptionalSubsystemRuntimeBin
     ...(runtime.__holoMailRuntime__?.bindings ? { mail: runtime.__holoMailRuntime__.bindings } : {}),
     ...(runtime.__holoNotificationsRuntime__?.bindings ? { notifications: runtime.__holoNotificationsRuntime__.bindings } : {}),
     ...(runtime.__holoBroadcastRuntime__?.bindings ? { broadcast: runtime.__holoBroadcastRuntime__.bindings } : {}),
+    ...(
+      runtime.__holoSecurityRuntime__?.bindings
+      || state.securityRedisAdapter
+      || typeof state.securityRateLimitStoreManaged !== 'undefined'
+        ? {
+            security: Object.freeze({
+              ...(runtime.__holoSecurityRuntime__?.bindings ? { bindings: runtime.__holoSecurityRuntime__.bindings } : {}),
+              ...(state.securityRedisAdapter ? { securityRedisAdapter: state.securityRedisAdapter } : {}),
+              ...(typeof state.securityRateLimitStoreManaged !== 'undefined'
+                ? { securityRateLimitStoreManaged: state.securityRateLimitStoreManaged }
+                : {}),
+            }),
+          }
+        : {}
+    ),
   })
 }
 
 function restoreOptionalSubsystemRuntimeBindings(
   bindings: OptionalSubsystemRuntimeBindings,
 ): void {
+  const state = getRuntimeState()
   const runtime = globalThis as typeof globalThis & {
     __holoMailRuntime__?: {
       bindings?: ReturnType<MailModule['getMailRuntimeBindings']>
@@ -726,6 +840,9 @@ function restoreOptionalSubsystemRuntimeBindings(
     }
     __holoBroadcastRuntime__?: {
       bindings?: ReturnType<BroadcastModule['getBroadcastRuntimeBindings']>
+    }
+    __holoSecurityRuntime__?: {
+      bindings?: ReturnType<SecurityModule['getSecurityRuntimeBindings']>
     }
   }
 
@@ -742,6 +859,13 @@ function restoreOptionalSubsystemRuntimeBindings(
   if (bindings.broadcast || runtime.__holoBroadcastRuntime__) {
     runtime.__holoBroadcastRuntime__ ??= {}
     runtime.__holoBroadcastRuntime__.bindings = bindings.broadcast
+  }
+
+  if (bindings.security || runtime.__holoSecurityRuntime__) {
+    runtime.__holoSecurityRuntime__ ??= {}
+    runtime.__holoSecurityRuntime__.bindings = bindings.security?.bindings
+    state.securityRedisAdapter = bindings.security?.securityRedisAdapter
+    state.securityRateLimitStoreManaged = bindings.security?.securityRateLimitStoreManaged
   }
 }
 
@@ -764,7 +888,6 @@ function resolveOptionalImportSpecifier(specifier: string, projectRoot?: string)
   }
 }
 
-/* v8 ignore next 15 -- optional-package absence is validated in published-package integration, not in this monorepo test graph */
 async function importOptionalModule<TModule>(
   specifier: string,
   options: {
@@ -774,21 +897,8 @@ async function importOptionalModule<TModule>(
   const resolvedSpecifier = resolveOptionalImportSpecifier(specifier, options.projectRoot)
 
   try {
-    if (process.env.VITEST) {
-      return await import(/* @vite-ignore */ resolvedSpecifier) as TModule
-    }
-
-    const indirectEval = globalThis.eval as (source: string) => Promise<TModule>
-    return await indirectEval(`import(${JSON.stringify(resolvedSpecifier)})`)
+    return await import(/* webpackIgnore: true */ resolvedSpecifier as string) as TModule
   } catch (error) {
-    if (
-      error
-      && typeof error === 'object'
-      && 'code' in error
-      && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-    ) {
-      return undefined
-    }
     /* v8 ignore start -- optional-package absence is validated in published-package integration, not in this monorepo test graph */
     if (
       error instanceof Error
@@ -1138,6 +1248,26 @@ async function loadSessionModule(required = false): Promise<SessionModule | unde
   return sessionModule
 }
 
+async function loadSecurityModule(required = false): Promise<SecurityModule | undefined> {
+  const securityModule = await portableRuntimeModuleInternals.importOptionalModule<SecurityModule>('@holo-js/security')
+  if (!securityModule && required) {
+    throw new Error('[@holo-js/core] Security support requires @holo-js/security to be installed.')
+  }
+
+  return securityModule
+}
+
+async function loadSecurityRedisAdapterModule(required: true): Promise<SecurityRedisAdapterModule>
+async function loadSecurityRedisAdapterModule(required?: false): Promise<SecurityRedisAdapterModule | undefined>
+async function loadSecurityRedisAdapterModule(required = false): Promise<SecurityRedisAdapterModule | undefined> {
+  const securityRedisAdapterModule = await portableRuntimeModuleInternals.importOptionalModule<SecurityRedisAdapterModule>('@holo-js/security/drivers/redis-adapter')
+  if (!securityRedisAdapterModule && required) {
+    throw new Error('[@holo-js/core] Redis-backed security rate limits require @holo-js/security/drivers/redis-adapter to be installed.')
+  }
+
+  return securityRedisAdapterModule
+}
+
 async function loadNotificationsModule(required = false): Promise<NotificationsModule | undefined> {
   const notificationsModule = await portableRuntimeModuleInternals.importOptionalModule<NotificationsModule>('@holo-js/notifications')
   if (!notificationsModule && required) {
@@ -1322,16 +1452,7 @@ function serializeSessionRecordForRow(record: {
   }
 }
 
-function normalizeNotificationRecordFromRow(row: Record<string, unknown>): {
-  readonly id: string
-  readonly type?: string
-  readonly notifiableType: string
-  readonly notifiableId: string | number
-  readonly data: unknown
-  readonly readAt?: Date | null
-  readonly createdAt: Date
-  readonly updatedAt: Date
-} {
+function normalizeNotificationRecordFromRow(row: Record<string, unknown>): CoreNotificationRecord<CoreNotificationJsonValue> {
   const decodedData = normalizeJsonValue(row.data)
 
   return Object.freeze({
@@ -1339,7 +1460,7 @@ function normalizeNotificationRecordFromRow(row: Record<string, unknown>): {
     type: typeof row.type === 'string' ? row.type : undefined,
     notifiableType: String(row.notifiable_type),
     notifiableId: typeof row.notifiable_id === 'number' ? row.notifiable_id : String(row.notifiable_id),
-    data: decodedData,
+    data: decodedData as CoreNotificationJsonValue,
     readAt: row.read_at ? normalizeDateLike(row.read_at) : null,
     createdAt: normalizeDateLike(row.created_at),
     updatedAt: normalizeDateLike(row.updated_at),
@@ -1484,38 +1605,15 @@ async function createCoreSessionStores<TCustom extends HoloConfigMap>(
 
 function createCoreNotificationStore<TCustom extends HoloConfigMap>(
   loadedConfig: LoadedHoloConfig<TCustom>,
-): {
-  create(record: unknown): Promise<void>
-  list(notifiable: { id: string | number, type: string }): Promise<readonly unknown[]>
-  unread(notifiable: { id: string | number, type: string }): Promise<readonly unknown[]>
-  markAsRead(ids: readonly string[]): Promise<number>
-  markAsUnread(ids: readonly string[]): Promise<number>
-  delete(ids: readonly string[]): Promise<number>
-} {
+): CoreNotificationStore {
   const tableName = loadedConfig.notifications.table
   const connectionName = loadedConfig.database.defaultConnection
 
-  const store: {
-    create(record: unknown): Promise<void>
-    list(notifiable: { id: string | number, type: string }): Promise<readonly unknown[]>
-    unread(notifiable: { id: string | number, type: string }): Promise<readonly unknown[]>
-    markAsRead(ids: readonly string[]): Promise<number>
-    markAsUnread(ids: readonly string[]): Promise<number>
-    delete(ids: readonly string[]): Promise<number>
-  } = {
-    async create(record): Promise<void> {
-      await DB.table(tableName, connectionName).insert(serializeNotificationRecordForRow(record as {
-        readonly id: string
-        readonly type?: string
-        readonly notifiableType: string
-        readonly notifiableId: string | number
-        readonly data: unknown
-        readonly readAt?: Date | null
-        readonly createdAt: Date
-        readonly updatedAt: Date
-      }))
+  const store: CoreNotificationStore = {
+    async create(record: CoreNotificationRecord): Promise<void> {
+      await DB.table(tableName, connectionName).insert(serializeNotificationRecordForRow(record))
     },
-    async list(notifiable): Promise<readonly unknown[]> {
+    async list(notifiable: CoreNotificationDatabaseRoute): Promise<readonly CoreNotificationRecord[]> {
       const rows = await DB.table(tableName, connectionName)
         .where('notifiable_type', notifiable.type)
         .where('notifiable_id', String(notifiable.id))
@@ -1524,7 +1622,7 @@ function createCoreNotificationStore<TCustom extends HoloConfigMap>(
 
       return Object.freeze(rows.map(row => normalizeNotificationRecordFromRow(row)))
     },
-    async unread(notifiable): Promise<readonly unknown[]> {
+    async unread(notifiable: CoreNotificationDatabaseRoute): Promise<readonly CoreNotificationRecord[]> {
       const rows = await DB.table(tableName, connectionName)
         .where('notifiable_type', notifiable.type)
         .where('notifiable_id', String(notifiable.id))
@@ -1534,7 +1632,7 @@ function createCoreNotificationStore<TCustom extends HoloConfigMap>(
 
       return Object.freeze(rows.map(row => normalizeNotificationRecordFromRow(row)))
     },
-    async markAsRead(ids): Promise<number> {
+    async markAsRead(ids: readonly string[]): Promise<number> {
       if (ids.length === 0) {
         return 0
       }
@@ -1548,7 +1646,7 @@ function createCoreNotificationStore<TCustom extends HoloConfigMap>(
 
       return result.affectedRows ?? 0
     },
-    async markAsUnread(ids): Promise<number> {
+    async markAsUnread(ids: readonly string[]): Promise<number> {
       if (ids.length === 0) {
         return 0
       }
@@ -1562,7 +1660,7 @@ function createCoreNotificationStore<TCustom extends HoloConfigMap>(
 
       return result.affectedRows ?? 0
     },
-    async delete(ids): Promise<number> {
+    async delete(ids: readonly string[]): Promise<number> {
       if (ids.length === 0) {
         return 0
       }
@@ -2653,7 +2751,17 @@ async function resolveAuthProviderRuntime<TCustom extends HoloConfigMap>(
         continue
       }
       if (error instanceof Error && /Could not resolve|Cannot find module|ENOENT/.test(error.message)) {
-        continue
+        const normalizedCandidate = candidate.replaceAll('\\', '/')
+        const normalizedMessage = error.message.replaceAll('\\', '/')
+        const escapedCandidate = normalizedCandidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const missingModulePattern = new RegExp(`(?:Cannot find module|Could not resolve|Failed to load url)\\s+['"]${escapedCandidate}['"]`)
+        const enotentPathMatch = normalizedMessage.match(/ENOENT.*?(?:open|scandir|stat).*?['"]([^'"]+)['"]/)
+        if (
+          missingModulePattern.test(normalizedMessage)
+          || enotentPathMatch?.[1]?.endsWith(normalizedCandidate)
+        ) {
+          continue
+        }
       }
       /* v8 ignore next -- unknown import failures are rethrown verbatim for visibility */
       throw error
@@ -3157,6 +3265,118 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
 
   const sessionConfigured = hasLoadedConfigFile(loadedConfig, 'session') || hasLoadedConfigFile(loadedConfig, 'auth')
   const authConfigured = hasLoadedConfigFile(loadedConfig, 'auth')
+  const securityConfigured = hasLoadedConfigFile(loadedConfig, 'security')
+  const securityModule = securityConfigured
+    ? await loadSecurityModule(true)
+    : undefined
+  const existingManagedSecurityRedisAdapter = getRuntimeState().securityRedisAdapter
+
+  if (securityModule) {
+    const existingSecurityBindings = securityModule.getSecurityRuntimeBindings()
+    const shouldReuseExistingSecurityStore = !!existingSecurityBindings?.rateLimitStore
+      && !existingManagedSecurityRedisAdapter
+      && getRuntimeState().securityRateLimitStoreManaged !== true
+    const shouldCloseExistingManagedSecurityStore = !shouldReuseExistingSecurityStore
+      && !!existingSecurityBindings?.rateLimitStore
+      && (
+        !!existingManagedSecurityRedisAdapter
+        || getRuntimeState().securityRateLimitStoreManaged === true
+      )
+    let nextManagedSecurityRedisAdapter: SecurityRedisAdapter | undefined
+    let rateLimitStore: ReturnType<typeof securityModule.createRateLimitStoreFromConfig> | undefined
+    let configuredSecurityRuntime = false
+
+    try {
+      if (
+        !shouldReuseExistingSecurityStore
+        && loadedConfig.security.rateLimit.driver === 'redis'
+      ) {
+        const securityRedisAdapterModule = await loadSecurityRedisAdapterModule(true)
+        nextManagedSecurityRedisAdapter = securityRedisAdapterModule.createSecurityRedisAdapter(
+          loadedConfig.security.rateLimit.redis,
+        )
+      }
+
+      rateLimitStore = shouldReuseExistingSecurityStore
+        ? existingSecurityBindings.rateLimitStore
+        : securityModule.createRateLimitStoreFromConfig(loadedConfig.security, {
+          projectRoot,
+          ...(nextManagedSecurityRedisAdapter ? { redisAdapter: nextManagedSecurityRedisAdapter } : {}),
+        })
+
+      if (
+        shouldCloseExistingManagedSecurityStore
+        && existingSecurityBindings?.rateLimitStore
+        && existingSecurityBindings.rateLimitStore !== rateLimitStore
+      ) {
+        await existingSecurityBindings.rateLimitStore.close?.()
+      }
+
+      if (
+        existingManagedSecurityRedisAdapter
+        && existingManagedSecurityRedisAdapter !== nextManagedSecurityRedisAdapter
+      ) {
+        await existingManagedSecurityRedisAdapter.close?.()
+      }
+
+      getRuntimeState().securityRedisAdapter = nextManagedSecurityRedisAdapter
+      getRuntimeState().securityRateLimitStoreManaged = !shouldReuseExistingSecurityStore
+
+      securityModule.configureSecurityRuntime({
+        config: loadedConfig.security,
+        rateLimitStore,
+        csrfSigningKey: loadedConfig.app.key,
+        defaultKeyResolver: async () => {
+          const authModule = await loadAuthModule()
+          if (!authModule) {
+            return undefined
+          }
+
+          try {
+            const authId = await authModule.getAuthRuntime().id()
+            if (authId !== null && typeof authId !== 'undefined') {
+              return `user:${String(authId)}`
+            }
+          } catch {
+            return undefined
+          }
+
+          return undefined
+        },
+      })
+      configuredSecurityRuntime = true
+    } catch (error) {
+      if (
+        !configuredSecurityRuntime
+        && rateLimitStore
+        && rateLimitStore !== existingSecurityBindings?.rateLimitStore
+      ) {
+        await rateLimitStore.close?.()
+      }
+
+      if (
+        nextManagedSecurityRedisAdapter
+        && nextManagedSecurityRedisAdapter !== existingManagedSecurityRedisAdapter
+      ) {
+        await nextManagedSecurityRedisAdapter.close?.()
+      }
+
+      throw error
+    }
+  } else if (existingManagedSecurityRedisAdapter || getRuntimeState().securityRateLimitStoreManaged === true) {
+    const existingSecurityModule = await loadSecurityModule()
+    const existingSecurityBindings = existingSecurityModule?.getSecurityRuntimeBindings()
+    if (getRuntimeState().securityRateLimitStoreManaged === true) {
+      await existingSecurityBindings?.rateLimitStore?.close?.()
+    }
+    await existingManagedSecurityRedisAdapter?.close?.()
+    getRuntimeState().securityRedisAdapter = undefined
+    getRuntimeState().securityRateLimitStoreManaged = undefined
+    existingSecurityModule?.resetSecurityRuntime()
+  } else {
+    getRuntimeState().securityRateLimitStoreManaged = undefined
+  }
+
   const sessionModule = sessionConfigured || authConfigured
     ? await loadSessionModule(true)
     : undefined
@@ -3263,6 +3483,27 @@ export async function resetOptionalHoloSubsystems(): Promise<void> {
   clerkModule?.resetClerkAuthRuntime()
   const sessionModule = await loadSessionModule()
   sessionModule?.resetSessionRuntime()
+  const securityModule = await loadSecurityModule()
+  const securityBindings = securityModule?.getSecurityRuntimeBindings()
+  const state = getRuntimeState()
+  const managedSecurityRedisAdapter = state.securityRateLimitStoreManaged === true
+    ? state.securityRedisAdapter
+    : undefined
+  const managedSecurityRateLimitStore = state.securityRateLimitStoreManaged === true
+    ? securityBindings?.rateLimitStore
+    : undefined
+
+  if (managedSecurityRedisAdapter) {
+    await managedSecurityRedisAdapter.close?.()
+    state.securityRedisAdapter = undefined
+  }
+
+  if (managedSecurityRateLimitStore) {
+    await managedSecurityRateLimitStore.close?.()
+  }
+
+  state.securityRateLimitStoreManaged = undefined
+  securityModule?.resetSecurityRuntime()
 }
 
 export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
@@ -3537,6 +3778,8 @@ export async function resetHoloRuntime(): Promise<void> {
   mailModule?.resetMailRuntime()
   const notificationsModule = await loadNotificationsModule()
   notificationsModule?.resetNotificationsRuntime()
+  const securityModule = await loadSecurityModule()
+  securityModule?.resetSecurityRuntime()
   const broadcastModule = await loadBroadcastModule(false, projectRoot)
   broadcastModule?.resetBroadcastRuntime()
   resetHoloRenderingRuntime()

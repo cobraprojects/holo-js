@@ -19,6 +19,7 @@ describe('@holo-js/forms client typing', () => {
     })
 
     const client = useForm(registerUser, {
+      csrf: false,
       initialValues: {
         email: 'ava@example.com',
         age: undefined,
@@ -27,6 +28,9 @@ describe('@holo-js/forms client typing', () => {
         },
       },
     })
+
+    // @ts-expect-error Throttling is intentionally server-only.
+    useForm(registerUser, { throttle: 'login' })
 
     type ClientAssertion = Expect<Equal<
       typeof client,

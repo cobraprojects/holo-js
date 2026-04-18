@@ -51,6 +51,9 @@ import {
   runBroadcastWorkCommand,
 } from './broadcast'
 import {
+  runRateLimitClearCommand,
+} from './security'
+import {
   renderFailedJobsTableMigration,
   renderQueueTableMigration,
   resolveDatabaseQueueTables,
@@ -182,6 +185,7 @@ export const cliInternals = {
   runQueueTableCommand,
   runQueueWorkCommand,
   runBroadcastWorkCommand,
+  runRateLimitClearCommand,
   splitCsv,
   withRuntimeEnvironment,
   writeQueueRestartSignal,

@@ -23,7 +23,11 @@ const loginForm = schema({
 })
 
 export async function POST(request: Request) {
-  const submission = await validate(request, loginForm)
+  const submission = await validate(request, loginForm, {
+    // Optional: requires @holo-js/security.
+    csrf: true,
+    throttle: 'login',
+  })
 
   if (!submission.valid) {
     return Response.json(submission.fail(), { status: submission.fail().status })
@@ -34,6 +38,7 @@ export async function POST(request: Request) {
 ```
 
 ```ts [Nuxt — server/api/login.post.ts]
+import { defineEventHandler } from 'h3'
 import { field, schema, validate } from '@holo-js/forms'
 
 const loginForm = schema({
@@ -42,8 +47,11 @@ const loginForm = schema({
 })
 
 export default defineEventHandler(async (event) => {
-  const body = await readBody(event)
-  const submission = await validate(body, loginForm)
+  const submission = await validate(event, loginForm, {
+    // Optional: requires @holo-js/security.
+    csrf: true,
+    throttle: 'login',
+  })
 
   if (!submission.valid) {
     return submission.fail()
@@ -63,7 +71,11 @@ const loginForm = schema({
 
 export const actions = {
   default: async ({ request }) => {
-    const submission = await validate(request, loginForm)
+    const submission = await validate(request, loginForm, {
+      // Optional: requires @holo-js/security.
+      csrf: true,
+      throttle: 'login',
+    })
 
     if (!submission.valid) {
       return submission.fail()
@@ -93,6 +105,14 @@ export const login = form(loginForm, async (data, invalid) => {
 
 :::
 
+`csrf` and `throttle` in these examples are optional security features. Use them only when
+`@holo-js/security` is installed and configured. Without that package, call `validate(...)` without those
+options.
+
+Use the framework-native request input with `validate(...)`: `request` in Next.js and SvelteKit, `event` in
+Nuxt `server/api/*`. `useRequestHeaders()` is a Nuxt app-context composable for pages, components, and plugins,
+not h3 route handlers.
+
 ## Client submit examples
 
 ::: code-group
@@ -102,6 +122,7 @@ import { useForm } from '@holo-js/adapter-next/client'
 import { loginForm } from '@/lib/schemas/login'
 
 const form = useForm(loginForm, {
+  csrf: true,
   async submitter({ formData }) {
     const response = await fetch('/api/login', { method: 'POST', body: formData })
     return await response.json()
@@ -114,6 +135,7 @@ import { useForm } from '@holo-js/adapter-nuxt/client'
 import { loginForm } from '~/lib/schemas/login'
 
 const form = useForm(loginForm, {
+  csrf: true,
   async submitter({ formData }) {
     return await $fetch('/api/login', { method: 'POST', body: formData })
   },
@@ -125,6 +147,7 @@ import { useForm } from '@holo-js/adapter-sveltekit/client'
 import { loginForm } from '$lib/schemas/login'
 
 const form = useForm(loginForm, {
+  csrf: true,
   async submitter({ formData }) {
     const response = await fetch('/api/login', { method: 'POST', body: formData })
     return await response.json()
@@ -145,6 +168,9 @@ SvelteKit users have three options for server validation. All three accept Holo 
 | `useForm(...)` | Any API route with `validate(...)` | `form.errors.has()` / `form.errors.first()` (Holo) |
 
 Pick the one that fits your app. They are not mutually exclusive.
+
+`useForm(...)` may opt into `csrf: true`, but it does not expose `throttle`. The browser only forwards the CSRF
+token so the server can verify it. Throttling is always enforced on the server.
 
 ## Standard Schema interop
 

@@ -3,6 +3,12 @@
   "compilerOptions": {
     "outDir": "./dist",
     "paths": {
+      "@holo-js/security": [
+        "../security/src/index.ts"
+      ],
+      "@holo-js/security/client": [
+        "../security/src/client.ts"
+      ],
       "@holo-js/validation": [
         "../validation/src/index.ts"
       ]

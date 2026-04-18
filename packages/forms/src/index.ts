@@ -9,7 +9,9 @@ export {
 } from './contracts'
 export type {
   FormFailurePayload,
+  FormRequestLikeInput,
   FormSchema,
+  FormSecurityOptions,
   FormSubmissionFailure,
   FormSubmissionResult,
   FormSubmissionSuccess,

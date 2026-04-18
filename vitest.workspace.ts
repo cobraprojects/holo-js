@@ -31,6 +31,7 @@ export default defineWorkspace([
   'packages/queue',
   'packages/queue-db',
   'packages/session',
+  'packages/security',
   'packages/storage',
   'packages/validation',
 ])

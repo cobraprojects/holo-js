@@ -65,15 +65,13 @@ type StorageS3Module = {
   }): StorageBackend
 }
 
-/* v8 ignore next 15 -- optional-package absence is validated in published-package integration, not in this monorepo test graph */
 async function importOptionalModule<TModule>(specifier: string): Promise<TModule | undefined> {
   try {
     if (process.env.VITEST) {
       return await import(/* @vite-ignore */ specifier) as TModule
     }
 
-    const indirectEval = globalThis.eval as (source: string) => Promise<TModule>
-    return await indirectEval(`import(${JSON.stringify(specifier)})`)
+    return await import(/* webpackIgnore: true */ specifier) as TModule
   } catch (error) {
     if (
       error
@@ -228,8 +226,8 @@ export async function configurePlainNodeStorageRuntime<TCustom extends HoloConfi
   projectRoot: string,
   loadedConfig: LoadedHoloConfig<TCustom>,
 ): Promise<void> {
-  const storageModule = await importOptionalModule<StorageModule>('@holo-js/storage')
-  const storageRuntime = await importOptionalModule<StorageRuntimeModule>('@holo-js/storage/runtime')
+  const storageModule = await storageRuntimeInternals.importOptionalModule<StorageModule>('@holo-js/storage')
+  const storageRuntime = await storageRuntimeInternals.importOptionalModule<StorageRuntimeModule>('@holo-js/storage/runtime')
   /* v8 ignore next 3 -- exercised only when the optional package is absent outside the monorepo test graph */
   if (!storageModule || !storageRuntime) {
     throw new Error('[@holo-js/core] Storage is configured but @holo-js/storage is not installed.')
@@ -269,6 +267,10 @@ export async function configurePlainNodeStorageRuntime<TCustom extends HoloConfi
 }
 
 export async function resetOptionalStorageRuntime(): Promise<void> {
-  const storageRuntime = await importOptionalModule<StorageRuntimeModule>('@holo-js/storage/runtime')
+  const storageRuntime = await storageRuntimeInternals.importOptionalModule<StorageRuntimeModule>('@holo-js/storage/runtime')
   storageRuntime?.resetStorageRuntime()
+}
+
+export const storageRuntimeInternals = {
+  importOptionalModule,
 }

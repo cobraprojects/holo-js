@@ -75,6 +75,37 @@ type StorageS3Module = {
   default: unknown
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function hasModuleNotFoundCode(error: unknown, expectedSpecifier: string): boolean {
+  if (!error || typeof error !== 'object') {
+    return false
+  }
+
+  if ('code' in error && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND') {
+    const message = 'message' in error && typeof (error as { message?: unknown }).message === 'string'
+      ? (error as { message: string }).message
+      : ''
+    const escapedSpecifier = escapeRegExp(expectedSpecifier)
+    if ([
+      new RegExp(`Cannot find package ['"]${escapedSpecifier}['"]`),
+      new RegExp(`Cannot find module ['"]${escapedSpecifier}['"]`),
+      new RegExp(`Could not resolve ['"]${escapedSpecifier}['"]`),
+      new RegExp(`Failed to load url\\s+(?:['"\`]${escapedSpecifier}['"\`]|${escapedSpecifier}(?=[\\s(]|$))`),
+    ].some(pattern => pattern.test(message))) {
+      return true
+    }
+  }
+
+  if ('cause' in error) {
+    return hasModuleNotFoundCode((error as { cause?: unknown }).cause, expectedSpecifier)
+  }
+
+  return false
+}
+
 interface NuxtHookContext {
   hook: (
     name: string,
@@ -106,12 +137,7 @@ async function importOptionalStorageModule(): Promise<StorageModule | undefined>
   try {
     return await import('@holo-js/storage') as StorageModule
   } catch (error) {
-    if (
-      error
-      && typeof error === 'object'
-      && 'code' in error
-      && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-    ) {
+    if (hasModuleNotFoundCode(error, '@holo-js/storage')) {
       return undefined
     }
 
@@ -122,25 +148,12 @@ async function importOptionalStorageModule(): Promise<StorageModule | undefined>
 /* v8 ignore next 15 -- optional-package absence is validated in published-package integration, not in this monorepo test graph */
 async function importOptionalStorageS3Module(): Promise<StorageS3Module | undefined> {
   try {
-    if (process.env.VITEST) {
-      const storageS3 = await import(/* @vite-ignore */ '@holo-js/storage-s3') as Partial<StorageS3Module>
-      return typeof storageS3.default === 'undefined'
-        ? undefined
-        : storageS3 as StorageS3Module
-    }
-
-    const indirectEval = globalThis.eval as (source: string) => Promise<Partial<StorageS3Module>>
-    const storageS3 = await indirectEval(`import(${JSON.stringify('@holo-js/storage-s3')})`)
+    const storageS3 = await import('@holo-js/storage-s3' as string) as Partial<StorageS3Module>
     return typeof storageS3.default === 'undefined'
       ? undefined
       : storageS3 as StorageS3Module
   } catch (error) {
-    if (
-      error
-      && typeof error === 'object'
-      && 'code' in error
-      && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-    ) {
+    if (hasModuleNotFoundCode(error, '@holo-js/storage-s3')) {
       return undefined
     }
 
@@ -286,6 +299,7 @@ export default defineNuxtModule<ModuleOptions>({
 })
 
 export const moduleInternals = {
+  hasModuleNotFoundCode,
   hasLoadedConfigFile,
   importOptionalStorageS3Module,
 }

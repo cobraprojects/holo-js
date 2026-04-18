@@ -1,70 +1,29 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { resetOptionalStorageRuntime } from '../src/storageRuntime'
-
-function restoreVitestEnv(originalVitest: string | undefined): void {
-  if (typeof originalVitest === 'undefined') {
-    delete process.env.VITEST
-    return
-  }
-
-  process.env.VITEST = originalVitest
-}
+import { resetOptionalStorageRuntime, storageRuntimeInternals } from '../src/storageRuntime'
 
 afterEach(() => {
   vi.restoreAllMocks()
 })
 
 describe('@holo-js/core storage runtime optional imports', () => {
-  it('loads the storage runtime through the indirect loader outside Vitest', async () => {
-    const originalVitest = process.env.VITEST
+  it('resets the storage runtime through the dynamic loader', async () => {
     const resetStorageRuntime = vi.fn()
+    vi.spyOn(storageRuntimeInternals, 'importOptionalModule').mockResolvedValueOnce({
+      resetStorageRuntime,
+    })
 
-    process.env.VITEST = ''
+    await resetOptionalStorageRuntime()
 
-    try {
-      const evalSpy = vi.spyOn(globalThis, 'eval').mockImplementation((source: string) => {
-        expect(source).toBe(`import(${JSON.stringify('@holo-js/storage/runtime')})`)
-        return Promise.resolve({
-          resetStorageRuntime,
-        }) as never
-      })
-
-      await resetOptionalStorageRuntime()
-
-      expect(evalSpy).toHaveBeenCalledTimes(1)
-      expect(resetStorageRuntime).toHaveBeenCalledTimes(1)
-    } finally {
-      restoreVitestEnv(originalVitest)
-    }
+    expect(resetStorageRuntime).toHaveBeenCalledTimes(1)
   })
 
   it('treats missing storage runtime modules as optional during reset', async () => {
-    const originalVitest = process.env.VITEST
-
-    process.env.VITEST = ''
-
-    try {
-      vi.spyOn(globalThis, 'eval').mockRejectedValueOnce(Object.assign(new Error('missing runtime'), {
-        code: 'ERR_MODULE_NOT_FOUND',
-      }))
-
-      await expect(resetOptionalStorageRuntime()).resolves.toBeUndefined()
-    } finally {
-      restoreVitestEnv(originalVitest)
-    }
+    vi.spyOn(storageRuntimeInternals, 'importOptionalModule').mockResolvedValueOnce(undefined)
+    await expect(resetOptionalStorageRuntime()).resolves.toBeUndefined()
   })
 
   it('rethrows non-missing storage runtime import failures during reset', async () => {
-    const originalVitest = process.env.VITEST
-
-    process.env.VITEST = ''
-
-    try {
-      vi.spyOn(globalThis, 'eval').mockRejectedValueOnce(new Error('boom'))
-
-      await expect(resetOptionalStorageRuntime()).rejects.toThrow('boom')
-    } finally {
-      restoreVitestEnv(originalVitest)
-    }
+    vi.spyOn(storageRuntimeInternals, 'importOptionalModule').mockRejectedValueOnce(new Error('boom'))
+    await expect(resetOptionalStorageRuntime()).rejects.toThrow('boom')
   })
 })

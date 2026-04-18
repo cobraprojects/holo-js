@@ -1,4 +1,26 @@
+import { execFile } from 'node:child_process'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+const execFileAsync = promisify(execFile)
+
+async function hasBun(): Promise<boolean> {
+  try {
+    await execFileAsync('bun', ['--version'], {
+      timeout: 30_000,
+    })
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return false
+    }
+
+    throw error
+  }
+}
 
 type StoredJobState = 'waiting' | 'active' | 'delayed' | 'completed' | 'failed' | 'removed'
 
@@ -350,6 +372,35 @@ afterEach(() => {
 })
 
 describe('@holo-js/queue redis driver', () => {
+  it('keeps the optional redis driver import visible to bundlers without a bare package specifier', async () => {
+    if (!await hasBun()) {
+      return
+    }
+
+    const outdir = await mkdtemp(join(tmpdir(), 'holo-queue-redis-bundle-'))
+
+    try {
+      await execFileAsync('bun', [
+        'build',
+        resolve(import.meta.dirname, '../src/drivers/redis.ts'),
+        '--target=node',
+        '--format=esm',
+        '--external=@holo-js/queue-redis',
+        `--outdir=${outdir}`,
+      ], {
+        timeout: 30_000,
+      })
+
+      const output = await readFile(join(outdir, 'redis.js'), 'utf8')
+
+      expect(output).toMatch(/\b(?:const|let|var)\s+specifier\s*=\s*['"]@holo-js\/queue-redis['"]/)
+      expect(output).toMatch(/\bimport\s*\(\s*specifier\s*\)/)
+      expect(output).not.toMatch(/import\(\s*['"]@holo-js\/queue-redis['"]\s*\)/)
+    } finally {
+      await rm(outdir, { recursive: true, force: true })
+    }
+  })
+
   it('exports the standalone config helper and supports closing unresolved redis drivers', async () => {
     const { queue } = await loadRedisQueueModule()
     const config = queue.defineQueueConfig({
@@ -1239,31 +1290,15 @@ describe('@holo-js/queue redis driver', () => {
     expect(queue.redisQueueDriverInternals.wrapRedisError('redis', 'reserve job', existing)).toBe(existing)
   })
 
-  it('loads the redis driver package through the indirect loader outside Vitest', async () => {
+  it('loads the redis driver package through the dynamic loader', async () => {
     const { queue } = await loadRedisQueueModule()
-    const originalVitest = process.env.VITEST
-    const redisModule = {
-      Queue: class FakeQueue {},
-      Worker: class FakeWorker {},
-      Job: class FakeJob {},
-    }
+    const redisModule = await queue.redisQueueDriverInternals.loadRedisDriverModule()
 
-    process.env.VITEST = ''
-
-    try {
-      const evalSpy = vi.spyOn(globalThis, 'eval').mockImplementation((source: string) => {
-        expect(source).toBe(`import(${JSON.stringify('@holo-js/queue-redis')})`)
-        return Promise.resolve(redisModule) as never
-      })
-
-      await expect(queue.redisQueueDriverInternals.loadRedisDriverModule()).resolves.toBe(redisModule)
-      expect(evalSpy).toHaveBeenCalledTimes(1)
-    } finally {
-      if (typeof originalVitest === 'undefined') {
-        delete process.env.VITEST
-      } else {
-        process.env.VITEST = originalVitest
-      }
-    }
+    expect(redisModule).toMatchObject({
+      redisQueueDriverFactory: {
+        driver: 'redis',
+        create: expect.any(Function),
+      },
+    })
   })
 })

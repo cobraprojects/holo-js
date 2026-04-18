@@ -41,6 +41,7 @@ import { registerUser } from '@/lib/schemas/register'
 export default function RegisterPage() {
   const form = useForm(registerUser, {
     validateOn: 'blur',
+    csrf: true,
     initialValues: { name: '', email: '', password: '', passwordConfirmation: '' },
     async submitter({ formData }) {
       const response = await fetch('/api/register', { method: 'POST', body: formData })
@@ -83,6 +84,7 @@ import { registerUser } from '~/lib/schemas/register'
 
 const form = useForm(registerUser, {
   validateOn: 'blur',
+  csrf: true,
   initialValues: { name: '', email: '', password: '', passwordConfirmation: '' },
   async submitter({ formData }) {
     return await $fetch('/api/register', { method: 'POST', body: formData })
@@ -114,6 +116,7 @@ const form = useForm(registerUser, {
 
   const form = useForm(registerUser, {
     validateOn: 'blur',
+    csrf: true,
     initialValues: { name: '', email: '', password: '', passwordConfirmation: '' },
     async submitter({ formData }) {
       const response = await fetch('/api/register', { method: 'POST', body: formData })
@@ -155,6 +158,26 @@ If the server returns `submission.fail()`, `useForm(...)` applies that payload a
 - `form.submitting` goes back to `false`
 
 ## Client-side APIs
+
+When `@holo-js/security` is installed, `useForm(..., { csrf: true })` also attaches the CSRF field for unsafe
+submissions so the server can verify it through `validate(...)` or `protect(...)`. `throttle` is intentionally
+not a client option. Rate limiting is enforced on the server.
+
+If the browser should use custom CSRF field or cookie names instead of the defaults (`_token` and
+`XSRF-TOKEN`), configure the browser helper once:
+
+```ts
+import { configureSecurityClient } from '@holo-js/security/client'
+
+configureSecurityClient({
+  config: {
+    csrf: {
+      field: '_csrf',
+      cookie: 'csrf-token',
+    },
+  },
+})
+```
 
 `useForm(...)` exposes:
 

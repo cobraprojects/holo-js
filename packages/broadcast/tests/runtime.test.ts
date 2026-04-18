@@ -424,6 +424,7 @@ describe('@holo-js/broadcast runtime', () => {
     configureBroadcastRuntime({
       config: createConfig(),
     })
+    broadcastRuntimeInternals.setLoadDbModuleForTesting(async () => null)
     await expect(
       broadcastRaw({
         connection: 'reverb',
@@ -772,13 +773,10 @@ describe('@holo-js/broadcast runtime', () => {
       publishedChannels: ['orders.context-fallback'],
     })
 
-    const originalVitest = process.env.VITEST
-    const originalEval = globalThis.eval
     try {
-      process.env.VITEST = ''
-      globalThis.eval = (async () => {
+      broadcastRuntimeInternals.setLoadQueueModuleForTesting(async () => {
         throw Object.assign(new Error('missing optional module'), { code: 'ERR_MODULE_NOT_FOUND' })
-      }) as typeof globalThis.eval
+      })
       broadcastRuntimeInternals.setLoadDbModuleForTesting(undefined)
 
       await expect(
@@ -797,6 +795,7 @@ describe('@holo-js/broadcast runtime', () => {
       configureBroadcastRuntime({
         config: createConfig(),
       })
+      broadcastRuntimeInternals.setLoadDbModuleForTesting(async () => null)
       await expect(
         broadcastRaw({
           event: 'orders.default-db',
@@ -825,9 +824,21 @@ describe('@holo-js/broadcast runtime', () => {
       ).rejects.toThrow(queueFailure)
       broadcastRuntimeInternals.setLoadQueueModuleForTesting(undefined)
 
-      globalThis.eval = (async () => {
+      broadcastRuntimeInternals.setLoadDbModuleForTesting(async () => {
         throw new Error('db exploded')
-      }) as typeof globalThis.eval
+      })
+      broadcastRuntimeInternals.setLoadQueueModuleForTesting(async () => ({
+        defineJob(definition) {
+          return definition
+        },
+        dispatch() {
+          throw new Error('queue dispatch should not be reached')
+        },
+        getRegisteredQueueJob() {
+          return {}
+        },
+        registerQueueJob() {},
+      }))
       await expect(
         broadcast(defineBroadcast({
           name: 'orders.queue-generic',
@@ -838,8 +849,9 @@ describe('@holo-js/broadcast runtime', () => {
           queue: {
             queued: true,
           },
-        })),
+        })).afterCommit(),
       ).rejects.toThrow('db exploded')
+      broadcastRuntimeInternals.setLoadQueueModuleForTesting(undefined)
       await expect(
         broadcastRaw({
           event: 'orders.db-error',
@@ -850,8 +862,8 @@ describe('@holo-js/broadcast runtime', () => {
         }).afterCommit(),
       ).rejects.toThrow('db exploded')
     } finally {
-      process.env.VITEST = originalVitest
-      globalThis.eval = originalEval
+      broadcastRuntimeInternals.setLoadDbModuleForTesting(undefined)
+      broadcastRuntimeInternals.setLoadQueueModuleForTesting(undefined)
     }
   })
 })
