@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
@@ -9,8 +9,13 @@ import { getClientCsrfField, clientSecurityInternals, loadSecurityClientModule }
 import { formsSecurityInternals, loadSecurityModule } from '../src/security'
 
 const execFileAsync = promisify(execFile)
-const formsNodeModulesRoot = resolve(import.meta.dirname, '../node_modules')
-const securityPackageRoot = join(formsNodeModulesRoot, '@holo-js/security')
+const formsSourceRoot = resolve(import.meta.dirname, '..')
+const formsFixtureFiles = [
+  'src/client-security.ts',
+  'src/contracts.ts',
+  'src/security.ts',
+] as const
+const tempDirs: string[] = []
 
 async function runBun(
   args: string[],
@@ -41,10 +46,36 @@ afterEach(() => {
 })
 
 afterEach(async () => {
-  await rm(securityPackageRoot, { recursive: true, force: true })
+  await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
 })
 
-async function writeSecurityPackage(files: Record<string, string>): Promise<void> {
+async function createSecurityFixtureProject(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'holo-forms-security-fixture-'))
+  tempDirs.push(root)
+
+  for (const relativePath of formsFixtureFiles) {
+    const source = resolve(formsSourceRoot, relativePath)
+    const target = resolve(root, relativePath)
+    await mkdir(resolve(target, '..'), { recursive: true })
+    await copyFile(source, target)
+  }
+
+  const tsconfig = {
+    compilerOptions: {
+      baseUrl: '.',
+      paths: {
+        '@holo-js/validation': [resolve(import.meta.dirname, '../../validation/src/index.ts')],
+      },
+    },
+  }
+  await writeFile(resolve(root, 'tsconfig.json'), `${JSON.stringify(tsconfig, null, 2)}\n`, 'utf8')
+
+  return root
+}
+
+async function writeSecurityPackage(projectRoot: string, files: Record<string, string>): Promise<void> {
+  const securityPackageRoot = join(projectRoot, 'node_modules', '@holo-js', 'security')
+
   for (const [relativePath, contents] of Object.entries(files)) {
     const target = join(securityPackageRoot, relativePath)
     await mkdir(resolve(target, '..'), { recursive: true })
@@ -64,18 +95,19 @@ describe('@holo-js/forms security helpers', () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'holo-forms-security-project-'))
 
     try {
-      await writeFile(join(projectDir, 'tsconfig.json'), `{
-  "compilerOptions": {
-    "baseUrl": ".",
-    "paths": {
-      "@holo-js/validation": ["${resolve(import.meta.dirname, '../../validation/src/index.ts')}"],
-      "@holo-js/security": ["${resolve(import.meta.dirname, '../../security/src/index.ts')}"],
-      "@holo-js/security/client": ["${resolve(import.meta.dirname, '../../security/src/client.ts')}"],
-      "@holo-js/config": ["${resolve(import.meta.dirname, '../../config/src/index.ts')}"]
-    }
-  }
-}
-`, 'utf8')
+      const tsconfig = {
+        compilerOptions: {
+          baseUrl: '.',
+          paths: {
+            '@holo-js/validation': [resolve(import.meta.dirname, '../../validation/src/index.ts')],
+            '@holo-js/security': [resolve(import.meta.dirname, '../../security/src/index.ts')],
+            '@holo-js/security/client': [resolve(import.meta.dirname, '../../security/src/client.ts')],
+            '@holo-js/config': [resolve(import.meta.dirname, '../../config/src/index.ts')],
+          },
+        },
+      }
+
+      await writeFile(join(projectDir, 'tsconfig.json'), `${JSON.stringify(tsconfig, null, 2)}\n`, 'utf8')
 
       const result = await runBun([
         'build',
@@ -184,7 +216,9 @@ describe('@holo-js/forms security helpers', () => {
   })
 
   it('loads the optional security entrypoints without bundler escape hatches outside Vitest', async () => {
-    await writeSecurityPackage({
+    const projectRoot = await createSecurityFixtureProject()
+
+    await writeSecurityPackage(projectRoot, {
       'package.json': JSON.stringify({
         name: '@holo-js/security',
         type: 'module',
@@ -217,8 +251,8 @@ export function getSecurityClientConfig() {
     const result = await runBun([
       '--eval',
       `
-const securityMod = await import(${JSON.stringify(resolve(import.meta.dirname, '../src/security.ts'))})
-const clientMod = await import(${JSON.stringify(resolve(import.meta.dirname, '../src/client-security.ts'))})
+const securityMod = await import(${JSON.stringify(resolve(projectRoot, 'src/security.ts'))})
+const clientMod = await import(${JSON.stringify(resolve(projectRoot, 'src/client-security.ts'))})
 const security = await securityMod.loadSecurityModule()
 const client = await clientMod.loadSecurityClientModule()
 
@@ -229,7 +263,7 @@ console.log(JSON.stringify({
 }))
       `,
     ], {
-      cwd: resolve(import.meta.dirname, '..'),
+      cwd: projectRoot,
       env: {
         ...process.env,
         VITEST: '',

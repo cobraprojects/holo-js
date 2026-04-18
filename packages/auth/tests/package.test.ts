@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src'
@@ -39,8 +39,14 @@ import clientAuth, {
   user as clientUser,
 } from '../src/client'
 
-function hashPasswordResetEmail(email: string): string {
-  return createHash('sha256').update(email.trim().toLowerCase()).digest('hex')
+function hashPasswordResetEmail(email: string, csrfSigningKey?: string): string {
+  const canonicalEmail = email.trim().toLowerCase()
+
+  if (csrfSigningKey) {
+    return createHmac('sha256', csrfSigningKey).update(canonicalEmail).digest('hex')
+  }
+
+  return createHash('sha256').update(canonicalEmail).digest('hex')
 }
 import type {
   AuthDeliveryHook,
@@ -1767,6 +1773,54 @@ describe('@holo-js/auth package runtime', () => {
     })
     expect(runtime.deliveries).toHaveLength(1)
     expect(runtime.passwordResetTokenStore.records.size).toBe(1)
+  })
+
+  it('keys shared password reset throttles with the CSRF signing key when available', async () => {
+    const hit = vi.fn(async (_key: string, _options: { readonly maxAttempts: number, readonly decaySeconds: number }) => ({
+      limited: false,
+    }))
+
+    vi.stubGlobal('__holoAuthSecurityModule__', {
+      getSecurityRuntimeBindings() {
+        return {
+          rateLimitStore: {
+            hit,
+            clear: vi.fn(async () => true),
+          },
+          csrfSigningKey: 'signing-key',
+        }
+      },
+    })
+
+    const runtime = configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 60,
+          },
+        },
+      },
+    })
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    await passwords.request('ava@example.com')
+
+    expect(hit).toHaveBeenCalledWith(
+      `auth:password-reset:${createHash('sha256').update('signing-key').digest('hex').slice(0, 16)}:users:users:password_reset_tokens:${hashPasswordResetEmail('ava@example.com', 'signing-key')}`,
+      {
+        maxAttempts: 1,
+        decaySeconds: 3600,
+      },
+    )
   })
 
   it('releases shared password reset reservations when token persistence fails', async () => {

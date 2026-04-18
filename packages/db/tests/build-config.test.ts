@@ -17,5 +17,6 @@ describe('db build config', () => {
       '@holo-js/db-postgres',
       '@holo-js/db-mysql',
     ]))
+    expect(config.external).toHaveLength(3)
   })
 })

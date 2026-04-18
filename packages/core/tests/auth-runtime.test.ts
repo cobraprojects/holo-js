@@ -3518,4 +3518,60 @@ export default defineAuthConfig({
 
     await expect(missingRuntime.initialize()).rejects.toThrow('Auth provider model "MissingUser" could not be resolved')
   })
+
+  it('falls back to alternate auth provider extensions when missing imports are reported as unquoted urls', async () => {
+    const root = await createProject({
+      auth: true,
+    })
+
+    await rm(join(root, 'server/models/User.ts'))
+    await writeFile(join(root, 'server/models/User.js'), `
+const users = new Map()
+
+export default {
+  async find(id) {
+    return users.get(id)
+  },
+  where(column, value) {
+    return {
+      async first() {
+        for (const record of users.values()) {
+          if (record?.[column] === value) {
+            return record
+          }
+        }
+
+        return undefined
+      },
+    }
+  },
+  async create(values) {
+    return values
+  },
+  async update(_id, values) {
+    return values
+  },
+}
+`, 'utf8')
+
+    const runtime = await createHolo(root, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    await runtime.initialize()
+
+    const registered = await runtime.auth?.register({
+      name: 'Fallback User',
+      email: 'fallback@example.com',
+      password: 'supersecret',
+      passwordConfirmation: 'supersecret',
+    })
+
+    expect(registered).toMatchObject({
+      email: 'fallback@example.com',
+    })
+
+    await runtime.shutdown()
+  })
 })

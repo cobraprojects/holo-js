@@ -67,9 +67,18 @@ describe('cli regressions', () => {
         connection: 'sync',
         queue: 'default',
       },
+      {
+        sourcePath: 'server/jobs/reports/weekly.ts',
+        name: 'reports.weekly',
+        exportName: 'weeklyJob',
+        connection: 'redis',
+        queue: 'reports',
+      },
     ] satisfies readonly GeneratedJobRegistryEntry[])
 
     expect(output).toMatch(/import type \{\n {2}QueueJobDefinition,\n {2}ExportedQueueJobDefinition,\n\} from '@holo-js\/queue'/)
+    expect(output).toContain('import type * as holoQueueJobModule0 from \'../../server/jobs/reports/daily\'')
+    expect(output).toContain('import type * as holoQueueJobModule1 from \'../../server/jobs/reports/weekly\'')
 
     const untypedOnlyOutput = renderGeneratedQueueTypes([
       {

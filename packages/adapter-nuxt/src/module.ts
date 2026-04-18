@@ -93,7 +93,7 @@ function hasModuleNotFoundCode(error: unknown, expectedSpecifier: string): boole
       new RegExp(`Cannot find package ['"]${escapedSpecifier}['"]`),
       new RegExp(`Cannot find module ['"]${escapedSpecifier}['"]`),
       new RegExp(`Could not resolve ['"]${escapedSpecifier}['"]`),
-      new RegExp(`Failed to load url ['"]${escapedSpecifier}['"]`),
+      new RegExp(`Failed to load url\\s+(?:['"\`]${escapedSpecifier}['"\`]|${escapedSpecifier}(?=[\\s(]|$))`),
     ].some(pattern => pattern.test(message))) {
       return true
     }

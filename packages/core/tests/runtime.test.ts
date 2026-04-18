@@ -2162,7 +2162,7 @@ export default defineSecurityConfig({
     }
   })
 
-  it('closes a managed security store when security config is removed', async () => {
+  it('closes a leftover managed security store when no security config file exists', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
 
@@ -2274,9 +2274,6 @@ export default defineSecurityConfig({
       await runtime.shutdown()
 
       expect(resetSecurityRuntime).toHaveBeenCalled()
-      expect(runtimeState.__holoRuntime__?.securityRateLimitStoreManaged).toBe(true)
-      runtimeState.__holoRuntime__ = undefined
-      runtimeState.__holoSecurityRuntime__ = undefined
     } finally {
       vi.restoreAllMocks()
       vi.resetModules()

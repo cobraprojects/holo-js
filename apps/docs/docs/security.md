@@ -70,8 +70,11 @@ export default defineSecurityConfig({
 - When a limiter uses `define()` instead of `by(...)`, the package uses its default key strategy.
 - The default key is `user:<id>` when the current Holo auth runtime can resolve an authenticated user.
 - Otherwise the default key falls back to `ip:<client-ip>` from the incoming request headers.
-- If your app sits behind trusted proxies or needs additional identifier scoping, override the limiter
-  key with `by(...)`.
+- The runtime only reads `x-forwarded-for` and `x-real-ip` when `HOLO_SECURITY_TRUST_PROXY` is truthy.
+- Without trusted proxy headers, guest requests can fall back to `ip:unknown`, which means multiple
+  anonymous clients may share the same limiter bucket and get throttled together.
+- If your app sits behind trusted proxies or needs additional identifier scoping, either override the
+  limiter key with `by(...)` or enable `HOLO_SECURITY_TRUST_PROXY` for those trusted proxies.
 
 ## Forms
 

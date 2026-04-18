@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { createHash, randomBytes, randomUUID, scrypt as nodeScrypt, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomBytes, randomUUID, scrypt as nodeScrypt, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
 import { normalizeAuthConfig } from '@holo-js/config'
 import type {
@@ -263,10 +263,14 @@ function createPasswordResetThrottleKey(
   provider: string,
   table: string,
   email: string,
+  csrfSigningKey?: string,
 ): string {
   const namespacePrefix = namespace ? `${namespace}:` : ''
   const canonicalEmail = email.trim().toLowerCase()
-  const emailHash = createHash('sha256').update(canonicalEmail).digest('hex')
+  const normalizedSigningKey = csrfSigningKey?.trim()
+  const emailHash = normalizedSigningKey
+    ? createHmac('sha256', normalizedSigningKey).update(canonicalEmail).digest('hex')
+    : createHash('sha256').update(canonicalEmail).digest('hex')
   return `auth:password-reset:${namespacePrefix}${brokerName}:${provider}:${table}:${emailHash}`
 }
 
@@ -327,6 +331,7 @@ async function reserveSharedPasswordResetThrottle(
     broker.provider,
     broker.table,
     email,
+    bindings?.csrfSigningKey,
   )
   const failures = getAuthRuntimeState().sharedPasswordResetThrottleFailures ??= new Set<string>()
   if (failures.has(key)) {

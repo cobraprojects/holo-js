@@ -45,7 +45,7 @@ import {
 const tempDirs: string[] = []
 const packageEntry = JSON.stringify(resolve(import.meta.dirname, '../src/index.ts'))
 
-function resolveWorkspacePackageEntry(packageName: '@holo-js/security'): string {
+function resolveWorkspacePackageEntry(packageName: string): string {
   const packagesRoot = resolve(import.meta.dirname, '../..')
 
   for (const entry of readdirSync(packagesRoot, { withFileTypes: true })) {
@@ -61,8 +61,16 @@ function resolveWorkspacePackageEntry(packageName: '@holo-js/security'): string 
       if (packageJson.name === packageName) {
         return resolve(packageRoot, 'src/index.ts')
       }
-    } catch {
-      continue
+    } catch (error) {
+      const code = typeof error === 'object' && error && 'code' in error
+        ? (error as { code?: unknown }).code
+        : undefined
+
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        continue
+      }
+
+      throw error
     }
   }
 
@@ -1817,6 +1825,10 @@ export default defineQueueConfig({
 
     expect(loaded.loadedFiles.some(filePath => normalizeTestPath(filePath).endsWith('/config/queue.ts'))).toBe(true)
     expect(loaded.loadedFiles.some(filePath => normalizeTestPath(filePath).endsWith('/config/security.ts'))).toBe(true)
+    expect(loaded.queue.connections.redis).not.toMatchObject({
+      retryAfter: 15,
+      blockFor: 1,
+    })
     expect(loaded.queue.connections.redis).toEqual({
       name: 'redis',
       driver: 'redis',

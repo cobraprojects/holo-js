@@ -424,6 +424,13 @@ export default defineStorageConfig({
       }),
       '@holo-js/storage-s3',
     )).toBe(true)
+
+    expect(mod.moduleInternals.hasModuleNotFoundCode(
+      Object.assign(new Error('Failed to load url `@holo-js/storage-s3` (resolved id: `@holo-js/storage-s3`). Does the file exist?'), {
+        code: 'ERR_MODULE_NOT_FOUND',
+      }),
+      '@holo-js/storage-s3',
+    )).toBe(true)
   })
 
   it('only matches missing-module errors for the expected optional package specifier', async () => {
