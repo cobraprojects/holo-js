@@ -7,6 +7,7 @@ export default defineConfig({
       { find: '@holo-js/security/drivers/redis-adapter', replacement: resolve(__dirname, '../security/src/drivers/redis-adapter.ts') },
       { find: '@holo-js/security', replacement: resolve(__dirname, '../security/src/index.ts') },
       { find: '@holo-js/auth', replacement: resolve(__dirname, '../auth/src/index.ts') },
+      { find: '@holo-js/authorization', replacement: resolve(__dirname, '../authorization/src/index.ts') },
       { find: '@holo-js/auth-social', replacement: resolve(__dirname, '../auth-social/src/index.ts') },
       { find: '@holo-js/auth-workos', replacement: resolve(__dirname, '../auth-workos/src/index.ts') },
       { find: '@holo-js/auth-clerk', replacement: resolve(__dirname, '../auth-clerk/src/index.ts') },

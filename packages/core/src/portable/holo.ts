@@ -620,6 +620,33 @@ type AuthModule = {
   resetAuthRuntime(): void
 }
 
+type AuthorizationModule = {
+  isAuthorizationPolicyDefinition(value: unknown): boolean
+  isAuthorizationAbilityDefinition(value: unknown): boolean
+  authorizationInternals: {
+    getAuthorizationRuntimeState(): {
+      policiesByName: Map<string, unknown>
+      abilitiesByName: Map<string, unknown>
+    }
+    getAuthorizationAuthIntegration(): {
+      hasGuard(guardName: string): boolean
+      resolveDefaultActor(): Promise<object | null> | object | null
+      resolveGuardActor(guardName: string): Promise<object | null> | object | null
+    }
+    registerPolicyDefinition?(definition: unknown): unknown
+    registerAbilityDefinition?(definition: unknown): unknown
+    configureAuthorizationAuthIntegration(options?: {
+      hasGuard(guardName: string): boolean
+      resolveDefaultActor(): Promise<object | null> | object | null
+      resolveGuardActor(guardName: string): Promise<object | null> | object | null
+    }): void
+    resetAuthorizationAuthIntegration(): void
+    resetAuthorizationRuntimeState(): void
+    unregisterPolicyDefinition(name: string): void
+    unregisterAbilityDefinition(name: string): void
+  }
+}
+
 type SocialModule = {
   configureSocialAuthRuntime(options?: {
     readonly providers: Readonly<Record<string, unknown>>
@@ -1306,6 +1333,15 @@ async function loadAuthModule(required = false): Promise<AuthModule | undefined>
   return authModule
 }
 
+async function loadAuthorizationModule(required = false): Promise<AuthorizationModule | undefined> {
+  const authorizationModule = await portableRuntimeModuleInternals.importOptionalModule<AuthorizationModule>('@holo-js/authorization')
+  if (!authorizationModule && required) {
+    throw new Error('[@holo-js/core] Authorization support requires @holo-js/authorization to be installed.')
+  }
+
+  return authorizationModule
+}
+
 async function loadSocialModule(required = false): Promise<SocialModule | undefined> {
   const socialModule = await portableRuntimeModuleInternals.importOptionalModule<SocialModule>('@holo-js/auth-social')
   if (!socialModule && required) {
@@ -1343,6 +1379,18 @@ function resolveQueueJobExport(
   }
 
   return Object.values(exports).find(value => queueModule.isQueueJobDefinition(value))
+}
+
+function resolveAuthorizationDefinitionExport(
+  moduleValue: unknown,
+  matcher: (value: unknown) => boolean,
+): unknown | undefined {
+  const exports = moduleValue as Record<string, unknown>
+  if (matcher(exports.default)) {
+    return exports.default
+  }
+
+  return Object.values(exports).find(value => matcher(value))
 }
 
 const HOLO_EVENT_DEFINITION_MARKER = Symbol.for('holo-js.events.definition')
@@ -3054,6 +3102,98 @@ function unregisterProjectQueueJobs(
   }
 }
 
+async function registerProjectAuthorizationDefinitions(
+  projectRoot: string,
+  registry: GeneratedProjectRegistry | undefined,
+  authorizationModule: AuthorizationModule | undefined,
+): Promise<{ readonly policyNames: readonly string[], readonly abilityNames: readonly string[] }> {
+  if (!registry || (!registry.authorizationPolicies.length && !registry.authorizationAbilities.length)) {
+    return Object.freeze({
+      policyNames: Object.freeze([]),
+      abilityNames: Object.freeze([]),
+    })
+  }
+
+  if (!authorizationModule) {
+    throw new Error('[@holo-js/core] Authorization support requires @holo-js/authorization to be installed.')
+  }
+
+  const registeredPolicyNames: string[] = []
+  const registeredAbilityNames: string[] = []
+  const previousPolicies = new Map<string, unknown>()
+  const previousAbilities = new Map<string, unknown>()
+
+  try {
+    for (const entry of registry.authorizationPolicies) {
+      const existing = authorizationModule.authorizationInternals.getAuthorizationRuntimeState().policiesByName.get(entry.name)
+      if (existing) {
+        previousPolicies.set(entry.name, existing)
+        authorizationModule.authorizationInternals.unregisterPolicyDefinition(entry.name)
+      }
+
+      const moduleValue = await importRuntimeModule(projectRoot, resolve(projectRoot, entry.sourcePath))
+      const policy = resolveAuthorizationDefinitionExport(moduleValue, value => authorizationModule.isAuthorizationPolicyDefinition(value))
+      if (!policy) {
+        throw new Error(`Discovered policy "${entry.sourcePath}" does not export a Holo policy.`)
+      }
+
+      registeredPolicyNames.push((policy as { readonly name: string }).name)
+    }
+
+    for (const entry of registry.authorizationAbilities) {
+      const existing = authorizationModule.authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.get(entry.name)
+      if (existing) {
+        previousAbilities.set(entry.name, existing)
+        authorizationModule.authorizationInternals.unregisterAbilityDefinition(entry.name)
+      }
+
+      const moduleValue = await importRuntimeModule(projectRoot, resolve(projectRoot, entry.sourcePath))
+      const ability = resolveAuthorizationDefinitionExport(moduleValue, value => authorizationModule.isAuthorizationAbilityDefinition(value))
+      if (!ability) {
+        throw new Error(`Discovered ability "${entry.sourcePath}" does not export a Holo ability.`)
+      }
+
+      registeredAbilityNames.push((ability as { readonly name: string }).name)
+    }
+  } catch (error) {
+    unregisterProjectAuthorizationDefinitions(authorizationModule, registeredPolicyNames, registeredAbilityNames)
+    if (typeof authorizationModule.authorizationInternals.registerPolicyDefinition === 'function') {
+      for (const definition of previousPolicies.values()) {
+        authorizationModule.authorizationInternals.registerPolicyDefinition(definition)
+      }
+    }
+    if (typeof authorizationModule.authorizationInternals.registerAbilityDefinition === 'function') {
+      for (const definition of previousAbilities.values()) {
+        authorizationModule.authorizationInternals.registerAbilityDefinition(definition)
+      }
+    }
+    throw error
+  }
+
+  return Object.freeze({
+    policyNames: Object.freeze(registeredPolicyNames),
+    abilityNames: Object.freeze(registeredAbilityNames),
+  })
+}
+
+function unregisterProjectAuthorizationDefinitions(
+  authorizationModule: AuthorizationModule | undefined,
+  policyNames: readonly string[],
+  abilityNames: readonly string[],
+): void {
+  if (!authorizationModule) {
+    return
+  }
+
+  for (const policyName of policyNames) {
+    authorizationModule.authorizationInternals.unregisterPolicyDefinition(policyName)
+  }
+
+  for (const abilityName of abilityNames) {
+    authorizationModule.authorizationInternals.unregisterAbilityDefinition(abilityName)
+  }
+}
+
 async function registerProjectEventsAndListeners(
   projectRoot: string,
   registry: GeneratedProjectRegistry | undefined,
@@ -3387,6 +3527,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   }
 
   const authModule = await loadAuthModule(authConfigured)
+  const authorizationModule = await loadAuthorizationModule()
   let authContext: ReturnType<AuthModule['createAsyncAuthContext']> | undefined
   const workosModule = authConfigUsesWorkosProviders(loadedConfig)
     ? await loadWorkosModule(true)
@@ -3433,6 +3574,16 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
       context: authContext,
     })
 
+    if (authorizationModule) {
+      authorizationModule.authorizationInternals.configureAuthorizationAuthIntegration({
+        hasGuard(guardName: string) {
+          return guardName in loadedConfig.auth.guards
+        },
+        resolveDefaultActor: async () => authModule.getAuthRuntime().user(),
+        resolveGuardActor: async (guardName: string) => authModule.getAuthRuntime().guard(guardName).user(),
+      })
+    }
+
     if (socialModule) {
       socialModule.configureSocialAuthRuntime({
         ...(await createCoreSocialBindings(projectRoot, loadedConfig, sessionModule)),
@@ -3451,6 +3602,8 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
         identityStore: createCoreHostedIdentityStore('clerk'),
       })
     }
+  } else if (authorizationModule) {
+    authorizationModule.authorizationInternals.resetAuthorizationAuthIntegration()
   }
 
   return Object.freeze({
@@ -3475,6 +3628,8 @@ export async function resetOptionalHoloSubsystems(): Promise<void> {
   broadcastModule?.resetBroadcastRuntime()
   const authModule = await loadAuthModule()
   authModule?.resetAuthRuntime()
+  const authorizationModule = await loadAuthorizationModule()
+  authorizationModule?.authorizationInternals.resetAuthorizationAuthIntegration()
   const socialModule = await loadSocialModule()
   socialModule?.resetSocialAuthRuntime()
   const workosModule = await loadWorkosModule()
@@ -3525,8 +3680,11 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   const runtimeOwnedQueueJobNames: string[] = []
   const runtimeOwnedEventNames: string[] = []
   const runtimeOwnedListenerIds: string[] = []
+  const runtimeOwnedAuthorizationPolicyNames: string[] = []
+  const runtimeOwnedAuthorizationAbilityNames: string[] = []
   let activeQueueModule: QueueModule | undefined
   let activeEventsModule: EventsModule | undefined
+  let activeAuthorizationModule: AuthorizationModule | undefined
   let activeSessionRuntime: HoloSessionRuntimeBinding | undefined
   let activeAuthRuntime: HoloAuthRuntimeBinding | undefined
   let activeAuthContext: { activate(): void } | undefined
@@ -3614,6 +3772,15 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
           runtimeOwnedListenerIds.splice(0, runtimeOwnedListenerIds.length, ...eventRegistration.listenerIds)
         }
 
+        activeAuthorizationModule = await loadAuthorizationModule()
+        const authorizationRegistration = await registerProjectAuthorizationDefinitions(
+          projectRoot,
+          registry,
+          activeAuthorizationModule,
+        )
+        runtimeOwnedAuthorizationPolicyNames.splice(0, runtimeOwnedAuthorizationPolicyNames.length, ...authorizationRegistration.policyNames)
+        runtimeOwnedAuthorizationAbilityNames.splice(0, runtimeOwnedAuthorizationAbilityNames.length, ...authorizationRegistration.abilityNames)
+
         if (options.registerProjectQueueJobs === true && registryHasJobs(registry)) {
           /* v8 ignore start -- exercised only when the optional package is absent outside the monorepo test graph */
           if (!activeQueueModule) {
@@ -3631,8 +3798,12 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
         unregisterProjectEventsAndListeners(activeEventsModule, runtimeOwnedEventNames, runtimeOwnedListenerIds)
         runtimeOwnedEventNames.splice(0, runtimeOwnedEventNames.length)
         runtimeOwnedListenerIds.splice(0, runtimeOwnedListenerIds.length)
+        unregisterProjectAuthorizationDefinitions(activeAuthorizationModule, runtimeOwnedAuthorizationPolicyNames, runtimeOwnedAuthorizationAbilityNames)
+        runtimeOwnedAuthorizationPolicyNames.splice(0, runtimeOwnedAuthorizationPolicyNames.length)
+        runtimeOwnedAuthorizationAbilityNames.splice(0, runtimeOwnedAuthorizationAbilityNames.length)
         unregisterProjectQueueJobs(activeQueueModule, runtimeOwnedQueueJobNames)
         runtimeOwnedQueueJobNames.splice(0, runtimeOwnedQueueJobNames.length)
+        activeAuthorizationModule = undefined
         activeEventsModule = undefined
         activeQueueModule = undefined
         activeSessionRuntime = undefined
@@ -3665,8 +3836,12 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
         unregisterProjectEventsAndListeners(activeEventsModule, runtimeOwnedEventNames, runtimeOwnedListenerIds)
         runtimeOwnedEventNames.splice(0, runtimeOwnedEventNames.length)
         runtimeOwnedListenerIds.splice(0, runtimeOwnedListenerIds.length)
+        unregisterProjectAuthorizationDefinitions(activeAuthorizationModule, runtimeOwnedAuthorizationPolicyNames, runtimeOwnedAuthorizationAbilityNames)
+        runtimeOwnedAuthorizationPolicyNames.splice(0, runtimeOwnedAuthorizationPolicyNames.length)
+        runtimeOwnedAuthorizationAbilityNames.splice(0, runtimeOwnedAuthorizationAbilityNames.length)
         unregisterProjectQueueJobs(activeQueueModule, runtimeOwnedQueueJobNames)
         runtimeOwnedQueueJobNames.splice(0, runtimeOwnedQueueJobNames.length)
+        activeAuthorizationModule = undefined
         activeEventsModule = undefined
         activeQueueModule = undefined
         activeSessionRuntime = undefined
@@ -3805,12 +3980,16 @@ export const holoRuntimeInternals = {
   createCoreNotificationStore,
   createNotificationMailText,
   createCoreSessionStores,
+  registerProjectAuthorizationDefinitions,
+  unregisterProjectAuthorizationDefinitions,
+  resolveAuthorizationDefinitionExport,
   fromHostedIdentityProviderValue: fromHostedIdentityProviderValue,
   getConfigSection,
   getConfigValue,
   createCoreSocialBindings,
   normalizeNotificationRecordFromRow,
   loadConfiguredSocialProviders,
+  loadAuthorizationModule,
   markProviderUser,
   normalizeDateValue,
   normalizeEmailVerificationTokenRecord,

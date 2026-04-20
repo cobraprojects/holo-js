@@ -1,9 +1,11 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 import type {
+  AuthorizationDiscoveryModule,
   BroadcastDiscoveryModule,
   EventsDiscoveryModule,
   ProjectModuleBundler,
@@ -17,6 +19,32 @@ import {
 
 let projectModuleBundler: ProjectModuleBundler = build
 
+function resolveWorkspacePackageImportSpecifier(specifier: string): string | undefined {
+  if (!specifier.startsWith('@holo-js/')) {
+    return undefined
+  }
+
+  const [, packageName, ...subpathSegments] = specifier.split('/')
+  if (!packageName) {
+    return undefined
+  }
+
+  const subpath = subpathSegments.join('/')
+  const candidateRoots = [
+    resolve(import.meta.dirname, '../../', packageName),
+    resolve(import.meta.dirname, '../../../', packageName),
+  ]
+
+  for (const candidateRoot of candidateRoots) {
+    const candidatePath = join(candidateRoot, 'dist', subpath ? `${subpath}.mjs` : 'index.mjs')
+    if (existsSync(candidatePath)) {
+      return pathToFileURL(candidatePath).href
+    }
+  }
+
+  return undefined
+}
+
 export function resolveProjectPackageImportSpecifier(
   projectRoot: string,
   specifier: string,
@@ -27,7 +55,7 @@ export function resolveProjectPackageImportSpecifier(
     const resolved = (resolveSpecifier ?? projectRequire.resolve.bind(projectRequire))(specifier)
     return pathToFileURL(resolved).href
   } catch {
-    return specifier
+    return resolveWorkspacePackageImportSpecifier(specifier) ?? specifier
   }
 }
 
@@ -41,6 +69,10 @@ export async function loadEventsDiscoveryModule(projectRoot: string): Promise<Ev
 
 export async function loadBroadcastDiscoveryModule(projectRoot: string): Promise<BroadcastDiscoveryModule> {
   return await import(resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/broadcast')) as BroadcastDiscoveryModule
+}
+
+export async function loadAuthorizationDiscoveryModule(projectRoot: string): Promise<AuthorizationDiscoveryModule> {
+  return await import(resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/authorization')) as AuthorizationDiscoveryModule
 }
 
 export async function resolveFirstExistingPath(

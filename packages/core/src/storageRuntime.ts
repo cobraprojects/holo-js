@@ -73,11 +73,19 @@ async function importOptionalModule<TModule>(specifier: string): Promise<TModule
 
     return await import(/* webpackIgnore: true */ specifier) as TModule
   } catch (error) {
+    const message = error && typeof error === 'object' && 'message' in error
+      && typeof (error as { message?: unknown }).message === 'string'
+      ? (error as { message: string }).message
+      : ''
     if (
       error
       && typeof error === 'object'
-      && 'code' in error
-      && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
+      && (
+        ('code' in error && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND')
+        || message.includes(`Cannot find package '${specifier}'`)
+        || message.includes(`Cannot find module '${specifier}'`)
+        || (message.includes('Failed to load url') && message.includes('Does the file exist?'))
+      )
     ) {
       return undefined
     }

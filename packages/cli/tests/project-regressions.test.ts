@@ -1,9 +1,10 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { GeneratedJobRegistryEntry } from '../src/project'
 import { installSecurityIntoProject } from '../src/project'
+import * as projectRuntimeModule from '../src/project/runtime'
 import { renderGeneratedQueueTypes } from '../src/project/registry'
 
 const tempDirs: string[] = []
@@ -31,16 +32,28 @@ export default defineAppConfig({
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
 })
 
 describe('cli regressions', () => {
+  it('creates the rate-limit gitignore when it is missing', async () => {
+    const root = await createProject()
+    const ignorePath = join(root, 'storage/framework/rate-limits/.gitignore')
+
+    await mkdir(join(root, 'storage/framework/rate-limits'), { recursive: true })
+
+    await installSecurityIntoProject(root)
+
+    await expect(readFile(ignorePath, 'utf8')).resolves.toBe('*\n!.gitignore\n')
+  })
+
   it('preserves existing rate-limit gitignore rules when installing security', async () => {
     const root = await createProject()
     const ignorePath = join(root, 'storage/framework/rate-limits/.gitignore')
 
     await mkdir(join(root, 'storage/framework/rate-limits'), { recursive: true })
-    await writeFile(ignorePath, 'custom-rule\n', 'utf8')
+    await writeFile(ignorePath, 'custom-rule', 'utf8')
 
     await installSecurityIntoProject(root)
 
@@ -50,6 +63,26 @@ describe('cli regressions', () => {
       '!.gitignore',
       '',
     ].join('\n'))
+  })
+
+  it('appends rate-limit gitignore rules when the existing file is unreadable', async () => {
+    const root = await createProject()
+    const ignorePath = join(root, 'storage/framework/rate-limits/.gitignore')
+    const readTextFile = projectRuntimeModule.readTextFile
+
+    await mkdir(join(root, 'storage/framework/rate-limits'), { recursive: true })
+    await writeFile(ignorePath, '', 'utf8')
+    vi.spyOn(projectRuntimeModule, 'readTextFile').mockImplementation((path: string) => {
+      if (path === ignorePath) {
+        return Promise.resolve(undefined)
+      }
+
+      return readTextFile(path)
+    })
+
+    await installSecurityIntoProject(root)
+
+    await expect(readFile(ignorePath, 'utf8')).resolves.toBe('*\n!.gitignore\n')
   })
 
   it('renders queue type imports in the stable order and keeps a separator without local imports', () => {

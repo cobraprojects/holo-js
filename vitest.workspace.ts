@@ -19,6 +19,7 @@ export default defineWorkspace([
   'packages/events',
   'packages/forms',
   'packages/cli',
+  'packages/authorization',
   'packages/core',
   'packages/broadcast',
   'packages/flux',

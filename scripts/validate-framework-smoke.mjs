@@ -44,6 +44,7 @@ const additionalRuntimeSmokePackages = [
   '@holo-js/auth-social-facebook',
   '@holo-js/auth-social-github',
   '@holo-js/auth-social-linkedin',
+  '@holo-js/authorization',
   '@holo-js/security',
   '@holo-js/flux',
   '@holo-js/mail',
@@ -505,6 +506,48 @@ async function runBroadcastSmokeCheck(app, baseUrl) {
 
   assert.equal(authPayload.ok, false)
   assert.equal(authPayload.error, 'unauthenticated')
+}
+
+async function fetchAuthorizationResponse(url) {
+  const response = await fetch(url)
+  const body = await response.text()
+
+  return {
+    status: response.status,
+    body,
+    json: body ? JSON.parse(body) : null,
+  }
+}
+
+async function runAuthorizationSmokeCheck(app, baseUrl) {
+  const success = await fetchAuthorizationResponse(`${baseUrl}/api/holo/authorization?actor=editor&scenario=view-published`)
+  assert.equal(success.status, 200, `${app.framework} authorization success returned ${success.status}: ${success.body}`)
+  assert.equal(success.json?.ok, true)
+  assert.equal(success.json?.framework, app.framework)
+  assert.equal(success.json?.actor, 'editor')
+  assert.equal(success.json?.scenario, 'view-published')
+  assert.equal(success.json?.decision?.allowed, true)
+  assert.equal(success.json?.decision?.status, 200)
+  assert.equal(success.json?.canViewPublished, true)
+  assert.equal(success.json?.cannotDeletePublished, true)
+  assert.equal(success.json?.abilityDecision?.allowed, true)
+  assert.equal(success.json?.abilityDecision?.status, 200)
+
+  const forbidden = await fetchAuthorizationResponse(`${baseUrl}/api/holo/authorization?actor=author&scenario=delete-published`)
+  assert.equal(forbidden.status, 403, `${app.framework} authorization deny returned ${forbidden.status}: ${forbidden.body}`)
+  assert.equal(forbidden.json?.ok, false)
+  assert.equal(forbidden.json?.framework, app.framework)
+  assert.equal(forbidden.json?.decision?.allowed, false)
+  assert.equal(forbidden.json?.decision?.status, 403)
+  assert.match(String(forbidden.json?.error ?? ''), /Only admins can delete posts/)
+
+  const notFound = await fetchAuthorizationResponse(`${baseUrl}/api/holo/authorization?actor=guest&scenario=view-draft`)
+  assert.equal(notFound.status, 404, `${app.framework} authorization concealment returned ${notFound.status}: ${notFound.body}`)
+  assert.equal(notFound.json?.ok, false)
+  assert.equal(notFound.json?.framework, app.framework)
+  assert.equal(notFound.json?.decision?.allowed, false)
+  assert.equal(notFound.json?.decision?.status, 404)
+  assert.match(String(notFound.json?.error ?? ''), /Resource not found/)
 }
 
 function updateManifestDependencySections(manifest, dependencyOverrides) {
@@ -2060,6 +2103,7 @@ async function validateFrameworkApp(app) {
 
     const auth = await fetchJson(`${baseUrl}/api/holo/auth`)
     assertAuthSmokePayload(app, auth)
+    await runAuthorizationSmokeCheck(app, baseUrl)
     await runBroadcastSmokeCheck(app, baseUrl)
   } finally {
     await server.stop()

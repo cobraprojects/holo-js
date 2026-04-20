@@ -31,6 +31,7 @@ import {
   SECURITY_CONFIG_FILE_NAMES,
   SESSION_CONFIG_FILE_NAMES,
   SUPPORTED_AUTH_SOCIAL_PROVIDERS,
+  type AuthorizationInstallResult,
   type AuthInstallResult,
   type EventsInstallResult,
   type MailInstallResult,
@@ -916,6 +917,26 @@ function renderAuthUserModel(generatedSchemaImportPath = '../db/schema.generated
   ].join('\n')
 }
 
+function renderAuthorizationPoliciesReadme(): string {
+  return [
+    '# Authorization Policies',
+    '',
+    'Place policy files in this directory.',
+    'Export `definePolicy(...)` definitions from `@holo-js/authorization`.',
+    '',
+  ].join('\n')
+}
+
+function renderAuthorizationAbilitiesReadme(): string {
+  return [
+    '# Authorization Abilities',
+    '',
+    'Place ability files in this directory.',
+    'Export `defineAbility(...)` definitions from `@holo-js/authorization`.',
+    '',
+  ].join('\n')
+}
+
 function resolveAuthUserModelSchemaImportPath(
   userModelPath: string,
   generatedSchemaPath: string,
@@ -1797,6 +1818,23 @@ async function upsertAuthPackageDependencies(
   return true
 }
 
+async function upsertAuthorizationPackageDependency(projectRoot: string): Promise<boolean> {
+  const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
+  const currentVersion = dependencies['@holo-js/authorization']
+  const currentDevVersion = devDependencies['@holo-js/authorization']
+
+  if (currentVersion === nextVersion && typeof currentDevVersion === 'undefined') {
+    return false
+  }
+
+  dependencies['@holo-js/authorization'] = nextVersion
+  delete devDependencies['@holo-js/authorization']
+
+  await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
+  return true
+}
+
 async function resolveExistingModelPath(modelsRoot: string, modelName: string): Promise<string | undefined> {
   const supportedExtensions = ['.ts', '.mts', '.js', '.mjs', '.cts', '.cjs']
 
@@ -1977,6 +2015,39 @@ export async function installAuthIntoProject(
     createdMigrationFiles,
     updatedEnv: nextEnv.changed,
     updatedEnvExample: nextEnvExample.changed,
+  }
+}
+
+export async function installAuthorizationIntoProject(
+  projectRoot: string,
+): Promise<AuthorizationInstallResult> {
+  await loadProjectConfig(projectRoot, { required: true })
+  const policiesRoot = resolve(projectRoot, 'server/policies')
+  const abilitiesRoot = resolve(projectRoot, 'server/abilities')
+  const policiesDirectoryExists = await pathExists(policiesRoot)
+  const abilitiesDirectoryExists = await pathExists(abilitiesRoot)
+  const policiesReadmePath = resolve(policiesRoot, 'README.md')
+  const abilitiesReadmePath = resolve(abilitiesRoot, 'README.md')
+  const policiesReadmeExists = await pathExists(policiesReadmePath)
+  const abilitiesReadmeExists = await pathExists(abilitiesReadmePath)
+
+  await mkdir(policiesRoot, { recursive: true })
+  await mkdir(abilitiesRoot, { recursive: true })
+
+  if (!policiesReadmeExists) {
+    await writeTextFile(policiesReadmePath, renderAuthorizationPoliciesReadme())
+  }
+
+  if (!abilitiesReadmeExists) {
+    await writeTextFile(abilitiesReadmePath, renderAuthorizationAbilitiesReadme())
+  }
+
+  return {
+    updatedPackageJson: await upsertAuthorizationPackageDependency(projectRoot),
+    createdPoliciesDirectory: !policiesDirectoryExists,
+    createdAbilitiesDirectory: !abilitiesDirectoryExists,
+    createdPoliciesReadme: !policiesReadmeExists,
+    createdAbilitiesReadme: !abilitiesReadmeExists,
   }
 }
 
@@ -3019,6 +3090,10 @@ function renderScaffoldPackageJson(options: ProjectScaffoldOptions): string {
     dependencies['@holo-js/session'] = `^${HOLO_PACKAGE_VERSION}`
   }
 
+  if (optionalPackages.includes('authorization')) {
+    dependencies['@holo-js/authorization'] = `^${HOLO_PACKAGE_VERSION}`
+  }
+
   if (optionalPackages.includes('notifications')) {
     dependencies['@holo-js/notifications'] = `^${HOLO_PACKAGE_VERSION}`
   }
@@ -3070,6 +3145,7 @@ export async function scaffoldProject(
   const queueEnabled = optionalPackages.includes('queue')
   const eventsEnabled = optionalPackages.includes('events')
   const authEnabled = optionalPackages.includes('auth')
+  const authorizationEnabled = optionalPackages.includes('authorization')
   const notificationsEnabled = optionalPackages.includes('notifications')
   const mailEnabled = optionalPackages.includes('mail')
   const securityEnabled = optionalPackages.includes('security')
@@ -3085,6 +3161,10 @@ export async function scaffoldProject(
   if (eventsEnabled) {
     await mkdir(resolve(projectRoot, config.paths.events), { recursive: true })
     await mkdir(resolve(projectRoot, config.paths.listeners), { recursive: true })
+  }
+  if (authorizationEnabled) {
+    await mkdir(resolve(projectRoot, 'server/policies'), { recursive: true })
+    await mkdir(resolve(projectRoot, 'server/abilities'), { recursive: true })
   }
   if (mailEnabled) {
     await mkdir(resolve(projectRoot, 'server/mail'), { recursive: true })
@@ -3140,6 +3220,10 @@ export async function scaffoldProject(
     for (const migrationFile of createAuthMigrationFiles()) {
       await writeFile(resolve(projectRoot, config.paths.migrations, migrationFile.path), migrationFile.contents, 'utf8')
     }
+  }
+  if (authorizationEnabled) {
+    await writeFile(resolve(projectRoot, 'server/policies/README.md'), renderAuthorizationPoliciesReadme(), 'utf8')
+    await writeFile(resolve(projectRoot, 'server/abilities/README.md'), renderAuthorizationAbilitiesReadme(), 'utf8')
   }
   if (storageEnabled) {
     await writeFile(resolve(projectRoot, 'config/storage.ts'), renderStorageConfig(), 'utf8')

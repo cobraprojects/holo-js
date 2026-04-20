@@ -325,7 +325,7 @@ export function createInternalCommands(
     {
       name: 'new',
       description: 'Scaffold a new Holo project',
-      usage: 'holo-js new <name> [--framework <nuxt|next|sveltekit>] [--database <sqlite|mysql|postgres>] [--package-manager <bun|npm|pnpm|yarn>] [--package <storage|events|queue|validation|forms|notifications|mail>] [--storage-default-disk <local|public>]',
+      usage: 'holo-js new <name> [--framework <nuxt|next|sveltekit>] [--database <sqlite|mysql|postgres>] [--package-manager <bun|npm|pnpm|yarn>] [--package <storage|events|queue|validation|forms|auth|authorization|notifications|mail|security>] [--storage-default-disk <local|public>]',
       source: 'internal',
       async prepare(input) {
         const resolved = await resolveNewProjectInput(context, input)
@@ -375,7 +375,7 @@ export function createInternalCommands(
     {
       name: 'install',
       description: 'Install first-party Holo support into an existing project.',
-      usage: 'holo install <queue|events|auth|notifications|mail|broadcast|security> [--driver <sync|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
+      usage: 'holo install <queue|events|auth|authorization|notifications|mail|broadcast|security> [--driver <sync|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
       source: 'internal',
       async prepare(input) {
         const target = normalizeChoice(
@@ -389,6 +389,9 @@ export function createInternalCommands(
         }
         if (target === 'auth' && requestedDriver) {
           throw new Error('The auth installer does not support --driver.')
+        }
+        if (target === 'authorization' && requestedDriver) {
+          throw new Error('The authorization installer does not support --driver.')
         }
         if (target === 'notifications' && requestedDriver) {
           throw new Error('The notifications installer does not support --driver.')
@@ -517,6 +520,24 @@ export function createInternalCommands(
           if (result.updatedEnv) writeLine(context.stdout, '  - updated .env')
           if (result.updatedEnvExample) writeLine(context.stdout, '  - updated .env.example')
           if (result.createdMigrationFiles.length > 0) writeLine(context.stdout, `  - created ${result.createdMigrationFiles.length} auth migrations`)
+          return
+        }
+
+        if (target === 'authorization') {
+          const { installAuthorizationIntoProject } = await loadProjectScaffoldModule()
+          const result = await installAuthorizationIntoProject(context.projectRoot)
+          const changed = result.updatedPackageJson
+            || result.createdPoliciesDirectory
+            || result.createdAbilitiesDirectory
+            || result.createdPoliciesReadme
+            || result.createdAbilitiesReadme
+
+          writeLine(context.stdout, changed ? 'Installed authorization support.' : 'Authorization support is already installed.')
+          if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
+          if (result.createdPoliciesDirectory) writeLine(context.stdout, '  - created server/policies')
+          if (result.createdAbilitiesDirectory) writeLine(context.stdout, '  - created server/abilities')
+          if (result.createdPoliciesReadme) writeLine(context.stdout, '  - created server/policies/README.md')
+          if (result.createdAbilitiesReadme) writeLine(context.stdout, '  - created server/abilities/README.md')
           return
         }
 
