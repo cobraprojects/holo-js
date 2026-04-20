@@ -159,8 +159,9 @@ describe('@holo-js/cli broadcast worker command', () => {
       })),
     })
 
-    await vi.waitUntil(() => process.listeners('SIGINT').length > 0)
-    process.listeners('SIGINT')[process.listeners('SIGINT').length - 1]?.('SIGINT')
+    const sigintListenersBefore = process.listeners('SIGINT').length
+    await vi.waitUntil(() => process.listeners('SIGINT').length > sigintListenersBefore)
+    process.listeners('SIGINT')[sigintListenersBefore]?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
     expect(stop).toHaveBeenCalledTimes(1)
     expect(io.read()).toContain('[broadcast] Worker listening on 0.0.0.0:8080')
@@ -187,8 +188,10 @@ describe('@holo-js/cli broadcast worker command', () => {
 
     await vi.waitUntil(() => process.listeners('SIGTERM').length > sigtermListenersBefore)
     await vi.waitUntil(() => process.listeners('SIGINT').length > sigintListenersBefore)
-    process.listeners('SIGTERM')[sigtermListenersBefore]?.('SIGTERM')
-    process.listeners('SIGINT')[sigintListenersBefore]?.('SIGINT')
+    const sigtermHandler = process.listeners('SIGTERM')[sigtermListenersBefore]
+    const sigintHandler = process.listeners('SIGINT')[sigintListenersBefore]
+    sigtermHandler?.('SIGTERM')
+    sigintHandler?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
     expect(stop).toHaveBeenCalledTimes(1)
   })

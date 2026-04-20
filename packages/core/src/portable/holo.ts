@@ -3102,6 +3102,34 @@ function unregisterProjectQueueJobs(
   }
 }
 
+function withCanonicalAuthorizationDefinitionName<TDefinition extends { readonly name: string }>(
+  definition: TDefinition,
+  name: string,
+): TDefinition {
+  if (definition.name === name) {
+    return definition
+  }
+
+  return {
+    ...definition,
+    name,
+  }
+}
+
+function withCanonicalAuthorizationAbilityName<TDefinition extends { readonly name: string }>(
+  definition: TDefinition,
+  name: string,
+): TDefinition {
+  if (definition.name === name) {
+    return definition
+  }
+
+  return {
+    ...definition,
+    name,
+  }
+}
+
 async function registerProjectAuthorizationDefinitions(
   projectRoot: string,
   registry: GeneratedProjectRegistry | undefined,
@@ -3137,7 +3165,23 @@ async function registerProjectAuthorizationDefinitions(
         throw new Error(`Discovered policy "${entry.sourcePath}" does not export a Holo policy.`)
       }
 
-      registeredPolicyNames.push((policy as { readonly name: string }).name)
+      const canonicalPolicy = withCanonicalAuthorizationDefinitionName(
+        policy as { readonly name: string },
+        entry.name,
+      )
+      const resolvedPolicyName = (policy as { readonly name: string }).name
+      if (resolvedPolicyName !== entry.name) {
+        authorizationModule.authorizationInternals.unregisterPolicyDefinition(resolvedPolicyName)
+      }
+
+      if (
+        typeof authorizationModule.authorizationInternals.registerPolicyDefinition === 'function'
+        && !authorizationModule.authorizationInternals.getAuthorizationRuntimeState().policiesByName.has(entry.name)
+      ) {
+        authorizationModule.authorizationInternals.registerPolicyDefinition(canonicalPolicy)
+      }
+
+      registeredPolicyNames.push(entry.name)
     }
 
     for (const entry of registry.authorizationAbilities) {
@@ -3153,7 +3197,23 @@ async function registerProjectAuthorizationDefinitions(
         throw new Error(`Discovered ability "${entry.sourcePath}" does not export a Holo ability.`)
       }
 
-      registeredAbilityNames.push((ability as { readonly name: string }).name)
+      const canonicalAbility = withCanonicalAuthorizationAbilityName(
+        ability as { readonly name: string },
+        entry.name,
+      )
+      const resolvedAbilityName = (ability as { readonly name: string }).name
+      if (resolvedAbilityName !== entry.name) {
+        authorizationModule.authorizationInternals.unregisterAbilityDefinition(resolvedAbilityName)
+      }
+
+      if (
+        typeof authorizationModule.authorizationInternals.registerAbilityDefinition === 'function'
+        && !authorizationModule.authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.has(entry.name)
+      ) {
+        authorizationModule.authorizationInternals.registerAbilityDefinition(canonicalAbility)
+      }
+
+      registeredAbilityNames.push(entry.name)
     }
   } catch (error) {
     unregisterProjectAuthorizationDefinitions(authorizationModule, registeredPolicyNames, registeredAbilityNames)
@@ -3573,14 +3633,15 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
           : {}),
       context: authContext,
     })
+    const boundAuthRuntime = bindAuthRuntimeToContext(authModule.getAuthRuntime(), authContext)
 
     if (authorizationModule) {
       authorizationModule.authorizationInternals.configureAuthorizationAuthIntegration({
         hasGuard(guardName: string) {
           return guardName in loadedConfig.auth.guards
         },
-        resolveDefaultActor: async () => authModule.getAuthRuntime().user(),
-        resolveGuardActor: async (guardName: string) => authModule.getAuthRuntime().guard(guardName).user(),
+        resolveDefaultActor: async () => boundAuthRuntime.user(),
+        resolveGuardActor: async (guardName: string) => boundAuthRuntime.guard(guardName).user(),
       })
     }
 

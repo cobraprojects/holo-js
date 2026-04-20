@@ -309,6 +309,7 @@ export default reportAbility
     const root = await createProject()
     await mkdir(join(root, 'server/policies'), { recursive: true })
     await mkdir(join(root, 'server/abilities'), { recursive: true })
+    await symlink(join(workspaceRoot, 'packages/authorization'), join(root, 'node_modules/@holo-js/authorization'))
     await writeFile(join(root, 'server/policies/posts.ts'), `
 import { definePolicy } from '@holo-js/authorization'
 
@@ -432,7 +433,7 @@ export default {
     expect(unregisterAbilityDefinition).toHaveBeenCalledWith('reports.export')
   })
 
-  it('tracks the actual registered authorization names when project files are renamed before prepare reruns', async () => {
+  it('uses registry policy names when project policy exports drift before prepare reruns', async () => {
     const root = await createProject()
     await mkdir(join(root, 'server/policies'), { recursive: true })
     await mkdir(join(root, 'server/abilities'), { recursive: true })
@@ -478,11 +479,13 @@ export default defineAbility('renamed.reports.export', () => true)
     )
 
     expect(registration).toEqual({
-      policyNames: ['renamed-posts'],
-      abilityNames: ['renamed.reports.export'],
+      policyNames: ['posts'],
+      abilityNames: ['reports.export'],
     })
-    expect(authorizationInternals.getAuthorizationRuntimeState().policiesByName.has('renamed-posts')).toBe(true)
-    expect(authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.has('renamed.reports.export')).toBe(true)
+    expect(authorizationInternals.getAuthorizationRuntimeState().policiesByName.has('posts')).toBe(true)
+    expect(authorizationInternals.getAuthorizationRuntimeState().policiesByName.has('renamed-posts')).toBe(false)
+    expect(authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.has('reports.export')).toBe(true)
+    expect(authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.has('renamed.reports.export')).toBe(false)
 
     holoRuntimeInternals.unregisterProjectAuthorizationDefinitions(
       {
@@ -492,8 +495,8 @@ export default defineAbility('renamed.reports.export', () => true)
       registration.abilityNames,
     )
 
-    expect(authorizationInternals.getAuthorizationRuntimeState().policiesByName.has('renamed-posts')).toBe(false)
-    expect(authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.has('renamed.reports.export')).toBe(false)
+    expect(authorizationInternals.getAuthorizationRuntimeState().policiesByName.has('posts')).toBe(false)
+    expect(authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.has('reports.export')).toBe(false)
   })
 
   it('keeps the previously registered authorization definitions when reloading updated modules fails', async () => {

@@ -65,7 +65,7 @@ describe('cli regressions', () => {
     ].join('\n'))
   })
 
-  it('appends rate-limit gitignore rules when the existing file is unreadable', async () => {
+  it('falls back to default rules when readTextFile returns undefined for an existing file', async () => {
     const root = await createProject()
     const ignorePath = join(root, 'storage/framework/rate-limits/.gitignore')
     const readTextFile = projectRuntimeModule.readTextFile
@@ -74,6 +74,7 @@ describe('cli regressions', () => {
     await writeFile(ignorePath, '', 'utf8')
     vi.spyOn(projectRuntimeModule, 'readTextFile').mockImplementation((path: string) => {
       if (path === ignorePath) {
+        // This covers the undefined fallback path used by ensureRateLimitStorageIgnore.
         return Promise.resolve(undefined)
       }
 

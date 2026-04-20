@@ -419,10 +419,10 @@ export function renderGeneratedAuthorizationTypes(
     const importName = policyImportNameByName.get(entry.name)
     const classActionEntries = entry.classActions.length > 0
       ? entry.classActions.map(action => `      ${JSON.stringify(action)}: true`)
-      : ['      [key: string]: true']
+      : []
     const recordActionEntries = entry.recordActions.length > 0
       ? entry.recordActions.map(action => `      ${JSON.stringify(action)}: true`)
-      : ['      [key: string]: true']
+      : []
 
     if (!importName || !entry.exportName) {
       return [

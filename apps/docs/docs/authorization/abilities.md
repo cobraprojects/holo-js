@@ -20,6 +20,8 @@ export default defineAbility('reports.export', (context, input: {
   }
 
   return input.format === 'csv'
+    ? allow()
+    : deny('Only CSV export is allowed.')
 })
 ```
 

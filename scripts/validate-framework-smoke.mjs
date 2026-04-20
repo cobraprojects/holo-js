@@ -511,11 +511,20 @@ async function runBroadcastSmokeCheck(app, baseUrl) {
 async function fetchAuthorizationResponse(url) {
   const response = await fetch(url)
   const body = await response.text()
+  let json = null
+
+  if (body) {
+    try {
+      json = JSON.parse(body)
+    } catch {
+      json = null
+    }
+  }
 
   return {
     status: response.status,
     body,
-    json: body ? JSON.parse(body) : null,
+    json,
   }
 }
 

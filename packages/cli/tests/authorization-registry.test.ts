@@ -202,7 +202,9 @@ describe('@holo-js/cli authorization registry discovery', () => {
     ] satisfies readonly GeneratedAuthorizationPolicyRegistryEntry[], [], ['web'])
 
     expect(output).toContain('"plain": {')
-    expect(output).toContain('[key: string]: true')
+    expect(output).toContain('classActions: {')
+    expect(output).toContain('recordActions: {')
+    expect(output).not.toContain('[key: string]: true')
   })
 
   it('renders authorization registry entries without optional export names', () => {
@@ -343,7 +345,7 @@ export const postPolicy = definePolicy('posts', Post, {
 `, 'utf8')
 
     await expect(prepareProjectDiscovery(root, normalizeHoloProjectConfig())).rejects.toThrow(
-      'Discovered policy "server/policies/posts/index.ts" must register exactly one Holo policy.',
+      'Discovered policy "server/policies/posts/index.ts" must register exactly one Holo policy and zero Holo abilities (found 2 policies and 0 abilities).',
     )
     expect([...authorizationInternals.getAuthorizationRuntimeState().policiesByName.keys()]).toEqual([])
   })
@@ -360,7 +362,7 @@ export default defineAbility('reports.export', () => true)
 `, 'utf8')
 
     await expect(prepareProjectDiscovery(root, normalizeHoloProjectConfig())).rejects.toThrow(
-      'Discovered ability "server/abilities/reports.export.ts" must register exactly one Holo ability.',
+      'Discovered ability "server/abilities/reports.export.ts" must register exactly one Holo ability and zero Holo policies (found 0 policies and 2 abilities).',
     )
     expect([...authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.keys()]).toEqual([])
   })
@@ -394,15 +396,20 @@ class PlainTarget {
     const root = await createProject()
     await symlink(join(workspaceRoot, 'packages/authorization'), join(root, 'node_modules/@holo-js/authorization'))
     await writeFile(join(root, 'server/policies/plain.ts'), `
+import { authorizationInternals } from ${JSON.stringify(authorizationModulePath)}
 import { AUTHORIZATION_POLICY_MARKER } from ${JSON.stringify(authorizationContractsModulePath)}
 
-export default {
+const policy = {
   [AUTHORIZATION_POLICY_MARKER]: true,
   name: 'plain',
   target: {},
   class: {},
   record: {},
 }
+
+authorizationInternals.registerPolicyDefinition(policy)
+
+export default policy
 `, 'utf8')
 
     const registry = await prepareProjectDiscovery(root, normalizeHoloProjectConfig())

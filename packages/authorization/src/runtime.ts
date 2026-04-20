@@ -17,12 +17,10 @@ import type {
   AuthorizationTargetModel,
   AuthorizationTargetModelDefinition,
   AuthorizationTargetConstructor,
-  AbilityActorForName,
   AbilityInput,
   HoloAbilityName,
   HoloAuthorizationGuardName,
   HoloPolicyName,
-  PolicyActorForName,
   PolicyActionFor,
   PolicyActionForPolicy,
 } from './contracts'
@@ -243,7 +241,7 @@ function freezeAbilityDefinition<TDefinition extends RegisteredAbility>(definiti
 export function definePolicy<
   TName extends string,
   TTarget extends AuthorizationPolicyTarget,
-  TActor extends PolicyActorForName<TName>,
+  TActor extends object,
   TDefinition extends {
     readonly before?: AuthorizationPolicyBeforeHandler<TActor, TTarget>
     readonly class?: Readonly<Record<string, AuthorizationPolicyClassHandler<TActor, TTarget>>>
@@ -292,7 +290,7 @@ export function definePolicy<
 export function defineAbility<
   TName extends string,
   TInput extends object,
-  TActor extends AbilityActorForName<TName>,
+  TActor extends object,
 >(
   name: TName,
   handle: AuthorizationAbilityHandler<TActor, TInput>,
@@ -453,7 +451,10 @@ function resolveContext<TActor extends object, TGuardName extends string>(
 }
 
 function createAuthorizationError(decision: AuthorizationDecision): AuthorizationError {
-  return new AuthorizationErrorClass(decision.message as string, decision)
+  return new AuthorizationErrorClass(
+    decision.message ?? 'You are not authorized to perform this action.',
+    decision,
+  )
 }
 
 function normalizeResult(outcome: AuthorizationDecisionInput | Promise<AuthorizationDecisionInput>): Promise<AuthorizationDecision> {

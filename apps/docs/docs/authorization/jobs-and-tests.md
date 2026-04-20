@@ -12,13 +12,14 @@ import authorization from '@holo-js/authorization'
 export async function runPublishJob(postId: string, actor: { id: string, role: string }) {
   const post = await Post.findOrFail(postId)
 
-  await authorization.forUser(actor).authorize('update', post)
+  await authorization.forUser(actor).policy('posts').authorize('update', post)
 
   await post.publish()
 }
 ```
 
 Passing the actor explicitly keeps the job deterministic. It does not depend on request context or auth state.
+Use `.policy('posts')` to select the posts policy explicitly. If you omit it, the default policy resolution will be used.
 
 ## Tests
 

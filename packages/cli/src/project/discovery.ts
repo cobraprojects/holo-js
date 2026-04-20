@@ -323,6 +323,11 @@ function resolveListenerEventNamesForDiscovery(
 }
 
 function resolveAuthorizationTargetName(target: object): string | undefined {
+  const modelFacadeTarget = target as { readonly definition?: { readonly name?: unknown } }
+  if (typeof modelFacadeTarget.definition?.name === 'string' && modelFacadeTarget.definition.name.trim()) {
+    return modelFacadeTarget.definition.name.trim()
+  }
+
   const namedTarget = target as { readonly name?: unknown }
   return typeof namedTarget.name === 'string' && namedTarget.name.trim()
     ? namedTarget.name.trim()
@@ -831,8 +836,10 @@ export async function prepareProjectDiscovery(
       const addedPolicyNames = findAddedAuthorizationDefinitionNames(authorizationStateAfterImport.policiesByName, existingPolicyNames)
       const addedAbilityNames = findAddedAuthorizationDefinitionNames(authorizationStateAfterImport.abilitiesByName, existingAbilityNames)
 
-      if (addedPolicyNames.length > 1 || addedAbilityNames.length > 0) {
-        throw new Error(`Discovered policy "${relativePath}" must register exactly one Holo policy.`)
+      if (addedPolicyNames.length !== 1 || addedAbilityNames.length !== 0) {
+        throw new Error(
+          `Discovered policy "${relativePath}" must register exactly one Holo policy and zero Holo abilities (found ${addedPolicyNames.length} policies and ${addedAbilityNames.length} abilities).`,
+        )
       }
 
       const normalizedPolicy = exportedPolicy.value as {
@@ -884,8 +891,10 @@ export async function prepareProjectDiscovery(
       const addedPolicyNames = findAddedAuthorizationDefinitionNames(authorizationStateAfterImport.policiesByName, existingPolicyNames)
       const addedAbilityNames = findAddedAuthorizationDefinitionNames(authorizationStateAfterImport.abilitiesByName, existingAbilityNames)
 
-      if (addedPolicyNames.length > 0 || addedAbilityNames.length > 1) {
-        throw new Error(`Discovered ability "${relativePath}" must register exactly one Holo ability.`)
+      if (addedPolicyNames.length !== 0 || addedAbilityNames.length !== 1) {
+        throw new Error(
+          `Discovered ability "${relativePath}" must register exactly one Holo ability and zero Holo policies (found ${addedPolicyNames.length} policies and ${addedAbilityNames.length} abilities).`,
+        )
       }
 
       const normalizedAbility = exportedAbility.value as {

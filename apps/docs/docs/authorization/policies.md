@@ -6,7 +6,7 @@ target.
 ## Policy shape
 
 ```ts
-import { definePolicy, allow, deny, denyAsNotFound } from '@holo-js/authorization'
+import { definePolicy, allow, deny } from '@holo-js/authorization'
 import { Post } from '@/server/models/Post'
 
 export default definePolicy('posts', Post, {

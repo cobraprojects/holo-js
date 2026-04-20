@@ -218,8 +218,8 @@ type RegisteredPolicyRecordActionFor<TTarget> = {
     ? TTarget extends AuthorizationPolicyTarget
       ? never
       : TTarget extends AuthorizationTargetInstance<TRegisteredTarget>
-      ? FallbackRegistryAction<Extract<keyof TRecordActions, string>>
-      : never
+        ? FallbackRegistryAction<Extract<keyof TRecordActions, string>>
+        : never
     : never
 }[RegisteredAuthorizationPolicyName]
 
@@ -456,9 +456,7 @@ export function normalizeAuthorizationDecision(
   }
 
   if (isAuthorizationDecision(outcome)) {
-    return outcome.allowed
-      ? allow(outcome.message)
-      : (outcome.status === 404 ? denyAsNotFound(outcome.message) : deny(outcome.message))
+    return outcome
   }
 
   return deny(fallbackMessage)

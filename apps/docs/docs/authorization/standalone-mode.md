@@ -9,6 +9,8 @@ It works by passing the actor explicitly.
 ```ts
 import authorization from '@holo-js/authorization'
 
+const post = { id: 'post-123', authorId: 'user-1' }
+
 await authorization.forUser({ id: 'user-1', role: 'editor' }).authorize('update', post)
 await authorization.forUser({ id: 'user-1', role: 'editor' }).can('view', post)
 await authorization.forUser(null).can('view', post)

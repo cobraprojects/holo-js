@@ -4,6 +4,11 @@
   "description": "Holo-JS Framework - policy contracts, abilities, and typed authorization surfaces",
   "type": "module",
   "license": "MIT",
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cobraprojects/holo-js.git"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -24,6 +29,7 @@
   "scripts": {
     "build": "tsup",
     "stub": "tsup",
+    "stub:watch": "tsup --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest --run"
   },

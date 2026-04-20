@@ -114,7 +114,10 @@ describe('@holo-js/authorization package', () => {
     expect(isAuthorizationDecision(null)).toBe(false)
     expect(isAuthorizationDecision({ allowed: true, status: 201 })).toBe(false)
     expect(normalizeAuthorizationDecision(undefined, 'fallback')).toEqual(deny('fallback'))
-    expect(normalizeDecision()).toEqual(deny())
+    expect(normalizeAuthorizationDecision(true, 'fallback')).toEqual(allow())
+    expect(normalizeAuthorizationDecision(undefined)).toEqual(deny())
+    expect(normalizeAuthorizationDecision({ allowed: false, status: 403, message: 'blocked', code: 'E_BLOCKED' }))
+      .toEqual({ allowed: false, status: 403, message: 'blocked', code: 'E_BLOCKED' })
     expect(new AuthorizationError('Denied', deny('Denied'))).toBeInstanceOf(Error)
     expect(new AuthorizationGuardNotFoundError()).toBeInstanceOf(Error)
     expect(new AuthorizationPolicyNotFoundError()).toBeInstanceOf(Error)
@@ -315,7 +318,3 @@ describe('@holo-js/authorization package', () => {
       .rejects.toBeInstanceOf(AuthorizationAbilityNotFoundError)
   })
 })
-
-function normalizeDecision() {
-  return deny()
-}
