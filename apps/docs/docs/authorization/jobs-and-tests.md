@@ -39,9 +39,9 @@ Use explicit actor tests when you want the authorization rule itself under test,
 
 ## What to prefer
 
-- Use `authorization.forUser(user)` when the actor is already known.
-- Use `authorization.guard('web')` or top-level helpers only when you want auth to resolve the actor for you.
-- Use standalone mode in tests when you want to avoid booting auth.
+- Call `authorization.forUser(user)` when the actor is already known.
+- Invoke `authorization.guard('web')` or top-level helpers only when you want auth to resolve the actor for you.
+- Enable standalone mode in tests when you want to avoid booting auth.
 
 ## Continue
 

@@ -540,8 +540,8 @@ export async function prepareProjectDiscovery(
   const channelsPath = resolveBroadcastArtifactsPath(config, 'channels')
   const broadcastRoot = resolve(projectRoot, broadcastPath)
   const channelsRoot = resolve(projectRoot, channelsPath)
-  const policiesRoot = resolve(projectRoot, 'server/policies')
-  const abilitiesRoot = resolve(projectRoot, 'server/abilities')
+  const policiesRoot = resolve(projectRoot, config.paths.authorizationPolicies ?? 'server/policies')
+  const abilitiesRoot = resolve(projectRoot, config.paths.authorizationAbilities ?? 'server/abilities')
 
   const [modelFiles, migrationFiles, seederFiles, commandFiles, jobFiles, eventFiles, listenerFiles, broadcastFiles, channelFiles] = await Promise.all([
     collectFiles(modelsRoot),
@@ -934,8 +934,8 @@ export async function prepareProjectDiscovery(
       listeners: config.paths.listeners,
       broadcast: broadcastPath,
       channels: channelsPath,
-      authorizationPolicies: 'server/policies',
-      authorizationAbilities: 'server/abilities',
+      authorizationPolicies: config.paths.authorizationPolicies ?? 'server/policies',
+      authorizationAbilities: config.paths.authorizationAbilities ?? 'server/abilities',
       generatedSchema: config.paths.generatedSchema,
     },
     models,

@@ -1383,14 +1383,19 @@ function resolveQueueJobExport(
 
 function resolveAuthorizationDefinitionExport(
   moduleValue: unknown,
+  exportName: string | undefined,
   matcher: (value: unknown) => boolean,
 ): unknown | undefined {
   const exports = moduleValue as Record<string, unknown>
+  if (exportName && exportName !== 'default' && matcher(exports[exportName])) {
+    return exports[exportName]
+  }
+
   if (matcher(exports.default)) {
     return exports.default
   }
 
-  return Object.values(exports).find(value => matcher(value))
+  return Object.entries(exports).find(([name, value]) => name !== exportName && matcher(value))?.[1]
 }
 
 const HOLO_EVENT_DEFINITION_MARKER = Symbol.for('holo-js.events.definition')
@@ -3160,7 +3165,11 @@ async function registerProjectAuthorizationDefinitions(
       }
 
       const moduleValue = await importRuntimeModule(projectRoot, resolve(projectRoot, entry.sourcePath))
-      const policy = resolveAuthorizationDefinitionExport(moduleValue, value => authorizationModule.isAuthorizationPolicyDefinition(value))
+      const policy = resolveAuthorizationDefinitionExport(
+        moduleValue,
+        entry.exportName,
+        value => authorizationModule.isAuthorizationPolicyDefinition(value),
+      )
       if (!policy) {
         throw new Error(`Discovered policy "${entry.sourcePath}" does not export a Holo policy.`)
       }
@@ -3192,7 +3201,11 @@ async function registerProjectAuthorizationDefinitions(
       }
 
       const moduleValue = await importRuntimeModule(projectRoot, resolve(projectRoot, entry.sourcePath))
-      const ability = resolveAuthorizationDefinitionExport(moduleValue, value => authorizationModule.isAuthorizationAbilityDefinition(value))
+      const ability = resolveAuthorizationDefinitionExport(
+        moduleValue,
+        entry.exportName,
+        value => authorizationModule.isAuthorizationAbilityDefinition(value),
+      )
       if (!ability) {
         throw new Error(`Discovered ability "${entry.sourcePath}" does not export a Holo ability.`)
       }

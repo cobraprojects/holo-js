@@ -9,6 +9,8 @@ export interface HoloProjectPaths {
   factories: string
   commands: string
   jobs: string
+  authorizationPolicies: string
+  authorizationAbilities: string
 }
 
 export interface HoloProjectConnectionConfig {

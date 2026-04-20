@@ -233,7 +233,7 @@ describe('@holo-js/core authorization boot integration', () => {
       holoRuntimeInternals.resolveAuthorizationDefinitionExport({
         default: { name: 'default' },
         named: namedDefinition,
-      }, value => value === namedDefinition),
+      }, undefined, value => value === namedDefinition),
     ).toBe(namedDefinition)
 
     await expect(holoRuntimeInternals.registerProjectAuthorizationDefinitions(
@@ -390,8 +390,22 @@ export default {
 }
 `, 'utf8')
 
-    const unregisterPolicyDefinition = vi.fn()
-    const unregisterAbilityDefinition = vi.fn()
+    const unregisterPolicyDefinition = vi.fn((name: string) => {
+      runtimeState.policiesByName.delete(name)
+    })
+    const unregisterAbilityDefinition = vi.fn((name: string) => {
+      runtimeState.abilitiesByName.delete(name)
+    })
+    const registerPolicyDefinition = vi.fn((definition: unknown) => {
+      const resolvedDefinition = definition as { name: string }
+      runtimeState.policiesByName.set(resolvedDefinition.name, resolvedDefinition)
+      return definition
+    })
+    const registerAbilityDefinition = vi.fn((definition: unknown) => {
+      const resolvedDefinition = definition as { name: string }
+      runtimeState.abilitiesByName.set(resolvedDefinition.name, resolvedDefinition)
+      return definition
+    })
     const runtimeState = {
       policiesByName: new Map<string, unknown>([['posts', { sourcePath: 'server/policies/posts.ts' }]]),
       abilitiesByName: new Map<string, unknown>([['reports.export', { sourcePath: 'server/abilities/reports.export.ts' }]]),
@@ -417,6 +431,8 @@ export default {
         authorizationInternals: {
           getAuthorizationRuntimeState: () => runtimeState,
           getAuthorizationAuthIntegration: vi.fn(),
+          registerPolicyDefinition,
+          registerAbilityDefinition,
           configureAuthorizationAuthIntegration: vi.fn(),
           resetAuthorizationAuthIntegration: vi.fn(),
           resetAuthorizationRuntimeState: vi.fn(),
@@ -431,6 +447,75 @@ export default {
 
     expect(unregisterPolicyDefinition).toHaveBeenCalledWith('posts')
     expect(unregisterAbilityDefinition).toHaveBeenCalledWith('reports.export')
+    expect(registerPolicyDefinition).toHaveBeenCalledWith({ name: 'posts' })
+    expect(registerAbilityDefinition).toHaveBeenCalledWith({ name: 'reports.export' })
+    expect(runtimeState.policiesByName.get('posts')).toEqual({ name: 'posts' })
+    expect(runtimeState.abilitiesByName.get('reports.export')).toEqual({ name: 'reports.export' })
+  })
+
+  it('prefers the registry export name over the default authorization export', async () => {
+    const root = await createProject()
+    await mkdir(join(root, 'server/policies'), { recursive: true })
+    await mkdir(join(root, 'server/abilities'), { recursive: true })
+    await symlink(join(workspaceRoot, 'packages/authorization'), join(root, 'node_modules/@holo-js/authorization'))
+    await writeFile(join(root, 'server/policies/posts.ts'), `
+import { definePolicy } from '@holo-js/authorization'
+
+class DefaultPost {}
+class NamedPost {}
+
+export const postsPolicy = definePolicy('posts', NamedPost, {
+  record: {
+    view() {
+      return true
+    },
+  },
+})
+
+export default definePolicy('wrong-posts', DefaultPost, {
+  record: {
+    view() {
+      return false
+    },
+  },
+})
+`, 'utf8')
+    await writeFile(join(root, 'server/abilities/reports.export.ts'), `
+import { defineAbility } from '@holo-js/authorization'
+
+export const reportsExportAbility = defineAbility('reports.export', () => true)
+export default defineAbility('wrong.reports.export', () => false)
+`, 'utf8')
+
+    const registration = await holoRuntimeInternals.registerProjectAuthorizationDefinitions(
+      root,
+      {
+        authorizationPolicies: [{
+          sourcePath: 'server/policies/posts.ts',
+          name: 'posts',
+          exportName: 'postsPolicy',
+        }],
+        authorizationAbilities: [{
+          sourcePath: 'server/abilities/reports.export.ts',
+          name: 'reports.export',
+          exportName: 'reportsExportAbility',
+        }],
+      } as never,
+      {
+        isAuthorizationPolicyDefinition: (value: unknown) => typeof value === 'object' && value !== null && 'name' in value,
+        isAuthorizationAbilityDefinition: (value: unknown) => typeof value === 'object' && value !== null && 'name' in value,
+        authorizationInternals,
+      } as never,
+    )
+
+    expect(registration).toEqual({
+      policyNames: ['posts'],
+      abilityNames: ['reports.export'],
+    })
+    expect(authorizationInternals.getAuthorizationRuntimeState().policiesByName.has('posts')).toBe(true)
+    expect(authorizationInternals.getAuthorizationRuntimeState().policiesByName.get('posts')).toMatchObject({ name: 'posts' })
+    expect(authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.has('reports.export')).toBe(true)
+    expect(authorizationInternals.getAuthorizationRuntimeState().abilitiesByName.get('reports.export')).toMatchObject({ name: 'reports.export' })
   })
 
   it('uses registry policy names when project policy exports drift before prepare reruns', async () => {
