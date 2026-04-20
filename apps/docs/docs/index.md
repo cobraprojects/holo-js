@@ -99,6 +99,7 @@ If you are contributing to the framework packages inside this repository, use:
 - [Events](/events/)
 - [Broadcast](/broadcast/)
 - [Notifications](/notifications/)
+- [Authorization](/authorization/)
 - [Mail](/mail/)
 - [Storage](/storage)
 - [Queue](/queue/)
@@ -111,6 +112,7 @@ If you are contributing to the framework packages inside this repository, use:
 - `holo prepare` scans Holo-JS-owned directories and regenerates typed registries under `.holo-js/generated`.
 - `config/queue.ts` is scaffolded by default and starts on the `sync` driver.
 - `holo install broadcast` scaffolds `config/broadcast.ts`, `server/broadcast`, `server/channels`, and `/broadcasting/auth`.
+- `holo install authorization` scaffolds `server/policies` and `server/abilities`.
 - `holo dev` reruns discovery, watches Holo-JS files, and then starts the selected framework.
 - `holo build` refreshes discovery before the framework build.
 - `holo config:cache` and `holo config:clear` manage production config caching.

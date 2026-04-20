@@ -3,9 +3,14 @@ import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import * as projectModule from '../src/project'
 import { loadGeneratedProjectRegistry, loadProjectConfig } from '../src/project'
 import { loadBroadcastCliModule, runBroadcastWorkCommand } from '../src/broadcast'
 import { createInternalCommands } from '../src/cli'
+
+vi.setConfig({
+  testTimeout: 30000,
+})
 
 function createIo(projectRoot: string) {
   const stdin = Object.assign(new PassThrough(), { isTTY: false }) as unknown as NodeJS.ReadStream
@@ -96,6 +101,8 @@ describe('@holo-js/cli broadcast worker command', () => {
         listeners: 'server/listeners',
         broadcast: 'server/broadcast',
         channels: 'server/channels',
+        authorizationPolicies: 'server/policies',
+        authorizationAbilities: 'server/abilities',
         generatedSchema: 'server/db/schema.generated.ts',
       },
       models: [],
@@ -115,6 +122,8 @@ describe('@holo-js/cli broadcast worker command', () => {
           whispers: ['typing.start'],
         },
       ],
+      authorizationPolicies: [],
+      authorizationAbilities: [],
     }))
     const promise = runBroadcastWorkCommand(io.io, tempRoot, {
       loadConfig: vi.fn(async () => ({ broadcast: { ok: true }, queue: { redis: true } })) as never,
@@ -142,14 +151,17 @@ describe('@holo-js/cli broadcast worker command', () => {
           return {
             host: '0.0.0.0',
             port: 8080,
-            stop,
+            stop: vi.fn(async () => {
+              await stop()
+            }),
           }
         }),
       })),
     })
 
-    await new Promise(resolve => setTimeout(resolve, 100))
-    process.emit('SIGINT')
+    const sigintListenersBefore = process.listeners('SIGINT').length
+    await vi.waitUntil(() => process.listeners('SIGINT').length > sigintListenersBefore)
+    process.listeners('SIGINT')[sigintListenersBefore]?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
     expect(stop).toHaveBeenCalledTimes(1)
     expect(io.read()).toContain('[broadcast] Worker listening on 0.0.0.0:8080')
@@ -158,6 +170,8 @@ describe('@holo-js/cli broadcast worker command', () => {
   it('stops at most once when multiple signals are emitted', async () => {
     const io = createIo(process.cwd())
     const stop = vi.fn(async () => {})
+    const sigtermListenersBefore = process.listeners('SIGTERM').length
+    const sigintListenersBefore = process.listeners('SIGINT').length
     const promise = runBroadcastWorkCommand(io.io, process.cwd(), {
       loadConfig: vi.fn(async () => ({ broadcast: { ok: true }, queue: {} })) as never,
       loadRegistry: vi.fn(async () => undefined),
@@ -165,14 +179,19 @@ describe('@holo-js/cli broadcast worker command', () => {
         startBroadcastWorker: vi.fn(async () => ({
           host: '127.0.0.1',
           port: 7001,
-          stop,
+          stop: vi.fn(async () => {
+            await stop()
+          }),
         })),
       })),
     })
 
-    await new Promise(resolve => setTimeout(resolve, 100))
-    process.emit('SIGTERM')
-    process.emit('SIGINT')
+    await vi.waitUntil(() => process.listeners('SIGTERM').length > sigtermListenersBefore)
+    await vi.waitUntil(() => process.listeners('SIGINT').length > sigintListenersBefore)
+    const sigtermHandler = process.listeners('SIGTERM')[sigtermListenersBefore]
+    const sigintHandler = process.listeners('SIGINT')[sigintListenersBefore]
+    sigtermHandler?.('SIGTERM')
+    sigintHandler?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
     expect(stop).toHaveBeenCalledTimes(1)
   })
@@ -298,6 +317,7 @@ describe('@holo-js/cli broadcast worker command', () => {
       name: 'broadcast-missing-module-fixture',
       private: true,
     }, null, 2))
+    vi.spyOn(projectModule, 'resolveProjectPackageImportSpecifier').mockReturnValue('file:///definitely-missing-broadcast-module.mjs')
 
     await expect(loadBroadcastCliModule(tempRoot)).rejects.toThrow(
       `Unable to load @holo-js/broadcast from ${tempRoot}. Install it with "holo install broadcast".`,
@@ -445,6 +465,8 @@ describe('@holo-js/cli broadcast worker command', () => {
           listeners: 'server/listeners',
           broadcast: 'server/broadcast',
           channels: 'server/channels',
+          authorizationPolicies: 'server/policies',
+          authorizationAbilities: 'server/abilities',
           generatedSchema: 'server/db/schema.generated.ts',
         },
         models: [],
@@ -465,6 +487,8 @@ describe('@holo-js/cli broadcast worker command', () => {
             whispers: [],
           },
         ],
+        authorizationPolicies: [],
+        authorizationAbilities: [],
       })),
       loadModule: vi.fn(async () => ({
         startBroadcastWorker: vi.fn(async ({

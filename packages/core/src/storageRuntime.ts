@@ -1,5 +1,6 @@
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { LoadedHoloConfig, HoloConfigMap } from '@holo-js/config'
 
 type StorageBackend = {
@@ -73,11 +74,28 @@ async function importOptionalModule<TModule>(specifier: string): Promise<TModule
 
     return await import(/* webpackIgnore: true */ specifier) as TModule
   } catch (error) {
+    const message = error && typeof error === 'object' && 'message' in error
+      && typeof (error as { message?: unknown }).message === 'string'
+      ? (error as { message: string }).message
+      : ''
+    const resolvedSpecifier = specifier.startsWith('file://')
+      ? fileURLToPath(specifier)
+      : specifier
+    const failedTarget = message.match(/Cannot find package '([^']+)'|Cannot find module '([^']+)'|Failed to load url ([^ ]+)/)?.slice(1)
+      .find((value): value is string => typeof value === 'string')
+    const matchesRequestedTarget = failedTarget === specifier || failedTarget === resolvedSpecifier
     if (
       error
       && typeof error === 'object'
-      && 'code' in error
-      && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
+      && (
+        ('code' in error && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND')
+        // Node reports missing ESM packages as "Cannot find package '<specifier>'".
+        || (message.startsWith('Cannot find package \'') && matchesRequestedTarget)
+        // Node reports missing CJS/URL imports as "Cannot find module '<specifier>'".
+        || (message.startsWith('Cannot find module \'') && matchesRequestedTarget)
+        // Vite reports unresolved optional imports as "Failed to load url <specifier> ... Does the file exist?".
+        || (message.includes('Does the file exist?') && message.startsWith('Failed to load url ') && matchesRequestedTarget)
+      )
     ) {
       return undefined
     }

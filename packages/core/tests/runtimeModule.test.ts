@@ -5,6 +5,12 @@ import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runtimeModuleInternals } from '../src/runtimeModule'
 
+vi.mock('esbuild', () => ({
+  default: {
+    build: vi.fn(async () => ({ warnings: [], outputFiles: [] })),
+  },
+}))
+
 const tempDirs: string[] = []
 
 async function createTempProject(): Promise<string> {
@@ -60,6 +66,37 @@ describe('@holo-js/core runtime module helpers', () => {
     expect(loaded.value).toBe(42)
   })
 
+  it('imports runtime modules through the webpackIgnore branch outside Vitest', async () => {
+    const projectRoot = await createTempProject()
+    const entryPath = join(projectRoot, 'module.mjs')
+
+    await writeFile(entryPath, 'export default "loaded"\nexport const value = 42\n', 'utf8')
+
+    const originalVitest = process.env.VITEST
+    delete process.env.VITEST
+    try {
+      const loaded = await runtimeModuleInternals.importModule<{
+        default: string
+        value: number
+      }>(pathToFileURL(entryPath).href)
+
+      expect(loaded.default).toBe('loaded')
+      expect(loaded.value).toBe(42)
+    } finally {
+      if (typeof originalVitest === 'string') {
+        process.env.VITEST = originalVitest
+      } else {
+        delete process.env.VITEST
+      }
+    }
+  })
+
+  it('returns the default esbuild export when the imported module does not expose build directly', async () => {
+    await expect(runtimeModuleInternals.loadEsbuild()).resolves.toEqual(expect.objectContaining({
+      build: expect.any(Function),
+    }))
+  })
+
   it('surfaces bundled runtime build failures clearly', async () => {
     const projectRoot = await createTempProject()
     const entryPath = join(projectRoot, 'server/jobs/report.ts')
@@ -82,6 +119,18 @@ describe('@holo-js/core runtime module helpers', () => {
     )
 
     vi.spyOn(runtimeModuleInternals, 'runEsbuild').mockRejectedValueOnce('boom')
+    await expect(runtimeModuleInternals.bundleRuntimeModule(projectRoot, entryPath)).rejects.toThrow(
+      `Failed to load ${entryPath}.`,
+    )
+
+    vi.spyOn(runtimeModuleInternals, 'runEsbuild').mockRejectedValueOnce({})
+    await expect(runtimeModuleInternals.bundleRuntimeModule(projectRoot, entryPath)).rejects.toThrow(
+      `Failed to load ${entryPath}.`,
+    )
+
+    vi.spyOn(runtimeModuleInternals, 'runEsbuild').mockRejectedValueOnce({
+      errors: 'boom',
+    })
     await expect(runtimeModuleInternals.bundleRuntimeModule(projectRoot, entryPath)).rejects.toThrow(
       `Failed to load ${entryPath}.`,
     )

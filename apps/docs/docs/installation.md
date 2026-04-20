@@ -44,7 +44,7 @@ The interactive flow asks for:
 - database driver: `sqlite`, `mysql`, or `postgres`
 - package manager: `bun`, `npm`, `pnpm`, or `yarn`
 - storage default disk: `local` or `public`
-- optional packages: `validation`, `forms`, `security`, `notifications`, `mail`, `storage`, `events`, `queue`, `auth`, or none
+- optional packages: `validation`, `forms`, `security`, `notifications`, `mail`, `storage`, `events`, `queue`, `auth`, `authorization`, or none
 
 ## Create a project non-interactively
 
@@ -103,11 +103,17 @@ instead of resolving `create-holo-js`.
 
 Use the non-interactive flags for CI, templates, or internal automation.
 
-`forms`, `validation`, `security`, `notifications`, `mail`, `storage`, `events`, `queue`, and `auth` are optional packages. Add them during scaffolding only if the
+`forms`, `validation`, `security`, `notifications`, `mail`, `storage`, `events`, `queue`, `auth`, and `authorization` are optional packages. Add them during scaffolding only if the
 app needs them.
 
 Example optional package sets include `--package forms,validation,notifications`,
-`--package forms,validation,mail`, and `--package forms,validation,security`.
+`--package forms,validation,mail`, `--package forms,validation,security`, and `--package authorization`.
+
+Authorization can also be installed after scaffolding:
+
+```bash
+bunx holo install authorization
+```
 
 Broadcast setup is installed after scaffolding:
 

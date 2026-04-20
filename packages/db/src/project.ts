@@ -11,6 +11,8 @@ export interface HoloProjectPaths {
   jobs: string
   events: string
   listeners: string
+  authorizationPolicies: string
+  authorizationAbilities: string
 }
 
 export interface HoloProjectConnectionConfig {
@@ -51,6 +53,8 @@ export const DEFAULT_HOLO_PROJECT_PATHS: Readonly<HoloProjectPaths> = Object.fre
   jobs: 'server/jobs',
   events: 'server/events',
   listeners: 'server/listeners',
+  authorizationPolicies: 'server/policies',
+  authorizationAbilities: 'server/abilities',
 })
 
 export interface NormalizedHoloProjectConfig {

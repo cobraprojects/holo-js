@@ -739,6 +739,22 @@ export default {
     expect(await readFile(join(authRoot, 'server/models/User.ts'), 'utf8')).toContain('hidden: [\'password\']')
     expect((await readdir(join(authRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(6)
 
+    const authorizationRoot = join(baseRoot, 'authorization-runtime-app')
+    await projectInternals.scaffoldProject(authorizationRoot, {
+      projectName: 'Authorization Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['authorization'],
+    })
+
+    expect(await readFile(join(authorizationRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/authorization": "${expectedHoloPackageRange}"`)
+    expect((await stat(join(authorizationRoot, 'server/policies'))).isDirectory()).toBe(true)
+    expect((await stat(join(authorizationRoot, 'server/abilities'))).isDirectory()).toBe(true)
+    expect(await readFile(join(authorizationRoot, 'server/policies/README.md'), 'utf8')).toContain('Authorization Policies')
+    expect(await readFile(join(authorizationRoot, 'server/abilities/README.md'), 'utf8')).toContain('Authorization Abilities')
+
     const mailRoot = join(baseRoot, 'mail-runtime-app')
     await projectInternals.scaffoldProject(mailRoot, {
       projectName: 'Mail Runtime App',
@@ -953,7 +969,19 @@ export default {
     )).toBe(pathToFileURL('/tmp/.bun/install/cache/@holo-js/queue/dist/index.mjs').href)
     expect(projectInternals.resolveProjectPackageImportSpecifier('/tmp/project', '@holo-js/queue', () => {
       throw Object.assign(new Error('missing'), { code: 'MODULE_NOT_FOUND' })
-    })).toBe('@holo-js/queue')
+    })).toContain('/packages/queue/dist/index.mjs')
+    expect(projectInternals.resolveProjectPackageImportSpecifier('/tmp/project', '@holo-js/security/drivers/redis-adapter', () => {
+      throw Object.assign(new Error('missing'), { code: 'MODULE_NOT_FOUND' })
+    })).toContain('/packages/security/dist/drivers/redis-adapter.mjs')
+    expect(projectInternals.resolveProjectPackageImportSpecifier('/tmp/project', 'left-pad', () => {
+      throw Object.assign(new Error('missing'), { code: 'MODULE_NOT_FOUND' })
+    })).toBe('left-pad')
+    expect(projectInternals.resolveProjectPackageImportSpecifier('/tmp/project', '@holo-js/', () => {
+      throw Object.assign(new Error('missing'), { code: 'MODULE_NOT_FOUND' })
+    })).toBe('@holo-js/')
+    expect(projectInternals.resolveProjectPackageImportSpecifier('/tmp/project', '@holo-js/not-a-real-package', () => {
+      throw Object.assign(new Error('missing'), { code: 'MODULE_NOT_FOUND' })
+    })).toBe('@holo-js/not-a-real-package')
     expect(projectInternals.inferDatabaseDriverFromUrl('postgres://localhost/app')).toBe('postgres')
     expect(projectInternals.inferDatabaseDriverFromUrl('mysql2://localhost/app')).toBe('mysql')
     expect(projectInternals.inferDatabaseDriverFromUrl('./storage/database.sqlite')).toBe('sqlite')
@@ -1081,10 +1109,12 @@ export default {
     expect(projectInternals.isSupportedScaffoldOptionalPackage('forms')).toBe(true)
     expect(projectInternals.isSupportedScaffoldOptionalPackage('storage')).toBe(true)
     expect(projectInternals.isSupportedScaffoldOptionalPackage('auth')).toBe(true)
+    expect(projectInternals.isSupportedScaffoldOptionalPackage('authorization')).toBe(true)
     expect(projectInternals.normalizeScaffoldOptionalPackages(['forms'])).toEqual(['forms', 'validation'])
     expect(projectInternals.normalizeScaffoldOptionalPackages(['validation', 'forms', 'validation'])).toEqual(['forms', 'validation'])
-    expect(projectInternals.normalizeScaffoldOptionalPackages(['validate', 'form', 'storage', 'queue', 'events', 'auth'])).toEqual([
+    expect(projectInternals.normalizeScaffoldOptionalPackages(['validate', 'form', 'storage', 'queue', 'events', 'auth', 'authorization'])).toEqual([
       'auth',
+      'authorization',
       'events',
       'forms',
       'queue',
@@ -1330,6 +1360,80 @@ export default defineAppConfig({
     expect(rerun.status).toBe(0)
     expect(rerun.stdout).toContain('Auth support is already installed.')
   }, 30000)
+
+  it('installs authorization support without forcing auth and is idempotent', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    const first = await projectInternals.installAuthorizationIntoProject(projectRoot)
+    expect(first).toMatchObject({
+      updatedPackageJson: true,
+      createdPoliciesDirectory: true,
+      createdAbilitiesDirectory: true,
+      createdPoliciesReadme: true,
+      createdAbilitiesReadme: true,
+    })
+
+    const second = await projectInternals.installAuthorizationIntoProject(projectRoot)
+    expect(second).toEqual({
+      updatedPackageJson: false,
+      createdPoliciesDirectory: false,
+      createdAbilitiesDirectory: false,
+      createdPoliciesReadme: false,
+      createdAbilitiesReadme: false,
+    })
+
+    const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    expect(packageJson.dependencies?.['@holo-js/authorization']).toBe(expectedHoloPackageRange)
+    expect(packageJson.dependencies?.['@holo-js/auth']).toBeUndefined()
+    expect((await stat(join(projectRoot, 'server/policies'))).isDirectory()).toBe(true)
+    expect((await stat(join(projectRoot, 'server/abilities'))).isDirectory()).toBe(true)
+    expect(await readFile(join(projectRoot, 'server/policies/README.md'), 'utf8')).toContain('Authorization Policies')
+    expect(await readFile(join(projectRoot, 'server/abilities/README.md'), 'utf8')).toContain('Authorization Abilities')
+  })
+
+  it('installs authorization support through the CLI and is idempotent', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    const first = runCliProcess(projectRoot, ['install', 'authorization'])
+
+    expect(first.status).toBe(0)
+    expect(first.stdout).toContain('Installed authorization support.')
+    expect(first.stdout).toContain('  - updated package.json')
+    expect(first.stdout).toContain('  - created server/policies')
+    expect(first.stdout).toContain('  - created server/abilities')
+    expect(first.stdout).toContain('  - created server/policies/README.md')
+    expect(first.stdout).toContain('  - created server/abilities/README.md')
+
+    const second = runCliProcess(projectRoot, ['install', 'authorization'])
+
+    expect(second.status).toBe(0)
+    expect(second.stdout).toContain('Authorization support is already installed.')
+  }, 30000)
+
+  it('keeps auth installed when authorization is added afterward', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await projectInternals.installAuthIntoProject(projectRoot)
+    const result = await projectInternals.installAuthorizationIntoProject(projectRoot)
+
+    expect(result).toMatchObject({
+      updatedPackageJson: true,
+      createdPoliciesDirectory: true,
+      createdAbilitiesDirectory: true,
+    })
+
+    const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    expect(packageJson.dependencies?.['@holo-js/auth']).toBe(expectedHoloPackageRange)
+    expect(packageJson.dependencies?.['@holo-js/session']).toBe(expectedHoloPackageRange)
+    expect(packageJson.dependencies?.['@holo-js/authorization']).toBe(expectedHoloPackageRange)
+  })
 
   it('does not scaffold broadcast auth files when installing auth without broadcast support', async () => {
     const projectRoot = await createTempProject()
@@ -1757,7 +1861,7 @@ export default defineAppConfig({
 
     const unsupportedTarget = runCliProcess(projectRoot, ['install', 'mailer'])
     expect(unsupportedTarget.status).toBe(1)
-    expect(unsupportedTarget.stderr).toContain('Unsupported install target: mailer. Expected one of queue, events, auth, notifications, mail, broadcast, security.')
+    expect(unsupportedTarget.stderr).toContain('Unsupported install target: mailer. Expected one of queue, events, auth, authorization, notifications, mail, broadcast, security.')
 
     const unsupportedDriver = runCliProcess(projectRoot, ['install', 'queue', '--driver', 'sqs'])
     expect(unsupportedDriver.status).toBe(1)
@@ -1770,6 +1874,10 @@ export default defineAppConfig({
     const authDriver = runCliProcess(projectRoot, ['install', 'auth', '--driver', 'redis'])
     expect(authDriver.status).toBe(1)
     expect(authDriver.stderr).toContain('The auth installer does not support --driver.')
+
+    const authorizationDriver = runCliProcess(projectRoot, ['install', 'authorization', '--driver', 'redis'])
+    expect(authorizationDriver.status).toBe(1)
+    expect(authorizationDriver.stderr).toContain('The authorization installer does not support --driver.')
 
     const notificationsDriver = runCliProcess(projectRoot, ['install', 'notifications', '--driver', 'redis'])
     expect(notificationsDriver.status).toBe(1)
@@ -1852,6 +1960,10 @@ export default defineAppConfig({
       flags: { driver: 'redis' },
     }, commandContext as never)).rejects.toThrow('The auth installer does not support --driver.')
     await expect(installCommand?.prepare?.({
+      args: ['authorization'],
+      flags: { driver: 'redis' },
+    }, commandContext as never)).rejects.toThrow('The authorization installer does not support --driver.')
+    await expect(installCommand?.prepare?.({
       args: ['notifications'],
       flags: {},
     }, commandContext as never)).resolves.toEqual({
@@ -1928,6 +2040,20 @@ export default defineAppConfig({
       loadProject: async () => ({ config: defaultProjectConfig() }),
     } as never)).resolves.toBeUndefined()
     expect(installCommandIo.read().stdout).toContain('Events support is already installed.')
+
+    await expect(projectInternals.installAuthorizationIntoProject(projectRoot)).resolves.toMatchObject({
+      updatedPackageJson: true,
+      createdPoliciesDirectory: true,
+      createdAbilitiesDirectory: true,
+    })
+    await expect(installCommand?.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: ['authorization'],
+      flags: {},
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    } as never)).resolves.toBeUndefined()
+    expect(installCommandIo.read().stdout).toContain('Authorization support is already installed.')
 
     await expect(projectInternals.installQueueIntoProject(projectRoot, { driver: 'database' })).resolves.toEqual({
       createdQueueConfig: true,
@@ -6521,6 +6647,13 @@ export default defineEvent({ name: 'audit.activity' })
       updatedEnv: true,
       updatedEnvExample: true,
     }))
+    const installAuthorizationIntoProject = vi.fn(async () => ({
+      updatedPackageJson: true,
+      createdPoliciesDirectory: true,
+      createdAbilitiesDirectory: true,
+      createdPoliciesReadme: true,
+      createdAbilitiesReadme: true,
+    }))
     const installEventsIntoProject = vi.fn(async () => ({
       updatedPackageJson: true,
       createdEventsDirectory: true,
@@ -6586,6 +6719,7 @@ export default defineEvent({ name: 'audit.activity' })
       return {
         ...actual,
         installAuthIntoProject,
+        installAuthorizationIntoProject,
         installEventsIntoProject,
         installMailIntoProject,
         installNotificationsIntoProject,
@@ -6751,6 +6885,13 @@ export default defineEvent({ name: 'audit.activity' })
       await commands.find(command => command.name === 'install')!.run({
         projectRoot,
         cwd: projectRoot,
+        args: ['authorization'],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'install')!.run({
+        projectRoot,
+        cwd: projectRoot,
         args: ['notifications'],
         flags: {},
         loadProject: baseContext.loadProject,
@@ -6838,6 +6979,7 @@ export default defineEvent({ name: 'audit.activity' })
         workos: false,
         clerk: false,
       })
+      expect(installAuthorizationIntoProject).toHaveBeenCalledWith(projectRoot)
       expect(installEventsIntoProject).toHaveBeenCalledWith(projectRoot)
       expect(installMailIntoProject).toHaveBeenCalledWith(projectRoot)
       expect(installNotificationsIntoProject).toHaveBeenCalledWith(projectRoot)
@@ -6856,6 +6998,8 @@ export default defineEvent({ name: 'audit.activity' })
       expect(io.read().stdout).toContain('  - updated .env.example')
       expect(io.read().stdout).toContain('  - created config/mail.ts')
       expect(io.read().stdout).toContain('  - created config/notifications.ts')
+      expect(io.read().stdout).toContain('  - created server/policies')
+      expect(io.read().stdout).toContain('  - created server/abilities')
       expect(scaffoldProject).toHaveBeenCalledWith(resolve(projectRoot, 'LazyProject'), {
         projectName: 'LazyProject',
         framework: 'nuxt',
@@ -10286,6 +10430,8 @@ export default defineDatabaseConfig({
         seeders: 'server/db/seeders',
         commands: 'server/commands',
         jobs: 'server/jobs',
+        authorizationPolicies: 'server/policies',
+        authorizationAbilities: 'server/abilities',
         generatedSchema: 'server/db/schema.generated.ts',
       },
       models: [],
@@ -10293,6 +10439,8 @@ export default defineDatabaseConfig({
       seeders: [],
       commands: [],
       jobs: [],
+      authorizationPolicies: [],
+      authorizationAbilities: [],
     }, null, 2)}\n`)
     await writeProjectFile(projectRoot, 'server/jobs/reports/send.mjs', `
 import { defineJob } from '@holo-js/queue'
@@ -10336,6 +10484,8 @@ export default defineJob({
         listeners: 'server/listeners',
         broadcast: 'server/broadcast',
         channels: 'server/channels',
+        authorizationPolicies: 'server/policies',
+        authorizationAbilities: 'server/abilities',
         generatedSchema: 'server/db/schema.generated.ts',
       },
       models: [],
@@ -10353,6 +10503,8 @@ export default defineJob({
         params: ['orderId'],
         whispers: [],
       }],
+      authorizationPolicies: [],
+      authorizationAbilities: [],
     }
     const freshRegistry = {
       ...staleRegistry,
@@ -10464,6 +10616,8 @@ export default defineJob({
             seeders: 'server/db/seeders',
             commands: 'server/commands',
             jobs: 'server/jobs',
+            authorizationPolicies: 'server/policies',
+            authorizationAbilities: 'server/abilities',
             generatedSchema: 'server/db/schema.generated.ts',
           },
           models: [],
@@ -10475,6 +10629,8 @@ export default defineJob({
             name: 'broken',
             queue: 'default',
           }],
+          authorizationPolicies: [],
+          authorizationAbilities: [],
         })),
         bundleProjectModule: vi.fn(async () => ({
           path: join(projectRoot, 'server/jobs/broken.mjs'),

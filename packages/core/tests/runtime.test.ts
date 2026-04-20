@@ -540,7 +540,7 @@ describe('@holo-js/core portable runtime', () => {
     const importOptionalModule = vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(
       async <TModule>(specifier: string, options?: { readonly projectRoot?: string }): Promise<TModule | undefined> => {
         if (specifier === '@holo-js/notifications') {
-          throw new Error('notifications should not load without config')
+          return undefined
         }
 
         return await import(specifier) as TModule
@@ -2569,6 +2569,107 @@ export default defineSecurityConfig({
     }
   })
 
+  it('closes a newly created security rate-limit store when security runtime boot fails', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeSecurityConfig(root)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      const configureSecurityRuntime = vi.fn()
+      const closeNextStore = vi.fn(async () => {})
+      const initialStore = {
+        hit: vi.fn(async () => ({
+          limited: false,
+          snapshot: {
+            limiter: 'login',
+            key: 'user:7',
+            attempts: 1,
+            maxAttempts: 5,
+            remainingAttempts: 4,
+            expiresAt: new Date('2026-04-16T12:01:00.000Z'),
+          },
+          retryAfterSeconds: 60,
+        })),
+        clear: vi.fn(async () => true),
+        clearByPrefix: vi.fn(async () => 0),
+        clearAll: vi.fn(async () => 0),
+      }
+      const nextStore = {
+        hit: vi.fn(async () => ({
+          limited: false,
+          snapshot: {
+            limiter: 'login',
+            key: 'user:7',
+            attempts: 1,
+            maxAttempts: 5,
+            remainingAttempts: 4,
+            expiresAt: new Date('2026-04-16T12:01:00.000Z'),
+          },
+          retryAfterSeconds: 60,
+        })),
+        clear: vi.fn(async () => true),
+        clearByPrefix: vi.fn(async () => 0),
+        clearAll: vi.fn(async () => 0),
+        close: closeNextStore,
+      }
+      const createRateLimitStoreFromConfig = vi.fn(() => (bootPhase === 'initial' ? initialStore : nextStore))
+      let bootPhase: 'initial' | 'failing' = 'initial'
+
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
+        if (specifier === '@holo-js/security') {
+          return {
+            configureSecurityRuntime,
+            defineSecurityConfig(config: unknown) {
+              return config
+            },
+            createRateLimitStoreFromConfig,
+            getSecurityRuntimeBindings: () => bootPhase === 'initial'
+              ? undefined
+              : { rateLimitStore: initialStore },
+            ip() {
+              return '203.0.113.7'
+            },
+            limit: {
+              perMinute() {
+                return {
+                  by(resolver: unknown) {
+                    return {
+                      maxAttempts: 5,
+                      decaySeconds: 60,
+                      key: resolver,
+                    }
+                  },
+                }
+              },
+            },
+            resetSecurityRuntime: vi.fn(),
+          } as never
+        }
+
+        return await originalImportOptionalModule(specifier, options)
+      })
+
+      const runtime = await portable.createHolo(root)
+      await expect(runtime.initialize()).resolves.toBeUndefined()
+
+      bootPhase = 'failing'
+      configureSecurityRuntime.mockImplementation(() => {
+        throw new Error('security boot failed')
+      })
+
+      await expect(portable.reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))).rejects.toThrow('security boot failed')
+      expect(createRateLimitStoreFromConfig).toHaveBeenCalledTimes(2)
+      expect(closeNextStore).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
   it('provides the security runtime with an auth-aware default rate-limit key resolver', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
@@ -2580,7 +2681,9 @@ export default defineSecurityConfig({
       const portable = await import('../src/portable')
       const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
       const configureSecurityRuntime = vi.fn()
-      const authId = vi.fn(async () => 123)
+      const authId = vi.fn()
+        .mockResolvedValueOnce(123)
+        .mockResolvedValueOnce(null)
 
       vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
         if (specifier === '@holo-js/security') {
@@ -2652,7 +2755,181 @@ export default defineSecurityConfig({
 
       expect(typeof bindings?.defaultKeyResolver).toBe('function')
       await expect(bindings?.defaultKeyResolver?.(new Request('https://app.test/login'))).resolves.toBe('user:123')
-      expect(authId).toHaveBeenCalledTimes(1)
+      await expect(bindings?.defaultKeyResolver?.(new Request('https://app.test/login'))).resolves.toBeUndefined()
+      expect(authId).toHaveBeenCalledTimes(2)
+
+      await runtime.shutdown()
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
+  it('returns undefined from the default security key resolver when auth runtime id lookup fails', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeSecurityConfig(root)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      const configureSecurityRuntime = vi.fn()
+
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
+        if (specifier === '@holo-js/security') {
+          return {
+            configureSecurityRuntime,
+            defineSecurityConfig(config: unknown) {
+              return config
+            },
+            createRateLimitStoreFromConfig() {
+              return {
+                hit: vi.fn(async () => ({
+                  limited: false,
+                  snapshot: {
+                    limiter: '',
+                    key: 'custom',
+                    attempts: 1,
+                    maxAttempts: 5,
+                    remainingAttempts: 4,
+                    expiresAt: new Date('2026-04-16T12:01:00.000Z'),
+                  },
+                  retryAfterSeconds: 60,
+                })),
+                clear: vi.fn(async () => true),
+                clearByPrefix: vi.fn(async () => 0),
+                clearAll: vi.fn(async () => 0),
+              }
+            },
+            getSecurityRuntimeBindings: () => undefined,
+            ip() {
+              return '203.0.113.7'
+            },
+            limit: {
+              perMinute() {
+                return {
+                  by(resolver: unknown) {
+                    return {
+                      maxAttempts: 5,
+                      decaySeconds: 60,
+                      key: resolver,
+                    }
+                  },
+                }
+              },
+            },
+            resetSecurityRuntime: vi.fn(),
+          } as never
+        }
+
+        if (specifier === '@holo-js/auth') {
+          return {
+            getAuthRuntime() {
+              return {
+                id: vi.fn(async () => {
+                  throw new Error('auth id failure')
+                }),
+              }
+            },
+            resetAuthRuntime: vi.fn(),
+          } as never
+        }
+
+        return await originalImportOptionalModule(specifier, options)
+      })
+
+      const runtime = await portable.createHolo(root)
+      await runtime.initialize()
+
+      const bindings = configureSecurityRuntime.mock.calls[0]?.[0] as
+        | { readonly defaultKeyResolver?: (request: Request) => Promise<string | number | null | undefined> }
+        | undefined
+
+      await expect(bindings?.defaultKeyResolver?.(new Request('https://app.test/login'))).resolves.toBeUndefined()
+
+      await runtime.shutdown()
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
+  it('returns undefined from the default security key resolver when auth is unavailable', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeSecurityConfig(root)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      const configureSecurityRuntime = vi.fn()
+
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
+        if (specifier === '@holo-js/security') {
+          return {
+            configureSecurityRuntime,
+            defineSecurityConfig(config: unknown) {
+              return config
+            },
+            createRateLimitStoreFromConfig() {
+              return {
+                hit: vi.fn(async () => ({
+                  limited: false,
+                  snapshot: {
+                    limiter: '',
+                    key: 'custom',
+                    attempts: 1,
+                    maxAttempts: 5,
+                    remainingAttempts: 4,
+                    expiresAt: new Date('2026-04-16T12:01:00.000Z'),
+                  },
+                  retryAfterSeconds: 60,
+                })),
+                clear: vi.fn(async () => true),
+                clearByPrefix: vi.fn(async () => 0),
+                clearAll: vi.fn(async () => 0),
+              }
+            },
+            getSecurityRuntimeBindings: () => undefined,
+            ip() {
+              return '203.0.113.7'
+            },
+            limit: {
+              perMinute() {
+                return {
+                  by(resolver: unknown) {
+                    return {
+                      maxAttempts: 5,
+                      decaySeconds: 60,
+                      key: resolver,
+                    }
+                  },
+                }
+              },
+            },
+            resetSecurityRuntime: vi.fn(),
+          } as never
+        }
+
+        if (specifier === '@holo-js/auth') {
+          return undefined
+        }
+
+        return await originalImportOptionalModule(specifier, options)
+      })
+
+      const runtime = await portable.createHolo(root)
+      await runtime.initialize()
+
+      const bindings = configureSecurityRuntime.mock.calls[0]?.[0] as
+        | { readonly defaultKeyResolver?: (request: Request) => Promise<string | number | null | undefined> }
+        | undefined
+
+      await expect(bindings?.defaultKeyResolver?.(new Request('https://app.test/login'))).resolves.toBeUndefined()
 
       await runtime.shutdown()
     } finally {
@@ -4993,6 +5270,8 @@ describe('@holo-js/core registry loader', () => {
         jobs: 'server/jobs',
         events: 'server/events',
         listeners: 'server/listeners',
+        authorizationPolicies: 'server/policies',
+        authorizationAbilities: 'server/abilities',
         generatedSchema: 'server/db/schema.ts',
       },
       models: [],
@@ -5002,6 +5281,8 @@ describe('@holo-js/core registry loader', () => {
       jobs: [],
       events: [],
       listeners: [],
+      authorizationPolicies: [],
+      authorizationAbilities: [],
     })).toBe(true)
 
     await expect(loadGeneratedProjectRegistry(root)).resolves.toEqual({
@@ -5017,6 +5298,8 @@ describe('@holo-js/core registry loader', () => {
         listeners: 'server/listeners',
         broadcast: 'server/broadcast',
         channels: 'server/channels',
+        authorizationPolicies: 'server/policies',
+        authorizationAbilities: 'server/abilities',
         generatedSchema: 'server/db/schema.ts',
       },
       models: [],
@@ -5028,6 +5311,8 @@ describe('@holo-js/core registry loader', () => {
       listeners: [],
       broadcast: [],
       channels: [],
+      authorizationPolicies: [],
+      authorizationAbilities: [],
     })
   })
 })

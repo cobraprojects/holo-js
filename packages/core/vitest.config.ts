@@ -16,6 +16,7 @@ export default defineConfig({
       { find: '@holo-js/auth-social-linkedin', replacement: resolve(__dirname, '../auth-social-linkedin/src/index.ts') },
       { find: '@holo-js/auth-workos', replacement: resolve(__dirname, '../auth-workos/src/index.ts') },
       { find: '@holo-js/auth-clerk', replacement: resolve(__dirname, '../auth-clerk/src/index.ts') },
+      { find: '@holo-js/authorization', replacement: resolve(__dirname, '../authorization/src/index.ts') },
       { find: '@holo-js/config', replacement: resolve(__dirname, '../config/src/index.ts') },
       { find: '@holo-js/broadcast', replacement: resolve(__dirname, '../broadcast/src/index.ts') },
       { find: '@holo-js/db', replacement: resolve(__dirname, '../db/src/index.ts') },

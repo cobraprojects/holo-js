@@ -378,6 +378,16 @@
         "vitest": "^2.1.8",
       },
     },
+    "packages/authorization": {
+      "name": "@holo-js/authorization",
+      "version": "0.1.2",
+      "devDependencies": {
+        "@types/node": "^22.10.2",
+        "tsup": "^8.3.5",
+        "typescript": "^5.7.2",
+        "vitest": "^2.1.8",
+      },
+    },
     "packages/broadcast": {
       "name": "@holo-js/broadcast",
       "version": "0.1.2",
@@ -1150,6 +1160,8 @@
     "@holo-js/auth-social-linkedin": ["@holo-js/auth-social-linkedin@workspace:packages/auth-social-linkedin"],
 
     "@holo-js/auth-workos": ["@holo-js/auth-workos@workspace:packages/auth-workos"],
+
+    "@holo-js/authorization": ["@holo-js/authorization@workspace:packages/authorization"],
 
     "@holo-js/broadcast": ["@holo-js/broadcast@workspace:packages/broadcast"],
 

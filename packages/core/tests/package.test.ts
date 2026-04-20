@@ -22,6 +22,7 @@ describe('@holo-js/core package boundaries', () => {
       '@holo-js/auth-clerk',
       '@holo-js/auth-social',
       '@holo-js/auth-workos',
+      '@holo-js/authorization',
       '@holo-js/mail',
       '@holo-js/notifications',
       '@holo-js/queue',

@@ -95,6 +95,21 @@ export type GeneratedChannelRegistryEntry = {
   readonly whispers: readonly string[]
 }
 
+export type GeneratedAuthorizationPolicyRegistryEntry = {
+  readonly sourcePath: string
+  readonly name: string
+  readonly exportName?: string
+  readonly target: string
+  readonly classActions: readonly string[]
+  readonly recordActions: readonly string[]
+}
+
+export type GeneratedAuthorizationAbilityRegistryEntry = {
+  readonly sourcePath: string
+  readonly name: string
+  readonly exportName?: string
+}
+
 export type GeneratedProjectRegistry = {
   readonly version: 1
   readonly generatedAt: string
@@ -108,6 +123,8 @@ export type GeneratedProjectRegistry = {
     readonly listeners: string
     readonly broadcast: string
     readonly channels: string
+    readonly authorizationPolicies: string
+    readonly authorizationAbilities: string
     readonly generatedSchema: string
   }
   readonly models: readonly GeneratedModelRegistryEntry[]
@@ -119,6 +136,8 @@ export type GeneratedProjectRegistry = {
   readonly listeners: readonly GeneratedListenerRegistryEntry[]
   readonly broadcast: readonly GeneratedBroadcastRegistryEntry[]
   readonly channels: readonly GeneratedChannelRegistryEntry[]
+  readonly authorizationPolicies: readonly GeneratedAuthorizationPolicyRegistryEntry[]
+  readonly authorizationAbilities: readonly GeneratedAuthorizationAbilityRegistryEntry[]
 }
 
 export type SupportedScaffoldFramework = 'nuxt' | 'next' | 'sveltekit'
@@ -126,7 +145,7 @@ export type SupportedScaffoldFramework = 'nuxt' | 'next' | 'sveltekit'
 export type SupportedScaffoldPackageManager = 'bun' | 'npm' | 'pnpm' | 'yarn'
 
 export type SupportedScaffoldStorageDisk = 'local' | 'public'
-export type SupportedScaffoldOptionalPackage = 'storage' | 'events' | 'queue' | 'validation' | 'forms' | 'auth' | 'notifications' | 'mail' | 'security'
+export type SupportedScaffoldOptionalPackage = 'storage' | 'events' | 'queue' | 'validation' | 'forms' | 'auth' | 'authorization' | 'notifications' | 'mail' | 'security'
 export type SupportedQueueInstallerDriver = 'sync' | 'redis' | 'database'
 export type SupportedAuthSocialProvider = 'google' | 'github' | 'discord' | 'facebook' | 'apple' | 'linkedin'
 export type AuthInstallerFeature = 'social' | 'workos' | 'clerk'
@@ -157,6 +176,20 @@ export type BroadcastDiscoveryModule = {
   isChannelDefinition(value: unknown): boolean
   broadcastInternals: {
     extractChannelPatternParamNames(pattern: string): readonly string[]
+  }
+}
+
+export type AuthorizationDiscoveryModule = {
+  isAuthorizationPolicyDefinition(value: unknown): boolean
+  isAuthorizationAbilityDefinition(value: unknown): boolean
+  authorizationInternals: {
+    getAuthorizationRuntimeState(): {
+      policiesByName: Map<string, unknown>
+      abilitiesByName: Map<string, unknown>
+    }
+    unregisterPolicyDefinition?(name: string): void
+    unregisterAbilityDefinition?(name: string): void
+    resetAuthorizationRuntimeState?(): void
   }
 }
 
@@ -200,6 +233,14 @@ export type AuthInstallResult = {
   readonly createdMigrationFiles: readonly string[]
   readonly updatedEnv: boolean
   readonly updatedEnvExample: boolean
+}
+
+export type AuthorizationInstallResult = {
+  readonly updatedPackageJson: boolean
+  readonly createdPoliciesDirectory: boolean
+  readonly createdAbilitiesDirectory: boolean
+  readonly createdPoliciesReadme: boolean
+  readonly createdAbilitiesReadme: boolean
 }
 
 export type NotificationsInstallResult = {
@@ -346,6 +387,9 @@ export const GENERATED_LISTENERS_PATH = join(GENERATED_ROOT, 'listeners.ts')
 export const GENERATED_BROADCAST_PATH = join(GENERATED_ROOT, 'broadcast.ts')
 export const GENERATED_CHANNELS_PATH = join(GENERATED_ROOT, 'channels.ts')
 export const GENERATED_BROADCAST_MANIFEST_PATH = join(GENERATED_ROOT, 'broadcast-manifest.ts')
+export const GENERATED_AUTHORIZATION_ROOT = join(GENERATED_ROOT, 'authorization')
+export const GENERATED_AUTHORIZATION_REGISTRY_PATH = join(GENERATED_AUTHORIZATION_ROOT, 'registry.ts')
+export const GENERATED_AUTHORIZATION_TYPES_PATH = join(GENERATED_AUTHORIZATION_ROOT, 'types.d.ts')
 export const GENERATED_CONFIG_TYPES_PATH = join(GENERATED_ROOT, 'config.d.ts')
 export const GENERATED_QUEUE_TYPES_PATH = join(GENERATED_ROOT, 'queue.d.ts')
 export const GENERATED_EVENT_TYPES_PATH = join(GENERATED_ROOT, 'events.d.ts')
@@ -358,7 +402,7 @@ export const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIO
 export const SUPPORTED_SCAFFOLD_FRAMEWORKS = ['nuxt', 'next', 'sveltekit'] as const
 export const SUPPORTED_SCAFFOLD_PACKAGE_MANAGERS = ['bun', 'npm', 'pnpm', 'yarn'] as const
 export const SUPPORTED_SCAFFOLD_STORAGE_DISKS = ['local', 'public'] as const
-export const SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms', 'auth', 'notifications', 'mail', 'security'] as const
+export const SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms', 'auth', 'authorization', 'notifications', 'mail', 'security'] as const
 export const SUPPORTED_QUEUE_INSTALLER_DRIVERS = ['sync', 'redis', 'database'] as const
 export const HOLO_EVENT_DEFINITION_MARKER = Symbol.for('holo-js.events.definition')
 export const HOLO_LISTENER_DEFINITION_MARKER = Symbol.for('holo-js.events.listener')

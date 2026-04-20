@@ -14,9 +14,11 @@ export {
   ensureHolo,
   getHolo,
   initializeHolo,
+  reconfigureOptionalHoloSubsystems,
   peekHolo,
   resetHoloRenderingRuntime,
   resetHoloRuntime,
+  resetOptionalHoloSubsystems,
   holoRuntimeInternals,
 } from './portable/holo'
 export {

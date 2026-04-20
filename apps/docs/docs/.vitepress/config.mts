@@ -72,6 +72,18 @@ const frameworkSidebar = [
     ],
   },
   {
+    text: 'Authorization',
+    items: [
+      { text: 'Overview', link: '/authorization/' },
+      { text: 'Policies', link: '/authorization/policies' },
+      { text: 'Abilities', link: '/authorization/abilities' },
+      { text: 'Standalone Mode', link: '/authorization/standalone-mode' },
+      { text: 'Auth Integration', link: '/authorization/auth-integrated-mode' },
+      { text: 'Jobs And Tests', link: '/authorization/jobs-and-tests' },
+      { text: '403 vs 404', link: '/authorization/errors' },
+    ],
+  },
+  {
     text: 'Queue',
     items: [
       { text: 'Getting Started', link: '/queue/' },

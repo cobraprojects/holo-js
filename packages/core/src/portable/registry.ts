@@ -68,6 +68,21 @@ export interface GeneratedChannelRegistryEntry {
   readonly whispers: readonly string[]
 }
 
+export interface GeneratedAuthorizationPolicyRegistryEntry {
+  readonly sourcePath: string
+  readonly name: string
+  readonly exportName?: string
+  readonly target: string
+  readonly classActions: readonly string[]
+  readonly recordActions: readonly string[]
+}
+
+export interface GeneratedAuthorizationAbilityRegistryEntry {
+  readonly sourcePath: string
+  readonly name: string
+  readonly exportName?: string
+}
+
 export interface GeneratedProjectRegistry {
   readonly version: 1
   readonly generatedAt: string
@@ -79,9 +94,11 @@ export interface GeneratedProjectRegistry {
     readonly jobs: string
     readonly events: string
     readonly listeners: string
-    readonly broadcast: string
-    readonly channels: string
-    readonly generatedSchema: string
+  readonly broadcast: string
+  readonly channels: string
+  readonly authorizationPolicies: string
+  readonly authorizationAbilities: string
+  readonly generatedSchema: string
   }
   readonly models: readonly GeneratedModelRegistryEntry[]
   readonly migrations: readonly GeneratedMigrationRegistryEntry[]
@@ -92,6 +109,8 @@ export interface GeneratedProjectRegistry {
   readonly listeners: readonly GeneratedListenerRegistryEntry[]
   readonly broadcast: readonly GeneratedBroadcastRegistryEntry[]
   readonly channels: readonly GeneratedChannelRegistryEntry[]
+  readonly authorizationPolicies: readonly GeneratedAuthorizationPolicyRegistryEntry[]
+  readonly authorizationAbilities: readonly GeneratedAuthorizationAbilityRegistryEntry[]
 }
 
 export interface GeneratedBroadcastManifestEvent {
@@ -144,6 +163,14 @@ function normalizeLegacyGeneratedProjectRegistry(value: Record<string, unknown>)
     paths.channels = 'server/channels'
   }
 
+  if (paths && typeof paths.authorizationPolicies !== 'string') {
+    paths.authorizationPolicies = 'server/policies'
+  }
+
+  if (paths && typeof paths.authorizationAbilities !== 'string') {
+    paths.authorizationAbilities = 'server/abilities'
+  }
+
   if (!Array.isArray(value.jobs)) {
     value.jobs = []
   }
@@ -162,6 +189,14 @@ function normalizeLegacyGeneratedProjectRegistry(value: Record<string, unknown>)
 
   if (!Array.isArray(value.channels)) {
     value.channels = []
+  }
+
+  if (!Array.isArray(value.authorizationPolicies)) {
+    value.authorizationPolicies = []
+  }
+
+  if (!Array.isArray(value.authorizationAbilities)) {
+    value.authorizationAbilities = []
   }
 }
 
@@ -182,6 +217,8 @@ function isGeneratedProjectRegistry(value: unknown): value is GeneratedProjectRe
     && Array.isArray(value.listeners)
     && Array.isArray(value.broadcast)
     && Array.isArray(value.channels)
+    && Array.isArray(value.authorizationPolicies)
+    && Array.isArray(value.authorizationAbilities)
 }
 
 export function resolveGeneratedProjectRegistryPath(projectRoot: string): string {

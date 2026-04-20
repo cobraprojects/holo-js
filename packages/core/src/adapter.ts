@@ -141,8 +141,12 @@ async function resolveProjectSourceSignature(projectRoot: string, envName: strin
     .map(entry => resolveFileStamp(resolve(projectRoot, entry.sourcePath))))
   const listenerStamps = await Promise.all((registry?.listeners ?? [])
     .map(entry => resolveFileStamp(resolve(projectRoot, entry.sourcePath))))
+  const authorizationPolicyStamps = await Promise.all((registry?.authorizationPolicies ?? [])
+    .map(entry => resolveFileStamp(resolve(projectRoot, entry.sourcePath))))
+  const authorizationAbilityStamps = await Promise.all((registry?.authorizationAbilities ?? [])
+    .map(entry => resolveFileStamp(resolve(projectRoot, entry.sourcePath))))
 
-  return [configStamp, registryStamp, ...envStamps, ...jobStamps, ...eventStamps, ...listenerStamps].join('||')
+  return [configStamp, registryStamp, ...envStamps, ...jobStamps, ...eventStamps, ...listenerStamps, ...authorizationPolicyStamps, ...authorizationAbilityStamps].join('||')
 }
 
 export function resolveHoloFrameworkOptions(

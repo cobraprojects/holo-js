@@ -10,6 +10,7 @@ import {
 import type { HoloAppCommand } from '../types'
 import { loadGeneratedProjectRegistry, writeGeneratedProjectRegistry } from './registry'
 import {
+  loadAuthorizationDiscoveryModule,
   loadBroadcastDiscoveryModule,
   importProjectModule,
   loadEventsDiscoveryModule,
@@ -20,8 +21,11 @@ import {
   COMMAND_FILE_PATTERN,
   MIGRATION_NAME_PATTERN,
   type CliModelReference,
+  type AuthorizationDiscoveryModule,
   type DiscoveredAppCommand,
   type GeneratedCommandRegistryEntry,
+  type GeneratedAuthorizationAbilityRegistryEntry,
+  type GeneratedAuthorizationPolicyRegistryEntry,
   type GeneratedBroadcastRegistryEntry,
   type GeneratedChannelRegistryEntry,
   type GeneratedEventRegistryEntry,
@@ -203,7 +207,7 @@ function normalizeCommandAliases(value: readonly string[] | undefined): readonly
 }
 
 function assertUniqueEntries(
-  kind: 'model' | 'migration' | 'seeder' | 'command' | 'job' | 'event' | 'listener' | 'broadcast' | 'channel',
+  kind: 'model' | 'migration' | 'seeder' | 'command' | 'job' | 'event' | 'listener' | 'broadcast' | 'channel' | 'policy' | 'ability',
   entries: readonly { name: string, sourcePath: string }[],
 ): void {
   const seen = new Map<string, string>()
@@ -316,6 +320,51 @@ function resolveListenerEventNamesForDiscovery(
 
     throw new Error('[Holo Events] Listener event references must resolve to explicit event names before discovery registration.')
   }))])
+}
+
+function resolveAuthorizationTargetName(target: object): string | undefined {
+  const modelFacadeTarget = target as { readonly definition?: { readonly name?: unknown } }
+  if (typeof modelFacadeTarget.definition?.name === 'string' && modelFacadeTarget.definition.name.trim()) {
+    return modelFacadeTarget.definition.name.trim()
+  }
+
+  const namedTarget = target as { readonly name?: unknown }
+  return typeof namedTarget.name === 'string' && namedTarget.name.trim()
+    ? namedTarget.name.trim()
+    : undefined
+}
+
+function captureAuthorizationDefinitionNames(definitions: ReadonlyMap<string, unknown>): Set<string> {
+  return new Set(definitions.keys())
+}
+
+function findAddedAuthorizationDefinitionNames(
+  definitions: ReadonlyMap<string, unknown>,
+  existingNames: ReadonlySet<string>,
+): readonly string[] {
+  return [...definitions.keys()].filter(name => !existingNames.has(name))
+}
+
+function unregisterAuthorizationDefinitionNames(
+  authorizationDiscovery: AuthorizationDiscoveryModule,
+  policyNames: readonly string[],
+  abilityNames: readonly string[],
+): void {
+  if (
+    typeof authorizationDiscovery.authorizationInternals.unregisterPolicyDefinition !== 'function'
+    || typeof authorizationDiscovery.authorizationInternals.unregisterAbilityDefinition !== 'function'
+  ) {
+    authorizationDiscovery.authorizationInternals.resetAuthorizationRuntimeState?.()
+    return
+  }
+
+  for (const policyName of policyNames) {
+    authorizationDiscovery.authorizationInternals.unregisterPolicyDefinition(policyName)
+  }
+
+  for (const abilityName of abilityNames) {
+    authorizationDiscovery.authorizationInternals.unregisterAbilityDefinition(abilityName)
+  }
 }
 
 function collectImportedBindingsBySource(sourceText: string): ReadonlyMap<string, string> {
@@ -491,6 +540,8 @@ export async function prepareProjectDiscovery(
   const channelsPath = resolveBroadcastArtifactsPath(config, 'channels')
   const broadcastRoot = resolve(projectRoot, broadcastPath)
   const channelsRoot = resolve(projectRoot, channelsPath)
+  const policiesRoot = resolve(projectRoot, config.paths.authorizationPolicies ?? 'server/policies')
+  const abilitiesRoot = resolve(projectRoot, config.paths.authorizationAbilities ?? 'server/abilities')
 
   const [modelFiles, migrationFiles, seederFiles, commandFiles, jobFiles, eventFiles, listenerFiles, broadcastFiles, channelFiles] = await Promise.all([
     collectFiles(modelsRoot),
@@ -502,6 +553,10 @@ export async function prepareProjectDiscovery(
     collectFiles(listenersRoot),
     collectFiles(broadcastRoot),
     collectFiles(channelsRoot),
+  ])
+  const [policyFiles, abilityFiles] = await Promise.all([
+    collectFiles(policiesRoot),
+    collectFiles(abilitiesRoot),
   ])
 
   const models: GeneratedModelRegistryEntry[] = []
@@ -757,6 +812,115 @@ export async function prepareProjectDiscovery(
   })))
   channels.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath))
 
+  const authorizationDiscovery = (policyFiles.length > 0 || abilityFiles.length > 0)
+    ? await loadAuthorizationDiscoveryModule(projectRoot)
+    : undefined
+
+  const authorizationPolicies: GeneratedAuthorizationPolicyRegistryEntry[] = []
+  for (const filePath of policyFiles) {
+    const relativePath = makeProjectRelativePath(projectRoot, filePath)
+    const authorizationStateBeforeImport = authorizationDiscovery!.authorizationInternals.getAuthorizationRuntimeState()
+    const existingPolicyNames = captureAuthorizationDefinitionNames(authorizationStateBeforeImport.policiesByName)
+    const existingAbilityNames = captureAuthorizationDefinitionNames(authorizationStateBeforeImport.abilitiesByName)
+
+    try {
+      const exportedPolicy = resolveNamedExportEntry(
+        await importProjectModule(projectRoot, filePath),
+        (value): value is object => authorizationDiscovery!.isAuthorizationPolicyDefinition(value),
+      )
+      if (!exportedPolicy) {
+        throw new Error(`Discovered policy "${relativePath}" does not export a Holo policy.`)
+      }
+
+      const authorizationStateAfterImport = authorizationDiscovery!.authorizationInternals.getAuthorizationRuntimeState()
+      const addedPolicyNames = findAddedAuthorizationDefinitionNames(authorizationStateAfterImport.policiesByName, existingPolicyNames)
+      const addedAbilityNames = findAddedAuthorizationDefinitionNames(authorizationStateAfterImport.abilitiesByName, existingAbilityNames)
+
+      if (addedPolicyNames.length !== 1 || addedAbilityNames.length !== 0) {
+        throw new Error(
+          `Discovered policy "${relativePath}" must register exactly one Holo policy and zero Holo abilities (found ${addedPolicyNames.length} policies and ${addedAbilityNames.length} abilities).`,
+        )
+      }
+
+      const normalizedPolicy = exportedPolicy.value as {
+        readonly name: string
+        readonly target: object
+        readonly class?: Readonly<Record<string, unknown>>
+        readonly record?: Readonly<Record<string, unknown>>
+      }
+      authorizationPolicies.push({
+        sourcePath: relativePath,
+        name: normalizedPolicy.name.trim(),
+        exportName: exportedPolicy.exportName,
+        target: resolveAuthorizationTargetName(normalizedPolicy.target) ?? 'Object',
+        classActions: Object.freeze(Object.keys(normalizedPolicy.class ?? {})),
+        recordActions: Object.freeze(Object.keys(normalizedPolicy.record ?? {})),
+      })
+    } finally {
+      const authorizationStateAfterDiscovery = authorizationDiscovery!.authorizationInternals.getAuthorizationRuntimeState()
+      unregisterAuthorizationDefinitionNames(
+        authorizationDiscovery!,
+        findAddedAuthorizationDefinitionNames(authorizationStateAfterDiscovery.policiesByName, existingPolicyNames),
+        findAddedAuthorizationDefinitionNames(authorizationStateAfterDiscovery.abilitiesByName, existingAbilityNames),
+      )
+    }
+  }
+  assertUniqueEntries('policy', authorizationPolicies.map(entry => ({
+    name: entry.name,
+    sourcePath: entry.sourcePath,
+  })))
+  authorizationPolicies.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath))
+
+  const authorizationAbilities: GeneratedAuthorizationAbilityRegistryEntry[] = []
+  for (const filePath of abilityFiles) {
+    const relativePath = makeProjectRelativePath(projectRoot, filePath)
+    const authorizationStateBeforeImport = authorizationDiscovery!.authorizationInternals.getAuthorizationRuntimeState()
+    const existingPolicyNames = captureAuthorizationDefinitionNames(authorizationStateBeforeImport.policiesByName)
+    const existingAbilityNames = captureAuthorizationDefinitionNames(authorizationStateBeforeImport.abilitiesByName)
+
+    try {
+      const exportedAbility = resolveNamedExportEntry(
+        await importProjectModule(projectRoot, filePath),
+        (value): value is object => authorizationDiscovery!.isAuthorizationAbilityDefinition(value),
+      )
+      if (!exportedAbility) {
+        throw new Error(`Discovered ability "${relativePath}" does not export a Holo ability.`)
+      }
+
+      const authorizationStateAfterImport = authorizationDiscovery!.authorizationInternals.getAuthorizationRuntimeState()
+      const addedPolicyNames = findAddedAuthorizationDefinitionNames(authorizationStateAfterImport.policiesByName, existingPolicyNames)
+      const addedAbilityNames = findAddedAuthorizationDefinitionNames(authorizationStateAfterImport.abilitiesByName, existingAbilityNames)
+
+      if (addedPolicyNames.length !== 0 || addedAbilityNames.length !== 1) {
+        throw new Error(
+          `Discovered ability "${relativePath}" must register exactly one Holo ability and zero Holo policies (found ${addedPolicyNames.length} policies and ${addedAbilityNames.length} abilities).`,
+        )
+      }
+
+      const normalizedAbility = exportedAbility.value as {
+        readonly name: string
+      }
+
+      authorizationAbilities.push({
+        sourcePath: relativePath,
+        name: normalizedAbility.name.trim(),
+        exportName: exportedAbility.exportName,
+      })
+    } finally {
+      const authorizationStateAfterDiscovery = authorizationDiscovery!.authorizationInternals.getAuthorizationRuntimeState()
+      unregisterAuthorizationDefinitionNames(
+        authorizationDiscovery!,
+        findAddedAuthorizationDefinitionNames(authorizationStateAfterDiscovery.policiesByName, existingPolicyNames),
+        findAddedAuthorizationDefinitionNames(authorizationStateAfterDiscovery.abilitiesByName, existingAbilityNames),
+      )
+    }
+  }
+  assertUniqueEntries('ability', authorizationAbilities.map(entry => ({
+    name: entry.name,
+    sourcePath: entry.sourcePath,
+  })))
+  authorizationAbilities.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath))
+
   const registry: GeneratedProjectRegistry = {
     version: 1,
     generatedAt: new Date().toISOString(),
@@ -770,6 +934,8 @@ export async function prepareProjectDiscovery(
       listeners: config.paths.listeners,
       broadcast: broadcastPath,
       channels: channelsPath,
+      authorizationPolicies: config.paths.authorizationPolicies ?? 'server/policies',
+      authorizationAbilities: config.paths.authorizationAbilities ?? 'server/abilities',
       generatedSchema: config.paths.generatedSchema,
     },
     models,
@@ -781,6 +947,8 @@ export async function prepareProjectDiscovery(
     listeners,
     broadcast,
     channels,
+    authorizationPolicies,
+    authorizationAbilities,
   }
 
   await writeGeneratedProjectRegistry(projectRoot, registry)
