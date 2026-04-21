@@ -23,7 +23,8 @@
     "build": "tsup",
     "stub": "tsup --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest --run"
+    "test": "vitest --run",
+    "test:integration": "HOLO_CLI_INCLUDE_INTEGRATION=1 vitest --run tests/cli.test.ts"
   },
   "dependencies": {
     "@holo-js/config": "^0.1.2",

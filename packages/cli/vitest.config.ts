@@ -1,6 +1,8 @@
 import { resolve } from 'node:path'
 import { defineConfig } from 'vitest/config'
 
+const includeCliIntegration = process.env.HOLO_CLI_INCLUDE_INTEGRATION === '1'
+
 export default defineConfig({
   resolve: {
     alias: [
@@ -33,6 +35,7 @@ export default defineConfig({
     name: '@holo-js/cli',
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    exclude: includeCliIntegration ? [] : ['tests/cli.test.ts'],
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],

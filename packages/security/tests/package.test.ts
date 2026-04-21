@@ -124,7 +124,7 @@ describe('@holo-js/security package surface', () => {
       peerDependenciesMeta?: Record<string, { optional?: boolean }>
     }
 
-    expect(packageJson.peerDependencies?.ioredis).toBe('^5.4.2')
+    expect(packageJson.peerDependencies?.ioredis).toBe('catalog:')
     expect(packageJson.peerDependenciesMeta?.ioredis?.optional).toBe(true)
   })
 

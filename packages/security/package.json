@@ -41,7 +41,7 @@
     "@holo-js/config": "^0.1.2"
   },
   "peerDependencies": {
-    "ioredis": "^5.4.2"
+    "ioredis": "catalog:"
   },
   "peerDependenciesMeta": {
     "ioredis": {
@@ -50,7 +50,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
-    "ioredis": "^5.4.2",
+    "ioredis": "catalog:",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
