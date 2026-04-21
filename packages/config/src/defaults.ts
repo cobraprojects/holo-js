@@ -461,7 +461,14 @@ function parseRedisInteger(
 
   const normalized = typeof value === 'number'
     ? value
-    : Number.parseInt(value, 10)
+    : (() => {
+        const trimmed = value.trim()
+        if (!trimmed || !/^\d+$/.test(trimmed)) {
+          return Number.NaN
+        }
+
+        return Number.parseInt(trimmed, 10)
+      })()
 
   if (!Number.isInteger(normalized)) {
     throw new Error(`[Holo Redis] ${label} must be an integer.`)
@@ -537,11 +544,20 @@ function normalizeRedisClusterNodeConfig(
   const url = normalizeOptionalRedisString(config.url, `${label} url`)
   const socketPath = normalizeOptionalRedisSocketPath(config.socketPath, `${label} socketPath`)
   const normalizedSocketPath = deriveNormalizedRedisSocketPath(socketPath, config.host?.trim())
-  const host = config.host?.trim() || normalizedSocketPath || DEFAULT_REDIS_HOST
+
+  if (typeof normalizedSocketPath !== 'undefined') {
+    throw new Error(`[Holo Redis] ${label} cannot use socketPath in cluster mode.`)
+  }
+
+  parseRedisDatabaseFromUrl(url, {
+    allowPath: false,
+    label: `${label} url`,
+  })
+
+  const host = config.host?.trim() || DEFAULT_REDIS_HOST
 
   return Object.freeze({
     ...(typeof url === 'undefined' ? {} : { url }),
-    ...(typeof normalizedSocketPath === 'undefined' ? {} : { socketPath: normalizedSocketPath }),
     host,
     port: parseRedisInteger(config.port, DEFAULT_REDIS_PORT, `${label} port`, {
       minimum: 1,
@@ -560,7 +576,13 @@ function normalizeRedisClusterNodes(
   return Object.freeze(nodes.map((node, index) => normalizeRedisClusterNodeConfig(connectionName, index, node)))
 }
 
-function parseRedisDatabaseFromUrl(url: string | undefined): number | undefined {
+function parseRedisDatabaseFromUrl(
+  url: string | undefined,
+  options: {
+    allowPath?: boolean
+    label?: string
+  } = {},
+): number | undefined {
   if (typeof url === 'undefined') {
     return undefined
   }
@@ -573,12 +595,22 @@ function parseRedisDatabaseFromUrl(url: string | undefined): number | undefined 
     }
 
     const [databaseSegment] = pathname.split('/')
-    if (!databaseSegment || !/^\d+$/.test(databaseSegment)) {
-      return undefined
+    const label = options.label ?? 'Redis URL'
+
+    if (options.allowPath === false) {
+      throw new Error(`[Holo Redis] ${label} cannot include a database path in cluster mode.`)
+    }
+
+    if (!databaseSegment || !/^\d+$/.test(databaseSegment) || pathname !== databaseSegment) {
+      throw new Error(`[Holo Redis] ${label} database path must be a single integer segment.`)
     }
 
     return Number.parseInt(databaseSegment, 10)
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('[Holo Redis]')) {
+      throw error
+    }
+
     return undefined
   }
 }
@@ -591,7 +623,23 @@ function normalizeRedisConnectionConfig(
   const clusters = normalizeRedisClusterNodes(name, config.clusters)
   const socketPath = normalizeOptionalRedisSocketPath(config.socketPath, `redis connection "${name}" socketPath`)
   const normalizedSocketPath = deriveNormalizedRedisSocketPath(socketPath, config.host?.trim())
+  const targetModeCount = [url, clusters, normalizedSocketPath].filter(value => typeof value !== 'undefined').length
+
+  if (targetModeCount > 1) {
+    throw new Error(`[Holo Redis] redis connection "${name}" must configure exactly one target mode: url, clusters, or socketPath.`)
+  }
+
   const host = config.host?.trim() || normalizedSocketPath || DEFAULT_REDIS_HOST
+  const databaseFromUrl = parseRedisDatabaseFromUrl(url, {
+    label: `redis connection "${name}" url`,
+  })
+  const database = parseRedisInteger(config.db ?? databaseFromUrl, DEFAULT_REDIS_DB, `redis connection "${name}" db`, {
+    minimum: 0,
+  })
+
+  if (typeof clusters !== 'undefined' && database !== 0) {
+    throw new Error(`[Holo Redis] redis connection "${name}" cannot select redis.db=${database} in cluster mode; Redis Cluster only supports database 0.`)
+  }
 
   return Object.freeze({
     name,
@@ -604,9 +652,7 @@ function normalizeRedisConnectionConfig(
     }),
     username: config.username?.trim() || undefined,
     password: config.password?.trim() || undefined,
-    db: parseRedisInteger(config.db ?? parseRedisDatabaseFromUrl(url), DEFAULT_REDIS_DB, `redis connection "${name}" db`, {
-      minimum: 0,
-    }),
+    db: database,
   })
 }
 

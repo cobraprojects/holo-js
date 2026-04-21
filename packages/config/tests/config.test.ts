@@ -848,6 +848,93 @@ describe('@holo-js/config', () => {
     })).toThrow('Unsupported queue driver "sqs"')
   })
 
+  it('rejects invalid redis integer values and ambiguous redis connection modes during normalization', () => {
+    expect(() => normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
+          port: '6380abc',
+        },
+      },
+    })).toThrow('redis connection "cache" port must be an integer')
+
+    expect(() => normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
+          url: 'redis://cache.internal:6380',
+          socketPath: '/tmp/redis.sock',
+        },
+      },
+    })).toThrow('must configure exactly one target mode: url, clusters, or socketPath')
+
+    expect(() => normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
+          clusters: [{
+            socketPath: '/tmp/redis.sock',
+          }],
+        },
+      },
+    })).toThrow('cluster node 1 cannot use socketPath in cluster mode')
+
+    expect(() => normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
+          clusters: [{
+            host: '/tmp/redis.sock',
+          }],
+        },
+      },
+    })).toThrow('cluster node 1 cannot use socketPath in cluster mode')
+
+    expect(() => normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
+          clusters: [{
+            url: 'redis://cache.internal:6380/4',
+          }],
+        },
+      },
+    })).toThrow('cluster node 1 url cannot include a database path in cluster mode')
+
+    expect(() => normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
+          url: 'redis://cache.internal:6380/not-a-db',
+        },
+      },
+    })).toThrow('url database path must be a single integer segment')
+
+    expect(() => normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
+          clusters: [{
+            host: 'cache-1.internal',
+          }],
+          db: 4,
+        },
+      },
+    })).toThrow('cannot select redis.db=4 in cluster mode')
+
+    expect(() => normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
+          clusters: [{
+            host: 'cache-1.internal',
+          }],
+          url: 'redis://cache.internal:6380/4',
+        },
+      },
+    })).toThrow('must configure exactly one target mode: url, clusters, or socketPath')
+  })
+
   it('loads security config files through the shared config loader', async () => {
     const projectRoot = await createProject()
     await writeFile(join(projectRoot, 'config', 'redis.ts'), [
