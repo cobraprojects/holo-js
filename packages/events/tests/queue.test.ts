@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { QueueDriverFactory, QueueJobEnvelope, QueueJsonValue } from '@holo-js/queue'
+import type { EventReferenceInput, ListenerHandledEvent } from '../src'
 import {
   configureQueueRuntime,
   getRegisteredQueueJob,
@@ -29,6 +30,19 @@ import {
 } from '../src'
 
 const execFileAsync = promisify(execFile)
+const sharedRedisConfig = {
+  default: 'default',
+  connections: {
+    default: {
+      name: 'default',
+      host: '127.0.0.1',
+      port: 6379,
+      password: undefined,
+      username: undefined,
+      db: 0,
+    },
+  },
+} as const
 
 async function runBun(args: string[]): Promise<{ stdout: string, stderr: string } | undefined> {
   try {
@@ -121,7 +135,7 @@ describe('@holo-js/events queue integration', () => {
       name: 'user.registered',
     }))
 
-    const handled = vi.fn(async () => {})
+    const handled = vi.fn(async (_event: ListenerHandledEvent<EventReferenceInput>) => {})
     registerListener(defineListener({
       name: 'send.welcome',
       listensTo: ['user.registered'],
@@ -207,7 +221,7 @@ describe('@holo-js/events queue integration', () => {
             queue: 'db-events',
           },
         },
-      }),
+      }, sharedRedisConfig),
       driverFactories: [
         createAsyncDriverFactory('redis', dispatched),
         createAsyncDriverFactory('database', dispatched),
@@ -278,14 +292,14 @@ describe('@holo-js/events queue integration', () => {
             queue: 'events',
           },
         },
-      }),
+      }, sharedRedisConfig),
       driverFactories: [createAsyncDriverFactory('redis', dispatched)],
     })
 
     registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
       name: 'user.registered',
     }))
-    const handled = vi.fn(async () => {})
+    const handled = vi.fn(async (_event: ListenerHandledEvent<EventReferenceInput>) => {})
     registerListener(defineListener({
       name: 'send.welcome',
       listensTo: ['user.registered'],
@@ -322,7 +336,7 @@ describe('@holo-js/events queue integration', () => {
             queue: 'events',
           },
         },
-      }),
+      }, sharedRedisConfig),
       driverFactories: [createAsyncDriverFactory('redis', dispatched)],
     })
 
@@ -360,7 +374,7 @@ describe('@holo-js/events queue integration', () => {
             queue: 'events',
           },
         },
-      }),
+      }, sharedRedisConfig),
       driverFactories: [createAsyncDriverFactory('redis', dispatched)],
     })
 

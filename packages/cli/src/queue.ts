@@ -399,6 +399,7 @@ export async function initializeQueueMaintenanceEnvironment(
   if (!connection || connection.driver !== 'database') {
     queueModule.configureQueueRuntime({
       config: loadedConfig.queue,
+      redisConfig: loadedConfig.redis,
     })
 
     return {
@@ -411,6 +412,7 @@ export async function initializeQueueMaintenanceEnvironment(
   const { createQueueDbRuntimeOptions } = await import(resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue-db'))
   queueModule.configureQueueRuntime({
     config: loadedConfig.queue,
+    redisConfig: loadedConfig.redis,
     ...createQueueDbRuntimeOptions(),
   })
 

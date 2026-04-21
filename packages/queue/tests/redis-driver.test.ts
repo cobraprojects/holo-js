@@ -6,6 +6,20 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { QueueAsyncDriver, QueueDriver } from '../src'
 
+const sharedRedisConfig = {
+  default: 'default',
+  connections: {
+    default: {
+      name: 'default',
+      host: '127.0.0.1',
+      port: 6379,
+      password: undefined,
+      username: undefined,
+      db: 0,
+    },
+  },
+} as const
+
 const execFileAsync = promisify(execFile)
 
 async function hasBun(): Promise<boolean> {
@@ -726,6 +740,7 @@ describe('@holo-js/queue redis driver', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
     })
 
     queue.registerQueueJob({
@@ -785,6 +800,7 @@ describe('@holo-js/queue redis driver', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
     })
 
     queue.registerQueueJob({

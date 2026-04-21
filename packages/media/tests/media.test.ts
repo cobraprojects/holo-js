@@ -61,6 +61,20 @@ import {
   setMediaPathGenerator,
 } from '../src'
 
+const sharedRedisConfig = {
+  default: 'default',
+  connections: {
+    default: {
+      name: 'default',
+      host: '127.0.0.1',
+      port: 6379,
+      password: undefined,
+      username: undefined,
+      db: 0,
+    },
+  },
+} as const
+
 type RuntimeMediaEntity = {
   getMedia(collectionName?: string): Promise<unknown[]>
   getMediaUrls(collectionName?: string, conversionName?: string): Promise<string[]>
@@ -1828,6 +1842,7 @@ describe('@holo-js/media', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
       driverFactories: [queueHarness.factory],
     })
 
@@ -1969,6 +1984,7 @@ describe('@holo-js/media', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
       driverFactories: [queueHarness.factory],
     })
 
@@ -2210,6 +2226,7 @@ describe('@holo-js/media', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
       driverFactories: [queueHarness.factory],
     })
 
@@ -2308,6 +2325,7 @@ describe('@holo-js/media', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
       driverFactories: [queueHarness.factory],
     })
 
@@ -2372,6 +2390,7 @@ describe('@holo-js/media', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
       driverFactories: [queueHarness.factory],
     })
 

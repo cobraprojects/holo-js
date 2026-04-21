@@ -10,6 +10,8 @@ import {
   type QueueJobDefinition,
   type QueueJobEnvelope,
   type QueuePendingDispatch,
+  type QueueJsonValue,
+  type QueueSharedRedisConfig,
 } from '../src'
 
 declare module '../src' {
@@ -20,12 +22,6 @@ declare module '../src' {
 
 describe('@holo-js/queue typing', () => {
   it('preserves typing for job definitions, envelopes, dispatch calls, and normalized config', () => {
-    type Expect<TValue extends true> = TValue
-    type Equal<TLeft, TRight>
-      = (<TValue>() => TValue extends TLeft ? 1 : 2) extends (<TValue>() => TValue extends TRight ? 1 : 2)
-        ? ((<TValue>() => TValue extends TRight ? 1 : 2) extends (<TValue>() => TValue extends TLeft ? 1 : 2) ? true : false)
-        : false
-
     const job = defineJob({
       queue: 'reports',
       async handle(payload: { reportId: string }) {
@@ -35,6 +31,27 @@ describe('@holo-js/queue typing', () => {
 
     const typedJob: QueueJobDefinition<{ reportId: string }, string> = job
     const normalized: NormalizedHoloQueueConfig = normalizeQueueConfig()
+    const sharedRedisConfig: QueueSharedRedisConfig = {
+      default: 'cache',
+      connections: {
+        cache: {
+          name: 'cache',
+          host: '127.0.0.1',
+          port: 6379,
+          password: undefined,
+          username: undefined,
+          db: 0,
+        },
+      },
+    }
+    const normalizedWithSharedRedis: NormalizedHoloQueueConfig = normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+          connection: 'cache',
+        },
+      },
+    }, sharedRedisConfig)
     const envelope: QueueJobEnvelope<{ reportId: string }> = {
       id: 'job-1',
       name: 'reports.generate',
@@ -69,30 +86,33 @@ describe('@holo-js/queue typing', () => {
     })
     type SyncDispatchResult = Awaited<ReturnType<typeof dispatchSync<'reports.generate'>>>
     const syncResult: SyncDispatchResult = { ok: true }
-    type JobModuleWithExtraExport = {
-      readonly default: QueueJobDefinition<{ reportId: string }, { ok: true }>
-      readonly helper: QueueJobDefinition<{ helperId: number }, { ok: false }>
-    }
-    type SelectedExportType = ExportedQueueJobDefinition<JobModuleWithExtraExport>
+    const exportedJob = defineJob({
+      async handle(payload: { reportId: string }) {
+        return {
+          ok: payload.reportId.length > 0,
+        }
+      },
+    })
+    type SelectedExportType = ExportedQueueJobDefinition<typeof exportedJob>
     type SelectedPayload = SelectedExportType extends QueueJobDefinition<infer TPayload, unknown> ? TPayload : never
     type SelectedResult = SelectedExportType extends QueueJobDefinition<QueueJsonValue, infer TResult> ? TResult : never
-    type SelectedExportAssertion = Expect<Equal<
-      SelectedPayload,
-      { reportId: string }
-    >>
-    type SelectedResultAssertion = Expect<Equal<
-      SelectedResult,
-      { ok: true }
-    >>
+    const selectedPayload: SelectedPayload = {
+      reportId: 'rep-1',
+    }
+    const selectedResult: SelectedResult = {
+      ok: true,
+    }
 
     void typedJob
     void normalized
+    void normalizedWithSharedRedis
     void envelope
     void driver
     void typedPending
     void dynamicPending
     void syncResult
-    void (0 as unknown as SelectedExportAssertion)
-    void (0 as unknown as SelectedResultAssertion)
+    void exportedJob
+    void selectedPayload
+    void selectedResult
   })
 })

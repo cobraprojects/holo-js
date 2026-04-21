@@ -280,7 +280,7 @@ export type HoloServerViewRenderer = (
 ) => string | Promise<string>
 
 type QueueModule = {
-  configureQueueRuntime(options: { config: LoadedHoloConfig['queue'] } & Record<string, unknown>): void
+  configureQueueRuntime(options: { config: LoadedHoloConfig['queue'], redisConfig?: LoadedHoloConfig['redis'] } & Record<string, unknown>): void
   getRegisteredQueueJob(name: string): { sourcePath?: string } | undefined
   getQueueRuntime(): HoloQueueRuntimeBinding
   isQueueJobDefinition(value: unknown): boolean
@@ -3512,6 +3512,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
 
     queueModule.configureQueueRuntime({
       config: loadedConfig.queue,
+      redisConfig: loadedConfig.redis,
       ...(queueDbModule?.createQueueDbRuntimeOptions() ?? {}),
     })
   }

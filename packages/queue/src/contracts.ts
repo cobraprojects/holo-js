@@ -488,6 +488,26 @@ export interface NormalizedQueueRedisConnectionConfig {
   }
 }
 
+export interface QueueSharedRedisConnectionConfig {
+  readonly name: string
+  readonly url?: string
+  readonly clusters?: readonly {
+    readonly url?: string
+    readonly host: string
+    readonly port: number
+  }[]
+  readonly host: string
+  readonly port: number
+  readonly password?: string
+  readonly username?: string
+  readonly db: number
+}
+
+export interface QueueSharedRedisConfig {
+  readonly default: string
+  readonly connections: Readonly<Record<string, QueueSharedRedisConnectionConfig>>
+}
+
 export interface NormalizedQueueDatabaseConnectionConfig {
   readonly name: string
   readonly driver: 'database'

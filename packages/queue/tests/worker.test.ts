@@ -3,7 +3,9 @@ import type {
   QueueDriverFactory,
   QueueJobEnvelope,
   QueueJsonValue,
+  QueueReserveInput,
   QueueReservedJob,
+  RegisterableQueueJobDefinition,
 } from '../src'
 import {
   clearQueueConnection,
@@ -16,6 +18,20 @@ import {
   resetQueueRuntime,
   runQueueWorker,
 } from '../src'
+
+const sharedRedisConfig = {
+  default: 'default',
+  connections: {
+    default: {
+      name: 'default',
+      host: '127.0.0.1',
+      port: 6379,
+      password: undefined,
+      username: undefined,
+      db: 0,
+    },
+  },
+} as const
 
 type FakeAsyncDriverState = {
   reserveQueue: Array<QueueReservedJob<QueueJsonValue> | null>
@@ -61,7 +77,7 @@ function createFakeAsyncDriverFactory(
 ): QueueDriverFactory {
   return {
     driver: driverName,
-    create(connection) {
+    create(connection, _context) {
       return {
         name: connection.name,
         driver: connection.driver,
@@ -77,12 +93,12 @@ function createFakeAsyncDriverFactory(
           return 7
         },
         async close() {},
-        async reserve(input) {
+        async reserve<TPayload extends QueueJsonValue = QueueJsonValue>(input: QueueReserveInput) {
           state.reserveInputs.push({
             queueNames: input.queueNames,
             workerId: input.workerId,
           })
-          return state.reserveQueue.shift() ?? null
+          return (state.reserveQueue.shift() ?? null) as QueueReservedJob<TPayload> | null
         },
         async acknowledge(job) {
           state.acknowledged.push(job as QueueReservedJob<QueueJsonValue>)
@@ -106,11 +122,11 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-function registerNamedJob(
+function registerNamedJob<TPayload extends QueueJsonValue, TResult>(
   name: string,
-  definition: Record<string, unknown>,
+  definition: RegisterableQueueJobDefinition<TPayload, TResult>,
 ) {
-  return registerQueueJob(definition as never, { name })
+  return registerQueueJob(definition, { name })
 }
 
 describe('@holo-js/queue worker runtime', () => {
@@ -143,6 +159,7 @@ describe('@holo-js/queue worker runtime', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
       driverFactories: [
         createFakeAsyncDriverFactory('redis', state),
       ],
@@ -223,6 +240,7 @@ describe('@holo-js/queue worker runtime', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
       driverFactories: [
         createFakeAsyncDriverFactory('redis', state),
       ],
@@ -314,18 +332,22 @@ describe('@holo-js/queue worker runtime', () => {
       error: expect.any(Error),
     }))
 
-    const directDriver = createFakeAsyncDriverFactory('redis', state).create({
-      name: 'redis',
-      driver: 'redis',
-      queue: 'default',
-      retryAfter: 90,
-      blockFor: 5,
-      redis: {
-        host: '127.0.0.1',
-        port: 6379,
-        db: 0,
-      },
-    }, queueRuntimeInternals.createQueueDriverFactoryContext())
+    const directDriver = queueWorkerInternals.requireAsyncDriver(
+      createFakeAsyncDriverFactory('redis', state).create({
+        name: 'redis',
+        driver: 'redis',
+        connection: 'default',
+        queue: 'default',
+        retryAfter: 90,
+        blockFor: 5,
+        redis: {
+          host: '127.0.0.1',
+          port: 6379,
+          db: 0,
+        },
+      }, queueRuntimeInternals.createQueueDriverFactoryContext()),
+      'redis',
+    )
     const releaseThenThrow = await queueWorkerInternals.processReservedJob(
       directDriver,
       createReservedJob('jobs.release-then-throw'),
@@ -384,6 +406,7 @@ describe('@holo-js/queue worker runtime', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
       driverFactories: [
         createFakeAsyncDriverFactory('redis', state),
       ],
@@ -449,6 +472,7 @@ describe('@holo-js/queue worker runtime', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
       driverFactories: [
         createFakeAsyncDriverFactory('redis', state),
       ],
@@ -528,6 +552,7 @@ describe('@holo-js/queue worker runtime', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
       driverFactories: [
         createFakeAsyncDriverFactory('redis', state),
       ],
@@ -599,7 +624,7 @@ describe('@holo-js/queue worker runtime', () => {
       deleted: [],
       clearCalls: [],
     }
-    const sleepFn = vi.fn(async () => {})
+    const sleepFn = vi.fn(async (_milliseconds: number) => {})
     const onIdle = vi.fn()
     let stopRequested = false
 
@@ -824,6 +849,7 @@ describe('@holo-js/queue worker runtime', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
       driverFactories: [
         createFakeAsyncDriverFactory('redis', state),
       ],

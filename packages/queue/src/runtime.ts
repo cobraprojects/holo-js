@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type {
   NormalizedQueueConnectionConfig,
   NormalizedHoloQueueConfig,
+  QueueSharedRedisConfig,
   QueueConnectionFacade,
   QueueDelayValue,
   QueueDispatchCompletedHook,
@@ -42,6 +43,7 @@ type QueuePayloadValidationState = {
 
 type ConfigureQueueRuntimeOptions = {
   readonly config?: HoloQueueConfig | NormalizedHoloQueueConfig
+  readonly redisConfig?: QueueSharedRedisConfig
   readonly driverFactories?: ReadonlyArray<QueueDriverFactory> | ReadonlyMap<string, QueueDriverFactory>
   readonly failedJobStore?: QueueFailedJobStore
 }
@@ -132,6 +134,24 @@ function normalizeQueueName(name: string): string {
   }
 
   return normalized
+}
+
+function isNormalizedQueueConfig(
+  config: HoloQueueConfig | NormalizedHoloQueueConfig,
+): config is NormalizedHoloQueueConfig {
+  return typeof config.default === 'string'
+    && typeof config.connections === 'object'
+    && config.connections !== null
+    && Object.values(config.connections).every((connection) => {
+      return typeof connection === 'object'
+        && connection !== null
+        && 'name' in connection
+        && 'driver' in connection
+        && 'queue' in connection
+        && typeof connection.name === 'string'
+        && typeof connection.driver === 'string'
+        && typeof connection.queue === 'string'
+    })
 }
 
 function normalizeDispatchCompletedHook(callback: QueueDispatchCompletedHook): QueueDispatchCompletedHook {
@@ -613,7 +633,9 @@ export function configureQueueRuntime(options: ConfigureQueueRuntimeOptions = {}
   let shouldResetDrivers = false
 
   if (options.config) {
-    state.config = normalizeQueueConfig(options.config)
+    state.config = isNormalizedQueueConfig(options.config)
+      ? options.config
+      : normalizeQueueConfig(options.config, options.redisConfig)
     shouldResetDrivers = true
   }
 
