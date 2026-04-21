@@ -135,11 +135,12 @@ export async function runProjectDependencyInstall(
 
 export async function runProjectPrepare(projectRoot: string, io?: IoStreams): Promise<void> {
   const project = await ensureProjectConfig(projectRoot)
+  await prepareProjectDiscovery(projectRoot, project.config)
   const updatedDependencies = await syncManagedDriverDependencies(projectRoot)
   if (updatedDependencies && io) {
     await runProjectDependencyInstall(io, projectRoot)
+    await prepareProjectDiscovery(projectRoot, project.config)
   }
-  await prepareProjectDiscovery(projectRoot, project.config)
 }
 
 export function toPosixSlashes(value: string): string {
@@ -159,6 +160,8 @@ export function isDiscoveryRelevantPath(
     project.config.paths.jobs,
     project.config.paths.events,
     project.config.paths.listeners,
+    project.config.paths.authorizationPolicies,
+    project.config.paths.authorizationAbilities,
     'server/broadcast',
     'server/channels',
     project.config.paths.generatedSchema,
@@ -223,6 +226,8 @@ export async function collectDiscoveryWatchRoots(
     resolve(projectRoot, project.config.paths.jobs),
     resolve(projectRoot, project.config.paths.events),
     resolve(projectRoot, project.config.paths.listeners),
+    resolve(projectRoot, project.config.paths.authorizationPolicies),
+    resolve(projectRoot, project.config.paths.authorizationAbilities),
     resolve(projectRoot, 'server/broadcast'),
     resolve(projectRoot, 'server/channels'),
     dirname(resolve(projectRoot, project.config.paths.generatedSchema)),
