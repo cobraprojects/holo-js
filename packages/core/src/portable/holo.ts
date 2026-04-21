@@ -339,6 +339,11 @@ type SessionModule = {
     write(record: unknown): Promise<void>
     delete(sessionId: string): Promise<void>
   }
+  createRedisSessionStore(adapter: SessionRedisAdapter): {
+    read(sessionId: string): Promise<unknown | null>
+    write(record: unknown): Promise<void>
+    delete(sessionId: string): Promise<void>
+  }
   getSessionRuntime(): HoloSessionRuntimeBinding
   resetSessionRuntime(): void
 }
@@ -395,6 +400,23 @@ type SecurityRedisAdapter = {
 
 type SecurityRedisAdapterModule = {
   createSecurityRedisAdapter(config: LoadedHoloConfig['security']['rateLimit']['redis']): SecurityRedisAdapter
+}
+
+type LoadedSessionRedisStoreConfig = Extract<LoadedHoloConfig['session']['stores'][string], {
+  readonly driver: 'redis'
+}>
+
+type SessionRedisAdapter = {
+  connect?(): Promise<void>
+  disconnect?(): Promise<void>
+  get(sessionId: string): Promise<unknown | null>
+  set(record: unknown): Promise<void>
+  del(sessionId: string): Promise<void>
+  close?(): Promise<void>
+}
+
+type SessionRedisAdapterModule = {
+  createSessionRedisAdapter(config: LoadedSessionRedisStoreConfig): SessionRedisAdapter
 }
 
 type NotificationsModule = {
@@ -763,6 +785,7 @@ function getRuntimeState(): {
   renderView?: HoloServerViewRenderer
   securityRedisAdapter?: SecurityRedisAdapter
   securityRateLimitStoreManaged?: boolean
+  sessionRedisAdapters?: readonly SessionRedisAdapter[]
 } {
   const runtime = globalThis as typeof globalThis & {
     __holoRuntime__?: {
@@ -772,6 +795,7 @@ function getRuntimeState(): {
       renderView?: HoloServerViewRenderer
       securityRedisAdapter?: SecurityRedisAdapter
       securityRateLimitStoreManaged?: boolean
+      sessionRedisAdapters?: readonly SessionRedisAdapter[]
     }
   }
 
@@ -808,6 +832,9 @@ type OptionalSubsystemRuntimeBindings = Readonly<{
   readonly mail?: ReturnType<MailModule['getMailRuntimeBindings']>
   readonly notifications?: ReturnType<NotificationsModule['getNotificationsRuntimeBindings']>
   readonly broadcast?: ReturnType<BroadcastModule['getBroadcastRuntimeBindings']>
+  readonly session?: Readonly<{
+    readonly sessionRedisAdapters?: readonly SessionRedisAdapter[]
+  }>
   readonly security?: Readonly<{
     readonly bindings?: ReturnType<SecurityModule['getSecurityRuntimeBindings']>
     readonly securityRedisAdapter?: SecurityRedisAdapter
@@ -836,6 +863,13 @@ function snapshotOptionalSubsystemRuntimeBindings(): OptionalSubsystemRuntimeBin
     ...(runtime.__holoMailRuntime__?.bindings ? { mail: runtime.__holoMailRuntime__.bindings } : {}),
     ...(runtime.__holoNotificationsRuntime__?.bindings ? { notifications: runtime.__holoNotificationsRuntime__.bindings } : {}),
     ...(runtime.__holoBroadcastRuntime__?.bindings ? { broadcast: runtime.__holoBroadcastRuntime__.bindings } : {}),
+    ...(state.sessionRedisAdapters
+      ? {
+          session: Object.freeze({
+            sessionRedisAdapters: state.sessionRedisAdapters,
+          }),
+        }
+      : {}),
     ...(
       runtime.__holoSecurityRuntime__?.bindings
       || state.securityRedisAdapter
@@ -887,6 +921,8 @@ function restoreOptionalSubsystemRuntimeBindings(
     runtime.__holoBroadcastRuntime__ ??= {}
     runtime.__holoBroadcastRuntime__.bindings = bindings.broadcast
   }
+
+  state.sessionRedisAdapters = bindings.session?.sessionRedisAdapters
 
   if (bindings.security || runtime.__holoSecurityRuntime__) {
     runtime.__holoSecurityRuntime__ ??= {}
@@ -1295,6 +1331,17 @@ async function loadSecurityRedisAdapterModule(required = false): Promise<Securit
   return securityRedisAdapterModule
 }
 
+async function loadSessionRedisAdapterModule(required: true): Promise<SessionRedisAdapterModule>
+async function loadSessionRedisAdapterModule(required?: false): Promise<SessionRedisAdapterModule | undefined>
+async function loadSessionRedisAdapterModule(required = false): Promise<SessionRedisAdapterModule | undefined> {
+  const sessionRedisAdapterModule = await portableRuntimeModuleInternals.importOptionalModule<SessionRedisAdapterModule>('@holo-js/session/drivers/redis-adapter')
+  if (!sessionRedisAdapterModule && required) {
+    throw new Error('[@holo-js/core] Redis-backed session stores require @holo-js/session/drivers/redis-adapter to be installed.')
+  }
+
+  return sessionRedisAdapterModule
+}
+
 async function loadNotificationsModule(required = false): Promise<NotificationsModule | undefined> {
   const notificationsModule = await portableRuntimeModuleInternals.importOptionalModule<NotificationsModule>('@holo-js/notifications')
   if (!notificationsModule && required) {
@@ -1585,20 +1632,24 @@ function markProviderUser<T>(value: T, providerName: string): T {
 }
 
 /* v8 ignore next -- helper body is covered through runtime initialization; this declaration line itself is a coverage artifact */
-async function createCoreSessionStores<TCustom extends HoloConfigMap>(
+async function createCoreManagedSessionStores<TCustom extends HoloConfigMap>(
   projectRoot: string,
   loadedConfig: LoadedHoloConfig<TCustom>,
   sessionModule: SessionModule,
-): Promise<Readonly<Record<string, {
-  read(sessionId: string): Promise<unknown | null>
-  write(record: unknown): Promise<void>
-  delete(sessionId: string): Promise<void>
-}>>> {
+): Promise<{
+  readonly stores: Readonly<Record<string, {
+    read(sessionId: string): Promise<unknown | null>
+    write(record: unknown): Promise<void>
+    delete(sessionId: string): Promise<void>
+  }>>
+  readonly redisAdapters: readonly SessionRedisAdapter[]
+}> {
   const stores: Record<string, {
     read(sessionId: string): Promise<unknown | null>
     write(record: unknown): Promise<void>
     delete(sessionId: string): Promise<void>
   }> = {}
+  const redisAdapters: SessionRedisAdapter[] = []
 
   for (const [name, config] of Object.entries(loadedConfig.session.stores)) {
     if (config.driver === 'file') {
@@ -1644,6 +1695,38 @@ async function createCoreSessionStores<TCustom extends HoloConfigMap>(
             .delete()
         },
       })
+      continue
+    }
+
+    if (config.driver === 'redis') {
+      const sessionRedisAdapterModule = await loadSessionRedisAdapterModule(true)
+      const adapter = sessionRedisAdapterModule.createSessionRedisAdapter(config)
+
+      try {
+        await adapter.connect?.()
+        const store = sessionModule.createRedisSessionStore(adapter)
+        redisAdapters.push(adapter)
+        stores[name] = store
+      } catch (error) {
+        const originalError = error
+        const cleanupResults = await Promise.allSettled([
+          adapter.disconnect?.(),
+          ...redisAdapters.map(existingAdapter => existingAdapter.disconnect?.()),
+        ])
+        const cleanupErrors = cleanupResults.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+
+        if (cleanupErrors.length > 0 && originalError instanceof Error) {
+          Object.defineProperty(originalError, 'cleanupErrors', {
+            value: Object.freeze(cleanupErrors),
+            configurable: true,
+            enumerable: false,
+          })
+        }
+
+        throw originalError
+      }
+
+      continue
     }
   }
 
@@ -1653,7 +1736,23 @@ async function createCoreSessionStores<TCustom extends HoloConfigMap>(
     )
   }
 
-  return Object.freeze(stores)
+  return Object.freeze({
+    stores: Object.freeze(stores),
+    redisAdapters: Object.freeze(redisAdapters),
+  })
+}
+
+/* v8 ignore next -- helper body is covered through runtime initialization; this declaration line itself is a coverage artifact */
+async function createCoreSessionStores<TCustom extends HoloConfigMap>(
+  projectRoot: string,
+  loadedConfig: LoadedHoloConfig<TCustom>,
+  sessionModule: SessionModule,
+): Promise<Readonly<Record<string, {
+  read(sessionId: string): Promise<unknown | null>
+  write(record: unknown): Promise<void>
+  delete(sessionId: string): Promise<void>
+}>>> {
+  return (await createCoreManagedSessionStores(projectRoot, loadedConfig, sessionModule)).stores
 }
 
 function createCoreNotificationStore<TCustom extends HoloConfigMap>(
@@ -3593,6 +3692,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   const sessionModule = sessionConfigured || authConfigured
     ? await loadSessionModule(true)
     : undefined
+  const existingManagedSessionRedisAdapters = getRuntimeState().sessionRedisAdapters
 
   /* v8 ignore start -- redundant defensive guards after required-module loaders above */
   if (authConfigured && !sessionModule) {
@@ -3610,11 +3710,33 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     : undefined
 
   if (sessionModule) {
-    const stores = await createCoreSessionStores(projectRoot, loadedConfig, sessionModule)
-    sessionModule.configureSessionRuntime({
-      config: loadedConfig.session,
-      stores,
-    })
+    let managedSessionStores: Awaited<ReturnType<typeof createCoreManagedSessionStores>> | undefined
+
+    try {
+      managedSessionStores = await createCoreManagedSessionStores(projectRoot, loadedConfig, sessionModule)
+
+      if (existingManagedSessionRedisAdapters) {
+        await Promise.all(existingManagedSessionRedisAdapters.map(adapter => adapter.close?.()))
+      }
+
+      getRuntimeState().sessionRedisAdapters = managedSessionStores.redisAdapters.length > 0
+        ? managedSessionStores.redisAdapters
+        : undefined
+
+      sessionModule.configureSessionRuntime({
+        config: loadedConfig.session,
+        stores: managedSessionStores.stores,
+      })
+    } catch (error) {
+      if (managedSessionStores) {
+        await Promise.all(managedSessionStores.redisAdapters.map(adapter => adapter.close?.()))
+      }
+
+      throw error
+    }
+  } else if (existingManagedSessionRedisAdapters) {
+    await Promise.all(existingManagedSessionRedisAdapters.map(adapter => adapter.close?.()))
+    getRuntimeState().sessionRedisAdapters = undefined
   }
 
   if (authConfigured) {
@@ -3712,6 +3834,11 @@ export async function resetOptionalHoloSubsystems(): Promise<void> {
   clerkModule?.resetClerkAuthRuntime()
   const sessionModule = await loadSessionModule()
   sessionModule?.resetSessionRuntime()
+  const managedSessionRedisAdapters = getRuntimeState().sessionRedisAdapters
+  if (managedSessionRedisAdapters) {
+    await Promise.all(managedSessionRedisAdapters.map(adapter => adapter.close?.()))
+    getRuntimeState().sessionRedisAdapters = undefined
+  }
   const securityModule = await loadSecurityModule()
   const securityBindings = securityModule?.getSecurityRuntimeBindings()
   const state = getRuntimeState()

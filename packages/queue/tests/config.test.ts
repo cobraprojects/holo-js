@@ -161,6 +161,44 @@ describe('@holo-js/queue config', () => {
         },
       },
     })
+    expect(normalizeQueueConfig({
+      default: 'redis',
+      connections: {
+        redis: {
+          driver: 'redis',
+          redis: {
+            url: ' redis://cache.internal:6380/4 ',
+            username: ' worker ',
+            password: ' secret ',
+            db: '4',
+          },
+        },
+      },
+    })).toEqual({
+      default: 'redis',
+      failed: {
+        driver: 'database',
+        connection: 'default',
+        table: 'failed_jobs',
+      },
+      connections: {
+        redis: {
+          name: 'redis',
+          driver: 'redis',
+          queue: 'default',
+          retryAfter: 90,
+          blockFor: 5,
+          redis: {
+            url: 'redis://cache.internal:6380/4',
+            host: '127.0.0.1',
+            port: 6379,
+            password: 'secret',
+            username: 'worker',
+            db: 4,
+          },
+        },
+      },
+    })
   })
 
   it('trims defaults, names, and optional redis credentials when provided', () => {

@@ -704,6 +704,7 @@ export default {
     expect(await readFile(join(directRoot, 'storage/database.sqlite'), 'utf8')).toBe('')
     expect(await readFile(join(directRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/forms": "${expectedHoloPackageRange}"`)
     expect(await readFile(join(directRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/validation": "${expectedHoloPackageRange}"`)
+    expect(await readFile(join(directRoot, 'config/redis.ts'), 'utf8')).toContain('defineRedisConfig')
 
     const optionalRoot = join(baseRoot, 'optional-runtime-app')
     await projectInternals.scaffoldProject(optionalRoot, {
@@ -716,9 +717,67 @@ export default {
     })
 
     expect(await readFile(join(optionalRoot, 'config/queue.ts'), 'utf8')).toContain('driver: \'sync\'')
+    expect(await readFile(join(optionalRoot, 'config/redis.ts'), 'utf8')).toContain('defineRedisConfig')
     expect(await readFile(join(optionalRoot, 'config/storage.ts'), 'utf8')).toContain('defineStorageConfig')
     expect(await stat(join(optionalRoot, 'server/events'))).toBeDefined()
     expect(await stat(join(optionalRoot, 'server/listeners'))).toBeDefined()
+
+    const storageRoot = join(baseRoot, 'storage-runtime-app')
+    await projectInternals.scaffoldProject(storageRoot, {
+      projectName: 'Storage Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'public',
+      optionalPackages: ['storage'],
+    })
+
+    expect(await readFile(join(storageRoot, 'package.json'), 'utf8')).toContain('"@holo-js/storage":')
+    expect(await readFile(join(storageRoot, 'config/storage.ts'), 'utf8')).toContain('defineStorageConfig')
+    expect(await stat(join(storageRoot, 'storage/app/public'))).toBeDefined()
+
+    const queueRoot = join(baseRoot, 'queue-runtime-app')
+    await projectInternals.scaffoldProject(queueRoot, {
+      projectName: 'Queue Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['queue'],
+    })
+
+    expect(await readFile(join(queueRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
+    expect(await readFile(join(queueRoot, 'config/queue.ts'), 'utf8')).toContain('driver: \'sync\'')
+    expect(await stat(join(queueRoot, 'server/jobs'))).toBeDefined()
+    await expect(stat(join(queueRoot, 'server/events'))).rejects.toThrow()
+
+    const eventsRoot = join(baseRoot, 'events-runtime-app')
+    await projectInternals.scaffoldProject(eventsRoot, {
+      projectName: 'Events Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['events'],
+    })
+
+    expect(await readFile(join(eventsRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/events": "${expectedHoloPackageRange}"`)
+    expect(await stat(join(eventsRoot, 'server/events'))).toBeDefined()
+    expect(await stat(join(eventsRoot, 'server/listeners'))).toBeDefined()
+    await expect(stat(join(eventsRoot, 'config/queue.ts'))).rejects.toThrow()
+
+    const validationRoot = join(baseRoot, 'validation-runtime-app')
+    await projectInternals.scaffoldProject(validationRoot, {
+      projectName: 'Validation Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['validation'],
+    })
+
+    expect(await readFile(join(validationRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/validation": "${expectedHoloPackageRange}"`)
+    expect(await readFile(join(validationRoot, 'package.json'), 'utf8')).not.toContain(`"@holo-js/forms": "${expectedHoloPackageRange}"`)
 
     const authRoot = join(baseRoot, 'auth-runtime-app')
     await projectInternals.scaffoldProject(authRoot, {
@@ -733,6 +792,7 @@ export default {
     expect(await readFile(join(authRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/auth": "${expectedHoloPackageRange}"`)
     expect(await readFile(join(authRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/session": "${expectedHoloPackageRange}"`)
     expect(await readFile(join(authRoot, 'config/auth.ts'), 'utf8')).toContain('guard: \'web\'')
+    expect(await readFile(join(authRoot, 'config/redis.ts'), 'utf8')).toContain('defineRedisConfig')
     expect(await readFile(join(authRoot, 'config/auth.ts'), 'utf8')).toContain('identifiers: [\'email\']')
     expect(await readFile(join(authRoot, 'config/session.ts'), 'utf8')).toContain('defineSessionConfig')
     expect(await readFile(join(authRoot, '.env'), 'utf8')).toContain('SESSION_CONNECTION=main')
@@ -768,6 +828,34 @@ export default {
     expect(await readFile(join(mailRoot, 'config/mail.ts'), 'utf8')).toContain('defineMailConfig')
     expect(await readFile(join(mailRoot, 'config/notifications.ts'), 'utf8')).toContain('defineNotificationsConfig')
 
+    const notificationsRoot = join(baseRoot, 'notifications-runtime-app')
+    await projectInternals.scaffoldProject(notificationsRoot, {
+      projectName: 'Notifications Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['notifications'],
+    })
+
+    expect(await readFile(join(notificationsRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/notifications": "${expectedHoloPackageRange}"`)
+    expect(await readFile(join(notificationsRoot, 'config/notifications.ts'), 'utf8')).toContain('defineNotificationsConfig')
+    await expect(stat(join(notificationsRoot, 'config/mail.ts'))).rejects.toThrow()
+
+    const standaloneMailRoot = join(baseRoot, 'standalone-mail-runtime-app')
+    await projectInternals.scaffoldProject(standaloneMailRoot, {
+      projectName: 'Standalone Mail Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['mail'],
+    })
+
+    expect(await readFile(join(standaloneMailRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/mail": "${expectedHoloPackageRange}"`)
+    expect(await readFile(join(standaloneMailRoot, 'config/mail.ts'), 'utf8')).toContain('defineMailConfig')
+    await expect(stat(join(standaloneMailRoot, 'config/notifications.ts'))).rejects.toThrow()
+
     const securityRoot = join(baseRoot, 'security-runtime-app')
     await projectInternals.scaffoldProject(securityRoot, {
       projectName: 'Security Runtime App',
@@ -779,8 +867,9 @@ export default {
     })
 
     expect(await readFile(join(securityRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/security": "${expectedHoloPackageRange}"`)
+    expect(await readFile(join(securityRoot, 'config/redis.ts'), 'utf8')).toContain('defineRedisConfig')
     expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain(`import { defineSecurityConfig, limit } from '@holo-js/security'`)
-    expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain('connection: \'redis\'')
+    expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain('connection: \'default\'')
     expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain('login: limit.perMinute(5).define()')
     expect(await readFile(join(securityRoot, 'config/security.ts'), 'utf8')).toContain('register: limit.perHour(10).define()')
     expect(await stat(join(securityRoot, 'storage/framework/rate-limits'))).toBeDefined()
@@ -916,13 +1005,15 @@ export default {
     expect(projectInternals.renderQueueConfig({
       driver: 'redis',
       defaultDatabaseConnection: 'main',
-    })).toContain('host: env(\'REDIS_HOST\', \'127.0.0.1\')')
+    })).toContain('connection: \'default\'')
+    expect(projectInternals.renderRedisConfig()).toContain('defineRedisConfig')
     expect(projectInternals.renderQueueConfig({
       driver: 'database',
       defaultDatabaseConnection: 'main',
     })).toContain('driver: \'database\'')
     expect(projectInternals.renderQueueConfig()).toContain('failed: false')
     expect(projectInternals.renderQueueEnvFiles('sync').env).toEqual([])
+    expect(projectInternals.renderQueueEnvFiles('redis').env).toContain('REDIS_URL=')
     expect(projectInternals.renderQueueEnvFiles('redis').env).toContain('REDIS_HOST=127.0.0.1')
     expect(projectInternals.isSupportedQueueInstallerDriver('redis')).toBe(true)
     expect(projectInternals.isSupportedQueueInstallerDriver('sqs')).toBe(false)
@@ -2135,7 +2226,9 @@ export default defineAppConfig({
       createdJobsDirectory: true,
     })
     expect(await readFile(join(projectRoot, 'config/queue.mjs'), 'utf8')).toBe('export default "keep"\n')
+    expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).toContain('defineRedisConfig')
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('export REDIS_HOST=cache.internal')
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('REDIS_URL=')
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('REDIS_PORT=6379')
     expect((await readFile(join(projectRoot, '.env'), 'utf8')).match(/REDIS_HOST=/g)?.length).toBe(1)
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('REDIS_DB=')
@@ -2168,14 +2261,24 @@ export default defineQueueConfig({
   connections: {
     redis: {
       driver: 'redis',
+      connection: 'cache',
       queue: 'default',
       retryAfter: 90,
       blockFor: 5,
-      redis: {
-        host: '127.0.0.1',
-        port: 6379,
-        db: 0,
-      },
+    },
+  },
+})
+`)
+    await writeProjectFile(implicitFailedStoreRoot, 'config/redis.ts', `
+import { defineRedisConfig } from '@holo-js/config'
+
+export default defineRedisConfig({
+  default: 'cache',
+  connections: {
+    cache: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
     },
   },
 })
@@ -2266,7 +2369,10 @@ export default defineQueueConfig({
     } as never)).resolves.toBeUndefined()
     expect(redisRunIo.read().stdout).toContain('updated .env')
     expect(redisRunIo.read().stdout).toContain('updated .env.example')
-    expect(await readFile(join(redisRunRoot, '.env'), 'utf8')).toContain('APP_NAME=Redis\n\nREDIS_HOST=127.0.0.1')
+    const redisEnv = await readFile(join(redisRunRoot, '.env'), 'utf8')
+    expect(redisEnv).toContain('APP_NAME=Redis')
+    expect(redisEnv).toMatch(/\nREDIS_URL=/)
+    expect(redisEnv).toContain('REDIS_HOST=127.0.0.1')
 
     const authProviderRunRoot = await createTempProject()
     tempDirs.push(authProviderRunRoot)
@@ -2472,14 +2578,24 @@ export default defineQueueConfig({
   connections: {
     redis: {
       driver: 'redis',
+      connection: 'cache',
       queue: 'default',
       retryAfter: 90,
       blockFor: 5,
-      redis: {
-        host: '127.0.0.1',
-        port: 6379,
-        db: 0,
-      },
+    },
+  },
+})
+`)
+    await writeProjectFile(dependencySyncRoot, 'config/redis.ts', `
+import { defineRedisConfig } from '@holo-js/config'
+
+export default defineRedisConfig({
+  default: 'cache',
+  connections: {
+    cache: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
     },
   },
 })
@@ -2548,14 +2664,24 @@ export default defineQueueConfig({
   connections: {
     redis: {
       driver: 'redis',
+      connection: 'cache',
       queue: 'default',
       retryAfter: 90,
       blockFor: 5,
-      redis: {
-        host: '127.0.0.1',
-        port: 6379,
-        db: 0,
-      },
+    },
+  },
+})
+`)
+    await writeProjectFile(queueDefaultFailedStoreRoot, 'config/redis.ts', `
+import { defineRedisConfig } from '@holo-js/config'
+
+export default defineRedisConfig({
+  default: 'cache',
+  connections: {
+    cache: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
     },
   },
 })
@@ -2602,14 +2728,24 @@ export default defineQueueConfig({
   connections: {
     redis: {
       driver: 'redis',
+      connection: 'cache',
       queue: 'default',
       retryAfter: 90,
       blockFor: 5,
-      redis: {
-        host: '127.0.0.1',
-        port: 6379,
-        db: 0,
-      },
+    },
+  },
+})
+`)
+    await writeProjectFile(queueFailedStoreRoot, 'config/redis.ts', `
+import { defineRedisConfig } from '@holo-js/config'
+
+export default defineRedisConfig({
+  default: 'cache',
+  connections: {
+    cache: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
     },
   },
 })
@@ -4252,6 +4388,20 @@ export const command = {
   it('discovers nested jobs, events, and listeners, including derived event names and invalid modules', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'config/redis.ts', `
+import { defineRedisConfig } from '@holo-js/config'
+
+export default defineRedisConfig({
+  default: 'default',
+  connections: {
+    default: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+    },
+  },
+})
+`)
     await writeProjectFile(projectRoot, 'config/queue.ts', `
 import { defineQueueConfig } from '@holo-js/config'
 
@@ -7946,6 +8096,51 @@ export default defineConfig({
     expect('jsx' in nuxtTsconfig.compilerOptions).toBe(false)
   })
 
+  it('does not re-declare built-in redis or security config sections in generated config types', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, 'config/redis.ts', `
+export default {
+  default: 'cache',
+  connections: {
+    cache: {
+      host: 'redis.internal',
+      port: 6381,
+      db: 4,
+    },
+  },
+}
+`)
+    await writeProjectFile(projectRoot, 'config/security.ts', `
+export default {
+  csrf: {
+    enabled: true,
+  },
+}
+`)
+    await writeProjectFile(projectRoot, 'config/services.ts', `
+import { defineConfig } from '@holo-js/config'
+
+export default defineConfig({
+  services: {
+    mailgun: {
+      secret: 'secret',
+    },
+  },
+})
+`)
+
+    await withFakeBun(async () => {
+      await cliInternals.runProjectPrepare(projectRoot)
+    })
+
+    const generatedTypes = await readFile(join(projectRoot, '.holo-js/generated/config.d.ts'), 'utf8')
+    expect(generatedTypes).toContain('"services": typeof')
+    expect(generatedTypes).not.toContain('"redis": typeof')
+    expect(generatedTypes).not.toContain('"security": typeof')
+  })
+
   it('fails holo dev when the child process errors or exits non-zero', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
@@ -10281,6 +10476,18 @@ export default defineDatabaseConfig({
   it('loads the default security package entrypoints when clearing redis rate limits', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'config/redis.ts', `
+export default {
+  default: 'default',
+  connections: {
+    default: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+    },
+  },
+}
+`)
     const io = createIo(projectRoot)
 
     await writeProjectFile(projectRoot, 'config/security.ts', `
@@ -10291,9 +10498,6 @@ export default {
   rateLimit: {
     driver: 'redis',
     redis: {
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
       connection: 'default',
       prefix: 'holo:rate-limit:',
     },

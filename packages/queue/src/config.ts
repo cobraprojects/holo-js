@@ -87,8 +87,43 @@ function normalizeConnectionName(value: string | undefined, label: string): stri
   return normalized
 }
 
+function normalizeOptionalString(value: string | undefined, label: string): string | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  return normalizeConnectionName(value, label)
+}
+
 function normalizeQueueName(value: string | undefined): string {
   return value?.trim() || DEFAULT_QUEUE_NAME
+}
+
+type QueueRedisClusterNodes = readonly {
+  readonly url?: string
+  readonly host?: string
+  readonly port?: number | string
+}[] | undefined
+
+function normalizeRedisClusterNodes(
+  connectionName: string,
+  nodes: QueueRedisClusterNodes,
+): NormalizedQueueRedisConnectionConfig['redis']['clusters'] {
+  if (!nodes || nodes.length === 0) {
+    return undefined
+  }
+
+  return Object.freeze(nodes.map((node, index) => {
+    const url = normalizeOptionalString(node.url, `queue connection "${connectionName}" redis.clusters[${index}].url`)
+
+    return Object.freeze({
+      ...(typeof url === 'undefined' ? {} : { url }),
+      host: node.host?.trim() || '127.0.0.1',
+      port: parseInteger(node.port, 6379, `queue connection "${connectionName}" redis.clusters[${index}].port`, {
+        minimum: 1,
+      }),
+    })
+  }))
 }
 
 function normalizeSyncConnection(
@@ -107,10 +142,14 @@ function normalizeRedisConnection(
   config: QueueRedisConnectionConfig,
 ): NormalizedQueueRedisConnectionConfig {
   const redis = config.redis ?? {}
+  const connection = config.connection?.trim() || 'default'
+  const url = normalizeOptionalString(redis.url, `queue connection "${name}" redis.url`)
+  const clusters = normalizeRedisClusterNodes(name, redis.clusters)
 
   return Object.freeze({
     name,
     driver: 'redis',
+    ...(config.connection?.trim() ? { connection } : {}),
     queue: normalizeQueueName(config.queue),
     retryAfter: parseInteger(config.retryAfter, DEFAULT_QUEUE_RETRY_AFTER, `queue connection "${name}" retryAfter`, {
       minimum: 0,
@@ -119,6 +158,8 @@ function normalizeRedisConnection(
       minimum: 0,
     }),
     redis: Object.freeze({
+      ...(typeof url === 'undefined' ? {} : { url }),
+      ...(typeof clusters === 'undefined' ? {} : { clusters }),
       host: redis.host?.trim() || '127.0.0.1',
       port: parseInteger(redis.port, 6379, `queue connection "${name}" redis.port`, {
         minimum: 1,

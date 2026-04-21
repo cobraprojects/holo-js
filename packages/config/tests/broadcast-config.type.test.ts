@@ -30,6 +30,7 @@ describe('@holo-js/config broadcast typing', () => {
     const accessors = createConfigAccessors({
       app: {} as HoloConfigRegistry['app'],
       database: {} as HoloConfigRegistry['database'],
+      redis: {} as HoloConfigRegistry['redis'],
       storage: {} as HoloConfigRegistry['storage'],
       queue: {} as HoloConfigRegistry['queue'],
       broadcast: broadcast as unknown as HoloConfigRegistry['broadcast'],

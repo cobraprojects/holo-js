@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { QueueAsyncDriver, QueueDriver } from '../src'
 
 const execFileAsync = promisify(execFile)
 
@@ -365,6 +366,14 @@ async function loadRedisQueueModule() {
   }
 }
 
+function requireAsyncDriver(driver: QueueDriver): QueueAsyncDriver {
+  if (driver.mode !== 'async') {
+    throw new Error('Expected an async queue driver.')
+  }
+
+  return driver
+}
+
 afterEach(() => {
   vi.doUnmock('bullmq')
   vi.doUnmock('@holo-js/queue-redis')
@@ -485,7 +494,7 @@ describe('@holo-js/queue redis driver', () => {
       name: 'redis.contract',
     })
 
-    const driver = queue.redisQueueDriverFactory.create({
+    const driver = requireAsyncDriver(queue.redisQueueDriverFactory.create({
       name: 'redis',
       driver: 'redis',
       queue: 'default',
@@ -496,7 +505,7 @@ describe('@holo-js/queue redis driver', () => {
         port: 6379,
         db: 1,
       },
-    }, queue.queueRuntimeInternals.createQueueDriverFactoryContext())
+    }, queue.queueRuntimeInternals.createQueueDriverFactoryContext()))
 
     const dispatched = await driver.dispatch({
       id: 'job-1',
@@ -638,6 +647,49 @@ describe('@holo-js/queue redis driver', () => {
     await expect(driver.close()).resolves.toBeUndefined()
   })
 
+  it('passes redis URLs through to BullMQ connection options', async () => {
+    const { queue, state } = await loadRedisQueueModule()
+
+    const driver = requireAsyncDriver(queue.redisQueueDriverFactory.create({
+      name: 'redis',
+      driver: 'redis',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 5,
+      redis: {
+        url: 'redis://cache.internal:6380/4',
+        host: '127.0.0.1',
+        port: 6379,
+        username: 'worker',
+        password: 'secret',
+        db: 4,
+      },
+    }, queue.queueRuntimeInternals.createQueueDriverFactoryContext()))
+
+    await driver.dispatch({
+      id: 'job-url',
+      name: 'redis.contract',
+      connection: 'redis',
+      queue: 'critical',
+      payload: null,
+      attempts: 0,
+      maxAttempts: 1,
+      createdAt: 0,
+    })
+
+    expect(state.queues.get('critical')?.options).toMatchObject({
+      connection: {
+        url: 'redis://cache.internal:6380/4',
+        username: 'worker',
+        password: 'secret',
+        db: 4,
+        maxRetriesPerRequest: null,
+      },
+    })
+
+    await driver.close()
+  })
+
   it('supports default runtime integration for delayed dispatch, worker processing, and named queue routing', async () => {
     const { queue, state } = await loadRedisQueueModule()
     queue.configureQueueRuntime({
@@ -747,7 +799,7 @@ describe('@holo-js/queue redis driver', () => {
 
   it('normalizes enqueue, reserve, malformed payload, missing id, and reserve setup failures', async () => {
     const { queue, state } = await loadRedisQueueModule()
-    const driver = queue.redisQueueDriverFactory.create({
+    const driver = requireAsyncDriver(queue.redisQueueDriverFactory.create({
       name: 'redis',
       driver: 'redis',
       queue: 'default',
@@ -758,7 +810,7 @@ describe('@holo-js/queue redis driver', () => {
         port: 6380,
         db: 3,
       },
-    }, queue.queueRuntimeInternals.createQueueDriverFactoryContext())
+    }, queue.queueRuntimeInternals.createQueueDriverFactoryContext()))
 
     state.queues.set('default', {
       jobs: [],
@@ -842,7 +894,7 @@ describe('@holo-js/queue redis driver', () => {
       workerId: 'worker-3',
     })).rejects.toThrow('failed to reserve job: BullMQ returned a reserved job without an id.')
 
-    const readyDriver = queue.redisQueueDriverFactory.create({
+    const readyDriver = requireAsyncDriver(queue.redisQueueDriverFactory.create({
       name: 'redis',
       driver: 'redis',
       queue: 'ready',
@@ -853,7 +905,7 @@ describe('@holo-js/queue redis driver', () => {
         port: 6380,
         db: 3,
       },
-    }, queue.queueRuntimeInternals.createQueueDriverFactoryContext())
+    }, queue.queueRuntimeInternals.createQueueDriverFactoryContext()))
     ensureWorkerRecord(state, 'ready').waitUntilReadyError = new Error('not ready')
     await expect(readyDriver.reserve({
       queueNames: ['ready'],
@@ -883,7 +935,7 @@ describe('@holo-js/queue redis driver', () => {
 
   it('normalizes acknowledge, release, delete, clear, and close failures', async () => {
     const { queue, state } = await loadRedisQueueModule()
-    const driver = queue.redisQueueDriverFactory.create({
+    const driver = requireAsyncDriver(queue.redisQueueDriverFactory.create({
       name: 'redis',
       driver: 'redis',
       queue: 'default',
@@ -894,7 +946,7 @@ describe('@holo-js/queue redis driver', () => {
         port: 6379,
         db: 0,
       },
-    }, queue.queueRuntimeInternals.createQueueDriverFactoryContext())
+    }, queue.queueRuntimeInternals.createQueueDriverFactoryContext()))
 
     const queueRecord = ensureQueueRecord(state, 'default')
     queueRecord.jobs.push({
@@ -1009,7 +1061,7 @@ describe('@holo-js/queue redis driver', () => {
 
   it('covers blocking reserve, queue rotation, missing reservations, and queue fallbacks', async () => {
     const { queue, state } = await loadRedisQueueModule()
-    const driver = queue.redisQueueDriverFactory.create({
+    const driver = requireAsyncDriver(queue.redisQueueDriverFactory.create({
       name: 'redis',
       driver: 'redis',
       queue: 'default',
@@ -1020,7 +1072,7 @@ describe('@holo-js/queue redis driver', () => {
         port: 6379,
         db: 0,
       },
-    }, queue.queueRuntimeInternals.createQueueDriverFactoryContext())
+    }, queue.queueRuntimeInternals.createQueueDriverFactoryContext()))
 
     ensureQueueRecord(state, 'first').jobs.push({
       key: 'first-job',
@@ -1236,6 +1288,33 @@ describe('@holo-js/queue redis driver', () => {
     })).toEqual({
       host: 'redis.internal',
       port: 6380,
+      username: 'worker',
+      password: 'secret',
+      db: 4,
+      maxRetriesPerRequest: null,
+    })
+    expect(queue.redisQueueDriverInternals.resolveBullConnectionOptions({
+      name: 'redis',
+      driver: 'redis',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 5,
+      redis: {
+        host: undefined as never,
+        port: 6380,
+        username: 'worker',
+        password: 'secret',
+        db: 4,
+        clusters: [{
+          host: 'cluster.internal',
+          port: 6381,
+        }],
+      },
+    } as never)).toEqual({
+      clusters: [{
+        host: 'cluster.internal',
+        port: 6381,
+      }],
       username: 'worker',
       password: 'secret',
       db: 4,

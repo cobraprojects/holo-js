@@ -28,6 +28,7 @@ import {
   DB_DRIVER_PACKAGE_NAMES,
   NOTIFICATIONS_CONFIG_FILE_NAMES,
   QUEUE_CONFIG_FILE_NAMES,
+  REDIS_CONFIG_FILE_NAMES,
   SECURITY_CONFIG_FILE_NAMES,
   SESSION_CONFIG_FILE_NAMES,
   SUPPORTED_AUTH_SOCIAL_PROVIDERS,
@@ -67,6 +68,7 @@ type AuthInstallFeatures = {
 }
 
 type ConfigModuleFormat = 'esm' | 'cjs'
+const IOREDIS_PACKAGE_VERSION = '^5.4.2'
 
 const AUTH_MIGRATION_SLUGS = [
   'create_users',
@@ -130,16 +132,10 @@ function renderQueueConfig(
       '  connections: {',
       '    redis: {',
       '      driver: \'redis\',',
+      '      connection: \'default\',',
       '      queue: \'default\',',
       '      retryAfter: 90,',
       '      blockFor: 5,',
-      '      redis: {',
-      '        host: env(\'REDIS_HOST\', \'127.0.0.1\'),',
-      '        port: env(\'REDIS_PORT\', 6379),',
-      '        username: env(\'REDIS_USERNAME\'),',
-      '        password: env(\'REDIS_PASSWORD\'),',
-      '        db: env(\'REDIS_DB\', 0),',
-      '      },',
       '    },',
       '  },',
       '})',
@@ -188,6 +184,38 @@ function renderQueueConfig(
     '})',
     '',
   ].join('\n')
+}
+
+function renderRedisConfig(): string {
+  return [
+    'import { defineRedisConfig, env } from \'@holo-js/config\'',
+    '',
+    'export default defineRedisConfig({',
+    '  default: \'default\',',
+    '  connections: {',
+    '    default: {',
+    '      url: env(\'REDIS_URL\') || undefined,',
+    '      host: env(\'REDIS_HOST\', \'127.0.0.1\'),',
+    '      port: env(\'REDIS_PORT\', 6379),',
+    '      username: env(\'REDIS_USERNAME\'),',
+    '      password: env(\'REDIS_PASSWORD\'),',
+    '      db: env(\'REDIS_DB\', 0),',
+    '    },',
+    '  },',
+    '})',
+    '',
+  ].join('\n')
+}
+
+async function ensureRedisConfigFile(projectRoot: string): Promise<boolean> {
+  const redisConfigPath = await resolveFirstExistingPath(projectRoot, REDIS_CONFIG_FILE_NAMES) ?? resolve(projectRoot, 'config/redis.ts')
+  const redisConfigExists = await pathExists(redisConfigPath)
+
+  if (!redisConfigExists) {
+    await writeTextFile(redisConfigPath, renderRedisConfig())
+  }
+
+  return !redisConfigExists
 }
 
 function renderNotificationsConfig(): string {
@@ -257,7 +285,7 @@ function renderSecurityConfig(): string {
     '      path: \'./storage/framework/rate-limits\',',
     '    },',
     '    redis: {',
-    '      connection: \'redis\',',
+    '      connection: \'default\',',
     '      prefix: \'holo:rate-limit:\',',
     '    },',
     '    limiters: {',
@@ -1271,6 +1299,7 @@ function renderQueueEnvFiles(
 
   return {
     env: [
+      'REDIS_URL=',
       'REDIS_HOST=127.0.0.1',
       'REDIS_PORT=6379',
       'REDIS_USERNAME=',
@@ -1278,6 +1307,7 @@ function renderQueueEnvFiles(
       'REDIS_DB=0',
     ],
     example: [
+      'REDIS_URL=',
       'REDIS_HOST=',
       'REDIS_PORT=',
       'REDIS_USERNAME=',
@@ -1496,6 +1526,14 @@ export async function syncManagedDriverDependencies(projectRoot: string): Promis
     }
   }
 
+  if (
+    loaded.security?.rateLimit?.driver === 'redis'
+    || Object.values(loaded.session?.stores ?? {}).some(store => store.driver === 'redis')
+    || loaded.broadcast?.worker?.scaling !== false
+  ) {
+    requiredPackages.add('ioredis')
+  }
+
   if (storageConfigured) {
     requiredPackages.add('@holo-js/storage')
 
@@ -1521,8 +1559,11 @@ export async function syncManagedDriverDependencies(projectRoot: string): Promis
   ])
 
   for (const packageName of requiredPackages) {
-    if (dependencies[packageName] !== nextVersion || typeof devDependencies[packageName] !== 'undefined') {
-      dependencies[packageName] = nextVersion
+    const requiredVersion = packageName === 'ioredis'
+      ? IOREDIS_PACKAGE_VERSION
+      : nextVersion
+    if (dependencies[packageName] !== requiredVersion || typeof devDependencies[packageName] !== 'undefined') {
+      dependencies[packageName] = requiredVersion
       delete devDependencies[packageName]
       changed = true
     }
@@ -1973,6 +2014,7 @@ export async function installAuthIntoProject(
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })
   await mkdir(modelsRoot, { recursive: true })
   await mkdir(migrationsRoot, { recursive: true })
+  await ensureRedisConfigFile(projectRoot)
   await writeTextFile(authConfigTargetPath, renderAuthConfig(features))
   if (!sessionConfigPath) {
     await writeTextFile(sessionConfigTargetPath, renderSessionConfig(defaultDatabaseConnection))
@@ -2075,6 +2117,10 @@ export async function installQueueIntoProject(
       driver,
       defaultDatabaseConnection,
     }))
+  }
+
+  if (driver === 'redis') {
+    await ensureRedisConfigFile(projectRoot)
   }
 
   await mkdir(jobsRoot, { recursive: true })
@@ -2185,6 +2231,7 @@ export async function installSecurityIntoProject(
 
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })
   await ensureRateLimitStorageIgnore(projectRoot)
+  await ensureRedisConfigFile(projectRoot)
 
   if (!securityConfigPath) {
     await writeTextFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig())
@@ -2218,6 +2265,7 @@ export async function installBroadcastIntoProject(
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })
   await mkdir(broadcastRoot, { recursive: true })
   await mkdir(channelsRoot, { recursive: true })
+  await ensureRedisConfigFile(projectRoot)
 
   if (!broadcastConfigPath) {
     await writeTextFile(
@@ -3185,6 +3233,7 @@ export async function scaffoldProject(
   await writeFile(resolve(projectRoot, '.env.example'), example, 'utf8')
   await writeFile(resolve(projectRoot, 'config/app.ts'), renderScaffoldAppConfig(options.projectName), 'utf8')
   await writeFile(resolve(projectRoot, 'config/database.ts'), renderScaffoldDatabaseConfig(options), 'utf8')
+  await writeFile(resolve(projectRoot, 'config/redis.ts'), renderRedisConfig(), 'utf8')
   if (queueEnabled) {
     await writeFile(resolve(projectRoot, 'config/queue.ts'), renderQueueConfig({
       driver: 'sync',
@@ -3263,6 +3312,7 @@ export {
   renderNotificationsConfig,
   renderNotificationsMigration,
   renderQueueConfig,
+  renderRedisConfig,
   renderQueueEnvFiles,
   renderScaffoldAppConfig,
   renderScaffoldDatabaseConfig,

@@ -19,6 +19,7 @@
       "@holo-js/security": ["../security/src/index.ts"],
       "@holo-js/security/drivers/redis-adapter": ["../security/src/drivers/redis-adapter.ts"],
       "@holo-js/session": ["../session/src/index.ts"],
+      "@holo-js/session/drivers/redis-adapter": ["../session/src/drivers/redis-adapter.ts"],
       "@holo-js/storage": ["../storage/src/index.ts"],
       "@holo-js/storage/runtime": ["../storage/src/runtime/composables/index.ts"]
     }

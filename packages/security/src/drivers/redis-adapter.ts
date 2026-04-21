@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import type { NormalizedSecurityRateLimitRedisConfig } from '@holo-js/config'
+import type {
+  NormalizedSecurityRateLimitRedisConfig,
+} from '@holo-js/config'
 import Redis from 'ioredis'
 import type { SecurityRateLimitRedisDriverAdapter } from '../contracts'
 
@@ -10,12 +12,46 @@ export interface SecurityRedisAdapterOptions {
 type RedisClientOptions = {
   readonly host?: string
   readonly port?: number
+  readonly path?: string
   readonly password?: string
   readonly username?: string
   readonly db?: number
   readonly connectionName?: string
   readonly lazyConnect: true
   readonly maxRetriesPerRequest: number
+}
+
+type RedisClusterOptions = {
+  readonly redisOptions: RedisClientOptions
+}
+
+type RedisClusterStartupNode = {
+  readonly host: string
+  readonly port: number
+  readonly tls?: Record<string, never>
+}
+
+type RedisClientLike = {
+  connect(): Promise<unknown>
+  multi(): {
+    zadd(key: string, score: number, member: string): ReturnType<RedisClientLike['multi']>
+    zremrangebyscore(key: string, min: string | number, max: string | number): ReturnType<RedisClientLike['multi']>
+    zcard(key: string): ReturnType<RedisClientLike['multi']>
+    zrange(key: string, start: number, stop: number, withScores: string): ReturnType<RedisClientLike['multi']>
+    exec(): Promise<readonly RedisCommandTuple[] | null>
+  }
+  del(...keys: string[]): Promise<number>
+  scan(cursor: string, matchLabel: string, pattern: string, countLabel: string, count: number): Promise<[string, string[]]>
+  pexpireat(key: string, timestampMs: number): Promise<number>
+  quit(): Promise<unknown>
+  disconnect(): void
+}
+
+type RedisCtor = typeof Redis & {
+  Cluster: new (
+    startupNodes: readonly RedisClusterStartupNode[],
+    options?: RedisClusterOptions,
+  ) => RedisClientLike
 }
 
 const REDIS_SCAN_COUNT = 100
@@ -32,6 +68,12 @@ function isRedisSocketConnectionTarget(value: string): boolean {
     || value.startsWith('/')
 }
 
+function toRedisSocketPath(value: string): string {
+  return value.startsWith('unix://')
+    ? value.slice('unix://'.length)
+    : value
+}
+
 function escapeRedisGlob(value: string): string {
   return value.replace(/[\\*?[\]]/g, match => `\\${match}`)
 }
@@ -45,13 +87,19 @@ function createRedisClientOptions(
     password: config.password,
     username: config.username,
     db: config.db,
-    ...(!isRedisConnectionTarget(config.connection)
-      ? {
-          host: config.host,
-          port: config.port,
-        }
-      : {}),
-    ...(config.connection !== 'default' && !isRedisConnectionTarget(config.connection)
+    ...(
+      !isRedisConnectionTarget(config.connection)
+      && !config.clusters?.length
+      && !isRedisSocketConnectionTarget(config.host)
+        ? {
+            host: config.host,
+            port: config.port,
+          }
+        : isRedisSocketConnectionTarget(config.host) && !config.clusters?.length
+          ? { path: toRedisSocketPath(config.host) }
+          : {}
+    ),
+    ...(config.connection !== 'default' && !isRedisConnectionTarget(config.connection) && !config.clusters?.length
       ? { connectionName: config.connection }
       : {}),
     lazyConnect: true,
@@ -59,8 +107,72 @@ function createRedisClientOptions(
   }
 }
 
+function parseClusterNodeUrl(
+  url: string,
+  label: string,
+): RedisClusterStartupNode {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'redis:' && parsed.protocol !== 'rediss:') {
+      throw new Error(`unsupported protocol "${parsed.protocol}"`)
+    }
+
+    if (!parsed.hostname) {
+      throw new Error('missing hostname')
+    }
+
+    return {
+      host: parsed.hostname,
+      port: parsed.port ? Number.parseInt(parsed.port, 10) : 6379,
+      ...(parsed.protocol === 'rediss:' ? { tls: {} } : {}),
+    }
+  } catch (error) {
+    throw new Error(`[@holo-js/security] ${label} is invalid: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+function resolveClusterStartupNodes(
+  config: NormalizedSecurityRateLimitRedisConfig,
+): readonly RedisClusterStartupNode[] {
+  return (config.clusters ?? []).map((node, index) => {
+    const label = `Security rate-limit Redis cluster node ${index + 1}`
+    if (typeof node.url === 'string') {
+      return parseClusterNodeUrl(node.url, `${label} url`)
+    }
+
+    if (isRedisSocketConnectionTarget(node.host)) {
+      throw new Error(`[@holo-js/security] ${label} cannot use a Unix socket path in Redis cluster mode.`)
+    }
+
+    return {
+      host: node.host,
+      port: node.port,
+    }
+  })
+}
+
+function createRedisClusterOptions(
+  config: NormalizedSecurityRateLimitRedisConfig,
+): RedisClusterOptions {
+  if (typeof config.db === 'number' && config.db !== 0) {
+    throw new Error('[@holo-js/security] Redis Cluster does not support selecting a non-zero database. Remove redis.db or set it to 0.')
+  }
+
+  const startupNodes = resolveClusterStartupNodes(config)
+
+  return {
+    redisOptions: {
+      password: config.password,
+      username: config.username,
+      lazyConnect: true,
+      maxRetriesPerRequest: 3,
+      ...(startupNodes.some(node => typeof node.tls !== 'undefined') ? { tls: {} } : {}),
+    },
+  }
+}
+
 export class RedisSecurityAdapter implements SecurityRateLimitRedisDriverAdapter {
-  private readonly client: Redis
+  private readonly client: RedisClientLike
   private readonly now: () => Date
   private readonly prefix: string
 
@@ -68,9 +180,15 @@ export class RedisSecurityAdapter implements SecurityRateLimitRedisDriverAdapter
     this.prefix = config.prefix
     this.now = options.now ?? (() => new Date())
     const clientOptions = createRedisClientOptions(config)
-    this.client = isRedisConnectionTarget(config.connection)
-      ? new Redis(config.connection, clientOptions)
-      : new Redis(clientOptions)
+    const RedisConstructor = Redis as RedisCtor
+
+    this.client = typeof config.url === 'string'
+      ? new RedisConstructor(config.url, clientOptions)
+      : config.clusters && config.clusters.length > 0
+        ? new RedisConstructor.Cluster(resolveClusterStartupNodes(config), createRedisClusterOptions(config))
+        : isRedisConnectionTarget(config.connection)
+          ? new RedisConstructor(config.connection, clientOptions)
+          : new RedisConstructor(clientOptions)
   }
 
   private qualifyKey(key: string): string {
@@ -211,7 +329,11 @@ export class RedisSecurityAdapter implements SecurityRateLimitRedisDriverAdapter
   }
 
   async close(): Promise<void> {
-    await this.client.quit()
+    try {
+      await this.client.quit()
+    } catch {
+      this.client.disconnect()
+    }
   }
 }
 
@@ -226,6 +348,11 @@ export const securityRedisAdapterInternals = {
   REDIS_SCAN_COUNT,
   RedisSecurityAdapter,
   createRedisClientOptions,
+  createRedisClusterOptions,
+  escapeRedisGlob,
   isRedisConnectionTarget,
   isRedisSocketConnectionTarget,
+  parseClusterNodeUrl,
+  resolveClusterStartupNodes,
+  toRedisSocketPath,
 }

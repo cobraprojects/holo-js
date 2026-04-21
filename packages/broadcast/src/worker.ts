@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomInt, randomUUID } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
-import type { NormalizedHoloBroadcastConfig, NormalizedHoloQueueConfig } from '@holo-js/config'
+import type { NormalizedHoloBroadcastConfig, NormalizedHoloQueueConfig, NormalizedHoloRedisConfig } from '@holo-js/config'
 import {
   authorizeBroadcastChannel,
   validateBroadcastWhisperPayload,
@@ -181,6 +181,12 @@ type BroadcastScalingMessage =
   | BroadcastScalingPresenceMemberRemovedMessage
 
 type BroadcastRedisScalingConnection = {
+  readonly url?: string
+  readonly clusters?: readonly {
+    readonly url?: string
+    readonly host: string
+    readonly port: number
+  }[]
   readonly host: string
   readonly port: number
   readonly username?: string
@@ -207,29 +213,48 @@ type BroadcastWorkerScalingRuntime = {
   readonly adapter: BroadcastScalingAdapter
 }
 
+type RedisScalingClientLike = {
+  on(event: 'message', callback: (channel: string, payload: string) => void): unknown
+  off(event: 'message', callback: (channel: string, payload: string) => void): unknown
+  subscribe(channel: string): Promise<number>
+  unsubscribe(channel: string): Promise<number>
+  publish(channel: string, payload: string): Promise<number>
+  hset(key: string, field: string, value: string): Promise<number>
+  hdel(key: string, ...fields: string[]): Promise<number>
+  hgetall(key: string): Promise<Record<string, string>>
+  quit(): Promise<unknown>
+  disconnect(): void
+}
+
 type RedisScalingModuleLike = {
-  default: new (options: {
-    host: string
-    port: number
-    username?: string
-    password?: string
-    db?: number
-  }) => {
-    duplicate(): {
-      subscribe(channel: string): Promise<number>
-      on(event: 'message', callback: (channel: string, payload: string) => void): unknown
-      off(event: 'message', callback: (channel: string, payload: string) => void): unknown
-      unsubscribe(channel: string): Promise<number>
-      quit(): Promise<unknown>
-      disconnect(): void
-    }
-    publish(channel: string, payload: string): Promise<number>
-    hset(key: string, field: string, value: string): Promise<number>
-    hdel(key: string, ...fields: string[]): Promise<number>
-    hgetall(key: string): Promise<Record<string, string>>
-    quit(): Promise<unknown>
-    disconnect(): void
-  }
+  default: new (
+    target: string | {
+      host?: string
+      port?: number
+      path?: string
+      username?: string
+      password?: string
+      db?: number
+    },
+    options?: {
+      username?: string
+      password?: string
+      db?: number
+    },
+  ) => RedisScalingClientLike
+  Cluster: new (
+    startupNodes: readonly {
+      readonly host: string
+      readonly port: number
+    }[],
+    options?: {
+      readonly redisOptions?: {
+        readonly username?: string
+        readonly password?: string
+        readonly db?: number
+      }
+    },
+  ) => RedisScalingClientLike
 }
 
 function normalizeRequiredString(value: string, label: string): string {
@@ -436,28 +461,115 @@ function parsePresenceHashMembers(
 function resolveRedisScalingConnection(
   queueConfig: NormalizedHoloQueueConfig | undefined,
   connectionName: string,
+  redisConfig?: NormalizedHoloRedisConfig,
 ): BroadcastRedisScalingConnection {
-  if (!queueConfig) {
-    throw new Error('[@holo-js/broadcast] Broadcast scaling requires queue config so the Redis connection can be resolved.')
+  const queueConnection = queueConfig?.connections[connectionName]
+  if (queueConnection?.driver === 'redis') {
+    return Object.freeze({
+      ...(typeof queueConnection.redis.url === 'undefined' ? {} : { url: queueConnection.redis.url }),
+      ...(typeof queueConnection.redis.clusters === 'undefined' ? {} : { clusters: queueConnection.redis.clusters }),
+      host: queueConnection.redis.host,
+      port: queueConnection.redis.port,
+      username: queueConnection.redis.username,
+      password: queueConnection.redis.password,
+      db: queueConnection.redis.db,
+    })
   }
 
-  const connection = queueConfig.connections[connectionName]
-  if (!connection) {
-    throw new Error(`[@holo-js/broadcast] Broadcast scaling connection "${connectionName}" was not found in queue connections.`)
+  const redisConnection = redisConfig?.connections[connectionName]
+  if (redisConnection) {
+    return Object.freeze({
+      ...(typeof redisConnection.url === 'undefined' ? {} : { url: redisConnection.url }),
+      ...(typeof redisConnection.clusters === 'undefined' ? {} : { clusters: redisConnection.clusters }),
+      host: redisConnection.host,
+      port: redisConnection.port,
+      username: redisConnection.username,
+      password: redisConnection.password,
+      db: redisConnection.db,
+    })
   }
 
-  if (connection.driver !== 'redis') {
+  if (queueConnection) {
     throw new Error(
       `[@holo-js/broadcast] Broadcast scaling connection "${connectionName}" must use the Redis queue driver.`,
     )
   }
 
-  return Object.freeze({
-    host: connection.redis.host,
-    port: connection.redis.port,
-    username: connection.redis.username,
-    password: connection.redis.password,
-    db: connection.redis.db,
+  if (!queueConfig) {
+    throw new Error('[@holo-js/broadcast] Broadcast scaling requires either redis config or a Redis queue connection so the Redis connection can be resolved.')
+  }
+
+  throw new Error(`[@holo-js/broadcast] Broadcast scaling connection "${connectionName}" was not found in queue connections.`)
+}
+
+function resolveScalingConnectionName(
+  connectionName: string,
+  queueConfig: NormalizedHoloQueueConfig | undefined,
+  redisConfig?: NormalizedHoloRedisConfig,
+): string {
+  const queueDefaultConnection = queueConfig
+    ? queueConfig.connections[queueConfig.default]
+    : undefined
+
+  if (connectionName !== 'default') {
+    return connectionName
+  }
+
+  if (queueDefaultConnection?.driver === 'redis') {
+    return queueConfig!.default
+  }
+
+  return redisConfig?.default ?? connectionName
+}
+
+function isRedisSocketConnectionTarget(value: string): boolean {
+  return value.startsWith('unix://') || value.startsWith('/')
+}
+
+function toRedisSocketPath(value: string): string {
+  return value.startsWith('unix://')
+    ? value.slice('unix://'.length)
+    : value
+}
+
+function parseRedisClusterNodeUrl(url: string, label: string): { readonly host: string, readonly port: number } {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'redis:' && parsed.protocol !== 'rediss:') {
+      throw new Error(`unsupported protocol "${parsed.protocol}"`)
+    }
+
+    if (!parsed.hostname) {
+      throw new Error('missing hostname')
+    }
+
+    return {
+      host: parsed.hostname,
+      port: parsed.port ? Number.parseInt(parsed.port, 10) : 6379,
+      ...(parsed.protocol === 'rediss:' ? { tls: {} } : {}),
+    }
+  } catch (error) {
+    throw new Error(`[@holo-js/broadcast] ${label} is invalid: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+function resolveRedisClusterStartupNodes(
+  connection: BroadcastRedisScalingConnection,
+): readonly { readonly host: string, readonly port: number, readonly tls?: Record<string, never> }[] {
+  return (connection.clusters ?? []).map((node, index) => {
+    const label = `Broadcast scaling cluster node ${index + 1}`
+    if (typeof node.url === 'string') {
+      return parseRedisClusterNodeUrl(node.url, `${label} url`)
+    }
+
+    if (isRedisSocketConnectionTarget(node.host)) {
+      throw new Error(`[@holo-js/broadcast] ${label} cannot use a Unix socket path in Redis cluster mode.`)
+    }
+
+    return {
+      host: node.host,
+      port: node.port,
+    }
   })
 }
 
@@ -498,14 +610,48 @@ async function createRedisScalingAdapter(
 ): Promise<BroadcastScalingAdapter> {
   const redisModule = await loadRedisScalingModule(dependencies.loadRedisModule)
   const RedisCtor = redisModule.default
-  const commandClient = new RedisCtor({
-    host: connection.host,
-    port: connection.port,
-    username: connection.username,
-    password: connection.password,
-    db: connection.db,
-  })
-  const subscriberClient = commandClient.duplicate()
+  const createClient = (): RedisScalingClientLike => {
+    if (typeof connection.url === 'string') {
+      return new RedisCtor(connection.url, {
+        username: connection.username,
+        password: connection.password,
+        db: connection.db,
+      })
+    }
+
+    if (connection.clusters && connection.clusters.length > 0) {
+    return new redisModule.Cluster(
+        resolveRedisClusterStartupNodes(connection),
+        {
+          redisOptions: {
+            username: connection.username,
+            password: connection.password,
+            db: connection.db,
+            ...(resolveRedisClusterStartupNodes(connection).some(node => typeof node.tls !== 'undefined') ? { tls: {} } : {}),
+          },
+        },
+      )
+    }
+
+    return new RedisCtor(
+      isRedisSocketConnectionTarget(connection.host)
+        ? {
+            path: toRedisSocketPath(connection.host),
+            username: connection.username,
+            password: connection.password,
+            db: connection.db,
+          }
+        : {
+            host: connection.host,
+            port: connection.port,
+            username: connection.username,
+            password: connection.password,
+            db: connection.db,
+          },
+    )
+  }
+  const commandClient = createClient()
+  const subscriberClient = createClient()
   const listeners = new Map<string, (channel: string, payload: string) => void>()
 
   return Object.freeze({
@@ -1526,6 +1672,7 @@ async function handleSubscribeFailure(
 export async function startBroadcastWorker(
   runtimeBindings: Pick<BroadcastRuntimeBindings, 'config' | 'channelAuth'> & {
     readonly queue?: NormalizedHoloQueueConfig
+    readonly redis?: NormalizedHoloRedisConfig
     readonly nodeId?: string
     readonly fetch?: typeof fetch
     readonly createScalingAdapter?: (connection: BroadcastRedisScalingConnection) => Promise<BroadcastScalingAdapter>
@@ -1538,18 +1685,21 @@ export async function startBroadcastWorker(
     throw new Error('[@holo-js/broadcast] Broadcast worker requires a loaded broadcast config.')
   }
 
+  const scalingConnectionName = config.worker.scaling
+    ? resolveScalingConnectionName(config.worker.scaling.connection, runtimeBindings.queue, runtimeBindings.redis)
+    : undefined
   const scalingConfig = config.worker.scaling
     ? Object.freeze({
         driver: 'redis' as const,
-        connection: config.worker.scaling.connection,
+        connection: scalingConnectionName!,
         nodeId: runtimeBindings.nodeId ?? createScalingNodeId(),
-        eventChannel: resolveScalingEventChannel(config.worker.scaling.connection),
+        eventChannel: resolveScalingEventChannel(scalingConnectionName!),
         adapter: await (runtimeBindings.createScalingAdapter
           ? runtimeBindings.createScalingAdapter(
-            resolveRedisScalingConnection(runtimeBindings.queue, config.worker.scaling.connection),
+            resolveRedisScalingConnection(runtimeBindings.queue, scalingConnectionName!, runtimeBindings.redis),
           )
           : createRedisScalingAdapter(
-            resolveRedisScalingConnection(runtimeBindings.queue, config.worker.scaling.connection),
+            resolveRedisScalingConnection(runtimeBindings.queue, scalingConnectionName!, runtimeBindings.redis),
             { loadRedisModule: runtimeBindings.loadRedisModule },
           )),
       })

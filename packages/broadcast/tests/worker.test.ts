@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { describe, expect, it, vi } from 'vitest'
-import { normalizeBroadcastConfig, normalizeQueueConfigForHolo } from '@holo-js/config'
+import { normalizeBroadcastConfig, normalizeQueueConfigForHolo, normalizeRedisConfig } from '@holo-js/config'
 import {
   createBroadcastWorkerRuntime,
   startBroadcastWorker,
@@ -50,6 +50,29 @@ function createRawConfig() {
 
 function createConfig() {
   return normalizeBroadcastConfig(createRawConfig())
+}
+
+function createRedisConfig(overrides: {
+  default?: string
+  connections?: Record<string, {
+    url?: string
+    host?: string
+    port?: number
+    username?: string
+    password?: string
+    db?: number
+  }>
+} = {}) {
+  return normalizeRedisConfig({
+    default: overrides.default ?? 'broadcast',
+    connections: overrides.connections ?? {
+      broadcast: {
+        host: '127.0.0.1',
+        port: 6379,
+        db: 0,
+      },
+    },
+  })
 }
 
 function createSocket(app: { connection: string, appId: string, key: string, secret: string, authEndpoint?: string }) {
@@ -130,6 +153,7 @@ function createFakeRedisModule(options: {
 } = {}) {
   const hashes = new Map<string, Map<string, string>>()
   const published: Array<{ channel: string, payload: string }> = []
+  const constructorArgs: unknown[][] = []
   const commandDisconnect = vi.fn()
   const subscriberDisconnect = vi.fn()
   const subscriberOn = vi.fn()
@@ -139,34 +163,36 @@ function createFakeRedisModule(options: {
 
   const module = {
     default: class FakeRedis {
-      duplicate() {
-        return {
-          async subscribe() {
-            return 1
-          },
-          on(event: 'message', callback: (channel: string, payload: string) => void) {
-            subscriberOn(event, callback)
-            subscriberHandler = callback
-          },
-          async unsubscribe(channel: string) {
-            subscriberUnsubscribe(channel)
-            return 1
-          },
-          off(event: 'message', callback: (channel: string, payload: string) => void) {
-            subscriberOff(event, callback)
-            if (subscriberHandler === callback) {
-              subscriberHandler = undefined
-            }
-          },
-          async quit() {
-            if (options.throwOnSubscriberQuit) {
-              throw new Error('subscriber quit failed')
-            }
-          },
-          disconnect() {
-            subscriberDisconnect()
-          },
+      private readonly role: 'command' | 'subscriber'
+
+      constructor(...args: unknown[]) {
+        constructorArgs.push(args)
+        this.role = constructorArgs.length === 1 ? 'command' : 'subscriber'
+      }
+
+      async subscribe() {
+        return 1
+      }
+
+      on(event: 'message', callback: (channel: string, payload: string) => void) {
+        subscriberOn(event, callback)
+        subscriberHandler = callback
+      }
+
+      async unsubscribe(channel: string) {
+        subscriberUnsubscribe(channel)
+        return 1
+      }
+
+      off(event: 'message', callback: (channel: string, payload: string) => void) {
+        subscriberOff(event, callback)
+        if (subscriberHandler === callback) {
+          subscriberHandler = undefined
         }
+      }
+
+      duplicate() {
+        return new FakeRedis()
       }
 
       async publish(channel: string, payload: string) {
@@ -198,12 +224,127 @@ function createFakeRedisModule(options: {
       }
 
       async quit() {
+        if (this.role === 'subscriber') {
+          if (options.throwOnSubscriberQuit) {
+            throw new Error('subscriber quit failed')
+          }
+          return
+        }
+
         if (options.throwOnCommandQuit) {
           throw new Error('command quit failed')
         }
       }
 
       disconnect() {
+        if (this.role === 'subscriber') {
+          subscriberDisconnect()
+          return
+        }
+
+        commandDisconnect()
+      }
+    },
+    Cluster: class FakeRedisCluster extends (class {} as new (...args: unknown[]) => {
+      startupNodes: unknown[]
+      options?: unknown
+      role: 'command' | 'subscriber'
+      subscribe(): Promise<number>
+      on(event: 'message', callback: (channel: string, payload: string) => void): void
+      unsubscribe(channel: string): Promise<number>
+      off(event: 'message', callback: (channel: string, payload: string) => void): void
+      publish(channel: string, payload: string): Promise<number>
+      hset(key: string, field: string, value: string): Promise<number>
+      hdel(key: string, ...fields: string[]): Promise<number>
+      hgetall(key: string): Promise<Record<string, string>>
+      quit(): Promise<void>
+      disconnect(): void
+    }) {
+      override readonly startupNodes: unknown[]
+      override readonly options?: unknown
+      override readonly role: 'command' | 'subscriber'
+
+      constructor(startupNodes: unknown[], options?: unknown) {
+        super()
+        constructorArgs.push([startupNodes, options])
+        this.startupNodes = startupNodes
+        this.options = options
+        this.role = constructorArgs.length === 1 ? 'command' : 'subscriber'
+      }
+
+      override async subscribe() {
+        return 1
+      }
+
+      override on(event: 'message', callback: (channel: string, payload: string) => void) {
+        subscriberOn(event, callback)
+        subscriberHandler = callback
+      }
+
+      override async unsubscribe(channel: string) {
+        subscriberUnsubscribe(channel)
+        return 1
+      }
+
+      override off(event: 'message', callback: (channel: string, payload: string) => void) {
+        subscriberOff(event, callback)
+        if (subscriberHandler === callback) {
+          subscriberHandler = undefined
+        }
+      }
+
+      override async publish(channel: string, payload: string) {
+        published.push({ channel, payload })
+        return 1
+      }
+
+      override async hset(key: string, field: string, value: string) {
+        const map = hashes.get(key) ?? new Map<string, string>()
+        map.set(field, value)
+        hashes.set(key, map)
+        return 1
+      }
+
+      override async hdel(key: string, ...fields: string[]) {
+        const map = hashes.get(key)
+        if (!map) {
+          return 0
+        }
+        let deleted = 0
+        for (const field of fields) {
+          if (map.delete(field)) {
+            deleted += 1
+          }
+        }
+        if (map.size === 0) {
+          hashes.delete(key)
+        }
+        return deleted
+      }
+
+      override async hgetall(key: string) {
+        return Object.fromEntries(hashes.get(key)?.entries() ?? [])
+      }
+
+      override async quit() {
+        if (this.role === 'subscriber') {
+          if (options.throwOnSubscriberQuit) {
+            throw new Error('subscriber quit failed')
+          }
+          return
+        }
+
+        if (options.throwOnCommandQuit) {
+          throw new Error('command quit failed')
+        }
+      }
+
+      override disconnect() {
+        if (this.role === 'subscriber') {
+          subscriberDisconnect()
+          return
+        }
+
         commandDisconnect()
       }
     },
@@ -214,6 +355,7 @@ function createFakeRedisModule(options: {
     emit(channel: string, payload: string) {
       subscriberHandler?.(channel, payload)
     },
+    constructorArgs,
     published,
     commandDisconnect,
     subscriberDisconnect,
@@ -1204,6 +1346,60 @@ describe('@holo-js/broadcast worker runtime', () => {
     await failingAdapter.close()
     expect(failingRedis.commandDisconnect).toHaveBeenCalledTimes(1)
     expect(failingRedis.subscriberDisconnect).toHaveBeenCalledTimes(1)
+
+    const urlRedis = createFakeRedisModule()
+    const urlAdapter = await workerInternals.createRedisScalingAdapter({
+      url: 'redis://cache.internal:6380/4',
+      host: '127.0.0.1',
+      port: 6379,
+      username: 'worker',
+      password: 'secret',
+      db: 4,
+    }, {
+      loadRedisModule: async () => urlRedis.module,
+    })
+    await urlAdapter.close()
+    expect(urlRedis.constructorArgs[0]).toEqual([
+      'redis://cache.internal:6380/4',
+      {
+        username: 'worker',
+        password: 'secret',
+        db: 4,
+      },
+    ])
+    expect(urlRedis.commandDisconnect).not.toHaveBeenCalled()
+    expect(urlRedis.subscriberDisconnect).not.toHaveBeenCalled()
+
+    const clusterRedis = createFakeRedisModule()
+    const clusterAdapter = await workerInternals.createRedisScalingAdapter({
+      host: '127.0.0.1',
+      port: 6379,
+      username: 'worker',
+      password: 'secret',
+      db: 4,
+      clusters: [{
+        url: 'rediss://cache.internal:6380',
+        host: 'cache.internal',
+        port: 6380,
+      }],
+    }, {
+      loadRedisModule: async () => clusterRedis.module,
+    })
+    await clusterAdapter.close()
+    expect(clusterRedis.constructorArgs[0]).toEqual([[
+      {
+        host: 'cache.internal',
+        port: 6380,
+        tls: {},
+      },
+    ], {
+      redisOptions: {
+        username: 'worker',
+        password: 'secret',
+        db: 4,
+        tls: {},
+      },
+    }])
   })
 
   it('exposes health and stats endpoints and rejects invalid publish/auth flows', async () => {
@@ -1279,14 +1475,18 @@ describe('@holo-js/broadcast worker runtime', () => {
       connections: {
         broadcast: {
           driver: 'redis',
-          redis: {
-            host: '127.0.0.1',
-            port: 6380,
-            db: 2,
-          },
+          connection: 'broadcast',
         },
       },
-    })
+    }, createRedisConfig({
+      connections: {
+        broadcast: {
+          host: '127.0.0.1',
+          port: 6380,
+          db: 2,
+        },
+      },
+    }))
     expect(workerInternals.resolveRedisScalingConnection(queueConfig, 'broadcast')).toEqual({
       host: '127.0.0.1',
       port: 6380,
@@ -1294,7 +1494,91 @@ describe('@holo-js/broadcast worker runtime', () => {
       password: undefined,
       db: 2,
     })
-    expect(() => workerInternals.resolveRedisScalingConnection(undefined, 'broadcast')).toThrow('requires queue config')
+    expect(workerInternals.resolveRedisScalingConnection(
+      normalizeQueueConfigForHolo({
+        default: 'default',
+        connections: {
+          default: {
+            driver: 'redis',
+            connection: 'default',
+          },
+        },
+      }, createRedisConfig({
+        default: 'default',
+        connections: {
+          default: {
+            host: '10.0.0.5',
+            port: 6385,
+            db: 4,
+          },
+        },
+      })),
+      'default',
+      normalizeRedisConfig(),
+    )).toEqual({
+      host: '10.0.0.5',
+      port: 6385,
+      username: undefined,
+      password: undefined,
+      db: 4,
+    })
+    expect(workerInternals.resolveRedisScalingConnection(
+      normalizeQueueConfigForHolo({
+        default: 'default',
+        connections: {
+          default: {
+            driver: 'sync',
+          },
+        },
+      }),
+      'default',
+      normalizeRedisConfig({
+        connections: {
+          default: {
+            host: '10.0.0.9',
+            port: 6389,
+            db: 9,
+          },
+        },
+      }),
+    )).toEqual({
+      host: '10.0.0.9',
+      port: 6389,
+      username: undefined,
+      password: undefined,
+      db: 9,
+    })
+    expect(() => workerInternals.resolveRedisScalingConnection(
+      normalizeQueueConfigForHolo({
+        default: 'default',
+        connections: {
+          default: {
+            driver: 'sync',
+          },
+        },
+      }),
+      'default',
+    )).toThrow('must use the Redis queue driver')
+    expect(workerInternals.resolveRedisScalingConnection(
+      queueConfig,
+      'shared-cache',
+      normalizeRedisConfig({
+        connections: {
+          'shared-cache': {
+            host: '10.0.0.7',
+            port: 6382,
+            db: 6,
+          },
+        },
+      }),
+    )).toEqual({
+      host: '10.0.0.7',
+      port: 6382,
+      username: undefined,
+      password: undefined,
+      db: 6,
+    })
+    expect(() => workerInternals.resolveRedisScalingConnection(undefined, 'broadcast')).toThrow('requires either redis config or a Redis queue connection')
     expect(() => workerInternals.resolveRedisScalingConnection(queueConfig, 'missing')).toThrow('was not found')
     const nonRedisQueue = normalizeQueueConfigForHolo({
       default: 'sync',
@@ -1305,7 +1589,6 @@ describe('@holo-js/broadcast worker runtime', () => {
       },
     })
     expect(() => workerInternals.resolveRedisScalingConnection(nonRedisQueue, 'sync')).toThrow('must use the Redis queue driver')
-
     expect(() => workerInternals.buildWorkerApps(normalizeBroadcastConfig({
       default: 'log',
       connections: {
@@ -1424,13 +1707,10 @@ describe('@holo-js/broadcast worker runtime', () => {
           connections: {
             broadcast: {
               driver: 'redis',
-              redis: {
-                host: '127.0.0.1',
-                port: 6379,
-              },
+              connection: 'broadcast',
             },
           },
-        }),
+        }, createRedisConfig()),
         nodeId: 'node-start',
         createScalingAdapter: async () => scalingAdapter,
       })
@@ -1503,13 +1783,10 @@ describe('@holo-js/broadcast worker runtime', () => {
           connections: {
             broadcast: {
               driver: 'redis',
-              redis: {
-                host: '127.0.0.1',
-                port: 6379,
-              },
+              connection: 'broadcast',
             },
           },
-        }),
+        }, createRedisConfig()),
         nodeId: 'node-path',
         createScalingAdapter: async () => scalingAdapter,
       })
@@ -1518,6 +1795,206 @@ describe('@holo-js/broadcast worker runtime', () => {
       }), { upgrade })
       expect(upgradedWithCustomPath.status).toBe(200)
       await pathWorker.stop()
+
+      const workerWithSharedRedisDefault = await startBroadcastWorker({
+        config: normalizeBroadcastConfig({
+          ...createRawConfig(),
+          worker: {
+            ...createRawConfig().worker,
+            scaling: {
+              driver: 'redis',
+            },
+          },
+        }),
+        redis: normalizeRedisConfig({
+          default: 'cache',
+          connections: {
+            cache: {
+              host: '10.0.0.7',
+              port: 6382,
+              db: 6,
+            },
+          },
+        }),
+        createScalingAdapter: async (connection) => {
+          expect(connection).toEqual({
+            host: '10.0.0.7',
+            port: 6382,
+            username: undefined,
+            password: undefined,
+            db: 6,
+          })
+
+          return scalingAdapter
+        },
+      })
+      await workerWithSharedRedisDefault.stop()
+
+      const workerWithSyncQueueDefaultScaling = await startBroadcastWorker({
+        config: normalizeBroadcastConfig({
+          ...createRawConfig(),
+          worker: {
+            ...createRawConfig().worker,
+            scaling: {
+              driver: 'redis',
+            },
+          },
+        }),
+        queue: normalizeQueueConfigForHolo({
+          default: 'default',
+          connections: {
+            default: {
+              driver: 'sync',
+            },
+          },
+        }),
+        redis: normalizeRedisConfig({
+          default: 'cache',
+          connections: {
+            cache: {
+              host: '10.0.0.10',
+              port: 6390,
+              db: 10,
+            },
+          },
+        }),
+        createScalingAdapter: async (connection) => {
+          expect(connection).toEqual({
+            host: '10.0.0.10',
+            port: 6390,
+            username: undefined,
+            password: undefined,
+            db: 10,
+          })
+
+          return scalingAdapter
+        },
+      })
+      await workerWithSyncQueueDefaultScaling.stop()
+
+      const workerWithQueueDefaultScaling = await startBroadcastWorker({
+        config: normalizeBroadcastConfig({
+          ...createRawConfig(),
+          worker: {
+            ...createRawConfig().worker,
+            scaling: {
+              driver: 'redis',
+            },
+          },
+        }),
+        queue: normalizeQueueConfigForHolo({
+          default: 'default',
+          connections: {
+            default: {
+              driver: 'redis',
+              connection: 'broadcast',
+            },
+          },
+        }, normalizeRedisConfig({
+          default: 'cache',
+          connections: {
+            broadcast: {
+              host: '10.0.0.8',
+              port: 6383,
+              db: 7,
+            },
+            cache: {
+              host: '10.0.0.9',
+              port: 6384,
+              db: 8,
+            },
+          },
+        })),
+        redis: normalizeRedisConfig({
+          default: 'cache',
+          connections: {
+            broadcast: {
+              host: '10.0.0.8',
+              port: 6383,
+              db: 7,
+            },
+            cache: {
+              host: '10.0.0.9',
+              port: 6384,
+              db: 8,
+            },
+          },
+        }),
+        createScalingAdapter: async (connection) => {
+          expect(connection).toEqual({
+            host: '10.0.0.8',
+            port: 6383,
+            username: undefined,
+            password: undefined,
+            db: 7,
+          })
+
+          return scalingAdapter
+        },
+      })
+      await workerWithQueueDefaultScaling.stop()
+
+      const workerWithNamedQueueDefaultScaling = await startBroadcastWorker({
+        config: normalizeBroadcastConfig({
+          ...createRawConfig(),
+          worker: {
+            ...createRawConfig().worker,
+            scaling: {
+              driver: 'redis',
+            },
+          },
+        }),
+        queue: normalizeQueueConfigForHolo({
+          default: 'broadcast',
+          connections: {
+            broadcast: {
+              driver: 'redis',
+              connection: 'broadcast',
+            },
+          },
+        }, normalizeRedisConfig({
+          default: 'cache',
+          connections: {
+            broadcast: {
+              host: '10.0.0.11',
+              port: 6391,
+              db: 11,
+            },
+            cache: {
+              host: '10.0.0.12',
+              port: 6392,
+              db: 12,
+            },
+          },
+        })),
+        redis: normalizeRedisConfig({
+          default: 'cache',
+          connections: {
+            broadcast: {
+              host: '10.0.0.11',
+              port: 6391,
+              db: 11,
+            },
+            cache: {
+              host: '10.0.0.12',
+              port: 6392,
+              db: 12,
+            },
+          },
+        }),
+        createScalingAdapter: async (connection) => {
+          expect(connection).toEqual({
+            host: '10.0.0.11',
+            port: 6391,
+            username: undefined,
+            password: undefined,
+            db: 11,
+          })
+
+          return scalingAdapter
+        },
+      })
+      await workerWithNamedQueueDefaultScaling.stop()
 
       const fakeRedis = createFakeRedisModule()
       const workerWithLazyRedis = await startBroadcastWorker({
@@ -1536,13 +2013,10 @@ describe('@holo-js/broadcast worker runtime', () => {
           connections: {
             broadcast: {
               driver: 'redis',
-              redis: {
-                host: '127.0.0.1',
-                port: 6379,
-              },
+              connection: 'broadcast',
             },
           },
-        }),
+        }, createRedisConfig()),
         loadRedisModule: async () => fakeRedis.module,
       })
       await workerWithLazyRedis.stop()
@@ -1620,13 +2094,10 @@ describe('@holo-js/broadcast worker runtime', () => {
         connections: {
           broadcast: {
             driver: 'redis',
-            redis: {
-              host: '127.0.0.1',
-              port: 6379,
-            },
+            connection: 'broadcast',
           },
         },
-      }),
+      }, createRedisConfig()),
       createScalingAdapter: async () => scalingAdapter,
     })).rejects.toThrow('subscribe failed')
   })
@@ -2755,13 +3226,10 @@ describe('@holo-js/broadcast worker runtime', () => {
         connections: {
           broadcast: {
             driver: 'redis',
-            redis: {
-              host: '127.0.0.1',
-              port: 6379,
-            },
+            connection: 'broadcast',
           },
         },
-      }),
+      }, createRedisConfig()),
       createScalingAdapter: async () => subscribeFailAdapter,
     })).rejects.toThrow('subscribe cleanup test')
     expect(subscribeFailAdapter.close).toHaveBeenCalled()
@@ -2794,13 +3262,10 @@ describe('@holo-js/broadcast worker runtime', () => {
         connections: {
           broadcast: {
             driver: 'redis',
-            redis: {
-              host: '127.0.0.1',
-              port: 6379,
-            },
+            connection: 'broadcast',
           },
         },
-      }),
+      }, createRedisConfig()),
       createScalingAdapter: async () => doubleFailAdapter,
     })).rejects.toThrow('subscribe double-fail')
 
@@ -2838,13 +3303,10 @@ describe('@holo-js/broadcast worker runtime', () => {
           connections: {
             broadcast: {
               driver: 'redis',
-              redis: {
-                host: '127.0.0.1',
-                port: 6379,
-              },
+              connection: 'broadcast',
             },
           },
-        }),
+        }, createRedisConfig()),
         createScalingAdapter: async () => hub.createAdapter(),
       })
 

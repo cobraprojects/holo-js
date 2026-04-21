@@ -38,6 +38,7 @@
         "@holo-js/auth-social-google": "workspace:*",
         "@holo-js/auth-social-linkedin": "workspace:*",
         "@holo-js/auth-workos": "workspace:*",
+        "@holo-js/authorization": "workspace:*",
         "@holo-js/broadcast": "workspace:*",
         "@holo-js/cli": "workspace:*",
         "@holo-js/config": "workspace:*",
@@ -83,6 +84,7 @@
         "@holo-js/auth-social-google": "workspace:*",
         "@holo-js/auth-social-linkedin": "workspace:*",
         "@holo-js/auth-workos": "workspace:*",
+        "@holo-js/authorization": "workspace:*",
         "@holo-js/broadcast": "workspace:*",
         "@holo-js/cli": "workspace:*",
         "@holo-js/config": "workspace:*",
@@ -132,6 +134,7 @@
         "@holo-js/auth-social-google": "workspace:*",
         "@holo-js/auth-social-linkedin": "workspace:*",
         "@holo-js/auth-workos": "workspace:*",
+        "@holo-js/authorization": "workspace:*",
         "@holo-js/broadcast": "workspace:*",
         "@holo-js/cli": "workspace:*",
         "@holo-js/config": "workspace:*",
@@ -456,6 +459,7 @@
       },
       "devDependencies": {
         "@holo-js/auth": "^0.1.2",
+        "@holo-js/authorization": "^0.1.2",
         "@holo-js/events": "^0.1.2",
         "@holo-js/mail": "^0.1.2",
         "@holo-js/notifications": "^0.1.2",
@@ -472,6 +476,7 @@
         "@holo-js/auth-clerk": "^0.1.2",
         "@holo-js/auth-social": "^0.1.2",
         "@holo-js/auth-workos": "^0.1.2",
+        "@holo-js/authorization": "^0.1.2",
         "@holo-js/mail": "^0.1.2",
         "@holo-js/notifications": "^0.1.2",
         "@holo-js/queue": "^0.1.2",
@@ -484,6 +489,7 @@
         "@holo-js/auth-clerk",
         "@holo-js/auth-social",
         "@holo-js/auth-workos",
+        "@holo-js/authorization",
         "@holo-js/mail",
         "@holo-js/notifications",
         "@holo-js/queue",
@@ -784,6 +790,7 @@
       "version": "0.1.2",
       "dependencies": {
         "bullmq": "^5.71.0",
+        "ioredis": "catalog:",
         "tslib": "^2.8.1",
       },
       "devDependencies": {
@@ -825,10 +832,17 @@
       },
       "devDependencies": {
         "@types/node": "^22.10.2",
+        "ioredis": "catalog:",
         "tsup": "^8.3.5",
         "typescript": "^5.7.2",
         "vitest": "^2.1.8",
       },
+      "peerDependencies": {
+        "ioredis": "catalog:",
+      },
+      "optionalPeers": [
+        "ioredis",
+      ],
     },
     "packages/storage": {
       "name": "@holo-js/storage",
@@ -899,6 +913,7 @@
     "eslint": "^9.17.0",
     "fast-check": "^4.5.3",
     "globals": "^15.14.0",
+    "ioredis": "^5.4.2",
     "mysql2": "^3.17.1",
     "nuxt": "^4.0.0",
     "pg": "^8.13.0",

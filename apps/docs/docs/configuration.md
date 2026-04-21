@@ -10,6 +10,7 @@ my-app/
 ├── config/
 │   ├── app.ts
 │   ├── database.ts
+│   ├── redis.ts
 │   ├── queue.ts
 │   ├── storage.ts
 │   └── services.ts
@@ -27,6 +28,7 @@ Typical built-in files:
 
 - `config/app.ts`
 - `config/database.ts`
+- `config/redis.ts`
 - `config/queue.ts`
 - `config/storage.ts`
 - `config/media.ts` when media is installed
@@ -80,10 +82,30 @@ export default defineStorageConfig({
 })
 ```
 
+Example Redis config:
+
+```ts
+import { defineRedisConfig, env } from '@holo-js/config'
+
+export default defineRedisConfig({
+  default: 'cache',
+  connections: {
+    cache: {
+      url: env('REDIS_URL') || undefined,
+      host: env('REDIS_HOST', '127.0.0.1'),
+      port: env('REDIS_PORT', 6379),
+      username: env('REDIS_USERNAME'),
+      password: env('REDIS_PASSWORD'),
+      db: env('REDIS_DB', 0),
+    },
+  },
+})
+```
+
 Example queue config:
 
 ```ts
-import { defineQueueConfig, env } from '@holo-js/config'
+import { defineQueueConfig } from '@holo-js/config'
 
 export default defineQueueConfig({
   default: 'redis',
@@ -95,16 +117,96 @@ export default defineQueueConfig({
   connections: {
     redis: {
       driver: 'redis',
+      connection: 'cache',
       queue: 'default',
       retryAfter: 90,
       blockFor: 5,
-      redis: {
-        host: env('REDIS_HOST', '127.0.0.1'),
-        port: env('REDIS_PORT', 6379),
-        username: env('REDIS_USERNAME'),
-        password: env('REDIS_PASSWORD'),
-        db: env('REDIS_DB', 0),
-      },
+    },
+  },
+})
+```
+
+## Shared Redis config
+
+`config/redis.ts` is the shared Redis connection registry for first-party packages that support Redis.
+
+- Define named Redis connections once.
+- Reference them by name from `queue`, `security`, `session`, and broadcast worker scaling.
+- Redis stays optional. Apps that do not use Redis-backed features do not need to install Redis packages.
+
+### Connection priority
+
+When a Redis-backed package resolves a shared connection, Holo-JS uses this priority order:
+
+1. `url`
+2. `clusters`
+3. `host`
+
+That means:
+
+- if `url` is set, it wins
+- otherwise cluster mode is used when `clusters` is present
+- otherwise Holo-JS falls back to standalone `host` / `port`
+- `host` may be a network host or a Unix socket path such as `/var/run/redis.sock`
+
+### URL example
+
+```ts
+import { defineRedisConfig, env } from '@holo-js/config'
+
+export default defineRedisConfig({
+  default: 'cache',
+  connections: {
+    cache: {
+      url: env('REDIS_URL') || undefined,
+      host: env('REDIS_HOST', '127.0.0.1'),
+      port: env('REDIS_PORT', 6379),
+      username: env('REDIS_USERNAME'),
+      password: env('REDIS_PASSWORD'),
+      db: env('REDIS_DB', 0),
+    },
+  },
+})
+```
+
+### Cluster example
+
+```ts
+import { defineRedisConfig } from '@holo-js/config'
+
+export default defineRedisConfig({
+  default: 'cluster',
+  connections: {
+    cluster: {
+      clusters: [
+        { host: '10.0.0.11', port: 6379 },
+        { host: '10.0.0.12', port: 6379 },
+        { host: '10.0.0.13', port: 6379 },
+      ],
+      username: 'worker',
+      password: 'secret',
+      db: 0,
+    },
+  },
+})
+```
+
+### Standalone host or socket example
+
+```ts
+import { defineRedisConfig } from '@holo-js/config'
+
+export default defineRedisConfig({
+  default: 'cache',
+  connections: {
+    cache: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+    },
+    socket: {
+      host: '/var/run/redis.sock',
+      db: 1,
     },
   },
 })

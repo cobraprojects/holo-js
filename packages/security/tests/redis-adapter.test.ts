@@ -20,6 +20,44 @@ const redisMock = vi.hoisted(() => {
   const scanResponses: Array<[string, string[]]> = []
 
   class FakeRedis {
+    static Cluster = class FakeRedisCluster {
+      constructor(...args: unknown[]) {
+        calls.constructorArgs.push(args)
+      }
+
+      async connect(): Promise<void> {
+        calls.connect += 1
+      }
+
+      multi() {
+        return new FakeRedis().multi()
+      }
+
+      async del(...keys: string[]): Promise<number> {
+        return new FakeRedis().del(...keys)
+      }
+
+      async scan(
+        cursor: string,
+        matchLabel: string,
+        pattern: string,
+        countLabel: string,
+        count: number,
+      ): Promise<[string, string[]]> {
+        return new FakeRedis().scan(cursor, matchLabel, pattern, countLabel, count)
+      }
+
+      async pexpireat(key: string, timestampMs: number): Promise<number> {
+        return new FakeRedis().pexpireat(key, timestampMs)
+      }
+
+      async quit(): Promise<void> {
+        calls.quit += 1
+      }
+
+      disconnect(): void {}
+    }
+
     constructor(...args: unknown[]) {
       calls.constructorArgs.push(args)
     }
@@ -226,6 +264,40 @@ describe('security redis adapter', () => {
     ]])
   })
 
+  it('propagates TLS options for rediss cluster nodes', async () => {
+    const adapter = createSecurityRedisAdapter({
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:rate-limit:',
+      clusters: [{
+        url: 'rediss://cache.internal:6380',
+        host: 'cache.internal',
+        port: 6380,
+      }],
+    })
+
+    await adapter.connect()
+
+    expect(redisMock.calls.constructorArgs).toEqual([[
+      [{
+        host: 'cache.internal',
+        port: 6380,
+        tls: {},
+      }],
+      {
+        redisOptions: {
+          password: undefined,
+          username: undefined,
+          lazyConnect: true,
+          maxRetriesPerRequest: 3,
+          tls: {},
+        },
+      },
+    ]])
+  })
+
   it('preserves the configured redis db for socket-style connections', async () => {
     const adapter = createSecurityRedisAdapter({
       host: '127.0.0.1',
@@ -346,6 +418,40 @@ describe('security redis adapter', () => {
       lazyConnect: true,
       maxRetriesPerRequest: 3,
     })
+
+    expect(securityRedisAdapterInternals.createRedisClusterOptions({
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:rate-limit:',
+      clusters: [{
+        url: 'rediss://cache.internal:6380',
+        host: 'cache.internal',
+        port: 6380,
+      }],
+    })).toEqual({
+      redisOptions: {
+        password: undefined,
+        username: undefined,
+        lazyConnect: true,
+        maxRetriesPerRequest: 3,
+        tls: {},
+      },
+    })
+
+    expect(() => securityRedisAdapterInternals.createRedisClusterOptions({
+      host: '127.0.0.1',
+      port: 6379,
+      db: 4,
+      connection: 'default',
+      prefix: 'holo:rate-limit:',
+      clusters: [{
+        url: 'redis://cache.internal:6380',
+        host: 'cache.internal',
+        port: 6380,
+      }],
+    })).toThrow('Redis Cluster does not support selecting a non-zero database')
   })
 
   it('counts repeated hits within the same window instead of overwriting a single sorted-set member', async () => {

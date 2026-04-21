@@ -119,6 +119,7 @@ describe('@holo-js/config typing', () => {
     const accessors = createConfigAccessors({
       app: {} as HoloConfigRegistry['app'],
       database: {} as HoloConfigRegistry['database'],
+      redis: {} as HoloConfigRegistry['redis'],
       storage: {} as HoloConfigRegistry['storage'],
       queue: queue as unknown as HoloConfigRegistry['queue'],
       broadcast: broadcast as unknown as HoloConfigRegistry['broadcast'],
@@ -147,6 +148,7 @@ describe('@holo-js/config typing', () => {
     const nestedPath: DotPath<{
       app: HoloConfigRegistry['app']
       database: HoloConfigRegistry['database']
+      redis: HoloConfigRegistry['redis']
       storage: HoloConfigRegistry['storage']
       queue: HoloConfigRegistry['queue']
       broadcast: HoloConfigRegistry['broadcast']

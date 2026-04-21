@@ -700,6 +700,11 @@ export function dispatch<TJobName extends Extract<keyof HoloQueueJobRegistry, st
 export function dispatch<TPayload extends QueueJsonValue = QueueJsonValue>(
   jobName: string,
   payload: TPayload,
+  options?: QueueDispatchOptions,
+): QueuePendingDispatch<TPayload>
+export function dispatch<TPayload extends QueueJsonValue = QueueJsonValue>(
+  jobName: string,
+  payload: TPayload,
   options: QueueDispatchOptions = {},
 ): QueuePendingDispatch<TPayload> {
   return new PendingQueueDispatch(jobName, payload, options)

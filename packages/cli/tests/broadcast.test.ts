@@ -126,12 +126,18 @@ describe('@holo-js/cli broadcast worker command', () => {
       authorizationAbilities: [],
     }))
     const promise = runBroadcastWorkCommand(io.io, tempRoot, {
-      loadConfig: vi.fn(async () => ({ broadcast: { ok: true }, queue: { redis: true } })) as never,
+      loadConfig: vi.fn(async () => ({
+        broadcast: { ok: true },
+        queue: { redis: true },
+        redis: { default: 'cache' },
+        loadedFiles: [join(tempRoot, 'config/redis.ts')],
+      })) as never,
       loadRegistry,
       loadModule: vi.fn(async () => ({
-        startBroadcastWorker: vi.fn(async ({ config, queue, channelAuth }: { config: unknown, queue?: unknown, channelAuth?: unknown }) => {
+        startBroadcastWorker: vi.fn(async ({ config, queue, redis, channelAuth }: { config: unknown, queue?: unknown, redis?: unknown, channelAuth?: unknown }) => {
           expect(config).toEqual({ ok: true })
           expect(queue).toEqual({ redis: true })
+          expect(redis).toEqual({ default: 'cache' })
           expect(channelAuth).toEqual({
             registry: {
               projectRoot: tempRoot,
@@ -194,6 +200,96 @@ describe('@holo-js/cli broadcast worker command', () => {
     sigintHandler?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
     expect(stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('passes loaded redis config through to broadcast worker startup', async () => {
+    const io = createIo(process.cwd())
+    const sigintListenersBefore = process.listeners('SIGINT').length
+
+    const promise = runBroadcastWorkCommand(io.io, process.cwd(), {
+      loadConfig: vi.fn(async () => ({
+        broadcast: { ok: true },
+        queue: undefined,
+        redis: {
+          default: 'cache',
+          connections: {
+            cache: {
+              name: 'cache',
+              host: '127.0.0.1',
+              port: 6379,
+              db: 0,
+            },
+          },
+        },
+        loadedFiles: [join(process.cwd(), 'config/redis.ts')],
+      })) as never,
+      loadRegistry: vi.fn(async () => undefined),
+      loadModule: vi.fn(async () => ({
+        startBroadcastWorker: vi.fn(async ({ redis }: { redis?: unknown }) => {
+          expect(redis).toEqual({
+            default: 'cache',
+            connections: {
+              cache: {
+                name: 'cache',
+                host: '127.0.0.1',
+                port: 6379,
+                db: 0,
+              },
+            },
+          })
+
+          return {
+            host: '127.0.0.1',
+            port: 7001,
+            stop: vi.fn(async () => {}),
+          }
+        }),
+      })),
+    })
+
+    await vi.waitUntil(() => process.listeners('SIGINT').length > sigintListenersBefore)
+    process.listeners('SIGINT')[sigintListenersBefore]?.('SIGINT')
+    await expect(promise).resolves.toBeUndefined()
+  })
+
+  it('does not pass synthesized redis defaults through to broadcast worker startup', async () => {
+    const io = createIo(process.cwd())
+    const sigintListenersBefore = process.listeners('SIGINT').length
+
+    const promise = runBroadcastWorkCommand(io.io, process.cwd(), {
+      loadConfig: vi.fn(async () => ({
+        broadcast: { ok: true },
+        queue: undefined,
+        redis: {
+          default: 'default',
+          connections: {
+            default: {
+              name: 'default',
+              host: '127.0.0.1',
+              port: 6379,
+              db: 0,
+            },
+          },
+        },
+        loadedFiles: [join(process.cwd(), 'config/broadcast.ts')],
+      })) as never,
+      loadRegistry: vi.fn(async () => undefined),
+      loadModule: vi.fn(async () => ({
+        startBroadcastWorker: vi.fn(async ({ redis }: { redis?: unknown }) => {
+          expect(redis).toBeUndefined()
+
+          return {
+            host: '127.0.0.1',
+            port: 7001,
+            stop: vi.fn(async () => {}),
+          }
+        }),
+      })),
+    })
+
+    await vi.waitUntil(() => process.listeners('SIGINT').length > sigintListenersBefore)
+    process.listeners('SIGINT')[sigintListenersBefore]?.('SIGINT')
+    await expect(promise).resolves.toBeUndefined()
   })
 
   it('refreshes discovery even when loading the stale generated registry fails', async () => {
