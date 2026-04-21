@@ -488,7 +488,44 @@ function normalizeOptionalRedisString(value: string | undefined, label: string):
     return undefined
   }
 
+  const normalized = normalizeRedisConnectionName(value, label)
+
+  try {
+    const parsed = new URL(normalized)
+    if (parsed.protocol !== 'redis:' && parsed.protocol !== 'rediss:') {
+      throw new Error(`[Holo Redis] ${label} must use the redis:// or rediss:// scheme.`)
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('[Holo Redis]')) {
+      throw error
+    }
+
+    throw new Error(`[Holo Redis] ${label} must be a valid redis:// or rediss:// URL.`)
+  }
+
+  return normalized
+}
+
+function normalizeOptionalRedisSocketPath(value: string | undefined, label: string): string | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
   return normalizeRedisConnectionName(value, label)
+}
+
+function deriveNormalizedRedisSocketPath(socketPath: string | undefined, host: string | undefined): string | undefined {
+  if (socketPath) {
+    return socketPath
+  }
+
+  if (typeof host === 'string' && (host.startsWith('unix://') || host.startsWith('/'))) {
+    return host.startsWith('unix://')
+      ? host.slice('unix://'.length)
+      : host
+  }
+
+  return undefined
 }
 
 function normalizeRedisClusterNodeConfig(
@@ -498,10 +535,14 @@ function normalizeRedisClusterNodeConfig(
 ): NormalizedHoloRedisClusterNodeConfig {
   const label = `redis connection "${connectionName}" cluster node ${index + 1}`
   const url = normalizeOptionalRedisString(config.url, `${label} url`)
+  const socketPath = normalizeOptionalRedisSocketPath(config.socketPath, `${label} socketPath`)
+  const normalizedSocketPath = deriveNormalizedRedisSocketPath(socketPath, config.host?.trim())
+  const host = config.host?.trim() || normalizedSocketPath || DEFAULT_REDIS_HOST
 
   return Object.freeze({
     ...(typeof url === 'undefined' ? {} : { url }),
-    host: config.host?.trim() || DEFAULT_REDIS_HOST,
+    ...(typeof normalizedSocketPath === 'undefined' ? {} : { socketPath: normalizedSocketPath }),
+    host,
     port: parseRedisInteger(config.port, DEFAULT_REDIS_PORT, `${label} port`, {
       minimum: 1,
     }),
@@ -548,12 +589,16 @@ function normalizeRedisConnectionConfig(
 ): NormalizedHoloRedisConnectionConfig {
   const url = normalizeOptionalRedisString(config.url, `redis connection "${name}" url`)
   const clusters = normalizeRedisClusterNodes(name, config.clusters)
+  const socketPath = normalizeOptionalRedisSocketPath(config.socketPath, `redis connection "${name}" socketPath`)
+  const normalizedSocketPath = deriveNormalizedRedisSocketPath(socketPath, config.host?.trim())
+  const host = config.host?.trim() || normalizedSocketPath || DEFAULT_REDIS_HOST
 
   return Object.freeze({
     name,
     ...(typeof url === 'undefined' ? {} : { url }),
     ...(typeof clusters === 'undefined' ? {} : { clusters }),
-    host: config.host?.trim() || DEFAULT_REDIS_HOST,
+    ...(typeof normalizedSocketPath === 'undefined' ? {} : { socketPath: normalizedSocketPath }),
+    host,
     port: parseRedisInteger(config.port, DEFAULT_REDIS_PORT, `redis connection "${name}" port`, {
       minimum: 1,
     }),

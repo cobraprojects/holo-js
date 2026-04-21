@@ -57,6 +57,7 @@ export type HoloDatabaseConfig = HoloProjectDatabaseConfig
 export interface HoloRedisConnectionConfig {
   readonly url?: string
   readonly clusters?: readonly HoloRedisClusterNodeConfig[]
+  readonly socketPath?: string
   readonly host?: string
   readonly port?: number | string
   readonly username?: string
@@ -66,6 +67,7 @@ export interface HoloRedisConnectionConfig {
 
 export interface HoloRedisClusterNodeConfig {
   readonly url?: string
+  readonly socketPath?: string
   readonly host?: string
   readonly port?: number | string
 }
@@ -79,6 +81,7 @@ export interface NormalizedHoloRedisConnectionConfig {
   readonly name: string
   readonly url?: string
   readonly clusters?: readonly NormalizedHoloRedisClusterNodeConfig[]
+  readonly socketPath?: string
   readonly host: string
   readonly port: number
   readonly username?: string
@@ -88,6 +91,7 @@ export interface NormalizedHoloRedisConnectionConfig {
 
 export interface NormalizedHoloRedisClusterNodeConfig {
   readonly url?: string
+  readonly socketPath?: string
   readonly host: string
   readonly port: number
 }
@@ -699,7 +703,7 @@ export interface NormalizedQueueSyncConnectionConfig {
 export interface NormalizedQueueRedisConnectionConfig {
   readonly name: string
   readonly driver: 'redis'
-  readonly connection?: string
+  readonly connection: string
   readonly queue: string
   readonly retryAfter: number
   readonly blockFor: number

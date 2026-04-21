@@ -495,6 +495,14 @@ function resolveRedisScalingConnection(
     )
   }
 
+  if (redisConfig && typeof redisConfig.connections === 'object') {
+    const availableConnections = Object.keys(redisConfig.connections)
+    throw new Error(
+      `[@holo-js/broadcast] Broadcast scaling connection "${connectionName}" was not found in top-level redis connections. `
+      + `Available redis connections: ${availableConnections.join(', ') || '(none)'}.`,
+    )
+  }
+
   if (!queueConfig) {
     throw new Error('[@holo-js/broadcast] Broadcast scaling requires either redis config or a Redis queue connection so the Redis connection can be resolved.')
   }
@@ -608,6 +616,10 @@ async function createRedisScalingAdapter(
     readonly loadRedisModule?: () => Promise<unknown>
   } = {},
 ): Promise<BroadcastScalingAdapter> {
+  if (connection.clusters && connection.clusters.length > 0 && connection.db !== 0) {
+    throw new Error('[@holo-js/broadcast] Redis Cluster does not support selecting a non-zero database. Remove redis.db or set it to 0.')
+  }
+
   const redisModule = await loadRedisScalingModule(dependencies.loadRedisModule)
   const RedisCtor = redisModule.default
   const createClient = (): RedisScalingClientLike => {

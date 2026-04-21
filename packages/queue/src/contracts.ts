@@ -236,8 +236,8 @@ export interface QueueConnectionFacade {
     payload: QueuePayloadFor<TJobName>,
     options?: QueueDispatchOptions,
   ): QueuePendingDispatch<QueuePayloadFor<TJobName>>
-  dispatch<TPayload extends QueueJsonValue = QueueJsonValue>(
-    jobName: string,
+  dispatch<TJobName extends Exclude<string, KnownQueueJobName>, TPayload extends QueueJsonValue = QueueJsonValue>(
+    jobName: TJobName,
     payload: TPayload,
     options?: QueueDispatchOptions,
   ): QueuePendingDispatch<TPayload>
@@ -469,7 +469,7 @@ export interface NormalizedQueueSyncConnectionConfig {
 export interface NormalizedQueueRedisConnectionConfig {
   readonly name: string
   readonly driver: 'redis'
-  readonly connection?: string
+  readonly connection: string
   readonly queue: string
   readonly retryAfter: number
   readonly blockFor: number

@@ -392,10 +392,11 @@ describe('security redis adapter', () => {
     })
 
     expect(securityRedisAdapterInternals.createRedisClientOptions({
+      url: 'redis://cache.internal:6380/4',
       host: '127.0.0.1',
       port: 6379,
       db: 0,
-      connection: 'rediss://cache.internal:6380/4',
+      connection: 'cache',
       prefix: 'holo:rate-limit:',
     })).toEqual({
       password: undefined,

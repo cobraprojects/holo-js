@@ -7,6 +7,12 @@ vi.mock('bullmq', () => ({
 
 vi.mock('ioredis', () => {
   class FakeRedis {
+    static constructorArgs: unknown[][] = []
+
+    constructor(...args: unknown[]) {
+      FakeRedis.constructorArgs.push(args)
+    }
+
     static Cluster = class FakeRedisCluster {
       constructor(
         public readonly startupNodes: readonly unknown[],
@@ -32,6 +38,7 @@ describe('@holo-js/queue-redis', () => {
     expect(redisQueueDriverInternals.resolveBullConnectionOptions({
       name: 'redis',
       driver: 'redis',
+      connection: 'default',
       queue: 'default',
       retryAfter: 90,
       blockFor: 5,
@@ -65,6 +72,7 @@ describe('@holo-js/queue-redis', () => {
     const connection = redisQueueDriverInternals.resolveBullConnection({
       name: 'redis',
       driver: 'redis',
+      connection: 'default',
       queue: 'default',
       retryAfter: 90,
       blockFor: 5,
@@ -114,6 +122,7 @@ describe('@holo-js/queue-redis', () => {
     expect(() => redisQueueDriverInternals.resolveBullConnection({
       name: 'redis',
       driver: 'redis',
+      connection: 'default',
       queue: 'default',
       retryAfter: 90,
       blockFor: 5,
@@ -130,5 +139,43 @@ describe('@holo-js/queue-redis', () => {
         ],
       },
     })).toThrow('cannot select redis.db=4 in cluster mode')
+  })
+
+  it('creates a managed ioredis client for url-based connections', async () => {
+    const {
+      redisQueueDriverInternals,
+    } = await import('../src')
+    const RedisModule = (await import('ioredis')).default as unknown as {
+      constructorArgs: unknown[][]
+    }
+
+    redisQueueDriverInternals.resolveBullConnection({
+      name: 'redis',
+      driver: 'redis',
+      connection: 'default',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 5,
+      redis: {
+        url: 'rediss://cache.internal:6380/4',
+        host: '127.0.0.1',
+        port: 6379,
+        username: 'worker',
+        password: 'secret',
+        db: 4,
+      },
+    })
+
+    expect(RedisModule.constructorArgs.at(-1)).toEqual([
+      'rediss://cache.internal:6380/4',
+      {
+        username: 'worker',
+        password: 'secret',
+        db: 4,
+        lazyConnect: true,
+        maxRetriesPerRequest: null,
+        tls: {},
+      },
+    ])
   })
 })

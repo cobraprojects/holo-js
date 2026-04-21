@@ -160,6 +160,35 @@ describe('@holo-js/config', () => {
         },
       },
     })
+    expect(normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
+          socketPath: ' /tmp/redis.sock ',
+        },
+      },
+    })).toEqual({
+      default: 'cache',
+      connections: {
+        cache: {
+          name: 'cache',
+          socketPath: '/tmp/redis.sock',
+          host: '/tmp/redis.sock',
+          port: 6379,
+          username: undefined,
+          password: undefined,
+          db: 0,
+        },
+      },
+    })
+    expect(() => normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
+          url: 'http://cache.internal:6380/4',
+        },
+      },
+    })).toThrow('must use the redis:// or rediss:// scheme')
     expect(normalizeDatabaseConfig({
       defaultConnection: 'primary',
       connections: {

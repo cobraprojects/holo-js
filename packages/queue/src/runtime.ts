@@ -697,8 +697,8 @@ export function dispatch<TJobName extends Extract<keyof HoloQueueJobRegistry, st
   payload: QueuePayloadFor<TJobName>,
   options?: QueueDispatchOptions,
 ): QueuePendingDispatch<QueuePayloadFor<TJobName>>
-export function dispatch<TPayload extends QueueJsonValue = QueueJsonValue>(
-  jobName: string,
+export function dispatch<TJobName extends Exclude<string, Extract<keyof HoloQueueJobRegistry, string>>, TPayload extends QueueJsonValue = QueueJsonValue>(
+  jobName: TJobName,
   payload: TPayload,
   options?: QueueDispatchOptions,
 ): QueuePendingDispatch<TPayload>

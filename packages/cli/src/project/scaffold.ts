@@ -1529,7 +1529,7 @@ export async function syncManagedDriverDependencies(projectRoot: string): Promis
   if (
     loaded.security?.rateLimit?.driver === 'redis'
     || Object.values(loaded.session?.stores ?? {}).some(store => store.driver === 'redis')
-    || loaded.broadcast?.worker?.scaling !== false
+    || (loaded.broadcast?.worker != null && loaded.broadcast.worker.scaling !== false)
   ) {
     requiredPackages.add('ioredis')
   }
@@ -1556,6 +1556,7 @@ export async function syncManagedDriverDependencies(projectRoot: string): Promis
     '@holo-js/queue-db',
     '@holo-js/queue-redis',
     '@holo-js/storage-s3',
+    'ioredis',
   ])
 
   for (const packageName of requiredPackages) {

@@ -2227,11 +2227,15 @@ export default defineAppConfig({
     })
     expect(await readFile(join(projectRoot, 'config/queue.mjs'), 'utf8')).toBe('export default "keep"\n')
     expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).toContain('defineRedisConfig')
-    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('export REDIS_HOST=cache.internal')
-    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('REDIS_URL=')
-    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('REDIS_PORT=6379')
-    expect((await readFile(join(projectRoot, '.env'), 'utf8')).match(/REDIS_HOST=/g)?.length).toBe(1)
-    expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('REDIS_DB=')
+    const envAfterFirstInstall = await readFile(join(projectRoot, '.env'), 'utf8')
+    const envExampleAfterFirstInstall = await readFile(join(projectRoot, '.env.example'), 'utf8')
+    expect(envAfterFirstInstall).toContain('export REDIS_HOST=cache.internal')
+    expect(envAfterFirstInstall).toContain('REDIS_URL=')
+    expect(envAfterFirstInstall).toContain('REDIS_PORT=6379')
+    expect(envAfterFirstInstall.match(/REDIS_HOST=/g)?.length).toBe(1)
+    expect(envAfterFirstInstall.match(/REDIS_URL=/g)?.length).toBe(1)
+    expect(envExampleAfterFirstInstall).toContain('REDIS_DB=')
+    expect(envExampleAfterFirstInstall.match(/REDIS_URL=/g)?.length).toBe(1)
     expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))).toMatchObject({
       dependencies: {
         '@holo-js/queue': expectedHoloPackageRange,
@@ -2250,6 +2254,10 @@ export default defineAppConfig({
       updatedEnvExample: false,
       createdJobsDirectory: false,
     })
+    const envAfterRerun = await readFile(join(projectRoot, '.env'), 'utf8')
+    const envExampleAfterRerun = await readFile(join(projectRoot, '.env.example'), 'utf8')
+    expect(envAfterRerun.match(/REDIS_URL=/g)?.length).toBe(1)
+    expect(envExampleAfterRerun.match(/REDIS_URL=/g)?.length).toBe(1)
 
     const implicitFailedStoreRoot = await createTempProject()
     tempDirs.push(implicitFailedStoreRoot)

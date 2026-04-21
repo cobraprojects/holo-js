@@ -69,7 +69,7 @@ export interface QueueAsyncDriver {
 export interface NormalizedQueueRedisConnectionConfig {
   readonly name: string
   readonly driver: 'redis'
-  readonly connection?: string
+  readonly connection: string
   readonly queue: string
   readonly retryAfter: number
   readonly blockFor: number
@@ -232,6 +232,17 @@ function resolveBullConnection(
         maxRetriesPerRequest: null,
         ...(startupNodes.some(node => typeof node.tls !== 'undefined') ? { tls: {} } : {}),
       },
+    })
+  }
+
+  if (typeof connection.redis.url === 'string') {
+    return new Redis(connection.redis.url, {
+      username: connection.redis.username,
+      password: connection.redis.password,
+      db: connection.redis.db,
+      lazyConnect: true,
+      maxRetriesPerRequest: null,
+      ...(connection.redis.url.startsWith('rediss://') ? { tls: {} } : {}),
     })
   }
 
@@ -545,26 +556,31 @@ export class RedisQueueDriver implements QueueAsyncDriver {
     this.workers.clear()
     this.queues.clear()
 
-    const results = await Promise.allSettled(resources.map(async (resource) => {
-      if (resource instanceof BullWorker) {
-        await resource.close(true)
-        return
+    let closeRejection: PromiseRejectedResult | undefined
+
+    try {
+      const results = await Promise.allSettled(resources.map(async (resource) => {
+        if (resource instanceof BullWorker) {
+          await resource.close(true)
+          return
+        }
+
+        await resource.close()
+      }))
+
+      closeRejection = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+    } finally {
+      if (this.managedRedisConnection) {
+        try {
+          await this.managedRedisConnection.quit()
+        } catch {
+          this.managedRedisConnection.disconnect()
+        }
       }
-
-      await resource.close()
-    }))
-
-    const rejection = results.find(result => result.status === 'rejected')
-    if (rejection) {
-      throw wrapRedisError(this.name, 'close driver', rejection.reason)
     }
 
-    if (this.managedRedisConnection) {
-      try {
-        await this.managedRedisConnection.quit()
-      } catch {
-        this.managedRedisConnection.disconnect()
-      }
+    if (closeRejection) {
+      throw wrapRedisError(this.name, 'close driver', closeRejection.reason)
     }
   }
 }

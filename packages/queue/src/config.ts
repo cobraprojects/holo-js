@@ -149,7 +149,7 @@ function normalizeRedisConnection(
   return Object.freeze({
     name,
     driver: 'redis',
-    ...(config.connection?.trim() ? { connection } : {}),
+    connection,
     queue: normalizeQueueName(config.queue),
     retryAfter: parseInteger(config.retryAfter, DEFAULT_QUEUE_RETRY_AFTER, `queue connection "${name}" retryAfter`, {
       minimum: 0,

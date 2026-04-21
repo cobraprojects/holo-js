@@ -432,6 +432,7 @@ describe('@holo-js/queue redis driver', () => {
     const driver = queue.redisQueueDriverFactory.create({
       name: 'redis',
       driver: 'redis',
+      connection: 'default',
       queue: 'default',
       retryAfter: 90,
       blockFor: 5,
@@ -461,6 +462,7 @@ describe('@holo-js/queue redis driver', () => {
     const driver = queue.redisQueueDriverFactory.create({
       name: 'redis',
       driver: 'redis',
+      connection: 'default',
       queue: 'default',
       retryAfter: 90,
       blockFor: 5,
@@ -497,6 +499,7 @@ describe('@holo-js/queue redis driver', () => {
     const driver = requireAsyncDriver(queue.redisQueueDriverFactory.create({
       name: 'redis',
       driver: 'redis',
+      connection: 'default',
       queue: 'default',
       retryAfter: 90,
       blockFor: 5,
@@ -653,6 +656,7 @@ describe('@holo-js/queue redis driver', () => {
     const driver = requireAsyncDriver(queue.redisQueueDriverFactory.create({
       name: 'redis',
       driver: 'redis',
+      connection: 'default',
       queue: 'default',
       retryAfter: 90,
       blockFor: 5,
@@ -677,12 +681,28 @@ describe('@holo-js/queue redis driver', () => {
       createdAt: 0,
     })
 
-    expect(state.queues.get('critical')?.options).toMatchObject({
-      connection: {
-        url: 'redis://cache.internal:6380/4',
+    const criticalQueueOptions = state.queues.get('critical')?.options as {
+      readonly connection?: {
+        readonly options?: {
+          readonly host?: string
+          readonly port?: number
+          readonly username?: string
+          readonly password?: string
+          readonly db?: number
+          readonly lazyConnect?: boolean
+          readonly maxRetriesPerRequest?: null
+        }
+      }
+    } | undefined
+
+    expect(criticalQueueOptions?.connection).toMatchObject({
+      options: {
+        host: 'cache.internal',
+        port: 6380,
         username: 'worker',
         password: 'secret',
         db: 4,
+        lazyConnect: true,
         maxRetriesPerRequest: null,
       },
     })
@@ -802,6 +822,7 @@ describe('@holo-js/queue redis driver', () => {
     const driver = requireAsyncDriver(queue.redisQueueDriverFactory.create({
       name: 'redis',
       driver: 'redis',
+      connection: 'default',
       queue: 'default',
       retryAfter: 90,
       blockFor: 5,
@@ -897,6 +918,7 @@ describe('@holo-js/queue redis driver', () => {
     const readyDriver = requireAsyncDriver(queue.redisQueueDriverFactory.create({
       name: 'redis',
       driver: 'redis',
+      connection: 'default',
       queue: 'ready',
       retryAfter: 90,
       blockFor: 5,
@@ -938,6 +960,7 @@ describe('@holo-js/queue redis driver', () => {
     const driver = requireAsyncDriver(queue.redisQueueDriverFactory.create({
       name: 'redis',
       driver: 'redis',
+      connection: 'default',
       queue: 'default',
       retryAfter: 90,
       blockFor: 0,
@@ -1064,6 +1087,7 @@ describe('@holo-js/queue redis driver', () => {
     const driver = requireAsyncDriver(queue.redisQueueDriverFactory.create({
       name: 'redis',
       driver: 'redis',
+      connection: 'default',
       queue: 'default',
       retryAfter: 90,
       blockFor: 5,
@@ -1275,6 +1299,7 @@ describe('@holo-js/queue redis driver', () => {
     expect(queue.redisQueueDriverInternals.resolveBullConnectionOptions({
       name: 'redis',
       driver: 'redis',
+      connection: 'default',
       queue: 'default',
       retryAfter: 90,
       blockFor: 5,
@@ -1296,25 +1321,19 @@ describe('@holo-js/queue redis driver', () => {
     expect(queue.redisQueueDriverInternals.resolveBullConnectionOptions({
       name: 'redis',
       driver: 'redis',
+      connection: 'default',
       queue: 'default',
       retryAfter: 90,
       blockFor: 5,
       redis: {
-        host: undefined as never,
+        host: '/tmp/redis.sock',
         port: 6380,
         username: 'worker',
         password: 'secret',
         db: 4,
-        clusters: [{
-          host: 'cluster.internal',
-          port: 6381,
-        }],
       },
-    } as never)).toEqual({
-      clusters: [{
-        host: 'cluster.internal',
-        port: 6381,
-      }],
+    })).toEqual({
+      path: '/tmp/redis.sock',
       username: 'worker',
       password: 'secret',
       db: 4,

@@ -1371,12 +1371,27 @@ describe('@holo-js/broadcast worker runtime', () => {
     expect(urlRedis.subscriberDisconnect).not.toHaveBeenCalled()
 
     const clusterRedis = createFakeRedisModule()
-    const clusterAdapter = await workerInternals.createRedisScalingAdapter({
+    await expect(workerInternals.createRedisScalingAdapter({
       host: '127.0.0.1',
       port: 6379,
       username: 'worker',
       password: 'secret',
       db: 4,
+      clusters: [{
+        url: 'rediss://cache.internal:6380',
+        host: 'cache.internal',
+        port: 6380,
+      }],
+    }, {
+      loadRedisModule: async () => clusterRedis.module,
+    })).rejects.toThrow('Redis Cluster does not support selecting a non-zero database')
+
+    const clusterAdapter = await workerInternals.createRedisScalingAdapter({
+      host: '127.0.0.1',
+      port: 6379,
+      username: 'worker',
+      password: 'secret',
+      db: 0,
       clusters: [{
         url: 'rediss://cache.internal:6380',
         host: 'cache.internal',
@@ -1396,7 +1411,7 @@ describe('@holo-js/broadcast worker runtime', () => {
       redisOptions: {
         username: 'worker',
         password: 'secret',
-        db: 4,
+        db: 0,
         tls: {},
       },
     }])
@@ -1580,6 +1595,19 @@ describe('@holo-js/broadcast worker runtime', () => {
     })
     expect(() => workerInternals.resolveRedisScalingConnection(undefined, 'broadcast')).toThrow('requires either redis config or a Redis queue connection')
     expect(() => workerInternals.resolveRedisScalingConnection(queueConfig, 'missing')).toThrow('was not found')
+    expect(() => workerInternals.resolveRedisScalingConnection(
+      queueConfig,
+      'missing',
+      normalizeRedisConfig({
+        connections: {
+          cache: {
+            host: '10.0.0.7',
+            port: 6382,
+            db: 6,
+          },
+        },
+      }),
+    )).toThrow('Available redis connections: cache')
     const nonRedisQueue = normalizeQueueConfigForHolo({
       default: 'sync',
       connections: {

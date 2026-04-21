@@ -41,7 +41,7 @@ import type {
 
 const CONFIG_EXTENSION_PRIORITY = ['.ts', '.mts', '.js', '.mjs', '.cts', '.cjs'] as const
 const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIORITY)
-const HOLO_CONFIG_CACHE_VERSION = 2
+const HOLO_CONFIG_CACHE_VERSION = 3
 const HOLO_CONFIG_CACHE_PATH = join('.holo-js', 'generated', 'config-cache.json')
 const TRANSIENT_CONFIG_IMPORT_MARKER = '.__holo_import_'
 const LEGACY_TRANSIENT_CONFIG_IMPORT_MARKERS = [TRANSIENT_CONFIG_IMPORT_MARKER, '.__native_test__']

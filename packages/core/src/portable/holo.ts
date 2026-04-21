@@ -419,6 +419,10 @@ type SessionRedisAdapterModule = {
   createSessionRedisAdapter(config: LoadedSessionRedisStoreConfig): SessionRedisAdapter
 }
 
+function closeSessionRedisAdapter(adapter: SessionRedisAdapter): Promise<void> | void {
+  return adapter.disconnect?.() || adapter.close?.()
+}
+
 type NotificationsModule = {
   configureNotificationsRuntime(options?: {
     readonly config: LoadedHoloConfig['notifications']
@@ -1704,14 +1708,16 @@ async function createCoreManagedSessionStores<TCustom extends HoloConfigMap>(
 
       try {
         await adapter.connect?.()
-        const store = sessionModule.createRedisSessionStore(adapter)
         redisAdapters.push(adapter)
+        const store = sessionModule.createRedisSessionStore(adapter)
         stores[name] = store
       } catch (error) {
         const originalError = error
         const cleanupResults = await Promise.allSettled([
-          adapter.disconnect?.(),
-          ...redisAdapters.map(existingAdapter => existingAdapter.disconnect?.()),
+          closeSessionRedisAdapter(adapter),
+          ...redisAdapters
+            .filter(existingAdapter => existingAdapter !== adapter)
+            .map(existingAdapter => closeSessionRedisAdapter(existingAdapter)),
         ])
         const cleanupErrors = cleanupResults.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
 
@@ -3715,18 +3721,18 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     try {
       managedSessionStores = await createCoreManagedSessionStores(projectRoot, loadedConfig, sessionModule)
 
-      if (existingManagedSessionRedisAdapters) {
-        await Promise.all(existingManagedSessionRedisAdapters.map(adapter => adapter.close?.()))
-      }
+      sessionModule.configureSessionRuntime({
+        config: loadedConfig.session,
+        stores: managedSessionStores.stores,
+      })
 
       getRuntimeState().sessionRedisAdapters = managedSessionStores.redisAdapters.length > 0
         ? managedSessionStores.redisAdapters
         : undefined
 
-      sessionModule.configureSessionRuntime({
-        config: loadedConfig.session,
-        stores: managedSessionStores.stores,
-      })
+      if (existingManagedSessionRedisAdapters) {
+        await Promise.all(existingManagedSessionRedisAdapters.map(adapter => adapter.close?.()))
+      }
     } catch (error) {
       if (managedSessionStores) {
         await Promise.all(managedSessionStores.redisAdapters.map(adapter => adapter.close?.()))

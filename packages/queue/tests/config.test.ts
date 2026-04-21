@@ -51,6 +51,7 @@ describe('@holo-js/queue config', () => {
         redis: {
           name: 'redis',
           driver: 'redis',
+          connection: 'default',
           queue: 'emails',
           retryAfter: 120,
           blockFor: 10,
@@ -139,6 +140,7 @@ describe('@holo-js/queue config', () => {
         redis: {
           name: 'redis',
           driver: 'redis',
+          connection: 'default',
           queue: 'default',
           retryAfter: 90,
           blockFor: 5,
@@ -185,6 +187,7 @@ describe('@holo-js/queue config', () => {
         redis: {
           name: 'redis',
           driver: 'redis',
+          connection: 'default',
           queue: 'default',
           retryAfter: 90,
           blockFor: 5,
@@ -231,6 +234,7 @@ describe('@holo-js/queue config', () => {
         redis: {
           name: 'redis',
           driver: 'redis',
+          connection: 'default',
           queue: 'notifications',
           retryAfter: 90,
           blockFor: 5,

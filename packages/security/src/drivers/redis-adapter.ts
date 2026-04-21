@@ -88,18 +88,22 @@ function createRedisClientOptions(
     username: config.username,
     db: config.db,
     ...(
-      !isRedisConnectionTarget(config.connection)
+      typeof config.url === 'undefined'
+      && !isRedisConnectionTarget(config.connection)
       && !config.clusters?.length
       && !isRedisSocketConnectionTarget(config.host)
         ? {
             host: config.host,
             port: config.port,
           }
-        : isRedisSocketConnectionTarget(config.host) && !config.clusters?.length
+        : typeof config.url === 'undefined' && isRedisSocketConnectionTarget(config.host) && !config.clusters?.length
           ? { path: toRedisSocketPath(config.host) }
           : {}
     ),
-    ...(config.connection !== 'default' && !isRedisConnectionTarget(config.connection) && !config.clusters?.length
+    ...(typeof config.url === 'undefined'
+      && config.connection !== 'default'
+      && !isRedisConnectionTarget(config.connection)
+      && !config.clusters?.length
       ? { connectionName: config.connection }
       : {}),
     lazyConnect: true,
