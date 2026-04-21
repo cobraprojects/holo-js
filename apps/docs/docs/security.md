@@ -45,7 +45,7 @@ export default defineSecurityConfig({
       path: './storage/framework/rate-limits',
     },
     redis: {
-      connection: 'default',
+      connection: 'cache',
       prefix: 'holo:rate-limit:',
     },
     limiters: {
@@ -57,6 +57,38 @@ export default defineSecurityConfig({
 })
 ```
 
+When `rateLimit.driver` is `redis`, `rateLimit.redis.connection` points to a named connection in
+`config/redis.ts`.
+
+Example shared Redis config:
+
+```ts
+import { defineRedisConfig, env } from '@holo-js/config'
+
+export default defineRedisConfig({
+  default: 'cache',
+  connections: {
+    cache: {
+      url: env('REDIS_URL') || undefined,
+      host: env('REDIS_HOST', '127.0.0.1'),
+      port: env('REDIS_PORT', 6379),
+      username: env('REDIS_USERNAME'),
+      password: env('REDIS_PASSWORD'),
+      db: env('REDIS_DB', 0),
+    },
+  },
+})
+```
+
+Shared Redis connections resolve in this order:
+
+1. `url`
+2. `clusters`
+3. `host`
+
+So if `url` is present, it wins. Otherwise cluster mode is used when `clusters` exists. Otherwise
+Holo-JS falls back to standalone `host`, which may also be a Unix socket path.
+
 ### Config rules
 
 - `csrf.enabled` controls the default CSRF behavior for route protection.
@@ -65,6 +97,7 @@ export default defineSecurityConfig({
 - `csrf.cookie` stores the signed token cookie that `useForm(..., { csrf: true })` reads on the client.
 - `csrf.except` skips CSRF verification for matching paths such as webhooks.
 - `rateLimit.driver` must be `memory`, `file`, or `redis`.
+- `rateLimit.redis.connection` must reference a named shared Redis connection when `rateLimit.driver` is `redis`.
 - `rateLimit.limiters` is the named limiter registry used by `validate(...)`, `protect(...)`, and
   `rateLimit(...)`.
 - When a limiter uses `define()` instead of `by(...)`, the package uses its default key strategy.

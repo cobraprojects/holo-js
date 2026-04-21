@@ -6,6 +6,37 @@ import {
   holoQueueDefaults,
 } from '../src'
 
+const sharedRedisConfig = {
+  default: 'default',
+  connections: {
+    default: {
+      name: 'default',
+      host: '127.0.0.1',
+      port: 6379,
+      password: undefined,
+      username: undefined,
+      db: 0,
+    },
+    cache: {
+      name: 'cache',
+      url: 'redis://cache.internal:6380/4',
+      host: 'cache.internal',
+      port: 6380,
+      password: 'secret',
+      username: 'worker',
+      db: 4,
+    },
+    'redis-primary': {
+      name: 'redis-primary',
+      host: 'redis.internal',
+      port: 6379,
+      password: 'secret',
+      username: 'worker',
+      db: 0,
+    },
+  },
+} as const
+
 describe('@holo-js/queue config', () => {
   it('normalizes the default sync queue config', () => {
     expect(normalizeQueueConfig()).toEqual(holoQueueDefaults)
@@ -17,14 +48,10 @@ describe('@holo-js/queue config', () => {
       connections: {
         redis: {
           driver: 'redis',
+          connection: 'cache',
           queue: 'emails',
           retryAfter: '120',
           blockFor: '10',
-          redis: {
-            host: 'redis.internal',
-            port: '6380',
-            db: '2',
-          },
         },
         database: {
           driver: 'database',
@@ -40,7 +67,7 @@ describe('@holo-js/queue config', () => {
         connection: 'archive',
         table: 'failed_queue_jobs',
       },
-    })).toEqual({
+    }, sharedRedisConfig)).toEqual({
       default: 'redis',
       failed: {
         driver: 'database',
@@ -51,15 +78,17 @@ describe('@holo-js/queue config', () => {
         redis: {
           name: 'redis',
           driver: 'redis',
+          connection: 'cache',
           queue: 'emails',
           retryAfter: 120,
           blockFor: 10,
           redis: {
-            host: 'redis.internal',
+            url: 'redis://cache.internal:6380/4',
+            host: 'cache.internal',
             port: 6380,
-            password: undefined,
-            username: undefined,
-            db: 2,
+            password: 'secret',
+            username: 'worker',
+            db: 4,
           },
         },
         database: {
@@ -92,10 +121,10 @@ describe('@holo-js/queue config', () => {
           driver: 'database',
         },
       },
-    }).default).toBe('redis')
+    }, sharedRedisConfig).default).toBe('redis')
   })
 
-  it('normalizes blank queue fields and optional credentials to defaults', () => {
+  it('normalizes blank queue fields and shared redis defaults', () => {
     expect(normalizeQueueConfig({
       failed: {
         driver: 'database',
@@ -110,11 +139,6 @@ describe('@holo-js/queue config', () => {
         redis: {
           driver: 'redis',
           queue: '   ',
-          redis: {
-            host: '   ',
-            password: '   ',
-            username: '   ',
-          },
         },
         database: {
           driver: 'database',
@@ -123,7 +147,7 @@ describe('@holo-js/queue config', () => {
           table: '   ',
         },
       },
-    })).toEqual({
+    }, sharedRedisConfig)).toEqual({
       default: 'sync',
       failed: {
         driver: 'database',
@@ -139,6 +163,7 @@ describe('@holo-js/queue config', () => {
         redis: {
           name: 'redis',
           driver: 'redis',
+          connection: 'default',
           queue: 'default',
           retryAfter: 90,
           blockFor: 5,
@@ -161,6 +186,40 @@ describe('@holo-js/queue config', () => {
         },
       },
     })
+    expect(normalizeQueueConfig({
+      default: 'redis',
+      connections: {
+        redis: {
+          driver: 'redis',
+          connection: 'cache',
+        },
+      },
+    }, sharedRedisConfig)).toEqual({
+      default: 'redis',
+      failed: {
+        driver: 'database',
+        connection: 'default',
+        table: 'failed_jobs',
+      },
+      connections: {
+        redis: {
+          name: 'redis',
+          driver: 'redis',
+          connection: 'cache',
+          queue: 'default',
+          retryAfter: 90,
+          blockFor: 5,
+          redis: {
+            url: 'redis://cache.internal:6380/4',
+            host: 'cache.internal',
+            port: 6380,
+            password: 'secret',
+            username: 'worker',
+            db: 4,
+          },
+        },
+      },
+    })
   })
 
   it('trims defaults, names, and optional redis credentials when provided', () => {
@@ -174,15 +233,11 @@ describe('@holo-js/queue config', () => {
       connections: {
         redis: {
           driver: 'redis',
+          connection: 'redis-primary',
           queue: ' notifications ',
-          redis: {
-            host: ' redis.internal ',
-            password: ' secret ',
-            username: ' worker ',
-          },
         },
       },
-    })).toEqual({
+    }, sharedRedisConfig)).toEqual({
       default: 'redis',
       failed: {
         driver: 'database',
@@ -193,6 +248,7 @@ describe('@holo-js/queue config', () => {
         redis: {
           name: 'redis',
           driver: 'redis',
+          connection: 'redis-primary',
           queue: 'notifications',
           retryAfter: 90,
           blockFor: 5,
@@ -232,52 +288,30 @@ describe('@holo-js/queue config', () => {
       connections: {
         redis: {
           driver: 'redis',
-          redis: {
-            port: 'abc',
-          },
+          connection: 'cache',
         },
       },
-    })).toThrow('queue connection "redis" redis.port must be an integer')
+    }, sharedRedisConfig)).not.toThrow()
 
     expect(() => normalizeQueueConfig({
       connections: {
         redis: {
           driver: 'redis',
+          connection: 'cache',
           retryAfter: -1,
         },
       },
-    })).toThrow('queue connection "redis" retryAfter must be greater than or equal to 0.')
+    }, sharedRedisConfig)).toThrow('queue connection "redis" retryAfter must be greater than or equal to 0.')
 
     expect(() => normalizeQueueConfig({
       connections: {
         redis: {
           driver: 'redis',
+          connection: 'cache',
           blockFor: -1,
         },
       },
-    })).toThrow('queue connection "redis" blockFor must be greater than or equal to 0.')
-
-    expect(() => normalizeQueueConfig({
-      connections: {
-        redis: {
-          driver: 'redis',
-          redis: {
-            port: 0,
-          },
-        },
-      },
-    })).toThrow('queue connection "redis" redis.port must be greater than or equal to 1.')
-
-    expect(() => normalizeQueueConfig({
-      connections: {
-        redis: {
-          driver: 'redis',
-          redis: {
-            db: -1,
-          },
-        },
-      },
-    })).toThrow('queue connection "redis" redis.db must be greater than or equal to 0.')
+    }, sharedRedisConfig)).toThrow('queue connection "redis" blockFor must be greater than or equal to 0.')
 
     expect(() => normalizeQueueConfig({
       connections: {
@@ -320,6 +354,64 @@ describe('@holo-js/queue config', () => {
         },
       },
     })).toThrow('Queue connection name must be a non-empty string.')
+  })
+
+  it('resolves named shared Redis connections for Redis-backed queues', () => {
+    expect(normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+          connection: 'cache',
+        },
+      },
+    }, sharedRedisConfig).connections.redis).toEqual({
+      name: 'redis',
+      driver: 'redis',
+      connection: 'cache',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 5,
+      redis: {
+        url: 'redis://cache.internal:6380/4',
+        host: 'cache.internal',
+        port: 6380,
+        password: 'secret',
+        username: 'worker',
+        db: 4,
+      },
+    })
+  })
+
+  it('rejects missing or unresolved shared Redis config for Redis-backed queues', () => {
+    expect(() => normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+          connection: 'cache',
+        },
+      },
+    })).toThrow('references shared Redis connection "cache" but no shared Redis config was provided')
+
+    expect(() => normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+          connection: 'cache',
+        },
+      },
+    }, {
+      default: 'default',
+      connections: {
+        default: {
+          name: 'default',
+          host: '127.0.0.1',
+          port: 6379,
+          password: undefined,
+          username: undefined,
+          db: 0,
+        },
+      },
+    })).toThrow('Queue Redis connection "cache" was not found in shared Redis config')
   })
 
   it('exposes parseInteger fallback behavior for undefined values', () => {

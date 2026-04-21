@@ -15,6 +15,8 @@ export type {
   NormalizedQueueConnectionConfig,
   NormalizedQueueDatabaseConnectionConfig,
   NormalizedQueueFailedStoreConfig,
+  QueueSharedRedisConfig,
+  QueueSharedRedisConnectionConfig,
   NormalizedQueueRedisConnectionConfig,
   NormalizedQueueSyncConnectionConfig,
   NormalizedHoloQueueConfig,

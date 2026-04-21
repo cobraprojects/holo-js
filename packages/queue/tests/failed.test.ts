@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { QueueDriverFactory, QueueFailedJobStore, QueueReservedJob } from '../src'
+import type { QueueDriverFactory, QueueFailedJobStore, QueueJsonValue, QueueReservedJob } from '../src'
 import {
   configureQueueRuntime,
   flushFailedQueueJobs,
@@ -11,6 +11,20 @@ import {
   retryFailedQueueJobs,
   resetQueueRuntime,
 } from '../src'
+
+const sharedRedisConfig = {
+  default: 'default',
+  connections: {
+    default: {
+      name: 'default',
+      host: '127.0.0.1',
+      port: 6379,
+      password: undefined,
+      username: undefined,
+      db: 0,
+    },
+  },
+} as const
 
 function createReservedJob(
   name: string,
@@ -35,7 +49,7 @@ function createReservedJob(
 function createRedisDriverFactory(dispatched: ReturnType<typeof vi.fn>): QueueDriverFactory {
   return {
     driver: 'redis',
-    create(connection) {
+    create(connection, _context) {
       return {
         name: connection.name,
         driver: connection.driver,
@@ -51,8 +65,8 @@ function createRedisDriverFactory(dispatched: ReturnType<typeof vi.fn>): QueueDr
           return 0
         },
         async close() {},
-        async reserve() {
-          return null
+        async reserve<TPayload extends QueueJsonValue = QueueJsonValue>() {
+          return null as QueueReservedJob<TPayload> | null
         },
         async acknowledge() {},
         async release() {},
@@ -122,6 +136,7 @@ describe('@holo-js/queue failed job store runtime hooks', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
       driverFactories: [createRedisDriverFactory(dispatched)],
       failedJobStore: store,
     })

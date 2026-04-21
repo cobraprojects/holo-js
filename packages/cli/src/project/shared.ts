@@ -328,6 +328,15 @@ export const QUEUE_CONFIG_FILE_NAMES = [
   'config/queue.mjs',
 ] as const
 
+export const REDIS_CONFIG_FILE_NAMES = [
+  'config/redis.ts',
+  'config/redis.mts',
+  'config/redis.js',
+  'config/redis.mjs',
+  'config/redis.cts',
+  'config/redis.cjs',
+] as const
+
 export const NOTIFICATIONS_CONFIG_FILE_NAMES = [
   'config/notifications.ts',
   'config/notifications.mts',

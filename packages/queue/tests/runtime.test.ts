@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { QueueDriverFactory, QueueJsonValue } from '../src'
+import type { QueueDriverFactory, QueueJsonValue, QueueReservedJob, RegisterableQueueJobDefinition } from '../src'
 import {
   Queue,
   QueueReleaseUnsupportedError,
@@ -21,6 +21,20 @@ import {
   useQueueConnection,
 } from '../src'
 
+const sharedRedisConfig = {
+  default: 'default',
+  connections: {
+    default: {
+      name: 'default',
+      host: '127.0.0.1',
+      port: 6379,
+      password: undefined,
+      username: undefined,
+      db: 0,
+    },
+  },
+} as const
+
 function createAsyncDriverFactory(
   driverName: 'redis' | 'database',
   dispatched: ReturnType<typeof vi.fn>,
@@ -28,7 +42,7 @@ function createAsyncDriverFactory(
 ): QueueDriverFactory {
   return {
     driver: driverName,
-    create(connection) {
+    create(connection, _context) {
       return {
         name: connection.name,
         driver: connection.driver,
@@ -48,8 +62,8 @@ function createAsyncDriverFactory(
           return 0
         },
         close,
-        async reserve() {
-          return null
+        async reserve<TPayload extends QueueJsonValue = QueueJsonValue>() {
+          return null as QueueReservedJob<TPayload> | null
         },
         async acknowledge() {},
         async release() {},
@@ -65,14 +79,50 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-function registerNamedJob(
+function registerNamedJob<TPayload extends QueueJsonValue, TResult>(
   name: string,
-  definition: Record<string, unknown>,
+  definition: RegisterableQueueJobDefinition<TPayload, TResult>,
 ) {
-  return registerQueueJob(definition as never, { name })
+  return registerQueueJob(definition, { name })
 }
 
 describe('@holo-js/queue runtime', () => {
+  it('accepts shared redis config when configuring Redis-backed runtime connections', () => {
+    configureQueueRuntime({
+      config: {
+        default: 'redis',
+        connections: {
+          redis: {
+            driver: 'redis',
+          },
+        },
+      },
+      redisConfig: {
+        default: 'default',
+        connections: {
+          default: {
+            name: 'default',
+            host: '127.0.0.1',
+            port: 6379,
+            password: undefined,
+            username: undefined,
+            db: 0,
+          },
+        },
+      },
+    })
+
+    expect(getQueueRuntime().config.connections.redis).toMatchObject({
+      driver: 'redis',
+      connection: 'default',
+      redis: {
+        host: '127.0.0.1',
+        port: 6379,
+        db: 0,
+      },
+    })
+  })
+
   it('registers jobs from explicit names, definitions, and source-path-derived names', () => {
     const packageJob = registerQueueJob({
       async handle() {},
@@ -500,10 +550,11 @@ describe('@holo-js/queue runtime', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
       driverFactories: [
         {
           driver: 'redis',
-          create(connection) {
+          create(connection, _context) {
             return {
               name: connection.name,
               driver: connection.driver,
@@ -515,8 +566,8 @@ describe('@holo-js/queue runtime', () => {
                 return 0
               },
               async close() {},
-              async reserve() {
-                return null
+              async reserve<TPayload extends QueueJsonValue = QueueJsonValue>() {
+                return null as QueueReservedJob<TPayload> | null
               },
               async acknowledge() {},
               async release() {},
@@ -560,6 +611,7 @@ describe('@holo-js/queue runtime', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
       driverFactories: [
         createAsyncDriverFactory('redis', dispatched),
         createAsyncDriverFactory('database', dispatched),
@@ -668,6 +720,7 @@ describe('@holo-js/queue runtime', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
       driverFactories: new Map<string, QueueDriverFactory>([
         ['redis', createAsyncDriverFactory('redis', dispatched)],
       ]),
@@ -698,6 +751,7 @@ describe('@holo-js/queue runtime', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
     })
 
     registerNamedJob('queue.validate', {
@@ -714,26 +768,26 @@ describe('@holo-js/queue runtime', () => {
       nested: {
         bad: undefined,
       },
-    }).dispatch()).rejects.toThrow('Queue payload at "payload.nested.bad" must be JSON-serializable.')
+    } as unknown as QueueJsonValue).dispatch()).rejects.toThrow('Queue payload at "payload.nested.bad" must be JSON-serializable.')
 
     await expect(dispatch('queue.validate', {
       nested: new Date(),
-    }).dispatch()).rejects.toThrow('Queue payload at "payload.nested" must be a plain JSON object, array, or primitive.')
+    } as unknown as QueueJsonValue).dispatch()).rejects.toThrow('Queue payload at "payload.nested" must be a plain JSON object, array, or primitive.')
 
     await expect(dispatch('queue.validate', {
       count: Number.POSITIVE_INFINITY,
-    }).dispatch()).rejects.toThrow('Queue payload at "payload.count" must be JSON-serializable.')
+    } as unknown as QueueJsonValue).dispatch()).rejects.toThrow('Queue payload at "payload.count" must be JSON-serializable.')
 
     await expect(dispatch('queue.validate', {
       big: 1n,
-    } as never).dispatch()).rejects.toThrow('Queue payload at "payload.big" must be JSON-serializable.')
+    } as unknown as QueueJsonValue).dispatch()).rejects.toThrow('Queue payload at "payload.big" must be JSON-serializable.')
 
     const circular: { readonly name: string, self?: unknown } = { name: 'loop' }
     circular.self = circular
-    await expect(dispatch('queue.validate', circular as never).dispatch()).rejects.toThrow('Queue payload at "payload.self" contains a circular reference.')
+    await expect(dispatch('queue.validate', circular as unknown as QueueJsonValue).dispatch()).rejects.toThrow('Queue payload at "payload.self" contains a circular reference.')
     const circularArray: unknown[] = ['loop']
     circularArray.push(circularArray)
-    await expect(dispatch('queue.validate', circularArray as never).dispatch()).rejects.toThrow('Queue payload at "payload[1]" contains a circular reference.')
+    await expect(dispatch('queue.validate', circularArray as unknown as QueueJsonValue).dispatch()).rejects.toThrow('Queue payload at "payload[1]" contains a circular reference.')
     await expect(dispatchSync('queue.validate', {
       items: [1, { ok: true }, null],
     })).resolves.toBeUndefined()
@@ -822,7 +876,7 @@ describe('@holo-js/queue runtime', () => {
             queue: 'emails',
           },
         },
-      }),
+      }, sharedRedisConfig),
       driverFactories: [redisFactory],
     })
 
@@ -996,6 +1050,7 @@ describe('@holo-js/queue runtime', () => {
           },
         },
       },
+      redisConfig: sharedRedisConfig,
       driverFactories: [
         createAsyncDriverFactory('redis', dispatched, close),
       ],

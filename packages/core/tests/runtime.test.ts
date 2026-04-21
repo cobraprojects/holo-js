@@ -191,6 +191,23 @@ export default defineSecurityConfig({
 `, 'utf8')
 }
 
+async function writeRedisConfig(root: string, contents?: string): Promise<void> {
+  await writeFile(join(root, 'config/redis.ts'), contents ?? `
+import { defineRedisConfig } from ${packageEntry}
+
+export default defineRedisConfig({
+  default: 'default',
+  connections: {
+    default: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+    },
+  },
+})
+`, 'utf8')
+}
+
 async function writeAuthConfig(root: string): Promise<void> {
   await writeFile(join(root, 'config/auth.ts'), `
 import { defineAuthConfig } from ${packageEntry}
@@ -2456,6 +2473,7 @@ export default defineSecurityConfig({
   it('passes a redis adapter into security runtime boot when the redis driver is configured', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
+    await writeRedisConfig(root)
     await writeSecurityConfig(root, `
 import { defineSecurityConfig, ip, limit } from '@holo-js/security'
 
@@ -2765,6 +2783,102 @@ export default defineSecurityConfig({
     }
   })
 
+  it('disconnects redis session adapters created before session runtime boot fails', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRedisConfig(root)
+    await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${packageEntry}
+
+export default defineSessionConfig({
+  driver: 'primary',
+  stores: {
+    primary: {
+      driver: 'redis',
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:sessions:primary:',
+    },
+    secondary: {
+      driver: 'redis',
+      host: '127.0.0.1',
+      port: 6380,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:sessions:secondary:',
+    },
+  },
+})
+`, 'utf8')
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      const primaryAdapter = {
+        connect: vi.fn(async () => {}),
+        disconnect: vi.fn(async () => {}),
+        get: vi.fn(async () => null),
+        set: vi.fn(async () => {}),
+        del: vi.fn(async () => {}),
+      }
+      const secondaryAdapter = {
+        connect: vi.fn(async () => {}),
+        disconnect: vi.fn(async () => {}),
+        get: vi.fn(async () => null),
+        set: vi.fn(async () => {}),
+        del: vi.fn(async () => {}),
+      }
+      const createSessionRedisAdapter = vi.fn()
+        .mockReturnValueOnce(primaryAdapter)
+        .mockReturnValueOnce(secondaryAdapter)
+
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
+        if (specifier === '@holo-js/session') {
+          return {
+            configureSessionRuntime: vi.fn(),
+            createDatabaseSessionStore: vi.fn(),
+            createFileSessionStore: vi.fn(),
+            createRedisSessionStore: vi.fn((adapter: unknown) => {
+              if (adapter === primaryAdapter) {
+                return {
+                  read: vi.fn(async () => null),
+                  write: vi.fn(async () => {}),
+                  delete: vi.fn(async () => {}),
+                }
+              }
+
+              throw new Error('session store boot failed')
+            }),
+            getSessionRuntime: vi.fn(),
+            resetSessionRuntime: vi.fn(),
+          } as never
+        }
+
+        if (specifier === '@holo-js/session/drivers/redis-adapter') {
+          return {
+            createSessionRedisAdapter,
+          } as never
+        }
+
+        return await originalImportOptionalModule(specifier, options)
+      })
+
+      await expect(portable.reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))).rejects.toThrow('session store boot failed')
+      expect(createSessionRedisAdapter).toHaveBeenCalledTimes(2)
+      expect(primaryAdapter.connect).toHaveBeenCalledTimes(1)
+      expect(secondaryAdapter.connect).toHaveBeenCalledTimes(1)
+      expect(primaryAdapter.disconnect).toHaveBeenCalledTimes(1)
+      expect(secondaryAdapter.disconnect).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
   it('returns undefined from the default security key resolver when auth runtime id lookup fails', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
@@ -2941,6 +3055,7 @@ export default defineSecurityConfig({
   it('closes a newly created redis security adapter when runtime boot fails', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
+    await writeRedisConfig(root)
     await writeSecurityConfig(root, `
 import { defineSecurityConfig, ip, limit } from '@holo-js/security'
 
@@ -3063,6 +3178,7 @@ export default defineSecurityConfig({
   it('replaces an existing managed redis security adapter during security reconfiguration', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
+    await writeRedisConfig(root)
     await writeSecurityConfig(root, `
 import { defineSecurityConfig, ip, limit } from '@holo-js/security'
 
@@ -3183,6 +3299,7 @@ export default defineSecurityConfig({
   it('rebuilds redis-backed security stores when an existing managed adapter is present', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
+    await writeRedisConfig(root)
     await writeSecurityConfig(root, `
 import { defineSecurityConfig, ip, limit } from '@holo-js/security'
 
@@ -3359,6 +3476,7 @@ export default defineSecurityConfig({
   it('closes a newly created managed security store when security reconfiguration fails after store creation', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
+    await writeRedisConfig(root)
     await writeSecurityConfig(root, `
 import { defineSecurityConfig, ip, limit } from '@holo-js/security'
 
@@ -3467,6 +3585,7 @@ export default defineSecurityConfig({
   it('fails clearly when redis-backed security is configured without the redis adapter subpath', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
+    await writeRedisConfig(root)
     await writeSecurityConfig(root, `
 import { defineSecurityConfig, ip, limit } from '@holo-js/security'
 

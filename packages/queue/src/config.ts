@@ -2,6 +2,8 @@ import type {
   NormalizedQueueConnectionConfig,
   NormalizedQueueDatabaseConnectionConfig,
   NormalizedQueueFailedStoreConfig,
+  QueueSharedRedisConfig,
+  QueueSharedRedisConnectionConfig,
   NormalizedQueueRedisConnectionConfig,
   NormalizedQueueSyncConnectionConfig,
   NormalizedHoloQueueConfig,
@@ -17,6 +19,8 @@ export type {
   NormalizedQueueConnectionConfig,
   NormalizedQueueDatabaseConnectionConfig,
   NormalizedQueueFailedStoreConfig,
+  QueueSharedRedisConfig,
+  QueueSharedRedisConnectionConfig,
   NormalizedQueueRedisConnectionConfig,
   NormalizedQueueSyncConnectionConfig,
   NormalizedHoloQueueConfig,
@@ -102,15 +106,47 @@ function normalizeSyncConnection(
   })
 }
 
+function resolveSharedRedisConnection(
+  redisConfig: QueueSharedRedisConfig,
+  connectionName: string,
+): QueueSharedRedisConnectionConfig {
+  const resolvedConnection = redisConfig.connections[connectionName]
+  if (!resolvedConnection) {
+    const availableConnections = Object.keys(redisConfig.connections)
+    throw new Error(
+      `[Holo Queue] Queue Redis connection "${connectionName}" was not found in shared Redis config. `
+      + `Available connections: ${availableConnections.join(', ') || '(none)'}.`,
+    )
+  }
+
+  return resolvedConnection
+}
+
 function normalizeRedisConnection(
   name: string,
   config: QueueRedisConnectionConfig,
+  redisConfig?: QueueSharedRedisConfig,
 ): NormalizedQueueRedisConnectionConfig {
-  const redis = config.redis ?? {}
+  const explicitConnectionName = config.connection?.trim()
+  const connectionName = explicitConnectionName || redisConfig?.default
+  if (!connectionName) {
+    throw new Error(
+      `[Holo Queue] Queue Redis connection "${name}" requires a shared Redis config with a default connection or an explicit connection name.`,
+    )
+  }
+
+  if (!redisConfig) {
+    throw new Error(
+      `[Holo Queue] Queue Redis connection "${name}" references shared Redis connection "${connectionName}" but no shared Redis config was provided.`,
+    )
+  }
+
+  const resolvedRedisConnection = resolveSharedRedisConnection(redisConfig, connectionName)
 
   return Object.freeze({
     name,
     driver: 'redis',
+    connection: resolvedRedisConnection.name,
     queue: normalizeQueueName(config.queue),
     retryAfter: parseInteger(config.retryAfter, DEFAULT_QUEUE_RETRY_AFTER, `queue connection "${name}" retryAfter`, {
       minimum: 0,
@@ -119,15 +155,13 @@ function normalizeRedisConnection(
       minimum: 0,
     }),
     redis: Object.freeze({
-      host: redis.host?.trim() || '127.0.0.1',
-      port: parseInteger(redis.port, 6379, `queue connection "${name}" redis.port`, {
-        minimum: 1,
-      }),
-      password: redis.password?.trim() || undefined,
-      username: redis.username?.trim() || undefined,
-      db: parseInteger(redis.db, 0, `queue connection "${name}" redis.db`, {
-        minimum: 0,
-      }),
+      ...(typeof resolvedRedisConnection.url === 'undefined' ? {} : { url: resolvedRedisConnection.url }),
+      ...(typeof resolvedRedisConnection.clusters === 'undefined' ? {} : { clusters: resolvedRedisConnection.clusters }),
+      host: resolvedRedisConnection.host,
+      port: resolvedRedisConnection.port,
+      password: resolvedRedisConnection.password,
+      username: resolvedRedisConnection.username,
+      db: resolvedRedisConnection.db,
     }),
   })
 }
@@ -154,12 +188,13 @@ function normalizeDatabaseConnection(
 function normalizeConnectionConfig(
   name: string,
   config: QueueConnectionConfig,
+  redisConfig?: QueueSharedRedisConfig,
 ): NormalizedQueueConnectionConfig {
   switch (config.driver) {
     case 'sync':
       return normalizeSyncConnection(name, config)
     case 'redis':
-      return normalizeRedisConnection(name, config)
+      return normalizeRedisConnection(name, config, redisConfig)
     case 'database':
       return normalizeDatabaseConnection(name, config)
     default:
@@ -169,6 +204,7 @@ function normalizeConnectionConfig(
 
 function normalizeConnections(
   connections: Readonly<Record<string, QueueConnectionConfig>> | undefined,
+  redisConfig?: QueueSharedRedisConfig,
 ): Readonly<Record<string, NormalizedQueueConnectionConfig>> {
   if (!connections || Object.keys(connections).length === 0) {
     return DEFAULT_QUEUE_CONFIG.connections
@@ -176,7 +212,7 @@ function normalizeConnections(
 
   const normalizedEntries = Object.entries(connections).map(([name, config]) => {
     const normalizedName = normalizeConnectionName(name, 'Queue connection name')
-    return [normalizedName, normalizeConnectionConfig(normalizedName, config)] as const
+    return [normalizedName, normalizeConnectionConfig(normalizedName, config, redisConfig)] as const
   })
 
   return Object.freeze(Object.fromEntries(normalizedEntries))
@@ -202,8 +238,9 @@ function normalizeFailedStore(config: false | QueueFailedStoreConfig | undefined
 
 export function normalizeQueueConfig(
   config: HoloQueueConfig = {},
+  redisConfig?: QueueSharedRedisConfig,
 ): NormalizedHoloQueueConfig {
-  const connections = normalizeConnections(config.connections)
+  const connections = normalizeConnections(config.connections, redisConfig)
   const connectionNames = Object.keys(connections)
   const defaultConnection = config.default?.trim()
     || connectionNames[0]!

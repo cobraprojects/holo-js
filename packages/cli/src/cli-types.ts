@@ -101,7 +101,10 @@ export type QueueCliModule = {
     connectionName?: string,
     options?: { queueNames?: readonly string[] },
   ): Promise<number>
-  configureQueueRuntime(options: { config: Awaited<ReturnType<typeof loadConfigDirectory>>['queue'] } & Record<string, unknown>): void
+  configureQueueRuntime(options: {
+    config: Awaited<ReturnType<typeof loadConfigDirectory>>['queue']
+    redisConfig?: Awaited<ReturnType<typeof loadConfigDirectory>>['redis']
+  } & Record<string, unknown>): void
   flushFailedQueueJobs(): Promise<number>
   forgetFailedQueueJob(identifier: string): Promise<boolean>
   getRegisteredQueueJob(name: string): { sourcePath?: string } | undefined

@@ -35,19 +35,39 @@ All worker instances must share the same Redis backend for pub/sub and presence 
 
 ### Configure Redis Coordination
 
-1. Point your queue config to a real shared Redis server (not memory, not local-only per node).
-2. Configure broadcast scaling to use Redis.
+1. Define a shared Redis connection in `config/redis.ts`.
+2. Configure broadcast scaling to use that shared Redis connection by name.
 3. Start multiple `broadcast:work` processes; all must use the same Redis connection.
 
 Example `.env`:
 
 ```bash
+REDIS_URL=
 REDIS_HOST=10.0.0.25
 REDIS_PORT=6379
 REDIS_PASSWORD=
 REDIS_DB=0
 
 BROADCAST_REDIS_CONNECTION=default
+```
+
+Example `config/redis.ts`:
+
+```ts
+import { defineRedisConfig, env } from '@holo-js/config'
+
+export default defineRedisConfig({
+  default: 'default',
+  connections: {
+    default: {
+      url: env('REDIS_URL') || undefined,
+      host: env('REDIS_HOST', '127.0.0.1'),
+      port: env('REDIS_PORT', 6379),
+      password: env('REDIS_PASSWORD'),
+      db: env('REDIS_DB', 0),
+    },
+  },
+})
 ```
 
 Example `config/broadcast.ts`:
@@ -79,6 +99,15 @@ export default defineBroadcastConfig({
   },
 })
 ```
+
+Shared Redis connections resolve in this order:
+
+1. `url`
+2. `clusters`
+3. `host`
+
+So if `REDIS_URL` is present, the worker uses that target. Otherwise it uses cluster settings when defined.
+Otherwise it falls back to `host` / `port` or a socket path.
 
 Example process scaling:
 

@@ -1342,7 +1342,7 @@ export default defineSessionConfig({
     await expect(createHolo(invalidRoot, {
       processEnv: process.env,
       preferCache: false,
-    })).rejects.toThrow('Redis-backed session stores are not supported by the portable runtime yet')
+    })).rejects.toThrow('references shared Redis connection "cache" but no top-level redis config is loaded')
   })
 
   it('loads pending-schema auth model modules without treating them as missing', async () => {

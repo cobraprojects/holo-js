@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   defineSecurityConfig,
+  normalizeRedisConfig,
   normalizeSecurityConfig,
 } from '../src'
 
@@ -36,7 +37,16 @@ describe('@holo-js/config security normalization', () => {
     })
 
     expect(Object.isFrozen(config)).toBe(true)
-    expect(normalizeSecurityConfig(config)).toEqual({
+    expect(normalizeSecurityConfig(config, normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
+          host: '127.0.0.1',
+          port: 6379,
+          db: 0,
+        },
+      },
+    }))).toEqual({
       csrf: {
         enabled: true,
         field: '_token',

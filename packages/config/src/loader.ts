@@ -8,6 +8,7 @@ import {
   normalizeDatabaseConfig,
   normalizeMailConfig,
   normalizeNotificationsConfig,
+  normalizeRedisConfig,
   normalizeQueueConfigForHolo,
   normalizeSecurityConfig,
   normalizeSessionConfig,
@@ -31,6 +32,7 @@ import type {
   HoloMailConfig,
   HoloMediaConfig,
   HoloNotificationsConfig,
+  HoloRedisConfig,
   HoloQueueConfig,
   HoloSecurityConfig,
   HoloSessionConfig,
@@ -39,7 +41,7 @@ import type {
 
 const CONFIG_EXTENSION_PRIORITY = ['.ts', '.mts', '.js', '.mjs', '.cts', '.cjs'] as const
 const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIORITY)
-const HOLO_CONFIG_CACHE_VERSION = 2
+const HOLO_CONFIG_CACHE_VERSION = 3
 const HOLO_CONFIG_CACHE_PATH = join('.holo-js', 'generated', 'config-cache.json')
 const TRANSIENT_CONFIG_IMPORT_MARKER = '.__holo_import_'
 const LEGACY_TRANSIENT_CONFIG_IMPORT_MARKERS = [TRANSIENT_CONFIG_IMPORT_MARKER, '.__native_test__']
@@ -247,19 +249,24 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
   const resolvedRawConfig = resolveEnvPlaceholders(rawConfig, options.environment.values)
   const app = normalizeAppConfig(resolvedRawConfig.app as HoloAppConfig | undefined)
   const database = normalizeDatabaseConfig(resolvedRawConfig.database as HoloDatabaseConfig | undefined)
+  const redis = normalizeRedisConfig(resolvedRawConfig.redis as HoloRedisConfig | undefined)
+  const resolvedRedisConfig = typeof resolvedRawConfig.redis === 'undefined'
+    ? undefined
+    : redis
   const storage = normalizeStorageConfig(resolvedRawConfig.storage as HoloStorageConfig | undefined)
-  const queue = normalizeQueueConfigForHolo(resolvedRawConfig.queue as HoloQueueConfig | undefined)
+  const queue = normalizeQueueConfigForHolo(resolvedRawConfig.queue as HoloQueueConfig | undefined, resolvedRedisConfig)
   const broadcast = normalizeBroadcastConfig(resolvedRawConfig.broadcast as HoloBroadcastConfig | undefined)
   const mail = normalizeMailConfig(resolvedRawConfig.mail as HoloMailConfig | undefined)
   const notifications = normalizeNotificationsConfig(resolvedRawConfig.notifications as HoloNotificationsConfig | undefined)
   const media = Object.freeze({ ...((resolvedRawConfig.media as HoloMediaConfig | undefined) ?? {}) })
-  const session = normalizeSessionConfig(resolvedRawConfig.session as HoloSessionConfig | undefined)
-  const security = normalizeSecurityConfig(resolvedRawConfig.security as HoloSecurityConfig | undefined)
+  const session = normalizeSessionConfig(resolvedRawConfig.session as HoloSessionConfig | undefined, resolvedRedisConfig)
+  const security = normalizeSecurityConfig(resolvedRawConfig.security as HoloSecurityConfig | undefined, resolvedRedisConfig)
   const auth = normalizeAuthConfig(resolvedRawConfig.auth as HoloAuthConfig | undefined)
 
   const customEntries = Object.entries(resolvedRawConfig).filter(([key]) => {
     return key !== 'app'
       && key !== 'database'
+      && key !== 'redis'
       && key !== 'storage'
       && key !== 'queue'
       && key !== 'broadcast'
@@ -274,6 +281,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
   const all = Object.freeze({
     app,
     database,
+    redis,
     storage,
     queue,
     broadcast,
@@ -289,6 +297,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
   return {
     app,
     database,
+    redis,
     storage,
     queue,
     broadcast,
@@ -500,6 +509,10 @@ export function defineAppConfig<TConfig extends HoloAppConfig>(config: TConfig):
 }
 
 export function defineDatabaseConfig<TConfig extends HoloDatabaseConfig>(config: TConfig): DefineConfigValue<TConfig> {
+  return defineConfig(config)
+}
+
+export function defineRedisConfig<TConfig extends HoloRedisConfig>(config: TConfig): DefineConfigValue<TConfig> {
   return defineConfig(config)
 }
 

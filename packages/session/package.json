@@ -9,6 +9,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./drivers/redis-adapter": {
+      "types": "./dist/drivers/redis-adapter.d.ts",
+      "import": "./dist/drivers/redis-adapter.mjs",
+      "default": "./dist/drivers/redis-adapter.mjs"
     }
   },
   "main": "./dist/index.mjs",
@@ -25,8 +30,17 @@
   "dependencies": {
     "@holo-js/config": "^0.1.2"
   },
+  "peerDependencies": {
+    "ioredis": "catalog:"
+  },
+  "peerDependenciesMeta": {
+    "ioredis": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "ioredis": "catalog:",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"

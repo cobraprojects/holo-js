@@ -5,6 +5,7 @@ import {
   type ConnectionOptions,
   type Job,
 } from 'bullmq'
+import Redis from 'ioredis'
 
 export type QueueJsonValue
   = null
@@ -68,10 +69,17 @@ export interface QueueAsyncDriver {
 export interface NormalizedQueueRedisConnectionConfig {
   readonly name: string
   readonly driver: 'redis'
+  readonly connection: string
   readonly queue: string
   readonly retryAfter: number
   readonly blockFor: number
   readonly redis: {
+    readonly url?: string
+    readonly clusters?: readonly {
+      readonly url?: string
+      readonly host: string
+      readonly port: number
+    }[]
     readonly host: string
     readonly port: number
     readonly password?: string
@@ -89,10 +97,17 @@ type RedisQueuedEnvelope = QueueJobEnvelope<QueueJsonValue>
 type BullQueueInstance = BullQueue<RedisQueuedEnvelope, unknown, string>
 type BullWorkerInstance = BullWorker<RedisQueuedEnvelope, unknown, string>
 type BullJobInstance = Job<RedisQueuedEnvelope, unknown, string>
+type QueueBullConnection = ConnectionOptions | Redis | InstanceType<(typeof Redis)['Cluster']>
 
 type RedisReservation = {
   readonly job: BullJobInstance
   readonly token: string
+}
+
+type RedisClusterStartupNode = {
+  readonly host: string
+  readonly port: number
+  readonly tls?: Record<string, never>
 }
 
 function normalizeRedisErrorMessage(error: unknown): string {
@@ -125,17 +140,113 @@ function isQueueEnvelope(value: unknown): value is QueueJobEnvelope<QueueJsonVal
     && (typeof value.availableAt === 'undefined' || (typeof value.availableAt === 'number' && Number.isFinite(value.availableAt)))
 }
 
+function isRedisSocketConnectionTarget(value: string): boolean {
+  return value.startsWith('unix://') || value.startsWith('/')
+}
+
+function toRedisSocketPath(value: string): string {
+  return value.startsWith('unix://')
+    ? value.slice('unix://'.length)
+    : value
+}
+
+function parseClusterNodeUrl(url: string, label: string): RedisClusterStartupNode {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'redis:' && parsed.protocol !== 'rediss:') {
+      throw new Error(`unsupported protocol "${parsed.protocol}"`)
+    }
+
+    if (!parsed.hostname) {
+      throw new Error('missing hostname')
+    }
+
+    return {
+      host: parsed.hostname,
+      port: parsed.port ? Number.parseInt(parsed.port, 10) : 6379,
+      ...(parsed.protocol === 'rediss:' ? { tls: {} } : {}),
+    }
+  } catch (error) {
+    throw new Error(`[Holo Queue] ${label} is invalid: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+function resolveClusterStartupNodes(
+  connection: NormalizedQueueRedisConnectionConfig,
+): readonly RedisClusterStartupNode[] {
+  return (connection.redis.clusters ?? []).map((node, index) => {
+    const label = `Redis queue connection "${connection.name}" cluster node ${index + 1}`
+    if (typeof node.url === 'string') {
+      return parseClusterNodeUrl(node.url, `${label} url`)
+    }
+
+    if (isRedisSocketConnectionTarget(node.host)) {
+      throw new Error(`[Holo Queue] ${label} cannot use a Unix socket path in Redis cluster mode.`)
+    }
+
+    return {
+      host: node.host,
+      port: node.port,
+    }
+  })
+}
+
 function resolveBullConnectionOptions(
   connection: NormalizedQueueRedisConnectionConfig,
 ): ConnectionOptions {
+  const redisHost = connection.redis.host
+
   return {
-    host: connection.redis.host,
-    port: connection.redis.port,
+    ...(typeof connection.redis.url === 'string'
+      ? { url: connection.redis.url }
+      : typeof redisHost === 'string' && isRedisSocketConnectionTarget(redisHost)
+        ? { path: toRedisSocketPath(redisHost) }
+        : {
+          host: redisHost,
+          port: connection.redis.port,
+        }),
     username: connection.redis.username,
     password: connection.redis.password,
     db: connection.redis.db,
     maxRetriesPerRequest: null,
   }
+}
+
+function resolveBullConnection(
+  connection: NormalizedQueueRedisConnectionConfig,
+): QueueBullConnection {
+  if (connection.redis.clusters && connection.redis.clusters.length > 0 && typeof connection.redis.url !== 'string') {
+    if (connection.redis.db !== 0) {
+      throw new Error(
+        `[Holo Queue] Redis queue connection "${connection.name}" cannot select redis.db=${connection.redis.db} in cluster mode; Redis Cluster only supports database 0.`,
+      )
+    }
+
+    const startupNodes = [...resolveClusterStartupNodes(connection)]
+
+    return new Redis.Cluster(startupNodes.map(({ host, port }) => ({ host, port })), {
+      redisOptions: {
+        username: connection.redis.username,
+        password: connection.redis.password,
+        lazyConnect: true,
+        maxRetriesPerRequest: null,
+        ...(startupNodes.some(node => typeof node.tls !== 'undefined') ? { tls: {} } : {}),
+      },
+    })
+  }
+
+  if (typeof connection.redis.url === 'string') {
+    return new Redis(connection.redis.url, {
+      username: connection.redis.username,
+      password: connection.redis.password,
+      db: connection.redis.db,
+      lazyConnect: true,
+      maxRetriesPerRequest: null,
+      ...(connection.redis.url.startsWith('rediss://') ? { tls: {} } : {}),
+    })
+  }
+
+  return resolveBullConnectionOptions(connection)
 }
 
 export class RedisQueueDriverError extends Error {
@@ -184,7 +295,8 @@ export class RedisQueueDriver implements QueueAsyncDriver {
   readonly mode = 'async' as const
 
   private readonly connection: NormalizedQueueRedisConnectionConfig
-  private readonly bullConnection: ConnectionOptions
+  private readonly bullConnection: QueueBullConnection
+  private readonly managedRedisConnection?: Redis | InstanceType<(typeof Redis)['Cluster']>
   private readonly queues = new Map<string, BullQueueInstance>()
   private readonly workers = new Map<string, BullWorkerInstance>()
   private readonly reservations = new Map<string, RedisReservation>()
@@ -196,7 +308,11 @@ export class RedisQueueDriver implements QueueAsyncDriver {
   ) {
     this.name = connection.name
     this.connection = connection
-    this.bullConnection = resolveBullConnectionOptions(connection)
+    const bullConnection = resolveBullConnection(connection)
+    this.bullConnection = bullConnection
+    this.managedRedisConnection = bullConnection instanceof Redis || bullConnection instanceof Redis.Cluster
+      ? bullConnection
+      : undefined
   }
 
   private getQueue(queueName: string): BullQueueInstance {
@@ -440,18 +556,31 @@ export class RedisQueueDriver implements QueueAsyncDriver {
     this.workers.clear()
     this.queues.clear()
 
-    const results = await Promise.allSettled(resources.map(async (resource) => {
-      if (resource instanceof BullWorker) {
-        await resource.close(true)
-        return
+    let closeRejection: PromiseRejectedResult | undefined
+
+    try {
+      const results = await Promise.allSettled(resources.map(async (resource) => {
+        if (resource instanceof BullWorker) {
+          await resource.close(true)
+          return
+        }
+
+        await resource.close()
+      }))
+
+      closeRejection = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+    } finally {
+      if (this.managedRedisConnection) {
+        try {
+          await this.managedRedisConnection.quit()
+        } catch {
+          this.managedRedisConnection.disconnect()
+        }
       }
+    }
 
-      await resource.close()
-    }))
-
-    const rejection = results.find(result => result.status === 'rejected')
-    if (rejection) {
-      throw wrapRedisError(this.name, 'close driver', rejection.reason)
+    if (closeRejection) {
+      throw wrapRedisError(this.name, 'close driver', closeRejection.reason)
     }
   }
 }
@@ -466,7 +595,11 @@ export const redisQueueDriverFactory: QueueDriverFactory<NormalizedQueueRedisCon
 export const redisQueueDriverInternals = {
   isQueueEnvelope,
   normalizeRedisErrorMessage,
+  parseClusterNodeUrl,
   resolveAttempts,
+  resolveBullConnection,
   resolveBullConnectionOptions,
+  resolveClusterStartupNodes,
+  toRedisSocketPath,
   wrapRedisError,
 }

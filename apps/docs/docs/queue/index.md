@@ -78,7 +78,27 @@ No worker process is required.
 Use `redis` for normal asynchronous work:
 
 ```ts
-import { defineQueueConfig, env } from '@holo-js/config'
+// config/redis.ts
+import { defineRedisConfig, env } from '@holo-js/config'
+
+export default defineRedisConfig({
+  default: 'cache',
+  connections: {
+    cache: {
+      url: env('REDIS_URL') || undefined,
+      host: env('REDIS_HOST', '127.0.0.1'),
+      port: env('REDIS_PORT', 6379),
+      username: env('REDIS_USERNAME'),
+      password: env('REDIS_PASSWORD'),
+      db: env('REDIS_DB', 0),
+    },
+  },
+})
+```
+
+```ts
+// config/queue.ts
+import { defineQueueConfig } from '@holo-js/config'
 
 export default defineQueueConfig({
   default: 'redis',
@@ -90,20 +110,25 @@ export default defineQueueConfig({
   connections: {
     redis: {
       driver: 'redis',
+      connection: 'cache',
       queue: 'default',
       retryAfter: 90,
       blockFor: 5,
-      redis: {
-        host: env('REDIS_HOST', '127.0.0.1'),
-        port: env('REDIS_PORT', 6379),
-        username: env('REDIS_USERNAME'),
-        password: env('REDIS_PASSWORD'),
-        db: env('REDIS_DB', 0),
-      },
     },
   },
 })
 ```
+
+Queue only needs the shared Redis connection name.
+The actual Redis target lives in `config/redis.ts`.
+
+Shared Redis connections resolve in this order:
+
+1. `url`
+2. `clusters`
+3. `host`
+
+See [Configuration](/configuration) for examples of all three connection styles.
 
 Run a worker:
 

@@ -1,3 +1,4 @@
+import { basename, extname } from 'node:path'
 import { loadConfigDirectory } from '@holo-js/config'
 import {
   loadGeneratedProjectRegistry,
@@ -13,6 +14,7 @@ type BroadcastCliModule = {
   startBroadcastWorker(bindings: {
     config: Awaited<ReturnType<typeof loadConfigDirectory>>['broadcast']
     queue?: Awaited<ReturnType<typeof loadConfigDirectory>>['queue']
+    redis?: Awaited<ReturnType<typeof loadConfigDirectory>>['redis']
     channelAuth?: {
       registry?: {
         projectRoot: string
@@ -32,6 +34,12 @@ type BroadcastCliModule = {
     port: number
     stop(): Promise<void>
   }>
+}
+
+function hasLoadedRedisConfigSection(loadedFiles: readonly string[] | undefined): boolean {
+  return Array.isArray(loadedFiles) && loadedFiles.some((filePath) => {
+    return basename(filePath, extname(filePath)) === 'redis'
+  })
 }
 
 export async function loadBroadcastCliModule(projectRoot: string): Promise<BroadcastCliModule> {
@@ -66,6 +74,9 @@ export async function runBroadcastWorkCommand(
   const worker = await broadcastModule.startBroadcastWorker({
     config: config.broadcast,
     queue: config.queue,
+    ...(hasLoadedRedisConfigSection(config.loadedFiles)
+      ? { redis: config.redis }
+      : {}),
     ...(registry
       ? {
         channelAuth: {

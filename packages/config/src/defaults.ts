@@ -19,6 +19,9 @@ import type {
   HoloMailConfig,
   HoloMailMailerConfig,
   HoloMailQueueConfig,
+  HoloRedisConfig,
+  HoloRedisClusterNodeConfig,
+  HoloRedisConnectionConfig,
   NormalizedQueueConnectionConfig,
   NormalizedAuthGuardConfig,
   NormalizedAuthClerkProviderConfig,
@@ -35,6 +38,9 @@ import type {
   NormalizedHoloMailConfig,
   NormalizedHoloMailMailerConfig,
   NormalizedHoloMailQueueConfig,
+  NormalizedHoloRedisConfig,
+  NormalizedHoloRedisClusterNodeConfig,
+  NormalizedHoloRedisConnectionConfig,
   NormalizedQueueDatabaseConnectionConfig,
   NormalizedQueueFailedStoreConfig,
   NormalizedHoloAppConfig,
@@ -67,6 +73,7 @@ import type {
   SecurityRateLimitRedisConfig,
   SessionDatabaseStoreConfig,
   SessionFileStoreConfig,
+  SessionRedisStoreConfig,
   SessionStoreConfig,
 } from './types'
 
@@ -92,6 +99,25 @@ export const holoDatabaseDefaults: Readonly<NormalizedHoloDatabaseConfig> = Obje
       url: './data/database.sqlite',
       schema: 'public',
       logging: false,
+    }),
+  }),
+})
+
+export const DEFAULT_REDIS_CONNECTION = 'default'
+export const DEFAULT_REDIS_HOST = '127.0.0.1'
+export const DEFAULT_REDIS_PORT = 6379
+export const DEFAULT_REDIS_DB = 0
+
+export const holoRedisDefaults: Readonly<NormalizedHoloRedisConfig> = Object.freeze({
+  default: DEFAULT_REDIS_CONNECTION,
+  connections: Object.freeze({
+    [DEFAULT_REDIS_CONNECTION]: Object.freeze({
+      name: DEFAULT_REDIS_CONNECTION,
+      host: DEFAULT_REDIS_HOST,
+      port: DEFAULT_REDIS_PORT,
+      username: undefined,
+      password: undefined,
+      db: DEFAULT_REDIS_DB,
     }),
   }),
 })
@@ -265,9 +291,6 @@ export const DEFAULT_SECURITY_CSRF_HEADER = 'X-CSRF-TOKEN'
 export const DEFAULT_SECURITY_CSRF_COOKIE = 'XSRF-TOKEN'
 export const DEFAULT_SECURITY_RATE_LIMIT_DRIVER: SecurityRateLimitDriver = 'memory'
 export const DEFAULT_SECURITY_RATE_LIMIT_FILE_PATH = './storage/framework/rate-limits'
-export const DEFAULT_SECURITY_RATE_LIMIT_REDIS_HOST = '127.0.0.1'
-export const DEFAULT_SECURITY_RATE_LIMIT_REDIS_PORT = 6379
-export const DEFAULT_SECURITY_RATE_LIMIT_REDIS_DB = 0
 export const DEFAULT_SECURITY_RATE_LIMIT_REDIS_CONNECTION = 'default'
 export const DEFAULT_SECURITY_RATE_LIMIT_REDIS_PREFIX = 'holo:rate-limit:'
 
@@ -288,11 +311,11 @@ const DEFAULT_SECURITY_RATE_LIMIT_CONFIG: Readonly<NormalizedHoloSecurityRateLim
     path: DEFAULT_SECURITY_RATE_LIMIT_FILE_PATH,
   }),
   redis: Object.freeze({
-    host: DEFAULT_SECURITY_RATE_LIMIT_REDIS_HOST,
-    port: DEFAULT_SECURITY_RATE_LIMIT_REDIS_PORT,
+    host: DEFAULT_REDIS_HOST,
+    port: DEFAULT_REDIS_PORT,
     password: undefined,
     username: undefined,
-    db: DEFAULT_SECURITY_RATE_LIMIT_REDIS_DB,
+    db: DEFAULT_REDIS_DB,
     connection: DEFAULT_SECURITY_RATE_LIMIT_REDIS_CONNECTION,
     prefix: DEFAULT_SECURITY_RATE_LIMIT_REDIS_PREFIX,
   }),
@@ -426,6 +449,242 @@ function normalizeQueueName(value: string | undefined): string {
   return value?.trim() || DEFAULT_QUEUE_NAME
 }
 
+function parseRedisInteger(
+  value: number | string | undefined,
+  fallback: number,
+  label: string,
+  options: { minimum?: number } = {},
+): number {
+  if (typeof value === 'undefined') {
+    return fallback
+  }
+
+  const normalized = typeof value === 'number'
+    ? value
+    : (() => {
+        const trimmed = value.trim()
+        if (!trimmed || !/^\d+$/.test(trimmed)) {
+          return Number.NaN
+        }
+
+        return Number.parseInt(trimmed, 10)
+      })()
+
+  if (!Number.isInteger(normalized)) {
+    throw new Error(`[Holo Redis] ${label} must be an integer.`)
+  }
+
+  if (typeof options.minimum === 'number' && normalized < options.minimum) {
+    throw new Error(`[Holo Redis] ${label} must be greater than or equal to ${options.minimum}.`)
+  }
+
+  return normalized
+}
+
+function normalizeRedisConnectionName(value: string | undefined, label: string): string {
+  const normalized = value?.trim()
+  if (!normalized) {
+    throw new Error(`[Holo Redis] ${label} must be a non-empty string.`)
+  }
+
+  return normalized
+}
+
+function normalizeOptionalRedisString(value: string | undefined, label: string): string | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  const normalized = normalizeRedisConnectionName(value, label)
+
+  try {
+    const parsed = new URL(normalized)
+    if (parsed.protocol !== 'redis:' && parsed.protocol !== 'rediss:') {
+      throw new Error(`[Holo Redis] ${label} must use the redis:// or rediss:// scheme.`)
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('[Holo Redis]')) {
+      throw error
+    }
+
+    throw new Error(`[Holo Redis] ${label} must be a valid redis:// or rediss:// URL.`)
+  }
+
+  return normalized
+}
+
+function normalizeOptionalRedisSocketPath(value: string | undefined, label: string): string | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  return normalizeRedisConnectionName(value, label)
+}
+
+function deriveNormalizedRedisSocketPath(socketPath: string | undefined, host: string | undefined): string | undefined {
+  if (socketPath) {
+    return socketPath
+  }
+
+  if (typeof host === 'string' && (host.startsWith('unix://') || host.startsWith('/'))) {
+    return host.startsWith('unix://')
+      ? host.slice('unix://'.length)
+      : host
+  }
+
+  return undefined
+}
+
+function normalizeRedisClusterNodeConfig(
+  connectionName: string,
+  index: number,
+  config: HoloRedisClusterNodeConfig,
+): NormalizedHoloRedisClusterNodeConfig {
+  const label = `redis connection "${connectionName}" cluster node ${index + 1}`
+  const url = normalizeOptionalRedisString(config.url, `${label} url`)
+  const socketPath = normalizeOptionalRedisSocketPath(config.socketPath, `${label} socketPath`)
+  const normalizedSocketPath = deriveNormalizedRedisSocketPath(socketPath, config.host?.trim())
+
+  if (typeof normalizedSocketPath !== 'undefined') {
+    throw new Error(`[Holo Redis] ${label} cannot use socketPath in cluster mode.`)
+  }
+
+  parseRedisDatabaseFromUrl(url, {
+    allowPath: false,
+    label: `${label} url`,
+  })
+
+  const host = config.host?.trim() || DEFAULT_REDIS_HOST
+
+  return Object.freeze({
+    ...(typeof url === 'undefined' ? {} : { url }),
+    host,
+    port: parseRedisInteger(config.port, DEFAULT_REDIS_PORT, `${label} port`, {
+      minimum: 1,
+    }),
+  })
+}
+
+function normalizeRedisClusterNodes(
+  connectionName: string,
+  nodes: readonly HoloRedisClusterNodeConfig[] | undefined,
+): readonly NormalizedHoloRedisClusterNodeConfig[] | undefined {
+  if (!nodes || nodes.length === 0) {
+    return undefined
+  }
+
+  return Object.freeze(nodes.map((node, index) => normalizeRedisClusterNodeConfig(connectionName, index, node)))
+}
+
+function parseRedisDatabaseFromUrl(
+  url: string | undefined,
+  options: {
+    allowPath?: boolean
+    label?: string
+  } = {},
+): number | undefined {
+  if (typeof url === 'undefined') {
+    return undefined
+  }
+
+  try {
+    const parsed = new URL(url)
+    const pathname = parsed.pathname.replace(/^\/+/, '')
+    if (!pathname) {
+      return undefined
+    }
+
+    const [databaseSegment] = pathname.split('/')
+    const label = options.label ?? 'Redis URL'
+
+    if (options.allowPath === false) {
+      throw new Error(`[Holo Redis] ${label} cannot include a database path in cluster mode.`)
+    }
+
+    if (!databaseSegment || !/^\d+$/.test(databaseSegment) || pathname !== databaseSegment) {
+      throw new Error(`[Holo Redis] ${label} database path must be a single integer segment.`)
+    }
+
+    return Number.parseInt(databaseSegment, 10)
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('[Holo Redis]')) {
+      throw error
+    }
+
+    return undefined
+  }
+}
+
+function normalizeRedisConnectionConfig(
+  name: string,
+  config: HoloRedisConnectionConfig,
+): NormalizedHoloRedisConnectionConfig {
+  const url = normalizeOptionalRedisString(config.url, `redis connection "${name}" url`)
+  const clusters = normalizeRedisClusterNodes(name, config.clusters)
+  const socketPath = normalizeOptionalRedisSocketPath(config.socketPath, `redis connection "${name}" socketPath`)
+  const normalizedSocketPath = deriveNormalizedRedisSocketPath(socketPath, config.host?.trim())
+  const targetModeCount = [url, clusters, normalizedSocketPath].filter(value => typeof value !== 'undefined').length
+
+  if (targetModeCount > 1) {
+    throw new Error(`[Holo Redis] redis connection "${name}" must configure exactly one target mode: url, clusters, or socketPath.`)
+  }
+
+  const host = config.host?.trim() || normalizedSocketPath || DEFAULT_REDIS_HOST
+  const databaseFromUrl = parseRedisDatabaseFromUrl(url, {
+    label: `redis connection "${name}" url`,
+  })
+  const database = parseRedisInteger(config.db ?? databaseFromUrl, DEFAULT_REDIS_DB, `redis connection "${name}" db`, {
+    minimum: 0,
+  })
+
+  if (typeof clusters !== 'undefined' && database !== 0) {
+    throw new Error(`[Holo Redis] redis connection "${name}" cannot select redis.db=${database} in cluster mode; Redis Cluster only supports database 0.`)
+  }
+
+  return Object.freeze({
+    name,
+    ...(typeof url === 'undefined' ? {} : { url }),
+    ...(typeof clusters === 'undefined' ? {} : { clusters }),
+    ...(typeof normalizedSocketPath === 'undefined' ? {} : { socketPath: normalizedSocketPath }),
+    host,
+    port: parseRedisInteger(config.port, DEFAULT_REDIS_PORT, `redis connection "${name}" port`, {
+      minimum: 1,
+    }),
+    username: config.username?.trim() || undefined,
+    password: config.password?.trim() || undefined,
+    db: database,
+  })
+}
+
+function normalizeRedisConnections(
+  connections: Readonly<Record<string, HoloRedisConnectionConfig>> | undefined,
+): Readonly<Record<string, NormalizedHoloRedisConnectionConfig>> {
+  if (!connections || Object.keys(connections).length === 0) {
+    return holoRedisDefaults.connections
+  }
+
+  return Object.freeze(Object.fromEntries(
+    Object.entries(connections).map(([name, config]) => {
+      const normalizedName = normalizeRedisConnectionName(name, 'Redis connection name')
+      return [normalizedName, normalizeRedisConnectionConfig(normalizedName, config)] as const
+    }),
+  ))
+}
+
+function resolveNormalizedRedisConnection(
+  redisConfig: NormalizedHoloRedisConfig | undefined,
+  connectionName: string,
+  label: string,
+): NormalizedHoloRedisConnectionConfig {
+  const connections = redisConfig?.connections ?? holoRedisDefaults.connections
+  const resolved = connections[connectionName]
+  if (!resolved) {
+    throw new Error(`[Holo Redis] ${label} "${connectionName}" is not configured.`)
+  }
+
+  return resolved
+}
+
 function parseSecurityInteger(
   value: number | string | undefined,
   fallback: number,
@@ -484,12 +743,32 @@ function normalizeSyncConnection(
 function normalizeRedisConnection(
   name: string,
   config: QueueRedisConnectionConfig,
+  redisConfig?: NormalizedHoloRedisConfig,
 ): NormalizedQueueConnectionConfig {
-  const redis = config.redis ?? {}
+  const explicitConnectionName = config.connection?.trim()
+  const connectionName = explicitConnectionName || redisConfig?.default
+  if (!connectionName) {
+    throw new Error(
+      `[@holo-js/config] Queue Redis connection "${name}" requires a top-level redis config with a default connection or an explicit connection name.`,
+    )
+  }
+
+  if (!redisConfig) {
+    throw new Error(
+      `[@holo-js/config] Queue Redis connection "${name}" references shared Redis connection "${connectionName}" but no top-level redis config is loaded.`,
+    )
+  }
+
+  const resolvedRedisConnection = resolveNormalizedRedisConnection(
+    redisConfig,
+    connectionName,
+    'Queue Redis connection',
+  )
 
   return Object.freeze({
     name,
     driver: 'redis',
+    connection: resolvedRedisConnection.name,
     queue: normalizeQueueName(config.queue),
     retryAfter: parseInteger(config.retryAfter, DEFAULT_QUEUE_RETRY_AFTER, `queue connection "${name}" retryAfter`, {
       minimum: 0,
@@ -498,15 +777,13 @@ function normalizeRedisConnection(
       minimum: 0,
     }),
     redis: Object.freeze({
-      host: redis.host?.trim() || '127.0.0.1',
-      port: parseInteger(redis.port, 6379, `queue connection "${name}" redis.port`, {
-        minimum: 1,
-      }),
-      password: redis.password?.trim() || undefined,
-      username: redis.username?.trim() || undefined,
-      db: parseInteger(redis.db, 0, `queue connection "${name}" redis.db`, {
-        minimum: 0,
-      }),
+      ...(typeof resolvedRedisConnection.url === 'undefined' ? {} : { url: resolvedRedisConnection.url }),
+      ...(typeof resolvedRedisConnection.clusters === 'undefined' ? {} : { clusters: resolvedRedisConnection.clusters }),
+      host: resolvedRedisConnection.host,
+      port: resolvedRedisConnection.port,
+      password: resolvedRedisConnection.password,
+      username: resolvedRedisConnection.username,
+      db: resolvedRedisConnection.db,
     }),
   })
 }
@@ -533,12 +810,13 @@ function normalizeDatabaseConnection(
 function normalizeConnectionConfig(
   name: string,
   config: QueueConnectionConfig,
+  redisConfig?: NormalizedHoloRedisConfig,
 ): NormalizedQueueConnectionConfig {
   switch (config.driver) {
     case 'sync':
       return normalizeSyncConnection(name, config)
     case 'redis':
-      return normalizeRedisConnection(name, config)
+      return normalizeRedisConnection(name, config, redisConfig)
     case 'database':
       return normalizeDatabaseConnection(name, config)
     default:
@@ -548,6 +826,7 @@ function normalizeConnectionConfig(
 
 function normalizeConnections(
   connections: Readonly<Record<string, QueueConnectionConfig>> | undefined,
+  redisConfig?: NormalizedHoloRedisConfig,
 ): Readonly<Record<string, NormalizedQueueConnectionConfig>> {
   if (!connections || Object.keys(connections).length === 0) {
     return DEFAULT_QUEUE_CONFIG.connections
@@ -555,7 +834,7 @@ function normalizeConnections(
 
   const normalizedEntries = Object.entries(connections).map(([name, config]) => {
     const normalizedName = normalizeConnectionName(name, 'Queue connection name')
-    return [normalizedName, normalizeConnectionConfig(normalizedName, config)] as const
+    return [normalizedName, normalizeConnectionConfig(normalizedName, config, redisConfig)] as const
   })
 
   return Object.freeze(Object.fromEntries(normalizedEntries))
@@ -618,6 +897,7 @@ export function normalizeAppConfig(
 function normalizeSessionStoreConfig(
   name: string,
   config: SessionStoreConfig,
+  redisConfig?: NormalizedHoloRedisConfig,
 ): NormalizedHoloSessionConfig['stores'][string] {
   /* v8 ignore start -- branch coverage here is mostly trim/default normalization on simple data mapping */
   switch (config.driver) {
@@ -639,7 +919,40 @@ function normalizeSessionStoreConfig(
       })
     }
     case 'redis': {
-      throw new Error('[Holo Session] Redis-backed session stores are not supported by the portable runtime yet.')
+      const redisStoreConfig = config as SessionRedisStoreConfig
+      const configuredConnection = redisStoreConfig.connection?.trim()
+      const connectionName = configuredConnection || redisConfig?.default
+      if (!connectionName) {
+        throw new Error(
+          `[@holo-js/config] Session Redis store "${name}" requires a top-level redis config with a default connection or an explicit connection name.`,
+        )
+      }
+
+      if (!redisConfig) {
+        throw new Error(
+          `[@holo-js/config] Session Redis store "${name}" references shared Redis connection "${connectionName}" but no top-level redis config is loaded.`,
+        )
+      }
+
+      const resolvedConnection = resolveNormalizedRedisConnection(
+        redisConfig,
+        connectionName,
+        'Session Redis store',
+      )
+
+      return Object.freeze({
+        name,
+        driver: 'redis',
+        connection: resolvedConnection.name,
+        ...(typeof resolvedConnection.url === 'undefined' ? {} : { url: resolvedConnection.url }),
+        ...(typeof resolvedConnection.clusters === 'undefined' ? {} : { clusters: resolvedConnection.clusters }),
+        host: resolvedConnection.host,
+        port: resolvedConnection.port,
+        username: resolvedConnection.username,
+        password: resolvedConnection.password,
+        db: resolvedConnection.db,
+        prefix: redisStoreConfig.prefix?.trim() || '',
+      })
     }
     default:
       throw new Error(`[Holo Session] Unsupported session store driver "${String((config as { driver?: unknown }).driver)}" on store "${name}".`)
@@ -649,12 +962,13 @@ function normalizeSessionStoreConfig(
 
 export function normalizeSessionConfig(
   config: HoloSessionConfig = {},
+  redisConfig?: NormalizedHoloRedisConfig,
 ): NormalizedHoloSessionConfig {
   const stores = !config.stores || Object.keys(config.stores).length === 0
     ? holoSessionDefaults.stores
     : Object.freeze(Object.fromEntries(Object.entries(config.stores).map(([name, store]) => {
       const normalizedName = normalizeConnectionName(name, 'Session store name')
-      return [normalizedName, normalizeSessionStoreConfig(normalizedName, store)]
+      return [normalizedName, normalizeSessionStoreConfig(normalizedName, store, redisConfig)]
     })))
 
   /* v8 ignore start -- straightforward default selection between configured, preferred, and first available stores */
@@ -741,6 +1055,7 @@ function normalizeSecurityLimiter(
 
 function normalizeSecurityRateLimitConfig(
   config: HoloSecurityRateLimitConfig | undefined,
+  redisConfig?: NormalizedHoloRedisConfig,
 ): NormalizedHoloSecurityRateLimitConfig {
   const driver = normalizeSecurityOptionalString(config?.driver) || DEFAULT_SECURITY_RATE_LIMIT_DRIVER
   if (driver !== 'memory' && driver !== 'file' && driver !== 'redis') {
@@ -764,21 +1079,50 @@ function normalizeSecurityRateLimitConfig(
     file: Object.freeze({
       path: normalizeSecurityOptionalString(file.path) || DEFAULT_SECURITY_RATE_LIMIT_FILE_PATH,
     }),
-    redis: Object.freeze({
-      host: normalizeSecurityOptionalString(redis.host) || DEFAULT_SECURITY_RATE_LIMIT_REDIS_HOST,
-      port: parseSecurityInteger(redis.port, DEFAULT_SECURITY_RATE_LIMIT_REDIS_PORT, 'rate limit redis.port', { minimum: 1 }),
-      password: normalizeSecurityOptionalString(redis.password),
-      username: normalizeSecurityOptionalString(redis.username),
-      db: parseSecurityInteger(redis.db, DEFAULT_SECURITY_RATE_LIMIT_REDIS_DB, 'rate limit redis.db', { minimum: 0 }),
-      connection: normalizeSecurityOptionalString(redis.connection) || DEFAULT_SECURITY_RATE_LIMIT_REDIS_CONNECTION,
-      prefix: normalizeSecurityOptionalString(redis.prefix) || DEFAULT_SECURITY_RATE_LIMIT_REDIS_PREFIX,
-    }),
+    redis: Object.freeze((() => {
+      const connectionName = normalizeSecurityOptionalString(redis.connection)
+        || redisConfig?.default
+        || DEFAULT_SECURITY_RATE_LIMIT_REDIS_CONNECTION
+      const resolvedConnection = redisConfig
+        ? resolveNormalizedRedisConnection(
+            redisConfig,
+            connectionName,
+            'Security rate-limit Redis connection',
+          )
+        : driver === 'redis'
+          ? (() => {
+              throw new Error(
+                `[@holo-js/config] Security rate-limit Redis config references shared Redis connection "${connectionName}" but no top-level redis config is loaded.`,
+              )
+            })()
+          : {
+              name: connectionName,
+              host: DEFAULT_REDIS_HOST,
+              port: DEFAULT_REDIS_PORT,
+              password: undefined,
+              username: undefined,
+              db: DEFAULT_REDIS_DB,
+            }
+
+      return {
+        ...(typeof resolvedConnection.url === 'undefined' ? {} : { url: resolvedConnection.url }),
+        ...(typeof resolvedConnection.clusters === 'undefined' ? {} : { clusters: resolvedConnection.clusters }),
+        host: resolvedConnection.host,
+        port: resolvedConnection.port,
+        password: resolvedConnection.password,
+        username: resolvedConnection.username,
+        db: resolvedConnection.db,
+        connection: resolvedConnection.name,
+        prefix: normalizeSecurityOptionalString(redis.prefix) || DEFAULT_SECURITY_RATE_LIMIT_REDIS_PREFIX,
+      }
+    })()),
     limiters,
   })
 }
 
 export function normalizeSecurityConfig(
   config: HoloSecurityConfig = {},
+  redisConfig?: NormalizedHoloRedisConfig,
 ): NormalizedHoloSecurityConfig {
   const csrf = typeof config.csrf === 'boolean'
     ? { enabled: config.csrf }
@@ -803,7 +1147,7 @@ export function normalizeSecurityConfig(
       cookie: normalizeSecurityOptionalString(csrf.cookie) || DEFAULT_SECURITY_CSRF_COOKIE,
       except,
     }),
-    rateLimit: normalizeSecurityRateLimitConfig(config.rateLimit),
+    rateLimit: normalizeSecurityRateLimitConfig(config.rateLimit, redisConfig),
   })
 }
 
@@ -1546,10 +1890,31 @@ export function normalizeNotificationsConfig(
   })
 }
 
+export function normalizeRedisConfig(
+  config: HoloRedisConfig = {},
+): NormalizedHoloRedisConfig {
+  const connections = normalizeRedisConnections(config.connections)
+  const connectionNames = Object.keys(connections)
+  const defaultConnection = config.default?.trim() || connectionNames[0]!
+
+  if (!connections[defaultConnection]) {
+    throw new Error(
+      `[Holo Redis] default redis connection "${defaultConnection}" is not configured. `
+      + `Available connections: ${connectionNames.join(', ')}`,
+    )
+  }
+
+  return Object.freeze({
+    default: defaultConnection,
+    connections,
+  })
+}
+
 export function normalizeQueueConfigForHolo(
   config: HoloQueueConfig = {},
+  redisConfig?: NormalizedHoloRedisConfig,
 ): NormalizedHoloQueueConfig {
-  const connections = normalizeConnections(config.connections)
+  const connections = normalizeConnections(config.connections, redisConfig)
   const connectionNames = Object.keys(connections)
   const defaultConnection = config.default?.trim()
     || connectionNames[0]!

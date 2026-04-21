@@ -71,20 +71,47 @@ function isQueueEnvelope(value: unknown): value is RedisQueuedEnvelope {
 }
 
 type RedisConnectionOptions = {
-  host: string
-  port: number
+  url?: string
+  clusters?: readonly {
+    readonly url?: string
+    readonly host: string
+    readonly port: number
+  }[]
+  host?: string
+  port?: number
+  path?: string
   username?: string
   password?: string
   db: number
   maxRetriesPerRequest: null
 }
 
+function isRedisSocketConnectionTarget(value: string): boolean {
+  return value.startsWith('unix://') || value.startsWith('/')
+}
+
+function toRedisSocketPath(value: string): string {
+  return value.startsWith('unix://')
+    ? value.slice('unix://'.length)
+    : value
+}
+
 function resolveBullConnectionOptions(
   connection: NormalizedQueueRedisConnectionConfig,
 ): RedisConnectionOptions {
+  const redisHost = connection.redis.host
+
   return {
-    host: connection.redis.host,
-    port: connection.redis.port,
+    ...(typeof connection.redis.url === 'string'
+      ? { url: connection.redis.url }
+      : connection.redis.clusters && connection.redis.clusters.length > 0
+        ? { clusters: connection.redis.clusters }
+        : typeof redisHost === 'string' && isRedisSocketConnectionTarget(redisHost)
+          ? { path: toRedisSocketPath(redisHost) }
+      : {
+          host: redisHost,
+          port: connection.redis.port,
+        }),
     username: connection.redis.username,
     password: connection.redis.password,
     db: connection.redis.db,
@@ -217,5 +244,6 @@ export const redisQueueDriverInternals = {
   normalizeRedisErrorMessage,
   resolveAttempts,
   resolveBullConnectionOptions,
+  toRedisSocketPath,
   wrapRedisError,
 }

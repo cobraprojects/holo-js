@@ -236,8 +236,8 @@ export interface QueueConnectionFacade {
     payload: QueuePayloadFor<TJobName>,
     options?: QueueDispatchOptions,
   ): QueuePendingDispatch<QueuePayloadFor<TJobName>>
-  dispatch<TPayload extends QueueJsonValue = QueueJsonValue>(
-    jobName: string,
+  dispatch<TJobName extends Exclude<string, KnownQueueJobName>, TPayload extends QueueJsonValue = QueueJsonValue>(
+    jobName: TJobName,
     payload: TPayload,
     options?: QueueDispatchOptions,
   ): QueuePendingDispatch<TPayload>
@@ -410,10 +410,17 @@ export interface QueueFailedStoreConfig {
 
 export interface QueueRedisConnectionConfig {
   readonly driver: 'redis'
+  readonly connection?: string
   readonly queue?: string
   readonly retryAfter?: number | string
   readonly blockFor?: number | string
   readonly redis?: {
+    readonly url?: string
+    readonly clusters?: readonly {
+      readonly url?: string
+      readonly host?: string
+      readonly port?: number | string
+    }[]
     readonly host?: string
     readonly port?: number | string
     readonly password?: string
@@ -462,16 +469,43 @@ export interface NormalizedQueueSyncConnectionConfig {
 export interface NormalizedQueueRedisConnectionConfig {
   readonly name: string
   readonly driver: 'redis'
+  readonly connection: string
   readonly queue: string
   readonly retryAfter: number
   readonly blockFor: number
   readonly redis: {
+    readonly url?: string
+    readonly clusters?: readonly {
+      readonly url?: string
+      readonly host: string
+      readonly port: number
+    }[]
     readonly host: string
     readonly port: number
     readonly password?: string
     readonly username?: string
     readonly db: number
   }
+}
+
+export interface QueueSharedRedisConnectionConfig {
+  readonly name: string
+  readonly url?: string
+  readonly clusters?: readonly {
+    readonly url?: string
+    readonly host: string
+    readonly port: number
+  }[]
+  readonly host: string
+  readonly port: number
+  readonly password?: string
+  readonly username?: string
+  readonly db: number
+}
+
+export interface QueueSharedRedisConfig {
+  readonly default: string
+  readonly connections: Readonly<Record<string, QueueSharedRedisConnectionConfig>>
 }
 
 export interface NormalizedQueueDatabaseConnectionConfig {

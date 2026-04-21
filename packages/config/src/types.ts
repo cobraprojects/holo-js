@@ -54,6 +54,53 @@ export interface HoloAppConfig extends HoloProjectConfig {
 export type HoloDatabaseConnectionConfig = HoloProjectConnectionConfig
 export type HoloDatabaseConfig = HoloProjectDatabaseConfig
 
+export interface HoloRedisConnectionConfig {
+  readonly url?: string
+  readonly clusters?: readonly HoloRedisClusterNodeConfig[]
+  readonly socketPath?: string
+  readonly host?: string
+  readonly port?: number | string
+  readonly username?: string
+  readonly password?: string
+  readonly db?: number | string
+}
+
+export interface HoloRedisClusterNodeConfig {
+  readonly url?: string
+  readonly socketPath?: string
+  readonly host?: string
+  readonly port?: number | string
+}
+
+export interface HoloRedisConfig {
+  readonly default?: string
+  readonly connections?: Readonly<Record<string, HoloRedisConnectionConfig>>
+}
+
+export interface NormalizedHoloRedisConnectionConfig {
+  readonly name: string
+  readonly url?: string
+  readonly clusters?: readonly NormalizedHoloRedisClusterNodeConfig[]
+  readonly socketPath?: string
+  readonly host: string
+  readonly port: number
+  readonly username?: string
+  readonly password?: string
+  readonly db: number
+}
+
+export interface NormalizedHoloRedisClusterNodeConfig {
+  readonly url?: string
+  readonly socketPath?: string
+  readonly host: string
+  readonly port: number
+}
+
+export interface NormalizedHoloRedisConfig {
+  readonly default: string
+  readonly connections: Readonly<Record<string, NormalizedHoloRedisConnectionConfig>>
+}
+
 export type StorageDriver = 'local' | 'public' | 's3'
 export type StorageVisibility = 'private' | 'public'
 
@@ -309,6 +356,13 @@ export interface NormalizedSessionRedisStoreConfig {
   readonly name: string
   readonly driver: 'redis'
   readonly connection: string
+  readonly url?: string
+  readonly clusters?: readonly NormalizedHoloRedisClusterNodeConfig[]
+  readonly host: string
+  readonly port: number
+  readonly username?: string
+  readonly password?: string
+  readonly db: number
   readonly prefix: string
 }
 
@@ -383,6 +437,8 @@ export interface SecurityRateLimitFileConfig {
 }
 
 export interface SecurityRateLimitRedisConnectionConfig {
+  readonly url?: string
+  readonly clusters?: readonly HoloRedisClusterNodeConfig[]
   readonly host?: string
   readonly port?: number | string
   readonly password?: string
@@ -391,11 +447,6 @@ export interface SecurityRateLimitRedisConnectionConfig {
 }
 
 export interface SecurityRateLimitRedisConfig {
-  readonly host?: string
-  readonly port?: number | string
-  readonly password?: string
-  readonly username?: string
-  readonly db?: number | string
   readonly connection?: string
   readonly prefix?: string
 }
@@ -417,6 +468,8 @@ export interface NormalizedSecurityRateLimitFileConfig {
 }
 
 export interface NormalizedSecurityRateLimitRedisConfig {
+  readonly url?: string
+  readonly clusters?: readonly NormalizedHoloRedisClusterNodeConfig[]
   readonly host: string
   readonly port: number
   readonly password?: string
@@ -598,16 +651,10 @@ export interface NormalizedHoloAuthConfig {
 
 export interface QueueRedisConnectionConfig {
   readonly driver: 'redis'
+  readonly connection?: string
   readonly queue?: string
   readonly retryAfter?: number | string
   readonly blockFor?: number | string
-  readonly redis?: {
-    readonly host?: string
-    readonly port?: number | string
-    readonly password?: string
-    readonly username?: string
-    readonly db?: number | string
-  }
 }
 
 export interface QueueDatabaseConnectionConfig {
@@ -656,10 +703,13 @@ export interface NormalizedQueueSyncConnectionConfig {
 export interface NormalizedQueueRedisConnectionConfig {
   readonly name: string
   readonly driver: 'redis'
+  readonly connection: string
   readonly queue: string
   readonly retryAfter: number
   readonly blockFor: number
   readonly redis: {
+    readonly url?: string
+    readonly clusters?: readonly NormalizedHoloRedisClusterNodeConfig[]
     readonly host: string
     readonly port: number
     readonly password?: string
@@ -868,6 +918,7 @@ export interface NormalizedHoloMailConfig {
 export interface HoloConfigRegistry {
   app: NormalizedHoloAppConfig
   database: NormalizedHoloDatabaseConfig
+  redis: NormalizedHoloRedisConfig
   storage: NormalizedHoloStorageConfig
   queue: NormalizedHoloQueueConfig
   broadcast: NormalizedHoloBroadcastConfig
@@ -891,6 +942,7 @@ export interface LoadedEnvironment {
 export interface LoadedHoloConfig<TCustom extends HoloConfigMap = HoloConfigMap> {
   readonly app: NormalizedHoloAppConfig
   readonly database: NormalizedHoloDatabaseConfig
+  readonly redis: NormalizedHoloRedisConfig
   readonly storage: NormalizedHoloStorageConfig
   readonly queue: NormalizedHoloQueueConfig
   readonly broadcast: NormalizedHoloBroadcastConfig
