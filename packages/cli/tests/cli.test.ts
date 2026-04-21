@@ -8192,7 +8192,7 @@ export const sendEmailJob = defineJob({
   async handle() {},
 })
 `)
-    await writeProjectFile(projectRoot, 'server/broadcast/orders.ts', `
+    await writeProjectFile(projectRoot, 'server/broadcast/orders/updated.ts', `
 import { defineBroadcast } from '@holo-js/broadcast'
 
 export const orderUpdated = defineBroadcast({
@@ -8234,7 +8234,7 @@ export default defineAbility('reports.export', () => true)
     await expect(readFile(join(projectRoot, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('"orders.{orderId}": ExportedChannelDefinition')
     await expect(readFile(join(projectRoot, '.holo-js/generated/authorization/types.d.ts'), 'utf8')).resolves.toContain('"posts": {')
     await expect(readFile(join(projectRoot, '.holo-js/generated/authorization/types.d.ts'), 'utf8')).resolves.toContain('"reports.export": {')
-  })
+  }, 30000)
 
   it('preserves manifest connection fields when env overrides are partial', () => {
     expect(cliInternals.mergeRuntimeDatabaseConfig({

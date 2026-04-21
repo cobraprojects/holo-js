@@ -1548,6 +1548,32 @@ function mailConfigUsesQueue(
     || Object.values(loaded.mail.mailers).some(mailer => mailer.queue.queued)
 }
 
+async function projectHasAuthorizationScaffold(projectRoot: string): Promise<boolean> {
+  const project = await loadProjectConfig(projectRoot)
+  const policiesRoot = resolve(projectRoot, project.config.paths.authorizationPolicies ?? 'server/policies')
+  const abilitiesRoot = resolve(projectRoot, project.config.paths.authorizationAbilities ?? 'server/abilities')
+
+  return await pathExists(policiesRoot) || await pathExists(abilitiesRoot)
+}
+
+async function projectHasEventsScaffold(projectRoot: string): Promise<boolean> {
+  const project = await loadProjectConfig(projectRoot)
+  const eventsRoot = resolve(projectRoot, project.config.paths.events)
+  const listenersRoot = resolve(projectRoot, project.config.paths.listeners)
+
+  return await pathExists(eventsRoot) || await pathExists(listenersRoot)
+}
+
+function renderEnvFileContents(segments: readonly string[]): string {
+  const normalized = segments
+    .map(segment => segment.replace(/\n+$/, ''))
+    .filter(segment => segment.length > 0)
+
+  return normalized.length > 0
+    ? `${normalized.join('\n')}\n`
+    : ''
+}
+
 export async function syncManagedDriverDependencies(
   projectRoot: string,
   registry?: GeneratedProjectRegistry,
@@ -1566,6 +1592,8 @@ export async function syncManagedDriverDependencies(
   const sessionConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'session')
   const storageConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'storage')
   const requiredPackages = new Set<string>()
+  const hasAuthorizationScaffold = await projectHasAuthorizationScaffold(projectRoot)
+  const hasEventsScaffold = await projectHasEventsScaffold(projectRoot)
 
   for (const connection of Object.values(loaded.database.connections)) {
     const inferredDriver = inferConnectionDriver(connection)
@@ -1627,11 +1655,11 @@ export async function syncManagedDriverDependencies(
     requiredPackages.add('@holo-js/broadcast')
   }
 
-  if (registryHasAuthorizationDefinitions(discoveredRegistry)) {
+  if (registryHasAuthorizationDefinitions(discoveredRegistry) || hasAuthorizationScaffold) {
     requiredPackages.add('@holo-js/authorization')
   }
 
-  if (registryHasEvents(discoveredRegistry)) {
+  if (registryHasEvents(discoveredRegistry) || hasEventsScaffold) {
     requiredPackages.add('@holo-js/events')
     requiredPackages.add('@holo-js/queue')
   }
@@ -3356,12 +3384,14 @@ export async function scaffoldProject(
   const broadcastEnvFiles = broadcastEnabled ? renderBroadcastEnvFiles() : undefined
   const baseEnv = Array.isArray(env) ? env : [env]
   const baseExample = Array.isArray(example) ? example : [example]
-  const scaffoldEnv = broadcastEnvFiles
+  const scaffoldEnvSegments = broadcastEnvFiles
     ? [...baseEnv, ...broadcastEnvFiles.env]
     : baseEnv
-  const scaffoldEnvExample = broadcastEnvFiles
+  const scaffoldEnvExampleSegments = broadcastEnvFiles
     ? [...baseExample, ...broadcastEnvFiles.example]
     : baseExample
+  const scaffoldEnv = renderEnvFileContents(scaffoldEnvSegments)
+  const scaffoldEnvExample = renderEnvFileContents(scaffoldEnvExampleSegments)
 
   await mkdir(projectRoot, { recursive: true })
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })

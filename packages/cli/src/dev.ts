@@ -152,6 +152,8 @@ export function isDiscoveryRelevantPath(
   project: LoadedProjectConfig,
 ): boolean {
   const normalized = toPosixSlashes(filePath)
+  const authorizationPoliciesPath = project.config.paths.authorizationPolicies || 'server/policies'
+  const authorizationAbilitiesPath = project.config.paths.authorizationAbilities || 'server/abilities'
   const roots = [
     project.config.paths.models,
     project.config.paths.migrations,
@@ -160,8 +162,8 @@ export function isDiscoveryRelevantPath(
     project.config.paths.jobs,
     project.config.paths.events,
     project.config.paths.listeners,
-    project.config.paths.authorizationPolicies,
-    project.config.paths.authorizationAbilities,
+    authorizationPoliciesPath,
+    authorizationAbilitiesPath,
     'server/broadcast',
     'server/channels',
     project.config.paths.generatedSchema,
@@ -215,6 +217,8 @@ export async function collectDiscoveryWatchRoots(
   project: LoadedProjectConfig,
 ): Promise<string[]> {
   const directories = new Set<string>()
+  const authorizationPoliciesPath = project.config.paths.authorizationPolicies || 'server/policies'
+  const authorizationAbilitiesPath = project.config.paths.authorizationAbilities || 'server/abilities'
   const roots = [
     projectRoot,
     resolve(projectRoot, 'config'),
@@ -226,8 +230,8 @@ export async function collectDiscoveryWatchRoots(
     resolve(projectRoot, project.config.paths.jobs),
     resolve(projectRoot, project.config.paths.events),
     resolve(projectRoot, project.config.paths.listeners),
-    resolve(projectRoot, project.config.paths.authorizationPolicies),
-    resolve(projectRoot, project.config.paths.authorizationAbilities),
+    resolve(projectRoot, authorizationPoliciesPath),
+    resolve(projectRoot, authorizationAbilitiesPath),
     resolve(projectRoot, 'server/broadcast'),
     resolve(projectRoot, 'server/channels'),
     dirname(resolve(projectRoot, project.config.paths.generatedSchema)),
