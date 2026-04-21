@@ -25,6 +25,7 @@ import type * as HoloQueueDbModule from '@holo-js/queue-db'
 import type { QueueWorkerRunOptions } from '@holo-js/queue'
 import { defineCommand } from '../src'
 import { cliInternals } from '../src/cli-internals'
+import { collectDiscoveryWatchRoots, isDiscoveryRelevantPath } from '../src/dev'
 import { generatorInternals } from '../src/generators'
 import { loadSecurityCliModule } from '../src/security'
 import {
@@ -875,6 +876,40 @@ export default {
     expect(await stat(join(securityRoot, 'storage/framework/rate-limits'))).toBeDefined()
     await expect(readFile(join(securityRoot, 'storage/framework/rate-limits/.gitignore'), 'utf8')).resolves.toBe('*\n!.gitignore\n')
 
+    const broadcastRoot = join(baseRoot, 'broadcast-runtime-app')
+    await projectInternals.scaffoldProject(broadcastRoot, {
+      projectName: 'Broadcast Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['broadcast'],
+    })
+
+    expect(await readFile(join(broadcastRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/broadcast": "${expectedHoloPackageRange}"`)
+    expect(await readFile(join(broadcastRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/flux": "${expectedHoloPackageRange}"`)
+    expect(await readFile(join(broadcastRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/flux-react": "${expectedHoloPackageRange}"`)
+    expect(await readFile(join(broadcastRoot, 'config/broadcast.ts'), 'utf8')).toContain('defineBroadcastConfig')
+    expect(await readFile(join(broadcastRoot, 'config/broadcast.ts'), 'utf8')).not.toContain('authEndpoint:')
+    expect(await readFile(join(broadcastRoot, '.env'), 'utf8')).toContain('BROADCAST_CONNECTION=holo')
+    expect(await readFile(join(broadcastRoot, '.env.example'), 'utf8')).toContain('BROADCAST_APP_KEY=')
+    expect((await stat(join(broadcastRoot, 'server/broadcast'))).isDirectory()).toBe(true)
+    expect((await stat(join(broadcastRoot, 'server/channels'))).isDirectory()).toBe(true)
+    await expect(stat(join(broadcastRoot, 'app/broadcasting/auth/route.ts'))).rejects.toThrow()
+
+    const authBroadcastRoot = join(baseRoot, 'auth-broadcast-runtime-app')
+    await projectInternals.scaffoldProject(authBroadcastRoot, {
+      projectName: 'Auth Broadcast Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['auth', 'broadcast'],
+    })
+
+    expect(await readFile(join(authBroadcastRoot, 'config/broadcast.ts'), 'utf8')).toContain('authEndpoint:')
+    expect(await readFile(join(authBroadcastRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).toContain('renderBroadcastAuthResponse')
+
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: '!!!',
       framework: 'nuxt',
@@ -939,6 +974,30 @@ export default {
       storageDefaultDisk: 'public',
       optionalPackages: ['storage', 'events', 'queue'],
     })).not.toContain(`"@holo-js/queue-db": "${expectedHoloPackageRange}"`)
+    expect(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Broadcast Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['broadcast'],
+    })).toContain(`"@holo-js/broadcast": "${expectedHoloPackageRange}"`)
+    expect(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Broadcast Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['broadcast'],
+    })).toContain(`"@holo-js/flux": "${expectedHoloPackageRange}"`)
+    expect(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Broadcast Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['broadcast'],
+    })).toContain(`"@holo-js/flux-react": "${expectedHoloPackageRange}"`)
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'Auth Runtime App',
       framework: 'next',
@@ -2800,6 +2859,334 @@ export default defineDatabaseConfig({
     expect(JSON.parse(await readFile(join(staleQueuePackagesRoot, 'package.json'), 'utf8')).dependencies['@holo-js/queue-redis']).toBeUndefined()
   }, 30000)
 
+  it('syncs lazy optional holo packages from config and discovery registry entries', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/db': expectedHoloPackageRange,
+        '@holo-js/db-sqlite': expectedHoloPackageRange,
+      },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'config/auth.ts', `
+import { defineAuthConfig } from '@holo-js/config'
+
+export default defineAuthConfig({
+  guards: {
+    web: {
+      driver: 'session',
+      provider: 'users',
+    },
+  },
+  providers: {
+    users: {
+      model: 'User',
+    },
+  },
+  social: {
+    google: {},
+  },
+  workos: {
+    admin: {},
+  },
+  clerk: {
+    app: {},
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'config/session.ts', `
+import { defineSessionConfig } from '@holo-js/config'
+
+export default defineSessionConfig({
+  driver: 'redis',
+  stores: {
+    redis: {
+      driver: 'redis',
+      connection: 'cache',
+    },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'config/security.ts', `
+import { defineSecurityConfig } from '@holo-js/config'
+
+export default defineSecurityConfig({
+  rateLimit: {
+    driver: 'redis',
+    redis: {
+      connection: 'cache',
+    },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'config/mail.ts', `
+import { defineMailConfig } from '@holo-js/config'
+
+export default defineMailConfig({
+  queue: {
+    queued: true,
+  },
+  mailers: {
+    default: {
+      driver: 'log',
+    },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'config/notifications.ts', `
+import { defineNotificationsConfig } from '@holo-js/config'
+
+export default defineNotificationsConfig({})
+`)
+    await writeProjectFile(projectRoot, 'config/broadcast.ts', `
+import { defineBroadcastConfig } from '@holo-js/config'
+
+export default defineBroadcastConfig({
+  default: 'holo',
+  connections: {
+    holo: {
+      driver: 'holo',
+      key: 'key',
+      secret: 'secret',
+      appId: 'app',
+    },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'config/redis.ts', `
+import { defineRedisConfig } from '@holo-js/config'
+
+export default defineRedisConfig({
+  default: 'cache',
+  connections: {
+    cache: {
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+    },
+  },
+})
+`)
+
+    await expect(projectInternals.syncManagedDriverDependencies(projectRoot, {
+      version: 1,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      paths: {
+        models: 'server/models',
+        migrations: 'server/db/migrations',
+        seeders: 'server/db/seeders',
+        commands: 'server/commands',
+        jobs: 'server/jobs',
+        events: 'server/events',
+        listeners: 'server/listeners',
+        broadcast: 'server/broadcast',
+        channels: 'server/channels',
+        authorizationPolicies: 'server/policies',
+        authorizationAbilities: 'server/abilities',
+        generatedSchema: 'server/db/schema.generated.ts',
+      },
+      models: [],
+      migrations: [],
+      seeders: [],
+      commands: [],
+      jobs: [{
+        sourcePath: 'server/jobs/send-email.ts',
+        name: 'send-email',
+      }],
+      events: [{
+        sourcePath: 'server/events/user-registered.ts',
+        name: 'user.registered',
+      }],
+      listeners: [{
+        sourcePath: 'server/listeners/send-welcome-email.ts',
+        id: 'send-welcome-email',
+        eventNames: ['user.registered'],
+      }],
+      broadcast: [{
+        sourcePath: 'server/broadcast/orders.ts',
+        name: 'orders.updated',
+        channels: [],
+      }],
+      channels: [{
+        sourcePath: 'server/channels/orders.ts',
+        pattern: 'orders.{orderId}',
+        type: 'private',
+        params: ['orderId'],
+        whispers: [],
+      }],
+      authorizationPolicies: [{
+        sourcePath: 'server/policies/PostPolicy.ts',
+        name: 'posts',
+        target: 'Post',
+        classActions: [],
+        recordActions: [],
+      }],
+      authorizationAbilities: [{
+        sourcePath: 'server/abilities/exportReports.ts',
+        name: 'reports.export',
+      }],
+    })).resolves.toBe(true)
+
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))).toMatchObject({
+      dependencies: {
+        '@holo-js/auth': expectedHoloPackageRange,
+        '@holo-js/auth-clerk': expectedHoloPackageRange,
+        '@holo-js/auth-social': expectedHoloPackageRange,
+        '@holo-js/auth-social-google': expectedHoloPackageRange,
+        '@holo-js/auth-workos': expectedHoloPackageRange,
+        '@holo-js/authorization': expectedHoloPackageRange,
+        '@holo-js/broadcast': expectedHoloPackageRange,
+        '@holo-js/db': expectedHoloPackageRange,
+        '@holo-js/events': expectedHoloPackageRange,
+        '@holo-js/mail': expectedHoloPackageRange,
+        '@holo-js/notifications': expectedHoloPackageRange,
+        '@holo-js/queue': expectedHoloPackageRange,
+        '@holo-js/security': expectedHoloPackageRange,
+        '@holo-js/session': expectedHoloPackageRange,
+        'ioredis': '^5.4.2',
+      },
+    })
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies['@holo-js/storage']).toBeUndefined()
+    await expect(projectInternals.syncManagedDriverDependencies(projectRoot, {
+      version: 1,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      paths: {
+        models: 'server/models',
+        migrations: 'server/db/migrations',
+        seeders: 'server/db/seeders',
+        commands: 'server/commands',
+        jobs: 'server/jobs',
+        events: 'server/events',
+        listeners: 'server/listeners',
+        broadcast: 'server/broadcast',
+        channels: 'server/channels',
+        authorizationPolicies: 'server/policies',
+        authorizationAbilities: 'server/abilities',
+        generatedSchema: 'server/db/schema.generated.ts',
+      },
+      models: [],
+      migrations: [],
+      seeders: [],
+      commands: [],
+      jobs: [{
+        sourcePath: 'server/jobs/send-email.ts',
+        name: 'send-email',
+      }],
+      events: [{
+        sourcePath: 'server/events/user-registered.ts',
+        name: 'user.registered',
+      }],
+      listeners: [{
+        sourcePath: 'server/listeners/send-welcome-email.ts',
+        id: 'send-welcome-email',
+        eventNames: ['user.registered'],
+      }],
+      broadcast: [{
+        sourcePath: 'server/broadcast/orders.ts',
+        name: 'orders.updated',
+        channels: [],
+      }],
+      channels: [{
+        sourcePath: 'server/channels/orders.ts',
+        pattern: 'orders.{orderId}',
+        type: 'private',
+        params: ['orderId'],
+        whispers: [],
+      }],
+      authorizationPolicies: [{
+        sourcePath: 'server/policies/PostPolicy.ts',
+        name: 'posts',
+        target: 'Post',
+        classActions: [],
+        recordActions: [],
+      }],
+      authorizationAbilities: [{
+        sourcePath: 'server/abilities/exportReports.ts',
+        name: 'reports.export',
+      }],
+    })).resolves.toBe(false)
+  }, 30000)
+
+  it('prunes stale lazy optional holo packages even when feature folders do not exist', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/auth': expectedHoloPackageRange,
+        '@holo-js/auth-clerk': expectedHoloPackageRange,
+        '@holo-js/auth-social': expectedHoloPackageRange,
+        '@holo-js/auth-social-google': expectedHoloPackageRange,
+        '@holo-js/auth-workos': expectedHoloPackageRange,
+        '@holo-js/authorization': expectedHoloPackageRange,
+        '@holo-js/broadcast': expectedHoloPackageRange,
+        '@holo-js/db': expectedHoloPackageRange,
+        '@holo-js/db-sqlite': expectedHoloPackageRange,
+        '@holo-js/events': expectedHoloPackageRange,
+        '@holo-js/mail': expectedHoloPackageRange,
+        '@holo-js/notifications': expectedHoloPackageRange,
+        '@holo-js/queue': expectedHoloPackageRange,
+        '@holo-js/security': expectedHoloPackageRange,
+        '@holo-js/session': expectedHoloPackageRange,
+        '@holo-js/storage': expectedHoloPackageRange,
+        'ioredis': '^5.4.2',
+      },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/config'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'sqlite',
+      url: ':memory:',
+    },
+  },
+})
+`)
+
+    await expect(projectInternals.syncManagedDriverDependencies(projectRoot, {
+      version: 1,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      paths: {
+        models: 'server/models',
+        migrations: 'server/db/migrations',
+        seeders: 'server/db/seeders',
+        commands: 'server/commands',
+        jobs: 'server/jobs',
+        events: 'server/events',
+        listeners: 'server/listeners',
+        broadcast: 'server/broadcast',
+        channels: 'server/channels',
+        authorizationPolicies: 'server/policies',
+        authorizationAbilities: 'server/abilities',
+        generatedSchema: 'server/db/schema.generated.ts',
+      },
+      models: [],
+      migrations: [],
+      seeders: [],
+      commands: [],
+      jobs: [],
+      events: [],
+      listeners: [],
+      broadcast: [],
+      channels: [],
+      authorizationPolicies: [],
+      authorizationAbilities: [],
+    })).resolves.toBe(true)
+
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))).toMatchObject({
+      dependencies: {
+        '@holo-js/db': expectedHoloPackageRange,
+        '@holo-js/db-sqlite': expectedHoloPackageRange,
+      },
+    })
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies['@holo-js/auth']).toBeUndefined()
+  }, 30000)
+
   it('detects queue and storage config files from Windows-style loaded paths during dependency sync', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
@@ -3607,6 +3994,11 @@ export default defineBroadcastConfig({
       input: 'security\n',
     })
     await expect(cliInternals.promptOptionalPackages(securityPromptIo.io)).resolves.toEqual(['security'])
+    const broadcastPromptIo = createIo(baseRoot, {
+      tty: true,
+      input: 'broadcast\n',
+    })
+    await expect(cliInternals.promptOptionalPackages(broadcastPromptIo.io)).resolves.toEqual(['broadcast'])
     const formsOnlyPromptIo = createIo(baseRoot, {
       tty: true,
       input: 'forms\n',
@@ -3616,6 +4008,7 @@ export default defineBroadcastConfig({
     expect(() => cliInternals.normalizeChoice('astro', ['nuxt', 'next'], 'Framework')).toThrow('Unsupported Framework')
     expect(() => cliInternals.normalizeChoice(undefined, ['nuxt', 'next'], 'Framework')).toThrow('(empty)')
     expect(() => cliInternals.normalizeOptionalPackages(['weird-package'])).toThrow('Unsupported optional package')
+    expect(cliInternals.normalizeOptionalPackages(['broadcast'])).toEqual(['broadcast'])
     expect(cliInternals.normalizeOptionalPackages(['security'])).toEqual(['security'])
     expect(cliInternals.normalizeOptionalPackages(['forms'])).toEqual(['forms', 'validation'])
     expect(cliInternals.normalizeOptionalPackages(['forms', 'validation', 'forms'])).toEqual(['forms', 'validation'])
@@ -7788,6 +8181,61 @@ export default defineConfig({
     expect(runLifecycleScript).toHaveBeenCalledWith(lifecycleContext, projectRoot, 'holo:build')
   })
 
+  it('generates queue, broadcast, and authorization type artifacts during prepare', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await linkWorkspaceDb(projectRoot)
+    await writeProjectFile(projectRoot, 'server/jobs/send-email.ts', `
+import { defineJob } from '@holo-js/queue'
+
+export const sendEmailJob = defineJob({
+  async handle() {},
+})
+`)
+    await writeProjectFile(projectRoot, 'server/broadcast/orders/updated.ts', `
+import { defineBroadcast } from '@holo-js/broadcast'
+
+export const orderUpdated = defineBroadcast({
+  channels: ['orders.{orderId}'],
+})
+`)
+    await writeProjectFile(projectRoot, 'server/channels/orders.ts', `
+import { defineChannel } from '@holo-js/broadcast'
+
+export default defineChannel('orders.{orderId}', {
+  authorize() {
+    return true
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/policies/PostPolicy.ts', `
+import { definePolicy } from '@holo-js/authorization'
+
+class Post {}
+
+export const postPolicy = definePolicy('posts', Post, {
+  view() {
+    return true
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'server/abilities/exportReports.ts', `
+import { defineAbility } from '@holo-js/authorization'
+
+export default defineAbility('reports.export', () => true)
+`)
+
+    await withFakeBun(async () => {
+      await cliInternals.runProjectPrepare(projectRoot)
+    })
+
+    await expect(readFile(join(projectRoot, '.holo-js/generated/queue.d.ts'), 'utf8')).resolves.toContain('"send-email": ExportedQueueJobDefinition')
+    await expect(readFile(join(projectRoot, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('"orders.updated": ExportedBroadcastDefinition')
+    await expect(readFile(join(projectRoot, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('"orders.{orderId}": ExportedChannelDefinition')
+    await expect(readFile(join(projectRoot, '.holo-js/generated/authorization/types.d.ts'), 'utf8')).resolves.toContain('"posts": {')
+    await expect(readFile(join(projectRoot, '.holo-js/generated/authorization/types.d.ts'), 'utf8')).resolves.toContain('"reports.export": {')
+  }, 30000)
+
   it('preserves manifest connection fields when env overrides are partial', () => {
     expect(cliInternals.mergeRuntimeDatabaseConfig({
       defaultConnection: 'primary',
@@ -7943,11 +8391,13 @@ throw 'string discovery failure'
     expect(closeWatcher).toHaveBeenCalledTimes(1)
   })
 
-  it('refreshes discovery when broadcast and channel source files change during holo dev', async () => {
+  it('refreshes discovery when broadcast, channel, and authorization source files change during holo dev', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     await writeProjectFile(projectRoot, 'server/channels/orders.mjs', 'export default {}\n')
     await writeProjectFile(projectRoot, 'server/broadcast/orders.mjs', 'export default {}\n')
+    await writeProjectFile(projectRoot, 'server/policies/PostPolicy.mjs', 'export default {}\n')
+    await writeProjectFile(projectRoot, 'server/abilities/exportReports.mjs', 'export default {}\n')
 
     const io = createIo(projectRoot)
     const child = new EventEmitter() as EventEmitter & {
@@ -7980,11 +8430,54 @@ throw 'string discovery failure'
     await new Promise(resolve => setTimeout(resolve, 50))
     watchCallback('change', 'server/broadcast/orders.mjs')
     await new Promise(resolve => setTimeout(resolve, 50))
+    watchCallback('change', 'server/policies/PostPolicy.mjs')
+    await new Promise(resolve => setTimeout(resolve, 50))
+    watchCallback('change', 'server/abilities/exportReports.mjs')
+    await new Promise(resolve => setTimeout(resolve, 50))
     child.emit('close', 0)
 
     await expect(devPromise).resolves.toBeUndefined()
-    expect(prepare).toHaveBeenCalledTimes(3)
+    expect(prepare).toHaveBeenCalledTimes(5)
   }, 15000)
+
+  it('marks all discovery roots as relevant and collects existing authorization watch roots', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await mkdir(join(projectRoot, 'server/policies/admin'), { recursive: true })
+    await mkdir(join(projectRoot, 'server/abilities/reports'), { recursive: true })
+    await mkdir(join(projectRoot, 'server/broadcast'), { recursive: true })
+    await mkdir(join(projectRoot, 'server/channels'), { recursive: true })
+    await mkdir(join(projectRoot, 'server/jobs'), { recursive: true })
+    await mkdir(join(projectRoot, 'server/events'), { recursive: true })
+    await mkdir(join(projectRoot, 'server/listeners'), { recursive: true })
+    await mkdir(join(projectRoot, 'server/commands'), { recursive: true })
+    await mkdir(join(projectRoot, 'server/models'), { recursive: true })
+    await mkdir(join(projectRoot, 'server/db/migrations'), { recursive: true })
+    await mkdir(join(projectRoot, 'server/db/seeders'), { recursive: true })
+    const project = { config: defaultProjectConfig() }
+
+    expect(isDiscoveryRelevantPath('config/app.ts', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('.env.local', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('.holo-js/generated/index.ts', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('server/commands/hello.ts', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('server/jobs/send-email.ts', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('server/events/user-registered.ts', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('server/listeners/send-welcome-email.ts', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('server/broadcast/orders.ts', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('server/channels/orders.ts', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('server/policies/PostPolicy.ts', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('server/abilities/exportReports.ts', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('server/models/User.ts', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('server/db/migrations/2026_01_01_000000_users.ts', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('server/db/seeders/UserSeeder.ts', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('README.md', project as never)).toBe(false)
+
+    const roots = await collectDiscoveryWatchRoots(projectRoot, project as never)
+    expect(roots).toContain(join(projectRoot, 'server/policies'))
+    expect(roots).toContain(join(projectRoot, 'server/policies/admin'))
+    expect(roots).toContain(join(projectRoot, 'server/abilities'))
+    expect(roots).toContain(join(projectRoot, 'server/abilities/reports'))
+  })
 
   it('skips model files whose generated schema has not been materialized yet', async () => {
     const projectRoot = await createTempProject()

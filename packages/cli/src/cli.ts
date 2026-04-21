@@ -325,7 +325,7 @@ export function createInternalCommands(
     {
       name: 'new',
       description: 'Scaffold a new Holo project',
-      usage: 'holo-js new <name> [--framework <nuxt|next|sveltekit>] [--database <sqlite|mysql|postgres>] [--package-manager <bun|npm|pnpm|yarn>] [--package <storage|events|queue|validation|forms|auth|authorization|notifications|mail|security>] [--storage-default-disk <local|public>]',
+      usage: 'holo-js new <name> [--framework <nuxt|next|sveltekit>] [--database <sqlite|mysql|postgres>] [--package-manager <bun|npm|pnpm|yarn>] [--package <storage|events|queue|validation|forms|auth|authorization|notifications|mail|broadcast|security>] [--storage-default-disk <local|public>]',
       source: 'internal',
       async prepare(input) {
         const resolved = await resolveNewProjectInput(context, input)

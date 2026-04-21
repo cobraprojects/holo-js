@@ -24,6 +24,7 @@ import {
   AUTH_CONFIG_FILE_NAMES,
   BROADCAST_CONFIG_FILE_NAMES,
   type BroadcastInstallResult,
+  type GeneratedProjectRegistry,
   MAIL_CONFIG_FILE_NAMES,
   DB_DRIVER_PACKAGE_NAMES,
   NOTIFICATIONS_CONFIG_FILE_NAMES,
@@ -53,6 +54,7 @@ import {
   resolveFirstExistingPath,
   writeTextFile,
 } from './runtime'
+import { loadGeneratedProjectRegistry } from './registry'
 import { relativeImportPath } from '../templates'
 
 type ScaffoldedFile = {
@@ -1494,14 +1496,104 @@ function inferConnectionDriver(
   return inferDatabaseDriverFromUrl(connection.url ?? connection.filename)
 }
 
-export async function syncManagedDriverDependencies(projectRoot: string): Promise<boolean> {
+function registryHasJobs(
+  registry: GeneratedProjectRegistry | undefined,
+): boolean {
+  return (registry?.jobs.length ?? 0) > 0
+}
+
+function registryHasEvents(
+  registry: GeneratedProjectRegistry | undefined,
+): boolean {
+  return (registry?.events.length ?? 0) > 0
+    || (registry?.listeners.length ?? 0) > 0
+}
+
+function registryHasBroadcastDefinitions(
+  registry: GeneratedProjectRegistry | undefined,
+): boolean {
+  return (registry?.broadcast.length ?? 0) > 0
+    || (registry?.channels.length ?? 0) > 0
+}
+
+function registryHasAuthorizationDefinitions(
+  registry: GeneratedProjectRegistry | undefined,
+): boolean {
+  return (registry?.authorizationPolicies.length ?? 0) > 0
+    || (registry?.authorizationAbilities.length ?? 0) > 0
+}
+
+function authConfigUsesSocialProviders(
+  loaded: Awaited<ReturnType<typeof loadConfigDirectory>>,
+): boolean {
+  return Object.keys(loaded.auth.social).length > 0
+}
+
+function authConfigUsesWorkosProviders(
+  loaded: Awaited<ReturnType<typeof loadConfigDirectory>>,
+): boolean {
+  return Object.keys(loaded.auth.workos).length > 0
+}
+
+function authConfigUsesClerkProviders(
+  loaded: Awaited<ReturnType<typeof loadConfigDirectory>>,
+): boolean {
+  return Object.keys(loaded.auth.clerk).length > 0
+}
+
+function mailConfigUsesQueue(
+  loaded: Awaited<ReturnType<typeof loadConfigDirectory>>,
+): boolean {
+  return loaded.mail.queue.queued
+    || Object.values(loaded.mail.mailers).some(mailer => mailer.queue.queued)
+}
+
+async function projectHasAuthorizationScaffold(projectRoot: string): Promise<boolean> {
+  const project = await loadProjectConfig(projectRoot)
+  const policiesRoot = resolve(projectRoot, project.config.paths.authorizationPolicies ?? 'server/policies')
+  const abilitiesRoot = resolve(projectRoot, project.config.paths.authorizationAbilities ?? 'server/abilities')
+
+  return await pathExists(policiesRoot) || await pathExists(abilitiesRoot)
+}
+
+async function projectHasEventsScaffold(projectRoot: string): Promise<boolean> {
+  const project = await loadProjectConfig(projectRoot)
+  const eventsRoot = resolve(projectRoot, project.config.paths.events)
+  const listenersRoot = resolve(projectRoot, project.config.paths.listeners)
+
+  return await pathExists(eventsRoot) || await pathExists(listenersRoot)
+}
+
+function renderEnvFileContents(segments: readonly string[]): string {
+  const normalized = segments
+    .map(segment => segment.replace(/\n+$/, ''))
+    .filter(segment => segment.length > 0)
+
+  return normalized.length > 0
+    ? `${normalized.join('\n')}\n`
+    : ''
+}
+
+export async function syncManagedDriverDependencies(
+  projectRoot: string,
+  registry?: GeneratedProjectRegistry,
+): Promise<boolean> {
   const loaded = await loadConfigDirectory(projectRoot, {
     preferCache: false,
     processEnv: process.env,
   })
+  const discoveredRegistry = registry ?? await loadGeneratedProjectRegistry(projectRoot)
+  const authConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'auth')
+  const broadcastConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'broadcast')
+  const mailConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'mail')
+  const notificationsConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'notifications')
   const queueConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'queue')
+  const securityConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'security')
+  const sessionConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'session')
   const storageConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'storage')
   const requiredPackages = new Set<string>()
+  const hasAuthorizationScaffold = await projectHasAuthorizationScaffold(projectRoot)
+  const hasEventsScaffold = await projectHasEventsScaffold(projectRoot)
 
   for (const connection of Object.values(loaded.database.connections)) {
     const inferredDriver = inferConnectionDriver(connection)
@@ -1510,19 +1602,83 @@ export async function syncManagedDriverDependencies(projectRoot: string): Promis
     }
   }
 
-  if (queueConfigured) {
-    requiredPackages.add('@holo-js/queue')
+  if (
+    authConfigured
+    || sessionConfigured
+  ) {
+    requiredPackages.add('@holo-js/session')
+  }
 
-    const queueConnections = Object.values(loaded.queue.connections)
-    if (queueConnections.some(connection => connection.driver === 'redis')) {
-      requiredPackages.add('@holo-js/queue-redis')
+  if (
+    authConfigured
+    || securityConfigured
+  ) {
+    requiredPackages.add('@holo-js/security')
+  }
+
+  if (authConfigured) {
+    requiredPackages.add('@holo-js/auth')
+
+    if (authConfigUsesSocialProviders(loaded)) {
+      requiredPackages.add('@holo-js/auth-social')
+
+      for (const [providerName, provider] of Object.entries(loaded.auth.social)) {
+        if (typeof provider.runtime === 'string' && provider.runtime.trim()) {
+          continue
+        }
+
+        const builtinPackage = AUTH_SOCIAL_PROVIDER_PACKAGE_NAMES[providerName as SupportedAuthSocialProvider]
+        if (builtinPackage) {
+          requiredPackages.add(builtinPackage)
+        }
+      }
     }
 
-    if (
-      queueConnections.some(connection => connection.driver === 'database')
-      || loaded.queue.failed !== false
-    ) {
-      requiredPackages.add('@holo-js/queue-db')
+    if (authConfigUsesWorkosProviders(loaded)) {
+      requiredPackages.add('@holo-js/auth-workos')
+    }
+
+    if (authConfigUsesClerkProviders(loaded)) {
+      requiredPackages.add('@holo-js/auth-clerk')
+    }
+  }
+
+  if (mailConfigured) {
+    requiredPackages.add('@holo-js/mail')
+  }
+
+  if (notificationsConfigured) {
+    requiredPackages.add('@holo-js/notifications')
+  }
+
+  if (broadcastConfigured || registryHasBroadcastDefinitions(discoveredRegistry)) {
+    requiredPackages.add('@holo-js/broadcast')
+  }
+
+  if (registryHasAuthorizationDefinitions(discoveredRegistry) || hasAuthorizationScaffold) {
+    requiredPackages.add('@holo-js/authorization')
+  }
+
+  if (registryHasEvents(discoveredRegistry) || hasEventsScaffold) {
+    requiredPackages.add('@holo-js/events')
+    requiredPackages.add('@holo-js/queue')
+  }
+
+  if (queueConfigured || registryHasJobs(discoveredRegistry) || mailConfigUsesQueue(loaded)) {
+    requiredPackages.add('@holo-js/queue')
+
+    if (queueConfigured) {
+      const queueConnections = Object.values(loaded.queue.connections)
+      if (queueConnections.some(connection => connection.driver === 'redis')) {
+        requiredPackages.add('@holo-js/queue-redis')
+      }
+
+      if (
+        queueConnections.some(connection => connection.driver === 'database')
+        || loaded.queue.failed !== false
+      ) {
+        requiredPackages.add('@holo-js/queue-db')
+      }
     }
   }
 
@@ -1553,9 +1709,23 @@ export async function syncManagedDriverDependencies(projectRoot: string): Promis
   const nextVersion = `^${HOLO_PACKAGE_VERSION}`
   const removableManagedPackages = new Set<string>([
     ...Object.values(DB_DRIVER_PACKAGE_NAMES),
+    '@holo-js/auth',
+    '@holo-js/auth-clerk',
+    '@holo-js/auth-social',
+    '@holo-js/auth-workos',
+    '@holo-js/authorization',
+    '@holo-js/broadcast',
+    '@holo-js/events',
+    '@holo-js/mail',
+    '@holo-js/notifications',
+    '@holo-js/queue',
     '@holo-js/queue-db',
     '@holo-js/queue-redis',
+    '@holo-js/security',
+    '@holo-js/session',
+    '@holo-js/storage',
     '@holo-js/storage-s3',
+    ...Object.values(AUTH_SOCIAL_PROVIDER_PACKAGE_NAMES),
     'ioredis',
   ])
 
@@ -3151,6 +3321,18 @@ function renderScaffoldPackageJson(options: ProjectScaffoldOptions): string {
     dependencies['@holo-js/mail'] = `^${HOLO_PACKAGE_VERSION}`
   }
 
+  if (optionalPackages.includes('broadcast')) {
+    dependencies['@holo-js/broadcast'] = `^${HOLO_PACKAGE_VERSION}`
+    dependencies['@holo-js/flux'] = `^${HOLO_PACKAGE_VERSION}`
+    if (options.framework === 'next') {
+      dependencies['@holo-js/flux-react'] = `^${HOLO_PACKAGE_VERSION}`
+    } else if (options.framework === 'nuxt') {
+      dependencies['@holo-js/flux-vue'] = `^${HOLO_PACKAGE_VERSION}`
+    } else if (options.framework === 'sveltekit') {
+      dependencies['@holo-js/flux-svelte'] = `^${HOLO_PACKAGE_VERSION}`
+    }
+  }
+
   if (optionalPackages.includes('security')) {
     dependencies['@holo-js/security'] = `^${HOLO_PACKAGE_VERSION}`
   }
@@ -3197,7 +3379,19 @@ export async function scaffoldProject(
   const authorizationEnabled = optionalPackages.includes('authorization')
   const notificationsEnabled = optionalPackages.includes('notifications')
   const mailEnabled = optionalPackages.includes('mail')
+  const broadcastEnabled = optionalPackages.includes('broadcast')
   const securityEnabled = optionalPackages.includes('security')
+  const broadcastEnvFiles = broadcastEnabled ? renderBroadcastEnvFiles() : undefined
+  const baseEnv = Array.isArray(env) ? env : [env]
+  const baseExample = Array.isArray(example) ? example : [example]
+  const scaffoldEnvSegments = broadcastEnvFiles
+    ? [...baseEnv, ...broadcastEnvFiles.env]
+    : baseEnv
+  const scaffoldEnvExampleSegments = broadcastEnvFiles
+    ? [...baseExample, ...broadcastEnvFiles.example]
+    : baseExample
+  const scaffoldEnv = renderEnvFileContents(scaffoldEnvSegments)
+  const scaffoldEnvExample = renderEnvFileContents(scaffoldEnvExampleSegments)
 
   await mkdir(projectRoot, { recursive: true })
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })
@@ -3218,6 +3412,10 @@ export async function scaffoldProject(
   if (mailEnabled) {
     await mkdir(resolve(projectRoot, 'server/mail'), { recursive: true })
   }
+  if (broadcastEnabled) {
+    await mkdir(resolve(projectRoot, 'server/broadcast'), { recursive: true })
+    await mkdir(resolve(projectRoot, 'server/channels'), { recursive: true })
+  }
   await mkdir(resolve(projectRoot, 'server/db/factories'), { recursive: true })
   await mkdir(resolve(projectRoot, 'server/db/migrations'), { recursive: true })
   await mkdir(resolve(projectRoot, 'server/db/seeders'), { recursive: true })
@@ -3230,8 +3428,8 @@ export async function scaffoldProject(
 
   await writeFile(resolve(projectRoot, 'package.json'), renderScaffoldPackageJson(options), 'utf8')
   await writeFile(resolve(projectRoot, '.gitignore'), renderScaffoldGitignore(), 'utf8')
-  await writeFile(resolve(projectRoot, '.env'), env, 'utf8')
-  await writeFile(resolve(projectRoot, '.env.example'), example, 'utf8')
+  await writeFile(resolve(projectRoot, '.env'), scaffoldEnv, 'utf8')
+  await writeFile(resolve(projectRoot, '.env.example'), scaffoldEnvExample, 'utf8')
   await writeFile(resolve(projectRoot, 'config/app.ts'), renderScaffoldAppConfig(options.projectName), 'utf8')
   await writeFile(resolve(projectRoot, 'config/database.ts'), renderScaffoldDatabaseConfig(options), 'utf8')
   await writeFile(resolve(projectRoot, 'config/redis.ts'), renderRedisConfig(), 'utf8')
@@ -3249,6 +3447,9 @@ export async function scaffoldProject(
   }
   if (mailEnabled) {
     await writeFile(resolve(projectRoot, 'config/mail.ts'), renderMailConfig(), 'utf8')
+  }
+  if (broadcastEnabled) {
+    await writeFile(resolve(projectRoot, 'config/broadcast.ts'), renderBroadcastConfig('esm', false, true), 'utf8')
   }
   if (securityEnabled) {
     await writeFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig(), 'utf8')
@@ -3270,6 +3471,9 @@ export async function scaffoldProject(
     for (const migrationFile of createAuthMigrationFiles()) {
       await writeFile(resolve(projectRoot, config.paths.migrations, migrationFile.path), migrationFile.contents, 'utf8')
     }
+  }
+  if (broadcastEnabled && authEnabled) {
+    await syncBroadcastAuthSupportAfterAuthInstall(projectRoot)
   }
   if (authorizationEnabled) {
     await writeFile(resolve(projectRoot, 'server/policies/README.md'), renderAuthorizationPoliciesReadme(), 'utf8')
