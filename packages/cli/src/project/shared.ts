@@ -145,8 +145,9 @@ export type SupportedScaffoldFramework = 'nuxt' | 'next' | 'sveltekit'
 export type SupportedScaffoldPackageManager = 'bun' | 'npm' | 'pnpm' | 'yarn'
 
 export type SupportedScaffoldStorageDisk = 'local' | 'public'
-export type SupportedScaffoldOptionalPackage = 'storage' | 'events' | 'queue' | 'validation' | 'forms' | 'auth' | 'authorization' | 'notifications' | 'mail' | 'broadcast' | 'security'
+export type SupportedScaffoldOptionalPackage = 'storage' | 'events' | 'queue' | 'validation' | 'forms' | 'auth' | 'authorization' | 'notifications' | 'mail' | 'broadcast' | 'security' | 'cache'
 export type SupportedQueueInstallerDriver = 'sync' | 'redis' | 'database'
+export type SupportedCacheInstallerDriver = 'file' | 'redis' | 'database'
 export type SupportedAuthSocialProvider = 'google' | 'github' | 'discord' | 'facebook' | 'apple' | 'linkedin'
 export type AuthInstallerFeature = 'social' | 'workos' | 'clerk'
 
@@ -260,6 +261,15 @@ export type SecurityInstallResult = {
   readonly createdSecurityConfig: boolean
 }
 
+export type CacheInstallResult = {
+  readonly updatedPackageJson: boolean
+  readonly createdCacheConfig: boolean
+  readonly createdRedisConfig: boolean
+  readonly updatedEnv: boolean
+  readonly updatedEnvExample: boolean
+  readonly databaseDriver: boolean
+}
+
 export type BroadcastInstallResult = {
   readonly updatedPackageJson: boolean
   readonly createdBroadcastConfig: boolean
@@ -337,6 +347,15 @@ export const REDIS_CONFIG_FILE_NAMES = [
   'config/redis.cjs',
 ] as const
 
+export const CACHE_CONFIG_FILE_NAMES = [
+  'config/cache.ts',
+  'config/cache.mts',
+  'config/cache.js',
+  'config/cache.mjs',
+  'config/cache.cts',
+  'config/cache.cjs',
+] as const
+
 export const NOTIFICATIONS_CONFIG_FILE_NAMES = [
   'config/notifications.ts',
   'config/notifications.mts',
@@ -411,8 +430,9 @@ export const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIO
 export const SUPPORTED_SCAFFOLD_FRAMEWORKS = ['nuxt', 'next', 'sveltekit'] as const
 export const SUPPORTED_SCAFFOLD_PACKAGE_MANAGERS = ['bun', 'npm', 'pnpm', 'yarn'] as const
 export const SUPPORTED_SCAFFOLD_STORAGE_DISKS = ['local', 'public'] as const
-export const SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms', 'auth', 'authorization', 'notifications', 'mail', 'broadcast', 'security'] as const
+export const SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms', 'auth', 'authorization', 'notifications', 'mail', 'broadcast', 'security', 'cache'] as const
 export const SUPPORTED_QUEUE_INSTALLER_DRIVERS = ['sync', 'redis', 'database'] as const
+export const SUPPORTED_CACHE_INSTALLER_DRIVERS = ['file', 'redis', 'database'] as const
 export const HOLO_EVENT_DEFINITION_MARKER = Symbol.for('holo-js.events.definition')
 export const HOLO_LISTENER_DEFINITION_MARKER = Symbol.for('holo-js.events.listener')
 
@@ -497,6 +517,10 @@ export function normalizeScaffoldOptionalPackages(
 
 export function isSupportedQueueInstallerDriver(value: string): value is SupportedQueueInstallerDriver {
   return (SUPPORTED_QUEUE_INSTALLER_DRIVERS as readonly string[]).includes(value)
+}
+
+export function isSupportedCacheInstallerDriver(value: string): value is SupportedCacheInstallerDriver {
+  return (SUPPORTED_CACHE_INSTALLER_DRIVERS as readonly string[]).includes(value)
 }
 
 export function sanitizePackageName(value: string): string {

@@ -3,6 +3,12 @@ export { QueryScheduler, createQueryScheduler } from './core/QueryScheduler'
 export { unsafeSql } from './core/unsafe'
 export { createCapabilities, DEFAULT_CAPABILITIES } from './core/capabilities'
 export {
+  configureDatabaseQueryCacheBridge,
+  getDatabaseQueryCacheBridge,
+  resetDatabaseQueryCacheBridge,
+  queryCacheInternals,
+} from './cache'
+export {
   DatabaseError,
   ConfigurationError,
   CompilerError,
@@ -191,6 +197,12 @@ export type {
   SeederSuccessLog,
 } from './core/types'
 export type {
+  DatabaseQueryCacheBridge,
+  QueryCacheConfig,
+  QueryCacheFlexibleTtlInput,
+  QueryCacheTtlInput,
+} from './cache'
+export type {
   RuntimeConfigInput,
   RuntimeConnectionConfig,
   RuntimeDatabaseConfig,
@@ -225,7 +237,9 @@ export type {
 } from './project'
 export type {
   AnyColumnDefinition,
+  BoundTableDefinition,
   ColumnDefinition,
+  DefineTableOptions,
   ForeignKeyReference,
   GeneratedSchemaTable,
   GeneratedSchemaTableName,

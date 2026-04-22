@@ -1,9 +1,16 @@
 import { HydrationError, ModelNotFoundException, RelationError } from '../core/errors'
+import type { QueryCacheConfig, QueryCacheTtlInput } from '../cache'
 import {
   createCursorPaginator,
   createPaginator,
   createSimplePaginator,
 } from '../query/paginator'
+import {
+  assertPositiveInteger,
+  decodeOffsetCursor,
+  encodeOffsetCursor,
+  normalizePaginationParameterName,
+} from '../query/pagination'
 import { compareChunkValuesAscending, compareChunkValuesDescending } from '../query/chunkOrdering'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import { resolveMorphSelector } from './morphRegistry'
@@ -62,6 +69,7 @@ type MorphModelTarget = {
     morphClass?: string
   }
 }
+type MorphRelationTypeInput = string | MorphModelTarget | readonly (string | MorphModelTarget)[]
 type MorphTypeSelector = string | MorphModelTarget | MorphEntityTarget | null
 type EagerLoad = {
   relation: string
@@ -779,66 +787,36 @@ export class ModelQueryBuilder<
 
   whereMorphRelation<TRelationPath extends ModelRelationPath<TRelations>>(
     relation: TRelationPath,
-    types: string | { definition?: { morphClass?: string } } | readonly (string | { definition?: { morphClass?: string } })[],
+    types: MorphRelationTypeInput,
     column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>,
     operator: unknown,
     value?: unknown,
   ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
-    this.assertMorphToRelation(relation)
-    return this.withRelationFilter({
-      relation,
-      negate: false,
-      boolean: 'and',
-      morphTypes: this.normalizeMorphTypes(types),
-      constraint: query => query.where(column, operator, value),
-    })
+    return this.applyMorphRelationFilter(relation, types, column, operator, value, 'and')
   }
 
   orWhereMorphRelation<TRelationPath extends ModelRelationPath<TRelations>>(
     relation: TRelationPath,
-    types: string | { definition?: { morphClass?: string } } | readonly (string | { definition?: { morphClass?: string } })[],
+    types: MorphRelationTypeInput,
     column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>,
     operator: unknown,
     value?: unknown,
   ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
-    this.assertMorphToRelation(relation)
-    return this.withRelationFilter({
-      relation,
-      negate: false,
-      boolean: 'or',
-      morphTypes: this.normalizeMorphTypes(types),
-      constraint: query => query.where(column, operator, value),
-    })
+    return this.applyMorphRelationFilter(relation, types, column, operator, value, 'or')
   }
 
   whereBelongsTo<TRelated extends TableDefinition>(
     relatedEntity: Entity<TRelated>,
     relationName?: ModelRelationPath<TRelations>,
   ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
-    const relation = this.resolveBelongsToRelation(relatedEntity, relationName)
-    const ownerValue = relatedEntity.get(relation.ownerKey as never)
-
-    return ownerValue === null || typeof ownerValue === 'undefined'
-      ? this.whereDoesntHave(this.resolveBelongsToRelationName(relatedEntity, relationName))
-      : this.whereHas(
-          this.resolveBelongsToRelationName(relatedEntity, relationName),
-          query => query.where(relation.ownerKey, ownerValue),
-        )
+    return this.applyBelongsToFilter(relatedEntity, relationName, 'and')
   }
 
   orWhereBelongsTo<TRelated extends TableDefinition>(
     relatedEntity: Entity<TRelated>,
     relationName?: ModelRelationPath<TRelations>,
   ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
-    const relation = this.resolveBelongsToRelation(relatedEntity, relationName)
-    const ownerValue = relatedEntity.get(relation.ownerKey as never)
-
-    return ownerValue === null || typeof ownerValue === 'undefined'
-      ? this.orWhereDoesntHave(this.resolveBelongsToRelationName(relatedEntity, relationName))
-      : this.orWhereHas(
-          this.resolveBelongsToRelationName(relatedEntity, relationName),
-          query => query.where(relation.ownerKey, ownerValue),
-        )
+    return this.applyBelongsToFilter(relatedEntity, relationName, 'or')
   }
 
   whereMorphedTo(
@@ -925,6 +903,12 @@ export class ModelQueryBuilder<
     return this
   }
 
+  cache(
+    config: QueryCacheTtlInput | QueryCacheConfig,
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+    return this.clone(this.tableQuery.cache(config))
+  }
+
   async get(): Promise<ModelCollection<TTable, TRelations> & Array<EntityWithLoaded<TTable, TRelations, TLoaded>>> {
     const rows = await this.tableQuery.get<ModelRecord<TTable>>()
     const hasQueryCasts = Object.keys(this.queryCasts).length > 0
@@ -964,9 +948,9 @@ export class ModelQueryBuilder<
     page = 1,
     options: PaginationOptions = {},
   ): Promise<PaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>> {
-    this.assertPositiveInteger(perPage, 'Per-page value')
-    this.assertPositiveInteger(page, 'Page')
-    const pageName = this.normalizePaginationParameterName(options.pageName, 'page')
+    assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
+    assertPositiveInteger(page, 'Page', message => new HydrationError(message))
+    const pageName = normalizePaginationParameterName(options.pageName, 'page', message => new HydrationError(message))
 
     const entities = await this.getUnpaginatedEntities()
     const total = entities.length
@@ -992,9 +976,9 @@ export class ModelQueryBuilder<
     page = 1,
     options: PaginationOptions = {},
   ): Promise<SimplePaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>> {
-    this.assertPositiveInteger(perPage, 'Per-page value')
-    this.assertPositiveInteger(page, 'Page')
-    const pageName = this.normalizePaginationParameterName(options.pageName, 'page')
+    assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
+    assertPositiveInteger(page, 'Page', message => new HydrationError(message))
+    const pageName = normalizePaginationParameterName(options.pageName, 'page', message => new HydrationError(message))
 
     const entities = await this.getUnpaginatedEntities()
     const offset = (page - 1) * perPage
@@ -1019,9 +1003,9 @@ export class ModelQueryBuilder<
     cursor: string | null = null,
     options: CursorPaginationOptions = {},
   ): Promise<CursorPaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>> {
-    this.assertPositiveInteger(perPage, 'Per-page value')
-    const cursorName = this.normalizePaginationParameterName(options.cursorName, 'cursor')
-    const offset = this.decodeCursor(cursor)
+    assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
+    const cursorName = normalizePaginationParameterName(options.cursorName, 'cursor', message => new HydrationError(message))
+    const offset = decodeOffsetCursor(cursor, message => new HydrationError(message))
     const orderedQuery = this.prepareCursorPaginationQuery()
     const entities = await orderedQuery.getUnpaginatedEntities()
     const pageEntities = entities.slice(offset, offset + perPage + 1)
@@ -1031,7 +1015,7 @@ export class ModelQueryBuilder<
     return createCursorPaginator(this.repository.createCollection(data), {
       perPage,
       cursorName,
-      nextCursor: hasMorePages ? this.encodeCursor(offset + perPage) : null,
+      nextCursor: hasMorePages ? encodeOffsetCursor(offset + perPage) : null,
       prevCursor: cursor,
     }) as CursorPaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>
   }
@@ -1040,7 +1024,7 @@ export class ModelQueryBuilder<
     size: number,
     callback: (rows: readonly EntityWithLoaded<TTable, TRelations, TLoaded>[], page: number) => unknown | Promise<unknown>,
   ): Promise<void> {
-    this.assertPositiveInteger(size, 'Chunk size')
+    assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
 
     const entities = await this.getUnpaginatedEntities()
     let page = 1
@@ -1060,7 +1044,7 @@ export class ModelQueryBuilder<
     callback: (rows: readonly EntityWithLoaded<TTable, TRelations, TLoaded>[], page: number) => unknown | Promise<unknown>,
     column: ModelAttributeKey<TTable> = this.repository.definition.primaryKey,
   ): Promise<void> {
-    this.assertPositiveInteger(size, 'Chunk size')
+    assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
 
     const entities = await this.getUnpaginatedEntities()
     const sorted = [...entities].sort((left, right) => {
@@ -1085,7 +1069,7 @@ export class ModelQueryBuilder<
     callback: (rows: readonly EntityWithLoaded<TTable, TRelations, TLoaded>[], page: number) => unknown | Promise<unknown>,
     column: ModelAttributeKey<TTable> = this.repository.definition.primaryKey,
   ): Promise<void> {
-    this.assertPositiveInteger(size, 'Chunk size')
+    assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
 
     const entities = await this.getUnpaginatedEntities()
     const sorted = [...entities].sort((left, right) => {
@@ -1106,7 +1090,7 @@ export class ModelQueryBuilder<
   }
 
   async* lazy(size = 1000): AsyncGenerator<EntityWithLoaded<TTable, TRelations, TLoaded>, void, unknown> {
-    this.assertPositiveInteger(size, 'Chunk size')
+    assertPositiveInteger(size, 'Chunk size', message => new HydrationError(message))
 
     const entities = await this.getUnpaginatedEntities()
     for (let index = 0; index < entities.length; index += size) {
@@ -1443,7 +1427,7 @@ export class ModelQueryBuilder<
   }
 
   private normalizeMorphTypes(
-    input: string | { definition?: { morphClass?: string } } | readonly (string | { definition?: { morphClass?: string } })[],
+    input: MorphRelationTypeInput,
   ): readonly string[] {
     const values = Array.isArray(input) ? input : [input]
     const labels = values.map((value) => {
@@ -1492,6 +1476,24 @@ export class ModelQueryBuilder<
       boolean,
       morphTypes,
       constraint,
+    })
+  }
+
+  private applyMorphRelationFilter<TRelationPath extends ModelRelationPath<TRelations>>(
+    relation: TRelationPath,
+    types: MorphRelationTypeInput,
+    column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>,
+    operator: unknown,
+    value: unknown,
+    boolean: 'and' | 'or',
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+    this.assertMorphToRelation(relation)
+    return this.withRelationFilter({
+      relation,
+      negate: false,
+      boolean,
+      morphTypes: this.normalizeMorphTypes(types),
+      constraint: query => query.where(column, operator, value),
     })
   }
 
@@ -1612,6 +1614,26 @@ export class ModelQueryBuilder<
     return relation
   }
 
+  private applyBelongsToFilter<TRelated extends TableDefinition>(
+    relatedEntity: Entity<TRelated>,
+    relationName: ModelRelationPath<TRelations> | undefined,
+    boolean: 'and' | 'or',
+  ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
+    const resolvedRelationName = this.resolveBelongsToRelationName(relatedEntity, relationName)
+    const relation = this.resolveBelongsToRelation(relatedEntity, resolvedRelationName)
+    const ownerValue = relatedEntity.get(relation.ownerKey as never)
+
+    if (ownerValue === null || typeof ownerValue === 'undefined') {
+      return boolean === 'and'
+        ? this.whereDoesntHave(resolvedRelationName)
+        : this.orWhereDoesntHave(resolvedRelationName)
+    }
+
+    return boolean === 'and'
+      ? this.whereHas(resolvedRelationName, query => query.where(relation.ownerKey, ownerValue))
+      : this.orWhereHas(resolvedRelationName, query => query.where(relation.ownerKey, ownerValue))
+  }
+
   private resolveBelongsToRelationName<TRelated extends TableDefinition>(
     relatedEntity: Entity<TRelated>,
     relationName?: ModelRelationPath<TRelations>,
@@ -1663,48 +1685,6 @@ export class ModelQueryBuilder<
 
   private async getUnpaginatedEntities(): Promise<ModelCollection<TTable, TRelations> & Array<EntityWithLoaded<TTable, TRelations, TLoaded>>> {
     return this.clone(this.tableQuery.limit(undefined).offset(undefined)).get()
-  }
-
-  private encodeCursor(offset: number): string {
-    return Buffer.from(JSON.stringify({ offset }), 'utf8').toString('base64url')
-  }
-
-  private decodeCursor(cursor: string | null): number {
-    if (cursor === null) {
-      return 0
-    }
-
-    try {
-      const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { offset?: unknown }
-      const offset = decoded.offset
-      if (typeof offset !== 'number' || !Number.isInteger(offset) || offset < 0) {
-        throw new Error('invalid offset')
-      }
-
-      return offset
-    } catch {
-      throw new HydrationError('Cursor is malformed.')
-    }
-  }
-
-  private assertPositiveInteger(value: number, kind: string): void {
-    if (!Number.isInteger(value) || value <= 0) {
-      throw new HydrationError(`${kind} must be a positive integer.`)
-    }
-  }
-
-  private normalizePaginationParameterName(value: string | undefined, fallback: string): string {
-    if (typeof value === 'undefined') {
-      return fallback
-    }
-
-    if (typeof value !== 'string' || value.trim().length === 0) {
-      throw new HydrationError(
-        `${fallback === 'cursor' ? 'Cursor' : 'Page'} parameter name must be a non-empty string.`,
-      )
-    }
-
-    return value
   }
 
   private prepareCursorPaginationQuery(): ModelQueryBuilder<TTable, TRelations, TLoaded> {

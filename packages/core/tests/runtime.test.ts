@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { config, loadConfigDirectory, useConfig } from '@holo-js/config'
-import { createSchemaService, DB } from '@holo-js/db'
+import { createSchemaService, DB, getDatabaseQueryCacheBridge } from '@holo-js/db'
 import {
   broadcastRaw,
   configureBroadcastRuntime,
@@ -67,6 +67,46 @@ import { useStorage } from '@holo-js/storage/runtime'
 const packageEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
 const tempDirs: string[] = []
 
+function getCacheRuntimeBindingsForTest(): unknown {
+  const runtime = globalThis as typeof globalThis & {
+    __holoCacheRuntime__?: {
+      bindings?: unknown
+    }
+  }
+
+  return runtime.__holoCacheRuntime__?.bindings
+}
+
+function seedCacheRuntimeGlobalsForTest(): void {
+  const runtime = globalThis as typeof globalThis & {
+    __holoCacheRuntime__?: {
+      bindings?: unknown
+    }
+    __holoDbQueryCacheBridge__?: {
+      bridge?: unknown
+    }
+  }
+
+  runtime.__holoCacheRuntime__ = {
+    bindings: {
+      config: {
+        default: 'memory',
+      },
+    },
+  }
+  runtime.__holoDbQueryCacheBridge__ = {
+    bridge: {
+      get: async () => null,
+      put: async () => {},
+      flexible: async <TValue>(_key: string, _ttl: unknown, callback: () => TValue | Promise<TValue>) => {
+        return await callback()
+      },
+      forget: async () => true,
+      invalidateDependencies: async () => {},
+    },
+  }
+}
+
 async function createProject(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-core-runtime-'))
   tempDirs.push(root)
@@ -120,6 +160,21 @@ export default defineConfig({
   },
 })
 `, 'utf8')
+}
+
+async function writeCacheConfig(root: string, contents = `
+import { defineCacheConfig } from ${packageEntry}
+
+export default defineCacheConfig({
+  default: 'memory',
+  stores: {
+    memory: {
+      driver: 'memory',
+    },
+  },
+})
+`): Promise<void> {
+  await writeFile(join(root, 'config/cache.ts'), contents, 'utf8')
 }
 
 async function writeQueueConfig(root: string, contents: string): Promise<void> {
@@ -1895,6 +1950,96 @@ export default defineQueueConfig({
     }
   })
 
+  it('fails runtime initialization when cache config is present but the cache package is missing', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeCacheConfig(root)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
+        if (specifier === '@holo-js/cache') {
+          return undefined
+        }
+
+        return originalImportOptionalModule(specifier, options)
+      })
+
+      await expect(portable.initializeHolo(root)).rejects.toThrow('Cache support requires @holo-js/cache to be installed')
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('does not require the cache package when cache config is absent', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
+        if (specifier === '@holo-js/cache') {
+          return undefined
+        }
+
+        return originalImportOptionalModule(specifier, options)
+      })
+
+      const runtime = await portable.initializeHolo(root)
+      expect(runtime.initialized).toBe(true)
+      await portable.resetHoloRuntime()
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('configures the cache runtime with default cache config when the cache package is present', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      const configureCacheRuntime = vi.fn()
+      const resetCacheRuntime = vi.fn()
+
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
+        if (specifier === '@holo-js/cache') {
+          return {
+            configureCacheRuntime,
+            resetCacheRuntime,
+          }
+        }
+
+        return originalImportOptionalModule(specifier, options)
+      })
+
+      const loadedConfig = await loadConfigDirectory(root, {
+        preferCache: false,
+        processEnv: process.env,
+      })
+
+      await portable.reconfigureOptionalHoloSubsystems(root, loadedConfig)
+      expect(configureCacheRuntime).toHaveBeenCalledWith({
+        config: loadedConfig.cache,
+        databaseConfig: loadedConfig.database,
+        redisConfig: loadedConfig.redis,
+      })
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
+
   it('fails runtime initialization when notifications config is present but the notifications package is missing', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
@@ -2068,6 +2213,97 @@ export default defineQueueConfig({
       rateLimitStore: customStore,
     }))
     expect(getSecurityRuntimeBindings()?.csrfSigningKey).toBeUndefined()
+  })
+
+  it('configures and resets the cache runtime when cache config is present', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeCacheConfig(root)
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      const configureCacheRuntime = vi.fn()
+      const resetCacheRuntime = vi.fn()
+
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
+        if (specifier === '@holo-js/cache') {
+          return {
+            configureCacheRuntime,
+            resetCacheRuntime,
+          }
+        }
+
+        return originalImportOptionalModule(specifier, options)
+      })
+
+      const loadedConfig = await loadConfigDirectory(root, {
+        preferCache: false,
+        processEnv: process.env,
+      })
+
+      await portable.reconfigureOptionalHoloSubsystems(root, loadedConfig)
+      expect(configureCacheRuntime).toHaveBeenCalledWith({
+        config: loadedConfig.cache,
+        databaseConfig: loadedConfig.database,
+        redisConfig: loadedConfig.redis,
+      })
+
+      await portable.resetOptionalHoloSubsystems()
+      expect(resetCacheRuntime).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('clears cache globals during subsystem reset even when the cache module is no longer resolvable', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+
+    seedCacheRuntimeGlobalsForTest()
+
+    expect(getCacheRuntimeBindingsForTest()).toBeDefined()
+    expect(getDatabaseQueryCacheBridge()).toBeDefined()
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
+        if (specifier === '@holo-js/cache') {
+          return undefined
+        }
+
+        return originalImportOptionalModule(specifier, options)
+      })
+
+      await portable.resetOptionalHoloSubsystems()
+
+      expect(getCacheRuntimeBindingsForTest()).toBeUndefined()
+      expect(getDatabaseQueryCacheBridge()).toBeUndefined()
+    } finally {
+      ;(globalThis as typeof globalThis & {
+        __holoCacheRuntime__?: {
+          bindings?: unknown
+        }
+        __holoDbQueryCacheBridge__?: {
+          bridge?: unknown
+        }
+      }).__holoCacheRuntime__ = undefined
+      ;(globalThis as typeof globalThis & {
+        __holoCacheRuntime__?: {
+          bindings?: unknown
+        }
+        __holoDbQueryCacheBridge__?: {
+          bridge?: unknown
+        }
+      }).__holoDbQueryCacheBridge__ = undefined
+      vi.restoreAllMocks()
+    }
   })
 
   it('closes managed security stores on shutdown instead of restoring them', async () => {
@@ -2873,6 +3109,285 @@ export default defineSessionConfig({
       expect(secondaryAdapter.connect).toHaveBeenCalledTimes(1)
       expect(primaryAdapter.disconnect).toHaveBeenCalledTimes(1)
       expect(secondaryAdapter.disconnect).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
+  it('surfaces cleanup errors when redis session store boot fails after adapter creation', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRedisConfig(root)
+    await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${packageEntry}
+
+export default defineSessionConfig({
+  driver: 'primary',
+  stores: {
+    primary: {
+      driver: 'redis',
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:sessions:primary:',
+    },
+    secondary: {
+      driver: 'redis',
+      host: '127.0.0.1',
+      port: 6380,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:sessions:secondary:',
+    },
+  },
+})
+`, 'utf8')
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      const cleanupFailure = new Error('adapter cleanup failed')
+      const primaryAdapter = {
+        connect: vi.fn(async () => {}),
+        disconnect: vi.fn(async () => {
+          throw cleanupFailure
+        }),
+        get: vi.fn(async () => null),
+        set: vi.fn(async () => {}),
+        del: vi.fn(async () => {}),
+      }
+      const secondaryAdapter = {
+        connect: vi.fn(async () => {}),
+        disconnect: vi.fn(async () => {}),
+        get: vi.fn(async () => null),
+        set: vi.fn(async () => {}),
+        del: vi.fn(async () => {}),
+      }
+      const createSessionRedisAdapter = vi.fn()
+        .mockReturnValueOnce(primaryAdapter)
+        .mockReturnValueOnce(secondaryAdapter)
+
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
+        if (specifier === '@holo-js/session') {
+          return {
+            configureSessionRuntime: vi.fn(),
+            createDatabaseSessionStore: vi.fn(),
+            createFileSessionStore: vi.fn(),
+            createRedisSessionStore: vi.fn((adapter: unknown) => {
+              if (adapter === primaryAdapter) {
+                return {
+                  read: vi.fn(async () => null),
+                  write: vi.fn(async () => {}),
+                  delete: vi.fn(async () => {}),
+                }
+              }
+
+              throw new Error('session store boot failed')
+            }),
+            getSessionRuntime: vi.fn(),
+            resetSessionRuntime: vi.fn(),
+          } as never
+        }
+
+        if (specifier === '@holo-js/session/drivers/redis-adapter') {
+          return {
+            createSessionRedisAdapter,
+          } as never
+        }
+
+        return await originalImportOptionalModule(specifier, options)
+      })
+
+      let thrown: unknown
+      try {
+        await portable.reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+      } catch (error) {
+        thrown = error
+      }
+
+      expect(thrown).toBeInstanceOf(Error)
+      expect((thrown as Error).message).toBe('session store boot failed')
+      expect((thrown as Error & { cleanupErrors?: readonly unknown[] }).cleanupErrors).toEqual([cleanupFailure])
+      expect(createSessionRedisAdapter).toHaveBeenCalledTimes(2)
+      expect(primaryAdapter.disconnect).toHaveBeenCalledTimes(1)
+      expect(secondaryAdapter.disconnect).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
+  it('fails clearly when redis session stores are configured without the redis adapter package', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRedisConfig(root)
+    await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${packageEntry}
+
+export default defineSessionConfig({
+  driver: 'primary',
+  stores: {
+    primary: {
+      driver: 'redis',
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:sessions:primary:',
+    },
+  },
+})
+`, 'utf8')
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
+        if (specifier === '@holo-js/session') {
+          return {
+            configureSessionRuntime: vi.fn(),
+            createDatabaseSessionStore: vi.fn(),
+            createFileSessionStore: vi.fn(),
+            createRedisSessionStore: vi.fn(),
+            getSessionRuntime: vi.fn(),
+            resetSessionRuntime: vi.fn(),
+          } as never
+        }
+
+        if (specifier === '@holo-js/session/drivers/redis-adapter') {
+          return undefined
+        }
+
+        return await originalImportOptionalModule(specifier, options)
+      })
+
+      await expect(portable.reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))).rejects.toThrow(
+        '[@holo-js/core] Redis-backed session stores require @holo-js/session/drivers/redis-adapter to be installed.',
+      )
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
+  it('returns only the session stores from the managed-session helper', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${packageEntry}
+
+export default defineSessionConfig({
+  driver: 'file',
+  stores: {
+    file: {
+      driver: 'file',
+      path: './storage/framework/sessions',
+    },
+  },
+})
+`, 'utf8')
+
+    const loadedConfig = await loadConfigDirectory(root, {
+      preferCache: false,
+      processEnv: process.env,
+    })
+
+    const stores = await holoRuntimeInternals.createCoreSessionStores(root, loadedConfig, {
+      configureSessionRuntime: vi.fn(),
+      createDatabaseSessionStore: vi.fn(),
+      createFileSessionStore: vi.fn((path: string) => ({
+        read: vi.fn(async (sessionId: string) => ({ id: sessionId, path })),
+        write: vi.fn(async () => {}),
+        delete: vi.fn(async () => {}),
+      })),
+      createRedisSessionStore: vi.fn(),
+      getSessionRuntime: vi.fn(),
+      resetSessionRuntime: vi.fn(),
+    })
+
+    expect(Object.keys(stores)).toEqual(['file'])
+    await expect(stores.file?.read('abc')).resolves.toEqual({
+      id: 'abc',
+      path: expect.stringContaining('/storage/framework/sessions'),
+    })
+  })
+
+  it('closes managed redis session adapters during subsystem reset', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRedisConfig(root)
+    await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from ${packageEntry}
+
+export default defineSessionConfig({
+  driver: 'primary',
+  stores: {
+    primary: {
+      driver: 'redis',
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:sessions:primary:',
+    },
+  },
+})
+`, 'utf8')
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      const close = vi.fn(async () => {})
+      const createSessionRedisAdapter = vi.fn(() => ({
+        connect: vi.fn(async () => {}),
+        disconnect: vi.fn(async () => {}),
+        close,
+        get: vi.fn(async () => null),
+        set: vi.fn(async () => {}),
+        del: vi.fn(async () => {}),
+      }))
+      const resetSessionRuntime = vi.fn()
+
+      vi.spyOn(portable.holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier, options) => {
+        if (specifier === '@holo-js/session') {
+          return {
+            configureSessionRuntime: vi.fn(),
+            createDatabaseSessionStore: vi.fn(),
+            createFileSessionStore: vi.fn(),
+            createRedisSessionStore: vi.fn(() => ({
+              read: vi.fn(async () => null),
+              write: vi.fn(async () => {}),
+              delete: vi.fn(async () => {}),
+            })),
+            getSessionRuntime: vi.fn(),
+            resetSessionRuntime,
+          } as never
+        }
+
+        if (specifier === '@holo-js/session/drivers/redis-adapter') {
+          return {
+            createSessionRedisAdapter,
+          } as never
+        }
+
+        return await originalImportOptionalModule(specifier, options)
+      })
+
+      await portable.reconfigureOptionalHoloSubsystems(root, await loadConfigDirectory(root))
+      await portable.resetOptionalHoloSubsystems()
+
+      expect(createSessionRedisAdapter).toHaveBeenCalledTimes(1)
+      expect(close).toHaveBeenCalledTimes(1)
+      expect(resetSessionRuntime).toHaveBeenCalledTimes(1)
     } finally {
       vi.restoreAllMocks()
       vi.resetModules()

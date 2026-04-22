@@ -1,0 +1,40 @@
+{
+  "name": "@holo-js/cache-db",
+  "version": "0.1.2",
+  "description": "Holo-JS Framework - DB-backed cache driver",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "stub": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest --run"
+  },
+  "peerDependencies": {
+    "@holo-js/cache": "workspace:*",
+    "@holo-js/db": "workspace:*"
+  },
+  "dependencies": {
+    "tslib": "catalog:"
+  },
+  "devDependencies": {
+    "@holo-js/cache": "workspace:*",
+    "@holo-js/db": "workspace:*",
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

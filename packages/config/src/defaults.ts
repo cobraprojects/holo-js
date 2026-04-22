@@ -12,7 +12,13 @@ import type {
   BaseBroadcastConnectionConfig,
   BroadcastConnectionOptionsConfig,
   BroadcastWorkerConfig,
+  CacheDatabaseDriverConfig,
+  CacheDriverConfig,
+  CacheFileDriverConfig,
+  CacheMemoryDriverConfig,
+  CacheRedisDriverConfig,
   HoloBroadcastConfig,
+  HoloCacheConfig,
   HoloBroadcastConnection,
   HoloAuthConfig,
   HoloMailAddressConfig,
@@ -31,6 +37,12 @@ import type {
   NormalizedAuthWorkosProviderConfig,
   NormalizedBroadcastConnectionOptionsConfig,
   NormalizedBroadcastWorkerConfig,
+  NormalizedCacheDatabaseDriverConfig,
+  NormalizedCacheDriverConfig,
+  NormalizedCacheFileDriverConfig,
+  NormalizedCacheMemoryDriverConfig,
+  NormalizedCacheRedisDriverConfig,
+  NormalizedHoloCacheConfig,
   NormalizedHoloBroadcastConfig,
   NormalizedHoloBroadcastConnection,
   NormalizedHoloAuthConfig,
@@ -185,6 +197,38 @@ export const holoBroadcastDefaults: Readonly<NormalizedHoloBroadcastConfig> = Ob
     scaling: false,
   }),
 })
+
+export const DEFAULT_CACHE_DRIVER = 'file'
+export const DEFAULT_CACHE_PREFIX = ''
+export const DEFAULT_CACHE_FILE_PATH = './storage/framework/cache/data'
+export const DEFAULT_CACHE_REDIS_CONNECTION = 'default'
+export const DEFAULT_CACHE_DATABASE_CONNECTION = 'default'
+export const DEFAULT_CACHE_DATABASE_TABLE = 'cache'
+export const DEFAULT_CACHE_DATABASE_LOCK_TABLE = 'cache_locks'
+
+export const holoCacheDefaults: Readonly<NormalizedHoloCacheConfig> = Object.freeze({
+  default: DEFAULT_CACHE_DRIVER,
+  prefix: DEFAULT_CACHE_PREFIX,
+  drivers: Object.freeze({
+    file: Object.freeze({
+      name: 'file',
+      driver: 'file' as const,
+      path: DEFAULT_CACHE_FILE_PATH,
+      prefix: DEFAULT_CACHE_PREFIX,
+    }),
+    memory: Object.freeze({
+      name: 'memory',
+      driver: 'memory' as const,
+      maxEntries: undefined,
+      prefix: DEFAULT_CACHE_PREFIX,
+    }),
+  }),
+})
+
+type CacheNormalizationOptions = {
+  readonly database?: NormalizedHoloDatabaseConfig
+  readonly redis?: NormalizedHoloRedisConfig
+}
 
 export const DEFAULT_MAILER_NAME = 'preview'
 export const DEFAULT_MAIL_PREVIEW_PATH = '.holo-js/runtime/mail-preview'
@@ -443,6 +487,152 @@ function normalizeConnectionName(value: string | undefined, label: string): stri
   }
 
   return normalized
+}
+
+function normalizeCacheName(value: string | undefined, label: string): string {
+  const normalized = value?.trim()
+  if (!normalized) {
+    throw new Error(`[Holo Cache] ${label} must be a non-empty string.`)
+  }
+
+  return normalized
+}
+
+function normalizeCacheOptionalString(value: string | undefined): string | undefined {
+  const normalized = value?.trim()
+  return normalized || undefined
+}
+
+function parseCacheInteger(
+  value: number | string | undefined,
+  label: string,
+  options: { minimum?: number } = {},
+): number | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  const normalized = typeof value === 'number'
+    ? value
+    : (() => {
+        const trimmed = value.trim()
+        if (!trimmed) {
+          return Number.NaN
+        }
+
+        return Number(trimmed)
+      })()
+
+  if (!Number.isFinite(normalized) || !Number.isInteger(normalized)) {
+    throw new Error(`[Holo Cache] ${label} must be an integer.`)
+  }
+
+  if (typeof options.minimum === 'number' && normalized < options.minimum) {
+    throw new Error(`[Holo Cache] ${label} must be greater than or equal to ${options.minimum}.`)
+  }
+
+  return normalized
+}
+
+function resolveCachePrefix(globalPrefix: string, localPrefix: string | undefined): string {
+  return normalizeCacheOptionalString(localPrefix) ?? globalPrefix
+}
+
+function normalizeCacheDriverConfig(
+  name: string,
+  config: CacheDriverConfig,
+  globalPrefix: string,
+): NormalizedCacheDriverConfig {
+  switch (config.driver) {
+    case 'memory': {
+      const memoryConfig = config as CacheMemoryDriverConfig
+      return Object.freeze({
+        name,
+        driver: 'memory',
+        prefix: resolveCachePrefix(globalPrefix, memoryConfig.prefix),
+        maxEntries: parseCacheInteger(memoryConfig.maxEntries, `cache driver "${name}" maxEntries`, {
+          minimum: 1,
+        }),
+      } satisfies NormalizedCacheMemoryDriverConfig)
+    }
+    case 'file': {
+      const fileConfig = config as CacheFileDriverConfig
+      return Object.freeze({
+        name,
+        driver: 'file',
+        path: normalizeCacheOptionalString(fileConfig.path) || DEFAULT_CACHE_FILE_PATH,
+        prefix: resolveCachePrefix(globalPrefix, fileConfig.prefix),
+      } satisfies NormalizedCacheFileDriverConfig)
+    }
+    case 'redis': {
+      const redisConfig = config as CacheRedisDriverConfig
+      return Object.freeze({
+        name,
+        driver: 'redis',
+        connection: normalizeCacheOptionalString(redisConfig.connection) || DEFAULT_CACHE_REDIS_CONNECTION,
+        prefix: resolveCachePrefix(globalPrefix, redisConfig.prefix),
+      } satisfies NormalizedCacheRedisDriverConfig)
+    }
+    case 'database': {
+      const databaseConfig = config as CacheDatabaseDriverConfig
+      return Object.freeze({
+        name,
+        driver: 'database',
+        connection: normalizeCacheOptionalString(databaseConfig.connection) || DEFAULT_CACHE_DATABASE_CONNECTION,
+        table: normalizeCacheOptionalString(databaseConfig.table) || DEFAULT_CACHE_DATABASE_TABLE,
+        lockTable: normalizeCacheOptionalString(databaseConfig.lockTable) || DEFAULT_CACHE_DATABASE_LOCK_TABLE,
+        prefix: resolveCachePrefix(globalPrefix, databaseConfig.prefix),
+      } satisfies NormalizedCacheDatabaseDriverConfig)
+    }
+    default:
+      throw new Error(`[Holo Cache] Unsupported cache driver "${String((config as { driver?: unknown }).driver)}" on driver "${name}".`)
+  }
+}
+
+export function normalizeCacheConfig(
+  config: HoloCacheConfig = {},
+  options: CacheNormalizationOptions = {},
+): NormalizedHoloCacheConfig {
+  const prefix = normalizeCacheOptionalString(config.prefix) ?? DEFAULT_CACHE_PREFIX
+  const defaultRedisConnection = options.redis?.default ?? DEFAULT_CACHE_REDIS_CONNECTION
+  const defaultDatabaseConnection = options.database?.defaultConnection ?? DEFAULT_CACHE_DATABASE_CONNECTION
+  const drivers = !config.drivers || Object.keys(config.drivers).length === 0
+    ? holoCacheDefaults.drivers
+    : Object.freeze(Object.fromEntries(Object.entries(config.drivers).map(([name, driver]) => {
+      const normalizedName = normalizeCacheName(name, 'Cache driver name')
+      const driverConfig = (() => {
+        switch (driver.driver) {
+          case 'redis':
+            return {
+              ...driver,
+              connection: normalizeCacheOptionalString(driver.connection) ?? defaultRedisConnection,
+            }
+          case 'database':
+            return {
+              ...driver,
+              connection: normalizeCacheOptionalString(driver.connection) ?? defaultDatabaseConnection,
+            }
+          default:
+            return driver
+        }
+      })()
+      return [normalizedName, normalizeCacheDriverConfig(normalizedName, driverConfig, prefix)]
+    })))
+
+  const configuredDefault = normalizeCacheOptionalString(config.default)
+  const defaultDriver = configuredDefault
+    || (DEFAULT_CACHE_DRIVER in drivers ? DEFAULT_CACHE_DRIVER : undefined)
+    || Object.keys(drivers)[0]
+
+  if (!defaultDriver || !(defaultDriver in drivers)) {
+    throw new Error(`[Holo Cache] default cache driver "${configuredDefault ?? ''}" is not configured.`)
+  }
+
+  return Object.freeze({
+    default: defaultDriver,
+    prefix,
+    drivers,
+  })
 }
 
 function normalizeQueueName(value: string | undefined): string {

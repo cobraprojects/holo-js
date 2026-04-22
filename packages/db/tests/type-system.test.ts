@@ -406,6 +406,7 @@ describe('type system contracts', () => {
       const builder = undefined as unknown as TableQueryBuilder<typeof users>
       const narrowed = builder.select('id', 'name')
       const activeOnly = builder.select('active')
+      const cached = builder.cache(300)
       const widened = builder.select('id').addSelect('name')
       const aliased = builder.select('name as displayName')
       const grouped = builder
@@ -418,10 +419,12 @@ describe('type system contracts', () => {
       expectTypeOf(narrowed.get()).toEqualTypeOf<Promise<Array<{ id: number, name: string }>>>()
       expectTypeOf(narrowed.first()).toEqualTypeOf<Promise<{ id: number, name: string } | undefined>>()
       expectTypeOf(narrowed.paginate()).toEqualTypeOf<Promise<PaginatedResult<{ id: number, name: string }>>>()
+      expectTypeOf(cached.get()).toEqualTypeOf<Promise<Array<{ id: number, name: string, active: boolean, created_at: Date }>>>()
       expectTypeOf(narrowed.pluck('id')).toEqualTypeOf<Promise<number[]>>()
       expectTypeOf(activeOnly.value('active')).toEqualTypeOf<Promise<boolean | undefined>>()
       expectTypeOf(aliased.get()).toEqualTypeOf<Promise<Array<Record<string, unknown>>>>()
       expectTypeOf(groupedRows).toMatchTypeOf<Promise<Array<{ name: string, total: number, totalScore: number | null }>>>()
+      void cached
       void widened
       void aliased
       void grouped

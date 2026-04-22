@@ -17,6 +17,7 @@ const frameworkMatrixSmokePackages = [
   '@holo-js/auth-social-google',
   '@holo-js/auth-workos',
   '@holo-js/auth-clerk',
+  '@holo-js/cache',
   '@holo-js/db',
   '@holo-js/db-sqlite',
   '@holo-js/db-mysql',
@@ -57,6 +58,8 @@ const frameworkHelperSmokePackages = [
 ]
 const indirectSmokeCoveragePackages = [
   'create-holo-js',
+  '@holo-js/cache-db',
+  '@holo-js/cache-redis',
 ]
 const smokeWorkspacePackages = [
   ...new Set([
@@ -1718,6 +1721,7 @@ function assertMatrixPayload(app, payload) {
   assert.equal(payload.app, app.appName)
   assert.equal(payload.ok, true)
   assert.equal(payload.config.defaultConnection, 'main')
+  assert.equal(payload.config.defaultCache, 'file')
   assert.equal(payload.storage.localContents, 'private payload')
   assert.equal(payload.storage.publicContents, 'public payload')
   assert.equal(payload.storage.movedExists, true)
@@ -1771,6 +1775,12 @@ function assertMatrixPayload(app, payload) {
   assert.equal(payload.softDeletes.restoredTrashed, 0)
   assert.equal(payload.softDeletes.restoredDeletedAtCleared, true)
   assert.equal(payload.transactions.rolledBack, true)
+  assert.equal(payload.cache.default.driver, 'file')
+  assert.equal(payload.cache.default.hit.framework, app.framework)
+  assert.equal(payload.cache.default.remembered.computeRuns, 1)
+  assert.equal(payload.cache.default.flexible.step, 'fresh')
+  assert.equal(payload.cache.memory.driver, 'memory')
+  assert.equal(payload.cache.memory.hit.scope, 'process')
   assert.equal(payload.media.mediaCount, 2)
   assert.ok(payload.media.imageUrl.includes(`/storage/media/`))
   assert.ok(payload.media.thumbUrl.includes(`/storage/media/`))

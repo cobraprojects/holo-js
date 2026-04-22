@@ -73,6 +73,12 @@ describe('@holo-js/core storage runtime optional imports', () => {
     await expect(storageRuntimeInternals.importOptionalModule('./definitely-missing-storage-runtime.mjs')).resolves.toBeUndefined()
   })
 
+  it('treats missing optional bare packages as optional outside Vitest', async () => {
+    await withoutVitestEnv(async () => {
+      await expect(storageRuntimeInternals.importOptionalModule('@holo-js/definitely-missing-storage-runtime')).resolves.toBeUndefined()
+    })
+  })
+
   it('rethrows module evaluation failures outside Vitest', async () => {
     const root = await mkdtemp(join(tmpdir(), 'holo-storage-runtime-boom-'))
     tempDirs.push(root)
@@ -129,6 +135,14 @@ describe('@holo-js/core storage runtime optional imports', () => {
     tempDirs.push(root)
     await withoutVitestEnv(async () => {
       await expect(storageRuntimeInternals.importOptionalModule(pathToFileURL(join(root, 'missing.mjs')).href)).resolves.toBeUndefined()
+    })
+  })
+
+  it('treats missing absolute-path optional storage modules as optional outside Vitest', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'holo-storage-runtime-absolute-missing-'))
+    tempDirs.push(root)
+    await withoutVitestEnv(async () => {
+      await expect(storageRuntimeInternals.importOptionalModule(join(root, 'missing.mjs'))).resolves.toBeUndefined()
     })
   })
 })

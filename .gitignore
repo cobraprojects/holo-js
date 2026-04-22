@@ -28,6 +28,8 @@ apps/docs/docs/.vitepress/cache
 *.swp
 *.swo
 *~
+.fallow
+.fallowrc.json
 
 # OS
 .DS_Store

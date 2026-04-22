@@ -31,6 +31,7 @@ describe('@holo-js/config broadcast typing', () => {
       app: {} as HoloConfigRegistry['app'],
       database: {} as HoloConfigRegistry['database'],
       redis: {} as HoloConfigRegistry['redis'],
+      cache: {} as HoloConfigRegistry['cache'],
       storage: {} as HoloConfigRegistry['storage'],
       queue: {} as HoloConfigRegistry['queue'],
       broadcast: broadcast as unknown as HoloConfigRegistry['broadcast'],

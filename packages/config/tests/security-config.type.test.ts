@@ -33,6 +33,7 @@ describe('@holo-js/config security typing', () => {
       app: {} as HoloConfigRegistry['app'],
       database: {} as HoloConfigRegistry['database'],
       redis: {} as HoloConfigRegistry['redis'],
+      cache: {} as HoloConfigRegistry['cache'],
       storage: {} as HoloConfigRegistry['storage'],
       queue: {} as HoloConfigRegistry['queue'],
       broadcast: {} as HoloConfigRegistry['broadcast'],
