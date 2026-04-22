@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   column,
   configureDB,
@@ -65,6 +65,7 @@ class MemoryQueryCacheBridge implements DatabaseQueryCacheBridge {
   readonly putCalls: Array<{ key: string, driver?: string }> = []
   readonly flexibleCalls: Array<{ key: string, driver?: string }> = []
   readonly invalidatedDependencies: string[][] = []
+  readonly inFlightFlexible = new Map<string, Promise<unknown>>()
 
   private buildKey(key: string, driver?: string): string {
     return `${driver ?? '__default__'}\u0000${key}`
@@ -134,11 +135,25 @@ class MemoryQueryCacheBridge implements DatabaseQueryCacheBridge {
       return cached
     }
 
-    const value = await callback()
-    this.values.set(cacheKey, value)
-    this.flexibleCalls.push({ key, driver: options?.driver })
-    this.registerDependencies(cacheKey, options?.dependencies)
-    return value
+    const pending = this.inFlightFlexible.get(cacheKey) as Promise<TValue> | undefined
+    if (pending) {
+      return pending
+    }
+
+    const compute = (async () => {
+      const value = await callback()
+      this.values.set(cacheKey, value)
+      this.flexibleCalls.push({ key, driver: options?.driver })
+      this.registerDependencies(cacheKey, options?.dependencies)
+      return value
+    })()
+    this.inFlightFlexible.set(cacheKey, compute)
+
+    try {
+      return await compute
+    } finally {
+      this.inFlightFlexible.delete(cacheKey)
+    }
   }
 
   async forget(key: string, options?: { readonly driver?: string }): Promise<boolean> {
@@ -243,8 +258,8 @@ describe('@holo-js/db query cache integration', () => {
     expect(first).toEqual(second)
     expect(first[0]?.created_at).toBeInstanceOf(Date)
     expect(adapter.queryCount).toBe(2)
-    expect(bridge.putCalls[0]?.key).toMatch(/^db:query:/)
-    expect(bridge.putCalls[1]).toEqual({
+    expect(bridge.flexibleCalls[0]?.key).toMatch(/^db:query:/)
+    expect(bridge.flexibleCalls[1]).toEqual({
       key: 'users.explicit',
       driver: 'redis',
     })
@@ -270,6 +285,30 @@ describe('@holo-js/db query cache integration', () => {
     expect(bridge.flexibleCalls).toHaveLength(1)
     expect(firstModels[0]?.get('name')).toBe('Ava')
     expect(secondModels[0]?.get('name')).toBe('Ava')
+  })
+
+  it('deduplicates concurrent ttl cache misses through the cache bridge compute path', async () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+    })
+
+    adapter.queryRows = [{ id: 1, name: 'Ava' }]
+    const originalQuery = adapter.query.bind(adapter)
+    adapter.query = async <TRow extends Record<string, unknown> = Record<string, unknown>>(): Promise<DriverQueryResult<TRow>> => {
+      await new Promise((resolveDelay) => {
+        setTimeout(resolveDelay, 0)
+      })
+      return originalQuery<TRow>()
+    }
+
+    const [first, second] = await Promise.all([
+      DB.table(users).cache(300).get(),
+      DB.table(users).cache(300).get(),
+    ])
+
+    expect(first).toEqual(second)
+    expect(adapter.queryCount).toBe(1)
   })
 
   it('supports query caching from string table sources', async () => {
@@ -367,7 +406,7 @@ describe('@holo-js/db query cache integration', () => {
 
     expect(lockedRows[0]?.points).toBe(11)
     expect(adapter.queryCount).toBe(3)
-    expect(bridge.getCalls).toHaveLength(1)
+    expect(bridge.flexibleCalls).toHaveLength(1)
     expect(result.affectedRows).toBe(1)
   })
 

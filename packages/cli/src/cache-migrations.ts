@@ -57,7 +57,25 @@ export async function loadCacheConfig(projectRoot: string) {
     throw new Error('Cache config is missing or malformed. Expected a cache config object with a drivers property.')
   }
 
-  return loadedConfig.cache as CacheConfigShape
+  const cacheConfig = loadedConfig.cache as CacheConfigShape
+
+  for (const [driverName, driverConfig] of Object.entries(cacheConfig.drivers)) {
+    if (driverConfig.driver !== 'database') {
+      continue
+    }
+
+    const databaseDriver = driverConfig as Extract<CacheConfigDriverShape, { driver: 'database' }>
+    if (
+      typeof databaseDriver.table !== 'string'
+      || !databaseDriver.table.trim()
+      || typeof databaseDriver.lockTable !== 'string'
+      || !databaseDriver.lockTable.trim()
+    ) {
+      throw new Error(`Database cache driver "${driverName}" must define non-empty "table" and "lockTable" strings.`)
+    }
+  }
+
+  return cacheConfig
 }
 
 export function normalizeCacheMigrationName(tableName: string): string {

@@ -283,8 +283,11 @@ export function createCacheQueryBridge(
       },
     ): Promise<void> {
       const indexedKey = createIndexedKey(key, options.driver)
+      const resolvedTtl = typeof options.flexible === 'undefined'
+        ? options.ttl
+        : normalizeFlexibleTtl(options.flexible).staleSeconds
 
-      await putCachedValue(key, value, options.ttl, options.driver)
+      await putCachedValue(key, value, resolvedTtl, options.driver)
       await syncDependencies(indexedKey, options.dependencies)
     },
     async flexible<TValue>(

@@ -292,7 +292,10 @@ function createCacheRepository(driverName?: string): CacheRepository {
       }
 
       const refreshLock = createRefreshLock(key, normalizedTtl.staleSeconds)
-      const refreshed = await refreshLock.block(1, async () => refreshFlexibleValue(key, normalizedTtl, callback))
+      const refreshed = await refreshLock.block(
+        Math.max(1, Math.ceil(normalizedTtl.staleSeconds / 300)),
+        async () => refreshFlexibleValue(key, normalizedTtl, callback),
+      )
 
       if (refreshed !== false) {
         return refreshed as Awaited<TValue>

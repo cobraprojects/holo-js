@@ -3558,6 +3558,10 @@ export const limit = Object.freeze({
     expect(await readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).toContain('default: \'redis\'')
     expect(await readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).toContain('driver: \'redis\'')
     expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).toContain('defineRedisConfig')
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('REDIS_HOST=')
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('REDIS_PORT=')
+    expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('REDIS_HOST=')
+    expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('REDIS_PORT=')
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/cache": "${expectedHoloPackageRange}"`)
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/cache-redis": "${expectedHoloPackageRange}"`)
   }, 30_000)
@@ -3582,6 +3586,8 @@ export default defineRedisConfig({
     const result = runCliProcess(projectRoot, ['install', 'cache', '--driver', 'redis'])
     expect(result.status).toBe(0)
     expect(await readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).toContain('connection: \'cache\'')
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('REDIS_HOST=')
+    expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('REDIS_HOST=')
   }, 30_000)
 
   it('fails instead of partially installing a mismatched cache driver when cache config already exists', async () => {
@@ -4370,6 +4376,7 @@ printf 'fake npm install\n'
       expect(syncedDependencies['@holo-js/cache-db']).toBe(expectedHoloPackageRange)
       expect(syncedDependencies['@holo-js/cache-redis']).toBe(expectedHoloPackageRange)
       expect(typeof syncedDependencies.ioredis).toBe('string')
+      await writeFile(installLogPath, '', 'utf8')
 
       await writeProjectFile(projectRoot, 'config/cache.ts', `
 import { defineCacheConfig } from '@holo-js/config'

@@ -87,10 +87,11 @@ describe('@holo-js/cache package surface', () => {
     })
     expect(normalizeCacheTtl(1, { now: new Date(1_000) }).expiresAt).toBe(2_000)
 
-    expect(() => normalizeCacheTtl(-1)).toThrow(CacheInvalidTtlError)
+    expect(() => normalizeCacheTtl(-1)).toThrow('Cache TTL seconds must be > 0 or use a Date/forever option.')
     expect(() => normalizeCacheTtl(0)).toThrow('Cache TTL seconds must be > 0 or use a Date/forever option.')
     expect(() => normalizeCacheTtl(1.5)).toThrow(CacheInvalidTtlError)
     expect(() => normalizeCacheTtl(new Date('invalid'))).toThrow(CacheInvalidTtlError)
+    expect(() => normalizeCacheTtl(1, { now: new Date('invalid') })).toThrow(TypeError)
   })
 
   it('serializes plain JSON-safe values and dates without losing shape', () => {
@@ -479,7 +480,7 @@ describe('@holo-js/cache package surface', () => {
         version: refreshCalls,
       }
     })
-    await vi.advanceTimersByTimeAsync(1_001)
+    await vi.advanceTimersByTimeAsync(2_001)
     const blockedValue = await blockedValuePromise
 
     const retriedRefreshLock = cache.lock(cacheFacadeInternals.createRefreshLockName('retried.flexible'), 2)
@@ -500,7 +501,7 @@ describe('@holo-js/cache package surface', () => {
         version: refreshCalls,
       }
     })
-    await vi.advanceTimersByTimeAsync(1_001)
+    await vi.advanceTimersByTimeAsync(2_001)
     const retriedValue = await retriedValuePromise
 
     expect(firstValue).toEqual({ version: 1 })
@@ -899,7 +900,7 @@ describe('@holo-js/cache package surface', () => {
     }
   })
 
-  it('ignores malformed shared-path files while flushing a prefixed file driver', async () => {
+  it('removes malformed shared-path files while flushing a prefixed file driver', async () => {
     const cachePath = await createTempCacheDirectory('file-shared-malformed')
 
     try {
@@ -924,8 +925,9 @@ describe('@holo-js/cache package surface', () => {
         payload: '"second"',
         expiresAt: Date.now() + 60_000,
       })
+      const malformedFilePath = join(cachePath, 'entries', 'ff', 'broken.json')
       await mkdir(join(cachePath, 'entries', 'ff'), { recursive: true })
-      await writeFile(join(cachePath, 'entries', 'ff', 'broken.json'), '{not-json', 'utf8')
+      await writeFile(malformedFilePath, '{not-json', 'utf8')
 
       await primary.flush()
 
@@ -934,6 +936,7 @@ describe('@holo-js/cache package surface', () => {
         payload: '"second"',
         expiresAt: expect.any(Number),
       })
+      await expect(readFile(malformedFilePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     } finally {
       await rm(cachePath, { recursive: true, force: true })
     }
@@ -1839,6 +1842,14 @@ describe('@holo-js/cache package surface', () => {
       payload: serializeCacheValue('value'),
       expiresAt: undefined,
     })
+    await queryBridge.put('flex-put', 'value', {
+      flexible: [60, 300],
+    })
+    expect(driver.put).toHaveBeenCalledWith(expect.objectContaining({
+      key: 'app:flex-put',
+      payload: serializeCacheValue('value'),
+      expiresAt: expect.any(Number),
+    }))
     await expect(queryBridge.flexible('stale', [60, 300], async () => 'callback')).resolves.toBe('stale-window')
     await expect(queryBridge.flexible('retried', [60, 300], async () => 'callback')).resolves.toBe('retried')
     await expect(queryBridge.flexible('refreshed', [60, 300], async () => driver.refreshValue)).resolves.toBe('callback-expired-retry')
@@ -1980,5 +1991,60 @@ describe('@holo-js/cache package surface', () => {
 
     await expect(queryBridge.flexible('fresh', [60, 300], async () => 'callback')).resolves.toBe('fresh')
     expect(driver.lock).not.toHaveBeenCalled()
+  })
+
+  it('waits for the stale window when a flexible refresh is already in progress', async () => {
+    const blockCalls: number[] = []
+    const staleEnvelope = serializeCacheValue({
+      __holo_cache_flexible: true,
+      value: 'stale',
+      freshUntil: Date.now() - 1_000,
+      staleUntil: Date.now() - 1_000,
+    })
+
+    const driver = {
+      name: 'memory',
+      driver: 'memory',
+      forget: vi.fn(async () => true),
+      flush: vi.fn(async () => undefined),
+      increment: vi.fn(async () => 0),
+      decrement: vi.fn(async () => 0),
+      put: vi.fn(async () => true),
+      add: vi.fn(async () => true),
+      get: vi.fn()
+        .mockResolvedValueOnce({
+          hit: true,
+          payload: staleEnvelope,
+        })
+        .mockResolvedValueOnce({ hit: false }),
+      lock: vi.fn(() => ({
+        name: 'lock',
+        async get<TValue>(callback?: () => TValue | Promise<TValue>): Promise<boolean | TValue> {
+          return callback ? callback() : true
+        },
+        async release(): Promise<boolean> {
+          return true
+        },
+        async block<TValue>(waitSeconds: number, _callback?: () => TValue | Promise<TValue>): Promise<boolean | TValue> {
+          blockCalls.push(waitSeconds)
+          return false
+        },
+      })),
+    }
+
+    configureCacheRuntime({
+      config: {
+        default: 'memory',
+        drivers: {
+          memory: {
+            driver: 'memory',
+          },
+        },
+      },
+      drivers: new Map([['memory', driver as never]]),
+    })
+
+    await expect(cache.flexible('stale-wait', [60, 600], async () => 'refreshed')).resolves.toBe('refreshed')
+    expect(blockCalls).toEqual([2])
   })
 })

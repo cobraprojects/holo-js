@@ -95,8 +95,10 @@ bunx holo install cache --driver file
 
 ```bash
 bunx holo install cache --driver redis
-bunx holo cache:clear --driver redis
 ```
+
+Use `bunx holo cache:clear --driver redis` later when you need to clear existing Redis cache state during migration or
+troubleshooting.
 
 ### Database cache
 

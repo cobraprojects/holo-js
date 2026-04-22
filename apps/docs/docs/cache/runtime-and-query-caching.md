@@ -22,6 +22,10 @@ await cache.forget('flags:beta')
 Raw string keys work, but `defineCacheKey(...)` preserves value inference across `get`, `put`, `remember`, and
 `flexible`.
 
+`cache.add(key, value, ttl)` only writes when the key does not already exist, so it does not overwrite existing
+values. `cache.put(key, value, ttl)` always writes and overwrites the key. Use `cache.add` for idempotent first-write
+scenarios, and use `cache.put` when you need to update or refresh a cached value.
+
 Returned cache payloads are immutable snapshots. Arrays and plain objects from `get(...)`, `remember(...)`,
 `rememberForever(...)`, and `flexible(...)` are recursively frozen so callers cannot mutate shared cached state after
 deserialization.

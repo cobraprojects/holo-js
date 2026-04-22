@@ -233,6 +233,24 @@ describe('@holo-js/cache-db', () => {
       password: 'secret',
       database: 'app',
     })
+
+    const invalidStringPortOptions = cacheDbInternals.createDatabaseContextOptions('cache', {
+      driver: 'postgres',
+      host: 'cache.internal',
+      database: 'app',
+      username: 'user',
+      password: 'secret',
+      port: 'not-a-port' as never,
+    })
+    const invalidStringAdapter = invalidStringPortOptions.adapter as {
+      readonly options?: {
+        readonly config?: {
+          readonly port?: number
+        }
+      }
+    }
+
+    expect(invalidStringAdapter.options?.config?.port).toBeUndefined()
   })
 
   it('creates cache tables through the shared schema helper', async () => {
@@ -425,7 +443,11 @@ describe('@holo-js/cache-db', () => {
     expect(await primary.lock('primary:report', 60).get()).toBe(true)
     expect(await secondary.lock('secondary:report', 60).get()).toBe(true)
 
+    const getSpy = vi.spyOn(TableQueryBuilder.prototype, 'get')
+
     await primary.flush()
+    expect(getSpy).not.toHaveBeenCalled()
+    getSpy.mockRestore()
 
     expect(await primary.get('primary:alpha')).toEqual({ hit: false })
     expect(await secondary.get('secondary:alpha')).toEqual({

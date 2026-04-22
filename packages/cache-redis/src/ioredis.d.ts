@@ -3,7 +3,7 @@ declare module 'ioredis' {
   type RedisClusterStartupNode = {
     host: string
     port: number
-    tls?: Record<string, never>
+    tls?: import('node:tls').ConnectionOptions
   }
   type RedisClusterOptions = {
     redisOptions?: Record<string, unknown>

@@ -1346,7 +1346,7 @@ function renderScaffoldEnvFiles(
     ? [...renderAuthEnvFiles({}, defaultDatabaseConnection).env]
     : []
   const cacheLines = normalizeScaffoldOptionalPackages(options.optionalPackages).includes('cache')
-    ? [...renderCacheEnvFiles().env]
+    ? [...renderCacheEnvFiles('file').env]
     : []
   const env = [...baseLines, ...driverLines, ...storageLines, ...authLines, ...cacheLines, ''].join('\n')
   const example = [
@@ -1389,7 +1389,23 @@ function renderQueueEnvFiles(
   }
 }
 
-function renderCacheEnvFiles(): { env: readonly string[], example: readonly string[] } {
+function renderCacheEnvFiles(
+  driver: SupportedCacheInstallerDriver,
+): { env: readonly string[], example: readonly string[] } {
+  if (driver === 'redis') {
+    const redis = renderQueueEnvFiles('redis')
+    return {
+      env: [
+        'CACHE_PREFIX=',
+        ...redis.env,
+      ],
+      example: [
+        'CACHE_PREFIX=',
+        ...redis.example,
+      ],
+    }
+  }
+
   return {
     env: [
       'CACHE_PREFIX=',
@@ -2618,7 +2634,7 @@ export async function installCacheIntoProject(
     createdRedisConfig = await ensureRedisConfigFile(projectRoot)
   }
 
-  const cacheEnvFiles = renderCacheEnvFiles()
+  const cacheEnvFiles = renderCacheEnvFiles(driver)
   const envPath = resolve(projectRoot, '.env')
   const envExamplePath = resolve(projectRoot, '.env.example')
   const nextEnv = upsertEnvContents(await readTextFile(envPath), cacheEnvFiles.env)

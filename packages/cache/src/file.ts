@@ -221,6 +221,7 @@ async function removeScopedCacheFiles<TValue extends FileCacheEntryEnvelope | Fi
   for (const filePath of await listFiles(rootPath)) {
     const decoded = await readJsonFile(filePath)
     if (!decoded || decoded === MALFORMED_FILE || !isEnvelope(decoded)) {
+      await removeFileIfPresent(filePath)
       continue
     }
 

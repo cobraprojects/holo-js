@@ -403,7 +403,14 @@ export function normalizeCacheTtl(
   options: { now?: number | Date } = {},
 ): NormalizedCacheTtl {
   const now = options.now instanceof Date
-    ? options.now.getTime()
+    ? (() => {
+        const timestamp = options.now.getTime()
+        if (Number.isNaN(timestamp)) {
+          throw new TypeError('[@holo-js/cache] Cache TTL options.now Date must be valid.')
+        }
+
+        return timestamp
+      })()
     : options.now ?? Date.now()
 
   if (ttl instanceof Date) {
@@ -425,7 +432,7 @@ export function normalizeCacheTtl(
   }
 
   if (ttl < 0) {
-    throw new CacheInvalidTtlError('[@holo-js/cache] Cache TTL seconds must be greater than or equal to 0.')
+    throw new CacheInvalidTtlError('[@holo-js/cache] Cache TTL seconds must be > 0 or use a Date/forever option.')
   }
 
   if (ttl === 0) {
