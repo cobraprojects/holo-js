@@ -179,6 +179,10 @@ function parseClusterNodeUrl(url: string, label: string): RedisClusterStartupNod
       throw new Error('missing hostname')
     }
 
+    if (parsed.username || parsed.password || (parsed.pathname && parsed.pathname !== '/')) {
+      throw new Error('cluster node URLs must not include credentials or a Redis database/path; supply those via redisOptions instead')
+    }
+
     return {
       host: parsed.hostname,
       port: parsed.port ? Number.parseInt(parsed.port, 10) : 6379,
@@ -235,12 +239,18 @@ function createRedisClusterOptions(
 function createRedisClient(options: RedisCacheDriverOptions): RedisClientLike {
   const RedisConstructor = Redis as RedisCtor
   const clientOptions = createRedisClientOptions(options)
+  const hasStandaloneUrl = typeof options.redis.url === 'string'
+  const hasClusters = !!options.redis.clusters?.length
 
-  if (typeof options.redis.url === 'string') {
+  if (hasStandaloneUrl && hasClusters) {
+    throw new Error('[@holo-js/cache-redis] Configure either redis.url or redis.clusters, but not both.')
+  }
+
+  if (hasStandaloneUrl) {
     return new RedisConstructor(options.redis.url, clientOptions)
   }
 
-  if (options.redis.clusters && options.redis.clusters.length > 0) {
+  if (hasClusters) {
     return new RedisConstructor.Cluster(
       resolveClusterStartupNodes(options),
       createRedisClusterOptions(options),
@@ -252,6 +262,14 @@ function createRedisClient(options: RedisCacheDriverOptions): RedisClientLike {
 
 function toLockTtlMilliseconds(seconds: number): number {
   return Math.max(1, Math.round(seconds * 1000))
+}
+
+function isRedisNumericMutationError(error: unknown): error is Error {
+  return error instanceof Error
+    && (
+      error.message.includes('value is not an integer or out of range')
+      || error.message.includes('WRONGTYPE')
+    )
 }
 
 function createRedisLock(
@@ -327,7 +345,7 @@ export function createRedisCacheDriver(options: RedisCacheDriverOptions): CacheD
       const [nextCursor, keys] = await target.scan(cursor, 'MATCH', flushPattern, 'COUNT', REDIS_SCAN_COUNT)
       cursor = nextCursor
       if (keys.length > 0) {
-        await target.del(...keys)
+        await Promise.all(keys.map(async (key) => target.del(key)))
       }
     } while (cursor !== '0')
   }
@@ -389,6 +407,10 @@ export function createRedisCacheDriver(options: RedisCacheDriverOptions): CacheD
       try {
         return await client.incrby(key, amount)
       } catch (error) {
+        if (!isRedisNumericMutationError(error)) {
+          throw error
+        }
+
         throw new CacheInvalidNumericMutationError(
           `[@holo-js/cache] Cache key "${key}" does not contain a numeric value.`,
           { cause: error },
@@ -399,6 +421,10 @@ export function createRedisCacheDriver(options: RedisCacheDriverOptions): CacheD
       try {
         return await client.decrby(key, amount)
       } catch (error) {
+        if (!isRedisNumericMutationError(error)) {
+          throw error
+        }
+
         throw new CacheInvalidNumericMutationError(
           `[@holo-js/cache] Cache key "${key}" does not contain a numeric value.`,
           { cause: error },
@@ -418,6 +444,7 @@ export const redisCacheDriverInternals = {
   createRedisLock,
   escapeRedisGlob,
   isRedisSocketConnectionTarget,
+  isRedisNumericMutationError,
   parseClusterNodeUrl,
   resolveClusterStartupNodes,
   toLockTtlMilliseconds,

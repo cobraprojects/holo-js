@@ -27,6 +27,10 @@ type DatabaseCacheDriverModule = {
 
 type DatabaseDriverModuleLoader = () => Promise<DatabaseCacheDriverModule>
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 function isNormalizedDatabaseConfig(
   config: HoloDatabaseConfig | NormalizedHoloDatabaseConfig,
 ): config is NormalizedHoloDatabaseConfig {
@@ -63,15 +67,41 @@ function resolveSharedDatabaseConnection(
   )
 }
 
-function isModuleNotFoundError(error: unknown): boolean {
-  return !!error
-    && typeof error === 'object'
-    && 'code' in error
+function isModuleNotFoundError(error: unknown, expectedSpecifier = '@holo-js/cache-db'): boolean {
+  if (!error || typeof error !== 'object') {
+    return false
+  }
+
+  const message = 'message' in error && typeof (error as { message?: unknown }).message === 'string'
+    ? (error as { message: string }).message
+    : ''
+  const escapedSpecifier = escapeRegExp(expectedSpecifier)
+
+  if (
+    'code' in error
     && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
+    && [
+      new RegExp(`Cannot find package ['"]${escapedSpecifier}['"]`),
+      new RegExp(`Cannot find module ['"]${escapedSpecifier}['"]`),
+      new RegExp(`Could not resolve ['"]${escapedSpecifier}['"]`),
+      new RegExp(`Failed to load url\\s+(?:['"\`]${escapedSpecifier}['"\`]|${escapedSpecifier}(?=[\\s(]|$))`),
+    ].some(pattern => pattern.test(message))
+  ) {
+    return true
+  }
+
+  if ('cause' in error) {
+    return isModuleNotFoundError((error as { cause?: unknown }).cause, expectedSpecifier)
+  }
+
+  return false
 }
 
-function normalizeDatabaseModuleLoadError(error: unknown): CacheOptionalPackageError | unknown {
-  if (isModuleNotFoundError(error)) {
+function normalizeDatabaseModuleLoadError(
+  error: unknown,
+  expectedSpecifier = '@holo-js/cache-db',
+): CacheOptionalPackageError | unknown {
+  if (isModuleNotFoundError(error, expectedSpecifier)) {
     return new CacheOptionalPackageError(
       '[@holo-js/cache] Database cache support requires @holo-js/cache-db to be installed.',
       { cause: error },
@@ -87,7 +117,7 @@ async function loadDatabaseDriverModule(): Promise<DatabaseCacheDriverModule> {
     const specifier = '@holo-js/cache-db' as string
     return await import(specifier) as DatabaseCacheDriverModule
   } catch (error) {
-    throw normalizeDatabaseModuleLoadError(error)
+    throw normalizeDatabaseModuleLoadError(error, '@holo-js/cache-db')
   }
 }
 /* v8 ignore stop */

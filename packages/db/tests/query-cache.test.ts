@@ -349,6 +349,28 @@ describe('@holo-js/db query cache integration', () => {
     expect(unsupported[0]?.name).toBe('Joined')
   })
 
+  it('skips query caching for locked queries and uses a fresh read during numeric adjustments', async () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      points: column.integer(),
+      name: column.string(),
+    })
+
+    adapter.queryRows = [{ id: 1, points: 10, name: 'Ava' }]
+    await DB.table(users).cache(300).get()
+
+    adapter.queryRows = [{ id: 1, points: 11, name: 'Ava' }]
+    const lockedRows = await DB.table(users).cache(300).lockForUpdate().get()
+
+    adapter.queryRows = [{ id: 1, points: 50, name: 'Ava' }]
+    const result = await DB.table(users).cache(300).where('id', 1).increment('points', 2)
+
+    expect(lockedRows[0]?.points).toBe(11)
+    expect(adapter.queryCount).toBe(3)
+    expect(bridge.getCalls).toHaveLength(1)
+    expect(result.affectedRows).toBe(1)
+  })
+
   it('defers automatic invalidation until the surrounding transaction commits', async () => {
     const users = defineTable('users', {
       id: column.id(),
@@ -416,15 +438,15 @@ describe('@holo-js/db query cache integration', () => {
     expect(queryCacheInternals.supportsAutomaticPredicateInvalidation({
       kind: 'exists',
       boolean: 'and',
-      query: rawSelectionPlan,
-    } as never)).toBe(false)
+      subquery: rawSelectionPlan,
+    })).toBe(false)
     expect(queryCacheInternals.supportsAutomaticPredicateInvalidation({
       kind: 'subquery',
       boolean: 'and',
       column: 'id',
       operator: 'in',
-      query: rawSelectionPlan,
-    } as never)).toBe(false)
+      subquery: rawSelectionPlan,
+    })).toBe(false)
     expect(queryCacheInternals.supportsAutomaticPredicateInvalidation({
       kind: 'group',
       boolean: 'and',

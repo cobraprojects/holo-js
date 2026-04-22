@@ -43,7 +43,21 @@ type CacheConfigShape = {
 
 export async function loadCacheConfig(projectRoot: string) {
   const loadedConfig = await loadConfigDirectory(projectRoot)
-  return (loadedConfig as unknown as { readonly cache: CacheConfigShape }).cache
+  if (
+    !loadedConfig
+    || typeof loadedConfig !== 'object'
+    || !('cache' in loadedConfig)
+    || !loadedConfig.cache
+    || typeof loadedConfig.cache !== 'object'
+    || !('drivers' in loadedConfig.cache)
+    || typeof loadedConfig.cache.drivers !== 'object'
+    || loadedConfig.cache.drivers === null
+    || Array.isArray(loadedConfig.cache.drivers)
+  ) {
+    throw new Error('Cache config is missing or malformed. Expected a cache config object with a drivers property.')
+  }
+
+  return loadedConfig.cache as CacheConfigShape
 }
 
 export function normalizeCacheMigrationName(tableName: string): string {

@@ -1322,6 +1322,7 @@ describe('@holo-js/cache package surface', () => {
     cacheDbInternals.setDatabaseDriverModuleLoader(async () => {
       throw cacheDbInternals.normalizeDatabaseModuleLoadError({
         code: 'ERR_MODULE_NOT_FOUND',
+        message: 'Cannot find package \'@holo-js/cache-db\' imported from /tmp/cache-loader.mjs',
       })
     })
 
@@ -1601,8 +1602,17 @@ describe('@holo-js/cache package surface', () => {
     })).toEqual(normalizedDatabaseConfig)
     expect(cacheDbInternals.normalizeRuntimeDatabaseConfig(undefined)).toBeUndefined()
     expect(cacheDbInternals.isNormalizedDatabaseConfig(normalizedDatabaseConfig)).toBe(true)
-    expect(cacheDbInternals.isModuleNotFoundError({ code: 'ERR_MODULE_NOT_FOUND' })).toBe(true)
+    expect(cacheDbInternals.isModuleNotFoundError({
+      code: 'ERR_MODULE_NOT_FOUND',
+      message: 'Cannot find package "@holo-js/cache-db" imported from "/tmp/app.mjs"',
+    })).toBe(true)
     expect(cacheDbInternals.isModuleNotFoundError(new Error('nope'))).toBe(false)
+    expect(cacheDbInternals.isModuleNotFoundError({
+      cause: {
+        code: 'ERR_MODULE_NOT_FOUND',
+        message: 'Could not resolve "@holo-js/cache-db"',
+      },
+    })).toBe(true)
     expect(() => cacheDbInternals.resolveSharedDatabaseConnection({
       defaultConnection: 'main',
       connections: {},
@@ -1610,11 +1620,15 @@ describe('@holo-js/cache package surface', () => {
 
     const missingPackageError = cacheDbInternals.normalizeDatabaseModuleLoadError({
       code: 'ERR_MODULE_NOT_FOUND',
+      message: 'Cannot find module "@holo-js/cache-db"',
     })
     expect(missingPackageError).toBeInstanceOf(CacheOptionalPackageError)
     expect((missingPackageError as CacheOptionalPackageError).message).toContain('@holo-js/cache-db')
 
-    const passthroughError = new Error('boom')
+    const passthroughError = Object.assign(new Error('boom'), {
+      code: 'ERR_MODULE_NOT_FOUND',
+      message: 'Cannot find package "@holo-js/other"',
+    })
     expect(cacheDbInternals.normalizeDatabaseModuleLoadError(passthroughError)).toBe(passthroughError)
   })
 

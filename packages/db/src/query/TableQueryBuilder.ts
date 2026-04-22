@@ -1257,7 +1257,7 @@ export class TableQueryBuilder<
   async get<TRow extends Record<string, unknown> = TSelectedRow>(): Promise<TRow[]> {
     const statement = this.toSQL()
     const cacheConfig = this.queryCacheConfig
-    if (!cacheConfig) {
+    if (!cacheConfig || this.plan.lockMode) {
       const result = await this.connection.queryCompiled<TRow>(statement)
       return result.rows
     }
@@ -1758,7 +1758,12 @@ export class TableQueryBuilder<
     }
 
     const primaryKey = this.resolvePrimaryKeyColumn()
-    const rows = await this.select(primaryKey as never, column as never).get() as Record<string, unknown>[]
+    const uncachedSelection = new TableQueryBuilder<TTableOrName, Record<string, unknown>>(
+      (this.source.table ?? this.source.tableName) as TTableOrName,
+      this.connection,
+      withSelections(this.plan, [primaryKey as never, column as never]),
+    )
+    const rows = await uncachedSelection.get() as Record<string, unknown>[]
     let affectedRows = 0
     let lastInsertId: number | string | undefined
 

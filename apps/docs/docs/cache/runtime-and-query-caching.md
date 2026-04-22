@@ -22,6 +22,10 @@ await cache.forget('flags:beta')
 Raw string keys work, but `defineCacheKey(...)` preserves value inference across `get`, `put`, `remember`, and
 `flexible`.
 
+Returned cache payloads are immutable snapshots. Arrays and plain objects from `get(...)`, `remember(...)`,
+`rememberForever(...)`, and `flexible(...)` are recursively frozen so callers cannot mutate shared cached state after
+deserialization.
+
 ## Read-through caching
 
 Use `remember(...)` when you want to compute once and cache the result:

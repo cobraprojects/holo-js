@@ -152,6 +152,14 @@ const redisMock = vi.hoisted(() => {
 
     async incrby(key: string, amount: number): Promise<number> {
       calls.incrby.push([key, amount])
+      if (key.includes('timeout')) {
+        throw new Error('ETIMEDOUT')
+      }
+
+      if (key.includes('wrongtype')) {
+        throw new Error('WRONGTYPE Operation against a key holding the wrong kind of value')
+      }
+
       const current = await this.get(key)
       const currentNumber = current === null ? 0 : Number(current)
       if (!Number.isInteger(currentNumber)) {
@@ -414,12 +422,17 @@ describe('@holo-js/cache-redis', () => {
       key: 'holo:cache:alpha',
       payload: '"one"',
     })
+    await driver.put({
+      key: 'holo:cache:beta',
+      payload: '"two"',
+    })
     await driver.flush()
 
     expect(redisMock.calls.scan).toEqual([
       ['0', 'MATCH', 'holo:cache:*', 'COUNT', 100],
       ['0', 'MATCH', 'holo:cache:*', 'COUNT', 100],
     ])
+    expect(redisMock.calls.del.every(keys => keys.length === 1)).toBe(true)
   })
 
   it('prefers url, then clusters, then host/socket when creating redis clients', async () => {
@@ -515,6 +528,46 @@ describe('@holo-js/cache-redis', () => {
       key: 'holo:cache:forever-add',
       payload: '"ok"',
     })).toBe(true)
+  })
+
+  it('rejects ambiguous standalone and cluster redis targets', () => {
+    expect(() => createRedisCacheDriver({
+      name: 'ambiguous',
+      connectionName: 'cache',
+      prefix: 'holo:cache:',
+      redis: {
+        url: 'redis://cache.internal:6379/0',
+        db: 0,
+        clusters: [{ host: 'cache-a.internal', port: 6379 }],
+      },
+    })).toThrow('either redis.url or redis.clusters')
+  })
+
+  it('rejects cluster node urls with credentials or db paths', () => {
+    expect(() => redisCacheDriverInternals.parseClusterNodeUrl('redis://user:pass@cache.internal:6379', 'node')).toThrow(
+      'must not include credentials or a Redis database/path',
+    )
+    expect(() => redisCacheDriverInternals.parseClusterNodeUrl('redis://cache.internal:6379/2', 'node')).toThrow(
+      'must not include credentials or a Redis database/path',
+    )
+  })
+
+  it('only wraps redis numeric type errors for increment and decrement', async () => {
+    const driver = createRedisCacheDriver({
+      name: 'redis',
+      connectionName: 'cache',
+      prefix: 'holo:cache:',
+      redis: {
+        host: '127.0.0.1',
+        port: 6379,
+        db: 0,
+      },
+    })
+
+    await expect(driver.increment('holo:cache:wrongtype', 1)).rejects.toThrow(CacheInvalidNumericMutationError)
+    await expect(driver.decrement('holo:cache:timeout', 1)).rejects.toThrow('ETIMEDOUT')
+    expect(redisCacheDriverInternals.isRedisNumericMutationError(new Error('WRONGTYPE boom'))).toBe(true)
+    expect(redisCacheDriverInternals.isRedisNumericMutationError(new Error('ETIMEDOUT'))).toBe(false)
   })
 
   it('exposes deterministic redis internals for escaping and cluster validation', () => {

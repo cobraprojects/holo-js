@@ -5,6 +5,9 @@ declare module '@holo-js/cache-redis' {
     readonly name: string
     readonly connectionName: string
     readonly prefix: string
+    readonly now?: () => number
+    readonly sleep?: (milliseconds: number) => Promise<void>
+    readonly ownerFactory?: () => string
     readonly redis:
       & {
         readonly username?: string

@@ -198,7 +198,16 @@ export interface CacheRuntimeBindings {
   readonly queryBridge?: CacheQueryBridge
 }
 
+/**
+ * Cache reads return immutable snapshots.
+ * Arrays and plain objects returned by the cache are recursively frozen and
+ * must not be mutated in place.
+ */
 export interface CacheRepository {
+  /**
+   * Returns the cached value or `null` when the key is missing.
+   * Arrays and plain objects in the returned value are frozen snapshots.
+   */
   get<TValue>(key: CacheKey<TValue>): Promise<TValue | null>
   get<TValue>(key: CacheKeyInput<TValue>, fallback: CacheFallback<TValue>): Promise<TValue>
   get<TValue>(key: string, fallback: CacheFallback<TValue>): Promise<TValue>
@@ -212,6 +221,10 @@ export interface CacheRepository {
   flush(): Promise<void>
   increment(key: CacheKeyInput<number>, amount?: number): Promise<number>
   decrement(key: CacheKeyInput<number>, amount?: number): Promise<number>
+  /**
+   * Resolves and stores the value on a cache miss.
+   * Arrays and plain objects returned from the cache path are frozen snapshots.
+   */
   remember<TValue>(key: CacheKeyInput<Awaited<TValue>>, ttl: CacheTtlInput, callback: CacheValueResolver<TValue>): Promise<Awaited<TValue>>
   rememberForever<TValue>(key: CacheKeyInput<Awaited<TValue>>, callback: CacheValueResolver<TValue>): Promise<Awaited<TValue>>
   flexible<TValue>(

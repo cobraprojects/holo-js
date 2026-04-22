@@ -300,7 +300,9 @@ function createCacheRepository(driverName?: string): CacheRepository {
 
       const retried = await getCachedValue<unknown>(key)
       if (isFlexibleEnvelope<Awaited<TValue>>(retried)) {
-        return retried.value
+        if (Date.now() <= retried.staleUntil) {
+          return retried.value
+        }
       }
 
       return refreshFlexibleValue(key, normalizedTtl, callback)

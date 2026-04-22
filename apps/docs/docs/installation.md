@@ -103,7 +103,7 @@ instead of resolving `create-holo-js`.
 
 Use the non-interactive flags for CI, templates, or internal automation.
 
-`forms`, `validation`, `security`, `notifications`, `mail`, `storage`, `events`, `queue`, `cache`, `auth`, and `authorization` are optional packages. Add them during scaffolding only if the
+`forms`, `validation`, `security`, `notifications`, `mail`, `storage`, `events`, `queue`, `cache`, `auth`, `authorization`, and `broadcast` are optional packages. Add them during scaffolding only if the
 app needs them.
 
 Example optional package sets include `--package forms,validation,notifications`,
