@@ -1633,7 +1633,7 @@ describe('query core slice', () => {
       source: 'query:select:users' })
   })
 
-  it('compiles pessimistic lock clauses per dialect and fails closed when unsupported', () => {
+  it('compiles pessimistic lock clauses per dialect and degrades SQLite locks to plain selects', () => {
     const users = defineTable('users', {
       id: column.id(),
       name: column.string() })
@@ -1677,8 +1677,14 @@ describe('query core slice', () => {
           adapter: new QueryAdapter(),
           dialect: createDialect('sqlite') } } }))
 
-    expect(() => DB.table(users).lockForUpdate().toSQL()).toThrow(CompilerError)
-    expect(() => DB.table(users).sharedLock().toSQL()).toThrow(CompilerError)
+    expect(DB.table(users).lockForUpdate().toSQL()).toEqual({
+      sql: 'SELECT * FROM "users"',
+      bindings: [],
+      source: 'query:select:users' })
+    expect(DB.table(users).sharedLock().toSQL()).toEqual({
+      sql: 'SELECT * FROM "users"',
+      bindings: [],
+      source: 'query:select:users' })
   })
 
   it('compiles EXISTS and NOT EXISTS subqueries', () => {
@@ -2737,11 +2743,11 @@ describe('query core slice', () => {
     const lastCursorPage = await DB.table(users).orderBy('id').cursorPaginate(10)
     expect(lastCursorPage.nextCursor).toBeNull()
 
-    const customPaginated = await DB.table(users).orderBy('id').paginate(2, 1, { pageName: 'usersPage' })
+    const customPaginated = await DB.table(users).orderBy('id').paginate(2, 1, { pageName: ' usersPage ' })
     expect(customPaginated.meta.pageName).toBe('usersPage')
-    const customSimple = await DB.table(users).orderBy('id').simplePaginate(2, 1, { pageName: 'usersPage' })
+    const customSimple = await DB.table(users).orderBy('id').simplePaginate(2, 1, { pageName: ' usersPage ' })
     expect(customSimple.meta.pageName).toBe('usersPage')
-    const customCursor = await DB.table(users).orderBy('id').cursorPaginate(2, null, { cursorName: 'usersCursor' })
+    const customCursor = await DB.table(users).orderBy('id').cursorPaginate(2, null, { cursorName: ' usersCursor ' })
     expect(customCursor.cursorName).toBe('usersCursor')
 
     const chunked: number[][] = []

@@ -94,6 +94,15 @@ const frameworkSidebar = [
       { text: 'Media Integration', link: '/queue/media' },
     ],
   },
+  {
+    text: 'Cache',
+    items: [
+      { text: 'Overview', link: '/cache/' },
+      { text: 'Setup and CLI', link: '/cache/setup-and-cli' },
+      { text: 'Config and Drivers', link: '/cache/config-and-drivers' },
+      { text: 'Runtime API, Locks, and Query Caching', link: '/cache/runtime-and-query-caching' },
+    ],
+  },
     {
       text: 'Events',
       items: [

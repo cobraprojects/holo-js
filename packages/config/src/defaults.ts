@@ -596,9 +596,10 @@ export function normalizeCacheConfig(
   const prefix = normalizeCacheOptionalString(config.prefix) ?? DEFAULT_CACHE_PREFIX
   const defaultRedisConnection = options.redis?.default ?? DEFAULT_CACHE_REDIS_CONNECTION
   const defaultDatabaseConnection = options.database?.defaultConnection ?? DEFAULT_CACHE_DATABASE_CONNECTION
-  const drivers = !config.drivers || Object.keys(config.drivers).length === 0
-    ? holoCacheDefaults.drivers
-    : Object.freeze(Object.fromEntries(Object.entries(config.drivers).map(([name, driver]) => {
+  const driverEntries = !config.drivers || Object.keys(config.drivers).length === 0
+    ? Object.entries(holoCacheDefaults.drivers)
+    : Object.entries(config.drivers)
+  const drivers = Object.freeze(Object.fromEntries(driverEntries.map(([name, driver]) => {
       const normalizedName = normalizeCacheName(name, 'Cache driver name')
       const driverConfig = (() => {
         switch (driver.driver) {

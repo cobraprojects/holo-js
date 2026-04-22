@@ -223,13 +223,107 @@ Use `when(...)` and `unless(...)` to apply query branches without breaking chain
 
 ## Pessimistic Locking
 
-- `lockForUpdate()`
-- `sharedLock()`
-- `lock('update' | 'share')`
+Use pessimistic locking when the workflow must coordinate concurrent transactions around the same rows.
+Typical examples are inventory reservation, balance transfers, queue claiming, and "read then write"
+flows where another transaction must not change the selected rows in the middle of the operation.
 
-These compile only on supporting dialects and fail closed elsewhere.
+Available methods:
 
-Use locking only inside transaction-scoped workflows where row contention is an actual concern.
+- `lockForUpdate()`: exclusive row lock for rows you intend to update
+- `sharedLock()`: shared read lock for rows that should stay stable while you inspect them
+- `lock('update' | 'share')`: explicit form when you want to choose the mode dynamically
+
+Dialect support:
+
+- PostgreSQL: `lockForUpdate()` compiles to `FOR UPDATE`, `sharedLock()` compiles to `FOR SHARE`
+- MySQL: `lockForUpdate()` compiles to `FOR UPDATE`, `sharedLock()` compiles to `LOCK IN SHARE MODE`
+- SQLite: the methods are accepted, but the lock clause degrades to a plain `SELECT` because SQLite does not expose
+  the same row-lock syntax as PostgreSQL or MySQL
+
+That means SQLite will not apply a pessimistic row lock for these methods. The query still runs, but the lock
+intent is ignored at the SQL level.
+
+Use locks inside `DB.transaction(...)`. Outside a transaction they do not provide a durable concurrency boundary
+for application workflows.
+
+### `lockForUpdate()`
+
+Use `lockForUpdate()` when the current transaction plans to modify the selected rows:
+
+```ts
+await DB.transaction(async (tx) => {
+  const product = await tx.table('products')
+    .where('id', productId)
+    .lockForUpdate()
+    .first<{ id: number, quantity: number }>()
+
+  if (!product || product.quantity < requestedQty) {
+    throw new Error('Out of stock')
+  }
+
+  await tx.table('products')
+    .where('id', productId)
+    .update({ quantity: product.quantity - requestedQty })
+})
+```
+
+The important behavior is that another transaction trying to lock or update the same row will wait until the
+current transaction commits or rolls back.
+
+On SQLite, `lockForUpdate()` does not emit a row-lock clause and does not lock the selected rows. Keep the workflow inside a transaction, and prefer
+an atomic conditional write when that expresses the business rule directly.
+
+### `sharedLock()`
+
+Use `sharedLock()` when multiple transactions may read the same rows concurrently, but writers should wait until
+those readers finish:
+
+```ts
+await DB.transaction(async (tx) => {
+  const account = await tx.table('accounts')
+    .where('id', accountId)
+    .sharedLock()
+    .first<{ id: number, status: string }>()
+
+  if (!account || account.status !== 'active') {
+    throw new Error('Account is not active')
+  }
+
+  // perform follow-up reads that rely on the row staying stable for this transaction
+})
+```
+
+Use this more sparingly than `lockForUpdate()`. If the workflow will definitely write the row, prefer
+`lockForUpdate()`.
+
+On SQLite, `sharedLock()` also degrades to a normal `SELECT` and does not block concurrent writers.
+
+### Practical rules
+
+- Keep the lock scope small: select the fewest rows you actually need.
+- Keep the transaction short: do not perform network calls or slow external I/O while holding row locks.
+- Prefer deterministic predicates such as primary keys when locking.
+- Use a normal transaction with a conditional write when that solves the problem without a read-first lock step.
+- Reach for cache locks only when you need cross-process coordination above the database layer; row locks are the
+  stronger source of truth for database-backed state.
+
+### When not to use pessimistic locking
+
+Do not add row locks just because a workflow writes data. Many operations are better expressed as one atomic write:
+
+```ts
+const result = await DB.table('products')
+  .where('id', productId)
+  .where('quantity', '>=', requestedQty)
+  .decrement('quantity', requestedQty)
+
+if ((result.affectedRows ?? 0) === 0) {
+  throw new Error('Out of stock')
+}
+```
+
+That pattern is often simpler and scales better than a read-lock-write sequence. Use pessimistic locking when the
+business rule genuinely requires a stable read set inside the transaction, not by default.
 
 ## Debugging
 

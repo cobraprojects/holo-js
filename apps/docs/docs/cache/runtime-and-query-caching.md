@@ -70,7 +70,27 @@ await cache.flexible('feed.home', {
 
 ## Locks
 
-All first-party drivers expose the same lock API:
+Use cache locks when one caller should perform a piece of work at a time: rebuilding a report, importing a file,
+refreshing a third-party API snapshot, or serializing a purchase flow before the database write.
+
+Create a lock with:
+
+```ts
+const lock = cache.lock(name, seconds)
+```
+
+Arguments:
+
+- `name`: the lock key. Callers that use the same name compete for the same lock.
+- `seconds`: the lock TTL. If the process crashes or never releases the lock, it expires after this many seconds.
+
+`cache.lock(...)` does not acquire anything by itself. It returns a lock handle with three methods:
+
+- `get(callback?)`: try once right now. Returns `false` immediately if another caller already holds the lock.
+- `block(waitSeconds, callback?)`: keep retrying until the lock is acquired or the wait timeout expires.
+- `release()`: release a lock you already acquired.
+
+Use `get(...)` when you want "run only if nobody else is doing this already":
 
 ```ts
 const lock = cache.lock('reports:daily', 30)
@@ -81,14 +101,102 @@ const acquired = await lock.get(async () => {
 })
 ```
 
-Wait for a lock instead of failing immediately:
+Here `30` is the lock TTL in seconds. If another worker already holds `reports:daily`, `acquired` is `false`
+immediately.
+
+Use `block(...)` when you want "wait a little before giving up":
 
 ```ts
-await cache.lock('imports:users', 60).block(5, async () => {
+const imported = await cache.lock('imports:users', 60).block(5, async () => {
   await runUserImport()
   return true
 })
 ```
+
+Here:
+
+- `'imports:users'` is the shared lock name
+- `60` means the lock itself lives for up to 60 seconds
+- `5` means this caller will wait for up to 5 seconds trying to acquire it
+
+If the lock becomes free within those 5 seconds, the callback runs and its return value is returned. If not,
+`block(...)` returns `false`.
+
+### `get(...)` vs `block(...)`
+
+- `get(...)`: one immediate attempt, no waiting
+- `block(...)`: retry for up to `waitSeconds`
+
+Use `get(...)` for background refresh work where duplicate work is harmless to skip. Use `block(...)` for user-facing
+flows where it is worth waiting briefly for the first operation to finish.
+
+### Example: skip duplicate refresh work
+
+```ts
+const refreshed = await cache.lock('dashboard:refresh', 20).get(async () => {
+  await refreshDashboardCache()
+  return true
+})
+
+if (refreshed === false) {
+  // Another worker is already doing the refresh.
+}
+```
+
+### Example: wait for a purchase lock
+
+```ts
+const result = await cache.lock(`purchase:product:${productId}`, 10).block(3, async () => {
+  return DB.transaction(async (tx) => {
+    const updated = await tx
+      .table('products')
+      .where('id', productId)
+      .where('quantity', '>=', requestedQty)
+      .decrement('quantity', requestedQty)
+
+    if ((updated.affectedRows ?? 0) === 0) {
+      throw new Error('Out of stock')
+    }
+
+    await tx.table('orders').insert({
+      product_id: productId,
+      user_id: userId,
+      quantity: requestedQty,
+    })
+
+    return true
+  })
+})
+
+if (result === false) {
+  throw new Error('Purchase is already in progress, try again')
+}
+```
+
+This pattern matters:
+
+- the cache lock reduces concurrent work across processes or nodes
+- the database transaction is still the source of truth
+- the conditional decrement prevents overselling even if a lock expires or another worker retries later
+
+### Manual acquire and release
+
+You can acquire first and release later if you do not want the callback form:
+
+```ts
+const lock = cache.lock('exports:nightly', 120)
+
+if (await lock.get()) {
+  try {
+    await runNightlyExport()
+  } finally {
+    await lock.release()
+  }
+}
+```
+
+Choose a TTL that is longer than the expected critical section. If `seconds` is too short, the lock may expire while
+the first operation is still running, allowing another caller to enter.
 
 Driver behavior:
 
@@ -136,7 +244,7 @@ Model queries support the same API:
 const users = await User.query().cache(300).get()
 ```
 
-## Query invalidation
+## Cache invalidation
 
 ### Manual invalidation
 

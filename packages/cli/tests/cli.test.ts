@@ -3596,6 +3596,9 @@ export default defineRedisConfig({
     expect(result.stderr).toContain('config/cache.ts already exists')
     expect(result.stderr).toContain('does not configure the "redis" cache driver')
     expect(await readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).toContain('default: \'file\'')
+    await expect(readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).not.toContain('REDIS_URL=')
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).not.toContain('REDIS_HOST=')
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).not.toContain('"@holo-js/cache-redis"')
   }, 30_000)
 
@@ -11048,12 +11051,6 @@ export default defineCacheConfig({
       table: 'report_cache',
       lockTable: 'report_cache_locks',
     },
-    duplicate: {
-      driver: 'database',
-      connection: 'default',
-      table: 'report_cache',
-      lockTable: 'report_cache_locks',
-    },
     file: {
       driver: 'file',
       path: '.holo/cache',
@@ -11072,6 +11069,8 @@ export default defineCacheConfig({
     expect(customMigrations.some(name => name.endsWith('create_cache_entries_cache_table.ts'))).toBe(true)
     expect(customMigrations.some(name => name.endsWith('create_report_cache_cache_table.ts'))).toBe(true)
     expect(cliInternals.renderCacheTableMigration('cache_entries', 'cache_entry_locks')).toContain('table.bigInteger(\'expires_at\').nullable()')
+    expect(cliInternals.renderCacheTableMigration(`cache'entries`, `cache\\locks`)).toContain('cache\\\'entries')
+    expect(cliInternals.renderCacheTableMigration(`cache'entries`, `cache\\locks`)).toContain('cache\\\\locks')
 
     const fileOnlyProjectRoot = await createTempProject()
     tempDirs.push(fileOnlyProjectRoot)
@@ -11092,6 +11091,34 @@ export default defineCacheConfig({
     await expect(
       withFakeBun(async () => cliInternals.runCacheTableCommand(createIo(fileOnlyProjectRoot).io, fileOnlyProjectRoot)),
     ).rejects.toThrow('The configured cache drivers do not use the database driver.')
+
+    const duplicateProjectRoot = await createTempProject()
+    tempDirs.push(duplicateProjectRoot)
+    await writeProjectFile(duplicateProjectRoot, 'config/cache.ts', `
+import { defineCacheConfig } from '@holo-js/config'
+
+export default defineCacheConfig({
+  default: 'first',
+  drivers: {
+    first: {
+      driver: 'database',
+      connection: 'default',
+      table: 'report.cache',
+      lockTable: 'report_cache_locks',
+    },
+    second: {
+      driver: 'database',
+      connection: 'default',
+      table: 'report_cache',
+      lockTable: 'other_cache_locks',
+    },
+  },
+})
+`)
+
+    await expect(
+      withFakeBun(async () => cliInternals.runCacheTableCommand(createIo(duplicateProjectRoot).io, duplicateProjectRoot)),
+    ).rejects.toThrow('A migration for cache tables "report_cache" and "other_cache_locks" already exists.')
   })
 
   it('boots queue runtime environments without a generated registry when project discovery returns no jobs', async () => {

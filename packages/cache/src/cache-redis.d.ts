@@ -5,21 +5,50 @@ declare module '@holo-js/cache-redis' {
     readonly name: string
     readonly connectionName: string
     readonly prefix: string
-    readonly redis: {
-      readonly url?: string
-      readonly clusters?: readonly {
-        readonly url?: string
-        readonly socketPath?: string
-        readonly host: string
-        readonly port: number
-      }[]
-      readonly socketPath?: string
-      readonly host: string
-      readonly port: number
-      readonly username?: string
-      readonly password?: string
-      readonly db: number
-    }
+    readonly redis:
+      & {
+        readonly username?: string
+        readonly password?: string
+        readonly db: number
+      }
+      & (
+        | {
+            readonly url?: string
+            readonly clusters?: readonly {
+              readonly url?: string
+              readonly socketPath?: string
+              readonly host: string
+              readonly port: number
+            }[]
+            readonly socketPath?: string
+            readonly host: string
+            readonly port: number
+          }
+        | {
+            readonly url: string
+            readonly clusters?: readonly {
+              readonly url?: string
+              readonly socketPath?: string
+              readonly host: string
+              readonly port: number
+            }[]
+            readonly socketPath?: string
+            readonly host?: string
+            readonly port?: number
+          }
+        | {
+            readonly clusters: readonly {
+              readonly url?: string
+              readonly socketPath?: string
+              readonly host: string
+              readonly port: number
+            }[]
+            readonly url?: string
+            readonly socketPath?: string
+            readonly host?: string
+            readonly port?: number
+          }
+      )
   }
 
   export function createRedisCacheDriver(options: RedisCacheDriverOptions): CacheDriverContract

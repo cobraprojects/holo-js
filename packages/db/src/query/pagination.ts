@@ -19,13 +19,14 @@ export function normalizePaginationParameterName(
     return fallback
   }
 
-  if (typeof value !== 'string' || value.trim().length === 0) {
+  const trimmed = value.trim()
+  if (typeof value !== 'string' || trimmed.length === 0) {
     throw createError(
       `${fallback === 'cursor' ? 'Cursor' : 'Page'} parameter name must be a non-empty string.`,
     )
   }
 
-  return value
+  return trimmed
 }
 
 export function encodeOffsetCursor(offset: number): string {

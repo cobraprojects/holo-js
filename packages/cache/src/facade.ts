@@ -86,6 +86,7 @@ function createCacheRepository(driverName?: string): CacheRepository {
     const driver = cacheRuntimeInternals.resolveConfiguredDriver(runtime, configuredDriverName)
     const config = runtime.config.drivers[configuredDriverName]
     return {
+      configuredDriverName,
       driver,
       prefix: config?.prefix ?? runtime.config.prefix,
     }
@@ -204,21 +205,29 @@ function createCacheRepository(driverName?: string): CacheRepository {
     },
     async forget(key: CacheKeyInput<unknown>): Promise<boolean> {
       const runtime = getCacheRuntime()
-      const { driver } = resolveDriverContext()
+      const { configuredDriverName, driver } = resolveDriverContext()
       const forgotten = await driver.forget(resolveNormalizedKey(key))
-      await runtime.dependencyIndex?.removeKey(cacheQueryBridgeInternals.createIndexedKey(key, driverName))
+      const dependencyIndex = runtime.dependencyIndex
+      if (!dependencyIndex) {
+        return forgotten
+      }
+
+      await dependencyIndex.removeKey(cacheQueryBridgeInternals.createIndexedKey(key, configuredDriverName))
       return forgotten
     },
     async flush(): Promise<void> {
       const runtime = getCacheRuntime()
-      const { driver } = resolveDriverContext()
+      const { configuredDriverName, driver } = resolveDriverContext()
       await driver.flush()
-      const registeredKeys = await runtime.dependencyIndex!.listRegisteredKeys()
+      const dependencyIndex = runtime.dependencyIndex
+      if (!dependencyIndex) {
+        return
+      }
 
-      const configuredDriverName = driverName?.trim() || runtime.config.default
+      const registeredKeys = await dependencyIndex.listRegisteredKeys()
       for (const indexedKey of registeredKeys) {
         if (cacheQueryBridgeInternals.parseIndexedKey(indexedKey).driverName === configuredDriverName) {
-          await runtime.dependencyIndex!.removeKey(indexedKey)
+          await dependencyIndex.removeKey(indexedKey)
         }
       }
     },

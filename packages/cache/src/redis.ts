@@ -142,8 +142,11 @@ class LazyRedisCacheDriver implements CacheDriverContract {
   }
 
   private createLockProxy(name: string, seconds: number): CacheLockContract {
+    let lockPromise: Promise<CacheLockContract> | undefined
+
     const resolveLock = async (): Promise<CacheLockContract> => {
-      return this.withDriver((driver) => driver.lock(name, seconds))
+      lockPromise ??= this.withDriver((driver) => driver.lock(name, seconds))
+      return lockPromise
     }
 
     return {

@@ -291,6 +291,10 @@ function encodeArrayValue(value: readonly unknown[], path: string): EncodedCache
 function encodeObjectValue(value: Record<string, unknown>, path: string): EncodedCacheValue {
   const encodedEntries: Record<string, EncodedCacheValue> = {}
   for (const [key, entry] of Object.entries(value)) {
+    if (key === '__holo_cache_type') {
+      throw new CacheSerializationError(`[@holo-js/cache] Cache value at ${path}.${key} uses a reserved key.`)
+    }
+
     if (typeof entry === 'undefined') {
       throw new CacheSerializationError(`[@holo-js/cache] Cache value at ${path}.${key} must be JSON-safe.`)
     }
@@ -411,10 +415,15 @@ export function normalizeCacheTtl(
     throw new CacheInvalidTtlError('[@holo-js/cache] Cache TTL seconds must be greater than or equal to 0.')
   }
 
+  if (ttl === 0) {
+    throw new CacheInvalidTtlError('[@holo-js/cache] Cache TTL seconds must be > 0 or use a Date/forever option.')
+  }
+
+  const expiresAt = now + (ttl * 1000)
   return Object.freeze({
     seconds: ttl,
-    expiresAt: now + (ttl * 1000),
-    isExpired: ttl === 0,
+    expiresAt,
+    isExpired: expiresAt <= now,
   })
 }
 

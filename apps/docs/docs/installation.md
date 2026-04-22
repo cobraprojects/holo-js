@@ -44,7 +44,7 @@ The interactive flow asks for:
 - database driver: `sqlite`, `mysql`, or `postgres`
 - package manager: `bun`, `npm`, `pnpm`, or `yarn`
 - storage default disk: `local` or `public`
-- optional packages: `validation`, `forms`, `security`, `notifications`, `mail`, `storage`, `events`, `queue`, `cache`, `auth`, `authorization`, or none
+- optional packages: `validation`, `forms`, `security`, `notifications`, `mail`, `storage`, `events`, `queue`, `cache`, `auth`, `authorization`, `broadcast`, or none
 
 ## Create a project non-interactively
 

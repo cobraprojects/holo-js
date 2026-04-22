@@ -142,6 +142,7 @@ export class TableQueryBuilder<
       table,
       this.connection,
       withSource(this.plan, createTableSource(table)),
+      this.queryCacheConfig,
     )
   }
 
@@ -1639,7 +1640,7 @@ export class TableQueryBuilder<
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createUpdateQueryPlan(this.source, this.plan.predicates, this.normalizeUpdateValues(values)),
     ))
-    if ((result.affectedRows ?? 0) > 0) {
+    if (result.affectedRows !== 0) {
       await this.invalidateSourceTableQueries()
     }
     return result
@@ -1656,7 +1657,7 @@ export class TableQueryBuilder<
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createDeleteQueryPlan(this.source, this.plan.predicates),
     ))
-    if ((result.affectedRows ?? 0) > 0) {
+    if (result.affectedRows !== 0) {
       await this.invalidateSourceTableQueries()
     }
     return result

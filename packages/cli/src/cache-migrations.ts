@@ -50,31 +50,40 @@ export function normalizeCacheMigrationName(tableName: string): string {
   return normalizeMigrationSlug(`create_${tableName.replaceAll('.', '_')}_cache_table`)
 }
 
+function escapeSingleQuotedString(value: string): string {
+  return value.replaceAll('\\', '\\\\').replaceAll('\'', '\\\'')
+}
+
 export function renderCacheTableMigration(
   tableName = DEFAULT_CACHE_DATABASE_TABLE,
   lockTableName = DEFAULT_CACHE_DATABASE_LOCK_TABLE,
 ): string {
+  const escapedTableName = escapeSingleQuotedString(tableName)
+  const escapedLockTableName = escapeSingleQuotedString(lockTableName)
+  const escapedTableIndexName = escapeSingleQuotedString(`${tableName.replaceAll('.', '_')}_expires_at_index`)
+  const escapedLockTableIndexName = escapeSingleQuotedString(`${lockTableName.replaceAll('.', '_')}_expires_at_index`)
+
   return [
     'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
     '',
     'export default defineMigration({',
     '  async up({ schema }: MigrationContext) {',
-    `    await schema.createTable('${tableName}', (table) => {`,
+    `    await schema.createTable('${escapedTableName}', (table) => {`,
     '      table.string(\'key\').primaryKey()',
     '      table.text(\'payload\')',
     '      table.bigInteger(\'expires_at\').nullable()',
-    `      table.index(['expires_at'], '${tableName.replaceAll('.', '_')}_expires_at_index')`,
+    `      table.index(['expires_at'], '${escapedTableIndexName}')`,
     '    })',
-    `    await schema.createTable('${lockTableName}', (table) => {`,
+    `    await schema.createTable('${escapedLockTableName}', (table) => {`,
     '      table.string(\'name\').primaryKey()',
     '      table.string(\'owner\')',
     '      table.bigInteger(\'expires_at\')',
-    `      table.index(['expires_at'], '${lockTableName.replaceAll('.', '_')}_expires_at_index')`,
+    `      table.index(['expires_at'], '${escapedLockTableIndexName}')`,
     '    })',
     '  },',
     '  async down({ schema }: MigrationContext) {',
-    `    await schema.dropTable('${lockTableName}')`,
-    `    await schema.dropTable('${tableName}')`,
+    `    await schema.dropTable('${escapedLockTableName}')`,
+    `    await schema.dropTable('${escapedTableName}')`,
     '  },',
     '})',
     '',
@@ -95,12 +104,7 @@ export function resolveDatabaseCacheTables(
     throw new Error('The configured cache drivers do not use the database driver.')
   }
 
-  const uniqueTables = new Map<string, DatabaseCacheMigrationTables>()
-  for (const entry of configured) {
-    uniqueTables.set(`${entry.table}::${entry.lockTable}`, entry)
-  }
-
-  return Object.freeze([...uniqueTables.values()])
+  return Object.freeze(configured)
 }
 
 export async function runCacheTableCommand(
@@ -113,8 +117,24 @@ export async function runCacheTableCommand(
   const cacheConfig = await loadCacheConfig(projectRoot)
   const migrationsDir = resolve(projectRoot, project.config.paths.migrations)
   const createdFiles: string[] = []
+  const resolvedTables = resolveDatabaseCacheTables(cacheConfig)
+  const seenTables = new Set<string>()
+  const seenLockTables = new Set<string>()
+  const seenSlugs = new Map<string, string>()
 
-  for (const { table, lockTable } of resolveDatabaseCacheTables(cacheConfig)) {
+  for (const { table, lockTable } of resolvedTables) {
+    const migrationName = normalizeCacheMigrationName(table)
+    const previousTable = seenSlugs.get(migrationName)
+    if (seenTables.has(table) || seenLockTables.has(lockTable) || (previousTable && previousTable !== table)) {
+      throw new Error(`A migration for cache tables "${table}" and "${lockTable}" already exists.`)
+    }
+
+    seenTables.add(table)
+    seenLockTables.add(lockTable)
+    seenSlugs.set(migrationName, table)
+  }
+
+  for (const { table, lockTable } of resolvedTables) {
     const migrationName = normalizeCacheMigrationName(table)
     if (
       hasRegisteredMigrationSlug(registry, migrationName)
@@ -125,7 +145,7 @@ export async function runCacheTableCommand(
     }
   }
 
-  for (const { table, lockTable } of resolveDatabaseCacheTables(cacheConfig)) {
+  for (const { table, lockTable } of resolvedTables) {
     const migrationTemplate = await nextMigrationTemplate(normalizeCacheMigrationName(table), migrationsDir)
     const migrationFilePath = resolveDefaultArtifactPath(projectRoot, project.config.paths.migrations, migrationTemplate.fileName)
     await writeTextFile(migrationFilePath, renderCacheTableMigration(table, lockTable))

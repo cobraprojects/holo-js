@@ -12,21 +12,50 @@ export type RedisCacheDriverOptions = {
   readonly name: string
   readonly connectionName: string
   readonly prefix: string
-  readonly redis: {
-    readonly url?: string
-    readonly clusters?: readonly {
-      readonly url?: string
-      readonly socketPath?: string
-      readonly host: string
-      readonly port: number
-    }[]
-    readonly socketPath?: string
-    readonly host: string
-    readonly port: number
-    readonly username?: string
-    readonly password?: string
-    readonly db: number
-  }
+  readonly redis:
+    & {
+      readonly username?: string
+      readonly password?: string
+      readonly db: number
+    }
+    & (
+      | {
+          readonly url?: string
+          readonly clusters?: readonly {
+            readonly url?: string
+            readonly socketPath?: string
+            readonly host: string
+            readonly port: number
+          }[]
+          readonly socketPath?: string
+          readonly host: string
+          readonly port: number
+        }
+      | {
+          readonly url: string
+          readonly clusters?: readonly {
+            readonly url?: string
+            readonly socketPath?: string
+            readonly host: string
+            readonly port: number
+          }[]
+          readonly socketPath?: string
+          readonly host?: string
+          readonly port?: number
+        }
+      | {
+          readonly clusters: readonly {
+            readonly url?: string
+            readonly socketPath?: string
+            readonly host: string
+            readonly port: number
+          }[]
+          readonly url?: string
+          readonly socketPath?: string
+          readonly host?: string
+          readonly port?: number
+        }
+    )
   readonly now?: () => number
   readonly sleep?: (milliseconds: number) => Promise<void>
   readonly ownerFactory?: () => string
@@ -56,6 +85,7 @@ type RedisClusterOptions = {
 }
 
 type RedisClientLike = {
+  readonly isCluster?: boolean
   get(key: string): Promise<string | null>
   set(key: string, value: string, ...arguments_: readonly (string | number)[]): Promise<'OK' | null>
   del(...keys: string[]): Promise<number>
@@ -63,6 +93,7 @@ type RedisClientLike = {
   incrby(key: string, amount: number): Promise<number>
   decrby(key: string, amount: number): Promise<number>
   eval(script: string, numberOfKeys: number, ...arguments_: readonly string[]): Promise<number>
+  nodes?(role: 'master'): readonly RedisClientLike[]
 }
 
 type RedisCtor = typeof Redis & {
@@ -119,6 +150,7 @@ function createRedisClientOptions(
       ? { path: options.redis.socketPath }
       : typeof options.redis.url === 'undefined'
           && !options.redis.clusters?.length
+          && typeof options.redis.host === 'string'
           && isRedisSocketConnectionTarget(options.redis.host)
         ? { path: toRedisSocketPath(options.redis.host) }
         : typeof options.redis.url === 'undefined' && !options.redis.clusters?.length
@@ -228,6 +260,7 @@ function createRedisLock(
   seconds: number,
   ownerFactory: () => string,
   sleep: (milliseconds: number) => Promise<void>,
+  now: () => number,
 ): CacheLockContract {
   const owner = ownerFactory()
 
@@ -262,13 +295,13 @@ function createRedisLock(
       return (await client.eval(RELEASE_LOCK_SCRIPT, 1, name, owner)) === 1
     },
     async block<TValue>(waitSeconds: number, callback?: () => TValue | Promise<TValue>): Promise<boolean | TValue> {
-      const deadline = Date.now() + Math.max(0, Math.round(waitSeconds * 1000))
+      const deadline = now() + Math.max(0, Math.round(waitSeconds * 1000))
       while (true) {
         if (await tryAcquire()) {
           return withCallback(callback)
         }
 
-        if (Date.now() >= deadline) {
+        if (now() >= deadline) {
           return false
         }
 
@@ -286,6 +319,18 @@ export function createRedisCacheDriver(options: RedisCacheDriverOptions): CacheD
   const ownerFactory = options.ownerFactory ?? randomUUID
   const now = options.now ?? Date.now
   const flushPattern = `${escapeRedisGlob(options.prefix)}*`
+
+  async function flushClient(target: RedisClientLike): Promise<void> {
+    let cursor = '0'
+
+    do {
+      const [nextCursor, keys] = await target.scan(cursor, 'MATCH', flushPattern, 'COUNT', REDIS_SCAN_COUNT)
+      cursor = nextCursor
+      if (keys.length > 0) {
+        await target.del(...keys)
+      }
+    } while (cursor !== '0')
+  }
 
   return {
     name: options.name,
@@ -331,15 +376,14 @@ export function createRedisCacheDriver(options: RedisCacheDriverOptions): CacheD
       return (await client.del(key)) > 0
     },
     async flush(): Promise<void> {
-      let cursor = '0'
-
-      do {
-        const [nextCursor, keys] = await client.scan(cursor, 'MATCH', flushPattern, 'COUNT', REDIS_SCAN_COUNT)
-        cursor = nextCursor
-        if (keys.length > 0) {
-          await client.del(...keys)
+      if (client.isCluster) {
+        for (const node of client.nodes?.('master') ?? []) {
+          await flushClient(node)
         }
-      } while (cursor !== '0')
+        return
+      }
+
+      await flushClient(client)
     },
     async increment(key: string, amount: number): Promise<number> {
       try {
@@ -362,7 +406,7 @@ export function createRedisCacheDriver(options: RedisCacheDriverOptions): CacheD
       }
     },
     lock(name: string, seconds: number): CacheLockContract {
-      return createRedisLock(client, name, seconds, ownerFactory, sleep)
+      return createRedisLock(client, name, seconds, ownerFactory, sleep, now)
     },
   }
 }

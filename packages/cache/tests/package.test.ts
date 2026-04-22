@@ -80,12 +80,6 @@ describe('@holo-js/cache package surface', () => {
       isExpired: false,
     })
 
-    expect(normalizeCacheTtl(0, { now: 1_000 })).toEqual({
-      seconds: 0,
-      expiresAt: 1_000,
-      isExpired: true,
-    })
-
     expect(normalizeCacheTtl(new Date(2_000), { now: 1_000 })).toEqual({
       seconds: 1,
       expiresAt: 2_000,
@@ -94,6 +88,7 @@ describe('@holo-js/cache package surface', () => {
     expect(normalizeCacheTtl(1, { now: new Date(1_000) }).expiresAt).toBe(2_000)
 
     expect(() => normalizeCacheTtl(-1)).toThrow(CacheInvalidTtlError)
+    expect(() => normalizeCacheTtl(0)).toThrow('Cache TTL seconds must be > 0 or use a Date/forever option.')
     expect(() => normalizeCacheTtl(1.5)).toThrow(CacheInvalidTtlError)
     expect(() => normalizeCacheTtl(new Date('invalid'))).toThrow(CacheInvalidTtlError)
   })
@@ -126,6 +121,9 @@ describe('@holo-js/cache package surface', () => {
     expect(() => serializeCacheValue({
       value: undefined,
     })).toThrow(CacheSerializationError)
+    expect(() => serializeCacheValue({
+      __holo_cache_type: 'date',
+    })).toThrow('uses a reserved key')
     expect(() => serializeCacheValue(Number.NaN)).toThrow(CacheSerializationError)
     expect(() => serializeCacheValue(new Date('invalid'))).toThrow(CacheSerializationError)
 
@@ -141,6 +139,8 @@ describe('@holo-js/cache package surface', () => {
   })
 
   it('normalizes runtime config and exposes resettable seams', async () => {
+    const originalDependencyIndex = cacheQueryBridgeInternals.getOrCreateDependencyIndex()
+
     configureCacheRuntime({
       config: {
         default: 'memory',
@@ -169,6 +169,7 @@ describe('@holo-js/cache package surface', () => {
 
     configureCacheRuntime(undefined)
     expect(getCacheRuntimeBindings()).toBeUndefined()
+    expect(cacheQueryBridgeInternals.getOrCreateDependencyIndex()).not.toBe(originalDependencyIndex)
   })
 
   it('accepts normalized config objects and custom driver maps', async () => {
@@ -1009,10 +1010,10 @@ describe('@holo-js/cache package surface', () => {
       await vi.advanceTimersByTimeAsync(25)
       await expect(delayedAcquire).resolves.toBe('after-expiry')
 
-      const heldNumericLock = driver.lock('__numeric__:blocked', 2)
+      const heldNumericLock = driver.lock('__numeric__:blocked', 5)
       expect(await heldNumericLock.get()).toBe(true)
       const blockedIncrement = driver.increment('blocked', 1)
-      await vi.advanceTimersByTimeAsync(1_001)
+      await vi.advanceTimersByTimeAsync(2_001)
       await expect(blockedIncrement).rejects.toThrow(CacheLockAcquisitionError)
 
       expect(await cache.increment('counter')).toBe(1)
@@ -1209,6 +1210,18 @@ describe('@holo-js/cache package surface', () => {
 
   it('lazy-loads database drivers through shared database config resolution', async () => {
     const values = new Map<string, string>()
+    const lockFactory = vi.fn((name: string) => ({
+      name,
+      async get<TValue>(callback?: () => TValue | Promise<TValue>) {
+        return callback ? callback() : true
+      },
+      async release() {
+        return true
+      },
+      async block<TValue>(_: number, callback?: () => TValue | Promise<TValue>) {
+        return callback ? callback() : true
+      },
+    }))
     const createDatabaseCacheDriver = vi.fn((options: {
       readonly name: string
       readonly connectionName: string
@@ -1257,18 +1270,7 @@ describe('@holo-js/cache package surface', () => {
           return -1
         },
         lock(name: string) {
-          return {
-            name,
-            async get() {
-              return true
-            },
-            async release() {
-              return true
-            },
-            async block() {
-              return true
-            },
-          }
+          return lockFactory(name)
         },
       }
     })
@@ -1307,10 +1309,12 @@ describe('@holo-js/cache package surface', () => {
     await expect(cache.flush()).resolves.toBeUndefined()
     expect(await cache.increment('alpha', 2)).toBe(1)
     expect(await cache.decrement('alpha', 1)).toBe(-1)
-    expect(await cache.lock('reports', 1).get(async () => 'locked')).toBe(true)
-    expect(await cache.lock('reports', 1).release()).toBe(true)
-    expect(await cache.lock('reports', 1).block(1, async () => 'blocked')).toBe(true)
+    const lock = cache.lock('reports', 1)
+    expect(await lock.get(async () => 'locked')).toBe('locked')
+    expect(await lock.release()).toBe(true)
+    expect(await lock.block(1, async () => 'blocked')).toBe('blocked')
     expect(createDatabaseCacheDriver).toHaveBeenCalledTimes(1)
+    expect(lockFactory).toHaveBeenCalledTimes(1)
     expect(cacheRuntimeInternals.resolveConfiguredDriver(getCacheRuntime()).driver).toBe('database')
   })
 
@@ -1779,6 +1783,7 @@ describe('@holo-js/cache package surface', () => {
           }),
         })
         .mockResolvedValueOnce({ hit: false }),
+      refreshValue: 'callback-expired-retry',
       lock: vi.fn(() => ({
         name: 'lock',
         async get<TValue>(callback?: () => TValue | Promise<TValue>): Promise<boolean | TValue> {
@@ -1822,7 +1827,7 @@ describe('@holo-js/cache package surface', () => {
     })
     await expect(queryBridge.flexible('stale', [60, 300], async () => 'callback')).resolves.toBe('stale-window')
     await expect(queryBridge.flexible('retried', [60, 300], async () => 'callback')).resolves.toBe('retried')
-    await expect(queryBridge.flexible('refreshed', [60, 300], async () => 'callback')).resolves.toBe('callback')
+    await expect(queryBridge.flexible('refreshed', [60, 300], async () => driver.refreshValue)).resolves.toBe('callback-expired-retry')
 
     await queryBridge.put('duplicate', 'value', {
       ttl: 60,

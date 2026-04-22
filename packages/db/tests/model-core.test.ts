@@ -751,7 +751,10 @@ describe('model core slice', () => {
       bindings: [],
       source: 'query:select:users' })
 
-    expect(() => User.lockForUpdate().toSQL()).toThrow('does not support pessimistic lock clauses')
+    expect(User.lockForUpdate().toSQL()).toEqual({
+      sql: 'SELECT * FROM "users"',
+      bindings: [],
+      source: 'query:select:users' })
 
     const postTable = defineTable('posts', {
       id: column.id(),

@@ -98,7 +98,8 @@ export class SQLQueryCompiler {
     const orderClause = plan.orderBy.length === 0
       ? ''
       : ` ORDER BY ${plan.orderBy.map(orderBy => this.compileOrderBy(orderBy, bindings)).join(', ')}`
-    const lockClause = plan.lockMode ? ` ${this.compileLockClause(plan.lockMode)}` : ''
+    const compiledLockClause = plan.lockMode ? this.compileLockClause(plan.lockMode) : ''
+    const lockClause = compiledLockClause ? ` ${compiledLockClause}` : ''
     const limitClause = typeof plan.limit === 'number' ? ` LIMIT ${plan.limit}` : ''
     const offsetClause = typeof plan.offset === 'number' ? ` OFFSET ${plan.offset}` : ''
 

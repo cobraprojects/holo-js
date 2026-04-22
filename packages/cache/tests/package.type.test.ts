@@ -49,9 +49,10 @@ describe('@holo-js/cache typing', () => {
     const rememberTyped = (key: typeof reportKey) => cache.remember(key, 60, async () => ({ total: 1, createdAt: null }))
     const rememberForeverTyped = (key: typeof reportKey) => cache.rememberForever(key, async () => ({ total: 1, createdAt: null }))
     const flexibleTyped = (key: typeof reportKey) => cache.flexible(key, [60, 300] as const, async () => ({ total: 1, createdAt: null }))
+    const getMemoryRepository = () => cache.driver('memory')
 
     expectTypeOf(cache).toExtend<CacheFacade>()
-    expectTypeOf(cache.driver('memory')).toExtend<CacheRepository>()
+    expectTypeOf(getMemoryRepository).returns.toExtend<CacheRepository>()
     expectTypeOf(getTyped).returns.toEqualTypeOf<Promise<CacheValue | null>>()
     expectTypeOf(getTypedWithFallback).returns.toEqualTypeOf<Promise<CacheValue>>()
     expectTypeOf(getString).returns.toEqualTypeOf<Promise<unknown | null>>()

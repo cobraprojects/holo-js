@@ -31,6 +31,8 @@ type CreateFileCacheDriverOptions = {
   readonly now?: () => number
   readonly sleep?: (milliseconds: number) => Promise<void>
   readonly ownerFactory?: () => string
+  readonly numericMutationLockSeconds?: number
+  readonly numericMutationWaitSeconds?: number
 }
 
 type FileReadResult<TValue> =
@@ -339,6 +341,11 @@ function createFileLock(
         return false
       }
 
+      const latestLock = await readLock(rootPath, name, now())
+      if (latestLock.state === 'missing' || latestLock.value.owner !== owner) {
+        return false
+      }
+
       await removeFileIfPresent(currentLock.filePath)
       return true
     },
@@ -367,6 +374,8 @@ export function createFileCacheDriver(options: CreateFileCacheDriverOptions): Ca
   const now = options.now ?? Date.now
   const sleep = options.sleep ?? defaultSleep
   const ownerFactory = options.ownerFactory ?? randomUUID
+  const numericMutationLockSeconds = options.numericMutationLockSeconds ?? 5
+  const numericMutationWaitSeconds = options.numericMutationWaitSeconds ?? 2
 
   async function writeEntry(input: CacheDriverPutInput): Promise<boolean> {
     const filePath = resolveEntryFilePath(rootPath, input.key)
@@ -378,11 +387,11 @@ export function createFileCacheDriver(options: CreateFileCacheDriverOptions): Ca
     const result = await createFileLock(
       rootPath,
       `__numeric__:${key}`,
-      1,
+      numericMutationLockSeconds,
       now,
       sleep,
       ownerFactory,
-    ).block(1, async () => {
+    ).block(numericMutationWaitSeconds, async () => {
       const entry = await readEntry(rootPath, key, now())
       const currentValue = entry.state === 'hit'
         ? deserializeCacheValue<unknown>(entry.value.payload)

@@ -1,5 +1,5 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
-import type { InsertQueryPlan, QueryDatePredicate, QueryJsonPredicate, QueryJsonUpdateOperation } from './ast'
+import type { InsertQueryPlan, QueryDatePredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLockMode } from './ast'
 
 function createSqliteJsonExtractExpression(column: string, pathLiteral: string): string {
   return `json_extract(${column}, ${pathLiteral})`
@@ -23,6 +23,10 @@ const SQLITE_JSON_HELPERS = Object.freeze({
 const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
 
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
+  protected override compileLockClause(_lockMode: QueryLockMode): string {
+    return ''
+  }
+
   protected override compileJsonPredicate(predicate: QueryJsonPredicate, bindings: unknown[]): string {
     const column = this.compileColumnReference(predicate.column)
     const pathLiteral = this.createJsonPathLiteral(predicate.path)

@@ -45,6 +45,8 @@ const redisMock = vi.hoisted(() => {
 
   class FakeRedis {
     static Cluster = class FakeRedisCluster {
+      readonly isCluster = true
+
       constructor(...args: unknown[]) {
         calls.constructorArgs.push(args)
       }
@@ -81,6 +83,10 @@ const redisMock = vi.hoisted(() => {
 
       async eval(script: string, numberOfKeys: number, ...arguments_: readonly string[]): Promise<number> {
         return new FakeRedis().eval(script, numberOfKeys, ...arguments_)
+      }
+
+      nodes(): readonly FakeRedis[] {
+        return [new FakeRedis(), new FakeRedis()]
       }
     }
 
@@ -368,6 +374,52 @@ describe('@holo-js/cache-redis', () => {
     const heldLock = driver.lock('holo:cache:lock:timeout', 1)
     expect(await heldLock.get()).toBe(true)
     await expect(driver.lock('holo:cache:lock:timeout', 1).block(0)).resolves.toBe(false)
+  })
+
+  it('uses the injected clock for blocking lock deadlines', async () => {
+    let currentTime = 0
+    const driver = createRedisCacheDriver({
+      name: 'redis',
+      connectionName: 'cache',
+      prefix: 'holo:cache:',
+      redis: {
+        host: '127.0.0.1',
+        port: 6379,
+        db: 0,
+      },
+      now: () => currentTime,
+      sleep: async (milliseconds) => {
+        currentTime += milliseconds
+      },
+    })
+
+    expect(await driver.lock('holo:cache:lock:clock', 1).get()).toBe(true)
+    await expect(driver.lock('holo:cache:lock:clock', 1).block(0.02)).resolves.toBe(false)
+  })
+
+  it('flushes every cluster master when using a redis cluster client', async () => {
+    const driver = createRedisCacheDriver({
+      name: 'redis-cluster',
+      connectionName: 'cache',
+      prefix: 'holo:cache:',
+      redis: {
+        db: 0,
+        clusters: [
+          { host: 'cache-a.internal', port: 6379 },
+        ],
+      },
+    })
+
+    await driver.put({
+      key: 'holo:cache:alpha',
+      payload: '"one"',
+    })
+    await driver.flush()
+
+    expect(redisMock.calls.scan).toEqual([
+      ['0', 'MATCH', 'holo:cache:*', 'COUNT', 100],
+      ['0', 'MATCH', 'holo:cache:*', 'COUNT', 100],
+    ])
   })
 
   it('prefers url, then clusters, then host/socket when creating redis clients', async () => {

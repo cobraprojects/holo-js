@@ -20,6 +20,7 @@ export { getCacheRuntime, getCacheRuntimeBindings } from './runtime-shared'
 export function configureCacheRuntime(bindings?: CacheRuntimeBindings): void {
   if (!bindings) {
     getCacheRuntimeState().bindings = undefined
+    resetDefaultDependencyIndex()
     setGlobalDatabaseQueryCacheBridge(undefined)
     return
   }

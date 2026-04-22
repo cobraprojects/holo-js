@@ -23,6 +23,7 @@ class QueryCacheAdapter implements DriverAdapter {
   queryRows: Record<string, unknown>[] = []
   queryCount = 0
   executionCount = 0
+  affectedRows?: number = 1
 
   async initialize(): Promise<void> {
     this.connected = true
@@ -47,7 +48,7 @@ class QueryCacheAdapter implements DriverAdapter {
   async execute(): Promise<DriverExecutionResult> {
     this.executionCount += 1
     return {
-      affectedRows: 1,
+      affectedRows: this.affectedRows,
     }
   }
 
@@ -279,6 +280,26 @@ describe('@holo-js/db query cache integration', () => {
     const second = await DB.table('users').cache(300).get()
 
     expect(first).toEqual(second)
+  })
+
+  it('preserves cache config across from() and invalidates when affectedRows is omitted', async () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+    })
+
+    adapter.queryRows = [{ id: 1, name: 'Ava' }]
+    const first = await DB.table(users).cache(300).from('users').get()
+    adapter.queryRows = [{ id: 1, name: 'Changed' }]
+    const second = await DB.table(users).cache(300).from('users').get()
+
+    adapter.affectedRows = undefined
+    await DB.table(users).update({ name: 'Updated' })
+    adapter.queryRows = [{ id: 1, name: 'Refreshed' }]
+    const third = await DB.table(users).cache(300).get()
+
+    expect(first).toEqual(second)
+    expect(third[0]?.name).toBe('Refreshed')
   })
 
   it('throws a clear error when query caching is requested without a configured cache bridge', async () => {

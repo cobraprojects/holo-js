@@ -1,11 +1,14 @@
 import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
+
+const rootDir = fileURLToPath(new URL('.', import.meta.url))
 
 export default defineConfig({
   resolve: {
     alias: {
-      '@holo-js/cache': resolve(__dirname, '../cache/src/index.ts'),
-      '@holo-js/config': resolve(__dirname, '../config/src/index.ts'),
+      '@holo-js/cache': resolve(rootDir, '../cache/src/index.ts'),
+      '@holo-js/config': resolve(rootDir, '../config/src/index.ts'),
     },
   },
   test: {

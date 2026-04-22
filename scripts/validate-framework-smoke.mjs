@@ -2097,6 +2097,7 @@ async function validateFrameworkApp(app) {
   await runFrameworkFluxHelperSmokeCheck(app)
 
   await runCommand(app.cwd, 'bun', ['run', 'build'], env)
+  await rm(join(app.cwd, 'storage/framework/cache/data'), { recursive: true, force: true })
 
   const server = await startServer(app)
   try {
