@@ -5,6 +5,7 @@ import {
   normalizeAppConfig,
   normalizeBroadcastConfig,
   normalizeAuthConfig,
+  normalizeCacheConfig,
   normalizeDatabaseConfig,
   normalizeMailConfig,
   normalizeNotificationsConfig,
@@ -27,6 +28,7 @@ import type {
   HoloAppConfig,
   HoloBroadcastConfig,
   HoloAuthConfig,
+  HoloCacheConfig,
   HoloConfigMap,
   HoloDatabaseConfig,
   HoloMailConfig,
@@ -253,6 +255,10 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
   const resolvedRedisConfig = typeof resolvedRawConfig.redis === 'undefined'
     ? undefined
     : redis
+  const cache = normalizeCacheConfig(resolvedRawConfig.cache as HoloCacheConfig | undefined, {
+    database,
+    redis: resolvedRedisConfig,
+  })
   const storage = normalizeStorageConfig(resolvedRawConfig.storage as HoloStorageConfig | undefined)
   const queue = normalizeQueueConfigForHolo(resolvedRawConfig.queue as HoloQueueConfig | undefined, resolvedRedisConfig)
   const broadcast = normalizeBroadcastConfig(resolvedRawConfig.broadcast as HoloBroadcastConfig | undefined)
@@ -267,6 +273,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
     return key !== 'app'
       && key !== 'database'
       && key !== 'redis'
+      && key !== 'cache'
       && key !== 'storage'
       && key !== 'queue'
       && key !== 'broadcast'
@@ -282,6 +289,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
     app,
     database,
     redis,
+    cache,
     storage,
     queue,
     broadcast,
@@ -298,6 +306,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
     app,
     database,
     redis,
+    cache,
     storage,
     queue,
     broadcast,
@@ -513,6 +522,10 @@ export function defineDatabaseConfig<TConfig extends HoloDatabaseConfig>(config:
 }
 
 export function defineRedisConfig<TConfig extends HoloRedisConfig>(config: TConfig): DefineConfigValue<TConfig> {
+  return defineConfig(config)
+}
+
+export function defineCacheConfig<TConfig extends HoloCacheConfig>(config: TConfig): DefineConfigValue<TConfig> {
   return defineConfig(config)
 }
 

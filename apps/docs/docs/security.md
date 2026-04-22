@@ -308,7 +308,7 @@ export default defineSecurityConfig({
 })
 ```
 
-`define()` is the default path. It gives you Laravel-style behavior without repeating a key resolver on
+`define()` is the default path. It gives you the default framework behavior without repeating a key resolver on
 every limiter: authenticated requests use `user:<id>` and guest requests fall back to `ip:<client-ip>`.
 
 ### Overriding the default key

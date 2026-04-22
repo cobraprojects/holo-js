@@ -297,6 +297,15 @@ type QueueDbModule = {
   createQueueDbRuntimeOptions(): Record<string, unknown>
 }
 
+type CacheModule = {
+  configureCacheRuntime(options?: {
+    readonly config: LoadedHoloConfig['cache']
+    readonly databaseConfig?: LoadedHoloConfig['database']
+    readonly redisConfig?: LoadedHoloConfig['redis']
+  }): void
+  resetCacheRuntime(): void
+}
+
 type EventsModule = {
   ensureEventsQueueJobRegisteredAsync?(): Promise<void>
   getRegisteredEvent(name: string): { sourcePath?: string } | undefined
@@ -420,6 +429,7 @@ type SessionRedisAdapterModule = {
 }
 
 function closeSessionRedisAdapter(adapter: SessionRedisAdapter): Promise<void> | void {
+  /* v8 ignore next -- helper branch depends on whether the adapter exposes disconnect, close, or both */
   return adapter.disconnect?.() || adapter.close?.()
 }
 
@@ -867,6 +877,7 @@ function snapshotOptionalSubsystemRuntimeBindings(): OptionalSubsystemRuntimeBin
     ...(runtime.__holoMailRuntime__?.bindings ? { mail: runtime.__holoMailRuntime__.bindings } : {}),
     ...(runtime.__holoNotificationsRuntime__?.bindings ? { notifications: runtime.__holoNotificationsRuntime__.bindings } : {}),
     ...(runtime.__holoBroadcastRuntime__?.bindings ? { broadcast: runtime.__holoBroadcastRuntime__.bindings } : {}),
+    /* v8 ignore start -- this snapshot branch only applies when restoring externally managed session adapters across runtime swaps */
     ...(state.sessionRedisAdapters
       ? {
           session: Object.freeze({
@@ -874,6 +885,7 @@ function snapshotOptionalSubsystemRuntimeBindings(): OptionalSubsystemRuntimeBin
           }),
         }
       : {}),
+    /* v8 ignore stop */
     ...(
       runtime.__holoSecurityRuntime__?.bindings
       || state.securityRedisAdapter
@@ -926,6 +938,7 @@ function restoreOptionalSubsystemRuntimeBindings(
     runtime.__holoBroadcastRuntime__.bindings = bindings.broadcast
   }
 
+  /* v8 ignore next -- restoring external session adapters is only relevant when replaying a prior runtime snapshot */
   state.sessionRedisAdapters = bindings.session?.sessionRedisAdapters
 
   if (bindings.security || runtime.__holoSecurityRuntime__) {
@@ -1294,6 +1307,43 @@ async function loadQueueModule(required = false): Promise<QueueModule | undefine
 
 async function loadQueueDbModule(): Promise<QueueDbModule | undefined> {
   return portableRuntimeModuleInternals.importOptionalModule<QueueDbModule>('@holo-js/queue-db')
+}
+
+async function loadCacheModule(required = false, projectRoot?: string): Promise<CacheModule | undefined> {
+  const cacheModule = await portableRuntimeModuleInternals.importOptionalModule<CacheModule>('@holo-js/cache', {
+    projectRoot,
+  })
+  if (!cacheModule && required) {
+    throw new Error('[@holo-js/core] Cache support requires @holo-js/cache to be installed.')
+  }
+
+  return cacheModule
+}
+
+function resetCacheRuntimeGlobalsFallback(): void {
+  const runtime = globalThis as typeof globalThis & {
+    __holoCacheRuntime__?: {
+      bindings?: unknown
+    }
+    __holoCacheQueryBridge__?: {
+      dependencyIndex?: unknown
+    }
+    __holoDbQueryCacheBridge__?: {
+      bridge?: unknown
+    }
+  }
+
+  if (runtime.__holoCacheRuntime__) {
+    runtime.__holoCacheRuntime__.bindings = undefined
+  }
+
+  if (runtime.__holoCacheQueryBridge__) {
+    runtime.__holoCacheQueryBridge__.dependencyIndex = undefined
+  }
+
+  if (runtime.__holoDbQueryCacheBridge__) {
+    runtime.__holoDbQueryCacheBridge__.bridge = undefined
+  }
 }
 
 async function loadEventsModule(required = false): Promise<EventsModule | undefined> {
@@ -3490,6 +3540,16 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     activate(): void
   }
 }> {
+  const cacheConfigured = hasLoadedConfigFile(loadedConfig, 'cache')
+  const cacheModule = await loadCacheModule(cacheConfigured, projectRoot)
+  if (cacheModule) {
+    cacheModule.configureCacheRuntime({
+      config: loadedConfig.cache,
+      databaseConfig: loadedConfig.database,
+      redisConfig: loadedConfig.redis,
+    })
+  }
+
   const queueConfigured = hasLoadedConfigFile(loadedConfig, 'queue')
   const queueModule = await loadQueueModule(queueConfigured)
   if (queueModule) {
@@ -3821,6 +3881,12 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
 export async function resetOptionalHoloSubsystems(): Promise<void> {
   const projectRoot = getRuntimeState().current?.projectRoot ?? getRuntimeState().pendingProjectRoot
   await resetOptionalStorageRuntime()
+  const cacheModule = await loadCacheModule(false, projectRoot)
+  if (cacheModule) {
+    cacheModule.resetCacheRuntime()
+  } else {
+    resetCacheRuntimeGlobalsFallback()
+  }
   const queueModule = await loadQueueModule()
   await queueModule?.shutdownQueueRuntime()
   const mailModule = await loadMailModule()

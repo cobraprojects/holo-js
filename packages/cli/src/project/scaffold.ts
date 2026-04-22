@@ -23,7 +23,9 @@ import {
   AUTH_SOCIAL_PROVIDER_PACKAGE_NAMES,
   AUTH_CONFIG_FILE_NAMES,
   BROADCAST_CONFIG_FILE_NAMES,
+  CACHE_CONFIG_FILE_NAMES,
   type BroadcastInstallResult,
+  type CacheInstallResult,
   type GeneratedProjectRegistry,
   MAIL_CONFIG_FILE_NAMES,
   DB_DRIVER_PACKAGE_NAMES,
@@ -40,10 +42,12 @@ import {
   type NotificationsInstallResult,
   type ProjectScaffoldOptions,
   type QueueInstallResult,
+  type SupportedCacheInstallerDriver,
   type SecurityInstallResult,
   type SupportedAuthSocialProvider,
   type SupportedQueueInstallerDriver,
   type SupportedScaffoldPackageManager,
+  isSupportedCacheInstallerDriver,
   isSupportedQueueInstallerDriver,
   normalizeScaffoldOptionalPackages,
   pathExists,
@@ -67,6 +71,17 @@ type AuthInstallFeatures = {
   readonly socialProviders?: readonly SupportedAuthSocialProvider[]
   readonly workos?: boolean
   readonly clerk?: boolean
+}
+
+type LoadedConfigWithCache = Awaited<ReturnType<typeof loadConfigDirectory>> & {
+  readonly cache: {
+    readonly drivers: Readonly<Record<string, {
+      readonly driver: string
+    }>>
+  }
+  readonly redis: {
+    readonly default: string
+  }
 }
 
 type ConfigModuleFormat = 'esm' | 'cjs'
@@ -186,6 +201,58 @@ function renderQueueConfig(
     '})',
     '',
   ].join('\n')
+}
+
+function renderCacheConfig(
+  driver: SupportedCacheInstallerDriver = 'file',
+  defaultDatabaseConnection = 'default',
+  defaultRedisConnection = 'default',
+): string {
+  const lines = [
+    'import { defineCacheConfig, env } from \'@holo-js/config\'',
+    '',
+    'export default defineCacheConfig({',
+    `  default: '${driver}',`,
+    '  prefix: env(\'CACHE_PREFIX\', \'\'),',
+    '  drivers: {',
+    '    file: {',
+    '      driver: \'file\',',
+    '      path: \'./storage/framework/cache/data\',',
+    '    },',
+    '    memory: {',
+    '      driver: \'memory\',',
+    '      maxEntries: 1000,',
+    '    },',
+  ]
+
+  if (driver === 'redis') {
+    lines.push(
+      '    redis: {',
+      '      driver: \'redis\',',
+      `      connection: '${defaultRedisConnection}',`,
+      '      prefix: \'cache:\',',
+      '    },',
+    )
+  }
+
+  if (driver === 'database') {
+    lines.push(
+      '    database: {',
+      '      driver: \'database\',',
+      `      connection: '${defaultDatabaseConnection}',`,
+      '      table: \'cache\',',
+      '      lockTable: \'cache_locks\',',
+      '    },',
+    )
+  }
+
+  lines.push(
+    '  },',
+    '})',
+    '',
+  )
+
+  return lines.join('\n')
 }
 
 function renderRedisConfig(): string {
@@ -1278,11 +1345,14 @@ function renderScaffoldEnvFiles(
   const authLines = normalizeScaffoldOptionalPackages(options.optionalPackages).includes('auth')
     ? [...renderAuthEnvFiles({}, defaultDatabaseConnection).env]
     : []
-  const env = [...baseLines, ...driverLines, ...storageLines, ...authLines, ''].join('\n')
+  const cacheLines = normalizeScaffoldOptionalPackages(options.optionalPackages).includes('cache')
+    ? [...renderCacheEnvFiles().env]
+    : []
+  const env = [...baseLines, ...driverLines, ...storageLines, ...authLines, ...cacheLines, ''].join('\n')
   const example = [
     '# Copy this file to .env and fill in your local values.',
     '# Supported layered env files: .env.local, .env.development, .env.production, .env.prod, .env.test',
-    ...[...baseLines, ...driverLines, ...storageLines, ...authLines].map(line => `${line.split('=')[0]}=`),
+    ...[...baseLines, ...driverLines, ...storageLines, ...authLines, ...cacheLines].map(line => `${line.split('=')[0]}=`),
     '',
   ].join('\n')
 
@@ -1315,6 +1385,17 @@ function renderQueueEnvFiles(
       'REDIS_USERNAME=',
       'REDIS_PASSWORD=',
       'REDIS_DB=',
+    ],
+  }
+}
+
+function renderCacheEnvFiles(): { env: readonly string[], example: readonly string[] } {
+  return {
+    env: [
+      'CACHE_PREFIX=',
+    ],
+    example: [
+      'CACHE_PREFIX=',
     ],
   }
 }
@@ -1581,10 +1662,11 @@ export async function syncManagedDriverDependencies(
   const loaded = await loadConfigDirectory(projectRoot, {
     preferCache: false,
     processEnv: process.env,
-  })
+  }) as LoadedConfigWithCache
   const discoveredRegistry = registry ?? await loadGeneratedProjectRegistry(projectRoot)
   const authConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'auth')
   const broadcastConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'broadcast')
+  const cacheConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'cache')
   const mailConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'mail')
   const notificationsConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'notifications')
   const queueConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'queue')
@@ -1594,6 +1676,14 @@ export async function syncManagedDriverDependencies(
   const requiredPackages = new Set<string>()
   const hasAuthorizationScaffold = await projectHasAuthorizationScaffold(projectRoot)
   const hasEventsScaffold = await projectHasEventsScaffold(projectRoot)
+  const {
+    packageJsonPath,
+    parsed,
+    dependencies,
+    devDependencies,
+  } = await readPackageJsonDependencyState(projectRoot)
+  const cachePackageInstalled = typeof dependencies['@holo-js/cache'] !== 'undefined'
+    || typeof devDependencies['@holo-js/cache'] !== 'undefined'
 
   for (const connection of Object.values(loaded.database.connections)) {
     const inferredDriver = inferConnectionDriver(connection)
@@ -1647,6 +1737,21 @@ export async function syncManagedDriverDependencies(
     requiredPackages.add('@holo-js/mail')
   }
 
+  if (cacheConfigured || cachePackageInstalled) {
+    requiredPackages.add('@holo-js/cache')
+  }
+
+  if (cacheConfigured) {
+    const cacheDrivers = Object.values(loaded.cache.drivers)
+    if (cacheDrivers.some(driver => driver.driver === 'redis')) {
+      requiredPackages.add('@holo-js/cache-redis')
+    }
+
+    if (cacheDrivers.some(driver => driver.driver === 'database')) {
+      requiredPackages.add('@holo-js/cache-db')
+    }
+  }
+
   if (notificationsConfigured) {
     requiredPackages.add('@holo-js/notifications')
   }
@@ -1683,7 +1788,8 @@ export async function syncManagedDriverDependencies(
   }
 
   if (
-    loaded.security?.rateLimit?.driver === 'redis'
+    Object.values(loaded.cache?.drivers ?? {}).some(driver => driver.driver === 'redis')
+    || loaded.security?.rateLimit?.driver === 'redis'
     || Object.values(loaded.session?.stores ?? {}).some(store => store.driver === 'redis')
     || (loaded.broadcast?.worker != null && loaded.broadcast.worker.scaling !== false)
   ) {
@@ -1698,13 +1804,6 @@ export async function syncManagedDriverDependencies(
     }
   }
 
-  const {
-    packageJsonPath,
-    parsed,
-    dependencies,
-    devDependencies,
-  } = await readPackageJsonDependencyState(projectRoot)
-
   let changed = false
   const nextVersion = `^${HOLO_PACKAGE_VERSION}`
   const removableManagedPackages = new Set<string>([
@@ -1715,6 +1814,9 @@ export async function syncManagedDriverDependencies(
     '@holo-js/auth-workos',
     '@holo-js/authorization',
     '@holo-js/broadcast',
+    '@holo-js/cache',
+    '@holo-js/cache-db',
+    '@holo-js/cache-redis',
     '@holo-js/events',
     '@holo-js/mail',
     '@holo-js/notifications',
@@ -1895,6 +1997,61 @@ async function upsertSecurityPackageDependency(projectRoot: string): Promise<boo
 
   dependencies['@holo-js/security'] = nextVersion
   delete devDependencies['@holo-js/security']
+  await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
+  return true
+}
+
+async function upsertCachePackageDependencies(
+  projectRoot: string,
+  driver: SupportedCacheInstallerDriver = 'file',
+): Promise<boolean> {
+  const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  const cacheConfigPath = await resolveFirstExistingPath(projectRoot, CACHE_CONFIG_FILE_NAMES)
+  const cacheConfig = cacheConfigPath
+    ? await loadConfigDirectory(projectRoot, {
+        preferCache: false,
+        processEnv: process.env,
+      }).then(config => (config as LoadedConfigWithCache).cache)
+        .catch(() => undefined)
+    : undefined
+  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
+  const requiresCacheRedis = driver === 'redis'
+    || Object.values(cacheConfig?.drivers ?? {}).some(connection => connection.driver === 'redis')
+  const requiresCacheDb = driver === 'database'
+    || Object.values(cacheConfig?.drivers ?? {}).some(connection => connection.driver === 'database')
+  const currentVersion = dependencies['@holo-js/cache']
+  const currentCacheDbVersion = dependencies['@holo-js/cache-db']
+  const currentCacheRedisVersion = dependencies['@holo-js/cache-redis']
+  const currentDevVersion = devDependencies['@holo-js/cache']
+  const currentDevCacheDbVersion = devDependencies['@holo-js/cache-db']
+  const currentDevCacheRedisVersion = devDependencies['@holo-js/cache-redis']
+
+  if (
+    currentVersion === nextVersion
+    && (requiresCacheDb ? currentCacheDbVersion === nextVersion : typeof currentCacheDbVersion === 'undefined')
+    && (requiresCacheRedis ? currentCacheRedisVersion === nextVersion : typeof currentCacheRedisVersion === 'undefined')
+    && typeof currentDevVersion === 'undefined'
+    && typeof currentDevCacheDbVersion === 'undefined'
+    && typeof currentDevCacheRedisVersion === 'undefined'
+  ) {
+    return false
+  }
+
+  dependencies['@holo-js/cache'] = nextVersion
+  if (requiresCacheDb) {
+    dependencies['@holo-js/cache-db'] = nextVersion
+  } else {
+    delete dependencies['@holo-js/cache-db']
+  }
+  if (requiresCacheRedis) {
+    dependencies['@holo-js/cache-redis'] = nextVersion
+  } else {
+    delete dependencies['@holo-js/cache-redis']
+  }
+  delete devDependencies['@holo-js/cache']
+  delete devDependencies['@holo-js/cache-db']
+  delete devDependencies['@holo-js/cache-redis']
+
   await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
   return true
 }
@@ -2411,6 +2568,77 @@ export async function installSecurityIntoProject(
   return {
     updatedPackageJson: await upsertSecurityPackageDependency(projectRoot),
     createdSecurityConfig: !securityConfigPath,
+  }
+}
+
+export async function installCacheIntoProject(
+  projectRoot: string,
+  options: {
+    readonly driver?: SupportedCacheInstallerDriver
+  } = {},
+): Promise<CacheInstallResult> {
+  const project = await loadProjectConfig(projectRoot, { required: true })
+  const driver = options.driver ?? 'file'
+  if (!isSupportedCacheInstallerDriver(driver)) {
+    throw new Error(`Unsupported cache driver: ${driver}.`)
+  }
+
+  const cacheConfigPath = await resolveFirstExistingPath(projectRoot, CACHE_CONFIG_FILE_NAMES)
+  const loadedConfig = await loadConfigDirectory(projectRoot, {
+    preferCache: false,
+    processEnv: process.env,
+  }) as LoadedConfigWithCache
+  const defaultDatabaseConnection = project.config.database?.defaultConnection ?? 'default'
+  const defaultRedisConnection = loadedConfig.redis.default
+  const loadedCacheConfig = cacheConfigPath
+    ? loadedConfig.cache
+    : undefined
+
+  if (
+    loadedCacheConfig
+    && !Object.values(loadedCacheConfig.drivers).some(entry => entry.driver === driver)
+  ) {
+    throw new Error(
+      `config/cache.ts already exists and does not configure the "${driver}" cache driver. `
+      + `Update your cache config first, then rerun "holo install cache".`,
+    )
+  }
+
+  await mkdir(resolve(projectRoot, 'config'), { recursive: true })
+
+  if (!cacheConfigPath) {
+    await writeTextFile(
+      resolve(projectRoot, 'config/cache.ts'),
+      renderCacheConfig(driver, defaultDatabaseConnection, defaultRedisConnection),
+    )
+  }
+
+  let createdRedisConfig = false
+  if (driver === 'redis') {
+    createdRedisConfig = await ensureRedisConfigFile(projectRoot)
+  }
+
+  const cacheEnvFiles = renderCacheEnvFiles()
+  const envPath = resolve(projectRoot, '.env')
+  const envExamplePath = resolve(projectRoot, '.env.example')
+  const nextEnv = upsertEnvContents(await readTextFile(envPath), cacheEnvFiles.env)
+  const nextEnvExample = upsertEnvContents(await readTextFile(envExamplePath), cacheEnvFiles.example)
+
+  if (nextEnv.changed && typeof nextEnv.contents === 'string') {
+    await writeTextFile(envPath, nextEnv.contents)
+  }
+
+  if (nextEnvExample.changed && typeof nextEnvExample.contents === 'string') {
+    await writeTextFile(envExamplePath, nextEnvExample.contents)
+  }
+
+  return {
+    updatedPackageJson: await upsertCachePackageDependencies(projectRoot, driver),
+    createdCacheConfig: !cacheConfigPath,
+    createdRedisConfig,
+    updatedEnv: nextEnv.changed,
+    updatedEnvExample: nextEnvExample.changed,
+    databaseDriver: driver === 'database',
   }
 }
 
@@ -3337,6 +3565,10 @@ function renderScaffoldPackageJson(options: ProjectScaffoldOptions): string {
     dependencies['@holo-js/security'] = `^${HOLO_PACKAGE_VERSION}`
   }
 
+  if (optionalPackages.includes('cache')) {
+    dependencies['@holo-js/cache'] = `^${HOLO_PACKAGE_VERSION}`
+  }
+
   return `${JSON.stringify({
     name: packageName,
     private: true,
@@ -3381,6 +3613,7 @@ export async function scaffoldProject(
   const mailEnabled = optionalPackages.includes('mail')
   const broadcastEnabled = optionalPackages.includes('broadcast')
   const securityEnabled = optionalPackages.includes('security')
+  const cacheEnabled = optionalPackages.includes('cache')
   const broadcastEnvFiles = broadcastEnabled ? renderBroadcastEnvFiles() : undefined
   const baseEnv = Array.isArray(env) ? env : [env]
   const baseExample = Array.isArray(example) ? example : [example]
@@ -3455,6 +3688,9 @@ export async function scaffoldProject(
     await writeFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig(), 'utf8')
     await ensureRateLimitStorageIgnore(projectRoot)
   }
+  if (cacheEnabled) {
+    await writeFile(resolve(projectRoot, 'config/cache.ts'), renderCacheConfig('file', 'main'), 'utf8')
+  }
   if (authEnabled) {
     await writeFile(resolve(projectRoot, 'config/auth.ts'), renderAuthConfig(), 'utf8')
     await writeFile(resolve(projectRoot, 'config/session.ts'), renderSessionConfig('main'), 'utf8')
@@ -3502,6 +3738,7 @@ export {
   hasLoadedConfigFile,
   inferConnectionDriver,
   inferDatabaseDriverFromUrl,
+  isSupportedCacheInstallerDriver,
   isSupportedQueueInstallerDriver,
   injectBroadcastAuthEndpoint,
   renderAuthConfig,
@@ -3516,8 +3753,10 @@ export {
   renderSecurityConfig,
   renderNotificationsConfig,
   renderNotificationsMigration,
+  renderCacheConfig,
   renderQueueConfig,
   renderRedisConfig,
+  renderCacheEnvFiles,
   renderQueueEnvFiles,
   renderScaffoldAppConfig,
   renderScaffoldDatabaseConfig,
@@ -3530,6 +3769,7 @@ export {
   resolvePackageManagerVersion,
   resolveBroadcastConfigTargetPath,
   sanitizePackageName,
+  upsertCachePackageDependencies,
   upsertAuthPackageDependencies,
   upsertEventsPackageDependency,
   upsertMailPackageDependency,

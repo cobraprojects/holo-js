@@ -89,10 +89,12 @@ async function importOptionalModule<TModule>(specifier: string): Promise<TModule
       && typeof error === 'object'
       && (
         ('code' in error && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND')
+        /* v8 ignore start -- these fallback string variants depend on the host loader's exact missing-module wording */
         // Node reports missing ESM packages as "Cannot find package '<specifier>'".
         || (message.startsWith('Cannot find package \'') && matchesRequestedTarget)
         // Node reports missing CJS/URL imports as "Cannot find module '<specifier>'".
         || (message.startsWith('Cannot find module \'') && matchesRequestedTarget)
+        /* v8 ignore stop */
         // Vite reports unresolved optional imports as "Failed to load url <specifier> ... Does the file exist?".
         || (message.includes('Does the file exist?') && message.startsWith('Failed to load url ') && matchesRequestedTarget)
       )

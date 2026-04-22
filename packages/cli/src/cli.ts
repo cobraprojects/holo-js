@@ -14,6 +14,7 @@ import {
   parseNumberFlag,
   splitCsv,
   SUPPORTED_INSTALL_TARGETS,
+  SUPPORTED_CACHE_INSTALL_DRIVERS,
   SUPPORTED_QUEUE_INSTALL_DRIVERS,
 } from './parsing'
 import { fileExists } from './fs-utils'
@@ -30,7 +31,9 @@ import {
 } from './project/shared'
 import type * as RuntimeModule from './runtime'
 import type * as QueueModule from './queue'
+import type * as CacheModule from './cache'
 import type * as QueueMigrationsModule from './queue-migrations'
+import type * as CacheMigrationsModule from './cache-migrations'
 import type * as GeneratorsModule from './generators'
 import type * as BroadcastModule from './broadcast'
 import type * as SecurityModule from './security'
@@ -43,6 +46,7 @@ import type {
   SupportedScaffoldFramework,
   SupportedScaffoldPackageManager,
   SupportedScaffoldStorageDisk,
+  SupportedCacheInstallerDriver,
   SupportedQueueInstallerDriver,
   ProjectScaffoldOptions,
   DiscoveredAppCommand,
@@ -66,6 +70,11 @@ type QueueCommandExecutors = {
   runQueueTableCommand?: typeof QueueMigrationsModule.runQueueTableCommand
   runQueueClearCommand?: typeof QueueModule.runQueueClearCommand
 }
+type CacheCommandExecutors = {
+  runCacheTableCommand?: typeof CacheMigrationsModule.runCacheTableCommand
+  runCacheClearCommand?: typeof CacheModule.runCacheClearCommand
+  runCacheForgetCommand?: typeof CacheModule.runCacheForgetCommand
+}
 type BroadcastCommandExecutors = {
   runBroadcastWorkCommand?: typeof BroadcastModule.runBroadcastWorkCommand
 }
@@ -75,7 +84,9 @@ type SecurityCommandExecutors = {
 
 let runtimeModulePromise: Promise<typeof RuntimeModule> | undefined
 let queueModulePromise: Promise<typeof QueueModule> | undefined
+let cacheModulePromise: Promise<typeof CacheModule> | undefined
 let queueMigrationsModulePromise: Promise<typeof QueueMigrationsModule> | undefined
+let cacheMigrationsModulePromise: Promise<typeof CacheMigrationsModule> | undefined
 let generatorsModulePromise: Promise<typeof GeneratorsModule> | undefined
 let broadcastModulePromise: Promise<typeof BroadcastModule> | undefined
 let securityModulePromise: Promise<typeof SecurityModule> | undefined
@@ -95,9 +106,19 @@ function loadQueueModule(): Promise<typeof QueueModule> {
   return queueModulePromise
 }
 
+function loadCacheModule(): Promise<typeof CacheModule> {
+  cacheModulePromise ??= import('./cache')
+  return cacheModulePromise
+}
+
 function loadQueueMigrationsModule(): Promise<typeof QueueMigrationsModule> {
   queueMigrationsModulePromise ??= import('./queue-migrations')
   return queueMigrationsModulePromise
+}
+
+function loadCacheMigrationsModule(): Promise<typeof CacheMigrationsModule> {
+  cacheMigrationsModulePromise ??= import('./cache-migrations')
+  return cacheMigrationsModulePromise
 }
 
 function loadGeneratorsModule(): Promise<typeof GeneratorsModule> {
@@ -143,6 +164,10 @@ function loadProjectScaffoldModule(): Promise<typeof ProjectScaffoldModule> {
 type QueueExecutorKey = keyof QueueCommandExecutors
 type QueueExecutorLoaderMap = {
   [TKey in QueueExecutorKey]: () => Promise<NonNullable<QueueCommandExecutors[TKey]>>
+}
+type CacheExecutorKey = keyof CacheCommandExecutors
+type CacheExecutorLoaderMap = {
+  [TKey in CacheExecutorKey]: () => Promise<NonNullable<CacheCommandExecutors[TKey]>>
 }
 type ProjectExecutorKey = keyof ProjectCommandExecutors
 type ProjectExecutorLoaderMap = {
@@ -200,6 +225,12 @@ const queueExecutorLoaders: QueueExecutorLoaderMap = {
   runQueueClearCommand: async () => (await loadQueueModule()).runQueueClearCommand,
 }
 
+const cacheExecutorLoaders: CacheExecutorLoaderMap = {
+  runCacheTableCommand: async () => (await loadCacheMigrationsModule()).runCacheTableCommand,
+  runCacheClearCommand: async () => (await loadCacheModule()).runCacheClearCommand,
+  runCacheForgetCommand: async () => (await loadCacheModule()).runCacheForgetCommand,
+}
+
 const broadcastExecutorLoaders: BroadcastExecutorLoaderMap = {
   runBroadcastWorkCommand: async () => (await loadBroadcastModule()).runBroadcastWorkCommand,
 }
@@ -214,6 +245,18 @@ async function resolveQueueExecutor<TKey extends QueueExecutorKey>(
   }
 
   return queueExecutorLoaders[key]()
+}
+
+async function resolveCacheExecutor<TKey extends CacheExecutorKey>(
+  cacheExecutors: CacheCommandExecutors,
+  key: TKey,
+): Promise<NonNullable<CacheCommandExecutors[TKey]>> {
+  const existing = cacheExecutors[key]
+  if (existing) {
+    return existing as NonNullable<CacheCommandExecutors[TKey]>
+  }
+
+  return cacheExecutorLoaders[key]()
 }
 
 async function resolveBroadcastExecutor<TKey extends BroadcastExecutorKey>(
@@ -308,6 +351,7 @@ export function createInternalCommands(
   projectExecutors: ProjectCommandExecutors = {},
   broadcastExecutors: BroadcastCommandExecutors = {},
   securityExecutors: SecurityCommandExecutors = {},
+  cacheExecutors: CacheCommandExecutors = {},
 ): CommandDefinition[] {
   return [
     {
@@ -325,7 +369,7 @@ export function createInternalCommands(
     {
       name: 'new',
       description: 'Scaffold a new Holo project',
-      usage: 'holo-js new <name> [--framework <nuxt|next|sveltekit>] [--database <sqlite|mysql|postgres>] [--package-manager <bun|npm|pnpm|yarn>] [--package <storage|events|queue|validation|forms|auth|authorization|notifications|mail|broadcast|security>] [--storage-default-disk <local|public>]',
+      usage: 'holo new <name> [--framework <nuxt|next|sveltekit>] [--database <sqlite|mysql|postgres>] [--package-manager <bun|npm|pnpm|yarn>] [--package <storage|events|queue|validation|forms|auth|authorization|notifications|mail|broadcast|security|cache>] [--storage-default-disk <local|public>]',
       source: 'internal',
       async prepare(input) {
         const resolved = await resolveNewProjectInput(context, input)
@@ -375,7 +419,7 @@ export function createInternalCommands(
     {
       name: 'install',
       description: 'Install first-party Holo support into an existing project.',
-      usage: 'holo install <queue|events|auth|authorization|notifications|mail|broadcast|security> [--driver <sync|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
+      usage: 'holo install <queue|events|auth|authorization|notifications|mail|broadcast|security|cache> [--driver <queue: sync|file|redis|database; cache: file|redis|database; security: file|redis>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
       source: 'internal',
       async prepare(input) {
         const target = normalizeChoice(
@@ -410,6 +454,10 @@ export function createInternalCommands(
           ? (requestedDriver
               ? normalizeChoice(requestedDriver, SUPPORTED_QUEUE_INSTALL_DRIVERS, 'queue driver')
               : 'sync')
+          : target === 'cache'
+            ? (requestedDriver
+                ? normalizeChoice(requestedDriver, SUPPORTED_CACHE_INSTALL_DRIVERS, 'cache driver')
+                : 'file')
           : undefined
         const socialProviders = target === 'auth'
           ? ((collectMultiStringFlag(input.flags, 'provider') ?? [])
@@ -606,6 +654,28 @@ export function createInternalCommands(
           return
         }
 
+        if (target === 'cache') {
+          const { installCacheIntoProject } = await loadProjectScaffoldModule()
+          const result = await installCacheIntoProject(context.projectRoot, {
+            driver: String(commandContext.flags.driver ?? 'file') as SupportedCacheInstallerDriver,
+          })
+
+          const changed = result.createdCacheConfig
+            || result.createdRedisConfig
+            || result.updatedPackageJson
+            || result.updatedEnv
+            || result.updatedEnvExample
+
+          writeLine(context.stdout, changed ? 'Installed cache support.' : 'Cache support is already installed.')
+          if (result.createdCacheConfig) writeLine(context.stdout, '  - created config/cache.ts')
+          if (result.createdRedisConfig) writeLine(context.stdout, '  - created config/redis.ts')
+          if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
+          if (result.updatedEnv) writeLine(context.stdout, '  - updated .env')
+          if (result.updatedEnvExample) writeLine(context.stdout, '  - updated .env.example')
+          if (result.databaseDriver) writeLine(context.stdout, '  - run "holo cache:table" to create the cache tables')
+          return
+        }
+
         if (target !== 'queue') {
           throw new Error(`Unsupported install target: ${target || '(empty)'}.`)
         }
@@ -682,6 +752,67 @@ export function createInternalCommands(
       async run() {
         const runBroadcastWorkCommand = await resolveBroadcastExecutor(broadcastExecutors, 'runBroadcastWorkCommand')
         await runBroadcastWorkCommand(context, context.projectRoot)
+      },
+    },
+    {
+      name: 'cache:table',
+      description: 'Generate the database cache table migration.',
+      usage: 'holo cache:table',
+      source: 'internal',
+      async prepare() {
+        return { args: [], flags: {} }
+      },
+      async run() {
+        const runCacheTableCommand = await resolveCacheExecutor(cacheExecutors, 'runCacheTableCommand')
+        await runCacheTableCommand(context, context.projectRoot)
+      },
+    },
+    {
+      name: 'cache:clear',
+      description: 'Clear the configured cache store.',
+      usage: 'holo cache:clear [--driver <name>]',
+      source: 'internal',
+      async prepare(input) {
+        const driver = resolveStringFlag(input.flags, 'driver', 'd')
+        return {
+          args: [],
+          flags: {
+            ...(driver ? { driver } : {}),
+          },
+        }
+      },
+      async run(commandContext) {
+        const runCacheClearCommand = await resolveCacheExecutor(cacheExecutors, 'runCacheClearCommand')
+        await runCacheClearCommand(
+          context,
+          context.projectRoot,
+          typeof commandContext.flags.driver === 'string' ? commandContext.flags.driver : undefined,
+        )
+      },
+    },
+    {
+      name: 'cache:forget',
+      description: 'Forget a single cache key.',
+      usage: 'holo cache:forget <key> [--driver <name>]',
+      source: 'internal',
+      async prepare(input) {
+        const key = await ensureRequiredArg(context, input, 0, 'Cache key')
+        const driver = resolveStringFlag(input.flags, 'driver', 'd')
+        return {
+          args: [key],
+          flags: {
+            ...(driver ? { driver } : {}),
+          },
+        }
+      },
+      async run(commandContext) {
+        const runCacheForgetCommand = await resolveCacheExecutor(cacheExecutors, 'runCacheForgetCommand')
+        await runCacheForgetCommand(
+          context,
+          context.projectRoot,
+          String(commandContext.args[0] ?? ''),
+          typeof commandContext.flags.driver === 'string' ? commandContext.flags.driver : undefined,
+        )
       },
     },
     {
@@ -1465,6 +1596,9 @@ export async function runCli(argv: readonly string[], io: IoStreams): Promise<nu
       || requestedCommandName === 'prepare'
       || requestedCommandName === 'dev'
       || requestedCommandName === 'build'
+      || requestedCommandName === 'cache:table'
+      || requestedCommandName === 'cache:clear'
+      || requestedCommandName === 'cache:forget'
       || requestedCommandName === 'broadcast:work'
       || requestedCommandName === 'queue:table'
       || requestedCommandName === 'queue:failed-table'

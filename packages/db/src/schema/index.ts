@@ -36,6 +36,7 @@ export type {
   TableIndexDefinition,
   VectorValue,
 } from './types'
+export type { BoundTableDefinition, DefineTableOptions } from './defineTable'
 export type {
   GeneratedSchemaTable,
   GeneratedSchemaTableName,

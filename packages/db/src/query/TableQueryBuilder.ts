@@ -1,11 +1,27 @@
-import { CompilerError, SecurityError } from '../core/errors'
+import { CompilerError, ConfigurationError, SecurityError } from '../core/errors'
 import { redactBindings } from '../security/policy'
+import {
+  getDatabaseQueryCacheBridge,
+  invalidateQueryCacheDependencies,
+  normalizeQueryCacheConfig,
+  resolveQueryCacheDependencies,
+  resolveQueryCacheKey,
+  type NormalizedQueryCacheConfig,
+  type QueryCacheConfig,
+  type QueryCacheTtlInput,
+} from '../cache'
 import { compareChunkValuesAscending, compareChunkValuesDescending } from './chunkOrdering'
 import {
   createCursorPaginator,
   createPaginator,
   createSimplePaginator,
 } from './paginator'
+import {
+  assertPositiveInteger,
+  decodeOffsetCursor,
+  encodeOffsetCursor,
+  normalizePaginationParameterName,
+} from './pagination'
 import {
   createDeleteQueryPlan,
   createInsertQueryPlan,
@@ -99,6 +115,7 @@ export class TableQueryBuilder<
     table: TTableOrName,
     private readonly connection: DatabaseContext,
     plan?: SelectQueryPlan,
+    private readonly queryCacheConfig?: NormalizedQueryCacheConfig,
   ) {
     this.source = createTableSource(table)
     this.plan = plan ?? createSelectQueryPlan(this.source)
@@ -125,6 +142,7 @@ export class TableQueryBuilder<
       table,
       this.connection,
       withSource(this.plan, createTableSource(table)),
+      this.queryCacheConfig,
     )
   }
 
@@ -1186,8 +1204,8 @@ export class TableQueryBuilder<
   }
 
   forPage(page: number, perPage = 15): TableQueryBuilder<TTableOrName, TSelectedRow> {
-    this.assertPositiveInteger(page, 'Page')
-    this.assertPositiveInteger(perPage, 'Per-page value')
+    assertPositiveInteger(page, 'Page', message => new SecurityError(message))
+    assertPositiveInteger(perPage, 'Per-page value', message => new SecurityError(message))
 
     return this.limit(perPage).offset((page - 1) * perPage)
   }
@@ -1225,8 +1243,65 @@ export class TableQueryBuilder<
     return this
   }
 
+  cache(
+    config: QueryCacheTtlInput | QueryCacheConfig,
+  ): TableQueryBuilder<TTableOrName, TSelectedRow> {
+    return new TableQueryBuilder<TTableOrName, TSelectedRow>(
+      (this.source.table ?? this.source.tableName) as TTableOrName,
+      this.connection,
+      this.plan,
+      normalizeQueryCacheConfig(config),
+    )
+  }
+
   async get<TRow extends Record<string, unknown> = TSelectedRow>(): Promise<TRow[]> {
-    const result = await this.connection.queryCompiled<TRow>(this.toSQL())
+    const statement = this.toSQL()
+    const cacheConfig = this.queryCacheConfig
+    if (!cacheConfig || this.plan.lockMode) {
+      const result = await this.connection.queryCompiled<TRow>(statement)
+      return result.rows
+    }
+
+    const bridge = getDatabaseQueryCacheBridge()
+    if (!bridge) {
+      throw new ConfigurationError('[@holo-js/db] Query caching requires @holo-js/cache to be installed and configured.')
+    }
+
+    const cacheKey = resolveQueryCacheKey(statement, this.connection.getConnectionName(), cacheConfig)
+    const dependencies = resolveQueryCacheDependencies(
+      this.plan,
+      this.connection.getConnectionName(),
+      cacheConfig.invalidate,
+    )
+
+    if (cacheConfig.flexible) {
+      return bridge.flexible(
+        cacheKey,
+        cacheConfig.flexible,
+        async () => {
+          const result = await this.connection.queryCompiled<TRow>(statement)
+          return result.rows
+        },
+        {
+          driver: cacheConfig.driver,
+          dependencies,
+        },
+      )
+    }
+
+    const cached = await bridge.get<TRow[]>(cacheKey, {
+      driver: cacheConfig.driver,
+    })
+    if (cached !== null) {
+      return cached
+    }
+
+    const result = await this.connection.queryCompiled<TRow>(statement)
+    await bridge.put(cacheKey, result.rows, {
+      driver: cacheConfig.driver,
+      ttl: cacheConfig.ttl,
+      dependencies,
+    })
     return result.rows
   }
 
@@ -1249,9 +1324,9 @@ export class TableQueryBuilder<
     page = 1,
     options: PaginationOptions = {},
   ): Promise<PaginatedResult<TRow>> {
-    this.assertPositiveInteger(perPage, 'Per-page value')
-    this.assertPositiveInteger(page, 'Page')
-    const pageName = this.normalizePaginationParameterName(options.pageName, 'page')
+    assertPositiveInteger(perPage, 'Per-page value', message => new SecurityError(message))
+    assertPositiveInteger(page, 'Page', message => new SecurityError(message))
+    const pageName = normalizePaginationParameterName(options.pageName, 'page', message => new SecurityError(message))
 
     const rows = await this.getUnpaginatedRows<TRow>()
     const total = rows.length
@@ -1277,9 +1352,9 @@ export class TableQueryBuilder<
     page = 1,
     options: PaginationOptions = {},
   ): Promise<SimplePaginatedResult<TRow>> {
-    this.assertPositiveInteger(perPage, 'Per-page value')
-    this.assertPositiveInteger(page, 'Page')
-    const pageName = this.normalizePaginationParameterName(options.pageName, 'page')
+    assertPositiveInteger(perPage, 'Per-page value', message => new SecurityError(message))
+    assertPositiveInteger(page, 'Page', message => new SecurityError(message))
+    const pageName = normalizePaginationParameterName(options.pageName, 'page', message => new SecurityError(message))
 
     const rows = await this.getUnpaginatedRows<TRow>()
     const offset = (page - 1) * perPage
@@ -1304,9 +1379,9 @@ export class TableQueryBuilder<
     cursor: string | null = null,
     options: CursorPaginationOptions = {},
   ): Promise<CursorPaginatedResult<TRow>> {
-    this.assertPositiveInteger(perPage, 'Per-page value')
-    const cursorName = this.normalizePaginationParameterName(options.cursorName, 'cursor')
-    const offset = this.decodeCursor(cursor)
+    assertPositiveInteger(perPage, 'Per-page value', message => new SecurityError(message))
+    const cursorName = normalizePaginationParameterName(options.cursorName, 'cursor', message => new SecurityError(message))
+    const offset = decodeOffsetCursor(cursor, message => new SecurityError(message))
     const orderedQuery = this.prepareCursorPaginationQuery()
     const rows = await orderedQuery.getUnpaginatedRows<TRow>()
     const pageRows = rows.slice(offset, offset + perPage + 1)
@@ -1316,7 +1391,7 @@ export class TableQueryBuilder<
     return createCursorPaginator(data, {
       perPage,
       cursorName,
-      nextCursor: hasMorePages ? this.encodeCursor(offset + perPage) : null,
+      nextCursor: hasMorePages ? encodeOffsetCursor(offset + perPage) : null,
       prevCursor: cursor,
     })
   }
@@ -1325,7 +1400,7 @@ export class TableQueryBuilder<
     size: number,
     callback: (rows: readonly TRow[], page: number) => unknown | Promise<unknown>,
   ): Promise<void> {
-    this.assertPositiveInteger(size, 'Chunk size')
+    assertPositiveInteger(size, 'Chunk size', message => new SecurityError(message))
 
     const rows = await this.getUnpaginatedRows<TRow>()
     let page = 1
@@ -1345,7 +1420,7 @@ export class TableQueryBuilder<
     callback: (rows: readonly TRow[], page: number) => unknown | Promise<unknown>,
     column = 'id',
   ): Promise<void> {
-    this.assertPositiveInteger(size, 'Chunk size')
+    assertPositiveInteger(size, 'Chunk size', message => new SecurityError(message))
 
     const rows = await this.getUnpaginatedRows<TRow>()
     const sortedRows = [...rows].sort((left, right) => {
@@ -1370,7 +1445,7 @@ export class TableQueryBuilder<
     callback: (rows: readonly TRow[], page: number) => unknown | Promise<unknown>,
     column = 'id',
   ): Promise<void> {
-    this.assertPositiveInteger(size, 'Chunk size')
+    assertPositiveInteger(size, 'Chunk size', message => new SecurityError(message))
 
     const rows = await this.getUnpaginatedRows<TRow>()
     const sortedRows = [...rows].sort((left, right) => {
@@ -1393,7 +1468,7 @@ export class TableQueryBuilder<
   async* lazy<TRow extends Record<string, unknown> = TSelectedRow>(
     size = 1000,
   ): AsyncGenerator<TRow, void, unknown> {
-    this.assertPositiveInteger(size, 'Chunk size')
+    assertPositiveInteger(size, 'Chunk size', message => new SecurityError(message))
 
     const rows = await this.getUnpaginatedRows<TRow>()
     for (let index = 0; index < rows.length; index += size) {
@@ -1505,9 +1580,11 @@ export class TableQueryBuilder<
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
-    return this.connection.executeCompiled(this.getCompiler().compile(
+    const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createInsertQueryPlan(this.source, rows),
     ))
+    await this.invalidateSourceTableQueries()
+    return result
   }
 
   async insertOrIgnore(
@@ -1516,9 +1593,11 @@ export class TableQueryBuilder<
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
-    return this.connection.executeCompiled(this.getCompiler().compile(
+    const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createInsertQueryPlan(this.source, rows, { ignoreConflicts: true }),
     ))
+    await this.invalidateSourceTableQueries()
+    return result
   }
 
   async insertGetId(values: Readonly<Record<string, unknown>>): Promise<number | string | undefined> {
@@ -1534,9 +1613,11 @@ export class TableQueryBuilder<
     const rows = Array.isArray(values)
       ? values.map(value => this.normalizeWriteRecord(value))
       : [this.normalizeWriteRecord(values as Readonly<Record<string, unknown>>)]
-    return this.connection.executeCompiled(this.getCompiler().compile(
+    const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createUpsertQueryPlan(this.source, rows, uniqueBy, updateColumns),
     ))
+    await this.invalidateSourceTableQueries()
+    return result
   }
 
   async increment(
@@ -1556,9 +1637,13 @@ export class TableQueryBuilder<
   }
 
   async update(values: Readonly<Record<string, unknown>>): Promise<DriverExecutionResult> {
-    return this.connection.executeCompiled(this.getCompiler().compile(
+    const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createUpdateQueryPlan(this.source, this.plan.predicates, this.normalizeUpdateValues(values)),
     ))
+    if (result.affectedRows !== 0) {
+      await this.invalidateSourceTableQueries()
+    }
+    return result
   }
 
   async updateJson(
@@ -1569,9 +1654,13 @@ export class TableQueryBuilder<
   }
 
   async delete(): Promise<DriverExecutionResult> {
-    return this.connection.executeCompiled(this.getCompiler().compile(
+    const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createDeleteQueryPlan(this.source, this.plan.predicates),
     ))
+    if (result.affectedRows !== 0) {
+      await this.invalidateSourceTableQueries()
+    }
+    return result
   }
 
   async unsafeQuery<TRow extends Record<string, unknown> = Record<string, unknown>>(
@@ -1596,7 +1685,13 @@ export class TableQueryBuilder<
     plan: SelectQueryPlan,
   ): TableQueryBuilder<TTableOrName, TRow> {
     const table = (this.source.table ?? this.source.tableName) as TTableOrName
-    return new TableQueryBuilder<TTableOrName, TRow>(table, this.connection, plan)
+    return new TableQueryBuilder<TTableOrName, TRow>(table, this.connection, plan, this.queryCacheConfig)
+  }
+
+  private async invalidateSourceTableQueries(): Promise<void> {
+    await invalidateQueryCacheDependencies(this.connection, [
+      `db:${this.connection.getConnectionName()}:${this.source.tableName}`,
+    ])
   }
 
   private getCompiler(): SQLQueryCompiler {
@@ -1663,7 +1758,12 @@ export class TableQueryBuilder<
     }
 
     const primaryKey = this.resolvePrimaryKeyColumn()
-    const rows = await this.select(primaryKey as never, column as never).get() as Record<string, unknown>[]
+    const uncachedSelection = new TableQueryBuilder<TTableOrName, Record<string, unknown>>(
+      (this.source.table ?? this.source.tableName) as TTableOrName,
+      this.connection,
+      withSelections(this.plan, [primaryKey as never, column as never]),
+    )
+    const rows = await uncachedSelection.get() as Record<string, unknown>[]
     let affectedRows = 0
     let lastInsertId: number | string | undefined
 
@@ -1751,26 +1851,6 @@ export class TableQueryBuilder<
       .orderByVectorSimilarity(column as never, vector)
   }
 
-  private assertPositiveInteger(value: number, kind: string): void {
-    if (!Number.isInteger(value) || value <= 0) {
-      throw new SecurityError(`${kind} must be a positive integer.`)
-    }
-  }
-
-  private normalizePaginationParameterName(value: string | undefined, fallback: string): string {
-    if (typeof value === 'undefined') {
-      return fallback
-    }
-
-    if (typeof value !== 'string' || value.trim().length === 0) {
-      throw new SecurityError(
-        `${fallback === 'cursor' ? 'Cursor' : 'Page'} parameter name must be a non-empty string.`,
-      )
-    }
-
-    return value
-  }
-
   private prepareCursorPaginationQuery(): TableQueryBuilder<TTableOrName, TSelectedRow> {
     if (this.plan.orderBy.some(orderBy => orderBy.kind === 'random')) {
       throw new SecurityError('Cursor pagination cannot use random ordering.')
@@ -1785,28 +1865,6 @@ export class TableQueryBuilder<
     }
 
     return this
-  }
-
-  private encodeCursor(offset: number): string {
-    return Buffer.from(JSON.stringify({ offset }), 'utf8').toString('base64url')
-  }
-
-  private decodeCursor(cursor: string | null): number {
-    if (cursor === null) {
-      return 0
-    }
-
-    try {
-      const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { offset?: unknown }
-      const offset = decoded.offset
-      if (typeof offset !== 'number' || !Number.isInteger(offset) || offset < 0) {
-        throw new Error('invalid offset')
-      }
-
-      return offset
-    } catch {
-      throw new SecurityError('Cursor is malformed.')
-    }
   }
 
   private async aggregateNumeric(column: string, kind: 'sum'): Promise<number> {

@@ -127,6 +127,7 @@ describe('generated schema helpers', () => {
 
     const rendered = renderGeneratedSchemaModule([numberedTable, auditEvents, blankIdentifierTable, fallbackKindsTable])
 
+    expect(rendered).toContain('import { column, defineGeneratedTable, registerGeneratedTables } from \'@holo-js/db\'')
     expect(rendered).toContain('export const auditEvents = defineGeneratedTable("audit.events", {')
     expect(rendered).toContain('export const table = defineGeneratedTable("---", {')
     expect(rendered).toContain('export const table123WeirdTable = defineGeneratedTable("123-weird-table", {')
@@ -163,7 +164,11 @@ describe('generated schema helpers', () => {
     expect(rendered).toContain('"audit.events": typeof auditEvents')
     expect(rendered).toContain('"---": typeof table')
     expect(rendered).toContain('"123-weird-table": typeof table123WeirdTable')
+    expect(rendered).toContain('declare module \'@holo-js/db\' {')
+    expect(rendered).toContain('export const tables = { ')
     expect(rendered).toContain('registerGeneratedTables(tables)')
+    expect(rendered).not.toContain('@holo-js/db/src/')
+    expect(rendered).not.toContain('../node_modules/@holo-js/db/src/')
   })
 
   it('resolves explicit generated tables and falls back to a minimal table shape when absent', () => {

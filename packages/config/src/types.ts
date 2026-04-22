@@ -284,6 +284,88 @@ export interface NormalizedHoloBroadcastConfig {
   readonly worker: NormalizedBroadcastWorkerConfig
 }
 
+export type CacheDriver = 'memory' | 'file' | 'redis' | 'database'
+
+export interface CacheMemoryDriverConfig {
+  readonly driver: 'memory'
+  readonly maxEntries?: number | string
+  readonly prefix?: string
+}
+
+export interface CacheFileDriverConfig {
+  readonly driver: 'file'
+  readonly path?: string
+  readonly prefix?: string
+}
+
+export interface CacheRedisDriverConfig {
+  readonly driver: 'redis'
+  readonly connection?: string
+  readonly prefix?: string
+}
+
+export interface CacheDatabaseDriverConfig {
+  readonly driver: 'database'
+  readonly connection?: string
+  readonly table?: string
+  readonly lockTable?: string
+  readonly prefix?: string
+}
+
+export type CacheDriverConfig
+  = CacheMemoryDriverConfig
+  | CacheFileDriverConfig
+  | CacheRedisDriverConfig
+  | CacheDatabaseDriverConfig
+
+export interface HoloCacheConfig {
+  readonly default?: string
+  readonly prefix?: string
+  readonly drivers?: Readonly<Record<string, CacheDriverConfig>>
+}
+
+export interface NormalizedCacheMemoryDriverConfig {
+  readonly name: string
+  readonly driver: 'memory'
+  readonly prefix: string
+  readonly maxEntries?: number
+}
+
+export interface NormalizedCacheFileDriverConfig {
+  readonly name: string
+  readonly driver: 'file'
+  readonly path: string
+  readonly prefix: string
+}
+
+export interface NormalizedCacheRedisDriverConfig {
+  readonly name: string
+  readonly driver: 'redis'
+  readonly connection: string
+  readonly prefix: string
+}
+
+export interface NormalizedCacheDatabaseDriverConfig {
+  readonly name: string
+  readonly driver: 'database'
+  readonly connection: string
+  readonly table: string
+  readonly lockTable: string
+  readonly prefix: string
+}
+
+export type NormalizedCacheDriverConfig
+  = NormalizedCacheMemoryDriverConfig
+  | NormalizedCacheFileDriverConfig
+  | NormalizedCacheRedisDriverConfig
+  | NormalizedCacheDatabaseDriverConfig
+
+export interface NormalizedHoloCacheConfig {
+  readonly default: string
+  readonly prefix: string
+  readonly drivers: Readonly<Record<string, NormalizedCacheDriverConfig>>
+}
+
 export type SessionCookieSameSite = 'lax' | 'strict' | 'none'
 
 export interface HoloSessionCookieConfig {
@@ -919,6 +1001,7 @@ export interface HoloConfigRegistry {
   app: NormalizedHoloAppConfig
   database: NormalizedHoloDatabaseConfig
   redis: NormalizedHoloRedisConfig
+  cache: NormalizedHoloCacheConfig
   storage: NormalizedHoloStorageConfig
   queue: NormalizedHoloQueueConfig
   broadcast: NormalizedHoloBroadcastConfig
@@ -943,6 +1026,7 @@ export interface LoadedHoloConfig<TCustom extends HoloConfigMap = HoloConfigMap>
   readonly app: NormalizedHoloAppConfig
   readonly database: NormalizedHoloDatabaseConfig
   readonly redis: NormalizedHoloRedisConfig
+  readonly cache: NormalizedHoloCacheConfig
   readonly storage: NormalizedHoloStorageConfig
   readonly queue: NormalizedHoloQueueConfig
   readonly broadcast: NormalizedHoloBroadcastConfig

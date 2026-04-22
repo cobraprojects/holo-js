@@ -1,0 +1,39 @@
+{
+  "name": "@holo-js/cache-redis",
+  "version": "0.1.2",
+  "description": "Holo-JS Framework - Redis cache driver",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "stub": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest --run"
+  },
+  "peerDependencies": {
+    "@holo-js/cache": "^0.1.2"
+  },
+  "dependencies": {
+    "ioredis": "catalog:",
+    "tslib": "^2.8.1"
+  },
+  "devDependencies": {
+    "@holo-js/cache": "workspace:*",
+    "@types/node": "^22.10.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

@@ -3,6 +3,7 @@ import {
   createConfigAccessors,
   defineAuthConfig,
   defineBroadcastConfig,
+  defineCacheConfig,
   defineConfig,
   defineMailConfig,
   defineNotificationsConfig,
@@ -70,6 +71,20 @@ describe('@holo-js/config typing', () => {
         path: '/',
       },
     })
+    const cache = defineCacheConfig({
+      default: 'redis',
+      prefix: 'app',
+      drivers: {
+        redis: {
+          driver: 'redis',
+          connection: 'cache',
+        },
+        memory: {
+          driver: 'memory',
+          maxEntries: 100,
+        },
+      },
+    })
     const security = defineSecurityConfig({
       csrf: {
         enabled: true,
@@ -120,6 +135,7 @@ describe('@holo-js/config typing', () => {
       app: {} as HoloConfigRegistry['app'],
       database: {} as HoloConfigRegistry['database'],
       redis: {} as HoloConfigRegistry['redis'],
+      cache: cache as unknown as HoloConfigRegistry['cache'],
       storage: {} as HoloConfigRegistry['storage'],
       queue: queue as unknown as HoloConfigRegistry['queue'],
       broadcast: broadcast as unknown as HoloConfigRegistry['broadcast'],
@@ -149,6 +165,7 @@ describe('@holo-js/config typing', () => {
       app: HoloConfigRegistry['app']
       database: HoloConfigRegistry['database']
       redis: HoloConfigRegistry['redis']
+      cache: HoloConfigRegistry['cache']
       storage: HoloConfigRegistry['storage']
       queue: HoloConfigRegistry['queue']
       broadcast: HoloConfigRegistry['broadcast']
@@ -161,6 +178,8 @@ describe('@holo-js/config typing', () => {
       services: typeof services
     }> = 'services.mailgun.secret'
     const queueDefault: string = accessors.useConfig('queue.default')
+    const cacheDefault: string = accessors.useConfig('cache.default')
+    const cachePrefix: string = accessors.useConfig('cache.prefix')
     const broadcastDefault: string = accessors.useConfig('broadcast.default')
     const mailDefault: string = accessors.useConfig('mail.default')
     const notificationsTable: string = accessors.useConfig('notifications.table')
@@ -180,6 +199,8 @@ describe('@holo-js/config typing', () => {
     void clerkSessionCookie
     void nestedPath
     void queueDefault
+    void cacheDefault
+    void cachePrefix
     void broadcastDefault
     void mailDefault
     void notificationsTable

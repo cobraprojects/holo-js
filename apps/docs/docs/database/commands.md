@@ -70,6 +70,15 @@ Use:
 The generator can still infer common create, alter, and drop shapes from conventional file names, but
 the flags make the intended scaffold explicit.
 
+### Create cache tables
+
+```bash
+bunx holo cache:table
+```
+
+Use this when your cache config uses the `database` driver. The generator creates a normal migration file under
+`server/db/migrations` for the cache entry and cache lock tables.
+
 ### Create a seeder
 
 ```bash
@@ -162,6 +171,17 @@ bunx holo prune Session AuditLog
 If you name an unknown model, the command fails. If you name a registered model that does not define
 `prunable`, the command also fails. When no model names are passed and no registered models are prunable,
 the command succeeds and reports that there was nothing to prune.
+
+### Cache maintenance
+
+```bash
+bunx holo cache:clear
+bunx holo cache:clear --driver redis
+bunx holo cache:forget dashboard.stats
+```
+
+Use these commands when you want to clear one configured store or drop one specific key without writing a custom
+script.
 
 ## Interactive prompts
 
