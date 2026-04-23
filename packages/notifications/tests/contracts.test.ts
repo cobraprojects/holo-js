@@ -55,8 +55,9 @@ describe('@holo-js/notifications contracts', () => {
 
   it('rejects malformed definitions, delays, and queue options', () => {
     expect(() => defineNotification({
+      // @ts-expect-error - intentionally returning wrong channel type to test validation
       via() {
-        return ['email'] as never
+        return ['email']
       },
       build: {},
     })).toThrow('must define at least one channel payload builder')
