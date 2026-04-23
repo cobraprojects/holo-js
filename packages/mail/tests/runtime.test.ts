@@ -30,7 +30,7 @@ const previousAppEnv = process.env.APP_ENV
 const previousNodeEnv = process.env.NODE_ENV
 
 type NormalizedMailMailerConfig = NormalizedHoloMailConfig['mailers'][string]
-type BuiltInDriverName = 'preview' | 'fake' | 'log' | 'smtp'
+type BuiltInDriverName = keyof typeof mailRuntimeInternals.builtInDrivers
 
 function getMailerConfig<TDriver extends NormalizedMailMailerConfig['driver']>(
   config: NormalizedHoloMailConfig,

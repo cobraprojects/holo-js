@@ -9,7 +9,10 @@ import {
   unreadNotifications,
 } from './runtime'
 
-export { defineNotificationsConfig } from '@holo-js/config'
+import {
+  defineNotificationsConfig as defineBaseNotificationsConfig,
+  type HoloNotificationsConfig,
+} from '@holo-js/config'
 export type { HoloNotificationsConfig, NormalizedHoloNotificationsConfig } from '@holo-js/config'
 
 export {
@@ -82,6 +85,10 @@ export {
   resetNotificationsRuntime,
   unreadNotifications,
 } from './runtime'
+
+export function defineNotificationsConfig<const TConfig extends HoloNotificationsConfig>(config: TConfig) {
+  return defineBaseNotificationsConfig(config)
+}
 
 const notifications = Object.freeze({
   deleteNotifications,

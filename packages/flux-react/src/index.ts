@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useReducer, useRef, useSyncExternalStore } from 'react'
 import { getFluxClient, type FluxClient, type FluxConnectionStatus, type FluxListenerControls } from '@holo-js/flux'
-import type { BroadcastJsonObject, BroadcastPayloadFor } from '@holo-js/broadcast'
+import type { BroadcastJsonObject, BroadcastPayloadFor, GeneratedBroadcastManifest } from '@holo-js/broadcast'
 
-export interface FluxHookOptions<TClient extends FluxClient = FluxClient> {
-  readonly client?: TClient
+export interface FluxHookOptions<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest> {
+  readonly client?: FluxClient<TManifest>
   readonly onUnmount?: (cleanup: () => void) => void
 }
 
-export interface FluxConnectionStatusHookOptions<TClient extends FluxClient = FluxClient> extends FluxHookOptions<TClient> {
+export interface FluxConnectionStatusHookOptions<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest> extends FluxHookOptions<TManifest> {
   readonly onChange?: (status: FluxConnectionStatus) => void
 }
 
@@ -24,8 +24,10 @@ type AnyFluxPresenceSubscription = ReturnType<FluxClient['presence']> & {
   __onPresenceChange?(callback: (members: readonly BroadcastJsonObject[]) => void): () => void
 }
 
-function resolveClient<TClient extends FluxClient = FluxClient>(options: FluxHookOptions<TClient>): TClient {
-  return (options.client ?? getFluxClient()) as TClient
+function resolveClient<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
+  options: FluxHookOptions<TManifest>,
+): FluxClient<TManifest> {
+  return (options.client ?? getFluxClient()) as FluxClient<TManifest>
 }
 
 const noop = Function.prototype as () => void
@@ -117,11 +119,11 @@ function useEventSubscription<TEvent extends string>(
   }, onUnmount, dependencies)
 }
 
-export function useFlux<TEvent extends string>(
+export function useFlux<TEvent extends string, TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
   channel: string,
   events: TEvent | readonly TEvent[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxHookOptions = {},
+  options: FluxHookOptions<TManifest> = {},
 ): FluxListenerControls {
   const client = resolveClient(options)
   return useEventSubscription(
@@ -133,11 +135,11 @@ export function useFlux<TEvent extends string>(
   )
 }
 
-export function useFluxPublic<TEvent extends string>(
+export function useFluxPublic<TEvent extends string, TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
   channel: string,
   events: TEvent | readonly TEvent[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxHookOptions = {},
+  options: FluxHookOptions<TManifest> = {},
 ): FluxListenerControls {
   const client = resolveClient(options)
   return useEventSubscription(
@@ -149,19 +151,19 @@ export function useFluxPublic<TEvent extends string>(
   )
 }
 
-export function useFluxPrivate<TEvent extends string>(
+export function useFluxPrivate<TEvent extends string, TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
   channel: string,
   events: TEvent | readonly TEvent[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxHookOptions = {},
+  options: FluxHookOptions<TManifest> = {},
 ): FluxListenerControls {
   return useFlux(channel, events, callback, options)
 }
 
-export function useFluxPresence<TMember = unknown>(
+export function useFluxPresence<TMember = unknown, TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
   channel: string,
   callbacks: FluxPresenceHookCallbacks<TMember> = {},
-  options: FluxHookOptions = {},
+  options: FluxHookOptions<TManifest> = {},
 ): FluxPresenceHookState<TMember> {
   const client = resolveClient(options)
   const membersRef = useRef<readonly TMember[]>([])
@@ -227,10 +229,10 @@ export function useFluxPresence<TMember = unknown>(
   })
 }
 
-export function useFluxNotification(
+export function useFluxNotification<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
   channel: string,
   callback: (payload: unknown) => void,
-  options: FluxHookOptions = {},
+  options: FluxHookOptions<TManifest> = {},
 ): FluxListenerControls {
   const client = resolveClient(options)
   const callbackRef = useLatestRef(callback)
@@ -241,17 +243,17 @@ export function useFluxNotification(
   }, options.onUnmount, [client, channel])
 }
 
-export function useFluxModel<TEvent extends string>(
+export function useFluxModel<TEvent extends string, TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
   channel: string,
   events: TEvent | readonly TEvent[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxHookOptions = {},
+  options: FluxHookOptions<TManifest> = {},
 ): FluxListenerControls {
   return useFluxPrivate(channel, events, callback, options)
 }
 
-export function useFluxConnectionStatus(
-  options: FluxConnectionStatusHookOptions = {},
+export function useFluxConnectionStatus<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
+  options: FluxConnectionStatusHookOptions<TManifest> = {},
 ): FluxConnectionStatus {
   const client = resolveClient(options)
   const onChangeRef = useLatestRef(options.onChange)

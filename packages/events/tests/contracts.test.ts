@@ -100,6 +100,22 @@ describe('@holo-js/events contracts', () => {
     expect(Object.isFrozen(multiple.listensTo)).toBe(true)
   })
 
+  it('normalizes a single listener event reference into a frozen list', () => {
+    const event = defineEvent<{ userId: string }, 'user.registered'>({
+      name: 'user.registered',
+    })
+
+    const listener = defineListener({
+      listensTo: event,
+      async handle() {
+        return 'ok'
+      },
+    })
+
+    expect(listener.listensTo).toEqual([event])
+    expect(Object.isFrozen(listener.listensTo)).toBe(true)
+  })
+
   it('rejects invalid listener definitions and metadata combinations', () => {
     const validEvent = defineEvent<{ id: string }, 'entity.created'>({
       name: 'entity.created',

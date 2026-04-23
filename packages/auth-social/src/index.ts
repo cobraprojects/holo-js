@@ -93,11 +93,47 @@ const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
 type RuntimeAuthProviderAdapter = ReturnType<typeof authRuntimeInternals.getRuntimeBindings>['providers'][string]
 
 function requireUserRecord(user: unknown, message: string): Record<string, unknown> {
-  if (!user || typeof user !== 'object') {
+  if (user == null) {
+    throw new Error(message)
+  }
+
+  if (typeof user !== 'object') {
     throw new Error(message)
   }
 
   return user as Record<string, unknown>
+}
+
+function resolveUserRecord(user: unknown, message: string): Record<string, unknown> | null {
+  if (user == null) {
+    return null
+  }
+
+  return requireUserRecord(user, message)
+}
+
+function requireUserId(
+  adapter: RuntimeAuthProviderAdapter,
+  user: unknown,
+  message: string,
+): string | number {
+  const userRecord = requireUserRecord(user, message)
+  const userId = adapter.getId(userRecord)
+
+  if (typeof userId === 'string') {
+    const normalized = userId.trim()
+    if (!normalized) {
+      throw new Error(message)
+    }
+
+    return normalized
+  }
+
+  if (typeof userId === 'number' && Number.isFinite(userId)) {
+    return userId
+  }
+
+  throw new Error(message)
 }
 
 function throwUnconfigured(): never {
@@ -236,7 +272,11 @@ function serializeLocalUser(
   user: Record<string, unknown>,
   providerName: string,
 ): AuthUserLike {
-  const id = adapter.getId(user)
+  const id = requireUserId(
+    adapter,
+    user,
+    '[@holo-js/auth-social] Auth provider users must resolve to a non-empty string or numeric id.',
+  )
   const serialized = adapter.serialize
     ? adapter.serialize(user)
     : { ...(user as Record<string, unknown>) }
@@ -263,9 +303,7 @@ async function findUserByEmail(
   }
 
   const user = await adapter.findByCredentials({ email })
-  return user
-    ? requireUserRecord(user, '[@holo-js/auth-social] Auth provider lookups must return object users.')
-    : null
+  return resolveUserRecord(user, '[@holo-js/auth-social] Auth provider lookups must return object users.')
 }
 
 function resolveEmailForCreation(
@@ -299,10 +337,13 @@ async function resolveLinkedUser(
   const verificationRequired = authBindings.config.emailVerification.required === true
 
   if (existingIdentity) {
-    const linkedUser = requireUserRecord(
+    const linkedUser = resolveUserRecord(
       await adapter.findById(existingIdentity.userId),
       `[@holo-js/auth-social] Linked social identity "${provider}:${profile.id}" references a missing local user.`,
     )
+    if (!linkedUser) {
+      throw new Error(`[@holo-js/auth-social] Linked social identity "${provider}:${profile.id}" references a missing local user.`)
+    }
 
     const serialized = serializeLocalUser(adapter, linkedUser, authProvider)
     await bindings.identityStore.save({

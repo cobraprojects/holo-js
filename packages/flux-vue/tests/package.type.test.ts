@@ -12,9 +12,9 @@ import {
 
 describe('@holo-js/flux-vue typing', () => {
   it('supports single and multi-event typed helper usage', () => {
-    const manifest: GeneratedBroadcastManifest = {
+    const manifest = {
       version: 1,
-      generatedAt: '2026-01-01T00:00:00.000Z',
+      generatedAt: '2026-01-01T00:00:00.000Z' as string,
       events: [{
         name: 'orders.updated',
         channels: [{
@@ -35,7 +35,7 @@ describe('@holo-js/flux-vue typing', () => {
         params: ['orderId'],
         whispers: ['typing.start'],
       }],
-    }
+    } as const satisfies GeneratedBroadcastManifest
 
     const client = createFluxClient({
       manifest,
@@ -54,7 +54,11 @@ describe('@holo-js/flux-vue typing', () => {
     const priv = useFluxPrivate('orders.1', 'orders.shipped', payload => {
       expectTypeOf(payload).toExtend<Record<string, unknown>>()
     }, { client })
-    const presence = useFluxPresence<{ id: string }>('chat.1', {}, { client })
+    const presence = useFluxPresence('chat.1', {
+      onHere(members: readonly { id: string }[]) {
+        void members
+      },
+    }, { client })
     const status = useFluxConnectionStatus({ client })
     expectTypeOf(presence.members).toEqualTypeOf<readonly { id: string }[]>()
     expectTypeOf(status).toExtend<{ readonly value: FluxConnectionStatus }>()

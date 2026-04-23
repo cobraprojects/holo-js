@@ -1,6 +1,6 @@
 import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
-import { join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 
 const packagesRoot = resolve('packages')
@@ -55,8 +55,8 @@ async function resolveTestTsconfigs(packageDir, generatedConfigDirs) {
   }
 
   const typeTestFiles = await collectTypeTestFiles(packageDir)
-  for (const typeTestFile of typeTestFiles) {
-    configPaths.push(await createGeneratedTypeTestConfig(packageDir, typeTestFile, generatedConfigDirs))
+  if (typeTestFiles.length > 0) {
+    configPaths.push(await createGeneratedTypeTestsBatchConfig(packageDir, typeTestFiles, generatedConfigDirs))
   }
 
   return configPaths
@@ -88,7 +88,7 @@ async function createGeneratedMainTestConfig(packageDir, generatedConfigDirs) {
   return generatedConfigPath
 }
 
-async function createGeneratedTypeTestConfig(packageDir, typeTestFile, generatedConfigDirs) {
+async function createGeneratedTypeTestsBatchConfig(packageDir, typeTestFiles, generatedConfigDirs) {
   const generatedConfigDir = await mkdtemp(join(tmpdir(), 'holo-type-test-typecheck-'))
   generatedConfigDirs.push(generatedConfigDir)
 
@@ -102,7 +102,7 @@ async function createGeneratedTypeTestConfig(packageDir, typeTestFile, generated
     },
     include: [
       join(packageDir, 'src/**/*').replaceAll('\\', '/'),
-      typeTestFile.replaceAll('\\', '/'),
+      ...typeTestFiles.map(typeTestFile => typeTestFile.replaceAll('\\', '/')),
     ],
     exclude: [
       join(packageDir, 'node_modules').replaceAll('\\', '/'),
@@ -122,7 +122,10 @@ async function collectTypeTestFiles(packageDir) {
 
   return entries
     .filter(entry => entry.isFile() && entry.name.endsWith('.type.test.ts'))
-    .map(entry => join(entry.parentPath, entry.name))
+    .map(entry => {
+      const parentPath = entry.parentPath ?? dirname(entry.path) ?? testsDir
+      return join(parentPath, entry.name)
+    })
     .sort()
 }
 

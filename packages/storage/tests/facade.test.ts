@@ -445,6 +445,12 @@ describe('Storage facade', () => {
     expect(new TextDecoder().decode((await local.getBytes('blob/data.bin')) ?? new Uint8Array())).toBe('blob-data')
   })
 
+  it('returns null for malformed backend values that cannot be decoded into bytes', async () => {
+    storedValues['holo:local']?.set('raw:invalid.txt', 0 as never)
+
+    await expect(Storage.disk('local').get('raw/invalid.txt')).resolves.toBeNull()
+  })
+
   it('preserves malformed encoded keys when listing backend files', async () => {
     storedValues['holo:local']?.set('reports:bad%ZZname.txt', new TextEncoder().encode('bad'))
 

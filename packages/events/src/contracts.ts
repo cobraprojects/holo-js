@@ -180,6 +180,13 @@ export interface ListenerDefinition<
   handle(event: ListenerHandledEvent<TInput>): TResult | Promise<TResult>
 }
 
+export type ListenerDefinitionInput<
+  TInput extends EventReferenceInput = EventReferenceInput,
+  TResult = unknown,
+> = Omit<ListenerDefinition<TInput, TResult>, 'listensTo'> & {
+  readonly listensTo: TInput
+}
+
 export interface RegisteredListener<
   TInput extends EventReferenceInput = EventReferenceInput,
   TResult = unknown,
@@ -330,8 +337,8 @@ export function isListenerDefinition(value: unknown): value is ListenerDefinitio
 
 export function normalizeListenerDefinition<
   TInput extends EventReferenceInput,
-  TListener extends ListenerDefinition<TInput>,
->(listener: TListener): TListener {
+  TResult,
+>(listener: ListenerDefinitionInput<TInput, TResult>): ListenerDefinition<TInput, TResult> {
   if (!isListenerDefinition(listener)) {
     throw new Error('[Holo Events] Listeners must define "listensTo" and a "handle" function.')
   }
@@ -355,13 +362,13 @@ export function normalizeListenerDefinition<
     ...(typeof queueName === 'undefined' ? {} : { queueName }),
     ...(typeof delay === 'undefined' ? {} : { delay }),
     ...(typeof afterCommit === 'undefined' ? {} : { afterCommit }),
-  } as TListener
+  } as ListenerDefinition<TInput, TResult>
 }
 
 export function defineListener<
   TInput extends EventReferenceInput,
-  TListener extends ListenerDefinition<TInput>,
->(listener: TListener): TListener {
+  TResult,
+>(listener: ListenerDefinitionInput<TInput, TResult>): ListenerDefinition<TInput, TResult> {
   const normalized = normalizeListenerDefinition(listener)
   if (isReadonlyArray(normalized.listensTo)) {
     Object.freeze(normalized.listensTo)
@@ -373,7 +380,7 @@ export function defineListener<
     value: true,
     enumerable: false,
   })
-  return Object.freeze(tagged)
+  return Object.freeze(tagged) as ListenerDefinition<TInput, TResult>
 }
 
 export const eventInternals = {

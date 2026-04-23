@@ -2085,7 +2085,12 @@ function createPasswordResetFacade(): AuthPasswordResetFacade {
       }
 
       const password = await getRuntimeBindings().passwordHasher.hash(input.password)
-      const updated = await updateUserRecord(record.provider, adapter.getId(user), {
+      const userId = requireUserId(
+        adapter,
+        user,
+        '[@holo-js/auth] Password reset token user is invalid.',
+      )
+      const updated = await updateUserRecord(record.provider, userId, {
         password,
       })
       await store.delete(record.id, {

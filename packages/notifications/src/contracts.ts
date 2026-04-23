@@ -220,6 +220,13 @@ export interface AnonymousNotificationTarget<
   readonly routes: TRoutes
 }
 
+type AnonymousRoutesWithChannel<
+  TRoutes extends Partial<{ readonly [TChannel in NotificationChannelName]: NotificationRouteFor<TChannel> }>,
+  TChannel extends NotificationChannelName,
+> = Readonly<Omit<TRoutes, TChannel> & {
+  readonly [TKey in TChannel]: NotificationRouteFor<TChannel>
+}>
+
 export interface NotificationChannelDispatchResult<TChannel extends string = string> {
   readonly channel: TChannel
   readonly targetIndex: number
@@ -263,7 +270,7 @@ export interface PendingAnonymousNotification<
   channel<TChannel extends NotificationChannelName>(
     channel: TChannel,
     route: NotificationRouteFor<TChannel>,
-  ): PendingAnonymousNotification<TRoutes & { readonly [TKey in TChannel]: NotificationRouteFor<TChannel> }>
+  ): PendingAnonymousNotification<AnonymousRoutesWithChannel<TRoutes, TChannel>>
   notify<TNotification extends NotificationDefinition<unknown, NotificationBuildFactories<unknown>>>(
     notification: TNotification,
   ): PendingNotificationDispatch<NotificationDispatchResult>

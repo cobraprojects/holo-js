@@ -12,9 +12,9 @@ import {
 
 describe('@holo-js/flux-react typing', () => {
   it('supports single and multi-event typed helper usage', () => {
-    const manifest: GeneratedBroadcastManifest = {
+    const manifest = {
       version: 1,
-      generatedAt: '2026-01-01T00:00:00.000Z',
+      generatedAt: '2026-01-01T00:00:00.000Z' as string,
       events: [{
         name: 'orders.updated',
         channels: [{
@@ -35,7 +35,7 @@ describe('@holo-js/flux-react typing', () => {
         params: ['orderId'],
         whispers: ['typing.start'],
       }],
-    }
+    } as const satisfies GeneratedBroadcastManifest
 
     const client = createFluxClient({
       manifest,
@@ -43,21 +43,22 @@ describe('@holo-js/flux-react typing', () => {
     if (false) {
       const generic = useFlux('orders.1', 'orders.updated', payload => {
         expectTypeOf(payload).toExtend<Record<string, unknown>>()
-      }, { client })
+      })
       const genericMany = useFlux('orders.1', ['orders.updated', 'orders.shipped'], payload => {
         expectTypeOf(payload).toExtend<Record<string, unknown>>()
-      }, { client })
+      })
       const pub = useFluxPublic('feed.1', 'orders.updated', payload => {
         expectTypeOf(payload).toExtend<Record<string, unknown>>()
-      }, { client })
+      })
       const priv = useFluxPrivate('orders.1', 'orders.shipped', payload => {
         expectTypeOf(payload).toExtend<Record<string, unknown>>()
-      }, { client })
-      const presence = useFluxPresence<{ id: string }>('chat.1', {}, { client })
-      const status = useFluxConnectionStatus({ client })
+      })
+      const presence = useFluxPresence<{ id: string }>('chat.1', {})
+      const status = useFluxConnectionStatus()
       expectTypeOf(presence.members).toEqualTypeOf<readonly { id: string }[]>()
       expectTypeOf(status).toEqualTypeOf<FluxConnectionStatus>()
 
+      void client
       void generic
       void genericMany
       void pub

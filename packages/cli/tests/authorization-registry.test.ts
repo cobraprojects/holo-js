@@ -156,7 +156,10 @@ describe('@holo-js/cli authorization registry discovery', () => {
     expect(types).toContain('AuthorizationPolicyRegistry')
     expect(types).toContain('AuthorizationAbilityRegistry')
     expect(types).toContain('AuthorizationGuardRegistry')
-    expect(types).toContain('actor: object')
+    const policyEntry = /"posts": \{[\s\S]*?recordActions:/.exec(types)?.[0]
+    const abilityEntry = /"reports\.export": \{[\s\S]*?input:/.exec(types)?.[0]
+    expect(policyEntry).toContain('actor: object')
+    expect(abilityEntry).toContain('actor: object')
     expect(types).toContain('"web": {')
     expect(types).toContain('user: import(\'@holo-js/auth\').AuthUser')
     expect(types).toContain('"admin": {')

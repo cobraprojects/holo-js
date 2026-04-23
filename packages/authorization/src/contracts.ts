@@ -173,13 +173,13 @@ type RegisteredAuthorizationAbilityEntry<TAbilityName extends string> = Authoriz
 ]
 
 export type PolicyActorForName<TPolicyName extends string> = RegisteredAuthorizationPolicyEntry<TPolicyName> extends {
-  actor: infer TActor
+  actor?: infer TActor
 }
   ? FallbackRegistryActor<TActor>
   : object
 
 export type AbilityActorForName<TAbilityName extends string> = RegisteredAuthorizationAbilityEntry<TAbilityName> extends {
-  actor: infer TActor
+  actor?: infer TActor
 }
   ? FallbackRegistryActor<TActor>
   : object

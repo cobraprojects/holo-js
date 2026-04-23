@@ -249,6 +249,43 @@ describe('custom s3 storage driver', () => {
     expect(await readRequestBody(fetchMock.mock.calls[1]?.[0] as Request)).toBe('u8')
   })
 
+  it('preserves buffer-backed payloads on writes', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 }))
+
+    const createDriver = await loadDriver()
+    const driver = createDriver({
+      bucket: 'media-bucket',
+      region: 'us-east-1',
+      endpoint: 'https://s3.us-east-1.amazonaws.com',
+      accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'supersecretkey',
+    })
+
+    await driver.setItemRaw('reports:buffer.bin', Buffer.from('buffer-ok'))
+
+    expect(await readRequestBody(fetchMock.mock.calls[0]?.[0] as Request)).toBe('buffer-ok')
+  })
+
+  it('preserves shared-array-buffer-backed payloads on writes', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 }))
+
+    const createDriver = await loadDriver()
+    const driver = createDriver({
+      bucket: 'media-bucket',
+      region: 'us-east-1',
+      endpoint: 'https://s3.us-east-1.amazonaws.com',
+      accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'supersecretkey',
+    })
+
+    const payload = new Uint8Array(new SharedArrayBuffer(9))
+    payload.set(new TextEncoder().encode('shared-ok'))
+
+    await driver.setItemRaw('reports:shared.bin', payload)
+
+    expect(await readRequestBody(fetchMock.mock.calls[0]?.[0] as Request)).toBe('shared-ok')
+  })
+
   it('returns null for missing raw objects and preserves plain string writes', async () => {
     fetchMock
       .mockResolvedValueOnce(new Response(null, { status: 404 }))

@@ -1,14 +1,14 @@
 import { onDestroy } from 'svelte'
 import { readable, writable, type Readable } from 'svelte/store'
 import { getFluxClient, type FluxClient, type FluxConnectionStatus, type FluxListenerControls } from '@holo-js/flux'
-import type { BroadcastJsonObject, BroadcastPayloadFor } from '@holo-js/broadcast'
+import type { BroadcastJsonObject, BroadcastPayloadFor, GeneratedBroadcastManifest } from '@holo-js/broadcast'
 
-export interface FluxHelperOptions<TClient extends FluxClient = FluxClient> {
-  readonly client?: TClient
+export interface FluxHelperOptions<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest> {
+  readonly client?: FluxClient<TManifest>
   readonly onUnmount?: (cleanup: () => void) => void
 }
 
-export interface FluxConnectionStatusHelperOptions<TClient extends FluxClient = FluxClient> extends FluxHelperOptions<TClient> {
+export interface FluxConnectionStatusHelperOptions<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest> extends FluxHelperOptions<TManifest> {
   readonly onChange?: (status: FluxConnectionStatus) => void
 }
 
@@ -25,11 +25,16 @@ type AnyFluxPresenceSubscription = ReturnType<FluxClient['presence']> & {
   __onPresenceChange?(callback: (members: readonly BroadcastJsonObject[]) => void): () => void
 }
 
-function resolveClient<TClient extends FluxClient = FluxClient>(options: FluxHelperOptions<TClient>): TClient {
-  return (options.client ?? getFluxClient()) as TClient
+function resolveClient<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
+  options: FluxHelperOptions<TManifest>,
+): FluxClient<TManifest> {
+  return (options.client ?? getFluxClient()) as FluxClient<TManifest>
 }
 
-function registerCleanup(options: FluxHelperOptions, cleanup: () => void): void {
+function registerCleanup<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
+  options: FluxHelperOptions<TManifest>,
+  cleanup: () => void,
+): void {
   const runCleanup = () => {
     cleanup()
   }
@@ -77,11 +82,11 @@ function subscribeWithEvents<TEvent extends string>(
   ) as AnyFluxSubscription
 }
 
-export function useFlux<TEvent extends string>(
+export function useFlux<TEvent extends string, TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
   channel: string,
   events: TEvent | readonly TEvent[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxHelperOptions = {},
+  options: FluxHelperOptions<TManifest> = {},
 ): FluxListenerControls {
   const subscription = subscribeWithEvents(
     resolveClient(options).private(channel),
@@ -94,11 +99,11 @@ export function useFlux<TEvent extends string>(
   return controlsFromSubscription(subscription)
 }
 
-export function useFluxPublic<TEvent extends string>(
+export function useFluxPublic<TEvent extends string, TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
   channel: string,
   events: TEvent | readonly TEvent[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxHelperOptions = {},
+  options: FluxHelperOptions<TManifest> = {},
 ): FluxListenerControls {
   const subscription = subscribeWithEvents(
     resolveClient(options).channel(channel),
@@ -111,19 +116,19 @@ export function useFluxPublic<TEvent extends string>(
   return controlsFromSubscription(subscription)
 }
 
-export function useFluxPrivate<TEvent extends string>(
+export function useFluxPrivate<TEvent extends string, TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
   channel: string,
   events: TEvent | readonly TEvent[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxHelperOptions = {},
+  options: FluxHelperOptions<TManifest> = {},
 ): FluxListenerControls {
   return useFlux(channel, events, callback, options)
 }
 
-export function useFluxPresence<TMember = unknown>(
+export function useFluxPresence<TMember = unknown, TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
   channel: string,
   callbacks: FluxPresenceHelperCallbacks<TMember> = {},
-  options: FluxHelperOptions = {},
+  options: FluxHelperOptions<TManifest> = {},
 ): FluxPresenceHelperState<TMember> {
   const subscription = resolveClient(options).presence(channel) as AnyFluxPresenceSubscription
   callbacks.onHere?.(subscription.members as readonly TMember[])
@@ -145,10 +150,10 @@ export function useFluxPresence<TMember = unknown>(
   })
 }
 
-export function useFluxNotification(
+export function useFluxNotification<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
   channel: string,
   callback: (payload: unknown) => void,
-  options: FluxHelperOptions = {},
+  options: FluxHelperOptions<TManifest> = {},
 ): FluxListenerControls {
   const subscription = resolveClient(options).private(channel).notification(callback as (payload: { readonly [key: string]: unknown }) => void) as AnyFluxSubscription
   registerCleanup(options, () => {
@@ -157,17 +162,17 @@ export function useFluxNotification(
   return controlsFromSubscription(subscription)
 }
 
-export function useFluxModel<TEvent extends string>(
+export function useFluxModel<TEvent extends string, TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
   channel: string,
   events: TEvent | readonly TEvent[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
-  options: FluxHelperOptions = {},
+  options: FluxHelperOptions<TManifest> = {},
 ): FluxListenerControls {
   return useFluxPrivate(channel, events, callback, options)
 }
 
-export function useFluxConnectionStatus(
-  options: FluxConnectionStatusHelperOptions = {},
+export function useFluxConnectionStatus<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
+  options: FluxConnectionStatusHelperOptions<TManifest> = {},
 ): Readable<FluxConnectionStatus> {
   const client = resolveClient(options)
   const status = writable(client.getStatus())

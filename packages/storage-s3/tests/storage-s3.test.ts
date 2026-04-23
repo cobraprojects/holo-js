@@ -31,4 +31,27 @@ describe('@holo-js/storage-s3', () => {
     expect(request.headers.get('authorization')).toContain('AWS4-HMAC-SHA256')
     expect(request.url).toContain('/reports/daily.txt')
   })
+
+  it('supports buffer-backed payload uploads', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const request = input instanceof Request ? input : new Request(input)
+      expect(await request.text()).toBe('buffer-ok')
+      return new Response(null, { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const driver = createS3Driver({
+      bucket: 'media-bucket',
+      region: 'us-east-1',
+      endpoint: 'https://s3.us-east-1.amazonaws.com',
+      accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'supersecretkey',
+    })
+
+    await driver.setItemRaw('reports:buffer.txt', Buffer.from('buffer-ok'))
+
+    const firstCall = fetchMock.mock.calls[0] as unknown[] | undefined
+    const request = firstCall?.[0] as unknown as Request
+    expect(request.url).toContain('/reports/buffer.txt')
+  })
 })
