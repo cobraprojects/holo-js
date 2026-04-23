@@ -15,7 +15,9 @@
     }
   },
   "include": [
-    "src/**/*"
+    "src/**/*",
+    "tests/contracts.test.ts",
+    "tests/contracts.type.test.ts"
   ],
   "exclude": [
     "node_modules",

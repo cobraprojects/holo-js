@@ -264,6 +264,12 @@ describe('@holo-js/db query cache integration', () => {
       driver: 'redis',
     })
     expect(explicit[0]?.name).toBe('Changed')
+
+    await DB.table(users).cache(new Date(Date.now() + 30_000)).get()
+
+    await expect(
+      DB.table(users).cache(new Date('invalid')).get(),
+    ).rejects.toThrow('Query cache Date TTL must be valid')
   })
 
   it('supports flexible query caching and model-query cache passthrough without changing result behavior', async () => {
@@ -553,5 +559,23 @@ describe('@holo-js/db query cache integration', () => {
     expect(queryCacheInternals.createDeterministicQueryCacheKey({
       sql: 'select * from "users"',
     }, 'main')).toMatch(/^db:query:/)
+  })
+
+  it('rejects malformed query-cache state without ttl or flexible metadata at execution time', async () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+    })
+
+    await expect(
+      new TableQueryBuilder(
+        users,
+        DB.connection(),
+        undefined,
+        {
+          key: 'users.malformed',
+        } as never,
+      ).get(),
+    ).rejects.toThrow('Query cache config requires "ttl" or "flexible"')
   })
 })

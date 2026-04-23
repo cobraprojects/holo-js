@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process'
 
 const appRoot = 'apps'
 const passThroughArgs = process.argv.slice(2)
+const eslintBaseArgs = ['eslint', '--cache', '--cache-strategy', 'content', '--cache-location', '.eslintcache-generated']
 
 async function main() {
   const groups = await collectGeneratedLintGroups()
@@ -76,7 +77,7 @@ function run(targets) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       'bunx',
-      ['eslint', '--no-ignore', ...targets, ...passThroughArgs],
+      [...eslintBaseArgs, '--no-ignore', ...targets, ...passThroughArgs],
       {
         stdio: 'inherit',
         shell: process.platform === 'win32',

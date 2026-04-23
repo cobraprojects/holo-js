@@ -222,6 +222,34 @@ describe('@holo-js/queue config', () => {
     })
   })
 
+  it('rejects missing shared redis connections and invalid queue defaults', () => {
+    expect(() => normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+        },
+      },
+    })).toThrow('requires a shared Redis config with a default connection or an explicit connection name')
+
+    expect(() => normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+          connection: 'missing',
+        },
+      },
+    }, sharedRedisConfig)).toThrow('Queue Redis connection "missing" was not found in shared Redis config')
+
+    expect(() => normalizeQueueConfig({
+      default: 'missing',
+      connections: {
+        sync: {
+          driver: 'sync',
+        },
+      },
+    }, sharedRedisConfig)).toThrow('default queue connection "missing" is not configured')
+  })
+
   it('trims defaults, names, and optional redis credentials when provided', () => {
     expect(normalizeQueueConfig({
       default: ' redis ',
@@ -380,6 +408,63 @@ describe('@holo-js/queue config', () => {
         db: 4,
       },
     })
+  })
+
+  it('preserves shared redis cluster definitions and reports empty shared config inventories', () => {
+    expect(normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+          connection: 'cluster',
+        },
+      },
+    }, {
+      default: 'cluster',
+      connections: {
+        cluster: {
+          name: 'cluster',
+          host: '127.0.0.1',
+          port: 6379,
+          password: undefined,
+          username: undefined,
+          db: 0,
+          clusters: [{
+            host: 'redis-cluster.internal',
+            port: 6380,
+          }],
+        },
+      },
+    }).connections.redis).toEqual({
+      name: 'redis',
+      driver: 'redis',
+      connection: 'cluster',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 5,
+      redis: {
+        clusters: [{
+          host: 'redis-cluster.internal',
+          port: 6380,
+        }],
+        host: '127.0.0.1',
+        port: 6379,
+        password: undefined,
+        username: undefined,
+        db: 0,
+      },
+    })
+
+    expect(() => normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+          connection: 'missing',
+        },
+      },
+    }, {
+      default: 'default',
+      connections: {},
+    })).toThrow('Available connections: (none).')
   })
 
   it('rejects missing or unresolved shared Redis config for Redis-backed queues', () => {

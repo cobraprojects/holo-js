@@ -194,4 +194,111 @@ describe('@holo-js/config security normalization', () => {
       },
     })).toThrow('key resolver must be a function')
   })
+
+  it('normalizes redis-backed security settings and rejects missing shared redis connections', () => {
+    expect(normalizeSecurityConfig({
+      rateLimit: {
+        driver: 'redis',
+        redis: {
+          connection: ' cache ',
+          prefix: ' custom-prefix ',
+        },
+      },
+    }, normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
+          url: 'redis://cache.internal:6380/4',
+        },
+      },
+    }))).toEqual({
+      csrf: {
+        enabled: false,
+        field: '_token',
+        header: 'X-CSRF-TOKEN',
+        cookie: 'XSRF-TOKEN',
+        except: [],
+      },
+      rateLimit: {
+        driver: 'redis',
+        memory: {
+          driver: 'memory',
+        },
+        file: {
+          path: './storage/framework/rate-limits',
+        },
+        redis: {
+          url: 'redis://cache.internal:6380/4',
+          host: '127.0.0.1',
+          port: 6379,
+          password: undefined,
+          username: undefined,
+          db: 4,
+          connection: 'cache',
+          prefix: 'custom-prefix',
+        },
+        limiters: {},
+      },
+    })
+
+    expect(() => normalizeSecurityConfig({
+      rateLimit: {
+        driver: 'redis',
+        redis: {
+          connection: 'missing',
+        },
+      },
+    }, normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
+          host: '127.0.0.1',
+        },
+      },
+    }))).toThrow('Security rate-limit Redis connection "missing" is not configured')
+
+    expect(() => normalizeSecurityConfig({
+      rateLimit: {
+        limiters: {
+          login: {
+            maxAttempts: '   ',
+            decaySeconds: 60,
+          },
+        },
+      },
+    })).toThrow('maxAttempts must be an integer')
+
+    expect(() => normalizeSecurityConfig({
+      rateLimit: {
+        driver: 'redis',
+      },
+    })).toThrow('but no top-level redis config is loaded')
+
+    expect(normalizeSecurityConfig({
+      rateLimit: {
+        driver: 'redis',
+        redis: {
+          connection: 'cache',
+        },
+      },
+    }, normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
+          clusters: [{
+            url: 'redis://cache-1.internal:6380',
+          }],
+        },
+      },
+    }))).toMatchObject({
+      rateLimit: {
+        redis: {
+          connection: 'cache',
+          clusters: [{
+            url: 'redis://cache-1.internal:6380',
+          }],
+        },
+      },
+    })
+  })
 })

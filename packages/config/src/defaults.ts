@@ -565,20 +565,20 @@ function normalizeCacheDriverConfig(
       } satisfies NormalizedCacheFileDriverConfig)
     }
     case 'redis': {
-      const redisConfig = config as CacheRedisDriverConfig
+      const redisConfig = config as CacheRedisDriverConfig & { connection: string }
       return Object.freeze({
         name,
         driver: 'redis',
-        connection: normalizeCacheOptionalString(redisConfig.connection) || DEFAULT_CACHE_REDIS_CONNECTION,
+        connection: redisConfig.connection,
         prefix: resolveCachePrefix(globalPrefix, redisConfig.prefix),
       } satisfies NormalizedCacheRedisDriverConfig)
     }
     case 'database': {
-      const databaseConfig = config as CacheDatabaseDriverConfig
+      const databaseConfig = config as CacheDatabaseDriverConfig & { connection: string }
       return Object.freeze({
         name,
         driver: 'database',
-        connection: normalizeCacheOptionalString(databaseConfig.connection) || DEFAULT_CACHE_DATABASE_CONNECTION,
+        connection: databaseConfig.connection,
         table: normalizeCacheOptionalString(databaseConfig.table) || DEFAULT_CACHE_DATABASE_TABLE,
         lockTable: normalizeCacheOptionalString(databaseConfig.lockTable) || DEFAULT_CACHE_DATABASE_LOCK_TABLE,
         prefix: resolveCachePrefix(globalPrefix, databaseConfig.prefix),
@@ -599,7 +599,7 @@ export function normalizeCacheConfig(
   const driverEntries = !config.drivers || Object.keys(config.drivers).length === 0
     ? Object.entries(holoCacheDefaults.drivers)
     : Object.entries(config.drivers)
-  const drivers = Object.freeze(Object.fromEntries(driverEntries.map(([name, driver]) => {
+  const normalizedDriverEntries: Array<readonly [string, NormalizedCacheDriverConfig]> = driverEntries.map(([name, driver]) => {
       const normalizedName = normalizeCacheName(name, 'Cache driver name')
       const driverConfig = (() => {
         switch (driver.driver) {
@@ -617,17 +617,17 @@ export function normalizeCacheConfig(
             return driver
         }
       })()
-      return [normalizedName, normalizeCacheDriverConfig(normalizedName, driverConfig, prefix)]
-    })))
+      return [normalizedName, normalizeCacheDriverConfig(normalizedName, driverConfig, prefix)] as const
+    })
+  const drivers = Object.freeze(Object.fromEntries(normalizedDriverEntries))
 
   const configuredDefault = normalizeCacheOptionalString(config.default)
-  const defaultDriver = configuredDefault
-    || (DEFAULT_CACHE_DRIVER in drivers ? DEFAULT_CACHE_DRIVER : undefined)
-    || Object.keys(drivers)[0]
-
-  if (!defaultDriver || !(defaultDriver in drivers)) {
-    throw new Error(`[Holo Cache] default cache driver "${configuredDefault ?? ''}" is not configured.`)
+  if (configuredDefault && !(configuredDefault in drivers)) {
+    throw new Error(`[Holo Cache] default cache driver "${configuredDefault}" is not configured.`)
   }
+  const fallbackDefaultDriver = normalizedDriverEntries.find(([name]) => name === DEFAULT_CACHE_DRIVER)?.[0]
+    ?? normalizedDriverEntries[0]![0]
+  const defaultDriver = configuredDefault ?? fallbackDefaultDriver
 
   return Object.freeze({
     default: defaultDriver,
@@ -771,8 +771,8 @@ function parseRedisDatabaseFromUrl(
   url: string | undefined,
   options: {
     allowPath?: boolean
-    label?: string
-  } = {},
+    label: string
+  },
 ): number | undefined {
   if (typeof url === 'undefined') {
     return undefined
@@ -786,7 +786,7 @@ function parseRedisDatabaseFromUrl(
     }
 
     const [databaseSegment] = pathname.split('/')
-    const label = options.label ?? 'Redis URL'
+    const { label } = options
 
     if (options.allowPath === false) {
       throw new Error(`[Holo Redis] ${label} cannot include a database path in cluster mode.`)
@@ -863,11 +863,11 @@ function normalizeRedisConnections(
 }
 
 function resolveNormalizedRedisConnection(
-  redisConfig: NormalizedHoloRedisConfig | undefined,
+  redisConfig: NormalizedHoloRedisConfig,
   connectionName: string,
   label: string,
 ): NormalizedHoloRedisConnectionConfig {
-  const connections = redisConfig?.connections ?? holoRedisDefaults.connections
+  const { connections } = redisConfig
   const resolved = connections[connectionName]
   if (!resolved) {
     throw new Error(`[Holo Redis] ${label} "${connectionName}" is not configured.`)

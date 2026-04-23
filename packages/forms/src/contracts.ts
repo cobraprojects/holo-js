@@ -13,6 +13,7 @@ import { formsSecurityInternals, loadSecurityModule } from './security'
 
 export interface FormSchema<TShape extends SchemaInputShape = SchemaInputShape> extends ValidationSchema<TShape> {
   readonly mode: 'form'
+  readonly fields: ValidationSchema<TShape>['fields']
   readonly $values?: Partial<InferSchemaData<TShape>>
 }
 
@@ -319,7 +320,6 @@ function normalizeRequestHeaders(input: unknown): Headers {
 
 function extractRequestLikeUrl(input: FormRequestLikeInput, headers: Headers): string {
   const url = input.web?.request?.url
-    ?? (typeof input.req === 'object' && input.req instanceof Request ? input.req.url : undefined)
     ?? (typeof input.url === 'string' ? input.url : input.url?.toString())
     ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.url : undefined)
     ?? input.node?.req?.url
@@ -337,7 +337,6 @@ function extractRequestLikeUrl(input: FormRequestLikeInput, headers: Headers): s
 
 function extractRequestLikeMethod(input: FormRequestLikeInput): string {
   return input.web?.request?.method
-    ?? (typeof input.req === 'object' && input.req instanceof Request ? input.req.method : undefined)
     ?? input.method
     ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.method : undefined)
     ?? input.node?.req?.method
@@ -393,7 +392,7 @@ function isRequestLikeInput(input: unknown): input is FormRequestLikeInput {
     || (!!candidate.node?.req && typeof candidate.node.req === 'object')
 }
 
-function normalizeRequestLikeInput(input: FormLikeValidationInput | FormRequestLikeInput): Request | undefined {
+function normalizeRequestLikeInput(input: FormLikeValidationInput | FormRequestLikeInput | null | undefined): Request | undefined {
   if (isRequestInput(input as FormLikeValidationInput)) {
     return input as Request
   }
@@ -558,6 +557,7 @@ export async function validate<TShape extends SchemaInputShape>(
 
 export const formsInternals = {
   createSubmission,
+  isRequestLikeHeaders,
   normalizeRequestLikeInput,
   normalizeStatus,
   normalizeRequestHeaders,

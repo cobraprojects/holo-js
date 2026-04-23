@@ -1,5 +1,6 @@
 import { describe, it } from 'vitest'
 import {
+  type FieldKind,
   type InferSchemaData,
   type StandardSchemaV1,
   type ValidationErrorBag,
@@ -29,6 +30,7 @@ describe('@holo-js/validation typing', () => {
     type RegisterUserData = typeof registerUser.$data
     type RegisterUserErrors = typeof registerUser.$errors
     type ManualData = InferSchemaData<typeof registerUser.fields>
+    type FieldDefinitionKind = typeof registerUser.fields.profile.city.definition.kind
 
     type DataAssertion = Expect<Equal<
       RegisterUserData,
@@ -46,6 +48,7 @@ describe('@holo-js/validation typing', () => {
 
     type ManualAssertion = Expect<Equal<RegisterUserData, ManualData | undefined>>
     type ErrorAssertion = Expect<Equal<RegisterUserErrors, ValidationErrorBag<ManualData> | undefined>>
+    type FieldAssertion = Expect<Equal<FieldDefinitionKind, FieldKind>>
 
     // Schema implements StandardSchemaV1
     const _standard: StandardSchemaV1<unknown, ManualData> = registerUser
@@ -71,6 +74,7 @@ describe('@holo-js/validation typing', () => {
     void (0 as unknown as DataAssertion)
     void (0 as unknown as ManualAssertion)
     void (0 as unknown as ErrorAssertion)
+    void (0 as unknown as FieldAssertion)
 
     if (false) {
       // @ts-expect-error Invalid field kinds must not be accepted inside schema definitions.

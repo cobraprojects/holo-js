@@ -562,9 +562,9 @@ function parseRedisClusterNodeUrl(url: string, label: string): { readonly host: 
 }
 
 function resolveRedisClusterStartupNodes(
-  connection: BroadcastRedisScalingConnection,
+  clusters: readonly NonNullable<BroadcastRedisScalingConnection['clusters']>[number][],
 ): readonly { readonly host: string, readonly port: number, readonly tls?: Record<string, never> }[] {
-  return (connection.clusters ?? []).map((node, index) => {
+  return clusters.map((node, index) => {
     const label = `Broadcast scaling cluster node ${index + 1}`
     if (typeof node.url === 'string') {
       return parseRedisClusterNodeUrl(node.url, `${label} url`)
@@ -633,13 +633,13 @@ async function createRedisScalingAdapter(
 
     if (connection.clusters && connection.clusters.length > 0) {
     return new redisModule.Cluster(
-        resolveRedisClusterStartupNodes(connection),
+        resolveRedisClusterStartupNodes(connection.clusters),
         {
           redisOptions: {
             username: connection.username,
             password: connection.password,
             db: connection.db,
-            ...(resolveRedisClusterStartupNodes(connection).some(node => typeof node.tls !== 'undefined') ? { tls: {} } : {}),
+            ...(resolveRedisClusterStartupNodes(connection.clusters).some(node => typeof node.tls !== 'undefined') ? { tls: {} } : {}),
           },
         },
       )

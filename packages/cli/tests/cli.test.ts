@@ -15,6 +15,7 @@ import type * as HoloCoreModule from '@holo-js/core'
 import type * as HoloDbModule from '@holo-js/db'
 import type * as ProjectModule from '../src/project'
 import type * as ParsingInternalModule from '../src/parsing'
+import type * as CacheInternalModule from '../src/cache'
 import type * as ProjectConfigInternalModule from '../src/project/config'
 import type * as ProjectDiscoveryInternalModule from '../src/project/discovery'
 import type * as ProjectRuntimeInternalModule from '../src/project/runtime'
@@ -1087,6 +1088,12 @@ export default {
       defaultDatabaseConnection: 'main',
     })).toContain('driver: \'database\'')
     expect(projectInternals.renderQueueConfig()).toContain('failed: false')
+    expect(projectInternals.renderCacheConfig('redis', 'main', 'cache')).toContain('connection: \'cache\'')
+    expect(projectInternals.renderCacheConfig('database', 'main')).toContain('lockTable: \'cache_locks\'')
+    expect(projectInternals.renderCacheEnvFiles('redis').env).toContain('REDIS_URL=')
+    expect(projectInternals.renderCacheEnvFiles('file').env).toEqual(['CACHE_PREFIX='])
+    expect(projectInternals.isSupportedCacheInstallerDriver('database')).toBe(true)
+    expect(projectInternals.isSupportedCacheInstallerDriver('memcached')).toBe(false)
     expect(projectInternals.renderQueueEnvFiles('sync').env).toEqual([])
     expect(projectInternals.renderQueueEnvFiles('redis').env).toContain('REDIS_URL=')
     expect(projectInternals.renderQueueEnvFiles('redis').env).toContain('REDIS_HOST=127.0.0.1')
@@ -1121,6 +1128,22 @@ export default {
       storageDefaultDisk: 'local',
       optionalPackages: ['auth'],
     }).env).toContain('SESSION_CONNECTION=main')
+    expect(projectInternals.renderScaffoldPackageJson({
+      projectName: 'nuxt-broadcast-app',
+      framework: 'nuxt',
+      packageManager: 'bun',
+      databaseDriver: 'sqlite',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['broadcast'],
+    })).toContain('@holo-js/flux-vue')
+    expect(projectInternals.renderScaffoldPackageJson({
+      projectName: 'svelte-broadcast-app',
+      framework: 'sveltekit',
+      packageManager: 'bun',
+      databaseDriver: 'sqlite',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['broadcast'],
+    })).toContain('@holo-js/flux-svelte')
     expect(projectInternals.resolveDefaultDatabaseUrl('sqlite')).toBe('./storage/database.sqlite')
     expect(projectInternals.resolveDefaultDatabaseUrl('postgres')).toBeUndefined()
     expect(projectInternals.resolveProjectPackageImportSpecifier(
@@ -1410,6 +1433,20 @@ export default {
     expect(projectInternals.resolveBroadcastConfigTargetPath('/project', 'config/app.js', 'esm')).toContain('broadcast.js')
     // Cover resolveBroadcastConfigTargetPath with cjs format
     expect(projectInternals.resolveBroadcastConfigTargetPath('/project', 'config/app.json', 'cjs')).toContain('broadcast.cjs')
+  })
+
+  it('normalizes scaffold env segments and renders empty env file contents directly', () => {
+    expect(projectInternals.normalizeScaffoldEnvSegments('APP_NAME=test')).toEqual(['APP_NAME=test'])
+    expect(projectInternals.normalizeScaffoldEnvSegments(['APP_NAME=test', 'APP_ENV=development'])).toEqual([
+      'APP_NAME=test',
+      'APP_ENV=development',
+    ])
+    expect(projectInternals.renderEnvFileContents(['APP_NAME=test\n', '', 'APP_ENV=development'])).toBe([
+      'APP_NAME=test',
+      'APP_ENV=development',
+      '',
+    ].join('\n'))
+    expect(projectInternals.renderEnvFileContents(['', '\n'])).toBe('')
   })
 
   it('scaffolds a new project with cache support through the CLI', async () => {
@@ -3227,6 +3264,185 @@ export default defineDatabaseConfig({
     })
     expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies['@holo-js/auth']).toBeUndefined()
   }, 30000)
+
+  it('skips builtin auth social packages when provider runtimes are explicit and no-ops cache dependency sync without cache config files', async () => {
+    const authRuntimeRoot = await createTempProject()
+    tempDirs.push(authRuntimeRoot)
+    await writeProjectFile(authRuntimeRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/db': expectedHoloPackageRange,
+        '@holo-js/db-sqlite': expectedHoloPackageRange,
+      },
+    }, null, 2))
+    await writeProjectFile(authRuntimeRoot, 'config/auth.ts', `
+import { defineAuthConfig } from '@holo-js/config'
+
+export default defineAuthConfig({
+  guards: {
+    web: {
+      driver: 'session',
+      provider: 'users',
+    },
+  },
+  providers: {
+    users: {
+      model: 'User',
+    },
+  },
+  social: {
+    google: {
+      runtime: '@acme/custom-google-runtime',
+    },
+  },
+})
+`)
+    await writeProjectFile(authRuntimeRoot, 'config/session.ts', `
+import { defineSessionConfig } from '@holo-js/config'
+
+export default defineSessionConfig({
+  driver: 'file',
+  stores: {
+    file: {
+      driver: 'file',
+    },
+  },
+})
+`)
+
+    await expect(projectInternals.syncManagedDriverDependencies(authRuntimeRoot)).resolves.toBe(true)
+    const authRuntimeDeps = JSON.parse(await readFile(join(authRuntimeRoot, 'package.json'), 'utf8')).dependencies
+    expect(authRuntimeDeps['@holo-js/auth']).toBe(expectedHoloPackageRange)
+    expect(authRuntimeDeps['@holo-js/auth-social']).toBe(expectedHoloPackageRange)
+    expect(authRuntimeDeps['@holo-js/auth-social-google']).toBeUndefined()
+
+    const cacheDepsRoot = await createTempProject()
+    tempDirs.push(cacheDepsRoot)
+    await writeProjectFile(cacheDepsRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/cache': expectedHoloPackageRange,
+      },
+    }, null, 2))
+
+    await expect(projectInternals.upsertCachePackageDependencies(cacheDepsRoot)).resolves.toBe(false)
+  }, 30_000)
+
+  it('removes stale cache driver packages when cache config does not require them', async () => {
+    const cacheDepsRoot = await createTempProject()
+    tempDirs.push(cacheDepsRoot)
+    await writeProjectFile(cacheDepsRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/cache': expectedHoloPackageRange,
+        '@holo-js/cache-db': expectedHoloPackageRange,
+        '@holo-js/cache-redis': expectedHoloPackageRange,
+      },
+    }, null, 2))
+
+    await expect(projectInternals.upsertCachePackageDependencies(cacheDepsRoot)).resolves.toBe(true)
+
+    const dependencies = JSON.parse(await readFile(join(cacheDepsRoot, 'package.json'), 'utf8')).dependencies
+    expect(dependencies['@holo-js/cache']).toBe(expectedHoloPackageRange)
+    expect(dependencies['@holo-js/cache-db']).toBeUndefined()
+    expect(dependencies['@holo-js/cache-redis']).toBeUndefined()
+  }, 30_000)
+
+  it('keeps matching cache driver packages when cache config already requires database and redis', async () => {
+    const cacheDepsRoot = await createTempProject()
+    tempDirs.push(cacheDepsRoot)
+    await writeProjectFile(cacheDepsRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/cache': expectedHoloPackageRange,
+        '@holo-js/cache-db': expectedHoloPackageRange,
+        '@holo-js/cache-redis': expectedHoloPackageRange,
+      },
+    }, null, 2))
+    await writeProjectFile(cacheDepsRoot, 'config/cache.ts', `
+import { defineCacheConfig } from '@holo-js/config'
+
+export default defineCacheConfig({
+  default: 'database',
+  drivers: {
+    database: {
+      driver: 'database',
+      connection: 'default',
+      table: 'cache',
+      lockTable: 'cache_locks',
+    },
+    redis: {
+      driver: 'redis',
+      connection: 'default',
+    },
+  },
+})
+`)
+
+    await expect(projectInternals.upsertCachePackageDependencies(cacheDepsRoot)).resolves.toBe(false)
+  }, 30_000)
+
+  it('uses fallback authorization scaffold paths and default cache database connections in isolated scaffold imports', async () => {
+    const scaffoldRoot = await createTempProject()
+    tempDirs.push(scaffoldRoot)
+    await mkdir(join(scaffoldRoot, 'server/policies'), { recursive: true })
+
+    const baseProjectConfig = defaultProjectConfig()
+    const loadProjectConfig = vi.fn(async () => ({
+      config: {
+        ...baseProjectConfig,
+        paths: {
+          ...baseProjectConfig.paths,
+          authorizationPolicies: undefined,
+          authorizationAbilities: undefined,
+        },
+      },
+    }))
+
+    vi.resetModules()
+    vi.doMock('../src/project/config', async () => {
+      const actual = await vi.importActual('../src/project/config') as typeof ProjectConfigInternalModule
+      return {
+        ...actual,
+        loadProjectConfig,
+      }
+    })
+
+    try {
+      const isolatedScaffold = await import('../src/project/scaffold')
+
+      await expect(isolatedScaffold.syncManagedDriverDependencies(scaffoldRoot)).resolves.toBe(true)
+      expect(JSON.parse(await readFile(join(scaffoldRoot, 'package.json'), 'utf8'))).toMatchObject({
+        dependencies: {
+          '@holo-js/authorization': expectedHoloPackageRange,
+        },
+      })
+
+      const cacheRoot = await createTempProject()
+      tempDirs.push(cacheRoot)
+      await writeProjectFile(cacheRoot, '.env', '')
+      await writeProjectFile(cacheRoot, '.env.example', '')
+
+      await expect(isolatedScaffold.installCacheIntoProject(cacheRoot, {
+        driver: 'database',
+      })).resolves.toEqual({
+        updatedPackageJson: true,
+        createdCacheConfig: true,
+        createdRedisConfig: false,
+        updatedEnv: true,
+        updatedEnvExample: true,
+        databaseDriver: true,
+      })
+      expect(await readFile(join(cacheRoot, 'config/cache.ts'), 'utf8')).toContain('connection: \'default\'')
+    } finally {
+      vi.doUnmock('../src/project/config')
+      vi.resetModules()
+    }
+  }, 30_000)
 
   it('detects queue and storage config files from Windows-style loaded paths during dependency sync', async () => {
     const projectRoot = await createTempProject()
@@ -5568,6 +5784,95 @@ export default defineJob({
         }],
       })
     })
+
+    const authorizationFallbackRoot = await createTempProject()
+    tempDirs.push(authorizationFallbackRoot)
+    await writeProjectFile(authorizationFallbackRoot, 'server/policies/FallbackPolicy.mjs', 'export default {}\n')
+    await writeProjectFile(authorizationFallbackRoot, 'server/abilities/fallback.mjs', 'export default {}\n')
+
+    vi.resetModules()
+    const authorizationState = {
+      policiesByName: new Map<string, unknown>(),
+      abilitiesByName: new Map<string, unknown>(),
+    }
+    const resetAuthorizationRuntimeState = vi.fn(() => {
+      authorizationState.policiesByName.clear()
+      authorizationState.abilitiesByName.clear()
+    })
+    vi.doMock('../src/project/runtime', async () => {
+      const actual = await vi.importActual('../src/project/runtime') as typeof ProjectRuntimeInternalModule
+      return {
+        ...actual,
+        loadAuthorizationDiscoveryModule: vi.fn(async () => ({
+          isAuthorizationPolicyDefinition: (value: unknown) => !!value
+            && typeof value === 'object'
+            && 'kind' in value
+            && (value as { kind?: string }).kind === 'policy',
+          isAuthorizationAbilityDefinition: (value: unknown) => !!value
+            && typeof value === 'object'
+            && 'kind' in value
+            && (value as { kind?: string }).kind === 'ability',
+          authorizationInternals: {
+            getAuthorizationRuntimeState: () => authorizationState,
+            resetAuthorizationRuntimeState,
+          },
+        })),
+        importProjectModule: vi.fn(async (_projectRoot: string, filePath: string) => {
+          if (filePath.endsWith('FallbackPolicy.mjs')) {
+            authorizationState.policiesByName.set('posts', {})
+            return {
+              default: {
+                kind: 'policy',
+                name: 'posts',
+                target: {},
+              },
+            }
+          }
+
+          if (filePath.endsWith('fallback.mjs')) {
+            authorizationState.abilitiesByName.set('reports.export', {})
+            return {
+              default: {
+                kind: 'ability',
+                name: 'reports.export',
+              },
+            }
+          }
+
+          return await actual.importProjectModule(_projectRoot, filePath)
+        }),
+      }
+    })
+
+    try {
+      const isolatedDiscovery = await import('../src/project/discovery')
+      await expect(isolatedDiscovery.prepareProjectDiscovery(authorizationFallbackRoot, {
+        ...defaultProjectConfig(),
+        paths: {
+          ...defaultProjectConfig().paths,
+          authorizationPolicies: undefined as never,
+          authorizationAbilities: undefined as never,
+        },
+      })).resolves.toMatchObject({
+        paths: {
+          authorizationPolicies: 'server/policies',
+          authorizationAbilities: 'server/abilities',
+        },
+        authorizationPolicies: [{
+          sourcePath: 'server/policies/FallbackPolicy.mjs',
+          name: 'posts',
+          target: 'Object',
+        }],
+        authorizationAbilities: [{
+          sourcePath: 'server/abilities/fallback.mjs',
+          name: 'reports.export',
+        }],
+      })
+      expect(resetAuthorizationRuntimeState).toHaveBeenCalled()
+    } finally {
+      vi.doUnmock('../src/project/runtime')
+      vi.resetModules()
+    }
 
     const duplicateRoot = await createTempProject()
     tempDirs.push(duplicateRoot)
@@ -8157,6 +8462,112 @@ export default defineEvent({ name: 'audit.activity' })
     }
   })
 
+  it('prepares cache install drivers and prints cache install output for changed and unchanged runs', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const installCacheIntoProject = vi.fn()
+      .mockImplementationOnce(async () => ({
+        updatedPackageJson: true,
+        createdCacheConfig: true,
+        createdRedisConfig: true,
+        updatedEnv: true,
+        updatedEnvExample: true,
+        databaseDriver: true,
+      }))
+      .mockImplementationOnce(async () => ({
+        updatedPackageJson: false,
+        createdCacheConfig: false,
+        createdRedisConfig: false,
+        updatedEnv: false,
+        updatedEnvExample: false,
+        databaseDriver: false,
+      }))
+
+    vi.resetModules()
+    vi.doMock('../src/project/scaffold', async () => {
+      const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
+      return {
+        ...actual,
+        installCacheIntoProject,
+      }
+    })
+
+    try {
+      const isolatedCli = await import('../src/cli')
+      const installCommand = isolatedCli.createInternalCommands({
+        ...io.io,
+        projectRoot,
+        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never).find(command => command.name === 'install')
+
+      await expect(installCommand?.prepare?.({
+        args: ['cache'],
+        flags: { driver: 'redis' },
+      }, {
+        ...io.io,
+        projectRoot,
+        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never)).resolves.toEqual({
+        args: ['cache'],
+        flags: {
+          driver: 'redis',
+        },
+      })
+      await expect(installCommand?.prepare?.({
+        args: ['cache'],
+        flags: {},
+      }, {
+        ...io.io,
+        projectRoot,
+        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never)).resolves.toEqual({
+        args: ['cache'],
+        flags: {
+          driver: 'file',
+        },
+      })
+
+      await installCommand?.run({
+        ...io.io,
+        projectRoot,
+        cwd: projectRoot,
+        args: ['cache'],
+        flags: { driver: 'redis' },
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never)
+      await installCommand?.run({
+        ...io.io,
+        projectRoot,
+        cwd: projectRoot,
+        args: ['cache'],
+        flags: {},
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never)
+
+      expect(installCacheIntoProject).toHaveBeenNthCalledWith(1, projectRoot, {
+        driver: 'redis',
+      })
+      expect(installCacheIntoProject).toHaveBeenNthCalledWith(2, projectRoot, {
+        driver: 'file',
+      })
+      expect(io.read().stdout).toContain('Installed cache support.')
+      expect(io.read().stdout).toContain('  - created config/cache.ts')
+      expect(io.read().stdout).toContain('  - created config/redis.ts')
+      expect(io.read().stdout).toContain('  - updated package.json')
+      expect(io.read().stdout).toContain('  - updated .env')
+      expect(io.read().stdout).toContain('  - updated .env.example')
+      expect(io.read().stdout).toContain('  - run "holo cache:table" to create the cache tables')
+      expect(io.read().stdout).toContain('Cache support is already installed.')
+    } finally {
+      vi.doUnmock('../src/project/scaffold')
+      vi.resetModules()
+    }
+  }, 30_000)
+
   it('covers command and template helper utilities', () => {
     const command = defineCommand({
       description: 'Example command.',
@@ -8750,11 +9161,28 @@ throw 'string discovery failure'
     expect(isDiscoveryRelevantPath('server/db/seeders/UserSeeder.ts', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('README.md', project as never)).toBe(false)
 
+    const fallbackProject = {
+      config: {
+        ...defaultProjectConfig(),
+        paths: {
+          ...defaultProjectConfig().paths,
+          authorizationPolicies: '',
+          authorizationAbilities: '',
+        },
+      },
+    }
+    expect(isDiscoveryRelevantPath('server/policies/FallbackPolicy.ts', fallbackProject as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('server/abilities/fallback.ts', fallbackProject as never)).toBe(true)
+
     const roots = await collectDiscoveryWatchRoots(projectRoot, project as never)
     expect(roots).toContain(join(projectRoot, 'server/policies'))
     expect(roots).toContain(join(projectRoot, 'server/policies/admin'))
     expect(roots).toContain(join(projectRoot, 'server/abilities'))
     expect(roots).toContain(join(projectRoot, 'server/abilities/reports'))
+
+    const fallbackRoots = await collectDiscoveryWatchRoots(projectRoot, fallbackProject as never)
+    expect(fallbackRoots).toContain(join(projectRoot, 'server/policies'))
+    expect(fallbackRoots).toContain(join(projectRoot, 'server/abilities'))
   })
 
   it('skips model files whose generated schema has not been materialized yet', async () => {
@@ -9607,6 +10035,10 @@ export default {
       args: [],
       flags: {},
     })
+    expect(await cacheForget?.prepare?.({ args: ['users'], flags: {} }, commandContext as never)).toEqual({
+      args: ['users'],
+      flags: {},
+    })
     expect(await cacheForget?.prepare?.({ args: ['users'], flags: { driver: 'memory' } }, commandContext as never)).toEqual({
       args: ['users'],
       flags: {
@@ -9644,6 +10076,61 @@ export default {
     expect(runCacheTable).toHaveBeenCalledWith(expect.anything(), projectRoot)
     expect(runCacheClear).toHaveBeenCalledWith(expect.anything(), projectRoot, 'redis')
     expect(runCacheForget).toHaveBeenCalledWith(expect.anything(), projectRoot, 'users', 'memory')
+  })
+
+  it('loads cache command executors lazily and falls back when cache command inputs are missing or non-string', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const runCacheClearCommand = vi.fn(async () => {})
+    const runCacheForgetCommand = vi.fn(async () => {})
+
+    vi.resetModules()
+    vi.doMock('../src/cache', async () => {
+      const actual = await vi.importActual('../src/cache') as typeof CacheInternalModule
+      return {
+        ...actual,
+        runCacheClearCommand,
+        runCacheForgetCommand,
+      }
+    })
+
+    try {
+      const isolatedCli = await import('../src/cli')
+      const commands = isolatedCli.createInternalCommands({
+        ...io.io,
+        projectRoot,
+        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never)
+
+      await commands.find(command => command.name === 'cache:clear')!.run({
+        ...io.io,
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {
+          driver: true,
+        },
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never)
+      await commands.find(command => command.name === 'cache:forget')!.run({
+        ...io.io,
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {
+          driver: true,
+        },
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never)
+
+      expect(runCacheClearCommand).toHaveBeenCalledWith(expect.anything(), projectRoot, undefined)
+      expect(runCacheForgetCommand).toHaveBeenCalledWith(expect.anything(), projectRoot, '', undefined)
+    } finally {
+      vi.doUnmock('../src/cache')
+      vi.resetModules()
+    }
   })
 
   it('covers queue command defaults, skipped worker flags, and built CLI entry resolution', async () => {
@@ -10784,6 +11271,174 @@ export default defineJob({
     }
   }, 30_000)
 
+  it('supports cache maintenance modules that export repository methods without a default facade', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const cacheModuleSpecifier = projectInternals.resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/cache')
+    const flush = vi.fn(async () => {})
+
+    vi.resetModules()
+    vi.doMock('@holo-js/config', async () => {
+      const actual = await vi.importActual('@holo-js/config') as typeof HoloConfigModule
+      return {
+        ...actual,
+        loadConfigDirectory: vi.fn(async () => ({
+          cache: {
+            default: 'file',
+            prefix: '',
+            drivers: {
+              file: {
+                name: 'file',
+                driver: 'file',
+                path: './storage/framework/cache/data',
+                prefix: '',
+              },
+            },
+          },
+          database: {
+            defaultConnection: 'default',
+            connections: {},
+          },
+          redis: {
+            default: 'default',
+            connections: {},
+          },
+        })),
+      }
+    })
+    vi.doMock(cacheModuleSpecifier, async () => ({
+      default: undefined,
+      configureCacheRuntime: vi.fn(),
+      resetCacheRuntime: vi.fn(),
+      flush,
+      forget: vi.fn(async () => true),
+      driver: vi.fn(),
+    }))
+
+    try {
+      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      await isolatedCliInternals.runCacheClearCommand(io.io, projectRoot)
+      expect(flush).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.doUnmock('@holo-js/config')
+      vi.doUnmock(cacheModuleSpecifier)
+      vi.resetModules()
+    }
+  }, 30_000)
+
+  it('installs cache support for file, redis, and database drivers and rejects unsupported or missing cache drivers', async () => {
+    const fileRoot = await createTempProject()
+    tempDirs.push(fileRoot)
+
+    await expect(projectInternals.installCacheIntoProject(fileRoot)).resolves.toEqual({
+      updatedPackageJson: true,
+      createdCacheConfig: true,
+      createdRedisConfig: false,
+      updatedEnv: true,
+      updatedEnvExample: true,
+      databaseDriver: false,
+    })
+    expect(await readFile(join(fileRoot, 'config/cache.ts'), 'utf8')).toContain('driver: \'file\'')
+    expect(await readFile(join(fileRoot, '.env'), 'utf8')).toContain('CACHE_PREFIX=')
+    expect(JSON.parse(await readFile(join(fileRoot, 'package.json'), 'utf8'))).toMatchObject({
+      dependencies: {
+        '@holo-js/cache': expectedHoloPackageRange,
+      },
+    })
+    await expect(projectInternals.installCacheIntoProject(fileRoot)).resolves.toEqual({
+      updatedPackageJson: false,
+      createdCacheConfig: false,
+      createdRedisConfig: false,
+      updatedEnv: false,
+      updatedEnvExample: false,
+      databaseDriver: false,
+    })
+
+    const redisRoot = await createTempProject()
+    tempDirs.push(redisRoot)
+    await writeProjectFile(redisRoot, '.env', '')
+    await writeProjectFile(redisRoot, '.env.example', '')
+
+    await expect(projectInternals.installCacheIntoProject(redisRoot, { driver: 'redis' })).resolves.toEqual({
+      updatedPackageJson: true,
+      createdCacheConfig: true,
+      createdRedisConfig: true,
+      updatedEnv: true,
+      updatedEnvExample: true,
+      databaseDriver: false,
+    })
+    expect(await readFile(join(redisRoot, 'config/cache.ts'), 'utf8')).toContain('driver: \'redis\'')
+    expect(await readFile(join(redisRoot, 'config/redis.ts'), 'utf8')).toContain('defineRedisConfig')
+    expect(await readFile(join(redisRoot, '.env.example'), 'utf8')).toContain('REDIS_URL=')
+    expect(JSON.parse(await readFile(join(redisRoot, 'package.json'), 'utf8'))).toMatchObject({
+      dependencies: {
+        '@holo-js/cache': expectedHoloPackageRange,
+        '@holo-js/cache-redis': expectedHoloPackageRange,
+      },
+    })
+
+    const databaseRoot = await createTempProject()
+    tempDirs.push(databaseRoot)
+    await writeProjectFile(databaseRoot, '.env', '')
+    await writeProjectFile(databaseRoot, '.env.example', '')
+    await writeProjectFile(databaseRoot, 'config/cache.ts', `
+import { defineCacheConfig } from '@holo-js/config'
+
+export default defineCacheConfig({
+  default: 'database',
+  drivers: {
+    file: {
+      driver: 'file',
+    },
+    database: {
+      driver: 'database',
+      connection: 'default',
+      table: 'cache',
+      lockTable: 'cache_locks',
+    },
+  },
+})
+`)
+
+    await expect(projectInternals.installCacheIntoProject(databaseRoot, { driver: 'database' })).resolves.toEqual({
+      updatedPackageJson: true,
+      createdCacheConfig: false,
+      createdRedisConfig: false,
+      updatedEnv: true,
+      updatedEnvExample: true,
+      databaseDriver: true,
+    })
+    expect(JSON.parse(await readFile(join(databaseRoot, 'package.json'), 'utf8'))).toMatchObject({
+      dependencies: {
+        '@holo-js/cache': expectedHoloPackageRange,
+        '@holo-js/cache-db': expectedHoloPackageRange,
+      },
+    })
+
+    const mismatchRoot = await createTempProject()
+    tempDirs.push(mismatchRoot)
+    await writeProjectFile(mismatchRoot, 'config/cache.ts', `
+import { defineCacheConfig } from '@holo-js/config'
+
+export default defineCacheConfig({
+  default: 'file',
+  drivers: {
+    file: {
+      driver: 'file',
+    },
+  },
+})
+`)
+
+    await expect(projectInternals.installCacheIntoProject(mismatchRoot, {
+      driver: 'redis',
+    })).rejects.toThrow('does not configure the "redis" cache driver')
+    await expect(projectInternals.installCacheIntoProject(mismatchRoot, {
+      driver: 'bad' as never,
+    })).rejects.toThrow('Unsupported cache driver: bad.')
+  }, 30_000)
+
   it('generates queue table migrations and runs failed-job helper commands with injected dependencies', async () => {
     const defaultProjectRoot = await createTempProject()
     tempDirs.push(defaultProjectRoot)
@@ -11098,6 +11753,50 @@ export default defineCacheConfig({
     await expect(
       withFakeBun(async () => cliInternals.runCacheTableCommand(createIo(fileOnlyProjectRoot).io, fileOnlyProjectRoot)),
     ).rejects.toThrow('The configured cache drivers do not use the database driver.')
+
+    vi.resetModules()
+    vi.doMock('@holo-js/config', async () => {
+      const actual = await vi.importActual('@holo-js/config') as typeof HoloConfigModule
+      return {
+        ...actual,
+        loadConfigDirectory: vi.fn(async () => ({
+          cache: null,
+        })),
+      }
+    })
+    try {
+      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      await expect(isolatedCliInternals.loadCacheConfig(fileOnlyProjectRoot)).rejects.toThrow('Cache config is missing or malformed')
+    } finally {
+      vi.doUnmock('@holo-js/config')
+      vi.resetModules()
+    }
+
+    vi.resetModules()
+    vi.doMock('@holo-js/config', async () => {
+      const actual = await vi.importActual('@holo-js/config') as typeof HoloConfigModule
+      return {
+        ...actual,
+        loadConfigDirectory: vi.fn(async () => ({
+          cache: {
+            drivers: {
+              database: {
+                driver: 'database',
+                table: 'cache',
+                lockTable: '',
+              },
+            },
+          },
+        })),
+      }
+    })
+    try {
+      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      await expect(isolatedCliInternals.loadCacheConfig(fileOnlyProjectRoot)).rejects.toThrow('must define non-empty "table" and "lockTable" strings')
+    } finally {
+      vi.doUnmock('@holo-js/config')
+      vi.resetModules()
+    }
 
     const duplicateProjectRoot = await createTempProject()
     tempDirs.push(duplicateProjectRoot)

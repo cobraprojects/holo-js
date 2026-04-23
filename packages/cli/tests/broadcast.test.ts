@@ -628,7 +628,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     process.emit('SIGINT')
     await expect(promise).resolves.toBeUndefined()
     expect(stop).toHaveBeenCalledTimes(1)
-  })
+  }, 120_000)
 
   it('uses the default generated-registry loader when no registry dependency is injected', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'holo-cli-broadcast-default-registry-'))

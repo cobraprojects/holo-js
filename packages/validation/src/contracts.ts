@@ -116,6 +116,15 @@ type NormalizeFieldInput<TInput> = TInput extends ValidationFieldBuilder<infer T
 
 type InferFieldOutput<TInput> = NormalizeFieldInput<TInput> extends ValidationField<infer TOutput> ? TOutput : never
 
+export type NormalizedSchemaShape<TShape extends SchemaInputShape> = {
+  readonly [K in keyof TShape]:
+    TShape[K] extends FieldBuilderInput
+      ? NormalizeFieldInput<TShape[K]>
+      : TShape[K] extends SchemaInputShape
+        ? NormalizedSchemaShape<TShape[K]>
+        : never
+}
+
 export type SchemaInputShape = {
   readonly [key: string]: FieldBuilderInput | SchemaInputShape
 }
@@ -153,7 +162,7 @@ export type ValidationErrorBag<TShape> = ErrorTree<TShape> & {
 
 export interface ValidationSchema<TShape extends SchemaInputShape = SchemaInputShape> extends StandardSchemaV1<unknown, InferSchemaData<TShape>> {
   readonly kind: 'schema'
-  readonly fields: TShape
+  readonly fields: TShape & NormalizedSchemaShape<TShape>
   readonly $data?: InferSchemaData<TShape>
   readonly $errors?: ValidationErrorBag<InferSchemaData<TShape>>
 }

@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process'
 
 const rootTargets = ['playground', 'scripts', 'eslint.config.mjs', 'vitest.workspace.ts']
 const passThroughArgs = process.argv.slice(2)
+const eslintBaseArgs = ['eslint', '--cache', '--cache-strategy', 'content', '--cache-location', '.eslintcache-main']
 const lintExtensions = new Set(['.js', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts'])
 const ignoredDirectoryNames = new Set([
   '.git',
@@ -96,7 +97,7 @@ function run(targets) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       'bunx',
-      ['eslint', ...targets, ...passThroughArgs],
+      [...eslintBaseArgs, ...targets, ...passThroughArgs],
       {
         stdio: 'inherit',
         shell: process.platform === 'win32',

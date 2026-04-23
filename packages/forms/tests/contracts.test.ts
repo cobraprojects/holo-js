@@ -500,8 +500,180 @@ describe('@holo-js/forms contracts', () => {
     })
 
     expect(request).toBeInstanceOf(Request)
-    expect(request?.duplex).toBe('half')
+    expect((request as Request & { duplex?: 'half' })?.duplex).toBe('half')
     await expect(request?.text()).resolves.toBe('email=ava@example.com')
+  })
+
+  it('normalizes request-like headers, urls, methods, and body variants through the form internals', async () => {
+    expect(formsInternals.isRequestLikeHeaders(new Headers())).toBe(true)
+    expect(formsInternals.isRequestLikeHeaders([
+      ['accept', 'application/json'],
+    ])).toBe(true)
+    expect(formsInternals.isRequestLikeHeaders({
+      host: 'forms.example.test',
+    })).toBe(true)
+    expect(formsInternals.isRequestLikeHeaders('accept: application/json')).toBe(false)
+
+    const tupleHeaders = formsInternals.normalizeRequestHeaders([
+      ['accept', 'application/json'],
+      ['x-forwarded-host', 'forms.example.test'],
+    ])
+    expect(tupleHeaders.get('accept')).toBe('application/json')
+    expect(tupleHeaders.get('x-forwarded-host')).toBe('forms.example.test')
+
+    const objectHeaders = formsInternals.normalizeRequestHeaders({
+      cookie: ['a=1', 'XSRF-TOKEN=token'],
+      'x-forwarded-proto': 'https',
+      'x-trace': ['trace-1', 'trace-2'],
+    })
+    expect(objectHeaders.get('cookie')).toBe('a=1; XSRF-TOKEN=token')
+    expect(objectHeaders.get('x-trace')).toBe('trace-1,trace-2')
+
+    const ignoredHeadersRequest = formsInternals.normalizeRequestLikeInput({
+      web: {
+        request: {
+          url: 'https://forms.example.test/web-request',
+          method: 'OPTIONS',
+        },
+      },
+      path: '/fallback',
+      headers: 42 as never,
+    })
+    expect(ignoredHeadersRequest?.url).toBe('https://forms.example.test/web-request')
+    expect(ignoredHeadersRequest?.method).toBe('OPTIONS')
+
+    const formDataBody = new FormData()
+    formDataBody.set('email', 'ava@example.com')
+    const formDataRequest = formsInternals.normalizeRequestLikeInput({
+      method: 'POST',
+      path: '/signup',
+      headers: {
+        'x-forwarded-proto': 'https',
+        'x-forwarded-host': 'forms.example.test',
+      },
+      body: formDataBody,
+    })
+    expect(formDataRequest?.url).toBe('https://forms.example.test/signup')
+    expect(formDataRequest?.method).toBe('POST')
+    await expect(formDataRequest?.formData()).resolves.toMatchObject({
+      get: expect.any(Function),
+    })
+
+    const blobRequest = formsInternals.normalizeRequestLikeInput({
+      method: 'PATCH',
+      url: new URL('https://forms.example.test/profile'),
+      headers: new Headers({
+        'content-type': 'text/plain',
+      }),
+      body: new Blob(['patched']),
+    })
+    await expect(blobRequest?.text()).resolves.toBe('patched')
+
+    const directUrlRequest = formsInternals.normalizeRequestLikeInput({
+      method: 'POST',
+      url: 'https://forms.example.test/direct',
+      body: 'email=ava@example.com',
+    })
+    expect(directUrlRequest?.url).toBe('https://forms.example.test/direct')
+
+    const jsonRequest = formsInternals.normalizeRequestLikeInput({
+      req: {
+        method: 'PUT',
+        url: '/json',
+        headers: {
+          host: 'forms.example.test',
+        },
+        body: {
+          city: 'Cairo',
+        },
+      },
+    })
+    expect(jsonRequest?.headers.get('content-type')).toBe('application/json')
+    await expect(jsonRequest?.json()).resolves.toEqual({
+      city: 'Cairo',
+    })
+
+    const typedArrayRequest = formsInternals.normalizeRequestLikeInput({
+      method: 'POST',
+      path: '/binary',
+      headers: {
+        host: 'forms.example.test',
+      },
+      body: new Uint8Array([65, 66, 67]),
+    })
+    expect(await typedArrayRequest?.text()).toBe('ABC')
+
+    const arrayBufferRequest = formsInternals.normalizeRequestLikeInput({
+      method: 'POST',
+      path: '/buffer',
+      headers: {
+        host: 'forms.example.test',
+      },
+      body: new Uint8Array([68, 69, 70]).buffer,
+    })
+    expect(await arrayBufferRequest?.text()).toBe('DEF')
+
+    const stringifiedRequest = formsInternals.normalizeRequestLikeInput({
+      node: {
+        req: {
+          method: 'DELETE',
+          url: '/remove',
+          headers: {
+            host: 'forms.example.test',
+          },
+          body: 404,
+        },
+      },
+    })
+    expect(stringifiedRequest?.method).toBe('DELETE')
+    await expect(stringifiedRequest?.text()).resolves.toBe('404')
+
+    const nodeBodyFallbackRequest = formsInternals.normalizeRequestLikeInput({
+      node: {
+        req: {
+          method: 'POST',
+          url: '/node-body',
+          headers: {
+            host: 'forms.example.test',
+          },
+          pipe() {},
+        },
+      },
+    })
+    expect(nodeBodyFallbackRequest?.method).toBe('POST')
+
+    const emptyPostRequest = formsInternals.normalizeRequestLikeInput({
+      req: {
+        method: 'POST',
+        url: '/empty',
+        headers: {
+          host: 'forms.example.test',
+        },
+        body: null,
+      },
+    })
+    expect(await emptyPostRequest?.text()).toBe('')
+
+    const headRequest = formsInternals.normalizeRequestLikeInput({
+      method: 'HEAD',
+      path: '/health',
+      body: 'ignored',
+    })
+    expect(await headRequest?.text()).toBe('')
+
+    const defaultGetRequest = formsInternals.normalizeRequestLikeInput({
+      node: {
+        req: {
+          headers: {
+            host: 'forms.example.test',
+          },
+        },
+      },
+    })
+    expect(defaultGetRequest?.method).toBe('GET')
+    expect(defaultGetRequest?.url).toBe('http://forms.example.test/')
+    expect(await defaultGetRequest?.text()).toBe('')
+    expect(formsInternals.normalizeRequestLikeInput(null)).toBeUndefined()
   })
 
   it('falls back to empty values when request inspection cannot be replayed after a security failure', async () => {
