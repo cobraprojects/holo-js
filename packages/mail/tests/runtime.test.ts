@@ -19,10 +19,40 @@ import {
   resetPreviewMailArtifacts,
   resetMailRuntime,
   sendMail,
+  type MailDriver,
+  type MailPreviewInput,
+  type MailPreviewResult,
+  type MailSendResult,
+  type NormalizedHoloMailConfig,
 } from '../src'
 
 const previousAppEnv = process.env.APP_ENV
 const previousNodeEnv = process.env.NODE_ENV
+
+type NormalizedMailMailerConfig = NormalizedHoloMailConfig['mailers'][string]
+type BuiltInDriverName = 'preview' | 'fake' | 'log' | 'smtp'
+
+function getMailerConfig<TDriver extends NormalizedMailMailerConfig['driver']>(
+  config: NormalizedHoloMailConfig,
+  mailer: string,
+  driver: TDriver,
+): Extract<NormalizedMailMailerConfig, { readonly driver: TDriver }> {
+  const mailerConfig = config.mailers[mailer]
+  if (!mailerConfig || mailerConfig.driver !== driver) {
+    throw new Error(`Expected mailer "${mailer}" to use driver "${driver}".`)
+  }
+
+  return mailerConfig as Extract<NormalizedMailMailerConfig, { readonly driver: TDriver }>
+}
+
+function getBuiltInDriver(name: BuiltInDriverName): MailDriver {
+  const driver = mailRuntimeInternals.builtInDrivers[name]
+  if (!driver) {
+    throw new Error(`Expected built-in mail driver "${name}" to be registered.`)
+  }
+
+  return driver
+}
 
 function createQueueModuleStub(options: { readonly autoRun?: boolean } = {}) {
   const jobs = new Map<string, { handle(payload: unknown): Promise<unknown> | unknown }>()
@@ -172,13 +202,13 @@ afterEach(() => {
   resetMailDriverRegistry()
   resetMailRuntime()
   if (typeof previousAppEnv === 'string') {
-    process.env.APP_ENV = previousAppEnv
+    Reflect.set(process.env, 'APP_ENV', previousAppEnv)
   } else {
     Reflect.deleteProperty(process.env, 'APP_ENV')
   }
 
   if (typeof previousNodeEnv === 'string') {
-    process.env.NODE_ENV = previousNodeEnv
+    Reflect.set(process.env, 'NODE_ENV', previousNodeEnv)
   } else {
     Reflect.deleteProperty(process.env, 'NODE_ENV')
   }
@@ -637,18 +667,20 @@ describe('@holo-js/mail runtime', () => {
   })
 
   it('sends through the built-in preview and fake drivers and stores runtime records', async () => {
+    const resolvedConfig = mailRuntimeInternals.getResolvedConfig()
+
     configureMailRuntime({
       config: {
-        ...mailRuntimeInternals.getResolvedConfig(),
+        ...resolvedConfig,
         default: 'preview',
         from: { email: 'config@example.com' },
         mailers: {
-          ...mailRuntimeInternals.getResolvedConfig().mailers,
+          ...resolvedConfig.mailers,
           preview: {
-            ...mailRuntimeInternals.getResolvedConfig().mailers.preview,
+            ...getMailerConfig(resolvedConfig, 'preview', 'preview'),
           },
           fake: {
-            ...mailRuntimeInternals.getResolvedConfig().mailers.fake,
+            ...getMailerConfig(resolvedConfig, 'fake', 'fake'),
           },
         },
       },
@@ -713,15 +745,17 @@ describe('@holo-js/mail runtime', () => {
     const previewRoot = await mkdtemp(join(tmpdir(), 'holo-mail-preview-'))
 
     try {
+      const resolvedConfig = mailRuntimeInternals.getResolvedConfig()
+
       configureMailRuntime({
         config: {
-          ...mailRuntimeInternals.getResolvedConfig(),
+          ...resolvedConfig,
           default: 'preview',
           from: { email: 'config@example.com' },
           mailers: {
-            ...mailRuntimeInternals.getResolvedConfig().mailers,
+            ...resolvedConfig.mailers,
             preview: {
-              ...mailRuntimeInternals.getResolvedConfig().mailers.preview,
+              ...getMailerConfig(resolvedConfig, 'preview', 'preview'),
               path: previewRoot,
             },
           },
@@ -769,17 +803,19 @@ describe('@holo-js/mail runtime', () => {
     const previewRoot = await mkdtemp(join(tmpdir(), 'holo-mail-preview-'))
 
     try {
+      const resolvedConfig = mailRuntimeInternals.getResolvedConfig()
+
       configureMailRuntime({
         config: {
-          ...mailRuntimeInternals.getResolvedConfig(),
+          ...resolvedConfig,
           from: { email: 'config@example.com' },
           mailers: {
-            ...mailRuntimeInternals.getResolvedConfig().mailers,
+            ...resolvedConfig.mailers,
             fake: {
-              ...mailRuntimeInternals.getResolvedConfig().mailers.fake,
+              ...getMailerConfig(resolvedConfig, 'fake', 'fake'),
             },
             preview: {
-              ...mailRuntimeInternals.getResolvedConfig().mailers.preview,
+              ...getMailerConfig(resolvedConfig, 'preview', 'preview'),
               path: previewRoot,
             },
           },
@@ -823,23 +859,24 @@ describe('@holo-js/mail runtime', () => {
   it('queues built-in preview, fake, and log drivers and only captures on execution', async () => {
     const queue = createQueueModuleStub({ autoRun: false })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const resolvedConfig = mailRuntimeInternals.getResolvedConfig()
 
     mailRuntimeInternals.setQueueModuleLoader(async () => queue.module)
     configureMailRuntime({
       config: {
-        ...mailRuntimeInternals.getResolvedConfig(),
+        ...resolvedConfig,
         from: { email: 'config@example.com' },
         default: 'preview',
         mailers: {
-          ...mailRuntimeInternals.getResolvedConfig().mailers,
+          ...resolvedConfig.mailers,
           preview: {
-            ...mailRuntimeInternals.getResolvedConfig().mailers.preview,
+            ...getMailerConfig(resolvedConfig, 'preview', 'preview'),
           },
           fake: {
-            ...mailRuntimeInternals.getResolvedConfig().mailers.fake,
+            ...getMailerConfig(resolvedConfig, 'fake', 'fake'),
           },
           log: {
-            ...mailRuntimeInternals.getResolvedConfig().mailers.log,
+            ...getMailerConfig(resolvedConfig, 'log', 'log'),
             logBodies: false,
           },
         },
@@ -892,19 +929,20 @@ describe('@holo-js/mail runtime', () => {
       },
     })
     const storage = createStorageModuleStub()
+    const resolvedConfig = mailRuntimeInternals.getResolvedConfig()
 
     mailRuntimeInternals.setNodemailerModuleLoader(async () => nodemailer.module)
     mailRuntimeInternals.setStorageModuleLoader(async () => storage.module)
     configureMailRuntime({
       config: {
-        ...mailRuntimeInternals.getResolvedConfig(),
+        ...resolvedConfig,
         default: 'smtp',
         from: { email: 'config@example.com', name: 'Config Sender' },
         replyTo: { email: 'reply@example.com', name: 'Reply Team' },
         mailers: {
-          ...mailRuntimeInternals.getResolvedConfig().mailers,
+          ...resolvedConfig.mailers,
           smtp: {
-            ...mailRuntimeInternals.getResolvedConfig().mailers.smtp,
+            ...getMailerConfig(resolvedConfig, 'smtp', 'smtp'),
             from: { email: 'mailer@example.com', name: 'Mailer Sender' },
             replyTo: { email: 'mailer-reply@example.com', name: 'Mailer Reply' },
             host: 'smtp.internal',
@@ -1098,15 +1136,16 @@ describe('@holo-js/mail runtime', () => {
         },
       },
     }))
+    const resolvedConfig = mailRuntimeInternals.getResolvedConfig()
     configureMailRuntime({
       config: {
-        ...mailRuntimeInternals.getResolvedConfig(),
+        ...resolvedConfig,
         default: 'fake',
         from: { email: 'config@example.com' },
         mailers: {
-          ...mailRuntimeInternals.getResolvedConfig().mailers,
+          ...resolvedConfig.mailers,
           fake: {
-            ...mailRuntimeInternals.getResolvedConfig().mailers.fake,
+            ...getMailerConfig(resolvedConfig, 'fake', 'fake'),
           },
         },
       },
@@ -1398,11 +1437,12 @@ describe('@holo-js/mail runtime', () => {
         queue: 'mail-only',
       },
     })
+    const resolvedConfig = mailRuntimeInternals.getResolvedConfig()
     const queueConfig = {
-      ...mailRuntimeInternals.getResolvedConfig(),
+      ...resolvedConfig,
       mailers: {
         preview: {
-          ...mailRuntimeInternals.getResolvedConfig().mailers.preview,
+          ...getMailerConfig(resolvedConfig, 'preview', 'preview'),
           queue: {
             queued: true,
             connection: 'redis',
@@ -1467,13 +1507,17 @@ describe('@holo-js/mail runtime', () => {
     const context = mailRuntimeInternals.createSendContext('mail-1', {
       mailer: 'preview',
       driver: 'preview',
-      implementation: mailRuntimeInternals.builtInDrivers.preview,
+      implementation: getBuiltInDriver('preview'),
     }, false)
     expect(mailRuntimeInternals.normalizeDriverResult(undefined, context)).toMatchObject({
       messageId: 'mail-1',
       queued: false,
     })
     expect(mailRuntimeInternals.normalizeDriverResult({
+      messageId: 'mail-1',
+      mailer: 'preview',
+      driver: 'preview',
+      queued: false,
       providerMessageId: 'provider-1',
       provider: {
         response: '250 accepted',
@@ -1568,7 +1612,7 @@ describe('@holo-js/mail runtime', () => {
       mailRuntimeInternals.createSendContext('mail-2', {
         mailer: 'preview',
         driver: 'smtp',
-        implementation: mailRuntimeInternals.builtInDrivers.smtp,
+        implementation: getBuiltInDriver('smtp'),
       }, false),
     )).rejects.toMatchObject({
       code: 'MAIL_SMTP_MAILER_INVALID',
@@ -1579,15 +1623,16 @@ describe('@holo-js/mail runtime', () => {
       },
     })
     mailRuntimeInternals.setNodemailerModuleLoader(async () => nodemailerWithoutResponse.module)
+    const smtpConfigWithoutResponse = mailRuntimeInternals.getResolvedConfig()
     configureMailRuntime({
       config: {
-        ...mailRuntimeInternals.getResolvedConfig(),
+        ...smtpConfigWithoutResponse,
         default: 'smtp',
         from: { email: 'config@example.com' },
         mailers: {
-          ...mailRuntimeInternals.getResolvedConfig().mailers,
+          ...smtpConfigWithoutResponse.mailers,
           smtp: {
-            ...mailRuntimeInternals.getResolvedConfig().mailers.smtp,
+            ...getMailerConfig(smtpConfigWithoutResponse, 'smtp', 'smtp'),
             host: 'smtp.example.com',
             port: 587,
             secure: false,
@@ -1604,7 +1649,7 @@ describe('@holo-js/mail runtime', () => {
     } as never, mailRuntimeInternals.createSendContext('mail-3a', {
       mailer: 'smtp',
       driver: 'smtp',
-      implementation: mailRuntimeInternals.builtInDrivers.smtp,
+      implementation: getBuiltInDriver('smtp'),
     }, false))).toMatchObject({
       html: '<p>Hello</p>',
     })
@@ -1618,7 +1663,7 @@ describe('@holo-js/mail runtime', () => {
       mailRuntimeInternals.createSendContext('mail-3', {
         mailer: 'smtp',
         driver: 'smtp',
-        implementation: mailRuntimeInternals.builtInDrivers.smtp,
+        implementation: getBuiltInDriver('smtp'),
       }, false),
     )).resolves.toMatchObject({
       providerMessageId: 'provider-only-id',
@@ -1629,15 +1674,16 @@ describe('@holo-js/mail runtime', () => {
       },
     })
     mailRuntimeInternals.setNodemailerModuleLoader(async () => nodemailerWithoutMessageId.module)
+    const smtpConfigWithoutMessageId = mailRuntimeInternals.getResolvedConfig()
     configureMailRuntime({
       config: {
-        ...mailRuntimeInternals.getResolvedConfig(),
+        ...smtpConfigWithoutMessageId,
         default: 'smtp',
         from: { email: 'config@example.com' },
         mailers: {
-          ...mailRuntimeInternals.getResolvedConfig().mailers,
+          ...smtpConfigWithoutMessageId.mailers,
           smtp: {
-            ...mailRuntimeInternals.getResolvedConfig().mailers.smtp,
+            ...getMailerConfig(smtpConfigWithoutMessageId, 'smtp', 'smtp'),
             host: 'smtp.example.com',
             port: 587,
             secure: false,
@@ -1656,7 +1702,7 @@ describe('@holo-js/mail runtime', () => {
       mailRuntimeInternals.createSendContext('mail-3ab', {
         mailer: 'smtp',
         driver: 'smtp',
-        implementation: mailRuntimeInternals.builtInDrivers.smtp,
+        implementation: getBuiltInDriver('smtp'),
       }, false),
     )).resolves.toMatchObject({
       provider: {
@@ -1670,15 +1716,16 @@ describe('@holo-js/mail runtime', () => {
       },
     })
     mailRuntimeInternals.setNodemailerModuleLoader(async () => nodemailerWithResponse.module)
+    const smtpConfigWithResponse = mailRuntimeInternals.getResolvedConfig()
     configureMailRuntime({
       config: {
-        ...mailRuntimeInternals.getResolvedConfig(),
+        ...smtpConfigWithResponse,
         default: 'smtp',
         from: { email: 'config@example.com' },
         mailers: {
-          ...mailRuntimeInternals.getResolvedConfig().mailers,
+          ...smtpConfigWithResponse.mailers,
           smtp: {
-            ...mailRuntimeInternals.getResolvedConfig().mailers.smtp,
+            ...getMailerConfig(smtpConfigWithResponse, 'smtp', 'smtp'),
             host: 'smtp.example.com',
             port: 587,
             secure: false,
@@ -1698,7 +1745,7 @@ describe('@holo-js/mail runtime', () => {
       mailRuntimeInternals.createSendContext('mail-3b', {
         mailer: 'smtp',
         driver: 'smtp',
-        implementation: mailRuntimeInternals.builtInDrivers.smtp,
+        implementation: getBuiltInDriver('smtp'),
       }, false),
     )).resolves.toMatchObject({
       providerMessageId: 'provider-response-id',
@@ -1709,7 +1756,7 @@ describe('@holo-js/mail runtime', () => {
     mailRuntimeInternals.setNodemailerModuleLoader(undefined)
 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(mailRuntimeInternals.builtInDrivers.log.send({
+    expect(getBuiltInDriver('log').send({
       ...smtpResolvedMail,
       tags: ['transactional'],
       priority: 'high',
@@ -1724,7 +1771,7 @@ describe('@holo-js/mail runtime', () => {
     } as never, mailRuntimeInternals.createSendContext('mail-log', {
       mailer: 'preview',
       driver: 'log',
-      implementation: mailRuntimeInternals.builtInDrivers.log,
+      implementation: getBuiltInDriver('log'),
     }, false))).toMatchObject({
       driver: 'log',
     })
@@ -1769,7 +1816,12 @@ describe('@holo-js/mail runtime', () => {
     })
     registerMailDriver('resolved-driver', {
       async send() {
-        return undefined
+        return {
+          messageId: 'resolved-driver',
+          mailer: 'custom-mailer',
+          driver: 'resolved-driver',
+          queued: false,
+        }
       },
     }, {
       replaceExisting: true,
@@ -1970,14 +2022,15 @@ describe('@holo-js/mail runtime', () => {
       },
     })
 
+    const missingFromConfig = mailRuntimeInternals.getResolvedConfig()
     configureMailRuntime({
       config: {
-        ...mailRuntimeInternals.getResolvedConfig(),
+        ...missingFromConfig,
         from: undefined,
         mailers: {
-          ...mailRuntimeInternals.getResolvedConfig().mailers,
+          ...missingFromConfig.mailers,
           preview: {
-            ...mailRuntimeInternals.getResolvedConfig().mailers.preview,
+            ...getMailerConfig(missingFromConfig, 'preview', 'preview'),
             from: undefined,
             replyTo: undefined,
           },
@@ -1998,12 +2051,10 @@ describe('@holo-js/mail runtime', () => {
           allowedEnvironments: ['test'],
         },
       },
-      preview: vi.fn(async ({ mail }) => ({
-        messageId: 'preview-override',
+      preview: vi.fn(async ({ mail }: MailPreviewInput): Promise<MailPreviewResult> => ({
         source: {
           kind: 'text',
         },
-        mailer: 'preview',
         from: { email: 'config@example.com' },
         replyTo: { email: 'config@example.com' },
         to: mail.to,
@@ -2012,6 +2063,8 @@ describe('@holo-js/mail runtime', () => {
         subject: mail.subject,
         text: 'override preview',
         attachments: [],
+        headers: {},
+        tags: [],
         metadata: {},
       })),
       renderPreview: vi.fn(async () => new Response('override render')),
@@ -2104,16 +2157,17 @@ describe('@holo-js/mail runtime', () => {
 
   it('logs summary output by default and includes bodies only when verbose log mode is enabled', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const resolvedConfig = mailRuntimeInternals.getResolvedConfig()
 
     configureMailRuntime({
       config: {
-        ...mailRuntimeInternals.getResolvedConfig(),
+        ...resolvedConfig,
         default: 'log',
         from: { email: 'config@example.com' },
         mailers: {
-          ...mailRuntimeInternals.getResolvedConfig().mailers,
+          ...resolvedConfig.mailers,
           log: {
-            ...mailRuntimeInternals.getResolvedConfig().mailers.log,
+            ...getMailerConfig(resolvedConfig, 'log', 'log'),
             logBodies: false,
           },
           verbose: {
@@ -2158,7 +2212,11 @@ describe('@holo-js/mail runtime', () => {
   })
 
   it('uses registered custom drivers and wraps thrown driver errors', async () => {
-    const customSend = vi.fn(async () => ({
+    const customSend = vi.fn<MailDriver['send']>(async () => ({
+      messageId: 'custom-send',
+      mailer: 'transactional',
+      driver: 'resend',
+      queued: false,
       providerMessageId: 'provider-1',
       provider: {
         region: 'us',

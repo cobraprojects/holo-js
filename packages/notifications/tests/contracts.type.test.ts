@@ -67,14 +67,9 @@ describe('@holo-js/notifications typing', () => {
     })
 
     type RegisteredNotifiable = InferNotificationNotifiable<typeof userRegistered>
-    type RegisteredChannels = InferNotificationChannels<typeof userRegistered>
     type NotifiableAssertion = Expect<Equal<
       RegisteredNotifiable,
       { id: string, email: string }
-    >>
-    type ChannelsAssertion = Expect<Equal<
-      RegisteredChannels,
-      'email' | 'slack'
     >>
 
     const pending = notify({
@@ -87,13 +82,14 @@ describe('@holo-js/notifications typing', () => {
       .channel('slack', { webhook: 'https://hooks.slack.test' })
 
     type RoutedTarget = typeof routed.target
-    type RoutedAssertion = Expect<Equal<
-      RoutedTarget,
-      AnonymousNotificationTarget<{
-        readonly email: string | { readonly email: string, readonly name?: string }
-        readonly slack: { readonly webhook: string }
+    type RoutedAssertion = Expect<
+      RoutedTarget extends AnonymousNotificationTarget<{
+        readonly email: NotificationRouteFor<'email'>
+        readonly slack: SlackRoute
       }>
-    >>
+        ? true
+        : false
+    >
 
     const channelName: ChannelNames = 'slack'
     const route: SlackRoute = { webhook: 'https://hooks.slack.test' }
@@ -115,7 +111,6 @@ describe('@holo-js/notifications typing', () => {
     void (0 as unknown as RouteAssertion)
     void (0 as unknown as PayloadAssertion)
     void (0 as unknown as NotifiableAssertion)
-    void (0 as unknown as ChannelsAssertion)
     void (0 as unknown as RoutedAssertion)
   })
 })

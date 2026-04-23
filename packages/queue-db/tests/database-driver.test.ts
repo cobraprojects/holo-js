@@ -38,13 +38,19 @@ function createDialect(name: string, placeholderPrefix: '$' | '?'): Dialect {
   return {
     name,
     capabilities: {
+      returning: false,
+      lockForUpdate: false,
+      sharedLock: false,
       concurrentQueries: false,
-      jsonOperations: true,
-      lateralJoins: false,
       workerThreadExecution: false,
-      pessimisticLocking: false,
       savepoints: true,
-      vectorColumns: false,
+      jsonValueQuery: true,
+      jsonContains: true,
+      jsonLength: true,
+      schemaQualifiedIdentifiers: true,
+      nativeUpsert: false,
+      ddlAlterSupport: false,
+      introspection: false,
     },
     quoteIdentifier(identifier: string) {
       return `"${identifier}"`
@@ -444,7 +450,7 @@ describe('@holo-js/queue-db database driver', () => {
   })
 
   it('reuses the active async-context connection when it matches the configured database connection', async () => {
-    const executeCompiled = vi.fn(async () => ({}))
+    const executeCompiled = vi.fn(async (_statement: unknown) => ({}))
     const initialize = vi.fn(async () => {})
     const activeConnection = {
       async initialize() {

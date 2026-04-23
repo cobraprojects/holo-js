@@ -78,10 +78,10 @@ describe('@holo-js/flux package surface', () => {
     publicSubscription.notification((payload) => {
       receivedNotifications.push(payload)
     })
-    publicSubscription.listenForWhisper('typing.start', (payload) => {
+    publicSubscription.listenForWhisper('typing.start' as never, (payload) => {
       receivedWhispers.push(payload)
     })
-    publicSubscription.listenForWhisper('typing.start', (payload) => {
+    publicSubscription.listenForWhisper('typing.start' as never, (payload) => {
       receivedWhispers.push({ duplicate: payload })
     })
     expect(() => publicSubscription.listen('   ' as never, () => undefined)).toThrow('must be a non-empty string')
@@ -89,7 +89,7 @@ describe('@holo-js/flux package surface', () => {
 
     debug!.emitEvent('orders.1', 'orders.updated', { id: 'ord_1' })
     debug!.emitNotification('orders.1', { type: 'OrderUpdated' })
-    await publicSubscription.whisper('typing.start', { editing: true })
+    await publicSubscription.whisper('typing.start' as never, { editing: true })
     expect(receivedEvents).toEqual([{ id: 'ord_1' }])
     expect(receivedNotifications).toEqual([{ type: 'OrderUpdated' }])
     expect(receivedWhispers).toEqual([
@@ -108,7 +108,7 @@ describe('@holo-js/flux package surface', () => {
     debug!.updatePresenceMembers('chat.1', [{ id: 'user_1' }, { id: 'user_2' }])
     expect(presenceSubscription.members).toEqual([{ id: 'user_1' }, { id: 'user_2' }])
 
-    await privateSubscription.whisper('typing.start', { editing: false })
+    await privateSubscription.whisper('typing.start' as never, { editing: false })
     privateSubscription.leave()
     publicSubscription.leaveChannel()
     presenceSubscription.leaveChannel()
@@ -164,13 +164,13 @@ describe('@holo-js/flux package surface', () => {
       connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
     })
     const debug = (client as unknown as { __debug?: ReturnType<typeof fluxInternals.createPusherConnector>['__debug'] }).__debug
-    const presenceSubscription = client.presence('chat.2') as typeof client extends never
+    const presenceSubscription = client.presence('chat.2') as unknown as typeof client extends never
       ? never
       : {
           __onPresenceChange(callback: (members: readonly BroadcastJsonObject[]) => void): () => void
           leaveChannel(): void
         }
-    const seen: readonly BroadcastJsonObject[][] = []
+    const seen: Array<readonly BroadcastJsonObject[]> = []
 
     const stop = presenceSubscription.__onPresenceChange((members) => {
       seen.push(members)

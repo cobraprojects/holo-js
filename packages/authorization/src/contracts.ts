@@ -172,27 +172,15 @@ type RegisteredAuthorizationAbilityEntry<TAbilityName extends string> = Authoriz
   Extract<TAbilityName, RegisteredAuthorizationAbilityName>
 ]
 
-export type PolicyActorForName<TPolicyName extends string> = RegisteredAuthorizationPolicyEntry<TPolicyName> extends AuthorizationPolicyRegistryEntry<
-  AuthorizationPolicyTarget,
-  string,
-  string,
-  infer TActor
->
-  ? FallbackRegistryActor<TActor>
-  : RegisteredAuthorizationPolicyEntry<TPolicyName> extends {
-    actor: infer TActor
-  }
+export type PolicyActorForName<TPolicyName extends string> = RegisteredAuthorizationPolicyEntry<TPolicyName> extends {
+  actor: infer TActor
+}
   ? FallbackRegistryActor<TActor>
   : object
 
-export type AbilityActorForName<TAbilityName extends string> = RegisteredAuthorizationAbilityEntry<TAbilityName> extends AuthorizationAbilityRegistryEntry<
-  object,
-  infer TActor
->
-  ? FallbackRegistryActor<TActor>
-  : RegisteredAuthorizationAbilityEntry<TAbilityName> extends {
-    actor: infer TActor
-  }
+export type AbilityActorForName<TAbilityName extends string> = RegisteredAuthorizationAbilityEntry<TAbilityName> extends {
+  actor: infer TActor
+}
   ? FallbackRegistryActor<TActor>
   : object
 

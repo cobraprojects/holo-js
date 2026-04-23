@@ -5,12 +5,6 @@ import {
   type HoloConfigRegistry,
 } from '../src'
 
-declare module '../src/types' {
-  interface HoloConfigRegistry {
-    services: Record<string, never>
-  }
-}
-
 describe('@holo-js/config broadcast typing', () => {
   it('preserves broadcast inference through config helpers and dot-path access', () => {
     const broadcast = defineBroadcastConfig({
@@ -47,7 +41,11 @@ describe('@holo-js/config broadcast typing', () => {
       session: {} as HoloConfigRegistry['session'],
       security: {} as HoloConfigRegistry['security'],
       auth: {} as HoloConfigRegistry['auth'],
-      services: {} as HoloConfigRegistry['services'],
+      services: {
+        mailgun: {
+          secret: 'secret',
+        },
+      },
     })
 
     const defaultConnection: string = accessors.useConfig('broadcast.default')

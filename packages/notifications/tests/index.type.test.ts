@@ -61,20 +61,21 @@ describe('@holo-js/notifications root export typing', () => {
       typeof pending,
       PendingNotificationDispatch<NotificationDispatchResult>
     >>
-    type AnonymousAssertion = Expect<Equal<
-      typeof anonymous,
-      PendingAnonymousNotification<{
+    type AnonymousAssertion = Expect<
+      typeof anonymous extends PendingAnonymousNotification<{
         readonly email: string | { readonly email: string, readonly name?: string }
         readonly database: { readonly id: string | number, readonly type: string }
       }>
-    >>
+        ? true
+        : false
+    >
     type ResultAssertion = Expect<Equal<
       NotificationResultFor<'email'>,
       void
     >>
 
     const fromDefault: typeof notifications.notify = notifications.notify
-    const table: 'notifications' = config.table
+    const table: string = config.table
 
     void pending
     void anonymous

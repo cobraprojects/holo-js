@@ -441,7 +441,7 @@ export function renderGeneratedAuthorizationTypes(
 
     return [
       `    ${JSON.stringify(entry.name)}: {`,
-      `      actor: typeof ${importName}[${JSON.stringify(entry.exportName)}] extends import('@holo-js/authorization/contracts').AuthorizationPolicyDefinition<infer _TName, infer _TTarget, infer _TClassActions, infer _TRecordActions, infer TActor> ? TActor : object`,
+      '      actor: object',
       `      target: typeof ${importName}[${JSON.stringify(entry.exportName)}] extends import('@holo-js/authorization/contracts').AuthorizationPolicyDefinition<infer _TName, infer TTarget, infer _TClassActions, infer _TRecordActions, infer _TActor> ? TTarget : object`,
       `      classActions: typeof ${importName}[${JSON.stringify(entry.exportName)}] extends import('@holo-js/authorization/contracts').AuthorizationPolicyDefinition<infer _TName, infer _TTarget, infer TClassActions, infer _TRecordActions, infer _TActor> ? {`,
       ...classActionEntries,
@@ -466,7 +466,7 @@ export function renderGeneratedAuthorizationTypes(
 
     return [
       `    ${JSON.stringify(entry.name)}: {`,
-      `      actor: typeof ${importName}[${JSON.stringify(entry.exportName)}] extends import('@holo-js/authorization/contracts').AuthorizationAbilityDefinition<infer _TName, infer _TInput, infer TActor> ? TActor : object`,
+      '      actor: object',
       `      input: typeof ${importName}[${JSON.stringify(entry.exportName)}] extends import('@holo-js/authorization/contracts').AuthorizationAbilityDefinition<infer _TName, infer TInput, infer _TActor> ? TInput : object`,
       '    }',
     ].join('\n')

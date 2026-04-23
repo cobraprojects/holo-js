@@ -38,7 +38,7 @@ describe('@holo-js/events typing', () => {
       handle(event) {
         return event.name
       },
-    })
+    } satisfies ListenerDefinition<readonly [typeof userRegistered, typeof userDeleted], string>)
 
     type MultiEvent = Parameters<typeof multiListener.handle>[0]
     type MultiEventName = MultiEvent['name']

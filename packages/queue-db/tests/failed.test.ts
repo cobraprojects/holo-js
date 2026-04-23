@@ -34,13 +34,19 @@ function createDialect(name: string, placeholderPrefix: '$' | '?'): Dialect {
   return {
     name,
     capabilities: {
+      returning: false,
+      lockForUpdate: false,
+      sharedLock: false,
       concurrentQueries: false,
-      jsonOperations: true,
-      lateralJoins: false,
       workerThreadExecution: false,
-      pessimisticLocking: false,
       savepoints: true,
-      vectorColumns: false,
+      jsonValueQuery: true,
+      jsonContains: true,
+      jsonLength: true,
+      schemaQualifiedIdentifiers: true,
+      nativeUpsert: false,
+      ddlAlterSupport: false,
+      introspection: false,
     },
     quoteIdentifier(identifier: string) {
       return `"${identifier}"`
@@ -320,7 +326,7 @@ describe('@holo-js/queue-db failed job store', () => {
   })
 
   it('reuses the active async-context connection for the failed-job store when names match', async () => {
-    const executeCompiled = vi.fn(async () => ({}))
+    const executeCompiled = vi.fn(async (_statement: unknown) => ({}))
     const activeConnection = {
       async initialize() {},
       getConnectionName() {

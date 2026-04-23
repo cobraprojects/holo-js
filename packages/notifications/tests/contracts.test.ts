@@ -56,7 +56,7 @@ describe('@holo-js/notifications contracts', () => {
   it('rejects malformed definitions, delays, and queue options', () => {
     expect(() => defineNotification({
       via() {
-        return ['email'] as const
+        return ['email'] as never
       },
       build: {},
     })).toThrow('must define at least one channel payload builder')

@@ -218,7 +218,7 @@ function createSignedRequest(
   return new Request(url.toString(), {
     method,
     headers,
-    body: payloadBytes,
+    body: payloadBytes ? new Blob([new Uint8Array(payloadBytes)]) : undefined,
   })
 }
 

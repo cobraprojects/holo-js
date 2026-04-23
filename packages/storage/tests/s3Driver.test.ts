@@ -1,7 +1,13 @@
 import { createHash, createHmac } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type createS3Driver from '../../storage-s3/src'
 
 const fetchMock = vi.fn()
+
+async function loadDriver(): Promise<typeof createS3Driver> {
+  const module = await import('../src/runtime/drivers/s3') as { default: typeof createS3Driver }
+  return module.default
+}
 
 async function readRequestBody(request: Request): Promise<string> {
   return request.clone().text()
@@ -45,7 +51,7 @@ describe('custom s3 storage driver', () => {
   it('signs requests with the session token when temporary credentials are configured', async () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 200 }))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -66,7 +72,7 @@ describe('custom s3 storage driver', () => {
   it('uses the configured addressing mode for backend requests', async () => {
     fetchMock.mockImplementation(async () => new Response('stored', { status: 200 }))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const virtualHostDriver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -99,7 +105,7 @@ describe('custom s3 storage driver', () => {
     const accessKeyId = 'AKIAEXAMPLE'
     const secretAccessKey = 'supersecretkey'
     const region = 'us-east-1'
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region,
@@ -142,7 +148,7 @@ describe('custom s3 storage driver', () => {
   })
 
   it('validates required driver options', async () => {
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
 
     expect(() => createDriver({
       region: 'us-east-1',
@@ -196,7 +202,7 @@ describe('custom s3 storage driver', () => {
       }))
       .mockResolvedValueOnce(new Response(null, { status: 404 }))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -228,7 +234,7 @@ describe('custom s3 storage driver', () => {
       .mockResolvedValueOnce(new Response(null, { status: 404 }))
       .mockResolvedValueOnce(new Response(null, { status: 200 }))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -248,7 +254,7 @@ describe('custom s3 storage driver', () => {
       .mockResolvedValueOnce(new Response(null, { status: 404 }))
       .mockResolvedValueOnce(new Response(null, { status: 200 }))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -266,7 +272,7 @@ describe('custom s3 storage driver', () => {
   it('returns null metadata for missing objects', async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 404 }))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -283,7 +289,7 @@ describe('custom s3 storage driver', () => {
       .mockResolvedValueOnce(new Response(null, { status: 200 }))
       .mockResolvedValueOnce(new Response(null, { status: 200 }))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -302,7 +308,7 @@ describe('custom s3 storage driver', () => {
   it('parses structured JSON payloads back through getItem', async () => {
     fetchMock.mockResolvedValueOnce(new Response('{"ok":true,"count":2}', { status: 200 }))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -333,7 +339,7 @@ describe('custom s3 storage driver', () => {
         { status: 200 },
       ))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -363,7 +369,7 @@ describe('custom s3 storage driver', () => {
       { status: 200 },
     ))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -387,7 +393,7 @@ describe('custom s3 storage driver', () => {
       { status: 200 },
     ))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -421,7 +427,7 @@ describe('custom s3 storage driver', () => {
       .mockResolvedValueOnce(new Response(null, { status: 200 }))
       .mockResolvedValueOnce(new Response(null, { status: 200 }))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -449,7 +455,7 @@ describe('custom s3 storage driver', () => {
       { status: 200 },
     ))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -472,7 +478,7 @@ describe('custom s3 storage driver', () => {
       { status: 200 },
     ))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -496,7 +502,7 @@ describe('custom s3 storage driver', () => {
       { status: 200 },
     ))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -520,7 +526,7 @@ describe('custom s3 storage driver', () => {
       { status: 200 },
     ))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -546,7 +552,7 @@ describe('custom s3 storage driver', () => {
       .mockResolvedValueOnce(new Response(null, { status: 200 }))
       .mockResolvedValueOnce(new Response(null, { status: 200 }))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -575,7 +581,7 @@ describe('custom s3 storage driver', () => {
         }),
       })
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -596,7 +602,7 @@ describe('custom s3 storage driver', () => {
       { status: 200 },
     ))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -611,7 +617,7 @@ describe('custom s3 storage driver', () => {
   it('handles root-object requests and duplicate query keys when signing', async () => {
     fetchMock.mockResolvedValueOnce(new Response('root', { status: 200 }))
 
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region: 'us-east-1',
@@ -634,7 +640,7 @@ describe('custom s3 storage driver', () => {
     const accessKeyId = 'AKIAEXAMPLE'
     const secretAccessKey = 'supersecretkey'
     const region = 'us-east-1'
-    const { default: createDriver } = await import('../src/runtime/drivers/s3')
+    const createDriver = await loadDriver()
     const driver = createDriver({
       bucket: 'media-bucket',
       region,

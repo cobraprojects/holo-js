@@ -1,6 +1,7 @@
 import { createHash, createHmac } from 'node:crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HoloStorageRuntimeConfig } from '../src'
+import type * as StorageRuntimeModule from '../src/runtime/composables/index'
 
 type StoredValue = string | Uint8Array | ArrayBuffer | Buffer
 
@@ -72,6 +73,18 @@ function encodeCanonicalUri(pathname: string): string {
   return pathname.replace(/[!'()*]/g, (value) => {
     return `%${value.charCodeAt(0).toString(16).toUpperCase()}`
   })
+}
+
+function restoreGlobalProperty(
+  property: 'useRuntimeConfig' | 'useStorage',
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (descriptor) {
+    Object.defineProperty(globalThis, property, descriptor)
+    return
+  }
+
+  Reflect.deleteProperty(globalThis, property)
 }
 
 describe('Storage facade', () => {
@@ -282,7 +295,9 @@ describe('Storage facade', () => {
   })
 
   it('shares explicit runtime bindings across isolated module instances', async () => {
-    const isolatedRuntime = await import('../src/runtime/composables/index.ts?isolated-storage-runtime')
+    const isolatedRuntime = await import(
+      '../src/runtime/composables/index.ts' + '?isolated-storage-runtime'
+    ) as typeof StorageRuntimeModule
 
     try {
       await expect(isolatedRuntime.useStorage('public').exists('avatars/user-1.txt')).resolves.toBe(false)
@@ -316,43 +331,43 @@ describe('Storage facade', () => {
 
   it('falls back to runtime globals when explicit bindings are absent', async () => {
     const backend = createBackend('holo:public')
-    const runtimeGlobals = globalThis as typeof globalThis & {
-      useRuntimeConfig?: () => typeof runtimeConfig
-      useStorage?: () => MockStorageBackend
-    }
-    const previousUseRuntimeConfig = runtimeGlobals.useRuntimeConfig
-    const previousUseStorage = runtimeGlobals.useStorage
+    const previousUseRuntimeConfig = Object.getOwnPropertyDescriptor(globalThis, 'useRuntimeConfig')
+    const previousUseStorage = Object.getOwnPropertyDescriptor(globalThis, 'useStorage')
 
-    runtimeGlobals.useRuntimeConfig = () => runtimeConfig
-    runtimeGlobals.useStorage = () => backend
+    Object.defineProperty(globalThis, 'useRuntimeConfig', {
+      configurable: true,
+      writable: true,
+      value: () => runtimeConfig,
+    })
+    Object.defineProperty(globalThis, 'useStorage', {
+      configurable: true,
+      writable: true,
+      value: () => backend,
+    })
     resetStorageRuntime()
 
     try {
       await expect(useStorage('public').exists('avatars/user-1.txt')).resolves.toBe(false)
       expect(useStorage('public').url('avatars/user-1.txt')).toBe('https://app.test/storage/avatars/user-1.txt')
     } finally {
-      runtimeGlobals.useRuntimeConfig = previousUseRuntimeConfig
-      runtimeGlobals.useStorage = previousUseStorage
+      restoreGlobalProperty('useRuntimeConfig', previousUseRuntimeConfig)
+      restoreGlobalProperty('useStorage', previousUseStorage)
     }
   })
 
   it('throws when neither explicit bindings nor runtime globals are configured', () => {
-    const runtimeGlobals = globalThis as typeof globalThis & {
-      useRuntimeConfig?: unknown
-      useStorage?: unknown
-    }
-    const previousUseRuntimeConfig = runtimeGlobals.useRuntimeConfig
-    const previousUseStorage = runtimeGlobals.useStorage
+    const previousUseRuntimeConfig = Object.getOwnPropertyDescriptor(globalThis, 'useRuntimeConfig')
+    const previousUseStorage = Object.getOwnPropertyDescriptor(globalThis, 'useStorage')
 
-    delete runtimeGlobals.useRuntimeConfig
-    delete runtimeGlobals.useStorage
+    Reflect.deleteProperty(globalThis, 'useRuntimeConfig')
+    Reflect.deleteProperty(globalThis, 'useStorage')
     resetStorageRuntime()
 
     try {
       expect(() => useStorage('local')).toThrow('Storage runtime is not configured')
     } finally {
-      runtimeGlobals.useRuntimeConfig = previousUseRuntimeConfig
-      runtimeGlobals.useStorage = previousUseStorage
+      restoreGlobalProperty('useRuntimeConfig', previousUseRuntimeConfig)
+      restoreGlobalProperty('useStorage', previousUseStorage)
     }
   })
 
