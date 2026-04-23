@@ -109,6 +109,20 @@ function createDatabaseContextOptions(
     return createRuntimeConnectionOptions(driver, url, Boolean(typeof connection === 'string' ? false : connection.logging), undefined, connectionName)
   }
 
+  const parsedPort = typeof connection === 'string'
+    ? undefined
+    : typeof connection.port === 'number'
+      ? connection.port
+      : typeof connection.port === 'string' && /^\d+$/.test(connection.port.trim())
+        ? Number(connection.port.trim())
+        : undefined
+  const port = typeof parsedPort === 'number'
+    && Number.isInteger(parsedPort)
+    && parsedPort > 0
+    && parsedPort <= 65_535
+    ? parsedPort
+    : undefined
+
   return createRuntimeConnectionOptions(
     driver,
     typeof connection === 'string'
@@ -116,11 +130,7 @@ function createDatabaseContextOptions(
       : {
           url: connection.url,
           host: connection.host,
-          port: typeof connection.port === 'number'
-            ? connection.port
-            : typeof connection.port === 'string' && connection.port.trim()
-              ? Number.parseInt(connection.port.trim(), 10)
-              : undefined,
+          port,
           username: connection.username,
           password: connection.password,
           database: connection.database,
@@ -522,28 +532,29 @@ export function createDatabaseCacheDriver(options: DatabaseCacheDriverOptions): 
           return
         }
 
-        const lockNames = await new TableQueryBuilder(lockTableName, tx)
-          .select('name')
-          .get<{ name: string }>()
-        const entryKeys = await new TableQueryBuilder(entryTableName, tx)
-          .select('key')
-          .get<{ key: string }>()
+        const hasSqlWildcard = /[%_[]/.test(prefix)
+        if (hasSqlWildcard) {
+          const upperBound = `${prefix}\uFFFF`
 
-        for (const { name } of lockNames) {
-          if (name.startsWith(prefix)) {
-            await new TableQueryBuilder(lockTableName, tx)
-              .where('name', name)
-              .delete()
-          }
-        }
-
-        for (const { key } of entryKeys) {
-          if (key.startsWith(prefix)) {
-            await new TableQueryBuilder(entryTableName, tx)
-              .where('key', key)
+          await new TableQueryBuilder(lockTableName, tx)
+            .where('name', '>=', prefix)
+            .where('name', '<', upperBound)
             .delete()
-          }
+          await new TableQueryBuilder(entryTableName, tx)
+            .where('key', '>=', prefix)
+            .where('key', '<', upperBound)
+            .delete()
+          return
         }
+
+        const likePattern = `${prefix}%`
+
+        await new TableQueryBuilder(lockTableName, tx)
+          .whereLike('name', likePattern)
+          .delete()
+        await new TableQueryBuilder(entryTableName, tx)
+          .whereLike('key', likePattern)
+          .delete()
       }))
     },
     async increment(key: string, amount: number): Promise<number> {

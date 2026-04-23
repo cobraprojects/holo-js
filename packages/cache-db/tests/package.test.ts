@@ -233,6 +233,42 @@ describe('@holo-js/cache-db', () => {
       password: 'secret',
       database: 'app',
     })
+
+    const invalidStringPortOptions = cacheDbInternals.createDatabaseContextOptions('cache', {
+      driver: 'postgres',
+      host: 'cache.internal',
+      database: 'app',
+      username: 'user',
+      password: 'secret',
+      port: 'not-a-port' as never,
+    })
+    const invalidStringAdapter = invalidStringPortOptions.adapter as {
+      readonly options?: {
+        readonly config?: {
+          readonly port?: number
+        }
+      }
+    }
+
+    expect(invalidStringAdapter.options?.config?.port).toBeUndefined()
+
+    const partiallyNumericPortOptions = cacheDbInternals.createDatabaseContextOptions('cache', {
+      driver: 'postgres',
+      host: 'cache.internal',
+      database: 'app',
+      username: 'user',
+      password: 'secret',
+      port: '5433abc' as never,
+    })
+    const partiallyNumericAdapter = partiallyNumericPortOptions.adapter as {
+      readonly options?: {
+        readonly config?: {
+          readonly port?: number
+        }
+      }
+    }
+
+    expect(partiallyNumericAdapter.options?.config?.port).toBeUndefined()
   })
 
   it('creates cache tables through the shared schema helper', async () => {
@@ -425,7 +461,14 @@ describe('@holo-js/cache-db', () => {
     expect(await primary.lock('primary:report', 60).get()).toBe(true)
     expect(await secondary.lock('secondary:report', 60).get()).toBe(true)
 
-    await primary.flush()
+    const getSpy = vi.spyOn(TableQueryBuilder.prototype, 'get')
+
+    try {
+      await primary.flush()
+      expect(getSpy).not.toHaveBeenCalled()
+    } finally {
+      getSpy.mockRestore()
+    }
 
     expect(await primary.get('primary:alpha')).toEqual({ hit: false })
     expect(await secondary.get('secondary:alpha')).toEqual({
@@ -435,6 +478,56 @@ describe('@holo-js/cache-db', () => {
     })
     expect(await primary.lock('primary:report', 60).get()).toBe(true)
     expect(await secondary.lock('secondary:report', 60).get()).toBe(false)
+  })
+
+  it('flushes exact wildcard-containing prefixes without treating them as SQL wildcards', async () => {
+    const { databasePath } = await createPreparedDriver()
+    const exactPrefixDriver = createDatabaseCacheDriver({
+      name: 'database',
+      connectionName: 'cache',
+      table: DEFAULT_CACHE_DATABASE_TABLE,
+      lockTable: DEFAULT_CACHE_DATABASE_LOCK_TABLE,
+      connection: {
+        driver: 'sqlite',
+        filename: databasePath,
+      },
+      prefix: 'tenant_%:',
+    })
+    const overlappingPrefixDriver = createDatabaseCacheDriver({
+      name: 'database',
+      connectionName: 'cache',
+      table: DEFAULT_CACHE_DATABASE_TABLE,
+      lockTable: DEFAULT_CACHE_DATABASE_LOCK_TABLE,
+      connection: {
+        driver: 'sqlite',
+        filename: databasePath,
+      },
+      prefix: 'tenant-1:',
+    })
+
+    await exactPrefixDriver.put({
+      key: 'tenant_%:alpha',
+      payload: '"exact"',
+      expiresAt: Date.now() + 60_000,
+    })
+    await overlappingPrefixDriver.put({
+      key: 'tenant-1:alpha',
+      payload: '"other"',
+      expiresAt: Date.now() + 60_000,
+    })
+    expect(await exactPrefixDriver.lock('tenant_%:report', 60).get()).toBe(true)
+    expect(await overlappingPrefixDriver.lock('tenant-1:report', 60).get()).toBe(true)
+
+    await exactPrefixDriver.flush()
+
+    expect(await exactPrefixDriver.get('tenant_%:alpha')).toEqual({ hit: false })
+    expect(await overlappingPrefixDriver.get('tenant-1:alpha')).toEqual({
+      hit: true,
+      payload: '"other"',
+      expiresAt: expect.any(Number),
+    })
+    expect(await exactPrefixDriver.lock('tenant_%:report', 60).get()).toBe(true)
+    expect(await overlappingPrefixDriver.lock('tenant-1:report', 60).get()).toBe(false)
   })
 
   it('supports expiration cleanup and numeric mutation', async () => {

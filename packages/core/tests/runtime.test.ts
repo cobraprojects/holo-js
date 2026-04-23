@@ -1972,6 +1972,7 @@ export default defineQueueConfig({
       await expect(portable.initializeHolo(root)).rejects.toThrow('Cache support requires @holo-js/cache to be installed')
     } finally {
       vi.restoreAllMocks()
+      vi.resetModules()
     }
   })
 
@@ -1998,6 +1999,7 @@ export default defineQueueConfig({
       await portable.resetHoloRuntime()
     } finally {
       vi.restoreAllMocks()
+      vi.resetModules()
     }
   })
 
@@ -2036,6 +2038,7 @@ export default defineQueueConfig({
         redisConfig: loadedConfig.redis,
       })
     } finally {
+      vi.resetModules()
       vi.restoreAllMocks()
     }
   })
@@ -2286,23 +2289,24 @@ export default defineQueueConfig({
       expect(getCacheRuntimeBindingsForTest()).toBeUndefined()
       expect(getDatabaseQueryCacheBridge()).toBeUndefined()
     } finally {
-      ;(globalThis as typeof globalThis & {
+      delete (globalThis as typeof globalThis & {
         __holoCacheRuntime__?: {
           bindings?: unknown
         }
         __holoDbQueryCacheBridge__?: {
           bridge?: unknown
         }
-      }).__holoCacheRuntime__ = undefined
-      ;(globalThis as typeof globalThis & {
+      }).__holoCacheRuntime__
+      delete (globalThis as typeof globalThis & {
         __holoCacheRuntime__?: {
           bindings?: unknown
         }
         __holoDbQueryCacheBridge__?: {
           bridge?: unknown
         }
-      }).__holoDbQueryCacheBridge__ = undefined
+      }).__holoDbQueryCacheBridge__
       vi.restoreAllMocks()
+      vi.resetModules()
     }
   })
 

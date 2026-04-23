@@ -8,6 +8,7 @@ import {
   resolveQueryCacheKey,
   type NormalizedQueryCacheConfig,
   type QueryCacheConfig,
+  type QueryCacheFlexibleTtlInput,
   type QueryCacheTtlInput,
 } from '../cache'
 import { compareChunkValuesAscending, compareChunkValuesDescending } from './chunkOrdering'
@@ -103,6 +104,20 @@ type MergeSelections<
 > = TCurrentRow & Pick<SelectRow<TTableOrName>, TColumns[number]>
 
 type AggregateSelectionResult<TAlias extends string, TValue> = Record<TAlias, TValue>
+
+function normalizeAtomicQueryCacheTtl(ttl: QueryCacheTtlInput): QueryCacheFlexibleTtlInput {
+  if (ttl instanceof Date) {
+    const expiresAt = ttl.getTime()
+    if (Number.isNaN(expiresAt)) {
+      throw new ConfigurationError('[@holo-js/db] Query cache Date TTL must be valid.')
+    }
+
+    const seconds = Math.max(1, Math.ceil((expiresAt - Date.now()) / 1000))
+    return [seconds, seconds]
+  }
+
+  return [ttl, ttl]
+}
 
 export class TableQueryBuilder<
   TTableOrName extends TableReference = string,
@@ -1289,20 +1304,22 @@ export class TableQueryBuilder<
       )
     }
 
-    const cached = await bridge.get<TRow[]>(cacheKey, {
-      driver: cacheConfig.driver,
-    })
-    if (cached !== null) {
-      return cached
+    if (typeof cacheConfig.ttl === 'undefined') {
+      throw new ConfigurationError('[@holo-js/db] Query cache config requires "ttl" or "flexible".')
     }
 
-    const result = await this.connection.queryCompiled<TRow>(statement)
-    await bridge.put(cacheKey, result.rows, {
-      driver: cacheConfig.driver,
-      ttl: cacheConfig.ttl,
-      dependencies,
-    })
-    return result.rows
+    return bridge.flexible(
+      cacheKey,
+      normalizeAtomicQueryCacheTtl(cacheConfig.ttl),
+      async () => {
+        const result = await this.connection.queryCompiled<TRow>(statement)
+        return result.rows
+      },
+      {
+        driver: cacheConfig.driver,
+        dependencies,
+      },
+    )
   }
 
   async first<TRow extends Record<string, unknown> = TSelectedRow>(): Promise<TRow | undefined> {

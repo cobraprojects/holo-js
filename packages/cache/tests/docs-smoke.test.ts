@@ -43,6 +43,8 @@ describe('cache documentation smoke checks', () => {
 
     expect(runtime).toContain('defineCacheKey')
     expect(runtime).toContain('cache.put(reportKey, { total: 42 }, 300)')
+    expect(runtime).toContain('cache.add(key, value, ttl)')
+    expect(runtime).toContain('cache.put(key, value, ttl)')
     expect(runtime).toContain('cache.remember(')
     expect(runtime).toContain('cache.rememberForever(')
     expect(runtime).toContain('cache.flexible(')

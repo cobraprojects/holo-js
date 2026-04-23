@@ -1346,7 +1346,7 @@ function renderScaffoldEnvFiles(
     ? [...renderAuthEnvFiles({}, defaultDatabaseConnection).env]
     : []
   const cacheLines = normalizeScaffoldOptionalPackages(options.optionalPackages).includes('cache')
-    ? [...renderCacheEnvFiles().env]
+    ? [...renderCacheEnvFiles('file').env]
     : []
   const env = [...baseLines, ...driverLines, ...storageLines, ...authLines, ...cacheLines, ''].join('\n')
   const example = [
@@ -1359,16 +1359,7 @@ function renderScaffoldEnvFiles(
   return { env, example }
 }
 
-function renderQueueEnvFiles(
-  driver: SupportedQueueInstallerDriver,
-): { env: readonly string[], example: readonly string[] } {
-  if (driver !== 'redis') {
-    return {
-      env: [],
-      example: [],
-    }
-  }
-
+function renderRedisConnectionEnvFiles(): { env: readonly string[], example: readonly string[] } {
   return {
     env: [
       'REDIS_URL=',
@@ -1389,7 +1380,36 @@ function renderQueueEnvFiles(
   }
 }
 
-function renderCacheEnvFiles(): { env: readonly string[], example: readonly string[] } {
+function renderQueueEnvFiles(
+  driver: SupportedQueueInstallerDriver,
+): { env: readonly string[], example: readonly string[] } {
+  if (driver !== 'redis') {
+    return {
+      env: [],
+      example: [],
+    }
+  }
+
+  return renderRedisConnectionEnvFiles()
+}
+
+function renderCacheEnvFiles(
+  driver: SupportedCacheInstallerDriver,
+): { env: readonly string[], example: readonly string[] } {
+  if (driver === 'redis') {
+    const redis = renderRedisConnectionEnvFiles()
+    return {
+      env: [
+        'CACHE_PREFIX=',
+        ...redis.env,
+      ],
+      example: [
+        'CACHE_PREFIX=',
+        ...redis.example,
+      ],
+    }
+  }
+
   return {
     env: [
       'CACHE_PREFIX=',
@@ -2618,7 +2638,7 @@ export async function installCacheIntoProject(
     createdRedisConfig = await ensureRedisConfigFile(projectRoot)
   }
 
-  const cacheEnvFiles = renderCacheEnvFiles()
+  const cacheEnvFiles = renderCacheEnvFiles(driver)
   const envPath = resolve(projectRoot, '.env')
   const envExamplePath = resolve(projectRoot, '.env.example')
   const nextEnv = upsertEnvContents(await readTextFile(envPath), cacheEnvFiles.env)

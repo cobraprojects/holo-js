@@ -1,4 +1,5 @@
 import { describe, expectTypeOf, it } from 'vitest'
+import type { RedisCacheDriverOptions } from '@holo-js/cache-redis'
 import cache, {
   defineCacheConfig,
   defineCacheKey,
@@ -72,5 +73,114 @@ describe('@holo-js/cache typing', () => {
     void defaultDriver
     void redisConnection
     void memoryEntries
+  })
+
+  it('enforces mutually exclusive redis connection shapes', () => {
+    const hostConfig = {
+      name: 'redis',
+      connectionName: 'cache',
+      prefix: 'app:',
+      redis: {
+        db: 0,
+        host: '127.0.0.1',
+        port: 6379,
+      },
+    } satisfies RedisCacheDriverOptions
+
+    const urlConfig = {
+      name: 'redis',
+      connectionName: 'cache',
+      prefix: 'app:',
+      redis: {
+        db: 0,
+        url: 'redis://127.0.0.1:6379',
+      },
+    } satisfies RedisCacheDriverOptions
+
+    const clusterConfig = {
+      name: 'redis',
+      connectionName: 'cache',
+      prefix: 'app:',
+      redis: {
+        db: 0,
+        clusters: [{
+          host: '127.0.0.1',
+          port: 6379,
+        }],
+      },
+    } satisfies RedisCacheDriverOptions
+
+    const socketConfig = {
+      name: 'redis',
+      connectionName: 'cache',
+      prefix: 'app:',
+      redis: {
+        db: 0,
+        socketPath: '/var/run/redis.sock',
+      },
+    } satisfies RedisCacheDriverOptions
+
+    const ambiguousStandalone: RedisCacheDriverOptions = {
+      name: 'redis',
+      connectionName: 'cache',
+      prefix: 'app:',
+      // @ts-expect-error url and host/port must be mutually exclusive
+      redis: {
+        db: 0,
+        url: 'redis://127.0.0.1:6379',
+        host: '127.0.0.1',
+        port: 6379,
+      },
+    }
+
+    const ambiguousCluster: RedisCacheDriverOptions = {
+      name: 'redis',
+      connectionName: 'cache',
+      prefix: 'app:',
+      // @ts-expect-error clusters and url must be mutually exclusive
+      redis: {
+        db: 0,
+        url: 'redis://127.0.0.1:6379',
+        clusters: [{
+          host: '127.0.0.1',
+          port: 6379,
+        }],
+      },
+    }
+
+    const clusterDbConfig: RedisCacheDriverOptions = {
+      name: 'redis',
+      connectionName: 'cache',
+      prefix: 'app:',
+      // @ts-expect-error redis clusters must use database 0
+      redis: {
+        db: 1,
+        clusters: [{
+          host: '127.0.0.1',
+          port: 6379,
+        }],
+      },
+    }
+
+    const ambiguousSocketConfig: RedisCacheDriverOptions = {
+      name: 'redis',
+      connectionName: 'cache',
+      prefix: 'app:',
+      // @ts-expect-error socketPath must be mutually exclusive with other connection shapes
+      redis: {
+        db: 0,
+        socketPath: '/var/run/redis.sock',
+        url: 'redis://127.0.0.1:6379',
+      },
+    }
+
+    void hostConfig
+    void urlConfig
+    void clusterConfig
+    void socketConfig
+    void ambiguousStandalone
+    void ambiguousCluster
+    void clusterDbConfig
+    void ambiguousSocketConfig
   })
 })
