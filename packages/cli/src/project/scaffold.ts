@@ -1675,6 +1675,13 @@ function renderEnvFileContents(segments: readonly string[]): string {
     : ''
 }
 
+function normalizeScaffoldEnvSegments(segments: string): readonly string[] {
+  return segments
+    .split('\n')
+    .map(segment => segment.trim())
+    .filter(segment => segment.length > 0)
+}
+
 export async function syncManagedDriverDependencies(
   projectRoot: string,
   registry?: GeneratedProjectRegistry,
@@ -3635,8 +3642,8 @@ export async function scaffoldProject(
   const securityEnabled = optionalPackages.includes('security')
   const cacheEnabled = optionalPackages.includes('cache')
   const broadcastEnvFiles = broadcastEnabled ? renderBroadcastEnvFiles() : undefined
-  const baseEnv = Array.isArray(env) ? env : [env]
-  const baseExample = Array.isArray(example) ? example : [example]
+  const baseEnv = normalizeScaffoldEnvSegments(env)
+  const baseExample = normalizeScaffoldEnvSegments(example)
   const scaffoldEnvSegments = broadcastEnvFiles
     ? [...baseEnv, ...broadcastEnvFiles.env]
     : baseEnv
@@ -3780,10 +3787,12 @@ export {
   renderQueueEnvFiles,
   renderScaffoldAppConfig,
   renderScaffoldDatabaseConfig,
+  renderEnvFileContents,
   renderScaffoldGitignore,
   renderScaffoldPackageJson,
   renderScaffoldTsconfig,
   renderScaffoldEnvFiles,
+  normalizeScaffoldEnvSegments,
   renderStorageConfig,
   resolveDefaultDatabaseUrl,
   resolvePackageManagerVersion,

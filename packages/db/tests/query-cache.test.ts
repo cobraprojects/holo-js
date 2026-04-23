@@ -63,7 +63,11 @@ class MemoryQueryCacheBridge implements DatabaseQueryCacheBridge {
   readonly dependencyKeys = new Map<string, Set<string>>()
   readonly getCalls: string[] = []
   readonly putCalls: Array<{ key: string, driver?: string }> = []
-  readonly flexibleCalls: Array<{ key: string, driver?: string }> = []
+  readonly flexibleCalls: Array<{
+    key: string
+    driver?: string
+    ttl: readonly [number, number] | { readonly fresh: number, readonly stale: number }
+  }> = []
   readonly invalidatedDependencies: string[][] = []
   readonly inFlightFlexible = new Map<string, Promise<unknown>>()
 
@@ -122,7 +126,7 @@ class MemoryQueryCacheBridge implements DatabaseQueryCacheBridge {
 
   async flexible<TValue>(
     key: string,
-    _ttl: readonly [number, number] | { readonly fresh: number, readonly stale: number },
+    ttl: readonly [number, number] | { readonly fresh: number, readonly stale: number },
     callback: () => TValue | Promise<TValue>,
     options?: {
       readonly driver?: string
@@ -143,7 +147,7 @@ class MemoryQueryCacheBridge implements DatabaseQueryCacheBridge {
     const compute = (async () => {
       const value = await callback()
       this.values.set(cacheKey, value)
-      this.flexibleCalls.push({ key, driver: options?.driver })
+      this.flexibleCalls.push({ key, driver: options?.driver, ttl })
       this.registerDependencies(cacheKey, options?.dependencies)
       return value
     })()
@@ -262,8 +266,26 @@ describe('@holo-js/db query cache integration', () => {
     expect(bridge.flexibleCalls[1]).toEqual({
       key: 'users.explicit',
       driver: 'redis',
+      ttl: [300, 300],
     })
     expect(explicit[0]?.name).toBe('Changed')
+
+    await DB.table(users).cache(new Date(Date.now() + 30_000)).get()
+    expect(bridge.flexibleCalls[2]?.ttl).toEqual(expect.arrayContaining([
+      expect.any(Number),
+      expect.any(Number),
+    ]))
+    expect(Array.isArray(bridge.flexibleCalls[2]?.ttl)).toBe(true)
+    const ttl = bridge.flexibleCalls[2]?.ttl
+    if (!ttl || !Array.isArray(ttl)) {
+      throw new Error('Expected Date TTL to normalize into a fixed tuple.')
+    }
+    expect(ttl[0]).toBe(ttl[1])
+    expect(ttl[0]).toBeGreaterThan(0)
+
+    await expect(
+      DB.table(users).cache(new Date('invalid')).get(),
+    ).rejects.toThrow('Query cache Date TTL must be valid')
   })
 
   it('supports flexible query caching and model-query cache passthrough without changing result behavior', async () => {
@@ -553,5 +575,23 @@ describe('@holo-js/db query cache integration', () => {
     expect(queryCacheInternals.createDeterministicQueryCacheKey({
       sql: 'select * from "users"',
     }, 'main')).toMatch(/^db:query:/)
+  })
+
+  it('rejects malformed query-cache state without ttl or flexible metadata at execution time', async () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+    })
+
+    await expect(
+      new TableQueryBuilder(
+        users,
+        DB.connection(),
+        undefined,
+        {
+          key: 'users.malformed',
+        } as never,
+      ).get(),
+    ).rejects.toThrow('Query cache config requires "ttl" or "flexible"')
   })
 })

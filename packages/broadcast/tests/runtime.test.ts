@@ -288,7 +288,7 @@ describe('@holo-js/broadcast runtime', () => {
       return {
         connection: ` ${context.connection} `,
         driver: ` ${context.driver} `,
-        queued: undefined,
+        queued: false,
         publishedChannels: input.channels,
         messageId: 'custom-msg',
         provider: {
@@ -398,7 +398,7 @@ describe('@holo-js/broadcast runtime', () => {
         payload: {
           ok: true,
         },
-      }).catch(error => error.message),
+      }).catch(error => error instanceof Error ? error.message : String(error)),
     ).resolves.toContain('Broadcast event must be a non-empty string')
 
     await expect(
@@ -462,7 +462,7 @@ describe('@holo-js/broadcast runtime', () => {
         event: 'orders.updated',
         channels: ['orders.1'],
         payload: 'invalid' as never,
-      }).catch(error => error.message),
+      }).catch(error => error instanceof Error ? error.message : String(error)),
     ).resolves.toContain('payload must be a plain object')
     await expect(
       broadcastRaw({
@@ -472,7 +472,7 @@ describe('@holo-js/broadcast runtime', () => {
           ok: true,
         },
         socketId: '   ',
-      }).catch(error => error.message),
+      }).catch(error => error instanceof Error ? error.message : String(error)),
     ).resolves.toContain('socket id must be a non-empty string')
 
     await expect(
@@ -491,7 +491,7 @@ describe('@holo-js/broadcast runtime', () => {
         payload: {
           broken: new Map(),
         } as never,
-      }).catch(error => error.message),
+      }).catch(error => error instanceof Error ? error.message : String(error)),
     ).resolves.toContain('JSON-serializable')
 
     expect(() => broadcastRaw({
@@ -866,4 +866,66 @@ describe('@holo-js/broadcast runtime', () => {
       broadcastRuntimeInternals.setLoadQueueModuleForTesting(undefined)
     }
   })
+
+  it('loads the default queue/db modules when no testing override is configured', async () => {
+    vi.doMock('@holo-js/queue', () => ({
+      defineJob(definition: unknown) {
+        return definition
+      },
+      dispatch: vi.fn(),
+      getRegisteredQueueJob() {
+        return undefined
+      },
+      registerQueueJob: vi.fn(),
+    }))
+    vi.doMock('@holo-js/db', () => ({
+      connectionAsyncContext: {
+        getActive() {
+          return undefined
+        },
+      },
+    }))
+
+    try {
+      const queueModule = await broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered()
+      expect(queueModule).toMatchObject({
+        dispatch: expect.any(Function),
+        getRegisteredQueueJob: expect.any(Function),
+      })
+
+      configureBroadcastRuntime({
+        config: createConfig(),
+      })
+
+      await expect(
+        broadcastRaw({
+          event: 'orders.no-db',
+          channels: ['orders.15'],
+          payload: {
+            ok: true,
+          },
+        }).afterCommit(),
+      ).rejects.toThrow('requires a publish runtime binding')
+
+      broadcastRuntimeInternals.setLoadDbModuleForTesting(async () => {
+        throw Object.assign(new Error('missing optional db module'), {
+          code: 'ERR_MODULE_NOT_FOUND',
+        })
+      })
+
+      await expect(
+        broadcastRaw({
+          event: 'orders.no-db-optional',
+          channels: ['orders.16'],
+          payload: {
+            ok: true,
+          },
+        }).afterCommit(),
+      ).rejects.toThrow('requires a publish runtime binding')
+    } finally {
+      vi.doUnmock('@holo-js/queue')
+      vi.doUnmock('@holo-js/db')
+    }
+  })
+
 })

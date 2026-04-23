@@ -1,14 +1,12 @@
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
+import { execFile, type ExecFileOptionsWithStringEncoding } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FormContractError } from '../src'
 import { getClientCsrfField, clientSecurityInternals, loadSecurityClientModule } from '../src/client-security'
 import { formsSecurityInternals, loadSecurityModule } from '../src/security'
 
-const execFileAsync = promisify(execFile)
 const formsSourceRoot = resolve(import.meta.dirname, '..')
 const formsFixtureFiles = [
   'src/client-security.ts',
@@ -19,12 +17,22 @@ const tempDirs: string[] = []
 
 async function runBun(
   args: string[],
-  options: Parameters<typeof execFileAsync>[2] = {},
+  options: Omit<ExecFileOptionsWithStringEncoding, 'encoding'> = {},
 ): Promise<{ stdout: string, stderr: string } | undefined> {
   try {
-    return await execFileAsync('bun', args, {
-      timeout: 30_000,
-      ...options,
+    return await new Promise<{ stdout: string, stderr: string }>((resolvePromise, rejectPromise) => {
+      execFile('bun', args, {
+        encoding: 'utf8',
+        timeout: 30_000,
+        ...options,
+      }, (error, stdout, stderr) => {
+        if (error) {
+          rejectPromise(error)
+          return
+        }
+
+        resolvePromise({ stdout, stderr })
+      })
     })
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -164,6 +172,29 @@ describe('@holo-js/forms security helpers', () => {
     } finally {
       vi.doUnmock('@holo-js/security')
       vi.doUnmock('@holo-js/security/client')
+      vi.resetModules()
+    }
+  })
+
+  it('loads the server security entrypoint through the Vitest literal import branch', async () => {
+    vi.resetModules()
+    const verify = vi.fn(async () => {})
+    const rateLimit = vi.fn(async () => ({ limited: false }))
+    vi.doMock('@holo-js/security', () => ({
+      csrf: {
+        verify,
+      },
+      rateLimit,
+    }))
+
+    try {
+      const mod = await import('../src/security')
+      const security = await mod.loadSecurityModule()
+
+      expect(security.csrf.verify).toBe(verify)
+      expect(security.rateLimit).toBe(rateLimit)
+    } finally {
+      vi.doUnmock('@holo-js/security')
       vi.resetModules()
     }
   })

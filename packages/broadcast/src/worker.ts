@@ -562,9 +562,9 @@ function parseRedisClusterNodeUrl(url: string, label: string): { readonly host: 
 }
 
 function resolveRedisClusterStartupNodes(
-  connection: BroadcastRedisScalingConnection,
+  clusters: readonly NonNullable<BroadcastRedisScalingConnection['clusters']>[number][],
 ): readonly { readonly host: string, readonly port: number, readonly tls?: Record<string, never> }[] {
-  return (connection.clusters ?? []).map((node, index) => {
+  return clusters.map((node, index) => {
     const label = `Broadcast scaling cluster node ${index + 1}`
     if (typeof node.url === 'string') {
       return parseRedisClusterNodeUrl(node.url, `${label} url`)
@@ -623,26 +623,28 @@ async function createRedisScalingAdapter(
   const redisModule = await loadRedisScalingModule(dependencies.loadRedisModule)
   const RedisCtor = redisModule.default
   const createClient = (): RedisScalingClientLike => {
+    if (connection.clusters && connection.clusters.length > 0) {
+      const startupNodes = resolveRedisClusterStartupNodes(connection.clusters)
+
+      return new redisModule.Cluster(
+        startupNodes,
+        {
+          redisOptions: {
+            username: connection.username,
+            password: connection.password,
+            db: connection.db,
+            ...(startupNodes.some(node => typeof node.tls !== 'undefined') ? { tls: {} } : {}),
+          },
+        },
+      )
+    }
+
     if (typeof connection.url === 'string') {
       return new RedisCtor(connection.url, {
         username: connection.username,
         password: connection.password,
         db: connection.db,
       })
-    }
-
-    if (connection.clusters && connection.clusters.length > 0) {
-    return new redisModule.Cluster(
-        resolveRedisClusterStartupNodes(connection),
-        {
-          redisOptions: {
-            username: connection.username,
-            password: connection.password,
-            db: connection.db,
-            ...(resolveRedisClusterStartupNodes(connection).some(node => typeof node.tls !== 'undefined') ? { tls: {} } : {}),
-          },
-        },
-      )
     }
 
     return new RedisCtor(

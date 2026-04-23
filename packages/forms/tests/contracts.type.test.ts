@@ -24,37 +24,20 @@ describe('@holo-js/forms typing', () => {
       age: field.number().optional(),
     })
 
+    type ExpectedData = {
+      name: string
+      email: string
+      age: number | undefined
+    }
+
     type RegisterUserData = typeof registerUser.$data
     type RegisterUserErrors = typeof registerUser.$errors
-    type Success = ReturnType<typeof createSuccessfulSubmission<typeof registerUser.fields, typeof registerUser>>
-    type Failure = ReturnType<typeof createFailedSubmission<typeof registerUser.fields, typeof registerUser>>
-    type SubmitResult = Awaited<ReturnType<typeof validate<typeof registerUser.fields, typeof registerUser>>>
+    type ExpectedSubmission = FormSubmissionSuccess<ExpectedData> | FormSubmissionFailure<ExpectedData>
 
     type DataAssertion = Expect<Equal<
       RegisterUserData,
-      {
-        name: string
-        email: string
-        age: number | undefined
-      } | undefined
+      ExpectedData | undefined
     >>
-    type SuccessAssertion = Expect<Equal<
-      Success,
-      FormSubmissionSuccess<{
-        name: string
-        email: string
-        age: number | undefined
-      }>
-    >>
-    type FailureAssertion = Expect<Equal<
-      Failure,
-      FormSubmissionFailure<{
-        name: string
-        email: string
-        age: number | undefined
-      }>
-    >>
-    type SubmitAssertion = Expect<Equal<SubmitResult, Success | Failure>>
 
     const success = createSuccessfulSubmission(registerUser, {
       name: 'Ava',
@@ -66,6 +49,9 @@ describe('@holo-js/forms typing', () => {
     }, {
       email: ['Email must be valid.'],
     })
+
+    type Success = typeof success
+    type Failure = typeof failure
 
     const data: NonNullable<RegisterUserData> = success.data
     const emailErrors = failure.errors.email
@@ -82,7 +68,17 @@ describe('@holo-js/forms typing', () => {
         const typedEmailErrors: readonly string[] | undefined = submission.errors.email
         void typedEmailErrors
       }
+
+      return submission
     }
+
+    type SubmitResult = Awaited<ReturnType<typeof expectsTypedSubmission>>
+    type SuccessAssertion = Expect<Equal<Success, FormSubmissionSuccess<ExpectedData>>>
+    type FailureAssertion = Expect<Equal<Failure, FormSubmissionFailure<ExpectedData>>>
+    const fieldKind: string = registerUser.fields.email.definition.kind
+    const typedSubmitResult: ExpectedSubmission = null as unknown as SubmitResult
+    void fieldKind
+    void typedSubmitResult
 
     async function expectsTypedSecuritySubmission(request: Request) {
       const submission = await validate(request, registerUser, {
@@ -97,6 +93,8 @@ describe('@holo-js/forms typing', () => {
         const typedEmailErrors: readonly string[] | undefined = submission.errors.email
         void typedEmailErrors
       }
+
+      return submission
     }
 
     async function expectsTypedEventSubmission(event: FormRequestLikeInput) {
@@ -112,6 +110,8 @@ describe('@holo-js/forms typing', () => {
         const typedEmailErrors: readonly string[] | undefined = submission.errors.email
         void typedEmailErrors
       }
+
+      return submission
     }
 
     // @ts-expect-error Missing required fields must fail type checking for successful submissions.
@@ -129,6 +129,5 @@ describe('@holo-js/forms typing', () => {
     void (0 as unknown as DataAssertion)
     void (0 as unknown as SuccessAssertion)
     void (0 as unknown as FailureAssertion)
-    void (0 as unknown as SubmitAssertion)
   })
 })

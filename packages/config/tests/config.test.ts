@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type * as LoaderModule from '../src/loader'
 import {
   clearConfigCache,
@@ -27,6 +27,7 @@ import {
   normalizeAppConfig,
   normalizeAppEnv,
   normalizeAuthConfig,
+  normalizeCacheConfig,
   normalizeDatabaseConfig,
   normalizeMailConfig,
   normalizeNotificationsConfig,
@@ -111,6 +112,44 @@ describe('@holo-js/config', () => {
     expect(resolveAppEnvironment({ APP_ENV: 'staging' })).toBe('development')
     expect(normalizeAppEnv('test', 'development')).toBe('test')
     expect(normalizeAppEnv('staging', 'production')).toBe('production')
+  })
+
+  it('rejects malformed cache, redis, and queue defaults with precise validation errors', () => {
+    expect(() => normalizeCacheConfig({
+      default: 'missing',
+      drivers: {
+        memory: {
+          driver: 'memory',
+        },
+      },
+    })).toThrow('default cache driver "missing" is not configured')
+
+    expect(() => normalizeCacheConfig({
+      drivers: {
+        memory: {
+          driver: 'memory',
+          maxEntries: '   ',
+        },
+      },
+    })).toThrow('maxEntries must be an integer')
+
+    expect(() => normalizeRedisConfig({
+      default: 'missing',
+      connections: {
+        cache: {
+          host: '127.0.0.1',
+        },
+      },
+    })).toThrow('default redis connection "missing" is not configured')
+
+    expect(() => normalizeQueueConfigForHolo({
+      default: 'missing',
+      connections: {
+        sync: {
+          driver: 'sync',
+        },
+      },
+    })).toThrow('default queue connection "missing" is not configured')
   })
 
   it('normalizes database defaults and freezes media, mail, notifications, queue, and security config values', () => {
@@ -729,6 +768,35 @@ describe('@holo-js/config', () => {
       },
     })
 
+    expect(normalizeQueueConfigForHolo({
+      connections: {
+        redis: {
+          driver: 'redis',
+          connection: 'cache',
+        },
+      },
+    }, normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
+          clusters: [{
+            url: 'redis://cache-1.internal:6380',
+          }],
+        },
+      },
+    }))).toMatchObject({
+      connections: {
+        redis: {
+          connection: 'cache',
+          redis: {
+            clusters: [{
+              url: 'redis://cache-1.internal:6380',
+            }],
+          },
+        },
+      },
+    })
+
     const normalizedQueueWithBlankSharedRedisCredentials = normalizeQueueConfigForHolo({
       failed: {
         driver: 'database',
@@ -862,6 +930,15 @@ describe('@holo-js/config', () => {
       default: 'cache',
       connections: {
         cache: {
+          port: 0,
+        },
+      },
+    })).toThrow('redis connection "cache" port must be greater than or equal to 1')
+
+    expect(() => normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
           url: 'redis://cache.internal:6380',
           socketPath: '/tmp/redis.sock',
         },
@@ -933,6 +1010,185 @@ describe('@holo-js/config', () => {
         },
       },
     })).toThrow('must configure exactly one target mode: url, clusters, or socketPath')
+  })
+
+  it('covers redis URL parser fallback branches during normalization', () => {
+    const originalUrl = globalThis.URL
+    const rejectingUrl = class BrokenUrl {
+      constructor() {
+        throw 'broken redis url parser'
+      }
+    } as unknown as typeof URL
+
+    try {
+      vi.stubGlobal('URL', rejectingUrl)
+      expect(() => normalizeRedisConfig({
+        default: 'cache',
+        connections: {
+          cache: {
+            url: 'redis://cache.internal:6379',
+          },
+        },
+      })).toThrow('redis connection "cache" url must be a valid redis:// or rediss:// URL')
+
+      let calls = 0
+      vi.stubGlobal('URL', class UrlThatBreaksDuringDbParsing {
+        protocol = 'redis:'
+        pathname = '/0'
+
+        constructor() {
+          calls += 1
+          if (calls > 1) {
+            throw 'broken redis database parser'
+          }
+        }
+      } as unknown as typeof URL)
+
+      const normalized = normalizeRedisConfig({
+        default: 'cache',
+        connections: {
+          cache: {
+            url: 'redis://cache.internal:6379/0',
+          },
+        },
+      })
+
+      expect(normalized.connections.cache?.db).toBe(0)
+    } finally {
+      vi.stubGlobal('URL', originalUrl)
+    }
+  })
+
+  it('normalizes cache and redis defaults through fallback branches', () => {
+    expect(normalizeCacheConfig({
+      drivers: {
+        redis: {
+          driver: 'redis',
+          connection: 'cache',
+        },
+        database: {
+          driver: 'database',
+          connection: 'main',
+        },
+      },
+    })).toMatchObject({
+      drivers: {
+        redis: {
+          connection: 'cache',
+        },
+        database: {
+          connection: 'main',
+        },
+      },
+    })
+
+    expect(normalizeCacheConfig({
+      default: '   ',
+      drivers: {
+        reports: {
+          driver: 'database',
+          connection: '   ',
+          table: '   ',
+          lockTable: '   ',
+        },
+        redis: {
+          driver: 'redis',
+          connection: '   ',
+        },
+      },
+    }, {
+      database: {
+        defaultConnection: 'primary',
+      } as never,
+      redis: {
+        default: 'cache',
+      } as never,
+    })).toEqual({
+      default: 'reports',
+      prefix: '',
+      drivers: {
+        reports: {
+          name: 'reports',
+          driver: 'database',
+          connection: 'primary',
+          table: 'cache',
+          lockTable: 'cache_locks',
+          prefix: '',
+        },
+        redis: {
+          name: 'redis',
+          driver: 'redis',
+          connection: 'cache',
+          prefix: '',
+        },
+      },
+    })
+
+    expect(normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
+          host: 'unix:///tmp/redis.sock',
+        },
+        urlOnly: {
+          url: 'redis://cache.internal:6380',
+        },
+        clustered: {
+          clusters: [{}],
+        },
+      },
+    })).toEqual({
+      default: 'cache',
+      connections: {
+        cache: {
+          name: 'cache',
+          socketPath: '/tmp/redis.sock',
+          host: 'unix:///tmp/redis.sock',
+          port: 6379,
+          username: undefined,
+          password: undefined,
+          db: 0,
+        },
+        urlOnly: {
+          name: 'urlOnly',
+          url: 'redis://cache.internal:6380',
+          host: '127.0.0.1',
+          port: 6379,
+          username: undefined,
+          password: undefined,
+          db: 0,
+        },
+        clustered: {
+          name: 'clustered',
+          host: '127.0.0.1',
+          port: 6379,
+          username: undefined,
+          password: undefined,
+          db: 0,
+          clusters: [{
+            host: '127.0.0.1',
+            port: 6379,
+          }],
+        },
+      },
+    })
+
+    expect(() => normalizeRedisConfig({
+      default: 'cache',
+      connections: {
+        cache: {
+          url: '   ',
+        },
+      },
+    })).toThrow('must be a non-empty string')
+
+    expect(() => normalizeQueueConfigForHolo({
+      connections: {
+        broken: {
+          driver: 'redis',
+        },
+      },
+    })).toThrow('requires a top-level redis config with a default connection or an explicit connection name')
   })
 
   it('loads security config files through the shared config loader', async () => {

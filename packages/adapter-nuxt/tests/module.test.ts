@@ -2,6 +2,9 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type * as HoloConfigModule from '@holo-js/config'
+import type * as HoloCoreModule from '@holo-js/core'
+import type * as RuntimeComposablesModule from '../src/runtime/composables'
 
 type RuntimeConfigShape = Record<string, unknown>
 const packageEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
@@ -13,6 +16,9 @@ function createNuxtHarness(rootDir: string, runtimeConfig: RuntimeConfigShape = 
       runtimeConfig,
       build: {
         transpile: [] as string[],
+      },
+      nitro: {
+        storage: {} as Record<string, Record<string, unknown>>,
       },
       srcDir: rootDir,
       rootDir,
@@ -113,7 +119,7 @@ async function loadRuntimeExports(runtimeConfig: RuntimeConfigShape) {
   const configureHoloRuntimeConfig = vi.fn()
 
   vi.doMock('@holo-js/core', async (importOriginal) => {
-    const actual = await importOriginal()
+    const actual = await importOriginal<typeof HoloCoreModule>()
 
     return {
       ...actual,
@@ -122,7 +128,7 @@ async function loadRuntimeExports(runtimeConfig: RuntimeConfigShape) {
   })
 
   vi.doMock('../src/runtime/composables', async (importOriginal) => {
-    const actual = await importOriginal()
+    const actual = await importOriginal<typeof RuntimeComposablesModule>()
 
     return {
       ...actual,
@@ -464,6 +470,16 @@ export default defineStorageConfig({
     )).toBe(true)
   })
 
+  it('returns false for non-object and code-less optional-module errors', async () => {
+    const mod = await import('../src/module')
+
+    expect(mod.moduleInternals.hasModuleNotFoundCode(null, '@holo-js/storage-s3')).toBe(false)
+    expect(mod.moduleInternals.hasModuleNotFoundCode({
+      code: 'ERR_MODULE_NOT_FOUND',
+    }, '@holo-js/storage-s3')).toBe(false)
+    expect(mod.moduleInternals.hasModuleNotFoundCode(new Error('Cannot find package "@holo-js/storage-s3"'), '@holo-js/storage-s3')).toBe(false)
+  })
+
   it('rethrows non-missing optional storage-s3 import errors', async () => {
     vi.resetModules()
     vi.doMock('@holo-js/storage-s3', () => {
@@ -534,15 +550,14 @@ export default defineStorageConfig({
     }))
 
     vi.doMock('@holo-js/config', async (importOriginal) => {
-      const actual = await importOriginal()
+      const actual = await importOriginal<typeof HoloConfigModule>()
       return {
         ...actual,
         loadConfigDirectory,
       }
     })
 
-    const previousNodeEnv = process.env.NODE_ENV
-    process.env.NODE_ENV = 'production'
+    vi.stubEnv('NODE_ENV', 'production')
 
     try {
       const { module } = await loadAdapterModule()
@@ -555,7 +570,7 @@ export default defineStorageConfig({
         processEnv: process.env,
       })
     } finally {
-      process.env.NODE_ENV = previousNodeEnv
+      vi.unstubAllEnvs()
     }
   })
 })
@@ -951,15 +966,14 @@ describe('useHoloDb', () => {
       runtime: {},
     }))
     const cwd = vi.spyOn(process, 'cwd').mockReturnValue('/tmp/nuxt-runtime-cwd')
-    const previousNodeEnv = process.env.NODE_ENV
-    process.env.NODE_ENV = 'production'
+    vi.stubEnv('NODE_ENV', 'production')
 
     vi.stubGlobal('useRuntimeConfig', () => runtimeConfig)
     vi.doMock('#app', () => ({
       useRuntimeConfig: () => runtimeConfig,
     }))
     vi.doMock('@holo-js/core', async (importOriginal) => {
-      const actual = await importOriginal()
+      const actual = await importOriginal<typeof HoloCoreModule>()
 
       return {
         ...actual,
@@ -979,7 +993,7 @@ describe('useHoloDb', () => {
         processEnv: process.env,
       })
     } finally {
-      process.env.NODE_ENV = previousNodeEnv
+      vi.unstubAllEnvs()
       cwd.mockRestore()
     }
   })
@@ -1009,7 +1023,7 @@ describe('useHoloDb', () => {
       useRuntimeConfig: () => runtimeConfig,
     }))
     vi.doMock('@holo-js/core', async (importOriginal) => {
-      const actual = await importOriginal()
+      const actual = await importOriginal<typeof HoloCoreModule>()
 
       return {
         ...actual,
@@ -1049,7 +1063,7 @@ describe('useHoloDb', () => {
       useRuntimeConfig: () => runtimeConfig,
     }))
     vi.doMock('@holo-js/core', async (importOriginal) => {
-      const actual = await importOriginal()
+      const actual = await importOriginal<typeof HoloCoreModule>()
 
       return {
         ...actual,

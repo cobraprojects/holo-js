@@ -1370,6 +1370,38 @@ describe('@holo-js/broadcast worker runtime', () => {
     expect(urlRedis.commandDisconnect).not.toHaveBeenCalled()
     expect(urlRedis.subscriberDisconnect).not.toHaveBeenCalled()
 
+    const mixedRedis = createFakeRedisModule()
+    const mixedAdapter = await workerInternals.createRedisScalingAdapter({
+      url: 'redis://cache.internal:6380/4',
+      host: '127.0.0.1',
+      port: 6379,
+      username: 'worker',
+      password: 'secret',
+      db: 0,
+      clusters: [{
+        url: 'rediss://cache.internal:6380',
+        host: 'cache.internal',
+        port: 6380,
+      }],
+    }, {
+      loadRedisModule: async () => mixedRedis.module,
+    })
+    await mixedAdapter.close()
+    expect(mixedRedis.constructorArgs[0]).toEqual([[
+      {
+        host: 'cache.internal',
+        port: 6380,
+        tls: {},
+      },
+    ], {
+      redisOptions: {
+        username: 'worker',
+        password: 'secret',
+        db: 0,
+        tls: {},
+      },
+    }])
+
     const clusterRedis = createFakeRedisModule()
     await expect(workerInternals.createRedisScalingAdapter({
       host: '127.0.0.1',
@@ -1899,6 +1931,26 @@ describe('@holo-js/broadcast worker runtime', () => {
         },
       })
       await workerWithSyncQueueDefaultScaling.stop()
+
+      await expect(startBroadcastWorker({
+        config: normalizeBroadcastConfig({
+          ...createRawConfig(),
+          worker: {
+            ...createRawConfig().worker,
+            scaling: {
+              driver: 'redis',
+            },
+          },
+        }),
+        queue: normalizeQueueConfigForHolo({
+          default: 'default',
+          connections: {
+            default: {
+              driver: 'sync',
+            },
+          },
+        }),
+      })).rejects.toThrow('Broadcast scaling connection "default" must use the Redis queue driver.')
 
       const workerWithQueueDefaultScaling = await startBroadcastWorker({
         config: normalizeBroadcastConfig({
@@ -3479,5 +3531,373 @@ describe('@holo-js/broadcast worker runtime', () => {
     await publishRuntime.close()
 
     errorSpy.mockRestore()
+  })
+
+  it('covers redis scaling socket and cluster helper edge cases', async () => {
+    const loadValidationRedisModule = async () => ({
+      default: class RedisMock {
+        duplicate() {
+          return this
+        }
+        on() {
+          return this
+        }
+        async connect() {}
+        async quit() {}
+        subscribe() {
+          return this
+        }
+        publish() {
+          return Promise.resolve(0)
+        }
+        hSet() {
+          return Promise.resolve(0)
+        }
+        hGetAll() {
+          return Promise.resolve({})
+        }
+        del() {
+          return Promise.resolve(0)
+        }
+      },
+      Cluster: class ClusterMock {
+        duplicate() {
+          return this
+        }
+        on() {
+          return this
+        }
+        async connect() {}
+        async quit() {}
+        subscribe() {
+          return this
+        }
+        publish() {
+          return Promise.resolve(0)
+        }
+        hSet() {
+          return Promise.resolve(0)
+        }
+        hGetAll() {
+          return Promise.resolve({})
+        }
+        del() {
+          return Promise.resolve(0)
+        }
+      },
+    })
+
+    expect(() => workerInternals.resolveRedisScalingConnection(undefined, 'broadcast')).toThrow(
+      'requires either redis config or a Redis queue connection',
+    )
+
+    expect(workerInternals.resolveRedisScalingConnection({
+      default: 'broadcast',
+      connections: {
+        broadcast: {
+          name: 'broadcast',
+          driver: 'redis',
+          queue: 'broadcasts',
+          retryAfter: 60,
+          blockFor: 5,
+          redis: {
+            url: 'redis://queue.internal:6379/0',
+            clusters: [{
+              host: 'cluster-a.internal',
+              port: 6380,
+            }],
+            host: 'queue.internal',
+            port: 6379,
+            username: undefined,
+            password: undefined,
+            db: 0,
+          },
+        },
+      },
+    } as never, 'broadcast')).toMatchObject({
+      url: 'redis://queue.internal:6379/0',
+      clusters: [{
+        host: 'cluster-a.internal',
+        port: 6380,
+      }],
+    })
+    expect(workerInternals.resolveRedisScalingConnection({
+      default: 'database',
+      connections: {},
+    } as never, 'cache', {
+      default: 'cache',
+      connections: {
+        cache: {
+          name: 'cache',
+          url: undefined,
+          clusters: [{
+            host: 'cluster-b.internal',
+            port: 6381,
+          }],
+          host: 'redis.internal',
+          port: 6379,
+          username: undefined,
+          password: undefined,
+          db: 0,
+        },
+      },
+    } as never)).toMatchObject({
+      clusters: [{
+        host: 'cluster-b.internal',
+        port: 6381,
+      }],
+    })
+    expect(workerInternals.resolveRedisScalingConnection(undefined, 'cache', {
+      default: 'cache',
+      connections: {
+        cache: {
+          name: 'cache',
+          url: 'redis://cache.internal:6380/4',
+          clusters: undefined,
+          host: 'redis.internal',
+          port: 6379,
+          username: undefined,
+          password: undefined,
+          db: 4,
+        },
+      },
+    } as never)).toMatchObject({
+      url: 'redis://cache.internal:6380/4',
+    })
+    expect(() => workerInternals.resolveRedisScalingConnection(undefined, 'missing', {
+      default: 'cache',
+      connections: {},
+    } as never)).toThrow('Available redis connections: (none).')
+
+    await expect(workerInternals.createRedisScalingAdapter({
+      host: 'unix:///tmp/broadcast.sock',
+      port: 6379,
+      db: 0,
+    }, {
+      loadRedisModule: loadValidationRedisModule,
+    })).resolves.toBeDefined()
+
+    await expect(workerInternals.createRedisScalingAdapter({
+      host: '/tmp/broadcast.sock',
+      port: 6379,
+      db: 0,
+    }, {
+      loadRedisModule: loadValidationRedisModule,
+    })).resolves.toBeDefined()
+
+    await expect(workerInternals.createRedisScalingAdapter({
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      clusters: [{
+        host: '/tmp/cluster.sock',
+        port: 6379,
+      }],
+    }, {
+      loadRedisModule: loadValidationRedisModule,
+    })).rejects.toThrow('cannot use a Unix socket path in Redis cluster mode')
+
+    const defaultPortClusterCalls: unknown[] = []
+
+    await expect(workerInternals.createRedisScalingAdapter({
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      clusters: [{
+        url: 'redis://cluster.internal',
+        host: 'cluster.internal',
+        port: 6379,
+      }],
+    }, {
+      loadRedisModule: async () => ({
+        default: class RedisMock {
+          duplicate() {
+            return this
+          }
+          on() {
+            return this
+          }
+          async connect() {}
+          async quit() {}
+          subscribe() {
+            return this
+          }
+          publish() {
+            return Promise.resolve(0)
+          }
+          hSet() {
+            return Promise.resolve(0)
+          }
+          hGetAll() {
+            return Promise.resolve({})
+          }
+          del() {
+            return Promise.resolve(0)
+          }
+        },
+        Cluster: class ClusterMock {
+          constructor(startupNodes: unknown) {
+            defaultPortClusterCalls.push(startupNodes)
+          }
+          duplicate() {
+            return this
+          }
+          on() {
+            return this
+          }
+          async connect() {}
+          async quit() {}
+          subscribe() {
+            return this
+          }
+          publish() {
+            return Promise.resolve(0)
+          }
+          hSet() {
+            return Promise.resolve(0)
+          }
+          hGetAll() {
+            return Promise.resolve({})
+          }
+          del() {
+            return Promise.resolve(0)
+          }
+        },
+      }),
+    })).resolves.toBeDefined()
+    expect(defaultPortClusterCalls[0]).toEqual([{
+      host: 'cluster.internal',
+      port: 6379,
+    }])
+
+    const originalUrl = globalThis.URL
+    try {
+      globalThis.URL = class BrokenUrl {
+        constructor() {
+          throw 'broken url parser'
+        }
+      } as never
+
+      await expect(workerInternals.createRedisScalingAdapter({
+        host: '127.0.0.1',
+        port: 6379,
+        db: 0,
+        clusters: [{
+          url: 'http://cluster.internal:6379',
+          host: 'cluster.internal',
+          port: 6379,
+        }],
+      }, {
+        loadRedisModule: loadValidationRedisModule,
+      })).rejects.toThrow('broken url parser')
+    } finally {
+      globalThis.URL = originalUrl
+    }
+
+    await expect(workerInternals.createRedisScalingAdapter({
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      clusters: [{
+        url: 'http://cluster.internal:6379',
+        host: 'cluster.internal',
+        port: 6379,
+      }],
+    }, {
+      loadRedisModule: loadValidationRedisModule,
+    })).rejects.toThrow('unsupported protocol')
+
+    await expect(workerInternals.createRedisScalingAdapter({
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      clusters: [{
+        url: 'redis:///0',
+        host: '',
+        port: 6379,
+      }],
+    }, {
+      loadRedisModule: loadValidationRedisModule,
+    })).rejects.toThrow('missing hostname')
+
+    const clusterOptionCalls: unknown[] = []
+    await expect(workerInternals.createRedisScalingAdapter({
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      clusters: [{
+        host: 'cluster.internal',
+        port: 6380,
+      }],
+    }, {
+      loadRedisModule: async () => ({
+        default: class RedisMock {
+          duplicate() {
+            return this
+          }
+          on() {
+            return this
+          }
+          async connect() {}
+          async quit() {}
+          subscribe() {
+            return this
+          }
+          publish() {
+            return Promise.resolve(0)
+          }
+          hSet() {
+            return Promise.resolve(0)
+          }
+          hGetAll() {
+            return Promise.resolve({})
+          }
+          del() {
+            return Promise.resolve(0)
+          }
+        },
+        Cluster: class ClusterMock {
+          constructor(startupNodes: unknown, options: unknown) {
+            clusterOptionCalls.push({ startupNodes, options })
+          }
+          duplicate() {
+            return this
+          }
+          on() {
+            return this
+          }
+          async connect() {}
+          async quit() {}
+          subscribe() {
+            return this
+          }
+          publish() {
+            return Promise.resolve(0)
+          }
+          hSet() {
+            return Promise.resolve(0)
+          }
+          hGetAll() {
+            return Promise.resolve({})
+          }
+          del() {
+            return Promise.resolve(0)
+          }
+        },
+      }),
+    })).resolves.toBeDefined()
+    expect(clusterOptionCalls[0]).toEqual({
+      startupNodes: [{
+        host: 'cluster.internal',
+        port: 6380,
+      }],
+      options: {
+        redisOptions: {
+          db: 0,
+          password: undefined,
+          username: undefined,
+        },
+      },
+    })
   })
 })

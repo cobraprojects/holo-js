@@ -418,4 +418,35 @@ export default policy
       target: 'Object',
     })])
   })
+
+  it('uses model definition names when a discovered policy target exposes definition.name', async () => {
+    const root = await createProject()
+    await symlink(join(workspaceRoot, 'packages/authorization'), join(root, 'node_modules/@holo-js/authorization'))
+    await writeFile(join(root, 'server/policies/model-facade.ts'), `
+import { authorizationInternals } from ${JSON.stringify(authorizationModulePath)}
+import { AUTHORIZATION_POLICY_MARKER } from ${JSON.stringify(authorizationContractsModulePath)}
+
+const policy = {
+  [AUTHORIZATION_POLICY_MARKER]: true,
+  name: 'model-facade',
+  target: {
+    definition: {
+      name: 'Invoice',
+    },
+  },
+  class: {},
+  record: {},
+}
+
+authorizationInternals.registerPolicyDefinition(policy)
+
+export default policy
+`, 'utf8')
+
+    const registry = await prepareProjectDiscovery(root, normalizeHoloProjectConfig())
+    expect(registry.authorizationPolicies).toEqual([expect.objectContaining({
+      name: 'model-facade',
+      target: 'Invoice',
+    })])
+  })
 })

@@ -13,6 +13,7 @@ describe('@holo-js/forms client typing', () => {
     const registerUser = schema({
       email: field.string().required().email(),
       age: field.number().optional(),
+      tags: field.array(field.string().required()).optional(),
       profile: {
         city: field.string().required(),
       },
@@ -23,6 +24,7 @@ describe('@holo-js/forms client typing', () => {
       initialValues: {
         email: 'ava@example.com',
         age: undefined,
+        tags: ['admin'],
         profile: {
           city: 'Cairo',
         },
@@ -37,6 +39,7 @@ describe('@holo-js/forms client typing', () => {
       UseFormResult<{
         email: string
         age: number | undefined
+        tags: string[] | undefined
         profile: {
           city: string
         }
@@ -45,11 +48,13 @@ describe('@holo-js/forms client typing', () => {
 
     const emailField: FormFieldState<string> = client.fields.email
     const ageField: FormFieldState<number | undefined> = client.fields.age
+    const tagsField: FormFieldState<string[] | undefined> = client.fields.tags
     const cityField: FormFieldState<string> = client.fields.profile.city
     const emailValue: string = client.values.email
     const applyServerStateResult: ClientSubmitResult<{
       email: string
       age: number | undefined
+      tags: string[] | undefined
       profile: {
         city: string
       }
@@ -70,6 +75,7 @@ describe('@holo-js/forms client typing', () => {
 
     void emailField
     void ageField
+    void tagsField
     void cityField
     void emailValue
     void applyServerStateResult

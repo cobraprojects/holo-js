@@ -104,26 +104,11 @@ function dynamicImport<TModule>(specifier: string): Promise<TModule> {
 }
 
 async function loadQueueModule(): Promise<QueueModule> {
-  const override = getRuntimeState().loadQueueModule
-  if (override) {
-    try {
-      return await override()
-    } catch (error) {
-      if (
-        error
-        && typeof error === 'object'
-        && 'code' in error
-        && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-      ) {
-        throw new Error('[@holo-js/broadcast] Queued or delayed broadcasts require @holo-js/queue to be installed.')
-      }
-
-      throw error
-    }
-  }
+  const load = getRuntimeState().loadQueueModule
+    ?? (async () => await dynamicImport<QueueModule>('@holo-js/queue'))
 
   try {
-    return await dynamicImport<QueueModule>('@holo-js/queue')
+    return await load()
   } catch (error) {
     if (
       error
@@ -139,28 +124,12 @@ async function loadQueueModule(): Promise<QueueModule> {
 }
 
 async function loadDbModule(): Promise<DbModule | null> {
-  const override = getRuntimeState().loadDbModule
-  if (override) {
-    try {
-      return await override()
-    } catch (error) {
-      if (
-        error
-        && typeof error === 'object'
-        && 'code' in error
-        && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-      ) {
-        return null
-      }
-
-      throw error
-    }
-  }
+  const load = getRuntimeState().loadDbModule
+    ?? (async () => await dynamicImport<DbModule>('@holo-js/db'))
 
   try {
-    return await dynamicImport<DbModule>('@holo-js/db')
+    return await load()
   } catch (error) {
-    /* v8 ignore start -- environment-specific optional dependency fallback */
     if (
       error
       && typeof error === 'object'
@@ -171,7 +140,6 @@ async function loadDbModule(): Promise<DbModule | null> {
     }
 
     throw error
-    /* v8 ignore stop */
   }
 }
 

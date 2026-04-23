@@ -1528,6 +1528,16 @@ describe('query core slice', () => {
     adapter.queryRows = [{ id: 1, score: 'bad' as never }]
     await expect(DB.table(users).increment('score', 1)).rejects.toThrow(CompilerError)
     await expect(DB.table(users).increment('score', Number.NaN)).rejects.toThrow(SecurityError)
+
+    adapter.executions.length = 0
+    adapter.queryRows = [{ id: 3, score: 15 }]
+
+    const incrementedFromStringTable = await DB.table('users').where('id', 3).increment('score', 5)
+    expect(incrementedFromStringTable.affectedRows).toBe(3)
+    expect(adapter.executions).toEqual([{
+      sql: 'UPDATE "users" SET "score" = ?1 WHERE "id" = ?2 AND "id" = ?3',
+      bindings: [20, 3, 3],
+    }])
   })
 
   it('falls back for numeric adjustments when the driver omits affected row counts', async () => {

@@ -110,6 +110,15 @@ describe('@holo-js/config cache normalization', () => {
     })).toThrow('default cache driver "redis" is not configured')
 
     expect(() => normalizeCacheConfig({
+      default: 'toString',
+      drivers: {
+        file: {
+          driver: 'file',
+        },
+      },
+    })).toThrow('default cache driver "toString" is not configured')
+
+    expect(() => normalizeCacheConfig({
       drivers: {
         '  ': {
           driver: 'file',

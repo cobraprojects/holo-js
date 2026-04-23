@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createFailedSubmission, createSuccessfulSubmission, field, schema } from '../src'
 import { useForm } from '../src/client'
 
+const browserGlobal = globalThis as typeof globalThis & { document?: Document }
 const originalFetch = globalThis.fetch
-const originalDocument = globalThis.document
+const originalDocument = browserGlobal.document
 
 function createSecurityClientModule(config: { readonly field: string, readonly cookie: string } = {
   field: '_token',
@@ -21,9 +22,9 @@ function createSecurityClientModule(config: { readonly field: string, readonly c
 afterEach(() => {
   globalThis.fetch = originalFetch
   if (typeof originalDocument === 'undefined') {
-    delete (globalThis as typeof globalThis & { document?: Document }).document
+    delete browserGlobal.document
   } else {
-    globalThis.document = originalDocument
+    browserGlobal.document = originalDocument
   }
   delete (globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__
   delete (globalThis as typeof globalThis & { __holoFormsSecurityClientModule__?: unknown }).__holoFormsSecurityClientModule__
@@ -43,6 +44,22 @@ function createDeferred<TValue>() {
   }
 }
 
+function createJsonResponse(body: unknown, init?: ResponseInit): Response {
+  const headers = new Headers(init?.headers)
+  if (!headers.has('content-type')) {
+    headers.set('content-type', 'application/json')
+  }
+
+  return new Response(JSON.stringify(body), {
+    ...init,
+    headers,
+  })
+}
+
+function createTextResponse(body: string, init?: ResponseInit): Response {
+  return new Response(body, init)
+}
+
 describe('@holo-js/forms client', () => {
   it('attaches the configured csrf token to outgoing form data when enabled', async () => {
     const registerUser = schema({
@@ -51,7 +68,7 @@ describe('@holo-js/forms client', () => {
 
     ;(globalThis as typeof globalThis & { __holoFormsSecurityClientModule__?: unknown }).__holoFormsSecurityClientModule__ = createSecurityClientModule()
 
-    globalThis.document = {
+    browserGlobal.document = {
       cookie: 'XSRF-TOKEN=client-token',
     } as Document
 
@@ -87,7 +104,7 @@ describe('@holo-js/forms client', () => {
       cookie: 'csrf-token',
     })
 
-    globalThis.document = {
+    browserGlobal.document = {
       cookie: 'csrf-token=client-token',
     } as Document
 
@@ -121,7 +138,7 @@ describe('@holo-js/forms client', () => {
 
     ;(globalThis as typeof globalThis & { __holoFormsSecurityClientModule__?: unknown }).__holoFormsSecurityClientModule__ = createSecurityClientModule()
 
-    globalThis.document = {
+    browserGlobal.document = {
       cookie: 'XSRF-TOKEN=safe-token',
     } as Document
 
@@ -143,7 +160,7 @@ describe('@holo-js/forms client', () => {
 
     await safeClient.submit()
 
-    globalThis.document = {
+    browserGlobal.document = {
       cookie: '',
     } as Document
 
@@ -420,7 +437,11 @@ describe('@holo-js/forms client', () => {
     const successfulSerializedResult = client.applyServerState(serializedSuccess)
 
     expect('valid' in successfulSerializedResult && successfulSerializedResult.valid === true).toBe(true)
-    if ('valid' in successfulSerializedResult && successfulSerializedResult.valid) {
+    if (
+      'valid' in successfulSerializedResult
+      && successfulSerializedResult.valid
+      && 'data' in successfulSerializedResult
+    ) {
       expect(successfulSerializedResult.data.email).toBe('ok@example.com')
     }
 
@@ -542,12 +563,9 @@ describe('@holo-js/forms client', () => {
     expect('valid' in fetchResult && fetchResult.valid === false).toBe(true)
     expect(fetchClient.errors.first('email')).toBe('Server says no.')
 
-    globalThis.fetch = vi.fn(async () => ({
+    globalThis.fetch = vi.fn(async (): Promise<Response> => new Response(null, {
       status: 204,
-      async json() {
-        throw new Error('204 responses should not be parsed as JSON.')
-      },
-    } as Response))
+    }))
 
     const noContentClient = useForm(registerUser, {
       action: '/register',
@@ -566,24 +584,20 @@ describe('@holo-js/forms client', () => {
       expect(noContentResult.data).toBeUndefined()
     }
 
-    globalThis.fetch = vi.fn(async () => ({
+    globalThis.fetch = vi.fn(async (): Promise<Response> => createJsonResponse({
       ok: false,
       status: 422,
-      async json() {
-        return {
-          ok: false,
-          status: 422,
-          valid: false,
-          values: {
-            email: 'missing-header-bad',
-            publishedAt: '2026-04-04T10:00:00.000Z',
-          },
-          errors: {
-            email: ['Missing header failure.'],
-          },
-        }
+      valid: false,
+      values: {
+        email: 'missing-header-bad',
+        publishedAt: '2026-04-04T10:00:00.000Z',
       },
-    } as Response))
+      errors: {
+        email: ['Missing header failure.'],
+      },
+    }, {
+      status: 422,
+    }))
 
     const headerlessFailureClient = useForm(registerUser, {
       action: '/register',
@@ -599,16 +613,12 @@ describe('@holo-js/forms client', () => {
     expect('valid' in headerlessFailure && headerlessFailure.valid === false).toBe(true)
     expect(headerlessFailureClient.errors.first('email')).toBe('Missing header failure.')
 
-    globalThis.fetch = vi.fn(async () => ({
-      ok: false,
+    globalThis.fetch = vi.fn(async (): Promise<Response> => createTextResponse('<html></html>', {
       status: 500,
-      headers: new Headers({
+      headers: {
         'content-type': 'text/html; charset=utf-8',
-      }),
-      async json() {
-        throw new Error('Non-JSON error responses should not be parsed as JSON.')
       },
-    } as Response))
+    }))
 
     const nonJsonFailureClient = useForm(registerUser, {
       action: '/register',
@@ -649,16 +659,12 @@ describe('@holo-js/forms client', () => {
     })
     expect(nonJsonFailureClient.errors.flatten()).toEqual({})
 
-    globalThis.fetch = vi.fn(async () => ({
-      ok: true,
+    globalThis.fetch = vi.fn(async (): Promise<Response> => createTextResponse('<html></html>', {
       status: 200,
-      headers: new Headers({
+      headers: {
         'content-type': 'text/html; charset=utf-8',
-      }),
-      async json() {
-        throw new Error('Non-JSON success responses should not be parsed as JSON.')
       },
-    } as Response))
+    }))
 
     const redirectedClient = useForm(registerUser, {
       action: '/register',
@@ -1025,24 +1031,17 @@ describe('@holo-js/forms client', () => {
       },
     })
 
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
+    const fetchMock = vi.fn(async (): Promise<Response> => createJsonResponse({
+      ok: true as const,
       status: 200,
-      headers: new Headers({
-        'content-type': 'application/json',
-      }),
-      async json() {
-        return {
-          ok: true as const,
-          status: 200,
-          data: {
-            results: [],
-          },
-        }
+      data: {
+        results: [],
       },
+    }, {
+      status: 200,
     }))
 
-    globalThis.fetch = fetchMock as typeof fetch
+    globalThis.fetch = fetchMock
 
     const client = useForm(searchSchema, {
       action: 'https://example.com/search',
@@ -1068,14 +1067,11 @@ describe('@holo-js/forms client', () => {
       avatar: field.file().optional(),
     })
 
-    const fetchMock = vi.fn(async () => ({
+    const fetchMock = vi.fn(async (): Promise<Response> => new Response(null, {
       status: 204,
-      json: vi.fn(async () => {
-        throw new Error('HEAD responses should not be parsed as JSON')
-      }),
     }))
 
-    globalThis.fetch = fetchMock as typeof fetch
+    globalThis.fetch = fetchMock
 
     const client = useForm(uploadSchema, {
       action: 'https://example.com/upload#done',
@@ -1099,24 +1095,17 @@ describe('@holo-js/forms client', () => {
       q: field.string().optional(),
     })
 
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
+    const fetchMock = vi.fn(async (): Promise<Response> => createJsonResponse({
+      ok: true as const,
       status: 200,
-      headers: new Headers({
-        'content-type': 'application/json',
-      }),
-      async json() {
-        return {
-          ok: true as const,
-          status: 200,
-          data: {
-            results: [],
-          },
-        }
+      data: {
+        results: [],
       },
+    }, {
+      status: 200,
     }))
 
-    globalThis.fetch = fetchMock as typeof fetch
+    globalThis.fetch = fetchMock
 
     const client = useForm(searchSchema, {
       action: 'https://example.com/search#results',

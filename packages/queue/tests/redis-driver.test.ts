@@ -1342,6 +1342,28 @@ describe('@holo-js/queue redis driver', () => {
       retryAfter: 90,
       blockFor: 5,
       redis: {
+        url: 'redis://redis.internal:6380/4',
+        host: 'redis.internal',
+        port: 6380,
+        username: 'worker',
+        password: 'secret',
+        db: 4,
+      },
+    })).toEqual({
+      url: 'redis://redis.internal:6380/4',
+      username: 'worker',
+      password: 'secret',
+      db: 4,
+      maxRetriesPerRequest: null,
+    })
+    expect(queue.redisQueueDriverInternals.resolveBullConnectionOptions({
+      name: 'redis',
+      driver: 'redis',
+      connection: 'default',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 5,
+      redis: {
         host: '/tmp/redis.sock',
         port: 6380,
         username: 'worker',
@@ -1353,6 +1375,52 @@ describe('@holo-js/queue redis driver', () => {
       username: 'worker',
       password: 'secret',
       db: 4,
+      maxRetriesPerRequest: null,
+    })
+    expect(queue.redisQueueDriverInternals.resolveBullConnectionOptions({
+      name: 'redis',
+      driver: 'redis',
+      connection: 'default',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 5,
+      redis: {
+        host: 'unix:///tmp/redis.sock',
+        port: 6380,
+        username: 'worker',
+        password: 'secret',
+        db: 4,
+      },
+    })).toEqual({
+      path: '/tmp/redis.sock',
+      username: 'worker',
+      password: 'secret',
+      db: 4,
+      maxRetriesPerRequest: null,
+    })
+    expect(queue.redisQueueDriverInternals.resolveBullConnectionOptions({
+      name: 'redis',
+      driver: 'redis',
+      connection: 'default',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 5,
+      redis: {
+        host: '127.0.0.1',
+        port: 6379,
+        username: 'worker',
+        password: 'secret',
+        db: 0,
+        clusters: [{
+          host: 'redis-cluster.internal',
+          port: 6380,
+        }],
+      },
+    })).toMatchObject({
+      clusters: [{
+        host: 'redis-cluster.internal',
+        port: 6380,
+      }],
       maxRetriesPerRequest: null,
     })
     expect(queue.redisQueueDriverInternals.normalizeRedisErrorMessage('plain failure')).toBe('plain failure')
