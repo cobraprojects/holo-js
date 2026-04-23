@@ -1859,10 +1859,17 @@ export async function startBroadcastWorker(
   const httpServer = createServer(async (request, response) => {
     const requestUrl = toNodeRequestUrl(request, `${config.worker.host}:${config.worker.port}`)
     const requestBody = await readNodeRequestBody(request)
-    const runtimeRequest = new Request(requestUrl, {
+    const requestInit: RequestInit = {
       method: request.method,
       headers: toNodeHeaders(request.headers),
-      ...(typeof requestBody === 'undefined' ? {} : { body: requestBody }),
+    }
+
+    if (typeof requestBody !== 'undefined') {
+      requestInit.body = new Uint8Array(requestBody)
+    }
+
+    const runtimeRequest = new Request(requestUrl, {
+      ...requestInit,
     })
     const runtimeResponse = await runtime.fetch(runtimeRequest)
     await writeNodeResponse(response, runtimeResponse)

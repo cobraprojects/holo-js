@@ -390,7 +390,7 @@ describe('@holo-js/mail contracts', () => {
     expect(() => mailInternals.normalizeAttachment({
       resolve: 'bad' as never,
     }, 0)).toThrow('resolve attachments must define resolve()')
-    expect(() => mailInternals.normalizeAttachment({}, 0)).toThrow('must define path, storage, content, or resolve')
+    expect(() => mailInternals.normalizeAttachment({} as never, 0)).toThrow('must define path, storage, content, or resolve')
     expect(() => mailInternals.resolveNormalizedAttachment({
       resolve: async () => ({
         content: 'hello',

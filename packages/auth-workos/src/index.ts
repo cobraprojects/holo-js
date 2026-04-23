@@ -2,7 +2,7 @@ import { createPublicKey, verify as verifySignature } from 'node:crypto'
 import { authRuntimeInternals } from '@holo-js/auth'
 import type { AuthEstablishedSession } from '@holo-js/auth'
 import { parseCookieHeader } from '@holo-js/session'
-import type { AuthProviderAdapter, AuthUserLike } from '@holo-js/auth'
+import type { AuthUserLike } from '@holo-js/auth'
 import type { AuthWorkosProviderConfig } from '@holo-js/config'
 
 export interface WorkosIdentityProfile {
@@ -45,6 +45,8 @@ export interface WorkosProviderRuntime {
 type JwkKey = Readonly<Record<string, unknown>> & {
   readonly kid?: string
 }
+
+type RuntimeAuthProviderAdapter = ReturnType<typeof authRuntimeInternals.getRuntimeBindings>['providers'][string]
 
 export interface HostedIdentityRecord {
   readonly provider: string
@@ -418,7 +420,7 @@ function getProviderRuntime(provider?: string): WorkosProviderRuntime {
 function resolveGuardAndProvider(provider?: string): {
   readonly guard: string
   readonly authProvider: string
-  readonly adapter: AuthProviderAdapter
+  readonly adapter: RuntimeAuthProviderAdapter
 } {
   const authBindings = authRuntimeInternals.getRuntimeBindings()
   const providerConfig = getConfiguredProviderConfig(provider)
@@ -444,7 +446,36 @@ function resolveGuardAndProvider(provider?: string): {
   }
 }
 
-function serializeLocalUser(adapter: AuthProviderAdapter, user: unknown, providerName: string): AuthUserLike {
+function requireUserId(
+  adapter: RuntimeAuthProviderAdapter,
+  user: unknown,
+  message: string,
+): string | number {
+  if (!user || typeof user !== 'object') {
+    throw new Error(message)
+  }
+
+  const userId = adapter.getId(user as Record<string, unknown>)
+  if (typeof userId !== 'string' && typeof userId !== 'number') {
+    throw new Error(message)
+  }
+
+  return userId
+}
+
+function requireUserRecord(user: unknown, message: string): Record<string, unknown> {
+  if (!user || typeof user !== 'object') {
+    throw new Error(message)
+  }
+
+  return user as Record<string, unknown>
+}
+
+function serializeLocalUser(
+  adapter: RuntimeAuthProviderAdapter,
+  user: Record<string, unknown>,
+  providerName: string,
+): AuthUserLike {
   const id = adapter.getId(user)
   const serialized = adapter.serialize
     ? adapter.serialize(user)
@@ -496,19 +527,22 @@ function normalizeHostedProfile(profile: WorkosIdentityProfile): Readonly<Record
 }
 
 async function findUserByEmail(
-  adapter: AuthProviderAdapter,
+  adapter: RuntimeAuthProviderAdapter,
   email: string | undefined,
-): Promise<unknown | null> {
+): Promise<Record<string, unknown> | null> {
   if (!email?.trim()) {
     return null
   }
 
-  return adapter.findByCredentials({ email: email.trim() })
+  const user = await adapter.findByCredentials({ email: email.trim() })
+  return user
+    ? requireUserRecord(user, '[@holo-js/auth-workos] Auth provider lookups must return object users.')
+    : null
 }
 
 async function updateLocalUser(
-  adapter: AuthProviderAdapter,
-  user: unknown,
+  adapter: RuntimeAuthProviderAdapter,
+  user: Record<string, unknown>,
   input: {
     readonly name?: string
     readonly email?: string
@@ -516,7 +550,7 @@ async function updateLocalUser(
     readonly emailVerified?: boolean
   },
 ): Promise<{
-  readonly user: unknown
+  readonly user: Record<string, unknown>
   readonly changed: boolean
 }> {
   const nextInput = {
@@ -546,7 +580,10 @@ async function updateLocalUser(
 
   if (adapter.update) {
     return {
-      user: await adapter.update(user, nextInput),
+      user: requireUserRecord(
+        await adapter.update(user, nextInput),
+        '[@holo-js/auth-workos] Auth provider updates must return object users.',
+      ),
       changed: true,
     }
   }
@@ -557,7 +594,7 @@ async function updateLocalUser(
 }
 
 async function ensureNoUnexpectedEmailCollision(
-  adapter: AuthProviderAdapter,
+  adapter: RuntimeAuthProviderAdapter,
   authProvider: string,
   profile: WorkosIdentityProfile,
   currentUserId: string | number,
@@ -572,7 +609,13 @@ async function ensureNoUnexpectedEmailCollision(
     return
   }
 
-  if (adapter.getId(matched) !== currentUserId) {
+  if (
+    requireUserId(
+      adapter,
+      matched,
+      '[@holo-js/auth-workos] Matched local users must expose a serializable id.',
+    ) !== currentUserId
+  ) {
     throw new WorkosAuthConflictError({
       provider: 'workos',
       workosUserId: profile.id,
@@ -585,11 +628,15 @@ async function ensureNoUnexpectedEmailCollision(
 async function assertUserLinkAvailable(
   providerName: string,
   authProvider: string,
-  adapter: AuthProviderAdapter,
-  user: unknown,
+  adapter: RuntimeAuthProviderAdapter,
+  user: Record<string, unknown>,
   workosUserId: string,
 ): Promise<void> {
-  const existing = await getBindings().identityStore.findByUserId(providerName, authProvider, adapter.getId(user))
+  const existing = await getBindings().identityStore.findByUserId(
+    providerName,
+    authProvider,
+    requireUserId(adapter, user, '[@holo-js/auth-workos] Linked users must expose a serializable id.'),
+  )
   if (existing && existing.providerUserId !== workosUserId) {
     throw new WorkosAuthConflictError({
       provider: providerName,
@@ -741,7 +788,10 @@ export async function syncIdentity(
   const existingIdentity = await identityStore.findByProviderUserId(providerName, profile.id)
 
   if (existingIdentity) {
-    let linkedUser = await adapter.findById(existingIdentity.userId)
+    const existingLinkedUser = await adapter.findById(existingIdentity.userId)
+    let linkedUser = existingLinkedUser
+      ? requireUserRecord(existingLinkedUser, '[@holo-js/auth-workos] Auth provider lookups must return object users.')
+      : null
 
     if (!linkedUser) {
       linkedUser = verifiedEmail
@@ -753,13 +803,13 @@ export async function syncIdentity(
       }
 
       if (!linkedUser) {
-        linkedUser = await adapter.create({
+        linkedUser = requireUserRecord(await adapter.create({
           name: resolveDisplayName(profile),
           email: resolveEmailForCreation(profile),
           password: null,
           avatar: profile.avatar ?? null,
           email_verified_at: profile.emailVerified === true ? new Date() : null,
-        })
+        }), '[@holo-js/auth-workos] Auth provider create() must return an object user.')
       }
 
       const relinked = await updateLocalUser(adapter, linkedUser, {
@@ -773,7 +823,11 @@ export async function syncIdentity(
         provider: providerName,
         guard,
         authProvider,
-        userId: adapter.getId(relinkedUser),
+        userId: requireUserId(
+          adapter,
+          relinkedUser,
+          '[@holo-js/auth-workos] Relinked local users must expose a serializable id.',
+        ),
         profile,
         previous: existingIdentity,
       })
@@ -790,7 +844,16 @@ export async function syncIdentity(
       })
     }
 
-    await ensureNoUnexpectedEmailCollision(adapter, authProvider, profile, adapter.getId(linkedUser))
+    await ensureNoUnexpectedEmailCollision(
+      adapter,
+      authProvider,
+      profile,
+      requireUserId(
+        adapter,
+        linkedUser,
+        '[@holo-js/auth-workos] Linked local users must expose a serializable id.',
+      ),
+    )
     const updated = await updateLocalUser(adapter, linkedUser, {
       name: resolveDisplayName(profile),
       email: profile.email?.trim(),
@@ -801,7 +864,11 @@ export async function syncIdentity(
       provider: providerName,
       guard,
       authProvider,
-      userId: adapter.getId(updated.user),
+      userId: requireUserId(
+        adapter,
+        updated.user,
+        '[@holo-js/auth-workos] Updated local users must expose a serializable id.',
+      ),
       profile,
       previous: existingIdentity,
     })
@@ -834,7 +901,11 @@ export async function syncIdentity(
       provider: providerName,
       guard,
       authProvider,
-      userId: adapter.getId(linked.user),
+      userId: requireUserId(
+        adapter,
+        linked.user,
+        '[@holo-js/auth-workos] Linked local users must expose a serializable id.',
+      ),
       profile,
     })
     await identityStore.save(identity)
@@ -850,18 +921,22 @@ export async function syncIdentity(
     })
   }
 
-  localUser = await adapter.create({
+  localUser = requireUserRecord(await adapter.create({
     name: resolveDisplayName(profile),
     email: resolveEmailForCreation(profile),
     password: null,
     avatar: profile.avatar ?? null,
     email_verified_at: profile.emailVerified === true ? new Date() : null,
-  })
+  }), '[@holo-js/auth-workos] Auth provider create() must return an object user.')
   const identity = createIdentityRecord({
     provider: providerName,
     guard,
     authProvider,
-    userId: adapter.getId(localUser),
+    userId: requireUserId(
+      adapter,
+      localUser,
+      '[@holo-js/auth-workos] Created local users must expose a serializable id.',
+    ),
     profile,
   })
   await identityStore.save(identity)

@@ -22,7 +22,7 @@ function createSecurityClientModule(config: { readonly field: string, readonly c
 afterEach(() => {
   globalThis.fetch = originalFetch
   if (typeof originalDocument === 'undefined') {
-    delete browserGlobal.document
+    delete (browserGlobal as { document?: Document }).document
   } else {
     browserGlobal.document = originalDocument
   }

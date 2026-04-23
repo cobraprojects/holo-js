@@ -1575,14 +1575,15 @@ describe('@holo-js/media', () => {
   it('supports remote uploads and selective regeneration', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input?: string | URL | Request) => {
       const url = String(input)
+      const imageBytes = new Uint8Array(await createImageBuffer())
 
       if (url.includes('no-header')) {
-        return new Response(await createImageBuffer(), {
+        return new Response(imageBytes, {
           status: 200,
         })
       }
 
-      return new Response(await createImageBuffer(), {
+      return new Response(imageBytes, {
         status: 200,
         headers: {
           'content-type': 'image/jpeg',

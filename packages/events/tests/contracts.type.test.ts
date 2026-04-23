@@ -7,6 +7,7 @@ import {
   type EventPendingDispatch,
   type EventPayloadFor,
   type ListenerDefinition,
+  type ListenerDefinitionInput,
   defineEvent,
   defineListener,
 } from '../src'
@@ -38,11 +39,19 @@ describe('@holo-js/events typing', () => {
       handle(event) {
         return event.name
       },
-    })
+    } satisfies ListenerDefinition<readonly [typeof userRegistered, typeof userDeleted], string>)
+
+    const singleListener = defineListener({
+      listensTo: userRegistered,
+      handle(event) {
+        return event.payload.userId
+      },
+    } satisfies ListenerDefinitionInput<typeof userRegistered, string>)
 
     type MultiEvent = Parameters<typeof multiListener.handle>[0]
     type MultiEventName = MultiEvent['name']
     type MultiEventPayload = MultiEvent['payload']
+    type SingleListensTo = typeof singleListener.listensTo
     type PayloadFromRegistry = EventPayloadFor<'user.registered'>
     type ListenerContract = ListenerDefinition<readonly [typeof userRegistered, typeof userDeleted], string>
 
@@ -76,6 +85,10 @@ describe('@holo-js/events typing', () => {
       PayloadFromRegistry,
       { userId: string; email: string }
     >>
+    type SingleListensToAssertion = Expect<Equal<
+      SingleListensTo,
+      readonly [typeof userRegistered]
+    >>
 
     const explicitEnvelope: ExplicitEnvelope = {
       name: 'user.registered',
@@ -95,5 +108,6 @@ describe('@holo-js/events typing', () => {
     void (0 as unknown as MultiNameAssertion)
     void (0 as unknown as MultiPayloadAssertion)
     void (0 as unknown as RegistryPayloadAssertion)
+    void (0 as unknown as SingleListensToAssertion)
   })
 })

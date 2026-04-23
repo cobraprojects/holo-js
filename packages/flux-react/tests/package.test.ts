@@ -1,5 +1,5 @@
-import { createElement, useEffect } from 'react'
-import { act, create } from 'react-test-renderer'
+import { useEffect } from 'react'
+import { jsx } from 'react/jsx-runtime'
 import { describe, expect, it, vi } from 'vitest'
 import { configureFluxClient, createFluxClient, fluxInternals, getFluxClient, resetFluxClient } from '@holo-js/flux'
 import {
@@ -19,6 +19,24 @@ type DebugConnector = {
   getJoinedChannels(): readonly string[]
 }
 
+type Renderer = {
+  update(element: ReturnType<typeof jsx>): void
+  unmount(): void
+}
+
+type RendererModule = {
+  act(callback: () => void | Promise<void>): Promise<void>
+  create(element: ReturnType<typeof jsx>): Renderer
+}
+
+async function loadRenderer(): Promise<RendererModule> {
+  return await import('react-test-renderer') as unknown as RendererModule
+}
+
+function renderElement(Component: () => null): ReturnType<typeof jsx> {
+  return jsx(Component, {})
+}
+
 describe('@holo-js/flux-react package surface', () => {
   it('uses the default flux client when no client is provided', async () => {
     resetFluxClient()
@@ -34,9 +52,10 @@ describe('@holo-js/flux-react package surface', () => {
       return null
     }
 
-    let renderer: ReturnType<typeof create> | undefined
+    const { act, create } = await loadRenderer()
+    let renderer: Renderer | undefined
     await act(async () => {
-      renderer = create(createElement(Probe))
+      renderer = create(renderElement(Probe))
     })
 
     expect(debug.getJoinedChannels()).toContain('public:feed.default')
@@ -75,9 +94,10 @@ describe('@holo-js/flux-react package surface', () => {
       return null
     }
 
-    let renderer: ReturnType<typeof create> | undefined
+    const { act, create } = await loadRenderer()
+    let renderer: Renderer | undefined
     await act(async () => {
-      renderer = create(createElement(Probe))
+      renderer = create(renderElement(Probe))
     })
 
     expect(controls).toEqual({
@@ -134,14 +154,15 @@ describe('@holo-js/flux-react package surface', () => {
       return null
     }
 
-    let renderer: ReturnType<typeof create> | undefined
+    const { act, create } = await loadRenderer()
+    let renderer: Renderer | undefined
     await act(async () => {
-      renderer = create(createElement(Probe))
+      renderer = create(renderElement(Probe))
     })
     expect(subscribeCalls).toBe(1)
 
     await act(async () => {
-      renderer!.update(createElement(Probe))
+      renderer!.update(renderElement(Probe))
     })
     expect(subscribeCalls).toBe(1)
 
@@ -160,14 +181,14 @@ describe('@holo-js/flux-react package surface', () => {
     const statusHandler = vi.fn((status: string) => {
       statusChanges.push(status)
     })
-    const presenceSnapshots: readonly unknown[][] = []
+    const presenceSnapshots: Array<readonly { id: string }[]> = []
     const statusSnapshots: string[] = []
     const bareStatusSnapshots: string[] = []
     let emptyPresence: ReturnType<typeof useFluxPresence> | undefined
     let presenceControls: ReturnType<typeof useFluxPresence<{ id: string }>> | undefined
 
     function Probe() {
-      const presence = useFluxPresence('chat.1', {
+      const presence = useFluxPresence<{ id: string }>('chat.1', {
         onHere(members) {
           here.push(members)
         },
@@ -195,9 +216,10 @@ describe('@holo-js/flux-react package surface', () => {
       return null
     }
 
-    let renderer: ReturnType<typeof create> | undefined
+    const { act, create } = await loadRenderer()
+    let renderer: Renderer | undefined
     await act(async () => {
-      renderer = create(createElement(Probe))
+      renderer = create(renderElement(Probe))
     })
 
     expect(here).toEqual([[]])
@@ -259,9 +281,10 @@ describe('@holo-js/flux-react package surface', () => {
       return null
     }
 
-    let renderer: ReturnType<typeof create> | undefined
+    const { act, create } = await loadRenderer()
+    let renderer: Renderer | undefined
     await act(async () => {
-      renderer = create(createElement(Probe))
+      renderer = create(renderElement(Probe))
     })
 
     expect(unmounts.length).toBeGreaterThanOrEqual(4)

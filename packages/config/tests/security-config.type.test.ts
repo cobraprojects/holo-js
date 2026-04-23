@@ -43,7 +43,11 @@ describe('@holo-js/config security typing', () => {
       session: {} as HoloConfigRegistry['session'],
       security: security as unknown as HoloConfigRegistry['security'],
       auth: {} as HoloConfigRegistry['auth'],
-      services: {} as HoloConfigRegistry['services'],
+      services: {
+        mailgun: {
+          secret: 'secret',
+        },
+      },
     })
 
     const csrfField: string = accessors.useConfig('security.csrf.field')

@@ -41,7 +41,11 @@ describe('@holo-js/config broadcast typing', () => {
       session: {} as HoloConfigRegistry['session'],
       security: {} as HoloConfigRegistry['security'],
       auth: {} as HoloConfigRegistry['auth'],
-      services: {} as HoloConfigRegistry['services'],
+      services: {
+        mailgun: {
+          secret: 'secret',
+        },
+      },
     })
 
     const defaultConnection: string = accessors.useConfig('broadcast.default')

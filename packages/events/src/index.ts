@@ -24,6 +24,7 @@ export type {
   EventReferenceInput,
   ExportedEventDefinition,
   ListenerDefinition,
+  ListenerDefinitionInput,
   ListenerHandledEvent,
   RegisteredEvent,
   RegisteredListener,

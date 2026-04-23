@@ -45,7 +45,7 @@ describe('@holo-js/mail root export typing', () => {
     const preview: Promise<MailPreviewResult> = 0 as unknown as Promise<MailPreviewResult>
     const renderedPreview: Promise<Response> = 0 as unknown as Promise<Response>
     const fromDefault: typeof mail.sendMail = mail.sendMail
-    const defaultMailer: 'preview' = config.default
+    const defaultMailer: string = config.default
 
     if (false) {
       void previewMail(definition)

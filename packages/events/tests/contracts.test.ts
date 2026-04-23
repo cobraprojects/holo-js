@@ -11,7 +11,7 @@ import {
 
 describe('@holo-js/events contracts', () => {
   it('normalizes and freezes valid event definitions', () => {
-    const event = defineEvent<{ userId: string }, 'user.registered'>({
+    const event = defineEvent<{ userId: string }>({
       name: ' user.registered ',
     })
     const unnamed = defineEvent<{
@@ -64,7 +64,7 @@ describe('@holo-js/events contracts', () => {
     })
 
     const single = defineListener({
-      listensTo: userRegistered,
+      listensTo: [userRegistered] as const,
       async handle() {
         return 'ok'
       },
@@ -100,6 +100,22 @@ describe('@holo-js/events contracts', () => {
     expect(Object.isFrozen(multiple.listensTo)).toBe(true)
   })
 
+  it('normalizes a single listener event reference into a frozen list', () => {
+    const event = defineEvent<{ userId: string }, 'user.registered'>({
+      name: 'user.registered',
+    })
+
+    const listener = defineListener({
+      listensTo: event,
+      async handle() {
+        return 'ok'
+      },
+    })
+
+    expect(listener.listensTo).toEqual([event])
+    expect(Object.isFrozen(listener.listensTo)).toBe(true)
+  })
+
   it('rejects invalid listener definitions and metadata combinations', () => {
     const validEvent = defineEvent<{ id: string }, 'entity.created'>({
       name: 'entity.created',
@@ -116,26 +132,26 @@ describe('@holo-js/events contracts', () => {
     })).toThrow('Listener event reference at index 0 must be a non-empty string.')
 
     expect(() => defineListener({
-      listensTo: validEvent,
+      listensTo: [validEvent] as const,
       connection: 'redis',
       async handle() {},
     })).toThrow('Listener queue metadata requires queue: true.')
 
     expect(() => defineListener({
-      listensTo: validEvent,
+      listensTo: [validEvent] as const,
       queue: true,
       delay: -1,
       async handle() {},
     })).toThrow('Listener delay must be a finite number greater than or equal to 0.')
 
     expect(() => defineListener({
-      listensTo: validEvent,
+      listensTo: [validEvent] as const,
       queue: 'yes' as never,
       async handle() {},
     })).toThrow('Listener queue must be a boolean when provided.')
 
     expect(() => defineListener({
-      listensTo: validEvent,
+      listensTo: [validEvent] as const,
       queue: true,
       delay: new Date(Number.NaN),
       async handle() {},
@@ -146,7 +162,7 @@ describe('@holo-js/events contracts', () => {
     )
 
     expect(() => normalizeListenerDefinition({
-      listensTo: validEvent,
+      listensTo: [validEvent] as const,
       handle: 'not-a-function',
     } as never)).toThrow('Listeners must define "listensTo" and a "handle" function.')
   })

@@ -17,12 +17,16 @@ import type {
   AuthorizationTargetModel,
   AuthorizationTargetModelDefinition,
   AuthorizationTargetConstructor,
+  AuthorizationAbilityRegistry,
+  AuthorizationPolicyRegistry,
   AbilityInput,
   HoloAbilityName,
-  HoloAuthorizationGuardName,
   HoloPolicyName,
+  HoloAuthorizationGuardName,
   PolicyActionFor,
   PolicyActionForPolicy,
+  AbilityActorForName,
+  PolicyActorForName,
 } from './contracts'
 import {
   allow,
@@ -40,6 +44,18 @@ import {
 
 type RegisteredPolicy = AuthorizationPolicyDefinition<string, AuthorizationPolicyTarget, string, string, object>
 type RegisteredAbility = AuthorizationAbilityDefinition<string, object, object>
+
+type FallbackAuthorizationActor<TActor> = [TActor] extends [never]
+  ? object
+  : Extract<TActor, object>
+
+type PolicyActorForDefinition<TName extends string> = [Extract<TName, keyof AuthorizationPolicyRegistry & string>] extends [never]
+  ? object
+  : FallbackAuthorizationActor<PolicyActorForName<Extract<TName, keyof AuthorizationPolicyRegistry & string>>>
+
+type AbilityActorForDefinition<TName extends string> = [Extract<TName, keyof AuthorizationAbilityRegistry & string>] extends [never]
+  ? object
+  : FallbackAuthorizationActor<AbilityActorForName<Extract<TName, keyof AuthorizationAbilityRegistry & string>>>
 
 type AuthorizationAuthIntegration = {
   hasGuard(guardName: string): boolean
@@ -241,26 +257,25 @@ function freezeAbilityDefinition<TDefinition extends RegisteredAbility>(definiti
 export function definePolicy<
   TName extends string,
   TTarget extends AuthorizationPolicyTarget,
-  TActor extends object,
   TDefinition extends {
-    readonly before?: AuthorizationPolicyBeforeHandler<TActor, TTarget>
-    readonly class?: Readonly<Record<string, AuthorizationPolicyClassHandler<TActor, TTarget>>>
-    readonly record?: Readonly<Record<string, AuthorizationPolicyRecordHandler<TActor, TTarget>>>
+    readonly before?: AuthorizationPolicyBeforeHandler<PolicyActorForDefinition<TName>, TTarget>
+    readonly class?: Readonly<Record<string, AuthorizationPolicyClassHandler<PolicyActorForDefinition<TName>, TTarget>>>
+    readonly record?: Readonly<Record<string, AuthorizationPolicyRecordHandler<PolicyActorForDefinition<TName>, TTarget>>>
   },
 >(
   name: TName,
   target: TTarget,
   definition: TDefinition & {
-    readonly before?: AuthorizationPolicyBeforeHandler<TActor, TTarget>
-    readonly class?: Readonly<Record<string, AuthorizationPolicyClassHandler<TActor, TTarget>>>
-    readonly record?: Readonly<Record<string, AuthorizationPolicyRecordHandler<TActor, TTarget>>>
+    readonly before?: AuthorizationPolicyBeforeHandler<PolicyActorForDefinition<TName>, TTarget>
+    readonly class?: Readonly<Record<string, AuthorizationPolicyClassHandler<PolicyActorForDefinition<TName>, TTarget>>>
+    readonly record?: Readonly<Record<string, AuthorizationPolicyRecordHandler<PolicyActorForDefinition<TName>, TTarget>>>
   },
 ): AuthorizationPolicyDefinition<
   TName,
   TTarget,
   Extract<keyof NonNullable<TDefinition['class']>, string>,
   Extract<keyof NonNullable<TDefinition['record']>, string>,
-  TActor
+  PolicyActorForDefinition<TName>
 > {
   const normalizedName = normalizePolicyName(name)
   const normalizedTarget = normalizeTarget(target)
@@ -283,18 +298,17 @@ export function definePolicy<
     TTarget,
     Extract<keyof NonNullable<TDefinition['class']>, string>,
     Extract<keyof NonNullable<TDefinition['record']>, string>,
-    TActor
+    PolicyActorForDefinition<TName>
   >
 }
 
 export function defineAbility<
   TName extends string,
   TInput extends object,
-  TActor extends object,
 >(
   name: TName,
-  handle: AuthorizationAbilityHandler<TActor, TInput>,
-): AuthorizationAbilityDefinition<TName, TInput, TActor> {
+  handle: AuthorizationAbilityHandler<AbilityActorForDefinition<TName>, TInput>,
+): AuthorizationAbilityDefinition<TName, TInput> {
   const normalizedName = normalizeAbilityName(name)
   const runtimeDefinition = {
     [AUTHORIZATION_ABILITY_MARKER]: true,
@@ -305,7 +319,7 @@ export function defineAbility<
 
   const registered = registerAbilityDefinition(freezeAbilityDefinition(runtimeDefinition))
 
-  return registered as unknown as AuthorizationAbilityDefinition<TName, TInput, TActor>
+  return registered as unknown as AuthorizationAbilityDefinition<TName, TInput>
 }
 
 function getPolicyByName(name: string): RegisteredPolicy {

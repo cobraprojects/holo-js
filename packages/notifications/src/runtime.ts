@@ -1008,12 +1008,12 @@ class AnonymousNotificationBuilder<
   channel<TChannel extends NotificationChannelName>(
     channel: TChannel,
     route: NotificationRouteFor<TChannel>,
-  ): PendingAnonymousNotification<TRoutes & { readonly [TKey in TChannel]: NotificationRouteFor<TChannel> }> {
+  ): PendingAnonymousNotification<Readonly<Omit<TRoutes, TChannel> & { readonly [TKey in TChannel]: NotificationRouteFor<TChannel> }>> {
     const normalizedChannel = normalizeOptionalString(channel, 'Notification channel')
     return new AnonymousNotificationBuilder({
       ...this.target.routes,
       [normalizedChannel]: route,
-    } as TRoutes & { readonly [TKey in TChannel]: NotificationRouteFor<TChannel> })
+    } as Readonly<Omit<TRoutes, TChannel> & { readonly [TKey in TChannel]: NotificationRouteFor<TChannel> }>)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- must accept any NotificationDefinition variant

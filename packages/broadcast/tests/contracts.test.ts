@@ -255,9 +255,7 @@ describe('@holo-js/broadcast contracts', () => {
 
     expect(() => defineChannel('orders.{orderId}', {
       type: 'public' as never,
-      authorize() {
-        return true
-      },
+      authorize: (async () => true) as never,
     })).toThrow('must use type "private" or "presence"')
 
     expect(() => broadcastInternals.extractChannelPatternParamNames('orders.{orderId}.{orderId}')).toThrow('duplicate params')

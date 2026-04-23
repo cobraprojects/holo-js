@@ -545,7 +545,7 @@ export function defineMailConfig<TConfig extends HoloMailConfig>(config: TConfig
   return defineConfig(config)
 }
 
-export function defineNotificationsConfig<TConfig extends HoloNotificationsConfig>(config: TConfig): DefineConfigValue<TConfig> {
+export function defineNotificationsConfig<const TConfig extends HoloNotificationsConfig>(config: TConfig): DefineConfigValue<TConfig> {
   return defineConfig(config)
 }
 

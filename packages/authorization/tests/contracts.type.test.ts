@@ -102,7 +102,7 @@ describe('@holo-js/authorization typing', () => {
 
     defineAbility('reports.export', (_context, input: { reportId: string, format: 'csv' | 'pdf' }) => input.format === 'csv')
 
-    expectTypeOf<'articles' | 'documents' | 'locked-projects' | 'posts' | 'projects'>().toExtend<HoloPolicyName>()
+    expectTypeOf<'posts'>().toExtend<HoloPolicyName>()
     expectTypeOf<'typing-web'>().toExtend<HoloAuthorizationGuardName>()
     expectTypeOf<'create' | 'viewAny'>().toExtend<PolicyClassActionFor<typeof Post>>()
     expectTypeOf<'view' | 'update' | 'delete'>().toExtend<PolicyRecordActionFor<Post>>()

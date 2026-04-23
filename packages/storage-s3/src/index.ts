@@ -215,10 +215,23 @@ function createSignedRequest(
     `AWS4-HMAC-SHA256 Credential=${options.accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
   )
 
+  const requestBody = payloadBytes
+    ? (() => {
+      const { buffer, byteOffset, byteLength } = payloadBytes
+      const arrayBuffer = buffer instanceof ArrayBuffer
+        ? (byteOffset === 0 && byteLength === buffer.byteLength
+          ? buffer
+          : buffer.slice(byteOffset, byteOffset + byteLength))
+        : payloadBytes.slice().buffer
+
+      return new Blob([arrayBuffer])
+    })()
+    : undefined
+
   return new Request(url.toString(), {
     method,
     headers,
-    body: payloadBytes,
+    body: requestBody,
   })
 }
 

@@ -156,6 +156,7 @@ export interface AuthorizationGuardRegistry {
 type FallbackRegistryName<TName extends string> = [TName] extends [never] ? string : TName
 type FallbackRegistryAction<TAction extends string> = [TAction] extends [never] ? string : TAction
 type FallbackRegistryInput<TInput extends object> = [TInput] extends [never] ? object : TInput
+type FallbackRegistryActor<TActor> = [TActor] extends [never] ? object : TActor
 
 export type HoloPolicyName = FallbackRegistryName<Extract<keyof AuthorizationPolicyRegistry, string>>
 export type HoloAbilityName = FallbackRegistryName<Extract<keyof AuthorizationAbilityRegistry, string>>
@@ -171,28 +172,16 @@ type RegisteredAuthorizationAbilityEntry<TAbilityName extends string> = Authoriz
   Extract<TAbilityName, RegisteredAuthorizationAbilityName>
 ]
 
-export type PolicyActorForName<TPolicyName extends string> = RegisteredAuthorizationPolicyEntry<TPolicyName> extends AuthorizationPolicyRegistryEntry<
-  AuthorizationPolicyTarget,
-  string,
-  string,
-  infer TActor
->
-  ? TActor
-  : RegisteredAuthorizationPolicyEntry<TPolicyName> extends {
-    actor: infer TActor
-  }
-  ? TActor
+export type PolicyActorForName<TPolicyName extends string> = RegisteredAuthorizationPolicyEntry<TPolicyName> extends {
+  actor?: infer TActor
+}
+  ? FallbackRegistryActor<TActor>
   : object
 
-export type AbilityActorForName<TAbilityName extends string> = RegisteredAuthorizationAbilityEntry<TAbilityName> extends AuthorizationAbilityRegistryEntry<
-  object,
-  infer TActor
->
-  ? TActor
-  : RegisteredAuthorizationAbilityEntry<TAbilityName> extends {
-    actor: infer TActor
-  }
-  ? TActor
+export type AbilityActorForName<TAbilityName extends string> = RegisteredAuthorizationAbilityEntry<TAbilityName> extends {
+  actor?: infer TActor
+}
+  ? FallbackRegistryActor<TActor>
   : object
 
 type RegisteredPolicyClassActionFor<TTarget> = {

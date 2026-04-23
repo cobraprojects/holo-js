@@ -212,7 +212,8 @@ function asString(value: RawStorageValue): string | null {
     return value
   }
 
-  return new TextDecoder().decode(toUint8Array(value))
+  const bytes = toUint8Array(value)
+  return bytes ? new TextDecoder().decode(bytes) : null
 }
 
 async function normalizeContent(value: StorageContent): Promise<Exclude<RawStorageValue, null>> {

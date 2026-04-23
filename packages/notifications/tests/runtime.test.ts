@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   configureNotificationsRuntime,
+  defineNotification,
   getNotificationsRuntimeBindings,
   getNotificationsRuntime,
   getRegisteredNotificationChannel,
@@ -17,9 +18,35 @@ import {
   registerNotificationChannel,
   resetNotificationChannelRegistry,
   resetNotificationsRuntime,
+  type NotificationChannel,
+  type NotificationBuildFactories,
+  type NotificationDefinition,
 } from '../src'
 
-const invoicePaid = {
+type InvoicePaidNotifiable = {
+  readonly id?: string
+  readonly type?: string
+  readonly email: string
+  readonly name?: string
+  readonly routeNotificationForBroadcast?: () => readonly string[]
+}
+
+declare module '../src/contracts' {
+  interface HoloNotificationChannelRegistry {
+    readonly slack: NotificationChannel<{ readonly webhook: string }, { readonly text: string }, void>
+  }
+}
+
+function asRuntimeNotification<TNotifiable, TBuild extends NotificationBuildFactories<TNotifiable>>(
+  notification: NotificationDefinition<TNotifiable, TBuild>,
+): NotificationDefinition<unknown, NotificationBuildFactories<unknown>> {
+  return notification as unknown as NotificationDefinition<unknown, NotificationBuildFactories<unknown>>
+}
+
+const invoicePaidDefinition: NotificationDefinition<
+  InvoicePaidNotifiable,
+  NotificationBuildFactories<InvoicePaidNotifiable>
+> = {
   type: 'invoice-paid',
   via() {
     return ['email', 'database', 'broadcast'] as const
@@ -46,7 +73,9 @@ const invoicePaid = {
       }
     },
   },
-} as const
+}
+
+const invoicePaid = defineNotification(invoicePaidDefinition)
 
 function createQueueModuleStub() {
   const jobs = new Map<string, { handle(payload: unknown): Promise<unknown> | unknown }>()
@@ -245,7 +274,7 @@ describe('@holo-js/notifications runtime', () => {
       .channel('email', { email: 'ava@example.com', name: 'Ava' })
       .channel('database', { id: 'user-1', type: 'users' })
       .channel('broadcast', { channels: ['private-users.user-1'] })
-      .notify(invoicePaid)
+      .notify(asRuntimeNotification(invoicePaid))
 
     expect(result.channels).toHaveLength(3)
     expect(mailer.send).toHaveBeenCalledWith({
@@ -343,7 +372,7 @@ describe('@holo-js/notifications runtime', () => {
 
     await expect(notifyUsing()
       .channel('email', { email: 'ava@example.com' })
-      .notify(invoicePaid)).resolves.toMatchObject({
+      .notify(asRuntimeNotification(invoicePaid))).resolves.toMatchObject({
       totalTargets: 1,
     })
 
@@ -384,7 +413,7 @@ describe('@holo-js/notifications runtime', () => {
     const invalidDatabaseRoute = await notifyUsing()
       .channel('email', { email: 'ava@example.com' })
       .channel('database', { id: 'user-1', type: '   ' } as never)
-      .notify(invoicePaid)
+      .notify(asRuntimeNotification(invoicePaid))
 
     expect((invalidDatabaseRoute.channels[1] as { error: Error }).error.message)
       .toContain('Database routes must include a string or numeric id and a non-empty type')
@@ -479,7 +508,7 @@ describe('@holo-js/notifications runtime', () => {
 
     await expect(notify({
       email: 'ava@example.com',
-    }, {
+    } as never, {
       via() {
         return ['sms'] as const
       },
@@ -525,12 +554,15 @@ describe('@holo-js/notifications runtime', () => {
       },
     })
 
-    const queuedInvoicePaid = {
+    const queuedInvoicePaid: NotificationDefinition<
+      InvoicePaidNotifiable,
+      typeof invoicePaid.build
+    > = defineNotification({
       type: 'invoice-paid',
       via() {
         return ['email', 'database', 'broadcast'] as const
       },
-      queue(_notifiable: unknown, channel: string) {
+      queue(_notifiable: InvoicePaidNotifiable, channel: string) {
         if (channel === 'broadcast') {
           return {
             connection: 'notification-connection',
@@ -540,7 +572,7 @@ describe('@holo-js/notifications runtime', () => {
 
         return true
       },
-      delay(_notifiable: unknown, channel: string) {
+      delay(_notifiable: InvoicePaidNotifiable, channel: string) {
         if (channel === 'database') {
           return 10
         }
@@ -552,7 +584,7 @@ describe('@holo-js/notifications runtime', () => {
         return undefined
       },
       build: invoicePaid.build,
-    } as const
+    })
 
     const result = await notify({
       id: 'user-1',
@@ -864,7 +896,7 @@ describe('@holo-js/notifications runtime', () => {
 
         return undefined
       },
-    }, {
+    } as never, {
       via() {
         return ['slack'] as const
       },
@@ -990,7 +1022,7 @@ describe('@holo-js/notifications runtime', () => {
 
         return undefined
       },
-    }, {
+    } as never, {
       via() {
         return ['email', 'slack'] as const
       },

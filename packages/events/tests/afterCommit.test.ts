@@ -91,13 +91,11 @@ function createTestDialect(savepoints = false): Dialect {
       ddlAlterSupport: false,
       introspection: true,
     },
-    placeholders: {
-      indexed(startAt = 1) {
-        return (_value, index) => `?${startAt + index}`
-      },
-      named() {
-        return name => `:${name}`
-      },
+    quoteIdentifier(identifier: string) {
+      return `"${identifier}"`
+    },
+    createPlaceholder(index: number) {
+      return `?${index}`
     },
   }
 }

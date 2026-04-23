@@ -164,10 +164,10 @@ function insertListenerIntoIndexes(
   }
 }
 
-export function registerEvent<TPayload, TName extends string = string>(
+export function registerEvent<TPayload, TName extends string | undefined = string | undefined>(
   definition: EventDefinition<TPayload, TName>,
   options: RegisterEventOptions = {},
-): RegisteredEvent<TPayload, TName> {
+): RegisteredEvent<TPayload, Extract<TName, string> extends never ? string : Extract<TName, string>> {
   if (!isEventDefinition(definition)) {
     throw new Error('[Holo Events] Events must be plain objects.')
   }
@@ -187,7 +187,7 @@ export function registerEvent<TPayload, TName extends string = string>(
       ...normalizedDefinition,
       name,
     }),
-  }) as RegisteredEvent<TPayload, TName>
+  }) as RegisteredEvent<TPayload, Extract<TName, string> extends never ? string : Extract<TName, string>>
 
   state.events.set(name, entry as RegisteredEvent)
   return entry

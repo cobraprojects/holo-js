@@ -35,6 +35,7 @@ describe('@holo-js/events package boundaries', () => {
       const contents = await readFile(filePath, 'utf8')
       const imports = [...contents.matchAll(/from\s+['"](@holo-js\/[^'"]+)['"]/g)]
         .map(match => match[1])
+        .filter((moduleSpecifier): moduleSpecifier is string => typeof moduleSpecifier === 'string')
 
       for (const moduleSpecifier of imports) {
         if (!allowedHoloImports.has(moduleSpecifier)) {

@@ -15,6 +15,24 @@ let adapterBuildPromise: Promise<{ adapterOutDir: string }> | null = null
 const dbRuntimeDependencyNames = ['better-sqlite3', 'mysql2', 'pg', 'ulid', 'uuid'] as const
 
 type RuntimeConfigShape = Record<string, unknown>
+type NuxtHarnessOptions = {
+  rootDir?: string
+  srcDir: string
+  runtimeConfig?: RuntimeConfigShape & {
+    holoStorage?: unknown
+  }
+  build: {
+    transpile: string[]
+  }
+  nitro?: {
+    storage?: Record<string, unknown>
+  }
+}
+
+type NuxtHarness = {
+  options: NuxtHarnessOptions
+  hook: ReturnType<typeof vi.fn>
+}
 
 async function createTempBuildRoot(prefix: string): Promise<string> {
   const baseDir = resolve(repoRoot, '.vitest-builds')
@@ -39,11 +57,12 @@ async function provisionTempPackage(sourcePackageDir: string, tempPackageDir: st
 }
 
 async function runPackageBuild(command: string, args: string[], targetPackageDir: string, outDir?: string): Promise<void> {
-  const env = outDir ? {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
-    HOLO_BUILD_OUT_DIR: outDir,
-  } : {
-    ...process.env,
+  }
+
+  if (outDir) {
+    env.HOLO_BUILD_OUT_DIR = outDir
   }
 
   env.PATH = `${resolve(repoRoot, 'node_modules/.bin')}:${env.PATH ?? ''}`
@@ -130,7 +149,7 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
   return adapterBuildPromise
 }
 
-function createNuxtHarness(rootDir: string, runtimeConfig: RuntimeConfigShape = {}) {
+function createNuxtHarness(rootDir: string, runtimeConfig: RuntimeConfigShape = {}): NuxtHarness {
   return {
     options: {
       rootDir,
@@ -145,11 +164,19 @@ function createNuxtHarness(rootDir: string, runtimeConfig: RuntimeConfigShape = 
 }
 
 function runHook(
-  nuxt: ReturnType<typeof createNuxtHarness>,
+  nuxt: NuxtHarness,
   name: string,
 ): void {
   const callback = nuxt.hook.mock.calls.find(([hookName]) => hookName === name)?.[1]
   callback?.()
+}
+
+function getNitroStorage(nuxt: NuxtHarness): Record<string, unknown> | undefined {
+  return nuxt.options.nitro?.storage
+}
+
+function getHoloStorageRuntimeConfig(nuxt: NuxtHarness): Record<string, unknown> | undefined {
+  return nuxt.options.runtimeConfig?.holoStorage as Record<string, unknown> | undefined
 }
 
 async function createProject(): Promise<string> {
@@ -359,7 +386,7 @@ export default defineStorageConfig({
     await module.setup({}, nuxt as never)
     runHook(nuxt, 'modules:done')
 
-    expect((nuxt.options as { nitro: { storage: Record<string, unknown> } }).nitro.storage).toEqual({
+    expect(getNitroStorage(nuxt)).toEqual({
       'holo:local': {
         driver: 'fs',
         base: './storage/app',
@@ -383,8 +410,8 @@ export default defineStorageConfig({
         forcePathStyleEndpoint: true,
       },
     })
-    expect((nuxt.options.runtimeConfig.holoStorage as Record<string, unknown>).defaultDisk).toBe('media')
-    expect((nuxt.options.runtimeConfig.holoStorage as Record<string, unknown>).routePrefix).toBe('/files')
+    expect(getHoloStorageRuntimeConfig(nuxt)?.defaultDisk).toBe('media')
+    expect(getHoloStorageRuntimeConfig(nuxt)?.routePrefix).toBe('/files')
     expect(nuxt.options.build.transpile).toContain('./runtime')
     expect(addImports).toHaveBeenCalledTimes(1)
     expect(addImports.mock.calls[0]?.[0]).toHaveLength(6)
@@ -417,7 +444,7 @@ export default defineStorageConfig({
     await module.setup({}, nuxt as never)
     runHook(nuxt, 'modules:done')
 
-    expect((nuxt.options as { nitro: { storage: Record<string, unknown> } }).nitro.storage).toEqual({
+    expect(getNitroStorage(nuxt)).toEqual({
       'holo:local': {
         driver: 'fs',
         base: './storage/app',
@@ -427,8 +454,8 @@ export default defineStorageConfig({
         base: './storage/app/public',
       },
     })
-    expect((nuxt.options.runtimeConfig.holoStorage as Record<string, unknown>).defaultDisk).toBe('local')
-    expect((nuxt.options.runtimeConfig.holoStorage as Record<string, unknown>).routePrefix).toBe('/storage')
+    expect(getHoloStorageRuntimeConfig(nuxt)?.defaultDisk).toBe('local')
+    expect(getHoloStorageRuntimeConfig(nuxt)?.routePrefix).toBe('/storage')
     expect(addServerHandler).toHaveBeenCalledWith({
       route: '/storage/**',
       handler: './runtime/server/routes/storage.get',
@@ -473,7 +500,7 @@ export default defineStorageConfig({
       process.chdir(previousCwd)
     }
 
-    expect((nuxt.options as { nitro: { storage: Record<string, unknown> } }).nitro.storage).toEqual({
+    expect(getNitroStorage(nuxt)).toEqual({
       'holo:legacy': {
         driver: 'fs',
         base: './legacy',
@@ -483,8 +510,8 @@ export default defineStorageConfig({
     delete (nuxt.options as { runtimeConfig?: Record<string, unknown> }).runtimeConfig
     runHook(nuxt, 'modules:done')
 
-    expect((nuxt.options.runtimeConfig.holoStorage as Record<string, unknown>).defaultDisk).toBe('media')
-    expect((nuxt.options as { nitro: { storage: Record<string, unknown> } }).nitro.storage).toEqual({
+    expect(getHoloStorageRuntimeConfig(nuxt)?.defaultDisk).toBe('media')
+    expect(getNitroStorage(nuxt)).toEqual({
       'holo:local': {
         driver: 'fs',
         base: './storage/app',
@@ -533,7 +560,7 @@ export default defineStorageConfig({
 
     await module.setup({}, nuxt as never)
 
-    expect((nuxt.options as { nitro: { storage: Record<string, unknown> } }).nitro.storage).toMatchObject({
+    expect(getNitroStorage(nuxt)).toMatchObject({
       'holo:local': {
         driver: 'fs',
         base: './storage/app',

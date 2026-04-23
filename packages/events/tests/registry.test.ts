@@ -83,7 +83,7 @@ describe('@holo-js/events registry', () => {
   })
 
   it('applies normalized names first and treats explicit and path-derived collisions as the same event identity', () => {
-    registerEvent(defineEvent<{ userId: string }, ' user.registered '>({
+    registerEvent(defineEvent<{ userId: string }>({
       name: ' user.registered ',
     }))
 
