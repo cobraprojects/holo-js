@@ -48,7 +48,7 @@ afterEach(() => {
   delete (globalThis as typeof globalThis & { __holoFormsSecurityClientModule__?: unknown }).__holoFormsSecurityClientModule__
   delete (globalThis as typeof globalThis & { __holoFormsSecurityImport__?: unknown }).__holoFormsSecurityImport__
   delete (globalThis as typeof globalThis & { __holoFormsSecurityClientImport__?: unknown }).__holoFormsSecurityClientImport__
-  delete (globalThis as typeof globalThis & { document?: Document }).document
+  delete ((globalThis as typeof globalThis & { document?: Document }) as { document?: Document }).document
   formsSecurityInternals.resetSecurityModuleCache()
   clientSecurityInternals.resetSecurityClientModuleCache()
 })

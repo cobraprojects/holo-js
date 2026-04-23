@@ -15,7 +15,6 @@ import type {
   AuthLogoutResult,
   AuthPasswordResetFacade,
   AuthPasswordHasher,
-  AuthProviderAdapter,
   AuthRegistrationInput,
   AuthSessionLoginOptions,
   AuthTokenFacade,
@@ -25,7 +24,6 @@ import type {
   AuthRuntimeContext,
   AuthRuntimeFacade,
   AuthSessionRecord,
-  AuthUserLike,
   EmailVerificationTokenRecord,
   EmailVerificationTokenResult,
   EmailVerificationTokenStore,
@@ -41,8 +39,20 @@ const SCRYPT_PREFIX = 'scrypt'
 const TOKEN_HASH_PREFIX = 'sha256'
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
 
-type SerializedAuthUser = AuthUserLike & {
+type SerializedAuthUser = AuthUser & {
   readonly id: string | number
+}
+
+type ErasedAuthProviderAdapter = {
+  findById(id: string | number): Promise<unknown | null>
+  findByCredentials(credentials: Readonly<Record<string, unknown>>): Promise<unknown | null>
+  create(input: Readonly<Record<string, unknown>>): Promise<unknown>
+  update?(user: unknown, input: Readonly<Record<string, unknown>>): Promise<unknown>
+  matchesUser?(user: unknown): boolean
+  getId(user: unknown): string | number
+  getPasswordHash?(user: unknown): string | null | undefined
+  getEmailVerifiedAt?(user: unknown): Date | string | null | undefined
+  serialize?(user: unknown): AuthUser
 }
 
 type SessionIdentityPayload = {
@@ -82,7 +92,7 @@ type AsyncAuthContext = AuthRuntimeContext & {
 type RuntimeBindings = {
   readonly config: ReturnType<typeof normalizeAuthConfig>
   readonly session: AuthRuntimeBindings['session']
-  readonly providers: Readonly<Record<string, AuthProviderAdapter>>
+  readonly providers: Readonly<Record<string, ErasedAuthProviderAdapter>>
   readonly tokens?: AuthTokenStore
   readonly emailVerificationTokens?: EmailVerificationTokenStore
   readonly passwordResetTokens?: PasswordResetTokenStore
@@ -193,6 +203,25 @@ function getRuntimeBindings(): RuntimeBindings {
   return bindings
 }
 
+function getExposedRuntimeBindings(): {
+  readonly config: RuntimeBindings['config']
+  readonly session: AuthRuntimeBindings['session']
+  readonly providers: AuthRuntimeBindings['providers']
+  readonly tokens?: AuthTokenStore
+  readonly emailVerificationTokens?: EmailVerificationTokenStore
+  readonly passwordResetTokens?: PasswordResetTokenStore
+  readonly delivery: AuthDeliveryHook
+  readonly context: AuthRuntimeContext
+  readonly passwordHasher: AuthPasswordHasher
+} {
+  const bindings = getRuntimeBindings()
+
+  return {
+    ...bindings,
+    providers: bindings.providers as unknown as AuthRuntimeBindings['providers'],
+  }
+}
+
 function createDefaultPasswordHasher(): AuthPasswordHasher {
   return {
     async hash(password: string): Promise<string> {
@@ -215,6 +244,14 @@ function createDefaultPasswordHasher(): AuthPasswordHasher {
       return false
     },
   }
+}
+
+function requireRecordValue(value: unknown, message: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object') {
+    throw new Error(message)
+  }
+
+  return value as Record<string, unknown>
 }
 
 async function resolveNeedsPasswordRehash(
@@ -696,7 +733,7 @@ function getProviderAdapter(
   providerName: string,
 ): {
   readonly config: RuntimeBindings['config']['providers'][string]
-  readonly adapter: AuthProviderAdapter
+  readonly adapter: ErasedAuthProviderAdapter
 } {
   const bindings = getRuntimeBindings()
   const providerConfig = bindings.config.providers[providerName]
@@ -724,11 +761,19 @@ function readMarkedProvider(user: unknown): string | undefined {
   return typeof marker === 'string' ? marker : undefined
 }
 
+function requireUserRecord(user: unknown, message: string): Record<string, unknown> {
+  if (!user || typeof user !== 'object') {
+    throw new Error(message)
+  }
+
+  return user as Record<string, unknown>
+}
+
 function getGuardProviderAdapter(
   guardName: string,
 ): {
   readonly guard: RuntimeBindings['config']['guards'][string]
-  readonly adapter: AuthProviderAdapter
+  readonly adapter: ErasedAuthProviderAdapter
   readonly provider: string
 } {
   const guard = getGuardConfig(guardName)
@@ -780,10 +825,10 @@ function toLookupCredentials(
 }
 
 async function findUserByConfiguredIdentifiers(
-  adapter: AuthProviderAdapter,
+  adapter: ErasedAuthProviderAdapter,
   credentials: Readonly<Record<string, unknown>>,
   identifiers: readonly string[],
-): Promise<unknown | null> {
+): Promise<Record<string, unknown> | null> {
   const lookup = toLookupCredentials(credentials, identifiers)
 
   for (const identifier of identifiers) {
@@ -796,7 +841,7 @@ async function findUserByConfiguredIdentifiers(
       [identifier]: value,
     })
     if (user) {
-      return user
+      return requireRecordValue(user, '[@holo-js/auth] Auth provider lookup must return an object user record.')
     }
   }
 
@@ -819,17 +864,19 @@ function toRegistrationRecord(input: AuthRegistrationInput, password: string): R
 }
 
 function serializeUser(
-  adapter: AuthProviderAdapter,
+  adapter: ErasedAuthProviderAdapter,
   user: unknown,
   providerName?: string,
 ): SerializedAuthUser {
   const serialized = adapter.serialize
     ? adapter.serialize(user)
-    : { ...(user as Record<string, unknown>) }
+    : requireRecordValue(
+        user,
+        '[@holo-js/auth] Auth provider users must be objects when serialize() is not implemented.',
+      )
   const id = adapter.getId(user)
-
   const result = {
-    ...serialized,
+    ...requireRecordValue(serialized, '[@holo-js/auth] Auth provider serialize() must return an object user.'),
     id,
   }
   if (providerName) {
@@ -840,7 +887,7 @@ function serializeUser(
     })
   }
 
-  return Object.freeze(result)
+  return Object.freeze(result) as SerializedAuthUser
 }
 
 function rehydrateSerializedUser(
@@ -860,25 +907,25 @@ function rehydrateSerializedUser(
 }
 
 function getEmailVerifiedAt(
-  adapter: AuthProviderAdapter,
+  adapter: ErasedAuthProviderAdapter,
   user: unknown,
 ): Date | string | null | undefined {
   if (adapter.getEmailVerifiedAt) {
     return adapter.getEmailVerifiedAt(user)
   }
 
-  return (user as Record<string, unknown>).email_verified_at as Date | string | null | undefined
+  return requireRecordValue(user, '[@holo-js/auth] Auth provider users must be objects.').email_verified_at as Date | string | null | undefined
 }
 
 function getPasswordHash(
-  adapter: AuthProviderAdapter,
+  adapter: ErasedAuthProviderAdapter,
   user: unknown,
 ): string | null | undefined {
   if (adapter.getPasswordHash) {
     return adapter.getPasswordHash(user)
   }
 
-  const value = (user as Record<string, unknown>).password
+  const value = requireRecordValue(user, '[@holo-js/auth] Auth provider users must be objects.').password
   return typeof value === 'string' ? value : null
 }
 
@@ -1292,11 +1339,11 @@ function assertTrustedUserProvider(
 }
 
 function extractUserId(
-  adapter: AuthProviderAdapter,
+  adapter: ErasedAuthProviderAdapter,
   user: unknown,
 ): string | number | undefined {
   try {
-    const resolved = adapter.getId(user as never)
+    const resolved = adapter.getId(user)
     if (typeof resolved === 'string' || typeof resolved === 'number') {
       return resolved
     }
@@ -1314,6 +1361,19 @@ function extractUserId(
     : undefined
 }
 
+function requireUserId(
+  adapter: ErasedAuthProviderAdapter,
+  user: unknown,
+  message: string,
+): string | number {
+  const userId = extractUserId(adapter, user)
+  if (typeof userId !== 'string' && typeof userId !== 'number') {
+    throw new Error(message)
+  }
+
+  return userId
+}
+
 function isCompatibleSerializedUserCandidate(
   candidate: unknown,
   serialized: SerializedAuthUser,
@@ -1322,16 +1382,18 @@ function isCompatibleSerializedUserCandidate(
     return false
   }
 
+  const serializedRecord = serialized as Readonly<Record<string, unknown>>
+
   for (const [key, value] of Object.entries(candidate)) {
     if (typeof value === 'undefined') {
       continue
     }
 
-    if (!(key in serialized)) {
+    if (!(key in serializedRecord)) {
       return false
     }
 
-    if (serialized[key] !== value) {
+    if (serializedRecord[key] !== value) {
       return false
     }
   }
@@ -1344,8 +1406,8 @@ async function resolveTrustedUserForGuard(
   candidate: unknown,
 ): Promise<{
   readonly provider: string
-  readonly adapter: AuthProviderAdapter
-  readonly user: unknown
+  readonly adapter: ErasedAuthProviderAdapter
+  readonly user: Record<string, unknown>
 }> {
   const { provider, adapter } = getGuardProviderAdapter(guardName)
 
@@ -1364,7 +1426,7 @@ async function resolveTrustedUserForGuard(
     return {
       provider,
       adapter,
-      user,
+      user: requireRecordValue(user, '[@holo-js/auth] Auth provider lookups must return object users.'),
     }
   }
 
@@ -1389,7 +1451,7 @@ async function resolveTrustedUserForGuard(
     return {
       provider,
       adapter,
-      user,
+      user: requireRecordValue(user, '[@holo-js/auth] Auth provider lookups must return object users.'),
     }
   }
 
@@ -1411,7 +1473,7 @@ async function resolveTrustedUserForGuard(
       return {
         provider,
         adapter,
-        user,
+        user: requireRecordValue(user, '[@holo-js/auth] Auth provider lookups must return object users.'),
       }
     }
   }
@@ -1826,7 +1888,7 @@ async function updateUserRecord(
 
   let updated: unknown = user
   if (adapter.update) {
-    updated = await adapter.update(user as never, input)
+    updated = await adapter.update(user, input)
   } else if (
     typeof input.name !== 'undefined'
     || typeof input.email !== 'undefined'
@@ -1849,7 +1911,11 @@ function createEmailVerificationFacade(): AuthEmailVerificationFacade {
         ? getGuardConfig(options.guard).provider
         : findProviderNameForUser(user)
       const { adapter } = getProviderAdapter(providerName)
-      const serialized = serializeUser(adapter, user, providerName)
+      const serialized = serializeUser(
+        adapter,
+        requireUserRecord(user, '[@holo-js/auth] Email verification requires a serializable user object.'),
+        providerName,
+      )
       const email = typeof serialized.email === 'string' ? serialized.email.trim() : ''
       if (!email) {
         throw new Error('[@holo-js/auth] Email verification requires a user with an email address.')
@@ -2041,7 +2107,11 @@ function createTokenFacade(): AuthTokenFacade {
         ? getGuardConfig(options.guard).provider
         : findProviderNameForUser(user)
       const { adapter } = getProviderAdapter(providerName)
-      const userId = adapter.getId(user)
+      const userId = requireUserId(
+        adapter,
+        user,
+        '[@holo-js/auth] Personal access token creation requires a user with a serializable id.',
+      )
       const id = createPersonalAccessTokenId()
       const secret = createPersonalAccessTokenSecret()
       const record = normalizeTokenRecord({
@@ -2066,7 +2136,11 @@ function createTokenFacade(): AuthTokenFacade {
         ? getGuardConfig(options.guard).provider
         : findProviderNameForUser(user)
       const { adapter } = getProviderAdapter(providerName)
-      const userId = adapter.getId(user)
+      const userId = requireUserId(
+        adapter,
+        user,
+        '[@holo-js/auth] Listing personal access tokens requires a user with a serializable id.',
+      )
       const records = await tokenStore.listByUserId(providerName, userId)
       return records.map(normalizeTokenRecord)
     },
@@ -2081,7 +2155,11 @@ function createTokenFacade(): AuthTokenFacade {
         ? getGuardConfig(options.guard).provider
         : findProviderNameForUser(user)
       const { adapter } = getProviderAdapter(providerName)
-      const userId = adapter.getId(user)
+      const userId = requireUserId(
+        adapter,
+        user,
+        '[@holo-js/auth] Revoking personal access tokens requires a user with a serializable id.',
+      )
       return tokenStore.deleteByUserId(providerName, userId)
     },
     async authenticate(plainTextToken: string): Promise<AuthUser | null> {
@@ -2395,7 +2473,7 @@ export const authRuntimeInternals = {
   establishSessionForUser,
   getPasswordHash,
   getProviderIdentifiers,
-  getRuntimeBindings,
+  getRuntimeBindings: getExposedRuntimeBindings,
   hashTokenSecret,
   parsePlainTextToken,
   parseSetCookieDefinition,

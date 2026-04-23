@@ -77,7 +77,7 @@ export interface AuthFacade extends AuthGuardFacade {
   passwords: AuthPasswordResetFacade
 }
 
-export interface AuthProviderAdapter<TUser = unknown> {
+type AuthProviderAdapterBase<TUser> = {
   findById(id: string | number): Promise<TUser | null>
   findByCredentials(credentials: Readonly<Record<string, unknown>>): Promise<TUser | null>
   create(input: Readonly<Record<string, unknown>>): Promise<TUser>
@@ -86,8 +86,17 @@ export interface AuthProviderAdapter<TUser = unknown> {
   getId(user: TUser): string | number
   getPasswordHash?(user: TUser): string | null | undefined
   getEmailVerifiedAt?(user: TUser): Date | string | null | undefined
-  serialize?(user: TUser): AuthUser
 }
+
+export type AuthProviderAdapter<TUser = AuthUser> = AuthProviderAdapterBase<TUser> & (
+  TUser extends AuthUser
+    ? {
+        serialize?(user: TUser): AuthUser
+      }
+    : {
+        serialize(user: TUser): AuthUser
+      }
+)
 
 export interface AuthPasswordHasher {
   hash(password: string): Promise<string>

@@ -5,6 +5,12 @@ import {
   type HoloConfigRegistry,
 } from '../src'
 
+declare module '../src/types' {
+  interface HoloConfigRegistry {
+    services: Record<string, never>
+  }
+}
+
 describe('@holo-js/config security typing', () => {
   it('preserves security inference through config helpers and dot-path access', () => {
     const security = defineSecurityConfig({
