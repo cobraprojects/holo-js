@@ -92,6 +92,8 @@ describe('@holo-js/cache package surface', () => {
     expect(() => normalizeCacheTtl(1.5)).toThrow(CacheInvalidTtlError)
     expect(() => normalizeCacheTtl(new Date('invalid'))).toThrow(CacheInvalidTtlError)
     expect(() => normalizeCacheTtl(1, { now: new Date('invalid') })).toThrow(TypeError)
+    expect(() => normalizeCacheTtl(1, { now: Number.NaN })).toThrow(TypeError)
+    expect(() => normalizeCacheTtl(1, { now: Number.POSITIVE_INFINITY })).toThrow(TypeError)
   })
 
   it('serializes plain JSON-safe values and dates without losing shape', () => {
@@ -1753,6 +1755,8 @@ describe('@holo-js/cache package surface', () => {
   })
 
   it('covers query-bridge flexible retries, duplicate invalidation suppression, and ttl validation', async () => {
+    const now = new Date('2026-04-22T00:00:00.000Z').getTime()
+    const dateNowSpy = vi.spyOn(Date, 'now').mockReturnValue(now)
     const driver = {
       name: 'memory',
       driver: 'memory',
@@ -1834,35 +1838,39 @@ describe('@holo-js/cache package surface', () => {
       throw new Error('Expected cache query bridge bindings.')
     }
 
-    await expect(queryBridge.flexible('invalid', [-1, 1], async () => 'nope')).rejects.toBeInstanceOf(CacheInvalidTtlError)
-    await expect(queryBridge.flexible('invalid', [2, 1], async () => 'nope')).rejects.toBeInstanceOf(CacheInvalidTtlError)
-    await queryBridge.put('forever', 'value', {})
-    expect(driver.put).toHaveBeenCalledWith({
-      key: 'app:forever',
-      payload: serializeCacheValue('value'),
-      expiresAt: undefined,
-    })
-    await queryBridge.put('flex-put', 'value', {
-      flexible: [60, 300],
-    })
-    expect(driver.put).toHaveBeenCalledWith(expect.objectContaining({
-      key: 'app:flex-put',
-      payload: serializeCacheValue('value'),
-      expiresAt: expect.any(Number),
-    }))
-    await expect(queryBridge.flexible('stale', [60, 300], async () => 'callback')).resolves.toBe('stale-window')
-    await expect(queryBridge.flexible('retried', [60, 300], async () => 'callback')).resolves.toBe('retried')
-    await expect(queryBridge.flexible('refreshed', [60, 300], async () => driver.refreshValue)).resolves.toBe('callback-expired-retry')
+    try {
+      await expect(queryBridge.flexible('invalid', [-1, 1], async () => 'nope')).rejects.toBeInstanceOf(CacheInvalidTtlError)
+      await expect(queryBridge.flexible('invalid', [2, 1], async () => 'nope')).rejects.toBeInstanceOf(CacheInvalidTtlError)
+      await queryBridge.put('forever', 'value', {})
+      expect(driver.put).toHaveBeenCalledWith({
+        key: 'app:forever',
+        payload: serializeCacheValue('value'),
+        expiresAt: undefined,
+      })
+      await queryBridge.put('flex-put', 'value', {
+        flexible: [60, 300],
+      })
+      expect(driver.put).toHaveBeenCalledWith({
+        key: 'app:flex-put',
+        payload: serializeCacheValue('value'),
+        expiresAt: now + 300_000,
+      })
+      await expect(queryBridge.flexible('stale', [60, 300], async () => 'callback')).resolves.toBe('stale-window')
+      await expect(queryBridge.flexible('retried', [60, 300], async () => 'callback')).resolves.toBe('retried')
+      await expect(queryBridge.flexible('refreshed', [60, 300], async () => driver.refreshValue)).resolves.toBe('callback-expired-retry')
 
-    await queryBridge.put('duplicate', 'value', {
-      ttl: 60,
-      dependencies: ['db:main:users', 'db:main:posts'],
-    })
-    await queryBridge.invalidateDependencies(['db:main:users', 'db:main:posts'])
+      await queryBridge.put('duplicate', 'value', {
+        ttl: 60,
+        dependencies: ['db:main:users', 'db:main:posts'],
+      })
+      await queryBridge.invalidateDependencies(['db:main:users', 'db:main:posts'])
 
-    expect(driver.forget).toHaveBeenCalledTimes(1)
-    expect(driver.forget).toHaveBeenNthCalledWith(1, 'app:duplicate')
-    expect(driver.put).toHaveBeenCalled()
+      expect(driver.forget).toHaveBeenCalledTimes(1)
+      expect(driver.forget).toHaveBeenNthCalledWith(1, 'app:duplicate')
+      expect(driver.put).toHaveBeenCalled()
+    } finally {
+      dateNowSpy.mockRestore()
+    }
   })
 
   it('covers direct query-bridge get, forget, and object flexible ttl paths', async () => {
@@ -1994,6 +2002,76 @@ describe('@holo-js/cache package surface', () => {
   })
 
   it('waits for the stale window when a flexible refresh is already in progress', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-22T00:00:00.000Z'))
+
+    const blockCalls: number[] = []
+    const now = Date.now()
+    const staleEnvelope = serializeCacheValue({
+      __holo_cache_flexible: true,
+      value: 'stale',
+      freshUntil: now - 1_000,
+      staleUntil: now - 1_000,
+    })
+
+    const driver = {
+      name: 'memory',
+      driver: 'memory',
+      forget: vi.fn(async () => true),
+      flush: vi.fn(async () => undefined),
+      increment: vi.fn(async () => 0),
+      decrement: vi.fn(async () => 0),
+      put: vi.fn(async () => true),
+      add: vi.fn(async () => true),
+      get: vi.fn()
+        .mockResolvedValueOnce({
+          hit: true,
+          payload: staleEnvelope,
+        })
+        .mockResolvedValueOnce({ hit: false }),
+      lock: vi.fn(() => ({
+        name: 'lock',
+        async get<TValue>(callback?: () => TValue | Promise<TValue>): Promise<boolean | TValue> {
+          return callback ? callback() : true
+        },
+        async release(): Promise<boolean> {
+          return true
+        },
+        async block<TValue>(waitSeconds: number, _callback?: () => TValue | Promise<TValue>): Promise<boolean | TValue> {
+          blockCalls.push(waitSeconds)
+          return false
+        },
+      })),
+    }
+
+    configureCacheRuntime({
+      config: {
+        default: 'memory',
+        drivers: {
+          memory: {
+            driver: 'memory',
+          },
+        },
+      },
+      drivers: new Map([['memory', driver as never]]),
+    })
+
+    await expect(cache.flexible('stale-wait', [60, 600], async () => 'refreshed')).resolves.toBe('refreshed')
+    expect(blockCalls).toEqual([2])
+    expect(driver.put).toHaveBeenCalledTimes(1)
+    expect(driver.put).toHaveBeenCalledWith({
+      key: 'stale-wait',
+      payload: serializeCacheValue({
+        __holo_cache_flexible: true,
+        value: 'refreshed',
+        freshUntil: now + 60_000,
+        staleUntil: now + 600_000,
+      }),
+      expiresAt: now + 600_000,
+    })
+  })
+
+  it('caps flexible refresh blocking time for very long stale windows', async () => {
     const blockCalls: number[] = []
     const staleEnvelope = serializeCacheValue({
       __holo_cache_flexible: true,
@@ -2044,7 +2122,7 @@ describe('@holo-js/cache package surface', () => {
       drivers: new Map([['memory', driver as never]]),
     })
 
-    await expect(cache.flexible('stale-wait', [60, 600], async () => 'refreshed')).resolves.toBe('refreshed')
-    expect(blockCalls).toEqual([2])
+    await expect(cache.flexible('stale-capped', [60, 10_000], async () => 'refreshed')).resolves.toBe('refreshed')
+    expect(blockCalls).toEqual([30])
   })
 })

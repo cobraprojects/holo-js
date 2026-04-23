@@ -112,7 +112,7 @@ function normalizeAtomicQueryCacheTtl(ttl: QueryCacheTtlInput): QueryCacheFlexib
       throw new ConfigurationError('[@holo-js/db] Query cache Date TTL must be valid.')
     }
 
-    const seconds = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000))
+    const seconds = Math.max(1, Math.ceil((expiresAt - Date.now()) / 1000))
     return [seconds, seconds]
   }
 

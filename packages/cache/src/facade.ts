@@ -30,6 +30,8 @@ type NormalizedFlexibleTtl = {
   readonly staleSeconds: number
 }
 
+const MAX_REFRESH_BLOCK_SECONDS = 30
+
 function resolveFallback<TValue>(fallback: CacheFallback<TValue>): Promise<TValue> | TValue {
   return typeof fallback === 'function'
     ? (fallback as CacheFallbackResolver<TValue>)()
@@ -293,7 +295,10 @@ function createCacheRepository(driverName?: string): CacheRepository {
 
       const refreshLock = createRefreshLock(key, normalizedTtl.staleSeconds)
       const refreshed = await refreshLock.block(
-        Math.max(1, Math.ceil(normalizedTtl.staleSeconds / 300)),
+        Math.min(
+          MAX_REFRESH_BLOCK_SECONDS,
+          Math.max(1, Math.ceil(normalizedTtl.staleSeconds / 300)),
+        ),
         async () => refreshFlexibleValue(key, normalizedTtl, callback),
       )
 

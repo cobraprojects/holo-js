@@ -110,6 +110,16 @@ describe('@holo-js/cache typing', () => {
       },
     } satisfies RedisCacheDriverOptions
 
+    const socketConfig = {
+      name: 'redis',
+      connectionName: 'cache',
+      prefix: 'app:',
+      redis: {
+        db: 0,
+        socketPath: '/var/run/redis.sock',
+      },
+    } satisfies RedisCacheDriverOptions
+
     const ambiguousStandalone: RedisCacheDriverOptions = {
       name: 'redis',
       connectionName: 'cache',
@@ -138,10 +148,39 @@ describe('@holo-js/cache typing', () => {
       },
     }
 
+    const clusterDbConfig: RedisCacheDriverOptions = {
+      name: 'redis',
+      connectionName: 'cache',
+      prefix: 'app:',
+      // @ts-expect-error redis clusters must use database 0
+      redis: {
+        db: 1,
+        clusters: [{
+          host: '127.0.0.1',
+          port: 6379,
+        }],
+      },
+    }
+
+    const ambiguousSocketConfig: RedisCacheDriverOptions = {
+      name: 'redis',
+      connectionName: 'cache',
+      prefix: 'app:',
+      // @ts-expect-error socketPath must be mutually exclusive with other connection shapes
+      redis: {
+        db: 0,
+        socketPath: '/var/run/redis.sock',
+        url: 'redis://127.0.0.1:6379',
+      },
+    }
+
     void hostConfig
     void urlConfig
     void clusterConfig
+    void socketConfig
     void ambiguousStandalone
     void ambiguousCluster
+    void clusterDbConfig
+    void ambiguousSocketConfig
   })
 })

@@ -1359,16 +1359,7 @@ function renderScaffoldEnvFiles(
   return { env, example }
 }
 
-function renderQueueEnvFiles(
-  driver: SupportedQueueInstallerDriver,
-): { env: readonly string[], example: readonly string[] } {
-  if (driver !== 'redis') {
-    return {
-      env: [],
-      example: [],
-    }
-  }
-
+function renderRedisConnectionEnvFiles(): { env: readonly string[], example: readonly string[] } {
   return {
     env: [
       'REDIS_URL=',
@@ -1389,11 +1380,24 @@ function renderQueueEnvFiles(
   }
 }
 
+function renderQueueEnvFiles(
+  driver: SupportedQueueInstallerDriver,
+): { env: readonly string[], example: readonly string[] } {
+  if (driver !== 'redis') {
+    return {
+      env: [],
+      example: [],
+    }
+  }
+
+  return renderRedisConnectionEnvFiles()
+}
+
 function renderCacheEnvFiles(
   driver: SupportedCacheInstallerDriver,
 ): { env: readonly string[], example: readonly string[] } {
   if (driver === 'redis') {
-    const redis = renderQueueEnvFiles('redis')
+    const redis = renderRedisConnectionEnvFiles()
     return {
       env: [
         'CACHE_PREFIX=',

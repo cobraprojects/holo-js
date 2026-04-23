@@ -113,8 +113,8 @@ function createDatabaseContextOptions(
     ? undefined
     : typeof connection.port === 'number'
       ? connection.port
-      : typeof connection.port === 'string' && connection.port.trim()
-        ? Number.parseInt(connection.port.trim(), 10)
+      : typeof connection.port === 'string' && /^\d+$/.test(connection.port.trim())
+        ? Number(connection.port.trim())
         : undefined
   const port = typeof parsedPort === 'number'
     && Number.isInteger(parsedPort)
@@ -529,6 +529,21 @@ export function createDatabaseCacheDriver(options: DatabaseCacheDriverOptions): 
         if (!prefix) {
           await new TableQueryBuilder(lockTableName, tx).delete()
           await new TableQueryBuilder(entryTableName, tx).delete()
+          return
+        }
+
+        const hasSqlWildcard = /[%_[]/.test(prefix)
+        if (hasSqlWildcard) {
+          const upperBound = `${prefix}\uFFFF`
+
+          await new TableQueryBuilder(lockTableName, tx)
+            .where('name', '>=', prefix)
+            .where('name', '<', upperBound)
+            .delete()
+          await new TableQueryBuilder(entryTableName, tx)
+            .where('key', '>=', prefix)
+            .where('key', '<', upperBound)
+            .delete()
           return
         }
 

@@ -1,12 +1,17 @@
 declare module '@holo-js/cache-redis' {
   import type { CacheDriverContract } from './contracts'
 
-  type RedisClusterNode = {
-    readonly url?: string
-    readonly socketPath?: string
-    readonly host: string
-    readonly port: number
-  }
+  type RedisClusterNode =
+    | {
+        readonly url: string
+        readonly host?: never
+        readonly port?: never
+      }
+    | {
+        readonly url?: never
+        readonly host: string
+        readonly port: number
+      }
 
   export type RedisCacheDriverOptions = {
     readonly name: string
@@ -19,10 +24,10 @@ declare module '@holo-js/cache-redis' {
       & {
         readonly username?: string
         readonly password?: string
-        readonly db: number
       }
       & (
         | {
+            readonly db: number
             readonly url?: never
             readonly clusters?: never
             readonly socketPath?: never
@@ -30,6 +35,7 @@ declare module '@holo-js/cache-redis' {
             readonly port: number
           }
         | {
+            readonly db: number
             readonly url: string
             readonly clusters?: never
             readonly socketPath?: never
@@ -37,6 +43,7 @@ declare module '@holo-js/cache-redis' {
             readonly port?: never
           }
         | {
+            readonly db: 0
             readonly url?: never
             readonly clusters: readonly RedisClusterNode[]
             readonly socketPath?: never
@@ -44,6 +51,7 @@ declare module '@holo-js/cache-redis' {
             readonly port?: never
           }
         | {
+            readonly db: number
             readonly url?: never
             readonly clusters?: never
             readonly socketPath: string

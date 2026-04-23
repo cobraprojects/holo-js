@@ -8,6 +8,18 @@ import {
   type CacheLockContract,
 } from '@holo-js/cache'
 
+type RedisClusterNode =
+  | {
+      readonly url: string
+      readonly host?: never
+      readonly port?: never
+    }
+  | {
+      readonly url?: never
+      readonly host: string
+      readonly port: number
+    }
+
 export type RedisCacheDriverOptions = {
   readonly name: string
   readonly connectionName: string
@@ -16,44 +28,39 @@ export type RedisCacheDriverOptions = {
     & {
       readonly username?: string
       readonly password?: string
-      readonly db: number
     }
     & (
       | {
-          readonly url?: string
-          readonly clusters?: readonly {
-            readonly url?: string
-            readonly socketPath?: string
-            readonly host: string
-            readonly port: number
-          }[]
-          readonly socketPath?: string
+          readonly db: number
+          readonly url?: never
+          readonly clusters?: never
+          readonly socketPath?: never
           readonly host: string
           readonly port: number
         }
       | {
+          readonly db: number
           readonly url: string
-          readonly clusters?: readonly {
-            readonly url?: string
-            readonly socketPath?: string
-            readonly host: string
-            readonly port: number
-          }[]
-          readonly socketPath?: string
+          readonly clusters?: never
+          readonly socketPath?: never
           readonly host?: string
           readonly port?: number
         }
       | {
-          readonly clusters: readonly {
-            readonly url?: string
-            readonly socketPath?: string
-            readonly host: string
-            readonly port: number
-          }[]
-          readonly url?: string
-          readonly socketPath?: string
+          readonly db: 0
+          readonly clusters: readonly RedisClusterNode[]
+          readonly url?: never
+          readonly socketPath?: never
           readonly host?: string
           readonly port?: number
+        }
+      | {
+          readonly db: number
+          readonly url?: never
+          readonly clusters?: never
+          readonly socketPath: string
+          readonly host?: never
+          readonly port?: never
         }
     )
   readonly now?: () => number
@@ -206,7 +213,8 @@ function resolveClusterStartupNodes(
       return parseClusterNodeUrl(node.url, `${label} url`)
     }
 
-    if (typeof node.socketPath === 'string' || isRedisSocketConnectionTarget(node.host)) {
+    const socketPath = 'socketPath' in node ? node.socketPath : undefined
+    if (typeof socketPath === 'string' || isRedisSocketConnectionTarget(node.host)) {
       throw new Error(`[@holo-js/cache-redis] ${label} cannot use a Unix socket path in Redis cluster mode.`)
     }
 

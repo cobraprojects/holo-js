@@ -411,7 +411,15 @@ export function normalizeCacheTtl(
 
         return timestamp
       })()
-    : options.now ?? Date.now()
+    : typeof options.now === 'number'
+      ? (() => {
+          if (Number.isNaN(options.now) || !Number.isFinite(options.now)) {
+            throw new TypeError('[@holo-js/cache] Cache TTL options.now must be a valid finite number.')
+          }
+
+          return options.now
+        })()
+      : Date.now()
 
   if (ttl instanceof Date) {
     const expiresAt = ttl.getTime()

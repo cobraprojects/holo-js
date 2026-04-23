@@ -442,8 +442,6 @@ describe('@holo-js/cache-redis', () => {
       prefix: 'holo:cache:',
       redis: {
         url: 'redis://cache.internal:6380/2',
-        host: '127.0.0.1',
-        port: 6379,
         db: 2,
       },
     })
@@ -453,11 +451,9 @@ describe('@holo-js/cache-redis', () => {
       connectionName: 'cluster',
       prefix: 'holo:cache:',
       redis: {
-        host: '127.0.0.1',
-        port: 6379,
         db: 0,
         clusters: [
-          { url: 'rediss://cache-a.internal:6380', host: 'cache-a.internal', port: 6380 },
+          { url: 'rediss://cache-a.internal:6380' },
           { host: 'cache-b.internal', port: 6381 },
         ],
       },
@@ -469,8 +465,6 @@ describe('@holo-js/cache-redis', () => {
       prefix: 'holo:cache:',
       redis: {
         socketPath: '/tmp/redis.sock',
-        host: '/tmp/redis.sock',
-        port: 6379,
         db: 0,
       },
     })
@@ -539,7 +533,7 @@ describe('@holo-js/cache-redis', () => {
         url: 'redis://cache.internal:6379/0',
         db: 0,
         clusters: [{ host: 'cache-a.internal', port: 6379 }],
-      },
+      } as never,
     })).toThrow('either redis.url or redis.clusters')
   })
 
@@ -595,13 +589,11 @@ describe('@holo-js/cache-redis', () => {
       connectionName: 'cluster',
       prefix: 'holo:cache:',
       redis: {
-        host: '127.0.0.1',
-        port: 6379,
         db: 0,
         clusters: [
-          { socketPath: '/tmp/redis.sock', host: '/tmp/redis.sock', port: 6379 },
+          { socketPath: '/tmp/redis.sock', host: '/tmp/redis.sock', port: 6379 } as never,
         ],
-      },
+      } as never,
     })).toThrow('cannot use a Unix socket path')
     expect(redisCacheDriverInternals.createRedisClusterOptions({
       name: 'cluster',
@@ -634,7 +626,7 @@ describe('@holo-js/cache-redis', () => {
         clusters: [
           { host: 'cache.internal', port: 6379 },
         ],
-      },
+      } as never,
     })).toThrow('non-zero database')
     expect(redisCacheDriverInternals.createRedisClientOptions({
       name: 'socket',
