@@ -622,7 +622,7 @@ export function normalizeCacheConfig(
   const drivers = Object.freeze(Object.fromEntries(normalizedDriverEntries))
 
   const configuredDefault = normalizeCacheOptionalString(config.default)
-  if (configuredDefault && !(configuredDefault in drivers)) {
+  if (configuredDefault && !Object.hasOwn(drivers, configuredDefault)) {
     throw new Error(`[Holo Cache] default cache driver "${configuredDefault}" is not configured.`)
   }
   const fallbackDefaultDriver = normalizedDriverEntries.find(([name]) => name === DEFAULT_CACHE_DRIVER)?.[0]

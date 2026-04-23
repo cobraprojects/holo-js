@@ -17,7 +17,7 @@ const tempDirs: string[] = []
 
 async function runBun(
   args: string[],
-  options: ExecFileOptionsWithStringEncoding = {},
+  options: Omit<ExecFileOptionsWithStringEncoding, 'encoding'> = {},
 ): Promise<{ stdout: string, stderr: string } | undefined> {
   try {
     return await new Promise<{ stdout: string, stderr: string }>((resolvePromise, rejectPromise) => {
@@ -178,24 +178,21 @@ describe('@holo-js/forms security helpers', () => {
 
   it('loads the server security entrypoint through the Vitest literal import branch', async () => {
     vi.resetModules()
+    const verify = vi.fn(async () => {})
+    const rateLimit = vi.fn(async () => ({ limited: false }))
     vi.doMock('@holo-js/security', () => ({
       csrf: {
-        async verify() {},
+        verify,
       },
-      async rateLimit() {
-        return { limited: false }
-      },
+      rateLimit,
     }))
 
     try {
       const mod = await import('../src/security')
+      const security = await mod.loadSecurityModule()
 
-      await expect(mod.loadSecurityModule()).resolves.toMatchObject({
-        csrf: {
-          verify: expect.any(Function),
-        },
-        rateLimit: expect.any(Function),
-      })
+      expect(security.csrf.verify).toBe(verify)
+      expect(security.rateLimit).toBe(rateLimit)
     } finally {
       vi.doUnmock('@holo-js/security')
       vi.resetModules()

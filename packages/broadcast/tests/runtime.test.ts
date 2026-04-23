@@ -886,44 +886,46 @@ describe('@holo-js/broadcast runtime', () => {
       },
     }))
 
-    const queueModule = await broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered()
-    expect(queueModule).toMatchObject({
-      dispatch: expect.any(Function),
-      getRegisteredQueueJob: expect.any(Function),
-    })
-
-    configureBroadcastRuntime({
-      config: createConfig(),
-    })
-
-    await expect(
-      broadcastRaw({
-        event: 'orders.no-db',
-        channels: ['orders.15'],
-        payload: {
-          ok: true,
-        },
-      }).afterCommit(),
-    ).rejects.toThrow('requires a publish runtime binding')
-
-    broadcastRuntimeInternals.setLoadDbModuleForTesting(async () => {
-      throw Object.assign(new Error('missing optional db module'), {
-        code: 'ERR_MODULE_NOT_FOUND',
+    try {
+      const queueModule = await broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered()
+      expect(queueModule).toMatchObject({
+        dispatch: expect.any(Function),
+        getRegisteredQueueJob: expect.any(Function),
       })
-    })
 
-    await expect(
-      broadcastRaw({
-        event: 'orders.no-db-optional',
-        channels: ['orders.16'],
-        payload: {
-          ok: true,
-        },
-      }).afterCommit(),
-    ).rejects.toThrow('requires a publish runtime binding')
+      configureBroadcastRuntime({
+        config: createConfig(),
+      })
 
-    vi.doUnmock('@holo-js/queue')
-    vi.doUnmock('@holo-js/db')
+      await expect(
+        broadcastRaw({
+          event: 'orders.no-db',
+          channels: ['orders.15'],
+          payload: {
+            ok: true,
+          },
+        }).afterCommit(),
+      ).rejects.toThrow('requires a publish runtime binding')
+
+      broadcastRuntimeInternals.setLoadDbModuleForTesting(async () => {
+        throw Object.assign(new Error('missing optional db module'), {
+          code: 'ERR_MODULE_NOT_FOUND',
+        })
+      })
+
+      await expect(
+        broadcastRaw({
+          event: 'orders.no-db-optional',
+          channels: ['orders.16'],
+          payload: {
+            ok: true,
+          },
+        }).afterCommit(),
+      ).rejects.toThrow('requires a publish runtime binding')
+    } finally {
+      vi.doUnmock('@holo-js/queue')
+      vi.doUnmock('@holo-js/db')
+    }
   })
 
 })

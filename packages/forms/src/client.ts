@@ -50,11 +50,11 @@ export interface FormFieldState<TValue> {
   validate(): Promise<readonly string[]>
 }
 
-export type FormFieldTree<TData> = TData extends readonly unknown[]
+export type FormFieldTree<TData> = [TData] extends [readonly unknown[]]
   ? FormFieldState<TData>
-  : TData extends PrimitiveLike
+  : [TData] extends [PrimitiveLike]
     ? FormFieldState<TData>
-    : TData extends Record<string, unknown>
+    : [TData] extends [Record<string, unknown>]
       ? { readonly [K in keyof TData]: FormFieldTree<TData[K]> }
       : FormFieldState<TData>
 

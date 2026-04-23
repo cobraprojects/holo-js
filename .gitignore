@@ -50,6 +50,8 @@ Thumbs.db
 coverage
 .nyc_output
 .vitest-builds
+.eslintcache-generated
+.eslintcache-main
 /docs
 /apps/Nuxt_test_app
 /apps/Next_test_app

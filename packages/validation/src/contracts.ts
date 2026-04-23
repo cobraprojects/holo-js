@@ -129,7 +129,7 @@ export type SchemaInputShape = {
   readonly [key: string]: FieldBuilderInput | SchemaInputShape
 }
 
-type Simplify<TValue> = { [K in keyof TValue]: TValue[K] } & {}
+type Simplify<TValue> = { -readonly [K in keyof TValue]: TValue[K] } & {}
 
 export type InferSchemaData<TShape extends SchemaInputShape> = Simplify<{
   [K in keyof TShape]:
@@ -162,7 +162,7 @@ export type ValidationErrorBag<TShape> = ErrorTree<TShape> & {
 
 export interface ValidationSchema<TShape extends SchemaInputShape = SchemaInputShape> extends StandardSchemaV1<unknown, InferSchemaData<TShape>> {
   readonly kind: 'schema'
-  readonly fields: TShape & NormalizedSchemaShape<TShape>
+  readonly fields: NormalizedSchemaShape<TShape>
   readonly $data?: InferSchemaData<TShape>
   readonly $errors?: ValidationErrorBag<InferSchemaData<TShape>>
 }
@@ -184,6 +184,10 @@ export interface ValidationFailure<TData> {
 }
 
 export type ValidationResult<TData> = ValidationSuccess<TData> | ValidationFailure<TData>
+
+type InferValidationSchemaData<TSchema extends ValidationSchema> = TSchema extends ValidationSchema<infer TShape>
+  ? InferSchemaData<TShape>
+  : never
 export type FormLikeValidationInput = SchemaSourceInput
 
 // ---------------------------------------------------------------------------
@@ -294,7 +298,7 @@ function normalizeFieldBuilder<TOutput>(input: FieldBuilderInput<TOutput>): Vali
 }
 /* v8 ignore stop */
 
-function normalizeSchemaShape<TShape extends SchemaInputShape>(shape: TShape, path = 'schema'): TShape {
+function normalizeSchemaShape<TShape extends SchemaInputShape>(shape: TShape, path = 'schema'): NormalizedSchemaShape<TShape> {
   if (!isPlainObject(shape) || Object.keys(shape).length === 0) {
     throw new ValidationContractError(`${path} must declare at least one field.`)
   }
@@ -315,7 +319,7 @@ function normalizeSchemaShape<TShape extends SchemaInputShape>(shape: TShape, pa
     throw new ValidationContractError(`${path}.${key} must be a field builder or nested schema object.`)
   })
 
-  return Object.freeze(Object.fromEntries(normalizedEntries)) as TShape
+  return Object.freeze(Object.fromEntries(normalizedEntries)) as NormalizedSchemaShape<TShape>
 }
 
 function createField<TOutput>(kind: FieldKind, item?: FieldDefinition): ValidationField<TOutput> {
@@ -1540,7 +1544,7 @@ function summarizeErrors(flattened: Record<string, readonly string[]>): string {
 async function validateInternal<TSchema extends ValidationSchema>(
   input: FormLikeValidationInput,
   schemaDefinition: TSchema,
-): Promise<ValidationResult<InferSchemaData<TSchema['fields']>>> {
+): Promise<ValidationResult<InferValidationSchemaData<TSchema>>> {
   const normalized = await normalizeInput(input)
 
   try {
@@ -1552,17 +1556,17 @@ async function validateInternal<TSchema extends ValidationSchema>(
       return {
         valid: false,
         submitted: true,
-        values: coerced as Partial<InferSchemaData<TSchema['fields']>>,
-        errors: createErrorBag<InferSchemaData<TSchema['fields']>>(flat),
+        values: coerced as Partial<InferValidationSchemaData<TSchema>>,
+        errors: createErrorBag<InferValidationSchemaData<TSchema>>(flat),
       }
     }
 
     return {
       valid: true,
       submitted: true,
-      data: result.value as InferSchemaData<TSchema['fields']>,
-      values: result.value as InferSchemaData<TSchema['fields']>,
-      errors: createErrorBag<InferSchemaData<TSchema['fields']>>(),
+      data: result.value as InferValidationSchemaData<TSchema>,
+      values: result.value as InferValidationSchemaData<TSchema>,
+      errors: createErrorBag<InferValidationSchemaData<TSchema>>(),
     }
   } catch (error) {
     const issues: Record<string, string[]> = {
@@ -1572,8 +1576,8 @@ async function validateInternal<TSchema extends ValidationSchema>(
     return {
       valid: false,
       submitted: true,
-      values: (normalized.value ?? /* v8 ignore next */ {}) as Partial<InferSchemaData<TSchema['fields']>>,
-      errors: createErrorBag<InferSchemaData<TSchema['fields']>>(issues),
+      values: (normalized.value ?? /* v8 ignore next */ {}) as Partial<InferValidationSchemaData<TSchema>>,
+      errors: createErrorBag<InferValidationSchemaData<TSchema>>(issues),
     }
   }
 }
@@ -1581,21 +1585,21 @@ async function validateInternal<TSchema extends ValidationSchema>(
 export async function validate<TSchema extends ValidationSchema>(
   input: FormLikeValidationInput,
   schemaDefinition: TSchema,
-): Promise<ValidationResult<InferSchemaData<TSchema['fields']>>> {
+): Promise<ValidationResult<InferValidationSchemaData<TSchema>>> {
   return validateInternal(input, schemaDefinition)
 }
 
 export async function safeParse<TSchema extends ValidationSchema>(
   input: FormLikeValidationInput,
   schemaDefinition: TSchema,
-): Promise<ValidationResult<InferSchemaData<TSchema['fields']>>> {
+): Promise<ValidationResult<InferValidationSchemaData<TSchema>>> {
   return validateInternal(input, schemaDefinition)
 }
 
 export async function parse<TSchema extends ValidationSchema>(
   input: FormLikeValidationInput,
   schemaDefinition: TSchema,
-): Promise<InferSchemaData<TSchema['fields']>> {
+): Promise<InferValidationSchemaData<TSchema>> {
   const result = await validateInternal(input, schemaDefinition)
   if (!result.valid) {
     throw new ValidationContractError(summarizeErrors(result.errors.flatten()))

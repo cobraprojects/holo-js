@@ -623,26 +623,28 @@ async function createRedisScalingAdapter(
   const redisModule = await loadRedisScalingModule(dependencies.loadRedisModule)
   const RedisCtor = redisModule.default
   const createClient = (): RedisScalingClientLike => {
+    if (connection.clusters && connection.clusters.length > 0) {
+      const startupNodes = resolveRedisClusterStartupNodes(connection.clusters)
+
+      return new redisModule.Cluster(
+        startupNodes,
+        {
+          redisOptions: {
+            username: connection.username,
+            password: connection.password,
+            db: connection.db,
+            ...(startupNodes.some(node => typeof node.tls !== 'undefined') ? { tls: {} } : {}),
+          },
+        },
+      )
+    }
+
     if (typeof connection.url === 'string') {
       return new RedisCtor(connection.url, {
         username: connection.username,
         password: connection.password,
         db: connection.db,
       })
-    }
-
-    if (connection.clusters && connection.clusters.length > 0) {
-    return new redisModule.Cluster(
-        resolveRedisClusterStartupNodes(connection.clusters),
-        {
-          redisOptions: {
-            username: connection.username,
-            password: connection.password,
-            db: connection.db,
-            ...(resolveRedisClusterStartupNodes(connection.clusters).some(node => typeof node.tls !== 'undefined') ? { tls: {} } : {}),
-          },
-        },
-      )
     }
 
     return new RedisCtor(

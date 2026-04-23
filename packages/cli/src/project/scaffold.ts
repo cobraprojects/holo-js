@@ -1675,14 +1675,11 @@ function renderEnvFileContents(segments: readonly string[]): string {
     : ''
 }
 
-function normalizeScaffoldEnvSegments(
-  segments: string | readonly string[],
-): readonly string[] {
-  if (typeof segments === 'string') {
-    return [segments]
-  }
-
+function normalizeScaffoldEnvSegments(segments: string): readonly string[] {
   return segments
+    .split('\n')
+    .map(segment => segment.trim())
+    .filter(segment => segment.length > 0)
 }
 
 export async function syncManagedDriverDependencies(

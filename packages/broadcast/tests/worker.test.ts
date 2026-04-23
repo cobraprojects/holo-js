@@ -1370,6 +1370,38 @@ describe('@holo-js/broadcast worker runtime', () => {
     expect(urlRedis.commandDisconnect).not.toHaveBeenCalled()
     expect(urlRedis.subscriberDisconnect).not.toHaveBeenCalled()
 
+    const mixedRedis = createFakeRedisModule()
+    const mixedAdapter = await workerInternals.createRedisScalingAdapter({
+      url: 'redis://cache.internal:6380/4',
+      host: '127.0.0.1',
+      port: 6379,
+      username: 'worker',
+      password: 'secret',
+      db: 0,
+      clusters: [{
+        url: 'rediss://cache.internal:6380',
+        host: 'cache.internal',
+        port: 6380,
+      }],
+    }, {
+      loadRedisModule: async () => mixedRedis.module,
+    })
+    await mixedAdapter.close()
+    expect(mixedRedis.constructorArgs[0]).toEqual([[
+      {
+        host: 'cache.internal',
+        port: 6380,
+        tls: {},
+      },
+    ], {
+      redisOptions: {
+        username: 'worker',
+        password: 'secret',
+        db: 0,
+        tls: {},
+      },
+    }])
+
     const clusterRedis = createFakeRedisModule()
     await expect(workerInternals.createRedisScalingAdapter({
       host: '127.0.0.1',
@@ -3502,6 +3534,59 @@ describe('@holo-js/broadcast worker runtime', () => {
   })
 
   it('covers redis scaling socket and cluster helper edge cases', async () => {
+    const loadValidationRedisModule = async () => ({
+      default: class RedisMock {
+        duplicate() {
+          return this
+        }
+        on() {
+          return this
+        }
+        async connect() {}
+        async quit() {}
+        subscribe() {
+          return this
+        }
+        publish() {
+          return Promise.resolve(0)
+        }
+        hSet() {
+          return Promise.resolve(0)
+        }
+        hGetAll() {
+          return Promise.resolve({})
+        }
+        del() {
+          return Promise.resolve(0)
+        }
+      },
+      Cluster: class ClusterMock {
+        duplicate() {
+          return this
+        }
+        on() {
+          return this
+        }
+        async connect() {}
+        async quit() {}
+        subscribe() {
+          return this
+        }
+        publish() {
+          return Promise.resolve(0)
+        }
+        hSet() {
+          return Promise.resolve(0)
+        }
+        hGetAll() {
+          return Promise.resolve({})
+        }
+        del() {
+          return Promise.resolve(0)
+        }
+      },
+    })
+
     expect(() => workerInternals.resolveRedisScalingConnection(undefined, 'broadcast')).toThrow(
       'requires either redis config or a Redis queue connection',
     )
@@ -3588,12 +3673,16 @@ describe('@holo-js/broadcast worker runtime', () => {
       host: 'unix:///tmp/broadcast.sock',
       port: 6379,
       db: 0,
+    }, {
+      loadRedisModule: loadValidationRedisModule,
     })).resolves.toBeDefined()
 
     await expect(workerInternals.createRedisScalingAdapter({
       host: '/tmp/broadcast.sock',
       port: 6379,
       db: 0,
+    }, {
+      loadRedisModule: loadValidationRedisModule,
     })).resolves.toBeDefined()
 
     await expect(workerInternals.createRedisScalingAdapter({
@@ -3604,6 +3693,8 @@ describe('@holo-js/broadcast worker runtime', () => {
         host: '/tmp/cluster.sock',
         port: 6379,
       }],
+    }, {
+      loadRedisModule: loadValidationRedisModule,
     })).rejects.toThrow('cannot use a Unix socket path in Redis cluster mode')
 
     const defaultPortClusterCalls: unknown[] = []
@@ -3680,11 +3771,28 @@ describe('@holo-js/broadcast worker runtime', () => {
     }])
 
     const originalUrl = globalThis.URL
-    globalThis.URL = class BrokenUrl {
-      constructor() {
-        throw 'broken url parser'
-      }
-    } as never
+    try {
+      globalThis.URL = class BrokenUrl {
+        constructor() {
+          throw 'broken url parser'
+        }
+      } as never
+
+      await expect(workerInternals.createRedisScalingAdapter({
+        host: '127.0.0.1',
+        port: 6379,
+        db: 0,
+        clusters: [{
+          url: 'http://cluster.internal:6379',
+          host: 'cluster.internal',
+          port: 6379,
+        }],
+      }, {
+        loadRedisModule: loadValidationRedisModule,
+      })).rejects.toThrow('broken url parser')
+    } finally {
+      globalThis.URL = originalUrl
+    }
 
     await expect(workerInternals.createRedisScalingAdapter({
       host: '127.0.0.1',
@@ -3695,19 +3803,8 @@ describe('@holo-js/broadcast worker runtime', () => {
         host: 'cluster.internal',
         port: 6379,
       }],
-    })).rejects.toThrow('broken url parser')
-
-    globalThis.URL = originalUrl
-
-    await expect(workerInternals.createRedisScalingAdapter({
-      host: '127.0.0.1',
-      port: 6379,
-      db: 0,
-      clusters: [{
-        url: 'http://cluster.internal:6379',
-        host: 'cluster.internal',
-        port: 6379,
-      }],
+    }, {
+      loadRedisModule: loadValidationRedisModule,
     })).rejects.toThrow('unsupported protocol')
 
     await expect(workerInternals.createRedisScalingAdapter({
@@ -3719,6 +3816,8 @@ describe('@holo-js/broadcast worker runtime', () => {
         host: '',
         port: 6379,
       }],
+    }, {
+      loadRedisModule: loadValidationRedisModule,
     })).rejects.toThrow('missing hostname')
 
     const clusterOptionCalls: unknown[] = []

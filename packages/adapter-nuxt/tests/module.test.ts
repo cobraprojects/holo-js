@@ -2,6 +2,9 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type * as HoloConfigModule from '@holo-js/config'
+import type * as HoloCoreModule from '@holo-js/core'
+import type * as RuntimeComposablesModule from '../src/runtime/composables'
 
 type RuntimeConfigShape = Record<string, unknown>
 const packageEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
@@ -116,7 +119,7 @@ async function loadRuntimeExports(runtimeConfig: RuntimeConfigShape) {
   const configureHoloRuntimeConfig = vi.fn()
 
   vi.doMock('@holo-js/core', async (importOriginal) => {
-    const actual = await importOriginal<Record<string, unknown>>()
+    const actual = await importOriginal<typeof HoloCoreModule>()
 
     return {
       ...actual,
@@ -125,7 +128,7 @@ async function loadRuntimeExports(runtimeConfig: RuntimeConfigShape) {
   })
 
   vi.doMock('../src/runtime/composables', async (importOriginal) => {
-    const actual = await importOriginal<Record<string, unknown>>()
+    const actual = await importOriginal<typeof RuntimeComposablesModule>()
 
     return {
       ...actual,
@@ -547,7 +550,7 @@ export default defineStorageConfig({
     }))
 
     vi.doMock('@holo-js/config', async (importOriginal) => {
-      const actual = await importOriginal<Record<string, unknown>>()
+      const actual = await importOriginal<typeof HoloConfigModule>()
       return {
         ...actual,
         loadConfigDirectory,
@@ -970,7 +973,7 @@ describe('useHoloDb', () => {
       useRuntimeConfig: () => runtimeConfig,
     }))
     vi.doMock('@holo-js/core', async (importOriginal) => {
-      const actual = await importOriginal<Record<string, unknown>>()
+      const actual = await importOriginal<typeof HoloCoreModule>()
 
       return {
         ...actual,
@@ -1020,7 +1023,7 @@ describe('useHoloDb', () => {
       useRuntimeConfig: () => runtimeConfig,
     }))
     vi.doMock('@holo-js/core', async (importOriginal) => {
-      const actual = await importOriginal<Record<string, unknown>>()
+      const actual = await importOriginal<typeof HoloCoreModule>()
 
       return {
         ...actual,
@@ -1060,7 +1063,7 @@ describe('useHoloDb', () => {
       useRuntimeConfig: () => runtimeConfig,
     }))
     vi.doMock('@holo-js/core', async (importOriginal) => {
-      const actual = await importOriginal<Record<string, unknown>>()
+      const actual = await importOriginal<typeof HoloCoreModule>()
 
       return {
         ...actual,

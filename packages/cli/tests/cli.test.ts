@@ -1436,9 +1436,14 @@ export default {
   })
 
   it('normalizes scaffold env segments and renders empty env file contents directly', () => {
-    expect(projectInternals.normalizeScaffoldEnvSegments('APP_NAME=test')).toEqual(['APP_NAME=test'])
-    expect(projectInternals.normalizeScaffoldEnvSegments(['APP_NAME=test', 'APP_ENV=development'])).toEqual([
+    expect(projectInternals.normalizeScaffoldEnvSegments(`
+APP_NAME=test
+
+  # comment
+APP_ENV=development
+`)).toEqual([
       'APP_NAME=test',
+      '# comment',
       'APP_ENV=development',
     ])
     expect(projectInternals.renderEnvFileContents(['APP_NAME=test\n', '', 'APP_ENV=development'])).toBe([
@@ -4564,6 +4569,8 @@ export default defineCacheConfig({
     database: {
       driver: 'database',
       connection: 'main',
+      table: 'cache',
+      lockTable: 'cache_locks',
     },
   },
 })
