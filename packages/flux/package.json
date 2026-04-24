@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/flux",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Holo-JS Framework - framework-agnostic realtime client skeleton for broadcast and presence",
   "type": "module",
   "license": "MIT",
@@ -23,7 +23,7 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/broadcast": "^0.1.2"
+    "@holo-js/broadcast": "^0.1.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

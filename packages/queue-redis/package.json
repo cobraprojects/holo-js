@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/queue-redis",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Holo-JS Framework - Redis queue driver",
   "type": "module",
   "license": "MIT",
@@ -23,7 +23,7 @@
     "test": "vitest --run"
   },
   "peerDependencies": {
-    "@holo-js/queue": "^0.1.2"
+    "@holo-js/queue": "^0.1.3"
   },
   "dependencies": {
     "bullmq": "^5.71.0",

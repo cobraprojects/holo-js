@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/notifications",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Holo-JS Framework - notification contracts, channels, and fluent dispatch helpers",
   "type": "module",
   "license": "MIT",
@@ -28,10 +28,10 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "^0.1.2"
+    "@holo-js/config": "^0.1.3"
   },
   "peerDependencies": {
-    "@holo-js/queue": "^0.1.2"
+    "@holo-js/queue": "^0.1.3"
   },
   "peerDependenciesMeta": {
     "@holo-js/queue": {
