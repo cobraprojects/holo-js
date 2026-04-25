@@ -92,7 +92,7 @@ function normalizeRedisModuleLoadError(error: unknown): CacheOptionalPackageErro
 async function loadRedisDriverModule(): Promise<RedisCacheDriverModule> {
   try {
     const specifier = '@holo-js/cache-redis' as string
-    return await import(specifier) as RedisCacheDriverModule
+    return await import(/* webpackIgnore: true */ specifier) as RedisCacheDriverModule
   } catch (error) {
     throw normalizeRedisModuleLoadError(error)
   }

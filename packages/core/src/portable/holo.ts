@@ -2298,7 +2298,7 @@ async function loadConfiguredSocialProviders<TCustom extends HoloConfigMap>(
 ): Promise<Readonly<Record<string, unknown>>> {
   const projectRoot = typeof projectRootOrLoadedConfig === 'string'
     ? projectRootOrLoadedConfig
-    : process.cwd()
+    : /* turbopackIgnore: true */ process.cwd()
   const loadedConfig = (typeof projectRootOrLoadedConfig === 'string'
     ? maybeLoadedConfig
     : projectRootOrLoadedConfig) as LoadedHoloConfig<TCustom> | undefined
@@ -2512,7 +2512,7 @@ async function createCoreSocialBindings<TCustom extends HoloConfigMap>(
 }> {
   const projectRoot = typeof projectRootOrLoadedConfig === 'string'
     ? projectRootOrLoadedConfig
-    : process.cwd()
+    : /* turbopackIgnore: true */ process.cwd()
   const loadedConfig = (typeof projectRootOrLoadedConfig === 'string'
     ? loadedConfigOrSessionModule
     : projectRootOrLoadedConfig) as LoadedHoloConfig<TCustom>

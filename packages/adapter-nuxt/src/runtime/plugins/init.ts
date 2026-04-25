@@ -2,6 +2,8 @@ import {
   configureHoloRuntimeConfig,
 } from '../composables'
 import { initializeHoloAdapterProject } from '@holo-js/core'
+import { useRuntimeConfig } from 'nitropack/runtime/config'
+import { defineNitroPlugin } from 'nitropack/runtime/plugin'
 
 export default defineNitroPlugin(async (nitroApp: { hooks: { hook: (name: string, handler: () => Promise<void>) => void } }) => {
   const config = useRuntimeConfig()

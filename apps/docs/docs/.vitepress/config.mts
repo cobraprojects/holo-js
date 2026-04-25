@@ -236,6 +236,11 @@ export default defineConfig({
   cleanUrls: true,
   lang: 'en-US',
   lastUpdated: true,
+  vite: {
+    build: {
+      chunkSizeWarningLimit: 1000,
+    },
+  },
   head: [
     ['meta', { name: 'theme-color', content: '#e4572e' }],
     ['meta', { name: 'viewport', content: 'width=device-width, initial-scale=1.0' }],

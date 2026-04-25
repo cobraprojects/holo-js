@@ -28,32 +28,33 @@
       "name": "next_test_app",
       "dependencies": {
         "@holo-js/adapter-next": "workspace:*",
-        "@holo-js/auth": "^0.1.2",
-        "@holo-js/auth-clerk": "^0.1.2",
-        "@holo-js/auth-social": "^0.1.2",
-        "@holo-js/auth-social-google": "^0.1.2",
-        "@holo-js/auth-workos": "^0.1.2",
-        "@holo-js/authorization": "^0.1.2",
-        "@holo-js/broadcast": "^0.1.2",
-        "@holo-js/cache": "^0.1.2",
+        "@holo-js/auth": "^0.1.3",
+        "@holo-js/auth-clerk": "^0.1.3",
+        "@holo-js/auth-social": "^0.1.3",
+        "@holo-js/auth-social-google": "^0.1.3",
+        "@holo-js/auth-workos": "^0.1.3",
+        "@holo-js/authorization": "^0.1.3",
+        "@holo-js/broadcast": "^0.1.3",
+        "@holo-js/cache": "^0.1.3",
+        "@holo-js/cache-db": "workspace:*",
+        "@holo-js/cache-redis": "workspace:*",
         "@holo-js/cli": "workspace:*",
         "@holo-js/config": "workspace:*",
         "@holo-js/db": "workspace:*",
-        "@holo-js/db-mysql": "^0.1.2",
-        "@holo-js/db-postgres": "^0.1.2",
-        "@holo-js/db-sqlite": "^0.1.2",
-        "@holo-js/events": "^0.1.2",
+        "@holo-js/db-mysql": "^0.1.3",
+        "@holo-js/db-postgres": "^0.1.3",
+        "@holo-js/db-sqlite": "^0.1.3",
+        "@holo-js/events": "^0.1.3",
         "@holo-js/flux": "workspace:*",
         "@holo-js/media": "workspace:*",
-        "@holo-js/queue": "^0.1.2",
-        "@holo-js/queue-db": "^0.1.2",
-        "@holo-js/queue-redis": "^0.1.2",
-        "@holo-js/security": "^0.1.2",
-        "@holo-js/session": "^0.1.2",
-        "@holo-js/storage": "^0.1.2",
-        "@holo-js/storage-s3": "^0.1.2",
+        "@holo-js/queue": "^0.1.3",
+        "@holo-js/queue-db": "^0.1.3",
+        "@holo-js/queue-redis": "^0.1.3",
+        "@holo-js/security": "^0.1.3",
+        "@holo-js/session": "^0.1.3",
+        "@holo-js/storage": "^0.1.3",
+        "@holo-js/storage-s3": "^0.1.3",
         "esbuild": "^0.27.4",
-        "ioredis": "^5.4.2",
         "next": "^16.0.0",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
@@ -69,32 +70,31 @@
       "name": "nuxt_test_app",
       "dependencies": {
         "@holo-js/adapter-nuxt": "workspace:*",
-        "@holo-js/auth": "^0.1.2",
-        "@holo-js/auth-clerk": "^0.1.2",
-        "@holo-js/auth-social": "^0.1.2",
-        "@holo-js/auth-social-google": "^0.1.2",
-        "@holo-js/auth-workos": "^0.1.2",
-        "@holo-js/authorization": "^0.1.2",
-        "@holo-js/broadcast": "^0.1.2",
-        "@holo-js/cache": "^0.1.2",
+        "@holo-js/auth": "^0.1.3",
+        "@holo-js/auth-clerk": "^0.1.3",
+        "@holo-js/auth-social": "^0.1.3",
+        "@holo-js/auth-social-google": "^0.1.3",
+        "@holo-js/auth-workos": "^0.1.3",
+        "@holo-js/authorization": "^0.1.3",
+        "@holo-js/broadcast": "^0.1.3",
+        "@holo-js/cache": "^0.1.3",
         "@holo-js/cli": "workspace:*",
         "@holo-js/config": "workspace:*",
         "@holo-js/db": "workspace:*",
-        "@holo-js/db-mysql": "^0.1.2",
-        "@holo-js/db-postgres": "^0.1.2",
-        "@holo-js/db-sqlite": "^0.1.2",
-        "@holo-js/events": "^0.1.2",
+        "@holo-js/db-mysql": "^0.1.3",
+        "@holo-js/db-postgres": "^0.1.3",
+        "@holo-js/db-sqlite": "^0.1.3",
+        "@holo-js/events": "^0.1.3",
         "@holo-js/flux": "workspace:*",
         "@holo-js/media": "workspace:*",
-        "@holo-js/queue": "^0.1.2",
-        "@holo-js/queue-db": "^0.1.2",
-        "@holo-js/queue-redis": "^0.1.2",
-        "@holo-js/security": "^0.1.2",
-        "@holo-js/session": "^0.1.2",
-        "@holo-js/storage": "^0.1.2",
-        "@holo-js/storage-s3": "^0.1.2",
+        "@holo-js/queue": "^0.1.3",
+        "@holo-js/queue-db": "^0.1.3",
+        "@holo-js/queue-redis": "^0.1.3",
+        "@holo-js/security": "^0.1.3",
+        "@holo-js/session": "^0.1.3",
+        "@holo-js/storage": "^0.1.3",
+        "@holo-js/storage-s3": "^0.1.3",
         "esbuild": "^0.27.4",
-        "ioredis": "^5.4.2",
         "nuxt": "^4.0.0",
       },
       "devDependencies": {
@@ -114,35 +114,34 @@
       "name": "svelte_test_app",
       "dependencies": {
         "@holo-js/adapter-sveltekit": "workspace:*",
-        "@holo-js/auth": "^0.1.2",
-        "@holo-js/auth-clerk": "^0.1.2",
-        "@holo-js/auth-social": "^0.1.2",
-        "@holo-js/auth-social-google": "^0.1.2",
-        "@holo-js/auth-workos": "^0.1.2",
-        "@holo-js/authorization": "^0.1.2",
-        "@holo-js/broadcast": "^0.1.2",
-        "@holo-js/cache": "^0.1.2",
+        "@holo-js/auth": "^0.1.3",
+        "@holo-js/auth-clerk": "^0.1.3",
+        "@holo-js/auth-social": "^0.1.3",
+        "@holo-js/auth-social-google": "^0.1.3",
+        "@holo-js/auth-workos": "^0.1.3",
+        "@holo-js/authorization": "^0.1.3",
+        "@holo-js/broadcast": "^0.1.3",
+        "@holo-js/cache": "^0.1.3",
         "@holo-js/cli": "workspace:*",
         "@holo-js/config": "workspace:*",
         "@holo-js/db": "workspace:*",
-        "@holo-js/db-mysql": "^0.1.2",
-        "@holo-js/db-postgres": "^0.1.2",
-        "@holo-js/db-sqlite": "^0.1.2",
-        "@holo-js/events": "^0.1.2",
+        "@holo-js/db-mysql": "^0.1.3",
+        "@holo-js/db-postgres": "^0.1.3",
+        "@holo-js/db-sqlite": "^0.1.3",
+        "@holo-js/events": "^0.1.3",
         "@holo-js/flux": "workspace:*",
         "@holo-js/media": "workspace:*",
-        "@holo-js/queue": "^0.1.2",
-        "@holo-js/queue-db": "^0.1.2",
-        "@holo-js/queue-redis": "^0.1.2",
-        "@holo-js/security": "^0.1.2",
-        "@holo-js/session": "^0.1.2",
-        "@holo-js/storage": "^0.1.2",
-        "@holo-js/storage-s3": "^0.1.2",
+        "@holo-js/queue": "^0.1.3",
+        "@holo-js/queue-db": "^0.1.3",
+        "@holo-js/queue-redis": "^0.1.3",
+        "@holo-js/security": "^0.1.3",
+        "@holo-js/session": "^0.1.3",
+        "@holo-js/storage": "^0.1.3",
+        "@holo-js/storage-s3": "^0.1.3",
         "@sveltejs/adapter-node": "^5.0.0",
         "@sveltejs/kit": "^2.0.0",
         "@sveltejs/vite-plugin-svelte": "^4.0.0",
         "esbuild": "^0.27.4",
-        "ioredis": "^5.4.2",
         "svelte": "^5.0.0",
         "vite": "^5.0.0",
       },
@@ -153,10 +152,10 @@
     },
     "packages/adapter-next": {
       "name": "@holo-js/adapter-next",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/config": "^0.1.2",
-        "@holo-js/core": "^0.1.2",
+        "@holo-js/config": "^0.1.3",
+        "@holo-js/core": "^0.1.3",
       },
       "devDependencies": {
         "@types/node": "^22.10.2",
@@ -165,7 +164,7 @@
         "vitest": "^2.1.8",
       },
       "peerDependencies": {
-        "@holo-js/forms": "^0.1.2",
+        "@holo-js/forms": "^0.1.3",
       },
       "optionalPeers": [
         "@holo-js/forms",
@@ -173,11 +172,11 @@
     },
     "packages/adapter-nuxt": {
       "name": "@holo-js/adapter-nuxt",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/config": "^0.1.2",
-        "@holo-js/core": "^0.1.2",
-        "@holo-js/db": "^0.1.2",
+        "@holo-js/config": "^0.1.3",
+        "@holo-js/core": "^0.1.3",
+        "@holo-js/db": "^0.1.3",
         "@nuxt/kit": "^4.0.0",
       },
       "devDependencies": {
@@ -189,9 +188,9 @@
         "vitest": "^2.1.8",
       },
       "peerDependencies": {
-        "@holo-js/forms": "^0.1.2",
-        "@holo-js/storage": "^0.1.2",
-        "@holo-js/storage-s3": "^0.1.2",
+        "@holo-js/forms": "^0.1.3",
+        "@holo-js/storage": "^0.1.3",
+        "@holo-js/storage-s3": "^0.1.3",
       },
       "optionalPeers": [
         "@holo-js/forms",
@@ -201,10 +200,10 @@
     },
     "packages/adapter-sveltekit": {
       "name": "@holo-js/adapter-sveltekit",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/config": "^0.1.2",
-        "@holo-js/core": "^0.1.2",
+        "@holo-js/config": "^0.1.3",
+        "@holo-js/core": "^0.1.3",
       },
       "devDependencies": {
         "@types/node": "^22.10.2",
@@ -213,7 +212,7 @@
         "vitest": "^2.1.8",
       },
       "peerDependencies": {
-        "@holo-js/forms": "^0.1.2",
+        "@holo-js/forms": "^0.1.3",
       },
       "optionalPeers": [
         "@holo-js/forms",
@@ -221,9 +220,9 @@
     },
     "packages/auth": {
       "name": "@holo-js/auth",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/config": "^0.1.2",
+        "@holo-js/config": "^0.1.3",
       },
       "devDependencies": {
         "@types/node": "^22.10.2",
@@ -232,7 +231,7 @@
         "vitest": "^2.1.8",
       },
       "peerDependencies": {
-        "@holo-js/security": "^0.1.2",
+        "@holo-js/security": "^0.1.3",
       },
       "optionalPeers": [
         "@holo-js/security",
@@ -240,7 +239,7 @@
     },
     "packages/auth-clerk": {
       "name": "@holo-js/auth-clerk",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@holo-js/auth": "workspace:*",
         "@holo-js/config": "workspace:*",
@@ -255,10 +254,10 @@
     },
     "packages/auth-social": {
       "name": "@holo-js/auth-social",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/auth": "^0.1.2",
-        "@holo-js/config": "^0.1.2",
+        "@holo-js/auth": "^0.1.3",
+        "@holo-js/config": "^0.1.3",
       },
       "devDependencies": {
         "@types/node": "^22.10.2",
@@ -269,7 +268,7 @@
     },
     "packages/auth-social-apple": {
       "name": "@holo-js/auth-social-apple",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@holo-js/auth-social": "workspace:*",
         "@holo-js/config": "workspace:*",
@@ -283,7 +282,7 @@
     },
     "packages/auth-social-discord": {
       "name": "@holo-js/auth-social-discord",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@holo-js/auth-social": "workspace:*",
         "@holo-js/config": "workspace:*",
@@ -297,7 +296,7 @@
     },
     "packages/auth-social-facebook": {
       "name": "@holo-js/auth-social-facebook",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@holo-js/auth-social": "workspace:*",
         "@holo-js/config": "workspace:*",
@@ -311,7 +310,7 @@
     },
     "packages/auth-social-github": {
       "name": "@holo-js/auth-social-github",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@holo-js/auth-social": "workspace:*",
         "@holo-js/config": "workspace:*",
@@ -325,7 +324,7 @@
     },
     "packages/auth-social-google": {
       "name": "@holo-js/auth-social-google",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@holo-js/auth-social": "workspace:*",
         "@holo-js/config": "workspace:*",
@@ -339,7 +338,7 @@
     },
     "packages/auth-social-linkedin": {
       "name": "@holo-js/auth-social-linkedin",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@holo-js/auth-social": "workspace:*",
         "@holo-js/config": "workspace:*",
@@ -353,7 +352,7 @@
     },
     "packages/auth-workos": {
       "name": "@holo-js/auth-workos",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@holo-js/auth": "workspace:*",
         "@holo-js/config": "workspace:*",
@@ -368,7 +367,7 @@
     },
     "packages/authorization": {
       "name": "@holo-js/authorization",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "devDependencies": {
         "@types/node": "^22.10.2",
         "tsup": "^8.3.5",
@@ -378,10 +377,10 @@
     },
     "packages/broadcast": {
       "name": "@holo-js/broadcast",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/config": "^0.1.2",
-        "@holo-js/validation": "^0.1.2",
+        "@holo-js/config": "^0.1.3",
+        "@holo-js/validation": "^0.1.3",
         "ws": "^8.18.3",
       },
       "devDependencies": {
@@ -401,9 +400,9 @@
     },
     "packages/cache": {
       "name": "@holo-js/cache",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/config": "^0.1.2",
+        "@holo-js/config": "^0.1.3",
       },
       "devDependencies": {
         "@types/node": "^22.10.2",
@@ -414,9 +413,9 @@
     },
     "packages/cache-db": {
       "name": "@holo-js/cache-db",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "tslib": "catalog:",
+        "tslib": "^2.8.1",
       },
       "devDependencies": {
         "@holo-js/cache": "workspace:*",
@@ -427,13 +426,13 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "@holo-js/cache": "workspace:*",
-        "@holo-js/db": "workspace:*",
+        "@holo-js/cache": "^0.1.3",
+        "@holo-js/db": "^0.1.3",
       },
     },
     "packages/cache-redis": {
       "name": "@holo-js/cache-redis",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "ioredis": "catalog:",
         "tslib": "^2.8.1",
@@ -446,26 +445,26 @@
         "vitest": "^2.1.8",
       },
       "peerDependencies": {
-        "@holo-js/cache": "^0.1.2",
+        "@holo-js/cache": "^0.1.3",
       },
     },
     "packages/cli": {
       "name": "@holo-js/cli",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "bin": {
         "holo": "./dist/bin/holo.mjs",
         "holo-js": "./dist/bin/holo.mjs",
       },
       "dependencies": {
-        "@holo-js/config": "^0.1.2",
-        "@holo-js/core": "^0.1.2",
-        "@holo-js/db": "^0.1.2",
+        "@holo-js/config": "^0.1.3",
+        "@holo-js/core": "^0.1.3",
+        "@holo-js/db": "^0.1.3",
         "esbuild": "^0.27.4",
       },
       "devDependencies": {
-        "@holo-js/events": "^0.1.2",
-        "@holo-js/queue": "^0.1.2",
-        "@holo-js/queue-db": "^0.1.2",
+        "@holo-js/events": "^0.1.3",
+        "@holo-js/queue": "^0.1.3",
+        "@holo-js/queue-db": "^0.1.3",
         "@types/node": "^22.10.2",
         "tsup": "^8.3.5",
         "typescript": "^5.7.2",
@@ -474,9 +473,9 @@
     },
     "packages/config": {
       "name": "@holo-js/config",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/db": "^0.1.2",
+        "@holo-js/db": "^0.1.3",
       },
       "devDependencies": {
         "tsup": "^8.3.5",
@@ -486,38 +485,38 @@
     },
     "packages/core": {
       "name": "@holo-js/core",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/config": "^0.1.2",
-        "@holo-js/db": "^0.1.2",
+        "@holo-js/config": "^0.1.3",
+        "@holo-js/db": "^0.1.3",
         "esbuild": "^0.27.4",
       },
       "devDependencies": {
-        "@holo-js/auth": "^0.1.2",
-        "@holo-js/authorization": "^0.1.2",
-        "@holo-js/events": "^0.1.2",
-        "@holo-js/mail": "^0.1.2",
-        "@holo-js/notifications": "^0.1.2",
-        "@holo-js/queue-db": "^0.1.2",
-        "@holo-js/session": "^0.1.2",
-        "@holo-js/storage": "^0.1.2",
+        "@holo-js/auth": "^0.1.3",
+        "@holo-js/authorization": "^0.1.3",
+        "@holo-js/events": "^0.1.3",
+        "@holo-js/mail": "^0.1.3",
+        "@holo-js/notifications": "^0.1.3",
+        "@holo-js/queue-db": "^0.1.3",
+        "@holo-js/session": "^0.1.3",
+        "@holo-js/storage": "^0.1.3",
         "@types/node": "^22.10.2",
         "tsup": "^8.3.5",
         "typescript": "^5.7.2",
         "vitest": "^2.1.8",
       },
       "peerDependencies": {
-        "@holo-js/auth": "^0.1.2",
-        "@holo-js/auth-clerk": "^0.1.2",
-        "@holo-js/auth-social": "^0.1.2",
-        "@holo-js/auth-workos": "^0.1.2",
-        "@holo-js/authorization": "^0.1.2",
-        "@holo-js/mail": "^0.1.2",
-        "@holo-js/notifications": "^0.1.2",
-        "@holo-js/queue": "^0.1.2",
-        "@holo-js/security": "^0.1.2",
-        "@holo-js/session": "^0.1.2",
-        "@holo-js/storage": "^0.1.2",
+        "@holo-js/auth": "^0.1.3",
+        "@holo-js/auth-clerk": "^0.1.3",
+        "@holo-js/auth-social": "^0.1.3",
+        "@holo-js/auth-workos": "^0.1.3",
+        "@holo-js/authorization": "^0.1.3",
+        "@holo-js/mail": "^0.1.3",
+        "@holo-js/notifications": "^0.1.3",
+        "@holo-js/queue": "^0.1.3",
+        "@holo-js/security": "^0.1.3",
+        "@holo-js/session": "^0.1.3",
+        "@holo-js/storage": "^0.1.3",
       },
       "optionalPeers": [
         "@holo-js/auth",
@@ -535,7 +534,7 @@
     },
     "packages/create-holo-js": {
       "name": "create-holo-js",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "bin": {
         "create-holo-js": "./dist/bin/create-holo-js.mjs",
       },
@@ -550,7 +549,7 @@
     },
     "packages/db": {
       "name": "@holo-js/db",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "ulid": "^3.0.1",
         "uuid": "^12.0.0",
@@ -565,9 +564,9 @@
         "typescript": "^5.7.2",
       },
       "peerDependencies": {
-        "@holo-js/db-mysql": "^0.1.2",
-        "@holo-js/db-postgres": "^0.1.2",
-        "@holo-js/db-sqlite": "^0.1.2",
+        "@holo-js/db-mysql": "^0.1.3",
+        "@holo-js/db-postgres": "^0.1.3",
+        "@holo-js/db-sqlite": "^0.1.3",
       },
       "optionalPeers": [
         "@holo-js/db-mysql",
@@ -577,7 +576,7 @@
     },
     "packages/db-mysql": {
       "name": "@holo-js/db-mysql",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "mysql2": "^3.17.1",
       },
@@ -588,12 +587,12 @@
         "vitest": "^2.1.8",
       },
       "peerDependencies": {
-        "@holo-js/db": "^0.1.2",
+        "@holo-js/db": "^0.1.3",
       },
     },
     "packages/db-postgres": {
       "name": "@holo-js/db-postgres",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "pg": "^8.13.0",
       },
@@ -605,12 +604,12 @@
         "vitest": "^2.1.8",
       },
       "peerDependencies": {
-        "@holo-js/db": "^0.1.2",
+        "@holo-js/db": "^0.1.3",
       },
     },
     "packages/db-sqlite": {
       "name": "@holo-js/db-sqlite",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "better-sqlite3": "^11.7.0",
       },
@@ -622,14 +621,14 @@
         "vitest": "^2.1.8",
       },
       "peerDependencies": {
-        "@holo-js/db": "^0.1.2",
+        "@holo-js/db": "^0.1.3",
       },
     },
     "packages/events": {
       "name": "@holo-js/events",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/db": "^0.1.2",
+        "@holo-js/db": "^0.1.3",
       },
       "devDependencies": {
         "@types/node": "^22.10.2",
@@ -638,7 +637,7 @@
         "vitest": "^2.1.8",
       },
       "peerDependencies": {
-        "@holo-js/queue": "^0.1.2",
+        "@holo-js/queue": "^0.1.3",
       },
       "optionalPeers": [
         "@holo-js/queue",
@@ -646,9 +645,9 @@
     },
     "packages/flux": {
       "name": "@holo-js/flux",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/broadcast": "^0.1.2",
+        "@holo-js/broadcast": "^0.1.3",
       },
       "devDependencies": {
         "@types/node": "^22.10.2",
@@ -659,7 +658,7 @@
     },
     "packages/flux-react": {
       "name": "@holo-js/flux-react",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@holo-js/broadcast": "^0.1.2",
         "@holo-js/flux": "^0.1.2",
@@ -680,7 +679,7 @@
     },
     "packages/flux-svelte": {
       "name": "@holo-js/flux-svelte",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@holo-js/broadcast": "^0.1.2",
         "@holo-js/flux": "^0.1.2",
@@ -698,7 +697,7 @@
     },
     "packages/flux-vue": {
       "name": "@holo-js/flux-vue",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@holo-js/broadcast": "^0.1.2",
         "@holo-js/flux": "^0.1.2",
@@ -716,7 +715,7 @@
     },
     "packages/forms": {
       "name": "@holo-js/forms",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@holo-js/validation": "^0.1.2",
       },
@@ -735,9 +734,9 @@
     },
     "packages/mail": {
       "name": "@holo-js/mail",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/config": "^0.1.2",
+        "@holo-js/config": "^0.1.3",
         "nodemailer": "^6.10.1",
       },
       "devDependencies": {
@@ -747,8 +746,8 @@
         "vitest": "^2.1.8",
       },
       "peerDependencies": {
-        "@holo-js/queue": "^0.1.2",
-        "@holo-js/storage": "^0.1.2",
+        "@holo-js/queue": "^0.1.3",
+        "@holo-js/storage": "^0.1.3",
       },
       "optionalPeers": [
         "@holo-js/queue",
@@ -757,11 +756,11 @@
     },
     "packages/media": {
       "name": "@holo-js/media",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/db": "^0.1.2",
-        "@holo-js/queue": "^0.1.2",
-        "@holo-js/storage": "^0.1.2",
+        "@holo-js/db": "^0.1.3",
+        "@holo-js/queue": "^0.1.3",
+        "@holo-js/storage": "^0.1.3",
         "sharp": "^0.34.4",
       },
       "devDependencies": {
@@ -772,9 +771,9 @@
     },
     "packages/notifications": {
       "name": "@holo-js/notifications",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/config": "^0.1.2",
+        "@holo-js/config": "^0.1.3",
       },
       "devDependencies": {
         "@types/node": "^22.10.2",
@@ -783,7 +782,7 @@
         "vitest": "^2.1.8",
       },
       "peerDependencies": {
-        "@holo-js/queue": "^0.1.2",
+        "@holo-js/queue": "^0.1.3",
       },
       "optionalPeers": [
         "@holo-js/queue",
@@ -791,7 +790,7 @@
     },
     "packages/queue": {
       "name": "@holo-js/queue",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "devDependencies": {
         "@holo-js/queue-redis": "workspace:*",
         "@types/node": "^22.10.2",
@@ -800,7 +799,7 @@
         "vitest": "^2.1.8",
       },
       "peerDependencies": {
-        "@holo-js/queue-redis": "^0.1.2",
+        "@holo-js/queue-redis": "^0.1.3",
       },
       "optionalPeers": [
         "@holo-js/queue-redis",
@@ -808,10 +807,10 @@
     },
     "packages/queue-db": {
       "name": "@holo-js/queue-db",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/db": "^0.1.2",
-        "@holo-js/queue": "^0.1.2",
+        "@holo-js/db": "^0.1.3",
+        "@holo-js/queue": "^0.1.3",
       },
       "devDependencies": {
         "@types/node": "^22.10.2",
@@ -822,7 +821,7 @@
     },
     "packages/queue-redis": {
       "name": "@holo-js/queue-redis",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "bullmq": "^5.71.0",
         "ioredis": "catalog:",
@@ -836,14 +835,14 @@
         "vitest": "^2.1.8",
       },
       "peerDependencies": {
-        "@holo-js/queue": "^0.1.2",
+        "@holo-js/queue": "^0.1.3",
       },
     },
     "packages/security": {
       "name": "@holo-js/security",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/config": "^0.1.2",
+        "@holo-js/config": "^0.1.3",
       },
       "devDependencies": {
         "@types/node": "^22.10.2",
@@ -861,9 +860,9 @@
     },
     "packages/session": {
       "name": "@holo-js/session",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/config": "^0.1.2",
+        "@holo-js/config": "^0.1.3",
       },
       "devDependencies": {
         "@types/node": "^22.10.2",
@@ -881,9 +880,9 @@
     },
     "packages/storage": {
       "name": "@holo-js/storage",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
-        "@holo-js/config": "^0.1.2",
+        "@holo-js/config": "^0.1.3",
       },
       "devDependencies": {
         "@holo-js/storage-s3": "workspace:*",
@@ -893,7 +892,7 @@
         "vitest": "^2.1.8",
       },
       "peerDependencies": {
-        "@holo-js/storage-s3": "^0.1.2",
+        "@holo-js/storage-s3": "^0.1.3",
       },
       "optionalPeers": [
         "@holo-js/storage-s3",
@@ -901,7 +900,7 @@
     },
     "packages/storage-s3": {
       "name": "@holo-js/storage-s3",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "devDependencies": {
         "@types/node": "^22.10.2",
         "tsup": "^8.3.5",
@@ -911,7 +910,7 @@
     },
     "packages/validation": {
       "name": "@holo-js/validation",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "valibot": "^1.1.0",
       },

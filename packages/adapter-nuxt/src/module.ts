@@ -1,4 +1,5 @@
-import { resolve } from 'node:path'
+import { mkdir, readdir, writeFile } from 'node:fs/promises'
+import { basename, extname, relative, resolve } from 'node:path'
 import {
   addImports,
   addServerHandler,
@@ -74,6 +75,8 @@ type StorageModule = {
 type StorageS3Module = {
   default: unknown
 }
+
+const MODEL_FILE_EXTENSIONS = new Set(['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'])
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -186,6 +189,37 @@ function toStorageModuleOptions(
   }
 }
 
+async function createServerModelImports(sourceDir: string): Promise<string | null> {
+  const modelsDir = resolve(sourceDir, 'server/models')
+  const modelImportDir = resolve(sourceDir, '.holo-js/generated/nuxt-server-imports')
+  const modelImportFile = resolve(modelImportDir, 'models.ts')
+
+  let modelFiles: string[]
+  try {
+    modelFiles = (await readdir(modelsDir))
+      .filter(fileName => MODEL_FILE_EXTENSIONS.has(extname(fileName)))
+      .sort((left, right) => left.localeCompare(right))
+  } catch {
+    return null
+  }
+
+  if (modelFiles.length === 0) {
+    return null
+  }
+
+  const lines = modelFiles.map((fileName) => {
+    const modelName = basename(fileName, extname(fileName))
+    const importPath = relative(modelImportDir, resolve(modelsDir, fileName)).replaceAll('\\', '/')
+    const normalizedImportPath = importPath.replace(/^(?!\.)/, './')
+    const extension = extname(normalizedImportPath)
+    return `export { default as ${modelName} } from '${normalizedImportPath.slice(0, -extension.length)}'`
+  })
+
+  await mkdir(modelImportDir, { recursive: true })
+  await writeFile(modelImportFile, `${lines.join('\n')}\n`, 'utf8')
+  return modelImportDir
+}
+
 export default defineNuxtModule<ModuleOptions>({
   meta: {
     name: '@holo-js/adapter-nuxt',
@@ -250,7 +284,10 @@ export default defineNuxtModule<ModuleOptions>({
       addServerPlugin(resolver.resolve('./runtime/plugins/init'))
       addImports(imports)
       addServerImportsDir(resolver.resolve('./runtime/server/imports'))
-      addServerImportsDir(resolve(sourceDir, 'server/models'))
+      const serverModelImports = await createServerModelImports(sourceDir)
+      if (serverModelImports) {
+        addServerImportsDir(serverModelImports)
+      }
       opts._holoCoreRuntimeRegistered = true
     }
 

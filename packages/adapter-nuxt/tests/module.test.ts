@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -110,9 +110,10 @@ async function loadRuntimeExports(runtimeConfig: RuntimeConfigShape) {
     },
   }))
 
-  vi.stubGlobal('defineNitroPlugin', (plugin: unknown) => plugin)
-  vi.stubGlobal('useRuntimeConfig', () => runtimeConfig)
-  vi.doMock('#app', () => ({
+  vi.doMock('nitropack/runtime/plugin', () => ({
+    defineNitroPlugin: (plugin: unknown) => plugin,
+  }))
+  vi.doMock('nitropack/runtime/config', () => ({
     useRuntimeConfig: () => runtimeConfig,
   }))
 
@@ -172,6 +173,8 @@ const originalEnv = new Map<string, string | undefined>(
 afterEach(() => {
   vi.doUnmock('@nuxt/kit')
   vi.doUnmock('#app')
+  vi.doUnmock('nitropack/runtime/plugin')
+  vi.doUnmock('nitropack/runtime/config')
   vi.doUnmock('@holo-js/config')
   vi.doUnmock('@holo-js/db')
   vi.doUnmock('@holo-js/core')
@@ -333,14 +336,34 @@ export default defineDatabaseConfig({
       expect.objectContaining({ name: 'Storage', as: 'Storage', from: './runtime/composables/storage' }),
     ]))
     expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/imports')
-    expect(addServerImportsDir).toHaveBeenCalledWith(resolve(root, 'server/models'))
-    expect(addServerImportsDir).toHaveBeenCalledTimes(2)
+    expect(addServerImportsDir).toHaveBeenCalledTimes(1)
     expect(nuxt.options.build.transpile).toContain('./runtime')
 
     const prepareTypes = nuxt.hook.mock.calls.find(([name]) => name === 'prepare:types')?.[1]
     const references: Array<Record<string, string>> = []
     prepareTypes?.({ references })
     expect(references).toContainEqual({ types: '@holo-js/adapter-nuxt' })
+  })
+
+  it('generates a server import wrapper for model defaults when server models exist', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'server/models/User.ts'), 'export default class User {}\nexport function prepareAuthCreateInput() {}\n', 'utf8')
+    await writeFile(join(root, 'server/models/Admin.mts'), 'export default class Admin {}\nexport function prepareAuthCreateInput() {}\n', 'utf8')
+    await writeFile(join(root, 'server/models/README.md'), '# ignored\n', 'utf8')
+
+    const { module, addServerImportsDir } = await loadAdapterModule()
+    const nuxt = createNuxtHarness(root)
+
+    await module.setup({}, nuxt as never)
+
+    expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/imports')
+    expect(addServerImportsDir).toHaveBeenCalledWith(resolve(root, '.holo-js/generated/nuxt-server-imports'))
+    expect(addServerImportsDir).toHaveBeenCalledTimes(2)
+    expect(await readFile(join(root, '.holo-js/generated/nuxt-server-imports/models.ts'), 'utf8')).toBe([
+      "export { default as Admin } from '../../../server/models/Admin'",
+      "export { default as User } from '../../../server/models/User'",
+      '',
+    ].join('\n'))
   })
 
   it('registers the built s3 runtime driver path for object storage disks', async () => {

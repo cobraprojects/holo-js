@@ -154,7 +154,7 @@ export function resolveHoloFrameworkOptions(
 ): ResolvedHoloFrameworkOptions {
   const processEnv = options.processEnv ?? process.env
   return {
-    projectRoot: resolve(options.projectRoot ?? process.cwd()),
+    projectRoot: resolve(options.projectRoot ?? /* turbopackIgnore: true */ process.cwd()),
     runtime: {
       envName: options.envName,
       preferCache: options.preferCache ?? processEnv.NODE_ENV === 'production',

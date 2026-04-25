@@ -51,11 +51,15 @@ describe('storage runtime plugin', () => {
     const useRuntimeConfig = vi.fn(() => runtimeConfig)
     const useNitroStorage = vi.fn(() => backend)
 
-    vi.doMock('#imports', () => ({
+    vi.doMock('nitropack/runtime/plugin', () => ({
+      defineNitroPlugin: (plugin: unknown) => plugin,
+    }))
+    vi.doMock('nitropack/runtime/config', () => ({
       useRuntimeConfig,
+    }))
+    vi.doMock('nitropack/runtime/storage', () => ({
       useStorage: useNitroStorage,
     }))
-    vi.stubGlobal('defineNitroPlugin', (plugin: unknown) => plugin)
 
     const { resetStorageRuntime, useStorage } = await import('@holo-js/storage/runtime')
     resetStorageRuntime()

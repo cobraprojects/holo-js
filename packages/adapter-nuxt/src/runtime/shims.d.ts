@@ -43,6 +43,18 @@ declare module '#imports' {
   export function useStorage(base: string): unknown
 }
 
+declare module 'nitropack/runtime/config' {
+  export function useRuntimeConfig(): HoloRuntimeConfig
+}
+
+declare module 'nitropack/runtime/plugin' {
+  export function defineNitroPlugin<T>(plugin: T): T
+}
+
+declare module 'nitropack/runtime/storage' {
+  export function useStorage(base: string): unknown
+}
+
 declare global {
   function createError(input: { statusCode: number, statusMessage: string }): Error
   function defineNitroPlugin<T>(plugin: T): T

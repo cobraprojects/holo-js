@@ -9,6 +9,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = resolve(packageDir, '../..')
 const configEntry = JSON.stringify(resolve(packageDir, '../config/src/index.ts'))
+const nitropackPackageDir = resolve(repoRoot, 'node_modules/.bun/node_modules/nitropack')
 const tempDirs: string[] = []
 const tempBuildRoots: string[] = []
 let adapterBuildPromise: Promise<{ adapterOutDir: string }> | null = null
@@ -106,6 +107,7 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
       await symlink(resolve(repoRoot, 'node_modules/typescript'), join(tempRootNodeModules, 'typescript'))
       await symlink(resolve(repoRoot, 'node_modules/.bun/node_modules/bullmq'), join(tempRootNodeModules, 'bullmq'))
       await symlink(resolve(packageDir, 'node_modules/@nuxt'), join(tempRootNodeModules, '@nuxt'))
+      await symlink(nitropackPackageDir, join(tempRootNodeModules, 'nitropack'))
       for (const dependencyName of dbRuntimeDependencyNames) {
         await symlink(resolve(repoRoot, 'node_modules', dependencyName), join(tempRootNodeModules, dependencyName))
       }
@@ -351,6 +353,16 @@ describe('@holo-js/adapter-nuxt module setup', () => {
     expect(output).toContain('Storage runtime is not configured')
   }, 60000)
 
+  it('publishes the init Nitro plugin with explicit Nitro runtime imports', async () => {
+    const build = await runAdapterStub()
+
+    const initPluginEntry = resolve(build.adapterOutDir, 'runtime/plugins/init.js')
+    const publishedPlugin = await readFile(initPluginEntry, 'utf8')
+
+    expect(publishedPlugin).toContain('from "nitropack/runtime/plugin"')
+    expect(publishedPlugin).toContain('from "nitropack/runtime/config"')
+  }, 60000)
+
   it('loads storage config files from the project root and wires nitro/runtime state', async () => {
     const root = await createProject()
     await writeFile(join(root, '.env'), 'STORAGE_DEFAULT_DISK=media\n', 'utf8')
@@ -421,8 +433,7 @@ export default defineStorageConfig({
       expect.objectContaining({ name: 'Storage', as: 'Storage', from: './runtime/composables/storage' }),
     ]))
     expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/imports')
-    expect(addServerImportsDir).toHaveBeenCalledWith(resolve(root, 'server/models'))
-    expect(addServerImportsDir).toHaveBeenCalledTimes(2)
+    expect(addServerImportsDir).toHaveBeenCalledTimes(1)
     expect(addServerHandler).toHaveBeenCalledWith({
       route: '/files/**',
       handler: './runtime/server/routes/storage.get',

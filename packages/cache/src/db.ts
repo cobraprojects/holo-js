@@ -115,7 +115,7 @@ function normalizeDatabaseModuleLoadError(
 async function loadDatabaseDriverModule(): Promise<DatabaseCacheDriverModule> {
   try {
     const specifier = '@holo-js/cache-db' as string
-    return await import(specifier) as DatabaseCacheDriverModule
+    return await import(/* webpackIgnore: true */ specifier) as DatabaseCacheDriverModule
   } catch (error) {
     throw normalizeDatabaseModuleLoadError(error, '@holo-js/cache-db')
   }
