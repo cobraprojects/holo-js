@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/storage",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Holo-JS Framework - Portable storage runtime and config helpers",
   "type": "module",
   "license": "MIT",
@@ -33,10 +33,10 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "^0.1.3"
+    "@holo-js/config": "^0.1.4"
   },
   "peerDependencies": {
-    "@holo-js/storage-s3": "^0.1.3"
+    "@holo-js/storage-s3": "^0.1.4"
   },
   "peerDependenciesMeta": {
     "@holo-js/storage-s3": {

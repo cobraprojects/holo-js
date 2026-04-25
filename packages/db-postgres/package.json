@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/db-postgres",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Holo-JS Framework - Postgres database adapter",
   "type": "module",
   "license": "MIT",
@@ -23,7 +23,7 @@
     "test": "vitest --run"
   },
   "peerDependencies": {
-    "@holo-js/db": "^0.1.3"
+    "@holo-js/db": "^0.1.4"
   },
   "dependencies": {
     "pg": "^8.13.0"

@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/auth-social-github",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Holo-JS Framework - GitHub social auth provider",
   "type": "module",
   "license": "MIT",

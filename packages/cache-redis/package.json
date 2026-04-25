@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/cache-redis",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Holo-JS Framework - Redis cache driver",
   "type": "module",
   "license": "MIT",
@@ -23,7 +23,7 @@
     "test": "vitest --run"
   },
   "peerDependencies": {
-    "@holo-js/cache": "^0.1.3"
+    "@holo-js/cache": "^0.1.4"
   },
   "dependencies": {
     "ioredis": "catalog:",
