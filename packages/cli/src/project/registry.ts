@@ -262,7 +262,13 @@ const SVELTE_HOOKS_OVERRIDE_BLOCK = [
 ].join('\n')
 
 function svelteConfigHasHooksOverride(contents: string): boolean {
-  return contents.includes('.holo-js/generated/hooks')
+  if (contents.includes('.holo-js/generated/hooks')) {
+    return true
+  }
+
+  // Detect any existing kit.files.hooks override so we don't double-patch
+  // configs that already redirect hook entrypoints.
+  return /kit\s*:\s*\{[\s\S]*?files\s*:\s*\{[\s\S]*?hooks\s*:/.test(contents)
 }
 
 function patchSvelteConfigWithHooksOverride(contents: string): string | undefined {

@@ -329,9 +329,9 @@ type StaticModelApi<
     nextCursor: string | null
     prevCursor: string | null
   }>
-  chunk(size: number, callback: (rows: readonly Entity<TTable, TRelations>[], page: number) => unknown | Promise<unknown>): Promise<void>
-  chunkById(size: number, callback: (rows: readonly Entity<TTable, TRelations>[], page: number) => unknown | Promise<unknown>, column?: ModelAttributeKey<TTable>): Promise<void>
-  chunkByIdDesc(size: number, callback: (rows: readonly Entity<TTable, TRelations>[], page: number) => unknown | Promise<unknown>, column?: ModelAttributeKey<TTable>): Promise<void>
+  chunk(size: number, callback: (rows: readonly EntityWithLoaded<TTable, TRelations, unknown>[], page: number) => unknown | Promise<unknown>): Promise<void>
+  chunkById(size: number, callback: (rows: readonly EntityWithLoaded<TTable, TRelations, unknown>[], page: number) => unknown | Promise<unknown>, column?: ModelAttributeKey<TTable>): Promise<void>
+  chunkByIdDesc(size: number, callback: (rows: readonly EntityWithLoaded<TTable, TRelations, unknown>[], page: number) => unknown | Promise<unknown>, column?: ModelAttributeKey<TTable>): Promise<void>
   lazy(size?: number): AsyncGenerator<Entity<TTable, TRelations>, void, unknown>
   cursor(): AsyncGenerator<Entity<TTable, TRelations>, void, unknown>
   count(): Promise<number>
