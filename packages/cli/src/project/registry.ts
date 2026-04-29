@@ -271,9 +271,18 @@ function patchSvelteConfigWithHooksOverride(contents: string): string | undefine
   }
 
   // Try to inject the files.hooks block right after `kit: {` (with possible trailing content on the same line).
+  // Handle both multi-line `kit: {\n...` and single-line `kit: {}` or files without trailing newline.
   const patched = contents.replace(
-    /(kit:\s*\{[^\n]*\n)/,
-    `$1${SVELTE_HOOKS_OVERRIDE_BLOCK}\n`,
+    /(kit:\s*\{)([^\n]*\n?)/,
+    (match, opening: string, rest: string) => {
+      const trimmedRest = rest.trimEnd()
+      // Single-line `kit: {}` — inject before the closing brace
+      if (trimmedRest === '}' || trimmedRest === '},') {
+        const suffix = trimmedRest.endsWith(',') ? ',' : ''
+        return `${opening}\n${SVELTE_HOOKS_OVERRIDE_BLOCK}\n  }${suffix}\n`
+      }
+      return `${opening}${rest}${SVELTE_HOOKS_OVERRIDE_BLOCK}\n`
+    },
   )
 
   return patched !== contents ? patched : undefined
@@ -768,20 +777,7 @@ function renderGeneratedTsconfigForBase(basePath: string): string {
   }, null, 2)}\n`
 }
 
-async function resolveGeneratedTsconfigBase(projectRoot: string): Promise<string> {
-  const frameworkProjectPath = resolve(projectRoot, '.holo-js/framework/project.json')
-  try {
-    const content = await readFile(frameworkProjectPath, 'utf8')
-    const manifest = JSON.parse(content) as { framework?: string }
-
-    if (manifest.framework === 'nuxt') {
-      // For existing Nuxt projects, use root tsconfig.json which extends .nuxt/tsconfig.json
-      return '../../tsconfig.json'
-    }
-  } catch {
-    // Not a framework project
-  }
-
+async function resolveGeneratedTsconfigBase(_projectRoot: string): Promise<string> {
   return '../../tsconfig.json'
 }
 

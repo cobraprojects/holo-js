@@ -3,12 +3,12 @@ type SerializableModel = {
 }
 
 export type SerializeModels<TValue>
-  = TValue extends SerializableModel
-    ? ReturnType<TValue['toJSON']>
-    : TValue extends readonly (infer TItem)[]
-      ? SerializeModels<TItem>[]
-      : TValue extends Date
-        ? Date
+  = TValue extends Date
+    ? Date
+    : TValue extends SerializableModel
+      ? ReturnType<TValue['toJSON']>
+      : TValue extends readonly (infer TItem)[]
+        ? SerializeModels<TItem>[]
         : TValue extends object
           ? { [K in keyof TValue]: SerializeModels<TValue[K]> }
           : TValue

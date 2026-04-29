@@ -272,6 +272,7 @@ export async function getRuntimeEnvironment(projectRoot: string): Promise<Runtim
 export const nodeRuntimeScript = `
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   configureDB,
   createSchemaService,
@@ -396,7 +397,7 @@ try {
 
     const executed = await createMigrationService(manager.connection(), migrations).migrate({})
     await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath)
-    await preloadGeneratedSchema(manager, new URL(payload.generatedSchemaOutputPath, 'file://').href)
+    await preloadGeneratedSchema(manager, pathToFileURL(payload.generatedSchemaOutputPath).href)
     if (executed.length === 0) {
       console.log('No migrations were executed.')
     } else {

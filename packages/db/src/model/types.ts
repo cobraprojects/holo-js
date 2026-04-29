@@ -325,28 +325,28 @@ export interface BelongsToManyRelationMethods<TRelated, TPivot = Record<string, 
  * Converts a RelationDefinition to its corresponding methods type
  */
 export type RelationMethodsOf<TRelation extends RelationDefinition>
-  = TRelation extends BelongsToRelationDefinition
-    ? BelongsToRelationMethods<unknown>
-    : TRelation extends HasOneRelationDefinition
-      ? HasOneRelationMethods<unknown>
-      : TRelation extends HasOneOfManyRelationDefinition
-        ? HasOneRelationMethods<unknown>
-        : TRelation extends HasManyRelationDefinition
-          ? HasManyRelationMethods<unknown>
-          : TRelation extends HasOneThroughRelationDefinition
-            ? HasOneRelationMethods<unknown>
-            : TRelation extends HasManyThroughRelationDefinition
-              ? HasManyRelationMethods<unknown>
-              : TRelation extends BelongsToManyRelationDefinition<ModelDefinitionLike, infer TPivot>
-                ? BelongsToManyRelationMethods<unknown, TPivot>
-                : TRelation extends MorphOneRelationDefinition
-                  ? HasOneRelationMethods<unknown>
-                  : TRelation extends MorphManyRelationDefinition
-                    ? HasManyRelationMethods<unknown>
-                    : TRelation extends MorphToManyRelationDefinition<ModelDefinitionLike, infer TPivot>
-                      ? BelongsToManyRelationMethods<unknown, TPivot>
-                      : TRelation extends MorphedByManyRelationDefinition<ModelDefinitionLike, infer TPivot>
-                        ? BelongsToManyRelationMethods<unknown, TPivot>
+  = TRelation extends BelongsToRelationDefinition<infer TRelated>
+    ? BelongsToRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+    : TRelation extends HasOneRelationDefinition<infer TRelated>
+      ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+      : TRelation extends HasOneOfManyRelationDefinition<infer TRelated>
+        ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+        : TRelation extends HasManyRelationDefinition<infer TRelated>
+          ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+          : TRelation extends HasOneThroughRelationDefinition<infer TRelated>
+            ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+            : TRelation extends HasManyThroughRelationDefinition<infer TRelated>
+              ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+              : TRelation extends BelongsToManyRelationDefinition<infer TRelated>
+                ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>>
+                : TRelation extends MorphOneRelationDefinition<infer TRelated>
+                  ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+                  : TRelation extends MorphManyRelationDefinition<infer TRelated>
+                    ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+                    : TRelation extends MorphToManyRelationDefinition<infer TRelated>
+                      ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>>
+                      : TRelation extends MorphedByManyRelationDefinition<infer TRelated>
+                        ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>>
                         : never
 
 export interface RelationMap {

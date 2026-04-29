@@ -9182,7 +9182,7 @@ throw 'string discovery failure'
     expect(isDiscoveryRelevantPath('config/app.ts', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('.env.local', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('.holo-js/generated/index.ts', project as never)).toBe(false)
-    expect(isDiscoveryRelevantPath('server/db/schema.generated.ts', project as never)).toBe(false)
+    expect(isDiscoveryRelevantPath('server/db/schema.generated.ts', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('server/commands/hello.ts', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('server/jobs/send-email.ts', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('server/events/user-registered.ts', project as never)).toBe(true)
@@ -9257,17 +9257,19 @@ throw 'string discovery failure'
     expect(prepare).toHaveBeenCalledTimes(1)
 
     watchCallback('change', 'server/db/schema.generated.ts')
-    await new Promise(resolve => setTimeout(resolve, 25))
-    expect(prepare).toHaveBeenCalledTimes(1)
+    while (prepare.mock.calls.length < 2) {
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+    expect(prepare).toHaveBeenCalledTimes(2)
 
     watchCallback('change', 'config/app.ts')
-    while (prepare.mock.calls.length < 2) {
+    while (prepare.mock.calls.length < 3) {
       await new Promise(resolve => setTimeout(resolve, 5))
     }
 
     child.emit('close', 0)
     await expect(devPromise).resolves.toBeUndefined()
-    expect(prepare).toHaveBeenCalledTimes(2)
+    expect(prepare).toHaveBeenCalledTimes(3)
   })
 
   it('skips model files whose generated schema has not been materialized yet', async () => {
@@ -9337,6 +9339,9 @@ registerGeneratedTables(tables)
 
     const schemaExists = await readFile(join(projectRoot, 'server/db/schema.generated.ts'), 'utf8')
     expect(schemaExists).toContain('defineGeneratedTable')
+
+    const registryJson = await readFile(join(projectRoot, '.holo-js/generated/registry.json'), 'utf8')
+    expect(registryJson).toContain('server/models/Course.ts')
   })
 
   it('ignores unsupported and nested config entries when generating typed config metadata', async () => {

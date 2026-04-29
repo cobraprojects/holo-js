@@ -163,9 +163,32 @@ async function runNuxtPrepare(projectRoot: string): Promise<void> {
     return
   }
 
+  const manager = await resolveProjectPackageManager(projectRoot)
+  let command: string
+  let args: string[]
+  switch (manager) {
+    case 'npm':
+      command = 'npm'
+      args = ['exec', '--', 'nuxt', 'prepare']
+      break
+    case 'pnpm':
+      command = 'pnpm'
+      args = ['exec', 'nuxt', 'prepare']
+      break
+    case 'yarn':
+      command = 'yarn'
+      args = ['run', 'nuxt', 'prepare']
+      break
+    case 'bun':
+    default:
+      command = 'bun'
+      args = ['x', 'nuxt', 'prepare']
+      break
+  }
+
   const { spawn } = await import('node:child_process')
   await new Promise((resolve, reject) => {
-    const child = spawn('nuxi', ['prepare'], {
+    const child = spawn(command, args, {
       cwd: projectRoot,
       stdio: 'inherit',
     })
@@ -173,7 +196,7 @@ async function runNuxtPrepare(projectRoot: string): Promise<void> {
       if (code === 0) {
         resolve(undefined)
       } else {
-        reject(new Error(`nuxi prepare exited with ${code}`))
+        reject(new Error(`nuxt prepare exited with ${code}`))
       }
     })
     child.on('error', reject)
@@ -193,9 +216,32 @@ async function runSvelteKitSync(projectRoot: string): Promise<void> {
     return
   }
 
+  const manager = await resolveProjectPackageManager(projectRoot)
+  let command: string
+  let args: string[]
+  switch (manager) {
+    case 'npm':
+      command = 'npm'
+      args = ['exec', '--', 'svelte-kit', 'sync']
+      break
+    case 'pnpm':
+      command = 'pnpm'
+      args = ['exec', 'svelte-kit', 'sync']
+      break
+    case 'yarn':
+      command = 'yarn'
+      args = ['run', 'svelte-kit', 'sync']
+      break
+    case 'bun':
+    default:
+      command = 'bun'
+      args = ['x', 'svelte-kit', 'sync']
+      break
+  }
+
   const { spawn } = await import('node:child_process')
   await new Promise((resolve, reject) => {
-    const child = spawn('bun', ['x', 'svelte-kit', 'sync'], {
+    const child = spawn(command, args, {
       cwd: projectRoot,
       stdio: 'inherit',
     })
@@ -221,6 +267,11 @@ export function isDiscoveryRelevantPath(
   const normalized = toPosixSlashes(filePath)
   if (normalized === '.holo-js/generated' || normalized.startsWith('.holo-js/generated/')) {
     return false
+  }
+
+  const generatedSchemaPath = toPosixSlashes(project.config.paths.generatedSchema ?? 'server/db/schema.generated.ts')
+  if (normalized === generatedSchemaPath) {
+    return true
   }
 
   const authorizationPoliciesPath = project.config.paths.authorizationPolicies || 'server/policies'

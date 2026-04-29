@@ -50,14 +50,20 @@ async function preloadGeneratedSchemaModule(
     return
   }
 
+  const expectedTarget = pathToFileURL(resolve(projectRoot, entry)).href
   try {
-    await import(pathToFileURL(resolve(projectRoot, entry)).href)
+    await import(expectedTarget)
   } catch (error) {
     if (
       error instanceof Error
       && /Cannot find module|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Failed to load url/.test(error.message)
     ) {
-      return
+      const message = error.message
+      const failedTarget = message.match(/Cannot find module '([^']+)'|Cannot find package '([^']+)'|Failed to load url ([^ ]+)/)?.slice(1)
+        .find((value): value is string => typeof value === 'string')
+      if (failedTarget === expectedTarget || failedTarget === resolve(projectRoot, entry)) {
+        return
+      }
     }
 
     throw error

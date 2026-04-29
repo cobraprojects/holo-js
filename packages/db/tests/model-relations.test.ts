@@ -969,30 +969,32 @@ describe('model relation slice', () => {
     clearGeneratedTables()
     registerGeneratedTables({ posts, tags, post_tags: postTags })
 
-    const Tag = defineModel('tags')
-    const Post = defineModel('posts', {
-      fillable: ['title', 'slug', 'excerpt', 'body', 'status', 'published_at', 'user_id', 'category_id'],
-      relations: {
-        tags: belongsToMany(() => Tag, {
-          pivotTable: 'post_tags',
-          foreignPivotKey: 'post_id',
-          relatedPivotKey: 'tag_id',
-        }),
-      },
-    })
+    try {
+      const Tag = defineModel('tags')
+      const Post = defineModel('posts', {
+        fillable: ['title', 'slug', 'excerpt', 'body', 'status', 'published_at', 'user_id', 'category_id'],
+        relations: {
+          tags: belongsToMany(() => Tag, {
+            pivotTable: 'post_tags',
+            foreignPivotKey: 'post_id',
+            relatedPivotKey: 'tag_id',
+          }),
+        },
+      })
 
-    const post = await Post.findOrFail(1)
-    const postDynamic = post as typeof post & { tags: () => { attach: (ids: unknown) => Promise<void>, sync: (ids: unknown) => Promise<{ attached: unknown[], detached: unknown[], updated: unknown[] }>, detach: (ids?: unknown) => Promise<number> } }
+      const post = await Post.findOrFail(1)
+      const postDynamic = post as typeof post & { tags: () => { attach: (ids: unknown) => Promise<void>, sync: (ids: unknown) => Promise<{ attached: unknown[], detached: unknown[], updated: unknown[] }>, detach: (ids?: unknown) => Promise<number> } }
 
-    await postDynamic.tags().attach([10, 11])
-    expect(adapter.tables.post_tags).toHaveLength(2)
-    expect(adapter.tables.post_tags).toContainEqual(expect.objectContaining({ post_id: 1, tag_id: 10 }))
-    expect(adapter.tables.post_tags).toContainEqual(expect.objectContaining({ post_id: 1, tag_id: 11 }))
+      await postDynamic.tags().attach([10, 11])
+      expect(adapter.tables.post_tags).toHaveLength(2)
+      expect(adapter.tables.post_tags).toContainEqual(expect.objectContaining({ post_id: 1, tag_id: 10 }))
+      expect(adapter.tables.post_tags).toContainEqual(expect.objectContaining({ post_id: 1, tag_id: 11 }))
 
-    const syncResult = await postDynamic.tags().sync([11])
-    expect(syncResult.detached).toContain(10)
-
-    clearGeneratedTables()
+      const syncResult = await postDynamic.tags().sync([11])
+      expect(syncResult.detached).toContain(10)
+    } finally {
+      clearGeneratedTables()
+    }
   })
 
   it('supports relation persistence helpers for belongsTo, hasMany, hasOne, and morphMany relations', async () => {

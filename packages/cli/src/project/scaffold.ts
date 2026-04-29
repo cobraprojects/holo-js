@@ -2839,11 +2839,16 @@ function renderVSCodeSettings(options: Pick<ProjectScaffoldOptions, 'framework'>
     return undefined
   }
 
-  return `${JSON.stringify({
+  const settings: Record<string, unknown> = {
     'typescript.tsdk': 'node_modules/typescript/lib',
     'typescript.enablePromptUseWorkspaceTsdk': true,
-    'vue.server.hybridMode': true,
-  }, null, 2)}\n`
+  }
+
+  if (options.framework === 'nuxt') {
+    settings['vue.server.hybridMode'] = true
+  }
+
+  return `${JSON.stringify(settings, null, 2)}\n`
 }
 
 function renderNuxtAppVue(projectName: string): string {
@@ -3409,7 +3414,7 @@ function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'framework'
     '})',
     '',
     'child.on(\'close\', (code) => {',
-    '  process.exit(code ?? 0)',
+    '  process.exit(code ?? 1)',
     '})',
     '',
   ].join('\n')

@@ -401,17 +401,26 @@ class EntityBase<
     }
 
     if (relationDef.kind === 'belongsTo') {
+      const repo = this.getRepositoryRuntime()
       return {
         associate: (related: unknown) => {
-          this.setRelation(name, related)
+          if (typeof repo.associateRelation === 'function') {
+            repo.associateRelation(this, name, related as Entity<TableDefinition> | null)
+          } else {
+            this.setRelation(name, related)
+          }
         },
         dissociate: () => {
-          this.setRelation(name, null)
+          if (typeof repo.dissociateRelation === 'function') {
+            repo.dissociateRelation(this, name)
+          } else {
+            this.setRelation(name, null)
+          }
         },
       } as unknown as RelationMethodsOf<TRelations[K]>
     }
 
-    if (relationDef.kind === 'hasOne' || relationDef.kind === 'hasOneThrough') {
+    if (relationDef.kind === 'hasOne' || relationDef.kind === 'hasOneThrough' || relationDef.kind === 'morphOne') {
       return {
         create: async (values: Record<string, unknown>) => {
           return this.createRelated(name, values)
@@ -422,7 +431,7 @@ class EntityBase<
       } as unknown as RelationMethodsOf<TRelations[K]>
     }
 
-    if (relationDef.kind === 'hasMany' || relationDef.kind === 'hasManyThrough') {
+    if (relationDef.kind === 'hasMany' || relationDef.kind === 'hasManyThrough' || relationDef.kind === 'morphMany') {
       return {
         create: async (values: Record<string, unknown>) => {
           return this.createRelated(name, values)

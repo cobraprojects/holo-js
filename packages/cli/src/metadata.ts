@@ -1,7 +1,7 @@
 import packageJson from '../package.json' with { type: 'json' }
 
 export const HOLO_PACKAGE_VERSION = packageJson.version
-export const ESBUILD_PACKAGE_VERSION = '^0.25.0'
+export const ESBUILD_PACKAGE_VERSION = '^0.27.4'
 const HOLO_PACKAGE_RANGE = `^${HOLO_PACKAGE_VERSION}`
 
 export const SCAFFOLD_PACKAGE_MANAGER_VERSIONS = Object.freeze({
@@ -12,7 +12,7 @@ export const SCAFFOLD_PACKAGE_MANAGER_VERSIONS = Object.freeze({
 } as const)
 
 export const SCAFFOLD_FRAMEWORK_VERSIONS = Object.freeze({
-  nuxt: 'latest',
+  nuxt: '^3.17.0',
   next: '^16.0.0',
   sveltekit: '^2.0.0',
 } as const)

@@ -365,7 +365,7 @@ type StaticModelApi<
   upsert(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
   firstOrNew(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
   firstOrCreate(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>
-  saveMany(entities: readonly Entity<TTable, TRelations>[]): Promise<ModelCollection<TTable, TRelations>>
+  saveMany(entities: readonly EntityWithLoaded<TTable, TRelations, unknown>[]): Promise<ModelCollection<TTable, TRelations>>
   resolveRelationUsing(name: string, resolver: DynamicRelationResolver): StaticModelApi<TTable, TScopes, TRelations>
   make(values?: Partial<ModelRecord<TTable>>): Entity<TTable, TRelations>
   getRepository(): ModelRepository<TTable>
@@ -1151,7 +1151,7 @@ function createStaticModelApi<
     firstOrCreate(match: Partial<ModelRecord<TTable>>, values: Partial<ModelRecord<TTable>> = {}) {
       return this.getRepository().firstOrCreate(match, values)
     },
-    saveMany(entities: readonly Entity<TTable, TRelations>[]) {
+    saveMany(entities: readonly EntityWithLoaded<TTable, TRelations, unknown>[]) {
       return this.getRepository().saveMany(entities)
     },
     resolveRelationUsing(name: string, resolver: DynamicRelationResolver) {

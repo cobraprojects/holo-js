@@ -83,7 +83,7 @@ export function relativeImportPath(fromFile: string, toFile: string): string {
 
 export function renderModelTemplate(options: {
   tableName: string
-  generatedSchemaImportPath: string
+  generatedSchemaImportPath?: string
   observerImportPath?: string
   observerClassName?: string
 }): string {
