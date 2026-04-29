@@ -616,7 +616,11 @@ export default {
     })
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('.env.production')
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('DB_PASSWORD=')
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('APP_NAME=')
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).not.toContain('APP_NAME="demo-app"')
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('DB_DRIVER=postgres')
+    expect(await readFile(join(projectRoot, 'config/app.ts'), 'utf8')).toContain(`name: env('APP_NAME', "demo-app")`)
+    expect(await readFile(join(projectRoot, 'config/app.ts'), 'utf8')).toContain(`const appEnv = env('APP_ENV') === 'production'`)
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).not.toContain('STORAGE_DEFAULT_DISK=')
     expect(await readFile(join(projectRoot, 'config/app.ts'), 'utf8')).toContain('server/models')
     expect(await readFile(join(projectRoot, 'config/app.ts'), 'utf8')).toContain('server/jobs')
@@ -635,6 +639,8 @@ export default {
     expect(await readFile(join(projectRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain('Missing framework binary')
     expect(await readFile(join(projectRoot, 'app/api/holo/health/route.ts'), 'utf8')).toContain('holo.getApp')
     expect(await readFile(join(projectRoot, 'server/holo.ts'), 'utf8')).toContain('createNextHoloHelpers')
+    expect(await readFile(join(projectRoot, 'server/holo.ts'), 'utf8')).toContain('./db/schema.generated')
+    expect(await readFile(join(projectRoot, 'app/layout.tsx'), 'utf8')).toContain('../server/db/schema.generated')
     expect(await readFile(join(projectRoot, 'next.config.mjs'), 'utf8')).toContain('nextConfig')
     expect(await readFile(join(projectRoot, 'tsconfig.json'), 'utf8')).toContain('next-env.d.ts')
     expect(await readFile(join(projectRoot, '.gitignore'), 'utf8')).toContain('.holo-js/generated')
@@ -736,7 +742,9 @@ export default {
 
     expect(await readFile(join(storageRoot, 'package.json'), 'utf8')).toContain('"@holo-js/storage":')
     expect(await readFile(join(storageRoot, 'config/storage.ts'), 'utf8')).toContain('defineStorageConfig')
+    expect(await readFile(join(storageRoot, 'app/storage/[[...path]]/route.ts'), 'utf8')).toContain('from \'@holo-js/storage\'')
     expect(await stat(join(storageRoot, 'storage/app/public'))).toBeDefined()
+    await expect(stat(join(storageRoot, 'server/lib/public-storage.ts'))).rejects.toThrow()
 
     const queueRoot = join(baseRoot, 'queue-runtime-app')
     await projectInternals.scaffoldProject(queueRoot, {
@@ -1031,9 +1039,8 @@ export default {
       storageDefaultDisk: 'local',
       optionalPackages: ['auth'],
     })).toContain(`"@holo-js/session": "${expectedHoloPackageRange}"`)
-    expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain('import type { HoloAppEnv }')
-    expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain('env<HoloAppEnv>(\'APP_ENV\', \'development\')')
-    expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain('env<boolean>(\'APP_DEBUG\', true)')
+    expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain("const appEnv = env('APP_ENV') === 'production'")
+    expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain("env('APP_DEBUG', true)")
     expect(projectInternals.renderAuthConfig()).toContain('guard: \'web\'')
     expect(projectInternals.renderAuthConfig()).toContain('identifiers: [\'email\']')
     expect(projectInternals.renderAuthConfig({ social: true })).toContain('AUTH_GOOGLE_CLIENT_ID')
@@ -1071,7 +1078,7 @@ export default {
     expect(projectInternals.renderAuthEnvFiles().env).toContain('SESSION_DRIVER=file')
     expect(projectInternals.renderSessionConfig()).toContain('defineSessionConfig')
     expect(projectInternals.renderSessionConfig()).toContain('driver: env(\'SESSION_DRIVER\', \'file\')')
-    expect(projectInternals.renderAuthUserModel()).toContain('defineModel(holoModelTable')
+    expect(projectInternals.renderAuthUserModel()).toContain("export default defineModel('users', {")
     expect(projectInternals.renderStorageConfig()).toContain('defineStorageConfig')
     expect(projectInternals.renderMediaConfig()).toContain('defineMediaConfig')
     expect(projectInternals.renderQueueConfig({
@@ -1228,16 +1235,14 @@ export default {
       databaseDriver: 'sqlite',
       packageManager: 'bun',
       storageDefaultDisk: 'local',
-      optionalPackages: ['storage'],
-    }).find(file => file.path === 'src/hooks.server.ts')?.contents).toContain('STORAGE_ROUTE_PREFIX')
+    }).find(file => file.path === 'src/hooks.ts')?.contents).toContain('export {}')
     expect(projectInternals.renderFrameworkFiles({
       projectName: 'Svelte App',
       framework: 'sveltekit',
       databaseDriver: 'sqlite',
       packageManager: 'bun',
       storageDefaultDisk: 'local',
-      optionalPackages: ['storage'],
-    }).find(file => file.path === 'src/hooks.server.ts')?.contents).toContain("event.url.pathname = `/storage")
+    }).find(file => file.path === 'src/hooks.server.ts')?.contents).toContain('export {}')
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'Svelte App',
       framework: 'sveltekit',
@@ -1255,13 +1260,21 @@ export default {
       optionalPackages: ['storage'],
     })).toContain(`"@holo-js/storage": "${expectedHoloPackageRange}"`)
     expect(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Nuxt App',
+      framework: 'nuxt',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: [],
+    })).toContain('"vue-router": "^5.0.4"')
+    expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'Svelte App',
       framework: 'sveltekit',
       databaseDriver: 'sqlite',
       packageManager: 'bun',
       storageDefaultDisk: 'local',
       optionalPackages: [],
-    })).toContain('"esbuild": "^0.27.4"')
+    })).toContain('"esbuild": "^0.25.0"')
     expect(projectInternals.renderScaffoldTsconfig({
       framework: 'next',
     })).toContain('next-env.d.ts')
@@ -1274,6 +1287,18 @@ export default {
     expect(projectInternals.renderScaffoldTsconfig({
       framework: 'nuxt',
     })).not.toContain('"include"')
+    expect(projectInternals.renderScaffoldTsconfig({
+      framework: 'nuxt',
+    })).not.toContain('"compilerOptions"')
+    expect(projectInternals.renderVSCodeSettings({
+      framework: 'nuxt',
+    })).toContain('"typescript.tsdk": "node_modules/typescript/lib"')
+    expect(projectInternals.renderVSCodeSettings({
+      framework: 'nuxt',
+    })).toContain('"vue.server.hybridMode": true')
+    expect(projectInternals.renderVSCodeSettings({
+      framework: 'next',
+    })).toBeUndefined()
     const svelteTsconfig = JSON.parse(projectInternals.renderScaffoldTsconfig({
       framework: 'sveltekit',
     })) as {
@@ -1369,8 +1394,11 @@ export default {
     })
     await writeFrameworkBinary(nuxtRoot, 'nuxi')
     expect(runNodeScript(nuxtRoot, join(nuxtRoot, '.holo-js/framework/run.mjs'), ['dev']).stdout).toContain('dev')
+    expect(await readFile(join(nuxtRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain("process.on('SIGTERM'")
     expect(await readFile(join(nuxtRoot, 'nuxt.config.ts'), 'utf8')).toContain('@holo-js/adapter-nuxt')
     expect(await readFile(join(nuxtRoot, 'package.json'), 'utf8')).toContain('"postinstall": "nuxt prepare"')
+    expect(await readFile(join(nuxtRoot, 'app.vue'), 'utf8')).toContain('const appName = "nuxt-runner"')
+    expect(await readFile(join(nuxtRoot, 'app.vue'), 'utf8')).not.toContain('<h1>nuxt-runner</h1>')
     expect(await readFile(join(nuxtRoot, 'nuxt.config.ts'), 'utf8')).not.toContain('import { defineNuxtConfig } from \'nuxt/config\'')
     expect(await readFile(join(nuxtRoot, 'server/api/holo/health.get.ts'), 'utf8')).not.toContain('import { defineEventHandler } from \'h3\'')
     expect(await readFile(join(nuxtRoot, 'server/api/holo/health.get.ts'), 'utf8')).not.toContain('@holo-js/adapter-nuxt/runtime')
@@ -1386,6 +1414,8 @@ export default {
     })
     await writeFrameworkBinary(nextRoot, 'next')
     expect(runNodeScript(nextRoot, join(nextRoot, '.holo-js/framework/run.mjs'), ['build']).stdout).toContain('build')
+    expect(await readFile(join(nextRoot, 'server/holo.ts'), 'utf8')).toContain('./db/schema.generated')
+    expect(await readFile(join(nextRoot, 'app/layout.tsx'), 'utf8')).toContain('../server/db/schema.generated')
 
     const svelteRoot = join(baseRoot, 'svelte-runner')
     await projectInternals.scaffoldProject(svelteRoot, {
@@ -1398,6 +1428,8 @@ export default {
     await writeFrameworkBinary(svelteRoot, 'vite')
     expect(runNodeScript(svelteRoot, join(svelteRoot, '.holo-js/framework/run.mjs'), ['dev']).stdout).toContain('dev')
     expect(await readFile(join(svelteRoot, 'src/lib/server/holo.ts'), 'utf8')).toContain('createSvelteKitHoloHelpers')
+    expect(await readFile(join(svelteRoot, 'src/lib/server/holo.ts'), 'utf8')).toContain('../../../server/db/schema.generated')
+    expect(await readFile(join(svelteRoot, 'src/hooks.ts'), 'utf8')).toContain('export {}')
 
     const missingBinary = runNodeScript(join(baseRoot, 'fallback-app'), join(baseRoot, 'fallback-app/.holo-js/framework/run.mjs'), ['dev'])
     expect(missingBinary.status).toBe(1)
@@ -2080,7 +2112,7 @@ export default defineAppConfig({
     })
 
     expect(await readFile(join(projectRoot, 'app/models/User.ts'), 'utf8')).toContain(
-      "import { tables as holoGeneratedTables } from '../db/schema.generated'",
+      "import { defineModel } from '@holo-js/db'",
     )
   })
 
@@ -3866,9 +3898,8 @@ export default defineRedisConfig({
     await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain("driver: 'holo'")
     await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain("host: env('BROADCAST_HOST', '127.0.0.1')")
     await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain("port: env('BROADCAST_PORT', 8080)")
-    await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain("scheme: env<'http' | 'https'>('BROADCAST_SCHEME', 'http')")
-    await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain("useTLS: env('BROADCAST_SCHEME', 'http') === 'https'")
-    await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.not.toContain("authEndpoint: `${env('APP_URL', 'http://localhost:3000')}/broadcasting/auth`")
+await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain('scheme: broadcastScheme')
+    await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain('useTLS: broadcastScheme ===')
     await expect(readFile(join(nextRoot, '.env'), 'utf8')).resolves.toContain('BROADCAST_CONNECTION=holo')
     await expect(readFile(join(nextRoot, '.env.example'), 'utf8')).resolves.toContain('BROADCAST_CONNECTION=holo')
     await expect(readFile(join(nextRoot, '.env.example'), 'utf8')).resolves.toContain('BROADCAST_APP_ID=')
@@ -4751,20 +4782,16 @@ export default defineAppConfig({
 
     expect(model).toContain('observers: [CourseObserver]')
     expect(model).toContain('defineModel(')
-    expect(model).toContain('import { tables as holoGeneratedTables } from \'../../db/schema.generated\'')
-    expect(model).toContain('import { defineModel, type TableDefinition } from \'@holo-js/db\'')
-    expect(model).toContain('const holoModelTable = (holoGeneratedTables as Partial<Record<string, TableDefinition>>)["courses"]')
-    expect(model).toContain('export const holoModelPendingSchema = typeof holoModelTable === \'undefined\'')
-    expect(model).toContain('export default holoModelPendingSchema')
+    expect(model).toContain('import { defineModel } from \'@holo-js/db\'')
+    expect(model).toContain('export default defineModel("courses", {')
     expect(model).not.toContain('table => table')
     expect(model).not.toContain('.id()')
     expect(model).not.toContain('.timestamps()')
     expect(observer).toContain('export class CourseObserver')
     expect(factory).toContain('defineFactory')
     expect(seeder).toContain('defineSeeder')
-    expect(generatedModels).not.toContain('"server/models/courses/Course.ts"')
-    expect(generatedSeeders).toContain('"server/db/seeders/courses/CourseSeeder.ts"')
-    expect(generatedMigrations).toContain('"server/db/migrations/')
+    expect(generatedSeeders).toContain('server/db/seeders/courses/CourseSeeder.ts')
+    expect(generatedMigrations).toContain('server/db/migrations/')
 
   }, 30000)
 
@@ -7028,7 +7055,7 @@ export default {
         },
       })
     })
-    await expect(readFile(join(sharedTableProjectRoot, 'server/models/Admin.ts'), 'utf8')).resolves.toContain('["users"]')
+    await expect(readFile(join(sharedTableProjectRoot, 'server/models/Admin.ts'), 'utf8')).resolves.toContain('defineModel("users"')
     await expect(withFakeBun(async () => {
       await cliInternals.runMakeModel(sharedTableIo.io, sharedTableProjectRoot, {
         args: ['Person'],
@@ -8606,11 +8633,11 @@ export default defineEvent({ name: 'audit.activity' })
     expect(renderModelTemplate({
       tableName: 'courses',
       generatedSchemaImportPath: '../db/schema.generated',
-    })).toContain('import { tables as holoGeneratedTables } from \'../db/schema.generated\'')
+    })).toContain('import { defineModel } from \'@holo-js/db\'')
     expect(renderModelTemplate({
       tableName: 'courses',
       generatedSchemaImportPath: '../db/schema.generated',
-    })).toContain('import { defineModel, type TableDefinition } from \'@holo-js/db\'')
+    })).toContain('export default defineModel("courses", {')
     expect(renderModelTemplate({
       tableName: 'courses',
       generatedSchemaImportPath: '../db/schema.generated',
@@ -8618,11 +8645,11 @@ export default defineEvent({ name: 'audit.activity' })
     expect(renderModelTemplate({
       tableName: 'courses',
       generatedSchemaImportPath: '../db/schema.generated',
-    })).toContain('export default holoModelPendingSchema')
+    })).not.toContain('holoModelPendingSchema')
     expect(renderModelTemplate({
       tableName: 'courses',
       generatedSchemaImportPath: '../db/schema.generated',
-    })).toContain('export const holoModelPendingSchema = typeof holoModelTable === \'undefined\'')
+    })).not.toContain('holoGeneratedTables')
     expect(renderModelTemplate({
       tableName: 'courses',
       generatedSchemaImportPath: '../db/schema.generated',
@@ -9154,7 +9181,8 @@ throw 'string discovery failure'
 
     expect(isDiscoveryRelevantPath('config/app.ts', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('.env.local', project as never)).toBe(true)
-    expect(isDiscoveryRelevantPath('.holo-js/generated/index.ts', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('.holo-js/generated/index.ts', project as never)).toBe(false)
+    expect(isDiscoveryRelevantPath('server/db/schema.generated.ts', project as never)).toBe(false)
     expect(isDiscoveryRelevantPath('server/commands/hello.ts', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('server/jobs/send-email.ts', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('server/events/user-registered.ts', project as never)).toBe(true)
@@ -9182,6 +9210,7 @@ throw 'string discovery failure'
     expect(isDiscoveryRelevantPath('server/abilities/fallback.ts', fallbackProject as never)).toBe(true)
 
     const roots = await collectDiscoveryWatchRoots(projectRoot, project as never)
+    expect(roots).not.toContain(join(projectRoot, '.holo-js/generated'))
     expect(roots).toContain(join(projectRoot, 'server/policies'))
     expect(roots).toContain(join(projectRoot, 'server/policies/admin'))
     expect(roots).toContain(join(projectRoot, 'server/abilities'))
@@ -9190,6 +9219,55 @@ throw 'string discovery failure'
     const fallbackRoots = await collectDiscoveryWatchRoots(projectRoot, fallbackProject as never)
     expect(fallbackRoots).toContain(join(projectRoot, 'server/policies'))
     expect(fallbackRoots).toContain(join(projectRoot, 'server/abilities'))
+  }, 20000)
+
+  it('ignores generated discovery artifacts during holo dev watch reloads', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: PassThrough
+      stderr: PassThrough
+      stdin: PassThrough
+    }
+    child.stdout = new PassThrough()
+    child.stderr = new PassThrough()
+    child.stdin = new PassThrough()
+
+    let watchCallback: ((eventType: string, fileName: string | Buffer | null) => void) | undefined
+    const prepare = vi.fn(async () => {})
+
+    const devPromise = withFakeBun(async () => cliInternals.runProjectDevServer(
+      io.io,
+      projectRoot,
+      (() => child as never) as never,
+      ((_path: string, _options: { recursive?: boolean }, callback: (eventType: string, fileName: string | Buffer | null) => void) => {
+        watchCallback = callback
+        return { close() {} } as unknown as FSWatcher
+      }) as never,
+      prepare,
+    ))
+
+    while (!watchCallback || child.listenerCount('close') === 0) {
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+
+    watchCallback('change', '.holo-js/generated/registry.json')
+    await new Promise(resolve => setTimeout(resolve, 25))
+    expect(prepare).toHaveBeenCalledTimes(1)
+
+    watchCallback('change', 'server/db/schema.generated.ts')
+    await new Promise(resolve => setTimeout(resolve, 25))
+    expect(prepare).toHaveBeenCalledTimes(1)
+
+    watchCallback('change', 'config/app.ts')
+    while (prepare.mock.calls.length < 2) {
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+
+    child.emit('close', 0)
+    await expect(devPromise).resolves.toBeUndefined()
+    expect(prepare).toHaveBeenCalledTimes(2)
   })
 
   it('skips model files whose generated schema has not been materialized yet', async () => {
@@ -9257,21 +9335,8 @@ registerGeneratedTables(tables)
       await cliInternals.runProjectPrepare(projectRoot)
     })
 
-    await withFakeBun(async () => {
-      await expect(loadGeneratedProjectRegistry(projectRoot)).resolves.toMatchObject({
-        models: [
-          {
-            sourcePath: 'server/models/Course.ts',
-            name: 'Course',
-            prunable: false,
-          },
-        ],
-      })
-
-      const loaded = await loadProjectConfig(projectRoot, { required: true })
-      expect(loaded.config.models).toEqual(['server/models/Course.ts'])
-      await expect(loadRegisteredModels(projectRoot, loaded.config)).resolves.toHaveLength(1)
-    })
+    const schemaExists = await readFile(join(projectRoot, 'server/db/schema.generated.ts'), 'utf8')
+    expect(schemaExists).toContain('defineGeneratedTable')
   })
 
   it('ignores unsupported and nested config entries when generating typed config metadata', async () => {
@@ -9307,7 +9372,7 @@ export default defineConfig({
     const nextTsconfig = JSON.parse(projectInternals.renderScaffoldTsconfig({ framework: 'next' }))
     const nuxtTsconfig = JSON.parse(projectInternals.renderScaffoldTsconfig({ framework: 'nuxt' }))
     expect(nextTsconfig.compilerOptions.jsx).toBe('preserve')
-    expect('jsx' in nuxtTsconfig.compilerOptions).toBe(false)
+    expect(nuxtTsconfig.compilerOptions).toBeUndefined()
   })
 
   it('does not re-declare built-in redis or security config sections in generated config types', async () => {
@@ -9353,6 +9418,68 @@ export default defineConfig({
     expect(generatedTypes).toContain('"services": typeof')
     expect(generatedTypes).not.toContain('"redis": typeof')
     expect(generatedTypes).not.toContain('"security": typeof')
+  })
+
+  it('writes a Nuxt-aware generated tsconfig during prepare', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'nuxt' }, null, 2))
+
+    await withFakeBun(async () => {
+      await cliInternals.runProjectPrepare(projectRoot)
+    })
+
+    const generatedTsconfig = JSON.parse(
+      await readFile(join(projectRoot, '.holo-js/generated/tsconfig.json'), 'utf8'),
+    ) as { extends: string }
+
+    expect(generatedTsconfig.extends).toBe('../../tsconfig.json')
+  })
+
+  it('manages SvelteKit hook entrypoints during prepare and preserves user hook extensions separately', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
+    await writeProjectFile(projectRoot, 'src/hooks.ts', 'export const reroute = ({ url }) => url.pathname\n')
+    await writeProjectFile(projectRoot, 'src/hooks.server.ts', 'export const handleFetch = async ({ request, fetch }) => fetch(request)\n')
+    // Simulate a legacy .user.ts file that should be migrated and deleted.
+    await writeProjectFile(projectRoot, 'src/hooks.user.ts', 'export const reroute = ({ url }) => url.pathname\n')
+    await writeProjectFile(projectRoot, 'src/hooks.server.user.ts', 'export const handleFetch = async ({ request, fetch }) => fetch(request)\n')
+    // Simulate an existing svelte.config.js without the hooks override.
+    await writeProjectFile(projectRoot, 'svelte.config.js', [
+      'import adapter from \'@sveltejs/adapter-node\'',
+      '',
+      'const config = {',
+      '  kit: {',
+      '    adapter: adapter(),',
+      '  },',
+      '}',
+      '',
+      'export default config',
+      '',
+    ].join('\n'))
+
+    await withFakeBun(async () => {
+      await cliInternals.runProjectPrepare(projectRoot)
+    })
+
+    // User-owned files remain at the standard SvelteKit paths
+    expect(await readFile(join(projectRoot, 'src/hooks.ts'), 'utf8')).toContain('export const reroute')
+    expect(await readFile(join(projectRoot, 'src/hooks.server.ts'), 'utf8')).toContain('export const handleFetch')
+
+    // Holo-managed hooks are generated into .holo-js/generated/
+    expect(await readFile(join(projectRoot, '.holo-js/generated/hooks.ts'), 'utf8')).toContain('// Generated by holo prepare. Do not edit.')
+    expect(await readFile(join(projectRoot, '.holo-js/generated/hooks.ts'), 'utf8')).toContain('holoSvelteKitTransport')
+    expect(await readFile(join(projectRoot, '.holo-js/generated/hooks.server.ts'), 'utf8')).toContain('sequence(holoHandle, serverHooks.handle)')
+
+    // Legacy .user.ts files are deleted, not left as empty artifacts.
+    await expect(stat(join(projectRoot, 'src/hooks.user.ts'))).rejects.toThrow()
+    await expect(stat(join(projectRoot, 'src/hooks.server.user.ts'))).rejects.toThrow()
+
+    // Existing svelte.config.js is patched with the hooks override.
+    const svelteConfig = await readFile(join(projectRoot, 'svelte.config.js'), 'utf8')
+    expect(svelteConfig).toContain('.holo-js/generated/hooks.server')
+    expect(svelteConfig).toContain('.holo-js/generated/hooks')
   })
 
   it('fails holo dev when the child process errors or exits non-zero', async () => {

@@ -2,7 +2,7 @@
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type { GeneratedSchemaTable } from '../schema/generated'
 import type { InferInsert, InferSelect, InferUpdate, TableDefinition } from '../schema/types'
-import type { Entity } from './Entity'
+import type { Entity, ModelBase, ModelRelationMethods } from './Entity'
 import type { ModelQueryBuilder } from './ModelQueryBuilder'
 import type { ModelCollection } from './collection'
 
@@ -282,6 +282,73 @@ export type RelationDefinition
     | HasOneThroughRelationDefinition
     | HasManyThroughRelationDefinition
 
+/**
+ * Methods available on BelongsTo relations when called as a method (e.g., post.category())
+ */
+export interface BelongsToRelationMethods<TRelated> {
+  associate(related: TRelated | null): void
+  dissociate(): void
+}
+
+/**
+ * Methods available on HasOne/HasOneThrough relations when called as a method
+ */
+export interface HasOneRelationMethods<TRelated> {
+  create(values: Record<string, unknown>): Promise<TRelated>
+  save(related: TRelated): Promise<TRelated>
+}
+
+/**
+ * Methods available on HasMany/HasManyThrough relations when called as a method
+ */
+export interface HasManyRelationMethods<TRelated> {
+  create(values: Record<string, unknown>): Promise<TRelated>
+  createMany(values: readonly Record<string, unknown>[]): Promise<TRelated[]>
+  save(related: TRelated): Promise<TRelated>
+  saveMany(related: readonly TRelated[]): Promise<TRelated[]>
+}
+
+/**
+ * Methods available on BelongsToMany relations when called as a method (e.g., post.tags())
+ */
+export interface BelongsToManyRelationMethods<TRelated, TPivot = Record<string, unknown>> {
+  attach(ids: unknown | readonly unknown[], attributes?: TPivot): Promise<void>
+  detach(ids?: unknown | readonly unknown[]): Promise<number>
+  sync(ids: unknown): Promise<{ attached: unknown[], detached: unknown[], updated: unknown[] }>
+  toggle(ids: unknown): Promise<{ attached: unknown[], detached: unknown[] }>
+  updateExistingPivot(id: unknown, attributes: TPivot): Promise<number>
+  create(values: Record<string, unknown>): Promise<TRelated>
+  save(related: TRelated): Promise<TRelated>
+}
+
+/**
+ * Converts a RelationDefinition to its corresponding methods type
+ */
+export type RelationMethodsOf<TRelation extends RelationDefinition>
+  = TRelation extends BelongsToRelationDefinition
+    ? BelongsToRelationMethods<unknown>
+    : TRelation extends HasOneRelationDefinition
+      ? HasOneRelationMethods<unknown>
+      : TRelation extends HasOneOfManyRelationDefinition
+        ? HasOneRelationMethods<unknown>
+        : TRelation extends HasManyRelationDefinition
+          ? HasManyRelationMethods<unknown>
+          : TRelation extends HasOneThroughRelationDefinition
+            ? HasOneRelationMethods<unknown>
+            : TRelation extends HasManyThroughRelationDefinition
+              ? HasManyRelationMethods<unknown>
+              : TRelation extends BelongsToManyRelationDefinition<ModelDefinitionLike, infer TPivot>
+                ? BelongsToManyRelationMethods<unknown, TPivot>
+                : TRelation extends MorphOneRelationDefinition
+                  ? HasOneRelationMethods<unknown>
+                  : TRelation extends MorphManyRelationDefinition
+                    ? HasManyRelationMethods<unknown>
+                    : TRelation extends MorphToManyRelationDefinition<ModelDefinitionLike, infer TPivot>
+                      ? BelongsToManyRelationMethods<unknown, TPivot>
+                      : TRelation extends MorphedByManyRelationDefinition<ModelDefinitionLike, infer TPivot>
+                        ? BelongsToManyRelationMethods<unknown, TPivot>
+                        : never
+
 export interface RelationMap {
   readonly [key: string]: RelationDefinition
 }
@@ -363,6 +430,13 @@ type IsToManyRelation<TRelation extends RelationDefinition>
 type ResolveRelationEntity<TRelation extends RelationDefinition>
   = Entity<RelatedTableOfRelation<TRelation>, RelatedRelationsOfRelation<TRelation>>
 
+type ResolveNestedRelationEntity<TRelation extends RelationDefinition, TLoaded>
+  = EntityWithLoaded<
+    RelatedTableOfRelation<TRelation>,
+    RelatedRelationsOfRelation<TRelation>,
+    TLoaded
+  >
+
 /**
  * Wraps a base entity type in the correct cardinality for a relation:
  * - to-many  → `TEntity[]`
@@ -396,8 +470,10 @@ export type ResolveEagerLoadPath<TRelations extends RelationMap, TPath extends s
           : {
               readonly [K in TRoot]: WrapRelationCardinality<
                 TRelations[TRoot],
-                ResolveRelationEntity<TRelations[TRoot]>
-                  & ResolveEagerLoadPath<RelatedRelationsOfRelation<TRelations[TRoot]>, TRest>
+                ResolveNestedRelationEntity<
+                  TRelations[TRoot],
+                  ResolveEagerLoadPath<RelatedRelationsOfRelation<TRelations[TRoot]>, TRest>
+                >
               >
             }
         : never
@@ -485,7 +561,9 @@ export type EntityWithLoaded<
   TTable extends TableDefinition,
   TRelations extends RelationMap,
   TLoaded,
-> = Entity<TTable, TRelations> & TLoaded & {
+> = ModelBase<TTable, TRelations>
+  & Omit<ModelRelationMethods<TRelations>, Extract<keyof TLoaded, string>>
+  & TLoaded & {
   toJSON(): SerializedEntityWithLoaded<TTable, TLoaded>
 }
 
@@ -548,7 +626,7 @@ export type ModelDateSerializer = (value: Date) => unknown
 export type ModelCollectionFactory<
   TTable extends TableDefinition = TableDefinition,
   TRelations extends RelationMap = RelationMap,
-> = (items: readonly Entity<TTable, TRelations>[]) => ModelCollection<TTable, TRelations>
+> = <TItem extends Entity<TTable, TRelations>>(items: readonly TItem[]) => ModelCollection<TTable, TRelations, TItem>
 export type ModelPrunableDefinition<
   TTable extends TableDefinition = TableDefinition,
   TRelations extends RelationMap = RelationMap,

@@ -27,6 +27,11 @@ export {
   registryInternals,
   resolveGeneratedProjectRegistryPath,
 } from './portable/registry'
+export type {
+  GeneratedBroadcastManifest,
+  GeneratedBroadcastManifestChannel,
+  GeneratedBroadcastManifestEvent,
+} from './portable/registry'
 export {
   createRuntimeConnectionOptions,
   resolveRuntimeConnectionManagerOptions,

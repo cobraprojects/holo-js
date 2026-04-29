@@ -13,7 +13,14 @@ export type GeneratedSchemaTable<TName extends string>
     ? GeneratedSchemaTables[TName]
     : TableDefinition<TName, TableColumnsShape>
 
-const generatedTables = new Map<string, TableDefinition>()
+const generatedTables = (() => {
+  const runtime = globalThis as typeof globalThis & {
+    __holoGeneratedTables__?: Map<string, TableDefinition>
+  }
+
+  runtime.__holoGeneratedTables__ ??= new Map<string, TableDefinition>()
+  return runtime.__holoGeneratedTables__
+})()
 
 export function registerGeneratedTables<TTables extends Record<string, TableDefinition>>(tables: TTables): TTables {
   for (const table of Object.values(tables)) {

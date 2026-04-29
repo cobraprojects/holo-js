@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createSvelteKitHoloHelpers } from '../src'
+import type { SerializedSvelteKitData } from '../src/transport'
 
 const packageDir = resolve(import.meta.dirname, '..')
 
@@ -59,6 +60,44 @@ describe('@holo-js/adapter-sveltekit typing', () => {
 
     void services
     void secret
+  })
+
+  it('preserves serialized payload inference for transport serialization', async () => {
+    const model = {
+      id: 1,
+      name: 'Amina',
+      toJSON() {
+        return {
+          id: this.id,
+          name: this.name,
+        }
+      },
+    }
+
+    type LoadResult = SerializedSvelteKitData<{
+      user: typeof model
+      users: typeof model[]
+    }>
+    type SerializedValue = SerializedSvelteKitData<typeof model>
+    type UserResult = LoadResult extends { user: infer TResult } ? TResult : never
+    type UsersResult = LoadResult extends { users: readonly (infer TResult)[] } ? TResult : never
+
+    const userResult: UserResult = {
+      id: 1,
+      name: 'Amina',
+    }
+    const usersResult: UsersResult = {
+      id: 1,
+      name: 'Amina',
+    }
+    const serializedValue: SerializedValue = {
+      id: 1,
+      name: 'Amina',
+    }
+
+    void userResult
+    void usersResult
+    void serializedValue
   })
 
   it('publishes a client declaration that type-checks under NodeNext resolution', async () => {

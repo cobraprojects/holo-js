@@ -1935,6 +1935,26 @@ export const mailgun = {
     expect(loaded.loadedFiles.some(file => file.includes('/nested/'))).toBe(false)
   })
 
+  it('uses the fallback when a configured env value is blank', async () => {
+    const root = await createProject()
+
+    await writeFile(join(root, '.env'), 'APP_NAME=   \n', 'utf8')
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig, env } from ${packageEntry}
+
+export default defineAppConfig({
+  name: env('APP_NAME', 'Fallback App'),
+})
+`, 'utf8')
+
+    const loaded = await loadConfigDirectory(root, {
+      processEnv: {},
+      preferCache: false,
+    })
+
+    expect(loaded.app.name).toBe('Fallback App')
+  })
+
   it('prefers the highest-priority config extension and supports named config exports', async () => {
     const root = await createProject()
 

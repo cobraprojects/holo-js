@@ -17,8 +17,10 @@ import type {
   CursorPaginatedResult,
   CursorPaginationOptions,
   PaginatedResult,
+  PaginationMeta,
   PaginationOptions,
   SimplePaginatedResult,
+  SimplePaginationMeta,
 } from '../query/types'
 import type { DriverExecutionResult } from '../core/types'
 import type { InferInsert, TableDefinition } from '../schema/types'
@@ -26,6 +28,7 @@ import type {
   RelationMap,
   DynamicRelationResolver,
   DefineModelOptions,
+  EntityWithLoaded,
   EmptyScopeMap,
   GeneratedSchemaTable,
   ModelCastDefinition,
@@ -45,6 +48,7 @@ import type {
   ModelUpdatePayload,
   RelatedColumnNameForRelationPath,
   ResolveEagerLoads,
+  SerializedEntityWithLoaded,
 } from './types'
 
 type BuilderCallback<TBuilder> = (query: TBuilder) => unknown
@@ -106,6 +110,17 @@ function inferPrimaryKey<TTable extends TableDefinition>(table: TTable): Extract
   }
 
   return primaryKey.name as Extract<keyof TTable['columns'], string>
+}
+
+function resolveGeneratedModelTable(tableName: string): TableDefinition {
+  const table = getGeneratedTableDefinition(tableName)
+  if (!table) {
+    throw new SchemaError(
+      `Model "${tableName}" is not present in the generated schema registry. Import your generated schema module and run "holo migrate" to refresh it.`,
+    )
+  }
+
+  return table
 }
 
 function resolveDeletedAtColumn<TTable extends TableDefinition>(
@@ -250,6 +265,7 @@ type StaticModelApi<
   orWhereFullText(columns: ModelColumnName<TTable> | readonly ModelColumnName<TTable>[], value: string, options?: { mode?: 'natural' | 'boolean' }): ModelQueryBuilder<TTable, TRelations>
   whereVectorSimilarTo(column: ModelColumnName<TTable>, vector: readonly number[], minSimilarity?: number): ModelQueryBuilder<TTable, TRelations>
   orWhereVectorSimilarTo(column: ModelColumnName<TTable>, vector: readonly number[], minSimilarity?: number): ModelQueryBuilder<TTable, TRelations>
+  orderBy(column: ModelColumnName<TTable>, direction?: 'asc' | 'desc'): ModelQueryBuilder<TTable, TRelations>
   latest(column?: ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations>
   oldest(column?: ModelColumnName<TTable>): ModelQueryBuilder<TTable, TRelations>
   inRandomOrder(): ModelQueryBuilder<TTable, TRelations>
@@ -289,15 +305,28 @@ type StaticModelApi<
   find(value: unknown): Promise<Entity<TTable, TRelations> | undefined>
   findMany(values: readonly unknown[]): Promise<ModelCollection<TTable, TRelations>>
   findOrFail(value: unknown): Promise<Entity<TTable, TRelations>>
+  findOrFailJson(value: unknown): Promise<SerializedEntityWithLoaded<TTable, unknown>>
   first(): Promise<Entity<TTable, TRelations> | undefined>
+  firstJson(): Promise<SerializedEntityWithLoaded<TTable, unknown> | undefined>
   firstOrFail(): Promise<Entity<TTable, TRelations>>
   sole(): Promise<Entity<TTable, TRelations>>
+  soleJson(): Promise<SerializedEntityWithLoaded<TTable, unknown>>
   firstWhere(column: ModelColumnName<TTable>, operator: unknown, value?: unknown): Promise<Entity<TTable, TRelations> | undefined>
   get(): Promise<ModelCollection<TTable, TRelations>>
+  getJson(): Promise<SerializedEntityWithLoaded<TTable, unknown>[]>
   all(): Promise<ModelCollection<TTable, TRelations>>
   paginate(perPage?: number, page?: number, options?: PaginationOptions): Promise<PaginatedResult<Entity<TTable, TRelations>> & { data: ModelCollection<TTable, TRelations> }>
+  paginateJson(perPage?: number, page?: number, options?: PaginationOptions): Promise<{ data: readonly SerializedEntityWithLoaded<TTable, unknown>[], meta: PaginationMeta }>
   simplePaginate(perPage?: number, page?: number, options?: PaginationOptions): Promise<SimplePaginatedResult<Entity<TTable, TRelations>> & { data: ModelCollection<TTable, TRelations> }>
+  simplePaginateJson(perPage?: number, page?: number, options?: PaginationOptions): Promise<{ data: readonly SerializedEntityWithLoaded<TTable, unknown>[], meta: SimplePaginationMeta }>
   cursorPaginate(perPage?: number, cursor?: string | null, options?: CursorPaginationOptions): Promise<CursorPaginatedResult<Entity<TTable, TRelations>> & { data: ModelCollection<TTable, TRelations> }>
+  cursorPaginateJson(perPage?: number, cursor?: string | null, options?: CursorPaginationOptions): Promise<{
+    data: readonly SerializedEntityWithLoaded<TTable, unknown>[]
+    perPage: number
+    cursorName: string
+    nextCursor: string | null
+    prevCursor: string | null
+  }>
   chunk(size: number, callback: (rows: readonly Entity<TTable, TRelations>[], page: number) => unknown | Promise<unknown>): Promise<void>
   chunkById(size: number, callback: (rows: readonly Entity<TTable, TRelations>[], page: number) => unknown | Promise<unknown>, column?: ModelAttributeKey<TTable>): Promise<void>
   chunkByIdDesc(size: number, callback: (rows: readonly Entity<TTable, TRelations>[], page: number) => unknown | Promise<unknown>, column?: ModelAttributeKey<TTable>): Promise<void>
@@ -388,14 +417,10 @@ export function defineModel(
     )
   }
 
-  const table = getGeneratedTableDefinition(tableOrName)
-  if (!table) {
-    throw new SchemaError(
-      `Model "${tableOrName}" is not present in the generated schema registry. Import your generated schema module and run "holo migrate" to refresh it.`,
-    )
-  }
-
-  return defineModelFromResolvedTable(table, (builderOrOptions ?? {}) as DefineModelOptions<TableDefinition>)
+  return defineModelFromGeneratedTableName(
+    tableOrName,
+    (builderOrOptions ?? {}) as DefineModelOptions<TableDefinition>,
+  )
 }
 
 export function defineModelFromTable<
@@ -415,6 +440,120 @@ export function defineModelFromTable(
     (options ?? {}) as DefineModelOptions<TableDefinition>,
   )
 }
+
+function defineModelFromGeneratedTableName<
+  TName extends string,
+  TScopes extends ModelScopesDefinition = EmptyScopeMap,
+  TRelations extends RelationMap = RelationMap,
+>(
+  tableName: TName,
+  options: DefineModelOptions<GeneratedSchemaTable<TName>, TScopes, TRelations> = {},
+): StaticModelApi<GeneratedSchemaTable<TName>, TScopes, TRelations> {
+  const resolvedAtDefinition = getGeneratedTableDefinition(tableName) as GeneratedSchemaTable<TName> | undefined
+  const inferredName = options.name ?? inferModelName(tableName)
+  const relations = { ...(options.relations ?? {}) } as TRelations
+  const touches = validateTouches(inferredName, relations, options.touches ?? [])
+
+  const resolveTable = (): GeneratedSchemaTable<TName> => resolveGeneratedModelTable(tableName) as GeneratedSchemaTable<TName>
+  const resolvePrimaryKey = (): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> => (
+    (options.primaryKey ?? inferPrimaryKey(resolveTable())) as Extract<keyof GeneratedSchemaTable<TName>['columns'], string>
+  )
+  const resolveCreatedAtColumn = (): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> | undefined => {
+    const timestamps = options.timestamps ?? true
+    return timestamps
+      ? resolveTimestampColumn(resolveTable(), options.createdAtColumn, 'created_at')
+      : undefined
+  }
+  const resolveUpdatedAtColumn = (): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> | undefined => {
+    const timestamps = options.timestamps ?? true
+    return timestamps
+      ? resolveTimestampColumn(resolveTable(), options.updatedAtColumn, 'updated_at')
+      : undefined
+  }
+  const resolveDeletedAt = (): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> | undefined => (
+    resolveDeletedAtColumn(resolveTable(), options)
+  )
+  const uniqueIdConfig = resolvedAtDefinition
+    ? resolveUniqueIdConfig(
+        options.traits,
+        resolvePrimaryKey(),
+        options.uniqueIds,
+        options.newUniqueId,
+      )
+    : resolveUniqueIdConfig(
+        options.traits,
+        (options.primaryKey ?? 'id') as Extract<keyof GeneratedSchemaTable<TName>['columns'], string>,
+        options.uniqueIds,
+        options.newUniqueId,
+      )
+
+  if (resolvedAtDefinition) {
+    validateUniqueIdConfig(resolvedAtDefinition, inferredName, uniqueIdConfig)
+  }
+
+  const definition = {
+    kind: 'model' as const,
+    name: inferredName,
+    connectionName: options.connectionName,
+    morphClass: options.morphClass ?? inferredName,
+    with: Object.freeze([...(options.with ?? [])]),
+    pendingAttributes: Object.freeze({ ...(options.pendingAttributes ?? {}) }),
+    preventLazyLoading: options.preventLazyLoading ?? false,
+    preventAccessingMissingAttributes: options.preventAccessingMissingAttributes ?? false,
+    automaticEagerLoading: options.automaticEagerLoading ?? false,
+    timestamps: options.timestamps ?? true,
+    fillable: Object.freeze([...(options.fillable ?? [])]),
+    hasExplicitFillable: typeof options.fillable !== 'undefined',
+    guarded: Object.freeze([...(options.guarded ?? [])]),
+    scopes: (options.scopes ?? {}) as TScopes,
+    globalScopes: { ...(options.globalScopes ?? {}) },
+    relations,
+    casts: { ...(options.casts ?? {}) },
+    accessors: { ...(options.accessors ?? {}) },
+    mutators: { ...(options.mutators ?? {}) },
+    hidden: Object.freeze([...(options.hidden ?? [])]),
+    visible: Object.freeze([...(options.visible ?? [])]),
+    appended: Object.freeze([...(options.appended ?? [])]),
+    serializeDate: options.serializeDate,
+    collection: options.collection,
+    prunable: options.prunable,
+    massPrunable: options.massPrunable ?? false,
+    touches,
+    traits: Object.freeze([...(options.traits ?? [])]),
+    uniqueIdConfig,
+    replicationExcludes: Object.freeze([...(options.replicationExcludes ?? [])]),
+    softDeletes: options.softDeletes ?? false,
+    events: normalizeEventHandlers(options.events),
+    observers: Object.freeze([...(options.observers ?? [])]),
+  } as Omit<ModelDefinition<GeneratedSchemaTable<TName>, TScopes, TRelations>, 'table' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn'>
+    & Pick<ModelDefinition<GeneratedSchemaTable<TName>, TScopes, TRelations>, 'table' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn'>
+
+  Object.defineProperties(definition, {
+    table: {
+      enumerable: true,
+      get: resolveTable,
+    },
+    primaryKey: {
+      enumerable: true,
+      get: resolvePrimaryKey,
+    },
+    createdAtColumn: {
+      enumerable: true,
+      get: resolveCreatedAtColumn,
+    },
+    updatedAtColumn: {
+      enumerable: true,
+      get: resolveUpdatedAtColumn,
+    },
+    deletedAtColumn: {
+      enumerable: true,
+      get: resolveDeletedAt,
+    },
+  })
+
+  return createStaticModelApi(Object.freeze(definition) as ModelDefinition<GeneratedSchemaTable<TName>, TScopes, TRelations>)
+}
+
 function defineModelFromResolvedTable<
   TTable extends TableDefinition,
   TScopes extends ModelScopesDefinition = EmptyScopeMap,
@@ -484,6 +623,16 @@ function defineModelFromResolvedTable<
     observers: Object.freeze([...(options.observers ?? [])]),
   })
 
+  return createStaticModelApi(definition)
+}
+
+function createStaticModelApi<
+  TTable extends TableDefinition,
+  TScopes extends ModelScopesDefinition = EmptyScopeMap,
+  TRelations extends RelationMap = RelationMap,
+>(
+  definition: ModelDefinition<TTable, TScopes, TRelations>,
+): StaticModelApi<TTable, TScopes, TRelations> {
   const model: StaticModelApi<TTable, TScopes, TRelations> = {
     definition,
     query() {
@@ -727,6 +876,9 @@ function defineModelFromResolvedTable<
     orWhereVectorSimilarTo(column: ModelColumnName<TTable>, vector: readonly number[], minSimilarity: number = 0) {
       return this.query().orWhereVectorSimilarTo(column, vector, minSimilarity)
     },
+    orderBy(column: ModelColumnName<TTable>, direction: 'asc' | 'desc' = 'asc') {
+      return this.query().orderBy(column, direction)
+    },
     latest(column?: ModelColumnName<TTable>) {
       return this.query().latest(column)
     },
@@ -752,12 +904,15 @@ function defineModelFromResolvedTable<
       return this.query().sharedLock()
     },
     with(
-      first: ModelRelationPath<TRelations> | RelationConstraintMap<TRelations>,
+      first: ModelRelationPath<TRelations> | RelationConstraintMap<TRelations> | readonly ModelRelationPath<TRelations>[],
       second?: ModelRelationPath<TRelations> | RelationConstraintCallback,
       ...rest: readonly ModelRelationPath<TRelations>[]
     ) {
-      if (typeof first !== 'string') {
-        return this.query().with(first)
+      if (Array.isArray(first)) {
+        return this.query().with(first as readonly ModelRelationPath<TRelations>[])
+      }
+      if (typeof first === 'object') {
+        return this.query().with(first as RelationConstraintMap<TRelations>)
       }
       if (typeof second === 'function') {
         return this.query().with(first, second)
@@ -846,8 +1001,14 @@ function defineModelFromResolvedTable<
     findOrFail(value: unknown) {
       return this.getRepository().findOrFail(value)
     },
+    findOrFailJson(value: unknown) {
+      return this.query().findOrFailJson(value)
+    },
     first() {
       return this.getRepository().first()
+    },
+    firstJson() {
+      return this.query().firstJson()
     },
     firstOrFail() {
       return this.getRepository().firstOrFail()
@@ -855,11 +1016,17 @@ function defineModelFromResolvedTable<
     sole() {
       return this.getRepository().sole()
     },
+    soleJson() {
+      return this.query().soleJson()
+    },
     firstWhere(column: ModelColumnName<TTable>, operator: unknown, value?: unknown) {
       return this.getRepository().firstWhere(column, operator, value)
     },
     get() {
       return this.getRepository().get()
+    },
+    getJson() {
+      return this.query().getJson()
     },
     all() {
       return this.getRepository().all()
@@ -867,19 +1034,28 @@ function defineModelFromResolvedTable<
     paginate(perPage: number = 15, page: number = 1, options: PaginationOptions = {}) {
       return this.query().paginate(perPage, page, options)
     },
+    paginateJson(perPage: number = 15, page: number = 1, options: PaginationOptions = {}) {
+      return this.query().paginateJson(perPage, page, options)
+    },
     simplePaginate(perPage: number = 15, page: number = 1, options: PaginationOptions = {}) {
       return this.query().simplePaginate(perPage, page, options)
+    },
+    simplePaginateJson(perPage: number = 15, page: number = 1, options: PaginationOptions = {}) {
+      return this.query().simplePaginateJson(perPage, page, options)
     },
     cursorPaginate(perPage: number = 15, cursor: string | null = null, options: CursorPaginationOptions = {}) {
       return this.query().cursorPaginate(perPage, cursor, options)
     },
-    chunk(size: number, callback: (rows: readonly Entity<TTable>[], page: number) => unknown | Promise<unknown>) {
+    cursorPaginateJson(perPage: number = 15, cursor: string | null = null, options: CursorPaginationOptions = {}) {
+      return this.query().cursorPaginateJson(perPage, cursor, options)
+    },
+    chunk(size: number, callback: (rows: readonly EntityWithLoaded<TTable, TRelations, unknown>[], page: number) => unknown | Promise<unknown>) {
       return this.query().chunk(size, callback)
     },
-    chunkById(size: number, callback: (rows: readonly Entity<TTable>[], page: number) => unknown | Promise<unknown>, column?: ModelAttributeKey<TTable>) {
+    chunkById(size: number, callback: (rows: readonly EntityWithLoaded<TTable, TRelations, unknown>[], page: number) => unknown | Promise<unknown>, column?: ModelAttributeKey<TTable>) {
       return this.query().chunkById(size, callback, column)
     },
-    chunkByIdDesc(size: number, callback: (rows: readonly Entity<TTable>[], page: number) => unknown | Promise<unknown>, column?: ModelAttributeKey<TTable>) {
+    chunkByIdDesc(size: number, callback: (rows: readonly EntityWithLoaded<TTable, TRelations, unknown>[], page: number) => unknown | Promise<unknown>, column?: ModelAttributeKey<TTable>) {
       return this.query().chunkByIdDesc(size, callback, column)
     },
     lazy(size: number = 1000) {
@@ -975,7 +1151,7 @@ function defineModelFromResolvedTable<
     firstOrCreate(match: Partial<ModelRecord<TTable>>, values: Partial<ModelRecord<TTable>> = {}) {
       return this.getRepository().firstOrCreate(match, values)
     },
-    saveMany(entities: readonly Entity<TTable>[]) {
+    saveMany(entities: readonly Entity<TTable, TRelations>[]) {
       return this.getRepository().saveMany(entities)
     },
     resolveRelationUsing(name: string, resolver: DynamicRelationResolver) {

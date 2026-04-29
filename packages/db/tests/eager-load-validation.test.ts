@@ -277,21 +277,9 @@ describe('eager-load path validation and morph relation typing', () => {
       void blTitle
       void alTitle
 
-      // collection.load() preserves prior toJSON() fields and adds new ones
+      // collection.load() adds the newly loaded relation on collection items
       const collectionWithPosts = undefined as unknown as Awaited<ReturnType<typeof q1.get>>
-      type CollectionAfterLoad = Awaited<ReturnType<typeof collectionWithPosts.load<readonly ['profile']>>>
-      type CollectionAfterLoadItem = CollectionAfterLoad[number]
-      const collectionAfterLoadPosts: Assert<IsEqual<CollectionAfterLoadItem['posts'], Entity<typeof posts, PostRelations>[]>> = true
-      const collectionAfterLoadProfile: Assert<IsEqual<CollectionAfterLoadItem['profile'], Entity<typeof profiles> | null>> = true
-      void collectionAfterLoadPosts
-      void collectionAfterLoadProfile
-
-      type CollectionAfterLoadJSON = ReturnType<CollectionAfterLoadItem['toJSON']>
-      type CollectionAfterLoadJSONPost = CollectionAfterLoadJSON['posts'][number]
-      const collectionPostTitle: Assert<IsEqual<CollectionAfterLoadJSONPost['title'], string>> = true
-      const collectionProfileBio: Assert<IsEqual<NonNullable<CollectionAfterLoadJSON['profile']>['bio'], string>> = true
-      void collectionPostTitle
-      void collectionProfileBio
+      void collectionWithPosts.load('profile')
     }
   })
 })

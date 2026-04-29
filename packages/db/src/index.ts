@@ -170,6 +170,7 @@ export {
   getModelDefinition,
   resetMorphRegistry,
   resolveMorphModel,
+  serializeModels,
 } from './model'
 export {
   DEFAULT_HOLO_PROJECT_PATHS,
@@ -212,6 +213,7 @@ export type {
 export type { DatabaseCapabilities } from './core/capabilities'
 export type { SecurityPolicy } from './security/policy'
 export type { ConnectionManagerOptions } from './connection/ConnectionManager'
+export type { EmptyScopeMap } from './model'
 export type {
   MySQLAdapterOptions,
   MySQLClientLike,
@@ -325,6 +327,8 @@ export type {
   ResolveEagerLoadPath,
   ResolveEagerLoadUnion,
   SerializedEntityWithLoaded,
+  SerializeLoaded,
+  SerializeModels,
   UniqueIdRuntimeConfig,
   UniqueIdTrait,
   UniqueIdTraitKind,

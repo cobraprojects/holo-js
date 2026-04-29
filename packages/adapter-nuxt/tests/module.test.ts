@@ -290,6 +290,11 @@ export default defineDatabaseConfig({
       appEnv: 'production',
       projectRoot: root,
     })
+    expect((nuxt.options.runtimeConfig.public as Record<string, unknown>)).toMatchObject({
+      holo: {
+        appName: 'Example App',
+      },
+    })
     expect(nuxt.options.runtimeConfig.db).toEqual({
       defaultConnection: 'primary',
       connections: {

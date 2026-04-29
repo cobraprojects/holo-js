@@ -122,6 +122,13 @@ interface NuxtOptionsWithNitro {
     [key: string]: unknown
   }
   runtimeConfig: {
+    public?: {
+      holo?: {
+        appName?: string
+        [key: string]: unknown
+      }
+      [key: string]: unknown
+    }
     holoStorage?: HoloStorageRuntimeConfig
     [key: string]: unknown
   }
@@ -241,6 +248,11 @@ export default defineNuxtModule<ModuleOptions>({
     opts.nitro = opts.nitro || { storage: {} }
     opts.nitro.storage = opts.nitro.storage || {}
     opts.runtimeConfig = opts.runtimeConfig || {}
+    opts.runtimeConfig.public = opts.runtimeConfig.public || {}
+    opts.runtimeConfig.public.holo = {
+      ...(opts.runtimeConfig.public.holo || {}),
+      appName: loaded.app.name,
+    }
     opts.runtimeConfig.holo = {
       appUrl: loaded.app.url,
       appEnv: loaded.app.env,

@@ -597,7 +597,7 @@ describe('@holo-js/auth package runtime', () => {
       readonly peerDependenciesMeta?: Record<string, { readonly optional?: boolean }>
     }
 
-    expect(packageJson.peerDependencies?.['@holo-js/security']).toBe('^0.1.2')
+    expect(packageJson.peerDependencies?.['@holo-js/security']).toBe('^0.1.4')
     expect(packageJson.peerDependenciesMeta?.['@holo-js/security']?.optional).toBe(true)
   })
 

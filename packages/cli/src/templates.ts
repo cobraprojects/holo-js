@@ -87,10 +87,7 @@ export function renderModelTemplate(options: {
   observerImportPath?: string
   observerClassName?: string
 }): string {
-  const imports = [
-    `import { tables as holoGeneratedTables } from '${options.generatedSchemaImportPath}'`,
-    'import { defineModel, type TableDefinition } from \'@holo-js/db\'',
-  ]
+  const imports = ['import { defineModel } from \'@holo-js/db\'']
 
   if (options.observerImportPath && options.observerClassName) {
     imports.push(`import { ${options.observerClassName} } from '${options.observerImportPath}'`)
@@ -99,18 +96,10 @@ export function renderModelTemplate(options: {
   return [
     ...imports,
     '',
-    `const holoModelTable = (holoGeneratedTables as Partial<Record<string, TableDefinition>>)[${JSON.stringify(options.tableName)}]`,
-    'export const holoModelPendingSchema = typeof holoModelTable === \'undefined\'',
-    '',
-    'export default holoModelPendingSchema',
-    '  ? undefined',
-    '  : defineModel(',
-    '      holoModelTable,',
-    '      {',
-    '        fillable: [],',
-    ...(options.observerClassName ? [`        observers: [${options.observerClassName}],`] : []),
-    '      },',
-    '    )',
+    `export default defineModel(${JSON.stringify(options.tableName)}, {`,
+    '  fillable: [],',
+    ...(options.observerClassName ? [`  observers: [${options.observerClassName}],`] : []),
+    '})',
     '',
   ].join('\n')
 }

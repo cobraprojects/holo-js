@@ -26,6 +26,7 @@ import type {
   RelationDefinition,
   RelationAggregateKind,
   ModelUpdatePayload,
+  RelationMap,
 } from './types'
 
 type WriteMode = 'create' | 'update'
@@ -127,7 +128,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     return relation
   }
 
-  createCollection(items: readonly Entity<TTable>[]): ModelCollection<TTable> {
+  createCollection<TItem extends Entity<TTable>>(items: readonly TItem[]): ModelCollection<TTable, RelationMap, TItem> {
     return this.definition.collection
       ? this.definition.collection(items)
       : createModelCollection(items)

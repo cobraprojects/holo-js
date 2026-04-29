@@ -41,6 +41,29 @@ interface CoreNotificationDatabaseRoute {
   readonly type: string
 }
 
+async function preloadGeneratedSchemaModule(
+  projectRoot: string,
+  registry: GeneratedProjectRegistry | undefined,
+): Promise<void> {
+  const entry = registry?.paths.generatedSchema
+  if (!entry) {
+    return
+  }
+
+  try {
+    await import(pathToFileURL(resolve(projectRoot, entry)).href)
+  } catch (error) {
+    if (
+      error instanceof Error
+      && /Cannot find module|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Failed to load url/.test(error.message)
+    ) {
+      return
+    }
+
+    throw error
+  }
+}
+
 interface CoreNotificationRecord<TData extends CoreNotificationJsonValue = CoreNotificationJsonValue> {
   readonly id: string
   readonly type?: string
@@ -4002,6 +4025,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
 
       configureConfigRuntime(loadedConfig.all)
       configureDB(manager)
+      await preloadGeneratedSchemaModule(projectRoot, registry)
       previousOptionalSubsystemBindings = snapshotOptionalSubsystemRuntimeBindings()
       if (options.renderView) {
         configureHoloRenderingRuntime({

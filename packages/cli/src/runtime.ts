@@ -396,6 +396,7 @@ try {
 
     const executed = await createMigrationService(manager.connection(), migrations).migrate({})
     await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath)
+    await preloadGeneratedSchema(manager, new URL(payload.generatedSchemaOutputPath, 'file://').href)
     if (executed.length === 0) {
       console.log('No migrations were executed.')
     } else {
@@ -443,6 +444,10 @@ try {
       console.log(\`Migrations executed: \${rolledBack.map(item => item.name).join(', ')}\`)
     }
   } else if (payload.kind === 'seed') {
+    if (payload.generatedSchema) {
+      await preloadGeneratedSchema(manager, payload.generatedSchema)
+    }
+
     const seeders = []
     for (const entry of payload.seeders) {
       const seeder = resolveExport(await loadModule(entry), isSeeder)

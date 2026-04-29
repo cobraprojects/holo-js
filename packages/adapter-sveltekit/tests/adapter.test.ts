@@ -186,6 +186,57 @@ afterAll(async () => {
 })
 
 describe('@holo-js/adapter-sveltekit', () => {
+  it('serializes model-like values for SvelteKit transport boundaries', async () => {
+    const { holoSvelteKitTransport } = await loadAdapterModule()
+    const { serializeSvelteKitData } = await import('../src/transport')
+
+    const entity = {
+      id: 1,
+      title: 'Hello',
+      getRepository() {
+        return {}
+      },
+      toAttributes() {
+        return { id: this.id, title: this.title }
+      },
+      toJSON() {
+        return { id: this.id, title: this.title, kind: 'entity' }
+      },
+    }
+    const collection = Object.assign([entity], {
+      modelKeys() {
+        return [entity.id]
+      },
+      toQuery() {
+        return {}
+      },
+      toJSON() {
+        return [{ id: entity.id, title: entity.title, kind: 'entity' }]
+      },
+    })
+
+    expect(serializeSvelteKitData({
+      entity,
+      collection,
+      nested: { entity },
+    })).toEqual({
+      entity: { id: 1, title: 'Hello', kind: 'entity' },
+      collection: [{ id: 1, title: 'Hello', kind: 'entity' }],
+      nested: {
+        entity: { id: 1, title: 'Hello', kind: 'entity' },
+      },
+    })
+
+    expect(holoSvelteKitTransport.HoloModel.encode(entity)).toEqual({
+      id: 1,
+      title: 'Hello',
+      kind: 'entity',
+    })
+    expect(holoSvelteKitTransport.HoloCollection.encode(collection)).toEqual([
+      { id: 1, title: 'Hello', kind: 'entity' },
+    ])
+  }, 30000)
+
   it('initializes a singleton project and exposes typed config helpers', async () => {
     const {
       adapterSvelteKitInternals,
