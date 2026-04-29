@@ -8,6 +8,8 @@ import {
   ensureProjectConfig,
   syncManagedDriverDependencies,
   prepareProjectDiscovery,
+  renderFrameworkRunner,
+  writeTextFile,
 } from './project'
 import { hasProjectDependency } from './package-json'
 import type {
@@ -137,6 +139,7 @@ export async function runProjectDependencyInstall(
 export async function runProjectPrepare(projectRoot: string, io?: IoStreams): Promise<void> {
   const project = await ensureProjectConfig(projectRoot)
   await prepareProjectDiscovery(projectRoot, project.config)
+  await refreshFrameworkRunner(projectRoot)
 
   await runNuxtPrepare(projectRoot)
   await runSvelteKitSync(projectRoot)
@@ -145,8 +148,33 @@ export async function runProjectPrepare(projectRoot: string, io?: IoStreams): Pr
   if (updatedDependencies && io) {
     await runProjectDependencyInstall(io, projectRoot)
     await prepareProjectDiscovery(projectRoot, project.config)
+    await refreshFrameworkRunner(projectRoot)
     await runNuxtPrepare(projectRoot)
     await runSvelteKitSync(projectRoot)
+  }
+}
+
+async function refreshFrameworkRunner(projectRoot: string): Promise<void> {
+  const frameworkProjectPath = resolve(projectRoot, '.holo-js/framework/project.json')
+  const frameworkRunnerPath = resolve(projectRoot, '.holo-js/framework/run.mjs')
+
+  try {
+    const content = await readFile(frameworkProjectPath, 'utf8')
+    const manifest = JSON.parse(content) as { framework?: unknown }
+
+    if (
+      manifest.framework !== 'next'
+      && manifest.framework !== 'nuxt'
+      && manifest.framework !== 'sveltekit'
+    ) {
+      return
+    }
+
+    await writeTextFile(frameworkRunnerPath, renderFrameworkRunner({
+      framework: manifest.framework,
+    }))
+  } catch {
+    return
   }
 }
 

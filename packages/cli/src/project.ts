@@ -187,6 +187,7 @@ export {
   makeProjectRelativePath,
   prepareProjectDiscovery,
   readTextFile,
+  renderFrameworkRunner,
   resolveDefaultArtifactPath,
   resolveGeneratedSchemaPath,
   resolveProjectPackageImportSpecifier,

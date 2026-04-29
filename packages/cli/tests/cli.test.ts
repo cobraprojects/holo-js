@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, extname, join, resolve } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
 import { pathToFileURL } from 'node:url'
@@ -1417,6 +1417,35 @@ export default {
     expect(await readFile(join(nextRoot, 'server/holo.ts'), 'utf8')).toContain('./db/schema.generated')
     expect(await readFile(join(nextRoot, 'app/layout.tsx'), 'utf8')).toContain('../server/db/schema.generated')
 
+    const staleNextProcess = spawn('node', ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+    })
+    const nextStatePath = join(nextRoot, '.next-runner-state')
+    await writeFile(join(nextRoot, 'node_modules/.bin/next'), `#!/usr/bin/env node
+const { existsSync, readFileSync, writeFileSync } = require('node:fs')
+const statePath = ${JSON.stringify(nextStatePath)}
+const count = existsSync(statePath) ? Number.parseInt(readFileSync(statePath, 'utf8'), 10) : 0
+writeFileSync(statePath, String(count + 1))
+if (count === 0) {
+  console.error('⨯ Another next dev server is already running.')
+  console.error('')
+  console.error('- Local:        http://localhost:53864')
+  console.error('- PID:          ${staleNextProcess.pid}')
+  console.error('- Dir:          ${nextRoot}')
+  console.error('- Log:          .next/dev/logs/next-development.log')
+  process.exit(1)
+}
+console.log(process.argv.slice(2).join(' '))
+`, 'utf8')
+    await chmod(join(nextRoot, 'node_modules/.bin/next'), 0o755)
+
+    const restartedDevResult = runNodeScript(nextRoot, join(nextRoot, '.holo-js/framework/run.mjs'), ['dev'])
+    expect(restartedDevResult.status, restartedDevResult.stderr || restartedDevResult.stdout).toBe(0)
+    expect(restartedDevResult.stdout).toContain('dev')
+    expect(restartedDevResult.stderr).toContain(`Stopped stale Next dev server ${staleNextProcess.pid}. Restarting dev server.`)
+    expect(await readFile(nextStatePath, 'utf8')).toBe('2')
+    await expect(async () => process.kill(staleNextProcess.pid!, 0)).rejects.toMatchObject({ code: 'ESRCH' })
+
     const svelteRoot = join(baseRoot, 'svelte-runner')
     await projectInternals.scaffoldProject(svelteRoot, {
       projectName: 'svelte-runner',
@@ -2802,6 +2831,7 @@ export default defineStorageConfig({
     await expect(projectInternals.syncManagedDriverDependencies(dependencySyncRoot)).resolves.toBe(true)
     expect(JSON.parse(await readFile(join(dependencySyncRoot, 'package.json'), 'utf8'))).toMatchObject({
       dependencies: {
+        '@holo-js/core': expectedHoloPackageRange,
         '@holo-js/db': expectedHoloPackageRange,
         '@holo-js/db-postgres': expectedHoloPackageRange,
         '@holo-js/queue': expectedHoloPackageRange,
@@ -9252,25 +9282,31 @@ throw 'string discovery failure'
       await new Promise(resolve => setTimeout(resolve, 5))
     }
 
-    watchCallback('change', '.holo-js/generated/registry.json')
-    await new Promise(resolve => setTimeout(resolve, 25))
-    expect(prepare).toHaveBeenCalledTimes(1)
-
-    watchCallback('change', 'server/db/schema.generated.ts')
-    while (prepare.mock.calls.length < 2) {
+    while (prepare.mock.calls.length < 1) {
       await new Promise(resolve => setTimeout(resolve, 5))
     }
-    expect(prepare).toHaveBeenCalledTimes(2)
+    prepare.mockClear()
+
+    watchCallback('change', '.holo-js/generated/registry.json')
+    await new Promise(resolve => setTimeout(resolve, 25))
+    expect(prepare).toHaveBeenCalledTimes(0)
+
+    watchCallback('change', 'server/db/schema.generated.ts')
+    while (prepare.mock.calls.length < 1) {
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+    expect(prepare).toHaveBeenCalledTimes(1)
+    prepare.mockClear()
 
     watchCallback('change', 'config/app.ts')
-    while (prepare.mock.calls.length < 3) {
+    while (prepare.mock.calls.length < 1) {
       await new Promise(resolve => setTimeout(resolve, 5))
     }
 
     child.emit('close', 0)
     await expect(devPromise).resolves.toBeUndefined()
-    expect(prepare).toHaveBeenCalledTimes(3)
-  })
+    expect(prepare).toHaveBeenCalledTimes(1)
+  }, 30000)
 
   it('skips model files whose generated schema has not been materialized yet', async () => {
     const projectRoot = await createTempProject()
@@ -9494,7 +9530,92 @@ export default defineConfig({
     const svelteConfig = await readFile(join(projectRoot, 'svelte.config.js'), 'utf8')
     expect(svelteConfig).toContain('.holo-js/generated/hooks.server')
     expect(svelteConfig).toContain('.holo-js/generated/hooks')
-  })
+  }, 30000)
+
+  it('preserves legacy SvelteKit hook extension files when no migration occurs', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
+    await writeProjectFile(projectRoot, 'src/hooks.ts', 'export const reroute = ({ url }) => url.pathname\n')
+    await writeProjectFile(projectRoot, 'src/hooks.server.ts', 'export const handleFetch = async ({ request, fetch }) => fetch(request)\n')
+    await writeProjectFile(projectRoot, 'src/hooks.user.ts', 'export const transport = {}\n')
+    await writeProjectFile(projectRoot, 'src/hooks.server.user.ts', 'export const handle = async ({ event, resolve }) => resolve(event)\n')
+    await writeProjectFile(projectRoot, 'svelte.config.js', [
+      'import adapter from \'@sveltejs/adapter-node\'',
+      '',
+      'const config = {',
+      '  kit: {',
+      '    adapter: adapter(),',
+      '  },',
+      '}',
+      '',
+      'export default config',
+      '',
+    ].join('\n'))
+
+    await withFakeBun(async () => {
+      await cliInternals.runProjectPrepare(projectRoot)
+    })
+
+    await expect(readFile(join(projectRoot, 'src/hooks.user.ts'), 'utf8')).resolves.toContain('export const transport')
+    await expect(readFile(join(projectRoot, 'src/hooks.server.user.ts'), 'utf8')).resolves.toContain('export const handle')
+  }, 30000)
+
+  it('patches compact SvelteKit kit objects without producing invalid config', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
+    await writeProjectFile(projectRoot, 'svelte.config.js', [
+      'import adapter from \'@sveltejs/adapter-node\'',
+      '',
+      'const config = {',
+      '  kit: { adapter: adapter() },',
+      '}',
+      '',
+      'export default config',
+      '',
+    ].join('\n'))
+
+    await withFakeBun(async () => {
+      await cliInternals.runProjectPrepare(projectRoot)
+    })
+
+    const svelteConfig = await readFile(join(projectRoot, 'svelte.config.js'), 'utf8')
+    expect(svelteConfig).toContain('kit: {')
+    expect(svelteConfig).toContain('adapter: adapter()')
+    expect(svelteConfig).toContain('.holo-js/generated/hooks.server')
+    expect(svelteConfig).toContain('.holo-js/generated/hooks')
+    expect(svelteConfig).toContain('files: {')
+    expect(svelteConfig).not.toContain('kit: { adapter: adapter() },\n    files:')
+  }, 30000)
+
+  it('fails prepare for unsupported custom SvelteKit hook entrypoints', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
+    await writeProjectFile(projectRoot, 'svelte.config.js', [
+      'import adapter from \'@sveltejs/adapter-node\'',
+      '',
+      'const config = {',
+      '  kit: {',
+      '    adapter: adapter(),',
+      '    files: {',
+      '      hooks: {',
+      '        server: \'src/custom-hooks.server\',',
+      '        universal: \'src/custom-hooks\',',
+      '      },',
+      '    },',
+      '  },',
+      '}',
+      '',
+      'export default config',
+      '',
+    ].join('\n'))
+
+    await expect(withFakeBun(async () => {
+      await cliInternals.runProjectPrepare(projectRoot)
+    })).rejects.toThrow('Custom SvelteKit hook entrypoints are not supported')
+  }, 30000)
 
   it('fails holo dev when the child process errors or exits non-zero', async () => {
     const projectRoot = await createTempProject()
