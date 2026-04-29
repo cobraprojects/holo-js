@@ -297,8 +297,8 @@ type StaticModelApi<
   orWhereDoesntHave(relation: ModelRelationPath<TRelations>, constraint?: RelationConstraintCallback): ModelQueryBuilder<TTable, TRelations>
   whereRelation<TRelationPath extends ModelRelationPath<TRelations>>(relation: TRelationPath, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations>
   orWhereRelation<TRelationPath extends ModelRelationPath<TRelations>>(relation: TRelationPath, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, operator: unknown, value?: unknown): ModelQueryBuilder<TTable, TRelations>
-  whereBelongsTo<TRelated extends TableDefinition>(entity: Entity<TRelated>, relationName?: ModelRelationPath<TRelations>): ModelQueryBuilder<TTable, TRelations>
-  orWhereBelongsTo<TRelated extends TableDefinition>(entity: Entity<TRelated>, relationName?: ModelRelationPath<TRelations>): ModelQueryBuilder<TTable, TRelations>
+  whereBelongsTo<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(entity: Entity<TRelated, TRelatedRelations>, relationName?: ModelRelationPath<TRelations>): ModelQueryBuilder<TTable, TRelations>
+  orWhereBelongsTo<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(entity: Entity<TRelated, TRelatedRelations>, relationName?: ModelRelationPath<TRelations>): ModelQueryBuilder<TTable, TRelations>
   whereMorphedTo(relation: ModelRelationPath<TRelations>, target: MorphTypeSelector): ModelQueryBuilder<TTable, TRelations>
   orWhereMorphedTo(relation: ModelRelationPath<TRelations>, target: MorphTypeSelector): ModelQueryBuilder<TTable, TRelations>
   whereNotMorphedTo(relation: ModelRelationPath<TRelations>, target: MorphTypeSelector): ModelQueryBuilder<TTable, TRelations>
@@ -972,10 +972,10 @@ function createStaticModelApi<
     orWhereRelation<TRelationPath extends ModelRelationPath<TRelations>>(relation: TRelationPath, column: RelatedColumnNameForRelationPath<TRelations, TRelationPath>, operator: unknown, value?: unknown) {
       return this.query().orWhereRelation(relation, column, operator, value)
     },
-    whereBelongsTo<TRelated extends TableDefinition>(entity: Entity<TRelated>, relationName?: ModelRelationPath<TRelations>) {
+    whereBelongsTo<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(entity: Entity<TRelated, TRelatedRelations>, relationName?: ModelRelationPath<TRelations>) {
       return this.query().whereBelongsTo(entity, relationName)
     },
-    orWhereBelongsTo<TRelated extends TableDefinition>(entity: Entity<TRelated>, relationName?: ModelRelationPath<TRelations>) {
+    orWhereBelongsTo<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(entity: Entity<TRelated, TRelatedRelations>, relationName?: ModelRelationPath<TRelations>) {
       return this.query().orWhereBelongsTo(entity, relationName)
     },
     whereMorphedTo(relation: ModelRelationPath<TRelations>, target: MorphTypeSelector) {

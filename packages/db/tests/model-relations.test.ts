@@ -911,7 +911,6 @@ describe('model relation slice', () => {
 
     const user = await User.findOrFail(1)
 
-    // Use the dynamic method call syntax: user.roles().attach(...)
     const userDynamic = user as typeof user & { roles: () => { attach: (ids: unknown, attrs?: Record<string, unknown>) => Promise<void>, sync: (ids: unknown) => Promise<{ attached: unknown[], detached: unknown[], updated: unknown[] }>, detach: (ids?: unknown) => Promise<number> } }
     await userDynamic.roles().attach([100, 101])
     expect(adapter.tables.role_users).toHaveLength(2)
@@ -924,6 +923,53 @@ describe('model relation slice', () => {
 
     const detached = await userDynamic.roles().detach([101])
     expect(detached).toBe(1)
+  })
+
+  it('returns callable lazy relation properties that still resolve loaded values', async () => {
+    const adapter = new RelationAdapter({
+      users: [{ id: 1, name: 'Mohamed' }],
+      roles: [
+        { id: 100, name: 'Admin' },
+        { id: 101, name: 'Editor' },
+      ],
+      role_users: [
+        { id: 1, userId: 1, roleId: 100 },
+        { id: 2, userId: 1, roleId: 101 },
+      ] })
+
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: {
+        default: createDatabase({
+          connectionName: 'default',
+          adapter,
+          dialect: createDialect() }) } }))
+
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string() })
+    const roles = defineTable('roles', {
+      id: column.id(),
+      name: column.string() })
+    const roleUsers = defineTable('role_users', {
+      id: column.id(),
+      userId: column.integer(),
+      roleId: column.integer() })
+
+    const Role = defineModelFromTable(roles)
+    const User = defineModelFromTable(users, {
+      relations: {
+        roles: belongsToMany(() => Role, roleUsers, 'userId', 'roleId') } })
+
+    const user = await User.findOrFail(1)
+    const lazyUser = user as typeof user & {
+      roles: (() => { detach: (ids?: unknown) => Promise<number> }) & Promise<readonly Awaited<ReturnType<typeof Role.findOrFail>>[]>
+    }
+
+    expect(typeof lazyUser.roles).toBe('function')
+    expect(await lazyUser.roles().detach([100])).toBe(1)
+    const loadedRoles = await lazyUser.roles
+    expect(loadedRoles).toHaveLength(1)
   })
 
   it('supports dynamic relation method calls on defineModel(tableName) models with generated schema', async () => {

@@ -809,15 +809,15 @@ export class ModelQueryBuilder<
     return this.applyMorphRelationFilter(relation, types, column, operator, value, 'or')
   }
 
-  whereBelongsTo<TRelated extends TableDefinition>(
-    relatedEntity: Entity<TRelated>,
+  whereBelongsTo<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(
+    relatedEntity: Entity<TRelated, TRelatedRelations>,
     relationName?: ModelRelationPath<TRelations>,
   ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.applyBelongsToFilter(relatedEntity, relationName, 'and')
   }
 
-  orWhereBelongsTo<TRelated extends TableDefinition>(
-    relatedEntity: Entity<TRelated>,
+  orWhereBelongsTo<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(
+    relatedEntity: Entity<TRelated, TRelatedRelations>,
     relationName?: ModelRelationPath<TRelations>,
   ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.applyBelongsToFilter(relatedEntity, relationName, 'or')
@@ -1669,8 +1669,8 @@ export class ModelQueryBuilder<
     return alias ? { relation, alias } : { relation }
   }
 
-  private resolveBelongsToRelation<TRelated extends TableDefinition>(
-    relatedEntity: Entity<TRelated>,
+  private resolveBelongsToRelation<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(
+    relatedEntity: Entity<TRelated, TRelatedRelations>,
     relationName?: ModelRelationPath<TRelations>,
   ): Extract<ReturnType<ModelRepository<TTable>['getRelationDefinition']>, { kind: 'belongsTo' }> {
     const resolvedName = this.resolveBelongsToRelationName(relatedEntity, relationName)
@@ -1683,8 +1683,8 @@ export class ModelQueryBuilder<
     return relation
   }
 
-  private applyBelongsToFilter<TRelated extends TableDefinition>(
-    relatedEntity: Entity<TRelated>,
+  private applyBelongsToFilter<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(
+    relatedEntity: Entity<TRelated, TRelatedRelations>,
     relationName: ModelRelationPath<TRelations> | undefined,
     boolean: 'and' | 'or',
   ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
@@ -1703,8 +1703,8 @@ export class ModelQueryBuilder<
       : this.orWhereHas(resolvedRelationName, query => query.where(relation.ownerKey, ownerValue))
   }
 
-  private resolveBelongsToRelationName<TRelated extends TableDefinition>(
-    relatedEntity: Entity<TRelated>,
+  private resolveBelongsToRelationName<TRelated extends TableDefinition, TRelatedRelations extends RelationMap = RelationMap>(
+    relatedEntity: Entity<TRelated, TRelatedRelations>,
     relationName?: ModelRelationPath<TRelations>,
   ): ModelRelationPath<TRelations> {
     if (relationName) {

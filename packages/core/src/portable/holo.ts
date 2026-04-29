@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { createHash, createHmac } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
@@ -19,9 +20,9 @@ import {
   DB,
   resetDB,
 } from '@holo-js/db'
+import { importBundledRuntimeModule } from '../runtimeModule'
 import { resolveRuntimeConnectionManagerOptions } from './dbRuntime'
 import { loadGeneratedProjectRegistry, type GeneratedProjectRegistry } from './registry'
-import { importBundledRuntimeModule } from '../runtimeModule'
 import { configurePlainNodeStorageRuntime, resetOptionalStorageRuntime } from '../storageRuntime'
 
 type RuntimeConfigRegistry<TCustom extends HoloConfigMap> = LoadedHoloConfig<TCustom>['all']
@@ -50,18 +51,22 @@ async function preloadGeneratedSchemaModule(
     return
   }
 
-  const expectedTarget = pathToFileURL(resolve(projectRoot, entry)).href
+  const expectedTarget = resolve(projectRoot, entry)
+  if (!existsSync(expectedTarget)) {
+    return
+  }
+
   try {
-    await import(expectedTarget)
+    await importBundledRuntimeModule(projectRoot, entry)
   } catch (error) {
     if (
       error instanceof Error
-      && /Cannot find module|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Failed to load url/.test(error.message)
+      && /Cannot find module|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Failed to load url|Failed to load /.test(error.message)
     ) {
       const message = error.message
-      const failedTarget = message.match(/Cannot find module '([^']+)'|Cannot find package '([^']+)'|Failed to load url ([^ ]+)/)?.slice(1)
+      const failedTarget = message.match(/Cannot find module '([^']+)'|Cannot find package '([^']+)'|Failed to load url ([^ ]+)|Failed to load ([^ ]+)\./)?.slice(1)
         .find((value): value is string => typeof value === 'string')
-      if (failedTarget === expectedTarget || failedTarget === resolve(projectRoot, entry)) {
+      if (failedTarget === expectedTarget) {
         return
       }
     }
