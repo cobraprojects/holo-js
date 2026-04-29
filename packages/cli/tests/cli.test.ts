@@ -1447,7 +1447,16 @@ console.log(process.argv.slice(2).join(' '))
     expect(await readFile(nextStatePath, 'utf8')).toBe('2')
     await expect(async () => process.kill(staleNextProcess.pid!, 0)).rejects.toMatchObject({ code: 'ESRCH' })
     } finally {
-      try { process.kill(staleNextProcess.pid!, 'SIGKILL') } catch { /* already exited */ }
+      try {
+        process.kill(staleNextProcess.pid!, 'SIGKILL')
+        await new Promise<void>((resolve) => {
+          const timeout = setTimeout(resolve, 2000)
+          staleNextProcess.once('exit', () => {
+            clearTimeout(timeout)
+            resolve()
+          })
+        })
+      } catch { /* already exited */ }
     }
 
     const svelteRoot = join(baseRoot, 'svelte-runner')

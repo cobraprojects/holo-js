@@ -33,7 +33,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
     serverExternalPackages: mergedExternal,
     outputFileTracingExcludes: mergedExcludes,
     async rewrites() {
-      const userResult = await userRewrites?.()
+      const userResult = await userRewrites?.call(this)
 
       const raw = process.env.STORAGE_ROUTE_PREFIX?.trim() ?? '/storage'
       const needsRewrite = raw && raw !== '/' && raw !== '/storage'
@@ -56,7 +56,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
         const shaped = userResult as { beforeFiles?: unknown[], afterFiles?: unknown[], fallback?: unknown[] }
         return {
           ...shaped,
-          beforeFiles: [...(shaped.beforeFiles ?? []), holoRewrite],
+          beforeFiles: [...(Array.isArray(shaped.beforeFiles) ? shaped.beforeFiles : []), holoRewrite],
         }
       }
 

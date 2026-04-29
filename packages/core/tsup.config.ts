@@ -22,16 +22,16 @@ function buildBareToNodeRegex(): RegExp {
   )
 }
 
-async function restoreNodeProtocol(dir: string): Promise<void> {
-  const pattern = buildBareToNodeRegex()
+async function restoreNodeProtocol(dir: string, pattern?: RegExp): Promise<void> {
+  const regex = pattern ?? buildBareToNodeRegex()
   const entries = await readdir(dir, { withFileTypes: true })
   for (const entry of entries) {
     const fullPath = join(dir, entry.name)
     if (entry.isDirectory()) {
-      await restoreNodeProtocol(fullPath)
+      await restoreNodeProtocol(fullPath, regex)
     } else if (entry.name.endsWith('.mjs')) {
       const content = await readFile(fullPath, 'utf8')
-      const updated = content.replace(pattern, '$1node:$2$3')
+      const updated = content.replace(regex, '$1node:$2$3')
       if (updated !== content) {
         await writeFile(fullPath, updated, 'utf8')
       }
