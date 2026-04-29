@@ -161,6 +161,10 @@ function coerceEnvScalar<TValue extends EnvScalar>(
   runtimeValue: string,
   fallback: TValue,
 ): TValue {
+  if (runtimeValue.trim().length === 0) {
+    return fallback
+  }
+
   if (typeof fallback === 'boolean') {
     const normalized = runtimeValue.trim().toLowerCase()
     if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') {

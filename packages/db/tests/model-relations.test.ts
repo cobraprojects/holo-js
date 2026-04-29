@@ -28,6 +28,8 @@ import {
   resetDB,
   resetMorphRegistry,
   scopeRelation,
+  registerGeneratedTables,
+  clearGeneratedTables,
   type Dialect,
   type DriverAdapter,
   type DriverExecutionResult,
@@ -871,6 +873,128 @@ describe('model relation slice', () => {
     expect(user.getRelation<Entity<TableDefinition>[]>('roles')).toEqual([])
 
     expect(adapter.tables.role_users).toEqual([])
+  })
+
+  it('supports dynamic relation method calls for belongsToMany attach, sync, and detach', async () => {
+    const adapter = new RelationAdapter({
+      users: [{ id: 1, name: 'Mohamed' }],
+      roles: [
+        { id: 100, name: 'Admin' },
+        { id: 101, name: 'Editor' },
+        { id: 102, name: 'Viewer' },
+      ],
+      role_users: [] })
+
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: {
+        default: createDatabase({
+          connectionName: 'default',
+          adapter,
+          dialect: createDialect() }) } }))
+
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string() })
+    const roles = defineTable('roles', {
+      id: column.id(),
+      name: column.string() })
+    const roleUsers = defineTable('role_users', {
+      id: column.id(),
+      userId: column.integer(),
+      roleId: column.integer() })
+
+    const Role = defineModelFromTable(roles)
+    const User = defineModelFromTable(users, {
+      relations: {
+        roles: belongsToMany(() => Role, roleUsers, 'userId', 'roleId') } })
+
+    const user = await User.findOrFail(1)
+
+    // Use the dynamic method call syntax: user.roles().attach(...)
+    const userDynamic = user as typeof user & { roles: () => { attach: (ids: unknown, attrs?: Record<string, unknown>) => Promise<void>, sync: (ids: unknown) => Promise<{ attached: unknown[], detached: unknown[], updated: unknown[] }>, detach: (ids?: unknown) => Promise<number> } }
+    await userDynamic.roles().attach([100, 101])
+    expect(adapter.tables.role_users).toHaveLength(2)
+    expect(adapter.tables.role_users).toContainEqual(expect.objectContaining({ userId: 1, roleId: 100 }))
+    expect(adapter.tables.role_users).toContainEqual(expect.objectContaining({ userId: 1, roleId: 101 }))
+
+    const syncResult = await userDynamic.roles().sync([101, 102])
+    expect(syncResult.attached).toContain(102)
+    expect(syncResult.detached).toContain(100)
+
+    const detached = await userDynamic.roles().detach([101])
+    expect(detached).toBe(1)
+  })
+
+  it('supports dynamic relation method calls on defineModel(tableName) models with generated schema', async () => {
+    const adapter = new RelationAdapter({
+      posts: [{ id: 1, title: 'Hello', user_id: 1, category_id: null, slug: 'hello', excerpt: null, body: 'content', status: 'published', published_at: null, created_at: '2026-01-01', updated_at: '2026-01-01' }],
+      tags: [
+        { id: 10, name: 'framework', slug: 'framework', created_at: '2026-01-01', updated_at: '2026-01-01' },
+        { id: 11, name: 'release', slug: 'release', created_at: '2026-01-01', updated_at: '2026-01-01' },
+      ],
+      post_tags: [] })
+
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: {
+        default: createDatabase({
+          connectionName: 'default',
+          adapter,
+          dialect: createDialect() }) } }))
+
+    const posts = defineTable('posts', {
+      id: column.id(),
+      title: column.string(),
+      user_id: column.integer(),
+      category_id: column.integer().nullable(),
+      slug: column.string(),
+      excerpt: column.string().nullable(),
+      body: column.text(),
+      status: column.string(),
+      published_at: column.timestamp().nullable(),
+      created_at: column.timestamp().defaultNow(),
+      updated_at: column.timestamp().defaultNow() })
+    const tags = defineTable('tags', {
+      id: column.id(),
+      name: column.string(),
+      slug: column.string(),
+      created_at: column.timestamp().defaultNow(),
+      updated_at: column.timestamp().defaultNow() })
+    const postTags = defineTable('post_tags', {
+      id: column.id(),
+      post_id: column.integer(),
+      tag_id: column.integer() })
+
+    clearGeneratedTables()
+    registerGeneratedTables({ posts, tags, post_tags: postTags })
+
+    try {
+      const Tag = defineModel('tags')
+      const Post = defineModel('posts', {
+        fillable: ['title', 'slug', 'excerpt', 'body', 'status', 'published_at', 'user_id', 'category_id'],
+        relations: {
+          tags: belongsToMany(() => Tag, {
+            pivotTable: 'post_tags',
+            foreignPivotKey: 'post_id',
+            relatedPivotKey: 'tag_id',
+          }),
+        },
+      })
+
+      const post = await Post.findOrFail(1)
+      const postDynamic = post as typeof post & { tags: () => { attach: (ids: unknown) => Promise<void>, sync: (ids: unknown) => Promise<{ attached: unknown[], detached: unknown[], updated: unknown[] }>, detach: (ids?: unknown) => Promise<number> } }
+
+      await postDynamic.tags().attach([10, 11])
+      expect(adapter.tables.post_tags).toHaveLength(2)
+      expect(adapter.tables.post_tags).toContainEqual(expect.objectContaining({ post_id: 1, tag_id: 10 }))
+      expect(adapter.tables.post_tags).toContainEqual(expect.objectContaining({ post_id: 1, tag_id: 11 }))
+
+      const syncResult = await postDynamic.tags().sync([11])
+      expect(syncResult.detached).toContain(10)
+    } finally {
+      clearGeneratedTables()
+    }
   })
 
   it('supports relation persistence helpers for belongsTo, hasMany, hasOne, and morphMany relations', async () => {
@@ -3024,7 +3148,7 @@ describe('model relation slice', () => {
     expect(user.get('name')).toBe('Moe')
 
     const lazyPosts = dynamicUser.posts
-    expect(lazyPosts).toBeInstanceOf(Promise)
+    expect(typeof lazyPosts).toBe('function')
     await expect(lazyPosts).resolves.toHaveLength(2)
     expect(Array.isArray(dynamicUser.posts)).toBe(true)
     expect((dynamicUser.posts as Entity<TableDefinition>[])[0]?.get('published')).toBe(true)
@@ -3043,7 +3167,7 @@ describe('model relation slice', () => {
         posts: hasMany(() => Post, 'userId') } })
 
     const strictUser = await StrictUser.findOrFail(1)
-    expect(() => asDynamicEntity(strictUser).posts).toThrow(
+    await expect(Promise.resolve(asDynamicEntity(strictUser).posts)).rejects.toThrow(
       'Lazy loading relation "posts" is disabled on model "StrictUser".',
     )
 
@@ -3086,7 +3210,7 @@ describe('model relation slice', () => {
     expect(calls).toEqual([])
   })
 
-  it('falls back to undefined relation properties when the repository does not resolve them', () => {
+  it('falls back to callable relation properties when the repository does not resolve them', () => {
     const entity = new Entity({
       definition: {
         table: { columns: { save: {}, nickname: {} } },
@@ -3100,7 +3224,7 @@ describe('model relation slice', () => {
     dynamicEntity.nickname = 'Mo'
     expect(entity.get('nickname' as never)).toBe('Mo')
     expect(typeof dynamicEntity.get).toBe('function')
-    expect(dynamicEntity.profile).toBeUndefined()
+    expect(typeof dynamicEntity.profile).toBe('function')
 
     dynamicEntity.profile = { id: 9 }
     expect(entity.getRelation('profile')).toEqual({ id: 9 })

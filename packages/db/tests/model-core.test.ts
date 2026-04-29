@@ -30,6 +30,7 @@ import {
   type DriverQueryResult,
   type ModelCollection,
   type ModelQueryBuilder,
+  type RelationMap,
   type TableDefinition } from '../src'
 import { registerMorphModel, resolveMorphSelector } from '../src/model/morphRegistry'
 import { defineModelFromTable, defineTable } from './support/internal'
@@ -439,6 +440,27 @@ describe('model core slice', () => {
     expect(User.definition.timestamps).toBe(true)
   })
 
+  it('defers generated table lookup for defineModel(tableName, options) until the schema is registered', () => {
+    const User = defineModel('users', {
+      fillable: ['name'],
+      timestamps: true,
+    })
+
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+      created_at: column.timestamp().defaultNow(),
+      updated_at: column.timestamp().defaultNow(),
+    })
+    registerGeneratedTables({ users })
+
+    expect(User.definition.table.tableName).toBe('users')
+    expect(Object.keys(User.definition.table.columns)).toEqual(['id', 'name', 'created_at', 'updated_at'])
+    expect(User.definition.primaryKey).toBe('id')
+    expect(User.definition.createdAtColumn).toBe('created_at')
+    expect(User.definition.updatedAtColumn).toBe('updated_at')
+  })
+
   it('supports the public defineModel(tableName) authoring path without options', () => {
     const auditLogs = defineTable('audit_logs', {
       id: column.id(),
@@ -479,8 +501,10 @@ describe('model core slice', () => {
     expect(User.definition.name).toBe('User')
   })
 
-  it('fails fast when a generated-schema-backed model is defined before the generated schema is imported', () => {
-    expect(() => defineModel('missing_users')).toThrow(
+  it('defers missing generated-schema errors until the model table is resolved', () => {
+    const User = defineModel('missing_users')
+
+    expect(() => User.definition.table).toThrow(
       'Model "missing_users" is not present in the generated schema registry. Import your generated schema module and run "holo migrate" to refresh it.',
     )
   })
@@ -1515,8 +1539,8 @@ describe('model core slice', () => {
       email: column.string() })
 
     const User = defineModelFromTable(users, {
-      collection(items) {
-        const collection = createModelCollection(items) as ReturnType<typeof createModelCollection<typeof users>> & {
+      collection<TItem extends Entity<typeof users>>(items: readonly TItem[]) {
+        const collection = createModelCollection<typeof users, RelationMap, TItem>(items) as ModelCollection<typeof users, RelationMap, TItem> & {
           emails(): string[]
         }
 
@@ -1525,7 +1549,7 @@ describe('model core slice', () => {
           enumerable: false,
           configurable: true })
 
-        return collection as ModelCollection<typeof users> & { emails(): string[] }
+        return collection
       } })
 
     const collection = await User.all() as ModelCollection<typeof users> & { emails(): string[] }
@@ -2446,6 +2470,17 @@ describe('model core slice', () => {
 
     const created = await User.create({ name: 'Sara', email: 's@example.com' })
     expect(created.toJSON()).toEqual({ id: 1, name: 'Sara', email: 's@example.com' })
+    await expect(User.query().orderBy('id').getJson()).resolves.toEqual([
+      { id: 1, name: 'Sara', email: 's@example.com' },
+    ])
+    await expect(User.query().where('id', 1).firstJson()).resolves.toEqual({
+      id: 1,
+      name: 'Sara',
+      email: 's@example.com',
+    })
+    await expect(User.getJson()).resolves.toEqual([
+      { id: 1, name: 'Sara', email: 's@example.com' },
+    ])
     expect((await OpenUser.create({ name: 'Open', email: 'o@example.com', status: 'active' })).get('id')).toBe(2)
     expect((await WildcardUser.create({ name: 'Wild', email: 'w@example.com' })).get('id')).toBe(3)
 

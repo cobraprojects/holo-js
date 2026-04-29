@@ -328,7 +328,7 @@ function renderMailConfig(): string {
     '      driver: \'smtp\',',
     '      host: env(\'MAIL_HOST\', \'127.0.0.1\'),',
     '      port: env(\'MAIL_PORT\', 1025),',
-    '      secure: env<boolean>(\'MAIL_SECURE\', false),',
+    '      secure: env(\'MAIL_SECURE\', false),',
     '    },',
     '  },',
     '})',
@@ -402,13 +402,15 @@ function renderBroadcastConfig(
 ): string {
   const renderBroadcastScheme = (): string => {
     return useTypeScriptSyntax
-      ? 'env<\'http\' | \'https\'>(\'BROADCAST_SCHEME\', \'http\')'
-      : 'env(\'BROADCAST_SCHEME\', \'http\')'
+      ? "env('BROADCAST_SCHEME') === 'https' ? 'https' : 'http'"
+      : "(process.env.BROADCAST_SCHEME === 'https' ? 'https' : 'http')"
   }
 
   if (moduleFormat === 'cjs') {
     return [
       'const { defineBroadcastConfig, env } = require(\'@holo-js/config\')',
+      '',
+      `const broadcastScheme = ${renderBroadcastScheme()}`,
       '',
       'module.exports = defineBroadcastConfig({',
       '  default: env(\'BROADCAST_CONNECTION\', \'holo\'),',
@@ -421,8 +423,8 @@ function renderBroadcastConfig(
       '      options: {',
       '        host: env(\'BROADCAST_HOST\', \'127.0.0.1\'),',
       '        port: env(\'BROADCAST_PORT\', 8080),',
-      `        scheme: ${renderBroadcastScheme()},`,
-      '        useTLS: env(\'BROADCAST_SCHEME\', \'http\') === \'https\',',
+      '        scheme: broadcastScheme,',
+      '        useTLS: broadcastScheme === \'https\',',
       '      },',
       /* v8 ignore next 6 -- authEndpoint injection is tested through the install auth flow */
       ...(includeAuthEndpoint
@@ -448,6 +450,8 @@ function renderBroadcastConfig(
   return [
     'import { defineBroadcastConfig, env } from \'@holo-js/config\'',
     '',
+    `const broadcastScheme = ${renderBroadcastScheme()}`,
+    '',
     'export default defineBroadcastConfig({',
     '  default: env(\'BROADCAST_CONNECTION\', \'holo\'),',
     '  connections: {',
@@ -459,8 +463,8 @@ function renderBroadcastConfig(
       '      options: {',
       '        host: env(\'BROADCAST_HOST\', \'127.0.0.1\'),',
       '        port: env(\'BROADCAST_PORT\', 8080),',
-      `        scheme: ${renderBroadcastScheme()},`,
-      '        useTLS: env(\'BROADCAST_SCHEME\', \'http\') === \'https\',',
+      '        scheme: broadcastScheme,',
+      '        useTLS: broadcastScheme === \'https\',',
       '      },',
       ...(includeAuthEndpoint
         ? [
@@ -585,9 +589,15 @@ function renderNuxtBroadcastAuthRoute(): string {
     'export default defineEventHandler(async (event) => {',
     '  const app = await holo.getApp()',
     '  const auth = await holo.getAuth()',
+    '  const headers = new Headers()',
+    '  for (const [key, value] of Object.entries(getHeaders(event))) {',
+    '    if (typeof value === \'string\') {',
+    '      headers.set(key, value)',
+    '    }',
+    '  }',
     '  const request = new Request(getRequestURL(event), {',
     '    method: event.method,',
-    '    headers: getHeaders(event),',
+    '    headers,',
     '    body: await readRawBody(event),',
     '  })',
     '',
@@ -708,6 +718,12 @@ function renderSessionConfig(defaultDatabaseConnection = 'default'): string {
   return [
     'import { defineSessionConfig, env } from \'@holo-js/config\'',
     '',
+    "const sessionSameSite = env('SESSION_SAME_SITE') === 'strict'",
+    "  ? 'strict'",
+    "  : env('SESSION_SAME_SITE') === 'none'",
+    "    ? 'none'",
+    "    : 'lax'",
+    '',
     'export default defineSessionConfig({',
     '  driver: env(\'SESSION_DRIVER\', \'file\'),',
     '  stores: {',
@@ -725,9 +741,9 @@ function renderSessionConfig(defaultDatabaseConnection = 'default'): string {
     '    name: env(\'SESSION_COOKIE\', \'holo_session\'),',
     '    path: env(\'SESSION_PATH\', \'/\'),',
     '    domain: env(\'SESSION_DOMAIN\'),',
-    '    secure: env<boolean>(\'SESSION_SECURE\', false),',
+    '    secure: env(\'SESSION_SECURE\', false),',
     '    httpOnly: true,',
-    '    sameSite: env<\'lax\' | \'strict\' | \'none\'>(\'SESSION_SAME_SITE\', \'lax\'),',
+    '    sameSite: sessionSameSite,',
     '  },',
     '  idleTimeout: env(\'SESSION_IDLE_TIMEOUT\', 120),',
     '  absoluteLifetime: env(\'SESSION_LIFETIME\', 120),',
@@ -996,20 +1012,14 @@ export function renderAuthEnvFiles(
   }
 }
 
-function renderAuthUserModel(generatedSchemaImportPath = '../db/schema.generated'): string {
+function renderAuthUserModel(_generatedSchemaImportPath = '../db/schema.generated'): string {
   return [
-    `import { tables as holoGeneratedTables } from '${generatedSchemaImportPath}'`,
-    'import { defineModel, type TableDefinition } from \'@holo-js/db\'',
+    'import { defineModel } from \'@holo-js/db\'',
     '',
-    'const holoModelTable = (holoGeneratedTables as Partial<Record<string, TableDefinition>>).users',
-    'export const holoModelPendingSchema = typeof holoModelTable === \'undefined\'',
-    '',
-    'export default holoModelPendingSchema',
-    '  ? undefined',
-    '  : defineModel(holoModelTable, {',
-    '      fillable: [\'name\', \'email\', \'password\', \'avatar\', \'email_verified_at\'],',
-    '      hidden: [\'password\'],',
-    '    })',
+    'export default defineModel(\'users\', {',
+    '  fillable: [\'name\', \'email\', \'password\', \'avatar\', \'email_verified_at\'],',
+    '  hidden: [\'password\'],',
+    '})',
     '',
   ].join('\n')
 }
@@ -1239,15 +1249,20 @@ function createNotificationsMigrationFiles(date = new Date()): readonly Scaffold
 
 function renderScaffoldAppConfig(projectName: string): string {
   return [
-    'import type { HoloAppEnv } from \'@holo-js/config\'',
     'import { defineAppConfig, env } from \'@holo-js/config\'',
+    '',
+    "const appEnv = env('APP_ENV') === 'production'",
+    "  ? 'production'",
+    "  : env('APP_ENV') === 'test'",
+    "    ? 'test'",
+    "    : 'development'",
     '',
     'export default defineAppConfig({',
     `  name: env('APP_NAME', ${JSON.stringify(projectName)}),`,
     '  key: env(\'APP_KEY\'),',
     '  url: env(\'APP_URL\', \'http://localhost:3000\'),',
-    '  env: env<HoloAppEnv>(\'APP_ENV\', \'development\'),',
-    '  debug: env<boolean>(\'APP_DEBUG\', true),',
+    '  env: appEnv,',
+    '  debug: env(\'APP_DEBUG\', true),',
     '  paths: {',
     '    models: \'server/models\',',
     '    migrations: \'server/db/migrations\',',
@@ -1317,7 +1332,7 @@ function renderScaffoldEnvFiles(
 ): { env: string, example: string } {
   const defaultDatabaseConnection = 'main'
   const baseLines = [
-    `APP_NAME=${JSON.stringify(options.projectName)}`,
+    'APP_NAME=',
     'APP_KEY=',
     'APP_URL=http://localhost:3000',
     'APP_ENV=development',
@@ -2775,11 +2790,6 @@ function renderScaffoldTsconfig(options: Pick<ProjectScaffoldOptions, 'framework
   if (options.framework === 'nuxt') {
     return `${JSON.stringify({
       extends: './.nuxt/tsconfig.json',
-      compilerOptions: {
-        strict: true,
-        noEmit: true,
-        skipLibCheck: true,
-      },
     }, null, 2)}\n`
   }
 
@@ -2824,14 +2834,35 @@ function renderScaffoldTsconfig(options: Pick<ProjectScaffoldOptions, 'framework
   }, null, 2)}\n`
 }
 
+function renderVSCodeSettings(options: Pick<ProjectScaffoldOptions, 'framework'>): string | undefined {
+  if (options.framework !== 'nuxt' && options.framework !== 'sveltekit') {
+    return undefined
+  }
+
+  const settings: Record<string, unknown> = {
+    'typescript.tsdk': 'node_modules/typescript/lib',
+    'typescript.enablePromptUseWorkspaceTsdk': true,
+  }
+
+  if (options.framework === 'nuxt') {
+    settings['vue.server.hybridMode'] = true
+  }
+
+  return `${JSON.stringify(settings, null, 2)}\n`
+}
+
 function renderNuxtAppVue(projectName: string): string {
   return [
     '<template>',
     '  <main class="shell">',
-    `    <h1>${projectName}</h1>`,
+    '    <h1>{{ appName }}</h1>',
     '    <p>Nuxt renders the UI. Holo owns the backend runtime and canonical server directories.</p>',
     '  </main>',
     '</template>',
+    '',
+    '<script setup lang="ts">',
+    `const appName = ${JSON.stringify(projectName)}`,
+    '</script>',
     '',
     '<style scoped>',
     '.shell {',
@@ -2860,8 +2891,25 @@ function renderNuxtConfig(): string {
   return [
     'export default defineNuxtConfig({',
     '  modules: [\'@holo-js/adapter-nuxt\'],',
-    '  typescript: {',
-    '    strict: true,',
+    '  sourcemap: {',
+    '    client: false,',
+    '    server: false,',
+    '  },',
+    '  vite: {',
+    '    build: {',
+    '      rollupOptions: {',
+    '        onwarn(warning, defaultHandler) {',
+    '          if (',
+    '            warning.message.includes(\'nuxt:module-preload-polyfill\')',
+    '            && warning.message.includes(\'didn\\\'t generate a sourcemap\')',
+    '          ) {',
+    '            return',
+    '          }',
+    '',
+    '          defaultHandler(warning)',
+    '        },',
+    '      },',
+    '    },',
     '  },',
     '})',
     '',
@@ -2889,7 +2937,18 @@ function renderNextConfig(storageEnabled: boolean): string {
   if (!storageEnabled) {
     return [
       '/** @type {import(\'next\').NextConfig} */',
-      'const nextConfig = {}',
+      'const nextConfig = {',
+      '  outputFileTracingExcludes: {',
+      '    \'/*\': [\'./next.config.mjs\'],',
+      '  },',
+      '  serverExternalPackages: [',
+      '    \'@holo-js/core\',',
+      '    \'@holo-js/adapter-next\',',
+      '    \'@holo-js/db\',',
+      '    \'@holo-js/config\',',
+      '    \'esbuild\',',
+      '  ],',
+      '}',
       '',
       'export default nextConfig',
       '',
@@ -2908,6 +2967,16 @@ function renderNextConfig(storageEnabled: boolean): string {
     '',
     '/** @type {import(\'next\').NextConfig} */',
     'const nextConfig = {',
+    '  outputFileTracingExcludes: {',
+    '    \'/*\': [\'./next.config.mjs\'],',
+    '  },',
+    '  serverExternalPackages: [',
+    '    \'@holo-js/core\',',
+    '    \'@holo-js/adapter-next\',',
+    '    \'@holo-js/db\',',
+    '    \'@holo-js/config\',',
+    '    \'esbuild\',',
+    '  ],',
     '  async rewrites() {',
     '    if (storageRoutePrefix === \'/storage\') {',
     '      return []',
@@ -2929,6 +2998,8 @@ function renderNextConfig(storageEnabled: boolean): string {
 
 function renderNextLayout(projectName: string): string {
   return [
+    'import \'../server/db/schema.generated\'',
+    '',
     'import type { ReactNode } from \'react\'',
     '',
     'export const metadata = {',
@@ -2973,6 +3044,8 @@ function renderNextEnvDts(): string {
 
 function renderNextHoloHelper(): string {
   return [
+    'import \'./db/schema.generated\'',
+    '',
     'import { createNextHoloHelpers } from \'@holo-js/adapter-next\'',
     '',
     'export const holo = createNextHoloHelpers()',
@@ -2980,196 +3053,13 @@ function renderNextHoloHelper(): string {
   ].join('\n')
 }
 
-function renderPublicStorageHelper(): string {
+function renderNextInstrumentation(): string {
   return [
-    'import { readFile, realpath } from \'node:fs/promises\'',
-    'import { extname, resolve, sep } from \'node:path\'',
-    'import { normalizeModuleOptions, type RuntimeDiskConfig, type HoloStorageRuntimeConfig } from \'@holo-js/storage\'',
-    'import type { NormalizedHoloStorageConfig } from \'@holo-js/config\'',
-    '',
-    'const NAMED_PUBLIC_DISK_ROUTE_SEGMENT = \'__holo\'',
-    '',
-    'type PublicLocalDisk = RuntimeDiskConfig & {',
-    '  driver: \'local\' | \'public\'',
-    '  visibility: \'public\'',
-    '  root: string',
-    '}',
-    '',
-    'type ResolvedPublicStorageRequest = {',
-    '  disk: PublicLocalDisk',
-    '  absolutePath: string',
-    '}',
-    '',
-    'function normalizeRequestPath(value: string): string[] {',
-    '  return value',
-    '    .split(\'/\')',
-    '    .map((segment) => {',
-    '      const trimmed = segment.trim()',
-    '      if (!trimmed) {',
-    '        return trimmed',
-    '      }',
-    '',
-    '      try {',
-    '        return decodeURIComponent(trimmed)',
-    '      } catch {',
-    '        return trimmed',
-      '      }',
-    '    })',
-    '    .filter(Boolean)',
-    '}',
-    '',
-    'function isPublicLocalDisk(disk: RuntimeDiskConfig | undefined): disk is PublicLocalDisk {',
-    '  return Boolean(disk && disk.visibility === \'public\' && disk.driver !== \'s3\' && typeof disk.root === \'string\')',
-    '}',
-    '',
-    'function resolveAbsolutePath(projectRoot: string, disk: PublicLocalDisk, fileSegments: string[]): string | null {',
-    '  const root = resolve(projectRoot, disk.root)',
-    '  const absolutePath = resolve(root, ...fileSegments)',
-    '  if (absolutePath !== root && !absolutePath.startsWith(`${root}${sep}`)) {',
-    '    return null',
+    'export async function register() {',
+    '  if (process.env.NEXT_RUNTIME === \'nodejs\') {',
+    '    const { holo } = await import(\'@/server/holo\')',
+    '    await holo.getApp()',
     '  }',
-    '',
-    '  return absolutePath',
-    '}',
-    '',
-    'function resolveContentType(absolutePath: string): string {',
-    '  switch (extname(absolutePath).toLowerCase()) {',
-    '    case \'.avif\': return \'image/avif\'',
-    '    case \'.css\': return \'text/css; charset=utf-8\'',
-    '    case \'.gif\': return \'image/gif\'',
-    '    case \'.html\': return \'text/html; charset=utf-8\'',
-    '    case \'.jpeg\':',
-    '    case \'.jpg\': return \'image/jpeg\'',
-    '    case \'.js\':',
-    '    case \'.mjs\': return \'text/javascript; charset=utf-8\'',
-    '    case \'.json\': return \'application/json; charset=utf-8\'',
-    '    case \'.mp3\': return \'audio/mpeg\'',
-    '    case \'.pdf\': return \'application/pdf\'',
-    '    case \'.png\': return \'image/png\'',
-    '    case \'.svg\': return \'image/svg+xml\'',
-    '    case \'.txt\': return \'text/plain; charset=utf-8\'',
-    '    case \'.webp\': return \'image/webp\'',
-    '    case \'.woff\': return \'font/woff\'',
-    '    case \'.woff2\': return \'font/woff2\'',
-    '    default: return \'application/octet-stream\'',
-    '  }',
-    '}',
-    '',
-    'function createMissingFileResponse(): Response {',
-    '  return new Response(\'Storage file not found.\', { status: 404 })',
-    '}',
-    '',
-    'function resolveRouteSegments(routePath: string): string[] | null {',
-    '  const segments = normalizeRequestPath(routePath)',
-    '  if (segments.length === 0 || segments.includes(\'..\')) {',
-    '    return null',
-    '  }',
-    '',
-    '  return segments',
-    '}',
-    '',
-    'function resolveDefaultPublicStorageRequest(projectRoot: string, config: HoloStorageRuntimeConfig, segments: string[]): ResolvedPublicStorageRequest | null {',
-    '  const disk = isPublicLocalDisk(config.disks.public) ? config.disks.public : undefined',
-    '  if (!disk) {',
-    '    return null',
-    '  }',
-    '',
-    '  const absolutePath = resolveAbsolutePath(projectRoot, disk, segments)',
-    '  return absolutePath ? { disk, absolutePath } : null',
-    '}',
-    '',
-    'function usesReservedNamedDiskNamespace(segments: string[]): boolean {',
-    '  return segments[0] === NAMED_PUBLIC_DISK_ROUTE_SEGMENT',
-    '}',
-    '',
-    'function resolveNamedPublicStorageRequest(projectRoot: string, config: HoloStorageRuntimeConfig, segments: string[]): ResolvedPublicStorageRequest | null {',
-    '  const namedPublicDisks = Object.values(config.disks).filter((disk): disk is PublicLocalDisk => isPublicLocalDisk(disk) && disk.name !== \'public\')',
-    '  const usesReservedNamespace = segments[0] === NAMED_PUBLIC_DISK_ROUTE_SEGMENT',
-    '  const diskName = usesReservedNamespace ? segments[1] : segments[0]',
-    '  const disk = diskName ? namedPublicDisks.find(candidate => candidate.name === diskName) : undefined',
-    '  if (!disk) {',
-    '    return null',
-    '  }',
-    '',
-    '  const fileSegments = usesReservedNamespace ? segments.slice(2) : segments.slice(1)',
-    '  if (fileSegments.length === 0) {',
-    '    return null',
-    '  }',
-    '',
-    '  const absolutePath = resolveAbsolutePath(projectRoot, disk, fileSegments)',
-    '  return absolutePath ? { disk, absolutePath } : null',
-    '}',
-    '',
-    'function resolvePublicStorageRequest(projectRoot: string, config: HoloStorageRuntimeConfig, routePath: string): ResolvedPublicStorageRequest | null {',
-    '  const segments = resolveRouteSegments(routePath)',
-    '  if (!segments) {',
-    '    return null',
-    '  }',
-    '',
-    '  if (usesReservedNamedDiskNamespace(segments)) {',
-    '    return resolveNamedPublicStorageRequest(projectRoot, config, segments) ?? resolveDefaultPublicStorageRequest(projectRoot, config, segments)',
-    '  }',
-    '',
-    '  return resolveDefaultPublicStorageRequest(projectRoot, config, segments) ?? resolveNamedPublicStorageRequest(projectRoot, config, segments)',
-    '}',
-    '',
-    'function resolveFallbackPublicStorageRequest(projectRoot: string, config: HoloStorageRuntimeConfig, segments: string[], attemptedDiskName: string): ResolvedPublicStorageRequest | null {',
-    '  if (usesReservedNamedDiskNamespace(segments)) {',
-    '    return null',
-    '  }',
-    '',
-    '  const candidates = [',
-    '    resolveDefaultPublicStorageRequest(projectRoot, config, segments),',
-    '    resolveNamedPublicStorageRequest(projectRoot, config, segments),',
-    '  ]',
-    '',
-    '  return candidates.find(candidate => candidate && candidate.disk.name !== attemptedDiskName) ?? null',
-    '}',
-    '',
-    'export async function createPublicStorageResponse(projectRoot: string, storageConfig: NormalizedHoloStorageConfig, request: Request): Promise<Response> {',
-    '  const normalized = normalizeModuleOptions({',
-    '    defaultDisk: storageConfig.defaultDisk,',
-    '    routePrefix: storageConfig.routePrefix,',
-    '    disks: storageConfig.disks,',
-    '  })',
-    '  const pathname = new URL(request.url).pathname',
-    '  const routePath = pathname.startsWith(normalized.routePrefix) ? pathname.slice(normalized.routePrefix.length) : pathname',
-    '  const segments = resolveRouteSegments(routePath)',
-    '',
-    '  if (!segments) {',
-    '    return createMissingFileResponse()',
-    '  }',
-    '',
-    '  const resolvedRequest = resolvePublicStorageRequest(projectRoot, normalized, routePath)',
-    '  if (!resolvedRequest) {',
-    '    return createMissingFileResponse()',
-    '  }',
-    '',
-    '  const tryRead = async (entry: ResolvedPublicStorageRequest): Promise<Response | null> => {',
-    '    try {',
-    '      const resolvedRoot = await realpath(resolve(projectRoot, entry.disk.root))',
-    '      const resolvedPath = await realpath(entry.absolutePath)',
-    '      if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(`${resolvedRoot}${sep}`)) {',
-    '        return null',
-    '      }',
-    '',
-    '      const contents = await readFile(entry.absolutePath)',
-    '      return new Response(contents, {',
-    '        status: 200,',
-    '        headers: { \'content-type\': resolveContentType(entry.absolutePath) },',
-    '      })',
-    '    } catch {',
-    '      return null',
-    '    }',
-    '  }',
-    '',
-    '  const primary = await tryRead(resolvedRequest)',
-    '  if (primary) {',
-    '    return primary',
-    '  }',
-    '',
-    '  const fallback = resolveFallbackPublicStorageRequest(projectRoot, normalized, segments, resolvedRequest.disk.name)',
-    '  return fallback ? ((await tryRead(fallback)) ?? createMissingFileResponse()) : createMissingFileResponse()',
     '}',
     '',
   ].join('\n')
@@ -3197,7 +3087,7 @@ function renderNextHealthRoute(): string {
 function renderNextStorageRoute(): string {
   return [
     'import { holo } from \'@/server/holo\'',
-    'import { createPublicStorageResponse } from \'@/server/lib/public-storage\'',
+    'import { createPublicStorageResponse } from \'@holo-js/storage\'',
     '',
     'export async function GET(request: Request) {',
     '  const app = await holo.getApp()',
@@ -3217,6 +3107,12 @@ function renderSvelteConfig(): string {
     '  preprocess: vitePreprocess(),',
     '  kit: {',
     '    adapter: adapter(),',
+    '    files: {',
+    '      hooks: {',
+    '        server: \'.holo-js/generated/hooks.server\',',
+    '        universal: \'.holo-js/generated/hooks\',',
+    '      },',
+    '    },',
     '  },',
     '}',
     '',
@@ -3225,32 +3121,16 @@ function renderSvelteConfig(): string {
   ].join('\n')
 }
 
-function renderSvelteHooksServer(): string {
+function renderSvelteUserHooks(): string {
   return [
-    'import type { Handle } from \'@sveltejs/kit\'',
-    'import { env } from \'$env/dynamic/private\'',
+    'export {}',
     '',
-    'function normalizeStorageRoutePrefix(value: string | undefined): string {',
-    '  const raw = value?.trim() ?? \'/storage\'',
-    '  if (!raw || raw === \'/\') {',
-    '    return \'/storage\'',
-    '  }',
-    '',
-    '  return `/${raw.replace(/^\\/+|\\/+$/g, \'\')}`',
-    '}',
-    '',
-    'export const handle: Handle = async ({ event, resolve }) => {',
-    '  const storageRoutePrefix = normalizeStorageRoutePrefix(env.STORAGE_ROUTE_PREFIX)',
-    '',
-    '  if (storageRoutePrefix !== \'/storage\') {',
-    '    const pathname = event.url.pathname',
-    '    if (pathname === storageRoutePrefix || pathname.startsWith(`${storageRoutePrefix}/`)) {',
-    '      event.url.pathname = `/storage${pathname.slice(storageRoutePrefix.length)}` || \'/storage\'',
-    '    }',
-    '  }',
-    '',
-    '  return resolve(event)',
-    '}',
+  ].join('\n')
+}
+
+function renderSvelteServerUserHooks(): string {
+  return [
+    'export {}',
     '',
   ].join('\n')
 }
@@ -3276,6 +3156,11 @@ function renderSvelteViteConfig(storageEnabled: boolean): string {
     '',
     'export default defineConfig({',
     '  plugins: [sveltekit()],',
+    '  server: {',
+    '    fs: {',
+    '      allow: [\'.holo-js/generated\'],',
+    '    },',
+    '  },',
     '  ssr: {',
     '    external: [',
     ...externals,
@@ -3341,6 +3226,8 @@ function renderSveltePage(projectName: string): string {
 
 function renderSvelteHoloHelper(): string {
   return [
+    'import \'../../../server/db/schema.generated\'',
+    '',
     'import { createSvelteKitHoloHelpers } from \'@holo-js/adapter-sveltekit\'',
     '',
     'export const holo = createSvelteKitHoloHelpers()',
@@ -3371,7 +3258,7 @@ function renderSvelteHealthRoute(): string {
 function renderSvelteStorageRoute(): string {
   return [
     'import { holo } from \'$lib/server/holo\'',
-    'import { createPublicStorageResponse } from \'../../../../server/lib/public-storage\'',
+    'import { createPublicStorageResponse } from \'@holo-js/storage\'',
     '',
     'export async function GET({ request }: { request: Request }) {',
     '  const app = await holo.getApp()',
@@ -3401,21 +3288,18 @@ function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly Scaffol
       { path: 'app/page.tsx', contents: renderNextPage(options.projectName) },
       { path: 'app/api/holo/health/route.ts', contents: renderNextHealthRoute() },
       ...(storageEnabled
-        ? [
-            { path: 'app/storage/[[...path]]/route.ts', contents: renderNextStorageRoute() },
-            { path: 'server/lib/public-storage.ts', contents: renderPublicStorageHelper() },
-          ]
+        ? [{ path: 'app/storage/[[...path]]/route.ts', contents: renderNextStorageRoute() }]
         : []),
       { path: 'server/holo.ts', contents: renderNextHoloHelper() },
+      { path: 'instrumentation.ts', contents: renderNextInstrumentation() },
     ]
   }
 
   return [
     { path: 'svelte.config.js', contents: renderSvelteConfig() },
     { path: 'vite.config.ts', contents: renderSvelteViteConfig(storageEnabled) },
-    ...(storageEnabled
-      ? [{ path: 'src/hooks.server.ts', contents: renderSvelteHooksServer() }]
-      : []),
+    { path: 'src/hooks.ts', contents: renderSvelteUserHooks() },
+    { path: 'src/hooks.server.ts', contents: renderSvelteServerUserHooks() },
     { path: 'src/app.html', contents: renderSvelteAppHtml() },
     { path: 'src/routes/+page.svelte', contents: renderSveltePage(options.projectName) },
     { path: 'src/routes/api/holo/+server.ts', contents: renderSvelteHealthRoute() },
@@ -3423,9 +3307,6 @@ function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly Scaffol
       ? [{ path: 'src/routes/storage/[...path]/+server.ts', contents: renderSvelteStorageRoute() }]
       : []),
     { path: 'src/lib/server/holo.ts', contents: renderSvelteHoloHelper() },
-    ...(storageEnabled
-      ? [{ path: 'server/lib/public-storage.ts', contents: renderPublicStorageHelper() }]
-      : []),
   ]
 }
 
@@ -3505,9 +3386,27 @@ function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'framework'
     '  env: process.env,',
     '  stdio: [\'inherit\', \'pipe\', \'pipe\'],',
     '})',
+    'let forwardedSignal = null',
     '',
     'pipeOutput(child.stdout, process.stdout)',
     'pipeOutput(child.stderr, process.stderr)',
+    '',
+    'function forwardSignal(signal) {',
+    '  if (forwardedSignal || child.exitCode !== null) {',
+    '    return',
+    '  }',
+    '',
+    '  forwardedSignal = signal',
+    '  child.kill(signal)',
+    '}',
+    '',
+    'process.on(\'SIGINT\', () => {',
+    '  forwardSignal(\'SIGINT\')',
+    '})',
+    '',
+    'process.on(\'SIGTERM\', () => {',
+    '  forwardSignal(\'SIGTERM\')',
+    '})',
     '',
     'child.on(\'error\', (error) => {',
     '  console.error(error instanceof Error ? error.message : String(error))',
@@ -3545,13 +3444,17 @@ function renderScaffoldPackageJson(options: ProjectScaffoldOptions): string {
     esbuild: ESBUILD_PACKAGE_VERSION,
   }
   const devDependencies: Record<string, string> = {
-    typescript: '^5.7.2',
-    '@types/node': '^22.10.2',
+    typescript: '^5.8.0',
+    '@types/node': '^22.0.0',
   }
 
   if (options.framework === 'nuxt') {
     dependencies.nuxt = SCAFFOLD_FRAMEWORK_VERSIONS.nuxt
+    dependencies.vue = '^3.5.13'
+    dependencies['vue-router'] = '^5.0.4'
     dependencies['@holo-js/adapter-nuxt'] = SCAFFOLD_FRAMEWORK_ADAPTER_VERSIONS.nuxt
+    devDependencies.vite = '^5.4.14'
+    devDependencies['vue-tsc'] = '^2.2.0'
   }
 
   if (options.framework === 'next') {
@@ -3641,6 +3544,16 @@ function renderScaffoldPackageJson(options: ProjectScaffoldOptions): string {
       prepare: 'holo prepare',
       dev: 'holo dev',
       build: 'holo build',
+      lint: options.framework === 'nuxt'
+        ? 'npx eslint app.vue config server tests --fix --no-warn-ignored'
+        : options.framework === 'next'
+          ? 'npx eslint app config server tests --fix --no-warn-ignored'
+          : 'npx eslint src config server tests --fix --no-warn-ignored',
+      typecheck: options.framework === 'nuxt'
+        ? 'npx nuxi typecheck'
+        : options.framework === 'next'
+          ? 'npx tsc -p tsconfig.json --noEmit'
+          : 'npx svelte-kit sync && npx svelte-check --tsconfig ./tsconfig.json',
       ['config:cache']: 'holo config:cache',
       ['config:clear']: 'holo config:clear',
       ['holo:dev']: 'node ./.holo-js/framework/run.mjs dev',
@@ -3781,6 +3694,11 @@ export async function scaffoldProject(
   await writeFile(resolve(projectRoot, '.holo-js/framework/run.mjs'), renderFrameworkRunner(options), 'utf8')
   await writeFile(resolve(projectRoot, '.holo-js/framework/project.json'), `${JSON.stringify(options, null, 2)}\n`, 'utf8')
   await writeFile(resolve(projectRoot, 'tsconfig.json'), renderScaffoldTsconfig(options), 'utf8')
+  const vscodeSettings = renderVSCodeSettings(options)
+  if (vscodeSettings) {
+    await mkdir(resolve(projectRoot, '.vscode'), { recursive: true })
+    await writeFile(resolve(projectRoot, '.vscode/settings.json'), vscodeSettings, 'utf8')
+  }
   await writeFile(generatedSchemaPath, renderGeneratedSchemaPlaceholder(), 'utf8')
 
   for (const file of renderFrameworkFiles(options)) {
@@ -3824,6 +3742,7 @@ export {
   renderScaffoldGitignore,
   renderScaffoldPackageJson,
   renderScaffoldTsconfig,
+  renderVSCodeSettings,
   renderScaffoldEnvFiles,
   normalizeScaffoldEnvSegments,
   renderStorageConfig,

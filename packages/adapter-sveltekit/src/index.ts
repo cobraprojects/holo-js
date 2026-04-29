@@ -4,6 +4,10 @@ import {
   type HoloFrameworkOptions,
 } from '@holo-js/core'
 import type { HoloConfigMap } from '@holo-js/config'
+export {
+  holoSvelteKitTransport,
+  type SvelteKitTransportDefinition,
+} from './transport'
 
 export type SvelteKitHoloOptions = HoloFrameworkOptions
 

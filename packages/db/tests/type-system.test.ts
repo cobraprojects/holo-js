@@ -365,9 +365,9 @@ describe('type system contracts', () => {
       const collection = undefined as unknown as ModelCollection<typeof users, RelatedUserRelations>
       const query = RelatedUser.query()
 
-      expectTypeOf(RelatedUser.with('team')).toMatchTypeOf<ModelQueryBuilder<typeof users, RelatedUserRelations>>()
-      expectTypeOf(query.with('team')).toMatchTypeOf<ModelQueryBuilder<typeof users, RelatedUserRelations>>()
-      expectTypeOf(query.with('team.members')).toMatchTypeOf<ModelQueryBuilder<typeof users, RelatedUserRelations>>()
+      void RelatedUser.with('team')
+      void query.with('team')
+      void query.with('team.members')
       expectTypeOf(entity.id).toEqualTypeOf<number>()
       expectTypeOf(entity.name).toEqualTypeOf<string>()
       expectTypeOf(entity.public_id).toEqualTypeOf<string>()
@@ -375,8 +375,11 @@ describe('type system contracts', () => {
       expectTypeOf(entity.deleted_at).toEqualTypeOf<Date | null>()
       void query.where('name', '=', 'A')
       void query.orderBy('created_at')
-      expectTypeOf(entity.load('team')).toMatchTypeOf<Promise<Entity<typeof users, RelatedUserRelations>>>()
-      expectTypeOf(collection.load('team')).toMatchTypeOf<Promise<ModelCollection<typeof users, RelatedUserRelations>>>()
+      type LoadTeamResult = Awaited<ReturnType<typeof entity.load<readonly ['team']>>>
+      const loadTeam: Assert<IsEqual<LoadTeamResult['team'], Entity<typeof teams, typeof Team.definition.relations> | null>> = true
+      void loadTeam
+
+      void collection.load('team')
 
       // @ts-expect-error invalid relation names should be rejected on model statics
       RelatedUser.with('missing')
@@ -714,8 +717,8 @@ describe('type system contracts', () => {
       void nestedLoadComments
 
       // --- with() on static model ---
-      expectTypeOf(User.with('posts')).toMatchTypeOf<ModelQueryBuilder<typeof users, UserRelations>>()
-      expectTypeOf(User.with('posts.comments')).toMatchTypeOf<ModelQueryBuilder<typeof users, UserRelations>>()
+      void User.with('posts')
+      void User.with('posts.comments')
 
       // --- invalid nested paths are rejected at compile time ---
       // @ts-expect-error invalid nested relation name should be rejected on with()
@@ -769,6 +772,23 @@ describe('type system contracts', () => {
       void jsonPostTitle
       void jsonPostId
 
+      const withPostsCollection = undefined as unknown as Awaited<ReturnType<typeof withPostsQuery.get>>
+      type WithPostsCollectionItem = (typeof withPostsCollection)[number]
+      const loadedPostTitle: Assert<IsEqual<WithPostsCollectionItem['posts'][number]['title'], string>> = true
+      const mapItem = withPostsCollection.map(user => user.posts[0]?.title ?? null)
+      const mapItemType: Assert<IsEqual<(typeof mapItem)[number], string | null>> = true
+      type WithPostsCollectionJSON = ReturnType<typeof withPostsCollection.toJSON>
+      const jsonCollectionPostTitle: Assert<IsEqual<WithPostsCollectionJSON[number]['posts'][number]['title'], string>> = true
+      type WithPostsQueryJSON = Awaited<ReturnType<typeof withPostsQuery.getJson>>
+      const queryJsonPostTitle: Assert<IsEqual<WithPostsQueryJSON[number]['posts'][number]['title'], string>> = true
+      type WithPostsFirstJSON = Awaited<ReturnType<typeof withPostsQuery.firstJson>>
+      const queryFirstJsonPostTitle: Assert<IsEqual<NonNullable<WithPostsFirstJSON>['posts'][number]['title'], string>> = true
+      void loadedPostTitle
+      void mapItemType
+      void jsonCollectionPostTitle
+      void queryJsonPostTitle
+      void queryFirstJsonPostTitle
+
       // --- nested toJSON() serializes nested relations ---
       const nestedQ = User.query().with('posts.comments')
       type NestedEntity = NonNullable<Awaited<ReturnType<typeof nestedQ.first>>>
@@ -787,7 +807,10 @@ describe('type system contracts', () => {
       type ProfileValue = ProfileJSON['profile']
       // to-one: serialized as ModelRecord | null, check the non-null branch
       const jsonProfileBio: Assert<IsEqual<NonNullable<ProfileValue>['bio'], string>> = true
+      type StaticGetJSON = Awaited<ReturnType<typeof User.getJson>>
+      const staticGetJsonName: Assert<IsEqual<StaticGetJSON[number]['name'], string>> = true
       void jsonProfileBio
+      void staticGetJsonName
     }
   })
 

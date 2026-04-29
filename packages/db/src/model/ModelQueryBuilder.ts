@@ -21,8 +21,10 @@ import type {
   CursorPaginatedResult,
   CursorPaginationOptions,
   PaginatedResult,
+  PaginationMeta,
   PaginationOptions,
   SimplePaginatedResult,
+  SimplePaginationMeta,
 } from '../query/types'
 import type { TableDefinition } from '../schema/types'
 import type { Entity } from './Entity'
@@ -39,6 +41,7 @@ import type {
   RelatedColumnNameForRelationPath,
   RelationMap,
   ResolveEagerLoads,
+  SerializedEntityWithLoaded,
 } from './types'
 import type { ModelRepository } from './ModelRepository'
 
@@ -708,8 +711,9 @@ export class ModelQueryBuilder<
   with<TPaths extends readonly ModelRelationPath<TRelations>[]>(...relations: TPaths): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, TPaths>>
   with<TPath extends ModelRelationPath<TRelations>>(relation: TPath, constraint: RelationConstraint): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>>
   with(relations: Readonly<Partial<Record<ModelRelationPath<TRelations>, RelationConstraint>>>): ModelQueryBuilder<TTable, TRelations, TLoaded>
+  with<TPaths extends readonly ModelRelationPath<TRelations>[]>(relations: TPaths): ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, TPaths>>
   with(
-    first: ModelRelationPath<TRelations> | Readonly<Partial<Record<ModelRelationPath<TRelations>, RelationConstraint>>>,
+    first: ModelRelationPath<TRelations> | Readonly<Partial<Record<ModelRelationPath<TRelations>, RelationConstraint>>> | readonly ModelRelationPath<TRelations>[],
     second?: ModelRelationPath<TRelations> | RelationConstraint,
     ...rest: readonly ModelRelationPath<TRelations>[]
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- return type varies per overload
@@ -909,7 +913,9 @@ export class ModelQueryBuilder<
     return this.clone(this.tableQuery.cache(config))
   }
 
-  async get(): Promise<ModelCollection<TTable, TRelations> & Array<EntityWithLoaded<TTable, TRelations, TLoaded>>> {
+  async get(): Promise<
+    ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>
+  > {
     const rows = await this.tableQuery.get<ModelRecord<TTable>>()
     const hasQueryCasts = Object.keys(this.queryCasts).length > 0
     let entities = await Promise.all(
@@ -923,12 +929,21 @@ export class ModelQueryBuilder<
     this.repository.attachCollection(entities)
     await this.repository.loadRelations(entities, this.eagerLoads)
     await this.repository.loadRelationAggregates(entities, this.aggregateLoads)
-    return this.repository.createCollection(entities) as ModelCollection<TTable, TRelations> & Array<EntityWithLoaded<TTable, TRelations, TLoaded>>
+    return this.repository.createCollection(entities as EntityWithLoaded<TTable, TRelations, TLoaded>[]) as
+      ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>
+  }
+
+  async getJson(): Promise<SerializedEntityWithLoaded<TTable, TLoaded>[]> {
+    return (await this.get()).toJSON() as SerializedEntityWithLoaded<TTable, TLoaded>[]
   }
 
   async first(): Promise<EntityWithLoaded<TTable, TRelations, TLoaded> | undefined> {
     const [entity] = await this.limit(1).get()
     return entity
+  }
+
+  async firstJson(): Promise<SerializedEntityWithLoaded<TTable, TLoaded> | undefined> {
+    return (await this.first())?.toJSON() as SerializedEntityWithLoaded<TTable, TLoaded> | undefined
   }
 
   async sole(): Promise<EntityWithLoaded<TTable, TRelations, TLoaded>> {
@@ -941,6 +956,10 @@ export class ModelQueryBuilder<
     }
 
     return entities[0]!
+  }
+
+  async soleJson(): Promise<SerializedEntityWithLoaded<TTable, TLoaded>> {
+    return (await this.sole()).toJSON() as SerializedEntityWithLoaded<TTable, TLoaded>
   }
 
   async paginate(
@@ -971,6 +990,17 @@ export class ModelQueryBuilder<
     }) as PaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>
   }
 
+  async paginateJson(
+    perPage = 15,
+    page = 1,
+    options: PaginationOptions = {},
+  ): Promise<{ data: readonly SerializedEntityWithLoaded<TTable, TLoaded>[], meta: PaginationMeta }> {
+    return (await this.paginate(perPage, page, options)).toJSON() as {
+      data: readonly SerializedEntityWithLoaded<TTable, TLoaded>[]
+      meta: PaginationMeta
+    }
+  }
+
   async simplePaginate(
     perPage = 15,
     page = 1,
@@ -998,6 +1028,17 @@ export class ModelQueryBuilder<
     }) as SimplePaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>
   }
 
+  async simplePaginateJson(
+    perPage = 15,
+    page = 1,
+    options: PaginationOptions = {},
+  ): Promise<{ data: readonly SerializedEntityWithLoaded<TTable, TLoaded>[], meta: SimplePaginationMeta }> {
+    return (await this.simplePaginate(perPage, page, options)).toJSON() as {
+      data: readonly SerializedEntityWithLoaded<TTable, TLoaded>[]
+      meta: SimplePaginationMeta
+    }
+  }
+
   async cursorPaginate(
     perPage = 15,
     cursor: string | null = null,
@@ -1018,6 +1059,26 @@ export class ModelQueryBuilder<
       nextCursor: hasMorePages ? encodeOffsetCursor(offset + perPage) : null,
       prevCursor: cursor,
     }) as CursorPaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>
+  }
+
+  async cursorPaginateJson(
+    perPage = 15,
+    cursor: string | null = null,
+    options: CursorPaginationOptions = {},
+  ): Promise<{
+    data: readonly SerializedEntityWithLoaded<TTable, TLoaded>[]
+    perPage: number
+    cursorName: string
+    nextCursor: string | null
+    prevCursor: string | null
+  }> {
+    return (await this.cursorPaginate(perPage, cursor, options)).toJSON() as {
+      data: readonly SerializedEntityWithLoaded<TTable, TLoaded>[]
+      perPage: number
+      cursorName: string
+      nextCursor: string | null
+      prevCursor: string | null
+    }
   }
 
   async chunk(
@@ -1214,6 +1275,10 @@ export class ModelQueryBuilder<
     return entity
   }
 
+  async findOrFailJson(value: unknown, column?: string): Promise<SerializedEntityWithLoaded<TTable, TLoaded>> {
+    return (await this.findOrFail(value, column)).toJSON() as SerializedEntityWithLoaded<TTable, TLoaded>
+  }
+
   async update(values: Partial<ModelRecord<TTable>>): Promise<DriverExecutionResult> {
     return this.tableQuery.update(this.repository.sanitizeWritePayload(values, 'update'))
   }
@@ -1370,10 +1435,14 @@ export class ModelQueryBuilder<
   }
 
   private normalizeEagerLoads(
-    first: ModelRelationPath<TRelations> | RelationConstraintMap<TRelations>,
+    first: ModelRelationPath<TRelations> | RelationConstraintMap<TRelations> | readonly ModelRelationPath<TRelations>[],
     second?: ModelRelationPath<TRelations> | RelationConstraint,
     rest: readonly ModelRelationPath<TRelations>[] = [],
   ): readonly EagerLoad[] {
+    if (Array.isArray(first)) {
+      return first.map((relation) => ({ relation }))
+    }
+
     if (typeof first === 'string') {
       if (typeof second === 'function') {
         return [{ relation: first, constraint: second }]
@@ -1683,7 +1752,9 @@ export class ModelQueryBuilder<
     })
   }
 
-  private async getUnpaginatedEntities(): Promise<ModelCollection<TTable, TRelations> & Array<EntityWithLoaded<TTable, TRelations, TLoaded>>> {
+  private async getUnpaginatedEntities(): Promise<
+    ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>
+  > {
     return this.clone(this.tableQuery.limit(undefined).offset(undefined)).get()
   }
 

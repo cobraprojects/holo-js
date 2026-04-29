@@ -1,7 +1,8 @@
 import { spawnSync, spawn } from 'node:child_process'
 import { watch } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
-import { dirname, join, relative, resolve } from 'node:path'
+import { join, dirname, relative, resolve } from 'node:path'
+import { readFile } from 'node:fs/promises'
 import {
   readTextFile,
   ensureProjectConfig,
@@ -136,11 +137,123 @@ export async function runProjectDependencyInstall(
 export async function runProjectPrepare(projectRoot: string, io?: IoStreams): Promise<void> {
   const project = await ensureProjectConfig(projectRoot)
   await prepareProjectDiscovery(projectRoot, project.config)
+
+  await runNuxtPrepare(projectRoot)
+  await runSvelteKitSync(projectRoot)
+
   const updatedDependencies = await syncManagedDriverDependencies(projectRoot)
   if (updatedDependencies && io) {
     await runProjectDependencyInstall(io, projectRoot)
     await prepareProjectDiscovery(projectRoot, project.config)
+    await runNuxtPrepare(projectRoot)
+    await runSvelteKitSync(projectRoot)
   }
+}
+
+async function runNuxtPrepare(projectRoot: string): Promise<void> {
+  const frameworkProjectPath = resolve(projectRoot, '.holo-js/framework/project.json')
+  try {
+    const content = await readFile(frameworkProjectPath, 'utf8')
+    const manifest = JSON.parse(content) as { framework?: string }
+
+    if (manifest.framework !== 'nuxt') {
+      return
+    }
+  } catch {
+    return
+  }
+
+  const manager = await resolveProjectPackageManager(projectRoot)
+  let command: string
+  let args: string[]
+  switch (manager) {
+    case 'npm':
+      command = 'npm'
+      args = ['exec', '--', 'nuxt', 'prepare']
+      break
+    case 'pnpm':
+      command = 'pnpm'
+      args = ['exec', 'nuxt', 'prepare']
+      break
+    case 'yarn':
+      command = 'yarn'
+      args = ['run', 'nuxt', 'prepare']
+      break
+    case 'bun':
+    default:
+      command = 'bun'
+      args = ['x', 'nuxt', 'prepare']
+      break
+  }
+
+  const { spawn } = await import('node:child_process')
+  await new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: projectRoot,
+      stdio: 'inherit',
+    })
+    child.on('close', code => {
+      if (code === 0) {
+        resolve(undefined)
+      } else {
+        reject(new Error(`nuxt prepare exited with ${code}`))
+      }
+    })
+    child.on('error', reject)
+  })
+}
+
+async function runSvelteKitSync(projectRoot: string): Promise<void> {
+  const frameworkProjectPath = resolve(projectRoot, '.holo-js/framework/project.json')
+  try {
+    const content = await readFile(frameworkProjectPath, 'utf8')
+    const manifest = JSON.parse(content) as { framework?: string }
+
+    if (manifest.framework !== 'sveltekit') {
+      return
+    }
+  } catch {
+    return
+  }
+
+  const manager = await resolveProjectPackageManager(projectRoot)
+  let command: string
+  let args: string[]
+  switch (manager) {
+    case 'npm':
+      command = 'npm'
+      args = ['exec', '--', 'svelte-kit', 'sync']
+      break
+    case 'pnpm':
+      command = 'pnpm'
+      args = ['exec', 'svelte-kit', 'sync']
+      break
+    case 'yarn':
+      command = 'yarn'
+      args = ['run', 'svelte-kit', 'sync']
+      break
+    case 'bun':
+    default:
+      command = 'bun'
+      args = ['x', 'svelte-kit', 'sync']
+      break
+  }
+
+  const { spawn } = await import('node:child_process')
+  await new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: projectRoot,
+      stdio: 'inherit',
+    })
+    child.on('close', code => {
+      if (code === 0) {
+        resolve(undefined)
+      } else {
+        reject(new Error(`svelte-kit sync exited with ${code}`))
+      }
+    })
+    child.on('error', reject)
+  })
 }
 
 export function toPosixSlashes(value: string): string {
@@ -152,6 +265,15 @@ export function isDiscoveryRelevantPath(
   project: LoadedProjectConfig,
 ): boolean {
   const normalized = toPosixSlashes(filePath)
+  if (normalized === '.holo-js/generated' || normalized.startsWith('.holo-js/generated/')) {
+    return false
+  }
+
+  const generatedSchemaPath = toPosixSlashes(project.config.paths.generatedSchema ?? 'server/db/schema.generated.ts')
+  if (normalized === generatedSchemaPath) {
+    return true
+  }
+
   const authorizationPoliciesPath = project.config.paths.authorizationPolicies || 'server/policies'
   const authorizationAbilitiesPath = project.config.paths.authorizationAbilities || 'server/abilities'
   const roots = [
@@ -166,9 +288,7 @@ export function isDiscoveryRelevantPath(
     authorizationAbilitiesPath,
     'server/broadcast',
     'server/channels',
-    project.config.paths.generatedSchema,
     'config',
-    '.holo-js/generated',
   ]
 
   if (normalized === '.env' || normalized.startsWith('.env.')) {
@@ -222,7 +342,6 @@ export async function collectDiscoveryWatchRoots(
   const roots = [
     projectRoot,
     resolve(projectRoot, 'config'),
-    resolve(projectRoot, '.holo-js/generated'),
     resolve(projectRoot, project.config.paths.models),
     resolve(projectRoot, project.config.paths.migrations),
     resolve(projectRoot, project.config.paths.seeders),
@@ -234,7 +353,7 @@ export async function collectDiscoveryWatchRoots(
     resolve(projectRoot, authorizationAbilitiesPath),
     resolve(projectRoot, 'server/broadcast'),
     resolve(projectRoot, 'server/channels'),
-    dirname(resolve(projectRoot, project.config.paths.generatedSchema)),
+    resolve(projectRoot, dirname(project.config.paths.generatedSchema ?? 'server/db/schema.generated.ts')),
   ]
 
   for (const rootPath of roots) {

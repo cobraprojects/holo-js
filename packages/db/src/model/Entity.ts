@@ -1,6 +1,6 @@
 import { HydrationError } from '../core/errors'
 import type { TableDefinition } from '../schema/types'
-import type { AnyModelDefinition, EmptyScopeMap, ModelAggregateLoad, ModelMorphLoadMap, ModelRecord, ModelRelationName, ModelRelationPath, ModelRepositoryLike, ModelUpdatePayload, RelatedColumnNameOfRelation, RelationMap, ResolveEagerLoads, SerializeLoaded } from './types'
+import type { AnyModelDefinition, EmptyScopeMap, ModelAggregateLoad, ModelMorphLoadMap, ModelRecord, ModelRelationName, ModelRelationPath, ModelRepositoryLike, ModelUpdatePayload, RelatedColumnNameOfRelation, RelationMap, RelationMethodsOf, ResolveEagerLoads, SerializeLoaded } from './types'
 
 type EntityConstructor = {
   new<
@@ -390,6 +390,90 @@ class EntityBase<
     return this
   }
 
+  relation<K extends ModelRelationName<TRelations>>(
+    name: K,
+  ): RelationMethodsOf<TRelations[K]> {
+    const repo = this.getRepositoryRuntime()
+    const relationDef = (typeof repo.getRelationDefinition === 'function'
+      ? repo.getRelationDefinition(name as string)
+      : repo.definition.relations[name]) as TRelations[K] | undefined
+
+    if (!relationDef) {
+      throw new Error(`Relation '${name}' is not defined on this model`)
+    }
+
+    if (relationDef.kind === 'belongsTo') {
+      return {
+        associate: (related: unknown) => {
+          this.associate(name, related as Entity<TableDefinition> | null)
+        },
+        dissociate: () => {
+          this.dissociate(name)
+        },
+      } as unknown as RelationMethodsOf<TRelations[K]>
+    }
+
+    if (relationDef.kind === 'hasOne' || relationDef.kind === 'hasOneOfMany' || relationDef.kind === 'hasOneThrough' || relationDef.kind === 'morphOne' || relationDef.kind === 'morphOneOfMany') {
+      return {
+        create: async (values: Record<string, unknown>) => {
+          return this.createRelated(name, values)
+        },
+        save: async (related: unknown) => {
+          return this.saveRelated(name, related as Entity<TableDefinition>)
+        },
+      } as unknown as RelationMethodsOf<TRelations[K]>
+    }
+
+    if (relationDef.kind === 'hasMany' || relationDef.kind === 'hasManyThrough' || relationDef.kind === 'morphMany') {
+      return {
+        create: async (values: Record<string, unknown>) => {
+          return this.createRelated(name, values)
+        },
+        createMany: async (values: readonly Record<string, unknown>[]) => {
+          return this.createManyRelated(name, values)
+        },
+        save: async (related: unknown) => {
+          return this.saveRelated(name, related as Entity<TableDefinition>)
+        },
+        saveMany: async (related: readonly unknown[]) => {
+          return this.saveManyRelated(name, related as Entity<TableDefinition>[])
+        },
+      } as unknown as RelationMethodsOf<TRelations[K]>
+    }
+
+    if (
+      relationDef.kind === 'belongsToMany' ||
+      relationDef.kind === 'morphToMany' ||
+      relationDef.kind === 'morphedByMany'
+    ) {
+      return {
+        attach: async (ids: unknown | readonly unknown[], attributes?: Record<string, unknown>) => {
+          await this.attach(name, ids, attributes ?? {})
+        },
+        detach: async (ids?: unknown | readonly unknown[]) => {
+          return this.detach(name, ids)
+        },
+        sync: async (ids: unknown) => {
+          return this.sync(name, ids)
+        },
+        toggle: async (ids: unknown) => {
+          return this.toggle(name, ids)
+        },
+        updateExistingPivot: async (id: unknown, attributes: Record<string, unknown>) => {
+          return this.updateExistingPivot(name, id, attributes)
+        },
+        create: async (values: Record<string, unknown>) => {
+          return this.createRelated(name, values)
+        },
+        save: async (related: unknown) => {
+          return this.saveRelated(name, related as Entity<TableDefinition>)
+        },
+      } as unknown as RelationMethodsOf<TRelations[K]>
+    }
+
+    return {} as unknown as RelationMethodsOf<TRelations[K]>
+  }
+
   toJSON(): ModelRecord<TTable> {
     const repo = this.getRepositoryRuntime()
     if (typeof repo.serializeEntity === 'function') {
@@ -603,7 +687,7 @@ class EntityBase<
   async load<TPaths extends readonly ModelRelationPath<TRelations>[]>(
     ...relations: TPaths
   ): Promise<
-    this
+    Omit<this, keyof ResolveEagerLoads<TRelations, TPaths>>
     & ResolveEagerLoads<TRelations, TPaths>
     & (this extends { toJSON(): infer R }
       ? { toJSON(): R & SerializeLoaded<ResolveEagerLoads<TRelations, TPaths>> }
@@ -622,7 +706,7 @@ class EntityBase<
   async loadMissing<TPaths extends readonly ModelRelationPath<TRelations>[]>(
     ...relations: TPaths
   ): Promise<
-    this
+    Omit<this, keyof ResolveEagerLoads<TRelations, TPaths>>
     & ResolveEagerLoads<TRelations, TPaths>
     & (this extends { toJSON(): infer R }
       ? { toJSON(): R & SerializeLoaded<ResolveEagerLoads<TRelations, TPaths>> }
@@ -928,11 +1012,24 @@ class EntityBase<
             return this.getRelation(key)
           }
 
-          if (typeof repo?.resolveRelationProperty === 'function') {
-            return repo.resolveRelationProperty(this, key)
+          const relationMethod = (() => this.relation(key as ModelRelationName<TRelations>)) as (() => RelationMethodsOf<TRelations[ModelRelationName<TRelations>]>) & PromiseLike<unknown> & {
+            catch?: <TResult = never>(onRejected?: (reason: unknown) => TResult | PromiseLike<TResult>) => Promise<unknown | TResult>
+            finally?: (onFinally?: () => void) => Promise<unknown>
           }
 
-          return undefined
+          const loadRelation = () => {
+            if (typeof repo?.resolveRelationProperty !== 'function') {
+              return Promise.resolve(undefined)
+            }
+
+            return Promise.resolve((repo.resolveRelationProperty as (entity: unknown, key: string) => unknown)(this, key))
+          }
+
+          relationMethod.then = (onFulfilled, onRejected) => loadRelation().then(onFulfilled, onRejected)
+          relationMethod.catch = (onRejected) => loadRelation().catch(onRejected)
+          relationMethod.finally = (onFinally) => loadRelation().finally(onFinally)
+
+          return relationMethod
         },
         set: (value: unknown) => {
           this.setRelation(key, value)
@@ -942,9 +1039,28 @@ class EntityBase<
   }
 }
 
+export type ModelRelationMethods<TRelations extends RelationMap>
+  = string extends ModelRelationName<TRelations>
+    ? Record<never, never>
+    : {
+        [K in ModelRelationName<TRelations>]: () => RelationMethodsOf<TRelations[K]>
+      }
+
+export type ModelBase<
+  TTable extends TableDefinition = TableDefinition,
+  TRelations extends RelationMap = RelationMap,
+> = EntityBase<TTable, TRelations> & ModelRecord<TTable> & {
+  relation<K extends ModelRelationName<TRelations>>(name: K): RelationMethodsOf<TRelations[K]>
+}
+
 export type Entity<
   TTable extends TableDefinition = TableDefinition,
   TRelations extends RelationMap = RelationMap,
-> = EntityBase<TTable, TRelations> & ModelRecord<TTable>
+> = ModelBase<TTable, TRelations> & ModelRelationMethods<TRelations>
+
+export type Model<
+  TTable extends TableDefinition = TableDefinition,
+  TRelations extends RelationMap = RelationMap,
+> = Entity<TTable, TRelations>
 
 export const Entity = EntityBase as unknown as EntityConstructor

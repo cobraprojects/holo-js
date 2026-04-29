@@ -7,6 +7,7 @@ export { ModelQueryBuilder } from './ModelQueryBuilder'
 export { ModelRepository, getModelDefinition } from './ModelRepository'
 export { defineModel } from './defineModel'
 export { listMorphModels, resetMorphRegistry, resolveMorphModel } from './morphRegistry'
+export { serializeModels } from './serialize'
 export {
   belongsTo,
   belongsToMany,
@@ -39,6 +40,7 @@ export {
   validateUniqueIdConfig,
 } from './uniqueIds'
 export type { ModelCollection } from './collection'
+export type { Model } from './Entity'
 export type {
   DefineModelOptions,
   EntityWithLoaded,
@@ -49,6 +51,7 @@ export type {
   ModelRecord,
   ModelReference,
   DynamicRelationResolver,
+  EmptyScopeMap,
   EnumCastDefinition,
   RelationDefinition,
   RelationMap,
@@ -59,7 +62,9 @@ export type {
   ResolveEagerLoadPath,
   ResolveEagerLoadUnion,
   SerializedEntityWithLoaded,
+  SerializeLoaded,
   UniqueIdRuntimeConfig,
   UniqueIdTrait,
   UniqueIdTraitKind,
 } from './types'
+export type { SerializeModels } from './serialize'

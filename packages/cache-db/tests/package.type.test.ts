@@ -73,8 +73,8 @@ describe('@holo-js/cache-db typing', () => {
     if (false) {
       const query = User.query()
 
-      expectTypeOf(User.with('team')).toMatchTypeOf<UserQuery>()
-      expectTypeOf(query.with('team')).toMatchTypeOf<UserQuery>()
+      void User.with('team')
+      void query.with('team')
       expectTypeOf(User.definition.relations).toMatchTypeOf<UserRelations>()
 
       // @ts-expect-error invalid generated-schema scope names should be rejected

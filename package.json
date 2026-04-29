@@ -10,10 +10,13 @@
       "apps/*",
       "playground"
     ],
-    "catalog": {
+"catalog": {
       "better-sqlite3": "^11.7.0",
       "@types/better-sqlite3": "^7.6.12",
       "nuxt": "^4.0.0",
+      "vue": "^3.5.13",
+      "vue-router": "^5.0.4",
+      "vite": "^5.4.14",
       "@nuxt/kit": "^4.0.0",
       "@nuxt/module-builder": "^1.0.2",
       "@eslint/js": "^9.17.0",
@@ -58,6 +61,10 @@
     "test:cli": "vitest --run --project @holo-js/cli",
     "test:cli:integration": "bun run --cwd packages/cli test:integration",
     "test:cli:coverage": "rm -rf coverage/cli && HOLO_CLI_INCLUDE_INTEGRATION=1 vitest --run --project @holo-js/cli --coverage --coverage.clean=false --coverage.reportsDirectory='coverage/cli' --coverage.include='packages/cli/src/**/*.ts' --coverage.exclude='packages/cli/src/**/types.ts' --coverage.exclude='packages/cli/src/cli-types.ts' --coverage.exclude='packages/cli/src/bin/**' --pool forks",
+    "test:example:blog-nuxt": "bun run --cwd apps/blog-nuxt test",
+    "test:example:blog-next": "bun run --cwd apps/blog-next test",
+    "test:example:blog-sveltekit": "bun run --cwd apps/blog-sveltekit test",
+    "test:examples": "bun run test:example:blog-nuxt && bun run test:example:blog-next && bun run test:example:blog-sveltekit",
     "test:config:coverage": "rm -rf coverage/config && vitest --run --project @holo-js/config --coverage --coverage.clean=false --coverage.reportsDirectory='coverage/config' --coverage.include='packages/config/src/**/*.ts' --coverage.exclude='packages/config/src/**/types.ts'",
     "test:core:coverage": "rm -rf coverage/core && vitest --run --project @holo-js/core --coverage --coverage.clean=false --coverage.reportsDirectory='coverage/core' --coverage.include='packages/core/src/**/*.ts' --coverage.exclude='packages/core/src/**/types.ts' --coverage.exclude='packages/core/src/runtime/**/*.d.ts'",
     "test:db:coverage": "rm -rf coverage/db && vitest --run --project @holo-js/db --coverage --coverage.clean=false --coverage.reportsDirectory='coverage/db' --coverage.include='packages/db/src/**/*.ts' --coverage.exclude='packages/db/src/**/types.ts' --coverage.exclude='packages/db/src/migrations/templates/**' --coverage.exclude='packages/db/src/drivers/index.ts' --coverage.exclude='packages/db/src/drivers/SQLiteAdapter.ts' --coverage.exclude='packages/db/src/drivers/PostgresAdapter.ts' --coverage.exclude='packages/db/src/drivers/MySQLAdapter.ts'",
