@@ -9477,6 +9477,15 @@ export default defineConfig({
     expect(await readFile(join(projectRoot, '.holo-js/generated/hooks.ts'), 'utf8')).toContain('holoSvelteKitTransport')
     expect(await readFile(join(projectRoot, '.holo-js/generated/hooks.server.ts'), 'utf8')).toContain('sequence(holoHandle, serverHooks.handle)')
 
+    // Generated hooks import and re-export user hooks
+    const generatedHooks = await readFile(join(projectRoot, '.holo-js/generated/hooks.ts'), 'utf8')
+    expect(generatedHooks).toContain("from '../../src/hooks'")
+    expect(generatedHooks).toContain('reroute')
+
+    const generatedServerHooks = await readFile(join(projectRoot, '.holo-js/generated/hooks.server.ts'), 'utf8')
+    expect(generatedServerHooks).toContain("from '../../src/hooks.server'")
+    expect(generatedServerHooks).toContain('handleFetch')
+
     // Legacy .user.ts files are deleted, not left as empty artifacts.
     await expect(stat(join(projectRoot, 'src/hooks.user.ts'))).rejects.toThrow()
     await expect(stat(join(projectRoot, 'src/hooks.server.user.ts'))).rejects.toThrow()

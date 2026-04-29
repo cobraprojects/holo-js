@@ -350,15 +350,17 @@ async function ensureSvelteManagedHooks(projectRoot: string): Promise<void> {
 }
 
 async function syncManagedFrameworkArtifacts(projectRoot: string): Promise<void> {
+  let manifest: { framework?: string }
   try {
     const content = await readFile(resolve(projectRoot, '.holo-js/framework/project.json'), 'utf8')
-    const manifest = JSON.parse(content) as { framework?: string }
-
-    if (manifest.framework === 'sveltekit') {
-      await ensureSvelteManagedHooks(projectRoot)
-    }
+    manifest = JSON.parse(content) as { framework?: string }
   } catch {
     // Ignore missing or invalid framework manifests during registry writes.
+    return
+  }
+
+  if (manifest.framework === 'sveltekit') {
+    await ensureSvelteManagedHooks(projectRoot)
   }
 }
 

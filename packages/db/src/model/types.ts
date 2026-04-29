@@ -341,9 +341,11 @@ export type RelationMethodsOf<TRelation extends RelationDefinition>
                 ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>>
                 : TRelation extends MorphOneRelationDefinition<infer TRelated>
                   ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
-                  : TRelation extends MorphManyRelationDefinition<infer TRelated>
-                    ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
-                    : TRelation extends MorphToManyRelationDefinition<infer TRelated>
+                  : TRelation extends MorphOneOfManyRelationDefinition<infer TRelated>
+                    ? HasOneRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+                    : TRelation extends MorphManyRelationDefinition<infer TRelated>
+                      ? HasManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>>
+                      : TRelation extends MorphToManyRelationDefinition<infer TRelated>
                       ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>>
                       : TRelation extends MorphedByManyRelationDefinition<infer TRelated>
                         ? BelongsToManyRelationMethods<Entity<ModelDefinitionTable<TRelated>>, Record<string, unknown>>

@@ -18,16 +18,16 @@ function isSerializableModel(value: unknown): value is SerializableModel {
 }
 
 export function serializeModels<TValue>(value: TValue): SerializeModels<TValue> {
+  if (value instanceof Date || value === null || typeof value !== 'object') {
+    return value as SerializeModels<TValue>
+  }
+
   if (isSerializableModel(value)) {
     return value.toJSON() as SerializeModels<TValue>
   }
 
   if (Array.isArray(value)) {
     return value.map(item => serializeModels(item)) as SerializeModels<TValue>
-  }
-
-  if (value instanceof Date || value === null || typeof value !== 'object') {
-    return value as SerializeModels<TValue>
   }
 
   return Object.fromEntries(

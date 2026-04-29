@@ -394,33 +394,26 @@ class EntityBase<
     name: K,
   ): RelationMethodsOf<TRelations[K]> {
     const repo = this.getRepositoryRuntime()
-    const relationDef = repo.definition.relations[name]
+    const relationDef = (typeof repo.getRelationDefinition === 'function'
+      ? repo.getRelationDefinition(name as string)
+      : repo.definition.relations[name]) as TRelations[K] | undefined
 
     if (!relationDef) {
       throw new Error(`Relation '${name}' is not defined on this model`)
     }
 
     if (relationDef.kind === 'belongsTo') {
-      const repo = this.getRepositoryRuntime()
       return {
         associate: (related: unknown) => {
-          if (typeof repo.associateRelation === 'function') {
-            repo.associateRelation(this, name, related as Entity<TableDefinition> | null)
-          } else {
-            this.setRelation(name, related)
-          }
+          this.associate(name, related as Entity<TableDefinition> | null)
         },
         dissociate: () => {
-          if (typeof repo.dissociateRelation === 'function') {
-            repo.dissociateRelation(this, name)
-          } else {
-            this.setRelation(name, null)
-          }
+          this.dissociate(name)
         },
       } as unknown as RelationMethodsOf<TRelations[K]>
     }
 
-    if (relationDef.kind === 'hasOne' || relationDef.kind === 'hasOneThrough' || relationDef.kind === 'morphOne') {
+    if (relationDef.kind === 'hasOne' || relationDef.kind === 'hasOneOfMany' || relationDef.kind === 'hasOneThrough' || relationDef.kind === 'morphOne' || relationDef.kind === 'morphOneOfMany') {
       return {
         create: async (values: Record<string, unknown>) => {
           return this.createRelated(name, values)

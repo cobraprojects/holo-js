@@ -49,6 +49,7 @@ import type {
   RelatedColumnNameForRelationPath,
   ResolveEagerLoads,
   SerializedEntityWithLoaded,
+  UniqueIdRuntimeConfig,
 } from './types'
 
 type BuilderCallback<TBuilder> = (query: TBuilder) => unknown
@@ -275,6 +276,7 @@ type StaticModelApi<
   lockForUpdate(): ModelQueryBuilder<TTable, TRelations>
   sharedLock(): ModelQueryBuilder<TTable, TRelations>
   with<TPaths extends readonly ModelRelationPath<TRelations>[]>(...relations: TPaths): ModelQueryBuilder<TTable, TRelations, ResolveEagerLoads<TRelations, TPaths>>
+  with<TPaths extends readonly ModelRelationPath<TRelations>[]>(relations: TPaths): ModelQueryBuilder<TTable, TRelations, ResolveEagerLoads<TRelations, TPaths>>
   with<TPath extends ModelRelationPath<TRelations>>(relation: TPath, constraint: RelationConstraintCallback): ModelQueryBuilder<TTable, TRelations, ResolveEagerLoads<TRelations, readonly [TPath]>>
   with<TMap extends Readonly<Partial<Record<ModelRelationPath<TRelations>, RelationConstraintCallback>>>>(relations: TMap): ModelQueryBuilder<TTable, TRelations>
   withCount(...relations: readonly ModelRelationPath<TRelations>[]): ModelQueryBuilder<TTable, TRelations>
@@ -473,22 +475,18 @@ function defineModelFromGeneratedTableName<
   const resolveDeletedAt = (): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> | undefined => (
     resolveDeletedAtColumn(resolveTable(), options)
   )
-  const uniqueIdConfig = resolvedAtDefinition
-    ? resolveUniqueIdConfig(
-        options.traits,
-        resolvePrimaryKey(),
-        options.uniqueIds,
-        options.newUniqueId,
-      )
-    : resolveUniqueIdConfig(
-        options.traits,
-        (options.primaryKey ?? 'id') as Extract<keyof GeneratedSchemaTable<TName>['columns'], string>,
-        options.uniqueIds,
-        options.newUniqueId,
-      )
+  const resolveUniqueId = (): UniqueIdRuntimeConfig<GeneratedSchemaTable<TName>> | null => {
+    return resolveUniqueIdConfig(
+      options.traits,
+      resolvePrimaryKey(),
+      options.uniqueIds,
+      options.newUniqueId,
+    )
+  }
 
   if (resolvedAtDefinition) {
-    validateUniqueIdConfig(resolvedAtDefinition, inferredName, uniqueIdConfig)
+    const eagerConfig = resolveUniqueId()
+    validateUniqueIdConfig(resolvedAtDefinition, inferredName, eagerConfig)
   }
 
   const definition = {
@@ -520,13 +518,12 @@ function defineModelFromGeneratedTableName<
     massPrunable: options.massPrunable ?? false,
     touches,
     traits: Object.freeze([...(options.traits ?? [])]),
-    uniqueIdConfig,
     replicationExcludes: Object.freeze([...(options.replicationExcludes ?? [])]),
     softDeletes: options.softDeletes ?? false,
     events: normalizeEventHandlers(options.events),
     observers: Object.freeze([...(options.observers ?? [])]),
-  } as Omit<ModelDefinition<GeneratedSchemaTable<TName>, TScopes, TRelations>, 'table' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn'>
-    & Pick<ModelDefinition<GeneratedSchemaTable<TName>, TScopes, TRelations>, 'table' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn'>
+  } as Omit<ModelDefinition<GeneratedSchemaTable<TName>, TScopes, TRelations>, 'table' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig'>
+    & Pick<ModelDefinition<GeneratedSchemaTable<TName>, TScopes, TRelations>, 'table' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig'>
 
   Object.defineProperties(definition, {
     table: {
@@ -548,6 +545,10 @@ function defineModelFromGeneratedTableName<
     deletedAtColumn: {
       enumerable: true,
       get: resolveDeletedAt,
+    },
+    uniqueIdConfig: {
+      enumerable: true,
+      get: resolveUniqueId,
     },
   })
 

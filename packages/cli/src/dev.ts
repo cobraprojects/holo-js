@@ -1,7 +1,7 @@
 import { spawnSync, spawn } from 'node:child_process'
 import { watch } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
-import { join, relative, resolve } from 'node:path'
+import { join, dirname, relative, resolve } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import {
   readTextFile,
@@ -353,6 +353,7 @@ export async function collectDiscoveryWatchRoots(
     resolve(projectRoot, authorizationAbilitiesPath),
     resolve(projectRoot, 'server/broadcast'),
     resolve(projectRoot, 'server/channels'),
+    resolve(projectRoot, dirname(project.config.paths.generatedSchema ?? 'server/db/schema.generated.ts')),
   ]
 
   for (const rootPath of roots) {
