@@ -61,10 +61,10 @@ async function preloadGeneratedSchemaModule(
   } catch (error) {
     if (
       error instanceof Error
-      && /Cannot find module|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Failed to load url/.test(error.message)
+      && /Cannot find module|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Failed to load url|Failed to load /.test(error.message)
     ) {
       const message = error.message
-      const failedTarget = message.match(/Cannot find module '([^']+)'|Cannot find package '([^']+)'|Failed to load url ([^ ]+)/)?.slice(1)
+      const failedTarget = message.match(/Cannot find module '([^']+)'|Cannot find package '([^']+)'|Failed to load url ([^ ]+)|Failed to load ([^.]+)\./)?.slice(1)
         .find((value): value is string => typeof value === 'string')
       if (failedTarget === expectedTarget) {
         return

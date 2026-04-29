@@ -2816,7 +2816,7 @@ function renderScaffoldTsconfig(options: Pick<ProjectScaffoldOptions, 'framework
     }, null, 2)}\n`
   }
 
-  const include = ['next-env.d.ts', 'app/**/*.ts', 'app/**/*.tsx', 'server/**/*.ts', 'config/**/*.ts', '.holo-js/generated/**/*.ts', '.holo-js/generated/**/*.d.ts']
+  const include = ['next-env.d.ts', 'instrumentation.ts', 'app/**/*.ts', 'app/**/*.tsx', 'server/**/*.ts', 'config/**/*.ts', '.holo-js/generated/**/*.ts', '.holo-js/generated/**/*.d.ts']
 
   return `${JSON.stringify({
     compilerOptions: {
@@ -2936,63 +2936,14 @@ function renderNuxtHealthRoute(): string {
   ].join('\n')
 }
 
-function renderNextConfig(storageEnabled: boolean): string {
-  if (!storageEnabled) {
-    return [
-      '/** @type {import(\'next\').NextConfig} */',
-      'const nextConfig = {',
-      '  outputFileTracingExcludes: {',
-      '    \'/*\': [\'./next.config.mjs\'],',
-      '  },',
-      '  serverExternalPackages: [',
-      '    \'@holo-js/core\',',
-      '    \'@holo-js/adapter-next\',',
-      '    \'@holo-js/db\',',
-      '    \'@holo-js/config\',',
-      '    \'esbuild\',',
-      '  ],',
-      '}',
-      '',
-      'export default nextConfig',
-      '',
-    ].join('\n')
-  }
-
+function renderNextConfig(_storageEnabled: boolean): string {
   return [
-    'const storageRoutePrefix = (() => {',
-    '  const raw = process.env.STORAGE_ROUTE_PREFIX?.trim() ?? \'/storage\'',
-    '  if (!raw || raw === \'/\') {',
-    '    return \'/storage\'',
-    '  }',
+    'import type { NextConfig } from \'next\'',
+    'import { withHolo } from \'@holo-js/adapter-next/config\'',
     '',
-    '  return `/${raw.replace(/^\\/+|\\/+$/g, \'\')}`',
-    '})()',
-    '',
-    '/** @type {import(\'next\').NextConfig} */',
-    'const nextConfig = {',
-    '  outputFileTracingExcludes: {',
-    '    \'/*\': [\'./next.config.mjs\'],',
-    '  },',
-    '  serverExternalPackages: [',
-    '    \'@holo-js/core\',',
-    '    \'@holo-js/adapter-next\',',
-    '    \'@holo-js/db\',',
-    '    \'@holo-js/config\',',
-    '    \'esbuild\',',
-    '  ],',
-    '  async rewrites() {',
-    '    if (storageRoutePrefix === \'/storage\') {',
-    '      return []',
-    '    }',
-    '',
-    '    return [',
-    '      {',
-    '        source: `${storageRoutePrefix}/:path*`,',
-    '        destination: \'/storage/:path*\',',
-    '      },',
-    '    ]',
-    '  },',
-    '}',
+    'const nextConfig: NextConfig = withHolo({',
+    '  /* config options here */',
+    '})',
     '',
     'export default nextConfig',
     '',
@@ -3285,7 +3236,7 @@ function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly Scaffol
 
   if (options.framework === 'next') {
     return [
-      { path: 'next.config.mjs', contents: renderNextConfig(storageEnabled) },
+      { path: 'next.config.ts', contents: renderNextConfig(storageEnabled) },
       { path: 'next-env.d.ts', contents: renderNextEnvDts() },
       { path: 'app/layout.tsx', contents: renderNextLayout(options.projectName) },
       { path: 'app/page.tsx', contents: renderNextPage(options.projectName) },
@@ -3464,6 +3415,7 @@ function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'framework'
     '',
     'async function run() {',
     '  let restartedAfterConflict = false',
+    '  const maxStderrLines = 200',
     '',
     '  while (true) {',
     '    const stderrLines = []',
@@ -3476,15 +3428,18 @@ function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'framework'
     '',
     '    pipeOutput(child.stdout, process.stdout)',
     '    pipeOutput(child.stderr, process.stderr, line => {',
+    '      if (stderrLines.length >= maxStderrLines) {',
+    '        stderrLines.shift()',
+    '      }',
     '      stderrLines.push(line)',
     '    })',
     '',
-    '    const code = await new Promise((resolve, reject) => {',
+    '    const result = await new Promise((resolve, reject) => {',
     '      child.on(\'error\', reject)',
-    '      child.on(\'close\', resolve)',
+    '      child.on(\'close\', (code, signal) => resolve({ code, signal }))',
     '    })',
     '',
-    '    if (code === 0) {',
+    '    if (result.code === 0) {',
     '      process.exit(0)',
     '    }',
     '',
@@ -3498,7 +3453,11 @@ function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'framework'
     '      }',
     '    }',
     '',
-    '    process.exit(code ?? 1)',
+    '    if (result.signal) {',
+    '      process.kill(process.pid, result.signal)',
+    '    } else {',
+    '      process.exit(result.code ?? 1)',
+    '    }',
     '  }',
     '}',
     '',

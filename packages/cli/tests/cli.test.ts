@@ -1420,6 +1420,7 @@ export default {
     const staleNextProcess = spawn('node', ['-e', 'setInterval(() => {}, 1000)'], {
       stdio: 'ignore',
     })
+    try {
     const nextStatePath = join(nextRoot, '.next-runner-state')
     await writeFile(join(nextRoot, 'node_modules/.bin/next'), `#!/usr/bin/env node
 const { existsSync, readFileSync, writeFileSync } = require('node:fs')
@@ -1445,6 +1446,9 @@ console.log(process.argv.slice(2).join(' '))
     expect(restartedDevResult.stderr).toContain(`Stopped stale Next dev server ${staleNextProcess.pid}. Restarting dev server.`)
     expect(await readFile(nextStatePath, 'utf8')).toBe('2')
     await expect(async () => process.kill(staleNextProcess.pid!, 0)).rejects.toMatchObject({ code: 'ESRCH' })
+    } finally {
+      try { process.kill(staleNextProcess.pid!, 'SIGKILL') } catch { /* already exited */ }
+    }
 
     const svelteRoot = join(baseRoot, 'svelte-runner')
     await projectInternals.scaffoldProject(svelteRoot, {
