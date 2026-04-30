@@ -17,6 +17,9 @@ export function renderScaffoldGitignore(): string {
     '.svelte-kit',
     'coverage',
     'dist',
+    'storage',
+    'storage/database.sqlite',
+    'storage/framework',
     '',
   ].join('\n')
 }

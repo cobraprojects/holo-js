@@ -163,9 +163,31 @@ function defineModelFromGeneratedTableName<
   const relations = { ...(options.relations ?? {}) } as TRelations
   const touches = validateTouches(inferredName, relations, options.touches ?? [])
 
-  const resolveTable = (): GeneratedSchemaTable<TName> => resolveGeneratedModelTable(tableName) as GeneratedSchemaTable<TName>
+  const resolveTableDefinition = (): GeneratedSchemaTable<TName> => (
+    resolveGeneratedModelTable(tableName) as GeneratedSchemaTable<TName>
+  )
+  const resolvePrimaryKeyFromTable = (
+    table: GeneratedSchemaTable<TName>,
+  ): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> => (
+    (options.primaryKey ?? inferPrimaryKey(table)) as Extract<keyof GeneratedSchemaTable<TName>['columns'], string>
+  )
+  const resolveUniqueIdFromTable = (
+    table: GeneratedSchemaTable<TName>,
+  ): UniqueIdRuntimeConfig<GeneratedSchemaTable<TName>> | null => {
+    return resolveUniqueIdConfig(
+      options.traits,
+      resolvePrimaryKeyFromTable(table),
+      options.uniqueIds,
+      options.newUniqueId,
+    )
+  }
+  const resolveTable = (): GeneratedSchemaTable<TName> => {
+    const table = resolveTableDefinition()
+    validateUniqueIdConfig(table, inferredName, resolveUniqueIdFromTable(table))
+    return table
+  }
   const resolvePrimaryKey = (): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> => (
-    (options.primaryKey ?? inferPrimaryKey(resolveTable())) as Extract<keyof GeneratedSchemaTable<TName>['columns'], string>
+    resolvePrimaryKeyFromTable(resolveTable())
   )
   const resolveCreatedAtColumn = (): Extract<keyof GeneratedSchemaTable<TName>['columns'], string> | undefined => {
     const timestamps = options.timestamps ?? true
@@ -183,12 +205,7 @@ function defineModelFromGeneratedTableName<
     resolveDeletedAtColumn(resolveTable(), options)
   )
   const resolveUniqueId = (): UniqueIdRuntimeConfig<GeneratedSchemaTable<TName>> | null => {
-    return resolveUniqueIdConfig(
-      options.traits,
-      resolvePrimaryKey(),
-      options.uniqueIds,
-      options.newUniqueId,
-    )
+    return resolveUniqueIdFromTable(resolveTable())
   }
 
   if (resolvedAtDefinition) {

@@ -48,14 +48,23 @@ export function valuesAreEqual(left: unknown, right: unknown): boolean {
     && typeof right === 'object'
     && Object.getPrototypeOf(left) === Object.getPrototypeOf(right)
   ) {
-    const leftEntries = Object.entries(left)
-    const rightEntries = Object.entries(right)
+    const leftRecord = left as Record<string, unknown>
+    const rightRecord = right as Record<string, unknown>
+    const leftKeys = Object.keys(leftRecord)
+    const rightKeys = Object.keys(rightRecord)
 
-    if (leftEntries.length !== rightEntries.length) {
+    if (leftKeys.length !== rightKeys.length) {
       return false
     }
 
-    return leftEntries.every(([key, value]) => valuesAreEqual(value, (right as Record<string, unknown>)[key]))
+    if (
+      leftKeys.some(key => !Object.prototype.hasOwnProperty.call(rightRecord, key))
+      || rightKeys.some(key => !Object.prototype.hasOwnProperty.call(leftRecord, key))
+    ) {
+      return false
+    }
+
+    return leftKeys.every(key => valuesAreEqual(leftRecord[key], rightRecord[key]))
   }
 
   return false

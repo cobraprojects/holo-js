@@ -557,7 +557,21 @@ export function upsertEnvContents(
     ? existingContents.replace(/\r\n/g, '\n').split('\n')
     : []
   const existingKeys = new Set(nextLines.map(parseEnvKey).filter((value): value is string => typeof value === 'string'))
-  const missingLines = additions.filter(line => !existingKeys.has(line.slice(0, line.indexOf('=')).trim()))
+  const additionKeys = new Set<string>()
+  const missingLines = additions.flatMap(line => {
+    const normalizedLine = line.trim()
+    if (normalizedLine.length === 0 || normalizedLine.startsWith('#')) {
+      return []
+    }
+
+    const key = parseEnvKey(normalizedLine)
+    if (!key || additionKeys.has(key) || existingKeys.has(key)) {
+      return []
+    }
+
+    additionKeys.add(key)
+    return [normalizedLine]
+  })
 
   if (missingLines.length === 0) {
     return {

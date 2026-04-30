@@ -32,9 +32,10 @@ async function main() {
     ...await buildDirectoryGroups('packages'),
     rootTargets,
   ]
-  let retriedAfterCacheReset = false
 
   for (const targets of groups) {
+    let retriedAfterCacheReset = false
+
     try {
       await run(targets)
     } catch (error) {

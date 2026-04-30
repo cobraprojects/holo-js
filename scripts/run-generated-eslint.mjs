@@ -9,9 +9,10 @@ const eslintBaseArgs = ['eslint', '--cache', '--cache-strategy', 'content', '--c
 
 async function main() {
   const groups = await collectGeneratedLintGroups()
-  let retriedAfterCacheReset = false
 
   for (const group of groups) {
+    let retriedAfterCacheReset = false
+
     try {
       await run(group)
     } catch (error) {

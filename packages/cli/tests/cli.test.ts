@@ -66,7 +66,7 @@ import {
   toPascalCase,
   toSnakeCase,
 } from '../src/templates'
-import { HOLO_PACKAGE_VERSION } from '../src/metadata'
+import { ESBUILD_PACKAGE_VERSION, HOLO_PACKAGE_VERSION } from '../src/metadata'
 import type { FSWatcher } from 'node:fs'
 
 const workspaceRoot = resolve(import.meta.dirname, '../../..')
@@ -1274,7 +1274,7 @@ export default {
       packageManager: 'bun',
       storageDefaultDisk: 'local',
       optionalPackages: [],
-    })).toContain('"esbuild": "^0.27.4"')
+    })).toContain(`"esbuild": "${ESBUILD_PACKAGE_VERSION}"`)
     expect(projectInternals.renderScaffoldTsconfig({
       framework: 'next',
     })).toContain('next-env.d.ts')
@@ -1413,8 +1413,12 @@ export default {
       storageDefaultDisk: 'local',
     })
     await writeFrameworkBinary(nextRoot, 'next')
-    expect(runNodeScript(nextRoot, join(nextRoot, '.holo-js/framework/run.mjs'), ['build']).stdout).toContain('build')
-    expect(runNodeScript(nextRoot, join(nextRoot, '.holo-js/framework/run.mjs'), ['dev']).stdout).toContain('dev')
+    const nextBuildResult = runNodeScript(nextRoot, join(nextRoot, '.holo-js/framework/run.mjs'), ['build'])
+    expect(nextBuildResult.status).toBe(0)
+    expect(nextBuildResult.stdout).toContain('build')
+    const nextDevResult = runNodeScript(nextRoot, join(nextRoot, '.holo-js/framework/run.mjs'), ['dev'])
+    expect(nextDevResult.status).toBe(0)
+    expect(nextDevResult.stdout).toContain('dev')
     expect(await readFile(join(nextRoot, 'server/holo.ts'), 'utf8')).toContain('./db/schema.generated')
     expect(await readFile(join(nextRoot, 'app/layout.tsx'), 'utf8')).toContain('../server/db/schema.generated')
 
@@ -9320,9 +9324,19 @@ export default undefined
     })
 
     await withFakeBun(async () => {
-      await expect(loadGeneratedProjectRegistry(projectRoot)).resolves.toMatchObject({
-        models: expect.any(Array),
-      })
+      const registry = await loadGeneratedProjectRegistry(projectRoot)
+
+      expect(registry).toBeDefined()
+      if (!registry) {
+        throw new Error('Expected generated project registry to exist after prepare.')
+      }
+
+      expect(Array.isArray(registry.models)).toBe(true)
+      expect(registry.models).toEqual(expect.not.arrayContaining([
+        expect.objectContaining({
+          file: expect.stringContaining('server/models/Course.ts'),
+        }),
+      ]))
     })
 
     await writeProjectFile(projectRoot, 'server/db/schema.generated.ts', `

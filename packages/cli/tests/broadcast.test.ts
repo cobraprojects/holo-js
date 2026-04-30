@@ -35,6 +35,11 @@ function createIo(projectRoot: string) {
   }
 }
 
+async function waitForSignalListener(signal: 'SIGINT' | 'SIGTERM', baselineCount: number) {
+  await vi.waitUntil(() => process.listeners(signal).length > baselineCount)
+  return process.listeners(signal)[baselineCount]
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
 })
@@ -338,6 +343,7 @@ describe('@holo-js/cli broadcast worker command', () => {
 
     const io = createIo(tempRoot)
     const stop = vi.fn(async () => {})
+    const sigintListenersBefore = process.listeners('SIGINT').length
     const promise = runBroadcastWorkCommand(io.io, tempRoot, {
       loadConfig: vi.fn(async () => ({ broadcast: { ok: true }, queue: {} })) as never,
       loadRegistry: vi.fn(async () => {
@@ -370,8 +376,8 @@ describe('@holo-js/cli broadcast worker command', () => {
       })),
     })
 
-    await new Promise(resolve => setTimeout(resolve, 100))
-    process.emit('SIGINT')
+    await vi.waitUntil(() => process.listeners('SIGINT').length > sigintListenersBefore)
+    process.listeners('SIGINT')[sigintListenersBefore]?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
     expect(stop).toHaveBeenCalledTimes(1)
   })
@@ -465,6 +471,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     ])
 
     const stop = vi.fn(async () => {})
+    const sigintListenersBefore = process.listeners('SIGINT').length
     const promise = runBroadcastWorkCommand(createIo(tempRoot).io, tempRoot, {
       loadConfig: vi.fn(async () => ({ broadcast: { ok: true }, queue: { redis: true } })) as never,
       loadRegistry: vi.fn(async () => undefined),
@@ -495,8 +502,7 @@ describe('@holo-js/cli broadcast worker command', () => {
       })),
     })
 
-    await new Promise(resolve => setTimeout(resolve, 100))
-    process.emit('SIGINT')
+    ;(await waitForSignalListener('SIGINT', sigintListenersBefore))?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
     expect(stop).toHaveBeenCalledTimes(1)
   })
@@ -546,6 +552,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     ])
 
     const stop = vi.fn(async () => {})
+    const sigintListenersBefore = process.listeners('SIGINT').length
     const promise = runBroadcastWorkCommand(createIo(tempRoot).io, tempRoot, {
       loadConfig: vi.fn(async () => ({ broadcast: { ok: true }, queue: {} })) as never,
       loadRegistry: vi.fn(async () => ({
@@ -624,8 +631,7 @@ describe('@holo-js/cli broadcast worker command', () => {
       })),
     })
 
-    await new Promise(resolve => setTimeout(resolve, 100))
-    process.emit('SIGINT')
+    ;(await waitForSignalListener('SIGINT', sigintListenersBefore))?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
     expect(stop).toHaveBeenCalledTimes(1)
   }, 120_000)
@@ -675,6 +681,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     ])
 
     const stop = vi.fn(async () => {})
+    const sigintListenersBefore = process.listeners('SIGINT').length
     const promise = runBroadcastWorkCommand(createIo(tempRoot).io, tempRoot, {
       loadConfig: vi.fn(async () => ({ broadcast: { ok: true }, queue: { redis: true } })) as never,
       loadModule: vi.fn(async () => ({
@@ -704,8 +711,7 @@ describe('@holo-js/cli broadcast worker command', () => {
       })),
     })
 
-    await new Promise(resolve => setTimeout(resolve, 100))
-    process.emit('SIGINT')
+    ;(await waitForSignalListener('SIGINT', sigintListenersBefore))?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
     expect(stop).toHaveBeenCalledTimes(1)
   })
@@ -718,6 +724,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     }, null, 2))
 
     const stop = vi.fn(async () => {})
+    const sigintListenersBefore = process.listeners('SIGINT').length
     const promise = runBroadcastWorkCommand(createIo(projectRoot).io, projectRoot, {
       loadRegistry: vi.fn(async () => undefined),
       loadModule: vi.fn(async () => ({
@@ -729,8 +736,7 @@ describe('@holo-js/cli broadcast worker command', () => {
       })),
     })
 
-    await new Promise(resolve => setTimeout(resolve, 100))
-    process.emit('SIGINT')
+    ;(await waitForSignalListener('SIGINT', sigintListenersBefore))?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
     expect(stop).toHaveBeenCalledTimes(1)
   })
@@ -756,13 +762,13 @@ describe('@holo-js/cli broadcast worker command', () => {
     ].join('\n'), 'utf8')
 
     const io = createIo(projectRoot)
+    const sigtermListenersBefore = process.listeners('SIGTERM').length
     const promise = runBroadcastWorkCommand(io.io, projectRoot, {
       loadConfig: vi.fn(async () => ({ broadcast: {}, queue: {} })) as never,
       loadRegistry: vi.fn(async () => undefined),
     })
 
-    await new Promise(resolve => setTimeout(resolve, 100))
-    process.emit('SIGTERM')
+    ;(await waitForSignalListener('SIGTERM', sigtermListenersBefore))?.('SIGTERM')
     await expect(promise).resolves.toBeUndefined()
     expect(io.read()).toContain('[broadcast] Worker listening on 127.0.0.1:7003')
   })
@@ -781,6 +787,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     })
 
     try {
+      const sigintListenersBefore = process.listeners('SIGINT').length
       const { runBroadcastWorkCommand: isolatedRunBroadcastWorkCommand } = await import('../src/broadcast')
       const promise = isolatedRunBroadcastWorkCommand(io.io, process.cwd(), {
         loadConfig: vi.fn(async () => ({ broadcast: { ok: true }, queue: {} })) as never,
@@ -797,8 +804,7 @@ describe('@holo-js/cli broadcast worker command', () => {
         })),
       })
 
-      await new Promise(resolve => setTimeout(resolve, 100))
-      process.emit('SIGINT')
+      ;(await waitForSignalListener('SIGINT', sigintListenersBefore))?.('SIGINT')
       await expect(promise).resolves.toBeUndefined()
       expect(stop).toHaveBeenCalledTimes(1)
     } finally {
@@ -813,6 +819,8 @@ describe('@holo-js/cli broadcast worker command', () => {
       await new Promise(resolve => setTimeout(resolve, 100))
     })
     const offSpy = vi.spyOn(process, 'off').mockImplementation(() => process)
+    const sigtermListenersBefore = process.listeners('SIGTERM').length
+    const sigintListenersBefore = process.listeners('SIGINT').length
     const promise = runBroadcastWorkCommand(io.io, process.cwd(), {
       loadConfig: vi.fn(async () => ({ broadcast: { ok: true }, queue: {} })) as never,
       loadRegistry: vi.fn(async () => undefined),
@@ -825,9 +833,8 @@ describe('@holo-js/cli broadcast worker command', () => {
       })),
     })
 
-    await new Promise(resolve => setTimeout(resolve, 100))
-    process.emit('SIGTERM')
-    process.emit('SIGINT')
+    ;(await waitForSignalListener('SIGTERM', sigtermListenersBefore))?.('SIGTERM')
+    ;(await waitForSignalListener('SIGINT', sigintListenersBefore))?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
     expect(stop).toHaveBeenCalledTimes(1)
     expect(offSpy).toHaveBeenCalled()
@@ -849,6 +856,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     ].join('\n'), 'utf8')
 
     const stop = vi.fn(async () => {})
+    const sigintListenersBefore = process.listeners('SIGINT').length
     const promise = runBroadcastWorkCommand(createIo(tempRoot).io, tempRoot, {
       loadConfig: vi.fn(async () => ({ broadcast: { ok: true }, queue: {} })) as never,
       loadRegistry: vi.fn(async () => undefined),
@@ -861,8 +869,7 @@ describe('@holo-js/cli broadcast worker command', () => {
       })),
     })
 
-    await new Promise(resolve => setTimeout(resolve, 100))
-    process.emit('SIGINT')
+    ;(await waitForSignalListener('SIGINT', sigintListenersBefore))?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
 
     const project = await loadProjectConfig(tempRoot, { required: true })

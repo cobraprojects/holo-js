@@ -716,6 +716,11 @@ async function upsertAuthPackageDependencies(
       delete devDependencies[packageName]
       changed = true
     }
+
+    if (typeof currentDependency !== 'undefined') {
+      delete dependencies[packageName]
+      changed = true
+    }
   }
 
   for (const [providerName, packageName] of Object.entries(AUTH_SOCIAL_PROVIDER_PACKAGE_NAMES)) {
@@ -734,6 +739,11 @@ async function upsertAuthPackageDependencies(
 
     if (typeof currentDevDependency !== 'undefined') {
       delete devDependencies[packageName]
+      changed = true
+    }
+
+    if (typeof currentDependency !== 'undefined') {
+      delete dependencies[packageName]
       changed = true
     }
   }
