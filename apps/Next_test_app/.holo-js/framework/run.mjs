@@ -115,7 +115,9 @@ function inspectProcess(pid) {
         args: readFileSync(`/proc/${pid}/cmdline`, 'utf8').replaceAll('\u0000', ' ').trim(),
       }
     }
-  } catch {}
+  } catch {
+    // Fall through to the portable process inspection path below.
+  }
 
   try {
     return {
@@ -146,12 +148,16 @@ function isOwnedNextDevServer(pid, reportedDir) {
   return argsMatch && (cwdMatches || argsReferenceProject || expectedDir === projectRoot)
 }
 
-async function stopStaleNextDevServer(pid, reportedDir) {
+async function stopStaleNextDevServer(pid, reportedDir, force = false) {
   if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) {
     return false
   }
 
   if (!isOwnedNextDevServer(pid, reportedDir)) {
+    return false
+  }
+
+  if (!force) {
     return false
   }
 

@@ -1,136 +1,51 @@
-import { createPublicKey, verify as verifySignature } from 'node:crypto'
 import { authRuntimeInternals } from '@holo-js/auth'
-import type { AuthEstablishedSession } from '@holo-js/auth'
+import type { AuthEstablishedSession, AuthUserLike } from '@holo-js/auth'
 import { parseCookieHeader } from '@holo-js/session'
-import type { AuthUserLike } from '@holo-js/auth'
 import type { AuthClerkProviderConfig } from '@holo-js/config'
-
-export interface ClerkEmailAddress {
-  readonly id?: string
-  readonly emailAddress: string
-  readonly verificationStatus?: 'verified' | 'unverified' | 'pending'
-}
-
-export interface ClerkUserProfile {
-  readonly id: string
-  readonly email?: string
-  readonly emailVerified?: boolean
-  readonly firstName?: string
-  readonly lastName?: string
-  readonly name?: string
-  readonly imageUrl?: string
-  readonly primaryEmailAddressId?: string
-  readonly emailAddresses?: readonly ClerkEmailAddress[]
-  readonly raw?: unknown
-}
-
-export interface ClerkVerifiedSession {
-  readonly sessionId: string
-  readonly user: ClerkUserProfile
-  readonly accessToken?: string
-  readonly actor?: {
-    readonly id?: string
-    readonly type?: string
-  }
-  readonly raw?: unknown
-}
-
-export interface ClerkVerifyRequestContext {
-  readonly provider: string
-  readonly request: Request
-  readonly config: AuthClerkProviderConfig
-}
-
-export interface ClerkVerifySessionContext {
-  readonly provider: string
-  readonly token: string
-  readonly config: AuthClerkProviderConfig
-}
-
-export interface ClerkProviderRuntime {
-  verifyRequest?(context: ClerkVerifyRequestContext): Promise<ClerkVerifiedSession | null>
-  verifySession?(context: ClerkVerifySessionContext): Promise<ClerkVerifiedSession | null>
-}
-
-type JwkKey = Readonly<Record<string, unknown>> & {
-  readonly kid?: string
-}
+export {
+  ClerkAuthConflictError,
+} from './contracts'
+export type {
+  ClerkAuthBindings,
+  ClerkAuthFacade,
+  ClerkAuthenticationResult,
+  ClerkEmailAddress,
+  ClerkProviderRuntime,
+  ClerkSyncStatus,
+  ClerkUserProfile,
+  ClerkVerifiedSession,
+  ClerkVerifyRequestContext,
+  ClerkVerifySessionContext,
+  ConfigureClerkAuthRuntimeOptions,
+  HostedIdentityRecord,
+  HostedIdentityStore,
+} from './contracts'
+import {
+  ClerkAuthConflictError,
+  type ClerkAuthBindings,
+  type ClerkAuthenticationResult,
+  type ClerkEmailAddress,
+  type ClerkProviderRuntime,
+  type ClerkUserProfile,
+  type ClerkVerifiedSession,
+  type ClerkVerifySessionContext,
+  type ConfigureClerkAuthRuntimeOptions,
+  type HostedIdentityRecord,
+} from './contracts'
+import {
+  CLERK_API_BASE_URL,
+  fetchClerkJwks,
+  parseJwt,
+  resolveClerkJwksUrl,
+  type JwkKey,
+  verifyJwtSignatureWithJwk,
+  verifyJwtSignatureWithPem,
+} from './jwt'
 
 type RuntimeAuthProviderAdapter = ReturnType<typeof authRuntimeInternals.getRuntimeBindings>['providers'][string]
 
-export interface HostedIdentityRecord {
-  readonly provider: string
-  readonly providerUserId: string
-  readonly guard: string
-  readonly authProvider: string
-  readonly userId: string | number
-  readonly email?: string
-  readonly emailVerified: boolean
-  readonly profile: Readonly<Record<string, unknown>>
-  readonly linkedAt: Date
-  readonly updatedAt: Date
-}
-
-export interface HostedIdentityStore {
-  findByProviderUserId(provider: string, providerUserId: string): Promise<HostedIdentityRecord | null>
-  findByUserId(provider: string, authProvider: string, userId: string | number): Promise<HostedIdentityRecord | null>
-  save(record: HostedIdentityRecord): Promise<void>
-}
-
-export type ClerkSyncStatus = 'created' | 'updated' | 'linked' | 'relinked'
-
-export interface ClerkAuthenticationResult {
-  readonly provider: string
-  readonly guard: string
-  readonly authProvider: string
-  readonly status: ClerkSyncStatus
-  readonly user: AuthUserLike
-  readonly identity: HostedIdentityRecord
-  readonly session: ClerkVerifiedSession
-  readonly authSession?: AuthEstablishedSession
-}
-
-export interface ClerkAuthBindings {
-  readonly providers: Readonly<Record<string, ClerkProviderRuntime>>
-  readonly identityStore: HostedIdentityStore
-}
-
-export interface ConfigureClerkAuthRuntimeOptions {
-  readonly providers?: Readonly<Record<string, ClerkProviderRuntime>>
-  readonly identityStore?: HostedIdentityStore
-}
-
-export interface ClerkAuthFacade {
-  verifyRequest(request: Request, provider?: string): Promise<ClerkVerifiedSession | null>
-  verifySession(token: string, provider?: string): Promise<ClerkVerifiedSession | null>
-  syncIdentity(session: ClerkVerifiedSession, provider?: string): Promise<ClerkAuthenticationResult>
-  authenticate(request: Request, provider?: string): Promise<ClerkAuthenticationResult | null>
-}
-
-export class ClerkAuthConflictError extends Error {
-  readonly code = 'clerk_identity_conflict'
-  readonly provider: string
-  readonly clerkUserId: string
-  readonly email?: string
-
-  constructor(options: {
-    readonly provider: string
-    readonly clerkUserId: string
-    readonly email?: string
-    readonly message: string
-  }) {
-    super(options.message)
-    this.name = 'ClerkAuthConflictError'
-    this.provider = options.provider
-    this.clerkUserId = options.clerkUserId
-    this.email = options.email
-  }
-}
-
 let clerkBindings: ConfigureClerkAuthRuntimeOptions | undefined
-const CLERK_API_BASE_URL = 'https://api.clerk.com'
 const clerkDefaultProviderRuntimeCache = new Map<string, ClerkProviderRuntime>()
-const clerkJwksCache = new Map<string, Promise<readonly JwkKey[]>>()
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
 
 function throwUnconfigured(): never {
@@ -145,115 +60,6 @@ function getBindings(): ClerkAuthBindings {
   return {
     providers: clerkBindings.providers ?? {},
     identityStore: clerkBindings.identityStore,
-  }
-}
-
-function decodeJwtSegment<T>(value: string, label: string): T {
-  try {
-    return JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as T
-  } catch {
-    throw new Error(`[@holo-js/auth-clerk] Clerk token ${label} was not valid JSON.`)
-  }
-}
-
-function parseJwt(token: string): {
-  readonly header: Readonly<Record<string, unknown>>
-  readonly payload: Readonly<Record<string, unknown>>
-  readonly signature: Buffer
-  readonly signingInput: Buffer
-} {
-  const segments = token.split('.')
-  if (segments.length !== 3 || !segments[0] || !segments[1] || !segments[2]) {
-    throw new Error('[@holo-js/auth-clerk] Clerk token was not a valid JWT.')
-  }
-
-  return {
-    header: decodeJwtSegment<Readonly<Record<string, unknown>>>(segments[0], 'header'),
-    payload: decodeJwtSegment<Readonly<Record<string, unknown>>>(segments[1], 'payload'),
-    signature: Buffer.from(segments[2], 'base64url'),
-    signingInput: Buffer.from(`${segments[0]}.${segments[1]}`, 'utf8'),
-  }
-}
-
-function verifyJwtSignatureWithJwk(
-  token: ReturnType<typeof parseJwt>,
-  jwk: JwkKey,
-): boolean {
-  const algorithm = typeof token.header.alg === 'string' ? token.header.alg : ''
-  const key = createPublicKey({ key: jwk as never, format: 'jwk' })
-
-  switch (algorithm) {
-    case 'RS256':
-      return verifySignature('RSA-SHA256', token.signingInput, key, token.signature)
-    case 'RS384':
-      return verifySignature('RSA-SHA384', token.signingInput, key, token.signature)
-    case 'RS512':
-      return verifySignature('RSA-SHA512', token.signingInput, key, token.signature)
-    default:
-      throw new Error(`[@holo-js/auth-clerk] Unsupported Clerk JWT algorithm "${algorithm || 'unknown'}".`)
-  }
-}
-
-function verifyJwtSignatureWithPem(
-  token: ReturnType<typeof parseJwt>,
-  pem: string,
-): boolean {
-  const algorithm = typeof token.header.alg === 'string' ? token.header.alg : ''
-  const key = createPublicKey(pem.replace(/\\n/g, '\n'))
-
-  switch (algorithm) {
-    case 'RS256':
-      return verifySignature('RSA-SHA256', token.signingInput, key, token.signature)
-    case 'RS384':
-      return verifySignature('RSA-SHA384', token.signingInput, key, token.signature)
-    case 'RS512':
-      return verifySignature('RSA-SHA512', token.signingInput, key, token.signature)
-    default:
-      throw new Error(`[@holo-js/auth-clerk] Unsupported Clerk JWT algorithm "${algorithm || 'unknown'}".`)
-  }
-}
-
-function resolveClerkJwksUrl(config: AuthClerkProviderConfig): string {
-  const frontendApi = config.frontendApi?.trim()
-  if (frontendApi) {
-    return `${frontendApi.replace(/\/$/, '')}/.well-known/jwks.json`
-  }
-
-  const apiUrl = config.apiUrl?.trim() || CLERK_API_BASE_URL
-  return `${apiUrl.replace(/\/$/, '')}/v1/jwks`
-}
-
-async function fetchClerkJwks(jwksUrl: string, options: {
-  readonly refresh?: boolean
-} = {}): Promise<readonly JwkKey[]> {
-  if (options.refresh) {
-    clerkJwksCache.delete(jwksUrl)
-  }
-  const existing = clerkJwksCache.get(jwksUrl)
-  if (existing) {
-    return existing
-  }
-
-  const pending = (async () => {
-    const response = await fetch(jwksUrl, {
-      headers: {
-        accept: 'application/json',
-      },
-    })
-    if (!response.ok) {
-      throw new Error(`[@holo-js/auth-clerk] Failed to load Clerk JWKS from "${jwksUrl}".`)
-    }
-
-    const payload = await response.json() as { keys?: readonly JwkKey[] }
-    return payload.keys ?? []
-  })()
-
-  clerkJwksCache.set(jwksUrl, pending)
-  try {
-    return await pending
-  } catch (error) {
-    clerkJwksCache.delete(jwksUrl)
-    throw error
   }
 }
 

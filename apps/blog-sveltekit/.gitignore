@@ -1,0 +1,16 @@
+node_modules
+.env
+.env.local
+.env.development
+.env.production
+.env.prod
+.env.test
+.holo-js/generated
+.holo-js/runtime
+.nuxt
+.output
+.next
+.svelte-kit
+build
+coverage
+dist

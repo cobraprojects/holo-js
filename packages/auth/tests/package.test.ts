@@ -63,12 +63,12 @@ import type {
 
 type UserRecord = {
   id: number
-  name?: string
+  name: string
   email: string
   phone?: string
   country?: string
   dob?: string
-  role?: 'admin' | 'member'
+  role: 'admin' | 'member'
   password?: string | null
   avatar?: string | null
   email_verified_at?: Date | null
@@ -121,8 +121,9 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
   async create(input: Readonly<Record<string, unknown>>): Promise<UserRecord> {
     const record: UserRecord = {
       id: this.nextId,
-      name: typeof input.name === 'string' ? input.name : undefined,
+      name: typeof input.name === 'string' ? input.name : '',
       email: typeof input.email === 'string' ? input.email : '',
+      role: input.role === 'admin' || input.role === 'member' ? input.role : 'member',
       password: typeof input.password === 'string' || input.password === null ? input.password as string | null : undefined,
       avatar: typeof input.avatar === 'string' || input.avatar === null ? input.avatar as string | null : undefined,
       email_verified_at: input.email_verified_at instanceof Date || input.email_verified_at === null
@@ -151,11 +152,14 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
 
   async update(user: UserRecord, input: Readonly<Record<string, unknown>>): Promise<UserRecord> {
     const currentEmail = user.email
-    if (typeof input.name === 'string' || input.name === undefined) {
-      user.name = input.name as string | undefined
+    if (typeof input.name === 'string') {
+      user.name = input.name
     }
     if (typeof input.email === 'string') {
       user.email = input.email
+    }
+    if (input.role === 'admin' || input.role === 'member') {
+      user.role = input.role
     }
     if (typeof input.avatar === 'string' || input.avatar === null) {
       user.avatar = input.avatar
@@ -199,9 +203,9 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
   serialize(user: UserRecord): AuthUser {
     const serialized = {
       id: user.id,
-      name: user.name ?? '',
+      name: user.name,
       email: user.email,
-      role: user.role ?? 'member' as const,
+      role: user.role,
       phone: user.phone,
       country: user.country,
       dob: user.dob,
@@ -237,8 +241,9 @@ class SnapshotProviderAdapter implements AuthProviderAdapter<UserRecord> {
   async create(input: Readonly<Record<string, unknown>>): Promise<UserRecord> {
     const record: UserRecord = {
       id: this.nextId,
-      name: typeof input.name === 'string' ? input.name : undefined,
+      name: typeof input.name === 'string' ? input.name : '',
       email: typeof input.email === 'string' ? input.email : '',
+      role: input.role === 'admin' || input.role === 'member' ? input.role : 'member',
       password: typeof input.password === 'string' || input.password === null ? input.password as string | null : undefined,
       avatar: typeof input.avatar === 'string' || input.avatar === null ? input.avatar as string | null : undefined,
       email_verified_at: input.email_verified_at instanceof Date || input.email_verified_at === null
@@ -268,9 +273,9 @@ class SnapshotProviderAdapter implements AuthProviderAdapter<UserRecord> {
   serialize(user: UserRecord): AuthUser {
     const serialized = {
       id: user.id,
-      name: user.name ?? '',
+      name: user.name,
       email: user.email,
-      role: user.role ?? 'member' as const,
+      role: user.role,
       avatarUrl: user.avatar ?? null,
       email_verified_at: user.email_verified_at ?? null,
     }
@@ -3508,6 +3513,7 @@ describe('@holo-js/auth package runtime', () => {
       id: 44,
       name: 'External Admin',
       email: 'admin@example.com',
+      role: 'admin' as const,
       password: await hasher.hash('secret-secret'),
       email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
     }
@@ -3963,7 +3969,9 @@ describe('@holo-js/auth package runtime', () => {
       },
     }, {
       id: 1,
+      name: 'Ava',
       email: 'ava@example.com',
+      role: 'member',
       password: null,
     })).toBeNull()
     expect(authRuntimeInternals.writeSessionPayloads({
@@ -4403,12 +4411,7 @@ describe('@holo-js/auth package runtime', () => {
 
   it('supports provider adapters without explicit serialize or credential helper hooks', async () => {
     const sessionStore = new InMemorySessionStore()
-    const users = new Map<number, {
-      id: number
-      email: string
-      password: string
-      email_verified_at: Date
-    }>()
+    const users = new Map<number, UserRecord>()
 
     configureSessionRuntime({
       config: {
@@ -4442,7 +4445,9 @@ describe('@holo-js/auth package runtime', () => {
     const hashedPassword = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
     users.set(1, {
       id: 1,
+      name: 'Ava',
       email: 'ava@example.com',
+      role: 'member',
       password: hashedPassword,
       email_verified_at: new Date(),
     })

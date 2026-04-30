@@ -37,6 +37,4 @@ export async function resetNextHoloProject(): Promise<void> {
   await nextAdapter.resetProject()
 }
 
-export { withHolo } from './config'
-
 export const adapterNextInternals = nextAdapter.internals

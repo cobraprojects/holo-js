@@ -119,6 +119,7 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
 
   if (optionalPackages.includes('events')) {
     dependencies['@holo-js/events'] = `^${HOLO_PACKAGE_VERSION}`
+    dependencies['@holo-js/queue'] = `^${HOLO_PACKAGE_VERSION}`
   }
 
   if (optionalPackages.includes('queue')) {
@@ -136,6 +137,7 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
   if (optionalPackages.includes('auth')) {
     dependencies['@holo-js/auth'] = `^${HOLO_PACKAGE_VERSION}`
     dependencies['@holo-js/session'] = `^${HOLO_PACKAGE_VERSION}`
+    dependencies['@holo-js/security'] = `^${HOLO_PACKAGE_VERSION}`
   }
 
   if (optionalPackages.includes('authorization')) {
@@ -183,10 +185,10 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
       dev: 'holo dev',
       build: 'holo build',
       lint: options.framework === 'nuxt'
-        ? 'npx eslint app.vue config server tests --fix --no-warn-ignored'
+        ? 'npx eslint app.vue config server tests --fix --no-warn-ignored --no-error-on-unmatched-pattern'
         : options.framework === 'next'
-          ? 'npx eslint app config server tests --fix --no-warn-ignored'
-          : 'npx eslint src config server tests --fix --no-warn-ignored',
+          ? 'npx eslint app config server tests --fix --no-warn-ignored --no-error-on-unmatched-pattern'
+          : 'npx eslint src config server tests --fix --no-warn-ignored --no-error-on-unmatched-pattern',
       typecheck: options.framework === 'nuxt'
         ? 'npx nuxi typecheck'
         : options.framework === 'next'
