@@ -105,7 +105,7 @@ function run(targets) {
       process.stderr.write(text)
     })
 
-    child.on('exit', code => {
+    child.on('close', code => {
       if (code === 0) {
         resolve()
         return

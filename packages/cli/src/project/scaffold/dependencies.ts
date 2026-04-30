@@ -246,6 +246,7 @@ export async function syncManagedDriverDependencies(
   } = await readPackageJsonDependencyState(projectRoot)
   const cachePackageInstalled = typeof dependencies['@holo-js/cache'] !== 'undefined'
     || typeof devDependencies['@holo-js/cache'] !== 'undefined'
+  const cacheDesired = cacheConfigured
 
   requiredPackages.add('@holo-js/core')
 
@@ -295,7 +296,7 @@ export async function syncManagedDriverDependencies(
     requiredPackages.add('@holo-js/mail')
   }
 
-  if (cacheConfigured || cachePackageInstalled) {
+  if (cacheDesired) {
     requiredPackages.add('@holo-js/cache')
   }
 
@@ -373,7 +374,6 @@ export async function syncManagedDriverDependencies(
     '@holo-js/auth-workos',
     '@holo-js/authorization',
     '@holo-js/broadcast',
-    '@holo-js/cache',
     '@holo-js/cache-db',
     '@holo-js/cache-redis',
     '@holo-js/events',
@@ -389,6 +389,10 @@ export async function syncManagedDriverDependencies(
     ...Object.values(AUTH_SOCIAL_PROVIDER_PACKAGE_NAMES),
     'ioredis',
   ])
+
+  if (cacheDesired || cachePackageInstalled) {
+    removableManagedPackages.add('@holo-js/cache')
+  }
 
   for (const packageName of requiredPackages) {
     const requiredVersion = packageName === 'ioredis'
@@ -654,7 +658,30 @@ export async function upsertBroadcastPackageDependencies(projectRoot: string): P
     requestedPackages.add('@holo-js/adapter-sveltekit')
   }
 
-  for (const packageName of requestedPackages) {
+  const frameworkPackages = new Set<string>([
+    '@holo-js/flux-react',
+    '@holo-js/adapter-next',
+    '@holo-js/flux-vue',
+    '@holo-js/adapter-nuxt',
+    '@holo-js/flux-svelte',
+    '@holo-js/adapter-sveltekit',
+  ])
+  const managedPackages = new Set<string>([
+    ...requestedPackages,
+    ...frameworkPackages,
+  ])
+
+  for (const packageName of managedPackages) {
+    if (!requestedPackages.has(packageName)) {
+      if (typeof dependencies[packageName] !== 'undefined' || typeof devDependencies[packageName] !== 'undefined') {
+        delete dependencies[packageName]
+        delete devDependencies[packageName]
+        changed = true
+      }
+
+      continue
+    }
+
     if (dependencies[packageName] !== nextVersion || typeof devDependencies[packageName] !== 'undefined') {
       dependencies[packageName] = nextVersion
       delete devDependencies[packageName]

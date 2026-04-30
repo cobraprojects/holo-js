@@ -158,7 +158,7 @@ function defineModelFromGeneratedTableName<
   tableName: TName,
   options: DefineModelOptions<GeneratedSchemaTable<TName>, TScopes, TRelations> = {},
 ): StaticModelApi<GeneratedSchemaTable<TName>, TScopes, TRelations> {
-  const resolvedAtDefinition = resolveGeneratedModelTableSafely(tableName)
+  const resolvedAtDefinition = resolveGeneratedModelTable(tableName) as GeneratedSchemaTable<TName>
   const inferredName = options.name ?? inferModelName(tableName)
   const relations = { ...(options.relations ?? {}) } as TRelations
   const touches = validateTouches(inferredName, relations, options.touches ?? [])
@@ -904,14 +904,4 @@ function createStaticModelApi<
   registerMorphModel(definition.morphClass, model)
 
   return Object.freeze(model) as unknown as StaticModelApi<TTable, TScopes, TRelations>
-}
-
-function resolveGeneratedModelTableSafely<TName extends string>(
-  tableName: TName,
-): GeneratedSchemaTable<TName> | undefined {
-  try {
-    return resolveGeneratedModelTable(tableName) as GeneratedSchemaTable<TName>
-  } catch {
-    return undefined
-  }
 }

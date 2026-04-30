@@ -1221,7 +1221,7 @@ export default {
       databaseDriver: 'sqlite',
       packageManager: 'bun',
       storageDefaultDisk: 'local',
-    }).map(file => file.path)).toContain('src/routes/api/holo/+server.ts')
+    }).map(file => file.path)).toContain('src/routes/api/holo/health/+server.ts')
     expect(projectInternals.renderFrameworkFiles({
       projectName: 'Svelte App',
       framework: 'sveltekit',
@@ -1266,7 +1266,7 @@ export default {
       packageManager: 'bun',
       storageDefaultDisk: 'local',
       optionalPackages: [],
-    })).toContain('"vue-router": "^5.0.4"')
+    })).toContain('"vue-router": "^4.1.6"')
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'Svelte App',
       framework: 'sveltekit',
@@ -1535,7 +1535,7 @@ APP_ENV=development
     }
     expect(packageJson.dependencies?.['@holo-js/queue']).toBe(expectedHoloPackageRange)
     expect(packageJson.dependencies?.['@holo-js/queue-db']).toBeUndefined()
-    expect(packageJson.dependencies?.esbuild).toBe('^0.27.4')
+    expect(packageJson.dependencies?.esbuild).toBe(ESBUILD_PACKAGE_VERSION)
     expect(await readFile(join(projectRoot, 'config/queue.ts'), 'utf8')).toContain('default: \'sync\'')
     expect(await readFile(join(projectRoot, 'config/queue.ts'), 'utf8')).toContain('failed: false')
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).toBe('APP_NAME=Fixture\n')
@@ -1585,7 +1585,7 @@ export default defineAppConfig({
       devDependencies?: Record<string, string>
     }
     expect(packageJson.dependencies?.['@holo-js/queue']).toBe(expectedHoloPackageRange)
-    expect(packageJson.dependencies?.esbuild).toBe('^0.27.4')
+    expect(packageJson.dependencies?.esbuild).toBe(ESBUILD_PACKAGE_VERSION)
     expect(packageJson.devDependencies?.['@holo-js/queue']).toBeUndefined()
     expect(packageJson.devDependencies?.esbuild).toBeUndefined()
     expect(await readFile(join(projectRoot, 'config/queue.ts'), 'utf8')).toBe('export default "keep-me"\n')

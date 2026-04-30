@@ -139,7 +139,11 @@ export function initializeEntityModelProperties<TRelations extends RelationMap>(
             return Promise.resolve(undefined)
           }
 
-          return Promise.resolve(repo.resolveRelationProperty(entity, key))
+          try {
+            return Promise.resolve(repo.resolveRelationProperty(entity, key))
+          } catch (error) {
+            return Promise.reject(error)
+          }
         }
 
         relationMethod.then = (onFulfilled, onRejected) => loadRelation().then(onFulfilled, onRejected)
