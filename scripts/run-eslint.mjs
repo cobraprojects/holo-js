@@ -1,10 +1,11 @@
-import { readdir } from 'node:fs/promises'
+import { readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 
 const rootTargets = ['playground', 'scripts', 'eslint.config.mjs', 'vitest.workspace.ts']
 const passThroughArgs = process.argv.slice(2)
-const eslintBaseArgs = ['eslint', '--cache', '--cache-strategy', 'content', '--cache-location', '.eslintcache-main']
+const cacheLocation = '.eslintcache-main'
+const eslintBaseArgs = ['eslint', '--cache', '--cache-strategy', 'content', '--cache-location', cacheLocation]
 const lintExtensions = new Set(['.js', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts'])
 const ignoredDirectoryNames = new Set([
   '.git',
@@ -31,9 +32,21 @@ async function main() {
     ...await buildDirectoryGroups('packages'),
     rootTargets,
   ]
+  let retriedAfterCacheReset = false
 
   for (const targets of groups) {
-    await run(targets)
+    try {
+      await run(targets)
+    } catch (error) {
+      if (!retriedAfterCacheReset && shouldResetCache(error)) {
+        retriedAfterCacheReset = true
+        await clearCache(cacheLocation)
+        await run(targets)
+        continue
+      }
+
+      throw error
+    }
   }
 }
 
@@ -95,14 +108,21 @@ async function hasLintableFiles(directory) {
 
 function run(targets) {
   return new Promise((resolve, reject) => {
+    let stderr = ''
     const child = spawn(
       'bunx',
       [...eslintBaseArgs, ...targets, ...passThroughArgs],
       {
-        stdio: 'inherit',
+        stdio: ['inherit', 'inherit', 'pipe'],
         shell: process.platform === 'win32',
       },
     )
+
+    child.stderr.on('data', chunk => {
+      const text = chunk.toString()
+      stderr += text
+      process.stderr.write(text)
+    })
 
     child.on('exit', code => {
       if (code === 0) {
@@ -110,11 +130,21 @@ function run(targets) {
         return
       }
 
-      reject(new Error(`ESLint failed for: ${targets.join(', ')}`))
+      reject(new Error(stderr || `ESLint failed for: ${targets.join(', ')}`))
     })
 
     child.on('error', reject)
   })
+}
+
+async function clearCache(path) {
+  await rm(path, { force: true }).catch(() => undefined)
+}
+
+function shouldResetCache(error) {
+  return error instanceof Error
+    && error.message.includes('ENOENT:')
+    && error.message.includes('timestamp-')
 }
 
 main().catch(error => {

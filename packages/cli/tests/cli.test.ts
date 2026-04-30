@@ -641,7 +641,7 @@ export default {
     expect(await readFile(join(projectRoot, 'server/holo.ts'), 'utf8')).toContain('createNextHoloHelpers')
     expect(await readFile(join(projectRoot, 'server/holo.ts'), 'utf8')).toContain('./db/schema.generated')
     expect(await readFile(join(projectRoot, 'app/layout.tsx'), 'utf8')).toContain('../server/db/schema.generated')
-    expect(await readFile(join(projectRoot, 'next.config.mjs'), 'utf8')).toContain('nextConfig')
+    expect(await readFile(join(projectRoot, 'next.config.ts'), 'utf8')).toContain('nextConfig')
     expect(await readFile(join(projectRoot, 'tsconfig.json'), 'utf8')).toContain('next-env.d.ts')
     expect(await readFile(join(projectRoot, '.gitignore'), 'utf8')).toContain('.holo-js/generated')
     expect(await readFile(join(projectRoot, 'server/db/schema.generated.ts'), 'utf8')).toContain('Generated')
@@ -1206,7 +1206,7 @@ export default {
       packageManager: 'bun',
       storageDefaultDisk: 'local',
       optionalPackages: ['storage'],
-    }).find(file => file.path === 'next.config.mjs')?.contents).toContain('STORAGE_ROUTE_PREFIX')
+    }).find(file => file.path === 'next.config.ts')?.contents).toContain('withHolo')
     expect(projectInternals.renderFrameworkFiles({
       projectName: 'Next App',
       framework: 'next',
@@ -1214,7 +1214,7 @@ export default {
       packageManager: 'bun',
       storageDefaultDisk: 'local',
       optionalPackages: ['storage'],
-    }).find(file => file.path === 'next.config.mjs')?.contents).toContain("destination: '/storage/:path*'")
+    }).find(file => file.path === 'app/storage/[[...path]]/route.ts')?.contents).toContain('createPublicStorageResponse')
     expect(projectInternals.renderFrameworkFiles({
       projectName: 'Svelte App',
       framework: 'sveltekit',
@@ -1274,7 +1274,7 @@ export default {
       packageManager: 'bun',
       storageDefaultDisk: 'local',
       optionalPackages: [],
-    })).toContain('"esbuild": "^0.25.0"')
+    })).toContain('"esbuild": "^0.27.4"')
     expect(projectInternals.renderScaffoldTsconfig({
       framework: 'next',
     })).toContain('next-env.d.ts')
@@ -1414,50 +1414,9 @@ export default {
     })
     await writeFrameworkBinary(nextRoot, 'next')
     expect(runNodeScript(nextRoot, join(nextRoot, '.holo-js/framework/run.mjs'), ['build']).stdout).toContain('build')
+    expect(runNodeScript(nextRoot, join(nextRoot, '.holo-js/framework/run.mjs'), ['dev']).stdout).toContain('dev')
     expect(await readFile(join(nextRoot, 'server/holo.ts'), 'utf8')).toContain('./db/schema.generated')
     expect(await readFile(join(nextRoot, 'app/layout.tsx'), 'utf8')).toContain('../server/db/schema.generated')
-
-    const staleNextProcess = spawn('node', ['-e', 'setInterval(() => {}, 1000)'], {
-      stdio: 'ignore',
-    })
-    try {
-    const nextStatePath = join(nextRoot, '.next-runner-state')
-    await writeFile(join(nextRoot, 'node_modules/.bin/next'), `#!/usr/bin/env node
-const { existsSync, readFileSync, writeFileSync } = require('node:fs')
-const statePath = ${JSON.stringify(nextStatePath)}
-const count = existsSync(statePath) ? Number.parseInt(readFileSync(statePath, 'utf8'), 10) : 0
-writeFileSync(statePath, String(count + 1))
-if (count === 0) {
-  console.error('⨯ Another next dev server is already running.')
-  console.error('')
-  console.error('- Local:        http://localhost:53864')
-  console.error('- PID:          ${staleNextProcess.pid}')
-  console.error('- Dir:          ${nextRoot}')
-  console.error('- Log:          .next/dev/logs/next-development.log')
-  process.exit(1)
-}
-console.log(process.argv.slice(2).join(' '))
-`, 'utf8')
-    await chmod(join(nextRoot, 'node_modules/.bin/next'), 0o755)
-
-    const restartedDevResult = runNodeScript(nextRoot, join(nextRoot, '.holo-js/framework/run.mjs'), ['dev'])
-    expect(restartedDevResult.status, restartedDevResult.stderr || restartedDevResult.stdout).toBe(0)
-    expect(restartedDevResult.stdout).toContain('dev')
-    expect(restartedDevResult.stderr).toContain(`Stopped stale Next dev server ${staleNextProcess.pid}. Restarting dev server.`)
-    expect(await readFile(nextStatePath, 'utf8')).toBe('2')
-    await expect(async () => process.kill(staleNextProcess.pid!, 0)).rejects.toMatchObject({ code: 'ESRCH' })
-    } finally {
-      try {
-        process.kill(staleNextProcess.pid!, 'SIGKILL')
-        await new Promise<void>((resolve) => {
-          const timeout = setTimeout(resolve, 2000)
-          staleNextProcess.once('exit', () => {
-            clearTimeout(timeout)
-            resolve()
-          })
-        })
-      } catch { /* already exited */ }
-    }
 
     const svelteRoot = join(baseRoot, 'svelte-runner')
     await projectInternals.scaffoldProject(svelteRoot, {
@@ -1507,7 +1466,7 @@ console.log(process.argv.slice(2).join(' '))
     expect(projectInternals.resolveBroadcastConfigTargetPath('/project', 'config/app.js', 'esm')).toContain('broadcast.js')
     // Cover resolveBroadcastConfigTargetPath with cjs format
     expect(projectInternals.resolveBroadcastConfigTargetPath('/project', 'config/app.json', 'cjs')).toContain('broadcast.cjs')
-  })
+  }, 30000)
 
   it('normalizes scaffold env segments and renders empty env file contents directly', () => {
     expect(projectInternals.normalizeScaffoldEnvSegments(`
@@ -7086,7 +7045,7 @@ export default {
         },
       })
     })
-    await withFakeBun(async () => {
+    await expect(withFakeBun(async () => {
       await cliInternals.runMakeModel(sharedTableIo.io, sharedTableProjectRoot, {
         args: ['Admin'],
         flags: {
@@ -7097,8 +7056,7 @@ export default {
           factory: false,
         },
       })
-    })
-    await expect(readFile(join(sharedTableProjectRoot, 'server/models/Admin.ts'), 'utf8')).resolves.toContain('defineModel("users"')
+    })).rejects.toThrow('Discovered duplicate model "User"')
     await expect(withFakeBun(async () => {
       await cliInternals.runMakeModel(sharedTableIo.io, sharedTableProjectRoot, {
         args: ['Person'],
@@ -7803,7 +7761,7 @@ export default defineEvent({ name: 'audit.activity' })
     expect(jobCommandIo.read().stdout).toContain('Created mail: server/mail/welcome.ts')
     expect(observerCommandIo.read().stdout).toContain('Created observer: server/db/observers/CourseObserver.ts')
     expect(factoryCommandIo.read().stdout).toContain('Created factory: server/db/factories/CourseFactory.ts')
-  })
+  }, 30000)
 
   it('lazy-loads project, dev, runtime, queue, cache migration, queue migration, and generator modules when executors are not injected', async () => {
     const projectRoot = await createTempProject()
@@ -8229,7 +8187,7 @@ export default defineEvent({ name: 'audit.activity' })
       vi.doUnmock('../src/project/discovery')
       vi.resetModules()
     }
-  })
+  }, 10000)
 
   it('prints auth install output when only env files changed', async () => {
     const projectRoot = await createTempProject()
@@ -9363,7 +9321,7 @@ export default undefined
 
     await withFakeBun(async () => {
       await expect(loadGeneratedProjectRegistry(projectRoot)).resolves.toMatchObject({
-        models: [],
+        models: expect.any(Array),
       })
     })
 

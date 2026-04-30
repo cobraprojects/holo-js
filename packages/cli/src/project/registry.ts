@@ -354,10 +354,14 @@ async function ensureSvelteManagedHooks(projectRoot: string): Promise<void> {
   if (legacyUserContents && (!hooksContents || isManagedPrepareArtifact(hooksContents))) {
     await writeFileIfChanged(hooksPath, legacyUserContents)
     await unlinkIfPresent(legacyHooksUserPath)
+  } else if (legacyUserContents && hooksContents === legacyUserContents) {
+    await unlinkIfPresent(legacyHooksUserPath)
   }
 
   if (legacyServerUserContents && (!hooksServerContents || isManagedPrepareArtifact(hooksServerContents))) {
     await writeFileIfChanged(hooksServerPath, legacyServerUserContents)
+    await unlinkIfPresent(legacyHooksServerUserPath)
+  } else if (legacyServerUserContents && hooksServerContents === legacyServerUserContents) {
     await unlinkIfPresent(legacyHooksServerUserPath)
   }
 

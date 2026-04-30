@@ -1,68 +1,10 @@
 import { HydrationError } from '../core/errors'
+import { initializeEntityModelProperties, type EntityConstructor, valuesAreEqual } from './entityRuntime'
 import type { TableDefinition } from '../schema/types'
 import type { AnyModelDefinition, EmptyScopeMap, ModelAggregateLoad, ModelMorphLoadMap, ModelRecord, ModelRelationName, ModelRelationPath, ModelRepositoryLike, ModelUpdatePayload, RelatedColumnNameOfRelation, RelationMap, RelationMethodsOf, ResolveEagerLoads, SerializeLoaded } from './types'
 
-type EntityConstructor = {
-  new<
-    TTable extends TableDefinition = TableDefinition,
-    TRelations extends RelationMap = RelationMap,
-  >(
-    repository: ModelRepositoryLike<TTable, EmptyScopeMap, TRelations>,
-    attributes: Partial<ModelRecord<TTable>>,
-    exists?: boolean,
-  ): Entity<TTable, TRelations>
-  prototype: EntityBase<TableDefinition, RelationMap>
-}
-
 function isEntity(value: unknown): value is Entity<TableDefinition, RelationMap> {
   return value instanceof EntityBase
-}
-
-function valuesAreEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) {
-    return true
-  }
-
-  if (left instanceof Date && right instanceof Date) {
-    return left.getTime() === right.getTime()
-  }
-
-  if (left instanceof Uint8Array && right instanceof Uint8Array) {
-    if (left.length !== right.length) {
-      return false
-    }
-
-    for (let index = 0; index < left.length; index += 1) {
-      if (left[index] !== right[index]) {
-        return false
-      }
-    }
-
-    return true
-  }
-
-  if (Array.isArray(left) && Array.isArray(right)) {
-    return left.length === right.length && left.every((value, index) => valuesAreEqual(value, right[index]))
-  }
-
-  if (
-    left
-    && right
-    && typeof left === 'object'
-    && typeof right === 'object'
-    && Object.getPrototypeOf(left) === Object.getPrototypeOf(right)
-  ) {
-    const leftEntries = Object.entries(left)
-    const rightEntries = Object.entries(right)
-
-    if (leftEntries.length !== rightEntries.length) {
-      return false
-    }
-
-    return leftEntries.every(([key, value]) => valuesAreEqual(value, (right as Record<string, unknown>)[key]))
-  }
-
-  return false
 }
 
 type EntityRepositoryRuntime<TTable extends TableDefinition, TRelations extends RelationMap> = ModelRepositoryLike<TTable, EmptyScopeMap, TRelations> & {
@@ -141,7 +83,7 @@ class EntityBase<
     this.changes = exists ? {} : { ...attributes }
     this.persisted = exists
     this.relations = {}
-    this.initializeModelProperties()
+    initializeEntityModelProperties(this, this.getRepositoryRuntime())
   }
 
   getRepository(): ModelRepositoryLike<TTable> {
@@ -975,68 +917,6 @@ class EntityBase<
     return result
   }
 
-  private initializeModelProperties(): void {
-    const repo = this.getRepositoryRuntime()
-    const columns = repo?.definition?.table?.columns
-    if (columns && typeof columns === 'object') {
-      for (const key of Object.keys(columns)) {
-        if (key in this) {
-          continue
-        }
-
-        Object.defineProperty(this, key, {
-          configurable: true,
-          enumerable: true,
-          get: () => this.get(key as never),
-          set: (value: unknown) => {
-            this.set(key as never, value as never)
-          },
-        })
-      }
-    }
-
-    const relationNames = typeof repo?.getRelationNames === 'function'
-      ? repo.getRelationNames()
-      : Object.keys(repo?.definition?.relations ?? {})
-
-    for (const key of relationNames) {
-      if (key in this) {
-        continue
-      }
-
-      Object.defineProperty(this, key, {
-        configurable: true,
-        enumerable: false,
-        get: () => {
-          if (this.hasRelation(key)) {
-            return this.getRelation(key)
-          }
-
-          const relationMethod = (() => this.relation(key as ModelRelationName<TRelations>)) as (() => RelationMethodsOf<TRelations[ModelRelationName<TRelations>]>) & PromiseLike<unknown> & {
-            catch?: <TResult = never>(onRejected?: (reason: unknown) => TResult | PromiseLike<TResult>) => Promise<unknown | TResult>
-            finally?: (onFinally?: () => void) => Promise<unknown>
-          }
-
-          const loadRelation = () => {
-            if (typeof repo?.resolveRelationProperty !== 'function') {
-              return Promise.resolve(undefined)
-            }
-
-            return Promise.resolve((repo.resolveRelationProperty as (entity: unknown, key: string) => unknown)(this, key))
-          }
-
-          relationMethod.then = (onFulfilled, onRejected) => loadRelation().then(onFulfilled, onRejected)
-          relationMethod.catch = (onRejected) => loadRelation().catch(onRejected)
-          relationMethod.finally = (onFinally) => loadRelation().finally(onFinally)
-
-          return relationMethod
-        },
-        set: (value: unknown) => {
-          this.setRelation(key, value)
-        },
-      })
-    }
-  }
 }
 
 export type ModelRelationMethods<TRelations extends RelationMap>

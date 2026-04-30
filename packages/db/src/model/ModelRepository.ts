@@ -3726,7 +3726,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
 
   private serializeRelationValue(value: unknown): unknown {
     if (value instanceof Entity) {
-      return value.toJSON()
+      return (value as Entity).toJSON()
     }
 
     if (Array.isArray(value)) {
