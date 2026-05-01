@@ -1,16 +1,30 @@
-import { readdir, stat } from 'node:fs/promises'
+import { readdir, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 
 const appRoot = 'apps'
 const passThroughArgs = process.argv.slice(2)
-const eslintBaseArgs = ['eslint', '--cache', '--cache-strategy', 'content', '--cache-location', '.eslintcache-generated']
+const cacheLocation = '.eslintcache-generated'
+const eslintBaseArgs = ['eslint', '--cache', '--cache-strategy', 'content', '--cache-location', cacheLocation]
 
 async function main() {
   const groups = await collectGeneratedLintGroups()
 
   for (const group of groups) {
-    await run(group)
+    let retriedAfterCacheReset = false
+
+    try {
+      await run(group)
+    } catch (error) {
+      if (!retriedAfterCacheReset && shouldResetCache(error)) {
+        retriedAfterCacheReset = true
+        await clearCache(cacheLocation)
+        await run(group)
+        continue
+      }
+
+      throw error
+    }
   }
 }
 
@@ -75,26 +89,43 @@ async function pathExists(path) {
 
 function run(targets) {
   return new Promise((resolve, reject) => {
+    let stderr = ''
     const child = spawn(
       'bunx',
       [...eslintBaseArgs, '--no-ignore', ...targets, ...passThroughArgs],
       {
-        stdio: 'inherit',
+        stdio: ['inherit', 'inherit', 'pipe'],
         shell: process.platform === 'win32',
       },
     )
 
-    child.on('exit', code => {
+    child.stderr.on('data', chunk => {
+      const text = chunk.toString()
+      stderr += text
+      process.stderr.write(text)
+    })
+
+    child.on('close', code => {
       if (code === 0) {
         resolve()
         return
       }
 
-      reject(new Error(`Generated ESLint failed for: ${targets[0]}`))
+      reject(new Error(stderr || `Generated ESLint failed for: ${targets[0]}`))
     })
 
     child.on('error', reject)
   })
+}
+
+async function clearCache(path) {
+  await rm(path, { force: true }).catch(() => undefined)
+}
+
+function shouldResetCache(error) {
+  return error instanceof Error
+    && error.message.includes('ENOENT:')
+    && error.message.includes('timestamp-')
 }
 
 main().catch(error => {
