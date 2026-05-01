@@ -9,10 +9,16 @@ packages/core/src/runtime/*.d.ts
 packages/core/src/runtime/*.mjs
 *.log
 
-# Nuxt
+# Frameworks
 .nuxt
 .output
 .nitro
+.data
+.next
+out
+next-env.d.ts
+.svelte-kit
+build
 
 # VitePress
 apps/docs/docs/.vitepress/cache
