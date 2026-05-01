@@ -27,7 +27,7 @@ describe('broadcast documentation smoke checks', () => {
     expect(setup).toContain('holo make:channel orders.{orderId}')
     expect(setup).toContain('holo broadcast:work')
     expect(setup).toContain('npx holo broadcast:work')
-    expect(installation).toContain('bunx holo install broadcast')
+    expect(installation).toContain('npx holo install broadcast')
   })
 
   it('covers drivers, auth endpoint, Flux helpers, deployment, and notifications bridge', async () => {

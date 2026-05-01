@@ -5,10 +5,10 @@ export const ESBUILD_PACKAGE_VERSION = '^0.27.4'
 const HOLO_PACKAGE_RANGE = `^${HOLO_PACKAGE_VERSION}`
 
 export const SCAFFOLD_PACKAGE_MANAGER_VERSIONS = Object.freeze({
-  bun: 'bun@1.3.9',
   npm: 'npm@latest',
   pnpm: 'pnpm@latest',
   yarn: 'yarn@stable',
+  bun: 'bun@1.3.9',
 } as const)
 
 export const SCAFFOLD_FRAMEWORK_VERSIONS = Object.freeze({

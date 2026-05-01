@@ -173,11 +173,11 @@ To enable email verification delivery through notifications or mail:
 
 ```bash
 # For full notifications + mail integration (recommended)
-bunx holo install notifications
-bunx holo install mail
+npx holo install notifications
+npx holo install mail
 
 # For mail-only delivery
-bunx holo install mail
+npx holo install mail
 ```
 
 ## Protecting Application Routes
@@ -274,8 +274,8 @@ notifications or mail for auth-managed verification emails.
 Install notifications or mail into an existing project with:
 
 ```bash
-bunx holo install notifications
-bunx holo install mail
+npx holo install notifications
+npx holo install mail
 ```
 
 ## Runtime Delivery Hook Configuration

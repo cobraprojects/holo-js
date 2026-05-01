@@ -67,16 +67,16 @@ files.
 ## Validate before merge
 
 ```bash
-bun run typecheck
-bun run lint
-bun run test
-bun run build
+npm run typecheck
+npm run lint
+npm run test
+npm run build
 ```
 
 If documentation changed:
 
 ```bash
-bun run build:docs
+npm run build:docs
 ```
 
 ## Keep operational steps explicit

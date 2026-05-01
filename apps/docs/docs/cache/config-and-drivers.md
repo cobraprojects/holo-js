@@ -138,7 +138,7 @@ Database install requirements:
 
 - `@holo-js/cache`
 - `@holo-js/cache-db`
-- `bunx holo cache:table`
+- `npx holo cache:table`
 
 The cache driver reuses a named DB connection from `config/database.ts`. It does not duplicate database
 credentials inside `config/cache.ts`.

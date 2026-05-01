@@ -8,13 +8,13 @@ install them later into an existing project.
 Use the optional package flag during `create`:
 
 ```bash
-bun create holo-js my-app --package notifications
+npm create holo-js@latest my-app -- --package notifications
 ```
 
 Multiple optional packages still compose normally:
 
 ```bash
-bun create holo-js my-app --package forms,validation,notifications
+npm create holo-js@latest my-app -- --package forms,validation,notifications
 ```
 
 ## Existing projects
@@ -22,7 +22,7 @@ bun create holo-js my-app --package forms,validation,notifications
 Install notifications into an existing Holo-JS app with:
 
 ```bash
-bunx holo install notifications
+npx holo install notifications
 ```
 
 This adds the `@holo-js/notifications` package dependency when needed and scaffolds:
@@ -33,7 +33,7 @@ This adds the `@holo-js/notifications` package dependency when needed and scaffo
 After install, run the normal migration flow:
 
 ```bash
-bunx holo migrate
+npx holo migrate
 ```
 
 ## Scaffolded database channel support

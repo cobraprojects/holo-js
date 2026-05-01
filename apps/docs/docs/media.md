@@ -14,7 +14,7 @@ Queued conversions are now backed by the queue subsystem instead of a dormant fl
 Install the media package alongside DB and storage:
 
 ```bash
-bun add @holo-js/media
+npm install @holo-js/media
 ```
 
 `@holo-js/media` is not a framework adapter. It builds on top of `@holo-js/db` and `@holo-js/storage`.
@@ -275,7 +275,7 @@ Behavior depends on the configured queue driver:
 Run a worker for async queue drivers:
 
 ```bash
-bunx holo queue:work --connection redis --queue media
+npx holo queue:work --connection redis --queue media
 ```
 
 ## Clearing and deleting media

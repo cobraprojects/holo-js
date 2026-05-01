@@ -8,14 +8,14 @@ jobs inline and does not need a worker process.
 Run the queue worker:
 
 ```bash
-bunx holo queue:work --connection redis
+npx holo queue:work --connection redis
 ```
 
 Filter one or more queue names:
 
 ```bash
-bunx holo queue:work --connection redis --queue emails
-bunx holo queue:work --connection redis --queue emails,media
+npx holo queue:work --connection redis --queue emails
+npx holo queue:work --connection redis --queue emails,media
 ```
 
 Useful flags:
@@ -31,7 +31,7 @@ Useful flags:
 Example:
 
 ```bash
-bunx holo queue:work \
+npx holo queue:work \
   --connection database \
   --queue default,media \
   --sleep 1 \
@@ -47,7 +47,7 @@ bunx holo queue:work \
 discovery as needed, and restarts the worker when relevant files change.
 
 ```bash
-bunx holo queue:listen --connection redis --queue media
+npx holo queue:listen --connection redis --queue media
 ```
 
 This is the right command when you want a queue worker running while editing job files in local
@@ -58,7 +58,7 @@ development.
 Signal long-lived workers to restart after the current job:
 
 ```bash
-bunx holo queue:restart
+npx holo queue:restart
 ```
 
 Use this after deploying new code when your process manager keeps queue workers alive.
@@ -68,8 +68,8 @@ Use this after deploying new code when your process manager keeps queue workers 
 Clear pending jobs from a connection:
 
 ```bash
-bunx holo queue:clear --connection redis
-bunx holo queue:clear --connection redis --queue emails
+npx holo queue:clear --connection redis
+npx holo queue:clear --connection redis --queue emails
 ```
 
 This removes pending work from the selected queue names. It is not a failed-job command.
@@ -86,8 +86,8 @@ This removes pending work from the selected queue names. It is not a failed-job 
 Running dedicated workers for separate queues is often cleaner than one large worker pool:
 
 ```bash
-bunx holo queue:work --connection redis --queue emails
-bunx holo queue:work --connection redis --queue media
+npx holo queue:work --connection redis --queue emails
+npx holo queue:work --connection redis --queue media
 ```
 
 That keeps email and media workloads isolated even when they share one Redis connection.

@@ -1,7 +1,7 @@
 # ORM: Getting Started
 
 Holo-JS models are the application-facing record layer. They are directly queryable, relation-aware, and
-typed from the generated schema metadata refreshed by `holo migrate`.
+typed from the generated schema metadata refreshed by `npx holo migrate`.
 
 ## Introduction
 
@@ -19,8 +19,8 @@ server/models/User.ts
 The fastest way to start is:
 
 ```bash
-bunx holo make:model User
-bunx holo make:model courses/Course --migration --observer --factory --seeder
+npx holo make:model User
+npx holo make:model courses/Course --migration --observer --factory --seeder
 ```
 
 Use `make:model` when you want the model scaffold and optional companion files created together. Nested
@@ -51,7 +51,7 @@ server/api/users/index.get.ts
 The flow is:
 
 1. migrations define or change the table
-2. `bunx holo migrate` refreshes `server/db/schema.generated.ts`
+2. `npx holo migrate` refreshes `server/db/schema.generated.ts`
 3. model files define behavior
 4. API routes or server services call the model
 
@@ -536,8 +536,8 @@ Put observer classes in a server-side file, usually under `server/db/observers`.
 server/db/observers/UserObserver.ts
 ```
 
-Use `holo make:observer UserObserver` to scaffold the observer file. If you are creating a new model and
-want the observer wired automatically, use `holo make:model User --observer`.
+Use `npx holo make:observer UserObserver` to scaffold the observer file. If you are creating a new model and
+want the observer wired automatically, use `npx holo make:model User --observer`.
 
 ```ts
 class UserObserver {
@@ -596,11 +596,11 @@ const deletedCount = await Session.prune()
 Or run it through the CLI:
 
 ```bash
-holo prune
-holo prune Session
+npx holo prune
+npx holo prune Session
 ```
 
-`holo prune` with no arguments prunes every registered model that defines `prunable`. If you explicitly
+`npx holo prune` with no arguments prunes every registered model that defines `prunable`. If you explicitly
 name a model that does not define `prunable`, the command fails instead of silently skipping it.
 
 Use pruning when the cleanup rule belongs to the model itself and should stay repeatable.

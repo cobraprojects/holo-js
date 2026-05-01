@@ -86,7 +86,7 @@ describe('auth documentation smoke checks', () => {
     expect(verification).toContain('verification.create')
     expect(verification).toContain('verification.consume')
     expect(verification).toContain('@holo-js/notifications')
-    expect(verification).toContain('bunx holo install mail')
+    expect(verification).toContain('npx holo install mail')
     expect(verification).toContain('notify(created, verificationCreated(token))')
     expect(reset).toContain('passwords.request')
     expect(reset).toContain('passwords.consume')

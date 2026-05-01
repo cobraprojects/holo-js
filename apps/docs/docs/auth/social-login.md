@@ -25,9 +25,9 @@ Social login uses one shared runtime package plus one package per provider. Inst
 actually uses.
 
 ```bash
-bunx holo install auth --social --provider google
-bunx holo install auth --social --provider github
-bunx holo install auth --social --provider google,github
+npx holo install auth --social --provider google
+npx holo install auth --social --provider github
+npx holo install auth --social --provider google,github
 ```
 
 Supported first-party providers:
@@ -48,12 +48,12 @@ provider package installed by the CLI.
 
 | Provider | Install Command | Config Key | Package | Default Scopes |
 | --- | --- | --- | --- | --- |
-| Google | `bunx holo install auth --social --provider google` | `google` | `@holo-js/auth-social-google` | `openid email profile` |
-| GitHub | `bunx holo install auth --social --provider github` | `github` | `@holo-js/auth-social-github` | `read:user user:email` |
-| Discord | `bunx holo install auth --social --provider discord` | `discord` | `@holo-js/auth-social-discord` | `identify email` |
-| Facebook | `bunx holo install auth --social --provider facebook` | `facebook` | `@holo-js/auth-social-facebook` | `email public_profile` |
-| Apple | `bunx holo install auth --social --provider apple` | `apple` | `@holo-js/auth-social-apple` | `name email` |
-| LinkedIn | `bunx holo install auth --social --provider linkedin` | `linkedin` | `@holo-js/auth-social-linkedin` | `openid profile email` |
+| Google | `npx holo install auth --social --provider google` | `google` | `@holo-js/auth-social-google` | `openid email profile` |
+| GitHub | `npx holo install auth --social --provider github` | `github` | `@holo-js/auth-social-github` | `read:user user:email` |
+| Discord | `npx holo install auth --social --provider discord` | `discord` | `@holo-js/auth-social-discord` | `identify email` |
+| Facebook | `npx holo install auth --social --provider facebook` | `facebook` | `@holo-js/auth-social-facebook` | `email public_profile` |
+| Apple | `npx holo install auth --social --provider apple` | `apple` | `@holo-js/auth-social-apple` | `name email` |
+| LinkedIn | `npx holo install auth --social --provider linkedin` | `linkedin` | `@holo-js/auth-social-linkedin` | `openid profile email` |
 
 Those default scopes come from the first-party provider packages. Override them only when your application needs a
 different upstream permission set.
@@ -202,7 +202,7 @@ different services.
 Install:
 
 ```bash
-bunx holo install auth --social --provider google
+npx holo install auth --social --provider google
 ```
 
 Config:
@@ -225,7 +225,7 @@ Use Google when you want OpenID Connect style profile data with `openid`, `email
 Install:
 
 ```bash
-bunx holo install auth --social --provider github
+npx holo install auth --social --provider github
 ```
 
 Config:
@@ -249,7 +249,7 @@ user by email.
 Install:
 
 ```bash
-bunx holo install auth --social --provider discord
+npx holo install auth --social --provider discord
 ```
 
 Config:
@@ -273,7 +273,7 @@ address.
 Install:
 
 ```bash
-bunx holo install auth --social --provider facebook
+npx holo install auth --social --provider facebook
 ```
 
 Config:
@@ -296,7 +296,7 @@ Facebook uses Graph API profile fields. Keep `email` when your app needs local a
 Install:
 
 ```bash
-bunx holo install auth --social --provider apple
+npx holo install auth --social --provider apple
 ```
 
 Config:
@@ -320,7 +320,7 @@ through the same Holo `callback('apple', request)` flow.
 Install:
 
 ```bash
-bunx holo install auth --social --provider linkedin
+npx holo install auth --social --provider linkedin
 ```
 
 Config:

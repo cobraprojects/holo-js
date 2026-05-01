@@ -30,9 +30,9 @@ holo build
 holo prepare
 holo config:cache
 holo config:clear
-bun run typecheck
-bun run lint
-bun run test
+npm run typecheck
+npm run lint
+npm run test
 ```
 
 `holo dev` already runs discovery before starting the selected framework. `holo prepare` is the manual

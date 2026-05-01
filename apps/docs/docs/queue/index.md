@@ -8,14 +8,14 @@ Holo-JS ships queue support as a first-class server subsystem. New projects alre
 Install queue support into an existing Holo-JS app with:
 
 ```bash
-bunx holo install queue
+npx holo install queue
 ```
 
 Pick a starting driver during install when needed:
 
 ```bash
-bunx holo install queue --driver redis
-bunx holo install queue --driver database
+npx holo install queue --driver redis
+npx holo install queue --driver database
 ```
 
 ## What queue owns
@@ -133,7 +133,7 @@ See [Configuration](/configuration) for examples of all three connection styles.
 Run a worker:
 
 ```bash
-bunx holo queue:work --connection redis
+npx holo queue:work --connection redis
 ```
 
 ### Database
@@ -166,15 +166,15 @@ export default defineQueueConfig({
 Generate the required tables and migrate:
 
 ```bash
-bunx holo queue:table
-bunx holo queue:failed-table
-bunx holo migrate
+npx holo queue:table
+npx holo queue:failed-table
+npx holo migrate
 ```
 
 Then run a worker:
 
 ```bash
-bunx holo queue:work --connection database
+npx holo queue:work --connection database
 ```
 
 ## Queue names and connections

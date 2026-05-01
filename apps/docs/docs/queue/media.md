@@ -39,7 +39,7 @@ inline.
 With `redis` or `database`, the job is enqueued and processed by a worker:
 
 ```bash
-bunx holo queue:work --connection redis --queue media
+npx holo queue:work --connection redis --queue media
 ```
 
 ## Why the payload stays small
@@ -60,7 +60,7 @@ The worker reloads the media record and original file from storage when it execu
 Example dedicated worker:
 
 ```bash
-bunx holo queue:work --connection redis --queue media
+npx holo queue:work --connection redis --queue media
 ```
 
 ## Continue

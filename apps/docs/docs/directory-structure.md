@@ -165,7 +165,7 @@ Holo-JS does not replace those layouts.
 Use:
 
 ```bash
-bun run dev
+holo dev
 holo build
 holo prepare
 ```

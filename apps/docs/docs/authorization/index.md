@@ -5,7 +5,7 @@ Authorization is Holo's package for deciding what an authenticated or explicit a
 Install it when your application needs policy checks, ability checks, or typed authorization decisions:
 
 ```bash
-bunx holo install authorization
+npx holo install authorization
 ```
 
 The package is optional and can be used without `@holo-js/auth`. When auth is installed, Holo wires the current

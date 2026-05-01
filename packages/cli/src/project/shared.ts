@@ -142,7 +142,7 @@ export type GeneratedProjectRegistry = {
 
 export type SupportedScaffoldFramework = 'nuxt' | 'next' | 'sveltekit'
 
-export type SupportedScaffoldPackageManager = 'bun' | 'npm' | 'pnpm' | 'yarn'
+export type SupportedScaffoldPackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun'
 
 export type SupportedScaffoldStorageDisk = 'local' | 'public'
 export type SupportedScaffoldOptionalPackage = 'storage' | 'events' | 'queue' | 'validation' | 'forms' | 'auth' | 'authorization' | 'notifications' | 'mail' | 'broadcast' | 'security' | 'cache'
@@ -430,7 +430,7 @@ export const GENERATED_SVELTE_SERVER_HOOKS_PATH = join(GENERATED_ROOT, 'hooks.se
 export const CONFIG_EXTENSION_PRIORITY = ['.ts', '.mts', '.js', '.mjs', '.cts', '.cjs'] as const
 export const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIORITY)
 export const SUPPORTED_SCAFFOLD_FRAMEWORKS = ['nuxt', 'next', 'sveltekit'] as const
-export const SUPPORTED_SCAFFOLD_PACKAGE_MANAGERS = ['bun', 'npm', 'pnpm', 'yarn'] as const
+export const SUPPORTED_SCAFFOLD_PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn', 'bun'] as const
 export const SUPPORTED_SCAFFOLD_STORAGE_DISKS = ['local', 'public'] as const
 export const SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms', 'auth', 'authorization', 'notifications', 'mail', 'broadcast', 'security', 'cache'] as const
 export const SUPPORTED_QUEUE_INSTALLER_DRIVERS = ['sync', 'redis', 'database'] as const

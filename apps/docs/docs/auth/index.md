@@ -51,12 +51,12 @@ authentication.
 Install only the packages you need:
 
 ```bash
-bunx holo install auth
-bunx holo install auth --social --provider google
-bunx holo install auth --social --provider github
-bunx holo install auth --social --provider google,github
-bunx holo install auth --workos
-bunx holo install auth --clerk
+npx holo install auth
+npx holo install auth --social --provider google
+npx holo install auth --social --provider github
+npx holo install auth --social --provider google,github
+npx holo install auth --workos
+npx holo install auth --clerk
 ```
 
 When `auth` is installed, `session` is installed with it automatically because session-backed auth depends on it.

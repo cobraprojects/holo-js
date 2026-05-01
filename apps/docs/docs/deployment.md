@@ -28,7 +28,7 @@ For deployable artifacts, keep these steps explicit:
 ```bash
 holo prepare
 holo config:cache
-bun run build
+npm run build
 ```
 
 `holo prepare` refreshes discovery output. `holo config:cache` is optional but useful when you want
@@ -66,14 +66,14 @@ Do not expose secrets to browser-visible config or client bundles.
 ## Validation before rollout
 
 ```bash
-bun run typecheck
-bun run lint
-bun run test
-bun run build
+npm run typecheck
+npm run lint
+npm run test
+npm run build
 ```
 
 If docs changed:
 
 ```bash
-bun run build:docs
+npm run build:docs
 ```

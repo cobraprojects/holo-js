@@ -13,7 +13,7 @@ describe('security documentation smoke checks', () => {
     const security = await readDoc('apps/docs/docs/security.md')
     const installation = await readDoc('apps/docs/docs/installation.md')
 
-    expect(security).toContain('bunx holo install security')
+    expect(security).toContain('npx holo install security')
     expect(security).toContain('config/security.ts')
     expect(security).toContain('defineSecurityConfig')
     expect(security).toContain('limit.perMinute(5)')

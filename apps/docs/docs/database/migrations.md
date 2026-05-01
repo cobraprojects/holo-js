@@ -23,7 +23,7 @@ Do not put migrations in client code. They belong to deployment, local setup, CI
 bootstrap flows.
 
 In Holo-JS, migrations are the operational source of truth. They change the real database, and after a
-successful `bunx holo migrate` run the CLI refreshes `server/db/schema.generated.ts`. Model files consume
+successful `npx holo migrate` run the CLI refreshes `server/db/schema.generated.ts`. Model files consume
 that generated schema metadata instead of redefining columns inline.
 
 Columns are not nullable by default. Write `.nullable()` only when a column should allow nulls. Use
@@ -34,9 +34,9 @@ Columns are not nullable by default. Write `.nullable()` only when a column shou
 Generate migrations with the CLI:
 
 ```bash
-bunx holo make:migration create_users_table
-bunx holo make:migration create_users_table --create users
-bunx holo make:migration add_status_to_users_table --table users
+npx holo make:migration create_users_table
+npx holo make:migration create_users_table --create users
+npx holo make:migration add_status_to_users_table --table users
 ```
 
 This creates a timestamped file in `server/db/migrations`:
@@ -125,14 +125,14 @@ export default defineMigration({
 Use `--create` when the table does not exist yet:
 
 ```bash
-bunx holo make:migration create_users_table --create users
+npx holo make:migration create_users_table --create users
 ```
 
 Use `--table` when the table already exists and the migration is adding, changing, renaming, indexing,
 or dropping parts of it:
 
 ```bash
-bunx holo make:migration add_profile_photo_to_users_table --table users
+npx holo make:migration add_profile_photo_to_users_table --table users
 ```
 
 That keeps create-table and alter-table scaffolds explicit and easy to review.
@@ -149,20 +149,20 @@ omit `down` when the migration is intentionally irreversible and your team is tr
 Run all pending migrations:
 
 ```bash
-bunx holo migrate
+npx holo migrate
 ```
 
 Run only the next `N` migrations:
 
 ```bash
-bunx holo migrate --step 1
+npx holo migrate --step 1
 ```
 
 Reset the database and rerun everything:
 
 ```bash
-bunx holo migrate:fresh
-bunx holo migrate:fresh --seed
+npx holo migrate:fresh
+npx holo migrate:fresh --seed
 ```
 
 `migrate:fresh` drops every table in the active connection, reruns the full migration chain, and then
@@ -183,19 +183,19 @@ That keeps schema work explicit even when teams wrap it in deployment automation
 Roll back the latest batch:
 
 ```bash
-bunx holo migrate:rollback
+npx holo migrate:rollback
 ```
 
 Roll back a specific number of migrations:
 
 ```bash
-bunx holo migrate:rollback --step 1
+npx holo migrate:rollback --step 1
 ```
 
 Roll back a specific batch:
 
 ```bash
-bunx holo migrate:rollback --batch 3
+npx holo migrate:rollback --batch 3
 ```
 
 Use rollback when you need to reverse recent schema changes in development, tests, or controlled

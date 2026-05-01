@@ -3629,7 +3629,7 @@ export default defineCacheConfig({
       projectName: 'optional-array-app',
       framework: 'nuxt',
       databaseDriver: 'sqlite',
-      packageManager: 'bun',
+      packageManager: 'npm',
       storageDefaultDisk: 'local',
       optionalPackages: ['forms', 'validation'],
     })
@@ -3642,7 +3642,7 @@ export default defineCacheConfig({
       projectName: 'forms-app',
       framework: 'nuxt',
       databaseDriver: 'sqlite',
-      packageManager: 'bun',
+      packageManager: 'npm',
       storageDefaultDisk: 'local',
       optionalPackages: ['forms', 'validation'],
     })
@@ -3654,7 +3654,7 @@ export default defineCacheConfig({
       projectName: 'defaults-app',
       framework: 'nuxt',
       databaseDriver: 'sqlite',
-      packageManager: 'bun',
+      packageManager: 'npm',
       storageDefaultDisk: 'local',
       optionalPackages: [],
     })

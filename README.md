@@ -29,29 +29,26 @@ across database drivers, storage drivers, and deployment targets.
 Interactive:
 
 ```bash
-bun create holo-js my-app
+npm create holo-js@latest my-app
 ```
 
 Non-interactive:
 
 ```bash
-bun create holo-js my-app \
+npm create holo-js@latest my-app -- \
   --framework next \
   --database sqlite \
-  --package-manager bun \
+  --package-manager npm \
   --storage-default-disk public
 ```
 
 Equivalent create-package entrypoints:
 
 ```bash
-npm create holo-js@latest my-app
-bunx create-holo-js my-app
+pnpm create holo-js@latest my-app
+yarn create holo-js my-app
+npx create-holo-js my-app
 ```
-
-Do not use `bunx create holo-js`.
-`bunx` treats `create` as the package name in that form, so it installs and runs the npm package named `create`
-instead of resolving `create-holo-js`.
 
 That scaffold writes the framework glue once. After that, the user-facing setup surface is:
 
@@ -89,15 +86,21 @@ my-app/
 
 ## Core commands
 
+Use your package manager's run command for framework lifecycle:
+
 ```bash
-bun install
-bun run dev
-bun run build
-bunx holo prepare
-bunx holo config:cache
-bunx holo config:clear
-bunx holo migrate
-bunx holo seed
+npm run dev
+npm run build
+```
+
+Use your package manager's exec wrapper for direct Holo-JS CLI commands:
+
+```bash
+npx holo prepare
+npx holo config:cache
+npx holo config:clear
+npx holo migrate
+npx holo seed
 ```
 
 `holo dev` and `holo build` run discovery before handing control to the selected framework.
@@ -111,12 +114,7 @@ const app = await holo.getApp()
 
 The framework route wrapper stays native, but Holo-JS access stays consistent.
 
-Inside a project, use:
-
-- `bun run dev` / `bun run build` for framework lifecycle commands
-- `bunx holo ...` for direct Holo-JS CLI commands such as `make:model`, `migrate`, and `seed`
-
-Equivalent direct CLI forms are `npx holo ...`, `pnpm dlx holo ...`, and `yarn dlx holo ...`.
+Equivalent exec forms: `npx holo ...`, `pnpm dlx holo ...`, `yarn dlx holo ...`, `bunx holo ...`.
 
 ## Flexible runtime
 
