@@ -135,6 +135,22 @@ async function waitForText(url, predicate, timeoutMs = 30000) {
 
 let child = null
 
+function killChildTree() {
+  if (!child || child.exitCode !== null) {
+    return
+  }
+
+  try {
+    process.kill(-child.pid, 'SIGTERM')
+  } catch {
+    try {
+      child.kill('SIGTERM')
+    } catch {
+      // Already exited.
+    }
+  }
+}
+
 try {
   await rm(join(cwd, '.next'), { recursive: true, force: true })
   await run('bun', ['run', 'prepare'])
@@ -143,6 +159,7 @@ try {
 
   child = spawn('bun', ['run', 'dev'], {
     cwd,
+    detached: true,
     env: {
       ...process.env,
       PORT: port,
@@ -161,7 +178,7 @@ try {
   const updated = await waitForJson(healthUrl, payload => payload.app === 'blog-next-updated')
   assert.equal(updated.app, 'blog-next-updated')
 
-  child.kill('SIGTERM')
+  killChildTree()
   await new Promise(resolve => child.once('close', resolve))
   child = null
 
@@ -170,8 +187,8 @@ try {
   await run('bun', ['run', 'build'])
 } finally {
   await writeFile(configPath, originalConfig)
+  killChildTree()
   if (child && child.exitCode === null) {
-    child.kill('SIGTERM')
     await new Promise(resolve => child.once('close', resolve))
   }
 }

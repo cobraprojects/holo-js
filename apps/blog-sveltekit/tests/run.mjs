@@ -179,6 +179,22 @@ function waitForDevUrl(child, timeoutMs = 30000) {
 
 let child = null
 
+function killChildTree() {
+  if (!child || child.exitCode !== null) {
+    return
+  }
+
+  try {
+    process.kill(-child.pid, 'SIGTERM')
+  } catch {
+    try {
+      child.kill('SIGTERM')
+    } catch {
+      // Already exited.
+    }
+  }
+}
+
 try {
   await rm(join(cwd, '.svelte-kit'), { recursive: true, force: true })
   await rm(join(cwd, 'build'), { recursive: true, force: true })
@@ -188,6 +204,7 @@ try {
 
   child = spawn('bun', ['run', 'dev'], {
     cwd,
+    detached: true,
     env: process.env,
     stdio: ['inherit', 'pipe', 'pipe'],
   })
@@ -204,7 +221,7 @@ try {
   const updated = await waitForJson(healthUrl, payload => payload.app === 'blog-sveltekit-updated')
   assert.equal(updated.app, 'blog-sveltekit-updated')
 
-  child.kill('SIGTERM')
+  killChildTree()
   await new Promise(resolve => child.once('close', resolve))
   child = null
 
@@ -213,8 +230,8 @@ try {
   await run('bun', ['run', 'build'])
 } finally {
   await writeFile(configPath, originalConfig)
+  killChildTree()
   if (child && child.exitCode === null) {
-    child.kill('SIGTERM')
     await new Promise(resolve => child.once('close', resolve))
   }
 }
