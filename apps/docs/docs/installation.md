@@ -160,7 +160,7 @@ bun run dev
 :::
 
 `npm run dev` (or the equivalent for your package manager) already runs discovery first, refreshes `.holo-js/generated`, watches relevant files, and then
-starts Nuxt, Next.js, or SvelteKit. Run `holo prepare` directly only when you want to regenerate discovery
+starts Nuxt, Next.js, or SvelteKit. Run `npx holo prepare` (or the equivalent exec wrapper for your package manager) only when you want to regenerate discovery
 artifacts without starting the dev server.
 
 ## Running Holo-JS commands inside a project

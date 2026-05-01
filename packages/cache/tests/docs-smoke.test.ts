@@ -20,6 +20,7 @@ describe('cache documentation smoke checks', () => {
     expect(index).toContain('cache.remember(...)')
     expect(index).toContain('query.cache(...)')
     expect(setup).toContain('npx holo install cache')
+    expect(setup).toContain('npm create holo-js@latest my-app -- --package cache')
     expect(setup).toContain('npx holo install cache --driver redis')
     expect(setup).toContain('npx holo install cache --driver database')
     expect(setup).toContain('npx holo cache:table')
