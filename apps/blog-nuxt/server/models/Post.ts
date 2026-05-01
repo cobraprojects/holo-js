@@ -1,5 +1,4 @@
 import { belongsTo, belongsToMany, defineModel } from '@holo-js/db'
-import { posts } from '../db/schema.generated'
 
 import Category from './Category'
 import Tag from './Tag'
@@ -13,7 +12,7 @@ const relations = {
   }),
 }
 
-export default defineModel(posts, {
+export default defineModel('posts', {
   fillable: ['title', 'slug', 'excerpt', 'body', 'status', 'published_at', 'user_id', 'category_id'],
   relations,
 })

@@ -6,9 +6,20 @@ const HOLO_SERVER_EXTERNAL_PACKAGES = [
   'esbuild',
 ]
 
+interface TurbopackIgnoreIssueRule {
+  readonly path: string | RegExp
+  readonly title?: string | RegExp
+}
+
+interface TurbopackConfig {
+  readonly ignoreIssue?: readonly TurbopackIgnoreIssueRule[]
+  readonly [key: string]: unknown
+}
+
 interface NextConfig {
   readonly serverExternalPackages?: string[]
   readonly outputFileTracingExcludes?: Record<string, string[]>
+  readonly turbopack?: TurbopackConfig
   readonly rewrites?: () => Promise<unknown>
   readonly [key: string]: unknown
 }
@@ -26,12 +37,26 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
     '/*': [...new Set(['./next.config.ts', './next.config.mjs', ...existingGlobalExcludes])],
   }
 
+  const existingTurbopack = nextConfig.turbopack ?? {}
+  const existingIgnoreIssue = existingTurbopack.ignoreIssue ?? []
+  const mergedTurbopack: TurbopackConfig = {
+    ...existingTurbopack,
+    ignoreIssue: [
+      ...existingIgnoreIssue,
+      {
+        path: /next\.config\.(ts|mjs|js)$/,
+        title: /Encountered unexpected file in NFT list/,
+      },
+    ],
+  }
+
   const userRewrites = nextConfig.rewrites
 
   return {
     ...nextConfig,
     serverExternalPackages: mergedExternal,
     outputFileTracingExcludes: mergedExcludes,
+    turbopack: mergedTurbopack,
     async rewrites() {
       const userResult = await userRewrites?.call(this)
 

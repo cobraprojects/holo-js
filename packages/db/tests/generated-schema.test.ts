@@ -9,6 +9,7 @@ import {
   resolveGeneratedTableDefinition,
   renderGeneratedSchemaModule,
   renderGeneratedSchemaPlaceholder,
+  renderGeneratedSchemaRuntimeModule,
   type TableDefinition,
 } from '../src'
 
@@ -169,6 +170,11 @@ describe('generated schema helpers', () => {
     expect(rendered).toContain('registerGeneratedTables(tables)')
     expect(rendered).not.toContain('@holo-js/db/src/')
     expect(rendered).not.toContain('../node_modules/@holo-js/db/src/')
+
+    const runtimeRendered = renderGeneratedSchemaRuntimeModule([numberedTable, auditEvents])
+    expect(runtimeRendered).toContain('import { column, defineGeneratedTable, registerGeneratedTables } from \'@holo-js/db\'')
+    expect(runtimeRendered).toContain('registerGeneratedTables(tables)')
+    expect(runtimeRendered).not.toContain('declare module \'@holo-js/db\'')
   })
 
   it('resolves explicit generated tables and falls back to a minimal table shape when absent', () => {

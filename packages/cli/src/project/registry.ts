@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, resolve } from 'node:path'
 import { loadConfigDirectory } from '@holo-js/config'
-import { DEFAULT_HOLO_PROJECT_PATHS } from '@holo-js/db'
+import { DEFAULT_HOLO_PROJECT_PATHS, renderGeneratedSchemaRuntimeModule, type TableDefinition } from '@holo-js/db'
 import { relativeImportPath } from '../templates'
 import { importProjectModule } from './runtime'
 import { syncManagedFrameworkArtifacts } from './registry-svelte'
@@ -26,6 +26,7 @@ import {
   GENERATED_MODELS_PATH,
   GENERATED_QUEUE_TYPES_PATH,
   GENERATED_REGISTRY_JSON_PATH,
+  GENERATED_SCHEMA_RUNTIME_PATH,
   GENERATED_ROOT,
   GENERATED_SEEDERS_PATH,
   GENERATED_TSCONFIG_PATH,
@@ -40,7 +41,6 @@ import {
   type GeneratedProjectRegistry,
   isRecord,
   makeProjectRelativePath,
-  pathExists,
 } from './shared'
 
 export function renderGeneratedModule(exportName: string, value: unknown): string {
@@ -52,6 +52,39 @@ export function renderGeneratedModule(exportName: string, value: unknown): strin
     `export default ${exportName}`,
     '',
   ].join('\n')
+}
+
+function isGeneratedSchemaTable(value: unknown): value is TableDefinition {
+  return isRecord(value)
+    && value.kind === 'table'
+    && typeof value.tableName === 'string'
+    && isRecord(value.columns)
+}
+
+function extractGeneratedSchemaTables(moduleValue: unknown): readonly TableDefinition[] {
+  if (isRecord(moduleValue) && isRecord(moduleValue.tables)) {
+    return Object.values(moduleValue.tables).filter(isGeneratedSchemaTable)
+  }
+
+  if (isRecord(moduleValue) && isGeneratedSchemaTable(moduleValue.default)) {
+    return [moduleValue.default]
+  }
+
+  if (isRecord(moduleValue)) {
+    return Object.values(moduleValue).filter(isGeneratedSchemaTable)
+  }
+
+  return []
+}
+
+async function renderGeneratedSchemaRuntimeArtifact(
+  projectRoot: string,
+  schemaEntry: string,
+): Promise<string> {
+  const schemaPath = resolve(projectRoot, schemaEntry)
+  const moduleValue = await importProjectModule(projectRoot, schemaPath)
+  const tables = extractGeneratedSchemaTables(moduleValue)
+  return renderGeneratedSchemaRuntimeModule(tables)
 }
 
 export function renderGeneratedIndexModule(): string {
@@ -698,6 +731,10 @@ export async function writeGeneratedProjectRegistry(
   await syncManagedFrameworkArtifacts(projectRoot)
   await writeFileIfChanged(resolve(projectRoot, GENERATED_INDEX_PATH), renderGeneratedIndexModule())
   await writeFileIfChanged(resolve(projectRoot, GENERATED_REGISTRY_JSON_PATH), `${JSON.stringify(nextRegistry, null, 2)}\n`)
+  await writeFileIfChanged(
+    resolve(projectRoot, GENERATED_SCHEMA_RUNTIME_PATH),
+    await renderGeneratedSchemaRuntimeArtifact(projectRoot, nextRegistry.paths.generatedSchema),
+  )
 }
 
 export function isGeneratedProjectRegistry(value: unknown): value is GeneratedProjectRegistry {
@@ -738,18 +775,19 @@ export function isGeneratedProjectRegistry(value: unknown): value is GeneratedPr
 export async function loadGeneratedProjectRegistry(
   projectRoot: string,
 ): Promise<GeneratedProjectRegistry | undefined> {
-  const filePath = resolve(projectRoot, GENERATED_INDEX_PATH)
-  if (!(await pathExists(filePath))) {
+  const filePath = resolve(projectRoot, GENERATED_REGISTRY_JSON_PATH)
+  const contents = await readFile(filePath, 'utf8').catch(() => undefined)
+  if (!contents) {
     return undefined
   }
 
-  const moduleValue = await importProjectModule(projectRoot, filePath)
-  if (isRecord(moduleValue) && isGeneratedProjectRegistry(moduleValue.default)) {
-    return moduleValue.default
-  }
-
-  if (isRecord(moduleValue) && isGeneratedProjectRegistry(moduleValue.registry)) {
-    return moduleValue.registry
+  try {
+    const parsed = JSON.parse(contents) as unknown
+    if (isGeneratedProjectRegistry(parsed)) {
+      return parsed
+    }
+  } catch {
+    return undefined
   }
 
   return undefined

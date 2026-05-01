@@ -89,7 +89,7 @@ try {
     tagIds: String(frameworkTag.id),
   })
 
-  let logicPost = await Post.query().with('category', 'tags').where('slug', 'logic-coverage-post').first()
+  let logicPost = await Post.with('category', 'tags').where('slug', 'logic-coverage-post').first()
   assert.ok(logicPost)
   assert.equal(logicPost.category?.id, updatedCategory.id)
   assert.equal(logicPost.tags.length, 1)
@@ -104,7 +104,7 @@ try {
     tagIds: String(releaseTag.id),
   })
 
-  logicPost = await Post.query().with('category', 'tags').where('id', logicPost.id).first()
+  logicPost = await Post.with('category', 'tags').where('id', logicPost.id).first()
   assert.ok(logicPost)
   assert.equal(logicPost.slug, 'logic-coverage-post-revised')
   assert.equal(logicPost.status, 'draft')

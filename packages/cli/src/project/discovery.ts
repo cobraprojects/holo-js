@@ -30,6 +30,7 @@ import {
   type GeneratedSeederRegistryEntry,
   type MinimalListenerDefinition,
   makeProjectRelativePath,
+  pathExists,
 } from './shared'
 import {
   assertUniqueCommandTokens,
@@ -86,6 +87,11 @@ export async function prepareProjectDiscovery(
   const channelsRoot = resolve(projectRoot, channelsPath)
   const policiesRoot = resolve(projectRoot, config.paths.authorizationPolicies ?? 'server/policies')
   const abilitiesRoot = resolve(projectRoot, config.paths.authorizationAbilities ?? 'server/abilities')
+  const generatedSchemaPath = resolve(projectRoot, config.paths.generatedSchema)
+
+  if (await pathExists(generatedSchemaPath)) {
+    await importProjectModule(projectRoot, generatedSchemaPath)
+  }
 
   const [modelFiles, migrationFiles, seederFiles, commandFiles, jobFiles, eventFiles, listenerFiles, broadcastFiles, channelFiles] = await Promise.all([
     collectFiles(modelsRoot),

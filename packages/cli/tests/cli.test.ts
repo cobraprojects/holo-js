@@ -639,8 +639,8 @@ export default {
     expect(await readFile(join(projectRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain('Missing framework binary')
     expect(await readFile(join(projectRoot, 'app/api/holo/health/route.ts'), 'utf8')).toContain('holo.getApp')
     expect(await readFile(join(projectRoot, 'server/holo.ts'), 'utf8')).toContain('createNextHoloHelpers')
-    expect(await readFile(join(projectRoot, 'server/holo.ts'), 'utf8')).toContain('./db/schema.generated')
-    expect(await readFile(join(projectRoot, 'app/layout.tsx'), 'utf8')).toContain('../server/db/schema.generated')
+    expect(await readFile(join(projectRoot, 'server/holo.ts'), 'utf8')).not.toContain('schema.generated')
+    expect(await readFile(join(projectRoot, 'app/layout.tsx'), 'utf8')).not.toContain('schema.generated')
     expect(await readFile(join(projectRoot, 'next.config.ts'), 'utf8')).toContain('nextConfig')
     expect(await readFile(join(projectRoot, 'tsconfig.json'), 'utf8')).toContain('next-env.d.ts')
     expect(await readFile(join(projectRoot, '.gitignore'), 'utf8')).toContain('.holo-js/generated')
@@ -1429,8 +1429,8 @@ export default {
     const nextDevResult = runNodeScript(nextRoot, join(nextRoot, '.holo-js/framework/run.mjs'), ['dev'])
     expect(nextDevResult.status).toBe(0)
     expect(nextDevResult.stdout).toContain('dev')
-    expect(await readFile(join(nextRoot, 'server/holo.ts'), 'utf8')).toContain('./db/schema.generated')
-    expect(await readFile(join(nextRoot, 'app/layout.tsx'), 'utf8')).toContain('../server/db/schema.generated')
+    expect(await readFile(join(nextRoot, 'server/holo.ts'), 'utf8')).not.toContain('schema.generated')
+    expect(await readFile(join(nextRoot, 'app/layout.tsx'), 'utf8')).not.toContain('schema.generated')
 
     const svelteRoot = join(baseRoot, 'svelte-runner')
     await projectInternals.scaffoldProject(svelteRoot, {
@@ -1443,7 +1443,7 @@ export default {
     await writeFrameworkBinary(svelteRoot, 'vite')
     expect(runNodeScript(svelteRoot, join(svelteRoot, '.holo-js/framework/run.mjs'), ['dev']).stdout).toContain('dev')
     expect(await readFile(join(svelteRoot, 'src/lib/server/holo.ts'), 'utf8')).toContain('createSvelteKitHoloHelpers')
-    expect(await readFile(join(svelteRoot, 'src/lib/server/holo.ts'), 'utf8')).toContain('../../../server/db/schema.generated')
+    expect(await readFile(join(svelteRoot, 'src/lib/server/holo.ts'), 'utf8')).not.toContain('schema.generated')
     expect(await readFile(join(svelteRoot, 'src/hooks.ts'), 'utf8')).toContain('export {}')
 
     const missingBinary = runNodeScript(join(baseRoot, 'fallback-app'), join(baseRoot, 'fallback-app/.holo-js/framework/run.mjs'), ['dev'])

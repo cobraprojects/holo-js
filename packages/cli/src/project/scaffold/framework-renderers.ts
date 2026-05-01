@@ -102,8 +102,6 @@ function renderNextConfig(): string {
 
 function renderNextLayout(projectName: string): string {
   return [
-    'import \'../server/db/schema.generated\'',
-    '',
     'import type { ReactNode } from \'react\'',
     '',
     'export const metadata = {',
@@ -161,8 +159,6 @@ function renderNextEnvDts(): string {
 
 export function renderNextHoloHelper(): string {
   return [
-    'import \'./db/schema.generated\'',
-    '',
     'import { createNextHoloHelpers } from \'@holo-js/adapter-next\'',
     '',
     'export const holo = createNextHoloHelpers()',
@@ -345,8 +341,6 @@ function renderSveltePage(projectName: string): string {
 
 export function renderSvelteHoloHelper(): string {
   return [
-    'import \'../../../server/db/schema.generated\'',
-    '',
     'import { createSvelteKitHoloHelpers } from \'@holo-js/adapter-sveltekit\'',
     '',
     'export const holo = createSvelteKitHoloHelpers()',
@@ -438,12 +432,13 @@ export function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'fra
   return [
     'import { existsSync, readFileSync, readlinkSync } from \'node:fs\'',
     'import { dirname, resolve } from \'node:path\'',
-    'import { fileURLToPath } from \'node:url\'',
+    'import { fileURLToPath, pathToFileURL } from \'node:url\'',
     'import { execFileSync, spawn } from \'node:child_process\'',
     '',
     'const mode = process.argv[2]',
     'const manifestPath = fileURLToPath(new URL(\'./project.json\', import.meta.url))',
     'const projectRoot = resolve(dirname(manifestPath), \'../..\')',
+    'const runtimeSchemaPath = resolve(projectRoot, \'.holo-js/generated/schema.mjs\')',
     'const manifest = JSON.parse(readFileSync(manifestPath, \'utf8\'))',
     'const framework = String(manifest.framework ?? \'\')',
     `const commandName = ${JSON.stringify(commandName)}`,
@@ -652,9 +647,16 @@ export function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'fra
     '',
     '  while (true) {',
     '    const stderrLines = []',
+    '    const childEnv = { ...process.env }',
+    '    if (existsSync(runtimeSchemaPath)) {',
+    '      const preload = `--import=${pathToFileURL(runtimeSchemaPath).href}`',
+      '      childEnv.NODE_OPTIONS = childEnv.NODE_OPTIONS',
+      '        ? `${childEnv.NODE_OPTIONS} ${preload}`',
+      '        : preload',
+    '    }',
     '    child = spawn(binaryPath, commandArgs, {',
     '      cwd: projectRoot,',
-    '      env: process.env,',
+    '      env: childEnv,',
     '      stdio: [\'inherit\', \'pipe\', \'pipe\'],',
     '    })',
     '    forwardedSignal = null',

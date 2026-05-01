@@ -78,6 +78,7 @@ export {
   resolveGeneratedTableDefinition,
   renderGeneratedSchemaModule,
   renderGeneratedSchemaPlaceholder,
+  renderGeneratedSchemaRuntimeModule,
   SchemaRegistry,
   TableDefinitionBuilder,
   TableMutationBuilder,
