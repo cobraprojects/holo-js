@@ -33,9 +33,9 @@ async function createUniqueSlug(model: typeof Post | typeof Category | typeof Ta
     .replace(/^-+|-+$/g, '') || 'entry'
 
   const fetchExisting = (m: typeof Post | typeof Category | typeof Tag) => {
-    if (m === Post) return Post.query().whereLike('slug', `${base}%`).when(excludeId, q => q.where('id', '!=', excludeId)).select('slug').get()
-    if (m === Category) return Category.query().whereLike('slug', `${base}%`).when(excludeId, q => q.where('id', '!=', excludeId)).select('slug').get()
-    return Tag.query().whereLike('slug', `${base}%`).when(excludeId, q => q.where('id', '!=', excludeId)).select('slug').get()
+    if (m === Post) return Post.whereLike('slug', `${base}%`).when(excludeId, q => q.where('id', '!=', excludeId)).select('slug').get()
+    if (m === Category) return Category.whereLike('slug', `${base}%`).when(excludeId, q => q.where('id', '!=', excludeId)).select('slug').get()
+    return Tag.whereLike('slug', `${base}%`).when(excludeId, q => q.where('id', '!=', excludeId)).select('slug').get()
   }
 
   const existing = await fetchExisting(model)

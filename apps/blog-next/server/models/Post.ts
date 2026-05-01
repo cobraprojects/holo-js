@@ -1,5 +1,3 @@
-import '../db/schema.generated'
-
 import { belongsTo, belongsToMany, defineModel } from '@holo-js/db'
 
 import Category from './Category'

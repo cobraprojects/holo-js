@@ -229,23 +229,10 @@ function renderIndex(index: TableIndexDefinition): string {
   return `{ columns: ${JSON.stringify([...index.columns])}, unique: ${index.unique}${index.name ? `, name: ${JSON.stringify(index.name)}` : ''} }`
 }
 
-export function renderGeneratedSchemaPlaceholder(): string {
-  return [
-    '/* eslint-disable @typescript-eslint/no-empty-object-type */',
-    'import { registerGeneratedTables } from \'@holo-js/db\'',
-    '',
-    'declare module \'@holo-js/db\' {',
-    '  interface GeneratedSchemaTables {}',
-    '}',
-    '',
-    'export const tables = {} as const',
-    '',
-    'registerGeneratedTables(tables)',
-    '',
-  ].join('\n')
-}
-
-export function renderGeneratedSchemaModule(tables: readonly TableDefinition[]): string {
+function buildGeneratedSchemaModuleLines(
+  tables: readonly TableDefinition[],
+  options: { withTypeAugmentation: boolean },
+): string[] {
   const renderedTables = [...tables].sort((left, right) => left.tableName.localeCompare(right.tableName))
   const declarations: string[] = [
     'import { column, defineGeneratedTable, registerGeneratedTables } from \'@holo-js/db\'',
@@ -266,16 +253,47 @@ export function renderGeneratedSchemaModule(tables: readonly TableDefinition[]):
     declarations.push('')
   }
 
-  declarations.push('declare module \'@holo-js/db\' {')
-  declarations.push('  interface GeneratedSchemaTables {')
-  declarations.push(...interfaceLines)
-  declarations.push('  }')
-  declarations.push('}')
-  declarations.push('')
-  declarations.push(`export const tables = { ${exportedTableEntries.join(', ')} } as const`)
+  if (options.withTypeAugmentation) {
+    declarations.push('declare module \'@holo-js/db\' {')
+    declarations.push('  interface GeneratedSchemaTables {')
+    declarations.push(...interfaceLines)
+    declarations.push('  }')
+    declarations.push('}')
+    declarations.push('')
+  }
+
+  declarations.push(
+    options.withTypeAugmentation
+      ? `export const tables = { ${exportedTableEntries.join(', ')} } as const`
+      : `export const tables = Object.freeze({ ${exportedTableEntries.join(', ')} })`,
+  )
   declarations.push('')
   declarations.push('registerGeneratedTables(tables)')
   declarations.push('')
 
-  return declarations.join('\n')
+  return declarations
+}
+
+export function renderGeneratedSchemaPlaceholder(): string {
+  return [
+    '/* eslint-disable @typescript-eslint/no-empty-object-type */',
+    'import { registerGeneratedTables } from \'@holo-js/db\'',
+    '',
+    'declare module \'@holo-js/db\' {',
+    '  interface GeneratedSchemaTables {}',
+    '}',
+    '',
+    'export const tables = {} as const',
+    '',
+    'registerGeneratedTables(tables)',
+    '',
+  ].join('\n')
+}
+
+export function renderGeneratedSchemaModule(tables: readonly TableDefinition[]): string {
+  return buildGeneratedSchemaModuleLines(tables, { withTypeAugmentation: true }).join('\n')
+}
+
+export function renderGeneratedSchemaRuntimeModule(tables: readonly TableDefinition[]): string {
+  return buildGeneratedSchemaModuleLines(tables, { withTypeAugmentation: false }).join('\n')
 }

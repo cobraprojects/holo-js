@@ -31,9 +31,9 @@ async function createUniqueSlug(model: typeof Post | typeof Category | typeof Ta
     .replace(/^-+|-+$/g, '') || 'entry'
 
   const fetchExisting = (m: typeof Post | typeof Category | typeof Tag) => {
-    if (m === Post) return Post.query().whereLike('slug', `${base}%`).when(excludeId, q => q.where('id', '!=', excludeId)).select('slug').get()
-    if (m === Category) return Category.query().whereLike('slug', `${base}%`).when(excludeId, q => q.where('id', '!=', excludeId)).select('slug').get()
-    return Tag.query().whereLike('slug', `${base}%`).when(excludeId, q => q.where('id', '!=', excludeId)).select('slug').get()
+    if (m === Post) return Post.whereLike('slug', `${base}%`).when(excludeId, q => q.where('id', '!=', excludeId)).select('slug').get()
+    if (m === Category) return Category.whereLike('slug', `${base}%`).when(excludeId, q => q.where('id', '!=', excludeId)).select('slug').get()
+    return Tag.whereLike('slug', `${base}%`).when(excludeId, q => q.where('id', '!=', excludeId)).select('slug').get()
   }
 
   const existing = await fetchExisting(model)
@@ -56,9 +56,9 @@ export function parseTagIds(value: string): number[] {
 
 export async function getHomePageData() {
   const [posts, categories, tags] = await Promise.all([
-    Post.query().with('category', 'tags').where('status', 'published').orderBy('published_at', 'desc').get(),
-    Category.query().orderBy('name').get(),
-    Tag.query().orderBy('name').get(),
+    Post.with('category', 'tags').where('status', 'published').orderBy('published_at', 'desc').get(),
+    Category.orderBy('name').get(),
+    Tag.orderBy('name').get(),
   ])
   return {
     posts,
@@ -69,18 +69,18 @@ export async function getHomePageData() {
 }
 
 export async function getPublishedPosts() {
-  return await Post.query().with('category', 'tags').where('status', 'published').orderBy('published_at', 'desc').get()
+  return await Post.with('category', 'tags').where('status', 'published').orderBy('published_at', 'desc').get()
 }
 
 export async function getPublishedPostBySlug(slug: string) {
-  return await Post.query().with('category', 'tags').where('slug', slug).where('status', 'published').first()
+  return await Post.with('category', 'tags').where('slug', slug).where('status', 'published').first()
 }
 
 export async function getCategoryArchive(slug: string) {
   const category = await Category.where('slug', slug).first()
   if (!category) return null
 
-  const posts = await Post.query().with('category', 'tags').where('category_id', category.id).where('status', 'published').orderBy('published_at', 'desc').get()
+  const posts = await Post.with('category', 'tags').where('category_id', category.id).where('status', 'published').orderBy('published_at', 'desc').get()
   return { category, posts }
 }
 
@@ -88,7 +88,7 @@ export async function getTagArchive(slug: string) {
   const tag = await Tag.where('slug', slug).first()
   if (!tag) return null
 
-  const posts = await Post.query().with('category', 'tags').whereRelation('tags', 'id', tag.id).where('status', 'published').orderBy('published_at', 'desc').get()
+  const posts = await Post.with('category', 'tags').whereRelation('tags', 'id', tag.id).where('status', 'published').orderBy('published_at', 'desc').get()
   return { tag, posts }
 }
 
@@ -110,18 +110,18 @@ export async function getAdminDashboardData() {
 
 export async function getAdminPostsData() {
   const [posts, categories, tags] = await Promise.all([
-    Post.query().with('category', 'tags').orderBy('created_at', 'desc').get(),
-    Category.query().orderBy('name').get(),
-    Tag.query().orderBy('name').get(),
+    Post.with('category', 'tags').orderBy('created_at', 'desc').get(),
+    Category.orderBy('name').get(),
+    Tag.orderBy('name').get(),
   ])
   return { posts, categories, tags }
 }
 
 export async function getAdminPostById(id: number) {
   const [post, categories, tags] = await Promise.all([
-    Post.query().with('category', 'tags').where('id', id).first(),
-    Category.query().orderBy('name').get(),
-    Tag.query().orderBy('name').get(),
+    Post.with('category', 'tags').where('id', id).first(),
+    Category.orderBy('name').get(),
+    Tag.orderBy('name').get(),
   ])
   if (!post) return null
 
@@ -129,7 +129,7 @@ export async function getAdminPostById(id: number) {
 }
 
 export async function getAdminCategoriesData() {
-  return { categories: await Category.query().orderBy('name').get() }
+  return { categories: await Category.orderBy('name').get() }
 }
 
 export async function getAdminCategoryById(id: number) {
@@ -137,7 +137,7 @@ export async function getAdminCategoryById(id: number) {
 }
 
 export async function getAdminTagsData() {
-  return { tags: await Tag.query().orderBy('name').get() }
+  return { tags: await Tag.orderBy('name').get() }
 }
 
 export async function getAdminTagById(id: number) {

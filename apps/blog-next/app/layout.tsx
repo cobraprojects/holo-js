@@ -1,8 +1,8 @@
-import '../server/db/schema.generated'
 import type { ReactNode } from 'react'
+import type { Metadata } from 'next'
 import Link from 'next/link'
 
-export const metadata = {
+export const metadata: Metadata = {
   title: 'blog-next',
   description: 'A reference Holo blog built on Next.js',
 }

@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { get } from 'node:http'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
@@ -31,12 +33,27 @@ const port = await new Promise((resolve, reject) => {
 })
 const healthUrl = `http://localhost:${port}/api/holo/health`
 const originalConfig = await readFile(configPath, 'utf8')
+const runtimeSchemaPath = join(cwd, '.holo-js/generated/schema.mjs')
+
+function createChildEnv(overrides = {}) {
+  const env = {
+    ...process.env,
+    ...overrides,
+  }
+
+  if (existsSync(runtimeSchemaPath)) {
+    const preload = `--import=${pathToFileURL(runtimeSchemaPath).href}`
+    env.NODE_OPTIONS = env.NODE_OPTIONS ? `${env.NODE_OPTIONS} ${preload}` : preload
+  }
+
+  return env
+}
 
 function run(command, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd,
-      env: process.env,
+      env: createChildEnv(),
       stdio: 'inherit',
     })
 
@@ -161,13 +178,12 @@ try {
   child = spawn('bun', ['run', 'dev'], {
     cwd,
     detached: true,
-    env: {
-      ...process.env,
+    env: createChildEnv({
       PORT: port,
       HOST: 'localhost',
       NITRO_HOST: 'localhost',
       APP_URL: `http://localhost:${port}`,
-    },
+    }),
     stdio: 'inherit',
   })
 

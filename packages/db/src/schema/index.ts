@@ -8,6 +8,7 @@ export {
   resolveGeneratedTableDefinition,
   renderGeneratedSchemaModule,
   renderGeneratedSchemaPlaceholder,
+  renderGeneratedSchemaRuntimeModule,
 } from './generated'
 export { TableDefinitionBuilder } from './TableDefinitionBuilder'
 export { TableMutationBuilder } from './TableMutationBuilder'
