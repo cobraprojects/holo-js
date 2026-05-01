@@ -1,4 +1,4 @@
-import { initializeHolo, type CreateHoloOptions } from '@holo-js/core/runtime'
+import { initializeHolo, type CreateHoloOptions } from '@holo-js/core'
 import type { DotPath, HoloConfigMap, LoadedHoloConfig, ValueAtPath } from '@holo-js/config'
 
 export type NextHoloRuntimeOptions = CreateHoloOptions & {
