@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as configModule from '@holo-js/config'
-import { normalizeHoloProjectConfig } from '@holo-js/db'
+import { normalizeHoloProjectConfig, renderGeneratedSchemaPlaceholder } from '@holo-js/db'
 import { authorizationInternals } from '../../authorization/src/index'
 import { prepareProjectDiscovery } from '../src/project/discovery'
 import { loadGeneratedProjectRegistry, renderGeneratedAuthorizationRegistry, renderGeneratedAuthorizationTypes, writeGeneratedProjectRegistry } from '../src/project/registry'
@@ -22,6 +22,7 @@ async function createProject(withAuthorizationFiles = false): Promise<string> {
   await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
   await mkdir(join(root, 'server/policies/posts'), { recursive: true })
   await mkdir(join(root, 'server/abilities'), { recursive: true })
+  await mkdir(join(root, 'server/db'), { recursive: true })
 
   await writeFile(join(root, 'package.json'), JSON.stringify({
     name: 'authorization-registry-fixture',
@@ -30,6 +31,7 @@ async function createProject(withAuthorizationFiles = false): Promise<string> {
   }, null, 2))
   await writeFile(join(root, 'config/app.ts'), 'export default {}', 'utf8')
   await writeFile(join(root, 'config/database.ts'), 'export default {}', 'utf8')
+  await writeFile(join(root, 'server/db/schema.generated.ts'), renderGeneratedSchemaPlaceholder(), 'utf8')
   await writeFile(join(root, 'config/auth.ts'), `
 import { defineAuthConfig } from '@holo-js/config'
 

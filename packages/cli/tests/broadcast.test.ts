@@ -1,8 +1,9 @@
 import { PassThrough } from 'node:stream'
-import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { renderGeneratedSchemaPlaceholder } from '@holo-js/db'
 import * as projectModule from '../src/project'
 import { loadGeneratedProjectRegistry, loadProjectConfig } from '../src/project'
 import { loadBroadcastCliModule, runBroadcastWorkCommand } from '../src/broadcast'
@@ -40,8 +41,35 @@ async function waitForSignalListener(signal: 'SIGINT' | 'SIGTERM', baselineCount
   return process.listeners(signal)[baselineCount]
 }
 
-afterEach(() => {
+const SCHEMA_PLACEHOLDER = renderGeneratedSchemaPlaceholder()
+
+async function writeSchemaPlaceholder(root: string, relativePath = 'server/db/schema.generated.ts'): Promise<void> {
+  const dir = join(root, relativePath, '..')
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(root, relativePath), SCHEMA_PLACEHOLDER, 'utf8')
+}
+
+const tempDirs: string[] = []
+
+async function createMinimalProject(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'holo-cli-broadcast-minimal-'))
+  tempDirs.push(root)
+  await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
+  await writeFile(join(root, 'package.json'), JSON.stringify({
+    name: 'broadcast-minimal-fixture',
+    private: true,
+  }, null, 2))
+  await symlink(join(resolve(import.meta.dirname, '../../..'), 'packages/config'), join(root, 'node_modules/@holo-js/config'))
+  await symlink(join(resolve(import.meta.dirname, '../../..'), 'packages/db'), join(root, 'node_modules/@holo-js/db'))
+  await writeSchemaPlaceholder(root)
+  return root
+}
+
+afterEach(async () => {
   vi.restoreAllMocks()
+  for (const dir of tempDirs.splice(0)) {
+    await rm(dir, { recursive: true, force: true })
+  }
 })
 
 describe('@holo-js/cli broadcast worker command', () => {
@@ -49,6 +77,7 @@ describe('@holo-js/cli broadcast worker command', () => {
 
   it('runs the broadcast worker with refreshed discovery and shuts down on process signals', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'holo-cli-broadcast-run-'))
+    tempDirs.push(tempRoot)
     const moduleRoot = join(tempRoot, 'node_modules', '@holo-js')
     await mkdir(join(tempRoot, 'config'), { recursive: true })
     await mkdir(join(tempRoot, 'server/channels'), { recursive: true })
@@ -59,6 +88,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     }, null, 2))
     await writeFile(join(tempRoot, 'config/app.ts'), 'export default {}\n', 'utf8')
     await writeFile(join(tempRoot, 'config/database.ts'), 'export default {}\n', 'utf8')
+    await writeSchemaPlaceholder(tempRoot)
     await writeFile(join(tempRoot, 'config/broadcast.ts'), [
       'import { defineBroadcastConfig } from \'@holo-js/config\'',
       '',
@@ -179,11 +209,12 @@ describe('@holo-js/cli broadcast worker command', () => {
   })
 
   it('stops at most once when multiple signals are emitted', async () => {
-    const io = createIo(process.cwd())
+    const tempRoot = await createMinimalProject()
+    const io = createIo(tempRoot)
     const stop = vi.fn(async () => {})
     const sigtermListenersBefore = process.listeners('SIGTERM').length
     const sigintListenersBefore = process.listeners('SIGINT').length
-    const promise = runBroadcastWorkCommand(io.io, process.cwd(), {
+    const promise = runBroadcastWorkCommand(io.io, tempRoot, {
       loadConfig: vi.fn(async () => ({ broadcast: { ok: true }, queue: {} })) as never,
       loadRegistry: vi.fn(async () => undefined),
       loadModule: vi.fn(async () => ({
@@ -208,10 +239,11 @@ describe('@holo-js/cli broadcast worker command', () => {
   })
 
   it('passes loaded redis config through to broadcast worker startup', async () => {
-    const io = createIo(process.cwd())
+    const tempRoot = await createMinimalProject()
+    const io = createIo(tempRoot)
     const sigintListenersBefore = process.listeners('SIGINT').length
 
-    const promise = runBroadcastWorkCommand(io.io, process.cwd(), {
+    const promise = runBroadcastWorkCommand(io.io, tempRoot, {
       loadConfig: vi.fn(async () => ({
         broadcast: { ok: true },
         queue: undefined,
@@ -226,7 +258,7 @@ describe('@holo-js/cli broadcast worker command', () => {
             },
           },
         },
-        loadedFiles: [join(process.cwd(), 'config/redis.ts')],
+        loadedFiles: [join(tempRoot, 'config/redis.ts')],
       })) as never,
       loadRegistry: vi.fn(async () => undefined),
       loadModule: vi.fn(async () => ({
@@ -258,10 +290,11 @@ describe('@holo-js/cli broadcast worker command', () => {
   })
 
   it('does not pass synthesized redis defaults through to broadcast worker startup', async () => {
-    const io = createIo(process.cwd())
+    const tempRoot = await createMinimalProject()
+    const io = createIo(tempRoot)
     const sigintListenersBefore = process.listeners('SIGINT').length
 
-    const promise = runBroadcastWorkCommand(io.io, process.cwd(), {
+    const promise = runBroadcastWorkCommand(io.io, tempRoot, {
       loadConfig: vi.fn(async () => ({
         broadcast: { ok: true },
         queue: undefined,
@@ -276,7 +309,7 @@ describe('@holo-js/cli broadcast worker command', () => {
             },
           },
         },
-        loadedFiles: [join(process.cwd(), 'config/broadcast.ts')],
+        loadedFiles: [join(tempRoot, 'config/broadcast.ts')],
       })) as never,
       loadRegistry: vi.fn(async () => undefined),
       loadModule: vi.fn(async () => ({
@@ -299,6 +332,7 @@ describe('@holo-js/cli broadcast worker command', () => {
 
   it('refreshes discovery even when loading the stale generated registry fails', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'holo-cli-broadcast-stale-registry-'))
+    tempDirs.push(tempRoot)
     const moduleRoot = join(tempRoot, 'node_modules', '@holo-js')
     await mkdir(join(tempRoot, 'config'), { recursive: true })
     await mkdir(join(tempRoot, 'server/channels'), { recursive: true })
@@ -309,6 +343,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     }, null, 2))
     await writeFile(join(tempRoot, 'config/app.ts'), 'export default {}\n', 'utf8')
     await writeFile(join(tempRoot, 'config/database.ts'), 'export default {}\n', 'utf8')
+    await writeSchemaPlaceholder(tempRoot)
     await writeFile(join(tempRoot, 'config/broadcast.ts'), [
       'import { defineBroadcastConfig } from \'@holo-js/config\'',
       '',
@@ -428,6 +463,7 @@ describe('@holo-js/cli broadcast worker command', () => {
 
   it('discovers channel auth definitions when the generated registry is missing', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'holo-cli-broadcast-fallback-'))
+    tempDirs.push(tempRoot)
     const moduleRoot = join(tempRoot, 'node_modules', '@holo-js')
     await mkdir(join(tempRoot, 'config'), { recursive: true })
     await mkdir(join(tempRoot, 'server/channels'), { recursive: true })
@@ -438,6 +474,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     }, null, 2))
     await writeFile(join(tempRoot, 'config/app.ts'), 'export default {}\n', 'utf8')
     await writeFile(join(tempRoot, 'config/database.ts'), 'export default {}\n', 'utf8')
+    await writeSchemaPlaceholder(tempRoot)
     await writeFile(join(tempRoot, 'config/broadcast.ts'), [
       'import { defineBroadcastConfig } from \'@holo-js/config\'',
       '',
@@ -509,6 +546,7 @@ describe('@holo-js/cli broadcast worker command', () => {
 
   it('passes a project module importer into worker channel auth bindings', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'holo-cli-broadcast-importer-'))
+    tempDirs.push(tempRoot)
     const moduleRoot = join(tempRoot, 'node_modules', '@holo-js')
     await mkdir(join(tempRoot, 'config'), { recursive: true })
     await mkdir(join(tempRoot, 'server/channels'), { recursive: true })
@@ -519,6 +557,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     }, null, 2))
     await writeFile(join(tempRoot, 'config/app.ts'), 'export default {}\n', 'utf8')
     await writeFile(join(tempRoot, 'config/database.ts'), 'export default {}\n', 'utf8')
+    await writeSchemaPlaceholder(tempRoot)
     await writeFile(join(tempRoot, 'config/broadcast.ts'), [
       'import { defineBroadcastConfig } from \'@holo-js/config\'',
       '',
@@ -638,6 +677,7 @@ describe('@holo-js/cli broadcast worker command', () => {
 
   it('uses the default generated-registry loader when no registry dependency is injected', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'holo-cli-broadcast-default-registry-'))
+    tempDirs.push(tempRoot)
     const moduleRoot = join(tempRoot, 'node_modules', '@holo-js')
     await mkdir(join(tempRoot, 'config'), { recursive: true })
     await mkdir(join(tempRoot, 'server/channels'), { recursive: true })
@@ -648,6 +688,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     }, null, 2))
     await writeFile(join(tempRoot, 'config/app.ts'), 'export default {}\n', 'utf8')
     await writeFile(join(tempRoot, 'config/database.ts'), 'export default {}\n', 'utf8')
+    await writeSchemaPlaceholder(tempRoot)
     await writeFile(join(tempRoot, 'config/broadcast.ts'), [
       'import { defineBroadcastConfig } from \'@holo-js/config\'',
       '',
@@ -717,11 +758,7 @@ describe('@holo-js/cli broadcast worker command', () => {
   })
 
   it('falls back to default config loader when no loadConfig dependency is injected', async () => {
-    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-cli-broadcast-config-'))
-    await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
-      name: 'broadcast-config-loader-fixture',
-      private: true,
-    }, null, 2))
+    const projectRoot = await createMinimalProject()
 
     const stop = vi.fn(async () => {})
     const sigintListenersBefore = process.listeners('SIGINT').length
@@ -742,7 +779,7 @@ describe('@holo-js/cli broadcast worker command', () => {
   })
 
   it('falls back to default broadcast module loader when no loadModule dependency is injected', async () => {
-    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-cli-broadcast-loader-'))
+    const projectRoot = await createMinimalProject()
     const moduleRoot = join(projectRoot, 'node_modules/@holo-js/broadcast')
     await mkdir(moduleRoot, { recursive: true })
     await writeFile(join(moduleRoot, 'package.json'), JSON.stringify({
@@ -774,7 +811,8 @@ describe('@holo-js/cli broadcast worker command', () => {
   })
 
   it('omits channel auth when discovery cannot produce a registry', async () => {
-    const io = createIo(process.cwd())
+    const tempRoot = await createMinimalProject()
+    const io = createIo(tempRoot)
     const stop = vi.fn(async () => {})
 
     vi.resetModules()
@@ -789,7 +827,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     try {
       const sigintListenersBefore = process.listeners('SIGINT').length
       const { runBroadcastWorkCommand: isolatedRunBroadcastWorkCommand } = await import('../src/broadcast')
-      const promise = isolatedRunBroadcastWorkCommand(io.io, process.cwd(), {
+      const promise = isolatedRunBroadcastWorkCommand(io.io, tempRoot, {
         loadConfig: vi.fn(async () => ({ broadcast: { ok: true }, queue: {} })) as never,
         loadRegistry: vi.fn(async () => undefined),
         loadModule: vi.fn(async () => ({
@@ -814,14 +852,15 @@ describe('@holo-js/cli broadcast worker command', () => {
   })
 
   it('ignores duplicate stop requests when process listener removal is unavailable', async () => {
-    const io = createIo(process.cwd())
+    const tempRoot = await createMinimalProject()
+    const io = createIo(tempRoot)
     const stop = vi.fn(async () => {
       await new Promise(resolve => setTimeout(resolve, 100))
     })
     const offSpy = vi.spyOn(process, 'off').mockImplementation(() => process)
     const sigtermListenersBefore = process.listeners('SIGTERM').length
     const sigintListenersBefore = process.listeners('SIGINT').length
-    const promise = runBroadcastWorkCommand(io.io, process.cwd(), {
+    const promise = runBroadcastWorkCommand(io.io, tempRoot, {
       loadConfig: vi.fn(async () => ({ broadcast: { ok: true }, queue: {} })) as never,
       loadRegistry: vi.fn(async () => undefined),
       loadModule: vi.fn(async () => ({
@@ -842,7 +881,12 @@ describe('@holo-js/cli broadcast worker command', () => {
 
   it('regenerates broadcast discovery using the project app config when the registry is missing', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'holo-cli-broadcast-config-'))
+    tempDirs.push(tempRoot)
+    await mkdir(join(tempRoot, 'node_modules/@holo-js'), { recursive: true })
+    await symlink(join(workspaceRoot, 'packages/config'), join(tempRoot, 'node_modules/@holo-js/config'))
+    await symlink(join(workspaceRoot, 'packages/db'), join(tempRoot, 'node_modules/@holo-js/db'))
     await mkdir(join(tempRoot, 'config'), { recursive: true })
+    await writeSchemaPlaceholder(tempRoot, 'custom/.holo-js/generated/schema.generated.ts')
     await writeFile(join(tempRoot, 'config/app.ts'), [
       'export default {',
       '  paths: {',
