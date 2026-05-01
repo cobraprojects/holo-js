@@ -40,6 +40,7 @@ export function renderScaffoldGitignore(): string {
     'dist',
     'coverage',
     '*.log',
+    '*.tsbuildinfo',
     '',
     '# Database',
     '*.db',
