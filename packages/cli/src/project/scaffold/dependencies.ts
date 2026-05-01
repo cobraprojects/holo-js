@@ -499,13 +499,22 @@ async function upsertEventsPackageDependency(projectRoot: string): Promise<boole
   const nextVersion = `^${HOLO_PACKAGE_VERSION}`
   const currentVersion = dependencies['@holo-js/events']
   const currentDevVersion = devDependencies['@holo-js/events']
+  const currentQueueVersion = dependencies['@holo-js/queue']
+  const currentQueueDevVersion = devDependencies['@holo-js/queue']
 
-  if (currentVersion === nextVersion && typeof currentDevVersion === 'undefined') {
+  if (
+    currentVersion === nextVersion
+    && typeof currentDevVersion === 'undefined'
+    && currentQueueVersion === nextVersion
+    && typeof currentQueueDevVersion === 'undefined'
+  ) {
     return false
   }
 
   dependencies['@holo-js/events'] = nextVersion
+  dependencies['@holo-js/queue'] = nextVersion
   delete devDependencies['@holo-js/events']
+  delete devDependencies['@holo-js/queue']
 
   await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
   return true
@@ -718,6 +727,7 @@ async function upsertAuthPackageDependencies(
   const requestedPackages = {
     '@holo-js/auth': true,
     '@holo-js/session': true,
+    '@holo-js/security': true,
     '@holo-js/auth-social': socialEnabled,
     '@holo-js/auth-workos': features.workos === true,
     '@holo-js/auth-clerk': features.clerk === true,

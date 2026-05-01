@@ -208,9 +208,7 @@ function defineModelFromGeneratedTableName<
     return resolveUniqueIdFromTable(resolveTable())
   }
 
-  if (resolvedAtDefinition) {
-    validateUniqueIdConfig(resolvedAtDefinition, inferredName, resolveUniqueId())
-  }
+  validateUniqueIdConfig(resolvedAtDefinition, inferredName, resolveUniqueId())
 
   const definition = {
     kind: 'model' as const,

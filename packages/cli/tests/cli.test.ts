@@ -772,6 +772,7 @@ export default {
     })
 
     expect(await readFile(join(eventsRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/events": "${expectedHoloPackageRange}"`)
+    expect(await readFile(join(eventsRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
     expect(await stat(join(eventsRoot, 'server/events'))).toBeDefined()
     expect(await stat(join(eventsRoot, 'server/listeners'))).toBeDefined()
     await expect(stat(join(eventsRoot, 'config/queue.ts'))).rejects.toThrow()
@@ -801,6 +802,7 @@ export default {
 
     expect(await readFile(join(authRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/auth": "${expectedHoloPackageRange}"`)
     expect(await readFile(join(authRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/session": "${expectedHoloPackageRange}"`)
+    expect(await readFile(join(authRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/security": "${expectedHoloPackageRange}"`)
     expect(await readFile(join(authRoot, 'config/auth.ts'), 'utf8')).toContain('guard: \'web\'')
     expect(await readFile(join(authRoot, 'config/redis.ts'), 'utf8')).toContain('defineRedisConfig')
     expect(await readFile(join(authRoot, 'config/auth.ts'), 'utf8')).toContain('identifiers: [\'email\']')
@@ -1039,6 +1041,14 @@ export default {
       storageDefaultDisk: 'local',
       optionalPackages: ['auth'],
     })).toContain(`"@holo-js/session": "${expectedHoloPackageRange}"`)
+    expect(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Auth Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['auth'],
+    })).toContain(`"@holo-js/security": "${expectedHoloPackageRange}"`)
     expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain("const appEnv = env('APP_ENV') === 'production'")
     expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain("env('APP_DEBUG', true)")
     expect(projectInternals.renderAuthConfig()).toContain('guard: \'web\'')
@@ -1623,7 +1633,7 @@ export default defineAppConfig({
     expect(packageJson.dependencies?.['@holo-js/auth-social-google']).toBeUndefined()
     expect(await readFile(join(projectRoot, 'config/auth.ts'), 'utf8')).toContain('provider: \'users\'')
     expect(await readFile(join(projectRoot, 'config/session.ts'), 'utf8')).toContain('driver: env(\'SESSION_DRIVER\', \'file\')')
-    expect(await readFile(join(projectRoot, 'server/models/User.ts'), 'utf8')).toContain('fillable: [\'name\', \'email\', \'password\', \'avatar\', \'email_verified_at\']')
+    expect(await readFile(join(projectRoot, 'server/models/User.ts'), 'utf8')).toContain('fillable: [\'name\', \'email\', \'password\', \'avatar\']')
     expect((await readdir(join(projectRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(6)
 
     const rerun = runCliProcess(projectRoot, ['install', 'auth'])
@@ -9333,9 +9343,7 @@ export default undefined
 
       expect(Array.isArray(registry.models)).toBe(true)
       expect(registry.models).toEqual(expect.not.arrayContaining([
-        expect.objectContaining({
-          file: expect.stringContaining('server/models/Course.ts'),
-        }),
+        'server/models/Course.ts',
       ]))
     })
 

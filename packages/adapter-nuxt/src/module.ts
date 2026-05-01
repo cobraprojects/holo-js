@@ -196,10 +196,17 @@ function toStorageModuleOptions(
   }
 }
 
-async function createServerModelImports(sourceDir: string): Promise<string | null> {
+type ServerModelImportArtifacts = {
+  importDir: string
+  pluginFile: string
+}
+
+async function createServerModelImports(sourceDir: string): Promise<ServerModelImportArtifacts | null> {
   const modelsDir = resolve(sourceDir, 'server/models')
+  const generatedSchemaPath = resolve(sourceDir, 'server/db/schema.generated.ts')
   const modelImportDir = resolve(sourceDir, '.holo-js/generated/nuxt-server-imports')
   const modelImportFile = resolve(modelImportDir, 'models.ts')
+  const modelPluginFile = resolve(modelImportDir, 'plugin.ts')
 
   let modelFiles: string[]
   try {
@@ -214,17 +221,33 @@ async function createServerModelImports(sourceDir: string): Promise<string | nul
     return null
   }
 
-  const lines = modelFiles.map((fileName) => {
+  const generatedSchemaImportPath = relative(modelImportDir, generatedSchemaPath).replaceAll('\\', '/')
+  const normalizedGeneratedSchemaImportPath = generatedSchemaImportPath.replace(/^(?!\.)/, './')
+  const lines = [
+    `import '${normalizedGeneratedSchemaImportPath.slice(0, -extname(normalizedGeneratedSchemaImportPath).length)}'`,
+    '',
+    ...modelFiles.map((fileName) => {
     const modelName = basename(fileName, extname(fileName))
     const importPath = relative(modelImportDir, resolve(modelsDir, fileName)).replaceAll('\\', '/')
     const normalizedImportPath = importPath.replace(/^(?!\.)/, './')
     const extension = extname(normalizedImportPath)
     return `export { default as ${modelName} } from '${normalizedImportPath.slice(0, -extension.length)}'`
-  })
+    }),
+  ]
+  const pluginLines = [
+    `import '${normalizedGeneratedSchemaImportPath.slice(0, -extname(normalizedGeneratedSchemaImportPath).length)}'`,
+    "import './models'",
+    '',
+    'export default () => {}',
+  ]
 
   await mkdir(modelImportDir, { recursive: true })
   await writeFile(modelImportFile, `${lines.join('\n')}\n`, 'utf8')
-  return modelImportDir
+  await writeFile(modelPluginFile, `${pluginLines.join('\n')}\n`, 'utf8')
+  return {
+    importDir: modelImportDir,
+    pluginFile: modelPluginFile,
+  }
 }
 
 export default defineNuxtModule<ModuleOptions>({
@@ -298,7 +321,8 @@ export default defineNuxtModule<ModuleOptions>({
       addServerImportsDir(resolver.resolve('./runtime/server/imports'))
       const serverModelImports = await createServerModelImports(sourceDir)
       if (serverModelImports) {
-        addServerImportsDir(serverModelImports)
+        addServerImportsDir(serverModelImports.importDir)
+        addServerPlugin(serverModelImports.pluginFile)
       }
       opts._holoCoreRuntimeRegistered = true
     }

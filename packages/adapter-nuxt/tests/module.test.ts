@@ -356,7 +356,7 @@ export default defineDatabaseConfig({
     await writeFile(join(root, 'server/models/Admin.mts'), 'export default class Admin {}\nexport function prepareAuthCreateInput() {}\n', 'utf8')
     await writeFile(join(root, 'server/models/README.md'), '# ignored\n', 'utf8')
 
-    const { module, addServerImportsDir } = await loadAdapterModule()
+    const { module, addServerImportsDir, addServerPlugin } = await loadAdapterModule()
     const nuxt = createNuxtHarness(root)
 
     await module.setup({}, nuxt as never)
@@ -364,9 +364,19 @@ export default defineDatabaseConfig({
     expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/imports')
     expect(addServerImportsDir).toHaveBeenCalledWith(resolve(root, '.holo-js/generated/nuxt-server-imports'))
     expect(addServerImportsDir).toHaveBeenCalledTimes(2)
+    expect(addServerPlugin).toHaveBeenCalledWith(resolve(root, '.holo-js/generated/nuxt-server-imports/plugin.ts'))
     expect(await readFile(join(root, '.holo-js/generated/nuxt-server-imports/models.ts'), 'utf8')).toBe([
+      "import '../../../server/db/schema.generated'",
+      '',
       "export { default as Admin } from '../../../server/models/Admin'",
       "export { default as User } from '../../../server/models/User'",
+      '',
+    ].join('\n'))
+    expect(await readFile(join(root, '.holo-js/generated/nuxt-server-imports/plugin.ts'), 'utf8')).toBe([
+      "import '../../../server/db/schema.generated'",
+      "import './models'",
+      '',
+      'export default () => {}',
       '',
     ].join('\n'))
   })
