@@ -29,7 +29,7 @@ describe('notifications documentation smoke checks', () => {
     const verification = await readFile(resolve(root, 'apps/docs/docs/auth/email-verification.md'), 'utf8')
     const reset = await readFile(resolve(root, 'apps/docs/docs/auth/password-reset.md'), 'utf8')
 
-    expect(setup).toContain('bunx holo install notifications')
+    expect(setup).toContain('npx holo install notifications')
     expect(setup).toContain('config/notifications.ts')
     expect(setup).toContain('create_notifications')
     expect(setup).toContain('email verification')

@@ -31,15 +31,15 @@ describe('mail documentation smoke checks', () => {
     const verification = await readFile(resolve(root, 'apps/docs/docs/auth/email-verification.md'), 'utf8')
     const reset = await readFile(resolve(root, 'apps/docs/docs/auth/password-reset.md'), 'utf8')
 
-    expect(setup).toContain('bunx holo install mail')
+    expect(setup).toContain('npx holo install mail')
     expect(setup).toContain('config/mail.ts')
     expect(setup).toContain('server/mail/')
-    expect(setup).toContain('bunx holo make:mail auth/verify-email')
+    expect(setup).toContain('npx holo make:mail auth/verify-email')
     expect(setup).toContain('--markdown')
     expect(setup).toContain('custom `renderView` runtime binding')
     expect(installation).toContain('mail')
     expect(installation).toContain('--package forms,validation,mail')
-    expect(verification).toContain('bunx holo install mail')
+    expect(verification).toContain('npx holo install mail')
     expect(reset).toContain('@holo-js/mail')
   })
 

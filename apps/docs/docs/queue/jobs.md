@@ -7,7 +7,7 @@ Holo-JS discovers jobs from `server/jobs` and all nested subdirectories under it
 Generate a new job file:
 
 ```bash
-bunx holo make:job reports/send-digest
+npx holo make:job reports/send-digest
 ```
 
 That creates:
@@ -182,11 +182,11 @@ through queue internally while keeping event-first contracts.
 
 Holo-JS refreshes the generated job registry during:
 
-- `bun run dev`
-- `bun run build`
-- `bunx holo prepare`
+- `holo dev`
+- `holo build`
+- `npx holo prepare`
 
-Run `bunx holo prepare` directly when you only want to rebuild discovery output.
+Run `npx holo prepare` directly when you only want to rebuild discovery output.
 
 ## Continue
 

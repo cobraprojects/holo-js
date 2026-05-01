@@ -7,7 +7,7 @@ Queue tables are app-owned migrations. Holo-JS does not hide them inside a packa
 Use this when your queue connection uses the `database` driver:
 
 ```bash
-bunx holo queue:table
+npx holo queue:table
 ```
 
 That creates a normal migration file under `server/db/migrations`.
@@ -17,7 +17,7 @@ That creates a normal migration file under `server/db/migrations`.
 Use this when your queue config keeps failed jobs in the database:
 
 ```bash
-bunx holo queue:failed-table
+npx holo queue:failed-table
 ```
 
 This is the default failed-job setup that new queue scaffolds write.
@@ -27,13 +27,13 @@ This is the default failed-job setup that new queue scaffolds write.
 After generating the files, migrate normally:
 
 ```bash
-bunx holo migrate
+npx holo migrate
 ```
 
 Or for a fresh local rebuild:
 
 ```bash
-bunx holo migrate:fresh --seed --force
+npx holo migrate:fresh --seed --force
 ```
 
 ## Database queue config
@@ -69,11 +69,11 @@ The queue layer does not duplicate full DB credentials here. It reuses the named
 ## Typical setup flow
 
 ```bash
-bunx holo install queue --driver database
-bunx holo queue:table
-bunx holo queue:failed-table
-bunx holo migrate
-bunx holo queue:work --connection database
+npx holo install queue --driver database
+npx holo queue:table
+npx holo queue:failed-table
+npx holo migrate
+npx holo queue:work --connection database
 ```
 
 ## Continue

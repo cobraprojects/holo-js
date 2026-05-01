@@ -24,12 +24,6 @@ database drivers, storage drivers, and hosting targets.
 
 ::: code-group
 
-```bash [Bun]
-bun create holo-js my-app
-cd my-app
-bun run dev
-```
-
 ```bash [npm]
 npm create holo-js@latest my-app
 cd my-app
@@ -46,6 +40,12 @@ pnpm dev
 yarn create holo-js my-app
 cd my-app
 yarn dev
+```
+
+```bash [Bun]
+bun create holo-js my-app
+cd my-app
+bun run dev
 ```
 
 :::
@@ -109,7 +109,7 @@ If you are contributing to the framework packages inside this repository, use:
 
 ## Backend workflow
 
-- `bun create holo-js` scaffolds the project and asks for framework, database, package manager, and storage defaults.
+- `npm create holo-js@latest` scaffolds the project and asks for framework, database, package manager, and storage defaults.
 - `holo prepare` scans Holo-JS-owned directories and regenerates typed registries under `.holo-js/generated`.
 - `config/queue.ts` is scaffolded by default and starts on the `sync` driver.
 - `holo install broadcast` scaffolds `config/broadcast.ts`, `server/broadcast`, `server/channels`, and `/broadcasting/auth`.

@@ -5,7 +5,7 @@
 Scaffold cache during project creation:
 
 ```bash
-bun create holo-js my-app --package cache
+npm create holo-js@latest my-app -- --package cache
 ```
 
 That adds `@holo-js/cache`, writes `config/cache.ts`, and adds `CACHE_PREFIX` to `.env` files.
@@ -15,15 +15,15 @@ That adds `@holo-js/cache`, writes `config/cache.ts`, and adds `CACHE_PREFIX` to
 Install cache into an existing app:
 
 ```bash
-bunx holo install cache
+npx holo install cache
 ```
 
 Pick an explicit driver when needed:
 
 ```bash
-bunx holo install cache --driver file
-bunx holo install cache --driver redis
-bunx holo install cache --driver database
+npx holo install cache --driver file
+npx holo install cache --driver redis
+npx holo install cache --driver database
 ```
 
 `file` is the default install target and the default runtime driver.
@@ -50,25 +50,25 @@ Install output by driver:
 Clear the default cache store:
 
 ```bash
-bunx holo cache:clear
+npx holo cache:clear
 ```
 
 Clear a named cache store:
 
 ```bash
-bunx holo cache:clear --driver redis
+npx holo cache:clear --driver redis
 ```
 
 Forget one key from the default cache store:
 
 ```bash
-bunx holo cache:forget dashboard.stats
+npx holo cache:forget dashboard.stats
 ```
 
 Forget one key from a named cache store:
 
 ```bash
-bunx holo cache:forget dashboard.stats --driver redis
+npx holo cache:forget dashboard.stats --driver redis
 ```
 
 ## Database cache tables
@@ -76,8 +76,8 @@ bunx holo cache:forget dashboard.stats --driver redis
 If your cache driver is `database`, generate the migration and then migrate normally:
 
 ```bash
-bunx holo cache:table
-bunx holo migrate
+npx holo cache:table
+npx holo migrate
 ```
 
 `cache:table` creates a normal app migration under `server/db/migrations`. Holo-JS does not hide cache
@@ -88,24 +88,24 @@ tables inside a package.
 ### File cache
 
 ```bash
-bunx holo install cache --driver file
+npx holo install cache --driver file
 ```
 
 ### Redis cache
 
 ```bash
-bunx holo install cache --driver redis
+npx holo install cache --driver redis
 ```
 
-Use `bunx holo cache:clear --driver redis` later when you need to clear existing Redis cache state during migration or
+Use `npx holo cache:clear --driver redis` later when you need to clear existing Redis cache state during migration or
 troubleshooting.
 
 ### Database cache
 
 ```bash
-bunx holo install cache --driver database
-bunx holo cache:table
-bunx holo migrate
+npx holo install cache --driver database
+npx holo cache:table
+npx holo migrate
 ```
 
 ## Continue

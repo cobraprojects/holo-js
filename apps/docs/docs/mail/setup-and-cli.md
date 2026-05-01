@@ -8,13 +8,13 @@ an existing app.
 Use the optional package flag during `create`:
 
 ```bash
-bun create holo-js my-app --package mail
+npm create holo-js@latest my-app -- --package mail
 ```
 
 Optional packages still compose normally:
 
 ```bash
-bun create holo-js my-app --package forms,validation,mail
+npm create holo-js@latest my-app -- --package forms,validation,mail
 ```
 
 ## Existing projects
@@ -22,7 +22,7 @@ bun create holo-js my-app --package forms,validation,mail
 Install mail into an existing Holo-JS app with:
 
 ```bash
-bunx holo install mail
+npx holo install mail
 ```
 
 This adds the `@holo-js/mail` package dependency when needed and scaffolds:
@@ -35,13 +35,13 @@ This adds the `@holo-js/mail` package dependency when needed and scaffolds:
 Generate a mail definition with:
 
 ```bash
-bunx holo make:mail auth/verify-email
+npx holo make:mail auth/verify-email
 ```
 
 Use `--markdown` to skip the default markdown scaffold explicitly:
 
 ```bash
-bunx holo make:mail auth/verify-email --markdown
+npx holo make:mail auth/verify-email --markdown
 ```
 
 If the app has a custom `renderView` runtime binding, author `render: { view, props }` mails manually as shown in

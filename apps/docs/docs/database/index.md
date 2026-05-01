@@ -9,7 +9,7 @@ Most applications follow this path:
 
 1. configure a connection in `config/database.ts`
 2. write migrations in `server/db/migrations`
-3. run `bunx holo migrate`
+3. run `npx holo migrate`
 4. let Holo-JS refresh `server/db/schema.generated.ts`
 5. define models under `server/models`
 6. query through `DB.table(...)` or the ORM
@@ -47,13 +47,13 @@ changes underneath it.
 For day-to-day database work, use the Holo-JS CLI:
 
 ```bash
-bunx holo list
-bunx holo migrate
-bunx holo migrate:fresh --seed
-bunx holo seed
+npx holo list
+npx holo migrate
+npx holo migrate:fresh --seed
+npx holo seed
 ```
 
-`bunx holo list` shows internal database commands plus app commands auto-discovered from
+`npx holo list` shows internal database commands plus app commands auto-discovered from
 `server/commands`.
 
 ## Multiple connections

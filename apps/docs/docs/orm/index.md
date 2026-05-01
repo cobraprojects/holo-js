@@ -19,8 +19,8 @@ server/models/User.ts
 The fastest way to start is:
 
 ```bash
-bunx holo make:model User
-bunx holo make:model courses/Course --migration --observer --factory --seeder
+npx holo make:model User
+npx holo make:model courses/Course --migration --observer --factory --seeder
 ```
 
 Use `make:model` when you want the model scaffold and optional companion files created together. Nested
@@ -51,7 +51,7 @@ server/api/users/index.get.ts
 The flow is:
 
 1. migrations define or change the table
-2. `bunx holo migrate` refreshes `server/db/schema.generated.ts`
+2. `npx holo migrate` refreshes `server/db/schema.generated.ts`
 3. model files define behavior
 4. API routes or server services call the model
 

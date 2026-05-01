@@ -6,7 +6,7 @@ database-backed failed-job table named `failed_jobs`.
 ## List failed jobs
 
 ```bash
-bunx holo queue:failed
+npx holo queue:failed
 ```
 
 Use this to inspect failed jobs and copy the failed-job record ID for retry or deletion.
@@ -16,19 +16,19 @@ Use this to inspect failed jobs and copy the failed-job record ID for retry or d
 Retry one failed job:
 
 ```bash
-bunx holo queue:retry 01JZ123456789ABCDEFGHJKMNP
+npx holo queue:retry 01JZ123456789ABCDEFGHJKMNP
 ```
 
 Retry every stored failed job:
 
 ```bash
-bunx holo queue:retry all
+npx holo queue:retry all
 ```
 
 ## Delete one failed job record
 
 ```bash
-bunx holo queue:forget 01JZ123456789ABCDEFGHJKMNP
+npx holo queue:forget 01JZ123456789ABCDEFGHJKMNP
 ```
 
 This removes the failed-job record without retrying it.
@@ -36,7 +36,7 @@ This removes the failed-job record without retrying it.
 ## Flush the failed-job store
 
 ```bash
-bunx holo queue:flush
+npx holo queue:flush
 ```
 
 Use this only when you intentionally want to clear every stored failed job record.

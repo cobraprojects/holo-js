@@ -7,17 +7,13 @@ files plus Holo-JS-owned server directories.
 ## Requirements
 
 - Node 20 or newer
-- Bun or another modern package manager
+- a modern package manager (npm, pnpm, yarn, or bun)
 - one of: Nuxt, Next.js, or SvelteKit
 - SQLite, Postgres, or MySQL
 
 ## Create a project interactively
 
 ::: code-group
-
-```bash [Bun]
-bun create holo-js my-app
-```
 
 ```bash [npm]
 npm create holo-js@latest my-app
@@ -31,33 +27,17 @@ pnpm create holo-js@latest my-app
 yarn create holo-js my-app
 ```
 
-```bash [Direct]
-bunx create-holo-js my-app
+```bash [Bun]
+bun create holo-js my-app
 ```
 
 :::
-
-The interactive flow asks for:
-
-- project name
-- framework: `nuxt`, `next`, or `sveltekit`
-- database driver: `sqlite`, `mysql`, or `postgres`
-- package manager: `bun`, `npm`, `pnpm`, or `yarn`
 - storage default disk: `local` or `public`
 - optional packages: `validation`, `forms`, `security`, `notifications`, `mail`, `storage`, `events`, `queue`, `cache`, `auth`, `authorization`, `broadcast`, or none
 
 ## Create a project non-interactively
 
 ::: code-group
-
-```bash [Bun]
-bun create holo-js my-app \
-  --framework next \
-  --database sqlite \
-  --package-manager bun \
-  --storage-default-disk public \
-  --package forms,validation,mail
-```
 
 ```bash [npm]
 npm create holo-js@latest my-app -- \
@@ -86,8 +66,8 @@ yarn create holo-js my-app \
   --package forms,validation,mail
 ```
 
-```bash [Direct]
-bunx create-holo-js my-app \
+```bash [Bun]
+bun create holo-js my-app \
   --framework next \
   --database sqlite \
   --package-manager bun \
@@ -96,10 +76,6 @@ bunx create-holo-js my-app \
 ```
 
 :::
-
-Do not use `bunx create holo-js`.
-`bunx` treats `create` as the package name in that form, so it installs and runs the npm package named `create`
-instead of resolving `create-holo-js`.
 
 Use the non-interactive flags for CI, templates, or internal automation.
 
@@ -112,19 +88,19 @@ Example optional package sets include `--package forms,validation,notifications`
 Authorization can also be installed after scaffolding:
 
 ```bash
-bunx holo install authorization
+npx holo install authorization
 ```
 
 Broadcast setup is installed after scaffolding:
 
 ```bash
-bunx holo install broadcast
+npx holo install broadcast
 ```
 
 Cache setup can also be installed after scaffolding:
 
 ```bash
-bunx holo install cache
+npx holo install cache
 ```
 
 ## What the scaffold writes
@@ -153,13 +129,37 @@ to work are:
 
 ## First commands
 
-```bash
+After scaffolding, install dependencies and start the dev server using the package manager you selected:
+
+::: code-group
+
+```bash [npm]
+cd my-app
+npm install
+npm run dev
+```
+
+```bash [pnpm]
+cd my-app
+pnpm install
+pnpm dev
+```
+
+```bash [Yarn]
+cd my-app
+yarn install
+yarn dev
+```
+
+```bash [Bun]
 cd my-app
 bun install
 bun run dev
 ```
 
-`bun run dev` already runs discovery first, refreshes `.holo-js/generated`, watches relevant files, and then
+:::
+
+`npm run dev` (or the equivalent for your package manager) already runs discovery first, refreshes `.holo-js/generated`, watches relevant files, and then
 starts Nuxt, Next.js, or SvelteKit. Run `holo prepare` directly only when you want to regenerate discovery
 artifacts without starting the dev server.
 
@@ -168,11 +168,6 @@ artifacts without starting the dev server.
 Use normal package scripts for framework lifecycle commands:
 
 ::: code-group
-
-```bash [Bun]
-bun run dev
-bun run build
-```
 
 ```bash [npm]
 npm run dev
@@ -189,17 +184,16 @@ yarn dev
 yarn build
 ```
 
+```bash [Bun]
+bun run dev
+bun run build
+```
+
 :::
 
 Use your package manager's exec wrapper for direct Holo-JS CLI commands:
 
 ::: code-group
-
-```bash [Bun]
-bunx holo make:model User
-bunx holo migrate
-bunx holo seed
-```
 
 ```bash [npm]
 npx holo make:model User
@@ -217,6 +211,12 @@ pnpm dlx holo seed
 yarn dlx holo make:model User
 yarn dlx holo migrate
 yarn dlx holo seed
+```
+
+```bash [Bun]
+bunx holo make:model User
+bunx holo migrate
+bunx holo seed
 ```
 
 :::

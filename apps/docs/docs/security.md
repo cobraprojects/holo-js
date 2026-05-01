@@ -5,7 +5,7 @@
 Install it only when the app needs browser form protection or named request throttles:
 
 ```bash
-bunx holo install security
+npx holo install security
 ```
 
 That writes `config/security.ts`, adds `@holo-js/security`, and lets core boot the package lazily only when
@@ -388,10 +388,10 @@ await clearRateLimit({ all: true })
 CLI helper:
 
 ```bash
-bunx holo rate-limit:clear --limiter api --key "user:42"
-bunx holo rate-limit:clear --limiter api --key "ip:203.0.113.7"
-bunx holo rate-limit:clear --limiter login
-bunx holo rate-limit:clear --all
+npx holo rate-limit:clear --limiter api --key "user:42"
+npx holo rate-limit:clear --limiter api --key "ip:203.0.113.7"
+npx holo rate-limit:clear --limiter login
+npx holo rate-limit:clear --all
 ```
 
 ## Driver persistence
@@ -454,7 +454,7 @@ Examples:
 
 Security stays optional:
 
-- install it with `bunx holo install security`
+- install it with `npx holo install security`
 - include it during project creation only if the app needs it
 - apps that do not install it do not pay dependency or runtime cost
 - `@holo-js/forms` loads it lazily only when security-aware options are actually used

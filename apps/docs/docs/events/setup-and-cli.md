@@ -25,19 +25,19 @@ server/listeners/billing/sync-invoice-state.ts
 Create an event:
 
 ```bash
-bunx holo make:event user/registered
+npx holo make:event user/registered
 ```
 
 Create a listener for one event:
 
 ```bash
-bunx holo make:listener user/send-welcome-email --event user.registered
+npx holo make:listener user/send-welcome-email --event user.registered
 ```
 
 Create a listener for multiple events:
 
 ```bash
-bunx holo make:listener audit/user-lifecycle \
+npx holo make:listener audit/user-lifecycle \
   --event user.registered \
   --event user.deleted
 ```
@@ -47,7 +47,7 @@ bunx holo make:listener audit/user-lifecycle \
 Install event support into an existing Holo-JS app with:
 
 ```bash
-bunx holo install events
+npx holo install events
 ```
 
 This adds the `@holo-js/events` package dependency when needed and creates the discovery directories:

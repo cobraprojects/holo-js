@@ -16,8 +16,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "bun x tsup",
-    "stub": "bun x tsup",
+    "build": "tsup",
+    "stub": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest --run"
   },
