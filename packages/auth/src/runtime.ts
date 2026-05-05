@@ -62,6 +62,7 @@ type ErasedAuthProviderAdapter = {
   findById(id: string | number): Promise<unknown | null>
   findByCredentials(credentials: Readonly<Record<string, unknown>>): Promise<unknown | null>
   create(input: Readonly<Record<string, unknown>>): Promise<unknown>
+  delete?(id: string | number): Promise<void>
   update?(user: unknown, input: Readonly<Record<string, unknown>>): Promise<unknown>
   matchesUser?(user: unknown): boolean
   getId(user: unknown): string | number
@@ -936,6 +937,19 @@ async function hydrateGuardContextFromRequest(guardName: string): Promise<void> 
       const rememberToken = await resolveRequestCookie(bindings, rememberCookie.name)
       if (rememberToken) {
         bindings.context.setRememberToken?.(guardName, rememberToken)
+        if (!bindings.context.getSessionId(guardName)) {
+          const rememberedSession = await bindings.session.consumeRememberMeToken?.(rememberToken)
+          const payload = readSessionPayload(rememberedSession, guardName)
+          if (rememberedSession && payload?.guard === guardName) {
+            bindings.context.setSessionId(guardName, rememberedSession.id)
+            bindings.context.setCachedUser(
+              guardName,
+              rehydrateSerializedUser(payload.user, payload.provider),
+            )
+          } else if (!rememberedSession) {
+            bindings.context.setRememberToken?.(guardName)
+          }
+        }
       }
     }
   }
@@ -2215,12 +2229,33 @@ async function registerDefaultUser(input: AuthRegistrationInput): Promise<AuthUs
   const user = await adapter.create(toRegistrationRecord(input, password))
   const serialized = serializeUser(adapter, user, guard.provider)
   if (isEmailVerificationRequired()) {
-    await createEmailVerificationFacade().create(serialized, {
-      guard: defaultGuard,
-    })
+    try {
+      await createEmailVerificationFacade().create(serialized, {
+        guard: defaultGuard,
+      })
+    } catch (error) {
+      await bindings.emailVerificationTokens?.deleteByUserId(guard.provider, serialized.id).catch(() => undefined)
+      await rollbackRegisteredUser(adapter, user, serialized).catch(() => undefined)
+      throw error
+    }
   }
 
   return serialized
+}
+
+async function rollbackRegisteredUser(
+  adapter: ErasedAuthProviderAdapter,
+  createdUser: unknown,
+  serialized: SerializedAuthUser,
+): Promise<void> {
+  if (createdUser && typeof createdUser === 'object' && 'delete' in createdUser && typeof createdUser.delete === 'function') {
+    await createdUser.delete()
+    return
+  }
+
+  if (adapter.delete) {
+    await adapter.delete(serialized.id)
+  }
 }
 
 function findProviderNameForUser(user: unknown): string {

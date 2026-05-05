@@ -438,6 +438,10 @@ export interface AuthSessionRuntime {
     sessionId: string,
     options?: { readonly store?: string },
   ): Promise<string>
+  consumeRememberMeToken?(
+    token: string,
+    options?: { readonly store?: string },
+  ): Promise<AuthSessionRecord | null>
   cookie?(
     name: string,
     value: string,

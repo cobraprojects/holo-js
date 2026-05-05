@@ -50,6 +50,11 @@ type RequestLikeHeaders =
   | Headers
   | ReadonlyArray<readonly [string, string]>
   | Record<string, string | readonly string[] | undefined>
+  | {
+    readonly get?: (name: string) => string | null | undefined
+    readonly forEach?: (callback: (value: string, key: string) => void) => void
+    readonly entries?: () => Iterable<readonly [string, string]>
+  }
 
 export interface FormRequestLikeInput {
   readonly method?: string
@@ -253,8 +258,32 @@ function isHeadersTupleArray(value: unknown): value is ReadonlyArray<readonly [s
       && typeof entry[1] === 'string')
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype
+}
+
+function isHeaderAccessorObject(value: unknown): value is {
+  readonly get?: (name: string) => string | null | undefined
+  readonly forEach?: (callback: (value: string, key: string) => void) => void
+  readonly entries?: () => Iterable<readonly [string, string]>
+} {
+  if (!value || typeof value !== 'object' || isPlainObject(value)) {
+    return false
+  }
+
+  const candidate = value as {
+    readonly get?: unknown
+    readonly forEach?: unknown
+    readonly entries?: unknown
+  }
+
+  return typeof candidate.get === 'function'
+    || typeof candidate.forEach === 'function'
+    || typeof candidate.entries === 'function'
+}
+
 function isRequestLikeHeaders(value: unknown): value is RequestLikeHeaders {
-  return value instanceof Headers || isHeadersTupleArray(value) || (!!value && typeof value === 'object')
+  return value instanceof Headers || isHeadersTupleArray(value) || isHeaderAccessorObject(value)
 }
 
 function normalizeRequestHeaders(input: unknown): Headers {
@@ -270,6 +299,22 @@ function normalizeRequestHeaders(input: unknown): Headers {
     }
 
     return headers
+  }
+
+  if (isHeaderAccessorObject(input)) {
+    if (typeof input.forEach === 'function') {
+      input.forEach((value, name) => {
+        headers.append(name, value)
+      })
+      return headers
+    }
+
+    if (typeof input.entries === 'function') {
+      for (const [name, value] of input.entries()) {
+        headers.append(name, value)
+      }
+      return headers
+    }
   }
 
   if (input && typeof input === 'object') {
@@ -403,9 +448,10 @@ function isRequestLikeInput(input: unknown): input is FormRequestLikeInput {
     || typeof candidate.url === 'string'
     || candidate.url instanceof URL
   const hasStructuredHeaders = isRequestLikeHeaders(candidate.headers)
+  const hasPlainHeaderRecord = isPlainObject(candidate.headers)
   const hasBody = typeof candidate.body !== 'undefined'
 
-  return hasRequestMetadata && (hasStructuredHeaders || hasBody)
+  return hasRequestMetadata && (hasStructuredHeaders || hasPlainHeaderRecord || hasBody)
 }
 
 function normalizeRequestLikeInput(input: FormLikeValidationInput | FormRequestLikeInput | null | undefined): Request | undefined {

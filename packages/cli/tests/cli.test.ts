@@ -1284,6 +1284,13 @@ export default {
       packageManager: 'bun',
       storageDefaultDisk: 'local',
     }).find(file => file.path === 'src/hooks.server.ts')?.contents).toContain('export {}')
+    expect(projectInternals.renderFrameworkFiles({
+      projectName: 'Svelte App',
+      framework: 'sveltekit',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+    }).find(file => file.path === 'src/lib/server/holo.ts')?.contents).toContain('@holo-js/adapter-sveltekit')
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'Svelte App',
       framework: 'sveltekit',

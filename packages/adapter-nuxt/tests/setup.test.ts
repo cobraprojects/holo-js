@@ -423,9 +423,9 @@ export default defineStorageConfig({
     expect(addImports).toHaveBeenCalledTimes(1)
     expect(addImports.mock.calls[0]?.[0]).toHaveLength(6)
     expect(addImports.mock.calls[0]?.[0]).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'holo', as: 'holo', from: './runtime/composables' }),
-      expect.objectContaining({ name: 'useStorage', as: 'useStorage', from: './runtime/composables/storage' }),
-      expect.objectContaining({ name: 'Storage', as: 'Storage', from: './runtime/composables/storage' }),
+      expect.objectContaining({ name: 'holo', as: 'holo', from: '@holo-js/adapter-nuxt/runtime' }),
+      expect.objectContaining({ name: 'useStorage', as: 'useStorage', from: '@holo-js/adapter-nuxt/storage' }),
+      expect.objectContaining({ name: 'Storage', as: 'Storage', from: '@holo-js/adapter-nuxt/storage' }),
     ]))
     expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/imports')
     expect(addServerImportsDir).toHaveBeenCalledTimes(1)

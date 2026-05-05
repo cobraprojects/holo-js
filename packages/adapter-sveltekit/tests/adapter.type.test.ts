@@ -2,8 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
-import { createSvelteKitHoloHelpers } from '../src'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SerializedSvelteKitData } from '../src/transport'
 import {
   linkInstalledDependenciesForPackage,
@@ -33,8 +32,13 @@ declare module '@holo-js/config' {
   }
 }
 
+afterEach(() => {
+  vi.resetModules()
+})
+
 describe('@holo-js/adapter-sveltekit typing', () => {
-  it('preserves inference for helper accessors', () => {
+  it('preserves inference for helper accessors', async () => {
+    const { createSvelteKitHoloHelpers } = await import('../src')
     const helpers = createSvelteKitHoloHelpers()
 
     type Helpers = typeof helpers
