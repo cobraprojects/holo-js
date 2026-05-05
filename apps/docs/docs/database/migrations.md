@@ -23,8 +23,9 @@ Do not put migrations in client code. They belong to deployment, local setup, CI
 bootstrap flows.
 
 In Holo-JS, migrations are the operational source of truth. They change the real database, and after a
-successful `npx holo migrate` run the CLI refreshes `server/db/schema.generated.ts`. Model files consume
-that generated schema metadata instead of redefining columns inline.
+successful `npx holo migrate` run the CLI refreshes internal generated schema metadata under
+`.holo-js/generated`. Model files consume that schema metadata indirectly instead of redefining columns
+inline.
 
 Columns are not nullable by default. Write `.nullable()` only when a column should allow nulls. Use
 `.notNull()` only when you need to make that intent explicit during a later mutation such as `change()`.
@@ -166,7 +167,8 @@ npx holo migrate:fresh --seed
 ```
 
 `migrate:fresh` drops every table in the active connection, reruns the full migration chain, and then
-refreshes `server/db/schema.generated.ts`. Add `--seed` to run registered seeders immediately after
+refreshes the internal generated schema metadata under `.holo-js/generated`. Add `--seed` to run
+registered seeders immediately after
 the fresh migration pass.
 
 Holo-JS does not silently run migrations just because the app starts. You run them explicitly from:
@@ -652,7 +654,7 @@ For a new feature, the normal order is:
    - `holo make:migration add_status_to_users_table --table users`
 2. Write the `schema.createTable('users', ...)` or `schema.table('users', ...)` change.
 3. Run `holo migrate`.
-4. Update or create the matching `defineModel('users', { ... })` model file and import `../db/schema.generated`.
+4. Update or create the matching `defineModel('users', { ... })` model file.
 5. Build routes, factories, and seeders on top of that typed model definition.
 
 That is the cleanest way to keep the operational database layer and the app-facing typed model in sync.

@@ -1,10 +1,15 @@
 import { existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  linkInstalledDependenciesForPackage,
+  provisionTempPackage,
+  stagePublishedPackage,
+} from '../../../tests/support/published-package'
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = resolve(packageDir, '../..')
@@ -13,7 +18,6 @@ const nitropackPackageDir = resolve(repoRoot, 'node_modules/.bun/node_modules/ni
 const tempDirs: string[] = []
 const tempBuildRoots: string[] = []
 let adapterBuildPromise: Promise<{ adapterOutDir: string }> | null = null
-const dbRuntimeDependencyNames = ['better-sqlite3', 'mysql2', 'pg', 'ulid', 'uuid'] as const
 
 type RuntimeConfigShape = Record<string, unknown>
 type NuxtHarnessOptions = {
@@ -43,20 +47,6 @@ async function createTempBuildRoot(prefix: string): Promise<string> {
   return root
 }
 
-async function provisionTempPackage(sourcePackageDir: string, tempPackageDir: string): Promise<void> {
-  await cp(sourcePackageDir, tempPackageDir, {
-    recursive: true,
-    filter(source) {
-      return !source.includes('/dist/')
-        && !source.endsWith('/dist')
-        && !source.includes('/tests/')
-        && !source.endsWith('/tests')
-        && !source.includes('/node_modules/')
-        && !source.endsWith('/node_modules')
-    },
-  })
-}
-
 async function runPackageBuild(command: string, args: string[], targetPackageDir: string, outDir?: string): Promise<void> {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -73,12 +63,6 @@ async function runPackageBuild(command: string, args: string[], targetPackageDir
     env,
     stdio: 'pipe',
   })
-}
-
-async function stagePublishedPackage(sourceDir: string, targetDir: string, distDir: string): Promise<void> {
-  await mkdir(targetDir, { recursive: true })
-  await writeFile(join(targetDir, 'package.json'), await readFile(join(sourceDir, 'package.json'), 'utf8'))
-  await cp(distDir, join(targetDir, 'dist'), { recursive: true })
 }
 
 async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
@@ -105,12 +89,19 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
       await symlink(resolve(packageDir, '../db/node_modules/@types/pg'), join(tempRootTypes, 'pg'))
       await symlink(resolve(packageDir, '../db/node_modules/tsup'), join(tempRootNodeModules, 'tsup'))
       await symlink(resolve(repoRoot, 'node_modules/typescript'), join(tempRootNodeModules, 'typescript'))
-      await symlink(resolve(repoRoot, 'node_modules/.bun/node_modules/bullmq'), join(tempRootNodeModules, 'bullmq'))
       await symlink(resolve(packageDir, 'node_modules/@nuxt'), join(tempRootNodeModules, '@nuxt'))
       await symlink(nitropackPackageDir, join(tempRootNodeModules, 'nitropack'))
-      for (const dependencyName of dbRuntimeDependencyNames) {
-        await symlink(resolve(repoRoot, 'node_modules', dependencyName), join(tempRootNodeModules, dependencyName))
-      }
+      await linkInstalledDependenciesForPackage({
+        repoRoot,
+        nodeModulesRoot: tempRootNodeModules,
+        packageJsonPath: resolve(packageDir, '../db/package.json'),
+      })
+      await linkInstalledDependenciesForPackage({
+        repoRoot,
+        nodeModulesRoot: tempRootNodeModules,
+        packageJsonPath: resolve(packageDir, '../queue/package.json'),
+        extraDependencyNames: ['bullmq'],
+      })
 
       await provisionTempPackage(resolve(packageDir, '../db'), dbPackageRoot)
       await provisionTempPackage(resolve(packageDir, '../config'), configPackageRoot)
@@ -288,7 +279,11 @@ describe('@holo-js/adapter-nuxt module setup', () => {
 
     try {
       await mkdir(tempHoloNodeModules, { recursive: true })
-      await symlink(resolve(packageDir, '../validation/node_modules/valibot'), join(tempNodeModules, 'valibot'))
+      await linkInstalledDependenciesForPackage({
+        repoRoot,
+        nodeModulesRoot: tempNodeModules,
+        packageJsonPath: resolve(packageDir, '../validation/package.json'),
+      })
 
       await runPackageBuild(resolve(packageDir, '../validation/node_modules/.bin/tsup'), [], resolve(packageDir, '../validation'), join(buildRoot, 'validation'))
       await runPackageBuild(resolve(packageDir, '../forms/node_modules/.bin/tsup'), [], resolve(packageDir, '../forms'), join(buildRoot, 'forms'))

@@ -445,7 +445,7 @@ describe('model core slice', () => {
       fillable: ['name'],
       timestamps: true,
     })).toThrow(
-      'Model "users" is not present in the generated schema registry. Import your generated schema module and run "holo migrate" to refresh it.',
+      'Model "users" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.',
     )
   })
 
@@ -489,9 +489,29 @@ describe('model core slice', () => {
     expect(User.definition.name).toBe('User')
   })
 
+  it('infers model names from regular, irregular, compound, and schema-qualified table names', () => {
+    const people = defineTable('people', {
+      id: column.id(),
+    })
+    const children = defineTable('children', {
+      id: column.id(),
+    })
+    const blueLotOfThings = defineTable('blue_lot_of_things', {
+      id: column.id(),
+    })
+    const auditLogs = defineTable('analytics.audit_logs', {
+      id: column.id(),
+    })
+
+    expect(defineModel(people).definition.name).toBe('Person')
+    expect(defineModel(children).definition.name).toBe('Child')
+    expect(defineModel(blueLotOfThings).definition.name).toBe('BlueLotOfThing')
+    expect(defineModel(auditLogs).definition.name).toBe('AuditLog')
+  })
+
   it('throws immediately when defineModel(tableName) references a missing generated schema table', () => {
     expect(() => defineModel('missing_users')).toThrow(
-      'Model "missing_users" is not present in the generated schema registry. Import your generated schema module and run "holo migrate" to refresh it.',
+      'Model "missing_users" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.',
     )
   })
 

@@ -1,10 +1,14 @@
 import { existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
+import {
+  linkInstalledDependenciesForPackage,
+  provisionTempPackage,
+} from '../../../tests/support/published-package'
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = resolve(packageDir, '../..')
@@ -17,20 +21,6 @@ async function createTempBuildRoot(prefix: string): Promise<string> {
   const root = await mkdtemp(join(baseDir, `${prefix}-`))
   tempBuildRoots.push(root)
   return root
-}
-
-async function provisionTempPackage(sourcePackageDir: string, tempPackageDir: string): Promise<void> {
-  await cp(sourcePackageDir, tempPackageDir, {
-    recursive: true,
-    filter(source) {
-      return !source.includes('/dist/')
-        && !source.endsWith('/dist')
-        && !source.includes('/tests/')
-        && !source.endsWith('/tests')
-        && !source.includes('/node_modules/')
-        && !source.endsWith('/node_modules')
-    },
-  })
 }
 
 async function runPackageBuild(): Promise<{ outDir: string }> {
@@ -59,7 +49,17 @@ async function runPackageBuild(): Promise<{ outDir: string }> {
       await provisionTempPackage(packageDir, queueDbPackageRoot)
       await symlink(dbPackageRoot, join(holoNodeModulesRoot, 'db'))
       await symlink(queuePackageRoot, join(holoNodeModulesRoot, 'queue'))
-      await symlink(resolve(repoRoot, 'node_modules/.bun/node_modules/bullmq'), join(nodeModulesRoot, 'bullmq'))
+      await linkInstalledDependenciesForPackage({
+        repoRoot,
+        nodeModulesRoot,
+        packageJsonPath: resolve(repoRoot, 'packages/db/package.json'),
+      })
+      await linkInstalledDependenciesForPackage({
+        repoRoot,
+        nodeModulesRoot,
+        packageJsonPath: resolve(repoRoot, 'packages/queue/package.json'),
+        extraDependencyNames: ['bullmq'],
+      })
 
       execFileSync(resolve(packageDir, '../db/node_modules/.bin/tsup'), [], {
         cwd: dbPackageRoot,

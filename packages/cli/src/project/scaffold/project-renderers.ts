@@ -77,7 +77,7 @@ export function renderAuthEnvFiles(
   }
 }
 
-export function renderAuthUserModel(_generatedSchemaImportPath = '../db/schema.generated'): string {
+export function renderAuthUserModel(_generatedSchemaImportPath = '../../.holo-js/generated/schema.generated'): string {
   return [
     'import { defineModel } from \'@holo-js/db\'',
     '',
@@ -336,7 +336,7 @@ export function renderScaffoldAppConfig(projectName: string): string {
     '    jobs: \'server/jobs\',',
     '    events: \'server/events\',',
     '    listeners: \'server/listeners\',',
-    '    generatedSchema: \'server/db/schema.generated.ts\',',
+    '    generatedSchema: \'.holo-js/generated/schema.generated.ts\',',
     '  },',
     '})',
     '',

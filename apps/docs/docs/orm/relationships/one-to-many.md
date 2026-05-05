@@ -9,12 +9,15 @@ Use `hasMany` on the parent-facing side.
 ```ts
 const User = defineModel('users', {
   relations: {
-    posts: hasMany(Post, {
+    posts: hasMany('Post', {
       foreignKey: 'user_id',
     }),
   },
 })
 ```
+
+String relation targets use the model name inferred from the related table, so `posts -> Post`,
+`people -> Person`, and `children -> Child`.
 
 ### Load children
 
@@ -60,7 +63,7 @@ Use `belongsTo` on the child-facing side when the child table stores the foreign
 ```ts
 const Post = defineModel('posts', {
   relations: {
-    author: belongsTo(User, {
+    author: belongsTo('User', {
       foreignKey: 'user_id',
     }),
   },

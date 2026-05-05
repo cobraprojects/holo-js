@@ -5,13 +5,13 @@ import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { writeConfigCache } from '@holo-js/config'
+import { linkInstalledDependenciesForPackage } from '../../../tests/support/published-package'
 import type * as AdapterModule from '../src'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
 const repoRoot = resolve(import.meta.dirname, '../../..')
 const tempDirs: string[] = []
 const tempBuildRoots: string[] = []
-const dbRuntimeDependencyNames = ['better-sqlite3', 'mysql2', 'pg', 'ulid', 'uuid'] as const
 let coreBuildPromise: Promise<{ coreEntryUrl: string }> | null = null
 let adapterModulePromise: Promise<typeof AdapterModule> | null = null
 
@@ -33,17 +33,6 @@ async function linkPackageDependency(
   await rm(dependencyPath, { recursive: true, force: true })
   await mkdir(dirname(dependencyPath), { recursive: true })
   await symlink(dependencyRoot, dependencyPath)
-}
-
-async function linkExternalDependency(
-  targetPackageDir: string,
-  dependencyName: string,
-): Promise<void> {
-  await linkPackageDependency(
-    targetPackageDir,
-    dependencyName,
-    join(repoRoot, 'node_modules', ...dependencyName.split('/')),
-  )
 }
 
 function buildWorkspacePackage(filter: string, outDir: string): void {
@@ -75,13 +64,20 @@ async function ensureIsolatedCoreBuild(): Promise<{ coreEntryUrl: string }> {
       const corePackageRoot = join(root, 'packages/core')
 
       await writePackageWrapper(resolve(repoRoot, 'packages/db'), dbPackageRoot)
-      for (const dependencyName of dbRuntimeDependencyNames) {
-        await linkExternalDependency(dbPackageRoot, dependencyName)
-      }
+      await linkInstalledDependenciesForPackage({
+        repoRoot,
+        nodeModulesRoot: join(dbPackageRoot, 'node_modules'),
+        packageJsonPath: resolve(repoRoot, 'packages/db/package.json'),
+      })
       buildWorkspacePackage('@holo-js/db', join(dbPackageRoot, 'dist'))
 
       await writePackageWrapper(resolve(repoRoot, 'packages/queue'), queuePackageRoot)
-      await linkExternalDependency(queuePackageRoot, 'bullmq')
+      await linkInstalledDependenciesForPackage({
+        repoRoot,
+        nodeModulesRoot: join(queuePackageRoot, 'node_modules'),
+        packageJsonPath: resolve(repoRoot, 'packages/queue/package.json'),
+        extraDependencyNames: ['bullmq'],
+      })
       buildWorkspacePackage('@holo-js/queue', join(queuePackageRoot, 'dist'))
 
       await writePackageWrapper(resolve(repoRoot, 'packages/queue-db'), queueDbPackageRoot)

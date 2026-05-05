@@ -1,15 +1,14 @@
-import { belongsTo, belongsToMany, defineModel } from '@holo-js/db'
-
-import Category from './Category'
-import Tag from './Tag'
+import { belongsTo, belongsToMany, defineModel, hasMany } from '@holo-js/db'
 
 const relations = {
-  category: belongsTo(() => Category, { foreignKey: 'category_id' }),
-  tags: belongsToMany(() => Tag, {
+  user: belongsTo('User', { foreignKey: 'user_id' }),
+  category: belongsTo('Category', { foreignKey: 'category_id' }),
+  tags: belongsToMany('Tag', {
     pivotTable: 'post_tags',
     foreignPivotKey: 'post_id',
     relatedPivotKey: 'tag_id',
   }),
+  comments: hasMany('Comment', { foreignKey: 'post_id' }),
 }
 
 export default defineModel('posts', {

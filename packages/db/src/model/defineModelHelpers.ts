@@ -1,3 +1,4 @@
+import { singularize } from 'inflection'
 import { SchemaError } from '../core/errors'
 import { TableDefinitionBuilder } from '../schema/TableDefinitionBuilder'
 import { getGeneratedTableDefinition } from '../schema/generated'
@@ -31,7 +32,8 @@ export function buildModelTable<
 }
 
 export function inferModelName(tableName: string): string {
-  const singular = tableName.endsWith('s') ? tableName.slice(0, -1) : tableName
+  const unqualifiedName = tableName.split('.').at(-1) ?? tableName
+  const singular = singularize(unqualifiedName)
   return singular
     .split(/[_-]/g)
     .filter(Boolean)
@@ -52,7 +54,7 @@ export function resolveGeneratedModelTable(tableName: string): TableDefinition {
   const table = getGeneratedTableDefinition(tableName)
   if (!table) {
     throw new SchemaError(
-      `Model "${tableName}" is not present in the generated schema registry. Import your generated schema module and run "holo migrate" to refresh it.`,
+      `Model "${tableName}" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.`,
     )
   }
 

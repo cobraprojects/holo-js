@@ -10,7 +10,7 @@ Most applications follow this path:
 1. configure a connection in `config/database.ts`
 2. write migrations in `server/db/migrations`
 3. run `npx holo migrate`
-4. let Holo-JS refresh `server/db/schema.generated.ts`
+4. let Holo-JS refresh the internal generated schema metadata under `.holo-js/generated`
 5. define models under `server/models`
 6. query through `DB.table(...)` or the ORM
 
@@ -69,7 +69,6 @@ Models can target a named connection with `connectionName`.
 ## Defining models
 
 ```ts
-import '../db/schema.generated'
 import { defineModel } from '@holo-js/db'
 
 export const User = defineModel('users', {

@@ -51,8 +51,8 @@ These are the normal user-owned surfaces:
 `.holo-js/generated` is machine-owned output. `.holo-js/runtime` is internal runtime and CLI scratch space.
 Do not edit either by hand.
 
-They contain generated registries, metadata, and transient runtime artifacts used by adapters, runtime boot,
-and CLI execution.
+They contain generated registries, schema metadata, and transient runtime artifacts used by adapters,
+runtime boot, and CLI execution.
 
 ## Canonical directories
 

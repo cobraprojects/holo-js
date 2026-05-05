@@ -27,7 +27,6 @@ Use `make:model` when you want the model scaffold and optional companion files c
 model folders are supported.
 
 ```ts
-import '../db/schema.generated'
 import { defineModel } from '@holo-js/db'
 
 const User = defineModel('users', {
@@ -51,7 +50,7 @@ server/api/users/index.get.ts
 The flow is:
 
 1. migrations define or change the table
-2. `npx holo migrate` refreshes `server/db/schema.generated.ts`
+2. `npx holo migrate` refreshes the internal generated schema metadata under `.holo-js/generated`
 3. model files define behavior
 4. API routes or server services call the model
 
@@ -62,6 +61,25 @@ For writes, mass assignment, and trusted write paths, see [ORM Writes](/orm/writ
 ### Table Names
 
 The table name is the first argument to `defineModel(...)`.
+
+### Model Names
+
+Model names are inferred from the table name and used by string-based relation targets.
+
+- `defineModel('users', ...)` becomes `User`
+- `defineModel('blog_posts', ...)` becomes `BlogPost`
+- `defineModel('people', ...)` becomes `Person`
+- `defineModel('children', ...)` becomes `Child`
+- `defineModel('blue_lot_of_things', ...)` becomes `BlueLotOfThing`
+
+If the inferred name is not the public API you want, set it explicitly and use that exact name in
+relations:
+
+```ts
+const Person = defineModel('people', {
+  name: 'Person',
+})
+```
 
 ### Primary Keys
 

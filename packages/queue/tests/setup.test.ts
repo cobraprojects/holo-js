@@ -1,10 +1,14 @@
 import { existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
+import {
+  linkInstalledDependenciesForPackage,
+  provisionTempPackage,
+} from '../../../tests/support/published-package'
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = resolve(packageDir, '../..')
@@ -19,20 +23,6 @@ async function createTempBuildRoot(prefix: string): Promise<string> {
   return root
 }
 
-async function provisionTempPackage(sourcePackageDir: string, tempPackageDir: string): Promise<void> {
-  await cp(sourcePackageDir, tempPackageDir, {
-    recursive: true,
-    filter(source) {
-      return !source.includes('/dist/')
-        && !source.endsWith('/dist')
-        && !source.includes('/tests/')
-        && !source.endsWith('/tests')
-        && !source.includes('/node_modules/')
-        && !source.endsWith('/node_modules')
-    },
-  })
-}
-
 async function runPackageBuild(): Promise<{ outDir: string }> {
   if (!packageBuildPromise) {
     packageBuildPromise = (async () => {
@@ -45,10 +35,15 @@ async function runPackageBuild(): Promise<{ outDir: string }> {
       await symlink(resolve(repoRoot, 'tsconfig.json'), join(buildRoot, 'tsconfig.json'))
       await mkdir(nodeModulesRoot, { recursive: true })
       await mkdir(typesRoot, { recursive: true })
-      await symlink(resolve(repoRoot, 'node_modules/.bun/node_modules/bullmq'), join(nodeModulesRoot, 'bullmq'))
       await symlink(resolve(packageDir, 'node_modules/tsup'), join(nodeModulesRoot, 'tsup'))
       await symlink(resolve(packageDir, 'node_modules/typescript'), join(nodeModulesRoot, 'typescript'))
       await symlink(resolve(repoRoot, 'node_modules/@types/node'), join(typesRoot, 'node'))
+      await linkInstalledDependenciesForPackage({
+        repoRoot,
+        nodeModulesRoot,
+        packageJsonPath: resolve(packageDir, 'package.json'),
+        extraDependencyNames: ['bullmq'],
+      })
       await provisionTempPackage(packageDir, queuePackageRoot)
 
       execFileSync(resolve(packageDir, 'node_modules/.bin/tsup'), [], {

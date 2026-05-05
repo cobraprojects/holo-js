@@ -1,5 +1,7 @@
 <script setup lang="ts">
-const { data } = await useFetch('/api/admin/posts')
+import type { AdminPostsData } from '../../../server/lib/blog'
+
+const { data } = await useFetch<AdminPostsData>('/api/admin/posts')
 </script>
 
 <template>

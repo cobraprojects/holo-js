@@ -32,7 +32,7 @@ server/models/Role.ts
 ```ts
 const User = defineModel('users', {
   relations: {
-    roles: belongsToMany(() => Role, {
+    roles: belongsToMany('Role', {
       pivotTable: 'role_user',
       foreignPivotKey: 'user_id',
       relatedPivotKey: 'role_id',
@@ -40,6 +40,10 @@ const User = defineModel('users', {
   },
 })
 ```
+
+The `'Role'` target is the model name, not the file name. By default Holo-JS infers that name from the
+table, including irregular forms such as `people -> Person` and compound names such as
+`blue_lot_of_things -> BlueLotOfThing`.
 
 ## Load related models
 

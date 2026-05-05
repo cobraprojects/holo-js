@@ -10,6 +10,11 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { loadConfigDirectory } from '@holo-js/config'
 import { initializeHolo } from '@holo-js/core'
 import { DB, createSchemaService } from '@holo-js/db'
+import {
+  linkInstalledDependenciesForPackageSync,
+  resolveInstalledDependencyRoot,
+  symlinkPackageDependencySync,
+} from '../../../tests/support/published-package'
 import type * as HoloConfigModule from '@holo-js/config'
 import type * as HoloCoreModule from '@holo-js/core'
 import type * as HoloDbModule from '@holo-js/db'
@@ -70,7 +75,6 @@ import { ESBUILD_PACKAGE_VERSION, HOLO_PACKAGE_VERSION } from '../src/metadata'
 import type { FSWatcher } from 'node:fs'
 
 const workspaceRoot = resolve(import.meta.dirname, '../../..')
-const bunStoreNodeModulesRoot = join(workspaceRoot, 'node_modules/.bun/node_modules')
 type BuiltWorkspacePackages = {
   readonly root: string
   readonly broadcastPackageRoot: string
@@ -124,22 +128,6 @@ function linkPackageDependencySync(
   symlinkSync(dependencyRoot, dependencyPath)
 }
 
-function linkExternalDependencySync(targetPackageDir: string, dependencyName: string): void {
-  linkPackageDependencySync(
-    targetPackageDir,
-    dependencyName,
-    join(workspaceRoot, 'node_modules', ...dependencyName.split('/')),
-  )
-}
-
-function linkBunStoreDependencySync(targetPackageDir: string, dependencyName: string): void {
-  linkPackageDependencySync(
-    targetPackageDir,
-    dependencyName,
-    join(bunStoreNodeModulesRoot, ...dependencyName.split('/')),
-  )
-}
-
 function buildWorkspacePackageSync(filter: string, outDir: string) {
   return spawnSync('bun', ['run', '--filter', filter, 'build'], {
     cwd: workspaceRoot,
@@ -176,23 +164,38 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   const cliPackageRoot = join(root, 'packages/cli')
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/db-sqlite'), dbSqlitePackageRoot)
-  linkExternalDependencySync(dbSqlitePackageRoot, 'better-sqlite3')
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(dbSqlitePackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/db-sqlite/package.json'),
+  })
   const dbSqliteBuild = buildWorkspacePackageSync('@holo-js/db-sqlite', join(dbSqlitePackageRoot, 'dist'))
   expect(dbSqliteBuild.status, dbSqliteBuild.stderr || dbSqliteBuild.stdout).toBe(0)
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/db-postgres'), dbPostgresPackageRoot)
-  linkExternalDependencySync(dbPostgresPackageRoot, 'pg')
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(dbPostgresPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/db-postgres/package.json'),
+  })
   const dbPostgresBuild = buildWorkspacePackageSync('@holo-js/db-postgres', join(dbPostgresPackageRoot, 'dist'))
   expect(dbPostgresBuild.status, dbPostgresBuild.stderr || dbPostgresBuild.stdout).toBe(0)
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/db-mysql'), dbMysqlPackageRoot)
-  linkExternalDependencySync(dbMysqlPackageRoot, 'mysql2')
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(dbMysqlPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/db-mysql/package.json'),
+  })
   const dbMysqlBuild = buildWorkspacePackageSync('@holo-js/db-mysql', join(dbMysqlPackageRoot, 'dist'))
   expect(dbMysqlBuild.status, dbMysqlBuild.stderr || dbMysqlBuild.stdout).toBe(0)
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/db'), dbPackageRoot)
-  linkExternalDependencySync(dbPackageRoot, 'ulid')
-  linkExternalDependencySync(dbPackageRoot, 'uuid')
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(dbPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/db/package.json'),
+  })
   linkPackageDependencySync(dbPackageRoot, '@holo-js/db-sqlite', dbSqlitePackageRoot)
   linkPackageDependencySync(dbPackageRoot, '@holo-js/db-postgres', dbPostgresPackageRoot)
   linkPackageDependencySync(dbPackageRoot, '@holo-js/db-mysql', dbMysqlPackageRoot)
@@ -200,7 +203,11 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   expect(dbBuild.status, dbBuild.stderr || dbBuild.stdout).toBe(0)
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/queue-redis'), queueRedisPackageRoot)
-  linkBunStoreDependencySync(queueRedisPackageRoot, 'bullmq')
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(queueRedisPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/queue-redis/package.json'),
+  })
   const queueRedisBuild = buildWorkspacePackageSync('@holo-js/queue-redis', join(queueRedisPackageRoot, 'dist'))
   expect(queueRedisBuild.status, queueRedisBuild.stderr || queueRedisBuild.stdout).toBe(0)
 
@@ -228,14 +235,22 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   expect(configBuild.status, configBuild.stderr || configBuild.stdout).toBe(0)
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/validation'), validationPackageRoot)
-  linkBunStoreDependencySync(validationPackageRoot, 'valibot')
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(validationPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/validation/package.json'),
+  })
   const validationBuild = buildWorkspacePackageSync('@holo-js/validation', join(validationPackageRoot, 'dist'))
   expect(validationBuild.status, validationBuild.stderr || validationBuild.stdout).toBe(0)
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/broadcast'), broadcastPackageRoot)
   linkPackageDependencySync(broadcastPackageRoot, '@holo-js/config', configPackageRoot)
   linkPackageDependencySync(broadcastPackageRoot, '@holo-js/validation', validationPackageRoot)
-  linkExternalDependencySync(broadcastPackageRoot, 'ws')
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(broadcastPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/broadcast/package.json'),
+  })
   const broadcastBuild = buildWorkspacePackageSync('@holo-js/broadcast', join(broadcastPackageRoot, 'dist'))
   expect(broadcastBuild.status, broadcastBuild.stderr || broadcastBuild.stdout).toBe(0)
 
@@ -258,7 +273,11 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   linkPackageDependencySync(mailPackageRoot, '@holo-js/config', configPackageRoot)
   linkPackageDependencySync(mailPackageRoot, '@holo-js/queue', queuePackageRoot)
   linkPackageDependencySync(mailPackageRoot, '@holo-js/storage', storagePackageRoot)
-  linkExternalDependencySync(mailPackageRoot, 'nodemailer')
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(mailPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/mail/package.json'),
+  })
   const mailBuild = buildWorkspacePackageSync('@holo-js/mail', join(mailPackageRoot, 'dist'))
   expect(mailBuild.status, mailBuild.stderr || mailBuild.stdout).toBe(0)
 
@@ -435,15 +454,9 @@ async function writeProjectFile(projectRoot: string, relativePath: string, conte
 
 async function linkWorkspaceExternalDependency(projectRoot: string, dependencyName: string): Promise<void> {
   const dependencyPath = join(projectRoot, 'node_modules', ...dependencyName.split('/'))
-  const workspaceDependencyPath = join(workspaceRoot, 'node_modules', ...dependencyName.split('/'))
-  const bunStoreDependencyPath = join(bunStoreNodeModulesRoot, ...dependencyName.split('/'))
-  const dependencyRoot = await stat(workspaceDependencyPath)
-    .then(() => workspaceDependencyPath)
-    .catch(async () => await stat(bunStoreDependencyPath)
-      .then(() => bunStoreDependencyPath))
   await mkdir(dirname(dependencyPath), { recursive: true })
   await rm(dependencyPath, { recursive: true, force: true }).catch(() => {})
-  await symlink(dependencyRoot, dependencyPath).catch(() => {})
+  await symlink(resolveInstalledDependencyRoot(workspaceRoot, dependencyName), dependencyPath).catch(() => {})
 }
 
 async function linkWorkspaceConfig(projectRoot: string): Promise<void> {
@@ -644,7 +657,7 @@ export default {
     expect(await readFile(join(projectRoot, 'next.config.ts'), 'utf8')).toContain('nextConfig')
     expect(await readFile(join(projectRoot, 'tsconfig.json'), 'utf8')).toContain('next-env.d.ts')
     expect(await readFile(join(projectRoot, '.gitignore'), 'utf8')).toContain('.holo-js/generated')
-    expect(await readFile(join(projectRoot, 'server/db/schema.generated.ts'), 'utf8')).toContain('Generated')
+    expect(await readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8')).toContain('Generated')
 
     const duplicateResult = runCliProcess(targetRoot, [
       'new',
@@ -2004,7 +2017,7 @@ module.exports = {
   },
 }
 `)
-    await writeProjectFile(projectRoot, 'server/models/User.ts', projectInternals.renderAuthUserModel('../db/schema.generated'))
+    await writeProjectFile(projectRoot, 'server/models/User.ts', projectInternals.renderAuthUserModel('../../.holo-js/generated/schema.generated'))
     await rm(join(projectRoot, 'server/db/migrations'), { recursive: true, force: true })
     await mkdir(join(projectRoot, 'server/db/migrations'), { recursive: true })
 
@@ -3116,7 +3129,7 @@ export default defineRedisConfig({
         channels: 'server/channels',
         authorizationPolicies: 'server/policies',
         authorizationAbilities: 'server/abilities',
-        generatedSchema: 'server/db/schema.generated.ts',
+        generatedSchema: '.holo-js/generated/schema.generated.ts',
       },
       models: [],
       migrations: [],
@@ -3195,7 +3208,7 @@ export default defineRedisConfig({
         channels: 'server/channels',
         authorizationPolicies: 'server/policies',
         authorizationAbilities: 'server/abilities',
-        generatedSchema: 'server/db/schema.generated.ts',
+        generatedSchema: '.holo-js/generated/schema.generated.ts',
       },
       models: [],
       migrations: [],
@@ -3294,7 +3307,7 @@ export default defineDatabaseConfig({
         channels: 'server/channels',
         authorizationPolicies: 'server/policies',
         authorizationAbilities: 'server/abilities',
-        generatedSchema: 'server/db/schema.generated.ts',
+        generatedSchema: '.holo-js/generated/schema.generated.ts',
       },
       models: [],
       migrations: [],
@@ -4850,7 +4863,7 @@ export default defineDatabaseConfig({
 })
 `)
 
-    await writeProjectFile(projectRoot, 'server/db/schema.generated.ts', `
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', `
 import { column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
 
 declare module '@holo-js/db' {
@@ -4876,7 +4889,7 @@ registerGeneratedTables(tables)
 `)
 
     await writeProjectFile(projectRoot, 'server/models/Session.ts', `
-import '../db/schema.generated'
+import '../../.holo-js/generated/schema.generated'
 import { defineModel } from '@holo-js/db'
 
 export default defineModel('sessions', {
@@ -4885,7 +4898,7 @@ export default defineModel('sessions', {
 `)
 
     await writeProjectFile(projectRoot, 'server/models/User.ts', `
-import '../db/schema.generated'
+import '../../.holo-js/generated/schema.generated'
 import { defineModel } from '@holo-js/db'
 
 export default defineModel('users')
@@ -4977,7 +4990,7 @@ export default defineDatabaseConfig({
 })
 `)
 
-    await writeProjectFile(projectRoot, 'server/db/schema.generated.ts', `
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', `
 import { column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
 
 declare module '@holo-js/db' {
@@ -4997,7 +5010,7 @@ registerGeneratedTables(tables)
 `)
 
     await writeProjectFile(projectRoot, 'server/models/Session.ts', `
-import '../db/schema.generated'
+import '../../.holo-js/generated/schema.generated'
 import { defineModel } from '@holo-js/db'
 
 export default defineModel('sessions', {
@@ -5106,7 +5119,7 @@ export default defineMigration({
     const migrated = runCliProcess(projectRoot, ['migrate'])
     expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
 
-    const generatedPath = join(projectRoot, 'server/db/schema.generated.ts')
+    const generatedPath = join(projectRoot, '.holo-js/generated/schema.generated.ts')
     await expect(readFile(generatedPath, 'utf8')).resolves.toContain('export const users = defineGeneratedTable("users", {')
 
     const rolledBack = runCliProcess(projectRoot, ['migrate:rollback'])
@@ -5153,7 +5166,7 @@ export default defineDatabaseConfig({
 })
 `)
 
-    await writeProjectFile(projectRoot, 'server/db/schema.generated.ts', `
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', `
 import { column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
 
 declare module '@holo-js/db' {
@@ -5172,7 +5185,7 @@ registerGeneratedTables(tables)
 `)
 
     await writeProjectFile(projectRoot, 'server/models/User.ts', `
-import '../db/schema.generated'
+import '../../.holo-js/generated/schema.generated'
 import { defineModel } from '@holo-js/db'
 
 export default defineModel('users', {
@@ -5210,9 +5223,9 @@ export default defineMigration({
 
     const fresh = runCliProcess(projectRoot, ['migrate:fresh', '--seed'])
     expect(fresh.status, fresh.stderr || fresh.stdout).toBe(0)
-    expect(fresh.stdout).toContain('Seeders executed: UserSeeder')
+    expect(fresh.stdout).toMatch(/Seeders executed:\s+UserSeeder/)
 
-    const generated = await readFile(join(projectRoot, 'server/db/schema.generated.ts'), 'utf8')
+    const generated = await readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8')
     expect(generated).toContain('"name": column.string()')
   }, 30000)
 
@@ -8643,31 +8656,31 @@ export default defineEvent({ name: 'audit.activity' })
     expect(relativeImportPath('/tmp/app/server/models/Course.ts', '/tmp/app/server/models/Session.ts')).toBe('./Session')
     expect(renderModelTemplate({
       tableName: 'courses',
-      generatedSchemaImportPath: '../db/schema.generated',
+      generatedSchemaImportPath: '../../.holo-js/generated/schema.generated',
     })).not.toContain('observers:')
     expect(renderModelTemplate({
       tableName: 'courses',
-      generatedSchemaImportPath: '../db/schema.generated',
+      generatedSchemaImportPath: '../../.holo-js/generated/schema.generated',
     })).toContain('import { defineModel } from \'@holo-js/db\'')
     expect(renderModelTemplate({
       tableName: 'courses',
-      generatedSchemaImportPath: '../db/schema.generated',
+      generatedSchemaImportPath: '../../.holo-js/generated/schema.generated',
     })).toContain('export default defineModel("courses", {')
     expect(renderModelTemplate({
       tableName: 'courses',
-      generatedSchemaImportPath: '../db/schema.generated',
+      generatedSchemaImportPath: '../../.holo-js/generated/schema.generated',
     })).toContain('fillable: []')
     expect(renderModelTemplate({
       tableName: 'courses',
-      generatedSchemaImportPath: '../db/schema.generated',
+      generatedSchemaImportPath: '../../.holo-js/generated/schema.generated',
     })).not.toContain('holoModelPendingSchema')
     expect(renderModelTemplate({
       tableName: 'courses',
-      generatedSchemaImportPath: '../db/schema.generated',
+      generatedSchemaImportPath: '../../.holo-js/generated/schema.generated',
     })).not.toContain('holoGeneratedTables')
     expect(renderModelTemplate({
       tableName: 'courses',
-      generatedSchemaImportPath: '../db/schema.generated',
+      generatedSchemaImportPath: '../../.holo-js/generated/schema.generated',
     })).not.toContain('table => table')
     expect(renderViewMailTemplate('WelcomeMail', 'WelcomeMailInput', 'mail.welcome')).toContain('view: \'mail.welcome\'')
     expect(renderViewMailTemplate('WelcomeMail', 'WelcomeMailInput', 'mail.welcome')).toContain('props: input')
@@ -8684,7 +8697,7 @@ export default defineEvent({ name: 'audit.activity' })
 
   it('covers project registration helpers', () => {
     const base = defaultProjectConfig()
-    expect(base.paths.generatedSchema).toBe('server/db/schema.generated.ts')
+    expect(base.paths.generatedSchema).toBe('.holo-js/generated/schema.generated.ts')
     expect(base.paths.models).toBe('server/models')
     expect(base.paths.commands).toBe('server/commands')
     expect(base.paths.jobs).toBe('server/jobs')
@@ -9197,7 +9210,7 @@ throw 'string discovery failure'
     expect(isDiscoveryRelevantPath('config/app.ts', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('.env.local', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('.holo-js/generated/index.ts', project as never)).toBe(false)
-    expect(isDiscoveryRelevantPath('server/db/schema.generated.ts', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('.holo-js/generated/schema.generated.ts', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('server/commands/hello.ts', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('server/jobs/send-email.ts', project as never)).toBe(true)
     expect(isDiscoveryRelevantPath('server/events/user-registered.ts', project as never)).toBe(true)
@@ -9276,7 +9289,7 @@ throw 'string discovery failure'
     await new Promise(resolve => setTimeout(resolve, 25))
     expect(prepare).toHaveBeenCalledTimes(0)
 
-    watchCallback('change', 'server/db/schema.generated.ts')
+    watchCallback('change', '.holo-js/generated/schema.generated.ts')
     while (prepare.mock.calls.length < 1) {
       await new Promise(resolve => setTimeout(resolve, 5))
     }
@@ -9297,7 +9310,7 @@ throw 'string discovery failure'
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     await writeProjectFile(projectRoot, 'server/models/admins/User.mjs', `
-throw new Error('Model "users" is not present in the generated schema registry. Import your generated schema module and run "holo migrate" to refresh it.')
+throw new Error('Model "users" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.')
 `)
 
     const registry = await withFakeBun(async () => prepareProjectDiscovery(projectRoot))
@@ -9347,7 +9360,7 @@ export default undefined
       ]))
     })
 
-    await writeProjectFile(projectRoot, 'server/db/schema.generated.ts', `
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', `
 import { column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
 
 export const courses = defineGeneratedTable('courses', {
@@ -9366,7 +9379,7 @@ registerGeneratedTables(tables)
       await cliInternals.runProjectPrepare(projectRoot)
     })
 
-    const schemaExists = await readFile(join(projectRoot, 'server/db/schema.generated.ts'), 'utf8')
+    const schemaExists = await readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8')
     expect(schemaExists).toContain('defineGeneratedTable')
 
     const registryJson = await readFile(join(projectRoot, '.holo-js/generated/registry.json'), 'utf8')
@@ -9881,7 +9894,7 @@ export default defineAppConfig({
     migrations: 'server/db/migrations',
     seeders: 'server/db/seeders',
     commands: 'server/commands',
-    generatedSchema: 'server/db/schema.generated.ts',
+    generatedSchema: '.holo-js/generated/schema.generated.ts',
   },
 })
 `)
@@ -12663,7 +12676,7 @@ export default defineDatabaseConfig({
         jobs: 'server/jobs',
         authorizationPolicies: 'server/policies',
         authorizationAbilities: 'server/abilities',
-        generatedSchema: 'server/db/schema.generated.ts',
+        generatedSchema: '.holo-js/generated/schema.generated.ts',
       },
       models: [],
       migrations: [],
@@ -12717,7 +12730,7 @@ export default defineJob({
         channels: 'server/channels',
         authorizationPolicies: 'server/policies',
         authorizationAbilities: 'server/abilities',
-        generatedSchema: 'server/db/schema.generated.ts',
+        generatedSchema: '.holo-js/generated/schema.generated.ts',
       },
       models: [],
       migrations: [],
@@ -12849,7 +12862,7 @@ export default defineJob({
             jobs: 'server/jobs',
             authorizationPolicies: 'server/policies',
             authorizationAbilities: 'server/abilities',
-            generatedSchema: 'server/db/schema.generated.ts',
+            generatedSchema: '.holo-js/generated/schema.generated.ts',
           },
           models: [],
           migrations: [],
@@ -14073,7 +14086,7 @@ export const registry = {
     seeders: 'server/db/seeders',
     commands: 'server/commands',
     jobs: 'server/jobs',
-    generatedSchema: 'server/db/schema.generated.ts',
+    generatedSchema: '.holo-js/generated/schema.generated.ts',
   },
   models: [],
   migrations: [],
