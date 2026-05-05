@@ -35,9 +35,14 @@ const sharedRedisConfig = {
   },
 } as const
 
+type DispatchedQueueJob = {
+  readonly connection: unknown
+  readonly job: QueueReservedJob['envelope']
+}
+
 function createAsyncDriverFactory(
   driverName: 'redis' | 'database',
-  dispatched: ReturnType<typeof vi.fn>,
+  dispatched: (entry: DispatchedQueueJob) => void,
   close = vi.fn(async () => {}),
 ): QueueDriverFactory {
   return {
@@ -592,7 +597,7 @@ describe('@holo-js/queue runtime', () => {
   })
 
   it('supports fluent dispatch overrides individually and in combination for async connections', async () => {
-    const dispatched = vi.fn()
+    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
 
     configureQueueRuntime({
       config: {
@@ -705,7 +710,7 @@ describe('@holo-js/queue runtime', () => {
   })
 
   it('supports Queue.connection(name) and useQueueConnection(name) facade access', async () => {
-    const dispatched = vi.fn()
+    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
 
     configureQueueRuntime({
       config: {
@@ -848,7 +853,7 @@ describe('@holo-js/queue runtime', () => {
   })
 
   it('creates and caches driver factories and resolved drivers cleanly', async () => {
-    const dispatched = vi.fn()
+    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
     const redisFactory = createAsyncDriverFactory('redis', dispatched)
     const defaultFactories = queueRuntimeInternals.createQueueDriverFactoryMap()
     const arrayFactories = queueRuntimeInternals.createQueueDriverFactoryMap([redisFactory])
@@ -917,7 +922,7 @@ describe('@holo-js/queue runtime', () => {
   })
 
   it('resets runtime state without clearing registered jobs', async () => {
-    const dispatched = vi.fn()
+    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
     const close = vi.fn(async () => {})
 
     registerNamedJob('jobs.cleanup', {
@@ -1002,7 +1007,7 @@ describe('@holo-js/queue runtime', () => {
         },
       },
       driverFactories: [
-        createAsyncDriverFactory('database', vi.fn(), close),
+        createAsyncDriverFactory('database', vi.fn<(entry: DispatchedQueueJob) => void>(), close),
       ],
     })
 
@@ -1035,7 +1040,7 @@ describe('@holo-js/queue runtime', () => {
   })
 
   it('closes cached drivers when runtime configuration changes and swallows close failures', async () => {
-    const dispatched = vi.fn()
+    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
     const close = vi.fn(async () => {})
     const failingClose = vi.fn(async () => {
       throw new Error('close failed')

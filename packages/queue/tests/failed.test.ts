@@ -26,6 +26,8 @@ const sharedRedisConfig = {
   },
 } as const
 
+type DispatchedQueueJob = QueueReservedJob['envelope']
+
 function createReservedJob(
   name: string,
   id = `${name}-id`,
@@ -46,7 +48,7 @@ function createReservedJob(
   }
 }
 
-function createRedisDriverFactory(dispatched: ReturnType<typeof vi.fn>): QueueDriverFactory {
+function createRedisDriverFactory(dispatched: (job: DispatchedQueueJob) => void): QueueDriverFactory {
   return {
     driver: 'redis',
     create(connection, _context) {
@@ -108,7 +110,7 @@ describe('@holo-js/queue failed job store runtime hooks', () => {
       exception: 'boom',
       failedAt: 200,
     } as const
-    const dispatched = vi.fn()
+    const dispatched = vi.fn<(job: DispatchedQueueJob) => void>()
     const store: QueueFailedJobStore = {
       persistFailedJob: vi.fn(async () => persistedRecord),
       listFailedJobs: vi.fn(async () => Object.freeze([persistedRecord])),

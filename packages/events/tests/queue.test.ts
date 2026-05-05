@@ -44,6 +44,11 @@ const sharedRedisConfig = {
   },
 } as const
 
+type DispatchedQueueJob = {
+  readonly connection: unknown
+  readonly job: QueueJobEnvelope<QueueJsonValue>
+}
+
 async function runBun(args: string[]): Promise<{ stdout: string, stderr: string } | undefined> {
   try {
     return await execFileAsync('bun', args, {
@@ -60,7 +65,7 @@ async function runBun(args: string[]): Promise<{ stdout: string, stderr: string 
 
 function createAsyncDriverFactory(
   driverName: 'redis' | 'database',
-  dispatched: ReturnType<typeof vi.fn>,
+  dispatched: (entry: DispatchedQueueJob) => void,
 ): QueueDriverFactory {
   return {
     driver: driverName,
@@ -202,7 +207,7 @@ describe('@holo-js/events queue integration', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-03T10:00:00.000Z'))
 
-    const dispatched = vi.fn()
+    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
     configureQueueRuntime({
       config: normalizeQueueConfig({
         default: 'redis',
@@ -279,7 +284,7 @@ describe('@holo-js/events queue integration', () => {
   })
 
   it('fails queued listener execution clearly when the listener is removed before worker execution', async () => {
-    const dispatched = vi.fn()
+    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
     configureQueueRuntime({
       config: normalizeQueueConfig({
         default: 'redis',
@@ -323,7 +328,7 @@ describe('@holo-js/events queue integration', () => {
   })
 
   it('surfaces listener failures through the internal queue job so queue-native retries can occur', async () => {
-    const dispatched = vi.fn()
+    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
     configureQueueRuntime({
       config: normalizeQueueConfig({
         default: 'redis',
@@ -361,7 +366,7 @@ describe('@holo-js/events queue integration', () => {
   })
 
   it('fails queued listener execution clearly when the listener no longer targets the queued event', async () => {
-    const dispatched = vi.fn()
+    const dispatched = vi.fn<(entry: DispatchedQueueJob) => void>()
     configureQueueRuntime({
       config: normalizeQueueConfig({
         default: 'redis',

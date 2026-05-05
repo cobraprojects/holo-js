@@ -6,14 +6,14 @@ import type * as StorageRuntimeModule from '../src/runtime/composables/index'
 type StoredValue = string | Uint8Array | ArrayBuffer | Buffer
 
 interface MockStorageBackend {
-  getItemRaw: ReturnType<typeof vi.fn>
-  setItemRaw: ReturnType<typeof vi.fn>
-  hasItem: ReturnType<typeof vi.fn>
-  removeItem: ReturnType<typeof vi.fn>
-  getKeys: ReturnType<typeof vi.fn>
-  getMeta: ReturnType<typeof vi.fn>
-  setMeta: ReturnType<typeof vi.fn>
-  removeMeta: ReturnType<typeof vi.fn>
+  getItemRaw: (key: string) => Promise<StoredValue | null>
+  setItemRaw: (key: string, value: StoredValue) => Promise<void>
+  hasItem: (key: string) => Promise<boolean>
+  removeItem: (key: string) => Promise<void>
+  getKeys: (baseKey?: string) => Promise<string[]>
+  getMeta: (key: string) => Promise<StoredValue | null>
+  setMeta: (key: string, value: StoredValue) => Promise<void>
+  removeMeta: (key: string) => Promise<void>
 }
 
 let runtimeConfig: { holoStorage: HoloStorageRuntimeConfig, holo?: { appUrl?: string } }

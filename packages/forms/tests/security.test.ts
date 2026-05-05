@@ -315,14 +315,14 @@ console.log(JSON.stringify({
 
   it('loads the optional security module when process is unavailable', async () => {
     vi.resetModules()
-    vi.doMock('@holo-js/security', () => ({
+    ;(globalThis as typeof globalThis & { __holoFormsSecurityImport__?: () => Promise<unknown> }).__holoFormsSecurityImport__ = async () => ({
       csrf: {
         async verify() {},
       },
       async rateLimit() {
         return { limited: false }
       },
-    }))
+    })
     vi.stubGlobal('process', undefined)
 
     try {
@@ -333,7 +333,6 @@ console.log(JSON.stringify({
         rateLimit: expect.any(Function),
       })
     } finally {
-      vi.doUnmock('@holo-js/security')
       vi.resetModules()
       vi.unstubAllGlobals()
       formsSecurityInternals.resetSecurityModuleCache()

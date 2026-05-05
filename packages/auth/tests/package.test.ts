@@ -634,6 +634,7 @@ afterEach(() => {
   resetAuthRuntime()
   resetSessionRuntime()
   resetAuthClient()
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
