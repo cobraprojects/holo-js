@@ -2249,8 +2249,23 @@ async function rollbackRegisteredUser(
   serialized: SerializedAuthUser,
 ): Promise<void> {
   if (createdUser && typeof createdUser === 'object' && 'delete' in createdUser && typeof createdUser.delete === 'function') {
-    await createdUser.delete()
-    return
+    try {
+      await createdUser.delete()
+      return
+    } catch (deleteError) {
+      if (adapter.delete) {
+        try {
+          await adapter.delete(serialized.id)
+        } catch (adapterDeleteError) {
+          throw new AggregateError(
+            [deleteError, adapterDeleteError],
+            'Failed to rollback the registered user.',
+          )
+        }
+      }
+
+      throw deleteError
+    }
   }
 
   if (adapter.delete) {

@@ -1229,6 +1229,42 @@ describe('@holo-js/auth package runtime', () => {
     expect(runtime.emailVerificationTokenStore.records.size).toBe(0)
   })
 
+  it('falls back to adapter deletion when model deletion throws during registration rollback', async () => {
+    const runtime = configureRuntime({
+      emailVerificationRequired: true,
+      delivery: {
+        async sendEmailVerification() {
+          throw new Error('delivery failed')
+        },
+      },
+    })
+    const adapterDelete = vi.spyOn(runtime.usersProvider, 'delete')
+    const originalCreate = runtime.usersProvider.create.bind(runtime.usersProvider)
+
+    runtime.usersProvider.create = vi.fn(async (input) => {
+      const created = await originalCreate(input)
+
+      return {
+        ...created,
+        async delete() {
+          throw new Error('model delete failed')
+        },
+      }
+    })
+
+    await expect(register({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: 'secret-secret',
+      passwordConfirmation: 'secret-secret',
+    })).rejects.toThrow('delivery failed')
+
+    expect(adapterDelete).toHaveBeenCalledWith(1)
+    expect(runtime.usersProvider.users.size).toBe(0)
+    expect(runtime.usersProvider.usersByEmail.size).toBe(0)
+    expect(runtime.emailVerificationTokenStore.records.size).toBe(0)
+  })
+
   it('accepts non-email credentials when the application passes validated input', async () => {
     const runtime = configureRuntime({
       authConfig: defineAuthConfig({

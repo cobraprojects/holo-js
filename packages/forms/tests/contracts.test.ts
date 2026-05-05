@@ -651,6 +651,16 @@ describe('@holo-js/forms contracts', () => {
     expect(objectHeaders.get('cookie')).toBe('a=1; XSRF-TOKEN=token')
     expect(objectHeaders.get('x-trace')).toBe('trace-1,trace-2')
 
+    class GetOnlyHeaders {
+      get(name: string) {
+        return name === 'accept' ? 'application/json' : undefined
+      }
+    }
+
+    expect(() => formsInternals.normalizeRequestHeaders(new GetOnlyHeaders())).toThrow(
+      new TypeError('get-only header accessor is not iterable.'),
+    )
+
     const ignoredHeadersRequest = formsInternals.normalizeRequestLikeInput({
       web: {
         request: {

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { existsSync } from 'node:fs'
 import { createHash, createHmac } from 'node:crypto'
 import { createRequire } from 'node:module'
@@ -1402,15 +1403,22 @@ function createRequestAwareAuthContext<TContext extends {
   getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
   setRequestAccessors(accessors?: CreateHoloOptions['authRequest']): void
 } {
-  let currentAccessors = accessors
+  const requestAccessorStorage = new AsyncLocalStorage<{
+    readonly accessors?: CreateHoloOptions['authRequest']
+  }>()
   type RequestAccessContext = TContext & {
     getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
     getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
   }
 
-  const resolveRequestContext = (): RequestAccessContext => currentAccessors
-    ? attachAuthRequestAccessors(context, currentAccessors)
-    : context as RequestAccessContext
+  const resolveRequestContext = (): RequestAccessContext => {
+    const requestAccessors = requestAccessorStorage.getStore()
+    const resolvedAccessors = requestAccessors ? requestAccessors.accessors : accessors
+
+    return resolvedAccessors
+      ? attachAuthRequestAccessors(context, resolvedAccessors)
+      : context as RequestAccessContext
+  }
 
   return Object.freeze({
     ...context,
@@ -1421,7 +1429,9 @@ function createRequestAwareAuthContext<TContext extends {
       return resolveRequestContext().getRequestHeader?.(name)
     },
     setRequestAccessors(nextAccessors) {
-      currentAccessors = nextAccessors
+      requestAccessorStorage.enterWith({
+        accessors: nextAccessors,
+      })
     },
   })
 }

@@ -1,5 +1,61 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+type MockAuthRequest = {
+  getCookie(name: string): Promise<string | undefined>
+  getHeader(name: string): Promise<string | undefined>
+}
+
+function makeHoloCoreMock(
+  setCapturedAuthRequest: (authRequest: MockAuthRequest | undefined) => void,
+) {
+  return {
+    createHoloFrameworkAdapter: () => ({
+      capabilities: {},
+      async createProject() {
+        return {}
+      },
+      async initializeProject() {
+        return {}
+      },
+      createHelpers(options: {
+        authRequest?: MockAuthRequest
+      }) {
+        setCapturedAuthRequest(options.authRequest)
+
+        return {
+          async getApp() {
+            return {}
+          },
+          async getProject() {
+            return {}
+          },
+          async getSession() {
+            return undefined
+          },
+          async getAuth() {
+            return undefined
+          },
+          async useConfig() {
+            return undefined
+          },
+          async config() {
+            return undefined
+          },
+        }
+      },
+      async resetProject() {},
+      internals: {
+        getState() {
+          return {}
+        },
+        resolveOptions() {
+          return {}
+        },
+      },
+    }),
+  }
+}
+
 afterEach(() => {
   vi.doUnmock('@holo-js/core')
   vi.resetModules()
@@ -7,61 +63,10 @@ afterEach(() => {
 
 describe('@holo-js/adapter-sveltekit request context', () => {
   it('owns auth request accessors inside the adapter and resolves them from the current request event', async () => {
-    let capturedAuthRequest:
-      | {
-        getCookie(name: string): Promise<string | undefined>
-        getHeader(name: string): Promise<string | undefined>
-      }
-      | undefined
+    let capturedAuthRequest: MockAuthRequest | undefined
 
-    vi.doMock('@holo-js/core', () => ({
-      createHoloFrameworkAdapter: () => ({
-        capabilities: {},
-        async createProject() {
-          return {}
-        },
-        async initializeProject() {
-          return {}
-        },
-        createHelpers(options: {
-          authRequest?: {
-            getCookie(name: string): Promise<string | undefined>
-            getHeader(name: string): Promise<string | undefined>
-          }
-        }) {
-          capturedAuthRequest = options.authRequest
-
-          return {
-            async getApp() {
-              return {}
-            },
-            async getProject() {
-              return {}
-            },
-            async getSession() {
-              return undefined
-            },
-            async getAuth() {
-              return undefined
-            },
-            async useConfig() {
-              return undefined
-            },
-            async config() {
-              return undefined
-            },
-          }
-        },
-        async resetProject() {},
-        internals: {
-          getState() {
-            return {}
-          },
-          resolveOptions() {
-            return {}
-          },
-        },
-      }),
+    vi.doMock('@holo-js/core', () => makeHoloCoreMock((authRequest) => {
+      capturedAuthRequest = authRequest
     }))
 
     const { createSvelteKitHoloHelpers, runWithSvelteKitRequestEvent } = await import('../src')
@@ -83,70 +88,27 @@ describe('@holo-js/adapter-sveltekit request context', () => {
     }, async () => {
       await helpers.getProject()
 
-      await expect(capturedAuthRequest?.getCookie('session')).resolves.toBe('cookie-value')
-      await expect(capturedAuthRequest?.getHeader('x-request-id')).resolves.toBe('header-value')
+      expect(capturedAuthRequest).toBeDefined()
+      if (!capturedAuthRequest) {
+        throw new Error('Expected auth request accessors to be captured.')
+      }
+      await expect(capturedAuthRequest.getCookie('session')).resolves.toBe('cookie-value')
+      await expect(capturedAuthRequest.getHeader('x-request-id')).resolves.toBe('header-value')
     })
 
-    await expect(capturedAuthRequest?.getCookie('session')).resolves.toBeUndefined()
-    await expect(capturedAuthRequest?.getHeader('x-request-id')).resolves.toBeUndefined()
+    expect(capturedAuthRequest).toBeDefined()
+    if (!capturedAuthRequest) {
+      throw new Error('Expected auth request accessors to be captured.')
+    }
+    await expect(capturedAuthRequest.getCookie('session')).resolves.toBeUndefined()
+    await expect(capturedAuthRequest.getHeader('x-request-id')).resolves.toBeUndefined()
   })
 
   it('preserves explicit auth request overrides', async () => {
-    let capturedAuthRequest:
-      | {
-        getCookie(name: string): Promise<string | undefined>
-        getHeader(name: string): Promise<string | undefined>
-      }
-      | undefined
+    let capturedAuthRequest: MockAuthRequest | undefined
 
-    vi.doMock('@holo-js/core', () => ({
-      createHoloFrameworkAdapter: () => ({
-        capabilities: {},
-        async createProject() {
-          return {}
-        },
-        async initializeProject() {
-          return {}
-        },
-        createHelpers(options: {
-          authRequest?: {
-            getCookie(name: string): Promise<string | undefined>
-            getHeader(name: string): Promise<string | undefined>
-          }
-        }) {
-          capturedAuthRequest = options.authRequest
-
-          return {
-            async getApp() {
-              return {}
-            },
-            async getProject() {
-              return {}
-            },
-            async getSession() {
-              return undefined
-            },
-            async getAuth() {
-              return undefined
-            },
-            async useConfig() {
-              return undefined
-            },
-            async config() {
-              return undefined
-            },
-          }
-        },
-        async resetProject() {},
-        internals: {
-          getState() {
-            return {}
-          },
-          resolveOptions() {
-            return {}
-          },
-        },
-      }),
+    vi.doMock('@holo-js/core', () => makeHoloCoreMock((authRequest) => {
+      capturedAuthRequest = authRequest
     }))
 
     const customAuthRequest = {

@@ -315,6 +315,10 @@ function normalizeRequestHeaders(input: unknown): Headers {
       }
       return headers
     }
+
+    if (typeof input.get === 'function') {
+      throw new TypeError('get-only header accessor is not iterable.')
+    }
   }
 
   if (input && typeof input === 'object') {
