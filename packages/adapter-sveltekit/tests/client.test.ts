@@ -1,6 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { field, schema } from '@holo-js/forms'
 
+vi.mock('svelte/reactivity', () => ({
+  createSubscriber(start: (update: () => void) => void | (() => void)) {
+    let initialized = false
+
+    return () => {
+      if (!initialized) {
+        void start(() => {})
+        initialized = true
+      }
+    }
+  },
+}))
+
 describe('@holo-js/adapter-sveltekit client', () => {
   afterEach(() => {
     vi.resetModules()
@@ -8,19 +21,6 @@ describe('@holo-js/adapter-sveltekit client', () => {
   })
 
   it('wraps the shared form client with a Svelte reactive subscriber bridge', async () => {
-    vi.mock('svelte/reactivity', () => ({
-      createSubscriber(start: (update: () => void) => void | (() => void)) {
-        let initialized = false
-
-        return () => {
-          if (!initialized) {
-            void start(() => {})
-            initialized = true
-          }
-        }
-      },
-    }))
-
     const { useForm } = await import('../src/client')
     const login = schema({
       email: field.string().required().email(),
@@ -40,19 +40,6 @@ describe('@holo-js/adapter-sveltekit client', () => {
   })
 
   it('exposes nested keys that are added after the wrapper is created', async () => {
-    vi.mock('svelte/reactivity', () => ({
-      createSubscriber(start: (update: () => void) => void | (() => void)) {
-        let initialized = false
-
-        return () => {
-          if (!initialized) {
-            void start(() => {})
-            initialized = true
-          }
-        }
-      },
-    }))
-
     const { useForm } = await import('../src/client')
     const login = schema({
       profile: {
@@ -77,19 +64,6 @@ describe('@holo-js/adapter-sveltekit client', () => {
   })
 
   it('returns undefined descriptors for missing proxy keys', async () => {
-    vi.mock('svelte/reactivity', () => ({
-      createSubscriber(start: (update: () => void) => void | (() => void)) {
-        let initialized = false
-
-        return () => {
-          if (!initialized) {
-            void start(() => {})
-            initialized = true
-          }
-        }
-      },
-    }))
-
     const { useForm } = await import('../src/client')
     const login = schema({
       email: field.string().required().email(),
@@ -105,19 +79,6 @@ describe('@holo-js/adapter-sveltekit client', () => {
   })
 
   it('preserves array and date values as native objects through the proxy', async () => {
-    vi.mock('svelte/reactivity', () => ({
-      createSubscriber(start: (update: () => void) => void | (() => void)) {
-        let initialized = false
-
-        return () => {
-          if (!initialized) {
-            void start(() => {})
-            initialized = true
-          }
-        }
-      },
-    }))
-
     const { useForm } = await import('../src/client')
     const publishPost = schema({
       publishedAt: field.date().required(),

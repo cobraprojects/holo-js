@@ -1,26 +1,30 @@
-import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { dirname, join, relative, resolve } from 'node:path'
-import { tmpdir } from 'node:os'
 
 const packagesRoot = resolve('packages')
+const generatedConfigsRootPrefix = resolve('.holo-test-typecheck-')
 
 async function main() {
   const packageDirs = await collectPackageDirsWithTests()
-  const generatedConfigDirs = []
+  let generatedConfigsRootDir
 
   try {
+    generatedConfigsRootDir = await mkdtemp(generatedConfigsRootPrefix)
+
     for (const packageDir of packageDirs) {
-      const configPaths = await resolveTestTsconfigs(packageDir, generatedConfigDirs)
+      const configPaths = await resolveTestTsconfigs(packageDir, generatedConfigsRootDir)
       for (const configPath of configPaths) {
         await runTypecheck(configPath, packageDir)
       }
     }
   } finally {
-    await Promise.all(generatedConfigDirs.map(path => rm(path, {
-      recursive: true,
-      force: true,
-    })))
+    if (generatedConfigsRootDir) {
+      await rm(generatedConfigsRootDir, {
+        recursive: true,
+        force: true,
+      })
+    }
   }
 }
 
@@ -44,28 +48,27 @@ async function collectPackageDirsWithTests() {
   return packageDirs.sort()
 }
 
-async function resolveTestTsconfigs(packageDir, generatedConfigDirs) {
+async function resolveTestTsconfigs(packageDir, generatedConfigsRootDir) {
   const configPaths = []
   const explicitMainConfigPath = join(packageDir, 'tsconfig.tests.json')
 
   if (await pathExists(explicitMainConfigPath)) {
     configPaths.push(explicitMainConfigPath)
   } else {
-    configPaths.push(await createGeneratedMainTestConfig(packageDir, generatedConfigDirs))
+    configPaths.push(await createGeneratedMainTestConfig(packageDir, generatedConfigsRootDir))
   }
 
   const typeTestFiles = await collectTypeTestFiles(packageDir)
   if (typeTestFiles.length > 0) {
-    configPaths.push(await createGeneratedTypeTestsBatchConfig(packageDir, typeTestFiles, generatedConfigDirs))
+    configPaths.push(await createGeneratedTypeTestsBatchConfig(packageDir, typeTestFiles, generatedConfigsRootDir))
   }
 
   return configPaths
 }
 
-async function createGeneratedMainTestConfig(packageDir, generatedConfigDirs) {
-  const generatedConfigDir = await mkdtemp(join(tmpdir(), 'holo-test-typecheck-'))
-  generatedConfigDirs.push(generatedConfigDir)
-
+async function createGeneratedMainTestConfig(packageDir, generatedConfigsRootDir) {
+  const generatedConfigDir = join(generatedConfigsRootDir, relative(packagesRoot, packageDir), 'main')
+  await mkdir(generatedConfigDir, { recursive: true })
   const generatedConfigPath = join(generatedConfigDir, 'tsconfig.json')
   const relativeExtendsPath = relative(generatedConfigDir, join(packageDir, 'tsconfig.json'))
 
@@ -88,10 +91,9 @@ async function createGeneratedMainTestConfig(packageDir, generatedConfigDirs) {
   return generatedConfigPath
 }
 
-async function createGeneratedTypeTestsBatchConfig(packageDir, typeTestFiles, generatedConfigDirs) {
-  const generatedConfigDir = await mkdtemp(join(tmpdir(), 'holo-type-test-typecheck-'))
-  generatedConfigDirs.push(generatedConfigDir)
-
+async function createGeneratedTypeTestsBatchConfig(packageDir, typeTestFiles, generatedConfigsRootDir) {
+  const generatedConfigDir = join(generatedConfigsRootDir, relative(packagesRoot, packageDir), 'type-tests')
+  await mkdir(generatedConfigDir, { recursive: true })
   const generatedConfigPath = join(generatedConfigDir, 'tsconfig.json')
   const relativeExtendsPath = relative(generatedConfigDir, join(packageDir, 'tsconfig.json'))
 

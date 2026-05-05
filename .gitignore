@@ -56,6 +56,7 @@ Thumbs.db
 coverage
 .nyc_output
 .vitest-builds
+.holo-test-typecheck-*
 .eslintcache-generated
 .eslintcache-main
 /docs
