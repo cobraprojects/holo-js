@@ -244,6 +244,7 @@ type AuthProviderAdapterBase<TUser> = {
   findById(id: string | number): Promise<TUser | null>
   findByCredentials(credentials: Readonly<Record<string, unknown>>): Promise<TUser | null>
   create(input: Readonly<Record<string, unknown>>): Promise<TUser>
+  delete?(id: string | number): Promise<void>
   update?(user: TUser, input: Readonly<Record<string, unknown>>): Promise<TUser>
   matchesUser?(user: unknown): boolean
   getId(user: TUser): string | number
@@ -438,6 +439,10 @@ export interface AuthSessionRuntime {
     sessionId: string,
     options?: { readonly store?: string },
   ): Promise<string>
+  consumeRememberMeToken?(
+    token: string,
+    options?: { readonly store?: string },
+  ): Promise<AuthSessionRecord | null>
   cookie?(
     name: string,
     value: string,

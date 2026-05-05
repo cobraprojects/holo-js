@@ -228,7 +228,7 @@ describe('@holo-js/forms contracts', () => {
     })
   })
 
-  it('excludes Laravel-style dontFlash fields from serialized failure payloads', async () => {
+  it('excludes password-like dontFlash fields while preserving transport tokens in serialized failure payloads', async () => {
     const registerUser = schema({
       email: field.string().required().email(),
       password: field.string().required().min(8),
@@ -259,6 +259,7 @@ describe('@holo-js/forms contracts', () => {
       submitted: true,
       values: {
         email: 'bad',
+        token: 'reset-token',
       },
       errors: {
         email: ['Invalid email: Received "bad"'],
@@ -270,10 +271,26 @@ describe('@holo-js/forms contracts', () => {
       valid: false,
       values: {
         email: 'bad',
+        token: 'reset-token',
       },
       errors: {
         email: ['Invalid email: Received "bad"'],
       },
+    })
+  })
+
+  it('preserves verification and reset transport tokens while still stripping passwords', () => {
+    expect(formsInternals.sanitizeFlashedInput({
+      email: 'ava@example.com',
+      password: 'secret-secret',
+      token: 'reset-token',
+      verification_token: 'verify-token',
+      verificationCode: '123456',
+    })).toEqual({
+      email: 'ava@example.com',
+      token: 'reset-token',
+      verification_token: 'verify-token',
+      verificationCode: '123456',
     })
   })
 
@@ -578,6 +595,13 @@ describe('@holo-js/forms contracts', () => {
         },
       },
     })).toBeUndefined()
+    expect(formsInternals.normalizeRequestLikeInput({
+      req: {
+        headers: {
+          email: 'ava@example.com',
+        },
+      },
+    })).toBeUndefined()
   })
 
   it('marks streamed request-like bodies as duplex requests', async () => {
@@ -609,7 +633,7 @@ describe('@holo-js/forms contracts', () => {
     ])).toBe(true)
     expect(formsInternals.isRequestLikeHeaders({
       host: 'forms.example.test',
-    })).toBe(true)
+    })).toBe(false)
     expect(formsInternals.isRequestLikeHeaders('accept: application/json')).toBe(false)
 
     const tupleHeaders = formsInternals.normalizeRequestHeaders([
@@ -626,6 +650,16 @@ describe('@holo-js/forms contracts', () => {
     })
     expect(objectHeaders.get('cookie')).toBe('a=1; XSRF-TOKEN=token')
     expect(objectHeaders.get('x-trace')).toBe('trace-1,trace-2')
+
+    class GetOnlyHeaders {
+      get(name: string) {
+        return name === 'accept' ? 'application/json' : undefined
+      }
+    }
+
+    expect(() => formsInternals.normalizeRequestHeaders(new GetOnlyHeaders())).toThrow(
+      new TypeError('get-only header accessor is not iterable.'),
+    )
 
     const ignoredHeadersRequest = formsInternals.normalizeRequestLikeInput({
       web: {
@@ -768,9 +802,7 @@ describe('@holo-js/forms contracts', () => {
         },
       },
     })
-    expect(defaultGetRequest?.method).toBe('GET')
-    expect(defaultGetRequest?.url).toBe('http://forms.example.test/')
-    expect(await defaultGetRequest?.text()).toBe('')
+    expect(defaultGetRequest).toBeUndefined()
     expect(formsInternals.normalizeRequestLikeInput(null)).toBeUndefined()
   })
 

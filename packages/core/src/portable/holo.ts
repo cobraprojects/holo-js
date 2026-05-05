@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { existsSync } from 'node:fs'
 import { createHash, createHmac } from 'node:crypto'
 import { createRequire } from 'node:module'
@@ -1381,6 +1382,57 @@ function attachAuthRequestAccessors<TContext extends {
     ...context,
     getRequestCookie: accessors.getCookie,
     getRequestHeader: accessors.getHeader,
+  })
+}
+
+function createRequestAwareAuthContext<TContext extends {
+  activate(): void
+  getSessionId(guardName: string): string | undefined
+  setSessionId(guardName: string, sessionId?: string): void
+  getCachedUser(guardName: string): unknown
+  setCachedUser(guardName: string, user: unknown): void
+  getAccessToken?(guardName: string): string | undefined
+  setAccessToken?(guardName: string, token?: string): void
+  getRememberToken?(guardName: string): string | undefined
+  setRememberToken?(guardName: string, token?: string): void
+}>(
+  context: TContext,
+  accessors?: CreateHoloOptions['authRequest'],
+): TContext & {
+  getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
+  getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
+  setRequestAccessors(accessors?: CreateHoloOptions['authRequest']): void
+} {
+  const requestAccessorStorage = new AsyncLocalStorage<{
+    readonly accessors?: CreateHoloOptions['authRequest']
+  }>()
+  type RequestAccessContext = TContext & {
+    getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
+    getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
+  }
+
+  const resolveRequestContext = (): RequestAccessContext => {
+    const requestAccessors = requestAccessorStorage.getStore()
+    const resolvedAccessors = requestAccessors ? requestAccessors.accessors : accessors
+
+    return resolvedAccessors
+      ? attachAuthRequestAccessors(context, resolvedAccessors)
+      : context as RequestAccessContext
+  }
+
+  return Object.freeze({
+    ...context,
+    getRequestCookie(name) {
+      return resolveRequestContext().getRequestCookie?.(name)
+    },
+    getRequestHeader(name) {
+      return resolveRequestContext().getRequestHeader?.(name)
+    },
+    setRequestAccessors(nextAccessors) {
+      requestAccessorStorage.enterWith({
+        accessors: nextAccessors,
+      })
+    },
   })
 }
 
@@ -3215,6 +3267,7 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
 
     type AuthModelRepository = {
       saveEntity?(entity: unknown, internalColumns?: ReadonlySet<string>): Promise<unknown>
+      delete?(id: unknown): Promise<void>
     }
 
     const resolvedModule = await resolveAuthProviderRuntime(projectRoot, loadedConfig, providerConfig.model) as {
@@ -3241,6 +3294,7 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
       getRepository?(): AuthModelRepository
       create(values: Record<string, unknown>): Promise<unknown>
       update(id: unknown, values: Record<string, unknown>): Promise<unknown>
+      delete?(id: unknown): Promise<void>
     }
     const throwPendingSchema = (): never => {
       throw new Error(
@@ -3412,6 +3466,27 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
         const persisted = entity ? await saveAuthEntity(entity, values) : null
 
         return markProviderUser(persisted ?? await model.create(values), providerName)
+      },
+      async delete(id: string | number) {
+        const repository = typeof model.getRepository === 'function'
+          ? model.getRepository()
+          : null
+        if (repository && typeof repository.delete === 'function') {
+          await repository.delete(id)
+          return
+        }
+
+        if (typeof model.delete === 'function') {
+          await model.delete(id)
+          return
+        }
+
+        const existing = typeof model.find === 'function'
+          ? await model.find(id)
+          : null
+        if (existing && typeof existing === 'object' && 'delete' in existing && typeof existing.delete === 'function') {
+          await existing.delete()
+        }
       },
       /* v8 ignore start -- adapter shape mirrors the auth package contract; core tests cover the wired runtime behavior */
       async update(user: unknown, input: Readonly<Record<string, unknown>>) {
@@ -3801,6 +3876,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   readonly auth?: HoloAuthRuntimeBinding
   readonly authContext?: {
     activate(): void
+    setRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
   }
 }> {
   const cacheConfigured = hasLoadedConfigFile(loadedConfig, 'cache')
@@ -4031,7 +4107,9 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
 
   const authModule = await loadAuthModule(authConfigured)
   const authorizationModule = await loadAuthorizationModule()
-  let authContext: ReturnType<AuthModule['createAsyncAuthContext']> | undefined
+  let authContext: ReturnType<AuthModule['createAsyncAuthContext']> & {
+    setRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
+  } | undefined
   const workosModule = authConfigUsesWorkosProviders(loadedConfig)
     ? await loadWorkosModule(true)
     : undefined
@@ -4084,9 +4162,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     const authStores = createCoreAuthStores(loadedConfig)
 
     const baseAuthContext = authModule.createAsyncAuthContext()
-    authContext = options.authRequest
-      ? attachAuthRequestAccessors(baseAuthContext, options.authRequest)
-      : baseAuthContext
+    authContext = createRequestAwareAuthContext(baseAuthContext, options.authRequest)
     authModule.configureAuthRuntime({
       config: loadedConfig.auth,
       session: sessionModule.getSessionRuntime(),
@@ -4227,7 +4303,10 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   let activeAuthorizationModule: AuthorizationModule | undefined
   let activeSessionRuntime: HoloSessionRuntimeBinding | undefined
   let activeAuthRuntime: HoloAuthRuntimeBinding | undefined
-  let activeAuthContext: { activate(): void } | undefined
+  let activeAuthContext: {
+    activate(): void
+    setRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
+  } | undefined
   let previousOptionalSubsystemBindings: OptionalSubsystemRuntimeBindings | undefined
   const previousRenderView = options.renderView
     ? getRuntimeState().renderView
@@ -4237,7 +4316,9 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     drivers: new Map<string, HoloQueueDriverBinding>(),
   }) as HoloQueueRuntimeBinding
 
-  const runtime: MutableHoloRuntime<TCustom> = {
+  const runtime: MutableHoloRuntime<TCustom> & {
+    setAuthRequestAccessors(accessors?: CreateHoloOptions['authRequest']): void
+  } = {
     projectRoot,
     loadedConfig,
     registry,
@@ -4257,6 +4338,9 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     initialized: false,
     useConfig: accessors.useConfig,
     config: accessors.config,
+    setAuthRequestAccessors(authRequest) {
+      activeAuthContext?.setRequestAccessors?.(authRequest)
+    },
     async initialize() {
       if (runtime.initialized) {
         throw new Error('Holo runtime is already initialized.')
@@ -4418,6 +4502,9 @@ export async function initializeHolo<TCustom extends HoloConfigMap = HoloConfigM
       throw new Error(`A Holo runtime is already initialized for "${current.projectRoot}".`)
     }
 
+    ;(current as HoloRuntime<TCustom> & {
+      setAuthRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
+    }).setAuthRequestAccessors?.(options.authRequest)
     return current
   }
 
@@ -4426,7 +4513,12 @@ export async function initializeHolo<TCustom extends HoloConfigMap = HoloConfigM
       throw new Error(`A Holo runtime is already initializing for "${state.pendingProjectRoot}".`)
     }
 
-    return state.pending as Promise<HoloRuntime<TCustom>>
+    return (state.pending as Promise<HoloRuntime<TCustom>>).then((runtime) => {
+      ;(runtime as HoloRuntime<TCustom> & {
+        setAuthRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
+      }).setAuthRequestAccessors?.(options.authRequest)
+      return runtime
+    })
   }
 
   const pending = (async () => {

@@ -8,11 +8,6 @@ const DEFAULT_DONT_FLASH_FIELDS = Object.freeze([
   'password',
   'password_confirmation',
   'passwordConfirmation',
-  'token',
-  'verification_code',
-  'verificationCode',
-  'verification_token',
-  'verificationToken',
 ])
 
 const DEFAULT_DONT_FLASH_FIELD_SET = new Set<string>(DEFAULT_DONT_FLASH_FIELDS)

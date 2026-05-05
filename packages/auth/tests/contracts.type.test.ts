@@ -96,6 +96,7 @@ describe('@holo-js/auth typing', () => {
     }
 
     expectTypeOf(adapter.serialize).returns.toEqualTypeOf<AppAuthUser>()
+    expectTypeOf(adapter.delete).toEqualTypeOf<((id: string | number) => Promise<void>) | undefined>()
     expectTypeOf(auth.user).returns.toEqualTypeOf<Promise<AppAuthUser | null>>()
     expectTypeOf(auth.login).returns.toEqualTypeOf<Promise<AuthResult<AuthEstablishedSession, AuthLoginErrorCode>>>()
     expectTypeOf(auth.loginUsing).returns.toEqualTypeOf<Promise<AuthEstablishedSession>>()

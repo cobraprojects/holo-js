@@ -176,6 +176,20 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
     return record
   }
 
+  async delete(id: string | number): Promise<void> {
+    const numericId = typeof id === 'number' ? id : Number.parseInt(String(id), 10)
+    const existing = this.users.get(numericId)
+    if (!existing) {
+      return
+    }
+
+    this.users.delete(numericId)
+    this.usersByEmail.delete(existing.email)
+    if (existing.phone) {
+      this.usersByPhone.delete(existing.phone)
+    }
+  }
+
   async update(user: UserRecord, input: Readonly<Record<string, unknown>>): Promise<UserRecord> {
     const currentEmail = user.email
     if (typeof input.name === 'string') {
@@ -431,6 +445,7 @@ function configureRuntime(options: {
   emailVerificationRequired?: boolean
   adminProvider?: InMemoryProviderAdapter
   authConfig?: HoloAuthConfig
+  delivery?: Partial<AuthDeliveryHook>
   passwordHasher?: NonNullable<Parameters<typeof configureAuthRuntime>[0]>['passwordHasher']
 } = {}) {
   const sessionStore = new InMemorySessionStore()
@@ -455,6 +470,7 @@ function configureRuntime(options: {
         tokenValue: input.token.plainTextToken,
       })
     },
+    ...options.delivery,
   }
   configureSessionRuntime({
     config: {
@@ -1189,6 +1205,64 @@ describe('@holo-js/auth package runtime', () => {
       password: 'secret-secret',
       passwordConfirmation: 'different-secret',
     }), 'password_confirmation_mismatch')
+  })
+
+  it('rolls back registration when email verification creation fails', async () => {
+    const runtime = configureRuntime({
+      emailVerificationRequired: true,
+      delivery: {
+        async sendEmailVerification() {
+          throw new Error('delivery failed')
+        },
+      },
+    })
+
+    await expect(register({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: 'secret-secret',
+      passwordConfirmation: 'secret-secret',
+    })).rejects.toThrow('delivery failed')
+
+    expect(runtime.usersProvider.users.size).toBe(0)
+    expect(runtime.usersProvider.usersByEmail.size).toBe(0)
+    expect(runtime.emailVerificationTokenStore.records.size).toBe(0)
+  })
+
+  it('falls back to adapter deletion when model deletion throws during registration rollback', async () => {
+    const runtime = configureRuntime({
+      emailVerificationRequired: true,
+      delivery: {
+        async sendEmailVerification() {
+          throw new Error('delivery failed')
+        },
+      },
+    })
+    const adapterDelete = vi.spyOn(runtime.usersProvider, 'delete')
+    const originalCreate = runtime.usersProvider.create.bind(runtime.usersProvider)
+
+    runtime.usersProvider.create = vi.fn(async (input) => {
+      const created = await originalCreate(input)
+
+      return {
+        ...created,
+        async delete() {
+          throw new Error('model delete failed')
+        },
+      }
+    })
+
+    await expect(register({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: 'secret-secret',
+      passwordConfirmation: 'secret-secret',
+    })).rejects.toThrow('delivery failed')
+
+    expect(adapterDelete).toHaveBeenCalledWith(1)
+    expect(runtime.usersProvider.users.size).toBe(0)
+    expect(runtime.usersProvider.usersByEmail.size).toBe(0)
+    expect(runtime.emailVerificationTokenStore.records.size).toBe(0)
   })
 
   it('accepts non-email credentials when the application passes validated input', async () => {
@@ -2903,6 +2977,76 @@ describe('@holo-js/auth package runtime', () => {
     await expect(logout()).resolves.toMatchObject({
       guard: 'web',
     })
+  })
+
+  it('restores a session from the remember cookie when no session cookie is present', async () => {
+    const runtime = configureRuntime()
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const remembered = await auth.guard('web').loginUsing(created, {
+      remember: true,
+    })
+    const restartedContext = Object.freeze({
+      ...authRuntimeInternals.createMemoryAuthContext(),
+      getRequestCookie(name: string) {
+        if (name === 'holo_session_remember') {
+          return remembered.rememberToken
+        }
+
+        return undefined
+      },
+    })
+
+    configureAuthRuntime({
+      config: defineAuthConfig({
+        defaults: {
+          guard: 'web',
+          passwords: 'users',
+        },
+        guards: {
+          web: {
+            driver: 'session',
+            provider: 'users',
+          },
+          admin: {
+            driver: 'session',
+            provider: 'admins',
+          },
+          api: {
+            driver: 'token',
+            provider: 'users',
+          },
+        },
+        providers: {
+          users: {
+            model: 'User',
+          },
+          admins: {
+            model: 'Admin',
+          },
+        },
+      }),
+      session: getSessionRuntime(),
+      providers: {
+        users: runtime.usersProvider,
+        admins: runtime.adminsProvider,
+      },
+      tokens: runtime.tokenStore,
+      emailVerificationTokens: runtime.emailVerificationTokenStore,
+      passwordResetTokens: runtime.passwordResetTokenStore,
+      context: restartedContext,
+    })
+
+    await expect(auth.guard('web').user()).resolves.toMatchObject({
+      id: created.id,
+      email: created.email,
+    })
+    expect(restartedContext.getSessionId('web')).toBe(remembered.sessionId)
+    expect(restartedContext.getRememberToken?.('web')).toBe(remembered.rememberToken)
   })
 
   it('clears hosted provider cookies without inheriting custom app session scope', async () => {

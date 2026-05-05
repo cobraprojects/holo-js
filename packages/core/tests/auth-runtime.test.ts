@@ -6,7 +6,7 @@ import { createSchemaService, DB } from '@holo-js/db'
 import { authRuntimeInternals } from '../../auth/src'
 import { listFakeSentMails, resetFakeSentMails } from '@holo-js/mail'
 import { configureNotificationsRuntime } from '@holo-js/notifications'
-import { createHolo, holoRuntimeInternals, resetHoloRuntime } from '../src'
+import { createHolo, holoRuntimeInternals, initializeHolo, resetHoloRuntime } from '../src'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
 const tempDirs: string[] = []
@@ -1215,6 +1215,86 @@ export default {
     })
 
     await runtime.shutdown()
+  })
+
+  it('refreshes auth request accessors when initializeHolo reuses the current runtime', async () => {
+    const root = await createProject({
+      auth: true,
+    })
+
+    await initializeHolo(root, {
+      authRequest: {
+        getCookie(name) {
+          return `${name}-first`
+        },
+      },
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    expect(await authRuntimeInternals.getRuntimeBindings().context.getRequestCookie?.('session')).toBe('session-first')
+
+    await initializeHolo(root, {
+      authRequest: {
+        getCookie(name) {
+          return `${name}-second`
+        },
+      },
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    expect(await authRuntimeInternals.getRuntimeBindings().context.getRequestCookie?.('session')).toBe('session-second')
+  })
+
+  it('keeps auth request accessors isolated per async request when initializeHolo reuses the current runtime', async () => {
+    const root = await createProject({
+      auth: true,
+    })
+
+    await initializeHolo(root, {
+      authRequest: {
+        getCookie(name) {
+          return `${name}-default`
+        },
+      },
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    const [firstCookie, secondCookie] = await Promise.all([
+      Promise.resolve().then(async () => {
+        await initializeHolo(root, {
+          authRequest: {
+            getCookie(name) {
+              return `${name}-first`
+            },
+          },
+          processEnv: process.env,
+          preferCache: false,
+        })
+
+        await new Promise(resolvePromise => setTimeout(resolvePromise, 10))
+
+        return authRuntimeInternals.getRuntimeBindings().context.getRequestCookie?.('session')
+      }),
+      Promise.resolve().then(async () => {
+        await initializeHolo(root, {
+          authRequest: {
+            getCookie(name) {
+              return `${name}-second`
+            },
+          },
+          processEnv: process.env,
+          preferCache: false,
+        })
+
+        return authRuntimeInternals.getRuntimeBindings().context.getRequestCookie?.('session')
+      }),
+    ])
+
+    expect(await firstCookie).toBe('session-first')
+    expect(await secondCookie).toBe('session-second')
   })
 
   it('boots auth with the default file session store when session config is omitted', async () => {
