@@ -352,6 +352,15 @@ export default defineDatabaseConfig({
 
   it('generates a server import wrapper for model defaults when server models exist', async () => {
     const root = await createProject()
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  paths: {
+    generatedSchema: '.holo-js/generated/schema.generated.ts',
+  },
+})
+`, 'utf8')
     await writeFile(join(root, 'server/models/User.ts'), 'export default class User {}\nexport function prepareAuthCreateInput() {}\n', 'utf8')
     await writeFile(join(root, 'server/models/Admin.mts'), 'export default class Admin {}\nexport function prepareAuthCreateInput() {}\n', 'utf8')
     await writeFile(join(root, 'server/models/README.md'), '# ignored\n', 'utf8')
