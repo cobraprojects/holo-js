@@ -1,6 +1,7 @@
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { ConfigurationError } from '../core/errors'
 import { unsafeSql } from '../core/unsafe'
+import { resetGlobalModelRegistry } from '../model/ModelRegistry'
 import { resetMorphRegistry } from '../model/morphRegistry'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
 import type { ConnectionManager } from '../connection/ConnectionManager'
@@ -109,5 +110,6 @@ export function configureDB(manager: ConnectionManager): void {
 
 export function resetDB(): void {
   DB.reset()
+  resetGlobalModelRegistry()
   resetMorphRegistry()
 }

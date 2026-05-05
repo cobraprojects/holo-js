@@ -169,6 +169,7 @@ export {
   generateUlid,
   generateUuidV7,
   getModelDefinition,
+  resetGlobalModelRegistry,
   resetMorphRegistry,
   resolveMorphModel,
   serializeModels,

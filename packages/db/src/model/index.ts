@@ -1,6 +1,6 @@
 export { Entity } from './Entity'
 export { ModelEventService, createModelEventService } from './ModelEventService'
-export { ModelRegistry, createModelRegistry } from './ModelRegistry'
+export { ModelRegistry, createModelRegistry, resetGlobalModelRegistry } from './ModelRegistry'
 export { binaryCast, encryptedCast, enumCast } from './casts'
 export { createModelCollection } from './collection'
 export { ModelQueryBuilder } from './ModelQueryBuilder'

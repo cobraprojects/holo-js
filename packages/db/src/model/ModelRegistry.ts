@@ -68,3 +68,7 @@ export function registerGlobalModel(reference: ModelDefinitionLike): ModelDefini
 export function getGlobalModel(name: string): ModelDefinitionLike | undefined {
   return globalModels.get(name)
 }
+
+export function resetGlobalModelRegistry(): void {
+  globalModels.clear()
+}
