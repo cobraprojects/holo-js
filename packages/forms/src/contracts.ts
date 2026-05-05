@@ -9,9 +9,11 @@ import {
 } from '@holo-js/validation'
 import { FormContractError } from './errors'
 import type { FormSchema } from './schema'
+import { sanitizeFlashedInput } from './sensitiveInput'
 
 export { FormContractError } from './errors'
 export { type FormSchema, type InferFormData, isFormSchema, schema } from './schema'
+export { sanitizeFlashedInput } from './sensitiveInput'
 
 export interface FormFailurePayload<TData> {
   readonly ok: false
@@ -120,7 +122,7 @@ function serializeSubmissionState<TData>(
   return Object.freeze({
     valid,
     submitted: true as const,
-    values,
+    values: sanitizeFlashedInput(values),
     errors: errors.flatten(),
   })
 }
@@ -138,7 +140,7 @@ function createSubmission<TData>(
     ok: false,
     status: normalizedFailureStatus,
     valid: false as const,
-    values: values as Partial<TData>,
+    values: sanitizeFlashedInput(values) as Partial<TData>,
     errors: errors.flatten(),
   })
 
@@ -347,6 +349,33 @@ function extractRequestLikeBody(
   return String(rawBody)
 }
 
+function isStructuredRequestLikeObject(value: unknown): value is {
+  readonly method?: string
+  readonly path?: string
+  readonly url?: string | URL
+  readonly headers?: RequestLikeHeaders
+  readonly body?: unknown
+} {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const candidate = value as {
+    readonly method?: unknown
+    readonly path?: unknown
+    readonly url?: unknown
+    readonly headers?: unknown
+    readonly body?: unknown
+  }
+
+  return typeof candidate.method === 'string'
+    || typeof candidate.path === 'string'
+    || typeof candidate.url === 'string'
+    || candidate.url instanceof URL
+    || isRequestLikeHeaders(candidate.headers)
+    || typeof candidate.body !== 'undefined'
+}
+
 function isRequestLikeInput(input: unknown): input is FormRequestLikeInput {
   if (!input || typeof input !== 'object') {
     return false
@@ -357,15 +386,15 @@ function isRequestLikeInput(input: unknown): input is FormRequestLikeInput {
     return true
   }
 
-  if (!!candidate.web?.request && typeof candidate.web.request === 'object') {
+  if (isStructuredRequestLikeObject(candidate.web?.request)) {
     return true
   }
 
-  if (!!candidate.req && typeof candidate.req === 'object') {
+  if (isStructuredRequestLikeObject(candidate.req)) {
     return true
   }
 
-  if (!!candidate.node?.req && typeof candidate.node.req === 'object') {
+  if (isStructuredRequestLikeObject(candidate.node?.req)) {
     return true
   }
 
@@ -548,5 +577,6 @@ export const formsInternals = {
   normalizeRequestLikeInput,
   normalizeStatus,
   normalizeRequestHeaders,
+  sanitizeFlashedInput,
   serializeSubmissionState,
 }

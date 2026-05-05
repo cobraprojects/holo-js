@@ -3,8 +3,10 @@ export {
   createFailedSubmission,
   createSuccessfulSubmission,
   formsInternals,
+  sanitizeFlashedInput,
   validate,
 } from './contracts'
+export { sensitiveInputInternals } from './sensitiveInput'
 export {
   schema,
   isFormSchema,

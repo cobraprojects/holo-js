@@ -8,6 +8,7 @@ import type {
   SerializedFormSubmission,
 } from './contracts'
 import { FormContractError } from './errors'
+import { clearSensitiveInputValues, sanitizeFlashedInput } from './sensitiveInput'
 import {
   type FormLikeValidationInput,
   createErrorBag,
@@ -135,7 +136,7 @@ function serializeSubmissionState<TData>(
   return Object.freeze({
     valid,
     submitted: true as const,
-    values,
+    values: sanitizeFlashedInput(values),
     errors: errors.flatten(),
   })
 }
@@ -153,7 +154,7 @@ function createSubmission<TData>(
     ok: false,
     status: normalizedFailureStatus,
     valid: false as const,
-    values: values as Partial<TData>,
+    values: sanitizeFlashedInput(values) as Partial<TData>,
     errors: errors.flatten(),
   })
 
@@ -825,6 +826,7 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
 
       if ('ok' in normalized && normalized.ok === false) {
         state.values = mergeValues(state.values, normalized.values)
+        clearSensitiveInputValues(state.values)
         state.flattenedErrors = normalized.errors
         state.lastSubmission = normalized
         notifyListeners(state)
@@ -833,6 +835,7 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
 
       const normalizedSubmission = normalized as FormSubmissionResult<TData>
       state.values = mergeValues(state.values, normalizedSubmission.values)
+      clearSensitiveInputValues(state.values)
       state.flattenedErrors = normalizedSubmission.errors.flatten()
       state.lastSubmission = normalizedSubmission.valid
         ? undefined

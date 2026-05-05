@@ -1,11 +1,9 @@
-import { createRequire } from 'node:module'
-import { dirname, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import {
   createHoloFrameworkAdapter,
   type HoloAdapterProject,
   type HoloFrameworkOptions,
 } from '@holo-js/core'
+import { getRequestEvent } from '$app/server'
 import type { HoloConfigMap } from '@holo-js/config'
 export {
   holoSvelteKitTransport,
@@ -16,25 +14,6 @@ export type SvelteKitHoloOptions = HoloFrameworkOptions
 
 export type SvelteKitHoloProject<TCustom extends HoloConfigMap = HoloConfigMap> = HoloAdapterProject<TCustom>
 
-const require = createRequire(resolve(process.cwd(), 'package.json'))
-
-type SvelteKitRequestEventModule = {
-  readonly getRequestEvent: () => {
-    readonly cookies: {
-      get(name: string): string | undefined
-    }
-    readonly request: {
-      readonly headers: Headers
-    }
-  }
-}
-
-async function loadSvelteKitRequestEventModule(): Promise<SvelteKitRequestEventModule> {
-  const packageJsonPath = require.resolve('@sveltejs/kit/package.json')
-  const modulePath = resolve(dirname(packageJsonPath), 'src/exports/internal/server.js')
-  return await import(pathToFileURL(modulePath).href) as SvelteKitRequestEventModule
-}
-
 function withSvelteKitAuthRequest(options: SvelteKitHoloOptions = {}): SvelteKitHoloOptions {
   if (options.authRequest) {
     return options
@@ -44,12 +23,12 @@ function withSvelteKitAuthRequest(options: SvelteKitHoloOptions = {}): SvelteKit
     ...options,
     authRequest: {
       async getCookie(name: string) {
-        const { getRequestEvent } = await loadSvelteKitRequestEventModule()
-        return getRequestEvent().cookies.get(name) ?? undefined
+        const event = getRequestEvent()
+        return event.cookies.get(name) ?? undefined
       },
       async getHeader(name: string) {
-        const { getRequestEvent } = await loadSvelteKitRequestEventModule()
-        return getRequestEvent().request.headers.get(name) ?? undefined
+        const event = getRequestEvent()
+        return event.request.headers.get(name) ?? undefined
       },
     },
   }

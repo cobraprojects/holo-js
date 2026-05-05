@@ -63,6 +63,9 @@ function VerifyEmailPageContent() {
         ? payload.errors._root[0]
         : 'Could not send another verification email.'
       setResendError(typeof message === 'string' ? message : 'Could not send another verification email.')
+    } catch (error) {
+      console.error('Failed to resend verification email.', error)
+      setResendError('Could not send another verification email.')
     } finally {
       setResending(false)
     }

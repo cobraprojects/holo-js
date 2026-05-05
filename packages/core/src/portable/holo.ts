@@ -18,6 +18,7 @@ import {
 import {
   configureDB,
   DB,
+  Entity,
   resetDB,
 } from '@holo-js/db'
 import { importBundledRuntimeModule } from '../runtimeModule'
@@ -3208,6 +3209,14 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
       first(): Promise<unknown>
     }
 
+    type AuthModelEntity = {
+      forceFill?(values: Record<string, unknown>): unknown
+    }
+
+    type AuthModelRepository = {
+      saveEntity?(entity: unknown, internalColumns?: ReadonlySet<string>): Promise<unknown>
+    }
+
     const resolvedModule = await resolveAuthProviderRuntime(projectRoot, loadedConfig, providerConfig.model) as {
       default?: unknown
       holoModelPendingSchema?: boolean
@@ -3229,6 +3238,7 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
       query?(): AuthModelQuery
       find(value: unknown): Promise<unknown>
       where(column: string, value: unknown): AuthModelQuery
+      getRepository?(): AuthModelRepository
       create(values: Record<string, unknown>): Promise<unknown>
       update(id: unknown, values: Record<string, unknown>): Promise<unknown>
     }
@@ -3313,7 +3323,9 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
     }
 
     const prepareAuthCreateInput = async (input: Readonly<Record<string, unknown>>): Promise<Record<string, unknown>> => {
-      const sanitizedInput = sanitizeAuthWriteInput(input)
+      const sanitizedInput = sanitizeAuthWriteInput(input, {
+        enforceFillable: false,
+      })
       if (typeof resolvedModule.prepareAuthCreateInput !== 'function') {
         return sanitizedInput
       }
@@ -3327,7 +3339,9 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
       user: unknown,
       input: Readonly<Record<string, unknown>>,
     ): Promise<Record<string, unknown>> => {
-      const sanitizedInput = sanitizeAuthWriteInput(input)
+      const sanitizedInput = sanitizeAuthWriteInput(input, {
+        enforceFillable: false,
+      })
       if (typeof resolvedModule.prepareAuthUpdateInput !== 'function') {
         return sanitizedInput
       }
@@ -3335,6 +3349,25 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
       return sanitizeAuthWriteInput(await resolvedModule.prepareAuthUpdateInput(user, sanitizedInput), {
         enforceFillable: false,
       })
+    }
+
+    const saveAuthEntity = async (entity: unknown, values: Record<string, unknown>) => {
+      const repository = typeof model.getRepository === 'function'
+        ? model.getRepository()
+        : null
+
+      if (
+        repository
+        && typeof repository.saveEntity === 'function'
+        && entity
+        && typeof entity === 'object'
+        && typeof (entity as AuthModelEntity).forceFill === 'function'
+      ) {
+        ;(entity as AuthModelEntity).forceFill!(values)
+        return repository.saveEntity(entity, new Set(Object.keys(values)))
+      }
+
+      return null
     }
 
     const adapter = {
@@ -3369,14 +3402,27 @@ async function createCoreAuthProviders<TCustom extends HoloConfigMap>(
         return resolved ? markProviderUser(resolved, providerName) : null
       },
       async create(input: Readonly<Record<string, unknown>>) {
-        return markProviderUser(await model.create(await prepareAuthCreateInput(input)), providerName)
+        const values = await prepareAuthCreateInput(input)
+        const repository = typeof model.getRepository === 'function'
+          ? model.getRepository()
+          : null
+        const entity = repository && typeof repository.saveEntity === 'function'
+          ? new Entity(repository as never, values as never, false)
+          : null
+        const persisted = entity ? await saveAuthEntity(entity, values) : null
+
+        return markProviderUser(persisted ?? await model.create(values), providerName)
       },
       /* v8 ignore start -- adapter shape mirrors the auth package contract; core tests cover the wired runtime behavior */
       async update(user: unknown, input: Readonly<Record<string, unknown>>) {
-        return markProviderUser(
-          await model.update(getEntityAttributes(user).id, await prepareAuthUpdateInput(user, input)),
-          providerName,
-        )
+        const id = getEntityAttributes(user).id
+        const values = await prepareAuthUpdateInput(user, input)
+        const existing = typeof model.find === 'function'
+          ? await model.find(id)
+          : null
+        const persisted = existing ? await saveAuthEntity(existing, values) : null
+
+        return markProviderUser(persisted ?? await model.update(id, values), providerName)
       },
       matchesUser(user: unknown) {
         if (typeof model === 'function' && user instanceof model) {

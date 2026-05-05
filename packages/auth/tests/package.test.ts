@@ -4490,9 +4490,9 @@ describe('@holo-js/auth package runtime', () => {
       guard: 'web',
     })).rejects.toThrow('Email verification requires a user with an email address.')
     expectAuthFailureCode(await requestPasswordReset({ email: '   ' }), 'password_reset_email_required')
-    expectAuthFailureCode(await requestPasswordReset({ email: 'ava@example.com' }, {
+    await expect(requestPasswordReset({ email: 'ava@example.com' }, {
       broker: 'missing',
-    }), 'password_broker_not_configured')
+    })).rejects.toThrow('Password broker "missing" is not configured.')
     expect(unwrapAuthResult(await requestPasswordReset({ email: 'missing@example.com' }))).toBeUndefined()
 
     await requestPasswordReset({ email: 'ava@example.com' })

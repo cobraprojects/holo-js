@@ -86,11 +86,11 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
 ): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {
   type TData = InferFormData<TSchema>
 
-  const formRef = useRef<UseFormResult<TData, TSuccess, InferFormFieldTree<TSchema>>>()
-  const previousSchemaRef = useRef<TSchema>()
-  const previousOptionsRef = useRef<UseFormOptions<TData, TSuccess>>()
-  const latestOptionsRef = useRef<UseFormOptions<TData, TSuccess>>()
-  const submitterBridgeRef = useRef<UseFormOptions<TData, TSuccess>['submitter']>()
+  const formRef = useRef<UseFormResult<TData, TSuccess, InferFormFieldTree<TSchema>> | undefined>(undefined)
+  const previousSchemaRef = useRef<TSchema | undefined>(undefined)
+  const previousOptionsRef = useRef<UseFormOptions<TData, TSuccess> | undefined>(undefined)
+  const latestOptionsRef = useRef<UseFormOptions<TData, TSuccess> | undefined>(undefined)
+  const submitterBridgeRef = useRef<UseFormOptions<TData, TSuccess>['submitter']>(undefined)
   const [, setVersion] = useState(0)
 
   latestOptionsRef.current = options

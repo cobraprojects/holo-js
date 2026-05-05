@@ -1,7 +1,7 @@
 import { defineModel, hasMany } from '@holo-js/db'
 
 export default defineModel('users', {
-  fillable: ['name', 'email', 'password', 'avatar', 'email_verified_at'],
+  fillable: ['name', 'email', 'password', 'avatar'],
   hidden: ['password'],
   relations: {
     posts: hasMany('Post', { foreignKey: 'user_id' }),

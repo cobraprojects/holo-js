@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit'
 import { requestPasswordReset } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
+import { sanitizeFlashedInput, validate } from '@holo-js/forms'
 
 import { forgotPasswordForm } from '$lib/schemas/auth'
 
@@ -19,7 +19,7 @@ export async function POST({ request }: { request: Request }) {
       ok: false as const,
       status: error.status,
       valid: false as const,
-      values: submission.values,
+      values: sanitizeFlashedInput(submission.values),
       errors: error.fields,
     }, {
       status: error.status,

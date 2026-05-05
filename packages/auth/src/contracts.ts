@@ -130,7 +130,6 @@ export type AuthEmailVerificationResendErrorCode
 
 export type AuthPasswordResetRequestErrorCode
   = 'password_reset_email_required'
-  | 'password_broker_not_configured'
 
 export type AuthPasswordResetConsumeErrorCode
   = 'password_confirmation_mismatch'

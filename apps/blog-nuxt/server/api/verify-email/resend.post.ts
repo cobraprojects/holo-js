@@ -5,13 +5,17 @@ interface ResendVerificationRequestBody {
 }
 
 export default defineEventHandler(async (event) => {
-  let payload: ResendVerificationRequestBody = {}
+  let payload: ResendVerificationRequestBody | null = {}
   try {
-    payload = await readBody<ResendVerificationRequestBody>(event)
+    payload = await readBody<ResendVerificationRequestBody | null>(event)
   } catch {
     payload = {}
   }
-  const email = typeof payload.email === 'string' ? payload.email.trim() : ''
+  const email = typeof payload === 'object'
+    && payload !== null
+    && typeof payload.email === 'string'
+    ? payload.email.trim()
+    : ''
   const { error } = await verification.resend(email ? { email } : undefined)
   if (error) {
     setResponseStatus(event, error.status)

@@ -2121,12 +2121,48 @@ export default {
         email_verified_at: {},
       },
     },
-    fillable: ['email', 'name', 'password', 'email_verified_at'],
+    fillable: ['email', 'name', 'password'],
     guarded: ['id'],
     hasExplicitFillable: true,
   },
+  getRepository() {
+    return {
+      async saveEntity(entity, internalColumns) {
+        if (!internalColumns.has('email_verified_at')) {
+          throw new Error('Expected auth updates to treat email_verified_at as an internal column.')
+        }
+
+        const attributes = typeof entity?.toAttributes === 'function'
+          ? entity.toAttributes()
+          : entity
+        const id = typeof attributes.id === 'number' ? attributes.id : 1
+        const record = {
+          id,
+          public_id: attributes.public_id,
+          team_id: attributes.team_id,
+          email: attributes.email,
+          name: attributes.name,
+          password: attributes.password,
+          email_verified_at: attributes.email_verified_at,
+        }
+        records.set(id, record)
+        return record
+      },
+    }
+  },
   async find(id) {
-    return records.get(Number(id)) ?? null
+    const existing = records.get(Number(id))
+    if (!existing) {
+      return null
+    }
+
+    return {
+      ...existing,
+      forceFill(values) {
+        Object.assign(this, values)
+        return this
+      },
+    }
   },
   where() {
     return {
@@ -2139,9 +2175,8 @@ export default {
     records.set(1, { id: 1, ...values })
     return { id: 1, ...values }
   },
-  async update(id, values) {
-    records.set(Number(id), { id: Number(id), ...values })
-    return { id: Number(id), ...values }
+  async update() {
+    throw new Error('model.update should not be used for auth writes when saveEntity is available')
   },
 }
 `, 'utf8')
@@ -2161,7 +2196,7 @@ export default {
       name: 'Hosted User',
       avatar: 'https://cdn.test/avatar.png',
       email_verified_at: new Date('2026-04-11T00:00:00.000Z'),
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       id: 1,
       public_id: 'generated-public-id',
       team_id: 7,
@@ -2174,8 +2209,11 @@ export default {
       name: 'Updated Hosted User',
       avatar: 'https://cdn.test/avatar-2.png',
       email_verified_at: new Date('2026-04-12T00:00:00.000Z'),
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       id: 1,
+      public_id: 'generated-public-id',
+      team_id: 7,
+      email: 'hosted@example.com',
       name: 'Updated Hosted User',
       email_verified_at: new Date('2026-04-12T00:00:00.000Z'),
     })

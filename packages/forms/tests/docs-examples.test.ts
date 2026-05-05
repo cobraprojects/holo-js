@@ -33,7 +33,10 @@ describe('@holo-js/forms documented examples', () => {
         ok: false,
         status: 422,
         valid: false,
-        values: registerFailure.values,
+        values: {
+          email: 'bad',
+          name: 'Ava',
+        },
         errors: registerFailure.errors.flatten(),
       })
     }

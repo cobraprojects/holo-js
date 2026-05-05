@@ -73,6 +73,14 @@ async function loadNitroContextModule(): Promise<NitroContextModule> {
 }
 
 export function createNuxtAuthRequestAccessors() {
+  function safeDecode(value: string): string | undefined {
+    try {
+      return decodeURIComponent(value)
+    } catch {
+      return undefined
+    }
+  }
+
   async function readHeader(name: string): Promise<string | undefined> {
     const nitroContext = await loadNitroContextModule()
     const event = nitroContext.useEvent()
@@ -112,24 +120,37 @@ export function createNuxtAuthRequestAccessors() {
         continue
       }
 
-      const key = decodeURIComponent(trimmed.slice(0, separator))
+      const key = safeDecode(trimmed.slice(0, separator))
+      if (typeof key === 'undefined') {
+        continue
+      }
+
       if (key !== name) {
         continue
       }
 
-      return decodeURIComponent(trimmed.slice(separator + 1))
+      const value = safeDecode(trimmed.slice(separator + 1))
+      if (typeof value === 'undefined') {
+        continue
+      }
+
+      return value
     }
 
     return undefined
   }
 
+  const getCookieValue: NonNullable<CreateHoloOptions['authRequest']>['getCookie'] = async (name) => {
+    return await readCookie(name)
+  }
+
+  const getHeaderValue: NonNullable<CreateHoloOptions['authRequest']>['getHeader'] = async (name) => {
+    return await readHeader(name)
+  }
+
   return {
-    async getCookie(name: string) {
-      return await readCookie(name)
-    },
-    async getHeader(name: string) {
-      return await readHeader(name)
-    },
+    getCookie: getCookieValue,
+    getHeader: getHeaderValue,
   } satisfies NonNullable<CreateHoloOptions['authRequest']>
 }
 

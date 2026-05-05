@@ -34,6 +34,8 @@ const port = await new Promise((resolve, reject) => {
 })
 const healthUrl = `http://localhost:${port}/api/holo/health`
 const originalConfig = await readFile(configPath, 'utf8')
+const mirrorCapturedOutput = process.env.MAIL_LOG_VERBOSE === 'true'
+  || process.argv.includes('--mail-log-verbose')
 const runtimeSchemaPath = join(cwd, '.holo-js/generated/schema.mjs')
 let capturedOutput = ''
 
@@ -162,7 +164,9 @@ function pipeOutput(stream, target) {
   stream.on('data', chunk => {
     const text = chunk.toString()
     capturedOutput += text
-    target.write(text)
+    if (mirrorCapturedOutput) {
+      target.write(text)
+    }
   })
 }
 

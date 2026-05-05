@@ -209,7 +209,6 @@ const EXPECTED_EMAIL_VERIFICATION_RESEND_ERRORS = [
 
 const EXPECTED_PASSWORD_RESET_REQUEST_ERRORS = [
   'password_reset_email_required',
-  'password_broker_not_configured',
 ] as const satisfies readonly AuthPasswordResetRequestErrorCode[]
 
 const EXPECTED_PASSWORD_RESET_CONSUME_ERRORS = [

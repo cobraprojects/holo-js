@@ -127,8 +127,21 @@ Then use auth operations inside your own routes:
 ```ts
 import { login, logout, refreshUser, register, user } from '@holo-js/auth'
 
+function sanitizeAuthBody(body: Record<string, unknown>) {
+  const sanitizedBody = { ...body }
+  delete sanitizedBody.password
+  delete sanitizedBody.passwordConfirmation
+  delete sanitizedBody.confirmPassword
+  delete sanitizedBody.currentPassword
+  delete sanitizedBody.newPassword
+  delete sanitizedBody.token
+
+  return sanitizedBody
+}
+
 export async function POST(request: Request) {
   const body = await request.json()
+  const sanitizedBody = sanitizeAuthBody(body)
 
   const { data: created, error: registerError } = await register({
     name: body.name,
@@ -142,7 +155,7 @@ export async function POST(request: Request) {
       ok: false,
       status: registerError.status,
       valid: false,
-      values: body,
+      values: sanitizedBody,
       errors: registerError.fields,
     }, { status: registerError.status })
   }
@@ -152,6 +165,7 @@ export async function POST(request: Request) {
 
 export async function PUT(request: Request) {
   const body = await request.json()
+  const sanitizedBody = sanitizeAuthBody(body)
 
   const { data: session, error } = await login({
     email: body.email,
@@ -164,7 +178,7 @@ export async function PUT(request: Request) {
       ok: false,
       status: error.status,
       valid: false,
-      values: body,
+      values: sanitizedBody,
       errors: error.fields,
     }, { status: error.status })
   }
@@ -272,12 +286,14 @@ Successful auth calls put the result in `data`. Expected auth failures come back
 That means your route can forward auth failures directly without any helper layer:
 
 ```ts
+const sanitizedBody = sanitizeAuthBody(body)
+
 if (error) {
   return Response.json({
     ok: false,
     status: error.status,
     valid: false,
-    values: body,
+    values: sanitizedBody,
     errors: error.fields,
   }, { status: error.status })
 }

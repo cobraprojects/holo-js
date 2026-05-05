@@ -1,10 +1,14 @@
 import { defineSessionConfig, env } from '@holo-js/config'
 
-const sessionSameSite = env('SESSION_SAME_SITE') === 'strict'
-  ? 'strict'
-  : env('SESSION_SAME_SITE') === 'none'
-    ? 'none'
-    : 'lax'
+const configuredSessionSameSite = env('SESSION_SAME_SITE')
+const sessionSameSite = configuredSessionSameSite === 'strict'
+  || configuredSessionSameSite === 'lax'
+  || configuredSessionSameSite === 'none'
+  ? configuredSessionSameSite
+  : 'lax'
+const sessionSecure = sessionSameSite === 'none'
+  ? true
+  : env('SESSION_SECURE', false)
 
 export default defineSessionConfig({
   driver: env('SESSION_DRIVER', 'file'),
@@ -23,7 +27,7 @@ export default defineSessionConfig({
     name: env('SESSION_COOKIE', 'holo_session'),
     path: env('SESSION_PATH', '/'),
     domain: env('SESSION_DOMAIN'),
-    secure: env('SESSION_SECURE', false),
+    secure: sessionSecure,
     httpOnly: true,
     sameSite: sessionSameSite,
   },

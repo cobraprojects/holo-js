@@ -465,6 +465,40 @@ describe('@holo-js/forms client', () => {
     expect('valid' in fallback && fallback.valid === true).toBe(true)
   })
 
+  it('clears Laravel-style dontFlash fields after server-side failures', () => {
+    const registerUser = schema({
+      email: field.string().required().email(),
+      password: field.string().required().min(8),
+      passwordConfirmation: field.string().required(),
+    })
+
+    const client = useForm(registerUser, {
+      initialValues: {
+        email: 'ava@example.com',
+        password: 'super-secret',
+        passwordConfirmation: 'super-secret',
+      },
+    })
+
+    client.applyServerState({
+      ok: false,
+      status: 422,
+      valid: false,
+      values: {
+        email: 'bad',
+      },
+      errors: {
+        email: ['Email must be valid.'],
+        password: ['The password field is required.'],
+      },
+    })
+
+    expect(client.values.email).toBe('bad')
+    expect(client.values.password).toBeUndefined()
+    expect(client.values.passwordConfirmation).toBeUndefined()
+    expect(client.errors.first('password')).toBe('The password field is required.')
+  })
+
   it('submits through custom submitters and default transports', async () => {
     const registerUser = schema({
       email: field.string().required().email(),

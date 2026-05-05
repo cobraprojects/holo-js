@@ -1,5 +1,5 @@
 import { verification } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
+import { sanitizeFlashedInput, validate } from '@holo-js/forms'
 
 import { verifyEmailForm } from '../../lib/schemas/auth'
 
@@ -19,7 +19,7 @@ export default defineEventHandler(async (event) => {
       ok: false as const,
       status: error.status,
       valid: false as const,
-      values: submission.values,
+      values: sanitizeFlashedInput(submission.values),
       errors: error.fields,
     }
   }
