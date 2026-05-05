@@ -48,7 +48,7 @@ export default defineAppConfig({
     jobs: 'server/jobs',
     events: 'server/events',
     listeners: 'server/listeners',
-    generatedSchema: 'server/db/schema.generated.ts',
+    generatedSchema: '.holo-js/generated/schema.generated.ts',
   },
 })
 `, 'utf8')

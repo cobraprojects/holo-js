@@ -43,7 +43,7 @@ async function waitForSignalListener(signal: 'SIGINT' | 'SIGTERM', baselineCount
 
 const SCHEMA_PLACEHOLDER = renderGeneratedSchemaPlaceholder()
 
-async function writeSchemaPlaceholder(root: string, relativePath = 'server/db/schema.generated.ts'): Promise<void> {
+async function writeSchemaPlaceholder(root: string, relativePath = '.holo-js/generated/schema.generated.ts'): Promise<void> {
   const dir = join(root, relativePath, '..')
   await mkdir(dir, { recursive: true })
   await writeFile(join(root, relativePath), SCHEMA_PLACEHOLDER, 'utf8')
@@ -138,7 +138,7 @@ describe('@holo-js/cli broadcast worker command', () => {
         channels: 'server/channels',
         authorizationPolicies: 'server/policies',
         authorizationAbilities: 'server/abilities',
-        generatedSchema: 'server/db/schema.generated.ts',
+        generatedSchema: '.holo-js/generated/schema.generated.ts',
       },
       models: [],
       migrations: [],
@@ -609,7 +609,7 @@ describe('@holo-js/cli broadcast worker command', () => {
           channels: 'server/channels',
           authorizationPolicies: 'server/policies',
           authorizationAbilities: 'server/abilities',
-          generatedSchema: 'server/db/schema.generated.ts',
+          generatedSchema: '.holo-js/generated/schema.generated.ts',
         },
         models: [],
         migrations: [],

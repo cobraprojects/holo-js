@@ -18,13 +18,14 @@ async function createProject(): Promise<string> {
   await mkdir(join(root, 'server/broadcast/orders'), { recursive: true })
   await mkdir(join(root, 'server/channels'), { recursive: true })
   await mkdir(join(root, 'server/db'), { recursive: true })
+  await mkdir(join(root, '.holo-js/generated'), { recursive: true })
   await writeFile(join(root, 'package.json'), JSON.stringify({
     name: 'broadcast-registry-fixture',
     private: true,
   }, null, 2))
   await writeFile(join(root, 'config/app.ts'), 'export default {}', 'utf8')
   await writeFile(join(root, 'config/database.ts'), 'export default {}', 'utf8')
-  await writeFile(join(root, 'server/db/schema.generated.ts'), renderGeneratedSchemaPlaceholder(), 'utf8')
+  await writeFile(join(root, '.holo-js/generated/schema.generated.ts'), renderGeneratedSchemaPlaceholder(), 'utf8')
   await Promise.all([
     symlink(join(workspaceRoot, 'packages/broadcast'), join(root, 'node_modules/@holo-js/broadcast')),
     symlink(join(workspaceRoot, 'packages/config'), join(root, 'node_modules/@holo-js/config')),

@@ -294,13 +294,13 @@ export function isDiscoveryRelevantPath(
   project: LoadedProjectConfig,
 ): boolean {
   const normalized = toPosixSlashes(filePath)
-  if (normalized === '.holo-js/generated' || normalized.startsWith('.holo-js/generated/')) {
-    return false
-  }
-
-  const generatedSchemaPath = toPosixSlashes(project.config.paths.generatedSchema ?? 'server/db/schema.generated.ts')
+  const generatedSchemaPath = toPosixSlashes(project.config.paths.generatedSchema ?? '.holo-js/generated/schema.generated.ts')
   if (normalized === generatedSchemaPath) {
     return true
+  }
+
+  if (normalized === '.holo-js/generated' || normalized.startsWith('.holo-js/generated/')) {
+    return false
   }
 
   const authorizationPoliciesPath = project.config.paths.authorizationPolicies || 'server/policies'
@@ -382,7 +382,7 @@ export async function collectDiscoveryWatchRoots(
     resolve(projectRoot, authorizationAbilitiesPath),
     resolve(projectRoot, 'server/broadcast'),
     resolve(projectRoot, 'server/channels'),
-    resolve(projectRoot, dirname(project.config.paths.generatedSchema ?? 'server/db/schema.generated.ts')),
+    resolve(projectRoot, dirname(project.config.paths.generatedSchema ?? '.holo-js/generated/schema.generated.ts')),
   ]
 
   for (const rootPath of roots) {

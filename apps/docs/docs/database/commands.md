@@ -126,7 +126,7 @@ npx holo migrate:fresh --seed --force
 ```
 
 `migrate:fresh` drops every table in the active connection, reruns all registered migrations from
-scratch, and refreshes `server/db/schema.generated.ts` at the end of the migration pass.
+scratch, and refreshes the internal generated schema metadata under `.holo-js/generated` at the end of the migration pass.
 
 Use `--seed` when you want the fresh database to be reseeded immediately after migrations finish.
 The seeding flags match `holo seed`:

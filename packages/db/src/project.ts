@@ -45,7 +45,7 @@ export interface HoloProjectConfig {
 export const DEFAULT_HOLO_PROJECT_PATHS: Readonly<HoloProjectPaths> = Object.freeze({
   models: 'server/models',
   migrations: 'server/db/migrations',
-  generatedSchema: 'server/db/schema.generated.ts',
+  generatedSchema: '.holo-js/generated/schema.generated.ts',
   seeders: 'server/db/seeders',
   observers: 'server/db/observers',
   factories: 'server/db/factories',
