@@ -862,10 +862,10 @@ async function persistPreviewArtifact(artifact: MailPreviewArtifact): Promise<vo
 }
 
 function createSmtpAddress(address: MailAddress): NodemailerAddress {
-  return Object.freeze({
+  return {
     address: address.email,
     ...(typeof address.name === 'string' ? { name: address.name } : {}),
-  })
+  }
 }
 
 function createSmtpHeaders(mail: Readonly<ResolvedMail>): Readonly<Record<string, string>> | undefined {
@@ -909,20 +909,20 @@ async function createSmtpAttachment(
   } satisfies Omit<NodemailerAttachment, 'path' | 'content'>
 
   if (typeof attachment.path === 'string') {
-    return Object.freeze({
+    return {
       ...base,
       path: attachment.path,
-    })
+    }
   }
 
   if (attachment.storage) {
     const storageModule = await loadStorageModule()
     const disk = storageModule.Storage.disk(attachment.storage.disk)
     if (disk.driver !== 's3') {
-      return Object.freeze({
+      return {
         ...base,
         path: disk.path(attachment.storage.path),
-      })
+      }
     }
 
     const bytes = await disk.getBytes(attachment.storage.path)
@@ -933,17 +933,17 @@ async function createSmtpAttachment(
       )
     }
 
-    return Object.freeze({
+    return {
       ...base,
       content: bytes,
-    })
+    }
   }
 
   if (typeof attachment.content !== 'undefined') {
-    return Object.freeze({
+    return {
       ...base,
       content: attachment.content,
-    })
+    }
   }
 
   throw new MailError(
@@ -957,23 +957,23 @@ async function createSmtpMessage(
   context: Readonly<MailDriverExecutionContext>,
 ): Promise<NodemailerMailMessage> {
   const attachments = mail.attachments.length > 0
-    ? Object.freeze(await Promise.all(mail.attachments.map(createSmtpAttachment)))
+    ? await Promise.all(mail.attachments.map(createSmtpAttachment))
     : undefined
   const headers = createSmtpHeaders(mail)
 
-  return Object.freeze({
+  return {
     messageId: context.messageId,
     from: createSmtpAddress(mail.from),
     replyTo: createSmtpAddress(mail.replyTo),
-    to: Object.freeze(mail.to.map(createSmtpAddress)),
-    ...(mail.cc.length > 0 ? { cc: Object.freeze(mail.cc.map(createSmtpAddress)) } : {}),
-    ...(mail.bcc.length > 0 ? { bcc: Object.freeze(mail.bcc.map(createSmtpAddress)) } : {}),
+    to: mail.to.map(createSmtpAddress),
+    ...(mail.cc.length > 0 ? { cc: mail.cc.map(createSmtpAddress) } : {}),
+    ...(mail.bcc.length > 0 ? { bcc: mail.bcc.map(createSmtpAddress) } : {}),
     subject: mail.subject,
     ...(typeof mail.html === 'string' ? { html: mail.html } : {}),
     ...(typeof mail.text === 'string' ? { text: mail.text } : {}),
     ...(attachments ? { attachments } : {}),
     ...(headers ? { headers } : {}),
-  })
+  }
 }
 
 async function sendViaSmtp(

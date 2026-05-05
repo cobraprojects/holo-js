@@ -113,6 +113,12 @@ Holo-JS falls back to standalone `host`, which may also be a Unix socket path.
 
 When `@holo-js/forms` is installed, forms can opt into security directly through `validate(...)`.
 
+Validation failures and auth failures stay separate:
+
+- `validate(...)` returns form validation failures such as missing fields, bad formats, CSRF errors, and throttling.
+- `login(...)`, `register(...)`, `verification.consume(...)`, `requestPasswordReset(...)`, and `resetPassword(...)` return auth failures in `error`.
+- Auth failures are plain data with `status` and `fields`, so routes can forward them directly into the normal form response shape.
+
 ### Login
 
 ```ts
@@ -136,7 +142,18 @@ export async function POST(request: Request) {
     })
   }
 
-  await login(submission.data)
+  const { error } = await login(submission.data)
+  if (error) {
+    return Response.json({
+      ok: false,
+      status: error.status,
+      valid: false,
+      values: submission.values,
+      errors: error.fields,
+    }, {
+      status: error.status,
+    })
+  }
 
   return Response.json(submission.success({
     message: 'Logged in.',
@@ -169,7 +186,18 @@ export async function POST(request: Request) {
     })
   }
 
-  await register(submission.data)
+  const { error } = await register(submission.data)
+  if (error) {
+    return Response.json({
+      ok: false,
+      status: error.status,
+      valid: false,
+      values: submission.values,
+      errors: error.fields,
+    }, {
+      status: error.status,
+    })
+  }
 
   return Response.json(submission.success({
     message: 'Account created.',

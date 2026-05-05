@@ -1,6 +1,7 @@
 import { createSubscriber } from 'svelte/reactivity'
-import type { InferSchemaData } from '@holo-js/forms'
+import type { FormSchema, InferFormData } from '@holo-js/forms'
 import {
+  type InferFormFieldTree,
   type UseFormOptions,
   type UseFormResult,
   useForm as createForm,
@@ -80,15 +81,15 @@ function createReactiveView<TValue extends object>(
   return proxy as TValue
 }
 
-export function useForm<TSchema extends Parameters<typeof createForm>[0]>(
+export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
   schemaDefinition: TSchema,
-  options: UseFormOptions<InferSchemaData<TSchema['fields']>> = {},
-): UseFormResult<InferSchemaData<TSchema['fields']>> {
-  type TData = InferSchemaData<TSchema['fields']>
+  options: UseFormOptions<InferFormData<TSchema>, TSuccess> = {},
+): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {
+  type TData = InferFormData<TSchema>
 
   const form = createForm(schemaDefinition, options)
   const subscribe = createSubscriber((update) => form.subscribe(update))
   const cache = new WeakMap<object, object>()
 
-  return createReactiveView<UseFormResult<TData>>(form, subscribe, cache)
+  return createReactiveView<UseFormResult<TData, TSuccess, InferFormFieldTree<TSchema>>>(form, subscribe, cache)
 }

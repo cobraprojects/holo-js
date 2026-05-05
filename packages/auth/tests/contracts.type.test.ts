@@ -1,6 +1,6 @@
 import { describe, expectTypeOf, it } from 'vitest'
-import auth, { type getAuthRuntime, type AuthEstablishedSession, type AuthGuardFacade, type AuthImpersonationState, type AuthLogoutResult, type AuthProviderAdapter, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type register, type user } from '../src'
-import clientAuth, { type refreshUser as refreshClientUser, type user as clientUser } from '../src/client'
+import auth, { AuthError, isAuthError, type AuthErrorCode, type AuthEstablishedSession, type AuthFailure, type AuthGuardFacade, type AuthImpersonationState, type AuthLoginErrorCode, type AuthLogoutResult, type AuthPasswordResetConsumeErrorCode, type AuthPasswordResetRequestErrorCode, type AuthProviderAdapter, type AuthRegistrationErrorCode, type AuthResult, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type getAuthRuntime, type register, type user } from '../src'
+import clientAuth, { type refreshUser as refreshClientUser, type useAuth as clientUseAuth, type user as clientUser } from '../src/client'
 
 declare module '../src' {
   interface HoloAuthTypeRegistry {
@@ -27,6 +27,7 @@ describe('@holo-js/auth typing', () => {
     type RegisteredUser = Awaited<ReturnType<typeof register>>
     type CurrentServerUser = Awaited<ReturnType<typeof user>>
     type CurrentClientUser = Awaited<ReturnType<typeof clientUser>>
+    type CurrentClientAuth = Awaited<ReturnType<typeof clientUseAuth>>
     type RefreshedClientUser = Awaited<ReturnType<typeof refreshClientUser>>
     type GuardUser = Awaited<ReturnType<AuthGuardFacade['user']>>
     type GuardRefreshedUser = Awaited<ReturnType<AuthGuardFacade['refreshUser']>>
@@ -39,9 +40,13 @@ describe('@holo-js/auth typing', () => {
     type RuntimeLogoutAll = Awaited<ReturnType<ReturnType<typeof getAuthRuntime>['logoutAll']>>
 
     expectTypeOf<AuthUser>().toEqualTypeOf<AppAuthUser>()
-    expectTypeOf<RegisteredUser>().toEqualTypeOf<AppAuthUser>()
+    expectTypeOf<RegisteredUser>().toEqualTypeOf<AuthResult<AppAuthUser, AuthRegistrationErrorCode>>()
     expectTypeOf<CurrentServerUser>().toEqualTypeOf<AppAuthUser | null>()
     expectTypeOf<CurrentClientUser>().toEqualTypeOf<AppAuthUser | null>()
+    expectTypeOf<CurrentClientAuth>().toEqualTypeOf<CurrentAuthResponse & {
+      readonly check: () => boolean
+      readonly refreshUser: () => Promise<AppAuthUser | null>
+    }>()
     expectTypeOf<RefreshedClientUser>().toEqualTypeOf<AppAuthUser | null>()
     expectTypeOf<GuardUser>().toEqualTypeOf<AppAuthUser | null>()
     expectTypeOf<GuardRefreshedUser>().toEqualTypeOf<AppAuthUser | null>()
@@ -92,6 +97,7 @@ describe('@holo-js/auth typing', () => {
 
     expectTypeOf(adapter.serialize).returns.toEqualTypeOf<AppAuthUser>()
     expectTypeOf(auth.user).returns.toEqualTypeOf<Promise<AppAuthUser | null>>()
+    expectTypeOf(auth.login).returns.toEqualTypeOf<Promise<AuthResult<AuthEstablishedSession, AuthLoginErrorCode>>>()
     expectTypeOf(auth.loginUsing).returns.toEqualTypeOf<Promise<AuthEstablishedSession>>()
     expectTypeOf(auth.loginUsingId).returns.toEqualTypeOf<Promise<AuthEstablishedSession>>()
     expectTypeOf(auth.hashPassword).returns.toEqualTypeOf<Promise<string>>()
@@ -102,6 +108,37 @@ describe('@holo-js/auth typing', () => {
     expectTypeOf(auth.stopImpersonating).returns.toEqualTypeOf<Promise<AppAuthUser | null>>()
     expectTypeOf(auth.logout).returns.toEqualTypeOf<Promise<AuthLogoutResult>>()
     expectTypeOf(clientAuth.user).returns.toEqualTypeOf<Promise<AppAuthUser | null>>()
+    expectTypeOf(clientAuth.useAuth).returns.toEqualTypeOf<Promise<CurrentAuthResponse & {
+      readonly check: () => boolean
+      readonly refreshUser: () => Promise<AppAuthUser | null>
+    }>>()
+
+    async function requestPasswordResetResult() {
+      return await auth.requestPasswordReset({
+        email: 'ava@example.com',
+      })
+    }
+
+    async function resetPasswordResult() {
+      return await auth.resetPassword({
+        token: 'token-value',
+        password: 'secret-secret',
+        passwordConfirmation: 'secret-secret',
+      })
+    }
+
+    expectTypeOf<Awaited<ReturnType<typeof requestPasswordResetResult>>>().toEqualTypeOf<
+      AuthResult<void, AuthPasswordResetRequestErrorCode, {
+        email?: readonly string[]
+      }>
+    >()
+    expectTypeOf<Awaited<ReturnType<typeof resetPasswordResult>>>().toEqualTypeOf<
+      AuthResult<AppAuthUser, AuthPasswordResetConsumeErrorCode, {
+        token?: readonly string[]
+        password?: readonly string[]
+        passwordConfirmation?: readonly string[]
+      }>
+    >()
   })
 
   it('keeps legacy custom session runtimes assignable to auth runtime bindings', () => {
@@ -137,12 +174,71 @@ describe('@holo-js/auth typing', () => {
       password: 'secret-secret',
     }
     // @ts-expect-error passwordConfirmation must be required
-    const invalidPasswordResetInput: Parameters<typeof auth.passwords.consume>[0] = {
+    const invalidPasswordResetInput: Parameters<typeof auth.resetPassword>[0] = {
       token: 'token-value',
       password: 'secret-secret',
     }
 
     void invalidRegisterInput
     void invalidPasswordResetInput
+  })
+
+  it('exposes a public auth error discriminator for catch-time narrowing', () => {
+    expectTypeOf<AuthErrorCode>().toEqualTypeOf<
+      | 'runtime_unconfigured'
+      | 'token_runtime_unconfigured'
+      | 'email_verification_runtime_unconfigured'
+      | 'password_reset_runtime_unconfigured'
+      | 'guard_not_configured'
+      | 'provider_not_configured'
+      | 'provider_runtime_not_configured'
+      | 'guard_session_login_unsupported'
+      | 'credentials_identifier_missing'
+      | 'password_confirmation_mismatch'
+      | 'invalid_credentials'
+      | 'email_verification_required'
+      | 'trusted_login_user_required'
+      | 'trusted_login_provider_mismatch'
+      | 'trusted_login_user_not_found'
+      | 'trusted_login_user_incompatible'
+      | 'impersonation_actor_required'
+      | 'impersonation_nested_unsupported'
+      | 'impersonation_already_active'
+      | 'registration_identifier_taken'
+      | 'auth_user_missing'
+      | 'provider_resolution_required'
+      | 'provider_update_unsupported'
+      | 'email_required_for_verification'
+      | 'email_verification_user_missing'
+      | 'email_already_verified'
+      | 'email_verification_token_invalid'
+      | 'email_verification_token_expired'
+      | 'password_reset_email_required'
+      | 'password_broker_not_configured'
+      | 'password_reset_token_invalid'
+      | 'password_reset_token_expired'
+      | 'password_reset_user_missing'
+    >()
+
+    const error: unknown = null
+    if (isAuthError(error)) {
+      const code: AuthErrorCode = error.code
+      void code
+    }
+  })
+
+  it('exposes plain auth failure objects in result unions', () => {
+    expectTypeOf<AuthFailure<AuthLoginErrorCode, {
+      email?: readonly string[]
+      password?: readonly string[]
+    }>>().toMatchTypeOf<{
+      code: AuthLoginErrorCode
+      message: string
+      status: number
+      fields: {
+        email?: readonly string[]
+        password?: readonly string[]
+      }
+    }>()
   })
 })

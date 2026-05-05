@@ -37,9 +37,14 @@ describe('notifications documentation smoke checks', () => {
     expect(installation).toContain('notifications')
     expect(installation).toContain('--package forms,validation,notifications')
     expect(verification).toContain('@holo-js/notifications')
-    expect(verification).toContain('notify(created, verificationCreated(token))')
-    expect(reset).toContain('notifyUsing()')
-    expect(reset).toContain('auth.password-reset')
+    expect(verification).toContain('APP_URL')
+    expect(verification).toContain('AUTH_EMAIL_VERIFICATION_ROUTE')
+    expect(verification).toContain('generated email link')
+    expect(verification).not.toContain('notify(created, verificationCreated(token))')
+    expect(reset).toContain('@holo-js/notifications')
+    expect(reset).toContain('APP_URL')
+    expect(reset).toContain('AUTH_PASSWORD_RESET_ROUTE')
+    expect(reset).not.toContain('notifyUsing()')
   })
 
   it('covers the final fluent API and custom channel story', async () => {

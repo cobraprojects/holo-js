@@ -1,11 +1,11 @@
 import { onScopeDispose, shallowRef, watchEffect } from 'vue'
-import type { FormSchema } from '@holo-js/forms'
+import type { FormSchema, InferFormData } from '@holo-js/forms'
 import {
+  type InferFormFieldTree,
   type UseFormOptions,
   type UseFormResult,
   useForm as createForm,
 } from '@holo-js/forms/client'
-import type { InferSchemaData, SchemaInputShape } from '@holo-js/validation'
 
 export {
   type ClientSubmitContext,
@@ -89,10 +89,10 @@ function createReactiveView<TValue extends object>(
   return proxy as TValue
 }
 
-export function useForm<TSchema extends FormSchema<SchemaInputShape>>(
+export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
   schemaDefinition: TSchema,
-  options: UseFormOptions<InferSchemaData<TSchema['fields']>> = {},
-): UseFormResult<InferSchemaData<TSchema['fields']>> {
+  options: UseFormOptions<InferFormData<TSchema>, TSuccess> = {},
+): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {
   const form = shallowRef(createForm(schemaDefinition, options))
   const version = shallowRef(0)
   const cache = new WeakMap<object, object>()

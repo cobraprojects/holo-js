@@ -119,6 +119,10 @@ interface NuxtHookContext {
 interface NuxtOptionsWithNitro {
   nitro: {
     storage: Record<string, unknown>
+    experimental?: {
+      asyncContext?: boolean
+      [key: string]: unknown
+    }
     [key: string]: unknown
   }
   runtimeConfig: {
@@ -273,6 +277,10 @@ export default defineNuxtModule<ModuleOptions>({
 
     opts.nitro = opts.nitro || { storage: {} }
     opts.nitro.storage = opts.nitro.storage || {}
+    opts.nitro.experimental = {
+      ...(opts.nitro.experimental || {}),
+      asyncContext: true,
+    }
     opts.runtimeConfig = opts.runtimeConfig || {}
     opts.runtimeConfig.public = opts.runtimeConfig.public || {}
     opts.runtimeConfig.public.holo = {

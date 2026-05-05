@@ -2,6 +2,7 @@ import type { RuntimeConnectionConfig, RuntimeDatabaseConfig } from '@holo-js/db
 import {
   createHoloProjectAccessors,
   initializeHoloAdapterProject,
+  type CreateHoloOptions,
 } from '@holo-js/core'
 
 type RuntimeConfigShape = {
@@ -17,6 +18,22 @@ type RuntimeConfigShape = {
 type RuntimeGlobals = typeof globalThis & {
   __holoRuntimeConfig?: RuntimeConfigShape
   useRuntimeConfig?: () => RuntimeConfigShape
+}
+
+type NuxtAuthRequestEvent = {
+  readonly headers?: Headers
+  readonly request?: {
+    readonly headers?: Headers
+  }
+  readonly node?: {
+    readonly req?: {
+      readonly headers?: Readonly<Record<string, string | readonly string[] | undefined>>
+    }
+  }
+}
+
+type NitroContextModule = {
+  readonly useEvent: () => NuxtAuthRequestEvent | undefined
 }
 
 export function configureHoloRuntimeConfig(config: RuntimeConfigShape): void {
@@ -51,6 +68,71 @@ function resolveRuntimeProjectRoot(config: RuntimeConfigShape): string {
   return config.holo.projectRoot?.trim() || process.cwd()
 }
 
+async function loadNitroContextModule(): Promise<NitroContextModule> {
+  return await import('nitropack/runtime/context') as NitroContextModule
+}
+
+export function createNuxtAuthRequestAccessors() {
+  async function readHeader(name: string): Promise<string | undefined> {
+    const nitroContext = await loadNitroContextModule()
+    const event = nitroContext.useEvent()
+
+    if (!event) {
+      return undefined
+    }
+
+    const normalizedName = name.toLowerCase()
+
+    if (event.headers instanceof Headers) {
+      return event.headers.get(name) ?? undefined
+    }
+
+    if (event.request?.headers instanceof Headers) {
+      return event.request.headers.get(name) ?? undefined
+    }
+
+    const value = event.node?.req?.headers?.[normalizedName]
+    if (Array.isArray(value)) {
+      return value[0]
+    }
+
+    return typeof value === 'string' ? value : undefined
+  }
+
+  async function readCookie(name: string): Promise<string | undefined> {
+    const header = await readHeader('cookie')
+    if (!header) {
+      return undefined
+    }
+
+    for (const segment of header.split(';')) {
+      const trimmed = segment.trim()
+      const separator = trimmed.indexOf('=')
+      if (separator <= 0) {
+        continue
+      }
+
+      const key = decodeURIComponent(trimmed.slice(0, separator))
+      if (key !== name) {
+        continue
+      }
+
+      return decodeURIComponent(trimmed.slice(separator + 1))
+    }
+
+    return undefined
+  }
+
+  return {
+    async getCookie(name: string) {
+      return await readCookie(name)
+    },
+    async getHeader(name: string) {
+      return await readHeader(name)
+    },
+  } satisfies NonNullable<CreateHoloOptions['authRequest']>
+}
+
 export const holo = createHoloProjectAccessors(async () => {
   const config = getRuntimeConfig()
 
@@ -58,6 +140,7 @@ export const holo = createHoloProjectAccessors(async () => {
     envName: resolveRuntimeEnvName(config.holo.appEnv),
     preferCache: process.env.NODE_ENV === 'production',
     processEnv: process.env,
+    authRequest: createNuxtAuthRequestAccessors(),
   })
 })
 

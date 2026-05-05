@@ -256,6 +256,33 @@ describe('@holo-js/forms contracts', () => {
     })
   })
 
+  it('normalizes request-like event inputs even without security options', async () => {
+    const forgotPassword = schema({
+      email: field.string().required().email(),
+    })
+
+    const submission = await validate({
+      method: 'POST',
+      path: '/forgot-password',
+      headers: {
+        host: 'app.test',
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        email: 'ava@example.com',
+      }),
+    }, forgotPassword)
+
+    expect(submission.valid).toBe(true)
+    if (!submission.valid) {
+      throw new Error('Expected request-like event validation success.')
+    }
+
+    expect(submission.data).toEqual({
+      email: 'ava@example.com',
+    })
+  })
+
   it('runs csrf and throttle checks through validate() and returns form-shaped security failures', async () => {
     const login = schema({
       email: field.string().required().email(),

@@ -34,7 +34,7 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@nuxt/kit": "^4.0.0",
+    "@nuxt/kit": "catalog:",
     "@holo-js/config": "^0.1.4",
     "@holo-js/core": "^0.1.4",
     "@holo-js/db": "^0.1.4"
@@ -59,7 +59,7 @@
     "@holo-js/storage-s3": "workspace:*",
     "@nuxt/module-builder": "^1.0.2",
     "@types/node": "^22.10.2",
-    "nuxt": "^4.0.0",
+    "nuxt": "catalog:",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

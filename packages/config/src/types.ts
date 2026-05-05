@@ -594,10 +594,12 @@ export interface AuthPasswordBrokerConfig {
   readonly table?: string
   readonly expire?: number | string
   readonly throttle?: number | string
+  readonly route?: string
 }
 
 export interface AuthEmailVerificationConfig {
   readonly required?: boolean
+  readonly route?: string
 }
 
 export interface AuthPersonalAccessTokenConfig {
@@ -671,6 +673,7 @@ export interface NormalizedAuthPasswordBrokerConfig {
   readonly table: string
   readonly expire: number
   readonly throttle: number
+  readonly route: string
 }
 
 export interface NormalizedAuthSocialProviderConfig {
@@ -719,6 +722,7 @@ export interface NormalizedHoloAuthConfig {
   readonly passwords: Readonly<Record<string, NormalizedAuthPasswordBrokerConfig>>
   readonly emailVerification: {
     readonly required: boolean
+    readonly route: string
   }
   readonly personalAccessTokens: {
     readonly defaultAbilities: readonly string[]

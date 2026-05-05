@@ -34,7 +34,8 @@
   },
   "dependencies": {
     "@holo-js/config": "^0.1.4",
-    "@holo-js/core": "^0.1.4"
+    "@holo-js/core": "^0.1.4",
+    "svelte": "catalog:"
   },
   "peerDependencies": {
     "@holo-js/forms": "^0.1.4"

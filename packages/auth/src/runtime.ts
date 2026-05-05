@@ -3,20 +3,34 @@ import { createHash, createHmac, randomBytes, randomUUID, scrypt as nodeScrypt, 
 import { promisify } from 'node:util'
 import { normalizeAuthConfig } from '@holo-js/config'
 import type {
+  AuthFailure,
+  AuthErrorCode,
+  AuthFieldErrors,
   AuthCredentials,
   AuthCurrentAccessToken,
   AuthDeliveryHook,
+  AuthEmailVerificationConsumeErrorCode,
   AuthEmailVerificationFacade,
+  AuthEmailVerificationResendErrorCode,
   AuthEstablishedSession,
   AuthFacade,
+  AuthFailureResult,
   AuthGuardFacade,
   AuthImpersonationOptions,
   AuthImpersonationState,
+  AuthLoginErrorCode,
   AuthLogoutResult,
-  AuthPasswordResetFacade,
+  AuthPasswordResetInput,
+  AuthPasswordResetRequestInput,
+  AuthPasswordResetRequestOptions,
   AuthPasswordHasher,
+  AuthPasswordResetConsumeErrorCode,
+  AuthPasswordResetRequestErrorCode,
+  AuthRegistrationErrorCode,
+  AuthResult,
   AuthRegistrationInput,
   AuthSessionLoginOptions,
+  AuthSuccessResult,
   AuthTokenFacade,
   AuthTokenStore,
   AuthUser,
@@ -33,6 +47,7 @@ import type {
   PasswordResetTokenRecord,
   PasswordResetTokenStore,
 } from './contracts'
+import { AuthError, isAuthError } from './contracts'
 
 const scrypt = promisify(nodeScrypt)
 const SCRYPT_PREFIX = 'scrypt'
@@ -118,6 +133,317 @@ type OptionalSecurityModule = {
 
 let optionalSecurityModulePromise: Promise<OptionalSecurityModule | undefined> | undefined
 
+function createAuthError(
+  code: AuthErrorCode,
+  message: string,
+  details?: Readonly<Record<string, unknown>>,
+): AuthError {
+  return new AuthError(code, message, {
+    details,
+  })
+}
+
+function throwAuthError(
+  code: AuthErrorCode,
+  message: string,
+  details?: Readonly<Record<string, unknown>>,
+): never {
+  throw createAuthError(code, message, details)
+}
+
+function createAuthSuccess<TData>(data: TData): AuthSuccessResult<TData> {
+  return Object.freeze({
+    data,
+    error: null,
+  })
+}
+
+function createAuthFailure<TCode extends AuthErrorCode, TFields extends AuthFieldErrors>(
+  error: AuthFailure<TCode, TFields>,
+): AuthFailureResult<TCode, TFields> {
+  return Object.freeze({
+    data: null,
+    error,
+  })
+}
+
+async function captureExpectedAuthResult<TData, TCode extends AuthErrorCode, TFields extends AuthFieldErrors>(
+  operation: () => Promise<TData>,
+  expectedCodes: readonly TCode[],
+  mapError: (error: AuthError<TCode>) => AuthFailure<TCode, TFields>,
+): Promise<AuthResult<TData, TCode, TFields>> {
+  try {
+    return createAuthSuccess(await operation())
+  } catch (error) {
+    if (isAuthError(error) && expectedCodes.includes(error.code as TCode)) {
+      return createAuthFailure(mapError(error as AuthError<TCode>))
+    }
+
+    throw error
+  }
+}
+
+const EXPECTED_LOGIN_ERRORS = [
+  'credentials_identifier_missing',
+  'invalid_credentials',
+  'email_verification_required',
+] as const satisfies readonly AuthLoginErrorCode[]
+
+const EXPECTED_REGISTRATION_ERRORS = [
+  'credentials_identifier_missing',
+  'password_confirmation_mismatch',
+  'registration_identifier_taken',
+] as const satisfies readonly AuthRegistrationErrorCode[]
+
+const EXPECTED_EMAIL_VERIFICATION_CONSUME_ERRORS = [
+  'email_verification_token_invalid',
+  'email_verification_token_expired',
+  'auth_user_missing',
+  'provider_update_unsupported',
+] as const satisfies readonly AuthEmailVerificationConsumeErrorCode[]
+
+const EXPECTED_EMAIL_VERIFICATION_RESEND_ERRORS = [
+  'email_verification_user_missing',
+  'email_already_verified',
+] as const satisfies readonly AuthEmailVerificationResendErrorCode[]
+
+const EXPECTED_PASSWORD_RESET_REQUEST_ERRORS = [
+  'password_reset_email_required',
+  'password_broker_not_configured',
+] as const satisfies readonly AuthPasswordResetRequestErrorCode[]
+
+const EXPECTED_PASSWORD_RESET_CONSUME_ERRORS = [
+  'password_confirmation_mismatch',
+  'password_reset_token_invalid',
+  'password_reset_token_expired',
+  'password_reset_user_missing',
+  'auth_user_missing',
+  'provider_update_unsupported',
+] as const satisfies readonly AuthPasswordResetConsumeErrorCode[]
+
+type InputFieldName<TInput extends Readonly<Record<string, unknown>>> = Extract<keyof TInput, string>
+
+function hasInputField<TInput extends Readonly<Record<string, unknown>>>(
+  input: TInput,
+  field: string,
+): field is InputFieldName<TInput> {
+  return field in input
+}
+
+function pickInputField<TInput extends Readonly<Record<string, unknown>>>(
+  input: TInput,
+  candidates: readonly string[],
+): InputFieldName<TInput> | undefined {
+  for (const candidate of candidates) {
+    if (hasInputField(input, candidate)) {
+      return candidate
+    }
+  }
+
+  const [firstField] = Object.keys(input)
+  return firstField && hasInputField(input, firstField) ? firstField : undefined
+}
+
+function createFieldErrors<TField extends string>(
+  fields: readonly TField[],
+  message: string,
+): AuthFieldErrors<TField> {
+  return Object.freeze(
+    Object.fromEntries(fields.map(field => [field, [message] as readonly string[]])) as AuthFieldErrors<TField>,
+  )
+}
+
+function createAuthFailurePayload<TCode extends AuthErrorCode, TFields extends AuthFieldErrors>(
+  code: TCode,
+  message: string,
+  status: number,
+  fields: TFields,
+): AuthFailure<TCode, TFields> {
+  return Object.freeze({
+    code,
+    message,
+    status,
+    fields,
+  })
+}
+
+function resolveIdentifierFieldName<TInput extends Readonly<Record<string, unknown>>>(
+  input: TInput,
+  error: AuthError,
+): InputFieldName<TInput> | undefined {
+  const identifier = error.details?.identifier
+  if (typeof identifier === 'string' && hasInputField(input, identifier)) {
+    return identifier
+  }
+
+  return pickInputField(input, ['email', 'username', 'phone'])
+}
+
+function resolveRequiredFieldName<TInput extends Readonly<Record<string, unknown>>>(
+  input: TInput,
+  candidates: readonly string[],
+): InputFieldName<TInput> {
+  const field = pickInputField(input, candidates)
+  if (!field) {
+    throw new Error('[@holo-js/auth] Expected auth failure mapping to resolve at least one input field.')
+  }
+
+  return field
+}
+
+function createLoginFailure<TCredentials extends AuthCredentials>(
+  error: AuthError<AuthLoginErrorCode>,
+  credentials: TCredentials,
+): AuthFailure<AuthLoginErrorCode, Partial<Record<InputFieldName<TCredentials>, readonly string[]>>> {
+  switch (error.code) {
+    case 'invalid_credentials': {
+      const message = 'These credentials do not match our records.'
+      const fields = [
+        resolveIdentifierFieldName(credentials, error),
+        hasInputField(credentials, 'password') ? 'password' : undefined,
+      ].filter((field): field is InputFieldName<TCredentials> => typeof field === 'string')
+
+      return createAuthFailurePayload(
+        error.code,
+        message,
+        401,
+        createFieldErrors(fields.length > 0 ? fields : [resolveRequiredFieldName(credentials, ['password'])], message),
+      )
+    }
+
+    case 'email_verification_required': {
+      const message = 'Verify your email address before signing in.'
+      const field = resolveIdentifierFieldName(credentials, error) ?? resolveRequiredFieldName(credentials, ['password'])
+      return createAuthFailurePayload(error.code, message, 403, createFieldErrors([field], message))
+    }
+
+    case 'credentials_identifier_missing':
+    default: {
+      const field = resolveRequiredFieldName(credentials, ['email', 'username', 'phone', 'password'])
+      return createAuthFailurePayload(error.code, error.message, 422, createFieldErrors([field], error.message))
+    }
+  }
+}
+
+function createRegistrationFailure<TInput extends AuthRegistrationInput>(
+  error: AuthError<AuthRegistrationErrorCode>,
+  input: TInput,
+): AuthFailure<AuthRegistrationErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>> {
+  switch (error.code) {
+    case 'registration_identifier_taken': {
+      const field = resolveIdentifierFieldName(input, error) ?? resolveRequiredFieldName(input, ['email', 'username', 'phone', 'password'])
+      return createAuthFailurePayload(error.code, error.message, 422, createFieldErrors([field], error.message))
+    }
+
+    case 'password_confirmation_mismatch': {
+      const message = error.message
+      const fields = [
+        pickInputField(input, ['password']),
+        pickInputField(input, ['passwordConfirmation']),
+      ].filter((field): field is InputFieldName<TInput> => typeof field === 'string')
+
+      return createAuthFailurePayload(
+        error.code,
+        message,
+        422,
+        createFieldErrors(fields.length > 0 ? fields : [resolveRequiredFieldName(input, ['password'])], message),
+      )
+    }
+
+    case 'credentials_identifier_missing':
+    default: {
+      const field = resolveRequiredFieldName(input, ['email', 'username', 'phone', 'password'])
+      return createAuthFailurePayload(error.code, error.message, 422, createFieldErrors([field], error.message))
+    }
+  }
+}
+
+function createEmailVerificationResendFailure(
+  error: AuthError<AuthEmailVerificationResendErrorCode>,
+): AuthFailure<AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>> {
+  switch (error.code) {
+    case 'email_already_verified':
+      return createAuthFailurePayload(error.code, error.message, 409, createFieldErrors(['_root'], error.message))
+    case 'email_verification_user_missing':
+    default:
+      return createAuthFailurePayload(error.code, error.message, 401, createFieldErrors(['_root'], error.message))
+  }
+}
+
+function createPasswordResetRequestFailure<TInput extends AuthPasswordResetRequestInput>(
+  error: AuthError<AuthPasswordResetRequestErrorCode>,
+  input: TInput,
+): AuthFailure<AuthPasswordResetRequestErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>> {
+  const field = resolveRequiredFieldName(input, ['email'])
+  return createAuthFailurePayload(error.code, error.message, 422, createFieldErrors([field], error.message))
+}
+
+function createPasswordResetConsumeFailure<TInput extends AuthPasswordResetInput>(
+  error: AuthError<AuthPasswordResetConsumeErrorCode>,
+  input: TInput,
+): AuthFailure<AuthPasswordResetConsumeErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>> {
+  switch (error.code) {
+    case 'password_confirmation_mismatch': {
+      const message = error.message
+      const fields = [
+        pickInputField(input, ['password']),
+        pickInputField(input, ['passwordConfirmation']),
+      ].filter((field): field is InputFieldName<TInput> => typeof field === 'string')
+
+      return createAuthFailurePayload(
+        error.code,
+        message,
+        422,
+        createFieldErrors(fields.length > 0 ? fields : [resolveRequiredFieldName(input, ['password'])], message),
+      )
+    }
+
+    case 'provider_update_unsupported': {
+      const field = resolveRequiredFieldName(input, ['token'])
+      return createAuthFailurePayload(error.code, error.message, 500, createFieldErrors([field], error.message))
+    }
+
+    case 'password_reset_token_invalid': {
+      const field = resolveRequiredFieldName(input, ['token'])
+      return createAuthFailurePayload(error.code, error.message, 422, createFieldErrors([field], error.message))
+    }
+
+    case 'password_reset_token_expired': {
+      const message = 'This password reset link is invalid or has expired.'
+      const field = resolveRequiredFieldName(input, ['token'])
+      return createAuthFailurePayload(error.code, message, 422, createFieldErrors([field], message))
+    }
+
+    case 'password_reset_user_missing':
+    case 'auth_user_missing':
+    default: {
+      const field = resolveRequiredFieldName(input, ['token'])
+      return createAuthFailurePayload(error.code, error.message, 422, createFieldErrors([field], error.message))
+    }
+  }
+}
+
+function createEmailVerificationConsumeFailure(
+  error: AuthError<AuthEmailVerificationConsumeErrorCode>,
+): AuthFailure<AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>> {
+  switch (error.code) {
+    case 'provider_update_unsupported':
+      return createAuthFailurePayload(error.code, error.message, 500, createFieldErrors(['token'], error.message))
+
+    case 'email_verification_token_invalid':
+      return createAuthFailurePayload(error.code, error.message, 422, createFieldErrors(['token'], error.message))
+
+    case 'email_verification_token_expired': {
+      const message = 'This verification link is invalid or has expired.'
+      return createAuthFailurePayload(error.code, message, 422, createFieldErrors(['token'], message))
+    }
+
+    case 'auth_user_missing':
+    default:
+      return createAuthFailurePayload(error.code, error.message, 422, createFieldErrors(['token'], error.message))
+  }
+}
+
 function getAuthRuntimeState(): {
   bindings?: RuntimeBindings
   sharedPasswordResetThrottleFailures?: Set<string>
@@ -191,7 +517,7 @@ async function loadOptionalSecurityModule(): Promise<OptionalSecurityModule | un
 }
 
 function throwUnconfigured(): never {
-  throw new Error('[@holo-js/auth] Auth runtime is not configured yet.')
+  throwAuthError('runtime_unconfigured', 'Auth runtime is not configured yet.')
 }
 
 function getRuntimeBindings(): RuntimeBindings {
@@ -556,6 +882,66 @@ function buildLogoutCookies(
   return Object.freeze([...new Set(cookies)])
 }
 
+async function resolveRequestCookie(
+  bindings: RuntimeBindings,
+  name: string,
+): Promise<string | undefined> {
+  return await bindings.context.getRequestCookie?.(name)
+}
+
+async function resolveRequestHeader(
+  bindings: RuntimeBindings,
+  name: string,
+): Promise<string | undefined> {
+  const value = await bindings.context.getRequestHeader?.(name)
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+function parseBearerToken(header: string | undefined): string | undefined {
+  if (typeof header !== 'string') {
+    return undefined
+  }
+
+  const match = header.match(/^Bearer\s+(.+)$/i)
+  return match?.[1]?.trim() || undefined
+}
+
+async function hydrateGuardContextFromRequest(guardName: string): Promise<void> {
+  const bindings = getRuntimeBindings()
+  const guard = getGuardConfig(guardName)
+
+  if (guard.driver === 'token') {
+    if (!bindings.context.getAccessToken?.(guardName)) {
+      const accessToken = parseBearerToken(await resolveRequestHeader(bindings, 'authorization'))
+      if (accessToken) {
+        bindings.context.setAccessToken?.(guardName, accessToken)
+      }
+    }
+
+    return
+  }
+
+  if (!bindings.context.getSessionId(guardName)) {
+    const sessionCookie = parseSetCookieDefinition(bindings.session.sessionCookie(''))
+    if (sessionCookie) {
+      const sessionId = await resolveRequestCookie(bindings, sessionCookie.name)
+      if (sessionId) {
+        bindings.context.setSessionId(guardName, sessionId)
+      }
+    }
+  }
+
+  if (!bindings.context.getRememberToken?.(guardName)) {
+    const rememberCookie = parseSetCookieDefinition(bindings.session.rememberMeCookie(''))
+    if (rememberCookie) {
+      const rememberToken = await resolveRequestCookie(bindings, rememberCookie.name)
+      if (rememberToken) {
+        bindings.context.setRememberToken?.(guardName, rememberToken)
+      }
+    }
+  }
+}
+
 function createPersonalAccessTokenId(): string {
   return randomUUID()
 }
@@ -598,7 +984,7 @@ function createDefaultDeliveryHook(): AuthDeliveryHook {
 function ensureTokenStore(): AuthTokenStore {
   const bindings = getRuntimeBindings()
   if (!bindings.tokens) {
-    throw new Error('[@holo-js/auth] Personal access token runtime is not configured yet.')
+    throwAuthError('token_runtime_unconfigured', 'Personal access token runtime is not configured yet.')
   }
 
   return bindings.tokens
@@ -607,7 +993,7 @@ function ensureTokenStore(): AuthTokenStore {
 function ensureEmailVerificationTokenStore(): EmailVerificationTokenStore {
   const bindings = getRuntimeBindings()
   if (!bindings.emailVerificationTokens) {
-    throw new Error('[@holo-js/auth] Email verification token runtime is not configured yet.')
+    throwAuthError('email_verification_runtime_unconfigured', 'Email verification token runtime is not configured yet.')
   }
 
   return bindings.emailVerificationTokens
@@ -616,7 +1002,7 @@ function ensureEmailVerificationTokenStore(): EmailVerificationTokenStore {
 function ensurePasswordResetTokenStore(): PasswordResetTokenStore {
   const bindings = getRuntimeBindings()
   if (!bindings.passwordResetTokens) {
-    throw new Error('[@holo-js/auth] Password reset token runtime is not configured yet.')
+    throwAuthError('password_reset_runtime_unconfigured', 'Password reset token runtime is not configured yet.')
   }
 
   return bindings.passwordResetTokens
@@ -723,7 +1109,9 @@ function getGuardConfig(guardName: string): RuntimeBindings['config']['guards'][
   const bindings = getRuntimeBindings()
   const guard = bindings.config.guards[guardName]
   if (!guard) {
-    throw new Error(`[@holo-js/auth] Auth guard "${guardName}" is not configured.`)
+    throwAuthError('guard_not_configured', `Auth guard "${guardName}" is not configured.`, {
+      guard: guardName,
+    })
   }
 
   return guard
@@ -738,12 +1126,16 @@ function getProviderAdapter(
   const bindings = getRuntimeBindings()
   const providerConfig = bindings.config.providers[providerName]
   if (!providerConfig) {
-    throw new Error(`[@holo-js/auth] Auth provider "${providerName}" is not configured.`)
+    throwAuthError('provider_not_configured', `Auth provider "${providerName}" is not configured.`, {
+      provider: providerName,
+    })
   }
 
   const adapter = bindings.providers[providerName]
   if (!adapter) {
-    throw new Error(`[@holo-js/auth] Auth provider runtime "${providerName}" is not configured.`)
+    throwAuthError('provider_runtime_not_configured', `Auth provider runtime "${providerName}" is not configured.`, {
+      provider: providerName,
+    })
   }
 
   return {
@@ -778,7 +1170,10 @@ function getGuardProviderAdapter(
 } {
   const guard = getGuardConfig(guardName)
   if (guard.driver !== 'session') {
-    throw new Error(`[@holo-js/auth] Auth guard "${guardName}" does not support session login.`)
+    throwAuthError('guard_session_login_unsupported', `Auth guard "${guardName}" does not support session login.`, {
+      guard: guardName,
+      driver: guard.driver,
+    })
   }
 
   const provider = guard.provider
@@ -793,7 +1188,7 @@ function getGuardProviderAdapter(
 
 function ensurePasswordConfirmation(input: AuthRegistrationInput): void {
   if (input.password !== input.passwordConfirmation) {
-    throw new Error('[@holo-js/auth] Password confirmation does not match.')
+    throwAuthError('password_confirmation_mismatch', 'Password confirmation does not match.')
   }
 }
 
@@ -816,8 +1211,12 @@ function toLookupCredentials(
   )
 
   if (Object.keys(credentials).length === 0) {
-    throw new Error(
-      `[@holo-js/auth] Auth credentials must include at least one configured identifier field: ${identifiers.join(', ')}.`,
+    throwAuthError(
+      'credentials_identifier_missing',
+      `Auth credentials must include at least one configured identifier field: ${identifiers.join(', ')}.`,
+      {
+        identifiers,
+      },
     )
   }
 
@@ -906,17 +1305,6 @@ function rehydrateSerializedUser(
   return Object.freeze(restored)
 }
 
-function getEmailVerifiedAt(
-  adapter: ErasedAuthProviderAdapter,
-  user: unknown,
-): Date | string | null | undefined {
-  if (adapter.getEmailVerifiedAt) {
-    return adapter.getEmailVerifiedAt(user)
-  }
-
-  return requireRecordValue(user, '[@holo-js/auth] Auth provider users must be objects.').email_verified_at as Date | string | null | undefined
-}
-
 function getPasswordHash(
   adapter: ErasedAuthProviderAdapter,
   user: unknown,
@@ -931,6 +1319,50 @@ function getPasswordHash(
 
 function isEmailVerificationRequired(): boolean {
   return getRuntimeBindings().config.emailVerification.required === true
+}
+
+function getDefaultGuardName(): string {
+  return getRuntimeBindings().config.defaults.guard
+}
+
+function getEmailVerificationRoute(): string {
+  return getRuntimeBindings().config.emailVerification.route
+}
+
+function getPasswordBrokerConfig(brokerName: string) {
+  const broker = getRuntimeBindings().config.passwords[brokerName]
+  if (!broker) {
+    throwAuthError('password_broker_not_configured', `Password broker "${brokerName}" is not configured.`, {
+      broker: brokerName,
+    })
+  }
+
+  return broker
+}
+
+function getPasswordResetRoute(brokerName: string): string {
+  return getPasswordBrokerConfig(brokerName).route
+}
+
+function hasVerifiedEmail(user: Readonly<Record<string, unknown>>): boolean {
+  return user.email_verified_at instanceof Date
+    || typeof user.email_verified_at === 'string'
+}
+
+function createEmailVerificationRedirectRoute(user: AuthUser): string {
+  const route = getEmailVerificationRoute()
+  const rawEmail = (user as Readonly<Record<string, unknown>>).email
+  const email = typeof rawEmail === 'string'
+    ? rawEmail.trim()
+    : ''
+
+  if (!email) {
+    return route
+  }
+
+  const url = new URL(route, 'http://holo.local')
+  url.searchParams.set('email', email)
+  return `${url.pathname}${url.search}${url.hash}`
 }
 
 function toSessionIdentityPayload(
@@ -1189,6 +1621,8 @@ async function resolveCurrentAccessTokenForGuard(guardName: string): Promise<Aut
     return null
   }
 
+  await hydrateGuardContextFromRequest(guardName)
+
   const plainTextToken = bindings.context.getAccessToken?.(guardName)
   if (!plainTextToken) {
     return null
@@ -1213,6 +1647,8 @@ async function resolveUserFromGuard(
 ): Promise<AuthUser | null> {
   const bindings = getRuntimeBindings()
   const guard = getGuardConfig(guardName)
+
+  await hydrateGuardContextFromRequest(guardName)
 
   if (guard.driver === 'token') {
     const token = bindings.context.getAccessToken?.(guardName)
@@ -1287,19 +1723,12 @@ async function loginForGuard(guardName: string, credentials: AuthCredentials): P
   const { guard, adapter } = getGuardProviderAdapter(guardName)
   const user = await findUserByConfiguredIdentifiers(adapter, credentials, getProviderIdentifiers(guard.provider))
   if (!user) {
-    throw new Error('[@holo-js/auth] Invalid credentials.')
+    throwAuthError('invalid_credentials', 'Invalid credentials.')
   }
 
   const passwordHash = getPasswordHash(adapter, user)
   if (!passwordHash || !(await bindings.passwordHasher.verify(credentials.password, passwordHash))) {
-    throw new Error('[@holo-js/auth] Invalid credentials.')
-  }
-
-  if (isEmailVerificationRequired()) {
-    const verifiedAt = getEmailVerifiedAt(adapter, user)
-    if (!verifiedAt) {
-      throw new Error('[@holo-js/auth] Email verification is required before login.')
-    }
+    throwAuthError('invalid_credentials', 'Invalid credentials.')
   }
 
   const serialized = serializeUser(adapter, user, guard.provider)
@@ -1317,9 +1746,14 @@ function assertTrustedUserProvider(
 ): void {
   const markedProvider = readMarkedProvider(user)
   if (markedProvider && markedProvider !== providerName) {
-    throw new Error(
-      `[@holo-js/auth] Trusted login for guard "${guardName}" requires a user from provider "${providerName}", `
-      + `received "${markedProvider}".`,
+    throwAuthError(
+      'trusted_login_provider_mismatch',
+      `Trusted login for guard "${guardName}" requires a user from provider "${providerName}", received "${markedProvider}".`,
+      {
+        guard: guardName,
+        expectedProvider: providerName,
+        receivedProvider: markedProvider,
+      },
     )
   }
 
@@ -1330,9 +1764,14 @@ function assertTrustedUserProvider(
     }
 
     if (adapter.matchesUser?.(user) === true) {
-      throw new Error(
-        `[@holo-js/auth] Trusted login for guard "${guardName}" requires a user from provider "${providerName}", `
-        + `received "${candidateProviderName}".`,
+      throwAuthError(
+        'trusted_login_provider_mismatch',
+        `Trusted login for guard "${guardName}" requires a user from provider "${providerName}", received "${candidateProviderName}".`,
+        {
+          guard: guardName,
+          expectedProvider: providerName,
+          receivedProvider: candidateProviderName,
+        },
       )
     }
   }
@@ -1412,14 +1851,22 @@ async function resolveTrustedUserForGuard(
   const { provider, adapter } = getGuardProviderAdapter(guardName)
 
   if (candidate === null || typeof candidate === 'undefined') {
-    throw new Error('[@holo-js/auth] Trusted login requires a user or user id.')
+    throwAuthError('trusted_login_user_required', 'Trusted login requires a user or user id.', {
+      guard: guardName,
+    })
   }
 
   if (typeof candidate === 'string' || typeof candidate === 'number') {
     const user = await adapter.findById(candidate)
     if (!user) {
-      throw new Error(
-        `[@holo-js/auth] Auth user "${provider}:${String(candidate)}" was not found for trusted login.`,
+      throwAuthError(
+        'trusted_login_user_not_found',
+        `Auth user "${provider}:${String(candidate)}" was not found for trusted login.`,
+        {
+          guard: guardName,
+          provider,
+          userId: candidate,
+        },
       )
     }
 
@@ -1436,15 +1883,26 @@ async function resolveTrustedUserForGuard(
   if (adapter.matchesUser?.(candidate) === true) {
     const userId = extractUserId(adapter, candidate)
     if (typeof userId !== 'string' && typeof userId !== 'number') {
-      throw new Error(
-        `[@holo-js/auth] Trusted login for guard "${guardName}" requires a user value compatible with provider "${provider}".`,
+      throwAuthError(
+        'trusted_login_user_incompatible',
+        `Trusted login for guard "${guardName}" requires a user value compatible with provider "${provider}".`,
+        {
+          guard: guardName,
+          provider,
+        },
       )
     }
 
     const user = await adapter.findById(userId)
     if (!user) {
-      throw new Error(
-        `[@holo-js/auth] Auth user "${provider}:${String(userId)}" was not found for trusted login.`,
+      throwAuthError(
+        'trusted_login_user_not_found',
+        `Auth user "${provider}:${String(userId)}" was not found for trusted login.`,
+        {
+          guard: guardName,
+          provider,
+          userId,
+        },
       )
     }
 
@@ -1464,9 +1922,13 @@ async function resolveTrustedUserForGuard(
         && !markedProvider
         && !isCompatibleSerializedUserCandidate(candidate, serializeUser(adapter, user, provider))
       ) {
-        throw new Error(
-          `[@holo-js/auth] Trusted login for guard "${guardName}" requires a user from provider "${provider}". `
-          + 'Pass a user id, a serialized auth user, or implement matchesUser() on the provider adapter.',
+        throwAuthError(
+          'trusted_login_provider_mismatch',
+          `Trusted login for guard "${guardName}" requires a user from provider "${provider}". Pass a user id, a serialized auth user, or implement matchesUser() on the provider adapter.`,
+          {
+            guard: guardName,
+            expectedProvider: provider,
+          },
         )
       }
 
@@ -1478,8 +1940,13 @@ async function resolveTrustedUserForGuard(
     }
   }
 
-  throw new Error(
-    `[@holo-js/auth] Trusted login for guard "${guardName}" requires a user value compatible with provider "${provider}".`,
+  throwAuthError(
+    'trusted_login_user_incompatible',
+    `Trusted login for guard "${guardName}" requires a user value compatible with provider "${provider}".`,
+    {
+      guard: guardName,
+      provider,
+    },
   )
 }
 
@@ -1589,16 +2056,28 @@ async function impersonateForGuard(
   const actorGuard = options.actorGuard ?? guardName
   const actorState = await readGuardSessionState(actorGuard)
   if (!actorState) {
-    throw new Error(`[@holo-js/auth] Impersonation for guard "${guardName}" requires an authenticated actor on guard "${actorGuard}".`)
+    throwAuthError(
+      'impersonation_actor_required',
+      `Impersonation for guard "${guardName}" requires an authenticated actor on guard "${actorGuard}".`,
+      {
+        guard: guardName,
+        actorGuard,
+      },
+    )
   }
 
   if (actorState.payload.impersonation) {
-    throw new Error(`[@holo-js/auth] Nested impersonation is not supported for guard "${actorGuard}".`)
+    throwAuthError('impersonation_nested_unsupported', `Nested impersonation is not supported for guard "${actorGuard}".`, {
+      guard: guardName,
+      actorGuard,
+    })
   }
 
   const targetState = await readGuardSessionState(guardName)
   if (targetState?.payload.impersonation) {
-    throw new Error(`[@holo-js/auth] Guard "${guardName}" is already impersonating another user.`)
+    throwAuthError('impersonation_already_active', `Guard "${guardName}" is already impersonating another user.`, {
+      guard: guardName,
+    })
   }
 
   const resolved = await resolveTrustedUserForGuard(guardName, user)
@@ -1727,14 +2206,22 @@ async function registerDefaultUser(input: AuthRegistrationInput): Promise<AuthUs
       [identifier]: value,
     })
     if (existing) {
-      throw new Error(`[@holo-js/auth] A user with this ${identifier} already exists.`)
+      throwAuthError('registration_identifier_taken', `A user with this ${identifier} already exists.`, {
+        identifier,
+      })
     }
   }
 
   const password = await bindings.passwordHasher.hash(input.password)
   const user = await adapter.create(toRegistrationRecord(input, password))
+  const serialized = serializeUser(adapter, user, guard.provider)
+  if (isEmailVerificationRequired()) {
+    await createEmailVerificationFacade().create(serialized, {
+      guard: defaultGuard,
+    })
+  }
 
-  return serializeUser(adapter, user, guard.provider)
+  return serialized
 }
 
 function findProviderNameForUser(user: unknown): string {
@@ -1758,9 +2245,9 @@ function findProviderNameForUser(user: unknown): string {
     }
   }
 
-  throw new Error(
-    '[@holo-js/auth] Unable to resolve a provider for the given user. '
-    + 'Pass a guard explicitly when multiple auth providers are configured.',
+  throwAuthError(
+    'provider_resolution_required',
+    'Unable to resolve a provider for the given user. Pass a guard explicitly when multiple auth providers are configured.',
   )
 }
 
@@ -1849,6 +2336,12 @@ async function establishSessionForUser(
     sessionId: session.id,
     rememberToken,
     cookies: Object.freeze(cookies),
+    ...(isEmailVerificationRequired() && !hasVerifiedEmail(user as Readonly<Record<string, unknown>>)
+      ? {
+          emailVerificationRequired: true,
+          emailVerificationRoute: createEmailVerificationRedirectRoute(user),
+        }
+      : {}),
   })
 }
 
@@ -1883,7 +2376,10 @@ async function updateUserRecord(
   const { adapter } = getProviderAdapter(providerName)
   const user = await adapter.findById(userId)
   if (!user) {
-    throw new Error(`[@holo-js/auth] Auth user "${providerName}:${String(userId)}" no longer exists.`)
+    throwAuthError('auth_user_missing', `Auth user "${providerName}:${String(userId)}" no longer exists.`, {
+      provider: providerName,
+      userId,
+    })
   }
 
   let updated: unknown = user
@@ -1896,8 +2392,12 @@ async function updateUserRecord(
     || typeof input.email_verified_at !== 'undefined'
     || typeof input.password !== 'undefined'
   ) {
-    throw new Error(
-      `[@holo-js/auth] Auth provider "${providerName}" must implement update() to persist user changes.`,
+    throwAuthError(
+      'provider_update_unsupported',
+      `Auth provider "${providerName}" must implement update() to persist user changes.`,
+      {
+        provider: providerName,
+      },
     )
   }
 
@@ -1918,7 +2418,7 @@ function createEmailVerificationFacade(): AuthEmailVerificationFacade {
       )
       const email = typeof serialized.email === 'string' ? serialized.email.trim() : ''
       if (!email) {
-        throw new Error('[@holo-js/auth] Email verification requires a user with an email address.')
+        throwAuthError('email_required_for_verification', 'Email verification requires a user with an email address.')
       }
 
       const store = ensureEmailVerificationTokenStore()
@@ -1942,166 +2442,212 @@ function createEmailVerificationFacade(): AuthEmailVerificationFacade {
         user: serialized,
         email,
         token: result,
+        route: getEmailVerificationRoute(),
       })
       return result
     },
-    async consume(plainTextToken: string): Promise<AuthUser> {
-      const parsed = parsePlainTextToken(plainTextToken)
-      if (!parsed) {
-        throw new Error('[@holo-js/auth] Invalid email verification token.')
-      }
+    resend(options: { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string } = {}): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>> {
+      return captureExpectedAuthResult(async () => {
+        const guardName = options.guard ?? getDefaultGuardName()
+        let currentUser: AuthUser | null
+        if (typeof options.email === 'string' && options.email.trim().length > 0) {
+          const { provider, adapter } = getGuardProviderAdapter(guardName)
+          const matchedUser = await adapter.findByCredentials({
+            email: options.email.trim(),
+          })
+          currentUser = matchedUser
+            ? serializeUser(adapter, matchedUser, provider)
+            : null
+        } else {
+          currentUser = await resolveUserFromGuard(guardName, { fresh: true })
+        }
 
-      const store = ensureEmailVerificationTokenStore()
-      const record = await store.findById(parsed.id)
-      if (!record || !verifyTokenSecret(parsed.secret, record.tokenHash) || record.expiresAt.getTime() <= Date.now()) {
-        throw new Error('[@holo-js/auth] Invalid or expired email verification token.')
-      }
+        if (!currentUser) {
+          throwAuthError('email_verification_user_missing', 'Sign in before requesting another verification email.', {
+            guard: guardName,
+          })
+        }
 
-      const updated = await updateUserRecord(record.provider, record.userId, {
-        email_verified_at: new Date(),
-      })
-      await store.delete(record.id)
-      return updated
+        if (hasVerifiedEmail(currentUser as Readonly<Record<string, unknown>>)) {
+          throwAuthError('email_already_verified', 'Your email address is already verified.', {
+            guard: guardName,
+          })
+        }
+
+        return await this.create(currentUser, {
+          guard: guardName,
+          expiresAt: options.expiresAt,
+        })
+      }, EXPECTED_EMAIL_VERIFICATION_RESEND_ERRORS, createEmailVerificationResendFailure)
+    },
+    consume(plainTextToken: string): Promise<AuthResult<AuthUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>> {
+      return captureExpectedAuthResult(async () => {
+        const parsed = parsePlainTextToken(plainTextToken)
+        if (!parsed) {
+          throwAuthError('email_verification_token_invalid', 'Invalid email verification token.')
+        }
+
+        const store = ensureEmailVerificationTokenStore()
+        const record = await store.findById(parsed.id)
+        if (!record || !verifyTokenSecret(parsed.secret, record.tokenHash) || record.expiresAt.getTime() <= Date.now()) {
+          throwAuthError('email_verification_token_expired', 'Invalid or expired email verification token.')
+        }
+
+        const updated = await updateUserRecord(record.provider, record.userId, {
+          email_verified_at: new Date(),
+        })
+        await store.delete(record.id)
+        return updated
+      }, EXPECTED_EMAIL_VERIFICATION_CONSUME_ERRORS, createEmailVerificationConsumeFailure)
     },
   })
 }
 
-function createPasswordResetFacade(): AuthPasswordResetFacade {
-  return Object.freeze({
-    async request(email: string, options: { readonly broker?: string, readonly expiresAt?: Date } = {}): Promise<void> {
-      const normalizedEmail = email.trim()
-      if (!normalizedEmail) {
-        throw new Error('[@holo-js/auth] Email is required to request a password reset.')
-      }
+async function requestPasswordResetUsingRuntime<TInput extends AuthPasswordResetRequestInput>(
+  input: TInput,
+  options: AuthPasswordResetRequestOptions = {},
+): Promise<AuthResult<void, AuthPasswordResetRequestErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>>> {
+  return captureExpectedAuthResult(async () => {
+    const normalizedEmail = input.email.trim()
+    if (!normalizedEmail) {
+      throwAuthError('password_reset_email_required', 'Email is required to request a password reset.')
+    }
 
-      const bindings = getRuntimeBindings()
-      const brokerName = options.broker ?? bindings.config.defaults.passwords
-      const broker = bindings.config.passwords[brokerName]
-      if (!broker) {
-        throw new Error(`[@holo-js/auth] Password broker "${brokerName}" is not configured.`)
-      }
-
-      const store = ensurePasswordResetTokenStore()
-      const existing = await store.findLatestByEmail(broker.provider, normalizedEmail, {
-        table: broker.table,
+    const bindings = getRuntimeBindings()
+    const brokerName = options.broker ?? bindings.config.defaults.passwords
+    const broker = bindings.config.passwords[brokerName]
+    if (!broker) {
+      throwAuthError('password_broker_not_configured', `Password broker "${brokerName}" is not configured.`, {
+        broker: brokerName,
       })
-      if (existing && (existing.createdAt.getTime() + (broker.throttle * 60 * 1000)) > Date.now()) {
+    }
+
+    const store = ensurePasswordResetTokenStore()
+    const existing = await store.findLatestByEmail(broker.provider, normalizedEmail, {
+      table: broker.table,
+    })
+    if (existing && (existing.createdAt.getTime() + (broker.throttle * 60 * 1000)) > Date.now()) {
+      return
+    }
+
+    let sharedReservation: {
+      readonly key: string
+      readonly limited: boolean
+      readonly store: OptionalSecurityRateLimitStore
+      readonly bypassed: boolean
+    } | undefined
+
+    try {
+      sharedReservation = await reserveSharedPasswordResetThrottle(brokerName, broker, normalizedEmail)
+      if (sharedReservation?.limited) {
         return
       }
 
-      let sharedReservation: {
-        readonly key: string
-        readonly limited: boolean
-        readonly store: OptionalSecurityRateLimitStore
-        readonly bypassed: boolean
-      } | undefined
-
-      try {
-        sharedReservation = await reserveSharedPasswordResetThrottle(brokerName, broker, normalizedEmail)
-        if (sharedReservation?.limited) {
-          return
-        }
-
-        const { adapter } = getProviderAdapter(broker.provider)
-        const user = await adapter.findByCredentials({
-          email: normalizedEmail,
-        })
-        if (!user) {
-          await clearSharedPasswordResetThrottleReservation(sharedReservation)
-          return
-        }
-
-        const id = createPersonalAccessTokenId()
-        const secret = createPersonalAccessTokenSecret()
-        const record: PasswordResetTokenRecord = Object.freeze({
-          id,
-          provider: broker.provider,
-          email: normalizedEmail,
-          table: broker.table,
-          tokenHash: hashTokenSecret(secret),
-          createdAt: new Date(),
-          expiresAt: options.expiresAt ?? new Date(Date.now() + broker.expire * 60 * 1000),
-        })
-        await store.deleteByEmail(broker.provider, normalizedEmail, {
-          table: broker.table,
-        })
-        await store.create(record)
-        const result = createLifecycleTokenResult(record, `${id}.${secret}`)
-        try {
-          await bindings.delivery.sendPasswordReset({
-            provider: broker.provider,
-            email: normalizedEmail,
-            token: result,
-          })
-        } catch (error) {
-          try {
-            await store.delete(record.id, {
-              table: broker.table,
-            })
-          } catch (cleanupError) {
-            void cleanupError
-          }
-          throw error
-        }
-        if (sharedReservation?.bypassed) {
-          getAuthRuntimeState().sharedPasswordResetThrottleFailures?.delete(sharedReservation.key)
-        }
-      } catch (error) {
-        const cleared = await clearSharedPasswordResetThrottleReservation(sharedReservation)
-        if (cleared === 'unsupported' && sharedReservation) {
-          const failures = getAuthRuntimeState().sharedPasswordResetThrottleFailures ??= new Set<string>()
-          failures.add(sharedReservation.key)
-        }
-
-        throw error
-      }
-    },
-    async consume(input: {
-      readonly token: string
-      readonly password: string
-      readonly passwordConfirmation: string
-    }): Promise<AuthUser> {
-      if (input.password !== input.passwordConfirmation) {
-        throw new Error('[@holo-js/auth] Password confirmation does not match.')
-      }
-
-      const parsed = parsePlainTextToken(input.token)
-      if (!parsed) {
-        throw new Error('[@holo-js/auth] Invalid password reset token.')
-      }
-
-      const store = ensurePasswordResetTokenStore()
-      const record = await store.findById(parsed.id)
-      if (!record || !verifyTokenSecret(parsed.secret, record.tokenHash) || record.expiresAt.getTime() <= Date.now()) {
-        throw new Error('[@holo-js/auth] Invalid or expired password reset token.')
-      }
-
-      const { adapter } = getProviderAdapter(record.provider)
+      const { adapter } = getProviderAdapter(broker.provider)
       const user = await adapter.findByCredentials({
-        email: record.email,
+        email: normalizedEmail,
       })
       if (!user) {
-        throw new Error('[@holo-js/auth] Password reset token user no longer exists.')
+        await clearSharedPasswordResetThrottleReservation(sharedReservation)
+        return
       }
 
-      const password = await getRuntimeBindings().passwordHasher.hash(input.password)
-      const userId = requireUserId(
-        adapter,
-        user,
-        '[@holo-js/auth] Password reset token user is invalid.',
-      )
-      const updated = await updateUserRecord(record.provider, userId, {
-        password,
+      const id = createPersonalAccessTokenId()
+      const secret = createPersonalAccessTokenSecret()
+      const record: PasswordResetTokenRecord = Object.freeze({
+        id,
+        provider: broker.provider,
+        email: normalizedEmail,
+        table: broker.table,
+        tokenHash: hashTokenSecret(secret),
+        createdAt: new Date(),
+        expiresAt: options.expiresAt ?? new Date(Date.now() + broker.expire * 60 * 1000),
       })
-      await store.delete(record.id, {
-        table: record.table,
+      await store.deleteByEmail(broker.provider, normalizedEmail, {
+        table: broker.table,
       })
-      await store.deleteByEmail(record.provider, record.email, {
-        table: record.table,
+      await store.create(record)
+      const result = createLifecycleTokenResult(record, `${id}.${secret}`)
+      try {
+        await bindings.delivery.sendPasswordReset({
+          broker: brokerName,
+          provider: broker.provider,
+          email: normalizedEmail,
+          token: result,
+          route: getPasswordResetRoute(brokerName),
+        })
+      } catch (error) {
+        try {
+          await store.delete(record.id, {
+            table: broker.table,
+          })
+        } catch (cleanupError) {
+          void cleanupError
+        }
+        throw error
+      }
+      if (sharedReservation?.bypassed) {
+        getAuthRuntimeState().sharedPasswordResetThrottleFailures?.delete(sharedReservation.key)
+      }
+    } catch (error) {
+      const cleared = await clearSharedPasswordResetThrottleReservation(sharedReservation)
+      if (cleared === 'unsupported' && sharedReservation) {
+        const failures = getAuthRuntimeState().sharedPasswordResetThrottleFailures ??= new Set<string>()
+        failures.add(sharedReservation.key)
+      }
+
+      throw error
+    }
+  }, EXPECTED_PASSWORD_RESET_REQUEST_ERRORS, error => createPasswordResetRequestFailure(error, input))
+}
+
+async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
+  input: TInput,
+): Promise<AuthResult<AuthUser, AuthPasswordResetConsumeErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>>> {
+  return captureExpectedAuthResult(async () => {
+    if (input.password !== input.passwordConfirmation) {
+      throwAuthError('password_confirmation_mismatch', 'Password confirmation does not match.')
+    }
+
+    const parsed = parsePlainTextToken(input.token)
+    if (!parsed) {
+      throwAuthError('password_reset_token_invalid', 'Invalid password reset token.')
+    }
+
+    const store = ensurePasswordResetTokenStore()
+    const record = await store.findById(parsed.id)
+    if (!record || !verifyTokenSecret(parsed.secret, record.tokenHash) || record.expiresAt.getTime() <= Date.now()) {
+      throwAuthError('password_reset_token_expired', 'Invalid or expired password reset token.')
+    }
+
+    const { adapter } = getProviderAdapter(record.provider)
+    const user = await adapter.findByCredentials({
+      email: record.email,
+    })
+    if (!user) {
+      throwAuthError('password_reset_user_missing', 'Password reset token user no longer exists.', {
+        provider: record.provider,
+        email: record.email,
       })
-      return updated
-    },
-  })
+    }
+
+    const password = await getRuntimeBindings().passwordHasher.hash(input.password)
+    const userId = requireUserId(
+      adapter,
+      user,
+      '[@holo-js/auth] Password reset token user is invalid.',
+    )
+    const updated = await updateUserRecord(record.provider, userId, {
+      password,
+    })
+    await store.delete(record.id, {
+      table: record.table,
+    })
+    await store.deleteByEmail(record.provider, record.email, {
+      table: record.table,
+    })
+    return updated
+  }, EXPECTED_PASSWORD_RESET_CONSUME_ERRORS, error => createPasswordResetConsumeFailure(error, input))
 }
 
 function createTokenFacade(): AuthTokenFacade {
@@ -2195,8 +2741,12 @@ function createGuardFacade(guardName: string): AuthGuardFacade {
     currentAccessToken() {
       return resolveCurrentAccessTokenForGuard(guardName)
     },
-    login(credentials: AuthCredentials) {
-      return loginForGuard(guardName, credentials)
+    login<TCredentials extends AuthCredentials>(credentials: TCredentials) {
+      return captureExpectedAuthResult(
+        () => loginForGuard(guardName, credentials),
+        EXPECTED_LOGIN_ERRORS,
+        error => createLoginFailure(error, credentials),
+      )
     },
     loginUsing(user: unknown, options?: AuthSessionLoginOptions) {
       return loginUsingForGuard(guardName, user, options)
@@ -2245,7 +2795,6 @@ export function getAuthRuntime(): AuthRuntimeFacade {
   const getDefaultGuardName = () => getRuntimeBindings().config.defaults.guard
   const tokens = createTokenFacade()
   const verification = createEmailVerificationFacade()
-  const passwords = createPasswordResetFacade()
 
   const facade: AuthFacade = {
     check() {
@@ -2263,8 +2812,12 @@ export function getAuthRuntime(): AuthRuntimeFacade {
     currentAccessToken() {
       return resolveCurrentAccessTokenForGuard(getDefaultGuardName())
     },
-    login(credentials) {
-      return loginForGuard(getDefaultGuardName(), credentials)
+    login<TCredentials extends AuthCredentials>(credentials: TCredentials) {
+      return captureExpectedAuthResult(
+        () => loginForGuard(getDefaultGuardName(), credentials),
+        EXPECTED_LOGIN_ERRORS,
+        error => createLoginFailure(error, credentials),
+      )
     },
     loginUsing(user, options) {
       return loginUsingForGuard(getDefaultGuardName(), user, options)
@@ -2287,8 +2840,18 @@ export function getAuthRuntime(): AuthRuntimeFacade {
     logout() {
       return logoutForGuard(getDefaultGuardName())
     },
-    register(input) {
-      return registerDefaultUser(input)
+    register<TInput extends AuthRegistrationInput>(input: TInput) {
+      return captureExpectedAuthResult(
+        () => registerDefaultUser(input),
+        EXPECTED_REGISTRATION_ERRORS,
+        error => createRegistrationFailure(error, input),
+      )
+    },
+    requestPasswordReset<TInput extends AuthPasswordResetRequestInput>(input: TInput, options?: AuthPasswordResetRequestOptions) {
+      return requestPasswordResetUsingRuntime(input, options)
+    },
+    resetPassword<TInput extends AuthPasswordResetInput>(input: TInput) {
+      return resetPasswordUsingRuntime(input)
     },
     hashPassword(password: string) {
       return getRuntimeBindings().passwordHasher.hash(password)
@@ -2304,7 +2867,6 @@ export function getAuthRuntime(): AuthRuntimeFacade {
     },
     tokens,
     verification,
-    passwords,
   }
 
   return Object.freeze({
@@ -2365,7 +2927,9 @@ export async function currentAccessToken(): Promise<AuthCurrentAccessToken | nul
   return getAuthRuntime().currentAccessToken()
 }
 
-export async function login(credentials: AuthCredentials): Promise<AuthEstablishedSession> {
+export async function login<TCredentials extends AuthCredentials>(
+  credentials: TCredentials,
+): Promise<AuthResult<AuthEstablishedSession, AuthLoginErrorCode, Partial<Record<InputFieldName<TCredentials>, readonly string[]>>>> {
   return getAuthRuntime().login(credentials)
 }
 
@@ -2421,8 +2985,23 @@ export async function logout(): Promise<AuthLogoutResult> {
   return getAuthRuntime().logout()
 }
 
-export async function register(input: AuthRegistrationInput): Promise<AuthUser> {
+export async function register<TInput extends AuthRegistrationInput>(
+  input: TInput,
+): Promise<AuthResult<AuthUser, AuthRegistrationErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>>> {
   return getAuthRuntime().register(input)
+}
+
+export async function requestPasswordReset<TInput extends AuthPasswordResetRequestInput>(
+  input: TInput,
+  options?: AuthPasswordResetRequestOptions,
+): Promise<AuthResult<void, AuthPasswordResetRequestErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>>> {
+  return getAuthRuntime().requestPasswordReset(input, options)
+}
+
+export async function resetPassword<TInput extends AuthPasswordResetInput>(
+  input: TInput,
+): Promise<AuthResult<AuthUser, AuthPasswordResetConsumeErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>>> {
+  return getAuthRuntime().resetPassword(input)
 }
 
 export const tokens: AuthTokenFacade = Object.freeze({
@@ -2450,21 +3029,11 @@ export const verification: AuthEmailVerificationFacade = Object.freeze({
   create(user: unknown, options?: { readonly guard?: string, readonly expiresAt?: Date }) {
     return getAuthRuntime().verification.create(user, options)
   },
+  resend(options?: { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string }) {
+    return getAuthRuntime().verification.resend(options)
+  },
   consume(plainTextToken: string) {
     return getAuthRuntime().verification.consume(plainTextToken)
-  },
-})
-
-export const passwords: AuthPasswordResetFacade = Object.freeze({
-  request(email: string, options?: { readonly broker?: string, readonly expiresAt?: Date }) {
-    return getAuthRuntime().passwords.request(email, options)
-  },
-  consume(input: {
-    readonly token: string
-    readonly password: string
-    readonly passwordConfirmation: string
-  }) {
-    return getAuthRuntime().passwords.consume(input)
   },
 })
 

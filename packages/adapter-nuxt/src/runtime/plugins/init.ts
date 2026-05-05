@@ -1,4 +1,5 @@
 import {
+  createNuxtAuthRequestAccessors,
   configureHoloRuntimeConfig,
 } from '../composables'
 import { initializeHoloAdapterProject } from '@holo-js/core'
@@ -13,6 +14,7 @@ export default defineNitroPlugin(async (nitroApp: { hooks: { hook: (name: string
     envName: config.holo.appEnv,
     preferCache: process.env.NODE_ENV === 'production',
     processEnv: process.env,
+    authRequest: createNuxtAuthRequestAccessors(),
   })
   const driver = project.runtime.manager.connection().getDriver()
 

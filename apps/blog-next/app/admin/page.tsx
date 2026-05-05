@@ -1,15 +1,23 @@
 import Link from 'next/link'
+import { user } from '@holo-js/auth'
 
 import { getAdminDashboardData } from '@/server/lib/blog'
 
 export const dynamic = 'force-dynamic'
 
 export default async function AdminDashboardPage() {
-  const dashboard = await getAdminDashboardData()
+  const [dashboard, currentUser] = await Promise.all([
+    getAdminDashboardData(),
+    user(),
+  ])
+  const displayName = currentUser?.name ?? currentUser?.email ?? 'Editor'
 
   return (
     <section style={{ display: 'grid', gap: '1rem' }}>
-      <h1 style={{ margin: 0 }}>Admin</h1>
+      <div style={{ display: 'grid', gap: '0.35rem' }}>
+        <h1 style={{ margin: 0 }}>Admin</h1>
+        <p style={{ margin: 0, color: '#94a3b8' }}>Signed in as {displayName}</p>
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(12rem, 1fr))', gap: '1rem' }}>
         <article style={{ padding: '1rem', borderRadius: '1rem', background: '#111827' }}><strong>{dashboard.postCount}</strong><div>Posts</div></article>
         <article style={{ padding: '1rem', borderRadius: '1rem', background: '#111827' }}><strong>{dashboard.publishedCount}</strong><div>Published</div></article>

@@ -378,6 +378,8 @@ export const DEFAULT_AUTH_PASSWORD_BROKER = 'users'
 export const DEFAULT_AUTH_PASSWORD_RESET_TABLE = 'password_reset_tokens'
 export const DEFAULT_AUTH_PASSWORD_EXPIRE = 60
 export const DEFAULT_AUTH_PASSWORD_THROTTLE = 60
+export const DEFAULT_AUTH_PASSWORD_RESET_ROUTE = '/reset-password'
+export const DEFAULT_AUTH_EMAIL_VERIFICATION_ROUTE = '/verify-email'
 export const DEFAULT_WORKOS_SESSION_COOKIE = 'wos-session'
 export const DEFAULT_CLERK_SESSION_COOKIE = '__session'
 
@@ -407,10 +409,12 @@ export const holoAuthDefaults: Readonly<NormalizedHoloAuthConfig> = Object.freez
       table: DEFAULT_AUTH_PASSWORD_RESET_TABLE,
       expire: DEFAULT_AUTH_PASSWORD_EXPIRE,
       throttle: DEFAULT_AUTH_PASSWORD_THROTTLE,
+      route: DEFAULT_AUTH_PASSWORD_RESET_ROUTE,
     }),
   }),
   emailVerification: Object.freeze({
     required: false,
+    route: DEFAULT_AUTH_EMAIL_VERIFICATION_ROUTE,
   }),
   personalAccessTokens: Object.freeze({
     defaultAbilities: Object.freeze([]),
@@ -1406,6 +1410,7 @@ function normalizePasswordBroker(
     throttle: parseInteger(config.throttle, DEFAULT_AUTH_PASSWORD_THROTTLE, `auth password broker "${name}" throttle`, {
       minimum: 0,
     }),
+    route: config.route?.trim() || DEFAULT_AUTH_PASSWORD_RESET_ROUTE,
   })
   /* v8 ignore stop */
 }
@@ -1582,6 +1587,9 @@ export function normalizeAuthConfig(
       required: typeof config.emailVerification === 'boolean'
         ? config.emailVerification
         : config.emailVerification?.required ?? false,
+      route: typeof config.emailVerification === 'boolean'
+        ? DEFAULT_AUTH_EMAIL_VERIFICATION_ROUTE
+        : config.emailVerification?.route?.trim() || DEFAULT_AUTH_EMAIL_VERIFICATION_ROUTE,
     }),
     personalAccessTokens: Object.freeze({
       defaultAbilities: Object.freeze([...(config.personalAccessTokens?.defaultAbilities ?? [])]),

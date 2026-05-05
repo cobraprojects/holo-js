@@ -5,6 +5,8 @@
         <NuxtLink to="/" class="brand">blog-nuxt</NuxtLink>
         <NuxtLink to="/posts">Posts</NuxtLink>
         <NuxtLink to="/admin">Admin</NuxtLink>
+        <NuxtLink to="/login">Login</NuxtLink>
+        <NuxtLink to="/register">Register</NuxtLink>
       </nav>
     </header>
     <main class="content">

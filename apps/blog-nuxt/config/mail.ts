@@ -15,6 +15,7 @@ export default defineMailConfig({
     },
     log: {
       driver: 'log',
+      logBodies: env('MAIL_LOG_BODIES', false),
     },
     fake: {
       driver: 'fake',
@@ -24,6 +25,8 @@ export default defineMailConfig({
       host: env('MAIL_HOST', '127.0.0.1'),
       port: env('MAIL_PORT', 1025),
       secure: env('MAIL_SECURE', false),
+      user: env('MAIL_USERNAME') || undefined,
+      password: env('MAIL_PASSWORD') || undefined,
     },
   },
 })

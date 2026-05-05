@@ -1034,11 +1034,11 @@ describe('useHoloDb', () => {
         projectRoot: '/tmp/nuxt-project',
       })
       expect(runtime.useHoloEnv()).toBe('test')
-      expect(initializeHoloAdapterProject).toHaveBeenCalledWith('/tmp/nuxt-project', {
+      expect(initializeHoloAdapterProject).toHaveBeenCalledWith('/tmp/nuxt-project', expect.objectContaining({
         envName: 'test',
         preferCache: true,
         processEnv: process.env,
-      })
+      }))
     } finally {
       vi.unstubAllEnvs()
       cwd.mockRestore()
@@ -1177,11 +1177,11 @@ describe('runtime plugin', () => {
       },
     })
     expect(initializeHoloAdapterProject).toHaveBeenCalledTimes(1)
-    expect(initializeHoloAdapterProject).toHaveBeenCalledWith('/tmp/nuxt-project', {
+    expect(initializeHoloAdapterProject).toHaveBeenCalledWith('/tmp/nuxt-project', expect.objectContaining({
       envName: 'development',
       preferCache: false,
       processEnv: process.env,
-    })
+    }))
     expect(log).toHaveBeenCalledWith('✅ Holo DB connected (sqlite)')
 
     const closeHandler = hook.mock.calls.find(([name]) => name === 'close')?.[1]

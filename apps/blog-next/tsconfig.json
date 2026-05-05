@@ -37,6 +37,7 @@
     "instrumentation.ts",
     "app/**/*.ts",
     "app/**/*.tsx",
+    "lib/**/*.ts",
     "server/**/*.ts",
     "config/**/*.ts",
     ".holo-js/generated/**/*.ts",

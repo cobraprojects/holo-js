@@ -2,13 +2,16 @@ export {
   FormContractError,
   createFailedSubmission,
   createSuccessfulSubmission,
-  schema,
   formsInternals,
-  isFormSchema,
   validate,
 } from './contracts'
+export {
+  schema,
+  isFormSchema,
+} from './schema'
 export type {
   FormFailurePayload,
+  InferFormData,
   FormRequestLikeInput,
   FormSchema,
   FormSecurityOptions,
@@ -24,7 +27,7 @@ export {
   field,
   parse,
   safeParse,
-} from '@holo-js/validation'
+} from './schema'
 export type {
   ErrorTree,
   ErrorTreeNode,
@@ -41,4 +44,4 @@ export type {
   ValidationSchema,
   ValidationSuccess,
   WebFileLike,
-} from '@holo-js/validation'
+} from './schema'

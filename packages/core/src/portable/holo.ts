@@ -42,6 +42,19 @@ interface CoreNotificationDatabaseRoute {
   readonly type: string
 }
 
+type HoloAuthResult<TData> = {
+  readonly data: TData
+  readonly error: null
+} | {
+  readonly data: null
+  readonly error: {
+    readonly code: string
+    readonly message: string
+    readonly status: number
+    readonly fields: Readonly<Partial<Record<string, readonly string[]>>>
+  }
+}
+
 async function preloadGeneratedSchemaModule(
   projectRoot: string,
   registry: GeneratedProjectRegistry | undefined,
@@ -121,13 +134,13 @@ export interface HoloAuthRuntimeBinding {
   login(credentials: Readonly<Record<string, unknown>> & {
     readonly password: string
     readonly remember?: boolean
-  }): Promise<{
+  }): Promise<HoloAuthResult<{
     readonly guard: string
     readonly user: unknown
     readonly sessionId: string
     readonly rememberToken?: string
     readonly cookies: readonly string[]
-  }>
+  }>>
   loginUsing(
     user: unknown,
     options?: {
@@ -188,7 +201,7 @@ export interface HoloAuthRuntimeBinding {
     readonly password: string
     readonly passwordConfirmation: string
     readonly remember?: boolean
-  }): Promise<unknown>
+  }): Promise<HoloAuthResult<unknown>>
   logoutAll(guardName?: string): Promise<readonly {
     readonly guard: string
     readonly cookies: readonly string[]
@@ -202,13 +215,13 @@ export interface HoloAuthRuntimeBinding {
     login(credentials: Readonly<Record<string, unknown>> & {
       readonly password: string
       readonly remember?: boolean
-    }): Promise<{
+    }): Promise<HoloAuthResult<{
       readonly guard: string
       readonly user: unknown
       readonly sessionId: string
       readonly rememberToken?: string
       readonly cookies: readonly string[]
-    }>
+    }>>
     loginUsing(
       user: unknown,
       options?: {
@@ -281,16 +294,23 @@ export interface HoloAuthRuntimeBinding {
   }
   verification: {
     create(user: unknown, options?: { readonly guard?: string, readonly expiresAt?: Date }): Promise<unknown>
-    consume(plainTextToken: string): Promise<unknown>
+    resend(options?: { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string }): Promise<HoloAuthResult<unknown>>
+    consume(plainTextToken: string): Promise<HoloAuthResult<unknown>>
   }
-  passwords: {
-    request(email: string, options?: { readonly broker?: string, readonly expiresAt?: Date }): Promise<void>
-    consume(input: {
-      readonly token: string
-      readonly password: string
-      readonly passwordConfirmation: string
-    }): Promise<unknown>
-  }
+  requestPasswordReset(
+    input: {
+      readonly email: string
+    },
+    options?: {
+      readonly broker?: string
+      readonly expiresAt?: Date
+    },
+  ): Promise<HoloAuthResult<void>>
+  resetPassword(input: {
+    readonly token: string
+    readonly password: string
+    readonly passwordConfirmation: string
+  }): Promise<HoloAuthResult<unknown>>
 }
 
 export interface HoloQueueRuntimeBinding {
@@ -669,6 +689,8 @@ type AuthModule = {
       setSessionId(guardName: string, sessionId?: string): void
       getCachedUser(guardName: string): unknown
       setCachedUser(guardName: string, user: unknown): void
+      getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
+      getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
       getAccessToken?(guardName: string): string | undefined
       setAccessToken?(guardName: string, token?: string): void
       getRememberToken?(guardName: string): string | undefined
@@ -681,6 +703,8 @@ type AuthModule = {
     setSessionId(guardName: string, sessionId?: string): void
     getCachedUser(guardName: string): unknown
     setCachedUser(guardName: string, user: unknown): void
+    getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
+    getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
     getAccessToken?(guardName: string): string | undefined
     setAccessToken?(guardName: string, token?: string): void
     getRememberToken?(guardName: string): string | undefined
@@ -797,6 +821,10 @@ export interface CreateHoloOptions {
   readonly processEnv?: NodeJS.ProcessEnv
   readonly registerProjectQueueJobs?: boolean
   readonly renderView?: HoloServerViewRenderer
+  readonly authRequest?: {
+    readonly getCookie?: (name: string) => string | undefined | Promise<string | undefined>
+    readonly getHeader?: (name: string) => string | undefined | Promise<string | undefined>
+  }
 }
 
 export interface HoloRuntime<TCustom extends HoloConfigMap = HoloConfigMap> {
@@ -1308,24 +1336,50 @@ function bindAuthRuntimeToContext(
         activate()
         return runtime.verification.create(user, options)
       },
+      resend(options?: Parameters<HoloAuthRuntimeBinding['verification']['resend']>[0]) {
+        activate()
+        return runtime.verification.resend(options)
+      },
       consume(plainTextToken: Parameters<HoloAuthRuntimeBinding['verification']['consume']>[0]) {
         activate()
         return runtime.verification.consume(plainTextToken)
       },
     }),
-    passwords: Object.freeze({
-      request(
-        email: Parameters<HoloAuthRuntimeBinding['passwords']['request']>[0],
-        options?: Parameters<HoloAuthRuntimeBinding['passwords']['request']>[1],
-      ) {
-        activate()
-        return runtime.passwords.request(email, options)
-      },
-      consume(input: Parameters<HoloAuthRuntimeBinding['passwords']['consume']>[0]) {
-        activate()
-        return runtime.passwords.consume(input)
-      },
-    }),
+    requestPasswordReset(
+      input: Parameters<HoloAuthRuntimeBinding['requestPasswordReset']>[0],
+      options?: Parameters<HoloAuthRuntimeBinding['requestPasswordReset']>[1],
+    ) {
+      activate()
+      return runtime.requestPasswordReset(input, options)
+    },
+    resetPassword(input: Parameters<HoloAuthRuntimeBinding['resetPassword']>[0]) {
+      activate()
+      return runtime.resetPassword(input)
+    },
+  })
+}
+
+function attachAuthRequestAccessors<TContext extends {
+  activate(): void
+  getSessionId(guardName: string): string | undefined
+  setSessionId(guardName: string, sessionId?: string): void
+  getCachedUser(guardName: string): unknown
+  setCachedUser(guardName: string, user: unknown): void
+  getAccessToken?(guardName: string): string | undefined
+  setAccessToken?(guardName: string, token?: string): void
+  getRememberToken?(guardName: string): string | undefined
+  setRememberToken?(guardName: string, token?: string): void
+}>(
+  context: TContext,
+  accessors: NonNullable<CreateHoloOptions['authRequest']>,
+): TContext & {
+  getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
+  getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
+} {
+  return Object.freeze({
+    ...context,
+    getRequestCookie: accessors.getCookie,
+    getRequestHeader: accessors.getHeader,
   })
 }
 
@@ -1918,8 +1972,19 @@ function createCoreNotificationStore<TCustom extends HoloConfigMap>(
   return Object.freeze(store)
 }
 
+const authEmailDateFormatter = new Intl.DateTimeFormat('en-US', {
+  dateStyle: 'long',
+  timeStyle: 'short',
+  timeZone: 'UTC',
+})
+
+function formatAuthEmailExpiration(expiresAt: Date): string {
+  return `${authEmailDateFormatter.format(expiresAt)} UTC`
+}
+
 function createAuthNotificationsDeliveryHook(
   notificationsModule: NotificationsModule,
+  appUrl: string,
 ): {
   sendEmailVerification(input: {
     readonly provider: string
@@ -1930,8 +1995,10 @@ function createAuthNotificationsDeliveryHook(
       readonly plainTextToken: string
       readonly expiresAt: Date
     }
+    readonly route: string
   }): Promise<void>
   sendPasswordReset(input: {
+    readonly broker: string
     readonly provider: string
     readonly email: string
     readonly token: {
@@ -1939,6 +2006,7 @@ function createAuthNotificationsDeliveryHook(
       readonly plainTextToken: string
       readonly expiresAt: Date
     }
+    readonly route: string
   }): Promise<void>
 } {
   return Object.freeze({
@@ -1946,6 +2014,14 @@ function createAuthNotificationsDeliveryHook(
       const recipientName = typeof (input.user as { name?: unknown })?.name === 'string'
         ? (input.user as { name?: string }).name?.trim()
         : undefined
+      const lines = [
+        'Confirm your account to finish signing in.',
+        `This verification link expires at ${formatAuthEmailExpiration(input.token.expiresAt)}.`,
+      ] as const
+      const action = {
+        label: 'Verify email address',
+        url: createAuthActionUrl(appUrl, input.route, input.token.plainTextToken),
+      } as const
       const notification = notificationsModule.defineNotification({
         type: 'auth.email-verification',
         via() {
@@ -1956,12 +2032,14 @@ function createAuthNotificationsDeliveryHook(
             return {
               subject: 'Verify your email address',
               ...(recipientName ? { greeting: `Hello ${recipientName},` } : {}),
-              lines: [
-                'Use this token to verify your email address:',
-                input.token.plainTextToken,
-                `Provider: ${input.provider}`,
-                `Expires at: ${input.token.expiresAt.toISOString()}`,
-              ],
+              lines,
+              action,
+              html: createAuthEmailHtml({
+                subject: 'Verify your email address',
+                ...(recipientName ? { greeting: `Hello ${recipientName},` } : {}),
+                lines,
+                action,
+              }),
               metadata: {
                 provider: input.provider,
                 tokenId: input.token.id,
@@ -1982,6 +2060,14 @@ function createAuthNotificationsDeliveryHook(
         .notify(notification)
     },
     async sendPasswordReset(input): Promise<void> {
+      const lines = [
+        'Click the link below to choose a new password.',
+        `This reset link expires at ${formatAuthEmailExpiration(input.token.expiresAt)}.`,
+      ] as const
+      const action = {
+        label: 'Reset password',
+        url: createAuthActionUrl(appUrl, input.route, input.token.plainTextToken),
+      } as const
       const notification = notificationsModule.defineNotification({
         type: 'auth.password-reset',
         via() {
@@ -1991,12 +2077,13 @@ function createAuthNotificationsDeliveryHook(
           email() {
             return {
               subject: 'Reset your password',
-              lines: [
-                'Use this token to reset your password:',
-                input.token.plainTextToken,
-                `Provider: ${input.provider}`,
-                `Expires at: ${input.token.expiresAt.toISOString()}`,
-              ],
+              lines,
+              action,
+              html: createAuthEmailHtml({
+                subject: 'Reset your password',
+                lines,
+                action,
+              }),
               metadata: {
                 provider: input.provider,
                 tokenId: input.token.id,
@@ -2217,6 +2304,73 @@ function createNotificationMailText(message: {
   return parts.length > 0 ? parts.join('\n\n') : undefined
 }
 
+function joinAppUrl(baseUrl: string, path: string): string {
+  const normalizedBaseUrl = baseUrl.endsWith('/')
+    ? baseUrl.slice(0, -1)
+    : baseUrl
+  const normalizedPath = path.startsWith('/')
+    ? path
+    : `/${path}`
+
+  return `${normalizedBaseUrl}${normalizedPath}`
+}
+
+function createAuthActionUrl(
+  appUrl: string,
+  path: string,
+  token: string,
+): string {
+  const url = new URL(joinAppUrl(appUrl, path))
+  url.searchParams.set('token', token)
+  return url.toString()
+}
+
+function escapeAuthEmailHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
+function createAuthEmailHtml(message: {
+  readonly subject: string
+  readonly greeting?: string
+  readonly lines: readonly string[]
+  readonly action: {
+    readonly label: string
+    readonly url: string
+  }
+}): string {
+  const sections = [
+    typeof message.greeting === 'string'
+      ? `<p style="margin:0 0 16px;">${escapeAuthEmailHtml(message.greeting)}</p>`
+      : '',
+    ...message.lines.map(line => `<p style="margin:0 0 16px;">${escapeAuthEmailHtml(line)}</p>`),
+    `<p style="margin:24px 0;">` +
+      `<a href="${escapeAuthEmailHtml(message.action.url)}" ` +
+      `style="display:inline-block;padding:12px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">` +
+      `${escapeAuthEmailHtml(message.action.label)}` +
+      `</a></p>`,
+    `<p style="margin:0;color:#475569;font-size:14px;">` +
+      `If the button does not work, open this link: ` +
+      `<a href="${escapeAuthEmailHtml(message.action.url)}">${escapeAuthEmailHtml(message.action.url)}</a>` +
+      `</p>`,
+  ].join('')
+
+  return [
+    '<!doctype html>',
+    '<html><head><meta charset="utf-8">',
+    `<title>${escapeAuthEmailHtml(message.subject)}</title>`,
+    '</head><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#0f172a;background:#f8fafc;">',
+    '<div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:32px;">',
+    `<h1 style="margin:0 0 24px;font-size:24px;line-height:1.3;">${escapeAuthEmailHtml(message.subject)}</h1>`,
+    sections,
+    '</div></body></html>',
+  ].join('')
+}
+
 function createCoreNotificationMailSender(
   mailModule: MailModule,
 ): {
@@ -2261,6 +2415,7 @@ function createCoreNotificationMailSender(
 
 function createAuthMailDeliveryHook(
   mailModule: MailModule,
+  appUrl: string,
 ): {
   sendEmailVerification(input: {
     readonly provider: string
@@ -2271,8 +2426,10 @@ function createAuthMailDeliveryHook(
       readonly plainTextToken: string
       readonly expiresAt: Date
     }
+    readonly route: string
   }): Promise<void>
   sendPasswordReset(input: {
+    readonly broker: string
     readonly provider: string
     readonly email: string
     readonly token: {
@@ -2280,6 +2437,7 @@ function createAuthMailDeliveryHook(
       readonly plainTextToken: string
       readonly expiresAt: Date
     }
+    readonly route: string
   }): Promise<void>
 } {
   return Object.freeze({
@@ -2287,6 +2445,14 @@ function createAuthMailDeliveryHook(
       const recipientName = typeof (input.user as { name?: unknown })?.name === 'string'
         ? (input.user as { name?: string }).name?.trim()
         : undefined
+      const lines = [
+        'Confirm your account to finish signing in.',
+        `This verification link expires at ${formatAuthEmailExpiration(input.token.expiresAt)}.`,
+      ] as const
+      const action = {
+        label: 'Verify email address',
+        url: createAuthActionUrl(appUrl, input.route, input.token.plainTextToken),
+      } as const
 
       await mailModule.sendMail({
         to: {
@@ -2294,13 +2460,17 @@ function createAuthMailDeliveryHook(
           ...(recipientName ? { name: recipientName } : {}),
         },
         subject: 'Verify your email address',
-        text: [
-          recipientName ? `Hello ${recipientName},` : undefined,
-          'Use this token to verify your email address:',
-          input.token.plainTextToken,
-          `Provider: ${input.provider}`,
-          `Expires at: ${input.token.expiresAt.toISOString()}`,
-        ].filter((value): value is string => typeof value === 'string').join('\n\n'),
+        html: createAuthEmailHtml({
+          subject: 'Verify your email address',
+          ...(recipientName ? { greeting: `Hello ${recipientName},` } : {}),
+          lines,
+          action,
+        }),
+        text: createNotificationMailText({
+          ...(recipientName ? { greeting: `Hello ${recipientName},` } : {}),
+          lines,
+          action,
+        }),
         metadata: {
           provider: input.provider,
           tokenId: input.token.id,
@@ -2308,15 +2478,27 @@ function createAuthMailDeliveryHook(
       })
     },
     async sendPasswordReset(input): Promise<void> {
+      const lines = [
+        'Click the link below to choose a new password.',
+        `This reset link expires at ${formatAuthEmailExpiration(input.token.expiresAt)}.`,
+      ] as const
+      const action = {
+        label: 'Reset password',
+        url: createAuthActionUrl(appUrl, input.route, input.token.plainTextToken),
+      } as const
+
       await mailModule.sendMail({
         to: input.email,
         subject: 'Reset your password',
-        text: [
-          'Use this token to reset your password:',
-          input.token.plainTextToken,
-          `Provider: ${input.provider}`,
-          `Expires at: ${input.token.expiresAt.toISOString()}`,
-        ].join('\n\n'),
+        html: createAuthEmailHtml({
+          subject: 'Reset your password',
+          lines,
+          action,
+        }),
+        text: createNotificationMailText({
+          lines,
+          action,
+        }),
         metadata: {
           provider: input.provider,
           tokenId: input.token.id,
@@ -3565,6 +3747,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   loadedConfig: LoadedHoloConfig<TCustom>,
   options: {
     readonly renderView?: HoloServerViewRenderer
+    readonly authRequest?: CreateHoloOptions['authRequest']
   } = {},
 ): Promise<{
   readonly queueModule?: QueueModule
@@ -3854,7 +4037,10 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
       : undefined
     const authStores = createCoreAuthStores(loadedConfig)
 
-    authContext = authModule.createAsyncAuthContext()
+    const baseAuthContext = authModule.createAsyncAuthContext()
+    authContext = options.authRequest
+      ? attachAuthRequestAccessors(baseAuthContext, options.authRequest)
+      : baseAuthContext
     authModule.configureAuthRuntime({
       config: loadedConfig.auth,
       session: sessionModule.getSessionRuntime(),
@@ -3863,9 +4049,9 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
       emailVerificationTokens: authStores.emailVerificationTokens,
       passwordResetTokens: authStores.passwordResetTokens,
       ...(notificationsModule && (mailModule || notificationsRuntimeBindings?.mailer)
-        ? { delivery: createAuthNotificationsDeliveryHook(notificationsModule) }
+        ? { delivery: createAuthNotificationsDeliveryHook(notificationsModule, loadedConfig.app.url) }
         : mailModule
-          ? { delivery: createAuthMailDeliveryHook(mailModule) }
+          ? { delivery: createAuthMailDeliveryHook(mailModule, loadedConfig.app.url) }
           : {}),
       context: authContext,
     })
@@ -4049,6 +4235,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
 
         const optionalSubsystems = await reconfigureOptionalHoloSubsystems(projectRoot, loadedConfig, {
           renderView: options.renderView,
+          authRequest: options.authRequest,
         })
         activeQueueModule = optionalSubsystems.queueModule
         activeSessionRuntime = optionalSubsystems.session

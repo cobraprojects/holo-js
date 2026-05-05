@@ -297,16 +297,14 @@ describe('@holo-js/forms client', () => {
 
     const validated = await client.validate()
     expect(validated.valid).toBe(false)
-    expect(client.lastSubmission).toEqual(validated.serialize())
+    expect(client.lastSubmission).toBeUndefined()
 
     const fieldErrors = await client.validateField('email')
     expect(fieldErrors.length).toBeGreaterThan(0)
 
     const failure = await client.submit()
     expect('valid' in failure && failure.valid === false).toBe(true)
-    expect(client.lastSubmission).toEqual(
-      'serialize' in failure ? failure.serialize() : client.lastSubmission,
-    )
+    expect(client.lastSubmission).toBeUndefined()
 
     client.reset({
       email: 'reset@example.com',
@@ -646,8 +644,10 @@ describe('@holo-js/forms client', () => {
       errors: {},
     })
     expect(nonJsonFailureClient.lastSubmission).toEqual({
-      valid: false,
+      ok: false,
+      status: 500,
       submitted: true,
+      valid: false,
       values: {
         email: 'ava@example.com',
         publishedAt: new Date('2026-04-04T10:00:00.000Z'),
@@ -709,7 +709,7 @@ describe('@holo-js/forms client', () => {
     const result = await client.submit()
 
     expect('ok' in result && result.ok === false).toBe(true)
-    if ('ok' in result && result.ok === false) {
+    if ('ok' in result && result.ok === false && 'status' in result) {
       expect(result.status).toBe(409)
       expect(result.errors.email).toEqual(['Email is already taken.'])
     }

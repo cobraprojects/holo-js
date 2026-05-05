@@ -1,4 +1,3 @@
-import { normalizeSecurityConfig } from '@holo-js/config'
 import type { SecurityClientBindings, SecurityClientConfig } from './contracts'
 
 export type {
@@ -10,11 +9,10 @@ type RuntimeSecurityClientState = {
   bindings?: SecurityClientConfig
 }
 
-const DEFAULT_SECURITY_CONFIG = normalizeSecurityConfig({})
 const DEFAULT_SECURITY_CLIENT_CONFIG: SecurityClientConfig = Object.freeze({
   csrf: Object.freeze({
-    field: DEFAULT_SECURITY_CONFIG.csrf.field,
-    cookie: DEFAULT_SECURITY_CONFIG.csrf.cookie,
+    field: '_token',
+    cookie: 'XSRF-TOKEN',
   }),
 })
 

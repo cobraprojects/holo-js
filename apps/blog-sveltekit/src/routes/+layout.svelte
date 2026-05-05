@@ -4,6 +4,8 @@
       <a href="/" class="brand">blog-sveltekit</a>
       <a href="/posts">Posts</a>
       <a href="/admin">Admin</a>
+      <a href="/login">Login</a>
+      <a href="/register">Register</a>
     </nav>
   </header>
   <main class="content">

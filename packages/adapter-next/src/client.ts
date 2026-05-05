@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import type { InferSchemaData } from '@holo-js/forms'
+import type { FormSchema, InferFormData } from '@holo-js/forms'
 import {
   type ClientSubmitContext,
   type ClientSubmitResult,
+  type InferFormFieldTree,
   type UseFormOptions,
   type UseFormResult,
   useForm as createForm,
@@ -50,7 +51,10 @@ function areEqual(left: unknown, right: unknown): boolean {
   return false
 }
 
-function areOptionsEqual<TData>(left: UseFormOptions<TData>, right: UseFormOptions<TData>): boolean {
+function areOptionsEqual<TData, TSuccess>(
+  left: UseFormOptions<TData, TSuccess>,
+  right: UseFormOptions<TData, TSuccess>,
+): boolean {
   return left.action === right.action
     && left.method === right.method
     && left.csrf === right.csrf
@@ -60,9 +64,11 @@ function areOptionsEqual<TData>(left: UseFormOptions<TData>, right: UseFormOptio
     && areEqual(left.initialState, right.initialState)
 }
 
-function createSubmitterBridge<TData>(
-  optionsRef: { current: UseFormOptions<TData> | undefined },
-): ((context: ClientSubmitContext<TData>) => Promise<ClientSubmitResult<TData>> | ClientSubmitResult<TData>) {
+function createSubmitterBridge<TData, TSuccess>(
+  optionsRef: { current: UseFormOptions<TData, TSuccess> | undefined },
+): (
+  context: ClientSubmitContext<TData>,
+) => Promise<ClientSubmitResult<TData, TSuccess>> | ClientSubmitResult<TData, TSuccess> {
   return (context) => {
     const submitter = optionsRef.current?.submitter
 
@@ -74,26 +80,26 @@ function createSubmitterBridge<TData>(
   }
 }
 
-export function useForm<TSchema extends Parameters<typeof createForm>[0]>(
+export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
   schemaDefinition: TSchema,
-  options: UseFormOptions<InferSchemaData<TSchema['fields']>> = {},
-): UseFormResult<InferSchemaData<TSchema['fields']>> {
-  type TData = InferSchemaData<TSchema['fields']>
+  options: UseFormOptions<InferFormData<TSchema>, TSuccess> = {},
+): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {
+  type TData = InferFormData<TSchema>
 
-  const formRef = useRef<UseFormResult<TData>>()
+  const formRef = useRef<UseFormResult<TData, TSuccess, InferFormFieldTree<TSchema>>>()
   const previousSchemaRef = useRef<TSchema>()
-  const previousOptionsRef = useRef<UseFormOptions<TData>>()
-  const latestOptionsRef = useRef<UseFormOptions<TData>>()
-  const submitterBridgeRef = useRef<UseFormOptions<TData>['submitter']>()
+  const previousOptionsRef = useRef<UseFormOptions<TData, TSuccess>>()
+  const latestOptionsRef = useRef<UseFormOptions<TData, TSuccess>>()
+  const submitterBridgeRef = useRef<UseFormOptions<TData, TSuccess>['submitter']>()
   const [, setVersion] = useState(0)
 
   latestOptionsRef.current = options
 
   if (options.submitter && !submitterBridgeRef.current) {
-    submitterBridgeRef.current = createSubmitterBridge<TData>(latestOptionsRef)
+    submitterBridgeRef.current = createSubmitterBridge<TData, TSuccess>(latestOptionsRef)
   }
 
-  const resolvedOptions: UseFormOptions<TData> = options.submitter
+  const resolvedOptions: UseFormOptions<TData, TSuccess> = options.submitter
     ? {
         ...options,
         submitter: submitterBridgeRef.current,
@@ -108,14 +114,14 @@ export function useForm<TSchema extends Parameters<typeof createForm>[0]>(
     previousSchemaRef.current = schemaDefinition
     previousOptionsRef.current = options
   } else {
-    const previousOptions = previousOptionsRef.current as UseFormOptions<TData>
+    const previousOptions = previousOptionsRef.current as UseFormOptions<TData, TSuccess>
     if (!areOptionsEqual(previousOptions, options)) {
       formRef.current = createForm(schemaDefinition, resolvedOptions)
       previousOptionsRef.current = options
     }
   }
 
-  const form = formRef.current
+  const form = formRef.current!
 
   useEffect(() => form.subscribe(() => setVersion(version => version + 1)), [form])
 

@@ -111,7 +111,7 @@ export type NormalizeFieldInput<TInput> = TInput extends ValidationFieldBuilderL
 export type InferFieldOutput<TInput> = NormalizeFieldInput<TInput> extends ValidationField<infer TOutput> ? TOutput : never
 
 export type NormalizedSchemaShape<TShape extends SchemaInputShape> = {
-  readonly [K in keyof TShape]:
+  readonly [K in Extract<keyof TShape, string>]:
     TShape[K] extends FieldBuilderInput
       ? NormalizeFieldInput<TShape[K]>
       : TShape[K] extends SchemaInputShape
@@ -126,7 +126,7 @@ export type SchemaInputShape = {
 export type Simplify<TValue> = { -readonly [K in keyof TValue]: TValue[K] } & {}
 
 export type InferSchemaData<TShape extends SchemaInputShape> = Simplify<{
-  [K in keyof TShape]:
+  [K in Extract<keyof TShape, string>]:
     TShape[K] extends FieldBuilderInput
       ? InferFieldOutput<TShape[K]>
       : TShape[K] extends SchemaInputShape

@@ -21,7 +21,7 @@ The package does not require hardcoded request fields such as `email`. The crede
 Define a session guard and a provider:
 
 ```ts
-import { defineAuthConfig } from '@holo-js/config'
+import { defineAuthConfig, env } from '@holo-js/config'
 
 export default defineAuthConfig({
   defaults: {
@@ -45,9 +45,27 @@ export default defineAuthConfig({
     },
   },
   emailVerification: {
-    required: false,
+    required: true,
+    route: env('AUTH_EMAIL_VERIFICATION_ROUTE', '/verify-email'),
+  },
+  passwords: {
+    users: {
+      provider: 'users',
+      table: 'password_reset_tokens',
+      expire: 60,
+      throttle: 60,
+      route: env('AUTH_PASSWORD_RESET_ROUTE', '/reset-password'),
+    },
   },
 })
+```
+
+Related environment values:
+
+```dotenv
+APP_URL=http://localhost:3000
+AUTH_EMAIL_VERIFICATION_ROUTE=/verify-email
+AUTH_PASSWORD_RESET_ROUTE=/reset-password
 ```
 
 ## Identifiers
@@ -118,7 +136,7 @@ Use `register()` inside your route after validation succeeds:
 ```ts
 import { register } from '@holo-js/auth'
 
-const created = await register({
+const { data: created, error } = await register({
   name: body.name,
   email: body.email,
   phone: body.phone,
@@ -129,14 +147,32 @@ const created = await register({
 })
 ```
 
+Expected auth failures come back in `error`. Successful calls put the created user in `data`.
+
+The auth failure object is plain data:
+
+```ts
+{
+  code: 'registration_identifier_taken',
+  message: 'A user with this email already exists.',
+  status: 422,
+  fields: {
+    email: ['A user with this email already exists.'],
+  },
+}
+```
+
 The local provider creates the model record and hashes the password before it is stored. Extra fields like `country`
 and `dob` are saved as attributes, but they are not treated as auth identifiers unless you explicitly add them to the
 provider's `identifiers`.
 
+When `emailVerification.required` is `true`, successful registration also starts the verification flow automatically.
+Applications do not need to manually call `verification.create(...)` just to send the first verification email.
+
 If your application uses another identifier, pass that identifier instead:
 
 ```ts
-await register({
+const { error } = await register({
   phone: body.phone,
   country: body.country,
   password: body.password,
@@ -151,7 +187,7 @@ These APIs are server-side APIs from `@holo-js/auth`. They are not available fro
 ```ts
 import { login } from '@holo-js/auth'
 
-await login({
+const { data: session, error } = await login({
   email: body.email,
   password: body.password,
   remember: body.remember === true,
@@ -164,6 +200,13 @@ On successful login, the session guard:
 - creates a new session
 - stores the authenticated user payload in session state
 - optionally issues a remember-me token
+
+When email verification is enabled and the user is still unverified, successful login also includes:
+
+- `emailVerificationRequired: true`
+- `emailVerificationRoute: '/verify-email?email=...'`
+
+That lets the route redirect the user to the verification page while keeping them signed in.
 
 ## Signing In Trusted Users
 
@@ -227,7 +270,7 @@ This is useful when:
 
 ### `hashPassword(password)`
 
-Use this when you need a password digest but you are not going through `register()` or `passwords.consume()`.
+Use this when you need a password digest but you are not going through `register()` or `resetPassword()`.
 
 Typical cases:
 
@@ -330,7 +373,7 @@ Typical flow:
 Set `remember: true` during login:
 
 ```ts
-await login({
+const { error } = await login({
   email: body.email,
   password: body.password,
   remember: true,
@@ -386,12 +429,29 @@ import { login } from '@holo-js/auth'
 export async function POST(request: Request) {
   const body = await request.json()
 
-  await login({
+  const { data: session, error } = await login({
     email: body.email,
     password: body.password,
   })
 
-  return Response.json({ ok: true })
+  if (error) {
+    return Response.json({
+      ok: false,
+      status: error.status,
+      valid: false,
+      values: body,
+      errors: error.fields,
+    }, { status: error.status })
+  }
+
+  return Response.json({
+    ok: true,
+    data: {
+      redirectTo: session.emailVerificationRequired
+        ? session.emailVerificationRoute ?? '/verify-email'
+        : '/admin',
+    },
+  })
 }
 ```
 
