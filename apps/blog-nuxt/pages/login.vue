@@ -27,18 +27,18 @@ const form = useForm(loginForm, {
     <form class="stack" @submit.prevent="form.submit()">
       <label class="field">
         <span>Email</span>
-        <input name="email" type="email" v-model="form.fields.email.value" @blur="form.fields.email.onBlur()" />
+        <input name="email" type="email" v-model="form.values.email" @blur="form.fields.email.onBlur()" />
         <span v-if="form.errors.has('email')" class="error">{{ form.errors.first('email') }}</span>
       </label>
 
       <label class="field">
         <span>Password</span>
-        <input name="password" type="password" v-model="form.fields.password.value" @blur="form.fields.password.onBlur()" />
+        <input name="password" type="password" v-model="form.values.password" @blur="form.fields.password.onBlur()" />
         <span v-if="form.errors.has('password')" class="error">{{ form.errors.first('password') }}</span>
       </label>
 
       <label class="remember">
-        <input name="remember" type="checkbox" v-model="form.fields.remember.value" />
+        <input name="remember" type="checkbox" v-model="form.values.remember" />
         Remember me
       </label>
 

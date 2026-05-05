@@ -39,7 +39,7 @@ export default function ForgotPasswordPage() {
           <input
             name="email"
             type="email"
-            value={form.fields.email.value}
+            value={form.values.email}
             onInput={(event) => form.fields.email.onInput(event.currentTarget.value)}
             onBlur={() => form.fields.email.onBlur()}
           />

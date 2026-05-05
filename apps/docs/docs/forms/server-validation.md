@@ -212,12 +212,22 @@ in other frameworks:
 </script>
 
 <form onsubmit={(e) => { e.preventDefault(); form.submit() }}>
-  <input name="name" bind:value={form.fields.name.value} onblur={() => form.fields.name.onBlur()} />
+  <input
+    name="name"
+    value={form.values.name}
+    oninput={(event) => form.fields.name.onInput(event.currentTarget.value)}
+    onblur={() => form.fields.name.onBlur()}
+  />
   {#if form.errors.has('name')}
     <p>{form.errors.first('name')}</p>
   {/if}
 
-  <input name="email" bind:value={form.fields.email.value} onblur={() => form.fields.email.onBlur()} />
+  <input
+    name="email"
+    value={form.values.email}
+    oninput={(event) => form.fields.email.onInput(event.currentTarget.value)}
+    onblur={() => form.fields.email.onBlur()}
+  />
   {#if form.errors.has('email')}
     <p>{form.errors.first('email')}</p>
   {/if}
@@ -255,7 +265,7 @@ export default function LoginPage() {
       <input
         name="email"
         type="email"
-        value={form.fields.email.value}
+        value={form.values.email}
         onInput={(event) => form.fields.email.onInput(event.currentTarget.value)}
         onBlur={() => form.fields.email.onBlur()}
       />
@@ -264,7 +274,7 @@ export default function LoginPage() {
       <input
         name="password"
         type="password"
-        value={form.fields.password.value}
+        value={form.values.password}
         onInput={(event) => form.fields.password.onInput(event.currentTarget.value)}
         onBlur={() => form.fields.password.onBlur()}
       />
@@ -274,7 +284,7 @@ export default function LoginPage() {
         <input
           name="remember"
           type="checkbox"
-          checked={form.fields.remember.value}
+          checked={form.values.remember}
           onChange={(event) => form.fields.remember.onInput(event.currentTarget.checked)}
         />
         Remember me
@@ -306,14 +316,14 @@ const form = useForm(loginForm, {
 
 <template>
   <form @submit.prevent="form.submit()">
-    <input name="email" type="email" v-model="form.fields.email.value" @blur="form.fields.email.onBlur()" />
+    <input name="email" type="email" v-model="form.values.email" @blur="form.fields.email.onBlur()" />
     <p v-if="form.errors.has('email')">{{ form.errors.first('email') }}</p>
 
-    <input name="password" type="password" v-model="form.fields.password.value" @blur="form.fields.password.onBlur()" />
+    <input name="password" type="password" v-model="form.values.password" @blur="form.fields.password.onBlur()" />
     <p v-if="form.errors.has('password')">{{ form.errors.first('password') }}</p>
 
     <label>
-      <input name="remember" type="checkbox" v-model="form.fields.remember.value" />
+      <input name="remember" type="checkbox" v-model="form.values.remember" />
       Remember me
     </label>
 
@@ -325,6 +335,11 @@ const form = useForm(loginForm, {
   </form>
 </template>
 ```
+
+Bind displayed values from `form.values.*` across frameworks and keep `form.fields.*` for field lifecycle helpers.
+`form.fields.email.onBlur()` is the blur-validation hook when `validateOn: 'blur'` is enabled, while touched
+state can also be set during input and value updates through helpers like `form.fields.email.onInput(...)`
+and `form.setValue(...)`.
 
 ```svelte [SvelteKit — src/routes/login/+page.svelte (form actions)]
 <script lang="ts">

@@ -21,7 +21,7 @@ const form = useForm(forgotPasswordForm, {
     <form class="stack" @submit.prevent="form.submit()">
       <label class="field">
         <span>Email</span>
-        <input name="email" type="email" v-model="form.fields.email.value" @blur="form.fields.email.onBlur()" />
+        <input name="email" type="email" v-model="form.values.email" @blur="form.fields.email.onBlur()" />
         <span v-if="form.errors.has('email')" class="error">{{ form.errors.first('email') }}</span>
       </label>
 

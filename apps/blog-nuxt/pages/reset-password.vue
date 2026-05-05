@@ -23,11 +23,11 @@ const form = useForm(resetPasswordForm, {
     </div>
 
     <form v-if="token" class="stack" @submit.prevent="form.submit()">
-      <input name="token" type="hidden" v-model="form.fields.token.value">
+      <input name="token" type="hidden" :value="form.values.token">
 
       <label class="field">
         <span>New password</span>
-        <input name="password" type="password" v-model="form.fields.password.value" @blur="form.fields.password.onBlur()" />
+        <input name="password" type="password" v-model="form.values.password" @blur="form.fields.password.onBlur()" />
         <span v-if="form.errors.has('password')" class="error">{{ form.errors.first('password') }}</span>
       </label>
 
@@ -36,7 +36,7 @@ const form = useForm(resetPasswordForm, {
         <input
           name="passwordConfirmation"
           type="password"
-          v-model="form.fields.passwordConfirmation.value"
+          v-model="form.values.passwordConfirmation"
           @blur="form.fields.passwordConfirmation.onBlur()"
         />
         <span v-if="form.errors.has('passwordConfirmation')" class="error">{{ form.errors.first('passwordConfirmation') }}</span>

@@ -43,7 +43,7 @@ export default function LoginPage() {
           <input
             name="email"
             type="email"
-            value={form.fields.email.value}
+            value={form.values.email}
             onInput={(event) => form.fields.email.onInput(event.currentTarget.value)}
             onBlur={() => form.fields.email.onBlur()}
           />
@@ -55,7 +55,7 @@ export default function LoginPage() {
           <input
             name="password"
             type="password"
-            value={form.fields.password.value}
+            value={form.values.password}
             onInput={(event) => form.fields.password.onInput(event.currentTarget.value)}
             onBlur={() => form.fields.password.onBlur()}
           />
@@ -66,7 +66,7 @@ export default function LoginPage() {
           <input
             name="remember"
             type="checkbox"
-            checked={form.fields.remember.value}
+            checked={form.values.remember}
             onChange={(event) => form.fields.remember.onInput(event.currentTarget.checked)}
           />
           Remember me

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useRoute } from '#imports'
-import { ref } from 'vue'
 import { useForm } from '@holo-js/adapter-nuxt/client'
+import { ref } from 'vue'
 import { verifyEmailForm } from '~/lib/schemas/auth'
 
 const route = useRoute()
@@ -53,7 +53,7 @@ async function resendVerificationEmail() {
     </div>
 
     <form v-if="token" class="stack" @submit.prevent="form.submit()">
-      <input name="token" type="hidden" v-model="form.fields.token.value">
+      <input name="token" type="hidden" v-model="form.values.token">
       <span v-if="form.errors.has('token')" class="error">{{ form.errors.first('token') }}</span>
       <button :disabled="form.submitting">
         {{ form.submitting ? 'Verifying...' : 'Verify email' }}
