@@ -22,6 +22,18 @@ type FormValuesBridge = {
   setValue(path: string, value: unknown): Promise<void>
 }
 
+const ARRAY_MUTATION_METHODS = new Set([
+  'copyWithin',
+  'fill',
+  'pop',
+  'push',
+  'reverse',
+  'shift',
+  'sort',
+  'splice',
+  'unshift',
+])
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value
     && typeof value === 'object'
@@ -31,10 +43,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function isLeafValue(value: unknown): boolean {
-  return Array.isArray(value)
-    || value instanceof Date
+  return value instanceof Date
     || value instanceof Blob
-    || !isPlainObject(value)
+    || (!Array.isArray(value) && !isPlainObject(value))
 }
 
 function getValueAtPath(root: unknown, path: string): unknown {
@@ -52,12 +63,86 @@ function getValueAtPath(root: unknown, path: string): unknown {
   return cursor
 }
 
+function createArrayMutationView(
+  source: readonly unknown[],
+  path: string,
+  form: { value: FormValuesBridge },
+  version: { value: number },
+  cache: WeakMap<readonly unknown[], unknown[]>,
+): unknown[] {
+  const cached = cache.get(source)
+  if (cached) {
+    return cached
+  }
+
+  const proxy = new Proxy([] as unknown[], {
+    get(_target, key) {
+      void version.value
+      const current = getValueAtPath(form.value.values, path)
+      if (!Array.isArray(current)) {
+        return undefined
+      }
+
+      const value = Reflect.get(current, key, current)
+      if (typeof value !== 'function') {
+        return value
+      }
+
+      if (typeof key === 'string' && ARRAY_MUTATION_METHODS.has(key)) {
+        return (...args: unknown[]) => {
+          const latest = getValueAtPath(form.value.values, path)
+          if (!Array.isArray(latest)) {
+            return undefined
+          }
+
+          const next = latest.slice()
+          const result = Reflect.get(next, key, next).apply(next, args)
+          void form.value.setValue(path, next)
+          return result
+        }
+      }
+
+      return value.bind(current)
+    },
+    set(_target, key, value) {
+      const current = getValueAtPath(form.value.values, path)
+      if (!Array.isArray(current)) {
+        return false
+      }
+
+      const next = current.slice()
+      const updated = Reflect.set(next, key, value)
+      if (updated) {
+        void form.value.setValue(path, next)
+      }
+      return updated
+    },
+    deleteProperty(_target, key) {
+      const current = getValueAtPath(form.value.values, path)
+      if (!Array.isArray(current)) {
+        return false
+      }
+
+      const next = current.slice()
+      const deleted = Reflect.deleteProperty(next, key)
+      if (deleted) {
+        void form.value.setValue(path, next)
+      }
+      return deleted
+    },
+  })
+
+  cache.set(source, proxy)
+  return proxy
+}
+
 function defineLeafAccessor(
   target: Record<string, unknown>,
   key: string,
   path: string,
   form: { value: FormValuesBridge },
   version: { value: number },
+  arrayCache: WeakMap<readonly unknown[], unknown[]>,
 ): void {
   const descriptor = Object.getOwnPropertyDescriptor(target, key)
   if (descriptor?.get && descriptor?.set) {
@@ -69,7 +154,10 @@ function defineLeafAccessor(
     configurable: true,
     get() {
       void version.value
-      return getValueAtPath(form.value.values, path)
+      const value = getValueAtPath(form.value.values, path)
+      return Array.isArray(value)
+        ? createArrayMutationView(value, path, form, version, arrayCache)
+        : value
     },
     set(nextValue: unknown) {
       void form.value.setValue(path, nextValue)
@@ -82,6 +170,7 @@ function syncValuesView(
   source: unknown,
   form: { value: FormValuesBridge },
   version: { value: number },
+  arrayCache: WeakMap<readonly unknown[], unknown[]>,
   prefix = '',
 ): void {
   if (!isPlainObject(source)) {
@@ -102,12 +191,21 @@ function syncValuesView(
     const path = prefix ? `${prefix}.${key}` : key
     const current = target[key]
 
+    if (Array.isArray(item)) {
+      if (isPlainObject(current)) {
+        delete target[key]
+      }
+
+      defineLeafAccessor(target, key, path, form, version, arrayCache)
+      continue
+    }
+
     if (isLeafValue(item)) {
       if (isPlainObject(current)) {
         delete target[key]
       }
 
-      defineLeafAccessor(target, key, path, form, version)
+      defineLeafAccessor(target, key, path, form, version, arrayCache)
       continue
     }
 
@@ -115,7 +213,7 @@ function syncValuesView(
       target[key] = {}
     }
 
-    syncValuesView(target[key] as Record<string, unknown>, item, form, version, path)
+    syncValuesView(target[key] as Record<string, unknown>, item, form, version, arrayCache, path)
   }
 }
 
@@ -128,6 +226,7 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
   let versionCounter = 0
   const rawValues: Record<string, unknown> = {}
   const values = reactive(rawValues) as InferFormData<TSchema>
+  const arrayCache = new WeakMap<readonly unknown[], unknown[]>()
 
   const syncValuesFromForm = () => {
     syncValuesView(
@@ -135,6 +234,7 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
       form.value.values,
       form as { value: FormValuesBridge },
       version,
+      arrayCache,
     )
   }
 

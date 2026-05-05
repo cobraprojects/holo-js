@@ -336,8 +336,10 @@ const form = useForm(loginForm, {
 </template>
 ```
 
-Bind displayed values from `form.values.*` across frameworks and keep `form.fields.*` for touched state,
-blur-time validation, and field lifecycle helpers.
+Bind displayed values from `form.values.*` across frameworks and keep `form.fields.*` for field lifecycle helpers.
+`form.fields.email.onBlur()` is the blur-validation hook when `validateOn: 'blur'` is enabled, while touched
+state can also be set during input and value updates through helpers like `form.fields.email.onInput(...)`
+and `form.setValue(...)`.
 
 ```svelte [SvelteKit — src/routes/login/+page.svelte (form actions)]
 <script lang="ts">

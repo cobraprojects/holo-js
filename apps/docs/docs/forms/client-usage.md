@@ -209,8 +209,9 @@ form.lastSubmission           // last server response
 ```
 
 Use `form.values.email` as the field value source across frameworks.
-`form.fields.email.onBlur()` is still the blur/touched bridge for `validateOn: 'blur'`, and React/Svelte input
-handlers still call `form.fields.email.onInput(...)`.
+`form.fields.email.onBlur()` is the blur-validation hook when `validateOn: 'blur'` is enabled, while touched state
+can also be set during input and value updates through helpers like `form.fields.email.onInput(...)` and
+`form.setValue(...)`.
 
 Manual validation:
 

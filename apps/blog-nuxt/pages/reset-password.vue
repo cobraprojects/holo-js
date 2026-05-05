@@ -23,7 +23,7 @@ const form = useForm(resetPasswordForm, {
     </div>
 
     <form v-if="token" class="stack" @submit.prevent="form.submit()">
-      <input name="token" type="hidden" v-model="form.values.token">
+      <input name="token" type="hidden" :value="form.values.token">
 
       <label class="field">
         <span>New password</span>

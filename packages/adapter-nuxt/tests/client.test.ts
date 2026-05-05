@@ -132,7 +132,7 @@ describe('@holo-js/adapter-nuxt client', () => {
     expect(Object.getOwnPropertyDescriptor(form, 'missing')).toBeUndefined()
   })
 
-  it('preserves array and date values as native objects through the proxy', async () => {
+  it('preserves date values and exposes array contents through the proxy', async () => {
     vi.doMock('vue', () => ({
       onScopeDispose() {},
       reactive<TValue extends object>(value: TValue) {
@@ -166,8 +166,14 @@ describe('@holo-js/adapter-nuxt client', () => {
 
     expect(form.values.publishedAt).toBeInstanceOf(Date)
     expect(form.values.publishedAt.getTime()).toBe(publishedAt.getTime())
-    expect(Array.isArray(form.values.tags)).toBe(true)
-    expect(form.values.tags).toEqual(['news'])
+    const tags = form.values.tags
+    expect(Array.isArray(tags)).toBe(true)
+    expect(tags).toBeDefined()
+    if (!tags) {
+      throw new Error('Expected tags to be defined')
+    }
+
+    expect(Array.from(tags)).toEqual(['news'])
   })
 
   it('recreates the wrapped form when watched inputs change', async () => {
@@ -258,5 +264,51 @@ describe('@holo-js/adapter-nuxt client', () => {
     form.values.email = 'ava@example.com'
 
     expect(form.fields.email.value).toBe('ava@example.com')
+  })
+
+  it('routes array mutations through setValue so touched, dirty, and validation update', async () => {
+    vi.doMock('vue', () => ({
+      onScopeDispose() {},
+      reactive<TValue extends object>(value: TValue) {
+        return value
+      },
+      shallowRef<TValue>(value: TValue) {
+        return { value }
+      },
+      watchEffect(effect: (onCleanup: (cleanup: () => void) => void) => void) {
+        let cleanup: (() => void) | undefined
+        effect((nextCleanup) => {
+          cleanup = nextCleanup
+        })
+        return () => cleanup?.()
+      },
+    }))
+
+    const { useForm } = await import('../src/runtime/composables/forms')
+    const publishPost = schema({
+      tags: field.array(field.string().required()).required().min(1),
+    })
+
+    const form = useForm(publishPost, {
+      initialValues: {
+        tags: [],
+      },
+      validateOn: 'change',
+    })
+
+    await form.validate()
+    expect(form.errors.first('tags')).toBeDefined()
+    expect(form.fields.tags.touched).toBe(false)
+    expect(form.fields.tags.dirty).toBe(false)
+
+    form.values.tags.push('news')
+    await Promise.resolve()
+    await Promise.resolve()
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(Array.from(form.values.tags)).toEqual(['news'])
+    expect(form.fields.tags.touched).toBe(true)
+    expect(form.fields.tags.dirty).toBe(true)
+    expect(form.errors.first('tags')).toBeUndefined()
   })
 })
