@@ -228,6 +228,55 @@ describe('@holo-js/forms contracts', () => {
     })
   })
 
+  it('excludes Laravel-style dontFlash fields from serialized failure payloads', async () => {
+    const registerUser = schema({
+      email: field.string().required().email(),
+      password: field.string().required().min(8),
+      passwordConfirmation: field.string().required(),
+      token: field.string().required(),
+    })
+
+    const failure = await validate({
+      email: 'bad',
+      password: 'super-secret',
+      passwordConfirmation: 'super-secret',
+      token: 'reset-token',
+    }, registerUser)
+
+    expect(failure.valid).toBe(false)
+    if (failure.valid) {
+      throw new Error('Expected form submission failure.')
+    }
+
+    expect(failure.values).toEqual({
+      email: 'bad',
+      password: 'super-secret',
+      passwordConfirmation: 'super-secret',
+      token: 'reset-token',
+    })
+    expect(failure.serialize()).toEqual({
+      valid: false,
+      submitted: true,
+      values: {
+        email: 'bad',
+      },
+      errors: {
+        email: ['Invalid email: Received "bad"'],
+      },
+    })
+    expect(failure.fail()).toEqual({
+      ok: false,
+      status: 422,
+      valid: false,
+      values: {
+        email: 'bad',
+      },
+      errors: {
+        email: ['Invalid email: Received "bad"'],
+      },
+    })
+  })
+
   it('does not coerce plain form objects with request-like field names into Request inputs', async () => {
     const requestMeta = schema({
       method: field.string().required(),
@@ -253,6 +302,33 @@ describe('@holo-js/forms contracts', () => {
       url: '/login',
       headers: 'content-type: application/x-www-form-urlencoded',
       path: '/login',
+    })
+  })
+
+  it('normalizes request-like event inputs even without security options', async () => {
+    const forgotPassword = schema({
+      email: field.string().required().email(),
+    })
+
+    const submission = await validate({
+      method: 'POST',
+      path: '/forgot-password',
+      headers: {
+        host: 'app.test',
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        email: 'ava@example.com',
+      }),
+    }, forgotPassword)
+
+    expect(submission.valid).toBe(true)
+    if (!submission.valid) {
+      throw new Error('Expected request-like event validation success.')
+    }
+
+    expect(submission.data).toEqual({
+      email: 'ava@example.com',
     })
   })
 
@@ -480,6 +556,28 @@ describe('@holo-js/forms contracts', () => {
     expect(formsInternals.normalizeRequestLikeInput({
       req: nodeRequest,
     })).toBe(nodeRequest)
+  })
+
+  it('does not treat arbitrary nested request containers as requests', () => {
+    expect(formsInternals.normalizeRequestLikeInput({
+      req: {
+        email: 'ava@example.com',
+      },
+    })).toBeUndefined()
+    expect(formsInternals.normalizeRequestLikeInput({
+      web: {
+        request: {
+          email: 'ava@example.com',
+        },
+      },
+    })).toBeUndefined()
+    expect(formsInternals.normalizeRequestLikeInput({
+      node: {
+        req: {
+          email: 'ava@example.com',
+        },
+      },
+    })).toBeUndefined()
   })
 
   it('marks streamed request-like bodies as duplex requests', async () => {

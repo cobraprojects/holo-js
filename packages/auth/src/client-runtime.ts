@@ -142,6 +142,25 @@ export async function user(options?: AuthClientRequestOptions): Promise<AuthUser
   return (await fetchCurrentUser(options)).user
 }
 
+export async function useAuth(
+  options?: AuthClientRequestOptions,
+): Promise<CurrentAuthResponse & {
+  readonly check: () => boolean
+  readonly refreshUser: () => Promise<AuthUser | null>
+}> {
+  const current = await fetchCurrentUser(options)
+
+  return Object.freeze({
+    ...current,
+    check() {
+      return current.authenticated
+    },
+    refreshUser() {
+      return refreshUser(options)
+    },
+  })
+}
+
 export async function refreshUser(options?: AuthClientRequestOptions): Promise<AuthUser | null> {
   return (await fetchCurrentUser(options, { force: true })).user
 }

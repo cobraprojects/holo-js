@@ -160,6 +160,7 @@ export function resolveHoloFrameworkOptions(
       preferCache: options.preferCache ?? processEnv.NODE_ENV === 'production',
       processEnv,
       renderView: options.renderView,
+      authRequest: options.authRequest,
       registerProjectQueueJobs: options.registerProjectQueueJobs,
     },
   }
@@ -237,6 +238,7 @@ async function initializeSingletonFrameworkProject<
       configureDB(currentRuntime.manager)
       await reconfigureOptionalHoloSubsystems(state.project.projectRoot, currentRuntime.loadedConfig, {
         renderView: resolved.runtime.renderView,
+        authRequest: resolved.runtime.authRequest,
       })
 
       if (state.project.runtime !== currentRuntime) {
@@ -348,6 +350,7 @@ export async function initializeHoloAdapterProject<TCustom extends HoloConfigMap
   const runtime = await ensureHolo<TCustom>(project.projectRoot, options)
   await reconfigureOptionalHoloSubsystems(project.projectRoot, runtime.loadedConfig, {
     renderView: options.renderView,
+    authRequest: options.authRequest,
   })
 
   return {

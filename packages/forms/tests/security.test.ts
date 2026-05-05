@@ -11,7 +11,9 @@ const formsSourceRoot = resolve(import.meta.dirname, '..')
 const formsFixtureFiles = [
   'src/client-security.ts',
   'src/contracts.ts',
+  'src/errors.ts',
   'src/security.ts',
+  'src/security-shared.ts',
 ] as const
 const tempDirs: string[] = []
 

@@ -131,11 +131,14 @@ function createQueueModuleStub(options: { readonly autoRun?: boolean } = {}) {
 function createNodemailerModuleStub(options: {
   readonly result?: { readonly messageId?: string, readonly response?: string }
   readonly error?: Error
+  readonly inspectMessage?: (message: unknown) => void
 } = {}) {
   const sendMail = vi.fn(async (message: unknown) => {
     if (options.error) {
       throw options.error
     }
+
+    options.inspectMessage?.(message)
 
     return options.result ?? {
       messageId: 'smtp-provider-id',
@@ -1751,6 +1754,43 @@ describe('@holo-js/mail runtime', () => {
       providerMessageId: 'provider-response-id',
       provider: {
         response: '250 queued',
+      },
+    })
+    const nodemailerMutatingAddresses = createNodemailerModuleStub({
+      inspectMessage(message) {
+        if (!message || typeof message !== 'object') {
+          throw new Error('Expected SMTP message object.')
+        }
+
+        const smtpMessage = message as {
+          from?: { address?: string }
+          to?: Array<{ address?: string }>
+        }
+        if (!smtpMessage.from || !Array.isArray(smtpMessage.to) || !smtpMessage.to[0]) {
+          throw new Error('Expected SMTP message addresses.')
+        }
+
+        smtpMessage.from.address = smtpMessage.from.address?.toLowerCase()
+        smtpMessage.to[0].address = smtpMessage.to[0].address?.toLowerCase()
+      },
+    })
+    mailRuntimeInternals.setNodemailerModuleLoader(async () => nodemailerMutatingAddresses.module)
+    await expect(mailRuntimeInternals.sendViaSmtp(
+      {
+        ...smtpResolvedMail,
+        headers: {},
+        tags: [],
+        attachments: [],
+      } as never,
+      mailRuntimeInternals.createSendContext('mail-3c', {
+        mailer: 'smtp',
+        driver: 'smtp',
+        implementation: getBuiltInDriver('smtp'),
+      }, false),
+    )).resolves.toMatchObject({
+      providerMessageId: 'smtp-provider-id',
+      provider: {
+        response: '250 accepted',
       },
     })
     mailRuntimeInternals.setNodemailerModuleLoader(undefined)

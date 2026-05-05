@@ -17,6 +17,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <Link href="/" style={{ color: '#fff', textDecoration: 'none', fontWeight: 700 }}>blog-next</Link>
               <Link href="/posts" style={{ color: '#cbd5e1', textDecoration: 'none' }}>Posts</Link>
               <Link href="/admin" style={{ color: '#cbd5e1', textDecoration: 'none' }}>Admin</Link>
+              <Link href="/login" style={{ color: '#cbd5e1', textDecoration: 'none' }}>Login</Link>
+              <Link href="/register" style={{ color: '#cbd5e1', textDecoration: 'none' }}>Register</Link>
             </nav>
           </header>
           <main style={{ maxWidth: '72rem', margin: '0 auto', padding: '2rem 1.5rem 4rem' }}>{children}</main>

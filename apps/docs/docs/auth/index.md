@@ -67,7 +67,7 @@ Start with the auth and session config files:
 
 ```ts
 // config/auth.ts
-import { defineAuthConfig } from '@holo-js/config'
+import { defineAuthConfig, env } from '@holo-js/config'
 
 export default defineAuthConfig({
   defaults: {
@@ -88,6 +88,19 @@ export default defineAuthConfig({
     users: {
       model: 'User',
       identifiers: ['email'],
+    },
+  },
+  emailVerification: {
+    required: true,
+    route: env('AUTH_EMAIL_VERIFICATION_ROUTE', '/verify-email'),
+  },
+  passwords: {
+    users: {
+      provider: 'users',
+      table: 'password_reset_tokens',
+      expire: 60,
+      throttle: 60,
+      route: env('AUTH_PASSWORD_RESET_ROUTE', '/reset-password'),
     },
   },
 })
@@ -114,30 +127,67 @@ Then use auth operations inside your own routes:
 ```ts
 import { login, logout, refreshUser, register, user } from '@holo-js/auth'
 
+function sanitizeAuthBody(body: Record<string, unknown>) {
+  const sanitizedBody = { ...body }
+  delete sanitizedBody.password
+  delete sanitizedBody.passwordConfirmation
+  delete sanitizedBody.confirmPassword
+  delete sanitizedBody.currentPassword
+  delete sanitizedBody.newPassword
+  delete sanitizedBody.token
+
+  return sanitizedBody
+}
+
 export async function POST(request: Request) {
   const body = await request.json()
+  const sanitizedBody = sanitizeAuthBody(body)
 
-  const created = await register({
+  const { data: created, error: registerError } = await register({
     name: body.name,
     email: body.email,
     password: body.password,
     passwordConfirmation: body.passwordConfirmation,
   })
 
+  if (registerError) {
+    return Response.json({
+      ok: false,
+      status: registerError.status,
+      valid: false,
+      values: sanitizedBody,
+      errors: registerError.fields,
+    }, { status: registerError.status })
+  }
+
   return Response.json(created, { status: 201 })
 }
 
 export async function PUT(request: Request) {
   const body = await request.json()
+  const sanitizedBody = sanitizeAuthBody(body)
 
-  await login({
+  const { data: session, error } = await login({
     email: body.email,
     password: body.password,
     remember: body.remember === true,
   })
 
+  if (error) {
+    return Response.json({
+      ok: false,
+      status: error.status,
+      valid: false,
+      values: sanitizedBody,
+      errors: error.fields,
+    }, { status: error.status })
+  }
+
   return Response.json({
     authenticated: true,
+    redirectTo: session.emailVerificationRequired
+      ? session.emailVerificationRoute ?? '/verify-email'
+      : '/admin',
     user: await refreshUser(),
   })
 }
@@ -151,6 +201,9 @@ export async function DELETE() {
   })
 }
 ```
+
+When email verification is enabled, successful login can redirect the user to the configured verification route
+instead of rejecting the login attempt.
 
 ## Retrieving The Authenticated User
 
@@ -208,16 +261,48 @@ payload to `login()` or `register()`.
 ```ts
 import { login } from '@holo-js/auth'
 
-await login({
+const { data, error } = await login({
   email: 'ava@example.com',
   password: 'secret-secret',
 })
 ```
 
+Successful auth calls put the result in `data`. Expected auth failures come back in `error`.
+
+`error` is plain data:
+
+```ts
+{
+  code: 'invalid_credentials',
+  message: 'These credentials do not match our records.',
+  status: 401,
+  fields: {
+    email: ['These credentials do not match our records.'],
+    password: ['These credentials do not match our records.'],
+  },
+}
+```
+
+That means your route can forward auth failures directly without any helper layer:
+
+```ts
+const sanitizedBody = sanitizeAuthBody(body)
+
+if (error) {
+  return Response.json({
+    ok: false,
+    status: error.status,
+    valid: false,
+    values: sanitizedBody,
+    errors: error.fields,
+  }, { status: error.status })
+}
+```
+
 The auth runtime uses the validated payload itself. If your credentials are based on `phone`, pass `phone`.
 
 ```ts
-await login({
+const { data, error } = await login({
   phone: '20123456789',
   password: 'secret-secret',
 })

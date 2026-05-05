@@ -119,6 +119,10 @@ interface NuxtHookContext {
 interface NuxtOptionsWithNitro {
   nitro: {
     storage: Record<string, unknown>
+    experimental?: {
+      asyncContext?: boolean
+      [key: string]: unknown
+    }
     [key: string]: unknown
   }
   runtimeConfig: {
@@ -273,6 +277,10 @@ export default defineNuxtModule<ModuleOptions>({
 
     opts.nitro = opts.nitro || { storage: {} }
     opts.nitro.storage = opts.nitro.storage || {}
+    opts.nitro.experimental = {
+      ...(opts.nitro.experimental || {}),
+      asyncContext: true,
+    }
     opts.runtimeConfig = opts.runtimeConfig || {}
     opts.runtimeConfig.public = opts.runtimeConfig.public || {}
     opts.runtimeConfig.public.holo = {
@@ -308,15 +316,15 @@ export default defineNuxtModule<ModuleOptions>({
 
     if (!opts._holoCoreRuntimeRegistered) {
       const imports = [
-        { name: 'holo', as: 'holo', from: resolver.resolve('./runtime/composables') },
-        { name: 'useHoloDb', as: 'useHoloDb', from: resolver.resolve('./runtime/composables') },
-        { name: 'useHoloEnv', as: 'useHoloEnv', from: resolver.resolve('./runtime/composables') },
-        { name: 'useHoloDebug', as: 'useHoloDebug', from: resolver.resolve('./runtime/composables') },
+        { name: 'holo', as: 'holo', from: '@holo-js/adapter-nuxt/runtime' },
+        { name: 'useHoloDb', as: 'useHoloDb', from: '@holo-js/adapter-nuxt/runtime' },
+        { name: 'useHoloEnv', as: 'useHoloEnv', from: '@holo-js/adapter-nuxt/runtime' },
+        { name: 'useHoloDebug', as: 'useHoloDebug', from: '@holo-js/adapter-nuxt/runtime' },
       ]
       if (storageModule) {
         imports.push(
-          { name: 'useStorage', as: 'useStorage', from: resolver.resolve('./runtime/composables/storage') },
-          { name: 'Storage', as: 'Storage', from: resolver.resolve('./runtime/composables/storage') },
+          { name: 'useStorage', as: 'useStorage', from: '@holo-js/adapter-nuxt/storage' },
+          { name: 'Storage', as: 'Storage', from: '@holo-js/adapter-nuxt/storage' },
         )
       }
       addServerPlugin(resolver.resolve('./runtime/plugins/init'))

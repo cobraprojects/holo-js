@@ -5,17 +5,15 @@ import {
   type ValidationErrorBag,
   type ValidationSchema,
   createErrorBag,
-  defineSchema,
-  isValidationSchema,
   validate as validateInput,
 } from '@holo-js/validation'
-import { formsSecurityInternals, loadSecurityModule } from './security'
+import { FormContractError } from './errors'
+import type { FormSchema } from './schema'
+import { sanitizeFlashedInput } from './sensitiveInput'
 
-export interface FormSchema<TShape extends SchemaInputShape = SchemaInputShape> extends ValidationSchema<TShape> {
-  readonly mode: 'form'
-  readonly fields: ValidationSchema<TShape>['fields']
-  readonly $values?: Partial<InferSchemaData<TShape>>
-}
+export { FormContractError } from './errors'
+export { type FormSchema, type InferFormData, isFormSchema, schema } from './schema'
+export { sanitizeFlashedInput } from './sensitiveInput'
 
 export interface FormFailurePayload<TData> {
   readonly ok: false
@@ -32,6 +30,7 @@ export interface FormSuccessPayload<TPayload = undefined> {
 }
 
 export interface SerializedFormSubmission<TData> {
+  readonly ok?: false
   readonly valid: boolean
   readonly submitted: true
   readonly values: Partial<TData> | TData
@@ -103,31 +102,6 @@ export interface FormSubmissionFailure<TData> {
 
 export type FormSubmissionResult<TData> = FormSubmissionSuccess<TData> | FormSubmissionFailure<TData>
 
-export class FormContractError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'FormContractError'
-  }
-}
-
-export function schema<TShape extends SchemaInputShape>(
-  shapeOrSchema: TShape | ValidationSchema<TShape>,
-): FormSchema<TShape> {
-  const base = isValidationSchema(shapeOrSchema)
-    ? shapeOrSchema
-    : defineSchema(shapeOrSchema)
-
-  return Object.freeze({
-    ...base,
-    mode: 'form' as const,
-  }) as FormSchema<TShape>
-}
-
-export function isFormSchema(value: unknown): value is FormSchema {
-  return isValidationSchema(value)
-    && (value as { mode?: unknown }).mode === 'form'
-}
-
 function normalizeStatus(value: number | undefined, fallback: number): number {
   if (typeof value === 'undefined') {
     return fallback
@@ -148,7 +122,7 @@ function serializeSubmissionState<TData>(
   return Object.freeze({
     valid,
     submitted: true as const,
-    values,
+    values: sanitizeFlashedInput(values),
     errors: errors.flatten(),
   })
 }
@@ -166,7 +140,7 @@ function createSubmission<TData>(
     ok: false,
     status: normalizedFailureStatus,
     valid: false as const,
-    values: values as Partial<TData>,
+    values: sanitizeFlashedInput(values) as Partial<TData>,
     errors: errors.flatten(),
   })
 
@@ -375,21 +349,63 @@ function extractRequestLikeBody(
   return String(rawBody)
 }
 
+function isStructuredRequestLikeObject(value: unknown): value is {
+  readonly method?: string
+  readonly path?: string
+  readonly url?: string | URL
+  readonly headers?: RequestLikeHeaders
+  readonly body?: unknown
+} {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const candidate = value as {
+    readonly method?: unknown
+    readonly path?: unknown
+    readonly url?: unknown
+    readonly headers?: unknown
+    readonly body?: unknown
+  }
+
+  return typeof candidate.method === 'string'
+    || typeof candidate.path === 'string'
+    || typeof candidate.url === 'string'
+    || candidate.url instanceof URL
+    || isRequestLikeHeaders(candidate.headers)
+    || typeof candidate.body !== 'undefined'
+}
+
 function isRequestLikeInput(input: unknown): input is FormRequestLikeInput {
   if (!input || typeof input !== 'object') {
     return false
   }
 
   const candidate = input as FormRequestLikeInput
-  return candidate.web?.request instanceof Request
-    || candidate.req instanceof Request
-    || typeof candidate.method === 'string'
+  if (candidate.web?.request instanceof Request || candidate.req instanceof Request) {
+    return true
+  }
+
+  if (isStructuredRequestLikeObject(candidate.web?.request)) {
+    return true
+  }
+
+  if (isStructuredRequestLikeObject(candidate.req)) {
+    return true
+  }
+
+  if (isStructuredRequestLikeObject(candidate.node?.req)) {
+    return true
+  }
+
+  const hasRequestMetadata = typeof candidate.method === 'string'
     || typeof candidate.path === 'string'
     || typeof candidate.url === 'string'
     || candidate.url instanceof URL
-    || isRequestLikeHeaders(candidate.headers)
-    || (!!candidate.req && typeof candidate.req === 'object')
-    || (!!candidate.node?.req && typeof candidate.node.req === 'object')
+  const hasStructuredHeaders = isRequestLikeHeaders(candidate.headers)
+  const hasBody = typeof candidate.body !== 'undefined'
+
+  return hasRequestMetadata && (hasStructuredHeaders || hasBody)
 }
 
 function normalizeRequestLikeInput(input: FormLikeValidationInput | FormRequestLikeInput | null | undefined): Request | undefined {
@@ -473,9 +489,7 @@ export async function validate<TShape extends SchemaInputShape>(
     | FormSubmissionResult<InferSchemaData<TShape>>
     | undefined
   const usesSecurityOptions = options.csrf === true || typeof options.throttle === 'string'
-  const normalizedRequestInput = usesSecurityOptions
-    ? normalizeRequestLikeInput(input)
-    : undefined
+  const normalizedRequestInput = normalizeRequestLikeInput(input)
   const validationInput = normalizedRequestInput ?? input
 
   if (usesSecurityOptions && !normalizedRequestInput) {
@@ -488,6 +502,7 @@ export async function validate<TShape extends SchemaInputShape>(
     const request = normalizedRequestInput as Request
 
     try {
+      const { loadSecurityModule } = await import('./security')
       const security = await loadSecurityModule()
       const verificationRequest = (() => {
         try {
@@ -513,6 +528,7 @@ export async function validate<TShape extends SchemaInputShape>(
         })
       }
     } catch (error) {
+      const { formsSecurityInternals } = await import('./security')
       if (formsSecurityInternals.isRootSecurityError(error)) {
         if (validatedSubmission) {
           return createFailedSubmission(
@@ -561,5 +577,6 @@ export const formsInternals = {
   normalizeRequestLikeInput,
   normalizeStatus,
   normalizeRequestHeaders,
+  sanitizeFlashedInput,
   serializeSubmissionState,
 }

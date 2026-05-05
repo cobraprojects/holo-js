@@ -254,6 +254,8 @@ export type MailInstallResult = {
   readonly updatedPackageJson: boolean
   readonly createdMailConfig: boolean
   readonly createdMailDirectory: boolean
+  readonly updatedEnv: boolean
+  readonly updatedEnvExample: boolean
 }
 
 export type SecurityInstallResult = {

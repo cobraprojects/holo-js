@@ -1,5 +1,9 @@
-import { FormContractError } from './contracts'
-import { formsSecurityInternals } from './security'
+import { FormContractError } from './errors'
+import {
+  createMissingSecurityPackageError,
+  isMissingOptionalPackageError,
+  parseCookieHeader,
+} from './security-shared'
 
 type SecurityClientModule = {
   getSecurityClientConfig(): {
@@ -41,8 +45,8 @@ export async function loadSecurityClientModule(): Promise<SecurityClientModule> 
     .catch(async (error) => {
       securityClientModulePromise = undefined
 
-      if (formsSecurityInternals.isMissingOptionalPackageError(error)) {
-        throw formsSecurityInternals.createMissingSecurityPackageError()
+      if (isMissingOptionalPackageError(error)) {
+        throw createMissingSecurityPackageError()
       }
 
       throw error
@@ -66,7 +70,7 @@ export async function getClientCsrfField(): Promise<{ readonly name: string, rea
 
   const security = await loadSecurityClientModule()
   const config = security.getSecurityClientConfig().csrf
-  const value = formsSecurityInternals.parseCookieHeader(runtime.document.cookie)[config.cookie]
+  const value = parseCookieHeader(runtime.document.cookie)[config.cookie]
 
   if (!value) {
     throw new FormContractError(

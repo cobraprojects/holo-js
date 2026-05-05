@@ -82,4 +82,42 @@ describe('@holo-js/forms client typing', () => {
     void invalidField
     void (0 as unknown as ClientAssertion)
   })
+
+  it('keeps schema-driven field inference for forms that include a name field', () => {
+    const registerUser = schema({
+      name: field.string().required(),
+      email: field.string().required().email(),
+      password: field.string().required().min(8).confirmed(),
+      passwordConfirmation: field.string().required(),
+    })
+
+    const client = useForm(registerUser, {
+      initialValues: {
+        name: 'Ava',
+        email: 'ava@example.com',
+        password: 'supersecret',
+        passwordConfirmation: 'supersecret',
+      },
+      submitter() {
+        return {
+          ok: true as const,
+          status: 200,
+          data: {
+            message: 'Account created.',
+          },
+        }
+      },
+    })
+
+    const nameField: FormFieldState<string> = client.fields.name
+    const confirmationField: FormFieldState<string> = client.fields.passwordConfirmation
+
+    if (client.lastSubmission?.ok === true) {
+      const message: string = client.lastSubmission.data.message
+      void message
+    }
+
+    void nameField
+    void confirmationField
+  })
 })

@@ -1,295 +1,165 @@
 # Email Verification
 
-Email verification lets the application require verified email addresses before a user can continue.
+Email verification lets the application require a verified address while keeping the delivery flow automatic.
 
 ## Introduction
 
-When email verification is enabled, login is blocked until the local user model has a verification timestamp.
+When email verification is enabled:
+
+- registration automatically creates and sends a verification email
+- login is still allowed
+- the returned session tells the route that verification is still required
+- the framework-generated email link uses `APP_URL` plus the configured verification route
+
+Enable it in `config/auth.ts`:
 
 ```ts
-emailVerification: {
-  required: true,
-}
+import { defineAuthConfig, env } from '@holo-js/config'
+
+export default defineAuthConfig({
+  emailVerification: {
+    required: true,
+    route: env('AUTH_EMAIL_VERIFICATION_ROUTE', '/verify-email'),
+  },
+})
 ```
 
 The local model should have an `email_verified_at` column.
 
-## Creating Verification Tokens
+## Environment
 
-```ts
-import { verification } from '@holo-js/auth'
+Set the application URL and optional route override:
 
-const token = await verification.create(user)
+```dotenv
+APP_URL=http://localhost:3000
+AUTH_EMAIL_VERIFICATION_ROUTE=/verify-email
 ```
 
-The token store records:
+`APP_URL` is used when the framework builds the email link. Applications should not manually construct the
+verification URL in normal usage.
 
-- provider
-- user id
-- email
-- hashed token secret
-- creation time
-- expiration time
-
-## Consuming Verification Tokens
-
-```ts
-await verification.consume(token.plainTextToken)
-```
-
-The verification flow marks the local user as verified and invalidates the token.
+The application still owns the verification page and the route that calls `verification.consume(...)`. The framework
+owns the redirect target and the generated email link.
 
 ## Registration Flow
 
-After registration succeeds, the application should request a verification token and deliver it. This
-example sends through `@holo-js/notifications` directly; auth-managed delivery only works after the
-auth runtime has a delivery hook configured. See [Runtime Delivery Hook Configuration](#runtime-delivery-hook-configuration).
+Registration automatically starts email verification when `emailVerification.required` is `true`:
 
 ```ts
-import { register, verification } from '@holo-js/auth'
-import { defineNotification, notify } from '@holo-js/notifications'
+import { register } from '@holo-js/auth'
 
-const verificationCreated = (token: {
-  id: string
-  plainTextToken: string
-  expiresAt: Date
-}) => defineNotification({
-  type: 'auth.email-verification',
-  via() {
-    return ['email'] as const
-  },
-  build: {
-    email(user: { name?: string }) {
-      return {
-        subject: 'Verify your email address',
-        greeting: `Hello ${user.name ?? 'there'},`,
-        lines: ['Please verify your email address to continue.'],
-        action: {
-          label: 'Verify email',
-          url: `https://app.test/verify-email?token=${encodeURIComponent(token.plainTextToken)}`,
-        },
-      }
-    }
-  },
-})
-
-const created = await register({
+const { data: created, error } = await register({
+  name: body.name,
   email: body.email,
   password: body.password,
   passwordConfirmation: body.passwordConfirmation,
 })
-
-const token = await verification.create(created)
-
-// This sends through notifications directly.
-// Auth-managed delivery requires a configured AuthDeliveryHook.
-await notify(created, verificationCreated(token))
 ```
 
-## Delivery Integration
+Expected registration failures come back in `error`. On success, the local user is created and the verification
+message is delivered automatically through the configured auth delivery integration.
 
-Package installation alone does not enable auth email delivery. The auth runtime must have an
-`AuthDeliveryHook` bound before auth-managed verification emails can be sent.
+Applications do not need to call `verification.create(...)` after registration just to send the first email.
 
-See [Runtime Delivery Hook Configuration](#runtime-delivery-hook-configuration) for the runtime binding
-you need when routing auth delivery through notifications or mail.
+## Login Flow
 
-### Flexible Delivery Options
-Once you call notify, you can send the verification through any available channel:
-- **Email**: Primary delivery method for verification links (uses mail system when available)
-- **Database**: Store verification records for internal tracking
-- **Broadcast**: Real-time verification status updates via websocket
-- **Custom Channels**: Extend verification delivery to Slack, SMS, or other services
-
-### Queue-Friendly Delivery
-Verification notifications can be queued for background processing:
+Unverified users can still sign in. The returned session includes verification state:
 
 ```ts
-await notify(created, verificationCreated(token))
-  .onQueue('auth')
-```
+import { login } from '@holo-js/auth'
 
-### Transaction Safety
-Verification delivery respects database transactions:
-
-```ts
-await notify(created, verificationCreated(token))
-  .afterCommit() // Send only after DB transaction commits
-```
-
-## Customizing Verification Emails
-
-You can fully customize the verification notification by modifying the `build.email()` function:
-
-```ts
-const verificationCreated = (token: {
-  id: string
-  plainTextToken: string
-  expiresAt: Date
-}) => defineNotification({
-  type: 'auth.email-verification',
-  via() {
-    return ['email', 'database'] as const // Send to both email and database
-  },
-  build: {
-    email(user: { name?: string }) {
-      return {
-        subject: 'Verify your Holo JS account',
-        greeting: `Hello ${user.name ?? 'there'},`,
-        lines: [
-          'Thanks for signing up! Please verify your email address to get started.',
-          'This verification link will expire in 24 hours.'
-        ],
-        action: {
-          label: 'Verify Email Address',
-          url: `https://app.test/verify-email?token=${encodeURIComponent(token.plainTextToken)}`,
-        },
-        // Add any additional email-specific properties here
-      }
-    },
-    database() {
-      return {
-        verificationTokenId: token.id,
-        expiresAt: token.expiresAt,
-        purpose: 'email-verification'
-      }
-    }
-  }
+const { data: session, error } = await login({
+  email: body.email,
+  password: body.password,
+  remember: body.remember === true,
 })
 ```
 
-## Delivery Mechanism
+When verification is still required, successful login includes:
 
-When the `notify()` function is called for email verification:
+- `emailVerificationRequired: true`
+- `emailVerificationRoute: '/verify-email?email=ava%40example.com'`
 
-1. **If `@holo-js/notifications` is installed**: The notification is sent through the notifications system
-2. **Notifications → Mail**: If the notifications email channel is configured to use mail, the email is sent through the mailer
-3. **Auth Runtime Delivery Hook**: Built-in auth delivery requires a configured `AuthDeliveryHook`; otherwise auth logs a warning and skips delivery
-4. **No Delivery Binding**: If no delivery hook is bound, verification tokens are created but are not sent automatically
-
-## Installation
-
-To enable email verification delivery through notifications or mail:
-
-```bash
-# For full notifications + mail integration (recommended)
-npx holo install notifications
-npx holo install mail
-
-# For mail-only delivery
-npx holo install mail
-```
-
-## Protecting Application Routes
-
-Route protection remains in your application. A simple pattern is:
+Typical route handling:
 
 ```ts
-import { user } from '@holo-js/auth'
-
-const current = await user()
-if (!current?.email_verified_at) {
-  return Response.json({ message: 'Email verification required.' }, { status: 403 })
+if (error) {
+  return Response.json({
+    ok: false,
+    status: error.status,
+    valid: false,
+    values: body,
+    errors: error.fields,
+  }, { status: error.status })
 }
+
+return Response.json({
+  ok: true,
+  data: {
+    message: session.emailVerificationRequired
+      ? 'Signed in. Verify your email address to continue.'
+      : 'Signed in successfully.',
+    redirectTo: session.emailVerificationRequired
+      ? session.emailVerificationRoute ?? '/verify-email'
+      : '/admin',
+  },
+})
 ```
 
-The local model should have an `email_verified_at` column.
+That lets the app redirect the signed-in user to the verify page instead of rejecting the login attempt.
 
-## Creating Verification Tokens
+## Consuming Verification Tokens
+
+Verification pages consume the token from the emailed link:
 
 ```ts
 import { verification } from '@holo-js/auth'
 
-const token = await verification.create(user)
-```
-
-The token store records:
-
-- provider
-- user id
-- email
-- hashed token secret
-- creation time
-- expiration time
-
-## Consuming Verification Tokens
-
-```ts
-await verification.consume(token.plainTextToken)
+const { data: verifiedUser, error } = await verification.consume(token)
 ```
 
 The verification flow marks the local user as verified and invalidates the token.
 
-## Registration Flow
+## Resending Verification Emails
 
-After registration succeeds, the application should request a verification token and deliver it. This
-example again uses notifications directly; use [Runtime Delivery Hook Configuration](#runtime-delivery-hook-configuration)
-if you want auth-managed delivery through notifications or mail.
+Applications can resend another verification email with plain object input:
 
 ```ts
-import { register, verification } from '@holo-js/auth'
-import { defineNotification, notify } from '@holo-js/notifications'
+import { verification } from '@holo-js/auth'
 
-const verificationCreated = (token: {
-  id: string
-  plainTextToken: string
-  expiresAt: Date
-}) => defineNotification({
-  type: 'auth.email-verification',
-  via() {
-    return ['email'] as const
-  },
-  build: {
-    email(user: { name?: string }) {
-      return {
-        subject: 'Verify your email address',
-        greeting: `Hello ${user.name ?? 'there'},`,
-        lines: ['Please verify your email address to continue.'],
-        action: {
-          label: 'Verify email',
-          url: `https://app.test/verify-email?token=${encodeURIComponent(token.plainTextToken)}`,
-        },
-      }
-    },
-  },
-})
-
-const created = await register({
+const { error } = await verification.resend({
   email: body.email,
-  password: body.password,
-  passwordConfirmation: body.passwordConfirmation,
 })
-
-const token = await verification.create(created)
-
-await notify(created, verificationCreated(token))
 ```
+
+This is the intended verify-page flow when the user lands on `/verify-email?email=...` after login.
+
+Expected resend failures come back in `error`, for example:
+
+- `email_verification_user_missing`
+- `email_already_verified`
 
 ## Delivery
 
-Auth delivery requires runtime configuration. Bind an `AuthDeliveryHook` through auth runtime bindings,
-or follow [Runtime Delivery Hook Configuration](#runtime-delivery-hook-configuration), before relying on
-notifications or mail for auth-managed verification emails.
+Verification delivery is automatic once auth delivery is available.
 
-Install notifications or mail into an existing project with:
+- if `@holo-js/notifications` is installed, core can route auth delivery through notifications
+- if notifications are absent but `@holo-js/mail` is installed, core can send directly through mail
+- if no delivery integration is installed, auth logs the skipped delivery instead of building links in app code
 
-```bash
-npx holo install notifications
-npx holo install mail
-```
+The generated verification email includes:
 
-## Runtime Delivery Hook Configuration
+- an HTML body
+- a text fallback
+- a link built from `APP_URL`
+- the configured verification route
+- the signed verification token
 
-Auth delivery is disabled until the auth runtime is given a delivery hook. Bind `delivery` with
-`configureAuthRuntime({ delivery: ... })`, or follow the runtime bootstrap that wires auth, notifications,
-and mail together before relying on the built-in auth delivery flows.
-
-The manual `notify(created, verificationCreated(token))` example above does not use `AuthDeliveryHook`;
-it sends through notifications directly.
+Applications do not need to manually compose `https://app.test/verify-email?token=...` links in normal usage.
 
 ## Protecting Application Routes
 
-Route protection remains in your application. A simple pattern is:
+Route protection still belongs to the application. Email verification does not automatically block arbitrary pages.
 
 ```ts
 import { user } from '@holo-js/auth'
@@ -299,3 +169,8 @@ if (!current?.email_verified_at) {
   return Response.json({ message: 'Email verification required.' }, { status: 403 })
 }
 ```
+
+## Related Guides
+
+- [Local Authentication](/auth/local-auth)
+- [Password Reset](/auth/password-reset)

@@ -47,6 +47,10 @@ declare module 'nitropack/runtime/config' {
   export function useRuntimeConfig(): HoloRuntimeConfig
 }
 
+declare module 'nitropack/runtime/context' {
+  export function useEvent(): unknown
+}
+
 declare module 'nitropack/runtime/plugin' {
   export function defineNitroPlugin<T>(plugin: T): T
 }

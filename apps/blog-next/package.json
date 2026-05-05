@@ -45,7 +45,7 @@
     "@holo-js/storage": "^0.1.4",
     "@holo-js/validation": "workspace:*",
     "esbuild": "^0.25.0",
-    "next": "^16.0.0",
+    "next": "catalog:",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

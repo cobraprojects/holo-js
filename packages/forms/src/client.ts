@@ -1,15 +1,25 @@
-import {
-  type FormFailurePayload,
-  type FormSchema,
-  type FormSubmissionResult,
-  type FormSuccessPayload,
-  type SerializedFormSubmission as SerializedSubmissionState,
-  type SerializedFormSubmission,
-  createFailedSubmission,
-  createSuccessfulSubmission,
-  validate,
+import type {
+  FormFailurePayload,
+  InferFormData,
+  FormSchema,
+  FormSubmissionResult,
+  FormSuccessPayload,
+  SerializedFormSubmission as SerializedSubmissionState,
+  SerializedFormSubmission,
 } from './contracts'
-import { createErrorBag, type InferSchemaData, type SchemaInputShape, type ValidationErrorBag, type WebFileLike } from '@holo-js/validation'
+import { FormContractError } from './errors'
+import { clearSensitiveInputValues, sanitizeFlashedInput } from './sensitiveInput'
+import {
+  type FormLikeValidationInput,
+  createErrorBag,
+  type FieldBuilderInput,
+  type InferFieldOutput,
+  type SchemaInputShape,
+  type ValidationErrorBag,
+  type ValidationSchema,
+  type WebFileLike,
+  validate as validateInput,
+} from '@holo-js/validation'
 import { getClientCsrfField } from './client-security'
 
 type PrimitiveLike = string | number | boolean | bigint | symbol | null | undefined | Date | Blob | WebFileLike
@@ -23,20 +33,22 @@ export interface ClientSubmitContext<TData> {
   readonly formData: FormData
 }
 
-export type ClientSubmitResult<TData>
+export type ClientSubmitResult<TData, TSuccess = unknown>
   = FormSubmissionResult<TData>
   | SerializedFormSubmission<TData>
   | FormFailurePayload<TData>
-  | FormSuccessPayload<unknown>
+  | FormSuccessPayload<TSuccess>
 
-export interface UseFormOptions<TData> {
+export interface UseFormOptions<TData, TSuccess = unknown> {
   readonly action?: string
   readonly method?: string
   readonly csrf?: boolean
   readonly validateOn?: ValidateOnMode
   readonly initialValues?: Partial<TData>
   readonly initialState?: SerializedFormSubmission<TData>
-  readonly submitter?: (context: ClientSubmitContext<TData>) => Promise<ClientSubmitResult<TData>> | ClientSubmitResult<TData>
+  readonly submitter?: (
+    context: ClientSubmitContext<TData>,
+  ) => Promise<ClientSubmitResult<TData, TSuccess>> | ClientSubmitResult<TData, TSuccess>
 }
 
 export interface FormFieldState<TValue> {
@@ -58,36 +70,179 @@ export type FormFieldTree<TData> = [TData] extends [readonly unknown[]]
       ? { readonly [K in keyof TData]: FormFieldTree<TData[K]> }
       : FormFieldState<TData>
 
-export interface UseFormResult<TData> {
-  readonly fields: FormFieldTree<TData>
+type FormFieldTreeFromShape<TShape extends SchemaInputShape> = {
+  readonly [K in Extract<keyof TShape, string>]:
+    TShape[K] extends FieldBuilderInput
+      ? FormFieldState<InferFieldOutput<TShape[K]>>
+      : TShape[K] extends SchemaInputShape
+        ? FormFieldTreeFromShape<TShape[K]>
+        : never
+}
+
+export type InferFormFieldTree<TSchema extends FormSchema>
+  = TSchema extends FormSchema<infer TShape>
+    ? FormFieldTreeFromShape<TShape>
+    : never
+
+export interface UseFormResult<TData, TSuccess = unknown, TFields = FormFieldTree<TData>> {
+  readonly fields: TFields
   readonly values: TData
   readonly errors: ValidationErrorBag<TData>
   readonly submitting: boolean
   readonly valid: boolean
-  readonly lastSubmission?: SerializedFormSubmission<TData> | FormSuccessPayload<unknown>
+  readonly lastSubmission?: SerializedFormSubmission<TData> | FormFailurePayload<TData> | FormSuccessPayload<TSuccess>
   subscribe(listener: () => void): () => void
   validate(): Promise<FormSubmissionResult<TData>>
   validateField(path: string): Promise<readonly string[]>
-  submit(): Promise<ClientSubmitResult<TData>>
+  submit(): Promise<ClientSubmitResult<TData, TSuccess>>
   reset(values?: Partial<TData>): void
   setValue(path: string, value: unknown): Promise<void>
-  applyServerState(result: ClientSubmitResult<TData>): ClientSubmitResult<TData>
+  applyServerState(result: ClientSubmitResult<TData, TSuccess>): ClientSubmitResult<TData, TSuccess>
 }
 
-type MutableState<TData> = {
+type MutableState<TData, TSuccess> = {
   values: TData
   initialValues: TData
   flattenedErrors: Record<string, readonly string[]>
   touched: Set<string>
   dirty: Set<string>
   submitting: boolean
-  lastSubmission?: SerializedFormSubmission<TData> | FormSuccessPayload<unknown>
+  lastSubmission?: SerializedFormSubmission<TData> | FormFailurePayload<TData> | FormSuccessPayload<TSuccess>
   listeners: Set<() => void>
 }
 
 type SchemaFieldLike = {
   readonly kind: 'field'
   readonly definition: object
+}
+
+function normalizeStatus(value: number | undefined, fallback: number): number {
+  if (typeof value === 'undefined') {
+    return fallback
+  }
+
+  if (!Number.isInteger(value) || value < 100) {
+    throw new FormContractError('HTTP status codes must be integers greater than or equal to 100.')
+  }
+
+  return value
+}
+
+function serializeSubmissionState<TData>(
+  valid: boolean,
+  values: Partial<TData> | TData,
+  errors: ValidationErrorBag<TData>,
+): SerializedFormSubmission<TData> {
+  return Object.freeze({
+    valid,
+    submitted: true as const,
+    values: sanitizeFlashedInput(values),
+    errors: errors.flatten(),
+  })
+}
+
+function createSubmission<TData>(
+  valid: boolean,
+  values: Partial<TData> | TData,
+  errors: ValidationErrorBag<TData>,
+  failureStatus = 422,
+): FormSubmissionResult<TData> {
+  const normalizedFailureStatus = normalizeStatus(failureStatus, 422)
+  const serialize = () => serializeSubmissionState(valid, values, errors)
+
+  const failure = (): FormFailurePayload<TData> => ({
+    ok: false,
+    status: normalizedFailureStatus,
+    valid: false as const,
+    values: sanitizeFlashedInput(values) as Partial<TData>,
+    errors: errors.flatten(),
+  })
+
+  const success = <TPayload>(payload?: TPayload, status?: number): FormSuccessPayload<TPayload | undefined> => ({
+    ok: true,
+    status: normalizeStatus(status, 200),
+    data: payload,
+  })
+
+  if (valid) {
+    const data = values as TData
+    return Object.freeze({
+      valid: true as const,
+      submitted: true as const,
+      data,
+      values: data,
+      errors,
+      serialize,
+      success,
+      fail(status?: number) {
+        const payload = failure()
+        return {
+          ...payload,
+          status: normalizeStatus(status, payload.status),
+        }
+      },
+    })
+  }
+
+  return Object.freeze({
+    valid: false as const,
+    submitted: true as const,
+    data: undefined,
+    values: values as Partial<TData>,
+    errors,
+    serialize,
+    success,
+    fail(status?: number) {
+      const payload = failure()
+      return {
+        ...payload,
+        status: normalizeStatus(status, payload.status),
+      }
+    },
+  })
+}
+
+function createSuccessfulSubmission<TData>(
+  schemaDefinition: FormSchema,
+  data: TData,
+): FormSubmissionResult<TData> {
+  void schemaDefinition
+  return createSubmission<TData>(true, data, createErrorBag())
+}
+
+function createFailedSubmission<TData>(
+  schemaDefinition: FormSchema,
+  values: Partial<TData>,
+  flattenedErrors: Record<string, readonly string[]>,
+  status = 422,
+): FormSubmissionResult<TData> {
+  void schemaDefinition
+  return createSubmission<TData>(
+    false,
+    values,
+    createErrorBag<TData>(flattenedErrors),
+    normalizeStatus(status, 422),
+  )
+}
+
+async function validateClientValues<TData>(
+  values: TData,
+  schemaDefinition: FormSchema,
+): Promise<FormSubmissionResult<TData>> {
+  const result = await validateInput(
+    values as unknown as FormLikeValidationInput,
+    schemaDefinition as ValidationSchema<SchemaInputShape>,
+  )
+
+  if (result.valid) {
+    return createSuccessfulSubmission(schemaDefinition, result.data as TData)
+  }
+
+  return createFailedSubmission(
+    schemaDefinition,
+    result.values as Partial<TData>,
+    result.errors.flatten(),
+  )
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -290,7 +445,7 @@ function createTypedErrorBag<TData>(flattenedErrors: Record<string, readonly str
   return createErrorBag<TData>(flattenedErrors)
 }
 
-function notifyListeners<TData>(state: MutableState<TData>): void {
+function notifyListeners<TData, TSuccess>(state: MutableState<TData, TSuccess>): void {
   for (const listener of state.listeners) {
     listener()
   }
@@ -312,8 +467,8 @@ function collectErrorsForPath(
 }
 
 function buildFieldsTree<TData>(
-  state: MutableState<TData>,
-  schemaDefinition: FormSchema<SchemaInputShape>,
+  state: MutableState<TData, unknown>,
+  schemaDefinition: FormSchema,
   source: unknown,
   validateOn: ValidateOnMode,
   prefix = '',
@@ -346,9 +501,8 @@ function buildFieldsTree<TData>(
         }
 
         if (validateOn === 'change') {
-          const submission = await validate(state.values as unknown as Record<string, unknown>, schemaDefinition as never) as FormSubmissionResult<TData>
+          const submission = await validateClientValues(state.values, schemaDefinition) as FormSubmissionResult<TData>
           state.flattenedErrors = submission.errors.flatten()
-          state.lastSubmission = submission.serialize() as SerializedFormSubmission<TData>
         }
 
         notifyListeners(state)
@@ -359,15 +513,14 @@ function buildFieldsTree<TData>(
       async onBlur() {
         state.touched.add(path)
         if (validateOn === 'blur') {
-          const submission = await validate(state.values as unknown as Record<string, unknown>, schemaDefinition as never) as FormSubmissionResult<TData>
+          const submission = await validateClientValues(state.values, schemaDefinition) as FormSubmissionResult<TData>
           state.flattenedErrors = submission.errors.flatten()
-          state.lastSubmission = submission.serialize() as SerializedFormSubmission<TData>
         }
 
         notifyListeners(state)
       },
       async validate() {
-        const submission = await validate(state.values as unknown as Record<string, unknown>, schemaDefinition as never)
+        const submission = await validateClientValues(state.values, schemaDefinition)
         state.flattenedErrors = submission.errors.flatten()
         notifyListeners(state)
         return state.flattenedErrors[path] ?? []
@@ -383,7 +536,9 @@ function buildFieldsTree<TData>(
   return Object.freeze(Object.fromEntries(entries)) as FormFieldTree<TData>
 }
 
-function isSubmissionResult<TData>(value: ClientSubmitResult<TData>): value is FormSubmissionResult<TData> {
+function isSubmissionResult<TData, TSuccess>(
+  value: ClientSubmitResult<TData, TSuccess>,
+): value is FormSubmissionResult<TData> {
   return 'valid' in value
     && 'errors' in value
     && 'values' in value
@@ -393,15 +548,17 @@ function isSubmissionResult<TData>(value: ClientSubmitResult<TData>): value is F
     && typeof value.errors.flatten === 'function'
 }
 
-function isSerializedSubmission<TData>(value: ClientSubmitResult<TData>): value is SerializedSubmissionState<TData> {
+function isSerializedSubmission<TData, TSuccess>(
+  value: ClientSubmitResult<TData, TSuccess>,
+): value is SerializedSubmissionState<TData> {
   return 'submitted' in value && 'errors' in value && 'values' in value && !('ok' in value)
 }
 
-function normalizeSubmissionLike<TData>(
-  schemaDefinition: FormSchema<SchemaInputShape>,
+function normalizeSubmissionLike<TData, TSuccess>(
+  schemaDefinition: FormSchema,
   values: TData,
-  result: ClientSubmitResult<TData>,
-): ClientSubmitResult<TData> {
+  result: ClientSubmitResult<TData, TSuccess>,
+): ClientSubmitResult<TData, TSuccess> {
   if (isSubmissionResult(result)) {
     return result
   }
@@ -415,17 +572,17 @@ function normalizeSubmissionLike<TData>(
 
   if (isSerializedSubmission(result)) {
     if (result.valid) {
-      return createSuccessfulSubmission(schemaDefinition as never, result.values as never) as FormSubmissionResult<TData>
+      return createSuccessfulSubmission(schemaDefinition, result.values as TData) as FormSubmissionResult<TData>
     }
 
-    return createFailedSubmission(schemaDefinition as never, result.values as never, result.errors) as FormSubmissionResult<TData>
+    return createFailedSubmission(schemaDefinition, result.values as Partial<TData>, result.errors) as FormSubmissionResult<TData>
   }
 
   if ('ok' in result && result.ok === true) {
     return result
   }
 
-  return createSuccessfulSubmission(schemaDefinition as never, values as never) as FormSubmissionResult<TData>
+  return createSuccessfulSubmission(schemaDefinition, values) as FormSubmissionResult<TData>
 }
 
 function appendQueryString(action: string, formData: FormData): string {
@@ -447,20 +604,20 @@ function isJsonResponse(response: Response): boolean {
   return contentType === 'application/json' || contentType?.endsWith('+json') === true
 }
 
-async function normalizeFetchResponse<TData>(
+async function normalizeFetchResponse<TData, TSuccess>(
   response: Response,
   fallbackValues: Partial<TData> | TData,
-): Promise<ClientSubmitResult<TData>> {
+): Promise<ClientSubmitResult<TData, TSuccess>> {
   if (response.status === 204 || response.status === 205) {
     return {
       ok: true,
       status: response.status,
       data: undefined,
-    }
+    } as FormSuccessPayload<TSuccess>
   }
 
   if (isJsonResponse(response)) {
-    return await response.json() as ClientSubmitResult<TData>
+    return await response.json() as ClientSubmitResult<TData, TSuccess>
   }
 
   if (response.ok) {
@@ -468,11 +625,11 @@ async function normalizeFetchResponse<TData>(
       ok: true,
       status: response.status,
       data: undefined,
-    }
+    } as FormSuccessPayload<TSuccess>
   }
 
   try {
-    return await response.json() as ClientSubmitResult<TData>
+    return await response.json() as ClientSubmitResult<TData, TSuccess>
   } catch {
     return {
       ok: false,
@@ -484,12 +641,14 @@ async function normalizeFetchResponse<TData>(
   }
 }
 
-async function defaultSubmitter<TData>(context: ClientSubmitContext<TData>): Promise<ClientSubmitResult<TData>> {
+async function defaultSubmitter<TData, TSuccess>(
+  context: ClientSubmitContext<TData>,
+): Promise<ClientSubmitResult<TData, TSuccess>> {
   if (typeof fetch !== 'function' || !context.action) {
     return {
       ok: true,
       status: 200,
-      data: context.values,
+      data: context.values as unknown as TSuccess,
     }
   }
 
@@ -503,10 +662,10 @@ async function defaultSubmitter<TData>(context: ClientSubmitContext<TData>): Pro
         ok: true,
         status: response.status,
         data: undefined,
-      }
+      } as FormSuccessPayload<TSuccess>
     }
 
-    return await normalizeFetchResponse(response, context.values)
+    return await normalizeFetchResponse<TData, TSuccess>(response, context.values)
   }
 
   const response = await fetch(context.action, {
@@ -514,7 +673,7 @@ async function defaultSubmitter<TData>(context: ClientSubmitContext<TData>): Pro
     body: context.formData,
   })
 
-  return await normalizeFetchResponse(response, context.values)
+  return await normalizeFetchResponse<TData, TSuccess>(response, context.values)
 }
 
 function isSafeMethod(method: string): boolean {
@@ -525,18 +684,18 @@ function isSafeMethod(method: string): boolean {
     || normalized === 'TRACE'
 }
 
-export function useForm<TSchema extends FormSchema<SchemaInputShape>>(
+export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
   schemaDefinition: TSchema,
-  options: UseFormOptions<InferSchemaData<TSchema['fields']>> = {},
-): UseFormResult<InferSchemaData<TSchema['fields']>> {
-  type TData = InferSchemaData<TSchema['fields']>
+  options: UseFormOptions<InferFormData<TSchema>, TSuccess> = {},
+): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {
+  type TData = InferFormData<TSchema>
 
   const initialValues = mergeValues(
     normalizeObject<TData>(options.initialState?.values),
     options.initialValues,
   )
 
-  const state: MutableState<TData> = {
+  const state: MutableState<TData, TSuccess> = {
     values: cloneValue(initialValues),
     initialValues: cloneValue(initialValues),
     flattenedErrors: { ...(options.initialState?.errors ?? {}) },
@@ -551,15 +710,14 @@ export function useForm<TSchema extends FormSchema<SchemaInputShape>>(
   const fieldPaths = flattenLeafPaths(schemaDefinition.fields)
   const fields = buildFieldsTree(
     state,
-    schemaDefinition as unknown as FormSchema<SchemaInputShape>,
+    schemaDefinition,
     schemaDefinition.fields,
     validateOn,
-  ) as FormFieldTree<TData>
+  ) as unknown as InferFormFieldTree<TSchema>
 
   async function runValidation(): Promise<FormSubmissionResult<TData>> {
-    const submission = await validate(state.values as unknown as Record<string, unknown>, schemaDefinition as never) as FormSubmissionResult<TData>
+    const submission = await validateClientValues(state.values, schemaDefinition) as FormSubmissionResult<TData>
     state.flattenedErrors = submission.errors.flatten()
-    state.lastSubmission = submission.serialize()
     notifyListeners(state)
     return submission
   }
@@ -603,7 +761,7 @@ export function useForm<TSchema extends FormSchema<SchemaInputShape>>(
           return local
         }
 
-        const submitter = options.submitter ?? defaultSubmitter<TData>
+        const submitter = options.submitter ?? defaultSubmitter<TData, TSuccess>
         const method = options.method ?? 'POST'
         const formData = buildFormData(state.values)
 
@@ -652,9 +810,9 @@ export function useForm<TSchema extends FormSchema<SchemaInputShape>>(
 
       notifyListeners(state)
     },
-    applyServerState(result: ClientSubmitResult<TData>) {
+    applyServerState(result: ClientSubmitResult<TData, TSuccess>) {
       const normalized = normalizeSubmissionLike(
-        schemaDefinition as unknown as FormSchema<SchemaInputShape>,
+        schemaDefinition,
         state.values,
         result,
       )
@@ -668,24 +826,23 @@ export function useForm<TSchema extends FormSchema<SchemaInputShape>>(
 
       if ('ok' in normalized && normalized.ok === false) {
         state.values = mergeValues(state.values, normalized.values)
+        clearSensitiveInputValues(state.values)
         state.flattenedErrors = normalized.errors
-        state.lastSubmission = {
-          valid: false,
-          submitted: true,
-          values: normalized.values,
-          errors: normalized.errors,
-        }
+        state.lastSubmission = normalized
         notifyListeners(state)
         return normalized
       }
 
       const normalizedSubmission = normalized as FormSubmissionResult<TData>
       state.values = mergeValues(state.values, normalizedSubmission.values)
+      clearSensitiveInputValues(state.values)
       state.flattenedErrors = normalizedSubmission.errors.flatten()
-      state.lastSubmission = normalizedSubmission.serialize()
+      state.lastSubmission = normalizedSubmission.valid
+        ? undefined
+        : normalizedSubmission.fail()
       notifyListeners(state)
 
       return normalizedSubmission
     },
-  }) satisfies UseFormResult<TData>
+  }) satisfies UseFormResult<TData, TSuccess, InferFormFieldTree<TSchema>>
 }

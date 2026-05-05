@@ -175,6 +175,7 @@ afterEach(() => {
   vi.doUnmock('#app')
   vi.doUnmock('nitropack/runtime/plugin')
   vi.doUnmock('nitropack/runtime/config')
+  vi.doUnmock('nitropack/runtime/context')
   vi.doUnmock('@holo-js/config')
   vi.doUnmock('@holo-js/db')
   vi.doUnmock('@holo-js/core')
@@ -348,6 +349,25 @@ export default defineDatabaseConfig({
     const references: Array<Record<string, string>> = []
     prepareTypes?.({ references })
     expect(references).toContainEqual({ types: '@holo-js/adapter-nuxt' })
+  })
+
+  it('skips malformed cookie segments when decoding auth cookies', async () => {
+    vi.resetModules()
+    vi.doMock('nitropack/runtime/context', () => ({
+      useEvent: () => ({
+        request: {
+          headers: new Headers({
+            cookie: 'broken=%; auth-token=secret%20value',
+          }),
+        },
+      }),
+    }))
+
+    const runtime = await import('../src/runtime/composables')
+    const accessors = runtime.createNuxtAuthRequestAccessors()
+
+    await expect(accessors.getCookie('broken')).resolves.toBeUndefined()
+    await expect(accessors.getCookie('auth-token')).resolves.toBe('secret value')
   })
 
   it('generates a server import wrapper for model defaults when server models exist', async () => {
@@ -1034,11 +1054,11 @@ describe('useHoloDb', () => {
         projectRoot: '/tmp/nuxt-project',
       })
       expect(runtime.useHoloEnv()).toBe('test')
-      expect(initializeHoloAdapterProject).toHaveBeenCalledWith('/tmp/nuxt-project', {
+      expect(initializeHoloAdapterProject).toHaveBeenCalledWith('/tmp/nuxt-project', expect.objectContaining({
         envName: 'test',
         preferCache: true,
         processEnv: process.env,
-      })
+      }))
     } finally {
       vi.unstubAllEnvs()
       cwd.mockRestore()
@@ -1177,11 +1197,11 @@ describe('runtime plugin', () => {
       },
     })
     expect(initializeHoloAdapterProject).toHaveBeenCalledTimes(1)
-    expect(initializeHoloAdapterProject).toHaveBeenCalledWith('/tmp/nuxt-project', {
+    expect(initializeHoloAdapterProject).toHaveBeenCalledWith('/tmp/nuxt-project', expect.objectContaining({
       envName: 'development',
       preferCache: false,
       processEnv: process.env,
-    })
+    }))
     expect(log).toHaveBeenCalledWith('✅ Holo DB connected (sqlite)')
 
     const closeHandler = hook.mock.calls.find(([name]) => name === 'close')?.[1]

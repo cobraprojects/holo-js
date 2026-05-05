@@ -2,9 +2,147 @@ export { defineAuthConfig } from '@holo-js/config'
 export type { AuthGuardConfig, AuthProviderConfig, HoloAuthConfig, NormalizedHoloAuthConfig } from '@holo-js/config'
 import type { HoloAuthConfig, NormalizedHoloAuthConfig } from '@holo-js/config'
 
+export const AUTH_ERROR_CODES = [
+  'runtime_unconfigured',
+  'token_runtime_unconfigured',
+  'email_verification_runtime_unconfigured',
+  'password_reset_runtime_unconfigured',
+  'guard_not_configured',
+  'provider_not_configured',
+  'provider_runtime_not_configured',
+  'guard_session_login_unsupported',
+  'credentials_identifier_missing',
+  'password_confirmation_mismatch',
+  'invalid_credentials',
+  'email_verification_required',
+  'trusted_login_user_required',
+  'trusted_login_provider_mismatch',
+  'trusted_login_user_not_found',
+  'trusted_login_user_incompatible',
+  'impersonation_actor_required',
+  'impersonation_nested_unsupported',
+  'impersonation_already_active',
+  'registration_identifier_taken',
+  'auth_user_missing',
+  'provider_resolution_required',
+  'provider_update_unsupported',
+  'email_required_for_verification',
+  'email_verification_user_missing',
+  'email_already_verified',
+  'email_verification_token_invalid',
+  'email_verification_token_expired',
+  'password_reset_email_required',
+  'password_broker_not_configured',
+  'password_reset_token_invalid',
+  'password_reset_token_expired',
+  'password_reset_user_missing',
+] as const
+
+export type AuthErrorCode = typeof AUTH_ERROR_CODES[number]
+
+export interface AuthErrorOptions {
+  readonly cause?: unknown
+  readonly details?: Readonly<Record<string, unknown>>
+}
+
+export class AuthError<TCode extends AuthErrorCode = AuthErrorCode> extends Error {
+  readonly code: TCode
+  readonly details?: Readonly<Record<string, unknown>>
+
+  constructor(code: TCode, message: string, options: AuthErrorOptions = {}) {
+    super(message)
+    this.name = 'AuthError'
+    this.code = code
+    this.details = options.details
+
+    if ('cause' in options) {
+      this.cause = options.cause
+    }
+  }
+}
+
+export function isAuthError(value: unknown): value is AuthError {
+  return value instanceof AuthError
+    || (
+      !!value
+      && typeof value === 'object'
+      && (value as { name?: unknown }).name === 'AuthError'
+      && typeof (value as { code?: unknown }).code === 'string'
+      && (AUTH_ERROR_CODES as readonly string[]).includes((value as { code: string }).code)
+      && typeof (value as { message?: unknown }).message === 'string'
+    )
+}
+
+export type AuthFieldErrors<TField extends string = string> = Partial<Record<TField, readonly string[]>>
+
+export type AuthInputFieldErrors<
+  TInput extends Readonly<Record<string, unknown>>,
+  TExtraField extends string = never,
+> = AuthFieldErrors<Extract<keyof TInput, string> | TExtraField>
+
+export interface AuthFailure<TCode extends AuthErrorCode = AuthErrorCode, TFields extends AuthFieldErrors = AuthFieldErrors> {
+  readonly code: TCode
+  readonly message: string
+  readonly status: number
+  readonly fields: TFields
+}
+
+export interface AuthSuccessResult<TData> {
+  readonly data: TData
+  readonly error: null
+}
+
+export interface AuthFailureResult<
+  TCode extends AuthErrorCode = AuthErrorCode,
+  TFields extends AuthFieldErrors = AuthFieldErrors,
+> {
+  readonly data: null
+  readonly error: AuthFailure<TCode, TFields>
+}
+
+export type AuthResult<
+  TData,
+  TCode extends AuthErrorCode = AuthErrorCode,
+  TFields extends AuthFieldErrors = AuthFieldErrors,
+>
+  = AuthSuccessResult<TData>
+  | AuthFailureResult<TCode, TFields>
+
+export type AuthLoginErrorCode
+  = 'credentials_identifier_missing'
+  | 'invalid_credentials'
+  | 'email_verification_required'
+
+export type AuthRegistrationErrorCode
+  = 'credentials_identifier_missing'
+  | 'password_confirmation_mismatch'
+  | 'registration_identifier_taken'
+
+export type AuthEmailVerificationConsumeErrorCode
+  = 'email_verification_token_invalid'
+  | 'email_verification_token_expired'
+  | 'auth_user_missing'
+  | 'provider_update_unsupported'
+
+export type AuthEmailVerificationResendErrorCode
+  = 'email_verification_user_missing'
+  | 'email_already_verified'
+
+export type AuthPasswordResetRequestErrorCode
+  = 'password_reset_email_required'
+
+export type AuthPasswordResetConsumeErrorCode
+  = 'password_confirmation_mismatch'
+  | 'password_reset_token_invalid'
+  | 'password_reset_token_expired'
+  | 'password_reset_user_missing'
+  | 'auth_user_missing'
+  | 'provider_update_unsupported'
+
 export interface AuthUserLike {
   readonly id?: string | number
   readonly email?: string
+  readonly name?: string
   readonly [key: string]: unknown
 }
 
@@ -26,6 +164,21 @@ export interface AuthCredentials extends Readonly<Record<string, unknown>> {
 
 export interface AuthRegistrationInput extends AuthCredentials {
   readonly passwordConfirmation: string
+}
+
+export interface AuthPasswordResetRequestInput extends Readonly<Record<string, unknown>> {
+  readonly email: string
+}
+
+export interface AuthPasswordResetInput extends Readonly<Record<string, unknown>> {
+  readonly token: string
+  readonly password: string
+  readonly passwordConfirmation: string
+}
+
+export interface AuthPasswordResetRequestOptions {
+  readonly broker?: string
+  readonly expiresAt?: Date
 }
 
 export interface AuthSessionLoginOptions {
@@ -56,7 +209,9 @@ export interface AuthGuardFacade {
   refreshUser(): Promise<AuthUser | null>
   id(): Promise<string | number | null>
   currentAccessToken(): Promise<AuthCurrentAccessToken | null>
-  login(credentials: AuthCredentials): Promise<AuthEstablishedSession>
+  login<TCredentials extends AuthCredentials>(
+    credentials: TCredentials,
+  ): Promise<AuthResult<AuthEstablishedSession, AuthLoginErrorCode, AuthInputFieldErrors<TCredentials>>>
   loginUsing(user: unknown, options?: AuthSessionLoginOptions): Promise<AuthEstablishedSession>
   loginUsingId(userId: string | number, options?: AuthSessionLoginOptions): Promise<AuthEstablishedSession>
   impersonate(user: unknown, options?: AuthImpersonationOptions): Promise<AuthEstablishedSession>
@@ -67,14 +222,22 @@ export interface AuthGuardFacade {
 }
 
 export interface AuthFacade extends AuthGuardFacade {
-  register(input: AuthRegistrationInput): Promise<AuthUser>
+  register<TInput extends AuthRegistrationInput>(
+    input: TInput,
+  ): Promise<AuthResult<AuthUser, AuthRegistrationErrorCode, AuthInputFieldErrors<TInput>>>
+  requestPasswordReset<TInput extends AuthPasswordResetRequestInput>(
+    input: TInput,
+    options?: AuthPasswordResetRequestOptions,
+  ): Promise<AuthResult<void, AuthPasswordResetRequestErrorCode, AuthInputFieldErrors<TInput>>>
+  resetPassword<TInput extends AuthPasswordResetInput>(
+    input: TInput,
+  ): Promise<AuthResult<AuthUser, AuthPasswordResetConsumeErrorCode, AuthInputFieldErrors<TInput>>>
   hashPassword(password: string): Promise<string>
   verifyPassword(password: string, digest: string): Promise<boolean>
   needsPasswordRehash(digest: string): Promise<boolean>
   guard(name: string): AuthGuardFacade
   tokens: AuthTokenFacade
   verification: AuthEmailVerificationFacade
-  passwords: AuthPasswordResetFacade
 }
 
 type AuthProviderAdapterBase<TUser> = {
@@ -225,26 +388,21 @@ export interface AuthDeliveryHook {
     readonly user: AuthUser
     readonly email: string
     readonly token: EmailVerificationTokenResult
+    readonly route: string
   }): Promise<void>
   sendPasswordReset(input: {
+    readonly broker: string
     readonly provider: string
     readonly email: string
     readonly token: PasswordResetTokenResult
+    readonly route: string
   }): Promise<void>
 }
 
 export interface AuthEmailVerificationFacade {
   create(user: unknown, options?: { readonly guard?: string, readonly expiresAt?: Date }): Promise<EmailVerificationTokenResult>
-  consume(plainTextToken: string): Promise<AuthUser>
-}
-
-export interface AuthPasswordResetFacade {
-  request(email: string, options?: { readonly broker?: string, readonly expiresAt?: Date }): Promise<void>
-  consume(input: {
-    readonly token: string
-    readonly password: string
-    readonly passwordConfirmation: string
-  }): Promise<AuthUser>
+  resend(options?: { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string }): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+  consume(plainTextToken: string): Promise<AuthResult<AuthUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>>
 }
 
 export interface AuthSessionRecord {
@@ -300,6 +458,8 @@ export interface AuthRuntimeContext {
   setSessionId(guardName: string, sessionId?: string): void
   getCachedUser(guardName: string): AuthUser | null | undefined
   setCachedUser(guardName: string, user: AuthUser | null): void
+  getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
+  getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
   getAccessToken?(guardName: string): string | undefined
   setAccessToken?(guardName: string, token?: string): void
   getRememberToken?(guardName: string): string | undefined
@@ -328,6 +488,8 @@ export interface AuthEstablishedSession {
   readonly sessionId: string
   readonly rememberToken?: string
   readonly cookies: readonly string[]
+  readonly emailVerificationRequired?: boolean
+  readonly emailVerificationRoute?: string
 }
 
 export interface CurrentAuthResponse {

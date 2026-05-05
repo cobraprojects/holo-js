@@ -611,9 +611,13 @@ export function createInternalCommands(
           const changed = result.updatedPackageJson
             || result.createdMailConfig
             || result.createdMailDirectory
+            || result.updatedEnv
+            || result.updatedEnvExample
 
           writeLine(context.stdout, changed ? 'Installed mail support.' : 'Mail support is already installed.')
           if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
+          if (result.updatedEnv) writeLine(context.stdout, '  - updated .env')
+          if (result.updatedEnvExample) writeLine(context.stdout, '  - updated .env.example')
           if (result.createdMailConfig) writeLine(context.stdout, '  - created config/mail.ts')
           if (result.createdMailDirectory) writeLine(context.stdout, '  - created server/mail')
           return

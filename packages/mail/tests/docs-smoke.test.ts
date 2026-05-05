@@ -39,8 +39,13 @@ describe('mail documentation smoke checks', () => {
     expect(setup).toContain('custom `renderView` runtime binding')
     expect(installation).toContain('mail')
     expect(installation).toContain('--package forms,validation,mail')
-    expect(verification).toContain('npx holo install mail')
+    expect(verification).toContain('@holo-js/mail')
+    expect(verification).toContain('APP_URL')
+    expect(verification).toContain('AUTH_EMAIL_VERIFICATION_ROUTE')
+    expect(verification).toContain('generated email link')
     expect(reset).toContain('@holo-js/mail')
+    expect(reset).toContain('APP_URL')
+    expect(reset).toContain('AUTH_PASSWORD_RESET_ROUTE')
   })
 
   it('covers final mail authoring, preview, and attachment APIs', async () => {

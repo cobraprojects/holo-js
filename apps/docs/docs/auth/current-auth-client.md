@@ -7,6 +7,7 @@
 The client package is intentionally small. It does not implement authentication. It calls a current-auth endpoint
 owned by your application and returns:
 
+- `useAuth()`
 - `user()`
 - `refreshUser()`
 - `check()`
@@ -43,12 +44,22 @@ Optional configuration:
 ## Usage
 
 ```ts
-import { check, refreshUser, user } from '@holo-js/auth/client'
+import { check, refreshUser, useAuth, user } from '@holo-js/auth/client'
 
-const current = await user()
-const authenticated = await check()
-const fresh = await refreshUser()
+const auth = await useAuth()
+const current = auth.user
+const authenticated = auth.check()
+const fresh = await auth.refreshUser()
+
+// direct helpers still work too
+await user()
+await check()
+await refreshUser()
 ```
+
+`useAuth()` returns the full current-auth payload from your endpoint, so client code can read `auth.user`,
+`auth.authenticated`, and `auth.guard` from one object, while still exposing `auth.check()` and
+`auth.refreshUser()`.
 
 `user()` may return cached state. `refreshUser()` forces a new request to the endpoint.
 

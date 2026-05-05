@@ -20,6 +20,26 @@ type SessionRecordLike = {
   readonly rememberTokenHash?: string
 }
 
+function unwrapAuthResult<TData>(result: {
+  readonly data: TData
+  readonly error: null
+} | {
+  readonly data: null
+  readonly error: {
+    readonly code: string
+  }
+} | null | undefined): TData {
+  if (!result) {
+    throw new Error('Expected auth result but received nothing.')
+  }
+
+  if (result.error) {
+    throw new Error(`Expected auth success but received ${result.error.code}.`)
+  }
+
+  return result.data
+}
+
 async function createProject(options: {
   session?: 'file' | 'database' | false
   auth?: boolean
@@ -318,23 +338,27 @@ export default {
       table.index(['email'])
     })
 
-    const registered = await runtime.auth?.register({
+    const registered = unwrapAuthResult(await runtime.auth?.register({
       name: 'Ava',
       email: 'ava@example.com',
       password: 'supersecret',
       passwordConfirmation: 'supersecret',
-    })
+    }))
 
     const verificationToken = await runtime.auth?.verification.create(registered!) as VerificationTokenLike | undefined
-    await runtime.auth?.passwords.request('ava@example.com')
+    await runtime.auth?.requestPasswordReset({ email: 'ava@example.com' })
 
     expect(mailer.send).toHaveBeenCalledTimes(2)
     expect(mailer.send).toHaveBeenNthCalledWith(1, expect.objectContaining({
       subject: 'Verify your email address',
       lines: expect.arrayContaining([
-        'Use this token to verify your email address:',
-        verificationToken?.plainTextToken,
+        'Confirm your account to finish signing in.',
       ]),
+      action: {
+        label: 'Verify email address',
+        url: `http://localhost:3000/verify-email?token=${encodeURIComponent(verificationToken?.plainTextToken ?? '')}`,
+      },
+      html: expect.stringContaining(`/verify-email?token=${encodeURIComponent(verificationToken?.plainTextToken ?? '')}`),
       metadata: {
         provider: 'users',
         tokenId: verificationToken?.id,
@@ -349,8 +373,12 @@ export default {
     expect(mailer.send).toHaveBeenNthCalledWith(2, expect.objectContaining({
       subject: 'Reset your password',
       lines: expect.arrayContaining([
-        'Use this token to reset your password:',
+        'Click the link below to choose a new password.',
       ]),
+      action: expect.objectContaining({
+        label: 'Reset password',
+        url: expect.stringContaining('/reset-password?token='),
+      }),
       metadata: expect.objectContaining({
         provider: 'users',
       }),
@@ -442,23 +470,26 @@ export default {
       table.index(['email'])
     })
 
-    const registered = await runtime.auth?.register({
+    const registered = unwrapAuthResult(await runtime.auth?.register({
       name: 'Ava',
       email: 'ava@example.com',
       password: 'supersecret',
       passwordConfirmation: 'supersecret',
-    })
+    }))
 
     const verificationToken = await runtime.auth?.verification.create(registered!) as VerificationTokenLike | undefined
-    await runtime.auth?.passwords.request('ava@example.com')
+    await runtime.auth?.requestPasswordReset({ email: 'ava@example.com' })
 
     expect(mailer.send).toHaveBeenCalledTimes(2)
     expect(mailer.send).toHaveBeenNthCalledWith(1, expect.objectContaining({
       subject: 'Verify your email address',
       lines: expect.arrayContaining([
-        'Use this token to verify your email address:',
-        verificationToken?.plainTextToken,
+        'Confirm your account to finish signing in.',
       ]),
+      action: {
+        label: 'Verify email address',
+        url: `http://localhost:3000/verify-email?token=${encodeURIComponent(verificationToken?.plainTextToken ?? '')}`,
+      },
     }), expect.objectContaining({
       channel: 'email',
       route: {
@@ -469,8 +500,12 @@ export default {
     expect(mailer.send).toHaveBeenNthCalledWith(2, expect.objectContaining({
       subject: 'Reset your password',
       lines: expect.arrayContaining([
-        'Use this token to reset your password:',
+        'Click the link below to choose a new password.',
       ]),
+      action: expect.objectContaining({
+        label: 'Reset password',
+        url: expect.stringContaining('/reset-password?token='),
+      }),
     }), expect.objectContaining({
       channel: 'email',
       route: 'ava@example.com',
@@ -519,12 +554,12 @@ export default {
         table.index(['email'])
       })
 
-      const registered = await runtime.auth?.register({
+      const registered = unwrapAuthResult(await runtime.auth?.register({
         name: 'Ava',
         email: 'ava@example.com',
         password: 'supersecret',
         passwordConfirmation: 'supersecret',
-      })
+      }))
 
       await expect(runtime.auth?.verification.create(registered!)).resolves.toMatchObject({
         email: 'ava@example.com',
@@ -567,12 +602,12 @@ export default {
         table.index(['email'])
       })
 
-      const registered = await runtime.auth?.register({
+      const registered = unwrapAuthResult(await runtime.auth?.register({
         name: 'Ava',
         email: 'ava@example.com',
         password: 'supersecret',
         passwordConfirmation: 'supersecret',
-      })
+      }))
 
       await expect(runtime.auth?.verification.create(registered!)).resolves.toMatchObject({
         email: 'ava@example.com',
@@ -659,15 +694,15 @@ export default {
       table.index(['email'])
     })
 
-    const registered = await runtime.auth?.register({
+    const registered = unwrapAuthResult(await runtime.auth?.register({
       name: 'Ava',
       email: 'ava@example.com',
       password: 'supersecret',
       passwordConfirmation: 'supersecret',
-    })
+    }))
 
     const verificationToken = await runtime.auth?.verification.create(registered!) as VerificationTokenLike | undefined
-    await runtime.auth?.passwords.request('ava@example.com')
+    await runtime.auth?.requestPasswordReset({ email: 'ava@example.com' })
 
     expect(listFakeSentMails()).toHaveLength(2)
     expect(listFakeSentMails()[0]!.mail).toMatchObject({
@@ -678,7 +713,8 @@ export default {
           name: 'Ava',
         },
       ],
-      text: expect.stringContaining(verificationToken?.plainTextToken ?? ''),
+      text: expect.stringContaining(`Verify email address: http://localhost:3000/verify-email?token=${encodeURIComponent(verificationToken?.plainTextToken ?? '')}`),
+      html: expect.stringContaining(`/verify-email?token=${encodeURIComponent(verificationToken?.plainTextToken ?? '')}`),
       metadata: expect.objectContaining({
         provider: 'users',
         tokenId: verificationToken?.id,
@@ -691,7 +727,8 @@ export default {
           email: 'ava@example.com',
         },
       ],
-      text: expect.stringContaining('Use this token to reset your password:'),
+      text: expect.stringContaining('Reset password: http://localhost:3000/reset-password?token='),
+      html: expect.stringContaining('/reset-password?token='),
       metadata: expect.objectContaining({
         provider: 'users',
       }),
@@ -773,12 +810,12 @@ export default {
 
     await runtime.initialize()
 
-    const registered = await runtime.auth?.register({
+    const registered = unwrapAuthResult(await runtime.auth?.register({
       name: 'Ava',
       email: 'ava@example.com',
       password: 'supersecret',
       passwordConfirmation: 'supersecret',
-    })
+    }))
     expect(registered).not.toHaveProperty('password')
 
     await runtime.auth?.login({
@@ -2084,12 +2121,48 @@ export default {
         email_verified_at: {},
       },
     },
-    fillable: ['email', 'name', 'password', 'email_verified_at'],
+    fillable: ['email', 'name', 'password'],
     guarded: ['id'],
     hasExplicitFillable: true,
   },
+  getRepository() {
+    return {
+      async saveEntity(entity, internalColumns) {
+        if (!internalColumns.has('email_verified_at')) {
+          throw new Error('Expected auth updates to treat email_verified_at as an internal column.')
+        }
+
+        const attributes = typeof entity?.toAttributes === 'function'
+          ? entity.toAttributes()
+          : entity
+        const id = typeof attributes.id === 'number' ? attributes.id : 1
+        const record = {
+          id,
+          public_id: attributes.public_id,
+          team_id: attributes.team_id,
+          email: attributes.email,
+          name: attributes.name,
+          password: attributes.password,
+          email_verified_at: attributes.email_verified_at,
+        }
+        records.set(id, record)
+        return record
+      },
+    }
+  },
   async find(id) {
-    return records.get(Number(id)) ?? null
+    const existing = records.get(Number(id))
+    if (!existing) {
+      return null
+    }
+
+    return {
+      ...existing,
+      forceFill(values) {
+        Object.assign(this, values)
+        return this
+      },
+    }
   },
   where() {
     return {
@@ -2102,9 +2175,8 @@ export default {
     records.set(1, { id: 1, ...values })
     return { id: 1, ...values }
   },
-  async update(id, values) {
-    records.set(Number(id), { id: Number(id), ...values })
-    return { id: Number(id), ...values }
+  async update() {
+    throw new Error('model.update should not be used for auth writes when saveEntity is available')
   },
 }
 `, 'utf8')
@@ -2124,7 +2196,7 @@ export default {
       name: 'Hosted User',
       avatar: 'https://cdn.test/avatar.png',
       email_verified_at: new Date('2026-04-11T00:00:00.000Z'),
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       id: 1,
       public_id: 'generated-public-id',
       team_id: 7,
@@ -2137,8 +2209,11 @@ export default {
       name: 'Updated Hosted User',
       avatar: 'https://cdn.test/avatar-2.png',
       email_verified_at: new Date('2026-04-12T00:00:00.000Z'),
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       id: 1,
+      public_id: 'generated-public-id',
+      team_id: 7,
+      email: 'hosted@example.com',
       name: 'Updated Hosted User',
       email_verified_at: new Date('2026-04-12T00:00:00.000Z'),
     })
@@ -2594,12 +2669,12 @@ export default {
     await expect(runtime.session?.read(String(createdSession?.id))).resolves.toBeNull()
     await expect(runtime.session?.read('missing-session')).resolves.toBeNull()
 
-    const registered = await runtime.auth?.register({
+    const registered = unwrapAuthResult(await runtime.auth?.register({
       name: 'Ava',
       email: 'ava@example.com',
       password: 'supersecret',
       passwordConfirmation: 'supersecret',
-    })
+    }))
     expect(registered).toMatchObject({
       email: 'ava@example.com',
     })
@@ -2705,17 +2780,17 @@ export default {
       table.timestamp('updated_at')
     })
 
-    const registered = await runtime.auth?.register({
+    const registered = unwrapAuthResult(await runtime.auth?.register({
       name: 'Ava',
       email: 'ava@example.com',
       password: 'supersecret',
       passwordConfirmation: 'supersecret',
-    })
+    }))
     expect(registered).toMatchObject({
       email: 'ava@example.com',
     })
 
-    await runtime.auth?.passwords.request('ava@example.com')
+    await runtime.auth?.requestPasswordReset({ email: 'ava@example.com' })
     const rows = await DB.table('admin_password_reset_tokens').get<Record<string, unknown>>()
     expect(rows).toHaveLength(1)
   })
@@ -2794,18 +2869,18 @@ export default {
       table.timestamp('updated_at')
     })
 
-    const registered = await runtime.auth?.register({
+    const registered = unwrapAuthResult(await runtime.auth?.register({
       name: 'Ava',
       email: 'ava@example.com',
       password: 'supersecret',
       passwordConfirmation: 'supersecret',
-    })
+    }))
 
     expect(registered).toMatchObject({
       email: 'ava@example.com',
     })
 
-    await runtime.auth?.passwords.request('ava@example.com')
+    await runtime.auth?.requestPasswordReset({ email: 'ava@example.com' })
     expect(listFakeSentMails()).toHaveLength(1)
 
     const firstTokenRows = await DB.table('password_reset_tokens').get<Record<string, unknown>>()
@@ -2818,7 +2893,7 @@ export default {
       created_at: '2000-01-01T00:00:00.000Z',
     })
 
-    await runtime.auth?.passwords.request('ava@example.com')
+    await runtime.auth?.requestPasswordReset({ email: 'ava@example.com' })
 
     expect(listFakeSentMails()).toHaveLength(1)
     const finalTokenRows = await DB.table('password_reset_tokens').get<Record<string, unknown>>()
@@ -2912,12 +2987,12 @@ export default {
       table.timestamps()
     })
 
-    const registered = await runtime.auth?.register({
+    const registered = unwrapAuthResult(await runtime.auth?.register({
       name: 'Ava',
       email: 'ava@example.com',
       password: 'supersecret',
       passwordConfirmation: 'supersecret',
-    })
+    }))
     expect(registered).toMatchObject({
       id: 'user-1',
     })
@@ -3403,12 +3478,12 @@ export default {
     })
 
     await runtime.initialize()
-    const registered = await runtime.auth?.register({
+    const registered = unwrapAuthResult(await runtime.auth?.register({
       name: 'Admin',
       email: 'admin@example.com',
       password: 'supersecret',
       passwordConfirmation: 'supersecret',
-    })
+    }))
     expect(registered).toMatchObject({
       id: 1,
       email: 'admin@example.com',
@@ -3463,12 +3538,12 @@ export default {
       preferCache: false,
     })
     await noDefaultRuntime.initialize()
-    const plainRegistered = await noDefaultRuntime.auth?.register({
+    const plainRegistered = unwrapAuthResult(await noDefaultRuntime.auth?.register({
       name: 'Plain',
       email: 'plain@example.com',
       password: 'supersecret',
       passwordConfirmation: 'supersecret',
-    })
+    }))
     expect(plainRegistered).toMatchObject({
       id: 1,
       email: 'plain@example.com',
@@ -3561,12 +3636,12 @@ export default {
 
     await runtime.initialize()
 
-    const registered = await runtime.auth?.register({
+    const registered = unwrapAuthResult(await runtime.auth?.register({
       name: 'Fallback User',
       email: 'fallback@example.com',
       password: 'supersecret',
       passwordConfirmation: 'supersecret',
-    })
+    }))
 
     expect(registered).toMatchObject({
       email: 'fallback@example.com',

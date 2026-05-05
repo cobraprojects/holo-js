@@ -297,16 +297,14 @@ describe('@holo-js/forms client', () => {
 
     const validated = await client.validate()
     expect(validated.valid).toBe(false)
-    expect(client.lastSubmission).toEqual(validated.serialize())
+    expect(client.lastSubmission).toBeUndefined()
 
     const fieldErrors = await client.validateField('email')
     expect(fieldErrors.length).toBeGreaterThan(0)
 
     const failure = await client.submit()
     expect('valid' in failure && failure.valid === false).toBe(true)
-    expect(client.lastSubmission).toEqual(
-      'serialize' in failure ? failure.serialize() : client.lastSubmission,
-    )
+    expect(client.lastSubmission).toBeUndefined()
 
     client.reset({
       email: 'reset@example.com',
@@ -465,6 +463,40 @@ describe('@holo-js/forms client', () => {
     } as never)
 
     expect('valid' in fallback && fallback.valid === true).toBe(true)
+  })
+
+  it('clears Laravel-style dontFlash fields after server-side failures', () => {
+    const registerUser = schema({
+      email: field.string().required().email(),
+      password: field.string().required().min(8),
+      passwordConfirmation: field.string().required(),
+    })
+
+    const client = useForm(registerUser, {
+      initialValues: {
+        email: 'ava@example.com',
+        password: 'super-secret',
+        passwordConfirmation: 'super-secret',
+      },
+    })
+
+    client.applyServerState({
+      ok: false,
+      status: 422,
+      valid: false,
+      values: {
+        email: 'bad',
+      },
+      errors: {
+        email: ['Email must be valid.'],
+        password: ['The password field is required.'],
+      },
+    })
+
+    expect(client.values.email).toBe('bad')
+    expect(client.values.password).toBeUndefined()
+    expect(client.values.passwordConfirmation).toBeUndefined()
+    expect(client.errors.first('password')).toBe('The password field is required.')
   })
 
   it('submits through custom submitters and default transports', async () => {
@@ -646,8 +678,10 @@ describe('@holo-js/forms client', () => {
       errors: {},
     })
     expect(nonJsonFailureClient.lastSubmission).toEqual({
-      valid: false,
+      ok: false,
+      status: 500,
       submitted: true,
+      valid: false,
       values: {
         email: 'ava@example.com',
         publishedAt: new Date('2026-04-04T10:00:00.000Z'),
@@ -709,7 +743,7 @@ describe('@holo-js/forms client', () => {
     const result = await client.submit()
 
     expect('ok' in result && result.ok === false).toBe(true)
-    if ('ok' in result && result.ok === false) {
+    if ('ok' in result && result.ok === false && 'status' in result) {
       expect(result.status).toBe(409)
       expect(result.errors.email).toEqual(['Email is already taken.'])
     }

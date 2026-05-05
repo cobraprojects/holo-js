@@ -485,7 +485,7 @@ describe('@holo-js/core portable runtime', () => {
       refreshUser: vi.fn(async () => ({ id: 2 })),
       id: vi.fn(async () => 3),
       currentAccessToken: vi.fn(async () => ({ id: 'token' })),
-      login: vi.fn(async () => ({ guard: 'web', user: { id: 1 }, sessionId: 'session', cookies: [] })),
+      login: vi.fn(async () => ({ data: { guard: 'web', user: { id: 1 }, sessionId: 'session', cookies: [] }, error: null })),
       loginUsing: vi.fn(async () => ({ guard: 'web', user: { id: 1 }, sessionId: 'session', cookies: [] })),
       loginUsingId: vi.fn(async () => ({ guard: 'web', user: { id: 1 }, sessionId: 'session', cookies: [] })),
       impersonate: vi.fn(async () => ({ guard: 'web', user: { id: 2 }, sessionId: 'session', cookies: [] })),
@@ -503,7 +503,7 @@ describe('@holo-js/core portable runtime', () => {
       hashPassword: vi.fn(async () => 'digest'),
       verifyPassword: vi.fn(async () => true),
       needsPasswordRehash: vi.fn(async () => false),
-      login: vi.fn(async () => ({ guard: 'web', user: { id: 1 }, sessionId: 'session', cookies: [] })),
+      login: vi.fn(async () => ({ data: { guard: 'web', user: { id: 1 }, sessionId: 'session', cookies: [] }, error: null })),
       loginUsing: vi.fn(async () => ({ guard: 'web', user: { id: 1 }, sessionId: 'session', cookies: [] })),
       loginUsingId: vi.fn(async () => ({ guard: 'web', user: { id: 1 }, sessionId: 'session', cookies: [] })),
       impersonate: vi.fn(async () => ({ guard: 'web', user: { id: 2 }, sessionId: 'session', cookies: [] })),
@@ -511,7 +511,7 @@ describe('@holo-js/core portable runtime', () => {
       impersonation: vi.fn(async () => ({ active: true })),
       stopImpersonating: vi.fn(async () => ({ id: 1 })),
       logout: vi.fn(async () => ({ guard: 'web', cookies: [] })),
-      register: vi.fn(async () => ({ id: 4 })),
+      register: vi.fn(async () => ({ data: { id: 4 }, error: null })),
       logoutAll: vi.fn(async () => [{ guard: 'web', cookies: [] }]),
       guard: vi.fn(() => guard),
       tokens: {
@@ -524,12 +524,11 @@ describe('@holo-js/core portable runtime', () => {
       },
       verification: {
         create: vi.fn(async () => ({ id: 'verify' })),
-        consume: vi.fn(async () => ({ id: 1 })),
+        resend: vi.fn(async () => ({ data: { id: 'verify-resend' }, error: null })),
+        consume: vi.fn(async () => ({ data: { id: 1 }, error: null })),
       },
-      passwords: {
-        request: vi.fn(async () => {}),
-        consume: vi.fn(async () => ({ id: 1 })),
-      },
+      requestPasswordReset: vi.fn(async () => ({ data: undefined, error: null })),
+      resetPassword: vi.fn(async () => ({ data: { id: 1 }, error: null })),
     }
 
     const bound = holoRuntimeInternals.bindAuthRuntimeToContext(runtime, { activate })
@@ -548,20 +547,26 @@ describe('@holo-js/core portable runtime', () => {
     await expect(bound.user()).resolves.toEqual({ id: 1 })
     await expect(bound.refreshUser()).resolves.toEqual({ id: 2 })
     await expect(bound.currentAccessToken()).resolves.toEqual({ id: 'token' })
-    await expect(bound.login({ email: 'ava@example.com', password: 'secret' })).resolves.toMatchObject({ guard: 'web' })
+    await expect(bound.login({ email: 'ava@example.com', password: 'secret' })).resolves.toEqual({
+      data: { guard: 'web', user: { id: 1 }, sessionId: 'session', cookies: [] },
+      error: null,
+    })
     await expect(bound.logout()).resolves.toEqual({ guard: 'web', cookies: [] })
-    await expect(bound.register({ email: 'ava@example.com', password: 'secret', passwordConfirmation: 'secret' })).resolves.toEqual({ id: 4 })
+    await expect(bound.register({ email: 'ava@example.com', password: 'secret', passwordConfirmation: 'secret' })).resolves.toEqual({
+      data: { id: 4 },
+      error: null,
+    })
     await expect(bound.logoutAll('web')).resolves.toEqual([{ guard: 'web', cookies: [] }])
     await expect(bound.tokens.revoke()).resolves.toBeUndefined()
     await expect(bound.tokens.revokeAll({ id: 1 }, { guard: 'web' })).resolves.toBe(2)
     await expect(bound.tokens.authenticate('plain-text')).resolves.toEqual({ id: 1 })
     await expect(bound.tokens.can('plain-text', 'orders.read')).resolves.toBe(true)
-    await expect(bound.verification.consume('verify-token')).resolves.toEqual({ id: 1 })
-    await expect(bound.passwords.consume({
+    await expect(bound.verification.consume('verify-token')).resolves.toEqual({ data: { id: 1 }, error: null })
+    await expect(bound.resetPassword({
       token: 'reset-token',
       password: 'secret',
       passwordConfirmation: 'secret',
-    })).resolves.toEqual({ id: 1 })
+    })).resolves.toEqual({ data: { id: 1 }, error: null })
 
     const boundGuard = bound.guard('admin')
     await expect(boundGuard.check()).resolves.toBe(true)
@@ -569,7 +574,10 @@ describe('@holo-js/core portable runtime', () => {
     await expect(boundGuard.refreshUser()).resolves.toEqual({ id: 2 })
     await expect(boundGuard.id()).resolves.toBe(3)
     await expect(boundGuard.currentAccessToken()).resolves.toEqual({ id: 'token' })
-    await expect(boundGuard.login({ email: 'admin@example.com', password: 'secret' })).resolves.toMatchObject({ guard: 'web' })
+    await expect(boundGuard.login({ email: 'admin@example.com', password: 'secret' })).resolves.toEqual({
+      data: { guard: 'web', user: { id: 1 }, sessionId: 'session', cookies: [] },
+      error: null,
+    })
     await expect(boundGuard.loginUsing({ id: 1 }, { remember: true })).resolves.toMatchObject({ guard: 'web' })
     await expect(boundGuard.loginUsingId(1, { remember: true })).resolves.toMatchObject({ guard: 'web' })
     await expect(boundGuard.impersonate({ id: 2 }, { actorGuard: 'web' })).resolves.toMatchObject({ guard: 'web' })
@@ -582,7 +590,14 @@ describe('@holo-js/core portable runtime', () => {
     await expect(bound.tokens.create({ id: 1 }, { name: 'browser' })).resolves.toEqual({ id: 'created' })
     await expect(bound.tokens.list({ id: 1 }, { guard: 'web' })).resolves.toEqual([{ id: 'listed' }])
     await expect(bound.verification.create({ id: 1 }, { guard: 'web' })).resolves.toEqual({ id: 'verify' })
-    await expect(bound.passwords.request('ava@example.com', { broker: 'users' })).resolves.toBeUndefined()
+    await expect(bound.verification.resend({ email: 'ava@example.com' })).resolves.toEqual({
+      data: { id: 'verify-resend' },
+      error: null,
+    })
+    await expect(bound.requestPasswordReset({ email: 'ava@example.com' }, { broker: 'users' })).resolves.toEqual({
+      data: undefined,
+      error: null,
+    })
   })
 
   it('does not require @holo-js/queue-db for the implicit default sync queue runtime', async () => {
@@ -5554,7 +5569,7 @@ describe('@holo-js/core helper coverage', () => {
       async sendMail(message: unknown) {
         authMailSends.push(message)
       },
-    } as never)
+    } as never, 'https://app.test')
     const verificationToken = {
       id: 'verify-token',
       plainTextToken: 'verify-plain',
@@ -5566,14 +5581,17 @@ describe('@holo-js/core helper coverage', () => {
       user: { name: ' Ava ' },
       email: 'ava@example.com',
       token: verificationToken,
+      route: '/verify-email',
     })
     await authMailHook.sendEmailVerification({
       provider: 'users',
       user: {},
       email: 'no-name@example.com',
       token: verificationToken,
+      route: '/verify-email',
     })
     await authMailHook.sendPasswordReset({
+      broker: 'users',
       provider: 'users',
       email: 'reset@example.com',
       token: {
@@ -5581,6 +5599,7 @@ describe('@holo-js/core helper coverage', () => {
         plainTextToken: 'reset-plain',
         expiresAt: new Date('2026-04-12T13:00:00.000Z'),
       },
+      route: '/reset-password',
     })
 
     expect(authMailSends[0]).toMatchObject({
@@ -5589,8 +5608,11 @@ describe('@holo-js/core helper coverage', () => {
         name: 'Ava',
       },
       subject: 'Verify your email address',
+      html: expect.stringContaining('https://app.test/verify-email?token=verify-plain'),
     })
     expect((authMailSends[0] as { text: string }).text).toContain('Hello Ava,')
+    expect((authMailSends[0] as { text: string }).text).toContain('This verification link expires at April 12, 2026 at 12:00 PM UTC.')
+    expect((authMailSends[0] as { text: string }).text).toContain('Verify email address: https://app.test/verify-email?token=verify-plain')
     expect(authMailSends[1]).toMatchObject({
       to: {
         email: 'no-name@example.com',
@@ -5601,7 +5623,9 @@ describe('@holo-js/core helper coverage', () => {
     expect(authMailSends[2]).toMatchObject({
       to: 'reset@example.com',
       subject: 'Reset your password',
+      html: expect.stringContaining('https://app.test/reset-password?token=reset-plain'),
     })
+    expect((authMailSends[2] as { text: string }).text).toContain('This reset link expires at April 12, 2026 at 1:00 PM UTC.')
 
     const notificationDeliveries: unknown[] = []
     let emailVerificationRoute: unknown
@@ -5632,21 +5656,24 @@ describe('@holo-js/core helper coverage', () => {
           },
         }
       },
-    } as never)
+    } as never, 'https://app.test')
 
     await authNotificationsHook.sendEmailVerification({
       provider: 'users',
       user: { name: ' Ava ' },
       email: 'ava@example.com',
       token: verificationToken,
+      route: '/verify-email',
     })
     await authNotificationsHook.sendEmailVerification({
       provider: 'users',
       user: {},
       email: 'no-name@example.com',
       token: verificationToken,
+      route: '/verify-email',
     })
     await authNotificationsHook.sendPasswordReset({
+      broker: 'users',
       provider: 'users',
       email: 'reset@example.com',
       token: {
@@ -5654,6 +5681,7 @@ describe('@holo-js/core helper coverage', () => {
         plainTextToken: 'reset-plain',
         expiresAt: new Date('2026-04-12T13:00:00.000Z'),
       },
+      route: '/reset-password',
     })
 
     expect(notificationDeliveries[0]).toMatchObject({
@@ -5663,8 +5691,15 @@ describe('@holo-js/core helper coverage', () => {
       },
       message: {
         greeting: 'Hello Ava,',
+        action: {
+          label: 'Verify email address',
+          url: 'https://app.test/verify-email?token=verify-plain',
+        },
       },
     })
+    expect((notificationDeliveries[0] as { message: { lines: readonly string[] } }).message.lines).toContain(
+      'This verification link expires at April 12, 2026 at 12:00 PM UTC.',
+    )
     expect(notificationDeliveries[1]).toMatchObject({
       route: 'no-name@example.com',
       message: {
@@ -5676,8 +5711,15 @@ describe('@holo-js/core helper coverage', () => {
       route: 'reset@example.com',
       message: {
         subject: 'Reset your password',
+        action: {
+          label: 'Reset password',
+          url: 'https://app.test/reset-password?token=reset-plain',
+        },
       },
     })
+    expect((notificationDeliveries[2] as { message: { lines: readonly string[] } }).message.lines).toContain(
+      'This reset link expires at April 12, 2026 at 1:00 PM UTC.',
+    )
   })
 
   it('boots mail with the shared render runtime when no explicit render option is passed', async () => {

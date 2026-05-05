@@ -12,7 +12,7 @@ export default defineConfig({
   clean: true,
   outDir: 'dist',
   outExtension: () => ({ js: '.mjs' }),
-  external: ['react'],
+  external: ['react', 'next/headers'],
   esbuildOptions(options) {
     options.logLevel = 'warning'
   },

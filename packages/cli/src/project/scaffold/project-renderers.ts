@@ -29,6 +29,8 @@ export function renderAuthEnvFiles(
       : []
   const env = [
     'AUTH_SOCIAL_ENCRYPTION_KEY=',
+    'AUTH_EMAIL_VERIFICATION_ROUTE=/verify-email',
+    'AUTH_PASSWORD_RESET_ROUTE=/reset-password',
     'SESSION_DRIVER=file',
     `SESSION_CONNECTION=${defaultDatabaseConnection}`,
     'SESSION_COOKIE=holo_session',
@@ -436,15 +438,43 @@ export function renderScaffoldEnvFiles(
   const cacheLines = normalizeScaffoldOptionalPackages(options.optionalPackages).includes('cache')
     ? [...renderCacheEnvFiles('file').env]
     : []
-  const env = [...baseLines, ...driverLines, ...storageLines, ...authLines, ...cacheLines, ''].join('\n')
+  const mailLines = renderMailEnvFiles().env
+  const env = [...baseLines, ...driverLines, ...storageLines, ...authLines, ...cacheLines, ...mailLines, ''].join('\n')
   const example = [
     '# Copy this file to .env and fill in your local values.',
     '# Supported layered env files: .env.local, .env.development, .env.production, .env.prod, .env.test',
-    ...[...baseLines, ...driverLines, ...storageLines, ...authLines, ...cacheLines].map(line => `${line.split('=')[0]}=`),
+    ...[...baseLines, ...driverLines, ...storageLines, ...authLines, ...cacheLines, ...renderMailEnvFiles().example].map(line => `${line.split('=')[0]}=`),
     '',
   ].join('\n')
 
   return { env, example }
+}
+
+export function renderMailEnvFiles(): { env: readonly string[], example: readonly string[] } {
+  return {
+    env: [
+      'MAIL_MAILER=preview',
+      'MAIL_FROM_ADDRESS=hello@app.test',
+      'MAIL_FROM_NAME=Holo App',
+      'MAIL_LOG_BODIES=false',
+      'MAIL_HOST=127.0.0.1',
+      'MAIL_PORT=1025',
+      'MAIL_SECURE=false',
+      'MAIL_USERNAME=',
+      'MAIL_PASSWORD=',
+    ],
+    example: [
+      'MAIL_MAILER=',
+      'MAIL_FROM_ADDRESS=',
+      'MAIL_FROM_NAME=',
+      'MAIL_LOG_BODIES=',
+      'MAIL_HOST=',
+      'MAIL_PORT=',
+      'MAIL_SECURE=',
+      'MAIL_USERNAME=',
+      'MAIL_PASSWORD=',
+    ],
+  }
 }
 
 function renderRedisConnectionEnvFiles(): { env: readonly string[], example: readonly string[] } {

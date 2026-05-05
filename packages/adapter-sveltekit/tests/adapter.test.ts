@@ -121,6 +121,20 @@ async function loadAdapterModule() {
   if (!adapterModulePromise) {
     const { coreEntryUrl } = await ensureIsolatedCoreBuild()
     vi.doMock('@holo-js/core', () => import(coreEntryUrl))
+    vi.doMock('$app/server', () => ({
+      getRequestEvent() {
+        return {
+          cookies: {
+            get() {
+              return undefined
+            },
+          },
+          request: {
+            headers: new Headers(),
+          },
+        }
+      },
+    }))
     adapterModulePromise = import('../src')
   }
 
@@ -173,6 +187,7 @@ afterEach(async () => {
   await resetSvelteKitHoloProject()
   adapterModulePromise = null
   vi.doUnmock('@holo-js/core')
+  vi.doUnmock('$app/server')
   vi.resetModules()
   await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
 }, 45000)

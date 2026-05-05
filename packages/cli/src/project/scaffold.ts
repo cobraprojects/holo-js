@@ -97,6 +97,7 @@ import {
   renderAuthorizationPoliciesReadme,
   renderCacheEnvFiles,
   renderEnvFileContents,
+  renderMailEnvFiles,
   renderNotificationsMigration,
   renderQueueEnvFiles,
   renderScaffoldAppConfig,
@@ -448,6 +449,8 @@ export async function installMailIntoProject(
   const mailConfigPath = await resolveFirstExistingPath(projectRoot, MAIL_CONFIG_FILE_NAMES)
   const mailRoot = resolve(projectRoot, 'server/mail')
   const mailDirectoryExists = await pathExists(mailRoot)
+  const envPath = resolve(projectRoot, '.env')
+  const envExamplePath = resolve(projectRoot, '.env.example')
 
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })
   await mkdir(mailRoot, { recursive: true })
@@ -456,10 +459,24 @@ export async function installMailIntoProject(
     await writeTextFile(resolve(projectRoot, 'config/mail.ts'), renderMailConfig())
   }
 
+  const mailEnvFiles = renderMailEnvFiles()
+  const nextEnv = upsertEnvContents(await readTextFile(envPath), mailEnvFiles.env)
+  const nextEnvExample = upsertEnvContents(await readTextFile(envExamplePath), mailEnvFiles.example)
+
+  if (nextEnv.changed && typeof nextEnv.contents === 'string') {
+    await writeTextFile(envPath, nextEnv.contents)
+  }
+
+  if (nextEnvExample.changed && typeof nextEnvExample.contents === 'string') {
+    await writeTextFile(envExamplePath, nextEnvExample.contents)
+  }
+
   return {
     updatedPackageJson: await upsertMailPackageDependency(projectRoot),
     createdMailConfig: !mailConfigPath,
     createdMailDirectory: !mailDirectoryExists,
+    updatedEnv: nextEnv.changed,
+    updatedEnvExample: nextEnvExample.changed,
   }
 }
 
@@ -653,6 +670,7 @@ export {
   renderFrameworkFiles,
   renderFrameworkRunner,
   renderMailConfig,
+  renderMailEnvFiles,
   renderMediaConfig,
   renderNotificationsConfig,
   renderNotificationsMigration,

@@ -3,17 +3,42 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { get } from 'node:http'
+import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
 
 const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
 const originalConfig = await readFile(configPath, 'utf8')
 const runtimeSchemaPath = join(cwd, '.holo-js/generated/schema.mjs')
+const port = await new Promise((resolve, reject) => {
+  const server = createServer()
+  server.once('error', reject)
+  server.listen(0, '127.0.0.1', () => {
+    const address = server.address()
+    if (!address || typeof address === 'string') {
+      reject(new Error('Could not determine an available port.'))
+      return
+    }
+
+    const selected = String(address.port)
+    server.close((error) => {
+      if (error) {
+        reject(error)
+        return
+      }
+
+      resolve(selected)
+    })
+  })
+})
+let capturedOutput = ''
 
 function createChildEnv(overrides = {}) {
   const env = {
     ...process.env,
+    HOLO_SECURITY_TRUST_PROXY: 'true',
     ...overrides,
   }
 
@@ -134,7 +159,9 @@ function pipeOutput(stream, target, onLine) {
 
   let buffered = ''
   stream.on('data', chunk => {
-    buffered += chunk.toString()
+    const text = chunk.toString()
+    capturedOutput += text
+    buffered += text
     const lines = buffered.split(/\r?\n/)
     buffered = lines.pop() ?? ''
     for (const line of lines) {
@@ -219,10 +246,14 @@ try {
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await run('npx', ['tsx', 'tests/blog-logic.mjs'])
 
-  child = spawn('bun', ['run', 'dev'], {
+  child = spawn('bun', ['x', 'vite', 'dev', '--host', 'localhost', '--port', port], {
     cwd,
     detached: true,
-    env: createChildEnv(),
+    env: createChildEnv({
+      APP_URL: `http://localhost:${port}`,
+      MAIL_MAILER: 'log',
+      MAIL_LOG_BODIES: 'true',
+    }),
     stdio: ['inherit', 'pipe', 'pipe'],
   })
 
@@ -232,6 +263,11 @@ try {
   assert.equal(initial.app, 'blog-sveltekit')
   await waitForText(`${devUrl}/`, payload => payload.includes('Shipping a Real Holo Blog on SvelteKit'))
   await waitForText(`${devUrl}/admin/posts`, payload => payload.includes('Designing the Example App Roadmap'))
+  await assertExampleAppAuthFlow({
+    baseUrl: devUrl,
+    getOutput: () => capturedOutput,
+    appName: 'blog-sveltekit',
+  })
 
   await writeFile(configPath, originalConfig.replace("name: env('APP_NAME', 'blog-sveltekit')", "name: env('APP_NAME', 'blog-sveltekit-updated')"))
   await new Promise(resolve => setTimeout(resolve, 3000))

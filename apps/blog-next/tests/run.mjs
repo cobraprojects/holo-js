@@ -6,6 +6,7 @@ import { get } from 'node:http'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
 
 const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
@@ -33,10 +34,12 @@ const port = await new Promise((resolve, reject) => {
 const healthUrl = `http://localhost:${port}/api/holo/health`
 const originalConfig = await readFile(configPath, 'utf8')
 const runtimeSchemaPath = join(cwd, '.holo-js/generated/schema.mjs')
+let capturedOutput = ''
 
 function createChildEnv(overrides = {}) {
   const env = {
     ...process.env,
+    HOLO_SECURITY_TRUST_PROXY: 'true',
     ...overrides,
   }
 
@@ -150,6 +153,18 @@ async function waitForText(url, predicate, timeoutMs = 30000) {
   throw new Error(`Timed out waiting for ${url}${lastError instanceof Error ? `: ${lastError.message}` : ''}`)
 }
 
+function pipeOutput(stream, target) {
+  if (!stream) {
+    return
+  }
+
+  stream.on('data', chunk => {
+    const text = chunk.toString()
+    capturedOutput += text
+    target.write(text)
+  })
+}
+
 let child = null
 
 function killChildTree() {
@@ -181,14 +196,23 @@ try {
       PORT: port,
       HOST: 'localhost',
       APP_URL: `http://localhost:${port}`,
+      MAIL_MAILER: 'log',
+      MAIL_LOG_BODIES: 'true',
     }),
-    stdio: 'inherit',
+    stdio: ['inherit', 'pipe', 'pipe'],
   })
+  pipeOutput(child.stdout, process.stdout)
+  pipeOutput(child.stderr, process.stderr)
 
   const initial = await waitForJson(healthUrl, payload => payload.ok === true)
   assert.equal(initial.app, 'blog-next')
   await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Next'))
   await waitForText(`http://localhost:${port}/admin/posts`, payload => payload.includes('Designing the Example App Roadmap'))
+  await assertExampleAppAuthFlow({
+    baseUrl: `http://localhost:${port}`,
+    getOutput: () => capturedOutput,
+    appName: 'blog-next',
+  })
 
   await writeFile(configPath, originalConfig.replace("name: env('APP_NAME', 'blog-next')", "name: env('APP_NAME', 'blog-next-updated')"))
   const updated = await waitForJson(healthUrl, payload => payload.app === 'blog-next-updated')

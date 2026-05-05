@@ -22,6 +22,7 @@ export type {
   FieldKind,
   FieldRule,
   FormLikeValidationInput,
+  InferFieldOutput,
   InferSchemaData,
   PrimitiveFieldKind,
   SchemaInputShape,

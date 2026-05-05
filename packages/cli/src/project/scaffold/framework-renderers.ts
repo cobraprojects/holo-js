@@ -248,19 +248,44 @@ function renderSvelteServerUserHooks(): string {
   ].join('\n')
 }
 
-function renderSvelteViteConfig(storageEnabled: boolean): string {
+function renderSvelteViteConfig(_storageEnabled: boolean): string {
   const externals = [
     '      \'@holo-js/adapter-sveltekit\',',
+    '      \'@holo-js/auth\',',
+    '      \'@holo-js/auth-clerk\',',
+    '      \'@holo-js/auth-social\',',
+    '      \'@holo-js/auth-workos\',',
+    '      \'@holo-js/authorization\',',
+    '      \'@holo-js/broadcast\',',
+    '      \'@holo-js/cache\',',
+    '      \'@holo-js/cache-db\',',
+    '      \'@holo-js/cache-redis\',',
     '      \'@holo-js/config\',',
     '      \'@holo-js/core\',',
     '      \'@holo-js/db\',',
-    ...(storageEnabled
-      ? [
-          '      \'@holo-js/storage\',',
-          '      \'@holo-js/storage/runtime\',',
-        ]
-      : []),
+    '      \'@holo-js/db-mysql\',',
+    '      \'@holo-js/db-postgres\',',
+    '      \'@holo-js/db-sqlite\',',
+    '      \'@holo-js/events\',',
+    '      \'@holo-js/flux\',',
+    '      \'@holo-js/flux-svelte\',',
+    '      \'@holo-js/forms\',',
+    '      \'@holo-js/mail\',',
+    '      \'@holo-js/media\',',
+    '      \'@holo-js/notifications\',',
+    '      \'@holo-js/queue\',',
+    '      \'@holo-js/queue-db\',',
+    '      \'@holo-js/queue-redis\',',
+    '      \'@holo-js/security\',',
+    '      \'@holo-js/session\',',
+    '      \'@holo-js/storage\',',
+    '      \'@holo-js/storage/runtime\',',
+    '      \'@holo-js/storage-s3\',',
+    '      \'@holo-js/validation\',',
     '      \'better-sqlite3\',',
+    '      \'ioredis\',',
+    '      \'mysql2\',',
+    '      \'pg\',',
   ]
 
   return [

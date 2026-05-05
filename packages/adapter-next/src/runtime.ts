@@ -1,3 +1,4 @@
+import { cookies, headers } from 'next/headers'
 import { initializeHolo, type CreateHoloOptions } from '@holo-js/core'
 import type { DotPath, HoloConfigMap, LoadedHoloConfig, ValueAtPath } from '@holo-js/config'
 
@@ -5,10 +6,26 @@ export type NextHoloRuntimeOptions = CreateHoloOptions & {
   readonly projectRoot: string
 }
 
+function resolveNextAuthRequestAccessors(): NonNullable<CreateHoloOptions['authRequest']> {
+  return {
+    async getCookie(name: string) {
+      const store = await cookies()
+      return store.get(name)?.value
+    },
+    async getHeader(name: string) {
+      const requestHeaders = await headers()
+      return requestHeaders.get(name) ?? undefined
+    },
+  }
+}
+
 export function createNextHoloHelpers<TCustom extends HoloConfigMap = HoloConfigMap>(
   options: NextHoloRuntimeOptions,
 ) {
-  const resolveRuntime = async () => await initializeHolo<TCustom>(options.projectRoot, options)
+  const resolveRuntime = async () => await initializeHolo<TCustom>(options.projectRoot, {
+    ...options,
+    authRequest: options.authRequest ?? resolveNextAuthRequestAccessors(),
+  })
 
   const useConfig = async <TPath extends DotPath<LoadedHoloConfig<TCustom>['all']>>(
     path: TPath,

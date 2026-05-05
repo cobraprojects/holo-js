@@ -1158,6 +1158,24 @@ export default {
       storageDefaultDisk: 'local',
       optionalPackages: ['auth'],
     }).env).toContain('SESSION_CONNECTION=main')
+    expect(projectInternals.renderScaffoldEnvFiles({
+      projectName: 'Mail App',
+      databaseDriver: 'sqlite',
+      storageDefaultDisk: 'local',
+    }).env).toContain('MAIL_MAILER=preview')
+    expect(projectInternals.renderScaffoldEnvFiles({
+      projectName: 'Mail App',
+      databaseDriver: 'sqlite',
+      storageDefaultDisk: 'local',
+    }).env).toContain('MAIL_USERNAME=')
+    expect(projectInternals.renderScaffoldEnvFiles({
+      projectName: 'Mail App',
+      databaseDriver: 'sqlite',
+      storageDefaultDisk: 'local',
+    }).example).toContain('MAIL_FROM_ADDRESS=')
+    expect(projectInternals.renderMailConfig()).toContain('logBodies: env(\'MAIL_LOG_BODIES\', false)')
+    expect(projectInternals.renderMailConfig()).toContain('user: env(\'MAIL_USERNAME\') || undefined')
+    expect(projectInternals.renderMailConfig()).toContain('password: env(\'MAIL_PASSWORD\') || undefined')
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'nuxt-broadcast-app',
       framework: 'nuxt',
@@ -2374,11 +2392,15 @@ export default defineAppConfig({
       updatedPackageJson: true,
       createdMailConfig: true,
       createdMailDirectory: true,
+      updatedEnv: true,
+      updatedEnvExample: true,
     })
     await expect(projectInternals.installMailIntoProject(projectRoot)).resolves.toMatchObject({
       updatedPackageJson: false,
       createdMailConfig: false,
       createdMailDirectory: false,
+      updatedEnv: false,
+      updatedEnvExample: false,
     })
     await expect(projectInternals.installSecurityIntoProject(projectRoot)).resolves.toMatchObject({
       updatedPackageJson: true,
@@ -7849,6 +7871,8 @@ export default defineEvent({ name: 'audit.activity' })
       updatedPackageJson: true,
       createdMailConfig: true,
       createdMailDirectory: true,
+      updatedEnv: true,
+      updatedEnvExample: true,
     }))
     const installSecurityIntoProject = vi.fn(async () => ({
       updatedPackageJson: true,
@@ -8400,6 +8424,8 @@ export default defineEvent({ name: 'audit.activity' })
       updatedPackageJson: false,
       createdMailConfig: false,
       createdMailDirectory: false,
+      updatedEnv: false,
+      updatedEnvExample: false,
     }))
 
     vi.resetModules()
