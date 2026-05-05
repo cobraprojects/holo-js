@@ -56,6 +56,10 @@ export interface AnyEntity {
   getChanges(): Record<string, unknown>
 }
 export type AnyModelQueryBuilder = ModelQueryBuilder<TableDefinition>
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- declaration merging hook for app model registries
+export interface RegisteredModels {}
+export type RegisteredModelName = Extract<keyof RegisteredModels, string>
+export type RegisteredModelReference<TName extends RegisteredModelName> = RegisteredModels[TName]
 export type ModelDefinitionLike<TTable extends TableDefinition = TableDefinition>
   = | (AnyModelDefinition & { readonly table: TTable })
     | { readonly definition: AnyModelDefinition & { readonly table: TTable } }

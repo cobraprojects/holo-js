@@ -229,6 +229,10 @@ export type {
   SQLiteStatementLike,
 } from './drivers'
 export type {
+  BelongsToManyRelationDefinition,
+  BelongsToRelationDefinition,
+  HasManyRelationDefinition,
+  HasOneRelationDefinition,
   ModelCollection,
 } from './model'
 export type {
@@ -312,6 +316,9 @@ export type {
 export type {
   DefineModelOptions,
   EntityWithLoaded,
+  RegisteredModelName,
+  RegisteredModelReference,
+  RegisteredModels,
   ModelAttributeKey,
   ModelDefinition,
   DynamicRelationResolver,

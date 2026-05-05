@@ -5,6 +5,7 @@ import { initializeHoloAdapterProject } from '@holo-js/core'
 import Category from '../server/models/Category.ts'
 import Post from '../server/models/Post.ts'
 import Tag from '../server/models/Tag.ts'
+import User from '../server/models/User.ts'
 import {
   createCategory,
   createPost,
@@ -36,6 +37,13 @@ try {
   assert.equal(home.featured?.slug, 'shipping-a-real-holo-blog-on-nuxt')
   assert.equal(home.categories.length, 2)
   assert.equal(home.tags.length, 3)
+
+  const firstUser = await User.with('posts').first()
+  assert.ok(firstUser)
+  assert.ok(Array.isArray(firstUser.posts))
+
+  const featuredPost = await Post.with('user').where('slug', home.featured?.slug ?? '').first()
+  assert.ok(featuredPost?.user)
 
   const dashboard = await getAdminDashboardData()
   assert.equal(dashboard.postCount, 2)

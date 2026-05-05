@@ -10,12 +10,15 @@ Use `hasOne` on the parent-facing side when the related table stores the foreign
 ```ts
 const User = defineModel('users', {
   relations: {
-    profile: hasOne(Profile, {
+    profile: hasOne('Profile', {
       foreignKey: 'user_id',
     }),
   },
 })
 ```
+
+String relation targets use the model name inferred from the related table, including irregular plurals
+such as `people -> Person` and `children -> Child`.
 
 ### Save or create the related model
 
@@ -39,7 +42,7 @@ Use `belongsTo` on the inverse side when the current model stores the foreign ke
 ```ts
 const Profile = defineModel('profiles', {
   relations: {
-    user: belongsTo(User, {
+    user: belongsTo('User', {
       foreignKey: 'user_id',
     }),
   },

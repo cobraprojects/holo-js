@@ -63,6 +63,25 @@ For writes, mass assignment, and trusted write paths, see [ORM Writes](/orm/writ
 
 The table name is the first argument to `defineModel(...)`.
 
+### Model Names
+
+Model names are inferred from the table name and used by string-based relation targets.
+
+- `defineModel('users', ...)` becomes `User`
+- `defineModel('blog_posts', ...)` becomes `BlogPost`
+- `defineModel('people', ...)` becomes `Person`
+- `defineModel('children', ...)` becomes `Child`
+- `defineModel('blue_lot_of_things', ...)` becomes `BlueLotOfThing`
+
+If the inferred name is not the public API you want, set it explicitly and use that exact name in
+relations:
+
+```ts
+const Person = defineModel('people', {
+  name: 'Person',
+})
+```
+
 ### Primary Keys
 
 Primary key truth comes from migrations and the generated schema artifact. The model reads it from the

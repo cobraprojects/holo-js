@@ -379,7 +379,10 @@ try {
     if (executed.length === 0) {
       console.log('No migrations were executed.')
     } else {
-      console.log(\`Migrations executed: \${executed.map(item => item.name).join(', ')}\`)
+      console.log('Migrations executed:')
+      for (const item of executed) {
+        console.log(\`  \${item.name}\`)
+      }
     }
   } else if (payload.kind === 'fresh') {
     const migrations = []
@@ -401,7 +404,10 @@ try {
     if (executed.length === 0) {
       console.log('No migrations were executed.')
     } else {
-      console.log(\`Migrations executed: \${executed.map(item => item.name).join(', ')}\`)
+      console.log('Migrations executed:')
+      for (const item of executed) {
+        console.log(\`  \${item.name}\`)
+      }
     }
 
     if (payload.options?.seed) {
@@ -423,7 +429,10 @@ try {
       if (seeded.length === 0) {
         console.log('No seeders were executed.')
       } else {
-        console.log(\`Seeders executed: \${seeded.map(item => item.name).join(', ')}\`)
+        console.log('Seeders executed:')
+        for (const item of seeded) {
+          console.log(\`  \${item.name}\`)
+        }
       }
     }
   } else if (payload.kind === 'rollback') {
@@ -440,9 +449,12 @@ try {
     const rolledBack = await createMigrationService(manager.connection(), migrations).rollback(payload.options ?? {})
     await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath)
     if (rolledBack.length === 0) {
-      console.log('No migrations were executed.')
+      console.log('No migrations were rolled back.')
     } else {
-      console.log(\`Migrations executed: \${rolledBack.map(item => item.name).join(', ')}\`)
+      console.log('Migrations rolled back:')
+      for (const item of rolledBack) {
+        console.log(\`  \${item.name}\`)
+      }
     }
   } else if (payload.kind === 'seed') {
     if (payload.generatedSchema) {
@@ -462,7 +474,10 @@ try {
     if (executed.length === 0) {
       console.log('No seeders were executed.')
     } else {
-      console.log(\`Seeders executed: \${executed.map(item => item.name).join(', ')}\`)
+      console.log('Seeders executed:')
+      for (const item of executed) {
+        console.log(\`  \${item.name}\`)
+      }
     }
   } else if (payload.kind === 'prune') {
     const models = []

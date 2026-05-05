@@ -10,6 +10,11 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { loadConfigDirectory } from '@holo-js/config'
 import { initializeHolo } from '@holo-js/core'
 import { DB, createSchemaService } from '@holo-js/db'
+import {
+  linkInstalledDependenciesForPackageSync,
+  resolveInstalledDependencyRoot,
+  symlinkPackageDependencySync,
+} from '../../../tests/support/published-package'
 import type * as HoloConfigModule from '@holo-js/config'
 import type * as HoloCoreModule from '@holo-js/core'
 import type * as HoloDbModule from '@holo-js/db'
@@ -70,7 +75,6 @@ import { ESBUILD_PACKAGE_VERSION, HOLO_PACKAGE_VERSION } from '../src/metadata'
 import type { FSWatcher } from 'node:fs'
 
 const workspaceRoot = resolve(import.meta.dirname, '../../..')
-const bunStoreNodeModulesRoot = join(workspaceRoot, 'node_modules/.bun/node_modules')
 type BuiltWorkspacePackages = {
   readonly root: string
   readonly broadcastPackageRoot: string
@@ -124,22 +128,6 @@ function linkPackageDependencySync(
   symlinkSync(dependencyRoot, dependencyPath)
 }
 
-function linkExternalDependencySync(targetPackageDir: string, dependencyName: string): void {
-  linkPackageDependencySync(
-    targetPackageDir,
-    dependencyName,
-    join(workspaceRoot, 'node_modules', ...dependencyName.split('/')),
-  )
-}
-
-function linkBunStoreDependencySync(targetPackageDir: string, dependencyName: string): void {
-  linkPackageDependencySync(
-    targetPackageDir,
-    dependencyName,
-    join(bunStoreNodeModulesRoot, ...dependencyName.split('/')),
-  )
-}
-
 function buildWorkspacePackageSync(filter: string, outDir: string) {
   return spawnSync('bun', ['run', '--filter', filter, 'build'], {
     cwd: workspaceRoot,
@@ -176,23 +164,38 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   const cliPackageRoot = join(root, 'packages/cli')
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/db-sqlite'), dbSqlitePackageRoot)
-  linkExternalDependencySync(dbSqlitePackageRoot, 'better-sqlite3')
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(dbSqlitePackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/db-sqlite/package.json'),
+  })
   const dbSqliteBuild = buildWorkspacePackageSync('@holo-js/db-sqlite', join(dbSqlitePackageRoot, 'dist'))
   expect(dbSqliteBuild.status, dbSqliteBuild.stderr || dbSqliteBuild.stdout).toBe(0)
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/db-postgres'), dbPostgresPackageRoot)
-  linkExternalDependencySync(dbPostgresPackageRoot, 'pg')
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(dbPostgresPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/db-postgres/package.json'),
+  })
   const dbPostgresBuild = buildWorkspacePackageSync('@holo-js/db-postgres', join(dbPostgresPackageRoot, 'dist'))
   expect(dbPostgresBuild.status, dbPostgresBuild.stderr || dbPostgresBuild.stdout).toBe(0)
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/db-mysql'), dbMysqlPackageRoot)
-  linkExternalDependencySync(dbMysqlPackageRoot, 'mysql2')
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(dbMysqlPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/db-mysql/package.json'),
+  })
   const dbMysqlBuild = buildWorkspacePackageSync('@holo-js/db-mysql', join(dbMysqlPackageRoot, 'dist'))
   expect(dbMysqlBuild.status, dbMysqlBuild.stderr || dbMysqlBuild.stdout).toBe(0)
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/db'), dbPackageRoot)
-  linkExternalDependencySync(dbPackageRoot, 'ulid')
-  linkExternalDependencySync(dbPackageRoot, 'uuid')
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(dbPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/db/package.json'),
+  })
   linkPackageDependencySync(dbPackageRoot, '@holo-js/db-sqlite', dbSqlitePackageRoot)
   linkPackageDependencySync(dbPackageRoot, '@holo-js/db-postgres', dbPostgresPackageRoot)
   linkPackageDependencySync(dbPackageRoot, '@holo-js/db-mysql', dbMysqlPackageRoot)
@@ -200,7 +203,11 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   expect(dbBuild.status, dbBuild.stderr || dbBuild.stdout).toBe(0)
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/queue-redis'), queueRedisPackageRoot)
-  linkBunStoreDependencySync(queueRedisPackageRoot, 'bullmq')
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(queueRedisPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/queue-redis/package.json'),
+  })
   const queueRedisBuild = buildWorkspacePackageSync('@holo-js/queue-redis', join(queueRedisPackageRoot, 'dist'))
   expect(queueRedisBuild.status, queueRedisBuild.stderr || queueRedisBuild.stdout).toBe(0)
 
@@ -228,14 +235,22 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   expect(configBuild.status, configBuild.stderr || configBuild.stdout).toBe(0)
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/validation'), validationPackageRoot)
-  linkBunStoreDependencySync(validationPackageRoot, 'valibot')
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(validationPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/validation/package.json'),
+  })
   const validationBuild = buildWorkspacePackageSync('@holo-js/validation', join(validationPackageRoot, 'dist'))
   expect(validationBuild.status, validationBuild.stderr || validationBuild.stdout).toBe(0)
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/broadcast'), broadcastPackageRoot)
   linkPackageDependencySync(broadcastPackageRoot, '@holo-js/config', configPackageRoot)
   linkPackageDependencySync(broadcastPackageRoot, '@holo-js/validation', validationPackageRoot)
-  linkExternalDependencySync(broadcastPackageRoot, 'ws')
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(broadcastPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/broadcast/package.json'),
+  })
   const broadcastBuild = buildWorkspacePackageSync('@holo-js/broadcast', join(broadcastPackageRoot, 'dist'))
   expect(broadcastBuild.status, broadcastBuild.stderr || broadcastBuild.stdout).toBe(0)
 
@@ -258,7 +273,11 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   linkPackageDependencySync(mailPackageRoot, '@holo-js/config', configPackageRoot)
   linkPackageDependencySync(mailPackageRoot, '@holo-js/queue', queuePackageRoot)
   linkPackageDependencySync(mailPackageRoot, '@holo-js/storage', storagePackageRoot)
-  linkExternalDependencySync(mailPackageRoot, 'nodemailer')
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(mailPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/mail/package.json'),
+  })
   const mailBuild = buildWorkspacePackageSync('@holo-js/mail', join(mailPackageRoot, 'dist'))
   expect(mailBuild.status, mailBuild.stderr || mailBuild.stdout).toBe(0)
 
@@ -435,15 +454,9 @@ async function writeProjectFile(projectRoot: string, relativePath: string, conte
 
 async function linkWorkspaceExternalDependency(projectRoot: string, dependencyName: string): Promise<void> {
   const dependencyPath = join(projectRoot, 'node_modules', ...dependencyName.split('/'))
-  const workspaceDependencyPath = join(workspaceRoot, 'node_modules', ...dependencyName.split('/'))
-  const bunStoreDependencyPath = join(bunStoreNodeModulesRoot, ...dependencyName.split('/'))
-  const dependencyRoot = await stat(workspaceDependencyPath)
-    .then(() => workspaceDependencyPath)
-    .catch(async () => await stat(bunStoreDependencyPath)
-      .then(() => bunStoreDependencyPath))
   await mkdir(dirname(dependencyPath), { recursive: true })
   await rm(dependencyPath, { recursive: true, force: true }).catch(() => {})
-  await symlink(dependencyRoot, dependencyPath).catch(() => {})
+  await symlink(resolveInstalledDependencyRoot(workspaceRoot, dependencyName), dependencyPath).catch(() => {})
 }
 
 async function linkWorkspaceConfig(projectRoot: string): Promise<void> {

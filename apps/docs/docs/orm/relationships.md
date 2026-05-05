@@ -10,14 +10,61 @@ Keep the schema responsible for columns and keys, then use the model to describe
 ```ts
 const User = defineModel('users', {
   relations: {
-    profile: hasOne(Profile, { foreignKey: 'user_id' }),
-    posts: hasMany(Post, { foreignKey: 'user_id' }),
-    roles: belongsToMany(Role, {
+    profile: hasOne('Profile', { foreignKey: 'user_id' }),
+    posts: hasMany('Post', { foreignKey: 'user_id' }),
+    roles: belongsToMany('Role', {
       pivotTable: 'role_user',
       foreignPivotKey: 'user_id',
       relatedPivotKey: 'role_id',
     }),
   },
+})
+```
+
+When models point at each other across files, prefer string relation targets. That avoids circular
+inference errors while keeping eager-load and relation-name autocomplete once your models are registered.
+
+Framework adapters load `server/models` automatically. In custom runtimes, import your model files once
+during boot before resolving string-based relations.
+
+## Relation Target Names
+
+String relation targets use the model name, not the file name.
+
+By default, Holo-JS infers the model name from the table name:
+
+- `defineModel('users', ...)` -> `User`
+- `defineModel('blog_posts', ...)` -> `BlogPost`
+- `defineModel('people', ...)` -> `Person`
+- `defineModel('children', ...)` -> `Child`
+- `defineModel('blue_lot_of_things', ...)` -> `BlueLotOfThing`
+
+That means these are valid relation targets:
+
+```ts
+const Person = defineModel('people', {
+  relations: {
+    posts: hasMany('Post', { foreignKey: 'person_id' }),
+  },
+})
+
+const Child = defineModel('children', {
+  relations: {
+    parent: belongsTo('Person', { foreignKey: 'person_id' }),
+  },
+})
+```
+
+If your table name is unusual, not English, or you want a different public model name, set `name`
+explicitly and use that value in relations:
+
+```ts
+const Person = defineModel('people', {
+  name: 'Person',
+})
+
+const LegacyThing = defineModel('tbl_legacy_people', {
+  name: 'LegacyPerson',
 })
 ```
 
@@ -179,8 +226,8 @@ Inverse resolution is explicit when a model can reach the same target more than 
 ```ts
 const Invoice = defineModel('invoices', {
   relations: {
-    billingAddress: belongsTo(Address, { foreignKey: 'billing_address_id' }),
-    shippingAddress: belongsTo(Address, { foreignKey: 'shipping_address_id' }),
+    billingAddress: belongsTo('Address', { foreignKey: 'billing_address_id' }),
+    shippingAddress: belongsTo('Address', { foreignKey: 'shipping_address_id' }),
   },
 })
 ```

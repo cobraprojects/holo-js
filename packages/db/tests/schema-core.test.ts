@@ -1114,6 +1114,9 @@ describe('native schema core', () => {
     const memberships = defineTable('memberships', {
       team_id: column.foreignId().constrained().cascadeOnDelete().restrictOnUpdate(),
       category_id: column.foreignId().constrained(),
+      person_id: column.foreignId().constrained(),
+      child_id: column.foreignId().constrained(),
+      blue_lot_of_thing_id: column.foreignId().constrained(),
       ownerId: column.foreignId().constrained().nullOnDelete().noActionOnUpdate(),
       status: column.foreignId().constrained(),
       company_id: column.foreignId().references('uuid').on('companies').noActionOnDelete().nullOnUpdate(),
@@ -1126,6 +1129,21 @@ describe('native schema core', () => {
       onUpdate: 'restrict' })
     expect(memberships.category_id.references).toEqual({
       table: 'categories',
+      column: 'id',
+      onDelete: undefined,
+      onUpdate: undefined })
+    expect(memberships.person_id.references).toEqual({
+      table: 'people',
+      column: 'id',
+      onDelete: undefined,
+      onUpdate: undefined })
+    expect(memberships.child_id.references).toEqual({
+      table: 'children',
+      column: 'id',
+      onDelete: undefined,
+      onUpdate: undefined })
+    expect(memberships.blue_lot_of_thing_id.references).toEqual({
+      table: 'blue_lot_of_things',
       column: 'id',
       onDelete: undefined,
       onUpdate: undefined })

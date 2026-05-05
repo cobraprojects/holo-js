@@ -15,15 +15,20 @@ import type {
   MorphToManyRelationDefinition,
   PivotTableColumnName,
   PivotRelationMethods,
+  RegisteredModelName,
+  RegisteredModelReference,
   RelationConstraintDefinition,
   RelationDefinition,
 } from './types'
+import { getGlobalModel } from './ModelRegistry'
+import { RelationError } from '../core/errors'
 import type { TableDefinition } from '../schema/types'
 
 type PivotMethodKeys = 'withPivot' | 'wherePivot' | 'orderByPivot' | 'as' | 'using'
 type BareBelongsToManyRelation = Omit<BelongsToManyRelationDefinition, PivotMethodKeys>
 type BareMorphToManyRelation = Omit<MorphToManyRelationDefinition, PivotMethodKeys>
 type BareMorphedByManyRelation = Omit<MorphedByManyRelationDefinition, PivotMethodKeys>
+type RelatedInput<TRelated extends ModelDefinitionLike<TableDefinition>> = RegisteredModelName | (() => TRelated)
 
 function defaultMorphTypeColumn(name: string): string {
   return `${name}_type`
@@ -31,6 +36,25 @@ function defaultMorphTypeColumn(name: string): string {
 
 function defaultMorphIdColumn(name: string): string {
   return `${name}_id`
+}
+
+function resolveRegisteredModel(name: string): ModelDefinitionLike {
+  const model = getGlobalModel(name)
+  if (!model) {
+    throw new RelationError(
+      `Relation target "${name}" is not registered. Import the related model once during boot or use your framework's model discovery.`,
+    )
+  }
+
+  return model
+}
+
+function normalizeRelatedResolver(related: RegisteredModelName | (() => ModelDefinitionLike<TableDefinition>)): () => ModelDefinitionLike<TableDefinition> {
+  if (typeof related === 'string') {
+    return () => resolveRegisteredModel(related)
+  }
+
+  return related
 }
 
 function decoratePivotRelation<TBase extends {
@@ -96,11 +120,21 @@ function decoratePivotRelation<TBase extends {
   }) as unknown as TResult
 }
 
+export function belongsTo<const TName extends RegisteredModelName>(
+  related: TName,
+  foreignKeyOrOptions: string | { foreignKey: string, ownerKey?: string },
+  ownerKey?: string,
+): BelongsToRelationDefinition<RegisteredModelReference<TName>>
 export function belongsTo<TRelated extends ModelDefinitionLike<TableDefinition>>(
   related: () => TRelated,
   foreignKeyOrOptions: string | { foreignKey: string, ownerKey?: string },
+  ownerKey?: string,
+): BelongsToRelationDefinition<TRelated>
+export function belongsTo(
+  related: RelatedInput<ModelDefinitionLike<TableDefinition>>,
+  foreignKeyOrOptions: string | { foreignKey: string, ownerKey?: string },
   ownerKey = 'id',
-): BelongsToRelationDefinition<TRelated> {
+): BelongsToRelationDefinition<ModelDefinitionLike<TableDefinition>> {
   const foreignKey = typeof foreignKeyOrOptions === 'string'
     ? foreignKeyOrOptions
     : foreignKeyOrOptions.foreignKey
@@ -110,17 +144,27 @@ export function belongsTo<TRelated extends ModelDefinitionLike<TableDefinition>>
 
   return Object.freeze({
     kind: 'belongsTo',
-    related,
+    related: normalizeRelatedResolver(related),
     foreignKey,
     ownerKey: resolvedOwnerKey,
   })
 }
 
+export function hasMany<const TName extends RegisteredModelName>(
+  related: TName,
+  foreignKeyOrOptions: string | { foreignKey: string, localKey?: string },
+  localKey?: string,
+): HasManyRelationDefinition<RegisteredModelReference<TName>>
 export function hasMany<TRelated extends ModelDefinitionLike<TableDefinition>>(
   related: () => TRelated,
   foreignKeyOrOptions: string | { foreignKey: string, localKey?: string },
+  localKey?: string,
+): HasManyRelationDefinition<TRelated>
+export function hasMany(
+  related: RelatedInput<ModelDefinitionLike<TableDefinition>>,
+  foreignKeyOrOptions: string | { foreignKey: string, localKey?: string },
   localKey = 'id',
-): HasManyRelationDefinition<TRelated> {
+): HasManyRelationDefinition<ModelDefinitionLike<TableDefinition>> {
   const foreignKey = typeof foreignKeyOrOptions === 'string'
     ? foreignKeyOrOptions
     : foreignKeyOrOptions.foreignKey
@@ -130,17 +174,27 @@ export function hasMany<TRelated extends ModelDefinitionLike<TableDefinition>>(
 
   return Object.freeze({
     kind: 'hasMany',
-    related,
+    related: normalizeRelatedResolver(related),
     foreignKey,
     localKey: resolvedLocalKey,
   })
 }
 
+export function hasOne<const TName extends RegisteredModelName>(
+  related: TName,
+  foreignKeyOrOptions: string | { foreignKey: string, localKey?: string },
+  localKey?: string,
+): HasOneRelationDefinition<RegisteredModelReference<TName>>
 export function hasOne<TRelated extends ModelDefinitionLike<TableDefinition>>(
   related: () => TRelated,
   foreignKeyOrOptions: string | { foreignKey: string, localKey?: string },
+  localKey?: string,
+): HasOneRelationDefinition<TRelated>
+export function hasOne(
+  related: RelatedInput<ModelDefinitionLike<TableDefinition>>,
+  foreignKeyOrOptions: string | { foreignKey: string, localKey?: string },
   localKey = 'id',
-): HasOneRelationDefinition<TRelated> {
+): HasOneRelationDefinition<ModelDefinitionLike<TableDefinition>> {
   const foreignKey = typeof foreignKeyOrOptions === 'string'
     ? foreignKeyOrOptions
     : foreignKeyOrOptions.foreignKey
@@ -150,7 +204,7 @@ export function hasOne<TRelated extends ModelDefinitionLike<TableDefinition>>(
 
   return Object.freeze({
     kind: 'hasOne',
-    related,
+    related: normalizeRelatedResolver(related),
     foreignKey,
     localKey: resolvedLocalKey,
   })
@@ -282,6 +336,23 @@ export function oldestOfMany<TRelated extends ModelDefinitionLike<TableDefinitio
 }
 
 export function belongsToMany<
+  const TName extends RegisteredModelName,
+  TPivotTable extends string | TableDefinition,
+>(
+  related: TName,
+  pivotTableOrOptions: TPivotTable | {
+    pivotTable: TPivotTable
+    foreignPivotKey: string
+    relatedPivotKey: string
+    parentKey?: string
+    relatedKey?: string
+  },
+  foreignPivotKey?: string,
+  relatedPivotKey?: string,
+  parentKey?: string,
+  relatedKey?: string,
+): BelongsToManyRelationDefinition<RegisteredModelReference<TName>, TPivotTable> & PivotRelationMethods<BelongsToManyRelationDefinition<RegisteredModelReference<TName>, TPivotTable>, TPivotTable>
+export function belongsToMany<
   TRelated extends ModelDefinitionLike<TableDefinition>,
   TPivotTable extends string | TableDefinition,
 >(
@@ -295,9 +366,23 @@ export function belongsToMany<
   },
   foreignPivotKey?: string,
   relatedPivotKey?: string,
+  parentKey?: string,
+  relatedKey?: string,
+): BelongsToManyRelationDefinition<TRelated, TPivotTable> & PivotRelationMethods<BelongsToManyRelationDefinition<TRelated, TPivotTable>, TPivotTable>
+export function belongsToMany<TPivotTable extends string | TableDefinition>(
+  related: RelatedInput<ModelDefinitionLike<TableDefinition>>,
+  pivotTableOrOptions: TPivotTable | {
+    pivotTable: TPivotTable
+    foreignPivotKey: string
+    relatedPivotKey: string
+    parentKey?: string
+    relatedKey?: string
+  },
+  foreignPivotKey?: string,
+  relatedPivotKey?: string,
   parentKey = 'id',
   relatedKey = 'id',
-): BelongsToManyRelationDefinition<TRelated, TPivotTable> & PivotRelationMethods<BelongsToManyRelationDefinition<TRelated, TPivotTable>, TPivotTable> {
+): BelongsToManyRelationDefinition<ModelDefinitionLike<TableDefinition>, TPivotTable> & PivotRelationMethods<BelongsToManyRelationDefinition<ModelDefinitionLike<TableDefinition>, TPivotTable>, TPivotTable> {
   const pivotTable = typeof pivotTableOrOptions === 'object' && 'pivotTable' in pivotTableOrOptions
     ? pivotTableOrOptions.pivotTable
     : pivotTableOrOptions
@@ -316,11 +401,11 @@ export function belongsToMany<
 
   return decoratePivotRelation<
     BareBelongsToManyRelation,
-    BelongsToManyRelationDefinition<TRelated, TPivotTable>,
+    BelongsToManyRelationDefinition<ModelDefinitionLike<TableDefinition>, TPivotTable>,
     TPivotTable
   >(Object.freeze({
     kind: 'belongsToMany',
-    related,
+    related: normalizeRelatedResolver(related),
     pivotTable,
     foreignPivotKey: resolvedForeignPivotKey,
     relatedPivotKey: resolvedRelatedPivotKey,

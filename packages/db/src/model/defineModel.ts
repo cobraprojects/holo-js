@@ -1,6 +1,7 @@
 import { registerDynamicRelation } from './dynamicRelations'
 import { withoutModelEvents, withoutModelGuards } from './eventState'
 import { ModelRepository } from './ModelRepository'
+import { registerGlobalModel } from './ModelRegistry'
 import { registerMorphModel } from './morphRegistry'
 import { setAutomaticEagerLoading, setPreventAccessingMissingAttributes, setPreventLazyLoading } from './runtimeSettings'
 import { resolveUniqueIdConfig, validateUniqueIdConfig } from './uniqueIds'
@@ -899,6 +900,7 @@ function createStaticModelApi<
     ;(model as Record<string, unknown>)[name] = (...args: readonly unknown[]) => scoped(model.query(), ...args)
   }
 
+  registerGlobalModel(model)
   registerMorphModel(definition.morphClass, model)
 
   return Object.freeze(model) as unknown as StaticModelApi<TTable, TScopes, TRelations>

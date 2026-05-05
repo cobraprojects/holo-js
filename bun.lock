@@ -79,6 +79,7 @@
         "@holo-js/cache": "^0.1.4",
         "@holo-js/cli": "workspace:*",
         "@holo-js/config": "workspace:*",
+        "@holo-js/core": "^0.1.4",
         "@holo-js/db": "workspace:*",
         "@holo-js/db-mysql": "^0.1.4",
         "@holo-js/db-postgres": "^0.1.4",
@@ -160,7 +161,7 @@
         "@holo-js/cache-db": "^0.1.4",
         "@holo-js/cli": "workspace:*",
         "@holo-js/config": "workspace:*",
-        "@holo-js/core": "workspace:*",
+        "@holo-js/core": "^0.1.4",
         "@holo-js/db": "workspace:*",
         "@holo-js/db-sqlite": "^0.1.4",
         "@holo-js/events": "^0.1.4",
@@ -252,6 +253,7 @@
         "@holo-js/cache": "^0.1.4",
         "@holo-js/cli": "workspace:*",
         "@holo-js/config": "workspace:*",
+        "@holo-js/core": "^0.1.4",
         "@holo-js/db": "workspace:*",
         "@holo-js/db-mysql": "^0.1.4",
         "@holo-js/db-postgres": "^0.1.4",
@@ -679,6 +681,7 @@
       "name": "@holo-js/db",
       "version": "0.1.4",
       "dependencies": {
+        "inflection": "catalog:",
         "ulid": "^3.0.1",
         "uuid": "^12.0.0",
       },
@@ -1075,6 +1078,7 @@
     "eslint": "^9.17.0",
     "fast-check": "^4.5.3",
     "globals": "^15.14.0",
+    "inflection": "^3.0.2",
     "ioredis": "^5.4.2",
     "mysql2": "^3.17.1",
     "nuxt": "^4.0.0",
@@ -2440,6 +2444,8 @@
     "impound": ["impound@1.1.5", "", { "dependencies": { "@jridgewell/trace-mapping": "^0.3.31", "es-module-lexer": "^2.0.0", "pathe": "^2.0.3", "unplugin": "^3.0.0", "unplugin-utils": "^0.3.1" } }, "sha512-5AUn+QE0UofqNHu5f2Skf6Svukdg4ehOIq8O0EtqIx4jta0CDZYBPqpIHt0zrlUTiFVYlLpeH39DoikXBjPKpA=="],
 
     "imurmurhash": ["imurmurhash@0.1.4", "", {}, "sha512-JmXMZ6wuvDmLiHEml9ykzqO6lwFbof0GG4IkcGaENdCRDDmMVnny7s5HsIgHCbaq0w2MyPhDqkhTUgS2LU2PHA=="],
+
+    "inflection": ["inflection@3.0.2", "", {}, "sha512-+Bg3+kg+J6JUWn8J6bzFmOWkTQ6L/NHfDRSYU+EVvuKHDxUDHAXgqixHfVlzuBQaPOTac8hn43aPhMNk6rMe3g=="],
 
     "inherits": ["inherits@2.0.4", "", {}, "sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ=="],
 

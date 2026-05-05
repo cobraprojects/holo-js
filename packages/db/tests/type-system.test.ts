@@ -16,15 +16,19 @@ import {
   unsafeSql,
   type TableQueryBuilder,
   type CursorPaginatedResult,
+  type EmptyScopeMap,
   type Entity,
+  type HasManyRelationDefinition,
   type InferInsert,
   type InferSelect,
   type InferUpdate,
   type MySQLAdapterOptions,
   type ModelCollection,
   type ModelQueryBuilder,
+  type ModelReference,
   type PaginatedResult,
   type PostgresAdapterOptions,
+  type RelationMap,
   type SimplePaginatedResult } from '../src'
 import type { AnyModelDefinition, BelongsToRelationDefinition, ModelRelationPath } from '../src/model/types'
 import { defineModelFromTable, defineTable } from './support/internal'
@@ -35,6 +39,35 @@ type IsEqual<A, B>
     : false
 
 type Assert<T extends true> = T
+
+const namedUsersTable = defineTable('named_users', {
+  id: column.id(),
+  name: column.string(),
+})
+
+const namedPostsTable = defineTable('named_posts', {
+  id: column.id(),
+  user_id: column.integer(),
+  title: column.string(),
+})
+
+interface NamedUserRelations extends RelationMap {
+  readonly posts: HasManyRelationDefinition<NamedPostModel>
+}
+
+interface NamedPostRelations extends RelationMap {
+  readonly user: BelongsToRelationDefinition<NamedUserModel>
+}
+
+type NamedUserModel = ModelReference<typeof namedUsersTable, EmptyScopeMap, NamedUserRelations>
+type NamedPostModel = ModelReference<typeof namedPostsTable, EmptyScopeMap, NamedPostRelations>
+
+declare module '../src' {
+  interface RegisteredModels {
+    NamedPost: NamedPostModel
+    NamedUser: NamedUserModel
+  }
+}
 
 describe('type system contracts', () => {
   it('infers schema select, insert, and update payloads from one schema definition', () => {
@@ -812,6 +845,33 @@ describe('type system contracts', () => {
       void jsonProfileBio
       void staticGetJsonName
     }
+  })
+
+  it('supports string relation targets for cross-file inverse relations', () => {
+    const NamedPost = defineModelFromTable(namedPostsTable, {
+      relations: {
+        user: belongsTo('NamedUser', 'user_id'),
+      },
+    })
+    const NamedUser = defineModelFromTable(namedUsersTable, {
+      relations: {
+        posts: hasMany('NamedPost', 'user_id'),
+      },
+    })
+
+    if (false) {
+      const query = NamedUser.with('posts.user')
+      type Result = NonNullable<Awaited<ReturnType<typeof query.first>>>
+      type LoadedPosts = Result['posts']
+      type LoadedUser = LoadedPosts[number]['user']
+      expectTypeOf<LoadedUser>().toMatchTypeOf<Entity<typeof namedUsersTable> | null>()
+
+      // @ts-expect-error string relation targets must match the registered model names
+      hasMany('MissingModel', 'user_id')
+    }
+
+    expectTypeOf(NamedUser.definition.relations.posts).toMatchTypeOf<HasManyRelationDefinition<NamedPostModel>>()
+    expectTypeOf(NamedPost.definition.relations.user).toMatchTypeOf<BelongsToRelationDefinition<NamedUserModel>>()
   })
 
   it('supports self-referential eager-load paths', () => {

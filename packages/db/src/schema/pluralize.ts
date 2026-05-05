@@ -1,13 +1,7 @@
+import { pluralize } from 'inflection'
+
 export function pluralizeTableName(word: string): string {
-  if (word.endsWith('y') && !/[aeiou]y$/i.test(word)) {
-    return `${word.slice(0, -1)}ies`
-  }
-
-  if (/(?:[sxz]|ch|sh)$/i.test(word)) {
-    return `${word}es`
-  }
-
-  return `${word}s`
+  return pluralize(word)
 }
 
 export function inferConstrainedTableName(columnName: string): string {

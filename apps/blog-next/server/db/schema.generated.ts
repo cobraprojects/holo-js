@@ -31,6 +31,16 @@ export const categories = defineGeneratedTable("categories", {
   "updated_at": column.timestamp().defaultNow(),
 })
 
+export const comments = defineGeneratedTable("comments", {
+  "id": column.id(),
+  "post_id": column.integer(),
+  "user_id": column.integer(),
+  "body": column.text(),
+  "status": column.string().default("pending"),
+  "created_at": column.timestamp().defaultNow(),
+  "updated_at": column.timestamp().defaultNow(),
+})
+
 export const emailVerificationTokens = defineGeneratedTable("email_verification_tokens", {
   "id": column.uuid().primaryKey(),
   "provider": column.string().default("users"),
@@ -134,6 +144,7 @@ declare module '@holo-js/db' {
     "_holo_migrations": typeof holoMigrations
     "auth_identities": typeof authIdentities
     "categories": typeof categories
+    "comments": typeof comments
     "email_verification_tokens": typeof emailVerificationTokens
     "notifications": typeof notifications
     "password_reset_tokens": typeof passwordResetTokens
@@ -146,6 +157,6 @@ declare module '@holo-js/db' {
   }
 }
 
-export const tables = { "_holo_migrations": holoMigrations, "auth_identities": authIdentities, "categories": categories, "email_verification_tokens": emailVerificationTokens, "notifications": notifications, "password_reset_tokens": passwordResetTokens, "personal_access_tokens": personalAccessTokens, "post_tags": postTags, "posts": posts, "sessions": sessions, "tags": tags, "users": users } as const
+export const tables = { "_holo_migrations": holoMigrations, "auth_identities": authIdentities, "categories": categories, "comments": comments, "email_verification_tokens": emailVerificationTokens, "notifications": notifications, "password_reset_tokens": passwordResetTokens, "personal_access_tokens": personalAccessTokens, "post_tags": postTags, "posts": posts, "sessions": sessions, "tags": tags, "users": users } as const
 
 registerGeneratedTables(tables)
