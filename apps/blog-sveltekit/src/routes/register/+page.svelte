@@ -26,7 +26,12 @@
   <form class="stack" on:submit={(event) => { event.preventDefault(); form.submit() }}>
     <label class="field">
       <span>Name</span>
-      <input name="name" bind:value={form.fields.name.value} on:blur={() => form.fields.name.onBlur()} />
+      <input
+        name="name"
+        value={form.values.name}
+        on:input={(event) => form.fields.name.onInput(event.currentTarget.value)}
+        on:blur={() => form.fields.name.onBlur()}
+      />
       {#if form.errors.has('name')}
         <span class="error">{form.errors.first('name')}</span>
       {/if}
@@ -34,7 +39,13 @@
 
     <label class="field">
       <span>Email</span>
-      <input name="email" type="email" bind:value={form.fields.email.value} on:blur={() => form.fields.email.onBlur()} />
+      <input
+        name="email"
+        type="email"
+        value={form.values.email}
+        on:input={(event) => form.fields.email.onInput(event.currentTarget.value)}
+        on:blur={() => form.fields.email.onBlur()}
+      />
       {#if form.errors.has('email')}
         <span class="error">{form.errors.first('email')}</span>
       {/if}
@@ -42,7 +53,13 @@
 
     <label class="field">
       <span>Password</span>
-      <input name="password" type="password" bind:value={form.fields.password.value} on:blur={() => form.fields.password.onBlur()} />
+      <input
+        name="password"
+        type="password"
+        value={form.values.password}
+        on:input={(event) => form.fields.password.onInput(event.currentTarget.value)}
+        on:blur={() => form.fields.password.onBlur()}
+      />
       {#if form.errors.has('password')}
         <span class="error">{form.errors.first('password')}</span>
       {/if}
@@ -53,7 +70,8 @@
       <input
         name="passwordConfirmation"
         type="password"
-        bind:value={form.fields.passwordConfirmation.value}
+        value={form.values.passwordConfirmation}
+        on:input={(event) => form.fields.passwordConfirmation.onInput(event.currentTarget.value)}
         on:blur={() => form.fields.passwordConfirmation.onBlur()}
       />
       {#if form.errors.has('passwordConfirmation')}

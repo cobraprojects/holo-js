@@ -80,7 +80,7 @@ function VerifyEmailPageContent() {
 
       {token.length > 0 ? (
         <form onSubmit={(event) => { event.preventDefault(); form.submit() }} style={{ display: 'grid', gap: '0.9rem' }}>
-          <input name="token" type="hidden" value={form.fields.token.value} />
+          <input name="token" type="hidden" value={form.values.token} />
           {form.errors.has('token') ? <span style={{ color: '#fca5a5' }}>{form.errors.first('token')}</span> : null}
           <button type="submit" disabled={form.submitting}>
             {form.submitting ? 'Verifying...' : 'Verify email'}

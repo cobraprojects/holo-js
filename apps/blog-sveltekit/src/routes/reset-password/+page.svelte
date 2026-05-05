@@ -24,11 +24,17 @@
 
   {#if data.token}
     <form class="stack" on:submit={(event) => { event.preventDefault(); form.submit() }}>
-      <input name="token" type="hidden" bind:value={form.fields.token.value} />
+      <input name="token" type="hidden" value={form.values.token} />
 
       <label class="field">
         <span>New password</span>
-        <input name="password" type="password" bind:value={form.fields.password.value} on:blur={() => form.fields.password.onBlur()} />
+        <input
+          name="password"
+          type="password"
+          value={form.values.password}
+          on:input={(event) => form.fields.password.onInput(event.currentTarget.value)}
+          on:blur={() => form.fields.password.onBlur()}
+        />
         {#if form.errors.has('password')}
           <span class="error">{form.errors.first('password')}</span>
         {/if}
@@ -39,7 +45,8 @@
         <input
           name="passwordConfirmation"
           type="password"
-          bind:value={form.fields.passwordConfirmation.value}
+          value={form.values.passwordConfirmation}
+          on:input={(event) => form.fields.passwordConfirmation.onInput(event.currentTarget.value)}
           on:blur={() => form.fields.passwordConfirmation.onBlur()}
         />
         {#if form.errors.has('passwordConfirmation')}

@@ -1,4 +1,4 @@
-import { onScopeDispose, shallowRef, watchEffect } from 'vue'
+import { onScopeDispose, reactive, shallowRef, watchEffect } from 'vue'
 import type { FormSchema, InferFormData } from '@holo-js/forms'
 import {
   type InferFormFieldTree,
@@ -17,8 +17,9 @@ export {
   type ValidateOnMode,
 } from '@holo-js/forms/client'
 
-type VersionRef = {
-  value: number
+type FormValuesBridge = {
+  readonly values: unknown
+  setValue(path: string, value: unknown): Promise<void>
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -29,64 +30,93 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
     && !(value instanceof Blob)
 }
 
-function createReactiveView<TValue extends object>(
-  targetRef: { value: TValue },
-  version: VersionRef,
-  cache: WeakMap<object, object>,
-): TValue {
-  const target = targetRef.value
-  const cached = cache.get(target)
+function isLeafValue(value: unknown): boolean {
+  return Array.isArray(value)
+    || value instanceof Date
+    || value instanceof Blob
+    || !isPlainObject(value)
+}
 
-  if (cached) {
-    return cached as TValue
+function getValueAtPath(root: unknown, path: string): unknown {
+  const parts = path.split('.').map(part => part.trim()).filter(Boolean)
+  let cursor = root
+
+  for (const part of parts) {
+    if (!isPlainObject(cursor) && !Array.isArray(cursor)) {
+      return undefined
+    }
+
+    cursor = (cursor as Record<string, unknown>)[part]
   }
 
-  const proxy = new Proxy({}, {
-    get(_shell, key) {
+  return cursor
+}
+
+function defineLeafAccessor(
+  target: Record<string, unknown>,
+  key: string,
+  path: string,
+  form: { value: FormValuesBridge },
+  version: { value: number },
+): void {
+  const descriptor = Object.getOwnPropertyDescriptor(target, key)
+  if (descriptor?.get && descriptor?.set) {
+    return
+  }
+
+  Object.defineProperty(target, key, {
+    enumerable: true,
+    configurable: true,
+    get() {
       void version.value
-      const currentTarget = targetRef.value
-      const value = Reflect.get(currentTarget as object, key)
-
-      if (typeof value === 'function') {
-        return value.bind(currentTarget)
-      }
-
-      if (isPlainObject(value)) {
-        return createReactiveView({ value: value as object }, version, cache)
-      }
-
-      return value
+      return getValueAtPath(form.value.values, path)
     },
-    set(_shell, key, value) {
-      const updated = Reflect.set(targetRef.value as object, key, value)
-      version.value += 1
-      return updated
-    },
-    ownKeys() {
-      void version.value
-      return Reflect.ownKeys(targetRef.value as object)
-    },
-    getOwnPropertyDescriptor(_shell, key) {
-      void version.value
-      const descriptor = Reflect.getOwnPropertyDescriptor(targetRef.value as object, key)
-
-      if (!descriptor) {
-        return undefined
-      }
-
-      return {
-        ...descriptor,
-        configurable: true,
-      }
-    },
-    has(_shell, key) {
-      void version.value
-      return Reflect.has(targetRef.value as object, key)
+    set(nextValue: unknown) {
+      void form.value.setValue(path, nextValue)
     },
   })
+}
 
-  cache.set(target, proxy)
-  return proxy as TValue
+function syncValuesView(
+  target: Record<string, unknown>,
+  source: unknown,
+  form: { value: FormValuesBridge },
+  version: { value: number },
+  prefix = '',
+): void {
+  if (!isPlainObject(source)) {
+    for (const key of Object.keys(target)) {
+      delete target[key]
+    }
+
+    return
+  }
+
+  for (const key of Object.keys(target)) {
+    if (!(key in source)) {
+      delete target[key]
+    }
+  }
+
+  for (const [key, item] of Object.entries(source)) {
+    const path = prefix ? `${prefix}.${key}` : key
+    const current = target[key]
+
+    if (isLeafValue(item)) {
+      if (isPlainObject(current)) {
+        delete target[key]
+      }
+
+      defineLeafAccessor(target, key, path, form, version)
+      continue
+    }
+
+    if (!isPlainObject(current)) {
+      target[key] = {}
+    }
+
+    syncValuesView(target[key] as Record<string, unknown>, item, form, version, path)
+  }
 }
 
 export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
@@ -95,13 +125,27 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
 ): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {
   const form = shallowRef(createForm(schemaDefinition, options))
   const version = shallowRef(0)
-  const cache = new WeakMap<object, object>()
+  let versionCounter = 0
+  const rawValues: Record<string, unknown> = {}
+  const values = reactive(rawValues) as InferFormData<TSchema>
+
+  const syncValuesFromForm = () => {
+    syncValuesView(
+      rawValues,
+      form.value.values,
+      form as { value: FormValuesBridge },
+      version,
+    )
+  }
+
   const stopWatching = watchEffect((onCleanup) => {
     form.value = createForm(schemaDefinition, options)
-    version.value += 1
+    syncValuesFromForm()
+    version.value = ++versionCounter
 
     const unsubscribe = form.value.subscribe(() => {
-      version.value += 1
+      syncValuesFromForm()
+      version.value = ++versionCounter
     })
 
     onCleanup(unsubscribe)
@@ -109,5 +153,48 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
 
   onScopeDispose(stopWatching)
 
-  return createReactiveView(form, version, cache)
+  return reactive({
+    get fields() {
+      void version.value
+      return form.value.fields
+    },
+    values,
+    get errors() {
+      void version.value
+      return form.value.errors
+    },
+    get submitting() {
+      void version.value
+      return form.value.submitting
+    },
+    get valid() {
+      void version.value
+      return form.value.valid
+    },
+    get lastSubmission() {
+      void version.value
+      return form.value.lastSubmission
+    },
+    subscribe(listener: () => void) {
+      return form.value.subscribe(listener)
+    },
+    async validate() {
+      return await form.value.validate()
+    },
+    async validateField(path: string) {
+      return await form.value.validateField(path)
+    },
+    async submit() {
+      return await form.value.submit()
+    },
+    reset(nextValues?: Partial<InferFormData<TSchema>>) {
+      form.value.reset(nextValues)
+    },
+    async setValue(path: string, value: unknown) {
+      await form.value.setValue(path, value)
+    },
+    applyServerState(result: ReturnType<UseFormResult<InferFormData<TSchema>, TSuccess>['applyServerState']>) {
+      return form.value.applyServerState(result)
+    },
+  }) as UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>>
 }

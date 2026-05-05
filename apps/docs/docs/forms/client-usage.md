@@ -53,7 +53,7 @@ export default function RegisterPage() {
     <form onSubmit={(event) => { event.preventDefault(); form.submit() }}>
       <input
         name="name"
-        value={form.fields.name.value}
+        value={form.values.name}
         onInput={(e) => form.fields.name.onInput(e.currentTarget.value)}
         onBlur={() => form.fields.name.onBlur()}
       />
@@ -61,7 +61,7 @@ export default function RegisterPage() {
 
       <input
         name="email"
-        value={form.fields.email.value}
+        value={form.values.email}
         onInput={(e) => form.fields.email.onInput(e.currentTarget.value)}
         onBlur={() => form.fields.email.onBlur()}
       />
@@ -94,10 +94,10 @@ const form = useForm(registerUser, {
 
 <template>
   <form @submit.prevent="form.submit()">
-    <input name="name" v-model="form.fields.name.value" @blur="form.fields.name.onBlur()" />
+    <input name="name" v-model="form.values.name" @blur="form.fields.name.onBlur()" />
     <p v-if="form.errors.has('name')">{{ form.errors.first('name') }}</p>
 
-    <input name="email" v-model="form.fields.email.value" @blur="form.fields.email.onBlur()" />
+    <input name="email" v-model="form.values.email" @blur="form.fields.email.onBlur()" />
     <p v-if="form.errors.has('email')">{{ form.errors.first('email') }}</p>
 
     <button :disabled="form.submitting">
@@ -126,12 +126,22 @@ const form = useForm(registerUser, {
 </script>
 
 <form onsubmit={(e) => { e.preventDefault(); form.submit() }}>
-  <input name="name" bind:value={form.fields.name.value} onblur={() => form.fields.name.onBlur()} />
+  <input
+    name="name"
+    value={form.values.name}
+    oninput={(event) => form.fields.name.onInput(event.currentTarget.value)}
+    onblur={() => form.fields.name.onBlur()}
+  />
   {#if form.errors.has('name')}
     <p>{form.errors.first('name')}</p>
   {/if}
 
-  <input name="email" bind:value={form.fields.email.value} onblur={() => form.fields.email.onBlur()} />
+  <input
+    name="email"
+    value={form.values.email}
+    oninput={(event) => form.fields.email.onInput(event.currentTarget.value)}
+    onblur={() => form.fields.email.onBlur()}
+  />
   {#if form.errors.has('email')}
     <p>{form.errors.first('email')}</p>
   {/if}
@@ -147,6 +157,9 @@ const form = useForm(registerUser, {
 ```
 
 :::
+
+With `validateOn: 'blur'`, calling `form.fields.name.onBlur()` validates that field path and updates that
+field's errors. It does not surface every other untouched field error in the form.
 
 ## What happens on failure
 
@@ -182,7 +195,7 @@ configureSecurityClient({
 `useForm(...)` exposes:
 
 ```ts
-form.fields.email.value       // current value
+form.values.email             // current value
 form.fields.email.errors      // field-level errors
 form.fields.email.touched     // has been interacted with
 form.fields.email.dirty       // differs from initial value
@@ -194,6 +207,10 @@ form.submitting               // true while submit is in flight
 form.valid                    // true when no errors
 form.lastSubmission           // last server response
 ```
+
+Use `form.values.email` as the field value source across frameworks.
+`form.fields.email.onBlur()` is still the blur/touched bridge for `validateOn: 'blur'`, and React/Svelte input
+handlers still call `form.fields.email.onInput(...)`.
 
 Manual validation:
 

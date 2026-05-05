@@ -56,7 +56,7 @@
 
   {#if data.token}
     <form class="stack" on:submit={(event) => { event.preventDefault(); form.submit() }}>
-      <input name="token" type="hidden" bind:value={form.fields.token.value} />
+      <input name="token" type="hidden" value={form.values.token} />
       {#if form.errors.has('token')}
         <span class="error">{form.errors.first('token')}</span>
       {/if}

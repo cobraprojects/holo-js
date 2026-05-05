@@ -466,6 +466,25 @@ function collectErrorsForPath(
     : []
 }
 
+function replaceErrorsForPath(
+  flattenedErrors: Record<string, readonly string[]>,
+  path: string,
+  nextErrors: Record<string, readonly string[]>,
+): Record<string, readonly string[]> {
+  const prefix = `${path}.`
+  const merged = Object.fromEntries(
+    Object.entries(flattenedErrors).filter(([key]) => key !== path && !key.startsWith(prefix)),
+  )
+
+  for (const [key, messages] of Object.entries(nextErrors)) {
+    if (key === path || key.startsWith(prefix)) {
+      merged[key] = messages
+    }
+  }
+
+  return merged
+}
+
 function buildFieldsTree<TData>(
   state: MutableState<TData, unknown>,
   schemaDefinition: FormSchema,
@@ -514,7 +533,11 @@ function buildFieldsTree<TData>(
         state.touched.add(path)
         if (validateOn === 'blur') {
           const submission = await validateClientValues(state.values, schemaDefinition) as FormSubmissionResult<TData>
-          state.flattenedErrors = submission.errors.flatten()
+          state.flattenedErrors = replaceErrorsForPath(
+            state.flattenedErrors,
+            path,
+            submission.errors.flatten(),
+          )
         }
 
         notifyListeners(state)

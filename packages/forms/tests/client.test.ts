@@ -268,9 +268,33 @@ describe('@holo-js/forms client', () => {
     await blurClient.fields.profile.city.onBlur()
     expect(blurClient.fields.profile.city.touched).toBe(true)
     expect(blurClient.errors.first('profile.city')).toBe('This field is required.')
+    expect(blurClient.errors.first('email')).toBeUndefined()
 
     const emailErrors = await blurClient.fields.email.validate()
     expect(emailErrors).toEqual([])
+  })
+
+  it('keeps untouched field errors hidden when blur validation runs', async () => {
+    const registerUser = schema({
+      name: field.string().required(),
+      email: field.string().required().email(),
+      password: field.string().required().min(8),
+    })
+
+    const client = useForm(registerUser, {
+      initialValues: {
+        name: '',
+        email: '',
+        password: '',
+      },
+      validateOn: 'blur',
+    })
+
+    await client.fields.name.onBlur()
+
+    expect(client.errors.first('name')).toBe('This field is required.')
+    expect(client.errors.first('email')).toBeUndefined()
+    expect(client.errors.first('password')).toBeUndefined()
   })
 
   it('validates, resets, and preserves local failure state on submit', async () => {

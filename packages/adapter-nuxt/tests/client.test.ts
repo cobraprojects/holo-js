@@ -22,6 +22,9 @@ describe('@holo-js/adapter-nuxt client', () => {
           ;(globalThis as unknown as { __holoNuxtClientDisposed?: boolean }).__holoNuxtClientDisposed = true
         }
       },
+      reactive<TValue extends object>(value: TValue) {
+        return value
+      },
       shallowRef<TValue>(value: TValue) {
         return { value }
       },
@@ -59,6 +62,9 @@ describe('@holo-js/adapter-nuxt client', () => {
   it('exposes nested keys that are added after the wrapper is created', async () => {
     vi.doMock('vue', () => ({
       onScopeDispose() {},
+      reactive<TValue extends object>(value: TValue) {
+        return value
+      },
       shallowRef<TValue>(value: TValue) {
         return { value }
       },
@@ -97,6 +103,9 @@ describe('@holo-js/adapter-nuxt client', () => {
   it('returns undefined descriptors for missing proxy keys', async () => {
     vi.doMock('vue', () => ({
       onScopeDispose() {},
+      reactive<TValue extends object>(value: TValue) {
+        return value
+      },
       shallowRef<TValue>(value: TValue) {
         return { value }
       },
@@ -126,6 +135,9 @@ describe('@holo-js/adapter-nuxt client', () => {
   it('preserves array and date values as native objects through the proxy', async () => {
     vi.doMock('vue', () => ({
       onScopeDispose() {},
+      reactive<TValue extends object>(value: TValue) {
+        return value
+      },
       shallowRef<TValue>(value: TValue) {
         return { value }
       },
@@ -163,6 +175,9 @@ describe('@holo-js/adapter-nuxt client', () => {
 
     vi.doMock('vue', () => ({
       onScopeDispose() {},
+      reactive<TValue extends object>(value: TValue) {
+        return value
+      },
       shallowRef<TValue>(value: TValue) {
         return { value }
       },
@@ -204,5 +219,44 @@ describe('@holo-js/adapter-nuxt client', () => {
     rerunEffect()
 
     expect(form.values.email).toBe('nora@example.com')
+  })
+
+  it('returns Vue-reactive form state for v-model bindings', async () => {
+    const reactiveCalls: unknown[] = []
+
+    vi.doMock('vue', () => ({
+      onScopeDispose() {},
+      reactive<TValue extends object>(value: TValue) {
+        reactiveCalls.push(value)
+        return value
+      },
+      shallowRef<TValue>(value: TValue) {
+        return { value }
+      },
+      watchEffect(effect: (onCleanup: (cleanup: () => void) => void) => void) {
+        let cleanup: (() => void) | undefined
+        effect((nextCleanup) => {
+          cleanup = nextCleanup
+        })
+        return () => cleanup?.()
+      },
+    }))
+
+    const { useForm } = await import('../src/runtime/composables/forms')
+    const login = schema({
+      email: field.string().required().email(),
+    })
+
+    const form = useForm(login, {
+      initialValues: {
+        email: '',
+      },
+    })
+
+    expect(reactiveCalls.length).toBeGreaterThan(0)
+
+    form.values.email = 'ava@example.com'
+
+    expect(form.fields.email.value).toBe('ava@example.com')
   })
 })

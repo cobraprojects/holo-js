@@ -28,19 +28,19 @@ const form = useForm(registerForm, {
     <form class="stack" @submit.prevent="form.submit()">
       <label class="field">
         <span>Name</span>
-        <input name="name" v-model="form.fields.name.value" @blur="form.fields.name.onBlur()" />
+        <input name="name" v-model="form.values.name" @blur="form.fields.name.onBlur()" />
         <span v-if="form.errors.has('name')" class="error">{{ form.errors.first('name') }}</span>
       </label>
 
       <label class="field">
         <span>Email</span>
-        <input name="email" type="email" v-model="form.fields.email.value" @blur="form.fields.email.onBlur()" />
+        <input name="email" type="email" v-model="form.values.email" @blur="form.fields.email.onBlur()" />
         <span v-if="form.errors.has('email')" class="error">{{ form.errors.first('email') }}</span>
       </label>
 
       <label class="field">
         <span>Password</span>
-        <input name="password" type="password" v-model="form.fields.password.value" @blur="form.fields.password.onBlur()" />
+        <input name="password" type="password" v-model="form.values.password" @blur="form.fields.password.onBlur()" />
         <span v-if="form.errors.has('password')" class="error">{{ form.errors.first('password') }}</span>
       </label>
 
@@ -49,7 +49,7 @@ const form = useForm(registerForm, {
         <input
           name="passwordConfirmation"
           type="password"
-          v-model="form.fields.passwordConfirmation.value"
+          v-model="form.values.passwordConfirmation"
           @blur="form.fields.passwordConfirmation.onBlur()"
         />
         <span v-if="form.errors.has('passwordConfirmation')" class="error">{{ form.errors.first('passwordConfirmation') }}</span>

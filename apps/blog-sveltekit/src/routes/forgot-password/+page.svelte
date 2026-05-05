@@ -21,7 +21,13 @@
   <form class="stack" on:submit={(event) => { event.preventDefault(); form.submit() }}>
     <label class="field">
       <span>Email</span>
-      <input name="email" type="email" bind:value={form.fields.email.value} on:blur={() => form.fields.email.onBlur()} />
+      <input
+        name="email"
+        type="email"
+        value={form.values.email}
+        on:input={(event) => form.fields.email.onInput(event.currentTarget.value)}
+        on:blur={() => form.fields.email.onBlur()}
+      />
       {#if form.errors.has('email')}
         <span class="error">{form.errors.first('email')}</span>
       {/if}

@@ -44,7 +44,7 @@ export default function RegisterPage() {
           <span>Name</span>
           <input
             name="name"
-            value={form.fields.name.value}
+            value={form.values.name}
             onInput={(event) => form.fields.name.onInput(event.currentTarget.value)}
             onBlur={() => form.fields.name.onBlur()}
           />
@@ -56,7 +56,7 @@ export default function RegisterPage() {
           <input
             name="email"
             type="email"
-            value={form.fields.email.value}
+            value={form.values.email}
             onInput={(event) => form.fields.email.onInput(event.currentTarget.value)}
             onBlur={() => form.fields.email.onBlur()}
           />
@@ -68,7 +68,7 @@ export default function RegisterPage() {
           <input
             name="password"
             type="password"
-            value={form.fields.password.value}
+            value={form.values.password}
             onInput={(event) => form.fields.password.onInput(event.currentTarget.value)}
             onBlur={() => form.fields.password.onBlur()}
           />
@@ -80,7 +80,7 @@ export default function RegisterPage() {
           <input
             name="passwordConfirmation"
             type="password"
-            value={form.fields.passwordConfirmation.value}
+            value={form.values.passwordConfirmation}
             onInput={(event) => form.fields.passwordConfirmation.onInput(event.currentTarget.value)}
             onBlur={() => form.fields.passwordConfirmation.onBlur()}
           />

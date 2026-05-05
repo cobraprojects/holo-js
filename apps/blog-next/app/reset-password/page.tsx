@@ -45,14 +45,14 @@ function ResetPasswordPageContent() {
 
       {token.length > 0 ? (
         <form onSubmit={(event) => { event.preventDefault(); form.submit() }} style={{ display: 'grid', gap: '0.9rem' }}>
-          <input name="token" type="hidden" value={form.fields.token.value} />
+          <input name="token" type="hidden" value={form.values.token} />
 
           <label style={{ display: 'grid', gap: '0.35rem' }}>
             <span>New password</span>
             <input
               name="password"
               type="password"
-              value={form.fields.password.value}
+              value={form.values.password}
               onInput={(event) => form.fields.password.onInput(event.currentTarget.value)}
               onBlur={() => form.fields.password.onBlur()}
             />
@@ -64,7 +64,7 @@ function ResetPasswordPageContent() {
             <input
               name="passwordConfirmation"
               type="password"
-              value={form.fields.passwordConfirmation.value}
+              value={form.values.passwordConfirmation}
               onInput={(event) => form.fields.passwordConfirmation.onInput(event.currentTarget.value)}
               onBlur={() => form.fields.passwordConfirmation.onBlur()}
             />
