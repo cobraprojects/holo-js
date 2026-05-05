@@ -237,3 +237,12 @@ export async function updatePost(id: number, input: { title: string, excerpt?: s
 export async function deletePost(id: number) {
   await Post.delete(id)
 }
+
+export type HomePageData = Awaited<ReturnType<typeof getHomePageData>>
+export type PublishedPostsData = Awaited<ReturnType<typeof getPublishedPosts>>
+export type CategoryArchiveData = Awaited<ReturnType<typeof getCategoryArchive>>
+export type TagArchiveData = Awaited<ReturnType<typeof getTagArchive>>
+export type AdminPostsData = Awaited<ReturnType<typeof getAdminPostsData>>
+export type AdminPostData = Awaited<ReturnType<typeof getAdminPostById>>
+export type AdminCategoriesData = Awaited<ReturnType<typeof getAdminCategoriesData>>
+export type AdminTagsData = Awaited<ReturnType<typeof getAdminTagsData>>

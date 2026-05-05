@@ -27,7 +27,6 @@ Use `make:model` when you want the model scaffold and optional companion files c
 model folders are supported.
 
 ```ts
-import '../db/schema.generated'
 import { defineModel } from '@holo-js/db'
 
 const User = defineModel('users', {
@@ -51,7 +50,7 @@ server/api/users/index.get.ts
 The flow is:
 
 1. migrations define or change the table
-2. `npx holo migrate` refreshes `server/db/schema.generated.ts`
+2. `npx holo migrate` refreshes the internal generated schema metadata under `.holo-js/generated`
 3. model files define behavior
 4. API routes or server services call the model
 

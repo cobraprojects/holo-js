@@ -1,3 +1,4 @@
+import '../.holo-js/generated/schema.generated'
 import type {
   BelongsToManyRelationDefinition,
   BelongsToRelationDefinition,

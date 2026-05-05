@@ -54,7 +54,7 @@ export function resolveGeneratedModelTable(tableName: string): TableDefinition {
   const table = getGeneratedTableDefinition(tableName)
   if (!table) {
     throw new SchemaError(
-      `Model "${tableName}" is not present in the generated schema registry. Import your generated schema module and run "holo migrate" to refresh it.`,
+      `Model "${tableName}" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.`,
     )
   }
 

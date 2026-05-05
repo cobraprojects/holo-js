@@ -1110,7 +1110,7 @@ describe('native schema core', () => {
       onUpdate: 'cascade' })
   })
 
-  it('covers the direct foreignId column helper surface', () => {
+  it('covers pluralization for direct foreignId column helper (irregular and compound forms)', () => {
     const memberships = defineTable('memberships', {
       team_id: column.foreignId().constrained().cascadeOnDelete().restrictOnUpdate(),
       category_id: column.foreignId().constrained(),

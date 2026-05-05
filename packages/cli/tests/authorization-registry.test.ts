@@ -23,6 +23,7 @@ async function createProject(withAuthorizationFiles = false): Promise<string> {
   await mkdir(join(root, 'server/policies/posts'), { recursive: true })
   await mkdir(join(root, 'server/abilities'), { recursive: true })
   await mkdir(join(root, 'server/db'), { recursive: true })
+  await mkdir(join(root, '.holo-js/generated'), { recursive: true })
 
   await writeFile(join(root, 'package.json'), JSON.stringify({
     name: 'authorization-registry-fixture',
@@ -31,7 +32,7 @@ async function createProject(withAuthorizationFiles = false): Promise<string> {
   }, null, 2))
   await writeFile(join(root, 'config/app.ts'), 'export default {}', 'utf8')
   await writeFile(join(root, 'config/database.ts'), 'export default {}', 'utf8')
-  await writeFile(join(root, 'server/db/schema.generated.ts'), renderGeneratedSchemaPlaceholder(), 'utf8')
+  await writeFile(join(root, '.holo-js/generated/schema.generated.ts'), renderGeneratedSchemaPlaceholder(), 'utf8')
   await writeFile(join(root, 'config/auth.ts'), `
 import { defineAuthConfig } from '@holo-js/config'
 
@@ -282,7 +283,7 @@ describe('@holo-js/cli authorization registry discovery', () => {
         channels: 'server/channels',
         authorizationPolicies: 'server/policies',
         authorizationAbilities: 'server/abilities',
-        generatedSchema: 'server/db/schema.generated.ts',
+        generatedSchema: '.holo-js/generated/schema.generated.ts',
       },
       models: [],
       migrations: [],

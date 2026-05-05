@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import type { AdminPostData } from '../../../../server/lib/blog'
+
 const route = useRoute()
-const { data } = await useFetch(`/api/admin/posts/${route.params.id}`)
+const { data } = await useFetch<AdminPostData>(`/api/admin/posts/${route.params.id}`)
 const selectedTagIds = computed(() => new Set((data.value?.post?.tags ?? []).map(tag => tag.id)))
 
 if (!data.value) {

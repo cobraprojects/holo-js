@@ -366,14 +366,14 @@ export default defineDatabaseConfig({
     expect(addServerImportsDir).toHaveBeenCalledTimes(2)
     expect(addServerPlugin).toHaveBeenCalledWith(resolve(root, '.holo-js/generated/nuxt-server-imports/plugin.ts'))
     expect(await readFile(join(root, '.holo-js/generated/nuxt-server-imports/models.ts'), 'utf8')).toBe([
-      "import '../../../server/db/schema.generated'",
+      "import '../schema.generated'",
       '',
       "export { default as Admin } from '../../../server/models/Admin'",
       "export { default as User } from '../../../server/models/User'",
       '',
     ].join('\n'))
     expect(await readFile(join(root, '.holo-js/generated/nuxt-server-imports/plugin.ts'), 'utf8')).toBe([
-      "import '../../../server/db/schema.generated'",
+      "import '../schema.generated'",
       "import './models'",
       '',
       'export default () => {}',
@@ -549,7 +549,7 @@ export default defineStorageConfig({
         paths: {
           models: 'server/models',
           migrations: 'server/db/migrations',
-          generatedSchema: 'server/db/schema.generated.ts',
+          generatedSchema: '.holo-js/generated/schema.generated.ts',
           seeders: 'server/db/seeders',
           observers: 'server/observers',
           factories: 'server/db/factories',

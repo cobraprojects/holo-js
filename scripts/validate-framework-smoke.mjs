@@ -2078,7 +2078,7 @@ async function validateFrameworkApp(app) {
   await cleanupAppStorage(app)
   await runCommand(app.cwd, 'bunx', ['holo', 'prepare'], env)
   await runCommand(app.cwd, 'bunx', ['holo', 'migrate:fresh', '--seed', '--force'], env)
-  assert.equal(await pathExists(join(app.cwd, 'server/db/schema.generated.ts')), true)
+  assert.equal(await pathExists(join(app.cwd, '.holo-js/generated/schema.generated.ts')), true)
 
   await runCommand(app.cwd, 'bun', ['run', 'config:cache'], env)
   const cachePath = join(app.cwd, '.holo-js/generated/config-cache.json')

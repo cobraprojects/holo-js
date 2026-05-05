@@ -89,7 +89,6 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
       await symlink(resolve(packageDir, '../db/node_modules/@types/pg'), join(tempRootTypes, 'pg'))
       await symlink(resolve(packageDir, '../db/node_modules/tsup'), join(tempRootNodeModules, 'tsup'))
       await symlink(resolve(repoRoot, 'node_modules/typescript'), join(tempRootNodeModules, 'typescript'))
-      await symlink(resolve(repoRoot, 'node_modules/.bun/node_modules/bullmq'), join(tempRootNodeModules, 'bullmq'))
       await symlink(resolve(packageDir, 'node_modules/@nuxt'), join(tempRootNodeModules, '@nuxt'))
       await symlink(nitropackPackageDir, join(tempRootNodeModules, 'nitropack'))
       await linkInstalledDependenciesForPackage({

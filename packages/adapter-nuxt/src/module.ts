@@ -203,7 +203,7 @@ type ServerModelImportArtifacts = {
 
 async function createServerModelImports(sourceDir: string): Promise<ServerModelImportArtifacts | null> {
   const modelsDir = resolve(sourceDir, 'server/models')
-  const generatedSchemaPath = resolve(sourceDir, 'server/db/schema.generated.ts')
+  const generatedSchemaPath = resolve(sourceDir, '.holo-js/generated/schema.generated.ts')
   const modelImportDir = resolve(sourceDir, '.holo-js/generated/nuxt-server-imports')
   const modelImportFile = resolve(modelImportDir, 'models.ts')
   const modelPluginFile = resolve(modelImportDir, 'plugin.ts')
