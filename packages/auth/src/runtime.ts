@@ -882,6 +882,13 @@ function buildLogoutCookies(
   return Object.freeze([...new Set(cookies)])
 }
 
+function forgetDefaultRememberCookie(bindings: RuntimeBindings): string | undefined {
+  const rememberCookie = parseSetCookieDefinition(bindings.session.rememberMeCookie(''))
+  return rememberCookie
+    ? forgetCookie(bindings, rememberCookie.name, rememberCookie.options)
+    : undefined
+}
+
 async function resolveRequestCookie(
   bindings: RuntimeBindings,
   name: string,
@@ -1745,6 +1752,7 @@ async function loginForGuard(guardName: string, credentials: AuthCredentials): P
   }
 
   const serialized = serializeUser(adapter, user, guard.provider)
+  await hydrateGuardContextFromRequest(guardName)
   return establishSessionForUser(serialized, {
     guard: guardName,
     provider: guard.provider,
@@ -1971,6 +1979,7 @@ async function loginUsingForGuard(
   const resolved = await resolveTrustedUserForGuard(guardName, user)
   const serialized = serializeUser(resolved.adapter, resolved.user, resolved.provider)
 
+  await hydrateGuardContextFromRequest(guardName)
   return establishSessionForUser(serialized, {
     guard: guardName,
     provider: resolved.provider,
@@ -2346,6 +2355,14 @@ async function establishSessionForUser(
     && options.preserveRemember
     && !options.remember
   )
+  const shouldClearRememberCookie = !!(
+    !options.remember
+    && !preserveRememberSession
+    && (
+      existingSession?.rememberTokenHash
+      || bindings.context.getRememberToken?.(options.guard)
+    )
+  )
   const session = rotateCurrentGuardSession
     ? await bindings.session.create({
       data: nextSessionData,
@@ -2379,6 +2396,9 @@ async function establishSessionForUser(
   const cookies = [
     bindings.session.sessionCookie(session.id),
     ...(rememberToken ? [bindings.session.rememberMeCookie(rememberToken)] : []),
+    ...(!rememberToken && shouldClearRememberCookie
+      ? [forgetDefaultRememberCookie(bindings)].filter((cookie): cookie is string => typeof cookie === 'string')
+      : []),
   ]
 
   return Object.freeze({

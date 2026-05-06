@@ -1151,10 +1151,50 @@ describe('@holo-js/auth package runtime', () => {
     }))
 
     const nextRecord = runtime.sessionStore.records.get(loggedInAgain.sessionId)
-    expect(loggedInAgain.cookies).toHaveLength(1)
+    expect(loggedInAgain.cookies).toHaveLength(2)
     expect(loggedInAgain.rememberToken).toBeUndefined()
+    expect(loggedInAgain.cookies).toContainEqual(expect.stringContaining('holo_session_remember=;'))
     expect(runtime.context.getRememberToken?.('web')).toBeUndefined()
     expect(nextRecord?.rememberTokenHash).toBeUndefined()
+  })
+
+  it('hydrates remember-me cookies before normal login and clears remembered state when opting out', async () => {
+    const runtime = configureRuntime()
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date(),
+    })
+
+    const remembered = unwrapAuthResult(await login({
+      email: 'ava@example.com',
+      password: 'secret-secret',
+      remember: true,
+    }))
+    expect(remembered.rememberToken).toBeTypeOf('string')
+
+    const currentBindings = authRuntimeInternals.getRuntimeBindings()
+    configureAuthRuntime({
+      ...currentBindings,
+      context: {
+        ...authRuntimeInternals.createMemoryAuthContext(),
+        getRequestCookie(name: string) {
+          return name === 'holo_session_remember' ? remembered.rememberToken : undefined
+        },
+      },
+    })
+
+    const loggedInAgain = unwrapAuthResult(await login({
+      email: 'ava@example.com',
+      password: 'secret-secret',
+    }))
+
+    expect(runtime.sessionStore.records.has(remembered.sessionId)).toBe(false)
+    expect(runtime.sessionStore.records.get(loggedInAgain.sessionId)?.rememberTokenHash).toBeUndefined()
+    expect(loggedInAgain.rememberToken).toBeUndefined()
+    expect(loggedInAgain.cookies).toContainEqual(expect.stringContaining('holo_session_remember=;'))
   })
 
   it('supports impersonation across guards and removes the impersonated guard on stop', async () => {
