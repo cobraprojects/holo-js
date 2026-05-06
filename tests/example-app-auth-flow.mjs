@@ -45,6 +45,13 @@ function createCookieJar() {
     header() {
       return [...cookies.entries()].map(([name, value]) => `${name}=${value}`).join('; ')
     },
+    headerExcept(excludedNames) {
+      const excluded = new Set(excludedNames)
+      return [...cookies.entries()]
+        .filter(([name]) => !excluded.has(name))
+        .map(([name, value]) => `${name}=${value}`)
+        .join('; ')
+    },
   }
 }
 
@@ -344,6 +351,60 @@ export async function assertExampleAppAuthFlow({
   const authenticatedSessionCookie = authenticatedJar.header()
   assert.ok(authenticatedSessionCookie.length > 0)
   assert.match(authenticatedSessionCookie, new RegExp(`(?:^|;\\s*)${escapeRegExp(sessionCookieName)}=`))
+
+  const rememberCookieName = `${sessionCookieName}_remember`
+  const rememberedJar = createCookieJar()
+  const rememberedLogin = await fetchAuthJson('/api/login', {
+    fields: {
+      email,
+      password,
+      remember: true,
+    },
+    headers: {
+      'x-forwarded-for': '127.0.0.222',
+      'x-real-ip': '127.0.0.222',
+    },
+    jar: rememberedJar,
+  })
+  assert.equal(rememberedLogin.json.ok, true)
+  assert.equal(rememberedLogin.json.data?.redirectTo, '/admin')
+  assert.ok(listSetCookieHeaders(rememberedLogin.response).some(cookie => cookie.startsWith(`${rememberCookieName}=`)))
+
+  const rememberOnlyCookie = rememberedJar.headerExcept([sessionCookieName])
+  assert.match(rememberOnlyCookie, new RegExp(`(?:^|;\\s*)${escapeRegExp(rememberCookieName)}=`))
+
+  const rememberedUser = await fetchAuthJson('/api/auth/user', {
+    headers: {
+      cookie: rememberOnlyCookie,
+    },
+  })
+  assert.equal(rememberedUser.json.authenticated, true)
+  assert.equal(rememberedUser.json.guard, 'web')
+  assert.equal(rememberedUser.json.user?.email, email)
+
+  const optOutLogin = await fetchAuthJson('/api/login', {
+    fields: {
+      email,
+      password,
+    },
+    headers: {
+      'x-forwarded-for': '127.0.0.223',
+      'x-real-ip': '127.0.0.223',
+    },
+    jar: rememberedJar,
+  })
+  assert.equal(optOutLogin.json.ok, true)
+  assert.ok(listSetCookieHeaders(optOutLogin.response).some(cookie => cookie.startsWith(`${rememberCookieName}=;`)))
+  assert.doesNotMatch(rememberedJar.header(), new RegExp(`(?:^|;\\s*)${escapeRegExp(rememberCookieName)}=`))
+
+  const staleRememberUser = await fetchAuthJson('/api/auth/user', {
+    headers: {
+      cookie: rememberOnlyCookie,
+    },
+  })
+  assert.equal(staleRememberUser.json.authenticated, false)
+  assert.equal(staleRememberUser.json.guard, 'web')
+  assert.equal(staleRememberUser.json.user, null)
 
   const loggedOut = await fetchAuthJson('/api/logout', {
     method: 'POST',
