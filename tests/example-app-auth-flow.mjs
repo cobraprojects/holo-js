@@ -133,12 +133,12 @@ async function waitForOutputMatch(getOutput, matcher, startIndex = 0, timeoutMs 
 }
 
 const authTokenPattern = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[A-Za-z0-9_-]+)/i
-const sessionCookieName = 'holo_session'
 
 export async function assertExampleAppAuthFlow({
   baseUrl,
   getOutput,
   appName,
+  sessionCookieName,
   checkPages = true,
 }) {
   const email = `${appName}-${Date.now()}@app.test`

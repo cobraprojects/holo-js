@@ -6,6 +6,7 @@ import { get } from 'node:http'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { DEFAULT_SESSION_COOKIE_NAME } from '@holo-js/config'
 import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
 
 const cwd = process.cwd()
@@ -218,6 +219,7 @@ try {
     baseUrl: `http://localhost:${port}`,
     getOutput: () => capturedOutput,
     appName: 'blog-nuxt',
+    sessionCookieName: DEFAULT_SESSION_COOKIE_NAME,
   })
 
   await writeFile(configPath, originalConfig.replace("name: env('APP_NAME', 'blog-nuxt')", "name: env('APP_NAME', 'blog-nuxt-updated')"))

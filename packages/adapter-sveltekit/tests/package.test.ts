@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 describe('@holo-js/adapter-sveltekit package boundaries', () => {
-  it('keeps the forms client surface as an optional peer', async () => {
+  it('keeps forms and auth client surfaces on the correct dependency boundaries', async () => {
     const packageJsonPath = resolve(import.meta.dirname, '../package.json')
     const clientEntryPath = resolve(import.meta.dirname, '../src/client.ts')
     const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8')) as {

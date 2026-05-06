@@ -1,3 +1,4 @@
+import { getContext, setContext } from 'svelte'
 import { createSubscriber } from 'svelte/reactivity'
 import { refreshUser as refreshCurrentUser } from '@holo-js/auth/client'
 import type { AuthClientRequestOptions, HoloAuthUser } from '@holo-js/auth/client'
@@ -28,6 +29,33 @@ export type UseAuthResult = {
   readonly authenticated: boolean
   readonly user: HoloAuthUser | null
   readonly refreshUser: () => Promise<HoloAuthUser | null>
+}
+
+const authContextKey = Symbol('holo-js.auth.client')
+
+export function setAuthContext(auth: UseAuthResult): UseAuthResult {
+  setContext(authContextKey, auth)
+  return auth
+}
+
+export function getAuthContext(): UseAuthResult | undefined {
+  return getContext<UseAuthResult | undefined>(authContextKey)
+}
+
+function tryGetAuthContext(): UseAuthResult | undefined {
+  try {
+    return getAuthContext()
+  } catch {
+    return undefined
+  }
+}
+
+function trySetAuthContext(auth: UseAuthResult): void {
+  try {
+    setAuthContext(auth)
+  } catch {
+    // Outside component initialization there is no Svelte context to attach.
+  }
 }
 
 class AuthClientState implements UseAuthResult {
@@ -67,10 +95,18 @@ class AuthClientState implements UseAuthResult {
   }
 }
 
-export function useAuth(options: UseAuthOptions = {}): UseAuthResult {
-  const { initialUser = null, ...requestOptions } = options
+export function useAuth(options?: UseAuthOptions): UseAuthResult {
+  const context = tryGetAuthContext()
+  if (!options && context) {
+    return context
+  }
 
-  return new AuthClientState(initialUser, requestOptions)
+  const resolvedOptions = options ?? {}
+  const { initialUser = null, ...requestOptions } = resolvedOptions
+  const auth = new AuthClientState(initialUser, requestOptions)
+
+  trySetAuthContext(auth)
+  return auth
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

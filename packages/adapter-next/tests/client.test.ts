@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { field, schema } from '@holo-js/forms'
 
 type MockReactContext<TValue> = {
-  value: TValue
+  currentRenderValue: TValue
   readonly Provider: (props: { readonly value: TValue, readonly children?: unknown }) => unknown
 }
 
@@ -10,9 +10,9 @@ function createReactMock(overrides: Readonly<Record<string, unknown>>): Readonly
   return {
     createContext<TValue>(defaultValue: TValue): MockReactContext<TValue> {
       const context: MockReactContext<TValue> = {
-        value: defaultValue,
+        currentRenderValue: defaultValue,
         Provider({ value, children }) {
-          context.value = value
+          context.currentRenderValue = value
           return children
         },
       }
@@ -30,7 +30,7 @@ function createReactMock(overrides: Readonly<Record<string, unknown>>): Readonly
       return { type, props, children }
     },
     useContext<TValue>(context: MockReactContext<TValue>): TValue {
-      return context.value
+      return context.currentRenderValue
     },
     ...overrides,
   }
@@ -172,7 +172,7 @@ describe('@holo-js/adapter-next client', () => {
     const { useAuth } = await import('../src/client')
 
     useAuth()
-    await Promise.resolve()
+    await new Promise<void>(resolve => setImmediate(resolve))
 
     expect(hookState).toEqual(refreshedUser)
   })

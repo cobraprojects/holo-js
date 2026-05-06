@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { field, schema } from '@holo-js/forms'
 
+const subscriberCleanups: Array<() => void> = []
+
+function cleanupSubscribers(): void {
+  for (const cleanup of subscriberCleanups.splice(0)) {
+    cleanup()
+  }
+}
+
 vi.mock('svelte/reactivity', () => ({
   createSubscriber(start: (update: () => void) => void | (() => void)) {
     let initialized = false
@@ -8,7 +16,9 @@ vi.mock('svelte/reactivity', () => ({
     return () => {
       if (!initialized) {
         const cleanup = start(() => {})
-        cleanup?.()
+        if (cleanup) {
+          subscriberCleanups.push(cleanup)
+        }
         initialized = true
       }
     }
@@ -17,9 +27,11 @@ vi.mock('svelte/reactivity', () => ({
 
 describe('@holo-js/adapter-sveltekit client', () => {
   afterEach(() => {
+    cleanupSubscribers()
     vi.resetModules()
     vi.clearAllMocks()
     vi.doUnmock('@holo-js/auth/client')
+    vi.doUnmock('svelte')
   })
 
   it('exposes current user state through the auth client helper', async () => {
@@ -44,8 +56,35 @@ describe('@holo-js/adapter-sveltekit client', () => {
 
     expect(auth.authenticated).toBe(true)
     expect(auth.user?.email).toBe('ava@example.com')
+    cleanupSubscribers()
     await expect(auth.refreshUser()).resolves.toEqual(refreshedUser)
     expect(auth.user).toEqual(refreshedUser)
+  })
+
+  it('shares auth state through Svelte context when called without options', async () => {
+    let contextValue: unknown
+
+    vi.doMock('svelte', () => ({
+      getContext: vi.fn(() => contextValue),
+      setContext: vi.fn((_key: symbol, value: unknown) => {
+        contextValue = value
+        return value
+      }),
+    }))
+    vi.doMock('@holo-js/auth/client', () => ({
+      refreshUser: vi.fn(async () => null),
+    }))
+
+    const { useAuth } = await import('../src/client')
+    const auth = useAuth({
+      initialUser: {
+        id: 1,
+        email: 'ava@example.com',
+        name: 'Ava',
+      },
+    })
+
+    expect(useAuth()).toBe(auth)
   })
 
   it('allows refresh before Svelte subscribes to auth state', async () => {
@@ -63,6 +102,18 @@ describe('@holo-js/adapter-sveltekit client', () => {
     })
 
     await expect(auth.refreshUser()).resolves.toBeNull()
+    expect(auth.user).toBeNull()
+  })
+
+  it('creates guest auth state when no options are provided', async () => {
+    vi.doMock('@holo-js/auth/client', () => ({
+      refreshUser: vi.fn(async () => null),
+    }))
+
+    const { useAuth } = await import('../src/client')
+    const auth = useAuth()
+
+    expect(auth.authenticated).toBe(false)
     expect(auth.user).toBeNull()
   })
 

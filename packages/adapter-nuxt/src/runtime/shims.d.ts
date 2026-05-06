@@ -1,5 +1,4 @@
 import type { RuntimeConfigInput, RuntimeConnectionConfig, RuntimeDatabaseConfig } from '@holo-js/db'
-import type { CurrentAuthResponse } from '@holo-js/auth'
 
 type HoloConnectionRuntimeConfig = RuntimeConnectionConfig
 type HoloDatabaseRuntimeConfig = RuntimeDatabaseConfig
@@ -48,13 +47,20 @@ interface HoloUseFetchResult<TValue> {
   readonly refresh: () => Promise<void>
 }
 
+/**
+ * Minimal Nuxt runtime shims for adapter typechecking.
+ *
+ * Keep these declarations limited to the fields consumed by adapter runtime code:
+ * composables/auth.ts uses HoloUseFetchResult.data/refresh, useFetch options.key,
+ * useState key/init with HoloRef.value, and computed getter/value.
+ */
 declare module '#app' {
   export function useRuntimeConfig(): HoloRuntimeConfig
 }
 
 declare module '#imports' {
   export function computed<TValue>(getter: () => TValue): HoloComputedRef<TValue>
-  export function useFetch<TValue = CurrentAuthResponse>(
+  export function useFetch<TValue = unknown>(
     request: string,
     options?: { readonly key?: string },
   ): Promise<HoloUseFetchResult<TValue>>

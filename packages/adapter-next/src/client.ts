@@ -24,7 +24,9 @@ export {
 } from '@holo-js/forms/client'
 export type { HoloAuthUser } from '@holo-js/auth/client'
 
-export type UseAuthOptions = AuthClientRequestOptions & {
+type UseAuthRequestOptions = Pick<AuthClientRequestOptions, 'endpoint' | 'guard' | 'headers'>
+
+export type UseAuthOptions = UseAuthRequestOptions & {
   readonly initialUser?: HoloAuthUser | null
 }
 
@@ -40,7 +42,10 @@ export type AuthProviderProps = UseAuthOptions & {
 
 const AuthContext = createContext<UseAuthResult | null>(null)
 
-function useAuthState(options: UseAuthOptions = {}): UseAuthResult {
+function useAuthState(
+  options: UseAuthOptions = {},
+  stateOptions: { readonly refreshOnMount?: boolean } = {},
+): UseAuthResult {
   const { initialUser, ...requestOptions } = options
   const [currentUser, setCurrentUser] = useState<HoloAuthUser | null>(initialUser ?? null)
   const requestOptionsRef = useRef<AuthClientRequestOptions>(requestOptions)
@@ -54,10 +59,10 @@ function useAuthState(options: UseAuthOptions = {}): UseAuthResult {
   }, [])
 
   useEffect(() => {
-    if (typeof initialUser === 'undefined') {
+    if (stateOptions.refreshOnMount !== false && typeof initialUser === 'undefined') {
       void refreshUser()
     }
-  }, [initialUser, refreshUser])
+  }, [initialUser, refreshUser, stateOptions.refreshOnMount])
 
   return {
     authenticated: currentUser !== null,
@@ -74,11 +79,15 @@ export function AuthProvider({ children, ...options }: AuthProviderProps): React
 
 export function useAuth(options?: UseAuthOptions): UseAuthResult {
   const context = useContext(AuthContext)
+  const localAuth = useAuthState(options, {
+    refreshOnMount: Boolean(options) || !context,
+  })
+
   if (!options && context) {
     return context
   }
 
-  return useAuthState(options)
+  return localAuth
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

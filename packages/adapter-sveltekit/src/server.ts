@@ -11,7 +11,7 @@ export type AuthOptions = {
 }
 
 function toClientAuthUser(user: HoloAuthUser | null): HoloAuthUser | null {
-  return user ? { ...user } : null
+  return user ? JSON.parse(JSON.stringify(user)) as HoloAuthUser : null
 }
 
 export async function auth(options: AuthOptions = {}): Promise<AuthState> {

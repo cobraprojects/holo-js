@@ -28,13 +28,17 @@ function expectCommandToPass(command: string, args: readonly string[], options: 
     execFileSync(command, args, options)
   } catch (error) {
     const failure = error as {
+      readonly message?: string
       readonly stderr?: Buffer
       readonly stdout?: Buffer
     }
-    throw new Error([
+    const message = [
       failure.stdout?.toString(),
       failure.stderr?.toString(),
-    ].filter(Boolean).join('\n'))
+      failure.message,
+    ].filter(Boolean).join('\n')
+
+    throw new Error(message, { cause: error })
   }
 }
 

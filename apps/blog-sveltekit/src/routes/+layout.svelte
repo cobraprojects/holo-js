@@ -10,13 +10,18 @@
   const displayName = $derived(auth.user?.name ?? auth.user?.email ?? 'Account')
 
   async function logout() {
-    const response = await fetch('/api/logout', { method: 'POST' })
-    if (!response.ok) {
-      return
-    }
+    try {
+      const response = await fetch('/api/logout', { method: 'POST' })
+      if (!response.ok) {
+        console.warn('Logout failed.', { status: response.status })
+        return
+      }
 
-    await auth.refreshUser()
-    await invalidateAll()
+      await auth.refreshUser()
+      await invalidateAll()
+    } catch (error) {
+      console.warn('Logout failed.', error)
+    }
   }
 </script>
 
