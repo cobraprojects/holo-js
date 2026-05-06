@@ -13,8 +13,9 @@ export async function POST({ request }: { request: Request }) {
     })
   }
 
-  const wasAuthenticated = await check()
-  const { error } = await verification.consume(submission.data.token)
+  const authenticationCheck = check()
+  const verificationResult = verification.consume(submission.data.token)
+  const [wasAuthenticated, { error }] = await Promise.all([authenticationCheck, verificationResult])
   if (error) {
     return json({
       ok: false as const,

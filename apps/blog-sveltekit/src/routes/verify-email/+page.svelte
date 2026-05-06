@@ -19,7 +19,11 @@
       const response = await fetch('/api/verify-email', { method: 'POST', body: formData })
       const submission = await response.json()
       if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
-        await auth.refreshUser()
+        try {
+          await auth.refreshUser()
+        } catch (error) {
+          console.error('Failed to refresh the current user after email verification.', error)
+        }
         await invalidateAll()
         await goto(submission.data.redirectTo)
       }

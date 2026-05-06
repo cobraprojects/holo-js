@@ -36,7 +36,6 @@ function VerifyEmailPageContent() {
       const submission = await response.json()
       if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
         await auth.refreshUser()
-        router.refresh()
         router.replace(submission.data.redirectTo)
       }
       return submission
