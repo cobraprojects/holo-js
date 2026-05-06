@@ -6,6 +6,7 @@ describe('@holo-js/adapter-nuxt package boundaries', () => {
   it('keeps exported storage and forms surfaces as optional peers', async () => {
     const packageJsonPath = resolve(import.meta.dirname, '../package.json')
     const runtimeEntryPath = resolve(import.meta.dirname, '../src/runtime/composables/index.ts')
+    const authEntryPath = resolve(import.meta.dirname, '../src/runtime/composables/auth.ts')
     const storageEntryPath = resolve(import.meta.dirname, '../src/runtime/composables/storage.ts')
     const clientEntryPath = resolve(import.meta.dirname, '../src/runtime/composables/forms.ts')
     const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8')) as {
@@ -15,13 +16,17 @@ describe('@holo-js/adapter-nuxt package boundaries', () => {
       exports?: Record<string, unknown>
     }
     const runtimeEntry = await readFile(runtimeEntryPath, 'utf8')
+    const authEntry = await readFile(authEntryPath, 'utf8')
     const storageEntry = await readFile(storageEntryPath, 'utf8')
     const clientEntry = await readFile(clientEntryPath, 'utf8')
 
     expect(runtimeEntry).not.toContain("@holo-js/storage/runtime")
     expect(storageEntry).toContain("@holo-js/storage/runtime")
     expect(clientEntry).toContain("@holo-js/forms/client")
+    expect(authEntry).toContain("@holo-js/auth")
     expect(packageJson.exports?.['./storage']).toBeDefined()
+    expect(packageJson.exports?.['./auth']).toBeDefined()
+    expect(packageJson.dependencies?.['@holo-js/auth']).toBeDefined()
     expect(packageJson.dependencies?.['@holo-js/storage']).toBeUndefined()
     expect(packageJson.dependencies?.['@holo-js/forms']).toBeUndefined()
     expect(packageJson.peerDependencies?.['@holo-js/storage']).toBeDefined()

@@ -1,73 +1,192 @@
 # Current Auth Client
 
-`@holo-js/auth/client` provides lightweight client helpers for current-user state.
+Auth client state is read-only. Login, register, logout, impersonation, password hashing, and provider operations stay on
+the server through `@holo-js/auth`.
 
-## Introduction
+Use the adapter client helper for your framework:
 
-The client package is intentionally small. It does not implement authentication. It calls a current-auth endpoint
-owned by your application and returns:
+- Next.js: `@holo-js/adapter-next/client`
+- Nuxt: `@holo-js/adapter-nuxt/client`
+- SvelteKit: `@holo-js/adapter-sveltekit/client`
 
-- `useAuth()`
-- `user()`
-- `refreshUser()`
-- `check()`
+Each adapter exposes `useAuth()`. The returned `user` is inferred as `HoloAuthUser | null`, so application code can read
+`auth.user`, `user.value`, or `auth.authenticated` without writing a local user shape type.
 
-It is read-only on purpose.
+## `user` vs `refreshUser`
 
-The client package does not expose:
+`user` is the current auth state the client already has. It is reactive in the framework adapters:
 
-- `login()` or `register()`
-- `loginUsing()` or `loginUsingId()`
-- `hashPassword()`, `verifyPassword()`, or `needsPasswordRehash()`
-- `impersonate()` or `stopImpersonating()`
+- Next.js: `auth.user`
+- Nuxt: `user.value`
+- SvelteKit: `auth.user`
 
-Those operations stay in `@holo-js/auth` because they require trusted server runtime access to your providers,
-sessions, password hasher, and cookies.
+`refreshUser()` makes a new request to the current-user endpoint, updates that current auth state, and returns the fresh
+user.
 
-## Configuration
-
-```ts
-import { configureAuthClient } from '@holo-js/auth/client'
-
-configureAuthClient({
-  endpoint: '/api/auth/user',
-})
-```
-
-Optional configuration:
-
-- `endpoint`
-- `guard`
-- `headers`
-- custom `fetch`
-
-## Usage
+Use `user` to render the current navigation, profile link, or authenticated UI. Use `refreshUser()` after an action that
+can change auth state, such as login, register, logout, switching guards, or updating the user's profile.
 
 ```ts
-import { check, refreshUser, useAuth, user } from '@holo-js/auth/client'
-
-const auth = await useAuth()
 const current = auth.user
-const authenticated = auth.check()
 const fresh = await auth.refreshUser()
-
-// direct helpers still work too
-await user()
-await check()
-await refreshUser()
 ```
 
-`useAuth()` returns the full current-auth payload from your endpoint, so client code can read `auth.user`,
-`auth.authenticated`, and `auth.guard` from one object, while still exposing `auth.check()` and
-`auth.refreshUser()`.
+## Client Usage
 
-`user()` may return cached state. `refreshUser()` forces a new request to the endpoint.
+::: code-group
 
-## Implementing The Endpoint
+```tsx [Next.js]
+'use client'
 
-Your application implements the endpoint itself:
+import { useAuth } from '@holo-js/adapter-next/client'
 
-```ts
+export function AuthNav() {
+  const auth = useAuth()
+  const displayName = auth.user?.name ?? auth.user?.email ?? 'Account'
+
+  async function logout() {
+    const response = await fetch('/api/logout', { method: 'POST' })
+    if (!response.ok) {
+      return
+    }
+
+    await auth.refreshUser()
+  }
+
+  if (!auth.authenticated) {
+    return (
+      <>
+        <a href="/login">Login</a>
+        <a href="/register">Register</a>
+      </>
+    )
+  }
+
+  return (
+    <>
+      <span>{displayName}</span>
+      <button type="button" onClick={logout}>Logout</button>
+    </>
+  )
+}
+```
+
+```vue [Nuxt]
+<script setup lang="ts">
+const { authenticated, refreshUser, user } = await useAuth()
+const displayName = computed(() => user.value?.name ?? user.value?.email ?? 'Account')
+
+async function logout() {
+  await $fetch('/api/logout', { method: 'POST' })
+  await refreshUser()
+  await navigateTo('/')
+}
+</script>
+
+<template>
+  <template v-if="authenticated">
+    <span>{{ displayName }}</span>
+    <button type="button" @click="logout">Logout</button>
+  </template>
+  <template v-else>
+    <NuxtLink to="/login">Login</NuxtLink>
+    <NuxtLink to="/register">Register</NuxtLink>
+  </template>
+</template>
+```
+
+```svelte [SvelteKit]
+<script lang="ts">
+  import { invalidateAll } from '$app/navigation'
+  import { untrack } from 'svelte'
+  import { useAuth } from '@holo-js/adapter-sveltekit/client'
+  import type { LayoutProps } from './$types'
+
+  let { data, children }: LayoutProps = $props()
+
+  const auth = useAuth({ initialUser: untrack(() => data.auth.user) })
+  const displayName = $derived(auth.user?.name ?? auth.user?.email ?? 'Account')
+
+  async function logout() {
+    const response = await fetch('/api/logout', { method: 'POST' })
+    if (!response.ok) {
+      return
+    }
+
+    await auth.refreshUser()
+    await invalidateAll()
+  }
+</script>
+
+{#if auth.authenticated}
+  <span>{displayName}</span>
+  <button type="button" onclick={logout}>Logout</button>
+{:else}
+  <a href="/login">Login</a>
+  <a href="/register">Register</a>
+{/if}
+
+{@render children()}
+```
+
+:::
+
+## Initial Server State
+
+Next.js and SvelteKit can pass the server-resolved user into the client helper so the first render already knows whether
+the visitor is authenticated.
+
+::: code-group
+
+```tsx [Next.js — app/layout.tsx]
+import { AuthProvider } from '@holo-js/adapter-next/client'
+import { auth } from '@holo-js/adapter-next/server'
+import { AuthNav } from './auth-nav'
+
+export default async function RootLayout({ children }: { readonly children: React.ReactNode }) {
+  const currentAuth = await auth()
+
+  return (
+    <html lang="en">
+      <body>
+        <AuthProvider initialUser={currentAuth.user}>
+          <AuthNav />
+          {children}
+        </AuthProvider>
+      </body>
+    </html>
+  )
+}
+```
+
+```vue [Nuxt — app.vue]
+<script setup lang="ts">
+const { authenticated, refreshUser, user } = await useAuth()
+</script>
+```
+
+```ts [SvelteKit — src/routes/+layout.server.ts]
+import { auth } from '@holo-js/adapter-sveltekit/server'
+
+export async function load() {
+  return {
+    auth: await auth(),
+  }
+}
+```
+
+:::
+
+Nuxt's `useAuth()` is async because it uses Nuxt's server/client data fetching state. The composable fetches
+`/api/auth/user` by default and stores the result in a keyed Nuxt state ref.
+
+## Current User Endpoint
+
+The adapter helpers need an application-owned current-auth endpoint. The default endpoint is `/api/auth/user`.
+
+::: code-group
+
+```ts [Next.js — app/api/auth/user/route.ts]
 import { check, user } from '@holo-js/auth'
 
 export async function GET() {
@@ -79,26 +198,90 @@ export async function GET() {
 }
 ```
 
-Guard-specific endpoint:
+```ts [Nuxt — server/api/auth/user.get.ts]
+import { check, user } from '@holo-js/auth'
 
-```ts
-import auth from '@holo-js/auth'
+export default defineEventHandler(async () => {
+  return {
+    authenticated: await check(),
+    guard: 'web',
+    user: await user(),
+  }
+})
+```
+
+```ts [SvelteKit — src/routes/api/auth/user/+server.ts]
+import { json } from '@sveltejs/kit'
+import { check, user } from '@holo-js/auth'
 
 export async function GET() {
-  const guard = 'admin'
-
-  return Response.json({
-    authenticated: await auth.guard(guard).check(),
-    guard,
-    user: await auth.guard(guard).user(),
+  return json({
+    authenticated: await check(),
+    guard: 'web',
+    user: await user(),
   })
 }
 ```
 
-## Error Handling
+:::
 
-The client helpers throw when:
+For a named guard, pass `guard` to the adapter helper and return that guard's state from the endpoint.
 
-- the current-auth endpoint returns a non-2xx status
-- the response body is not valid JSON
-- no fetch implementation is available
+## Types
+
+Most app code should not import a user type. The type is inferred from your auth provider configuration and exposed
+through `useAuth().user`.
+
+If reusable library code really needs an explicit annotation, import the public type from the adapter or auth client:
+
+::: code-group
+
+```ts [Next.js]
+import { type HoloAuthUser } from '@holo-js/adapter-next/client'
+```
+
+```ts [Nuxt]
+import { type HoloAuthUser } from '@holo-js/adapter-nuxt/client'
+```
+
+```ts [SvelteKit]
+import { type HoloAuthUser } from '@holo-js/adapter-sveltekit/client'
+```
+
+```ts [Framework-neutral]
+import { type HoloAuthUser } from '@holo-js/auth/client'
+```
+
+:::
+
+## Lower-Level Client
+
+`@holo-js/auth/client` is still available for framework-neutral browser code. It exposes:
+
+- `useAuth()`
+- `user()`
+- `refreshUser()`
+- `check()`
+
+```ts
+import { check, refreshUser, useAuth, user } from '@holo-js/auth/client'
+
+const auth = await useAuth()
+const current = auth.user
+const authenticated = auth.check()
+const fresh = await auth.refreshUser()
+
+await user()
+await check()
+await refreshUser()
+```
+
+The lower-level client calls the same current-auth endpoint, may cache `user()`, and `refreshUser()` always forces a new
+request.
+
+It does not expose:
+
+- `login()` or `register()`
+- `loginUsing()` or `loginUsingId()`
+- `hashPassword()`, `verifyPassword()`, or `needsPasswordRehash()`
+- `impersonate()` or `stopImpersonating()`

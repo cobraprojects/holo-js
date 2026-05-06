@@ -2174,6 +2174,8 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
     })
   }
 
+  await hydrateGuardContextFromRequest(guardName)
+
   let clearSessionCookies = false
   const sessionId = bindings.context.getSessionId(guardName)
   if (sessionId) {

@@ -1,15 +1,55 @@
+<script lang="ts">
+  import { invalidateAll } from '$app/navigation'
+  import { untrack } from 'svelte'
+  import { useAuth } from '@holo-js/adapter-sveltekit/client'
+  import type { LayoutProps } from './$types'
+
+  let { data, children }: LayoutProps = $props()
+  let isLoggingOut = $state(false)
+
+  const auth = useAuth({ initialUser: untrack(() => data?.auth?.user ?? null) })
+  const displayName = $derived(auth.user?.name ?? auth.user?.email ?? 'Account')
+
+  async function logout() {
+    if (isLoggingOut) {
+      return
+    }
+
+    isLoggingOut = true
+    try {
+      const response = await fetch('/api/logout', { method: 'POST' })
+      if (!response.ok) {
+        console.warn('Logout failed.', { status: response.status })
+        return
+      }
+
+      await auth.refreshUser()
+      await invalidateAll()
+    } catch (error) {
+      console.warn('Logout failed.', error)
+    } finally {
+      isLoggingOut = false
+    }
+  }
+</script>
+
 <div class="shell">
   <header class="header">
     <nav class="nav">
       <a href="/" class="brand">blog-sveltekit</a>
       <a href="/posts">Posts</a>
       <a href="/admin">Admin</a>
-      <a href="/login">Login</a>
-      <a href="/register">Register</a>
+      {#if auth.authenticated}
+        <span class="user-name">{displayName}</span>
+        <button type="button" class="logout-button" disabled={isLoggingOut} aria-busy={isLoggingOut} onclick={logout}>Logout</button>
+      {:else}
+        <a href="/login">Login</a>
+        <a href="/register">Register</a>
+      {/if}
     </nav>
   </header>
   <main class="content">
-    <slot />
+    {@render children()}
   </main>
 </div>
 
@@ -32,9 +72,27 @@
   .nav {
     display: flex;
     gap: 1rem;
+    align-items: center;
+    flex-wrap: wrap;
   }
   .brand {
     font-weight: 700;
+  }
+  .user-name {
+    color: #e5eef8;
+  }
+  .logout-button {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #cbd5e1;
+    cursor: pointer;
+    font: inherit;
+  }
+  .logout-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+    pointer-events: none;
   }
   a {
     color: #cbd5e1;

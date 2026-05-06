@@ -1,5 +1,5 @@
 import { describe, expectTypeOf, it } from 'vitest'
-import auth, { AuthError, isAuthError, type AuthErrorCode, type AuthEstablishedSession, type AuthFailure, type AuthGuardFacade, type AuthImpersonationState, type AuthLoginErrorCode, type AuthLogoutResult, type AuthPasswordResetConsumeErrorCode, type AuthPasswordResetRequestErrorCode, type AuthProviderAdapter, type AuthRegistrationErrorCode, type AuthResult, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type getAuthRuntime, type register, type user } from '../src'
+import auth, { AuthError, isAuthError, type AuthErrorCode, type AuthEstablishedSession, type AuthFailure, type AuthGuardFacade, type AuthImpersonationState, type AuthLoginErrorCode, type AuthLogoutResult, type AuthPasswordResetConsumeErrorCode, type AuthPasswordResetRequestErrorCode, type AuthProviderAdapter, type AuthRegistrationErrorCode, type AuthResult, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type getAuthRuntime, type HoloAuthUser, type register, type user } from '../src'
 import clientAuth, { type refreshUser as refreshClientUser, type useAuth as clientUseAuth, type user as clientUser } from '../src/client'
 
 declare module '../src' {
@@ -40,6 +40,7 @@ describe('@holo-js/auth typing', () => {
     type RuntimeLogoutAll = Awaited<ReturnType<ReturnType<typeof getAuthRuntime>['logoutAll']>>
 
     expectTypeOf<AuthUser>().toEqualTypeOf<AppAuthUser>()
+    expectTypeOf<HoloAuthUser>().toEqualTypeOf<AppAuthUser>()
     expectTypeOf<RegisteredUser>().toEqualTypeOf<AuthResult<AppAuthUser, AuthRegistrationErrorCode>>()
     expectTypeOf<CurrentServerUser>().toEqualTypeOf<AppAuthUser | null>()
     expectTypeOf<CurrentClientUser>().toEqualTypeOf<AppAuthUser | null>()

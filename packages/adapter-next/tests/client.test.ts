@@ -1,12 +1,220 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { field, schema } from '@holo-js/forms'
 
+type MockReactContext<TValue> = {
+  currentRenderValue: TValue
+  readonly Provider: (props: { readonly value: TValue, readonly children?: unknown }) => unknown
+}
+
+function createReactMock(overrides: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  return {
+    createContext<TValue>(defaultValue: TValue): MockReactContext<TValue> {
+      const context: MockReactContext<TValue> = {
+        currentRenderValue: defaultValue,
+        Provider({ value, children }) {
+          context.currentRenderValue = value
+          return children
+        },
+      }
+
+      return context
+    },
+    createElement(type: unknown, props: Record<string, unknown> | null, ...children: readonly unknown[]): unknown {
+      if (typeof type === 'function') {
+        return (type as (props: Record<string, unknown>) => unknown)({
+          ...(props ?? {}),
+          children: children.length === 1 ? children[0] : children,
+        })
+      }
+
+      return { type, props, children }
+    },
+    useContext<TValue>(context: MockReactContext<TValue>): TValue {
+      return context.currentRenderValue
+    },
+    ...overrides,
+  }
+}
+
 describe('@holo-js/adapter-next client', () => {
   afterEach(() => {
     vi.resetModules()
     vi.clearAllMocks()
     vi.doUnmock('react')
+    vi.doUnmock('@holo-js/auth/client')
     vi.doUnmock('@holo-js/forms/client')
+  })
+
+  it('exposes current user state through the auth client helper', async () => {
+    const refreshedUser = {
+      id: 2,
+      email: 'nora@example.com',
+      name: 'Nora',
+    }
+    const hookStates: unknown[] = []
+    let hookStateIndex = 0
+
+    vi.doMock('@holo-js/auth/client', () => ({
+      refreshUser: vi.fn(async () => refreshedUser),
+    }))
+
+    vi.doMock('react', () => createReactMock({
+      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
+        return callback
+      },
+      useEffect() {},
+      useRef<TValue>(initialValue?: TValue) {
+        return { current: initialValue }
+      },
+      useState<TValue>(initialState: TValue | (() => TValue)) {
+        const stateIndex = hookStateIndex
+        hookStateIndex += 1
+        hookStates[stateIndex] = typeof initialState === 'function'
+          ? (initialState as () => TValue)()
+          : initialState
+
+        return [hookStates[stateIndex] as TValue, (next: TValue | ((previous: TValue) => TValue)) => {
+          hookStates[stateIndex] = typeof next === 'function'
+            ? (next as (previous: TValue) => TValue)(hookStates[stateIndex] as TValue)
+            : next
+        }] as const
+      },
+    }))
+
+    const { useAuth } = await import('../src/client')
+    const auth = useAuth({
+      initialUser: {
+        id: 1,
+        email: 'ava@example.com',
+        name: 'Ava',
+      },
+    })
+
+    expect(auth.authenticated).toBe(true)
+    expect(auth.user?.email).toBe('ava@example.com')
+    await expect(auth.refreshUser()).resolves.toEqual(refreshedUser)
+    expect(hookStates[0]).toEqual(refreshedUser)
+  })
+
+  it('shares the provider user with auth hooks that do not pass options', async () => {
+    const initialUser = {
+      id: 1,
+      email: 'ava@example.com',
+      name: 'Ava',
+    }
+
+    vi.doMock('@holo-js/auth/client', () => ({
+      refreshUser: vi.fn(),
+    }))
+
+    vi.doMock('react', () => createReactMock({
+      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
+        return callback
+      },
+      useEffect() {},
+      useRef<TValue>(initialValue?: TValue) {
+        return { current: initialValue }
+      },
+      useState<TValue>(initialState: TValue | (() => TValue)) {
+        const value = typeof initialState === 'function'
+          ? (initialState as () => TValue)()
+          : initialState
+
+        return [value, vi.fn()] as const
+      },
+    }))
+
+    const { AuthProvider, useAuth } = await import('../src/client')
+
+    AuthProvider({
+      initialUser,
+      children: null,
+    })
+
+    const auth = useAuth()
+
+    expect(auth.authenticated).toBe(true)
+    expect(auth.user).toEqual(initialUser)
+  })
+
+  it('fetches the current user when no initial user is provided', async () => {
+    const refreshedUser = {
+      id: 3,
+      email: 'mina@example.com',
+      name: 'Mina',
+    }
+    const hookStates: unknown[] = []
+    let hookStateIndex = 0
+
+    vi.doMock('@holo-js/auth/client', () => ({
+      refreshUser: vi.fn(async () => refreshedUser),
+    }))
+
+    vi.doMock('react', () => createReactMock({
+      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
+        return callback
+      },
+      useEffect(effect: () => void | (() => void)) {
+        void effect()
+      },
+      useRef<TValue>(initialValue?: TValue) {
+        return { current: initialValue }
+      },
+      useState<TValue>(initialState: TValue | (() => TValue)) {
+        const stateIndex = hookStateIndex
+        hookStateIndex += 1
+        hookStates[stateIndex] = typeof initialState === 'function'
+          ? (initialState as () => TValue)()
+          : initialState
+
+        return [hookStates[stateIndex] as TValue, (next: TValue | ((previous: TValue) => TValue)) => {
+          hookStates[stateIndex] = typeof next === 'function'
+            ? (next as (previous: TValue) => TValue)(hookStates[stateIndex] as TValue)
+            : next
+        }] as const
+      },
+    }))
+
+    const { useAuth } = await import('../src/client')
+
+    useAuth()
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+
+    expect(hookStates[0]).toEqual(refreshedUser)
+  })
+
+  it('does not refresh automatically when an initial user value is provided', async () => {
+    const refreshUser = vi.fn()
+
+    vi.doMock('@holo-js/auth/client', () => ({
+      refreshUser,
+    }))
+
+    vi.doMock('react', () => createReactMock({
+      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
+        return callback
+      },
+      useEffect(effect: () => void | (() => void)) {
+        void effect()
+      },
+      useRef<TValue>(initialValue?: TValue) {
+        return { current: initialValue }
+      },
+      useState<TValue>(initialState: TValue | (() => TValue)) {
+        const value = typeof initialState === 'function'
+          ? (initialState as () => TValue)()
+          : initialState
+
+        return [value, vi.fn()] as const
+      },
+    }))
+
+    const { useAuth } = await import('../src/client')
+
+    const auth = useAuth({ initialUser: null })
+
+    expect(auth.authenticated).toBe(false)
+    expect(refreshUser).not.toHaveBeenCalled()
   })
 
   it('wraps the shared form client with a React subscription bridge', async () => {
@@ -23,7 +231,10 @@ describe('@holo-js/adapter-next client', () => {
       useForm: vi.fn(() => fakeForm),
     }))
 
-    vi.doMock('react', () => ({
+    vi.doMock('react', () => createReactMock({
+      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
+        return callback
+      },
       useEffect(effect: () => void | (() => void)) {
         void effect()
       },
@@ -88,7 +299,10 @@ describe('@holo-js/adapter-next client', () => {
       })),
     }))
 
-    vi.doMock('react', () => ({
+    vi.doMock('react', () => createReactMock({
+      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
+        return callback
+      },
       useEffect(effect: () => void | (() => void)) {
         return effect()
       },
@@ -180,7 +394,10 @@ describe('@holo-js/adapter-next client', () => {
       useForm: createForm,
     }))
 
-    vi.doMock('react', () => ({
+    vi.doMock('react', () => createReactMock({
+      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
+        return callback
+      },
       useEffect(effect: () => void | (() => void)) {
         return effect()
       },
@@ -266,7 +483,10 @@ describe('@holo-js/adapter-next client', () => {
       useForm: createForm,
     }))
 
-    vi.doMock('react', () => ({
+    vi.doMock('react', () => createReactMock({
+      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
+        return callback
+      },
       useEffect(effect: () => void | (() => void)) {
         return effect()
       },
@@ -375,7 +595,10 @@ describe('@holo-js/adapter-next client', () => {
       useForm: createForm,
     }))
 
-    vi.doMock('react', () => ({
+    vi.doMock('react', () => createReactMock({
+      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
+        return callback
+      },
       useEffect(effect: () => void | (() => void)) {
         return effect()
       },
@@ -468,7 +691,10 @@ describe('@holo-js/adapter-next client', () => {
       useForm: createForm,
     }))
 
-    vi.doMock('react', () => ({
+    vi.doMock('react', () => createReactMock({
+      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
+        return callback
+      },
       useEffect(effect: () => void | (() => void)) {
         return effect()
       },
@@ -557,7 +783,10 @@ describe('@holo-js/adapter-next client', () => {
       useForm: createForm,
     }))
 
-    vi.doMock('react', () => ({
+    vi.doMock('react', () => createReactMock({
+      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
+        return callback
+      },
       useEffect(effect: () => void | (() => void)) {
         return effect()
       },

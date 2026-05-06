@@ -15,6 +15,11 @@
       "import": "./dist/client.mjs",
       "default": "./dist/client.mjs"
     },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.mjs",
+      "default": "./dist/server.mjs"
+    },
     "./transport": {
       "types": "./dist/transport.d.ts",
       "import": "./dist/transport.mjs",
@@ -33,6 +38,7 @@
     "test": "vitest --run"
   },
   "dependencies": {
+    "@holo-js/auth": "^0.1.4",
     "@holo-js/config": "^0.1.4",
     "@holo-js/core": "^0.1.4",
     "svelte": "catalog:"

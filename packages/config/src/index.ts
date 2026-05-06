@@ -1,5 +1,6 @@
 export {
   DEFAULT_APP_NAME,
+  DEFAULT_SESSION_COOKIE_NAME,
   normalizeAppConfig,
   normalizeAppEnv,
   normalizeBroadcastConfig,

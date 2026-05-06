@@ -1,3 +1,14 @@
+<script setup lang="ts">
+const { authenticated, refreshUser, user } = await useAuth()
+const displayName = computed(() => user.value?.name ?? user.value?.email ?? 'Account')
+
+async function logout() {
+  await $fetch('/api/logout', { method: 'POST' })
+  await refreshUser()
+  await navigateTo('/')
+}
+</script>
+
 <template>
   <div class="shell">
     <header class="header">
@@ -5,8 +16,14 @@
         <NuxtLink to="/" class="brand">blog-nuxt</NuxtLink>
         <NuxtLink to="/posts">Posts</NuxtLink>
         <NuxtLink to="/admin">Admin</NuxtLink>
-        <NuxtLink to="/login">Login</NuxtLink>
-        <NuxtLink to="/register">Register</NuxtLink>
+        <template v-if="authenticated">
+          <span class="user-name">{{ displayName }}</span>
+          <button type="button" class="logout-button" @click="logout">Logout</button>
+        </template>
+        <template v-else>
+          <NuxtLink to="/login">Login</NuxtLink>
+          <NuxtLink to="/register">Register</NuxtLink>
+        </template>
       </nav>
     </header>
     <main class="content">
@@ -34,9 +51,22 @@
 .nav {
   display: flex;
   gap: 1rem;
+  align-items: center;
+  flex-wrap: wrap;
 }
 .brand {
   font-weight: 700;
+}
+.user-name {
+  color: #e5eef8;
+}
+.logout-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #cbd5e1;
+  cursor: pointer;
+  font: inherit;
 }
 a {
   color: #cbd5e1;
