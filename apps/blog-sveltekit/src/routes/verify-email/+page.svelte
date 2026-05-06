@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { useForm } from '@holo-js/adapter-sveltekit/client'
+  import { goto, invalidateAll } from '$app/navigation'
+  import { useAuth, useForm } from '@holo-js/adapter-sveltekit/client'
   import { verifyEmailForm } from '$lib/schemas/auth'
 
   export let data: {
@@ -11,11 +12,22 @@
   let resendError = ''
   let resending = false
 
+  const auth = useAuth()
   const form = useForm(verifyEmailForm, {
     initialValues: { token: data.token },
     async submitter({ formData }) {
       const response = await fetch('/api/verify-email', { method: 'POST', body: formData })
-      return await response.json()
+      const submission = await response.json()
+      if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
+        try {
+          await auth.refreshUser()
+        } catch (error) {
+          console.error('Failed to refresh the current user after email verification.', error)
+        }
+        await invalidateAll()
+        await goto(submission.data.redirectTo)
+      }
+      return submission
     },
   })
 

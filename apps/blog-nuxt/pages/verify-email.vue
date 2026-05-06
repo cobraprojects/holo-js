@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { useRoute } from '#imports'
+import { navigateTo, useRoute } from '#imports'
 import { useForm } from '@holo-js/adapter-nuxt/client'
 import { ref } from 'vue'
 import { verifyEmailForm } from '~/lib/schemas/auth'
 
+const { refreshUser } = await useAuth()
 const route = useRoute()
 const token = typeof route.query.token === 'string' ? route.query.token : ''
 const email = typeof route.query.email === 'string' ? route.query.email : ''
@@ -14,7 +15,12 @@ const resending = ref(false)
 const form = useForm(verifyEmailForm, {
   initialValues: { token },
   async submitter({ formData }) {
-    return await $fetch('/api/verify-email', { method: 'POST', body: formData })
+    const submission = await $fetch('/api/verify-email', { method: 'POST', body: formData })
+    if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
+      await refreshUser()
+      await navigateTo(submission.data.redirectTo)
+    }
+    return submission
   },
 })
 

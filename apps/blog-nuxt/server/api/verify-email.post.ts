@@ -1,4 +1,4 @@
-import { verification } from '@holo-js/auth'
+import { check, verification } from '@holo-js/auth'
 import { sanitizeFlashedInput, validate } from '@holo-js/forms'
 
 import { verifyEmailForm } from '../../lib/schemas/auth'
@@ -12,6 +12,7 @@ export default defineEventHandler(async (event) => {
     return failure
   }
 
+  const wasAuthenticated = await check()
   const { error } = await verification.consume(submission.data.token)
   if (error) {
     setResponseStatus(event, error.status)
@@ -25,7 +26,9 @@ export default defineEventHandler(async (event) => {
   }
 
   return submission.success({
-    message: 'Email address verified. You can sign in now.',
-    redirectTo: '/login',
+    message: wasAuthenticated
+      ? 'Email address verified.'
+      : 'Email address verified. You can sign in now.',
+    redirectTo: wasAuthenticated ? '/admin' : '/login',
   })
 })

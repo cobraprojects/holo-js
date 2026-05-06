@@ -9,7 +9,7 @@ const appEnv = env('APP_ENV') === 'production'
 export default defineAppConfig({
   name: env('APP_NAME', 'blog-sveltekit'),
   key: env('APP_KEY'),
-  url: env('APP_URL', 'http://localhost:3000'),
+  url: env('APP_URL', 'http://localhost:5173'),
   env: appEnv,
   debug: env('APP_DEBUG', true),
   paths: {
