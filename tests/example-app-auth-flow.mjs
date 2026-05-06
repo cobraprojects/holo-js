@@ -9,7 +9,7 @@ function createCookieJar() {
         return
       }
 
-      headers.set('cookie', [...cookies.entries()].map(([name, value]) => `${name}=${value}`).join('; '))
+      headers.set('cookie', this.header())
     },
     capture(response) {
       const setCookies = typeof response.headers.getSetCookie === 'function'
@@ -30,13 +30,20 @@ function createCookieJar() {
         const name = firstSegment.slice(0, equalsIndex).trim()
         const value = firstSegment.slice(equalsIndex + 1).trim()
 
-        if (value.length === 0) {
+        const clearsCookie = value.length === 0
+          || /(?:^|;\s*)max-age=0(?:;|$)/i.test(setCookie)
+          || /(?:^|;\s*)expires=thu,\s*01\s+jan\s+1970/i.test(setCookie)
+
+        if (clearsCookie) {
           cookies.delete(name)
           continue
         }
 
         cookies.set(name, value)
       }
+    },
+    header() {
+      return [...cookies.entries()].map(([name, value]) => `${name}=${value}`).join('; ')
     },
   }
 }
@@ -126,11 +133,13 @@ async function waitForOutputMatch(getOutput, matcher, startIndex = 0, timeoutMs 
 }
 
 const authTokenPattern = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[A-Za-z0-9_-]+)/i
+const sessionCookieName = 'holo_session'
 
 export async function assertExampleAppAuthFlow({
   baseUrl,
   getOutput,
   appName,
+  checkPages = true,
 }) {
   const email = `${appName}-${Date.now()}@app.test`
   const password = 'secret-secret'
@@ -156,17 +165,34 @@ export async function assertExampleAppAuthFlow({
     },
   })
 
-  const loginPage = await fetchAuthText('/login')
-  assert.match(loginPage.text, /Sign in/i)
+  const assertGuestNav = (text) => {
+    assert.match(text, />Login</i)
+    assert.match(text, />Register</i)
+    assert.doesNotMatch(text, />Logout</i)
+  }
 
-  const registerPage = await fetchAuthText('/register')
-  assert.match(registerPage.text, /Create account/i)
+  const assertUserNav = (text) => {
+    assert.match(text, /Auth Flow User/i)
+    assert.match(text, />Logout</i)
+    assert.doesNotMatch(text, />Login</i)
+    assert.doesNotMatch(text, />Register</i)
+  }
 
-  const forgotPasswordPage = await fetchAuthText('/forgot-password')
-  assert.match(forgotPasswordPage.text, /Forgot password/i)
+  if (checkPages) {
+    const registerPage = await fetchAuthText('/register')
+    assert.match(registerPage.text, /Create account/i)
+    assertGuestNav(registerPage.text)
 
-  const verifyPromptPage = await fetchAuthText('/verify-email')
-  assert.match(verifyPromptPage.text, /Verify your email/i)
+    const loginPage = await fetchAuthText('/login')
+    assert.match(loginPage.text, /Sign in/i)
+    assertGuestNav(loginPage.text)
+
+    const forgotPasswordPage = await fetchAuthText('/forgot-password')
+    assert.match(forgotPasswordPage.text, /Forgot password/i)
+
+    const verifyPromptPage = await fetchAuthText('/verify-email')
+    assert.match(verifyPromptPage.text, /Verify your email/i)
+  }
 
   const initialUser = await fetchAuthJson('/api/auth/user')
   assert.equal(initialUser.json.authenticated, false)
@@ -229,10 +255,12 @@ export async function assertExampleAppAuthFlow({
   )[1]
   assert.ok(resentVerificationToken)
 
-  const verifyTokenPage = await fetchAuthText(
-    `/verify-email?token=${encodeURIComponent(resentVerificationToken)}`,
-  )
-  assert.match(verifyTokenPage.text, /Verify your email/i)
+  if (checkPages) {
+    const verifyTokenPage = await fetchAuthText(
+      `/verify-email?token=${encodeURIComponent(resentVerificationToken)}`,
+    )
+    assert.match(verifyTokenPage.text, /Verify your email/i)
+  }
 
   const verified = await fetchAuthJson('/api/verify-email', {
     method: 'POST',
@@ -264,6 +292,50 @@ export async function assertExampleAppAuthFlow({
   assert.equal(authenticatedUser.json.user?.email, email)
   assert.equal(authenticatedUser.json.user?.name, 'Auth Flow User')
 
+  if (checkPages) {
+    const authenticatedHome = await fetchAuthText('/', {
+      jar: authenticatedJar,
+    })
+    assertUserNav(authenticatedHome.text)
+  }
+
+  const authenticatedSessionCookie = authenticatedJar.header()
+  assert.ok(authenticatedSessionCookie.length > 0)
+  assert.match(authenticatedSessionCookie, new RegExp(`(?:^|;\\s*)${sessionCookieName}=`))
+
+  const loggedOut = await fetchAuthJson('/api/logout', {
+    method: 'POST',
+    jar: authenticatedJar,
+  })
+  assert.equal(loggedOut.json.ok, true)
+  assert.equal(loggedOut.json.authenticated, false)
+  assert.equal(loggedOut.json.message, 'Signed out successfully.')
+  assert.equal(loggedOut.json.user, null)
+  assert.ok(listSetCookieHeaders(loggedOut.response).length > 0)
+
+  const userAfterLogout = await fetchAuthJson('/api/auth/user', {
+    jar: authenticatedJar,
+  })
+  assert.equal(userAfterLogout.json.authenticated, false)
+  assert.equal(userAfterLogout.json.guard, 'web')
+  assert.equal(userAfterLogout.json.user, null)
+
+  const staleSessionUser = await fetchAuthJson('/api/auth/user', {
+    headers: {
+      cookie: authenticatedSessionCookie,
+    },
+  })
+  assert.equal(staleSessionUser.json.authenticated, false)
+  assert.equal(staleSessionUser.json.guard, 'web')
+  assert.equal(staleSessionUser.json.user, null)
+
+  if (checkPages) {
+    const loggedOutHome = await fetchAuthText('/', {
+      jar: authenticatedJar,
+    })
+    assertGuestNav(loggedOutHome.text)
+  }
+
   const outputStart = getOutput().length
   const forgotPassword = await fetchAuthJson('/api/forgot-password', {
     fields: {
@@ -281,8 +353,10 @@ export async function assertExampleAppAuthFlow({
   const resetToken = resetTokenMatch[1]
   assert.ok(resetToken)
 
-  const resetPage = await fetchAuthText(`/reset-password?token=${encodeURIComponent(resetToken)}`)
-  assert.match(resetPage.text, /Reset password/i)
+  if (checkPages) {
+    const resetPage = await fetchAuthText(`/reset-password?token=${encodeURIComponent(resetToken)}`)
+    assert.match(resetPage.text, /Reset password/i)
+  }
 
   const resetResult = await fetchAuthJson('/api/reset-password', {
     fields: {

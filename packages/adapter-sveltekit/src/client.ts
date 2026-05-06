@@ -1,4 +1,6 @@
 import { createSubscriber } from 'svelte/reactivity'
+import { refreshUser as refreshCurrentUser } from '@holo-js/auth/client'
+import type { AuthClientRequestOptions, HoloAuthUser } from '@holo-js/auth/client'
 import type { FormSchema, InferFormData } from '@holo-js/forms'
 import {
   type InferFormFieldTree,
@@ -16,6 +18,60 @@ export {
   type UseFormResult,
   type ValidateOnMode,
 } from '@holo-js/forms/client'
+export type { HoloAuthUser } from '@holo-js/auth/client'
+
+export type UseAuthOptions = AuthClientRequestOptions & {
+  readonly initialUser?: HoloAuthUser | null
+}
+
+export type UseAuthResult = {
+  readonly authenticated: boolean
+  readonly user: HoloAuthUser | null
+  readonly refreshUser: () => Promise<HoloAuthUser | null>
+}
+
+class AuthClientState implements UseAuthResult {
+  #notify: () => void = () => {}
+  #user: HoloAuthUser | null
+
+  readonly #subscribe = createSubscriber((update) => {
+    this.#notify = update
+
+    return () => {
+      this.#notify = () => {}
+    }
+  })
+
+  constructor(
+    initialUser: HoloAuthUser | null,
+    private readonly requestOptions: AuthClientRequestOptions,
+  ) {
+    this.#user = initialUser
+  }
+
+  get authenticated(): boolean {
+    this.#subscribe()
+    return this.#user !== null
+  }
+
+  get user(): HoloAuthUser | null {
+    this.#subscribe()
+    return this.#user
+  }
+
+  async refreshUser(): Promise<HoloAuthUser | null> {
+    this.#user = await refreshCurrentUser(this.requestOptions)
+    this.#notify()
+
+    return this.#user
+  }
+}
+
+export function useAuth(options: UseAuthOptions = {}): UseAuthResult {
+  const { initialUser = null, ...requestOptions } = options
+
+  return new AuthClientState(initialUser, requestOptions)
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value

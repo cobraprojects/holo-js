@@ -7,7 +7,8 @@ vi.mock('svelte/reactivity', () => ({
 
     return () => {
       if (!initialized) {
-        void start(() => {})
+        const cleanup = start(() => {})
+        cleanup?.()
         initialized = true
       }
     }
@@ -18,6 +19,51 @@ describe('@holo-js/adapter-sveltekit client', () => {
   afterEach(() => {
     vi.resetModules()
     vi.clearAllMocks()
+    vi.doUnmock('@holo-js/auth/client')
+  })
+
+  it('exposes current user state through the auth client helper', async () => {
+    const refreshedUser = {
+      id: 2,
+      email: 'nora@example.com',
+      name: 'Nora',
+    }
+
+    vi.doMock('@holo-js/auth/client', () => ({
+      refreshUser: vi.fn(async () => refreshedUser),
+    }))
+
+    const { useAuth } = await import('../src/client')
+    const auth = useAuth({
+      initialUser: {
+        id: 1,
+        email: 'ava@example.com',
+        name: 'Ava',
+      },
+    })
+
+    expect(auth.authenticated).toBe(true)
+    expect(auth.user?.email).toBe('ava@example.com')
+    await expect(auth.refreshUser()).resolves.toEqual(refreshedUser)
+    expect(auth.user).toEqual(refreshedUser)
+  })
+
+  it('allows refresh before Svelte subscribes to auth state', async () => {
+    vi.doMock('@holo-js/auth/client', () => ({
+      refreshUser: vi.fn(async () => null),
+    }))
+
+    const { useAuth } = await import('../src/client')
+    const auth = useAuth({
+      initialUser: {
+        id: 1,
+        email: 'ava@example.com',
+        name: 'Ava',
+      },
+    })
+
+    await expect(auth.refreshUser()).resolves.toBeNull()
+    expect(auth.user).toBeNull()
   })
 
   it('wraps the shared form client with a Svelte reactive subscriber bridge', async () => {

@@ -77,6 +77,10 @@ describe('auth documentation smoke checks', () => {
     const reset = await readDoc('password-reset.md')
 
     expect(client).toContain('@holo-js/auth/client')
+    expect(client).toContain('@holo-js/adapter-next/client')
+    expect(client).toContain('@holo-js/adapter-nuxt/client')
+    expect(client).toContain('@holo-js/adapter-sveltekit/client')
+    expect(client).toContain('HoloAuthUser')
     expect(client).toContain('useAuth')
     expect(client).toContain('refreshUser')
     expect(client).toContain('/api/auth/user')

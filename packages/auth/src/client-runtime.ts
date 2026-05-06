@@ -1,8 +1,8 @@
 import type {
   AuthClientConfig,
   AuthClientRequestOptions,
-  AuthUser,
   CurrentAuthResponse,
+  HoloAuthUser,
 } from './contracts'
 
 const DEFAULT_CURRENT_USER_ENDPOINT = '/api/auth/user'
@@ -138,7 +138,7 @@ export function resetAuthClient(): void {
   clientState.cache.clear()
 }
 
-export async function user(options?: AuthClientRequestOptions): Promise<AuthUser | null> {
+export async function user(options?: AuthClientRequestOptions): Promise<HoloAuthUser | null> {
   return (await fetchCurrentUser(options)).user
 }
 
@@ -146,7 +146,7 @@ export async function useAuth(
   options?: AuthClientRequestOptions,
 ): Promise<CurrentAuthResponse & {
   readonly check: () => boolean
-  readonly refreshUser: () => Promise<AuthUser | null>
+  readonly refreshUser: () => Promise<HoloAuthUser | null>
 }> {
   const current = await fetchCurrentUser(options)
 
@@ -161,7 +161,7 @@ export async function useAuth(
   })
 }
 
-export async function refreshUser(options?: AuthClientRequestOptions): Promise<AuthUser | null> {
+export async function refreshUser(options?: AuthClientRequestOptions): Promise<HoloAuthUser | null> {
   return (await fetchCurrentUser(options, { force: true })).user
 }
 

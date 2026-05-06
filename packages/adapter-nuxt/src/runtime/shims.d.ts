@@ -1,4 +1,5 @@
 import type { RuntimeConfigInput, RuntimeConnectionConfig, RuntimeDatabaseConfig } from '@holo-js/db'
+import type { CurrentAuthResponse } from '@holo-js/auth'
 
 type HoloConnectionRuntimeConfig = RuntimeConnectionConfig
 type HoloDatabaseRuntimeConfig = RuntimeDatabaseConfig
@@ -34,12 +35,31 @@ interface HoloRuntimeConfig extends RuntimeConfigInput {
   }
 }
 
+interface HoloRef<TValue> {
+  value: TValue
+}
+
+interface HoloComputedRef<TValue> {
+  readonly value: TValue
+}
+
+interface HoloUseFetchResult<TValue> {
+  readonly data: HoloRef<TValue | null>
+  readonly refresh: () => Promise<void>
+}
+
 declare module '#app' {
   export function useRuntimeConfig(): HoloRuntimeConfig
 }
 
 declare module '#imports' {
+  export function computed<TValue>(getter: () => TValue): HoloComputedRef<TValue>
+  export function useFetch<TValue = CurrentAuthResponse>(
+    request: string,
+    options?: { readonly key?: string },
+  ): Promise<HoloUseFetchResult<TValue>>
   export function useRuntimeConfig(): HoloRuntimeConfig
+  export function useState<TValue>(key: string, init: () => TValue): HoloRef<TValue>
   export function useStorage(base: string): unknown
 }
 

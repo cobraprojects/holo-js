@@ -157,6 +157,8 @@ export type AuthUser = HoloAuthTypeRegistry extends {
     : AuthUserLike
   : AuthUserLike
 
+export type HoloAuthUser = AuthUser
+
 export interface AuthCredentials extends Readonly<Record<string, unknown>> {
   readonly password: string
   readonly remember?: boolean

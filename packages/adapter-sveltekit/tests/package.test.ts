@@ -14,6 +14,8 @@ describe('@holo-js/adapter-sveltekit package boundaries', () => {
     const clientEntry = await readFile(clientEntryPath, 'utf8')
 
     expect(clientEntry).toContain("@holo-js/forms/client")
+    expect(clientEntry).toContain("@holo-js/auth/client")
+    expect(packageJson.dependencies?.['@holo-js/auth']).toBeDefined()
     expect(packageJson.dependencies?.['@holo-js/forms']).toBeUndefined()
     expect(packageJson.peerDependencies?.['@holo-js/forms']).toBeDefined()
     expect(packageJson.peerDependenciesMeta?.['@holo-js/forms']?.optional).toBe(true)

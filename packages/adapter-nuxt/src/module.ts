@@ -320,6 +320,7 @@ export default defineNuxtModule<ModuleOptions>({
         { name: 'useHoloDb', as: 'useHoloDb', from: '@holo-js/adapter-nuxt/runtime' },
         { name: 'useHoloEnv', as: 'useHoloEnv', from: '@holo-js/adapter-nuxt/runtime' },
         { name: 'useHoloDebug', as: 'useHoloDebug', from: '@holo-js/adapter-nuxt/runtime' },
+        { name: 'useAuth', as: 'useAuth', from: '@holo-js/adapter-nuxt/auth' },
       ]
       if (storageModule) {
         imports.push(

@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import type { ExecFileSyncOptionsWithBufferEncoding } from 'node:child_process'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -20,6 +21,21 @@ function buildPackage(packageRoot: string, outDir: string): void {
     },
     stdio: 'pipe',
   })
+}
+
+function expectCommandToPass(command: string, args: readonly string[], options: ExecFileSyncOptionsWithBufferEncoding): void {
+  try {
+    execFileSync(command, args, options)
+  } catch (error) {
+    const failure = error as {
+      readonly stderr?: Buffer
+      readonly stdout?: Buffer
+    }
+    throw new Error([
+      failure.stdout?.toString(),
+      failure.stderr?.toString(),
+    ].filter(Boolean).join('\n'))
+  }
 }
 
 declare module '@holo-js/config' {
@@ -115,24 +131,40 @@ describe('@holo-js/adapter-sveltekit typing', () => {
         repoRoot: resolve(packageDir, '../..'),
         nodeModulesRoot: tempNodeModules,
         packageJsonPath: resolve(packageDir, '../validation/package.json'),
+        extraDependencyNames: ['@types/node'],
       })
 
+      buildPackage(resolve(packageDir, '../config'), join(buildRoot, 'config'))
       buildPackage(resolve(packageDir, '../validation'), join(buildRoot, 'validation'))
       buildPackage(resolve(packageDir, '../forms'), join(buildRoot, 'forms'))
+      buildPackage(resolve(packageDir, '../auth'), join(buildRoot, 'auth'))
       buildPackage(packageDir, join(buildRoot, 'adapter-sveltekit'))
 
       await Promise.all([
+        stagePublishedPackage(resolve(packageDir, '../config'), join(tempHoloNodeModules, 'config'), join(buildRoot, 'config')),
         stagePublishedPackage(resolve(packageDir, '../validation'), join(tempHoloNodeModules, 'validation'), join(buildRoot, 'validation')),
         stagePublishedPackage(resolve(packageDir, '../forms'), join(tempHoloNodeModules, 'forms'), join(buildRoot, 'forms')),
+        stagePublishedPackage(resolve(packageDir, '../auth'), join(tempHoloNodeModules, 'auth'), join(buildRoot, 'auth')),
         stagePublishedPackage(packageDir, join(tempHoloNodeModules, 'adapter-sveltekit'), join(buildRoot, 'adapter-sveltekit')),
       ])
 
       await writeFile(
         entryPath,
-        `import { useForm } from '@holo-js/adapter-sveltekit/client'\nvoid useForm\n`,
+        [
+          `import { useAuth, useForm, type HoloAuthUser, type UseAuthResult } from '@holo-js/adapter-sveltekit/client'`,
+          `import { auth } from '@holo-js/adapter-sveltekit/server'`,
+          `const currentAuth = useAuth()`,
+          `const user: HoloAuthUser | null = currentAuth.user`,
+          `const authResult: UseAuthResult = currentAuth`,
+          `void user`,
+          `void authResult`,
+          `void useForm`,
+          `void auth`,
+          ``,
+        ].join('\n'),
       )
 
-      expect(() => execFileSync(
+      expectCommandToPass(
         resolve(packageDir, '../../node_modules/.bin/tsc'),
         [
           '--module',
@@ -148,7 +180,7 @@ describe('@holo-js/adapter-sveltekit typing', () => {
           cwd: tempDir,
           stdio: 'pipe',
         },
-      )).not.toThrow()
+      )
     } finally {
       await rm(tempDir, { recursive: true, force: true })
     }

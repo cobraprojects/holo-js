@@ -765,6 +765,44 @@ describe('@holo-js/auth package runtime', () => {
     expect(loggedOut.cookies).toContainEqual(expect.stringContaining('holo_session_remember=;'))
   })
 
+  it('hydrates the request session cookie before logout and invalidates the stored session', async () => {
+    const runtime = configureRuntime()
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+    const established = await loginUsing(created)
+    const currentBindings = authRuntimeInternals.getRuntimeBindings()
+    const createRequestContext = () => ({
+      ...authRuntimeInternals.createMemoryAuthContext(),
+      getRequestCookie(name: string) {
+        return name === 'holo_session' ? established.sessionId : undefined
+      },
+    })
+
+    configureAuthRuntime({
+      ...currentBindings,
+      context: createRequestContext(),
+    })
+
+    const loggedOut = await logout()
+
+    expect(loggedOut.cookies).toContainEqual(expect.stringContaining('holo_session=;'))
+    expect(runtime.sessionStore.records.has(established.sessionId)).toBe(false)
+    expect(await check()).toBe(false)
+    expect(await user()).toBeNull()
+
+    configureAuthRuntime({
+      ...currentBindings,
+      context: createRequestContext(),
+    })
+
+    expect(await check()).toBe(false)
+    expect(await user()).toBeNull()
+  })
+
   it('does not auto-start email verification during registration', async () => {
     const runtime = configureRuntime()
 

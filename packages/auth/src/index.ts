@@ -63,6 +63,7 @@ export type {
   AuthTokenFacade,
   AuthTokenStore,
   AuthUser,
+  HoloAuthUser,
   AuthGuardConfig,
   AuthProviderConfig,
   AuthProviderAdapter,

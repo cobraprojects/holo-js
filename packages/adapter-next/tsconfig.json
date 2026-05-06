@@ -5,6 +5,7 @@
     "baseUrl": ".",
     "paths": {
       "@holo-js/auth": ["../auth/src/index.ts"],
+      "@holo-js/auth/client": ["../auth/src/client.ts"],
       "@holo-js/auth-clerk": ["../auth-clerk/src/index.ts"],
       "@holo-js/auth-social": ["../auth-social/src/index.ts"],
       "@holo-js/auth-workos": ["../auth-workos/src/index.ts"],

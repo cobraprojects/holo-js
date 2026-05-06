@@ -1,4 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+'use client'
+
+import { createContext, createElement, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { refreshUser as refreshCurrentUser } from '@holo-js/auth/client'
+import type { AuthClientRequestOptions, HoloAuthUser } from '@holo-js/auth/client'
 import type { FormSchema, InferFormData } from '@holo-js/forms'
 import {
   type ClientSubmitContext,
@@ -18,6 +22,64 @@ export {
   type UseFormResult,
   type ValidateOnMode,
 } from '@holo-js/forms/client'
+export type { HoloAuthUser } from '@holo-js/auth/client'
+
+export type UseAuthOptions = AuthClientRequestOptions & {
+  readonly initialUser?: HoloAuthUser | null
+}
+
+export type UseAuthResult = {
+  readonly authenticated: boolean
+  readonly user: HoloAuthUser | null
+  readonly refreshUser: () => Promise<HoloAuthUser | null>
+}
+
+export type AuthProviderProps = UseAuthOptions & {
+  readonly children: ReactNode
+}
+
+const AuthContext = createContext<UseAuthResult | null>(null)
+
+function useAuthState(options: UseAuthOptions = {}): UseAuthResult {
+  const { initialUser, ...requestOptions } = options
+  const [currentUser, setCurrentUser] = useState<HoloAuthUser | null>(initialUser ?? null)
+  const requestOptionsRef = useRef<AuthClientRequestOptions>(requestOptions)
+
+  requestOptionsRef.current = requestOptions
+
+  const refreshUser = useCallback(async () => {
+    const nextUser = await refreshCurrentUser(requestOptionsRef.current)
+    setCurrentUser(nextUser)
+    return nextUser
+  }, [])
+
+  useEffect(() => {
+    if (typeof initialUser === 'undefined') {
+      void refreshUser()
+    }
+  }, [initialUser, refreshUser])
+
+  return {
+    authenticated: currentUser !== null,
+    user: currentUser,
+    refreshUser,
+  }
+}
+
+export function AuthProvider({ children, ...options }: AuthProviderProps): ReactNode {
+  const auth = useAuthState(options)
+
+  return createElement(AuthContext.Provider, { value: auth }, children)
+}
+
+export function useAuth(options?: UseAuthOptions): UseAuthResult {
+  const context = useContext(AuthContext)
+  if (!options && context) {
+    return context
+  }
+
+  return useAuthState(options)
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date) && !(value instanceof Blob)
