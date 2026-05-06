@@ -16,6 +16,7 @@ describe('@holo-js/adapter-sveltekit package boundaries', () => {
     expect(clientEntry).toContain("@holo-js/forms/client")
     expect(clientEntry).toContain("@holo-js/auth/client")
     expect(packageJson.dependencies?.['@holo-js/auth']).toBeDefined()
+    expect(packageJson.peerDependencies?.['@holo-js/auth']).toBeUndefined()
     expect(packageJson.dependencies?.['@holo-js/forms']).toBeUndefined()
     expect(packageJson.peerDependencies?.['@holo-js/forms']).toBeDefined()
     expect(packageJson.peerDependenciesMeta?.['@holo-js/forms']?.optional).toBe(true)

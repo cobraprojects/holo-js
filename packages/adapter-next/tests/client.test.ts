@@ -51,7 +51,8 @@ describe('@holo-js/adapter-next client', () => {
       email: 'nora@example.com',
       name: 'Nora',
     }
-    let hookState: unknown
+    const hookStates: unknown[] = []
+    let hookStateIndex = 0
 
     vi.doMock('@holo-js/auth/client', () => ({
       refreshUser: vi.fn(async () => refreshedUser),
@@ -66,13 +67,15 @@ describe('@holo-js/adapter-next client', () => {
         return { current: initialValue }
       },
       useState<TValue>(initialState: TValue | (() => TValue)) {
-        hookState = typeof initialState === 'function'
+        const stateIndex = hookStateIndex
+        hookStateIndex += 1
+        hookStates[stateIndex] = typeof initialState === 'function'
           ? (initialState as () => TValue)()
           : initialState
 
-        return [hookState as TValue, (next: TValue | ((previous: TValue) => TValue)) => {
-          hookState = typeof next === 'function'
-            ? (next as (previous: TValue) => TValue)(hookState as TValue)
+        return [hookStates[stateIndex] as TValue, (next: TValue | ((previous: TValue) => TValue)) => {
+          hookStates[stateIndex] = typeof next === 'function'
+            ? (next as (previous: TValue) => TValue)(hookStates[stateIndex] as TValue)
             : next
         }] as const
       },
@@ -90,7 +93,7 @@ describe('@holo-js/adapter-next client', () => {
     expect(auth.authenticated).toBe(true)
     expect(auth.user?.email).toBe('ava@example.com')
     await expect(auth.refreshUser()).resolves.toEqual(refreshedUser)
-    expect(hookState).toEqual(refreshedUser)
+    expect(hookStates[0]).toEqual(refreshedUser)
   })
 
   it('shares the provider user with auth hooks that do not pass options', async () => {
@@ -140,7 +143,8 @@ describe('@holo-js/adapter-next client', () => {
       email: 'mina@example.com',
       name: 'Mina',
     }
-    let hookState: unknown
+    const hookStates: unknown[] = []
+    let hookStateIndex = 0
 
     vi.doMock('@holo-js/auth/client', () => ({
       refreshUser: vi.fn(async () => refreshedUser),
@@ -157,13 +161,15 @@ describe('@holo-js/adapter-next client', () => {
         return { current: initialValue }
       },
       useState<TValue>(initialState: TValue | (() => TValue)) {
-        hookState = typeof initialState === 'function'
+        const stateIndex = hookStateIndex
+        hookStateIndex += 1
+        hookStates[stateIndex] = typeof initialState === 'function'
           ? (initialState as () => TValue)()
           : initialState
 
-        return [hookState as TValue, (next: TValue | ((previous: TValue) => TValue)) => {
-          hookState = typeof next === 'function'
-            ? (next as (previous: TValue) => TValue)(hookState as TValue)
+        return [hookStates[stateIndex] as TValue, (next: TValue | ((previous: TValue) => TValue)) => {
+          hookStates[stateIndex] = typeof next === 'function'
+            ? (next as (previous: TValue) => TValue)(hookStates[stateIndex] as TValue)
             : next
         }] as const
       },
@@ -172,9 +178,9 @@ describe('@holo-js/adapter-next client', () => {
     const { useAuth } = await import('../src/client')
 
     useAuth()
-    await new Promise<void>(resolve => setImmediate(resolve))
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
 
-    expect(hookState).toEqual(refreshedUser)
+    expect(hookStates[0]).toEqual(refreshedUser)
   })
 
   it('does not refresh automatically when an initial user value is provided', async () => {

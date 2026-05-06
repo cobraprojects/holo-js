@@ -134,6 +134,10 @@ async function waitForOutputMatch(getOutput, matcher, startIndex = 0, timeoutMs 
 
 const authTokenPattern = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[A-Za-z0-9_-]+)/i
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 export async function assertExampleAppAuthFlow({
   baseUrl,
   getOutput,
@@ -301,7 +305,7 @@ export async function assertExampleAppAuthFlow({
 
   const authenticatedSessionCookie = authenticatedJar.header()
   assert.ok(authenticatedSessionCookie.length > 0)
-  assert.match(authenticatedSessionCookie, new RegExp(`(?:^|;\\s*)${sessionCookieName}=`))
+  assert.match(authenticatedSessionCookie, new RegExp(`(?:^|;\\s*)${escapeRegExp(sessionCookieName)}=`))
 
   const loggedOut = await fetchAuthJson('/api/logout', {
     method: 'POST',

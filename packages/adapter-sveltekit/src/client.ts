@@ -60,6 +60,7 @@ function trySetAuthContext(auth: UseAuthResult): void {
 
 class AuthClientState implements UseAuthResult {
   #notify: () => void = () => {}
+  #pendingRefresh: Promise<HoloAuthUser | null> | undefined
   #user: HoloAuthUser | null
 
   readonly #subscribe = createSubscriber((update) => {
@@ -72,7 +73,7 @@ class AuthClientState implements UseAuthResult {
 
   constructor(
     initialUser: HoloAuthUser | null,
-    private readonly requestOptions: AuthClientRequestOptions,
+    private requestOptions: AuthClientRequestOptions,
   ) {
     this.#user = initialUser
   }
@@ -88,21 +89,42 @@ class AuthClientState implements UseAuthResult {
   }
 
   async refreshUser(): Promise<HoloAuthUser | null> {
-    this.#user = await refreshCurrentUser(this.requestOptions)
-    this.#notify()
+    if (this.#pendingRefresh) {
+      return this.#pendingRefresh
+    }
 
-    return this.#user
+    const refresh = refreshCurrentUser(this.requestOptions)
+      .then((user) => {
+        this.#user = user
+        this.#notify()
+
+        return user
+      })
+      .finally(() => {
+        this.#pendingRefresh = undefined
+      })
+
+    this.#pendingRefresh = refresh
+    return refresh
+  }
+
+  setRequestOptions(requestOptions: AuthClientRequestOptions): void {
+    this.requestOptions = requestOptions
   }
 }
 
 export function useAuth(options?: UseAuthOptions): UseAuthResult {
   const context = tryGetAuthContext()
-  if (!options && context) {
+  const resolvedOptions = options ?? {}
+  const { initialUser = null, ...requestOptions } = resolvedOptions
+  if (context && typeof options?.initialUser === 'undefined') {
+    if (context instanceof AuthClientState) {
+      context.setRequestOptions(requestOptions)
+    }
+
     return context
   }
 
-  const resolvedOptions = options ?? {}
-  const { initialUser = null, ...requestOptions } = resolvedOptions
   const auth = new AuthClientState(initialUser, requestOptions)
 
   trySetAuthContext(auth)

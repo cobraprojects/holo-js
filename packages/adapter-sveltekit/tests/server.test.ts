@@ -4,6 +4,7 @@ const authProviderMarker = Symbol.for('holo-js.auth.provider')
 
 describe('@holo-js/adapter-sveltekit server auth', () => {
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.resetModules()
     vi.doUnmock('@holo-js/auth')
   })
@@ -73,5 +74,26 @@ describe('@holo-js/adapter-sveltekit server auth', () => {
 
     expect(guard).toHaveBeenCalledWith('admin')
     expect(currentAuth.user).toEqual(guardUser)
+  })
+
+  it('returns a guest auth state when auth resolution fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.doMock('@holo-js/auth', () => ({
+      default: {
+        guard: vi.fn(),
+      },
+      user: vi.fn(async () => {
+        throw new Error('auth unavailable')
+      }),
+    }))
+
+    const { auth } = await import('../src/server')
+    const currentAuth = await auth()
+
+    expect(currentAuth).toEqual({
+      authenticated: false,
+      user: null,
+    })
+    expect(console.warn).toHaveBeenCalled()
   })
 })

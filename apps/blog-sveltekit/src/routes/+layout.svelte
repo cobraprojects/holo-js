@@ -5,11 +5,17 @@
   import type { LayoutProps } from './$types'
 
   let { data, children }: LayoutProps = $props()
+  let isLoggingOut = $state(false)
 
-  const auth = useAuth({ initialUser: untrack(() => data.auth.user) })
+  const auth = useAuth({ initialUser: untrack(() => data?.auth?.user ?? null) })
   const displayName = $derived(auth.user?.name ?? auth.user?.email ?? 'Account')
 
   async function logout() {
+    if (isLoggingOut) {
+      return
+    }
+
+    isLoggingOut = true
     try {
       const response = await fetch('/api/logout', { method: 'POST' })
       if (!response.ok) {
@@ -21,6 +27,8 @@
       await invalidateAll()
     } catch (error) {
       console.warn('Logout failed.', error)
+    } finally {
+      isLoggingOut = false
     }
   }
 </script>
@@ -33,7 +41,7 @@
       <a href="/admin">Admin</a>
       {#if auth.authenticated}
         <span class="user-name">{displayName}</span>
-        <button type="button" class="logout-button" onclick={logout}>Logout</button>
+        <button type="button" class="logout-button" disabled={isLoggingOut} aria-busy={isLoggingOut} onclick={logout}>Logout</button>
       {:else}
         <a href="/login">Login</a>
         <a href="/register">Register</a>
@@ -80,6 +88,11 @@
     color: #cbd5e1;
     cursor: pointer;
     font: inherit;
+  }
+  .logout-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+    pointer-events: none;
   }
   a {
     color: #cbd5e1;
