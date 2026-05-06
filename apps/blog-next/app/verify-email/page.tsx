@@ -5,7 +5,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 
-import { useForm } from '@holo-js/adapter-next/client'
+import { useAuth, useForm } from '@holo-js/adapter-next/client'
 
 import { verifyEmailForm } from '@/lib/schemas/auth'
 
@@ -21,6 +21,7 @@ const panelStyle = {
 
 function VerifyEmailPageContent() {
   const router = useRouter()
+  const auth = useAuth()
   const searchParams = useSearchParams()
   const token = searchParams.get('token') ?? ''
   const email = searchParams.get('email') ?? ''
@@ -34,6 +35,8 @@ function VerifyEmailPageContent() {
       const response = await fetch('/api/verify-email', { method: 'POST', body: formData })
       const submission = await response.json()
       if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
+        await auth.refreshUser()
+        router.refresh()
         router.replace(submission.data.redirectTo)
       }
       return submission

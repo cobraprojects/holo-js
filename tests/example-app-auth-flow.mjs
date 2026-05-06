@@ -202,6 +202,44 @@ export async function assertExampleAppAuthFlow({
   assert.equal(initialUser.json.authenticated, false)
   assert.equal(initialUser.json.user, null)
 
+  const loggedInVerificationEmail = `${appName}-logged-in-verification-${Date.now()}@app.test`
+  const loggedInVerificationOutputStart = getOutput().length
+  const loggedInVerificationJar = createCookieJar()
+  const loggedInVerification = await fetchAuthJson('/api/register', {
+    fields: {
+      name: 'Logged In Verification User',
+      email: loggedInVerificationEmail,
+      password,
+      passwordConfirmation: password,
+    },
+    headers: {
+      'x-forwarded-for': '127.0.0.221',
+      'x-real-ip': '127.0.0.221',
+    },
+    jar: loggedInVerificationJar,
+  })
+  assert.equal(loggedInVerification.response.status, 201)
+  assert.equal(loggedInVerification.json.ok, true)
+
+  const loggedInVerificationToken = (
+    await waitForOutputMatch(
+      getOutput,
+      authTokenPattern,
+      loggedInVerificationOutputStart,
+    )
+  )[1]
+  assert.ok(loggedInVerificationToken)
+
+  const loggedInVerified = await fetchAuthJson('/api/verify-email', {
+    method: 'POST',
+    fields: {
+      token: loggedInVerificationToken,
+    },
+    jar: loggedInVerificationJar,
+  })
+  assert.equal(loggedInVerified.json.ok, true)
+  assert.equal(loggedInVerified.json.data?.redirectTo, '/admin')
+
   const registerOutputStart = getOutput().length
   const registeredJar = createCookieJar()
   const registered = await fetchAuthJson('/api/register', {

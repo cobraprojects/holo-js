@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit'
-import { verification } from '@holo-js/auth'
+import { check, verification } from '@holo-js/auth'
 import { sanitizeFlashedInput, validate } from '@holo-js/forms'
 
 import { verifyEmailForm } from '$lib/schemas/auth'
@@ -13,6 +13,7 @@ export async function POST({ request }: { request: Request }) {
     })
   }
 
+  const wasAuthenticated = await check()
   const { error } = await verification.consume(submission.data.token)
   if (error) {
     return json({
@@ -27,7 +28,9 @@ export async function POST({ request }: { request: Request }) {
   }
 
   return json(submission.success({
-    message: 'Email address verified. You can sign in now.',
-    redirectTo: '/login',
+    message: wasAuthenticated
+      ? 'Email address verified.'
+      : 'Email address verified. You can sign in now.',
+    redirectTo: wasAuthenticated ? '/admin' : '/login',
   }))
 }

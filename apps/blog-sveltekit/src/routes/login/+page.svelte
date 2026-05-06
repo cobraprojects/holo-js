@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { goto } from '$app/navigation'
-  import { useForm } from '@holo-js/adapter-sveltekit/client'
+  import { goto, invalidateAll } from '$app/navigation'
+  import { useAuth, useForm } from '@holo-js/adapter-sveltekit/client'
   import { loginForm } from '$lib/schemas/auth'
 
+  const auth = useAuth()
   const form = useForm(loginForm, {
     validateOn: 'blur',
     initialValues: { email: '', password: '', remember: false },
@@ -10,6 +11,8 @@
       const response = await fetch('/api/login', { method: 'POST', body: formData })
       const submission = await response.json()
       if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
+        await auth.refreshUser()
+        await invalidateAll()
         await goto(submission.data.redirectTo)
       }
       return submission

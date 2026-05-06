@@ -17,7 +17,7 @@ export default defineBroadcastConfig({
         useTLS: broadcastScheme === 'https',
       },
       clientOptions: {
-        authEndpoint: `${env('APP_URL', 'http://localhost:3000')}/broadcasting/auth`,
+        authEndpoint: `${env('APP_URL', 'http://localhost:5173')}/broadcasting/auth`,
       },
     },
     log: {
