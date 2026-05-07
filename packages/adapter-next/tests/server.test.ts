@@ -131,5 +131,9 @@ describe('@holo-js/adapter-next server auth', () => {
     expect(routeProtectionInternals.matchesRoutes(['/auth/*'], '/auth')).toBe(true)
     expect(routeProtectionInternals.matchesRoutes(['/auth/*'], '/auth/reset')).toBe(true)
     expect(routeProtectionInternals.matchesRoutes(['/auth/*'], '/login')).toBe(false)
+
+    const statefulRoute = /^\/auth/g
+    expect(routeProtectionInternals.matchesRoutes([statefulRoute], '/auth')).toBe(true)
+    expect(routeProtectionInternals.matchesRoutes([statefulRoute], '/auth')).toBe(true)
   })
 })

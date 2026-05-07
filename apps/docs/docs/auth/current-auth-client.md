@@ -54,7 +54,12 @@ export default function LoginPage() {
       const submission = await response.json()
 
       if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
-        await auth.refreshUser()
+        try {
+          await auth.refreshUser()
+        } catch (error) {
+          console.warn('Auth refresh failed after login.', error)
+        }
+
         router.replace(submission.data.redirectTo)
       }
 

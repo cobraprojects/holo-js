@@ -35,6 +35,7 @@ function matchesRoute(route: RouteMatcher, pathname: string): boolean {
   }
 
   if (route instanceof RegExp) {
+    route.lastIndex = 0
     return route.test(normalizedPathname)
   }
 

@@ -9515,7 +9515,9 @@ export default defineConfig({
     ) as { extends: string }
 
     expect(generatedTsconfig.extends).toBe('../../tsconfig.json')
-    expect(await readFile(join(projectRoot, '.holo-js/generated/model-registry.d.ts'), 'utf8')).toContain('schema.generated')
+    const emptyModelTypes = await readFile(join(projectRoot, '.holo-js/generated/model-registry.d.ts'), 'utf8')
+    expect(emptyModelTypes).toContain('schema.generated')
+    expect(emptyModelTypes).not.toContain('ModelReference')
   }, 30000)
 
   it('manages SvelteKit hook entrypoints during prepare and preserves user hook extensions separately', async () => {

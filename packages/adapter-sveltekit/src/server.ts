@@ -51,6 +51,7 @@ function matchesRoute(route: RouteMatcher, pathname: string): boolean {
   }
 
   if (route instanceof RegExp) {
+    route.lastIndex = 0
     return route.test(normalizedPathname)
   }
 
@@ -100,7 +101,16 @@ export function guestOnly(options: GuestOnlyOptions): SvelteKitHandle {
       return resolve(event)
     }
 
-    return Response.redirect(new URL(options.redirectTo, event.url), options.status ?? 303)
+    const redirectUrl = new URL(options.redirectTo, event.url)
+    if (
+      redirectUrl.pathname === event.url.pathname
+      && redirectUrl.search === event.url.search
+      && redirectUrl.hash === event.url.hash
+    ) {
+      return resolve(event)
+    }
+
+    return Response.redirect(redirectUrl, options.status ?? 303)
   }
 }
 
