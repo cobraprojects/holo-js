@@ -822,6 +822,9 @@ export default {
     expect(await readFile(join(authRoot, 'config/session.ts'), 'utf8')).toContain('defineSessionConfig')
     expect(await readFile(join(authRoot, '.env'), 'utf8')).toContain('SESSION_CONNECTION=main')
     expect(await readFile(join(authRoot, 'server/models/User.ts'), 'utf8')).toContain('hidden: [\'password\']')
+    expect(await readFile(join(authRoot, 'app/api/auth/user/route.ts'), 'utf8')).toContain('await user()')
+    await expect(stat(join(authRoot, 'app/api/logout/route.ts'))).rejects.toThrow()
+    await expect(stat(join(authRoot, 'proxy.ts'))).rejects.toThrow()
     expect((await readdir(join(authRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(6)
 
     const authorizationRoot = join(baseRoot, 'authorization-runtime-app')
@@ -1064,6 +1067,7 @@ export default {
     })).toContain(`"@holo-js/security": "${expectedHoloPackageRange}"`)
     expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain("const appEnv = env('APP_ENV') === 'production'")
     expect(projectInternals.renderScaffoldAppConfig('Typed App')).toContain("env('APP_DEBUG', true)")
+    expect(projectInternals.renderScaffoldAppConfig('Typed Svelte App', 'sveltekit')).toContain("url: env('APP_URL', 'http://localhost:5173')")
     expect(projectInternals.renderAuthConfig()).toContain('guard: \'web\'')
     expect(projectInternals.renderAuthConfig()).toContain('identifiers: [\'email\']')
     expect(projectInternals.renderAuthConfig({ social: true })).toContain('AUTH_GOOGLE_CLIENT_ID')
@@ -1158,6 +1162,12 @@ export default {
       storageDefaultDisk: 'local',
       optionalPackages: ['auth'],
     }).env).toContain('SESSION_CONNECTION=main')
+    expect(projectInternals.renderScaffoldEnvFiles({
+      projectName: 'Svelte App',
+      framework: 'sveltekit',
+      databaseDriver: 'sqlite',
+      storageDefaultDisk: 'local',
+    }).env).toContain('APP_URL=http://localhost:5173')
     expect(projectInternals.renderScaffoldEnvFiles({
       projectName: 'Mail App',
       databaseDriver: 'sqlite',
@@ -1291,6 +1301,77 @@ export default {
       packageManager: 'bun',
       storageDefaultDisk: 'local',
     }).find(file => file.path === 'src/lib/server/holo.ts')?.contents).toContain('@holo-js/adapter-sveltekit')
+    expect(projectInternals.renderFrameworkFiles({
+      projectName: 'Next Auth App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['auth'],
+    }).map(file => file.path)).toEqual(expect.arrayContaining([
+      'app/api/auth/user/route.ts',
+    ]))
+    expect(projectInternals.renderFrameworkFiles({
+      projectName: 'Next Auth App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['auth'],
+    }).map(file => file.path)).not.toEqual(expect.arrayContaining([
+      'app/api/logout/route.ts',
+      'proxy.ts',
+    ]))
+    expect(projectInternals.renderFrameworkFiles({
+      projectName: 'Nuxt Auth App',
+      framework: 'nuxt',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['auth'],
+    }).map(file => file.path)).toEqual(expect.arrayContaining([
+      'server/api/auth/user.get.ts',
+    ]))
+    expect(projectInternals.renderFrameworkFiles({
+      projectName: 'Nuxt Auth App',
+      framework: 'nuxt',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['auth'],
+    }).map(file => file.path)).not.toEqual(expect.arrayContaining([
+      'server/api/logout.post.ts',
+      'app/middleware/auth-only.global.ts',
+      'app/middleware/guest-only.global.ts',
+    ]))
+    expect(projectInternals.renderFrameworkFiles({
+      projectName: 'Svelte Auth App',
+      framework: 'sveltekit',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['auth'],
+    }).map(file => file.path)).toEqual(expect.arrayContaining([
+      'src/routes/api/auth/user/+server.ts',
+    ]))
+    expect(projectInternals.renderFrameworkFiles({
+      projectName: 'Svelte Auth App',
+      framework: 'sveltekit',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['auth'],
+    }).map(file => file.path)).not.toEqual(expect.arrayContaining([
+      'src/routes/api/logout/+server.ts',
+    ]))
+    expect(projectInternals.renderFrameworkFiles({
+      projectName: 'Svelte Auth App',
+      framework: 'sveltekit',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['auth'],
+    }).find(file => file.path === 'src/hooks.server.ts')?.contents).toContain('export {}')
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'Svelte App',
       framework: 'sveltekit',
@@ -1298,7 +1379,7 @@ export default {
       packageManager: 'bun',
       storageDefaultDisk: 'local',
       optionalPackages: [],
-    })).toContain('"@sveltejs/vite-plugin-svelte": "^4.0.0"')
+    })).toContain('"@sveltejs/vite-plugin-svelte": "^7.1.0"')
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'Svelte App',
       framework: 'sveltekit',
@@ -1314,7 +1395,7 @@ export default {
       packageManager: 'bun',
       storageDefaultDisk: 'local',
       optionalPackages: [],
-    })).toContain('"vue-router": "^4.1.6"')
+    })).toContain('"vue-router": "^5.0.4"')
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'Svelte App',
       framework: 'sveltekit',
@@ -1418,7 +1499,7 @@ export default {
       flags: {
         'framework': 'nuxt',
         'database': 'sqlite',
-        'package-manager': 'bun',
+        'package-manager': 'npm',
         'storage-default-disk': 'local',
         'package': ['forms', 'validation'],
       },
@@ -1447,6 +1528,11 @@ export default {
     expect(await readFile(join(nuxtRoot, 'package.json'), 'utf8')).toContain('"postinstall": "nuxt prepare"')
     expect(await readFile(join(nuxtRoot, 'app/app.vue'), 'utf8')).toContain('const appName = "nuxt-runner"')
     expect(await readFile(join(nuxtRoot, 'app/app.vue'), 'utf8')).not.toContain('<h1>nuxt-runner</h1>')
+    expect(await stat(join(nuxtRoot, 'shared/.gitkeep'))).toBeDefined()
+    await expect(stat(join(nuxtRoot, 'app.vue'))).rejects.toThrow()
+    await expect(stat(join(nuxtRoot, 'pages'))).rejects.toThrow()
+    await expect(stat(join(nuxtRoot, 'middleware'))).rejects.toThrow()
+    await expect(stat(join(nuxtRoot, 'plugins'))).rejects.toThrow()
     expect(await readFile(join(nuxtRoot, '.holo-js/generated/model-registry.d.ts'), 'utf8')).toContain('schema.generated')
     expect(await readFile(join(nuxtRoot, 'nuxt.config.ts'), 'utf8')).not.toContain('import { defineNuxtConfig } from \'nuxt/config\'')
     expect(await readFile(join(nuxtRoot, 'server/api/holo/health.get.ts'), 'utf8')).not.toContain('import { defineEventHandler } from \'h3\'')

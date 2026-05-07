@@ -112,8 +112,14 @@ The generated project contains:
 - layered env support with `.env` and `.env.example`
 - canonical Holo-JS directories such as `server/models`, `server/db`, `server/commands`, `server/jobs`, `server/events`, and `server/listeners`
 - first-party queue scaffold including `config/queue.ts` with `sync` as the default driver
+- auth scaffold including `config/auth.ts`, `config/session.ts`, user/session migrations, and the framework current-auth endpoint at `/api/auth/user` when `auth` is selected
 - machine-owned generated output under `.holo-js/generated`
 - framework lifecycle scripts such as `dev` and `build`
+
+The auth scaffold does not generate application flows such as `/login`, `/register`, `/logout`, password reset, email
+verification, admin pages, or route-protection middleware. Those routes depend on the app's forms, redirects, and page
+structure. Add them in your application code and point `useAuth()` at a custom current-auth endpoint if you choose not
+to use `/api/auth/user`.
 
 The generated framework glue is not the user-edited setup surface. After scaffolding, the normal places
 to work are:

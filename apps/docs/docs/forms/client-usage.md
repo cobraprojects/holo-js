@@ -77,7 +77,7 @@ export default function RegisterPage() {
 }
 ```
 
-```vue [Nuxt — pages/register.vue]
+```vue [Nuxt — app/pages/register.vue]
 <script setup lang="ts">
 import { useForm } from '@holo-js/adapter-nuxt/client'
 import { registerUser } from '~/lib/schemas/register'

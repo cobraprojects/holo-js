@@ -314,7 +314,18 @@ export function createNotificationsMigrationFiles(date = new Date()): readonly S
   }]
 }
 
-export function renderScaffoldAppConfig(projectName: string): string {
+function resolveFrameworkDefaultUrl(framework: ProjectScaffoldOptions['framework'] | undefined): string {
+  return framework === 'sveltekit'
+    ? 'http://localhost:5173'
+    : 'http://localhost:3000'
+}
+
+export function renderScaffoldAppConfig(
+  projectName: string,
+  framework?: ProjectScaffoldOptions['framework'],
+): string {
+  const defaultUrl = resolveFrameworkDefaultUrl(framework)
+
   return [
     'import { defineAppConfig, env } from \'@holo-js/config\'',
     '',
@@ -327,7 +338,7 @@ export function renderScaffoldAppConfig(projectName: string): string {
     'export default defineAppConfig({',
     `  name: env('APP_NAME', ${JSON.stringify(projectName)}),`,
     '  key: env(\'APP_KEY\'),',
-    '  url: env(\'APP_URL\', \'http://localhost:3000\'),',
+    `  url: env('APP_URL', '${defaultUrl}'),`,
     '  env: appEnv,',
     '  debug: env(\'APP_DEBUG\', true),',
     '  paths: {',
@@ -403,13 +414,16 @@ export function resolveDefaultDatabaseUrl(driver: SupportedDatabaseDriver): stri
 }
 
 export function renderScaffoldEnvFiles(
-  options: Pick<ProjectScaffoldOptions, 'databaseDriver' | 'projectName' | 'storageDefaultDisk' | 'optionalPackages'>,
+  options: Pick<ProjectScaffoldOptions, 'databaseDriver' | 'projectName' | 'storageDefaultDisk' | 'optionalPackages'> & {
+    readonly framework?: ProjectScaffoldOptions['framework']
+  },
 ): { env: string, example: string } {
   const defaultDatabaseConnection = 'main'
+  const defaultUrl = resolveFrameworkDefaultUrl(options.framework)
   const baseLines = [
     'APP_NAME=',
     'APP_KEY=',
-    'APP_URL=http://localhost:3000',
+    `APP_URL=${defaultUrl}`,
     'APP_ENV=development',
     'APP_DEBUG=true',
     `DB_DRIVER=${options.databaseDriver}`,

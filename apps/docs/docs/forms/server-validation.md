@@ -307,7 +307,7 @@ export default function LoginPage() {
 }
 ```
 
-```vue [Nuxt — pages/login.vue]
+```vue [Nuxt — app/pages/login.vue]
 <script setup lang="ts">
 import { useAuth } from '@holo-js/auth/nuxt'
 import { useForm } from '@holo-js/adapter-nuxt/client'

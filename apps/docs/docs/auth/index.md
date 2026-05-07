@@ -231,6 +231,8 @@ page protection:
 - `guestOnly(...)` redirects signed-in users away from guest pages like login and register.
 
 Both helpers accept exact paths, wildcard paths such as `/admin/*`, RegExp matchers, or predicate functions.
+The base auth scaffold does not generate `/login`, `/register`, `/logout`, admin pages, or these protection entrypoints;
+add this wiring when those routes exist in your application.
 
 ::: code-group
 

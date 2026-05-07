@@ -139,8 +139,11 @@ Framework-owned files depend on the selected adapter.
 Nuxt usually adds:
 
 ```text
-app.vue
+app/
+  app.vue
 nuxt.config.ts
+server/
+shared/
 ```
 
 Next.js usually adds:

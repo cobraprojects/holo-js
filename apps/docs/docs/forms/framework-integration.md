@@ -137,7 +137,7 @@ const form = useForm(loginForm, {
 })
 ```
 
-```ts [Nuxt — pages/login.vue]
+```ts [Nuxt — app/pages/login.vue]
 import { useAuth } from '@holo-js/auth/nuxt'
 import { useForm } from '@holo-js/adapter-nuxt/client'
 import { loginForm } from '~/lib/schemas/login'

@@ -91,9 +91,8 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
   if (options.framework === 'nuxt') {
     dependencies.nuxt = SCAFFOLD_FRAMEWORK_VERSIONS.nuxt
     dependencies.vue = '^3.5.13'
-    dependencies['vue-router'] = '^4.1.6'
+    dependencies['vue-router'] = '^5.0.4'
     dependencies['@holo-js/adapter-nuxt'] = SCAFFOLD_FRAMEWORK_ADAPTER_VERSIONS.nuxt
-    devDependencies.vite = '^5.4.14'
     devDependencies['vue-tsc'] = '^2.2.0'
   }
 
@@ -108,11 +107,11 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
 
   if (options.framework === 'sveltekit') {
     dependencies['@holo-js/adapter-sveltekit'] = SCAFFOLD_FRAMEWORK_ADAPTER_VERSIONS.sveltekit
-    dependencies['@sveltejs/adapter-node'] = '^5.0.0'
+    dependencies['@sveltejs/adapter-node'] = '^5.5.4'
     dependencies['@sveltejs/kit'] = SCAFFOLD_FRAMEWORK_VERSIONS.sveltekit
-    dependencies['@sveltejs/vite-plugin-svelte'] = '^4.0.0'
-    dependencies.svelte = '^5.0.0'
-    dependencies.vite = '^5.0.0'
+    dependencies['@sveltejs/vite-plugin-svelte'] = '^7.1.0'
+    dependencies.svelte = '^5.55.5'
+    dependencies.vite = '^8.0.10'
   }
 
   if (optionalPackages.includes('storage')) {
@@ -187,7 +186,7 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
       dev: 'holo dev',
       build: 'holo build',
       lint: options.framework === 'nuxt'
-        ? 'npx eslint app config server tests *.d.ts --fix --no-warn-ignored --no-error-on-unmatched-pattern'
+        ? 'npx eslint app config server shared tests *.d.ts --fix --no-warn-ignored --no-error-on-unmatched-pattern'
         : options.framework === 'next'
           ? 'npx eslint app config server tests --fix --no-warn-ignored --no-error-on-unmatched-pattern'
           : 'npx eslint src config server tests --fix --no-warn-ignored --no-error-on-unmatched-pattern',
@@ -278,7 +277,7 @@ export async function scaffoldProject(
   await writeFile(resolve(projectRoot, '.gitignore'), renderScaffoldGitignore(), 'utf8')
   await writeFile(resolve(projectRoot, '.env'), scaffoldEnv, 'utf8')
   await writeFile(resolve(projectRoot, '.env.example'), scaffoldEnvExample, 'utf8')
-  await writeFile(resolve(projectRoot, 'config/app.ts'), renderScaffoldAppConfig(options.projectName), 'utf8')
+  await writeFile(resolve(projectRoot, 'config/app.ts'), renderScaffoldAppConfig(options.projectName, options.framework), 'utf8')
   await writeFile(resolve(projectRoot, 'config/database.ts'), renderScaffoldDatabaseConfig(options), 'utf8')
   await writeFile(resolve(projectRoot, 'config/redis.ts'), renderRedisConfig(), 'utf8')
   if (queueEnabled) {

@@ -12,9 +12,9 @@ export const SCAFFOLD_PACKAGE_MANAGER_VERSIONS = Object.freeze({
 } as const)
 
 export const SCAFFOLD_FRAMEWORK_VERSIONS = Object.freeze({
-  nuxt: '^3.17.0',
-  next: '^16.0.0',
-  sveltekit: '^2.0.0',
+  nuxt: '^4.4.4',
+  next: '^16.2.4',
+  sveltekit: '^2.59.1',
 } as const)
 
 export const SCAFFOLD_FRAMEWORK_ADAPTER_VERSIONS = Object.freeze({

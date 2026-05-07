@@ -261,7 +261,7 @@ export default async function RootLayout({ children }: { readonly children: Reac
 }
 ```
 
-```vue [Nuxt — app.vue]
+```vue [Nuxt — app/app.vue]
 <script setup lang="ts">
 import { useAuth } from '@holo-js/auth/nuxt'
 
@@ -287,6 +287,41 @@ Nuxt's `useAuth()` is async because it uses Nuxt's server/client data fetching s
 ## Current User Endpoint
 
 The framework auth helpers need an application-owned current-auth endpoint. The default endpoint is `/api/auth/user`.
+When `auth` is selected during scaffolding, Holo writes this endpoint for the selected framework so `useAuth()` works
+without extra setup.
+
+This endpoint is only for reading current auth state. Login, register, logout, password reset, email verification, and
+route protection remain application-owned routes and middleware.
+
+If your app uses a different current-auth URL, pass `endpoint` to the framework helper or provider:
+
+::: code-group
+
+```tsx [Next.js]
+const auth = useAuth({ endpoint: '/api/me' })
+
+<AuthProvider endpoint="/api/me" initialUser={currentAuth.user}>
+  {children}
+</AuthProvider>
+```
+
+```vue [Nuxt]
+const { authenticated, refreshUser, user } = await useAuth({ endpoint: '/api/me' })
+```
+
+```svelte [SvelteKit]
+const auth = useAuth({ endpoint: '/api/me' })
+```
+
+```ts [Framework-neutral]
+import { configureAuthClient, refreshUser } from '@holo-js/auth/client'
+
+configureAuthClient({ endpoint: '/api/me' })
+
+const user = await refreshUser()
+```
+
+:::
 
 ::: code-group
 
@@ -329,7 +364,9 @@ export async function GET() {
 
 :::
 
-For a named guard, pass `guard` to the framework auth helper and return that guard's state from the endpoint.
+For a named guard, pass `guard` to the framework auth helper and return that guard's state from the endpoint. The client
+adds the guard to the current-auth request query string, so custom endpoints that support multiple guards should read
+that value and call the matching server guard.
 
 ## Types
 

@@ -86,6 +86,21 @@ function renderNuxtHealthRoute(): string {
   ].join('\n')
 }
 
+function renderNuxtCurrentAuthRoute(): string {
+  return [
+    'import { check, user } from \'@holo-js/auth\'',
+    '',
+    'export default defineEventHandler(async () => {',
+    '  return {',
+    '    authenticated: await check(),',
+    '    guard: \'web\',',
+    '    user: await user(),',
+    '  }',
+    '})',
+    '',
+  ].join('\n')
+}
+
 function renderNextConfig(): string {
   return [
     'import type { NextConfig } from \'next\'',
@@ -191,6 +206,21 @@ function renderNextHealthRoute(): string {
     '    env: app.config.app.env,',
     '    models: app.registry?.models.length ?? 0,',
     '    commands: app.registry?.commands.length ?? 0,',
+    '  })',
+    '}',
+    '',
+  ].join('\n')
+}
+
+function renderNextCurrentAuthRoute(): string {
+  return [
+    'import { check, user } from \'@holo-js/auth\'',
+    '',
+    'export async function GET() {',
+    '  return Response.json({',
+    '    authenticated: await check(),',
+    '    guard: \'web\',',
+    '    user: await user(),',
     '  })',
     '}',
     '',
@@ -393,6 +423,22 @@ function renderSvelteHealthRoute(): string {
   ].join('\n')
 }
 
+function renderSvelteCurrentAuthRoute(): string {
+  return [
+    'import { json } from \'@sveltejs/kit\'',
+    'import { check, user } from \'@holo-js/auth\'',
+    '',
+    'export async function GET() {',
+    '  return json({',
+    '    authenticated: await check(),',
+    '    guard: \'web\',',
+    '    user: await user(),',
+    '  })',
+    '}',
+    '',
+  ].join('\n')
+}
+
 function renderSvelteStorageRoute(): string {
   return [
     'import { holo } from \'$lib/server/holo\'',
@@ -409,12 +455,19 @@ function renderSvelteStorageRoute(): string {
 export function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly ScaffoldedFile[] {
   const optionalPackages = normalizeScaffoldOptionalPackages(options.optionalPackages)
   const storageEnabled = optionalPackages.includes('storage')
+  const authEnabled = optionalPackages.includes('auth')
 
   if (options.framework === 'nuxt') {
     return [
       { path: 'app/app.vue', contents: renderNuxtAppVue(options.projectName) },
       { path: 'nuxt.config.ts', contents: renderNuxtConfig() },
       { path: 'server/api/holo/health.get.ts', contents: renderNuxtHealthRoute() },
+      { path: 'shared/.gitkeep', contents: '' },
+      ...(authEnabled
+        ? [
+            { path: 'server/api/auth/user.get.ts', contents: renderNuxtCurrentAuthRoute() },
+          ]
+        : []),
     ]
   }
 
@@ -425,6 +478,11 @@ export function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly 
       { path: 'app/layout.tsx', contents: renderNextLayout(options.projectName) },
       { path: 'app/page.tsx', contents: renderNextPage(options.projectName) },
       { path: 'app/api/holo/health/route.ts', contents: renderNextHealthRoute() },
+      ...(authEnabled
+        ? [
+            { path: 'app/api/auth/user/route.ts', contents: renderNextCurrentAuthRoute() },
+          ]
+        : []),
       ...(storageEnabled
         ? [{ path: 'app/storage/[[...path]]/route.ts', contents: renderNextStorageRoute() }]
         : []),
@@ -441,6 +499,11 @@ export function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly 
     { path: 'src/app.html', contents: renderSvelteAppHtml() },
     { path: 'src/routes/+page.svelte', contents: renderSveltePage(options.projectName) },
     { path: 'src/routes/api/holo/health/+server.ts', contents: renderSvelteHealthRoute() },
+    ...(authEnabled
+      ? [
+          { path: 'src/routes/api/auth/user/+server.ts', contents: renderSvelteCurrentAuthRoute() },
+        ]
+      : []),
     ...(storageEnabled
       ? [{ path: 'src/routes/storage/[...path]/+server.ts', contents: renderSvelteStorageRoute() }]
       : []),
