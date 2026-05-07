@@ -647,6 +647,12 @@ describe('@holo-js/auth package runtime', () => {
 
     expect(packageJson.peerDependencies?.['@holo-js/security']).toBe('^0.1.4')
     expect(packageJson.peerDependenciesMeta?.['@holo-js/security']?.optional).toBe(true)
+    expect(packageJson.peerDependencies?.react).toBeDefined()
+    expect(packageJson.peerDependencies?.svelte).toBeDefined()
+    expect(packageJson.peerDependencies?.nuxt).toBeDefined()
+    expect(packageJson.peerDependenciesMeta?.react?.optional).toBe(true)
+    expect(packageJson.peerDependenciesMeta?.svelte?.optional).toBe(true)
+    expect(packageJson.peerDependenciesMeta?.nuxt?.optional).toBe(true)
   })
 
   it('keeps the client auth entry read-only', () => {

@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react'
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { AuthProvider } from '@holo-js/adapter-next/client'
-import { auth } from '@holo-js/adapter-next/server'
+import { AuthProvider } from '@holo-js/auth/next/client'
+import { auth } from '@holo-js/auth/next/server'
 
 import { AuthNav } from './auth-nav'
 

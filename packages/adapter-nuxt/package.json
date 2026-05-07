@@ -17,14 +17,6 @@
       "types": "./dist/runtime/composables/index.d.ts",
       "import": "./dist/runtime/composables/index.js"
     },
-    "./auth": {
-      "types": "./dist/runtime/composables/auth.d.ts",
-      "import": "./dist/runtime/composables/auth.js"
-    },
-    "./server": {
-      "types": "./dist/runtime/server/protection.d.ts",
-      "import": "./dist/runtime/server/protection.js"
-    },
     "./storage": {
       "types": "./dist/runtime/composables/storage.d.ts",
       "import": "./dist/runtime/composables/storage.js"
@@ -43,7 +35,6 @@
   },
   "dependencies": {
     "@nuxt/kit": "catalog:",
-    "@holo-js/auth": "^0.1.4",
     "@holo-js/config": "^0.1.4",
     "@holo-js/core": "^0.1.4",
     "@holo-js/db": "^0.1.4"

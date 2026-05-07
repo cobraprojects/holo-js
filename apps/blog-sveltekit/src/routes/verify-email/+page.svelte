@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto, invalidateAll } from '$app/navigation'
-  import { useAuth, useForm } from '@holo-js/adapter-sveltekit/client'
+  import { useAuth } from '@holo-js/auth/sveltekit/client'
+  import { useForm } from '@holo-js/adapter-sveltekit/client'
   import { verifyEmailForm } from '$lib/schemas/auth'
 
   export let data: {

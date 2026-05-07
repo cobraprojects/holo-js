@@ -7,15 +7,24 @@ export type NextRequestLike = {
   readonly headers: Headers
 }
 
-const nextRequestStore = new AsyncLocalStorage<NextRequestLike>()
+type NextRequestGlobals = typeof globalThis & {
+  __holoNextAuthRequestStore?: AsyncLocalStorage<NextRequestLike>
+}
+
+function getNextRequestStore(): AsyncLocalStorage<NextRequestLike> {
+  const globals = globalThis as NextRequestGlobals
+  globals.__holoNextAuthRequestStore ??= new AsyncLocalStorage<NextRequestLike>()
+
+  return globals.__holoNextAuthRequestStore
+}
 
 export function getCurrentNextRequest(): NextRequestLike | undefined {
-  return nextRequestStore.getStore()
+  return getNextRequestStore().getStore()
 }
 
 export function runWithNextRequest<TValue>(
   request: NextRequestLike,
   callback: () => TValue,
 ): TValue {
-  return nextRequestStore.run(request, callback)
+  return getNextRequestStore().run(request, callback)
 }

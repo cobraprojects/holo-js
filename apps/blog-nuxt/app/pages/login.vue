@@ -1,13 +1,21 @@
 <script setup lang="ts">
+import { useAuth } from '@holo-js/auth/nuxt'
 import { useForm } from '@holo-js/adapter-nuxt/client'
 import { loginForm } from '#shared/schemas/auth'
 
+const { refreshUser } = await useAuth()
 const form = useForm(loginForm, {
   validateOn: 'blur',
   initialValues: { email: '', password: '', remember: false },
   async submitter({ formData }) {
     const submission = await $fetch('/api/login', { method: 'POST', body: formData })
     if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
+      try {
+        await refreshUser()
+      } catch (error) {
+        console.warn('Auth refresh failed after login.', error)
+      }
+
       await navigateTo(submission.data.redirectTo, {
         external: true,
       })

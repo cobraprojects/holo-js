@@ -118,7 +118,8 @@ not h3 route handlers.
 ::: code-group
 
 ```ts [Next.js — app/login/page.tsx]
-import { useAuth, useForm } from '@holo-js/adapter-next/client'
+import { useAuth } from '@holo-js/auth/next/client'
+import { useForm } from '@holo-js/adapter-next/client'
 import { loginForm } from '@/lib/schemas/login'
 
 const auth = useAuth()
@@ -137,6 +138,7 @@ const form = useForm(loginForm, {
 ```
 
 ```ts [Nuxt — pages/login.vue]
+import { useAuth } from '@holo-js/auth/nuxt'
 import { useForm } from '@holo-js/adapter-nuxt/client'
 import { loginForm } from '~/lib/schemas/login'
 
@@ -156,7 +158,8 @@ const form = useForm(loginForm, {
 
 ```ts [SvelteKit — src/routes/login/+page.svelte]
 import { invalidateAll } from '$app/navigation'
-import { useAuth, useForm } from '@holo-js/adapter-sveltekit/client'
+import { useAuth } from '@holo-js/auth/sveltekit/client'
+import { useForm } from '@holo-js/adapter-sveltekit/client'
 import { loginForm } from '$lib/schemas/login'
 
 const auth = useAuth()

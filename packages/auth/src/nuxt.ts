@@ -1,7 +1,7 @@
-import type { CurrentAuthResponse, HoloAuthUser } from '@holo-js/auth'
+import type { CurrentAuthResponse, HoloAuthUser } from './contracts'
 import { computed, useFetch, useState } from '#imports'
 
-export type { HoloAuthUser } from '@holo-js/auth'
+export type { HoloAuthUser } from './contracts'
 
 export type UseAuthOptions = {
   readonly endpoint?: string

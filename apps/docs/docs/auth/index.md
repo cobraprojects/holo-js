@@ -224,8 +224,127 @@ lookup for the selected guard.
 
 ## Protecting Routes
 
-Holo does not inject opinionated framework routes or route middleware for you. Route protection stays in your
-application code.
+Route protection stays explicit in your application code. The framework adapters provide server-side helpers for common
+page protection:
+
+- `authOnly(...)` redirects guests away from protected pages.
+- `guestOnly(...)` redirects signed-in users away from guest pages like login and register.
+
+Both helpers accept exact paths, wildcard paths such as `/admin/*`, RegExp matchers, or predicate functions.
+
+::: code-group
+
+```ts [Next.js 16 proxy.ts]
+import { authOnly, guestOnly, protectRoutes } from '@holo-js/auth/next/server'
+
+export const proxy = protectRoutes(
+  guestOnly({
+    routes: ['/login', '/register', '/forgot-password', '/reset-password'],
+    redirectTo: '/admin',
+  }),
+  authOnly({
+    routes: ['/admin/*'],
+    redirectTo: '/login',
+  }),
+)
+
+export const config = {
+  matcher: ['/login', '/register', '/forgot-password', '/reset-password', '/admin/:path*'],
+}
+```
+
+```ts [Nuxt 4 app/middleware/auth-only.global.ts]
+import { authOnly } from '@holo-js/auth/nuxt/server'
+
+export default authOnly({
+  routes: ['/admin/*'],
+  redirectTo: '/login',
+})
+```
+
+```ts [Nuxt 4 app/middleware/guest-only.global.ts]
+import { guestOnly } from '@holo-js/auth/nuxt/server'
+
+export default guestOnly({
+  routes: ['/login', '/register', '/forgot-password', '/reset-password'],
+  redirectTo: '/admin',
+})
+```
+
+```ts [SvelteKit hooks.server.ts]
+import { sequence } from '@sveltejs/kit/hooks'
+import { authOnly, guestOnly } from '@holo-js/auth/sveltekit/server'
+
+export const handle = sequence(
+  guestOnly({
+    routes: ['/login', '/register', '/forgot-password', '/reset-password'],
+    redirectTo: '/admin',
+  }),
+  authOnly({
+    routes: ['/admin/*'],
+    redirectTo: '/login',
+  }),
+)
+```
+
+:::
+
+You can compose your own framework middleware with the Holo helpers. Keep custom logic in the same native entrypoint and
+return a response only when it wants to stop the request.
+
+::: code-group
+
+```ts [Next.js 16 proxy.ts]
+import { authOnly, protectRoutes } from '@holo-js/auth/next/server'
+
+function maintenanceProxy() {
+  if (process.env.MAINTENANCE_MODE === 'true') {
+    return new Response('Down for maintenance.', { status: 503 })
+  }
+}
+
+export const proxy = protectRoutes(
+  maintenanceProxy,
+  authOnly({
+    routes: ['/admin/*'],
+    redirectTo: '/login',
+  }),
+)
+```
+
+```ts [SvelteKit hooks.server.ts]
+import { sequence } from '@sveltejs/kit/hooks'
+import { authOnly } from '@holo-js/auth/sveltekit/server'
+import { MAINTENANCE_MODE } from '$env/static/private'
+
+export const handle = sequence(
+  ({ event, resolve }) => {
+    if (event.url.pathname.startsWith('/admin') && MAINTENANCE_MODE === 'true') {
+      return new Response('Down for maintenance.', { status: 503 })
+    }
+
+    return resolve(event)
+  },
+  authOnly({
+    routes: ['/admin/*'],
+    redirectTo: '/login',
+  }),
+)
+```
+
+```ts [Nuxt 4 app/middleware/maintenance.global.ts]
+export default defineNuxtRouteMiddleware((to) => {
+  const config = useRuntimeConfig()
+
+  if (to.path.startsWith('/admin') && config.public.maintenanceMode === true) {
+    return abortNavigation('Down for maintenance.')
+  }
+})
+```
+
+:::
+
+For API handlers, return a `401` from the server boundary:
 
 ```ts
 import { check } from '@holo-js/auth'

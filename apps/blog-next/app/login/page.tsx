@@ -2,7 +2,8 @@
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useAuth, useForm } from '@holo-js/adapter-next/client'
+import { useAuth } from '@holo-js/auth/next/client'
+import { useForm } from '@holo-js/adapter-next/client'
 import { loginForm } from '@/lib/schemas/auth'
 
 const panelStyle = {

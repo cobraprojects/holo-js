@@ -14,6 +14,36 @@
       "types": "./dist/client.d.ts",
       "import": "./dist/client.mjs",
       "default": "./dist/client.mjs"
+    },
+    "./next/client": {
+      "types": "./dist/next/client.d.ts",
+      "import": "./dist/next/client.mjs",
+      "default": "./dist/next/client.mjs"
+    },
+    "./next/server": {
+      "types": "./dist/next/server.d.ts",
+      "import": "./dist/next/server.mjs",
+      "default": "./dist/next/server.mjs"
+    },
+    "./sveltekit/client": {
+      "types": "./dist/sveltekit/client.d.ts",
+      "import": "./dist/sveltekit/client.mjs",
+      "default": "./dist/sveltekit/client.mjs"
+    },
+    "./sveltekit/server": {
+      "types": "./dist/sveltekit/server.d.ts",
+      "import": "./dist/sveltekit/server.mjs",
+      "default": "./dist/sveltekit/server.mjs"
+    },
+    "./nuxt": {
+      "types": "./dist/nuxt.d.ts",
+      "import": "./dist/nuxt.mjs",
+      "default": "./dist/nuxt.mjs"
+    },
+    "./nuxt/server": {
+      "types": "./dist/nuxt/server.d.ts",
+      "import": "./dist/nuxt/server.mjs",
+      "default": "./dist/nuxt/server.mjs"
     }
   },
   "main": "./dist/index.mjs",
@@ -31,14 +61,30 @@
     "@holo-js/config": "^0.1.4"
   },
   "peerDependencies": {
-    "@holo-js/security": "^0.1.4"
+    "@holo-js/security": "^0.1.4",
+    "nuxt": "catalog:",
+    "react": "^18.3.1 || ^19.0.0",
+    "svelte": "catalog:"
   },
   "peerDependenciesMeta": {
     "@holo-js/security": {
       "optional": true
+    },
+    "nuxt": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "svelte": {
+      "optional": true
     }
   },
   "devDependencies": {
+    "@types/react": "^19.0.0",
+    "nuxt": "catalog:",
+    "react": "^19.0.0",
+    "svelte": "catalog:",
     "@types/node": "^22.10.2",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",

@@ -153,6 +153,42 @@ async function waitForText(url, predicate, timeoutMs = 30000) {
   throw new Error(`Timed out waiting for ${url}${lastError instanceof Error ? `: ${lastError.message}` : ''}`)
 }
 
+async function waitForRedirect(url, expectedPath, timeoutMs = 30000) {
+  const startedAt = Date.now()
+  let lastError = null
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const remainingMs = timeoutMs - (Date.now() - startedAt)
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), Math.max(100, Math.min(remainingMs, 5000)))
+    try {
+      const response = await fetch(url, {
+        redirect: 'manual',
+        signal: controller.signal,
+      })
+      const location = response.headers.get('location')
+      if (response.status >= 300 && response.status < 400 && location) {
+        const locationPath = new URL(location, url).pathname
+        if (locationPath === expectedPath) {
+          return
+        }
+
+        lastError = new Error(`Unexpected redirect ${response.status} to ${locationPath}`)
+      } else {
+        lastError = new Error(`Unexpected status ${response.status}`)
+      }
+    } catch (error) {
+      lastError = error
+    } finally {
+      clearTimeout(timeout)
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 250))
+  }
+
+  throw new Error(`Timed out waiting for ${url} to redirect to ${expectedPath}${lastError instanceof Error ? `: ${lastError.message}` : ''}`)
+}
+
 function pipeOutput(stream, target, onLine) {
   if (!stream) {
     return
@@ -263,7 +299,7 @@ try {
   const initial = await waitForJson(healthUrl, payload => payload.ok === true)
   assert.equal(initial.app, 'blog-sveltekit')
   await waitForText(`${devUrl}/`, payload => payload.includes('Shipping a Real Holo Blog on SvelteKit'))
-  await waitForText(`${devUrl}/admin/posts`, payload => payload.includes('Designing the Example App Roadmap'))
+  await waitForRedirect(`${devUrl}/admin/posts`, '/login')
   await assertExampleAppAuthFlow({
     baseUrl: devUrl,
     getOutput: () => capturedOutput,

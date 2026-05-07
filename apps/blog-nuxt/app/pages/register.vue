@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { navigateTo } from '#imports'
+import { useAuth } from '@holo-js/auth/nuxt'
 import { useForm } from '@holo-js/adapter-nuxt/client'
 import { registerForm } from '#shared/schemas/auth'
 
+const { refreshUser } = await useAuth()
 const form = useForm(registerForm, {
   validateOn: 'blur',
   initialValues: { name: '', email: '', password: '', passwordConfirmation: '' },
   async submitter({ formData }) {
     const submission = await $fetch('/api/register', { method: 'POST', body: formData })
     if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
+      await refreshUser()
       await navigateTo(submission.data.redirectTo, {
         redirectCode: 302,
       })

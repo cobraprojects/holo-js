@@ -3,13 +3,13 @@
 Auth client state is read-only. Login, register, logout, impersonation, password hashing, and provider operations stay on
 the server through `@holo-js/auth`.
 
-Use the adapter client helper for your framework:
+Use the auth client helper for your framework:
 
-- Next.js: `@holo-js/adapter-next/client`
-- Nuxt: `@holo-js/adapter-nuxt/client`
-- SvelteKit: `@holo-js/adapter-sveltekit/client`
+- Next.js: `@holo-js/auth/next/client`
+- Nuxt: `@holo-js/auth/nuxt`
+- SvelteKit: `@holo-js/auth/sveltekit/client`
 
-Each adapter exposes `useAuth()`. The returned `user` is inferred as `HoloAuthUser | null`, so application code can read
+Each framework auth entrypoint exposes `useAuth()`. The returned `user` is inferred as `HoloAuthUser | null`, so application code can read
 `auth.user`, `user.value`, or `auth.authenticated` without writing a local user shape type.
 
 ## `user` vs `refreshUser`
@@ -42,7 +42,8 @@ calls `refreshUser()` so the framework state matches the new server state before
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { useAuth, useForm } from '@holo-js/adapter-next/client'
+import { useAuth } from '@holo-js/auth/next/client'
+import { useForm } from '@holo-js/adapter-next/client'
 import { loginForm } from '@/lib/schemas/login'
 
 export default function LoginPage() {
@@ -73,6 +74,7 @@ export default function LoginPage() {
 
 ```vue [Nuxt — login/register success]
 <script setup lang="ts">
+import { useAuth } from '@holo-js/auth/nuxt'
 import { useForm } from '@holo-js/adapter-nuxt/client'
 import { loginForm } from '~/lib/schemas/login'
 
@@ -100,7 +102,8 @@ const form = useForm(loginForm, {
 ```svelte [SvelteKit — login/register success]
 <script lang="ts">
   import { goto, invalidateAll } from '$app/navigation'
-  import { useAuth, useForm } from '@holo-js/adapter-sveltekit/client'
+  import { useAuth } from '@holo-js/auth/sveltekit/client'
+  import { useForm } from '@holo-js/adapter-sveltekit/client'
   import { loginForm } from '$lib/schemas/login'
 
   const auth = useAuth()
@@ -135,7 +138,7 @@ const form = useForm(loginForm, {
 ```tsx [Next.js]
 'use client'
 
-import { useAuth } from '@holo-js/adapter-next/client'
+import { useAuth } from '@holo-js/auth/next/client'
 
 export function AuthNav() {
   const auth = useAuth()
@@ -170,6 +173,8 @@ export function AuthNav() {
 
 ```vue [Nuxt]
 <script setup lang="ts">
+import { useAuth } from '@holo-js/auth/nuxt'
+
 const { authenticated, refreshUser, user } = await useAuth()
 const displayName = computed(() => user.value?.name ?? user.value?.email ?? 'Account')
 
@@ -196,7 +201,7 @@ async function logout() {
 <script lang="ts">
   import { invalidateAll } from '$app/navigation'
   import { untrack } from 'svelte'
-  import { useAuth } from '@holo-js/adapter-sveltekit/client'
+  import { useAuth } from '@holo-js/auth/sveltekit/client'
   import type { LayoutProps } from './$types'
 
   let { data, children }: LayoutProps = $props()
@@ -236,8 +241,8 @@ the visitor is authenticated.
 ::: code-group
 
 ```tsx [Next.js — app/layout.tsx]
-import { AuthProvider } from '@holo-js/adapter-next/client'
-import { auth } from '@holo-js/adapter-next/server'
+import { AuthProvider } from '@holo-js/auth/next/client'
+import { auth } from '@holo-js/auth/next/server'
 import { AuthNav } from './auth-nav'
 
 export default async function RootLayout({ children }: { readonly children: React.ReactNode }) {
@@ -258,12 +263,14 @@ export default async function RootLayout({ children }: { readonly children: Reac
 
 ```vue [Nuxt — app.vue]
 <script setup lang="ts">
+import { useAuth } from '@holo-js/auth/nuxt'
+
 const { authenticated, refreshUser, user } = await useAuth()
 </script>
 ```
 
 ```ts [SvelteKit — src/routes/+layout.server.ts]
-import { auth } from '@holo-js/adapter-sveltekit/server'
+import { auth } from '@holo-js/auth/sveltekit/server'
 
 export async function load() {
   return {
@@ -279,7 +286,7 @@ Nuxt's `useAuth()` is async because it uses Nuxt's server/client data fetching s
 
 ## Current User Endpoint
 
-The adapter helpers need an application-owned current-auth endpoint. The default endpoint is `/api/auth/user`.
+The framework auth helpers need an application-owned current-auth endpoint. The default endpoint is `/api/auth/user`.
 
 ::: code-group
 
@@ -322,7 +329,7 @@ export async function GET() {
 
 :::
 
-For a named guard, pass `guard` to the adapter helper and return that guard's state from the endpoint.
+For a named guard, pass `guard` to the framework auth helper and return that guard's state from the endpoint.
 
 ## Types
 
@@ -334,15 +341,15 @@ If reusable library code really needs an explicit annotation, import the public 
 ::: code-group
 
 ```ts [Next.js]
-import { type HoloAuthUser } from '@holo-js/adapter-next/client'
+import { type HoloAuthUser } from '@holo-js/auth/next/client'
 ```
 
 ```ts [Nuxt]
-import { type HoloAuthUser } from '@holo-js/adapter-nuxt/client'
+import { type HoloAuthUser } from '@holo-js/auth/nuxt'
 ```
 
 ```ts [SvelteKit]
-import { type HoloAuthUser } from '@holo-js/adapter-sveltekit/client'
+import { type HoloAuthUser } from '@holo-js/auth/sveltekit/client'
 ```
 
 ```ts [Framework-neutral]

@@ -4,11 +4,6 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   resolve: {
     alias: {
-      '@holo-js/auth/client': resolve(__dirname, '../auth/src/client.ts'),
-      '@holo-js/auth': resolve(__dirname, '../auth/src/index.ts'),
-      '@holo-js/auth-social': resolve(__dirname, '../auth-social/src/index.ts'),
-      '@holo-js/auth-workos': resolve(__dirname, '../auth-workos/src/index.ts'),
-      '@holo-js/auth-clerk': resolve(__dirname, '../auth-clerk/src/index.ts'),
       '@holo-js/core/runtime': resolve(__dirname, '../core/src/portable/index.ts'),
       '@holo-js/storage/runtime/drivers/s3': resolve(__dirname, '../storage/src/runtime/drivers/s3.ts'),
       '@holo-js/storage/runtime': resolve(__dirname, '../storage/src/runtime/composables/index.ts'),

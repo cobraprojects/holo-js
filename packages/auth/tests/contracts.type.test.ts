@@ -1,6 +1,9 @@
 import { describe, expectTypeOf, it } from 'vitest'
 import auth, { AuthError, isAuthError, type AuthErrorCode, type AuthEstablishedSession, type AuthFailure, type AuthGuardFacade, type AuthImpersonationState, type AuthLoginErrorCode, type AuthLogoutResult, type AuthPasswordResetConsumeErrorCode, type AuthPasswordResetRequestErrorCode, type AuthProviderAdapter, type AuthRegistrationErrorCode, type AuthResult, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type getAuthRuntime, type HoloAuthUser, type register, type user } from '../src'
 import clientAuth, { type refreshUser as refreshClientUser, type useAuth as clientUseAuth, type user as clientUser } from '../src/client'
+import type { useAuth as useNextAuth } from '../src/next/client'
+import type { useAuth as useNuxtAuth } from '../src/nuxt'
+import type { useAuth as useSvelteKitAuth } from '../src/sveltekit/client'
 
 declare module '../src' {
   interface HoloAuthTypeRegistry {
@@ -28,6 +31,9 @@ describe('@holo-js/auth typing', () => {
     type CurrentServerUser = Awaited<ReturnType<typeof user>>
     type CurrentClientUser = Awaited<ReturnType<typeof clientUser>>
     type CurrentClientAuth = Awaited<ReturnType<typeof clientUseAuth>>
+    type CurrentNextAuth = ReturnType<typeof useNextAuth>
+    type CurrentNuxtAuth = Awaited<ReturnType<typeof useNuxtAuth>>
+    type CurrentSvelteKitAuth = ReturnType<typeof useSvelteKitAuth>
     type RefreshedClientUser = Awaited<ReturnType<typeof refreshClientUser>>
     type GuardUser = Awaited<ReturnType<AuthGuardFacade['user']>>
     type GuardRefreshedUser = Awaited<ReturnType<AuthGuardFacade['refreshUser']>>
@@ -48,6 +54,9 @@ describe('@holo-js/auth typing', () => {
       readonly check: () => boolean
       readonly refreshUser: () => Promise<AppAuthUser | null>
     }>()
+    expectTypeOf<CurrentNextAuth['user']>().toEqualTypeOf<AppAuthUser | null>()
+    expectTypeOf<CurrentNuxtAuth['user']['value']>().toEqualTypeOf<AppAuthUser | null>()
+    expectTypeOf<CurrentSvelteKitAuth['user']>().toEqualTypeOf<AppAuthUser | null>()
     expectTypeOf<RefreshedClientUser>().toEqualTypeOf<AppAuthUser | null>()
     expectTypeOf<GuardUser>().toEqualTypeOf<AppAuthUser | null>()
     expectTypeOf<GuardRefreshedUser>().toEqualTypeOf<AppAuthUser | null>()
