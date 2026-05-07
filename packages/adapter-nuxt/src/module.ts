@@ -112,7 +112,7 @@ function hasModuleNotFoundCode(error: unknown, expectedSpecifier: string): boole
 interface NuxtHookContext {
   hook: (
     name: string,
-    callback: (payload: { references: Array<{ types: string }> }) => void,
+    callback: (payload: { references: Array<{ path?: string, types?: string }> }) => void,
   ) => void
 }
 
@@ -267,6 +267,7 @@ export default defineNuxtModule<ModuleOptions>({
     const opts = nuxt.options as unknown as NuxtOptionsWithNitro
     const rootDir = opts.rootDir ?? opts.srcDir ?? process.cwd()
     const sourceDir = opts.srcDir ?? rootDir
+    const modelRegistryTypesPath = resolve(rootDir, '.holo-js/generated/model-registry.d.ts')
     const loaded = await loadConfigDirectory(rootDir, {
       preferCache: process.env.NODE_ENV === 'production',
       processEnv: process.env,
@@ -381,6 +382,7 @@ export default defineNuxtModule<ModuleOptions>({
       opts._holoTypesRegistered = true
       nuxt.hook('prepare:types', ({ references }) => {
         references.push({ types: '@holo-js/adapter-nuxt' })
+        references.push({ path: modelRegistryTypesPath })
       })
     }
   },

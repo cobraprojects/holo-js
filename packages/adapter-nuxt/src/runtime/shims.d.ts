@@ -47,6 +47,12 @@ interface HoloUseFetchResult<TValue> {
   readonly refresh: () => Promise<void>
 }
 
+interface HoloRouteLocation {
+  readonly path: string
+}
+
+type HoloNavigateToResult = void | false | Promise<void | false>
+
 /**
  * Minimal Nuxt runtime shims for adapter typechecking.
  *
@@ -60,6 +66,13 @@ declare module '#app' {
 
 declare module '#imports' {
   export function computed<TValue>(getter: () => TValue): HoloComputedRef<TValue>
+  export function defineNuxtRouteMiddleware<TValue>(
+    middleware: (to: HoloRouteLocation, from: HoloRouteLocation) => TValue | Promise<TValue>,
+  ): (to: HoloRouteLocation, from: HoloRouteLocation) => TValue | Promise<TValue>
+  export function navigateTo(
+    to: string,
+    options?: { readonly redirectCode?: number },
+  ): HoloNavigateToResult
   export function useFetch<TValue = unknown>(
     request: string,
     options?: { readonly key?: string },

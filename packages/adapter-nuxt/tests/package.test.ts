@@ -26,6 +26,7 @@ describe('@holo-js/adapter-nuxt package boundaries', () => {
     expect(authEntry).toContain("@holo-js/auth")
     expect(packageJson.exports?.['./storage']).toBeDefined()
     expect(packageJson.exports?.['./auth']).toBeDefined()
+    expect(packageJson.exports?.['./server']).toBeDefined()
     expect(packageJson.dependencies?.['@holo-js/auth']).toBeDefined()
     expect(packageJson.dependencies?.['@holo-js/storage']).toBeUndefined()
     expect(packageJson.dependencies?.['@holo-js/forms']).toBeUndefined()

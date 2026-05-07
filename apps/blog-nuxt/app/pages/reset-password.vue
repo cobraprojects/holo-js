@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useRoute } from '#imports'
 import { useForm } from '@holo-js/adapter-nuxt/client'
-import { resetPasswordForm } from '~/lib/schemas/auth'
+import { resetPasswordForm } from '#shared/schemas/auth'
 
 const route = useRoute()
 const token = typeof route.query.token === 'string' ? route.query.token : ''

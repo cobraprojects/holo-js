@@ -438,9 +438,12 @@ export default defineStorageConfig({
     expect(addServerPlugin).toHaveBeenCalledWith('./runtime/plugins/init')
 
     const prepareTypesHook = nuxt.hook.mock.calls.find(([name]) => name === 'prepare:types')?.[1]
-    const references: Array<{ types: string }> = []
+    const references: Array<{ path?: string, types?: string }> = []
     prepareTypesHook?.({ references })
-    expect(references).toEqual([{ types: '@holo-js/adapter-nuxt' }])
+    expect(references).toEqual([
+      { types: '@holo-js/adapter-nuxt' },
+      { path: join(root, '.holo-js/generated/model-registry.d.ts') },
+    ])
   }, 30000)
 
   it('falls back to default storage config when config/storage.ts is absent', async () => {

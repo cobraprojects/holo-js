@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import type { TagArchiveData } from '../../server/lib/blog'
+import type { CategoryArchiveData } from '../../../server/lib/blog'
 
 const route = useRoute()
-const { data } = await useFetch<TagArchiveData>(`/api/blog/tags/${route.params.slug}`)
+const { data } = await useFetch<CategoryArchiveData>(`/api/blog/categories/${route.params.slug}`)
 
 if (!data.value) {
-  throw createError({ statusCode: 404, statusMessage: 'Tag not found' })
+  throw createError({ statusCode: 404, statusMessage: 'Category not found' })
 }
 </script>
 
 <template>
   <section class="stack">
-    <h1>#{{ data?.tag.name }}</h1>
+    <h1>{{ data?.category.name }}</h1>
+    <p>{{ data?.category.description }}</p>
     <article v-for="post in data?.posts || []" :key="post.id" class="panel">
       <h2><NuxtLink :to="`/posts/${post.slug}`">{{ post.title }}</NuxtLink></h2>
       <p>{{ post.excerpt }}</p>

@@ -96,4 +96,60 @@ describe('@holo-js/adapter-sveltekit server auth', () => {
     })
     expect(console.warn).toHaveBeenCalled()
   })
+
+  it('redirects authenticated users from guest-only hook routes', async () => {
+    vi.doMock('@holo-js/auth', () => ({
+      default: {
+        guard: vi.fn(),
+      },
+      user: vi.fn(async () => ({ id: 1, email: 'ava@example.com' })),
+    }))
+
+    const { guestOnly } = await import('../src/server')
+    const handle = guestOnly({
+      routes: ['/login', '/register', '/auth/*'],
+      redirectTo: '/admin',
+    })
+    const response = await handle({
+      event: {
+        url: new URL('https://app.test/login'),
+      },
+      resolve: vi.fn(async () => new Response('ok')),
+    })
+
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe('https://app.test/admin')
+  })
+
+  it('resolves guest-only hook routes when no user is authenticated', async () => {
+    vi.doMock('@holo-js/auth', () => ({
+      default: {
+        guard: vi.fn(),
+      },
+      user: vi.fn(async () => null),
+    }))
+
+    const { guestOnly } = await import('../src/server')
+    const resolved = new Response('ok')
+    const resolve = vi.fn(async () => resolved)
+    const handle = guestOnly({
+      routes: ['/login'],
+      redirectTo: '/admin',
+    })
+
+    await expect(handle({
+      event: {
+        url: new URL('https://app.test/login'),
+      },
+      resolve,
+    })).resolves.toBe(resolved)
+  })
+
+  it('supports wildcard route matching for guest-only hook routes', async () => {
+    const { routeProtectionInternals } = await import('../src/server')
+
+    expect(routeProtectionInternals.matchesRoutes(['/auth/*'], '/auth')).toBe(true)
+    expect(routeProtectionInternals.matchesRoutes(['/auth/*'], '/auth/reset')).toBe(true)
+    expect(routeProtectionInternals.matchesRoutes(['/auth/*'], '/login')).toBe(false)
+  })
 })

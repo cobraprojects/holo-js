@@ -1,7 +1,7 @@
 import { resetPassword } from '@holo-js/auth'
 import { sanitizeFlashedInput, validate } from '@holo-js/forms'
 
-import { resetPasswordForm } from '../../lib/schemas/auth'
+import { resetPasswordForm } from '#shared/schemas/auth'
 
 export default defineEventHandler(async (event) => {
   const submission = await validate(event, resetPasswordForm)

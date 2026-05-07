@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AdminPostData } from '../../../../server/lib/blog'
+import type { AdminPostData } from '../../../../../server/lib/blog'
 
 const route = useRoute()
 const { data } = await useFetch<AdminPostData>(`/api/admin/posts/${route.params.id}`)

@@ -1,7 +1,7 @@
 import { check, verification } from '@holo-js/auth'
 import { sanitizeFlashedInput, validate } from '@holo-js/forms'
 
-import { verifyEmailForm } from '../../lib/schemas/auth'
+import { verifyEmailForm } from '#shared/schemas/auth'
 
 export default defineEventHandler(async (event) => {
   const submission = await validate(event, verifyEmailForm)

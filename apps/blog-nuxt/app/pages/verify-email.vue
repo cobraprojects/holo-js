@@ -2,7 +2,7 @@
 import { navigateTo, useRoute } from '#imports'
 import { useForm } from '@holo-js/adapter-nuxt/client'
 import { ref } from 'vue'
-import { verifyEmailForm } from '~/lib/schemas/auth'
+import { verifyEmailForm } from '#shared/schemas/auth'
 
 const { refreshUser } = await useAuth()
 const route = useRoute()

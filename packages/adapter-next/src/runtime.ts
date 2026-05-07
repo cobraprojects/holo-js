@@ -1,6 +1,8 @@
 import { cookies, headers } from 'next/headers'
 import { initializeHolo, type CreateHoloOptions } from '@holo-js/core'
 import type { DotPath, HoloConfigMap, LoadedHoloConfig, ValueAtPath } from '@holo-js/config'
+import { getCurrentNextRequest } from './request-context'
+export { runWithNextRequest, type NextRequestLike } from './request-context'
 
 export type NextHoloRuntimeOptions = CreateHoloOptions & {
   readonly projectRoot: string
@@ -9,10 +11,20 @@ export type NextHoloRuntimeOptions = CreateHoloOptions & {
 function resolveNextAuthRequestAccessors(): NonNullable<CreateHoloOptions['authRequest']> {
   return {
     async getCookie(name: string) {
+      const request = getCurrentNextRequest()
+      if (request) {
+        return request.cookies.get(name)?.value
+      }
+
       const store = await cookies()
       return store.get(name)?.value
     },
     async getHeader(name: string) {
+      const request = getCurrentNextRequest()
+      if (request) {
+        return request.headers.get(name) ?? undefined
+      }
+
       const requestHeaders = await headers()
       return requestHeaders.get(name) ?? undefined
     },

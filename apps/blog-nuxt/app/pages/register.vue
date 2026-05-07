@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { navigateTo } from '#imports'
 import { useForm } from '@holo-js/adapter-nuxt/client'
-import { registerForm } from '~/lib/schemas/auth'
+import { registerForm } from '#shared/schemas/auth'
 
 const form = useForm(registerForm, {
   validateOn: 'blur',

@@ -412,7 +412,7 @@ export function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly 
 
   if (options.framework === 'nuxt') {
     return [
-      { path: 'app.vue', contents: renderNuxtAppVue(options.projectName) },
+      { path: 'app/app.vue', contents: renderNuxtAppVue(options.projectName) },
       { path: 'nuxt.config.ts', contents: renderNuxtConfig() },
       { path: 'server/api/holo/health.get.ts', contents: renderNuxtHealthRoute() },
     ]

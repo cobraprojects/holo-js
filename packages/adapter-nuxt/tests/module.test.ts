@@ -350,6 +350,7 @@ export default defineDatabaseConfig({
     const references: Array<Record<string, string>> = []
     prepareTypes?.({ references })
     expect(references).toContainEqual({ types: '@holo-js/adapter-nuxt' })
+    expect(references).toContainEqual({ path: resolve(root, '.holo-js/generated/model-registry.d.ts') })
   })
 
   it('skips malformed cookie segments when decoding auth cookies', async () => {
