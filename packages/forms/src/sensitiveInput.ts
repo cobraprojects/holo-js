@@ -100,9 +100,11 @@ function sanitizePlainObject<TData>(
     return values
   }
 
-  const output = Object.fromEntries(
-    Object.entries(values).filter(([key]) => !DEFAULT_DONT_FLASH_FIELD_SET.has(key)),
-  )
+  const output = structuredClone(values) as Record<string, unknown>
+
+  for (const field of DEFAULT_DONT_FLASH_FIELD_SET) {
+    delete output[field]
+  }
 
   for (const path of sensitivePaths) {
     deletePath(output, path)

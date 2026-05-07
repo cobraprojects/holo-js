@@ -1,13 +1,14 @@
-import type {
-  FormFailureErrors,
-  FormFailureInput,
-  FormFailurePayload,
-  InferFormData,
-  FormSchema,
-  FormSubmissionResult,
-  FormSuccessPayload,
-  SerializedFormSubmission as SerializedSubmissionState,
-  SerializedFormSubmission,
+import {
+  type FormFailureInput,
+  type FormFailurePayload,
+  type InferFormData,
+  type FormSchema,
+  type FormSubmissionResult,
+  type FormSuccessPayload,
+  type SerializedFormSubmission as SerializedSubmissionState,
+  type SerializedFormSubmission,
+  normalizeFailureErrors,
+  normalizeFailureInput,
 } from './contracts'
 import { FormContractError } from './errors'
 import { clearSensitiveInputValues, sanitizeFlashedInput } from './sensitiveInput'
@@ -128,41 +129,6 @@ function normalizeStatus(value: number | undefined, fallback: number): number {
   }
 
   return value
-}
-
-function normalizeFailureInput(input: FormFailureInput, fallbackStatus: number): {
-  readonly status: number
-  readonly errors?: FormFailureErrors
-} {
-  if (typeof input === 'number') {
-    return {
-      status: normalizeStatus(input, fallbackStatus),
-    }
-  }
-
-  return {
-    status: normalizeStatus(input?.status, fallbackStatus),
-    errors: input?.errors,
-  }
-}
-
-function normalizeFailureErrors(
-  fallback: Record<string, readonly string[]>,
-  override: FormFailureErrors | undefined,
-): Record<string, readonly string[]> {
-  if (!override) {
-    return fallback
-  }
-
-  const normalized: Record<string, readonly string[]> = {}
-
-  for (const [field, messages] of Object.entries(override)) {
-    if (typeof messages !== 'undefined') {
-      normalized[field] = messages
-    }
-  }
-
-  return normalized
 }
 
 function serializeSubmissionState<TData>(

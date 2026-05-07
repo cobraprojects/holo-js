@@ -314,6 +314,39 @@ describe('@holo-js/forms contracts', () => {
     })
   })
 
+  it('does not mutate nested values when sanitizing flashed input', () => {
+    const profileForm = schema({
+      email: field.string().required(),
+      profile: {
+        displayName: field.string().required(),
+        nationalId: field.string().sensitive().required(),
+      },
+    })
+    const values = {
+      email: 'ava@example.com',
+      password: 'secret-secret',
+      profile: {
+        displayName: 'Ava',
+        nationalId: 'private-id',
+      },
+    }
+
+    expect(formsInternals.sanitizeFlashedInput(values, profileForm)).toEqual({
+      email: 'ava@example.com',
+      profile: {
+        displayName: 'Ava',
+      },
+    })
+    expect(values).toEqual({
+      email: 'ava@example.com',
+      password: 'secret-secret',
+      profile: {
+        displayName: 'Ava',
+        nationalId: 'private-id',
+      },
+    })
+  })
+
   it('does not coerce plain form objects with request-like field names into Request inputs', async () => {
     const requestMeta = schema({
       method: field.string().required(),

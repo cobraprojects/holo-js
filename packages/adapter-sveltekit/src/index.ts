@@ -32,6 +32,7 @@ type SvelteKitCookieOptions = {
   secure?: boolean
   httpOnly?: boolean
   sameSite?: 'lax' | 'strict' | 'none'
+  partitioned?: boolean
 }
 
 type ParsedResponseCookie = {
@@ -116,6 +117,9 @@ function parseResponseCookie(cookie: string): ParsedResponseCookie | null {
         if (value.toLowerCase() === 'lax' || value.toLowerCase() === 'strict' || value.toLowerCase() === 'none') {
           options.sameSite = value.toLowerCase() as SvelteKitCookieOptions['sameSite']
         }
+        break
+      case 'partitioned':
+        options.partitioned = value ? value.toLowerCase() === 'true' : true
         break
     }
   }

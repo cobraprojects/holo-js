@@ -132,7 +132,7 @@ function normalizeStatus(value: number | undefined, fallback: number): number {
   return value
 }
 
-function normalizeFailureInput(input: FormFailureInput, fallbackStatus: number): {
+export function normalizeFailureInput(input: FormFailureInput, fallbackStatus: number): {
   readonly status: number
   readonly errors?: FormFailureErrors
 } {
@@ -148,7 +148,7 @@ function normalizeFailureInput(input: FormFailureInput, fallbackStatus: number):
   }
 }
 
-function normalizeFailureErrors(
+export function normalizeFailureErrors(
   fallback: Record<string, readonly string[]>,
   override: FormFailureErrors | undefined,
 ): Record<string, readonly string[]> {
