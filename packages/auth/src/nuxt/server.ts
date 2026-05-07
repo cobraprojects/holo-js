@@ -66,7 +66,15 @@ function matchesRoutes(routes: readonly RouteMatcher[] | undefined, pathname: st
 }
 
 function isSamePath(path: string, redirectTo: string): boolean {
-  return normalizePathname(path) === normalizePathname(redirectTo)
+  const resolvePathname = (value: string): string => {
+    try {
+      return new URL(value, 'https://holo.local').pathname
+    } catch {
+      return value.split(/[?#]/, 1)[0] ?? value
+    }
+  }
+
+  return normalizePathname(resolvePathname(path)) === normalizePathname(resolvePathname(redirectTo))
 }
 
 export function guestOnly(options: GuestOnlyOptions): GuestOnlyRouteMiddleware {

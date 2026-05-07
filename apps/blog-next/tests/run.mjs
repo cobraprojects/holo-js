@@ -159,8 +159,14 @@ async function waitForRedirect(url, expectedPath, timeoutMs = 30000) {
   let lastError = null
 
   while (Date.now() - startedAt < timeoutMs) {
+    const remainingMs = timeoutMs - (Date.now() - startedAt)
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), Math.max(100, Math.min(remainingMs, 5000)))
     try {
-      const response = await fetch(url, { redirect: 'manual' })
+      const response = await fetch(url, {
+        redirect: 'manual',
+        signal: controller.signal,
+      })
       const location = response.headers.get('location')
       if (response.status >= 300 && response.status < 400 && location) {
         const locationPath = new URL(location, url).pathname
@@ -174,6 +180,8 @@ async function waitForRedirect(url, expectedPath, timeoutMs = 30000) {
       }
     } catch (error) {
       lastError = error
+    } finally {
+      clearTimeout(timeout)
     }
 
     await new Promise(resolve => setTimeout(resolve, 250))

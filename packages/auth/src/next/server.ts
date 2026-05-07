@@ -73,7 +73,8 @@ function matchesRoutes(routes: readonly RouteMatcher[] | undefined, pathname: st
 }
 
 function isSameUrl(left: URL, right: URL): boolean {
-  return left.pathname === right.pathname
+  return left.origin === right.origin
+    && left.pathname === right.pathname
     && left.search === right.search
     && left.hash === right.hash
 }

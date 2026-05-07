@@ -350,6 +350,71 @@ const form = useForm(loginForm, {
 </template>
 ```
 
+```svelte [SvelteKit — src/routes/login/+page.svelte (useForm client)]
+<script lang="ts">
+  import { useAuth } from '@holo-js/auth/sveltekit/client'
+  import { useForm } from '@holo-js/adapter-sveltekit/client'
+  import { loginForm } from '$lib/schemas/login'
+
+  const auth = useAuth()
+  const form = useForm(loginForm, {
+    csrf: true,
+    initialValues: { email: '', password: '', remember: false },
+    async submitter({ formData }) {
+      const response = await fetch('/api/login', { method: 'POST', body: formData })
+      const submission = await response.json()
+      if (submission?.ok === true) {
+        await auth.refreshUser()
+      }
+
+      return submission
+    },
+  })
+</script>
+
+<form onsubmit={(event) => { event.preventDefault(); void form.submit() }}>
+  <input
+    name="email"
+    type="email"
+    value={form.values.email}
+    oninput={(event) => form.fields.email.onInput(event.currentTarget.value)}
+    onblur={() => form.fields.email.onBlur()}
+  />
+  {#if form.errors.has('email')}
+    <p>{form.errors.first('email')}</p>
+  {/if}
+
+  <input
+    name="password"
+    type="password"
+    value={form.values.password}
+    oninput={(event) => form.fields.password.onInput(event.currentTarget.value)}
+    onblur={() => form.fields.password.onBlur()}
+  />
+  {#if form.errors.has('password')}
+    <p>{form.errors.first('password')}</p>
+  {/if}
+
+  <label>
+    <input
+      name="remember"
+      type="checkbox"
+      checked={form.values.remember}
+      onchange={(event) => form.fields.remember.onInput(event.currentTarget.checked)}
+    />
+    Remember me
+  </label>
+
+  <button type="submit" disabled={form.submitting}>
+    {form.submitting ? 'Signing in...' : 'Sign in'}
+  </button>
+
+  {#if form.lastSubmission?.ok === true}
+    <p>{form.lastSubmission.data.message}</p>
+  {/if}
+</form>
+```
+
 Bind displayed values from `form.values.*` across frameworks and keep `form.fields.*` for field lifecycle helpers.
 `form.fields.email.onBlur()` is the blur-validation hook when `validateOn: 'blur'` is enabled, while touched
 state can also be set during input and value updates through helpers like `form.fields.email.onInput(...)`

@@ -10,7 +10,12 @@ const form = useForm(loginForm, {
   async submitter({ formData }) {
     const submission = await $fetch('/api/login', { method: 'POST', body: formData })
     if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
-      await refreshUser()
+      try {
+        await refreshUser()
+      } catch (error) {
+        console.warn('Auth refresh failed after login.', error)
+      }
+
       await navigateTo(submission.data.redirectTo, {
         external: true,
       })

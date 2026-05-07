@@ -24,6 +24,11 @@ export type AuthProviderProps = UseAuthOptions & {
 
 const AuthContext = createContext<UseAuthResult | null>(null)
 
+function hasExplicitUseAuthOptions(options: UseAuthOptions | undefined): options is UseAuthOptions {
+  return typeof options !== 'undefined'
+    && Object.values(options).some(value => typeof value !== 'undefined')
+}
+
 function useAuthState(
   options: UseAuthOptions = {},
   stateOptions: { readonly refreshOnMount?: boolean } = {},
@@ -61,11 +66,12 @@ export function AuthProvider({ children, ...options }: AuthProviderProps): React
 
 export function useAuth(options?: UseAuthOptions): UseAuthResult {
   const context = useContext(AuthContext)
+  const hasOptions = hasExplicitUseAuthOptions(options)
   const localAuth = useAuthState(options, {
-    refreshOnMount: Boolean(options) || !context,
+    refreshOnMount: hasOptions || !context,
   })
 
-  if (!options && context) {
+  if (!hasOptions && context) {
     return context
   }
 
