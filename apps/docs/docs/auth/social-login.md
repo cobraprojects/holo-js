@@ -66,15 +66,20 @@ import { defineAuthConfig } from '@holo-js/config'
 export default defineAuthConfig({
   social: {
     google: {
-      clientId: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      redirectUri: 'https://app.example.com/auth/google/callback',
+      clientId: process.env.AUTH_GOOGLE_CLIENT_ID,
+      clientSecret: process.env.AUTH_GOOGLE_CLIENT_SECRET,
+      redirectUri: process.env.AUTH_GOOGLE_REDIRECT_URI,
       scopes: ['openid', 'email', 'profile'],
       guard: 'web',
     },
   },
 })
 ```
+
+The route the user clicks is the start route, for example `/auth/google`.
+
+The URL registered with the provider is the redirect URI, for example `/auth/google/callback`. This is the URL Google
+calls the "Authorized redirect URI", and it is the same value you put in `AUTH_GOOGLE_REDIRECT_URI`.
 
 Provider keys map to first-party packages:
 
@@ -168,19 +173,48 @@ Typical route shapes:
 - `GET /auth/github`
 - `GET /auth/github/callback`
 
+For a local app running on `http://localhost:3000`, put this in the provider dashboard:
+
+```text
+http://localhost:3000/auth/google/callback
+http://localhost:3000/auth/github/callback
+```
+
+And put the same redirect URIs in your app env:
+
+```ini
+AUTH_GOOGLE_REDIRECT_URI=http://localhost:3000/auth/google/callback
+AUTH_GITHUB_REDIRECT_URI=http://localhost:3000/auth/github/callback
+```
+
 ## Handling The Callback
 
 ```ts
+import { redirect } from 'next/navigation'
+import auth from '@holo-js/auth'
 import { callback } from '@holo-js/auth-social'
 
 export async function GET(request: Request) {
-  return callback('google', request)
+  const result = await callback('google', request)
+  if (!result.ok) {
+    return Response.json({
+      message: result.message,
+    }, {
+      status: result.status,
+    })
+  }
+
+  await auth.guard(result.guard).loginUsing(result.user)
+  redirect('/admin')
 }
 ```
 
 The callback route should receive the upstream `code` and `state` values, then pass the full request through to Holo.
 Holo validates the state, verifies PKCE when that provider flow uses it, exchanges the authorization code, links the
-identity, and establishes the local session.
+identity, and returns the local user.
+
+Use `loginUsing()` when the selected guard is session-based, then redirect with your framework's native redirect API.
+Token guard flows can create a token from the returned user instead of creating a session.
 
 The callback flow:
 

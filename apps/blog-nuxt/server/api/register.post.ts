@@ -27,7 +27,6 @@ export default defineEventHandler(async (event) => {
   }
 
   const session = await loginUsing(created)
-  event.node.res.setHeader('set-cookie', [...session.cookies])
   setResponseStatus(event, 201)
   return submission.success({
     message: session.emailVerificationRequired

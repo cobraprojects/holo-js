@@ -28,11 +28,6 @@ export async function POST({ request }: { request: Request }) {
     })
   }
 
-  const headers = new Headers()
-  for (const cookie of session.cookies) {
-    headers.append('set-cookie', cookie)
-  }
-
   return json(submission.success({
     message: session.emailVerificationRequired
       ? 'Signed in. Verify your email address to continue.'
@@ -41,7 +36,5 @@ export async function POST({ request }: { request: Request }) {
       ? session.emailVerificationRoute ?? '/verify-email'
       : '/admin',
     user: session.user,
-  }), {
-    headers,
-  })
+  }))
 }

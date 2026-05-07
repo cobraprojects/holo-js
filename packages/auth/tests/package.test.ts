@@ -771,6 +771,39 @@ describe('@holo-js/auth package runtime', () => {
     expect(loggedOut.cookies).toContainEqual(expect.stringContaining('holo_session_remember=;'))
   })
 
+  it('appends session and logout cookies to the active response context', async () => {
+    const runtime = configureRuntime()
+    const appendedCookies: string[] = []
+    const currentBindings = authRuntimeInternals.getRuntimeBindings()
+
+    configureAuthRuntime({
+      ...currentBindings,
+      context: {
+        ...runtime.context,
+        appendResponseCookie(cookie) {
+          appendedCookies.push(cookie)
+        },
+      },
+    })
+
+    const created = unwrapAuthResult(await register({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: 'secret-secret',
+      passwordConfirmation: 'secret-secret',
+    }))
+    const established = await loginUsing(created)
+
+    expect(appendedCookies).toEqual([...established.cookies])
+
+    const loggedOut = await logout()
+
+    expect(appendedCookies).toEqual([
+      ...established.cookies,
+      ...loggedOut.cookies,
+    ])
+  })
+
   it('hydrates the request session cookie before logout and invalidates the stored session', async () => {
     const runtime = configureRuntime()
     const created = await runtime.usersProvider.create({

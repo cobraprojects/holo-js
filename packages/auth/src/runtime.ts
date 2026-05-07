@@ -904,6 +904,19 @@ async function resolveRequestHeader(
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
+async function appendResponseCookies(
+  bindings: RuntimeBindings,
+  cookies: readonly string[],
+): Promise<void> {
+  if (!bindings.context.appendResponseCookie) {
+    return
+  }
+
+  for (const cookie of cookies) {
+    await bindings.context.appendResponseCookie(cookie)
+  }
+}
+
 function parseBearerToken(header: string | undefined): string | undefined {
   if (typeof header !== 'string') {
     return undefined
@@ -2210,9 +2223,12 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
   bindings.context.setCachedUser(guardName, null)
   bindings.context.setRememberToken?.(guardName)
 
+  const cookies = buildLogoutCookies(bindings, guardName, { clearSessionCookies })
+  await appendResponseCookies(bindings, cookies)
+
   return Object.freeze({
     guard: guardName,
-    cookies: buildLogoutCookies(bindings, guardName, { clearSessionCookies }),
+    cookies,
   })
 }
 
@@ -2400,6 +2416,7 @@ async function establishSessionForUser(
       ? [forgetDefaultRememberCookie(bindings)].filter((cookie): cookie is string => typeof cookie === 'string')
       : []),
   ]
+  await appendResponseCookies(bindings, cookies)
 
   return Object.freeze({
     guard: options.guard,

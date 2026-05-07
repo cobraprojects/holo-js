@@ -133,6 +133,37 @@ function assertRedirectsTo(result, expectedPath) {
   assert.equal(new URL(location, result.response.url).pathname, expectedPath)
 }
 
+function assertFieldFailure(result, fields) {
+  assert.equal(result.json.ok, false)
+  assert.equal(result.json.valid, false)
+  for (const field of fields) {
+    assert.ok(
+      Array.isArray(result.json.errors?.[field]),
+      `Expected ${field} validation errors.`,
+    )
+  }
+}
+
+function assertThrottleFailure(result) {
+  assert.equal(result.response.status, 429)
+  assert.equal(result.json.ok, false)
+  assert.equal(result.json.valid, false)
+  assert.ok(
+    Array.isArray(result.json.errors?._root),
+    'Expected throttled response to include a root error.',
+  )
+}
+
+function assertSocialRedirect(result, expected) {
+  assert.equal(result.response.status, 302)
+  const location = result.response.headers.get('location')
+  assert.ok(location, `Expected ${expected.provider} redirect to include a location header.`)
+  const authorizationUrl = new URL(location)
+  assert.equal(authorizationUrl.origin, expected.origin)
+  assert.equal(authorizationUrl.pathname, expected.pathname)
+  assert.ok(authorizationUrl.searchParams.get('state'), `Expected ${expected.provider} redirect to include OAuth state.`)
+}
+
 async function waitForOutputMatch(getOutput, matcher, startIndex = 0, timeoutMs = 10000) {
   const startedAt = Date.now()
 
@@ -166,6 +197,8 @@ export async function assertExampleAppAuthFlow({
   const password = 'secret-secret'
   const nextPassword = 'secret-secret-2'
   const clientIp = `127.0.0.${(Date.now() % 200) + 1}`
+  const throttleLoginIp = `127.0.1.${(Date.now() % 200) + 1}`
+  const throttleRegisterIp = `127.0.2.${(Date.now() % 200) + 1}`
   const requestHeaders = {
     'x-forwarded-for': clientIp,
     'x-real-ip': clientIp,
@@ -206,6 +239,8 @@ export async function assertExampleAppAuthFlow({
 
     const loginPage = await fetchAuthText('/login')
     assert.match(loginPage.text, /Sign in/i)
+    assert.match(loginPage.text, /Continue with Google/i)
+    assert.match(loginPage.text, /Continue with GitHub/i)
     assertGuestNav(loginPage.text)
 
     const forgotPasswordPage = await fetchAuthText('/forgot-password')
@@ -213,11 +248,90 @@ export async function assertExampleAppAuthFlow({
 
     const verifyPromptPage = await fetchAuthText('/verify-email')
     assert.match(verifyPromptPage.text, /Verify your email/i)
+
+    assertRedirectsTo(await fetchAuthText('/admin/posts', {
+      allowFailure: true,
+    }), '/login')
   }
 
   const initialUser = await fetchAuthJson('/api/auth/user')
   assert.equal(initialUser.json.authenticated, false)
   assert.equal(initialUser.json.user, null)
+
+  assertSocialRedirect(await fetchAuthText('/auth/google', {
+    allowFailure: true,
+  }), {
+    provider: 'google',
+    origin: 'https://accounts.google.com',
+    pathname: '/o/oauth2/v2/auth',
+  })
+  assertSocialRedirect(await fetchAuthText('/auth/github', {
+    allowFailure: true,
+  }), {
+    provider: 'github',
+    origin: 'https://github.com',
+    pathname: '/login/oauth/authorize',
+  })
+
+  const missingGoogleCallback = await fetchAuthJson('/auth/google/callback', {
+    allowFailure: true,
+  })
+  assert.equal(missingGoogleCallback.response.status, 400)
+  assert.equal(missingGoogleCallback.json.message, 'Missing OAuth state or code.')
+
+  const missingGithubCallback = await fetchAuthJson('/auth/github/callback', {
+    allowFailure: true,
+  })
+  assert.equal(missingGithubCallback.response.status, 400)
+  assert.equal(missingGithubCallback.json.message, 'Missing OAuth state or code.')
+
+  const badCredentials = await fetchAuthJson('/api/login', {
+    fields: {
+      email,
+      password: 'wrong-password',
+    },
+    headers: {
+      'x-forwarded-for': '127.0.0.224',
+      'x-real-ip': '127.0.0.224',
+    },
+    allowFailure: true,
+  })
+  assert.equal(badCredentials.response.status, 401)
+  assertFieldFailure(badCredentials, ['email', 'password'])
+
+  let throttledLogin
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    throttledLogin = await fetchAuthJson('/api/login', {
+      fields: {
+        email: `${appName}-throttled-login-${Date.now()}@app.test`,
+        password: 'wrong-password',
+      },
+      headers: {
+        'x-forwarded-for': throttleLoginIp,
+        'x-real-ip': throttleLoginIp,
+      },
+      allowFailure: true,
+    })
+  }
+  assertThrottleFailure(throttledLogin)
+
+  let throttledRegister
+  for (let attempt = 0; attempt < 11; attempt += 1) {
+    throttledRegister = await fetchAuthJson('/api/register', {
+      fields: {
+        name: 'No',
+        email: 'not-an-email',
+        password: 'short',
+        passwordConfirmation: 'different',
+      },
+      headers: {
+        'x-forwarded-for': throttleRegisterIp,
+        'x-real-ip': throttleRegisterIp,
+      },
+      allowFailure: true,
+    })
+  }
+  assertThrottleFailure(throttledRegister)
 
   const loggedInVerificationEmail = `${appName}-logged-in-verification-${Date.now()}@app.test`
   const loggedInVerificationOutputStart = getOutput().length
@@ -283,6 +397,32 @@ export async function assertExampleAppAuthFlow({
   )[1]
   assert.ok(verificationToken)
 
+  const invalidVerification = await fetchAuthJson('/api/verify-email', {
+    method: 'POST',
+    fields: {
+      token: `${verificationToken.split('.', 1)[0]}.wrong-secret`,
+    },
+    allowFailure: true,
+  })
+  assert.equal(invalidVerification.response.status, 422)
+  assertFieldFailure(invalidVerification, ['token'])
+
+  const duplicateRegistration = await fetchAuthJson('/api/register', {
+    fields: {
+      name: 'Duplicate Auth Flow User',
+      email,
+      password,
+      passwordConfirmation: password,
+    },
+    headers: {
+      'x-forwarded-for': '127.0.0.225',
+      'x-real-ip': '127.0.0.225',
+    },
+    allowFailure: true,
+  })
+  assert.equal(duplicateRegistration.response.status, 422)
+  assertFieldFailure(duplicateRegistration, ['email'])
+
   const pendingVerificationJar = createCookieJar()
   const unverifiedLogin = await fetchAuthJson('/api/login', {
     fields: {
@@ -329,6 +469,16 @@ export async function assertExampleAppAuthFlow({
   })
   assert.equal(verified.json.ok, true)
   assert.equal(verified.json.data?.redirectTo, '/login')
+
+  const consumedVerification = await fetchAuthJson('/api/verify-email', {
+    method: 'POST',
+    fields: {
+      token: resentVerificationToken,
+    },
+    allowFailure: true,
+  })
+  assert.equal(consumedVerification.response.status, 422)
+  assertFieldFailure(consumedVerification, ['token'])
 
   const authenticatedJar = createCookieJar()
   const loggedIn = await fetchAuthJson('/api/login', {
@@ -478,6 +628,17 @@ export async function assertExampleAppAuthFlow({
   const resetToken = resetTokenMatch[1]
   assert.ok(resetToken)
 
+  const invalidReset = await fetchAuthJson('/api/reset-password', {
+    fields: {
+      token: 'bad-token',
+      password: nextPassword,
+      passwordConfirmation: nextPassword,
+    },
+    allowFailure: true,
+  })
+  assert.equal(invalidReset.response.status, 422)
+  assertFieldFailure(invalidReset, ['token'])
+
   if (checkPages) {
     const resetPage = await fetchAuthText(`/reset-password?token=${encodeURIComponent(resetToken)}`)
     assert.match(resetPage.text, /Reset password/i)
@@ -493,6 +654,17 @@ export async function assertExampleAppAuthFlow({
   assert.equal(resetResult.json.ok, true)
   assert.equal(resetResult.json.data?.message, 'Password reset successfully. You can sign in with your new password.')
   assert.equal(resetResult.json.data?.redirectTo, '/login')
+
+  const consumedReset = await fetchAuthJson('/api/reset-password', {
+    fields: {
+      token: resetToken,
+      password: nextPassword,
+      passwordConfirmation: nextPassword,
+    },
+    allowFailure: true,
+  })
+  assert.equal(consumedReset.response.status, 422)
+  assertFieldFailure(consumedReset, ['token'])
 
   const oldPasswordLogin = await fetchAuthJson('/api/login', {
     fields: {

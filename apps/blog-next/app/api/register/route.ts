@@ -28,11 +28,6 @@ export async function POST(request: Request) {
   }
 
   const session = await loginUsing(created)
-  const headers = new Headers()
-  for (const cookie of session.cookies) {
-    headers.append('set-cookie', cookie)
-  }
-
   return Response.json(submission.success({
     message: session.emailVerificationRequired
       ? 'Account created. Check your inbox to verify your email address.'
@@ -43,6 +38,5 @@ export async function POST(request: Request) {
     user: session.user,
   }, 201), {
     status: 201,
-    headers,
   })
 }

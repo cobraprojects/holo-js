@@ -1,8 +1,7 @@
 import { logout, user } from '@holo-js/auth'
 
-export default defineEventHandler(async (event) => {
-  const signedOut = await logout()
-  event.node.res.setHeader('set-cookie', [...signedOut.cookies])
+export default defineEventHandler(async () => {
+  await logout()
 
   return {
     ok: true,

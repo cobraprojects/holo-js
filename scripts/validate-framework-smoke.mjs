@@ -2024,7 +2024,7 @@ function assertAuthSmokePayload(app, payload) {
   assert.equal(payload.social.unverifiedVerifiedEmailPolicyRejected, true)
   assert.equal(payload.social.unverifiedIdentityNotCreated, true)
   assert.equal(payload.social.pkceMismatchRejected, true)
-  assert.equal(payload.social.tokenGuardRejected, true)
+  assert.equal(payload.social.tokenGuardCreatesAccessToken, true)
   assert.equal(payload.social.verificationOptionalSyntheticEmail, true)
 
   assert.equal(payload.workos.missingProviderRejected, true)

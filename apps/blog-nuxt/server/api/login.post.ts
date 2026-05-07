@@ -26,8 +26,6 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  event.node.res.setHeader('set-cookie', [...session.cookies])
-
   return submission.success({
     message: session.emailVerificationRequired
       ? 'Signed in. Verify your email address to continue.'

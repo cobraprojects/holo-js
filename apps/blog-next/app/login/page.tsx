@@ -44,6 +44,11 @@ export default function LoginPage() {
         <p style={{ margin: 0, color: '#94a3b8' }}>Use your email address and password to access the admin area.</p>
       </div>
 
+      <div style={{ display: 'grid', gap: '0.65rem' }}>
+        <a href="/auth/google" style={{ color: '#e5e7eb', textDecoration: 'none' }}>Continue with Google</a>
+        <a href="/auth/github" style={{ color: '#e5e7eb', textDecoration: 'none' }}>Continue with GitHub</a>
+      </div>
+
       <form onSubmit={(event) => { event.preventDefault(); form.submit() }} style={{ display: 'grid', gap: '0.9rem' }}>
         <label style={{ display: 'grid', gap: '0.35rem' }}>
           <span>Email</span>

@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 const HOLO_SERVER_EXTERNAL_PACKAGES = [
   '@holo-js/core',
   '@holo-js/adapter-next',
@@ -5,6 +8,43 @@ const HOLO_SERVER_EXTERNAL_PACKAGES = [
   '@holo-js/config',
   'esbuild',
 ]
+
+const HOLO_OPTIONAL_SERVER_EXTERNAL_PACKAGES = [
+  '@holo-js/auth',
+  '@holo-js/auth-clerk',
+  '@holo-js/auth-social',
+  '@holo-js/auth-social-apple',
+  '@holo-js/auth-social-discord',
+  '@holo-js/auth-social-facebook',
+  '@holo-js/auth-social-github',
+  '@holo-js/auth-social-google',
+  '@holo-js/auth-social-linkedin',
+  '@holo-js/auth-workos',
+  '@holo-js/authorization',
+  '@holo-js/broadcast',
+  '@holo-js/cache',
+  '@holo-js/cache-db',
+  '@holo-js/cache-redis',
+  '@holo-js/events',
+  '@holo-js/forms',
+  '@holo-js/mail',
+  '@holo-js/notifications',
+  '@holo-js/queue',
+  '@holo-js/queue-db',
+  '@holo-js/queue-redis',
+  '@holo-js/security',
+  '@holo-js/session',
+  '@holo-js/storage',
+  '@holo-js/storage-s3',
+  '@holo-js/validation',
+] as const
+
+interface PackageJson {
+  readonly dependencies?: Readonly<Record<string, string>>
+  readonly devDependencies?: Readonly<Record<string, string>>
+  readonly peerDependencies?: Readonly<Record<string, string>>
+  readonly optionalDependencies?: Readonly<Record<string, string>>
+}
 
 interface TurbopackIgnoreIssueRule {
   readonly path: string | RegExp
@@ -24,10 +64,54 @@ interface NextConfig {
   readonly [key: string]: unknown
 }
 
+function isStringRecord(value: unknown): value is Readonly<Record<string, string>> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  return Object.values(value).every(entry => typeof entry === 'string')
+}
+
+function readPackageJson(projectRoot: string): PackageJson | undefined {
+  const packageJsonPath = resolve(projectRoot, 'package.json')
+  if (!existsSync(packageJsonPath)) {
+    return undefined
+  }
+
+  const parsed = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as unknown
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return undefined
+  }
+
+  return {
+    ...('dependencies' in parsed && isStringRecord(parsed.dependencies) ? { dependencies: parsed.dependencies } : {}),
+    ...('devDependencies' in parsed && isStringRecord(parsed.devDependencies) ? { devDependencies: parsed.devDependencies } : {}),
+    ...('peerDependencies' in parsed && isStringRecord(parsed.peerDependencies) ? { peerDependencies: parsed.peerDependencies } : {}),
+    ...('optionalDependencies' in parsed && isStringRecord(parsed.optionalDependencies) ? { optionalDependencies: parsed.optionalDependencies } : {}),
+  }
+}
+
+function hasPackage(packageJson: PackageJson, packageName: string): boolean {
+  return packageJson.dependencies?.[packageName] !== undefined
+    || packageJson.devDependencies?.[packageName] !== undefined
+    || packageJson.peerDependencies?.[packageName] !== undefined
+    || packageJson.optionalDependencies?.[packageName] !== undefined
+}
+
+function resolveInstalledOptionalServerExternalPackages(projectRoot: string): readonly string[] {
+  const packageJson = readPackageJson(projectRoot)
+  if (!packageJson) {
+    return []
+  }
+
+  return HOLO_OPTIONAL_SERVER_EXTERNAL_PACKAGES.filter(packageName => hasPackage(packageJson, packageName))
+}
+
 export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as TConfig): TConfig {
   const existingExternal = nextConfig.serverExternalPackages ?? []
+  const optionalExternal = resolveInstalledOptionalServerExternalPackages(process.cwd())
   const mergedExternal = [
-    ...new Set([...HOLO_SERVER_EXTERNAL_PACKAGES, ...existingExternal]),
+    ...new Set([...HOLO_SERVER_EXTERNAL_PACKAGES, ...optionalExternal, ...existingExternal]),
   ]
 
   const existingExcludes = nextConfig.outputFileTracingExcludes ?? {}
