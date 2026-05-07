@@ -204,4 +204,25 @@ export default defineConfig({
       process.chdir(previousCwd)
     }
   })
+
+  it('ignores optional externals when package.json cannot be parsed', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'package.json'), '{', 'utf8')
+
+    const previousCwd = process.cwd()
+    process.chdir(root)
+
+    try {
+      const config = withHolo()
+
+      expect(config.serverExternalPackages).toEqual(expect.arrayContaining([
+        '@holo-js/core',
+        '@holo-js/adapter-next',
+      ]))
+      expect(config.serverExternalPackages).not.toContain('@holo-js/auth')
+      expect(config.serverExternalPackages).not.toContain('@holo-js/auth-social')
+    } finally {
+      process.chdir(previousCwd)
+    }
+  })
 })

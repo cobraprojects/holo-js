@@ -27,8 +27,9 @@ import { field, schema } from '@holo-js/forms'
 export const registerUser = schema({
   name: field.string().required().min(3).max(255),
   email: field.string().required().email(),
-  password: field.string().required().min(8).confirmed(),
-  passwordConfirmation: field.string().required(),
+  password: field.password().required().min(8).confirmed(),
+  passwordConfirmation: field.password().required(),
+  nationalId: field.string().sensitive().optional(),
   avatar: field.file().optional().image().maxSize('2mb'),
   newsletter: field.boolean().default(false),
 })

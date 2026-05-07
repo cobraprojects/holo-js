@@ -18,7 +18,7 @@ const registerUser = schema({
   email: field.string()
     .required('Email is required.')
     .email('Enter a valid email address.'),
-  password: field.string()
+  password: field.password()
     .min(8, 'Password must be at least 8 characters.'),
   birthday: field.date()
     .beforeOrToday('Birthday cannot be in the future.'),
@@ -44,7 +44,7 @@ import { field, schema } from '@holo-js/validation'
 
 const registerUser = schema({
   email: field.string().required().email(),
-  password: field.string().required().min(8),
+  password: field.password().required().min(8),
 })
 ```
 

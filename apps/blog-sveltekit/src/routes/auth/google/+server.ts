@@ -1,5 +1,6 @@
 import { redirect } from '@holo-js/auth-social'
+import type { RequestHandler } from './$types'
 
-export function GET({ request }: { request: Request }): Promise<Response> {
+export const GET: RequestHandler = async ({ request }) => {
   return redirect('google', request)
 }

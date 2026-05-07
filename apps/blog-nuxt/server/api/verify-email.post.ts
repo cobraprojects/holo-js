@@ -1,5 +1,5 @@
 import { check, verification } from '@holo-js/auth'
-import { sanitizeFlashedInput, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
 
 import { verifyEmailForm } from '#shared/schemas/auth'
 
@@ -15,14 +15,13 @@ export default defineEventHandler(async (event) => {
   const wasAuthenticated = await check()
   const { error } = await verification.consume(submission.data.token)
   if (error) {
-    setResponseStatus(event, error.status)
-    return {
-      ok: false as const,
+    const failure = submission.fail({
       status: error.status,
-      valid: false as const,
-      values: sanitizeFlashedInput(submission.values),
       errors: error.fields,
-    }
+    })
+
+    setResponseStatus(event, failure.status)
+    return failure
   }
 
   return submission.success({

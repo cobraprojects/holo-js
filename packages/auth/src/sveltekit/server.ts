@@ -53,6 +53,9 @@ type SvelteKitRuntimeGlobal = typeof globalThis & {
   __holoSvelteKitRequestEventStore?: AsyncLocalStorage<SvelteKitStoredRequestEvent>
 }
 
+// Shared AsyncLocalStorage contract with packages/adapter-sveltekit/src/index.ts:
+// keep this exact global key and compatible AsyncLocalStorage<SvelteKitStoredRequestEvent>
+// / AsyncLocalStorage<SvelteKitRequestEvent> value types in sync.
 export type SvelteKitHandleInput<TEvent extends SvelteKitHandleEvent = SvelteKitHandleEvent> = {
   readonly event: TEvent
   readonly resolve: (event: TEvent, options?: never) => Response | Promise<Response>

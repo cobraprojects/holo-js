@@ -23,8 +23,8 @@ import { field, schema } from '@holo-js/forms'
 export const registerUser = schema({
   name: field.string().required('Name is required.').min(3, 'Name must be at least 3 characters.'),
   email: field.string().required('Email is required.').email('Enter a valid email address.'),
-  password: field.string().required('Password is required.').min(8, 'Password must be at least 8 characters.'),
-  passwordConfirmation: field.string().required('Please confirm your password.'),
+  password: field.password().required('Password is required.').min(8, 'Password must be at least 8 characters.'),
+  passwordConfirmation: field.password().required('Please confirm your password.'),
 })
 ```
 

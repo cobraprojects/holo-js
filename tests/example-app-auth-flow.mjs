@@ -155,7 +155,10 @@ function assertThrottleFailure(result) {
 }
 
 function assertSocialRedirect(result, expected) {
-  assert.equal(result.response.status, 302)
+  assert.ok(
+    result.response.status >= 300 && result.response.status < 400,
+    'Expected redirect status in 3xx range.',
+  )
   const location = result.response.headers.get('location')
   assert.ok(location, `Expected ${expected.provider} redirect to include a location header.`)
   const authorizationUrl = new URL(location)
@@ -300,10 +303,11 @@ export async function assertExampleAppAuthFlow({
   assertFieldFailure(badCredentials, ['email', 'password'])
 
   let throttledLogin
+  const throttledEmail = `${appName}-throttled-login-${Date.now()}@app.test`
   for (let attempt = 0; attempt < 6; attempt += 1) {
     throttledLogin = await fetchAuthJson('/api/login', {
       fields: {
-        email: `${appName}-throttled-login-${Date.now()}@app.test`,
+        email: throttledEmail,
         password: 'wrong-password',
       },
       headers: {

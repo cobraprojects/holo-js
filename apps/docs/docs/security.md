@@ -127,7 +127,7 @@ import { login } from '@holo-js/auth'
 
 const loginForm = schema({
   email: field.string().required().email(),
-  password: field.string().required().min(8),
+  password: field.password().required().min(8),
 })
 
 export async function POST(request: Request) {
@@ -144,15 +144,12 @@ export async function POST(request: Request) {
 
   const { error } = await login(submission.data)
   if (error) {
-    return Response.json({
-      ok: false,
+    const failure = submission.fail({
       status: error.status,
-      valid: false,
-      values: submission.values,
       errors: error.fields,
-    }, {
-      status: error.status,
     })
+
+    return Response.json(failure, { status: failure.status })
   }
 
   return Response.json(submission.success({
@@ -170,8 +167,8 @@ import { register } from '@holo-js/auth'
 const registerUser = schema({
   name: field.string().required().min(3).max(255),
   email: field.string().required().email(),
-  password: field.string().required().min(8).confirmed(),
-  passwordConfirmation: field.string().required(),
+  password: field.password().required().min(8).confirmed(),
+  passwordConfirmation: field.password().required(),
 })
 
 export async function POST(request: Request) {
@@ -188,15 +185,12 @@ export async function POST(request: Request) {
 
   const { error } = await register(submission.data)
   if (error) {
-    return Response.json({
-      ok: false,
+    const failure = submission.fail({
       status: error.status,
-      valid: false,
-      values: submission.values,
       errors: error.fields,
-    }, {
-      status: error.status,
     })
+
+    return Response.json(failure, { status: failure.status })
   }
 
   return Response.json(submission.success({
@@ -444,7 +438,7 @@ import { field, schema, validate } from '@holo-js/forms'
 
 const loginForm = schema({
   email: field.string().required().email(),
-  password: field.string().required().min(8),
+  password: field.password().required().min(8),
 })
 
 export default defineEventHandler(async (event) => {

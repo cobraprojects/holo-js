@@ -18,7 +18,8 @@ describe('@holo-js/validation contracts', () => {
     const registerUser = schema({
       name: field.string().required().min(3).max(255),
       email: field.string().required().email(),
-      password: field.string().required().min(8).confirmed(),
+      password: field.password().required().min(8).confirmed(),
+      nationalId: field.string().sensitive().required(),
       newsletter: field.boolean().default(false),
       tags: field.array(field.string().min(1)).optional(),
       profile: {
@@ -33,6 +34,8 @@ describe('@holo-js/validation contracts', () => {
     expect(registerUser['~standard'].vendor).toBe('holo-js')
     expect(typeof registerUser['~standard'].validate).toBe('function')
     expect(registerUser.fields.name.definition.rules.map(rule => rule.name)).toEqual(['required', 'min', 'max'])
+    expect(registerUser.fields.password.definition.sensitive).toBe(true)
+    expect(registerUser.fields.nationalId.definition.sensitive).toBe(true)
     expect(registerUser.fields.tags.definition.item?.kind).toBe('string')
     expect(registerUser.fields.profile.city.definition.kind).toBe('string')
   })
@@ -76,8 +79,8 @@ describe('@holo-js/validation contracts', () => {
       age: field.number().integer().optional(),
       newsletter: field.boolean().default(false),
       tags: field.array(field.string().min(1)).optional(),
-      password: field.string().required().min(8).confirmed(),
-      passwordConfirmation: field.string().required(),
+      password: field.password().required().min(8).confirmed(),
+      passwordConfirmation: field.password().required(),
       profile: {
         city: field.string().required(),
       },
@@ -131,8 +134,8 @@ describe('@holo-js/validation contracts', () => {
       name: field.string().required().min(3),
       email: field.string().required().email(),
       age: field.number().integer().optional(),
-      password: field.string().required().min(8).confirmed(),
-      passwordConfirmation: field.string().required(),
+      password: field.password().required().min(8).confirmed(),
+      passwordConfirmation: field.password().required(),
       profile: {
         city: field.string().required(),
       },
@@ -326,7 +329,7 @@ describe('@holo-js/validation contracts', () => {
       email: field.string()
         .required('Email is mandatory.')
         .email('Please enter a valid email address.'),
-      password: field.string()
+      password: field.password()
         .min(8, 'Password must be at least 8 characters.'),
       avatar: field.file()
         .image('Avatar must be an image file.')
@@ -898,7 +901,7 @@ describe('@holo-js/validation coverage completeness', () => {
 
   it('handles confirmed rule failure for missing confirmation field', async () => {
     const passwordSchema = schema({
-      password: field.string().required().confirmed(),
+      password: field.password().required().confirmed(),
     })
 
     const failure = await validate({ password: 'secret123' }, passwordSchema)

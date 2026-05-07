@@ -224,7 +224,8 @@ The callback flow:
 - loads the provider profile
 - resolves or creates a local user
 - links the social identity
-- establishes a local authenticated session
+- establishes a local session when using a session guard with `loginUsing()`, or returns an authenticated user that
+  token guards can use to create an access token
 
 Each provider package handles its own upstream field mapping. Holo does not guess raw provider response shapes across
 different services.

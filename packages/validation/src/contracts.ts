@@ -35,6 +35,7 @@ import {
   normalizeRequestInput,
   normalizeRule,
   normalizeSchemaShape,
+  markDefinitionSensitive,
   parseByteSize,
   resolveCompiledSchema,
 } from './contracts-support'
@@ -61,6 +62,15 @@ export class ValidationFieldBuilder<TOutput> implements StandardSchemaV1<unknown
       ...this.field,
       definition: rule ? cloneDefinition(this.field.definition, rule) : /* v8 ignore next */ this.field.definition,
     }) as ValidationField<TNextOutput>
+
+    return new ValidationFieldBuilder(nextField)
+  }
+
+  sensitive(): ValidationFieldBuilder<TOutput> {
+    const nextField = Object.freeze({
+      ...this.field,
+      definition: markDefinitionSensitive(this.field.definition),
+    }) as ValidationField<TOutput>
 
     return new ValidationFieldBuilder(nextField)
   }
@@ -229,6 +239,9 @@ export function arrayField<TItemInput extends FieldBuilderInput>(
 export const field = Object.freeze({
   string() {
     return new ValidationFieldBuilder<string>(createField('string'))
+  },
+  password() {
+    return new ValidationFieldBuilder<string>(createField('string', undefined, true))
   },
   number() {
     return new ValidationFieldBuilder<number>(createField('number'))

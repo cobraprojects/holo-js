@@ -44,6 +44,9 @@ type SvelteKitRuntimeGlobal = typeof globalThis & {
   __holoSvelteKitRequestEventStore?: AsyncLocalStorage<SvelteKitRequestEvent>
 }
 
+// Shared AsyncLocalStorage contract with packages/auth/src/sveltekit/server.ts:
+// keep this exact global key and compatible AsyncLocalStorage<SvelteKitRequestEvent>
+// / AsyncLocalStorage<SvelteKitStoredRequestEvent> value types in sync.
 const svelteKitAdapter = createHoloFrameworkAdapter<SvelteKitHoloOptions>({
   stateKey: '__holoSvelteKitAdapter__',
   displayName: 'SvelteKit',

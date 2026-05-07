@@ -122,65 +122,61 @@ export default defineSessionConfig({
 })
 ```
 
-Then use auth operations inside your own routes:
+Then use auth operations inside your own routes. With `@holo-js/forms`, failed values are sanitized
+by the form schema before they are sent back to the client:
 
 ```ts
 import { login, logout, refreshUser, register, user } from '@holo-js/auth'
+import { field, schema, validate } from '@holo-js/forms'
 
-function sanitizeAuthBody(body: Record<string, unknown>) {
-  const sanitizedBody = { ...body }
-  delete sanitizedBody.password
-  delete sanitizedBody.passwordConfirmation
-  delete sanitizedBody.confirmPassword
-  delete sanitizedBody.currentPassword
-  delete sanitizedBody.newPassword
-  delete sanitizedBody.token
+const registerForm = schema({
+  name: field.string().required(),
+  email: field.string().required().email(),
+  password: field.password().required().min(8).confirmed(),
+  passwordConfirmation: field.password().required(),
+})
 
-  return sanitizedBody
-}
+const loginForm = schema({
+  email: field.string().required().email(),
+  password: field.password().required(),
+  remember: field.boolean().default(false),
+})
 
 export async function POST(request: Request) {
-  const body = await request.json()
-  const sanitizedBody = sanitizeAuthBody(body)
+  const submission = await validate(request, registerForm)
+  if (!submission.valid) {
+    return Response.json(submission.fail(), { status: submission.fail().status })
+  }
 
-  const { data: created, error: registerError } = await register({
-    name: body.name,
-    email: body.email,
-    password: body.password,
-    passwordConfirmation: body.passwordConfirmation,
-  })
+  const { data: created, error: registerError } = await register(submission.data)
 
   if (registerError) {
-    return Response.json({
-      ok: false,
+    const failure = submission.fail({
       status: registerError.status,
-      valid: false,
-      values: sanitizedBody,
       errors: registerError.fields,
-    }, { status: registerError.status })
+    })
+
+    return Response.json(failure, { status: failure.status })
   }
 
   return Response.json(created, { status: 201 })
 }
 
 export async function PUT(request: Request) {
-  const body = await request.json()
-  const sanitizedBody = sanitizeAuthBody(body)
+  const submission = await validate(request, loginForm)
+  if (!submission.valid) {
+    return Response.json(submission.fail(), { status: submission.fail().status })
+  }
 
-  const { data: session, error } = await login({
-    email: body.email,
-    password: body.password,
-    remember: body.remember === true,
-  })
+  const { data: session, error } = await login(submission.data)
 
   if (error) {
-    return Response.json({
-      ok: false,
+    const failure = submission.fail({
       status: error.status,
-      valid: false,
-      values: sanitizedBody,
       errors: error.fields,
-    }, { status: error.status })
+    })
+
+    return Response.json(failure, { status: failure.status })
   }
 
   return Response.json({
@@ -404,19 +400,17 @@ Successful auth calls put the result in `data`. Expected auth failures come back
 }
 ```
 
-That means your route can forward auth failures directly without any helper layer:
+That means a form-backed route can forward auth failures through the submission object. The forms
+package keeps sensitive values out of the response:
 
 ```ts
-const sanitizedBody = sanitizeAuthBody(body)
-
 if (error) {
-  return Response.json({
-    ok: false,
+  const failure = submission.fail({
     status: error.status,
-    valid: false,
-    values: sanitizedBody,
     errors: error.fields,
-  }, { status: error.status })
+  })
+
+  return Response.json(failure, { status: failure.status })
 }
 ```
 

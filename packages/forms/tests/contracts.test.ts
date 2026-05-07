@@ -71,7 +71,7 @@ describe('@holo-js/forms contracts', () => {
   it('creates form schemas from shapes and validation schemas', () => {
     const direct = schema({
       email: field.string().required().email(),
-      password: field.string().required().min(8),
+      password: field.password().required().min(8),
     })
     const nested = schema(defineSchema({
       profile: {
@@ -231,9 +231,10 @@ describe('@holo-js/forms contracts', () => {
   it('excludes password-like dontFlash fields while preserving transport tokens in serialized failure payloads', async () => {
     const registerUser = schema({
       email: field.string().required().email(),
-      password: field.string().required().min(8),
-      passwordConfirmation: field.string().required(),
+      password: field.password().required().min(8),
+      passwordConfirmation: field.password().required(),
       token: field.string().required(),
+      nationalId: field.string().sensitive().required(),
     })
 
     const failure = await validate({
@@ -241,6 +242,7 @@ describe('@holo-js/forms contracts', () => {
       password: 'super-secret',
       passwordConfirmation: 'super-secret',
       token: 'reset-token',
+      nationalId: 'private-id',
     }, registerUser)
 
     expect(failure.valid).toBe(false)
@@ -253,6 +255,7 @@ describe('@holo-js/forms contracts', () => {
       password: 'super-secret',
       passwordConfirmation: 'super-secret',
       token: 'reset-token',
+      nationalId: 'private-id',
     })
     expect(failure.serialize()).toEqual({
       valid: false,
@@ -275,6 +278,23 @@ describe('@holo-js/forms contracts', () => {
       },
       errors: {
         email: ['Invalid email: Received "bad"'],
+      },
+    })
+    expect(failure.fail({
+      status: 409,
+      errors: {
+        email: ['A user with this email already exists.'],
+      },
+    })).toEqual({
+      ok: false,
+      status: 409,
+      valid: false,
+      values: {
+        email: 'bad',
+        token: 'reset-token',
+      },
+      errors: {
+        email: ['A user with this email already exists.'],
       },
     })
   })

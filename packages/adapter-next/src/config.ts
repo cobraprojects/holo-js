@@ -78,7 +78,13 @@ function readPackageJson(projectRoot: string): PackageJson | undefined {
     return undefined
   }
 
-  const parsed = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as unknown
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as unknown
+  } catch {
+    return undefined
+  }
+
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return undefined
   }

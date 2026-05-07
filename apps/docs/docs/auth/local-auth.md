@@ -425,23 +425,28 @@ Your framework route owns parsing and response formatting. The auth package only
 
 ```ts
 import { login } from '@holo-js/auth'
+import { field, schema, validate } from '@holo-js/forms'
+
+const loginForm = schema({
+  email: field.string().required().email(),
+  password: field.password().required(),
+})
 
 export async function POST(request: Request) {
-  const body = await request.json()
+  const submission = await validate(request, loginForm)
+  if (!submission.valid) {
+    return Response.json(submission.fail(), { status: submission.fail().status })
+  }
 
-  const { data: session, error } = await login({
-    email: body.email,
-    password: body.password,
-  })
+  const { data: session, error } = await login(submission.data)
 
   if (error) {
-    return Response.json({
-      ok: false,
+    const failure = submission.fail({
       status: error.status,
-      valid: false,
-      values: body,
       errors: error.fields,
-    }, { status: error.status })
+    })
+
+    return Response.json(failure, { status: failure.status })
   }
 
   return Response.json({
