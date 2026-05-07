@@ -82,7 +82,12 @@ const form = useForm(loginForm, {
     const submission = await $fetch('/api/login', { method: 'POST', body: formData })
 
     if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
-      await refreshUser()
+      try {
+        await refreshUser()
+      } catch (error) {
+        console.warn('Auth refresh failed after login.', error)
+      }
+
       await navigateTo(submission.data.redirectTo)
     }
 
@@ -105,7 +110,12 @@ const form = useForm(loginForm, {
       const submission = await response.json()
 
       if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
-        await auth.refreshUser()
+        try {
+          await auth.refreshUser()
+        } catch (error) {
+          console.warn('Auth refresh failed after login.', error)
+        }
+
         await invalidateAll()
         await goto(submission.data.redirectTo)
       }
