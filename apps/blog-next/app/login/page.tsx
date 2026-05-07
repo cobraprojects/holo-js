@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useForm } from '@holo-js/adapter-next/client'
+import { useAuth, useForm } from '@holo-js/adapter-next/client'
 import { loginForm } from '@/lib/schemas/auth'
 
 const panelStyle = {
@@ -17,6 +17,7 @@ const panelStyle = {
 
 export default function LoginPage() {
   const router = useRouter()
+  const auth = useAuth()
   const form = useForm(loginForm, {
     validateOn: 'blur',
     initialValues: { email: '', password: '', remember: false },
@@ -24,6 +25,11 @@ export default function LoginPage() {
       const response = await fetch('/api/login', { method: 'POST', body: formData })
       const submission = await response.json()
       if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
+        try {
+          await auth.refreshUser()
+        } catch (error) {
+          console.warn('Auth refresh failed after login.', error)
+        }
         router.replace(submission.data.redirectTo)
       }
       return submission

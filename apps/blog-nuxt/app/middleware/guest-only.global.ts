@@ -1,6 +1,6 @@
-import { guestOnly } from '@holo-js/adapter-sveltekit/server'
+import { guestOnly } from '@holo-js/adapter-nuxt/server'
 
-export const handle = guestOnly({
+export default guestOnly({
   routes: ['/login', '/register', '/forgot-password', '/reset-password'],
   redirectTo: '/admin',
 })

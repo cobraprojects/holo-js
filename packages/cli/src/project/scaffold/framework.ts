@@ -1,5 +1,5 @@
 import { mkdir, readdir, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import {
   normalizeHoloProjectConfig,
   renderGeneratedSchemaPlaceholder,
@@ -13,8 +13,10 @@ import {
   SCAFFOLD_PACKAGE_MANAGER_VERSIONS,
 } from '../../metadata'
 import { resolveGeneratedSchemaPath } from '../config'
+import { renderGeneratedModelTypes } from '../registry'
 import {
   DB_DRIVER_PACKAGE_NAMES,
+  GENERATED_MODEL_TYPES_PATH,
   normalizeScaffoldOptionalPackages,
   sanitizePackageName,
   type ProjectScaffoldOptions,
@@ -185,7 +187,7 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
       dev: 'holo dev',
       build: 'holo build',
       lint: options.framework === 'nuxt'
-        ? 'npx eslint app.vue config server tests --fix --no-warn-ignored --no-error-on-unmatched-pattern'
+        ? 'npx eslint app config server tests *.d.ts --fix --no-warn-ignored --no-error-on-unmatched-pattern'
         : options.framework === 'next'
           ? 'npx eslint app config server tests --fix --no-warn-ignored --no-error-on-unmatched-pattern'
           : 'npx eslint src config server tests --fix --no-warn-ignored --no-error-on-unmatched-pattern',
@@ -339,7 +341,9 @@ export async function scaffoldProject(
     await mkdir(resolve(projectRoot, '.vscode'), { recursive: true })
     await writeFile(resolve(projectRoot, '.vscode/settings.json'), vscodeSettings, 'utf8')
   }
+  await mkdir(dirname(generatedSchemaPath), { recursive: true })
   await writeFile(generatedSchemaPath, renderGeneratedSchemaPlaceholder(), 'utf8')
+  await writeFile(resolve(projectRoot, GENERATED_MODEL_TYPES_PATH), renderGeneratedModelTypes([]), 'utf8')
 
   for (const file of renderFrameworkFiles(options)) {
     await writeTextFile(resolve(projectRoot, file.path), file.contents)

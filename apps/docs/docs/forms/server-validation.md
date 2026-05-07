@@ -247,16 +247,22 @@ These examples show the real failure and success handling path using `useForm(..
 ```tsx [Next.js — app/login/page.tsx]
 'use client'
 
-import { useForm } from '@holo-js/adapter-next/client'
+import { useAuth, useForm } from '@holo-js/adapter-next/client'
 import { loginForm } from '@/lib/schemas/login'
 
 export default function LoginPage() {
+  const auth = useAuth()
   const form = useForm(loginForm, {
     csrf: true,
     initialValues: { email: '', password: '', remember: false },
     async submitter({ formData }) {
       const response = await fetch('/api/login', { method: 'POST', body: formData })
-      return await response.json()
+      const submission = await response.json()
+      if (submission?.ok === true) {
+        await auth.refreshUser()
+      }
+
+      return submission
     },
   })
 
@@ -305,11 +311,17 @@ export default function LoginPage() {
 import { useForm } from '@holo-js/adapter-nuxt/client'
 import { loginForm } from '~/lib/schemas/login'
 
+const { refreshUser } = await useAuth()
 const form = useForm(loginForm, {
   csrf: true,
   initialValues: { email: '', password: '', remember: false },
   async submitter({ formData }) {
-    return await $fetch('/api/login', { method: 'POST', body: formData })
+    const submission = await $fetch('/api/login', { method: 'POST', body: formData })
+    if (submission?.ok === true) {
+      await refreshUser()
+    }
+
+    return submission
   },
 })
 </script>

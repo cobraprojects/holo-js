@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises'
 import {
   readTextFile,
   ensureProjectConfig,
+  ensureGeneratedSchemaPlaceholder,
   syncManagedDriverDependencies,
   prepareProjectDiscovery,
   renderFrameworkRunner,
@@ -138,6 +139,7 @@ export async function runProjectDependencyInstall(
 
 export async function runProjectPrepare(projectRoot: string, io?: IoStreams): Promise<void> {
   const project = await ensureProjectConfig(projectRoot)
+  await ensureGeneratedSchemaPlaceholder(projectRoot, project.config)
   await prepareProjectDiscovery(projectRoot, project.config)
   await refreshFrameworkRunner(projectRoot)
 

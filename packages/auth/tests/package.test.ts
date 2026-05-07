@@ -4452,6 +4452,37 @@ describe('@holo-js/auth package runtime', () => {
         header: 'token-a',
       },
     })
+
+    const globalFetch = vi.fn(async function (this: typeof globalThis) {
+      if (this !== globalThis) {
+        throw new TypeError('Illegal invocation')
+      }
+
+      return new Response(JSON.stringify({
+        authenticated: true,
+        guard: 'web',
+        user: {
+          id: 1,
+          email: 'bound@example.com',
+        },
+      }), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+        },
+      })
+    })
+
+    resetAuthClient()
+    vi.stubGlobal('fetch', globalFetch)
+    await expect(authClientInternals.fetchCurrentUser({
+      endpoint: 'https://example.com/api/auth/bound-user',
+    })).resolves.toMatchObject({
+      authenticated: true,
+      user: {
+        email: 'bound@example.com',
+      },
+    })
   })
 
   it('covers missing store, provider config, and non-session guard failures', async () => {

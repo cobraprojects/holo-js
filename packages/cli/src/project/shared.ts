@@ -10,6 +10,9 @@ export type CliModelReference = {
   readonly definition: {
     readonly kind?: string
     readonly name: string
+    readonly table: {
+      readonly tableName: string
+    }
     readonly prunable?: unknown
   }
   prune(): Promise<number>
@@ -31,7 +34,9 @@ export type DiscoveredAppCommand = {
 export type GeneratedModelRegistryEntry = {
   readonly sourcePath: string
   readonly name: string
+  readonly tableName: string
   readonly prunable: boolean
+  readonly exportName?: string
 }
 
 export type GeneratedMigrationRegistryEntry = {
@@ -408,6 +413,7 @@ export const GENERATED_ROOT = join('.holo-js', 'generated')
 export const GENERATED_INDEX_PATH = join(GENERATED_ROOT, 'index.ts')
 export const GENERATED_METADATA_PATH = join(GENERATED_ROOT, 'metadata.ts')
 export const GENERATED_MODELS_PATH = join(GENERATED_ROOT, 'models.ts')
+export const GENERATED_MODEL_TYPES_PATH = join(GENERATED_ROOT, 'model-registry.d.ts')
 export const GENERATED_MIGRATIONS_PATH = join(GENERATED_ROOT, 'migrations.ts')
 export const GENERATED_SEEDERS_PATH = join(GENERATED_ROOT, 'seeders.ts')
 export const GENERATED_COMMANDS_PATH = join(GENERATED_ROOT, 'commands.ts')

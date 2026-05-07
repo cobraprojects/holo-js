@@ -123,6 +123,16 @@ async function fetchJson(baseUrl, path, options = {}) {
   }
 }
 
+function assertRedirectsTo(result, expectedPath) {
+  assert.ok(
+    result.response.status >= 300 && result.response.status < 400,
+    `Expected ${expectedPath} redirect, received status ${result.response.status}.`,
+  )
+  const location = result.response.headers.get('location')
+  assert.ok(location, `Expected ${expectedPath} redirect to include a location header.`)
+  assert.equal(new URL(location, result.response.url).pathname, expectedPath)
+}
+
 async function waitForOutputMatch(getOutput, matcher, startIndex = 0, timeoutMs = 10000) {
   const startedAt = Date.now()
 
@@ -346,6 +356,13 @@ export async function assertExampleAppAuthFlow({
       jar: authenticatedJar,
     })
     assertUserNav(authenticatedHome.text)
+
+    for (const guestPath of ['/login', '/register', '/forgot-password', '/reset-password']) {
+      assertRedirectsTo(await fetchAuthText(guestPath, {
+        jar: authenticatedJar,
+        allowFailure: true,
+      }), '/admin')
+    }
   }
 
   const authenticatedSessionCookie = authenticatedJar.header()

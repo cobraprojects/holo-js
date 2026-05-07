@@ -21,6 +21,10 @@
       "types": "./dist/runtime/composables/auth.d.ts",
       "import": "./dist/runtime/composables/auth.js"
     },
+    "./server": {
+      "types": "./dist/runtime/server/protection.d.ts",
+      "import": "./dist/runtime/server/protection.js"
+    },
     "./storage": {
       "types": "./dist/runtime/composables/storage.d.ts",
       "import": "./dist/runtime/composables/storage.js"

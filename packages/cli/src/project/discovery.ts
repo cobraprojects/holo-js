@@ -114,8 +114,8 @@ export async function prepareProjectDiscovery(
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
     try {
       const moduleValue = await importProjectModule(projectRoot, filePath)
-      const model = resolveNamedExport(moduleValue, isCliModelReference)
-      if (!model) {
+      const exportedModel = resolveNamedExportEntry(moduleValue, isCliModelReference)
+      if (!exportedModel) {
         if (isInactiveGeneratedModelModule(moduleValue)) {
           continue
         }
@@ -125,8 +125,10 @@ export async function prepareProjectDiscovery(
 
       models.push({
         sourcePath: relativePath,
-        name: model.definition.name,
-        prunable: Boolean(model.definition.prunable),
+        name: exportedModel.value.definition.name,
+        tableName: exportedModel.value.definition.table.tableName,
+        prunable: Boolean(exportedModel.value.definition.prunable),
+        ...(exportedModel.exportName === 'default' ? {} : { exportName: exportedModel.exportName }),
       })
     } catch (error) {
       if (!isMissingGeneratedSchemaModelError(error)) {

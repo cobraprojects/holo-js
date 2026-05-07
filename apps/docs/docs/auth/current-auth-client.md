@@ -31,6 +31,103 @@ const current = auth.user
 const fresh = await auth.refreshUser()
 ```
 
+## Refreshing After Auth Actions
+
+The client helper does not perform login or register itself. Your route changes the cookie/session, then the client
+calls `refreshUser()` so the framework state matches the new server state before rendering auth-aware UI.
+
+::: code-group
+
+```tsx [Next.js — login/register success]
+'use client'
+
+import { useRouter } from 'next/navigation'
+import { useAuth, useForm } from '@holo-js/adapter-next/client'
+import { loginForm } from '@/lib/schemas/login'
+
+export default function LoginPage() {
+  const router = useRouter()
+  const auth = useAuth()
+  const form = useForm(loginForm, {
+    async submitter({ formData }) {
+      const response = await fetch('/api/login', { method: 'POST', body: formData })
+      const submission = await response.json()
+
+      if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
+        try {
+          await auth.refreshUser()
+        } catch (error) {
+          console.warn('Auth refresh failed after login.', error)
+        }
+
+        router.replace(submission.data.redirectTo)
+      }
+
+      return submission
+    },
+  })
+
+  return <form onSubmit={(event) => { event.preventDefault(); form.submit() }} />
+}
+```
+
+```vue [Nuxt — login/register success]
+<script setup lang="ts">
+import { useForm } from '@holo-js/adapter-nuxt/client'
+import { loginForm } from '~/lib/schemas/login'
+
+const { refreshUser } = await useAuth()
+const form = useForm(loginForm, {
+  async submitter({ formData }) {
+    const submission = await $fetch('/api/login', { method: 'POST', body: formData })
+
+    if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
+      try {
+        await refreshUser()
+      } catch (error) {
+        console.warn('Auth refresh failed after login.', error)
+      }
+
+      await navigateTo(submission.data.redirectTo)
+    }
+
+    return submission
+  },
+})
+</script>
+```
+
+```svelte [SvelteKit — login/register success]
+<script lang="ts">
+  import { goto, invalidateAll } from '$app/navigation'
+  import { useAuth, useForm } from '@holo-js/adapter-sveltekit/client'
+  import { loginForm } from '$lib/schemas/login'
+
+  const auth = useAuth()
+  const form = useForm(loginForm, {
+    async submitter({ formData }) {
+      const response = await fetch('/api/login', { method: 'POST', body: formData })
+      const submission = await response.json()
+
+      if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
+        try {
+          await auth.refreshUser()
+        } catch (error) {
+          console.warn('Auth refresh failed after login.', error)
+        }
+
+        await invalidateAll()
+        await goto(submission.data.redirectTo)
+      }
+
+      return submission
+    },
+  })
+</script>
+```
+
+:::
+
 ## Client Usage
 
 ::: code-group

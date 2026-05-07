@@ -1,7 +1,7 @@
 import { loginUsing, register } from '@holo-js/auth'
 import { sanitizeFlashedInput, validate } from '@holo-js/forms'
 
-import { registerForm } from '../../lib/schemas/auth'
+import { registerForm } from '#shared/schemas/auth'
 
 export default defineEventHandler(async (event) => {
   const submission = await validate(event, registerForm, {

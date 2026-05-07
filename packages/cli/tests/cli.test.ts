@@ -1445,8 +1445,9 @@ export default {
     expect(await readFile(join(nuxtRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain("process.on('SIGTERM'")
     expect(await readFile(join(nuxtRoot, 'nuxt.config.ts'), 'utf8')).toContain('@holo-js/adapter-nuxt')
     expect(await readFile(join(nuxtRoot, 'package.json'), 'utf8')).toContain('"postinstall": "nuxt prepare"')
-    expect(await readFile(join(nuxtRoot, 'app.vue'), 'utf8')).toContain('const appName = "nuxt-runner"')
-    expect(await readFile(join(nuxtRoot, 'app.vue'), 'utf8')).not.toContain('<h1>nuxt-runner</h1>')
+    expect(await readFile(join(nuxtRoot, 'app/app.vue'), 'utf8')).toContain('const appName = "nuxt-runner"')
+    expect(await readFile(join(nuxtRoot, 'app/app.vue'), 'utf8')).not.toContain('<h1>nuxt-runner</h1>')
+    expect(await readFile(join(nuxtRoot, '.holo-js/generated/model-registry.d.ts'), 'utf8')).toContain('schema.generated')
     expect(await readFile(join(nuxtRoot, 'nuxt.config.ts'), 'utf8')).not.toContain('import { defineNuxtConfig } from \'nuxt/config\'')
     expect(await readFile(join(nuxtRoot, 'server/api/holo/health.get.ts'), 'utf8')).not.toContain('import { defineEventHandler } from \'h3\'')
     expect(await readFile(join(nuxtRoot, 'server/api/holo/health.get.ts'), 'utf8')).not.toContain('@holo-js/adapter-nuxt/runtime')
@@ -9514,7 +9515,10 @@ export default defineConfig({
     ) as { extends: string }
 
     expect(generatedTsconfig.extends).toBe('../../tsconfig.json')
-  })
+    const emptyModelTypes = await readFile(join(projectRoot, '.holo-js/generated/model-registry.d.ts'), 'utf8')
+    expect(emptyModelTypes).toContain('schema.generated')
+    expect(emptyModelTypes).not.toContain('ModelReference')
+  }, 30000)
 
   it('manages SvelteKit hook entrypoints during prepare and preserves user hook extensions separately', async () => {
     const projectRoot = await createTempProject()

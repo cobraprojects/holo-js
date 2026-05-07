@@ -108,7 +108,7 @@ async function fetchCurrentUser(
     }
   }
 
-  const response = await config.fetchImpl(createRequestUrl(config), {
+  const response = await config.fetchImpl.call(globalThis, createRequestUrl(config), {
     method: 'GET',
     headers: normalizeHeaders(config.headers),
   })

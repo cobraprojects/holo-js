@@ -118,14 +118,20 @@ not h3 route handlers.
 ::: code-group
 
 ```ts [Next.js — app/login/page.tsx]
-import { useForm } from '@holo-js/adapter-next/client'
+import { useAuth, useForm } from '@holo-js/adapter-next/client'
 import { loginForm } from '@/lib/schemas/login'
 
+const auth = useAuth()
 const form = useForm(loginForm, {
   csrf: true,
   async submitter({ formData }) {
     const response = await fetch('/api/login', { method: 'POST', body: formData })
-    return await response.json()
+    const submission = await response.json()
+    if (submission?.ok === true) {
+      await auth.refreshUser()
+    }
+
+    return submission
   },
 })
 ```
@@ -134,23 +140,37 @@ const form = useForm(loginForm, {
 import { useForm } from '@holo-js/adapter-nuxt/client'
 import { loginForm } from '~/lib/schemas/login'
 
+const { refreshUser } = await useAuth()
 const form = useForm(loginForm, {
   csrf: true,
   async submitter({ formData }) {
-    return await $fetch('/api/login', { method: 'POST', body: formData })
+    const submission = await $fetch('/api/login', { method: 'POST', body: formData })
+    if (submission?.ok === true) {
+      await refreshUser()
+    }
+
+    return submission
   },
 })
 ```
 
 ```ts [SvelteKit — src/routes/login/+page.svelte]
-import { useForm } from '@holo-js/adapter-sveltekit/client'
+import { invalidateAll } from '$app/navigation'
+import { useAuth, useForm } from '@holo-js/adapter-sveltekit/client'
 import { loginForm } from '$lib/schemas/login'
 
+const auth = useAuth()
 const form = useForm(loginForm, {
   csrf: true,
   async submitter({ formData }) {
     const response = await fetch('/api/login', { method: 'POST', body: formData })
-    return await response.json()
+    const submission = await response.json()
+    if (submission?.ok === true) {
+      await auth.refreshUser()
+      await invalidateAll()
+    }
+
+    return submission
   },
 })
 ```

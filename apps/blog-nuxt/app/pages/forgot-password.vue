@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useForm } from '@holo-js/adapter-nuxt/client'
-import { forgotPasswordForm } from '~/lib/schemas/auth'
+import { forgotPasswordForm } from '#shared/schemas/auth'
 
 const form = useForm(forgotPasswordForm, {
   validateOn: 'blur',
