@@ -34,51 +34,18 @@ interface HoloRuntimeConfig extends RuntimeConfigInput {
   }
 }
 
-interface HoloRef<TValue> {
-  value: TValue
-}
-
-interface HoloComputedRef<TValue> {
-  readonly value: TValue
-}
-
-interface HoloUseFetchResult<TValue> {
-  readonly data: HoloRef<TValue | null>
-  readonly refresh: () => Promise<void>
-}
-
-interface HoloRouteLocation {
-  readonly path: string
-}
-
-type HoloNavigateToResult = void | false | Promise<void | false>
-
 /**
  * Minimal Nuxt runtime shims for adapter typechecking.
  *
  * Keep these declarations limited to the fields consumed by adapter runtime code:
- * composables/auth.ts uses HoloUseFetchResult.data/refresh, useFetch options.key,
- * useState key/init with HoloRef.value, and computed getter/value.
+ * runtime config, storage access, and Nitro route/plugin globals.
  */
 declare module '#app' {
   export function useRuntimeConfig(): HoloRuntimeConfig
 }
 
 declare module '#imports' {
-  export function computed<TValue>(getter: () => TValue): HoloComputedRef<TValue>
-  export function defineNuxtRouteMiddleware<TValue>(
-    middleware: (to: HoloRouteLocation, from: HoloRouteLocation) => TValue | Promise<TValue>,
-  ): (to: HoloRouteLocation, from: HoloRouteLocation) => TValue | Promise<TValue>
-  export function navigateTo(
-    to: string,
-    options?: { readonly redirectCode?: number },
-  ): HoloNavigateToResult
-  export function useFetch<TValue = unknown>(
-    request: string,
-    options?: { readonly key?: string },
-  ): Promise<HoloUseFetchResult<TValue>>
   export function useRuntimeConfig(): HoloRuntimeConfig
-  export function useState<TValue>(key: string, init: () => TValue): HoloRef<TValue>
   export function useStorage(base: string): unknown
 }
 

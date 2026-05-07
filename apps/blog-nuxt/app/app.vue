@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useAuth } from '@holo-js/auth/nuxt'
+
 const { authenticated, refreshUser, user } = await useAuth()
 const displayName = computed(() => user.value?.name ?? user.value?.email ?? 'Account')
 

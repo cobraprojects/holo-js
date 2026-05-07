@@ -1,4 +1,4 @@
-import { useAuth } from '../composables/auth'
+import { useAuth } from '../nuxt'
 import { defineNuxtRouteMiddleware, navigateTo } from '#imports'
 
 export type RouteMatcher = string | RegExp | ((pathname: string) => boolean)
@@ -9,16 +9,29 @@ export type GuestOnlyOptions = {
   readonly status?: 301 | 302 | 303 | 307 | 308
 }
 
-export type GuestOnlyRouteLocation = {
+export type AuthOnlyOptions = {
+  readonly redirectTo: string
+  readonly routes?: readonly RouteMatcher[]
+  readonly status?: 301 | 302 | 303 | 307 | 308
+}
+
+export type RouteProtectionLocation = {
   readonly path: string
 }
 
-export type GuestOnlyRouteMiddlewareResult = void | false | Promise<void | false>
+export type RouteProtectionMiddlewareResult = void | false | Promise<void | false>
 
-export type GuestOnlyRouteMiddleware = (
-  to: GuestOnlyRouteLocation,
-  from: GuestOnlyRouteLocation,
-) => GuestOnlyRouteMiddlewareResult
+export type RouteProtectionMiddleware = (
+  to: RouteProtectionLocation,
+  from: RouteProtectionLocation,
+) => RouteProtectionMiddlewareResult
+
+export type GuestOnlyRouteLocation = RouteProtectionLocation
+export type GuestOnlyRouteMiddlewareResult = RouteProtectionMiddlewareResult
+export type GuestOnlyRouteMiddleware = RouteProtectionMiddleware
+export type AuthOnlyRouteLocation = RouteProtectionLocation
+export type AuthOnlyRouteMiddlewareResult = RouteProtectionMiddlewareResult
+export type AuthOnlyRouteMiddleware = RouteProtectionMiddleware
 
 function normalizePathname(pathname: string): string {
   if (pathname === '/') {
@@ -52,6 +65,10 @@ function matchesRoutes(routes: readonly RouteMatcher[] | undefined, pathname: st
   return (routes ?? ['/*']).some(route => matchesRoute(route, pathname))
 }
 
+function isSamePath(path: string, redirectTo: string): boolean {
+  return normalizePathname(path) === normalizePathname(redirectTo)
+}
+
 export function guestOnly(options: GuestOnlyOptions): GuestOnlyRouteMiddleware {
   return defineNuxtRouteMiddleware(async (to) => {
     if (!matchesRoutes(options.routes, to.path)) {
@@ -63,6 +80,31 @@ export function guestOnly(options: GuestOnlyOptions): GuestOnlyRouteMiddleware {
       return undefined
     }
 
+    if (isSamePath(to.path, options.redirectTo)) {
+      return undefined
+    }
+
+    return navigateTo(options.redirectTo, {
+      redirectCode: options.status ?? 303,
+    })
+  })
+}
+
+export function authOnly(options: AuthOnlyOptions): AuthOnlyRouteMiddleware {
+  return defineNuxtRouteMiddleware(async (to) => {
+    if (!matchesRoutes(options.routes, to.path)) {
+      return undefined
+    }
+
+    const currentAuth = await useAuth()
+    if (currentAuth.authenticated.value) {
+      return undefined
+    }
+
+    if (isSamePath(to.path, options.redirectTo)) {
+      return undefined
+    }
+
     return navigateTo(options.redirectTo, {
       redirectCode: options.status ?? 303,
     })
@@ -70,6 +112,7 @@ export function guestOnly(options: GuestOnlyOptions): GuestOnlyRouteMiddleware {
 }
 
 export const routeProtectionInternals = {
+  isSamePath,
   matchesRoute,
   matchesRoutes,
 }

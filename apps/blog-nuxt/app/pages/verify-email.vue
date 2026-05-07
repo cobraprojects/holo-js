@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { navigateTo, useRoute } from '#imports'
+import { useAuth } from '@holo-js/auth/nuxt'
 import { useForm } from '@holo-js/adapter-nuxt/client'
 import { ref } from 'vue'
 import { verifyEmailForm } from '#shared/schemas/auth'

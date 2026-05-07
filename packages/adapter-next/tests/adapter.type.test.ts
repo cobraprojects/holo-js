@@ -108,8 +108,9 @@ describe('@holo-js/adapter-next typing', () => {
       await writeFile(
         entryPath,
         [
-          `import { AuthProvider, useAuth, useForm, type HoloAuthUser, type UseAuthResult } from '@holo-js/adapter-next/client'`,
-          `import { auth } from '@holo-js/adapter-next/server'`,
+          `import { AuthProvider, useAuth, type HoloAuthUser, type UseAuthResult } from '@holo-js/auth/next/client'`,
+          `import { auth } from '@holo-js/auth/next/server'`,
+          `import { useForm } from '@holo-js/adapter-next/client'`,
           `const currentAuth = useAuth()`,
           `const user: HoloAuthUser | null = currentAuth.user`,
           `const authResult: UseAuthResult = currentAuth`,

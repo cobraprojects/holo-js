@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invalidateAll } from '$app/navigation'
   import { untrack } from 'svelte'
-  import { useAuth } from '@holo-js/adapter-sveltekit/client'
+  import { useAuth } from '@holo-js/auth/sveltekit/client'
   import type { LayoutProps } from './$types'
 
   let { data, children }: LayoutProps = $props()

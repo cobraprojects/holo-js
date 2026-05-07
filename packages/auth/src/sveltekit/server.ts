@@ -1,5 +1,5 @@
-import holoAuth, { user as currentUser } from '@holo-js/auth'
-import type { AuthUserLike, HoloAuthUser } from '@holo-js/auth'
+import holoAuth, { user as currentUser } from '../index'
+import type { AuthUserLike, HoloAuthUser } from '../contracts'
 
 export type AuthState = {
   readonly authenticated: boolean
@@ -18,13 +18,19 @@ export type GuestOnlyOptions = AuthOptions & {
   readonly status?: 301 | 302 | 303 | 307 | 308
 }
 
+export type AuthOnlyOptions = AuthOptions & {
+  readonly redirectTo: string
+  readonly routes?: readonly RouteMatcher[]
+  readonly status?: 301 | 302 | 303 | 307 | 308
+}
+
 export type SvelteKitHandleEvent = {
   readonly url: URL
 }
 
 export type SvelteKitHandleInput<TEvent extends SvelteKitHandleEvent = SvelteKitHandleEvent> = {
   readonly event: TEvent
-  readonly resolve: (event: TEvent, options?: unknown) => Response | Promise<Response>
+  readonly resolve: (event: TEvent, options?: never) => Response | Promise<Response>
 }
 
 export type SvelteKitHandle = <TEvent extends SvelteKitHandleEvent>(
@@ -68,6 +74,12 @@ function matchesRoutes(routes: readonly RouteMatcher[] | undefined, pathname: st
   return (routes ?? ['/*']).some(route => matchesRoute(route, pathname))
 }
 
+function isSameUrl(left: URL, right: URL): boolean {
+  return left.pathname === right.pathname
+    && left.search === right.search
+    && left.hash === right.hash
+}
+
 export async function auth(options: AuthOptions = {}): Promise<AuthState> {
   let user: HoloAuthUser | null
   try {
@@ -102,11 +114,27 @@ export function guestOnly(options: GuestOnlyOptions): SvelteKitHandle {
     }
 
     const redirectUrl = new URL(options.redirectTo, event.url)
-    if (
-      redirectUrl.pathname === event.url.pathname
-      && redirectUrl.search === event.url.search
-      && redirectUrl.hash === event.url.hash
-    ) {
+    if (isSameUrl(event.url, redirectUrl)) {
+      return resolve(event)
+    }
+
+    return Response.redirect(redirectUrl, options.status ?? 303)
+  }
+}
+
+export function authOnly(options: AuthOnlyOptions): SvelteKitHandle {
+  return async ({ event, resolve }) => {
+    if (!matchesRoutes(options.routes, event.url.pathname)) {
+      return resolve(event)
+    }
+
+    const currentAuth = await auth({ guard: options.guard })
+    if (currentAuth.authenticated) {
+      return resolve(event)
+    }
+
+    const redirectUrl = new URL(options.redirectTo, event.url)
+    if (isSameUrl(event.url, redirectUrl)) {
       return resolve(event)
     }
 
@@ -115,6 +143,7 @@ export function guestOnly(options: GuestOnlyOptions): SvelteKitHandle {
 }
 
 export const routeProtectionInternals = {
+  isSameUrl,
   matchesRoute,
   matchesRoutes,
 }

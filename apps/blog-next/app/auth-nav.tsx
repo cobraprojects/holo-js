@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { useAuth } from '@holo-js/adapter-next/client'
+import { useAuth } from '@holo-js/auth/next/client'
 
 const linkStyle = {
   color: '#cbd5e1',

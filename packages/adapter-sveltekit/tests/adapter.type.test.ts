@@ -155,8 +155,9 @@ describe('@holo-js/adapter-sveltekit typing', () => {
       await writeFile(
         entryPath,
         [
-          `import { useAuth, useForm, type HoloAuthUser, type UseAuthResult } from '@holo-js/adapter-sveltekit/client'`,
-          `import { auth } from '@holo-js/adapter-sveltekit/server'`,
+          `import { useAuth, type HoloAuthUser, type UseAuthResult } from '@holo-js/auth/sveltekit/client'`,
+          `import { auth } from '@holo-js/auth/sveltekit/server'`,
+          `import { useForm } from '@holo-js/adapter-sveltekit/client'`,
           `const currentAuth = useAuth()`,
           `const user: HoloAuthUser | null = currentAuth.user`,
           `const authResult: UseAuthResult = currentAuth`,

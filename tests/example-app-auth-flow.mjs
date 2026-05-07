@@ -363,6 +363,11 @@ export async function assertExampleAppAuthFlow({
         allowFailure: true,
       }), '/admin')
     }
+
+    const adminPostsPage = await fetchAuthText('/admin/posts', {
+      jar: authenticatedJar,
+    })
+    assert.match(adminPostsPage.text, /Designing the Example App Roadmap/i)
   }
 
   const authenticatedSessionCookie = authenticatedJar.header()

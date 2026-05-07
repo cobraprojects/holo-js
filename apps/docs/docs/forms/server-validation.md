@@ -247,7 +247,8 @@ These examples show the real failure and success handling path using `useForm(..
 ```tsx [Next.js — app/login/page.tsx]
 'use client'
 
-import { useAuth, useForm } from '@holo-js/adapter-next/client'
+import { useAuth } from '@holo-js/auth/next/client'
+import { useForm } from '@holo-js/adapter-next/client'
 import { loginForm } from '@/lib/schemas/login'
 
 export default function LoginPage() {
@@ -308,6 +309,7 @@ export default function LoginPage() {
 
 ```vue [Nuxt — pages/login.vue]
 <script setup lang="ts">
+import { useAuth } from '@holo-js/auth/nuxt'
 import { useForm } from '@holo-js/adapter-nuxt/client'
 import { loginForm } from '~/lib/schemas/login'
 

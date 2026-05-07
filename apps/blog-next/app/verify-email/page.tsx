@@ -5,7 +5,8 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 
-import { useAuth, useForm } from '@holo-js/adapter-next/client'
+import { useAuth } from '@holo-js/auth/next/client'
+import { useForm } from '@holo-js/adapter-next/client'
 
 import { verifyEmailForm } from '@/lib/schemas/auth'
 
