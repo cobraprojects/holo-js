@@ -29,6 +29,10 @@ type NuxtAuthRequestEvent = {
     readonly req?: {
       readonly headers?: Readonly<Record<string, string | readonly string[] | undefined>>
     }
+    readonly res?: {
+      getHeader(name: string): number | string | readonly string[] | undefined
+      setHeader(name: string, value: number | string | readonly string[]): void
+    }
   }
 }
 
@@ -140,6 +144,28 @@ export function createNuxtAuthRequestAccessors() {
     return undefined
   }
 
+  async function appendCookie(cookie: string): Promise<void> {
+    const nitroContext = await loadNitroContextModule()
+    const event = nitroContext.useEvent()
+    const response = event?.node?.res
+    if (!response) {
+      return
+    }
+
+    const current = response.getHeader('set-cookie')
+    if (Array.isArray(current)) {
+      response.setHeader('set-cookie', [...current, cookie])
+      return
+    }
+
+    if (typeof current === 'string') {
+      response.setHeader('set-cookie', [current, cookie])
+      return
+    }
+
+    response.setHeader('set-cookie', [cookie])
+  }
+
   const getCookieValue: NonNullable<CreateHoloOptions['authRequest']>['getCookie'] = async (name) => {
     return await readCookie(name)
   }
@@ -148,9 +174,14 @@ export function createNuxtAuthRequestAccessors() {
     return await readHeader(name)
   }
 
+  const appendResponseCookie: NonNullable<CreateHoloOptions['authRequest']>['appendResponseCookie'] = async (cookie) => {
+    await appendCookie(cookie)
+  }
+
   return {
     getCookie: getCookieValue,
     getHeader: getHeaderValue,
+    appendResponseCookie,
   } satisfies NonNullable<CreateHoloOptions['authRequest']>
 }
 

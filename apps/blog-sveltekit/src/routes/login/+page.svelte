@@ -27,6 +27,11 @@
     <p>Use your email address and password to access the admin area.</p>
   </div>
 
+  <div class="social-links">
+    <a href="/auth/google">Continue with Google</a>
+    <a href="/auth/github">Continue with GitHub</a>
+  </div>
+
   <form class="stack" on:submit={(event) => { event.preventDefault(); form.submit() }}>
     <label class="field">
       <span>Email</span>
@@ -89,6 +94,8 @@
   .copy p { margin: 0; color: #94a3b8; }
   .stack, .field { display: grid; gap: 0.35rem; }
   .stack { gap: 0.9rem; }
+  .social-links { display: grid; gap: 0.65rem; }
+  .social-links a { color: #e5e7eb; text-decoration: none; }
   .remember, .links { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
   .error { color: #fca5a5; }
   .success { color: #86efac; }

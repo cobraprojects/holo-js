@@ -81,6 +81,13 @@ export function cloneDefinition(definition: FieldDefinition, rule: FieldRule): F
   })
 }
 
+export function markDefinitionSensitive(definition: FieldDefinition): FieldDefinition {
+  return Object.freeze({
+    ...definition,
+    sensitive: true as const,
+  })
+}
+
 export function assertFiniteNumber(value: number, label: string): void {
   if (!Number.isFinite(value)) {
     throw new ValidationContractError(`${label} must be a finite number.`)
@@ -129,12 +136,13 @@ export function normalizeSchemaShape<TShape extends SchemaInputShape>(shape: TSh
   return Object.freeze(Object.fromEntries(normalizedEntries)) as NormalizedSchemaShape<TShape>
 }
 
-export function createField<TOutput>(kind: FieldKind, item?: FieldDefinition): ValidationField<TOutput> {
+export function createField<TOutput>(kind: FieldKind, item?: FieldDefinition, sensitive = false): ValidationField<TOutput> {
   return Object.freeze({
     kind: 'field' as const,
     definition: Object.freeze({
       kind,
       item,
+      ...(sensitive ? { sensitive: true as const } : {}),
       rules: Object.freeze([]),
     }),
   })

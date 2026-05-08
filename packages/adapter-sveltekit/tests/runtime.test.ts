@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 type MockAuthRequest = {
   getCookie(name: string): Promise<string | undefined>
   getHeader(name: string): Promise<string | undefined>
+  appendResponseCookie?(cookie: string): void | Promise<void>
 }
 
 function makeHoloCoreMock(
@@ -64,6 +65,16 @@ afterEach(() => {
 describe('@holo-js/adapter-sveltekit request context', () => {
   it('owns auth request accessors inside the adapter and resolves them from the current request event', async () => {
     let capturedAuthRequest: MockAuthRequest | undefined
+    const responseCookies: Array<{
+      readonly name: string
+      readonly value: string
+      readonly options: {
+        readonly path: string
+        readonly httpOnly?: boolean
+        readonly sameSite?: 'lax' | 'strict' | 'none'
+        readonly partitioned?: boolean
+      }
+    }> = []
 
     vi.doMock('@holo-js/core', () => makeHoloCoreMock((authRequest) => {
       capturedAuthRequest = authRequest
@@ -78,6 +89,9 @@ describe('@holo-js/adapter-sveltekit request context', () => {
       cookies: {
         get(name: string) {
           return name === 'session' ? 'cookie-value' : undefined
+        },
+        set(name, value, options) {
+          responseCookies.push({ name, value, options })
         },
       },
       request: {
@@ -94,7 +108,30 @@ describe('@holo-js/adapter-sveltekit request context', () => {
       }
       await expect(capturedAuthRequest.getCookie('session')).resolves.toBe('cookie-value')
       await expect(capturedAuthRequest.getHeader('x-request-id')).resolves.toBe('header-value')
+      await capturedAuthRequest.appendResponseCookie?.('session=response-value; Path=/; HttpOnly; SameSite=Lax; Partitioned')
+      await capturedAuthRequest.appendResponseCookie?.('analytics=off; Path=/metrics; Partitioned=false')
     })
+
+    expect(responseCookies).toEqual([
+      {
+        name: 'session',
+        value: 'response-value',
+        options: {
+          path: '/',
+          httpOnly: true,
+          sameSite: 'lax',
+          partitioned: true,
+        },
+      },
+      {
+        name: 'analytics',
+        value: 'off',
+        options: {
+          path: '/metrics',
+          partitioned: false,
+        },
+      },
+    ])
 
     expect(capturedAuthRequest).toBeDefined()
     if (!capturedAuthRequest) {

@@ -12,6 +12,9 @@ export {
   isFormSchema,
 } from './schema'
 export type {
+  FormFailureErrors,
+  FormFailureInput,
+  FormFailureOptions,
   FormFailurePayload,
   InferFormData,
   FormRequestLikeInput,

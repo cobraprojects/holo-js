@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit'
 import { login } from '@holo-js/auth'
-import { sanitizeFlashedInput, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
 
 import { loginForm } from '$lib/schemas/auth'
 
@@ -17,20 +17,12 @@ export async function POST({ request }: { request: Request }) {
 
   const { data: session, error } = await login(submission.data)
   if (error) {
-    return json({
-      ok: false as const,
+    const failure = submission.fail({
       status: error.status,
-      valid: false as const,
-      values: sanitizeFlashedInput(submission.values),
       errors: error.fields,
-    }, {
-      status: error.status,
     })
-  }
 
-  const headers = new Headers()
-  for (const cookie of session.cookies) {
-    headers.append('set-cookie', cookie)
+    return json(failure, { status: failure.status })
   }
 
   return json(submission.success({
@@ -41,7 +33,5 @@ export async function POST({ request }: { request: Request }) {
       ? session.emailVerificationRoute ?? '/verify-email'
       : '/admin',
     user: session.user,
-  }), {
-    headers,
-  })
+  }))
 }

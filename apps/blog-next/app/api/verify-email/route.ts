@@ -1,5 +1,5 @@
 import { check, verification } from '@holo-js/auth'
-import { sanitizeFlashedInput, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
 
 import { verifyEmailForm } from '@/lib/schemas/auth'
 
@@ -15,15 +15,12 @@ export async function POST(request: Request) {
   const wasAuthenticated = await check()
   const { error } = await verification.consume(submission.data.token)
   if (error) {
-    return Response.json({
-      ok: false as const,
+    const failure = submission.fail({
       status: error.status,
-      valid: false as const,
-      values: sanitizeFlashedInput(submission.values),
       errors: error.fields,
-    }, {
-      status: error.status,
     })
+
+    return Response.json(failure, { status: failure.status })
   }
 
   return Response.json(submission.success({

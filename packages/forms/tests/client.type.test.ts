@@ -87,8 +87,8 @@ describe('@holo-js/forms client typing', () => {
     const registerUser = schema({
       name: field.string().required(),
       email: field.string().required().email(),
-      password: field.string().required().min(8).confirmed(),
-      passwordConfirmation: field.string().required(),
+      password: field.password().required().min(8).confirmed(),
+      passwordConfirmation: field.password().required(),
     })
 
     const client = useForm(registerUser, {

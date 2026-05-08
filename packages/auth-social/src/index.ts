@@ -85,12 +85,35 @@ export interface SocialAuthBindings {
 
 export interface SocialAuthFacade {
   redirect(provider: string, request: Request): Promise<Response>
-  callback(provider: string, request: Request): Promise<Response>
+  callback(provider: string, request: Request): Promise<SocialCallbackResult>
 }
 
-let socialBindings: SocialAuthBindings | undefined
+export type SocialCallbackResult = SocialCallbackSuccess | SocialCallbackFailure
+
+export interface SocialCallbackSuccess {
+  readonly ok: true
+  readonly guard: string
+  readonly authProvider: string
+  readonly provider: string
+  readonly user: AuthUserLike
+}
+
+export interface SocialCallbackFailure {
+  readonly ok: false
+  readonly status: 400
+  readonly message: string
+}
+
+const SOCIAL_BINDINGS_KEY = '__holoAuthSocialBindings__'
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
 type RuntimeAuthProviderAdapter = ReturnType<typeof authRuntimeInternals.getRuntimeBindings>['providers'][string]
+type SocialRuntimeGlobal = typeof globalThis & {
+  [SOCIAL_BINDINGS_KEY]?: SocialAuthBindings
+}
+
+function getSocialRuntimeGlobal(): SocialRuntimeGlobal {
+  return globalThis as SocialRuntimeGlobal
+}
 
 function requireUserRecord(user: unknown, message: string): Record<string, unknown> {
   if (user == null) {
@@ -141,6 +164,7 @@ function throwUnconfigured(): never {
 }
 
 function getBindings(): SocialAuthBindings {
+  const socialBindings = getSocialRuntimeGlobal()[SOCIAL_BINDINGS_KEY]
   if (!socialBindings) {
     throwUnconfigured()
   }
@@ -249,9 +273,6 @@ function resolveGuardAndProvider(provider: string): {
   const guard = authBindings.config.guards[guardName]
   if (!guard) {
     throw new Error(`[@holo-js/auth-social] Guard "${guardName}" is not configured for social provider "${provider}".`)
-  }
-  if (guard.driver !== 'session') {
-    throw new Error(`[@holo-js/auth-social] Social sign-in requires auth guard "${guardName}" to use the session driver.`)
   }
 
   const authProvider = providerConfig.mapToProvider ?? guard.provider
@@ -482,19 +503,23 @@ async function readCallbackParameters(request: Request): Promise<{
   }
 }
 
-export async function callback(provider: string, request: Request): Promise<Response> {
+export async function callback(provider: string, request: Request): Promise<SocialCallbackResult> {
   const { state, code } = await readCallbackParameters(request)
   if (!state || !code) {
-    return Response.json({
+    return {
+      ok: false,
+      status: 400,
       message: 'Missing OAuth state or code.',
-    }, { status: 400 })
+    }
   }
 
   const pending = await getBindings().stateStore.read(provider, state)
   if (!pending) {
-    return Response.json({
+    return {
+      ok: false,
+      status: 400,
       message: 'Invalid or expired OAuth state.',
-    }, { status: 400 })
+    }
   }
 
   await getBindings().stateStore.delete(provider, state)
@@ -510,32 +535,22 @@ export async function callback(provider: string, request: Request): Promise<Resp
   })
 
   const linked = await resolveLinkedUser(provider, exchanged.profile, exchanged.tokens)
-  const established = await authRuntimeInternals.establishSessionForUser(linked.user, {
-    guard: linked.guard,
-    provider: linked.authProvider,
-  })
-  const headers = new Headers()
-  for (const cookie of established.cookies) {
-    headers.append('set-cookie', cookie)
-  }
 
-  return Response.json({
-    authenticated: true,
+  return {
+    ok: true,
     guard: linked.guard,
+    authProvider: linked.authProvider,
     provider,
     user: linked.user,
-  }, {
-    status: 200,
-    headers,
-  })
+  }
 }
 
 export function configureSocialAuthRuntime(bindings?: SocialAuthBindings): void {
-  socialBindings = bindings
+  getSocialRuntimeGlobal()[SOCIAL_BINDINGS_KEY] = bindings
 }
 
 export function resetSocialAuthRuntime(): void {
-  socialBindings = undefined
+  delete getSocialRuntimeGlobal()[SOCIAL_BINDINGS_KEY]
 }
 
 export const socialAuth = Object.freeze({

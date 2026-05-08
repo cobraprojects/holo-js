@@ -356,6 +356,7 @@ export default defineDatabaseConfig({
   })
 
   it('skips malformed cookie segments when decoding auth cookies', async () => {
+    const headers = new Map<string, number | string | readonly string[]>()
     vi.resetModules()
     vi.doMock('nitropack/runtime/context', () => ({
       useEvent: () => ({
@@ -363,6 +364,16 @@ export default defineDatabaseConfig({
           headers: new Headers({
             cookie: 'broken=%; auth-token=secret%20value',
           }),
+        },
+        node: {
+          res: {
+            getHeader(name: string) {
+              return headers.get(name)
+            },
+            setHeader(name: string, value: number | string | readonly string[]) {
+              headers.set(name, value)
+            },
+          },
         },
       }),
     }))
@@ -372,6 +383,12 @@ export default defineDatabaseConfig({
 
     await expect(accessors.getCookie('broken')).resolves.toBeUndefined()
     await expect(accessors.getCookie('auth-token')).resolves.toBe('secret value')
+    await accessors.appendResponseCookie?.('holo_session=session-1; Path=/; HttpOnly')
+    await accessors.appendResponseCookie?.('holo_session_remember=remember-1; Path=/; HttpOnly')
+    expect(headers.get('set-cookie')).toEqual([
+      'holo_session=session-1; Path=/; HttpOnly',
+      'holo_session_remember=remember-1; Path=/; HttpOnly',
+    ])
   })
 
   it('generates a server import wrapper for model defaults when server models exist', async () => {

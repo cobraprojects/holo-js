@@ -1,11 +1,14 @@
-import type {
-  FormFailurePayload,
-  InferFormData,
-  FormSchema,
-  FormSubmissionResult,
-  FormSuccessPayload,
-  SerializedFormSubmission as SerializedSubmissionState,
-  SerializedFormSubmission,
+import {
+  type FormFailureInput,
+  type FormFailurePayload,
+  type InferFormData,
+  type FormSchema,
+  type FormSubmissionResult,
+  type FormSuccessPayload,
+  type SerializedFormSubmission as SerializedSubmissionState,
+  type SerializedFormSubmission,
+  normalizeFailureErrors,
+  normalizeFailureInput,
 } from './contracts'
 import { FormContractError } from './errors'
 import { clearSensitiveInputValues, sanitizeFlashedInput } from './sensitiveInput'
@@ -132,11 +135,12 @@ function serializeSubmissionState<TData>(
   valid: boolean,
   values: Partial<TData> | TData,
   errors: ValidationErrorBag<TData>,
+  schemaDefinition?: FormSchema,
 ): SerializedFormSubmission<TData> {
   return Object.freeze({
     valid,
     submitted: true as const,
-    values: sanitizeFlashedInput(values),
+    values: sanitizeFlashedInput(values, schemaDefinition),
     errors: errors.flatten(),
   })
 }
@@ -146,17 +150,22 @@ function createSubmission<TData>(
   values: Partial<TData> | TData,
   errors: ValidationErrorBag<TData>,
   failureStatus = 422,
+  schemaDefinition?: FormSchema,
 ): FormSubmissionResult<TData> {
   const normalizedFailureStatus = normalizeStatus(failureStatus, 422)
-  const serialize = () => serializeSubmissionState(valid, values, errors)
+  const serialize = () => serializeSubmissionState(valid, values, errors, schemaDefinition)
 
-  const failure = (): FormFailurePayload<TData> => ({
-    ok: false,
-    status: normalizedFailureStatus,
-    valid: false as const,
-    values: sanitizeFlashedInput(values) as Partial<TData>,
-    errors: errors.flatten(),
-  })
+  const failure = (input?: FormFailureInput): FormFailurePayload<TData> => {
+    const normalized = normalizeFailureInput(input, normalizedFailureStatus)
+
+    return {
+      ok: false,
+      status: normalized.status,
+      valid: false as const,
+      values: sanitizeFlashedInput(values, schemaDefinition) as Partial<TData>,
+      errors: normalizeFailureErrors(errors.flatten(), normalized.errors),
+    }
+  }
 
   const success = <TPayload>(payload?: TPayload, status?: number): FormSuccessPayload<TPayload | undefined> => ({
     ok: true,
@@ -174,12 +183,8 @@ function createSubmission<TData>(
       errors,
       serialize,
       success,
-      fail(status?: number) {
-        const payload = failure()
-        return {
-          ...payload,
-          status: normalizeStatus(status, payload.status),
-        }
+      fail(input?: FormFailureInput) {
+        return failure(input)
       },
     })
   }
@@ -192,12 +197,8 @@ function createSubmission<TData>(
     errors,
     serialize,
     success,
-    fail(status?: number) {
-      const payload = failure()
-      return {
-        ...payload,
-        status: normalizeStatus(status, payload.status),
-      }
+    fail(input?: FormFailureInput) {
+      return failure(input)
     },
   })
 }
@@ -206,8 +207,7 @@ function createSuccessfulSubmission<TData>(
   schemaDefinition: FormSchema,
   data: TData,
 ): FormSubmissionResult<TData> {
-  void schemaDefinition
-  return createSubmission<TData>(true, data, createErrorBag())
+  return createSubmission<TData>(true, data, createErrorBag(), 422, schemaDefinition)
 }
 
 function createFailedSubmission<TData>(
@@ -222,6 +222,7 @@ function createFailedSubmission<TData>(
     values,
     createErrorBag<TData>(flattenedErrors),
     normalizeStatus(status, 422),
+    schemaDefinition,
   )
 }
 
@@ -849,7 +850,7 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
 
       if ('ok' in normalized && normalized.ok === false) {
         state.values = mergeValues(state.values, normalized.values)
-        clearSensitiveInputValues(state.values)
+        clearSensitiveInputValues(state.values, schemaDefinition)
         state.flattenedErrors = normalized.errors
         state.lastSubmission = normalized
         notifyListeners(state)
@@ -858,7 +859,7 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
 
       const normalizedSubmission = normalized as FormSubmissionResult<TData>
       state.values = mergeValues(state.values, normalizedSubmission.values)
-      clearSensitiveInputValues(state.values)
+      clearSensitiveInputValues(state.values, schemaDefinition)
       state.flattenedErrors = normalizedSubmission.errors.flatten()
       state.lastSubmission = normalizedSubmission.valid
         ? undefined

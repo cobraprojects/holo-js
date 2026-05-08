@@ -71,7 +71,7 @@ describe('@holo-js/forms contracts', () => {
   it('creates form schemas from shapes and validation schemas', () => {
     const direct = schema({
       email: field.string().required().email(),
-      password: field.string().required().min(8),
+      password: field.password().required().min(8),
     })
     const nested = schema(defineSchema({
       profile: {
@@ -231,9 +231,10 @@ describe('@holo-js/forms contracts', () => {
   it('excludes password-like dontFlash fields while preserving transport tokens in serialized failure payloads', async () => {
     const registerUser = schema({
       email: field.string().required().email(),
-      password: field.string().required().min(8),
-      passwordConfirmation: field.string().required(),
+      password: field.password().required().min(8),
+      passwordConfirmation: field.password().required(),
       token: field.string().required(),
+      nationalId: field.string().sensitive().required(),
     })
 
     const failure = await validate({
@@ -241,6 +242,7 @@ describe('@holo-js/forms contracts', () => {
       password: 'super-secret',
       passwordConfirmation: 'super-secret',
       token: 'reset-token',
+      nationalId: 'private-id',
     }, registerUser)
 
     expect(failure.valid).toBe(false)
@@ -253,6 +255,7 @@ describe('@holo-js/forms contracts', () => {
       password: 'super-secret',
       passwordConfirmation: 'super-secret',
       token: 'reset-token',
+      nationalId: 'private-id',
     })
     expect(failure.serialize()).toEqual({
       valid: false,
@@ -277,6 +280,45 @@ describe('@holo-js/forms contracts', () => {
         email: ['Invalid email: Received "bad"'],
       },
     })
+    expect(failure.fail({
+      status: 409,
+      errors: {
+        email: ['A user with this email already exists.'],
+      },
+    })).toEqual({
+      ok: false,
+      status: 409,
+      valid: false,
+      values: {
+        email: 'bad',
+        token: 'reset-token',
+      },
+      errors: {
+        email: ['A user with this email already exists.'],
+      },
+    })
+  })
+
+  it('merges failure override errors with existing validation errors', () => {
+    const registerUser = schema({
+      email: field.string().required().email(),
+      token: field.string().required(),
+    })
+    const failure = createFailedSubmission(registerUser, {
+      email: 'bad',
+    }, {
+      email: ['Invalid email.'],
+      token: ['Missing token.'],
+    })
+
+    expect(failure.fail({
+      errors: {
+        email: ['A user with this email already exists.'],
+      },
+    }).errors).toEqual({
+      email: ['A user with this email already exists.'],
+      token: ['Missing token.'],
+    })
   })
 
   it('preserves verification and reset transport tokens while still stripping passwords', () => {
@@ -291,6 +333,39 @@ describe('@holo-js/forms contracts', () => {
       token: 'reset-token',
       verification_token: 'verify-token',
       verificationCode: '123456',
+    })
+  })
+
+  it('does not mutate nested values when sanitizing flashed input', () => {
+    const profileForm = schema({
+      email: field.string().required(),
+      profile: {
+        displayName: field.string().required(),
+        nationalId: field.string().sensitive().required(),
+      },
+    })
+    const values = {
+      email: 'ava@example.com',
+      password: 'secret-secret',
+      profile: {
+        displayName: 'Ava',
+        nationalId: 'private-id',
+      },
+    }
+
+    expect(formsInternals.sanitizeFlashedInput(values, profileForm)).toEqual({
+      email: 'ava@example.com',
+      profile: {
+        displayName: 'Ava',
+      },
+    })
+    expect(values).toEqual({
+      email: 'ava@example.com',
+      password: 'secret-secret',
+      profile: {
+        displayName: 'Ava',
+        nationalId: 'private-id',
+      },
     })
   })
 

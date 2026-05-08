@@ -46,7 +46,7 @@ import { field, schema, validate } from '@holo-js/validation'
 
 const createSession = schema({
   email: field.string().required().email(),
-  password: field.string().required().min(8),
+  password: field.password().required().min(8),
   remember: field.boolean().default(false),
 })
 

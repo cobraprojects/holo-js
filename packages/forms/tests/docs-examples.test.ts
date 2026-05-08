@@ -7,8 +7,8 @@ describe('@holo-js/forms documented examples', () => {
     const registerUser = schema({
       name: field.string().required().min(3).max(255),
       email: field.string().required().email(),
-      password: field.string().required().min(8).confirmed(),
-      passwordConfirmation: field.string().required(),
+      password: field.password().required().min(8).confirmed(),
+      passwordConfirmation: field.password().required(),
     })
 
     const registerFailureRequest = new Request('https://example.com/register', {
@@ -101,7 +101,7 @@ describe('@holo-js/forms documented examples', () => {
   it('covers the documented client login, nested profile, and file upload flows', async () => {
     const loginSchema = schema({
       email: field.string().required().email(),
-      password: field.string().required().min(8),
+      password: field.password().required().min(8),
     })
 
     const login = useForm(loginSchema, {

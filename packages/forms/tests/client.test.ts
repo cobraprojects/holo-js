@@ -278,7 +278,7 @@ describe('@holo-js/forms client', () => {
     const registerUser = schema({
       name: field.string().required(),
       email: field.string().required().email(),
-      password: field.string().required().min(8),
+      password: field.password().required().min(8),
     })
 
     const client = useForm(registerUser, {
@@ -489,11 +489,12 @@ describe('@holo-js/forms client', () => {
     expect('valid' in fallback && fallback.valid === true).toBe(true)
   })
 
-  it('clears Laravel-style dontFlash fields after server-side failures', () => {
+  it('clears sensitive fields after server-side failures', () => {
     const registerUser = schema({
       email: field.string().required().email(),
-      password: field.string().required().min(8),
-      passwordConfirmation: field.string().required(),
+      password: field.password().required().min(8),
+      passwordConfirmation: field.password().required(),
+      nationalId: field.string().sensitive().required(),
     })
 
     const client = useForm(registerUser, {
@@ -501,6 +502,7 @@ describe('@holo-js/forms client', () => {
         email: 'ava@example.com',
         password: 'super-secret',
         passwordConfirmation: 'super-secret',
+        nationalId: 'private-id',
       },
     })
 
@@ -520,6 +522,7 @@ describe('@holo-js/forms client', () => {
     expect(client.values.email).toBe('bad')
     expect(client.values.password).toBeUndefined()
     expect(client.values.passwordConfirmation).toBeUndefined()
+    expect(client.values.nationalId).toBeUndefined()
     expect(client.errors.first('password')).toBe('The password field is required.')
   })
 

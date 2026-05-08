@@ -87,6 +87,7 @@ export interface FieldRule {
 export interface FieldDefinition {
   readonly kind: FieldKind
   readonly rules: readonly FieldRule[]
+  readonly sensitive?: boolean
   readonly item?: FieldDefinition
 }
 

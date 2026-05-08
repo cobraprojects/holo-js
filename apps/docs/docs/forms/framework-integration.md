@@ -19,7 +19,7 @@ import { field, schema, validate } from '@holo-js/forms'
 
 const loginForm = schema({
   email: field.string().required().email(),
-  password: field.string().required().min(8),
+  password: field.password().required().min(8),
 })
 
 export async function POST(request: Request) {
@@ -43,7 +43,7 @@ import { field, schema, validate } from '@holo-js/forms'
 
 const loginForm = schema({
   email: field.string().required().email(),
-  password: field.string().required().min(8),
+  password: field.password().required().min(8),
 })
 
 export default defineEventHandler(async (event) => {
@@ -66,7 +66,7 @@ import { field, schema, validate } from '@holo-js/forms'
 
 const loginForm = schema({
   email: field.string().required().email(),
-  password: field.string().required().min(8),
+  password: field.password().required().min(8),
 })
 
 export const actions = {
@@ -93,7 +93,7 @@ import { User } from '$lib/server/models'
 
 const loginForm = schema({
   email: field.string().required().email(),
-  password: field.string().required().min(8),
+  password: field.password().required().min(8),
 })
 
 export const login = form(loginForm, async (data, invalid) => {

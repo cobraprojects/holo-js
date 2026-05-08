@@ -10,6 +10,10 @@ validation as optional enhancement.
 The browser submits a form, the server validates it, and the response returns either `submission.fail()`
 or `submission.success(...)`.
 
+Use `field.password()` for password values and `.sensitive()` for any other submitted value that must
+never be flashed back to the client. `submission.fail()` and `submission.serialize()` remove those
+fields automatically.
+
 ::: code-group
 
 ```ts [Next.js — app/api/login/route.ts]
@@ -17,7 +21,7 @@ import { field, schema, validate } from '@holo-js/forms'
 
 const loginForm = schema({
   email: field.string().required('Email is required.').email('Enter a valid email address.'),
-  password: field.string().required('Password is required.').min(8, 'Password must be at least 8 characters.'),
+  password: field.password().required('Password is required.').min(8, 'Password must be at least 8 characters.'),
   remember: field.boolean().default(false),
 })
 
@@ -46,7 +50,7 @@ import { field, schema, validate } from '@holo-js/forms'
 
 const loginForm = schema({
   email: field.string().required('Email is required.').email('Enter a valid email address.'),
-  password: field.string().required('Password is required.').min(8, 'Password must be at least 8 characters.'),
+  password: field.password().required('Password is required.').min(8, 'Password must be at least 8 characters.'),
   remember: field.boolean().default(false),
 })
 
@@ -72,7 +76,7 @@ import { field, schema, validate } from '@holo-js/forms'
 
 const loginForm = schema({
   email: field.string().required('Email is required.').email('Enter a valid email address.'),
-  password: field.string().required('Password is required.').min(8, 'Password must be at least 8 characters.'),
+  password: field.password().required('Password is required.').min(8, 'Password must be at least 8 characters.'),
   remember: field.boolean().default(false),
 })
 
@@ -119,7 +123,7 @@ import { User } from '$lib/server/models'
 
 const loginSchema = schema({
   email: field.string().required().email(),
-  password: field.string().required().min(8),
+  password: field.password().required().min(8),
 })
 
 export const login = form(loginSchema, async (data, invalid) => {
@@ -470,6 +474,8 @@ When validation fails, `submission.fail()` returns:
 }
 ```
 
+Password fields and fields marked with `.sensitive()` are omitted from `values`.
+
 ## Success response shape
 
 On success:
@@ -509,8 +515,8 @@ import { field, schema, validate } from '@holo-js/forms'
 export const registerUser = schema({
   name: field.string().required().min(3).max(255),
   email: field.string().required().email(),
-  password: field.string().required().min(8).confirmed(),
-  passwordConfirmation: field.string().required(),
+  password: field.password().required().min(8).confirmed(),
+  passwordConfirmation: field.password().required(),
 })
 
 export async function POST(request: Request) {
@@ -537,8 +543,8 @@ import { field, schema, validate } from '@holo-js/forms'
 const registerUser = schema({
   name: field.string().required().min(3).max(255),
   email: field.string().required().email(),
-  password: field.string().required().min(8).confirmed(),
-  passwordConfirmation: field.string().required(),
+  password: field.password().required().min(8).confirmed(),
+  passwordConfirmation: field.password().required(),
 })
 
 export default defineEventHandler(async (event) => {
@@ -564,8 +570,8 @@ import { field, schema, validate } from '@holo-js/forms'
 const registerUser = schema({
   name: field.string().required().min(3).max(255),
   email: field.string().required().email(),
-  password: field.string().required().min(8).confirmed(),
-  passwordConfirmation: field.string().required(),
+  password: field.password().required().min(8).confirmed(),
+  passwordConfirmation: field.password().required(),
 })
 
 export const actions = {
@@ -594,7 +600,7 @@ import { User } from '$lib/server/models'
 const registerUser = schema({
   name: field.string().required().min(3).max(255),
   email: field.string().required().email(),
-  password: field.string().required().min(8),
+  password: field.password().required().min(8),
 })
 
 export const register = form(registerUser, async (data, invalid) => {

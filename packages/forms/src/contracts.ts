@@ -23,6 +23,15 @@ export interface FormFailurePayload<TData> {
   readonly errors: Record<string, readonly string[]>
 }
 
+export type FormFailureErrors = Readonly<Partial<Record<string, readonly string[]>>>
+
+export interface FormFailureOptions {
+  readonly status?: number
+  readonly errors?: FormFailureErrors
+}
+
+export type FormFailureInput = number | FormFailureOptions | undefined
+
 export interface FormSuccessPayload<TPayload = undefined> {
   readonly ok: true
   readonly status: number
@@ -90,7 +99,9 @@ export interface FormSubmissionSuccess<TData> {
   serialize(): SerializedFormSubmission<TData>
   success(): FormSuccessPayload<undefined>
   success<TPayload>(payload: TPayload, status?: number): FormSuccessPayload<TPayload>
+  fail(): FormFailurePayload<TData>
   fail(status?: number): FormFailurePayload<TData>
+  fail(options: FormFailureOptions): FormFailurePayload<TData>
 }
 
 export interface FormSubmissionFailure<TData> {
@@ -102,7 +113,9 @@ export interface FormSubmissionFailure<TData> {
   serialize(): SerializedFormSubmission<TData>
   success(): FormSuccessPayload<undefined>
   success<TPayload>(payload: TPayload, status?: number): FormSuccessPayload<TPayload>
+  fail(): FormFailurePayload<TData>
   fail(status?: number): FormFailurePayload<TData>
+  fail(options: FormFailureOptions): FormFailurePayload<TData>
 }
 
 export type FormSubmissionResult<TData> = FormSubmissionSuccess<TData> | FormSubmissionFailure<TData>
@@ -119,15 +132,51 @@ function normalizeStatus(value: number | undefined, fallback: number): number {
   return value
 }
 
+export function normalizeFailureInput(input: FormFailureInput, fallbackStatus: number): {
+  readonly status: number
+  readonly errors?: FormFailureErrors
+} {
+  if (typeof input === 'number') {
+    return {
+      status: normalizeStatus(input, fallbackStatus),
+    }
+  }
+
+  return {
+    status: normalizeStatus(input?.status, fallbackStatus),
+    errors: input?.errors,
+  }
+}
+
+export function normalizeFailureErrors(
+  fallback: Record<string, readonly string[]>,
+  override: FormFailureErrors | undefined,
+): Record<string, readonly string[]> {
+  if (!override) {
+    return fallback
+  }
+
+  const normalized: Record<string, readonly string[]> = { ...fallback }
+
+  for (const [field, messages] of Object.entries(override)) {
+    if (typeof messages !== 'undefined') {
+      normalized[field] = messages
+    }
+  }
+
+  return normalized
+}
+
 function serializeSubmissionState<TData>(
   valid: boolean,
   values: Partial<TData> | TData,
   errors: ValidationErrorBag<TData>,
+  schemaDefinition?: FormSchema,
 ): SerializedFormSubmission<TData> {
   return Object.freeze({
     valid,
     submitted: true as const,
-    values: sanitizeFlashedInput(values),
+    values: sanitizeFlashedInput(values, schemaDefinition),
     errors: errors.flatten(),
   })
 }
@@ -137,17 +186,22 @@ function createSubmission<TData>(
   values: Partial<TData> | TData,
   errors: ValidationErrorBag<TData>,
   failureStatus = 422,
+  schemaDefinition?: FormSchema,
 ): FormSubmissionResult<TData> {
   const normalizedFailureStatus = normalizeStatus(failureStatus, 422)
-  const serialize = () => serializeSubmissionState(valid, values, errors)
+  const serialize = () => serializeSubmissionState(valid, values, errors, schemaDefinition)
 
-  const failure = (): FormFailurePayload<TData> => ({
-    ok: false,
-    status: normalizedFailureStatus,
-    valid: false as const,
-    values: sanitizeFlashedInput(values) as Partial<TData>,
-    errors: errors.flatten(),
-  })
+  const failure = (input?: FormFailureInput): FormFailurePayload<TData> => {
+    const normalized = normalizeFailureInput(input, normalizedFailureStatus)
+
+    return {
+      ok: false,
+      status: normalized.status,
+      valid: false as const,
+      values: sanitizeFlashedInput(values, schemaDefinition) as Partial<TData>,
+      errors: normalizeFailureErrors(errors.flatten(), normalized.errors),
+    }
+  }
 
   const success = <TPayload>(payload?: TPayload, status?: number): FormSuccessPayload<TPayload | undefined> => ({
     ok: true,
@@ -165,12 +219,8 @@ function createSubmission<TData>(
       errors,
       serialize,
       success,
-      fail(status?: number) {
-        const payload = failure()
-        return {
-          ...payload,
-          status: normalizeStatus(status, payload.status),
-        }
+      fail(input?: FormFailureInput) {
+        return failure(input)
       },
     })
   }
@@ -183,12 +233,8 @@ function createSubmission<TData>(
     errors,
     serialize,
     success,
-    fail(status?: number) {
-      const payload = failure()
-      return {
-        ...payload,
-        status: normalizeStatus(status, payload.status),
-      }
+    fail(input?: FormFailureInput) {
+      return failure(input)
     },
   })
 }
@@ -198,9 +244,13 @@ export function createSuccessfulSubmission<TShape extends SchemaInputShape>(
   data: InferSchemaData<TShape>,
 ): FormSubmissionSuccess<InferSchemaData<TShape>> {
   void schemaDefinition
-  return createSubmission<InferSchemaData<TShape>>(true, data, createErrorBag()) as FormSubmissionSuccess<
-    InferSchemaData<TShape>
-  >
+  return createSubmission<InferSchemaData<TShape>>(
+    true,
+    data,
+    createErrorBag(),
+    422,
+    schemaDefinition,
+  ) as FormSubmissionSuccess<InferSchemaData<TShape>>
 }
 
 export function createFailedSubmission<TShape extends SchemaInputShape>(
@@ -216,6 +266,7 @@ export function createFailedSubmission<TShape extends SchemaInputShape>(
     values,
     createErrorBag<InferSchemaData<TShape>>(flattenedErrors),
     normalizedStatus,
+    schemaDefinition,
   ) as FormSubmissionFailure<InferSchemaData<TShape>>
 }
 

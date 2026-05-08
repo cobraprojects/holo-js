@@ -826,6 +826,7 @@ export interface CreateHoloOptions {
   readonly authRequest?: {
     readonly getCookie?: (name: string) => string | undefined | Promise<string | undefined>
     readonly getHeader?: (name: string) => string | undefined | Promise<string | undefined>
+    readonly appendResponseCookie?: (cookie: string) => void | Promise<void>
   }
 }
 
@@ -1377,11 +1378,13 @@ function attachAuthRequestAccessors<TContext extends {
 ): TContext & {
   getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
   getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
+  appendResponseCookie?(cookie: string): void | Promise<void>
 } {
   return Object.freeze({
     ...context,
     getRequestCookie: accessors.getCookie,
     getRequestHeader: accessors.getHeader,
+    appendResponseCookie: accessors.appendResponseCookie,
   })
 }
 
@@ -1401,6 +1404,7 @@ function createRequestAwareAuthContext<TContext extends {
 ): TContext & {
   getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
   getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
+  appendResponseCookie?(cookie: string): void | Promise<void>
   setRequestAccessors(accessors?: CreateHoloOptions['authRequest']): void
 } {
   const requestAccessorStorage = new AsyncLocalStorage<{
@@ -1409,6 +1413,7 @@ function createRequestAwareAuthContext<TContext extends {
   type RequestAccessContext = TContext & {
     getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
     getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
+    appendResponseCookie?(cookie: string): void | Promise<void>
   }
 
   const resolveRequestContext = (): RequestAccessContext => {
@@ -1427,6 +1432,9 @@ function createRequestAwareAuthContext<TContext extends {
     },
     getRequestHeader(name) {
       return resolveRequestContext().getRequestHeader?.(name)
+    },
+    appendResponseCookie(cookie) {
+      return resolveRequestContext().appendResponseCookie?.(cookie)
     },
     setRequestAccessors(nextAccessors) {
       requestAccessorStorage.enterWith({

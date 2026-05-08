@@ -1,5 +1,5 @@
 import { loginUsing, register } from '@holo-js/auth'
-import { sanitizeFlashedInput, validate } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
 
 import { registerForm } from '#shared/schemas/auth'
 
@@ -16,18 +16,16 @@ export default defineEventHandler(async (event) => {
 
   const { data: created, error } = await register(submission.data)
   if (error) {
-    setResponseStatus(event, error.status)
-    return {
-      ok: false as const,
+    const failure = submission.fail({
       status: error.status,
-      valid: false as const,
-      values: sanitizeFlashedInput(submission.values),
       errors: error.fields,
-    }
+    })
+
+    setResponseStatus(event, failure.status)
+    return failure
   }
 
   const session = await loginUsing(created)
-  event.node.res.setHeader('set-cookie', [...session.cookies])
   setResponseStatus(event, 201)
   return submission.success({
     message: session.emailVerificationRequired
