@@ -6,6 +6,8 @@ const SCRYPT_TARGET_N = 16_384
 const SCRYPT_TARGET_R = 8
 const SCRYPT_TARGET_P = 1
 const SCRYPT_KEY_LENGTH = 64
+const SCRYPT_KEY_HEX_LENGTH = SCRYPT_KEY_LENGTH * 2
+const HEX_PATTERN = /^(?:[0-9a-f]{2})+$/i
 type ScryptParams = { readonly N: number, readonly r: number, readonly p: number }
 const SCRYPT_TARGET_PARAMS: ScryptParams = { N: SCRYPT_TARGET_N, r: SCRYPT_TARGET_R, p: SCRYPT_TARGET_P }
 
@@ -16,9 +18,15 @@ function encodeScryptParams(params: ScryptParams): string {
 function parseScryptParams(value: string): ScryptParams | null {
   const params: Partial<Record<keyof ScryptParams, number>> = {}
   for (const entry of value.split(',')) {
-    const [key, rawValue] = entry.split('=', 2)
-    if ((key === 'N' || key === 'r' || key === 'p') && rawValue) {
-      params[key] = Number(rawValue)
+    const [rawKey, rawValue] = entry.split('=', 2)
+    const key = rawKey?.trim()
+    const normalizedValue = rawValue?.trim()
+    if ((key === 'N' || key === 'r' || key === 'p') && normalizedValue) {
+      if (!/^\d+$/.test(normalizedValue)) {
+        return null
+      }
+
+      params[key] = Number.parseInt(normalizedValue, 10)
     }
   }
   const { N, r, p } = params
@@ -34,6 +42,10 @@ function parseScryptParams(value: string): ScryptParams | null {
   return { N, r, p }
 }
 
+function isHex(value: string): boolean {
+  return HEX_PATTERN.test(value)
+}
+
 function parseScryptDigest(digest: string): {
   readonly params: ScryptParams
   readonly legacy: boolean
@@ -45,8 +57,16 @@ function parseScryptDigest(digest: string): {
     return null
   }
   if (!maybeHashHex) {
+    if (!isHex(paramsOrSaltHex) || !isHex(saltOrHashHex) || saltOrHashHex.length !== SCRYPT_KEY_HEX_LENGTH) {
+      return null
+    }
+
     return { params: SCRYPT_TARGET_PARAMS, legacy: true, saltHex: paramsOrSaltHex, hashHex: saltOrHashHex }
   }
+  if (!isHex(saltOrHashHex) || !isHex(maybeHashHex) || maybeHashHex.length !== SCRYPT_KEY_HEX_LENGTH) {
+    return null
+  }
+
   const params = parseScryptParams(paramsOrSaltHex)
   return params ? { params, legacy: false, saltHex: saltOrHashHex, hashHex: maybeHashHex } : null
 }

@@ -145,6 +145,10 @@ type RuntimeBindings = {
   readonly passwordHasher: AuthPasswordHasher
 }
 
+type ActivatableAuthRuntimeContext = AuthRuntimeContext & {
+  activate(): void
+}
+
 function getAuthRuntimeState(): {
   bindings?: RuntimeBindings
   sharedPasswordResetThrottleFailures?: Set<string>
@@ -164,10 +168,18 @@ function throwUnconfigured(): never {
   throwAuthError('runtime_unconfigured', 'Auth runtime is not configured yet.')
 }
 
+function hasContextActivator(context: AuthRuntimeContext): context is ActivatableAuthRuntimeContext {
+  return 'activate' in context && typeof context.activate === 'function'
+}
+
 function getRuntimeBindings(): RuntimeBindings {
   const bindings = getAuthRuntimeState().bindings
   if (!bindings) {
     throwUnconfigured()
+  }
+
+  if (hasContextActivator(bindings.context)) {
+    bindings.context.activate()
   }
 
   return bindings

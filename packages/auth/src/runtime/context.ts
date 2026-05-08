@@ -60,7 +60,9 @@ export function createAsyncAuthContext(): AsyncAuthContext {
 
   return {
     activate() {
-      storage.enterWith(createMemoryAuthContext())
+      if (!storage.getStore()) {
+        storage.enterWith(createMemoryAuthContext())
+      }
     },
     getSessionId: guardName => resolveContext().getSessionId(guardName),
     setSessionId: (guardName, sessionId) => resolveContext().setSessionId(guardName, sessionId),

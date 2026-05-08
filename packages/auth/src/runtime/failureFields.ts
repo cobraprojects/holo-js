@@ -6,7 +6,7 @@ export function hasInputField<TInput extends Readonly<Record<string, unknown>>>(
   input: TInput,
   field: string,
 ): field is InputFieldName<TInput> {
-  return field in input
+  return Object.prototype.hasOwnProperty.call(input, field)
 }
 
 export function pickInputField<TInput extends Readonly<Record<string, unknown>>>(
@@ -19,8 +19,7 @@ export function pickInputField<TInput extends Readonly<Record<string, unknown>>>
     }
   }
 
-  const [firstField] = Object.keys(input)
-  return firstField && hasInputField(input, firstField) ? firstField : undefined
+  return undefined
 }
 
 export function createFieldErrors<TField extends string>(
@@ -28,7 +27,7 @@ export function createFieldErrors<TField extends string>(
   message: string,
 ): AuthFieldErrors<TField> {
   return Object.freeze(
-    Object.fromEntries(fields.map(field => [field, [message] as readonly string[]])) as AuthFieldErrors<TField>,
+    Object.fromEntries(fields.map(field => [field, Object.freeze([message])])) as AuthFieldErrors<TField>,
   )
 }
 
