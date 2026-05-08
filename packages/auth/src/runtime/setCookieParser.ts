@@ -66,6 +66,14 @@ function applyCookieAttribute(options: ParsedSetCookieOptions, rawAttribute: str
   }
 }
 
+function decodeCookieName(value: string): string | null {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return null
+  }
+}
+
 export function parseSetCookieDefinition(header: string): {
   readonly name: string
   readonly options: CookieOptions
@@ -83,8 +91,10 @@ export function parseSetCookieDefinition(header: string): {
     applyCookieAttribute(options, rawAttribute)
   }
 
-  return {
-    name: decodeURIComponent(nameValue.slice(0, separator)),
-    options,
+  const name = decodeCookieName(nameValue.slice(0, separator))
+  if (!name) {
+    return null
   }
+
+  return { name, options }
 }

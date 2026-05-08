@@ -25,7 +25,7 @@ export function serializeCookie(
   if (options.domain) {
     attributes.push(`Domain=${options.domain}`)
   }
-  if ((options.maxAge ?? 0) > 0) {
+  if (typeof options.maxAge !== 'undefined' && options.maxAge >= 0) {
     attributes.push(`Max-Age=${options.maxAge}`)
   }
   if (options.expires) {

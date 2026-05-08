@@ -51,26 +51,24 @@ export function createAsyncAuthContext(): AsyncAuthContext {
   const storage = new AsyncLocalStorage<MemoryAuthContext>()
   const resolveContext = (): MemoryAuthContext => {
     const existing = storage.getStore()
-    if (existing) {
-      return existing
+    if (!existing) {
+      throw new Error('[@holo-js/auth] Async auth context is not active. Call activate() before reading or writing auth context state.')
     }
 
-    const created = createMemoryAuthContext()
-    storage.enterWith(created)
-    return created
+    return existing
   }
 
   return {
     activate() {
-      resolveContext()
+      storage.enterWith(createMemoryAuthContext())
     },
     getSessionId: guardName => resolveContext().getSessionId(guardName),
     setSessionId: (guardName, sessionId) => resolveContext().setSessionId(guardName, sessionId),
     getCachedUser: guardName => resolveContext().getCachedUser(guardName),
     setCachedUser: (guardName, user) => resolveContext().setCachedUser(guardName, user),
-    getAccessToken: guardName => resolveContext().getAccessToken?.(guardName),
-    setAccessToken: (guardName, token) => resolveContext().setAccessToken?.(guardName, token),
-    getRememberToken: guardName => resolveContext().getRememberToken?.(guardName),
-    setRememberToken: (guardName, token) => resolveContext().setRememberToken?.(guardName, token),
+    getAccessToken: guardName => resolveContext().getAccessToken(guardName),
+    setAccessToken: (guardName, token) => resolveContext().setAccessToken(guardName, token),
+    getRememberToken: guardName => resolveContext().getRememberToken(guardName),
+    setRememberToken: (guardName, token) => resolveContext().setRememberToken(guardName, token),
   }
 }

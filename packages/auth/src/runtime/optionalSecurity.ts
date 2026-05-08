@@ -38,6 +38,14 @@ function isMissingOptionalPackageError(error: unknown): boolean {
 
   const message = error.message
   const mentionsSecurityPackage = message.includes('@holo-js/security')
+  const code = (error as Error & { readonly code?: unknown }).code
+
+  if (
+    mentionsSecurityPackage
+    && (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND')
+  ) {
+    return true
+  }
 
   return mentionsSecurityPackage && (
     message.includes('Cannot find package')

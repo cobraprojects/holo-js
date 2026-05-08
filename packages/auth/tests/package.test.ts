@@ -2919,7 +2919,9 @@ describe('@holo-js/auth package runtime', () => {
     })
 
     vi.stubGlobal('__holoAuthSecurityImport__', async () => {
-      throw new Error('Could not resolve "@holo-js/security"')
+      const error = new Error('Cannot find package "@holo-js/security"')
+      Object.assign(error, { code: 'ERR_MODULE_NOT_FOUND' })
+      throw error
     })
 
     expect(unwrapAuthResult(await requestPasswordReset({ email: 'ava@example.com' }))).toBeUndefined()
@@ -4310,8 +4312,14 @@ describe('@holo-js/auth package runtime', () => {
   it('covers runtime helper branches for cookies, tokens, payloads, and async context', async () => {
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     const digest = await hasher.hash('secret-secret')
+    const [, params, saltHex, hashHex] = digest.split('$')
+    const legacyDigest = `scrypt$${saltHex ?? ''}$${hashHex ?? ''}`
 
+    expect(params).toBe('N=16384,r=8,p=1')
+    await expect(hasher.verify('secret-secret', legacyDigest)).resolves.toBe(true)
+    expect(hasher.needsRehash?.(legacyDigest)).toBe(true)
     await expect(hasher.verify('secret-secret', 'invalid')).resolves.toBe(false)
+    expect(hasher.needsRehash?.('invalid')).toBe(true)
     expect(authRuntimeInternals.verifyTokenSecret('secret', 'invalid')).toBe(false)
     expect(authRuntimeInternals.parsePlainTextToken('invalid')).toBeNull()
     expect(authRuntimeInternals.tokenHasAbility({
@@ -4343,6 +4351,7 @@ describe('@holo-js/auth package runtime', () => {
     }) && needsPasswordRehash(digest)).resolves.toBe(false)
 
     expect(authRuntimeInternals.parseSetCookieDefinition('invalid')).toBeNull()
+    expect(authRuntimeInternals.parseSetCookieDefinition('bad%name=value')).toBeNull()
     expect(authRuntimeInternals.parseSetCookieDefinition(
       'session=value; ; Path=/app; Domain=example.com; Secure; HttpOnly; SameSite=None; Partitioned',
     )).toEqual({
@@ -4366,6 +4375,9 @@ describe('@holo-js/auth package runtime', () => {
       sameSite: 'strict',
       partitioned: true,
     })).toContain('Max-Age=60')
+    expect(authRuntimeInternals.serializeCookie('session', '', {
+      maxAge: 0,
+    })).toContain('Max-Age=0')
     expect(authRuntimeInternals.serializeCookie('session', 'value')).toBe('session=value; Path=/')
     expect(authRuntimeInternals.getPasswordHash({
       getId(user: UserRecord) {
@@ -4451,7 +4463,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(authRuntimeInternals.readSessionPayload(record, 'missing')).toBeNull()
 
     const context = authRuntimeInternals.createAsyncAuthContext()
-    expect(context.getSessionId('web')).toBeUndefined()
+    expect(() => context.getSessionId('web')).toThrow('Async auth context is not active')
     context.activate()
     context.setSessionId('web', 'session-1')
     context.setCachedUser('web', {

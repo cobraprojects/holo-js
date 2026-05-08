@@ -10,8 +10,8 @@ import {
   type InputFieldName,
   createAuthFailurePayload,
   createFieldErrors,
+  createPasswordConfirmationMismatchFailure,
   hasInputField,
-  pickInputField,
   resolveIdentifierFieldName,
   resolveRequiredFieldName,
 } from './failureFields'
@@ -61,18 +61,7 @@ export function createRegistrationFailure<TInput extends AuthRegistrationInput>(
     }
 
     case 'password_confirmation_mismatch': {
-      const message = error.message
-      const fields = [
-        pickInputField(input, ['password']),
-        pickInputField(input, ['passwordConfirmation']),
-      ].filter((field): field is InputFieldName<TInput> => typeof field === 'string')
-
-      return createAuthFailurePayload(
-        error.code,
-        message,
-        422,
-        createFieldErrors(fields.length > 0 ? fields : [resolveRequiredFieldName(input, ['password'])], message),
-      )
+      return createPasswordConfirmationMismatchFailure(error.code, error.message, input)
     }
 
     case 'credentials_identifier_missing':

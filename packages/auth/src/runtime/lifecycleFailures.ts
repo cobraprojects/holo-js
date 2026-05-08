@@ -13,7 +13,7 @@ import {
   type InputFieldName,
   createAuthFailurePayload,
   createFieldErrors,
-  pickInputField,
+  createPasswordConfirmationMismatchFailure,
   resolveRequiredFieldName,
 } from './failureFields'
 
@@ -61,18 +61,7 @@ export function createPasswordResetConsumeFailure<TInput extends AuthPasswordRes
 ): AuthFailure<AuthPasswordResetConsumeErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>> {
   switch (error.code) {
     case 'password_confirmation_mismatch': {
-      const message = error.message
-      const fields = [
-        pickInputField(input, ['password']),
-        pickInputField(input, ['passwordConfirmation']),
-      ].filter((field): field is InputFieldName<TInput> => typeof field === 'string')
-
-      return createAuthFailurePayload(
-        error.code,
-        message,
-        422,
-        createFieldErrors(fields.length > 0 ? fields : [resolveRequiredFieldName(input, ['password'])], message),
-      )
+      return createPasswordConfirmationMismatchFailure(error.code, error.message, input)
     }
     case 'provider_update_unsupported': {
       const field = resolveRequiredFieldName(input, ['token'])

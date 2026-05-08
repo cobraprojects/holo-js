@@ -46,6 +46,27 @@ export function createAuthFailurePayload<TCode extends AuthErrorCode, TFields ex
   })
 }
 
+export function createPasswordConfirmationMismatchFailure<
+  TCode extends AuthErrorCode,
+  TInput extends Readonly<Record<string, unknown>>,
+>(
+  code: TCode,
+  message: string,
+  input: TInput,
+): AuthFailure<TCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>> {
+  const fields = [
+    pickInputField(input, ['password']),
+    pickInputField(input, ['passwordConfirmation']),
+  ].filter((field): field is InputFieldName<TInput> => typeof field === 'string')
+
+  return createAuthFailurePayload(
+    code,
+    message,
+    422,
+    createFieldErrors(fields.length > 0 ? fields : [resolveRequiredFieldName(input, ['password'])], message),
+  )
+}
+
 export function resolveIdentifierFieldName<TInput extends Readonly<Record<string, unknown>>>(
   input: TInput,
   error: AuthError,
