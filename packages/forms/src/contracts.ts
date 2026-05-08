@@ -156,7 +156,7 @@ export function normalizeFailureErrors(
     return fallback
   }
 
-  const normalized: Record<string, readonly string[]> = {}
+  const normalized: Record<string, readonly string[]> = { ...fallback }
 
   for (const [field, messages] of Object.entries(override)) {
     if (typeof messages !== 'undefined') {

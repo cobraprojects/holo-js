@@ -299,6 +299,28 @@ describe('@holo-js/forms contracts', () => {
     })
   })
 
+  it('merges failure override errors with existing validation errors', () => {
+    const registerUser = schema({
+      email: field.string().required().email(),
+      token: field.string().required(),
+    })
+    const failure = createFailedSubmission(registerUser, {
+      email: 'bad',
+    }, {
+      email: ['Invalid email.'],
+      token: ['Missing token.'],
+    })
+
+    expect(failure.fail({
+      errors: {
+        email: ['A user with this email already exists.'],
+      },
+    }).errors).toEqual({
+      email: ['A user with this email already exists.'],
+      token: ['Missing token.'],
+    })
+  })
+
   it('preserves verification and reset transport tokens while still stripping passwords', () => {
     expect(formsInternals.sanitizeFlashedInput({
       email: 'ava@example.com',
