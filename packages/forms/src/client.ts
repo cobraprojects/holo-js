@@ -1,16 +1,18 @@
+import type {
+  FormFailureInput,
+  FormFailurePayload,
+  InferFormData,
+  FormSchema,
+  FormSubmissionResult,
+  FormSuccessPayload,
+  SerializedFormSubmission as SerializedSubmissionState,
+  SerializedFormSubmission,
+} from './contracts'
 import {
-  type FormFailureInput,
-  type FormFailurePayload,
-  type InferFormData,
-  type FormSchema,
-  type FormSubmissionResult,
-  type FormSuccessPayload,
-  type SerializedFormSubmission as SerializedSubmissionState,
-  type SerializedFormSubmission,
   normalizeFailureErrors,
   normalizeFailureInput,
-} from './contracts'
-import { FormContractError } from './errors'
+  normalizeStatus,
+} from './failure'
 import { clearSensitiveInputValues, sanitizeFlashedInput } from './sensitiveInput'
 import {
   type FormLikeValidationInput,
@@ -117,18 +119,6 @@ type MutableState<TData, TSuccess> = {
 type SchemaFieldLike = {
   readonly kind: 'field'
   readonly definition: object
-}
-
-function normalizeStatus(value: number | undefined, fallback: number): number {
-  if (typeof value === 'undefined') {
-    return fallback
-  }
-
-  if (!Number.isInteger(value) || value < 100) {
-    throw new FormContractError('HTTP status codes must be integers greater than or equal to 100.')
-  }
-
-  return value
 }
 
 function serializeSubmissionState<TData>(

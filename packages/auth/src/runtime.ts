@@ -1,10 +1,6 @@
-import { AsyncLocalStorage } from 'node:async_hooks'
-import { createHash, createHmac, randomBytes, randomUUID, scrypt as nodeScrypt, timingSafeEqual } from 'node:crypto'
-import { promisify } from 'node:util'
+import { createHash, createHmac } from 'node:crypto'
 import { normalizeAuthConfig } from '@holo-js/config'
 import type {
-  AuthFailure,
-  AuthErrorCode,
   AuthFieldErrors,
   AuthCredentials,
   AuthCurrentAccessToken,
@@ -14,7 +10,6 @@ import type {
   AuthEmailVerificationResendErrorCode,
   AuthEstablishedSession,
   AuthFacade,
-  AuthFailureResult,
   AuthGuardFacade,
   AuthImpersonationOptions,
   AuthImpersonationState,
@@ -30,7 +25,6 @@ import type {
   AuthResult,
   AuthRegistrationInput,
   AuthSessionLoginOptions,
-  AuthSuccessResult,
   AuthTokenFacade,
   AuthTokenStore,
   AuthUser,
@@ -47,12 +41,61 @@ import type {
   PasswordResetTokenRecord,
   PasswordResetTokenStore,
 } from './contracts'
-import { AuthError, isAuthError } from './contracts'
+import {
+  createAsyncAuthContext,
+  createMemoryAuthContext,
+} from './runtime/context'
+import {
+  serializeCookie,
+} from './runtime/cookieSerialization'
+import {
+  EXPECTED_EMAIL_VERIFICATION_CONSUME_ERRORS,
+  EXPECTED_EMAIL_VERIFICATION_RESEND_ERRORS,
+  EXPECTED_LOGIN_ERRORS,
+  EXPECTED_PASSWORD_RESET_CONSUME_ERRORS,
+  EXPECTED_PASSWORD_RESET_REQUEST_ERRORS,
+  EXPECTED_REGISTRATION_ERRORS,
+} from './runtime/expectedErrors'
+import type { InputFieldName } from './runtime/failureFields'
+import {
+  createEmailVerificationConsumeFailure,
+  createEmailVerificationResendFailure,
+  createPasswordResetConsumeFailure,
+  createPasswordResetRequestFailure,
+} from './runtime/lifecycleFailures'
+import {
+  type OptionalSecurityRateLimitStore,
+  loadOptionalSecurityModule,
+  resetOptionalSecurityModuleCache,
+} from './runtime/optionalSecurity'
+import {
+  appendResponseCookies,
+  parseBearerToken,
+  resolveRequestCookie,
+  resolveRequestHeader,
+} from './runtime/requestAccess'
+import {
+  buildLogoutCookies,
+  forgetDefaultRememberCookie,
+} from './runtime/responseCookies'
+import { captureExpectedAuthResult, throwAuthError } from './runtime/result'
+import { createLoginFailure, createRegistrationFailure } from './runtime/sessionFailures'
+import {
+  createDefaultPasswordHasher,
+  createPersonalAccessTokenId,
+  createPersonalAccessTokenSecret,
+  hashTokenSecret,
+  resolveNeedsPasswordRehash,
+  verifyTokenSecret,
+} from './runtime/secrets'
+import { parseSetCookieDefinition } from './runtime/setCookieParser'
 
-const scrypt = promisify(nodeScrypt)
-const SCRYPT_PREFIX = 'scrypt'
-const TOKEN_HASH_PREFIX = 'sha256'
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
+
+export {
+  createAsyncAuthContext,
+  createMemoryAuthContext,
+} from './runtime/context'
 
 type SerializedAuthUser = AuthUser & {
   readonly id: string | number
@@ -90,21 +133,6 @@ type SessionAuthPayload = SessionIdentityPayload & {
 
 type SessionAuthPayloadMap = Readonly<Record<string, SessionAuthPayload>>
 
-type MemoryAuthContext = AuthRuntimeContext & {
-  readonly sessionIds: Map<string, string>
-  readonly cachedUsers: Map<string, AuthUser | null>
-  readonly accessTokens: Map<string, string>
-  readonly rememberTokens: Map<string, string>
-  getAccessToken(guardName: string): string | undefined
-  setAccessToken(guardName: string, token?: string): void
-  getRememberToken(guardName: string): string | undefined
-  setRememberToken(guardName: string, token?: string): void
-}
-
-type AsyncAuthContext = AuthRuntimeContext & {
-  activate(): void
-}
-
 type RuntimeBindings = {
   readonly config: ReturnType<typeof normalizeAuthConfig>
   readonly session: AuthRuntimeBindings['session']
@@ -115,333 +143,6 @@ type RuntimeBindings = {
   readonly delivery: AuthDeliveryHook
   readonly context: AuthRuntimeContext
   readonly passwordHasher: AuthPasswordHasher
-}
-
-type OptionalSecurityRateLimitStore = {
-  hit(
-    key: string,
-    options: { readonly maxAttempts: number, readonly decaySeconds: number },
-  ): Promise<{ readonly limited: boolean }>
-  clear?(key: string): Promise<boolean>
-}
-
-type OptionalSecurityModule = {
-  getSecurityRuntimeBindings?(): {
-    readonly rateLimitStore?: OptionalSecurityRateLimitStore
-    readonly csrfSigningKey?: string
-  } | undefined
-}
-
-let optionalSecurityModulePromise: Promise<OptionalSecurityModule | undefined> | undefined
-
-function createAuthError(
-  code: AuthErrorCode,
-  message: string,
-  details?: Readonly<Record<string, unknown>>,
-): AuthError {
-  return new AuthError(code, message, {
-    details,
-  })
-}
-
-function throwAuthError(
-  code: AuthErrorCode,
-  message: string,
-  details?: Readonly<Record<string, unknown>>,
-): never {
-  throw createAuthError(code, message, details)
-}
-
-function createAuthSuccess<TData>(data: TData): AuthSuccessResult<TData> {
-  return Object.freeze({
-    data,
-    error: null,
-  })
-}
-
-function createAuthFailure<TCode extends AuthErrorCode, TFields extends AuthFieldErrors>(
-  error: AuthFailure<TCode, TFields>,
-): AuthFailureResult<TCode, TFields> {
-  return Object.freeze({
-    data: null,
-    error,
-  })
-}
-
-async function captureExpectedAuthResult<TData, TCode extends AuthErrorCode, TFields extends AuthFieldErrors>(
-  operation: () => Promise<TData>,
-  expectedCodes: readonly TCode[],
-  mapError: (error: AuthError<TCode>) => AuthFailure<TCode, TFields>,
-): Promise<AuthResult<TData, TCode, TFields>> {
-  try {
-    return createAuthSuccess(await operation())
-  } catch (error) {
-    if (isAuthError(error) && expectedCodes.includes(error.code as TCode)) {
-      return createAuthFailure(mapError(error as AuthError<TCode>))
-    }
-
-    throw error
-  }
-}
-
-const EXPECTED_LOGIN_ERRORS = [
-  'credentials_identifier_missing',
-  'invalid_credentials',
-  'email_verification_required',
-] as const satisfies readonly AuthLoginErrorCode[]
-
-const EXPECTED_REGISTRATION_ERRORS = [
-  'credentials_identifier_missing',
-  'password_confirmation_mismatch',
-  'registration_identifier_taken',
-] as const satisfies readonly AuthRegistrationErrorCode[]
-
-const EXPECTED_EMAIL_VERIFICATION_CONSUME_ERRORS = [
-  'email_verification_token_invalid',
-  'email_verification_token_expired',
-  'auth_user_missing',
-  'provider_update_unsupported',
-] as const satisfies readonly AuthEmailVerificationConsumeErrorCode[]
-
-const EXPECTED_EMAIL_VERIFICATION_RESEND_ERRORS = [
-  'email_verification_user_missing',
-  'email_already_verified',
-] as const satisfies readonly AuthEmailVerificationResendErrorCode[]
-
-const EXPECTED_PASSWORD_RESET_REQUEST_ERRORS = [
-  'password_reset_email_required',
-] as const satisfies readonly AuthPasswordResetRequestErrorCode[]
-
-const EXPECTED_PASSWORD_RESET_CONSUME_ERRORS = [
-  'password_confirmation_mismatch',
-  'password_reset_token_invalid',
-  'password_reset_token_expired',
-  'password_reset_user_missing',
-  'auth_user_missing',
-  'provider_update_unsupported',
-] as const satisfies readonly AuthPasswordResetConsumeErrorCode[]
-
-type InputFieldName<TInput extends Readonly<Record<string, unknown>>> = Extract<keyof TInput, string>
-
-function hasInputField<TInput extends Readonly<Record<string, unknown>>>(
-  input: TInput,
-  field: string,
-): field is InputFieldName<TInput> {
-  return field in input
-}
-
-function pickInputField<TInput extends Readonly<Record<string, unknown>>>(
-  input: TInput,
-  candidates: readonly string[],
-): InputFieldName<TInput> | undefined {
-  for (const candidate of candidates) {
-    if (hasInputField(input, candidate)) {
-      return candidate
-    }
-  }
-
-  const [firstField] = Object.keys(input)
-  return firstField && hasInputField(input, firstField) ? firstField : undefined
-}
-
-function createFieldErrors<TField extends string>(
-  fields: readonly TField[],
-  message: string,
-): AuthFieldErrors<TField> {
-  return Object.freeze(
-    Object.fromEntries(fields.map(field => [field, [message] as readonly string[]])) as AuthFieldErrors<TField>,
-  )
-}
-
-function createAuthFailurePayload<TCode extends AuthErrorCode, TFields extends AuthFieldErrors>(
-  code: TCode,
-  message: string,
-  status: number,
-  fields: TFields,
-): AuthFailure<TCode, TFields> {
-  return Object.freeze({
-    code,
-    message,
-    status,
-    fields,
-  })
-}
-
-function resolveIdentifierFieldName<TInput extends Readonly<Record<string, unknown>>>(
-  input: TInput,
-  error: AuthError,
-): InputFieldName<TInput> | undefined {
-  const identifier = error.details?.identifier
-  if (typeof identifier === 'string' && hasInputField(input, identifier)) {
-    return identifier
-  }
-
-  return pickInputField(input, ['email', 'username', 'phone'])
-}
-
-function resolveRequiredFieldName<TInput extends Readonly<Record<string, unknown>>>(
-  input: TInput,
-  candidates: readonly string[],
-): InputFieldName<TInput> {
-  const field = pickInputField(input, candidates)
-  if (!field) {
-    throw new Error('[@holo-js/auth] Expected auth failure mapping to resolve at least one input field.')
-  }
-
-  return field
-}
-
-function createLoginFailure<TCredentials extends AuthCredentials>(
-  error: AuthError<AuthLoginErrorCode>,
-  credentials: TCredentials,
-): AuthFailure<AuthLoginErrorCode, Partial<Record<InputFieldName<TCredentials>, readonly string[]>>> {
-  switch (error.code) {
-    case 'invalid_credentials': {
-      const message = 'These credentials do not match our records.'
-      const fields = [
-        resolveIdentifierFieldName(credentials, error),
-        hasInputField(credentials, 'password') ? 'password' : undefined,
-      ].filter((field): field is InputFieldName<TCredentials> => typeof field === 'string')
-
-      return createAuthFailurePayload(
-        error.code,
-        message,
-        401,
-        createFieldErrors(fields.length > 0 ? fields : [resolveRequiredFieldName(credentials, ['password'])], message),
-      )
-    }
-
-    case 'email_verification_required': {
-      const message = 'Verify your email address before signing in.'
-      const field = resolveIdentifierFieldName(credentials, error) ?? resolveRequiredFieldName(credentials, ['password'])
-      return createAuthFailurePayload(error.code, message, 403, createFieldErrors([field], message))
-    }
-
-    case 'credentials_identifier_missing':
-    default: {
-      const field = resolveRequiredFieldName(credentials, ['email', 'username', 'phone', 'password'])
-      return createAuthFailurePayload(error.code, error.message, 422, createFieldErrors([field], error.message))
-    }
-  }
-}
-
-function createRegistrationFailure<TInput extends AuthRegistrationInput>(
-  error: AuthError<AuthRegistrationErrorCode>,
-  input: TInput,
-): AuthFailure<AuthRegistrationErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>> {
-  switch (error.code) {
-    case 'registration_identifier_taken': {
-      const field = resolveIdentifierFieldName(input, error) ?? resolveRequiredFieldName(input, ['email', 'username', 'phone', 'password'])
-      return createAuthFailurePayload(error.code, error.message, 422, createFieldErrors([field], error.message))
-    }
-
-    case 'password_confirmation_mismatch': {
-      const message = error.message
-      const fields = [
-        pickInputField(input, ['password']),
-        pickInputField(input, ['passwordConfirmation']),
-      ].filter((field): field is InputFieldName<TInput> => typeof field === 'string')
-
-      return createAuthFailurePayload(
-        error.code,
-        message,
-        422,
-        createFieldErrors(fields.length > 0 ? fields : [resolveRequiredFieldName(input, ['password'])], message),
-      )
-    }
-
-    case 'credentials_identifier_missing':
-    default: {
-      const field = resolveRequiredFieldName(input, ['email', 'username', 'phone', 'password'])
-      return createAuthFailurePayload(error.code, error.message, 422, createFieldErrors([field], error.message))
-    }
-  }
-}
-
-function createEmailVerificationResendFailure(
-  error: AuthError<AuthEmailVerificationResendErrorCode>,
-): AuthFailure<AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>> {
-  switch (error.code) {
-    case 'email_already_verified':
-      return createAuthFailurePayload(error.code, error.message, 409, createFieldErrors(['_root'], error.message))
-    case 'email_verification_user_missing':
-    default:
-      return createAuthFailurePayload(error.code, error.message, 401, createFieldErrors(['_root'], error.message))
-  }
-}
-
-function createPasswordResetRequestFailure<TInput extends AuthPasswordResetRequestInput>(
-  error: AuthError<AuthPasswordResetRequestErrorCode>,
-  input: TInput,
-): AuthFailure<AuthPasswordResetRequestErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>> {
-  const field = resolveRequiredFieldName(input, ['email'])
-  return createAuthFailurePayload(error.code, error.message, 422, createFieldErrors([field], error.message))
-}
-
-function createPasswordResetConsumeFailure<TInput extends AuthPasswordResetInput>(
-  error: AuthError<AuthPasswordResetConsumeErrorCode>,
-  input: TInput,
-): AuthFailure<AuthPasswordResetConsumeErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>> {
-  switch (error.code) {
-    case 'password_confirmation_mismatch': {
-      const message = error.message
-      const fields = [
-        pickInputField(input, ['password']),
-        pickInputField(input, ['passwordConfirmation']),
-      ].filter((field): field is InputFieldName<TInput> => typeof field === 'string')
-
-      return createAuthFailurePayload(
-        error.code,
-        message,
-        422,
-        createFieldErrors(fields.length > 0 ? fields : [resolveRequiredFieldName(input, ['password'])], message),
-      )
-    }
-
-    case 'provider_update_unsupported': {
-      const field = resolveRequiredFieldName(input, ['token'])
-      return createAuthFailurePayload(error.code, error.message, 500, createFieldErrors([field], error.message))
-    }
-
-    case 'password_reset_token_invalid': {
-      const field = resolveRequiredFieldName(input, ['token'])
-      return createAuthFailurePayload(error.code, error.message, 422, createFieldErrors([field], error.message))
-    }
-
-    case 'password_reset_token_expired': {
-      const message = 'This password reset link is invalid or has expired.'
-      const field = resolveRequiredFieldName(input, ['token'])
-      return createAuthFailurePayload(error.code, message, 422, createFieldErrors([field], message))
-    }
-
-    case 'password_reset_user_missing':
-    case 'auth_user_missing':
-    default: {
-      const field = resolveRequiredFieldName(input, ['token'])
-      return createAuthFailurePayload(error.code, error.message, 422, createFieldErrors([field], error.message))
-    }
-  }
-}
-
-function createEmailVerificationConsumeFailure(
-  error: AuthError<AuthEmailVerificationConsumeErrorCode>,
-): AuthFailure<AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>> {
-  switch (error.code) {
-    case 'provider_update_unsupported':
-      return createAuthFailurePayload(error.code, error.message, 500, createFieldErrors(['token'], error.message))
-
-    case 'email_verification_token_invalid':
-      return createAuthFailurePayload(error.code, error.message, 422, createFieldErrors(['token'], error.message))
-
-    case 'email_verification_token_expired': {
-      const message = 'This verification link is invalid or has expired.'
-      return createAuthFailurePayload(error.code, message, 422, createFieldErrors(['token'], message))
-    }
-
-    case 'auth_user_missing':
-    default:
-      return createAuthFailurePayload(error.code, error.message, 422, createFieldErrors(['token'], error.message))
-  }
 }
 
 function getAuthRuntimeState(): {
@@ -457,63 +158,6 @@ function getAuthRuntimeState(): {
 
   runtime.__holoAuthRuntime__ ??= {}
   return runtime.__holoAuthRuntime__
-}
-
-function getOptionalSecurityModuleOverride(): OptionalSecurityModule | undefined {
-  const runtime = globalThis as typeof globalThis & {
-    __holoAuthSecurityModule__?: OptionalSecurityModule
-  }
-
-  return runtime.__holoAuthSecurityModule__
-}
-
-function getOptionalSecurityImportOverride(): (() => Promise<unknown>) | undefined {
-  const runtime = globalThis as typeof globalThis & {
-    __holoAuthSecurityImport__?: () => Promise<unknown>
-  }
-
-  return runtime.__holoAuthSecurityImport__
-}
-
-function isMissingOptionalPackageError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false
-  }
-
-  const message = error.message
-  const mentionsSecurityPackage = message.includes('@holo-js/security')
-
-  return mentionsSecurityPackage && (
-    message.includes('Cannot find package')
-    || message.includes('Cannot find module')
-    || message.includes('Failed to resolve module specifier')
-    || message.includes('Failed to load url')
-    || message.includes('Could not resolve')
-  )
-}
-
-async function loadOptionalSecurityModule(): Promise<OptionalSecurityModule | undefined> {
-  const override = getOptionalSecurityModuleOverride()
-  if (override) {
-    return override
-  }
-
-  const importOverride = getOptionalSecurityImportOverride()
-  optionalSecurityModulePromise ??= (importOverride
-    ? importOverride()
-    : import('@holo-js/security' as string))
-    .then(module => module as OptionalSecurityModule)
-    .catch(async (error) => {
-      optionalSecurityModulePromise = undefined
-
-      if (isMissingOptionalPackageError(error)) {
-        return undefined
-      }
-
-      throw error
-    })
-
-  return await optionalSecurityModulePromise
 }
 
 function throwUnconfigured(): never {
@@ -548,76 +192,12 @@ function getExposedRuntimeBindings(): {
   }
 }
 
-function createDefaultPasswordHasher(): AuthPasswordHasher {
-  return {
-    async hash(password: string): Promise<string> {
-      const salt = randomBytes(16)
-      const derived = await scrypt(password, salt, 64) as Buffer
-      return `${SCRYPT_PREFIX}$${salt.toString('hex')}$${derived.toString('hex')}`
-    },
-    async verify(password: string, digest: string): Promise<boolean> {
-      const [prefix, saltHex, hashHex] = digest.split('$')
-      if (prefix !== SCRYPT_PREFIX || !saltHex || !hashHex) {
-        return false
-      }
-
-      const salt = Buffer.from(saltHex, 'hex')
-      const expected = Buffer.from(hashHex, 'hex')
-      const derived = await scrypt(password, salt, expected.length) as Buffer
-      return derived.length === expected.length && timingSafeEqual(derived, expected)
-    },
-    needsRehash() {
-      return false
-    },
-  }
-}
-
 function requireRecordValue(value: unknown, message: string): Record<string, unknown> {
   if (!value || typeof value !== 'object') {
     throw new Error(message)
   }
 
   return value as Record<string, unknown>
-}
-
-async function resolveNeedsPasswordRehash(
-  hasher: AuthPasswordHasher,
-  digest: string,
-): Promise<boolean> {
-  if (!hasher.needsRehash) {
-    return false
-  }
-
-  return await hasher.needsRehash(digest)
-}
-
-function hashTokenSecret(secret: string): string {
-  return `${TOKEN_HASH_PREFIX}$${createHash('sha256').update(secret).digest('hex')}`
-}
-
-type CookieOptions = {
-  readonly path?: string
-  readonly domain?: string
-  readonly secure?: boolean
-  readonly httpOnly?: boolean
-  readonly sameSite?: 'lax' | 'strict' | 'none'
-  readonly partitioned?: boolean
-}
-
-type CookieSerializationOptions = CookieOptions & {
-  readonly expires?: Date
-  readonly maxAge?: number
-}
-
-function verifyTokenSecret(secret: string, digest: string): boolean {
-  const [prefix, hashHex] = digest.split('$')
-  if (prefix !== TOKEN_HASH_PREFIX || !hashHex) {
-    return false
-  }
-
-  const expected = Buffer.from(hashHex, 'hex')
-  const actual = createHash('sha256').update(secret).digest()
-  return actual.length === expected.length && timingSafeEqual(actual, expected)
 }
 
 function createPasswordResetThrottleKey(
@@ -719,213 +299,6 @@ async function reserveSharedPasswordResetThrottle(
   }
 }
 
-function parseSetCookieDefinition(header: string): {
-  readonly name: string
-  readonly options: CookieOptions
-} | null {
-  const [nameValue, ...attributes] = header.split(';')
-  /* v8 ignore next -- split() always yields a first string element for string input. */
-  const separator = nameValue?.indexOf('=') ?? -1
-  if (!nameValue || separator <= 0) {
-    return null
-  }
-
-  const options: {
-    path?: string
-    domain?: string
-    secure?: boolean
-    httpOnly?: boolean
-    sameSite?: 'lax' | 'strict' | 'none'
-    partitioned?: boolean
-  } = {}
-
-  for (const rawAttribute of attributes) {
-    const attribute = rawAttribute.trim()
-    if (!attribute) {
-      continue
-    }
-
-    const attributeSeparator = attribute.indexOf('=')
-    const key = (attributeSeparator === -1 ? attribute : attribute.slice(0, attributeSeparator)).trim().toLowerCase()
-    const value = attributeSeparator === -1 ? '' : attribute.slice(attributeSeparator + 1).trim()
-
-    switch (key) {
-      case 'path':
-        options.path = value
-        break
-      case 'domain':
-        options.domain = value
-        break
-      case 'secure':
-        options.secure = true
-        break
-      case 'httponly':
-        options.httpOnly = true
-        break
-      case 'samesite':
-        if (value.toLowerCase() === 'lax' || value.toLowerCase() === 'strict' || value.toLowerCase() === 'none') {
-          options.sameSite = value.toLowerCase() as CookieOptions['sameSite']
-        }
-        break
-      case 'partitioned':
-        options.partitioned = true
-        break
-    }
-  }
-
-  return {
-    name: decodeURIComponent(nameValue.slice(0, separator)),
-    options,
-  }
-}
-
-function serializeCookie(
-  name: string,
-  value: string,
-  options: CookieSerializationOptions = {},
-): string {
-  const attributes = [
-    `${encodeURIComponent(name)}=${encodeURIComponent(value)}`,
-    `Path=${options.path ?? '/'}`,
-  ]
-
-  if (options.domain) {
-    attributes.push(`Domain=${options.domain}`)
-  }
-  if ((options.maxAge ?? 0) > 0) {
-    attributes.push(`Max-Age=${options.maxAge}`)
-  }
-  if (options.expires) {
-    attributes.push(`Expires=${options.expires.toUTCString()}`)
-  }
-  if (options.secure) {
-    attributes.push('Secure')
-  }
-  if (options.httpOnly) {
-    attributes.push('HttpOnly')
-  }
-  if (options.sameSite) {
-    attributes.push(`SameSite=${options.sameSite[0]!.toUpperCase()}${options.sameSite.slice(1)}`)
-  }
-  if (options.partitioned) {
-    attributes.push('Partitioned')
-  }
-
-  return attributes.join('; ')
-}
-
-function forgetCookie(
-  bindings: RuntimeBindings,
-  name: string,
-  options: CookieOptions = {},
-): string {
-  const cookieOptions = {
-    ...options,
-    expires: new Date(0),
-    maxAge: 0,
-  } satisfies CookieSerializationOptions
-
-  if (bindings.session.cookie) {
-    return bindings.session.cookie(name, '', cookieOptions)
-  }
-
-  return serializeCookie(name, '', cookieOptions)
-}
-
-function getHostedSessionCookieNamesForGuard(
-  config: RuntimeBindings['config'],
-  guardName: string,
-): readonly string[] {
-  const names = new Set<string>()
-  for (const provider of Object.values(config.workos)) {
-    if ((provider.guard ?? config.defaults.guard) === guardName) {
-      names.add(provider.sessionCookie)
-    }
-  }
-  for (const provider of Object.values(config.clerk)) {
-    if ((provider.guard ?? config.defaults.guard) === guardName) {
-      names.add(provider.sessionCookie)
-    }
-  }
-
-  return [...names]
-}
-
-function buildLogoutCookies(
-  bindings: RuntimeBindings,
-  guardName: string,
-  options: {
-    readonly clearSessionCookies: boolean
-  },
-): readonly string[] {
-  const cookies: string[] = []
-  const defaultSessionCookie = parseSetCookieDefinition(bindings.session.sessionCookie(''))
-  const defaultRememberCookie = parseSetCookieDefinition(bindings.session.rememberMeCookie(''))
-
-  if (options.clearSessionCookies) {
-    if (defaultSessionCookie) {
-      cookies.push(forgetCookie(bindings, defaultSessionCookie.name, defaultSessionCookie.options))
-    }
-    if (defaultRememberCookie) {
-      cookies.push(forgetCookie(bindings, defaultRememberCookie.name, defaultRememberCookie.options))
-    }
-  }
-
-  const hostedCookieOptions: CookieOptions = {
-    path: '/',
-    domain: '',
-  }
-  for (const cookieName of getHostedSessionCookieNamesForGuard(bindings.config, guardName)) {
-    cookies.push(forgetCookie(bindings, cookieName, hostedCookieOptions))
-  }
-
-  return Object.freeze([...new Set(cookies)])
-}
-
-function forgetDefaultRememberCookie(bindings: RuntimeBindings): string | undefined {
-  const rememberCookie = parseSetCookieDefinition(bindings.session.rememberMeCookie(''))
-  return rememberCookie
-    ? forgetCookie(bindings, rememberCookie.name, rememberCookie.options)
-    : undefined
-}
-
-async function resolveRequestCookie(
-  bindings: RuntimeBindings,
-  name: string,
-): Promise<string | undefined> {
-  return await bindings.context.getRequestCookie?.(name)
-}
-
-async function resolveRequestHeader(
-  bindings: RuntimeBindings,
-  name: string,
-): Promise<string | undefined> {
-  const value = await bindings.context.getRequestHeader?.(name)
-  return typeof value === 'string' && value.length > 0 ? value : undefined
-}
-
-async function appendResponseCookies(
-  bindings: RuntimeBindings,
-  cookies: readonly string[],
-): Promise<void> {
-  if (!bindings.context.appendResponseCookie) {
-    return
-  }
-
-  for (const cookie of cookies) {
-    await bindings.context.appendResponseCookie(cookie)
-  }
-}
-
-function parseBearerToken(header: string | undefined): string | undefined {
-  if (typeof header !== 'string') {
-    return undefined
-  }
-
-  const match = header.match(/^Bearer\s+(.+)$/i)
-  return match?.[1]?.trim() || undefined
-}
-
 async function hydrateGuardContextFromRequest(guardName: string): Promise<void> {
   const bindings = getRuntimeBindings()
   const guard = getGuardConfig(guardName)
@@ -973,14 +346,6 @@ async function hydrateGuardContextFromRequest(guardName: string): Promise<void> 
       }
     }
   }
-}
-
-function createPersonalAccessTokenId(): string {
-  return randomUUID()
-}
-
-function createPersonalAccessTokenSecret(): string {
-  return randomBytes(24).toString('base64url')
 }
 
 function createLifecycleTokenResult<TRecord extends {
@@ -1039,103 +404,6 @@ function ensurePasswordResetTokenStore(): PasswordResetTokenStore {
   }
 
   return bindings.passwordResetTokens
-}
-
-export function createMemoryAuthContext(): MemoryAuthContext {
-  const sessionIds = new Map<string, string>()
-  const cachedUsers = new Map<string, AuthUser | null>()
-  const accessTokens = new Map<string, string>()
-  const rememberTokens = new Map<string, string>()
-
-  return {
-    sessionIds,
-    cachedUsers,
-    accessTokens,
-    rememberTokens,
-    getSessionId(guardName) {
-      return sessionIds.get(guardName)
-    },
-    setSessionId(guardName, sessionId) {
-      if (!sessionId) {
-        sessionIds.delete(guardName)
-        return
-      }
-
-      sessionIds.set(guardName, sessionId)
-    },
-    getCachedUser(guardName) {
-      return cachedUsers.get(guardName)
-    },
-    setCachedUser(guardName, user) {
-      cachedUsers.set(guardName, user)
-    },
-    getAccessToken(guardName) {
-      return accessTokens.get(guardName)
-    },
-    setAccessToken(guardName, token) {
-      if (!token) {
-        accessTokens.delete(guardName)
-        return
-      }
-
-      accessTokens.set(guardName, token)
-    },
-    getRememberToken(guardName) {
-      return rememberTokens.get(guardName)
-    },
-    setRememberToken(guardName, token) {
-      if (!token) {
-        rememberTokens.delete(guardName)
-        return
-      }
-
-      rememberTokens.set(guardName, token)
-    },
-  }
-}
-
-export function createAsyncAuthContext(): AsyncAuthContext {
-  const storage = new AsyncLocalStorage<MemoryAuthContext>()
-  const resolveContext = (): MemoryAuthContext => {
-    const existing = storage.getStore()
-    if (existing) {
-      return existing
-    }
-
-    const created = createMemoryAuthContext()
-    storage.enterWith(created)
-    return created
-  }
-
-  return {
-    activate() {
-      resolveContext()
-    },
-    getSessionId(guardName) {
-      return resolveContext().getSessionId(guardName)
-    },
-    setSessionId(guardName, sessionId) {
-      resolveContext().setSessionId(guardName, sessionId)
-    },
-    getCachedUser(guardName) {
-      return resolveContext().getCachedUser(guardName)
-    },
-    setCachedUser(guardName, user) {
-      resolveContext().setCachedUser(guardName, user)
-    },
-    getAccessToken(guardName) {
-      return resolveContext().getAccessToken?.(guardName)
-    },
-    setAccessToken(guardName, token) {
-      resolveContext().setAccessToken?.(guardName, token)
-    },
-    getRememberToken(guardName) {
-      return resolveContext().getRememberToken?.(guardName)
-    },
-    setRememberToken(guardName, token) {
-      resolveContext().setRememberToken?.(guardName, token)
-    },
-  }
 }
 
 function getGuardConfig(guardName: string): RuntimeBindings['config']['guards'][string] {
@@ -2980,7 +2248,7 @@ export function resetAuthRuntime(): void {
   const state = getAuthRuntimeState()
   state.bindings = undefined
   state.sharedPasswordResetThrottleFailures = undefined
-  optionalSecurityModulePromise = undefined
+  resetOptionalSecurityModuleCache()
 }
 
 export async function checkForGuard(guardName: string): Promise<boolean> {
