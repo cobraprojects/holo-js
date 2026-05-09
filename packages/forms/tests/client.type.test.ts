@@ -1,6 +1,6 @@
 import { describe, it } from 'vitest'
 import { field, schema } from '../src'
-import { type ClientSubmitResult, type FormFieldState, type UseFormResult, useForm } from '../src/client'
+import { type ClientSubmitResult, createFormClient as useForm, type FormFieldState, type UseFormResult } from '../src/internal/client'
 
 describe('@holo-js/forms client typing', () => {
   it('preserves typed fields, values, and nested field access', () => {

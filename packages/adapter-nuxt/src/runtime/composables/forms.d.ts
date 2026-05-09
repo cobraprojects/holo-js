@@ -6,6 +6,6 @@ export type {
   UseFormOptions,
   UseFormResult,
   ValidateOnMode,
-} from '@holo-js/forms/client'
+} from '@holo-js/forms/internal/client'
 
-export declare const useForm: typeof import('@holo-js/forms/client').useForm
+export declare const useForm: typeof import('@holo-js/forms/internal/client').createFormClient

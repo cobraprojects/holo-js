@@ -4,8 +4,8 @@ import {
   type InferFormFieldTree,
   type UseFormOptions,
   type UseFormResult,
-  useForm as createForm,
-} from '@holo-js/forms/client'
+  createFormClient,
+} from '@holo-js/forms/internal/client'
 
 export {
   type ClientSubmitContext,
@@ -15,7 +15,7 @@ export {
   type UseFormOptions,
   type UseFormResult,
   type ValidateOnMode,
-} from '@holo-js/forms/client'
+} from '@holo-js/forms/internal/client'
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value
@@ -87,7 +87,7 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
 ): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {
   type TData = InferFormData<TSchema>
 
-  const form = createForm(schemaDefinition, options)
+  const form = createFormClient(schemaDefinition, options)
   const subscribe = createSubscriber((update) => form.subscribe(update))
   const cache = new WeakMap<object, object>()
 

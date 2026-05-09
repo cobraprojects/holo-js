@@ -7,13 +7,13 @@ import type {
   FormSuccessPayload,
   SerializedFormSubmission as SerializedSubmissionState,
   SerializedFormSubmission,
-} from './contracts'
+} from '../contracts'
 import {
   normalizeFailureErrors,
   normalizeFailureInput,
   normalizeStatus,
-} from './failure'
-import { clearSensitiveInputValues, sanitizeFlashedInput } from './sensitiveInput'
+} from '../failure'
+import { clearSensitiveInputValues, sanitizeFlashedInput } from '../sensitiveInput'
 import {
   type FormLikeValidationInput,
   createErrorBag,
@@ -25,7 +25,7 @@ import {
   type WebFileLike,
   validate as validateInput,
 } from '@holo-js/validation'
-import { getClientCsrfField } from './client-security'
+import { getClientCsrfField } from '../client-security'
 
 type PrimitiveLike = string | number | boolean | bigint | symbol | null | undefined | Date | Blob | WebFileLike
 
@@ -698,7 +698,10 @@ function isSafeMethod(method: string): boolean {
     || normalized === 'TRACE'
 }
 
-export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
+/**
+ * @internal Shared headless form runtime for framework adapters.
+ */
+export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>(
   schemaDefinition: TSchema,
   options: UseFormOptions<InferFormData<TSchema>, TSuccess> = {},
 ): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {

@@ -4,8 +4,8 @@ import {
   type InferFormFieldTree,
   type UseFormOptions,
   type UseFormResult,
-  useForm as createForm,
-} from '@holo-js/forms/client'
+  createFormClient,
+} from '@holo-js/forms/internal/client'
 
 export {
   type ClientSubmitContext,
@@ -15,7 +15,7 @@ export {
   type UseFormOptions,
   type UseFormResult,
   type ValidateOnMode,
-} from '@holo-js/forms/client'
+} from '@holo-js/forms/internal/client'
 
 type FormValuesBridge = {
   readonly values: unknown
@@ -221,7 +221,7 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
   schemaDefinition: TSchema,
   options: UseFormOptions<InferFormData<TSchema>, TSuccess> = {},
 ): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {
-  const form = shallowRef(createForm(schemaDefinition, options))
+  const form = shallowRef(createFormClient(schemaDefinition, options))
   const version = shallowRef(0)
   let versionCounter = 0
   const rawValues: Record<string, unknown> = {}
@@ -239,7 +239,7 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
   }
 
   const stopWatching = watchEffect((onCleanup) => {
-    form.value = createForm(schemaDefinition, options)
+    form.value = createFormClient(schemaDefinition, options)
     syncValuesFromForm()
     version.value = ++versionCounter
 

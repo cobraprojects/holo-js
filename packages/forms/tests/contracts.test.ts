@@ -1110,11 +1110,20 @@ describe('@holo-js/forms contracts', () => {
     const packageJson = JSON.parse(await import('node:fs/promises').then(module => module.readFile(
       new URL('../package.json', import.meta.url),
       'utf8',
-    ))) as { version?: string; dependencies?: Record<string, string>; devDependencies?: Record<string, string>; peerDependencies?: Record<string, string>; peerDependenciesMeta?: Record<string, { optional?: boolean }> }
+    ))) as {
+      version?: string
+      exports?: Record<string, unknown>
+      dependencies?: Record<string, string>
+      devDependencies?: Record<string, string>
+      peerDependencies?: Record<string, string>
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>
+    }
 
     expect(Object.keys(packageJson.dependencies ?? {})).not.toContain('@holo-js/adapter-next')
     expect(Object.keys(packageJson.dependencies ?? {})).not.toContain('@holo-js/adapter-nuxt')
     expect(Object.keys(packageJson.dependencies ?? {})).not.toContain('@holo-js/adapter-sveltekit')
+    expect(packageJson.exports).not.toHaveProperty('./client')
+    expect(packageJson.exports).toHaveProperty('./internal/client')
     expect(Object.keys(packageJson.devDependencies ?? {})).not.toContain('next')
     expect(Object.keys(packageJson.devDependencies ?? {})).not.toContain('nuxt')
     expect(packageJson.peerDependencies?.['@holo-js/security']).toBe(`^${packageJson.version}`)
