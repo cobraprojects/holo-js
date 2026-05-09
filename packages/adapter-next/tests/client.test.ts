@@ -41,7 +41,7 @@ describe('@holo-js/adapter-next client', () => {
     vi.resetModules()
     vi.clearAllMocks()
     vi.doUnmock('react')
-    vi.doUnmock('@holo-js/forms/client')
+    vi.doUnmock('@holo-js/forms/internal/client')
   })
 
   it('wraps the shared form client with a React subscription bridge', async () => {
@@ -54,8 +54,8 @@ describe('@holo-js/adapter-next client', () => {
       },
     }
 
-    vi.doMock('@holo-js/forms/client', () => ({
-      useForm: vi.fn(() => fakeForm),
+    vi.doMock('@holo-js/forms/internal/client', () => ({
+      createFormClient: vi.fn(() => fakeForm),
     }))
 
     vi.doMock('react', () => createReactMock({
@@ -115,8 +115,8 @@ describe('@holo-js/adapter-next client', () => {
       hookValues: [],
     }
 
-    vi.doMock('@holo-js/forms/client', () => ({
-      useForm: vi.fn((_schema, options: { initialValues?: { email?: string } }) => ({
+    vi.doMock('@holo-js/forms/internal/client', () => ({
+      createFormClient: vi.fn((_schema, options: { initialValues?: { email?: string } }) => ({
         subscribe() {
           return () => {}
         },
@@ -217,8 +217,8 @@ describe('@holo-js/adapter-next client', () => {
       },
     }))
 
-    vi.doMock('@holo-js/forms/client', () => ({
-      useForm: createForm,
+    vi.doMock('@holo-js/forms/internal/client', () => ({
+      createFormClient: createForm,
     }))
 
     vi.doMock('react', () => createReactMock({
@@ -306,8 +306,8 @@ describe('@holo-js/adapter-next client', () => {
       },
     }))
 
-    vi.doMock('@holo-js/forms/client', () => ({
-      useForm: createForm,
+    vi.doMock('@holo-js/forms/internal/client', () => ({
+      createFormClient: createForm,
     }))
 
     vi.doMock('react', () => createReactMock({
@@ -418,8 +418,8 @@ describe('@holo-js/adapter-next client', () => {
       },
     }))
 
-    vi.doMock('@holo-js/forms/client', () => ({
-      useForm: createForm,
+    vi.doMock('@holo-js/forms/internal/client', () => ({
+      createFormClient: createForm,
     }))
 
     vi.doMock('react', () => createReactMock({
@@ -514,8 +514,8 @@ describe('@holo-js/adapter-next client', () => {
       }
     })
 
-    vi.doMock('@holo-js/forms/client', () => ({
-      useForm: createForm,
+    vi.doMock('@holo-js/forms/internal/client', () => ({
+      createFormClient: createForm,
     }))
 
     vi.doMock('react', () => createReactMock({
@@ -606,8 +606,8 @@ describe('@holo-js/adapter-next client', () => {
       },
     }))
 
-    vi.doMock('@holo-js/forms/client', () => ({
-      useForm: createForm,
+    vi.doMock('@holo-js/forms/internal/client', () => ({
+      createFormClient: createForm,
     }))
 
     vi.doMock('react', () => createReactMock({

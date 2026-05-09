@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createFailedSubmission, createSuccessfulSubmission, field, schema } from '../src'
-import { useForm } from '../src/client'
+import { createFormClient as useForm } from '../src/internal/client'
 
 const browserGlobal = globalThis as typeof globalThis & { document?: Document }
 const originalFetch = globalThis.fetch

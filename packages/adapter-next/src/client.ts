@@ -8,8 +8,8 @@ import {
   type InferFormFieldTree,
   type UseFormOptions,
   type UseFormResult,
-  useForm as createForm,
-} from '@holo-js/forms/client'
+  createFormClient,
+} from '@holo-js/forms/internal/client'
 
 export {
   type ClientSubmitContext,
@@ -19,7 +19,7 @@ export {
   type UseFormOptions,
   type UseFormResult,
   type ValidateOnMode,
-} from '@holo-js/forms/client'
+} from '@holo-js/forms/internal/client'
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date) && !(value instanceof Blob)
@@ -112,13 +112,13 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
     !formRef.current
     || previousSchemaRef.current !== schemaDefinition
   ) {
-    formRef.current = createForm(schemaDefinition, resolvedOptions)
+    formRef.current = createFormClient(schemaDefinition, resolvedOptions)
     previousSchemaRef.current = schemaDefinition
     previousOptionsRef.current = options
   } else {
     const previousOptions = previousOptionsRef.current as UseFormOptions<TData, TSuccess>
     if (!areOptionsEqual(previousOptions, options)) {
-      formRef.current = createForm(schemaDefinition, resolvedOptions)
+      formRef.current = createFormClient(schemaDefinition, resolvedOptions)
       previousOptionsRef.current = options
     }
   }

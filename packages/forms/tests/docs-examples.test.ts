@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { field, schema, validate } from '../src'
-import { useForm } from '../src/client'
+import { createFormClient as useForm } from '../src/internal/client'
 
 describe('@holo-js/forms documented examples', () => {
   it('covers the documented registration and password reset server flows', async () => {

@@ -18,7 +18,7 @@ describe('@holo-js/adapter-next package boundaries', () => {
     const runtimeEntry = await readFile(runtimeEntryPath, 'utf8')
 
     expect(indexEntry).not.toContain("@holo-js/forms")
-    expect(clientEntry).toContain("@holo-js/forms/client")
+    expect(clientEntry).toContain("@holo-js/forms/internal/client")
     expect(clientEntry).not.toContain("@holo-js/auth")
     expect(runtimeEntry).not.toContain("@holo-js/forms")
     expect(runtimeEntry).not.toContain("@holo-js/auth")

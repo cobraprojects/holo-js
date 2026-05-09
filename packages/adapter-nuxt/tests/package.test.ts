@@ -32,7 +32,7 @@ describe('@holo-js/adapter-nuxt package boundaries', () => {
     expect(runtimeEntry).not.toMatch(/@holo-js\/forms/)
     expect(runtimeEntry).not.toMatch(/@holo-js\/storage\/runtime/)
     expect(storageEntry).toMatch(/@holo-js\/storage\/runtime/)
-    expect(clientEntry).toMatch(/@holo-js\/forms\/client/)
+    expect(clientEntry).toMatch(/@holo-js\/forms\/internal\/client/)
     expect(storagePlugin).toMatch(/@holo-js\/storage\/runtime/)
     expect(storageRoute).toMatch(/@holo-js\/storage/)
     expect(s3Driver).toMatch(/@holo-js\/storage-s3/)

@@ -18,7 +18,8 @@ describe('@holo-js/adapter-sveltekit package boundaries', () => {
     const transportEntry = await readFile(transportEntryPath, 'utf8')
 
     expect(indexEntry).not.toContain("@holo-js/forms")
-    expect(clientEntry).toContain("@holo-js/forms/client")
+    expect(clientEntry).toContain("@holo-js/forms/internal/client")
+    expect(clientEntry).not.toContain("@holo-js/forms/client")
     expect(clientEntry).not.toContain("@holo-js/auth")
     expect(transportEntry).not.toContain("@holo-js/forms")
     expect(transportEntry).not.toContain("@holo-js/auth")
