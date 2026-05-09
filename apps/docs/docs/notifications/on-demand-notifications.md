@@ -28,8 +28,8 @@ await notifyUsing()
     email: 'admin@example.com'
   })
   .channel('database', {
-    // For database channel, you might want to store it for a specific user
-    userId: '123'
+    id: 'user-1',
+    type: 'users',
   })
   .notify(invoicePaid)
 ```

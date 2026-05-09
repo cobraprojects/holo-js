@@ -13,9 +13,10 @@ build: {
         'Thanks for joining our platform!',
         'We\'re excited to have you on board.'
       ],
-      // Optional: Add action buttons
-      actionText: 'Get Started',
-      actionUrl: 'https://example.com/get-started'
+      action: {
+        label: 'Get Started',
+        url: 'https://example.com/get-started',
+      },
     }
   }
 }
@@ -23,23 +24,25 @@ build: {
 
 Available email properties:
 - `subject` (required) - The email subject line
-- `lines` (required) - Array of text lines for the email body
-- `actionText` (optional) - Text for a call-to-action button
-- `actionUrl` (optional) - URL for the call-to-action button
-- `introLines` (optional) - Introductory lines before the main content
-- `outroLines` (optional) - Concluding lines after the main content
+- `lines` (optional) - Array of text lines for the email body
+- `greeting` (optional) - Greeting text shown before the lines
+- `action` (optional) - Button label and URL
+- `html` (optional) - HTML body override
+- `text` (optional) - text body override
 
 ## Database Channel
 
-For the database channel, your builder function should return an object that will be serialized and stored in the notifications table:
+For the database channel, return a `data` object that will be serialized into the notifications table:
 
 ```ts
 build: {
   database() {
     return {
-      amount: 100.00,
-      transactionId: 'txn_123abc',
-      status: 'completed'
+      data: {
+        amount: 100.00,
+        transactionId: 'txn_123abc',
+        status: 'completed',
+      },
     }
   }
 }

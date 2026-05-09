@@ -101,6 +101,21 @@ describe('@holo-js/notifications typing', () => {
     // @ts-expect-error Wrong route shape for the custom channel must fail.
     notifyUsing().channel('slack', 'broken')
 
+    defineNotification({
+      type: 'missing-builder',
+      // @ts-expect-error via() cannot list channels without a matching builder.
+      via() {
+        return ['database']
+      },
+      build: {
+        email() {
+          return {
+            subject: 'Hello',
+          }
+        },
+      },
+    })
+
     void pending
     void routed
     void channelName

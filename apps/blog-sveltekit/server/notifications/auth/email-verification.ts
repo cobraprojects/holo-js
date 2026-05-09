@@ -13,17 +13,17 @@ export default defineNotification({
     return ['email']
   },
   build: {
-    email(input: EmailVerificationNotification) {
+    email(data: EmailVerificationNotification) {
       return {
-        subject: 'Verify your email address NOW',
-        greeting: input.name ? `Hello ${input.name},` : undefined,
+        subject: 'Verify your email address',
+        greeting: data.name ? `Hello ${data.name},` : undefined,
         lines: [
           'Confirm your account to finish signing in.',
-          `This verification link expires at ${input.expiresAt.toLocaleString()}.`,
+          `This verification link expires at ${data.expiresAt.toUTCString()}.`,
         ],
         action: {
           label: 'Verify email address',
-          url: input.url,
+          url: data.url,
         },
       }
     },

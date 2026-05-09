@@ -7,73 +7,97 @@ Each notification consists of a type identifier and channel-specific builders th
 ```ts
 import { defineNotification } from '@holo-js/notifications'
 
+interface InvoicePaidNotification {
+  readonly id: string
+  readonly type: string
+  readonly email: string
+  readonly name?: string
+  readonly invoiceId: string
+  readonly invoiceNumber: string
+  readonly paidAt: string
+}
+
 const invoicePaid = defineNotification({
   type: 'invoice-paid',
   via() {
     return ['email', 'database', 'broadcast']
   },
   build: {
-    email() {
+    email(data: InvoicePaidNotification) {
       return {
-        subject: 'Invoice Paid',
-        lines: ['Your invoice has been successfully paid.']
+        subject: `Invoice #${data.invoiceNumber} paid`,
+        greeting: data.name ? `Hello ${data.name},` : undefined,
+        lines: ['Your invoice has been successfully paid.'],
       }
     },
-    database() {
+    database(data: InvoicePaidNotification) {
       return {
-        status: 'paid',
-        paidAt: new Date().toISOString()
+        data: {
+          invoiceId: data.invoiceId,
+          invoiceNumber: data.invoiceNumber,
+          paidAt: data.paidAt,
+        },
       }
     },
-    broadcast() {
+    broadcast(data: InvoicePaidNotification) {
       return {
         event: 'invoice.paid',
         data: {
-          status: 'paid'
-        }
+          invoiceId: data.invoiceId,
+          invoiceNumber: data.invoiceNumber,
+        },
       }
-    }
-  }
+    },
+  },
 })
 ```
 
 ## Passing Data To A Notification
 
-If the message needs variables, create the notification from a function and pass the variables into that function.
-The recipient passed to `notify(...)` is available as the first argument in `via(...)` and in every channel builder.
+The value passed to `notify(...)` is the same value received by `via(...)` and every channel builder. Put the route
+fields and message variables the notification needs on that object.
 
 ```ts
 import { defineNotification, notify } from '@holo-js/notifications'
 
-const invoicePaid = (invoice: {
+interface InvoicePaidNotification {
   readonly id: string
-  readonly number: string
-}) => defineNotification({
+  readonly type: string
+  readonly email: string
+  readonly name?: string
+  readonly invoiceId: string
+  readonly invoiceNumber: string
+}
+
+const invoicePaid = defineNotification({
   type: 'invoice-paid',
   via() {
     return ['email']
   },
   build: {
-    email(user: { readonly name?: string }) {
+    email(data: InvoicePaidNotification) {
       return {
-        subject: `Invoice #${invoice.number} paid`,
-        greeting: user.name ? `Hello ${user.name},` : undefined,
+        subject: `Invoice #${data.invoiceNumber} paid`,
+        greeting: data.name ? `Hello ${data.name},` : undefined,
         action: {
           label: 'View invoice',
-          url: `https://app.test/invoices/${invoice.id}`,
+          url: `https://app.test/invoices/${data.invoiceId}`,
         },
       }
     },
   },
 })
 
-await notify({
+const notificationInput = {
+  id: 'user-1',
+  type: 'users',
   name: 'Ava',
   email: 'ava@example.com',
-}, invoicePaid({
-  id: 'inv-100',
-  number: 'INV-100',
-}))
+  invoiceId: 'inv-100',
+  invoiceNumber: 'INV-100',
+}
+
+await notify(notificationInput, invoicePaid)
 ```
 
 ## Notification Types

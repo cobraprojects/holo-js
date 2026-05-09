@@ -4563,7 +4563,7 @@ export default defineBroadcastConfig({
     }, defineNotification({
       type: 'invoice-paid',
       via() {
-        return ['broadcast'] as const
+        return ['broadcast']
       },
       build: {
         broadcast() {
@@ -4650,7 +4650,7 @@ export default defineBroadcastConfig({
     }, defineNotification({
       type: 'invoice-paid',
       via() {
-        return ['broadcast'] as const
+        return ['broadcast']
       },
       build: {
         broadcast() {
@@ -4685,7 +4685,7 @@ export default defineBroadcastConfig({
     }, defineNotification({
       type: 'invoice-paid-database',
       via() {
-        return ['database'] as const
+        return ['database']
       },
       build: {
         database() {
@@ -5600,12 +5600,12 @@ export default defineNotification({
     return ['email']
   },
   build: {
-    email(input: { url: string }) {
+    email(data: { url: string }) {
       return {
         subject: 'Custom verification',
         action: {
           label: 'Custom verify',
-          url: input.url,
+          url: data.url,
         },
       }
     },
@@ -5621,12 +5621,12 @@ export default defineNotification({
     return ['email']
   },
   build: {
-    email(input: { url: string }) {
+    email(data: { url: string }) {
       return {
         subject: 'Custom reset',
         action: {
           label: 'Custom reset',
-          url: input.url,
+          url: data.url,
         },
       }
     },
@@ -5699,7 +5699,14 @@ export default defineNotification({
     const root = await createProject()
     await mkdir(join(root, 'server/notifications/auth'), { recursive: true })
     await writeFile(join(root, 'server/notifications/auth/email-verification.ts'), `
-export default null
+export default {
+  via() {
+    return ['email']
+  },
+  build: {
+    email: null,
+  },
+}
 `)
 
     const hook = holoRuntimeInternals.createAuthNotificationsDeliveryHook({

@@ -1630,6 +1630,7 @@ export async function runCli(argv: readonly string[], io: IoStreams): Promise<nu
       || requestedCommandName === 'config:clear'
       || requestedCommandName === 'new'
       || requestedCommandName === 'install'
+      || requestedCommandName === 'auth:notifications:publish'
       || requestedCommandName === 'prepare'
       || requestedCommandName === 'dev'
       || requestedCommandName === 'build'

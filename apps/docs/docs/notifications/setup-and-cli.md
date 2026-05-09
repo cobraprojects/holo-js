@@ -77,7 +77,7 @@ When auth and notifications are scaffolded together, Holo publishes editable aut
 `server/notifications/auth`. Existing auth applications can publish them later:
 
 ```bash
-holo auth:notifications:publish
+npx holo auth:notifications:publish
 ```
 
 Those files define message content only. Email delivery still needs `@holo-js/mail` or another configured notification

@@ -207,7 +207,7 @@ type NotificationDefinitionInput<
   via(
     notifiable: TNotifiable,
     context: NotificationContext,
-  ): readonly NotificationChannelName[]
+  ): readonly Extract<keyof TBuild, string>[]
 }
 
 export type InferNotificationNotifiable<TNotification>
@@ -382,9 +382,17 @@ function normalizeQueueOptions(
   })
 }
 
-function normalizeDelayConfig<TChannels extends string>(
-  value: NotificationDefinition<unknown, NotificationBuildFactories<unknown>>['delay'] | undefined,
-): NotificationDefinition<unknown, NotificationBuildFactories<unknown>>['delay'] | undefined {
+function normalizeDelayConfig<TNotifiable, TChannels extends string>(
+  value:
+    | NotificationDelayValue
+    | Partial<Record<TChannels, NotificationDelayValue>>
+    | NotificationDelayResolver<TNotifiable, string>
+    | undefined,
+):
+  | NotificationDelayValue
+  | Partial<Record<TChannels, NotificationDelayValue>>
+  | NotificationDelayResolver<TNotifiable, string>
+  | undefined {
   if (typeof value === 'undefined' || typeof value === 'function') {
     return value
   }
@@ -433,15 +441,15 @@ export function normalizeNotificationDefinition<
       ? definition.queue
       : normalizeQueueOptions(definition.queue)
 
-  const normalized = {
+  const normalized: NotificationDefinition<TNotifiable, TBuild> = {
     ...definition,
     ...(typeof definition.type === 'undefined'
       ? {}
       : { type: normalizeOptionalString(definition.type, 'Notification type') }),
     build,
     queue,
-    delay: normalizeDelayConfig(definition.delay),
-  } as NotificationDefinition<TNotifiable, TBuild>
+    delay: normalizeDelayConfig<TNotifiable, Extract<keyof TBuild, string>>(definition.delay),
+  }
 
   Object.defineProperty(normalized, HOLO_NOTIFICATION_DEFINITION_MARKER, {
     value: true,

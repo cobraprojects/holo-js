@@ -22,20 +22,24 @@ You can customize how notifications are converted to mails by defining a custom 
 ```ts
 import { defineNotification } from '@holo-js/notifications'
 
+interface InvoicePaidNotification {
+  readonly invoiceNumber: string
+}
+
 const invoicePaid = defineNotification({
   type: 'invoice-paid',
   via() {
     return ['email']
   },
   build: {
-    email() {
+    email(data: InvoicePaidNotification) {
       return {
-        subject: 'Invoice Paid',
-        markdown: `# Invoice Paid\n\nYour invoice has been successfully paid.`,
+        subject: `Invoice #${data.invoiceNumber} paid`,
+        markdown: `# Invoice Paid\n\nInvoice #${data.invoiceNumber} has been successfully paid.`,
         // You can also specify mail-specific options here
         // like attachments, cc/bcc, etc.
       }
-    }
-  }
+    },
+  },
 })
 ```

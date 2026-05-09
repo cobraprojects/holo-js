@@ -268,11 +268,11 @@ server/notifications/auth/password-reset.ts
 Existing applications can publish those files later:
 
 ```bash
-holo auth:notifications:publish
+npx holo auth:notifications:publish
 ```
 
 The published verification notification is a normal `defineNotification(...)` file. Its email builder receives a small
-app-facing input with `email`, optional `name`, generated `url`, and `expiresAt`. Edit the file to change the subject,
+app-facing data with `email`, optional `name`, generated `url`, and `expiresAt`. Edit the file to change the subject,
 body, action text, queue settings, or delay behavior.
 
 ::: warning Delivery package required

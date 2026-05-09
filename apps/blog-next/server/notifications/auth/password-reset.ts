@@ -12,16 +12,16 @@ export default defineNotification({
     return ['email']
   },
   build: {
-    email(input: PasswordResetNotification) {
+    email(data: PasswordResetNotification) {
       return {
         subject: 'Reset your password',
         lines: [
           'Click the link below to choose a new password.',
-          `This reset link expires at ${input.expiresAt.toUTCString()}.`,
+          `This reset link expires at ${data.expiresAt.toUTCString()}.`,
         ],
         action: {
           label: 'Reset password',
-          url: input.url,
+          url: data.url,
         },
       }
     },

@@ -17,59 +17,35 @@ Holo-JS provides helper functions for working with stored notifications:
 
 ```ts
 import { 
+  deleteNotifications,
   listNotifications, 
-  listUnreadNotifications, 
-  markAsRead, 
-  markAsUnread,
-  deleteNotifications 
-} from '@holo-js/notifications/database'
+  markNotificationsAsRead,
+  markNotificationsAsUnread,
+  unreadNotifications,
+} from '@holo-js/notifications'
 
 // Get all notifications for a user
-const notifications = await listNotifications({ userId: '123' })
+const notifications = await listNotifications({ id: 'user-1', type: 'users' })
 
 // Get only unread notifications
-const unread = await listUnreadNotifications({ userId: '123' })
+const unread = await unreadNotifications({ id: 'user-1', type: 'users' })
 
 // Mark notifications as read
-await markAsRead(['notif_1', 'notif_2', 'notif_3'])
+await markNotificationsAsRead(['notif_1', 'notif_2', 'notif_3'])
 
 // Mark notifications as unread
-await markAsUnread(['notif_4', 'notif_5'])
+await markNotificationsAsUnread(['notif_4', 'notif_5'])
 
 // Delete notifications
 await deleteNotifications(['notif_6', 'notif_7'])
-```
-
-## Querying Notifications
-
-You can filter notifications when listing them:
-
-```ts
-// Get notifications by type
-const invoices = await listNotifications({ 
-  userId: '123',
-  type: 'invoice-paid'
-})
-
-// Get notifications created after a specific date
-const recent = await listNotifications({ 
-  userId: '123',
-  createdAfter: new Date(Date.now() - 86400000) // Last 24 hours
-})
 ```
 
 ## Marking as Read/Unread
 
 ```ts
 // Mark specific notifications as read
-await markAsRead(['notif_1', 'notif_2', 'notif_3'])
-
-// Mark all notifications as read for a user
-await markAsReadForUser('123')
+await markNotificationsAsRead(['notif_1', 'notif_2', 'notif_3'])
 
 // Mark specific notifications as unread
-await markAsUnread(['notif_4', 'notif_5'])
-
-// Mark all notifications as unread for a user
-await markAsUnreadForUser('123')
+await markNotificationsAsUnread(['notif_4', 'notif_5'])
 ```

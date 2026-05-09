@@ -11,33 +11,46 @@ Notifications are defined using the `defineNotification` function. Each notifica
 ```ts
 import { defineNotification } from '@holo-js/notifications'
 
+interface InvoicePaidNotification {
+  readonly id: string
+  readonly type: string
+  readonly email: string
+  readonly invoiceId: string
+  readonly invoiceNumber: string
+  readonly paidAt: string
+}
+
 const invoicePaid = defineNotification({
   type: 'invoice-paid',
   via() {
-    return ['email', 'database', 'broadcast'] as const
+    return ['email', 'database', 'broadcast']
   },
   build: {
-    email() {
+    email(data: InvoicePaidNotification) {
       return {
-        subject: 'Invoice Paid',
-        lines: ['Your invoice has been successfully paid.']
+        subject: `Invoice #${data.invoiceNumber} paid`,
+        lines: ['Your invoice has been successfully paid.'],
       }
     },
-    database() {
+    database(data: InvoicePaidNotification) {
       return {
-        status: 'paid',
-        paidAt: new Date().toISOString()
+        data: {
+          invoiceId: data.invoiceId,
+          invoiceNumber: data.invoiceNumber,
+          paidAt: data.paidAt,
+        },
       }
     },
-    broadcast() {
+    broadcast(data: InvoicePaidNotification) {
       return {
         event: 'invoice.paid',
         data: {
-          status: 'paid'
-        }
+          invoiceId: data.invoiceId,
+          invoiceNumber: data.invoiceNumber,
+        },
       }
-    }
-  }
+    },
+  },
 })
 ```
 
@@ -54,7 +67,8 @@ The `via()` method returns an array of channel names that the notification shoul
 
 ### Building Channel-Specific Data
 
-For each channel specified in `via()`, you must provide a corresponding builder function in the `build` object. These functions return the specific data that should be sent through each channel.
+For each channel specified in `via()`, you must provide a corresponding builder function in the `build` object. The
+builder receives the same data object passed to `notify(...)` and returns the data sent through that channel.
 
 ## Sending Notifications
 
@@ -66,7 +80,14 @@ Notifications are sent using the `notify` function, which returns a fluent API f
 import { notify } from '@holo-js/notifications'
 import { invoicePaid } from './notifications'
 
-await notify(user, invoicePaid)
+await notify({
+  id: 'user-1',
+  type: 'users',
+  email: 'ava@example.com',
+  invoiceId: 'inv-100',
+  invoiceNumber: 'INV-100',
+  paidAt: new Date().toISOString(),
+}, invoicePaid)
 ```
 
 ### Fluent Configuration Options
@@ -130,8 +151,8 @@ await notifyUsing()
     email: 'admin@example.com'
   })
   .channel('database', {
-    // For database channel, you might want to store it for a specific user
-    userId: '123'
+    id: 'user-1',
+    type: 'users',
   })
   .notify(invoicePaid)
 ```
@@ -151,9 +172,10 @@ build: {
         'Thanks for joining our platform!',
         'We\'re excited to have you on board.'
       ],
-      // Optional: Add action buttons
-      actionText: 'Get Started',
-      actionUrl: 'https://example.com/get-started'
+      action: {
+        label: 'Get Started',
+        url: 'https://example.com/get-started',
+      },
     }
   }
 }
@@ -161,23 +183,25 @@ build: {
 
 Available email properties:
 - `subject` (required) - The email subject line
-- `lines` (required) - Array of text lines for the email body
-- `actionText` (optional) - Text for a call-to-action button
-- `actionUrl` (optional) - URL for the call-to-action button
-- `introLines` (optional) - Introductory lines before the main content
-- `outroLines` (optional) - Concluding lines after the main content
+- `lines` (optional) - Array of text lines for the email body
+- `greeting` (optional) - Greeting text shown before the lines
+- `action` (optional) - Button label and URL
+- `html` (optional) - HTML body override
+- `text` (optional) - text body override
 
 ### Database Channel
 
-For the database channel, your builder function should return an object that will be serialized and stored in the notifications table:
+For the database channel, return a `data` object that will be serialized into the notifications table:
 
 ```ts
 build: {
   database() {
     return {
-      amount: 100.00,
-      transactionId: 'txn_123abc',
-      status: 'completed'
+      data: {
+        amount: 100.00,
+        transactionId: 'txn_123abc',
+        status: 'completed',
+      },
     }
   }
 }
@@ -235,7 +259,7 @@ Once registered, you can use your custom channel just like built-in channels:
 const welcomeNotification = defineNotification({
   type: 'welcome',
   via() {
-    return ['email', 'slack'] as const
+    return ['email', 'slack']
   },
   build: {
     email() {
@@ -293,24 +317,24 @@ Holo-JS provides helper functions for working with stored notifications:
 
 ```ts
 import { 
+  deleteNotifications,
   listNotifications, 
-  listUnreadNotifications, 
-  markAsRead, 
-  markAsUnread,
-  deleteNotifications 
-} from '@holo-js/notifications/database'
+  markNotificationsAsRead,
+  markNotificationsAsUnread,
+  unreadNotifications,
+} from '@holo-js/notifications'
 
 // Get all notifications for a user
-const notifications = await listNotifications({ userId: '123' })
+const notifications = await listNotifications({ id: 'user-1', type: 'users' })
 
 // Get only unread notifications
-const unread = await listUnreadNotifications({ userId: '123' })
+const unread = await unreadNotifications({ id: 'user-1', type: 'users' })
 
 // Mark notifications as read
-await markAsRead(['notif_1', 'notif_2', 'notif_3'])
+await markNotificationsAsRead(['notif_1', 'notif_2', 'notif_3'])
 
 // Mark notifications as unread
-await markAsUnread(['notif_4', 'notif_5'])
+await markNotificationsAsUnread(['notif_4', 'notif_5'])
 
 // Delete notifications
 await deleteNotifications(['notif_6', 'notif_7'])

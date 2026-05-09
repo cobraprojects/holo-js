@@ -10,7 +10,7 @@ describe('@holo-js/notifications contracts', () => {
     const definition = defineNotification({
       type: ' invoice.paid ',
       via() {
-        return ['email', 'database'] as const
+        return ['email', 'database']
       },
       build: {
         email() {
@@ -59,7 +59,7 @@ describe('@holo-js/notifications contracts', () => {
         return ['email']
       },
       build: {},
-    })).toThrow('must define at least one channel payload builder')
+    } as never)).toThrow('must define at least one channel payload builder')
 
     expect(() => defineNotification({
       via() {

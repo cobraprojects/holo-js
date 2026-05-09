@@ -49,7 +49,7 @@ const invoicePaidDefinition: NotificationDefinition<
 > = {
   type: 'invoice-paid',
   via() {
-    return ['email', 'database', 'broadcast'] as const
+    return ['email', 'database', 'broadcast']
   },
   build: {
     email(user: { email: string }) {
@@ -380,7 +380,7 @@ describe('@holo-js/notifications runtime', () => {
       .channel('email', { email: 'ava@example.com' })
       .notify({
         via() {
-          return ['email', 'database'] as const
+          return ['email', 'database']
         },
         build: {
           email() {
@@ -476,9 +476,9 @@ describe('@holo-js/notifications runtime', () => {
 
     const missingBuilder = await notify({
       email: 'ava@example.com',
-    }, {
+    } as never, {
       via() {
-        return ['email', 'database'] as const
+        return ['email', 'database']
       },
       build: {
         email() {
@@ -487,7 +487,7 @@ describe('@holo-js/notifications runtime', () => {
           }
         },
       },
-    })
+    } as never)
 
     expect(missingBuilder.channels).toEqual([
       {
@@ -510,7 +510,7 @@ describe('@holo-js/notifications runtime', () => {
       email: 'ava@example.com',
     } as never, {
       via() {
-        return ['sms'] as const
+        return ['sms']
       },
       build: {
         sms() {
@@ -560,7 +560,7 @@ describe('@holo-js/notifications runtime', () => {
     > = defineNotification({
       type: 'invoice-paid',
       via() {
-        return ['email', 'database', 'broadcast'] as const
+        return ['email', 'database', 'broadcast']
       },
       queue(_notifiable: InvoicePaidNotifiable, channel: string) {
         if (channel === 'broadcast') {
@@ -828,7 +828,7 @@ describe('@holo-js/notifications runtime', () => {
       .channel('slack', { webhook: 'https://hooks.slack.test' } as never)
       .notify({
         via() {
-          return ['slack'] as const
+          return ['slack']
         },
         build: {
           slack() {
@@ -898,7 +898,7 @@ describe('@holo-js/notifications runtime', () => {
       },
     } as never, {
       via() {
-        return ['slack'] as const
+        return ['slack']
       },
       build: {
         slack() {
@@ -954,7 +954,7 @@ describe('@holo-js/notifications runtime', () => {
       .channel('slack', { webhook: 'http://hooks.slack.test' } as never)
       .notify({
         via() {
-          return ['slack'] as const
+          return ['slack']
         },
         build: {
           slack() {
@@ -978,7 +978,7 @@ describe('@holo-js/notifications runtime', () => {
       .channel('slack', { webhook: 'https://hooks.slack.test' } as never)
       .notify({
         via() {
-          return ['slack'] as const
+          return ['slack']
         },
         build: {
           slack() {
@@ -1024,7 +1024,7 @@ describe('@holo-js/notifications runtime', () => {
       },
     } as never, {
       via() {
-        return ['email', 'slack'] as const
+        return ['email', 'slack']
       },
       build: {
         email() {

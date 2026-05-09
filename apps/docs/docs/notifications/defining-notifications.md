@@ -16,57 +16,58 @@ import { defineNotification } from '@holo-js/notifications'
 
 interface InvoiceRecipient {
   readonly id: string
+  readonly type: string
   readonly name?: string
   readonly email: string
+  readonly broadcastChannels?: readonly string[]
+  readonly invoiceId: string
+  readonly invoiceNumber: string
+  readonly invoiceTotal: number
 }
 
-export const invoicePaid = (invoice: {
-  readonly id: string
-  readonly number: string
-  readonly total: number
-}) => defineNotification({
+export const invoicePaid = defineNotification({
   type: 'invoice-paid',
 
-  via(user: InvoiceRecipient) {
+  via() {
     return ['email', 'database', 'broadcast']
   },
 
   build: {
-    email(user: InvoiceRecipient) {
+    email(data: InvoiceRecipient) {
       return {
-        subject: `Invoice #${invoice.number} paid`,
-        greeting: user.name ? `Hello ${user.name},` : undefined,
+        subject: `Invoice #${data.invoiceNumber} paid`,
+        greeting: data.name ? `Hello ${data.name},` : undefined,
         lines: [
-          `Invoice #${invoice.number} has been paid.`,
-          `Total: ${invoice.total}.`,
+          `Invoice #${data.invoiceNumber} has been paid.`,
+          `Total: ${data.invoiceTotal}.`,
         ],
         action: {
           label: 'View invoice',
-          url: `https://app.test/invoices/${invoice.id}`,
+          url: `https://app.test/invoices/${data.invoiceId}`,
         },
       }
     },
 
-    database(user: InvoiceRecipient) {
+    database(data: InvoiceRecipient) {
       return {
         data: {
-          userId: user.id,
-          invoiceId: invoice.id,
-          invoiceNumber: invoice.number,
-          total: invoice.total,
-          message: `Invoice #${invoice.number} has been paid.`,
+          userId: data.id,
+          invoiceId: data.invoiceId,
+          invoiceNumber: data.invoiceNumber,
+          total: data.invoiceTotal,
+          message: `Invoice #${data.invoiceNumber} has been paid.`,
         },
       }
     },
 
-    broadcast(user: InvoiceRecipient) {
+    broadcast(data: InvoiceRecipient) {
       return {
         event: 'notifications.invoice-paid',
         data: {
-          invoiceId: invoice.id,
-          invoiceNumber: invoice.number,
-          total: invoice.total,
-          userId: user.id,
+          invoiceId: data.invoiceId,
+          invoiceNumber: data.invoiceNumber,
+          total: data.invoiceTotal,
+          userId: data.id,
         },
       }
     },
@@ -76,54 +77,49 @@ export const invoicePaid = (invoice: {
 
 ## Passing Variables
 
-Notifications usually need two kinds of data:
-
-- the event data, such as an invoice, order, token, or URL
-- the recipient data passed to `notify(...)`
-
-Use a small factory function when the notification needs event data. The factory captures those variables, and the
-notifiable passed to `notify(...)` becomes the first argument for `via(...)` and each channel builder.
+The value passed to `notify(...)` is the same value passed to `via(...)` and to each channel builder. Include the
+channel route fields and the message variables on that data object.
 
 ```ts
 import { defineNotification, notify } from '@holo-js/notifications'
 
 interface InvoiceRecipient {
   readonly id: string
+  readonly type: string
   readonly name?: string
   readonly email?: string
+  readonly invoiceId: string
+  readonly invoiceNumber: string
+  readonly invoiceTotal: number
 }
 
-const invoicePaid = (invoice: {
-  readonly id: string
-  readonly number: string
-  readonly total: number
-}) => defineNotification({
+const invoicePaid = defineNotification({
   type: 'invoice-paid',
-  via(user: InvoiceRecipient) {
-    return user.email ? ['email', 'database'] : ['database']
+  via(data: InvoiceRecipient) {
+    return data.email ? ['email', 'database'] : ['database']
   },
   build: {
-    email(user: InvoiceRecipient) {
+    email(data: InvoiceRecipient) {
       return {
-        subject: `Invoice #${invoice.number} paid`,
-        greeting: user.name ? `Hello ${user.name},` : undefined,
+        subject: `Invoice #${data.invoiceNumber} paid`,
+        greeting: data.name ? `Hello ${data.name},` : undefined,
         lines: [
-          `Invoice #${invoice.number} has been paid.`,
-          `Total: ${invoice.total}.`,
+          `Invoice #${data.invoiceNumber} has been paid.`,
+          `Total: ${data.invoiceTotal}.`,
         ],
         action: {
           label: 'View invoice',
-          url: `https://app.test/invoices/${invoice.id}`,
+          url: `https://app.test/invoices/${data.invoiceId}`,
         },
       }
     },
-    database(user: InvoiceRecipient) {
+    database(data: InvoiceRecipient) {
       return {
         data: {
-          userId: user.id,
-          invoiceId: invoice.id,
-          invoiceNumber: invoice.number,
-          total: invoice.total,
+          userId: data.id,
+          invoiceId: data.invoiceId,
+          invoiceNumber: data.invoiceNumber,
+          total: data.invoiceTotal,
         },
       }
     },
@@ -132,17 +128,17 @@ const invoicePaid = (invoice: {
 
 await notify({
   id: 'user-1',
+  type: 'users',
   name: 'Ava',
   email: 'ava@example.com',
-}, invoicePaid({
-  id: 'inv-100',
-  number: 'INV-100',
-  total: 250,
-}))
+  invoiceId: 'inv-100',
+  invoiceNumber: 'INV-100',
+  invoiceTotal: 250,
+}, invoicePaid)
 ```
 
-In this example, `invoice` is available because the notification factory closes over it. The `user` argument is the
-notifiable object passed to `notify(...)`.
+In this example, the same object supplies the email route, the database notifiable route, and the invoice variables
+used by the message builders.
 
 ## Built-in channel payloads
 

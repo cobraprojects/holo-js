@@ -116,11 +116,11 @@ server/notifications/auth/password-reset.ts
 Existing applications can publish those files later:
 
 ```bash
-holo auth:notifications:publish
+npx holo auth:notifications:publish
 ```
 
 The published password reset notification is a normal `defineNotification(...)` file. Its email builder receives a
-small app-facing input with `email`, generated `url`, and `expiresAt`.
+small app-facing data with `email`, generated `url`, and `expiresAt`.
 
 ::: warning Delivery package required
 Publishing notification files only gives the application editable message definitions. Email delivery still needs

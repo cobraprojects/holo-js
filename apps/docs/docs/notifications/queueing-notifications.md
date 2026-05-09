@@ -60,37 +60,45 @@ await notify(user, invoicePaid)
 You can set queue defaults per channel in your notification definition:
 
 ```ts
+interface InvoicePaidNotification {
+  readonly invoiceId: string
+  readonly invoiceNumber: string
+}
+
 const invoicePaid = defineNotification({
   type: 'invoice-paid',
   via() {
     return ['email', 'database', 'broadcast']
   },
   queue: {
-    email: 'notifications-high-priority', // Use different queue for email
-    database: 'notifications'             // Use default queue for database
+    queue: 'notifications',
+    afterCommit: true,
   },
   build: {
-    email() {
+    email(data: InvoicePaidNotification) {
       return {
-        subject: 'Invoice Paid',
-        lines: ['Your invoice has been successfully paid.']
+        subject: `Invoice #${data.invoiceNumber} paid`,
+        lines: ['Your invoice has been successfully paid.'],
       }
     },
-    database() {
+    database(data: InvoicePaidNotification) {
       return {
-        status: 'paid',
-        paidAt: new Date().toISOString()
+        data: {
+          invoiceId: data.invoiceId,
+          invoiceNumber: data.invoiceNumber,
+        },
       }
     },
-    broadcast() {
+    broadcast(data: InvoicePaidNotification) {
       return {
         event: 'invoice.paid',
         data: {
-          status: 'paid'
-        }
+          invoiceId: data.invoiceId,
+          invoiceNumber: data.invoiceNumber,
+        },
       }
-    }
-  }
+    },
+  },
 })
 ```
 

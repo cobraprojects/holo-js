@@ -26,49 +26,53 @@ import { defineNotification, notify } from '@holo-js/notifications'
 
 interface InvoiceRecipient {
   readonly id: string
+  readonly type: string
   readonly name?: string
   readonly email: string
+  readonly invoiceId: string
+  readonly invoiceNumber: string
+  readonly invoiceTotal: number
 }
 
-const invoicePaid = (invoice: { id: string, number: string, total: number }) => defineNotification({
+const invoicePaid = defineNotification({
   type: 'invoice-paid',
-  via(user: InvoiceRecipient) {
+  via() {
     return ['email', 'database', 'broadcast']
   },
   build: {
-    email(user: InvoiceRecipient) {
+    email(data: InvoiceRecipient) {
       return {
-        subject: `Invoice #${invoice.number} paid`,
-        greeting: user.name ? `Hello ${user.name},` : undefined,
+        subject: `Invoice #${data.invoiceNumber} paid`,
+        greeting: data.name ? `Hello ${data.name},` : undefined,
         lines: [
-          `Invoice #${invoice.number} has been paid.`,
-          `Total: ${invoice.total}.`,
+          `Invoice #${data.invoiceNumber} has been paid.`,
+          `Total: ${data.invoiceTotal}.`,
         ],
         action: {
           label: 'View invoice',
-          url: `https://app.test/invoices/${invoice.id}`,
+          url: `https://app.test/invoices/${data.invoiceId}`,
         },
       }
     },
-    database(user: InvoiceRecipient) {
+    database(data: InvoiceRecipient) {
       return {
         data: {
-          userId: user.id,
-          invoiceId: invoice.id,
-          invoiceNumber: invoice.number,
-          total: invoice.total,
-          message: `Invoice #${invoice.number} has been paid.`,
+          userId: data.id,
+          invoiceId: data.invoiceId,
+          invoiceNumber: data.invoiceNumber,
+          total: data.invoiceTotal,
+          message: `Invoice #${data.invoiceNumber} has been paid.`,
         },
       }
     },
-    broadcast(user: InvoiceRecipient) {
+    broadcast(data: InvoiceRecipient) {
       return {
         event: 'notifications.invoice-paid',
         data: {
-          invoiceId: invoice.id,
-          invoiceNumber: invoice.number,
-          total: invoice.total,
-          userId: user.id,
+          invoiceId: data.invoiceId,
+          invoiceNumber: data.invoiceNumber,
+          total: data.invoiceTotal,
+          userId: data.id,
         },
       }
     },
@@ -77,17 +81,17 @@ const invoicePaid = (invoice: { id: string, number: string, total: number }) => 
 
 await notify({
   id: 'user-1',
+  type: 'users',
   name: 'Ava',
   email: 'ava@example.com',
-}, invoicePaid({
-  id: 'inv-100',
-  number: 'INV-100',
-  total: 250,
-}))
+  invoiceId: 'inv-100',
+  invoiceNumber: 'INV-100',
+  invoiceTotal: 250,
+}, invoicePaid)
 ```
 
-The `invoice` values are captured by the notification factory. The object passed to `notify(...)` is the notifiable,
-and it is passed into `via(...)` and every channel builder.
+The object passed to `notify(...)` is passed into `via(...)` and every channel builder. Include the route fields and
+message variables the notification needs on that object.
 
 ## Package boundaries
 

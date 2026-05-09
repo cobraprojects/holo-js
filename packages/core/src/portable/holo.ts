@@ -1861,13 +1861,32 @@ function resolveAuthNotification(
   filePath: string,
 ): unknown {
   const notification = module[exportName] ?? module.notification ?? module.default
-  if (!notification || typeof notification !== 'object') {
+  if (!isAuthNotificationDefinition(notification)) {
     throw new Error(
       `[@holo-js/core] Auth notification file "${filePath}" must export a notification definition.`,
     )
   }
 
   return notification
+}
+
+function isAuthNotificationDefinition(notification: unknown): notification is {
+  readonly via: (...args: readonly unknown[]) => readonly string[]
+  readonly build: Readonly<Record<string, (...args: readonly unknown[]) => unknown>>
+} {
+  if (!notification || typeof notification !== 'object') {
+    return false
+  }
+
+  const candidate = notification as {
+    readonly via?: unknown
+    readonly build?: unknown
+  }
+  if (typeof candidate.via !== 'function' || !candidate.build || typeof candidate.build !== 'object') {
+    return false
+  }
+
+  return Object.values(candidate.build).some(factory => typeof factory === 'function')
 }
 
 async function loadProjectAuthNotification(
