@@ -55,9 +55,9 @@ await notify(user, invoicePaid)
   .delay(new Date(Date.now() + 3600000))
 ```
 
-### Per-Channel Queue Settings
+### Notification Queue Defaults
 
-You can set queue defaults per channel in your notification definition:
+You can set queue defaults for every queued channel in your notification definition:
 
 ```ts
 interface InvoicePaidNotification {
