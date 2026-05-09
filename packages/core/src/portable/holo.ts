@@ -299,6 +299,9 @@ export interface HoloAuthRuntimeBinding {
     resend(options?: { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string }): Promise<HoloAuthResult<unknown>>
     consume(plainTextToken: string): Promise<HoloAuthResult<unknown>>
   }
+  verifyEmail(token: string): Promise<HoloAuthResult<unknown>>
+  sendEmailVerification(email?: string, options?: { readonly guard?: string, readonly expiresAt?: Date }): Promise<HoloAuthResult<unknown>>
+  resendEmailVerification(email?: string, options?: { readonly guard?: string, readonly expiresAt?: Date }): Promise<HoloAuthResult<unknown>>
   requestPasswordReset(
     input: {
       readonly email: string

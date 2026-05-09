@@ -17,6 +17,10 @@ export const forgotPasswordForm = schema({
   email: field.string().required('Email is required.').email('Enter a valid email address.'),
 })
 
+export const resendEmailVerificationForm = schema({
+  email: field.string().required('Email is required.').email('Enter a valid email address.'),
+})
+
 export const resetPasswordForm = schema({
   token: field.string().required('Reset token is required.'),
   password: field.password().required('Password is required.').min(8, 'Password must be at least 8 characters.').confirmed(),

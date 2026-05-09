@@ -38,7 +38,7 @@ AUTH_EMAIL_VERIFICATION_ROUTE=/verify-email
 `APP_URL` is used when the framework builds the email link. Applications should not manually construct the
 verification URL in normal usage.
 
-The application still owns the verification page and the route that calls `verification.consume(...)`. The framework
+The application still owns the verification page and the route that calls `verifyEmail(token)`. The framework
 owns the redirect target and the generated email link.
 
 ## Registration Flow
@@ -110,29 +110,35 @@ That lets the app redirect the signed-in user to the verify page instead of reje
 
 ## Consuming Verification Tokens
 
-Verification pages consume the token from the emailed link:
+Verification pages verify the token from the emailed link:
 
 ```ts
-import { verification } from '@holo-js/auth'
+import { verifyEmail } from '@holo-js/auth'
 
-const { data: verifiedUser, error } = await verification.consume(token)
+const { data: verifiedUser, error } = await verifyEmail(token)
 ```
 
 The verification flow marks the local user as verified and invalidates the token.
 
 ## Resending Verification Emails
 
-Applications can resend another verification email with plain object input:
+Applications can resend another verification email with a direct email argument:
 
 ```ts
-import { verification } from '@holo-js/auth'
+import { resendEmailVerification } from '@holo-js/auth'
 
-const { error } = await verification.resend({
-  email: body.email,
-})
+const { error } = await resendEmailVerification(body.email)
 ```
 
 This is the intended verify-page flow when the user lands on `/verify-email?email=...` after login.
+
+When you are sending a verification email outside a resend route, use the same API shape with the send-oriented name:
+
+```ts
+import { sendEmailVerification } from '@holo-js/auth'
+
+const { error } = await sendEmailVerification(body.email)
+```
 
 Expected resend failures come back in `error`, for example:
 

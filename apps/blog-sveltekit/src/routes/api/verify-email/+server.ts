@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit'
-import { check, verification } from '@holo-js/auth'
+import { check, verifyEmail } from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
 
 import { verifyEmailForm } from '$lib/schemas/auth'
@@ -14,7 +14,7 @@ export async function POST({ request }: { request: Request }) {
   }
 
   const authenticationCheck = check()
-  const verificationResult = verification.consume(submission.data.token)
+  const verificationResult = verifyEmail(submission.data.token)
   const [wasAuthenticated, { error }] = await Promise.all([authenticationCheck, verificationResult])
   if (error) {
     const failure = submission.fail({

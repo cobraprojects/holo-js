@@ -24,12 +24,15 @@ import auth, {
   refreshUser,
   register,
   requestPasswordReset,
+  resendEmailVerification,
   resetPassword,
   resetAuthRuntime,
+  sendEmailVerification,
   stopImpersonating,
   tokens,
   user,
   verification,
+  verifyEmail,
   verifyPassword,
 } from '../src'
 import clientAuth, {
@@ -1644,17 +1647,17 @@ describe('@holo-js/auth package runtime', () => {
     expect(runtime.deliveries[0]?.tokenValue).toBe(token.plainTextToken)
 
     const invalidVerificationError = expectAuthFailureCode(
-      await verification.consume('bad-token'),
+      await verifyEmail('bad-token'),
       'email_verification_token_invalid',
     )
     expect(invalidVerificationError.message).toContain('Invalid email verification token')
 
     expectAuthFailureCode(
-      await verification.consume(`${token.id}.wrong-secret`),
+      await verifyEmail(`${token.id}.wrong-secret`),
       'email_verification_token_expired',
     )
 
-    const verified = unwrapAuthResult(await verification.consume(token.plainTextToken))
+    const verified = unwrapAuthResult(await verifyEmail(token.plainTextToken))
     expect(verified).toMatchObject({
       id: 1,
       email: 'ava@example.com',
@@ -1662,12 +1665,12 @@ describe('@holo-js/auth package runtime', () => {
     expect(runtime.usersProvider.users.get(1)?.email_verified_at).toBeInstanceOf(Date)
     expect(runtime.emailVerificationTokenStore.records.size).toBe(0)
 
-    expectAuthFailureCode(await verification.consume(token.plainTextToken), 'email_verification_token_expired')
+    expectAuthFailureCode(await verifyEmail(token.plainTextToken), 'email_verification_token_expired')
 
     const expired = await verification.create(created, {
       expiresAt: new Date('2026-04-07T00:00:00.000Z'),
     })
-    expectAuthFailureCode(await verification.consume(expired.plainTextToken), 'email_verification_token_expired')
+    expectAuthFailureCode(await verifyEmail(expired.plainTextToken), 'email_verification_token_expired')
   })
 
   it('resends verification tokens by email without requiring an active session', async () => {
@@ -1684,26 +1687,28 @@ describe('@holo-js/auth package runtime', () => {
 
     expect(runtime.deliveries).toHaveLength(1)
 
-    const resent = unwrapAuthResult(await verification.resend({
+    const sent = unwrapAuthResult(await getAuthRuntime().sendEmailVerification('ava@example.com'))
+    const resent = unwrapAuthResult(await getAuthRuntime().resendEmailVerification('ava@example.com'))
+    const topLevelSent = unwrapAuthResult(await sendEmailVerification('ava@example.com'))
+    const legacyResent = unwrapAuthResult(await verification.resend({
       email: 'ava@example.com',
     }))
+    expect(sent.plainTextToken).toContain('.')
     expect(resent.plainTextToken).toContain('.')
-    expect(runtime.deliveries).toHaveLength(2)
-    expect(runtime.deliveries[1]).toMatchObject({
+    expect(topLevelSent.plainTextToken).toContain('.')
+    expect(legacyResent.plainTextToken).toContain('.')
+    expect(runtime.deliveries).toHaveLength(5)
+    expect(runtime.deliveries[4]).toMatchObject({
       type: 'verification',
       email: 'ava@example.com',
-      tokenId: resent.id,
-      tokenValue: resent.plainTextToken,
+      tokenId: legacyResent.id,
+      tokenValue: legacyResent.plainTextToken,
     })
 
-    expectAuthFailureCode(await verification.resend({
-      email: 'missing@example.com',
-    }), 'email_verification_user_missing')
+    expectAuthFailureCode(await resendEmailVerification('missing@example.com'), 'email_verification_user_missing')
 
-    await verification.consume(resent.plainTextToken)
-    expectAuthFailureCode(await verification.resend({
-      email: 'ava@example.com',
-    }), 'email_already_verified')
+    await verifyEmail(legacyResent.plainTextToken)
+    expectAuthFailureCode(await resendEmailVerification('ava@example.com'), 'email_already_verified')
   })
 
   it('fails verification and password reset flows when a provider cannot persist user changes', async () => {

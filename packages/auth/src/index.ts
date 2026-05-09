@@ -1,4 +1,4 @@
-import { check, currentAccessToken, getAuthRuntime, hashPassword, id, impersonate, impersonateById, impersonation, login, loginUsing, loginUsingId, logout, needsPasswordRehash, refreshUser, register, requestPasswordReset, resetPassword, stopImpersonating, tokens, user, verification, verifyPassword } from './runtime'
+import { check, currentAccessToken, getAuthRuntime, hashPassword, id, impersonate, impersonateById, impersonation, login, loginUsing, loginUsingId, logout, needsPasswordRehash, refreshUser, register, requestPasswordReset, resendEmailVerification, resetPassword, sendEmailVerification, stopImpersonating, tokens, user, verification, verifyEmail, verifyPassword } from './runtime'
 
 export { AUTH_ERROR_CODES, AuthError, defineAuthConfig, isAuthError } from './contracts'
 export {
@@ -21,12 +21,15 @@ export {
   refreshUser,
   register,
   requestPasswordReset,
+  resendEmailVerification,
   resetAuthRuntime,
   resetPassword,
+  sendEmailVerification,
   stopImpersonating,
   tokens,
   user,
   verification,
+  verifyEmail,
   verifyPassword,
 } from './runtime'
 export type {
@@ -40,6 +43,7 @@ export type {
   AuthEmailVerificationConsumeErrorCode,
   AuthEmailVerificationFacade,
   AuthEmailVerificationResendErrorCode,
+  AuthEmailVerificationSendOptions,
   AuthEstablishedSession,
   AuthFacade,
   AuthFieldErrors,
@@ -104,10 +108,13 @@ const auth = Object.freeze({
   needsPasswordRehash,
   register,
   requestPasswordReset,
+  resendEmailVerification,
   resetPassword,
+  sendEmailVerification,
   stopImpersonating,
   tokens,
   verification,
+  verifyEmail,
   verifyPassword,
   guard(name: string) {
     return getAuthRuntime().guard(name)
