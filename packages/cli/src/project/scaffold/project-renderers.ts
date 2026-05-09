@@ -91,6 +91,78 @@ export function renderAuthUserModel(_generatedSchemaImportPath = '../../.holo-js
   ].join('\n')
 }
 
+export function renderAuthEmailVerificationNotification(): string {
+  return [
+    'import { defineNotification } from \'@holo-js/notifications\'',
+    '',
+    'interface EmailVerificationNotification {',
+    '  readonly email: string',
+    '  readonly name?: string',
+    '  readonly url: string',
+    '  readonly expiresAt: Date',
+    '}',
+    '',
+    'export default defineNotification({',
+    '  type: \'auth.email-verification\',',
+    '  via() {',
+    '    return [\'email\']',
+    '  },',
+    '  build: {',
+    '    email(data: EmailVerificationNotification) {',
+    '      return {',
+    '        subject: \'Verify your email address\',',
+    '        greeting: data.name ? `Hello ${data.name},` : undefined,',
+    '        lines: [',
+    '          \'Confirm your account to finish signing in.\',',
+    '          `This verification link expires at ${data.expiresAt.toUTCString()}.`,',
+    '        ],',
+    '        action: {',
+    '          label: \'Verify email address\',',
+    '          url: data.url,',
+    '        },',
+    '      }',
+    '    },',
+    '  },',
+    '})',
+    '',
+  ].join('\n')
+}
+
+export function renderAuthPasswordResetNotification(): string {
+  return [
+    'import { defineNotification } from \'@holo-js/notifications\'',
+    '',
+    'interface PasswordResetNotification {',
+    '  readonly email: string',
+    '  readonly url: string',
+    '  readonly expiresAt: Date',
+    '}',
+    '',
+    'export default defineNotification({',
+    '  type: \'auth.password-reset\',',
+    '  via() {',
+    '    return [\'email\']',
+    '  },',
+    '  build: {',
+    '    email(data: PasswordResetNotification) {',
+    '      return {',
+    '        subject: \'Reset your password\',',
+    '        lines: [',
+    '          \'Click the link below to choose a new password.\',',
+    '          `This reset link expires at ${data.expiresAt.toUTCString()}.`,',
+    '        ],',
+    '        action: {',
+    '          label: \'Reset password\',',
+    '          url: data.url,',
+    '        },',
+    '      }',
+    '    },',
+    '  },',
+    '})',
+    '',
+  ].join('\n')
+}
+
 export function renderAuthorizationPoliciesReadme(): string {
   return [
     '# Authorization Policies',

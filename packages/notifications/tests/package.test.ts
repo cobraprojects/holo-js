@@ -21,7 +21,7 @@ describe('@holo-js/notifications package surface', () => {
   it('exports the package helpers and config helper', () => {
     const definition = defineNotification({
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {

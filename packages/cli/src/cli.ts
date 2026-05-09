@@ -704,6 +704,39 @@ export function createInternalCommands(
       },
     },
     {
+      name: 'auth:notifications:publish',
+      description: 'Publish editable auth notification definitions into the application.',
+      usage: 'holo auth:notifications:publish',
+      source: 'internal',
+      async prepare() {
+        return { args: [], flags: {} }
+      },
+      async run() {
+        const { publishAuthNotificationsIntoProject } = await loadProjectScaffoldModule()
+        const result = await publishAuthNotificationsIntoProject(context.projectRoot)
+        const changed = result.createdFiles.length > 0
+
+        writeLine(context.stdout, changed
+          ? 'Published auth notification files.'
+          : 'Auth notification files are already published.')
+
+        for (const filePath of result.createdFiles) {
+          writeLine(context.stdout, `  - created ${filePath}`)
+        }
+
+        for (const filePath of result.skippedFiles) {
+          writeLine(context.stdout, `  - skipped existing ${filePath}`)
+        }
+
+        if (!result.hasMailDependency) {
+          writeLine(
+            context.stdout,
+            '  - note: install @holo-js/mail or configure a notification mailer before email delivery can send.',
+          )
+        }
+      },
+    },
+    {
       name: 'prepare',
       description: 'Discover Holo resources and refresh generated registries.',
       usage: 'holo prepare',
@@ -1597,6 +1630,7 @@ export async function runCli(argv: readonly string[], io: IoStreams): Promise<nu
       || requestedCommandName === 'config:clear'
       || requestedCommandName === 'new'
       || requestedCommandName === 'install'
+      || requestedCommandName === 'auth:notifications:publish'
       || requestedCommandName === 'prepare'
       || requestedCommandName === 'dev'
       || requestedCommandName === 'build'

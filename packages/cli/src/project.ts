@@ -1,6 +1,7 @@
 import { normalizeHoloProjectConfig, type NormalizedHoloProjectConfig } from '@holo-js/db'
 export type {
   AuthInstallResult,
+  AuthNotificationsPublishResult,
   BroadcastInstallResult,
   CacheInstallResult,
   CliModelReference,
@@ -80,6 +81,7 @@ import {
   installEventsIntoProject,
   installMailIntoProject,
   installNotificationsIntoProject,
+  publishAuthNotificationsIntoProject,
   installQueueIntoProject,
   installSecurityIntoProject,
   inferConnectionDriver,
@@ -177,6 +179,7 @@ export {
   installEventsIntoProject,
   installMailIntoProject,
   installNotificationsIntoProject,
+  publishAuthNotificationsIntoProject,
   installQueueIntoProject,
   installSecurityIntoProject,
   loadGeneratedProjectRegistry,
@@ -245,6 +248,7 @@ export const projectInternals = {
   installEventsIntoProject,
   installMailIntoProject,
   installNotificationsIntoProject,
+  publishAuthNotificationsIntoProject,
   installQueueIntoProject,
   installSecurityIntoProject,
   collectImportedBindingsBySource,

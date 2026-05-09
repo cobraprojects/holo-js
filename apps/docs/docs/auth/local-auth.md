@@ -167,7 +167,7 @@ and `dob` are saved as attributes, but they are not treated as auth identifiers 
 provider's `identifiers`.
 
 When `emailVerification.required` is `true`, successful registration also starts the verification flow automatically.
-Applications do not need to manually call `verification.create(...)` just to send the first verification email.
+Applications do not need to manually send the first verification email.
 
 If your application uses another identifier, pass that identifier instead:
 

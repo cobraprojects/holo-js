@@ -102,8 +102,30 @@ Password reset delivery works the same way as email verification:
 - core builds the reset URL automatically from `APP_URL` and the configured broker route
 - notifications or direct mail deliver the message when those integrations are installed
 
-If `@holo-js/auth` and `@holo-js/notifications` are both installed, core bridges the built-in auth delivery hook
-through notifications automatically. If notifications are absent but `@holo-js/mail` is installed, core falls
-back to direct mail delivery.
+If `@holo-js/auth` and `@holo-js/notifications` are both installed with mail support, core bridges auth delivery
+through notifications automatically. If notifications are absent but `@holo-js/mail` is installed, core falls back
+to direct mail delivery.
+
+When auth and notifications are scaffolded together, Holo creates editable notification files:
+
+```txt
+server/notifications/auth/email-verification.ts
+server/notifications/auth/password-reset.ts
+```
+
+Existing applications can publish those files later:
+
+```bash
+npx holo auth:notifications:publish
+```
+
+The published password reset notification is a normal `defineNotification(...)` file. Its email builder receives a
+small app-facing data with `email`, generated `url`, and `expiresAt`.
+
+::: warning Delivery package required
+Publishing notification files only gives the application editable message definitions. Email delivery still needs
+`@holo-js/mail` or another configured notification mailer. Without delivery, auth creates the reset token and logs that
+the email was skipped.
+:::
 
 Applications do not need to manually create `reset-password?token=...` URLs in normal usage.

@@ -42,6 +42,8 @@ import {
   createAuthMigrationFiles,
   createNotificationsMigrationFiles,
   normalizeScaffoldEnvSegments,
+  renderAuthEmailVerificationNotification,
+  renderAuthPasswordResetNotification,
   renderAuthUserModel,
   renderAuthorizationAbilitiesReadme,
   renderAuthorizationPoliciesReadme,
@@ -321,6 +323,19 @@ export async function scaffoldProject(
     for (const migrationFile of createAuthMigrationFiles()) {
       await writeFile(resolve(projectRoot, config.paths.migrations, migrationFile.path), migrationFile.contents, 'utf8')
     }
+  }
+  if (authEnabled && notificationsEnabled) {
+    await mkdir(resolve(projectRoot, 'server/notifications/auth'), { recursive: true })
+    await writeFile(
+      resolve(projectRoot, 'server/notifications/auth/email-verification.ts'),
+      renderAuthEmailVerificationNotification(),
+      'utf8',
+    )
+    await writeFile(
+      resolve(projectRoot, 'server/notifications/auth/password-reset.ts'),
+      renderAuthPasswordResetNotification(),
+      'utf8',
+    )
   }
   if (broadcastEnabled && authEnabled) {
     await syncBroadcastAuthSupportAfterAuthInstall(projectRoot)

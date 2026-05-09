@@ -384,8 +384,10 @@ export default {
       }),
     }), expect.objectContaining({
       channel: 'email',
-      route: 'ava@example.com',
-      anonymous: true,
+      route: {
+        email: 'ava@example.com',
+      },
+      anonymous: false,
     }))
   })
 
@@ -508,8 +510,10 @@ export default {
       }),
     }), expect.objectContaining({
       channel: 'email',
-      route: 'ava@example.com',
-      anonymous: true,
+      route: {
+        email: 'ava@example.com',
+      },
+      anonymous: false,
     }))
   })
 
