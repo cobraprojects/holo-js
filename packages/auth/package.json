@@ -81,13 +81,13 @@
     }
   },
   "devDependencies": {
-    "@types/react": "^19.0.0",
+    "@types/react": "catalog:",
     "nuxt": "catalog:",
-    "react": "^19.0.0",
+    "react": "catalog:",
     "svelte": "catalog:",
-    "@types/node": "^22.10.2",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

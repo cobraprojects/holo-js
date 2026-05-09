@@ -30,6 +30,27 @@ type RuntimeCacheState = {
   bindings?: CacheRuntimeFacade
 }
 
+const CACHE_DRIVER_DISPOSE_SYMBOL = Symbol.for('holo.cache.driver.dispose')
+
+type DisposableCacheDriver = CacheDriverContract & {
+  readonly [CACHE_DRIVER_DISPOSE_SYMBOL]?: () => void
+}
+
+function disposeDriver(driver: CacheDriverContract): void {
+  const disposable = driver as DisposableCacheDriver
+  disposable[CACHE_DRIVER_DISPOSE_SYMBOL]?.()
+}
+
+export function disposeCacheRuntimeBindings(bindings: CacheRuntimeFacade | undefined): void {
+  if (!bindings) {
+    return
+  }
+
+  for (const driver of bindings.drivers.values()) {
+    disposeDriver(driver)
+  }
+}
+
 export function isNormalizedCacheConfig(
   config: HoloCacheConfig | NormalizedHoloCacheConfig,
 ): config is NormalizedHoloCacheConfig {

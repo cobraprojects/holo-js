@@ -24,6 +24,11 @@ type RedisCacheDriverModule = {
 }
 
 type RedisDriverModuleLoader = () => Promise<RedisCacheDriverModule>
+const CACHE_DRIVER_DISPOSE_SYMBOL = Symbol.for('holo.cache.driver.dispose')
+
+type DisposableCacheDriver = CacheDriverContract & {
+  readonly [CACHE_DRIVER_DISPOSE_SYMBOL]?: () => void
+}
 
 function isNormalizedRedisConfig(
   config: HoloRedisConfig | NormalizedHoloRedisConfig,
@@ -139,6 +144,25 @@ class LazyRedisCacheDriver implements CacheDriverContract {
     callback: (driver: CacheDriverContract) => Promise<TValue> | TValue,
   ): Promise<TValue> {
     return callback(await this.resolveDriver())
+  }
+
+  [CACHE_DRIVER_DISPOSE_SYMBOL](): void {
+    const pending = this.pending
+    const driverInstance = this.driverInstance
+
+    this.driverInstance = undefined
+    this.pending = undefined
+
+    if (driverInstance) {
+      const disposable = driverInstance as DisposableCacheDriver
+      disposable[CACHE_DRIVER_DISPOSE_SYMBOL]?.()
+      return
+    }
+
+    pending?.then((driver) => {
+      const disposable = driver as DisposableCacheDriver
+      disposable[CACHE_DRIVER_DISPOSE_SYMBOL]?.()
+    }).catch(() => {})
   }
 
   private createLockProxy(name: string, seconds: number): CacheLockContract {

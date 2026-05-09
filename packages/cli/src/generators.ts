@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { basename, extname, resolve } from 'node:path'
 import { normalizeMigrationSlug } from '@holo-js/db'
 import {
   ensureGeneratedSchemaPlaceholder,
@@ -41,6 +41,7 @@ import {
   nextMigrationTemplate,
 } from './migrations'
 import { writeLine } from './io'
+import { collectFiles } from './project/discovery-helpers'
 import type { IoStreams, PreparedInput } from './cli-types'
 
 type MailTemplateType = 'markdown' | 'view'
@@ -53,6 +54,31 @@ export function hasRegisteredModelName(
   modelName: string,
 ): boolean {
   return Boolean(registry?.models.some(entry => entry.name === modelName))
+}
+
+function findRegisteredModelByTableName(
+  registry: Awaited<ReturnType<typeof loadGeneratedProjectRegistry>> | undefined,
+  tableName: string,
+) {
+  return registry?.models.find(entry => entry.tableName === tableName)
+}
+
+async function findGeneratedModelSourceByTableName(
+  projectRoot: string,
+  modelsPath: string,
+  tableName: string,
+): Promise<string | undefined> {
+  const files = await collectFiles(resolve(projectRoot, modelsPath))
+  const generatedTableReference = `defineModel(${JSON.stringify(tableName)}`
+
+  for (const filePath of files) {
+    const contents = await readFile(filePath, 'utf8')
+    if (contents.includes(generatedTableReference)) {
+      return basename(filePath, extname(filePath))
+    }
+  }
+
+  return undefined
 }
 
 export function hasRegisteredJobName(
@@ -180,6 +206,7 @@ export async function runMakeModel(
   input: PreparedInput,
 ): Promise<void> {
   const project = await ensureProjectConfig(projectRoot)
+  const generatedSchemaFilePath = await ensureGeneratedSchemaPlaceholder(projectRoot, project.config)
   const registry = await loadGeneratedProjectRegistry(projectRoot)
     ?? await prepareProjectDiscovery(projectRoot, project.config)
   /* v8 ignore next */
@@ -200,7 +227,6 @@ export async function runMakeModel(
   const seederFilePath = resolveArtifactPath(projectRoot, project.config.paths.seeders, seederInfo.directory, `${seederInfo.baseName}.ts`)
   const factoryInfo = resolveNameInfo(`${requestedName}Factory`, { suffix: 'Factory' })
   const factoryFilePath = resolveArtifactPath(projectRoot, project.config.paths.factories, factoryInfo.directory, `${factoryInfo.baseName}.ts`)
-  const generatedSchemaFilePath = await ensureGeneratedSchemaPlaceholder(projectRoot, project.config)
 
   if (await fileExists(modelFilePath) || hasRegisteredModelName(registry, nameInfo.baseName)) {
     throw new Error(`Model with the same name already exists: ${nameInfo.baseName}.`)
@@ -211,6 +237,20 @@ export async function runMakeModel(
     if (hasRegisteredMigrationSlug(registry, migrationName) || hasRegisteredCreateTableMigration(registry, tableName)) {
       throw new Error(`A migration for table "${tableName}" already exists.`)
     }
+  }
+
+  const existingTableModel = findRegisteredModelByTableName(registry, tableName)
+  if (existingTableModel) {
+    throw new Error(`Discovered duplicate model "${existingTableModel.name}" for table "${tableName}".`)
+  }
+
+  const existingGeneratedModelName = await findGeneratedModelSourceByTableName(
+    projectRoot,
+    project.config.paths.models,
+    tableName,
+  )
+  if (existingGeneratedModelName) {
+    throw new Error(`Discovered duplicate model "${existingGeneratedModelName}" for table "${tableName}".`)
   }
 
   await ensureAbsent(modelFilePath)

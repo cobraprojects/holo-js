@@ -35,6 +35,7 @@ import cache, {
 } from '../src'
 
 const typedThemeKey = defineCacheKey<'light' | 'dark'>('theme.current')
+const cacheDriverDisposeSymbol = Symbol.for('holo.cache.driver.dispose')
 
 async function createTempCacheDirectory(name: string): Promise<string> {
   return mkdtemp(join(tmpdir(), `holo-cache-${name}-`))
@@ -1072,6 +1073,7 @@ describe('@holo-js/cache package surface', () => {
 
   it('lazy-loads redis drivers through shared redis config resolution', async () => {
     const values = new Map<string, string>()
+    const disposeRedisDriver = vi.fn()
     const createRedisCacheDriver = vi.fn((options: {
       readonly name: string
       readonly connectionName: string
@@ -1090,6 +1092,7 @@ describe('@holo-js/cache package surface', () => {
       return {
         name: options.name,
         driver: 'redis' as const,
+        [cacheDriverDisposeSymbol]: disposeRedisDriver,
         async get(key: string) {
           return values.has(key)
             ? Object.freeze({
@@ -1180,6 +1183,93 @@ describe('@holo-js/cache package surface', () => {
     await expect(cache.lock('report', 1).block(0)).resolves.toBe(true)
     expect(createRedisCacheDriver).toHaveBeenCalledTimes(1)
     expect(cacheRuntimeInternals.resolveConfiguredDriver(getCacheRuntime()).driver).toBe('redis')
+
+    resetCacheRuntime()
+    expect(disposeRedisDriver).toHaveBeenCalledTimes(1)
+  })
+
+  it('disposes a lazy redis driver when reset happens while the optional module is loading', async () => {
+    let resolveModule: ((module: {
+      readonly createRedisCacheDriver: () => ReturnType<typeof createPendingRedisDriver>
+    }) => void) | undefined
+    const disposeRedisDriver = vi.fn()
+
+    function createPendingRedisDriver() {
+      return {
+        name: 'redis',
+        driver: 'redis' as const,
+        [cacheDriverDisposeSymbol]: disposeRedisDriver,
+        async get() {
+          return Object.freeze({ hit: false })
+        },
+        async put() {
+          return true
+        },
+        async add() {
+          return true
+        },
+        async forget() {
+          return true
+        },
+        async flush() {},
+        async increment() {
+          return 1
+        },
+        async decrement() {
+          return -1
+        },
+        lock(name: string) {
+          return {
+            name,
+            async get<TValue>(callback?: () => TValue | Promise<TValue>) {
+              return callback ? callback() : true
+            },
+            async release() {
+              return true
+            },
+            async block<TValue>(_waitSeconds: number, callback?: () => TValue | Promise<TValue>) {
+              return callback ? callback() : true
+            },
+          }
+        },
+      }
+    }
+
+    cacheRedisInternals.setRedisDriverModuleLoader(() => new Promise((resolve) => {
+      resolveModule = resolve
+    }))
+
+    configureCacheRuntime({
+      config: {
+        default: 'redis',
+        drivers: {
+          redis: {
+            driver: 'redis',
+            connection: 'cache',
+          },
+        },
+      },
+      redisConfig: {
+        default: 'cache',
+        connections: {
+          cache: {
+            host: '127.0.0.1',
+            port: 6379,
+          },
+        },
+      },
+    })
+
+    const write = cache.put('alpha', 'one', 60)
+    resetCacheRuntime()
+    resolveModule?.({
+      createRedisCacheDriver: createPendingRedisDriver,
+    })
+
+    await expect(write).resolves.toBe(true)
+    await vi.waitFor(() => {
+      expect(disposeRedisDriver).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('throws a clear error when redis cache support is configured without the optional package', async () => {

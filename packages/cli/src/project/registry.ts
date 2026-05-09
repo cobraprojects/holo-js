@@ -84,6 +84,12 @@ async function renderGeneratedSchemaRuntimeArtifact(
   schemaEntry: string,
 ): Promise<string> {
   const schemaPath = resolve(projectRoot, schemaEntry)
+  try {
+    await readFile(schemaPath, 'utf8')
+  } catch {
+    return renderGeneratedSchemaRuntimeModule([])
+  }
+
   const moduleValue = await importProjectModule(projectRoot, schemaPath)
   const tables = extractGeneratedSchemaTables(moduleValue)
   return renderGeneratedSchemaRuntimeModule(tables)
@@ -821,17 +827,27 @@ export async function loadGeneratedProjectRegistry(
 ): Promise<GeneratedProjectRegistry | undefined> {
   const filePath = resolve(projectRoot, GENERATED_REGISTRY_JSON_PATH)
   const contents = await readFile(filePath, 'utf8').catch(() => undefined)
-  if (!contents) {
-    return undefined
+
+  if (contents) {
+    try {
+      const parsed = JSON.parse(contents) as unknown
+      if (isGeneratedProjectRegistry(parsed)) {
+        return parsed
+      }
+    } catch {
+      return undefined
+    }
   }
 
-  try {
-    const parsed = JSON.parse(contents) as unknown
-    if (isGeneratedProjectRegistry(parsed)) {
-      return parsed
-    }
-  } catch {
-    return undefined
+  const generatedIndexPath = resolve(projectRoot, GENERATED_INDEX_PATH)
+  const generatedModule = await importProjectModule(projectRoot, generatedIndexPath).catch(() => undefined)
+
+  if (isRecord(generatedModule) && isGeneratedProjectRegistry(generatedModule.registry)) {
+    return generatedModule.registry
+  }
+
+  if (isRecord(generatedModule) && isGeneratedProjectRegistry(generatedModule.default)) {
+    return generatedModule.default
   }
 
   return undefined

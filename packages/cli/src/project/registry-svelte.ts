@@ -1,5 +1,5 @@
-import { readFile, unlink, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { dirname, resolve } from 'node:path'
 import {
   GENERATED_SVELTE_HOOKS_PATH,
   GENERATED_SVELTE_SERVER_HOOKS_PATH,
@@ -234,6 +234,7 @@ async function writeFileIfChanged(path: string, contents: string): Promise<void>
     return
   }
 
+  await mkdir(dirname(path), { recursive: true })
   await writeFile(path, contents, 'utf8')
 }
 

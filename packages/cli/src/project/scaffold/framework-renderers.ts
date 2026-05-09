@@ -513,7 +513,7 @@ export function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly 
 
 export function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'framework'>): string {
   const commandName = options.framework === 'nuxt'
-    ? 'nuxi'
+    ? 'nuxt'
     : options.framework === 'next'
       ? 'next'
       : 'vite'
