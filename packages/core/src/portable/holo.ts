@@ -1125,243 +1125,6 @@ function authConfigUsesClerkProviders<TCustom extends HoloConfigMap>(
 
 const HOLO_AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
 
-function bindAuthRuntimeToContext(
-  runtime: HoloAuthRuntimeBinding,
-  authContext: { activate(): void },
-): HoloAuthRuntimeBinding {
-  type GuardRuntime = ReturnType<HoloAuthRuntimeBinding['guard']>
-
-  const activate = (): void => {
-    authContext.activate()
-  }
-
-  return Object.freeze({
-    check() {
-      activate()
-      return runtime.check()
-    },
-    user() {
-      activate()
-      return runtime.user()
-    },
-    refreshUser() {
-      activate()
-      return runtime.refreshUser()
-    },
-    id() {
-      activate()
-      return runtime.id()
-    },
-    currentAccessToken() {
-      activate()
-      return runtime.currentAccessToken()
-    },
-    hashPassword(password: Parameters<HoloAuthRuntimeBinding['hashPassword']>[0]) {
-      activate()
-      return runtime.hashPassword(password)
-    },
-    verifyPassword(
-      password: Parameters<HoloAuthRuntimeBinding['verifyPassword']>[0],
-      digest: Parameters<HoloAuthRuntimeBinding['verifyPassword']>[1],
-    ) {
-      activate()
-      return runtime.verifyPassword(password, digest)
-    },
-    needsPasswordRehash(digest: Parameters<HoloAuthRuntimeBinding['needsPasswordRehash']>[0]) {
-      activate()
-      return runtime.needsPasswordRehash(digest)
-    },
-    login(credentials: Parameters<HoloAuthRuntimeBinding['login']>[0]) {
-      activate()
-      return runtime.login(credentials)
-    },
-    loginUsing(
-      user: Parameters<HoloAuthRuntimeBinding['loginUsing']>[0],
-      options?: Parameters<HoloAuthRuntimeBinding['loginUsing']>[1],
-    ) {
-      activate()
-      return runtime.loginUsing(user, options)
-    },
-    loginUsingId(
-      userId: Parameters<HoloAuthRuntimeBinding['loginUsingId']>[0],
-      options?: Parameters<HoloAuthRuntimeBinding['loginUsingId']>[1],
-    ) {
-      activate()
-      return runtime.loginUsingId(userId, options)
-    },
-    impersonate(
-      user: Parameters<HoloAuthRuntimeBinding['impersonate']>[0],
-      options?: Parameters<HoloAuthRuntimeBinding['impersonate']>[1],
-    ) {
-      activate()
-      return runtime.impersonate(user, options)
-    },
-    impersonateById(
-      userId: Parameters<HoloAuthRuntimeBinding['impersonateById']>[0],
-      options?: Parameters<HoloAuthRuntimeBinding['impersonateById']>[1],
-    ) {
-      activate()
-      return runtime.impersonateById(userId, options)
-    },
-    impersonation() {
-      activate()
-      return runtime.impersonation()
-    },
-    stopImpersonating() {
-      activate()
-      return runtime.stopImpersonating()
-    },
-    logout() {
-      activate()
-      return runtime.logout()
-    },
-    register(input: Parameters<HoloAuthRuntimeBinding['register']>[0]) {
-      activate()
-      return runtime.register(input)
-    },
-    logoutAll(guardName?: Parameters<HoloAuthRuntimeBinding['logoutAll']>[0]) {
-      activate()
-      return runtime.logoutAll(guardName)
-    },
-    guard(name: Parameters<HoloAuthRuntimeBinding['guard']>[0]) {
-      const guard = runtime.guard(name)
-
-      return Object.freeze({
-        check() {
-          activate()
-          return guard.check()
-        },
-        user() {
-          activate()
-          return guard.user()
-        },
-        refreshUser() {
-          activate()
-          return guard.refreshUser()
-        },
-        id() {
-          activate()
-          return guard.id()
-        },
-        currentAccessToken() {
-          activate()
-          return guard.currentAccessToken()
-        },
-        login(credentials: Parameters<GuardRuntime['login']>[0]) {
-          activate()
-          return guard.login(credentials)
-        },
-        loginUsing(
-          user: Parameters<GuardRuntime['loginUsing']>[0],
-          options?: Parameters<GuardRuntime['loginUsing']>[1],
-        ) {
-          activate()
-          return guard.loginUsing(user, options)
-        },
-        loginUsingId(
-          userId: Parameters<GuardRuntime['loginUsingId']>[0],
-          options?: Parameters<GuardRuntime['loginUsingId']>[1],
-        ) {
-          activate()
-          return guard.loginUsingId(userId, options)
-        },
-        impersonate(
-          user: Parameters<GuardRuntime['impersonate']>[0],
-          options?: Parameters<GuardRuntime['impersonate']>[1],
-        ) {
-          activate()
-          return guard.impersonate(user, options)
-        },
-        impersonateById(
-          userId: Parameters<GuardRuntime['impersonateById']>[0],
-          options?: Parameters<GuardRuntime['impersonateById']>[1],
-        ) {
-          activate()
-          return guard.impersonateById(userId, options)
-        },
-        impersonation() {
-          activate()
-          return guard.impersonation()
-        },
-        stopImpersonating() {
-          activate()
-          return guard.stopImpersonating()
-        },
-        logout() {
-          activate()
-          return guard.logout()
-        },
-      })
-    },
-    tokens: Object.freeze({
-      create(
-        user: Parameters<HoloAuthRuntimeBinding['tokens']['create']>[0],
-        options: Parameters<HoloAuthRuntimeBinding['tokens']['create']>[1],
-      ) {
-        activate()
-        return runtime.tokens.create(user, options)
-      },
-      list(
-        user: Parameters<HoloAuthRuntimeBinding['tokens']['list']>[0],
-        options?: Parameters<HoloAuthRuntimeBinding['tokens']['list']>[1],
-      ) {
-        activate()
-        return runtime.tokens.list(user, options)
-      },
-      revoke(options?: Parameters<HoloAuthRuntimeBinding['tokens']['revoke']>[0]) {
-        activate()
-        return runtime.tokens.revoke(options)
-      },
-      revokeAll(
-        user: Parameters<HoloAuthRuntimeBinding['tokens']['revokeAll']>[0],
-        options?: Parameters<HoloAuthRuntimeBinding['tokens']['revokeAll']>[1],
-      ) {
-        activate()
-        return runtime.tokens.revokeAll(user, options)
-      },
-      authenticate(plainTextToken: Parameters<HoloAuthRuntimeBinding['tokens']['authenticate']>[0]) {
-        activate()
-        return runtime.tokens.authenticate(plainTextToken)
-      },
-      can(
-        token: Parameters<HoloAuthRuntimeBinding['tokens']['can']>[0],
-        ability: Parameters<HoloAuthRuntimeBinding['tokens']['can']>[1],
-      ) {
-        activate()
-        return runtime.tokens.can(token, ability)
-      },
-    }),
-    verification: Object.freeze({
-      create(
-        user: Parameters<HoloAuthRuntimeBinding['verification']['create']>[0],
-        options?: Parameters<HoloAuthRuntimeBinding['verification']['create']>[1],
-      ) {
-        activate()
-        return runtime.verification.create(user, options)
-      },
-      resend(options?: Parameters<HoloAuthRuntimeBinding['verification']['resend']>[0]) {
-        activate()
-        return runtime.verification.resend(options)
-      },
-      consume(plainTextToken: Parameters<HoloAuthRuntimeBinding['verification']['consume']>[0]) {
-        activate()
-        return runtime.verification.consume(plainTextToken)
-      },
-    }),
-    requestPasswordReset(
-      input: Parameters<HoloAuthRuntimeBinding['requestPasswordReset']>[0],
-      options?: Parameters<HoloAuthRuntimeBinding['requestPasswordReset']>[1],
-    ) {
-      activate()
-      return runtime.requestPasswordReset(input, options)
-    },
-    resetPassword(input: Parameters<HoloAuthRuntimeBinding['resetPassword']>[0]) {
-      activate()
-      return runtime.resetPassword(input)
-    },
-  })
-}
-
 function attachAuthRequestAccessors<TContext extends {
   activate(): void
   getSessionId(guardName: string): string | undefined
@@ -4185,15 +3948,15 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
           : {}),
       context: authContext,
     })
-    const boundAuthRuntime = bindAuthRuntimeToContext(authModule.getAuthRuntime(), authContext)
+    const authRuntime = authModule.getAuthRuntime()
 
     if (authorizationModule) {
       authorizationModule.authorizationInternals.configureAuthorizationAuthIntegration({
         hasGuard(guardName: string) {
           return guardName in loadedConfig.auth.guards
         },
-        resolveDefaultActor: async () => boundAuthRuntime.user(),
-        resolveGuardActor: async (guardName: string) => boundAuthRuntime.guard(guardName).user(),
+        resolveDefaultActor: async () => authRuntime.user(),
+        resolveGuardActor: async (guardName: string) => authRuntime.guard(guardName).user(),
       })
     }
 
@@ -4339,9 +4102,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       return activeSessionRuntime
     },
     get auth() {
-      return activeAuthRuntime && activeAuthContext
-        ? bindAuthRuntimeToContext(activeAuthRuntime, activeAuthContext)
-        : activeAuthRuntime
+      return activeAuthRuntime
     },
     initialized: false,
     useConfig: accessors.useConfig,
@@ -4615,7 +4376,6 @@ export const holoRuntimeInternals = {
   createAuthNotificationsDeliveryHook,
   createCoreNotificationBroadcaster,
   createCoreNotificationMailSender,
-  bindAuthRuntimeToContext,
   createCoreAuthProviders,
   createCoreAuthStores,
   createCoreHostedIdentityStore,

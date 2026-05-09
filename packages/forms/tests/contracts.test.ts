@@ -9,6 +9,7 @@ import {
   isFormSchema,
   schema,
   validate,
+  type FormFailureErrors,
 } from '../src'
 
 function createSecurityModule() {
@@ -317,6 +318,15 @@ describe('@holo-js/forms contracts', () => {
       },
     }).errors).toEqual({
       email: ['A user with this email already exists.'],
+      token: ['Missing token.'],
+    })
+
+    const undefinedOverride = { email: undefined } as FormFailureErrors
+
+    expect(failure.fail({
+      errors: undefinedOverride,
+    }).errors).toEqual({
+      email: ['Invalid email.'],
       token: ['Missing token.'],
     })
   })

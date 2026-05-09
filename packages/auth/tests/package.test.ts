@@ -41,6 +41,12 @@ import clientAuth, {
   useAuth as clientUseAuth,
   user as clientUser,
 } from '../src/client'
+import {
+  createFieldErrors,
+  hasInputField,
+  pickInputField,
+  resolveRequiredFieldName,
+} from '../src/runtime/failureFields'
 
 function hashPasswordResetEmail(email: string, csrfSigningKey?: string): string {
   const canonicalEmail = email.trim().toLowerCase()
@@ -1088,6 +1094,22 @@ describe('@holo-js/auth package runtime', () => {
     await expect(verifyPassword('secret-secret', digest)).resolves.toBe(true)
     await expect(verifyPassword('wrong-secret', digest)).resolves.toBe(false)
     await expect(needsPasswordRehash(digest)).resolves.toBe(false)
+  })
+
+  it('keeps auth field failure helpers candidate-only and immutable', () => {
+    const inheritedInput = Object.create({ password: 'secret-secret' }) as Readonly<Record<string, unknown>>
+    expect(hasInputField(inheritedInput, 'password')).toBe(false)
+    expect(pickInputField({ email: 'ava@example.com' }, ['password'])).toBeUndefined()
+
+    const errors = createFieldErrors(['email'], 'Invalid email')
+    expect(Object.isFrozen(errors)).toBe(true)
+    expect(Object.isFrozen(errors.email)).toBe(true)
+    expect(() => {
+      (errors.email as string[]).push('Still invalid')
+    }).toThrow(TypeError)
+    expect(() => resolveRequiredFieldName({ email: 'ava@example.com' }, ['password'])).toThrow(
+      'Expected auth failure mapping to resolve at least one input field.',
+    )
   })
 
   it('supports impersonation within the same guard and restores the original user', async () => {
@@ -2919,7 +2941,9 @@ describe('@holo-js/auth package runtime', () => {
     })
 
     vi.stubGlobal('__holoAuthSecurityImport__', async () => {
-      throw new Error('Could not resolve "@holo-js/security"')
+      const error = new Error('Cannot find package "@holo-js/security"')
+      Object.assign(error, { code: 'ERR_MODULE_NOT_FOUND' })
+      throw error
     })
 
     expect(unwrapAuthResult(await requestPasswordReset({ email: 'ava@example.com' }))).toBeUndefined()
@@ -4310,8 +4334,26 @@ describe('@holo-js/auth package runtime', () => {
   it('covers runtime helper branches for cookies, tokens, payloads, and async context', async () => {
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
     const digest = await hasher.hash('secret-secret')
+    const [, params, saltHex, hashHex] = digest.split('$')
+    const legacyDigest = `scrypt$${saltHex ?? ''}$${hashHex ?? ''}`
 
+    expect(params).toBe('N=16384,r=8,p=1')
+    await expect(hasher.verify('secret-secret', legacyDigest)).resolves.toBe(true)
+    expect(hasher.needsRehash?.(legacyDigest)).toBe(true)
     await expect(hasher.verify('secret-secret', 'invalid')).resolves.toBe(false)
+    await expect(hasher.verify('secret-secret', `scrypt$zz$${hashHex ?? ''}`)).resolves.toBe(false)
+    await expect(hasher.verify('secret-secret', `scrypt$${saltHex ?? ''}$zz`)).resolves.toBe(false)
+    await expect(hasher.verify('secret-secret', `scrypt$${params}$zz$${hashHex ?? ''}`)).resolves.toBe(false)
+    await expect(hasher.verify('secret-secret', `scrypt$${params}$${saltHex ?? ''}$zz`)).resolves.toBe(false)
+    await expect(hasher.verify('secret-secret', `scrypt$N=16384.5,r=8,p=1$${saltHex ?? ''}$${hashHex ?? ''}`)).resolves.toBe(false)
+    await expect(hasher.verify('secret-secret', `scrypt$N=16384,r=8$${saltHex ?? ''}$${hashHex ?? ''}`)).resolves.toBe(false)
+    await expect(hasher.verify('secret-secret', `scrypt$N=999999999999999999999,r=8,p=1$${saltHex ?? ''}$${hashHex ?? ''}`)).resolves.toBe(false)
+    await expect(hasher.verify('secret-secret', `scrypt$N=0,r=8,p=1$${saltHex ?? ''}$${hashHex ?? ''}`)).resolves.toBe(false)
+    await expect(hasher.verify('secret-secret', `scrypt$ N = 16384 , r = 8 , p = 1 $${saltHex ?? ''}$${hashHex ?? ''}`)).resolves.toBe(true)
+    expect(hasher.needsRehash?.(`scrypt$N=8192,r=8,p=1$${saltHex ?? ''}$${hashHex ?? ''}`)).toBe(true)
+    expect(hasher.needsRehash?.(`scrypt$N=16384,r=4,p=1$${saltHex ?? ''}$${hashHex ?? ''}`)).toBe(true)
+    expect(hasher.needsRehash?.(`scrypt$N=16384,r=8,p=0$${saltHex ?? ''}$${hashHex ?? ''}`)).toBe(true)
+    expect(hasher.needsRehash?.('invalid')).toBe(true)
     expect(authRuntimeInternals.verifyTokenSecret('secret', 'invalid')).toBe(false)
     expect(authRuntimeInternals.parsePlainTextToken('invalid')).toBeNull()
     expect(authRuntimeInternals.tokenHasAbility({
@@ -4343,6 +4385,7 @@ describe('@holo-js/auth package runtime', () => {
     }) && needsPasswordRehash(digest)).resolves.toBe(false)
 
     expect(authRuntimeInternals.parseSetCookieDefinition('invalid')).toBeNull()
+    expect(authRuntimeInternals.parseSetCookieDefinition('bad%name=value')).toBeNull()
     expect(authRuntimeInternals.parseSetCookieDefinition(
       'session=value; ; Path=/app; Domain=example.com; Secure; HttpOnly; SameSite=None; Partitioned',
     )).toEqual({
@@ -4366,6 +4409,9 @@ describe('@holo-js/auth package runtime', () => {
       sameSite: 'strict',
       partitioned: true,
     })).toContain('Max-Age=60')
+    expect(authRuntimeInternals.serializeCookie('session', '', {
+      maxAge: 0,
+    })).toContain('Max-Age=0')
     expect(authRuntimeInternals.serializeCookie('session', 'value')).toBe('session=value; Path=/')
     expect(authRuntimeInternals.getPasswordHash({
       getId(user: UserRecord) {
@@ -4451,7 +4497,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(authRuntimeInternals.readSessionPayload(record, 'missing')).toBeNull()
 
     const context = authRuntimeInternals.createAsyncAuthContext()
-    expect(context.getSessionId('web')).toBeUndefined()
+    expect(() => context.getSessionId('web')).toThrow('Async auth context is not active')
     context.activate()
     context.setSessionId('web', 'session-1')
     context.setCachedUser('web', {
@@ -4462,6 +4508,7 @@ describe('@holo-js/auth package runtime', () => {
     })
     context.setAccessToken?.('api', 'token-value')
     context.setRememberToken?.('web', 'remember-value')
+    context.activate()
     expect(context.getSessionId('web')).toBe('session-1')
     expect(context.getCachedUser('web')).toEqual({
       id: 1,
