@@ -825,7 +825,23 @@ export default {
     expect(await readFile(join(authRoot, 'app/api/auth/user/route.ts'), 'utf8')).toContain('await user()')
     await expect(stat(join(authRoot, 'app/api/logout/route.ts'))).rejects.toThrow()
     await expect(stat(join(authRoot, 'proxy.ts'))).rejects.toThrow()
+    await expect(stat(join(authRoot, 'server/notifications/auth/email-verification.ts'))).rejects.toThrow()
     expect((await readdir(join(authRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(6)
+
+    const authNotificationsRoot = join(baseRoot, 'auth-notifications-runtime-app')
+    await projectInternals.scaffoldProject(authNotificationsRoot, {
+      projectName: 'Auth Notifications Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['auth', 'notifications'],
+    })
+
+    expect(await readFile(join(authNotificationsRoot, 'server/notifications/auth/email-verification.ts'), 'utf8'))
+      .toContain('export default defineNotification')
+    expect(await readFile(join(authNotificationsRoot, 'server/notifications/auth/password-reset.ts'), 'utf8'))
+      .toContain('export default defineNotification')
 
     const authorizationRoot = join(baseRoot, 'authorization-runtime-app')
     await projectInternals.scaffoldProject(authorizationRoot, {
@@ -8565,6 +8581,80 @@ export default defineEvent({ name: 'audit.activity' })
       vi.doUnmock('../src/project/scaffold')
     }
   })
+
+  it('publishes editable auth notification files without overwriting existing files', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+      name: 'auth-notification-fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/auth': expectedHoloPackageRange,
+        '@holo-js/notifications': expectedHoloPackageRange,
+      },
+    }, null, 2))
+
+    const first = await projectInternals.publishAuthNotificationsIntoProject(projectRoot)
+    expect(first.createdFiles).toHaveLength(2)
+    expect(first.skippedFiles).toHaveLength(0)
+    expect(first.hasMailDependency).toBe(false)
+    await expect(readFile(join(projectRoot, 'server/notifications/auth/email-verification.ts'), 'utf8'))
+      .resolves.toContain('interface EmailVerificationNotification')
+    await expect(readFile(join(projectRoot, 'server/notifications/auth/password-reset.ts'), 'utf8'))
+      .resolves.toContain('interface PasswordResetNotification')
+
+    const second = await projectInternals.publishAuthNotificationsIntoProject(projectRoot)
+    expect(second.createdFiles).toHaveLength(0)
+    expect(second.skippedFiles).toHaveLength(2)
+  }, 30000)
+
+  it('prints auth notification publish command output', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const publishAuthNotificationsIntoProject = vi.fn(async () => ({
+      createdFiles: [join(projectRoot, 'server/notifications/auth/email-verification.ts')],
+      skippedFiles: [join(projectRoot, 'server/notifications/auth/password-reset.ts')],
+      hasMailDependency: false,
+    }))
+
+    vi.resetModules()
+    vi.doMock('../src/project/scaffold', async () => {
+      const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
+      return {
+        ...actual,
+        publishAuthNotificationsIntoProject,
+      }
+    })
+
+    try {
+      const isolatedCli = await import('../src/cli')
+      const publishCommand = isolatedCli.createInternalCommands({
+        ...io.io,
+        projectRoot,
+        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never).find(command => command.name === 'auth:notifications:publish')
+
+      await publishCommand?.run({
+        ...io.io,
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {},
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never)
+
+      const output = io.read().stdout
+      expect(output).toContain('Published auth notification files.')
+      expect(output).toContain('server/notifications/auth/email-verification.ts')
+      expect(output).toContain('skipped existing')
+      expect(output).toContain('install @holo-js/mail')
+    } finally {
+      vi.resetModules()
+      vi.doUnmock('../src/project/scaffold')
+    }
+  }, 30000)
 
   it('prints full broadcast install output when scaffold reports all created artifacts', async () => {
     const projectRoot = await createTempProject()

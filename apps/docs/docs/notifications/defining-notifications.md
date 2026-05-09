@@ -14,22 +14,28 @@ Each notification controls:
 ```ts
 import { defineNotification } from '@holo-js/notifications'
 
+interface InvoiceRecipient {
+  readonly id: string
+  readonly name?: string
+  readonly email: string
+}
+
 export const invoicePaid = (invoice: {
-  id: string
-  number: string
-  total: number
+  readonly id: string
+  readonly number: string
+  readonly total: number
 }) => defineNotification({
   type: 'invoice-paid',
 
-  via() {
-    return ['email', 'database', 'broadcast'] as const
+  via(user: InvoiceRecipient) {
+    return ['email', 'database', 'broadcast']
   },
 
   build: {
-    email(user: { name?: string }) {
+    email(user: InvoiceRecipient) {
       return {
         subject: `Invoice #${invoice.number} paid`,
-        greeting: `Hello ${user.name ?? 'there'},`,
+        greeting: user.name ? `Hello ${user.name},` : undefined,
         lines: [
           `Invoice #${invoice.number} has been paid.`,
           `Total: ${invoice.total}.`,
@@ -41,9 +47,10 @@ export const invoicePaid = (invoice: {
       }
     },
 
-    database() {
+    database(user: InvoiceRecipient) {
       return {
         data: {
+          userId: user.id,
           invoiceId: invoice.id,
           invoiceNumber: invoice.number,
           total: invoice.total,
@@ -52,7 +59,7 @@ export const invoicePaid = (invoice: {
       }
     },
 
-    broadcast(user: { id: string }) {
+    broadcast(user: InvoiceRecipient) {
       return {
         event: 'notifications.invoice-paid',
         data: {
@@ -67,6 +74,76 @@ export const invoicePaid = (invoice: {
 })
 ```
 
+## Passing Variables
+
+Notifications usually need two kinds of data:
+
+- the event data, such as an invoice, order, token, or URL
+- the recipient data passed to `notify(...)`
+
+Use a small factory function when the notification needs event data. The factory captures those variables, and the
+notifiable passed to `notify(...)` becomes the first argument for `via(...)` and each channel builder.
+
+```ts
+import { defineNotification, notify } from '@holo-js/notifications'
+
+interface InvoiceRecipient {
+  readonly id: string
+  readonly name?: string
+  readonly email?: string
+}
+
+const invoicePaid = (invoice: {
+  readonly id: string
+  readonly number: string
+  readonly total: number
+}) => defineNotification({
+  type: 'invoice-paid',
+  via(user: InvoiceRecipient) {
+    return user.email ? ['email', 'database'] : ['database']
+  },
+  build: {
+    email(user: InvoiceRecipient) {
+      return {
+        subject: `Invoice #${invoice.number} paid`,
+        greeting: user.name ? `Hello ${user.name},` : undefined,
+        lines: [
+          `Invoice #${invoice.number} has been paid.`,
+          `Total: ${invoice.total}.`,
+        ],
+        action: {
+          label: 'View invoice',
+          url: `https://app.test/invoices/${invoice.id}`,
+        },
+      }
+    },
+    database(user: InvoiceRecipient) {
+      return {
+        data: {
+          userId: user.id,
+          invoiceId: invoice.id,
+          invoiceNumber: invoice.number,
+          total: invoice.total,
+        },
+      }
+    },
+  },
+})
+
+await notify({
+  id: 'user-1',
+  name: 'Ava',
+  email: 'ava@example.com',
+}, invoicePaid({
+  id: 'inv-100',
+  number: 'INV-100',
+  total: 250,
+}))
+```
+
+In this example, `invoice` is available because the notification factory closes over it. The `user` argument is the
+notifiable object passed to `notify(...)`.
+
 ## Built-in channel payloads
 
 The built-in channels expect these payload families:
@@ -80,7 +157,7 @@ The simplest valid payloads are:
 ```ts
 defineNotification({
   via() {
-    return ['email', 'database', 'broadcast'] as const
+    return ['email', 'database', 'broadcast']
   },
   build: {
     email() {
@@ -113,7 +190,7 @@ Notifications can declare queueing and delay defaults directly:
 ```ts
 defineNotification({
   via() {
-    return ['email', 'database'] as const
+    return ['email', 'database']
   },
   queue: {
     connection: 'redis',

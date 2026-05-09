@@ -21,7 +21,7 @@ describe('@holo-js/notifications root export typing', () => {
     const definition = defineNotification({
       type: 'report-ready',
       via(user: { id: string, email: string }) {
-        return ['email', 'database'] as const
+        return ['email', 'database']
       },
       build: {
         email(user) {

@@ -200,6 +200,16 @@ export interface NotificationDefinition<
     | NotificationDelayResolver<TNotifiable, string>
 }
 
+type NotificationDefinitionInput<
+  TNotifiable,
+  TBuild extends NotificationBuildFactories<TNotifiable>,
+> = Omit<NotificationDefinition<TNotifiable, TBuild>, 'via'> & {
+  via(
+    notifiable: TNotifiable,
+    context: NotificationContext,
+  ): readonly NotificationChannelName[]
+}
+
 export type InferNotificationNotifiable<TNotification>
   = TNotification extends NotificationDefinition<infer TNotifiable, NotificationBuildFactories<unknown>>
     ? TNotifiable
@@ -395,9 +405,9 @@ function normalizeDelayConfig<TChannels extends string>(
 
 export function normalizeNotificationDefinition<
   TNotifiable,
-  TBuild extends NotificationBuildFactories<TNotifiable>,
+  const TBuild extends NotificationBuildFactories<TNotifiable>,
 >(
-  definition: NotificationDefinition<TNotifiable, TBuild>,
+  definition: NotificationDefinitionInput<TNotifiable, TBuild>,
 ): NotificationDefinition<TNotifiable, TBuild> {
   if (!isNotificationDefinition(definition)) {
     throw new Error('[@holo-js/notifications] Notifications must define via() and build.')
@@ -443,9 +453,9 @@ export function normalizeNotificationDefinition<
 
 export function defineNotification<
   TNotifiable,
-  TBuild extends NotificationBuildFactories<TNotifiable>,
+  const TBuild extends NotificationBuildFactories<TNotifiable>,
 >(
-  definition: NotificationDefinition<TNotifiable, TBuild>,
+  definition: NotificationDefinitionInput<TNotifiable, TBuild>,
 ): NotificationDefinition<TNotifiable, TBuild> {
   return normalizeNotificationDefinition(definition)
 }

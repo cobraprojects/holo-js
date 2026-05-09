@@ -63,7 +63,7 @@ You can set queue defaults per channel in your notification definition:
 const invoicePaid = defineNotification({
   type: 'invoice-paid',
   via() {
-    return ['email', 'database', 'broadcast'] as const
+    return ['email', 'database', 'broadcast']
   },
   queue: {
     email: 'notifications-high-priority', // Use different queue for email

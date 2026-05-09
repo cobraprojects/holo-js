@@ -255,6 +255,12 @@ export type NotificationsInstallResult = {
   readonly createdMigrationFiles: readonly string[]
 }
 
+export type AuthNotificationsPublishResult = {
+  readonly createdFiles: readonly string[]
+  readonly skippedFiles: readonly string[]
+  readonly hasMailDependency: boolean
+}
+
 export type MailInstallResult = {
   readonly updatedPackageJson: boolean
   readonly createdMailConfig: boolean

@@ -635,9 +635,9 @@ describe('@holo-js/notifications runtime', () => {
 
     const result = await notify({
       email: 'ava@example.com',
-    }, {
+    }, defineNotification({
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {
@@ -646,7 +646,7 @@ describe('@holo-js/notifications runtime', () => {
           }
         },
       },
-    }).onQueue('notifications')
+    })).onQueue('notifications')
 
     expect(result.channels).toHaveLength(1)
     expect(result.channels[0]).toMatchObject({
@@ -689,9 +689,9 @@ describe('@holo-js/notifications runtime', () => {
 
     const result = await notify({
       email: 'ava@example.com',
-    }, {
+    }, defineNotification({
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {
@@ -703,7 +703,7 @@ describe('@holo-js/notifications runtime', () => {
       queue: {
         afterCommit: true,
       },
-    })
+    }))
 
     expect(result).toEqual({
       totalTargets: 1,
@@ -753,9 +753,9 @@ describe('@holo-js/notifications runtime', () => {
 
     const result = await notify({
       email: 'ava@example.com',
-    }, {
+    }, defineNotification({
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {
@@ -764,7 +764,7 @@ describe('@holo-js/notifications runtime', () => {
           }
         },
       },
-    }).afterCommit()
+    })).afterCommit()
 
     expect(result).toEqual({
       totalTargets: 1,
@@ -1255,7 +1255,7 @@ describe('@holo-js/notifications runtime', () => {
       },
     }, {
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {
@@ -1371,7 +1371,7 @@ describe('@holo-js/notifications runtime', () => {
 
     expect(notificationsRuntimeInternals.resolveNotificationQueueOptions({
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {
@@ -1393,7 +1393,7 @@ describe('@holo-js/notifications runtime', () => {
 
     expect(notificationsRuntimeInternals.resolveNotificationDelay({
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {
@@ -1411,7 +1411,7 @@ describe('@holo-js/notifications runtime', () => {
     const delayedAt = new Date('2026-01-01T00:00:00.000Z')
     expect(notificationsRuntimeInternals.resolveNotificationDelay({
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {
@@ -1428,7 +1428,7 @@ describe('@holo-js/notifications runtime', () => {
     }, 'email')).toBe(delayedAt)
     expect(notificationsRuntimeInternals.resolveNotificationDelay({
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {
@@ -1638,7 +1638,7 @@ describe('@holo-js/notifications runtime', () => {
 
     expect(notificationsRuntimeInternals.resolveChannelDispatchPlan({
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {
@@ -1678,7 +1678,7 @@ describe('@holo-js/notifications runtime', () => {
 
     expect(notificationsRuntimeInternals.resolveNotificationDelay({
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {
@@ -1697,7 +1697,7 @@ describe('@holo-js/notifications runtime', () => {
     }, 'email')).toBe(50)
     expect(notificationsRuntimeInternals.resolveNotificationDelay({
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {
@@ -1726,7 +1726,7 @@ describe('@holo-js/notifications runtime', () => {
       },
       notification: {
         via() {
-          return ['email'] as const
+          return ['email']
         },
         build: {
           email() {
@@ -1743,7 +1743,7 @@ describe('@holo-js/notifications runtime', () => {
       notifiable: { email: 'ava@example.com' },
     }], {
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {

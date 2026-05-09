@@ -15,6 +15,7 @@ import {
   SECURITY_CONFIG_FILE_NAMES,
   SESSION_CONFIG_FILE_NAMES,
   type AuthInstallResult,
+  type AuthNotificationsPublishResult,
   type AuthorizationInstallResult,
   type BroadcastInstallResult,
   type CacheInstallResult,
@@ -91,7 +92,9 @@ import {
   createNotificationsMigrationFiles,
   normalizeScaffoldEnvSegments,
   renderAuthEnvFiles,
+  renderAuthEmailVerificationNotification,
   renderAuthMigration,
+  renderAuthPasswordResetNotification,
   renderAuthUserModel,
   renderAuthorizationAbilitiesReadme,
   renderAuthorizationPoliciesReadme,
@@ -167,6 +170,43 @@ async function resolveExistingNotificationsMigrationFiles(migrationsRoot: string
       || entry.endsWith('_create_notifications.cjs')
     ))
     .map(entry => resolve(migrationsRoot, entry))
+}
+
+const AUTH_NOTIFICATION_FILES = Object.freeze([
+  Object.freeze({
+    path: 'server/notifications/auth/email-verification.ts',
+    render: renderAuthEmailVerificationNotification,
+  }),
+  Object.freeze({
+    path: 'server/notifications/auth/password-reset.ts',
+    render: renderAuthPasswordResetNotification,
+  }),
+])
+
+async function writeAuthNotificationFiles(projectRoot: string): Promise<{
+  readonly createdFiles: readonly string[]
+  readonly skippedFiles: readonly string[]
+}> {
+  const createdFiles: string[] = []
+  const skippedFiles: string[] = []
+
+  await mkdir(resolve(projectRoot, 'server/notifications/auth'), { recursive: true })
+
+  for (const file of AUTH_NOTIFICATION_FILES) {
+    const filePath = resolve(projectRoot, file.path)
+    if (await pathExists(filePath)) {
+      skippedFiles.push(filePath)
+      continue
+    }
+
+    await writeTextFile(filePath, file.render())
+    createdFiles.push(filePath)
+  }
+
+  return {
+    createdFiles,
+    skippedFiles,
+  }
 }
 
 export async function installAuthIntoProject(
@@ -439,6 +479,34 @@ export async function installNotificationsIntoProject(
     updatedPackageJson: await upsertNotificationsPackageDependency(projectRoot),
     createdNotificationsConfig: !notificationsConfigPath,
     createdMigrationFiles,
+  }
+}
+
+export async function publishAuthNotificationsIntoProject(
+  projectRoot: string,
+): Promise<AuthNotificationsPublishResult> {
+  await loadProjectConfig(projectRoot, { required: true })
+  const dependencies = await readPackageJsonDependencyState(projectRoot)
+
+  if (!dependencies.dependencies['@holo-js/auth'] && !dependencies.devDependencies['@holo-js/auth']) {
+    throw new Error(
+      'Auth notification publishing requires @holo-js/auth. '
+      + 'Install auth first with `holo install auth`.',
+    )
+  }
+
+  if (!dependencies.dependencies['@holo-js/notifications'] && !dependencies.devDependencies['@holo-js/notifications']) {
+    throw new Error(
+      'Auth notification publishing requires @holo-js/notifications. '
+      + 'Install notifications first with `holo install notifications`.',
+    )
+  }
+
+  const result = await writeAuthNotificationFiles(projectRoot)
+
+  return {
+    ...result,
+    hasMailDependency: !!dependencies.dependencies['@holo-js/mail'] || !!dependencies.devDependencies['@holo-js/mail'],
   }
 }
 

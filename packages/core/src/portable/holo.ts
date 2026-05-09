@@ -558,6 +558,26 @@ type NotificationsModule = {
   resetNotificationsRuntime(): void
 }
 
+type AuthEmailVerificationNotification = {
+  readonly email: string
+  readonly name?: string
+  readonly url: string
+  readonly expiresAt: Date
+}
+
+type AuthPasswordResetNotification = {
+  readonly email: string
+  readonly url: string
+  readonly expiresAt: Date
+}
+
+type AuthNotificationModule = {
+  readonly default?: unknown
+  readonly notification?: unknown
+  readonly emailVerificationNotification?: unknown
+  readonly passwordResetNotification?: unknown
+}
+
 type BroadcastModule = {
   configureBroadcastRuntime(options?: {
     readonly config: LoadedHoloConfig['broadcast']
@@ -1809,9 +1829,65 @@ function formatAuthEmailExpiration(expiresAt: Date): string {
   return `${authEmailDateFormatter.format(expiresAt)} UTC`
 }
 
+const AUTH_EMAIL_VERIFICATION_NOTIFICATION_PATHS = [
+  'server/notifications/auth/email-verification.ts',
+  'server/notifications/auth/email-verification.mts',
+  'server/notifications/auth/email-verification.js',
+  'server/notifications/auth/email-verification.mjs',
+  'server/notifications/auth/email-verification.cts',
+  'server/notifications/auth/email-verification.cjs',
+] as const
+
+const AUTH_PASSWORD_RESET_NOTIFICATION_PATHS = [
+  'server/notifications/auth/password-reset.ts',
+  'server/notifications/auth/password-reset.mts',
+  'server/notifications/auth/password-reset.js',
+  'server/notifications/auth/password-reset.mjs',
+  'server/notifications/auth/password-reset.cts',
+  'server/notifications/auth/password-reset.cjs',
+] as const
+
+function resolveExistingProjectFile(projectRoot: string | undefined, candidates: readonly string[]): string | undefined {
+  if (!projectRoot) {
+    return undefined
+  }
+
+  return candidates.find(candidate => existsSync(resolve(projectRoot, candidate)))
+}
+
+function resolveAuthNotification(
+  module: AuthNotificationModule,
+  exportName: 'emailVerificationNotification' | 'passwordResetNotification',
+  filePath: string,
+): unknown {
+  const notification = module[exportName] ?? module.notification ?? module.default
+  if (!notification || typeof notification !== 'object') {
+    throw new Error(
+      `[@holo-js/core] Auth notification file "${filePath}" must export a notification definition.`,
+    )
+  }
+
+  return notification
+}
+
+async function loadProjectAuthNotification(
+  projectRoot: string | undefined,
+  candidates: readonly string[],
+  exportName: 'emailVerificationNotification' | 'passwordResetNotification',
+): Promise<unknown | undefined> {
+  const filePath = resolveExistingProjectFile(projectRoot, candidates)
+  if (!filePath) {
+    return undefined
+  }
+
+  const module = await importRuntimeModule(projectRoot!, filePath) as AuthNotificationModule
+  return resolveAuthNotification(module, exportName, filePath)
+}
+
 function createAuthNotificationsDeliveryHook(
   notificationsModule: NotificationsModule,
   appUrl: string,
+  projectRoot?: string,
 ): {
   sendEmailVerification(input: {
     readonly provider: string
@@ -1841,18 +1917,30 @@ function createAuthNotificationsDeliveryHook(
       const recipientName = typeof (input.user as { name?: unknown })?.name === 'string'
         ? (input.user as { name?: string }).name?.trim()
         : undefined
+      const actionUrl = createAuthActionUrl(appUrl, input.route, input.token.plainTextToken)
+      const authNotification: AuthEmailVerificationNotification = Object.freeze({
+        email: input.email,
+        ...(recipientName ? { name: recipientName } : {}),
+        url: actionUrl,
+        expiresAt: input.token.expiresAt,
+      })
+      const projectNotification = await loadProjectAuthNotification(
+        projectRoot,
+        AUTH_EMAIL_VERIFICATION_NOTIFICATION_PATHS,
+        'emailVerificationNotification',
+      )
       const lines = [
         'Confirm your account to finish signing in.',
         `This verification link expires at ${formatAuthEmailExpiration(input.token.expiresAt)}.`,
       ] as const
       const action = {
         label: 'Verify email address',
-        url: createAuthActionUrl(appUrl, input.route, input.token.plainTextToken),
+        url: actionUrl,
       } as const
-      const notification = notificationsModule.defineNotification({
+      const notification = projectNotification ?? notificationsModule.defineNotification({
         type: 'auth.email-verification',
         via() {
-          return ['email'] as const
+          return ['email']
         },
         build: {
           email() {
@@ -1877,28 +1965,32 @@ function createAuthNotificationsDeliveryHook(
       })
 
       await notificationsModule
-        .notifyUsing()
-        .channel('email', recipientName
-          ? {
-              email: input.email,
-              name: recipientName,
-            }
-          : input.email)
-        .notify(notification)
+        .notify(authNotification, notification)
     },
     async sendPasswordReset(input): Promise<void> {
+      const actionUrl = createAuthActionUrl(appUrl, input.route, input.token.plainTextToken)
+      const authNotification: AuthPasswordResetNotification = Object.freeze({
+        email: input.email,
+        url: actionUrl,
+        expiresAt: input.token.expiresAt,
+      })
+      const projectNotification = await loadProjectAuthNotification(
+        projectRoot,
+        AUTH_PASSWORD_RESET_NOTIFICATION_PATHS,
+        'passwordResetNotification',
+      )
       const lines = [
         'Click the link below to choose a new password.',
         `This reset link expires at ${formatAuthEmailExpiration(input.token.expiresAt)}.`,
       ] as const
       const action = {
         label: 'Reset password',
-        url: createAuthActionUrl(appUrl, input.route, input.token.plainTextToken),
+        url: actionUrl,
       } as const
-      const notification = notificationsModule.defineNotification({
+      const notification = projectNotification ?? notificationsModule.defineNotification({
         type: 'auth.password-reset',
         via() {
-          return ['email'] as const
+          return ['email']
         },
         build: {
           email() {
@@ -1921,9 +2013,7 @@ function createAuthNotificationsDeliveryHook(
       })
 
       await notificationsModule
-        .notifyUsing()
-        .channel('email', input.email)
-        .notify(notification)
+        .notify(authNotification, notification)
     },
   })
 }
@@ -2131,6 +2221,53 @@ function createNotificationMailText(message: {
   return parts.length > 0 ? parts.join('\n\n') : undefined
 }
 
+function createNotificationMailHtml(message: {
+  readonly subject: string
+  readonly greeting?: string
+  readonly lines?: readonly string[]
+  readonly action?: {
+    readonly label: string
+    readonly url: string
+  }
+}): string {
+  const greeting = typeof message.greeting === 'string'
+    ? message.greeting.trim()
+    : undefined
+  const lines = (message.lines ?? [])
+    .map(line => line.trim())
+    .filter(Boolean)
+  const sections = [
+    greeting
+      ? `<p style="margin:0 0 16px;">${escapeAuthEmailHtml(greeting)}</p>`
+      : '',
+    ...lines.map(line => `<p style="margin:0 0 16px;">${escapeAuthEmailHtml(line)}</p>`),
+    message.action
+      ? `<p style="margin:24px 0;">` +
+        `<a href="${escapeAuthEmailHtml(message.action.url)}" ` +
+        `style="display:inline-block;padding:12px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">` +
+        `${escapeAuthEmailHtml(message.action.label)}` +
+        `</a></p>`
+      : '',
+    message.action
+      ? `<p style="margin:0;color:#475569;font-size:14px;">` +
+        `If the button does not work, open this link: ` +
+        `<a href="${escapeAuthEmailHtml(message.action.url)}">${escapeAuthEmailHtml(message.action.url)}</a>` +
+        `</p>`
+      : '',
+  ].join('')
+
+  return [
+    '<!doctype html>',
+    '<html><head><meta charset="utf-8">',
+    `<title>${escapeAuthEmailHtml(message.subject)}</title>`,
+    '</head><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#0f172a;background:#f8fafc;">',
+    '<div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:32px;">',
+    `<h1 style="margin:0 0 24px;font-size:24px;line-height:1.3;">${escapeAuthEmailHtml(message.subject)}</h1>`,
+    sections,
+    '</div></body></html>',
+  ].join('')
+}
+
 function joinAppUrl(baseUrl: string, path: string): string {
   const normalizedBaseUrl = baseUrl.endsWith('/')
     ? baseUrl.slice(0, -1)
@@ -2170,32 +2307,7 @@ function createAuthEmailHtml(message: {
     readonly url: string
   }
 }): string {
-  const sections = [
-    typeof message.greeting === 'string'
-      ? `<p style="margin:0 0 16px;">${escapeAuthEmailHtml(message.greeting)}</p>`
-      : '',
-    ...message.lines.map(line => `<p style="margin:0 0 16px;">${escapeAuthEmailHtml(line)}</p>`),
-    `<p style="margin:24px 0;">` +
-      `<a href="${escapeAuthEmailHtml(message.action.url)}" ` +
-      `style="display:inline-block;padding:12px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">` +
-      `${escapeAuthEmailHtml(message.action.label)}` +
-      `</a></p>`,
-    `<p style="margin:0;color:#475569;font-size:14px;">` +
-      `If the button does not work, open this link: ` +
-      `<a href="${escapeAuthEmailHtml(message.action.url)}">${escapeAuthEmailHtml(message.action.url)}</a>` +
-      `</p>`,
-  ].join('')
-
-  return [
-    '<!doctype html>',
-    '<html><head><meta charset="utf-8">',
-    `<title>${escapeAuthEmailHtml(message.subject)}</title>`,
-    '</head><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#0f172a;background:#f8fafc;">',
-    '<div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:32px;">',
-    `<h1 style="margin:0 0 24px;font-size:24px;line-height:1.3;">${escapeAuthEmailHtml(message.subject)}</h1>`,
-    sections,
-    '</div></body></html>',
-  ].join('')
+  return createNotificationMailHtml(message)
 }
 
 function createCoreNotificationMailSender(
@@ -2224,16 +2336,12 @@ function createCoreNotificationMailSender(
       }
 
       const fallbackText = createNotificationMailText(message)
+      const fallbackHtml = createNotificationMailHtml(message)
       await mailModule.sendMail({
         to: route,
         subject: message.subject,
-        ...(typeof message.html === 'string' ? { html: message.html } : {}),
-        ...(typeof (message.text ?? fallbackText) === 'string'
-          ? { text: (message.text ?? fallbackText)! }
-          : {}),
-        ...(typeof message.html !== 'string' && typeof (message.text ?? fallbackText) === 'string'
-          ? { text: (message.text ?? fallbackText)! }
-          : {}),
+        html: typeof message.html === 'string' ? message.html : fallbackHtml,
+        ...(typeof (message.text ?? fallbackText) === 'string' ? { text: (message.text ?? fallbackText)! } : {}),
         ...(message.metadata ? { metadata: message.metadata } : {}),
       })
     },
@@ -3945,7 +4053,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
       emailVerificationTokens: authStores.emailVerificationTokens,
       passwordResetTokens: authStores.passwordResetTokens,
       ...(notificationsModule && (mailModule || notificationsRuntimeBindings?.mailer)
-        ? { delivery: createAuthNotificationsDeliveryHook(notificationsModule, loadedConfig.app.url) }
+        ? { delivery: createAuthNotificationsDeliveryHook(notificationsModule, loadedConfig.app.url, projectRoot) }
         : mailModule
           ? { delivery: createAuthMailDeliveryHook(mailModule, loadedConfig.app.url) }
           : {}),

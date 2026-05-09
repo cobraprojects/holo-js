@@ -25,7 +25,7 @@ import { defineNotification } from '@holo-js/notifications'
 const invoicePaid = defineNotification({
   type: 'invoice-paid',
   via() {
-    return ['email'] as const
+    return ['email']
   },
   build: {
     email() {

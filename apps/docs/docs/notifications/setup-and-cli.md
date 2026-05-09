@@ -73,6 +73,16 @@ notifications automatically:
 
 Auth still owns token creation and validation. Notifications only own delivery.
 
+When auth and notifications are scaffolded together, Holo publishes editable auth notification files under
+`server/notifications/auth`. Existing auth applications can publish them later:
+
+```bash
+holo auth:notifications:publish
+```
+
+Those files define message content only. Email delivery still needs `@holo-js/mail` or another configured notification
+mailer.
+
 ## Continue
 
 - [Notifications Overview](/notifications/)

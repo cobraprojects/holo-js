@@ -55,7 +55,6 @@ describe('@holo-js/notifications contracts', () => {
 
   it('rejects malformed definitions, delays, and queue options', () => {
     expect(() => defineNotification({
-      // @ts-expect-error - intentionally returning wrong channel type to test validation
       via() {
         return ['email']
       },
@@ -64,7 +63,7 @@ describe('@holo-js/notifications contracts', () => {
 
     expect(() => defineNotification({
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email: 'broken' as never,
@@ -74,7 +73,7 @@ describe('@holo-js/notifications contracts', () => {
     expect(() => defineNotification({
       type: '   ',
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {
@@ -87,7 +86,7 @@ describe('@holo-js/notifications contracts', () => {
 
     expect(() => defineNotification({
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {
@@ -103,7 +102,7 @@ describe('@holo-js/notifications contracts', () => {
 
     expect(() => defineNotification({
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {
@@ -126,7 +125,7 @@ describe('@holo-js/notifications contracts', () => {
     const delayResolver = () => 30
     const queueDefinition = notificationsInternals.normalizeNotificationDefinition({
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {
@@ -143,7 +142,7 @@ describe('@holo-js/notifications contracts', () => {
     expect(queueDefinition.delay).toBe(delayResolver)
     expect(defineNotification({
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {

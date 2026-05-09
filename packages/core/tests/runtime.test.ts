@@ -4479,7 +4479,7 @@ export default defineBroadcastConfig({
     const notification = defineNotification({
       type: 'invoice-paid',
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {
@@ -4669,7 +4669,7 @@ export default defineBroadcastConfig({
     }, defineNotification({
       type: 'invoice-paid-email',
       via() {
-        return ['email'] as const
+        return ['email']
       },
       build: {
         email() {
@@ -5356,6 +5356,7 @@ describe('@holo-js/core helper coverage', () => {
         name: 'Ava',
       },
       subject: 'Fallback message',
+      html: expect.stringContaining('<p style="margin:0 0 16px;">One line</p>'),
       text: 'One line',
     })
 
@@ -5505,33 +5506,17 @@ describe('@holo-js/core helper coverage', () => {
     expect((authMailSends[2] as { text: string }).text).toContain('This reset link expires at April 12, 2026 at 1:00 PM UTC.')
 
     const notificationDeliveries: unknown[] = []
-    let emailVerificationRoute: unknown
-    let passwordResetRoute: unknown
     const authNotificationsHook = holoRuntimeInternals.createAuthNotificationsDeliveryHook({
       defineNotification(definition: unknown) {
         return definition
       },
-      notifyUsing() {
-        return {
-          channel(_channel: string, route: unknown) {
-            if (typeof emailVerificationRoute === 'undefined') {
-              emailVerificationRoute = route
-            } else {
-              passwordResetRoute = route
-            }
-            return this
-          },
-          async notify(notification: { build: { email: (context: { name: string }) => unknown } }) {
-            notificationDeliveries.push({
-              route: typeof passwordResetRoute === 'undefined'
-                ? emailVerificationRoute
-                : passwordResetRoute,
-              message: notification.build.email({
-                name: ' Ava ',
-              }),
-            })
-          },
-        }
+      async notify(notifiable: { email: string, name?: string }, notification: { build: { email: (notifiable: { email: string, name?: string }) => unknown } }) {
+        notificationDeliveries.push({
+          route: typeof notifiable.name === 'string'
+            ? { email: notifiable.email, name: notifiable.name }
+            : { email: notifiable.email },
+          message: notification.build.email(notifiable),
+        })
       },
     } as never, 'https://app.test')
 
@@ -5578,14 +5563,18 @@ describe('@holo-js/core helper coverage', () => {
       'This verification link expires at April 12, 2026 at 12:00 PM UTC.',
     )
     expect(notificationDeliveries[1]).toMatchObject({
-      route: 'no-name@example.com',
+      route: {
+        email: 'no-name@example.com',
+      },
       message: {
         subject: 'Verify your email address',
       },
     })
     expect((notificationDeliveries[1] as { message: { greeting?: string } }).message.greeting).toBeUndefined()
     expect(notificationDeliveries[2]).toMatchObject({
-      route: 'reset@example.com',
+      route: {
+        email: 'reset@example.com',
+      },
       message: {
         subject: 'Reset your password',
         action: {
@@ -5597,6 +5586,140 @@ describe('@holo-js/core helper coverage', () => {
     expect((notificationDeliveries[2] as { message: { lines: readonly string[] } }).message.lines).toContain(
       'This reset link expires at April 12, 2026 at 1:00 PM UTC.',
     )
+  })
+
+  it('uses project auth notification definitions when they are published', async () => {
+    const root = await createProject()
+    await mkdir(join(root, 'server/notifications/auth'), { recursive: true })
+    await writeFile(join(root, 'server/notifications/auth/email-verification.ts'), `
+import { defineNotification } from '@holo-js/notifications'
+
+export default defineNotification({
+  type: 'auth.email-verification.custom',
+  via() {
+    return ['email']
+  },
+  build: {
+    email(input: { url: string }) {
+      return {
+        subject: 'Custom verification',
+        action: {
+          label: 'Custom verify',
+          url: input.url,
+        },
+      }
+    },
+  },
+})
+`)
+    await writeFile(join(root, 'server/notifications/auth/password-reset.ts'), `
+import { defineNotification } from '@holo-js/notifications'
+
+export default defineNotification({
+  type: 'auth.password-reset.custom',
+  via() {
+    return ['email']
+  },
+  build: {
+    email(input: { url: string }) {
+      return {
+        subject: 'Custom reset',
+        action: {
+          label: 'Custom reset',
+          url: input.url,
+        },
+      }
+    },
+  },
+})
+`)
+
+    const delivered: unknown[] = []
+    const customVerificationToken = {
+      id: 'verify-token',
+      plainTextToken: 'verify-plain',
+      expiresAt: new Date('2026-04-12T12:00:00.000Z'),
+    }
+    const hook = holoRuntimeInternals.createAuthNotificationsDeliveryHook({
+      defineNotification(definition: unknown) {
+        return definition
+      },
+      async notify(notifiable: unknown, notification: { build: { email: (notifiable: unknown) => unknown }, type?: string }) {
+        delivered.push({
+          type: notification.type,
+          message: notification.build.email(notifiable),
+        })
+      },
+    } as never, 'https://app.test', root)
+
+    await hook.sendEmailVerification({
+      provider: 'users',
+      user: { name: 'Ava' },
+      email: 'ava@example.com',
+      token: customVerificationToken,
+      route: '/verify-email',
+    })
+    await hook.sendPasswordReset({
+      broker: 'users',
+      provider: 'users',
+      email: 'reset@example.com',
+      token: {
+        id: 'reset-token',
+        plainTextToken: 'reset-plain',
+        expiresAt: new Date('2026-04-12T13:00:00.000Z'),
+      },
+      route: '/reset-password',
+    })
+
+    expect(delivered).toEqual([
+      {
+        type: 'auth.email-verification.custom',
+        message: {
+          subject: 'Custom verification',
+          action: {
+            label: 'Custom verify',
+            url: 'https://app.test/verify-email?token=verify-plain',
+          },
+        },
+      },
+      {
+        type: 'auth.password-reset.custom',
+        message: {
+          subject: 'Custom reset',
+          action: {
+            label: 'Custom reset',
+            url: 'https://app.test/reset-password?token=reset-plain',
+          },
+        },
+      },
+    ])
+  })
+
+  it('fails clearly when a published auth notification file is malformed', async () => {
+    const root = await createProject()
+    await mkdir(join(root, 'server/notifications/auth'), { recursive: true })
+    await writeFile(join(root, 'server/notifications/auth/email-verification.ts'), `
+export default null
+`)
+
+    const hook = holoRuntimeInternals.createAuthNotificationsDeliveryHook({
+      defineNotification(definition: unknown) {
+        return definition
+      },
+      async notify() {},
+    } as never, 'https://app.test', root)
+
+    await expect(hook.sendEmailVerification({
+      provider: 'users',
+      user: { name: 'Ava' },
+      email: 'ava@example.com',
+      token: {
+        id: 'verify-token',
+        plainTextToken: 'verify-plain',
+        expiresAt: new Date('2026-04-12T12:00:00.000Z'),
+      },
+      route: '/verify-email',
+    })).rejects.toThrow('must export a notification definition')
   })
 
   it('boots mail with the shared render runtime when no explicit render option is passed', async () => {

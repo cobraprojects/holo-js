@@ -24,16 +24,22 @@ but the real sender implementations stay outside this package.
 ```ts
 import { defineNotification, notify } from '@holo-js/notifications'
 
+interface InvoiceRecipient {
+  readonly id: string
+  readonly name?: string
+  readonly email: string
+}
+
 const invoicePaid = (invoice: { id: string, number: string, total: number }) => defineNotification({
   type: 'invoice-paid',
-  via() {
-    return ['email', 'database', 'broadcast'] as const
+  via(user: InvoiceRecipient) {
+    return ['email', 'database', 'broadcast']
   },
   build: {
-    email(user: { name?: string }) {
+    email(user: InvoiceRecipient) {
       return {
         subject: `Invoice #${invoice.number} paid`,
-        greeting: `Hello ${user.name ?? 'there'},`,
+        greeting: user.name ? `Hello ${user.name},` : undefined,
         lines: [
           `Invoice #${invoice.number} has been paid.`,
           `Total: ${invoice.total}.`,
@@ -44,9 +50,10 @@ const invoicePaid = (invoice: { id: string, number: string, total: number }) => 
         },
       }
     },
-    database() {
+    database(user: InvoiceRecipient) {
       return {
         data: {
+          userId: user.id,
           invoiceId: invoice.id,
           invoiceNumber: invoice.number,
           total: invoice.total,
@@ -54,7 +61,7 @@ const invoicePaid = (invoice: { id: string, number: string, total: number }) => 
         },
       }
     },
-    broadcast(user: { id: string }) {
+    broadcast(user: InvoiceRecipient) {
       return {
         event: 'notifications.invoice-paid',
         data: {
@@ -78,6 +85,9 @@ await notify({
   total: 250,
 }))
 ```
+
+The `invoice` values are captured by the notification factory. The object passed to `notify(...)` is the notifiable,
+and it is passed into `via(...)` and every channel builder.
 
 ## Package boundaries
 

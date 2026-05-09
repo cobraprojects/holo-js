@@ -10,7 +10,7 @@ import { defineNotification } from '@holo-js/notifications'
 const invoicePaid = defineNotification({
   type: 'invoice-paid',
   via() {
-    return ['email', 'database', 'broadcast'] as const
+    return ['email', 'database', 'broadcast']
   },
   build: {
     email() {
@@ -35,6 +35,45 @@ const invoicePaid = defineNotification({
     }
   }
 })
+```
+
+## Passing Data To A Notification
+
+If the message needs variables, create the notification from a function and pass the variables into that function.
+The recipient passed to `notify(...)` is available as the first argument in `via(...)` and in every channel builder.
+
+```ts
+import { defineNotification, notify } from '@holo-js/notifications'
+
+const invoicePaid = (invoice: {
+  readonly id: string
+  readonly number: string
+}) => defineNotification({
+  type: 'invoice-paid',
+  via() {
+    return ['email']
+  },
+  build: {
+    email(user: { readonly name?: string }) {
+      return {
+        subject: `Invoice #${invoice.number} paid`,
+        greeting: user.name ? `Hello ${user.name},` : undefined,
+        action: {
+          label: 'View invoice',
+          url: `https://app.test/invoices/${invoice.id}`,
+        },
+      }
+    },
+  },
+})
+
+await notify({
+  name: 'Ava',
+  email: 'ava@example.com',
+}, invoicePaid({
+  id: 'inv-100',
+  number: 'INV-100',
+}))
 ```
 
 ## Notification Types

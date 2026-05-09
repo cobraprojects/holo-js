@@ -51,7 +51,7 @@ import { defineNotification, notifyUsing } from '@holo-js/notifications'
 const deploymentFinished = defineNotification({
   type: 'deployment-finished',
   via() {
-    return ['slack'] as const
+    return ['slack']
   },
   build: {
     slack() {

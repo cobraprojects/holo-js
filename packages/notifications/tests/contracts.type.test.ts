@@ -50,7 +50,7 @@ describe('@holo-js/notifications typing', () => {
     const userRegistered = defineNotification({
       type: 'user.registered',
       via(user: { id: string, email: string }) {
-        return ['email', 'slack'] as const
+        return ['email', 'slack']
       },
       build: {
         email(user) {
