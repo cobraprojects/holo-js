@@ -8,6 +8,7 @@ import type {
   AuthEmailVerificationConsumeErrorCode,
   AuthEmailVerificationFacade,
   AuthEmailVerificationResendErrorCode,
+  AuthEmailVerificationSendOptions,
   AuthEstablishedSession,
   AuthFacade,
   AuthGuardFacade,
@@ -1871,6 +1872,16 @@ function createEmailVerificationFacade(): AuthEmailVerificationFacade {
   })
 }
 
+function createEmailVerificationResendInput(
+  email?: string,
+  options: AuthEmailVerificationSendOptions = {},
+): { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string } {
+  return {
+    ...options,
+    ...(typeof email === 'string' ? { email } : {}),
+  }
+}
+
 async function requestPasswordResetUsingRuntime<TInput extends AuthPasswordResetRequestInput>(
   input: TInput,
   options: AuthPasswordResetRequestOptions = {},
@@ -2221,6 +2232,15 @@ export function getAuthRuntime(): AuthRuntimeFacade {
     resetPassword<TInput extends AuthPasswordResetInput>(input: TInput) {
       return resetPasswordUsingRuntime(input)
     },
+    verifyEmail(token: string) {
+      return verification.consume(token)
+    },
+    sendEmailVerification(email?: string, options?: AuthEmailVerificationSendOptions) {
+      return verification.resend(createEmailVerificationResendInput(email, options))
+    },
+    resendEmailVerification(email?: string, options?: AuthEmailVerificationSendOptions) {
+      return verification.resend(createEmailVerificationResendInput(email, options))
+    },
     hashPassword(password: string) {
       return getRuntimeBindings().passwordHasher.hash(password)
     },
@@ -2370,6 +2390,34 @@ export async function resetPassword<TInput extends AuthPasswordResetInput>(
   input: TInput,
 ): Promise<AuthResult<AuthUser, AuthPasswordResetConsumeErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>>> {
   return getAuthRuntime().resetPassword(input)
+}
+
+export function verifyEmail(
+  token: string,
+): Promise<AuthResult<AuthUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>> {
+  return getAuthRuntime().verifyEmail(token)
+}
+
+export function sendEmailVerification(): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+export function sendEmailVerification(email: string): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+export function sendEmailVerification(email: string | undefined): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+export function sendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+export function sendEmailVerification(
+  email?: string,
+  options?: AuthEmailVerificationSendOptions,
+): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>> {
+  return getAuthRuntime().verification.resend(createEmailVerificationResendInput(email, options))
+}
+
+export function resendEmailVerification(): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+export function resendEmailVerification(email: string): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+export function resendEmailVerification(email: string | undefined): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+export function resendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+export function resendEmailVerification(
+  email?: string,
+  options?: AuthEmailVerificationSendOptions,
+): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>> {
+  return getAuthRuntime().verification.resend(createEmailVerificationResendInput(email, options))
 }
 
 export const tokens: AuthTokenFacade = Object.freeze({

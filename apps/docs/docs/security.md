@@ -116,7 +116,7 @@ When `@holo-js/forms` is installed, forms can opt into security directly through
 Validation failures and auth failures stay separate:
 
 - `validate(...)` returns form validation failures such as missing fields, bad formats, CSRF errors, and throttling.
-- `login(...)`, `register(...)`, `verification.consume(...)`, `requestPasswordReset(...)`, and `resetPassword(...)` return auth failures in `error`.
+- `login(...)`, `register(...)`, `verifyEmail(...)`, `requestPasswordReset(...)`, and `resetPassword(...)` return auth failures in `error`.
 - Auth failures are plain data with `status` and `fields`, so routes can forward them directly into the normal form response shape.
 
 ### Login

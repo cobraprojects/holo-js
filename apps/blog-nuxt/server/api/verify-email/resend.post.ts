@@ -1,36 +1,29 @@
-import { verification } from '@holo-js/auth'
+import { resendEmailVerification } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
 
-interface ResendVerificationRequestBody {
-  readonly email?: string
-}
+import { resendEmailVerificationForm } from '#shared/schemas/auth'
 
 export default defineEventHandler(async (event) => {
-  let payload: ResendVerificationRequestBody | null = {}
-  try {
-    payload = await readBody<ResendVerificationRequestBody | null>(event)
-  } catch {
-    payload = {}
-  }
-  const email = typeof payload === 'object'
-    && payload !== null
-    && typeof payload.email === 'string'
-    ? payload.email.trim()
-    : ''
-  const { error } = await verification.resend(email ? { email } : undefined)
-  if (error) {
-    setResponseStatus(event, error.status)
-    return {
-      ok: false as const,
-      status: error.status,
-      errors: error.fields,
-    }
+  const submission = await validate(event, resendEmailVerificationForm)
+
+  if (!submission.valid) {
+    const failure = submission.fail()
+    setResponseStatus(event, failure.status)
+    return failure
   }
 
-  return {
-    ok: true as const,
-    status: 200,
-    data: {
-      message: 'A fresh verification email has been sent.',
-    },
+  const { error } = await resendEmailVerification(submission.data.email)
+  if (error) {
+    const failure = submission.fail({
+      status: error.status,
+      errors: error.fields,
+    })
+
+    setResponseStatus(event, failure.status)
+    return failure
   }
+
+  return submission.success({
+    message: 'A fresh verification email has been sent.',
+  })
 })

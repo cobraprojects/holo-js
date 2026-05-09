@@ -183,6 +183,11 @@ export interface AuthPasswordResetRequestOptions {
   readonly expiresAt?: Date
 }
 
+export interface AuthEmailVerificationSendOptions {
+  readonly guard?: string
+  readonly expiresAt?: Date
+}
+
 export interface AuthSessionLoginOptions {
   readonly remember?: boolean
 }
@@ -234,6 +239,15 @@ export interface AuthFacade extends AuthGuardFacade {
   resetPassword<TInput extends AuthPasswordResetInput>(
     input: TInput,
   ): Promise<AuthResult<AuthUser, AuthPasswordResetConsumeErrorCode, AuthInputFieldErrors<TInput>>>
+  verifyEmail(token: string): Promise<AuthResult<AuthUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>>
+  sendEmailVerification(): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+  sendEmailVerification(email: string): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+  sendEmailVerification(email: string | undefined): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+  sendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+  resendEmailVerification(): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+  resendEmailVerification(email: string): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+  resendEmailVerification(email: string | undefined): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+  resendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
   hashPassword(password: string): Promise<string>
   verifyPassword(password: string, digest: string): Promise<boolean>
   needsPasswordRehash(digest: string): Promise<boolean>

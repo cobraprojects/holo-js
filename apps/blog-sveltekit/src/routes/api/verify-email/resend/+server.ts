@@ -1,43 +1,29 @@
 import { json } from '@sveltejs/kit'
-import { verification } from '@holo-js/auth'
+import { resendEmailVerification } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
 
-interface ResendVerificationRequestBody {
-  readonly email?: string
-}
-
-async function readRequestBody(request: Request): Promise<ResendVerificationRequestBody> {
-  const contentType = request.headers.get('content-type') ?? ''
-  if (!contentType.includes('application/json')) {
-    return {}
-  }
-
-  const payload = await request.json().catch(() => null)
-  if (!payload || typeof payload !== 'object') {
-    return {}
-  }
-
-  const email = typeof payload.email === 'string' ? payload.email.trim() : undefined
-  return email ? { email } : {}
-}
+import { resendEmailVerificationForm } from '$lib/schemas/auth'
 
 export async function POST({ request }: { request: Request }) {
-  const input = await readRequestBody(request)
-  const { error } = await verification.resend(input)
-  if (error) {
-    return json({
-      ok: false as const,
-      status: error.status,
-      errors: error.fields,
-    }, {
-      status: error.status,
+  const submission = await validate(request, resendEmailVerificationForm)
+
+  if (!submission.valid) {
+    return json(submission.fail(), {
+      status: submission.fail().status,
     })
   }
 
-  return json({
-    ok: true as const,
-    status: 200,
-    data: {
-      message: 'A fresh verification email has been sent.',
-    },
-  })
+  const { error } = await resendEmailVerification(submission.data.email)
+  if (error) {
+    const failure = submission.fail({
+      status: error.status,
+      errors: error.fields,
+    })
+
+    return json(failure, { status: failure.status })
+  }
+
+  return json(submission.success({
+    message: 'A fresh verification email has been sent.',
+  }))
 }
