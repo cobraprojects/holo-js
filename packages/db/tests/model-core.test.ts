@@ -32,6 +32,7 @@ import {
   type ModelQueryBuilder,
   type RelationMap,
   type TableDefinition } from '../src'
+import { getGlobalModel } from '../src/model/ModelRegistry'
 import { registerMorphModel, resolveMorphSelector } from '../src/model/morphRegistry'
 import { defineModelFromTable, defineTable } from './support/internal'
 
@@ -507,6 +508,42 @@ describe('model core slice', () => {
     expect(defineModel(children).definition.name).toBe('Child')
     expect(defineModel(blueLotOfThings).definition.name).toBe('BlueLotOfThing')
     expect(defineModel(auditLogs).definition.name).toBe('AuditLog')
+  })
+
+  it('uses irregular inferred model names anywhere model metadata is consumed', () => {
+    const people = defineTable('people', {
+      id: column.id(),
+      name: column.string(),
+    })
+    const children = defineTable('children', {
+      id: column.id(),
+      person_id: column.foreignId(),
+      name: column.string(),
+    })
+
+    const Person = defineModel(people)
+    const Child = defineModel(children)
+
+    expect(Person.definition.name).toBe('Person')
+    expect(Person.definition.morphClass).toBe('Person')
+    expect(Child.definition.name).toBe('Child')
+    expect(Child.definition.morphClass).toBe('Child')
+    expect(getGlobalModel('Person')).toBe(Person)
+    expect(getGlobalModel('Child')).toBe(Child)
+    expect(resolveMorphSelector('Person')).toBe(Person)
+    expect(resolveMorphSelector('people')).toBe(Person)
+    expect(resolveMorphSelector('Child')).toBe(Child)
+    expect(resolveMorphSelector('children')).toBe(Child)
+    expect(() => defineModel(people, {
+      touches: ['children'],
+    })).toThrow(
+      'Touched relation "children" is not defined on model "Person".',
+    )
+    expect(() => defineModel(children, {
+      touches: ['person'],
+    })).toThrow(
+      'Touched relation "person" is not defined on model "Child".',
+    )
   })
 
   it('throws immediately when defineModel(tableName) references a missing generated schema table', () => {
