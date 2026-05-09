@@ -1,4 +1,5 @@
 import { dirname, relative, resolve } from 'node:path'
+import inflection from 'inflection'
 
 function toPosixPath(value: string): string {
   return value.replace(/\\/g, '/')
@@ -59,15 +60,7 @@ export function toKebabCase(value: string): string {
 }
 
 export function pluralize(word: string): string {
-  if (word.endsWith('y') && !/[aeiou]y$/i.test(word)) {
-    return `${word.slice(0, -1)}ies`
-  }
-
-  if (/(?:[sxz]|ch|sh)$/i.test(word)) {
-    return `${word}es`
-  }
-
-  return `${word}s`
+  return inflection.pluralize(word)
 }
 
 export function ensureSuffix(name: string, suffix: string): string {

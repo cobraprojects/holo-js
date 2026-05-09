@@ -37,6 +37,28 @@ describe('migration template generation', () => {
     expect(template.contents).toContain('await schema.dropTable(\'users\')')
   })
 
+  it('preserves irregular plural table names in generated migration templates', () => {
+    const peopleTemplate = generateMigrationTemplate('create_people_table', {
+      date: new Date('2026-03-25T10:11:12.000Z') })
+    const childrenTemplate = generateMigrationTemplate('create_children_table', {
+      date: new Date('2026-03-25T10:11:12.000Z') })
+
+    expect(inferMigrationTableName('create_people_table', 'create_table')).toBe('people')
+    expect(inferMigrationTableName('create_children_table', 'create_table')).toBe('children')
+    expect(peopleTemplate).toMatchObject({
+      fileName: '2026_03_25_101112_create_people_table.ts',
+      kind: 'create_table',
+      tableName: 'people' })
+    expect(childrenTemplate).toMatchObject({
+      fileName: '2026_03_25_101112_create_children_table.ts',
+      kind: 'create_table',
+      tableName: 'children' })
+    expect(peopleTemplate.contents).toContain('await schema.createTable(\'people\', (table) => {')
+    expect(peopleTemplate.contents).toContain('await schema.dropTable(\'people\')')
+    expect(childrenTemplate.contents).toContain('await schema.createTable(\'children\', (table) => {')
+    expect(childrenTemplate.contents).toContain('await schema.dropTable(\'children\')')
+  })
+
   it('infers alter-table templates and renders a table mutation scaffold', () => {
     const template = generateMigrationTemplate('add_status_to_users_table', {
       date: new Date('2026-03-25T10:11:12.000Z') })

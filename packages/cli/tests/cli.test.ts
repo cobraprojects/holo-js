@@ -302,7 +302,11 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   linkPackageDependencySync(cliPackageRoot, '@holo-js/notifications', notificationsPackageRoot)
   linkPackageDependencySync(cliPackageRoot, '@holo-js/queue', queuePackageRoot)
   linkPackageDependencySync(cliPackageRoot, '@holo-js/queue-db', queueDbPackageRoot)
-  linkPackageDependencySync(cliPackageRoot, 'esbuild', resolve(workspaceRoot, 'packages/cli/node_modules/esbuild'))
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(cliPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/cli/package.json'),
+  })
   const cliBuild = buildWorkspacePackageSync('@holo-js/cli', join(cliPackageRoot, 'dist'))
   expect(cliBuild.status, cliBuild.stderr || cliBuild.stdout).toBe(0)
 
@@ -8913,6 +8917,8 @@ export default defineEvent({ name: 'audit.activity' })
     expect(pluralize('category')).toBe('categories')
     expect(pluralize('class')).toBe('classes')
     expect(pluralize('course')).toBe('courses')
+    expect(pluralize('person')).toBe('people')
+    expect(pluralize('child')).toBe('children')
     expect(ensureSuffix('Course', 'Seeder')).toBe('CourseSeeder')
     expect(relativeImportPath('/tmp/app/server/models/Course.ts', '/tmp/app/server/models/Session.ts')).toBe('./Session')
     expect(renderModelTemplate({
@@ -8954,6 +8960,18 @@ export default defineEvent({ name: 'audit.activity' })
       snakeStem: 'course',
       tableName: 'courses',
     })
+    expect(resolveNameInfo('Person')).toMatchObject({
+      baseName: 'Person',
+      snakeStem: 'person',
+      tableName: 'people',
+    })
+    expect(resolveNameInfo('Child')).toMatchObject({
+      baseName: 'Child',
+      snakeStem: 'child',
+      tableName: 'children',
+    })
+    expect(`create_${resolveNameInfo('Person').tableName}_table`).toBe('create_people_table')
+    expect(`create_${resolveNameInfo('Child').tableName}_table`).toBe('create_children_table')
   })
 
   it('covers project registration helpers', () => {
