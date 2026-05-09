@@ -1112,7 +1112,7 @@ describe('@holo-js/forms contracts', () => {
       'utf8',
     ))) as {
       version?: string
-      exports?: Record<string, unknown>
+      exports: Record<string, unknown>
       dependencies?: Record<string, string>
       devDependencies?: Record<string, string>
       peerDependencies?: Record<string, string>

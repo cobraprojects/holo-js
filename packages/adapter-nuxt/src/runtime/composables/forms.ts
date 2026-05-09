@@ -22,6 +22,8 @@ type FormValuesBridge = {
   setValue(path: string, value: unknown): Promise<void>
 }
 
+type FormValuesGetter = () => FormValuesBridge
+
 const ARRAY_MUTATION_METHODS = new Set([
   'copyWithin',
   'fill',
@@ -66,7 +68,7 @@ function getValueAtPath(root: unknown, path: string): unknown {
 function createArrayMutationView(
   source: readonly unknown[],
   path: string,
-  form: { value: FormValuesBridge },
+  getForm: FormValuesGetter,
   version: { value: number },
   cache: WeakMap<readonly unknown[], unknown[]>,
 ): unknown[] {
@@ -78,7 +80,7 @@ function createArrayMutationView(
   const proxy = new Proxy([] as unknown[], {
     get(_target, key) {
       void version.value
-      const current = getValueAtPath(form.value.values, path)
+      const current = getValueAtPath(getForm().values, path)
       if (!Array.isArray(current)) {
         return undefined
       }
@@ -90,14 +92,14 @@ function createArrayMutationView(
 
       if (typeof key === 'string' && ARRAY_MUTATION_METHODS.has(key)) {
         return (...args: unknown[]) => {
-          const latest = getValueAtPath(form.value.values, path)
+          const latest = getValueAtPath(getForm().values, path)
           if (!Array.isArray(latest)) {
             return undefined
           }
 
           const next = latest.slice()
           const result = Reflect.get(next, key, next).apply(next, args)
-          void form.value.setValue(path, next)
+          void getForm().setValue(path, next)
           return result
         }
       }
@@ -105,7 +107,7 @@ function createArrayMutationView(
       return value.bind(current)
     },
     set(_target, key, value) {
-      const current = getValueAtPath(form.value.values, path)
+      const current = getValueAtPath(getForm().values, path)
       if (!Array.isArray(current)) {
         return false
       }
@@ -113,12 +115,12 @@ function createArrayMutationView(
       const next = current.slice()
       const updated = Reflect.set(next, key, value)
       if (updated) {
-        void form.value.setValue(path, next)
+        void getForm().setValue(path, next)
       }
       return updated
     },
     deleteProperty(_target, key) {
-      const current = getValueAtPath(form.value.values, path)
+      const current = getValueAtPath(getForm().values, path)
       if (!Array.isArray(current)) {
         return false
       }
@@ -126,7 +128,7 @@ function createArrayMutationView(
       const next = current.slice()
       const deleted = Reflect.deleteProperty(next, key)
       if (deleted) {
-        void form.value.setValue(path, next)
+        void getForm().setValue(path, next)
       }
       return deleted
     },
@@ -140,7 +142,7 @@ function defineLeafAccessor(
   target: Record<string, unknown>,
   key: string,
   path: string,
-  form: { value: FormValuesBridge },
+  getForm: FormValuesGetter,
   version: { value: number },
   arrayCache: WeakMap<readonly unknown[], unknown[]>,
 ): void {
@@ -154,13 +156,13 @@ function defineLeafAccessor(
     configurable: true,
     get() {
       void version.value
-      const value = getValueAtPath(form.value.values, path)
+      const value = getValueAtPath(getForm().values, path)
       return Array.isArray(value)
-        ? createArrayMutationView(value, path, form, version, arrayCache)
+        ? createArrayMutationView(value, path, getForm, version, arrayCache)
         : value
     },
     set(nextValue: unknown) {
-      void form.value.setValue(path, nextValue)
+      void getForm().setValue(path, nextValue)
     },
   })
 }
@@ -168,7 +170,7 @@ function defineLeafAccessor(
 function syncValuesView(
   target: Record<string, unknown>,
   source: unknown,
-  form: { value: FormValuesBridge },
+  getForm: FormValuesGetter,
   version: { value: number },
   arrayCache: WeakMap<readonly unknown[], unknown[]>,
   prefix = '',
@@ -196,7 +198,7 @@ function syncValuesView(
         delete target[key]
       }
 
-      defineLeafAccessor(target, key, path, form, version, arrayCache)
+      defineLeafAccessor(target, key, path, getForm, version, arrayCache)
       continue
     }
 
@@ -205,7 +207,7 @@ function syncValuesView(
         delete target[key]
       }
 
-      defineLeafAccessor(target, key, path, form, version, arrayCache)
+      defineLeafAccessor(target, key, path, getForm, version, arrayCache)
       continue
     }
 
@@ -213,7 +215,7 @@ function syncValuesView(
       target[key] = {}
     }
 
-    syncValuesView(target[key] as Record<string, unknown>, item, form, version, arrayCache, path)
+    syncValuesView(target[key] as Record<string, unknown>, item, getForm, version, arrayCache, path)
   }
 }
 
@@ -221,30 +223,50 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
   schemaDefinition: TSchema,
   options: UseFormOptions<InferFormData<TSchema>, TSuccess> = {},
 ): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {
-  const form = shallowRef(createFormClient(schemaDefinition, options))
+  const form = shallowRef<UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> | undefined>(undefined)
   const version = shallowRef(0)
   let versionCounter = 0
   const rawValues: Record<string, unknown> = {}
   const values = reactive(rawValues) as InferFormData<TSchema>
   const arrayCache = new WeakMap<readonly unknown[], unknown[]>()
+  let activeForm: FormValuesBridge | undefined
 
-  const syncValuesFromForm = () => {
+  const getActiveForm = () => {
+    if (!activeForm) {
+      throw new TypeError('Expected form to be initialized.')
+    }
+
+    return activeForm
+  }
+
+  const currentForm = () => {
+    const current = form.value
+    if (!current) {
+      throw new TypeError('Expected form to be initialized.')
+    }
+
+    return current
+  }
+
+  const syncValuesFromForm = (localForm: UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>>) => {
+    activeForm = localForm
     syncValuesView(
       rawValues,
-      form.value.values,
-      form as { value: FormValuesBridge },
+      localForm.values,
+      getActiveForm,
       version,
       arrayCache,
     )
   }
 
   const stopWatching = watchEffect((onCleanup) => {
-    form.value = createFormClient(schemaDefinition, options)
-    syncValuesFromForm()
+    const localForm = createFormClient(schemaDefinition, options)
+    syncValuesFromForm(localForm)
+    form.value = localForm
     version.value = ++versionCounter
 
-    const unsubscribe = form.value.subscribe(() => {
-      syncValuesFromForm()
+    const unsubscribe = localForm.subscribe(() => {
+      syncValuesFromForm(localForm)
       version.value = ++versionCounter
     })
 
@@ -256,45 +278,45 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
   return reactive({
     get fields() {
       void version.value
-      return form.value.fields
+      return currentForm().fields
     },
     values,
     get errors() {
       void version.value
-      return form.value.errors
+      return currentForm().errors
     },
     get submitting() {
       void version.value
-      return form.value.submitting
+      return currentForm().submitting
     },
     get valid() {
       void version.value
-      return form.value.valid
+      return currentForm().valid
     },
     get lastSubmission() {
       void version.value
-      return form.value.lastSubmission
+      return currentForm().lastSubmission
     },
     subscribe(listener: () => void) {
-      return form.value.subscribe(listener)
+      return currentForm().subscribe(listener)
     },
     async validate() {
-      return await form.value.validate()
+      return await currentForm().validate()
     },
     async validateField(path: string) {
-      return await form.value.validateField(path)
+      return await currentForm().validateField(path)
     },
     async submit() {
-      return await form.value.submit()
+      return await currentForm().submit()
     },
     reset(nextValues?: Partial<InferFormData<TSchema>>) {
-      form.value.reset(nextValues)
+      currentForm().reset(nextValues)
     },
     async setValue(path: string, value: unknown) {
-      await form.value.setValue(path, value)
+      await currentForm().setValue(path, value)
     },
     applyServerState(result: ReturnType<UseFormResult<InferFormData<TSchema>, TSuccess>['applyServerState']>) {
-      return form.value.applyServerState(result)
+      return currentForm().applyServerState(result)
     },
   }) as UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>>
 }
