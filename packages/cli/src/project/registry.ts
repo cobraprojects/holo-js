@@ -80,6 +80,12 @@ function extractGeneratedSchemaTables(moduleValue: unknown): readonly TableDefin
   return []
 }
 
+function getFilesystemErrorCode(error: unknown): string | undefined {
+  return error instanceof Error && 'code' in error && typeof error.code === 'string'
+    ? error.code
+    : undefined
+}
+
 async function renderGeneratedSchemaRuntimeArtifact(
   projectRoot: string,
   schemaEntry: string,
@@ -87,8 +93,12 @@ async function renderGeneratedSchemaRuntimeArtifact(
   const schemaPath = resolve(projectRoot, schemaEntry)
   try {
     await access(schemaPath, fsConstants.R_OK)
-  } catch {
-    return renderGeneratedSchemaRuntimeModule([])
+  } catch (error) {
+    const code = getFilesystemErrorCode(error)
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return renderGeneratedSchemaRuntimeModule([])
+    }
+    throw error
   }
 
   const moduleValue = await importProjectModule(projectRoot, schemaPath)
@@ -836,7 +846,7 @@ export async function loadGeneratedProjectRegistry(
         return parsed
       }
     } catch {
-      return undefined
+      // Fall through to the generated module fallback below.
     }
   }
 

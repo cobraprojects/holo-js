@@ -69,23 +69,154 @@ export async function collectAppManifestFailures(root = repoRoot) {
 
 function collectImportBindings(source) {
   const bindings = new Map()
-  const importPattern = /import\s*{([\s\S]*?)}\s*from\s*['"]([^'"]+)['"]/g
+  const importPattern = /import\s+([\s\S]*?)\s+from\s*['"]([^'"]+)['"]/g
   for (const match of source.matchAll(importPattern)) {
-    const specifiers = match[1]
+    const specifiers = match[1]?.trim()
     const sourcePath = match[2]
     if (!specifiers || !sourcePath) continue
 
-    for (const rawSpecifier of specifiers.split(',')) {
-      const specifier = rawSpecifier.trim()
-      if (!specifier) continue
-      const aliasMatch = /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/.exec(specifier)
-      if (!aliasMatch) continue
-      const importedName = aliasMatch[1]
-      const localName = aliasMatch[2] ?? importedName
-      bindings.set(localName, { importedName, sourcePath })
+    const addNamedBindings = (namedSpecifiers) => {
+      for (const rawSpecifier of namedSpecifiers.split(',')) {
+        const specifier = rawSpecifier.trim()
+        if (!specifier) continue
+        const aliasMatch = /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/.exec(specifier)
+        if (!aliasMatch) continue
+        const importedName = aliasMatch[1]
+        const localName = aliasMatch[2] ?? importedName
+        bindings.set(localName, { importedName, sourcePath })
+      }
+    }
+
+    const namespaceMatch = /^\*\s+as\s+([A-Za-z_$][\w$]*)$/.exec(specifiers)
+    if (namespaceMatch) {
+      bindings.set(namespaceMatch[1], { importedName: '*', sourcePath })
+      continue
+    }
+
+    if (specifiers.startsWith('{') && specifiers.endsWith('}')) {
+      addNamedBindings(specifiers.slice(1, -1))
+      continue
+    }
+
+    const defaultAndRestMatch = /^([A-Za-z_$][\w$]*)(?:\s*,\s*([\s\S]+))?$/.exec(specifiers)
+    if (!defaultAndRestMatch) continue
+
+    bindings.set(defaultAndRestMatch[1], { importedName: 'default', sourcePath })
+    const restSpecifiers = defaultAndRestMatch[2]?.trim()
+    if (!restSpecifiers) continue
+
+    const restNamespaceMatch = /^\*\s+as\s+([A-Za-z_$][\w$]*)$/.exec(restSpecifiers)
+    if (restNamespaceMatch) {
+      bindings.set(restNamespaceMatch[1], { importedName: '*', sourcePath })
+      continue
+    }
+
+    if (restSpecifiers.startsWith('{') && restSpecifiers.endsWith('}')) {
+      addNamedBindings(restSpecifiers.slice(1, -1))
     }
   }
   return bindings
+}
+
+function collectNamespaceMemberNames(source, namespaceName) {
+  const memberNames = new Set()
+  const memberPattern = new RegExp(`\\b${namespaceName}\\.([A-Za-z_$][\\w$]*)\\b`, 'g')
+  for (const match of source.matchAll(memberPattern)) {
+    if (match[1]) memberNames.add(match[1])
+  }
+  return memberNames
+}
+
+async function collectBindingFailures({
+  modulePath,
+  source,
+  localName,
+  binding,
+  forbiddenRanges,
+  visited,
+}) {
+  if (!source.includes(localName)) return []
+
+  const resolvedModule = await readResolvedModule(modulePath, binding.sourcePath)
+  if (!resolvedModule) return []
+
+  if (binding.importedName === '*') {
+    const failures = []
+    for (const memberName of collectNamespaceMemberNames(source, localName)) {
+      failures.push(...await collectImportedConstantFailures({
+        modulePath: resolvedModule.path,
+        moduleSource: resolvedModule.source,
+        identifier: memberName,
+        forbiddenRanges,
+        visited,
+      }))
+    }
+    return failures
+  }
+
+  return collectImportedConstantFailures({
+    modulePath: resolvedModule.path,
+    moduleSource: resolvedModule.source,
+    identifier: binding.importedName,
+    forbiddenRanges,
+    visited,
+  })
+}
+
+function collectExportInitializer(source, exportName) {
+  if (exportName === 'default') {
+    const exportMatch = /\bexport\s+default\b/.exec(source)
+    if (!exportMatch) return undefined
+    const initializerStart = exportMatch.index + exportMatch[0].length
+    const nextExport = source.slice(initializerStart + 1).search(/\nexport\s+(?:const|function|class|type|interface|default)\s/)
+    const initializerEnd = nextExport === -1
+      ? source.length
+      : initializerStart + 1 + nextExport
+    return source.slice(initializerStart, initializerEnd)
+  }
+
+  const exportPattern = new RegExp(`export\\s+const\\s+${exportName}\\b`)
+  const exportMatch = exportPattern.exec(source)
+  if (!exportMatch) return undefined
+
+  const initializerStart = source.indexOf('=', exportMatch.index)
+  if (initializerStart === -1) return undefined
+
+  const nextExport = source.slice(initializerStart + 1).search(/\nexport\s+(?:const|function|class|type|interface|default)\s/)
+  const initializerEnd = nextExport === -1
+    ? source.length
+    : initializerStart + 1 + nextExport
+  return source.slice(initializerStart + 1, initializerEnd)
+}
+
+function collectFunctionBody(source, functionName) {
+  const functionPattern = new RegExp(`function\\s+${functionName}\\b[\\s\\S]*?{`)
+  const functionMatch = functionPattern.exec(source)
+  if (functionMatch) {
+    let depth = 1
+    let index = functionMatch.index + functionMatch[0].length
+    while (index < source.length && depth > 0) {
+      const current = source[index]
+      if (current === '{') depth += 1
+      if (current === '}') depth -= 1
+      index += 1
+    }
+
+    return source.slice(functionMatch.index, index)
+  }
+
+  const variableFunctionPattern = new RegExp(`(?:const|let|var)\\s+${functionName}\\b\\s*=`)
+  const variableFunctionMatch = variableFunctionPattern.exec(source)
+  if (!variableFunctionMatch) return undefined
+
+  const initializerStart = source.indexOf('=', variableFunctionMatch.index)
+  if (initializerStart === -1) return undefined
+
+  const nextDeclaration = source.slice(initializerStart + 1).search(/\n(?:export\s+)?(?:const|let|var|function|class|type|interface)\s/)
+  const initializerEnd = nextDeclaration === -1
+    ? source.length
+    : initializerStart + 1 + nextDeclaration
+  return source.slice(variableFunctionMatch.index, initializerEnd)
 }
 
 async function readResolvedModule(importerPath, importSource) {
@@ -113,38 +244,6 @@ async function readResolvedModule(importerPath, importSource) {
   return undefined
 }
 
-function collectExportInitializer(source, exportName) {
-  const exportPattern = new RegExp(`export\\s+const\\s+${exportName}\\b`)
-  const exportMatch = exportPattern.exec(source)
-  if (!exportMatch) return undefined
-
-  const initializerStart = source.indexOf('=', exportMatch.index)
-  if (initializerStart === -1) return undefined
-
-  const nextExport = source.slice(initializerStart + 1).search(/\nexport\s+(?:const|function|class|type|interface)\s/)
-  const initializerEnd = nextExport === -1
-    ? source.length
-    : initializerStart + 1 + nextExport
-  return source.slice(initializerStart + 1, initializerEnd)
-}
-
-function collectFunctionBody(source, functionName) {
-  const functionPattern = new RegExp(`function\\s+${functionName}\\b[\\s\\S]*?{`)
-  const functionMatch = functionPattern.exec(source)
-  if (!functionMatch) return undefined
-
-  let depth = 1
-  let index = functionMatch.index + functionMatch[0].length
-  while (index < source.length && depth > 0) {
-    const current = source[index]
-    if (current === '{') depth += 1
-    if (current === '}') depth -= 1
-    index += 1
-  }
-
-  return source.slice(functionMatch.index, index)
-}
-
 async function collectImportedConstantFailures({
   modulePath,
   moduleSource,
@@ -167,13 +266,11 @@ async function collectImportedConstantFailures({
   const importBindings = collectImportBindings(moduleSource)
   const failures = []
   for (const [localName, binding] of importBindings) {
-    if (!initializer.includes(localName)) continue
-    const resolvedModule = await readResolvedModule(modulePath, binding.sourcePath)
-    if (!resolvedModule) continue
-    failures.push(...await collectImportedConstantFailures({
-      modulePath: resolvedModule.path,
-      moduleSource: resolvedModule.source,
-      identifier: binding.importedName,
+    failures.push(...await collectBindingFailures({
+      modulePath,
+      source: initializer,
+      localName,
+      binding,
       forbiddenRanges,
       visited,
     }))
@@ -188,13 +285,11 @@ async function collectImportedConstantFailures({
     }
 
     for (const [localName, binding] of importBindings) {
-      if (!functionBody.includes(localName)) continue
-      const resolvedModule = await readResolvedModule(modulePath, binding.sourcePath)
-      if (!resolvedModule) continue
-      failures.push(...await collectImportedConstantFailures({
-        modulePath: resolvedModule.path,
-        moduleSource: resolvedModule.source,
-        identifier: binding.importedName,
+      failures.push(...await collectBindingFailures({
+        modulePath,
+        source: functionBody,
+        localName,
+        binding,
         forbiddenRanges,
         visited,
       }))
@@ -224,13 +319,11 @@ export async function collectScaffoldSourceFailures(root = repoRoot) {
   const failures = []
   const importBindings = collectImportBindings(source)
   for (const [localName, binding] of importBindings) {
-    if (!renderSource.includes(localName)) continue
-    const resolvedModule = await readResolvedModule(scaffoldPath, binding.sourcePath)
-    if (!resolvedModule) continue
-    failures.push(...await collectImportedConstantFailures({
-      modulePath: resolvedModule.path,
-      moduleSource: resolvedModule.source,
-      identifier: binding.importedName,
+    failures.push(...await collectBindingFailures({
+      modulePath: scaffoldPath,
+      source: renderSource,
+      localName,
+      binding,
       forbiddenRanges,
       visited: new Set(),
     }))

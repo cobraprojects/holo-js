@@ -54,6 +54,7 @@ import {
   writeProjectConfig,
   writeTextFile,
 } from '../src/project'
+import { renderFrameworkAwareTsconfig, writeGeneratedProjectRegistry } from '../src/project/registry'
 import {
   ensureSuffix,
   pluralize,
@@ -14489,6 +14490,42 @@ export default {
     })
   })
 
+  it('falls back to the generated module when generated registry JSON is malformed', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, '.holo-js/generated/registry.json', '{')
+    await writeProjectFile(projectRoot, '.holo-js/generated/index.ts', `
+export const registry = {
+  version: 1,
+  generatedAt: '2026-01-01T00:00:00.000Z',
+  paths: {
+    models: 'server/models',
+    migrations: 'server/db/migrations',
+    seeders: 'server/db/seeders',
+    commands: 'server/commands',
+    jobs: 'server/jobs',
+    generatedSchema: '.holo-js/generated/schema.generated.ts',
+  },
+  models: [],
+  migrations: [],
+  seeders: [],
+  commands: [],
+  jobs: [],
+  events: [],
+  listeners: [],
+  broadcast: [],
+  channels: [],
+  authorizationPolicies: [],
+  authorizationAbilities: [],
+}
+`)
+
+    await withFakeBun(async () => {
+      await expect(loadGeneratedProjectRegistry(projectRoot)).resolves.toMatchObject({ version: 1 })
+    })
+  }, 30000)
+
   it('loads generated registries from named exports and ignores invalid generated modules', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
@@ -14522,6 +14559,140 @@ export const registry = {
       await expect(loadGeneratedProjectRegistry(projectRoot)).resolves.toBeUndefined()
     })
   })
+
+  it('loads generated registries from default exports', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, '.holo-js/generated/index.ts', `
+export default {
+  version: 1,
+  generatedAt: '2026-01-01T00:00:00.000Z',
+  paths: {
+    models: 'server/models',
+    migrations: 'server/db/migrations',
+    seeders: 'server/db/seeders',
+    commands: 'server/commands',
+    jobs: 'server/jobs',
+    generatedSchema: '.holo-js/generated/schema.generated.ts',
+  },
+  models: [],
+  migrations: [],
+  seeders: [],
+  commands: [],
+  jobs: [],
+}
+`)
+
+    await withFakeBun(async () => {
+      await expect(loadGeneratedProjectRegistry(projectRoot)).resolves.toMatchObject({ version: 1 })
+    })
+  }, 30000)
+
+  it('covers generated tsconfig render helpers', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    expect(projectInternals.renderGeneratedTsconfig()).toContain('../../tsconfig.json')
+    await expect(renderFrameworkAwareTsconfig(projectRoot)).resolves.toContain('../../tsconfig.json')
+  }, 30000)
+
+  it('renders schema runtime tables from default and named generated schema exports', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const registry = {
+      version: 1,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      paths: {
+        models: 'server/models',
+        migrations: 'server/db/migrations',
+        seeders: 'server/db/seeders',
+        commands: 'server/commands',
+        jobs: 'server/jobs',
+        events: 'server/events',
+        listeners: 'server/listeners',
+        broadcast: 'server/broadcast',
+        channels: 'server/channels',
+        authorizationPolicies: 'server/policies',
+        authorizationAbilities: 'server/abilities',
+        generatedSchema: '.holo-js/generated/schema.generated.ts',
+      },
+      models: [],
+      migrations: [],
+      seeders: [],
+      commands: [],
+      jobs: [],
+      events: [],
+      listeners: [],
+      broadcast: [],
+      channels: [],
+      authorizationPolicies: [],
+      authorizationAbilities: [],
+    } satisfies Parameters<typeof writeGeneratedProjectRegistry>[1]
+
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', `
+export default {
+  kind: 'table',
+  tableName: 'users',
+  columns: {},
+  indexes: [],
+}
+`)
+    await writeGeneratedProjectRegistry(projectRoot, registry)
+    await expect(readFile(join(projectRoot, '.holo-js/generated/schema.mjs'), 'utf8')).resolves.toContain('users')
+
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', `
+export const posts = {
+  kind: 'table',
+  tableName: 'posts',
+  columns: {},
+  indexes: [],
+}
+`)
+    await writeGeneratedProjectRegistry(projectRoot, registry)
+    await expect(readFile(join(projectRoot, '.holo-js/generated/schema.mjs'), 'utf8')).resolves.toContain('posts')
+  }, 30000)
+
+  it('propagates generated schema access errors other than missing files', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', 'export const users = {}')
+    await chmod(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 0o000)
+
+    try {
+      await expect(writeGeneratedProjectRegistry(projectRoot, {
+        version: 1,
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        paths: {
+          models: 'server/models',
+          migrations: 'server/db/migrations',
+          seeders: 'server/db/seeders',
+          commands: 'server/commands',
+          jobs: 'server/jobs',
+          events: 'server/events',
+          listeners: 'server/listeners',
+          broadcast: 'server/broadcast',
+          channels: 'server/channels',
+          authorizationPolicies: 'server/policies',
+          authorizationAbilities: 'server/abilities',
+          generatedSchema: '.holo-js/generated/schema.generated.ts',
+        },
+        models: [],
+        migrations: [],
+        seeders: [],
+        commands: [],
+        jobs: [],
+        events: [],
+        listeners: [],
+        broadcast: [],
+        channels: [],
+        authorizationPolicies: [],
+        authorizationAbilities: [],
+      })).rejects.toMatchObject({ code: 'EACCES' })
+    } finally {
+      await chmod(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 0o600)
+    }
+  }, 30000)
 
   it('covers named exports for commands and registered runtime artifacts', async () => {
     const projectRoot = await createTempProject()
