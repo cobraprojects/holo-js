@@ -1,5 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import type * as FsPromisesModule from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
@@ -14656,11 +14657,26 @@ export const posts = {
   it('propagates generated schema access errors other than missing files', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
+    const generatedSchemaPath = join(projectRoot, '.holo-js/generated/schema.generated.ts')
     await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', 'export const users = {}')
-    await chmod(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 0o000)
+    const accessError = Object.assign(new Error('blocked'), { code: 'EACCES' })
+    vi.doMock('node:fs/promises', async (importOriginal) => {
+      const actual = await importOriginal<typeof FsPromisesModule>()
+      return {
+        ...actual,
+        access: async (path: Parameters<typeof actual.access>[0], mode?: Parameters<typeof actual.access>[1]) => {
+          if (path === generatedSchemaPath) {
+            throw accessError
+          }
+          return actual.access(path, mode)
+        },
+      }
+    })
+    vi.resetModules()
 
     try {
-      await expect(writeGeneratedProjectRegistry(projectRoot, {
+      const { writeGeneratedProjectRegistry: writeRegistryWithMockedAccess } = await import('../src/project/registry')
+      await expect(writeRegistryWithMockedAccess(projectRoot, {
         version: 1,
         generatedAt: '2026-01-01T00:00:00.000Z',
         paths: {
@@ -14690,7 +14706,8 @@ export const posts = {
         authorizationAbilities: [],
       })).rejects.toMatchObject({ code: 'EACCES' })
     } finally {
-      await chmod(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 0o600)
+      vi.doUnmock('node:fs/promises')
+      vi.resetModules()
     }
   }, 30000)
 
@@ -14914,11 +14931,14 @@ export default {
     }
     const publishedBin = await readFile(join(built.cliPackageRoot, 'dist/bin/holo.mjs'), 'utf8')
     const publishedIndex = await readFile(join(built.cliPackageRoot, 'dist/index.mjs'), 'utf8')
-    const publishedEntrypoints = await Promise.all(
-      (await readdir(join(built.cliPackageRoot, 'dist')))
-        .filter(fileName => fileName.endsWith('.mjs'))
-        .map(async fileName => readFile(join(built.cliPackageRoot, 'dist', fileName), 'utf8')),
-    )
+    const publishedEntrypoints = [
+      publishedBin,
+      ...await Promise.all(
+        (await readdir(join(built.cliPackageRoot, 'dist')))
+          .filter(fileName => fileName.endsWith('.mjs'))
+          .map(async fileName => readFile(join(built.cliPackageRoot, 'dist', fileName), 'utf8')),
+      ),
+    ]
     const executed = spawnSync('node', [built.cliBinPath, 'list'], {
       cwd: workspaceRoot,
       encoding: 'utf8',
