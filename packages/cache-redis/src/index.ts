@@ -93,6 +93,7 @@ type RedisClusterOptions = {
 
 type RedisClientLike = {
   readonly isCluster?: boolean
+  disconnect?(): void
   get(key: string): Promise<string | null>
   set(key: string, value: string, ...arguments_: readonly (string | number)[]): Promise<'OK' | null>
   del(...keys: string[]): Promise<number>
@@ -111,6 +112,7 @@ type RedisCtor = typeof Redis & {
 }
 
 const REDIS_SCAN_COUNT = 100
+const CACHE_DRIVER_DISPOSE_SYMBOL = Symbol.for('holo.cache.driver.dispose')
 const RELEASE_LOCK_SCRIPT = [
   'if redis.call("get", KEYS[1]) == ARGV[1] then',
   '  return redis.call("del", KEYS[1])',
@@ -358,7 +360,7 @@ export function createRedisCacheDriver(options: RedisCacheDriverOptions): CacheD
     } while (cursor !== '0')
   }
 
-  return {
+  const driver: CacheDriverContract = {
     name: options.name,
     driver: 'redis',
     async get(key: string): Promise<CacheDriverGetResult> {
@@ -443,6 +445,14 @@ export function createRedisCacheDriver(options: RedisCacheDriverOptions): CacheD
       return createRedisLock(client, name, seconds, ownerFactory, sleep, now)
     },
   }
+
+  Object.defineProperty(driver, CACHE_DRIVER_DISPOSE_SYMBOL, {
+    value() {
+      client.disconnect?.()
+    },
+  })
+
+  return driver
 }
 
 export const redisCacheDriverInternals = {

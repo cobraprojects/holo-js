@@ -162,6 +162,21 @@ bun run test
 bun run test:coverage
 ```
 
+### Dependency version policy
+
+Generated user projects must use publishable dependency ranges for `@holo-js/*` packages, for example `^0.1.4`.
+Do not scaffold `workspace:*` into user apps.
+
+Committed apps under `apps/` are repo examples and test fixtures. They must use `workspace:*` for local
+`@holo-js/*` packages so app validation runs against the current workspace code. They must also use `catalog:` for
+dependencies that exist in the root workspace catalog.
+
+CLI dependency sync must preserve the app's existing Holo dependency mode. If an app already uses `workspace:*` for
+any `@holo-js/*` package, newly managed `@holo-js/*` packages must also use `workspace:*`; otherwise they must use the
+current publishable Holo range.
+
+This policy is enforced by `scripts/validate-dependency-version-policy.mjs`, which runs as part of `bun run test`.
+
 For docs work:
 
 ```bash

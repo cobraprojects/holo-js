@@ -3,6 +3,7 @@ import { loadConfigDirectory, type SupportedDatabaseDriver } from '@holo-js/conf
 import {
   ESBUILD_PACKAGE_VERSION,
   HOLO_PACKAGE_VERSION,
+  IOREDIS_PACKAGE_VERSION,
 } from '../../metadata'
 import { loadProjectConfig } from '../config'
 import {
@@ -23,8 +24,6 @@ import {
 import { loadGeneratedProjectRegistry } from '../registry'
 import type { LoadedConfigWithCache } from './types'
 
-const IOREDIS_PACKAGE_VERSION = '^5.4.2'
-
 function normalizeDependencyMap(value: unknown): Record<string, string> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return {}
@@ -35,6 +34,31 @@ function normalizeDependencyMap(value: unknown): Record<string, string> {
       .filter(([, dependencyVersion]) => typeof dependencyVersion === 'string')
       .sort(([left], [right]) => left.localeCompare(right)),
   )
+}
+
+function isWorkspaceDependencyVersion(value: string | undefined): value is string {
+  return typeof value === 'string' && value.startsWith('workspace:')
+}
+
+function resolveManagedHoloPackageVersion(
+  packageName: string,
+  dependencies: Record<string, string>,
+  devDependencies: Record<string, string>,
+): string {
+  const currentPackageVersion = dependencies[packageName] ?? devDependencies[packageName]
+  if (isWorkspaceDependencyVersion(currentPackageVersion)) {
+    return currentPackageVersion
+  }
+
+  const workspaceVersion = Object.entries({
+    ...dependencies,
+    ...devDependencies,
+  }).find(([dependencyName, dependencyVersion]) => (
+    dependencyName.startsWith('@holo-js/')
+    && isWorkspaceDependencyVersion(dependencyVersion)
+  ))?.[1]
+
+  return workspaceVersion ?? `^${HOLO_PACKAGE_VERSION}`
 }
 
 export async function readPackageJsonDependencyState(projectRoot: string): Promise<{
@@ -246,7 +270,7 @@ export async function syncManagedDriverDependencies(
   } = await readPackageJsonDependencyState(projectRoot)
   const cachePackageInstalled = typeof dependencies['@holo-js/cache'] !== 'undefined'
     || typeof devDependencies['@holo-js/cache'] !== 'undefined'
-  const cacheDesired = cacheConfigured
+  const cacheDesired = cacheConfigured || cachePackageInstalled
 
   requiredPackages.add('@holo-js/core')
 
@@ -364,7 +388,6 @@ export async function syncManagedDriverDependencies(
   }
 
   let changed = false
-  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
   const removableManagedPackages = new Set<string>([
     '@holo-js/core',
     ...Object.values(DB_DRIVER_PACKAGE_NAMES),
@@ -397,7 +420,7 @@ export async function syncManagedDriverDependencies(
   for (const packageName of requiredPackages) {
     const requiredVersion = packageName === 'ioredis'
       ? IOREDIS_PACKAGE_VERSION
-      : nextVersion
+      : resolveManagedHoloPackageVersion(packageName, dependencies, devDependencies)
     if (dependencies[packageName] !== requiredVersion || typeof devDependencies[packageName] !== 'undefined') {
       dependencies[packageName] = requiredVersion
       delete devDependencies[packageName]
@@ -438,7 +461,9 @@ async function upsertQueuePackageDependency(
       }).then(config => config.queue)
         .catch(() => undefined)
     : Promise.resolve(undefined)
-  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
+  const nextVersion = resolveManagedHoloPackageVersion('@holo-js/queue', dependencies, devDependencies)
+  const nextQueueDbVersion = resolveManagedHoloPackageVersion('@holo-js/queue-db', dependencies, devDependencies)
+  const nextQueueRedisVersion = resolveManagedHoloPackageVersion('@holo-js/queue-redis', dependencies, devDependencies)
   const nextEsbuildVersion = ESBUILD_PACKAGE_VERSION
   const queueConfig = typeof driver === 'undefined'
     ? await loadedQueueConfig
@@ -462,8 +487,8 @@ async function upsertQueuePackageDependency(
 
   if (
     currentVersion === nextVersion
-    && (requiresQueueDb ? currentQueueDbVersion === nextVersion : typeof currentQueueDbVersion === 'undefined')
-    && (requiresQueueRedis ? currentQueueRedisVersion === nextVersion : typeof currentQueueRedisVersion === 'undefined')
+    && (requiresQueueDb ? currentQueueDbVersion === nextQueueDbVersion : typeof currentQueueDbVersion === 'undefined')
+    && (requiresQueueRedis ? currentQueueRedisVersion === nextQueueRedisVersion : typeof currentQueueRedisVersion === 'undefined')
     && typeof currentDevVersion === 'undefined'
     && typeof currentDevQueueDbVersion === 'undefined'
     && typeof currentDevQueueRedisVersion === 'undefined'
@@ -475,12 +500,12 @@ async function upsertQueuePackageDependency(
 
   dependencies['@holo-js/queue'] = nextVersion
   if (requiresQueueDb) {
-    dependencies['@holo-js/queue-db'] = nextVersion
+    dependencies['@holo-js/queue-db'] = nextQueueDbVersion
   } else {
     delete dependencies['@holo-js/queue-db']
   }
   if (requiresQueueRedis) {
-    dependencies['@holo-js/queue-redis'] = nextVersion
+    dependencies['@holo-js/queue-redis'] = nextQueueRedisVersion
   } else {
     delete dependencies['@holo-js/queue-redis']
   }
@@ -496,7 +521,8 @@ async function upsertQueuePackageDependency(
 
 async function upsertEventsPackageDependency(projectRoot: string): Promise<boolean> {
   const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
-  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
+  const nextVersion = resolveManagedHoloPackageVersion('@holo-js/events', dependencies, devDependencies)
+  const nextQueueVersion = resolveManagedHoloPackageVersion('@holo-js/queue', dependencies, devDependencies)
   const currentVersion = dependencies['@holo-js/events']
   const currentDevVersion = devDependencies['@holo-js/events']
   const currentQueueVersion = dependencies['@holo-js/queue']
@@ -505,14 +531,14 @@ async function upsertEventsPackageDependency(projectRoot: string): Promise<boole
   if (
     currentVersion === nextVersion
     && typeof currentDevVersion === 'undefined'
-    && currentQueueVersion === nextVersion
+    && currentQueueVersion === nextQueueVersion
     && typeof currentQueueDevVersion === 'undefined'
   ) {
     return false
   }
 
   dependencies['@holo-js/events'] = nextVersion
-  dependencies['@holo-js/queue'] = nextVersion
+  dependencies['@holo-js/queue'] = nextQueueVersion
   delete devDependencies['@holo-js/events']
   delete devDependencies['@holo-js/queue']
 
@@ -522,7 +548,7 @@ async function upsertEventsPackageDependency(projectRoot: string): Promise<boole
 
 async function upsertNotificationsPackageDependency(projectRoot: string): Promise<boolean> {
   const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
-  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
+  const nextVersion = resolveManagedHoloPackageVersion('@holo-js/notifications', dependencies, devDependencies)
   const currentVersion = dependencies['@holo-js/notifications']
   const currentDevVersion = devDependencies['@holo-js/notifications']
 
@@ -538,7 +564,7 @@ async function upsertNotificationsPackageDependency(projectRoot: string): Promis
 
 async function upsertMailPackageDependency(projectRoot: string): Promise<boolean> {
   const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
-  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
+  const nextVersion = resolveManagedHoloPackageVersion('@holo-js/mail', dependencies, devDependencies)
   const currentVersion = dependencies['@holo-js/mail']
   const currentDevVersion = devDependencies['@holo-js/mail']
 
@@ -554,7 +580,7 @@ async function upsertMailPackageDependency(projectRoot: string): Promise<boolean
 
 async function upsertSecurityPackageDependency(projectRoot: string): Promise<boolean> {
   const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
-  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
+  const nextVersion = resolveManagedHoloPackageVersion('@holo-js/security', dependencies, devDependencies)
   const currentVersion = dependencies['@holo-js/security']
   const currentDevVersion = devDependencies['@holo-js/security']
 
@@ -581,7 +607,9 @@ async function upsertCachePackageDependencies(
       }).then(config => (config as LoadedConfigWithCache).cache)
         .catch(() => undefined)
     : undefined
-  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
+  const nextVersion = resolveManagedHoloPackageVersion('@holo-js/cache', dependencies, devDependencies)
+  const nextCacheDbVersion = resolveManagedHoloPackageVersion('@holo-js/cache-db', dependencies, devDependencies)
+  const nextCacheRedisVersion = resolveManagedHoloPackageVersion('@holo-js/cache-redis', dependencies, devDependencies)
   const requiresCacheRedis = driver === 'redis'
     || Object.values(cacheConfig?.drivers ?? {}).some(connection => connection.driver === 'redis')
   const requiresCacheDb = driver === 'database'
@@ -595,8 +623,8 @@ async function upsertCachePackageDependencies(
 
   if (
     currentVersion === nextVersion
-    && (requiresCacheDb ? currentCacheDbVersion === nextVersion : typeof currentCacheDbVersion === 'undefined')
-    && (requiresCacheRedis ? currentCacheRedisVersion === nextVersion : typeof currentCacheRedisVersion === 'undefined')
+    && (requiresCacheDb ? currentCacheDbVersion === nextCacheDbVersion : typeof currentCacheDbVersion === 'undefined')
+    && (requiresCacheRedis ? currentCacheRedisVersion === nextCacheRedisVersion : typeof currentCacheRedisVersion === 'undefined')
     && typeof currentDevVersion === 'undefined'
     && typeof currentDevCacheDbVersion === 'undefined'
     && typeof currentDevCacheRedisVersion === 'undefined'
@@ -606,12 +634,12 @@ async function upsertCachePackageDependencies(
 
   dependencies['@holo-js/cache'] = nextVersion
   if (requiresCacheDb) {
-    dependencies['@holo-js/cache-db'] = nextVersion
+    dependencies['@holo-js/cache-db'] = nextCacheDbVersion
   } else {
     delete dependencies['@holo-js/cache-db']
   }
   if (requiresCacheRedis) {
-    dependencies['@holo-js/cache-redis'] = nextVersion
+    dependencies['@holo-js/cache-redis'] = nextCacheRedisVersion
   } else {
     delete dependencies['@holo-js/cache-redis']
   }
@@ -647,7 +675,7 @@ export async function upsertBroadcastPackageDependencies(projectRoot: string): P
   readonly framework: 'next' | 'nuxt' | 'sveltekit' | undefined
 }> {
   const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
-  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
+  const nextVersion = resolveManagedHoloPackageVersion('@holo-js/broadcast', dependencies, devDependencies)
   const framework = detectProjectFrameworkFromPackageJson(dependencies, devDependencies)
   let changed = false
 
@@ -722,7 +750,6 @@ async function upsertAuthPackageDependencies(
   } = {},
 ): Promise<boolean> {
   const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
-  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
   const socialEnabled = features.social === true || (features.socialProviders?.length ?? 0) > 0
   const requestedPackages = {
     '@holo-js/auth': true,
@@ -739,6 +766,7 @@ async function upsertAuthPackageDependencies(
   for (const [packageName, enabled] of Object.entries(requestedPackages)) {
     const currentDependency = dependencies[packageName]
     const currentDevDependency = devDependencies[packageName]
+    const nextVersion = resolveManagedHoloPackageVersion(packageName, dependencies, devDependencies)
 
     if (enabled) {
       if (currentDependency !== nextVersion || typeof currentDevDependency !== 'undefined') {
@@ -764,6 +792,7 @@ async function upsertAuthPackageDependencies(
     const enabled = requestedSocialProviders.has(providerName as SupportedAuthSocialProvider)
     const currentDependency = dependencies[packageName]
     const currentDevDependency = devDependencies[packageName]
+    const nextVersion = resolveManagedHoloPackageVersion(packageName, dependencies, devDependencies)
 
     if (enabled) {
       if (currentDependency !== nextVersion || typeof currentDevDependency !== 'undefined') {
@@ -795,7 +824,7 @@ async function upsertAuthPackageDependencies(
 
 async function upsertAuthorizationPackageDependency(projectRoot: string): Promise<boolean> {
   const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
-  const nextVersion = `^${HOLO_PACKAGE_VERSION}`
+  const nextVersion = resolveManagedHoloPackageVersion('@holo-js/authorization', dependencies, devDependencies)
   const currentVersion = dependencies['@holo-js/authorization']
   const currentDevVersion = devDependencies['@holo-js/authorization']
 

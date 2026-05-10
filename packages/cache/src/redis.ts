@@ -24,6 +24,11 @@ type RedisCacheDriverModule = {
 }
 
 type RedisDriverModuleLoader = () => Promise<RedisCacheDriverModule>
+const CACHE_DRIVER_DISPOSE_SYMBOL = Symbol.for('holo.cache.driver.dispose')
+
+type DisposableCacheDriver = CacheDriverContract & {
+  readonly [CACHE_DRIVER_DISPOSE_SYMBOL]?: () => void
+}
 
 function isNormalizedRedisConfig(
   config: HoloRedisConfig | NormalizedHoloRedisConfig,
@@ -114,6 +119,7 @@ class LazyRedisCacheDriver implements CacheDriverContract {
 
   private driverInstance?: CacheDriverContract
   private pending?: Promise<CacheDriverContract>
+  private disposalGeneration = 0
 
   constructor(private readonly options: RedisCacheDriverOptions) {}
 
@@ -124,9 +130,12 @@ class LazyRedisCacheDriver implements CacheDriverContract {
   private async resolveDriver(): Promise<CacheDriverContract> {
     if (this.driverInstance) return this.driverInstance
 
+    const pendingGeneration = this.disposalGeneration
     this.pending ??= redisDriverModuleLoader().then((module) => {
       const driver = module.createRedisCacheDriver(this.options)
-      this.driverInstance = driver
+      if (this.disposalGeneration === pendingGeneration) {
+        this.driverInstance = driver
+      }
       return driver
     }).finally(() => {
       this.pending = undefined
@@ -139,6 +148,26 @@ class LazyRedisCacheDriver implements CacheDriverContract {
     callback: (driver: CacheDriverContract) => Promise<TValue> | TValue,
   ): Promise<TValue> {
     return callback(await this.resolveDriver())
+  }
+
+  [CACHE_DRIVER_DISPOSE_SYMBOL](): void {
+    const pending = this.pending
+    const driverInstance = this.driverInstance
+
+    this.disposalGeneration += 1
+    this.driverInstance = undefined
+    this.pending = undefined
+
+    if (driverInstance) {
+      const disposable = driverInstance as DisposableCacheDriver
+      disposable[CACHE_DRIVER_DISPOSE_SYMBOL]?.()
+      return
+    }
+
+    pending?.then((driver) => {
+      const disposable = driver as DisposableCacheDriver
+      disposable[CACHE_DRIVER_DISPOSE_SYMBOL]?.()
+    }).catch(() => {})
   }
 
   private createLockProxy(name: string, seconds: number): CacheLockContract {

@@ -1,4 +1,5 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
+import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, resolve } from 'node:path'
 import { loadConfigDirectory } from '@holo-js/config'
 import { DEFAULT_HOLO_PROJECT_PATHS, renderGeneratedSchemaRuntimeModule, type TableDefinition } from '@holo-js/db'
@@ -79,11 +80,27 @@ function extractGeneratedSchemaTables(moduleValue: unknown): readonly TableDefin
   return []
 }
 
+function getFilesystemErrorCode(error: unknown): string | undefined {
+  return error instanceof Error && 'code' in error && typeof error.code === 'string'
+    ? error.code
+    : undefined
+}
+
 async function renderGeneratedSchemaRuntimeArtifact(
   projectRoot: string,
   schemaEntry: string,
 ): Promise<string> {
   const schemaPath = resolve(projectRoot, schemaEntry)
+  try {
+    await access(schemaPath, fsConstants.R_OK)
+  } catch (error) {
+    const code = getFilesystemErrorCode(error)
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return renderGeneratedSchemaRuntimeModule([])
+    }
+    throw error
+  }
+
   const moduleValue = await importProjectModule(projectRoot, schemaPath)
   const tables = extractGeneratedSchemaTables(moduleValue)
   return renderGeneratedSchemaRuntimeModule(tables)
@@ -821,17 +838,27 @@ export async function loadGeneratedProjectRegistry(
 ): Promise<GeneratedProjectRegistry | undefined> {
   const filePath = resolve(projectRoot, GENERATED_REGISTRY_JSON_PATH)
   const contents = await readFile(filePath, 'utf8').catch(() => undefined)
-  if (!contents) {
-    return undefined
+
+  if (contents) {
+    try {
+      const parsed = JSON.parse(contents) as unknown
+      if (isGeneratedProjectRegistry(parsed)) {
+        return parsed
+      }
+    } catch {
+      // Fall through to the generated module fallback below.
+    }
   }
 
-  try {
-    const parsed = JSON.parse(contents) as unknown
-    if (isGeneratedProjectRegistry(parsed)) {
-      return parsed
-    }
-  } catch {
-    return undefined
+  const generatedIndexPath = resolve(projectRoot, GENERATED_INDEX_PATH)
+  const generatedModule = await importProjectModule(projectRoot, generatedIndexPath).catch(() => undefined)
+
+  if (isRecord(generatedModule) && isGeneratedProjectRegistry(generatedModule.registry)) {
+    return generatedModule.registry
+  }
+
+  if (isRecord(generatedModule) && isGeneratedProjectRegistry(generatedModule.default)) {
+    return generatedModule.default
   }
 
   return undefined

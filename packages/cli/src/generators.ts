@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { basename, extname, resolve } from 'node:path'
 import { normalizeMigrationSlug } from '@holo-js/db'
 import {
   ensureGeneratedSchemaPlaceholder,
@@ -41,6 +41,7 @@ import {
   nextMigrationTemplate,
 } from './migrations'
 import { writeLine } from './io'
+import { collectFiles } from './project/discovery-helpers'
 import type { IoStreams, PreparedInput } from './cli-types'
 
 type MailTemplateType = 'markdown' | 'view'
@@ -53,6 +54,145 @@ export function hasRegisteredModelName(
   modelName: string,
 ): boolean {
   return Boolean(registry?.models.some(entry => entry.name === modelName))
+}
+
+function findRegisteredModelByTableName(
+  registry: Awaited<ReturnType<typeof loadGeneratedProjectRegistry>> | undefined,
+  tableName: string,
+) {
+  return registry?.models.find(entry => entry.tableName === tableName)
+}
+
+async function findGeneratedModelSourceByTableName(
+  projectRoot: string,
+  modelsPath: string,
+  tableName: string,
+): Promise<string | undefined> {
+  const files = await collectFiles(resolve(projectRoot, modelsPath))
+  const generatedTableReference = tableName
+
+  for (const filePath of files) {
+    const contents = await readFile(filePath, 'utf8')
+    if (containsDefineModelTableReference(contents, generatedTableReference)) {
+      return basename(filePath, extname(filePath))
+    }
+  }
+
+  return undefined
+}
+
+function containsDefineModelTableReference(contents: string, tableName: string): boolean {
+  let index = 0
+
+  while (index < contents.length) {
+    const nextReference = contents.indexOf('defineModel', index)
+    if (nextReference === -1) return false
+    if (isInsideComment(contents, nextReference)) {
+      index = nextReference + 'defineModel'.length
+      continue
+    }
+
+    const before = contents[nextReference - 1]
+    const after = contents[nextReference + 'defineModel'.length]
+    const hasIdentifierBoundary = !isIdentifierCharacter(before) && !isIdentifierCharacter(after)
+    if (!hasIdentifierBoundary) {
+      index = nextReference + 'defineModel'.length
+      continue
+    }
+
+    const openParenIndex = skipWhitespace(contents, nextReference + 'defineModel'.length)
+    if (contents[openParenIndex] !== '(') {
+      index = nextReference + 'defineModel'.length
+      continue
+    }
+
+    const firstArgumentIndex = skipWhitespace(contents, openParenIndex + 1)
+    const quote = contents[firstArgumentIndex]
+    if (quote !== '\'' && quote !== '"' && quote !== '`') {
+      index = firstArgumentIndex
+      continue
+    }
+
+    const literal = readStringLiteral(contents, firstArgumentIndex, quote)
+    if (literal?.value === tableName) return true
+    index = literal?.endIndex ?? firstArgumentIndex + 1
+  }
+
+  return false
+}
+
+function isInsideComment(contents: string, position: number): boolean {
+  let index = 0
+  while (index < position) {
+    const current = contents[index]
+    const next = contents[index + 1]
+
+    if (current === '\'' || current === '"' || current === '`') {
+      index = readStringLiteral(contents, index, current)?.endIndex ?? index + 1
+      continue
+    }
+
+    if (current === '/' && next === '/') {
+      const end = contents.indexOf('\n', index + 2)
+      if (end === -1 || end >= position) return true
+      index = end + 1
+      continue
+    }
+
+    if (current === '/' && next === '*') {
+      const end = contents.indexOf('*/', index + 2)
+      if (end === -1 || end + 2 >= position) return true
+      index = end + 2
+      continue
+    }
+
+    index += 1
+  }
+
+  return false
+}
+
+function isIdentifierCharacter(value: string | undefined): boolean {
+  return typeof value === 'string' && /[$\w]/.test(value)
+}
+
+function skipWhitespace(contents: string, startIndex: number): number {
+  let index = startIndex
+  while (/\s/.test(contents[index] ?? '')) {
+    index += 1
+  }
+  return index
+}
+
+function readStringLiteral(
+  contents: string,
+  startIndex: number,
+  quote: '\'' | '"' | '`',
+): { readonly value: string, readonly endIndex: number } | undefined {
+  let value = ''
+  let index = startIndex + 1
+  while (index < contents.length) {
+    const current = contents[index]
+    if (current === '\\') {
+      const escaped = contents[index + 1]
+      if (typeof escaped === 'string') {
+        value += escaped
+        index += 2
+        continue
+      }
+    }
+
+    if (current === quote) {
+      return { value, endIndex: index + 1 }
+    }
+
+    if (typeof current === 'string') {
+      value += current
+    }
+    index += 1
+  }
+
+  return undefined
 }
 
 export function hasRegisteredJobName(
@@ -180,6 +320,7 @@ export async function runMakeModel(
   input: PreparedInput,
 ): Promise<void> {
   const project = await ensureProjectConfig(projectRoot)
+  const generatedSchemaFilePath = await ensureGeneratedSchemaPlaceholder(projectRoot, project.config)
   const registry = await loadGeneratedProjectRegistry(projectRoot)
     ?? await prepareProjectDiscovery(projectRoot, project.config)
   /* v8 ignore next */
@@ -200,7 +341,6 @@ export async function runMakeModel(
   const seederFilePath = resolveArtifactPath(projectRoot, project.config.paths.seeders, seederInfo.directory, `${seederInfo.baseName}.ts`)
   const factoryInfo = resolveNameInfo(`${requestedName}Factory`, { suffix: 'Factory' })
   const factoryFilePath = resolveArtifactPath(projectRoot, project.config.paths.factories, factoryInfo.directory, `${factoryInfo.baseName}.ts`)
-  const generatedSchemaFilePath = await ensureGeneratedSchemaPlaceholder(projectRoot, project.config)
 
   if (await fileExists(modelFilePath) || hasRegisteredModelName(registry, nameInfo.baseName)) {
     throw new Error(`Model with the same name already exists: ${nameInfo.baseName}.`)
@@ -211,6 +351,20 @@ export async function runMakeModel(
     if (hasRegisteredMigrationSlug(registry, migrationName) || hasRegisteredCreateTableMigration(registry, tableName)) {
       throw new Error(`A migration for table "${tableName}" already exists.`)
     }
+  }
+
+  const existingTableModel = findRegisteredModelByTableName(registry, tableName)
+  if (existingTableModel) {
+    throw new Error(`Discovered duplicate model "${existingTableModel.name}" for table "${tableName}".`)
+  }
+
+  const existingGeneratedModelName = await findGeneratedModelSourceByTableName(
+    projectRoot,
+    project.config.paths.models,
+    tableName,
+  )
+  if (existingGeneratedModelName) {
+    throw new Error(`Discovered duplicate model "${existingGeneratedModelName}" for table "${tableName}".`)
   }
 
   await ensureAbsent(modelFilePath)

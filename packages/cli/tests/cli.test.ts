@@ -1,5 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import type * as FsPromisesModule from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
@@ -54,6 +55,7 @@ import {
   writeProjectConfig,
   writeTextFile,
 } from '../src/project'
+import { renderFrameworkAwareTsconfig, writeGeneratedProjectRegistry } from '../src/project/registry'
 import {
   ensureSuffix,
   pluralize,
@@ -71,7 +73,15 @@ import {
   toPascalCase,
   toSnakeCase,
 } from '../src/templates'
-import { ESBUILD_PACKAGE_VERSION, HOLO_PACKAGE_VERSION } from '../src/metadata'
+import {
+  ESBUILD_PACKAGE_VERSION,
+  HOLO_PACKAGE_VERSION,
+  IOREDIS_PACKAGE_VERSION,
+  SCAFFOLD_FRAMEWORK_VERSIONS,
+  SCAFFOLD_NEXT_REACT_VERSIONS,
+  SCAFFOLD_NUXT_DEPENDENCY_VERSIONS,
+  SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS,
+} from '../src/metadata'
 import type { FSWatcher } from 'node:fs'
 
 const workspaceRoot = resolve(import.meta.dirname, '../../..')
@@ -100,6 +110,12 @@ type BuiltWorkspacePackages = {
 const tempBuildRoots: string[] = []
 let builtWorkspacePackages: BuiltWorkspacePackages | null = null
 const expectedHoloPackageRange = `^${HOLO_PACKAGE_VERSION}`
+const expectedNextPackageRange = SCAFFOLD_FRAMEWORK_VERSIONS.next
+const expectedReactPackageRange = SCAFFOLD_NEXT_REACT_VERSIONS.react
+const expectedNuxtPackageRange = SCAFFOLD_FRAMEWORK_VERSIONS.nuxt
+const expectedSvelteKitPackageRange = SCAFFOLD_FRAMEWORK_VERSIONS.sveltekit
+const expectedVueRouterPackageRange = SCAFFOLD_NUXT_DEPENDENCY_VERSIONS['vue-router']
+const expectedSvelteVitePluginPackageRange = SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS['@sveltejs/vite-plugin-svelte']
 const outdatedHoloPackageRange = '^0.0.1'
 
 function createTempBuildRootSync(prefix: string): string {
@@ -621,9 +637,9 @@ export default {
         ['holo:build']: 'node ./.holo-js/framework/run.mjs build',
       },
       dependencies: {
-        'next': '^16.0.0',
-        'react': '^19.0.0',
-        'react-dom': '^19.0.0',
+        'next': expectedNextPackageRange,
+        'react': expectedReactPackageRange,
+        'react-dom': expectedReactPackageRange,
         '@holo-js/adapter-next': expectedHoloPackageRange,
         '@holo-js/cli': expectedHoloPackageRange,
         '@holo-js/config': expectedHoloPackageRange,
@@ -1041,6 +1057,16 @@ export default {
       storageDefaultDisk: 'public',
       optionalPackages: ['storage', 'events', 'queue'],
     })).not.toContain(`"@holo-js/queue-db": "${expectedHoloPackageRange}"`)
+    expect(JSON.parse(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Linted App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: [],
+    })).devDependencies).toMatchObject({
+      eslint: expect.any(String),
+    })
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'Broadcast Runtime App',
       framework: 'next',
@@ -1403,7 +1429,7 @@ export default {
       packageManager: 'bun',
       storageDefaultDisk: 'local',
       optionalPackages: [],
-    })).toContain('"@sveltejs/vite-plugin-svelte": "^7.1.0"')
+    })).toContain(`"@sveltejs/vite-plugin-svelte": "${expectedSvelteVitePluginPackageRange}"`)
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'Svelte App',
       framework: 'sveltekit',
@@ -1419,7 +1445,7 @@ export default {
       packageManager: 'bun',
       storageDefaultDisk: 'local',
       optionalPackages: [],
-    })).toContain('"vue-router": "^5.0.4"')
+    })).toContain(`"vue-router": "${expectedVueRouterPackageRange}"`)
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'Svelte App',
       framework: 'sveltekit',
@@ -1545,7 +1571,7 @@ export default {
       packageManager: 'bun',
       storageDefaultDisk: 'local',
     })
-    await writeFrameworkBinary(nuxtRoot, 'nuxi')
+    await writeFrameworkBinary(nuxtRoot, 'nuxt')
     expect(runNodeScript(nuxtRoot, join(nuxtRoot, '.holo-js/framework/run.mjs'), ['dev']).stdout).toContain('dev')
     expect(await readFile(join(nuxtRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain("process.on('SIGTERM'")
     expect(await readFile(join(nuxtRoot, 'nuxt.config.ts'), 'utf8')).toContain('@holo-js/adapter-nuxt')
@@ -1871,7 +1897,7 @@ export default defineAppConfig({
       name: 'fixture',
       private: true,
       dependencies: {
-        next: '^16.0.0',
+        next: expectedNextPackageRange,
       },
     }, null, 2))
 
@@ -2521,7 +2547,7 @@ export default defineAppConfig({
       updatedEnvExample: false,
     })
     await expect(projectInternals.installSecurityIntoProject(projectRoot)).resolves.toMatchObject({
-      updatedPackageJson: true,
+      updatedPackageJson: false,
       createdSecurityConfig: true,
     })
     await expect(projectInternals.installSecurityIntoProject(projectRoot)).resolves.toMatchObject({
@@ -2553,7 +2579,7 @@ export default defineAppConfig({
       private: true,
       devDependencies: {
         '@holo-js/queue': outdatedHoloPackageRange,
-        'typescript': '^5.0.0',
+        'typescript': outdatedHoloPackageRange,
       },
       optionalDependencies: ['ignored'],
     }, null, 2))
@@ -2584,7 +2610,7 @@ export default defineAppConfig({
         '@holo-js/queue-redis': expectedHoloPackageRange,
       },
       devDependencies: {
-        typescript: '^5.0.0',
+        typescript: outdatedHoloPackageRange,
       },
     })
     expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies['@holo-js/queue-db']).toBeUndefined()
@@ -2879,7 +2905,7 @@ export default defineRedisConfig({
       private: true,
       devDependencies: {
         '@holo-js/events': outdatedHoloPackageRange,
-        typescript: '^5.0.0',
+        typescript: outdatedHoloPackageRange,
       },
     }, null, 2))
     await expect(projectInternals.installEventsIntoProject(eventsDevDependencyRoot)).resolves.toEqual({
@@ -2892,7 +2918,7 @@ export default defineRedisConfig({
         '@holo-js/events': expectedHoloPackageRange,
       },
       devDependencies: {
-        typescript: '^5.0.0',
+        typescript: outdatedHoloPackageRange,
       },
     })
 
@@ -3143,6 +3169,78 @@ export default defineDatabaseConfig({
     expect(JSON.parse(await readFile(join(staleQueuePackagesRoot, 'package.json'), 'utf8')).dependencies['@holo-js/queue-redis']).toBeUndefined()
   }, 30000)
 
+  it('preserves workspace versions when syncing managed dependencies in workspace apps', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/auth': 'workspace:*',
+        '@holo-js/cache': 'workspace:*',
+        '@holo-js/db': 'workspace:*',
+        '@holo-js/db-sqlite': 'workspace:*',
+      },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/config'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'sqlite',
+      url: ':memory:',
+    },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'config/auth.ts', `
+import { defineAuthConfig } from '@holo-js/config'
+
+export default defineAuthConfig({
+  guards: {
+    web: {
+      driver: 'session',
+      provider: 'users',
+    },
+  },
+  providers: {
+    users: {
+      model: 'User',
+    },
+  },
+})
+`)
+    await writeProjectFile(projectRoot, 'config/cache.ts', `
+import { defineCacheConfig } from '@holo-js/config'
+
+export default defineCacheConfig({
+  default: 'database',
+  drivers: {
+    database: {
+      driver: 'database',
+      connection: 'default',
+      table: 'cache',
+    },
+  },
+})
+`)
+
+    await expect(projectInternals.syncManagedDriverDependencies(projectRoot)).resolves.toBe(true)
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))).toMatchObject({
+      dependencies: {
+        '@holo-js/auth': 'workspace:*',
+        '@holo-js/cache': 'workspace:*',
+        '@holo-js/cache-db': 'workspace:*',
+        '@holo-js/core': 'workspace:*',
+        '@holo-js/db': 'workspace:*',
+        '@holo-js/db-sqlite': 'workspace:*',
+        '@holo-js/security': 'workspace:*',
+        '@holo-js/session': 'workspace:*',
+      },
+    })
+  }, 30000)
+
   it('syncs lazy optional holo packages from config and discovery registry entries', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
@@ -3329,7 +3427,7 @@ export default defineRedisConfig({
         '@holo-js/queue': expectedHoloPackageRange,
         '@holo-js/security': expectedHoloPackageRange,
         '@holo-js/session': expectedHoloPackageRange,
-        'ioredis': '^5.4.2',
+        'ioredis': IOREDIS_PACKAGE_VERSION,
       },
     })
     expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies['@holo-js/storage']).toBeUndefined()
@@ -3416,7 +3514,7 @@ export default defineRedisConfig({
         '@holo-js/security': expectedHoloPackageRange,
         '@holo-js/session': expectedHoloPackageRange,
         '@holo-js/storage': expectedHoloPackageRange,
-        'ioredis': '^5.4.2',
+        'ioredis': IOREDIS_PACKAGE_VERSION,
       },
     }, null, 2))
     await writeProjectFile(projectRoot, 'config/database.ts', `
@@ -4051,7 +4149,7 @@ export default defineRedisConfig({
       name: 'next-broadcast-fixture',
       private: true,
       dependencies: {
-        next: '^16.0.0',
+        next: expectedNextPackageRange,
       },
     }, null, 2))
     await writeProjectFile(nextRoot, 'app/layout.tsx', 'export default function Layout({ children }: { children: React.ReactNode }) { return <html><body>{children}</body></html> }\n')
@@ -4105,7 +4203,7 @@ await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.t
       name: 'nuxt-broadcast-fixture',
       private: true,
       dependencies: {
-        nuxt: '^4.0.0',
+        nuxt: expectedNuxtPackageRange,
       },
     }, null, 2))
     const nuxtResult = runCliProcess(nuxtRoot, ['install', 'broadcast'])
@@ -4123,7 +4221,7 @@ await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.t
       name: 'svelte-broadcast-fixture',
       private: true,
       dependencies: {
-        '@sveltejs/kit': '^2.0.0',
+        '@sveltejs/kit': expectedSvelteKitPackageRange,
       },
     }, null, 2))
     const svelteResult = runCliProcess(svelteRoot, ['install', 'broadcast'])
@@ -4167,7 +4265,7 @@ module.exports = {
       name: 'next-direct-broadcast-fixture',
       private: true,
       dependencies: {
-        next: '^16.0.0',
+        next: expectedNextPackageRange,
       },
     }, null, 2))
     await writeProjectFile(nextRoot, 'config/auth.ts', 'export default {}\n')
@@ -4189,7 +4287,7 @@ module.exports = {
       name: 'nuxt-direct-broadcast-fixture',
       private: true,
       devDependencies: {
-        nuxt: '^4.0.0',
+        nuxt: expectedNuxtPackageRange,
       },
     }, null, 2))
     await writeProjectFile(nuxtRoot, 'config/auth.ts', 'export default {}\n')
@@ -4211,7 +4309,7 @@ module.exports = {
       name: 'svelte-direct-broadcast-fixture',
       private: true,
       dependencies: {
-        '@sveltejs/kit': '^2.0.0',
+        '@sveltejs/kit': expectedSvelteKitPackageRange,
       },
     }, null, 2))
     await writeProjectFile(svelteRoot, 'config/auth.ts', 'export default {}\n')
@@ -4280,7 +4378,7 @@ module.exports = {
       name: 'next-existing-broadcast-auth-fixture',
       private: true,
       dependencies: {
-        next: '^16.0.0',
+        next: expectedNextPackageRange,
       },
     }, null, 2))
     await writeProjectFile(nextRoot, 'config/auth.ts', 'export default {}\n')
@@ -4330,7 +4428,7 @@ export default defineBroadcastConfig({
       name: 'next-broadcast-auth-order-fixture',
       private: true,
       dependencies: {
-        next: '^16.0.0',
+        next: expectedNextPackageRange,
       },
     }, null, 2))
 
@@ -4357,7 +4455,7 @@ export default defineBroadcastConfig({
       name: 'next-broadcast-auth-formatted-fixture',
       private: true,
       dependencies: {
-        next: '^16.0.0',
+        next: expectedNextPackageRange,
       },
     }, null, 2))
 
@@ -4480,10 +4578,10 @@ export default defineBroadcastConfig({
     const io = createIo(baseRoot, { tty: true })
     await expect(cliInternals.resolveNewProjectInput(io.io, { args: [], flags: {} }, {
       prompt: async () => 'prompted-app',
-      choose: async (_label, _allowed, defaultValue) => {
-        if (defaultValue === 'nuxt') return 'sveltekit' as typeof defaultValue
-        if (defaultValue === 'sqlite') return 'sqlite' as typeof defaultValue
-        if (defaultValue === 'bun') return 'yarn' as typeof defaultValue
+      choose: async (label, _allowed, defaultValue) => {
+        if (label === 'Framework') return 'sveltekit' as typeof defaultValue
+        if (label === 'Database driver') return 'sqlite' as typeof defaultValue
+        if (label === 'Package manager') return 'yarn' as typeof defaultValue
         return 'local' as typeof defaultValue
       },
       optionalPackages: async () => ['validation'],
@@ -4498,10 +4596,10 @@ export default defineBroadcastConfig({
 
     await expect(cliInternals.resolveNewProjectInput(io.io, { args: [], flags: {} }, {
       prompt: async () => 'storage-app',
-      choose: async (_label, _allowed, defaultValue) => {
-        if (defaultValue === 'nuxt') return 'nuxt' as typeof defaultValue
-        if (defaultValue === 'sqlite') return 'sqlite' as typeof defaultValue
-        if (defaultValue === 'bun') return 'bun' as typeof defaultValue
+      choose: async (label, _allowed, defaultValue) => {
+        if (label === 'Framework') return 'nuxt' as typeof defaultValue
+        if (label === 'Database driver') return 'sqlite' as typeof defaultValue
+        if (label === 'Package manager') return 'bun' as typeof defaultValue
         return 'public' as typeof defaultValue
       },
       optionalPackages: async () => ['storage'],
@@ -4610,6 +4708,7 @@ export default defineBroadcastConfig({
     const projectRoot = join(baseRoot, 'scripted-app')
     const scaffolded = runCliProcess(baseRoot, ['new', 'scripted-app'])
     expect(scaffolded.status).toBe(0)
+    await writeFrameworkBinary(projectRoot, 'nuxt')
 
     const optionalCliResult = runCliProcess(baseRoot, [
       'new',
@@ -4654,8 +4753,6 @@ export default defineBroadcastConfig({
       await cliInternals.runProjectPrepare(projectRoot)
     })
     expect(await readFile(join(projectRoot, '.holo-js/generated/registry.json'), 'utf8')).toContain('"version": 1')
-
-    await writeFrameworkBinary(projectRoot, 'nuxi')
 
     const devResult = runNodeScript(projectRoot, join(projectRoot, '.holo-js/framework/run.mjs'), ['dev'])
     expect(devResult.status, devResult.stderr || devResult.stdout).toBe(0)
@@ -4962,6 +5059,46 @@ export default defineAppConfig({
     expect(generatedSeeders).toContain('server/db/seeders/courses/CourseSeeder.ts')
     expect(generatedMigrations).toContain('server/db/migrations/')
 
+  }, 30000)
+
+  it('detects duplicate generated model tables from source literals without matching comments', async () => {
+    const duplicateRoot = await createTempProject()
+    tempDirs.push(duplicateRoot)
+    await linkWorkspaceDb(duplicateRoot)
+    await ensureGeneratedSchemaPlaceholder(duplicateRoot, defaultProjectConfig())
+    await writeProjectFile(duplicateRoot, 'server/models/LegacyPerson.ts', `
+import '../../.holo-js/generated/schema.generated'
+import { defineModel } from '@holo-js/db'
+
+// defineModel("children", {}) is only documentation and should not block Child.
+export default defineModel('people', {})
+`)
+
+    const duplicateIo = createIo(duplicateRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['make:model', 'Person'], duplicateIo.io))).resolves.toBe(1)
+    expect(duplicateIo.read().stderr).toContain('Discovered duplicate model "LegacyPerson" for table "people".')
+
+    const commentOnlyRoot = await createTempProject()
+    tempDirs.push(commentOnlyRoot)
+    await linkWorkspaceDb(commentOnlyRoot)
+    await ensureGeneratedSchemaPlaceholder(commentOnlyRoot, defaultProjectConfig())
+    await writeProjectFile(commentOnlyRoot, 'server/models/Notes.ts', `
+// defineModel("children", {}) appears in a comment only.
+/* defineModel("children", {}) also appears in a block comment only. */
+if (false) {
+  const tableName = 'children'
+  notdefineModel("children", {})
+  defineModel(tableName, {})
+  defineModel("parents", {})
+  defineModel("child\\\\ren", {})
+}
+export const holoModelPendingSchema = true
+export default undefined
+`)
+
+    const commentOnlyIo = createIo(commentOnlyRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['make:model', 'Child'], commentOnlyIo.io))).resolves.toBe(0)
+    await expect(readFile(join(commentOnlyRoot, 'server/models/Child.ts'), 'utf8')).resolves.toContain('export default defineModel("children", {')
   }, 30000)
 
   it('prunes all registered prunable models with no arguments and rejects explicit non-prunable models', async () => {
@@ -5415,7 +5552,7 @@ export default defineAppConfig({
 `)
     await writeProjectFile(projectRoot, 'server/models/User.mjs', `
 export default {
-  definition: { kind: 'model', name: 'User', prunable: true },
+  definition: { kind: 'model', name: 'User', table: { tableName: 'users' }, prunable: true },
   async prune() { return 0 },
 }
 `)
@@ -6164,7 +6301,7 @@ export const config = {
 `)
     await writeProjectFile(projectRoot, 'app/models/User.mjs', `
 export default {
-  definition: { kind: 'model', name: 'User', prunable: true },
+  definition: { kind: 'model', name: 'User', table: { tableName: 'users' }, prunable: true },
   async prune() { return 0 },
 }
 `)
@@ -6804,9 +6941,9 @@ export default {
         },
       },
     })
-    expect(cliInternals.resolveConfigModuleUrl()).toContain('@holo-js/config')
+    expect(cliInternals.resolveConfigModuleUrl()).toContain('/config/dist/index.mjs')
     expect(cliInternals.resolveConfigModuleUrl(specifier => `mock:${specifier}`)).toBe('mock:@holo-js/config')
-    expect(cliInternals.resolveConfigModuleUrl(undefined)).toContain('/node_modules/@holo-js/config/dist/index.mjs')
+    expect(cliInternals.resolveConfigModuleUrl(null as never)).toContain('/node_modules/@holo-js/config/dist/index.mjs')
     expect(cliInternals.resolveConfigModuleUrl(() => pathToFileURL(join(workspaceRoot, 'packages/config/src/index.ts')).href))
       .toBe(pathToFileURL(join(workspaceRoot, 'packages/config/dist/index.mjs')).href)
     expect(cliInternals.resolveConfigModuleUrl(() => pathToFileURL(join(workspaceRoot, 'packages/config/src/index.mts')).href))
@@ -6850,13 +6987,13 @@ export default {
     await expect(cliInternals.hasProjectDependency(projectRoot, '@holo-js/queue')).resolves.toBe(false)
     await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
       dependencies: {
-        '@holo-js/queue': '^0.1.2',
+        '@holo-js/queue': outdatedHoloPackageRange,
       },
     }), 'utf8')
     await expect(cliInternals.hasProjectDependency(projectRoot, '@holo-js/queue')).resolves.toBe(true)
     await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
       devDependencies: {
-        '@holo-js/queue': '^0.1.2',
+        '@holo-js/queue': outdatedHoloPackageRange,
       },
     }), 'utf8')
     await expect(cliInternals.hasProjectDependency(projectRoot, '@holo-js/queue')).resolves.toBe(true)
@@ -7428,7 +7565,7 @@ export default defineMigration({
       name: 'nuxt-mail-fixture',
       private: true,
       dependencies: {
-        nuxt: '^4.0.0',
+        nuxt: expectedNuxtPackageRange,
       },
     }, null, 2))
     await expect(generatorInternals.resolveProjectMailViewFramework(nuxtMailProjectRoot)).resolves.toBe('nuxt')
@@ -7439,7 +7576,7 @@ export default defineMigration({
       name: 'next-mail-fixture',
       private: true,
       dependencies: {
-        next: '^16.0.0',
+        next: expectedNextPackageRange,
       },
     }, null, 2))
     await expect(generatorInternals.resolveProjectMailViewFramework(nextMailProjectRoot)).resolves.toBe('next')
@@ -7450,7 +7587,7 @@ export default defineMigration({
       name: 'svelte-mail-fixture',
       private: true,
       dependencies: {
-        '@sveltejs/kit': '^2.0.0',
+        '@sveltejs/kit': expectedSvelteKitPackageRange,
       },
     }, null, 2))
     await expect(generatorInternals.resolveProjectMailViewFramework(svelteMailProjectRoot)).resolves.toBe('sveltekit')
@@ -14267,7 +14404,7 @@ export default defineAppConfig({
 `)
     await writeProjectFile(projectRoot, 'server/models/Session.mjs', `
 export default {
-  definition: { kind: 'model', name: 'Session', prunable: true },
+  definition: { kind: 'model', name: 'Session', table: { tableName: 'sessions' }, prunable: true },
   async prune() { return 1 },
 }
 `)
@@ -14354,6 +14491,42 @@ export default {
     })
   })
 
+  it('falls back to the generated module when generated registry JSON is malformed', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, '.holo-js/generated/registry.json', '{')
+    await writeProjectFile(projectRoot, '.holo-js/generated/index.ts', `
+export const registry = {
+  version: 1,
+  generatedAt: '2026-01-01T00:00:00.000Z',
+  paths: {
+    models: 'server/models',
+    migrations: 'server/db/migrations',
+    seeders: 'server/db/seeders',
+    commands: 'server/commands',
+    jobs: 'server/jobs',
+    generatedSchema: '.holo-js/generated/schema.generated.ts',
+  },
+  models: [],
+  migrations: [],
+  seeders: [],
+  commands: [],
+  jobs: [],
+  events: [],
+  listeners: [],
+  broadcast: [],
+  channels: [],
+  authorizationPolicies: [],
+  authorizationAbilities: [],
+}
+`)
+
+    await withFakeBun(async () => {
+      await expect(loadGeneratedProjectRegistry(projectRoot)).resolves.toMatchObject({ version: 1 })
+    })
+  }, 30000)
+
   it('loads generated registries from named exports and ignores invalid generated modules', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
@@ -14388,6 +14561,156 @@ export const registry = {
     })
   })
 
+  it('loads generated registries from default exports', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, '.holo-js/generated/index.ts', `
+export default {
+  version: 1,
+  generatedAt: '2026-01-01T00:00:00.000Z',
+  paths: {
+    models: 'server/models',
+    migrations: 'server/db/migrations',
+    seeders: 'server/db/seeders',
+    commands: 'server/commands',
+    jobs: 'server/jobs',
+    generatedSchema: '.holo-js/generated/schema.generated.ts',
+  },
+  models: [],
+  migrations: [],
+  seeders: [],
+  commands: [],
+  jobs: [],
+}
+`)
+
+    await withFakeBun(async () => {
+      await expect(loadGeneratedProjectRegistry(projectRoot)).resolves.toMatchObject({ version: 1 })
+    })
+  }, 30000)
+
+  it('covers generated tsconfig render helpers', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    expect(projectInternals.renderGeneratedTsconfig()).toContain('../../tsconfig.json')
+    await expect(renderFrameworkAwareTsconfig(projectRoot)).resolves.toContain('../../tsconfig.json')
+  }, 30000)
+
+  it('renders schema runtime tables from default and named generated schema exports', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const registry = {
+      version: 1,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      paths: {
+        models: 'server/models',
+        migrations: 'server/db/migrations',
+        seeders: 'server/db/seeders',
+        commands: 'server/commands',
+        jobs: 'server/jobs',
+        events: 'server/events',
+        listeners: 'server/listeners',
+        broadcast: 'server/broadcast',
+        channels: 'server/channels',
+        authorizationPolicies: 'server/policies',
+        authorizationAbilities: 'server/abilities',
+        generatedSchema: '.holo-js/generated/schema.generated.ts',
+      },
+      models: [],
+      migrations: [],
+      seeders: [],
+      commands: [],
+      jobs: [],
+      events: [],
+      listeners: [],
+      broadcast: [],
+      channels: [],
+      authorizationPolicies: [],
+      authorizationAbilities: [],
+    } satisfies Parameters<typeof writeGeneratedProjectRegistry>[1]
+
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', `
+export default {
+  kind: 'table',
+  tableName: 'users',
+  columns: {},
+  indexes: [],
+}
+`)
+    await writeGeneratedProjectRegistry(projectRoot, registry)
+    await expect(readFile(join(projectRoot, '.holo-js/generated/schema.mjs'), 'utf8')).resolves.toContain('users')
+
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', `
+export const posts = {
+  kind: 'table',
+  tableName: 'posts',
+  columns: {},
+  indexes: [],
+}
+`)
+    await writeGeneratedProjectRegistry(projectRoot, registry)
+    await expect(readFile(join(projectRoot, '.holo-js/generated/schema.mjs'), 'utf8')).resolves.toContain('posts')
+  }, 30000)
+
+  it('propagates generated schema access errors other than missing files', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const generatedSchemaPath = join(projectRoot, '.holo-js/generated/schema.generated.ts')
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', 'export const users = {}')
+    const accessError = Object.assign(new Error('blocked'), { code: 'EACCES' })
+    vi.doMock('node:fs/promises', async (importOriginal) => {
+      const actual = await importOriginal<typeof FsPromisesModule>()
+      return {
+        ...actual,
+        access: async (path: Parameters<typeof actual.access>[0], mode?: Parameters<typeof actual.access>[1]) => {
+          if (path === generatedSchemaPath) {
+            throw accessError
+          }
+          return actual.access(path, mode)
+        },
+      }
+    })
+    vi.resetModules()
+
+    try {
+      const { writeGeneratedProjectRegistry: writeRegistryWithMockedAccess } = await import('../src/project/registry')
+      await expect(writeRegistryWithMockedAccess(projectRoot, {
+        version: 1,
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        paths: {
+          models: 'server/models',
+          migrations: 'server/db/migrations',
+          seeders: 'server/db/seeders',
+          commands: 'server/commands',
+          jobs: 'server/jobs',
+          events: 'server/events',
+          listeners: 'server/listeners',
+          broadcast: 'server/broadcast',
+          channels: 'server/channels',
+          authorizationPolicies: 'server/policies',
+          authorizationAbilities: 'server/abilities',
+          generatedSchema: '.holo-js/generated/schema.generated.ts',
+        },
+        models: [],
+        migrations: [],
+        seeders: [],
+        commands: [],
+        jobs: [],
+        events: [],
+        listeners: [],
+        broadcast: [],
+        channels: [],
+        authorizationPolicies: [],
+        authorizationAbilities: [],
+      })).rejects.toMatchObject({ code: 'EACCES' })
+    } finally {
+      vi.doUnmock('node:fs/promises')
+      vi.resetModules()
+    }
+  }, 30000)
+
   it('covers named exports for commands and registered runtime artifacts', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
@@ -14398,7 +14721,7 @@ export default defineAppConfig({})
 `)
     await writeProjectFile(projectRoot, 'server/models/Session.mjs', `
 export const SessionModel = {
-  definition: { kind: 'model', name: 'Session', prunable: true },
+  definition: { kind: 'model', name: 'Session', table: { tableName: 'sessions' }, prunable: true },
   async prune() { return 1 },
 }
 `)
@@ -14608,6 +14931,14 @@ export default {
     }
     const publishedBin = await readFile(join(built.cliPackageRoot, 'dist/bin/holo.mjs'), 'utf8')
     const publishedIndex = await readFile(join(built.cliPackageRoot, 'dist/index.mjs'), 'utf8')
+    const publishedEntrypoints = [
+      publishedBin,
+      ...await Promise.all(
+        (await readdir(join(built.cliPackageRoot, 'dist')))
+          .filter(fileName => fileName.endsWith('.mjs'))
+          .map(async fileName => readFile(join(built.cliPackageRoot, 'dist', fileName), 'utf8')),
+      ),
+    ]
     const executed = spawnSync('node', [built.cliBinPath, 'list'], {
       cwd: workspaceRoot,
       encoding: 'utf8',
@@ -14621,6 +14952,8 @@ export default {
     expect(publishedBin.startsWith('#!/usr/bin/env node\n')).toBe(true)
     expect(publishedBin.startsWith('#!/usr/bin/env node\n#!/usr/bin/env node')).toBe(false)
     expect(publishedIndex.startsWith('#!/usr/bin/env node')).toBe(false)
+    expect(publishedEntrypoints.some(entrypoint => entrypoint.includes('workspaces:'))).toBe(false)
+    expect(publishedEntrypoints.some(entrypoint => entrypoint.includes('.workspaces.catalog'))).toBe(false)
     expect(executed.status, executed.stderr || executed.stdout).toBe(0)
     expect(executed.stdout).toContain('Internal Commands')
   })
@@ -14644,6 +14977,49 @@ export default {
     expect(help.status, help.stderr || help.stdout).toBe(0)
     expect(help.stdout).toContain('Create a model and optionally related database artifacts.')
   })
+
+  it('runs published make:model through the user CLI path without installing unrelated optional packages', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await linkWorkspaceDb(projectRoot)
+
+    const person = runCliProcess(projectRoot, ['make:model', 'Person', '--migration'])
+    const child = runCliProcess(projectRoot, ['make:model', 'Child', '--migration', '--observer', '--seeder', '--factory'])
+    const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+      devDependencies?: Record<string, string>
+    }
+    const dependencies = {
+      ...(packageJson.dependencies ?? {}),
+      ...(packageJson.devDependencies ?? {}),
+    }
+
+    expect(person.status, person.stderr || person.stdout).toBe(0)
+    expect(child.status, child.stderr || child.stdout).toBe(0)
+
+    const personModel = await readFile(join(projectRoot, 'server/models/Person.ts'), 'utf8')
+    const childModel = await readFile(join(projectRoot, 'server/models/Child.ts'), 'utf8')
+    const childObserver = await readFile(join(projectRoot, 'server/db/observers/ChildObserver.ts'), 'utf8')
+    const childSeeder = await readFile(join(projectRoot, 'server/db/seeders/ChildSeeder.ts'), 'utf8')
+    const childFactory = await readFile(join(projectRoot, 'server/db/factories/ChildFactory.ts'), 'utf8')
+    const migrations = await readdir(join(projectRoot, 'server/db/migrations'))
+
+    expect(personModel).toContain('export default defineModel("people", {')
+    expect(childModel).toContain('export default defineModel("children", {')
+    expect(childModel).toContain('observers: [ChildObserver],')
+    expect(childObserver).toContain('export class ChildObserver')
+    expect(childSeeder).toContain('name: \'child\',')
+    expect(childFactory).toContain('defineFactory(Child, () => ({')
+    expect(migrations.some(fileName => fileName.endsWith('_create_people_table.ts'))).toBe(true)
+    expect(migrations.some(fileName => fileName.endsWith('_create_children_table.ts'))).toBe(true)
+    expect(dependencies['@holo-js/auth']).toBeUndefined()
+    expect(dependencies['@holo-js/notifications']).toBeUndefined()
+    expect(dependencies['@holo-js/mail']).toBeUndefined()
+    expect(dependencies['@holo-js/broadcast']).toBeUndefined()
+    expect(dependencies['@holo-js/cache']).toBeUndefined()
+    expect(dependencies['@holo-js/security']).toBeUndefined()
+    expect(dependencies['@holo-js/storage']).toBeUndefined()
+  }, 30_000)
 
   it('surfaces a helpful install hint when the security package cannot be loaded', async () => {
     const projectRoot = await createTempProject()

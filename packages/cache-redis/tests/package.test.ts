@@ -6,6 +6,7 @@ const redisMock = vi.hoisted(() => {
   const calls = {
     constructorArgs: [] as unknown[][],
     del: [] as string[][],
+    disconnect: [] as true[],
     eval: [] as Array<[string, number, ...string[]]>,
     get: [] as string[],
     incrby: [] as Array<[string, number]>,
@@ -85,6 +86,10 @@ const redisMock = vi.hoisted(() => {
         return new FakeRedis().eval(script, numberOfKeys, ...arguments_)
       }
 
+      disconnect(): void {
+        calls.disconnect.push(true)
+      }
+
       nodes(): readonly FakeRedis[] {
         return [new FakeRedis(), new FakeRedis()]
       }
@@ -92,6 +97,10 @@ const redisMock = vi.hoisted(() => {
 
     constructor(...args: unknown[]) {
       calls.constructorArgs.push(args)
+    }
+
+    disconnect(): void {
+      calls.disconnect.push(true)
     }
 
     async get(key: string): Promise<string | null> {
@@ -203,6 +212,7 @@ const redisMock = vi.hoisted(() => {
       lockOwners.clear()
       calls.constructorArgs.length = 0
       calls.del.length = 0
+      calls.disconnect.length = 0
       calls.eval.length = 0
       calls.get.length = 0
       calls.incrby.length = 0
@@ -219,6 +229,8 @@ vi.mock('ioredis', () => ({
 
 import { CacheInvalidNumericMutationError } from '@holo-js/cache'
 import { createRedisCacheDriver, redisCacheDriverInternals } from '../src/index'
+
+const cacheDriverDisposeSymbol = Symbol.for('holo.cache.driver.dispose')
 
 describe('@holo-js/cache-redis', () => {
   beforeEach(() => {
@@ -274,6 +286,28 @@ describe('@holo-js/cache-redis', () => {
     expect(redisMock.calls.scan).toEqual([
       ['0', 'MATCH', 'holo:cache:*', 'COUNT', 100],
     ])
+  })
+
+  it('disconnects its redis client through the runtime lifecycle hook', () => {
+    const driver = createRedisCacheDriver({
+      name: 'redis',
+      connectionName: 'cache',
+      prefix: 'holo:cache:',
+      redis: {
+        host: '127.0.0.1',
+        port: 6379,
+        db: 0,
+      },
+    }) as ReturnType<typeof createRedisCacheDriver> & Record<symbol, () => void>
+
+    const dispose = driver[cacheDriverDisposeSymbol]
+    if (!dispose) {
+      throw new Error('Expected redis cache driver to expose its runtime lifecycle hook.')
+    }
+
+    dispose()
+
+    expect(redisMock.calls.disconnect).toEqual([true])
   })
 
   it('supports expiration and immediate-expiry writes', async () => {
@@ -435,6 +469,33 @@ describe('@holo-js/cache-redis', () => {
     expect(redisMock.calls.del.every(keys => keys.length === 1)).toBe(true)
   })
 
+  it('handles cluster clients that do not expose master node iteration', async () => {
+    const clusterPrototype = redisMock.FakeRedis.Cluster.prototype as {
+      nodes?: (role: 'master') => readonly unknown[]
+    }
+    const originalNodes = clusterPrototype.nodes
+    clusterPrototype.nodes = undefined
+
+    try {
+      const driver = createRedisCacheDriver({
+        name: 'redis-cluster',
+        connectionName: 'cache',
+        prefix: 'holo:cache:',
+        redis: {
+          db: 0,
+          clusters: [
+            { host: 'cache-a.internal', port: 6379 },
+          ],
+        },
+      })
+
+      await expect(driver.flush()).resolves.toBeUndefined()
+      expect(redisMock.calls.scan).toEqual([])
+    } finally {
+      clusterPrototype.nodes = originalNodes
+    }
+  })
+
   it('prefers url, then clusters, then host/socket when creating redis clients', async () => {
     createRedisCacheDriver({
       name: 'by-url',
@@ -559,6 +620,7 @@ describe('@holo-js/cache-redis', () => {
     })
 
     await expect(driver.increment('holo:cache:wrongtype', 1)).rejects.toThrow(CacheInvalidNumericMutationError)
+    await expect(driver.increment('holo:cache:timeout', 1)).rejects.toThrow('ETIMEDOUT')
     await expect(driver.decrement('holo:cache:timeout', 1)).rejects.toThrow('ETIMEDOUT')
     expect(redisCacheDriverInternals.isRedisNumericMutationError(new Error('WRONGTYPE boom'))).toBe(true)
     expect(redisCacheDriverInternals.isRedisNumericMutationError(new Error('ETIMEDOUT'))).toBe(false)

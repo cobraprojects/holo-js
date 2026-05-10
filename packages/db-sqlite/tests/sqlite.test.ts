@@ -49,4 +49,19 @@ describe('@holo-js/db-sqlite', () => {
       'COMMIT',
     ])
   })
+
+  it('runs queries against a real in-memory SQLite database through the public adapter', async () => {
+    const adapter = createSQLiteAdapter()
+
+    try {
+      await adapter.execute('create table users (id integer primary key autoincrement, name text not null)')
+      const inserted = await adapter.execute('insert into users (name) values (?)', ['real-user'])
+      const selected = await adapter.query<{ name: string }>('select name from users where id = ?', [inserted.lastInsertId])
+
+      expect(inserted.affectedRows).toBe(1)
+      expect(selected.rows).toEqual([{ name: 'real-user' }])
+    } finally {
+      await adapter.disconnect()
+    }
+  })
 })

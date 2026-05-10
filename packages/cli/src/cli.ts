@@ -494,16 +494,15 @@ export function createInternalCommands(
             installEventsIntoProject,
             installQueueIntoProject,
           } = await loadProjectScaffoldModule()
-          const eventsResult = await installEventsIntoProject(context.projectRoot)
-          let queueResult:
-            | Awaited<ReturnType<typeof ProjectScaffoldModule.installQueueIntoProject>>
-            | undefined
-
           const queueConfigured = await hasProjectDependency(context.projectRoot, '@holo-js/queue')
             || await fileExists(resolve(context.projectRoot, 'config/queue.ts'))
             || await fileExists(resolve(context.projectRoot, 'config/queue.mts'))
             || await fileExists(resolve(context.projectRoot, 'config/queue.js'))
             || await fileExists(resolve(context.projectRoot, 'config/queue.mjs'))
+          const eventsResult = await installEventsIntoProject(context.projectRoot)
+          let queueResult:
+            | Awaited<ReturnType<typeof ProjectScaffoldModule.installQueueIntoProject>>
+            | undefined
 
           if (
             !queueConfigured

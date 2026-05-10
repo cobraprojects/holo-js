@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { createPostgresAdapter } from '../src'
 
@@ -37,4 +38,34 @@ describe('@holo-js/db-postgres', () => {
     expect(query).toHaveBeenNthCalledWith(3, 'BEGIN')
     expect(query).toHaveBeenNthCalledWith(4, 'COMMIT')
   })
+
+  it('runs queries against a local Postgres server through the public adapter', async () => {
+    const tableName = `holo_real_usage_postgres_${randomUUID().replaceAll('-', '_')}`
+    const adapter = createPostgresAdapter({
+      config: {
+        host: '127.0.0.1',
+        port: 5432,
+        user: 'postgres',
+        database: 'postgres',
+      },
+    })
+
+    try {
+      await adapter.execute(`create table ${tableName} (id serial primary key, name text not null)`)
+      const inserted = await adapter.execute(
+        `insert into ${tableName} (name) values ($1) returning id`,
+        ['real-user'],
+      )
+      const selected = await adapter.query<{ name: string }>(
+        `select name from ${tableName} where id = $1`,
+        [inserted.lastInsertId],
+      )
+
+      expect(inserted.affectedRows).toBe(1)
+      expect(selected.rows).toEqual([{ name: 'real-user' }])
+    } finally {
+      await adapter.execute(`drop table if exists ${tableName}`)
+      await adapter.disconnect()
+    }
+  }, 30_000)
 })

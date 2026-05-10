@@ -9,6 +9,7 @@ import {
 import { cacheRedisInternals } from './redis'
 import {
   createDriverMap,
+  disposeCacheRuntimeBindings,
   getCacheRuntimeState,
   isNormalizedCacheConfig,
   normalizeRuntimeConfig,
@@ -18,6 +19,8 @@ import {
 export { getCacheRuntime, getCacheRuntimeBindings } from './runtime-shared'
 
 export function configureCacheRuntime(bindings?: CacheRuntimeBindings): void {
+  disposeCacheRuntimeBindings(getCacheRuntimeState().bindings)
+
   if (!bindings) {
     getCacheRuntimeState().bindings = undefined
     resetDefaultDependencyIndex()
@@ -40,6 +43,7 @@ export function configureCacheRuntime(bindings?: CacheRuntimeBindings): void {
 }
 
 export function resetCacheRuntime(): void {
+  disposeCacheRuntimeBindings(getCacheRuntimeState().bindings)
   getCacheRuntimeState().bindings = undefined
   resetDefaultDependencyIndex()
   setGlobalDatabaseQueryCacheBridge(undefined)

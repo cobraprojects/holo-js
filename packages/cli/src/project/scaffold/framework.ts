@@ -7,10 +7,14 @@ import {
 import {
   ESBUILD_PACKAGE_VERSION,
   HOLO_PACKAGE_VERSION,
+  SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS,
   SCAFFOLD_FRAMEWORK_ADAPTER_VERSIONS,
   SCAFFOLD_FRAMEWORK_RUNTIME_VERSIONS,
   SCAFFOLD_FRAMEWORK_VERSIONS,
+  SCAFFOLD_NEXT_REACT_VERSIONS,
+  SCAFFOLD_NUXT_DEPENDENCY_VERSIONS,
   SCAFFOLD_PACKAGE_MANAGER_VERSIONS,
+  SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS,
 } from '../../metadata'
 import { resolveGeneratedSchemaPath } from '../config'
 import { renderGeneratedModelTypes } from '../registry'
@@ -86,34 +90,35 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
     esbuild: ESBUILD_PACKAGE_VERSION,
   }
   const devDependencies: Record<string, string> = {
-    typescript: '^5.8.0',
-    '@types/node': '^22.0.0',
+    typescript: SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS.typescript,
+    '@types/node': SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS['@types/node'],
+    eslint: SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS.eslint,
   }
 
   if (options.framework === 'nuxt') {
     dependencies.nuxt = SCAFFOLD_FRAMEWORK_VERSIONS.nuxt
-    dependencies.vue = '^3.5.13'
-    dependencies['vue-router'] = '^5.0.4'
+    dependencies.vue = SCAFFOLD_NUXT_DEPENDENCY_VERSIONS.vue
+    dependencies['vue-router'] = SCAFFOLD_NUXT_DEPENDENCY_VERSIONS['vue-router']
     dependencies['@holo-js/adapter-nuxt'] = SCAFFOLD_FRAMEWORK_ADAPTER_VERSIONS.nuxt
-    devDependencies['vue-tsc'] = '^2.2.0'
+    devDependencies['vue-tsc'] = SCAFFOLD_NUXT_DEPENDENCY_VERSIONS['vue-tsc']
   }
 
   if (options.framework === 'next') {
     dependencies.next = SCAFFOLD_FRAMEWORK_VERSIONS.next
-    dependencies.react = '^19.0.0'
-    dependencies['react-dom'] = '^19.0.0'
+    dependencies.react = SCAFFOLD_NEXT_REACT_VERSIONS.react
+    dependencies['react-dom'] = SCAFFOLD_NEXT_REACT_VERSIONS['react-dom']
     dependencies['@holo-js/adapter-next'] = SCAFFOLD_FRAMEWORK_ADAPTER_VERSIONS.next
-    devDependencies['@types/react'] = '^19.0.0'
-    devDependencies['@types/react-dom'] = '^19.0.0'
+    devDependencies['@types/react'] = SCAFFOLD_NEXT_REACT_VERSIONS['@types/react']
+    devDependencies['@types/react-dom'] = SCAFFOLD_NEXT_REACT_VERSIONS['@types/react-dom']
   }
 
   if (options.framework === 'sveltekit') {
     dependencies['@holo-js/adapter-sveltekit'] = SCAFFOLD_FRAMEWORK_ADAPTER_VERSIONS.sveltekit
-    dependencies['@sveltejs/adapter-node'] = '^5.5.4'
+    dependencies['@sveltejs/adapter-node'] = SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS['@sveltejs/adapter-node']
     dependencies['@sveltejs/kit'] = SCAFFOLD_FRAMEWORK_VERSIONS.sveltekit
-    dependencies['@sveltejs/vite-plugin-svelte'] = '^7.1.0'
-    dependencies.svelte = '^5.55.5'
-    dependencies.vite = '^8.0.10'
+    dependencies['@sveltejs/vite-plugin-svelte'] = SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS['@sveltejs/vite-plugin-svelte']
+    dependencies.svelte = SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS.svelte
+    dependencies.vite = SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS.vite
   }
 
   if (optionalPackages.includes('storage')) {
@@ -188,15 +193,15 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
       dev: 'holo dev',
       build: 'holo build',
       lint: options.framework === 'nuxt'
-        ? 'npx eslint app config server shared tests *.d.ts --fix --no-warn-ignored --no-error-on-unmatched-pattern'
+        ? 'eslint app config server shared tests *.d.ts --fix --no-warn-ignored --no-error-on-unmatched-pattern'
         : options.framework === 'next'
-          ? 'npx eslint app config server tests --fix --no-warn-ignored --no-error-on-unmatched-pattern'
-          : 'npx eslint src config server tests --fix --no-warn-ignored --no-error-on-unmatched-pattern',
+          ? 'eslint app config server tests --fix --no-warn-ignored --no-error-on-unmatched-pattern'
+          : 'eslint src config server tests --fix --no-warn-ignored --no-error-on-unmatched-pattern',
       typecheck: options.framework === 'nuxt'
-        ? 'npx nuxi typecheck'
+        ? 'nuxt typecheck'
         : options.framework === 'next'
-          ? 'npx tsc -p tsconfig.json --noEmit'
-          : 'npx svelte-kit sync && npx svelte-check --tsconfig ./tsconfig.json',
+          ? 'tsc -p tsconfig.json --noEmit'
+          : 'svelte-kit sync && svelte-check --tsconfig ./tsconfig.json',
       ['config:cache']: 'holo config:cache',
       ['config:clear']: 'holo config:clear',
       ['holo:dev']: 'node ./.holo-js/framework/run.mjs dev',
