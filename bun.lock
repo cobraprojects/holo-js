@@ -295,7 +295,7 @@
       },
       "peerDependencies": {
         "@holo-js/forms": "^0.1.4",
-        "next": "catalog:",
+        "next": "^13.0.0 || ^14.0.0 || ^15.0.0 || ^16.0.0",
         "react": "^18.3.1 || ^19.0.0",
       },
       "optionalPeers": [

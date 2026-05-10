@@ -1,4 +1,5 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
+import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, resolve } from 'node:path'
 import { loadConfigDirectory } from '@holo-js/config'
 import { DEFAULT_HOLO_PROJECT_PATHS, renderGeneratedSchemaRuntimeModule, type TableDefinition } from '@holo-js/db'
@@ -85,7 +86,7 @@ async function renderGeneratedSchemaRuntimeArtifact(
 ): Promise<string> {
   const schemaPath = resolve(projectRoot, schemaEntry)
   try {
-    await readFile(schemaPath, 'utf8')
+    await access(schemaPath, fsConstants.R_OK)
   } catch {
     return renderGeneratedSchemaRuntimeModule([])
   }

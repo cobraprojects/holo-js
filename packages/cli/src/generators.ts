@@ -69,13 +69,127 @@ async function findGeneratedModelSourceByTableName(
   tableName: string,
 ): Promise<string | undefined> {
   const files = await collectFiles(resolve(projectRoot, modelsPath))
-  const generatedTableReference = `defineModel(${JSON.stringify(tableName)}`
+  const generatedTableReference = tableName
 
   for (const filePath of files) {
     const contents = await readFile(filePath, 'utf8')
-    if (contents.includes(generatedTableReference)) {
+    if (containsDefineModelTableReference(contents, generatedTableReference)) {
       return basename(filePath, extname(filePath))
     }
+  }
+
+  return undefined
+}
+
+function containsDefineModelTableReference(contents: string, tableName: string): boolean {
+  let index = 0
+
+  while (index < contents.length) {
+    const nextReference = contents.indexOf('defineModel', index)
+    if (nextReference === -1) return false
+    if (isInsideComment(contents, nextReference)) {
+      index = nextReference + 'defineModel'.length
+      continue
+    }
+
+    const before = contents[nextReference - 1]
+    const after = contents[nextReference + 'defineModel'.length]
+    const hasIdentifierBoundary = !isIdentifierCharacter(before) && !isIdentifierCharacter(after)
+    if (!hasIdentifierBoundary) {
+      index = nextReference + 'defineModel'.length
+      continue
+    }
+
+    const openParenIndex = skipWhitespace(contents, nextReference + 'defineModel'.length)
+    if (contents[openParenIndex] !== '(') {
+      index = nextReference + 'defineModel'.length
+      continue
+    }
+
+    const firstArgumentIndex = skipWhitespace(contents, openParenIndex + 1)
+    const quote = contents[firstArgumentIndex]
+    if (quote !== '\'' && quote !== '"' && quote !== '`') {
+      index = firstArgumentIndex
+      continue
+    }
+
+    const literal = readStringLiteral(contents, firstArgumentIndex, quote)
+    if (literal?.value === tableName) return true
+    index = literal?.endIndex ?? firstArgumentIndex + 1
+  }
+
+  return false
+}
+
+function isInsideComment(contents: string, position: number): boolean {
+  let index = 0
+  while (index < position) {
+    const current = contents[index]
+    const next = contents[index + 1]
+
+    if (current === '\'' || current === '"' || current === '`') {
+      index = readStringLiteral(contents, index, current)?.endIndex ?? index + 1
+      continue
+    }
+
+    if (current === '/' && next === '/') {
+      const end = contents.indexOf('\n', index + 2)
+      if (end === -1 || end >= position) return true
+      index = end + 1
+      continue
+    }
+
+    if (current === '/' && next === '*') {
+      const end = contents.indexOf('*/', index + 2)
+      if (end === -1 || end + 2 >= position) return true
+      index = end + 2
+      continue
+    }
+
+    index += 1
+  }
+
+  return false
+}
+
+function isIdentifierCharacter(value: string | undefined): boolean {
+  return typeof value === 'string' && /[$\w]/.test(value)
+}
+
+function skipWhitespace(contents: string, startIndex: number): number {
+  let index = startIndex
+  while (/\s/.test(contents[index] ?? '')) {
+    index += 1
+  }
+  return index
+}
+
+function readStringLiteral(
+  contents: string,
+  startIndex: number,
+  quote: '\'' | '"' | '`',
+): { readonly value: string, readonly endIndex: number } | undefined {
+  let value = ''
+  let index = startIndex + 1
+  while (index < contents.length) {
+    const current = contents[index]
+    if (current === '\\') {
+      const escaped = contents[index + 1]
+      if (typeof escaped === 'string') {
+        value += escaped
+        index += 2
+        continue
+      }
+    }
+
+    if (current === quote) {
+      return { value, endIndex: index + 1 }
+    }
+
+    if (typeof current === 'string') {
+      value += current
+    }
+    index += 1
   }
 
   return undefined

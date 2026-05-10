@@ -119,6 +119,7 @@ class LazyRedisCacheDriver implements CacheDriverContract {
 
   private driverInstance?: CacheDriverContract
   private pending?: Promise<CacheDriverContract>
+  private disposalGeneration = 0
 
   constructor(private readonly options: RedisCacheDriverOptions) {}
 
@@ -129,9 +130,12 @@ class LazyRedisCacheDriver implements CacheDriverContract {
   private async resolveDriver(): Promise<CacheDriverContract> {
     if (this.driverInstance) return this.driverInstance
 
+    const pendingGeneration = this.disposalGeneration
     this.pending ??= redisDriverModuleLoader().then((module) => {
       const driver = module.createRedisCacheDriver(this.options)
-      this.driverInstance = driver
+      if (this.disposalGeneration === pendingGeneration) {
+        this.driverInstance = driver
+      }
       return driver
     }).finally(() => {
       this.pending = undefined
@@ -150,6 +154,7 @@ class LazyRedisCacheDriver implements CacheDriverContract {
     const pending = this.pending
     const driverInstance = this.driverInstance
 
+    this.disposalGeneration += 1
     this.driverInstance = undefined
     this.pending = undefined
 

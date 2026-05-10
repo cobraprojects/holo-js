@@ -1272,6 +1272,192 @@ describe('@holo-js/cache package surface', () => {
     })
   })
 
+  it('does not cache a lazy redis driver that resolves after runtime disposal', async () => {
+    let resolveModule: ((module: {
+      readonly createRedisCacheDriver: () => ReturnType<typeof createPendingRedisDriver>
+    }) => void) | undefined
+    const disposeRedisDriver = vi.fn()
+    const getRedisValue = vi.fn(async () => Object.freeze({ hit: false }))
+    const createRedisCacheDriver = vi.fn(createPendingRedisDriver)
+
+    function createPendingRedisDriver() {
+      return {
+        name: 'redis',
+        driver: 'redis' as const,
+        [cacheDriverDisposeSymbol]: disposeRedisDriver,
+        get: getRedisValue,
+        async put() {
+          return true
+        },
+        async add() {
+          return true
+        },
+        async forget() {
+          return true
+        },
+        async flush() {},
+        async increment() {
+          return 1
+        },
+        async decrement() {
+          return -1
+        },
+        lock(name: string) {
+          return {
+            name,
+            async get<TValue>(callback?: () => TValue | Promise<TValue>) {
+              return callback ? callback() : true
+            },
+            async release() {
+              return true
+            },
+            async block<TValue>(_waitSeconds: number, callback?: () => TValue | Promise<TValue>) {
+              return callback ? callback() : true
+            },
+          }
+        },
+      }
+    }
+
+    cacheRedisInternals.setRedisDriverModuleLoader(() => new Promise((resolve) => {
+      resolveModule = resolve
+    }))
+
+    configureCacheRuntime({
+      config: {
+        default: 'redis',
+        drivers: {
+          redis: {
+            driver: 'redis',
+            connection: 'cache',
+          },
+        },
+      },
+      redisConfig: {
+        default: 'cache',
+        connections: {
+          cache: {
+            host: '127.0.0.1',
+            port: 6379,
+          },
+        },
+      },
+    })
+
+    const write = cache.put('alpha', 'one', 60)
+    resetCacheRuntime()
+    resolveModule?.({ createRedisCacheDriver })
+    await expect(write).resolves.toBe(true)
+
+    cacheRedisInternals.setRedisDriverModuleLoader(async () => ({ createRedisCacheDriver }))
+    configureCacheRuntime({
+      config: {
+        default: 'redis',
+        drivers: {
+          redis: {
+            driver: 'redis',
+            connection: 'cache',
+          },
+        },
+      },
+      redisConfig: {
+        default: 'cache',
+        connections: {
+          cache: {
+            host: '127.0.0.1',
+            port: 6379,
+          },
+        },
+      },
+    })
+
+    await expect(cache.get('alpha')).resolves.toBeNull()
+    expect(createRedisCacheDriver).toHaveBeenCalledTimes(2)
+    expect(getRedisValue).toHaveBeenCalledTimes(1)
+    expect(disposeRedisDriver).toHaveBeenCalledTimes(1)
+  })
+
+  it('continues disposing runtime drivers when one driver dispose hook throws', () => {
+    const firstDispose = vi.fn(() => {
+      throw new Error('first dispose failed')
+    })
+    const secondDispose = vi.fn()
+    const reportError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const driver = {
+      name: 'first',
+      driver: 'memory' as const,
+      [cacheDriverDisposeSymbol]: firstDispose,
+      async get() {
+        return Object.freeze({ hit: false })
+      },
+      async put() {
+        return true
+      },
+      async add() {
+        return true
+      },
+      async forget() {
+        return true
+      },
+      async flush() {},
+      async increment() {
+        return 1
+      },
+      async decrement() {
+        return 1
+      },
+      lock(name: string) {
+        return {
+          name,
+          async get() {
+            return true
+          },
+          async release() {
+            return true
+          },
+          async block() {
+            return true
+          },
+        }
+      },
+    }
+    const secondDriver = {
+      ...driver,
+      name: 'second',
+      [cacheDriverDisposeSymbol]: secondDispose,
+    }
+
+    try {
+      configureCacheRuntime({
+        config: defineCacheConfig({
+          default: 'first',
+          drivers: {
+            first: {
+              driver: 'memory',
+            },
+            second: {
+              driver: 'memory',
+            },
+          },
+        }),
+        drivers: new Map([
+          ['first', driver],
+          ['second', secondDriver],
+        ]),
+      })
+
+      expect(() => resetCacheRuntime()).not.toThrow()
+      expect(firstDispose).toHaveBeenCalledTimes(1)
+      expect(secondDispose).toHaveBeenCalledTimes(1)
+      expect(reportError).toHaveBeenCalledWith(
+        expect.stringContaining('first'),
+        expect.any(Error),
+      )
+    } finally {
+      reportError.mockRestore()
+    }
+  })
+
   it('throws a clear error when redis cache support is configured without the optional package', async () => {
     cacheRedisInternals.setRedisDriverModuleLoader(async () => {
       throw cacheRedisInternals.normalizeRedisModuleLoadError({

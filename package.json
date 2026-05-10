@@ -77,7 +77,7 @@
     "test:example:blog-next": "bun run --cwd apps/blog-next test",
     "test:example:blog-sveltekit": "bun run --cwd apps/blog-sveltekit test",
     "test:examples": "bun run test:example:blog-nuxt && bun run test:example:blog-next && bun run test:example:blog-sveltekit",
-    "test:dependency-policy": "node scripts/validate-dependency-version-policy.mjs",
+    "test:dependency-policy": "node --test scripts/validate-dependency-version-policy.test.mjs && node scripts/validate-dependency-version-policy.mjs",
     "test:config:coverage": "rm -rf coverage/config && bun run --cwd packages/config test -- --coverage --coverage.clean=false --coverage.reportsDirectory='../../coverage/config' --coverage.include='src/**/*.ts' --coverage.exclude='src/**/types.ts'",
     "test:core:coverage": "rm -rf coverage/core && bun run --cwd packages/core test -- --coverage --coverage.clean=false --coverage.reportsDirectory='../../coverage/core' --coverage.include='src/**/*.ts' --coverage.exclude='src/**/types.ts' --coverage.exclude='src/runtime/**/*.d.ts'",
     "test:db:coverage": "rm -rf coverage/db && bun run --cwd packages/db test -- --coverage --coverage.clean=false --coverage.reportsDirectory='../../coverage/db' --coverage.include='src/**/*.ts' --coverage.exclude='src/**/types.ts' --coverage.exclude='src/migrations/templates/**' --coverage.exclude='src/drivers/index.ts' --coverage.exclude='src/drivers/SQLiteAdapter.ts' --coverage.exclude='src/drivers/PostgresAdapter.ts' --coverage.exclude='src/drivers/MySQLAdapter.ts'",

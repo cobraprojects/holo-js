@@ -92,6 +92,7 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
   const devDependencies: Record<string, string> = {
     typescript: SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS.typescript,
     '@types/node': SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS['@types/node'],
+    eslint: SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS.eslint,
   }
 
   if (options.framework === 'nuxt') {

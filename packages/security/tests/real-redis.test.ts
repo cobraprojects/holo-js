@@ -26,12 +26,18 @@ describe('@holo-js/security real Redis usage', () => {
         maxAttempts: 2,
         decaySeconds: 60,
       })
+      const thirdHit = await store.hit('login:127.0.0.1', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
       const cleared = await store.clear('login:127.0.0.1')
 
       expect(firstHit.limited).toBe(false)
       expect(firstHit.snapshot.attempts).toBe(1)
       expect(secondHit.limited).toBe(false)
       expect(secondHit.snapshot.attempts).toBe(2)
+      expect(thirdHit.limited).toBe(true)
+      expect(thirdHit.snapshot.attempts).toBe(3)
       expect(cleared).toBe(true)
     } finally {
       await adapter.clearAll()

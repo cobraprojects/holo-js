@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const execFileAsync = promisify(execFile)
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -17,8 +17,8 @@ function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-async function readWorkspaceCatalog() {
-  const rootManifest = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'))
+export async function readWorkspaceCatalog(root = repoRoot) {
+  const rootManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
   if (!isObject(rootManifest.workspaces) || !isObject(rootManifest.workspaces.catalog)) {
     return new Set()
   }
@@ -26,20 +26,20 @@ async function readWorkspaceCatalog() {
   return new Set(Object.keys(rootManifest.workspaces.catalog))
 }
 
-async function listTrackedAppManifests() {
+export async function listTrackedAppManifests(root = repoRoot) {
   const { stdout } = await execFileAsync('git', ['ls-files', 'apps/*/package.json'], {
-    cwd: repoRoot,
+    cwd: root,
   })
 
   return stdout
     .split('\n')
     .filter(Boolean)
-    .map(filePath => join(repoRoot, filePath))
+    .map(filePath => join(root, filePath))
 }
 
-async function collectAppManifestFailures() {
-  const catalogPackages = await readWorkspaceCatalog()
-  const manifestPaths = await listTrackedAppManifests()
+export async function collectAppManifestFailures(root = repoRoot) {
+  const catalogPackages = await readWorkspaceCatalog(root)
+  const manifestPaths = await listTrackedAppManifests(root)
   const failures = []
 
   for (const manifestPath of manifestPaths) {
@@ -67,8 +67,145 @@ async function collectAppManifestFailures() {
   return failures
 }
 
-async function collectScaffoldSourceFailures() {
-  const scaffoldPath = join(repoRoot, 'packages/cli/src/project/scaffold/framework.ts')
+function collectImportBindings(source) {
+  const bindings = new Map()
+  const importPattern = /import\s*{([\s\S]*?)}\s*from\s*['"]([^'"]+)['"]/g
+  for (const match of source.matchAll(importPattern)) {
+    const specifiers = match[1]
+    const sourcePath = match[2]
+    if (!specifiers || !sourcePath) continue
+
+    for (const rawSpecifier of specifiers.split(',')) {
+      const specifier = rawSpecifier.trim()
+      if (!specifier) continue
+      const aliasMatch = /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/.exec(specifier)
+      if (!aliasMatch) continue
+      const importedName = aliasMatch[1]
+      const localName = aliasMatch[2] ?? importedName
+      bindings.set(localName, { importedName, sourcePath })
+    }
+  }
+  return bindings
+}
+
+async function readResolvedModule(importerPath, importSource) {
+  if (!importSource.startsWith('.')) return undefined
+  const basePath = resolve(dirname(importerPath), importSource)
+  const candidates = [
+    basePath,
+    `${basePath}.ts`,
+    `${basePath}.js`,
+    `${basePath}.mjs`,
+    join(basePath, 'index.ts'),
+  ]
+
+  for (const candidate of candidates) {
+    try {
+      return {
+        path: candidate,
+        source: await readFile(candidate, 'utf8'),
+      }
+    } catch {
+      continue
+    }
+  }
+
+  return undefined
+}
+
+function collectExportInitializer(source, exportName) {
+  const exportPattern = new RegExp(`export\\s+const\\s+${exportName}\\b`)
+  const exportMatch = exportPattern.exec(source)
+  if (!exportMatch) return undefined
+
+  const initializerStart = source.indexOf('=', exportMatch.index)
+  if (initializerStart === -1) return undefined
+
+  const nextExport = source.slice(initializerStart + 1).search(/\nexport\s+(?:const|function|class|type|interface)\s/)
+  const initializerEnd = nextExport === -1
+    ? source.length
+    : initializerStart + 1 + nextExport
+  return source.slice(initializerStart + 1, initializerEnd)
+}
+
+function collectFunctionBody(source, functionName) {
+  const functionPattern = new RegExp(`function\\s+${functionName}\\b[\\s\\S]*?{`)
+  const functionMatch = functionPattern.exec(source)
+  if (!functionMatch) return undefined
+
+  let depth = 1
+  let index = functionMatch.index + functionMatch[0].length
+  while (index < source.length && depth > 0) {
+    const current = source[index]
+    if (current === '{') depth += 1
+    if (current === '}') depth -= 1
+    index += 1
+  }
+
+  return source.slice(functionMatch.index, index)
+}
+
+async function collectImportedConstantFailures({
+  modulePath,
+  moduleSource,
+  identifier,
+  forbiddenRanges,
+  visited,
+}) {
+  const visitKey = `${modulePath}:${identifier}`
+  if (visited.has(visitKey)) return []
+  visited.add(visitKey)
+
+  const initializer = collectExportInitializer(moduleSource, identifier)
+  if (!initializer) return []
+
+  const directForbiddenRange = forbiddenRanges.find(range => initializer.includes(range))
+  if (directForbiddenRange) {
+    return [`${modulePath}: imported scaffold dependency constant ${identifier} must not contain ${directForbiddenRange} ranges.`]
+  }
+
+  const importBindings = collectImportBindings(moduleSource)
+  const failures = []
+  for (const [localName, binding] of importBindings) {
+    if (!initializer.includes(localName)) continue
+    const resolvedModule = await readResolvedModule(modulePath, binding.sourcePath)
+    if (!resolvedModule) continue
+    failures.push(...await collectImportedConstantFailures({
+      modulePath: resolvedModule.path,
+      moduleSource: resolvedModule.source,
+      identifier: binding.importedName,
+      forbiddenRanges,
+      visited,
+    }))
+  }
+
+  for (const callMatch of initializer.matchAll(/\b([A-Za-z_$][\w$]*)\s*\(/g)) {
+    const functionBody = collectFunctionBody(moduleSource, callMatch[1])
+    if (!functionBody) continue
+    const forbiddenRange = forbiddenRanges.find(range => functionBody.includes(range))
+    if (forbiddenRange) {
+      failures.push(`${modulePath}: scaffold dependency helper ${callMatch[1]} used by ${identifier} must not contain ${forbiddenRange} ranges.`)
+    }
+
+    for (const [localName, binding] of importBindings) {
+      if (!functionBody.includes(localName)) continue
+      const resolvedModule = await readResolvedModule(modulePath, binding.sourcePath)
+      if (!resolvedModule) continue
+      failures.push(...await collectImportedConstantFailures({
+        modulePath: resolvedModule.path,
+        moduleSource: resolvedModule.source,
+        identifier: binding.importedName,
+        forbiddenRanges,
+        visited,
+      }))
+    }
+  }
+
+  return failures
+}
+
+export async function collectScaffoldSourceFailures(root = repoRoot) {
+  const scaffoldPath = join(root, 'packages/cli/src/project/scaffold/framework.ts')
   const source = await readFile(scaffoldPath, 'utf8')
   const renderStart = source.indexOf('export function renderScaffoldPackageJson')
   const renderEnd = source.indexOf('\nexport async function scaffoldProject', renderStart)
@@ -84,20 +221,42 @@ async function collectScaffoldSourceFailures() {
     return [`${scaffoldPath}: generated user project manifests must not contain ${forbiddenRange} dependency ranges.`]
   }
 
-  return []
-}
-
-const failures = [
-  ...(await collectAppManifestFailures()),
-  ...(await collectScaffoldSourceFailures()),
-]
-
-if (failures.length > 0) {
-  console.error('Dependency version policy failed:')
-  for (const failure of failures) {
-    console.error(`- ${failure}`)
+  const failures = []
+  const importBindings = collectImportBindings(source)
+  for (const [localName, binding] of importBindings) {
+    if (!renderSource.includes(localName)) continue
+    const resolvedModule = await readResolvedModule(scaffoldPath, binding.sourcePath)
+    if (!resolvedModule) continue
+    failures.push(...await collectImportedConstantFailures({
+      modulePath: resolvedModule.path,
+      moduleSource: resolvedModule.source,
+      identifier: binding.importedName,
+      forbiddenRanges,
+      visited: new Set(),
+    }))
   }
-  process.exit(1)
+
+  return failures
 }
 
-console.log('Dependency version policy validated.')
+export async function runDependencyVersionPolicyValidation(root = repoRoot) {
+  const failures = [
+    ...(await collectAppManifestFailures(root)),
+    ...(await collectScaffoldSourceFailures(root)),
+  ]
+
+  if (failures.length > 0) {
+    console.error('Dependency version policy failed:')
+    for (const failure of failures) {
+      console.error(`- ${failure}`)
+    }
+    return 1
+  }
+
+  console.log('Dependency version policy validated.')
+  return 0
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exit(await runDependencyVersionPolicyValidation())
+}

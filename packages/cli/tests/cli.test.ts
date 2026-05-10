@@ -1055,6 +1055,16 @@ export default {
       storageDefaultDisk: 'public',
       optionalPackages: ['storage', 'events', 'queue'],
     })).not.toContain(`"@holo-js/queue-db": "${expectedHoloPackageRange}"`)
+    expect(JSON.parse(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Linted App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: [],
+    })).devDependencies).toMatchObject({
+      eslint: expect.any(String),
+    })
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'Broadcast Runtime App',
       framework: 'next',
@@ -5047,6 +5057,46 @@ export default defineAppConfig({
     expect(generatedSeeders).toContain('server/db/seeders/courses/CourseSeeder.ts')
     expect(generatedMigrations).toContain('server/db/migrations/')
 
+  }, 30000)
+
+  it('detects duplicate generated model tables from source literals without matching comments', async () => {
+    const duplicateRoot = await createTempProject()
+    tempDirs.push(duplicateRoot)
+    await linkWorkspaceDb(duplicateRoot)
+    await ensureGeneratedSchemaPlaceholder(duplicateRoot, defaultProjectConfig())
+    await writeProjectFile(duplicateRoot, 'server/models/LegacyPerson.ts', `
+import '../../.holo-js/generated/schema.generated'
+import { defineModel } from '@holo-js/db'
+
+// defineModel("children", {}) is only documentation and should not block Child.
+export default defineModel('people', {})
+`)
+
+    const duplicateIo = createIo(duplicateRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['make:model', 'Person'], duplicateIo.io))).resolves.toBe(1)
+    expect(duplicateIo.read().stderr).toContain('Discovered duplicate model "LegacyPerson" for table "people".')
+
+    const commentOnlyRoot = await createTempProject()
+    tempDirs.push(commentOnlyRoot)
+    await linkWorkspaceDb(commentOnlyRoot)
+    await ensureGeneratedSchemaPlaceholder(commentOnlyRoot, defaultProjectConfig())
+    await writeProjectFile(commentOnlyRoot, 'server/models/Notes.ts', `
+// defineModel("children", {}) appears in a comment only.
+/* defineModel("children", {}) also appears in a block comment only. */
+if (false) {
+  const tableName = 'children'
+  notdefineModel("children", {})
+  defineModel(tableName, {})
+  defineModel("parents", {})
+  defineModel("child\\\\ren", {})
+}
+export const holoModelPendingSchema = true
+export default undefined
+`)
+
+    const commentOnlyIo = createIo(commentOnlyRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['make:model', 'Child'], commentOnlyIo.io))).resolves.toBe(0)
+    await expect(readFile(join(commentOnlyRoot, 'server/models/Child.ts'), 'utf8')).resolves.toContain('export default defineModel("children", {')
   }, 30000)
 
   it('prunes all registered prunable models with no arguments and rejects explicit non-prunable models', async () => {
@@ -14693,6 +14743,11 @@ export default {
     }
     const publishedBin = await readFile(join(built.cliPackageRoot, 'dist/bin/holo.mjs'), 'utf8')
     const publishedIndex = await readFile(join(built.cliPackageRoot, 'dist/index.mjs'), 'utf8')
+    const publishedEntrypoints = await Promise.all(
+      (await readdir(join(built.cliPackageRoot, 'dist')))
+        .filter(fileName => fileName.endsWith('.mjs'))
+        .map(async fileName => readFile(join(built.cliPackageRoot, 'dist', fileName), 'utf8')),
+    )
     const executed = spawnSync('node', [built.cliBinPath, 'list'], {
       cwd: workspaceRoot,
       encoding: 'utf8',
@@ -14706,6 +14761,8 @@ export default {
     expect(publishedBin.startsWith('#!/usr/bin/env node\n')).toBe(true)
     expect(publishedBin.startsWith('#!/usr/bin/env node\n#!/usr/bin/env node')).toBe(false)
     expect(publishedIndex.startsWith('#!/usr/bin/env node')).toBe(false)
+    expect(publishedEntrypoints.some(entrypoint => entrypoint.includes('workspaces:'))).toBe(false)
+    expect(publishedEntrypoints.some(entrypoint => entrypoint.includes('.workspaces.catalog'))).toBe(false)
     expect(executed.status, executed.stderr || executed.stdout).toBe(0)
     expect(executed.stdout).toContain('Internal Commands')
   })

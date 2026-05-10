@@ -1,9 +1,8 @@
 import packageJson from '../package.json' with { type: 'json' }
-import workspacePackageJson from '../../../package.json' with { type: 'json' }
+import { WORKSPACE_CATALOG } from './generated/workspaceCatalog'
 
 export const HOLO_PACKAGE_VERSION = packageJson.version
 const HOLO_PACKAGE_RANGE = `^${HOLO_PACKAGE_VERSION}`
-const WORKSPACE_CATALOG = workspacePackageJson.workspaces.catalog
 
 function catalogVersion<TPackageName extends keyof typeof WORKSPACE_CATALOG>(
   packageName: TPackageName,
@@ -36,6 +35,7 @@ export const SCAFFOLD_NEXT_REACT_VERSIONS = Object.freeze({
 export const SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS = Object.freeze({
   typescript: catalogVersion('typescript'),
   '@types/node': catalogVersion('@types/node'),
+  eslint: catalogVersion('eslint'),
 } as const)
 
 export const SCAFFOLD_NUXT_DEPENDENCY_VERSIONS = Object.freeze({

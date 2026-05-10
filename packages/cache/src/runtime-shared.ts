@@ -46,8 +46,12 @@ export function disposeCacheRuntimeBindings(bindings: CacheRuntimeFacade | undef
     return
   }
 
-  for (const driver of bindings.drivers.values()) {
-    disposeDriver(driver)
+  for (const [driverName, driver] of bindings.drivers.entries()) {
+    try {
+      disposeDriver(driver)
+    } catch (error) {
+      console.error(`[@holo-js/cache] Failed to dispose cache driver "${driverName}".`, error)
+    }
   }
 }
 
