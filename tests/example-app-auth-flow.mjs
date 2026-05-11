@@ -238,12 +238,14 @@ export async function assertExampleAppAuthFlow({
   if (checkPages) {
     const registerPage = await fetchAuthText('/register')
     assert.match(registerPage.text, /Create account/i)
+    assert.match(registerPage.text, /Register with WorkOS/i)
     assertGuestNav(registerPage.text)
 
     const loginPage = await fetchAuthText('/login')
     assert.match(loginPage.text, /Sign in/i)
     assert.match(loginPage.text, /Continue with Google/i)
     assert.match(loginPage.text, /Continue with GitHub/i)
+    assert.match(loginPage.text, /Continue with WorkOS/i)
     assertGuestNav(loginPage.text)
 
     const forgotPasswordPage = await fetchAuthText('/forgot-password')
@@ -287,6 +289,17 @@ export async function assertExampleAppAuthFlow({
   })
   assert.equal(missingGithubCallback.response.status, 400)
   assert.equal(missingGithubCallback.json.message, 'Missing OAuth state or code.')
+
+  const missingWorkosCallback = await fetchAuthText('/api/auth/workos/callback', {
+    allowFailure: true,
+  })
+  assertRedirectsTo(missingWorkosCallback, '/login')
+  const missingWorkosCallbackLocation = missingWorkosCallback.response.headers.get('location')
+  assert.ok(missingWorkosCallbackLocation, 'Expected WorkOS callback redirect to include a location header.')
+  assert.ok(
+    new URL(missingWorkosCallbackLocation, missingWorkosCallback.response.url).searchParams.has('error'),
+    'Expected WorkOS callback redirect to include an error query parameter.',
+  )
 
   const badCredentials = await fetchAuthJson('/api/login', {
     fields: {

@@ -13,7 +13,7 @@ type HostedProviderConfig = {
 type AuthCookieBindings = {
   readonly config: {
     readonly defaults: { readonly guard: string }
-    readonly workos: Readonly<Record<string, HostedProviderConfig>>
+    readonly workos: Readonly<Record<string, HostedProviderConfig | string | undefined>>
     readonly clerk: Readonly<Record<string, HostedProviderConfig>>
   }
   readonly session: {
@@ -46,7 +46,7 @@ function getHostedSessionCookieNamesForGuard(
   guardName: string,
 ): readonly string[] {
   const names = new Set<string>()
-  for (const provider of Object.values(config.workos)) {
+  for (const provider of Object.values(config.workos).filter(isHostedProviderConfig)) {
     if ((provider.guard ?? config.defaults.guard) === guardName) {
       names.add(provider.sessionCookie)
     }
@@ -58,6 +58,15 @@ function getHostedSessionCookieNamesForGuard(
   }
 
   return [...names]
+}
+
+function isHostedProviderConfig(value: HostedProviderConfig | string | undefined): value is HostedProviderConfig {
+  return !!(
+    value
+    && typeof value === 'object'
+    && 'sessionCookie' in value
+    && typeof value.sessionCookie === 'string'
+  )
 }
 
 export function buildLogoutCookies(

@@ -42,6 +42,9 @@
       {#if auth.authenticated}
         <span class="user-name">{displayName}</span>
         <button type="button" class="logout-button" disabled={isLoggingOut} aria-busy={isLoggingOut} onclick={logout}>Logout</button>
+        <form action="/api/auth/workos/logout" method="post" class="logout-form">
+          <button type="submit" class="logout-button">Logout from WorkOS</button>
+        </form>
       {:else}
         <a href="/login">Login</a>
         <a href="/register">Register</a>
@@ -93,6 +96,9 @@
     cursor: not-allowed;
     opacity: 0.6;
     pointer-events: none;
+  }
+  .logout-form {
+    display: inline;
   }
   a {
     color: #cbd5e1;

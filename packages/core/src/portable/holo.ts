@@ -1137,7 +1137,9 @@ function authConfigUsesSocialProviders<TCustom extends HoloConfigMap>(
 function authConfigUsesWorkosProviders<TCustom extends HoloConfigMap>(
   loadedConfig: LoadedHoloConfig<TCustom>,
 ): boolean {
-  return Object.keys(loadedConfig.auth.workos).length > 0
+  return Object.entries(loadedConfig.auth.workos).some(([name, provider]) => (
+    name !== 'provider' && typeof provider === 'object' && provider !== null
+  ))
 }
 
 function authConfigUsesClerkProviders<TCustom extends HoloConfigMap>(

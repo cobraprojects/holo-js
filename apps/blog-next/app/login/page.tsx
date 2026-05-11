@@ -47,6 +47,7 @@ export default function LoginPage() {
       <div style={{ display: 'grid', gap: '0.65rem' }}>
         <a href="/auth/google" style={{ color: '#e5e7eb', textDecoration: 'none' }}>Continue with Google</a>
         <a href="/auth/github" style={{ color: '#e5e7eb', textDecoration: 'none' }}>Continue with GitHub</a>
+        <a href="/api/auth/workos/login" style={{ color: '#e5e7eb', textDecoration: 'none' }}>Continue with WorkOS</a>
       </div>
 
       <form onSubmit={(event) => { event.preventDefault(); form.submit() }} style={{ display: 'grid', gap: '0.9rem' }}>
@@ -97,7 +98,7 @@ export default function LoginPage() {
       ) : null}
 
       <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-        <Link href="/register" style={{ color: '#7dd3fc' }}>Create account</Link>
+      <Link href="/register" style={{ color: '#7dd3fc' }}>Create account</Link>
         <Link href="/forgot-password" style={{ color: '#7dd3fc' }}>Forgot password?</Link>
       </div>
     </section>

@@ -8,6 +8,7 @@ import type {
   AuthPasswordBrokerConfig,
   AuthProviderConfig,
   AuthSocialProviderConfig,
+  HoloAuthWorkosConfig,
   AuthWorkosProviderConfig,
   BaseBroadcastConnectionConfig,
   BroadcastConnectionOptionsConfig,
@@ -34,6 +35,7 @@ import type {
   NormalizedAuthPasswordBrokerConfig,
   NormalizedAuthProviderConfig,
   NormalizedAuthSocialProviderConfig,
+  NormalizedHoloAuthWorkosConfig,
   NormalizedAuthWorkosProviderConfig,
   NormalizedBroadcastConnectionOptionsConfig,
   NormalizedBroadcastWorkerConfig,
@@ -1467,13 +1469,72 @@ function normalizeWorkosProvider(
     name,
     clientId: config.clientId?.trim() || undefined,
     apiKey: config.apiKey?.trim() || undefined,
-    cookiePassword: config.cookiePassword?.trim() || undefined,
     redirectUri: config.redirectUri?.trim() || undefined,
-    sessionCookie: config.sessionCookie?.trim() || DEFAULT_WORKOS_SESSION_COOKIE,
+    sessionCookie: DEFAULT_WORKOS_SESSION_COOKIE,
     guard,
     mapToProvider,
   })
   /* v8 ignore stop */
+}
+
+function isWorkosProviderConfig(value: AuthWorkosProviderConfig | string | undefined): value is AuthWorkosProviderConfig {
+  return typeof value === 'object' && value !== null
+}
+
+function getWorkosProviderEntries(
+  config: HoloAuthWorkosConfig | undefined,
+): readonly (readonly [string, AuthWorkosProviderConfig])[] {
+  if (!config) {
+    return Object.freeze([])
+  }
+
+  const entries: [string, AuthWorkosProviderConfig][] = []
+  for (const [name, value] of Object.entries(config)) {
+    if (name === 'provider') {
+      if (typeof value !== 'undefined' && typeof value !== 'string') {
+        throw new Error('[Holo Auth] WorkOS provider key "provider" is reserved for the default provider name.')
+      }
+      continue
+    }
+    if (!isWorkosProviderConfig(value)) {
+      throw new Error(`[Holo Auth] WorkOS provider "${name}" must be an object.`)
+    }
+    entries.push([name, value])
+  }
+
+  return Object.freeze(entries)
+}
+
+function normalizeWorkosConfig(
+  config: HoloAuthWorkosConfig | undefined,
+  guards: Readonly<Record<string, NormalizedAuthGuardConfig>>,
+  providers: Readonly<Record<string, NormalizedAuthProviderConfig>>,
+): NormalizedHoloAuthWorkosConfig {
+  const providerEntries = getWorkosProviderEntries(config)
+  const provider = typeof config?.provider === 'string' ? config.provider.trim() || undefined : undefined
+  if (providerEntries.length === 0) {
+    if (provider) {
+      throw new Error(`[Holo Auth] WorkOS provider "${provider}" is not configured.`)
+    }
+
+    return holoAuthDefaults.workos
+  }
+
+  const normalizedEntries = providerEntries.map(([name, providerConfig]) => {
+    const normalizedName = normalizeConnectionName(name, 'Auth WorkOS provider name')
+    return [normalizedName, providerConfig] as const
+  })
+  if (provider && !normalizedEntries.some(([name]) => name === provider)) {
+    throw new Error(`[Holo Auth] WorkOS provider "${provider}" is not configured.`)
+  }
+
+  return Object.freeze({
+    ...(typeof provider === 'undefined' ? {} : { provider }),
+    ...Object.fromEntries(normalizedEntries.map(([name, providerConfig]) => [
+      name,
+      normalizeWorkosProvider(name, providerConfig, guards, providers),
+    ])),
+  })
 }
 
 function normalizeClerkProvider(
@@ -1510,6 +1571,9 @@ function normalizeClerkProvider(
 
 export function normalizeAuthConfig(
   config: HoloAuthConfig = {},
+  _options: {
+    readonly appKey?: string
+  } = {},
 ): NormalizedHoloAuthConfig {
   const providers = !config.providers || Object.keys(config.providers).length === 0
     ? holoAuthDefaults.providers
@@ -1561,12 +1625,7 @@ export function normalizeAuthConfig(
       return [normalizedName, normalizeSocialProvider(normalizedName, provider, guards, providers)]
     })))
 
-  const workos = !config.workos || Object.keys(config.workos).length === 0
-    ? holoAuthDefaults.workos
-    : Object.freeze(Object.fromEntries(Object.entries(config.workos).map(([name, provider]) => {
-      const normalizedName = normalizeConnectionName(name, 'Auth WorkOS provider name')
-      return [normalizedName, normalizeWorkosProvider(normalizedName, provider, guards, providers)]
-    })))
+  const workos = normalizeWorkosConfig(config.workos, guards, providers)
 
   const clerk = !config.clerk || Object.keys(config.clerk).length === 0
     ? holoAuthDefaults.clerk
@@ -1594,7 +1653,7 @@ export function normalizeAuthConfig(
     personalAccessTokens: Object.freeze({
       defaultAbilities: Object.freeze([...(config.personalAccessTokens?.defaultAbilities ?? [])]),
     }),
-    socialEncryptionKey: config.socialEncryptionKey?.trim() || undefined,
+    socialEncryptionKey: config.socialEncryptionKey?.trim() || _options.appKey?.trim() || undefined,
     social,
     workos,
     clerk,

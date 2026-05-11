@@ -746,7 +746,6 @@ export function renderAuthConfig(
     '  personalAccessTokens: {',
     '    defaultAbilities: [],',
     '  },',
-    `  socialEncryptionKey: ${envValue('AUTH_SOCIAL_ENCRYPTION_KEY')},`,
   ]
 
   if (socialProviders.length > 0) {
@@ -779,12 +778,11 @@ export function renderAuthConfig(
   if (features.workos) {
     lines.push(
       '  workos: {',
+      `    provider: ${envValue('AUTH_WORKOS_PROVIDER', 'dashboard')},`,
       '    dashboard: {',
       `      clientId: ${envValue('WORKOS_CLIENT_ID')},`,
       `      apiKey: ${envValue('WORKOS_API_KEY')},`,
-      `      cookiePassword: ${envValue('WORKOS_COOKIE_PASSWORD')},`,
       `      redirectUri: ${envValue('WORKOS_REDIRECT_URI')},`,
-      `      sessionCookie: ${envValue('WORKOS_SESSION_COOKIE', 'wos-session')},`,
       '    },',
       '  },',
       '  // Add a dedicated guard and provider if WorkOS users should resolve through a different model.',

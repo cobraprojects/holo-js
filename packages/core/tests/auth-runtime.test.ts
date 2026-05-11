@@ -48,6 +48,7 @@ async function createProject(options: {
   social?: boolean
   socialEncryptionKey?: string
   workos?: boolean
+  workosProviderName?: string
   clerk?: boolean
 } = {}): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-core-auth-'))
@@ -59,6 +60,7 @@ import { defineAppConfig } from ${configEntry}
 
 export default defineAppConfig({
   name: 'Core Auth App',
+  key: 'core-auth-app-key',
   env: 'development',
   paths: {
     models: 'server/models',
@@ -136,7 +138,7 @@ export default defineAuthConfig({
     },
   },` : ''}
   ${options.workos ? `workos: {
-    dashboard: {
+    ${options.workosProviderName ?? 'dashboard'}: {
       clientId: 'client',
     },
   },` : ''}
@@ -1962,11 +1964,10 @@ export default undefined
     tableSpy.mockRestore()
   })
 
-  it('passes the social token encryption key into the configured social runtime', async () => {
+  it('passes the app key into the configured social runtime', async () => {
     const root = await createProject({
       auth: true,
       social: true,
-      socialEncryptionKey: 'phase-6-encryption-key',
     })
     const runtime = await createHolo(root, {
       processEnv: process.env,
@@ -1976,7 +1977,7 @@ export default undefined
     await runtime.initialize()
 
     const socialModule = await import('@holo-js/auth-social')
-    expect(socialModule.socialAuthInternals.getBindings().encryptionKey).toBe('phase-6-encryption-key')
+    expect(socialModule.socialAuthInternals.getBindings().encryptionKey).toBe('core-auth-app-key')
   })
 
   it('covers auth provider adapter credential branches for empty credentials, query builders, and partial where chains', async () => {
@@ -2478,6 +2479,30 @@ export default {
 
     await expect(workosRuntime.initialize()).rejects.toThrow('WorkOS auth config requires @holo-js/auth-workos to be installed')
     await expect(clerkRuntime.initialize()).rejects.toThrow('Clerk auth config requires @holo-js/auth-clerk to be installed')
+  })
+
+  it('detects WorkOS config when the provider is named defaultProvider', async () => {
+    const workosRoot = await createProject({
+      auth: true,
+      workos: true,
+      workosProviderName: 'defaultProvider',
+    })
+    const original = holoRuntimeInternals.moduleInternals.importOptionalModule
+    vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule')
+      .mockImplementation(async (specifier: string) => {
+        if (specifier === '@holo-js/auth-workos') {
+          return undefined
+        }
+
+        return original(specifier)
+      })
+
+    const workosRuntime = await createHolo(workosRoot, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    await expect(workosRuntime.initialize()).rejects.toThrow('WorkOS auth config requires @holo-js/auth-workos to be installed')
   })
 
   it('boots when hosted auth packages are installed and lets apps configure verifier runtimes separately', async () => {

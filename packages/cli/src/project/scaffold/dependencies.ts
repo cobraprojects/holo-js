@@ -209,7 +209,9 @@ function authConfigUsesSocialProviders(
 function authConfigUsesWorkosProviders(
   loaded: Awaited<ReturnType<typeof loadConfigDirectory>>,
 ): boolean {
-  return Object.keys(loaded.auth.workos).length > 0
+  return Object.entries(loaded.auth.workos).some(([name, provider]) => (
+    name !== 'provider' && typeof provider === 'object' && provider !== null
+  ))
 }
 
 function authConfigUsesClerkProviders(

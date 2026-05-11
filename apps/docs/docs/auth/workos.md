@@ -1,179 +1,119 @@
 # WorkOS
 
-WorkOS authentication keeps WorkOS as the hosted identity system while syncing the authenticated identity into a local
-application model.
-
-## What This Package Does
-
-`@holo-js/auth-workos` is designed for applications that need:
-
-- hosted sign-in and organization-aware identity flows
-- a local `User` or `Admin` model
-- synchronized identity linking
-- guard-aware authentication into the local model
-
-Think of the split like this:
-
-- WorkOS proves who the user is
-- Holo finds or creates your local user record
-- Holo signs that local user into your configured guard
-
-If you want the shortest answer to "how do I use this?":
-
-- easy Holo way: call `authenticate(request, 'dashboard')`
-- manual way: call `verifyRequest()`, then `syncIdentity()`, then `loginUsing()`
+`@holo-js/auth-workos` uses WorkOS/AuthKit as the hosted authentication UI, then syncs the authenticated WorkOS user into your local Holo user model and logs that local user into the normal Holo session.
 
 ## Configuration
 
 ```ts
-import { defineAuthConfig } from '@holo-js/config'
+import { defineAuthConfig, env } from '@holo-js/config'
 
 export default defineAuthConfig({
   workos: {
+    provider: env('AUTH_WORKOS_PROVIDER', 'dashboard'),
     dashboard: {
-      clientId: process.env.WORKOS_CLIENT_ID,
-      apiKey: process.env.WORKOS_API_KEY,
-      cookiePassword: process.env.WORKOS_COOKIE_PASSWORD,
-      redirectUri: 'https://app.example.com/auth/workos/callback',
-      sessionCookie: 'wos-session',
-      guard: 'web',
+      clientId: env('WORKOS_CLIENT_ID'),
+      apiKey: env('WORKOS_API_KEY'),
+      redirectUri: env('WORKOS_REDIRECT_URI'),
     },
   },
 })
 ```
 
-## Easy Holo Way
+`WORKOS_REDIRECT_URI` is the callback route registered in the WorkOS dashboard Redirect URIs list, for example `http://localhost:3000/api/auth/workos/callback`.
 
-This is the normal Holo flow. One call does everything:
+Do not configure a WorkOS cookie password or WorkOS session cookie name. Holo uses the app key for its own encryption needs, hides WorkOS hosted cookie internals, and authenticates the application through the normal Holo session cookie.
 
-- read the WorkOS session from the request
-- verify it
-- find or create the local user
-- link the hosted identity
-- create the local Holo session
+> **Session lifetime**
+>
+> After WorkOS login succeeds, Holo creates its own application session. To avoid users staying logged into Holo after their WorkOS session has already expired, configure the WorkOS session lifetime in the WorkOS dashboard to match your Holo session lifetime.
+
+## Routes
+
+Login redirects the browser to the hosted WorkOS sign-in form:
 
 ```ts
-import { authenticate } from '@holo-js/auth-workos'
+import { loginWithWorkos } from '@holo-js/auth-workos'
 
 export async function GET(request: Request) {
-  const result = await authenticate(request, 'dashboard')
-
-  if (!result) {
-    return Response.json({ message: 'Unauthenticated.' }, { status: 401 })
-  }
-
-  return Response.json({
-    authenticated: true,
-    user: result.user,
-  })
+  return await loginWithWorkos(request)
 }
 ```
 
-### What `authenticate()` Returns
+Register redirects the browser to the hosted WorkOS sign-up form:
 
 ```ts
-import { authenticate } from '@holo-js/auth-workos'
-```
-
-`authenticate()` returns:
-
-- `result.user`
-  Your local Holo user model after serialization. This is usually the value your app cares about most.
-- `result.status`
-  What happened during sync: `created`, `updated`, `linked`, or `relinked`.
-- `result.identity`
-  The stored hosted identity link row.
-- `result.session`
-  The verified WorkOS session data, including the hosted session token as `result.session.accessToken`.
-- `result.authSession`
-  The local Holo session that was established for the selected guard.
-
-In practice:
-
-- if you just want the signed-in local user, use `result.user`
-- if you care whether the local user was newly created or reused, check `result.status`
-- if you need hosted WorkOS details, inspect `result.session`
-
-`result.session.accessToken` is the verified WorkOS session token. It is hosted-session state, not a Holo personal
-access token and not a social-provider OAuth token.
-
-## Manual Way
-
-Use the manual flow when you want to control each step yourself.
-
-```ts
-import { loginUsing } from '@holo-js/auth'
-import { syncIdentity, verifyRequest } from '@holo-js/auth-workos'
+import { registerWithWorkos } from '@holo-js/auth-workos'
 
 export async function GET(request: Request) {
-  const hosted = await verifyRequest(request, 'dashboard')
-
-  if (!hosted) {
-    return Response.json({ message: 'Unauthenticated.' }, { status: 401 })
-  }
-
-  const linked = await syncIdentity(hosted, 'dashboard')
-
-  if (linked.user.email !== 'allowed@app.test') {
-    return Response.json({ message: 'Forbidden.' }, { status: 403 })
-  }
-
-  const authSession = await loginUsing(linked.user)
-
-  return Response.json({
-    authenticated: true,
-    user: linked.user,
-    status: linked.status,
-  })
+  return await registerWithWorkos(request)
 }
 ```
 
-### What Each Manual Step Returns
-
-- `verifyRequest(request, 'dashboard')`
-  Returns the verified WorkOS session from the incoming request, or `null` if the request is not authenticated with WorkOS.
-- `syncIdentity(hosted, 'dashboard')`
-  Returns the local-user sync result. This includes `linked.user`, `linked.status`, `linked.identity`, and `linked.session`.
-- `loginUsing(linked.user)`
-  Returns the local Holo session result for your configured guard.
-
-Use the manual flow when you need to:
-
-- inspect the verified WorkOS session before local sign-in
-- run your own authorization checks after identity sync
-- allow WorkOS authentication but delay local login
-- shape the response differently depending on `linked.status`
-
-## Verifying A Token Instead Of A Request
-
-If your route already has the WorkOS token, use `verifySession(token, provider)` instead of `verifyRequest(request, provider)`.
+The callback completes the WorkOS code exchange, syncs or creates the local user, links the WorkOS identity, and logs the user into Holo:
 
 ```ts
-import { verifySession } from '@holo-js/auth-workos'
+import { completeWorkosAuth } from '@holo-js/auth-workos'
 
-const hosted = await verifySession(token, 'dashboard')
+export async function GET(request: Request) {
+  const result = await completeWorkosAuth(request)
+
+  if (!result.ok) {
+    return Response.redirect(new URL(`/login?error=${result.code}`, request.url))
+  }
+
+  return Response.redirect(new URL('/admin', request.url))
+}
 ```
 
-This returns the same kind of hosted WorkOS session object as `verifyRequest()`, but starts from a token string instead of an incoming `Request`.
-
-## Logging Out
-
-Keep using the shared auth API:
+In Nuxt server routes, pass the event directly:
 
 ```ts
-import { logout } from '@holo-js/auth'
+import { completeWorkosAuth } from '@holo-js/auth-workos'
+import { sendRedirect } from 'h3'
 
-const signedOut = await logout()
+export default defineEventHandler(async (event) => {
+  const result = await completeWorkosAuth(event)
+
+  if (!result.ok) {
+    return await sendRedirect(event, `/login?error=${result.code}`, 303)
+  }
+
+  return await sendRedirect(event, '/admin', 303)
+})
 ```
 
-When the guard is mapped to WorkOS, `logout()` clears:
+Logout clears the local Holo session and returns the hosted WorkOS logout URL. WorkOS redirects to the Sign-out redirect configured in the WorkOS dashboard:
 
-- the local Holo auth session
-- the configured WorkOS session cookie for that guard
+```ts
+import { logoutWithWorkos } from '@holo-js/auth-workos'
 
-That prevents the next request from silently re-authenticating from the WorkOS cookie alone.
+export async function POST(request: Request) {
+  const result = await logoutWithWorkos(request)
 
-## Conflict Handling
+  if (!result.ok) {
+    return Response.json(result, { status: 422 })
+  }
 
-WorkOS sync is intentionally conservative. If a hosted identity conflicts with an existing linked user in a way the
-runtime cannot safely resolve, the flow fails with an explicit error instead of silently reassigning ownership.
+  return Response.redirect(result.url, 303)
+}
+```
+
+## Mapping Local Fields
+
+`completeWorkosAuth()` passes a fully typed WorkOS user to the optional mapper. Return any local user attributes you want Holo to save on create, update, or link.
+
+```ts
+const result = await completeWorkosAuth(request, {
+  user: (workosUser) => ({
+    email: workosUser.email,
+    name: workosUser.name,
+    avatarUrl: workosUser.profilePictureUrl,
+    timezone: workosUser.metadata.timezone,
+    workosOrganizationId: workosUser.organizationId,
+  }),
+})
+```
+
+The normalized `workosUser` includes `name`, derived from `firstName` and `lastName`, falling back to email. It also exposes WorkOS fields such as `id`, `emailVerified`, `profilePictureUrl`, `organizationId`, `metadata`, and the raw WorkOS payload.
+
+If no mapper is provided, Holo saves `email` and `name` by default. If your mapper omits either field, Holo still fills the missing `email` or `name` before writing the local user.

@@ -28,7 +28,6 @@ export function renderAuthEnvFiles(
       ? ['google']
       : []
   const env = [
-    'AUTH_SOCIAL_ENCRYPTION_KEY=',
     'AUTH_EMAIL_VERIFICATION_ROUTE=/verify-email',
     'AUTH_PASSWORD_RESET_ROUTE=/reset-password',
     'SESSION_DRIVER=file',
@@ -54,11 +53,10 @@ export function renderAuthEnvFiles(
 
   if (features.workos) {
     env.push(
+      'AUTH_WORKOS_PROVIDER=dashboard',
       'WORKOS_CLIENT_ID=',
       'WORKOS_API_KEY=',
-      'WORKOS_COOKIE_PASSWORD=',
       'WORKOS_REDIRECT_URI=',
-      'WORKOS_SESSION_COOKIE=wos-session',
     )
   }
 

@@ -267,7 +267,9 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
   const media = Object.freeze({ ...((resolvedRawConfig.media as HoloMediaConfig | undefined) ?? {}) })
   const session = normalizeSessionConfig(resolvedRawConfig.session as HoloSessionConfig | undefined, resolvedRedisConfig)
   const security = normalizeSecurityConfig(resolvedRawConfig.security as HoloSecurityConfig | undefined, resolvedRedisConfig)
-  const auth = normalizeAuthConfig(resolvedRawConfig.auth as HoloAuthConfig | undefined)
+  const auth = normalizeAuthConfig(resolvedRawConfig.auth as HoloAuthConfig | undefined, {
+    appKey: app.key,
+  })
 
   const customEntries = Object.entries(resolvedRawConfig).filter(([key]) => {
     return key !== 'app'
