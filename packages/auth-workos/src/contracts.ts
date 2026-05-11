@@ -48,7 +48,7 @@ export type WorkosCompleteAuthResult<TUser extends AuthUserLike = AuthUserLike> 
     readonly user: TUser
     readonly identity: HostedIdentityRecord
     readonly session: WorkosVerifiedSession
-    readonly authSession: AuthEstablishedSession
+    readonly authSession?: AuthEstablishedSession
   }>
   | Readonly<{
     readonly ok: false

@@ -17,6 +17,7 @@ import {
   verifySession,
   workosAuth,
   workosAuthInternals,
+  type WorkosAuthenticationResult,
   type WorkosAuthFacade,
   type WorkosCompleteAuthResult,
   type WorkosJsonValue,
@@ -40,6 +41,11 @@ type SessionStore = {
   write(record: SessionRecord): Promise<void>
   delete(sessionId: string): Promise<void>
 }
+
+type AssertExtends<TValue extends TExpected, TExpected> = true
+type IsOptionalProperty<TRecord, TKey extends keyof TRecord> = Record<never, never> extends Pick<TRecord, TKey>
+  ? true
+  : false
 
 type UserRecord = {
   id: number
@@ -447,7 +453,22 @@ describe('@holo-js/auth-workos', () => {
     expect(typeof workosAuthInternals.resolveEmailForCreation).toBe('function')
 
     type CompleteWorkosAuthReturn = Awaited<ReturnType<WorkosAuthFacade['completeWorkosAuth']>>
+    type CompleteWorkosAuthSuccess = Extract<CompleteWorkosAuthReturn, { readonly ok: true }>
+    type CompleteWorkosAuthSessionOptional = IsOptionalProperty<CompleteWorkosAuthSuccess, 'authSession'>
+    type WorkosAuthenticationSessionOptional = IsOptionalProperty<WorkosAuthenticationResult, 'authSession'>
+    type _CompleteAuthSessionOptionalityMatches = AssertExtends<
+      CompleteWorkosAuthSessionOptional,
+      WorkosAuthenticationSessionOptional
+    >
+    type _AuthenticationSessionOptionalityMatches = AssertExtends<
+      WorkosAuthenticationSessionOptional,
+      CompleteWorkosAuthSessionOptional
+    >
+
     expectTypeOf<CompleteWorkosAuthReturn>().toEqualTypeOf<WorkosCompleteAuthResult>()
+    expectTypeOf<CompleteWorkosAuthSuccess['authSession']>().toEqualTypeOf<WorkosAuthenticationResult['authSession']>()
+    expectTypeOf<IsOptionalProperty<CompleteWorkosAuthSuccess, 'authSession'>>()
+      .toEqualTypeOf<IsOptionalProperty<WorkosAuthenticationResult, 'authSession'>>()
   })
 
   it('resolves the configured default WorkOS provider', () => {
@@ -1028,7 +1049,10 @@ describe('@holo-js/auth-workos', () => {
 
     const callback = await completeWorkosAuth(new Request('https://app.test/api/auth/workos/callback?code=code_123'))
     expect(callback.ok).toBe(true)
-    const sessionCookie = callback.ok ? callback.authSession.cookies[0]?.split(';', 1)[0] : undefined
+    if (!callback.ok || !callback.authSession) {
+      throw new Error('Expected WorkOS callback to establish an auth session.')
+    }
+    const sessionCookie = callback.authSession.cookies[0]?.split(';', 1)[0]
 
     authRuntimeInternals.getRuntimeBindings().context.setSessionId('web')
     authRuntimeInternals.getRuntimeBindings().context.setCachedUser('web', null)
