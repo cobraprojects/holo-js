@@ -33,10 +33,10 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/validation": "^0.1.4"
+    "@holo-js/validation": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/security": "^0.1.4"
+    "@holo-js/security": "catalog:"
   },
   "peerDependenciesMeta": {
     "@holo-js/security": {
@@ -44,9 +44,9 @@
     }
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

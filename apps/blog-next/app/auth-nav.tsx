@@ -64,6 +64,9 @@ export function AuthNav() {
       <form action="/api/auth/workos/logout" method="post" style={logoutFormStyle}>
         <button type="submit" style={logoutButtonStyle}>Logout from WorkOS</button>
       </form>
+      <form action="/api/auth/clerk/logout" method="post" style={logoutFormStyle}>
+        <button type="submit" style={logoutButtonStyle}>Logout from Clerk</button>
+      </form>
     </>
   )
 }

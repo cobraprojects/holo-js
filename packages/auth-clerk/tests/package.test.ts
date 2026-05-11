@@ -8,8 +8,12 @@ import {
   authenticate,
   clerkAuth,
   clerkAuthInternals,
+  completeClerkAuth,
   configureClerkAuthRuntime,
+  loginWithClerk,
+  logoutWithClerk,
   resetClerkAuthRuntime,
+  registerWithClerk,
   syncIdentity,
   verifyRequest,
   verifySession,
@@ -35,10 +39,13 @@ type SessionStore = {
 
 type UserRecord = {
   id: number
-  name?: string
+  name: string
   email: string
+  role: 'admin' | 'member'
+  avatarUrl?: string | null
   password?: string | null
   avatar?: string | null
+  clerkUserId?: string
   email_verified_at?: Date | null
 }
 
@@ -60,6 +67,20 @@ type ClerkSessionFixture = {
     }[]
   }
   readonly raw?: unknown
+}
+
+type FetchMockInput = string | URL | Request
+
+function resolveFetchMockUrl(input: FetchMockInput): string {
+  if (input instanceof Request) {
+    return input.url
+  }
+
+  if (input instanceof URL) {
+    return input.href
+  }
+
+  return input
 }
 
 class InMemorySessionStore implements SessionStore {
@@ -96,14 +117,18 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
     readonly email: string
     readonly password?: string | null
     readonly avatar?: string | null
+    readonly clerkUserId?: string
     readonly email_verified_at?: Date | null
   }): Promise<UserRecord> {
     const created: UserRecord = {
       id: this.nextId,
-      name: input.name,
+      name: input.name ?? input.email,
       email: input.email,
+      role: 'member',
+      avatarUrl: input.avatar ?? null,
       password: input.password,
       avatar: input.avatar,
+      clerkUserId: input.clerkUserId,
       email_verified_at: input.email_verified_at,
     }
     this.nextId += 1
@@ -116,6 +141,7 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
     readonly name?: string
     readonly email?: string
     readonly avatar?: string | null
+    readonly clerkUserId?: string
     readonly email_verified_at?: Date | null
     readonly password?: string | null
   }): Promise<UserRecord> {
@@ -128,6 +154,10 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
     }
     if (typeof input.avatar !== 'undefined') {
       user.avatar = input.avatar
+      user.avatarUrl = input.avatar
+    }
+    if (typeof input.clerkUserId !== 'undefined') {
+      user.clerkUserId = input.clerkUserId
     }
     if (typeof input.email_verified_at !== 'undefined') {
       user.email_verified_at = input.email_verified_at
@@ -152,7 +182,10 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
       id: user.id,
       name: user.name,
       email: user.email,
+      role: user.role,
       avatar: user.avatar ?? null,
+      avatarUrl: user.avatarUrl ?? user.avatar ?? null,
+      clerkUserId: user.clerkUserId,
       email_verified_at: user.email_verified_at ?? null,
     }
   }
@@ -185,8 +218,10 @@ class SnapshotProviderAdapter implements AuthProviderAdapter<UserRecord> {
   }): Promise<UserRecord> {
     const created: UserRecord = {
       id: this.nextId,
-      name: input.name,
+      name: input.name ?? input.email,
       email: input.email,
+      role: 'member',
+      avatarUrl: input.avatar ?? null,
       password: input.password,
       avatar: input.avatar,
       email_verified_at: input.email_verified_at,
@@ -206,7 +241,9 @@ class SnapshotProviderAdapter implements AuthProviderAdapter<UserRecord> {
       id: user.id,
       name: user.name,
       email: user.email,
+      role: user.role,
       avatar: user.avatar ?? null,
+      avatarUrl: user.avatarUrl ?? user.avatar ?? null,
       email_verified_at: user.email_verified_at ?? null,
     }
   }
@@ -261,6 +298,13 @@ function configureRuntime(options: {
   clerkGuard?: 'web' | 'admin' | 'api'
   includeClerkConfig?: boolean
   configureClerkRuntime?: boolean
+  frontendApi?: string
+  publishableKey?: string
+  responseCookies?: string[]
+  redirectResponses?: {
+    url: string
+    status?: 301 | 302 | 303 | 307 | 308
+  }[]
 } = {}) {
   const sessionStore = new InMemorySessionStore()
   configureSessionRuntime({
@@ -294,6 +338,19 @@ function configureRuntime(options: {
 
   const usersProvider = new InMemoryProviderAdapter()
   const adminsProvider = new InMemoryProviderAdapter()
+  const context = authRuntimeInternals.createMemoryAuthContext()
+  const authContext = options.responseCookies || options.redirectResponses
+    ? {
+        ...context,
+        appendResponseCookie(cookie: string) {
+          options.responseCookies?.push(cookie)
+        },
+        redirectResponse(url: string, status?: 301 | 302 | 303 | 307 | 308) {
+          options.redirectResponses?.push({ url, status })
+        },
+      }
+    : context
+
   configureAuthRuntime({
     config: defineAuthConfig({
       defaults: {
@@ -315,10 +372,12 @@ function configureRuntime(options: {
       clerk: options.includeClerkConfig === false
         ? undefined
         : {
+            provider: 'app',
             app: {
-              publishableKey: 'pk_test',
+              publishableKey: options.publishableKey ?? 'pk_test',
               secretKey: 'sk_test',
-              jwtKey: 'jwt-key',
+              frontendApi: options.frontendApi ?? 'https://accounts.app.test',
+              redirectUri: 'https://app.test/api/auth/clerk/callback',
               sessionCookie: '__session',
               guard: options.clerkGuard,
               mapToProvider: options.clerkGuard === 'admin' ? 'admins' : undefined,
@@ -330,7 +389,7 @@ function configureRuntime(options: {
       users: usersProvider,
       admins: adminsProvider,
     },
-    context: authRuntimeInternals.createMemoryAuthContext(),
+    context: authContext,
   })
 
   const identityStore = new InMemoryIdentityStore()
@@ -348,6 +407,7 @@ function configureRuntime(options: {
 
             return {
               ...session,
+              user: clerkAuthInternals.normalizeClerkUserProfile(session.user),
               accessToken: token,
             }
           },
@@ -370,6 +430,7 @@ afterEach(() => {
   resetClerkAuthRuntime()
   resetAuthRuntime()
   resetSessionRuntime()
+  vi.doUnmock('@clerk/backend')
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -394,12 +455,38 @@ function createSignedJwt(
   return `${signingInput}.${signature}`
 }
 
+function createJwksResponse(publicKey: ReturnType<typeof generateKeyPairSync>['publicKey']): Response {
+  return new Response(JSON.stringify({
+    keys: [
+      {
+        ...(publicKey.export({ format: 'jwk' }) as Record<string, unknown>),
+        kid: 'clerk-test-key',
+        use: 'sig',
+        alg: 'RS256',
+      },
+    ],
+  }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
 describe('@holo-js/auth-clerk', () => {
   it('exports the Clerk auth facade and helpers', () => {
     expect(clerkAuth.authenticate).toBe(authenticate)
+    expect(clerkAuth.completeClerkAuth).toBe(completeClerkAuth)
+    expect(clerkAuth.loginWithClerk).toBe(loginWithClerk)
+    expect(clerkAuth.logoutWithClerk).toBe(logoutWithClerk)
+    expect(clerkAuth.registerWithClerk).toBe(registerWithClerk)
     expect(clerkAuth.verifyRequest).toBe(verifyRequest)
     expect(clerkAuth.verifySession).toBe(verifySession)
     expect(typeof clerkAuthInternals.resolveEmailForCreation).toBe('function')
+  })
+
+  it('normalizes fetch mock request inputs to URL strings', () => {
+    expect(resolveFetchMockUrl('https://api.clerk.test/v1/jwks')).toBe('https://api.clerk.test/v1/jwks')
+    expect(resolveFetchMockUrl(new URL('https://api.clerk.test/v1/users/user_1'))).toBe('https://api.clerk.test/v1/users/user_1')
+    expect(resolveFetchMockUrl(new Request('https://api.clerk.test/v1/sessions/session_1/revoke'))).toBe('https://api.clerk.test/v1/sessions/session_1/revoke')
   })
 
   it('merges partial runtime configuration updates', () => {
@@ -446,8 +533,12 @@ describe('@holo-js/auth-clerk', () => {
       sid: 'sess_clerk_1',
       exp: Math.floor(Date.now() / 1000) + 3600,
     }, privateKey)
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input)
+    const fetchMock = vi.fn(async (input: FetchMockInput) => {
+      const url = resolveFetchMockUrl(input)
+      if (url === 'https://api.clerk.com/v1/jwks') {
+        return createJwksResponse(publicKey)
+      }
+
       if (url === 'https://api.clerk.com/v1/users/user_clerk_1') {
         return new Response(JSON.stringify({
           id: 'user_clerk_1',
@@ -482,7 +573,6 @@ describe('@holo-js/auth-clerk', () => {
           app: {
             publishableKey: 'pk_test',
             secretKey: 'sk_test',
-            jwtKey: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
             sessionCookie: '__session',
           },
         },
@@ -527,8 +617,12 @@ describe('@holo-js/auth-clerk', () => {
       azp: 'https://app.test',
       exp: Math.floor(Date.now() / 1000) + 3600,
     }, privateKey)
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input)
+    const fetchMock = vi.fn(async (input: FetchMockInput) => {
+      const url = resolveFetchMockUrl(input)
+      if (url === 'https://api.clerk.com/v1/jwks') {
+        return createJwksResponse(publicKey)
+      }
+
       if (url === 'https://api.clerk.com/v1/users/user_clerk_azp_match') {
         return new Response(JSON.stringify({
           id: 'user_clerk_azp_match',
@@ -562,7 +656,6 @@ describe('@holo-js/auth-clerk', () => {
           app: {
             publishableKey: 'pk_test',
             secretKey: 'sk_test',
-            jwtKey: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
             sessionCookie: '__session',
             authorizedParties: ['https://app.test'],
           },
@@ -588,7 +681,7 @@ describe('@holo-js/auth-clerk', () => {
     })
   })
 
-  it('uses frontendApi JWKS when jwtKey and apiUrl are not configured', async () => {
+  it('uses frontendApi JWKS when apiUrl is not configured', async () => {
     const runtime = configureRuntime({
       configureClerkRuntime: false,
     })
@@ -604,8 +697,8 @@ describe('@holo-js/auth-clerk', () => {
       sid: 'sess_clerk_frontend',
       exp: Math.floor(Date.now() / 1000) + 3600,
     }, privateKey)
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input)
+    const fetchMock = vi.fn(async (input: FetchMockInput) => {
+      const url = resolveFetchMockUrl(input)
       if (url === 'https://clerk.example.test/.well-known/jwks.json') {
         return new Response(JSON.stringify({
           keys: [
@@ -719,8 +812,8 @@ describe('@holo-js/auth-clerk', () => {
     })
 
     let jwksRequestCount = 0
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input)
+    const fetchMock = vi.fn(async (input: FetchMockInput) => {
+      const url = resolveFetchMockUrl(input)
       if (url === 'https://rotate.clerk.test/.well-known/jwks.json') {
         jwksRequestCount += 1
         const publicKey = (jwksRequestCount === 1 ? firstKeyPair.publicKey : secondKeyPair.publicKey)
@@ -833,8 +926,8 @@ describe('@holo-js/auth-clerk', () => {
       sid: 'sess_clerk_frontend_second',
       exp: Math.floor(Date.now() / 1000) + 3600,
     }, secondKeyPair.privateKey)
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input)
+    const fetchMock = vi.fn(async (input: FetchMockInput) => {
+      const url = resolveFetchMockUrl(input)
       if (url === 'https://first.clerk.test/.well-known/jwks.json') {
         return new Response(JSON.stringify({
           keys: [
@@ -983,8 +1076,12 @@ describe('@holo-js/auth-clerk', () => {
       nbf: Math.floor(Date.now() / 1000) + 3600,
       exp: Math.floor(Date.now() / 1000) + 7200,
     }, privateKey)
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input)
+    vi.stubGlobal('fetch', vi.fn(async (input: FetchMockInput) => {
+      const url = resolveFetchMockUrl(input)
+      if (url === 'https://api.clerk.com/v1/jwks') {
+        return createJwksResponse(publicKey)
+      }
+
       if (url === 'https://api.clerk.com/v1/users/user_clerk_future') {
         return new Response(JSON.stringify({
           id: 'user_clerk_future',
@@ -1007,7 +1104,6 @@ describe('@holo-js/auth-clerk', () => {
           app: {
             publishableKey: 'pk_test',
             secretKey: 'sk_test',
-            jwtKey: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
             sessionCookie: '__session',
           },
         },
@@ -1127,6 +1223,383 @@ describe('@holo-js/auth-clerk', () => {
     expect(sessionId).toBeTypeOf('string')
   })
 
+  it('returns hosted Account Portal redirects for login and register', async () => {
+    configureRuntime()
+
+    const login = await loginWithClerk(new Request('https://app.test/login'))
+    expect(login.status).toBe(302)
+    expect(login.headers.get('location')).toBe('https://accounts.app.test/sign-in?redirect_url=https%3A%2F%2Fapp.test%2Fapi%2Fauth%2Fclerk%2Fcallback')
+
+    const register = await registerWithClerk({
+      node: {
+        req: {
+          method: 'GET',
+          url: '/register',
+          headers: {
+            host: 'app.test',
+          },
+        },
+      },
+    })
+    expect(register.status).toBe(302)
+    expect(register.headers.get('location')).toBe('https://accounts.app.test/sign-up?redirect_url=https%3A%2F%2Fapp.test%2Fapi%2Fauth%2Fclerk%2Fcallback')
+  })
+
+  it('derives Account Portal redirects from Clerk frontend API hosts', async () => {
+    configureRuntime({
+      frontendApi: 'https://steady-newt-5.clerk.accounts.dev',
+    })
+
+    const developmentLogin = await loginWithClerk(new Request('https://app.test/login'))
+    expect(developmentLogin.headers.get('location')).toBe('https://steady-newt-5.accounts.dev/sign-in?redirect_url=https%3A%2F%2Fapp.test%2Fapi%2Fauth%2Fclerk%2Fcallback')
+
+    configureRuntime({
+      frontendApi: 'https://clerk.example.com',
+    })
+
+    const productionLogin = await loginWithClerk(new Request('https://app.test/login'))
+    expect(productionLogin.headers.get('location')).toBe('https://accounts.example.com/sign-in?redirect_url=https%3A%2F%2Fapp.test%2Fapi%2Fauth%2Fclerk%2Fcallback')
+  })
+
+  it('completes the hosted Clerk callback with typed user mapping', async () => {
+    const runtime = configureRuntime()
+    runtime.sessions.set('callback-token', {
+      sessionId: 'sess_callback',
+      user: {
+        id: 'user_callback',
+        email: 'callback@app.test',
+        emailVerified: true,
+        firstName: 'Callback',
+        lastName: 'User',
+        imageUrl: 'https://cdn.test/callback.png',
+      },
+    })
+
+    const result = await completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback', {
+      headers: {
+        cookie: '__session=callback-token',
+      },
+    }), {
+      user: clerkUser => ({
+        email: clerkUser.email,
+        name: clerkUser.name,
+        avatar: clerkUser.imageUrl,
+        clerkUserId: clerkUser.id,
+      }),
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      provider: 'app',
+      guard: 'web',
+      authProvider: 'users',
+      status: 'created',
+      user: {
+        email: 'callback@app.test',
+        name: 'Callback User',
+        avatar: 'https://cdn.test/callback.png',
+        clerkUserId: 'user_callback',
+      },
+      identity: {
+        provider: 'app',
+        providerUserId: 'user_callback',
+        email: 'callback@app.test',
+      },
+      session: {
+        sessionId: 'sess_callback',
+        accessToken: 'callback-token',
+      },
+    })
+    expect(runtime.usersProvider.users.get(1)).toMatchObject({
+      email: 'callback@app.test',
+      name: 'Callback User',
+      avatar: 'https://cdn.test/callback.png',
+      clerkUserId: 'user_callback',
+    })
+  })
+
+  it('redirects Clerk SDK callback handshakes through the auth runtime', async () => {
+    const redirectResponses: { url: string, status?: 301 | 302 | 303 | 307 | 308 }[] = []
+    configureRuntime({
+      configureClerkRuntime: false,
+      publishableKey: 'pk_test_mocked',
+      redirectResponses,
+    })
+    configureClerkAuthRuntime({
+      identityStore: new InMemoryIdentityStore(),
+    })
+
+    const authenticateRequest = vi.fn().mockResolvedValueOnce({
+      status: 'handshake',
+      headers: new Headers({
+        location: 'https://steady-newt-5.clerk.accounts.dev/v1/client/handshake?redirect_url=https%3A%2F%2Fapp.test%2Fapi%2Fauth%2Fclerk%2Fcallback',
+      }),
+    })
+    const createClerkClient = vi.fn(() => ({
+      authenticateRequest,
+    }))
+    vi.doMock('@clerk/backend', () => ({
+      createClerkClient,
+    }))
+
+    await expect(
+      completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback')),
+    ).rejects.toThrow('Holo auth response was already handled.')
+
+    expect(authenticateRequest).toHaveBeenCalledTimes(1)
+    expect(redirectResponses).toEqual([
+      {
+        url: 'https://steady-newt-5.clerk.accounts.dev/v1/client/handshake?redirect_url=https%3A%2F%2Fapp.test%2Fapi%2Fauth%2Fclerk%2Fcallback',
+        status: 307,
+      },
+    ])
+  })
+
+  it('creates the local user after Clerk SDK resolves the callback handshake', async () => {
+    const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    const token = createSignedJwt({
+      sub: 'user_sdk_callback',
+      sid: 'sess_sdk_callback',
+      exp: Math.floor(Date.now() / 1000) + 300,
+      azp: 'https://app.test',
+    }, privateKey)
+    const responseCookies: string[] = []
+    const runtime = configureRuntime({
+      configureClerkRuntime: false,
+      publishableKey: 'pk_test_mocked',
+      responseCookies,
+    })
+    configureClerkAuthRuntime({
+      identityStore: runtime.identityStore,
+    })
+
+    const authenticateRequest = vi.fn()
+    authenticateRequest.mockImplementationOnce(async () => {
+      const headers = new Headers()
+      headers.append('Set-Cookie', '__session=sdk-callback-token; Path=/; SameSite=Lax')
+
+      return {
+        status: 'signed-in',
+        token,
+        headers,
+      }
+    })
+    const createClerkClient = vi.fn(() => ({
+      authenticateRequest,
+    }))
+    vi.doMock('@clerk/backend', () => ({
+      createClerkClient,
+    }))
+    vi.stubGlobal('fetch', async (url: string | URL | Request, init?: RequestInit) => {
+      const requestUrl = String(url)
+      if (requestUrl === 'https://accounts.app.test/.well-known/jwks.json') {
+        return createJwksResponse(publicKey)
+      }
+
+      expect(requestUrl).toBe('https://api.clerk.com/v1/users/user_sdk_callback')
+      expect(init?.headers).toMatchObject({
+        authorization: 'Bearer sk_test',
+      })
+
+      return new Response(JSON.stringify({
+        id: 'user_sdk_callback',
+        first_name: 'SDK',
+        last_name: 'Callback',
+        primary_email_address_id: 'email_sdk_callback',
+        email_addresses: [
+          {
+            id: 'email_sdk_callback',
+            email_address: 'sdk-callback@app.test',
+            verification: {
+              status: 'verified',
+            },
+          },
+        ],
+      }), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+        },
+      })
+    })
+
+    const result = await completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback?__clerk_handshake_nonce=nonce'))
+
+    expect(createClerkClient).toHaveBeenCalledWith({
+      apiUrl: undefined,
+      publishableKey: 'pk_test_mocked',
+      secretKey: 'sk_test',
+    })
+    expect(authenticateRequest).toHaveBeenCalledTimes(1)
+    expect(authenticateRequest).toHaveBeenCalledWith(expect.any(Request), {
+      apiUrl: undefined,
+      authorizedParties: ['https://app.test'],
+      publishableKey: 'pk_test_mocked',
+      secretKey: 'sk_test',
+    })
+    const authenticatedRequest = authenticateRequest.mock.calls[0]?.[0]
+    expect(authenticatedRequest).toBeInstanceOf(Request)
+    if (!(authenticatedRequest instanceof Request)) {
+      throw new Error('Expected Clerk SDK to receive a Request after handshake resolution.')
+    }
+    expect(authenticatedRequest.url).toBe('https://app.test/api/auth/clerk/callback?__clerk_handshake_nonce=nonce')
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'created',
+      user: {
+        email: 'sdk-callback@app.test',
+        name: 'SDK Callback',
+      },
+      identity: {
+        providerUserId: 'user_sdk_callback',
+        email: 'sdk-callback@app.test',
+      },
+      session: {
+        sessionId: 'sess_sdk_callback',
+        accessToken: token,
+      },
+    })
+    expect(runtime.usersProvider.users.get(1)).toMatchObject({
+      email: 'sdk-callback@app.test',
+      name: 'SDK Callback',
+    })
+    expect(responseCookies).toContain('__session=sdk-callback-token; Path=/; SameSite=Lax')
+    expect(responseCookies).toContainEqual(expect.stringContaining('holo_session='))
+  })
+
+  it('logs out locally, revokes the Clerk session, and returns a redirect URL', async () => {
+    vi.stubGlobal('fetch', async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://api.clerk.com/v1/sessions/sess_logout_callback/revoke')
+      expect(init?.method).toBe('POST')
+      expect(init?.headers).toMatchObject({
+        authorization: 'Bearer sk_test',
+      })
+
+      return new Response(JSON.stringify({ id: 'sess_logout_callback', status: 'revoked' }), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+        },
+      })
+    })
+
+    const runtime = configureRuntime()
+    runtime.sessions.set('logout-callback-token', {
+      sessionId: 'sess_logout_callback',
+      user: {
+        id: 'user_logout_callback',
+        email: 'logout-callback@app.test',
+        emailVerified: true,
+      },
+    })
+
+    const callback = await completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback', {
+      headers: {
+        cookie: '__session=logout-callback-token',
+      },
+    }))
+    expect(callback.ok).toBe(true)
+    if (!callback.ok || !callback.authSession) {
+      throw new Error('Expected Clerk callback to establish an auth session.')
+    }
+    const sessionCookie = callback.authSession.cookies[0]?.split(';', 1)[0]
+
+    authRuntimeInternals.getRuntimeBindings().context.setSessionId('web')
+    authRuntimeInternals.getRuntimeBindings().context.setCachedUser('web', null)
+
+    const result = await logoutWithClerk(new Request('https://app.test/api/auth/clerk/logout', {
+      method: 'POST',
+      headers: sessionCookie ? { cookie: sessionCookie } : undefined,
+    }), {
+      returnTo: '/login',
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      url: 'https://app.test/login',
+      local: {
+        guard: 'web',
+      },
+    })
+    expect(result.ok ? result.local.cookies : []).toContainEqual(expect.stringContaining('holo_session=;'))
+  })
+
+  it('normalizes Clerk logout return URLs to relative or same-origin destinations', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ id: 'sess_logout_callback', status: 'revoked' }), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+      },
+    }))
+
+    const runtime = configureRuntime()
+
+    async function completeAndLogout(returnTo: string) {
+      runtime.sessions.set('logout-callback-token', {
+        sessionId: 'sess_logout_callback',
+        user: {
+          id: 'user_logout_callback',
+          email: 'logout-callback@app.test',
+          emailVerified: true,
+        },
+      })
+
+      const callback = await completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback', {
+        headers: {
+          cookie: '__session=logout-callback-token',
+        },
+      }))
+      expect(callback.ok).toBe(true)
+      if (!callback.ok || !callback.authSession) {
+        throw new Error('Expected Clerk callback to establish an auth session.')
+      }
+      const sessionCookie = callback.authSession.cookies[0]?.split(';', 1)[0]
+
+      authRuntimeInternals.getRuntimeBindings().context.setSessionId('web')
+      authRuntimeInternals.getRuntimeBindings().context.setCachedUser('web', null)
+
+      return logoutWithClerk(new Request('https://app.test/api/auth/clerk/logout', {
+        method: 'POST',
+        headers: sessionCookie ? { cookie: sessionCookie } : undefined,
+      }), {
+        returnTo,
+      })
+    }
+
+    await expect(completeAndLogout('/login')).resolves.toMatchObject({
+      ok: true,
+      url: 'https://app.test/login',
+    })
+    await expect(completeAndLogout('https://app.test/settings')).resolves.toMatchObject({
+      ok: true,
+      url: 'https://app.test/settings',
+    })
+    await expect(completeAndLogout('https://evil.test/phish')).resolves.toMatchObject({
+      ok: true,
+      url: 'https://app.test/',
+    })
+    await expect(completeAndLogout('//evil.test/phish')).resolves.toMatchObject({
+      ok: true,
+      url: 'https://app.test/',
+    })
+  })
+
+  it('returns typed callback failures without combining response behavior', async () => {
+    configureRuntime()
+
+    await expect(completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback'))).resolves.toEqual({
+      ok: false,
+      code: 'clerk_session_required',
+      message: 'Clerk callback did not include an active session.',
+    })
+
+    await expect(completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback?error=access_denied&error_description=Denied'))).resolves.toEqual({
+      ok: false,
+      code: 'access_denied',
+      message: 'Denied',
+    })
+  })
+
   it('reuses an existing Holo session when the request already carries the session cookie', async () => {
     const runtime = configureRuntime()
     runtime.sessions.set('repeat-token', {
@@ -1200,6 +1673,7 @@ describe('@holo-js/auth-clerk', () => {
         email: 'sync@app.test',
         emailVerified: true,
         name: 'First Name',
+        imageUrl: 'https://cdn.test/first.png',
       },
     })
 
@@ -1232,6 +1706,7 @@ describe('@holo-js/auth-clerk', () => {
         id: 1,
         name: 'Updated Name',
         avatar: 'https://cdn.test/updated.png',
+        avatarUrl: 'https://cdn.test/updated.png',
       },
     })
 
@@ -1321,7 +1796,6 @@ describe('@holo-js/auth-clerk', () => {
           app: {
             publishableKey: 'pk_test',
             secretKey: 'sk_test',
-            jwtKey: 'jwt-key',
             sessionCookie: '__session',
           },
         },

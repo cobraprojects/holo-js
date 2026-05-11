@@ -101,6 +101,7 @@ export default function RegisterPage() {
 
       <Link href="/login" style={{ color: '#7dd3fc' }}>Already have an account?</Link>
       <a href="/api/auth/workos/register" style={{ color: '#7dd3fc' }}>Register with WorkOS</a>
+      <a href="/api/auth/clerk/register" style={{ color: '#7dd3fc' }}>Register with Clerk</a>
     </section>
   )
 }

@@ -23,7 +23,7 @@
     "test": "vitest --run"
   },
   "peerDependencies": {
-    "@holo-js/queue-redis": "^0.1.4"
+    "@holo-js/queue-redis": "catalog:"
   },
   "peerDependenciesMeta": {
     "@holo-js/queue-redis": {
@@ -31,10 +31,10 @@
     }
   },
   "devDependencies": {
-    "@holo-js/queue-redis": "workspace:*",
-    "@types/node": "^22.10.2",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
+    "@holo-js/queue-redis": "catalog:",
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

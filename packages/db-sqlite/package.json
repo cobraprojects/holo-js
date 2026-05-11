@@ -23,16 +23,16 @@
     "test": "vitest --run"
   },
   "peerDependencies": {
-    "@holo-js/db": "^0.1.4"
+    "@holo-js/db": "catalog:"
   },
   "dependencies": {
-    "better-sqlite3": "^11.7.0"
+    "better-sqlite3": "catalog:"
   },
   "devDependencies": {
-    "@holo-js/db": "workspace:*",
-    "@types/better-sqlite3": "^7.6.12",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
+    "@holo-js/db": "catalog:",
+    "@types/better-sqlite3": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

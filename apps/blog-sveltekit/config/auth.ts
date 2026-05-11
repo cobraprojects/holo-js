@@ -65,13 +65,14 @@ export default defineAuthConfig({
   },
   // Add a dedicated guard and provider if WorkOS users should resolve through a different model.
   clerk: {
+    provider: env('AUTH_CLERK_PROVIDER', 'app'),
     app: {
       publishableKey: env('CLERK_PUBLISHABLE_KEY'),
       secretKey: env('CLERK_SECRET_KEY'),
-      jwtKey: env('CLERK_JWT_KEY'),
       apiUrl: env('CLERK_API_URL'),
       frontendApi: env('CLERK_FRONTEND_API'),
-      sessionCookie: env('CLERK_SESSION_COOKIE', "__session"),
+      redirectUri: env('CLERK_REDIRECT_URI'),
+      sessionCookie: env('CLERK_SESSION_COOKIE', '__session'),
     },
   },
   // Add a dedicated guard and provider if Clerk users should resolve through a different model.

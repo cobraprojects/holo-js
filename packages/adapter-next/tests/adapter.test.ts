@@ -173,13 +173,15 @@ export default defineConfig({
     expect(resolved.runtime.renderView).toBe(renderView)
   })
 
-  it('externalizes installed optional Holo server packages', async () => {
+  it('externalizes only installed optional Holo server packages', async () => {
     const root = await createProject()
     await writeFile(join(root, 'package.json'), JSON.stringify({
       dependencies: {
         '@holo-js/auth': 'workspace:*',
-        '@holo-js/auth-social': 'workspace:*',
         '@holo-js/auth-social-google': 'workspace:*',
+      },
+      peerDependencies: {
+        '@holo-js/auth-social': 'workspace:*',
       },
     }), 'utf8')
 
@@ -205,7 +207,7 @@ export default defineConfig({
     }
   })
 
-  it('ignores optional externals when package.json cannot be parsed', async () => {
+  it('skips optional Holo packages when package.json cannot be parsed', async () => {
     const root = await createProject()
     await writeFile(join(root, 'package.json'), '{', 'utf8')
 

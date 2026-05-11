@@ -33,10 +33,10 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "^0.1.4"
+    "@holo-js/config": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/storage-s3": "^0.1.4"
+    "@holo-js/storage-s3": "catalog:"
   },
   "peerDependenciesMeta": {
     "@holo-js/storage-s3": {
@@ -44,10 +44,10 @@
     }
   },
   "devDependencies": {
-    "@holo-js/storage-s3": "workspace:*",
-    "@types/node": "^22.10.2",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
+    "@holo-js/storage-s3": "catalog:",
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

@@ -64,9 +64,9 @@ export function renderAuthEnvFiles(
     env.push(
       'CLERK_PUBLISHABLE_KEY=',
       'CLERK_SECRET_KEY=',
-      'CLERK_JWT_KEY=',
       'CLERK_API_URL=',
       'CLERK_FRONTEND_API=',
+      'CLERK_REDIRECT_URI=',
       'CLERK_SESSION_COOKIE=__session',
     )
   }

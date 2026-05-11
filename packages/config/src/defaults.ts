@@ -8,6 +8,7 @@ import type {
   AuthPasswordBrokerConfig,
   AuthProviderConfig,
   AuthSocialProviderConfig,
+  HoloAuthClerkConfig,
   HoloAuthWorkosConfig,
   AuthWorkosProviderConfig,
   BaseBroadcastConnectionConfig,
@@ -35,6 +36,7 @@ import type {
   NormalizedAuthPasswordBrokerConfig,
   NormalizedAuthProviderConfig,
   NormalizedAuthSocialProviderConfig,
+  NormalizedHoloAuthClerkConfig,
   NormalizedHoloAuthWorkosConfig,
   NormalizedAuthWorkosProviderConfig,
   NormalizedBroadcastConnectionOptionsConfig,
@@ -1552,20 +1554,99 @@ function normalizeClerkProvider(
   if (mapToProvider && !(mapToProvider in providers)) {
     throw new Error(`[Holo Auth] Clerk provider "${name}" references unknown provider "${mapToProvider}".`)
   }
+  const redirectUri = config.redirectUri?.trim()
+  if (redirectUri) {
+    try {
+      new URL(redirectUri)
+    } catch {
+      throw new Error(`Invalid redirectUri in Clerk provider "${name}": ${redirectUri}`)
+    }
+  }
 
   return Object.freeze({
     name,
     publishableKey: config.publishableKey?.trim() || undefined,
     secretKey: config.secretKey?.trim() || undefined,
-    jwtKey: config.jwtKey?.trim() || undefined,
     apiUrl: config.apiUrl?.trim() || undefined,
     frontendApi: config.frontendApi?.trim() || undefined,
+    redirectUri: redirectUri || undefined,
     sessionCookie: config.sessionCookie?.trim() || DEFAULT_CLERK_SESSION_COOKIE,
     authorizedParties: Object.freeze((config.authorizedParties ?? [])
       .map(value => value.trim())
       .filter(Boolean)),
     guard,
     mapToProvider,
+  })
+}
+
+function isClerkProviderConfig(value: unknown): value is AuthClerkProviderConfig {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  const candidate = value as Record<string, unknown>
+  for (const key of ['publishableKey', 'secretKey', 'apiUrl', 'frontendApi', 'redirectUri', 'sessionCookie', 'guard', 'mapToProvider']) {
+    const field = candidate[key]
+    if (typeof field !== 'undefined' && typeof field !== 'string') {
+      return false
+    }
+  }
+
+  return typeof candidate.authorizedParties === 'undefined'
+    || (Array.isArray(candidate.authorizedParties) && candidate.authorizedParties.every(value => typeof value === 'string'))
+}
+
+function getClerkProviderEntries(config: HoloAuthClerkConfig | undefined): readonly [string, AuthClerkProviderConfig][] {
+  if (!config) {
+    return Object.freeze([])
+  }
+
+  const entries: [string, AuthClerkProviderConfig][] = []
+  for (const [name, value] of Object.entries(config)) {
+    if (name === 'provider') {
+      if (typeof value !== 'undefined' && typeof value !== 'string') {
+        throw new Error('[Holo Auth] Clerk provider key "provider" is reserved for the default provider name.')
+      }
+      continue
+    }
+    if (!isClerkProviderConfig(value)) {
+      throw new Error(`[Holo Auth] Clerk provider "${name}" must be a Clerk provider config object.`)
+    }
+    entries.push([name, value])
+  }
+
+  return Object.freeze(entries)
+}
+
+function normalizeClerkConfig(
+  config: HoloAuthClerkConfig | undefined,
+  guards: Readonly<Record<string, NormalizedAuthGuardConfig>>,
+  providers: Readonly<Record<string, NormalizedAuthProviderConfig>>,
+): NormalizedHoloAuthClerkConfig {
+  const providerEntries = getClerkProviderEntries(config)
+  const provider = typeof config?.provider === 'string' ? config.provider.trim() || undefined : undefined
+  if (providerEntries.length === 0) {
+    if (provider) {
+      throw new Error(`[Holo Auth] Clerk provider "${provider}" is not configured.`)
+    }
+
+    return holoAuthDefaults.clerk
+  }
+
+  const normalizedEntries = providerEntries.map(([name, providerConfig]) => {
+    const normalizedName = normalizeConnectionName(name, 'Auth Clerk provider name')
+    return [normalizedName, providerConfig] as const
+  })
+  if (provider && !normalizedEntries.some(([name]) => name === provider)) {
+    throw new Error(`[Holo Auth] Clerk provider "${provider}" is not configured.`)
+  }
+
+  return Object.freeze({
+    ...(typeof provider === 'undefined' ? {} : { provider }),
+    ...Object.fromEntries(normalizedEntries.map(([name, providerConfig]) => [
+      name,
+      normalizeClerkProvider(name, providerConfig, guards, providers),
+    ])),
   })
 }
 
@@ -1627,12 +1708,7 @@ export function normalizeAuthConfig(
 
   const workos = normalizeWorkosConfig(config.workos, guards, providers)
 
-  const clerk = !config.clerk || Object.keys(config.clerk).length === 0
-    ? holoAuthDefaults.clerk
-    : Object.freeze(Object.fromEntries(Object.entries(config.clerk).map(([name, provider]) => {
-      const normalizedName = normalizeConnectionName(name, 'Auth Clerk provider name')
-      return [normalizedName, normalizeClerkProvider(normalizedName, provider, guards, providers)]
-    })))
+  const clerk = normalizeClerkConfig(config.clerk, guards, providers)
 
   return Object.freeze({
     defaults: Object.freeze({

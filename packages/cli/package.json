@@ -27,19 +27,19 @@
     "test:integration": "HOLO_CLI_INCLUDE_INTEGRATION=1 vitest --run tests/cli.test.ts"
   },
   "dependencies": {
-    "@holo-js/config": "^0.1.4",
-    "@holo-js/core": "^0.1.4",
-    "@holo-js/db": "^0.1.4",
-    "esbuild": "^0.27.4",
+    "@holo-js/config": "catalog:",
+    "@holo-js/core": "catalog:",
+    "@holo-js/db": "catalog:",
+    "esbuild": "catalog:",
     "inflection": "catalog:"
   },
   "devDependencies": {
-    "@holo-js/events": "^0.1.4",
-    "@holo-js/queue": "^0.1.4",
-    "@holo-js/queue-db": "^0.1.4",
-    "@types/node": "^22.10.2",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
+    "@holo-js/events": "catalog:",
+    "@holo-js/queue": "catalog:",
+    "@holo-js/queue-db": "catalog:",
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   },
   "engines": {

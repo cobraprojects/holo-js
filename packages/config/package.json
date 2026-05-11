@@ -22,11 +22,11 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/db": "^0.1.4"
+    "@holo-js/db": "catalog:"
   },
   "devDependencies": {
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

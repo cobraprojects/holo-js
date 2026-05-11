@@ -2585,12 +2585,13 @@ export default defineConfig({
         },
       },
       clerk: {
+        provider: ' admin ',
         admin: {
           publishableKey: ' pk_test ',
           secretKey: ' sk_test ',
-          jwtKey: ' jwt-key ',
           apiUrl: ' https://api.clerk.test ',
           frontendApi: ' https://clerk.test ',
+          redirectUri: ' https://app.test/auth/clerk/callback ',
           sessionCookie: ' __clerk_session ',
           authorizedParties: [' https://app.test ', 'https://admin.test'],
           guard: 'admin',
@@ -2663,13 +2664,14 @@ export default defineConfig({
         },
       },
       clerk: {
+        provider: 'admin',
         admin: {
           name: 'admin',
           publishableKey: 'pk_test',
           secretKey: 'sk_test',
-          jwtKey: 'jwt-key',
           apiUrl: 'https://api.clerk.test',
           frontendApi: 'https://clerk.test',
+          redirectUri: 'https://app.test/auth/clerk/callback',
           sessionCookie: '__clerk_session',
           authorizedParties: ['https://app.test', 'https://admin.test'],
           guard: 'admin',
@@ -2682,6 +2684,20 @@ export default defineConfig({
         guard: 'missing',
       },
     })).toThrow('default auth guard "missing" is not configured')
+    expect(() => normalizeAuthConfig({
+      clerk: {
+        app: {
+          redirectUri: 'not a url',
+        },
+      },
+    })).toThrow('Invalid redirectUri in Clerk provider "app": not a url')
+    expect(() => normalizeAuthConfig({
+      clerk: {
+        app: {
+          secretKey: 123 as never,
+        },
+      },
+    })).toThrow('Clerk provider "app" must be a Clerk provider config object.')
     expect(() => normalizeAuthConfig({
       defaults: {
         passwords: 'admins',
@@ -2805,6 +2821,34 @@ export default defineConfig({
         },
       },
     })).toThrow('references unknown provider "admins"')
+    expect(() => normalizeAuthConfig({
+      clerk: {
+        provider: 'missing',
+        app: {},
+      },
+    })).toThrow('Clerk provider "missing" is not configured')
+    expect(() => normalizeAuthConfig({
+      clerk: {
+        provider: 'app',
+      },
+    })).toThrow('Clerk provider "app" is not configured')
+    expect(normalizeAuthConfig({
+      clerk: {
+        provider: '   ',
+      },
+    }).clerk).toEqual(normalizeAuthConfig().clerk)
+    expect(() => normalizeAuthConfig({
+      clerk: {
+        provider: {
+          secretKey: 'sk_test',
+        },
+      } as never,
+    })).toThrow('Clerk provider key "provider" is reserved for the default provider name')
+    expect(() => normalizeAuthConfig({
+      clerk: {
+        app: 'invalid' as never,
+      },
+    })).toThrow('Clerk provider "app" must be a Clerk provider config object.')
     expect(() => normalizeAuthConfig({
       clerk: {
         admin: {
@@ -3000,9 +3044,9 @@ export default defineConfig({
         app: {
           publishableKey: ' pk ',
           secretKey: ' sk ',
-          jwtKey: ' jwt ',
           apiUrl: ' https://api.example.com ',
           frontendApi: ' https://clerk.example.com ',
+          redirectUri: ' https://example.com/clerk ',
           sessionCookie: ' custom-clerk ',
         },
       },
@@ -3046,9 +3090,9 @@ export default defineConfig({
         app: {
           publishableKey: 'pk',
           secretKey: 'sk',
-          jwtKey: 'jwt',
           apiUrl: 'https://api.example.com',
           frontendApi: 'https://clerk.example.com',
+          redirectUri: 'https://example.com/clerk',
           sessionCookie: 'custom-clerk',
         },
       },
@@ -3086,7 +3130,6 @@ export default defineConfig({
         app: {
           publishableKey: undefined,
           secretKey: undefined,
-          jwtKey: undefined,
           apiUrl: undefined,
           frontendApi: undefined,
           sessionCookie: '__session',

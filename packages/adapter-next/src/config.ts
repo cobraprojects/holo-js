@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 const HOLO_SERVER_EXTERNAL_PACKAGES = [
   '@holo-js/core',
@@ -39,12 +39,16 @@ const HOLO_OPTIONAL_SERVER_EXTERNAL_PACKAGES = [
   '@holo-js/validation',
 ] as const
 
-interface PackageJson {
-  readonly dependencies?: Readonly<Record<string, string>>
-  readonly devDependencies?: Readonly<Record<string, string>>
-  readonly peerDependencies?: Readonly<Record<string, string>>
-  readonly optionalDependencies?: Readonly<Record<string, string>>
-}
+type PackageDependencyField = 'dependencies' | 'devDependencies' | 'optionalDependencies' | 'peerDependencies'
+type PackageDependencyMap = Readonly<Record<string, string>>
+type PackageManifest = Partial<Record<PackageDependencyField, PackageDependencyMap>>
+
+const PACKAGE_DEPENDENCY_FIELDS = [
+  'dependencies',
+  'devDependencies',
+  'optionalDependencies',
+  'peerDependencies',
+] as const satisfies readonly PackageDependencyField[]
 
 interface TurbopackIgnoreIssueRule {
   readonly path: string | RegExp
@@ -64,60 +68,45 @@ interface NextConfig {
   readonly [key: string]: unknown
 }
 
-function isStringRecord(value: unknown): value is Readonly<Record<string, string>> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return false
-  }
-
-  return Object.values(value).every(entry => typeof entry === 'string')
+function isPackageDependencyMap(value: unknown): value is PackageDependencyMap {
+  return value !== null
+    && typeof value === 'object'
+    && Object.values(value).every(dependency => typeof dependency === 'string')
 }
 
-function readPackageJson(projectRoot: string): PackageJson | undefined {
-  const packageJsonPath = resolve(projectRoot, 'package.json')
-  if (!existsSync(packageJsonPath)) {
-    return undefined
-  }
-
-  let parsed: unknown
+function readProjectPackageManifest(): PackageManifest | null {
   try {
-    parsed = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as unknown
+    const parsed = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as unknown
+    if (!parsed || typeof parsed !== 'object') {
+      return null
+    }
+
+    const manifest: PackageManifest = {}
+    for (const field of PACKAGE_DEPENDENCY_FIELDS) {
+      const dependencies = (parsed as Partial<Record<PackageDependencyField, unknown>>)[field]
+      if (isPackageDependencyMap(dependencies)) {
+        manifest[field] = dependencies
+      }
+    }
+
+    return manifest
   } catch {
-    return undefined
-  }
-
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return undefined
-  }
-
-  return {
-    ...('dependencies' in parsed && isStringRecord(parsed.dependencies) ? { dependencies: parsed.dependencies } : {}),
-    ...('devDependencies' in parsed && isStringRecord(parsed.devDependencies) ? { devDependencies: parsed.devDependencies } : {}),
-    ...('peerDependencies' in parsed && isStringRecord(parsed.peerDependencies) ? { peerDependencies: parsed.peerDependencies } : {}),
-    ...('optionalDependencies' in parsed && isStringRecord(parsed.optionalDependencies) ? { optionalDependencies: parsed.optionalDependencies } : {}),
+    return null
   }
 }
 
-function hasPackage(packageJson: PackageJson, packageName: string): boolean {
-  return packageJson.dependencies?.[packageName] !== undefined
-    || packageJson.devDependencies?.[packageName] !== undefined
-    || packageJson.peerDependencies?.[packageName] !== undefined
-    || packageJson.optionalDependencies?.[packageName] !== undefined
-}
-
-function resolveInstalledOptionalServerExternalPackages(projectRoot: string): readonly string[] {
-  const packageJson = readPackageJson(projectRoot)
-  if (!packageJson) {
-    return []
-  }
-
-  return HOLO_OPTIONAL_SERVER_EXTERNAL_PACKAGES.filter(packageName => hasPackage(packageJson, packageName))
+function isOptionalServerExternalPackageInstalled(packageName: string, manifest: PackageManifest | null): boolean {
+  return PACKAGE_DEPENDENCY_FIELDS.some(field => Boolean(manifest?.[field]?.[packageName]))
 }
 
 export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as TConfig): TConfig {
   const existingExternal = nextConfig.serverExternalPackages ?? []
-  const optionalExternal = resolveInstalledOptionalServerExternalPackages(process.cwd())
+  const packageManifest = readProjectPackageManifest()
+  const installedOptionalExternal = HOLO_OPTIONAL_SERVER_EXTERNAL_PACKAGES.filter(packageName => (
+    isOptionalServerExternalPackageInstalled(packageName, packageManifest)
+  ))
   const mergedExternal = [
-    ...new Set([...HOLO_SERVER_EXTERNAL_PACKAGES, ...optionalExternal, ...existingExternal]),
+    ...new Set([...HOLO_SERVER_EXTERNAL_PACKAGES, ...installedOptionalExternal, ...existingExternal]),
   ]
 
   const existingExcludes = nextConfig.outputFileTracingExcludes ?? {}

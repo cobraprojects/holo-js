@@ -14,7 +14,7 @@ type AuthCookieBindings = {
   readonly config: {
     readonly defaults: { readonly guard: string }
     readonly workos: Readonly<Record<string, HostedProviderConfig | string | undefined>>
-    readonly clerk: Readonly<Record<string, HostedProviderConfig>>
+    readonly clerk: Readonly<Record<string, HostedProviderConfig | string | undefined>>
   }
   readonly session: {
     cookie?(name: string, value: string, options: CookieSerializationOptions): string
@@ -51,7 +51,7 @@ function getHostedSessionCookieNamesForGuard(
       names.add(provider.sessionCookie)
     }
   }
-  for (const provider of Object.values(config.clerk)) {
+  for (const provider of Object.values(config.clerk).filter(isHostedProviderConfig)) {
     if ((provider.guard ?? config.defaults.guard) === guardName) {
       names.add(provider.sessionCookie)
     }

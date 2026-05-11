@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, test } from 'node:test'
-import { collectScaffoldSourceFailures } from './validate-dependency-version-policy.mjs'
+import {
+  collectCatalogPackageCoverageFailures,
+  collectPackageManifestFailures,
+  collectScaffoldSourceFailures,
+} from './validate-dependency-version-policy.mjs'
 
 const tempRoots = []
 
@@ -133,4 +137,56 @@ test('dependency policy validator allows valid semver ranges', async () => {
   const failures = await collectScaffoldSourceFailures(repoRoot)
 
   assert.equal(failures.length, 0)
+})
+
+test('dependency policy validator requires package manifests to use catalog ranges', async () => {
+  const repoRoot = await createTestScaffold({
+    'packages/example/package.json': [
+      '{',
+      '  "name": "@holo-js/example",',
+      '  "version": "0.1.4",',
+      '  "dependencies": {',
+      '    "@holo-js/core": "^0.1.4",',
+      '    "typescript": "catalog:"',
+      '  }',
+      '}',
+      '',
+    ],
+  })
+
+  const failures = await collectPackageManifestFailures(repoRoot)
+
+  assert.equal(failures.length, 1)
+  assert.match(failures[0], /@holo-js\/core/)
+  assert.match(failures[0], /catalog:/)
+})
+
+test('dependency policy validator requires the catalog to include every package', async () => {
+  const repoRoot = await createTestScaffold({
+    'package.json': [
+      '{',
+      '  "workspaces": {',
+      '    "catalog": {',
+      '      "@holo-js/core": "^0.1.4"',
+      '    }',
+      '  }',
+      '}',
+      '',
+    ],
+    'packages/example/package.json': [
+      '{',
+      '  "name": "@holo-js/example",',
+      '  "version": "0.1.4",',
+      '  "dependencies": {',
+      '    "@holo-js/core": "catalog:"',
+      '  }',
+      '}',
+      '',
+    ],
+  })
+
+  const failures = await collectCatalogPackageCoverageFailures(repoRoot)
+
+  assert.equal(failures.length, 1)
+  assert.match(failures[0], /@holo-js\/example/)
 })

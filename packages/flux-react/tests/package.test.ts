@@ -234,11 +234,14 @@ describe('@holo-js/flux-react package surface', () => {
 
     await act(async () => {
       await client.connect()
+    })
+    expect(statusSnapshots).toContain('connected')
+
+    await act(async () => {
       await client.disconnect()
     })
     expect(statusChanges).toEqual(['connecting', 'connected', 'disconnected'])
     expect(statusHandler).toHaveBeenCalledTimes(3)
-    expect(statusSnapshots).toContain('connected')
     expect(statusSnapshots.at(-1)).toBe('disconnected')
     presenceControls!.leave()
     presenceControls!.leaveChannel()

@@ -31,6 +31,7 @@
     <a href="/auth/google">Continue with Google</a>
     <a href="/auth/github">Continue with GitHub</a>
     <a href="/api/auth/workos/login">Continue with WorkOS</a>
+    <a href="/api/auth/clerk/login">Continue with Clerk</a>
   </div>
 
   <form class="stack" on:submit={(event) => { event.preventDefault(); form.submit() }}>

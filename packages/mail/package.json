@@ -28,12 +28,12 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "^0.1.4",
-    "nodemailer": "^6.10.1"
+    "@holo-js/config": "catalog:",
+    "nodemailer": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/queue": "^0.1.4",
-    "@holo-js/storage": "^0.1.4"
+    "@holo-js/queue": "catalog:",
+    "@holo-js/storage": "catalog:"
   },
   "peerDependenciesMeta": {
     "@holo-js/queue": {
@@ -44,9 +44,9 @@
     }
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

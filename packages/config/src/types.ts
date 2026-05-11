@@ -633,13 +633,18 @@ export interface HoloAuthWorkosConfig {
 export interface AuthClerkProviderConfig {
   readonly publishableKey?: string
   readonly secretKey?: string
-  readonly jwtKey?: string
   readonly apiUrl?: string
   readonly frontendApi?: string
+  readonly redirectUri?: string
   readonly sessionCookie?: string
   readonly authorizedParties?: readonly string[]
   readonly guard?: string
   readonly mapToProvider?: string
+}
+
+export interface HoloAuthClerkConfig {
+  readonly provider?: string
+  readonly [provider: string]: AuthClerkProviderConfig | string | undefined
 }
 
 export interface HoloAuthConfig {
@@ -655,7 +660,7 @@ export interface HoloAuthConfig {
   readonly socialEncryptionKey?: string
   readonly social?: Readonly<Record<string, AuthSocialProviderConfig>>
   readonly workos?: HoloAuthWorkosConfig
-  readonly clerk?: Readonly<Record<string, AuthClerkProviderConfig>>
+  readonly clerk?: HoloAuthClerkConfig
 }
 
 export interface NormalizedAuthGuardConfig {
@@ -710,13 +715,18 @@ export interface NormalizedAuthClerkProviderConfig {
   readonly name: string
   readonly publishableKey?: string
   readonly secretKey?: string
-  readonly jwtKey?: string
   readonly apiUrl?: string
   readonly frontendApi?: string
+  readonly redirectUri?: string
   readonly sessionCookie: string
   readonly authorizedParties: readonly string[]
   readonly guard?: string
   readonly mapToProvider?: string
+}
+
+export interface NormalizedHoloAuthClerkConfig {
+  readonly provider?: string
+  readonly [provider: string]: NormalizedAuthClerkProviderConfig | string | undefined
 }
 
 export interface NormalizedHoloAuthConfig {
@@ -737,7 +747,7 @@ export interface NormalizedHoloAuthConfig {
   readonly socialEncryptionKey?: string
   readonly social: Readonly<Record<string, NormalizedAuthSocialProviderConfig>>
   readonly workos: NormalizedHoloAuthWorkosConfig
-  readonly clerk: Readonly<Record<string, NormalizedAuthClerkProviderConfig>>
+  readonly clerk: NormalizedHoloAuthClerkConfig
 }
 
 export interface QueueRedisConnectionConfig {

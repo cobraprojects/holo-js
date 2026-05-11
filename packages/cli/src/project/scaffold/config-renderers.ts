@@ -792,12 +792,13 @@ export function renderAuthConfig(
   if (features.clerk) {
     lines.push(
       '  clerk: {',
+      `    provider: ${envValue('AUTH_CLERK_PROVIDER', 'app')},`,
       '    app: {',
       `      publishableKey: ${envValue('CLERK_PUBLISHABLE_KEY')},`,
       `      secretKey: ${envValue('CLERK_SECRET_KEY')},`,
-      `      jwtKey: ${envValue('CLERK_JWT_KEY')},`,
       `      apiUrl: ${envValue('CLERK_API_URL')},`,
       `      frontendApi: ${envValue('CLERK_FRONTEND_API')},`,
+      `      redirectUri: ${envValue('CLERK_REDIRECT_URI')},`,
       `      sessionCookie: ${envValue('CLERK_SESSION_COOKIE', '__session')},`,
       '    },',
       '  },',

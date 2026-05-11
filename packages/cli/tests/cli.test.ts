@@ -977,6 +977,11 @@ export default {
     await expect(stat(join(authRoot, 'app/api/logout/route.ts'))).rejects.toThrow()
     await expect(stat(join(authRoot, 'proxy.ts'))).rejects.toThrow()
     await expect(stat(join(authRoot, 'server/notifications/auth/email-verification.ts'))).rejects.toThrow()
+    await expect(projectInternals.installAuthIntoProject(authRoot, { workos: true, clerk: true })).resolves.toMatchObject({
+      updatedPackageJson: true,
+    })
+    expect(await readFile(join(authRoot, 'app/api/auth/workos/callback/route.ts'), 'utf8')).toContain('completeWorkosAuth')
+    expect(await readFile(join(authRoot, 'app/api/auth/clerk/callback/route.ts'), 'utf8')).toContain('completeClerkAuth')
     expect((await readdir(join(authRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(6)
 
     const authNotificationsRoot = join(baseRoot, 'auth-notifications-runtime-app')
@@ -1269,6 +1274,19 @@ export default {
     expect(projectInternals.renderAuthMigration('create_auth_identities')).toContain('table.string(\'user_id\')')
     expect(projectInternals.renderAuthConfig({ workos: true })).toContain('WORKOS_CLIENT_ID')
     expect(projectInternals.renderAuthConfig({ clerk: true })).toContain('CLERK_PUBLISHABLE_KEY')
+    expect(projectInternals.renderAuthEnvFiles({ clerk: true }).env).toContain('CLERK_REDIRECT_URI=')
+    const hostedAuthRoutes = [
+      ...projectInternals.renderAuthProviderRouteFiles('next', { clerk: true }),
+      ...projectInternals.renderAuthProviderRouteFiles('nuxt', { clerk: true }),
+      ...projectInternals.renderAuthProviderRouteFiles('sveltekit', { clerk: true }),
+    ].filter(file => file.path.includes('/callback'))
+    expect(hostedAuthRoutes).toHaveLength(3)
+    for (const route of hostedAuthRoutes) {
+      expect(route.contents).not.toContain('/admin')
+    }
+    expect(hostedAuthRoutes.find(route => route.path.startsWith('app/'))?.contents).toContain('new URL(\'/\', request.url)')
+    expect(hostedAuthRoutes.find(route => route.path.startsWith('server/'))?.contents).toContain('sendRedirect(event, \'/\', 303)')
+    expect(hostedAuthRoutes.find(route => route.path.startsWith('src/'))?.contents).toContain('redirect(303, \'/\')')
     expect(projectInternals.authFeaturesRequireConfigUpdate({ socialProviders: ['google'] })).toBe(true)
     expect(projectInternals.detectAuthInstallFeaturesFromConfig(projectInternals.renderAuthConfig({
       workos: true,
@@ -2108,6 +2126,9 @@ export default defineSessionConfig({
     expect(rerunEnv).toContain('AUTH_GOOGLE_CLIENT_ID=')
     expect(rerunEnv).toContain('WORKOS_CLIENT_ID=')
     expect(rerunEnv).toContain('CLERK_PUBLISHABLE_KEY=')
+    expect(rerunEnv).toContain('CLERK_REDIRECT_URI=')
+    const rerunEnvExample = await readFile(join(projectRoot, '.env.example'), 'utf8')
+    expect(rerunEnvExample).toContain('CLERK_REDIRECT_URI=')
 
     const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
       dependencies?: Record<string, string>
@@ -2121,7 +2142,7 @@ export default defineSessionConfig({
     tempDirs.push(collisionRoot)
     await writeProjectFile(collisionRoot, 'server/models/User.ts', 'export default null\n')
     await expect(projectInternals.installAuthIntoProject(collisionRoot)).rejects.toThrow('Auth support is partially installed.')
-  })
+  }, 30000)
 
   it('treats an existing session config as part of partial auth collisions once auth artifacts already exist', async () => {
     const projectRoot = await createTempProject()

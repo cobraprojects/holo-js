@@ -71,7 +71,9 @@ import {
 } from './runtime/optionalSecurity'
 import {
   appendResponseCookies,
+  isAuthResponseInterrupt,
   parseBearerToken,
+  redirectResponse,
   resolveRequestCookie,
   resolveRequestHeader,
 } from './runtime/requestAccess'
@@ -2465,9 +2467,11 @@ export const authRuntimeInternals = {
   getProviderIdentifiers,
   getRuntimeBindings: getExposedRuntimeBindings,
   hashTokenSecret,
+  isResponseInterrupt: isAuthResponseInterrupt,
   parsePlainTextToken,
   parseSetCookieDefinition,
   readSessionPayload,
+  redirectResponse,
   serializeCookie,
   toLookupCredentials,
   toPlainTextTokenResult,

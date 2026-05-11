@@ -48,6 +48,7 @@ export default function LoginPage() {
         <a href="/auth/google" style={{ color: '#e5e7eb', textDecoration: 'none' }}>Continue with Google</a>
         <a href="/auth/github" style={{ color: '#e5e7eb', textDecoration: 'none' }}>Continue with GitHub</a>
         <a href="/api/auth/workos/login" style={{ color: '#e5e7eb', textDecoration: 'none' }}>Continue with WorkOS</a>
+        <a href="/api/auth/clerk/login" style={{ color: '#e5e7eb', textDecoration: 'none' }}>Continue with Clerk</a>
       </div>
 
       <form onSubmit={(event) => { event.preventDefault(); form.submit() }} style={{ display: 'grid', gap: '0.9rem' }}>

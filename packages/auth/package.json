@@ -58,12 +58,12 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "^0.1.4"
+    "@holo-js/config": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/security": "^0.1.4",
+    "@holo-js/security": "catalog:",
     "nuxt": "catalog:",
-    "react": "^18.3.1 || ^19.0.0",
+    "react": "catalog:",
     "svelte": "catalog:"
   },
   "peerDependenciesMeta": {

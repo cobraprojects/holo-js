@@ -40,6 +40,14 @@ type NitroContextModule = {
   readonly useEvent: () => NuxtAuthRequestEvent | undefined
 }
 
+type H3RedirectModule = {
+  readonly sendRedirect: (
+    event: NuxtAuthRequestEvent,
+    location: string,
+    code?: 301 | 302 | 303 | 307 | 308,
+  ) => Promise<void>
+}
+
 export function configureHoloRuntimeConfig(config: RuntimeConfigShape): void {
   const runtimeGlobals = globalThis as RuntimeGlobals
   runtimeGlobals.__holoRuntimeConfig = config
@@ -178,10 +186,22 @@ export function createNuxtAuthRequestAccessors() {
     await appendCookie(cookie)
   }
 
+  const redirectResponse: NonNullable<CreateHoloOptions['authRequest']>['redirectResponse'] = async (url, status) => {
+    const nitroContext = await loadNitroContextModule()
+    const event = nitroContext.useEvent()
+    if (!event) {
+      throw new TypeError('Holo Nuxt auth redirect requires an active Nitro event.')
+    }
+
+    const { sendRedirect } = await import('h3') as unknown as H3RedirectModule
+    await sendRedirect(event, url, status)
+  }
+
   return {
     getCookie: getCookieValue,
     getHeader: getHeaderValue,
     appendResponseCookie,
+    redirectResponse,
   } satisfies NonNullable<CreateHoloOptions['authRequest']>
 }
 

@@ -73,6 +73,7 @@ export {
   renderNextHoloHelper,
   renderSvelteHoloHelper,
 } from './framework-renderers'
+export { renderAuthProviderRouteFiles } from './framework-renderers'
 
 export function resolvePackageManagerVersion(value: SupportedScaffoldPackageManager): string {
   return SCAFFOLD_PACKAGE_MANAGER_VERSIONS[value]
