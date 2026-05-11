@@ -1,5 +1,5 @@
 import { generateKeyPairSync, sign as signData } from 'node:crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src/runtime'
 import { authRuntimeInternals, configureAuthRuntime, defineAuthConfig, logout, resetAuthRuntime } from '../../auth/src'
 import type { AuthProviderAdapter } from '../../auth/src'
@@ -17,6 +17,8 @@ import {
   verifySession,
   workosAuth,
   workosAuthInternals,
+  type WorkosAuthFacade,
+  type WorkosCompleteAuthResult,
   type WorkosJsonValue,
   type WorkosVerifiedSession,
 } from '../src'
@@ -71,8 +73,9 @@ function completeWorkosSessionFixture(session: WorkosSessionFixture | null): Wor
     return null
   }
 
+  const fullName = [session.identity.firstName, session.identity.lastName].filter(Boolean).join(' ')
   const name = session.identity.name
-    ?? [session.identity.firstName, session.identity.lastName].filter(Boolean).join(' ')
+    ?? (fullName || undefined)
     ?? session.identity.email
     ?? session.identity.id
 
@@ -442,6 +445,9 @@ describe('@holo-js/auth-workos', () => {
     expect(workosAuth.verifyRequest).toBe(verifyRequest)
     expect(workosAuth.verifySession).toBe(verifySession)
     expect(typeof workosAuthInternals.resolveEmailForCreation).toBe('function')
+
+    type CompleteWorkosAuthReturn = Awaited<ReturnType<WorkosAuthFacade['completeWorkosAuth']>>
+    expectTypeOf<CompleteWorkosAuthReturn>().toEqualTypeOf<WorkosCompleteAuthResult>()
   })
 
   it('resolves the configured default WorkOS provider', () => {
@@ -477,6 +483,16 @@ describe('@holo-js/auth-workos', () => {
     expect(workosAuthInternals.getBindings()).toEqual({
       providers,
       identityStore,
+    })
+  })
+
+  it('creates a resettable WorkOS runtime state property', () => {
+    configureRuntime()
+
+    expect(Object.getOwnPropertyDescriptor(globalThis, '__holoJsAuthWorkosRuntime')).toMatchObject({
+      configurable: true,
+      enumerable: false,
+      writable: true,
     })
   })
 
@@ -540,6 +556,66 @@ describe('@holo-js/auth-workos', () => {
         name: 'WorkOS User',
       },
     })
+  })
+
+  it('clears built-in WorkOS verifier caches when the runtime is reset', async () => {
+    const runtime = configureRuntime({
+      configureWorkosRuntime: false,
+    })
+    configureWorkosAuthRuntime({
+      identityStore: runtime.identityStore,
+    })
+
+    const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+    })
+    const token = createSignedJwt({
+      sub: 'user_workos_reset',
+      sid: 'sess_workos_reset',
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }, privateKey)
+    const publicJwk = publicKey.export({ format: 'jwk' })
+    let jwksRequestCount = 0
+
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === 'https://api.workos.com/sso/jwks/workos-client') {
+        jwksRequestCount += 1
+        return new Response(JSON.stringify({
+          keys: [{ ...publicJwk, kid: 'workos-test-key', alg: 'RS256', use: 'sig' }],
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+
+      if (url === 'https://api.workos.com/user_management/users/user_workos_reset') {
+        return new Response(JSON.stringify({
+          id: 'user_workos_reset',
+          email: 'reset@app.test',
+          email_verified: true,
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+
+      return new Response(null, { status: 404 })
+    })
+
+    await expect(verifySession(token)).resolves.toMatchObject({
+      sessionId: 'sess_workos_reset',
+    })
+
+    resetWorkosAuthRuntime()
+    configureWorkosAuthRuntime({
+      identityStore: runtime.identityStore,
+    })
+
+    await expect(verifySession(token)).resolves.toMatchObject({
+      sessionId: 'sess_workos_reset',
+    })
+    expect(jwksRequestCount).toBe(2)
   })
 
   it('rejects built-in WorkOS JWTs before their not-before time', async () => {
@@ -865,19 +941,19 @@ describe('@holo-js/auth-workos', () => {
         authorization: 'Bearer workos-key',
         'content-type': 'application/json',
       })
-      expect(init?.body).toBe(JSON.stringify({
+      expect(JSON.parse(String(init?.body))).toMatchObject({
         grant_type: 'authorization_code',
         client_id: 'workos-client',
         client_secret: 'workos-key',
         code: 'code_123',
-      }))
+      })
 
       return new Response(JSON.stringify({
-        access_token: accessToken,
+        access_token: ` ${accessToken} `,
         organization_id: 'org_123',
         user: {
           id: 'workos_callback',
-          email: 'callback@app.test',
+          email: ' callback@app.test ',
           firstName: 'Callback',
           lastName: 'User',
           emailVerified: true,

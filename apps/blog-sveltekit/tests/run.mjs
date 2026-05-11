@@ -39,6 +39,7 @@ let capturedOutput = ''
 function createChildEnv(overrides = {}) {
   const env = {
     ...process.env,
+    APP_NAME: '',
     HOLO_SECURITY_TRUST_PROXY: 'true',
     ...overrides,
   }

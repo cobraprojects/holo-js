@@ -3129,6 +3129,35 @@ describe('@holo-js/auth package runtime', () => {
     expect(loggedOut.cookies).toContainEqual(expect.stringContaining('wos-session=;'))
   })
 
+  it('ignores malformed hosted provider cookie configs during logout', async () => {
+    const runtime = configureRuntime()
+    configureAuthRuntime({
+      ...authRuntimeInternals.getRuntimeBindings(),
+      config: {
+        ...authRuntimeInternals.getRuntimeBindings().config,
+        workos: {
+          dashboard: {
+            guard: 'web',
+          },
+        } as never,
+      },
+    })
+
+    const created = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: null,
+      email_verified_at: new Date(),
+    })
+
+    await loginUsing(created)
+
+    const loggedOut = await logout()
+
+    expect(loggedOut.cookies).toContainEqual(expect.stringContaining('holo_session=;'))
+    expect(loggedOut.cookies).not.toContainEqual(expect.stringContaining('undefined=;'))
+  })
+
   it('supports logout with legacy session bindings that only expose named cookie helpers', async () => {
     const runtime = configureRuntime()
     const session = getSessionRuntime()

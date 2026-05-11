@@ -1491,6 +1491,9 @@ function getWorkosProviderEntries(
   const entries: [string, AuthWorkosProviderConfig][] = []
   for (const [name, value] of Object.entries(config)) {
     if (name === 'provider') {
+      if (typeof value !== 'undefined' && typeof value !== 'string') {
+        throw new Error('[Holo Auth] WorkOS provider key "provider" is reserved for the default provider name.')
+      }
       continue
     }
     if (!isWorkosProviderConfig(value)) {
@@ -1508,7 +1511,7 @@ function normalizeWorkosConfig(
   providers: Readonly<Record<string, NormalizedAuthProviderConfig>>,
 ): NormalizedHoloAuthWorkosConfig {
   const providerEntries = getWorkosProviderEntries(config)
-  const provider = config?.provider?.trim() || undefined
+  const provider = typeof config?.provider === 'string' ? config.provider.trim() || undefined : undefined
   if (providerEntries.length === 0) {
     if (provider) {
       throw new Error(`[Holo Auth] WorkOS provider "${provider}" is not configured.`)
@@ -1517,9 +1520,9 @@ function normalizeWorkosConfig(
     return holoAuthDefaults.workos
   }
 
-  const normalizedEntries = providerEntries.map(([name, provider]) => {
+  const normalizedEntries = providerEntries.map(([name, providerConfig]) => {
     const normalizedName = normalizeConnectionName(name, 'Auth WorkOS provider name')
-    return [normalizedName, provider] as const
+    return [normalizedName, providerConfig] as const
   })
   if (provider && !normalizedEntries.some(([name]) => name === provider)) {
     throw new Error(`[Holo Auth] WorkOS provider "${provider}" is not configured.`)
@@ -1527,9 +1530,9 @@ function normalizeWorkosConfig(
 
   return Object.freeze({
     ...(typeof provider === 'undefined' ? {} : { provider }),
-    ...Object.fromEntries(normalizedEntries.map(([name, provider]) => [
+    ...Object.fromEntries(normalizedEntries.map(([name, providerConfig]) => [
       name,
-      normalizeWorkosProvider(name, provider, guards, providers),
+      normalizeWorkosProvider(name, providerConfig, guards, providers),
     ])),
   })
 }

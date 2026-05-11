@@ -2774,6 +2774,18 @@ export default defineConfig({
         provider: 'dashboard',
       },
     })).toThrow('WorkOS provider "dashboard" is not configured')
+    expect(normalizeAuthConfig({
+      workos: {
+        provider: '   ',
+      },
+    }).workos).toEqual(normalizeAuthConfig().workos)
+    expect(() => normalizeAuthConfig({
+      workos: {
+        provider: {
+          clientId: 'workos-client',
+        },
+      } as never,
+    })).toThrow('WorkOS provider key "provider" is reserved for the default provider name')
     expect(() => normalizeAuthConfig({
       workos: {
         dashboard: 'invalid' as never,

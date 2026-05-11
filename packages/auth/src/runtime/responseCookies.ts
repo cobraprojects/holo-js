@@ -46,9 +46,7 @@ function getHostedSessionCookieNamesForGuard(
   guardName: string,
 ): readonly string[] {
   const names = new Set<string>()
-  for (const provider of Object.values(config.workos).filter(
-    (value): value is HostedProviderConfig => typeof value === 'object' && value !== null,
-  )) {
+  for (const provider of Object.values(config.workos).filter(isHostedProviderConfig)) {
     if ((provider.guard ?? config.defaults.guard) === guardName) {
       names.add(provider.sessionCookie)
     }
@@ -60,6 +58,15 @@ function getHostedSessionCookieNamesForGuard(
   }
 
   return [...names]
+}
+
+function isHostedProviderConfig(value: HostedProviderConfig | string | undefined): value is HostedProviderConfig {
+  return !!(
+    value
+    && typeof value === 'object'
+    && 'sessionCookie' in value
+    && typeof value.sessionCookie === 'string'
+  )
 }
 
 export function buildLogoutCookies(

@@ -290,9 +290,16 @@ export async function assertExampleAppAuthFlow({
   assert.equal(missingGithubCallback.response.status, 400)
   assert.equal(missingGithubCallback.json.message, 'Missing OAuth state or code.')
 
-  assertRedirectsTo(await fetchAuthText('/api/auth/workos/callback', {
+  const missingWorkosCallback = await fetchAuthText('/api/auth/workos/callback', {
     allowFailure: true,
-  }), '/login')
+  })
+  assertRedirectsTo(missingWorkosCallback, '/login')
+  const missingWorkosCallbackLocation = missingWorkosCallback.response.headers.get('location')
+  assert.ok(missingWorkosCallbackLocation, 'Expected WorkOS callback redirect to include a location header.')
+  assert.ok(
+    new URL(missingWorkosCallbackLocation, missingWorkosCallback.response.url).searchParams.has('error'),
+    'Expected WorkOS callback redirect to include an error query parameter.',
+  )
 
   const badCredentials = await fetchAuthJson('/api/login', {
     fields: {

@@ -13,6 +13,7 @@ export type {
   WorkosAuthBindings,
   WorkosAuthFacade,
   WorkosAuthenticationResult,
+  WorkosCompleteAuthResult,
   WorkosIdentityProfile,
   WorkosJsonValue,
   WorkosLogoutResult,
@@ -29,6 +30,7 @@ import {
   type HostedIdentityRecord,
   type WorkosAuthBindings,
   type WorkosAuthenticationResult,
+  type WorkosCompleteAuthResult,
   type WorkosIdentityProfile,
   type WorkosJsonValue,
   type WorkosLogoutResult,
@@ -134,7 +136,8 @@ function getRuntimeState(): WorkosRuntimeState {
     Object.defineProperty(runtimeGlobal, WORKOS_RUNTIME_STATE_KEY, {
       value: {},
       enumerable: false,
-      configurable: false,
+      configurable: true,
+      writable: true,
     })
   }
 
@@ -457,7 +460,7 @@ function normalizeWorkosUserProfile(user: Readonly<Record<string, unknown>>): Wo
   const name = typeof user.name === 'string'
     ? user.name
     : [firstName, lastName].filter(Boolean).join(' ').trim()
-  const email = typeof user.email === 'string' ? user.email : ''
+  const email = typeof user.email === 'string' ? user.email.trim() : ''
 
   return Object.freeze({
     id: String(user.id ?? ''),
@@ -1107,8 +1110,9 @@ export async function verifyRequest(input: WorkosRequestInput, provider?: string
 function getStringField(input: Readonly<Record<string, unknown>>, ...names: readonly string[]): string | undefined {
   for (const name of names) {
     const value = input[name]
-    if (typeof value === 'string' && value.trim()) {
-      return value
+    const normalized = typeof value === 'string' ? value.trim() : ''
+    if (normalized) {
+      return normalized
     }
   }
 
@@ -1430,8 +1434,6 @@ export async function logoutWithWorkos(
     if (requestSessionId) {
       authRuntimeInternals.getRuntimeBindings().context.setSessionId(guard, requestSessionId)
     }
-    await getAuthRuntime().guard(guard).user()
-
     const workosSession = await readCurrentWorkosLogoutSession(guard, providerName)
     if (!workosSession) {
       return Object.freeze({
@@ -1459,7 +1461,7 @@ export async function logoutWithWorkos(
 export async function completeWorkosAuth<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes>(
   input: WorkosRequestInput,
   options: CompleteWorkosAuthOptions<TUserAttributes> = {},
-) {
+): Promise<WorkosCompleteAuthResult> {
   try {
     const request = normalizeWorkosRequest(input)
     const url = new URL(request.url)
@@ -1527,6 +1529,8 @@ export function configureWorkosAuthRuntime(bindings?: ConfigureWorkosAuthRuntime
 
 export function resetWorkosAuthRuntime(): void {
   getRuntimeState().bindings = undefined
+  workosDefaultProviderRuntimeCache.clear()
+  workosJwksCache.clear()
 }
 
 export const workosAuth = Object.freeze({

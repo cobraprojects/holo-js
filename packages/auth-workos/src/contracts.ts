@@ -38,6 +38,24 @@ export interface WorkosLogoutSession {
   readonly sessionId: string
 }
 
+export type WorkosCompleteAuthResult<TUser extends AuthUserLike = AuthUserLike> =
+  | Readonly<{
+    readonly ok: true
+    readonly provider: string
+    readonly guard: string
+    readonly authProvider: string
+    readonly status: WorkosSyncStatus
+    readonly user: TUser
+    readonly identity: HostedIdentityRecord
+    readonly session: WorkosVerifiedSession
+    readonly authSession: AuthEstablishedSession
+  }>
+  | Readonly<{
+    readonly ok: false
+    readonly code: string
+    readonly message: string
+  }>
+
 export type WorkosLogoutResult =
   | Readonly<{
     readonly ok: true
@@ -114,12 +132,7 @@ export interface WorkosAuthFacade {
   loginWithWorkos(request: Request, options?: { readonly provider?: string }): Promise<Response>
   registerWithWorkos(request: Request, options?: { readonly provider?: string }): Promise<Response>
   logoutWithWorkos(request: Request, options?: { readonly provider?: string, readonly returnTo?: string }): Promise<WorkosLogoutResult>
-  completeWorkosAuth(request: Request, options?: { readonly provider?: string }): Promise<Readonly<{
-    readonly ok: boolean
-    readonly code?: string
-    readonly message?: string
-    readonly user?: AuthUserLike
-  }>>
+  completeWorkosAuth(request: Request, options?: { readonly provider?: string }): Promise<WorkosCompleteAuthResult>
   verifyRequest(request: Request, provider?: string): Promise<WorkosVerifiedSession | null>
   verifySession(token: string, provider?: string): Promise<WorkosVerifiedSession | null>
   syncIdentity(session: WorkosVerifiedSession, provider?: string): Promise<WorkosAuthenticationResult>
