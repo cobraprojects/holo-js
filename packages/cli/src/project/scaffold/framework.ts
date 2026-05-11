@@ -189,7 +189,7 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
       ...(options.framework === 'nuxt'
         ? { postinstall: 'nuxt prepare' }
         : {}),
-      prepare: 'holo prepare',
+      prepare: 'holo key:generate && holo prepare',
       dev: 'holo dev',
       build: 'holo build',
       lint: options.framework === 'nuxt'
