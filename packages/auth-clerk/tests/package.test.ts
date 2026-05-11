@@ -71,6 +71,18 @@ type ClerkSessionFixture = {
 
 type FetchMockInput = string | URL | Request
 
+function resolveFetchMockUrl(input: FetchMockInput): string {
+  if (input instanceof Request) {
+    return input.url
+  }
+
+  if (input instanceof URL) {
+    return input.href
+  }
+
+  return input
+}
+
 class InMemorySessionStore implements SessionStore {
   readonly records = new Map<string, SessionRecord>()
   async read(sessionId: string): Promise<SessionRecord | null> {
@@ -142,6 +154,7 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
     }
     if (typeof input.avatar !== 'undefined') {
       user.avatar = input.avatar
+      user.avatarUrl = input.avatar
     }
     if (typeof input.clerkUserId !== 'undefined') {
       user.clerkUserId = input.clerkUserId
@@ -470,6 +483,12 @@ describe('@holo-js/auth-clerk', () => {
     expect(typeof clerkAuthInternals.resolveEmailForCreation).toBe('function')
   })
 
+  it('normalizes fetch mock request inputs to URL strings', () => {
+    expect(resolveFetchMockUrl('https://api.clerk.test/v1/jwks')).toBe('https://api.clerk.test/v1/jwks')
+    expect(resolveFetchMockUrl(new URL('https://api.clerk.test/v1/users/user_1'))).toBe('https://api.clerk.test/v1/users/user_1')
+    expect(resolveFetchMockUrl(new Request('https://api.clerk.test/v1/sessions/session_1/revoke'))).toBe('https://api.clerk.test/v1/sessions/session_1/revoke')
+  })
+
   it('merges partial runtime configuration updates', () => {
     const identityStore = new InMemoryIdentityStore()
     const providers = Object.freeze({
@@ -515,7 +534,7 @@ describe('@holo-js/auth-clerk', () => {
       exp: Math.floor(Date.now() / 1000) + 3600,
     }, privateKey)
     const fetchMock = vi.fn(async (input: FetchMockInput) => {
-      const url = String(input)
+      const url = resolveFetchMockUrl(input)
       if (url === 'https://api.clerk.com/v1/jwks') {
         return createJwksResponse(publicKey)
       }
@@ -599,7 +618,7 @@ describe('@holo-js/auth-clerk', () => {
       exp: Math.floor(Date.now() / 1000) + 3600,
     }, privateKey)
     const fetchMock = vi.fn(async (input: FetchMockInput) => {
-      const url = String(input)
+      const url = resolveFetchMockUrl(input)
       if (url === 'https://api.clerk.com/v1/jwks') {
         return createJwksResponse(publicKey)
       }
@@ -679,7 +698,7 @@ describe('@holo-js/auth-clerk', () => {
       exp: Math.floor(Date.now() / 1000) + 3600,
     }, privateKey)
     const fetchMock = vi.fn(async (input: FetchMockInput) => {
-      const url = String(input)
+      const url = resolveFetchMockUrl(input)
       if (url === 'https://clerk.example.test/.well-known/jwks.json') {
         return new Response(JSON.stringify({
           keys: [
@@ -794,7 +813,7 @@ describe('@holo-js/auth-clerk', () => {
 
     let jwksRequestCount = 0
     const fetchMock = vi.fn(async (input: FetchMockInput) => {
-      const url = String(input)
+      const url = resolveFetchMockUrl(input)
       if (url === 'https://rotate.clerk.test/.well-known/jwks.json') {
         jwksRequestCount += 1
         const publicKey = (jwksRequestCount === 1 ? firstKeyPair.publicKey : secondKeyPair.publicKey)
@@ -908,7 +927,7 @@ describe('@holo-js/auth-clerk', () => {
       exp: Math.floor(Date.now() / 1000) + 3600,
     }, secondKeyPair.privateKey)
     const fetchMock = vi.fn(async (input: FetchMockInput) => {
-      const url = String(input)
+      const url = resolveFetchMockUrl(input)
       if (url === 'https://first.clerk.test/.well-known/jwks.json') {
         return new Response(JSON.stringify({
           keys: [
@@ -1058,7 +1077,7 @@ describe('@holo-js/auth-clerk', () => {
       exp: Math.floor(Date.now() / 1000) + 7200,
     }, privateKey)
     vi.stubGlobal('fetch', vi.fn(async (input: FetchMockInput) => {
-      const url = String(input)
+      const url = resolveFetchMockUrl(input)
       if (url === 'https://api.clerk.com/v1/jwks') {
         return createJwksResponse(publicKey)
       }
@@ -1654,6 +1673,7 @@ describe('@holo-js/auth-clerk', () => {
         email: 'sync@app.test',
         emailVerified: true,
         name: 'First Name',
+        imageUrl: 'https://cdn.test/first.png',
       },
     })
 
@@ -1686,6 +1706,7 @@ describe('@holo-js/auth-clerk', () => {
         id: 1,
         name: 'Updated Name',
         avatar: 'https://cdn.test/updated.png',
+        avatarUrl: 'https://cdn.test/updated.png',
       },
     })
 

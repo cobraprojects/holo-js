@@ -173,13 +173,15 @@ export default defineConfig({
     expect(resolved.runtime.renderView).toBe(renderView)
   })
 
-  it('externalizes optional Holo server packages consistently', async () => {
+  it('externalizes only installed optional Holo server packages', async () => {
     const root = await createProject()
     await writeFile(join(root, 'package.json'), JSON.stringify({
       dependencies: {
         '@holo-js/auth': 'workspace:*',
-        '@holo-js/auth-social': 'workspace:*',
         '@holo-js/auth-social-google': 'workspace:*',
+      },
+      peerDependencies: {
+        '@holo-js/auth-social': 'workspace:*',
       },
     }), 'utf8')
 
@@ -196,16 +198,16 @@ export default defineConfig({
         '@holo-js/auth',
         '@holo-js/auth-social',
         '@holo-js/auth-social-google',
-        '@holo-js/auth-social-github',
-        '@holo-js/auth-clerk',
         'custom-runtime',
       ]))
+      expect(config.serverExternalPackages).not.toContain('@holo-js/auth-social-github')
+      expect(config.serverExternalPackages).not.toContain('@holo-js/auth-clerk')
     } finally {
       process.chdir(previousCwd)
     }
   })
 
-  it('does not depend on package.json parsing to externalize optional Holo packages', async () => {
+  it('skips optional Holo packages when package.json cannot be parsed', async () => {
     const root = await createProject()
     await writeFile(join(root, 'package.json'), '{', 'utf8')
 
@@ -218,9 +220,9 @@ export default defineConfig({
       expect(config.serverExternalPackages).toEqual(expect.arrayContaining([
         '@holo-js/core',
         '@holo-js/adapter-next',
-        '@holo-js/auth',
-        '@holo-js/auth-social',
       ]))
+      expect(config.serverExternalPackages).not.toContain('@holo-js/auth')
+      expect(config.serverExternalPackages).not.toContain('@holo-js/auth-social')
     } finally {
       process.chdir(previousCwd)
     }
