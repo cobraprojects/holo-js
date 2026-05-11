@@ -70,6 +70,7 @@ const form = useForm(registerForm, {
 
     <NuxtLink to="/login">Already have an account?</NuxtLink>
     <a href="/api/auth/workos/register">Register with WorkOS</a>
+    <a href="/api/auth/clerk/register">Register with Clerk</a>
   </section>
 </template>
 

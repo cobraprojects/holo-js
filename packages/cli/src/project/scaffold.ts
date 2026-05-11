@@ -1,5 +1,5 @@
 import { mkdir, readdir } from 'node:fs/promises'
-import { extname, resolve } from 'node:path'
+import { dirname, extname, resolve } from 'node:path'
 import { loadConfigDirectory } from '@holo-js/config'
 import {
   loadProjectConfig,
@@ -79,6 +79,7 @@ import {
   upsertSecurityPackageDependency,
 } from './scaffold/dependencies'
 import {
+  renderAuthProviderRouteFiles,
   renderFrameworkFiles,
   renderFrameworkRunner,
   renderNextHoloHelper,
@@ -209,6 +210,28 @@ async function writeAuthNotificationFiles(projectRoot: string): Promise<{
   }
 }
 
+async function syncHostedAuthRouteFiles(projectRoot: string, features: AuthInstallFeatures): Promise<void> {
+  if (!features.workos && !features.clerk) {
+    return
+  }
+
+  const { dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  const framework = detectProjectFrameworkFromPackageJson(dependencies, devDependencies)
+  if (!framework) {
+    return
+  }
+
+  for (const file of renderAuthProviderRouteFiles(framework, features)) {
+    const targetPath = resolve(projectRoot, file.path)
+    if (await pathExists(targetPath)) {
+      continue
+    }
+
+    await mkdir(dirname(targetPath), { recursive: true })
+    await writeTextFile(targetPath, file.contents)
+  }
+}
+
 export async function installAuthIntoProject(
   projectRoot: string,
   features: AuthInstallFeatures = {},
@@ -260,6 +283,7 @@ export async function installAuthIntoProject(
     }
 
     await syncBroadcastAuthSupportAfterAuthInstall(projectRoot)
+    await syncHostedAuthRouteFiles(projectRoot, nextAuthFeatures)
 
     return {
       updatedPackageJson: await upsertAuthPackageDependencies(projectRoot, nextAuthFeatures),
@@ -329,6 +353,7 @@ export async function installAuthIntoProject(
   }
 
   await syncBroadcastAuthSupportAfterAuthInstall(projectRoot)
+  await syncHostedAuthRouteFiles(projectRoot, features)
 
   return {
     updatedPackageJson: await upsertAuthPackageDependencies(projectRoot, features),
@@ -731,6 +756,7 @@ export {
   renderAuthConfig,
   renderAuthEnvFiles,
   renderAuthMigration,
+  renderAuthProviderRouteFiles,
   renderAuthUserModel,
   renderCacheConfig,
   renderCacheEnvFiles,

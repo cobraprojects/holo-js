@@ -23,17 +23,17 @@
     "test": "vitest --run"
   },
   "peerDependencies": {
-    "@holo-js/cache": "^0.1.4"
+    "@holo-js/cache": "catalog:"
   },
   "dependencies": {
     "ioredis": "catalog:",
-    "tslib": "^2.8.1"
+    "tslib": "catalog:"
   },
   "devDependencies": {
-    "@holo-js/cache": "workspace:*",
-    "@types/node": "^22.10.2",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
+    "@holo-js/cache": "catalog:",
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

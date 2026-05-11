@@ -45,6 +45,9 @@
         <form action="/api/auth/workos/logout" method="post" class="logout-form">
           <button type="submit" class="logout-button">Logout from WorkOS</button>
         </form>
+        <form action="/api/auth/clerk/logout" method="post" class="logout-form">
+          <button type="submit" class="logout-button">Logout from Clerk</button>
+        </form>
       {:else}
         <a href="/login">Login</a>
         <a href="/register">Register</a>

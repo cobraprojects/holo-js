@@ -33,12 +33,13 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "^0.1.4",
-    "@holo-js/core": "^0.1.4",
+    "@holo-js/config": "catalog:",
+    "@holo-js/core": "catalog:",
     "svelte": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/forms": "^0.1.4"
+    "@holo-js/forms": "catalog:",
+    "@sveltejs/kit": "catalog:"
   },
   "peerDependenciesMeta": {
     "@holo-js/forms": {
@@ -46,9 +47,10 @@
     }
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
+    "@sveltejs/kit": "catalog:",
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

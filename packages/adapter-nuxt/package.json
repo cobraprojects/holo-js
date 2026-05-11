@@ -35,14 +35,15 @@
   },
   "dependencies": {
     "@nuxt/kit": "catalog:",
-    "@holo-js/config": "^0.1.4",
-    "@holo-js/core": "^0.1.4",
-    "@holo-js/db": "^0.1.4"
+    "@holo-js/config": "catalog:",
+    "@holo-js/core": "catalog:",
+    "@holo-js/db": "catalog:",
+    "h3": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/forms": "^0.1.4",
-    "@holo-js/storage": "^0.1.4",
-    "@holo-js/storage-s3": "^0.1.4"
+    "@holo-js/forms": "catalog:",
+    "@holo-js/storage": "catalog:",
+    "@holo-js/storage-s3": "catalog:"
   },
   "peerDependenciesMeta": {
     "@holo-js/forms": {
@@ -56,11 +57,11 @@
     }
   },
   "devDependencies": {
-    "@holo-js/storage-s3": "workspace:*",
-    "@nuxt/module-builder": "^1.0.2",
-    "@types/node": "^22.10.2",
+    "@holo-js/storage-s3": "catalog:",
+    "@nuxt/module-builder": "catalog:",
+    "@types/node": "catalog:",
     "nuxt": "catalog:",
-    "typescript": "^5.7.2",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

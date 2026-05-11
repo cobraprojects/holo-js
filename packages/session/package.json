@@ -28,7 +28,7 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "^0.1.4"
+    "@holo-js/config": "catalog:"
   },
   "peerDependencies": {
     "ioredis": "catalog:"
@@ -39,10 +39,10 @@
     }
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
+    "@types/node": "catalog:",
     "ioredis": "catalog:",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

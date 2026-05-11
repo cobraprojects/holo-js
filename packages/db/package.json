@@ -28,9 +28,9 @@
     "uuid": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/db-mysql": "^0.1.4",
-    "@holo-js/db-postgres": "^0.1.4",
-    "@holo-js/db-sqlite": "^0.1.4"
+    "@holo-js/db-mysql": "catalog:",
+    "@holo-js/db-postgres": "catalog:",
+    "@holo-js/db-sqlite": "catalog:"
   },
   "peerDependenciesMeta": {
     "@holo-js/db-mysql": {
@@ -44,12 +44,12 @@
     }
   },
   "devDependencies": {
-    "@holo-js/db-mysql": "workspace:*",
-    "@holo-js/db-postgres": "workspace:*",
-    "@holo-js/db-sqlite": "workspace:*",
-    "@types/better-sqlite3": "^7.6.12",
-    "@types/pg": "^8.11.0",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2"
+    "@holo-js/db-mysql": "catalog:",
+    "@holo-js/db-postgres": "catalog:",
+    "@holo-js/db-sqlite": "catalog:",
+    "@types/better-sqlite3": "catalog:",
+    "@types/pg": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:"
   }
 }

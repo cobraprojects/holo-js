@@ -23,17 +23,17 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/broadcast": "^0.1.4",
-    "@holo-js/flux": "^0.1.4"
+    "@holo-js/broadcast": "catalog:",
+    "@holo-js/flux": "catalog:"
   },
   "peerDependencies": {
-    "svelte": "^5.16.0"
+    "svelte": "catalog:"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
-    "svelte": "^5.16.0",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
+    "@types/node": "catalog:",
+    "svelte": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

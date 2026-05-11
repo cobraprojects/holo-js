@@ -1,7 +1,7 @@
-import { authRuntimeInternals } from '@holo-js/auth'
+import { authRuntimeInternals, getAuthRuntime } from '@holo-js/auth'
 import type { AuthEstablishedSession, AuthUserLike } from '@holo-js/auth'
 import { parseCookieHeader } from '@holo-js/session'
-import type { AuthClerkProviderConfig } from '@holo-js/config'
+import type { AuthClerkProviderConfig, NormalizedAuthClerkProviderConfig } from '@holo-js/config'
 export {
   ClerkAuthConflictError,
 } from './contracts'
@@ -9,7 +9,10 @@ export type {
   ClerkAuthBindings,
   ClerkAuthFacade,
   ClerkAuthenticationResult,
+  ClerkCompleteAuthResult,
   ClerkEmailAddress,
+  ClerkLogoutResult,
+  ClerkLogoutSession,
   ClerkProviderRuntime,
   ClerkSyncStatus,
   ClerkUserProfile,
@@ -24,7 +27,10 @@ import {
   ClerkAuthConflictError,
   type ClerkAuthBindings,
   type ClerkAuthenticationResult,
+  type ClerkCompleteAuthResult,
   type ClerkEmailAddress,
+  type ClerkLogoutResult,
+  type ClerkLogoutSession,
   type ClerkProviderRuntime,
   type ClerkUserProfile,
   type ClerkVerifiedSession,
@@ -39,10 +45,78 @@ import {
   resolveClerkJwksUrl,
   type JwkKey,
   verifyJwtSignatureWithJwk,
-  verifyJwtSignatureWithPem,
 } from './jwt'
 
 type RuntimeAuthProviderAdapter = ReturnType<typeof authRuntimeInternals.getRuntimeBindings>['providers'][string]
+
+type ClerkUserAttributeValue =
+  | string
+  | number
+  | boolean
+  | Date
+  | null
+  | undefined
+  | readonly ClerkUserAttributeValue[]
+  | { readonly [key: string]: ClerkUserAttributeValue }
+
+type ClerkUserAttributes = Readonly<Record<string, ClerkUserAttributeValue>>
+
+type ClerkDefaultUserAttributes = {
+  readonly email: string
+  readonly name: string
+}
+
+type CompleteClerkAuthOptions<TUserAttributes extends ClerkUserAttributes = ClerkDefaultUserAttributes> = {
+  readonly provider?: string
+  readonly user?: (clerkUser: ClerkUserProfile) => TUserAttributes
+}
+
+type ClerkRequestHeaders =
+  | Headers
+  | ReadonlyArray<readonly [string, string]>
+  | Record<string, string | readonly string[] | undefined>
+  | {
+    readonly get?: (name: string) => string | null | undefined
+    readonly forEach?: (callback: (value: string, key: string) => void) => void
+    readonly entries?: () => Iterable<readonly [string, string]>
+  }
+
+type ClerkRequestLike = {
+  readonly method?: string
+  readonly path?: string
+  readonly url?: string | URL
+  readonly headers?: ClerkRequestHeaders
+  readonly request?: Request
+  readonly req?: Request | {
+    readonly method?: string
+    readonly url?: string
+    readonly headers?: ClerkRequestHeaders
+  }
+  readonly node?: {
+    readonly req?: {
+      readonly method?: string
+      readonly url?: string
+      readonly headers?: ClerkRequestHeaders
+    }
+  }
+  readonly web?: {
+    readonly request?: Request
+  }
+}
+
+type ClerkRequestInput = Request | ClerkRequestLike
+
+type SerializedClerkAuthUser = AuthUserLike & {
+  readonly id: string | number
+}
+
+type ClerkSessionPayload = {
+  readonly guard: string
+  readonly provider: string
+  readonly userId: string | number
+  readonly user: SerializedClerkAuthUser
+  readonly clerk: ClerkLogoutSession
+}
 
 let clerkBindings: ConfigureClerkAuthRuntimeOptions | undefined
 const clerkDefaultProviderRuntimeCache = new Map<string, ClerkProviderRuntime>()
@@ -50,6 +124,129 @@ const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
 
 function throwUnconfigured(): never {
   throw new Error('[@holo-js/auth-clerk] Clerk auth runtime is not configured yet.')
+}
+
+function isPlainHeaderRecord(value: unknown): value is Record<string, string | readonly string[] | undefined> {
+  return Boolean(value) && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype
+}
+
+function appendKnownHeaders(headers: Headers, input: { readonly get?: (name: string) => string | null | undefined }): void {
+  for (const name of ['authorization', 'cookie', 'host', 'x-forwarded-host', 'x-forwarded-proto']) {
+    const value = input.get?.(name)
+    if (typeof value === 'string' && value) {
+      headers.set(name, value)
+    }
+  }
+}
+
+function hasHeaderForEach(input: ClerkRequestHeaders): input is { readonly forEach: (callback: (value: string, key: string) => void) => void } {
+  return !Array.isArray(input) && 'forEach' in input && typeof input.forEach === 'function'
+}
+
+function hasHeaderEntries(input: ClerkRequestHeaders): input is { readonly entries: () => Iterable<readonly [string, string]> } {
+  return !Array.isArray(input) && 'entries' in input && typeof input.entries === 'function'
+}
+
+function hasHeaderGet(input: ClerkRequestHeaders): input is { readonly get: (name: string) => string | null | undefined } {
+  return !Array.isArray(input) && 'get' in input && typeof input.get === 'function'
+}
+
+function normalizeRequestHeaders(input: ClerkRequestHeaders | undefined): Headers {
+  const headers = new Headers()
+  if (!input) {
+    return headers
+  }
+
+  if (input instanceof Headers || Array.isArray(input)) {
+    new Headers(input).forEach((value, name) => headers.append(name, value))
+    return headers
+  }
+
+  if (hasHeaderForEach(input)) {
+    input.forEach((value, name) => headers.append(name, value))
+    return headers
+  }
+
+  if (hasHeaderEntries(input)) {
+    for (const [name, value] of input.entries()) {
+      headers.append(name, value)
+    }
+    return headers
+  }
+
+  if (hasHeaderGet(input)) {
+    appendKnownHeaders(headers, input)
+    return headers
+  }
+
+  if (isPlainHeaderRecord(input)) {
+    for (const [name, value] of Object.entries(input)) {
+      if (typeof value === 'string') {
+        headers.append(name, value)
+        continue
+      }
+
+      if (Array.isArray(value)) {
+        const separator = name.toLowerCase() === 'cookie' ? '; ' : ','
+        const joined = value.filter((entry): entry is string => typeof entry === 'string').join(separator)
+        if (joined) {
+          headers.append(name, joined)
+        }
+      }
+    }
+  }
+
+  return headers
+}
+
+function getRequestFromLikeInput(input: ClerkRequestLike): Request | undefined {
+  return input.request ?? input.web?.request ?? (input.req instanceof Request ? input.req : undefined)
+}
+
+function getRequestLikeHeaders(input: ClerkRequestLike) {
+  return input.headers
+    ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.headers : undefined)
+    ?? input.node?.req?.headers
+}
+
+function getRequestLikeMethod(input: ClerkRequestLike): string {
+  return input.method
+    ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.method : undefined)
+    ?? input.node?.req?.method
+    ?? 'GET'
+}
+
+function getRequestLikeUrl(input: ClerkRequestLike, headers: Headers): string {
+  const url = (typeof input.url === 'string' ? input.url : input.url?.toString())
+    ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.url : undefined)
+    ?? input.node?.req?.url
+    ?? input.path
+    ?? '/'
+
+  try {
+    return new URL(url).toString()
+  } catch {
+    const protocol = headers.get('x-forwarded-proto') ?? 'http'
+    const host = headers.get('x-forwarded-host') ?? headers.get('host') ?? 'localhost'
+    return new URL(url, `${protocol}://${host}`).toString()
+  }
+}
+
+function normalizeClerkRequest(input: ClerkRequestInput): Request {
+  if (input instanceof Request) {
+    return input
+  }
+
+  const request = getRequestFromLikeInput(input)
+  if (request) {
+    return request
+  }
+
+  const headers = normalizeRequestHeaders(getRequestLikeHeaders(input))
+  return new Request(getRequestLikeUrl(input, headers), {
+    method: getRequestLikeMethod(input),
+    headers,
+  })
 }
 
 function getBindings(): ClerkAuthBindings {
@@ -69,36 +266,21 @@ async function verifyClerkSessionToken(
   authorizedParties: readonly string[] = [],
 ): Promise<Readonly<Record<string, unknown>>> {
   const parsed = parseJwt(token)
-  const verified = (() => {
-    const pem = config.jwtKey?.trim()
-    if (pem) {
-      return verifyJwtSignatureWithPem(parsed, pem)
-    }
-
-    return undefined
-  })()
-
-  if (verified === false) {
-    throw new Error('[@holo-js/auth-clerk] Clerk token signature verification failed.')
+  const headerKid = typeof parsed.header.kid === 'string' ? parsed.header.kid : undefined
+  const jwksUrl = resolveClerkJwksUrl(config)
+  const resolveKey = async (refresh = false): Promise<JwkKey | undefined> => {
+    const keys = await fetchClerkJwks(jwksUrl, { refresh })
+    return headerKid
+      ? keys.find(candidate => candidate.kid === headerKid)
+      : keys[0]
   }
 
-  if (typeof verified === 'undefined') {
-    const headerKid = typeof parsed.header.kid === 'string' ? parsed.header.kid : undefined
-    const jwksUrl = resolveClerkJwksUrl(config)
-    const resolveKey = async (refresh = false): Promise<JwkKey | undefined> => {
-      const keys = await fetchClerkJwks(jwksUrl, { refresh })
-      return headerKid
-        ? keys.find(candidate => candidate.kid === headerKid)
-        : keys[0]
-    }
-
-    let key = await resolveKey()
-    if (!key || !verifyJwtSignatureWithJwk(parsed, key)) {
-      key = await resolveKey(true)
-    }
-    if (!key || !verifyJwtSignatureWithJwk(parsed, key)) {
-      throw new Error('[@holo-js/auth-clerk] Clerk token signature verification failed.')
-    }
+  let key = await resolveKey()
+  if (!key || !verifyJwtSignatureWithJwk(parsed, key)) {
+    key = await resolveKey(true)
+  }
+  if (!key || !verifyJwtSignatureWithJwk(parsed, key)) {
+    throw new Error('[@holo-js/auth-clerk] Clerk token signature verification failed.')
   }
 
   const exp = typeof parsed.payload.exp === 'number' ? parsed.payload.exp : undefined
@@ -145,36 +327,56 @@ function normalizeClerkEmailAddress(value: Readonly<Record<string, unknown>>): C
 }
 
 function normalizeClerkUserProfile(user: Readonly<Record<string, unknown>>): ClerkUserProfile {
+  const emailAddresses = Array.isArray(user.emailAddresses)
+    ? user.emailAddresses.map(entry => normalizeClerkEmailAddress(entry as Readonly<Record<string, unknown>>))
+    : Array.isArray(user.email_addresses)
+      ? user.email_addresses.map(entry => normalizeClerkEmailAddress(entry as Readonly<Record<string, unknown>>))
+      : undefined
+  const primaryEmailAddressId = typeof user.primaryEmailAddressId === 'string'
+    ? user.primaryEmailAddressId
+    : typeof user.primary_email_address_id === 'string'
+      ? user.primary_email_address_id
+      : undefined
+  const email = typeof user.email === 'string' && user.email.trim()
+    ? user.email.trim()
+    : (
+        emailAddresses?.find((entry) => entry.id === primaryEmailAddressId)
+        ?? emailAddresses?.[0]
+      )?.emailAddress.trim()
+      ?? ''
+  const emailVerified = user.emailVerified === true
+    || user.email_verified === true
+    || (
+      emailAddresses?.find((entry) => entry.id === primaryEmailAddressId)
+      ?? emailAddresses?.[0]
+    )?.verificationStatus === 'verified'
+  const firstName = typeof user.firstName === 'string'
+    ? user.firstName
+    : typeof user.first_name === 'string'
+      ? user.first_name
+      : undefined
+  const lastName = typeof user.lastName === 'string'
+    ? user.lastName
+    : typeof user.last_name === 'string'
+      ? user.last_name
+      : undefined
+  const explicitName = typeof user.name === 'string' ? user.name.trim() : ''
+  const name = explicitName || [firstName?.trim(), lastName?.trim()].filter(Boolean).join(' ').trim()
+
   return Object.freeze({
     id: String(user.id ?? ''),
-    email: typeof user.email === 'string' ? user.email : undefined,
-    emailVerified: user.emailVerified === true || user.email_verified === true,
-    firstName: typeof user.firstName === 'string'
-      ? user.firstName
-      : typeof user.first_name === 'string'
-        ? user.first_name
-        : undefined,
-    lastName: typeof user.lastName === 'string'
-      ? user.lastName
-      : typeof user.last_name === 'string'
-        ? user.last_name
-        : undefined,
-    name: typeof user.name === 'string' ? user.name : undefined,
+    email,
+    emailVerified,
+    firstName,
+    lastName,
+    name: name || email || String(user.id ?? ''),
     imageUrl: typeof user.imageUrl === 'string'
       ? user.imageUrl
       : typeof user.image_url === 'string'
         ? user.image_url
         : undefined,
-    primaryEmailAddressId: typeof user.primaryEmailAddressId === 'string'
-      ? user.primaryEmailAddressId
-      : typeof user.primary_email_address_id === 'string'
-        ? user.primary_email_address_id
-        : undefined,
-    emailAddresses: Array.isArray(user.emailAddresses)
-      ? user.emailAddresses.map(entry => normalizeClerkEmailAddress(entry as Readonly<Record<string, unknown>>))
-      : Array.isArray(user.email_addresses)
-        ? user.email_addresses.map(entry => normalizeClerkEmailAddress(entry as Readonly<Record<string, unknown>>))
-        : undefined,
+    primaryEmailAddressId,
+    emailAddresses,
     raw: user,
   })
 }
@@ -207,7 +409,6 @@ function createDefaultProviderRuntime(providerName: string, config: AuthClerkPro
     providerName,
     config.apiUrl ?? '',
     config.frontendApi ?? '',
-    config.jwtKey ?? '',
     config.secretKey ?? '',
     [...(config.authorizedParties ?? [])].sort(),
   ])
@@ -254,7 +455,18 @@ function resolveConfiguredProviderName(provider?: string): string {
     return provider.trim()
   }
 
-  const configuredProviders = Object.keys(bindings.config.clerk)
+  const configuredDefaultProvider = typeof bindings.config.clerk.provider === 'string'
+    ? bindings.config.clerk.provider.trim()
+    : ''
+  if (configuredDefaultProvider) {
+    return configuredDefaultProvider
+  }
+
+  const configuredProviders = Object.entries(bindings.config.clerk).flatMap(([name, value]) => (
+    name !== 'provider' && typeof value === 'object' && value !== null
+      ? [name]
+      : []
+  ))
   if (configuredProviders.length === 0) {
     return 'default'
   }
@@ -272,20 +484,11 @@ function resolveConfiguredProviderName(provider?: string): string {
 
 function getConfiguredProviderConfig(provider?: string): {
   readonly name: string
-  readonly publishableKey?: string
-  readonly secretKey?: string
-  readonly jwtKey?: string
-  readonly apiUrl?: string
-  readonly frontendApi?: string
-  readonly sessionCookie: string
-  readonly authorizedParties: readonly string[]
-  readonly guard?: string
-  readonly mapToProvider?: string
-} {
+} & NormalizedAuthClerkProviderConfig {
   const providerName = resolveConfiguredProviderName(provider)
   const authBindings = authRuntimeInternals.getRuntimeBindings()
   const configured = authBindings.config.clerk[providerName]
-  if (!configured) {
+  if (!configured || typeof configured !== 'object') {
     throw new Error(`[@holo-js/auth-clerk] Clerk provider "${providerName}" is not configured in auth.clerk.`)
   }
 
@@ -293,9 +496,9 @@ function getConfiguredProviderConfig(provider?: string): {
     name: providerName,
     publishableKey: configured.publishableKey,
     secretKey: configured.secretKey,
-    jwtKey: configured.jwtKey,
     apiUrl: configured.apiUrl,
     frontendApi: configured.frontendApi,
+    redirectUri: configured.redirectUri,
     sessionCookie: configured.sessionCookie,
     authorizedParties: configured.authorizedParties ?? [],
     guard: configured.guard,
@@ -307,6 +510,59 @@ function getProviderRuntime(provider?: string): ClerkProviderRuntime {
   const providerName = resolveConfiguredProviderName(provider)
   return getBindings().providers[providerName]
     ?? createDefaultProviderRuntime(providerName, getConfiguredProviderConfig(providerName))
+}
+
+function requireClerkHostedConfig(config: NormalizedAuthClerkProviderConfig): {
+  readonly frontendApi: string
+  readonly redirectUri: string
+} {
+  const frontendApi = config.frontendApi?.trim()
+  const redirectUri = config.redirectUri?.trim()
+  if (!frontendApi) {
+    throw new Error('[@holo-js/auth-clerk] Clerk hosted auth requires frontendApi to be configured.')
+  }
+  if (!redirectUri) {
+    throw new Error('[@holo-js/auth-clerk] Clerk hosted auth requires redirectUri to be configured.')
+  }
+
+  return { frontendApi, redirectUri }
+}
+
+function resolveClerkAccountPortalUrl(frontendApi: string): string {
+  const url = new URL(frontendApi)
+  if (url.hostname.endsWith('.clerk.accounts.dev')) {
+    url.hostname = `${url.hostname.slice(0, -'.clerk.accounts.dev'.length)}.accounts.dev`
+  } else if (url.hostname.startsWith('clerk.')) {
+    url.hostname = `accounts.${url.hostname.slice('clerk.'.length)}`
+  }
+  url.pathname = '/'
+  url.search = ''
+  url.hash = ''
+
+  return url.toString()
+}
+
+function createAuthorizationUrl(config: NormalizedAuthClerkProviderConfig, page: 'sign-in' | 'sign-up'): string {
+  const { frontendApi, redirectUri } = requireClerkHostedConfig(config)
+  const portalBaseUrl = resolveClerkAccountPortalUrl(frontendApi)
+  const url = new URL(page, portalBaseUrl)
+  url.searchParams.set('redirect_url', redirectUri)
+
+  return url.toString()
+}
+
+function createClerkReturnUrl(request: Request, returnTo?: string): string {
+  return new URL(returnTo?.trim() || '/', request.url).toString()
+}
+
+function createClerkErrorResponse(error: unknown, code: string): Response {
+  return Response.json({
+    ok: false,
+    code,
+    message: getErrorMessage(error),
+  } as const, {
+    status: error instanceof ClerkAuthConflictError ? 409 : 422,
+  })
 }
 
 function resolveGuardAndProvider(provider?: string): {
@@ -363,6 +619,57 @@ function requireUserRecord(user: unknown, message: string): Record<string, unkno
   return user as Record<string, unknown>
 }
 
+function requireSerializedUser(user: AuthUserLike, message: string): SerializedClerkAuthUser {
+  if (typeof user.id === 'string' || typeof user.id === 'number') {
+    return user as SerializedClerkAuthUser
+  }
+
+  throw new Error(message)
+}
+
+function createClerkSessionPayload(
+  authenticated: Pick<ClerkAuthenticationResult, 'guard' | 'authProvider' | 'provider' | 'user'>,
+  session: ClerkVerifiedSession,
+): ClerkSessionPayload {
+  const user = requireSerializedUser(
+    authenticated.user,
+    '[@holo-js/auth-clerk] Clerk-authenticated local users must expose a serializable id.',
+  )
+
+  return Object.freeze({
+    guard: authenticated.guard,
+    provider: authenticated.authProvider,
+    userId: user.id,
+    user,
+    clerk: Object.freeze({
+      provider: authenticated.provider,
+      sessionId: session.sessionId,
+    }),
+  })
+}
+
+function getClerkLogoutSession(payload: unknown, providerName: string): ClerkLogoutSession | null {
+  if (!payload || typeof payload !== 'object' || !('clerk' in payload)) {
+    return null
+  }
+
+  const clerk = (payload as { readonly clerk?: unknown }).clerk
+  if (!clerk || typeof clerk !== 'object') {
+    return null
+  }
+
+  const provider = (clerk as { readonly provider?: unknown }).provider
+  const sessionId = (clerk as { readonly sessionId?: unknown }).sessionId
+  if (provider !== providerName || typeof sessionId !== 'string' || !sessionId.trim()) {
+    return null
+  }
+
+  return Object.freeze({
+    provider,
+    sessionId,
+  })
+}
+
 function serializeLocalUser(
   adapter: RuntimeAuthProviderAdapter,
   user: Record<string, unknown>,
@@ -410,13 +717,13 @@ function resolvePrimaryEmail(profile: ClerkUserProfile): { email?: string, email
   }
 }
 
-function resolveDisplayName(profile: ClerkUserProfile): string | undefined {
+function resolveDisplayName(profile: ClerkUserProfile): string {
   if (profile.name?.trim()) {
     return profile.name.trim()
   }
 
   const fullName = [profile.firstName?.trim(), profile.lastName?.trim()].filter(Boolean).join(' ').trim()
-  return fullName || undefined
+  return fullName || profile.email || profile.id
 }
 
 function resolveEmailForCreation(profile: ClerkUserProfile): string {
@@ -426,6 +733,44 @@ function resolveEmailForCreation(profile: ClerkUserProfile): string {
   }
 
   return `${profile.id}@clerk.hosted.local`
+}
+
+function toAdapterInput(input: ClerkUserAttributes): Readonly<Record<string, unknown>> {
+  return Object.freeze(Object.fromEntries(
+    Object.entries(input).filter((entry) => typeof entry[1] !== 'undefined'),
+  ))
+}
+
+function withRequiredUserFields(input: ClerkUserAttributes, profile: ClerkUserProfile): ClerkUserAttributes {
+  return Object.freeze({
+    ...input,
+    email: typeof input.email === 'undefined' ? resolveEmailForCreation(profile) : input.email,
+    name: typeof input.name === 'undefined' ? resolveDisplayName(profile) : input.name,
+  })
+}
+
+function resolveCreateUserInput<TUserAttributes extends ClerkUserAttributes>(
+  profile: ClerkUserProfile,
+  mapper?: (clerkUser: ClerkUserProfile) => TUserAttributes,
+): Readonly<Record<string, unknown>> {
+  return toAdapterInput(withRequiredUserFields({
+    password: null,
+    avatar: profile.imageUrl ?? null,
+    email_verified_at: profile.emailVerified ? new Date() : null,
+    ...(mapper?.(profile) ?? {}),
+  }, profile))
+}
+
+function resolveUpdateUserInput<TUserAttributes extends ClerkUserAttributes>(
+  profile: ClerkUserProfile,
+  mapper?: (clerkUser: ClerkUserProfile) => TUserAttributes,
+): Readonly<Record<string, unknown>> {
+  return toAdapterInput(withRequiredUserFields({
+    email: profile.email.trim() || undefined,
+    avatar: profile.imageUrl,
+    email_verified_at: profile.emailVerified ? new Date() : undefined,
+    ...(mapper?.(profile) ?? {}),
+  }, profile))
 }
 
 function normalizeHostedProfile(profile: ClerkUserProfile): Readonly<Record<string, unknown>> {
@@ -462,23 +807,11 @@ async function findUserByEmail(
 async function updateLocalUser(
   adapter: RuntimeAuthProviderAdapter,
   user: Record<string, unknown>,
-  input: {
-    readonly name?: string
-    readonly email?: string
-    readonly avatar?: string
-    readonly emailVerified?: boolean
-  },
+  input: Readonly<Record<string, unknown>>,
 ): Promise<{
   readonly user: Record<string, unknown>
   readonly changed: boolean
 }> {
-  const nextInput = {
-    name: input.name,
-    email: input.email,
-    avatar: typeof input.avatar === 'undefined' ? undefined : input.avatar,
-    email_verified_at: input.emailVerified === true ? new Date() : undefined,
-  }
-
   const current = user as {
     name?: string
     email?: string
@@ -486,12 +819,13 @@ async function updateLocalUser(
     email_verified_at?: Date | string | null
   }
 
-  const changed = (
-    (typeof nextInput.name !== 'undefined' && nextInput.name !== current.name)
-    || (typeof nextInput.email !== 'undefined' && nextInput.email !== current.email)
-    || (typeof nextInput.avatar !== 'undefined' && nextInput.avatar !== (current.avatar ?? undefined))
-    || (input.emailVerified === true && !current.email_verified_at)
-  )
+  const changed = Object.entries(input).some(([key, value]) => {
+    if (key === 'email_verified_at') {
+      return value instanceof Date && !current.email_verified_at
+    }
+
+    return !Object.is(value, user[key])
+  })
 
   if (!changed) {
     return { user, changed: false }
@@ -500,7 +834,7 @@ async function updateLocalUser(
   if (adapter.update) {
     return {
       user: requireUserRecord(
-        await adapter.update(user, nextInput),
+        await adapter.update(user, input),
         '[@holo-js/auth-clerk] Auth provider updates must return object users.',
       ),
       changed: true,
@@ -608,6 +942,75 @@ function getSessionTokenFromRequest(request: Request, sessionCookie: string): st
   return cookies[sessionCookie] ?? null
 }
 
+function hasClerkCallbackState(request: Request): boolean {
+  const url = new URL(request.url)
+  return [...url.searchParams.keys()].some(key => key.startsWith('__clerk'))
+}
+
+function hasClerkHandshakeAttempt(request: Request): boolean {
+  const url = new URL(request.url)
+  if (
+    url.searchParams.has('__clerk_handshake')
+    || url.searchParams.has('__clerk_handshake_nonce')
+    || url.searchParams.has('__clerk_synced')
+  ) {
+    return true
+  }
+
+  const cookies = parseCookieHeader(request.headers.get('cookie'))
+  const redirectCount = cookies.__clerk_redirect_count
+  return typeof redirectCount === 'string' && redirectCount !== '' && redirectCount !== '0'
+}
+
+function isConfiguredClerkRedirectRequest(
+  request: Request,
+  config: NormalizedAuthClerkProviderConfig,
+): boolean {
+  const redirectUri = config.redirectUri?.trim()
+  if (!redirectUri) {
+    return hasClerkCallbackState(request)
+  }
+
+  try {
+    const requestUrl = new URL(request.url)
+    const configuredUrl = new URL(redirectUri, requestUrl.origin)
+    return requestUrl.origin === configuredUrl.origin && requestUrl.pathname === configuredUrl.pathname
+  } catch {
+    return false
+  }
+}
+
+function splitSetCookieHeader(value: string): readonly string[] {
+  return value
+    .split(/,(?=\s*[^;,=\s]+=)/g)
+    .map(cookie => cookie.trim())
+    .filter(Boolean)
+}
+
+function getSetCookieHeaders(headers: Headers): readonly string[] {
+  const withGetSetCookie = headers as Headers & {
+    readonly getSetCookie?: () => string[]
+  }
+  const explicit = withGetSetCookie.getSetCookie?.()
+  if (explicit?.length) {
+    return explicit
+  }
+
+  const combined = headers.get('set-cookie')
+  return combined ? splitSetCookieHeader(combined) : []
+}
+
+async function appendClerkResponseCookies(headers: Headers): Promise<void> {
+  const append = authRuntimeInternals.getRuntimeBindings().context.appendResponseCookie
+  if (!append) {
+    return
+  }
+
+  for (const cookie of getSetCookieHeaders(headers)) {
+    await append(cookie)
+  }
+}
+
 function getHoloSessionIdFromRequest(request: Request): string | null {
   const cookieHeader = authRuntimeInternals.getRuntimeBindings().session.sessionCookie('')
   const separator = cookieHeader.indexOf('=')
@@ -667,6 +1070,87 @@ export async function verifySession(token: string, provider?: string): Promise<C
   })
 }
 
+function resolveRequestAuthorizedParties(
+  config: NormalizedAuthClerkProviderConfig,
+  request: Request,
+): readonly string[] {
+  return Object.freeze([
+    ...new Set([
+      ...(config.authorizedParties ?? []),
+      new URL(request.url).origin,
+    ]),
+  ])
+}
+
+async function verifyDefaultSessionToken(
+  token: string,
+  providerConfig: { readonly name: string } & NormalizedAuthClerkProviderConfig,
+  authorizedParties: readonly string[],
+): Promise<ClerkVerifiedSession | null> {
+  const config = {
+    ...providerConfig,
+    authorizedParties,
+  }
+  const defaultRuntime = createDefaultProviderRuntime(providerConfig.name, config)
+  if (!defaultRuntime.verifySession) {
+    throw new Error(`[@holo-js/auth-clerk] Clerk provider runtime "${providerConfig.name}" does not implement verifySession().`)
+  }
+
+  return defaultRuntime.verifySession({
+    provider: providerConfig.name,
+    token,
+    config,
+  })
+}
+
+async function verifyRequestWithClerkBackendSdk(
+  request: Request,
+  providerConfig: { readonly name: string } & NormalizedAuthClerkProviderConfig,
+): Promise<ClerkVerifiedSession | null> {
+  const publishableKey = providerConfig.publishableKey?.trim()
+  const secretKey = providerConfig.secretKey?.trim()
+  if (!publishableKey || !secretKey) {
+    return null
+  }
+
+  const { createClerkClient } = await import('@clerk/backend')
+  const client = createClerkClient({
+    apiUrl: providerConfig.apiUrl,
+    publishableKey,
+    secretKey,
+  })
+  const authenticateOptions = {
+    apiUrl: providerConfig.apiUrl,
+    authorizedParties: [...resolveRequestAuthorizedParties(providerConfig, request)],
+    publishableKey,
+    secretKey,
+  }
+  const requestState = await client.authenticateRequest(request, authenticateOptions)
+
+  await appendClerkResponseCookies(requestState.headers)
+  if (requestState.status === 'handshake') {
+    const redirectUrl = requestState.headers.get('location')
+    if (redirectUrl && !hasClerkHandshakeAttempt(request)) {
+      await authRuntimeInternals.redirectResponse(
+        authRuntimeInternals.getRuntimeBindings(),
+        new URL(redirectUrl, request.url).toString(),
+        307,
+      )
+    }
+    return null
+  }
+
+  if (requestState.status !== 'signed-in') {
+    return null
+  }
+
+  return verifyDefaultSessionToken(
+    requestState.token,
+    providerConfig,
+    resolveRequestAuthorizedParties(providerConfig, request),
+  )
+}
+
 export async function verifyRequest(request: Request, provider?: string): Promise<ClerkVerifiedSession | null> {
   const providerConfig = getConfiguredProviderConfig(provider)
   const configuredRuntime = getBindings().providers[providerConfig.name]
@@ -681,6 +1165,13 @@ export async function verifyRequest(request: Request, provider?: string): Promis
   }
 
   const token = getSessionTokenFromRequest(request, providerConfig.sessionCookie)
+  if (!configuredRuntime && (hasClerkCallbackState(request) || isConfiguredClerkRedirectRequest(request, providerConfig))) {
+    const clerkSession = await verifyRequestWithClerkBackendSdk(request, providerConfig)
+    if (clerkSession) {
+      return clerkSession
+    }
+  }
+
   if (!token) {
     return null
   }
@@ -697,38 +1188,15 @@ export async function verifyRequest(request: Request, provider?: string): Promis
     })
   }
 
-  const requestOrigin = new URL(request.url).origin
-  const defaultRuntime = createDefaultProviderRuntime(providerConfig.name, {
-    ...providerConfig,
-    authorizedParties: Object.freeze([
-      ...new Set([
-        ...(providerConfig.authorizedParties ?? []),
-        requestOrigin,
-      ]),
-    ]),
-  })
-  if (!defaultRuntime.verifySession) {
-    throw new Error(`[@holo-js/auth-clerk] Clerk provider runtime "${providerConfig.name}" does not implement verifySession().`)
-  }
-
-  return defaultRuntime.verifySession({
-    provider: providerConfig.name,
-    token,
-    config: {
-      ...providerConfig,
-      authorizedParties: Object.freeze([
-        ...new Set([
-          ...(providerConfig.authorizedParties ?? []),
-          requestOrigin,
-        ]),
-      ]),
-    },
-  })
+  return verifyDefaultSessionToken(token, providerConfig, resolveRequestAuthorizedParties(providerConfig, request))
 }
 
 export async function syncIdentity(
   session: ClerkVerifiedSession,
   provider?: string,
+  options: {
+    readonly user?: (clerkUser: ClerkUserProfile) => ClerkUserAttributes
+  } = {},
 ): Promise<ClerkAuthenticationResult> {
   const providerConfig = getConfiguredProviderConfig(provider)
   const providerName = providerConfig.name
@@ -761,21 +1229,13 @@ export async function syncIdentity(
       }
 
       if (!linkedUser) {
-        linkedUser = requireUserRecord(await adapter.create({
-          name: resolveDisplayName(profile),
-          email: resolveEmailForCreation(profile),
-          password: null,
-          avatar: profile.imageUrl ?? null,
-          email_verified_at: resolvedEmail.emailVerified ? new Date() : null,
-        }), '[@holo-js/auth-clerk] Auth provider create() must return an object user.')
+        linkedUser = requireUserRecord(
+          await adapter.create(resolveCreateUserInput(profile, options.user)),
+          '[@holo-js/auth-clerk] Auth provider create() must return an object user.',
+        )
       }
 
-      const relinked = await updateLocalUser(adapter, linkedUser, {
-        name: resolveDisplayName(profile),
-        email: resolvedEmail.email,
-        avatar: profile.imageUrl,
-        emailVerified: resolvedEmail.emailVerified,
-      })
+      const relinked = await updateLocalUser(adapter, linkedUser, resolveUpdateUserInput(profile, options.user))
       const relinkedUser = relinked.user
       const identity = createIdentityRecord({
         provider: providerName,
@@ -812,12 +1272,7 @@ export async function syncIdentity(
         '[@holo-js/auth-clerk] Linked local users must expose a serializable id.',
       ),
     )
-    const updated = await updateLocalUser(adapter, linkedUser, {
-      name: resolveDisplayName(profile),
-      email: resolvedEmail.email,
-      avatar: profile.imageUrl,
-      emailVerified: resolvedEmail.emailVerified,
-    })
+    const updated = await updateLocalUser(adapter, linkedUser, resolveUpdateUserInput(profile, options.user))
     const identity = createIdentityRecord({
       provider: providerName,
       guard,
@@ -849,12 +1304,7 @@ export async function syncIdentity(
 
   if (localUser) {
     await assertUserLinkAvailable(providerName, authProvider, adapter, localUser, profile.id)
-    const linked = await updateLocalUser(adapter, localUser, {
-      name: resolveDisplayName(profile),
-      email: resolvedEmail.email,
-      avatar: profile.imageUrl,
-      emailVerified: resolvedEmail.emailVerified,
-    })
+    const linked = await updateLocalUser(adapter, localUser, resolveUpdateUserInput(profile, options.user))
     const identity = createIdentityRecord({
       provider: providerName,
       guard,
@@ -879,13 +1329,10 @@ export async function syncIdentity(
     })
   }
 
-  localUser = requireUserRecord(await adapter.create({
-    name: resolveDisplayName(profile),
-    email: resolveEmailForCreation(profile),
-    password: null,
-    avatar: profile.imageUrl ?? null,
-    email_verified_at: resolvedEmail.emailVerified ? new Date() : null,
-  }), '[@holo-js/auth-clerk] Auth provider create() must return an object user.')
+  localUser = requireUserRecord(
+    await adapter.create(resolveCreateUserInput(profile, options.user)),
+    '[@holo-js/auth-clerk] Auth provider create() must return an object user.',
+  )
   const identity = createIdentityRecord({
     provider: providerName,
     guard,
@@ -910,7 +1357,8 @@ export async function syncIdentity(
   })
 }
 
-export async function authenticate(request: Request, provider?: string): Promise<ClerkAuthenticationResult | null> {
+export async function authenticate(input: ClerkRequestInput, provider?: string): Promise<ClerkAuthenticationResult | null> {
+  const request = normalizeClerkRequest(input)
   const session = await verifyRequest(request, provider)
   if (!session) {
     return null
@@ -921,11 +1369,174 @@ export async function authenticate(request: Request, provider?: string): Promise
     ?? await authRuntimeInternals.establishSessionForUser(authenticated.user, {
       guard: authenticated.guard,
       provider: authenticated.authProvider,
+      payload: createClerkSessionPayload(authenticated, session),
     })
   return Object.freeze({
     ...authenticated,
     authSession,
   })
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Clerk authentication failed.'
+}
+
+export async function loginWithClerk(
+  _input: ClerkRequestInput,
+  options: {
+    readonly provider?: string
+  } = {},
+): Promise<Response> {
+  try {
+    const providerConfig = getConfiguredProviderConfig(options.provider)
+    return Response.redirect(createAuthorizationUrl(providerConfig, 'sign-in'), 302)
+  } catch (error) {
+    return createClerkErrorResponse(error, 'clerk_login_failed')
+  }
+}
+
+export async function registerWithClerk(
+  _input: ClerkRequestInput,
+  options: {
+    readonly provider?: string
+  } = {},
+): Promise<Response> {
+  try {
+    const providerConfig = getConfiguredProviderConfig(options.provider)
+    return Response.redirect(createAuthorizationUrl(providerConfig, 'sign-up'), 302)
+  } catch (error) {
+    return createClerkErrorResponse(error, 'clerk_register_failed')
+  }
+}
+
+async function readCurrentClerkLogoutSession(guard: string, providerName: string): Promise<ClerkLogoutSession | null> {
+  const bindings = authRuntimeInternals.getRuntimeBindings()
+  const sessionId = bindings.context.getSessionId(guard)
+  if (!sessionId) {
+    return null
+  }
+
+  const record = await bindings.session.read(sessionId)
+  return getClerkLogoutSession(authRuntimeInternals.readSessionPayload(record, guard), providerName)
+}
+
+async function revokeClerkSession(config: NormalizedAuthClerkProviderConfig, sessionId: string): Promise<void> {
+  const secretKey = config.secretKey?.trim()
+  if (!secretKey) {
+    throw new Error('[@holo-js/auth-clerk] Clerk logout requires secretKey to be configured.')
+  }
+
+  const apiBase = config.apiUrl?.trim() || CLERK_API_BASE_URL
+  const response = await fetch(`${apiBase.replace(/\/$/, '')}/v1/sessions/${encodeURIComponent(sessionId)}/revoke`, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      authorization: `Bearer ${secretKey}`,
+    },
+  })
+  if (!response.ok) {
+    throw new Error(`[@holo-js/auth-clerk] Failed to revoke Clerk session "${sessionId}".`)
+  }
+}
+
+export async function logoutWithClerk(
+  input: ClerkRequestInput,
+  options: {
+    readonly provider?: string
+    readonly returnTo?: string
+  } = {},
+): Promise<ClerkLogoutResult> {
+  const request = normalizeClerkRequest(input)
+  try {
+    const providerConfig = getConfiguredProviderConfig(options.provider)
+    const providerName = providerConfig.name
+    const { guard } = resolveGuardAndProvider(providerName)
+    const requestSessionId = getHoloSessionIdFromRequest(request)
+    if (requestSessionId) {
+      authRuntimeInternals.getRuntimeBindings().context.setSessionId(guard, requestSessionId)
+    }
+    const clerkSession = await readCurrentClerkLogoutSession(guard, providerName)
+    if (!clerkSession) {
+      return Object.freeze({
+        ok: false,
+        code: 'clerk_session_missing',
+        message: 'The current Holo session was not created by Clerk.',
+      } as const)
+    }
+
+    await revokeClerkSession(providerConfig, clerkSession.sessionId)
+    const local = await getAuthRuntime().guard(guard).logout()
+    return Object.freeze({
+      ok: true,
+      url: createClerkReturnUrl(request, options.returnTo),
+      local,
+    } as const)
+  } catch (error) {
+    return Object.freeze({
+      ok: false,
+      code: 'clerk_logout_failed',
+      message: getErrorMessage(error),
+    } as const)
+  }
+}
+
+export async function completeClerkAuth<TUserAttributes extends ClerkUserAttributes = ClerkDefaultUserAttributes>(
+  input: ClerkRequestInput,
+  options: CompleteClerkAuthOptions<TUserAttributes> = {},
+): Promise<ClerkCompleteAuthResult> {
+  try {
+    const request = normalizeClerkRequest(input)
+    const url = new URL(request.url)
+    const callbackError = url.searchParams.get('error')?.trim()
+    if (callbackError) {
+      return Object.freeze({
+        ok: false,
+        code: callbackError,
+        message: url.searchParams.get('error_description')?.trim() || 'Clerk authentication failed.',
+      } as const)
+    }
+
+    const providerConfig = getConfiguredProviderConfig(options.provider)
+    const session = await verifyRequest(request, providerConfig.name)
+    if (!session) {
+      return Object.freeze({
+        ok: false,
+        code: 'clerk_session_required',
+        message: 'Clerk callback did not include an active session.',
+      } as const)
+    }
+
+    const authenticated = await syncIdentity(session, providerConfig.name, {
+      user: options.user,
+    })
+    const authSession = await authRuntimeInternals.establishSessionForUser(authenticated.user, {
+      guard: authenticated.guard,
+      provider: authenticated.authProvider,
+      payload: createClerkSessionPayload(authenticated, session),
+    })
+
+    return Object.freeze({
+      ok: true,
+      provider: authenticated.provider,
+      guard: authenticated.guard,
+      authProvider: authenticated.authProvider,
+      status: authenticated.status,
+      user: authenticated.user,
+      identity: authenticated.identity,
+      session,
+      authSession,
+    } as const)
+  } catch (error) {
+    if (authRuntimeInternals.isResponseInterrupt(error)) {
+      throw error
+    }
+
+    return Object.freeze({
+      ok: false,
+      code: error instanceof ClerkAuthConflictError ? error.code : 'clerk_auth_failed',
+      message: getErrorMessage(error),
+    } as const)
+  }
 }
 
 export function configureClerkAuthRuntime(bindings?: ConfigureClerkAuthRuntimeOptions): void {
@@ -942,10 +1553,15 @@ export function configureClerkAuthRuntime(bindings?: ConfigureClerkAuthRuntimeOp
 
 export function resetClerkAuthRuntime(): void {
   clerkBindings = undefined
+  clerkDefaultProviderRuntimeCache.clear()
 }
 
 export const clerkAuth = Object.freeze({
   authenticate,
+  completeClerkAuth,
+  loginWithClerk,
+  logoutWithClerk,
+  registerWithClerk,
   syncIdentity,
   verifyRequest,
   verifySession,
@@ -955,6 +1571,7 @@ export const clerkAuthInternals = {
   getBindings,
   getConfiguredProviderConfig,
   getSessionTokenFromRequest,
+  normalizeClerkUserProfile,
   normalizeHostedProfile,
   resolveConfiguredProviderName,
   resolveDisplayName,

@@ -2,7 +2,41 @@ import {
   normalizeScaffoldOptionalPackages,
   type ProjectScaffoldOptions,
 } from '../shared'
-import type { ScaffoldedFile } from './types'
+import type { AuthInstallFeatures, ScaffoldedFile } from './types'
+
+type HostedAuthProvider = 'clerk' | 'workos'
+
+type HostedAuthProviderSpec = {
+  readonly packageName: string
+  readonly loginFunction: string
+  readonly registerFunction: string
+  readonly callbackFunction: string
+  readonly logoutFunction: string
+}
+
+const HOSTED_AUTH_PROVIDERS = {
+  workos: {
+    packageName: '@holo-js/auth-workos',
+    loginFunction: 'loginWithWorkos',
+    registerFunction: 'registerWithWorkos',
+    callbackFunction: 'completeWorkosAuth',
+    logoutFunction: 'logoutWithWorkos',
+  },
+  clerk: {
+    packageName: '@holo-js/auth-clerk',
+    loginFunction: 'loginWithClerk',
+    registerFunction: 'registerWithClerk',
+    callbackFunction: 'completeClerkAuth',
+    logoutFunction: 'logoutWithClerk',
+  },
+} as const satisfies Record<HostedAuthProvider, HostedAuthProviderSpec>
+
+function getRequestedHostedAuthProviders(features: AuthInstallFeatures): readonly HostedAuthProvider[] {
+  return [
+    ...(features.workos ? ['workos'] as const : []),
+    ...(features.clerk ? ['clerk'] as const : []),
+  ]
+}
 
 function renderNuxtAppVue(projectName: string): string {
   return [
@@ -99,6 +133,76 @@ function renderNuxtCurrentAuthRoute(): string {
     '})',
     '',
   ].join('\n')
+}
+
+function renderNuxtHostedAuthLoginRoute(spec: HostedAuthProviderSpec): string {
+  return [
+    `import { ${spec.loginFunction} } from '${spec.packageName}'`,
+    '',
+    'export default defineEventHandler(async (event) => {',
+    `  return await ${spec.loginFunction}(event)`,
+    '})',
+    '',
+  ].join('\n')
+}
+
+function renderNuxtHostedAuthRegisterRoute(spec: HostedAuthProviderSpec): string {
+  return [
+    `import { ${spec.registerFunction} } from '${spec.packageName}'`,
+    '',
+    'export default defineEventHandler(async (event) => {',
+    `  return await ${spec.registerFunction}(event)`,
+    '})',
+    '',
+  ].join('\n')
+}
+
+function renderNuxtHostedAuthCallbackRoute(spec: HostedAuthProviderSpec): string {
+  return [
+    `import { ${spec.callbackFunction} } from '${spec.packageName}'`,
+    'import { sendRedirect } from \'h3\'',
+    '',
+    'export default defineEventHandler(async (event) => {',
+    `  const result = await ${spec.callbackFunction}(event)`,
+    '  if (!result.ok) {',
+    '    const errCode = result.code ?? \'unknown_error\'',
+    '    return await sendRedirect(event, `/login?error=${encodeURIComponent(errCode)}`, 303)',
+    '  }',
+    '',
+    '  return await sendRedirect(event, \'/admin\', 303)',
+    '})',
+    '',
+  ].join('\n')
+}
+
+function renderNuxtHostedAuthLogoutRoute(spec: HostedAuthProviderSpec): string {
+  return [
+    `import { ${spec.logoutFunction} } from '${spec.packageName}'`,
+    'import { createError, sendRedirect } from \'h3\'',
+    '',
+    'export default defineEventHandler(async (event) => {',
+    `  const result = await ${spec.logoutFunction}(event)`,
+    '  if (!result.ok) {',
+    '    throw createError({',
+    '      statusCode: 422,',
+    '      statusMessage: result.message,',
+    '    })',
+    '  }',
+    '',
+    '  return await sendRedirect(event, result.url, 303)',
+    '})',
+    '',
+  ].join('\n')
+}
+
+function renderNuxtHostedAuthRouteFiles(provider: HostedAuthProvider): readonly ScaffoldedFile[] {
+  const spec = HOSTED_AUTH_PROVIDERS[provider]
+  return [
+    { path: `server/api/auth/${provider}/login.get.ts`, contents: renderNuxtHostedAuthLoginRoute(spec) },
+    { path: `server/api/auth/${provider}/register.get.ts`, contents: renderNuxtHostedAuthRegisterRoute(spec) },
+    { path: `server/api/auth/${provider}/callback.get.ts`, contents: renderNuxtHostedAuthCallbackRoute(spec) },
+    { path: `server/api/auth/${provider}/logout.post.ts`, contents: renderNuxtHostedAuthLogoutRoute(spec) },
+  ]
 }
 
 function renderNextConfig(): string {
@@ -225,6 +329,70 @@ function renderNextCurrentAuthRoute(): string {
     '}',
     '',
   ].join('\n')
+}
+
+function renderNextHostedAuthLoginRoute(spec: HostedAuthProviderSpec): string {
+  return [
+    `import { ${spec.loginFunction} } from '${spec.packageName}'`,
+    '',
+    'export async function GET(request: Request) {',
+    `  return await ${spec.loginFunction}(request)`,
+    '}',
+    '',
+  ].join('\n')
+}
+
+function renderNextHostedAuthRegisterRoute(spec: HostedAuthProviderSpec): string {
+  return [
+    `import { ${spec.registerFunction} } from '${spec.packageName}'`,
+    '',
+    'export async function GET(request: Request) {',
+    `  return await ${spec.registerFunction}(request)`,
+    '}',
+    '',
+  ].join('\n')
+}
+
+function renderNextHostedAuthCallbackRoute(spec: HostedAuthProviderSpec): string {
+  return [
+    `import { ${spec.callbackFunction} } from '${spec.packageName}'`,
+    '',
+    'export async function GET(request: Request) {',
+    `  const result = await ${spec.callbackFunction}(request)`,
+    '  if (!result.ok) {',
+    '    return Response.redirect(new URL(`/login?error=${encodeURIComponent(result.code)}`, request.url))',
+    '  }',
+    '',
+    '  return Response.redirect(new URL(\'/admin\', request.url))',
+    '}',
+    '',
+  ].join('\n')
+}
+
+function renderNextHostedAuthLogoutRoute(spec: HostedAuthProviderSpec): string {
+  return [
+    `import { ${spec.logoutFunction} } from '${spec.packageName}'`,
+    '',
+    'export async function POST(request: Request) {',
+    `  const result = await ${spec.logoutFunction}(request)`,
+    '  if (!result.ok) {',
+    '    return Response.json(result, { status: 422 })',
+    '  }',
+    '',
+    '  return Response.redirect(result.url, 303)',
+    '}',
+    '',
+  ].join('\n')
+}
+
+function renderNextHostedAuthRouteFiles(provider: HostedAuthProvider): readonly ScaffoldedFile[] {
+  const spec = HOSTED_AUTH_PROVIDERS[provider]
+  return [
+    { path: `app/api/auth/${provider}/login/route.ts`, contents: renderNextHostedAuthLoginRoute(spec) },
+    { path: `app/api/auth/${provider}/register/route.ts`, contents: renderNextHostedAuthRegisterRoute(spec) },
+    { path: `app/api/auth/${provider}/callback/route.ts`, contents: renderNextHostedAuthCallbackRoute(spec) },
+    { path: `app/api/auth/${provider}/logout/route.ts`, contents: renderNextHostedAuthLogoutRoute(spec) },
+  ]
 }
 
 function renderNextStorageRoute(): string {
@@ -437,6 +605,91 @@ function renderSvelteCurrentAuthRoute(): string {
     '}',
     '',
   ].join('\n')
+}
+
+function renderSvelteHostedAuthLoginRoute(spec: HostedAuthProviderSpec): string {
+  return [
+    `import { ${spec.loginFunction} } from '${spec.packageName}'`,
+    'import type { RequestHandler } from \'./$types\'',
+    '',
+    'export const GET = (async (event) => {',
+    `  return await ${spec.loginFunction}(event)`,
+    '}) satisfies RequestHandler',
+    '',
+  ].join('\n')
+}
+
+function renderSvelteHostedAuthRegisterRoute(spec: HostedAuthProviderSpec): string {
+  return [
+    `import { ${spec.registerFunction} } from '${spec.packageName}'`,
+    'import type { RequestHandler } from \'./$types\'',
+    '',
+    'export const GET = (async (event) => {',
+    `  return await ${spec.registerFunction}(event)`,
+    '}) satisfies RequestHandler',
+    '',
+  ].join('\n')
+}
+
+function renderSvelteHostedAuthCallbackRoute(spec: HostedAuthProviderSpec): string {
+  return [
+    'import { redirect, type RequestHandler } from \'@sveltejs/kit\'',
+    `import { ${spec.callbackFunction} } from '${spec.packageName}'`,
+    '',
+    'export const GET = (async (event) => {',
+    `  const result = await ${spec.callbackFunction}(event)`,
+    '  if (!result.ok) {',
+    '    throw redirect(303, `/login?error=${encodeURIComponent(result.code)}`)',
+    '  }',
+    '',
+    '  throw redirect(303, \'/admin\')',
+    '}) satisfies RequestHandler',
+    '',
+  ].join('\n')
+}
+
+function renderSvelteHostedAuthLogoutRoute(spec: HostedAuthProviderSpec): string {
+  return [
+    'import { redirect, type RequestHandler } from \'@sveltejs/kit\'',
+    `import { ${spec.logoutFunction} } from '${spec.packageName}'`,
+    '',
+    'export const POST = (async (event) => {',
+    `  const result = await ${spec.logoutFunction}(event)`,
+    '  if (!result.ok) {',
+    '    return Response.json(result, { status: 422 })',
+    '  }',
+    '',
+    '  throw redirect(303, result.url)',
+    '}) satisfies RequestHandler',
+    '',
+  ].join('\n')
+}
+
+function renderSvelteHostedAuthRouteFiles(provider: HostedAuthProvider): readonly ScaffoldedFile[] {
+  const spec = HOSTED_AUTH_PROVIDERS[provider]
+  return [
+    { path: `src/routes/api/auth/${provider}/login/+server.ts`, contents: renderSvelteHostedAuthLoginRoute(spec) },
+    { path: `src/routes/api/auth/${provider}/register/+server.ts`, contents: renderSvelteHostedAuthRegisterRoute(spec) },
+    { path: `src/routes/api/auth/${provider}/callback/+server.ts`, contents: renderSvelteHostedAuthCallbackRoute(spec) },
+    { path: `src/routes/api/auth/${provider}/logout/+server.ts`, contents: renderSvelteHostedAuthLogoutRoute(spec) },
+  ]
+}
+
+export function renderAuthProviderRouteFiles(
+  framework: ProjectScaffoldOptions['framework'],
+  features: AuthInstallFeatures,
+): readonly ScaffoldedFile[] {
+  return getRequestedHostedAuthProviders(features).flatMap((provider) => {
+    if (framework === 'nuxt') {
+      return renderNuxtHostedAuthRouteFiles(provider)
+    }
+
+    if (framework === 'next') {
+      return renderNextHostedAuthRouteFiles(provider)
+    }
+
+    return renderSvelteHostedAuthRouteFiles(provider)
+  })
 }
 
 function renderSvelteStorageRoute(): string {

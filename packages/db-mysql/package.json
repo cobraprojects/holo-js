@@ -23,15 +23,15 @@
     "test": "vitest --run"
   },
   "peerDependencies": {
-    "@holo-js/db": "^0.1.4"
+    "@holo-js/db": "catalog:"
   },
   "dependencies": {
-    "mysql2": "^3.17.1"
+    "mysql2": "catalog:"
   },
   "devDependencies": {
-    "@holo-js/db": "workspace:*",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
+    "@holo-js/db": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

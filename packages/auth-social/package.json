@@ -23,13 +23,13 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/auth": "^0.1.4",
-    "@holo-js/config": "^0.1.4"
+    "@holo-js/auth": "catalog:",
+    "@holo-js/config": "catalog:"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
-    "tsup": "^8.3.5",
-    "typescript": "^5.7.2",
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:"
   }
 }

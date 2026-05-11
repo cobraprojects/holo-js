@@ -97,6 +97,7 @@
 
   <a href="/login" class="link">Already have an account?</a>
   <a href="/api/auth/workos/register" class="link">Register with WorkOS</a>
+  <a href="/api/auth/clerk/register" class="link">Register with Clerk</a>
 </section>
 
 <style>

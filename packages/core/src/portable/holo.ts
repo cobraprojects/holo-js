@@ -850,6 +850,7 @@ export interface CreateHoloOptions {
     readonly getCookie?: (name: string) => string | undefined | Promise<string | undefined>
     readonly getHeader?: (name: string) => string | undefined | Promise<string | undefined>
     readonly appendResponseCookie?: (cookie: string) => void | Promise<void>
+    readonly redirectResponse?: (url: string, status?: 301 | 302 | 303 | 307 | 308) => void | Promise<void>
   }
 }
 
@@ -1167,12 +1168,14 @@ function attachAuthRequestAccessors<TContext extends {
   getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
   getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
   appendResponseCookie?(cookie: string): void | Promise<void>
+  redirectResponse?(url: string, status?: 301 | 302 | 303 | 307 | 308): void | Promise<void>
 } {
   return Object.freeze({
     ...context,
     getRequestCookie: accessors.getCookie,
     getRequestHeader: accessors.getHeader,
     appendResponseCookie: accessors.appendResponseCookie,
+    redirectResponse: accessors.redirectResponse,
   })
 }
 
@@ -1193,6 +1196,7 @@ function createRequestAwareAuthContext<TContext extends {
   getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
   getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
   appendResponseCookie?(cookie: string): void | Promise<void>
+  redirectResponse?(url: string, status?: 301 | 302 | 303 | 307 | 308): void | Promise<void>
   setRequestAccessors(accessors?: CreateHoloOptions['authRequest']): void
 } {
   const requestAccessorStorage = new AsyncLocalStorage<{
@@ -1202,6 +1206,7 @@ function createRequestAwareAuthContext<TContext extends {
     getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
     getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
     appendResponseCookie?(cookie: string): void | Promise<void>
+    redirectResponse?(url: string, status?: 301 | 302 | 303 | 307 | 308): void | Promise<void>
   }
 
   const resolveRequestContext = (): RequestAccessContext => {
@@ -1223,6 +1228,9 @@ function createRequestAwareAuthContext<TContext extends {
     },
     appendResponseCookie(cookie) {
       return resolveRequestContext().appendResponseCookie?.(cookie)
+    },
+    redirectResponse(url, status) {
+      return resolveRequestContext().redirectResponse?.(url, status)
     },
     setRequestAccessors(nextAccessors) {
       requestAccessorStorage.enterWith({

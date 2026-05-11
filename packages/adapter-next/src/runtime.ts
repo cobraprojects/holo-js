@@ -29,6 +29,10 @@ type MutableNextCookieStore = {
   set(name: string, value: string, options?: ResponseCookieOptions): void
 }
 
+type NextNavigationModule = {
+  readonly redirect: (url: string) => never
+}
+
 function safeDecodeCookieSegment(value: string): string {
   try {
     return decodeURIComponent(value)
@@ -128,6 +132,10 @@ function resolveNextAuthRequestAccessors(): NonNullable<CreateHoloOptions['authR
 
       const store = await cookies() as unknown as MutableNextCookieStore
       store.set(parsed.name, parsed.value, parsed.options)
+    },
+    async redirectResponse(url: string) {
+      const { redirect } = await import('next/navigation') as NextNavigationModule
+      redirect(url)
     },
   }
 }

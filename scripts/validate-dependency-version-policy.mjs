@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+import { access, readdir, readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -37,6 +37,38 @@ export async function listTrackedAppManifests(root = repoRoot) {
     .map(filePath => join(root, filePath))
 }
 
+export async function listTrackedPackageManifests(root = repoRoot) {
+  try {
+    const { stdout } = await execFileAsync('git', ['ls-files', 'packages/*/package.json'], {
+      cwd: root,
+    })
+
+    return stdout
+      .split('\n')
+      .filter(Boolean)
+      .map(filePath => join(root, filePath))
+  } catch {
+    const packageDirectory = join(root, 'packages')
+    const entries = await readdir(packageDirectory, { withFileTypes: true })
+
+    const manifests = entries
+      .filter(entry => entry.isDirectory())
+      .map(entry => join(packageDirectory, entry.name, 'package.json'))
+
+    const existingManifests = []
+    for (const manifestPath of manifests) {
+      try {
+        await access(manifestPath)
+        existingManifests.push(manifestPath)
+      } catch {
+        continue
+      }
+    }
+
+    return existingManifests
+  }
+}
+
 export async function collectAppManifestFailures(root = repoRoot) {
   const catalogPackages = await readWorkspaceCatalog(root)
   const manifestPaths = await listTrackedAppManifests(root)
@@ -61,6 +93,45 @@ export async function collectAppManifestFailures(root = repoRoot) {
           failures.push(`${manifestPath}: ${sectionName}.${packageName} must use "catalog:" in committed apps, found "${version}".`)
         }
       }
+    }
+  }
+
+  return failures
+}
+
+export async function collectPackageManifestFailures(root = repoRoot) {
+  const manifestPaths = await listTrackedPackageManifests(root)
+  const failures = []
+
+  for (const manifestPath of manifestPaths) {
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+
+    for (const sectionName of dependencySections) {
+      const section = manifest[sectionName]
+      if (!isObject(section)) {
+        continue
+      }
+
+      for (const [packageName, version] of Object.entries(section)) {
+        if (version !== 'catalog:') {
+          failures.push(`${manifestPath}: ${sectionName}.${packageName} must use "catalog:" in package manifests, found "${version}".`)
+        }
+      }
+    }
+  }
+
+  return failures
+}
+
+export async function collectCatalogPackageCoverageFailures(root = repoRoot) {
+  const catalogPackages = await readWorkspaceCatalog(root)
+  const manifestPaths = await listTrackedPackageManifests(root)
+  const failures = []
+
+  for (const manifestPath of manifestPaths) {
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+    if (typeof manifest.name === 'string' && !catalogPackages.has(manifest.name)) {
+      failures.push(`${manifestPath}: root workspace catalog must include package "${manifest.name}".`)
     }
   }
 
@@ -335,6 +406,8 @@ export async function collectScaffoldSourceFailures(root = repoRoot) {
 export async function runDependencyVersionPolicyValidation(root = repoRoot) {
   const failures = [
     ...(await collectAppManifestFailures(root)),
+    ...(await collectPackageManifestFailures(root)),
+    ...(await collectCatalogPackageCoverageFailures(root)),
     ...(await collectScaffoldSourceFailures(root)),
   ]
 

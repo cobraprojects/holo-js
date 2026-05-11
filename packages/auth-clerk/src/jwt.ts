@@ -54,25 +54,6 @@ export function verifyJwtSignatureWithJwk(
   }
 }
 
-export function verifyJwtSignatureWithPem(
-  token: ReturnType<typeof parseJwt>,
-  pem: string,
-): boolean {
-  const algorithm = typeof token.header.alg === 'string' ? token.header.alg : ''
-  const key = createPublicKey(pem.replace(/\\n/g, '\n'))
-
-  switch (algorithm) {
-    case 'RS256':
-      return verifySignature('RSA-SHA256', token.signingInput, key, token.signature)
-    case 'RS384':
-      return verifySignature('RSA-SHA384', token.signingInput, key, token.signature)
-    case 'RS512':
-      return verifySignature('RSA-SHA512', token.signingInput, key, token.signature)
-    default:
-      throw new Error(`[@holo-js/auth-clerk] Unsupported Clerk JWT algorithm "${algorithm || 'unknown'}".`)
-  }
-}
-
 export function resolveClerkJwksUrl(config: AuthClerkProviderConfig): string {
   const frontendApi = config.frontendApi?.trim()
   if (frontendApi) {

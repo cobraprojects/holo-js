@@ -482,6 +482,7 @@ export interface AuthRuntimeContext {
   getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
   getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
   appendResponseCookie?(cookie: string): void | Promise<void>
+  redirectResponse?(url: string, status?: 301 | 302 | 303 | 307 | 308): void | Promise<void>
   getAccessToken?(guardName: string): string | undefined
   setAccessToken?(guardName: string, token?: string): void
   getRememberToken?(guardName: string): string | undefined

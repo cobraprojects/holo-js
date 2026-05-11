@@ -17,6 +17,7 @@ export const WORKSPACE_CATALOG = Object.freeze({
   "@sveltejs/vite-plugin-svelte": "^7.1.0",
   "@sveltejs/adapter-node": "^5.5.4",
   "@nuxt/kit": "^4.4.4",
+  "h3": "^1.15.11",
   "@nuxt/module-builder": "^1.0.2",
   "@eslint/js": "^9.17.0",
   "@types/node": "^22.10.2",
@@ -39,5 +40,6 @@ export const WORKSPACE_CATALOG = Object.freeze({
   "eslint": "^9.17.0",
   "fast-check": "^4.5.3",
   "ulid": "^3.0.1",
-  "uuid": "^12.0.0"
+  "uuid": "^12.0.0",
+  "@clerk/backend": "^3.4.7"
 } as const)
