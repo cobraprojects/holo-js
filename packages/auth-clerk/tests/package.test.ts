@@ -39,8 +39,10 @@ type SessionStore = {
 
 type UserRecord = {
   id: number
-  name?: string
+  name: string
   email: string
+  role: 'admin' | 'member'
+  avatarUrl?: string | null
   password?: string | null
   avatar?: string | null
   clerkUserId?: string
@@ -66,6 +68,8 @@ type ClerkSessionFixture = {
   }
   readonly raw?: unknown
 }
+
+type FetchMockInput = string | URL | Request
 
 class InMemorySessionStore implements SessionStore {
   readonly records = new Map<string, SessionRecord>()
@@ -106,8 +110,10 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
   }): Promise<UserRecord> {
     const created: UserRecord = {
       id: this.nextId,
-      name: input.name,
+      name: input.name ?? input.email,
       email: input.email,
+      role: 'member',
+      avatarUrl: input.avatar ?? null,
       password: input.password,
       avatar: input.avatar,
       clerkUserId: input.clerkUserId,
@@ -163,7 +169,9 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
       id: user.id,
       name: user.name,
       email: user.email,
+      role: user.role,
       avatar: user.avatar ?? null,
+      avatarUrl: user.avatarUrl ?? user.avatar ?? null,
       clerkUserId: user.clerkUserId,
       email_verified_at: user.email_verified_at ?? null,
     }
@@ -197,8 +205,10 @@ class SnapshotProviderAdapter implements AuthProviderAdapter<UserRecord> {
   }): Promise<UserRecord> {
     const created: UserRecord = {
       id: this.nextId,
-      name: input.name,
+      name: input.name ?? input.email,
       email: input.email,
+      role: 'member',
+      avatarUrl: input.avatar ?? null,
       password: input.password,
       avatar: input.avatar,
       email_verified_at: input.email_verified_at,
@@ -218,7 +228,9 @@ class SnapshotProviderAdapter implements AuthProviderAdapter<UserRecord> {
       id: user.id,
       name: user.name,
       email: user.email,
+      role: user.role,
       avatar: user.avatar ?? null,
+      avatarUrl: user.avatarUrl ?? user.avatar ?? null,
       email_verified_at: user.email_verified_at ?? null,
     }
   }
@@ -502,7 +514,7 @@ describe('@holo-js/auth-clerk', () => {
       sid: 'sess_clerk_1',
       exp: Math.floor(Date.now() / 1000) + 3600,
     }, privateKey)
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: FetchMockInput) => {
       const url = String(input)
       if (url === 'https://api.clerk.com/v1/jwks') {
         return createJwksResponse(publicKey)
@@ -586,7 +598,7 @@ describe('@holo-js/auth-clerk', () => {
       azp: 'https://app.test',
       exp: Math.floor(Date.now() / 1000) + 3600,
     }, privateKey)
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: FetchMockInput) => {
       const url = String(input)
       if (url === 'https://api.clerk.com/v1/jwks') {
         return createJwksResponse(publicKey)
@@ -666,7 +678,7 @@ describe('@holo-js/auth-clerk', () => {
       sid: 'sess_clerk_frontend',
       exp: Math.floor(Date.now() / 1000) + 3600,
     }, privateKey)
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: FetchMockInput) => {
       const url = String(input)
       if (url === 'https://clerk.example.test/.well-known/jwks.json') {
         return new Response(JSON.stringify({
@@ -781,7 +793,7 @@ describe('@holo-js/auth-clerk', () => {
     })
 
     let jwksRequestCount = 0
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: FetchMockInput) => {
       const url = String(input)
       if (url === 'https://rotate.clerk.test/.well-known/jwks.json') {
         jwksRequestCount += 1
@@ -895,7 +907,7 @@ describe('@holo-js/auth-clerk', () => {
       sid: 'sess_clerk_frontend_second',
       exp: Math.floor(Date.now() / 1000) + 3600,
     }, secondKeyPair.privateKey)
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: FetchMockInput) => {
       const url = String(input)
       if (url === 'https://first.clerk.test/.well-known/jwks.json') {
         return new Response(JSON.stringify({
@@ -1045,7 +1057,7 @@ describe('@holo-js/auth-clerk', () => {
       nbf: Math.floor(Date.now() / 1000) + 3600,
       exp: Math.floor(Date.now() / 1000) + 7200,
     }, privateKey)
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: FetchMockInput) => {
       const url = String(input)
       if (url === 'https://api.clerk.com/v1/jwks') {
         return createJwksResponse(publicKey)
@@ -1491,6 +1503,66 @@ describe('@holo-js/auth-clerk', () => {
       },
     })
     expect(result.ok ? result.local.cookies : []).toContainEqual(expect.stringContaining('holo_session=;'))
+  })
+
+  it('normalizes Clerk logout return URLs to relative or same-origin destinations', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ id: 'sess_logout_callback', status: 'revoked' }), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+      },
+    }))
+
+    const runtime = configureRuntime()
+
+    async function completeAndLogout(returnTo: string) {
+      runtime.sessions.set('logout-callback-token', {
+        sessionId: 'sess_logout_callback',
+        user: {
+          id: 'user_logout_callback',
+          email: 'logout-callback@app.test',
+          emailVerified: true,
+        },
+      })
+
+      const callback = await completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback', {
+        headers: {
+          cookie: '__session=logout-callback-token',
+        },
+      }))
+      expect(callback.ok).toBe(true)
+      if (!callback.ok || !callback.authSession) {
+        throw new Error('Expected Clerk callback to establish an auth session.')
+      }
+      const sessionCookie = callback.authSession.cookies[0]?.split(';', 1)[0]
+
+      authRuntimeInternals.getRuntimeBindings().context.setSessionId('web')
+      authRuntimeInternals.getRuntimeBindings().context.setCachedUser('web', null)
+
+      return logoutWithClerk(new Request('https://app.test/api/auth/clerk/logout', {
+        method: 'POST',
+        headers: sessionCookie ? { cookie: sessionCookie } : undefined,
+      }), {
+        returnTo,
+      })
+    }
+
+    await expect(completeAndLogout('/login')).resolves.toMatchObject({
+      ok: true,
+      url: 'https://app.test/login',
+    })
+    await expect(completeAndLogout('https://app.test/settings')).resolves.toMatchObject({
+      ok: true,
+      url: 'https://app.test/settings',
+    })
+    await expect(completeAndLogout('https://evil.test/phish')).resolves.toMatchObject({
+      ok: true,
+      url: 'https://app.test/',
+    })
+    await expect(completeAndLogout('//evil.test/phish')).resolves.toMatchObject({
+      ok: true,
+      url: 'https://app.test/',
+    })
   })
 
   it('returns typed callback failures without combining response behavior', async () => {

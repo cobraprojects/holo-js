@@ -1554,6 +1554,14 @@ function normalizeClerkProvider(
   if (mapToProvider && !(mapToProvider in providers)) {
     throw new Error(`[Holo Auth] Clerk provider "${name}" references unknown provider "${mapToProvider}".`)
   }
+  const redirectUri = config.redirectUri?.trim()
+  if (redirectUri) {
+    try {
+      new URL(redirectUri)
+    } catch {
+      throw new Error(`Invalid redirectUri in Clerk provider "${name}": ${redirectUri}`)
+    }
+  }
 
   return Object.freeze({
     name,
@@ -1561,7 +1569,7 @@ function normalizeClerkProvider(
     secretKey: config.secretKey?.trim() || undefined,
     apiUrl: config.apiUrl?.trim() || undefined,
     frontendApi: config.frontendApi?.trim() || undefined,
-    redirectUri: config.redirectUri?.trim() || undefined,
+    redirectUri: redirectUri || undefined,
     sessionCookie: config.sessionCookie?.trim() || DEFAULT_CLERK_SESSION_COOKIE,
     authorizedParties: Object.freeze((config.authorizedParties ?? [])
       .map(value => value.trim())
@@ -1572,7 +1580,20 @@ function normalizeClerkProvider(
 }
 
 function isClerkProviderConfig(value: unknown): value is AuthClerkProviderConfig {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  const candidate = value as Record<string, unknown>
+  for (const key of ['publishableKey', 'secretKey', 'apiUrl', 'frontendApi', 'redirectUri', 'sessionCookie', 'guard', 'mapToProvider']) {
+    const field = candidate[key]
+    if (typeof field !== 'undefined' && typeof field !== 'string') {
+      return false
+    }
+  }
+
+  return typeof candidate.authorizedParties === 'undefined'
+    || (Array.isArray(candidate.authorizedParties) && candidate.authorizedParties.every(value => typeof value === 'string'))
 }
 
 function getClerkProviderEntries(config: HoloAuthClerkConfig | undefined): readonly [string, AuthClerkProviderConfig][] {
@@ -1589,7 +1610,7 @@ function getClerkProviderEntries(config: HoloAuthClerkConfig | undefined): reado
       continue
     }
     if (!isClerkProviderConfig(value)) {
-      throw new Error(`[Holo Auth] Clerk provider "${name}" must be an object.`)
+      throw new Error(`[Holo Auth] Clerk provider "${name}" must be a Clerk provider config object.`)
     }
     entries.push([name, value])
   }

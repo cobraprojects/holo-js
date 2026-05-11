@@ -46,8 +46,10 @@ type SvelteKitRuntimeGlobal = typeof globalThis & {
 }
 
 type SvelteKitModule = {
-  readonly redirect: (status: 301 | 302 | 303 | 307 | 308, location: string) => never
+  readonly redirect: (status: SvelteKitRedirectStatus, location: string) => never
 }
+
+type SvelteKitRedirectStatus = 301 | 302 | 303 | 307 | 308
 
 // Shared AsyncLocalStorage contract with packages/auth/src/sveltekit/server.ts:
 // keep this exact global key and compatible AsyncLocalStorage<SvelteKitRequestEvent>
@@ -154,7 +156,7 @@ function resolveSvelteKitAuthRequestAccessors(): NonNullable<SvelteKitHoloOption
 
       event.cookies.set(parsed.name, parsed.value, parsed.options)
     },
-    async redirectResponse(url: string, status = 307) {
+    async redirectResponse(url: string, status: SvelteKitRedirectStatus = 307) {
       const { redirect } = await import('@sveltejs/kit') as SvelteKitModule
       redirect(status, url)
     },

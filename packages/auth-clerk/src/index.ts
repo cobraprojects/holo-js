@@ -14,7 +14,12 @@ export type {
   ClerkLogoutResult,
   ClerkLogoutSession,
   ClerkProviderRuntime,
+  ClerkRequestHeaders,
+  ClerkRequestInput,
+  ClerkRequestLike,
   ClerkSyncStatus,
+  ClerkUserAttributes,
+  ClerkUserAttributeValue,
   ClerkUserProfile,
   ClerkVerifiedSession,
   ClerkVerifyRequestContext,
@@ -32,6 +37,10 @@ import {
   type ClerkLogoutResult,
   type ClerkLogoutSession,
   type ClerkProviderRuntime,
+  type ClerkRequestHeaders,
+  type ClerkRequestInput,
+  type ClerkRequestLike,
+  type ClerkUserAttributes,
   type ClerkUserProfile,
   type ClerkVerifiedSession,
   type ClerkVerifySessionContext,
@@ -49,18 +58,6 @@ import {
 
 type RuntimeAuthProviderAdapter = ReturnType<typeof authRuntimeInternals.getRuntimeBindings>['providers'][string]
 
-type ClerkUserAttributeValue =
-  | string
-  | number
-  | boolean
-  | Date
-  | null
-  | undefined
-  | readonly ClerkUserAttributeValue[]
-  | { readonly [key: string]: ClerkUserAttributeValue }
-
-type ClerkUserAttributes = Readonly<Record<string, ClerkUserAttributeValue>>
-
 type ClerkDefaultUserAttributes = {
   readonly email: string
   readonly name: string
@@ -70,41 +67,6 @@ type CompleteClerkAuthOptions<TUserAttributes extends ClerkUserAttributes = Cler
   readonly provider?: string
   readonly user?: (clerkUser: ClerkUserProfile) => TUserAttributes
 }
-
-type ClerkRequestHeaders =
-  | Headers
-  | ReadonlyArray<readonly [string, string]>
-  | Record<string, string | readonly string[] | undefined>
-  | {
-    readonly get?: (name: string) => string | null | undefined
-    readonly forEach?: (callback: (value: string, key: string) => void) => void
-    readonly entries?: () => Iterable<readonly [string, string]>
-  }
-
-type ClerkRequestLike = {
-  readonly method?: string
-  readonly path?: string
-  readonly url?: string | URL
-  readonly headers?: ClerkRequestHeaders
-  readonly request?: Request
-  readonly req?: Request | {
-    readonly method?: string
-    readonly url?: string
-    readonly headers?: ClerkRequestHeaders
-  }
-  readonly node?: {
-    readonly req?: {
-      readonly method?: string
-      readonly url?: string
-      readonly headers?: ClerkRequestHeaders
-    }
-  }
-  readonly web?: {
-    readonly request?: Request
-  }
-}
-
-type ClerkRequestInput = Request | ClerkRequestLike
 
 type SerializedClerkAuthUser = AuthUserLike & {
   readonly id: string | number
@@ -118,9 +80,36 @@ type ClerkSessionPayload = {
   readonly clerk: ClerkLogoutSession
 }
 
-let clerkBindings: ConfigureClerkAuthRuntimeOptions | undefined
+interface ClerkRuntimeState {
+  bindings?: ConfigureClerkAuthRuntimeOptions
+}
+
+const CLERK_RUNTIME_STATE_KEY = '__holoJsAuthClerkRuntime'
+
+type ClerkRuntimeStateHost = {
+  [CLERK_RUNTIME_STATE_KEY]?: ClerkRuntimeState
+}
+
 const clerkDefaultProviderRuntimeCache = new Map<string, ClerkProviderRuntime>()
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
+
+function getRuntimeState(): ClerkRuntimeState {
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    readonly process?: ClerkRuntimeStateHost
+  } & ClerkRuntimeStateHost
+  const runtimeHost: ClerkRuntimeStateHost = runtimeGlobal.process ?? runtimeGlobal
+
+  if (!runtimeHost[CLERK_RUNTIME_STATE_KEY]) {
+    Object.defineProperty(runtimeHost, CLERK_RUNTIME_STATE_KEY, {
+      value: {},
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    })
+  }
+
+  return runtimeHost[CLERK_RUNTIME_STATE_KEY]!
+}
 
 function throwUnconfigured(): never {
   throw new Error('[@holo-js/auth-clerk] Clerk auth runtime is not configured yet.')
@@ -250,6 +239,7 @@ function normalizeClerkRequest(input: ClerkRequestInput): Request {
 }
 
 function getBindings(): ClerkAuthBindings {
+  const clerkBindings = getRuntimeState().bindings
   if (!clerkBindings?.identityStore) {
     throwUnconfigured()
   }
@@ -552,7 +542,36 @@ function createAuthorizationUrl(config: NormalizedAuthClerkProviderConfig, page:
 }
 
 function createClerkReturnUrl(request: Request, returnTo?: string): string {
-  return new URL(returnTo?.trim() || '/', request.url).toString()
+  const requestUrl = new URL(request.url)
+  const safeDefault = new URL('/', requestUrl).toString()
+  const trimmed = returnTo?.trim()
+  if (!trimmed || hasControlCharacter(trimmed)) {
+    return safeDefault
+  }
+
+  try {
+    const parsed = new URL(trimmed, requestUrl)
+    const isRelativePath = trimmed.startsWith('/') && !trimmed.startsWith('//')
+    const isAbsoluteUrl = /^[a-z][a-z\d+.-]*:/iu.test(trimmed)
+    if (parsed.origin !== requestUrl.origin || !parsed.pathname.startsWith('/') || (!isRelativePath && !isAbsoluteUrl)) {
+      return safeDefault
+    }
+
+    return parsed.toString()
+  } catch {
+    return safeDefault
+  }
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)
+    if (typeof codePoint === 'number' && (codePoint < 32 || codePoint === 127)) {
+      return true
+    }
+  }
+
+  return false
 }
 
 function createClerkErrorResponse(error: unknown, code: string): Response {
@@ -670,11 +689,11 @@ function getClerkLogoutSession(payload: unknown, providerName: string): ClerkLog
   })
 }
 
-function serializeLocalUser(
+function serializeLocalUser<TUserAttributes extends ClerkUserAttributes = ClerkDefaultUserAttributes>(
   adapter: RuntimeAuthProviderAdapter,
   user: Record<string, unknown>,
   providerName: string,
-): AuthUserLike {
+): AuthUserLike & TUserAttributes {
   const id = adapter.getId(user)
   const serialized = adapter.serialize
     ? adapter.serialize(user)
@@ -690,7 +709,7 @@ function serializeLocalUser(
     configurable: true,
   })
 
-  return Object.freeze(result)
+  return Object.freeze(result) as AuthUserLike & TUserAttributes
 }
 
 function resolvePrimaryEmail(profile: ClerkUserProfile): { email?: string, emailVerified: boolean } {
@@ -1151,7 +1170,8 @@ async function verifyRequestWithClerkBackendSdk(
   )
 }
 
-export async function verifyRequest(request: Request, provider?: string): Promise<ClerkVerifiedSession | null> {
+export async function verifyRequest(input: ClerkRequestInput, provider?: string): Promise<ClerkVerifiedSession | null> {
+  const request = normalizeClerkRequest(input)
   const providerConfig = getConfiguredProviderConfig(provider)
   const configuredRuntime = getBindings().providers[providerConfig.name]
   const runtime = configuredRuntime ?? getProviderRuntime(providerConfig.name)
@@ -1191,13 +1211,13 @@ export async function verifyRequest(request: Request, provider?: string): Promis
   return verifyDefaultSessionToken(token, providerConfig, resolveRequestAuthorizedParties(providerConfig, request))
 }
 
-export async function syncIdentity(
+export async function syncIdentity<TUserAttributes extends ClerkUserAttributes = ClerkDefaultUserAttributes>(
   session: ClerkVerifiedSession,
   provider?: string,
   options: {
-    readonly user?: (clerkUser: ClerkUserProfile) => ClerkUserAttributes
+    readonly user?: (clerkUser: ClerkUserProfile) => TUserAttributes
   } = {},
-): Promise<ClerkAuthenticationResult> {
+): Promise<ClerkAuthenticationResult<TUserAttributes>> {
   const providerConfig = getConfiguredProviderConfig(provider)
   const providerName = providerConfig.name
   const profile = session.user
@@ -1256,7 +1276,7 @@ export async function syncIdentity(
         guard,
         authProvider,
         status: 'relinked',
-        user: serializeLocalUser(adapter, relinkedUser, authProvider),
+        user: serializeLocalUser<TUserAttributes>(adapter, relinkedUser, authProvider),
         identity,
         session,
       })
@@ -1292,7 +1312,7 @@ export async function syncIdentity(
       guard,
       authProvider,
       status: updated.changed ? 'updated' : 'linked',
-      user: serializeLocalUser(adapter, updated.user, authProvider),
+      user: serializeLocalUser<TUserAttributes>(adapter, updated.user, authProvider),
       identity,
       session,
     })
@@ -1323,7 +1343,7 @@ export async function syncIdentity(
       guard,
       authProvider,
       status: 'linked',
-      user: serializeLocalUser(adapter, linked.user, authProvider),
+      user: serializeLocalUser<TUserAttributes>(adapter, linked.user, authProvider),
       identity,
       session,
     })
@@ -1351,7 +1371,7 @@ export async function syncIdentity(
     guard,
     authProvider,
     status: 'created',
-    user: serializeLocalUser(adapter, localUser, authProvider),
+    user: serializeLocalUser<TUserAttributes>(adapter, localUser, authProvider),
     identity,
     session,
   })
@@ -1483,7 +1503,7 @@ export async function logoutWithClerk(
 export async function completeClerkAuth<TUserAttributes extends ClerkUserAttributes = ClerkDefaultUserAttributes>(
   input: ClerkRequestInput,
   options: CompleteClerkAuthOptions<TUserAttributes> = {},
-): Promise<ClerkCompleteAuthResult> {
+): Promise<ClerkCompleteAuthResult<TUserAttributes>> {
   try {
     const request = normalizeClerkRequest(input)
     const url = new URL(request.url)
@@ -1540,19 +1560,20 @@ export async function completeClerkAuth<TUserAttributes extends ClerkUserAttribu
 }
 
 export function configureClerkAuthRuntime(bindings?: ConfigureClerkAuthRuntimeOptions): void {
+  const runtimeState = getRuntimeState()
   if (!bindings) {
-    clerkBindings = undefined
+    runtimeState.bindings = undefined
     return
   }
 
-  clerkBindings = Object.freeze({
-    providers: bindings.providers ?? clerkBindings?.providers,
-    identityStore: bindings.identityStore ?? clerkBindings?.identityStore,
+  runtimeState.bindings = Object.freeze({
+    providers: bindings.providers ?? runtimeState.bindings?.providers,
+    identityStore: bindings.identityStore ?? runtimeState.bindings?.identityStore,
   })
 }
 
 export function resetClerkAuthRuntime(): void {
-  clerkBindings = undefined
+  getRuntimeState().bindings = undefined
   clerkDefaultProviderRuntimeCache.clear()
 }
 

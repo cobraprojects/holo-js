@@ -169,7 +169,7 @@ function renderNuxtHostedAuthCallbackRoute(spec: HostedAuthProviderSpec): string
     '    return await sendRedirect(event, `/login?error=${encodeURIComponent(errCode)}`, 303)',
     '  }',
     '',
-    '  return await sendRedirect(event, \'/admin\', 303)',
+    '  return await sendRedirect(event, \'/\', 303)',
     '})',
     '',
   ].join('\n')
@@ -363,7 +363,7 @@ function renderNextHostedAuthCallbackRoute(spec: HostedAuthProviderSpec): string
     '    return Response.redirect(new URL(`/login?error=${encodeURIComponent(result.code)}`, request.url))',
     '  }',
     '',
-    '  return Response.redirect(new URL(\'/admin\', request.url))',
+    '  return Response.redirect(new URL(\'/\', request.url))',
     '}',
     '',
   ].join('\n')
@@ -642,7 +642,7 @@ function renderSvelteHostedAuthCallbackRoute(spec: HostedAuthProviderSpec): stri
     '    throw redirect(303, `/login?error=${encodeURIComponent(result.code)}`)',
     '  }',
     '',
-    '  throw redirect(303, \'/admin\')',
+    '  throw redirect(303, \'/\')',
     '}) satisfies RequestHandler',
     '',
   ].join('\n')

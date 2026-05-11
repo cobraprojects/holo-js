@@ -2685,6 +2685,20 @@ export default defineConfig({
       },
     })).toThrow('default auth guard "missing" is not configured')
     expect(() => normalizeAuthConfig({
+      clerk: {
+        app: {
+          redirectUri: 'not a url',
+        },
+      },
+    })).toThrow('Invalid redirectUri in Clerk provider "app": not a url')
+    expect(() => normalizeAuthConfig({
+      clerk: {
+        app: {
+          secretKey: 123 as never,
+        },
+      },
+    })).toThrow('Clerk provider "app" must be a Clerk provider config object.')
+    expect(() => normalizeAuthConfig({
       defaults: {
         passwords: 'admins',
       },
@@ -2834,7 +2848,7 @@ export default defineConfig({
       clerk: {
         app: 'invalid' as never,
       },
-    })).toThrow('Clerk provider "app" must be an object')
+    })).toThrow('Clerk provider "app" must be a Clerk provider config object.')
     expect(() => normalizeAuthConfig({
       clerk: {
         admin: {

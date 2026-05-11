@@ -6,6 +6,12 @@
 
 Install Clerk auth and enable the Clerk Account Portal in the Clerk Dashboard.
 
+```bash
+holo install auth --clerk
+```
+
+The command wires the hosted-auth route scaffolding. Keep Account Portal enabled in Clerk so those routes can redirect to Clerk's hosted forms.
+
 ```ts
 import { defineAuthConfig, env } from '@holo-js/config'
 
@@ -27,6 +33,7 @@ Use these environment variables:
 
 | Variable | Required | Value |
 | --- | --- | --- |
+| `AUTH_CLERK_PROVIDER` | No | Clerk provider key from `defineAuthConfig({ clerk })`. Defaults to `app`; valid values are the configured provider keys such as `app` or `org`. |
 | `CLERK_PUBLISHABLE_KEY` | Yes | Clerk publishable key, usually `pk_test_...` or `pk_live_...`. |
 | `CLERK_SECRET_KEY` | Yes | Clerk secret key, usually `sk_test_...` or `sk_live_...`. |
 | `CLERK_FRONTEND_API` | Yes | Clerk Frontend API URL, for example `https://steady-newt-5.clerk.accounts.dev` in development or `https://clerk.example.com` in production. |
@@ -35,6 +42,8 @@ Use these environment variables:
 | `CLERK_SESSION_COOKIE` | No | Clerk session cookie name. Defaults to `__session`. |
 
 `CLERK_FRONTEND_API` is not the Account Portal sign-in URL. Holo derives the matching Account Portal URL from it, appends `/sign-in` or `/sign-up`, and sends `CLERK_REDIRECT_URI` as Clerk's `redirect_url` query parameter. You do not configure a separate `CLERK_ACCOUNT_PORTAL_URL`.
+
+`CLERK_SESSION_COOKIE` is optional and defaults to `__session`; you only need to set it if your Clerk instance uses a different session cookie name.
 
 In the Clerk Dashboard:
 
@@ -81,7 +90,7 @@ export async function GET(request: Request) {
     return Response.redirect(new URL(`/login?error=${result.code}`, request.url))
   }
 
-  return Response.redirect(new URL('/admin', request.url))
+  return Response.redirect(new URL('/', request.url))
 }
 ```
 

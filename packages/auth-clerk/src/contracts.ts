@@ -20,6 +20,18 @@ export interface ClerkUserProfile {
   readonly raw?: unknown
 }
 
+export type ClerkUserAttributeValue =
+  | string
+  | number
+  | boolean
+  | Date
+  | null
+  | undefined
+  | readonly ClerkUserAttributeValue[]
+  | { readonly [key: string]: ClerkUserAttributeValue }
+
+export type ClerkUserAttributes = Readonly<Record<string, ClerkUserAttributeValue>>
+
 export interface ClerkVerifiedSession {
   readonly sessionId: string
   readonly user: ClerkUserProfile
@@ -36,14 +48,14 @@ export interface ClerkLogoutSession {
   readonly sessionId: string
 }
 
-export type ClerkCompleteAuthResult<TUser extends AuthUserLike = AuthUserLike> =
+export type ClerkCompleteAuthResult<TUser extends Readonly<Record<string, unknown>> = Readonly<Record<string, unknown>>> =
   | Readonly<{
     readonly ok: true
     readonly provider: string
     readonly guard: string
     readonly authProvider: string
     readonly status: ClerkSyncStatus
-    readonly user: TUser
+    readonly user: AuthUserLike & TUser
     readonly identity: HostedIdentityRecord
     readonly session: ClerkVerifiedSession
     readonly authSession?: AuthEstablishedSession
@@ -53,6 +65,41 @@ export type ClerkCompleteAuthResult<TUser extends AuthUserLike = AuthUserLike> =
     readonly code: string
     readonly message: string
   }>
+
+export type ClerkRequestHeaders =
+  | Headers
+  | ReadonlyArray<readonly [string, string]>
+  | Record<string, string | readonly string[] | undefined>
+  | {
+    readonly get?: (name: string) => string | null | undefined
+    readonly forEach?: (callback: (value: string, key: string) => void) => void
+    readonly entries?: () => Iterable<readonly [string, string]>
+  }
+
+export type ClerkRequestLike = {
+  readonly method?: string
+  readonly path?: string
+  readonly url?: string | URL
+  readonly headers?: ClerkRequestHeaders
+  readonly request?: Request
+  readonly req?: Request | {
+    readonly method?: string
+    readonly url?: string
+    readonly headers?: ClerkRequestHeaders
+  }
+  readonly node?: {
+    readonly req?: {
+      readonly method?: string
+      readonly url?: string
+      readonly headers?: ClerkRequestHeaders
+    }
+  }
+  readonly web?: {
+    readonly request?: Request
+  }
+}
+
+export type ClerkRequestInput = Request | ClerkRequestLike
 
 export type ClerkLogoutResult =
   | Readonly<{
@@ -105,12 +152,12 @@ export interface HostedIdentityStore {
 
 export type ClerkSyncStatus = 'created' | 'updated' | 'linked' | 'relinked'
 
-export interface ClerkAuthenticationResult {
+export interface ClerkAuthenticationResult<TUser extends Readonly<Record<string, unknown>> = Readonly<Record<string, unknown>>> {
   readonly provider: string
   readonly guard: string
   readonly authProvider: string
   readonly status: ClerkSyncStatus
-  readonly user: AuthUserLike
+  readonly user: AuthUserLike & TUser
   readonly identity: HostedIdentityRecord
   readonly session: ClerkVerifiedSession
   readonly authSession?: AuthEstablishedSession
@@ -127,11 +174,17 @@ export interface ConfigureClerkAuthRuntimeOptions {
 }
 
 export interface ClerkAuthFacade {
-  loginWithClerk(request: Request, options?: { readonly provider?: string }): Promise<Response>
-  registerWithClerk(request: Request, options?: { readonly provider?: string }): Promise<Response>
-  logoutWithClerk(request: Request, options?: { readonly provider?: string, readonly returnTo?: string }): Promise<ClerkLogoutResult>
-  completeClerkAuth(request: Request, options?: { readonly provider?: string }): Promise<ClerkCompleteAuthResult>
-  verifyRequest(request: Request, provider?: string): Promise<ClerkVerifiedSession | null>
+  loginWithClerk(request: ClerkRequestInput, options?: { readonly provider?: string }): Promise<Response>
+  registerWithClerk(request: ClerkRequestInput, options?: { readonly provider?: string }): Promise<Response>
+  logoutWithClerk(request: ClerkRequestInput, options?: { readonly provider?: string, readonly returnTo?: string }): Promise<ClerkLogoutResult>
+  completeClerkAuth<TUserAttributes extends ClerkUserAttributes = ClerkUserAttributes>(
+    request: ClerkRequestInput,
+    options?: {
+      readonly provider?: string
+      readonly user?: (clerkUser: ClerkUserProfile) => TUserAttributes
+    },
+  ): Promise<ClerkCompleteAuthResult<TUserAttributes>>
+  verifyRequest(request: ClerkRequestInput, provider?: string): Promise<ClerkVerifiedSession | null>
   verifySession(token: string, provider?: string): Promise<ClerkVerifiedSession | null>
   syncIdentity(session: ClerkVerifiedSession, provider?: string): Promise<ClerkAuthenticationResult>
   authenticate(request: Request, provider?: string): Promise<ClerkAuthenticationResult | null>

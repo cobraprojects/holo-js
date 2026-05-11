@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { readdir, readFile, writeFile } from 'node:fs/promises'
+import { access, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -22,10 +22,19 @@ async function readJson(filePath) {
 async function listPackageManifestPaths(root = repoRoot) {
   const packageDirectory = join(root, 'packages')
   const entries = await readdir(packageDirectory, { withFileTypes: true })
-
-  return entries
+  const manifestPaths = await Promise.all(entries
     .filter(entry => entry.isDirectory())
-    .map(entry => join(packageDirectory, entry.name, 'package.json'))
+    .map(async (entry) => {
+      const manifestPath = join(packageDirectory, entry.name, 'package.json')
+      try {
+        await access(manifestPath)
+        return manifestPath
+      } catch {
+        return null
+      }
+    }))
+
+  return manifestPaths.filter(manifestPath => typeof manifestPath === 'string')
 }
 
 export function resolveCatalogRangesInManifest(manifest, catalog) {
@@ -63,6 +72,7 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot) {
 
   const packageManifestPaths = await listPackageManifestPaths(root)
   const originalManifests = new Map()
+  let callbackError
 
   try {
     for (const manifestPath of packageManifestPaths) {
@@ -73,10 +83,28 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot) {
     }
 
     await callback()
-  } finally {
-    await Promise.all([...originalManifests].map(([manifestPath, contents]) => (
-      writeFile(manifestPath, contents)
-    )))
+  } catch (error) {
+    callbackError = error
+  }
+
+  const manifestEntries = [...originalManifests]
+  const restoreResults = await Promise.allSettled(manifestEntries.map(([manifestPath, contents]) => (
+    writeFile(manifestPath, contents)
+  )))
+  const restoreFailures = restoreResults.flatMap((result, index) => {
+    if (result.status === 'fulfilled') {
+      return []
+    }
+
+    const manifestPath = manifestEntries[index]?.[0] ?? '<unknown>'
+    const reason = result.reason instanceof Error ? result.reason.message : String(result.reason)
+    return [`${manifestPath}: ${reason}`]
+  })
+  if (restoreFailures.length > 0) {
+    throw new Error(`Failed to restore ${restoreFailures.length} package manifest(s): ${restoreFailures.join('; ')}`)
+  }
+  if (callbackError) {
+    throw callbackError
   }
 }
 
@@ -84,7 +112,8 @@ async function publishWithResolvedCatalogs() {
   let publishStatus = 0
 
   await withResolvedCatalogManifests(async () => {
-    const result = spawnSync('changeset', ['publish'], {
+    const changesetBinary = join(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'changeset.cmd' : 'changeset')
+    const result = spawnSync(changesetBinary, ['publish'], {
       cwd: repoRoot,
       stdio: 'inherit',
     })
