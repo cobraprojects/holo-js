@@ -17,6 +17,7 @@ import {
   SUPPORTED_CACHE_INSTALL_DRIVERS,
   SUPPORTED_QUEUE_INSTALL_DRIVERS,
 } from './parsing'
+import { generateProjectAppKey } from './app-key'
 import { fileExists } from './fs-utils'
 import { writeLine } from './io'
 import { hasProjectDependency } from './package-json'
@@ -414,6 +415,25 @@ export function createInternalCommands(
         writeLine(context.stdout, `  cd ${projectName}`)
         writeLine(context.stdout, `  ${resolvePackageManagerInstallCommand(packageManager)}`)
         writeLine(context.stdout, `  ${resolvePackageManagerDevCommand(packageManager)}`)
+      },
+    },
+    {
+      name: 'key:generate',
+      description: 'Generate APP_KEY in the project .env file when it is missing.',
+      usage: 'holo key:generate',
+      source: 'internal',
+      async prepare() {
+        return { args: [], flags: {} }
+      },
+      async run() {
+        const result = await generateProjectAppKey(context.projectRoot)
+
+        writeLine(
+          context.stdout,
+          result.generated
+            ? `Generated APP_KEY in ${result.envPath}.`
+            : `APP_KEY is already set in ${result.envPath}.`,
+        )
       },
     },
     {

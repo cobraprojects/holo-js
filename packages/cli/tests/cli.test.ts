@@ -31,6 +31,10 @@ import type * as HoloQueueModule from '@holo-js/queue'
 import type * as HoloQueueDbModule from '@holo-js/queue-db'
 import type { QueueWorkerRunOptions } from '@holo-js/queue'
 import { defineCommand } from '../src'
+import {
+  generateProjectAppKey,
+  renderEnvWithAppKey,
+} from '../src/app-key'
 import { cliInternals } from '../src/cli-internals'
 import { collectDiscoveryWatchRoots, isDiscoveryRelevantPath } from '../src/dev'
 import { generatorInternals } from '../src/generators'
@@ -602,6 +606,133 @@ export default {
     expect(result.stderr).toContain('Missing required argument: Model name.')
   }, 90000)
 
+  it('generates app keys without requiring an openssl binary', async () => {
+    expect(renderEnvWithAppKey(undefined, 'test-key')).toEqual({
+      contents: 'APP_KEY=test-key\n',
+      changed: true,
+    })
+    expect(renderEnvWithAppKey('', 'test-key')).toEqual({
+      contents: 'APP_KEY=test-key\n',
+      changed: true,
+    })
+    expect(renderEnvWithAppKey('APP_NAME=Demo\r\n', 'test-key')).toEqual({
+      contents: 'APP_NAME=Demo\nAPP_KEY=test-key\n',
+      changed: true,
+    })
+    expect(renderEnvWithAppKey('APP_NAME=Demo', 'test-key')).toEqual({
+      contents: 'APP_NAME=Demo\nAPP_KEY=test-key\n',
+      changed: true,
+    })
+    expect(renderEnvWithAppKey('APP_KEY=""\n', 'test-key')).toEqual({
+      contents: 'APP_KEY=test-key\n',
+      changed: true,
+    })
+    expect(renderEnvWithAppKey('APP_KEY = ""\n', 'test-key')).toEqual({
+      contents: 'APP_KEY = test-key\n',
+      changed: true,
+    })
+    expect(renderEnvWithAppKey('export APP_KEY=\'\'\n', 'test-key')).toEqual({
+      contents: 'export APP_KEY=test-key\n',
+      changed: true,
+    })
+    expect(renderEnvWithAppKey('# APP_KEY=\n', 'test-key')).toEqual({
+      contents: '# APP_KEY=\nAPP_KEY=test-key\n',
+      changed: true,
+    })
+    expect(renderEnvWithAppKey('APP_KEY=existing\n', 'test-key')).toEqual({
+      contents: 'APP_KEY=existing\n',
+      changed: false,
+    })
+    expect(renderEnvWithAppKey('APP_KEY=\'existing\'\n', 'test-key')).toEqual({
+      contents: 'APP_KEY=\'existing\'\n',
+      changed: false,
+    })
+
+    const generatedRoot = await createTempDirectory()
+    const skippedRoot = await createTempDirectory()
+    const commandRoot = await createTempDirectory()
+    const commandSkippedRoot = await createTempDirectory()
+    tempDirs.push(generatedRoot, skippedRoot, commandRoot, commandSkippedRoot)
+
+    const generated = await generateProjectAppKey(generatedRoot)
+    expect(generated.generated).toBe(true)
+    expect(generated.key).toBeDefined()
+    expect(Buffer.from(generated.key!, 'base64')).toHaveLength(32)
+    await expect(readFile(join(generatedRoot, '.env'), 'utf8')).resolves.toBe(`APP_KEY=${generated.key}\n`)
+
+    await writeProjectFile(skippedRoot, '.env', 'APP_KEY=already-set\n')
+    const skipped = await generateProjectAppKey(skippedRoot)
+    expect(skipped.generated).toBe(false)
+    expect(skipped.key).toBeUndefined()
+    await expect(readFile(join(skippedRoot, '.env'), 'utf8')).resolves.toBe('APP_KEY=already-set\n')
+
+    await writeProjectFile(commandRoot, '.env', 'APP_KEY=\n')
+    const commandIo = createIo(commandRoot)
+    const keyCommand = cliInternals.createInternalCommands({
+      ...commandIo.io,
+      projectRoot: commandRoot,
+      registry: [],
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    }).find(command => command.name === 'key:generate')
+
+    expect(keyCommand).toBeDefined()
+    await expect(keyCommand!.run({
+      projectRoot: commandRoot,
+      cwd: commandRoot,
+      args: [],
+      flags: {},
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    })).resolves.toBeUndefined()
+    const commandEnv = await readFile(join(commandRoot, '.env'), 'utf8')
+    const commandKey = commandEnv.match(/^APP_KEY=(.+)$/m)?.[1]
+    expect(commandKey).toBeDefined()
+    expect(Buffer.from(commandKey!, 'base64')).toHaveLength(32)
+    expect(commandIo.read().stdout).toContain('Generated APP_KEY')
+
+    await writeProjectFile(commandSkippedRoot, '.env', 'APP_KEY=already-set\n')
+    const skippedCommandIo = createIo(commandSkippedRoot)
+    const skippedKeyCommand = cliInternals.createInternalCommands({
+      ...skippedCommandIo.io,
+      projectRoot: commandSkippedRoot,
+      registry: [],
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    }).find(command => command.name === 'key:generate')
+
+    expect(skippedKeyCommand).toBeDefined()
+    await expect(skippedKeyCommand!.prepare?.({ args: [], flags: {} }, {
+      ...skippedCommandIo.io,
+      projectRoot: commandSkippedRoot,
+      registry: [],
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    })).resolves.toEqual({ args: [], flags: {} })
+    await expect(skippedKeyCommand!.run({
+      projectRoot: commandSkippedRoot,
+      cwd: commandSkippedRoot,
+      args: [],
+      flags: {},
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    })).resolves.toBeUndefined()
+    expect(skippedCommandIo.read().stdout).toContain('APP_KEY is already set')
+
+    const processRoot = await createTempProject()
+    tempDirs.push(processRoot)
+    await writeProjectFile(processRoot, '.env', 'APP_KEY=\n')
+
+    const processGenerated = runCliProcess(processRoot, ['key:generate'])
+    expect(processGenerated.status).toBe(0)
+    expect(processGenerated.stdout).toContain('Generated APP_KEY')
+
+    const processEnv = await readFile(join(processRoot, '.env'), 'utf8')
+    const processKey = processEnv.match(/^APP_KEY=(.+)$/m)?.[1]
+    expect(processKey).toBeDefined()
+    expect(Buffer.from(processKey!, 'base64')).toHaveLength(32)
+
+    const processSkipped = runCliProcess(processRoot, ['key:generate'])
+    expect(processSkipped.status).toBe(0)
+    expect(processSkipped.stdout).toContain('APP_KEY is already set')
+    await expect(readFile(join(processRoot, '.env'), 'utf8')).resolves.toBe(processEnv)
+  }, 90000)
+
   it('scaffolds a new project non-interactively with deterministic files', async () => {
     const targetRoot = await createTempDirectory()
     tempDirs.push(targetRoot)
@@ -628,7 +759,7 @@ export default {
       name: 'demo-app',
       packageManager: 'pnpm@latest',
       scripts: {
-        prepare: 'holo prepare',
+        prepare: 'holo key:generate && holo prepare',
         dev: 'holo dev',
         build: 'holo build',
         ['config:cache']: 'holo config:cache',
