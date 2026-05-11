@@ -1,16 +1,28 @@
-import type { AuthEstablishedSession, AuthUserLike } from '@holo-js/auth'
-import type { AuthWorkosProviderConfig } from '@holo-js/config'
+import type { AuthEstablishedSession, AuthLogoutResult, AuthUserLike } from '@holo-js/auth'
+import type { NormalizedAuthWorkosProviderConfig } from '@holo-js/config'
+
+export type WorkosJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly WorkosJsonValue[]
+  | { readonly [key: string]: WorkosJsonValue }
 
 export interface WorkosIdentityProfile {
   readonly id: string
-  readonly email?: string
-  readonly emailVerified?: boolean
+  readonly email: string
+  readonly name: string
+  readonly emailVerified: boolean
   readonly firstName?: string
   readonly lastName?: string
-  readonly name?: string
-  readonly avatar?: string
+  readonly profilePictureUrl?: string
+  readonly externalId?: string
   readonly organizationId?: string
-  readonly raw?: unknown
+  readonly metadata: Readonly<Record<string, WorkosJsonValue>>
+  readonly createdAt?: string
+  readonly updatedAt?: string
+  readonly raw: Readonly<Record<string, WorkosJsonValue>>
 }
 
 export interface WorkosVerifiedSession {
@@ -21,16 +33,34 @@ export interface WorkosVerifiedSession {
   readonly raw?: unknown
 }
 
+export interface WorkosLogoutSession {
+  readonly provider: string
+  readonly sessionId: string
+}
+
+export type WorkosLogoutResult =
+  | Readonly<{
+    readonly ok: true
+    readonly url: string
+    readonly local: AuthLogoutResult
+  }>
+  | Readonly<{
+    readonly ok: false
+    readonly code: 'workos_logout_failed' | 'workos_session_missing'
+    readonly message: string
+    readonly local?: AuthLogoutResult
+  }>
+
 export interface WorkosVerifyRequestContext {
   readonly provider: string
   readonly request: Request
-  readonly config: AuthWorkosProviderConfig
+  readonly config: NormalizedAuthWorkosProviderConfig
 }
 
 export interface WorkosVerifySessionContext {
   readonly provider: string
   readonly token: string
-  readonly config: AuthWorkosProviderConfig
+  readonly config: NormalizedAuthWorkosProviderConfig
 }
 
 export interface WorkosProviderRuntime {
@@ -81,6 +111,15 @@ export interface ConfigureWorkosAuthRuntimeOptions {
 }
 
 export interface WorkosAuthFacade {
+  loginWithWorkos(request: Request, options?: { readonly provider?: string }): Promise<Response>
+  registerWithWorkos(request: Request, options?: { readonly provider?: string }): Promise<Response>
+  logoutWithWorkos(request: Request, options?: { readonly provider?: string, readonly returnTo?: string }): Promise<WorkosLogoutResult>
+  completeWorkosAuth(request: Request, options?: { readonly provider?: string }): Promise<Readonly<{
+    readonly ok: boolean
+    readonly code?: string
+    readonly message?: string
+    readonly user?: AuthUserLike
+  }>>
   verifyRequest(request: Request, provider?: string): Promise<WorkosVerifiedSession | null>
   verifySession(token: string, provider?: string): Promise<WorkosVerifiedSession | null>
   syncIdentity(session: WorkosVerifiedSession, provider?: string): Promise<WorkosAuthenticationResult>

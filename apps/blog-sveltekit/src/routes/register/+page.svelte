@@ -96,6 +96,7 @@
   {/if}
 
   <a href="/login" class="link">Already have an account?</a>
+  <a href="/api/auth/workos/register" class="link">Register with WorkOS</a>
 </section>
 
 <style>

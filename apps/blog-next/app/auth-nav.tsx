@@ -18,6 +18,10 @@ const logoutButtonStyle = {
   padding: 0,
 } as const
 
+const logoutFormStyle = {
+  display: 'inline',
+} as const
+
 export function AuthNav() {
   const auth = useAuth()
   const [isLoggingOut, setIsLoggingOut] = useState(false)
@@ -57,6 +61,9 @@ export function AuthNav() {
     <>
       <span style={{ color: '#e5eef8' }}>{displayName}</span>
       <button type="button" disabled={isLoggingOut} onClick={logout} style={logoutButtonStyle}>Logout</button>
+      <form action="/api/auth/workos/logout" method="post" style={logoutFormStyle}>
+        <button type="submit" style={logoutButtonStyle}>Logout from WorkOS</button>
+      </form>
     </>
   )
 }

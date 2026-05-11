@@ -1146,10 +1146,10 @@ export default {
       workos: true,
       clerk: true,
     })
-    expect(projectInternals.renderAuthConfig()).toContain('socialEncryptionKey: env(\'AUTH_SOCIAL_ENCRYPTION_KEY\')')
+    expect(projectInternals.renderAuthConfig()).not.toContain('AUTH_SOCIAL_ENCRYPTION_KEY')
     expect(projectInternals.renderAuthConfig()).not.toContain('currentUserEndpoint')
     expect(projectInternals.renderAuthEnvFiles({ socialProviders: ['linkedin'] }).env).toContain('AUTH_LINKEDIN_CLIENT_ID=')
-    expect(projectInternals.renderAuthEnvFiles().env).toContain('AUTH_SOCIAL_ENCRYPTION_KEY=')
+    expect(projectInternals.renderAuthEnvFiles().env).not.toContain('AUTH_SOCIAL_ENCRYPTION_KEY=')
     expect(projectInternals.renderAuthEnvFiles().env).not.toContain('AUTH_CURRENT_USER_ENDPOINT=/api/auth/user')
     expect(projectInternals.renderAuthEnvFiles({}, 'primary').env).toContain('SESSION_CONNECTION=primary')
     expect(projectInternals.renderAuthEnvFiles().env).toContain('SESSION_DRIVER=file')

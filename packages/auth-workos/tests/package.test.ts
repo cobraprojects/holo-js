@@ -6,13 +6,19 @@ import type { AuthProviderAdapter } from '../../auth/src'
 import {
   WorkosAuthConflictError,
   authenticate,
+  completeWorkosAuth,
   configureWorkosAuthRuntime,
+  loginWithWorkos,
+  logoutWithWorkos,
   resetWorkosAuthRuntime,
+  registerWithWorkos,
   syncIdentity,
   verifyRequest,
   verifySession,
   workosAuth,
   workosAuthInternals,
+  type WorkosJsonValue,
+  type WorkosVerifiedSession,
 } from '../src'
 
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
@@ -39,6 +45,7 @@ type UserRecord = {
   email: string
   password?: string | null
   avatar?: string | null
+  timezone?: string
   email_verified_at?: Date | null
 }
 
@@ -51,11 +58,35 @@ type WorkosSessionFixture = {
     readonly firstName?: string
     readonly lastName?: string
     readonly name?: string
-    readonly avatar?: string
+    readonly profilePictureUrl?: string
     readonly organizationId?: string
-    readonly raw?: unknown
+    readonly metadata?: Readonly<Record<string, WorkosJsonValue>>
+    readonly raw?: Readonly<Record<string, WorkosJsonValue>>
   }
   readonly raw?: unknown
+}
+
+function completeWorkosSessionFixture(session: WorkosSessionFixture | null): WorkosVerifiedSession | null {
+  if (!session) {
+    return null
+  }
+
+  const name = session.identity.name
+    ?? [session.identity.firstName, session.identity.lastName].filter(Boolean).join(' ')
+    ?? session.identity.email
+    ?? session.identity.id
+
+  return {
+    ...session,
+    identity: {
+      ...session.identity,
+      email: session.identity.email ?? `${session.identity.id}@app.test`,
+      name,
+      emailVerified: session.identity.emailVerified ?? false,
+      metadata: session.identity.metadata ?? {},
+      raw: session.identity.raw ?? {},
+    },
+  }
 }
 
 class InMemorySessionStore implements SessionStore {
@@ -92,6 +123,7 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
     readonly email: string
     readonly password?: string | null
     readonly avatar?: string | null
+    readonly timezone?: string
     readonly email_verified_at?: Date | null
   }): Promise<UserRecord> {
     const created: UserRecord = {
@@ -100,6 +132,7 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
       email: input.email,
       password: input.password,
       avatar: input.avatar,
+      timezone: input.timezone,
       email_verified_at: input.email_verified_at,
     }
     this.nextId += 1
@@ -112,6 +145,7 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
     readonly name?: string
     readonly email?: string
     readonly avatar?: string | null
+    readonly timezone?: string
     readonly email_verified_at?: Date | null
     readonly password?: string | null
   }): Promise<UserRecord> {
@@ -124,6 +158,9 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
     }
     if (typeof input.avatar !== 'undefined') {
       user.avatar = input.avatar
+    }
+    if (typeof input.timezone !== 'undefined') {
+      user.timezone = input.timezone
     }
     if (typeof input.email_verified_at !== 'undefined') {
       user.email_verified_at = input.email_verified_at
@@ -149,6 +186,7 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
       name: user.name,
       email: user.email,
       avatar: user.avatar ?? null,
+      timezone: user.timezone,
       email_verified_at: user.email_verified_at ?? null,
     }
   }
@@ -177,6 +215,7 @@ class SnapshotProviderAdapter implements AuthProviderAdapter<UserRecord> {
     readonly email: string
     readonly password?: string | null
     readonly avatar?: string | null
+    readonly timezone?: string
     readonly email_verified_at?: Date | null
   }): Promise<UserRecord> {
     const created: UserRecord = {
@@ -185,6 +224,7 @@ class SnapshotProviderAdapter implements AuthProviderAdapter<UserRecord> {
       email: input.email,
       password: input.password,
       avatar: input.avatar,
+      timezone: input.timezone,
       email_verified_at: input.email_verified_at,
     }
     this.nextId += 1
@@ -203,6 +243,7 @@ class SnapshotProviderAdapter implements AuthProviderAdapter<UserRecord> {
       name: user.name,
       email: user.email,
       avatar: user.avatar ?? null,
+      timezone: user.timezone,
       email_verified_at: user.email_verified_at ?? null,
     }
   }
@@ -255,6 +296,7 @@ class InMemoryIdentityStore {
 function configureRuntime(options: {
   emailVerificationRequired?: boolean
   workosGuard?: 'web' | 'admin' | 'api'
+  defaultWorkosProvider?: string
   includeWorkosConfig?: boolean
   configureWorkosRuntime?: boolean
 } = {}) {
@@ -311,11 +353,11 @@ function configureRuntime(options: {
       workos: options.includeWorkosConfig === false
         ? undefined
         : {
+            provider: options.defaultWorkosProvider,
             dashboard: {
               clientId: 'workos-client',
               apiKey: 'workos-key',
-              cookiePassword: 'cookie-secret',
-              sessionCookie: 'workos-session',
+              redirectUri: 'https://app.test/api/auth/workos/callback',
               guard: options.workosGuard,
               mapToProvider: options.workosGuard === 'admin' ? 'admins' : undefined,
             },
@@ -337,7 +379,7 @@ function configureRuntime(options: {
       providers: {
         dashboard: {
           async verifySession({ token }) {
-            return sessions.get(token) ?? null
+            return completeWorkosSessionFixture(sessions.get(token) ?? null)
           },
         },
       },
@@ -382,12 +424,32 @@ function createSignedJwt(
   return `${signingInput}.${signature}`
 }
 
+function createUnsignedJwt(payload: Readonly<Record<string, unknown>>): string {
+  return [
+    encodeBase64Url(JSON.stringify({ alg: 'none', typ: 'JWT' })),
+    encodeBase64Url(JSON.stringify(payload)),
+    'signature',
+  ].join('.')
+}
+
 describe('@holo-js/auth-workos', () => {
   it('exports the WorkOS auth facade and helpers', () => {
     expect(workosAuth.authenticate).toBe(authenticate)
+    expect(workosAuth.completeWorkosAuth).toBe(completeWorkosAuth)
+    expect(workosAuth.loginWithWorkos).toBe(loginWithWorkos)
+    expect(workosAuth.logoutWithWorkos).toBe(logoutWithWorkos)
+    expect(workosAuth.registerWithWorkos).toBe(registerWithWorkos)
     expect(workosAuth.verifyRequest).toBe(verifyRequest)
     expect(workosAuth.verifySession).toBe(verifySession)
     expect(typeof workosAuthInternals.resolveEmailForCreation).toBe('function')
+  })
+
+  it('resolves the configured default WorkOS provider', () => {
+    configureRuntime({
+      defaultWorkosProvider: 'dashboard',
+    })
+
+    expect(workosAuthInternals.resolveConfiguredProviderName()).toBe('dashboard')
   })
 
   it('merges partial runtime configuration updates', () => {
@@ -535,8 +597,6 @@ describe('@holo-js/auth-workos', () => {
           dashboard: {
             clientId: 'workos-client-future',
             apiKey: 'workos-key',
-            cookiePassword: 'cookie-secret',
-            sessionCookie: 'workos-session',
           },
         },
       }),
@@ -586,8 +646,6 @@ describe('@holo-js/auth-workos', () => {
           dashboard: {
             clientId: 'workos-client-rotate',
             apiKey: 'workos-key',
-            cookiePassword: 'cookie-secret',
-            sessionCookie: 'workos-session',
           },
         },
       }),
@@ -707,7 +765,7 @@ describe('@holo-js/auth-workos', () => {
 
     await expect(verifyRequest(new Request('https://app.test/me', {
       headers: {
-        cookie: 'workos-session=cookie-token',
+        cookie: 'wos-session=cookie-token',
       },
     }))).resolves.toMatchObject({
       sessionId: 'sess_2',
@@ -732,7 +790,7 @@ describe('@holo-js/auth-workos', () => {
         emailVerified: true,
         firstName: 'Create',
         lastName: 'User',
-        avatar: 'https://cdn.test/avatar.png',
+        profilePictureUrl: 'https://cdn.test/avatar.png',
         organizationId: 'org_123',
       },
     })
@@ -771,6 +829,163 @@ describe('@holo-js/auth-workos', () => {
     })
     const sessionId = authRuntimeInternals.getRuntimeBindings().context.getSessionId('web')
     expect(sessionId).toBeTypeOf('string')
+  })
+
+  it('returns hosted AuthKit redirects for login and register', async () => {
+    configureRuntime()
+
+    const login = await loginWithWorkos(new Request('https://app.test/login'))
+    expect(login.status).toBe(302)
+    expect(login.headers.get('location')).toContain('https://api.workos.com/user_management/authorize?')
+    expect(login.headers.get('location')).toContain('provider=authkit')
+    expect(login.headers.get('location')).toContain('screen_hint=sign-in')
+
+    const register = await registerWithWorkos({
+      node: {
+        req: {
+          method: 'GET',
+          url: '/register',
+          headers: {
+            host: 'app.test',
+          },
+        },
+      },
+    })
+    expect(register.status).toBe(302)
+    expect(register.headers.get('location')).toContain('screen_hint=sign-up')
+  })
+
+  it('completes the hosted WorkOS callback with typed user mapping', async () => {
+    const runtime = configureRuntime()
+    const accessToken = createUnsignedJwt({ sid: 'session_workos_callback' })
+    vi.stubGlobal('fetch', async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://api.workos.com/user_management/authenticate')
+      expect(init?.method).toBe('POST')
+      expect(init?.headers).toMatchObject({
+        authorization: 'Bearer workos-key',
+        'content-type': 'application/json',
+      })
+      expect(init?.body).toBe(JSON.stringify({
+        grant_type: 'authorization_code',
+        client_id: 'workos-client',
+        client_secret: 'workos-key',
+        code: 'code_123',
+      }))
+
+      return new Response(JSON.stringify({
+        access_token: accessToken,
+        organization_id: 'org_123',
+        user: {
+          id: 'workos_callback',
+          email: 'callback@app.test',
+          firstName: 'Callback',
+          lastName: 'User',
+          emailVerified: true,
+          profilePictureUrl: 'https://cdn.test/callback.png',
+          metadata: {
+            timezone: 'Africa/Cairo',
+          },
+        },
+      }), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+        },
+      })
+    })
+
+    const result = await completeWorkosAuth(new Request('https://app.test/api/auth/workos/callback?code=code_123'), {
+      user: workosUser => ({
+        email: workosUser.email,
+        name: workosUser.name,
+        avatar: workosUser.profilePictureUrl,
+        timezone: workosUser.metadata.timezone,
+      }),
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      provider: 'dashboard',
+      guard: 'web',
+      authProvider: 'users',
+      status: 'created',
+      user: {
+        email: 'callback@app.test',
+        name: 'Callback User',
+        avatar: 'https://cdn.test/callback.png',
+        timezone: 'Africa/Cairo',
+      },
+      identity: {
+        provider: 'dashboard',
+        providerUserId: 'workos_callback',
+        email: 'callback@app.test',
+      },
+      session: {
+        sessionId: 'session_workos_callback',
+        accessToken,
+      },
+    })
+    expect(runtime.usersProvider.users.get(1)).toMatchObject({
+      email: 'callback@app.test',
+      name: 'Callback User',
+      avatar: 'https://cdn.test/callback.png',
+      timezone: 'Africa/Cairo',
+    })
+  })
+
+  it('logs out locally and returns the WorkOS hosted logout URL', async () => {
+    configureRuntime()
+    const accessToken = createUnsignedJwt({ sid: 'session_workos_logout' })
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      access_token: accessToken,
+      user: {
+        id: 'workos_logout_callback',
+        email: 'logout-callback@app.test',
+        emailVerified: true,
+      },
+    }), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+      },
+    }))
+
+    const callback = await completeWorkosAuth(new Request('https://app.test/api/auth/workos/callback?code=code_123'))
+    expect(callback.ok).toBe(true)
+    const sessionCookie = callback.ok ? callback.authSession.cookies[0]?.split(';', 1)[0] : undefined
+
+    authRuntimeInternals.getRuntimeBindings().context.setSessionId('web')
+    authRuntimeInternals.getRuntimeBindings().context.setCachedUser('web', null)
+
+    const result = await logoutWithWorkos(new Request('https://app.test/api/auth/workos/logout', {
+      method: 'POST',
+      headers: sessionCookie ? { cookie: sessionCookie } : undefined,
+    }))
+
+    expect(result).toMatchObject({
+      ok: true,
+      url: 'https://api.workos.com/user_management/sessions/logout?session_id=session_workos_logout',
+      local: {
+        guard: 'web',
+      },
+    })
+    expect(result.ok ? result.local.cookies : []).toContainEqual(expect.stringContaining('holo_session=;'))
+  })
+
+  it('returns typed callback failures without combining response behavior', async () => {
+    configureRuntime()
+
+    await expect(completeWorkosAuth(new Request('https://app.test/api/auth/workos/callback'))).resolves.toEqual({
+      ok: false,
+      code: 'workos_code_required',
+      message: 'WorkOS callback did not include an authorization code.',
+    })
+
+    await expect(completeWorkosAuth(new Request('https://app.test/api/auth/workos/callback?error=access_denied&error_description=Denied'))).resolves.toEqual({
+      ok: false,
+      code: 'access_denied',
+      message: 'Denied',
+    })
   })
 
   it('reuses an existing Holo session when the request already carries the session cookie', async () => {
@@ -834,7 +1049,7 @@ describe('@holo-js/auth-workos', () => {
     const loggedOut = await logout()
 
     expect(loggedOut.cookies).toContainEqual(expect.stringContaining('holo_session=;'))
-    expect(loggedOut.cookies).toContainEqual(expect.stringContaining('workos-session=;'))
+    expect(loggedOut.cookies).toContainEqual(expect.stringContaining('wos-session=;'))
   })
 
   it('updates existing linked users on subsequent WorkOS syncs and relinks missing local rows', async () => {
@@ -863,7 +1078,7 @@ describe('@holo-js/auth-workos', () => {
         email: 'sync@app.test',
         emailVerified: true,
         name: 'Updated Name',
-        avatar: 'https://cdn.test/updated.png',
+        profilePictureUrl: 'https://cdn.test/updated.png',
       },
     })
 
@@ -967,8 +1182,6 @@ describe('@holo-js/auth-workos', () => {
           dashboard: {
             clientId: 'workos-client',
             apiKey: 'workos-key',
-            cookiePassword: 'cookie-secret',
-            sessionCookie: 'workos-session',
           },
         },
       }),
@@ -1010,7 +1223,9 @@ describe('@holo-js/auth-workos', () => {
         email: 'sync@app.test',
         emailVerified: true,
         name: 'Updated Name',
-        avatar: 'https://cdn.test/updated.png',
+        profilePictureUrl: 'https://cdn.test/updated.png',
+        metadata: {},
+        raw: {},
       },
     }, 'dashboard')).rejects.toThrow('must implement update()')
     expect(usersProvider.users.get(1)).toMatchObject({

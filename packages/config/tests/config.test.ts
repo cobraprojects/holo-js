@@ -2575,12 +2575,11 @@ export default defineConfig({
         },
       },
       workos: {
+        provider: ' dashboard ',
         dashboard: {
           clientId: ' workos-client ',
           apiKey: ' workos-key ',
-          cookiePassword: ' cookie-secret ',
           redirectUri: ' https://app.test/auth/workos/callback ',
-          sessionCookie: ' workos-session ',
           guard: 'admin',
           mapToProvider: 'admins',
         },
@@ -2652,13 +2651,13 @@ export default defineConfig({
         },
       },
       workos: {
+        provider: 'dashboard',
         dashboard: {
           name: 'dashboard',
           clientId: 'workos-client',
           apiKey: 'workos-key',
-          cookiePassword: 'cookie-secret',
           redirectUri: 'https://app.test/auth/workos/callback',
-          sessionCookie: 'workos-session',
+          sessionCookie: 'wos-session',
           guard: 'admin',
           mapToProvider: 'admins',
         },
@@ -2764,6 +2763,22 @@ export default defineConfig({
         },
       },
     })).toThrow('references unknown provider "admins"')
+    expect(() => normalizeAuthConfig({
+      workos: {
+        provider: 'missing',
+        dashboard: {},
+      },
+    })).toThrow('WorkOS provider "missing" is not configured')
+    expect(() => normalizeAuthConfig({
+      workos: {
+        provider: 'dashboard',
+      },
+    })).toThrow('WorkOS provider "dashboard" is not configured')
+    expect(() => normalizeAuthConfig({
+      workos: {
+        dashboard: 'invalid' as never,
+      },
+    })).toThrow('WorkOS provider "dashboard" must be an object')
     expect(() => normalizeAuthConfig({
       workos: {
         dashboard: {
@@ -2966,9 +2981,7 @@ export default defineConfig({
         dashboard: {
           clientId: ' client ',
           apiKey: ' api ',
-          cookiePassword: ' cookie ',
           redirectUri: ' https://example.com/workos ',
-          sessionCookie: ' custom-workos ',
         },
       },
       clerk: {
@@ -3013,9 +3026,8 @@ export default defineConfig({
         dashboard: {
           clientId: 'client',
           apiKey: 'api',
-          cookiePassword: 'cookie',
           redirectUri: 'https://example.com/workos',
-          sessionCookie: 'custom-workos',
+          sessionCookie: 'wos-session',
         },
       },
       clerk: {
@@ -3054,7 +3066,6 @@ export default defineConfig({
         dashboard: {
           clientId: undefined,
           apiKey: undefined,
-          cookiePassword: undefined,
           redirectUri: undefined,
           sessionCookie: 'wos-session',
         },
@@ -3071,6 +3082,21 @@ export default defineConfig({
         },
       },
     })
+    const normalizedWithAppKey = normalizeAuthConfig({
+      workos: {
+        dashboard: {},
+      },
+    }, {
+      appKey: ' app-secret ',
+    })
+    expect(normalizedWithAppKey).toMatchObject({
+      workos: {
+        dashboard: {
+          sessionCookie: 'wos-session',
+        },
+      },
+    })
+    expect(normalizedWithAppKey.workos.dashboard).not.toHaveProperty('cookiePassword')
   })
 
   it('refreshes the config cache when config source files change', async () => {

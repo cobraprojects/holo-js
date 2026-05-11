@@ -100,6 +100,7 @@ export default function RegisterPage() {
       ) : null}
 
       <Link href="/login" style={{ color: '#7dd3fc' }}>Already have an account?</Link>
+      <a href="/api/auth/workos/register" style={{ color: '#7dd3fc' }}>Register with WorkOS</a>
     </section>
   )
 }

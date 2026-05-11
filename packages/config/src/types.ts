@@ -620,11 +620,14 @@ export interface AuthSocialProviderConfig {
 export interface AuthWorkosProviderConfig {
   readonly clientId?: string
   readonly apiKey?: string
-  readonly cookiePassword?: string
   readonly redirectUri?: string
-  readonly sessionCookie?: string
   readonly guard?: string
   readonly mapToProvider?: string
+}
+
+export interface HoloAuthWorkosConfig {
+  readonly provider?: string
+  readonly [provider: string]: AuthWorkosProviderConfig | string | undefined
 }
 
 export interface AuthClerkProviderConfig {
@@ -651,7 +654,7 @@ export interface HoloAuthConfig {
   readonly personalAccessTokens?: AuthPersonalAccessTokenConfig
   readonly socialEncryptionKey?: string
   readonly social?: Readonly<Record<string, AuthSocialProviderConfig>>
-  readonly workos?: Readonly<Record<string, AuthWorkosProviderConfig>>
+  readonly workos?: HoloAuthWorkosConfig
   readonly clerk?: Readonly<Record<string, AuthClerkProviderConfig>>
 }
 
@@ -692,11 +695,15 @@ export interface NormalizedAuthWorkosProviderConfig {
   readonly name: string
   readonly clientId?: string
   readonly apiKey?: string
-  readonly cookiePassword?: string
   readonly redirectUri?: string
   readonly sessionCookie: string
   readonly guard?: string
   readonly mapToProvider?: string
+}
+
+export interface NormalizedHoloAuthWorkosConfig {
+  readonly provider?: string
+  readonly [provider: string]: NormalizedAuthWorkosProviderConfig | string | undefined
 }
 
 export interface NormalizedAuthClerkProviderConfig {
@@ -729,7 +736,7 @@ export interface NormalizedHoloAuthConfig {
   }
   readonly socialEncryptionKey?: string
   readonly social: Readonly<Record<string, NormalizedAuthSocialProviderConfig>>
-  readonly workos: Readonly<Record<string, NormalizedAuthWorkosProviderConfig>>
+  readonly workos: NormalizedHoloAuthWorkosConfig
   readonly clerk: Readonly<Record<string, NormalizedAuthClerkProviderConfig>>
 }
 

@@ -21,6 +21,9 @@ async function logout() {
         <template v-if="authenticated">
           <span class="user-name">{{ displayName }}</span>
           <button type="button" class="logout-button" @click="logout">Logout</button>
+          <form action="/api/auth/workos/logout" method="post" class="logout-form">
+            <button type="submit" class="logout-button">Logout from WorkOS</button>
+          </form>
         </template>
         <template v-else>
           <NuxtLink to="/login">Login</NuxtLink>
@@ -69,6 +72,9 @@ async function logout() {
   color: #cbd5e1;
   cursor: pointer;
   font: inherit;
+}
+.logout-form {
+  display: inline;
 }
 a {
   color: #cbd5e1;

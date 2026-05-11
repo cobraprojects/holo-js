@@ -3103,7 +3103,6 @@ describe('@holo-js/auth package runtime', () => {
         },
         workos: {
           dashboard: {
-            sessionCookie: 'wos-session',
             guard: 'web',
           },
         },
@@ -3241,7 +3240,6 @@ describe('@holo-js/auth package runtime', () => {
         },
         workos: {
           dashboard: {
-            sessionCookie: 'wos-session',
             guard: 'web',
           },
         },
@@ -3620,7 +3618,6 @@ describe('@holo-js/auth package runtime', () => {
         },
         workos: {
           dashboard: {
-            sessionCookie: 'wos-session',
             guard: 'web',
           },
         },
@@ -3664,7 +3661,6 @@ describe('@holo-js/auth package runtime', () => {
         },
         workos: {
           dashboard: {
-            sessionCookie: 'wos-session',
             guard: 'web',
           },
         },
@@ -5332,9 +5328,7 @@ describe('@holo-js/auth package runtime', () => {
           },
         },
         workos: {
-          dashboard: {
-            sessionCookie: 'wos-session',
-          },
+          dashboard: {},
         },
       },
     })

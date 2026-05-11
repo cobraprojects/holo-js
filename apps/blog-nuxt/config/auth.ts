@@ -41,7 +41,6 @@ export default defineAuthConfig({
   personalAccessTokens: {
     defaultAbilities: [],
   },
-  socialEncryptionKey: env('AUTH_SOCIAL_ENCRYPTION_KEY'),
   social: {
     google: {
       clientId: env('AUTH_GOOGLE_CLIENT_ID'),
@@ -57,12 +56,11 @@ export default defineAuthConfig({
     },
   },
   workos: {
+    provider: env('AUTH_WORKOS_PROVIDER', 'dashboard'),
     dashboard: {
       clientId: env('WORKOS_CLIENT_ID'),
       apiKey: env('WORKOS_API_KEY'),
-      cookiePassword: env('WORKOS_COOKIE_PASSWORD'),
       redirectUri: env('WORKOS_REDIRECT_URI'),
-      sessionCookie: env('WORKOS_SESSION_COOKIE', "wos-session"),
     },
   },
   // Add a dedicated guard and provider if WorkOS users should resolve through a different model.

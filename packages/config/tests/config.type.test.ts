@@ -117,9 +117,9 @@ describe('@holo-js/config typing', () => {
         },
       },
       workos: {
+        provider: 'dashboard',
         dashboard: {
           clientId: 'workos-client',
-          sessionCookie: 'workos-session',
           guard: 'web',
         },
       },
@@ -159,7 +159,6 @@ describe('@holo-js/config typing', () => {
     const csrfField: string = accessors.useConfig('security.csrf.field')
     const authDefaultGuard: string = accessors.useConfig('auth.defaults.guard')
     const socialRedirectUri = accessors.useConfig('auth.social.google.redirectUri') as string | undefined
-    const workosSessionCookie = accessors.useConfig('auth.workos.dashboard.sessionCookie') as string | undefined
     const clerkSessionCookie = accessors.useConfig('auth.clerk.admin.sessionCookie') as string | undefined
     const nestedPath: DotPath<{
       app: HoloConfigRegistry['app']
@@ -195,7 +194,6 @@ describe('@holo-js/config typing', () => {
     void csrfField
     void authDefaultGuard
     void socialRedirectUri
-    void workosSessionCookie
     void clerkSessionCookie
     void nestedPath
     void queueDefault
