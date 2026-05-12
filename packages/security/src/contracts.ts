@@ -1,4 +1,11 @@
-import { normalizeSecurityConfig, type HoloSecurityConfig, type NormalizedHoloSecurityConfig } from '@holo-js/config'
+import {
+  normalizeCorsConfig,
+  normalizeSecurityConfig,
+  type HoloCorsConfig,
+  type HoloSecurityConfig,
+  type NormalizedHoloCorsConfig,
+  type NormalizedHoloSecurityConfig,
+} from '@holo-js/config'
 import type {
   SecurityLimiterConfig,
   SecurityRateLimitFileConfig,
@@ -9,7 +16,9 @@ import type {
 
 export type {
   HoloSecurityConfig,
+  HoloCorsConfig,
   HoloSecurityCsrfConfig,
+  NormalizedHoloCorsConfig,
   HoloSecurityRateLimitConfig,
   NormalizedHoloSecurityConfig,
   NormalizedHoloSecurityCsrfConfig,
@@ -26,6 +35,7 @@ export type {
 
 export interface SecurityRuntimeBindings {
   readonly config: HoloSecurityConfig | NormalizedHoloSecurityConfig
+  readonly cors?: HoloCorsConfig | NormalizedHoloCorsConfig
   readonly rateLimitStore?: SecurityRateLimitStore
   readonly csrfSigningKey?: string
   readonly defaultKeyResolver?: SecurityDefaultRateLimitKeyResolver
@@ -33,6 +43,7 @@ export interface SecurityRuntimeBindings {
 
 export interface SecurityRuntimeFacade {
   readonly config: NormalizedHoloSecurityConfig
+  readonly cors: NormalizedHoloCorsConfig
   readonly rateLimitStore?: SecurityRateLimitStore
   readonly csrfSigningKey?: string
   readonly defaultKeyResolver?: SecurityDefaultRateLimitKeyResolver
@@ -78,6 +89,12 @@ export interface SecurityCsrfFacade {
   field(request: Request): Promise<SecurityCsrfField>
   cookie(request: Request, token?: string): Promise<string>
   verify(request: Request): Promise<void>
+}
+
+export interface SecurityCorsFacade {
+  headers(request: Request): Headers
+  preflight(request: Request): Response | null
+  apply(request: Request, response?: Response): Response
 }
 
 export interface SecurityRateLimitBucketSnapshot {
@@ -279,12 +296,14 @@ export function defineSecurityRuntimeBindings(
   bindings: SecurityRuntimeBindings,
 ): Readonly<{
   config: NormalizedHoloSecurityConfig
+  cors: NormalizedHoloCorsConfig
   rateLimitStore?: SecurityRateLimitStore
   csrfSigningKey?: string
   defaultKeyResolver?: SecurityDefaultRateLimitKeyResolver
 }> {
   return Object.freeze({
     config: normalizeSecurityConfig(bindings.config),
+    cors: normalizeCorsConfig(bindings.cors),
     rateLimitStore: bindings.rateLimitStore,
     csrfSigningKey: bindings.csrfSigningKey,
     defaultKeyResolver: bindings.defaultKeyResolver,

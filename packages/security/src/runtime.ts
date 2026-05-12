@@ -1,4 +1,4 @@
-import { normalizeSecurityConfig } from '@holo-js/config'
+import { normalizeCorsConfig, normalizeSecurityConfig } from '@holo-js/config'
 import type { SecurityRuntimeBindings, SecurityRuntimeFacade } from './contracts'
 
 type RuntimeSecurityState = {
@@ -24,6 +24,7 @@ export function configureSecurityRuntime(bindings?: SecurityRuntimeBindings): vo
   getSecurityRuntimeState().bindings = bindings
     ? Object.freeze({
         config: normalizeSecurityConfig(bindings.config),
+        cors: normalizeCorsConfig(bindings.cors),
         rateLimitStore: bindings.rateLimitStore,
         csrfSigningKey: bindings.csrfSigningKey,
         defaultKeyResolver: bindings.defaultKeyResolver,

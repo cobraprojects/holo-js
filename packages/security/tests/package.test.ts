@@ -6,6 +6,9 @@ import * as securityExports from '../src'
 import security, {
   clearRateLimit,
   configureSecurityRuntime,
+  cors,
+  createCorsHeaders,
+  createCorsPreflightResponse,
   createFileRateLimitStore,
   createFileRateLimitStoreConfig,
   createMemoryRateLimitStore,
@@ -13,6 +16,7 @@ import security, {
   createRedisRateLimitStore,
   createRedisRateLimitStoreConfig,
   csrf,
+  corsInternals,
   defaultRateLimitKey,
   defineRateLimiter,
   defineSecurityConfig,
@@ -197,6 +201,7 @@ describe('@holo-js/security package surface', () => {
     expect(typeof security.configureSecurityRuntime).toBe('function')
     expect(typeof security.getSecurityRuntime).toBe('function')
     expect(typeof security.csrf.token).toBe('function')
+    expect(typeof security.cors.apply).toBe('function')
     expect(typeof security.protect).toBe('function')
     expect(typeof security.rateLimit).toBe('function')
     expect(typeof security.clearRateLimit).toBe('function')
@@ -208,6 +213,12 @@ describe('@holo-js/security package surface', () => {
     const store = createMockRateLimitStore()
     configureSecurityRuntime({
       config,
+      cors: {
+        paths: ['/api/*'],
+        origins: ['https://app.test'],
+        credentials: true,
+        statefulDomains: ['app.test'],
+      },
       rateLimitStore: store,
       csrfSigningKey: 'test-signing-key',
     })
@@ -215,6 +226,7 @@ describe('@holo-js/security package surface', () => {
     const request = new Request('https://app.test/form')
     const token = await csrf.token(request)
     expect(getSecurityRuntime().config.rateLimit.driver).toBe('file')
+    expect(getSecurityRuntime().cors.origins).toEqual(['https://app.test'])
     expect(getSecurityRuntime().config.rateLimit.limiters.login?.maxAttempts).toBe(5)
     expect(getSecurityRuntime().rateLimitStore).toBe(store)
     expect(token.length).toBeGreaterThan(10)
@@ -267,6 +279,99 @@ describe('@holo-js/security package surface', () => {
       maxAttempts: 2,
       decaySeconds: 60,
     })
+  })
+})
+
+describe('@holo-js/security cors', () => {
+  it('matches cors path wildcards without regular expressions', () => {
+    expect(corsInternals.matchesPathPattern('/api/posts', '/api/*')).toBe(true)
+    expect(corsInternals.matchesPathPattern('/assets/app.css', '/assets/*.css')).toBe(true)
+    expect(corsInternals.matchesPathPattern('/assets/app.js', '/assets/*.css')).toBe(false)
+    expect(corsInternals.matchesPathPattern('/web/posts', '/api/*')).toBe(false)
+    expect(corsInternals.matchesPathPattern('/broadcasting/auth', '/broadcasting/auth')).toBe(true)
+    expect(corsInternals.matchesPathPattern('/broadcasting/other', '/broadcasting/auth')).toBe(false)
+  })
+
+  it('builds credentialed cors headers for configured origins and stateful domains', () => {
+    configureSecurityRuntime({
+      config: {},
+      cors: {
+        paths: ['/api/*'],
+        origins: ['https://app.example.com'],
+        methods: ['get', 'post', 'options'],
+        headers: ['content-type', 'x-csrf-token'],
+        credentials: true,
+        maxAge: 600,
+        statefulDomains: ['admin.example.com'],
+      },
+    })
+
+    const preflight = new Request('https://api.example.com/api/posts', {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://app.example.com',
+        'access-control-request-method': 'POST',
+      },
+    })
+    const preflightResponse = createCorsPreflightResponse(preflight)
+
+    expect(createCorsHeaders(preflight).get('access-control-allow-origin')).toBe('https://app.example.com')
+    expect(preflightResponse?.status).toBe(204)
+    expect(preflightResponse?.headers.get('access-control-allow-credentials')).toBe('true')
+    expect(preflightResponse?.headers.get('access-control-allow-methods')).toBe('GET, POST, OPTIONS')
+    expect(preflightResponse?.headers.get('access-control-allow-headers')).toBe('content-type, x-csrf-token')
+    expect(preflightResponse?.headers.get('access-control-max-age')).toBe('600')
+    expect(preflightResponse?.headers.get('vary')).toContain('Origin')
+
+    const stateful = new Request('https://api.example.com/api/posts', {
+      headers: {
+        origin: 'https://admin.example.com',
+      },
+    })
+    const response = cors.apply(stateful, Response.json({ ok: true }))
+
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://admin.example.com')
+    expect(response.headers.get('access-control-allow-credentials')).toBe('true')
+
+    const varied = cors.apply(preflight, Response.json({ ok: true }, {
+      headers: {
+        vary: 'Accept-Encoding, Accept-Language',
+      },
+    }))
+    expect(varied.headers.get('vary')).toBe('Accept-Encoding, Accept-Language, Origin, Access-Control-Request-Method, Access-Control-Request-Headers')
+  })
+
+  it('does not emit cors headers outside configured paths or origins', () => {
+    configureSecurityRuntime({
+      config: {},
+      cors: {
+        paths: ['/api/*'],
+        origins: ['https://app.example.com'],
+      },
+    })
+
+    expect(cors.headers(new Request('https://api.example.com/web/posts', {
+      headers: {
+        origin: 'https://app.example.com',
+      },
+    })).get('access-control-allow-origin')).toBeNull()
+
+    const denied = cors.headers(new Request('https://api.example.com/api/posts', {
+      headers: {
+        origin: 'https://other.example.com',
+      },
+    }))
+    expect(denied.get('access-control-allow-origin')).toBeNull()
+    expect(denied.get('vary')).toBe('Origin')
+
+    const deniedPreflight = cors.preflight(new Request('https://api.example.com/api/posts', {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://other.example.com',
+        'access-control-request-method': 'POST',
+      },
+    }))
+    expect(deniedPreflight).toBeNull()
   })
 })
 

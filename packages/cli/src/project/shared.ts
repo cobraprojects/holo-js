@@ -235,6 +235,8 @@ export type AuthInstallResult = {
   readonly updatedPackageJson: boolean
   readonly createdAuthConfig: boolean
   readonly createdSessionConfig: boolean
+  readonly createdSecurityConfig: boolean
+  readonly createdCorsConfig: boolean
   readonly createdUserModel: boolean
   readonly createdMigrationFiles: readonly string[]
   readonly updatedEnv: boolean
@@ -272,6 +274,7 @@ export type MailInstallResult = {
 export type SecurityInstallResult = {
   readonly updatedPackageJson: boolean
   readonly createdSecurityConfig: boolean
+  readonly createdCorsConfig: boolean
 }
 
 export type CacheInstallResult = {
@@ -394,6 +397,15 @@ export const SECURITY_CONFIG_FILE_NAMES = [
   'config/security.mjs',
   'config/security.cts',
   'config/security.cjs',
+] as const
+
+export const CORS_CONFIG_FILE_NAMES = [
+  'config/cors.ts',
+  'config/cors.mts',
+  'config/cors.js',
+  'config/cors.mjs',
+  'config/cors.cts',
+  'config/cors.cjs',
 ] as const
 
 export const BROADCAST_CONFIG_FILE_NAMES = [

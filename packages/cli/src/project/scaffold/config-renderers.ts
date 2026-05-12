@@ -4,6 +4,7 @@ import { holoStorageDefaults } from '@holo-js/config'
 import {
   AUTH_CONFIG_FILE_NAMES,
   BROADCAST_CONFIG_FILE_NAMES,
+  CORS_CONFIG_FILE_NAMES,
   REDIS_CONFIG_FILE_NAMES,
   SUPPORTED_AUTH_SOCIAL_PROVIDERS,
   type SupportedCacheInstallerDriver,
@@ -294,6 +295,38 @@ export function renderSecurityConfig(): string {
     '})',
     '',
   ].join('\n')
+}
+
+export function renderCorsConfig(): string {
+  return [
+    'import { defineCorsConfig, env } from \'@holo-js/config\'',
+    '',
+    'export default defineCorsConfig({',
+    '  paths: [\'/api/*\', \'/broadcasting/auth\'],',
+    '  origins: [',
+    '    env(\'FRONTEND_URL\', \'http://localhost:3000\'),',
+    '  ],',
+    '  methods: [\'GET\', \'POST\', \'PUT\', \'PATCH\', \'DELETE\', \'OPTIONS\'],',
+    '  headers: [\'Content-Type\', \'Authorization\', \'X-CSRF-TOKEN\', \'X-Requested-With\'],',
+    '  credentials: true,',
+    '  maxAge: 7200,',
+    '  statefulDomains: [',
+    '    env(\'FRONTEND_DOMAIN\', \'localhost:3000\'),',
+    '  ],',
+    '})',
+    '',
+  ].join('\n')
+}
+
+export async function ensureCorsConfigFile(projectRoot: string): Promise<boolean> {
+  const corsConfigPath = await resolveFirstExistingPath(projectRoot, CORS_CONFIG_FILE_NAMES) ?? resolve(projectRoot, 'config/cors.ts')
+  const corsConfigExists = await pathExists(corsConfigPath)
+
+  if (!corsConfigExists) {
+    await writeTextFile(corsConfigPath, renderCorsConfig())
+  }
+
+  return !corsConfigExists
 }
 
 export async function ensureRateLimitStorageIgnore(projectRoot: string): Promise<void> {

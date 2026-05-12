@@ -18,6 +18,13 @@ import {
   verify as verifyCsrfRequest,
 } from './csrf'
 import {
+  apply as applyCors,
+  cors,
+  corsInternals,
+  headers as createCorsHeaders,
+  preflight as createCorsPreflightResponse,
+} from './cors'
+import {
   clearRateLimit,
   defaultRateLimitKey,
   rateLimit,
@@ -51,7 +58,9 @@ import {
 export { defineSecurityConfig } from '@holo-js/config'
 export type {
   HoloSecurityConfig,
+  HoloCorsConfig,
   HoloSecurityCsrfConfig,
+  NormalizedHoloCorsConfig,
   HoloSecurityRateLimitConfig,
   NormalizedHoloSecurityConfig,
   NormalizedHoloSecurityCsrfConfig,
@@ -74,6 +83,10 @@ export {
   createRedisRateLimitStoreConfig,
   createRedisRateLimitStore,
   createRateLimitStoreFromConfig,
+  cors,
+  applyCors,
+  createCorsHeaders,
+  createCorsPreflightResponse,
   csrf,
   createCsrfCookie,
   createCsrfField,
@@ -94,12 +107,14 @@ export {
   redisRateLimitDriverInternals,
   verifyCsrfRequest,
   csrfInternals,
+  corsInternals,
 }
 export type {
   SecurityClearRateLimitOptions,
   SecurityClientBindings,
   SecurityClientConfig,
   SecurityCsrfFacade,
+  SecurityCorsFacade,
   SecurityCsrfField,
   SecurityDefaultRateLimitKeyResolver,
   SecurityProtectOptions,
@@ -131,6 +146,7 @@ const security = Object.freeze({
   getSecurityRuntimeBindings,
   resetSecurityRuntime,
   csrf,
+  cors,
   protect,
   defaultRateLimitKey,
   rateLimit,

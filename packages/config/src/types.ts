@@ -460,6 +460,26 @@ export interface NormalizedHoloSessionConfig {
   readonly rememberMeLifetime: number
 }
 
+export interface HoloCorsConfig {
+  readonly paths?: readonly string[]
+  readonly origins?: readonly string[]
+  readonly methods?: readonly string[]
+  readonly headers?: readonly string[]
+  readonly credentials?: boolean
+  readonly maxAge?: number | string
+  readonly statefulDomains?: readonly string[]
+}
+
+export interface NormalizedHoloCorsConfig {
+  readonly paths: readonly string[]
+  readonly origins: readonly string[]
+  readonly methods: readonly string[]
+  readonly headers: readonly string[]
+  readonly credentials: boolean
+  readonly maxAge: number
+  readonly statefulDomains: readonly string[]
+}
+
 export type SecurityRateLimitDriver = 'memory' | 'file' | 'redis'
 
 export interface HoloSecurityCsrfConfig {

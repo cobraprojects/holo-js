@@ -6,6 +6,7 @@ import type {
   NormalizedHoloAuthConfig,
   NormalizedHoloBroadcastConfig,
   NormalizedHoloCacheConfig,
+  NormalizedHoloCorsConfig,
   NormalizedHoloDatabaseConfig,
   NormalizedHoloMailConfig,
   NormalizedHoloNotificationsConfig,
@@ -21,6 +22,7 @@ export interface HoloConfigRegistry {
   database: NormalizedHoloDatabaseConfig
   redis: NormalizedHoloRedisConfig
   cache: NormalizedHoloCacheConfig
+  cors: NormalizedHoloCorsConfig
   storage: NormalizedHoloStorageConfig
   queue: NormalizedHoloQueueConfig
   broadcast: NormalizedHoloBroadcastConfig
@@ -46,6 +48,7 @@ export interface LoadedHoloConfig<TCustom extends HoloConfigMap = HoloConfigMap>
   readonly database: NormalizedHoloDatabaseConfig
   readonly redis: NormalizedHoloRedisConfig
   readonly cache: NormalizedHoloCacheConfig
+  readonly cors: NormalizedHoloCorsConfig
   readonly storage: NormalizedHoloStorageConfig
   readonly queue: NormalizedHoloQueueConfig
   readonly broadcast: NormalizedHoloBroadcastConfig

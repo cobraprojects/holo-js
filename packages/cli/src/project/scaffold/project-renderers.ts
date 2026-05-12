@@ -30,6 +30,8 @@ export function renderAuthEnvFiles(
   const env = [
     'AUTH_EMAIL_VERIFICATION_ROUTE=/verify-email',
     'AUTH_PASSWORD_RESET_ROUTE=/reset-password',
+    'FRONTEND_URL=',
+    'FRONTEND_DOMAIN=',
     'SESSION_DRIVER=file',
     `SESSION_CONNECTION=${defaultDatabaseConnection}`,
     'SESSION_COOKIE=holo_session',

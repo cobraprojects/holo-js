@@ -33,6 +33,7 @@ import {
   renderBroadcastConfig,
   renderBroadcastEnvFiles,
   renderCacheConfig,
+  renderCorsConfig,
   renderMailConfig,
   renderNotificationsConfig,
   renderQueueConfig,
@@ -308,6 +309,7 @@ export async function scaffoldProject(
   }
   if (securityEnabled) {
     await writeFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig(), 'utf8')
+    await writeFile(resolve(projectRoot, 'config/cors.ts'), renderCorsConfig(), 'utf8')
     await ensureRateLimitStorageIgnore(projectRoot)
   }
   if (cacheEnabled) {
@@ -316,6 +318,11 @@ export async function scaffoldProject(
   if (authEnabled) {
     await writeFile(resolve(projectRoot, 'config/auth.ts'), renderAuthConfig(), 'utf8')
     await writeFile(resolve(projectRoot, 'config/session.ts'), renderSessionConfig('main'), 'utf8')
+    if (!securityEnabled) {
+      await writeFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig(), 'utf8')
+      await writeFile(resolve(projectRoot, 'config/cors.ts'), renderCorsConfig(), 'utf8')
+      await ensureRateLimitStorageIgnore(projectRoot)
+    }
     const userModelPath = resolve(projectRoot, config.paths.models, 'User.ts')
     await writeFile(
       userModelPath,

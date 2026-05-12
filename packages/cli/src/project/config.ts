@@ -1,9 +1,14 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   loadConfigDirectory,
   holoAppDefaults,
   holoDatabaseDefaults,
+  loadEnvironment,
+  normalizeAppConfig,
+  normalizeDatabaseConfig,
 } from '@holo-js/config'
 import {
   DEFAULT_HOLO_PROJECT_PATHS,
@@ -24,6 +29,117 @@ import {
   resolveFirstExistingPath,
 } from './runtime'
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function resolveConfigExport<TConfig extends object>(moduleValue: unknown): TConfig {
+  if (isObject(moduleValue) && isObject(moduleValue.default)) {
+    return moduleValue.default as TConfig
+  }
+
+  if (isObject(moduleValue) && isObject(moduleValue.config)) {
+    return moduleValue.config as TConfig
+  }
+
+  if (isObject(moduleValue) && ('default' in moduleValue || 'config' in moduleValue)) {
+    return {} as TConfig
+  }
+
+  if (isObject(moduleValue)) {
+    return moduleValue as TConfig
+  }
+
+  return {} as TConfig
+}
+
+type ProjectConfigImportState = {
+  readonly hash: string
+  readonly nonce: number
+}
+
+const projectConfigImportStates = new Map<string, ProjectConfigImportState>()
+let projectConfigImportLock = Promise.resolve()
+let projectConfigImportNonce = 0
+
+async function withProjectConfigImportLock<TValue>(callback: () => Promise<TValue>): Promise<TValue> {
+  const previousLock = projectConfigImportLock
+  let releaseLock = (): void => {}
+  projectConfigImportLock = new Promise<void>((resolveLock) => {
+    releaseLock = resolveLock
+  })
+
+  await previousLock
+
+  try {
+    return await callback()
+  } finally {
+    releaseLock()
+  }
+}
+
+function hashProjectConfigImportInputs(
+  fileContents: string,
+  environmentValues: Readonly<Record<string, string>>,
+): string {
+  const hash = createHash('sha256').update(fileContents).update('\0')
+  const keys = Object.keys(environmentValues).sort()
+  for (const key of keys) {
+    hash.update(key).update('\0').update(environmentValues[key] ?? '').update('\0')
+  }
+
+  return hash.digest('hex').slice(0, 16)
+}
+
+async function resolveProjectConfigImportUrl(
+  filePath: string,
+  environmentValues: Readonly<Record<string, string>>,
+): Promise<string> {
+  const fileUrl = pathToFileURL(filePath).href
+  const hash = hashProjectConfigImportInputs(await readFile(filePath, 'utf8'), environmentValues)
+  const previous = projectConfigImportStates.get(filePath)
+  if (previous?.hash === hash) {
+    return `${fileUrl}?t=${previous.nonce}`
+  }
+
+  projectConfigImportNonce += 1
+  const next = {
+    hash,
+    nonce: projectConfigImportNonce,
+  }
+  projectConfigImportStates.set(filePath, next)
+
+  return `${fileUrl}?t=${next.nonce}`
+}
+
+async function importProjectConfigFile<TConfig extends object>(
+  filePath: string,
+  environmentValues: Readonly<Record<string, string>>,
+): Promise<TConfig> {
+  return withProjectConfigImportLock(async () => {
+    const previousEnvEntries = new Map<string, string | undefined>()
+    const importUrl = await resolveProjectConfigImportUrl(filePath, environmentValues)
+
+    try {
+      for (const [key, value] of Object.entries(environmentValues)) {
+        previousEnvEntries.set(key, process.env[key])
+        process.env[key] = value
+      }
+
+      return resolveConfigExport<TConfig>(await import(importUrl))
+    } finally {
+      for (const [key, value] of previousEnvEntries) {
+        if (typeof value === 'string') {
+          process.env[key] = value
+          continue
+        }
+
+        Reflect.deleteProperty(process.env, key)
+      }
+    }
+  })
+}
+
 export async function loadProjectConfig(
   projectRoot: string,
   options: { required?: boolean } = {},
@@ -39,12 +155,18 @@ export async function loadProjectConfig(
     }
   }
 
-  const loaded = await loadConfigDirectory(projectRoot, {
+  const databaseConfigPath = await resolveFirstExistingPath(projectRoot, DATABASE_CONFIG_FILE_NAMES)
+  const environment = await loadEnvironment({
+    cwd: projectRoot,
     processEnv: process.env,
   })
+  const app = normalizeAppConfig(await importProjectConfigFile(appConfigPath, environment.values))
+  const database = normalizeDatabaseConfig(databaseConfigPath
+    ? await importProjectConfigFile(databaseConfigPath, environment.values)
+    : undefined)
   const baseConfig = normalizeHoloProjectConfig({
-    paths: loaded.app.paths,
-    database: loaded.database,
+    paths: app.paths,
+    database,
   })
   const registry = await loadGeneratedProjectRegistry(projectRoot)
 
@@ -56,7 +178,7 @@ export async function loadProjectConfig(
           models: registry.models.map(entry => entry.sourcePath),
           migrations: registry.migrations.map(entry => entry.sourcePath),
           seeders: registry.seeders.map(entry => entry.sourcePath),
-          database: loaded.database,
+          database,
         })
       : baseConfig,
   }

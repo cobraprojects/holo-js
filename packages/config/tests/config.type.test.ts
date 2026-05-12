@@ -136,6 +136,7 @@ describe('@holo-js/config typing', () => {
       database: {} as HoloConfigRegistry['database'],
       redis: {} as HoloConfigRegistry['redis'],
       cache: cache as unknown as HoloConfigRegistry['cache'],
+      cors: {} as HoloConfigRegistry['cors'],
       storage: {} as HoloConfigRegistry['storage'],
       queue: queue as unknown as HoloConfigRegistry['queue'],
       broadcast: broadcast as unknown as HoloConfigRegistry['broadcast'],
@@ -165,6 +166,7 @@ describe('@holo-js/config typing', () => {
       database: HoloConfigRegistry['database']
       redis: HoloConfigRegistry['redis']
       cache: HoloConfigRegistry['cache']
+      cors: HoloConfigRegistry['cors']
       storage: HoloConfigRegistry['storage']
       queue: HoloConfigRegistry['queue']
       broadcast: HoloConfigRegistry['broadcast']

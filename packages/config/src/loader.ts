@@ -6,6 +6,7 @@ import {
   normalizeBroadcastConfig,
   normalizeAuthConfig,
   normalizeCacheConfig,
+  normalizeCorsConfig,
   normalizeDatabaseConfig,
   normalizeMailConfig,
   normalizeNotificationsConfig,
@@ -30,6 +31,7 @@ import type {
   HoloAuthConfig,
   HoloCacheConfig,
   HoloConfigMap,
+  HoloCorsConfig,
   HoloDatabaseConfig,
   HoloMailConfig,
   HoloMediaConfig,
@@ -259,6 +261,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
     database,
     redis: resolvedRedisConfig,
   })
+  const cors = normalizeCorsConfig(resolvedRawConfig.cors as HoloCorsConfig | undefined)
   const storage = normalizeStorageConfig(resolvedRawConfig.storage as HoloStorageConfig | undefined)
   const queue = normalizeQueueConfigForHolo(resolvedRawConfig.queue as HoloQueueConfig | undefined, resolvedRedisConfig)
   const broadcast = normalizeBroadcastConfig(resolvedRawConfig.broadcast as HoloBroadcastConfig | undefined)
@@ -276,6 +279,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
       && key !== 'database'
       && key !== 'redis'
       && key !== 'cache'
+      && key !== 'cors'
       && key !== 'storage'
       && key !== 'queue'
       && key !== 'broadcast'
@@ -292,6 +296,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
     database,
     redis,
     cache,
+    cors,
     storage,
     queue,
     broadcast,
@@ -309,6 +314,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
     database,
     redis,
     cache,
+    cors,
     storage,
     queue,
     broadcast,
@@ -560,6 +566,10 @@ export function defineSessionConfig<TConfig extends HoloSessionConfig>(config: T
 }
 
 export function defineSecurityConfig<TConfig extends HoloSecurityConfig>(config: TConfig): DefineConfigValue<TConfig> {
+  return defineConfig(config)
+}
+
+export function defineCorsConfig<TConfig extends HoloCorsConfig>(config: TConfig): DefineConfigValue<TConfig> {
   return defineConfig(config)
 }
 

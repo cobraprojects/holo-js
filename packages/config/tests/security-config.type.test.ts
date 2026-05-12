@@ -1,6 +1,7 @@
 import { describe, it } from 'vitest'
 import {
   createConfigAccessors,
+  defineCorsConfig,
   defineSecurityConfig,
   type HoloConfigRegistry,
 } from '../src'
@@ -28,12 +29,17 @@ describe('@holo-js/config security typing', () => {
         },
       },
     })
+    const cors = defineCorsConfig({
+      origins: ['https://app.example.com'],
+      statefulDomains: ['app.example.com'],
+    })
 
     const accessors = createConfigAccessors({
       app: {} as HoloConfigRegistry['app'],
       database: {} as HoloConfigRegistry['database'],
       redis: {} as HoloConfigRegistry['redis'],
       cache: {} as HoloConfigRegistry['cache'],
+      cors: cors as unknown as HoloConfigRegistry['cors'],
       storage: {} as HoloConfigRegistry['storage'],
       queue: {} as HoloConfigRegistry['queue'],
       broadcast: {} as HoloConfigRegistry['broadcast'],
@@ -51,10 +57,12 @@ describe('@holo-js/config security typing', () => {
     })
 
     const csrfField: string = accessors.useConfig('security.csrf.field')
+    const corsOrigin = accessors.useConfig('cors.origins') as readonly string[]
     const rateLimitDriver: string = accessors.useConfig('security.rateLimit.driver')
     const redisPrefix = accessors.useConfig('security.rateLimit.redis.prefix') as string
 
     void csrfField
+    void corsOrigin
     void rateLimitDriver
     void redisPrefix
   })
