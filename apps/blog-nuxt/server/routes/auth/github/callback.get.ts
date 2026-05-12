@@ -1,10 +1,8 @@
 import auth from '@holo-js/auth'
 import { callback } from '@holo-js/auth-social'
 
-import { toWebRequest } from '../../../lib/request'
-
 export default defineEventHandler(async (event) => {
-  const result = await callback('github', toWebRequest(event))
+  const result = await callback('github', event)
   if (!result.ok) {
     setResponseStatus(event, result.status)
     return { message: result.message }

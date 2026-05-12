@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, expectTypeOf, it } from 'vitest'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src/runtime'
 import auth, { authRuntimeInternals, configureAuthRuntime, defineAuthConfig, resetAuthRuntime, tokens } from '../../auth/src'
 import type { AuthProviderAdapter, AuthTokenStore, PersonalAccessTokenRecord } from '../../auth/src'
@@ -9,6 +9,7 @@ import {
   redirect,
   resetSocialAuthRuntime,
   socialAuth,
+  type SocialAuthFacade,
   socialAuthInternals,
 } from '../src'
 
@@ -298,6 +299,136 @@ describe('@holo-js/auth-social', () => {
   it('exports the social auth facade and helpers', () => {
     expect(socialAuth.redirect).toBe(redirect)
     expect(socialAuth.callback).toBe(callback)
+  })
+
+  it('accepts Nuxt-style event input for redirects and callbacks', async () => {
+    type NuxtEventLike = {
+      readonly method: string
+      readonly node: {
+        readonly req: {
+          readonly url: string
+          readonly headers: Record<string, string>
+        }
+      }
+    }
+
+    expectTypeOf<NuxtEventLike>().toMatchTypeOf<Parameters<SocialAuthFacade['redirect']>[1]>()
+    expectTypeOf<NuxtEventLike>().toMatchTypeOf<Parameters<SocialAuthFacade['callback']>[1]>()
+
+    const runtime = configureRuntime()
+    const redirectResponse = await redirect('google', {
+      method: 'GET',
+      node: {
+        req: {
+          url: '/auth/google',
+          headers: {
+            host: 'app.test',
+            'x-forwarded-proto': 'https',
+          },
+        },
+      },
+    })
+    const location = redirectResponse.headers.get('location')
+    expect(location).toContain('https://accounts.example.com/oauth/authorize')
+    const state = new URL(location!).searchParams.get('state')
+    expect(state).toBeTruthy()
+
+    const pending = await runtime.stateStore.read('google', state!)
+    expect(pending).toBeTruthy()
+    runtime.exchangeProfiles.set('event-code', {
+      expectedVerifier: pending!.codeVerifier,
+      profile: {
+        id: 'google-event',
+        email: 'event@example.com',
+        emailVerified: true,
+        name: 'Event User',
+      },
+      tokens: { accessToken: 'event-token' },
+    })
+
+    const result = await callback('google', {
+      method: 'GET',
+      node: {
+        req: {
+          url: `/auth/google/callback?state=${encodeURIComponent(state!)}&code=event-code`,
+          headers: {
+            host: 'app.test',
+            'x-forwarded-proto': 'https',
+          },
+        },
+      },
+    })
+    expect(result).toMatchObject({
+      ok: true,
+      guard: 'web',
+      provider: 'google',
+      user: {
+        email: 'event@example.com',
+        name: 'Event User',
+      },
+    })
+  })
+
+  it('allows relative event URLs in development but requires forwarded headers in production', async () => {
+    configureRuntime()
+    const previousNodeEnv = process.env.NODE_ENV
+
+    try {
+      delete process.env.NODE_ENV
+      const developmentResponse = await redirect('google', {
+        method: 'GET',
+        node: {
+          req: {
+            url: '/auth/google',
+            headers: {},
+          },
+        },
+      })
+      expect(developmentResponse.status).toBe(302)
+
+      process.env.NODE_ENV = 'production'
+      await expect(redirect('google', {
+        method: 'GET',
+        node: {
+          req: {
+            url: '/auth/google',
+            headers: {},
+          },
+        },
+      })).rejects.toThrow('Relative request URLs require x-forwarded-proto and x-forwarded-host headers in production')
+
+      await expect(redirect('google', {
+        method: 'GET',
+        node: {
+          req: {
+            url: '/auth/google',
+            headers: {
+              'x-forwarded-proto': 'https',
+            },
+          },
+        },
+      })).rejects.toThrow('Relative request URLs require x-forwarded-proto and x-forwarded-host headers in production')
+
+      const productionResponse = await redirect('google', {
+        method: 'GET',
+        node: {
+          req: {
+            url: '/auth/google',
+            headers: {
+              'x-forwarded-host': 'app.test',
+              'x-forwarded-proto': 'https',
+            },
+          },
+        },
+      })
+      expect(productionResponse.status).toBe(302)
+    } finally {
+      if (typeof previousNodeEnv === 'string') {
+        process.env.NODE_ENV = previousNodeEnv
+      } else {
+        delete process.env.NODE_ENV
+      }
+    }
   })
 
   it('builds a redirect URL with state and PKCE and rejects unknown callback state', async () => {

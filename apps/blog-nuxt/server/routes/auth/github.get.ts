@@ -1,7 +1,5 @@
 import { redirect } from '@holo-js/auth-social'
 
-import { toWebRequest } from '../../lib/request'
-
 export default defineEventHandler((event) => {
-  return redirect('github', toWebRequest(event))
+  return redirect('github', event)
 })
