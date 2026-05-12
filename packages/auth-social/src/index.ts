@@ -141,6 +141,7 @@ export interface SocialCallbackFailure {
 
 const SOCIAL_BINDINGS_KEY = '__holoAuthSocialBindings__'
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
+const GET_ONLY_REQUEST_HEADER_NAMES = ['authorization', 'cookie', 'host', 'x-forwarded-host', 'x-forwarded-proto'] as const
 type RuntimeAuthProviderAdapter = ReturnType<typeof authRuntimeInternals.getRuntimeBindings>['providers'][string]
 type SocialRuntimeGlobal = typeof globalThis & {
   [SOCIAL_BINDINGS_KEY]?: SocialAuthBindings
@@ -154,8 +155,10 @@ function isPlainHeaderRecord(value: unknown): value is Record<string, string | r
   return Boolean(value) && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype
 }
 
+// Header-like objects that only expose get() cannot be enumerated. OAuth needs only auth, cookie, host, and forwarded
+// host/proto metadata here; every other header is ignored unless this input path grows full iteration support.
 function appendKnownHeaders(headers: Headers, input: { readonly get?: (name: string) => string | null | undefined }): void {
-  for (const name of ['authorization', 'cookie', 'host', 'x-forwarded-host', 'x-forwarded-proto']) {
+  for (const name of GET_ONLY_REQUEST_HEADER_NAMES) {
     const value = input.get?.(name)
     if (typeof value === 'string' && value) {
       headers.set(name, value)
@@ -240,6 +243,22 @@ function getRequestLikeMethod(input: SocialRequestLike): string {
     ?? 'GET'
 }
 
+function isProductionRuntime(): boolean {
+  return process.env.NODE_ENV === 'production'
+}
+
+function createRelativeRequestBaseUrl(headers: Headers): string {
+  const forwardedProtocol = headers.get('x-forwarded-proto')
+  const forwardedHost = headers.get('x-forwarded-host')
+  if (isProductionRuntime() && (!forwardedProtocol || !forwardedHost)) {
+    throw new Error('[@holo-js/auth-social] Relative request URLs require x-forwarded-proto and x-forwarded-host headers in production.')
+  }
+
+  const protocol = forwardedProtocol ?? 'http'
+  const host = forwardedHost ?? headers.get('host') ?? 'localhost'
+  return `${protocol}://${host}`
+}
+
 function getRequestLikeUrl(input: SocialRequestLike, headers: Headers): string {
   const url = (typeof input.url === 'string' ? input.url : input.url?.toString())
     ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.url : undefined)
@@ -250,9 +269,7 @@ function getRequestLikeUrl(input: SocialRequestLike, headers: Headers): string {
   try {
     return new URL(url).toString()
   } catch {
-    const protocol = headers.get('x-forwarded-proto') ?? 'http'
-    const host = headers.get('x-forwarded-host') ?? headers.get('host') ?? 'localhost'
-    return new URL(url, `${protocol}://${host}`).toString()
+    return new URL(url, createRelativeRequestBaseUrl(headers)).toString()
   }
 }
 
