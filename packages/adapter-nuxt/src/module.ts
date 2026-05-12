@@ -1,4 +1,5 @@
 import { access, mkdir, readdir, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { basename, dirname, extname, relative, resolve } from 'node:path'
 import {
   addImports,
@@ -77,6 +78,17 @@ type StorageS3Module = {
 }
 
 const MODEL_FILE_EXTENSIONS = new Set(['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'])
+const HOLO_PACKAGE_SCOPE = '@holo-js/'
+const CLIENT_OPTIMIZE_DEPS = [
+  {
+    packageName: `${HOLO_PACKAGE_SCOPE}forms`,
+    include: `${HOLO_PACKAGE_SCOPE}forms > ${HOLO_PACKAGE_SCOPE}validation > valibot`,
+  },
+  {
+    packageName: `${HOLO_PACKAGE_SCOPE}validation`,
+    include: `${HOLO_PACKAGE_SCOPE}validation > valibot`,
+  },
+] as const
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -109,11 +121,33 @@ function hasModuleNotFoundCode(error: unknown, expectedSpecifier: string): boole
   return false
 }
 
+function isModuleResolutionFailure(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false
+  }
+
+  return 'code' in error
+    && (
+      (error as { code?: unknown }).code === 'MODULE_NOT_FOUND'
+      || (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
+    )
+}
+
 interface NuxtHookContext {
   hook: (
     name: string,
     callback: (payload: { references: Array<{ path?: string, types?: string }> }) => void,
   ) => void
+}
+
+type ViteOptimizeDepsOptions = {
+  include?: string[]
+  [key: string]: unknown
+}
+
+type NuxtViteOptions = {
+  optimizeDeps?: ViteOptimizeDepsOptions
+  [key: string]: unknown
 }
 
 interface NuxtOptionsWithNitro {
@@ -137,6 +171,7 @@ interface NuxtOptionsWithNitro {
     [key: string]: unknown
   }
   build: { transpile: string[] }
+  vite?: NuxtViteOptions
   srcDir: string
   rootDir?: string
   _holoStorageModuleOptions?: StorageModuleOptions
@@ -144,6 +179,40 @@ interface NuxtOptionsWithNitro {
   _holoStorageRuntimeRegistered?: boolean
   _holoCoreRuntimeRegistered?: boolean
   _holoTypesRegistered?: boolean
+}
+
+function resolveClientOptimizeDeps(rootDir: string): string[] {
+  const projectRequire = createRequire(resolve(rootDir, 'package.json'))
+  const deps: string[] = []
+
+  for (const { packageName, include } of CLIENT_OPTIMIZE_DEPS) {
+    try {
+      projectRequire.resolve(packageName)
+      deps.push(include)
+    } catch (error) {
+      /* v8 ignore next 3 -- unexpected resolver failures should fail module setup */
+      if (!isModuleResolutionFailure(error)) {
+        throw error
+      }
+    }
+  }
+
+  return deps
+}
+
+function addViteOptimizeDeps(opts: NuxtOptionsWithNitro, deps: readonly string[]): void {
+  if (deps.length === 0) {
+    return
+  }
+
+  opts.vite = opts.vite || {}
+  opts.vite.optimizeDeps = opts.vite.optimizeDeps || {}
+  opts.vite.optimizeDeps.include = [
+    ...new Set([
+      ...(opts.vite.optimizeDeps.include || []),
+      ...deps,
+    ]),
+  ]
 }
 
 /* v8 ignore next 15 -- optional-package absence is validated in published-package integration, not in this monorepo test graph */
@@ -278,6 +347,7 @@ export default defineNuxtModule<ModuleOptions>({
     const rootDir = opts.rootDir ?? opts.srcDir ?? process.cwd()
     const sourceDir = opts.srcDir ?? rootDir
     const modelRegistryTypesPath = resolve(rootDir, '.holo-js/generated/model-registry.d.ts')
+    addViteOptimizeDeps(opts, resolveClientOptimizeDeps(rootDir))
     const loaded = await loadConfigDirectory(rootDir, {
       preferCache: process.env.NODE_ENV === 'production',
       processEnv: process.env,
@@ -399,9 +469,12 @@ export default defineNuxtModule<ModuleOptions>({
 })
 
 export const moduleInternals = {
+  addViteOptimizeDeps,
   hasModuleNotFoundCode,
   hasLoadedConfigFile,
   importOptionalStorageS3Module,
+  isModuleResolutionFailure,
+  resolveClientOptimizeDeps,
 }
 
 export const adapterNuxtInternals = {
