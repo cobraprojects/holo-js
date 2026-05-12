@@ -75,13 +75,11 @@ function resolveAllowedOrigin(config: NormalizedHoloCorsConfig, origin: string |
 
 function appendVary(headers: Headers, value: string): void {
   const existing = headers.get('vary')
-  if (!existing) {
-    headers.set('Vary', value)
-    return
-  }
+  const entries = new Set([
+    ...(existing ? existing.split(',') : []),
+    ...value.split(','),
+  ].map(entry => entry.trim()).filter(Boolean))
 
-  const entries = new Set(existing.split(',').map(entry => entry.trim()).filter(Boolean))
-  entries.add(value)
   headers.set('Vary', Array.from(entries).join(', '))
 }
 
@@ -95,6 +93,7 @@ export function headers(request: Request): Headers {
   const origin = request.headers.get('origin')
   const allowedOrigin = resolveAllowedOrigin(config, origin)
   if (!allowedOrigin) {
+    appendVary(result, 'Origin')
     return result
   }
 
@@ -118,7 +117,15 @@ export function headers(request: Request): Headers {
 
 export function apply(request: Request, response: Response = new Response(null, { status: 204 })): Response {
   const nextHeaders = new Headers(response.headers)
-  headers(request).forEach((value, key) => nextHeaders.set(key, value))
+  const corsHeaders = headers(request)
+  corsHeaders.forEach((value, key) => {
+    if (key.toLowerCase() === 'vary') {
+      appendVary(nextHeaders, value)
+      return
+    }
+
+    nextHeaders.set(key, value)
+  })
 
   return new Response(response.body, {
     status: response.status,

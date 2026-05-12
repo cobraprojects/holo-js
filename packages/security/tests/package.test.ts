@@ -332,6 +332,13 @@ describe('@holo-js/security cors', () => {
 
     expect(response.headers.get('access-control-allow-origin')).toBe('https://admin.example.com')
     expect(response.headers.get('access-control-allow-credentials')).toBe('true')
+
+    const varied = cors.apply(preflight, Response.json({ ok: true }, {
+      headers: {
+        vary: 'Accept-Encoding, Accept-Language',
+      },
+    }))
+    expect(varied.headers.get('vary')).toBe('Accept-Encoding, Accept-Language, Origin, Access-Control-Request-Method, Access-Control-Request-Headers')
   })
 
   it('does not emit cors headers outside configured paths or origins', () => {
@@ -348,13 +355,23 @@ describe('@holo-js/security cors', () => {
         origin: 'https://app.example.com',
       },
     })).get('access-control-allow-origin')).toBeNull()
-    expect(cors.preflight(new Request('https://api.example.com/api/posts', {
+
+    const denied = cors.headers(new Request('https://api.example.com/api/posts', {
+      headers: {
+        origin: 'https://other.example.com',
+      },
+    }))
+    expect(denied.get('access-control-allow-origin')).toBeNull()
+    expect(denied.get('vary')).toBe('Origin')
+
+    const deniedPreflight = cors.preflight(new Request('https://api.example.com/api/posts', {
       method: 'OPTIONS',
       headers: {
         origin: 'https://other.example.com',
         'access-control-request-method': 'POST',
       },
-    }))).toBeNull()
+    }))
+    expect(deniedPreflight).toBeNull()
   })
 })
 
