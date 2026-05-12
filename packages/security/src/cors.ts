@@ -2,13 +2,34 @@ import type { NormalizedHoloCorsConfig } from '@holo-js/config'
 import type { SecurityCorsFacade } from './contracts'
 import { getSecurityRuntime } from './runtime'
 
-function escapeRegex(value: string): string {
-  return value.replace(/[|\\{}()[\]^$+?.]/g, '\\$&')
-}
-
 function matchesPathPattern(pathname: string, pattern: string): boolean {
-  const source = `^${escapeRegex(pattern).replaceAll('*', '.*')}$`
-  return new RegExp(source).test(pathname)
+  const segments = pattern.split('*')
+  if (segments.length === 1) {
+    return pathname === pattern
+  }
+
+  const firstSegment = segments[0] ?? ''
+  if (firstSegment && !pathname.startsWith(firstSegment)) {
+    return false
+  }
+
+  let position = firstSegment.length
+  for (let index = 1; index < segments.length; index += 1) {
+    const segment = segments[index] ?? ''
+    if (!segment) {
+      continue
+    }
+
+    const nextPosition = pathname.indexOf(segment, position)
+    if (nextPosition < 0) {
+      return false
+    }
+
+    position = nextPosition + segment.length
+  }
+
+  const lastSegment = segments[segments.length - 1] ?? ''
+  return pattern.endsWith('*') || pathname.endsWith(lastSegment)
 }
 
 function normalizeDomain(value: string): string {
@@ -127,7 +148,6 @@ export const cors = Object.freeze({
 
 export const corsInternals = {
   appendVary,
-  escapeRegex,
   isCorsPath,
   isStatefulOrigin,
   matchesPathPattern,

@@ -1,11 +1,11 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   loadConfigDirectory,
   holoAppDefaults,
   holoDatabaseDefaults,
-  configureEnvRuntime,
   loadEnvironment,
   normalizeAppConfig,
   normalizeDatabaseConfig,
@@ -53,34 +53,91 @@ function resolveConfigExport<TConfig extends object>(moduleValue: unknown): TCon
   return {} as TConfig
 }
 
+type ProjectConfigImportState = {
+  readonly hash: string
+  readonly nonce: number
+}
+
+const projectConfigImportStates = new Map<string, ProjectConfigImportState>()
+let projectConfigImportLock = Promise.resolve()
 let projectConfigImportNonce = 0
+
+async function withProjectConfigImportLock<TValue>(callback: () => Promise<TValue>): Promise<TValue> {
+  const previousLock = projectConfigImportLock
+  let releaseLock = (): void => {}
+  projectConfigImportLock = new Promise<void>((resolveLock) => {
+    releaseLock = resolveLock
+  })
+
+  await previousLock
+
+  try {
+    return await callback()
+  } finally {
+    releaseLock()
+  }
+}
+
+function hashProjectConfigImportInputs(
+  fileContents: string,
+  environmentValues: Readonly<Record<string, string>>,
+): string {
+  const hash = createHash('sha256').update(fileContents).update('\0')
+  const keys = Object.keys(environmentValues).sort()
+  for (const key of keys) {
+    hash.update(key).update('\0').update(environmentValues[key] ?? '').update('\0')
+  }
+
+  return hash.digest('hex').slice(0, 16)
+}
+
+async function resolveProjectConfigImportUrl(
+  filePath: string,
+  environmentValues: Readonly<Record<string, string>>,
+): Promise<string> {
+  const fileUrl = pathToFileURL(filePath).href
+  const hash = hashProjectConfigImportInputs(await readFile(filePath, 'utf8'), environmentValues)
+  const previous = projectConfigImportStates.get(filePath)
+  if (previous?.hash === hash) {
+    return `${fileUrl}?t=${previous.nonce}`
+  }
+
+  projectConfigImportNonce += 1
+  const next = {
+    hash,
+    nonce: projectConfigImportNonce,
+  }
+  projectConfigImportStates.set(filePath, next)
+
+  return `${fileUrl}?t=${next.nonce}`
+}
 
 async function importProjectConfigFile<TConfig extends object>(
   filePath: string,
   environmentValues: Readonly<Record<string, string>>,
 ): Promise<TConfig> {
-  const previousEnvEntries = new Map<string, string | undefined>()
-  projectConfigImportNonce += 1
+  return withProjectConfigImportLock(async () => {
+    const previousEnvEntries = new Map<string, string | undefined>()
+    const importUrl = await resolveProjectConfigImportUrl(filePath, environmentValues)
 
-  try {
-    configureEnvRuntime(environmentValues)
-    for (const [key, value] of Object.entries(environmentValues)) {
-      previousEnvEntries.set(key, process.env[key])
-      process.env[key] = value
-    }
-
-    return resolveConfigExport<TConfig>(await import(`${pathToFileURL(filePath).href}?t=${projectConfigImportNonce}`))
-  } finally {
-    configureEnvRuntime(undefined)
-    for (const [key, value] of previousEnvEntries) {
-      if (typeof value === 'string') {
+    try {
+      for (const [key, value] of Object.entries(environmentValues)) {
+        previousEnvEntries.set(key, process.env[key])
         process.env[key] = value
-        continue
       }
 
-      Reflect.deleteProperty(process.env, key)
+      return resolveConfigExport<TConfig>(await import(importUrl))
+    } finally {
+      for (const [key, value] of previousEnvEntries) {
+        if (typeof value === 'string') {
+          process.env[key] = value
+          continue
+        }
+
+        Reflect.deleteProperty(process.env, key)
+      }
     }
-  }
+  })
 }
 
 export async function loadProjectConfig(

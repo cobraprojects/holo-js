@@ -25,7 +25,8 @@ it is installed.
 
 ## Configuration
 
-`config/security.ts` is the single config entrypoint:
+Security uses separate config entrypoints: cross-origin rules live in `config/cors.ts`, while CSRF and rate limit settings live in
+`config/security.ts`:
 
 ```ts
 import { defineSecurityConfig, limit } from '@holo-js/security'

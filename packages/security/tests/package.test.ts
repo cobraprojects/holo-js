@@ -16,6 +16,7 @@ import security, {
   createRedisRateLimitStore,
   createRedisRateLimitStoreConfig,
   csrf,
+  corsInternals,
   defaultRateLimitKey,
   defineRateLimiter,
   defineSecurityConfig,
@@ -282,6 +283,15 @@ describe('@holo-js/security package surface', () => {
 })
 
 describe('@holo-js/security cors', () => {
+  it('matches cors path wildcards without regular expressions', () => {
+    expect(corsInternals.matchesPathPattern('/api/posts', '/api/*')).toBe(true)
+    expect(corsInternals.matchesPathPattern('/assets/app.css', '/assets/*.css')).toBe(true)
+    expect(corsInternals.matchesPathPattern('/assets/app.js', '/assets/*.css')).toBe(false)
+    expect(corsInternals.matchesPathPattern('/web/posts', '/api/*')).toBe(false)
+    expect(corsInternals.matchesPathPattern('/broadcasting/auth', '/broadcasting/auth')).toBe(true)
+    expect(corsInternals.matchesPathPattern('/broadcasting/other', '/broadcasting/auth')).toBe(false)
+  })
+
   it('builds credentialed cors headers for configured origins and stateful domains', () => {
     configureSecurityRuntime({
       config: {},
