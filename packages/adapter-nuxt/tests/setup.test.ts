@@ -29,6 +29,13 @@ type NuxtHarnessOptions = {
   build: {
     transpile: string[]
   }
+  vite?: {
+    optimizeDeps?: {
+      include?: string[]
+      [key: string]: unknown
+    }
+    [key: string]: unknown
+  }
   nitro?: {
     storage?: Record<string, unknown>
   }
@@ -172,11 +179,21 @@ function getHoloStorageRuntimeConfig(nuxt: NuxtHarness): Record<string, unknown>
   return nuxt.options.runtimeConfig?.holoStorage as Record<string, unknown> | undefined
 }
 
+function getOptimizeDepsInclude(nuxt: NuxtHarness): readonly string[] {
+  return nuxt.options.vite?.optimizeDeps?.include ?? []
+}
+
 async function createProject(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-storage-module-'))
   tempDirs.push(root)
   await mkdir(join(root, 'config'), { recursive: true })
   return root
+}
+
+async function linkHoloPackage(root: string, name: string): Promise<void> {
+  const scopedPackageDir = join(root, 'node_modules/@holo-js')
+  await mkdir(scopedPackageDir, { recursive: true })
+  await symlink(resolve(packageDir, `../${name}`), join(scopedPackageDir, name))
 }
 
 async function loadAdapterModule() {
@@ -202,6 +219,7 @@ async function loadAdapterModule() {
 
   return {
     module: mod.default,
+    moduleInternals: mod.moduleInternals,
     addImports,
     addServerImportsDir,
     addServerHandler,
@@ -357,6 +375,64 @@ describe('@holo-js/adapter-nuxt module setup', () => {
     expect(publishedPlugin).toContain('from "nitropack/runtime/plugin"')
     expect(publishedPlugin).toContain('from "nitropack/runtime/config"')
   }, 60000)
+
+  it('resolves installed Holo client optimizer dependencies from the project root', async () => {
+    const root = await createProject()
+    const { moduleInternals } = await loadAdapterModule()
+
+    expect(moduleInternals.resolveClientOptimizeDeps(root)).toEqual([])
+    expect(moduleInternals.isModuleResolutionFailure(null)).toBe(false)
+    expect(moduleInternals.isModuleResolutionFailure({ code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' })).toBe(false)
+    expect(moduleInternals.isModuleResolutionFailure({ code: 'MODULE_NOT_FOUND' })).toBe(true)
+    expect(moduleInternals.isModuleResolutionFailure({ code: 'ERR_MODULE_NOT_FOUND' })).toBe(true)
+
+    const nuxt = createNuxtHarness(root)
+    moduleInternals.addViteOptimizeDeps(nuxt.options as never, [])
+    expect(nuxt.options.vite).toBeUndefined()
+
+    moduleInternals.addViteOptimizeDeps(nuxt.options as never, ['@holo-js/validation > valibot'])
+    expect(getOptimizeDepsInclude(nuxt)).toEqual(['@holo-js/validation > valibot'])
+
+    await linkHoloPackage(root, 'validation')
+    expect(moduleInternals.resolveClientOptimizeDeps(root)).toEqual([
+      '@holo-js/validation > valibot',
+    ])
+
+    await linkHoloPackage(root, 'forms')
+    expect(moduleInternals.resolveClientOptimizeDeps(root)).toEqual([
+      '@holo-js/forms > @holo-js/validation > valibot',
+      '@holo-js/validation > valibot',
+    ])
+  })
+
+  it('merges Holo client optimizer dependencies without replacing user Vite options', async () => {
+    const root = await createProject()
+    await mkdir(join(root, '.holo-js/generated'), { recursive: true })
+    await writeFile(join(root, '.holo-js/generated/model-registry.d.ts'), 'export {}\n', 'utf8')
+    await linkHoloPackage(root, 'forms')
+    await linkHoloPackage(root, 'validation')
+
+    const { module } = await loadAdapterModule()
+    const nuxt = createNuxtHarness(root)
+    nuxt.options.vite = {
+      optimizeDeps: {
+        include: [
+          'vue',
+          '@holo-js/validation > valibot',
+        ],
+        exclude: ['vue-demi'],
+      },
+    }
+
+    await module.setup({}, nuxt as never)
+
+    expect(getOptimizeDepsInclude(nuxt)).toEqual([
+      'vue',
+      '@holo-js/validation > valibot',
+      '@holo-js/forms > @holo-js/validation > valibot',
+    ])
+    expect(nuxt.options.vite.optimizeDeps?.exclude).toEqual(['vue-demi'])
+  }, 30000)
 
   it('loads storage config files from the project root and wires nitro/runtime state', async () => {
     const root = await createProject()
