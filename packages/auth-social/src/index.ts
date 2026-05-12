@@ -43,6 +43,41 @@ export interface SocialProviderRuntime {
   }>
 }
 
+export type SocialRequestHeaders =
+  | Headers
+  | ReadonlyArray<readonly [string, string]>
+  | Record<string, string | readonly string[] | undefined>
+  | {
+    readonly get?: (name: string) => string | null | undefined
+    readonly forEach?: (callback: (value: string, key: string) => void) => void
+    readonly entries?: () => Iterable<readonly [string, string]>
+  }
+
+export type SocialRequestLike = {
+  readonly method?: string
+  readonly path?: string
+  readonly url?: string | URL
+  readonly headers?: SocialRequestHeaders
+  readonly request?: Request
+  readonly req?: Request | {
+    readonly method?: string
+    readonly url?: string
+    readonly headers?: SocialRequestHeaders
+  }
+  readonly node?: {
+    readonly req?: {
+      readonly method?: string
+      readonly url?: string
+      readonly headers?: SocialRequestHeaders
+    }
+  }
+  readonly web?: {
+    readonly request?: Request
+  }
+}
+
+export type SocialRequestInput = Request | SocialRequestLike
+
 export interface SocialPendingStateRecord {
   readonly provider: string
   readonly state: string
@@ -84,8 +119,8 @@ export interface SocialAuthBindings {
 }
 
 export interface SocialAuthFacade {
-  redirect(provider: string, request: Request): Promise<Response>
-  callback(provider: string, request: Request): Promise<SocialCallbackResult>
+  redirect(provider: string, request: SocialRequestInput): Promise<Response>
+  callback(provider: string, request: SocialRequestInput): Promise<SocialCallbackResult>
 }
 
 export type SocialCallbackResult = SocialCallbackSuccess | SocialCallbackFailure
@@ -113,6 +148,129 @@ type SocialRuntimeGlobal = typeof globalThis & {
 
 function getSocialRuntimeGlobal(): SocialRuntimeGlobal {
   return globalThis as SocialRuntimeGlobal
+}
+
+function isPlainHeaderRecord(value: unknown): value is Record<string, string | readonly string[] | undefined> {
+  return Boolean(value) && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype
+}
+
+function appendKnownHeaders(headers: Headers, input: { readonly get?: (name: string) => string | null | undefined }): void {
+  for (const name of ['authorization', 'cookie', 'host', 'x-forwarded-host', 'x-forwarded-proto']) {
+    const value = input.get?.(name)
+    if (typeof value === 'string' && value) {
+      headers.set(name, value)
+    }
+  }
+}
+
+function hasHeaderForEach(input: SocialRequestHeaders): input is { readonly forEach: (callback: (value: string, key: string) => void) => void } {
+  return !Array.isArray(input) && 'forEach' in input && typeof input.forEach === 'function'
+}
+
+function hasHeaderEntries(input: SocialRequestHeaders): input is { readonly entries: () => Iterable<readonly [string, string]> } {
+  return !Array.isArray(input) && 'entries' in input && typeof input.entries === 'function'
+}
+
+function hasHeaderGet(input: SocialRequestHeaders): input is { readonly get: (name: string) => string | null | undefined } {
+  return !Array.isArray(input) && 'get' in input && typeof input.get === 'function'
+}
+
+function normalizeRequestHeaders(input: SocialRequestHeaders | undefined): Headers {
+  const headers = new Headers()
+  if (!input) {
+    return headers
+  }
+
+  if (input instanceof Headers || Array.isArray(input)) {
+    new Headers(input).forEach((value, name) => headers.append(name, value))
+    return headers
+  }
+
+  if (hasHeaderForEach(input)) {
+    input.forEach((value, name) => headers.append(name, value))
+    return headers
+  }
+
+  if (hasHeaderEntries(input)) {
+    for (const [name, value] of input.entries()) {
+      headers.append(name, value)
+    }
+    return headers
+  }
+
+  if (hasHeaderGet(input)) {
+    appendKnownHeaders(headers, input)
+    return headers
+  }
+
+  if (isPlainHeaderRecord(input)) {
+    for (const [name, value] of Object.entries(input)) {
+      if (typeof value === 'string') {
+        headers.append(name, value)
+        continue
+      }
+
+      if (Array.isArray(value)) {
+        const separator = name.toLowerCase() === 'cookie' ? '; ' : ','
+        const joined = value.filter((entry): entry is string => typeof entry === 'string').join(separator)
+        if (joined) {
+          headers.append(name, joined)
+        }
+      }
+    }
+  }
+
+  return headers
+}
+
+function getRequestFromLikeInput(input: SocialRequestLike): Request | undefined {
+  return input.request ?? input.web?.request ?? (input.req instanceof Request ? input.req : undefined)
+}
+
+function getRequestLikeHeaders(input: SocialRequestLike): SocialRequestHeaders | undefined {
+  return input.headers
+    ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.headers : undefined)
+    ?? input.node?.req?.headers
+}
+
+function getRequestLikeMethod(input: SocialRequestLike): string {
+  return input.method
+    ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.method : undefined)
+    ?? input.node?.req?.method
+    ?? 'GET'
+}
+
+function getRequestLikeUrl(input: SocialRequestLike, headers: Headers): string {
+  const url = (typeof input.url === 'string' ? input.url : input.url?.toString())
+    ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.url : undefined)
+    ?? input.node?.req?.url
+    ?? input.path
+    ?? '/'
+
+  try {
+    return new URL(url).toString()
+  } catch {
+    const protocol = headers.get('x-forwarded-proto') ?? 'http'
+    const host = headers.get('x-forwarded-host') ?? headers.get('host') ?? 'localhost'
+    return new URL(url, `${protocol}://${host}`).toString()
+  }
+}
+
+function normalizeSocialRequest(input: SocialRequestInput): Request {
+  if (input instanceof Request) {
+    return input
+  }
+
+  const request = getRequestFromLikeInput(input)
+  if (request) {
+    return request
+  }
+
+  const headers = normalizeRequestHeaders(getRequestLikeHeaders(input))
+  return new Request(getRequestLikeUrl(input, headers), {
+    method: getRequestLikeMethod(input),
+    headers,
+  })
 }
 
 function requireUserRecord(user: unknown, message: string): Record<string, unknown> {
@@ -433,7 +591,8 @@ async function resolveLinkedUser(
   }
 }
 
-export async function redirect(provider: string, request: Request): Promise<Response> {
+export async function redirect(provider: string, input: SocialRequestInput): Promise<Response> {
+  const request = normalizeSocialRequest(input)
   const providerConfig = getConfiguredProviderConfig(provider)
   const runtime = getProviderRuntime(provider)
   const { guard } = resolveGuardAndProvider(provider)
@@ -503,7 +662,8 @@ async function readCallbackParameters(request: Request): Promise<{
   }
 }
 
-export async function callback(provider: string, request: Request): Promise<SocialCallbackResult> {
+export async function callback(provider: string, input: SocialRequestInput): Promise<SocialCallbackResult> {
+  const request = normalizeSocialRequest(input)
   const { state, code } = await readCallbackParameters(request)
   if (!state || !code) {
     return {

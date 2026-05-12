@@ -25,10 +25,33 @@ Social login uses one shared runtime package plus one package per provider. Inst
 actually uses.
 
 ```bash
+npx holo install auth --social
 npx holo install auth --social --provider google
 npx holo install auth --social --provider github
 npx holo install auth --social --provider google,github
 ```
+
+If you pass `--social` without `--provider`, Holo installs Google by default. In other words,
+`npx holo install auth --social` is equivalent to `npx holo install auth --social --provider google`.
+
+Each social provider has its own package. Holo only installs the provider packages you specify:
+
+- Google uses `@holo-js/auth-social-google`
+- GitHub uses `@holo-js/auth-social-github`
+- Discord uses `@holo-js/auth-social-discord`
+- Facebook uses `@holo-js/auth-social-facebook`
+- Apple uses `@holo-js/auth-social-apple`
+- LinkedIn uses `@holo-js/auth-social-linkedin`
+
+Providers that are not listed are not installed, are not added to `config/auth.ts`, and do not get env keys. You can
+add another provider later by running the install command again:
+
+```bash
+npx holo install auth --social --provider github
+```
+
+That adds GitHub support on top of the existing auth setup. It does not remove already configured providers such as
+Google.
 
 Supported first-party providers:
 
@@ -152,26 +175,17 @@ social: {
 
 That makes the social login resolve into the local model behind the `admin` guard instead of the default `web` guard.
 
-## Redirecting Users
+## Route Shape
 
-Your route calls the social runtime:
+Social login needs two app-owned routes per provider:
 
-```ts
-import { redirect } from '@holo-js/auth-social'
+| Purpose | Google Example | GitHub Example |
+| --- | --- | --- |
+| Start the OAuth redirect | `GET /auth/google` | `GET /auth/github` |
+| Handle the provider callback | `GET /auth/google/callback` | `GET /auth/github/callback` |
 
-export async function GET(request: Request) {
-  return redirect('google', request)
-}
-```
-
-The provider name in `redirect('google', request)` must match the provider key in `config/auth.ts`.
-
-Typical route shapes:
-
-- `GET /auth/google`
-- `GET /auth/google/callback`
-- `GET /auth/github`
-- `GET /auth/github/callback`
+The provider name in `redirect('google', input)` and `callback('google', input)` must match the provider key in
+`config/auth.ts`.
 
 For a local app running on `http://localhost:3000`, put this in the provider dashboard:
 
@@ -187,7 +201,147 @@ AUTH_GOOGLE_REDIRECT_URI=http://localhost:3000/auth/google/callback
 AUTH_GITHUB_REDIRECT_URI=http://localhost:3000/auth/github/callback
 ```
 
-## Handling The Callback
+## Redirect Helper
+
+Use `redirect(provider, input)` from `@holo-js/auth-social` in the route the user clicks.
+
+```ts
+import { redirect } from '@holo-js/auth-social'
+
+const response = await redirect('google', requestOrEvent)
+```
+
+It returns:
+
+```ts
+Promise<Response>
+```
+
+The returned response is a `302` redirect to the upstream provider authorization URL. Holo also stores the pending
+OAuth state and PKCE verifier so the callback can be validated later.
+
+At runtime it looks like:
+
+```ts
+Response {
+  status: 302,
+  headers: {
+    location: 'https://accounts.google.com/o/oauth2/v2/auth?...&state=...&code_challenge=...',
+  },
+}
+```
+
+The helper accepts:
+
+- a standard `Request`
+- a Nuxt/H3 event
+- an event-like object that exposes `request`, `web.request`, `req`, `node.req`, or `url`/`method`/`headers`
+
+Use the native request object for your framework. Do not build a separate request adapter in app code.
+
+## Callback Helper
+
+Use `callback(provider, input)` from `@holo-js/auth-social` in the provider callback route.
+
+```ts
+import { callback } from '@holo-js/auth-social'
+
+const result = await callback('google', requestOrEvent)
+```
+
+It returns:
+
+```ts
+type SocialCallbackResult =
+  | {
+      readonly ok: true
+      readonly guard: string
+      readonly authProvider: string
+      readonly provider: string
+      readonly user: AuthUserLike
+    }
+  | {
+      readonly ok: false
+      readonly status: 400
+      readonly message: string
+    }
+```
+
+The success result does not redirect and does not create a session by itself. It gives your route the resolved local
+user and selected guard so your route can use the framework's native redirect API after signing the user in.
+
+The user has the local auth provider's serialized shape:
+
+```ts
+type AuthUserLike = {
+  readonly id?: string | number
+  readonly email?: string
+  readonly name?: string
+  readonly [key: string]: unknown
+}
+```
+
+For a normal `users` provider, the object usually includes `id`, `email`, `name`, and any fields your provider
+serializer exposes, such as `avatar` or `email_verified_at`. The external provider profile is linked in
+`auth_identities`; app code should continue treating the local Holo user as canonical.
+
+At runtime a successful callback result looks like:
+
+```ts
+{
+  ok: true,
+  guard: 'web',
+  authProvider: 'users',
+  provider: 'google',
+  user: {
+    id: 1,
+    email: 'ada@example.com',
+    name: 'Ada Lovelace',
+    avatar: 'https://provider.example/avatar.png',
+    email_verified_at: new Date(),
+  },
+}
+```
+
+An invalid callback result looks like:
+
+```ts
+{
+  ok: false,
+  status: 400,
+  message: 'Invalid or expired OAuth state.',
+}
+```
+
+The callback helper:
+
+- reads the upstream `code` and `state` from the callback request
+- validates the saved state
+- validates PKCE data when the provider flow uses it
+- exchanges the authorization code with the provider package
+- normalizes the provider profile
+- resolves or creates a local user
+- links the social identity
+- returns the selected guard, local auth provider, provider key, and local user
+
+## Framework Examples
+
+The examples below use Google. Replace `google` with another configured provider key when creating routes for GitHub,
+Discord, Facebook, Apple, or LinkedIn.
+
+### Next.js
+
+Create the redirect route at `app/auth/google/route.ts`:
+
+```ts
+import { redirect } from '@holo-js/auth-social'
+
+export function GET(request: Request): Promise<Response> {
+  return redirect('google', request)
+}
+```
+
+Create the callback route at `app/auth/google/callback/route.ts`:
 
 ```ts
 import { redirect } from 'next/navigation'
@@ -209,23 +363,81 @@ export async function GET(request: Request) {
 }
 ```
 
-The callback route should receive the upstream `code` and `state` values, then pass the full request through to Holo.
-Holo validates the state, verifies PKCE when that provider flow uses it, exchanges the authorization code, links the
-identity, and returns the local user.
+### Nuxt
+
+Nuxt server helpers such as `defineEventHandler`, `setResponseStatus`, and `sendRedirect` are available in Nuxt server
+routes. Import them from `h3` if your project does not use Nuxt auto-imports.
+
+Create the redirect route at `server/routes/auth/google.get.ts`:
+
+```ts
+import { redirect } from '@holo-js/auth-social'
+
+export default defineEventHandler((event) => {
+  return redirect('google', event)
+})
+```
+
+Create the callback route at `server/routes/auth/google/callback.get.ts`:
+
+```ts
+import auth from '@holo-js/auth'
+import { callback } from '@holo-js/auth-social'
+
+export default defineEventHandler(async (event) => {
+  const result = await callback('google', event)
+  if (!result.ok) {
+    setResponseStatus(event, result.status)
+    return {
+      message: result.message,
+    }
+  }
+
+  await auth.guard(result.guard).loginUsing(result.user)
+  return sendRedirect(event, '/admin', 303)
+})
+```
+
+Nuxt routes should pass the H3 event directly. Holo reads the method, URL, and headers from the event-like input.
+
+### SvelteKit
+
+Create the redirect route at `src/routes/auth/google/+server.ts`:
+
+```ts
+import { redirect } from '@holo-js/auth-social'
+import type { RequestHandler } from './$types'
+
+export const GET: RequestHandler = ({ request }) => {
+  return redirect('google', request)
+}
+```
+
+Create the callback route at `src/routes/auth/google/callback/+server.ts`:
+
+```ts
+import { json, redirect } from '@sveltejs/kit'
+import auth from '@holo-js/auth'
+import { callback } from '@holo-js/auth-social'
+import type { RequestHandler } from './$types'
+
+export const GET: RequestHandler = async ({ request }) => {
+  const result = await callback('google', request)
+  if (!result.ok) {
+    return json({
+      message: result.message,
+    }, {
+      status: result.status,
+    })
+  }
+
+  await auth.guard(result.guard).loginUsing(result.user)
+  throw redirect(303, '/admin')
+}
+```
 
 Use `loginUsing()` when the selected guard is session-based, then redirect with your framework's native redirect API.
 Token guard flows can create a token from the returned user instead of creating a session.
-
-The callback flow:
-
-- validates the saved state
-- validates PKCE data
-- exchanges the authorization code
-- loads the provider profile
-- resolves or creates a local user
-- links the social identity
-- establishes a local session when using a session guard with `loginUsing()`, or returns an authenticated user that
-  token guards can use to create an access token
 
 Each provider package handles its own upstream field mapping. Holo does not guess raw provider response shapes across
 different services.
