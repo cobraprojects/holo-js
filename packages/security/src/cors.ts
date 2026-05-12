@@ -1,0 +1,136 @@
+import type { NormalizedHoloCorsConfig } from '@holo-js/config'
+import type { SecurityCorsFacade } from './contracts'
+import { getSecurityRuntime } from './runtime'
+
+function escapeRegex(value: string): string {
+  return value.replace(/[|\\{}()[\]^$+?.]/g, '\\$&')
+}
+
+function matchesPathPattern(pathname: string, pattern: string): boolean {
+  const source = `^${escapeRegex(pattern).replaceAll('*', '.*')}$`
+  return new RegExp(source).test(pathname)
+}
+
+function normalizeDomain(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return ''
+  }
+
+  try {
+    const parsed = new URL(trimmed)
+    return parsed.host.toLowerCase()
+  } catch {
+    return trimmed.replace(/^\/+|\/+$/g, '').toLowerCase()
+  }
+}
+
+function isCorsPath(config: NormalizedHoloCorsConfig, request: Request): boolean {
+  const pathname = new URL(request.url).pathname
+  return config.paths.some(pattern => matchesPathPattern(pathname, pattern))
+}
+
+function isStatefulOrigin(config: NormalizedHoloCorsConfig, origin: string): boolean {
+  const normalizedOrigin = normalizeDomain(origin)
+  return normalizedOrigin !== ''
+    && config.statefulDomains.some(domain => normalizeDomain(domain) === normalizedOrigin)
+}
+
+function resolveAllowedOrigin(config: NormalizedHoloCorsConfig, origin: string | null): string | undefined {
+  if (!origin) {
+    return undefined
+  }
+
+  if (config.origins.includes(origin) || isStatefulOrigin(config, origin)) {
+    return origin
+  }
+
+  if (config.origins.includes('*')) {
+    return config.credentials ? origin : '*'
+  }
+
+  return undefined
+}
+
+function appendVary(headers: Headers, value: string): void {
+  const existing = headers.get('vary')
+  if (!existing) {
+    headers.set('Vary', value)
+    return
+  }
+
+  const entries = new Set(existing.split(',').map(entry => entry.trim()).filter(Boolean))
+  entries.add(value)
+  headers.set('Vary', Array.from(entries).join(', '))
+}
+
+export function headers(request: Request): Headers {
+  const config = getSecurityRuntime().cors
+  const result = new Headers()
+  if (!isCorsPath(config, request)) {
+    return result
+  }
+
+  const origin = request.headers.get('origin')
+  const allowedOrigin = resolveAllowedOrigin(config, origin)
+  if (!allowedOrigin) {
+    return result
+  }
+
+  result.set('Access-Control-Allow-Origin', allowedOrigin)
+  appendVary(result, 'Origin')
+
+  if (config.credentials || isStatefulOrigin(config, origin ?? '')) {
+    result.set('Access-Control-Allow-Credentials', 'true')
+  }
+
+  if (request.method.toUpperCase() === 'OPTIONS') {
+    result.set('Access-Control-Allow-Methods', config.methods.join(', '))
+    result.set('Access-Control-Allow-Headers', config.headers.join(', '))
+    result.set('Access-Control-Max-Age', String(config.maxAge))
+    appendVary(result, 'Access-Control-Request-Method')
+    appendVary(result, 'Access-Control-Request-Headers')
+  }
+
+  return result
+}
+
+export function apply(request: Request, response: Response = new Response(null, { status: 204 })): Response {
+  const nextHeaders = new Headers(response.headers)
+  headers(request).forEach((value, key) => nextHeaders.set(key, value))
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: nextHeaders,
+  })
+}
+
+export function preflight(request: Request): Response | null {
+  if (request.method.toUpperCase() !== 'OPTIONS') {
+    return null
+  }
+
+  if (!request.headers.has('access-control-request-method')) {
+    return null
+  }
+
+  const response = apply(request)
+  return response.headers.has('access-control-allow-origin') ? response : null
+}
+
+export const cors = Object.freeze({
+  headers,
+  preflight,
+  apply,
+}) satisfies SecurityCorsFacade
+
+export const corsInternals = {
+  appendVary,
+  escapeRegex,
+  isCorsPath,
+  isStatefulOrigin,
+  matchesPathPattern,
+  normalizeDomain,
+  resolveAllowedOrigin,
+}

@@ -1,9 +1,14 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   loadConfigDirectory,
   holoAppDefaults,
   holoDatabaseDefaults,
+  configureEnvRuntime,
+  loadEnvironment,
+  normalizeAppConfig,
+  normalizeDatabaseConfig,
 } from '@holo-js/config'
 import {
   DEFAULT_HOLO_PROJECT_PATHS,
@@ -24,6 +29,60 @@ import {
   resolveFirstExistingPath,
 } from './runtime'
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function resolveConfigExport<TConfig extends object>(moduleValue: unknown): TConfig {
+  if (isObject(moduleValue) && isObject(moduleValue.default)) {
+    return moduleValue.default as TConfig
+  }
+
+  if (isObject(moduleValue) && isObject(moduleValue.config)) {
+    return moduleValue.config as TConfig
+  }
+
+  if (isObject(moduleValue) && ('default' in moduleValue || 'config' in moduleValue)) {
+    return {} as TConfig
+  }
+
+  if (isObject(moduleValue)) {
+    return moduleValue as TConfig
+  }
+
+  return {} as TConfig
+}
+
+let projectConfigImportNonce = 0
+
+async function importProjectConfigFile<TConfig extends object>(
+  filePath: string,
+  environmentValues: Readonly<Record<string, string>>,
+): Promise<TConfig> {
+  const previousEnvEntries = new Map<string, string | undefined>()
+  projectConfigImportNonce += 1
+
+  try {
+    configureEnvRuntime(environmentValues)
+    for (const [key, value] of Object.entries(environmentValues)) {
+      previousEnvEntries.set(key, process.env[key])
+      process.env[key] = value
+    }
+
+    return resolveConfigExport<TConfig>(await import(`${pathToFileURL(filePath).href}?t=${projectConfigImportNonce}`))
+  } finally {
+    configureEnvRuntime(undefined)
+    for (const [key, value] of previousEnvEntries) {
+      if (typeof value === 'string') {
+        process.env[key] = value
+        continue
+      }
+
+      Reflect.deleteProperty(process.env, key)
+    }
+  }
+}
+
 export async function loadProjectConfig(
   projectRoot: string,
   options: { required?: boolean } = {},
@@ -39,12 +98,18 @@ export async function loadProjectConfig(
     }
   }
 
-  const loaded = await loadConfigDirectory(projectRoot, {
+  const databaseConfigPath = await resolveFirstExistingPath(projectRoot, DATABASE_CONFIG_FILE_NAMES)
+  const environment = await loadEnvironment({
+    cwd: projectRoot,
     processEnv: process.env,
   })
+  const app = normalizeAppConfig(await importProjectConfigFile(appConfigPath, environment.values))
+  const database = normalizeDatabaseConfig(databaseConfigPath
+    ? await importProjectConfigFile(databaseConfigPath, environment.values)
+    : undefined)
   const baseConfig = normalizeHoloProjectConfig({
-    paths: loaded.app.paths,
-    database: loaded.database,
+    paths: app.paths,
+    database,
   })
   const registry = await loadGeneratedProjectRegistry(projectRoot)
 
@@ -56,7 +121,7 @@ export async function loadProjectConfig(
           models: registry.models.map(entry => entry.sourcePath),
           migrations: registry.migrations.map(entry => entry.sourcePath),
           seeders: registry.seeders.map(entry => entry.sourcePath),
-          database: loaded.database,
+          database,
         })
       : baseConfig,
   }

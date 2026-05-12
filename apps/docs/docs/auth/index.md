@@ -59,7 +59,8 @@ npx holo install auth --workos
 npx holo install auth --clerk
 ```
 
-When `auth` is installed, `session` is installed with it automatically because session-backed auth depends on it.
+When `auth` is installed, `session` and `security` are installed with it automatically because session-backed auth
+depends on cookies, CSRF/rate-limit defaults, and CORS support for separate frontend/API deployments.
 
 ## Authentication Quickstart
 

@@ -1945,6 +1945,8 @@ export default defineAppConfig({
     expect(result.stdout).toContain('Installed auth support.')
     expect(result.stdout).toContain('created config/auth.ts')
     expect(result.stdout).toContain('created config/session.ts')
+    expect(result.stdout).toContain('created config/security.ts')
+    expect(result.stdout).toContain('created config/cors.ts')
     expect(result.stdout).toContain('created server/models/User.ts')
     expect(result.stdout).toContain('created 6 auth migrations')
 
@@ -1953,10 +1955,13 @@ export default defineAppConfig({
     }
     expect(packageJson.dependencies?.['@holo-js/auth']).toBe(expectedHoloPackageRange)
     expect(packageJson.dependencies?.['@holo-js/session']).toBe(expectedHoloPackageRange)
+    expect(packageJson.dependencies?.['@holo-js/security']).toBe(expectedHoloPackageRange)
     expect(packageJson.dependencies?.['@holo-js/auth-social']).toBeUndefined()
     expect(packageJson.dependencies?.['@holo-js/auth-social-google']).toBeUndefined()
     expect(await readFile(join(projectRoot, 'config/auth.ts'), 'utf8')).toContain('provider: \'users\'')
     expect(await readFile(join(projectRoot, 'config/session.ts'), 'utf8')).toContain('driver: env(\'SESSION_DRIVER\', \'file\')')
+    expect(await readFile(join(projectRoot, 'config/security.ts'), 'utf8')).toContain('defineSecurityConfig')
+    expect(await readFile(join(projectRoot, 'config/cors.ts'), 'utf8')).toContain('defineCorsConfig')
     expect(await readFile(join(projectRoot, 'server/models/User.ts'), 'utf8')).toContain('fillable: [\'name\', \'email\', \'password\', \'avatar\']')
     expect((await readdir(join(projectRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(6)
 
@@ -2104,6 +2109,8 @@ export default defineSessionConfig({
       updatedPackageJson: true,
       createdAuthConfig: true,
       createdSessionConfig: true,
+      createdSecurityConfig: true,
+      createdCorsConfig: true,
       createdUserModel: true,
     })
     expect(initial.createdMigrationFiles).toHaveLength(6)
@@ -2113,6 +2120,8 @@ export default defineSessionConfig({
       updatedPackageJson: true,
       createdAuthConfig: true,
       createdSessionConfig: false,
+      createdSecurityConfig: false,
+      createdCorsConfig: false,
       createdUserModel: false,
       createdMigrationFiles: [],
       updatedEnv: true,
@@ -2248,6 +2257,8 @@ export default defineAuthConfig({
       updatedPackageJson: false,
       createdAuthConfig: false,
       createdSessionConfig: false,
+      createdSecurityConfig: false,
+      createdCorsConfig: false,
       createdUserModel: false,
       createdMigrationFiles: [],
       updatedEnv: false,
@@ -2357,6 +2368,8 @@ module.exports = {
       updatedPackageJson: true,
       createdAuthConfig: false,
       createdSessionConfig: false,
+      createdSecurityConfig: true,
+      createdCorsConfig: true,
       createdUserModel: false,
       createdMigrationFiles: [],
       updatedEnv: true,
@@ -2388,6 +2401,8 @@ module.exports = {
       updatedPackageJson: true,
       createdAuthConfig: true,
       createdSessionConfig: false,
+      createdSecurityConfig: false,
+      createdCorsConfig: false,
       createdUserModel: false,
       createdMigrationFiles: [],
       updatedEnv: true,
@@ -2421,6 +2436,8 @@ module.exports = {
       updatedPackageJson: true,
       createdAuthConfig: true,
       createdSessionConfig: false,
+      createdSecurityConfig: false,
+      createdCorsConfig: false,
       createdUserModel: false,
       createdMigrationFiles: [],
       updatedEnv: true,
@@ -2700,11 +2717,13 @@ export default defineAppConfig({
     })
     await expect(projectInternals.installSecurityIntoProject(projectRoot)).resolves.toMatchObject({
       updatedPackageJson: false,
-      createdSecurityConfig: true,
+      createdSecurityConfig: false,
+      createdCorsConfig: false,
     })
     await expect(projectInternals.installSecurityIntoProject(projectRoot)).resolves.toMatchObject({
       updatedPackageJson: false,
       createdSecurityConfig: false,
+      createdCorsConfig: false,
     })
     expect((await stat(join(projectRoot, 'storage/framework/rate-limits'))).isDirectory()).toBe(true)
     await expect(readFile(join(projectRoot, 'storage/framework/rate-limits/.gitignore'), 'utf8')).resolves.toBe('*\n!.gitignore\n')
@@ -4119,7 +4138,9 @@ export default defineCacheConfig({
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('Installed security support.')
     expect(result.stdout).toContain('  - created config/security.ts')
+    expect(result.stdout).toContain('  - created config/cors.ts')
     expect(await readFile(join(projectRoot, 'config/security.ts'), 'utf8')).toContain('defineSecurityConfig')
+    expect(await readFile(join(projectRoot, 'config/cors.ts'), 'utf8')).toContain('defineCorsConfig')
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/security": "${expectedHoloPackageRange}"`)
     await writeProjectFile(projectRoot, 'node_modules/@holo-js/security/package.json', JSON.stringify({
       name: '@holo-js/security',
@@ -8284,6 +8305,7 @@ export default defineEvent({ name: 'audit.activity' })
     const installSecurityIntoProject = vi.fn(async () => ({
       updatedPackageJson: true,
       createdSecurityConfig: true,
+      createdCorsConfig: true,
     }))
     const installQueueIntoProject = vi.fn(async () => ({
       createdQueueConfig: true,
@@ -8655,6 +8677,8 @@ export default defineEvent({ name: 'audit.activity' })
       updatedPackageJson: false,
       createdAuthConfig: false,
       createdSessionConfig: false,
+      createdSecurityConfig: false,
+      createdCorsConfig: false,
       createdUserModel: false,
       createdMigrationFiles: [],
       updatedEnv: true,
@@ -8705,6 +8729,8 @@ export default defineEvent({ name: 'audit.activity' })
       updatedPackageJson: false,
       createdAuthConfig: false,
       createdSessionConfig: false,
+      createdSecurityConfig: false,
+      createdCorsConfig: false,
       createdUserModel: false,
       createdMigrationFiles: [],
       updatedEnv: false,
@@ -8778,6 +8804,8 @@ export default defineEvent({ name: 'audit.activity' })
       updatedPackageJson: false,
       createdAuthConfig: false,
       createdSessionConfig: false,
+      createdSecurityConfig: false,
+      createdCorsConfig: false,
       createdUserModel: false,
       createdMigrationFiles: [],
       updatedEnv: false,
@@ -12947,6 +12975,7 @@ export default defineDatabaseConfig({
     const installSecurityIntoProject = vi.fn(async () => ({
       updatedPackageJson: false,
       createdSecurityConfig: false,
+      createdCorsConfig: false,
     }))
 
     vi.resetModules()

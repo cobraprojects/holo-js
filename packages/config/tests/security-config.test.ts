@@ -1,11 +1,45 @@
 import { describe, expect, it } from 'vitest'
 import {
+  defineCorsConfig,
   defineSecurityConfig,
+  normalizeCorsConfig,
   normalizeRedisConfig,
   normalizeSecurityConfig,
 } from '../src'
 
 describe('@holo-js/config security normalization', () => {
+  it('defines and normalizes cors config', () => {
+    const config = defineCorsConfig({
+      paths: [' /api/* ', ' /broadcasting/auth '],
+      origins: [' https://app.example.com '],
+      methods: [' get ', ' post ', ' options '],
+      headers: [' Content-Type ', ' X-CSRF-TOKEN '],
+      credentials: true,
+      maxAge: '600',
+      statefulDomains: [' app.example.com ', ' localhost:5173 '],
+    })
+
+    expect(Object.isFrozen(config)).toBe(true)
+    expect(normalizeCorsConfig(config)).toEqual({
+      paths: ['/api/*', '/broadcasting/auth'],
+      origins: ['https://app.example.com'],
+      methods: ['GET', 'POST', 'OPTIONS'],
+      headers: ['Content-Type', 'X-CSRF-TOKEN'],
+      credentials: true,
+      maxAge: 600,
+      statefulDomains: ['app.example.com', 'localhost:5173'],
+    })
+    expect(normalizeCorsConfig()).toMatchObject({
+      paths: ['/api/*'],
+      origins: [],
+      credentials: false,
+      maxAge: 7200,
+      statefulDomains: [],
+    })
+    expect(() => normalizeCorsConfig({ origins: [''] })).toThrow('origins entry at index 0')
+    expect(() => normalizeCorsConfig({ maxAge: 'bad' })).toThrow('cors maxAge')
+  })
+
   it('defines and normalizes csrf and rate-limit config', () => {
     const config = defineSecurityConfig({
       csrf: {

@@ -9,6 +9,7 @@ import {
   AUTH_CONFIG_FILE_NAMES,
   BROADCAST_CONFIG_FILE_NAMES,
   CACHE_CONFIG_FILE_NAMES,
+  CORS_CONFIG_FILE_NAMES,
   MAIL_CONFIG_FILE_NAMES,
   NOTIFICATIONS_CONFIG_FILE_NAMES,
   QUEUE_CONFIG_FILE_NAMES,
@@ -41,6 +42,7 @@ import {
   authFeaturesRequireConfigUpdate,
   canSafelyRewriteAuthConfig,
   detectAuthInstallFeaturesFromConfig,
+  ensureCorsConfigFile,
   ensureRateLimitStorageIgnore,
   ensureRedisConfigFile,
   injectBroadcastAuthEndpoint,
@@ -49,6 +51,7 @@ import {
   renderBroadcastConfig,
   renderBroadcastEnvFiles,
   renderCacheConfig,
+  renderCorsConfig,
   renderMailConfig,
   renderMediaConfig,
   renderNotificationsConfig,
@@ -242,6 +245,8 @@ export async function installAuthIntoProject(
   const defaultDatabaseConnection = project.config.database?.defaultConnection ?? 'default'
   const authConfigPath = await resolveFirstExistingPath(projectRoot, AUTH_CONFIG_FILE_NAMES)
   const sessionConfigPath = await resolveFirstExistingPath(projectRoot, SESSION_CONFIG_FILE_NAMES)
+  const securityConfigPath = await resolveFirstExistingPath(projectRoot, SECURITY_CONFIG_FILE_NAMES)
+  const corsConfigPath = await resolveFirstExistingPath(projectRoot, CORS_CONFIG_FILE_NAMES)
   const userModelPath = await resolveExistingModelPath(modelsRoot, 'User')
   const existingMigrationFiles = await resolveExistingAuthMigrationFiles(migrationsRoot)
   const hasAllAuthMigrations = AUTH_MIGRATION_SLUGS.every(slug => existingMigrationFiles.has(slug))
@@ -282,6 +287,13 @@ export async function installAuthIntoProject(
       await writeTextFile(envExamplePath, nextEnvExample.contents)
     }
 
+    let createdSecurityConfig = false
+    if (!securityConfigPath) {
+      await writeTextFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig())
+      createdSecurityConfig = true
+    }
+    const createdCorsConfig = await ensureCorsConfigFile(projectRoot)
+
     await syncBroadcastAuthSupportAfterAuthInstall(projectRoot)
     await syncHostedAuthRouteFiles(projectRoot, nextAuthFeatures)
 
@@ -289,6 +301,8 @@ export async function installAuthIntoProject(
       updatedPackageJson: await upsertAuthPackageDependencies(projectRoot, nextAuthFeatures),
       createdAuthConfig: authConfigChanged,
       createdSessionConfig: false,
+      createdSecurityConfig,
+      createdCorsConfig,
       createdUserModel: false,
       createdMigrationFiles: [],
       updatedEnv: nextEnv.changed,
@@ -324,6 +338,12 @@ export async function installAuthIntoProject(
   if (!sessionConfigPath) {
     await writeTextFile(sessionConfigTargetPath, renderSessionConfig(defaultDatabaseConnection))
   }
+  let createdSecurityConfig = false
+  if (!securityConfigPath) {
+    await writeTextFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig())
+    createdSecurityConfig = true
+  }
+  const createdCorsConfig = corsConfigPath ? false : await ensureCorsConfigFile(projectRoot)
   await writeTextFile(
     userModelTargetPath,
     renderAuthUserModel(resolveAuthUserModelSchemaImportPath(
@@ -359,6 +379,8 @@ export async function installAuthIntoProject(
     updatedPackageJson: await upsertAuthPackageDependencies(projectRoot, features),
     createdAuthConfig: true,
     createdSessionConfig: !sessionConfigPath,
+    createdSecurityConfig,
+    createdCorsConfig,
     createdUserModel: true,
     createdMigrationFiles,
     updatedEnv: nextEnv.changed,
@@ -578,6 +600,7 @@ export async function installSecurityIntoProject(
 ): Promise<SecurityInstallResult> {
   await loadProjectConfig(projectRoot, { required: true })
   const securityConfigPath = await resolveFirstExistingPath(projectRoot, SECURITY_CONFIG_FILE_NAMES)
+  const corsConfigPath = await resolveFirstExistingPath(projectRoot, CORS_CONFIG_FILE_NAMES)
 
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })
   await ensureRateLimitStorageIgnore(projectRoot)
@@ -586,10 +609,12 @@ export async function installSecurityIntoProject(
   if (!securityConfigPath) {
     await writeTextFile(resolve(projectRoot, 'config/security.ts'), renderSecurityConfig())
   }
+  const createdCorsConfig = corsConfigPath ? false : await ensureCorsConfigFile(projectRoot)
 
   return {
     updatedPackageJson: await upsertSecurityPackageDependency(projectRoot),
     createdSecurityConfig: !securityConfigPath,
+    createdCorsConfig,
   }
 }
 
@@ -760,6 +785,7 @@ export {
   renderAuthUserModel,
   renderCacheConfig,
   renderCacheEnvFiles,
+  renderCorsConfig,
   renderEnvFileContents,
   renderFrameworkFiles,
   renderFrameworkRunner,

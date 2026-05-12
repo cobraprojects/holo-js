@@ -1,6 +1,6 @@
 # Security
 
-`@holo-js/security` is the optional package for CSRF protection and rate limiting.
+`@holo-js/security` is the optional package for CSRF protection, CORS, and rate limiting.
 
 Install it only when the app needs browser form protection or named request throttles:
 
@@ -8,12 +8,13 @@ Install it only when the app needs browser form protection or named request thro
 npx holo install security
 ```
 
-That writes `config/security.ts`, adds `@holo-js/security`, and lets core boot the package lazily only when
+That writes `config/security.ts` and `config/cors.ts`, adds `@holo-js/security`, and lets core boot the package lazily only when
 it is installed.
 
 ## What the package owns
 
 - CSRF token helpers for server-rendered forms and browser clients
+- CORS headers for separate frontend/API deployments
 - request protection for plain routes with `protect(...)`
 - named rate limiters with `limit.perMinute(...)` and `limit.perHour(...)`
 - low-level `rateLimit(...)` and `clearRateLimit(...)` helpers
@@ -57,6 +58,26 @@ export default defineSecurityConfig({
 })
 ```
 
+`config/cors.ts` controls cross-origin API access:
+
+```ts
+import { defineCorsConfig, env } from '@holo-js/config'
+
+export default defineCorsConfig({
+  paths: ['/api/*', '/broadcasting/auth'],
+  origins: [
+    env('FRONTEND_URL', 'http://localhost:3000'),
+  ],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  headers: ['Content-Type', 'Authorization', 'X-CSRF-TOKEN', 'X-Requested-With'],
+  credentials: true,
+  maxAge: 7200,
+  statefulDomains: [
+    env('FRONTEND_DOMAIN', 'localhost:3000'),
+  ],
+})
+```
+
 When `rateLimit.driver` is `redis`, `rateLimit.redis.connection` points to a named connection in
 `config/redis.ts`.
 
@@ -96,6 +117,9 @@ Holo-JS falls back to standalone `host`, which may also be a Unix socket path.
 - `csrf.header` is the header accepted for XHR and `fetch` requests.
 - `csrf.cookie` stores the signed token cookie that `useForm(..., { csrf: true })` reads on the client.
 - `csrf.except` skips CSRF verification for matching paths such as webhooks.
+- `cors.origins` lists frontend origins allowed to call the API.
+- `cors.credentials` must be true when the frontend uses cookie-backed auth with `fetch(..., { credentials: 'include' })`.
+- `cors.statefulDomains` lists browser hosts that should be treated as first-party cookie clients.
 - `rateLimit.driver` must be `memory`, `file`, or `redis`.
 - `rateLimit.redis.connection` must reference a named shared Redis connection when `rateLimit.driver` is `redis`.
 - `rateLimit.limiters` is the named limiter registry used by `validate(...)`, `protect(...)`, and

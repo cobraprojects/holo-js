@@ -419,6 +419,7 @@ type SessionModule = {
 type SecurityModule = {
   configureSecurityRuntime(options?: {
     readonly config: LoadedHoloConfig['security']
+    readonly cors?: LoadedHoloConfig['cors']
     readonly rateLimitStore?: {
       hit(key: string, options: { readonly maxAttempts: number, readonly decaySeconds: number }): Promise<unknown>
       clear(key: string): Promise<boolean>
@@ -3953,6 +3954,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
 
       securityModule.configureSecurityRuntime({
         config: loadedConfig.security,
+        cors: loadedConfig.cors,
         rateLimitStore,
         csrfSigningKey: loadedConfig.app.key,
         defaultKeyResolver: async () => {

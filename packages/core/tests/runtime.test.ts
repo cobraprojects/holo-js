@@ -2229,6 +2229,7 @@ export default defineSecurityConfig({
       const closeManagedStore = vi.fn(async () => {})
       let configuredSecurityBindings: {
         config: unknown
+        cors?: unknown
         rateLimitStore?: unknown
         csrfSigningKey?: string
       } | undefined
@@ -2252,11 +2253,13 @@ export default defineSecurityConfig({
       }))
       const configureSecurityRuntime = vi.fn((bindings?: {
         config: unknown
+        cors?: unknown
         rateLimitStore?: unknown
         csrfSigningKey?: string
       }) => {
         configuredSecurityBindings = bindings ? {
           config: bindings.config,
+          cors: bindings.cors,
           rateLimitStore: bindings.rateLimitStore,
           csrfSigningKey: bindings.csrfSigningKey,
         } : undefined
@@ -2378,6 +2381,7 @@ export default defineSecurityConfig({
           return {
             configureSecurityRuntime(bindings?: {
               config: unknown
+              cors?: unknown
               rateLimitStore?: unknown
               csrfSigningKey?: string
             }) {

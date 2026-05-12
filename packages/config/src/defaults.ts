@@ -23,6 +23,7 @@ import type {
   HoloCacheConfig,
   HoloBroadcastConnection,
   HoloAuthConfig,
+  HoloCorsConfig,
   HoloMailAddressConfig,
   HoloMailConfig,
   HoloMailMailerConfig,
@@ -50,6 +51,7 @@ import type {
   NormalizedHoloBroadcastConfig,
   NormalizedHoloBroadcastConnection,
   NormalizedHoloAuthConfig,
+  NormalizedHoloCorsConfig,
   NormalizedHoloMailAddressConfig,
   NormalizedHoloMailConfig,
   NormalizedHoloMailMailerConfig,
@@ -332,6 +334,21 @@ export const holoSessionDefaults: Readonly<NormalizedHoloSessionConfig> = Object
   idleTimeout: DEFAULT_SESSION_IDLE_TIMEOUT,
   absoluteLifetime: DEFAULT_SESSION_ABSOLUTE_LIFETIME,
   rememberMeLifetime: DEFAULT_SESSION_REMEMBER_ME_LIFETIME,
+})
+
+export const DEFAULT_CORS_PATHS = Object.freeze(['/api/*'] as const)
+export const DEFAULT_CORS_METHODS = Object.freeze(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const)
+export const DEFAULT_CORS_HEADERS = Object.freeze(['Content-Type', 'Authorization', 'X-CSRF-TOKEN', 'X-Requested-With'] as const)
+export const DEFAULT_CORS_MAX_AGE = 7200
+
+export const holoCorsDefaults: Readonly<NormalizedHoloCorsConfig> = Object.freeze({
+  paths: DEFAULT_CORS_PATHS,
+  origins: Object.freeze([]),
+  methods: DEFAULT_CORS_METHODS,
+  headers: DEFAULT_CORS_HEADERS,
+  credentials: false,
+  maxAge: DEFAULT_CORS_MAX_AGE,
+  statefulDomains: Object.freeze([]),
 })
 
 export const DEFAULT_SECURITY_CSRF_FIELD = '_token'
@@ -926,6 +943,48 @@ function normalizeSecurityName(value: string | undefined, label: string): string
 function normalizeSecurityOptionalString(value: string | undefined): string | undefined {
   const normalized = value?.trim()
   return normalized || undefined
+}
+
+function normalizeCorsStringList(
+  values: readonly string[] | undefined,
+  defaults: readonly string[],
+  label: string,
+): readonly string[] {
+  if (!values) {
+    return defaults
+  }
+
+  return Object.freeze(values.map((value, index) => {
+    const normalized = value.trim()
+    if (!normalized) {
+      throw new Error(`[Holo CORS] ${label} entry at index ${index} must be a non-empty string.`)
+    }
+
+    return normalized
+  }))
+}
+
+function normalizeCorsMethods(values: readonly string[] | undefined): readonly string[] {
+  return Object.freeze(normalizeCorsStringList(values, DEFAULT_CORS_METHODS, 'methods')
+    .map(value => value.toUpperCase()))
+}
+
+function normalizeCorsMaxAge(value: number | string | undefined): number {
+  return parseSecurityInteger(value ?? DEFAULT_CORS_MAX_AGE, DEFAULT_CORS_MAX_AGE, 'cors maxAge', {
+    minimum: 0,
+  })
+}
+
+export function normalizeCorsConfig(config: HoloCorsConfig = {}): NormalizedHoloCorsConfig {
+  return Object.freeze({
+    paths: normalizeCorsStringList(config.paths, DEFAULT_CORS_PATHS, 'paths'),
+    origins: normalizeCorsStringList(config.origins, holoCorsDefaults.origins, 'origins'),
+    methods: normalizeCorsMethods(config.methods),
+    headers: normalizeCorsStringList(config.headers, DEFAULT_CORS_HEADERS, 'headers'),
+    credentials: config.credentials ?? holoCorsDefaults.credentials,
+    maxAge: normalizeCorsMaxAge(config.maxAge),
+    statefulDomains: normalizeCorsStringList(config.statefulDomains, holoCorsDefaults.statefulDomains, 'statefulDomains'),
+  })
 }
 
 function normalizeSyncConnection(

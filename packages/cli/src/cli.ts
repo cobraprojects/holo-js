@@ -574,6 +574,8 @@ export function createInternalCommands(
           const changed = result.updatedPackageJson
             || result.createdAuthConfig
             || result.createdSessionConfig
+            || result.createdSecurityConfig
+            || result.createdCorsConfig
             || result.createdUserModel
             || result.createdMigrationFiles.length > 0
             || result.updatedEnv
@@ -583,6 +585,8 @@ export function createInternalCommands(
           if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
           if (result.createdAuthConfig) writeLine(context.stdout, '  - created config/auth.ts')
           if (result.createdSessionConfig) writeLine(context.stdout, '  - created config/session.ts')
+          if (result.createdSecurityConfig) writeLine(context.stdout, '  - created config/security.ts')
+          if (result.createdCorsConfig) writeLine(context.stdout, '  - created config/cors.ts')
           if (result.createdUserModel) writeLine(context.stdout, '  - created server/models/User.ts')
           if (result.updatedEnv) writeLine(context.stdout, '  - updated .env')
           if (result.updatedEnvExample) writeLine(context.stdout, '  - updated .env.example')
@@ -669,11 +673,12 @@ export function createInternalCommands(
         if (target === 'security') {
           const { installSecurityIntoProject } = await loadProjectScaffoldModule()
           const result = await installSecurityIntoProject(context.projectRoot)
-          const changed = result.updatedPackageJson || result.createdSecurityConfig
+          const changed = result.updatedPackageJson || result.createdSecurityConfig || result.createdCorsConfig
 
           writeLine(context.stdout, changed ? 'Installed security support.' : 'Security support is already installed.')
           if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
           if (result.createdSecurityConfig) writeLine(context.stdout, '  - created config/security.ts')
+          if (result.createdCorsConfig) writeLine(context.stdout, '  - created config/cors.ts')
           return
         }
 
