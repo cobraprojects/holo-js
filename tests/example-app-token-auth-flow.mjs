@@ -63,7 +63,7 @@ export async function assertExampleAppTokenAuthFlow({ baseUrl, expectedTitle }) 
 
   const badToken = await fetchJson(baseUrl, '/api/v1/posts', {
     headers: {
-      authorization: 'Bearer bad-token',
+      Authorization: 'Bearer bad-token',
     },
   })
   assert.equal(badToken.response.status, 401)
@@ -83,7 +83,7 @@ export async function assertExampleAppTokenAuthFlow({ baseUrl, expectedTitle }) 
   const token = await createTokenFromCredentials(baseUrl)
   const validToken = await fetchJson(baseUrl, '/api/v1/posts', {
     headers: {
-      authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${token}`,
     },
   })
   assert.equal(validToken.response.status, 200)

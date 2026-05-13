@@ -633,6 +633,19 @@ function getPasswordHash(
   return typeof value === 'string' ? value : null
 }
 
+async function verifyCredentialsForProvider(
+  providerName: string,
+  adapter: ErasedAuthProviderAdapter,
+  credentials: AuthCredentials,
+): Promise<Record<string, unknown> | null> {
+  const bindings = getRuntimeBindings()
+  const user = await findUserByConfiguredIdentifiers(adapter, credentials, getProviderIdentifiers(providerName))
+  const passwordHash = user ? getPasswordHash(adapter, user) : null
+  const passwordMatches = await bindings.passwordHasher.verify(credentials.password, passwordHash ?? '')
+
+  return user && passwordMatches ? user : null
+}
+
 function isEmailVerificationRequired(): boolean {
   return getRuntimeBindings().config.emailVerification.required === true
 }
@@ -1052,15 +1065,9 @@ async function resolveUserFromGuard(
 }
 
 async function loginForGuard(guardName: string, credentials: AuthCredentials): Promise<AuthEstablishedSession> {
-  const bindings = getRuntimeBindings()
   const { guard, adapter } = getGuardProviderAdapter(guardName)
-  const user = await findUserByConfiguredIdentifiers(adapter, credentials, getProviderIdentifiers(guard.provider))
+  const user = await verifyCredentialsForProvider(guard.provider, adapter, credentials)
   if (!user) {
-    throwAuthError('invalid_credentials', 'Invalid credentials.')
-  }
-
-  const passwordHash = getPasswordHash(adapter, user)
-  if (!passwordHash || !(await bindings.passwordHasher.verify(credentials.password, passwordHash))) {
     throwAuthError('invalid_credentials', 'Invalid credentials.')
   }
 

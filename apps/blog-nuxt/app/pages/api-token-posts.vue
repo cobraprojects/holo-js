@@ -71,7 +71,7 @@ async function fetchPosts(event: Event): Promise<void> {
 
   try {
     const response = await fetch('/api/v1/posts', {
-      headers: token ? { authorization: `Bearer ${token}` } : undefined,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     })
 
     postsResult.value = {

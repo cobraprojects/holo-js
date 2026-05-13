@@ -1639,6 +1639,28 @@ describe('@holo-js/auth package runtime', () => {
     })
   })
 
+  it('invokes password verification when credential lookup misses a user', async () => {
+    const verify = vi.fn(async () => false)
+    configureRuntime({
+      passwordHasher: {
+        hash: vi.fn(async () => 'real-hash'),
+        verify,
+      },
+    })
+
+    await expect(auth.login({
+      email: 'missing@example.com',
+      password: 'secret-secret',
+    })).resolves.toMatchObject({
+      data: null,
+      error: {
+        code: 'invalid_credentials',
+      },
+    })
+
+    expect(verify).toHaveBeenCalledWith('secret-secret', '')
+  })
+
   it('creates, expires, rejects, and consumes email verification tokens', async () => {
     const runtime = configureRuntime()
     const created = unwrapAuthResult(await register({

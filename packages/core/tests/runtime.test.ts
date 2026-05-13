@@ -1741,8 +1741,11 @@ export default {
       }
     }
 
-    expect(state.__holoCoreRuntimeModelPreload?.loaded).toEqual(['User', 'Post'])
-    delete state.__holoCoreRuntimeModelPreload
+    try {
+      expect(state.__holoCoreRuntimeModelPreload?.loaded).toEqual(['User', 'Post'])
+    } finally {
+      delete state.__holoCoreRuntimeModelPreload
+    }
   })
 
   it('reconfigures queue runtime when framework adapters reuse the current singleton runtime', async () => {

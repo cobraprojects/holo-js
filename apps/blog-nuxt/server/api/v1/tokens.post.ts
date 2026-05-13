@@ -17,10 +17,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const currentUser = await User.where('email', email).first()
-  const passwordHash = currentUser?.get('password')
-  const passwordMatches = typeof passwordHash === 'string'
-    ? await verifyPassword(password, passwordHash)
-    : false
+  const passwordMatches = await verifyPassword(password, currentUser?.get('password') ?? '')
 
   if (!currentUser || !passwordMatches) {
     setResponseStatus(event, 401)

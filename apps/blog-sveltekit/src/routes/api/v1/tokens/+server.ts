@@ -16,10 +16,7 @@ export async function POST({ request }: { request: Request }) {
   }
 
   const currentUser = await User.where('email', email).first()
-  const passwordHash = currentUser?.get('password')
-  const passwordMatches = typeof passwordHash === 'string'
-    ? await verifyPassword(password, passwordHash)
-    : false
+  const passwordMatches = await verifyPassword(password, currentUser?.get('password') ?? '')
 
   if (!currentUser || !passwordMatches) {
     return json({

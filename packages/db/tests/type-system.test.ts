@@ -198,6 +198,126 @@ describe('type system contracts', () => {
     void updateEnum
   })
 
+  it('infers model entity properties and get results from every logical column family', () => {
+    const examples = defineTable('entity_examples', {
+      id: column.id(),
+      integerValue: column.integer(),
+      bigIntegerValue: column.bigInteger(),
+      stringValue: column.string(),
+      textValue: column.text(),
+      booleanValue: column.boolean(),
+      realValue: column.real(),
+      decimalValue: column.decimal(),
+      dateValue: column.date(),
+      datetimeValue: column.datetime(),
+      timestampValue: column.timestamp(),
+      jsonValue: column.json<{ enabled: boolean, tags: string[] }>(),
+      blobValue: column.blob(),
+      uuidValue: column.uuid(),
+      ulidValue: column.ulid(),
+      snowflakeValue: column.snowflake(),
+      vectorValue: column.vector({ dimensions: 3 }),
+      enumValue: column.enum(['draft', 'published'] as const),
+      nullableId: column.id().nullable(),
+      nullableIntegerValue: column.integer().nullable(),
+      nullableBigIntegerValue: column.bigInteger().nullable(),
+      nullableStringValue: column.string().nullable(),
+      nullableTextValue: column.text().nullable(),
+      nullableBooleanValue: column.boolean().nullable(),
+      nullableRealValue: column.real().nullable(),
+      nullableDecimalValue: column.decimal().nullable(),
+      nullableDateValue: column.date().nullable(),
+      nullableDatetimeValue: column.datetime().nullable(),
+      nullableTimestampValue: column.timestamp().nullable(),
+      nullableJsonValue: column.json<{ enabled: boolean, tags: string[] }>().nullable(),
+      nullableBlobValue: column.blob().nullable(),
+      nullableUuidValue: column.uuid().nullable(),
+      nullableUlidValue: column.ulid().nullable(),
+      nullableSnowflakeValue: column.snowflake().nullable(),
+      nullableVectorValue: column.vector({ dimensions: 3 }).nullable(),
+      nullableEnumValue: column.enum(['draft', 'published'] as const).nullable(),
+    })
+
+    type ExampleEntity = Entity<typeof examples>
+
+    if (false) {
+      const entity = undefined as unknown as ExampleEntity
+
+      expectTypeOf(entity.id).toEqualTypeOf<number>()
+      expectTypeOf(entity.get('id')).toEqualTypeOf<number>()
+      expectTypeOf(entity.integerValue).toEqualTypeOf<number>()
+      expectTypeOf(entity.get('integerValue')).toEqualTypeOf<number>()
+      expectTypeOf(entity.bigIntegerValue).toEqualTypeOf<number>()
+      expectTypeOf(entity.get('bigIntegerValue')).toEqualTypeOf<number>()
+      expectTypeOf(entity.stringValue).toEqualTypeOf<string>()
+      expectTypeOf(entity.get('stringValue')).toEqualTypeOf<string>()
+      expectTypeOf(entity.textValue).toEqualTypeOf<string>()
+      expectTypeOf(entity.get('textValue')).toEqualTypeOf<string>()
+      expectTypeOf(entity.booleanValue).toEqualTypeOf<boolean>()
+      expectTypeOf(entity.get('booleanValue')).toEqualTypeOf<boolean>()
+      expectTypeOf(entity.realValue).toEqualTypeOf<number>()
+      expectTypeOf(entity.get('realValue')).toEqualTypeOf<number>()
+      expectTypeOf(entity.decimalValue).toEqualTypeOf<string>()
+      expectTypeOf(entity.get('decimalValue')).toEqualTypeOf<string>()
+      expectTypeOf(entity.dateValue).toEqualTypeOf<Date>()
+      expectTypeOf(entity.get('dateValue')).toEqualTypeOf<Date>()
+      expectTypeOf(entity.datetimeValue).toEqualTypeOf<Date>()
+      expectTypeOf(entity.get('datetimeValue')).toEqualTypeOf<Date>()
+      expectTypeOf(entity.timestampValue).toEqualTypeOf<Date>()
+      expectTypeOf(entity.get('timestampValue')).toEqualTypeOf<Date>()
+      expectTypeOf(entity.jsonValue).toEqualTypeOf<{ enabled: boolean, tags: string[] }>()
+      expectTypeOf(entity.get('jsonValue')).toEqualTypeOf<{ enabled: boolean, tags: string[] }>()
+      expectTypeOf(entity.blobValue).toEqualTypeOf<Uint8Array>()
+      expectTypeOf(entity.get('blobValue')).toEqualTypeOf<Uint8Array>()
+      expectTypeOf(entity.uuidValue).toEqualTypeOf<string>()
+      expectTypeOf(entity.get('uuidValue')).toEqualTypeOf<string>()
+      expectTypeOf(entity.ulidValue).toEqualTypeOf<string>()
+      expectTypeOf(entity.get('ulidValue')).toEqualTypeOf<string>()
+      expectTypeOf(entity.snowflakeValue).toEqualTypeOf<string>()
+      expectTypeOf(entity.get('snowflakeValue')).toEqualTypeOf<string>()
+      expectTypeOf(entity.vectorValue).toEqualTypeOf<readonly number[]>()
+      expectTypeOf(entity.get('vectorValue')).toEqualTypeOf<readonly number[]>()
+      expectTypeOf(entity.enumValue).toEqualTypeOf<'draft' | 'published'>()
+      expectTypeOf(entity.get('enumValue')).toEqualTypeOf<'draft' | 'published'>()
+      expectTypeOf(entity.nullableId).toEqualTypeOf<number | null>()
+      expectTypeOf(entity.get('nullableId')).toEqualTypeOf<number | null>()
+      expectTypeOf(entity.nullableIntegerValue).toEqualTypeOf<number | null>()
+      expectTypeOf(entity.get('nullableIntegerValue')).toEqualTypeOf<number | null>()
+      expectTypeOf(entity.nullableBigIntegerValue).toEqualTypeOf<number | null>()
+      expectTypeOf(entity.get('nullableBigIntegerValue')).toEqualTypeOf<number | null>()
+      expectTypeOf(entity.nullableStringValue).toEqualTypeOf<string | null>()
+      expectTypeOf(entity.get('nullableStringValue')).toEqualTypeOf<string | null>()
+      expectTypeOf(entity.nullableTextValue).toEqualTypeOf<string | null>()
+      expectTypeOf(entity.get('nullableTextValue')).toEqualTypeOf<string | null>()
+      expectTypeOf(entity.nullableBooleanValue).toEqualTypeOf<boolean | null>()
+      expectTypeOf(entity.get('nullableBooleanValue')).toEqualTypeOf<boolean | null>()
+      expectTypeOf(entity.nullableRealValue).toEqualTypeOf<number | null>()
+      expectTypeOf(entity.get('nullableRealValue')).toEqualTypeOf<number | null>()
+      expectTypeOf(entity.nullableDecimalValue).toEqualTypeOf<string | null>()
+      expectTypeOf(entity.get('nullableDecimalValue')).toEqualTypeOf<string | null>()
+      expectTypeOf(entity.nullableDateValue).toEqualTypeOf<Date | null>()
+      expectTypeOf(entity.get('nullableDateValue')).toEqualTypeOf<Date | null>()
+      expectTypeOf(entity.nullableDatetimeValue).toEqualTypeOf<Date | null>()
+      expectTypeOf(entity.get('nullableDatetimeValue')).toEqualTypeOf<Date | null>()
+      expectTypeOf(entity.nullableTimestampValue).toEqualTypeOf<Date | null>()
+      expectTypeOf(entity.get('nullableTimestampValue')).toEqualTypeOf<Date | null>()
+      expectTypeOf(entity.nullableJsonValue).toEqualTypeOf<{ enabled: boolean, tags: string[] } | null>()
+      expectTypeOf(entity.get('nullableJsonValue')).toEqualTypeOf<{ enabled: boolean, tags: string[] } | null>()
+      expectTypeOf(entity.nullableBlobValue).toEqualTypeOf<Uint8Array | null>()
+      expectTypeOf(entity.get('nullableBlobValue')).toEqualTypeOf<Uint8Array | null>()
+      expectTypeOf(entity.nullableUuidValue).toEqualTypeOf<string | null>()
+      expectTypeOf(entity.get('nullableUuidValue')).toEqualTypeOf<string | null>()
+      expectTypeOf(entity.nullableUlidValue).toEqualTypeOf<string | null>()
+      expectTypeOf(entity.get('nullableUlidValue')).toEqualTypeOf<string | null>()
+      expectTypeOf(entity.nullableSnowflakeValue).toEqualTypeOf<string | null>()
+      expectTypeOf(entity.get('nullableSnowflakeValue')).toEqualTypeOf<string | null>()
+      expectTypeOf(entity.nullableVectorValue).toEqualTypeOf<readonly number[] | null>()
+      expectTypeOf(entity.get('nullableVectorValue')).toEqualTypeOf<readonly number[] | null>()
+      expectTypeOf(entity.nullableEnumValue).toEqualTypeOf<'draft' | 'published' | null>()
+      expectTypeOf(entity.get('nullableEnumValue')).toEqualTypeOf<'draft' | 'published' | null>()
+    }
+  })
+
   it('carries fluent create-table builder column types through the chain', () => {
     const table = new TableDefinitionBuilder('users')
       .id()

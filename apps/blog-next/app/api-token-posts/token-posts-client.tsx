@@ -67,7 +67,7 @@ export function TokenPostsClient() {
 
     try {
       const response = await fetch('/api/v1/posts', {
-        headers: token ? { authorization: `Bearer ${token}` } : undefined,
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       })
 
       setPostsResult({
