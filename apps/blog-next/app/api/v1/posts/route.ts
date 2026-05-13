@@ -4,13 +4,21 @@ import Post from '@/server/models/Post'
 
 export async function GET() {
   const currentUser = await auth.guard('api').user()
-  const userId = currentUser?.id
 
-  if (typeof userId === 'undefined') {
+  if (!currentUser) {
     return Response.json({
       ok: false,
       message: 'Unauthenticated.',
     }, { status: 401 })
+  }
+
+  const userId = currentUser.id
+
+  if (!currentUser.can('posts.read')) {
+    return Response.json({
+      ok: false,
+      message: 'Forbidden.',
+    }, { status: 403 })
   }
 
   const posts = await Post

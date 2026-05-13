@@ -36,6 +36,8 @@ export {
 } from './runtime'
 export type {
   AuthFailure,
+  AuthenticatedAuthUser,
+  AuthAuthorizable,
   AuthClientConfig,
   AuthClientRequestOptions,
   AuthCredentials,
@@ -48,6 +50,7 @@ export type {
   AuthEmailVerificationSendOptions,
   AuthEstablishedSession,
   AuthFacade,
+  AuthBaseGuardFacade,
   AuthFieldErrors,
   AuthFailureResult,
   AuthGuardFacade,
@@ -56,6 +59,7 @@ export type {
   AuthGuardRegistrationData,
   AuthInputFieldErrors,
   AuthSessionGuardFacade,
+  AuthSessionOnlyFacade,
   AuthImpersonationOptions,
   AuthImpersonationState,
   AuthLoginErrorCode,

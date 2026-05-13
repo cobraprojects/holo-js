@@ -62,6 +62,7 @@ function hashPasswordResetEmail(email: string, csrfSigningKey?: string): string 
   return createHash('sha256').update(canonicalEmail).digest('hex')
 }
 import type {
+  AuthenticatedAuthUser,
   AuthErrorCode,
   AuthDeliveryHook,
   AuthProviderAdapter,
@@ -75,6 +76,19 @@ import type {
   PersonalAccessTokenRecord,
   AuthTokenStore,
 } from '../src'
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace HoloAuth {
+    export interface TypeRegistry {
+      guards: {
+        readonly web: 'session'
+        readonly admin: 'session'
+        readonly api: 'token'
+      }
+    }
+  }
+}
 
 function unwrapAuthResult<TData>(result: AuthResult<TData>): TData {
   if (result.error) {
@@ -3935,13 +3949,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('returns a personal access token when logging into a token guard with credentials', async () => {
-    const runtime = configureRuntime({
-      authConfig: {
-        personalAccessTokens: {
-          defaultAbilities: ['posts.read'],
-        },
-      },
-    })
+    const runtime = configureRuntime()
     const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
     const userRecord = await runtime.usersProvider.create({
       name: 'Ava',
@@ -3953,6 +3961,7 @@ describe('@holo-js/auth package runtime', () => {
     const token = unwrapAuthResult(await auth.guard('api').login({
       email: 'ava@example.com',
       password: 'secret-secret',
+      abilities: ['posts.read'],
     }))
 
     expect('plainTextToken' in token).toBe(true)
@@ -3979,6 +3988,7 @@ describe('@holo-js/auth package runtime', () => {
       email: 'mina@example.com',
       password: 'secret-secret',
       passwordConfirmation: 'secret-secret',
+      abilities: ['posts.read'],
     }))
 
     expect('plainTextToken' in token).toBe(true)
@@ -3988,6 +3998,7 @@ describe('@holo-js/auth package runtime', () => {
 
     expect(token.name).toBe('api')
     expect(token.provider).toBe('users')
+    expect(token.abilities).toEqual(['posts.read'])
     await expect(tokens.authenticate(token.plainTextToken)).resolves.toMatchObject({
       id: token.userId,
       email: 'mina@example.com',
@@ -3996,6 +4007,51 @@ describe('@holo-js/auth package runtime', () => {
       name: 'Mina',
     })
     expect(runtime.context.getSessionId('api')).toBeUndefined()
+  })
+
+  it('rolls back token guard registration when token creation fails', async () => {
+    const runtime = configureRuntime()
+    vi.spyOn(runtime.tokenStore, 'create').mockRejectedValueOnce(new Error('Token persistence failed.'))
+
+    await expect(auth.guard('api').register({
+      name: 'Rollback User',
+      email: 'rollback@example.com',
+      password: 'secret-secret',
+      passwordConfirmation: 'secret-secret',
+    })).rejects.toThrow('Token persistence failed.')
+
+    await expect(runtime.usersProvider.findByCredentials({
+      email: 'rollback@example.com',
+    })).resolves.toBeNull()
+  })
+
+  it('rejects token guards as the default top-level auth guard', () => {
+    const runtime = configureRuntime()
+
+    expect(() => configureAuthRuntime({
+      config: defineAuthConfig({
+        defaults: {
+          guard: 'api',
+        },
+        guards: {
+          api: {
+            driver: 'token',
+            provider: 'users',
+          },
+        },
+        providers: {
+          users: {
+            model: 'User',
+          },
+        },
+      }),
+      session: getSessionRuntime(),
+      providers: {
+        users: runtime.usersProvider,
+      },
+      tokens: runtime.tokenStore,
+      context: runtime.context,
+    })).toThrow('default auth guard "api" uses the token driver')
   })
 
   it('uses configured default token abilities when none are provided explicitly', async () => {
@@ -4121,6 +4177,12 @@ describe('@holo-js/auth package runtime', () => {
       name: 'mobile-app',
       abilities: ['orders.read'],
     })
+    expect(current?.can('orders.read')).toBe(true)
+    expect(current?.can('orders.write')).toBe(false)
+
+    const currentUser = await auth.guard('api').user()
+    expect(currentUser?.can('orders.read')).toBe(true)
+    expect(currentUser?.can('orders.write')).toBe(false)
 
     await current?.delete()
     expect(runtime.context.getAccessToken('api')).toBeUndefined()
@@ -4363,7 +4425,7 @@ describe('@holo-js/auth package runtime', () => {
     await expect(check()).rejects.toThrow('Auth runtime is not configured yet')
 
     const runtime = configureRuntime()
-    await expect(auth.guard('missing').check()).rejects.toThrow('Auth guard "missing" is not configured')
+    expect(() => auth.guard('missing')).toThrow('Auth guard "missing" is not configured')
 
     configureAuthRuntime({
       config: defineAuthConfig({
@@ -4639,12 +4701,18 @@ describe('@holo-js/auth package runtime', () => {
     expect(() => context.getSessionId('web')).toThrow('Async auth context is not active')
     context.activate()
     context.setSessionId('web', 'session-1')
-    context.setCachedUser('web', {
+    const cachedUser: AuthenticatedAuthUser = {
       id: 1,
       email: 'ava@example.com',
       name: 'Ava',
       role: 'member',
+      can: () => false,
+    }
+    Object.defineProperty(cachedUser, 'can', {
+      value: cachedUser.can,
+      enumerable: false,
     })
+    context.setCachedUser('web', cachedUser)
     context.setAccessToken?.('api', 'token-value')
     context.setRememberToken?.('web', 'remember-value')
     context.activate()
@@ -4655,6 +4723,7 @@ describe('@holo-js/auth package runtime', () => {
       name: 'Ava',
       role: 'member',
     })
+    expect(context.getCachedUser('web')?.can('posts.read')).toBe(false)
     expect(context.getAccessToken?.('api')).toBe('token-value')
     expect(context.getRememberToken?.('web')).toBe('remember-value')
   })
@@ -4784,7 +4853,7 @@ describe('@holo-js/auth package runtime', () => {
       guard: 'web',
     })).rejects.toThrow('Email verification token runtime is not configured yet')
     await expect(requestPasswordReset({ email: 'ava@example.com' })).rejects.toThrow('Password reset token runtime is not configured yet')
-    await expect(auth.guard('api').loginUsing(created)).rejects.toThrow('does not support session login')
+    expect('loginUsing' in auth.guard('api')).toBe(false)
 
     configureAuthRuntime({
       config: defineAuthConfig({
@@ -5229,6 +5298,7 @@ describe('@holo-js/auth package runtime', () => {
       email: 'ava@example.com',
       name: 'Ava',
       role: 'member',
+      can: () => false,
     }, {
       guard: 'web',
       provider: 'users',
@@ -5450,6 +5520,7 @@ describe('@holo-js/auth package runtime', () => {
       email: 'ava@example.com',
       name: 'Ava',
       role: 'member',
+      can: () => false,
     }, {
       guard: 'web',
       provider: 'users',

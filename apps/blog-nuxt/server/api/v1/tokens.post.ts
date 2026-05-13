@@ -14,7 +14,10 @@ export default defineEventHandler(async (event) => {
     return failure
   }
 
-  const { data: token, error } = await auth.guard('api').login(submission.data)
+  const { data: token, error } = await auth.guard('api').login({
+    ...submission.data,
+    abilities: ['posts.read'],
+  })
 
   if (error) {
     setResponseStatus(event, 401)
@@ -24,6 +27,8 @@ export default defineEventHandler(async (event) => {
       message: 'Invalid credentials.',
     }
   }
+
+  setResponseHeader(event, 'Cache-Control', 'no-store')
 
   return {
     ok: true,

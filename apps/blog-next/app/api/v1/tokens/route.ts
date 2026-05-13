@@ -15,7 +15,10 @@ export async function POST(request: Request) {
     })
   }
 
-  const { data: token, error } = await auth.guard('api').login(submission.data)
+  const { data: token, error } = await auth.guard('api').login({
+    ...submission.data,
+    abilities: ['posts.read'],
+  })
 
   if (error) {
     return Response.json({
@@ -29,5 +32,9 @@ export async function POST(request: Request) {
     token: token.plainTextToken,
     tokenId: token.id,
     abilities: token.abilities,
+  }, {
+    headers: {
+      'Cache-Control': 'no-store',
+    },
   })
 }

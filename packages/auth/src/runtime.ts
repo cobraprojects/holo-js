@@ -1,6 +1,7 @@
 import { createHash, createHmac } from 'node:crypto'
 import { normalizeAuthConfig } from '@holo-js/config'
 import type {
+  AuthenticatedAuthUser,
   AuthFieldErrors,
   AuthCredentials,
   AuthCurrentAccessToken,
@@ -26,7 +27,9 @@ import type {
   AuthRegistrationErrorCode,
   AuthResult,
   AuthRegistrationInput,
+  AuthSessionGuardFacade,
   AuthSessionLoginOptions,
+  AuthTokenGuardFacade,
   AuthTokenFacade,
   AuthTokenStore,
   AuthUser,
@@ -101,7 +104,7 @@ export {
   createMemoryAuthContext,
 } from './runtime/context'
 
-type SerializedAuthUser = AuthUser & {
+type SerializedAuthUser = AuthenticatedAuthUser & {
   readonly id: string | number
 }
 
@@ -583,6 +586,7 @@ function serializeUser(
   adapter: ErasedAuthProviderAdapter,
   user: unknown,
   providerName?: string,
+  options: { readonly can?: (ability: string) => boolean } = {},
 ): SerializedAuthUser {
   const serialized = adapter.serialize
     ? adapter.serialize(user)
@@ -595,6 +599,11 @@ function serializeUser(
     ...requireRecordValue(serialized, '[@holo-js/auth] Auth provider serialize() must return an object user.'),
     id,
   }
+  Object.defineProperty(result, 'can', {
+    value: options.can ?? (() => false),
+    enumerable: false,
+    configurable: true,
+  })
   if (providerName) {
     Object.defineProperty(result, AUTH_PROVIDER_MARKER, {
       value: providerName,
@@ -614,6 +623,11 @@ function rehydrateSerializedUser(
     ...user,
     id: user.id,
   }
+  Object.defineProperty(restored, 'can', {
+    value: () => false,
+    enumerable: false,
+    configurable: true,
+  })
   Object.defineProperty(restored, AUTH_PROVIDER_MARKER, {
     value: providerName,
     enumerable: false,
@@ -913,7 +927,7 @@ async function authenticateAccessTokenRecord(
   plainTextToken: string,
 ): Promise<{
   readonly token: PersonalAccessTokenRecord
-  readonly user: AuthUser
+  readonly user: SerializedAuthUser
 } | null> {
   const parsed = parsePlainTextToken(plainTextToken)
   if (!parsed) {
@@ -940,7 +954,9 @@ async function authenticateAccessTokenRecord(
 
   return {
     token: updatedRecord,
-    user: serializeUser(adapter, resolvedUser, tokenRecord.provider),
+    user: serializeUser(adapter, resolvedUser, tokenRecord.provider, {
+      can: ability => tokenHasAbility(updatedRecord, ability),
+    }),
   }
 }
 
@@ -948,8 +964,11 @@ function createCurrentAccessTokenHandle(
   guardName: string,
   record: PersonalAccessTokenRecord,
 ): AuthCurrentAccessToken {
+  const normalizedRecord = normalizeTokenRecord(record)
+
   return Object.freeze({
-    ...normalizeTokenRecord(record),
+    ...normalizedRecord,
+    can: (ability: string) => tokenHasAbility(normalizedRecord, ability),
     delete: async () => {
       await ensureTokenStore().delete(record.id)
       const bindings = getRuntimeBindings()
@@ -991,7 +1010,7 @@ async function resolveCurrentAccessTokenForGuard(guardName: string): Promise<Aut
 async function resolveUserFromGuard(
   guardName: string,
   options: { readonly fresh?: boolean } = {},
-): Promise<AuthUser | null> {
+): Promise<AuthenticatedAuthUser | null> {
   const bindings = getRuntimeBindings()
   const guard = getGuardConfig(guardName)
 
@@ -1094,7 +1113,7 @@ async function loginForGuard(guardName: string, credentials: AuthCredentials): P
   }
 
   const serialized = serializeUser(adapter, user, guard.provider)
-  return createLoginTokenForGuard(guardName, serialized)
+  return createLoginTokenForGuard(guardName, serialized, credentials)
 }
 
 function assertTrustedUserProvider(
@@ -1179,7 +1198,7 @@ function isCompatibleSerializedUserCandidate(
     return false
   }
 
-  const serializedRecord = serialized as Readonly<Record<string, unknown>>
+  const serializedRecord = serialized as unknown as Readonly<Record<string, unknown>>
 
   for (const [key, value] of Object.entries(candidate)) {
     if (typeof value === 'undefined') {
@@ -1473,7 +1492,7 @@ async function impersonationForGuard(guardName: string): Promise<AuthImpersonati
   return createImpersonationState(state.payload)
 }
 
-async function stopImpersonatingForGuard(guardName: string): Promise<AuthUser | null> {
+async function stopImpersonatingForGuard(guardName: string): Promise<AuthenticatedAuthUser | null> {
   const bindings = getRuntimeBindings()
   const state = await readGuardSessionState(guardName)
   if (!state || !state.payload.impersonation) {
@@ -1556,7 +1575,7 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
   })
 }
 
-async function registerUserForGuard(guardName: string, input: AuthRegistrationInput): Promise<AuthUser> {
+async function registerUserForGuard(guardName: string, input: AuthRegistrationInput): Promise<SerializedAuthUser> {
   ensurePasswordConfirmation(input)
 
   const bindings = getRuntimeBindings()
@@ -1593,20 +1612,24 @@ async function registerUserForGuard(guardName: string, input: AuthRegistrationIn
   return serialized
 }
 
-async function registerDefaultUser(input: AuthRegistrationInput): Promise<AuthUser> {
+async function registerDefaultUser(input: AuthRegistrationInput): Promise<AuthenticatedAuthUser> {
   return registerUserForGuard(getRuntimeBindings().config.defaults.guard, input)
 }
 
-async function registerForGuard(guardName: string, input: AuthRegistrationInput): Promise<AuthUser | PersonalAccessTokenResult> {
+async function registerForGuard(guardName: string, input: AuthRegistrationInput): Promise<AuthenticatedAuthUser | PersonalAccessTokenResult> {
   const guard = getGuardConfig(guardName)
   if (guard.driver === 'token') {
     ensureTokenStore()
+    const user = await registerUserForGuard(guardName, input)
+    try {
+      return await createLoginTokenForGuard(guardName, user, input)
+    } catch (error) {
+      await rollbackSerializedUserForGuard(guardName, user).catch(() => undefined)
+      throw error
+    }
   }
 
-  const user = await registerUserForGuard(guardName, input)
-  return guard.driver === 'token'
-    ? createLoginTokenForGuard(guardName, user)
-    : user
+  return registerUserForGuard(guardName, input)
 }
 
 async function rollbackRegisteredUser(
@@ -1639,6 +1662,14 @@ async function rollbackRegisteredUser(
   }
 }
 
+async function rollbackSerializedUserForGuard(guardName: string, user: SerializedAuthUser): Promise<void> {
+  const guard = getGuardConfig(guardName)
+  const { adapter } = getProviderAdapter(guard.provider)
+  if (adapter.delete) {
+    await adapter.delete(user.id)
+  }
+}
+
 function findProviderNameForUser(user: unknown): string {
   const bindings = getRuntimeBindings()
   const providerNames = Object.keys(bindings.providers)
@@ -1667,7 +1698,7 @@ function findProviderNameForUser(user: unknown): string {
 }
 
 async function establishSessionForUser(
-  user: AuthUser,
+  user: SerializedAuthUser,
   options: {
     readonly guard: string
     readonly provider: string
@@ -1698,7 +1729,7 @@ async function establishSessionForUser(
     && existingPayloads[options.guard]
   )
   const sessionPayload = options.payload
-    ?? toSessionPayload(options.guard, options.provider, user as SerializedAuthUser)
+    ?? toSessionPayload(options.guard, options.provider, user)
   const sessionPayloads = {
     ...existingPayloads,
     [options.guard]: sessionPayload,
@@ -1764,7 +1795,7 @@ async function establishSessionForUser(
     sessionId: session.id,
     rememberToken,
     cookies: Object.freeze(cookies),
-    ...(isEmailVerificationRequired() && !hasVerifiedEmail(user as Readonly<Record<string, unknown>>)
+    ...(isEmailVerificationRequired() && !hasVerifiedEmail(user as unknown as Readonly<Record<string, unknown>>)
       ? {
           emailVerificationRequired: true,
           emailVerificationRoute: createEmailVerificationRedirectRoute(user),
@@ -1790,10 +1821,23 @@ function toPlainTextTokenResult(
   })
 }
 
-function createLoginTokenForGuard(guardName: string, user: AuthUser): Promise<PersonalAccessTokenResult> {
+function getTokenAbilitiesFromInput(input?: Readonly<Record<string, unknown>>): readonly string[] | undefined {
+  const abilities = input?.abilities
+  return Array.isArray(abilities) && abilities.every(ability => typeof ability === 'string')
+    ? abilities
+    : undefined
+}
+
+function createLoginTokenForGuard(
+  guardName: string,
+  user: AuthUser,
+  input?: Readonly<Record<string, unknown>>,
+): Promise<PersonalAccessTokenResult> {
+  const abilities = getTokenAbilitiesFromInput(input)
   return createTokenFacade().create(user, {
     guard: guardName,
     name: guardName,
+    ...(abilities ? { abilities } : {}),
   })
 }
 
@@ -1807,7 +1851,7 @@ async function updateUserRecord(
     readonly email_verified_at?: Date | null
     readonly password?: string | null
   },
-): Promise<AuthUser> {
+): Promise<AuthenticatedAuthUser> {
   const { adapter } = getProviderAdapter(providerName)
   const user = await adapter.findById(userId)
   if (!user) {
@@ -1884,7 +1928,7 @@ function createEmailVerificationFacade(): AuthEmailVerificationFacade {
     resend(options: { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string } = {}): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>> {
       return captureExpectedAuthResult(async () => {
         const guardName = options.guard ?? getDefaultGuardName()
-        let currentUser: AuthUser | null
+        let currentUser: AuthenticatedAuthUser | null
         if (typeof options.email === 'string' && options.email.trim().length > 0) {
           const { provider, adapter } = getGuardProviderAdapter(guardName)
           const matchedUser = await adapter.findByCredentials({
@@ -1903,7 +1947,7 @@ function createEmailVerificationFacade(): AuthEmailVerificationFacade {
           })
         }
 
-        if (hasVerifiedEmail(currentUser as Readonly<Record<string, unknown>>)) {
+        if (hasVerifiedEmail(currentUser as unknown as Readonly<Record<string, unknown>>)) {
           throwAuthError('email_already_verified', 'Your email address is already verified.', {
             guard: guardName,
           })
@@ -1915,7 +1959,7 @@ function createEmailVerificationFacade(): AuthEmailVerificationFacade {
         })
       }, EXPECTED_EMAIL_VERIFICATION_RESEND_ERRORS, createEmailVerificationResendFailure)
     },
-    consume(plainTextToken: string): Promise<AuthResult<AuthUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>> {
+    consume(plainTextToken: string): Promise<AuthResult<AuthenticatedAuthUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>> {
       return captureExpectedAuthResult(async () => {
         const parsed = parsePlainTextToken(plainTextToken)
         if (!parsed) {
@@ -2048,7 +2092,7 @@ async function requestPasswordResetUsingRuntime<TInput extends AuthPasswordReset
 
 async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
   input: TInput,
-): Promise<AuthResult<AuthUser, AuthPasswordResetConsumeErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>>> {
+): Promise<AuthResult<AuthenticatedAuthUser, AuthPasswordResetConsumeErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>>> {
   return captureExpectedAuthResult(async () => {
     if (input.password !== input.passwordConfirmation) {
       throwAuthError('password_confirmation_mismatch', 'Password confirmation does not match.')
@@ -2158,7 +2202,7 @@ function createTokenFacade(): AuthTokenFacade {
       )
       return tokenStore.deleteByUserId(providerName, userId)
     },
-    async authenticate(plainTextToken: string): Promise<AuthUser | null> {
+    async authenticate(plainTextToken: string): Promise<AuthenticatedAuthUser | null> {
       const authenticated = await authenticateAccessTokenRecord(plainTextToken)
       return authenticated?.user ?? null
     },
@@ -2169,8 +2213,8 @@ function createTokenFacade(): AuthTokenFacade {
   })
 }
 
-function createGuardFacade(guardName: string): AuthGuardFacade {
-  return Object.freeze({
+function createGuardFacade(guardName: string): AuthSessionGuardFacade | AuthTokenGuardFacade {
+  const base = {
     check() {
       return checkForGuard(guardName)
     },
@@ -2203,6 +2247,17 @@ function createGuardFacade(guardName: string): AuthGuardFacade {
         error => createRegistrationFailure(error, input),
       )
     },
+    logout() {
+      return logoutForGuard(guardName)
+    },
+  }
+
+  if (getGuardConfig(guardName).driver === 'token') {
+    return Object.freeze(base) as AuthTokenGuardFacade
+  }
+
+  return Object.freeze({
+    ...base,
     loginUsing(user: unknown, options?: AuthSessionLoginOptions) {
       return loginUsingForGuard(guardName, user, options)
     },
@@ -2221,10 +2276,7 @@ function createGuardFacade(guardName: string): AuthGuardFacade {
     stopImpersonating() {
       return stopImpersonatingForGuard(guardName)
     },
-    logout() {
-      return logoutForGuard(guardName)
-    },
-  })
+  }) as AuthSessionGuardFacade
 }
 
 export function configureAuthRuntime(bindings?: AuthRuntimeBindings): void {
@@ -2233,8 +2285,17 @@ export function configureAuthRuntime(bindings?: AuthRuntimeBindings): void {
     return
   }
 
+  const config = normalizeAuthConfig(bindings.config)
+  const defaultGuard = config.guards[config.defaults.guard]
+  if (defaultGuard?.driver === 'token') {
+    throw new Error(
+      `[@holo-js/auth] The default auth guard "${config.defaults.guard}" uses the token driver. `
+      + 'Use a session-backed default guard for top-level login/register, or call auth.guard(name).login/register for token guards.',
+    )
+  }
+
   getAuthRuntimeState().bindings = {
-    config: normalizeAuthConfig(bindings.config),
+    config,
     session: bindings.session,
     providers: bindings.providers,
     tokens: bindings.tokens,
@@ -2329,8 +2390,8 @@ export function getAuthRuntime(): AuthRuntimeFacade {
     needsPasswordRehash(digest: string) {
       return resolveNeedsPasswordRehash(getRuntimeBindings().passwordHasher, digest)
     },
-    guard<TName extends string>(name: TName) {
-      return createGuardFacade(name) as AuthGuardFacadeFor<TName>
+    guard<TName extends string>(name: TName): string extends TName ? AuthGuardFacade : AuthGuardFacadeFor<TName> {
+      return createGuardFacade(name) as string extends TName ? AuthGuardFacade : AuthGuardFacadeFor<TName>
     },
     tokens,
     verification,
@@ -2366,11 +2427,11 @@ export async function checkForGuard(guardName: string): Promise<boolean> {
   return (await userForGuard(guardName)) !== null
 }
 
-export async function userForGuard(guardName: string): Promise<AuthUser | null> {
+export async function userForGuard(guardName: string): Promise<AuthenticatedAuthUser | null> {
   return resolveUserFromGuard(guardName)
 }
 
-export async function refreshUserForGuard(guardName: string): Promise<AuthUser | null> {
+export async function refreshUserForGuard(guardName: string): Promise<AuthenticatedAuthUser | null> {
   return resolveUserFromGuard(guardName, { fresh: true })
 }
 
@@ -2400,11 +2461,11 @@ export async function check(): Promise<boolean> {
   return getAuthRuntime().check()
 }
 
-export async function user(): Promise<AuthUser | null> {
+export async function user(): Promise<AuthenticatedAuthUser | null> {
   return getAuthRuntime().user()
 }
 
-export async function refreshUser(): Promise<AuthUser | null> {
+export async function refreshUser(): Promise<AuthenticatedAuthUser | null> {
   return getAuthRuntime().refreshUser()
 }
 
@@ -2458,7 +2519,7 @@ export async function impersonation(): Promise<AuthImpersonationState | null> {
   return getAuthRuntime().impersonation()
 }
 
-export async function stopImpersonating(): Promise<AuthUser | null> {
+export async function stopImpersonating(): Promise<AuthenticatedAuthUser | null> {
   return getAuthRuntime().stopImpersonating()
 }
 
@@ -2489,7 +2550,7 @@ export async function logout(): Promise<AuthLogoutResult> {
 
 export async function register<TInput extends AuthRegistrationInput>(
   input: TInput,
-): Promise<AuthResult<AuthUser, AuthRegistrationErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>>> {
+): Promise<AuthResult<AuthenticatedAuthUser, AuthRegistrationErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>>> {
   return getAuthRuntime().register(input)
 }
 
@@ -2502,13 +2563,13 @@ export async function requestPasswordReset<TInput extends AuthPasswordResetReque
 
 export async function resetPassword<TInput extends AuthPasswordResetInput>(
   input: TInput,
-): Promise<AuthResult<AuthUser, AuthPasswordResetConsumeErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>>> {
+): Promise<AuthResult<AuthenticatedAuthUser, AuthPasswordResetConsumeErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>>> {
   return getAuthRuntime().resetPassword(input)
 }
 
 export function verifyEmail(
   token: string,
-): Promise<AuthResult<AuthUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>> {
+): Promise<AuthResult<AuthenticatedAuthUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>> {
   return getAuthRuntime().verifyEmail(token)
 }
 

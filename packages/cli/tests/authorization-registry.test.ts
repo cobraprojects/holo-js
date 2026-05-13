@@ -6,7 +6,7 @@ import * as configModule from '@holo-js/config'
 import { normalizeHoloProjectConfig, renderGeneratedSchemaPlaceholder } from '@holo-js/db'
 import { authorizationInternals } from '../../authorization/src/index'
 import { prepareProjectDiscovery } from '../src/project/discovery'
-import { loadGeneratedProjectRegistry, renderGeneratedAuthorizationRegistry, renderGeneratedAuthorizationTypes, writeGeneratedProjectRegistry } from '../src/project/registry'
+import { loadGeneratedProjectRegistry, renderGeneratedAuthTypes, renderGeneratedAuthorizationRegistry, renderGeneratedAuthorizationTypes, writeGeneratedProjectRegistry } from '../src/project/registry'
 import type { GeneratedAuthorizationAbilityRegistryEntry, GeneratedAuthorizationPolicyRegistryEntry } from '../src/project/shared'
 
 const tempDirs: string[] = []
@@ -167,6 +167,43 @@ describe('@holo-js/cli authorization registry discovery', () => {
     expect(types).toContain('user: import(\'@holo-js/auth\').AuthUser')
     expect(types).toContain('"admin": {')
     expect(types).toContain('user: import(\'@holo-js/auth\').AuthUser')
+  })
+
+  it('emits auth guard registry types from auth config', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'config/auth.ts'), `
+import { defineAuthConfig } from '@holo-js/config'
+
+export default defineAuthConfig({
+  defaults: {
+    guard: 'web',
+  },
+  guards: {
+    web: {
+      driver: 'session',
+      provider: 'users',
+    },
+    api: {
+      driver: 'token',
+      provider: 'users',
+    },
+  },
+})
+`, 'utf8')
+
+    await prepareProjectDiscovery(root, normalizeHoloProjectConfig())
+
+    const types = await readFile(join(root, '.holo-js/generated/auth.d.ts'), 'utf8')
+    const index = await readFile(join(root, '.holo-js/generated/index.ts'), 'utf8')
+    expect(types).toContain('declare global')
+    expect(types).toContain('namespace HoloAuth')
+    expect(types).toContain('readonly "web": "session"')
+    expect(types).toContain('readonly "api": "token"')
+    expect(index).toContain('/// <reference path="./auth.d.ts" />')
+  })
+
+  it('renders fallback auth guard types when no guard metadata exists', () => {
+    expect(renderGeneratedAuthTypes({})).toContain('guards: Readonly<Record<string, \'session\'>>')
   })
 
   it('renders fallback authorization registry types for JavaScript entries without import metadata', () => {

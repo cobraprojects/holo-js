@@ -1,4 +1,4 @@
-import type { AuthEstablishedSession, AuthLogoutResult, AuthUserLike } from '@holo-js/auth'
+import type { AuthenticatedAuthUser, AuthEstablishedSession, AuthLogoutResult } from '@holo-js/auth'
 import type { AuthClerkProviderConfig } from '@holo-js/config'
 
 export interface ClerkEmailAddress {
@@ -55,7 +55,7 @@ export type ClerkCompleteAuthResult<TUser extends Readonly<Record<string, unknow
     readonly guard: string
     readonly authProvider: string
     readonly status: ClerkSyncStatus
-    readonly user: AuthUserLike & TUser
+    readonly user: ClerkAuthenticatedUser<TUser>
     readonly identity: HostedIdentityRecord
     readonly session: ClerkVerifiedSession
     readonly authSession?: AuthEstablishedSession
@@ -152,12 +152,17 @@ export interface HostedIdentityStore {
 
 export type ClerkSyncStatus = 'created' | 'updated' | 'linked' | 'relinked'
 
+export type ClerkAuthenticatedUser<TUser extends Readonly<Record<string, unknown>> = Readonly<Record<string, unknown>>> =
+  AuthenticatedAuthUser & TUser & {
+    readonly id: string | number
+  }
+
 export interface ClerkAuthenticationResult<TUser extends Readonly<Record<string, unknown>> = Readonly<Record<string, unknown>>> {
   readonly provider: string
   readonly guard: string
   readonly authProvider: string
   readonly status: ClerkSyncStatus
-  readonly user: AuthUserLike & TUser
+  readonly user: ClerkAuthenticatedUser<TUser>
   readonly identity: HostedIdentityRecord
   readonly session: ClerkVerifiedSession
   readonly authSession?: AuthEstablishedSession

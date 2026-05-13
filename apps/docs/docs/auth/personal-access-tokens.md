@@ -28,6 +28,7 @@ import auth from '@holo-js/auth'
 const { data: token, error } = await auth.guard('api').login({
   email: 'ava@example.com',
   password: 'secret-secret',
+  abilities: ['orders.read'],
 })
 
 if (error) {
@@ -64,6 +65,7 @@ const { data: token, error } = await auth.guard('api').register({
   email: 'ava@example.com',
   password: 'secret-secret',
   passwordConfirmation: 'secret-secret',
+  abilities: ['orders.read'],
 })
 
 if (error) {
@@ -83,7 +85,8 @@ return Response.json({
 ```
 
 For session guards, `login()` and `register()` still return session results. For token guards, they return personal
-access token results.
+access token results. TypeScript infers the guard driver from `config/auth.ts` through the generated `holo prepare`
+types, so `auth.guard('api')` is token-backed when the `api` guard uses `driver: 'token'`.
 
 ## Sending Tokens On Requests
 
@@ -110,6 +113,10 @@ export async function GET() {
     return Response.json({ ok: false, message: 'Unauthenticated.' }, { status: 401 })
   }
 
+  if (!currentUser.can('orders.read')) {
+    return Response.json({ ok: false, message: 'Forbidden.' }, { status: 403 })
+  }
+
   const token = await auth.guard('api').currentAccessToken()
 
   return Response.json({
@@ -119,6 +126,11 @@ export async function GET() {
   })
 }
 ```
+
+The ability check should match the abilities you issue during token creation. In the login example above, the token gets
+`orders.read`, so routes that expose order data should call `currentUser.can('orders.read')` before returning it. The
+current token also exposes `token.can('orders.read')` when the route needs to inspect the token directly. A token with
+`*` passes individual ability checks.
 
 `check()` follows the same guard context:
 

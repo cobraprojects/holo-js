@@ -146,6 +146,10 @@ export interface AuthUserLike {
   readonly [key: string]: unknown
 }
 
+export interface AuthAuthorizable {
+  can(ability: string): boolean
+}
+
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace HoloAuth {
@@ -173,9 +177,7 @@ type AuthGuardFacadeForDriver<TDriver extends AuthGuardDriverName> = TDriver ext
   ? AuthTokenGuardFacade
   : AuthSessionGuardFacade
 
-export type AuthGuardFacadeFor<TName extends string> = TName extends 'api'
-  ? AuthTokenGuardFacade
-  : AuthGuardFacadeForDriver<RegisteredAuthGuardDriver<TName>>
+export type AuthGuardFacadeFor<TName extends string> = AuthGuardFacadeForDriver<RegisteredAuthGuardDriver<TName>>
 
 export type AuthUser = HoloAuthTypeRegistry extends {
   readonly user: infer TUser
@@ -184,6 +186,8 @@ export type AuthUser = HoloAuthTypeRegistry extends {
     ? TUser
     : AuthUserLike
   : AuthUserLike
+
+export type AuthenticatedAuthUser = AuthUser & AuthAuthorizable
 
 export type HoloAuthUser = AuthUser
 
@@ -227,9 +231,9 @@ export interface AuthImpersonationOptions extends AuthSessionLoginOptions {
 export interface AuthImpersonationState {
   readonly guard: string
   readonly actorGuard: string
-  readonly user: AuthUser
-  readonly actor: AuthUser
-  readonly originalUser: AuthUser | null
+  readonly user: AuthenticatedAuthUser
+  readonly actor: AuthenticatedAuthUser
+  readonly originalUser: AuthenticatedAuthUser | null
   readonly startedAt: Date
 }
 
@@ -239,12 +243,12 @@ export interface AuthLogoutResult {
 }
 
 export type AuthGuardLoginData = AuthEstablishedSession | PersonalAccessTokenResult
-export type AuthGuardRegistrationData = AuthUser | PersonalAccessTokenResult
+export type AuthGuardRegistrationData = AuthenticatedAuthUser | PersonalAccessTokenResult
 
-export interface AuthGuardFacade {
+export interface AuthBaseGuardFacade {
   check(): Promise<boolean>
-  user(): Promise<AuthUser | null>
-  refreshUser(): Promise<AuthUser | null>
+  user(): Promise<AuthenticatedAuthUser | null>
+  refreshUser(): Promise<AuthenticatedAuthUser | null>
   provider(): Promise<string | null>
   id(): Promise<string | number | null>
   currentAccessToken(): Promise<AuthCurrentAccessToken | null>
@@ -254,25 +258,30 @@ export interface AuthGuardFacade {
   register<TInput extends AuthRegistrationInput>(
     input: TInput,
   ): Promise<AuthResult<AuthGuardRegistrationData, AuthRegistrationErrorCode, AuthInputFieldErrors<TInput>>>
+  logout(): Promise<AuthLogoutResult>
+}
+
+export interface AuthSessionOnlyFacade {
   loginUsing(user: unknown, options?: AuthSessionLoginOptions): Promise<AuthEstablishedSession>
   loginUsingId(userId: string | number, options?: AuthSessionLoginOptions): Promise<AuthEstablishedSession>
   impersonate(user: unknown, options?: AuthImpersonationOptions): Promise<AuthEstablishedSession>
   impersonateById(userId: string | number, options?: AuthImpersonationOptions): Promise<AuthEstablishedSession>
   impersonation(): Promise<AuthImpersonationState | null>
-  stopImpersonating(): Promise<AuthUser | null>
-  logout(): Promise<AuthLogoutResult>
+  stopImpersonating(): Promise<AuthenticatedAuthUser | null>
 }
 
-export interface AuthSessionGuardFacade extends AuthGuardFacade {
+export interface AuthGuardFacade extends AuthBaseGuardFacade, AuthSessionOnlyFacade {}
+
+export interface AuthSessionGuardFacade extends AuthBaseGuardFacade, AuthSessionOnlyFacade {
   login<TCredentials extends AuthCredentials>(
     credentials: TCredentials,
   ): Promise<AuthResult<AuthEstablishedSession, AuthLoginErrorCode, AuthInputFieldErrors<TCredentials>>>
   register<TInput extends AuthRegistrationInput>(
     input: TInput,
-  ): Promise<AuthResult<AuthUser, AuthRegistrationErrorCode, AuthInputFieldErrors<TInput>>>
+  ): Promise<AuthResult<AuthenticatedAuthUser, AuthRegistrationErrorCode, AuthInputFieldErrors<TInput>>>
 }
 
-export interface AuthTokenGuardFacade extends AuthGuardFacade {
+export interface AuthTokenGuardFacade extends AuthBaseGuardFacade {
   login<TCredentials extends AuthCredentials>(
     credentials: TCredentials,
   ): Promise<AuthResult<PersonalAccessTokenResult, AuthLoginErrorCode, AuthInputFieldErrors<TCredentials>>>
@@ -287,15 +296,15 @@ export interface AuthFacade extends AuthGuardFacade {
   ): Promise<AuthResult<AuthEstablishedSession, AuthLoginErrorCode, AuthInputFieldErrors<TCredentials>>>
   register<TInput extends AuthRegistrationInput>(
     input: TInput,
-  ): Promise<AuthResult<AuthUser, AuthRegistrationErrorCode, AuthInputFieldErrors<TInput>>>
+  ): Promise<AuthResult<AuthenticatedAuthUser, AuthRegistrationErrorCode, AuthInputFieldErrors<TInput>>>
   requestPasswordReset<TInput extends AuthPasswordResetRequestInput>(
     input: TInput,
     options?: AuthPasswordResetRequestOptions,
   ): Promise<AuthResult<void, AuthPasswordResetRequestErrorCode, AuthInputFieldErrors<TInput>>>
   resetPassword<TInput extends AuthPasswordResetInput>(
     input: TInput,
-  ): Promise<AuthResult<AuthUser, AuthPasswordResetConsumeErrorCode, AuthInputFieldErrors<TInput>>>
-  verifyEmail(token: string): Promise<AuthResult<AuthUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>>
+  ): Promise<AuthResult<AuthenticatedAuthUser, AuthPasswordResetConsumeErrorCode, AuthInputFieldErrors<TInput>>>
+  verifyEmail(token: string): Promise<AuthResult<AuthenticatedAuthUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>>
   sendEmailVerification(): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
   sendEmailVerification(email: string): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
   sendEmailVerification(email: string | undefined): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
@@ -307,7 +316,7 @@ export interface AuthFacade extends AuthGuardFacade {
   hashPassword(password: string): Promise<string>
   verifyPassword(password: string, digest: string): Promise<boolean>
   needsPasswordRehash(digest: string): Promise<boolean>
-  guard<TName extends string>(name: TName): AuthGuardFacadeFor<TName>
+  guard<TName extends string>(name: TName): string extends TName ? AuthGuardFacade : AuthGuardFacadeFor<TName>
   tokens: AuthTokenFacade
   verification: AuthEmailVerificationFacade
 }
@@ -385,7 +394,7 @@ export interface AuthTokenFacade {
   list(user: unknown, options?: { readonly guard?: string }): Promise<readonly PersonalAccessTokenRecord[]>
   revoke(options?: { readonly guard?: string }): Promise<void>
   revokeAll(user: unknown, options?: { readonly guard?: string }): Promise<number>
-  authenticate(plainTextToken: string): Promise<AuthUser | null>
+  authenticate(plainTextToken: string): Promise<AuthenticatedAuthUser | null>
   can(token: string, ability: string): Promise<boolean>
 }
 
@@ -394,6 +403,7 @@ export interface AuthCurrentAccessToken extends Omit<PersonalAccessTokenRecord, 
   readonly createdAt: Date
   readonly lastUsedAt?: Date
   readonly expiresAt?: Date | null
+  can(ability: string): boolean
   delete(): Promise<void>
 }
 
@@ -458,7 +468,7 @@ export interface PasswordResetTokenStore {
 export interface AuthDeliveryHook {
   sendEmailVerification(input: {
     readonly provider: string
-    readonly user: AuthUser
+    readonly user: AuthenticatedAuthUser
     readonly email: string
     readonly token: EmailVerificationTokenResult
     readonly route: string
@@ -475,7 +485,7 @@ export interface AuthDeliveryHook {
 export interface AuthEmailVerificationFacade {
   create(user: unknown, options?: { readonly guard?: string, readonly expiresAt?: Date }): Promise<EmailVerificationTokenResult>
   resend(options?: { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string }): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
-  consume(plainTextToken: string): Promise<AuthResult<AuthUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>>
+  consume(plainTextToken: string): Promise<AuthResult<AuthenticatedAuthUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>>
 }
 
 export interface AuthSessionRecord {
@@ -533,8 +543,8 @@ export interface AuthSessionRuntime {
 export interface AuthRuntimeContext {
   getSessionId(guardName: string): string | undefined
   setSessionId(guardName: string, sessionId?: string): void
-  getCachedUser(guardName: string): AuthUser | null | undefined
-  setCachedUser(guardName: string, user: AuthUser | null): void
+  getCachedUser(guardName: string): AuthenticatedAuthUser | null | undefined
+  setCachedUser(guardName: string, user: AuthenticatedAuthUser | null): void
   getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
   getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
   appendResponseCookie?(cookie: string): void | Promise<void>
@@ -564,7 +574,7 @@ export interface AuthRuntimeFacade extends AuthFacade {
 export interface AuthEstablishedSession {
   readonly guard: string
   readonly provider: string
-  readonly user: AuthUser
+  readonly user: AuthenticatedAuthUser
   readonly sessionId: string
   readonly rememberToken?: string
   readonly cookies: readonly string[]
@@ -576,7 +586,7 @@ export interface CurrentAuthResponse {
   readonly authenticated: boolean
   readonly guard: string
   readonly provider: string | null
-  readonly user: AuthUser | null
+  readonly user: HoloAuthUser | null
 }
 
 export interface AuthClientConfig {

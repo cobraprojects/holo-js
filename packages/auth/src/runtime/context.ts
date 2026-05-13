@@ -1,9 +1,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import type { AuthRuntimeContext, AuthUser } from '../contracts'
+import type { AuthenticatedAuthUser, AuthRuntimeContext } from '../contracts'
 
 export type MemoryAuthContext = AuthRuntimeContext & {
   readonly sessionIds: Map<string, string>
-  readonly cachedUsers: Map<string, AuthUser | null>
+  readonly cachedUsers: Map<string, AuthenticatedAuthUser | null>
   readonly accessTokens: Map<string, string>
   readonly rememberTokens: Map<string, string>
   getAccessToken(guardName: string): string | undefined
@@ -27,7 +27,7 @@ function setMapValue(map: Map<string, string>, key: string, value?: string): voi
 
 export function createMemoryAuthContext(): MemoryAuthContext {
   const sessionIds = new Map<string, string>()
-  const cachedUsers = new Map<string, AuthUser | null>()
+  const cachedUsers = new Map<string, AuthenticatedAuthUser | null>()
   const accessTokens = new Map<string, string>()
   const rememberTokens = new Map<string, string>()
 

@@ -16,7 +16,10 @@ export async function POST({ request }: { request: Request }) {
     })
   }
 
-  const { data: token, error } = await auth.guard('api').login(submission.data)
+  const { data: token, error } = await auth.guard('api').login({
+    ...submission.data,
+    abilities: ['posts.read'],
+  })
 
   if (error) {
     return json({

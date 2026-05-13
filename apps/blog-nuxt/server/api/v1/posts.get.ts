@@ -4,14 +4,24 @@ import Post from '../../models/Post'
 
 export default defineEventHandler(async (event) => {
   const currentUser = await auth.guard('api').user()
-  const userId = currentUser?.id
 
-  if (typeof userId === 'undefined') {
+  if (!currentUser) {
     setResponseStatus(event, 401)
 
     return {
       ok: false,
       message: 'Unauthenticated.',
+    }
+  }
+
+  const userId = currentUser.id
+
+  if (!currentUser.can('posts.read')) {
+    setResponseStatus(event, 403)
+
+    return {
+      ok: false,
+      message: 'Forbidden.',
     }
   }
 

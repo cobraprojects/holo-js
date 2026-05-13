@@ -43,7 +43,7 @@ export default defineAuthConfig({
     route: env('AUTH_EMAIL_VERIFICATION_ROUTE', '/verify-email'),
   },
   personalAccessTokens: {
-    defaultAbilities: ['posts.read'],
+    defaultAbilities: [],
   },
   social: {
     google: {
