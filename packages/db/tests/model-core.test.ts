@@ -441,11 +441,15 @@ describe('model core slice', () => {
     expect(User.definition.timestamps).toBe(true)
   })
 
-  it('fails fast when defineModel(tableName, options) is called before the generated schema is registered', () => {
-    expect(() => defineModel('users', {
+  it('defers defineModel(tableName, options) generated schema lookups until the model is used', () => {
+    const User = defineModel('users', {
       fillable: ['name'],
       timestamps: true,
-    })).toThrow(
+    })
+
+    expect(User.definition.name).toBe('User')
+    expect(User.definition.fillable).toEqual(['name'])
+    expect(() => User.getTableName()).toThrow(
       'Model "users" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.',
     )
   })
@@ -546,10 +550,37 @@ describe('model core slice', () => {
     )
   })
 
-  it('throws immediately when defineModel(tableName) references a missing generated schema table', () => {
-    expect(() => defineModel('missing_users')).toThrow(
+  it('defers generated schema table resolution until the model is used', () => {
+    const MissingUser = defineModel('missing_users')
+
+    expect(MissingUser.definition.name).toBe('MissingUser')
+    expect(MissingUser.definition.morphClass).toBe('MissingUser')
+    expect(() => MissingUser.getTableName()).toThrow(
       'Model "missing_users" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.',
     )
+  })
+
+  it('resolves deferred generated models from the configured runtime schema registry', () => {
+    const admins = defineTable('admins', {
+      id: column.id(),
+      name: column.string(),
+    })
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: {
+        default: createDatabase({
+          connectionName: 'default',
+          adapter: new InMemoryAdapter({}, {}),
+          dialect: createDialect('sqlite'),
+        }),
+      },
+    }))
+    DB.connection().getSchemaRegistry().replace(admins)
+
+    const Admin = defineModel('admins')
+
+    expect(Admin.getTableName()).toBe('admins')
+    expect(Admin.definition.table.columns).toHaveProperty('name')
   })
 
   it('aligns default polymorphic relation columns with builder-generated morph columns', () => {

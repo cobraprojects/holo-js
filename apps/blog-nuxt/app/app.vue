@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { useAuth } from '@holo-js/auth/nuxt'
 
-const { authenticated, refreshUser, user } = await useAuth()
+const { authenticated, provider, refreshUser, user } = await useAuth()
 const displayName = computed(() => user.value?.name ?? user.value?.email ?? 'Account')
+const isClerkSession = computed(() => provider.value === 'clerk')
+const isWorkosSession = computed(() => provider.value === 'workos')
 
 async function logout() {
   await $fetch('/api/logout', { method: 'POST' })
@@ -18,13 +20,14 @@ async function logout() {
         <NuxtLink to="/" class="brand">blog-nuxt</NuxtLink>
         <NuxtLink to="/posts">Posts</NuxtLink>
         <NuxtLink to="/admin">Admin</NuxtLink>
+        <NuxtLink to="/super-admin">Super Admin</NuxtLink>
         <template v-if="authenticated">
           <span class="user-name">{{ displayName }}</span>
           <button type="button" class="logout-button" @click="logout">Logout</button>
-          <form action="/api/auth/workos/logout" method="post" class="logout-form">
+          <form v-if="isWorkosSession" action="/api/auth/workos/logout" method="post" class="logout-form">
             <button type="submit" class="logout-button">Logout from WorkOS</button>
           </form>
-          <form action="/api/auth/clerk/logout" method="post" class="logout-form">
+          <form v-if="isClerkSession" action="/api/auth/clerk/logout" method="post" class="logout-form">
             <button type="submit" class="logout-button">Logout from Clerk</button>
           </form>
         </template>

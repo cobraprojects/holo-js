@@ -272,12 +272,12 @@ export async function getRuntimeEnvironment(projectRoot: string): Promise<Runtim
 export const nodeRuntimeScript = `
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import {
   configureDB,
   createSchemaService,
   createMigrationService,
   createSeederService,
+  registerGeneratedTables,
   renderGeneratedSchemaModule,
   resetDB,
   resolveRuntimeConnectionManagerOptions,
@@ -357,6 +357,12 @@ async function writeGeneratedSchemaArtifact(manager, outputPath) {
   await writeFile(outputPath, source, 'utf8')
 }
 
+function syncGeneratedSchemaFromManager(manager) {
+  registerGeneratedTables(Object.fromEntries(
+    manager.connection().getSchemaRegistry().list().map(table => [table.tableName, table]),
+  ))
+}
+
 const manager = resolveRuntimeConnectionManagerOptions(payload.runtimeConfig)
 configureDB(manager)
 
@@ -400,7 +406,7 @@ try {
 
     const executed = await createMigrationService(manager.connection(), migrations).migrate({})
     await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath)
-    await preloadGeneratedSchema(manager, pathToFileURL(payload.generatedSchemaOutputPath).href)
+    syncGeneratedSchemaFromManager(manager)
     if (executed.length === 0) {
       console.log('No migrations were executed.')
     } else {

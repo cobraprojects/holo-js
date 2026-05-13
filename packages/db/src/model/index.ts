@@ -41,9 +41,13 @@ export {
 } from './uniqueIds'
 export type { ModelCollection } from './collection'
 export type { Model } from './Entity'
+export type { StaticModelApi } from './staticModelApi'
 export type {
   BelongsToManyRelationDefinition,
   BelongsToRelationDefinition,
+  BuiltInCastName,
+  BuiltInCastString,
+  CastableDefinition,
   DefineModelOptions,
   EntityWithLoaded,
   ModelAttributeKey,
@@ -54,6 +58,7 @@ export type {
   ModelInsertPayload,
   ModelRecord,
   ModelReference,
+  ModelCastDefinition,
   DynamicRelationResolver,
   EmptyScopeMap,
   EnumCastDefinition,

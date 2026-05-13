@@ -1,4 +1,4 @@
-import { check, currentAccessToken, getAuthRuntime, hashPassword, id, impersonate, impersonateById, impersonation, login, loginUsing, loginUsingId, logout, needsPasswordRehash, refreshUser, register, requestPasswordReset, resendEmailVerification, resetPassword, sendEmailVerification, stopImpersonating, tokens, user, verification, verifyEmail, verifyPassword } from './runtime'
+import { check, currentAccessToken, getAuthRuntime, hashPassword, id, impersonate, impersonateById, impersonation, login, loginUsing, loginUsingId, logout, needsPasswordRehash, provider, refreshUser, register, requestPasswordReset, resendEmailVerification, resetPassword, sendEmailVerification, stopImpersonating, tokens, user, verification, verifyEmail, verifyPassword } from './runtime'
 
 export { AUTH_ERROR_CODES, AuthError, defineAuthConfig, isAuthError } from './contracts'
 export {
@@ -18,6 +18,7 @@ export {
   loginUsingId,
   logout,
   needsPasswordRehash,
+  provider,
   refreshUser,
   register,
   requestPasswordReset,
@@ -95,6 +96,7 @@ const auth = Object.freeze({
   check,
   user,
   refreshUser,
+  provider,
   id,
   currentAccessToken,
   hashPassword,

@@ -1825,6 +1825,40 @@ APP_ENV=development
     expect(projectInternals.renderEnvFileContents(['', '\n'])).toBe('')
   })
 
+  it('renders scaffolded current-auth routes that honor guard query parameters', () => {
+    const renderCurrentAuthRoute = (framework: 'next' | 'nuxt' | 'sveltekit', path: string): string => {
+      return projectInternals.renderFrameworkFiles({
+        projectName: 'Guarded Auth App',
+        framework,
+        databaseDriver: 'sqlite',
+        packageManager: 'bun',
+        storageDefaultDisk: 'local',
+        optionalPackages: ['auth'],
+      }).find(file => file.path === path)?.contents ?? ''
+    }
+
+    const nextCurrentAuthRoute = renderCurrentAuthRoute('next', 'app/api/auth/user/route.ts')
+    expect(nextCurrentAuthRoute).toContain('new URL(request.url).searchParams.get(\'guard\')')
+    expect(nextCurrentAuthRoute).toContain('const guardAuth = guard ? auth.guard(guard) : undefined')
+    expect(nextCurrentAuthRoute).toContain('authenticated: guardAuth ? await guardAuth.check() : await check()')
+    expect(nextCurrentAuthRoute).toContain('provider: guardAuth ? await guardAuth.provider() : await provider()')
+    expect(nextCurrentAuthRoute).toContain('user: guardAuth ? await guardAuth.user() : await user()')
+
+    const nuxtCurrentAuthRoute = renderCurrentAuthRoute('nuxt', 'server/api/auth/user.get.ts')
+    expect(nuxtCurrentAuthRoute).toContain('const query = getQuery(event)')
+    expect(nuxtCurrentAuthRoute).toContain('const guardAuth = guard ? auth.guard(guard) : undefined')
+    expect(nuxtCurrentAuthRoute).toContain('authenticated: guardAuth ? await guardAuth.check() : await check()')
+    expect(nuxtCurrentAuthRoute).toContain('provider: guardAuth ? await guardAuth.provider() : await provider()')
+    expect(nuxtCurrentAuthRoute).toContain('user: guardAuth ? await guardAuth.user() : await user()')
+
+    const svelteCurrentAuthRoute = renderCurrentAuthRoute('sveltekit', 'src/routes/api/auth/user/+server.ts')
+    expect(svelteCurrentAuthRoute).toContain('const guard = url.searchParams.get(\'guard\') ?? undefined')
+    expect(svelteCurrentAuthRoute).toContain('const guardAuth = guard ? auth.guard(guard) : undefined')
+    expect(svelteCurrentAuthRoute).toContain('authenticated: guardAuth ? await guardAuth.check() : await check()')
+    expect(svelteCurrentAuthRoute).toContain('provider: guardAuth ? await guardAuth.provider() : await provider()')
+    expect(svelteCurrentAuthRoute).toContain('user: guardAuth ? await guardAuth.user() : await user()')
+  })
+
   it('scaffolds a new project with cache support through the CLI', async () => {
     const targetRoot = await createTempDirectory()
     tempDirs.push(targetRoot)
@@ -5598,9 +5632,9 @@ export default {
     factories: 'server/db/factories',
     commands: 'server/commands',
   },
-  models: ['server/models/User.ts'],
+  models: ['server/models/User.ts', 'server/models/Admin.ts'],
   migrations: ['server/db/migrations/2026_01_01_000001_create_users.ts'],
-  seeders: ['server/db/seeders/UserSeeder.ts'],
+  seeders: ['server/db/seeders/UserSeeder.ts', 'server/db/seeders/AdminSeeder.ts'],
 }
 `)
     await writeProjectFile(projectRoot, 'config/database.ts', `
@@ -5643,6 +5677,15 @@ export default defineModel('users', {
 })
 `)
 
+    await writeProjectFile(projectRoot, 'server/models/Admin.ts', `
+import '../../.holo-js/generated/schema.generated'
+import { defineModel } from '@holo-js/db'
+
+export default defineModel('admins', {
+  fillable: ['name'],
+})
+`)
+
     await writeProjectFile(projectRoot, 'server/db/seeders/UserSeeder.ts', `
 import User from '../../models/User'
 import { defineSeeder } from '@holo-js/db'
@@ -5651,6 +5694,20 @@ export default defineSeeder({
   name: 'UserSeeder',
   async run() {
     await User.query().where('name', '=', 'Alice').count()
+  },
+})
+`)
+
+    await writeProjectFile(projectRoot, 'server/db/seeders/AdminSeeder.ts', `
+import Admin from '../../models/Admin'
+import { defineSeeder } from '@holo-js/db'
+
+export default defineSeeder({
+  name: 'AdminSeeder',
+  async run() {
+    await Admin.unguarded(() => Admin.create({
+      name: 'Root',
+    }))
   },
 })
 `)
@@ -5664,8 +5721,13 @@ export default defineMigration({
       table.id()
       table.string('name')
     })
+    await schema.createTable('admins', (table) => {
+      table.id()
+      table.string('name')
+    })
   },
   async down({ schema }) {
+    await schema.dropTable('admins')
     await schema.dropTable('users')
   },
 })
@@ -5673,10 +5735,13 @@ export default defineMigration({
 
     const fresh = runCliProcess(projectRoot, ['migrate:fresh', '--seed'])
     expect(fresh.status, fresh.stderr || fresh.stdout).toBe(0)
-    expect(fresh.stdout).toMatch(/Seeders executed:\s+UserSeeder/)
+    expect(fresh.stdout).toContain('Seeders executed:')
+    expect(fresh.stdout).toContain('UserSeeder')
+    expect(fresh.stdout).toContain('AdminSeeder')
 
     const generated = await readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8')
     expect(generated).toContain('"name": column.string()')
+    expect(generated).toContain('export const admins = defineGeneratedTable("admins", {')
   }, 30000)
 
   it('runs runtime commands without requiring the app to install @holo-js/db directly', async () => {

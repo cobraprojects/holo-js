@@ -1,5 +1,6 @@
 import { singularize } from 'inflection'
-import { SchemaError } from '../core/errors'
+import { ConfigurationError, SchemaError } from '../core/errors'
+import { DB } from '../facade/DB'
 import { TableDefinitionBuilder } from '../schema/TableDefinitionBuilder'
 import { getGeneratedTableDefinition } from '../schema/generated'
 import type { ColumnInput } from '../schema/columns'
@@ -50,8 +51,23 @@ export function inferPrimaryKey<TTable extends TableDefinition>(table: TTable): 
   return primaryKey.name as Extract<keyof TTable['columns'], string>
 }
 
-export function resolveGeneratedModelTable(tableName: string): TableDefinition {
-  const table = getGeneratedTableDefinition(tableName)
+function getRuntimeSchemaTable(tableName: string, connectionName?: string): TableDefinition | undefined {
+  try {
+    return DB.getManager().connection(connectionName).getSchemaRegistry().get(tableName)
+  } catch (error) {
+    if (
+      error instanceof ConfigurationError
+      && error.message === 'DB facade is not configured with a ConnectionManager.'
+    ) {
+      return undefined
+    }
+
+    throw error
+  }
+}
+
+export function resolveGeneratedModelTable(tableName: string, connectionName?: string): TableDefinition {
+  const table = getGeneratedTableDefinition(tableName) ?? getRuntimeSchemaTable(tableName, connectionName)
   if (!table) {
     throw new SchemaError(
       `Model "${tableName}" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.`,

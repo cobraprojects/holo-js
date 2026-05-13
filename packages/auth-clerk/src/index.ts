@@ -1067,8 +1067,10 @@ async function reuseExistingHoloSession(
   }
 
   bindings.context.setCachedUser(authenticated.guard, authenticated.user)
+  const source = payload as typeof payload & { readonly clerk?: unknown }
   return Object.freeze({
     guard: authenticated.guard,
+    provider: source.clerk && typeof source.clerk === 'object' ? 'clerk' : payload.provider,
     user: authenticated.user,
     sessionId,
     cookies: Object.freeze([]),

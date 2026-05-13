@@ -7,7 +7,10 @@
   let { data, children }: LayoutProps = $props()
   let isLoggingOut = $state(false)
 
-  const auth = useAuth({ initialUser: untrack(() => data?.auth?.user ?? null) })
+  const auth = useAuth({
+    initialProvider: untrack(() => data?.auth?.provider ?? null),
+    initialUser: untrack(() => data?.auth?.user ?? null),
+  })
   const displayName = $derived(auth.user?.name ?? auth.user?.email ?? 'Account')
 
   async function logout() {
@@ -39,15 +42,20 @@
       <a href="/" class="brand">blog-sveltekit</a>
       <a href="/posts">Posts</a>
       <a href="/admin">Admin</a>
+      <a href="/super-admin">Super Admin</a>
       {#if auth.authenticated}
         <span class="user-name">{displayName}</span>
         <button type="button" class="logout-button" disabled={isLoggingOut} aria-busy={isLoggingOut} onclick={logout}>Logout</button>
-        <form action="/api/auth/workos/logout" method="post" class="logout-form">
-          <button type="submit" class="logout-button">Logout from WorkOS</button>
-        </form>
-        <form action="/api/auth/clerk/logout" method="post" class="logout-form">
-          <button type="submit" class="logout-button">Logout from Clerk</button>
-        </form>
+        {#if auth.provider === 'workos'}
+          <form action="/api/auth/workos/logout" method="post" class="logout-form">
+            <button type="submit" class="logout-button">Logout from WorkOS</button>
+          </form>
+        {/if}
+        {#if auth.provider === 'clerk'}
+          <form action="/api/auth/clerk/logout" method="post" class="logout-form">
+            <button type="submit" class="logout-button">Logout from Clerk</button>
+          </form>
+        {/if}
       {:else}
         <a href="/login">Login</a>
         <a href="/register">Register</a>

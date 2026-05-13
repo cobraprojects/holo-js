@@ -1,0 +1,93 @@
+'use client'
+
+import { useRouter } from 'next/navigation'
+import { useAuth } from '@holo-js/auth/next/client'
+import { useForm } from '@holo-js/adapter-next/client'
+import { loginForm } from '@/lib/schemas/auth'
+
+const panelStyle = {
+  display: 'grid',
+  gap: '1rem',
+  maxWidth: '32rem',
+  padding: '1.5rem',
+  borderRadius: '1rem',
+  background: '#111827',
+  border: '1px solid rgba(148, 163, 184, 0.16)',
+} satisfies React.CSSProperties
+
+export default function SuperAdminLoginPage() {
+  const router = useRouter()
+  const auth = useAuth({ guard: 'admin' })
+  const form = useForm(loginForm, {
+    validateOn: 'blur',
+    initialValues: { email: '', password: '', remember: false },
+    async submitter({ formData }) {
+      const response = await fetch('/api/super-admin/login', { method: 'POST', body: formData })
+      const submission = await response.json()
+      if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
+        try {
+          await auth.refreshUser()
+        } catch (error) {
+          console.warn('Admin auth refresh failed after login.', error)
+        }
+        router.replace(submission.data.redirectTo)
+      }
+      return submission
+    },
+  })
+
+  return (
+    <section style={panelStyle}>
+      <div>
+        <h1 style={{ margin: '0 0 0.5rem 0' }}>Super Admin Sign In</h1>
+        <p style={{ margin: 0, color: '#94a3b8' }}>Use an admin account to access the super admin area.</p>
+      </div>
+
+      <form onSubmit={(event) => { event.preventDefault(); form.submit() }} style={{ display: 'grid', gap: '0.9rem' }}>
+        <label style={{ display: 'grid', gap: '0.35rem' }}>
+          <span>Email</span>
+          <input
+            name="email"
+            type="email"
+            value={form.values.email}
+            onInput={(event) => form.fields.email.onInput(event.currentTarget.value)}
+            onBlur={() => form.fields.email.onBlur()}
+          />
+          {form.errors.has('email') ? <span style={{ color: '#fca5a5' }}>{form.errors.first('email')}</span> : null}
+        </label>
+
+        <label style={{ display: 'grid', gap: '0.35rem' }}>
+          <span>Password</span>
+          <input
+            name="password"
+            type="password"
+            value={form.values.password}
+            onInput={(event) => form.fields.password.onInput(event.currentTarget.value)}
+            onBlur={() => form.fields.password.onBlur()}
+          />
+          {form.errors.has('password') ? <span style={{ color: '#fca5a5' }}>{form.errors.first('password')}</span> : null}
+        </label>
+
+        <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <input
+            name="remember"
+            type="checkbox"
+            checked={form.values.remember}
+            onChange={(event) => form.fields.remember.onInput(event.currentTarget.checked)}
+          />
+          Remember me
+        </label>
+
+        <button type="submit" disabled={form.submitting}>
+          {form.submitting ? 'Signing in...' : 'Sign in as super admin'}
+        </button>
+      </form>
+
+      {form.lastSubmission?.ok === true ? (
+        <div style={{ color: '#86efac' }}>
+          <p style={{ margin: 0 }}>Signed in as super admin.</p>
+        </div>
+      ) : null}
+    </section>
+  )
+}

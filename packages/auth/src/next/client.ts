@@ -1,7 +1,7 @@
 'use client'
 
 import { createContext, createElement, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
-import { refreshUser as refreshCurrentUser } from '../client'
+import { authClientInternals } from '../client'
 import type { AuthClientRequestOptions, HoloAuthUser } from '../contracts'
 
 export type { HoloAuthUser } from '../contracts'
@@ -9,11 +9,13 @@ export type { HoloAuthUser } from '../contracts'
 type UseAuthRequestOptions = Pick<AuthClientRequestOptions, 'endpoint' | 'guard' | 'headers'>
 
 export type UseAuthOptions = UseAuthRequestOptions & {
+  readonly initialProvider?: string | null
   readonly initialUser?: HoloAuthUser | null
 }
 
 export type UseAuthResult = {
   readonly authenticated: boolean
+  readonly provider: string | null
   readonly user: HoloAuthUser | null
   readonly refreshUser: () => Promise<HoloAuthUser | null>
 }
@@ -33,16 +35,20 @@ function useAuthState(
   options: UseAuthOptions = {},
   stateOptions: { readonly refreshOnMount?: boolean } = {},
 ): UseAuthResult {
-  const { initialUser, ...requestOptions } = options
+  const { initialProvider, initialUser, ...requestOptions } = options
+  const [currentProvider, setCurrentProvider] = useState<string | null>(initialProvider ?? null)
   const [currentUser, setCurrentUser] = useState<HoloAuthUser | null>(initialUser ?? null)
   const requestOptionsRef = useRef<AuthClientRequestOptions>(requestOptions)
 
   requestOptionsRef.current = requestOptions
 
   const refreshUser = useCallback(async () => {
-    const nextUser = await refreshCurrentUser(requestOptionsRef.current)
-    setCurrentUser(nextUser)
-    return nextUser
+    const currentAuth = await authClientInternals.fetchCurrentUser(requestOptionsRef.current, {
+      force: true,
+    })
+    setCurrentProvider(currentAuth.provider)
+    setCurrentUser(currentAuth.user)
+    return currentAuth.user
   }, [])
 
   useEffect(() => {
@@ -53,6 +59,7 @@ function useAuthState(
 
   return {
     authenticated: currentUser !== null,
+    provider: currentProvider,
     user: currentUser,
     refreshUser,
   }

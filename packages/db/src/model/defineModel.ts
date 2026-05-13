@@ -159,13 +159,12 @@ function defineModelFromGeneratedTableName<
   tableName: TName,
   options: DefineModelOptions<GeneratedSchemaTable<TName>, TScopes, TRelations> = {},
 ): StaticModelApi<GeneratedSchemaTable<TName>, TScopes, TRelations> {
-  const resolvedAtDefinition = resolveGeneratedModelTable(tableName) as GeneratedSchemaTable<TName>
   const inferredName = options.name ?? inferModelName(tableName)
   const relations = { ...(options.relations ?? {}) } as TRelations
   const touches = validateTouches(inferredName, relations, options.touches ?? [])
 
   const resolveTableDefinition = (): GeneratedSchemaTable<TName> => (
-    resolveGeneratedModelTable(tableName) as GeneratedSchemaTable<TName>
+    resolveGeneratedModelTable(tableName, options.connectionName) as GeneratedSchemaTable<TName>
   )
   const resolvePrimaryKeyFromTable = (
     table: GeneratedSchemaTable<TName>,
@@ -208,8 +207,6 @@ function defineModelFromGeneratedTableName<
   const resolveUniqueId = (): UniqueIdRuntimeConfig<GeneratedSchemaTable<TName>> | null => {
     return resolveUniqueIdFromTable(resolveTable())
   }
-
-  validateUniqueIdConfig(resolvedAtDefinition, inferredName, resolveUniqueId())
 
   const definition = {
     kind: 'model' as const,

@@ -1,6 +1,6 @@
 import { describe, expectTypeOf, it } from 'vitest'
 import auth, { AuthError, isAuthError, type AuthEmailVerificationConsumeErrorCode, type AuthEmailVerificationResendErrorCode, type AuthErrorCode, type AuthEstablishedSession, type AuthFailure, type AuthFieldErrors, type AuthGuardFacade, type AuthImpersonationState, type AuthLoginErrorCode, type AuthLogoutResult, type AuthPasswordResetConsumeErrorCode, type AuthPasswordResetRequestErrorCode, type AuthProviderAdapter, type AuthRegistrationErrorCode, type AuthResult, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type EmailVerificationTokenResult, type getAuthRuntime, type HoloAuthUser, type register, type user, type verifyEmail } from '../src'
-import clientAuth, { type refreshUser as refreshClientUser, type useAuth as clientUseAuth, type user as clientUser } from '../src/client'
+import clientAuth, { type provider as clientProvider, type refreshUser as refreshClientUser, type useAuth as clientUseAuth, type user as clientUser } from '../src/client'
 import type { useAuth as useNextAuth } from '../src/next/client'
 import type { useAuth as useNuxtAuth } from '../src/nuxt'
 import type { useAuth as useSvelteKitAuth } from '../src/sveltekit/client'
@@ -31,10 +31,12 @@ describe('@holo-js/auth typing', () => {
     type CurrentServerUser = Awaited<ReturnType<typeof user>>
     type CurrentClientUser = Awaited<ReturnType<typeof clientUser>>
     type CurrentClientAuth = Awaited<ReturnType<typeof clientUseAuth>>
+    type CurrentClientProvider = Awaited<ReturnType<typeof clientProvider>>
     type CurrentNextAuth = ReturnType<typeof useNextAuth>
     type CurrentNuxtAuth = Awaited<ReturnType<typeof useNuxtAuth>>
     type CurrentSvelteKitAuth = ReturnType<typeof useSvelteKitAuth>
     type RefreshedClientUser = Awaited<ReturnType<typeof refreshClientUser>>
+    type GuardProvider = Awaited<ReturnType<AuthGuardFacade['provider']>>
     type GuardUser = Awaited<ReturnType<AuthGuardFacade['user']>>
     type GuardRefreshedUser = Awaited<ReturnType<AuthGuardFacade['refreshUser']>>
     type TrustedSession = Awaited<ReturnType<AuthGuardFacade['loginUsing']>>
@@ -54,10 +56,15 @@ describe('@holo-js/auth typing', () => {
       readonly check: () => boolean
       readonly refreshUser: () => Promise<AppAuthUser | null>
     }>()
+    expectTypeOf<CurrentClientProvider>().toEqualTypeOf<string | null>()
     expectTypeOf<CurrentNextAuth['user']>().toEqualTypeOf<AppAuthUser | null>()
+    expectTypeOf<CurrentNextAuth['provider']>().toEqualTypeOf<string | null>()
     expectTypeOf<CurrentNuxtAuth['user']['value']>().toEqualTypeOf<AppAuthUser | null>()
+    expectTypeOf<CurrentNuxtAuth['provider']['value']>().toEqualTypeOf<string | null>()
     expectTypeOf<CurrentSvelteKitAuth['user']>().toEqualTypeOf<AppAuthUser | null>()
+    expectTypeOf<CurrentSvelteKitAuth['provider']>().toEqualTypeOf<string | null>()
     expectTypeOf<RefreshedClientUser>().toEqualTypeOf<AppAuthUser | null>()
+    expectTypeOf<GuardProvider>().toEqualTypeOf<string | null>()
     expectTypeOf<GuardUser>().toEqualTypeOf<AppAuthUser | null>()
     expectTypeOf<GuardRefreshedUser>().toEqualTypeOf<AppAuthUser | null>()
     expectTypeOf<TrustedSession>().toEqualTypeOf<AuthEstablishedSession>()
@@ -68,6 +75,7 @@ describe('@holo-js/auth typing', () => {
     expectTypeOf<GuardLogout>().toEqualTypeOf<AuthLogoutResult>()
     expectTypeOf<RuntimeLogoutAll>().toEqualTypeOf<readonly AuthLogoutResult[]>()
     expectTypeOf<CurrentAuthResponse['user']>().toEqualTypeOf<AppAuthUser | null>()
+    expectTypeOf<CurrentAuthResponse['provider']>().toEqualTypeOf<string | null>()
 
     const adapter: AuthProviderAdapter<{
       readonly id: number
@@ -108,6 +116,7 @@ describe('@holo-js/auth typing', () => {
     expectTypeOf(adapter.serialize).returns.toEqualTypeOf<AppAuthUser>()
     expectTypeOf(adapter.delete).toEqualTypeOf<((id: string | number) => Promise<void>) | undefined>()
     expectTypeOf(auth.user).returns.toEqualTypeOf<Promise<AppAuthUser | null>>()
+    expectTypeOf(auth.provider).returns.toEqualTypeOf<Promise<string | null>>()
     expectTypeOf(auth.login).returns.toEqualTypeOf<Promise<AuthResult<AuthEstablishedSession, AuthLoginErrorCode>>>()
     expectTypeOf(auth.loginUsing).returns.toEqualTypeOf<Promise<AuthEstablishedSession>>()
     expectTypeOf(auth.loginUsingId).returns.toEqualTypeOf<Promise<AuthEstablishedSession>>()
@@ -125,6 +134,7 @@ describe('@holo-js/auth typing', () => {
     expectTypeOf(auth.resendEmailVerification).parameter(0).toEqualTypeOf<string | undefined>()
     expectTypeOf(auth.resendEmailVerification).returns.toEqualTypeOf<Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>>()
     expectTypeOf(clientAuth.user).returns.toEqualTypeOf<Promise<AppAuthUser | null>>()
+    expectTypeOf(clientAuth.provider).returns.toEqualTypeOf<Promise<string | null>>()
     expectTypeOf(clientAuth.useAuth).returns.toEqualTypeOf<Promise<CurrentAuthResponse & {
       readonly check: () => boolean
       readonly refreshUser: () => Promise<AppAuthUser | null>

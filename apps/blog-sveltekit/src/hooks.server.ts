@@ -10,4 +10,14 @@ export const handle = sequence(
     routes: ['/admin/*'],
     redirectTo: '/login',
   }),
+  guestOnly({
+    routes: ['/super-admin/login'],
+    guard: 'admin',
+    redirectTo: '/super-admin',
+  }),
+  authOnly({
+    routes: ['/super-admin'],
+    guard: 'admin',
+    redirectTo: '/super-admin/login',
+  }),
 )

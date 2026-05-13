@@ -1,19 +1,31 @@
+import { hashPassword } from '@holo-js/auth'
 import { defineSeeder } from '@holo-js/db'
 
 import Post from '../../models/Post'
 import User from '../../models/User'
 import Category from '../../models/Category'
 import Tag from '../../models/Tag'
+import Admin from '../../models/Admin'
 
 export default defineSeeder({
   name: 'BlogSeeder',
   async run() {
     const timestamp = new Date('2026-04-26T09:00:00.000Z')
+    const userPassword = await hashPassword('secret')
+    const adminPassword = await hashPassword('admin-secret')
 
     const author = await User.unguarded(() => User.create({
       name: 'Holo Editor',
       email: 'editor@example.com',
-      password: 'secret',
+      password: userPassword,
+      avatar: null,
+      email_verified_at: timestamp,
+    }))
+
+    await Admin.unguarded(() => Admin.create({
+      name: 'Super Admin',
+      email: 'super-admin@example.com',
+      password: adminPassword,
       avatar: null,
       email_verified_at: timestamp,
     }))

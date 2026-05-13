@@ -39,6 +39,7 @@ import clientAuth, {
   authClientInternals,
   check as clientCheck,
   configureAuthClient,
+  provider as clientProvider,
   refreshUser as clientRefreshUser,
   resetAuthClient,
   useAuth as clientUseAuth,
@@ -1090,6 +1091,17 @@ describe('@holo-js/auth package runtime', () => {
 
   it('exposes public password hashing helpers', async () => {
     configureRuntime()
+
+    const digest = await hashPassword('secret-secret')
+
+    expect(digest).toMatch(/^scrypt\$/)
+    await expect(verifyPassword('secret-secret', digest)).resolves.toBe(true)
+    await expect(verifyPassword('wrong-secret', digest)).resolves.toBe(false)
+    await expect(needsPasswordRehash(digest)).resolves.toBe(false)
+  })
+
+  it('allows public password hashing helpers before auth runtime is configured', async () => {
+    resetAuthRuntime()
 
     const digest = await hashPassword('secret-secret')
 
@@ -3079,15 +3091,19 @@ describe('@holo-js/auth package runtime', () => {
     expect(await auth.guard('web').user()).toMatchObject({
       name: 'User Ava',
     })
+    expect(await auth.guard('web').provider()).toBe('users')
     expect(await auth.guard('admin').user()).toMatchObject({
       name: 'Admin Mina',
     })
+    expect(await auth.guard('admin').provider()).toBe('admins')
     expect(await auth.user()).toMatchObject({
       name: 'User Ava',
     })
+    expect(await auth.provider()).toBe('users')
 
     const loggedOut = await auth.guard('admin').logout()
     expect(await auth.guard('admin').check()).toBe(false)
+    expect(await auth.guard('admin').provider()).toBeNull()
     expect(await auth.guard('web').check()).toBe(true)
     expect(loggedOut.cookies).toHaveLength(0)
   })
@@ -4062,10 +4078,12 @@ describe('@holo-js/auth package runtime', () => {
     runtime.context.setAccessToken('api', activeToken.plainTextToken)
     expect(await auth.guard('api').check()).toBe(true)
     expect(await auth.guard('api').user()).toMatchObject({ id: ava.id, email: ava.email })
+    expect(await auth.guard('api').provider()).toBe('users')
     expect(await auth.guard('web').check()).toBe(true)
 
     runtime.context.setAccessToken('api', 'malformed-token')
     expect(await auth.guard('api').check()).toBe(false)
+    expect(await auth.guard('api').provider()).toBeNull()
 
     runtime.context.setAccessToken('api', `${activeToken.id}.bad-secret`)
     expect(await auth.guard('api').user()).toBeNull()
@@ -4085,6 +4103,7 @@ describe('@holo-js/auth package runtime', () => {
 
   it('supports default and named client exports', () => {
     expect(clientAuth.check).toBe(clientCheck)
+    expect(clientAuth.provider).toBe(clientProvider)
     expect(clientAuth.useAuth).toBe(clientUseAuth)
     expect(clientAuth.user).toBe(clientUser)
     expect(clientAuth.refreshUser).toBe(clientRefreshUser)
@@ -4103,6 +4122,7 @@ describe('@holo-js/auth package runtime', () => {
       return new Response(JSON.stringify({
         authenticated: true,
         guard,
+        provider: guard === 'admin' ? 'admins' : 'users',
         user: {
           id: guard === 'admin' ? 2 : 1,
           email: guard === 'admin' ? 'admin@example.com' : 'ava@example.com',
@@ -4139,6 +4159,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(authState).toMatchObject({
       authenticated: true,
       guard: 'web',
+      provider: 'users',
       user: {
         name: 'Ava',
         hit: 1,
@@ -4154,6 +4175,7 @@ describe('@holo-js/auth package runtime', () => {
     })
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(await clientCheck()).toBe(true)
+    expect(await clientProvider()).toBe('users')
 
     const adminUser = await clientUser({ guard: 'admin' })
     expect(adminUser).toMatchObject({
@@ -4197,6 +4219,7 @@ describe('@holo-js/auth package runtime', () => {
       return new Response(JSON.stringify({
         authenticated: true,
         guard: 'web',
+        provider: 'users',
         user: {
           id: authorization === 'Bearer token-b' ? 2 : 1,
           email: authorization === 'Bearer token-b' ? 'b@example.com' : 'a@example.com',
@@ -4562,6 +4585,7 @@ describe('@holo-js/auth package runtime', () => {
           return {
             authenticated: true,
             guard: 'admin',
+            provider: 'admins',
             user: {
               id: 2,
               email: 'admin@example.com',
@@ -4597,6 +4621,7 @@ describe('@holo-js/auth package runtime', () => {
     })).resolves.toMatchObject({
       authenticated: true,
       guard: 'admin',
+      provider: 'admins',
       user: {
         id: 2,
         header: 'token-a',
@@ -4611,6 +4636,7 @@ describe('@holo-js/auth package runtime', () => {
       return new Response(JSON.stringify({
         authenticated: true,
         guard: 'web',
+        provider: 'users',
         user: {
           id: 1,
           email: 'bound@example.com',
@@ -4629,6 +4655,7 @@ describe('@holo-js/auth package runtime', () => {
       endpoint: 'https://example.com/api/auth/bound-user',
     })).resolves.toMatchObject({
       authenticated: true,
+      provider: 'users',
       user: {
         email: 'bound@example.com',
       },

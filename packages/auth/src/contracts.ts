@@ -214,6 +214,7 @@ export interface AuthGuardFacade {
   check(): Promise<boolean>
   user(): Promise<AuthUser | null>
   refreshUser(): Promise<AuthUser | null>
+  provider(): Promise<string | null>
   id(): Promise<string | number | null>
   currentAccessToken(): Promise<AuthCurrentAccessToken | null>
   login<TCredentials extends AuthCredentials>(
@@ -507,6 +508,7 @@ export interface AuthRuntimeFacade extends AuthFacade {
 
 export interface AuthEstablishedSession {
   readonly guard: string
+  readonly provider: string
   readonly user: AuthUser
   readonly sessionId: string
   readonly rememberToken?: string
@@ -518,6 +520,7 @@ export interface AuthEstablishedSession {
 export interface CurrentAuthResponse {
   readonly authenticated: boolean
   readonly guard: string
+  readonly provider: string | null
   readonly user: AuthUser | null
 }
 
