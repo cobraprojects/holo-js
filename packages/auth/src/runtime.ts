@@ -798,6 +798,23 @@ function readSessionPayload(
   return Object.values(payloads)[0] ?? null
 }
 
+function resolveSessionPayloadProvider(payload: SessionAuthPayload): string {
+  const source = payload as SessionAuthPayload & {
+    readonly clerk?: unknown
+    readonly workos?: unknown
+  }
+
+  if (source.workos && typeof source.workos === 'object') {
+    return 'workos'
+  }
+
+  if (source.clerk && typeof source.clerk === 'object') {
+    return 'clerk'
+  }
+
+  return payload.provider
+}
+
 function writeSessionPayloads(
   currentData: Readonly<Record<string, unknown>>,
   payloads: SessionAuthPayloadMap,
@@ -1703,6 +1720,7 @@ async function establishSessionForUser(
 
   return Object.freeze({
     guard: options.guard,
+    provider: resolveSessionPayloadProvider(sessionPayload),
     user,
     sessionId: session.id,
     rememberToken,
@@ -2116,6 +2134,9 @@ function createGuardFacade(guardName: string): AuthGuardFacade {
     refreshUser() {
       return refreshUserForGuard(guardName)
     },
+    provider() {
+      return providerForGuard(guardName)
+    },
     async id() {
       return (await userForGuard(guardName))?.id ?? null
     },
@@ -2186,6 +2207,9 @@ export function getAuthRuntime(): AuthRuntimeFacade {
     },
     refreshUser() {
       return refreshUserForGuard(getDefaultGuardName())
+    },
+    provider() {
+      return providerForGuard(getDefaultGuardName())
     },
     async id() {
       return (await userForGuard(getDefaultGuardName()))?.id ?? null
@@ -2297,6 +2321,28 @@ export async function refreshUserForGuard(guardName: string): Promise<AuthUser |
   return resolveUserFromGuard(guardName, { fresh: true })
 }
 
+export async function providerForGuard(guardName: string): Promise<string | null> {
+  const bindings = getRuntimeBindings()
+  const guard = getGuardConfig(guardName)
+  const authenticatedUser = await resolveUserFromGuard(guardName)
+  if (!authenticatedUser) {
+    return null
+  }
+
+  if (guard.driver === 'token') {
+    return readMarkedProvider(authenticatedUser) ?? null
+  }
+
+  const sessionId = bindings.context.getSessionId(guardName)
+  if (!sessionId) {
+    return null
+  }
+
+  const payload = readSessionPayload(await bindings.session.read(sessionId), guardName)
+
+  return payload ? resolveSessionPayloadProvider(payload) : null
+}
+
 export async function check(): Promise<boolean> {
   return getAuthRuntime().check()
 }
@@ -2307,6 +2353,10 @@ export async function user(): Promise<AuthUser | null> {
 
 export async function refreshUser(): Promise<AuthUser | null> {
   return getAuthRuntime().refreshUser()
+}
+
+export async function provider(): Promise<string | null> {
+  return getAuthRuntime().provider()
 }
 
 export async function id(): Promise<string | number | null> {
@@ -2360,15 +2410,24 @@ export async function stopImpersonating(): Promise<AuthUser | null> {
 }
 
 export async function hashPassword(password: string): Promise<string> {
-  return getAuthRuntime().hashPassword(password)
+  const bindings = getAuthRuntimeState().bindings
+  return bindings
+    ? getAuthRuntime().hashPassword(password)
+    : createDefaultPasswordHasher().hash(password)
 }
 
 export async function verifyPassword(password: string, digest: string): Promise<boolean> {
-  return getAuthRuntime().verifyPassword(password, digest)
+  const bindings = getAuthRuntimeState().bindings
+  return bindings
+    ? getAuthRuntime().verifyPassword(password, digest)
+    : createDefaultPasswordHasher().verify(password, digest)
 }
 
 export async function needsPasswordRehash(digest: string): Promise<boolean> {
-  return getAuthRuntime().needsPasswordRehash(digest)
+  const bindings = getAuthRuntimeState().bindings
+  return bindings
+    ? getAuthRuntime().needsPasswordRehash(digest)
+    : resolveNeedsPasswordRehash(createDefaultPasswordHasher(), digest)
 }
 
 export async function logout(): Promise<AuthLogoutResult> {

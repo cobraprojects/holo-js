@@ -1,9 +1,11 @@
-import holoAuth, { user as currentUser } from '../index'
+import holoAuth, { authRuntimeInternals, provider as currentProvider, user as currentUser } from '../index'
 import type { HoloAuthUser } from '../contracts'
 import { runWithNextAuthRequest, type NextAuthRequestLike } from './request-context'
 
 export type AuthState = {
   readonly authenticated: boolean
+  readonly guard: string
+  readonly provider: string | null
   readonly user: HoloAuthUser | null
 }
 
@@ -80,14 +82,30 @@ function isSameUrl(left: URL, right: URL): boolean {
 }
 
 export async function auth(options: AuthOptions = {}): Promise<AuthState> {
-  const user = options.guard
-    ? await holoAuth.guard(options.guard).user()
-    : await currentUser()
-  const clientUser = toClientAuthUser(user)
+  const guard = options.guard ?? authRuntimeInternals.getRuntimeBindings().config.defaults.guard
+  try {
+    const user = options.guard
+      ? await holoAuth.guard(guard).user()
+      : await currentUser()
+    const provider = options.guard
+      ? await holoAuth.guard(guard).provider()
+      : await currentProvider()
+    const clientUser = toClientAuthUser(user)
 
-  return {
-    authenticated: clientUser !== null,
-    user: clientUser,
+    return {
+      authenticated: clientUser !== null,
+      guard,
+      provider: clientUser ? provider : null,
+      user: clientUser,
+    }
+  } catch (error) {
+    console.warn('Failed to resolve Next.js auth state.', error)
+    return {
+      authenticated: false,
+      guard,
+      provider: null,
+      user: null,
+    }
   }
 }
 

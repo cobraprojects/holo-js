@@ -7,6 +7,7 @@ import type { AuthInstallFeatures, ScaffoldedFile } from './types'
 type HostedAuthProvider = 'clerk' | 'workos'
 
 type HostedAuthProviderSpec = {
+  readonly provider: HostedAuthProvider
   readonly packageName: string
   readonly loginFunction: string
   readonly registerFunction: string
@@ -16,6 +17,7 @@ type HostedAuthProviderSpec = {
 
 const HOSTED_AUTH_PROVIDERS = {
   workos: {
+    provider: 'workos',
     packageName: '@holo-js/auth-workos',
     loginFunction: 'loginWithWorkos',
     registerFunction: 'registerWithWorkos',
@@ -23,6 +25,7 @@ const HOSTED_AUTH_PROVIDERS = {
     logoutFunction: 'logoutWithWorkos',
   },
   clerk: {
+    provider: 'clerk',
     packageName: '@holo-js/auth-clerk',
     loginFunction: 'loginWithClerk',
     registerFunction: 'registerWithClerk',
@@ -122,13 +125,18 @@ function renderNuxtHealthRoute(): string {
 
 function renderNuxtCurrentAuthRoute(): string {
   return [
-    'import { check, user } from \'@holo-js/auth\'',
+    'import auth, { check, provider, user } from \'@holo-js/auth\'',
     '',
-    'export default defineEventHandler(async () => {',
+    'export default defineEventHandler(async (event) => {',
+    '  const query = getQuery(event)',
+    '  const guard = typeof query.guard === \'string\' ? query.guard : undefined',
+    '  const guardAuth = guard ? auth.guard(guard) : undefined',
+    '',
     '  return {',
-    '    authenticated: await check(),',
-    '    guard: \'web\',',
-    '    user: await user(),',
+    '    authenticated: guardAuth ? await guardAuth.check() : await check(),',
+    '    guard: guard ?? \'web\',',
+    '    provider: guardAuth ? await guardAuth.provider() : await provider(),',
+    '    user: guardAuth ? await guardAuth.user() : await user(),',
     '  }',
     '})',
     '',
@@ -177,10 +185,22 @@ function renderNuxtHostedAuthCallbackRoute(spec: HostedAuthProviderSpec): string
 
 function renderNuxtHostedAuthLogoutRoute(spec: HostedAuthProviderSpec): string {
   return [
+    'import { provider } from \'@holo-js/auth\'',
     `import { ${spec.logoutFunction} } from '${spec.packageName}'`,
     'import { createError, sendRedirect } from \'h3\'',
     '',
     'export default defineEventHandler(async (event) => {',
+    '  let currentProvider: string | null',
+    '  try {',
+    '    currentProvider = await provider()',
+    '  } catch {',
+    '    return await sendRedirect(event, \'/\', 303)',
+    '  }',
+    '',
+    `  if (currentProvider !== '${spec.provider}') {`,
+    '    return await sendRedirect(event, \'/\', 303)',
+    '  }',
+    '',
     `  const result = await ${spec.logoutFunction}(event)`,
     '  if (!result.ok) {',
     '    throw createError({',
@@ -318,13 +338,17 @@ function renderNextHealthRoute(): string {
 
 function renderNextCurrentAuthRoute(): string {
   return [
-    'import { check, user } from \'@holo-js/auth\'',
+    'import auth, { check, provider, user } from \'@holo-js/auth\'',
     '',
-    'export async function GET() {',
+    'export async function GET(request: Request) {',
+    '  const guard = new URL(request.url).searchParams.get(\'guard\') ?? undefined',
+    '  const guardAuth = guard ? auth.guard(guard) : undefined',
+    '',
     '  return Response.json({',
-    '    authenticated: await check(),',
-    '    guard: \'web\',',
-    '    user: await user(),',
+    '    authenticated: guardAuth ? await guardAuth.check() : await check(),',
+    '    guard: guard ?? \'web\',',
+    '    provider: guardAuth ? await guardAuth.provider() : await provider(),',
+    '    user: guardAuth ? await guardAuth.user() : await user(),',
     '  })',
     '}',
     '',
@@ -371,9 +395,21 @@ function renderNextHostedAuthCallbackRoute(spec: HostedAuthProviderSpec): string
 
 function renderNextHostedAuthLogoutRoute(spec: HostedAuthProviderSpec): string {
   return [
+    'import { provider } from \'@holo-js/auth\'',
     `import { ${spec.logoutFunction} } from '${spec.packageName}'`,
     '',
     'export async function POST(request: Request) {',
+    '  let currentProvider: string | null',
+    '  try {',
+    '    currentProvider = await provider()',
+    '  } catch {',
+    '    return Response.redirect(new URL(\'/\', request.url), 303)',
+    '  }',
+    '',
+    `  if (currentProvider !== '${spec.provider}') {`,
+    '    return Response.redirect(new URL(\'/\', request.url), 303)',
+    '  }',
+    '',
     `  const result = await ${spec.logoutFunction}(request)`,
     '  if (!result.ok) {',
     '    return Response.json(result, { status: 422 })',
@@ -594,13 +630,17 @@ function renderSvelteHealthRoute(): string {
 function renderSvelteCurrentAuthRoute(): string {
   return [
     'import { json } from \'@sveltejs/kit\'',
-    'import { check, user } from \'@holo-js/auth\'',
+    'import auth, { check, provider, user } from \'@holo-js/auth\'',
     '',
-    'export async function GET() {',
+    'export async function GET({ url }: { url: URL }) {',
+    '  const guard = url.searchParams.get(\'guard\') ?? undefined',
+    '  const guardAuth = guard ? auth.guard(guard) : undefined',
+    '',
     '  return json({',
-    '    authenticated: await check(),',
-    '    guard: \'web\',',
-    '    user: await user(),',
+    '    authenticated: guardAuth ? await guardAuth.check() : await check(),',
+    '    guard: guard ?? \'web\',',
+    '    provider: guardAuth ? await guardAuth.provider() : await provider(),',
+    '    user: guardAuth ? await guardAuth.user() : await user(),',
     '  })',
     '}',
     '',
@@ -651,9 +691,21 @@ function renderSvelteHostedAuthCallbackRoute(spec: HostedAuthProviderSpec): stri
 function renderSvelteHostedAuthLogoutRoute(spec: HostedAuthProviderSpec): string {
   return [
     'import { redirect, type RequestHandler } from \'@sveltejs/kit\'',
+    'import { provider } from \'@holo-js/auth\'',
     `import { ${spec.logoutFunction} } from '${spec.packageName}'`,
     '',
     'export const POST = (async (event) => {',
+    '  let currentProvider: string | null',
+    '  try {',
+    '    currentProvider = await provider()',
+    '  } catch {',
+    '    throw redirect(303, \'/\')',
+    '  }',
+    '',
+    `  if (currentProvider !== '${spec.provider}') {`,
+    '    throw redirect(303, \'/\')',
+    '  }',
+    '',
     `  const result = await ${spec.logoutFunction}(event)`,
     '  if (!result.ok) {',
     '    return Response.json(result, { status: 422 })',

@@ -25,7 +25,8 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
               <Link href="/" style={{ color: '#fff', textDecoration: 'none', fontWeight: 700 }}>blog-next</Link>
               <Link href="/posts" style={{ color: '#cbd5e1', textDecoration: 'none' }}>Posts</Link>
               <Link href="/admin" style={{ color: '#cbd5e1', textDecoration: 'none' }}>Admin</Link>
-              <AuthProvider initialUser={currentAuth.user}>
+              <Link href="/super-admin" style={{ color: '#cbd5e1', textDecoration: 'none' }}>Super Admin</Link>
+              <AuthProvider initialProvider={currentAuth.provider} initialUser={currentAuth.user}>
                 <AuthNav />
               </AuthProvider>
             </nav>

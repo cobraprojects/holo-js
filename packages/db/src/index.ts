@@ -235,6 +235,7 @@ export type {
   HasManyRelationDefinition,
   HasOneRelationDefinition,
   ModelCollection,
+  StaticModelApi,
 } from './model'
 export type {
   NormalizedHoloProjectConfig,
@@ -317,10 +318,14 @@ export type {
 export type {
   DefineModelOptions,
   EntityWithLoaded,
+  BuiltInCastName,
+  BuiltInCastString,
+  CastableDefinition,
   RegisteredModelName,
   RegisteredModelReference,
   RegisteredModels,
   ModelAttributeKey,
+  ModelCastDefinition,
   ModelDefinition,
   DynamicRelationResolver,
   ModelInsertPayload,
@@ -328,6 +333,7 @@ export type {
   ModelReference,
   RelationDefinition,
   RelationMap,
+  EnumCastDefinition,
   ModelScopeArgs,
   ModelScopeMap,
   ModelTrait,
@@ -344,9 +350,11 @@ export type {
 } from './model'
 export type {
   CursorPaginatedResult,
+  CursorPaginationOptions,
   DeleteQueryPlan,
   InsertQueryPlan,
   PaginationMeta,
+  PaginationOptions,
   PaginatedResult,
   QueryDirection,
   QueryOperator,

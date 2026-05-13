@@ -8,12 +8,15 @@ import type {
   RelationMap,
 } from '@holo-js/db'
 
+type AdminTable = GeneratedSchemaTable<'admins'>
 type CategoryTable = GeneratedSchemaTable<'categories'>
 type CommentTable = GeneratedSchemaTable<'comments'>
 type PostTable = GeneratedSchemaTable<'posts'>
 type PostTagTable = GeneratedSchemaTable<'post_tags'>
 type TagTable = GeneratedSchemaTable<'tags'>
 type UserTable = GeneratedSchemaTable<'users'>
+
+type AdminRelations = RelationMap
 
 interface CategoryRelations extends RelationMap {
   readonly posts: HasManyRelationDefinition<PostModel>
@@ -40,6 +43,7 @@ interface UserRelations extends RelationMap {
   readonly comments: HasManyRelationDefinition<CommentModel>
 }
 
+type AdminModel = ModelReference<AdminTable, EmptyScopeMap, AdminRelations>
 type CategoryModel = ModelReference<CategoryTable, EmptyScopeMap, CategoryRelations>
 type CommentModel = ModelReference<CommentTable, EmptyScopeMap, CommentRelations>
 type PostModel = ModelReference<PostTable, EmptyScopeMap, PostRelations>
@@ -48,6 +52,7 @@ type UserModel = ModelReference<UserTable, EmptyScopeMap, UserRelations>
 
 declare module '@holo-js/db' {
   interface RegisteredModels {
+    Admin: AdminModel
     Category: CategoryModel
     Comment: CommentModel
     Post: PostModel

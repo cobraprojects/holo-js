@@ -142,6 +142,10 @@ export async function user(options?: AuthClientRequestOptions): Promise<HoloAuth
   return (await fetchCurrentUser(options)).user
 }
 
+export async function provider(options?: AuthClientRequestOptions): Promise<string | null> {
+  return (await fetchCurrentUser(options)).provider
+}
+
 export async function useAuth(
   options?: AuthClientRequestOptions,
 ): Promise<CurrentAuthResponse & {

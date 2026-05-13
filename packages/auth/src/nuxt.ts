@@ -11,6 +11,7 @@ export type UseAuthOptions = {
 
 export type UseAuthResult = {
   readonly authenticated: Readonly<{ readonly value: boolean }>
+  readonly provider: { value: string | null }
   readonly user: { value: HoloAuthUser | null }
   readonly refreshUser: () => Promise<HoloAuthUser | null>
 }
@@ -42,17 +43,21 @@ export async function useAuth(options: UseAuthOptions = {}): Promise<UseAuthResu
   const endpoint = options.endpoint ?? '/api/auth/user'
   const requestUrl = createCurrentAuthUrl(endpoint, options.guard)
   const stateKey = options.key ?? `holo-auth:${requestUrl}`
+  const currentProvider = useState<string | null>(`${stateKey}:provider`, () => null)
   const currentUser = useState<HoloAuthUser | null>(`${stateKey}:user`, () => null)
   const authenticated = computed(() => currentUser.value !== null)
   const { data, refresh } = await useCurrentAuthFetch(requestUrl, stateKey)
 
+  currentProvider.value = data.value?.provider ?? null
   currentUser.value = data.value?.user ?? null
 
   return {
     authenticated,
+    provider: currentProvider,
     user: currentUser,
     async refreshUser() {
       await refresh()
+      currentProvider.value = data.value?.provider ?? null
       currentUser.value = data.value?.user ?? null
 
       return currentUser.value

@@ -86,8 +86,13 @@ Logout clears the local Holo session and returns the hosted WorkOS logout URL. W
 
 ```ts
 import { logoutWithWorkos } from '@holo-js/auth-workos'
+import { provider } from '@holo-js/auth'
 
 export async function POST(request: Request) {
+  if (await provider() !== 'workos') {
+    return Response.redirect(new URL('/', request.url), 303)
+  }
+
   const result = await logoutWithWorkos(request)
 
   if (!result.ok) {
@@ -97,6 +102,10 @@ export async function POST(request: Request) {
   return Response.redirect(result.url, 303)
 }
 ```
+
+Use `provider()` on the server, or `useAuth().provider` in framework client code, to show the WorkOS logout action only
+when the current Holo session was created by WorkOS. Calling `logoutWithWorkos()` for a local, Clerk, or other session
+returns a typed failure because there is no WorkOS session to end upstream.
 
 ## Mapping Local Fields
 

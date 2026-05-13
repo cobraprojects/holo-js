@@ -254,8 +254,6 @@ export function isCliModelReference(value: unknown): value is CliModelReference 
     && isRecord(value.definition)
     && value.definition.kind === 'model'
     && typeof value.definition.name === 'string'
-    && isRecord(value.definition.table)
-    && typeof value.definition.table.tableName === 'string'
     && typeof value.prune === 'function'
 }
 

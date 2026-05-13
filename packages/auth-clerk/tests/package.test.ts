@@ -1,7 +1,7 @@
 import { generateKeyPairSync, sign as signData } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src/runtime'
-import { authRuntimeInternals, configureAuthRuntime, defineAuthConfig, logout, resetAuthRuntime } from '../../auth/src'
+import { authRuntimeInternals, configureAuthRuntime, defineAuthConfig, logout, provider, resetAuthRuntime } from '../../auth/src'
 import type { AuthProviderAdapter } from '../../auth/src'
 import {
   ClerkAuthConflictError,
@@ -1310,6 +1310,7 @@ describe('@holo-js/auth-clerk', () => {
         accessToken: 'callback-token',
       },
     })
+    await expect(provider()).resolves.toBe('clerk')
     expect(runtime.usersProvider.users.get(1)).toMatchObject({
       email: 'callback@app.test',
       name: 'Callback User',

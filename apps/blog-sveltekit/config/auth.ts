@@ -10,20 +10,20 @@ export default defineAuthConfig({
       driver: 'session',
       provider: 'users',
     },
-    // admin: {
-    //   driver: 'session',
-    //   provider: 'admins',
-    // },
+    admin: {
+      driver: 'session',
+      provider: 'admins',
+    },
   },
   providers: {
     users: {
       model: 'User',
       identifiers: ['email'],
     },
-    // admins: {
-    //   model: 'Admin',
-    //   identifiers: ['email'],
-    // },
+    admins: {
+      model: 'Admin',
+      identifiers: ['email'],
+    },
   },
   passwords: {
     users: {

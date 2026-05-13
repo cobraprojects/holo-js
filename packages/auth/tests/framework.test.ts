@@ -84,6 +84,61 @@ describe('@holo-js/auth framework helpers', () => {
     expect(refreshUser).not.toHaveBeenCalled()
   })
 
+  it('does not reuse the SvelteKit auth context when explicit request options are passed', async () => {
+    type SvelteContextValue = unknown
+
+    let storedContext: SvelteContextValue
+    const fetchCurrentUser = vi.fn(async () => ({
+      authenticated: true,
+      guard: 'web',
+      provider: 'users',
+      user: {
+        id: 1,
+        email: 'ava@example.com',
+        name: 'Ava',
+      },
+    }))
+
+    vi.doMock('../src/client', () => ({
+      authClientInternals: {
+        fetchCurrentUser,
+      },
+    }))
+    vi.doMock('svelte', () => ({
+      getContext() {
+        return storedContext
+      },
+      setContext(_key: symbol, value: SvelteContextValue) {
+        storedContext = value
+        return value
+      },
+    }))
+    vi.doMock('svelte/reactivity', () => ({
+      createSubscriber() {
+        return () => {}
+      },
+    }))
+
+    const { useAuth } = await import('../src/sveltekit/client')
+
+    const defaultAuth = useAuth({
+      initialProvider: 'users',
+      initialUser: {
+        id: 1,
+        email: 'ava@example.com',
+        name: 'Ava',
+      },
+    })
+    const adminAuth = useAuth({ guard: 'admin' })
+
+    expect(adminAuth).not.toBe(defaultAuth)
+    expect(adminAuth.user).toBeNull()
+
+    await defaultAuth.refreshUser()
+
+    expect(fetchCurrentUser).toHaveBeenCalledWith({}, { force: true })
+  })
+
   it('does not treat cross-origin Next redirects as self redirects', async () => {
     const { routeProtectionInternals } = await import('../src/next/server')
 

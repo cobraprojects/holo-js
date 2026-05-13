@@ -5,6 +5,41 @@ function resolveDefinition(reference: ModelDefinitionLike): AnyModelDefinition {
   return 'definition' in reference ? reference.definition : reference
 }
 
+function isMissingGeneratedSchemaModelError(error: unknown): boolean {
+  return error instanceof Error
+    && error.message.includes('is not present in the generated schema registry')
+}
+
+function tryGetDefinitionTableName(definition: AnyModelDefinition): string | undefined {
+  try {
+    return definition.table.tableName
+  } catch (error) {
+    if (isMissingGeneratedSchemaModelError(error)) {
+      return undefined
+    }
+
+    throw error
+  }
+}
+
+function definitionsReferToSameModel(left: AnyModelDefinition, right: AnyModelDefinition): boolean {
+  if (left === right) {
+    return true
+  }
+
+  const leftTableName = tryGetDefinitionTableName(left)
+  const rightTableName = tryGetDefinitionTableName(right)
+  if (!leftTableName || !rightTableName) {
+    return left.name === right.name
+      && left.primaryKey === right.primaryKey
+      && left.morphClass === right.morphClass
+  }
+
+  return leftTableName === rightTableName
+    && left.primaryKey === right.primaryKey
+    && left.morphClass === right.morphClass
+}
+
 const globalModels = new Map<string, ModelDefinitionLike>()
 
 export class ModelRegistry {
@@ -13,7 +48,7 @@ export class ModelRegistry {
   register(reference: ModelDefinitionLike): AnyModelDefinition {
     const definition = resolveDefinition(reference)
     const existing = this.models.get(definition.name)
-    if (existing && existing !== definition) {
+    if (existing && !definitionsReferToSameModel(existing, definition)) {
       throw new DatabaseError(`Model "${definition.name}" is already registered.`, 'DUPLICATE_MODEL')
     }
 
@@ -47,14 +82,7 @@ export function registerGlobalModel(reference: ModelDefinitionLike): ModelDefini
   const existing = globalModels.get(definition.name)
   if (existing) {
     const existingDefinition = resolveDefinition(existing)
-    const isSameDefinition = existingDefinition === definition
-      || (
-        existingDefinition.table.tableName === definition.table.tableName
-        && existingDefinition.primaryKey === definition.primaryKey
-        && existingDefinition.morphClass === definition.morphClass
-      )
-
-    if (!isSameDefinition) {
+    if (!definitionsReferToSameModel(existingDefinition, definition)) {
       throw new DatabaseError(`Model "${definition.name}" is already registered globally.`, 'DUPLICATE_MODEL')
     }
 

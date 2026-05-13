@@ -1,9 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import holoAuth, { user as currentUser } from '../index'
+import holoAuth, { authRuntimeInternals, provider as currentProvider, user as currentUser } from '../index'
 import type { AuthUserLike, HoloAuthUser } from '../contracts'
 
 export type AuthState = {
   readonly authenticated: boolean
+  readonly guard: string
+  readonly provider: string | null
   readonly user: HoloAuthUser | null
 }
 
@@ -143,15 +145,22 @@ function isSameUrl(left: URL, right: URL): boolean {
 }
 
 export async function auth(options: AuthOptions = {}): Promise<AuthState> {
+  const guard = options.guard ?? authRuntimeInternals.getRuntimeBindings().config.defaults.guard
   let user: HoloAuthUser | null
+  let provider: string | null
   try {
     user = options.guard
       ? await holoAuth.guard(options.guard).user()
       : await currentUser()
+    provider = options.guard
+      ? await holoAuth.guard(options.guard).provider()
+      : await currentProvider()
   } catch (error) {
     console.warn('Failed to resolve SvelteKit auth state.', error)
     return {
       authenticated: false,
+      guard,
+      provider: null,
       user: null,
     }
   }
@@ -160,6 +169,8 @@ export async function auth(options: AuthOptions = {}): Promise<AuthState> {
 
   return {
     authenticated: clientUser !== null,
+    guard,
+    provider: clientUser ? provider : null,
     user: clientUser,
   }
 }

@@ -248,6 +248,9 @@ export async function assertExampleAppAuthFlow({
     assert.match(loginPage.text, /Continue with WorkOS/i)
     assertGuestNav(loginPage.text)
 
+    const superAdminLoginPage = await fetchAuthText('/super-admin/login')
+    assert.match(superAdminLoginPage.text, /Super Admin Sign In/i)
+
     const forgotPasswordPage = await fetchAuthText('/forgot-password')
     assert.match(forgotPasswordPage.text, /Forgot password/i)
 
@@ -257,6 +260,10 @@ export async function assertExampleAppAuthFlow({
     assertRedirectsTo(await fetchAuthText('/admin/posts', {
       allowFailure: true,
     }), '/login')
+
+    assertRedirectsTo(await fetchAuthText('/super-admin', {
+      allowFailure: true,
+    }), '/super-admin/login')
   }
 
   const initialUser = await fetchAuthJson('/api/auth/user')
@@ -535,6 +542,82 @@ export async function assertExampleAppAuthFlow({
       jar: authenticatedJar,
     })
     assert.match(adminPostsPage.text, /Designing the Example App Roadmap/i)
+
+    assertRedirectsTo(await fetchAuthText('/super-admin', {
+      jar: authenticatedJar,
+      allowFailure: true,
+    }), '/super-admin/login')
+  }
+
+  const adminJar = createCookieJar()
+  const adminLogin = await fetchAuthJson('/api/super-admin/login', {
+    fields: {
+      email: 'super-admin@example.com',
+      password: 'admin-secret',
+    },
+    headers: {
+      'x-forwarded-for': '127.0.0.226',
+      'x-real-ip': '127.0.0.226',
+    },
+    jar: adminJar,
+  })
+  assert.equal(adminLogin.json.ok, true)
+  assert.equal(adminLogin.json.data?.message, 'Signed in as super admin.')
+  assert.equal(adminLogin.json.data?.redirectTo, '/super-admin')
+  assert.equal(adminLogin.json.data?.user?.email, 'super-admin@example.com')
+  assert.ok(listSetCookieHeaders(adminLogin.response).length > 0)
+
+  const adminGuardUser = await fetchAuthJson('/api/auth/user?guard=admin', {
+    jar: adminJar,
+  })
+  assert.equal(adminGuardUser.json.authenticated, true)
+  assert.equal(adminGuardUser.json.guard, 'admin')
+  assert.equal(adminGuardUser.json.user?.email, 'super-admin@example.com')
+  assert.equal(adminGuardUser.json.user?.name, 'Super Admin')
+
+  const adminDefaultGuardUser = await fetchAuthJson('/api/auth/user', {
+    jar: adminJar,
+  })
+  assert.equal(adminDefaultGuardUser.json.authenticated, false)
+  assert.equal(adminDefaultGuardUser.json.guard, 'web')
+  assert.equal(adminDefaultGuardUser.json.user, null)
+
+  if (checkPages) {
+    const superAdminPage = await fetchAuthText('/super-admin', {
+      jar: adminJar,
+    })
+    assert.match(superAdminPage.text, /Super Admin/i)
+    assert.match(superAdminPage.text, /admin guard/i)
+    assert.match(superAdminPage.text, /Sign out of super admin/i)
+
+    assertRedirectsTo(await fetchAuthText('/super-admin/login', {
+      jar: adminJar,
+      allowFailure: true,
+    }), '/super-admin')
+  }
+
+  const adminLogout = await fetchAuthJson('/api/super-admin/logout', {
+    method: 'POST',
+    jar: adminJar,
+  })
+  assert.equal(adminLogout.json.ok, true)
+  assert.equal(adminLogout.json.authenticated, false)
+  assert.equal(adminLogout.json.message, 'Signed out of super admin.')
+  assert.equal(adminLogout.json.user, null)
+  assert.ok(listSetCookieHeaders(adminLogout.response).length > 0)
+
+  const adminAfterLogout = await fetchAuthJson('/api/auth/user?guard=admin', {
+    jar: adminJar,
+  })
+  assert.equal(adminAfterLogout.json.authenticated, false)
+  assert.equal(adminAfterLogout.json.guard, 'admin')
+  assert.equal(adminAfterLogout.json.user, null)
+
+  if (checkPages) {
+    assertRedirectsTo(await fetchAuthText('/super-admin', {
+      jar: adminJar,
+      allowFailure: true,
+    }), '/super-admin/login')
   }
 
   const authenticatedSessionCookie = authenticatedJar.header()

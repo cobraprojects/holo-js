@@ -1046,7 +1046,7 @@ function getHoloSessionIdFromRequest(request: Request): string | null {
 
 async function reuseExistingHoloSession(
   request: Request,
-  authenticated: Pick<ClerkAuthenticationResult, 'guard' | 'authProvider' | 'user'>,
+  authenticated: Pick<ClerkAuthenticationResult, 'guard' | 'authProvider' | 'provider' | 'user'>,
 ): Promise<AuthEstablishedSession | null> {
   const bindings = authRuntimeInternals.getRuntimeBindings()
   const sessionId = getHoloSessionIdFromRequest(request)
@@ -1066,9 +1066,21 @@ async function reuseExistingHoloSession(
     return null
   }
 
+  const source = payload as typeof payload & {
+    readonly clerk?: {
+      readonly provider?: unknown
+    }
+  }
+  if (source.clerk && typeof source.clerk === 'object') {
+    if (typeof source.clerk.provider !== 'string' || source.clerk.provider !== authenticated.provider) {
+      return null
+    }
+  }
+
   bindings.context.setCachedUser(authenticated.guard, authenticated.user)
   return Object.freeze({
     guard: authenticated.guard,
+    provider: source.clerk && typeof source.clerk === 'object' ? 'clerk' : payload.provider,
     user: authenticated.user,
     sessionId,
     cookies: Object.freeze([]),

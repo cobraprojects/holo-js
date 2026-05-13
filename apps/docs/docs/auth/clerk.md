@@ -98,8 +98,13 @@ Logout clears the local Holo session, revokes the Clerk session through the Cler
 
 ```ts
 import { logoutWithClerk } from '@holo-js/auth-clerk'
+import { provider } from '@holo-js/auth'
 
 export async function POST(request: Request) {
+  if (await provider() !== 'clerk') {
+    return Response.redirect(new URL('/', request.url), 303)
+  }
+
   const result = await logoutWithClerk(request, {
     returnTo: '/login',
   })
@@ -111,6 +116,10 @@ export async function POST(request: Request) {
   return Response.redirect(result.url, 303)
 }
 ```
+
+Use `provider()` on the server, or `useAuth().provider` in framework client code, to show the Clerk logout action only
+when the current Holo session was created by Clerk. Calling `logoutWithClerk()` for a local, WorkOS, or other session
+returns a typed failure because there is no Clerk session to revoke upstream.
 
 ## Mapping Local Fields
 

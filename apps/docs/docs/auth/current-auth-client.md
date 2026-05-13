@@ -12,7 +12,7 @@ Use the auth client helper for your framework:
 Each framework auth entrypoint exposes `useAuth()`. The returned `user` is inferred as `HoloAuthUser | null`, so application code can read
 `auth.user`, `user.value`, or `auth.authenticated` without writing a local user shape type.
 
-## `user` vs `refreshUser`
+## `user`, `provider`, and `refreshUser`
 
 `user` is the current auth state the client already has. It is reactive in the framework adapters:
 
@@ -20,14 +20,22 @@ Each framework auth entrypoint exposes `useAuth()`. The returned `user` is infer
 - Nuxt: `user.value`
 - SvelteKit: `auth.user`
 
+`provider` identifies the current session source. Local Holo sessions return the local auth provider name, such as
+`users` or `admins`. Hosted sessions return `workos` or `clerk`. Unauthenticated states return `null`.
+
+- Next.js: `auth.provider`
+- Nuxt: `provider.value`
+- SvelteKit: `auth.provider`
+
 `refreshUser()` makes a new request to the current-user endpoint, updates that current auth state, and returns the fresh
-user.
+user. It also refreshes `provider`.
 
 Use `user` to render the current navigation, profile link, or authenticated UI. Use `refreshUser()` after an action that
 can change auth state, such as login, register, logout, switching guards, or updating the user's profile.
 
 ```ts
 const current = auth.user
+const sessionSource = auth.provider
 const fresh = await auth.refreshUser()
 ```
 
@@ -175,7 +183,7 @@ export function AuthNav() {
 <script setup lang="ts">
 import { useAuth } from '@holo-js/auth/nuxt'
 
-const { authenticated, refreshUser, user } = await useAuth()
+const { authenticated, provider, refreshUser, user } = await useAuth()
 const displayName = computed(() => user.value?.name ?? user.value?.email ?? 'Account')
 
 async function logout() {
@@ -206,7 +214,10 @@ async function logout() {
 
   let { data, children }: LayoutProps = $props()
 
-  const auth = useAuth({ initialUser: untrack(() => data.auth.user) })
+  const auth = useAuth({
+    initialProvider: untrack(() => data.auth.provider),
+    initialUser: untrack(() => data.auth.user),
+  })
   const displayName = $derived(auth.user?.name ?? auth.user?.email ?? 'Account')
 
   async function logout() {
@@ -251,7 +262,7 @@ export default async function RootLayout({ children }: { readonly children: Reac
   return (
     <html lang="en">
       <body>
-        <AuthProvider initialUser={currentAuth.user}>
+        <AuthProvider initialProvider={currentAuth.provider} initialUser={currentAuth.user}>
           <AuthNav />
           {children}
         </AuthProvider>
@@ -265,7 +276,7 @@ export default async function RootLayout({ children }: { readonly children: Reac
 <script setup lang="ts">
 import { useAuth } from '@holo-js/auth/nuxt'
 
-const { authenticated, refreshUser, user } = await useAuth()
+const { authenticated, provider, refreshUser, user } = await useAuth()
 </script>
 ```
 
@@ -300,13 +311,13 @@ If your app uses a different current-auth URL, pass `endpoint` to the framework 
 ```tsx [Next.js]
 const auth = useAuth({ endpoint: '/api/me' })
 
-<AuthProvider endpoint="/api/me" initialUser={currentAuth.user}>
+<AuthProvider endpoint="/api/me" initialProvider={currentAuth.provider} initialUser={currentAuth.user}>
   {children}
 </AuthProvider>
 ```
 
 ```vue [Nuxt]
-const { authenticated, refreshUser, user } = await useAuth({ endpoint: '/api/me' })
+const { authenticated, provider, refreshUser, user } = await useAuth({ endpoint: '/api/me' })
 ```
 
 ```svelte [SvelteKit]
@@ -323,50 +334,87 @@ const user = await refreshUser()
 
 :::
 
+For a non-default guard, pass `guard` to the framework auth helper. The client appends that guard to the
+current-auth request query string, so `useAuth({ guard: 'admin' })` reads `/api/auth/user?guard=admin` by default.
+
+::: code-group
+
+```tsx [Next.js]
+const auth = useAuth({ guard: 'admin' })
+```
+
+```vue [Nuxt]
+const { authenticated, refreshUser, user } = await useAuth({ guard: 'admin' })
+```
+
+```svelte [SvelteKit]
+const auth = useAuth({ guard: 'admin' })
+```
+
+:::
+
+If you combine `guard` with a custom endpoint, the guard is still sent as a query string parameter:
+
+```ts
+const auth = useAuth({ endpoint: '/api/me', guard: 'admin' })
+```
+
 ::: code-group
 
 ```ts [Next.js — app/api/auth/user/route.ts]
-import { check, user } from '@holo-js/auth'
+import auth, { check, provider, user } from '@holo-js/auth'
 
-export async function GET() {
+export async function GET(request: Request) {
+  const guard = new URL(request.url).searchParams.get('guard') ?? undefined
+  const guardAuth = guard ? auth.guard(guard) : undefined
+
   return Response.json({
-    authenticated: await check(),
-    guard: 'web',
-    user: await user(),
+    authenticated: guardAuth ? await guardAuth.check() : await check(),
+    guard: guard ?? 'web',
+    provider: guardAuth ? await guardAuth.provider() : await provider(),
+    user: guardAuth ? await guardAuth.user() : await user(),
   })
 }
 ```
 
 ```ts [Nuxt — server/api/auth/user.get.ts]
-import { check, user } from '@holo-js/auth'
+import auth, { check, provider, user } from '@holo-js/auth'
 
-export default defineEventHandler(async () => {
+export default defineEventHandler(async (event) => {
+  const query = getQuery(event)
+  const guard = typeof query.guard === 'string' ? query.guard : undefined
+  const guardAuth = guard ? auth.guard(guard) : undefined
+
   return {
-    authenticated: await check(),
-    guard: 'web',
-    user: await user(),
+    authenticated: guardAuth ? await guardAuth.check() : await check(),
+    guard: guard ?? 'web',
+    provider: guardAuth ? await guardAuth.provider() : await provider(),
+    user: guardAuth ? await guardAuth.user() : await user(),
   }
 })
 ```
 
 ```ts [SvelteKit — src/routes/api/auth/user/+server.ts]
 import { json } from '@sveltejs/kit'
-import { check, user } from '@holo-js/auth'
+import auth, { check, provider, user } from '@holo-js/auth'
 
-export async function GET() {
+export async function GET({ url }: { url: URL }) {
+  const guard = url.searchParams.get('guard') ?? undefined
+  const guardAuth = guard ? auth.guard(guard) : undefined
+
   return json({
-    authenticated: await check(),
-    guard: 'web',
-    user: await user(),
+    authenticated: guardAuth ? await guardAuth.check() : await check(),
+    guard: guard ?? 'web',
+    provider: guardAuth ? await guardAuth.provider() : await provider(),
+    user: guardAuth ? await guardAuth.user() : await user(),
   })
 }
 ```
 
 :::
 
-For a named guard, pass `guard` to the framework auth helper and return that guard's state from the endpoint. The client
-adds the guard to the current-auth request query string, so custom endpoints that support multiple guards should read
-that value and call the matching server guard.
+The default scaffolded endpoint supports both the default guard and named guards. If you write your own endpoint, keep
+the same behavior when the app calls `useAuth({ guard: 'admin' })`.
 
 ## Types
 
@@ -401,18 +449,21 @@ import { type HoloAuthUser } from '@holo-js/auth/client'
 
 - `useAuth()`
 - `user()`
+- `provider()`
 - `refreshUser()`
 - `check()`
 
 ```ts
-import { check, refreshUser, useAuth, user } from '@holo-js/auth/client'
+import { check, provider, refreshUser, useAuth, user } from '@holo-js/auth/client'
 
 const auth = await useAuth()
 const current = auth.user
+const sessionSource = auth.provider
 const authenticated = auth.check()
 const fresh = await auth.refreshUser()
 
 await user()
+await provider()
 await check()
 await refreshUser()
 ```

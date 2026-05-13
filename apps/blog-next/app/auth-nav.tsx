@@ -61,12 +61,16 @@ export function AuthNav() {
     <>
       <span style={{ color: '#e5eef8' }}>{displayName}</span>
       <button type="button" disabled={isLoggingOut} onClick={logout} style={logoutButtonStyle}>Logout</button>
-      <form action="/api/auth/workos/logout" method="post" style={logoutFormStyle}>
-        <button type="submit" style={logoutButtonStyle}>Logout from WorkOS</button>
-      </form>
-      <form action="/api/auth/clerk/logout" method="post" style={logoutFormStyle}>
-        <button type="submit" style={logoutButtonStyle}>Logout from Clerk</button>
-      </form>
+      {auth.provider === 'workos' && (
+        <form action="/api/auth/workos/logout" method="post" style={logoutFormStyle}>
+          <button type="submit" style={logoutButtonStyle}>Logout from WorkOS</button>
+        </form>
+      )}
+      {auth.provider === 'clerk' && (
+        <form action="/api/auth/clerk/logout" method="post" style={logoutFormStyle}>
+          <button type="submit" style={logoutButtonStyle}>Logout from Clerk</button>
+        </form>
+      )}
     </>
   )
 }
