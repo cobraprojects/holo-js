@@ -344,6 +344,7 @@ export default {
 async function writeRegistry(
   root: string,
   options: {
+    readonly models?: readonly Record<string, unknown>[]
     readonly jobs?: readonly Record<string, unknown>[]
     readonly events?: readonly Record<string, unknown>[]
     readonly listeners?: readonly Record<string, unknown>[]
@@ -364,7 +365,7 @@ async function writeRegistry(
       listeners: 'server/listeners',
       generatedSchema: 'server/db/schema.ts',
     },
-    models: [
+    models: options.models ?? [
       {
         sourcePath: 'server/models/User.ts',
         name: 'User',
@@ -1686,6 +1687,62 @@ export default defineQueueConfig({
     const reused = await initializeHoloAdapterProject(root)
     expect(reused.runtime).toBe(initialized.runtime)
     expect(reused.registry?.commands[0]?.name).toBe('inspire')
+  })
+
+  it('preloads discovered model modules during runtime initialization', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeFile(join(root, 'server/models/User.ts'), `
+const state = globalThis.__holoCoreRuntimeModelPreload ??= {
+  loaded: [],
+}
+
+state.loaded.push('User')
+
+export default {
+  definition: {
+    name: 'User',
+  },
+}
+`, 'utf8')
+    await writeFile(join(root, 'server/models/Post.ts'), `
+const state = globalThis.__holoCoreRuntimeModelPreload ??= {
+  loaded: [],
+}
+
+state.loaded.push('Post')
+
+export default {
+  definition: {
+    name: 'Post',
+  },
+}
+`, 'utf8')
+    await writeRegistry(root, {
+      models: [
+        {
+          sourcePath: 'server/models/User.ts',
+          name: 'User',
+          prunable: false,
+        },
+        {
+          sourcePath: 'server/models/Post.ts',
+          name: 'Post',
+          prunable: false,
+        },
+      ],
+    })
+
+    await initializeHolo(root)
+
+    const state = globalThis as typeof globalThis & {
+      __holoCoreRuntimeModelPreload?: {
+        loaded: string[]
+      }
+    }
+
+    expect(state.__holoCoreRuntimeModelPreload?.loaded).toEqual(['User', 'Post'])
+    delete state.__holoCoreRuntimeModelPreload
   })
 
   it('reconfigures queue runtime when framework adapters reuse the current singleton runtime', async () => {

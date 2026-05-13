@@ -14,6 +14,10 @@ export default defineAuthConfig({
       driver: 'session',
       provider: 'admins',
     },
+    api: {
+      driver: 'token',
+      provider: 'users',
+    },
   },
   providers: {
     users: {

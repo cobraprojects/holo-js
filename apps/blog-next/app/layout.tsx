@@ -24,6 +24,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             <nav style={{ maxWidth: '72rem', margin: '0 auto', display: 'flex', gap: '1rem', alignItems: 'center', padding: '1rem 1.5rem', flexWrap: 'wrap' }}>
               <Link href="/" style={{ color: '#fff', textDecoration: 'none', fontWeight: 700 }}>blog-next</Link>
               <Link href="/posts" style={{ color: '#cbd5e1', textDecoration: 'none' }}>Posts</Link>
+              <Link href="/api-token-posts" style={{ color: '#cbd5e1', textDecoration: 'none' }}>API Token</Link>
               <Link href="/admin" style={{ color: '#cbd5e1', textDecoration: 'none' }}>Admin</Link>
               <Link href="/super-admin" style={{ color: '#cbd5e1', textDecoration: 'none' }}>Super Admin</Link>
               <AuthProvider initialProvider={currentAuth.provider} initialUser={currentAuth.user}>

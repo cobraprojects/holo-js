@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { DEFAULT_SESSION_COOKIE_NAME } from '@holo-js/config'
 import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
+import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 
 const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
@@ -306,6 +307,10 @@ try {
     getOutput: () => capturedOutput,
     appName: 'blog-sveltekit',
     sessionCookieName: DEFAULT_SESSION_COOKIE_NAME,
+  })
+  await assertExampleAppTokenAuthFlow({
+    baseUrl: devUrl,
+    expectedTitle: 'Shipping a Real Holo Blog on SvelteKit',
   })
 
   await writeFile(configPath, originalConfig.replace("name: env('APP_NAME', 'blog-sveltekit')", "name: env('APP_NAME', 'blog-sveltekit-updated')"))

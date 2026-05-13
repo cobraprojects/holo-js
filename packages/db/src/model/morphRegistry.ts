@@ -1,16 +1,24 @@
 import type { ModelDefinitionLike } from './types'
 
-const morphRegistry = new Map<string, ModelDefinitionLike>()
+function getMorphRegistry(): Map<string, ModelDefinitionLike> {
+  const runtime = globalThis as typeof globalThis & {
+    __holoDbMorphRegistry__?: Map<string, ModelDefinitionLike>
+  }
+
+  runtime.__holoDbMorphRegistry__ ??= new Map<string, ModelDefinitionLike>()
+  return runtime.__holoDbMorphRegistry__
+}
 
 export function registerMorphModel(type: string, reference: ModelDefinitionLike): void {
-  morphRegistry.set(type, reference)
+  getMorphRegistry().set(type, reference)
 }
 
 export function resolveMorphModel(type: string): ModelDefinitionLike | undefined {
-  return morphRegistry.get(type)
+  return getMorphRegistry().get(type)
 }
 
 export function resolveMorphSelector(label: string): ModelDefinitionLike | undefined {
+  const morphRegistry = getMorphRegistry()
   const exact = morphRegistry.get(label)
   if (exact) {
     return exact
@@ -34,9 +42,9 @@ export function resolveMorphSelector(label: string): ModelDefinitionLike | undef
 }
 
 export function listMorphModels(): readonly ModelDefinitionLike[] {
-  return [...morphRegistry.values()]
+  return [...getMorphRegistry().values()]
 }
 
 export function resetMorphRegistry(): void {
-  morphRegistry.clear()
+  getMorphRegistry().clear()
 }

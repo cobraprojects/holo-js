@@ -90,6 +90,24 @@ async function preloadGeneratedSchemaModule(
   }
 }
 
+async function preloadDiscoveredModelModules(
+  projectRoot: string,
+  registry: GeneratedProjectRegistry | undefined,
+): Promise<void> {
+  if (!registry || registry.models.length === 0) {
+    return
+  }
+
+  for (const entry of registry.models) {
+    const sourcePath = resolve(projectRoot, entry.sourcePath)
+    if (!existsSync(sourcePath)) {
+      continue
+    }
+
+    await importBundledRuntimeModule(projectRoot, sourcePath)
+  }
+}
+
 interface CoreNotificationRecord<TData extends CoreNotificationJsonValue = CoreNotificationJsonValue> {
   readonly id: string
   readonly type?: string
@@ -4264,6 +4282,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       configureConfigRuntime(loadedConfig.all)
       configureDB(manager)
       await preloadGeneratedSchemaModule(projectRoot, registry)
+      await preloadDiscoveredModelModules(projectRoot, registry)
       previousOptionalSubsystemBindings = snapshotOptionalSubsystemRuntimeBindings()
       if (options.renderView) {
         configureHoloRenderingRuntime({
