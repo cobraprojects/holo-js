@@ -3934,6 +3934,70 @@ describe('@holo-js/auth package runtime', () => {
     await expect(tokens.can(created.plainTextToken, 'orders.write')).resolves.toBe(false)
   })
 
+  it('returns a personal access token when logging into a token guard with credentials', async () => {
+    const runtime = configureRuntime({
+      authConfig: {
+        personalAccessTokens: {
+          defaultAbilities: ['posts.read'],
+        },
+      },
+    })
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    const userRecord = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    const token = unwrapAuthResult(await auth.guard('api').login({
+      email: 'ava@example.com',
+      password: 'secret-secret',
+    }))
+
+    expect('plainTextToken' in token).toBe(true)
+    if (!('plainTextToken' in token)) {
+      throw new Error('Expected token guard login to return a personal access token.')
+    }
+
+    expect(token.name).toBe('api')
+    expect(token.provider).toBe('users')
+    expect(token.userId).toBe(userRecord.id)
+    expect(token.abilities).toEqual(['posts.read'])
+    await expect(tokens.authenticate(token.plainTextToken)).resolves.toMatchObject({
+      id: userRecord.id,
+      email: 'ava@example.com',
+    })
+    expect(runtime.context.getSessionId('api')).toBeUndefined()
+  })
+
+  it('registers users through a token guard and returns a personal access token', async () => {
+    const runtime = configureRuntime()
+
+    const token = unwrapAuthResult(await auth.guard('api').register({
+      name: 'Mina',
+      email: 'mina@example.com',
+      password: 'secret-secret',
+      passwordConfirmation: 'secret-secret',
+    }))
+
+    expect('plainTextToken' in token).toBe(true)
+    if (!('plainTextToken' in token)) {
+      throw new Error('Expected token guard registration to return a personal access token.')
+    }
+
+    expect(token.name).toBe('api')
+    expect(token.provider).toBe('users')
+    await expect(tokens.authenticate(token.plainTextToken)).resolves.toMatchObject({
+      id: token.userId,
+      email: 'mina@example.com',
+    })
+    expect(await runtime.usersProvider.findByCredentials({ email: 'mina@example.com' })).toMatchObject({
+      name: 'Mina',
+    })
+    expect(runtime.context.getSessionId('api')).toBeUndefined()
+  })
+
   it('uses configured default token abilities when none are provided explicitly', async () => {
     const runtime = configureRuntime({
       authConfig: {

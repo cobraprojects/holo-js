@@ -1,5 +1,5 @@
 import { describe, expectTypeOf, it } from 'vitest'
-import auth, { AuthError, isAuthError, type AuthEmailVerificationConsumeErrorCode, type AuthEmailVerificationResendErrorCode, type AuthErrorCode, type AuthEstablishedSession, type AuthFailure, type AuthFieldErrors, type AuthGuardFacade, type AuthImpersonationState, type AuthLoginErrorCode, type AuthLogoutResult, type AuthPasswordResetConsumeErrorCode, type AuthPasswordResetRequestErrorCode, type AuthProviderAdapter, type AuthRegistrationErrorCode, type AuthResult, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type EmailVerificationTokenResult, type getAuthRuntime, type HoloAuthUser, type register, type user, type verifyEmail } from '../src'
+import auth, { AuthError, isAuthError, type AuthEmailVerificationConsumeErrorCode, type AuthEmailVerificationResendErrorCode, type AuthErrorCode, type AuthEstablishedSession, type AuthFailure, type AuthFieldErrors, type AuthGuardFacade, type AuthImpersonationState, type AuthLoginErrorCode, type AuthLogoutResult, type AuthPasswordResetConsumeErrorCode, type AuthPasswordResetRequestErrorCode, type AuthProviderAdapter, type AuthRegistrationErrorCode, type AuthResult, type AuthRuntimeBindings, type AuthUser, type CurrentAuthResponse, type EmailVerificationTokenResult, type getAuthRuntime, type HoloAuthUser, type PersonalAccessTokenResult, type register, type user, type verifyEmail } from '../src'
 import clientAuth, { type provider as clientProvider, type refreshUser as refreshClientUser, type useAuth as clientUseAuth, type user as clientUser } from '../src/client'
 import type { useAuth as useNextAuth } from '../src/next/client'
 import type { useAuth as useNuxtAuth } from '../src/nuxt'
@@ -13,6 +13,18 @@ declare module '../src' {
       readonly name: string
       readonly role: 'admin' | 'member'
       readonly avatarUrl?: string | null
+    }
+  }
+}
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace HoloAuth {
+    export interface TypeRegistry {
+      guards: {
+        readonly web: 'session'
+        readonly api: 'token'
+      }
     }
   }
 }
@@ -39,6 +51,11 @@ describe('@holo-js/auth typing', () => {
     type GuardProvider = Awaited<ReturnType<AuthGuardFacade['provider']>>
     type GuardUser = Awaited<ReturnType<AuthGuardFacade['user']>>
     type GuardRefreshedUser = Awaited<ReturnType<AuthGuardFacade['refreshUser']>>
+    type WebGuardLogin = Awaited<ReturnType<ReturnType<typeof auth.guard<'web'>>['login']>>
+    type ApiGuardLogin = Awaited<ReturnType<ReturnType<typeof auth.guard<'api'>>['login']>>
+    type ApiGuardRegister = Awaited<ReturnType<ReturnType<typeof auth.guard<'api'>>['register']>>
+    type GuardLogin = Awaited<ReturnType<AuthGuardFacade['login']>>
+    type GuardRegister = Awaited<ReturnType<AuthGuardFacade['register']>>
     type TrustedSession = Awaited<ReturnType<AuthGuardFacade['loginUsing']>>
     type TrustedIdSession = Awaited<ReturnType<AuthGuardFacade['loginUsingId']>>
     type ImpersonatedSession = Awaited<ReturnType<AuthGuardFacade['impersonate']>>
@@ -67,6 +84,11 @@ describe('@holo-js/auth typing', () => {
     expectTypeOf<GuardProvider>().toEqualTypeOf<string | null>()
     expectTypeOf<GuardUser>().toEqualTypeOf<AppAuthUser | null>()
     expectTypeOf<GuardRefreshedUser>().toEqualTypeOf<AppAuthUser | null>()
+    expectTypeOf<WebGuardLogin>().toEqualTypeOf<AuthResult<AuthEstablishedSession, AuthLoginErrorCode>>()
+    expectTypeOf<ApiGuardLogin>().toEqualTypeOf<AuthResult<PersonalAccessTokenResult, AuthLoginErrorCode>>()
+    expectTypeOf<ApiGuardRegister>().toEqualTypeOf<AuthResult<PersonalAccessTokenResult, AuthRegistrationErrorCode>>()
+    expectTypeOf<GuardLogin>().toEqualTypeOf<AuthResult<AuthEstablishedSession | PersonalAccessTokenResult, AuthLoginErrorCode>>()
+    expectTypeOf<GuardRegister>().toEqualTypeOf<AuthResult<AppAuthUser | PersonalAccessTokenResult, AuthRegistrationErrorCode>>()
     expectTypeOf<TrustedSession>().toEqualTypeOf<AuthEstablishedSession>()
     expectTypeOf<TrustedIdSession>().toEqualTypeOf<AuthEstablishedSession>()
     expectTypeOf<ImpersonatedSession>().toEqualTypeOf<AuthEstablishedSession>()

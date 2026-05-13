@@ -1,3 +1,5 @@
+import { hashPassword } from '@holo-js/auth'
+
 import Post from '../models/Post'
 import User from '../models/User'
 import Category from '../models/Category'
@@ -13,10 +15,11 @@ async function ensureAuthorId(): Promise<number> {
     return existing.id
   }
 
+  const password = await hashPassword('secret-secret')
   const user = await User.unguarded(() => User.create({
     name: 'Holo Editor',
     email: 'editor@example.com',
-    password: 'secret',
+    password,
     avatar: null,
     email_verified_at: now(),
   }))

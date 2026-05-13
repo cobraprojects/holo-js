@@ -146,8 +146,36 @@ export interface AuthUserLike {
   readonly [key: string]: unknown
 }
 
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace HoloAuth {
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+    export interface TypeRegistry {}
+  }
+}
+
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface HoloAuthTypeRegistry {}
+export interface HoloAuthTypeRegistry extends HoloAuth.TypeRegistry {}
+
+type AuthGuardDriverName = 'session' | 'token'
+
+type RegisteredAuthGuards = HoloAuth.TypeRegistry extends {
+  readonly guards: infer TGuards
+}
+  ? TGuards
+  : Readonly<Record<string, 'session'>>
+
+type RegisteredAuthGuardDriver<TName extends string> = TName extends keyof RegisteredAuthGuards
+  ? Extract<RegisteredAuthGuards[TName], AuthGuardDriverName>
+  : AuthGuardDriverName
+
+type AuthGuardFacadeForDriver<TDriver extends AuthGuardDriverName> = TDriver extends 'token'
+  ? AuthTokenGuardFacade
+  : AuthSessionGuardFacade
+
+export type AuthGuardFacadeFor<TName extends string> = TName extends 'api'
+  ? AuthTokenGuardFacade
+  : AuthGuardFacadeForDriver<RegisteredAuthGuardDriver<TName>>
 
 export type AuthUser = HoloAuthTypeRegistry extends {
   readonly user: infer TUser
@@ -210,6 +238,9 @@ export interface AuthLogoutResult {
   readonly cookies: readonly string[]
 }
 
+export type AuthGuardLoginData = AuthEstablishedSession | PersonalAccessTokenResult
+export type AuthGuardRegistrationData = AuthUser | PersonalAccessTokenResult
+
 export interface AuthGuardFacade {
   check(): Promise<boolean>
   user(): Promise<AuthUser | null>
@@ -219,7 +250,10 @@ export interface AuthGuardFacade {
   currentAccessToken(): Promise<AuthCurrentAccessToken | null>
   login<TCredentials extends AuthCredentials>(
     credentials: TCredentials,
-  ): Promise<AuthResult<AuthEstablishedSession, AuthLoginErrorCode, AuthInputFieldErrors<TCredentials>>>
+  ): Promise<AuthResult<AuthGuardLoginData, AuthLoginErrorCode, AuthInputFieldErrors<TCredentials>>>
+  register<TInput extends AuthRegistrationInput>(
+    input: TInput,
+  ): Promise<AuthResult<AuthGuardRegistrationData, AuthRegistrationErrorCode, AuthInputFieldErrors<TInput>>>
   loginUsing(user: unknown, options?: AuthSessionLoginOptions): Promise<AuthEstablishedSession>
   loginUsingId(userId: string | number, options?: AuthSessionLoginOptions): Promise<AuthEstablishedSession>
   impersonate(user: unknown, options?: AuthImpersonationOptions): Promise<AuthEstablishedSession>
@@ -229,7 +263,28 @@ export interface AuthGuardFacade {
   logout(): Promise<AuthLogoutResult>
 }
 
+export interface AuthSessionGuardFacade extends AuthGuardFacade {
+  login<TCredentials extends AuthCredentials>(
+    credentials: TCredentials,
+  ): Promise<AuthResult<AuthEstablishedSession, AuthLoginErrorCode, AuthInputFieldErrors<TCredentials>>>
+  register<TInput extends AuthRegistrationInput>(
+    input: TInput,
+  ): Promise<AuthResult<AuthUser, AuthRegistrationErrorCode, AuthInputFieldErrors<TInput>>>
+}
+
+export interface AuthTokenGuardFacade extends AuthGuardFacade {
+  login<TCredentials extends AuthCredentials>(
+    credentials: TCredentials,
+  ): Promise<AuthResult<PersonalAccessTokenResult, AuthLoginErrorCode, AuthInputFieldErrors<TCredentials>>>
+  register<TInput extends AuthRegistrationInput>(
+    input: TInput,
+  ): Promise<AuthResult<PersonalAccessTokenResult, AuthRegistrationErrorCode, AuthInputFieldErrors<TInput>>>
+}
+
 export interface AuthFacade extends AuthGuardFacade {
+  login<TCredentials extends AuthCredentials>(
+    credentials: TCredentials,
+  ): Promise<AuthResult<AuthEstablishedSession, AuthLoginErrorCode, AuthInputFieldErrors<TCredentials>>>
   register<TInput extends AuthRegistrationInput>(
     input: TInput,
   ): Promise<AuthResult<AuthUser, AuthRegistrationErrorCode, AuthInputFieldErrors<TInput>>>
@@ -252,7 +307,7 @@ export interface AuthFacade extends AuthGuardFacade {
   hashPassword(password: string): Promise<string>
   verifyPassword(password: string, digest: string): Promise<boolean>
   needsPasswordRehash(digest: string): Promise<boolean>
-  guard(name: string): AuthGuardFacade
+  guard<TName extends string>(name: TName): AuthGuardFacadeFor<TName>
   tokens: AuthTokenFacade
   verification: AuthEmailVerificationFacade
 }

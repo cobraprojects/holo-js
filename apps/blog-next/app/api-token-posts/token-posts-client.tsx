@@ -94,7 +94,7 @@ export function TokenPostsClient() {
         </label>
         <label style={{ display: 'grid', gap: '0.35rem' }}>
           <span>Password</span>
-          <input name="password" type="password" placeholder="secret" required />
+          <input name="password" type="password" placeholder="secret-secret" required />
         </label>
         <button type="submit" disabled={creatingToken}>{creatingToken ? 'Creating...' : 'Create token'}</button>
       </form>

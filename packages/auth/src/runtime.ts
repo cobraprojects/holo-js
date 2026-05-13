@@ -12,6 +12,7 @@ import type {
   AuthEstablishedSession,
   AuthFacade,
   AuthGuardFacade,
+  AuthGuardFacadeFor,
   AuthImpersonationOptions,
   AuthImpersonationState,
   AuthLoginErrorCode,
@@ -1064,7 +1065,7 @@ async function resolveUserFromGuard(
   return serialized
 }
 
-async function loginForGuard(guardName: string, credentials: AuthCredentials): Promise<AuthEstablishedSession> {
+async function loginForSessionGuard(guardName: string, credentials: AuthCredentials): Promise<AuthEstablishedSession> {
   const { guard, adapter } = getGuardProviderAdapter(guardName)
   const user = await verifyCredentialsForProvider(guard.provider, adapter, credentials)
   if (!user) {
@@ -1078,6 +1079,22 @@ async function loginForGuard(guardName: string, credentials: AuthCredentials): P
     provider: guard.provider,
     remember: credentials.remember === true,
   })
+}
+
+async function loginForGuard(guardName: string, credentials: AuthCredentials): Promise<AuthEstablishedSession | PersonalAccessTokenResult> {
+  const guard = getGuardConfig(guardName)
+  if (guard.driver === 'session') {
+    return loginForSessionGuard(guardName, credentials)
+  }
+
+  const { adapter } = getProviderAdapter(guard.provider)
+  const user = await verifyCredentialsForProvider(guard.provider, adapter, credentials)
+  if (!user) {
+    throwAuthError('invalid_credentials', 'Invalid credentials.')
+  }
+
+  const serialized = serializeUser(adapter, user, guard.provider)
+  return createLoginTokenForGuard(guardName, serialized)
 }
 
 function assertTrustedUserProvider(
@@ -1539,12 +1556,11 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
   })
 }
 
-async function registerDefaultUser(input: AuthRegistrationInput): Promise<AuthUser> {
+async function registerUserForGuard(guardName: string, input: AuthRegistrationInput): Promise<AuthUser> {
   ensurePasswordConfirmation(input)
 
   const bindings = getRuntimeBindings()
-  const defaultGuard = bindings.config.defaults.guard
-  const guard = getGuardConfig(defaultGuard)
+  const guard = getGuardConfig(guardName)
   const { adapter } = getProviderAdapter(guard.provider)
   const identifiers = getProviderIdentifiers(guard.provider)
   const lookup = toLookupCredentials(input, identifiers)
@@ -1565,7 +1581,7 @@ async function registerDefaultUser(input: AuthRegistrationInput): Promise<AuthUs
   if (isEmailVerificationRequired()) {
     try {
       await createEmailVerificationFacade().create(serialized, {
-        guard: defaultGuard,
+        guard: guardName,
       })
     } catch (error) {
       await bindings.emailVerificationTokens?.deleteByUserId(guard.provider, serialized.id).catch(() => undefined)
@@ -1575,6 +1591,22 @@ async function registerDefaultUser(input: AuthRegistrationInput): Promise<AuthUs
   }
 
   return serialized
+}
+
+async function registerDefaultUser(input: AuthRegistrationInput): Promise<AuthUser> {
+  return registerUserForGuard(getRuntimeBindings().config.defaults.guard, input)
+}
+
+async function registerForGuard(guardName: string, input: AuthRegistrationInput): Promise<AuthUser | PersonalAccessTokenResult> {
+  const guard = getGuardConfig(guardName)
+  if (guard.driver === 'token') {
+    ensureTokenStore()
+  }
+
+  const user = await registerUserForGuard(guardName, input)
+  return guard.driver === 'token'
+    ? createLoginTokenForGuard(guardName, user)
+    : user
 }
 
 async function rollbackRegisteredUser(
@@ -1755,6 +1787,13 @@ function toPlainTextTokenResult(
     lastUsedAt: record.lastUsedAt ? new Date(record.lastUsedAt.getTime()) : undefined,
     expiresAt: record.expiresAt ? new Date(record.expiresAt.getTime()) : record.expiresAt,
     plainTextToken,
+  })
+}
+
+function createLoginTokenForGuard(guardName: string, user: AuthUser): Promise<PersonalAccessTokenResult> {
+  return createTokenFacade().create(user, {
+    guard: guardName,
+    name: guardName,
   })
 }
 
@@ -2157,6 +2196,13 @@ function createGuardFacade(guardName: string): AuthGuardFacade {
         error => createLoginFailure(error, credentials),
       )
     },
+    register<TInput extends AuthRegistrationInput>(input: TInput) {
+      return captureExpectedAuthResult(
+        () => registerForGuard(guardName, input),
+        EXPECTED_REGISTRATION_ERRORS,
+        error => createRegistrationFailure(error, input),
+      )
+    },
     loginUsing(user: unknown, options?: AuthSessionLoginOptions) {
       return loginUsingForGuard(guardName, user, options)
     },
@@ -2226,7 +2272,7 @@ export function getAuthRuntime(): AuthRuntimeFacade {
     },
     login<TCredentials extends AuthCredentials>(credentials: TCredentials) {
       return captureExpectedAuthResult(
-        () => loginForGuard(getDefaultGuardName(), credentials),
+        () => loginForSessionGuard(getDefaultGuardName(), credentials),
         EXPECTED_LOGIN_ERRORS,
         error => createLoginFailure(error, credentials),
       )
@@ -2283,8 +2329,8 @@ export function getAuthRuntime(): AuthRuntimeFacade {
     needsPasswordRehash(digest: string) {
       return resolveNeedsPasswordRehash(getRuntimeBindings().passwordHasher, digest)
     },
-    guard(name: string) {
-      return createGuardFacade(name)
+    guard<TName extends string>(name: TName) {
+      return createGuardFacade(name) as AuthGuardFacadeFor<TName>
     },
     tokens,
     verification,

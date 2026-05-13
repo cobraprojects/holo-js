@@ -1,40 +1,38 @@
 import { json } from '@sveltejs/kit'
-import auth, { verifyPassword } from '@holo-js/auth'
+import auth from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
 
-import User from '../../../../../server/models/User'
+import { loginForm } from '$lib/schemas/auth'
 
 export async function POST({ request }: { request: Request }) {
-  const formData = await request.formData()
-  const email = String(formData.get('email') ?? '').trim()
-  const password = String(formData.get('password') ?? '')
+  const submission = await validate(request, loginForm, {
+    throttle: 'login',
+  })
 
-  if (!email || !password) {
-    return json({
-      ok: false,
-      message: 'Email and password are required.',
-    }, { status: 422 })
+  if (!submission.valid) {
+    const failure = submission.fail()
+    return json(failure, {
+      status: failure.status,
+    })
   }
 
-  const currentUser = await User.where('email', email).first()
-  const passwordMatches = await verifyPassword(password, currentUser?.get('password') ?? '')
+  const { data: token, error } = await auth.guard('api').login(submission.data)
 
-  if (!currentUser || !passwordMatches) {
+  if (error) {
     return json({
       ok: false,
       message: 'Invalid credentials.',
     }, { status: 401 })
   }
 
-  const token = await auth.tokens.create(currentUser, {
-    guard: 'api',
-    name: 'browser-posts-api',
-    abilities: ['posts.read'],
-  })
-
   return json({
     ok: true,
     token: token.plainTextToken,
     tokenId: token.id,
     abilities: token.abilities,
+  }, {
+    headers: {
+      'Cache-Control': 'no-store',
+    },
   })
 }

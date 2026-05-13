@@ -1,25 +1,22 @@
-import auth, { verifyPassword } from '@holo-js/auth'
+import auth from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
 
-import User from '../../models/User'
+import { loginForm } from '#shared/schemas/auth'
 
 export default defineEventHandler(async (event) => {
-  const formData = await readFormData(event)
-  const email = String(formData.get('email') ?? '').trim()
-  const password = String(formData.get('password') ?? '')
+  const submission = await validate(event, loginForm, {
+    throttle: 'login',
+  })
 
-  if (!email || !password) {
-    setResponseStatus(event, 422)
-
-    return {
-      ok: false,
-      message: 'Email and password are required.',
-    }
+  if (!submission.valid) {
+    const failure = submission.fail()
+    setResponseStatus(event, failure.status)
+    return failure
   }
 
-  const currentUser = await User.where('email', email).first()
-  const passwordMatches = await verifyPassword(password, currentUser?.get('password') ?? '')
+  const { data: token, error } = await auth.guard('api').login(submission.data)
 
-  if (!currentUser || !passwordMatches) {
+  if (error) {
     setResponseStatus(event, 401)
 
     return {
@@ -27,12 +24,6 @@ export default defineEventHandler(async (event) => {
       message: 'Invalid credentials.',
     }
   }
-
-  const token = await auth.tokens.create(currentUser, {
-    guard: 'api',
-    name: 'browser-posts-api',
-    abilities: ['posts.read'],
-  })
 
   return {
     ok: true,

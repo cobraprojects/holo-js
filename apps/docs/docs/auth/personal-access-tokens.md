@@ -17,7 +17,121 @@ guards: {
 
 Tokens are created in plain text once, hashed at rest, and validated on each incoming request.
 
-## Creating Tokens
+## Token Login
+
+Use the token guard's normal `login()` method when a user submits credentials and the response should be a bearer token
+instead of a session cookie:
+
+```ts
+import auth from '@holo-js/auth'
+
+const { data: token, error } = await auth.guard('api').login({
+  email: 'ava@example.com',
+  password: 'secret-secret',
+})
+
+if (error) {
+  return Response.json({
+    ok: false,
+    message: 'Invalid credentials.',
+  }, { status: 401 })
+}
+
+return Response.json({
+  ok: true,
+  token: token.plainTextToken,
+  tokenId: token.id,
+  abilities: token.abilities,
+}, {
+  headers: {
+    'Cache-Control': 'no-store',
+  },
+})
+```
+
+For token guards, `auth.guard('api').login(...)` verifies the credentials, creates a personal access token for the
+authenticated user, and returns the token result.
+
+## Token Registration
+
+Use `register()` on a token guard when the registration response should immediately return a bearer token:
+
+```ts
+import auth from '@holo-js/auth'
+
+const { data: token, error } = await auth.guard('api').register({
+  name: 'Ava',
+  email: 'ava@example.com',
+  password: 'secret-secret',
+  passwordConfirmation: 'secret-secret',
+})
+
+if (error) {
+  return Response.json(error, { status: error.status })
+}
+
+return Response.json({
+  ok: true,
+  token: token.plainTextToken,
+  tokenId: token.id,
+  abilities: token.abilities,
+}, {
+  headers: {
+    'Cache-Control': 'no-store',
+  },
+})
+```
+
+For session guards, `login()` and `register()` still return session results. For token guards, they return personal
+access token results.
+
+## Sending Tokens On Requests
+
+Send the token on protected API requests with the standard `Authorization` header:
+
+```ts
+await fetch('/api/v1/orders', {
+  headers: {
+    Authorization: `Bearer ${token}`,
+  },
+})
+```
+
+Framework adapters read the bearer token from the request and make it available to the selected token guard. Server
+routes can then use the normal guard APIs:
+
+```ts
+import auth from '@holo-js/auth'
+
+export async function GET() {
+  const currentUser = await auth.guard('api').user()
+
+  if (!currentUser) {
+    return Response.json({ ok: false, message: 'Unauthenticated.' }, { status: 401 })
+  }
+
+  const token = await auth.guard('api').currentAccessToken()
+
+  return Response.json({
+    ok: true,
+    userId: currentUser.id,
+    abilities: token?.abilities ?? [],
+  })
+}
+```
+
+`check()` follows the same guard context:
+
+```ts
+if (!await auth.guard('api').check()) {
+  return Response.json({ ok: false, message: 'Unauthenticated.' }, { status: 401 })
+}
+```
+
+## Manual Token Creation
+
+Use the lower-level `tokens.create(...)` API when the user is already authenticated or trusted and your application
+needs to issue a token manually, such as from an account settings screen.
 
 ```ts
 import { tokens } from '@holo-js/auth'
@@ -35,12 +149,7 @@ The result contains:
 
 Show the plain text token to the user immediately after creation. The unhashed secret should be treated as write-only.
 
-## Sending Tokens On Requests
-
-The application should pass the token as a bearer token or another transport of its choice, then assign it to the
-token guard context before using the auth runtime for that request.
-
-## Authenticating Tokens
+## Manual Token Authentication
 
 ```ts
 import { tokens } from '@holo-js/auth'
@@ -49,6 +158,9 @@ const actor = await tokens.authenticate(created.plainTextToken)
 ```
 
 The runtime validates the token id and secret, updates `lastUsedAt`, and resolves the local user model.
+
+Most framework routes should use `auth.guard('api').user()` or `auth.guard('api').check()` instead. Use
+`tokens.authenticate(...)` when you are outside a Holo request context or implementing a custom token transport.
 
 ## Token Abilities
 

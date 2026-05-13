@@ -35,7 +35,7 @@ async function fetchText(baseUrl, path) {
 async function createTokenFromCredentials(baseUrl) {
   const formData = new FormData()
   formData.set('email', 'editor@example.com')
-  formData.set('password', 'secret')
+  formData.set('password', 'secret-secret')
 
   const result = await fetchJson(baseUrl, '/api/v1/tokens', {
     method: 'POST',
