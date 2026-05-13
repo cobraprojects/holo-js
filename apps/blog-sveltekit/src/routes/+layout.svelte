@@ -12,6 +12,7 @@
     initialUser: untrack(() => data?.auth?.user ?? null),
   })
   const displayName = $derived(auth.user?.name ?? auth.user?.email ?? 'Account')
+  const usesHostedLogout = $derived(auth.provider === 'workos' || auth.provider === 'clerk')
 
   async function logout() {
     if (isLoggingOut) {
@@ -45,7 +46,9 @@
       <a href="/super-admin">Super Admin</a>
       {#if auth.authenticated}
         <span class="user-name">{displayName}</span>
-        <button type="button" class="logout-button" disabled={isLoggingOut} aria-busy={isLoggingOut} onclick={logout}>Logout</button>
+        {#if !usesHostedLogout}
+          <button type="button" class="logout-button" disabled={isLoggingOut} aria-busy={isLoggingOut} onclick={logout}>Logout</button>
+        {/if}
         {#if auth.provider === 'workos'}
           <form action="/api/auth/workos/logout" method="post" class="logout-form">
             <button type="submit" class="logout-button">Logout from WorkOS</button>

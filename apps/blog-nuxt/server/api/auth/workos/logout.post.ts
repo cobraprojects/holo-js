@@ -2,8 +2,22 @@ import { provider } from '@holo-js/auth'
 import { logoutWithWorkos } from '@holo-js/auth-workos'
 import { createError, sendRedirect } from 'h3'
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 export default defineEventHandler(async (event) => {
-  if (await provider() !== 'workos') {
+  let currentProvider: string | null
+  try {
+    currentProvider = await provider()
+  } catch (error) {
+    throw createError({
+      statusCode: 500,
+      statusMessage: getErrorMessage(error),
+    })
+  }
+
+  if (currentProvider !== 'workos') {
     return await sendRedirect(event, '/', 303)
   }
 

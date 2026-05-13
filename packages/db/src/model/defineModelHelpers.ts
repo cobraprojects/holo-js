@@ -57,7 +57,9 @@ function getRuntimeSchemaTable(tableName: string, connectionName?: string): Tabl
   } catch (error) {
     if (
       error instanceof ConfigurationError
-      && error.message === 'DB facade is not configured with a ConnectionManager.'
+      && error.code === 'CONFIGURATION_ERROR'
+      && error.message.includes('ConnectionManager')
+      && error.message.includes('not configured')
     ) {
       return undefined
     }

@@ -43,12 +43,17 @@ function useAuthState(
   requestOptionsRef.current = requestOptions
 
   const refreshUser = useCallback(async () => {
-    const currentAuth = await authClientInternals.fetchCurrentUser(requestOptionsRef.current, {
-      force: true,
-    })
-    setCurrentProvider(currentAuth.provider)
-    setCurrentUser(currentAuth.user)
-    return currentAuth.user
+    try {
+      const currentAuth = await authClientInternals.fetchCurrentUser(requestOptionsRef.current, {
+        force: true,
+      })
+      setCurrentProvider(currentAuth.provider)
+      setCurrentUser(currentAuth.user)
+      return currentAuth.user
+    } catch (error) {
+      console.error('Failed to refresh auth user.', error)
+      throw error
+    }
   }, [])
 
   useEffect(() => {

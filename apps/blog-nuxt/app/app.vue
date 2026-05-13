@@ -3,8 +3,9 @@ import { useAuth } from '@holo-js/auth/nuxt'
 
 const { authenticated, provider, refreshUser, user } = await useAuth()
 const displayName = computed(() => user.value?.name ?? user.value?.email ?? 'Account')
-const isClerkSession = computed(() => provider.value === 'clerk')
-const isWorkosSession = computed(() => provider.value === 'workos')
+const currentProvider = computed(() => provider.value ?? '')
+const isClerkSession = computed(() => currentProvider.value === 'clerk')
+const isWorkosSession = computed(() => currentProvider.value === 'workos')
 
 async function logout() {
   await $fetch('/api/logout', { method: 'POST' })

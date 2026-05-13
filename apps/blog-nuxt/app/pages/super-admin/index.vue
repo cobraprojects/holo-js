@@ -8,6 +8,11 @@ definePageMeta({
 const { refreshUser, user } = await useAuth({ guard: 'admin' })
 const displayName = computed(() => user.value?.name ?? user.value?.email ?? 'Super Admin')
 const isLoggingOut = ref(false)
+const logoutError = ref<string | null>(null)
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
 
 async function logout() {
   if (isLoggingOut.value) {
@@ -15,12 +20,13 @@ async function logout() {
   }
 
   isLoggingOut.value = true
+  logoutError.value = null
   try {
     await $fetch('/api/super-admin/logout', { method: 'POST' })
     await refreshUser()
     await navigateTo('/super-admin/login')
   } catch (error) {
-    console.warn('Super admin logout failed.', error)
+    logoutError.value = `Super admin logout failed. ${getErrorMessage(error)}`
   } finally {
     isLoggingOut.value = false
   }
@@ -32,6 +38,7 @@ async function logout() {
     <p class="eyebrow">Admin guard</p>
     <h1>Super Admin</h1>
     <p>Signed in as {{ displayName }} through the admin guard.</p>
+    <p v-if="logoutError" class="error-message">{{ logoutError }}</p>
     <div>
       <button type="button" :disabled="isLoggingOut" @click="logout">
         {{ isLoggingOut ? 'Signing out...' : 'Sign out of super admin' }}
@@ -45,4 +52,5 @@ async function logout() {
 .eyebrow { margin: 0; color: #7dd3fc; font-size: 0.875rem; text-transform: uppercase; }
 h1 { margin: 0; }
 p { margin: 0; color: #cbd5e1; }
+.error-message { color: #fca5a5; }
 </style>

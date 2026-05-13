@@ -1043,7 +1043,7 @@ function getHoloSessionIdFromRequest(request: Request): string | null {
 
 async function reuseExistingHoloSession(
   request: Request,
-  authenticated: Pick<WorkosAuthenticationResult, 'guard' | 'authProvider' | 'user'>,
+  authenticated: Pick<WorkosAuthenticationResult, 'guard' | 'authProvider' | 'provider' | 'user'>,
 ): Promise<AuthEstablishedSession | null> {
   const bindings = authRuntimeInternals.getRuntimeBindings()
   const sessionId = getHoloSessionIdFromRequest(request)
@@ -1063,8 +1063,18 @@ async function reuseExistingHoloSession(
     return null
   }
 
+  const source = payload as typeof payload & {
+    readonly workos?: {
+      readonly provider?: unknown
+    }
+  }
+  if (source.workos && typeof source.workos === 'object') {
+    if (typeof source.workos.provider !== 'string' || source.workos.provider !== authenticated.provider) {
+      return null
+    }
+  }
+
   bindings.context.setCachedUser(authenticated.guard, authenticated.user)
-  const source = payload as typeof payload & { readonly workos?: unknown }
   return Object.freeze({
     guard: authenticated.guard,
     provider: source.workos && typeof source.workos === 'object' ? 'workos' : payload.provider,

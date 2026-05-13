@@ -31,6 +31,7 @@ function definitionsReferToSameModel(left: AnyModelDefinition, right: AnyModelDe
   const rightTableName = tryGetDefinitionTableName(right)
   if (!leftTableName || !rightTableName) {
     return left.name === right.name
+      && left.primaryKey === right.primaryKey
       && left.morphClass === right.morphClass
   }
 

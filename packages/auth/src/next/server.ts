@@ -83,19 +83,29 @@ function isSameUrl(left: URL, right: URL): boolean {
 
 export async function auth(options: AuthOptions = {}): Promise<AuthState> {
   const guard = options.guard ?? authRuntimeInternals.getRuntimeBindings().config.defaults.guard
-  const user = options.guard
-    ? await holoAuth.guard(options.guard).user()
-    : await currentUser()
-  const provider = options.guard
-    ? await holoAuth.guard(options.guard).provider()
-    : await currentProvider()
-  const clientUser = toClientAuthUser(user)
+  try {
+    const user = options.guard
+      ? await holoAuth.guard(guard).user()
+      : await currentUser()
+    const provider = options.guard
+      ? await holoAuth.guard(guard).provider()
+      : await currentProvider()
+    const clientUser = toClientAuthUser(user)
 
-  return {
-    authenticated: clientUser !== null,
-    guard,
-    provider: clientUser ? provider : null,
-    user: clientUser,
+    return {
+      authenticated: clientUser !== null,
+      guard,
+      provider: clientUser ? provider : null,
+      user: clientUser,
+    }
+  } catch (error) {
+    console.warn('Failed to resolve Next.js auth state.', error)
+    return {
+      authenticated: false,
+      guard,
+      provider: null,
+      user: null,
+    }
   }
 }
 
