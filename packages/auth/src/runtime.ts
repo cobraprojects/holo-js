@@ -1665,8 +1665,24 @@ async function rollbackRegisteredUser(
 async function rollbackSerializedUserForGuard(guardName: string, user: SerializedAuthUser): Promise<void> {
   const guard = getGuardConfig(guardName)
   const { adapter } = getProviderAdapter(guard.provider)
+  let adapterDeleteError: unknown
   if (adapter.delete) {
-    await adapter.delete(user.id)
+    try {
+      await adapter.delete(user.id)
+      return
+    } catch (error) {
+      adapterDeleteError = error
+    }
+  }
+
+  const createdUser = await adapter.findById(user.id)
+  if (createdUser && typeof createdUser === 'object' && 'delete' in createdUser && typeof createdUser.delete === 'function') {
+    await createdUser.delete()
+    return
+  }
+
+  if (adapterDeleteError) {
+    throw adapterDeleteError
   }
 }
 

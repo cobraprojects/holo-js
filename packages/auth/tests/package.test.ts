@@ -4025,6 +4025,37 @@ describe('@holo-js/auth package runtime', () => {
     })).resolves.toBeNull()
   })
 
+  it('rolls back token guard registration with the created model when adapter deletion is unavailable', async () => {
+    const runtime = configureRuntime()
+    const originalCreate = runtime.usersProvider.create.bind(runtime.usersProvider)
+    const originalDelete = runtime.usersProvider.delete.bind(runtime.usersProvider)
+    vi.spyOn(runtime.tokenStore, 'create').mockRejectedValueOnce(new Error('Token persistence failed.'))
+    Object.defineProperty(runtime.usersProvider, 'delete', {
+      value: undefined,
+      configurable: true,
+    })
+    runtime.usersProvider.create = vi.fn(async (input) => {
+      const created = await originalCreate(input)
+
+      return Object.assign(created, {
+        async delete() {
+          await originalDelete(created.id)
+        },
+      })
+    })
+
+    await expect(auth.guard('api').register({
+      name: 'Model Rollback User',
+      email: 'model-rollback@example.com',
+      password: 'secret-secret',
+      passwordConfirmation: 'secret-secret',
+    })).rejects.toThrow('Token persistence failed.')
+
+    await expect(runtime.usersProvider.findByCredentials({
+      email: 'model-rollback@example.com',
+    })).resolves.toBeNull()
+  })
+
   it('rejects token guards as the default top-level auth guard', () => {
     const runtime = configureRuntime()
 

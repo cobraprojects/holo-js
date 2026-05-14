@@ -23,7 +23,7 @@ export async function GET() {
 
   const posts = await Post
     .with('category', 'tags')
-    .where('user_id', Number(userId))
+    .where('user_id', userId)
     .orderBy('published_at', 'desc')
     .get()
 
