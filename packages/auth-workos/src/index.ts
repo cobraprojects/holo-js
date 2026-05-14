@@ -1,6 +1,6 @@
 import { createPublicKey, verify as verifySignature } from 'node:crypto'
 import { authRuntimeInternals, getAuthRuntime } from '@holo-js/auth'
-import type { AuthEstablishedSession, AuthUserLike } from '@holo-js/auth'
+import type { AuthenticatedAuthUser, AuthEstablishedSession, AuthUserLike } from '@holo-js/auth'
 import { parseCookieHeader } from '@holo-js/session'
 import type { NormalizedAuthWorkosProviderConfig } from '@holo-js/config'
 export {
@@ -12,6 +12,7 @@ export type {
   HostedIdentityStore,
   WorkosAuthBindings,
   WorkosAuthFacade,
+  WorkosAuthenticatedUser,
   WorkosAuthenticationResult,
   WorkosCompleteAuthResult,
   WorkosIdentityProfile,
@@ -103,7 +104,7 @@ type WorkosRequestLike = {
 
 type WorkosRequestInput = Request | WorkosRequestLike
 
-type SerializedWorkosAuthUser = AuthUserLike & {
+type SerializedWorkosAuthUser = AuthenticatedAuthUser & {
   readonly id: string | number
 }
 
@@ -787,7 +788,7 @@ function serializeLocalUser(
   adapter: RuntimeAuthProviderAdapter,
   user: Record<string, unknown>,
   providerName: string,
-): AuthUserLike {
+): SerializedWorkosAuthUser {
   const id = adapter.getId(user)
   const serialized = adapter.serialize
     ? adapter.serialize(user)
@@ -802,8 +803,13 @@ function serializeLocalUser(
     enumerable: false,
     configurable: true,
   })
+  Object.defineProperty(result, 'can', {
+    value: () => false,
+    enumerable: false,
+    configurable: true,
+  })
 
-  return Object.freeze(result)
+  return Object.freeze(result) as SerializedWorkosAuthUser
 }
 
 function resolveDisplayName(profile: WorkosIdentityProfile): string {

@@ -40,7 +40,14 @@ function definitionsReferToSameModel(left: AnyModelDefinition, right: AnyModelDe
     && left.morphClass === right.morphClass
 }
 
-const globalModels = new Map<string, ModelDefinitionLike>()
+function getGlobalModels(): Map<string, ModelDefinitionLike> {
+  const runtime = globalThis as typeof globalThis & {
+    __holoDbGlobalModels__?: Map<string, ModelDefinitionLike>
+  }
+
+  runtime.__holoDbGlobalModels__ ??= new Map<string, ModelDefinitionLike>()
+  return runtime.__holoDbGlobalModels__
+}
 
 export class ModelRegistry {
   private readonly models = new Map<string, AnyModelDefinition>()
@@ -79,6 +86,7 @@ export function createModelRegistry(): ModelRegistry {
 
 export function registerGlobalModel(reference: ModelDefinitionLike): ModelDefinitionLike {
   const definition = resolveDefinition(reference)
+  const globalModels = getGlobalModels()
   const existing = globalModels.get(definition.name)
   if (existing) {
     const existingDefinition = resolveDefinition(existing)
@@ -94,9 +102,9 @@ export function registerGlobalModel(reference: ModelDefinitionLike): ModelDefini
 }
 
 export function getGlobalModel(name: string): ModelDefinitionLike | undefined {
-  return globalModels.get(name)
+  return getGlobalModels().get(name)
 }
 
 export function resetGlobalModelRegistry(): void {
-  globalModels.clear()
+  getGlobalModels().clear()
 }

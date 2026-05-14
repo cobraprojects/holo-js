@@ -20,6 +20,7 @@ async function logout() {
       <nav class="nav">
         <NuxtLink to="/" class="brand">blog-nuxt</NuxtLink>
         <NuxtLink to="/posts">Posts</NuxtLink>
+        <NuxtLink to="/api-token-posts">API Token</NuxtLink>
         <NuxtLink to="/admin">Admin</NuxtLink>
         <NuxtLink to="/super-admin">Super Admin</NuxtLink>
         <template v-if="authenticated">

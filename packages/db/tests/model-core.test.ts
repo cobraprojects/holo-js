@@ -12,6 +12,7 @@ import {
   column,
   configureDB,
   createModelCollection,
+  createModelRegistry,
   createConnectionManager,
   createDatabase,
   clearGeneratedTables,
@@ -33,7 +34,7 @@ import {
   type RelationMap,
   type TableDefinition } from '../src'
 import { getGlobalModel } from '../src/model/ModelRegistry'
-import { registerMorphModel, resolveMorphSelector } from '../src/model/morphRegistry'
+import { listMorphModels, registerMorphModel, resolveMorphModel, resolveMorphSelector } from '../src/model/morphRegistry'
 import { defineModelFromTable, defineTable } from './support/internal'
 
 type Row = Record<string, unknown>
@@ -548,6 +549,160 @@ describe('model core slice', () => {
     })).toThrow(
       'Touched relation "person" is not defined on model "Child".',
     )
+  })
+
+  it('stores global relation registries on globalThis for bundled runtime module copies', () => {
+    const people = defineTable('people', {
+      id: column.id(),
+      name: column.string(),
+    })
+
+    const Person = defineModel(people)
+    const runtime = globalThis as typeof globalThis & {
+      __holoDbGlobalModels__?: Map<string, NonNullable<ReturnType<typeof getGlobalModel>>>
+      __holoDbMorphRegistry__?: Map<string, NonNullable<ReturnType<typeof resolveMorphModel>>>
+    }
+
+    expect(runtime.__holoDbGlobalModels__?.get('Person')).toBe(Person)
+    expect(runtime.__holoDbMorphRegistry__?.get('Person')).toBe(Person)
+    expect(listMorphModels()).toContain(Person)
+
+    resetDB()
+    runtime.__holoDbGlobalModels__?.set('Person', Person)
+    runtime.__holoDbMorphRegistry__?.set('Person', Person)
+
+    expect(getGlobalModel('Person')).toBe(Person)
+    expect(resolveMorphModel('Person')).toBe(Person)
+  })
+
+  it('keeps standalone model registries isolated from the global relation registry', () => {
+    const people = defineTable('people', {
+      id: column.id(),
+      name: column.string(),
+    })
+    const animals = defineTable('animals', {
+      id: column.id(),
+      name: column.string(),
+    })
+
+    const Person = defineModel(people)
+    const Animal = defineModel(animals)
+    const registry = createModelRegistry()
+
+    expect(registry.has('Person')).toBe(false)
+    expect(registry.register(Person)).toBe(Person.definition)
+    expect(registry.register(Person.definition)).toBe(Person.definition)
+    expect(registry.has('Person')).toBe(true)
+    expect(registry.get('Person')).toBe(Person.definition)
+    expect(registry.list()).toEqual([Person.definition])
+
+    const conflictingPerson = Object.freeze({
+      ...Animal.definition,
+      name: 'Person',
+      morphClass: 'Person',
+    })
+    expect(() => registry.register(conflictingPerson)).toThrow(
+      'Model "Person" is already registered.',
+    )
+
+    const brokenPerson = Object.create(Person.definition, {
+      table: {
+        get() {
+          throw new Error('broken table metadata')
+        },
+      },
+    }) as typeof Person.definition
+    expect(() => registry.register(brokenPerson)).toThrow('broken table metadata')
+
+    registry.clear()
+    expect(registry.list()).toEqual([])
+
+    const missingTableRegistry = createModelRegistry()
+    const missingGhost = Object.create(Person.definition, {
+      name: { value: 'Ghost' },
+      primaryKey: { value: 'id' },
+      morphClass: { value: 'ghost' },
+      table: {
+        get() {
+          throw new SchemaError('Model "ghosts" is not present in the generated schema registry.')
+        },
+      },
+    }) as typeof Person.definition
+    const conflictingGhost = Object.create(Person.definition, {
+      name: { value: 'Ghost' },
+      primaryKey: { value: 'id' },
+      morphClass: { value: 'other-ghost' },
+      table: {
+        get() {
+          throw new SchemaError('Model "ghosts" is not present in the generated schema registry.')
+        },
+      },
+    }) as typeof Person.definition
+    const matchingGhost = Object.create(Person.definition, {
+      name: { value: 'Ghost' },
+      primaryKey: { value: 'id' },
+      morphClass: { value: 'ghost' },
+      table: {
+        get() {
+          throw new SchemaError('Model "ghosts" is not present in the generated schema registry.')
+        },
+      },
+    }) as typeof Person.definition
+    const conflictingGhostKey = Object.create(Person.definition, {
+      name: { value: 'Ghost' },
+      primaryKey: { value: 'uuid' },
+      morphClass: { value: 'ghost' },
+      table: {
+        get() {
+          throw new SchemaError('Model "ghosts" is not present in the generated schema registry.')
+        },
+      },
+    }) as typeof Person.definition
+
+    expect(missingTableRegistry.register(missingGhost)).toBe(missingGhost)
+    expect(missingTableRegistry.register(matchingGhost)).toBe(matchingGhost)
+    expect(() => missingTableRegistry.register(conflictingGhostKey)).toThrow(
+      'Model "Ghost" is already registered.',
+    )
+    expect(() => missingTableRegistry.register(conflictingGhost)).toThrow(
+      'Model "Ghost" is already registered.',
+    )
+  })
+
+  it('allows duplicate global registrations for the same model and rejects conflicting models', () => {
+    const people = defineTable('people', {
+      id: column.id(),
+      name: column.string(),
+    })
+    const duplicatePeople = defineTable('people', {
+      id: column.id(),
+      name: column.string(),
+    })
+    const animals = defineTable('animals', {
+      id: column.id(),
+      name: column.string(),
+    })
+
+    const Person = defineModel(people)
+
+    expect(defineModel(duplicatePeople, { name: 'Person' }).definition.name).toBe('Person')
+    expect(getGlobalModel('Person')).toBe(Person)
+    expect(() => defineModel(animals, { name: 'Person' })).toThrow(
+      'Model "Person" is already registered globally.',
+    )
+  })
+
+  it('rethrows unresolved generated-schema errors while comparing duplicate model metadata', () => {
+    const Ghost = defineModel('ghosts', {
+      name: 'Ghost',
+      morphClass: 'ghost',
+    })
+
+    expect(() => defineModel('ghosts', {
+      name: 'Ghost',
+      morphClass: 'ghost',
+    })).toThrow('Model "ghosts" is not present in the generated schema registry.')
+    expect(getGlobalModel('Ghost')).toBe(Ghost)
   })
 
   it('defers generated schema table resolution until the model is used', () => {

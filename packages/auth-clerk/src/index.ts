@@ -1,5 +1,5 @@
 import { authRuntimeInternals, getAuthRuntime } from '@holo-js/auth'
-import type { AuthEstablishedSession, AuthUserLike } from '@holo-js/auth'
+import type { AuthenticatedAuthUser, AuthEstablishedSession, AuthUserLike } from '@holo-js/auth'
 import { parseCookieHeader } from '@holo-js/session'
 import type { AuthClerkProviderConfig, NormalizedAuthClerkProviderConfig } from '@holo-js/config'
 export {
@@ -8,6 +8,7 @@ export {
 export type {
   ClerkAuthBindings,
   ClerkAuthFacade,
+  ClerkAuthenticatedUser,
   ClerkAuthenticationResult,
   ClerkCompleteAuthResult,
   ClerkEmailAddress,
@@ -68,7 +69,7 @@ type CompleteClerkAuthOptions<TUserAttributes extends ClerkUserAttributes = Cler
   readonly user?: (clerkUser: ClerkUserProfile) => TUserAttributes
 }
 
-type SerializedClerkAuthUser = AuthUserLike & {
+type SerializedClerkAuthUser = AuthenticatedAuthUser & {
   readonly id: string | number
 }
 
@@ -693,7 +694,7 @@ function serializeLocalUser<TUserAttributes extends ClerkUserAttributes = ClerkD
   adapter: RuntimeAuthProviderAdapter,
   user: Record<string, unknown>,
   providerName: string,
-): AuthUserLike & TUserAttributes {
+): SerializedClerkAuthUser & TUserAttributes {
   const id = adapter.getId(user)
   const serialized = adapter.serialize
     ? adapter.serialize(user)
@@ -708,8 +709,13 @@ function serializeLocalUser<TUserAttributes extends ClerkUserAttributes = ClerkD
     enumerable: false,
     configurable: true,
   })
+  Object.defineProperty(result, 'can', {
+    value: () => false,
+    enumerable: false,
+    configurable: true,
+  })
 
-  return Object.freeze(result) as AuthUserLike & TUserAttributes
+  return Object.freeze(result) as SerializedClerkAuthUser & TUserAttributes
 }
 
 function resolvePrimaryEmail(profile: ClerkUserProfile): { email?: string, emailVerified: boolean } {

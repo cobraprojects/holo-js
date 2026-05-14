@@ -42,6 +42,7 @@
     <nav class="nav">
       <a href="/" class="brand">blog-sveltekit</a>
       <a href="/posts">Posts</a>
+      <a href="/api-token-posts">API Token</a>
       <a href="/admin">Admin</a>
       <a href="/super-admin">Super Admin</a>
       {#if auth.authenticated}

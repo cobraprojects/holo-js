@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { DEFAULT_SESSION_COOKIE_NAME } from '@holo-js/config'
 import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
+import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 
 const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
@@ -249,6 +250,10 @@ try {
     getOutput: () => capturedOutput,
     appName: 'blog-nuxt',
     sessionCookieName: DEFAULT_SESSION_COOKIE_NAME,
+  })
+  await assertExampleAppTokenAuthFlow({
+    baseUrl: `http://localhost:${port}`,
+    expectedTitle: 'Shipping a Real Holo Blog on Nuxt',
   })
 
   await writeFile(configPath, originalConfig.replace("name: env('APP_NAME', 'blog-nuxt')", "name: env('APP_NAME', 'blog-nuxt-updated')"))

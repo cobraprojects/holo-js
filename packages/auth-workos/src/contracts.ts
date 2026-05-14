@@ -1,4 +1,4 @@
-import type { AuthEstablishedSession, AuthLogoutResult, AuthUserLike } from '@holo-js/auth'
+import type { AuthenticatedAuthUser, AuthEstablishedSession, AuthLogoutResult, AuthUserLike } from '@holo-js/auth'
 import type { NormalizedAuthWorkosProviderConfig } from '@holo-js/config'
 
 export type WorkosJsonValue =
@@ -38,6 +38,11 @@ export interface WorkosLogoutSession {
   readonly sessionId: string
 }
 
+export type WorkosAuthenticatedUser<TUser extends AuthUserLike = AuthUserLike> =
+  AuthenticatedAuthUser & TUser & {
+    readonly id: string | number
+  }
+
 export type WorkosCompleteAuthResult<TUser extends AuthUserLike = AuthUserLike> =
   | Readonly<{
     readonly ok: true
@@ -45,7 +50,7 @@ export type WorkosCompleteAuthResult<TUser extends AuthUserLike = AuthUserLike> 
     readonly guard: string
     readonly authProvider: string
     readonly status: WorkosSyncStatus
-    readonly user: TUser
+    readonly user: WorkosAuthenticatedUser<TUser>
     readonly identity: HostedIdentityRecord
     readonly session: WorkosVerifiedSession
     readonly authSession?: AuthEstablishedSession
@@ -112,7 +117,7 @@ export interface WorkosAuthenticationResult {
   readonly guard: string
   readonly authProvider: string
   readonly status: WorkosSyncStatus
-  readonly user: AuthUserLike
+  readonly user: WorkosAuthenticatedUser
   readonly identity: HostedIdentityRecord
   readonly session: WorkosVerifiedSession
   readonly authSession?: AuthEstablishedSession

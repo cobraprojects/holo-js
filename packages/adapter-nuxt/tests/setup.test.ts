@@ -517,6 +517,7 @@ export default defineStorageConfig({
     prepareTypesHook?.({ references })
     expect(references).toEqual([
       { types: '@holo-js/adapter-nuxt' },
+      { path: join(root, '.holo-js/generated/auth.d.ts') },
       { path: join(root, '.holo-js/generated/model-registry.d.ts') },
     ])
   }, 30000)

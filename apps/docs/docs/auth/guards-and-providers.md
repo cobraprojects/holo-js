@@ -101,6 +101,20 @@ await auth.guard('admin').user()
 await auth.guard('api').currentAccessToken()
 ```
 
+On a token guard, `login()` and `register()` return personal access token results instead of session results:
+
+```ts
+const { data: token, error } = await auth.guard('api').login({
+  email: 'ava@example.com',
+  password: 'secret-secret',
+  abilities: ['orders.read'],
+})
+
+if (!error) {
+  token.plainTextToken
+}
+```
+
 ## Default Guard
 
 Named exports use the configured default guard:

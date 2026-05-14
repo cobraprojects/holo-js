@@ -1,4 +1,5 @@
 import { check, currentAccessToken, getAuthRuntime, hashPassword, id, impersonate, impersonateById, impersonation, login, loginUsing, loginUsingId, logout, needsPasswordRehash, provider, refreshUser, register, requestPasswordReset, resendEmailVerification, resetPassword, sendEmailVerification, stopImpersonating, tokens, user, verification, verifyEmail, verifyPassword } from './runtime'
+import type { AuthFacade } from './contracts'
 
 export { AUTH_ERROR_CODES, AuthError, defineAuthConfig, isAuthError } from './contracts'
 export {
@@ -35,6 +36,8 @@ export {
 } from './runtime'
 export type {
   AuthFailure,
+  AuthenticatedAuthUser,
+  AuthAuthorizable,
   AuthClientConfig,
   AuthClientRequestOptions,
   AuthCredentials,
@@ -47,10 +50,16 @@ export type {
   AuthEmailVerificationSendOptions,
   AuthEstablishedSession,
   AuthFacade,
+  AuthBaseGuardFacade,
   AuthFieldErrors,
   AuthFailureResult,
   AuthGuardFacade,
+  AuthGuardFacadeFor,
+  AuthGuardLoginData,
+  AuthGuardRegistrationData,
   AuthInputFieldErrors,
+  AuthSessionGuardFacade,
+  AuthSessionOnlyFacade,
   AuthImpersonationOptions,
   AuthImpersonationState,
   AuthLoginErrorCode,
@@ -66,6 +75,7 @@ export type {
   AuthResult,
   AuthSuccessResult,
   AuthTokenFacade,
+  AuthTokenGuardFacade,
   AuthTokenStore,
   AuthUser,
   HoloAuthUser,
@@ -92,7 +102,7 @@ export type {
   PasswordResetTokenStore,
 } from './contracts'
 
-const auth = Object.freeze({
+const auth: AuthFacade = Object.freeze({
   check,
   user,
   refreshUser,
@@ -118,7 +128,7 @@ const auth = Object.freeze({
   verification,
   verifyEmail,
   verifyPassword,
-  guard(name: string) {
+  guard<TName extends string>(name: TName) {
     return getAuthRuntime().guard(name)
   },
 })

@@ -11,7 +11,7 @@ export default defineSeeder({
   name: 'BlogSeeder',
   async run() {
     const timestamp = new Date('2026-04-26T09:00:00.000Z')
-    const userPassword = await hashPassword('secret')
+    const userPassword = await hashPassword('secret-secret')
     const adminPassword = await hashPassword('admin-secret')
 
     const author = await User.unguarded(() => User.create({
