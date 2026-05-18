@@ -36,6 +36,7 @@ apps/docs/docs/.vitepress/cache
 *~
 .fallow
 .fallowrc.json
+.clawpatch
 
 # OS
 .DS_Store
