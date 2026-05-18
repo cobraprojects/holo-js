@@ -24,6 +24,7 @@ const repoRoot = resolve(packageDir, '../..')
 const tempBuildRoots: string[] = []
 let packageBuildPromise: Promise<{ outDir: string }> | null = null
 const originalArgv = process.argv
+const originalExitCode = process.exitCode
 
 async function createTempBuildRoot(): Promise<string> {
   const baseDir = resolve(repoRoot, '.vitest-builds')
@@ -81,6 +82,7 @@ afterAll(async () => {
 
 afterEach(() => {
   process.argv = originalArgv
+  process.exitCode = originalExitCode
   runCliMock.mockReset()
   vi.restoreAllMocks()
 })
@@ -100,7 +102,7 @@ describe('create-holo-js bin', () => {
     }) as typeof process.exit)
     const modulePath = `../src/bin/create-holo-js.ts?run=${Date.now()}`
 
-    await expect(import(modulePath)).rejects.toThrow('exit:7')
+    await import(modulePath)
 
     expect(runCliMock).toHaveBeenCalledWith(['new', 'demo-app'], {
       cwd: process.cwd(),
@@ -108,7 +110,8 @@ describe('create-holo-js bin', () => {
       stdout: process.stdout,
       stderr: process.stderr,
     })
-    expect(exitSpy).toHaveBeenCalledWith(7)
+    expect(exitSpy).not.toHaveBeenCalled()
+    expect(process.exitCode).toBe(7)
   })
 
   it('emits and executes the published bin through the OS command path', async () => {
