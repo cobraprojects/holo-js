@@ -8,4 +8,4 @@ const exitCode = await runCli(process.argv.slice(2), {
   stderr: process.stderr,
 })
 
-process.exit(exitCode)
+process.exitCode = exitCode
