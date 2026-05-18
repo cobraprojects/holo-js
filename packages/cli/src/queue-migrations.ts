@@ -31,12 +31,15 @@ export function normalizeQueueMigrationName(tableName: string): string {
 }
 
 export function renderQueueTableMigration(tableName: string): string {
+  const tableNameLiteral = JSON.stringify(tableName)
+  const indexPrefix = tableName.replaceAll('.', '_')
+
   return [
     'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
     '',
     'export default defineMigration({',
     '  async up({ schema }: MigrationContext) {',
-    `    await schema.createTable('${tableName}', (table) => {`,
+    `    await schema.createTable(${tableNameLiteral}, (table) => {`,
     '      table.string(\'id\').primaryKey()',
     '      table.string(\'job\')',
     '      table.string(\'connection\')',
@@ -48,13 +51,13 @@ export function renderQueueTableMigration(tableName: string): string {
     '      table.bigInteger(\'reserved_at\').nullable()',
     '      table.string(\'reservation_id\').nullable()',
     '      table.bigInteger(\'created_at\')',
-    `      table.index(['queue', 'available_at'], '${tableName.replaceAll('.', '_')}_queue_available_at_index')`,
-    `      table.index(['queue', 'reserved_at'], '${tableName.replaceAll('.', '_')}_queue_reserved_at_index')`,
-    `      table.index(['reservation_id'], '${tableName.replaceAll('.', '_')}_reservation_id_index')`,
+    `      table.index(['queue', 'available_at'], ${JSON.stringify(`${indexPrefix}_queue_available_at_index`)})`,
+    `      table.index(['queue', 'reserved_at'], ${JSON.stringify(`${indexPrefix}_queue_reserved_at_index`)})`,
+    `      table.index(['reservation_id'], ${JSON.stringify(`${indexPrefix}_reservation_id_index`)})`,
     '    })',
     '  },',
     '  async down({ schema }: MigrationContext) {',
-    `    await schema.dropTable('${tableName}')`,
+    `    await schema.dropTable(${tableNameLiteral})`,
     '  },',
     '})',
     '',
@@ -62,12 +65,15 @@ export function renderQueueTableMigration(tableName: string): string {
 }
 
 export function renderFailedJobsTableMigration(tableName: string): string {
+  const tableNameLiteral = JSON.stringify(tableName)
+  const indexPrefix = tableName.replaceAll('.', '_')
+
   return [
     'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
     '',
     'export default defineMigration({',
     '  async up({ schema }: MigrationContext) {',
-    `    await schema.createTable('${tableName}', (table) => {`,
+    `    await schema.createTable(${tableNameLiteral}, (table) => {`,
     '      table.string(\'id\').primaryKey()',
     '      table.string(\'job_id\')',
     '      table.string(\'job\')',
@@ -76,12 +82,12 @@ export function renderFailedJobsTableMigration(tableName: string): string {
     '      table.text(\'payload\')',
     '      table.text(\'exception\')',
     '      table.bigInteger(\'failed_at\')',
-    `      table.index(['job_id'], '${tableName.replaceAll('.', '_')}_job_id_index')`,
-    `      table.index(['failed_at'], '${tableName.replaceAll('.', '_')}_failed_at_index')`,
+    `      table.index(['job_id'], ${JSON.stringify(`${indexPrefix}_job_id_index`)})`,
+    `      table.index(['failed_at'], ${JSON.stringify(`${indexPrefix}_failed_at_index`)})`,
     '    })',
     '  },',
     '  async down({ schema }: MigrationContext) {',
-    `    await schema.dropTable('${tableName}')`,
+    `    await schema.dropTable(${tableNameLiteral})`,
     '  },',
     '})',
     '',
