@@ -13206,6 +13206,61 @@ export default defineDatabaseConfig({
     expect(resetSecurityRuntime).toHaveBeenCalledTimes(1)
   }, 30000)
 
+  it('resets the security runtime when redis adapter close fails after rate-limit clearing', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const connect = vi.fn(async () => {})
+    const close = vi.fn(async () => {
+      throw new Error('redis close failed')
+    })
+    const resetSecurityRuntime = vi.fn()
+
+    await expect(cliInternals.runRateLimitClearCommand(io.io, projectRoot, {
+      limiter: 'login',
+    }, {
+      loadConfig: async () => ({
+        security: {
+          csrf: {
+            enabled: true,
+            field: '_token',
+            header: 'X-CSRF-TOKEN',
+            cookie: 'XSRF-TOKEN',
+            except: [],
+          },
+          rateLimit: {
+            driver: 'redis',
+            memory: { driver: 'memory' },
+            file: { path: './storage/framework/rate-limits' },
+            redis: { host: '127.0.0.1', port: 6379, db: 0, connection: 'default', prefix: 'holo:rate-limit:' },
+            limiters: {},
+          },
+        },
+      } as never),
+      loadSecurityModule: async () => ({
+        configureSecurityRuntime: vi.fn(),
+        resetSecurityRuntime,
+        createRateLimitStoreFromConfig: vi.fn(() => ({
+          hit: vi.fn(),
+          clear: vi.fn(),
+          clearByPrefix: vi.fn(),
+          clearAll: vi.fn(),
+        })),
+        clearRateLimit: vi.fn(async () => 1),
+      } as never),
+      loadRedisAdapter: async () => ({
+        createSecurityRedisAdapter: vi.fn(() => ({
+          connect,
+          close,
+        })),
+      }),
+    } as never)).rejects.toThrow('redis close failed')
+
+    expect(connect).toHaveBeenCalledTimes(1)
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(resetSecurityRuntime).toHaveBeenCalledTimes(1)
+  }, 30000)
+
   it('loads the default security package entrypoints when clearing redis rate limits', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

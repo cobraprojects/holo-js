@@ -107,7 +107,10 @@ export async function runRateLimitClearCommand(
     const count = typeof cleared === 'boolean' ? (cleared ? 1 : 0) : cleared
     writeLine(io.stdout, `[security] Cleared ${count} rate-limit bucket(s).`)
   } finally {
-    await redisAdapter?.close()
-    securityModule.resetSecurityRuntime()
+    try {
+      await redisAdapter?.close()
+    } finally {
+      securityModule.resetSecurityRuntime()
+    }
   }
 }
