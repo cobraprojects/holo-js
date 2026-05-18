@@ -150,19 +150,23 @@ export async function runCacheTableCommand(
   const migrationsDir = resolve(projectRoot, project.config.paths.migrations)
   const createdFiles: string[] = []
   const resolvedTables = resolveDatabaseCacheTables(cacheConfig)
-  const seenTables = new Set<string>()
-  const seenLockTables = new Set<string>()
+  const seenPhysicalTables = new Set<string>()
   const seenSlugs = new Map<string, string>()
 
   for (const { table, lockTable } of resolvedTables) {
     const migrationName = normalizeCacheMigrationName(table)
     const previousTable = seenSlugs.get(migrationName)
-    if (seenTables.has(table) || seenLockTables.has(lockTable) || (previousTable && previousTable !== table)) {
+    if (
+      table === lockTable
+      || seenPhysicalTables.has(table)
+      || seenPhysicalTables.has(lockTable)
+      || (previousTable && previousTable !== table)
+    ) {
       throw new Error(`A migration for cache tables "${table}" and "${lockTable}" already exists.`)
     }
 
-    seenTables.add(table)
-    seenLockTables.add(lockTable)
+    seenPhysicalTables.add(table)
+    seenPhysicalTables.add(lockTable)
     seenSlugs.set(migrationName, table)
   }
 
