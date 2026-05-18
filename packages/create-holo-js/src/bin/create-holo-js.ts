@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { runCli } from '@holo-js/cli'
 
 const exitCode = await runCli(['new', ...process.argv.slice(2)], {

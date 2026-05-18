@@ -18,6 +18,7 @@ export default defineWorkspace([
   'packages/cache-db',
   'packages/cache-redis',
   'packages/config',
+  'packages/create-holo-js',
   'packages/db',
   'packages/events',
   'packages/forms',

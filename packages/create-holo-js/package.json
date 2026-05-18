@@ -13,6 +13,7 @@
   "scripts": {
     "build": "tsup",
     "stub": "tsup --watch",
+    "test": "vitest --run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -21,7 +22,8 @@
   "devDependencies": {
     "@types/node": "catalog:",
     "tsup": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   },
   "engines": {
     "node": ">=20.11.0"

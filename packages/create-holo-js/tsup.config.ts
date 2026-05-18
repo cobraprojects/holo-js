@@ -12,9 +12,6 @@ export default defineConfig({
   dts: false,
   clean: true,
   external: ['@holo-js/cli'],
-  banner: {
-    js: '#!/usr/bin/env node',
-  },
   esbuildOptions(options: { logLevel?: string }) {
     options.logLevel = 'warning'
   },
