@@ -162,6 +162,12 @@ afterEach(() => {
 })
 
 describe('holo bin', () => {
+  it('keeps the source entrypoint executable as an npm bin', async () => {
+    const source = await readFile(join(packageDir, 'src/bin/holo.ts'), 'utf8')
+
+    expect(source.startsWith('#!/usr/bin/env node\n')).toBe(true)
+  })
+
   it('sets exitCode without forcing process termination', async () => {
     process.argv = ['node', 'holo', 'list']
     runCliMock.mockResolvedValue(7)
@@ -193,6 +199,7 @@ describe('holo bin', () => {
       const bin = await readFile(binPath, 'utf8')
 
       expect(bin.startsWith('#!/usr/bin/env node\n')).toBe(true)
+      expect(bin.split('\n').filter(line => line === '#!/usr/bin/env node')).toHaveLength(1)
 
       await chmod(binPath, 0o755)
       await rm(linkedBinPath, { force: true })

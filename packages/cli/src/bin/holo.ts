@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* v8 ignore file -- executable wrapper only */
 import { runCli } from '../cli'
 

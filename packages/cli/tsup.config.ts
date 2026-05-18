@@ -1,12 +1,12 @@
-import { defineConfig } from 'tsup'
+import { defineConfig, type Options } from 'tsup'
 
 const outDir = process.env.HOLO_BUILD_OUT_DIR ?? 'dist'
 
-const sharedOptions = {
-  format: ['esm'] as const,
+const sharedOptions: Pick<Options, 'format' | 'outDir' | 'outExtension' | 'esbuildOptions'> = {
+  format: ['esm'],
   outDir,
   outExtension: () => ({ js: '.mjs' }),
-  esbuildOptions(options: { logLevel?: string }) {
+  esbuildOptions(options) {
     options.logLevel = 'warning'
   },
 }
@@ -27,8 +27,5 @@ export default defineConfig([
     },
     dts: false,
     clean: false,
-    banner: {
-      js: '#!/usr/bin/env node',
-    },
   },
 ])
