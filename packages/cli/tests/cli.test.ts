@@ -9910,6 +9910,34 @@ throw 'string discovery failure'
     expect(fallbackRoots).toContain(join(projectRoot, 'server/abilities'))
   }, 20000)
 
+  it('uses configured broadcast and channel paths for holo dev discovery watches', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await mkdir(join(projectRoot, 'src/broadcast/orders'), { recursive: true })
+    await mkdir(join(projectRoot, 'src/channels/orders'), { recursive: true })
+    const project = {
+      config: {
+        ...defaultProjectConfig(),
+        paths: {
+          ...defaultProjectConfig().paths,
+          broadcast: 'src/broadcast',
+          channels: 'src/channels',
+        },
+      },
+    }
+
+    expect(isDiscoveryRelevantPath('src/broadcast/orders/created.ts', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('src/channels/orders/private.ts', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('server/broadcast/orders.ts', project as never)).toBe(false)
+    expect(isDiscoveryRelevantPath('server/channels/orders.ts', project as never)).toBe(false)
+
+    const roots = await collectDiscoveryWatchRoots(projectRoot, project as never)
+    expect(roots).toContain(join(projectRoot, 'src/broadcast'))
+    expect(roots).toContain(join(projectRoot, 'src/broadcast/orders'))
+    expect(roots).toContain(join(projectRoot, 'src/channels'))
+    expect(roots).toContain(join(projectRoot, 'src/channels/orders'))
+  }, 20000)
+
   it('ignores generated discovery artifacts during holo dev watch reloads', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

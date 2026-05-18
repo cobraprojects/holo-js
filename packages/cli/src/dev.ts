@@ -291,6 +291,20 @@ export function toPosixSlashes(value: string): string {
   return value.replaceAll('\\', '/')
 }
 
+function resolveConfiguredBroadcastPath(project: LoadedProjectConfig): string {
+  const configuredPaths = project.config.paths as typeof project.config.paths & {
+    readonly broadcast?: string
+  }
+  return configuredPaths.broadcast ?? 'server/broadcast'
+}
+
+function resolveConfiguredChannelsPath(project: LoadedProjectConfig): string {
+  const configuredPaths = project.config.paths as typeof project.config.paths & {
+    readonly channels?: string
+  }
+  return configuredPaths.channels ?? 'server/channels'
+}
+
 export function isDiscoveryRelevantPath(
   filePath: string,
   project: LoadedProjectConfig,
@@ -307,6 +321,8 @@ export function isDiscoveryRelevantPath(
 
   const authorizationPoliciesPath = project.config.paths.authorizationPolicies || 'server/policies'
   const authorizationAbilitiesPath = project.config.paths.authorizationAbilities || 'server/abilities'
+  const broadcastPath = resolveConfiguredBroadcastPath(project)
+  const channelsPath = resolveConfiguredChannelsPath(project)
   const roots = [
     project.config.paths.models,
     project.config.paths.migrations,
@@ -317,8 +333,8 @@ export function isDiscoveryRelevantPath(
     project.config.paths.listeners,
     authorizationPoliciesPath,
     authorizationAbilitiesPath,
-    'server/broadcast',
-    'server/channels',
+    broadcastPath,
+    channelsPath,
     'config',
   ]
 
@@ -370,6 +386,8 @@ export async function collectDiscoveryWatchRoots(
   const directories = new Set<string>()
   const authorizationPoliciesPath = project.config.paths.authorizationPolicies || 'server/policies'
   const authorizationAbilitiesPath = project.config.paths.authorizationAbilities || 'server/abilities'
+  const broadcastPath = resolveConfiguredBroadcastPath(project)
+  const channelsPath = resolveConfiguredChannelsPath(project)
   const roots = [
     projectRoot,
     resolve(projectRoot, 'config'),
@@ -382,8 +400,8 @@ export async function collectDiscoveryWatchRoots(
     resolve(projectRoot, project.config.paths.listeners),
     resolve(projectRoot, authorizationPoliciesPath),
     resolve(projectRoot, authorizationAbilitiesPath),
-    resolve(projectRoot, 'server/broadcast'),
-    resolve(projectRoot, 'server/channels'),
+    resolve(projectRoot, broadcastPath),
+    resolve(projectRoot, channelsPath),
     resolve(projectRoot, dirname(project.config.paths.generatedSchema ?? '.holo-js/generated/schema.generated.ts')),
   ]
 
