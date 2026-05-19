@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   FIELD_KINDS,
   SUPPORTED_RULE_FAMILIES,
+  type ValidationSchema,
   ValidationContractError,
   createErrorBag,
   field,
@@ -284,6 +285,68 @@ describe('@holo-js/validation contracts', () => {
     expect(customFailure.valid).toBe(false)
     if (!customFailure.valid) {
       expect(customFailure.errors.first('tags.0')).toBe('Blocked tag.')
+    }
+  })
+
+  it('applies post-validation rules to nested array elements', async () => {
+    const memberSchema = schema({
+      matrix: field.array(
+        field.array(
+          field.string()
+            .required()
+            .custom(value => value !== 'blocked' || 'Blocked cell.'),
+        ),
+      ).required(),
+    })
+
+    const missingValue = await validate({
+      matrix: [['']],
+    }, memberSchema)
+    expect(missingValue.valid).toBe(false)
+    if (!missingValue.valid) {
+      expect(missingValue.errors.first('matrix.0.0')).toBe('This field is required.')
+    }
+
+    const customFailure = await validate({
+      matrix: [['blocked']],
+    }, memberSchema)
+    expect(customFailure.valid).toBe(false)
+    if (!customFailure.valid) {
+      expect(customFailure.errors.first('matrix.0.0')).toBe('Blocked cell.')
+    }
+
+    const success = await validate({
+      matrix: [['allowed']],
+    }, memberSchema)
+    expect(success.valid).toBe(true)
+    if (success.valid) {
+      expect(success.data.matrix).toEqual([['allowed']])
+    }
+  })
+
+  it('infers and returns shape-changing transform output', async () => {
+    const nameSchema = schema({
+      nameLength: field.string().required().transform(value => value.length),
+    })
+    const defaultNameSchema = schema({
+      nameLength: field.string().default('Ava').transform(value => value.length),
+    })
+
+    const parsed = await parse({
+      nameLength: 'Ava',
+    }, nameSchema)
+    expect(parsed.nameLength).toBe(3)
+
+    const defaultParsed = await parse({}, defaultNameSchema)
+    expect(defaultParsed.nameLength).toBe(3)
+
+    const result = await validate({
+      nameLength: 'Lina',
+    }, nameSchema)
+    expect(result.valid).toBe(true)
+    if (result.valid) {
+      expect(result.data.nameLength).toBe(4)
+      expect(typeof result.data.nameLength).toBe('number')
     }
   })
 
@@ -590,6 +653,33 @@ describe('@holo-js/validation coverage completeness', () => {
     }
 
     const validItems = await tagsField['~standard'].validate(['admin', 'editor'])
+    expect('value' in validItems).toBe(true)
+  })
+
+  it('applies post-validation rules to nested array items in standalone field validation', async () => {
+    const matrixField = field.array(
+      field.array(
+        field.string()
+          .required()
+          .custom(value => value !== 'blocked' || 'Blocked cell.'),
+      ),
+    )
+
+    const missingValue = await matrixField['~standard'].validate([['']])
+    expect('issues' in missingValue && missingValue.issues).toBeDefined()
+    if ('issues' in missingValue && missingValue.issues) {
+      expect(missingValue.issues.some(issue => issue.message === 'This field is required.'
+        && issue.path?.map(segment => typeof segment === 'object' && 'key' in segment ? String(segment.key) : String(segment)).join('.') === '0.0')).toBe(true)
+    }
+
+    const blockedItem = await matrixField['~standard'].validate([['blocked']])
+    expect('issues' in blockedItem && blockedItem.issues).toBeDefined()
+    if ('issues' in blockedItem && blockedItem.issues) {
+      expect(blockedItem.issues.some(issue => issue.message === 'Blocked cell.'
+        && issue.path?.map(segment => typeof segment === 'object' && 'key' in segment ? String(segment.key) : String(segment)).join('.') === '0.0')).toBe(true)
+    }
+
+    const validItems = await matrixField['~standard'].validate([['admin', 'editor']])
     expect('value' in validItems).toBe(true)
   })
 
@@ -1100,6 +1190,9 @@ describe('@holo-js/validation edge case coverage', () => {
     const target: unknown[] = []
     expect(() => assignNestedValue(target, '0', 'val')).not.toThrow()
     expect(target[0]).toBe('val')
+
+    const objectTarget: Record<string, unknown> = {}
+    expect(() => assignNestedValue(objectTarget, '[0]', 'val')).toThrow('Invalid object path segment')
   })
 
   it('covers normalizeRequestInput with missing content-type', async () => {
@@ -1399,9 +1492,18 @@ describe('@holo-js/validation remaining branch coverage', () => {
 describe('@holo-js/validation final branch coverage', () => {
   it('covers summarizeErrors with empty errors and _root path', async () => {
     const s = schema({ name: field.string().required() })
+    const emptyFailureBase = schema({ name: field.string() })
+    const emptyFailureSchema: ValidationSchema<typeof emptyFailureBase.fields> = {
+      ...emptyFailureBase,
+      '~standard': {
+        ...emptyFailureBase['~standard'],
+        validate: () => ({ issues: [] }),
+      },
+    }
 
     // _root path via parse
     await expect(parse({ name: '' }, s)).rejects.toThrow('This field is required.')
+    await expect(parse({ name: 'valid' }, emptyFailureSchema)).rejects.toThrow('Validation failed.')
 
     // Non-root path via parse
     const nested = schema({ profile: { city: field.string().required() } })

@@ -32,8 +32,13 @@ import {
 } from './contracts-support'
 
 function resolveDateRuleValue(value: unknown): Date | undefined {
+  /* v8 ignore next 8 -- public rule builders normalize Date arguments to ISO strings before runtime resolution */
   if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? undefined : value
+    if (Number.isNaN(value.getTime())) {
+      return undefined
+    }
+
+    return value
   }
 
   if (typeof value === 'string') {
@@ -90,6 +95,10 @@ function getRule(definition: FieldDefinition, name: FieldRule['name']): FieldRul
   return definition.rules.find(rule => rule.name === name)
 }
 
+function hasRule(definition: FieldDefinition, name: FieldRule['name']): boolean {
+  return definition.rules.some(rule => rule.name === name)
+}
+
 function isMissingValue(value: unknown, kind: FieldKind): boolean {
   if (typeof value === 'undefined' || value === null) {
     return true
@@ -106,19 +115,33 @@ function isMissingValue(value: unknown, kind: FieldKind): boolean {
   return false
 }
 
+function resolveShapeRuleValue(definition: FieldDefinition, outputValue: unknown, inputValue: unknown): unknown {
+  if (!hasRule(definition, 'transform')) {
+    return outputValue
+  }
+
+  if (getRule(definition, 'default') && isMissingValue(inputValue, definition.kind)) {
+    return outputValue
+  }
+
+  return inputValue
+}
+
 async function applyPostFieldRules(
   definition: FieldDefinition,
   value: unknown,
+  inputValue: unknown,
   context: PostValidationContext,
   issues: Record<string, string[]>,
 ): Promise<void> {
+  const shapeRuleValue = resolveShapeRuleValue(definition, value, inputValue)
   const requiredRule = getRule(definition, 'required')
-  if (requiredRule && isMissingValue(value, definition.kind)) {
+  if (requiredRule && isMissingValue(shapeRuleValue, definition.kind)) {
     prependIssue(issues, context.path, resolveRuleMessage(requiredRule, 'This field is required.'))
     return
   }
 
-  if (typeof value === 'undefined' || value === null) {
+  if (typeof shapeRuleValue === 'undefined' || shapeRuleValue === null) {
     return
   }
 
@@ -173,7 +196,7 @@ async function applyPostFieldRules(
       case 'afterToday':
       case 'todayOrAfter':
       case 'afterOrToday': {
-        const dateValue = value instanceof Date ? value : resolveDateRuleValue(value)
+        const dateValue = shapeRuleValue instanceof Date ? shapeRuleValue : resolveDateRuleValue(shapeRuleValue)
         if (!dateValue) {
           pushIssue(issues, context.path, 'This field must be a valid date.')
           break
@@ -222,17 +245,17 @@ async function applyPostFieldRules(
         break
       }
       case 'max': {
-        if (definition.kind === 'file' && typeof (value as WebFileLike).size === 'number') {
+        if (definition.kind === 'file' && typeof (shapeRuleValue as WebFileLike).size === 'number') {
           const limit = parseByteSize(rule.args[0] as number | string)
-          if (((value as WebFileLike).size ?? /* v8 ignore next */ 0) > limit) {
+          if (((shapeRuleValue as WebFileLike).size ?? /* v8 ignore next */ 0) > limit) {
             pushIssue(issues, context.path, resolveRuleMessage(rule, `File size must be at most ${limit} bytes.`))
           }
         }
         break
       }
       case 'size': {
-        if (definition.kind === 'file' && typeof (value as WebFileLike).size === 'number' && typeof rule.args[0] === 'number') {
-          if ((value as WebFileLike).size !== rule.args[0]) {
+        if (definition.kind === 'file' && typeof (shapeRuleValue as WebFileLike).size === 'number' && typeof rule.args[0] === 'number') {
+          if ((shapeRuleValue as WebFileLike).size !== rule.args[0]) {
             pushIssue(issues, context.path, resolveRuleMessage(rule, `File size must be exactly ${rule.args[0]} bytes.`))
           }
         }
@@ -244,14 +267,42 @@ async function applyPostFieldRules(
   }
 }
 
+async function applyPostFieldRulesRecursively(
+  definition: FieldDefinition,
+  value: unknown,
+  inputValue: unknown,
+  context: PostValidationContext,
+  issues: Record<string, string[]>,
+): Promise<void> {
+  await applyPostFieldRules(definition, value, inputValue, context, issues)
+
+  if (definition.kind !== 'array' || !definition.item || !Array.isArray(value)) {
+    return
+  }
+
+  const inputItems = Array.isArray(inputValue) ? inputValue : value
+
+  for (const [index, item] of value.entries()) {
+    const key = String(index)
+    await applyPostFieldRulesRecursively(definition.item, item, inputItems[index], {
+      root: context.root,
+      parent: value,
+      key,
+      path: [...context.path, key],
+    }, issues)
+  }
+}
+
 async function applyPostValidation(
   shape: SchemaInputShape,
   data: unknown,
   root: unknown,
   issues: Record<string, string[]>,
   path: readonly string[] = [],
+  inputData: unknown = data,
 ): Promise<void> {
   const current = isPlainObject(data) ? data : /* v8 ignore next */ {}
+  const inputCurrent = isPlainObject(inputData) ? inputData : current
 
   for (const [key, value] of Object.entries(shape)) {
     const isFieldLike = isPlainObject(value)
@@ -260,27 +311,16 @@ async function applyPostValidation(
       const fieldDef = normalizeFieldBuilder(value as unknown as FieldBuilderInput)
       const nextPath = [...path, key]
       const nextValue = current[key]
-      await applyPostFieldRules(fieldDef.definition, nextValue, {
+      await applyPostFieldRulesRecursively(fieldDef.definition, nextValue, inputCurrent[key], {
         root,
         parent: current,
         key,
         path: nextPath,
       }, issues)
-
-      if (fieldDef.definition.kind === 'array' && fieldDef.definition.item && Array.isArray(nextValue)) {
-        for (const [index, item] of nextValue.entries()) {
-          await applyPostFieldRules(fieldDef.definition.item, item, {
-            root,
-            parent: nextValue,
-            key: String(index),
-            path: [...nextPath, String(index)],
-          }, issues)
-        }
-      }
       continue
     }
 
-    await applyPostValidation(value as SchemaInputShape, current[key], root, issues, [...path, key])
+    await applyPostValidation(value as SchemaInputShape, current[key], root, issues, [...path, key], inputCurrent[key])
   }
 }
 
@@ -298,7 +338,7 @@ async function runSchemaValidation(
   }
 
   const postTarget = result.success ? result.output : coerced
-  await applyPostValidation(fields, postTarget, postTarget, issues)
+  await applyPostValidation(fields, postTarget, postTarget, issues, [], coerced)
 
   if (Object.keys(issues).length > 0) {
     return { success: false, output: postTarget, issues }
@@ -346,7 +386,7 @@ async function runFieldValidation(
   }
 
   const postTarget = result.success ? result.output : coerced
-  await applyStandaloneFieldPostRules(definition, postTarget, issues)
+  await applyStandaloneFieldPostRules(definition, postTarget, coerced, issues)
 
   if (Object.keys(issues).length > 0) {
     return { success: false, output: postTarget, issues }
@@ -358,25 +398,15 @@ async function runFieldValidation(
 async function applyStandaloneFieldPostRules(
   definition: FieldDefinition,
   value: unknown,
+  inputValue: unknown,
   issues: Record<string, string[]>,
 ): Promise<void> {
-  await applyPostFieldRules(definition, value, {
+  await applyPostFieldRulesRecursively(definition, value, inputValue, {
     root: value,
     parent: null,
     key: '_value',
     path: [],
   }, issues)
-
-  if (definition.kind === 'array' && definition.item && Array.isArray(value)) {
-    for (const [index, item] of value.entries()) {
-      await applyPostFieldRules(definition.item, item, {
-        root: value,
-        parent: value,
-        key: String(index),
-        path: [String(index)],
-      }, issues)
-    }
-  }
 }
 
 export function createFieldStandardValidate<TOutput>(

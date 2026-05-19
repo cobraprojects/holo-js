@@ -28,7 +28,7 @@ export default function SuperAdminLoginPage() {
         try {
           await auth.refreshUser()
         } catch (error) {
-          console.warn('Admin auth refresh failed after login.', error)
+          console.warn('Super admin auth refresh failed after login.', error)
         }
         router.replace(submission.data.redirectTo)
       }
@@ -40,7 +40,7 @@ export default function SuperAdminLoginPage() {
     <section style={panelStyle}>
       <div>
         <h1 style={{ margin: '0 0 0.5rem 0' }}>Super Admin Sign In</h1>
-        <p style={{ margin: 0, color: '#94a3b8' }}>Use an admin account to access the super admin area.</p>
+        <p style={{ margin: 0, color: '#94a3b8' }}>Use a super admin account to access the super admin area.</p>
       </div>
 
       <form onSubmit={(event) => { event.preventDefault(); form.submit() }} style={{ display: 'grid', gap: '0.9rem' }}>

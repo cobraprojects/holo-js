@@ -329,11 +329,15 @@ function createRedisLock(
           return withCallback(callback)
         }
 
-        if (now() >= deadline) {
+        const remainingWait = deadline - now()
+        if (remainingWait <= 0) {
           return false
         }
 
-        await sleep(10)
+        await sleep(Math.min(10, remainingWait))
+        if (now() >= deadline) {
+          return false
+        }
       }
     },
   }

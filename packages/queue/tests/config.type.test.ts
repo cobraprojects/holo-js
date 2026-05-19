@@ -1,9 +1,10 @@
 import { describe, it } from 'vitest'
 import {
   dispatch,
-  type dispatchSync,
+  dispatchSync,
   defineJob,
   normalizeQueueConfig,
+  Queue,
   type ExportedQueueJobDefinition,
   type NormalizedHoloQueueConfig,
   type QueueDriver,
@@ -12,9 +13,16 @@ import {
   type QueuePendingDispatch,
   type QueueJsonValue,
   type QueueSharedRedisConfig,
+  useQueueConnection,
 } from '../src'
 
 declare module '../src' {
+  interface HoloQueueJobRegistry {
+    'reports.generate': QueueJobDefinition<{ reportId: string }, { ok: true }>
+  }
+}
+
+declare module '../src/contracts' {
   interface HoloQueueJobRegistry {
     'reports.generate': QueueJobDefinition<{ reportId: string }, { ok: true }>
   }
@@ -81,6 +89,24 @@ describe('@holo-js/queue typing', () => {
       reportId: 'rep-1',
     })
     const typedPending: QueuePendingDispatch<{ reportId: string }> = pending
+    const expectRegisteredQueuePayloadTypes = () => {
+      // @ts-expect-error registered job names must use their registry payload type
+      dispatch('reports.generate', {
+        wrong: 123,
+      })
+      // @ts-expect-error registered job names must use their registry payload type
+      dispatchSync('reports.generate', {
+        wrong: 123,
+      })
+      // @ts-expect-error connection dispatch preserves registered payload inference
+      Queue.connection('sync').dispatch('reports.generate', {
+        wrong: 123,
+      })
+      // @ts-expect-error connection dispatchSync preserves registered payload inference
+      useQueueConnection('sync').dispatchSync('reports.generate', {
+        wrong: 123,
+      })
+    }
     const dynamicPending: QueuePendingDispatch<{ anything: boolean }> = dispatch(`reports.${'dynamic'}`, {
       anything: true,
     })
@@ -94,8 +120,8 @@ describe('@holo-js/queue typing', () => {
       },
     })
     type SelectedExportType = ExportedQueueJobDefinition<typeof exportedJob>
-    type SelectedPayload = SelectedExportType extends QueueJobDefinition<infer TPayload, unknown> ? TPayload : never
-    type SelectedResult = SelectedExportType extends QueueJobDefinition<QueueJsonValue, infer TResult> ? TResult : never
+    type SelectedPayload = SelectedExportType extends QueueJobDefinition<infer TPayload, infer _TResult> ? TPayload : never
+    type SelectedResult = SelectedExportType extends QueueJobDefinition<infer _TPayload, infer TResult> ? TResult : never
     const selectedPayload: SelectedPayload = {
       reportId: 'rep-1',
     }
@@ -109,6 +135,7 @@ describe('@holo-js/queue typing', () => {
     void envelope
     void driver
     void typedPending
+    void expectRegisteredQueuePayloadTypes
     void dynamicPending
     void syncResult
     void exportedJob

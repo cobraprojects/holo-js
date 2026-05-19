@@ -69,17 +69,25 @@ function parseInteger(
 
   const normalized = typeof value === 'number'
     ? value
-    : Number.parseInt(value, 10)
+    : value.trim()
 
-  if (!Number.isInteger(normalized)) {
+  if (typeof normalized === 'string' && !/^[+-]?\d+$/.test(normalized)) {
     throw new Error(`[Holo Queue] ${label} must be an integer.`)
   }
 
-  if (typeof options.minimum === 'number' && normalized < options.minimum) {
+  const integer = typeof normalized === 'number'
+    ? normalized
+    : Number(normalized)
+
+  if (!Number.isInteger(integer)) {
+    throw new Error(`[Holo Queue] ${label} must be an integer.`)
+  }
+
+  if (typeof options.minimum === 'number' && integer < options.minimum) {
     throw new Error(`[Holo Queue] ${label} must be greater than or equal to ${options.minimum}.`)
   }
 
-  return normalized
+  return integer
 }
 
 function normalizeConnectionName(value: string | undefined, label: string): string {

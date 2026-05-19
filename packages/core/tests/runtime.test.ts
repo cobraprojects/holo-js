@@ -1007,8 +1007,8 @@ export const pruneCache = defineJob({
       'reports.send-digest',
       'cache.prune',
     ]))
-    await expect(Queue.dispatchSync<{ value: number }, number>('reports.send-digest', { value: 21 })).resolves.toBe(42)
-    await expect(Queue.dispatchSync<Record<string, never>, string>('cache.prune', {})).resolves.toBe('done')
+    await expect(Queue.dispatchSync('reports.send-digest', { value: 21 })).resolves.toBe(42)
+    await expect(Queue.dispatchSync('cache.prune', {})).resolves.toBe('done')
 
     await runtime.shutdown()
   })
@@ -1046,7 +1046,7 @@ export default defineJob({
       registerProjectQueueJobs: true,
     })
 
-    await expect(Queue.dispatchSync<{ value: number }, number>('reports.aliased', { value: 14 })).resolves.toBe(42)
+    await expect(Queue.dispatchSync('reports.aliased', { value: 14 })).resolves.toBe(42)
 
     await runtime.shutdown()
   })
@@ -1093,7 +1093,7 @@ export default defineJob({
 
     expect(listRegisteredQueueJobs().map(job => job.name)).toContain('send-email')
     expect(listRegisteredQueueJobs().map(job => job.name)).not.toContain('queue.send-email')
-    await expect(Queue.dispatchSync<Record<string, never>, string>('send-email', {})).resolves.toBe('custom-root')
+    await expect(Queue.dispatchSync('send-email', {})).resolves.toBe('custom-root')
 
     await runtime.shutdown()
   })
@@ -1184,7 +1184,7 @@ export default defineJob({
     const runtime = await initializeHolo(root, {
       registerProjectQueueJobs: true,
     })
-    await expect(Queue.dispatchSync<Record<string, never>, string>('reports.send-digest', {})).resolves.toBe('manual')
+    await expect(Queue.dispatchSync('reports.send-digest', {})).resolves.toBe('manual')
     await runtime.shutdown()
   })
 
@@ -1223,7 +1223,7 @@ export default defineJob({
       registerProjectQueueJobs: true,
     })
 
-    await expect(Queue.dispatchSync<Record<string, never>, string>('reports.send-digest', {})).resolves.toBe('project-version')
+    await expect(Queue.dispatchSync('reports.send-digest', {})).resolves.toBe('project-version')
 
     await runtime.shutdown()
   })
@@ -1254,7 +1254,7 @@ export default defineJob({
     const firstRuntime = await initializeHolo(root, {
       registerProjectQueueJobs: true,
     })
-    await expect(Queue.dispatchSync<Record<string, never>, string>('reports.send-digest', {})).resolves.toBe('first-version')
+    await expect(Queue.dispatchSync('reports.send-digest', {})).resolves.toBe('first-version')
     await firstRuntime.shutdown()
 
     await writeFile(jobPath, `
@@ -1270,7 +1270,7 @@ export default defineJob({
     const secondRuntime = await initializeHolo(root, {
       registerProjectQueueJobs: true,
     })
-    await expect(Queue.dispatchSync<Record<string, never>, string>('reports.send-digest', {})).resolves.toBe('second-version')
+    await expect(Queue.dispatchSync('reports.send-digest', {})).resolves.toBe('second-version')
     await secondRuntime.shutdown()
   })
 
@@ -1346,7 +1346,7 @@ export default {
       const runtime = await isolatedHoloModule.initializeHolo(root, {
         registerProjectQueueJobs: true,
       })
-      await expect(Queue.dispatchSync<Record<string, never>, string>('reports.direct', {})).resolves.toBe('direct-import')
+      await expect(Queue.dispatchSync('reports.direct', {})).resolves.toBe('direct-import')
       await runtime.shutdown()
     } finally {
       if (typeof originalVitest === 'undefined') {

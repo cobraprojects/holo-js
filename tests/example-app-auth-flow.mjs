@@ -152,6 +152,8 @@ function assertThrottleFailure(result) {
     Array.isArray(result.json.errors?._root),
     'Expected throttled response to include a root error.',
   )
+  assert.equal(typeof result.json.retryAfterSeconds, 'number')
+  assert.equal(typeof result.json.retryAt, 'string')
 }
 
 function assertSocialRedirect(result, expected) {
@@ -549,6 +551,21 @@ export async function assertExampleAppAuthFlow({
     }), '/super-admin/login')
   }
 
+  const regularAdminLogin = await fetchAuthJson('/api/super-admin/login', {
+    fields: {
+      email: 'admin@example.com',
+      password: 'admin-secret',
+    },
+    headers: {
+      'x-forwarded-for': '127.0.0.227',
+      'x-real-ip': '127.0.0.227',
+    },
+    allowFailure: true,
+  })
+  assert.equal(regularAdminLogin.response.status, 422)
+  assert.equal(regularAdminLogin.json.ok, false)
+  assertFieldFailure(regularAdminLogin, ['email'])
+
   const adminJar = createCookieJar()
   const adminLogin = await fetchAuthJson('/api/super-admin/login', {
     fields: {
@@ -567,13 +584,13 @@ export async function assertExampleAppAuthFlow({
   assert.equal(adminLogin.json.data?.user?.email, 'super-admin@example.com')
   assert.ok(listSetCookieHeaders(adminLogin.response).length > 0)
 
-  const adminGuardUser = await fetchAuthJson('/api/auth/user?guard=admin', {
+  const superAdminGuardUser = await fetchAuthJson('/api/auth/user?guard=admin', {
     jar: adminJar,
   })
-  assert.equal(adminGuardUser.json.authenticated, true)
-  assert.equal(adminGuardUser.json.guard, 'admin')
-  assert.equal(adminGuardUser.json.user?.email, 'super-admin@example.com')
-  assert.equal(adminGuardUser.json.user?.name, 'Super Admin')
+  assert.equal(superAdminGuardUser.json.authenticated, true)
+  assert.equal(superAdminGuardUser.json.guard, 'admin')
+  assert.equal(superAdminGuardUser.json.user?.email, 'super-admin@example.com')
+  assert.equal(superAdminGuardUser.json.user?.name, 'Super Admin')
 
   const adminDefaultGuardUser = await fetchAuthJson('/api/auth/user', {
     jar: adminJar,

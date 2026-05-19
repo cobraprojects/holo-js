@@ -612,6 +612,223 @@ describe('@holo-js/queue worker runtime', () => {
     expect(warn).toHaveBeenCalledWith('[Holo Queue] onFailed hook failed for job "jobs.fail-hook": failure hook failed')
   })
 
+  it('keeps finalized driver mutations stable when worker observer hooks fail', async () => {
+    const state: FakeAsyncDriverState = {
+      reserveQueue: [],
+      reserveInputs: [],
+      acknowledged: [],
+      released: [],
+      deleted: [],
+      clearCalls: [],
+    }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    configureQueueRuntime({
+      config: {
+        default: 'redis',
+        failed: false,
+        connections: {
+          redis: {
+            driver: 'redis',
+          },
+        },
+      },
+      redisConfig: sharedRedisConfig,
+      driverFactories: [
+        createFakeAsyncDriverFactory('redis', state),
+      ],
+    })
+
+    registerNamedJob('jobs.process-observer-fails', {
+      async handle() {},
+    })
+    registerNamedJob('jobs.release-observer-fails', {
+      async handle(_payload, context) {
+        await context.release(6)
+      },
+    })
+    registerNamedJob('jobs.fail-observer-fails', {
+      async handle() {
+        throw new Error('terminal failure')
+      },
+    })
+    registerNamedJob('jobs.release-then-fail-observerless', {
+      async handle(_payload, context) {
+        await context.release(3)
+        await context.fail(new Error('release keeps ownership'))
+      },
+    })
+    registerNamedJob('jobs.release-twice-observerless', {
+      async handle(_payload, context) {
+        await context.release(2)
+        await context.release(8)
+      },
+    })
+    registerNamedJob('jobs.fail-twice-observerless', {
+      async handle(_payload, context) {
+        try {
+          await context.fail(new Error('first terminal failure'))
+        } catch {
+          // context.fail records the terminal failure by throwing.
+        }
+
+        await context.fail(new Error('ignored terminal failure'))
+      },
+    })
+    registerNamedJob('jobs.fail-caught-observerless', {
+      async handle(_payload, context) {
+        try {
+          await context.fail(new Error('caught terminal failure'))
+        } catch {
+          return undefined
+        }
+      },
+    })
+    registerNamedJob('jobs.retry-observerless', {
+      async handle() {
+        throw new Error('retryable failure')
+      },
+    })
+
+    const directDriver = queueWorkerInternals.requireAsyncDriver(
+      createFakeAsyncDriverFactory('redis', state).create({
+        name: 'redis',
+        driver: 'redis',
+        connection: 'default',
+        queue: 'default',
+        retryAfter: 90,
+        blockFor: 5,
+        redis: {
+          host: '127.0.0.1',
+          port: 6379,
+          db: 0,
+        },
+      }, queueRuntimeInternals.createQueueDriverFactoryContext()),
+      'redis',
+    )
+
+    await expect(queueWorkerInternals.processReservedJob(
+      directDriver,
+      createReservedJob('jobs.process-observer-fails', { id: 'processed-once' }),
+      {
+        async onJobProcessed() {
+          throw new Error('processed observer failed')
+        },
+      },
+    )).resolves.toEqual({ kind: 'processed' })
+
+    await expect(queueWorkerInternals.processReservedJob(
+      directDriver,
+      createReservedJob('jobs.release-observer-fails', { id: 'released-once' }),
+      {
+        async onJobReleased() {
+          throw new Error('released observer failed')
+        },
+      },
+    )).resolves.toEqual({
+      kind: 'released',
+      delaySeconds: 6,
+    })
+
+    await expect(queueWorkerInternals.processReservedJob(
+      directDriver,
+      createReservedJob('jobs.fail-observer-fails', {
+        id: 'failed-once',
+        maxAttempts: 1,
+      }),
+      {
+        async onJobFailed() {
+          throw new Error('failed observer failed')
+        },
+      },
+    )).resolves.toEqual({
+      kind: 'failed',
+      error: expect.objectContaining({
+        message: 'terminal failure',
+      }),
+    })
+    await expect(queueWorkerInternals.processReservedJob(
+      directDriver,
+      createReservedJob('jobs.release-then-fail-observerless', { id: 'released-after-fail' }),
+      {},
+    )).resolves.toEqual({
+      kind: 'released',
+      delaySeconds: 3,
+      error: expect.objectContaining({
+        message: 'release keeps ownership',
+      }),
+    })
+    await expect(queueWorkerInternals.processReservedJob(
+      directDriver,
+      createReservedJob('jobs.release-twice-observerless', { id: 'released-twice' }),
+      {},
+    )).resolves.toEqual({
+      kind: 'released',
+      delaySeconds: 2,
+    })
+    await expect(queueWorkerInternals.processReservedJob(
+      directDriver,
+      createReservedJob('jobs.fail-twice-observerless', { id: 'failed-without-hook' }),
+      {},
+    )).resolves.toEqual({
+      kind: 'failed',
+      error: expect.objectContaining({
+        message: 'first terminal failure',
+      }),
+    })
+    await expect(queueWorkerInternals.processReservedJob(
+      directDriver,
+      createReservedJob('jobs.fail-caught-observerless', { id: 'failed-caught-without-hook' }),
+      {},
+    )).resolves.toEqual({
+      kind: 'failed',
+      error: expect.objectContaining({
+        message: 'caught terminal failure',
+      }),
+    })
+    await expect(queueWorkerInternals.processReservedJob(
+      directDriver,
+      createReservedJob('jobs.retry-observerless', { id: 'released-without-hook' }),
+      {},
+    )).resolves.toEqual({
+      kind: 'released',
+      error: expect.objectContaining({
+        message: 'retryable failure',
+      }),
+    })
+    await queueWorkerInternals.runWorkerHook('jobs.string-observer', 'onJobProcessed', () => {
+      throw 'string observer failed'
+    })
+
+    expect(state.acknowledged.map(job => job.envelope.id)).toEqual(['processed-once'])
+    expect(state.released.map(entry => ({
+      id: entry.job.envelope.id,
+      delaySeconds: entry.delaySeconds,
+    }))).toEqual([
+      {
+        id: 'released-once',
+        delaySeconds: 6,
+      },
+      {
+        id: 'released-after-fail',
+        delaySeconds: 3,
+      },
+      {
+        id: 'released-twice',
+        delaySeconds: 2,
+      },
+      {
+        id: 'released-without-hook',
+        delaySeconds: undefined,
+      },
+    ])
+    expect(state.deleted.map(job => job.envelope.id)).toEqual(['failed-once', 'failed-without-hook', 'failed-caught-without-hook'])
+    expect(warn).toHaveBeenCalledWith('[Holo Queue] onJobProcessed hook failed for job "jobs.process-observer-fails": processed observer failed')
+    expect(warn).toHaveBeenCalledWith('[Holo Queue] onJobReleased hook failed for job "jobs.release-observer-fails": released observer failed')
+    expect(warn).toHaveBeenCalledWith('[Holo Queue] onJobFailed hook failed for job "jobs.fail-observer-fails": failed observer failed')
+    expect(warn).toHaveBeenCalledWith('[Holo Queue] onJobProcessed hook failed for job "jobs.string-observer": string observer failed')
+  })
+
   it('supports sleep, stop signals, max jobs, max time, and timeout overrides', async () => {
     const state: FakeAsyncDriverState = {
       reserveQueue: [null, null, createReservedJob('jobs.timeout', {
@@ -796,7 +1013,56 @@ describe('@holo-js/queue worker runtime', () => {
     })).toBe('max-time')
     await expect(queueWorkerInternals.runWithTimeout(Promise.resolve('ok'), 'jobs.ok', undefined)).resolves.toBe('ok')
     await expect(queueWorkerInternals.runWithTimeout(Promise.resolve('ok'), 'jobs.ok', 1)).resolves.toBe('ok')
+    await expect(queueWorkerInternals.runWithTimeout(Promise.reject(new Error('rejected job')), 'jobs.rejected', 1)).rejects.toThrow('rejected job')
     await expect(queueWorkerInternals.runWithTimeout(new Promise(resolve => setTimeout(() => resolve('ok'), 20)), 'jobs.ok', 0)).rejects.toBeInstanceOf(QueueWorkerTimeoutError)
+  })
+
+  it('can poll without sleeping when worker sleep is zero', async () => {
+    const state: FakeAsyncDriverState = {
+      reserveQueue: [null],
+      reserveInputs: [],
+      acknowledged: [],
+      released: [],
+      deleted: [],
+      clearCalls: [],
+    }
+    let shouldStop = false
+
+    configureQueueRuntime({
+      config: {
+        default: 'database',
+        failed: false,
+        connections: {
+          database: {
+            driver: 'database',
+            sleep: 0,
+          },
+        },
+      },
+      driverFactories: [
+        createFakeAsyncDriverFactory('database', state),
+      ],
+    })
+
+    await expect(runQueueWorker({
+      connection: 'database',
+      sleepFn: async () => {
+        throw new Error('sleep should not run')
+      },
+      shouldStop: () => {
+        if (shouldStop) {
+          return true
+        }
+
+        shouldStop = true
+        return false
+      },
+    })).resolves.toEqual({
+      processed: 0,
+      released: 0,
+      failed: 0,
+      stoppedBecause: 'signal',
+    })
   })
 
   it('rejects sync drivers and missing registered definitions clearly', async () => {

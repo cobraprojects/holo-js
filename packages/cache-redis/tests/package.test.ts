@@ -439,6 +439,53 @@ describe('@holo-js/cache-redis', () => {
     await expect(driver.lock('holo:cache:lock:clock', 1).block(0.02)).resolves.toBe(false)
   })
 
+  it('does not retry blocking lock acquisition after the wait deadline', async () => {
+    let currentTime = 0
+    let setCalls = 0
+    const sleepCalls: number[] = []
+    const client: Parameters<typeof redisCacheDriverInternals.createRedisLock>[0] = {
+      async get() {
+        return null
+      },
+      async set() {
+        setCalls += 1
+        return setCalls === 1 ? null : 'OK'
+      },
+      async del() {
+        return 0
+      },
+      async scan() {
+        return ['0', []]
+      },
+      async incrby() {
+        return 0
+      },
+      async decrby() {
+        return 0
+      },
+      async eval() {
+        return 0
+      },
+    }
+    const callback = vi.fn()
+    const lock = redisCacheDriverInternals.createRedisLock(
+      client,
+      'holo:cache:lock:deadline',
+      1,
+      () => 'owner-1',
+      async (milliseconds) => {
+        sleepCalls.push(milliseconds)
+        currentTime += milliseconds
+      },
+      () => currentTime,
+    )
+
+    await expect(lock.block(0.005, callback)).resolves.toBe(false)
+    expect(callback).not.toHaveBeenCalled()
+    expect(setCalls).toBe(1)
+    expect(sleepCalls).toEqual([5])
+  })
+
   it('flushes every cluster master when using a redis cluster client', async () => {
     const driver = createRedisCacheDriver({
       name: 'redis-cluster',

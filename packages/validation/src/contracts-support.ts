@@ -109,6 +109,7 @@ export function normalizeFieldBuilder<TOutput>(input: FieldBuilderInput<TOutput>
     return input
   }
 
+  /* v8 ignore next */
   throw new ValidationContractError('Schema fields must be created through the validation field builder.')
 }
 

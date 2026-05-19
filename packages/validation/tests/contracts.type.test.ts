@@ -5,7 +5,9 @@ import {
   type StandardSchemaV1,
   type ValidationErrorBag,
   field,
+  parse,
   schema,
+  validate,
 } from '../src'
 
 describe('@holo-js/validation typing', () => {
@@ -57,6 +59,15 @@ describe('@holo-js/validation typing', () => {
     const emailField = field.string().required().email()
     const _fieldStandard: StandardSchemaV1<unknown, string> = emailField
 
+    const transformedField = field.string().required().transform(value => value.length)
+    const _transformedFieldStandard: StandardSchemaV1<unknown, number> = transformedField
+
+    const transformedSchema = schema({
+      nameLength: transformedField,
+    })
+    type TransformedData = InferSchemaData<typeof transformedSchema.fields>
+    type TransformAssertion = Expect<Equal<TransformedData, { nameLength: number }>>
+
     const data: ManualData = {
       name: 'Ava',
       email: 'ava@example.com',
@@ -71,10 +82,27 @@ describe('@holo-js/validation typing', () => {
     void data
     void _standard
     void _fieldStandard
+    void _transformedFieldStandard
     void (0 as unknown as DataAssertion)
     void (0 as unknown as ManualAssertion)
     void (0 as unknown as ErrorAssertion)
     void (0 as unknown as FieldAssertion)
+    void (0 as unknown as TransformAssertion)
+
+    async function assertTransformParserInference() {
+      const parsed = await parse({ nameLength: 'Ava' }, transformedSchema)
+      const validated = await validate({ nameLength: 'Ava' }, transformedSchema)
+      type ParsedAssertion = Expect<Equal<typeof parsed, { nameLength: number }>>
+
+      void (0 as unknown as ParsedAssertion)
+
+      if (validated.valid) {
+        type ValidatedAssertion = Expect<Equal<typeof validated.data, { nameLength: number }>>
+        void (0 as unknown as ValidatedAssertion)
+      }
+    }
+
+    void assertTransformParserInference
 
     if (false) {
       // @ts-expect-error Invalid field kinds must not be accepted inside schema definitions.

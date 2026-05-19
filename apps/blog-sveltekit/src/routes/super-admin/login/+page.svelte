@@ -21,7 +21,7 @@
 <section class="panel">
   <div class="copy">
     <h1>Super Admin Sign In</h1>
-    <p>Use an admin account to access the super admin area.</p>
+    <p>Use a super admin account to access the super admin area.</p>
   </div>
 
   <form class="stack" on:submit={(event) => { event.preventDefault(); form.submit() }}>

@@ -33,7 +33,7 @@ const form = useForm(loginForm, {
   <section class="panel">
     <div class="copy">
       <h1>Super Admin Sign In</h1>
-      <p>Use an admin account to access the super admin area.</p>
+      <p>Use a super admin account to access the super admin area.</p>
     </div>
 
     <form class="stack" @submit.prevent="form.submit()">

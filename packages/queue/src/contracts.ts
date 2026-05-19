@@ -179,25 +179,34 @@ export interface HoloQueueJobRegistry {}
 
 type KnownQueueJobName = Extract<keyof HoloQueueJobRegistry, string>
 
+type DynamicQueueJobName<TJobName extends string>
+  = [KnownQueueJobName] extends [never]
+    ? TJobName
+    : TJobName extends KnownQueueJobName
+      ? never
+      : KnownQueueJobName extends TJobName
+        ? never
+        : TJobName
+
 type ResolveRegisteredQueueJobDefinition<TJobName extends string>
   = TJobName extends KnownQueueJobName
-    ? Extract<HoloQueueJobRegistry[TJobName], QueueJobDefinition> extends never
-      ? QueueJobDefinition
-      : Extract<HoloQueueJobRegistry[TJobName], QueueJobDefinition>
+    ? HoloQueueJobRegistry[TJobName] extends QueueJobDefinition<infer TPayload, infer TResult>
+      ? QueueJobDefinition<TPayload, TResult>
+      : QueueJobDefinition
     : QueueJobDefinition
 
 export type ExportedQueueJobDefinition<TValue>
-  = Extract<TValue, QueueJobDefinition> extends never
-    ? QueueJobDefinition
-    : Extract<TValue, QueueJobDefinition>
+  = TValue extends QueueJobDefinition<infer TPayload, infer TResult>
+    ? QueueJobDefinition<TPayload, TResult>
+    : QueueJobDefinition
 
 export type QueuePayloadFor<TJobName extends string>
-  = ResolveRegisteredQueueJobDefinition<TJobName> extends QueueJobDefinition<infer TPayload, unknown>
+  = ResolveRegisteredQueueJobDefinition<TJobName> extends QueueJobDefinition<infer TPayload, infer _TResult>
     ? TPayload
     : QueueJsonValue
 
 export type QueueResultFor<TJobName extends string>
-  = ResolveRegisteredQueueJobDefinition<TJobName> extends QueueJobDefinition<QueueJsonValue, infer TResult>
+  = ResolveRegisteredQueueJobDefinition<TJobName> extends QueueJobDefinition<infer _TPayload, infer TResult>
     ? TResult
     : unknown
 
@@ -236,8 +245,8 @@ export interface QueueConnectionFacade {
     payload: QueuePayloadFor<TJobName>,
     options?: QueueDispatchOptions,
   ): QueuePendingDispatch<QueuePayloadFor<TJobName>>
-  dispatch<TJobName extends Exclude<string, KnownQueueJobName>, TPayload extends QueueJsonValue = QueueJsonValue>(
-    jobName: TJobName,
+  dispatch<TPayload extends QueueJsonValue = QueueJsonValue, const TJobName extends string = string>(
+    jobName: TJobName & DynamicQueueJobName<TJobName>,
     payload: TPayload,
     options?: QueueDispatchOptions,
   ): QueuePendingDispatch<TPayload>
@@ -245,7 +254,10 @@ export interface QueueConnectionFacade {
     jobName: TJobName,
     payload: QueuePayloadFor<TJobName>,
   ): Promise<QueueResultFor<TJobName>>
-  dispatchSync<TPayload extends QueueJsonValue = QueueJsonValue, TResult = unknown>(jobName: string, payload: TPayload): Promise<TResult>
+  dispatchSync<TPayload extends QueueJsonValue = QueueJsonValue, TResult = unknown, const TJobName extends string = string>(
+    jobName: TJobName & DynamicQueueJobName<TJobName>,
+    payload: TPayload,
+  ): Promise<TResult>
 }
 
 export interface QueueEnqueueResult {

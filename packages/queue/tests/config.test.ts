@@ -363,9 +363,50 @@ describe('@holo-js/queue config', () => {
       'sleep must be an integer.',
     )
 
+    expect(() => queueInternals.parseInteger('1.5', 0, 'sleep')).toThrow(
+      'sleep must be an integer.',
+    )
+
+    expect(() => queueInternals.parseInteger('10s', 0, 'sleep')).toThrow(
+      'sleep must be an integer.',
+    )
+
+    expect(() => queueInternals.parseInteger('', 0, 'sleep')).toThrow(
+      'sleep must be an integer.',
+    )
+
     expect(() => queueInternals.parseInteger(-1, 0, 'sleep', { minimum: 0 })).toThrow(
       'sleep must be greater than or equal to 0.',
     )
+
+    expect(() => normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+          connection: 'cache',
+          retryAfter: '1.5',
+        },
+      },
+    }, sharedRedisConfig)).toThrow('queue connection "redis" retryAfter must be an integer.')
+
+    expect(() => normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+          connection: 'cache',
+          blockFor: '10s',
+        },
+      },
+    }, sharedRedisConfig)).toThrow('queue connection "redis" blockFor must be an integer.')
+
+    expect(() => normalizeQueueConfig({
+      connections: {
+        database: {
+          driver: 'database',
+          sleep: '',
+        },
+      },
+    })).toThrow('queue connection "database" sleep must be an integer.')
   })
 
   it('rejects unsupported failed job store drivers and empty connection names', () => {

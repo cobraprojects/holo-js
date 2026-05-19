@@ -37,6 +37,8 @@ export interface FormFailurePayload<TData> {
   readonly valid: false
   readonly values: Partial<TData>
   readonly errors: Record<string, readonly string[]>
+  readonly retryAfterSeconds?: number
+  readonly retryAt?: string
 }
 
 export interface FormSuccessPayload<TPayload = undefined> {
@@ -71,6 +73,11 @@ type RequestLikeHeaders =
     readonly forEach?: (callback: (value: string, key: string) => void) => void
     readonly entries?: () => Iterable<readonly [string, string]>
   }
+
+interface FormFailureMetadata {
+  readonly retryAfterSeconds?: number
+  readonly retryAt?: string
+}
 
 export interface FormRequestLikeInput {
   readonly method?: string
@@ -147,6 +154,7 @@ function createSubmission<TData>(
   errors: ValidationErrorBag<TData>,
   failureStatus = 422,
   schemaDefinition?: FormSchema,
+  failureMetadata: FormFailureMetadata = {},
 ): FormSubmissionResult<TData> {
   const normalizedFailureStatus = normalizeStatus(failureStatus, 422)
   const serialize = () => serializeSubmissionState(valid, values, errors, schemaDefinition)
@@ -160,6 +168,7 @@ function createSubmission<TData>(
       valid: false as const,
       values: sanitizeFlashedInput(values, schemaDefinition) as Partial<TData>,
       errors: normalizeFailureErrors(errors.flatten(), normalized.errors),
+      ...(normalized.status === 429 ? failureMetadata : {}),
     }
   }
 
@@ -218,6 +227,7 @@ export function createFailedSubmission<TShape extends SchemaInputShape>(
   values: Partial<InferSchemaData<TShape>>,
   flattenedErrors: Record<string, readonly string[]>,
   status = 422,
+  failureMetadata: FormFailureMetadata = {},
 ): FormSubmissionFailure<InferSchemaData<TShape>> {
   void schemaDefinition
   const normalizedStatus = normalizeStatus(status, 422)
@@ -227,6 +237,7 @@ export function createFailedSubmission<TShape extends SchemaInputShape>(
     createErrorBag<InferSchemaData<TShape>>(flattenedErrors),
     normalizedStatus,
     schemaDefinition,
+    failureMetadata,
   ) as FormSubmissionFailure<InferSchemaData<TShape>>
 }
 
@@ -505,6 +516,30 @@ function normalizeRequestLikeInput(input: FormLikeValidationInput | FormRequestL
   })
 }
 
+function createSecurityFailureMetadata(error: Error & { readonly status: number }): FormFailureMetadata {
+  if (error.status !== 429) {
+    return {}
+  }
+
+  const candidate = error as {
+    readonly retryAfterSeconds?: unknown
+    readonly snapshot?: {
+      readonly expiresAt?: unknown
+    }
+  }
+  const retryAfterSeconds = typeof candidate.retryAfterSeconds === 'number' && Number.isFinite(candidate.retryAfterSeconds)
+    ? candidate.retryAfterSeconds
+    : undefined
+  const retryAt = candidate.snapshot?.expiresAt instanceof Date
+    ? candidate.snapshot.expiresAt.toISOString()
+    : undefined
+
+  return {
+    ...(typeof retryAfterSeconds === 'number' ? { retryAfterSeconds } : {}),
+    ...(typeof retryAt === 'string' ? { retryAt } : {}),
+  }
+}
+
 async function createSecurityFailureSubmission<TShape extends SchemaInputShape>(
   input: Request,
   schemaDefinition: FormSchema<TShape>,
@@ -538,6 +573,7 @@ async function createSecurityFailureSubmission<TShape extends SchemaInputShape>(
       ],
     },
     error.status,
+    createSecurityFailureMetadata(error),
   )
 }
 
@@ -609,6 +645,7 @@ export async function validate<TShape extends SchemaInputShape>(
               ],
             },
             error.status,
+            createSecurityFailureMetadata(error),
           )
         }
 

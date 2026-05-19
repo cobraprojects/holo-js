@@ -696,13 +696,24 @@ function dispatchSyncInternal(
   })()
 }
 
-export function dispatchSync<TJobName extends Extract<keyof HoloQueueJobRegistry, string>>(
+type KnownRuntimeQueueJobName = Extract<keyof HoloQueueJobRegistry, string>
+
+type DynamicRuntimeQueueJobName<TJobName extends string>
+  = [KnownRuntimeQueueJobName] extends [never]
+    ? TJobName
+    : TJobName extends KnownRuntimeQueueJobName
+      ? never
+      : KnownRuntimeQueueJobName extends TJobName
+        ? never
+        : TJobName
+
+export function dispatchSync<TJobName extends KnownRuntimeQueueJobName>(
   jobName: TJobName,
   payload: QueuePayloadFor<TJobName>,
   options?: QueueDispatchOptions,
 ): Promise<QueueResultFor<TJobName>>
-export function dispatchSync<TPayload extends QueueJsonValue = QueueJsonValue, TResult = unknown>(
-  jobName: string,
+export function dispatchSync<TPayload extends QueueJsonValue = QueueJsonValue, TResult = unknown, const TJobName extends string = string>(
+  jobName: TJobName & DynamicRuntimeQueueJobName<TJobName>,
   payload: TPayload,
   options?: QueueDispatchOptions,
 ): Promise<TResult>
@@ -714,13 +725,13 @@ export async function dispatchSync<TPayload extends QueueJsonValue = QueueJsonVa
   return await dispatchSyncInternal(jobName, payload, options) as TResult
 }
 
-export function dispatch<TJobName extends Extract<keyof HoloQueueJobRegistry, string>>(
+export function dispatch<TJobName extends KnownRuntimeQueueJobName>(
   jobName: TJobName,
   payload: QueuePayloadFor<TJobName>,
   options?: QueueDispatchOptions,
 ): QueuePendingDispatch<QueuePayloadFor<TJobName>>
-export function dispatch<TJobName extends Exclude<string, Extract<keyof HoloQueueJobRegistry, string>>, TPayload extends QueueJsonValue = QueueJsonValue>(
-  jobName: TJobName,
+export function dispatch<TPayload extends QueueJsonValue = QueueJsonValue, const TJobName extends string = string>(
+  jobName: TJobName & DynamicRuntimeQueueJobName<TJobName>,
   payload: TPayload,
   options?: QueueDispatchOptions,
 ): QueuePendingDispatch<TPayload>

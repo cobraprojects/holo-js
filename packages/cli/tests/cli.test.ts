@@ -10285,10 +10285,13 @@ export default defineConfig({
     const generatedHooks = await readFile(join(projectRoot, '.holo-js/generated/hooks.ts'), 'utf8')
     expect(generatedHooks).toContain("from '../../src/hooks'")
     expect(generatedHooks).toContain('reroute')
+    expect(generatedHooks).toContain('process.env.STORAGE_ROUTE_PREFIX')
+    expect(generatedHooks).toContain('return suffix ? `/storage${suffix}` : \'/storage\'')
 
     const generatedServerHooks = await readFile(join(projectRoot, '.holo-js/generated/hooks.server.ts'), 'utf8')
     expect(generatedServerHooks).toContain("from '../../src/hooks.server'")
     expect(generatedServerHooks).toContain('handleFetch')
+    expect(generatedServerHooks).not.toContain('event.url.pathname =')
 
     // Legacy .user.ts files are deleted, not left as empty artifacts.
     await expect(stat(join(projectRoot, 'src/hooks.user.ts'))).rejects.toThrow()

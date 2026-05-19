@@ -48,6 +48,16 @@ function createSecurityModule() {
       if (next > 1) {
         const error = new Error('Too many attempts. Please try again later.') as Error & { status: number }
         error.status = 429
+        Object.defineProperties(error, {
+          retryAfterSeconds: {
+            value: 60,
+          },
+          snapshot: {
+            value: {
+              expiresAt: new Date('2026-05-20T12:34:56.000Z'),
+            },
+          },
+        })
         throw error
       }
     },
@@ -527,7 +537,11 @@ describe('@holo-js/forms contracts', () => {
       email: 'ava@example.com',
     })
     expect(throttled.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
-    expect(throttled.fail().status).toBe(429)
+    expect(throttled.fail()).toMatchObject({
+      status: 429,
+      retryAfterSeconds: 60,
+      retryAt: '2026-05-20T12:34:56.000Z',
+    })
   })
 
   it('merges validation errors with security root failures and requires Request inputs for security-aware validation', async () => {

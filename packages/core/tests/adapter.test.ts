@@ -489,7 +489,7 @@ export default defineAbility('manage-posts', () => true)
     await project.runtime.initialize()
 
     expect(listRegisteredQueueJobs().map(job => job.name)).toContain('report')
-    await expect(Queue.dispatchSync<Record<string, never>, string>('report', {})).resolves.toBe('ok')
+    await expect(Queue.dispatchSync('report', {})).resolves.toBe('ok')
   })
 
   it('does not import discovered queue jobs during framework adapter initialization by default', async () => {
@@ -653,7 +653,7 @@ export default defineAbility('manage-posts', () => true)
 
     expect(project.runtime.initialized).toBe(true)
     expect(listRegisteredQueueJobs().map(job => job.name)).toContain('report')
-    await expect(Queue.dispatchSync<Record<string, never>, string>('report', {})).resolves.toBe('ok')
+    await expect(Queue.dispatchSync('report', {})).resolves.toBe('ok')
     expect(loadEsbuildSpy).toHaveBeenCalled()
   })
 
@@ -844,7 +844,7 @@ export default defineJob({
       registerProjectQueueJobs: true,
     })
 
-    await expect(Queue.dispatchSync<Record<string, never>, string>('report', {})).resolves.toBe('first')
+    await expect(Queue.dispatchSync('report', {})).resolves.toBe('first')
 
     await new Promise(resolvePromise => setTimeout(resolvePromise, 25))
 
@@ -865,7 +865,7 @@ export default defineJob({
     })
 
     expect(second).not.toBe(first)
-    await expect(Queue.dispatchSync<Record<string, never>, string>('report', {})).resolves.toBe('second')
+    await expect(Queue.dispatchSync('report', {})).resolves.toBe('second')
   })
 
   it('picks up auth provider model changes in dev mode without restarting the process', async () => {

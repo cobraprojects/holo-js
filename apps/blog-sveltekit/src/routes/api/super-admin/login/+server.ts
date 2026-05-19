@@ -3,8 +3,9 @@ import auth from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
 
 import { loginForm } from '$lib/schemas/auth'
+import type { RequestHandler } from './$types'
 
-export async function POST({ request }: { request: Request }) {
+export const POST: RequestHandler = async ({ request }) => {
   const submission = await validate(request, loginForm, {
     throttle: 'login',
   })

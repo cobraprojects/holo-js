@@ -190,12 +190,12 @@ export class ValidationFieldBuilder<TOutput> implements StandardSchemaV1<unknown
     return this.clone(normalizeRule('afterOrToday', [], message))
   }
 
-  transform(transformer: (value: TOutput) => unknown): ValidationFieldBuilder<TOutput> {
+  transform<TNextOutput>(transformer: (value: TOutput) => TNextOutput): ValidationFieldBuilder<TNextOutput> {
     if (typeof transformer !== 'function') {
       throw new ValidationContractError('transform must be a function.')
     }
 
-    return this.clone(normalizeRule('transform', [transformer]))
+    return this.clone<TNextOutput>(normalizeRule('transform', [transformer]))
   }
 
   custom(validator: (value: TOutput) => boolean | string, message?: string): ValidationFieldBuilder<TOutput> {
