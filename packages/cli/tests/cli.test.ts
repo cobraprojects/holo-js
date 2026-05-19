@@ -735,6 +735,25 @@ export default {
     await expect(readFile(join(processRoot, '.env'), 'utf8')).resolves.toBe(processEnv)
   }, 90000)
 
+  it('generates app keys before loading project config', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.env', 'APP_KEY=\n')
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+throw new Error('APP_KEY is required before config can load')
+`)
+
+    const commandIo = createIo(projectRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['key:generate'], commandIo.io))).resolves.toBe(0)
+    expect(commandIo.read().stdout).toContain('Generated APP_KEY')
+    expect(commandIo.read().stderr).toBe('')
+
+    const env = await readFile(join(projectRoot, '.env'), 'utf8')
+    const generatedKey = env.match(/^APP_KEY=(.+)$/m)?.[1]
+    expect(generatedKey).toBeDefined()
+    expect(Buffer.from(generatedKey!, 'base64')).toHaveLength(32)
+  }, 90000)
+
   it('scaffolds a new project non-interactively with deterministic files', async () => {
     const targetRoot = await createTempDirectory()
     tempDirs.push(targetRoot)

@@ -1652,6 +1652,7 @@ export async function runCli(argv: readonly string[], io: IoStreams): Promise<nu
     const registry = [...internalCommands]
     const canSkipAppDiscovery = requestedCommandName === 'config:cache'
       || requestedCommandName === 'config:clear'
+      || requestedCommandName === 'key:generate'
       || requestedCommandName === 'new'
       || requestedCommandName === 'install'
       || requestedCommandName === 'auth:notifications:publish'
