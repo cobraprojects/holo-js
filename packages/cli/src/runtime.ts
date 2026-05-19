@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
-import { mkdir, rm, symlink } from 'node:fs/promises'
+import { mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
+import { setTimeout } from 'node:timers/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { writeConfigCache } from '@holo-js/config'
 import {
@@ -18,6 +19,7 @@ import type { HoloRuntime } from '@holo-js/core'
 const runtimeImportMeta = import.meta as ImportMeta & {
   resolve?: (specifier: string) => string
 }
+const RUNTIME_DEPENDENCY_LOCK_RETRY_MS = 10
 
 export function resolveConfigModuleUrl(
   /* v8 ignore next */
@@ -551,21 +553,78 @@ export async function resolvePackageRootFromSpecifier(specifier: string): Promis
   }
 }
 
-export async function ensureRuntimeDependencyLink(projectRoot: string): Promise<string> {
+function isFileExistsError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && (error as { code?: unknown }).code === 'EEXIST'
+}
+
+async function withRuntimeDependencyLock<T>(projectRoot: string, callback: () => Promise<T>): Promise<T> {
   const runtimeRoot = join(projectRoot, CLI_RUNTIME_ROOT)
-  const packageRoot = await resolvePackageRootFromSpecifier('@holo-js/db')
-  const namespaceDir = join(runtimeRoot, 'node_modules', '@holo-js')
-  const targetPath = join(namespaceDir, 'db')
+  const lockDir = join(runtimeRoot, 'node_modules.lock')
 
-  await mkdir(namespaceDir, { recursive: true })
-  await rm(targetPath, { recursive: true, force: true })
-  await symlink(packageRoot, targetPath, 'junction')
+  await mkdir(runtimeRoot, { recursive: true })
 
-  return runtimeRoot
+  while (true) {
+    try {
+      await mkdir(lockDir)
+      break
+    } catch (error) {
+      if (!isFileExistsError(error)) {
+        throw error
+      }
+
+      await setTimeout(RUNTIME_DEPENDENCY_LOCK_RETRY_MS)
+    }
+  }
+
+  try {
+    return await callback()
+  } finally {
+    await rm(lockDir, { recursive: true, force: true })
+  }
+}
+
+async function readRuntimeDependencyReferenceCount(refPath: string): Promise<number> {
+  const raw = await readFile(refPath, 'utf8').catch(() => undefined)
+  const count = raw === undefined ? 0 : Number.parseInt(raw, 10)
+
+  return Number.isFinite(count) && count > 0 ? count : 0
+}
+
+export async function ensureRuntimeDependencyLink(projectRoot: string): Promise<string> {
+  return await withRuntimeDependencyLock(projectRoot, async () => {
+    const runtimeRoot = join(projectRoot, CLI_RUNTIME_ROOT)
+    const packageRoot = await resolvePackageRootFromSpecifier('@holo-js/db')
+    const nodeModulesDir = join(runtimeRoot, 'node_modules')
+    const namespaceDir = join(nodeModulesDir, '@holo-js')
+    const targetPath = join(namespaceDir, 'db')
+    const refPath = join(nodeModulesDir, '.holo-js-runtime-refs')
+    const references = await readRuntimeDependencyReferenceCount(refPath)
+
+    await mkdir(namespaceDir, { recursive: true })
+    if (references === 0) {
+      await rm(targetPath, { recursive: true, force: true })
+      await symlink(packageRoot, targetPath, 'junction')
+    }
+    await writeFile(refPath, String(references + 1), 'utf8')
+
+    return runtimeRoot
+  })
 }
 
 export async function cleanupRuntimeDependencyLink(projectRoot: string): Promise<void> {
-  await rm(join(projectRoot, CLI_RUNTIME_ROOT, 'node_modules'), { recursive: true, force: true })
+  await withRuntimeDependencyLock(projectRoot, async () => {
+    const nodeModulesDir = join(projectRoot, CLI_RUNTIME_ROOT, 'node_modules')
+    const refPath = join(nodeModulesDir, '.holo-js-runtime-refs')
+    const references = await readRuntimeDependencyReferenceCount(refPath)
+    const nextReferences = references - 1
+
+    if (nextReferences <= 0) {
+      await rm(nodeModulesDir, { recursive: true, force: true })
+      return
+    }
+
+    await writeFile(refPath, String(nextReferences), 'utf8')
+  })
 }
 /* v8 ignore stop */
 
@@ -640,6 +699,7 @@ export async function withRuntimeEnvironment<T>(
   callback: (stdout: string) => Promise<T>,
 ): Promise<T> {
   const environment = await getRuntimeEnvironment(projectRoot)
+  let dependencyLinkEnsured = false
 
   try {
     const envRuntimeConfig = createEnvRuntimeConfig()
@@ -648,6 +708,7 @@ export async function withRuntimeEnvironment<T>(
       envRuntimeConfig,
     )
     const runtimeRoot = await ensureRuntimeDependencyLink(projectRoot)
+    dependencyLinkEnsured = true
     const runtimePayload = JSON.stringify({
       kind,
       projectRoot,
@@ -676,7 +737,9 @@ export async function withRuntimeEnvironment<T>(
 
     return await callback((result.stdout ?? '').trim())
   } finally {
-    await cleanupRuntimeDependencyLink(projectRoot)
+    if (dependencyLinkEnsured) {
+      await cleanupRuntimeDependencyLink(projectRoot)
+    }
     await environment.cleanup()
   }
 }
