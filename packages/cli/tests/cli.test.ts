@@ -36,6 +36,7 @@ import {
   renderEnvWithAppKey,
 } from '../src/app-key'
 import { cliInternals } from '../src/cli-internals'
+import { runRuntimeInvocation } from '../src/runtime'
 import { collectDiscoveryWatchRoots, isDiscoveryRelevantPath } from '../src/dev'
 import { generatorInternals } from '../src/generators'
 import { loadSecurityCliModule } from '../src/security'
@@ -6793,6 +6794,23 @@ export default {
       command: 'node',
       args: ['--input-type=module', '--eval', 'console.log(1)'],
     })
+    const largeRuntimeOutputSize = 1024 * 1024 + 1024
+    const largeRuntimeOutput = await runRuntimeInvocation('node', [
+      '--eval',
+      `process.stdout.write('o'.repeat(${largeRuntimeOutputSize})); process.stderr.write('e'.repeat(${largeRuntimeOutputSize}))`,
+    ], {
+      cwd: process.cwd(),
+      env: process.env,
+    })
+    expect(largeRuntimeOutput.status).toBe(0)
+    expect(largeRuntimeOutput.stdout).toHaveLength(largeRuntimeOutputSize)
+    expect(largeRuntimeOutput.stderr).toHaveLength(largeRuntimeOutputSize)
+    const missingRuntimeOutput = await runRuntimeInvocation('__holo_missing_runtime_command__', [], {
+      cwd: process.cwd(),
+      env: process.env,
+    })
+    expect(missingRuntimeOutput.status).not.toBe(0)
+    expect(missingRuntimeOutput.error).toBeInstanceOf(Error)
     const executed: string[] = []
     let foreignKeysScoped = false
     await cliInternals.dropAllTablesForFresh(

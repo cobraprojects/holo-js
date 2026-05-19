@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { mkdir, rm, symlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -576,6 +576,43 @@ export function createRuntimeInvocation(script: string): { command: string, args
   }
 }
 
+export function runRuntimeInvocation(
+  command: string,
+  args: string[],
+  options: { cwd: string, env: NodeJS.ProcessEnv },
+): Promise<RuntimeSpawnResult> {
+  return new Promise(resolveInvocation => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    let error: Error | null = null
+
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => {
+      stdout += chunk
+    })
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk: string) => {
+      stderr += chunk
+    })
+    child.on('error', spawnError => {
+      error = spawnError
+    })
+    child.on('close', status => {
+      resolveInvocation({
+        status,
+        error,
+        stdout,
+        stderr,
+      })
+    })
+  })
+}
+
 export function getRuntimeFailureMessage(kind: string, result: RuntimeSpawnResult): string {
   const stderr = result.stderr?.trim()
   if (stderr) {
@@ -625,20 +662,19 @@ export async function withRuntimeEnvironment<T>(
       options,
     })
     const runtime = createRuntimeInvocation(nodeRuntimeScript)
-    const result = spawnSync(runtime.command, runtime.args, {
+    const result = await runRuntimeInvocation(runtime.command, runtime.args, {
       cwd: runtimeRoot,
       env: {
         ...process.env,
         HOLO_RUNTIME_PAYLOAD: runtimePayload,
       },
-      encoding: 'utf8',
     })
 
     if (result.status !== 0) {
       throw new Error(getRuntimeFailureMessage(kind, result))
     }
 
-    return await callback(result.stdout.trim())
+    return await callback((result.stdout ?? '').trim())
   } finally {
     await cleanupRuntimeDependencyLink(projectRoot)
     await environment.cleanup()
