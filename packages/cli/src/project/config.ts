@@ -24,6 +24,7 @@ import {
   pathExists,
 } from './shared'
 import {
+  bundleProjectModule,
   isModulePackage,
   readTextFile,
   resolveFirstExistingPath,
@@ -56,6 +57,11 @@ function resolveConfigExport<TConfig extends object>(moduleValue: unknown): TCon
 type ProjectConfigImportState = {
   readonly hash: string
   readonly nonce: number
+}
+
+type ProjectSourceConfig = {
+  readonly app: Awaited<ReturnType<typeof loadConfigDirectory>>['app']
+  readonly database: Awaited<ReturnType<typeof loadConfigDirectory>>['database']
 }
 
 const projectConfigImportStates = new Map<string, ProjectConfigImportState>()
@@ -113,12 +119,20 @@ async function resolveProjectConfigImportUrl(
 }
 
 async function importProjectConfigFile<TConfig extends object>(
+  projectRoot: string,
   filePath: string,
   environmentValues: Readonly<Record<string, string>>,
 ): Promise<TConfig> {
   return withProjectConfigImportLock(async () => {
     const previousEnvEntries = new Map<string, string | undefined>()
     const importUrl = await resolveProjectConfigImportUrl(filePath, environmentValues)
+    const configExtension = extname(filePath)
+    const bundled = configExtension === '.ts' || configExtension === '.mts'
+      ? await bundleProjectModule(projectRoot, filePath)
+      : undefined
+    const resolvedImportUrl = bundled
+      ? `${pathToFileURL(bundled.path).href}${new URL(importUrl).search}`
+      : importUrl
 
     try {
       for (const [key, value] of Object.entries(environmentValues)) {
@@ -126,7 +140,7 @@ async function importProjectConfigFile<TConfig extends object>(
         process.env[key] = value
       }
 
-      return resolveConfigExport<TConfig>(await import(importUrl))
+      return resolveConfigExport<TConfig>(await import(resolvedImportUrl))
     } finally {
       for (const [key, value] of previousEnvEntries) {
         if (typeof value === 'string') {
@@ -136,8 +150,29 @@ async function importProjectConfigFile<TConfig extends object>(
 
         Reflect.deleteProperty(process.env, key)
       }
+
+      await bundled?.cleanup()
     }
   })
+}
+
+async function loadCachedProjectSourceConfig(
+  projectRoot: string,
+  environmentName: string,
+): Promise<ProjectSourceConfig | undefined> {
+  const cachePath = join(projectRoot, '.holo-js/generated/config-cache.json')
+  if (environmentName !== 'production' || !(await pathExists(cachePath))) {
+    return undefined
+  }
+
+  const loaded = await loadConfigDirectory(projectRoot, {
+    processEnv: process.env,
+  })
+
+  return {
+    app: loaded.app,
+    database: loaded.database,
+  }
 }
 
 export async function loadProjectConfig(
@@ -160,12 +195,18 @@ export async function loadProjectConfig(
     cwd: projectRoot,
     processEnv: process.env,
   })
-  const app = normalizeAppConfig(await importProjectConfigFile(appConfigPath, environment.values))
-  const database = normalizeDatabaseConfig(databaseConfigPath
-    ? await importProjectConfigFile(databaseConfigPath, environment.values)
-    : undefined)
+  const cachedConfig = await loadCachedProjectSourceConfig(projectRoot, environment.name)
+  const app = cachedConfig?.app
+    ?? normalizeAppConfig(await importProjectConfigFile(projectRoot, appConfigPath, environment.values))
+  const database = cachedConfig?.database
+    ?? normalizeDatabaseConfig(databaseConfigPath
+      ? await importProjectConfigFile(projectRoot, databaseConfigPath, environment.values)
+      : undefined)
   const baseConfig = normalizeHoloProjectConfig({
     paths: app.paths,
+    models: app.models,
+    migrations: app.migrations,
+    seeders: app.seeders,
     database,
   })
   const registry = await loadGeneratedProjectRegistry(projectRoot)
@@ -175,9 +216,18 @@ export async function loadProjectConfig(
     config: registry
       ? normalizeHoloProjectConfig({
           paths: baseConfig.paths,
-          models: registry.models.map(entry => entry.sourcePath),
-          migrations: registry.migrations.map(entry => entry.sourcePath),
-          seeders: registry.seeders.map(entry => entry.sourcePath),
+          models: [...new Set([
+            ...baseConfig.models,
+            ...registry.models.map(entry => entry.sourcePath),
+          ])],
+          migrations: [...new Set([
+            ...baseConfig.migrations,
+            ...registry.migrations.map(entry => entry.sourcePath),
+          ])],
+          seeders: [...new Set([
+            ...baseConfig.seeders,
+            ...registry.seeders.map(entry => entry.sourcePath),
+          ])],
           database,
         })
       : baseConfig,
