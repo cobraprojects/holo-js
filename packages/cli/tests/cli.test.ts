@@ -2598,6 +2598,8 @@ export default defineAppConfig({
       .find(command => command.name === 'install')
 
     expect(installCommand).toBeDefined()
+    expect(installCommand?.usage).toContain('queue: sync|file|redis|database; cache: file|redis|database')
+    expect(installCommand?.usage).not.toContain('security: file|redis')
     await expect(installCommand?.prepare?.({
       args: ['queue'],
       flags: { driver: 'redis' },

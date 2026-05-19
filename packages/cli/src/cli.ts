@@ -439,7 +439,7 @@ export function createInternalCommands(
     {
       name: 'install',
       description: 'Install first-party Holo support into an existing project.',
-      usage: 'holo install <queue|events|auth|authorization|notifications|mail|broadcast|security|cache> [--driver <queue: sync|file|redis|database; cache: file|redis|database; security: file|redis>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
+      usage: 'holo install <queue|events|auth|authorization|notifications|mail|broadcast|security|cache> [--driver <queue: sync|file|redis|database; cache: file|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
       source: 'internal',
       async prepare(input) {
         const target = normalizeChoice(
