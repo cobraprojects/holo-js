@@ -48,6 +48,7 @@ export const SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS = Object.freeze({
   '@sveltejs/adapter-node': catalogVersion('@sveltejs/adapter-node'),
   '@sveltejs/vite-plugin-svelte': catalogVersion('@sveltejs/vite-plugin-svelte'),
   svelte: catalogVersion('svelte'),
+  'svelte-check': catalogVersion('svelte-check'),
   vite: catalogVersion('vite'),
 } as const)
 

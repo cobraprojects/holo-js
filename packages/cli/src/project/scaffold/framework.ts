@@ -121,6 +121,7 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
     dependencies['@sveltejs/vite-plugin-svelte'] = SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS['@sveltejs/vite-plugin-svelte']
     dependencies.svelte = SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS.svelte
     dependencies.vite = SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS.vite
+    devDependencies['svelte-check'] = SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS['svelte-check']
   }
 
   if (optionalPackages.includes('storage')) {

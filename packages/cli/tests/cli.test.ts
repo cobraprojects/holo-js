@@ -120,6 +120,7 @@ const expectedReactPackageRange = SCAFFOLD_NEXT_REACT_VERSIONS.react
 const expectedNuxtPackageRange = SCAFFOLD_FRAMEWORK_VERSIONS.nuxt
 const expectedSvelteKitPackageRange = SCAFFOLD_FRAMEWORK_VERSIONS.sveltekit
 const expectedVueRouterPackageRange = SCAFFOLD_NUXT_DEPENDENCY_VERSIONS['vue-router']
+const expectedSvelteCheckPackageRange = SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS['svelte-check']
 const expectedSvelteVitePluginPackageRange = SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS['@sveltejs/vite-plugin-svelte']
 const outdatedHoloPackageRange = '^0.0.1'
 
@@ -1580,6 +1581,16 @@ export default {
       storageDefaultDisk: 'local',
       optionalPackages: [],
     })).toContain(`"@sveltejs/vite-plugin-svelte": "${expectedSvelteVitePluginPackageRange}"`)
+    expect(JSON.parse(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Svelte App',
+      framework: 'sveltekit',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: [],
+    })).devDependencies).toMatchObject({
+      'svelte-check': expectedSvelteCheckPackageRange,
+    })
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'Svelte App',
       framework: 'sveltekit',

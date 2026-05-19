@@ -79,6 +79,7 @@ export const WORKSPACE_CATALOG = Object.freeze({
   "react-test-renderer": "^19.0.0",
   "sharp": "^0.34.4",
   "svelte": "^5.55.5",
+  "svelte-check": "^4.4.6",
   "tslib": "^2.8.1",
   "tsup": "^8.3.5",
   "typescript": "^5.7.2",
