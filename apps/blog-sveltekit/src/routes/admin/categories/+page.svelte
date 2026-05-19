@@ -7,7 +7,7 @@
 {#if data}
   <section class="stack">
     <h1>Categories</h1>
-    <form action="/admin/categories/create" method="post" class="stack">
+    <form action="?/create" method="post" class="stack">
       <input name="name" placeholder="Category name" required>
       <textarea name="description" rows="3" placeholder="Description"></textarea>
       <button type="submit">Create category</button>
@@ -17,7 +17,10 @@
         <div><strong>{category.name}</strong><div>{category.slug}</div></div>
         <div class="row">
           <a href={`/admin/categories/${category.id}/edit`}>Edit</a>
-          <form action={`/admin/categories/${category.id}/delete`} method="post"><button type="submit">Delete</button></form>
+          <form action="?/delete" method="post">
+            <input type="hidden" name="id" value={category.id}>
+            <button type="submit">Delete</button>
+          </form>
         </div>
       </article>
     {/each}

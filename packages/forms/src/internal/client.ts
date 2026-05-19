@@ -121,6 +121,8 @@ type SchemaFieldLike = {
   readonly definition: object
 }
 
+const transportFailureMessage = 'Unable to submit the form right now. Please try again.'
+
 function serializeSubmissionState<TData>(
   valid: boolean,
   values: Partial<TData> | TData,
@@ -214,6 +216,21 @@ function createFailedSubmission<TData>(
     normalizeStatus(status, 422),
     schemaDefinition,
   )
+}
+
+function createTransportFailure<TData>(
+  values: Partial<TData> | TData,
+  status = 500,
+): FormFailurePayload<TData> {
+  return {
+    ok: false,
+    status: normalizeStatus(status, 500),
+    valid: false,
+    values: values as Partial<TData>,
+    errors: {
+      _root: [transportFailureMessage],
+    },
+  }
 }
 
 async function validateClientValues<TData>(
@@ -645,13 +662,7 @@ async function normalizeFetchResponse<TData, TSuccess>(
   try {
     return await response.json() as ClientSubmitResult<TData, TSuccess>
   } catch {
-    return {
-      ok: false,
-      status: response.status,
-      valid: false,
-      values: fallbackValues as Partial<TData>,
-      errors: {},
-    }
+    return createTransportFailure(fallbackValues, response.status)
   }
 }
 
@@ -787,12 +798,17 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
           formData.set(csrfField.name, csrfField.value)
         }
 
-        const response = await submitter({
-          action: options.action,
-          method,
-          values: state.values,
-          formData,
-        })
+        let response: ClientSubmitResult<TData, TSuccess>
+        try {
+          response = await submitter({
+            action: options.action,
+            method,
+            values: state.values,
+            formData,
+          })
+        } catch {
+          return this.applyServerState(createTransportFailure(state.values))
+        }
 
         return this.applyServerState(response)
       } finally {

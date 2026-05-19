@@ -81,25 +81,28 @@ export async function runMediaGenerateConversionsJob(
   payload: MediaGenerateConversionsPayload,
 ): Promise<MediaGenerateConversionsResult> {
   const normalized = normalizePayload(payload)
-  const media = await Media.find(normalized.mediaId)
+  const media = typeof normalized.mediaId === 'number'
+    ? await Media.find(normalized.mediaId)
+    : await Media.where('id', normalized.mediaId).first()
 
-  if (!media) {
-    return Object.freeze({
-      status: 'missing-media',
-      conversionNames: Object.freeze([]),
-    })
+  switch (media) {
+    case undefined:
+      return Object.freeze({
+        status: 'missing-media',
+        conversionNames: Object.freeze([]),
+      })
+    default:
+      await regenerateMediaEntityConversions({
+        media,
+        conversions: normalized.conversionNames,
+        includeQueued: true,
+      })
+
+      return Object.freeze({
+        status: 'processed',
+        conversionNames: normalized.conversionNames,
+      })
   }
-
-  await regenerateMediaEntityConversions({
-    media,
-    conversions: normalized.conversionNames,
-    includeQueued: true,
-  })
-
-  return Object.freeze({
-    status: 'processed',
-    conversionNames: normalized.conversionNames,
-  })
 }
 
 export function ensureMediaQueueJobRegistered(): void {

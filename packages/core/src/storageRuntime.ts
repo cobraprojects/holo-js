@@ -1,5 +1,5 @@
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { LoadedHoloConfig, HoloConfigMap } from '@holo-js/config'
 
@@ -84,9 +84,7 @@ async function importOptionalModule<TModule>(specifier: string): Promise<TModule
     const failedTarget = message.match(/Cannot find package '([^']+)'|Cannot find module '([^']+)'|Failed to load url ([^ ]+)/)?.slice(1)
       .find((value): value is string => typeof value === 'string')
     const matchesRequestedTarget = failedTarget === specifier || failedTarget === resolvedSpecifier
-    if (
-      error
-      && typeof error === 'object'
+    const isMissingOptionalModule = error && typeof error === 'object'
       && (
         ('code' in error && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND')
         /* v8 ignore start -- these fallback string variants depend on the host loader's exact missing-module wording */
@@ -98,7 +96,8 @@ async function importOptionalModule<TModule>(specifier: string): Promise<TModule
         // Vite reports unresolved optional imports as "Failed to load url <specifier> ... Does the file exist?".
         || (message.includes('Does the file exist?') && message.startsWith('Failed to load url ') && matchesRequestedTarget)
       )
-    ) {
+
+    if (isMissingOptionalModule) {
       return undefined
     }
 
@@ -107,11 +106,30 @@ async function importOptionalModule<TModule>(specifier: string): Promise<TModule
 }
 
 export function resolveStorageKeyPath(root: string, key: string): string {
-  const segments = key.split(':').filter(Boolean)
+  if (isAbsolute(key) || win32.isAbsolute(key)) {
+    throw new Error('[Holo Storage] Storage paths must not be absolute.')
+  }
+
+  const segments = key
+    .replace(/\\/g, '/')
+    .split(':')
+    .flatMap(segment => segment.split('/'))
+    .filter(Boolean)
+
   if (segments.includes('..')) {
     throw new Error('[Holo Storage] Storage paths must not contain ".." segments.')
   }
-  return resolve(root, ...segments)
+
+  const rootPath = resolve(root)
+  const targetPath = resolve(rootPath, ...segments)
+  const relativeTarget = relative(rootPath, targetPath)
+
+  /* v8 ignore next -- cross-root relative paths are only reachable on platform-specific path edge cases */
+  if (relativeTarget === '..' || relativeTarget.startsWith(`..${sep}`) || isAbsolute(relativeTarget)) {
+    throw new Error('[Holo Storage] Storage paths must stay inside the configured disk root.')
+  }
+
+  return targetPath
 }
 
 function createFileStorageBackend(root: string): StorageBackend {

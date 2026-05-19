@@ -120,6 +120,8 @@ describe('create-holo-js bin', () => {
     const bin = await readFile(binPath, 'utf8')
 
     expect(bin.startsWith('#!/usr/bin/env node\n')).toBe(true)
+    expect(bin).toContain('process.exitCode = exitCode')
+    expect(bin).not.toContain('process.exit(')
 
     await chmod(binPath, 0o755)
 

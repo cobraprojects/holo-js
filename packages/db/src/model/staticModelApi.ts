@@ -59,6 +59,13 @@ type MorphModelTarget = {
 type MorphTypeSelector = string | MorphModelTarget | MorphEntityTarget | null
 type SubqueryBuilder<TSubTable extends TableDefinition = TableDefinition>
   = ModelQueryBuilder<TSubTable> | TableQueryBuilder<TSubTable, Record<string, unknown>>
+type PrimaryKeyName<TTable extends TableDefinition> = Extract<{
+  [K in keyof TTable['columns']]: TTable['columns'][K] extends { readonly primaryKey: true } ? K : never
+}[keyof TTable['columns']], keyof ModelRecord<TTable> & string>
+type ModelPrimaryKeyValue<TTable extends TableDefinition>
+  = [PrimaryKeyName<TTable>] extends [never]
+    ? unknown
+    : ModelRecord<TTable>[PrimaryKeyName<TTable>]
 
 export type StaticModelApi<
   TTable extends TableDefinition,
@@ -183,10 +190,10 @@ export type StaticModelApi<
   whereNotMorphedTo(relation: ModelRelationPath<TRelations>, target: MorphTypeSelector): ModelQueryBuilder<TTable, TRelations>
   orWhereNotMorphedTo(relation: ModelRelationPath<TRelations>, target: MorphTypeSelector): ModelQueryBuilder<TTable, TRelations>
   withWhereHas<TPath extends ModelRelationPath<TRelations>>(relation: TPath, constraint?: RelationConstraintCallback): ModelQueryBuilder<TTable, TRelations, ResolveEagerLoads<TRelations, readonly [TPath]>>
-  find(value: unknown): Promise<Entity<TTable, TRelations> | undefined>
-  findMany(values: readonly unknown[]): Promise<ModelCollection<TTable, TRelations>>
-  findOrFail(value: unknown): Promise<Entity<TTable, TRelations>>
-  findOrFailJson(value: unknown): Promise<SerializedEntityWithLoaded<TTable, unknown>>
+  find(value: ModelPrimaryKeyValue<TTable>): Promise<Entity<TTable, TRelations> | undefined>
+  findMany(values: readonly ModelPrimaryKeyValue<TTable>[]): Promise<ModelCollection<TTable, TRelations>>
+  findOrFail(value: ModelPrimaryKeyValue<TTable>): Promise<Entity<TTable, TRelations>>
+  findOrFailJson(value: ModelPrimaryKeyValue<TTable>): Promise<SerializedEntityWithLoaded<TTable, unknown>>
   first(): Promise<Entity<TTable, TRelations> | undefined>
   firstJson(): Promise<SerializedEntityWithLoaded<TTable, unknown> | undefined>
   firstOrFail(): Promise<Entity<TTable, TRelations>>
@@ -232,14 +239,14 @@ export type StaticModelApi<
   createQuietly(values: InferInsert<TTable>): Promise<Entity<TTable, TRelations>>
   createManyQuietly(values: readonly Partial<ModelRecord<TTable>>[]): Promise<ModelCollection<TTable, TRelations>>
   createManyQuietly(values: readonly InferInsert<TTable>[]): Promise<ModelCollection<TTable, TRelations>>
-  update(id: unknown, values: ModelUpdatePayload<TTable>): Promise<Entity<TTable, TRelations>>
+  update(id: ModelPrimaryKeyValue<TTable>, values: ModelUpdatePayload<TTable>): Promise<Entity<TTable, TRelations>>
   prune(): Promise<number>
   increment(column: ModelColumnName<TTable>, amount?: number, extraValues?: Partial<ModelRecord<TTable>>): Promise<DriverExecutionResult>
   decrement(column: ModelColumnName<TTable>, amount?: number, extraValues?: Partial<ModelRecord<TTable>>): Promise<DriverExecutionResult>
-  delete(id: unknown): Promise<void>
-  destroy(ids: readonly unknown[]): Promise<number>
-  restore(id: unknown): Promise<Entity<TTable, TRelations>>
-  forceDelete(id: unknown): Promise<void>
+  delete(id: ModelPrimaryKeyValue<TTable>): Promise<void>
+  destroy(ids: readonly ModelPrimaryKeyValue<TTable>[]): Promise<number>
+  restore(id: ModelPrimaryKeyValue<TTable>): Promise<Entity<TTable, TRelations>>
+  forceDelete(id: ModelPrimaryKeyValue<TTable>): Promise<void>
   withTrashed(): ModelQueryBuilder<TTable, TRelations>
   onlyTrashed(): ModelQueryBuilder<TTable, TRelations>
   updateOrCreate(match: Partial<ModelRecord<TTable>>, values?: Partial<ModelRecord<TTable>>): Promise<Entity<TTable, TRelations>>

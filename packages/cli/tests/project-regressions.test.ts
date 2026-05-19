@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { GeneratedJobRegistryEntry } from '../src/project'
-import { installSecurityIntoProject } from '../src/project'
+import { installSecurityIntoProject, projectInternals } from '../src/project'
 import * as projectRuntimeModule from '../src/project/runtime'
 import { renderGeneratedQueueTypes } from '../src/project/registry'
 
@@ -130,5 +130,37 @@ describe('cli regressions', () => {
       '',
       'declare module \'@holo-js/queue\' {',
     ].join('\n'))
+  })
+
+  it('uses process.env when adding broadcast auth to a custom config without env binding', () => {
+    const broadcastConfig = `
+import { defineBroadcastConfig } from ${configPackageEntry}
+
+export default defineBroadcastConfig({
+  default: 'holo',
+  connections: {
+    holo: {
+      driver: 'holo',
+      appId: 'app-id',
+      key: 'app-key',
+      secret: 'app-secret',
+      options: {
+        host: '127.0.0.1',
+        port: 8080,
+        scheme: 'http',
+        useTLS: false,
+      },
+    },
+  },
+})
+`
+
+    const rewrittenConfig = projectInternals.injectBroadcastAuthEndpoint(broadcastConfig)
+
+    expect(rewrittenConfig).toContain(
+      "authEndpoint: `${process.env.APP_URL ?? 'http://localhost:3000'}/broadcasting/auth`",
+    )
+    expect(rewrittenConfig).not.toContain("env('APP_URL'")
+    expect(rewrittenConfig).toContain(`import { defineBroadcastConfig } from ${configPackageEntry}`)
   })
 })

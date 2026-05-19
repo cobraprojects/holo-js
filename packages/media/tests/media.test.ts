@@ -2442,6 +2442,14 @@ describe('@holo-js/media', () => {
     })).resolves.toBeUndefined()
 
     await expect(runMediaGenerateConversionsJob({
+      mediaId: 'media-1',
+      conversionNames: ['thumb'],
+    })).resolves.toEqual({
+      status: 'missing-media',
+      conversionNames: [],
+    })
+
+    await expect(runMediaGenerateConversionsJob({
       mediaId: Number.NaN,
       conversionNames: ['thumb'],
     })).rejects.toThrow('finite media identifier')

@@ -15,7 +15,10 @@
         </div>
         <div class="row">
           <a href={`/admin/posts/${post.id}/edit`}>Edit</a>
-          <form action={`/admin/posts/${post.id}/delete`} method="post"><button type="submit">Delete</button></form>
+          <form action="?/delete" method="post">
+            <input type="hidden" name="id" value={post.id}>
+            <button type="submit">Delete</button>
+          </form>
         </div>
       </article>
     {/each}

@@ -8,7 +8,7 @@
 
 <section class="stack">
   <h1>Edit post</h1>
-  <form action={`/admin/posts/${data.post.id}/update`} method="post" class="stack">
+  <form action="?/update" method="post" class="stack">
     <input name="title" value={data.post.title} required>
     <textarea name="excerpt" rows="3">{data.post.excerpt || ''}</textarea>
     <textarea name="body" rows="10" required>{data.post.body}</textarea>

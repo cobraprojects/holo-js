@@ -38,9 +38,13 @@
     "@holo-js/auth-social": "catalog:",
     "@holo-js/auth-workos": "catalog:",
     "@holo-js/authorization": "catalog:",
+    "@holo-js/broadcast": "catalog:",
+    "@holo-js/cache": "catalog:",
+    "@holo-js/events": "catalog:",
     "@holo-js/mail": "catalog:",
     "@holo-js/notifications": "catalog:",
     "@holo-js/queue": "catalog:",
+    "@holo-js/queue-db": "catalog:",
     "@holo-js/security": "catalog:",
     "@holo-js/session": "catalog:",
     "@holo-js/storage": "catalog:"
@@ -61,6 +65,15 @@
     "@holo-js/authorization": {
       "optional": true
     },
+    "@holo-js/broadcast": {
+      "optional": true
+    },
+    "@holo-js/cache": {
+      "optional": true
+    },
+    "@holo-js/events": {
+      "optional": true
+    },
     "@holo-js/mail": {
       "optional": true
     },
@@ -68,6 +81,9 @@
       "optional": true
     },
     "@holo-js/queue": {
+      "optional": true
+    },
+    "@holo-js/queue-db": {
       "optional": true
     },
     "@holo-js/security": {

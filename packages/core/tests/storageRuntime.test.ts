@@ -130,11 +130,35 @@ describe('@holo-js/core storage runtime optional imports', () => {
     })
   })
 
+  it('treats matching Vite missing-url messages as optional outside Vitest', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'holo-storage-runtime-vite-missing-'))
+    tempDirs.push(root)
+    const modulePath = join(root, 'vite-missing.mjs')
+    const moduleUrl = pathToFileURL(modulePath).href
+    await writeFile(modulePath, `throw new Error(${JSON.stringify(`Failed to load url ${moduleUrl} Does the file exist?`)})\n`, 'utf8')
+
+    await withoutVitestEnv(async () => {
+      await expect(storageRuntimeInternals.importOptionalModule(moduleUrl)).resolves.toBeUndefined()
+    })
+  })
+
   it('returns undefined for missing optional storage modules outside Vitest', async () => {
     const root = await mkdtemp(join(tmpdir(), 'holo-storage-runtime-missing-'))
     tempDirs.push(root)
     await withoutVitestEnv(async () => {
       await expect(storageRuntimeInternals.importOptionalModule(pathToFileURL(join(root, 'missing.mjs')).href)).resolves.toBeUndefined()
+    })
+  })
+
+  it('treats matching "Cannot find module" loader messages as optional outside Vitest', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'holo-storage-runtime-cannot-find-'))
+    tempDirs.push(root)
+    const modulePath = join(root, 'cannot-find.mjs')
+    const moduleUrl = pathToFileURL(modulePath).href
+    await writeFile(modulePath, `throw new Error(${JSON.stringify(`Cannot find module '${moduleUrl}'`)})\n`, 'utf8')
+
+    await withoutVitestEnv(async () => {
+      await expect(storageRuntimeInternals.importOptionalModule(moduleUrl)).resolves.toBeUndefined()
     })
   })
 

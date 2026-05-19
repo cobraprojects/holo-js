@@ -67,6 +67,17 @@ export interface HoloFrameworkAdapterState<
   readonly sourceSignature?: string
 }
 
+type HoloFrameworkInitialization<TProject extends HoloAdapterProject> = {
+  readonly projectRoot: string
+  readonly promise: Promise<TProject>
+}
+
+type MutableHoloFrameworkAdapterState<TProject extends HoloAdapterProject> = {
+  -readonly [TKey in keyof HoloFrameworkAdapterState<TProject>]: HoloFrameworkAdapterState<TProject>[TKey]
+} & {
+  initialization?: HoloFrameworkInitialization<TProject>
+}
+
 export interface HoloAdapterCapabilities {
   readonly config: 'layered-env-and-cache'
   readonly discovery: 'generated-registries'
@@ -207,7 +218,15 @@ async function initializeSingletonFrameworkProject<
   createProject: (options: ResolvedHoloFrameworkOptions) => Promise<TProject>,
 ): Promise<TProject> {
   const resolved = resolveHoloFrameworkOptions(options)
-  const state = getFrameworkAdapterStateContainer<TProject>(stateKey)
+  const state = getFrameworkAdapterStateContainer<TProject>(stateKey) as MutableHoloFrameworkAdapterState<TProject>
+
+  if (state.initialization) {
+    if (state.initialization.projectRoot !== resolved.projectRoot) {
+      throw new Error(`${displayName} Holo project already initialized for "${state.initialization.projectRoot}".`)
+    }
+
+    return state.initialization.promise
+  }
 
   if (state.project) {
     if (state.projectRoot !== resolved.projectRoot) {
@@ -224,9 +243,9 @@ async function initializeSingletonFrameworkProject<
 
         if (state.sourceSignature && state.sourceSignature !== currentSignature) {
           await currentRuntime.shutdown()
-          ;(state as { project?: TProject }).project = undefined
-          ;(state as { projectRoot?: string }).projectRoot = undefined
-          ;(state as { sourceSignature?: string }).sourceSignature = undefined
+          state.project = undefined
+          state.projectRoot = undefined
+          state.sourceSignature = undefined
         }
       }
 
@@ -242,7 +261,7 @@ async function initializeSingletonFrameworkProject<
       })
 
       if (state.project.runtime !== currentRuntime) {
-        ;(state as { project?: TProject }).project = {
+        state.project = {
           ...state.project,
           config: currentRuntime.loadedConfig,
           registry: currentRuntime.registry,
@@ -253,23 +272,50 @@ async function initializeSingletonFrameworkProject<
       return state.project
     }
 
-    ;(state as { project?: TProject }).project = undefined
+    state.project = undefined
   }
 
-  const project = await createProject(resolved)
-  ;(state as { projectRoot?: string }).projectRoot = resolved.projectRoot
-  ;(state as { project?: TProject }).project = project
-  ;(state as { sourceSignature?: string }).sourceSignature = resolved.runtime.preferCache === false
-    ? await resolveProjectSourceSignature(resolved.projectRoot, project.config.environment.name)
-    : undefined
-  return project
+  state.projectRoot = resolved.projectRoot
+
+  const initialization = Promise.resolve()
+    .then(() => createProject(resolved))
+    .then(async (project) => {
+      state.projectRoot = resolved.projectRoot
+      state.project = project
+      state.sourceSignature = resolved.runtime.preferCache === false
+        ? await resolveProjectSourceSignature(resolved.projectRoot, project.config.environment.name)
+        : undefined
+      return project
+    })
+    .catch((error: unknown) => {
+      if (state.initialization?.promise === initialization) {
+        state.project = undefined
+        state.projectRoot = undefined
+        state.sourceSignature = undefined
+      }
+
+      throw error
+    })
+    .finally(() => {
+      if (state.initialization?.promise === initialization) {
+        state.initialization = undefined
+      }
+    })
+
+  state.initialization = {
+    projectRoot: resolved.projectRoot,
+    promise: initialization,
+  }
+
+  return initialization
 }
 
 export async function resetSingletonFrameworkProject(stateKey: string): Promise<void> {
-  const state = getFrameworkAdapterStateContainer(stateKey)
-  ;(state as { project?: HoloAdapterProject }).project = undefined
-  ;(state as { projectRoot?: string }).projectRoot = undefined
-  ;(state as { sourceSignature?: string }).sourceSignature = undefined
+  const state = getFrameworkAdapterStateContainer(stateKey) as MutableHoloFrameworkAdapterState<HoloAdapterProject>
+  state.project = undefined
+  state.projectRoot = undefined
+  state.sourceSignature = undefined
+  state.initialization = undefined
   await resetOptionalHoloSubsystems()
   await resetHoloRuntime()
 }

@@ -36,13 +36,14 @@ export interface ColumnDefinition<
   TNullable extends boolean = false,
   THasDefault extends boolean = false,
   TGenerated extends boolean = false,
+  TPrimaryKey extends boolean = false,
 > {
   readonly kind: LogicalColumnKind
   readonly name: string
   readonly nullable: TNullable
   readonly hasDefault: THasDefault
   readonly generated: TGenerated
-  readonly primaryKey: boolean
+  readonly primaryKey: TPrimaryKey
   readonly unique: boolean
   readonly defaultKind?: ColumnDefaultKind
   readonly defaultValue?: unknown
@@ -52,7 +53,7 @@ export interface ColumnDefinition<
   readonly vectorDimensions?: number
 }
 
-export type AnyColumnDefinition = ColumnDefinition<unknown, boolean, boolean, boolean>
+export type AnyColumnDefinition = ColumnDefinition<unknown, boolean, boolean, boolean, boolean>
 export type TableColumnsShape = Record<string, AnyColumnDefinition>
 
 export interface TableDefinition<
@@ -72,18 +73,18 @@ export interface TableIndexDefinition {
 }
 
 export type ColumnSelectType<TColumn extends AnyColumnDefinition>
-  = TColumn extends ColumnDefinition<infer TValue, infer TNullable, boolean, boolean>
+  = TColumn extends ColumnDefinition<infer TValue, infer TNullable, boolean, boolean, boolean>
     ? TNullable extends true ? TValue | null : TValue
     : never
 
 export type ColumnInsertType<TColumn extends AnyColumnDefinition>
-  = TColumn extends ColumnDefinition<infer TValue, infer TNullable, boolean, boolean>
+  = TColumn extends ColumnDefinition<infer TValue, infer TNullable, boolean, boolean, boolean>
     ? TNullable extends true ? TValue | null : TValue
     : never
 
 export type OptionalInsertKeys<TColumns extends TableColumnsShape> = {
   [K in keyof TColumns]:
-  TColumns[K] extends ColumnDefinition<unknown, boolean, infer THasDefault, infer TGenerated>
+  TColumns[K] extends ColumnDefinition<unknown, boolean, infer THasDefault, infer TGenerated, boolean>
     ? THasDefault extends true
       ? K
       : TGenerated extends true

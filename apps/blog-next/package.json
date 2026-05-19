@@ -7,7 +7,7 @@
     "prepare": "holo prepare",
     "dev": "holo dev",
     "build": "holo build",
-    "lint": "npx eslint app config server tests --fix --no-warn-ignored",
+    "lint": "npx eslint app config lib server tests vitest.config.ts --fix --no-warn-ignored",
     "typecheck": "npx tsc -p tsconfig.json --noEmit",
     "config:cache": "holo config:cache",
     "config:clear": "holo config:clear",

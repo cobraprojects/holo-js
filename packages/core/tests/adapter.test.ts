@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -131,8 +131,17 @@ describe('@holo-js/core adapter helpers', () => {
     expect(adapterInternals.resolveStorageKeyPath('/tmp/holo-storage', 'nested:file.txt')).toBe(
       resolve('/tmp/holo-storage', 'nested', 'file.txt'),
     )
+    expect(adapterInternals.resolveStorageKeyPath('/tmp/holo-storage', 'nested/file.txt')).toBe(
+      resolve('/tmp/holo-storage', 'nested', 'file.txt'),
+    )
     expect(() => adapterInternals.resolveStorageKeyPath('/tmp/holo-storage', '..:escape.txt')).toThrow(
       'Storage paths must not contain ".." segments.',
+    )
+    expect(() => adapterInternals.resolveStorageKeyPath('/tmp/holo-storage', '../escape.txt')).toThrow(
+      'Storage paths must not contain ".." segments.',
+    )
+    expect(() => adapterInternals.resolveStorageKeyPath('/tmp/holo-storage', '/tmp/escape.txt')).toThrow(
+      'Storage paths must not be absolute.',
     )
   })
 
@@ -276,6 +285,63 @@ describe('@holo-js/core adapter helpers', () => {
     expect(adapter.internals.getState().project).toBeUndefined()
   })
 
+  it('shares concurrent singleton initialization for the same project root', async () => {
+    const adapter = createHoloFrameworkAdapter({
+      stateKey: '__holoTestAdapter__',
+      displayName: 'Test',
+    })
+    const root = await createProjectRoot()
+
+    const [first, second] = await Promise.all([
+      adapter.initializeProject({ projectRoot: root }),
+      adapter.initializeProject({ projectRoot: root }),
+    ] as const)
+
+    expect(second).toBe(first)
+    expect(adapter.internals.getState().project).toBe(first)
+  })
+
+  it('rejects concurrent singleton initialization for a different project root', async () => {
+    const adapter = createHoloFrameworkAdapter({
+      stateKey: '__holoTestAdapter__',
+      displayName: 'Test',
+    })
+    const root = await createProjectRoot()
+    const otherRoot = await createProjectRoot()
+
+    const results = await Promise.allSettled([
+      adapter.initializeProject({ projectRoot: root }),
+      adapter.initializeProject({ projectRoot: otherRoot }),
+    ] as const)
+    const fulfilled = results.find((result): result is PromiseFulfilledResult<HoloAdapterProject> =>
+      result.status === 'fulfilled')
+    const rejected = results.find((result): result is PromiseRejectedResult =>
+      result.status === 'rejected')
+
+    expect(fulfilled?.value.projectRoot).toBe(root)
+    expect(rejected?.reason).toEqual(
+      new Error(`Test Holo project already initialized for "${root}".`),
+    )
+  })
+
+  it('clears in-flight singleton state when initialization fails', async () => {
+    const adapter = createHoloFrameworkAdapter({
+      stateKey: '__holoTestAdapter__',
+      displayName: 'Test',
+    })
+    const brokenRoot = await createProjectRoot()
+    await writeFile(join(brokenRoot, 'config/app.ts'), 'throw new Error("broken config")\n', 'utf8')
+
+    await expect(adapter.initializeProject({ projectRoot: brokenRoot })).rejects.toThrow('broken config')
+    expect(adapter.internals.getState().project).toBeUndefined()
+    expect(adapter.internals.getState().projectRoot).toBeUndefined()
+
+    const root = await createProjectRoot()
+    await expect(adapter.initializeProject({ projectRoot: root })).resolves.toMatchObject({
+      projectRoot: root,
+    })
+  })
+
   it('does not import discovered queue jobs when initializing an adapter project runtime directly by default', async () => {
     const root = await createProjectRoot()
 
@@ -318,6 +384,10 @@ describe('@holo-js/core adapter helpers', () => {
 
     await mkdir(join(root, '.holo-js/generated'), { recursive: true })
     await mkdir(join(root, 'server/jobs'), { recursive: true })
+    await mkdir(join(root, 'server/events'), { recursive: true })
+    await mkdir(join(root, 'server/listeners'), { recursive: true })
+    await mkdir(join(root, 'server/policies'), { recursive: true })
+    await mkdir(join(root, 'server/abilities'), { recursive: true })
     await writeFile(join(root, 'server/jobs/report.ts'), `
 import { defineJob } from '@holo-js/queue'
 
@@ -326,6 +396,40 @@ export default defineJob({
     return 'ok'
   },
 })
+`, 'utf8')
+    await writeFile(join(root, 'server/events/user-created.ts'), `
+import { defineEvent } from '@holo-js/events'
+
+export default defineEvent({
+  name: 'user-created',
+})
+`, 'utf8')
+    await writeFile(join(root, 'server/listeners/send-welcome.ts'), `
+import { defineListener } from '@holo-js/events'
+import UserCreated from '../events/user-created'
+
+export default defineListener({
+  listensTo: [UserCreated],
+  async handle() {},
+})
+`, 'utf8')
+    await writeFile(join(root, 'server/policies/post-policy.ts'), `
+import { definePolicy } from '@holo-js/authorization'
+
+class Post {}
+
+export default definePolicy('post-policy', Post, {
+  record: {
+    view() {
+      return true
+    },
+  },
+})
+`, 'utf8')
+    await writeFile(join(root, 'server/abilities/manage-posts.ts'), `
+import { defineAbility } from '@holo-js/authorization'
+
+export default defineAbility('manage-posts', () => true)
 `, 'utf8')
     await writeFile(join(root, '.holo-js/generated/registry.json'), `${JSON.stringify({
       version: 1,
@@ -346,6 +450,35 @@ export default defineJob({
         {
           sourcePath: 'server/jobs/report.ts',
           name: 'report',
+        },
+      ],
+      events: [
+        {
+          sourcePath: 'server/events/user-created.ts',
+          name: 'user-created',
+          exportName: 'default',
+        },
+      ],
+      listeners: [
+        {
+          sourcePath: 'server/listeners/send-welcome.ts',
+          id: 'send-welcome',
+          eventNames: ['user-created'],
+          exportName: 'default',
+        },
+      ],
+      authorizationPolicies: [
+        {
+          sourcePath: 'server/policies/post-policy.ts',
+          name: 'post-policy',
+          exportName: 'default',
+        },
+      ],
+      authorizationAbilities: [
+        {
+          sourcePath: 'server/abilities/manage-posts.ts',
+          name: 'manage-posts',
+          exportName: 'default',
         },
       ],
     }, null, 2)}\n`, 'utf8')
@@ -412,6 +545,10 @@ export default defineJob({
 
     await mkdir(join(root, '.holo-js/generated'), { recursive: true })
     await mkdir(join(root, 'server/jobs'), { recursive: true })
+    await mkdir(join(root, 'server/events'), { recursive: true })
+    await mkdir(join(root, 'server/listeners'), { recursive: true })
+    await mkdir(join(root, 'server/policies'), { recursive: true })
+    await mkdir(join(root, 'server/abilities'), { recursive: true })
     await writeFile(join(root, 'server/jobs/report.ts'), `
 import { defineJob } from '@holo-js/queue'
 
@@ -420,6 +557,40 @@ export default defineJob({
     return 'ok'
   },
 })
+`, 'utf8')
+    await writeFile(join(root, 'server/events/user-created.ts'), `
+import { defineEvent } from '@holo-js/events'
+
+export default defineEvent({
+  name: 'user-created',
+})
+`, 'utf8')
+    await writeFile(join(root, 'server/listeners/send-welcome.ts'), `
+import { defineListener } from '@holo-js/events'
+import UserCreated from '../events/user-created'
+
+export default defineListener({
+  listensTo: [UserCreated],
+  async handle() {},
+})
+`, 'utf8')
+    await writeFile(join(root, 'server/policies/post-policy.ts'), `
+import { definePolicy } from '@holo-js/authorization'
+
+class Post {}
+
+export default definePolicy('post-policy', Post, {
+  record: {
+    view() {
+      return true
+    },
+  },
+})
+`, 'utf8')
+    await writeFile(join(root, 'server/abilities/manage-posts.ts'), `
+import { defineAbility } from '@holo-js/authorization'
+
+export default defineAbility('manage-posts', () => true)
 `, 'utf8')
     await writeFile(join(root, '.holo-js/generated/registry.json'), `${JSON.stringify({
       version: 1,
@@ -440,6 +611,35 @@ export default defineJob({
         {
           sourcePath: 'server/jobs/report.ts',
           name: 'report',
+        },
+      ],
+      events: [
+        {
+          sourcePath: 'server/events/user-created.ts',
+          name: 'user-created',
+          exportName: 'default',
+        },
+      ],
+      listeners: [
+        {
+          sourcePath: 'server/listeners/send-welcome.ts',
+          id: 'send-welcome',
+          eventNames: ['user-created'],
+          exportName: 'default',
+        },
+      ],
+      authorizationPolicies: [
+        {
+          sourcePath: 'server/policies/post-policy.ts',
+          name: 'post-policy',
+          exportName: 'default',
+        },
+      ],
+      authorizationAbilities: [
+        {
+          sourcePath: 'server/abilities/manage-posts.ts',
+          name: 'manage-posts',
+          exportName: 'default',
         },
       ],
     }, null, 2)}\n`, 'utf8')
@@ -566,6 +766,31 @@ export default defineAppConfig({
 
     expect(second.config.app.name).toBe('Reloaded App')
     expect(second).not.toBe(first)
+  })
+
+  it('reuses the singleton project in dev mode when source signatures do not change', async () => {
+    const adapter = createHoloFrameworkAdapter({
+      stateKey: '__holoTestAdapter__',
+      displayName: 'Test',
+    })
+    const root = await createProjectRoot()
+    await writeConfigCache(root, {
+      envName: 'development',
+      processEnv: process.env,
+    })
+
+    const first = await adapter.initializeProject({
+      projectRoot: root,
+      preferCache: false,
+      registerProjectQueueJobs: true,
+    })
+    const second = await adapter.initializeProject({
+      projectRoot: root,
+      preferCache: false,
+      registerProjectQueueJobs: true,
+    })
+
+    expect(second).toBe(first)
   })
 
   it('reloads the singleton project in dev mode when discovered job sources change', async () => {
@@ -849,6 +1074,10 @@ export default defineStorageConfig({
     await storage.setItemRaw('legacy:json.bin', Uint8Array.from(Buffer.from(JSON.stringify({ ok: true }))))
     await storage.setItemRaw('legacy:array-buffer.bin', Uint8Array.from(Buffer.from(JSON.stringify({ raw: true }))).buffer)
     await storage.setItemRaw('legacy:buffer.bin', Buffer.from(JSON.stringify({ buffer: true })))
+    await symlink(
+      resolve(root, './storage/app/legacy/data.bin'),
+      resolve(root, './storage/app/legacy/data-link.bin'),
+    )
 
     expect(await storage.getMeta('legacy:data.bin')).toEqual({ etag: 'v1' })
     expect(await storage.getKeys()).toEqual(expect.arrayContaining(['legacy:data.bin', 'legacy:data.bin$']))
@@ -856,6 +1085,7 @@ export default defineStorageConfig({
       'legacy:data.bin',
       'legacy:data.bin$',
     ]))
+    expect(await storage.getKeys('legacy')).not.toContain('legacy:data-link.bin')
     expect(await storage.getItem('legacy:json.bin')).toEqual({ ok: true })
     expect(await storage.getItem('legacy:array-buffer.bin')).toEqual({ raw: true })
     expect(await storage.getItem('legacy:buffer.bin')).toEqual({ buffer: true })
@@ -895,6 +1125,22 @@ export default defineStorageConfig({
     await expect(storage.put('../escaped.txt', 'nope')).rejects.toThrow(
       'Storage paths must not contain ".." segments.',
     )
+    const escapedPath = resolve(root, './storage/escaped.txt')
+    await mkdir(resolve(root, './storage'), { recursive: true })
+    await writeFile(escapedPath, 'sentinel', 'utf8')
+    await expect(storage.getItemRaw('../escaped.txt')).rejects.toThrow(
+      'Storage paths must not contain ".." segments.',
+    )
+    await expect(storage.setItemRaw('../escaped.txt', Buffer.from('nope'))).rejects.toThrow(
+      'Storage paths must not contain ".." segments.',
+    )
+    await expect(storage.removeItem('../escaped.txt')).rejects.toThrow(
+      'Storage paths must not contain ".." segments.',
+    )
+    await expect(storage.clear('../')).rejects.toThrow(
+      'Storage paths must not contain ".." segments.',
+    )
+    await expect(readFile(escapedPath, 'utf8')).resolves.toBe('sentinel')
 
     await storage.removeMeta('legacy:data.bin')
     expect(await storage.getMeta('legacy:data.bin')).toBeNull()

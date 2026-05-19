@@ -687,6 +687,14 @@ describe('type system contracts', () => {
       expectTypeOf(User.withMax('roles', 'weight')).toEqualTypeOf<ModelQueryBuilder<typeof users, UserRelations>>()
       expectTypeOf(User.whereRelation('posts', 'title', 'Hello')).toEqualTypeOf<ModelQueryBuilder<typeof users, UserRelations>>()
       expectTypeOf(User.orWhereRelation('roles', 'name', 'admin')).toEqualTypeOf<ModelQueryBuilder<typeof users, UserRelations>>()
+      expectTypeOf(User.find(1)).toEqualTypeOf<Promise<Entity<typeof users, UserRelations> | undefined>>()
+      expectTypeOf(User.findMany([1, 2])).toEqualTypeOf<Promise<ModelCollection<typeof users, UserRelations>>>()
+      expectTypeOf(User.findOrFail(1)).toEqualTypeOf<Promise<Entity<typeof users, UserRelations>>>()
+      expectTypeOf(User.update(1, { name: 'Amina' })).toEqualTypeOf<Promise<Entity<typeof users, UserRelations>>>()
+      expectTypeOf(User.delete(1)).toEqualTypeOf<Promise<void>>()
+      expectTypeOf(User.destroy([1, 2])).toEqualTypeOf<Promise<number>>()
+      expectTypeOf(User.restore(1)).toEqualTypeOf<Promise<Entity<typeof users, UserRelations>>>()
+      expectTypeOf(User.forceDelete(1)).toEqualTypeOf<Promise<void>>()
       expectTypeOf(entity.loadSum('posts', 'score')).toEqualTypeOf<Promise<Entity<typeof users, UserRelations>>>()
       expectTypeOf(entity.loadAvg('posts', 'score')).toEqualTypeOf<Promise<Entity<typeof users, UserRelations>>>()
       expectTypeOf(entity.loadMin('roles', 'weight')).toEqualTypeOf<Promise<Entity<typeof users, UserRelations>>>()
@@ -718,6 +726,20 @@ describe('type system contracts', () => {
       User.whereJsonContains('missing->tags', 'beta')
       // @ts-expect-error invalid shorthand JSON path root should be rejected
       User.where('missing->tags', 'beta')
+      // @ts-expect-error model primary-key lookups use the schema-inferred id type
+      User.find('1')
+      // @ts-expect-error model primary-key updates use the schema-inferred id type
+      User.update('1', { name: 'Amina' })
+      // @ts-expect-error model primary-key deletes use the schema-inferred id type
+      User.delete('1')
+      // @ts-expect-error model primary-key restore uses the schema-inferred id type
+      User.restore('1')
+      // @ts-expect-error model primary-key force-delete uses the schema-inferred id type
+      User.forceDelete('1')
+      // @ts-expect-error model primary-key arrays use the schema-inferred id type
+      User.findMany(['1'])
+      // @ts-expect-error model primary-key destroy uses the schema-inferred id type
+      User.destroy(['1'])
       // @ts-expect-error invalid vector column should be rejected
       User.whereVectorSimilarTo('missing', [0.1, 0.2, 0.3], 0.4)
       // @ts-expect-error invalid firstWhere column should be rejected

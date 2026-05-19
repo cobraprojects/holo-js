@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import packageJson from '../package.json'
 import config from '../vitest.config'
 
 function normalizeAliases(alias: unknown): Record<string, string> {
@@ -36,5 +37,11 @@ describe('@holo-js/cli vitest config', () => {
       '@holo-js/security': expect.stringContaining('/packages/security/src/index.ts'),
       '@holo-js/security/drivers/redis-adapter': expect.stringContaining('/packages/security/src/drivers/redis-adapter.ts'),
     })
+  })
+
+  it('runs CLI integration tests from the package test script', () => {
+    expect(packageJson.scripts.test).toContain('test:integration')
+    expect(packageJson.scripts['test:integration']).toContain('HOLO_CLI_INCLUDE_INTEGRATION=1')
+    expect(packageJson.scripts['test:integration']).toContain('tests/cli.test.ts')
   })
 })

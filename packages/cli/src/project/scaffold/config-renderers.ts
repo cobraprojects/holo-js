@@ -454,18 +454,46 @@ export function stripBroadcastAuthEndpointBlock(value: string): string {
   )
 }
 
+function hasUnaliasedEnvSpecifier(specifiers: string, aliasToken: 'as' | ':'): boolean {
+  return specifiers.split(',').some((specifier) => {
+    const normalized = specifier.trim().replace(/\s+/g, ' ')
+    return normalized === 'env' || normalized === `env ${aliasToken} env`
+  })
+}
+
+function hasHoloConfigEnvBinding(value: string): boolean {
+  for (const match of value.matchAll(/import\s*\{([^}]+)\}\s*from\s*['"]@holo-js\/config['"]/g)) {
+    const specifiers = match[1]
+    if (specifiers && hasUnaliasedEnvSpecifier(specifiers, 'as')) {
+      return true
+    }
+  }
+
+  for (const match of value.matchAll(/\{([^}]+)\}\s*=\s*require\(['"]@holo-js\/config['"]\)/g)) {
+    const specifiers = match[1]
+    if (specifiers && hasUnaliasedEnvSpecifier(specifiers, ':')) {
+      return true
+    }
+  }
+
+  return false
+}
+
 export function injectBroadcastAuthEndpoint(value: string): string | undefined {
   if (value.includes('authEndpoint:')) {
     return value
   }
 
+  const authEndpointExpression = hasHoloConfigEnvBinding(value)
+    ? "`${env('APP_URL', 'http://localhost:3000')}/broadcasting/auth`"
+    : "`${process.env.APP_URL ?? 'http://localhost:3000'}/broadcasting/auth`"
   const nextValue = value.replace(
     /(holo:\s*\{[\s\S]*?options:\s*\{[\s\S]*?\n)([ \t]*)\},/m,
     (_match, prefix: string, indent: string) => {
       return [
         `${prefix}${indent}},`,
         `${indent}clientOptions: {`,
-        `${indent}  authEndpoint: \`\${env('APP_URL', 'http://localhost:3000')}/broadcasting/auth\`,`,
+        `${indent}  authEndpoint: ${authEndpointExpression},`,
         `${indent}},`,
       ].join('\n')
     },

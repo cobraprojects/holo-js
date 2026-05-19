@@ -7,7 +7,7 @@
 {#if data}
   <section class="stack">
     <h1>New post</h1>
-    <form action="/admin/posts/create" method="post" class="stack">
+    <form action="?/create" method="post" class="stack">
       <input name="title" placeholder="Title" required>
       <textarea name="excerpt" placeholder="Excerpt" rows="3"></textarea>
       <textarea name="body" placeholder="Body" rows="10" required></textarea>

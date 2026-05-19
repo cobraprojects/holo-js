@@ -297,6 +297,58 @@ describe('@holo-js/forms client', () => {
     expect(client.errors.first('password')).toBeUndefined()
   })
 
+  it('marks fields touched without validating on blur outside blur mode', async () => {
+    const registerUser = schema({
+      email: field.string().required().email(),
+    })
+
+    const client = useForm(registerUser, {
+      initialValues: {
+        email: '',
+      },
+    })
+
+    await client.fields.email.onBlur()
+
+    expect(client.fields.email.touched).toBe(true)
+    expect(client.errors.first('email')).toBeUndefined()
+  })
+
+  it('replaces path-specific blur errors without dropping unrelated server errors', async () => {
+    const registerUser = schema({
+      profile: {
+        city: field.string().required(),
+        country: field.string().required(),
+      },
+    })
+
+    const client = useForm(registerUser, {
+      validateOn: 'blur',
+      initialValues: {
+        profile: {
+          city: 'Cairo',
+          country: '',
+        },
+      },
+    })
+
+    client.applyServerState({
+      ok: false,
+      status: 422,
+      valid: false,
+      values: {},
+      errors: {
+        'profile.city': ['Old city error.'],
+        'profile.country': ['Old country error.'],
+      },
+    })
+
+    await client.fields.profile.city.onBlur()
+
+    expect(client.errors.first('profile.city')).toBeUndefined()
+    expect(client.errors.first('profile.country')).toBe('Old country error.')
+  })
+
   it('validates, resets, and preserves local failure state on submit', async () => {
     const registerUser = schema({
       email: field.string().required().email(),
@@ -337,6 +389,55 @@ describe('@holo-js/forms client', () => {
     expect(client.values.email).toBe('reset@example.com')
     expect(client.errors.flatten()).toEqual({})
     expect(client.lastSubmission).toBeUndefined()
+  })
+
+  it('serializes valid client submissions and can convert them to failures', async () => {
+    const registerUser = schema({
+      email: field.string().required().email(),
+    })
+
+    const client = useForm(registerUser, {
+      initialValues: {
+        email: 'ava@example.com',
+      },
+    })
+
+    const submission = await client.validate()
+    expect(submission.valid).toBe(true)
+
+    if (submission.valid) {
+      expect(submission.serialize()).toEqual({
+        valid: true,
+        submitted: true,
+        values: {
+          email: 'ava@example.com',
+        },
+        errors: {},
+      })
+      expect(submission.success({ message: 'Saved.' }, 201)).toEqual({
+        ok: true,
+        status: 201,
+        data: {
+          message: 'Saved.',
+        },
+      })
+      expect(submission.fail({
+        status: 409,
+        errors: {
+          _root: ['Manual failure.'],
+        },
+      })).toEqual({
+        ok: false,
+        status: 409,
+        valid: false,
+        values: {
+          email: 'ava@example.com',
+        },
+        errors: {
+          _root: ['Manual failure.'],
+        },
+      })
+    }
   })
 
   it('uses reset values as the new dirty-state baseline', async () => {
@@ -702,7 +803,9 @@ describe('@holo-js/forms client', () => {
           city: 'Cairo',
         },
       },
-      errors: {},
+      errors: {
+        _root: ['Unable to submit the form right now. Please try again.'],
+      },
     })
     expect(nonJsonFailureClient.lastSubmission).toEqual({
       ok: false,
@@ -716,9 +819,13 @@ describe('@holo-js/forms client', () => {
           city: 'Cairo',
         },
       },
-      errors: {},
+      errors: {
+        _root: ['Unable to submit the form right now. Please try again.'],
+      },
     })
-    expect(nonJsonFailureClient.errors.flatten()).toEqual({})
+    expect(nonJsonFailureClient.errors.flatten()).toEqual({
+      _root: ['Unable to submit the form right now. Please try again.'],
+    })
 
     globalThis.fetch = vi.fn(async (): Promise<Response> => createTextResponse('<html></html>', {
       status: 200,
@@ -776,6 +883,47 @@ describe('@holo-js/forms client', () => {
     }
     expect(client.values.email).toBe('taken@example.com')
     expect(client.errors.first('email')).toBe('Email is already taken.')
+  })
+
+  it('normalizes submitter transport errors into form failures', async () => {
+    const registerUser = schema({
+      email: field.string().required().email(),
+    })
+
+    const client = useForm(registerUser, {
+      initialValues: {
+        email: 'ava@example.com',
+      },
+      async submitter() {
+        throw new SyntaxError('Unexpected token < in JSON')
+      },
+    })
+
+    await expect(client.submit()).resolves.toEqual({
+      ok: false,
+      status: 500,
+      submitted: true,
+      valid: false,
+      values: {
+        email: 'ava@example.com',
+      },
+      errors: {
+        _root: ['Unable to submit the form right now. Please try again.'],
+      },
+    })
+    expect(client.errors.first('_root')).toBe('Unable to submit the form right now. Please try again.')
+    expect(client.lastSubmission).toEqual({
+      ok: false,
+      status: 500,
+      submitted: true,
+      valid: false,
+      values: {
+        email: 'ava@example.com',
+      },
+      errors: {
+        _root: ['Unable to submit the form right now. Please try again.'],
+      },
+    })
   })
 
   it('clears dirty state when a field is restored and skips change-validation for non-leaf paths', async () => {

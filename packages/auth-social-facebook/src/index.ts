@@ -12,18 +12,27 @@ async function readJson(response: Response): Promise<unknown> {
 }
 
 function applyScopes(url: URL, config: SocialRedirectContext['config']): void {
-  const scopes = (config.scopes ?? []).length > 0 ? config.scopes ?? [] : ['email', 'public_profile']
+  const configuredScopes = config.scopes
+  const scopes = configuredScopes && configuredScopes.length > 0 ? configuredScopes : ['email', 'public_profile']
   url.searchParams.set('scope', scopes.join(','))
 }
 
 async function exchangeToken(context: SocialCallbackContext): Promise<Record<string, unknown>> {
-  const url = new URL('https://graph.facebook.com/oauth/access_token')
-  url.searchParams.set('client_id', context.config.clientId ?? '')
-  url.searchParams.set('client_secret', context.config.clientSecret ?? '')
-  url.searchParams.set('redirect_uri', context.config.redirectUri ?? '')
-  url.searchParams.set('code', context.code)
+  const body = new URLSearchParams({
+    client_id: context.config.clientId ?? '',
+    client_secret: context.config.clientSecret ?? '',
+    redirect_uri: context.config.redirectUri ?? '',
+    code: context.code,
+  })
 
-  const response = await fetch(url)
+  const response = await fetch('https://graph.facebook.com/oauth/access_token', {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  })
   if (!response.ok) {
     throw new Error('[@holo-js/auth-social-facebook] Facebook token exchange failed.')
   }
@@ -79,8 +88,12 @@ export const facebookSocialProvider: SocialProviderRuntime = Object.freeze({
     const accessToken = String(tokenPayload.access_token ?? '')
     const profileUrl = new URL('https://graph.facebook.com/me')
     profileUrl.searchParams.set('fields', 'id,name,email,picture')
-    profileUrl.searchParams.set('access_token', accessToken)
-    const response = await fetch(profileUrl)
+    const response = await fetch(profileUrl, {
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        accept: 'application/json',
+      },
+    })
     if (!response.ok) {
       throw new Error('[@holo-js/auth-social-facebook] Facebook user request failed.')
     }

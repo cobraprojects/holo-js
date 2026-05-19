@@ -12,8 +12,11 @@ import {
   updateTag,
   deleteTag,
 } from '@/server/lib/blog'
+import { requireAdminAuth } from './auth'
 
 export async function createPostAction(formData: FormData) {
+  await requireAdminAuth()
+
   await createPost({
     title: String(formData.get('title') || ''),
     excerpt: String(formData.get('excerpt') || ''),
@@ -26,6 +29,8 @@ export async function createPostAction(formData: FormData) {
 }
 
 export async function updatePostAction(id: number, formData: FormData) {
+  await requireAdminAuth()
+
   await updatePost(id, {
     title: String(formData.get('title') || ''),
     excerpt: String(formData.get('excerpt') || ''),
@@ -38,11 +43,15 @@ export async function updatePostAction(id: number, formData: FormData) {
 }
 
 export async function deletePostAction(id: number) {
+  await requireAdminAuth()
+
   await deletePost(id)
   redirect('/admin/posts')
 }
 
 export async function createCategoryAction(formData: FormData) {
+  await requireAdminAuth()
+
   await createCategory({
     name: String(formData.get('name') || ''),
     description: String(formData.get('description') || ''),
@@ -51,6 +60,8 @@ export async function createCategoryAction(formData: FormData) {
 }
 
 export async function updateCategoryAction(id: number, formData: FormData) {
+  await requireAdminAuth()
+
   await updateCategory(id, {
     name: String(formData.get('name') || ''),
     description: String(formData.get('description') || ''),
@@ -59,21 +70,29 @@ export async function updateCategoryAction(id: number, formData: FormData) {
 }
 
 export async function deleteCategoryAction(id: number) {
+  await requireAdminAuth()
+
   await deleteCategory(id)
   redirect('/admin/categories')
 }
 
 export async function createTagAction(formData: FormData) {
+  await requireAdminAuth()
+
   await createTag({ name: String(formData.get('name') || '') })
   redirect('/admin/tags')
 }
 
 export async function updateTagAction(id: number, formData: FormData) {
+  await requireAdminAuth()
+
   await updateTag(id, { name: String(formData.get('name') || '') })
   redirect('/admin/tags')
 }
 
 export async function deleteTagAction(id: number) {
+  await requireAdminAuth()
+
   await deleteTag(id)
   redirect('/admin/tags')
 }

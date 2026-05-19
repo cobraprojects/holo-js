@@ -246,6 +246,7 @@ try {
   const initial = await waitForJson(healthUrl, payload => payload.ok === true)
   assert.equal(initial.app, 'blog-next')
   await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Next'))
+  await waitForRedirect(`http://localhost:${port}/admin`, '/login')
   await waitForRedirect(`http://localhost:${port}/admin/posts`, '/login')
   await assertExampleAppAuthFlow({
     baseUrl: `http://localhost:${port}`,

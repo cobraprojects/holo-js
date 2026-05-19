@@ -23,15 +23,8 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/db": "catalog:"
-  },
-  "peerDependencies": {
+    "@holo-js/db": "catalog:",
     "@holo-js/queue": "catalog:"
-  },
-  "peerDependenciesMeta": {
-    "@holo-js/queue": {
-      "optional": true
-    }
   },
   "devDependencies": {
     "@types/node": "catalog:",
