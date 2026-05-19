@@ -138,6 +138,29 @@ export async function collectCatalogPackageCoverageFailures(root = repoRoot) {
   return failures
 }
 
+export async function collectRootManifestFailures(root = repoRoot) {
+  const catalogPackages = await readWorkspaceCatalog(root)
+  const manifestPath = join(root, 'package.json')
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  const failures = []
+
+  for (const sectionName of ['dependencies', 'devDependencies']) {
+    const section = manifest[sectionName]
+    if (!isObject(section)) {
+      continue
+    }
+
+    for (const [packageName, version] of Object.entries(section)) {
+      const isWorkspaceRange = typeof version === 'string' && version.startsWith('workspace:')
+      if (catalogPackages.has(packageName) && version !== 'catalog:' && !isWorkspaceRange) {
+        failures.push(`${manifestPath}: ${sectionName}.${packageName} must use "catalog:" in the root manifest, found "${version}".`)
+      }
+    }
+  }
+
+  return failures
+}
+
 function collectImportBindings(source) {
   const bindings = new Map()
   const importPattern = /import\s+([\s\S]*?)\s+from\s*['"]([^'"]+)['"]/g
@@ -405,6 +428,7 @@ export async function collectScaffoldSourceFailures(root = repoRoot) {
 
 export async function runDependencyVersionPolicyValidation(root = repoRoot) {
   const failures = [
+    ...(await collectRootManifestFailures(root)),
     ...(await collectAppManifestFailures(root)),
     ...(await collectPackageManifestFailures(root)),
     ...(await collectCatalogPackageCoverageFailures(root)),

@@ -14,6 +14,8 @@ const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
 const originalConfig = await readFile(configPath, 'utf8')
 const runtimeSchemaPath = join(cwd, '.holo-js/generated/schema.mjs')
+const escapeCharacter = String.fromCharCode(27)
+const ansiEscapePattern = new RegExp(`${escapeCharacter}(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~])`, 'g')
 const port = await new Promise((resolve, reject) => {
   const server = createServer()
   server.once('error', reject)
@@ -239,7 +241,8 @@ function waitForDevUrl(child, timeoutMs = 30000) {
     const fail = finish(reject)
 
     const onLine = (line) => {
-      const match = line.match(/Local:\s+(https?:\/\/[^\s/]+(?::\d+)?)/)
+      const readableLine = line.replace(ansiEscapePattern, '')
+      const match = readableLine.match(/Local:\s+(https?:\/\/[^\s/]+(?::\d+)?)/)
       if (match) {
         localUrl = match[1]
         succeed(localUrl)

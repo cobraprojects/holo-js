@@ -6,6 +6,7 @@ import { afterEach, test } from 'node:test'
 import {
   collectCatalogPackageCoverageFailures,
   collectPackageManifestFailures,
+  collectRootManifestFailures,
   collectScaffoldSourceFailures,
 } from './validate-dependency-version-policy.mjs'
 
@@ -158,6 +159,30 @@ test('dependency policy validator requires package manifests to use catalog rang
 
   assert.equal(failures.length, 1)
   assert.match(failures[0], /@holo-js\/core/)
+  assert.match(failures[0], /catalog:/)
+})
+
+test('dependency policy validator requires root catalog dependencies to use catalog ranges', async () => {
+  const repoRoot = await createTestScaffold({
+    'package.json': [
+      '{',
+      '  "workspaces": {',
+      '    "catalog": {',
+      '      "react": "^19.2.6"',
+      '    }',
+      '  },',
+      '  "dependencies": {',
+      '    "react": "^19.2.6"',
+      '  }',
+      '}',
+      '',
+    ],
+  })
+
+  const failures = await collectRootManifestFailures(repoRoot)
+
+  assert.equal(failures.length, 1)
+  assert.match(failures[0], /dependencies\.react/)
   assert.match(failures[0], /catalog:/)
 })
 
