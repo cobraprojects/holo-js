@@ -92,6 +92,27 @@ function deletePath(root: Record<string, unknown>, path: string): void {
   }
 }
 
+function clearPath(root: Record<string, unknown>, path: string): void {
+  const parts = path.split('.').filter(Boolean)
+  const leaf = parts.at(-1)
+  if (!leaf) {
+    return
+  }
+
+  let cursor: unknown = root
+  for (const part of parts.slice(0, -1)) {
+    if (!isPlainObject(cursor)) {
+      return
+    }
+
+    cursor = cursor[part]
+  }
+
+  if (isPlainObject(cursor) && leaf in cursor) {
+    cursor[leaf] = ''
+  }
+}
+
 function sanitizePlainObject<TData>(
   values: TData,
   sensitivePaths: readonly string[],
@@ -125,12 +146,16 @@ export function clearSensitiveInputValues<TData>(values: TData, schemaDefinition
     return values
   }
 
+  const mutableValues: Record<string, unknown> = values
+
   for (const field of DEFAULT_DONT_FLASH_FIELD_SET) {
-    delete values[field]
+    if (field in mutableValues) {
+      mutableValues[field] = ''
+    }
   }
 
   for (const path of collectSensitivePaths(schemaDefinition)) {
-    deletePath(values, path)
+    clearPath(mutableValues, path)
   }
 
   return values

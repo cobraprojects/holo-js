@@ -7,6 +7,7 @@ import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { DEFAULT_SESSION_COOKIE_NAME } from '@holo-js/config'
+import ts from 'typescript'
 import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 
@@ -37,6 +38,81 @@ const healthUrl = `http://localhost:${port}/api/holo/health`
 const originalConfig = await readFile(configPath, 'utf8')
 const runtimeSchemaPath = join(cwd, '.holo-js/generated/schema.mjs')
 let capturedOutput = ''
+
+function getJsxTagName(tagName) {
+  if (ts.isIdentifier(tagName)) {
+    return tagName.text
+  }
+
+  if (ts.isPropertyAccessExpression(tagName)) {
+    return tagName.name.text
+  }
+
+  return tagName.getText()
+}
+
+function isJsxNodeNamed(node, tagName) {
+  if (ts.isJsxElement(node)) {
+    return getJsxTagName(node.openingElement.tagName) === tagName
+  }
+
+  return ts.isJsxSelfClosingElement(node) && getJsxTagName(node.tagName) === tagName
+}
+
+function findJsxElement(node, tagName) {
+  if (ts.isJsxElement(node) && getJsxTagName(node.openingElement.tagName) === tagName) {
+    return node
+  }
+
+  return ts.forEachChild(node, child => findJsxElement(child, tagName))
+}
+
+function containsJsxNode(node, tagName) {
+  if (isJsxNodeNamed(node, tagName)) {
+    return true
+  }
+
+  return ts.forEachChild(node, child => containsJsxNode(child, tagName)) === true
+}
+
+function containsRouterReplaceHome(node) {
+  if (
+    ts.isCallExpression(node)
+    && ts.isPropertyAccessExpression(node.expression)
+    && node.expression.name.text === 'replace'
+    && node.arguments.some(argument => ts.isStringLiteral(argument) && argument.text === '/')
+  ) {
+    return true
+  }
+
+  return ts.forEachChild(node, containsRouterReplaceHome) === true
+}
+
+async function assertRootLayoutSharesAuthProviderState() {
+  const layoutSource = await readFile(join(cwd, 'app/layout.tsx'), 'utf8')
+  const sourceFile = ts.createSourceFile('layout.tsx', layoutSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const authProvider = findJsxElement(sourceFile, 'AuthProvider')
+
+  assert.ok(authProvider, 'Expected app/layout.tsx to render AuthProvider.')
+  assert.ok(
+    containsJsxNode(authProvider, 'AuthNav'),
+    'Expected AuthProvider to contain AuthNav.',
+  )
+  assert.ok(
+    containsJsxNode(authProvider, 'main'),
+    'Expected AuthProvider to wrap the routed page content so login refreshes update the header.',
+  )
+}
+
+async function assertHeaderLogoutRedirectsHome() {
+  const authNavSource = await readFile(join(cwd, 'app/auth-nav.tsx'), 'utf8')
+  const sourceFile = ts.createSourceFile('auth-nav.tsx', authNavSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+
+  assert.ok(
+    containsRouterReplaceHome(sourceFile),
+    'Expected header logout to redirect home after clearing the session.',
+  )
+}
 
 function createChildEnv(overrides = {}) {
   const env = {
@@ -224,6 +300,8 @@ function killChildTree() {
 
 try {
   await rm(join(cwd, '.next'), { recursive: true, force: true })
+  await assertRootLayoutSharesAuthProviderState()
+  await assertHeaderLogoutRedirectsHome()
   await run('bun', ['run', 'prepare'])
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await run('npx', ['tsx', 'tests/blog-logic.mjs'])

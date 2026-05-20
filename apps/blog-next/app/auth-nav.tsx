@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useAuth } from '@holo-js/auth/next/client'
 
 const linkStyle = {
@@ -24,6 +25,7 @@ const logoutFormStyle = {
 
 export function AuthNav() {
   const auth = useAuth()
+  const router = useRouter()
   const [isLoggingOut, setIsLoggingOut] = useState(false)
   const displayName = auth.user?.name ?? auth.user?.email ?? 'Account'
 
@@ -41,6 +43,7 @@ export function AuthNav() {
       }
 
       await auth.refreshUser()
+      router.replace('/')
     } catch (error) {
       console.warn('Logout failed.', error)
     } finally {

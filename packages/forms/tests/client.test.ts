@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createFailedSubmission, createSuccessfulSubmission, field, schema } from '../src'
 import { createFormClient as useForm } from '../src/internal/client'
+import { clearSensitiveInputValues, sanitizeFlashedInput } from '../src/sensitiveInput'
 
 const browserGlobal = globalThis as typeof globalThis & { document?: Document }
 const originalFetch = globalThis.fetch
 const originalDocument = browserGlobal.document
+type SensitiveSchemaFixture = NonNullable<Parameters<typeof clearSensitiveInputValues>[1]>
 
 function createSecurityClientModule(config: { readonly field: string, readonly cookie: string } = {
   field: '_token',
@@ -58,6 +60,10 @@ function createJsonResponse(body: unknown, init?: ResponseInit): Response {
 
 function createTextResponse(body: string, init?: ResponseInit): Response {
   return new Response(body, init)
+}
+
+function createSensitiveSchemaFixture(fields: Record<string, unknown>): SensitiveSchemaFixture {
+  return { fields } as unknown as SensitiveSchemaFixture
 }
 
 describe('@holo-js/forms client', () => {
@@ -590,7 +596,7 @@ describe('@holo-js/forms client', () => {
     expect('valid' in fallback && fallback.valid === true).toBe(true)
   })
 
-  it('clears sensitive fields after server-side failures', () => {
+  it('resets sensitive fields to controlled empty values after server-side failures', () => {
     const registerUser = schema({
       email: field.string().required().email(),
       password: field.password().required().min(8),
@@ -621,10 +627,99 @@ describe('@holo-js/forms client', () => {
     })
 
     expect(client.values.email).toBe('bad')
-    expect(client.values.password).toBeUndefined()
-    expect(client.values.passwordConfirmation).toBeUndefined()
-    expect(client.values.nationalId).toBeUndefined()
+    expect(client.values.password).toBe('')
+    expect(client.values.passwordConfirmation).toBe('')
+    expect(client.values.nationalId).toBe('')
     expect(client.errors.first('password')).toBe('The password field is required.')
+  })
+
+  it('preserves controlled sensitive values for nested and malformed client state', () => {
+    const nestedCredentials = schema({
+      credentials: {
+        password: field.password().required(),
+        nationalId: field.string().sensitive().required(),
+        nested: {
+          deep: {
+            password: field.password().required(),
+          },
+        },
+      },
+    })
+
+    const nestedValues = {
+      credentials: {
+        password: 'super-secret',
+        nationalId: 'private-id',
+      },
+    }
+    expect(clearSensitiveInputValues(nestedValues, nestedCredentials)).toEqual({
+      credentials: {
+        password: '',
+        nationalId: '',
+      },
+    })
+
+    const malformedValues = {
+      credentials: {
+        nested: 'not-an-object',
+      },
+    }
+    expect(clearSensitiveInputValues(malformedValues, nestedCredentials)).toEqual({
+      credentials: {
+        nested: 'not-an-object',
+      },
+    })
+    expect(sanitizeFlashedInput(malformedValues, nestedCredentials)).toEqual({
+      credentials: {
+        nested: 'not-an-object',
+      },
+    })
+
+    const missingLeafValues = {
+      credentials: {},
+      passwordConfirmation: 'super-secret',
+    }
+    expect(clearSensitiveInputValues(missingLeafValues, nestedCredentials)).toEqual({
+      credentials: {},
+      passwordConfirmation: '',
+    })
+
+    const emptyPathSchema = createSensitiveSchemaFixture({
+      '': {
+        kind: 'field',
+        definition: {
+          kind: 'string',
+          rules: [],
+          sensitive: true,
+        },
+      },
+    })
+    const emptyPathValues = {
+      '': 'private-id',
+    }
+    expect(clearSensitiveInputValues(emptyPathValues, emptyPathSchema)).toEqual(emptyPathValues)
+    expect(sanitizeFlashedInput(emptyPathValues, emptyPathSchema)).toEqual(emptyPathValues)
+    expect(clearSensitiveInputValues('super-secret')).toBe('super-secret')
+    expect(sanitizeFlashedInput('super-secret')).toBe('super-secret')
+
+    const shallowMalformedSchema = createSensitiveSchemaFixture({
+      credentials: {
+        password: {
+          kind: 'field',
+          definition: {
+            kind: 'string',
+            rules: [],
+            sensitive: true,
+          },
+        },
+      },
+      ignored: null,
+    })
+    const shallowMalformedValues = {
+      credentials: 'not-an-object',
+      ignored: 'kept',
+    }
+    expect(sanitizeFlashedInput(shallowMalformedValues, shallowMalformedSchema)).toEqual(shallowMalformedValues)
   })
 
   it('submits through custom submitters and default transports', async () => {
