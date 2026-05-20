@@ -29,8 +29,16 @@ type RendererModule = {
   create(element: ReturnType<typeof jsx>): Renderer
 }
 
+type ServerRendererModule = {
+  renderToString(element: ReturnType<typeof jsx>): string
+}
+
 async function loadRenderer(): Promise<RendererModule> {
   return await import('react-test-renderer') as unknown as RendererModule
+}
+
+async function loadServerRenderer(): Promise<ServerRendererModule> {
+  return await import('react-dom/server') as unknown as ServerRendererModule
 }
 
 function renderElement(Component: () => null): ReturnType<typeof jsx> {
@@ -172,10 +180,25 @@ describe('@holo-js/flux-react package surface', () => {
   })
 
   it('supports presence state and reactive status callbacks', async () => {
-    const client = createFluxClient({
+    const baseClient = createFluxClient({
       connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
     })
-    const debug = (client as unknown as { __debug: DebugConnector }).__debug
+    const debug = (baseClient as unknown as { __debug: DebugConnector }).__debug
+    const listenedPresenceChannels: string[] = []
+    const client = Object.freeze({
+      ...baseClient,
+      presence<TChannel extends string>(name: TChannel) {
+        const subscription = baseClient.presence(name)
+
+        return Object.freeze({
+          ...subscription,
+          listen(...args: Parameters<typeof subscription.listen>) {
+            listenedPresenceChannels.push(String(name))
+            return subscription.listen(...args)
+          },
+        })
+      },
+    }) as typeof baseClient
     const here: unknown[] = []
     const statusChanges: string[] = []
     const statusHandler = vi.fn((status: string) => {
@@ -224,6 +247,7 @@ describe('@holo-js/flux-react package surface', () => {
 
     expect(here).toEqual([[]])
     expect(emptyPresence!.members).toEqual([])
+    expect(listenedPresenceChannels).toEqual(['chat.1', 'chat.empty'])
     debug.updatePresenceMembers('chat.1', [{ id: 'user_1' }, { id: 'user_2' }])
     await act(async () => undefined)
     expect(presenceSnapshots.at(-1)).toEqual([{ id: 'user_1' }, { id: 'user_2' }])
@@ -294,5 +318,21 @@ describe('@holo-js/flux-react package surface', () => {
     await act(async () => {
       renderer!.unmount()
     })
+  })
+
+  it('reads connection status during server rendering', async () => {
+    const client = createFluxClient({
+      connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+    })
+
+    function Probe() {
+      const status = useFluxConnectionStatus({ client })
+
+      return jsx('span', { children: status })
+    }
+
+    const { renderToString } = await loadServerRenderer()
+
+    expect(renderToString(jsx(Probe, {}))).toContain('idle')
   })
 })

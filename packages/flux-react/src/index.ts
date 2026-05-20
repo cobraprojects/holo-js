@@ -179,7 +179,6 @@ export function useFluxPresence<TMember = unknown, TManifest extends GeneratedBr
       callbacksRef.current.onHere?.(membersRef.current)
       rerender()
     }
-    updateMembers(subscription.members as readonly BroadcastJsonObject[])
     const stop = subscription.__onPresenceChange?.(updateMembers)
     const cleanup = () => {
       stop?.()
@@ -202,6 +201,8 @@ export function useFluxPresence<TMember = unknown, TManifest extends GeneratedBr
       },
     })
 
+    subscription.listen()
+    updateMembers(subscription.members as readonly BroadcastJsonObject[])
     onUnmountRef.current?.(cleanup)
     return cleanup
   }, [channel, client, callbacksRef, onUnmountRef])

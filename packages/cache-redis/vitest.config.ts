@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
 const rootDir = fileURLToPath(new URL('.', import.meta.url))
+const runRedisIntegration = process.env.HOLO_REDIS_INTEGRATION === '1'
 
 export default defineConfig({
   resolve: {
@@ -14,7 +15,9 @@ export default defineConfig({
   test: {
     name: '@holo-js/cache-redis',
     environment: 'node',
-    include: ['tests/**/*.test.ts'],
+    include: runRedisIntegration
+      ? ['tests/**/*.test.ts']
+      : ['tests/package.test.ts'],
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],

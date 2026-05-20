@@ -157,16 +157,22 @@ export async function prepareProjectDiscovery(
   const seeders: GeneratedSeederRegistryEntry[] = []
   for (const filePath of seederFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
-    const moduleValue = await importProjectModule(projectRoot, filePath)
-    const seeder = resolveNamedExport(moduleValue, isSeederDefinition)
-    if (!seeder) {
-      throw new Error(`Discovered seeder "${relativePath}" does not export a Holo seeder.`)
-    }
+    try {
+      const moduleValue = await importProjectModule(projectRoot, filePath)
+      const seeder = resolveNamedExport(moduleValue, isSeederDefinition)
+      if (!seeder) {
+        throw new Error(`Discovered seeder "${relativePath}" does not export a Holo seeder.`)
+      }
 
-    seeders.push({
-      sourcePath: relativePath,
-      name: seeder.name,
-    })
+      seeders.push({
+        sourcePath: relativePath,
+        name: seeder.name,
+      })
+    } catch (error) {
+      if (!isMissingGeneratedSchemaModelError(error)) {
+        throw error
+      }
+    }
   }
   assertUniqueEntries('seeder', seeders)
 

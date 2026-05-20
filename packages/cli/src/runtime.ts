@@ -698,6 +698,11 @@ export async function withRuntimeEnvironment<T>(
   options: Record<string, unknown>,
   callback: (stdout: string) => Promise<T>,
 ): Promise<T> {
+  if (kind === 'seed') {
+    const project = await loadProjectConfig(projectRoot, { required: true })
+    await prepareProjectDiscovery(projectRoot, project.config)
+  }
+
   const environment = await getRuntimeEnvironment(projectRoot)
   let dependencyLinkEnsured = false
 

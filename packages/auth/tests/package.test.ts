@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src'
 import type { SessionRecord, SessionStore } from '../../session/src'
 import auth, {
+  AuthError,
   authRuntimeInternals,
   check,
   configureAuthRuntime,
@@ -51,6 +52,7 @@ import {
   pickInputField,
   resolveRequiredFieldName,
 } from '../src/runtime/failureFields'
+import { createLoginFailure, createRegistrationFailure } from '../src/runtime/sessionFailures'
 
 function hashPasswordResetEmail(email: string, csrfSigningKey?: string): string {
   const canonicalEmail = email.trim().toLowerCase()
@@ -63,9 +65,11 @@ function hashPasswordResetEmail(email: string, csrfSigningKey?: string): string 
 }
 import type {
   AuthenticatedAuthUser,
+  AuthCredentials,
   AuthErrorCode,
   AuthDeliveryHook,
   AuthProviderAdapter,
+  AuthRegistrationInput,
   AuthResult,
   HoloAuthConfig,
   AuthUser,
@@ -1141,6 +1145,67 @@ describe('@holo-js/auth package runtime', () => {
     )
   })
 
+  it('maps expected login failures to form submission failures', () => {
+    const usernameFailure = createLoginFailure(new AuthError(
+      'invalid_credentials',
+      'Invalid credentials.',
+    ), {
+      username: 'ava',
+      password: 'secret-secret',
+    })
+    const verificationFailure = createLoginFailure(new AuthError(
+      'email_verification_required',
+      'Verify your email address before signing in.',
+    ), {
+      email: 'ava@example.com',
+      password: 'secret-secret',
+    })
+    const verificationPasswordFallback = createLoginFailure(new AuthError(
+      'email_verification_required',
+      'Verify your email address before signing in.',
+    ), {
+      password: 'secret-secret',
+    })
+    const takenPasswordFallback = createRegistrationFailure(new AuthError(
+      'registration_identifier_taken',
+      'The selected credentials are already in use.',
+    ), {
+      password: 'secret-secret',
+      passwordConfirmation: 'secret-secret',
+    } satisfies AuthRegistrationInput)
+
+    expect(usernameFailure).toEqual({
+      code: 'invalid_credentials',
+      message: 'These credentials do not match our records.',
+      status: 422,
+      fields: {
+        username: ['These credentials do not match our records.'],
+        password: ['These credentials do not match our records.'],
+      },
+    })
+    expect(() => createLoginFailure(new AuthError(
+      'invalid_credentials',
+      'Invalid credentials.',
+    ), Object.create({ password: 'secret-secret' }) as AuthCredentials)).toThrow(
+      'Expected auth failure mapping to resolve at least one input field.',
+    )
+
+    expect(verificationFailure).toEqual({
+      code: 'email_verification_required',
+      message: 'Verify your email address before signing in.',
+      status: 403,
+      fields: {
+        email: ['Verify your email address before signing in.'],
+      },
+    })
+    expect(verificationPasswordFallback.fields).toEqual({
+      password: ['Verify your email address before signing in.'],
+    })
+    expect(takenPasswordFallback.fields).toEqual({
+      password: ['The selected credentials are already in use.'],
+    })
+  })
+
   it('supports impersonation within the same guard and restores the original user', async () => {
     const runtime = configureRuntime()
     const actor = await runtime.usersProvider.create({
@@ -1623,15 +1688,17 @@ describe('@holo-js/auth package runtime', () => {
       password: 'secret-secret',
     }), 'invalid_credentials')
     expect(missingCredentialsError.message).toBe('These credentials do not match our records.')
+    expect(missingCredentialsError.status).toBe(422)
     expect(missingCredentialsError.fields).toEqual({
       email: ['These credentials do not match our records.'],
       password: ['These credentials do not match our records.'],
     })
 
-    expectAuthFailureCode(await login({
+    const badPasswordError = expectAuthFailureCode(await login({
       email: 'ava@example.com',
       password: 'bad-password',
     }), 'invalid_credentials')
+    expect(badPasswordError.status).toBe(422)
 
     expect(unwrapAuthResult(await login({
       email: 'ava@example.com',

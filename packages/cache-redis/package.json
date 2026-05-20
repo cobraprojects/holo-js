@@ -20,7 +20,8 @@
     "build": "tsup",
     "stub": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest --run"
+    "test": "vitest --run",
+    "test:integration": "HOLO_REDIS_INTEGRATION=1 vitest --run tests/real-redis.test.ts"
   },
   "peerDependencies": {
     "@holo-js/cache": "catalog:"

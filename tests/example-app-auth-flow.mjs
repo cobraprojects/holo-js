@@ -321,7 +321,7 @@ export async function assertExampleAppAuthFlow({
     },
     allowFailure: true,
   })
-  assert.equal(badCredentials.response.status, 401)
+  assert.equal(badCredentials.response.status, 422)
   assertFieldFailure(badCredentials, ['email', 'password'])
 
   let throttledLogin

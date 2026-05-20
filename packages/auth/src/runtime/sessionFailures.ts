@@ -31,7 +31,7 @@ export function createLoginFailure<TCredentials extends AuthCredentials>(
       return createAuthFailurePayload(
         error.code,
         message,
-        401,
+        422,
         createFieldErrors(fields.length > 0 ? fields : [resolveRequiredFieldName(credentials, ['password'])], message),
       )
     }
