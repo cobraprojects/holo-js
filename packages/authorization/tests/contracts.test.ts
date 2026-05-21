@@ -11,6 +11,8 @@ import {
   AuthorizationError,
 } from '../src'
 
+const HOLO_MODEL_REFERENCE_REGISTRY = Symbol.for('holo-js.db.model-reference-registry')
+
 class Project {
   constructor(public readonly ownerId: string) {}
 }
@@ -92,6 +94,40 @@ const LooseBlog = {
   },
 }
 
+const DeferredBlog = {
+  definition: {
+    name: 'DeferredBlog',
+  },
+  getRepository() {
+    throw new Error('repository should not be resolved while detecting policy target')
+  },
+  newModelQuery() {
+    throw new Error('model query should not be resolved while detecting policy target')
+  },
+  newQuery() {
+    throw new Error('query should not be resolved while detecting policy target')
+  },
+  query() {
+    throw new Error('query should not be called while detecting policy target')
+  },
+}
+getHoloModelReferenceRegistry().add(DeferredBlog)
+
+function getHoloModelReferenceRegistry(): WeakSet<object> {
+  const registryGlobal = globalThis as typeof globalThis & Record<symbol, WeakSet<object> | undefined>
+  const existing = registryGlobal[HOLO_MODEL_REFERENCE_REGISTRY]
+  if (existing) {
+    return existing
+  }
+
+  const registry = new WeakSet<object>()
+  Object.defineProperty(globalThis, HOLO_MODEL_REFERENCE_REGISTRY, {
+    value: registry,
+  })
+
+  return registry
+}
+
 declare module '../src/contracts' {
   interface AuthorizationPolicyRegistry {
     projects: {
@@ -146,6 +182,16 @@ declare module '../src/contracts' {
         view: true
       }
     }
+
+    'deferred-blogs': {
+      target: typeof DeferredBlog
+      classActions: {
+        viewAny: true
+      }
+      recordActions: {
+        view: true
+      }
+    }
   }
 }
 
@@ -169,6 +215,22 @@ describe('@holo-js/authorization contracts', () => {
       'malformed-query',
       // @ts-expect-error query must return the model query facade
       { definition: { name: 'MalformedQuery' }, query: () => ({}) },
+      {},
+    )).toThrow(TypeError)
+    expect(() => definePolicy(
+      'malformed-repository-model',
+      {
+        definition: { name: 'MalformedRepositoryModel' },
+        getRepository: () => ({ definition: { name: 'MalformedRepositoryModel' } }),
+        query: () => ({
+          async first() {
+            return undefined
+          },
+          async firstOrFail() {
+            return {}
+          },
+        }),
+      },
       {},
     )).toThrow(TypeError)
     expect(() => definePolicy('projects', Project, {
@@ -350,6 +412,19 @@ describe('@holo-js/authorization contracts', () => {
       query: () => ({}),
     })
     await expect(current.can('view', malformedRecord)).resolves.toBe(false)
+
+    const malformedRepositoryRecord = Object.assign(new DefinitionMetadataProject('user-1'), {
+      getRepository: () => ({ definition: { name: 'DefinitionMetadataProject' } }),
+      query: () => ({
+        async first() {
+          return undefined
+        },
+        async firstOrFail() {
+          return new DefinitionMetadataProject('user-1')
+        },
+      }),
+    })
+    await expect(current.can('view', malformedRepositoryRecord)).resolves.toBe(false)
   })
 
   it('throws clear policy lookup and mismatch errors', async () => {
@@ -499,6 +574,21 @@ describe('@holo-js/authorization contracts', () => {
     await expect(current.can('view', publishedPost)).resolves.toBe(true)
     await expect(current.authorize('view', draftPost)).resolves.toBeUndefined()
     await expect(authorization.forUser(null).inspect('view', hiddenDraft)).resolves.toEqual(denyAsNotFound())
+  })
+
+  it('does not initialize model queries while registering repository-backed policies', () => {
+    expect(() => definePolicy('deferred-blogs', DeferredBlog, {
+      class: {
+        viewAny() {
+          return allow()
+        },
+      },
+      record: {
+        view() {
+          return allow()
+        },
+      },
+    })).not.toThrow()
   })
 
   it('covers fallback lookup branches for model references and repository metadata', () => {

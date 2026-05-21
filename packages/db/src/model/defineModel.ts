@@ -55,6 +55,7 @@ type RelationConstraintCallback = (query: ModelQueryBuilder<TableDefinition>) =>
 type RelationConstraintMap<TRelations extends RelationMap> = Readonly<
   Partial<Record<ModelRelationPath<TRelations>, RelationConstraintCallback>>
 >
+const HOLO_MODEL_REFERENCE_REGISTRY = Symbol.for('holo-js.db.model-reference-registry')
 type MorphEntityTarget = {
   exists(): boolean
   getRepository(): {
@@ -900,5 +901,22 @@ function createStaticModelApi<
   registerGlobalModel(model)
   registerMorphModel(definition.morphClass, model)
 
+  getHoloModelReferenceRegistry().add(model)
+
   return Object.freeze(model) as unknown as StaticModelApi<TTable, TScopes, TRelations>
+}
+
+function getHoloModelReferenceRegistry(): WeakSet<object> {
+  const registryGlobal = globalThis as typeof globalThis & Record<symbol, WeakSet<object> | undefined>
+  const existing = registryGlobal[HOLO_MODEL_REFERENCE_REGISTRY]
+  if (existing) {
+    return existing
+  }
+
+  const registry = new WeakSet<object>()
+  Object.defineProperty(globalThis, HOLO_MODEL_REFERENCE_REGISTRY, {
+    value: registry,
+  })
+
+  return registry
 }

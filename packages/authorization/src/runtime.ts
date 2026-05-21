@@ -44,6 +44,7 @@ import {
 
 type RegisteredPolicy = AuthorizationPolicyDefinition<string, AuthorizationPolicyTarget, string, string, object>
 type RegisteredAbility = AuthorizationAbilityDefinition<string, object, object>
+const HOLO_MODEL_REFERENCE_REGISTRY = Symbol.for('holo-js.db.model-reference-registry')
 
 type FallbackAuthorizationActor<TActor> = [TActor] extends [never]
   ? object
@@ -406,12 +407,21 @@ function isAuthorizationTargetModel(value: unknown): value is AuthorizationTarge
 
   const candidate = value as {
     definition?: unknown
+    getRepository?: unknown
+    newModelQuery?: unknown
+    newQuery?: unknown
     query?: () => unknown
   }
 
   const query = candidate.query
   if (!isAuthorizationTargetModelDefinition(candidate.definition) || typeof query !== 'function') {
     return false
+  }
+
+  if (typeof candidate.getRepository === 'function') {
+    return getHoloModelReferenceRegistry().has(value)
+      && typeof candidate.newQuery === 'function'
+      && typeof candidate.newModelQuery === 'function'
   }
 
   try {
@@ -430,6 +440,11 @@ function isAuthorizationTargetModelDefinition(value: unknown): value is Authoriz
     && typeof value === 'object'
     && 'name' in value
     && typeof (value as { name?: unknown }).name === 'string'
+}
+
+function getHoloModelReferenceRegistry(): WeakSet<object> {
+  const registryGlobal = globalThis as typeof globalThis & Record<symbol, WeakSet<object> | undefined>
+  return registryGlobal[HOLO_MODEL_REFERENCE_REGISTRY] ?? new WeakSet<object>()
 }
 
 function getDefinitionKeyForTarget(target: AuthorizationPolicyTarget): string | null {
