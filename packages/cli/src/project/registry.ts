@@ -571,6 +571,15 @@ export function renderGeneratedAuthorizationTypes(
   const abilityImportNameByName = new Map(typedAbilityEntries.map((entry, index) => [entry.name, `holoAuthorizationAbilityModule${index}`]))
 
   const imports = [
+    ...(typedPolicyEntries.length > 0
+      ? ['import type { AuthorizationPolicyDefinition as HoloAuthorizationPolicyDefinition } from \'@holo-js/authorization/contracts\'']
+      : []),
+    ...(typedAbilityEntries.length > 0
+      ? ['import type { AuthorizationAbilityDefinition as HoloAuthorizationAbilityDefinition } from \'@holo-js/authorization/contracts\'']
+      : []),
+    ...(guardNames.length > 0
+      ? ['import type { AuthUser as HoloAuthUser } from \'@holo-js/auth\'']
+      : []),
     ...typedPolicyEntries.map((entry, index) => {
       return `import type * as holoAuthorizationPolicyModule${index} from '${relativeImportPath(GENERATED_AUTHORIZATION_TYPES_PATH, entry.sourcePath)}'`
     }),
@@ -606,15 +615,11 @@ export function renderGeneratedAuthorizationTypes(
     return [
       `    ${JSON.stringify(entry.name)}: {`,
       '      actor: object',
-      `      target: typeof ${importName}[${JSON.stringify(entry.exportName)}] extends import('@holo-js/authorization/contracts').AuthorizationPolicyDefinition<infer _TName, infer TTarget, infer _TClassActions, infer _TRecordActions, infer _TActor> ? TTarget : object`,
-      `      classActions: typeof ${importName}[${JSON.stringify(entry.exportName)}] extends import('@holo-js/authorization/contracts').AuthorizationPolicyDefinition<infer _TName, infer _TTarget, infer TClassActions, infer _TRecordActions, infer _TActor> ? {`,
-      ...classActionEntries,
-      '      } : {',
+      `      target: typeof ${importName}[${JSON.stringify(entry.exportName)}] extends HoloAuthorizationPolicyDefinition<infer _TName, infer TTarget, infer _TClassActions, infer _TRecordActions, infer _TActor> ? TTarget : object`,
+      '      classActions: {',
       ...classActionEntries,
       '      }',
-      `      recordActions: typeof ${importName}[${JSON.stringify(entry.exportName)}] extends import('@holo-js/authorization/contracts').AuthorizationPolicyDefinition<infer _TName, infer _TTarget, infer _TClassActions, infer TRecordActions, infer _TActor> ? {`,
-      ...recordActionEntries,
-      '      } : {',
+      '      recordActions: {',
       ...recordActionEntries,
       '      }',
       '    }',
@@ -631,7 +636,7 @@ export function renderGeneratedAuthorizationTypes(
     return [
       `    ${JSON.stringify(entry.name)}: {`,
       '      actor: object',
-      `      input: typeof ${importName}[${JSON.stringify(entry.exportName)}] extends import('@holo-js/authorization/contracts').AuthorizationAbilityDefinition<infer _TName, infer TInput, infer _TActor> ? TInput : object`,
+      `      input: typeof ${importName}[${JSON.stringify(entry.exportName)}] extends HoloAuthorizationAbilityDefinition<infer _TName, infer TInput, infer _TActor> ? TInput : object`,
       '    }',
     ].join('\n')
   })
@@ -639,7 +644,7 @@ export function renderGeneratedAuthorizationTypes(
   const guardMembers = guardNames.map((name) => {
     return [
       `    ${JSON.stringify(name)}: {`,
-      `      user: import('@holo-js/auth').AuthUser`,
+      '      user: HoloAuthUser',
       '    }',
     ].join('\n')
   })

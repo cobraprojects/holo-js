@@ -164,9 +164,9 @@ describe('@holo-js/cli authorization registry discovery', () => {
     expect(policyEntry).toContain('actor: object')
     expect(abilityEntry).toContain('actor: object')
     expect(types).toContain('"web": {')
-    expect(types).toContain('user: import(\'@holo-js/auth\').AuthUser')
+    expect(types).toContain('user: HoloAuthUser')
     expect(types).toContain('"admin": {')
-    expect(types).toContain('user: import(\'@holo-js/auth\').AuthUser')
+    expect(types).toContain('user: HoloAuthUser')
   })
 
   it('emits auth guard registry types from auth config', async () => {
@@ -229,7 +229,7 @@ export default defineAuthConfig({
     expect(output).toContain('actor: object')
     expect(output).toContain('input: object')
     expect(output).toContain('"web": {')
-    expect(output).toContain('user: import(\'@holo-js/auth\').AuthUser')
+    expect(output).toContain('user: HoloAuthUser')
   })
 
   it('renders fallback authorization registry types for empty JavaScript policy actions', () => {
