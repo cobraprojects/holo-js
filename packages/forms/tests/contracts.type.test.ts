@@ -23,11 +23,17 @@ describe('@holo-js/forms typing', () => {
       email: field.string().required().email(),
       age: field.number().optional(),
     })
+    const publishPost = schema({
+      status: field.string().in(['draft', 'published']),
+    })
 
     type ExpectedData = {
       name: string
       email: string
       age: number | undefined
+    }
+    type ExpectedPublishData = {
+      status: 'draft' | 'published'
     }
 
     type RegisterUserData = typeof registerUser.$data
@@ -52,6 +58,7 @@ describe('@holo-js/forms typing', () => {
 
     type Success = typeof success
     type Failure = typeof failure
+    type PublishData = typeof publishPost.$data
 
     const data: NonNullable<RegisterUserData> = success.data
     const emailErrors = failure.errors.email
@@ -75,6 +82,7 @@ describe('@holo-js/forms typing', () => {
     type SubmitResult = Awaited<ReturnType<typeof expectsTypedSubmission>>
     type SuccessAssertion = Expect<Equal<Success, FormSubmissionSuccess<ExpectedData>>>
     type FailureAssertion = Expect<Equal<Failure, FormSubmissionFailure<ExpectedData>>>
+    type PublishAssertion = Expect<Equal<PublishData, ExpectedPublishData | undefined>>
     const fieldKind: string = registerUser.fields.email.definition.kind
     const typedSubmitResult: ExpectedSubmission = null as unknown as SubmitResult
     void fieldKind
@@ -92,6 +100,17 @@ describe('@holo-js/forms typing', () => {
       } else {
         const typedEmailErrors: readonly string[] | undefined = submission.errors.email
         void typedEmailErrors
+      }
+
+      return submission
+    }
+
+    async function expectsTypedEnumSubmission(request: Request) {
+      const submission = await validate(request, publishPost)
+
+      if (submission.valid) {
+        const typedStatus: 'draft' | 'published' = submission.data.status
+        void typedStatus
       }
 
       return submission
@@ -125,9 +144,11 @@ describe('@holo-js/forms typing', () => {
     void expectsTypedSubmission
     void expectsTypedSecuritySubmission
     void expectsTypedEventSubmission
+    void expectsTypedEnumSubmission
     void (0 as unknown as RegisterUserErrors)
     void (0 as unknown as DataAssertion)
     void (0 as unknown as SuccessAssertion)
     void (0 as unknown as FailureAssertion)
+    void (0 as unknown as PublishAssertion)
   })
 })

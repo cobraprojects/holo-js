@@ -25,6 +25,7 @@ import {
   morphedByMany,
   registerGeneratedTables,
   resetDB,
+  uniqueSlug,
   type Dialect,
   type DriverAdapter,
   type DriverExecutionResult,
@@ -314,6 +315,44 @@ class FailingInMemoryAdapter extends InMemoryAdapter {
     }
 
     return super.execute(sql, bindings)
+  }
+}
+
+class ConcurrentUniqueInsertAdapter extends InMemoryAdapter {
+  private failed = false
+  private pendingConcurrentInsert = false
+
+  override async execute(
+    sql: string,
+    bindings: readonly unknown[] = [],
+  ): Promise<DriverExecutionResult> {
+    if (!this.failed && sql.startsWith('INSERT INTO "users"')) {
+      this.failed = true
+      this.pendingConcurrentInsert = true
+      throw Object.assign(new Error('UNIQUE constraint failed: users.email'), {
+        code: 'SQLITE_CONSTRAINT_UNIQUE',
+      })
+    }
+
+    return super.execute(sql, bindings)
+  }
+
+  override async rollback(): Promise<void> {
+    await super.rollback()
+    if (!this.pendingConcurrentInsert) {
+      return
+    }
+
+    this.pendingConcurrentInsert = false
+    this.tables.users = [
+      ...(this.tables.users ?? []),
+      {
+        id: 1,
+        name: 'Concurrent',
+        email: 'race@example.com',
+        status: 'active',
+      },
+    ]
   }
 }
 
@@ -736,6 +775,50 @@ describe('model core slice', () => {
 
     expect(Admin.getTableName()).toBe('admins')
     expect(Admin.definition.table.columns).toHaveProperty('name')
+  })
+
+  it('generates unique model slugs through the framework helper', async () => {
+    const articles = defineTable('articles', {
+      id: column.id(),
+      title: column.string(),
+      slug: column.string(),
+      public_slug: column.string(),
+    })
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: {
+        default: createDatabase({
+          connectionName: 'default',
+          adapter: new InMemoryAdapter({}, {}),
+          dialect: createDialect('sqlite'),
+        }),
+      },
+    }))
+
+    const Article = defineModel(articles, {
+      fillable: ['title', 'slug', 'public_slug'],
+    })
+    const existing = await Article.create({
+      title: 'Existing',
+      slug: 'hello-world',
+      public_slug: 'public-entry',
+    })
+
+    await Article.create({
+      title: 'Second',
+      slug: 'hello-world-2',
+      public_slug: 'other-entry',
+    })
+
+    await expect(uniqueSlug(Article, 'Hello World')).resolves.toBe('hello-world-3')
+    await expect(uniqueSlug(Article, 'Hello World', { ignore: existing.id })).resolves.toBe('hello-world')
+    await expect(uniqueSlug(Article, 'Public Entry', { column: 'public_slug' })).resolves.toBe('public-entry-2')
+    await expect(uniqueSlug(Article, '!!!')).resolves.toBe('entry')
+    await expect(uniqueSlug(Article, 'Hello World', { separator: '_' })).resolves.toBe('hello_world')
+    await expect(Promise.all([
+      uniqueSlug(Article, 'Concurrent Slug'),
+      uniqueSlug(Article, 'Concurrent Slug'),
+    ])).resolves.toEqual(['concurrent-slug', 'concurrent-slug-2'])
   })
 
   it('aligns default polymorphic relation columns with builder-generated morph columns', () => {
@@ -1745,6 +1828,36 @@ describe('model core slice', () => {
     expect(staticSaved.map(user => user.get('id'))).toEqual([6])
     expect(await User.destroy([1, 999, 2])).toBe(2)
     expect(adapter.tables.users!.map(user => user.id)).toEqual([3, 4, 5, 6])
+  })
+
+  it('returns the concurrent match when first-or-create loses a unique insert race', async () => {
+    const adapter = new ConcurrentUniqueInsertAdapter({ users: [] }, { users: 0 })
+
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: {
+        default: createDatabase({
+          connectionName: 'default',
+          adapter,
+          dialect: createDialect('sqlite') }) } }))
+
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+      email: column.string(),
+      status: column.string() })
+
+    const User = defineModelFromTable(users, {
+      fillable: ['name', 'email', 'status'] })
+
+    const user = await User.firstOrCreate(
+      { email: 'race@example.com' },
+      { name: 'Fallback', status: 'inactive' },
+    )
+
+    expect(user.get('id')).toBe(1)
+    expect(user.get('name')).toBe('Concurrent')
+    expect(adapter.tables.users).toHaveLength(1)
   })
 
   it('supports custom collections per model', async () => {
@@ -2848,6 +2961,15 @@ describe('model core slice', () => {
       bindings: ['inactive', 1] })
     expect(user.wasChanged('status')).toBe(true)
     expect(user.getChanges()).toEqual({ status: 'inactive' })
+
+    await user.update({ status: 'active' })
+    expect(adapter.executions[2]).toEqual({
+      sql: 'UPDATE "users" SET "status" = ?1 WHERE "id" = ?2',
+      bindings: ['active', 1] })
+    expect(user.get('status')).toBe('active')
+    expect(user.isClean()).toBe(true)
+    expect(user.wasChanged('status')).toBe(true)
+    expect(user.getChanges()).toEqual({ status: 'active' })
 
     const executionCount = adapter.executions.length
     await user.save()

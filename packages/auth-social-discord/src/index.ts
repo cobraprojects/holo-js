@@ -12,7 +12,7 @@ async function readJson(response: Response): Promise<unknown> {
 }
 
 function applyScopes(url: URL, config: SocialRedirectContext['config']): void {
-  const scopes = (config.scopes ?? []).length > 0 ? config.scopes ?? [] : ['identify', 'email']
+  const scopes = config.scopes && config.scopes.length > 0 ? config.scopes : ['identify', 'email']
   url.searchParams.set('scope', scopes.join(' '))
 }
 

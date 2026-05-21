@@ -178,6 +178,11 @@ export interface ConfigureClerkAuthRuntimeOptions {
   readonly identityStore?: HostedIdentityStore
 }
 
+type ClerkDefaultUserAttributes = {
+  readonly email: string
+  readonly name: string
+}
+
 export interface ClerkAuthFacade {
   loginWithClerk(request: ClerkRequestInput, options?: { readonly provider?: string }): Promise<Response>
   registerWithClerk(request: ClerkRequestInput, options?: { readonly provider?: string }): Promise<Response>
@@ -191,8 +196,14 @@ export interface ClerkAuthFacade {
   ): Promise<ClerkCompleteAuthResult<TUserAttributes>>
   verifyRequest(request: ClerkRequestInput, provider?: string): Promise<ClerkVerifiedSession | null>
   verifySession(token: string, provider?: string): Promise<ClerkVerifiedSession | null>
-  syncIdentity(session: ClerkVerifiedSession, provider?: string): Promise<ClerkAuthenticationResult>
-  authenticate(request: Request, provider?: string): Promise<ClerkAuthenticationResult | null>
+  syncIdentity<TUserAttributes extends ClerkUserAttributes = ClerkDefaultUserAttributes>(
+    session: ClerkVerifiedSession,
+    provider?: string,
+    options?: {
+      readonly user?: (clerkUser: ClerkUserProfile) => TUserAttributes
+    },
+  ): Promise<ClerkAuthenticationResult<TUserAttributes>>
+  authenticate(request: ClerkRequestInput, provider?: string): Promise<ClerkAuthenticationResult | null>
 }
 
 export class ClerkAuthConflictError extends Error {

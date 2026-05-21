@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { redisQueueDriverFactory } from '../src'
 
-describe('@holo-js/queue-redis real Redis usage', () => {
+const describeRealRedis = process.env.HOLO_QUEUE_REDIS_INTEGRATION === '1' ? describe : describe.skip
+
+describeRealRedis('@holo-js/queue-redis real Redis usage', () => {
   it('dispatches, reserves, and acknowledges a job through a local Redis server', async () => {
     const queueName = `holo-real-${randomUUID()}`
     const driver = redisQueueDriverFactory.create({

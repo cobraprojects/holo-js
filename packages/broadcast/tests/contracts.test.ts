@@ -164,6 +164,12 @@ describe('@holo-js/broadcast contracts', () => {
     expect(() => channel('orders.{orderId}', {
       ' ': 'ord_1',
     } as never)).toThrow('must not include empty keys')
+    expect(() => privateChannel('orders.{orderId}', {
+      orderId: 'ord.1',
+    })).toThrow('contains invalid segment "ord.1"')
+    expect(() => presenceChannel('chat.{roomId}', {
+      roomId: '',
+    })).toThrow('must be a non-empty channel segment')
     expect(() => broadcastInternals.formatChannelPattern('orders.{orderId}', {} as never)).toThrow('missing param "orderId"')
 
     expect(() => defineBroadcast({
@@ -203,6 +209,14 @@ describe('@holo-js/broadcast contracts', () => {
         invalid: new Map(),
       } as never,
     })).toThrow('JSON-serializable')
+    for (const invalid of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(() => defineBroadcast({
+        channels: [channel('dashboard')],
+        payload: {
+          invalid,
+        },
+      })).toThrow('JSON-serializable')
+    }
     expect(() => defineBroadcast({
       channels: [channel('dashboard')],
       payload: {

@@ -13,15 +13,15 @@ type HoloModelCollectionLike = JsonSerializable & {
 }
 
 export type SerializedSvelteKitData<TValue>
-  = TValue extends JsonSerializable
+  = TValue extends Date
+    ? Date
+    : TValue extends JsonSerializable
     ? ReturnType<TValue['toJSON']>
     : TValue extends readonly (infer TItem)[]
       ? SerializedSvelteKitData<TItem>[]
-      : TValue extends Date
-        ? Date
-        : TValue extends object
-          ? { [K in keyof TValue]: SerializedSvelteKitData<TValue[K]> }
-          : TValue
+      : TValue extends object
+        ? { [K in keyof TValue]: SerializedSvelteKitData<TValue[K]> }
+        : TValue
 
 type HoloTransportEncoder = {
   encode: (value: unknown) => false | unknown[] | Record<string, unknown>

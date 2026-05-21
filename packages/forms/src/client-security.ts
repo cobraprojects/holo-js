@@ -25,7 +25,7 @@ type BrowserLikeGlobal = typeof globalThis & {
 }
 
 async function importSecurityClientModule(): Promise<SecurityClientModule> {
-  if (process.env.VITEST) {
+  if (typeof process !== 'undefined' && process.env && process.env.VITEST) {
     return await import(/* @vite-ignore */ '@holo-js/security/client')
   }
 

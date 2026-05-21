@@ -1,3 +1,5 @@
+import { copyFile, readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { defineConfig } from 'tsup'
 
 const outDir = process.env.HOLO_BUILD_OUT_DIR ?? 'dist'
@@ -16,9 +18,22 @@ export default defineConfig({
   format: ['esm'],
   dts: true,
   clean: true,
-  external: ['#imports', 'react', 'svelte', 'svelte/reactivity'],
+  external: ['#imports', 'next/server', 'react', 'svelte', 'svelte/reactivity'],
   outDir,
   outExtension: () => ({ js: '.mjs' }),
+  async onSuccess() {
+    await copyFile(join(outDir, 'index.mjs'), join(outDir, 'index'))
+
+    const nextServerPath = join(outDir, 'next/server.mjs')
+    const nextServer = await readFile(nextServerPath, 'utf8')
+    await writeFile(join(outDir, 'next/server.edge.mjs'), nextServer)
+
+    const rewrittenNextServer = nextServer
+      .replace('var sourceAuthRuntimePath = "../index";', '')
+      .replace('return await import(sourceAuthRuntimePath);', 'return await import("../index.mjs");')
+
+    await writeFile(nextServerPath, rewrittenNextServer)
+  },
   esbuildOptions(options) {
     options.logLevel = 'warning'
   },

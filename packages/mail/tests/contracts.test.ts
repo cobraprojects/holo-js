@@ -296,6 +296,16 @@ describe('@holo-js/mail contracts', () => {
     expect(() => mailInternals.normalizeDelayValue(-1, 'delay')).toThrow('greater than or equal to 0')
     expect(() => mailInternals.normalizeDelayValue(new Date('invalid'), 'delay')).toThrow('must be valid Date instances')
     expect(() => mailInternals.normalizeJsonValue(Symbol('bad'), 'json')).toThrow('must be JSON-serializable')
+    expect(() => defineMail({
+      to: 'ava@example.com',
+      subject: 'Stats',
+      text: 'Body',
+      metadata: {
+        score: Number.NaN,
+      },
+    })).toThrow('must be JSON-serializable')
+    expect(() => mailInternals.normalizeJsonValue(Number.POSITIVE_INFINITY, 'json')).toThrow('must be JSON-serializable')
+    expect(() => mailInternals.normalizeJsonValue(Number.NEGATIVE_INFINITY, 'json')).toThrow('must be JSON-serializable')
     expect(mailInternals.isValidEmail('ava example.com')).toBe(false)
     expect(() => mailInternals.normalizeHeaders('bad' as never)).toThrow('Mail headers must be a plain object')
     expect(() => mailInternals.normalizeHeaders({ Test: 1 as never })).toThrow('Mail header "Test" must be a string')

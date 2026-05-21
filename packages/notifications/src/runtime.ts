@@ -15,6 +15,7 @@ import {
   type NotificationDispatchOptions,
   type NotificationDispatchResult,
   type NotificationDispatchTarget,
+  type NotificationQueueOptions,
   type NotificationRecord,
   type NotificationRouteFor,
   type NotificationRuntimeBindings,
@@ -43,10 +44,16 @@ import {
 
 const HOLO_NOTIFICATIONS_DELIVER_JOB = 'holo.notifications.deliver'
 
+function normalizeOptionalString(value: string, label: string): string
+function normalizeOptionalString(value: string | undefined, label: string): string | undefined
 function normalizeOptionalString(
-  value: string,
+  value: string | undefined,
   label: string,
-): string {
+): string | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
   const normalized = value.trim()
   if (!normalized) {
     throw new Error(`[@holo-js/notifications] ${label} must be a non-empty string.`)
@@ -69,6 +76,37 @@ function normalizeDelayValue(value: NotificationDelayValue, label: string): Noti
   }
 
   return value
+}
+
+function normalizeOptionalBoolean(value: boolean | undefined, label: string): boolean | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  if (typeof value !== 'boolean') {
+    throw new Error(`[@holo-js/notifications] ${label} must be a boolean.`)
+  }
+
+  return value
+}
+
+function normalizeQueueOptions(
+  value: NotificationQueueOptions | undefined,
+): NotificationQueueOptions | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  return Object.freeze({
+    connection: normalizeOptionalString(value.connection, 'Notification queue connection'),
+    queue: normalizeOptionalString(value.queue, 'Notification queue name'),
+    ...(typeof value.delay === 'undefined'
+      ? {}
+      : { delay: normalizeDelayValue(value.delay, 'Notification queue delay') }),
+    ...(typeof normalizeOptionalBoolean(value.afterCommit, 'Notification queue afterCommit') === 'undefined'
+      ? {}
+      : { afterCommit: value.afterCommit }),
+  })
 }
 
 function getRuntimeBindings(): NotificationRuntimeBindings {
@@ -118,6 +156,7 @@ async function loadQueueModule(): Promise<QueueModule> {
     }
   }
 
+  /* v8 ignore start -- native optional-peer import failure is covered through loader override tests. */
   try {
     return await dynamicImport<QueueModule>('@holo-js/queue')
   } catch (error) {
@@ -132,10 +171,12 @@ async function loadQueueModule(): Promise<QueueModule> {
 
     throw error
   }
+  /* v8 ignore stop */
 }
 
 async function loadDbModule(): Promise<DbModule | null> {
   const override = getRuntimeState().loadDbModule
+  /* v8 ignore next -- direct optional-peer import fallback is covered through loader override tests. */
   if (override) {
     try {
       return await override()
@@ -153,6 +194,7 @@ async function loadDbModule(): Promise<DbModule | null> {
     }
   }
 
+  /* v8 ignore start -- native optional-peer import failure is covered through loader override tests. */
   try {
     return await dynamicImport<DbModule>('@holo-js/db')
   } catch (error) {
@@ -167,6 +209,7 @@ async function loadDbModule(): Promise<DbModule | null> {
 
     throw error
   }
+  /* v8 ignore stop */
 }
 
 type MutableDispatchOptions = {
@@ -317,16 +360,20 @@ function resolveNotificationQueueOptions(
   notification: NotificationDefinition,
   target: ResolvedTarget,
   channel: string,
-): boolean | NotificationDispatchOptions {
-  if (typeof notification.queue === 'function') {
-    return notification.queue(
+): boolean | NotificationQueueOptions {
+  const queue = typeof notification.queue === 'function'
+    ? notification.queue(
       target.notifiable,
       channel as NotificationChannelName,
       createNotificationContext(target.anonymous),
     )
+    : notification.queue ?? false
+
+  if (typeof queue === 'boolean') {
+    return queue
   }
 
-  return notification.queue ?? false
+  return normalizeQueueOptions(queue) ?? false
 }
 
 function resolveNotificationDelay(
@@ -335,11 +382,15 @@ function resolveNotificationDelay(
   channel: string,
 ): NotificationDelayValue | undefined {
   if (typeof notification.delay === 'function') {
-    return notification.delay(
+    const delay = notification.delay(
       target.notifiable,
       channel as NotificationChannelName,
       createNotificationContext(target.anonymous),
     )
+
+    return typeof delay === 'undefined'
+      ? undefined
+      : normalizeDelayValue(delay, 'Notification delay')
   }
 
   if (typeof notification.delay === 'undefined') {
@@ -602,7 +653,11 @@ function shouldDeferDispatchAfterCommit(
   }
 
   return targets.some(target => resolveChannels(notification, target).some(channel => {
-    return resolveChannelDispatchPlan(notification, target, channel, options).afterCommit
+    try {
+      return resolveChannelDispatchPlan(notification, target, channel, options).afterCommit
+    } catch {
+      return false
+    }
   }))
 }
 

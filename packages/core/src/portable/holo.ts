@@ -794,6 +794,7 @@ type SocialModule = {
         readonly state: string
         readonly codeVerifier: string
         readonly guard: string
+        readonly browserBinding?: string
         readonly createdAt: Date
       }): Promise<void>
       read(provider: string, state: string): Promise<{
@@ -801,6 +802,7 @@ type SocialModule = {
         readonly state: string
         readonly codeVerifier: string
         readonly guard: string
+        readonly browserBinding?: string
         readonly createdAt: Date
       } | null>
       delete(provider: string, state: string): Promise<void>
@@ -2693,6 +2695,7 @@ async function createCoreSocialBindings<TCustom extends HoloConfigMap>(
       readonly state: string
       readonly codeVerifier: string
       readonly guard: string
+      readonly browserBinding?: string
       readonly createdAt: Date
     }): Promise<void>
     read(provider: string, state: string): Promise<{
@@ -2700,6 +2703,7 @@ async function createCoreSocialBindings<TCustom extends HoloConfigMap>(
       readonly state: string
       readonly codeVerifier: string
       readonly guard: string
+      readonly browserBinding?: string
       readonly createdAt: Date
     } | null>
     delete(provider: string, state: string): Promise<void>
@@ -2726,6 +2730,7 @@ async function createCoreSocialBindings<TCustom extends HoloConfigMap>(
       readonly state: string
       readonly codeVerifier: string
       readonly guard: string
+      readonly browserBinding?: string
       readonly createdAt: Date
     }) {
       await sessionRuntime.create({
@@ -2735,6 +2740,7 @@ async function createCoreSocialBindings<TCustom extends HoloConfigMap>(
           state: record.state,
           codeVerifier: record.codeVerifier,
           guard: record.guard,
+          browserBinding: record.browserBinding,
           createdAt: record.createdAt.toISOString(),
         },
       })
@@ -2755,6 +2761,7 @@ async function createCoreSocialBindings<TCustom extends HoloConfigMap>(
         state,
         codeVerifier: data.codeVerifier,
         guard: data.guard,
+        ...(typeof data.browserBinding === 'string' ? { browserBinding: data.browserBinding } : {}),
         createdAt: normalizeDateValue(data.createdAt ?? new Date()),
       }
     },

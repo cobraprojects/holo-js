@@ -24,6 +24,10 @@ function hasExplicitUseAuthOptions(options: UseAuthOptions | undefined): options
     && Object.values(options).some(value => typeof value !== 'undefined')
 }
 
+function hasExplicitRequestOptions(options: AuthClientRequestOptions): boolean {
+  return Object.values(options).some(value => typeof value !== 'undefined')
+}
+
 export function setAuthContext(auth: UseAuthResult): UseAuthResult {
   setContext(authContextKey, auth)
   return auth
@@ -130,6 +134,9 @@ export function useAuth(options?: UseAuthOptions): UseAuthResult {
 
   const auth = new AuthClientState(initialProvider, initialUser, requestOptions)
 
-  trySetAuthContext(auth)
+  if (!hasExplicitRequestOptions(requestOptions)) {
+    trySetAuthContext(auth)
+  }
+
   return auth
 }

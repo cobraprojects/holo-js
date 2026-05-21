@@ -166,9 +166,16 @@ describe('@holo-js/forms security helpers', () => {
     }))
 
     try {
-      const mod = await import('../src/client-security')
+      const serverMod = await import('../src/security')
+      const clientMod = await import('../src/client-security')
 
-      await expect(mod.loadSecurityClientModule()).resolves.toMatchObject({
+      await expect(serverMod.loadSecurityModule()).resolves.toMatchObject({
+        csrf: {
+          verify: expect.any(Function),
+        },
+        rateLimit: expect.any(Function),
+      })
+      await expect(clientMod.loadSecurityClientModule()).resolves.toMatchObject({
         getSecurityClientConfig: expect.any(Function),
       })
     } finally {
@@ -339,6 +346,75 @@ console.log(JSON.stringify({
     }
   })
 
+  it('loads the optional security client module when process.env is unavailable', async () => {
+    vi.resetModules()
+    vi.stubGlobal('process', {
+      ...process,
+      env: undefined,
+    })
+
+    try {
+      const client = await loadSecurityClientModule()
+
+      expect(client.getSecurityClientConfig().csrf).toEqual({
+        field: '_token',
+        cookie: 'XSRF-TOKEN',
+      })
+    } finally {
+      vi.resetModules()
+      vi.unstubAllGlobals()
+      clientSecurityInternals.resetSecurityClientModuleCache()
+    }
+  })
+
+  it('loads the optional security client module in a plain runtime when process is unavailable', async () => {
+    const projectRoot = await createSecurityFixtureProject()
+    await writeSecurityPackage(projectRoot, {
+      'package.json': JSON.stringify({
+        name: '@holo-js/security',
+        type: 'module',
+        exports: {
+          './client': './client.js',
+        },
+      }, null, 2),
+      'client.js': `
+export function getSecurityClientConfig() {
+  return {
+    csrf: {
+      field: '_token',
+      cookie: 'XSRF-TOKEN',
+    },
+  }
+}
+`,
+    })
+
+    const result = await runBun([
+      '--eval',
+      `
+globalThis.process = undefined
+const clientMod = await import(${JSON.stringify(resolve(projectRoot, 'src/client-security.ts'))})
+const client = await clientMod.loadSecurityClientModule()
+
+console.log(JSON.stringify(client.getSecurityClientConfig().csrf))
+      `,
+    ], {
+      cwd: projectRoot,
+      env: {
+        ...process.env,
+        VITEST: '',
+      },
+    })
+    if (!result) {
+      return
+    }
+
+    expect(JSON.parse(result.stdout)).toEqual({
+      field: '_token',
+      cookie: 'XSRF-TOKEN',
+    })
+  })
+
   it('parses cookie headers and recognizes optional-package errors', () => {
     expect(formsSecurityInternals.parseCookieHeader('XSRF-TOKEN=one; broken; csrf-token=two')).toEqual({
       'XSRF-TOKEN': 'one',
@@ -380,6 +456,25 @@ console.log(JSON.stringify({
       name: '_token',
       value: 'client-token',
     })
+  })
+
+  it('fails clearly when the configured csrf token cookie is missing', async () => {
+    ;(globalThis as typeof globalThis & { __holoFormsSecurityClientModule__?: unknown }).__holoFormsSecurityClientModule__ = {
+      getSecurityClientConfig() {
+        return {
+          csrf: {
+            field: '_token',
+            cookie: 'XSRF-TOKEN',
+          },
+        }
+      },
+    }
+
+    ;(globalThis as typeof globalThis & { document?: Document }).document = {
+      cookie: 'tracking=one',
+    } as Document
+
+    await expect(getClientCsrfField()).rejects.toThrow('Missing CSRF cookie "XSRF-TOKEN"')
   })
 
   it('fails clearly when csrf helpers run without a browser document or a test override', async () => {

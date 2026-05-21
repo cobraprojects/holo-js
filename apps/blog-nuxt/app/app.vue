@@ -9,7 +9,12 @@ const isWorkosSession = computed(() => currentProvider.value === 'workos')
 
 async function logout() {
   await $fetch('/api/logout', { method: 'POST' })
-  await refreshUser()
+  try {
+    await refreshUser()
+  } catch (error) {
+    console.warn('Auth refresh failed after logout.', error)
+  }
+
   await navigateTo('/')
 }
 </script>

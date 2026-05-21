@@ -104,6 +104,11 @@ type RedisReservation = {
   readonly token: string
 }
 
+type RedisWorkerRecord = {
+  readonly queueName: string
+  readonly worker: BullWorkerInstance
+}
+
 type RedisClusterStartupNode = {
   readonly host: string
   readonly port: number
@@ -298,7 +303,8 @@ export class RedisQueueDriver implements QueueAsyncDriver {
   private readonly bullConnection: QueueBullConnection
   private readonly managedRedisConnection?: Redis | InstanceType<(typeof Redis)['Cluster']>
   private readonly queues = new Map<string, BullQueueInstance>()
-  private readonly workers = new Map<string, BullWorkerInstance>()
+  private readonly workers = new Map<string, RedisWorkerRecord>()
+  private readonly workerReadyPromises = new Map<string, Promise<RedisWorkerRecord>>()
   private readonly reservations = new Map<string, RedisReservation>()
   private queueCursor = 0
 
@@ -333,10 +339,36 @@ export class RedisQueueDriver implements QueueAsyncDriver {
     return queue
   }
 
-  private async getWorker(queueName: string): Promise<BullWorkerInstance> {
-    const cached = this.workers.get(queueName)
+  private createWorkerKey(queueName: string, blockFor: number): string {
+    return `${queueName}:${blockFor}`
+  }
+
+  private normalizeReserveBlockFor(timeout: number | undefined): number {
+    if (typeof timeout === 'undefined') {
+      return this.connection.blockFor
+    }
+
+    if (!Number.isFinite(timeout) || timeout < 0) {
+      throw new Error('[Holo Queue] Redis queue reservation timeout must be a non-negative finite number when provided.')
+    }
+
+    return timeout
+  }
+
+  private resolveWorkerDrainDelay(blockFor: number): number {
+    return blockFor > 0 ? blockFor : 1
+  }
+
+  private async getWorker(queueName: string, blockFor = this.connection.blockFor): Promise<BullWorkerInstance> {
+    const workerKey = this.createWorkerKey(queueName, blockFor)
+    const pending = this.workerReadyPromises.get(workerKey)
+    if (pending) {
+      return (await pending).worker
+    }
+
+    const cached = this.workers.get(workerKey)
     if (cached) {
-      return cached
+      return cached.worker
     }
 
     const worker = new BullWorker<RedisQueuedEnvelope, unknown, string>(
@@ -346,16 +378,42 @@ export class RedisQueueDriver implements QueueAsyncDriver {
         autorun: false,
         concurrency: 1,
         connection: this.bullConnection,
-        drainDelay: this.connection.blockFor,
+        drainDelay: this.resolveWorkerDrainDelay(blockFor),
         lockDuration: this.connection.retryAfter * 1000,
         removeOnComplete: { count: 0 },
         removeOnFail: { count: 0 },
       },
     )
 
-    await worker.waitUntilReady()
-    this.workers.set(queueName, worker)
-    return worker
+    const workerRecord = {
+      queueName,
+      worker,
+    }
+
+    const ready = worker.waitUntilReady()
+      .then(() => workerRecord)
+      .catch(async (error: unknown) => {
+        if (this.workers.get(workerKey) === workerRecord) {
+          this.workers.delete(workerKey)
+        }
+
+        try {
+          await worker.close(true)
+        } catch {
+          // Preserve the startup failure. Closing is best-effort cleanup here.
+        }
+
+        throw error
+      })
+      .finally(() => {
+        if (this.workerReadyPromises.get(workerKey) === ready) {
+          this.workerReadyPromises.delete(workerKey)
+        }
+      })
+
+    this.workers.set(workerKey, workerRecord)
+    this.workerReadyPromises.set(workerKey, ready)
+    return (await ready).worker
   }
 
   private normalizeQueueNames(queueNames: readonly string[] | undefined): readonly string[] {
@@ -363,7 +421,7 @@ export class RedisQueueDriver implements QueueAsyncDriver {
       return [...new Set([
         this.connection.queue,
         ...this.queues.keys(),
-        ...this.workers.keys(),
+        ...[...this.workers.values()].map(worker => worker.queueName),
       ])]
     }
 
@@ -441,9 +499,9 @@ export class RedisQueueDriver implements QueueAsyncDriver {
       await callback(reservation)
     } catch (error) {
       throw wrapRedisError(this.name, action, error)
-    } finally {
-      this.reservations.delete(reserved.reservationId)
     }
+
+    this.reservations.delete(reserved.reservationId)
   }
 
   async dispatch<TPayload extends QueueJsonValue = QueueJsonValue, TResult = unknown>(
@@ -473,13 +531,19 @@ export class RedisQueueDriver implements QueueAsyncDriver {
   }
 
   async reserve<TPayload extends QueueJsonValue = QueueJsonValue>(
-    input: { readonly queueNames: readonly string[], readonly workerId: string },
+    input: {
+      readonly queueNames?: readonly string[]
+      readonly workerId?: string
+      readonly timeout?: number
+    },
   ): Promise<QueueReservedJob<TPayload> | null> {
     try {
       const queueNames = this.rotateQueueNames(this.normalizeQueueNames(input.queueNames))
+      const workerId = input.workerId ?? this.name
+      const blockFor = this.normalizeReserveBlockFor(input.timeout)
 
       for (const queueName of queueNames) {
-        const token = `${input.workerId}:${randomUUID()}`
+        const token = `${workerId}:${randomUUID()}`
         const worker = await this.getWorker(queueName)
         const job = await worker.getNextJob(token, { block: false })
         if (job) {
@@ -488,12 +552,12 @@ export class RedisQueueDriver implements QueueAsyncDriver {
       }
 
       const [blockingQueue] = queueNames
-      if (!blockingQueue || this.connection.blockFor <= 0) {
+      if (!blockingQueue || blockFor <= 0) {
         return null
       }
 
-      const token = `${input.workerId}:${randomUUID()}`
-      const worker = await this.getWorker(blockingQueue)
+      const token = `${workerId}:${randomUUID()}`
+      const worker = await this.getWorker(blockingQueue, blockFor)
       const job = await worker.getNextJob(token, { block: true })
       if (!job) {
         return null
@@ -548,11 +612,13 @@ export class RedisQueueDriver implements QueueAsyncDriver {
 
   async close(): Promise<void> {
     const resources = [
-      ...this.workers.values(),
+      ...[...this.workers.values()].map(worker => worker.worker),
       ...this.queues.values(),
     ]
+    const workerReadyPromises = [...this.workerReadyPromises.values()]
 
     this.reservations.clear()
+    this.workerReadyPromises.clear()
     this.workers.clear()
     this.queues.clear()
 
@@ -567,6 +633,7 @@ export class RedisQueueDriver implements QueueAsyncDriver {
 
         await resource.close()
       }))
+      await Promise.allSettled(workerReadyPromises)
 
       closeRejection = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
     } finally {

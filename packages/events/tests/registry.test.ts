@@ -80,6 +80,14 @@ describe('@holo-js/events registry', () => {
     )
 
     expect(() => registerEvent(null as never)).toThrow('Events must be plain objects.')
+    expect(() => registerEvent(defineEvent<{ userId: string }>({
+      name: 'user.updated',
+    }), {
+      name: 123,
+    } as never)).toThrow('Event registration name must be a non-empty string when provided.')
+    expect(() => registerEvent(defineEvent({}), {
+      sourcePath: 123,
+    } as never)).toThrow('Event source path must be a non-empty string when provided.')
   })
 
   it('applies normalized names first and treats explicit and path-derived collisions as the same event identity', () => {
@@ -227,6 +235,19 @@ describe('@holo-js/events registry', () => {
       listensTo: ['user.registered'],
       handle: 'not-a-function',
     } as never)).toThrow('Listeners must define "listensTo" and a "handle" function.')
+    expect(() => registerListener(defineListener({
+      name: 'invalid.option',
+      listensTo: ['user.registered'],
+      async handle() {},
+    }), {
+      id: 123,
+    } as never)).toThrow('Listener id must be a non-empty string when provided.')
+    expect(() => registerListener(defineListener({
+      listensTo: ['user.registered'],
+      async handle() {},
+    }), {
+      sourcePath: 123,
+    } as never)).toThrow('Listener source path must be a non-empty string when provided.')
   })
 
   it('replaces listeners only when explicitly requested and refreshes event indexes', () => {

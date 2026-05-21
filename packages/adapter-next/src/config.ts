@@ -113,7 +113,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
   const existingGlobalExcludes = existingExcludes['/*'] ?? []
   const mergedExcludes = {
     ...existingExcludes,
-    '/*': [...new Set(['./next.config.ts', './next.config.mjs', ...existingGlobalExcludes])],
+    '/*': [...new Set(['./next.config.ts', './next.config.mjs', './next.config.js', ...existingGlobalExcludes])],
   }
 
   const existingTurbopack = nextConfig.turbopack ?? {}

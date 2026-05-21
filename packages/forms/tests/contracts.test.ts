@@ -544,6 +544,53 @@ describe('@holo-js/forms contracts', () => {
     })
   })
 
+  it('applies throttle before csrf verification when both checks are enabled', async () => {
+    const register = schema({
+      email: field.string().required().email(),
+    })
+
+    ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
+
+    const firstAttempt = await validate(new Request('https://app.test/register', {
+      method: 'POST',
+      headers: {
+        'x-forwarded-for': '203.0.113.8',
+      },
+      body: new URLSearchParams({
+        email: 'ava@example.com',
+      }),
+    }), register, {
+      csrf: true,
+      throttle: 'register',
+    })
+
+    expect(firstAttempt.valid).toBe(false)
+    if (firstAttempt.valid) {
+      throw new Error('Expected csrf failure.')
+    }
+    expect(firstAttempt.fail().status).toBe(419)
+
+    const throttled = await validate(new Request('https://app.test/register', {
+      method: 'POST',
+      headers: {
+        'x-forwarded-for': '203.0.113.8',
+      },
+      body: new URLSearchParams({
+        email: 'ava@example.com',
+      }),
+    }), register, {
+      csrf: true,
+      throttle: 'register',
+    })
+
+    expect(throttled.valid).toBe(false)
+    if (throttled.valid) {
+      throw new Error('Expected throttle failure.')
+    }
+    expect(throttled.fail().status).toBe(429)
+    expect(throttled.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
+  })
+
   it('merges validation errors with security root failures and requires Request inputs for security-aware validation', async () => {
     const login = schema({
       email: field.string().required().email(),
@@ -750,6 +797,26 @@ describe('@holo-js/forms contracts', () => {
     expect(objectHeaders.get('cookie')).toBe('a=1; XSRF-TOKEN=token')
     expect(objectHeaders.get('x-trace')).toBe('trace-1,trace-2')
 
+    class ForEachHeaders {
+      forEach(callback: (value: string, name: string) => void) {
+        callback('application/json', 'accept')
+      }
+    }
+
+    const forEachHeaders = formsInternals.normalizeRequestHeaders(new ForEachHeaders())
+    expect(forEachHeaders.get('accept')).toBe('application/json')
+
+    class EntriesHeaders {
+      entries() {
+        return [
+          ['x-entry', 'yes'],
+        ][Symbol.iterator]()
+      }
+    }
+
+    const entriesHeaders = formsInternals.normalizeRequestHeaders(new EntriesHeaders())
+    expect(entriesHeaders.get('x-entry')).toBe('yes')
+
     class GetOnlyHeaders {
       get(name: string) {
         return name === 'accept' ? 'application/json' : undefined
@@ -772,6 +839,47 @@ describe('@holo-js/forms contracts', () => {
     })
     expect(ignoredHeadersRequest?.url).toBe('https://forms.example.test/web-request')
     expect(ignoredHeadersRequest?.method).toBe('OPTIONS')
+
+    const structuredWebRequest = formsInternals.normalizeRequestLikeInput({
+      web: {
+        request: {
+          method: 'POST',
+          url: 'https://forms.example.test/web-request-form',
+          headers: {
+            'content-type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({
+            email: 'ava@example.com',
+          }),
+        },
+      },
+    })
+    expect(structuredWebRequest?.headers.get('content-type')).toBe('application/x-www-form-urlencoded')
+    await expect(structuredWebRequest?.formData()).resolves.toMatchObject({
+      get: expect.any(Function),
+    })
+
+    const structuredSubmission = await validate({
+      web: {
+        request: {
+          method: 'POST',
+          url: 'https://forms.example.test/web-request-form',
+          headers: {
+            'content-type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({
+            email: 'ava@example.com',
+          }),
+        },
+      },
+    }, schema({
+      email: field.string().required().email(),
+    }))
+    expect(structuredSubmission.valid).toBe(true)
+    if (!structuredSubmission.valid) {
+      throw new Error('Expected structured web.request validation to pass.')
+    }
+    expect(structuredSubmission.data.email).toBe('ava@example.com')
 
     const formDataBody = new FormData()
     formDataBody.set('email', 'ava@example.com')

@@ -351,6 +351,21 @@ describe('@holo-js/cache-redis', () => {
       expiresAt: Date.now() - 1,
     })).toBe(true)
     expect(await driver.get('holo:cache:stale-add')).toEqual({ hit: false })
+
+    await driver.put({
+      key: 'holo:cache:live-add',
+      payload: '"original"',
+      expiresAt: Date.now() + 60_000,
+    })
+    expect(await driver.add({
+      key: 'holo:cache:live-add',
+      payload: '"expired-replacement"',
+      expiresAt: Date.now() - 1,
+    })).toBe(false)
+    expect(await driver.get('holo:cache:live-add')).toEqual({
+      hit: true,
+      payload: '"original"',
+    })
   })
 
   it('supports numeric mutation and rejects non-numeric values', async () => {

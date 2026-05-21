@@ -1,5 +1,6 @@
 import { readdir, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
 
 const appRoot = 'apps'
@@ -47,7 +48,7 @@ async function collectGeneratedLintGroups() {
   return groups
 }
 
-async function collectGeneratedTargets(appPath) {
+export async function collectGeneratedTargets(appPath) {
   const targets = []
   const frameworkRunPath = join(appPath, '.holo-js', 'framework', 'run.mjs')
   const generatedDir = join(appPath, '.holo-js', 'generated')
@@ -60,8 +61,21 @@ async function collectGeneratedTargets(appPath) {
     return targets
   }
 
-  const entries = await readdir(generatedDir, { withFileTypes: true })
+  await collectLintableGeneratedFiles(generatedDir, targets)
+
+  return targets.sort()
+}
+
+async function collectLintableGeneratedFiles(directory, targets) {
+  const entries = await readdir(directory, { withFileTypes: true })
   for (const entry of entries) {
+    const entryPath = join(directory, entry.name)
+
+    if (entry.isDirectory()) {
+      await collectLintableGeneratedFiles(entryPath, targets)
+      continue
+    }
+
     if (!entry.isFile()) {
       continue
     }
@@ -71,11 +85,9 @@ async function collectGeneratedTargets(appPath) {
       || entry.name.endsWith('.d.ts')
       || entry.name.endsWith('.mjs')
     ) {
-      targets.push(join(generatedDir, entry.name))
+      targets.push(entryPath)
     }
   }
-
-  return targets.sort()
 }
 
 async function pathExists(path) {
@@ -128,7 +140,9 @@ function shouldResetCache(error) {
     && error.message.includes('timestamp-')
 }
 
-main().catch(error => {
-  console.error(error instanceof Error ? error.message : String(error))
-  process.exit(1)
-})
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch(error => {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exit(1)
+  })
+}

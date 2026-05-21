@@ -218,7 +218,19 @@ export function resolveMediaCollection(
     })
   }
 
-  return definition.collectionsByName[collectionName] ?? Object.freeze({
+  const collection = definition.collectionsByName[collectionName]
+  if (collection) {
+    return collection
+  }
+
+  if (collectionName !== 'default') {
+    const model = resolveDefinition(target)
+    throw new Error(
+      `[Holo Media] Unknown media collection "${collectionName}" for model "${model.name}".`,
+    )
+  }
+
+  return Object.freeze({
     kind: 'collection',
     name: collectionName,
     singleFile: false,

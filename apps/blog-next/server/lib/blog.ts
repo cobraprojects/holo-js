@@ -1,4 +1,5 @@
 import { hashPassword } from '@holo-js/auth'
+import { uniqueSlug } from '@holo-js/db'
 
 import Post from '../models/Post'
 import User from '../models/User'
@@ -26,30 +27,6 @@ async function ensureAuthorId(): Promise<number> {
     }),
   )
   return user.id
-}
-
-async function createUniqueSlug(model: typeof Post | typeof Category | typeof Tag, value: string, excludeId?: number): Promise<string> {
-  const base = value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'entry'
-
-  const fetchExisting = (m: typeof Post | typeof Category | typeof Tag) => {
-    if (m === Post) return Post.whereLike('slug', `${base}%`).when(excludeId, q => q.where('id', '!=', excludeId)).select('slug').get()
-    if (m === Category) return Category.whereLike('slug', `${base}%`).when(excludeId, q => q.where('id', '!=', excludeId)).select('slug').get()
-    return Tag.whereLike('slug', `${base}%`).when(excludeId, q => q.where('id', '!=', excludeId)).select('slug').get()
-  }
-
-  const existing = await fetchExisting(model)
-  const taken = new Set(existing.map(row => row.slug))
-
-  for (let index = 1; ; index += 1) {
-    const slug = index === 1 ? base : `${base}-${index}`
-    if (!taken.has(slug)) {
-      return slug
-    }
-  }
 }
 
 export function parseTagIds(value: string): number[] {
@@ -166,17 +143,18 @@ export async function createCategory(input: { name: string, description?: string
 
   await Category.create({
     name,
-    slug: await createUniqueSlug(Category, name),
+    slug: await uniqueSlug(Category, name),
     description: input.description?.trim() || null,
   })
 }
 
 export async function updateCategory(id: number, input: { name: string, description?: string }) {
   const name = input.name.trim()
+  const category = await Category.findOrFail(id)
 
-  await Category.update(id, {
+  await category.update({
     name,
-    slug: await createUniqueSlug(Category, name, id),
+    slug: await uniqueSlug(Category, name, { ignore: id }),
     description: input.description?.trim() || null,
   })
 }
@@ -191,16 +169,17 @@ export async function createTag(input: { name: string }) {
 
   await Tag.create({
     name,
-    slug: await createUniqueSlug(Tag, name),
+    slug: await uniqueSlug(Tag, name),
   })
 }
 
 export async function updateTag(id: number, input: { name: string }) {
   const name = input.name.trim()
+  const tag = await Tag.findOrFail(id)
 
-  await Tag.update(id, {
+  await tag.update({
     name,
-    slug: await createUniqueSlug(Tag, name, id),
+    slug: await uniqueSlug(Tag, name, { ignore: id }),
   })
 }
 
@@ -217,7 +196,7 @@ export async function createPost(input: { title: string, excerpt?: string, body:
     user_id: authorId,
     category_id: input.categoryId ? Number(input.categoryId) : null,
     title: input.title.trim(),
-    slug: await createUniqueSlug(Post, input.title),
+    slug: await uniqueSlug(Post, input.title),
     excerpt: input.excerpt?.trim() || null,
     body: input.body.trim(),
     status: postStatus,
@@ -233,22 +212,20 @@ export async function createPost(input: { title: string, excerpt?: string, body:
 export async function updatePost(id: number, input: { title: string, excerpt?: string, body: string, status: string, categoryId?: string, tagIds?: string }) {
   const publishedAt = now()
   const postStatus = input.status === 'draft' ? 'draft' : 'published'
+  const post = await Post.findOrFail(id)
 
-  await Post.update(id, {
+  await post.update({
     category_id: input.categoryId ? Number(input.categoryId) : null,
     title: input.title.trim(),
-    slug: await createUniqueSlug(Post, input.title, id),
+    slug: await uniqueSlug(Post, input.title, { ignore: id }),
     excerpt: input.excerpt?.trim() || null,
     body: input.body.trim(),
     status: postStatus,
-    published_at: postStatus === 'published' ? publishedAt : null,
+    published_at: postStatus === 'published' ? post.published_at ?? publishedAt : null,
   })
 
   const tagIds = parseTagIds(input.tagIds || '')
-  const post = await Post.find(id)
-  if (post) {
-    await post.tags().sync(tagIds)
-  }
+  await post.tags().sync(tagIds)
 }
 
 export async function deletePost(id: number) {

@@ -29,11 +29,22 @@ function getRecordPath(root: string, sessionId: string): string {
   return join(root, `${encodeURIComponent(sessionId)}.json`)
 }
 
+function isMissingFileError(error: unknown): boolean {
+  return error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT'
+}
+
 export function createFileSessionStore(root: string): SessionStore {
   return {
     async read(sessionId) {
-      const contents = await readFile(getRecordPath(root, sessionId), 'utf8').catch(() => undefined)
-      return contents ? deserializeRecord(contents) : null
+      try {
+        return deserializeRecord(await readFile(getRecordPath(root, sessionId), 'utf8'))
+      } catch (error) {
+        if (isMissingFileError(error)) {
+          return null
+        }
+
+        throw error
+      }
     },
     async write(record) {
       await mkdir(root, { recursive: true })

@@ -124,6 +124,14 @@ function parseRememberMeToken(
   }
 }
 
+function decodeCookiePart(value: string): string | null {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return null
+  }
+}
+
 function normalizeCookieOptions(options: CookieSerializeOptions = {}): Required<Omit<CookieSerializeOptions, 'domain' | 'expires'>> & Pick<CookieSerializeOptions, 'domain' | 'expires'> {
   const config = getSessionRuntimeState().bindings?.config.cookie
   return {
@@ -152,7 +160,7 @@ export function serializeCookie(name: string, value: string, options: CookieSeri
   if (normalized.domain) {
     attributes.push(`Domain=${normalized.domain}`)
   }
-  if (normalized.maxAge > 0) {
+  if (normalized.maxAge > 0 || options.maxAge === 0) {
     attributes.push(`Max-Age=${normalized.maxAge}`)
   }
   if (normalized.expires) {
@@ -187,8 +195,12 @@ export function parseCookieHeader(header: string | null | undefined): Readonly<R
         return undefined
       }
 
-      const key = decodeURIComponent(segment.slice(0, separator))
-      const value = decodeURIComponent(segment.slice(separator + 1))
+      const key = decodeCookiePart(segment.slice(0, separator))
+      const value = decodeCookiePart(segment.slice(separator + 1))
+      if (key === null || value === null) {
+        return undefined
+      }
+
       return [key, value] as const
     })
     .filter((entry): entry is readonly [string, string] => !!entry)
@@ -268,7 +280,7 @@ export async function writeSession(record: SessionRecord): Promise<SessionRecord
   const nextRecord: SessionRecord = Object.freeze({
     ...record,
     store: name,
-    data: Object.freeze({ ...(record.data ?? {}) }),
+    data: Object.freeze({ ...record.data }),
     createdAt: ensureDate(record.createdAt),
     lastActivityAt: ensureDate(record.lastActivityAt),
     expiresAt: ensureDate(record.expiresAt),

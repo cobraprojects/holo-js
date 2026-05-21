@@ -35,7 +35,7 @@
     "build": "tsup",
     "stub": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest --run"
+    "test": "vitest --run --coverage"
   },
   "dependencies": {
     "@holo-js/config": "catalog:"

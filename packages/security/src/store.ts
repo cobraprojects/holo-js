@@ -6,8 +6,43 @@ import { createFileRateLimitStore } from './drivers/file'
 import { createMemoryRateLimitStore } from './drivers/memory'
 import { createRedisRateLimitStore } from './drivers/redis'
 
+type PotentialNormalizedSecurityConfig = {
+  readonly rateLimit?: {
+    readonly memory?: {
+      readonly driver?: unknown
+    }
+    readonly file?: {
+      readonly path?: unknown
+    }
+    readonly redis?: {
+      readonly host?: unknown
+      readonly port?: unknown
+      readonly db?: unknown
+      readonly connection?: unknown
+      readonly prefix?: unknown
+    }
+    readonly limiters?: unknown
+  }
+}
+
+function isNormalizedSecurityConfig(config: HoloSecurityConfig | NormalizedHoloSecurityConfig): config is NormalizedHoloSecurityConfig {
+  const candidate = config as PotentialNormalizedSecurityConfig
+
+  return typeof candidate.rateLimit?.memory?.driver === 'string'
+    && candidate.rateLimit.memory.driver === 'memory'
+    && typeof candidate.rateLimit.file?.path === 'string'
+    && typeof candidate.rateLimit.redis?.host === 'string'
+    && typeof candidate.rateLimit.redis.port === 'number'
+    && typeof candidate.rateLimit.redis.db === 'number'
+    && typeof candidate.rateLimit.redis.connection === 'string'
+    && typeof candidate.rateLimit.redis.prefix === 'string'
+    && typeof candidate.rateLimit.limiters === 'object'
+}
+
 function normalizeStoreConfig(config: HoloSecurityConfig | NormalizedHoloSecurityConfig): NormalizedHoloSecurityConfig {
-  return normalizeSecurityConfig(config)
+  return isNormalizedSecurityConfig(config)
+    ? config
+    : normalizeSecurityConfig(config)
 }
 
 export function createRateLimitStoreFromConfig(

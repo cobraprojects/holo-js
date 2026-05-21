@@ -1,4 +1,5 @@
 import {
+  CacheInvalidTtlError,
   CacheInvalidNumericMutationError,
   deserializeCacheValue,
   serializeCacheValue,
@@ -43,6 +44,18 @@ function defaultSleep(milliseconds: number): Promise<void> {
   })
 }
 
+function validateLockSeconds(seconds: number): void {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new CacheInvalidTtlError('[@holo-js/cache] Cache lock seconds must be a finite number greater than 0.')
+  }
+}
+
+function validateLockWaitSeconds(waitSeconds: number): void {
+  if (!Number.isFinite(waitSeconds) || waitSeconds < 0) {
+    throw new CacheInvalidTtlError('[@holo-js/cache] Cache lock wait seconds must be a finite number greater than or equal to 0.')
+  }
+}
+
 function createMemoryLock(
   state: MemoryCacheDriverState,
   name: string,
@@ -50,6 +63,8 @@ function createMemoryLock(
   now: () => number,
   sleep: (milliseconds: number) => Promise<void>,
 ): CacheLockContract {
+  validateLockSeconds(seconds)
+
   const owner = Symbol(name)
 
   function clearExpiredLock(): void {
@@ -110,6 +125,8 @@ function createMemoryLock(
       waitSeconds: number,
       callback?: () => TValue | Promise<TValue>,
     ): Promise<boolean | TValue> {
+      validateLockWaitSeconds(waitSeconds)
+
       const deadline = now() + (waitSeconds * 1000)
       while (true) {
         if (tryAcquire()) {

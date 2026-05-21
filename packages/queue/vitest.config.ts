@@ -14,8 +14,12 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
+      excludeAfterRemap: true,
       exclude: [
         'src/**/types.ts',
+        '../queue-redis/**',
+        '../queue-redis/src/**',
+        '**/packages/queue-redis/**',
         '**/node_modules/**',
       ],
       thresholds: {

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -21,6 +21,7 @@ import session, {
   rememberMeCookie,
   resetSessionRuntime,
   rotateSession,
+  sessionRuntimeInternals,
   sessionCookie,
   touchSession,
   type SessionRecord,
@@ -153,6 +154,7 @@ describe('@holo-js/session package surface', () => {
     expect(rememberMeCookie('remember_1')).toContain('holo_session_remember=remember_1')
     expect(rememberMeCookie('remember_1')).toContain('Max-Age=86400')
     expect(cookies.forget('custom')).toContain('Expires=')
+    expect(cookies.forget('custom')).toContain('Max-Age=0')
     expect(parseCookieHeader('a=1; b=two')).toEqual({ a: '1', b: 'two' })
 
     await invalidateSession('session_2')
@@ -222,6 +224,152 @@ describe('@holo-js/session package surface', () => {
       maxAge: 5,
     })).toContain('Max-Age=5')
     expect(() => cookie('', '1')).toThrow('Cookie name must be a non-empty string')
+  })
+
+  it('keeps cookie helpers explicit and tolerant of malformed request headers', () => {
+    expect(cookie('plain', 'value')).not.toContain('Max-Age=')
+    expect(cookie('scoped', 'value', { domain: 'example.com' })).toContain('Domain=example.com')
+    expect(sessionCookie('fallback')).toContain('holo_session=fallback')
+    expect(rememberMeCookie('fallback')).toContain('holo_session_remember=fallback')
+    expect(rememberMeCookie('fallback', { maxAge: 5 })).toContain('Max-Age=5')
+    expect(cookies.forget('plain')).toContain('Max-Age=0')
+    expect(parseCookieHeader(null)).toEqual({})
+    expect(parseCookieHeader('lonely; ok=1')).toEqual({ ok: '1' })
+    expect(parseCookieHeader('bad=%; holo_session=abc')).toEqual({
+      holo_session: 'abc',
+    })
+    expect(parseCookieHeader('%=bad; theme=dark')).toEqual({
+      theme: 'dark',
+    })
+  })
+
+  it('surfaces runtime configuration errors and missing-session paths', async () => {
+    await expect(readSession('missing')).rejects.toThrow('Session runtime is not configured yet')
+
+    configureSessionRuntime({
+      config: {
+        driver: 'database',
+        stores: {
+          database: {
+            name: 'database',
+            driver: 'database',
+            connection: 'default',
+            table: 'sessions',
+          },
+        },
+        cookie: {
+          name: 'my_session',
+          path: '/',
+          secure: false,
+          httpOnly: true,
+          sameSite: 'lax',
+          partitioned: false,
+          maxAge: 30,
+        },
+        idleTimeout: 15,
+        absoluteLifetime: 30,
+        rememberMeLifetime: 60,
+      },
+      stores: {},
+    })
+    await expect(readSession('missing')).rejects.toThrow('Session store "database" is not configured')
+
+    const storeMap = new Map<string, SessionRecord>()
+    configureSessionRuntime({
+      config: {
+        driver: 'database',
+        stores: {
+          database: {
+            name: 'database',
+            driver: 'database',
+            connection: 'default',
+            table: 'sessions',
+          },
+        },
+        cookie: {
+          name: 'my_session',
+          path: '/',
+          secure: false,
+          httpOnly: true,
+          sameSite: 'lax',
+          partitioned: false,
+          maxAge: 30,
+        },
+        idleTimeout: 15,
+        absoluteLifetime: 30,
+        rememberMeLifetime: 60,
+      },
+      stores: {
+        database: createDatabaseSessionStore({
+          async read(sessionId) {
+            return storeMap.get(sessionId) ?? null
+          },
+          async write(record) {
+            storeMap.set(record.id, record)
+          },
+          async delete(sessionId) {
+            storeMap.delete(sessionId)
+          },
+        }),
+      },
+    })
+
+    const generated = await createSession()
+    expect(generated.id).toBeTypeOf('string')
+    expect(generated.id).not.toHaveLength(0)
+    const idBacked = await createSession({
+      id: 'id-backed',
+      data: {
+        source: 'data',
+      },
+    })
+    expect(idBacked).toMatchObject({
+      id: 'id-backed',
+      data: {
+        source: 'data',
+      },
+    })
+    const rotatedWithGeneratedId = await rotateSession('id-backed')
+    expect(rotatedWithGeneratedId.id).not.toBe('id-backed')
+    storeMap.set('stable-session', createRecord('stable-session', {
+      expiresAt: new Date(Date.now() + 60_000),
+    }))
+    await expect(rotateSession('stable-session', {
+      newId: 'stable-session',
+    })).resolves.toMatchObject({
+      id: 'stable-session',
+    })
+    expect(storeMap.has('stable-session')).toBe(true)
+    await expect(touchSession('missing')).resolves.toBeNull()
+    await expect(rotateSession('missing')).rejects.toThrow('Session "missing" was not found')
+    await expect(issueRememberMeToken('missing')).rejects.toThrow('Session "missing" was not found')
+
+    storeMap.set('remember-without-hash', createRecord('remember-without-hash'))
+    await expect(consumeRememberMeToken(
+      `remember-without-hash.${Date.now().toString(36)}.secret`,
+    )).resolves.toBeNull()
+
+    storeMap.set('legacy-remember', createRecord('legacy-remember', {
+      rememberTokenHash: sessionRuntimeInternals.hashRememberToken('secret'),
+    }))
+    await expect(consumeRememberMeToken('legacy-remember.secret')).resolves.toMatchObject({
+      id: 'legacy-remember',
+    })
+    await expect(consumeRememberMeToken('legacy-remember.')).resolves.toBeNull()
+    await expect(consumeRememberMeToken('legacy-remember.@.secret')).resolves.toBeNull()
+
+    const rememberToken = await issueRememberMeToken(rotatedWithGeneratedId.id, {
+      store: 'database',
+    })
+    await expect(consumeRememberMeToken(rememberToken, {
+      store: 'database',
+    })).resolves.toMatchObject({
+      id: rotatedWithGeneratedId.id,
+    })
+    await expect(consumeRememberMeToken(
+      `${rotatedWithGeneratedId.id}.${Date.now().toString(36)}.wrong`,
+      { store: 'database' },
+    )).resolves.toBeNull()
   })
 
   it('caps touched sessions at the configured absolute lifetime', async () => {
@@ -318,6 +466,54 @@ describe('@holo-js/session package surface', () => {
     const before = Date.now()
     const created = await createSession({
       name: 'short-lived',
+    })
+    const remainingLifetimeMs = created.expiresAt.getTime() - before
+
+    expect(remainingLifetimeMs).toBeLessThanOrEqual((15 * 60_000) + 1000)
+    expect(remainingLifetimeMs).toBeGreaterThan((14 * 60_000))
+  })
+
+  it('starts new sessions capped by absolute lifetime when it is shorter', async () => {
+    configureSessionRuntime({
+      config: {
+        driver: 'database',
+        stores: {
+          database: {
+            name: 'database',
+            driver: 'database',
+            connection: 'default',
+            table: 'sessions',
+          },
+        },
+        cookie: {
+          name: 'my_session',
+          path: '/',
+          secure: false,
+          httpOnly: true,
+          sameSite: 'lax',
+          partitioned: false,
+          maxAge: 30,
+        },
+        idleTimeout: 30,
+        absoluteLifetime: 15,
+        rememberMeLifetime: 60,
+      },
+      stores: {
+        database: createDatabaseSessionStore({
+          async read() {
+            return null
+          },
+          async write() {
+          },
+          async delete() {
+          },
+        }),
+      },
+    })
+
+    const before = Date.now()
+    const created = await createSession({
+      name: 'absolute-capped',
     })
     const remainingLifetimeMs = created.expiresAt.getTime() - before
 
@@ -475,6 +671,20 @@ describe('@holo-js/session package surface', () => {
     ))).toEqual(record)
     await store.delete('file-session')
     expect(await store.read('file-session')).toBeNull()
+  })
+
+  it('surfaces non-missing file store read errors', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'holo-session-file-'))
+    tempDirs.push(root)
+    const store = createFileSessionStore(root)
+    const recordPath = fileSessionDriverInternals.getRecordPath(root, 'blocked-session')
+
+    await mkdir(recordPath)
+
+    await expect(store.read('blocked-session')).rejects.toMatchObject({
+      code: 'EISDIR',
+    })
+    await expect(store.read('missing-session')).resolves.toBeNull()
   })
 
   it('adapts database and redis stores through their driver contracts', async () => {

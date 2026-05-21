@@ -137,9 +137,9 @@ export class ValidationFieldBuilder<TOutput> implements StandardSchemaV1<unknown
     return this.clone(normalizeRule('regex', [value], message))
   }
 
-  in<const TValue extends readonly unknown[]>(values: TValue, message?: string): ValidationFieldBuilder<TOutput> {
+  in<const TValue extends readonly TOutput[]>(values: TValue, message?: string): ValidationFieldBuilder<TValue[number]> {
     assertNonEmptyArray(values, 'in')
-    return this.clone(normalizeRule('in', [...values], message))
+    return this.clone<TValue[number]>(normalizeRule('in', [...values], message))
   }
 
   confirmed(message?: string): ValidationFieldBuilder<TOutput> {

@@ -70,6 +70,9 @@ export function createRedisRateLimitStore(
       const cleared = await adapter.clearAll()
       return assertNonNegativeInteger(cleared, 'clearAll() result')
     },
+    async close() {
+      await adapter.close?.()
+    },
   }
 }
 

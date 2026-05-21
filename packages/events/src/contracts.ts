@@ -4,11 +4,15 @@ const HOLO_EVENT_DEFINITION_MARKER = Symbol.for('holo-js.events.definition')
 const HOLO_LISTENER_DEFINITION_MARKER = Symbol.for('holo-js.events.listener')
 
 function normalizeOptionalString(
-  value: string | undefined,
+  value: unknown,
   label: string,
 ): string | undefined {
   if (typeof value === 'undefined') {
     return undefined
+  }
+
+  if (typeof value !== 'string') {
+    throw new Error(`[Holo Events] ${label} must be a non-empty string when provided.`)
   }
 
   const normalized = value.trim()
@@ -90,6 +94,15 @@ function hasEventDefinitionMarker(value: unknown): boolean {
 
 function hasListenerDefinitionMarker(value: unknown): boolean {
   return !!value && typeof value === 'object' && HOLO_LISTENER_DEFINITION_MARKER in value
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false
+  }
+
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
 }
 
 export interface EventDefinition<
@@ -271,7 +284,7 @@ export interface EventFacade {
 }
 
 export function isEventDefinition(value: unknown): value is EventDefinition {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
+  return isPlainObject(value)
 }
 
 export function normalizeEventDefinition<TEvent extends EventDefinition>(event: TEvent): TEvent {
@@ -386,6 +399,7 @@ export function defineListener<
 export const eventInternals = {
   hasEventDefinitionMarker,
   hasListenerDefinitionMarker,
+  isPlainObject,
   isReadonlyArray,
   deriveEventNameFromSourcePath,
   normalizeEventDefinition,

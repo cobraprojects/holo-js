@@ -55,6 +55,10 @@ function normalizeRuntimeRedisConfig(
   return isNormalizedRedisConfig(config) ? config : normalizeRedisConfig(config)
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 function resolveSharedRedisConnection(
   redisConfig: NormalizedHoloRedisConfig | undefined,
   connectionName: string,
@@ -75,15 +79,41 @@ function resolveSharedRedisConnection(
   )
 }
 
-function isModuleNotFoundError(error: unknown): boolean {
-  return !!error
-    && typeof error === 'object'
-    && 'code' in error
+function isModuleNotFoundError(error: unknown, expectedSpecifier = '@holo-js/cache-redis'): boolean {
+  if (!error || typeof error !== 'object') {
+    return false
+  }
+
+  const message = 'message' in error && typeof (error as { message?: unknown }).message === 'string'
+    ? (error as { message: string }).message
+    : ''
+  const escapedSpecifier = escapeRegExp(expectedSpecifier)
+
+  if (
+    'code' in error
     && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
+    && [
+      new RegExp(`Cannot find package ['"]${escapedSpecifier}['"]`),
+      new RegExp(`Cannot find module ['"]${escapedSpecifier}['"]`),
+      new RegExp(`Could not resolve ['"]${escapedSpecifier}['"]`),
+      new RegExp(`Failed to load url\\s+(?:['"\`]${escapedSpecifier}['"\`]|${escapedSpecifier}(?=[\\s(]|$))`),
+    ].some(pattern => pattern.test(message))
+  ) {
+    return true
+  }
+
+  if ('cause' in error) {
+    return isModuleNotFoundError((error as { cause?: unknown }).cause, expectedSpecifier)
+  }
+
+  return false
 }
 
-function normalizeRedisModuleLoadError(error: unknown): CacheOptionalPackageError | unknown {
-  if (isModuleNotFoundError(error)) {
+function normalizeRedisModuleLoadError(
+  error: unknown,
+  expectedSpecifier = '@holo-js/cache-redis',
+): CacheOptionalPackageError | unknown {
+  if (isModuleNotFoundError(error, expectedSpecifier)) {
     return new CacheOptionalPackageError(
       '[@holo-js/cache] Redis cache support requires @holo-js/cache-redis to be installed.',
       { cause: error },
@@ -99,7 +129,7 @@ async function loadRedisDriverModule(): Promise<RedisCacheDriverModule> {
     const specifier = '@holo-js/cache-redis' as string
     return await import(/* webpackIgnore: true */ specifier) as RedisCacheDriverModule
   } catch (error) {
-    throw normalizeRedisModuleLoadError(error)
+    throw normalizeRedisModuleLoadError(error, '@holo-js/cache-redis')
   }
 }
 /* v8 ignore stop */

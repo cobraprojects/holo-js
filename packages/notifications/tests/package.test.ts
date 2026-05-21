@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import notifications, {
   deleteNotifications,
   defineNotification,
@@ -18,6 +20,19 @@ afterEach(() => {
 })
 
 describe('@holo-js/notifications package surface', () => {
+  it('declares optional peer metadata for dynamic integrations', async () => {
+    const packageJsonPath = fileURLToPath(new URL('../package.json', import.meta.url))
+    const manifest = JSON.parse(await readFile(packageJsonPath, 'utf8')) as {
+      peerDependencies?: Record<string, string>
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>
+    }
+
+    expect(manifest.peerDependencies?.['@holo-js/db']).toBe('catalog:')
+    expect(manifest.peerDependenciesMeta?.['@holo-js/db']).toEqual({
+      optional: true,
+    })
+  })
+
   it('exports the package helpers and config helper', () => {
     const definition = defineNotification({
       via() {

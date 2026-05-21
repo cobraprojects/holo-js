@@ -29,7 +29,10 @@ function ResetPasswordPageContent() {
     async submitter({ formData }) {
       const response = await fetch('/api/reset-password', { method: 'POST', body: formData })
       const submission = await response.json()
-      if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
+      if (
+        submission?.ok === true
+        && typeof submission.data?.redirectTo === 'string'
+      ) {
         router.replace(submission.data.redirectTo)
       }
       return submission

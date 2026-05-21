@@ -8,6 +8,7 @@ This page covers:
 - `make(...)` + `save()`
 - `update(...)`
 - `saveMany(...)`
+- unique slug fields
 - mass assignment with `fillable` and `guarded`
 - trusted bypasses with `unguarded(...)` and `forceFill(...)`
 
@@ -52,15 +53,17 @@ Use this form when:
 
 ## Updating Records
 
-Update a known row by primary key:
+Update a loaded entity when you are changing one record:
 
 ```ts
-const user = await User.update(1, {
+const user = await User.findOrFail(1)
+
+await user.update({
   name: 'Amina Hassan',
 })
 ```
 
-Update a loaded entity:
+You can still mutate attributes and save explicitly when the workflow needs intermediate steps:
 
 ```ts
 const user = await User.findOrFail(1)
@@ -73,11 +76,55 @@ await user.save()
 Update several rows through a model query:
 
 ```ts
-await User
-  .where('active', false)
+await Post
+  .where('status', 'draft')
   .update({
-    active: true,
+    status: 'published',
+    published_at: new Date(),
   })
+```
+
+## Unique Slug Fields
+
+Use `uniqueSlug(...)` when a model needs a readable unique slug. The helper is typed from the model,
+checks the existing rows for the target column, and returns the next available value.
+
+```ts
+import { uniqueSlug } from '@holo-js/db'
+import Post from '../models/Post'
+
+const post = await Post.create({
+  title: input.title,
+  slug: await uniqueSlug(Post, input.title),
+  body: input.body,
+})
+```
+
+On update, pass the current primary key with `ignore` so the row can keep its own slug:
+
+```ts
+const post = await Post.findOrFail(id)
+
+await post.update({
+  title: input.title,
+  slug: await uniqueSlug(Post, input.title, { ignore: id }),
+})
+```
+
+By default `uniqueSlug(...)` writes for the model's `slug` column. If the model uses another string
+column, pass `column`; TypeScript infers the allowed column names from the model:
+
+```ts
+await uniqueSlug(Post, input.title, { column: 'public_slug' })
+```
+
+You can also change the separator or fallback base:
+
+```ts
+await uniqueSlug(Post, input.title, {
+  separator: '_',
+  fallback: 'post',
+})
 ```
 
 ## Mass Assignment

@@ -49,6 +49,15 @@ type DispatchedQueueJob = {
   readonly job: QueueJobEnvelope<QueueJsonValue>
 }
 
+type PackageManifest = {
+  readonly dependencies?: Record<string, string>
+  readonly peerDependencies?: Record<string, string>
+  readonly peerDependenciesMeta?: Record<string, {
+    readonly optional?: boolean
+  }>
+  readonly devDependencies?: Record<string, string>
+}
+
 async function runBun(args: string[]): Promise<{ stdout: string, stderr: string } | undefined> {
   try {
     return await execFileAsync('bun', args, {
@@ -109,6 +118,17 @@ afterEach(() => {
 })
 
 describe('@holo-js/events queue integration', () => {
+  it('publishes the queue integration as an optional peer dependency', async () => {
+    const manifest = JSON.parse(
+      await readFile(resolve(import.meta.dirname, '../package.json'), 'utf8'),
+    ) as PackageManifest
+
+    expect(manifest.dependencies?.['@holo-js/queue']).toBeUndefined()
+    expect(manifest.peerDependencies?.['@holo-js/queue']).toBe('catalog:')
+    expect(manifest.peerDependenciesMeta?.['@holo-js/queue']?.optional).toBe(true)
+    expect(manifest.devDependencies?.['@holo-js/queue']).toBe('catalog:')
+  })
+
   it('keeps the optional queue import visible to bundlers without a bare package specifier', async () => {
     const outdir = await mkdtemp(join(tmpdir(), 'holo-events-queue-bundle-'))
 

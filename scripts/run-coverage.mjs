@@ -1,31 +1,35 @@
 import { spawn } from 'node:child_process'
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-
-const coverageJobs = [
-  { scriptName: 'test:cli:coverage', directoryName: 'cli' },
-  { scriptName: 'test:config:coverage', directoryName: 'config' },
-  { scriptName: 'test:core:coverage', directoryName: 'core' },
-  { scriptName: 'test:db:coverage', directoryName: 'db' },
-  { scriptName: 'test:events:coverage', directoryName: 'events' },
-  { scriptName: 'test:forms:coverage', directoryName: 'forms' },
-  { scriptName: 'test:queue:coverage', directoryName: 'queue' },
-  { scriptName: 'test:queue-db:coverage', directoryName: 'queue-db' },
-  { scriptName: 'test:storage:coverage', directoryName: 'storage' },
-  { scriptName: 'test:validation:coverage', directoryName: 'validation' },
-  { scriptName: 'test:adapter-next:coverage', directoryName: 'adapter-next' },
-  { scriptName: 'test:adapter-nuxt:coverage', directoryName: 'adapter-nuxt' },
-  { scriptName: 'test:adapter-sveltekit:coverage', directoryName: 'adapter-sveltekit' },
-  { scriptName: 'test:broadcast:coverage', directoryName: 'broadcast' },
-  { scriptName: 'test:flux:coverage', directoryName: 'flux' },
-  { scriptName: 'test:flux-react:coverage', directoryName: 'flux-react' },
-  { scriptName: 'test:flux-vue:coverage', directoryName: 'flux-vue' },
-  { scriptName: 'test:flux-svelte:coverage', directoryName: 'flux-svelte' },
-  { scriptName: 'test:media:coverage', directoryName: 'media' },
-]
+import { pathToFileURL } from 'node:url'
 
 const coverageRoot = resolve(process.cwd(), 'coverage')
 const totalCoverageDirectory = join(coverageRoot, 'total')
+
+export function discoverCoverageJobs(packageJson) {
+  const scripts = packageJson?.scripts
+  if (!scripts || typeof scripts !== 'object') {
+    return []
+  }
+
+  return Object.keys(scripts).flatMap((scriptName) => {
+    const match = /^test:(.+):coverage$/.exec(scriptName)
+    if (!match) {
+      return []
+    }
+
+    return [{
+      scriptName,
+      directoryName: match[1],
+    }]
+  })
+}
+
+async function loadCoverageJobs() {
+  const packageJsonPath = resolve(process.cwd(), 'package.json')
+  const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8'))
+  return discoverCoverageJobs(packageJson)
+}
 
 function runCoverageScript(scriptName) {
   return new Promise((resolvePromise, reject) => {
@@ -180,7 +184,7 @@ function summarizeCounts(covered, total) {
   }
 }
 
-async function mergeCoverageReports() {
+async function mergeCoverageReports(coverageJobs) {
   const mergedCoverage = {}
 
   for (const job of coverageJobs) {
@@ -219,31 +223,41 @@ async function mergeCoverageReports() {
   console.log(`Lines      : ${summary.lines.pct.toFixed(2)}% (${summary.lines.covered}/${summary.lines.total})`)
 }
 
-await cleanupCoverageRoot()
+export async function runCoverage() {
+  const coverageJobs = await loadCoverageJobs()
 
-const failed = []
+  await cleanupCoverageRoot()
 
-for (const job of coverageJobs) {
-  try {
-    await runCoverageScript(job.scriptName)
-  } catch (error) {
-    failed.push({
-      scriptName: job.scriptName,
-      reason: error,
-    })
+  const failed = []
+
+  for (const job of coverageJobs) {
+    try {
+      await runCoverageScript(job.scriptName)
+    } catch (error) {
+      failed.push({
+        scriptName: job.scriptName,
+        reason: error,
+      })
+    }
   }
+
+  if (failed.length > 0) {
+    for (const entry of failed) {
+      console.error(
+        entry.reason instanceof Error
+          ? entry.reason.message
+          : `Coverage script "${entry.scriptName}" failed.`,
+      )
+    }
+
+    process.exitCode = 1
+    return
+  }
+
+  await mergeCoverageReports(coverageJobs)
 }
 
-if (failed.length > 0) {
-  for (const entry of failed) {
-    console.error(
-      entry.reason instanceof Error
-        ? entry.reason.message
-        : `Coverage script "${entry.scriptName}" failed.`,
-    )
-  }
-
-  process.exitCode = 1
-} else {
-  await mergeCoverageReports()
+const entrypoint = process.argv[1]
+if (typeof entrypoint === 'string' && import.meta.url === pathToFileURL(resolve(entrypoint)).href) {
+  await runCoverage()
 }

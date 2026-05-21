@@ -5,6 +5,7 @@ import { loginForm } from '#shared/schemas/auth'
 
 const { refreshUser } = await useAuth()
 const form = useForm(loginForm, {
+  csrf: true,
   validateOn: 'blur',
   initialValues: { email: '', password: '', remember: false },
   async submitter({ formData }) {

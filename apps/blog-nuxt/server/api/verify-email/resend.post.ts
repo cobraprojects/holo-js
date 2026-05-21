@@ -21,7 +21,16 @@ export default defineEventHandler(async (event) => {
     return failure
   }
 
-  await resendEmailVerification(submission.data.email)
+  const { error } = await resendEmailVerification(submission.data.email)
+  if (error) {
+    const failure = submission.fail({
+      status: error.status,
+      errors: error.fields,
+    })
+
+    setResponseStatus(event, failure.status)
+    return failure
+  }
 
   return success()
 })

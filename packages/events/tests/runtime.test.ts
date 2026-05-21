@@ -299,10 +299,16 @@ describe('@holo-js/events runtime', () => {
 
     await expect(dispatchEvent('   ', {})).rejects.toThrow('Event names must be non-empty strings.')
     await expect(dispatchEvent('missing.event', {})).rejects.toThrow('Event "missing.event" is not registered.')
+    expect(() => eventRuntimeInternals.normalizeEventName(123 as never)).toThrow(
+      'Event names must be non-empty strings.',
+    )
     await expect(dispatchEvent(defineEvent<object>({}), {})).rejects.toThrow(
       'Dispatching an event definition requires an explicit event name.',
     )
     expect(() => eventRuntimeInternals.resolveDispatchedEventName(null as never)).toThrow('Events must be plain objects.')
+    expect(() => eventRuntimeInternals.resolveDispatchedEventName({
+      name: 123,
+    } as never)).toThrow('Event name must be a non-empty string when provided.')
   })
 
   it('supports afterCommit deferral and falls back to immediate dispatch when no deferral hook is active', async () => {

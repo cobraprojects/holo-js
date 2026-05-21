@@ -1,6 +1,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import holoAuth, { authRuntimeInternals, provider as currentProvider, user as currentUser } from '../index'
 import type { AuthUserLike, HoloAuthUser } from '../contracts'
+import {
+  createSignedCsrfToken,
+  defaultCsrfCookieName,
+  isCsrfCookieRequest,
+  resolveCsrfCookieOptions,
+} from '../runtime/csrfCookie'
 
 export type AuthState = {
   readonly authenticated: boolean
@@ -48,7 +54,20 @@ type SvelteKitStoredRequestEvent = SvelteKitHandleEvent & {
   }
   readonly request: {
     readonly headers: Headers
+    readonly method?: string
   }
+}
+
+type SvelteKitResolveOptions = {
+  readonly transformPageChunk?: (input: {
+    readonly html: string
+    readonly done: boolean
+  }) => string | Promise<string>
+  readonly filterSerializedResponseHeaders?: (name: string, value: string) => boolean
+  readonly preload?: (input: {
+    readonly type: 'js' | 'css' | 'font' | 'asset'
+    readonly path: string
+  }) => boolean
 }
 
 type SvelteKitRuntimeGlobal = typeof globalThis & {
@@ -60,7 +79,7 @@ type SvelteKitRuntimeGlobal = typeof globalThis & {
 // / AsyncLocalStorage<SvelteKitRequestEvent> value types in sync.
 export type SvelteKitHandleInput<TEvent extends SvelteKitHandleEvent = SvelteKitHandleEvent> = {
   readonly event: TEvent
-  readonly resolve: (event: TEvent, options?: never) => Response | Promise<Response>
+  readonly resolve: (event: TEvent, options?: SvelteKitResolveOptions) => Response | Promise<Response>
 }
 
 export type SvelteKitHandle = <TEvent extends SvelteKitHandleEvent>(
@@ -139,9 +158,32 @@ function matchesRoutes(routes: readonly RouteMatcher[] | undefined, pathname: st
 }
 
 function isSameUrl(left: URL, right: URL): boolean {
-  return left.pathname === right.pathname
+  return left.origin === right.origin
+    && left.pathname === right.pathname
     && left.search === right.search
     && left.hash === right.hash
+}
+
+async function ensureCsrfCookie(event: SvelteKitHandleEvent): Promise<void> {
+  if (!isSvelteKitStoredRequestEvent(event)) {
+    return
+  }
+
+  if (!isCsrfCookieRequest(event.request.method) || event.cookies.get(defaultCsrfCookieName)) {
+    return
+  }
+
+  const signingKey = process.env.APP_KEY?.trim()
+  if (!signingKey) {
+    return
+  }
+
+  const token = await createSignedCsrfToken(signingKey)
+  if (!token) {
+    return
+  }
+
+  event.cookies.set(defaultCsrfCookieName, token, resolveCsrfCookieOptions(event.url))
 }
 
 export async function auth(options: AuthOptions = {}): Promise<AuthState> {
@@ -184,11 +226,13 @@ export function guestOnly(options: GuestOnlyOptions): SvelteKitHandle {
 
       const currentAuth = await auth({ guard: options.guard })
       if (!currentAuth.authenticated) {
+        await ensureCsrfCookie(event)
         return resolve(event)
       }
 
       const redirectUrl = new URL(options.redirectTo, event.url)
       if (isSameUrl(event.url, redirectUrl)) {
+        await ensureCsrfCookie(event)
         return resolve(event)
       }
 
@@ -206,11 +250,13 @@ export function authOnly(options: AuthOnlyOptions): SvelteKitHandle {
 
       const currentAuth = await auth({ guard: options.guard })
       if (currentAuth.authenticated) {
+        await ensureCsrfCookie(event)
         return resolve(event)
       }
 
       const redirectUrl = new URL(options.redirectTo, event.url)
       if (isSameUrl(event.url, redirectUrl)) {
+        await ensureCsrfCookie(event)
         return resolve(event)
       }
 
@@ -220,6 +266,7 @@ export function authOnly(options: AuthOnlyOptions): SvelteKitHandle {
 }
 
 export const routeProtectionInternals = {
+  ensureCsrfCookie,
   isSameUrl,
   matchesRoute,
   matchesRoutes,

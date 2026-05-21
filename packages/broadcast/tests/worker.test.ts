@@ -931,6 +931,18 @@ describe('@holo-js/broadcast worker runtime', () => {
       body: payload,
     }))
     expect(invalid.status).toBe(401)
+
+    const expectedSignature = workerInternals.createPusherSignature(
+      app.secret,
+      'POST',
+      url.pathname,
+      url.searchParams,
+    )
+    expect(workerInternals.verifyPusherSignature(expectedSignature, expectedSignature)).toBe(true)
+    expect(workerInternals.verifyPusherSignature('0'.repeat(expectedSignature.length), expectedSignature)).toBe(false)
+    expect(workerInternals.verifyPusherSignature('abc', expectedSignature)).toBe(false)
+    expect(workerInternals.verifyPusherSignature('not-hex'.padEnd(expectedSignature.length, '0'), expectedSignature)).toBe(false)
+    expect(workerInternals.verifyPusherSignature(expectedSignature, 'not-hex'.padEnd(expectedSignature.length, '0'))).toBe(false)
   })
 
   it('keeps broadcast delivery scoped to the app that published it', async () => {

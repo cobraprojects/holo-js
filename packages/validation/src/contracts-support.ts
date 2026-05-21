@@ -16,6 +16,8 @@ import {
   type FieldRule,
 } from './contracts-types'
 
+const UNSAFE_PATH_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype'])
+
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
@@ -149,12 +151,31 @@ export function createField<TOutput>(kind: FieldKind, item?: FieldDefinition, se
   })
 }
 
+function createObjectContainer(): Record<string, unknown> {
+  return Object.create(null) as Record<string, unknown>
+}
+
+function hasOwnContainerValue(container: Record<string, unknown> | unknown[], key: string | number): boolean {
+  return Object.prototype.hasOwnProperty.call(container, key)
+}
+
+function assertSafePathSegment(segment: string, path: string): void {
+  if (UNSAFE_PATH_SEGMENTS.has(segment)) {
+    throw new ValidationContractError(`Unsafe path segment "${segment}" in "${path}".`)
+  }
+}
+
 function pathSegments(path: string): readonly string[] {
-  return path.split('.').map(segment => segment.trim()).filter(Boolean)
+  const segments = path.split('.').map(segment => segment.trim()).filter(Boolean)
+  for (const segment of segments) {
+    assertSafePathSegment(segment, path)
+  }
+
+  return segments
 }
 
 export function buildErrorTree(flattened: Record<string, readonly string[]>): Record<string, unknown> {
-  const root: Record<string, unknown> = {}
+  const root = createObjectContainer()
 
   for (const [path, messages] of Object.entries(flattened)) {
     const segments = pathSegments(path)
@@ -169,9 +190,9 @@ export function buildErrorTree(flattened: Record<string, readonly string[]>): Re
         continue
       }
 
-      const existing = cursor[segment]
+      const existing = hasOwnContainerValue(cursor, segment) ? cursor[segment] : undefined
       if (!isPlainObject(existing)) {
-        cursor[segment] = {}
+        cursor[segment] = createObjectContainer()
       }
 
       cursor = cursor[segment] as Record<string, unknown>
@@ -383,7 +404,7 @@ function parsePathTokens(path: string): readonly (string | number | '')[] {
   const pattern = /([^[.\]]+)|\[(.*?)\]/g
 
   for (const match of path.matchAll(pattern)) {
-    const segment = match[1] ?? match[2] ?? /* v8 ignore next */ ''
+    const segment = (match[1] ?? match[2])!
     if (segment === '') {
       tokens.push('')
       continue
@@ -394,6 +415,7 @@ function parsePathTokens(path: string): readonly (string | number | '')[] {
       continue
     }
 
+    assertSafePathSegment(segment, path)
     tokens.push(segment)
   }
 
@@ -401,7 +423,7 @@ function parsePathTokens(path: string): readonly (string | number | '')[] {
 }
 
 function createContainer(next: string | number | '' | undefined): Record<string, unknown> | unknown[] {
-  return typeof next === 'number' || next === '' ? [] : {}
+  return typeof next === 'number' || next === '' ? [] : createObjectContainer()
 }
 
 export function assignNestedValue(target: Record<string, unknown> | unknown[], path: string, value: unknown): void {
@@ -439,7 +461,7 @@ export function assignNestedValue(target: Record<string, unknown> | unknown[], p
         return
       }
 
-      const existing = cursor[token]
+      const existing = hasOwnContainerValue(cursor, token) ? cursor[token] : undefined
       if (!existing || /* v8 ignore next */ typeof existing !== 'object') {
         cursor[token] = createContainer(next)
       }
@@ -453,7 +475,7 @@ export function assignNestedValue(target: Record<string, unknown> | unknown[], p
     }
 
     if (last) {
-      const existing = cursor[token]
+      const existing = hasOwnContainerValue(cursor, token) ? cursor[token] : undefined
       if (typeof existing === 'undefined') {
         cursor[token] = value
       } else if (Array.isArray(existing)) {
@@ -464,7 +486,7 @@ export function assignNestedValue(target: Record<string, unknown> | unknown[], p
       return
     }
 
-    const existing = cursor[token]
+    const existing = hasOwnContainerValue(cursor, token) ? cursor[token] : undefined
     if (!existing || typeof existing !== 'object') {
       cursor[token] = createContainer(next)
     }

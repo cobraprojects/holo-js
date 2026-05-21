@@ -193,6 +193,99 @@ async function waitForRedirect(url, expectedPath, timeoutMs = 30000) {
   throw new Error(`Timed out waiting for ${url} to redirect to ${expectedPath}${lastError instanceof Error ? `: ${lastError.message}` : ''}`)
 }
 
+async function fetchJson(url, options = {}) {
+  const headers = new Headers(options.headers ?? {})
+  let body = options.body
+
+  if (options.fields) {
+    const payload = new FormData()
+    for (const [key, value] of Object.entries(options.fields)) {
+      if (typeof value === 'undefined' || value === null) {
+        continue
+      }
+
+      payload.set(key, String(value))
+    }
+
+    body = payload
+  }
+
+  const response = await fetch(url, {
+    method: options.method ?? (options.fields ? 'POST' : 'GET'),
+    headers,
+    body,
+    redirect: 'manual',
+  })
+  const text = await response.text()
+  if ((response.status < 200 || response.status >= 300) && options.allowFailure !== true) {
+    throw new Error(`Unexpected status ${response.status} for ${url}: ${text}`)
+  }
+
+  try {
+    return {
+      response,
+      json: JSON.parse(text),
+    }
+  } catch (error) {
+    throw new Error(`Expected JSON from ${url}: ${error instanceof Error ? error.message : String(error)}\n${text}`)
+  }
+}
+
+function assertFieldFailure(result, fields) {
+  assert.equal(result.json.ok, false)
+  assert.equal(result.json.valid, false)
+  for (const field of fields) {
+    assert.ok(
+      Array.isArray(result.json.errors?.[field]),
+      `Expected ${field} validation errors.`,
+    )
+  }
+}
+
+async function assertResetPasswordApiValidation(devUrl) {
+  const invalidSubmission = await fetchJson(`${devUrl}/api/reset-password`, {
+    fields: {},
+    allowFailure: true,
+  })
+  assert.equal(invalidSubmission.response.status, 422)
+  assertFieldFailure(invalidSubmission, ['token', 'password', 'passwordConfirmation'])
+}
+
+async function assertSuperAdminLogoutStillNavigatesAfterInvalidationFailure() {
+  const source = await readFile(join(cwd, 'src/routes/super-admin/+page.svelte'), 'utf8')
+  const invalidationWarning = "console.warn('Super admin auth invalidation failed after logout.', error)"
+  const navigation = "await goto('/super-admin/login')"
+
+  assert.ok(
+    source.includes(invalidationWarning),
+    'Expected super-admin logout to treat post-logout auth invalidation failures as non-blocking.',
+  )
+  assert.ok(
+    source.indexOf(navigation) > source.indexOf(invalidationWarning),
+    'Expected super-admin logout to navigate after the best-effort auth invalidation.',
+  )
+}
+
+async function assertHeaderLogoutTreatsRefreshFailureAsNonBlocking() {
+  const source = await readFile(join(cwd, 'src/routes/+layout.svelte'), 'utf8')
+  const refreshWarning = "console.warn('Auth refresh failed after logout.', error)"
+  const invalidation = 'await invalidateAll()'
+  const requestFailureWarning = "console.warn('Logout failed.', error)"
+
+  assert.ok(
+    source.includes(refreshWarning),
+    'Expected header logout to treat post-logout auth refresh failures as non-blocking.',
+  )
+  assert.ok(
+    source.indexOf(invalidation) > source.indexOf(refreshWarning),
+    'Expected header logout to invalidate auth state after the best-effort auth refresh.',
+  )
+  assert.ok(
+    source.indexOf(requestFailureWarning) > source.indexOf(invalidation),
+    'Expected header logout to distinguish post-logout auth refresh failures from logout request failures.',
+  )
+}
+
 function pipeOutput(stream, target, onLine) {
   if (!stream) {
     return
@@ -284,6 +377,8 @@ function killChildTree() {
 try {
   await rm(join(cwd, '.svelte-kit'), { recursive: true, force: true })
   await rm(join(cwd, 'build'), { recursive: true, force: true })
+  await assertSuperAdminLogoutStillNavigatesAfterInvalidationFailure()
+  await assertHeaderLogoutTreatsRefreshFailureAsNonBlocking()
   await run('bun', ['run', 'prepare'])
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await run('npx', ['tsx', 'tests/blog-logic.mjs'])
@@ -305,11 +400,13 @@ try {
   assert.equal(initial.app, 'blog-sveltekit')
   await waitForText(`${devUrl}/`, payload => payload.includes('Shipping a Real Holo Blog on SvelteKit'))
   await waitForRedirect(`${devUrl}/admin/posts`, '/login')
+  await assertResetPasswordApiValidation(devUrl)
   await assertExampleAppAuthFlow({
     baseUrl: devUrl,
     getOutput: () => capturedOutput,
     appName: 'blog-sveltekit',
     sessionCookieName: DEFAULT_SESSION_COOKIE_NAME,
+    loginRequiresCsrf: true,
   })
   await assertExampleAppTokenAuthFlow({
     baseUrl: devUrl,

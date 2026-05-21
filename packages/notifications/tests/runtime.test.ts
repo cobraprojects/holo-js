@@ -661,6 +661,150 @@ describe('@holo-js/notifications runtime', () => {
     )
   })
 
+  it('validates queue resolver options before loading the queue integration', async () => {
+    const loadQueueModule = vi.fn(async () => createQueueModuleStub().module)
+
+    notificationsRuntimeInternals.setQueueModuleLoader(loadQueueModule)
+
+    const blankQueue = await notify({
+      email: 'ava@example.com',
+    }, defineNotification({
+      via() {
+        return ['email']
+      },
+      queue() {
+        return {
+          queue: '   ',
+        }
+      },
+      build: {
+        email() {
+          return {
+            subject: 'Queued email',
+          }
+        },
+      },
+    }))
+
+    expect(blankQueue.channels).toEqual([
+      expect.objectContaining({
+        channel: 'email',
+        targetIndex: 0,
+        queued: false,
+        success: false,
+        error: expect.any(Error),
+      }),
+    ])
+    expect((blankQueue.channels[0] as { error: Error }).error.message).toContain(
+      'Notification queue name must be a non-empty string',
+    )
+    expect(loadQueueModule).not.toHaveBeenCalled()
+
+    const negativeQueueDelay = await notify({
+      email: 'ava@example.com',
+    }, defineNotification({
+      via() {
+        return ['email']
+      },
+      queue() {
+        return {
+          delay: -1,
+        }
+      },
+      build: {
+        email() {
+          return {
+            subject: 'Queued email',
+          }
+        },
+      },
+    }))
+
+    expect(negativeQueueDelay.channels).toEqual([
+      expect.objectContaining({
+        channel: 'email',
+        targetIndex: 0,
+        queued: false,
+        success: false,
+        error: expect.any(Error),
+      }),
+    ])
+    expect((negativeQueueDelay.channels[0] as { error: Error }).error.message).toContain(
+      'Notification queue delay must be a finite number greater than or equal to 0',
+    )
+    expect(loadQueueModule).not.toHaveBeenCalled()
+  })
+
+  it('validates delay resolver values before loading the queue integration', async () => {
+    const loadQueueModule = vi.fn(async () => createQueueModuleStub().module)
+
+    notificationsRuntimeInternals.setQueueModuleLoader(loadQueueModule)
+
+    const negativeDelay = await notify({
+      email: 'ava@example.com',
+    }, defineNotification({
+      via() {
+        return ['email']
+      },
+      delay() {
+        return -1
+      },
+      build: {
+        email() {
+          return {
+            subject: 'Delayed email',
+          }
+        },
+      },
+    }))
+
+    expect(negativeDelay.channels).toEqual([
+      expect.objectContaining({
+        channel: 'email',
+        targetIndex: 0,
+        queued: false,
+        success: false,
+        error: expect.any(Error),
+      }),
+    ])
+    expect((negativeDelay.channels[0] as { error: Error }).error.message).toContain(
+      'Notification delay must be a finite number greater than or equal to 0',
+    )
+    expect(loadQueueModule).not.toHaveBeenCalled()
+
+    const invalidDateDelay = await notify({
+      email: 'ava@example.com',
+    }, defineNotification({
+      via() {
+        return ['email']
+      },
+      delay() {
+        return new Date(Number.NaN)
+      },
+      build: {
+        email() {
+          return {
+            subject: 'Delayed email',
+          }
+        },
+      },
+    }))
+
+    expect(invalidDateDelay.channels).toEqual([
+      expect.objectContaining({
+        channel: 'email',
+        targetIndex: 0,
+        queued: false,
+        success: false,
+        error: expect.any(Error),
+      }),
+    ])
+    expect((invalidDateDelay.channels[0] as { error: Error }).error.message).toContain(
+      'Notification delay dates must be valid Date instances',
+    )
+    expect(loadQueueModule).not.toHaveBeenCalled()
+  })
+
   it('defers notification delivery until commit when afterCommit runs inside a transaction', async () => {
     const mailer = {
       send: vi.fn(async () => {}),
@@ -1095,6 +1239,7 @@ describe('@holo-js/notifications runtime', () => {
       throw customQueueError
     })
     await expect(notificationsRuntimeInternals.loadQueueModule()).rejects.toBe(customQueueError)
+    notificationsRuntimeInternals.setQueueModuleLoader(undefined)
 
     const dbMissing = new Error('db missing') as Error & { code?: string }
     dbMissing.code = 'ERR_MODULE_NOT_FOUND'
@@ -1390,6 +1535,75 @@ describe('@holo-js/notifications runtime', () => {
     }, 'email')).toEqual({
       queue: 'notifications',
     })
+    expect(notificationsRuntimeInternals.resolveNotificationQueueOptions({
+      via() {
+        return ['email']
+      },
+      build: {
+        email() {
+          return {
+            subject: 'Hello',
+          }
+        },
+      },
+      queue() {
+        return undefined as never
+      },
+    }, {
+      index: 0,
+      anonymous: false,
+      notifiable: {},
+    }, 'email')).toBe(false)
+    expect(notificationsRuntimeInternals.resolveNotificationQueueOptions({
+      via() {
+        return ['email']
+      },
+      build: {
+        email() {
+          return {
+            subject: 'Hello',
+          }
+        },
+      },
+      queue() {
+        return {
+          connection: ' redis ',
+          queue: ' notifications ',
+          delay: 5,
+          afterCommit: true,
+        }
+      },
+    }, {
+      index: 0,
+      anonymous: false,
+      notifiable: {},
+    }, 'email')).toEqual({
+      connection: 'redis',
+      queue: 'notifications',
+      delay: 5,
+      afterCommit: true,
+    })
+    expect(() => notificationsRuntimeInternals.resolveNotificationQueueOptions({
+      via() {
+        return ['email']
+      },
+      build: {
+        email() {
+          return {
+            subject: 'Hello',
+          }
+        },
+      },
+      queue() {
+        return {
+          afterCommit: 'yes',
+        } as never
+      },
+    }, {
+      index: 0,
+      anonymous: false,
+      notifiable: {},
+    }, 'email')).toThrow('Notification queue afterCommit must be a boolean')
 
     expect(notificationsRuntimeInternals.resolveNotificationDelay({
       via() {
@@ -1445,6 +1659,44 @@ describe('@holo-js/notifications runtime', () => {
       anonymous: false,
       notifiable: {},
     }, 'email')).toBe(45)
+    expect(notificationsRuntimeInternals.resolveNotificationDelay({
+      via() {
+        return ['email']
+      },
+      build: {
+        email() {
+          return {
+            subject: 'Hello',
+          }
+        },
+      },
+      delay() {
+        return undefined
+      },
+    }, {
+      index: 0,
+      anonymous: false,
+      notifiable: {},
+    }, 'email')).toBeUndefined()
+    expect(notificationsRuntimeInternals.resolveNotificationDelay({
+      via() {
+        return ['email']
+      },
+      build: {
+        email() {
+          return {
+            subject: 'Hello',
+          }
+        },
+      },
+      delay() {
+        return delayedAt
+      },
+    }, {
+      index: 0,
+      anonymous: false,
+      notifiable: {},
+    }, 'email')).toBe(delayedAt)
 
     expect(() => notificationsRuntimeInternals.resolveRoute('email', {
       index: 0,

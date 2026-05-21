@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomInt, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import type { NormalizedHoloBroadcastConfig, NormalizedHoloQueueConfig, NormalizedHoloRedisConfig } from '@holo-js/config'
@@ -355,6 +355,18 @@ function createPusherSignature(secret: string, method: string, pathname: string,
     .join('&')
   const payload = `${method.toUpperCase()}\n${pathname}\n${sorted}`
   return createHmac('sha256', secret).update(payload).digest('hex')
+}
+
+function verifyPusherSignature(providedSignature: string, expectedSignature: string): boolean {
+  if (
+    providedSignature.length !== expectedSignature.length
+    || !/^[a-f0-9]+$/i.test(providedSignature)
+    || !/^[a-f0-9]+$/i.test(expectedSignature)
+  ) {
+    return false
+  }
+
+  return timingSafeEqual(Buffer.from(providedSignature, 'hex'), Buffer.from(expectedSignature, 'hex'))
 }
 
 function logSocketMessageError(socketId: string, error: unknown): void {
@@ -1408,7 +1420,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       return new Response(message, { status: 401 })
     }
 
-    if (providedSignature !== expectedSignature) {
+    if (!verifyPusherSignature(providedSignature, expectedSignature)) {
       return new Response('Invalid auth signature', { status: 401 })
     }
 
@@ -1947,6 +1959,7 @@ export const workerInternals = {
   createScalingNodeId,
   createRedisScalingAdapter,
   createPusherSignature,
+  verifyPusherSignature,
   createSocketId,
   resolveRedisScalingConnection,
   resolveScalingEventChannel,

@@ -393,11 +393,6 @@ export function createRedisCacheDriver(options: RedisCacheDriverOptions): CacheD
       return true
     },
     async add(input: CacheDriverPutInput): Promise<boolean> {
-      if (typeof input.expiresAt === 'number' && input.expiresAt <= now()) {
-        await client.del(input.key)
-        return true
-      }
-
       if (typeof input.expiresAt === 'number') {
         return (await client.set(input.key, input.payload, 'PXAT', input.expiresAt, 'NX')) === 'OK'
       }

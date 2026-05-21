@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 describe('@holo-js/adapter-sveltekit package boundaries', () => {
-  it('keeps forms client surface optional and leaves auth helpers in @holo-js/auth', async () => {
+  it('keeps forms on the client surface and leaves auth helpers in @holo-js/auth', async () => {
     const packageJsonPath = resolve(import.meta.dirname, '../package.json')
     const indexEntryPath = resolve(import.meta.dirname, '../src/index.ts')
     const clientEntryPath = resolve(import.meta.dirname, '../src/client.ts')
@@ -27,6 +27,6 @@ describe('@holo-js/adapter-sveltekit package boundaries', () => {
     expect(packageJson.peerDependencies?.['@holo-js/auth']).toBeUndefined()
     expect(packageJson.dependencies?.['@holo-js/forms']).toBeUndefined()
     expect(packageJson.peerDependencies?.['@holo-js/forms']).toBeDefined()
-    expect(packageJson.peerDependenciesMeta?.['@holo-js/forms']?.optional).toBe(true)
+    expect(packageJson.peerDependenciesMeta?.['@holo-js/forms']?.optional).toBeUndefined()
   })
 })

@@ -94,6 +94,10 @@ export function getContentSize(value: BinaryContent): number {
     return value.byteLength
   }
 
+  if (value instanceof ArrayBuffer) {
+    return value.byteLength
+  }
+
   return (value as Blob).size
 }
 

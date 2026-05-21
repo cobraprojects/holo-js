@@ -32,6 +32,9 @@ export type {
   HoloQueueConfig,
 } from './contracts'
 
+type QueueRedisInlineConfig = NonNullable<QueueRedisConnectionConfig['redis']>
+type QueueRedisInlineClusterNodes = NonNullable<QueueRedisInlineConfig['clusters']>
+
 export const DEFAULT_QUEUE_CONNECTION = 'sync'
 export const DEFAULT_QUEUE_NAME = 'default'
 export const DEFAULT_QUEUE_RETRY_AFTER = 90
@@ -40,6 +43,9 @@ export const DEFAULT_QUEUE_SLEEP = 1
 export const DEFAULT_FAILED_JOBS_CONNECTION = 'default'
 export const DEFAULT_FAILED_JOBS_TABLE = 'failed_jobs'
 export const DEFAULT_DATABASE_QUEUE_TABLE = 'jobs'
+export const DEFAULT_REDIS_HOST = '127.0.0.1'
+export const DEFAULT_REDIS_PORT = 6379
+export const DEFAULT_REDIS_DB = 0
 
 const DEFAULT_QUEUE_CONFIG: Readonly<NormalizedHoloQueueConfig> = Object.freeze({
   default: DEFAULT_QUEUE_CONNECTION,
@@ -103,6 +109,10 @@ function normalizeQueueName(value: string | undefined): string {
   return value?.trim() || DEFAULT_QUEUE_NAME
 }
 
+function normalizeOptionalRedisString(value: string | undefined): string | undefined {
+  return value?.trim() || undefined
+}
+
 function normalizeSyncConnection(
   name: string,
   config: QueueSyncConnectionConfig,
@@ -130,6 +140,99 @@ function resolveSharedRedisConnection(
   return resolvedConnection
 }
 
+function parseRedisDatabaseFromUrl(url: string | undefined, label: string): number | undefined {
+  if (typeof url === 'undefined') {
+    return undefined
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch (error) {
+    throw new Error(`[Holo Queue] ${label} is invalid: ${String(error)}`)
+  }
+
+  if (parsed.protocol !== 'redis:' && parsed.protocol !== 'rediss:') {
+    throw new Error(`[Holo Queue] ${label} is invalid: unsupported protocol "${parsed.protocol}".`)
+  }
+
+  const pathname = parsed.pathname.replace(/^\/+/, '')
+  if (!pathname) {
+    return undefined
+  }
+
+  const [databaseSegment] = pathname.split('/')
+  if (!databaseSegment || !/^\d+$/.test(databaseSegment) || pathname !== databaseSegment) {
+    throw new Error(`[Holo Queue] ${label} must include at most one integer database path segment.`)
+  }
+
+  return Number(databaseSegment)
+}
+
+function normalizeRedisClusterNodes(
+  connectionName: string,
+  nodes: QueueRedisInlineClusterNodes | undefined,
+): NormalizedQueueRedisConnectionConfig['redis']['clusters'] {
+  if (!nodes || nodes.length === 0) {
+    return undefined
+  }
+
+  return Object.freeze(nodes.map((node, index) => {
+    const label = `queue connection "${connectionName}" redis cluster node ${index + 1}`
+    const url = normalizeOptionalRedisString(node.url)
+
+    if (typeof url !== 'undefined') {
+      const database = parseRedisDatabaseFromUrl(url, `${label} url`)
+      if (typeof database !== 'undefined') {
+        throw new Error(`[Holo Queue] ${label} url cannot include a database path in cluster mode.`)
+      }
+    }
+
+    return Object.freeze({
+      ...(typeof url === 'undefined' ? {} : { url }),
+      host: normalizeOptionalRedisString(node.host) ?? DEFAULT_REDIS_HOST,
+      port: parseInteger(node.port, DEFAULT_REDIS_PORT, `${label} port`, {
+        minimum: 1,
+      }),
+    })
+  }))
+}
+
+function normalizeRedisOptions(
+  connectionName: string,
+  base: QueueSharedRedisConnectionConfig | undefined,
+  overrides: QueueRedisConnectionConfig['redis'] | undefined,
+): NormalizedQueueRedisConnectionConfig['redis'] {
+  const hasTargetOverride = typeof overrides?.url !== 'undefined'
+    || typeof overrides?.clusters !== 'undefined'
+    || typeof overrides?.host !== 'undefined'
+    || typeof overrides?.port !== 'undefined'
+  const url = normalizeOptionalRedisString(overrides?.url) ?? (hasTargetOverride ? undefined : base?.url)
+  const clusters = typeof overrides?.clusters === 'undefined'
+    ? hasTargetOverride ? undefined : base?.clusters
+    : normalizeRedisClusterNodes(connectionName, overrides.clusters)
+  const dbFromUrl = parseRedisDatabaseFromUrl(url, `queue connection "${connectionName}" redis url`)
+  const db = parseInteger(overrides?.db ?? base?.db ?? dbFromUrl, DEFAULT_REDIS_DB, `queue connection "${connectionName}" redis db`, {
+    minimum: 0,
+  })
+
+  if (typeof clusters !== 'undefined' && db !== 0) {
+    throw new Error(`[Holo Queue] queue connection "${connectionName}" cannot select redis.db=${db} in cluster mode; Redis Cluster only supports database 0.`)
+  }
+
+  return Object.freeze({
+    ...(typeof url === 'undefined' ? {} : { url }),
+    ...(typeof clusters === 'undefined' ? {} : { clusters }),
+    host: normalizeOptionalRedisString(overrides?.host) ?? base?.host ?? DEFAULT_REDIS_HOST,
+    port: parseInteger(overrides?.port ?? base?.port, DEFAULT_REDIS_PORT, `queue connection "${connectionName}" redis port`, {
+      minimum: 1,
+    }),
+    password: normalizeOptionalRedisString(overrides?.password) ?? base?.password,
+    username: normalizeOptionalRedisString(overrides?.username) ?? base?.username,
+    db,
+  })
+}
+
 function normalizeRedisConnection(
   name: string,
   config: QueueRedisConnectionConfig,
@@ -137,24 +240,26 @@ function normalizeRedisConnection(
 ): NormalizedQueueRedisConnectionConfig {
   const explicitConnectionName = config.connection?.trim()
   const connectionName = explicitConnectionName || redisConfig?.default
-  if (!connectionName) {
+  if (!connectionName && !config.redis) {
     throw new Error(
       `[Holo Queue] Queue Redis connection "${name}" requires a shared Redis config with a default connection or an explicit connection name.`,
     )
   }
 
-  if (!redisConfig) {
+  if (!redisConfig && !config.redis) {
     throw new Error(
       `[Holo Queue] Queue Redis connection "${name}" references shared Redis connection "${connectionName}" but no shared Redis config was provided.`,
     )
   }
 
-  const resolvedRedisConnection = resolveSharedRedisConnection(redisConfig, connectionName)
+  const resolvedRedisConnection = redisConfig && connectionName
+    ? resolveSharedRedisConnection(redisConfig, connectionName)
+    : undefined
 
   return Object.freeze({
     name,
     driver: 'redis',
-    connection: resolvedRedisConnection.name,
+    connection: resolvedRedisConnection?.name ?? connectionName ?? name,
     queue: normalizeQueueName(config.queue),
     retryAfter: parseInteger(config.retryAfter, DEFAULT_QUEUE_RETRY_AFTER, `queue connection "${name}" retryAfter`, {
       minimum: 0,
@@ -162,15 +267,7 @@ function normalizeRedisConnection(
     blockFor: parseInteger(config.blockFor, DEFAULT_QUEUE_BLOCK_FOR, `queue connection "${name}" blockFor`, {
       minimum: 0,
     }),
-    redis: Object.freeze({
-      ...(typeof resolvedRedisConnection.url === 'undefined' ? {} : { url: resolvedRedisConnection.url }),
-      ...(typeof resolvedRedisConnection.clusters === 'undefined' ? {} : { clusters: resolvedRedisConnection.clusters }),
-      host: resolvedRedisConnection.host,
-      port: resolvedRedisConnection.port,
-      password: resolvedRedisConnection.password,
-      username: resolvedRedisConnection.username,
-      db: resolvedRedisConnection.db,
-    }),
+    redis: normalizeRedisOptions(name, resolvedRedisConnection, config.redis),
   })
 }
 

@@ -187,6 +187,52 @@ async function waitForRedirect(url, expectedPath, timeoutMs = 30000) {
   throw new Error(`Timed out waiting for ${url} to redirect to ${expectedPath}${lastError instanceof Error ? `: ${lastError.message}` : ''}`)
 }
 
+async function assertSuperAdminLogoutStillNavigatesAfterRefreshFailure() {
+  const source = await readFile(join(cwd, 'app/pages/super-admin/index.vue'), 'utf8')
+  const refreshWarning = "console.warn('Super admin auth refresh failed after logout.', error)"
+  const navigation = "await navigateTo('/super-admin/login')"
+
+  assert.ok(
+    source.includes(refreshWarning),
+    'Expected super-admin logout to treat post-logout auth refresh failures as non-blocking.',
+  )
+  assert.ok(
+    source.indexOf(navigation) > source.indexOf(refreshWarning),
+    'Expected super-admin logout to navigate after the best-effort auth refresh.',
+  )
+}
+
+async function assertHeaderLogoutStillNavigatesAfterRefreshFailure() {
+  const source = await readFile(join(cwd, 'app/app.vue'), 'utf8')
+  const refreshWarning = "console.warn('Auth refresh failed after logout.', error)"
+  const navigation = "await navigateTo('/')"
+
+  assert.ok(
+    source.includes(refreshWarning),
+    'Expected header logout to treat post-logout auth refresh failures as non-blocking.',
+  )
+  assert.ok(
+    source.indexOf(navigation) > source.indexOf(refreshWarning),
+    'Expected header logout to navigate after the best-effort auth refresh.',
+  )
+}
+
+async function assertSuperAdminLoginUsesVerificationRedirect() {
+  const source = await readFile(join(cwd, 'server/api/super-admin/login.post.ts'), 'utf8')
+  assert.ok(
+    source.includes('session.emailVerificationRequired'),
+    'Expected super-admin login to branch on email verification state.',
+  )
+  assert.ok(
+    source.includes("session.emailVerificationRoute ?? '/verify-email'"),
+    'Expected unverified super-admin login to redirect to the email verification route.',
+  )
+  assert.ok(
+    source.includes(": '/super-admin'"),
+    'Expected verified super-admin login to keep the dashboard redirect.',
+  )
+}
+
 function pipeOutput(stream, target) {
   if (!stream) {
     return
@@ -221,6 +267,9 @@ function killChildTree() {
 
 try {
   await rm(nuxtCachePath, { recursive: true, force: true })
+  await assertSuperAdminLogoutStillNavigatesAfterRefreshFailure()
+  await assertHeaderLogoutStillNavigatesAfterRefreshFailure()
+  await assertSuperAdminLoginUsesVerificationRedirect()
   await run('bun', ['run', 'prepare'])
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await run('npx', ['tsx', 'tests/blog-logic.mjs'])
@@ -250,6 +299,7 @@ try {
     getOutput: () => capturedOutput,
     appName: 'blog-nuxt',
     sessionCookieName: DEFAULT_SESSION_COOKIE_NAME,
+    loginRequiresCsrf: true,
   })
   await assertExampleAppTokenAuthFlow({
     baseUrl: `http://localhost:${port}`,

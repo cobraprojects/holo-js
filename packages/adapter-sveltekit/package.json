@@ -41,11 +41,6 @@
     "@holo-js/forms": "catalog:",
     "@sveltejs/kit": "catalog:"
   },
-  "peerDependenciesMeta": {
-    "@holo-js/forms": {
-      "optional": true
-    }
-  },
   "devDependencies": {
     "@sveltejs/kit": "catalog:",
     "@types/node": "catalog:",

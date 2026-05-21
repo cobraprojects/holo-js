@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { SerializedSvelteKitData } from '../src/transport'
+import { serializeSvelteKitData, type SerializedSvelteKitData } from '../src/transport'
 import {
   linkInstalledDependenciesForPackage,
   stagePublishedPackage,
@@ -85,6 +85,7 @@ describe('@holo-js/adapter-sveltekit typing', () => {
   })
 
   it('preserves serialized payload inference for transport serialization', async () => {
+    const publishedAt = new Date()
     const model = {
       id: 1,
       name: 'Amina',
@@ -99,10 +100,22 @@ describe('@holo-js/adapter-sveltekit typing', () => {
     type LoadResult = SerializedSvelteKitData<{
       user: typeof model
       users: typeof model[]
+      publishedAt: Date
+      nested: {
+        dates: Date[]
+      }
     }>
     type SerializedValue = SerializedSvelteKitData<typeof model>
     type UserResult = LoadResult extends { user: infer TResult } ? TResult : never
     type UsersResult = LoadResult extends { users: readonly (infer TResult)[] } ? TResult : never
+    type PublishedAtResult = LoadResult extends { publishedAt: infer TResult } ? TResult : never
+    type NestedDateResult = LoadResult extends {
+      nested: {
+        dates: readonly (infer TResult)[]
+      }
+    }
+      ? TResult
+      : never
 
     const userResult: UserResult = {
       id: 1,
@@ -116,10 +129,28 @@ describe('@holo-js/adapter-sveltekit typing', () => {
       id: 1,
       name: 'Amina',
     }
+    const publishedAtResult: PublishedAtResult = publishedAt
+    const nestedDateResult: NestedDateResult = publishedAt
+    const serialized = serializeSvelteKitData({
+      publishedAt,
+      nested: {
+        dates: [publishedAt],
+      },
+    })
+    const serializedPublishedAt: Date = serialized.publishedAt
+    const [serializedNestedDate] = serialized.nested.dates
+    if (!serializedNestedDate) {
+      throw new Error('Expected a nested Date value')
+    }
+    const serializedNestedDateResult: Date = serializedNestedDate
 
     void userResult
     void usersResult
     void serializedValue
+    void publishedAtResult
+    void nestedDateResult
+    void serializedPublishedAt
+    void serializedNestedDateResult
   })
 
   it('publishes a client declaration that type-checks under NodeNext resolution', async () => {

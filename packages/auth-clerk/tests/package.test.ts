@@ -1884,11 +1884,19 @@ describe('@holo-js/auth-clerk', () => {
       },
     })
 
-    await expect(authenticate(new Request('https://app.test/me', {
+    const error = await authenticate(new Request('https://app.test/me', {
       headers: {
         authorization: 'Bearer conflict-token',
       },
-    }))).rejects.toBeInstanceOf(ClerkAuthConflictError)
+    })).then(
+      () => null,
+      (caught: unknown) => caught,
+    )
+
+    expect(error).toBeInstanceOf(ClerkAuthConflictError)
+    expect(error).toMatchObject({
+      provider: 'app',
+    })
   })
 
   it('supports Clerk auth against a non-default guard and provider model', async () => {

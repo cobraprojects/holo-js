@@ -147,9 +147,11 @@ const form = useForm(loginForm, {
 'use client'
 
 import { useAuth } from '@holo-js/auth/next/client'
+import { useRouter } from 'next/navigation'
 
 export function AuthNav() {
   const auth = useAuth()
+  const router = useRouter()
   const displayName = auth.user?.name ?? auth.user?.email ?? 'Account'
 
   async function logout() {
@@ -158,7 +160,13 @@ export function AuthNav() {
       return
     }
 
-    await auth.refreshUser()
+    try {
+      await auth.refreshUser()
+    } catch (error) {
+      console.warn('Auth refresh failed after logout.', error)
+    }
+
+    router.replace('/')
   }
 
   if (!auth.authenticated) {
@@ -188,7 +196,12 @@ const displayName = computed(() => user.value?.name ?? user.value?.email ?? 'Acc
 
 async function logout() {
   await $fetch('/api/logout', { method: 'POST' })
-  await refreshUser()
+  try {
+    await refreshUser()
+  } catch (error) {
+    console.warn('Auth refresh failed after logout.', error)
+  }
+
   await navigateTo('/')
 }
 </script>
@@ -226,8 +239,17 @@ async function logout() {
       return
     }
 
-    await auth.refreshUser()
-    await invalidateAll()
+    try {
+      await auth.refreshUser()
+    } catch (error) {
+      console.warn('Auth refresh failed after logout.', error)
+    }
+
+    try {
+      await invalidateAll()
+    } catch (error) {
+      console.warn('Auth invalidation failed after logout.', error)
+    }
   }
 </script>
 

@@ -1942,6 +1942,82 @@ describe('@holo-js/auth package runtime', () => {
     ).resolves.toBe(true)
   })
 
+  it('does not verify email when verification token deletion fails', async () => {
+    const runtime = configureRuntime()
+    const created = unwrapAuthResult(await register({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: 'secret-secret',
+      passwordConfirmation: 'secret-secret',
+    }))
+    const token = await verification.create(created)
+    const deleteToken = runtime.emailVerificationTokenStore.delete
+    runtime.emailVerificationTokenStore.delete = async () => {
+      throw new Error('verification token delete failed')
+    }
+
+    try {
+      await expect(verifyEmail(token.plainTextToken)).rejects.toThrow('verification token delete failed')
+    } finally {
+      runtime.emailVerificationTokenStore.delete = deleteToken
+    }
+
+    expect(runtime.usersProvider.users.get(1)?.email_verified_at).toBeNull()
+    expect(runtime.emailVerificationTokenStore.records.has(token.id)).toBe(true)
+  })
+
+  it('does not reset the password when reset token deletion fails', async () => {
+    const runtime = configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 0,
+          },
+        },
+      },
+    })
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+    await requestPasswordReset({ email: 'ava@example.com' })
+    const resetDelivery = runtime.deliveries[0]!
+    const deleteToken = runtime.passwordResetTokenStore.delete
+    runtime.passwordResetTokenStore.delete = async () => {
+      throw new Error('password reset token delete failed')
+    }
+
+    try {
+      await expect(resetPassword({
+        token: resetDelivery.tokenValue,
+        password: 'new-secret',
+        passwordConfirmation: 'new-secret',
+      })).rejects.toThrow('password reset token delete failed')
+    } finally {
+      runtime.passwordResetTokenStore.delete = deleteToken
+    }
+
+    expect(runtime.passwordResetTokenStore.records.has(resetDelivery.tokenId)).toBe(true)
+    await expect(
+      authRuntimeInternals.createDefaultPasswordHasher().verify(
+        'secret-secret',
+        runtime.usersProvider.users.get(1)?.password ?? '',
+      ),
+    ).resolves.toBe(true)
+    await expect(
+      authRuntimeInternals.createDefaultPasswordHasher().verify(
+        'new-secret',
+        runtime.usersProvider.users.get(1)?.password ?? '',
+      ),
+    ).resolves.toBe(false)
+  })
+
   it('creates, invalidates, and consumes password reset tokens', async () => {
     const runtime = configureRuntime({
       authConfig: {

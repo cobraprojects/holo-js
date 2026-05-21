@@ -34,7 +34,7 @@
   "scripts": {
     "build": "tsup",
     "stub": "tsup",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.type-tests.json --noEmit",
     "test": "vitest --run"
   },
   "dependencies": {

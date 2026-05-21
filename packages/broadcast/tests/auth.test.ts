@@ -53,6 +53,7 @@ describe('@holo-js/broadcast channel auth runtime', () => {
               return {
                 id: String((user as { id: string }).id),
                 roomId: params.roomId,
+                score: 1,
               }
             },
           }),
@@ -105,6 +106,7 @@ describe('@holo-js/broadcast channel auth runtime', () => {
       member: {
         id: 'user_1',
         roomId: 'room_9',
+        score: 1,
       },
     })
 
@@ -126,6 +128,7 @@ describe('@holo-js/broadcast channel auth runtime', () => {
       member: {
         id: 'user_1',
         roomId: 'room_9',
+        score: 1,
       },
     })
 
@@ -229,6 +232,81 @@ describe('@holo-js/broadcast channel auth runtime', () => {
       channel: 'orders.ord_2',
     })
     expect(importModule).toHaveBeenCalledTimes(2)
+  })
+
+  it('retries registry loading after a failed import', async () => {
+    let attempts = 0
+    const importModule = vi.fn(async () => {
+      attempts += 1
+      if (attempts === 1) {
+        throw new Error('temporary registry failure')
+      }
+
+      return {
+        default: defineChannel('orders.{orderId}', {
+          type: 'private',
+          authorize() {
+            return true
+          },
+        }),
+      }
+    })
+    const channelAuth = {
+      registry: {
+        projectRoot: '/virtual/project',
+        channels: [{
+          sourcePath: 'server/channels/orders-channel.ts',
+          pattern: 'orders.{orderId}',
+          type: 'private' as const,
+          params: ['orderId'],
+          whispers: [],
+        }],
+      },
+      importModule,
+    }
+
+    await expect(authorizeBroadcastChannel({
+      channel: 'orders.ord_1',
+      user: {
+        id: 'user_1',
+      },
+    }, channelAuth)).rejects.toThrow('temporary registry failure')
+
+    await expect(authorizeBroadcastChannel({
+      channel: 'orders.ord_1',
+      user: {
+        id: 'user_1',
+      },
+    }, channelAuth)).resolves.toMatchObject({
+      ok: true,
+      channel: 'orders.ord_1',
+    })
+    expect(importModule).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects non-finite presence member numbers', async () => {
+    configureBroadcastRuntime({
+      channelAuth: {
+        definitions: [
+          defineChannel('chat.{roomId}', {
+            type: 'presence',
+            authorize() {
+              return {
+                id: 'user_1',
+                score: Number.NaN,
+              }
+            },
+          }),
+        ],
+      },
+    })
+
+    await expect(authorizeBroadcastChannel({
+      channel: 'chat.room_1',
+      user: {
+        id: 'user_1',
+      },
+    })).rejects.toThrow('JSON-serializable')
   })
 
   it('rejects duplicate channel patterns instead of silently overwriting them', async () => {

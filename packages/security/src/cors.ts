@@ -8,14 +8,14 @@ function matchesPathPattern(pathname: string, pattern: string): boolean {
     return pathname === pattern
   }
 
-  const firstSegment = segments[0] ?? ''
+  const firstSegment = segments[0] as string
   if (firstSegment && !pathname.startsWith(firstSegment)) {
     return false
   }
 
   let position = firstSegment.length
   for (let index = 1; index < segments.length; index += 1) {
-    const segment = segments[index] ?? ''
+    const segment = segments[index] as string
     if (!segment) {
       continue
     }
@@ -28,7 +28,7 @@ function matchesPathPattern(pathname: string, pattern: string): boolean {
     position = nextPosition + segment.length
   }
 
-  const lastSegment = segments[segments.length - 1] ?? ''
+  const lastSegment = segments[segments.length - 1] as string
   return pattern.endsWith('*') || pathname.endsWith(lastSegment)
 }
 
@@ -91,6 +91,11 @@ export function headers(request: Request): Headers {
   }
 
   const origin = request.headers.get('origin')
+  if (origin === null) {
+    appendVary(result, 'Origin')
+    return result
+  }
+
   const allowedOrigin = resolveAllowedOrigin(config, origin)
   if (!allowedOrigin) {
     appendVary(result, 'Origin')
@@ -100,7 +105,7 @@ export function headers(request: Request): Headers {
   result.set('Access-Control-Allow-Origin', allowedOrigin)
   appendVary(result, 'Origin')
 
-  if (config.credentials || isStatefulOrigin(config, origin ?? '')) {
+  if (config.credentials || isStatefulOrigin(config, origin)) {
     result.set('Access-Control-Allow-Credentials', 'true')
   }
 

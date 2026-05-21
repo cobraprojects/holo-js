@@ -74,6 +74,14 @@ type RequestLikeHeaders =
     readonly entries?: () => Iterable<readonly [string, string]>
   }
 
+interface StructuredRequestLikeObject {
+  readonly method?: string
+  readonly path?: string
+  readonly url?: string | URL
+  readonly headers?: RequestLikeHeaders
+  readonly body?: unknown
+}
+
 interface FormFailureMetadata {
   readonly retryAfterSeconds?: number
   readonly retryAt?: string
@@ -100,7 +108,7 @@ export interface FormRequestLikeInput {
     }
   }
   readonly web?: {
-    readonly request?: Request
+    readonly request?: Request | StructuredRequestLikeObject
   }
 }
 
@@ -363,8 +371,15 @@ function normalizeRequestHeaders(input: unknown): Headers {
   return headers
 }
 
+function getStructuredWebRequest(input: FormRequestLikeInput): StructuredRequestLikeObject | undefined {
+  return input.web?.request instanceof Request
+    ? undefined
+    : input.web?.request
+}
+
 function extractRequestLikeUrl(input: FormRequestLikeInput, headers: Headers): string {
-  const url = input.web?.request?.url
+  const webRequest = getStructuredWebRequest(input)
+  const url = webRequest?.url
     ?? (typeof input.url === 'string' ? input.url : input.url?.toString())
     ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.url : undefined)
     ?? input.node?.req?.url
@@ -381,7 +396,8 @@ function extractRequestLikeUrl(input: FormRequestLikeInput, headers: Headers): s
 }
 
 function extractRequestLikeMethod(input: FormRequestLikeInput): string {
-  return input.web?.request?.method
+  const webRequest = getStructuredWebRequest(input)
+  return webRequest?.method
     ?? input.method
     ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.method : undefined)
     ?? input.node?.req?.method
@@ -397,7 +413,9 @@ function extractRequestLikeBody(
     return undefined
   }
 
-  const rawBody = input.body
+  const webRequest = getStructuredWebRequest(input)
+  const rawBody = webRequest?.body
+    ?? input.body
     ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.body : undefined)
     ?? input.node?.req?.body
     ?? input.node?.req
@@ -420,13 +438,7 @@ function extractRequestLikeBody(
   return String(rawBody)
 }
 
-function isStructuredRequestLikeObject(value: unknown): value is {
-  readonly method?: string
-  readonly path?: string
-  readonly url?: string | URL
-  readonly headers?: RequestLikeHeaders
-  readonly body?: unknown
-} {
+function isStructuredRequestLikeObject(value: unknown): value is StructuredRequestLikeObject {
   if (!value || typeof value !== 'object') {
     return false
   }
@@ -498,7 +510,8 @@ function normalizeRequestLikeInput(input: FormLikeValidationInput | FormRequestL
   }
 
   const headers = normalizeRequestHeaders(
-    input.headers
+    getStructuredWebRequest(input)?.headers
+      ?? input.headers
       ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.headers : undefined)
       ?? input.node?.req?.headers,
   )
@@ -609,10 +622,6 @@ export async function validate<TShape extends SchemaInputShape>(
         }
       })()
 
-      if (options.csrf === true) {
-        await security.csrf.verify(verificationRequest)
-      }
-
       if (typeof options.throttle === 'string') {
         const inspection = await validateInput(request.clone(), schemaDefinition as ValidationSchema<TShape>)
         const throttleValues = inspection.valid ? inspection.data : inspection.values
@@ -623,6 +632,10 @@ export async function validate<TShape extends SchemaInputShape>(
           request,
           values: throttleValues,
         })
+      }
+
+      if (options.csrf === true) {
+        await security.csrf.verify(verificationRequest)
       }
     } catch (error) {
       const { formsSecurityInternals } = await import('./security')

@@ -43,6 +43,22 @@ export interface NormalizedMediaConversionDefinition<
   readonly queued: boolean
 }
 
+function normalizePositiveInteger(value: number, fieldName: string): number {
+  if (!Number.isFinite(value)) {
+    throw new Error(`[Holo Media] Media conversion ${fieldName} must be a finite number.`)
+  }
+
+  return Math.max(1, Math.floor(value))
+}
+
+function normalizeQuality(value: number): number {
+  if (!Number.isFinite(value)) {
+    throw new Error('[Holo Media] Media conversion quality must be a finite number.')
+  }
+
+  return Math.max(1, Math.min(100, Math.floor(value)))
+}
+
 function decorateConversion<
   TName extends string,
   TCollectionName extends string,
@@ -71,12 +87,12 @@ function decorateConversion<
     },
     width(pixels: number) {
       return clone({
-        width: Math.max(1, Math.floor(pixels)),
+        width: normalizePositiveInteger(pixels, 'width'),
       })
     },
     height(pixels: number) {
       return clone({
-        height: Math.max(1, Math.floor(pixels)),
+        height: normalizePositiveInteger(pixels, 'height'),
       })
     },
     fit(mode: MediaConversionFit) {
@@ -87,7 +103,7 @@ function decorateConversion<
     },
     quality(value: number) {
       return clone({
-        quality: Math.max(1, Math.min(100, Math.floor(value))),
+        quality: normalizeQuality(value),
       })
     },
     queued() {
@@ -123,13 +139,13 @@ export function normalizeConversionDefinitions<
         definition.collections.filter(Boolean),
       ),
       width: typeof definition.width === 'number'
-        ? Math.max(1, Math.floor(definition.width))
+        ? normalizePositiveInteger(definition.width, 'width')
         : undefined,
       height: typeof definition.height === 'number'
-        ? Math.max(1, Math.floor(definition.height))
+        ? normalizePositiveInteger(definition.height, 'height')
         : undefined,
       quality: typeof definition.quality === 'number'
-        ? Math.max(1, Math.min(100, Math.floor(definition.quality)))
+        ? normalizeQuality(definition.quality)
         : undefined,
       queued: Boolean(definition.queued),
     })

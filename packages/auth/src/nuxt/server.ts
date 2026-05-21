@@ -1,15 +1,17 @@
 import { useAuth } from '../nuxt'
-import { defineNuxtRouteMiddleware, navigateTo } from '#imports'
+import { defineNuxtRouteMiddleware, navigateTo, useCookie } from '#imports'
 
 export type RouteMatcher = string | RegExp | ((pathname: string) => boolean)
 
 export type GuestOnlyOptions = {
+  readonly guard?: string
   readonly redirectTo: string
   readonly routes?: readonly RouteMatcher[]
   readonly status?: 301 | 302 | 303 | 307 | 308
 }
 
 export type AuthOnlyOptions = {
+  readonly guard?: string
   readonly redirectTo: string
   readonly routes?: readonly RouteMatcher[]
   readonly status?: 301 | 302 | 303 | 307 | 308
@@ -70,11 +72,40 @@ function isSamePath(path: string, redirectTo: string): boolean {
     try {
       return new URL(value, 'https://holo.local').pathname
     } catch {
-      return value.split(/[?#]/, 1)[0] ?? value
+      return value.split(/[?#]/, 1).join('')
     }
   }
 
   return normalizePathname(resolvePathname(path)) === normalizePathname(resolvePathname(redirectTo))
+}
+
+function createUseAuthOptions(guard: string | undefined): { readonly guard: string } | undefined {
+  return guard ? { guard } : undefined
+}
+
+async function ensureCsrfCookie(path: string): Promise<void> {
+  if ('window' in globalThis) {
+    return
+  }
+
+  const signingKey = process.env.APP_KEY?.trim()
+  if (!signingKey) {
+    return
+  }
+
+  const {
+    createSignedCsrfToken,
+    defaultCsrfCookieName,
+    resolveCsrfCookieOptions,
+  } = await import('../runtime/csrfCookie')
+  const cookie = useCookie<string | undefined>(defaultCsrfCookieName, resolveCsrfCookieOptions(
+    new URL(path, process.env.APP_URL || 'http://localhost'),
+  ))
+  if (cookie.value) {
+    return
+  }
+
+  cookie.value = await createSignedCsrfToken(signingKey)
 }
 
 export function guestOnly(options: GuestOnlyOptions): GuestOnlyRouteMiddleware {
@@ -83,12 +114,14 @@ export function guestOnly(options: GuestOnlyOptions): GuestOnlyRouteMiddleware {
       return undefined
     }
 
-    const currentAuth = await useAuth()
+    const currentAuth = await useAuth(createUseAuthOptions(options.guard))
     if (!currentAuth.authenticated.value) {
+      await ensureCsrfCookie(to.path)
       return undefined
     }
 
     if (isSamePath(to.path, options.redirectTo)) {
+      await ensureCsrfCookie(to.path)
       return undefined
     }
 
@@ -104,12 +137,14 @@ export function authOnly(options: AuthOnlyOptions): AuthOnlyRouteMiddleware {
       return undefined
     }
 
-    const currentAuth = await useAuth()
+    const currentAuth = await useAuth(createUseAuthOptions(options.guard))
     if (currentAuth.authenticated.value) {
+      await ensureCsrfCookie(to.path)
       return undefined
     }
 
     if (isSamePath(to.path, options.redirectTo)) {
+      await ensureCsrfCookie(to.path)
       return undefined
     }
 
@@ -120,6 +155,7 @@ export function authOnly(options: AuthOnlyOptions): AuthOnlyRouteMiddleware {
 }
 
 export const routeProtectionInternals = {
+  ensureCsrfCookie,
   isSamePath,
   matchesRoute,
   matchesRoutes,

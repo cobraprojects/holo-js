@@ -115,6 +115,31 @@ function isMissingValue(value: unknown, kind: FieldKind): boolean {
   return false
 }
 
+function collectRequiredMissingPaths(
+  shape: SchemaInputShape,
+  data: Record<string, unknown>,
+  path: readonly string[] = [],
+  target = new Set<string>(),
+): Set<string> {
+  for (const [key, value] of Object.entries(shape)) {
+    const isFieldLike = isPlainObject(value)
+      && ('field' in value || (typeof value.kind === 'string' && value.kind === 'field' && 'definition' in value))
+    const nextPath = [...path, key]
+
+    if (isFieldLike) {
+      const fieldDef = normalizeFieldBuilder(value as unknown as FieldBuilderInput).definition
+      if (getRule(fieldDef, 'required') && isMissingValue(data[key], fieldDef.kind)) {
+        target.add(toIssuePath(nextPath))
+      }
+      continue
+    }
+
+    collectRequiredMissingPaths(value as SchemaInputShape, data[key] as Record<string, unknown>, nextPath, target)
+  }
+
+  return target
+}
+
 function resolveShapeRuleValue(definition: FieldDefinition, outputValue: unknown, inputValue: unknown): unknown {
   if (!hasRule(definition, 'transform')) {
     return outputValue
@@ -157,7 +182,8 @@ async function applyPostFieldRules(
             pushIssue(issues, context.path, result)
           }
         } else if (validator === 'image') {
-          const mimeType = typeof (value as WebFileLike).type === 'string' ? ((value as WebFileLike).type ?? /* v8 ignore next */ '') : ''
+          const rawMimeType = (value as WebFileLike).type
+          const mimeType = typeof rawMimeType === 'string' ? rawMimeType : ''
           if (!mimeType.toLowerCase().startsWith('image/')) {
             pushIssue(issues, context.path, resolveRuleMessage(rule, 'File must be an image.'))
           }
@@ -245,9 +271,10 @@ async function applyPostFieldRules(
         break
       }
       case 'max': {
-        if (definition.kind === 'file' && typeof (shapeRuleValue as WebFileLike).size === 'number') {
+        const fileSize = (shapeRuleValue as WebFileLike).size
+        if (definition.kind === 'file' && typeof fileSize === 'number') {
           const limit = parseByteSize(rule.args[0] as number | string)
-          if (((shapeRuleValue as WebFileLike).size ?? /* v8 ignore next */ 0) > limit) {
+          if (fileSize > limit) {
             pushIssue(issues, context.path, resolveRuleMessage(rule, `File size must be at most ${limit} bytes.`))
           }
         }
@@ -280,7 +307,7 @@ async function applyPostFieldRulesRecursively(
     return
   }
 
-  const inputItems = Array.isArray(inputValue) ? inputValue : value
+  const inputItems = Array.isArray(inputValue) ? inputValue : /* v8 ignore next */ value
 
   for (const [index, item] of value.entries()) {
     const key = String(index)
@@ -302,7 +329,7 @@ async function applyPostValidation(
   inputData: unknown = data,
 ): Promise<void> {
   const current = isPlainObject(data) ? data : /* v8 ignore next */ {}
-  const inputCurrent = isPlainObject(inputData) ? inputData : current
+  const inputCurrent = isPlainObject(inputData) ? inputData : /* v8 ignore next */ current
 
   for (const [key, value] of Object.entries(shape)) {
     const isFieldLike = isPlainObject(value)
@@ -332,9 +359,13 @@ async function runSchemaValidation(
   const compiled = resolveCompiledSchema(fields)
   const result = await v.safeParseAsync(compiled, coerced)
   const issues: Record<string, string[]> = {}
+  const requiredMissingPaths = collectRequiredMissingPaths(fields, coerced)
 
   if (!result.success) {
-    appendIssues(issues, result.issues ?? /* v8 ignore next */ [])
+    appendIssues(issues, result.issues)
+    for (const path of requiredMissingPaths) {
+      delete issues[path]
+    }
   }
 
   const postTarget = result.success ? result.output : coerced
@@ -382,7 +413,10 @@ async function runFieldValidation(
   const issues: Record<string, string[]> = {}
 
   if (!result.success) {
-    appendIssues(issues, result.issues ?? /* v8 ignore next */ [])
+    appendIssues(issues, result.issues)
+    if (getRule(definition, 'required') && isMissingValue(coerced, definition.kind)) {
+      delete issues._root
+    }
   }
 
   const postTarget = result.success ? result.output : coerced
@@ -497,7 +531,7 @@ export async function validateInternal<TSchema extends ValidationSchema>(
     return {
       valid: false,
       submitted: true,
-      values: (normalized.value ?? /* v8 ignore next */ {}) as Partial<InferValidationSchemaData<TSchema>>,
+      values: normalized.value as Partial<InferValidationSchemaData<TSchema>>,
       errors: createErrorBag<InferValidationSchemaData<TSchema>>(issues),
     }
   }

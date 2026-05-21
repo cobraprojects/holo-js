@@ -60,10 +60,8 @@ export function createMemoryRateLimitStore(options: MemoryRateLimitStoreOptions 
   pruneTimer.unref?.()
 
   const evictOldestBucket = (): void => {
-    const oldestKey = buckets.keys().next().value as string | undefined
-    if (oldestKey) {
-      buckets.delete(oldestKey)
-    }
+    const oldestKey = buckets.keys().next().value as string
+    buckets.delete(oldestKey)
   }
 
   return {

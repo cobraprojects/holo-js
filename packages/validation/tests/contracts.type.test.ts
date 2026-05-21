@@ -68,6 +68,12 @@ describe('@holo-js/validation typing', () => {
     type TransformedData = InferSchemaData<typeof transformedSchema.fields>
     type TransformAssertion = Expect<Equal<TransformedData, { nameLength: number }>>
 
+    const publishSchema = schema({
+      status: field.string().in(['draft', 'published']),
+    })
+    type PublishData = InferSchemaData<typeof publishSchema.fields>
+    type PublishAssertion = Expect<Equal<PublishData, { status: 'draft' | 'published' }>>
+
     const data: ManualData = {
       name: 'Ava',
       email: 'ava@example.com',
@@ -88,6 +94,7 @@ describe('@holo-js/validation typing', () => {
     void (0 as unknown as ErrorAssertion)
     void (0 as unknown as FieldAssertion)
     void (0 as unknown as TransformAssertion)
+    void (0 as unknown as PublishAssertion)
 
     async function assertTransformParserInference() {
       const parsed = await parse({ nameLength: 'Ava' }, transformedSchema)
@@ -99,6 +106,12 @@ describe('@holo-js/validation typing', () => {
       if (validated.valid) {
         type ValidatedAssertion = Expect<Equal<typeof validated.data, { nameLength: number }>>
         void (0 as unknown as ValidatedAssertion)
+      }
+
+      const publishValidation = await validate({ status: 'draft' }, publishSchema)
+      if (publishValidation.valid) {
+        type PublishValidationAssertion = Expect<Equal<typeof publishValidation.data, { status: 'draft' | 'published' }>>
+        void (0 as unknown as PublishValidationAssertion)
       }
     }
 

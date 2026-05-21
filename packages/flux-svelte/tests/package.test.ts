@@ -1,5 +1,5 @@
 import { get } from 'svelte/store'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { configureFluxClient, createFluxClient, fluxInternals, getFluxClient, resetFluxClient } from '@holo-js/flux'
 import {
   useFlux,
@@ -10,6 +10,11 @@ import {
   useFluxPrivate,
   useFluxPublic,
 } from '../src'
+
+afterEach(() => {
+  vi.doUnmock('svelte')
+  vi.resetModules()
+})
 
 type DebugConnector = {
   emitEvent(channel: string, event: string, payload: Record<string, unknown>): void
@@ -108,6 +113,8 @@ describe('@holo-js/flux-svelte package surface', () => {
     expect(here).toEqual([[]])
     const emptyPresence = useFluxPresence('chat.empty', {}, { client })
     expect(get(emptyPresence.members)).toEqual([])
+    expect('set' in presence.members).toBe(false)
+    expect('update' in presence.members).toBe(false)
     debug.updatePresenceMembers('chat.1', [{ id: 'user_1' }, { id: 'user_2' }])
     expect(get(presence.members)).toEqual([{ id: 'user_1' }, { id: 'user_2' }])
     presence.stopListening()
@@ -127,6 +134,32 @@ describe('@holo-js/flux-svelte package surface', () => {
     await client.disconnect()
     expect(statusChanges).toEqual(['connecting', 'connected', 'disconnected'])
     unmounts.forEach(cleanup => cleanup())
+    expect(debug.getJoinedChannels()).toEqual([])
+  })
+
+  it('registers cleanup through Svelte onDestroy when a component context is available', async () => {
+    let destroyCallback: (() => void) | undefined
+    vi.doMock('svelte', () => ({
+      onDestroy(callback: () => void) {
+        destroyCallback = callback
+      },
+    }))
+    const { useFluxPublic: useMountedFluxPublic } = await import('../src')
+    const client = createFluxClient({
+      connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+    })
+    const debug = (client as unknown as { __debug: DebugConnector }).__debug
+    const fallbackUnmount = vi.fn()
+
+    useMountedFluxPublic('feed.mounted', 'feed.updated', () => undefined, {
+      client,
+      onUnmount: fallbackUnmount,
+    })
+
+    expect(debug.getJoinedChannels()).toContain('public:feed.mounted')
+    expect(fallbackUnmount).not.toHaveBeenCalled()
+    expect(destroyCallback).toBeTypeOf('function')
+    destroyCallback?.()
     expect(debug.getJoinedChannels()).toEqual([])
   })
 })

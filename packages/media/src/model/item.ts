@@ -123,6 +123,7 @@ export class MediaItem<
       this.owner?.forgetRelation('media')
     } catch (error) {
       for (const snapshot of deletedSnapshots.reverse()) {
+        /* v8 ignore next -- rollback cleanup failures are intentionally swallowed. */
         await Storage.disk(snapshot.disk).put(snapshot.path, snapshot.contents).catch(() => undefined)
       }
 

@@ -247,7 +247,20 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       return existing
     }
 
-    return this.create({ ...match, ...values })
+    try {
+      return await this.create({ ...match, ...values })
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) {
+        throw error
+      }
+
+      const concurrent = await query.first()
+      if (concurrent) {
+        return concurrent
+      }
+
+      throw error
+    }
   }
 
   make(values: Partial<ModelRecord<TTable>> = {}): Entity<TTable> {
@@ -4013,4 +4026,42 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
 
     return parameter.replaceAll(/[YmdHis]/g, token => parts[token as keyof typeof parts])
   }
+}
+
+function getErrorCode(error: unknown): string | number | undefined {
+  return error && typeof error === 'object' && 'code' in error
+    ? (error as { readonly code?: string | number }).code
+    : undefined
+}
+
+function getErrorCause(error: unknown): unknown {
+  return error && typeof error === 'object' && 'cause' in error
+    ? (error as { readonly cause?: unknown }).cause
+    : undefined
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  let current: unknown = error
+  while (current) {
+    const code = getErrorCode(current)
+    if (
+      code === '23505'
+      || code === 1062
+      || code === '1062'
+      || code === 'ER_DUP_ENTRY'
+      || code === 'SQLITE_CONSTRAINT'
+      || code === 'SQLITE_CONSTRAINT_UNIQUE'
+      || code === 'SQLITE_CONSTRAINT_PRIMARYKEY'
+    ) {
+      return true
+    }
+
+    if (current instanceof Error && /unique constraint|duplicate entry|unique constraint failed/i.test(current.message)) {
+      return true
+    }
+
+    current = getErrorCause(current)
+  }
+
+  return false
 }

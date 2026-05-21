@@ -32,6 +32,7 @@ import type {
 
 type RuntimeState = {
   savepointCounter: number
+  rootTransactionTail: Promise<void>
   scheduler: QueryScheduler
 }
 
@@ -101,6 +102,7 @@ export class DatabaseContext {
       ? options.runtime
       : {
           savepointCounter: 0,
+          rootTransactionTail: Promise.resolve(),
           scheduler: createQueryScheduler({
             connectionName: this._connectionName,
             supportsConcurrentQueries: this._dialect.capabilities.concurrentQueries,
@@ -310,25 +312,45 @@ export class DatabaseContext {
     const runWithinScope = this._adapter.runWithTransactionScope?.bind(this._adapter)
       ?? (async <TResult>(runner: () => Promise<TResult>) => runner())
 
-    return runWithinScope(async () => {
-      const entry: TransactionLog = {
-        scope: 'transaction',
-        depth: 1,
-      }
+    const entry: TransactionLog = {
+      scope: 'transaction',
+      depth: 1,
+    }
+    let tx: DatabaseContext | undefined
+    let committed = false
 
+    const runTransaction = async () => {
       await this._logger?.onTransactionStart?.(entry)
-      await this._callTransactionHook('begin', () => this._adapter.beginTransaction(options), options)
-      const tx = this._createChildContext(
-        { kind: 'transaction', depth: 1 },
-        this._createTransactionCallbackState(),
-      )
-      let committed = false
-
       try {
-        const result = await this._runTransactionCallback(tx, callback)
-        await this._callTransactionHook('commit', () => this._adapter.commit(options), options)
-        committed = true
-        await tx._flushTransactionCallbacks('afterCommit')
+        const result = await runWithinScope(async () => {
+          await this._callTransactionHook('begin', () => this._adapter.beginTransaction(options), options)
+          tx = this._createChildContext(
+            { kind: 'transaction', depth: 1 },
+            this._createTransactionCallbackState(),
+          )
+
+          try {
+            const value = await this._runTransactionCallback(tx, callback)
+            await this._callTransactionHook('commit', () => this._adapter.commit(options), options)
+            committed = true
+            return value
+          } catch (error) {
+            if (committed) {
+              throw error
+            }
+
+            try {
+              await this._callTransactionHook('rollback', () => this._adapter.rollback(options), options)
+            } catch (rollbackError) {
+              await this._logger?.onTransactionRollback?.({ ...entry, error: rollbackError })
+              throw rollbackError
+            }
+
+            throw error
+          }
+        })
+
+        await tx?._flushTransactionCallbacks('afterCommit')
         await this._logger?.onTransactionCommit?.(entry)
         return result
       } catch (error) {
@@ -336,17 +358,39 @@ export class DatabaseContext {
           throw error
         }
 
-        try {
-          await this._callTransactionHook('rollback', () => this._adapter.rollback(options), options)
-        } catch (rollbackError) {
-          await this._logger?.onTransactionRollback?.({ ...entry, error: rollbackError })
-          throw rollbackError
-        }
-        await tx._flushTransactionCallbacks('afterRollback')
+        await tx?._flushTransactionCallbacks('afterRollback')
         await this._logger?.onTransactionRollback?.({ ...entry, error })
         throw error
       }
-    })
+    }
+
+    if (this._adapter.runWithTransactionScope) {
+      return runTransaction()
+    }
+
+    return this._runSerializedRootTransaction(runTransaction)
+  }
+
+  private async _runSerializedRootTransaction<T>(
+    callback: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this._runtime.rootTransactionTail
+    let release!: () => void
+    const current = previous.then(() => new Promise<void>((resolve) => {
+      release = resolve
+    }))
+    this._runtime.rootTransactionTail = current
+
+    await previous
+
+    try {
+      return await callback()
+    } finally {
+      release()
+      if (this._runtime.rootTransactionTail === current) {
+        this._runtime.rootTransactionTail = Promise.resolve()
+      }
+    }
   }
 
   private async _runNestedTransaction<T>(

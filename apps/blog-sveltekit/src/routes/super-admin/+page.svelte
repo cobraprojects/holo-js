@@ -19,7 +19,12 @@
         return
       }
 
-      await invalidateAll()
+      try {
+        await invalidateAll()
+      } catch (error) {
+        console.warn('Super admin auth invalidation failed after logout.', error)
+      }
+
       await goto('/super-admin/login')
     } catch (error) {
       console.warn('Super admin logout failed.', error)

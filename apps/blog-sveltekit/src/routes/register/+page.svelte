@@ -6,6 +6,7 @@
 
   const auth = useAuth()
   const form = useForm(registerForm, {
+    csrf: true,
     validateOn: 'blur',
     initialValues: { name: '', email: '', password: '', passwordConfirmation: '' },
     async submitter({ formData }) {

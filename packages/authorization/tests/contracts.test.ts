@@ -23,6 +23,14 @@ class LockedProject {
   constructor(public readonly ownerId: string) {}
 }
 
+class DefinitionMetadataProject {
+  readonly definition = {
+    name: 'DefinitionMetadataProject',
+  }
+
+  constructor(public readonly ownerId: string) {}
+}
+
 type BlogRecord = {
   get(key: 'id' | 'user_id' | 'published_at'): string | null
   getRepository(): {
@@ -151,6 +159,18 @@ describe('@holo-js/authorization contracts', () => {
     expect(() => definePolicy(' ', Project, {})).toThrow(TypeError)
     // @ts-expect-error invalid target is intentional in this runtime validation test
     expect(() => definePolicy('projects', null, {})).toThrow(TypeError)
+    expect(() => definePolicy(
+      'definition-only',
+      // @ts-expect-error definition metadata without query is not a valid model target
+      { definition: { name: 'DefinitionOnly' } },
+      {},
+    )).toThrow(TypeError)
+    expect(() => definePolicy(
+      'malformed-query',
+      // @ts-expect-error query must return the model query facade
+      { definition: { name: 'MalformedQuery' }, query: () => ({}) },
+      {},
+    )).toThrow(TypeError)
     expect(() => definePolicy('projects', Project, {
       class: {
         // @ts-expect-error invalid handler is intentional in this runtime validation test
@@ -307,8 +327,45 @@ describe('@holo-js/authorization contracts', () => {
     expect(policy.name).toBe('projects')
   })
 
+  it('treats records with definition metadata as record targets', async () => {
+    definePolicy('definition-metadata-projects', DefinitionMetadataProject, {
+      class: {
+        view() {
+          return allow()
+        },
+      },
+      record: {
+        view() {
+          return deny()
+        },
+      },
+    })
+
+    const current = authorization.forUser({ id: 'user-1' })
+
+    await expect(current.can('view', DefinitionMetadataProject)).resolves.toBe(true)
+    await expect(current.can('view', new DefinitionMetadataProject('user-1'))).resolves.toBe(false)
+
+    const malformedRecord = Object.assign(new DefinitionMetadataProject('user-1'), {
+      query: () => ({}),
+    })
+    await expect(current.can('view', malformedRecord)).resolves.toBe(false)
+  })
+
   it('throws clear policy lookup and mismatch errors', async () => {
     definePolicy('projects', Project, {
+      class: {
+        create() {
+          return true
+        },
+      },
+      record: {
+        view() {
+          return true
+        },
+      },
+    })
+    definePolicy('documents', Document, {
       class: {
         create() {
           return true
@@ -340,7 +397,16 @@ describe('@holo-js/authorization contracts', () => {
 
     await expect(authorization.forUser({ id: 'user-1' }).can('view', new OtherProject()))
       .rejects.toBeInstanceOf(AuthorizationPolicyNotFoundError)
-    
+
+    const erasedProjectsPolicy = authorization.forUser({ id: 'user-1' }).policy('projects') as {
+      can(action: string, target: object): Promise<boolean>
+    }
+
+    await expect(erasedProjectsPolicy.can('view', new Document('user-1')))
+      .rejects.toBeInstanceOf(AuthorizationPolicyNotFoundError)
+    await expect(erasedProjectsPolicy.can('create', Document))
+      .rejects.toBeInstanceOf(AuthorizationPolicyNotFoundError)
+
     // @ts-expect-error null is not a valid target object
     await expect(authorization.forUser({ id: 'user-1' }).can('view', null))
       .rejects.toBeInstanceOf(TypeError)
@@ -483,6 +549,13 @@ describe('@holo-js/authorization contracts', () => {
         }
       },
     }
+    const unregisteredBlogRecord = {
+      getRepository() {
+        return {
+          definition: unregisteredBlogModel.definition,
+        }
+      },
+    }
     const looseBlogRecord = {
       get(key: 'id' | 'user_id' | 'published_at') {
         return key === 'published_at' ? null : 'value'
@@ -504,6 +577,7 @@ describe('@holo-js/authorization contracts', () => {
     expect(authorizationInternals.getPolicyByTarget(looseBlogRecord)).toBeDefined()
     expect(authorizationInternals.getPolicyByTarget(aliasedBlogModel)).toBeDefined()
     expect(() => authorizationInternals.getPolicyByTarget(unregisteredBlogModel)).toThrow(AuthorizationPolicyNotFoundError)
+    expect(() => authorizationInternals.getPolicyByTarget(unregisteredBlogRecord)).toThrow(AuthorizationPolicyNotFoundError)
     expect(() => authorizationInternals.getPolicyByTarget(invalidRepositoryTarget)).toThrow(AuthorizationPolicyNotFoundError)
     expect(() => authorizationInternals.getPolicyByTarget(invalidDefinitionTarget)).toThrow(AuthorizationPolicyNotFoundError)
   })

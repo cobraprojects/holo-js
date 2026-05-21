@@ -7,7 +7,8 @@ import type {
 } from '@holo-js/auth-social'
 
 function applyScopes(url: URL, config: SocialRedirectContext['config'], fallback: readonly string[]): void {
-  const scopes = (config.scopes ?? []).length > 0 ? config.scopes ?? [] : fallback
+  const configuredScopes = config.scopes ?? []
+  const scopes = configuredScopes.length > 0 ? configuredScopes : fallback
   url.searchParams.set('scope', scopes.join(' '))
 }
 
@@ -85,6 +86,7 @@ export const googleSocialProvider: SocialProviderRuntime = Object.freeze({
     url.searchParams.set('state', context.state)
     url.searchParams.set('code_challenge', context.codeChallenge)
     url.searchParams.set('code_challenge_method', 'S256')
+    url.searchParams.set('access_type', 'offline')
     applyScopes(url, context.config, ['openid', 'email', 'profile'])
     return url.toString()
   },

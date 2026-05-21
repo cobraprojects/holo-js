@@ -202,25 +202,17 @@ function normalizeLimiterAttempts(value: number, label: string): number {
   return value
 }
 
-function normalizeLimiterWindowSeconds(value: number, label: string): number {
-  if (!Number.isInteger(value) || value < 1) {
-    throw new TypeError(`[@holo-js/security] ${label} must be an integer greater than or equal to 1.`)
-  }
-
-  return value
-}
-
 export const limit = Object.freeze({
   perMinute(maxAttempts: number) {
     return new PendingSecurityLimiterDefinition(
       normalizeLimiterAttempts(maxAttempts, 'Rate limiter maxAttempts'),
-      normalizeLimiterWindowSeconds(60, 'Rate limiter decaySeconds'),
+      60,
     )
   },
   perHour(maxAttempts: number) {
     return new PendingSecurityLimiterDefinition(
       normalizeLimiterAttempts(maxAttempts, 'Rate limiter maxAttempts'),
-      normalizeLimiterWindowSeconds(3600, 'Rate limiter decaySeconds'),
+      3600,
     )
   },
 })
@@ -337,5 +329,4 @@ export function createRedisRateLimitStoreConfig(
 export const securityInternals = {
   PendingSecurityLimiterDefinition,
   normalizeLimiterAttempts,
-  normalizeLimiterWindowSeconds,
 }

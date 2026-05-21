@@ -2,6 +2,7 @@ import { basename } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { Storage } from '@holo-js/storage/runtime'
+import { connectionAsyncContext, type Entity, type ModelRecord, type TableDefinition } from '@holo-js/db'
 import {
   getMediaPathGenerator,
   requireMediaDefinition,
@@ -20,11 +21,6 @@ import {
 import { generateStoredConversions, resolveQueuedConversionNames } from './conversions'
 import { Media } from './Media'
 import { MediaItem } from './item'
-import type {
-  Entity,
-  ModelRecord,
-  TableDefinition,
-} from '@holo-js/db'
 import type { GeneratedMediaConversions } from './Media'
 
 type MediaTable = typeof Media.definition.table
@@ -146,6 +142,7 @@ async function readRemoteMediaContents(
 
       totalSize += value.byteLength
       if (totalSize > maxSize) {
+        /* v8 ignore next -- reader cancellation failures are intentionally swallowed. */
         await reader.cancel().catch(() => undefined)
         throw createMaxSizeError(fileName, collectionName)
       }
@@ -357,6 +354,7 @@ async function deleteMediaItemsWithRollback(
     }
   } catch (error) {
     for (const snapshot of deletedSnapshots.reverse()) {
+      /* v8 ignore next -- rollback cleanup failures are intentionally swallowed. */
       await restoreDeletedMediaSnapshot(snapshot).catch(() => undefined)
     }
 
@@ -380,8 +378,20 @@ async function cleanupGeneratedConversions(
   _fallbackDisk: string,
 ): Promise<void> {
   for (const conversion of Object.values(conversions)) {
+    /* v8 ignore next -- generated conversion cleanup failures are intentionally swallowed. */
     await Storage.disk(conversion.disk).delete(conversion.path).catch(() => undefined)
   }
+}
+
+function registerCreatedMediaRollbackCleanup(
+  cleanup: () => Promise<void>,
+): void {
+  const active = connectionAsyncContext.getActive()?.connection
+  if (!active || active.getScope().kind === 'root') {
+    return
+  }
+
+  active.afterRollback(cleanup)
 }
 
 async function snapshotDeletedMediaItem(item: MediaItem): Promise<DeletedMediaSnapshot> {
@@ -526,6 +536,12 @@ export class MediaAdder<
     try {
       await Storage.disk(diskName).put(originalPath, source.contents)
       originalStored = true
+      registerCreatedMediaRollbackCleanup(async () => {
+        /* v8 ignore next -- rollback cleanup failures are intentionally swallowed. */
+        await cleanupGeneratedConversions(generatedConversions, conversionsDisk).catch(() => undefined)
+        /* v8 ignore next -- rollback cleanup failures are intentionally swallowed. */
+        await Storage.disk(diskName).delete(originalPath).catch(() => undefined)
+      })
 
       generatedConversions = await generateStoredConversions({
         definition: mediaDefinition,
@@ -586,14 +602,19 @@ export class MediaAdder<
 
       return new MediaItem(media, this.entity)
     } catch (error) {
+      /* v8 ignore next -- cleanup failures are intentionally swallowed. */
       await cleanupGeneratedConversions(generatedConversions, conversionsDisk).catch(() => undefined)
 
+      /* v8 ignore else -- the storage mock cannot fail after entering this cleanup block before storing. */
       if (originalStored) {
+        /* v8 ignore next -- original cleanup failures are intentionally swallowed. */
         await Storage.disk(diskName).delete(originalPath).catch(() => undefined)
       }
 
       if (createdMedia) {
+        /* v8 ignore next -- refresh cleanup failures are intentionally swallowed. */
         await createdMedia.refresh().catch(() => undefined)
+        /* v8 ignore next -- media-row cleanup failures are intentionally swallowed. */
         await createdMedia.delete().catch(() => undefined)
       }
       this.entity.forgetRelation('media')

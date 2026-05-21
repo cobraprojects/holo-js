@@ -22,7 +22,15 @@ export async function POST(request: Request) {
     })
   }
 
-  await resendEmailVerification(submission.data.email)
+  const { error } = await resendEmailVerification(submission.data.email)
+  if (error) {
+    const failure = submission.fail({
+      status: error.status,
+      errors: error.fields,
+    })
+
+    return Response.json(failure, { status: failure.status })
+  }
 
   return success()
 }

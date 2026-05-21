@@ -361,9 +361,11 @@ export function createCacheQueryBridge(
     },
     async invalidateDependencies(
       dependencies: readonly CacheDependencyDescriptor[],
+      options?: { driver?: string },
     ): Promise<void> {
       const invalidatedKeys = new Set<string>()
       const runtime = getCacheRuntime()
+      const driverName = options?.driver?.trim()
 
       for (const dependency of dependencies) {
         const indexedKeys = await dependencyIndex.listKeys(dependency)
@@ -375,6 +377,10 @@ export function createCacheQueryBridge(
 
           invalidatedKeys.add(indexedKey)
           const parsed = parseIndexedKey(indexedKey)
+          if (driverName && parsed.driverName !== driverName) {
+            continue
+          }
+
           const driver = resolveConfiguredDriver(runtime, parsed.driverName)
           await driver.forget(parsed.normalizedKey)
           await dependencyIndex.removeKey(indexedKey)

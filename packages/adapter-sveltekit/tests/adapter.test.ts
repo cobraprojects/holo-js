@@ -185,6 +185,7 @@ describe('@holo-js/adapter-sveltekit', () => {
   it('serializes model-like values for SvelteKit transport boundaries', async () => {
     const { holoSvelteKitTransport } = await loadAdapterModule()
     const { serializeSvelteKitData } = await import('../src/transport')
+    const publishedAt = new Date('2026-05-20T00:00:00.000Z')
 
     const entity = {
       id: 1,
@@ -214,14 +215,17 @@ describe('@holo-js/adapter-sveltekit', () => {
     expect(serializeSvelteKitData({
       entity,
       collection,
+      publishedAt,
       nested: { entity },
     })).toEqual({
       entity: { id: 1, title: 'Hello', kind: 'entity' },
       collection: [{ id: 1, title: 'Hello', kind: 'entity' }],
+      publishedAt,
       nested: {
         entity: { id: 1, title: 'Hello', kind: 'entity' },
       },
     })
+    expect(serializeSvelteKitData({ publishedAt }).publishedAt).toBe(publishedAt)
 
     expect(holoSvelteKitTransport.HoloModel.encode(entity)).toEqual({
       id: 1,
@@ -231,6 +235,10 @@ describe('@holo-js/adapter-sveltekit', () => {
     expect(holoSvelteKitTransport.HoloCollection.encode(collection)).toEqual([
       { id: 1, title: 'Hello', kind: 'entity' },
     ])
+    expect(holoSvelteKitTransport.HoloModel.encode({ id: 1 })).toBe(false)
+    expect(holoSvelteKitTransport.HoloCollection.encode([])).toBe(false)
+    expect(holoSvelteKitTransport.HoloModel.decode({ id: 1 })).toEqual({ id: 1 })
+    expect(holoSvelteKitTransport.HoloCollection.decode([{ id: 1 }])).toEqual([{ id: 1 }])
   }, 30000)
 
   it('initializes a singleton project and exposes typed config helpers', async () => {

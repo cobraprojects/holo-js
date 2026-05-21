@@ -144,9 +144,16 @@ function normalizeJsonValue(
   if (
     value === null
     || typeof value === 'string'
-    || typeof value === 'number'
     || typeof value === 'boolean'
   ) {
+    return value
+  }
+
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new Error(`[@holo-js/mail] ${label} must be JSON-serializable.`)
+    }
+
     return value
   }
 

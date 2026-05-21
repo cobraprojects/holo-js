@@ -6,6 +6,10 @@ interface HoloComputedRef<TValue> {
   readonly value: TValue
 }
 
+interface HoloCookieRef<TValue> {
+  value: TValue
+}
+
 interface HoloUseFetchResult<TValue> {
   readonly data: HoloRef<TValue | null>
   readonly refresh: () => Promise<void>
@@ -26,6 +30,14 @@ declare module '#imports' {
     to: string,
     options?: { readonly redirectCode?: number },
   ): HoloNavigateToResult
+  export function useCookie<TValue>(
+    name: string,
+    options?: {
+      readonly path?: string
+      readonly sameSite?: 'lax' | 'strict' | 'none'
+      readonly secure?: boolean
+    },
+  ): HoloCookieRef<TValue>
   export function useFetch<TValue = import('./contracts').CurrentAuthResponse>(
     request: string,
     options?: { readonly key?: string },

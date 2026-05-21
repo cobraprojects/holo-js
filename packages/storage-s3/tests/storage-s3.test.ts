@@ -2,6 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import createS3Driver from '../src'
 
 describe('@holo-js/storage-s3', () => {
+  const createDriver = () => {
+    return createS3Driver({
+      bucket: 'media-bucket',
+      region: 'us-east-1',
+      endpoint: 'https://s3.us-east-1.amazonaws.com',
+      accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'supersecretkey',
+    })
+  }
+
   beforeEach(() => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-03-30T00:00:00.000Z'))
@@ -16,13 +26,7 @@ describe('@holo-js/storage-s3', () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const driver = createS3Driver({
-      bucket: 'media-bucket',
-      region: 'us-east-1',
-      endpoint: 'https://s3.us-east-1.amazonaws.com',
-      accessKeyId: 'AKIAEXAMPLE',
-      secretAccessKey: 'supersecretkey',
-    })
+    const driver = createDriver()
 
     await driver.setItemRaw('reports:daily.txt', new TextEncoder().encode('ok'))
 
@@ -40,18 +44,56 @@ describe('@holo-js/storage-s3', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const driver = createS3Driver({
-      bucket: 'media-bucket',
-      region: 'us-east-1',
-      endpoint: 'https://s3.us-east-1.amazonaws.com',
-      accessKeyId: 'AKIAEXAMPLE',
-      secretAccessKey: 'supersecretkey',
-    })
+    const driver = createDriver()
 
     await driver.setItemRaw('reports:buffer.txt', Buffer.from('buffer-ok'))
 
     const firstCall = fetchMock.mock.calls[0] as unknown[] | undefined
     const request = firstCall?.[0] as unknown as Request
     expect(request.url).toContain('/reports/buffer.txt')
+  })
+
+  it('rejects raw uploads with period-only object key segments', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const driver = createDriver()
+
+    await expect(driver.setItemRaw('tenant:..:admin.txt', new TextEncoder().encode('x')))
+      .rejects.toThrow('S3 object keys cannot contain period-only path segments')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects deletes with period-only object key segments', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const driver = createDriver()
+
+    await expect(driver.removeItem('tenant:.:admin.txt'))
+      .rejects.toThrow('S3 object keys cannot contain period-only path segments')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('does not clear listed keys with period-only object key segments', async () => {
+    const listResponse = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<ListBucketResult>',
+      '<Contents><Key>tenant/../admin.txt</Key></Contents>',
+      '</ListBucketResult>',
+    ].join('')
+    const fetchMock = vi.fn(async () => new Response(listResponse, { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const driver = createDriver()
+
+    await expect(driver.clear('tenant')).rejects
+      .toThrow('S3 object keys cannot contain period-only path segments')
+    expect(fetchMock).toHaveBeenCalledOnce()
+
+    const firstCall = fetchMock.mock.calls[0] as unknown[] | undefined
+    const request = firstCall?.[0] as unknown as Request
+    expect(request.method).toBe('GET')
+    expect(request.url).not.toContain('/admin.txt')
   })
 })

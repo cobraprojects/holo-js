@@ -126,6 +126,21 @@ describe('@holo-js/broadcast runtime', () => {
     expect(publish).toHaveBeenCalledTimes(2)
   })
 
+  it('rejects non-finite raw broadcast payload numbers', async () => {
+    configureBroadcastRuntime({
+      config: createConfig(),
+      publish: vi.fn(),
+    })
+
+    await expect(broadcastRaw({
+      event: 'orders.updated',
+      channels: ['orders.ord_1'],
+      payload: {
+        value: Number.POSITIVE_INFINITY,
+      },
+    })).rejects.toThrow('JSON-serializable')
+  })
+
   it('dispatches presence channel definitions with the presence- prefix', async () => {
     const publish = vi.fn(async (input, context) => ({
       connection: context.connection,

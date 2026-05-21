@@ -1,4 +1,4 @@
-import type { AuthenticatedAuthUser, AuthEstablishedSession, AuthLogoutResult, AuthUserLike } from '@holo-js/auth'
+import type { AuthenticatedAuthUser, AuthEstablishedSession, AuthLogoutResult } from '@holo-js/auth'
 import type { NormalizedAuthWorkosProviderConfig } from '@holo-js/config'
 
 export type WorkosJsonValue =
@@ -25,6 +25,36 @@ export interface WorkosIdentityProfile {
   readonly raw: Readonly<Record<string, WorkosJsonValue>>
 }
 
+export type WorkosUserAttributeValue =
+  | string
+  | number
+  | boolean
+  | Date
+  | null
+  | undefined
+  | readonly WorkosUserAttributeValue[]
+  | { readonly [key: string]: WorkosUserAttributeValue }
+
+export type WorkosUserAttributes = Readonly<Record<string, WorkosUserAttributeValue>>
+
+export type WorkosDefaultUserAttributes = {
+  readonly email: string
+  readonly name: string
+}
+
+export type WorkosUserMapper<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes> = (
+  workosUser: WorkosIdentityProfile,
+) => TUserAttributes
+
+export type WorkosCompleteAuthOptions<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes> = {
+  readonly provider?: string
+  readonly user?: WorkosUserMapper<TUserAttributes>
+}
+
+export type WorkosSyncIdentityOptions<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes> = {
+  readonly user?: WorkosUserMapper<TUserAttributes>
+}
+
 export interface WorkosVerifiedSession {
   readonly sessionId: string
   readonly identity: WorkosIdentityProfile
@@ -38,19 +68,19 @@ export interface WorkosLogoutSession {
   readonly sessionId: string
 }
 
-export type WorkosAuthenticatedUser<TUser extends AuthUserLike = AuthUserLike> =
-  AuthenticatedAuthUser & TUser & {
+export type WorkosAuthenticatedUser<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes> =
+  AuthenticatedAuthUser & Omit<TUserAttributes, 'can' | 'id'> & {
     readonly id: string | number
   }
 
-export type WorkosCompleteAuthResult<TUser extends AuthUserLike = AuthUserLike> =
+export type WorkosCompleteAuthResult<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes> =
   | Readonly<{
     readonly ok: true
     readonly provider: string
     readonly guard: string
     readonly authProvider: string
     readonly status: WorkosSyncStatus
-    readonly user: WorkosAuthenticatedUser<TUser>
+    readonly user: WorkosAuthenticatedUser<TUserAttributes>
     readonly identity: HostedIdentityRecord
     readonly session: WorkosVerifiedSession
     readonly authSession?: AuthEstablishedSession
@@ -112,12 +142,12 @@ export interface HostedIdentityStore {
 
 export type WorkosSyncStatus = 'created' | 'updated' | 'linked' | 'relinked'
 
-export interface WorkosAuthenticationResult {
+export interface WorkosAuthenticationResult<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes> {
   readonly provider: string
   readonly guard: string
   readonly authProvider: string
   readonly status: WorkosSyncStatus
-  readonly user: WorkosAuthenticatedUser
+  readonly user: WorkosAuthenticatedUser<TUserAttributes>
   readonly identity: HostedIdentityRecord
   readonly session: WorkosVerifiedSession
   readonly authSession?: AuthEstablishedSession
@@ -137,10 +167,17 @@ export interface WorkosAuthFacade {
   loginWithWorkos(request: Request, options?: { readonly provider?: string }): Promise<Response>
   registerWithWorkos(request: Request, options?: { readonly provider?: string }): Promise<Response>
   logoutWithWorkos(request: Request, options?: { readonly provider?: string, readonly returnTo?: string }): Promise<WorkosLogoutResult>
-  completeWorkosAuth(request: Request, options?: { readonly provider?: string }): Promise<WorkosCompleteAuthResult>
+  completeWorkosAuth<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes>(
+    request: Request,
+    options?: WorkosCompleteAuthOptions<TUserAttributes>,
+  ): Promise<WorkosCompleteAuthResult<TUserAttributes>>
   verifyRequest(request: Request, provider?: string): Promise<WorkosVerifiedSession | null>
   verifySession(token: string, provider?: string): Promise<WorkosVerifiedSession | null>
-  syncIdentity(session: WorkosVerifiedSession, provider?: string): Promise<WorkosAuthenticationResult>
+  syncIdentity<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes>(
+    session: WorkosVerifiedSession,
+    provider?: string,
+    options?: WorkosSyncIdentityOptions<TUserAttributes>,
+  ): Promise<WorkosAuthenticationResult<TUserAttributes>>
   authenticate(request: Request, provider?: string): Promise<WorkosAuthenticationResult | null>
 }
 

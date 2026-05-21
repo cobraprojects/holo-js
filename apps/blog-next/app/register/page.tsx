@@ -20,13 +20,14 @@ const panelStyle = {
 export default function RegisterPage() {
   const router = useRouter()
   const form = useForm(registerForm, {
+    csrf: true,
     validateOn: 'blur',
     initialValues: { name: '', email: '', password: '', passwordConfirmation: '' },
     async submitter({ formData }) {
       const response = await fetch('/api/register', { method: 'POST', body: formData })
       const submission = await response.json()
-      if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
-        router.replace(submission.data.redirectTo)
+      if (submission?.ok === true) {
+        router.replace('/login')
       }
       return submission
     },

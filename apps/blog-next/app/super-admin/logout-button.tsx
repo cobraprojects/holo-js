@@ -22,7 +22,12 @@ export function SuperAdminLogoutButton() {
         return
       }
 
-      await auth.refreshUser()
+      try {
+        await auth.refreshUser()
+      } catch (error) {
+        console.warn('Super admin auth refresh failed after logout.', error)
+      }
+
       router.replace('/super-admin/login')
     } catch (error) {
       console.warn('Super admin logout failed.', error)

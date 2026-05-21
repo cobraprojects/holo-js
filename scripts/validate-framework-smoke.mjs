@@ -1,6 +1,7 @@
 import { access, readFile, rm, writeFile } from 'node:fs/promises'
 import { constants as fsConstants, readFileSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
 import assert from 'node:assert/strict'
 import BetterSqlite3 from 'better-sqlite3'
@@ -400,7 +401,9 @@ async function runQueueSmokeCheck(app, baseUrl, env) {
       ], env)
     }
 
-    const report = await fetchJson(`${baseUrl}/api/holo/queue?connection=${scenario.connection}`)
+    const queuePath = `/api/holo/queue?connection=${scenario.connection}`
+    await assertSmokeMutationGetRejected(app, baseUrl, queuePath)
+    const report = await fetchJson(`${baseUrl}${queuePath}`, smokeMutationRequest())
     assert.equal(report.ok, true)
     assert.equal(report.framework, app.framework)
     assert.equal(report.connection, scenario.connection)
@@ -448,7 +451,8 @@ async function runEventSmokeCheck(app, baseUrl, env) {
     'events',
   ], env)
 
-  const report = await fetchJson(`${baseUrl}/api/holo/events`)
+  await assertSmokeMutationGetRejected(app, baseUrl, '/api/holo/events')
+  const report = await fetchJson(`${baseUrl}/api/holo/events`, smokeMutationRequest())
   assert.equal(report.ok, true)
   assert.equal(report.framework, app.framework)
   assert.equal(report.dispatch.eventName, 'smoke.framework-fired')
@@ -477,7 +481,8 @@ async function runEventSmokeCheck(app, baseUrl, env) {
 }
 
 async function runBroadcastSmokeCheck(app, baseUrl) {
-  const report = await fetchJson(`${baseUrl}/api/holo/broadcast`)
+  await assertSmokeMutationGetRejected(app, baseUrl, '/api/holo/broadcast')
+  const report = await fetchJson(`${baseUrl}/api/holo/broadcast`, smokeMutationRequest())
   assert.equal(report.ok, true)
   assert.equal(report.framework, app.framework)
   assert.equal(report.authStatus, 200)
@@ -724,7 +729,28 @@ async function waitForServer(url, child, logs, timeoutMs = 20000) {
   throw new Error(`Timed out waiting for ${url}\n${logs.stdout}\n${logs.stderr}`)
 }
 
-async function startServer(app) {
+async function stopChildProcess(child, timeoutMs = 5000) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return
+  }
+
+  const closePromise = new Promise(resolvePromise => child.once('close', resolvePromise))
+  child.kill('SIGTERM')
+  const closed = await Promise.race([
+    closePromise.then(() => true),
+    sleep(timeoutMs).then(() => false),
+  ])
+
+  if (!closed && child.exitCode === null && child.signalCode === null) {
+    child.kill('SIGKILL')
+    await Promise.race([
+      closePromise,
+      sleep(1000),
+    ])
+  }
+}
+
+export async function startServer(app, readinessTimeoutMs = 20000) {
   const [command, ...args] = app.start
   const child = spawn(command, args, {
     cwd: app.cwd,
@@ -746,32 +772,43 @@ async function startServer(app) {
     logs.stderr += chunk.toString()
   })
 
-  await waitForServer(`http://127.0.0.1:${app.port}/api/holo/health`, child, logs)
+  try {
+    await waitForServer(
+      `http://127.0.0.1:${app.port}/api/holo/health`,
+      child,
+      logs,
+      readinessTimeoutMs,
+    )
+  } catch (error) {
+    await stopChildProcess(child)
+    throw error
+  }
 
   return {
     child,
     logs,
     async stop() {
-      if (child.exitCode !== null) {
-        return
-      }
-
-      child.kill('SIGTERM')
-      await Promise.race([
-        new Promise(resolvePromise => child.once('close', resolvePromise)),
-        sleep(5000).then(() => {
-          child.kill('SIGKILL')
-        }),
-      ])
+      await stopChildProcess(child)
     },
   }
 }
 
-async function fetchJson(url) {
-  const response = await fetch(url)
+async function fetchJson(url, init = undefined) {
+  const response = await fetch(url, init)
   const body = await response.text()
   assert.equal(response.status, 200, `${url} failed with ${response.status}: ${body}`)
   return JSON.parse(body)
+}
+
+function smokeMutationRequest() {
+  return { method: 'POST' }
+}
+
+async function assertSmokeMutationGetRejected(app, baseUrl, path) {
+  const url = `${baseUrl}${path}`
+  const response = await fetch(url)
+  const body = await response.text()
+  assert.equal(response.status, 405, `${url} GET should be rejected, got ${response.status}: ${body}`)
 }
 
 async function fetchBinary(url, expectedContentTypePrefix) {
@@ -2105,14 +2142,16 @@ async function validateFrameworkApp(app) {
     const health = await fetchJson(`${baseUrl}/api/holo/health`)
     assertHealthPayload(app, health)
 
-    const matrix = await fetchJson(`${baseUrl}/api/holo/matrix`)
+    await assertSmokeMutationGetRejected(app, baseUrl, '/api/holo/matrix')
+    const matrix = await fetchJson(`${baseUrl}/api/holo/matrix`, smokeMutationRequest())
     assertMatrixPayload(app, matrix)
 
     await fetchBinary(matrix.storage.publicUrl, 'text/plain')
     await fetchBinary(matrix.media.imageUrl, 'image/png')
     await fetchBinary(matrix.media.thumbUrl, 'image/png')
 
-    const audio = await fetchJson(`${baseUrl}/api/holo/audio`)
+    await assertSmokeMutationGetRejected(app, baseUrl, '/api/holo/audio')
+    const audio = await fetchJson(`${baseUrl}/api/holo/audio`, smokeMutationRequest())
     assertAudioPayload(app, audio)
     await fetchBinary(audio.audioUrl, 'audio/mpeg')
     await runEventSmokeCheck(app, baseUrl, env)
@@ -2181,7 +2220,9 @@ async function main() {
   log('success', 'All framework smoke apps passed the full validation matrix.')
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.stack ?? error.message : error)
-  process.exitCode = 1
-})
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.stack ?? error.message : error)
+    process.exitCode = 1
+  })
+}

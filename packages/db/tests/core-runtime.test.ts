@@ -891,6 +891,42 @@ describe('new core runtime slice', () => {
     expect(entries).toContain('tx-commit:transaction:1:-')
   })
 
+  it('serializes overlapping root transactions when the adapter owns a single transaction connection', async () => {
+    const adapter = new SlowAdapter(0, 0, 5)
+    const db = createDatabase({
+      adapter,
+      dialect: createDialect(),
+    })
+    const seen: string[] = []
+    let active = false
+
+    await Promise.all([
+      db.transaction(async () => {
+        expect(active).toBe(false)
+        active = true
+        await new Promise<void>(resolve => setTimeout(resolve, 5))
+        seen.push('first')
+        active = false
+      }),
+      db.transaction(async () => {
+        expect(active).toBe(false)
+        active = true
+        await new Promise<void>(resolve => setTimeout(resolve, 5))
+        seen.push('second')
+        active = false
+      }),
+    ])
+
+    expect(seen).toHaveLength(2)
+    expect(adapter.calls).toEqual([
+      'initialize',
+      'begin',
+      'commit',
+      'begin',
+      'commit',
+    ])
+  })
+
   it('registers transaction callbacks, rejects registration outside transactions, and runs them on commit and rollback', async () => {
     const adapter = new FakeAdapter()
     const db = createDatabase({

@@ -27,7 +27,24 @@ type ManifestWhisperName<
 type ManifestEventNamesForPattern<
   TManifest extends GeneratedBroadcastManifest,
   TPattern extends string,
-> = Extract<TManifest['events'][number], { channels: readonly { pattern: TPattern }[] }>['name'] & string
+> = TManifest['events'][number] extends infer TEvent
+  ? TEvent extends {
+    readonly name: infer TName
+    readonly channels: readonly { readonly pattern: infer TEventPattern }[]
+  }
+    ? TPattern extends TEventPattern & string
+      ? TName & string
+      : never
+    : never
+  : never
+type ManifestSubscriptionEventName<
+  TManifest extends GeneratedBroadcastManifest,
+  TChannel extends string,
+> = string extends ManifestEventName<TManifest>
+  ? string
+  : TChannel extends ManifestChannelPattern<TManifest>
+    ? ManifestEventNamesForPattern<TManifest, TChannel>
+    : ManifestEventName<TManifest>
 
 export interface FluxClientOptions<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest> {
   readonly manifest?: TManifest
@@ -80,7 +97,7 @@ export interface FluxSubscription<
 > extends FluxListenerControls {
   readonly name: TChannel
   readonly type: FluxChannelKind
-  listen<TEvent extends ManifestEventNamesForPattern<TManifest, TChannel> | ManifestEventName<TManifest>>(
+  listen<TEvent extends ManifestSubscriptionEventName<TManifest, TChannel>>(
     event?: TEvent | readonly TEvent[],
     callback?: (payload: BroadcastJsonObject) => void,
   ): FluxSubscription<TManifest, TChannel>
@@ -507,7 +524,7 @@ function createPresenceSubscription<
   }) as FluxPresenceSubscription<TManifest, TChannel>
 }
 
-export function createFluxClient<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
+export function createFluxClient<const TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
   options: FluxClientOptions<TManifest> = {},
 ): FluxClient<TManifest> & ConnectorDebugCarrier {
   const connector = options.connector

@@ -173,6 +173,7 @@ export {
   resetMorphRegistry,
   resolveMorphModel,
   serializeModels,
+  uniqueSlug,
 } from './model'
 export {
   DEFAULT_HOLO_PROJECT_PATHS,

@@ -26,8 +26,12 @@ export default defineEventHandler(async (event) => {
   }
 
   return submission.success({
-    message: 'Signed in as super admin.',
-    redirectTo: '/super-admin',
+    message: session.emailVerificationRequired
+      ? 'Signed in. Verify your email address to continue.'
+      : 'Signed in as super admin.',
+    redirectTo: session.emailVerificationRequired
+      ? session.emailVerificationRoute ?? '/verify-email'
+      : '/super-admin',
     user: session.user,
   })
 })

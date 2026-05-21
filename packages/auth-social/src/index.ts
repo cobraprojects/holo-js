@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { authRuntimeInternals } from '@holo-js/auth'
 import type { AuthUserLike } from '@holo-js/auth'
 import type { AuthSocialProviderConfig } from '@holo-js/config'
@@ -83,6 +83,7 @@ export interface SocialPendingStateRecord {
   readonly state: string
   readonly codeVerifier: string
   readonly guard: string
+  readonly browserBinding?: string
   readonly createdAt: Date
 }
 
@@ -351,12 +352,105 @@ function createState(): string {
   return randomBytes(24).toString('base64url')
 }
 
+function createBrowserBindingNonce(): string {
+  return createState()
+}
+
+function hashBrowserBinding(nonce: string): string {
+  return createHash('sha256').update(nonce).digest('base64url')
+}
+
 function createCodeVerifier(): string {
   return randomBytes(32).toString('base64url')
 }
 
 function createCodeChallenge(verifier: string): string {
   return createHash('sha256').update(verifier).digest('base64url')
+}
+
+function getStateCookieName(provider: string): string {
+  const suffix = provider.replace(/[^a-zA-Z0-9_-]/g, '_')
+  return `holo_oauth_state_${suffix}`
+}
+
+function serializeStateCookie(provider: string, state: string, nonce: string, request: Request): string {
+  const secure = new URL(request.url).protocol === 'https:'
+  const attributes = [
+    `${getStateCookieName(provider)}=${state}.${nonce}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=600',
+  ]
+  if (secure) {
+    attributes.push('Secure')
+  }
+
+  return attributes.join('; ')
+}
+
+function readCookie(request: Request, name: string): string | undefined {
+  const header = request.headers.get('cookie')
+  if (!header) {
+    return undefined
+  }
+
+  for (const entry of header.split(';')) {
+    const separatorIndex = entry.indexOf('=')
+    if (separatorIndex < 0) {
+      continue
+    }
+
+    const cookieName = entry.slice(0, separatorIndex).trim()
+    if (cookieName !== name) {
+      continue
+    }
+
+    return entry.slice(separatorIndex + 1).trim()
+  }
+
+  return undefined
+}
+
+function readStateCookie(request: Request, provider: string): { readonly state: string, readonly nonce: string } | null {
+  const value = readCookie(request, getStateCookieName(provider))
+  if (!value) {
+    return null
+  }
+
+  const separatorIndex = value.indexOf('.')
+  if (separatorIndex <= 0 || separatorIndex === value.length - 1) {
+    return null
+  }
+
+  return {
+    state: value.slice(0, separatorIndex),
+    nonce: value.slice(separatorIndex + 1),
+  }
+}
+
+function timingSafeStringEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left)
+  const rightBuffer = Buffer.from(right)
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer)
+}
+
+function verifyBrowserBinding(
+  provider: string,
+  state: string,
+  pending: SocialPendingStateRecord,
+  request: Request,
+): boolean {
+  if (!pending.browserBinding) {
+    return false
+  }
+
+  const cookie = readStateCookie(request, provider)
+  if (!cookie || cookie.state !== state) {
+    return false
+  }
+
+  return timingSafeStringEqual(hashBrowserBinding(cookie.nonce), pending.browserBinding)
 }
 
 function encryptTokens(value: unknown, encryptionKey?: string): unknown {
@@ -527,21 +621,29 @@ async function resolveLinkedUser(
   readonly user: AuthUserLike
 }> {
   const bindings = getBindings()
-  const { guard, authProvider, adapter } = resolveGuardAndProvider(provider)
   const existingIdentity = await bindings.identityStore.findByProviderUserId(provider, profile.id)
   const authBindings = authRuntimeInternals.getRuntimeBindings()
   const verificationRequired = authBindings.config.emailVerification.required === true
 
   if (existingIdentity) {
+    if (!authBindings.config.guards[existingIdentity.guard]) {
+      throw new Error(`[@holo-js/auth-social] Guard "${existingIdentity.guard}" is not configured for linked social identity "${provider}:${profile.id}".`)
+    }
+
+    const storedAdapter = authBindings.providers[existingIdentity.authProvider]
+    if (!storedAdapter) {
+      throw new Error(`[@holo-js/auth-social] Auth provider runtime "${existingIdentity.authProvider}" is not configured for linked social identity "${provider}:${profile.id}".`)
+    }
+
     const linkedUser = resolveUserRecord(
-      await adapter.findById(existingIdentity.userId),
+      await storedAdapter.findById(existingIdentity.userId),
       `[@holo-js/auth-social] Linked social identity "${provider}:${profile.id}" references a missing local user.`,
     )
     if (!linkedUser) {
       throw new Error(`[@holo-js/auth-social] Linked social identity "${provider}:${profile.id}" references a missing local user.`)
     }
 
-    const serialized = serializeLocalUser(adapter, linkedUser, authProvider)
+    const serialized = serializeLocalUser(storedAdapter, linkedUser, existingIdentity.authProvider)
     await bindings.identityStore.save({
       ...existingIdentity,
       email: profile.email,
@@ -557,9 +659,14 @@ async function resolveLinkedUser(
         : tokens,
       updatedAt: new Date(),
     })
-    return { guard, authProvider, user: serialized }
+    return {
+      guard: existingIdentity.guard,
+      authProvider: existingIdentity.authProvider,
+      user: serialized,
+    }
   }
 
+  const { guard, authProvider, adapter } = resolveGuardAndProvider(provider)
   const hasVerifiedEmail = profile.emailVerified === true && typeof profile.email === 'string' && profile.email.trim().length > 0
   if (!hasVerifiedEmail && verificationRequired) {
     throw new Error(`[@holo-js/auth-social] Social sign-in with "${provider}" requires a verified email address.`)
@@ -614,6 +721,7 @@ export async function redirect(provider: string, input: SocialRequestInput): Pro
   const runtime = getProviderRuntime(provider)
   const { guard } = resolveGuardAndProvider(provider)
   const state = createState()
+  const browserNonce = createBrowserBindingNonce()
   const codeVerifier = createCodeVerifier()
   const codeChallenge = createCodeChallenge(codeVerifier)
 
@@ -622,6 +730,7 @@ export async function redirect(provider: string, input: SocialRequestInput): Pro
     state,
     codeVerifier,
     guard,
+    browserBinding: hashBrowserBinding(browserNonce),
     createdAt: new Date(),
   })
 
@@ -634,11 +743,14 @@ export async function redirect(provider: string, input: SocialRequestInput): Pro
     config: providerConfig,
   })
 
+  const headers = new Headers({
+    location: authorizationUrl,
+  })
+  headers.append('set-cookie', serializeStateCookie(provider, state, browserNonce, request))
+
   return new Response(null, {
     status: 302,
-    headers: {
-      location: authorizationUrl,
-    },
+    headers,
   })
 }
 
@@ -692,6 +804,14 @@ export async function callback(provider: string, input: SocialRequestInput): Pro
 
   const pending = await getBindings().stateStore.read(provider, state)
   if (!pending) {
+    return {
+      ok: false,
+      status: 400,
+      message: 'Invalid or expired OAuth state.',
+    }
+  }
+
+  if (!verifyBrowserBinding(provider, state, pending, request)) {
     return {
       ok: false,
       status: 400,

@@ -1,7 +1,7 @@
-import { createPublicKey, verify as verifySignature } from 'node:crypto'
+import { createPublicKey, randomBytes, verify as verifySignature } from 'node:crypto'
 import { authRuntimeInternals, getAuthRuntime } from '@holo-js/auth'
-import type { AuthenticatedAuthUser, AuthEstablishedSession, AuthUserLike } from '@holo-js/auth'
-import { parseCookieHeader } from '@holo-js/session'
+import type { AuthEstablishedSession, AuthUserLike } from '@holo-js/auth'
+import { cookie, parseCookieHeader } from '@holo-js/session'
 import type { NormalizedAuthWorkosProviderConfig } from '@holo-js/config'
 export {
   WorkosAuthConflictError,
@@ -14,13 +14,18 @@ export type {
   WorkosAuthFacade,
   WorkosAuthenticatedUser,
   WorkosAuthenticationResult,
+  WorkosCompleteAuthOptions,
   WorkosCompleteAuthResult,
+  WorkosDefaultUserAttributes,
   WorkosIdentityProfile,
   WorkosJsonValue,
   WorkosLogoutResult,
   WorkosLogoutSession,
   WorkosProviderRuntime,
+  WorkosSyncIdentityOptions,
   WorkosSyncStatus,
+  WorkosUserAttributeValue,
+  WorkosUserAttributes,
   WorkosVerifiedSession,
   WorkosVerifyRequestContext,
   WorkosVerifySessionContext,
@@ -30,13 +35,18 @@ import {
   type ConfigureWorkosAuthRuntimeOptions,
   type HostedIdentityRecord,
   type WorkosAuthBindings,
+  type WorkosAuthenticatedUser,
   type WorkosAuthenticationResult,
+  type WorkosCompleteAuthOptions,
   type WorkosCompleteAuthResult,
+  type WorkosDefaultUserAttributes,
   type WorkosIdentityProfile,
   type WorkosJsonValue,
   type WorkosLogoutResult,
   type WorkosLogoutSession,
   type WorkosProviderRuntime,
+  type WorkosSyncIdentityOptions,
+  type WorkosUserAttributes,
   type WorkosVerifiedSession,
   type WorkosVerifySessionContext,
 } from './contracts'
@@ -46,28 +56,6 @@ type JwkKey = Readonly<Record<string, unknown>> & {
 }
 
 type RuntimeAuthProviderAdapter = ReturnType<typeof authRuntimeInternals.getRuntimeBindings>['providers'][string]
-
-type WorkosUserAttributeValue =
-  | string
-  | number
-  | boolean
-  | Date
-  | null
-  | undefined
-  | readonly WorkosUserAttributeValue[]
-  | { readonly [key: string]: WorkosUserAttributeValue }
-
-type WorkosUserAttributes = Readonly<Record<string, WorkosUserAttributeValue>>
-
-type WorkosDefaultUserAttributes = {
-  readonly email: string
-  readonly name: string
-}
-
-type CompleteWorkosAuthOptions<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes> = {
-  readonly provider?: string
-  readonly user?: (workosUser: WorkosIdentityProfile) => TUserAttributes
-}
 
 type WorkosRequestHeaders =
   | Headers
@@ -104,9 +92,8 @@ type WorkosRequestLike = {
 
 type WorkosRequestInput = Request | WorkosRequestLike
 
-type SerializedWorkosAuthUser = AuthenticatedAuthUser & {
-  readonly id: string | number
-}
+type SerializedWorkosAuthUser<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes> =
+  WorkosAuthenticatedUser<TUserAttributes>
 
 type WorkosSessionPayload = {
   readonly guard: string
@@ -125,6 +112,7 @@ const WORKOS_API_BASE_URL = 'https://api.workos.com'
 const WORKOS_AUTHORIZE_URL = `${WORKOS_API_BASE_URL}/user_management/authorize`
 const WORKOS_AUTHENTICATE_URL = `${WORKOS_API_BASE_URL}/user_management/authenticate`
 const WORKOS_LOGOUT_URL = `${WORKOS_API_BASE_URL}/user_management/sessions/logout`
+const WORKOS_STATE_COOKIE_MAX_AGE_SECONDS = 300
 const workosDefaultProviderRuntimeCache = new Map<string, WorkosProviderRuntime>()
 const workosJwksCache = new Map<string, Promise<readonly JwkKey[]>>()
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
@@ -647,7 +635,38 @@ function requireWorkosClientConfig(config: NormalizedAuthWorkosProviderConfig): 
   return { clientId, apiKey, redirectUri }
 }
 
-function createAuthorizationUrl(config: NormalizedAuthWorkosProviderConfig, screenHint: 'sign-in' | 'sign-up'): string {
+function getWorkosStateCookieName(providerName: string): string {
+  return `holo_workos_${providerName}_state`
+}
+
+function createWorkosState(): string {
+  return randomBytes(32).toString('base64url')
+}
+
+function createStateCookie(providerName: string, state: string, request: Request): string {
+  return cookie(getWorkosStateCookieName(providerName), state, {
+    httpOnly: true,
+    maxAge: WORKOS_STATE_COOKIE_MAX_AGE_SECONDS,
+    sameSite: 'lax',
+    secure: new URL(request.url).protocol === 'https:',
+  })
+}
+
+function clearStateCookie(providerName: string, request: Request): string {
+  return cookie(getWorkosStateCookieName(providerName), '', {
+    expires: new Date(0),
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: new URL(request.url).protocol === 'https:',
+  })
+}
+
+function getWorkosStateFromRequest(request: Request, providerName: string): string | undefined {
+  const cookies = parseCookieHeader(request.headers.get('cookie'))
+  return cookies[getWorkosStateCookieName(providerName)]?.trim() || undefined
+}
+
+function createAuthorizationUrl(config: NormalizedAuthWorkosProviderConfig, screenHint: 'sign-in' | 'sign-up', state: string): string {
   const { clientId, redirectUri } = requireWorkosClientConfig(config)
   const url = new URL(WORKOS_AUTHORIZE_URL)
   url.searchParams.set('provider', 'authkit')
@@ -655,8 +674,20 @@ function createAuthorizationUrl(config: NormalizedAuthWorkosProviderConfig, scre
   url.searchParams.set('client_id', clientId)
   url.searchParams.set('redirect_uri', redirectUri)
   url.searchParams.set('screen_hint', screenHint)
+  url.searchParams.set('state', state)
 
   return url.toString()
+}
+
+function createWorkosRedirect(request: Request, config: NormalizedAuthWorkosProviderConfig & { readonly name: string }, screenHint: 'sign-in' | 'sign-up'): Response {
+  const state = createWorkosState()
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: createAuthorizationUrl(config, screenHint, state),
+      'set-cookie': createStateCookie(config.name, state, request),
+    },
+  })
 }
 
 function createLogoutUrl(sessionId: string, request: Request, returnTo?: string): string {
@@ -741,8 +772,8 @@ function requireSerializedUser(user: AuthUserLike, message: string): SerializedW
   throw new Error(message)
 }
 
-function createWorkosSessionPayload(
-  authenticated: Pick<WorkosAuthenticationResult, 'guard' | 'authProvider' | 'provider' | 'user'>,
+function createWorkosSessionPayload<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes>(
+  authenticated: Pick<WorkosAuthenticationResult<TUserAttributes>, 'guard' | 'authProvider' | 'provider' | 'user'>,
   session: WorkosVerifiedSession,
 ): WorkosSessionPayload {
   const user = requireSerializedUser(
@@ -784,11 +815,11 @@ function getWorkosLogoutSession(payload: unknown, providerName: string): WorkosL
   })
 }
 
-function serializeLocalUser(
+function serializeLocalUser<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes>(
   adapter: RuntimeAuthProviderAdapter,
   user: Record<string, unknown>,
   providerName: string,
-): SerializedWorkosAuthUser {
+): SerializedWorkosAuthUser<TUserAttributes> {
   const id = adapter.getId(user)
   const serialized = adapter.serialize
     ? adapter.serialize(user)
@@ -809,7 +840,7 @@ function serializeLocalUser(
     configurable: true,
   })
 
-  return Object.freeze(result) as SerializedWorkosAuthUser
+  return Object.freeze(result) as SerializedWorkosAuthUser<TUserAttributes>
 }
 
 function resolveDisplayName(profile: WorkosIdentityProfile): string {
@@ -819,6 +850,15 @@ function resolveDisplayName(profile: WorkosIdentityProfile): string {
 
   const fullName = [profile.firstName?.trim(), profile.lastName?.trim()].filter(Boolean).join(' ').trim()
   return fullName || profile.email || profile.id
+}
+
+function resolveDisplayNameForUpdate(profile: WorkosIdentityProfile): string | undefined {
+  if (typeof profile.name === 'string' && profile.name.trim()) {
+    return profile.name.trim()
+  }
+
+  const fullName = [profile.firstName?.trim(), profile.lastName?.trim()].filter(Boolean).join(' ').trim()
+  return fullName || undefined
 }
 
 function resolveEmailForCreation(profile: WorkosIdentityProfile): string {
@@ -860,12 +900,13 @@ function resolveUpdateUserInput<TUserAttributes extends WorkosUserAttributes>(
   profile: WorkosIdentityProfile,
   mapper?: (workosUser: WorkosIdentityProfile) => TUserAttributes,
 ): Readonly<Record<string, unknown>> {
-  return toAdapterInput(withRequiredUserFields({
+  return toAdapterInput({
     email: typeof profile.email === 'string' ? profile.email.trim() || undefined : undefined,
+    name: resolveDisplayNameForUpdate(profile),
     avatar: profile.profilePictureUrl,
     email_verified_at: profile.emailVerified ? new Date() : undefined,
     ...(mapper?.(profile) ?? {}),
-  }, profile))
+  })
 }
 
 function normalizeHostedProfile(profile: WorkosIdentityProfile): Readonly<Record<string, unknown>> {
@@ -940,7 +981,7 @@ async function updateLocalUser(
 
 async function ensureNoUnexpectedEmailCollision(
   adapter: RuntimeAuthProviderAdapter,
-  authProvider: string,
+  providerName: string,
   profile: WorkosIdentityProfile,
   currentUserId: string | number,
 ): Promise<void> {
@@ -962,7 +1003,7 @@ async function ensureNoUnexpectedEmailCollision(
     ) !== currentUserId
   ) {
     throw new WorkosAuthConflictError({
-      provider: 'workos',
+      provider: providerName,
       workosUserId: profile.id,
       email,
       message: `[@holo-js/auth-workos] WorkOS email "${email}" collides with a different local user.`,
@@ -1205,13 +1246,11 @@ async function authenticateWorkosCode(
   })
 }
 
-export async function syncIdentity(
+export async function syncIdentity<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes>(
   session: WorkosVerifiedSession,
   provider?: string,
-  options: {
-    readonly user?: (workosUser: WorkosIdentityProfile) => WorkosUserAttributes
-  } = {},
-): Promise<WorkosAuthenticationResult> {
+  options: WorkosSyncIdentityOptions<TUserAttributes> = {},
+): Promise<WorkosAuthenticationResult<TUserAttributes>> {
   const providerConfig = getConfiguredProviderConfig(provider)
   const providerName = providerConfig.name
   const profile = session.identity
@@ -1272,7 +1311,7 @@ export async function syncIdentity(
         guard,
         authProvider,
         status: 'relinked',
-        user: serializeLocalUser(adapter, relinkedUser, authProvider),
+        user: serializeLocalUser<TUserAttributes>(adapter, relinkedUser, authProvider),
         identity,
         session,
       })
@@ -1280,7 +1319,7 @@ export async function syncIdentity(
 
     await ensureNoUnexpectedEmailCollision(
       adapter,
-      authProvider,
+      providerName,
       profile,
       requireUserId(
         adapter,
@@ -1308,7 +1347,7 @@ export async function syncIdentity(
       guard,
       authProvider,
       status: updated.changed ? 'updated' : 'linked',
-      user: serializeLocalUser(adapter, updated.user, authProvider),
+      user: serializeLocalUser<TUserAttributes>(adapter, updated.user, authProvider),
       identity,
       session,
     })
@@ -1339,7 +1378,7 @@ export async function syncIdentity(
       guard,
       authProvider,
       status: 'linked',
-      user: serializeLocalUser(adapter, linked.user, authProvider),
+      user: serializeLocalUser<TUserAttributes>(adapter, linked.user, authProvider),
       identity,
       session,
     })
@@ -1367,7 +1406,7 @@ export async function syncIdentity(
     guard,
     authProvider,
     status: 'created',
-    user: serializeLocalUser(adapter, localUser, authProvider),
+    user: serializeLocalUser<TUserAttributes>(adapter, localUser, authProvider),
     identity,
     session,
   })
@@ -1398,28 +1437,30 @@ function getErrorMessage(error: unknown): string {
 }
 
 export async function loginWithWorkos(
-  _input: WorkosRequestInput,
+  input: WorkosRequestInput,
   options: {
     readonly provider?: string
   } = {},
 ): Promise<Response> {
   try {
+    const request = normalizeWorkosRequest(input)
     const providerConfig = getConfiguredProviderConfig(options.provider)
-    return Response.redirect(createAuthorizationUrl(providerConfig, 'sign-in'), 302)
+    return createWorkosRedirect(request, providerConfig, 'sign-in')
   } catch (error) {
     return createWorkosErrorResponse(error, 'workos_login_failed')
   }
 }
 
 export async function registerWithWorkos(
-  _input: WorkosRequestInput,
+  input: WorkosRequestInput,
   options: {
     readonly provider?: string
   } = {},
 ): Promise<Response> {
   try {
+    const request = normalizeWorkosRequest(input)
     const providerConfig = getConfiguredProviderConfig(options.provider)
-    return Response.redirect(createAuthorizationUrl(providerConfig, 'sign-up'), 302)
+    return createWorkosRedirect(request, providerConfig, 'sign-up')
   } catch (error) {
     return createWorkosErrorResponse(error, 'workos_register_failed')
   }
@@ -1478,8 +1519,8 @@ export async function logoutWithWorkos(
 
 export async function completeWorkosAuth<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes>(
   input: WorkosRequestInput,
-  options: CompleteWorkosAuthOptions<TUserAttributes> = {},
-): Promise<WorkosCompleteAuthResult> {
+  options: WorkosCompleteAuthOptions<TUserAttributes> = {},
+): Promise<WorkosCompleteAuthResult<TUserAttributes>> {
   try {
     const request = normalizeWorkosRequest(input)
     const url = new URL(request.url)
@@ -1502,6 +1543,16 @@ export async function completeWorkosAuth<TUserAttributes extends WorkosUserAttri
     }
 
     const providerConfig = getConfiguredProviderConfig(options.provider)
+    const callbackState = url.searchParams.get('state')?.trim()
+    const expectedState = getWorkosStateFromRequest(request, providerConfig.name)
+    if (!callbackState || !expectedState || !Object.is(callbackState, expectedState)) {
+      return Object.freeze({
+        ok: false,
+        code: 'workos_state_mismatch',
+        message: 'WorkOS callback state did not match the login request.',
+      } as const)
+    }
+
     const session = await authenticateWorkosCode(request, code, providerConfig)
     const authenticated = await syncIdentity(session, providerConfig.name, {
       user: options.user,
@@ -1521,7 +1572,13 @@ export async function completeWorkosAuth<TUserAttributes extends WorkosUserAttri
       user: authenticated.user,
       identity: authenticated.identity,
       session,
-      authSession,
+      authSession: Object.freeze({
+        ...authSession,
+        cookies: Object.freeze([
+          ...authSession.cookies,
+          clearStateCookie(providerConfig.name, request),
+        ]),
+      }),
     } as const)
   } catch (error) {
     return Object.freeze({

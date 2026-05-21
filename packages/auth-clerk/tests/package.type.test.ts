@@ -1,6 +1,6 @@
 import { describe, expectTypeOf, it } from 'vitest'
 import { completeClerkAuth } from '../src'
-import type { ClerkAuthFacade, ClerkCompleteAuthResult } from '../src'
+import type { ClerkAuthFacade, ClerkAuthenticationResult, ClerkCompleteAuthResult, ClerkVerifiedSession } from '../src'
 
 describe('@holo-js/auth-clerk typing', () => {
   it('accepts hosted route request-like inputs and preserves mapped callback users', () => {
@@ -26,6 +26,7 @@ describe('@holo-js/auth-clerk typing', () => {
     expectTypeOf<NuxtEventLike>().toMatchTypeOf<Parameters<ClerkAuthFacade['registerWithClerk']>[0]>()
     expectTypeOf<NuxtEventLike>().toMatchTypeOf<Parameters<ClerkAuthFacade['logoutWithClerk']>[0]>()
     expectTypeOf<NuxtEventLike>().toMatchTypeOf<Parameters<ClerkAuthFacade['completeClerkAuth']>[0]>()
+    expectTypeOf<NuxtEventLike>().toMatchTypeOf<Parameters<ClerkAuthFacade['authenticate']>[0]>()
 
     const result = completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback'), {
       user: (clerkUser): MappedUser => ({
@@ -37,5 +38,20 @@ describe('@holo-js/auth-clerk typing', () => {
     })
 
     expectTypeOf(result).toEqualTypeOf<Promise<ClerkCompleteAuthResult<MappedUser>>>()
+
+    const assertFacadeSyncTypes = (facade: ClerkAuthFacade, session: ClerkVerifiedSession): void => {
+      const syncResult = facade.syncIdentity(session, 'app', {
+        user: (clerkUser): MappedUser => ({
+          email: clerkUser.email,
+          name: clerkUser.name,
+          avatar: clerkUser.imageUrl ?? null,
+          clerkUserId: clerkUser.id,
+        }),
+      })
+
+      expectTypeOf(syncResult).toEqualTypeOf<Promise<ClerkAuthenticationResult<MappedUser>>>()
+    }
+
+    expectTypeOf(assertFacadeSyncTypes).returns.toEqualTypeOf<void>()
   })
 })

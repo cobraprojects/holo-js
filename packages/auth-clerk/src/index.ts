@@ -873,7 +873,7 @@ async function updateLocalUser(
 
 async function ensureNoUnexpectedEmailCollision(
   adapter: RuntimeAuthProviderAdapter,
-  authProvider: string,
+  providerName: string,
   profile: ClerkUserProfile,
   currentUserId: string | number,
 ): Promise<void> {
@@ -895,7 +895,7 @@ async function ensureNoUnexpectedEmailCollision(
     ) !== currentUserId
   ) {
     throw new ClerkAuthConflictError({
-      provider: 'clerk',
+      provider: providerName,
       clerkUserId: profile.id,
       email: resolvedEmail,
       message: `[@holo-js/auth-clerk] Clerk email "${resolvedEmail}" collides with a different local user.`,
@@ -1302,7 +1302,7 @@ export async function syncIdentity<TUserAttributes extends ClerkUserAttributes =
 
     await ensureNoUnexpectedEmailCollision(
       adapter,
-      authProvider,
+      providerName,
       profile,
       requireUserId(
         adapter,

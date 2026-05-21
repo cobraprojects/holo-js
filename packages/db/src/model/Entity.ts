@@ -160,6 +160,11 @@ class EntityBase<
     return this
   }
 
+  async update(values: ModelUpdatePayload<TTable>): Promise<this> {
+    this.fill(values)
+    return await this.save()
+  }
+
   forceFill(values: Partial<ModelRecord<TTable>>): this {
     Object.assign(this.attributes, values)
     return this

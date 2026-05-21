@@ -6,6 +6,7 @@ import { loginForm } from '$lib/schemas/auth'
 
 export async function POST({ request }: { request: Request }) {
   const submission = await validate(request, loginForm, {
+    csrf: true,
     throttle: 'login',
   })
 

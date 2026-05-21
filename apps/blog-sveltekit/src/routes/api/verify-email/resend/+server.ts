@@ -24,7 +24,15 @@ export const POST: RequestHandler = async ({ request }) => {
     })
   }
 
-  await resendEmailVerification(submission.data.email)
+  const { error } = await resendEmailVerification(submission.data.email)
+  if (error) {
+    const failure = submission.fail({
+      status: error.status,
+      errors: error.fields,
+    })
+
+    return json(failure, { status: failure.status })
+  }
 
   return success()
 }

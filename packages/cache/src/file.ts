@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, open, readFile, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import {
   CacheInvalidNumericMutationError,
+  CacheInvalidTtlError,
   CacheLockAcquisitionError,
   deserializeCacheValue,
   serializeCacheValue,
@@ -46,12 +47,36 @@ type FileReadResult<TValue> =
       value: TValue
     }
 
+type FileLockReadResult =
+  | {
+      state: 'missing'
+      filePath: string
+    }
+  | {
+      state: 'hit'
+      filePath: string
+      markerFilePath: string
+      value: FileCacheLockEnvelope
+    }
+
 const MALFORMED_FILE = Symbol('MALFORMED_FILE')
 
 function defaultSleep(milliseconds: number): Promise<void> {
   return new Promise((resolveDelay) => {
     setTimeout(resolveDelay, milliseconds)
   })
+}
+
+function validateLockSeconds(seconds: number): void {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new CacheInvalidTtlError('[@holo-js/cache] Cache lock seconds must be a finite number greater than 0.')
+  }
+}
+
+function validateLockWaitSeconds(waitSeconds: number): void {
+  if (!Number.isFinite(waitSeconds) || waitSeconds < 0) {
+    throw new CacheInvalidTtlError('[@holo-js/cache] Cache lock wait seconds must be a finite number greater than or equal to 0.')
+  }
 }
 
 function hashCacheKey(key: string): string {
@@ -70,6 +95,10 @@ function resolveEntryFilePath(rootPath: string, key: string): string {
 function resolveLockFilePath(rootPath: string, name: string): string {
   const hash = hashCacheKey(name)
   return join(rootPath, 'locks', hash.slice(0, 2), `${hash}.lock`)
+}
+
+function resolveLockMarkerFilePath(lockPath: string, owner: string): string {
+  return join(lockPath, `${hashCacheKey(owner)}.json`)
 }
 
 function isPositiveTimestamp(value: unknown): value is number {
@@ -104,6 +133,22 @@ async function ensureParentDirectory(filePath: string): Promise<void> {
 
 async function removeFileIfPresent(filePath: string): Promise<void> {
   await rm(filePath, { force: true })
+}
+
+async function removeEmptyDirectoryIfPresent(path: string): Promise<void> {
+  try {
+    await rmdir(path)
+  } catch (error) {
+    if (
+      error instanceof Error
+      && 'code' in error
+      && (error.code === 'ENOENT' || error.code === 'ENOTEMPTY' || error.code === 'ENOTDIR')
+    ) {
+      return
+    }
+
+    throw error
+  }
 }
 
 async function readFileIfPresent(filePath: string): Promise<string | undefined> {
@@ -212,6 +257,11 @@ async function removeScopedCacheFiles<TValue extends FileCacheEntryEnvelope | Fi
   isEnvelope: (value: unknown) => value is TValue,
   resolveName: (value: TValue) => string,
 ): Promise<void> {
+  async function removeScopedFile(filePath: string): Promise<void> {
+    await removeFileIfPresent(filePath)
+    await removeEmptyDirectoryIfPresent(dirname(filePath))
+  }
+
   if (!prefix) {
     await rm(rootPath, { recursive: true, force: true })
     await mkdir(rootPath, { recursive: true })
@@ -221,12 +271,12 @@ async function removeScopedCacheFiles<TValue extends FileCacheEntryEnvelope | Fi
   for (const filePath of await listFiles(rootPath)) {
     const decoded = await readJsonFile(filePath)
     if (!decoded || decoded === MALFORMED_FILE || !isEnvelope(decoded)) {
-      await removeFileIfPresent(filePath)
+      await removeScopedFile(filePath)
       continue
     }
 
     if (resolveName(decoded).startsWith(prefix)) {
-      await removeFileIfPresent(filePath)
+      await removeScopedFile(filePath)
     }
   }
 }
@@ -257,21 +307,93 @@ async function readLock(
   rootPath: string,
   name: string,
   now: number,
-): Promise<FileReadResult<FileCacheLockEnvelope>> {
+): Promise<FileLockReadResult> {
   const filePath = resolveLockFilePath(rootPath, name)
-  const decoded = await readJsonFile(filePath)
-  if (decoded === MALFORMED_FILE || !isFileCacheLockEnvelope(decoded) || decoded.name !== name) {
-    return removeInvalidFileAndReadMissing(filePath, decoded)
+  let markerFilePaths: readonly string[]
+
+  try {
+    const entries = await readdir(filePath, { withFileTypes: true })
+    markerFilePaths = entries
+      .filter(entry => entry.isFile())
+      .map(entry => join(filePath, entry.name))
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return {
+        state: 'missing',
+        filePath,
+      }
+    }
+
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOTDIR')) {
+      throw error
+    }
+
+    const decoded = await readJsonFile(filePath)
+    if (decoded === MALFORMED_FILE || !isFileCacheLockEnvelope(decoded) || decoded.name !== name) {
+      if (typeof decoded !== 'undefined') {
+        await removeFileIfPresent(filePath)
+      }
+
+      return {
+        state: 'missing',
+        filePath,
+      }
+    }
+
+    if (decoded.expiresAt <= now) {
+      await removeFileIfPresent(filePath)
+      return {
+        state: 'missing',
+        filePath,
+      }
+    }
+
+    return {
+      state: 'hit',
+      filePath,
+      markerFilePath: filePath,
+      value: decoded,
+    }
   }
 
-  if (decoded.expiresAt <= now) {
-    return removeInvalidFileAndReadMissing(filePath, decoded)
+  if (markerFilePaths.length === 0) {
+    return {
+      state: 'hit',
+      filePath,
+      markerFilePath: resolveLockMarkerFilePath(filePath, ''),
+      value: {
+        name,
+        owner: '',
+        expiresAt: now + 1,
+      },
+    }
   }
+
+  for (const markerFilePath of markerFilePaths) {
+    const decoded = await readJsonFile(markerFilePath)
+    if (decoded === MALFORMED_FILE || !isFileCacheLockEnvelope(decoded) || decoded.name !== name) {
+      await removeFileIfPresent(markerFilePath)
+      continue
+    }
+
+    if (decoded.expiresAt <= now) {
+      await removeFileIfPresent(markerFilePath)
+      continue
+    }
+
+    return {
+      state: 'hit',
+      filePath,
+      markerFilePath,
+      value: decoded,
+    }
+  }
+
+  await removeEmptyDirectoryIfPresent(filePath)
 
   return {
-    state: 'hit',
+    state: 'missing',
     filePath,
-    value: decoded,
   }
 }
 
@@ -291,7 +413,33 @@ function createFileLock(
   sleep: (milliseconds: number) => Promise<void>,
   ownerFactory: () => string,
 ): CacheLockContract {
+  validateLockSeconds(seconds)
+
   const owner = ownerFactory()
+
+  async function writeLockDirectory(filePath: string, envelope: string): Promise<boolean> {
+    await ensureParentDirectory(filePath)
+
+    try {
+      await mkdir(filePath)
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
+        return false
+      }
+
+      throw error
+    }
+
+    try {
+      await writeFile(resolveLockMarkerFilePath(filePath, owner), envelope, 'utf8')
+    } catch (error) {
+      await removeFileIfPresent(resolveLockMarkerFilePath(filePath, owner))
+      await removeEmptyDirectoryIfPresent(filePath)
+      throw error
+    }
+
+    return true
+  }
 
   async function tryAcquire(): Promise<boolean> {
     const filePath = resolveLockFilePath(rootPath, name)
@@ -301,13 +449,13 @@ function createFileLock(
       expiresAt: now() + (seconds * 1000),
     } satisfies FileCacheLockEnvelope)
 
-    if (await writeFileExclusively(filePath, envelope)) {
+    if (await writeLockDirectory(filePath, envelope)) {
       return true
     }
 
     const currentLock = await readLock(rootPath, name, now())
     if (currentLock.state === 'missing') {
-      return writeFileExclusively(filePath, envelope)
+      return writeLockDirectory(filePath, envelope)
     }
 
     return false
@@ -342,15 +490,13 @@ function createFileLock(
         return false
       }
 
-      const latestLock = await readLock(rootPath, name, now())
-      if (latestLock.state === 'missing' || latestLock.value.owner !== owner) {
-        return false
-      }
-
-      await removeFileIfPresent(currentLock.filePath)
+      await removeFileIfPresent(currentLock.markerFilePath)
+      await removeEmptyDirectoryIfPresent(currentLock.filePath)
       return true
     },
     async block<TValue>(waitSeconds: number, callback?: () => TValue | Promise<TValue>): Promise<boolean | TValue> {
+      validateLockWaitSeconds(waitSeconds)
+
       const deadline = now() + (waitSeconds * 1000)
       while (true) {
         if (await tryAcquire()) {

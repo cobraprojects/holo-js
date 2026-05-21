@@ -23,7 +23,12 @@ async function logout() {
   logoutError.value = null
   try {
     await $fetch('/api/super-admin/logout', { method: 'POST' })
-    await refreshUser()
+    try {
+      await refreshUser()
+    } catch (error) {
+      console.warn('Super admin auth refresh failed after logout.', error)
+    }
+
     await navigateTo('/super-admin/login')
   } catch (error) {
     logoutError.value = `Super admin logout failed. ${getErrorMessage(error)}`

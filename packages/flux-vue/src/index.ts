@@ -2,6 +2,60 @@ import { getCurrentScope, onScopeDispose, readonly, shallowRef, type Ref, type S
 import { getFluxClient, type FluxClient, type FluxConnectionStatus, type FluxListenerControls } from '@holo-js/flux'
 import type { BroadcastJsonObject, BroadcastPayloadFor, GeneratedBroadcastManifest } from '@holo-js/broadcast'
 
+type ManifestEventName<TManifest extends GeneratedBroadcastManifest>
+  = TManifest['events'][number]['name'] & string
+type ManifestChannelPattern<TManifest extends GeneratedBroadcastManifest>
+  = TManifest['channels'][number]['pattern'] & string
+type ManifestChannelEntryByPattern<
+  TManifest extends GeneratedBroadcastManifest,
+  TPattern extends string,
+> = Extract<TManifest['channels'][number], { pattern: TPattern }>
+type ManifestPresenceMember<
+  TManifest extends GeneratedBroadcastManifest,
+  TPattern extends string,
+> = Extract<ManifestChannelEntryByPattern<TManifest, TPattern>, { member: unknown }> extends { member: infer TMember }
+  ? TMember
+  : BroadcastJsonObject
+type ManifestEventNamesForPattern<
+  TManifest extends GeneratedBroadcastManifest,
+  TPattern extends string,
+> = TManifest['events'][number] extends infer TEvent
+  ? TEvent extends {
+    readonly name: infer TName
+    readonly channels: readonly { readonly pattern: infer TEventPattern }[]
+  }
+    ? TPattern extends TEventPattern & string
+      ? TName & string
+      : never
+    : never
+  : never
+type ManifestSubscriptionEventName<
+  TManifest extends GeneratedBroadcastManifest,
+  TChannel extends string,
+> = string extends ManifestEventName<TManifest>
+  ? string
+  : TChannel extends ManifestChannelPattern<TManifest>
+    ? ManifestEventNamesForPattern<TManifest, TChannel>
+    : never
+type ManifestComposableChannel<TManifest extends GeneratedBroadcastManifest>
+  = string extends ManifestChannelPattern<TManifest>
+    ? string
+    : ManifestChannelPattern<TManifest>
+type ManifestComposableEvent<
+  TManifest extends GeneratedBroadcastManifest,
+  TChannel extends string,
+  TEvent extends string,
+> = TEvent & ManifestSubscriptionEventName<TManifest, TChannel>
+type ManifestComposablePresenceMember<
+  TMember,
+  TManifest extends GeneratedBroadcastManifest,
+  TChannel extends string,
+> = unknown extends TMember
+  ? string extends ManifestChannelPattern<TManifest>
+    ? BroadcastJsonObject
+    : ManifestPresenceMember<TManifest, TChannel>
+  : TMember
+
 export interface FluxComposableOptions<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest> {
   readonly client?: FluxClient<TManifest>
   readonly onUnmount?: (cleanup: () => void) => void
@@ -11,13 +65,13 @@ export interface FluxConnectionStatusComposableOptions<TManifest extends Generat
   readonly onChange?: (status: FluxConnectionStatus) => void
 }
 
-export interface FluxPresenceComposableCallbacks<TMember = unknown> {
+export interface FluxPresenceComposableCallbacks<TMember = BroadcastJsonObject> {
   readonly onHere?: (members: readonly TMember[]) => void
 }
 
-export type FluxPresenceComposableState<TMember = unknown> = FluxListenerControls & FluxPresenceState<TMember>
+export type FluxPresenceComposableState<TMember = BroadcastJsonObject> = FluxListenerControls & FluxPresenceState<TMember>
 
-interface FluxPresenceState<TMember = unknown> {
+interface FluxPresenceState<TMember = BroadcastJsonObject> {
   readonly members: readonly TMember[]
 }
 
@@ -74,9 +128,13 @@ function subscribeWithEvents<TEvent extends string>(
   ) as AnyFluxSubscription
 }
 
-export function useFlux<TEvent extends string, TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
-  channel: string,
-  events: TEvent | readonly TEvent[],
+export function useFlux<
+  TEvent extends string,
+  TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest,
+  TChannel extends ManifestComposableChannel<TManifest> = ManifestComposableChannel<TManifest>,
+>(
+  channel: TChannel,
+  events: ManifestComposableEvent<TManifest, TChannel, TEvent> | readonly ManifestComposableEvent<TManifest, TChannel, TEvent>[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
   options: FluxComposableOptions<TManifest> = {},
 ): FluxListenerControls {
@@ -91,9 +149,13 @@ export function useFlux<TEvent extends string, TManifest extends GeneratedBroadc
   return createControls(subscription)
 }
 
-export function useFluxPublic<TEvent extends string, TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
-  channel: string,
-  events: TEvent | readonly TEvent[],
+export function useFluxPublic<
+  TEvent extends string,
+  TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest,
+  TChannel extends ManifestComposableChannel<TManifest> = ManifestComposableChannel<TManifest>,
+>(
+  channel: TChannel,
+  events: ManifestComposableEvent<TManifest, TChannel, TEvent> | readonly ManifestComposableEvent<TManifest, TChannel, TEvent>[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
   options: FluxComposableOptions<TManifest> = {},
 ): FluxListenerControls {
@@ -108,26 +170,35 @@ export function useFluxPublic<TEvent extends string, TManifest extends Generated
   return createControls(subscription)
 }
 
-export function useFluxPrivate<TEvent extends string, TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
-  channel: string,
-  events: TEvent | readonly TEvent[],
+export function useFluxPrivate<
+  TEvent extends string,
+  TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest,
+  TChannel extends ManifestComposableChannel<TManifest> = ManifestComposableChannel<TManifest>,
+>(
+  channel: TChannel,
+  events: ManifestComposableEvent<TManifest, TChannel, TEvent> | readonly ManifestComposableEvent<TManifest, TChannel, TEvent>[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
   options: FluxComposableOptions<TManifest> = {},
 ): FluxListenerControls {
   return useFlux(channel, events, callback, options)
 }
 
-export function useFluxPresence<TMember = unknown, TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
-  channel: string,
-  callbacks: FluxPresenceComposableCallbacks<TMember> = {},
+export function useFluxPresence<
+  TMember = unknown,
+  TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest,
+  TChannel extends ManifestComposableChannel<TManifest> = ManifestComposableChannel<TManifest>,
+>(
+  channel: TChannel,
+  callbacks: FluxPresenceComposableCallbacks<ManifestComposablePresenceMember<TMember, TManifest, TChannel>> = {},
   options: FluxComposableOptions<TManifest> = {},
-): FluxPresenceComposableState<TMember> {
-  const subscription = resolveClient(options).presence(channel) as AnyFluxPresenceSubscription
-  const members = shallowRef(subscription.members as readonly TMember[])
+): FluxPresenceComposableState<ManifestComposablePresenceMember<TMember, TManifest, TChannel>> {
+  const subscription = resolveClient(options).presence(channel) as unknown as AnyFluxPresenceSubscription
+  type TResolvedMember = ManifestComposablePresenceMember<TMember, TManifest, TChannel>
+  const members = shallowRef(subscription.members as readonly TResolvedMember[])
   callbacks.onHere?.(members.value)
 
   const stop = subscription.__onPresenceChange?.((nextMembers) => {
-    members.value = nextMembers as readonly TMember[]
+    members.value = nextMembers as readonly TResolvedMember[]
     callbacks.onHere?.(members.value)
   })
 
@@ -144,21 +215,28 @@ export function useFluxPresence<TMember = unknown, TManifest extends GeneratedBr
   })
 }
 
-export function useFluxNotification<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
-  channel: string,
-  callback: (payload: unknown) => void,
+export function useFluxNotification<
+  TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest,
+  TChannel extends ManifestComposableChannel<TManifest> = ManifestComposableChannel<TManifest>,
+>(
+  channel: TChannel,
+  callback: (payload: BroadcastJsonObject) => void,
   options: FluxComposableOptions<TManifest> = {},
 ): FluxListenerControls {
-  const subscription = resolveClient(options).private(channel).notification(callback as (payload: { readonly [key: string]: unknown }) => void) as AnyFluxSubscription
+  const subscription = resolveClient(options).private(channel).notification(callback) as AnyFluxSubscription
   registerCleanup(options, () => {
     subscription.leaveChannel()
   })
   return createControls(subscription)
 }
 
-export function useFluxModel<TEvent extends string, TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
-  channel: string,
-  events: TEvent | readonly TEvent[],
+export function useFluxModel<
+  TEvent extends string,
+  TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest,
+  TChannel extends ManifestComposableChannel<TManifest> = ManifestComposableChannel<TManifest>,
+>(
+  channel: TChannel,
+  events: ManifestComposableEvent<TManifest, TChannel, TEvent> | readonly ManifestComposableEvent<TManifest, TChannel, TEvent>[],
   callback: (payload: BroadcastPayloadFor<TEvent>) => void,
   options: FluxComposableOptions<TManifest> = {},
 ): FluxListenerControls {

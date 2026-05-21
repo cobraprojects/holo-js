@@ -13,6 +13,7 @@ import security, {
   createFileRateLimitStoreConfig,
   createMemoryRateLimitStore,
   createMemoryRateLimitStoreConfig,
+  createRateLimitStoreFromConfig,
   createRedisRateLimitStore,
   createRedisRateLimitStoreConfig,
   csrf,
@@ -20,7 +21,9 @@ import security, {
   defaultRateLimitKey,
   defineRateLimiter,
   defineSecurityConfig,
+  defineSecurityRuntimeBindings,
   fileRateLimitDriverInternals,
+  getSecurityRuntimeBindings,
   getSecurityRuntime,
   ip,
   limit,
@@ -32,6 +35,7 @@ import security, {
   SecurityCsrfError,
   SecurityRateLimitError,
   SecurityRuntimeNotConfiguredError,
+  securityStoreInternals,
   type SecurityRateLimitRedisDriverAdapter,
   type SecurityRateLimitStore,
 } from '../src'
@@ -469,6 +473,28 @@ describe('@holo-js/security csrf', () => {
       body: formData,
     })
     await expect(csrf.verify(formRequest)).resolves.toBeUndefined()
+
+    const fallbackFormData = new FormData()
+    fallbackFormData.set('_token', formToken)
+    const blankHeaderRequest = new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        cookie: `XSRF-TOKEN=${formToken}`,
+        'X-CSRF-TOKEN': '   ',
+      },
+      body: fallbackFormData,
+    })
+    await expect(csrf.verify(blankHeaderRequest)).resolves.toBeUndefined()
+
+    const fileTokenFormData = new FormData()
+    fileTokenFormData.set('_token', new Blob(['not-a-string']))
+    await expect(csrf.verify(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        cookie: `XSRF-TOKEN=${formToken}`,
+      },
+      body: fileTokenFormData,
+    }))).rejects.toBeInstanceOf(SecurityCsrfError)
   })
 
   it('rejects missing or mismatched csrf tokens with 419', async () => {
@@ -540,8 +566,39 @@ describe('@holo-js/security csrf', () => {
     expect(securityExports.csrfInternals.parseCookieHeader('tracking=%; XSRF-TOKEN=value')).toEqual({
       'XSRF-TOKEN': 'value',
     })
+    expect(securityExports.csrfInternals.parseCookieHeader('%=value; XSRF-TOKEN=value')).toEqual({
+      'XSRF-TOKEN': 'value',
+    })
     expect(securityExports.csrfInternals.decodeCsrfToken('missing-separator')).toBeNull()
+    expect(securityExports.csrfInternals.decodeCsrfToken('nonce.')).toBeNull()
     expect(securityExports.csrfInternals.isValidSignedCsrfToken('nonce.short')).toBe(false)
+  })
+
+  it('signs explicit raw csrf cookie values and ignores malformed form payloads', async () => {
+    configureSecurityRuntime({
+      config: defineSecurityConfig({
+        csrf: {
+          enabled: true,
+        },
+      }),
+      csrfSigningKey: 'test-signing-key',
+    })
+
+    const cookie = await csrf.cookie(new Request('https://app.test/register'), 'raw-nonce')
+    const encodedValue = cookie.split(';', 1)[0]?.slice('XSRF-TOKEN='.length)
+    expect(encodedValue).toBeDefined()
+    const decoded = securityExports.csrfInternals.decodeCsrfToken(decodeURIComponent(encodedValue ?? ''))
+    expect(decoded?.nonce).toBe('raw-nonce')
+
+    const token = securityExports.csrfInternals.encodeCsrfToken('body-token')
+    await expect(csrf.verify(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        cookie: `XSRF-TOKEN=${token}`,
+        'content-type': 'text/plain',
+      },
+      body: token,
+    }))).rejects.toBeInstanceOf(SecurityCsrfError)
   })
 
   it('bypasses csrf verification for safe methods and excluded paths', async () => {
@@ -672,7 +729,7 @@ describe('@holo-js/security csrf', () => {
     })).resolves.toBeUndefined()
   })
 
-  it('protect applies throttle after csrf verification when configured', async () => {
+  it('protect applies throttle before csrf verification when configured', async () => {
     configureSecurityRuntime({
       config: defineSecurityConfig({
         csrf: {
@@ -699,6 +756,51 @@ describe('@holo-js/security csrf', () => {
     }), {
       throttle: 'login',
     })).resolves.toBeUndefined()
+
+    await expect(protect(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        'x-forwarded-for': '203.0.113.10',
+      },
+    }), {
+      throttle: 'login',
+    })).rejects.toBeInstanceOf(SecurityRateLimitError)
+  })
+
+  it('protect still applies throttle when csrf is skipped', async () => {
+    configureSecurityRuntime({
+      config: defineSecurityConfig({
+        csrf: {
+          enabled: true,
+        },
+        rateLimit: {
+          limiters: {
+            login: limit.perMinute(1).by(({ request }) => ip(request, true)),
+          },
+        },
+      }),
+      csrfSigningKey: 'test-signing-key',
+      rateLimitStore: createMockRateLimitStore(),
+    })
+
+    await expect(protect(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        'x-real-ip': '203.0.113.15',
+      },
+    }), {
+      csrf: false,
+      throttle: 'login',
+    })).resolves.toBeUndefined()
+
+    await expect(protect(new Request('https://app.test/login', {
+      method: 'GET',
+      headers: {
+        'x-real-ip': '203.0.113.15',
+      },
+    }), {
+      throttle: 'login',
+    })).rejects.toBeInstanceOf(SecurityRateLimitError)
   })
 })
 
@@ -812,6 +914,33 @@ describe('@holo-js/security rate-limit drivers', () => {
       await vi.advanceTimersByTimeAsync(10)
 
       await expect(store.clear('limiter:login|user:pruned')).resolves.toBe(false)
+      await store.close?.()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('leaves active memory buckets alone during timer pruning', async () => {
+    vi.useFakeTimers()
+
+    try {
+      const store = createMemoryRateLimitStore({
+        now: () => new Date('2026-04-16T12:00:00.000Z'),
+        maxBuckets: 1,
+        pruneIntervalMs: 10,
+      })
+
+      await store.hit('limiter:login|user:active', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+      await vi.advanceTimersByTimeAsync(10)
+
+      const repeated = await store.hit('limiter:login|user:active', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+      expect(repeated.snapshot.attempts).toBe(2)
       await store.close?.()
     } finally {
       vi.useRealTimers()
@@ -1006,6 +1135,81 @@ describe('@holo-js/security rate-limit drivers', () => {
           attempts: 1,
         }),
       }))
+    })
+
+    it('serializes concurrent waiters reclaiming the same stale bucket lock', async () => {
+      const harness = await createHarness()
+      const store = createFileRateLimitStore(harness.root, {
+        now: () => new Date('2026-04-16T12:00:00.000Z'),
+        lockRetryDelayMs: 1,
+        lockTimeoutMs: 200,
+      })
+      const key = 'limiter:login|user:stale-lock-contended'
+      const bucketPath = fileRateLimitDriverInternals.getBucketPath(harness.root, key)
+      const lockPath = fileRateLimitDriverInternals.getBucketLockPath(bucketPath)
+
+      await mkdir(lockPath, { recursive: true })
+      await utimes(lockPath, new Date('2026-04-16T11:59:00.000Z'), new Date('2026-04-16T11:59:00.000Z'))
+
+      const hits = await Promise.all(Array.from({ length: 6 }, () => store.hit(key, {
+        maxAttempts: 10,
+        decaySeconds: 60,
+      })))
+
+      expect(hits.map(hit => hit.snapshot.attempts).sort((left, right) => left - right)).toEqual([1, 2, 3, 4, 5, 6])
+
+      const persisted = await store.hit(key, {
+        maxAttempts: 10,
+        decaySeconds: 60,
+      })
+      expect(persisted.snapshot.attempts).toBe(7)
+    })
+
+    it('does not delete a newer bucket lock when an older owner finishes', async () => {
+      const harness = await createHarness()
+      const bucketPath = fileRateLimitDriverInternals.getBucketPath(harness.root, 'limiter:login|user:replaced-lock')
+      const lockPath = fileRateLimitDriverInternals.getBucketLockPath(bucketPath)
+      const ownerPath = join(lockPath, 'owner')
+      let releaseLock!: () => void
+      let replacedLock!: () => void
+      const releaseRequested = new Promise<void>((resolve) => {
+        releaseLock = resolve
+      })
+      const lockReplaced = new Promise<void>((resolve) => {
+        replacedLock = resolve
+      })
+
+      const holdingLock = fileRateLimitDriverInternals.withBucketLock(bucketPath, {
+        retryDelayMs: 1,
+        timeoutMs: 20,
+      }, async () => {
+        await rm(lockPath, { recursive: true, force: true })
+        await mkdir(lockPath)
+        await writeFile(ownerPath, 'new-owner', 'utf8')
+        replacedLock()
+        await releaseRequested
+      })
+
+      await lockReplaced
+      releaseLock()
+      await holdingLock
+
+      await expect(readFile(ownerPath, 'utf8')).resolves.toBe('new-owner')
+      await rm(lockPath, { recursive: true, force: true })
+    })
+
+    it('ignores heartbeat failures when a lock disappears during the protected operation', async () => {
+      const harness = await createHarness()
+      const bucketPath = fileRateLimitDriverInternals.getBucketPath(harness.root, 'limiter:login|user:heartbeat-missing-lock')
+      const lockPath = fileRateLimitDriverInternals.getBucketLockPath(bucketPath)
+
+      await expect(fileRateLimitDriverInternals.withBucketLock(bucketPath, {
+        retryDelayMs: 1,
+        timeoutMs: 4,
+      }, async () => {
+        await rm(lockPath, { recursive: true, force: true })
+        await fileRateLimitDriverInternals.sleep(10)
+      })).resolves.toBeUndefined()
     })
 
     it('does not reclaim live bucket locks while another operation is still running', async () => {
@@ -1265,6 +1469,15 @@ describe('@holo-js/security rate-limit drivers', () => {
 
       await expect(storeWithoutClear.clearByPrefix('limiter:login|')).resolves.toBe(0)
       await expect(storeWithoutClear.clearAll()).resolves.toBe(0)
+      await expect(storeWithoutClear.hit('limiter:login|user:default-now', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })).resolves.toMatchObject({
+        limited: false,
+        snapshot: {
+          attempts: 1,
+        },
+      })
 
       const malformedStore = createRedisRateLimitStore({
         async increment() {
@@ -1289,6 +1502,23 @@ describe('@holo-js/security rate-limit drivers', () => {
         decaySeconds: 60,
       })).rejects.toThrow('attempts must be a non-negative integer')
 
+      const malformedTtlStore = createRedisRateLimitStore({
+        async increment() {
+          return {
+            attempts: 1,
+            ttlSeconds: -1,
+          }
+        },
+        async del() {
+          return 1
+        },
+      })
+
+      await expect(malformedTtlStore.hit('limiter:login|user:1', {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })).rejects.toThrow('ttlSeconds must be a non-negative integer')
+
       const malformedClearStore = createRedisRateLimitStore({
         async increment() {
           return {
@@ -1310,12 +1540,417 @@ describe('@holo-js/security rate-limit drivers', () => {
       await expect(malformedClearStore.clear('limiter:login|user:1')).rejects.toThrow('del() result must be a non-negative integer')
       await expect(malformedClearStore.clearByPrefix('limiter:login|')).rejects.toThrow('clearByPrefix() result must be a non-negative integer')
       await expect(malformedClearStore.clearAll()).rejects.toThrow('clearAll() result must be a non-negative integer')
+
+      const close = vi.fn(async () => {})
+      const closableStore = createRedisRateLimitStore({
+        async increment() {
+          return {
+            attempts: 1,
+            ttlSeconds: 60,
+          }
+        },
+        async del() {
+          return 1
+        },
+        close,
+      })
+      await closableStore.close?.()
+      expect(close).toHaveBeenCalledOnce()
     })
 
     it('exposes the standalone contract suite-compatible driver behavior', () => {
       expect(typeof redisRateLimitDriverInternals.assertNonNegativeInteger).toBe('function')
       expect(typeof memoryRateLimitDriverInternals.isExpired).toBe('function')
     })
+  })
+})
+
+describe('@holo-js/security coverage edge cases', () => {
+  it('covers limiter, ip, runtime, cors, and store factory edge cases', async () => {
+    expect(() => limit.perMinute(0)).toThrow('Rate limiter maxAttempts must be an integer greater than or equal to 1.')
+    expect(() => limit.perMinute(1).by('ip' as never)).toThrow('Rate limiter key resolvers must be functions.')
+    expect(() => defineRateLimiter(undefined as never)).toThrow('Rate limiter definitions must be objects.')
+    expect(() => defineRateLimiter({
+      maxAttempts: undefined,
+      decaySeconds: 60,
+    } as never)).toThrow('Rate limiter maxAttempts is required.')
+    expect(() => defineRateLimiter({
+      maxAttempts: ' ',
+      decaySeconds: 60,
+    } as never)).toThrow('Rate limiter maxAttempts must be an integer greater than or equal to 1.')
+    expect(() => defineRateLimiter({
+      maxAttempts: 1.5,
+      decaySeconds: 60,
+    } as never)).toThrow('Rate limiter maxAttempts must be an integer greater than or equal to 1.')
+
+    expect(ip(new Request('https://app.test', {
+      headers: {
+        'x-real-ip': '203.0.113.10',
+      },
+    }), true)).toBe('203.0.113.10')
+    expect(ip(new Request('https://app.test'), true)).toBe('unknown')
+    expect(getSecurityRuntimeBindings()).toBeUndefined()
+
+    const bindings = defineSecurityRuntimeBindings({
+      config: {
+        rateLimit: {
+          driver: 'memory',
+          limiters: {
+            login: {
+              maxAttempts: 2,
+              decaySeconds: 60,
+            },
+          },
+        },
+      },
+    })
+    expect(bindings.config.rateLimit.driver).toBe('memory')
+    configureSecurityRuntime(bindings)
+    configureSecurityRuntime()
+    expect(getSecurityRuntimeBindings()).toBeUndefined()
+    expect(securityStoreInternals.normalizeStoreConfig({}).rateLimit.driver).toBe('memory')
+
+    expect(corsInternals.normalizeDomain('   ')).toBe('')
+    expect(corsInternals.matchesPathPattern('/broadcasting/auth', '/broadcasting/auth')).toBe(true)
+    expect(corsInternals.matchesPathPattern('/files/app.js', '*/app.css')).toBe(false)
+    expect(corsInternals.matchesPathPattern('/admin/users', '/api/*/users')).toBe(false)
+    expect(corsInternals.matchesPathPattern('/v1/users', '*/users')).toBe(true)
+    expect(corsInternals.matchesPathPattern('/api/users', '/api/**')).toBe(true)
+    expect(corsInternals.resolveAllowedOrigin({
+      paths: ['/api/*'],
+      origins: ['*'],
+      credentials: false,
+      methods: ['GET'],
+      headers: ['content-type'],
+      maxAge: 0,
+      statefulDomains: [],
+    }, null)).toBeUndefined()
+    expect(corsInternals.resolveAllowedOrigin({
+      paths: ['/api/*'],
+      origins: ['*'],
+      credentials: true,
+      methods: ['GET'],
+      headers: ['content-type'],
+      maxAge: 0,
+      statefulDomains: [],
+    }, 'https://client.test')).toBe('https://client.test')
+    expect(corsInternals.resolveAllowedOrigin({
+      paths: ['/api/*'],
+      origins: ['*'],
+      credentials: false,
+      methods: ['GET'],
+      headers: ['content-type'],
+      maxAge: 0,
+      statefulDomains: [],
+    }, 'https://client.test')).toBe('*')
+
+    configureSecurityRuntime({
+      config: defineSecurityConfig({}),
+      cors: {
+        paths: ['/api/*'],
+        origins: ['https://api-client.test'],
+        credentials: false,
+        methods: ['GET'],
+        headers: ['content-type'],
+        maxAge: 0,
+        statefulDomains: [],
+      },
+    })
+    const nonCredentialedCorsHeaders = cors.headers(new Request('https://app.test/api/users', {
+      headers: {
+        origin: 'https://api-client.test',
+      },
+    }))
+    expect(nonCredentialedCorsHeaders.get('access-control-allow-origin')).toBe('https://api-client.test')
+    expect(nonCredentialedCorsHeaders.has('access-control-allow-credentials')).toBe(false)
+
+    configureSecurityRuntime({
+      config: defineSecurityConfig({}),
+      cors: {
+        paths: ['/api/*'],
+        origins: ['https://api-client.test'],
+        credentials: true,
+        methods: ['GET'],
+        headers: ['content-type'],
+        maxAge: 0,
+        statefulDomains: [],
+      },
+    })
+    expect(cors.headers(new Request('https://app.test/api/users', {
+      headers: {
+        origin: 'https://api-client.test',
+      },
+    })).get('access-control-allow-credentials')).toBe('true')
+
+    configureSecurityRuntime({
+      config: defineSecurityConfig({}),
+      cors: {
+        paths: ['/api/*'],
+        origins: ['https://api-client.test'],
+        credentials: false,
+        methods: ['GET'],
+        headers: ['content-type'],
+        maxAge: 0,
+        statefulDomains: ['stateful.test'],
+      },
+      rateLimitStore: createMockRateLimitStore(),
+    })
+
+    const openCorsHeaders = cors.headers(new Request('https://app.test/api/users', {
+      headers: {
+        origin: 'https://stateful.test',
+      },
+    }))
+    expect(openCorsHeaders.get('access-control-allow-origin')).toBe('https://stateful.test')
+    expect(openCorsHeaders.get('access-control-allow-credentials')).toBe('true')
+    expect(cors.headers(new Request('https://app.test/api/users')).get('vary')).toBe('Origin')
+    expect(cors.preflight(new Request('https://app.test/api/users'))).toBeNull()
+    expect(cors.preflight(new Request('https://app.test/api/users', {
+      method: 'OPTIONS',
+    }))).toBeNull()
+    resetSecurityRuntime()
+
+    const memoryStore = createRateLimitStoreFromConfig({
+      rateLimit: {
+        driver: 'memory',
+      },
+    })
+    expect(await memoryStore.clearAll()).toBe(0)
+    await memoryStore.close?.()
+
+    expect(() => createMemoryRateLimitStore({ maxBuckets: 0 })).toThrow('maxBuckets must be an integer greater than or equal to 1.')
+    expect(() => createMemoryRateLimitStore({ pruneIntervalMs: 0 })).toThrow('pruneIntervalMs must be an integer greater than or equal to 1.')
+
+    const root = await mkdtemp(join(tmpdir(), 'holo-security-store-'))
+    tempDirs.push(root)
+    const fileStore = createRateLimitStoreFromConfig({
+      rateLimit: {
+        driver: 'file',
+        file: {
+          path: 'rate-limits',
+        },
+      },
+    }, {
+      projectRoot: root,
+    })
+    expect(await fileStore.clearAll()).toBe(0)
+
+    const directFileRoot = await mkdtemp(join(tmpdir(), 'holo-security-direct-store-'))
+    tempDirs.push(directFileRoot)
+    const directFileStore = createRateLimitStoreFromConfig({
+      rateLimit: {
+        driver: 'file',
+        file: {
+          path: join(directFileRoot, 'rate-limits'),
+        },
+      },
+    })
+    expect(await directFileStore.clearAll()).toBe(0)
+
+    const normalizedRedisConfig = {
+      ...bindings.config,
+      rateLimit: {
+        ...bindings.config.rateLimit,
+        driver: 'redis' as const,
+      },
+    }
+    const redisStore = createRateLimitStoreFromConfig(normalizedRedisConfig, {
+      redisAdapter: {
+        async increment() {
+          return {
+            attempts: 1,
+            ttlSeconds: 60,
+          }
+        },
+        async del() {
+          return 0
+        },
+      },
+    })
+    expect(await redisStore.clear('missing')).toBe(false)
+    expect(() => createRateLimitStoreFromConfig(normalizedRedisConfig)).toThrow('Redis-backed rate limits require a redis adapter.')
+    expect(() => createRateLimitStoreFromConfig({
+      ...bindings.config,
+      rateLimit: {
+        ...bindings.config.rateLimit,
+        driver: 'invalid' as never,
+      },
+    })).toThrow('Unsupported rate limit driver "invalid"')
+  })
+
+  it('covers default key trust proxy and resolver fallback branches', async () => {
+    const previousTrustProxy = process.env.HOLO_SECURITY_TRUST_PROXY
+    const runtime = globalThis as typeof globalThis & {
+      process?: NodeJS.Process
+    }
+    const previousProcess = runtime.process
+
+    try {
+      configureSecurityRuntime({
+        config: defineSecurityConfig({}),
+      })
+
+      for (const value of ['1', 'true', 'yes', 'on']) {
+        process.env.HOLO_SECURITY_TRUST_PROXY = value
+        await expect(defaultRateLimitKey(new Request('https://app.test', {
+          headers: {
+            'x-forwarded-for': '203.0.113.20, 198.51.100.10',
+          },
+        }))).resolves.toBe('ip:203.0.113.20')
+      }
+
+      process.env.HOLO_SECURITY_TRUST_PROXY = 'off'
+      await expect(defaultRateLimitKey(new Request('https://app.test', {
+        headers: {
+          'x-forwarded-for': '203.0.113.20',
+        },
+      }))).resolves.toBe('ip:unknown')
+
+      configureSecurityRuntime({
+        config: defineSecurityConfig({}),
+        defaultKeyResolver: () => null,
+      })
+      await expect(defaultRateLimitKey(new Request('https://app.test', {
+        headers: {
+          'x-real-ip': '203.0.113.21',
+        },
+      }))).resolves.toBe('ip:unknown')
+
+      configureSecurityRuntime({
+        config: defineSecurityConfig({}),
+        defaultKeyResolver: () => Number.POSITIVE_INFINITY,
+      })
+      await expect(defaultRateLimitKey(new Request('https://app.test'))).rejects.toThrow('Default rate limiter key resolver must resolve a non-empty string key.')
+
+      configureSecurityRuntime({
+        config: defineSecurityConfig({}),
+      })
+      expect(Reflect.deleteProperty(runtime, 'process')).toBe(true)
+      await expect(defaultRateLimitKey(new Request('https://app.test', {
+        headers: {
+          'x-forwarded-for': '203.0.113.22',
+        },
+      }))).resolves.toBe('ip:unknown')
+    } finally {
+      Reflect.set(runtime, 'process', previousProcess)
+      if (typeof previousTrustProxy === 'undefined') {
+        delete process.env.HOLO_SECURITY_TRUST_PROXY
+      } else {
+        process.env.HOLO_SECURITY_TRUST_PROXY = previousTrustProxy
+      }
+    }
+  })
+
+  it('covers file driver malformed bucket and lock cleanup paths', async () => {
+    expect(() => fileRateLimitDriverInternals.deserializeBucket(JSON.stringify({
+      keyHash: 'hash',
+      prefixHashes: ['prefix'],
+      attempts: 1,
+      expiresAt: '2026-04-16T12:01:00.000Z',
+    }))).toThrow('non-empty string namespace')
+    expect(() => fileRateLimitDriverInternals.deserializeBucket(JSON.stringify({
+      namespace: 'limiter:login|',
+      prefixHashes: ['prefix'],
+      attempts: 1,
+      expiresAt: '2026-04-16T12:01:00.000Z',
+    }))).toThrow('non-empty string key hash')
+    expect(() => fileRateLimitDriverInternals.deserializeBucket(JSON.stringify({
+      namespace: 'limiter:login|',
+      keyHash: 'hash',
+      prefixHashes: [],
+      attempts: 1,
+      expiresAt: '2026-04-16T12:01:00.000Z',
+    }))).toThrow('non-empty prefix hashes')
+    expect(() => fileRateLimitDriverInternals.deserializeBucket(JSON.stringify({
+      namespace: 'limiter:login|',
+      keyHash: 'hash',
+      prefixHashes: ['prefix', ''],
+      attempts: 1,
+      expiresAt: '2026-04-16T12:01:00.000Z',
+    }))).toThrow('non-empty prefix hashes')
+    expect(() => fileRateLimitDriverInternals.deserializeBucket(JSON.stringify({
+      namespace: 'limiter:login|',
+      keyHash: 'hash',
+      prefixHashes: ['prefix'],
+      attempts: 0,
+      expiresAt: '2026-04-16T12:01:00.000Z',
+    }))).toThrow('integer attempts count greater than 0')
+    expect(() => fileRateLimitDriverInternals.deserializeBucket(JSON.stringify({
+      namespace: 'limiter:login|',
+      keyHash: 'hash',
+      prefixHashes: ['prefix'],
+      attempts: 1,
+    }))).toThrow('ISO expiry timestamp')
+    expect(() => fileRateLimitDriverInternals.deserializeBucket(JSON.stringify({
+      namespace: 'limiter:login|',
+      keyHash: 'hash',
+      prefixHashes: ['prefix'],
+      attempts: 1,
+      expiresAt: 'not-a-date',
+    }))).toThrow('valid expiry timestamp')
+
+    const root = await mkdtemp(join(tmpdir(), 'holo-security-file-'))
+    tempDirs.push(root)
+    const defaultClockStore = createFileRateLimitStore(root)
+    await expect(defaultClockStore.hit('plain-key', {
+      maxAttempts: 1,
+      decaySeconds: 60,
+    })).resolves.toMatchObject({
+      snapshot: {
+        attempts: 1,
+      },
+    })
+
+    const directoryPath = join(root, 'bucket-directory')
+    await mkdir(directoryPath)
+    await expect(fileRateLimitDriverInternals.readBucket(directoryPath)).rejects.toThrow()
+    const filePath = join(root, 'not-a-directory')
+    await writeFile(filePath, '', 'utf8')
+    await expect(fileRateLimitDriverInternals.listBucketPaths(filePath)).rejects.toThrow()
+
+    const bucketPath = join(root, 'aa', 'bb', 'bucket.json')
+    await fileRateLimitDriverInternals.withBucketLock(bucketPath, {
+      retryDelayMs: 1,
+      timeoutMs: 50,
+    }, async () => {
+      await rm(join(fileRateLimitDriverInternals.getBucketLockPath(bucketPath), 'owner'), { force: true })
+    })
+
+    const unreadableOwnerBucketPath = join(root, 'cc', 'dd', 'bucket.json')
+    await expect(fileRateLimitDriverInternals.withBucketLock(unreadableOwnerBucketPath, {
+      retryDelayMs: 1,
+      timeoutMs: 50,
+    }, async () => {
+      await writeFile(join(fileRateLimitDriverInternals.getBucketLockPath(unreadableOwnerBucketPath), 'owner'), 'different-owner', 'utf8')
+    })).resolves.toBeUndefined()
+
+    const lockPath = join(root, 'fresh.lock')
+    await mkdir(lockPath)
+    await writeFile(join(lockPath, 'owner'), 'owner', 'utf8')
+    expect(await fileRateLimitDriverInternals.reclaimStaleBucketLock(lockPath, 60_000)).toBe(false)
+    await rm(lockPath, { recursive: true, force: true })
+    await expect(fileRateLimitDriverInternals.reclaimStaleBucketLock(join(root, 'missing.lock'), 5)).resolves.toBe(false)
+
+    const cleanupBlockedLockPath = join(root, 'cleanup-blocked.lock')
+    await mkdir(cleanupBlockedLockPath)
+    await mkdir(`${cleanupBlockedLockPath}.cleanup`)
+    await utimes(cleanupBlockedLockPath, new Date('2026-04-16T11:59:00.000Z'), new Date('2026-04-16T11:59:00.000Z'))
+    await expect(fileRateLimitDriverInternals.acquireBucketLock(cleanupBlockedLockPath, {
+      retryDelayMs: 1,
+      timeoutMs: 5,
+    })).rejects.toThrow('Timed out waiting')
+
+    const fileParent = join(root, 'file-parent')
+    await writeFile(fileParent, '', 'utf8')
+    await expect(fileRateLimitDriverInternals.acquireBucketLock(join(fileParent, 'bucket.lock'), {
+      retryDelayMs: 1,
+      timeoutMs: 5,
+    })).rejects.toThrow()
+    await expect(fileRateLimitDriverInternals.reclaimStaleBucketLock(join(fileParent, 'bucket.lock'), 5)).rejects.toThrow()
+    await expect(fileRateLimitDriverInternals.removeOwnedBucketLock({
+      ownerId: 'owner',
+      path: filePath,
+    })).rejects.toThrow()
   })
 })
 
@@ -1468,6 +2103,28 @@ describe('@holo-js/security rate limiting', () => {
 
     expect(result.snapshot.key).toBe('user:42')
     expect(defaultKeyResolver).toHaveBeenCalledWith(request)
+  })
+
+  it('accepts numeric default keys and rejects configured resolvers without requests', async () => {
+    configureSecurityRuntime({
+      config: defineSecurityConfig({
+        rateLimit: {
+          limiters: {
+            invites: limit.perHour(3).define(),
+            login: limit.perMinute(2).by(({ request }) => ip(request, true)),
+          },
+        },
+      }),
+      rateLimitStore: createMockRateLimitStore(),
+      defaultKeyResolver: async () => 42,
+    })
+
+    const result = await rateLimit('invites', {
+      request: new Request('https://app.test/invites'),
+    })
+    expect(result.snapshot.key).toBe('42')
+
+    await expect(rateLimit('login', {})).rejects.toThrow('requires a request when using its configured key resolver')
   })
 
   it('supports async limiter key resolvers that compose with the default helper', async () => {

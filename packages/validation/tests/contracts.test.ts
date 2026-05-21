@@ -13,6 +13,12 @@ import {
   validate,
   validationInternals,
 } from '../src'
+import { normalizeFieldBuilder } from '../src/contracts-support'
+import { summarizeErrors } from '../src/contracts-runtime'
+
+function objectPrototypeHas(key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(Object.prototype, key)
+}
 
 describe('@holo-js/validation contracts', () => {
   it('defines schemas, field builders, and rule families', () => {
@@ -55,22 +61,42 @@ describe('@holo-js/validation contracts', () => {
       email: string
       profile: {
         city: string
+        zip: string
       }
     }>({
       email: ['Email is required.'],
       'profile.city': ['City is required.'],
+      'profile.zip': ['ZIP is required.'],
     })
 
     expect(errors.has('email')).toBe(true)
+    expect(errors.has('missing')).toBe(false)
     expect(errors.first('email')).toBe('Email is required.')
+    expect(errors.first('missing')).toBeUndefined()
     expect(errors.get('profile.city')).toEqual(['City is required.'])
     expect(errors.email).toEqual(['Email is required.'])
     expect(errors.profile?.city).toEqual(['City is required.'])
+    expect(errors.profile?.zip).toEqual(['ZIP is required.'])
     expect(errors.flatten()).toEqual({
       email: ['Email is required.'],
       'profile.city': ['City is required.'],
+      'profile.zip': ['ZIP is required.'],
     })
     expect(errors.toJSON()).toEqual(errors.flatten())
+  })
+
+  it('rejects unsafe error paths without mutating Object.prototype', () => {
+    Reflect.deleteProperty(Object.prototype, 'polluted')
+
+    try {
+      for (const path of ['__proto__.polluted', 'constructor.prototype.polluted', 'profile.prototype.polluted']) {
+        expect(() => createErrorBag({ [path]: ['blocked'] })).toThrow(ValidationContractError)
+      }
+
+      expect(objectPrototypeHas('polluted')).toBe(false)
+    } finally {
+      Reflect.deleteProperty(Object.prototype, 'polluted')
+    }
   })
 
   it('validates plain objects and applies coercion, defaults, and inferred nested output', async () => {
@@ -163,6 +189,13 @@ describe('@holo-js/validation contracts', () => {
     expect(result.errors.has('age')).toBe(true)
     expect(result.errors.first('password')).toBe('This field does not match its confirmation.')
     expect(result.errors.first('profile.city')).toBe('This field is required.')
+    expect((await safeParse({
+      name: 'Ava',
+      email: 'ava@example.com',
+      age: '42',
+      password: 'supersecret',
+      passwordConfirmation: 'supersecret',
+    }, registerUser)).errors.first('profile.city')).toBe('This field is required.')
 
     await expect(parse({
       name: '',
@@ -232,6 +265,26 @@ describe('@holo-js/validation contracts', () => {
     expect(requestResult.valid).toBe(true)
     if (requestResult.valid) {
       expect(requestResult.data.age).toBe(33)
+    }
+  })
+
+  it('rejects unsafe FormData and URLSearchParams paths without mutating Object.prototype', async () => {
+    const s = schema({ ok: field.string().optional() })
+
+    Reflect.deleteProperty(Object.prototype, 'polluted')
+
+    try {
+      const formData = new FormData()
+      formData.append('__proto__.polluted', 'yes')
+      await expect(validate(formData, s)).rejects.toThrow(ValidationContractError)
+
+      const searchParams = new URLSearchParams()
+      searchParams.append('constructor.prototype.polluted', 'yes')
+      expect(() => validationInternals.normalizeFormData(searchParams)).toThrow(ValidationContractError)
+
+      expect(objectPrototypeHas('polluted')).toBe(false)
+    } finally {
+      Reflect.deleteProperty(Object.prototype, 'polluted')
     }
   })
 
@@ -623,6 +676,7 @@ describe('@holo-js/validation coverage completeness', () => {
 
     const stringFailure = await requiredString['~standard'].validate('')
     expect('issues' in stringFailure && stringFailure.issues?.length).toBeGreaterThan(0)
+    expect('issues' in stringFailure && stringFailure.issues?.map(issue => issue.message)).toEqual(['This field is required.'])
 
     const numberSuccess = await optionalNumber['~standard'].validate(42)
     expect('value' in numberSuccess && numberSuccess.value).toBe(42)
@@ -651,6 +705,15 @@ describe('@holo-js/validation coverage completeness', () => {
     if ('issues' in blockedItem && blockedItem.issues) {
       expect(blockedItem.issues.some(i => i.message === 'Blocked.')).toBe(true)
     }
+
+    const blockedSingleItem = await tagsField['~standard'].validate('blocked')
+    expect('issues' in blockedSingleItem && blockedSingleItem.issues).toBeDefined()
+    if ('issues' in blockedSingleItem && blockedSingleItem.issues) {
+      expect(blockedSingleItem.issues.some(i => i.message === 'Blocked.')).toBe(true)
+    }
+
+    const rootCustom = await field.string().custom(() => 'Root custom failure.')['~standard'].validate('x')
+    expect('issues' in rootCustom && rootCustom.issues?.[0]?.path).toBeUndefined()
 
     const validItems = await tagsField['~standard'].validate(['admin', 'editor'])
     expect('value' in validItems).toBe(true)
@@ -777,6 +840,19 @@ describe('@holo-js/validation coverage completeness', () => {
     })
 
     await expect(validate(request, loginSchema)).rejects.toThrow('Unsupported request content type')
+  })
+
+  it('rejects unsupported requests with missing content type', async () => {
+    const loginSchema = schema({
+      email: field.string().required(),
+    })
+
+    const request = new Request('https://example.com/login', {
+      method: 'POST',
+      body: new Blob(['raw-body']),
+    })
+
+    await expect(validate(request, loginSchema)).rejects.toThrow('Unsupported request content type: (missing).')
   })
 
   it('rejects non-object non-web inputs', async () => {
@@ -930,6 +1006,12 @@ describe('@holo-js/validation coverage completeness', () => {
 
     const failure = await validate({ status: 'deleted' }, statusSchema)
     expect(failure.valid).toBe(false)
+
+    const missing = await validate({}, statusSchema)
+    expect(missing.valid).toBe(false)
+    if (!missing.valid) {
+      expect(missing.errors.get('status')).toEqual(['This field is required.'])
+    }
   })
 
   it('handles regex rule validation through the schema pipeline', async () => {
@@ -1110,6 +1192,32 @@ describe('@holo-js/validation coverage completeness', () => {
     const result = coerceShapeInput({ name: field.string().required().field }, null)
     expect(result).toEqual({ name: undefined })
   })
+
+  it('covers nested defaults when input omits the nested object', async () => {
+    const s = schema({
+      profile: {
+        city: field.string().default('Cairo'),
+      },
+    })
+
+    const result = await validate({}, s)
+    expect(result.valid).toBe(true)
+    if (result.valid) {
+      expect(result.data.profile.city).toBe('Cairo')
+    }
+  })
+
+  it('covers post-validation of array item rules for scalar schema input', async () => {
+    const s = schema({
+      tags: field.array(field.string().custom(value => value !== 'blocked' || 'Blocked.')),
+    })
+
+    const result = await validate({ tags: 'blocked' }, s)
+    expect(result.valid).toBe(false)
+    if (!result.valid) {
+      expect(result.errors.first('tags.0')).toBe('Blocked.')
+    }
+  })
 })
 
 
@@ -1122,12 +1230,44 @@ describe('@holo-js/validation edge case coverage', () => {
     const fileLike = { name: 'test.png', type: 'image/png', size: 100 }
     const result = await validate({ avatar: fileLike }, uploadSchema)
     expect(result.valid).toBe(true)
+
+    const blobResult = await validate({ avatar: new Blob(['avatar']) }, uploadSchema)
+    expect(blobResult.valid).toBe(true)
+
+    const invalidResult = await validate({ avatar: {} }, uploadSchema)
+    expect(invalidResult.valid).toBe(false)
   })
 
   it('covers normalizeFieldBuilder with raw ValidationField objects', () => {
     const rawField = field.string().required().field
     const s = schema({ name: rawField as never })
     expect(s.fields.name).toBeDefined()
+    expect(normalizeFieldBuilder(rawField)).toBe(rawField)
+    expect(() => normalizeFieldBuilder({} as never)).toThrow(ValidationContractError)
+  })
+
+  it('covers defensive compilation of malformed regex and transform rules', async () => {
+    const malformed = schema({
+      code: {
+        kind: 'field',
+        definition: {
+          kind: 'string',
+          rules: [
+            { name: 'min', args: ['not-a-number'] },
+            { name: 'regex', args: ['not-a-regexp'] },
+            { name: 'transform', args: ['not-a-function'] },
+            { name: 'custom', args: ['not-image'] },
+            { name: 'customAsync', args: ['not-a-function'] },
+          ],
+        },
+      } as never,
+    })
+
+    const result = await validate({ code: 'ABC' }, malformed)
+    expect(result.valid).toBe(true)
+    if (result.valid) {
+      expect(result.data.code).toBe('ABC')
+    }
   })
 
   it('covers normalizeSchemaShape with empty field name', () => {
@@ -1167,6 +1307,13 @@ describe('@holo-js/validation edge case coverage', () => {
   it('covers assignNestedValue array index non-last with missing container', () => {
     const { assignNestedValue } = validationInternals
     const target: Record<string, unknown> = { items: [null] }
+    assignNestedValue(target, 'items[0].name', 'first')
+    expect(target.items).toEqual([{ name: 'first' }])
+  })
+
+  it('covers assignNestedValue array index non-last with primitive container replacement', () => {
+    const { assignNestedValue } = validationInternals
+    const target: Record<string, unknown> = { items: ['old'] }
     assignNestedValue(target, 'items[0].name', 'first')
     expect(target.items).toEqual([{ name: 'first' }])
   })
@@ -1318,6 +1465,14 @@ describe('@holo-js/validation edge case coverage', () => {
     expect(validationInternals.normalizeIssuePath({})).toBe('')
   })
 
+  it('covers issuesToFlat with root-level issue paths', () => {
+    expect(validationInternals.issuesToFlat([
+      { message: 'Root failed.' },
+    ])).toEqual({
+      _root: ['Root failed.'],
+    })
+  })
+
   it('covers isFieldDefinition and isValidationField guards', () => {
     expect(validationInternals.isFieldDefinition(null)).toBe(false)
     expect(validationInternals.isFieldDefinition({ kind: 'string', rules: [] })).toBe(true)
@@ -1399,6 +1554,13 @@ describe('@holo-js/validation remaining branch coverage', () => {
     const target: Record<string, unknown> = {}
     assignNestedValue(target, 'a.b.c', 'deep')
     expect(target).toEqual({ a: { b: { c: 'deep' } } })
+  })
+
+  it('covers assignNestedValue ignoring inherited object cursor values', () => {
+    const { assignNestedValue } = validationInternals
+    const target = Object.create({ profile: { inherited: true } }) as Record<string, unknown>
+    assignNestedValue(target, 'profile.name', 'Ava')
+    expect(target.profile).toEqual({ name: 'Ava' })
   })
 
   it('covers resolveDateRuleValue with valid Date object', async () => {
@@ -1729,6 +1891,14 @@ describe('@holo-js/validation unreachable-branch coverage', () => {
     // Non-root path: parse with nested required field missing
     const nestedSchema = schema({ profile: { city: field.string().required() } })
     await expect(parse({ profile: {} }, nestedSchema)).rejects.toThrow('profile.city')
+  })
+
+  it('covers summarizeErrors message fallbacks directly', () => {
+    expect(summarizeErrors({})).toBe('Validation failed.')
+    expect(summarizeErrors({ _root: [] })).toBe('Validation failed.')
+    expect(summarizeErrors({ _root: ['Root failed.'] })).toBe('Root failed.')
+    expect(summarizeErrors({ name: [] })).toBe('name: Validation failed.')
+    expect(summarizeErrors({ name: ['Name failed.'] })).toBe('name: Name failed.')
   })
 
   it('covers resolveDateRuleValue with Date instance for rule arg', async () => {

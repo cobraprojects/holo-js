@@ -67,17 +67,17 @@ function resolveRegisteredEventName(
   definition: EventDefinition,
   options: RegisterEventOptions = {},
 ): string {
-  const explicitOption = options.name?.trim()
+  const explicitOption = eventInternals.normalizeOptionalString(options.name, 'Event registration name')
   if (explicitOption) {
     return explicitOption
   }
 
-  const explicitDefinition = definition.name?.trim()
+  const explicitDefinition = eventInternals.normalizeOptionalString(definition.name, 'Event name')
   if (explicitDefinition) {
     return explicitDefinition
   }
 
-  const sourcePath = options.sourcePath?.trim()
+  const sourcePath = eventInternals.normalizeOptionalString(options.sourcePath, 'Event source path')
   if (sourcePath) {
     return eventInternals.deriveEventNameFromSourcePath(sourcePath)
   }
@@ -89,17 +89,17 @@ function resolveRegisteredListenerId(
   definition: ListenerDefinition,
   options: RegisterListenerOptions = {},
 ): string {
-  const explicitOption = options.id?.trim()
+  const explicitOption = eventInternals.normalizeOptionalString(options.id, 'Listener id')
   if (explicitOption) {
     return explicitOption
   }
 
-  const explicitDefinition = definition.name?.trim()
+  const explicitDefinition = eventInternals.normalizeOptionalString(definition.name, 'Listener name')
   if (explicitDefinition) {
     return explicitDefinition
   }
 
-  const sourcePath = options.sourcePath?.trim()
+  const sourcePath = eventInternals.normalizeOptionalString(options.sourcePath, 'Listener source path')
   if (sourcePath) {
     return deriveListenerIdFromSourcePath(sourcePath)
   }
@@ -112,7 +112,7 @@ function resolveListenerEventName(reference: EventReference): string {
     return reference
   }
 
-  const explicitName = reference.name?.trim()
+  const explicitName = eventInternals.normalizeOptionalString(reference.name, 'Listener event reference name')
   if (explicitName) {
     return explicitName
   }
@@ -174,6 +174,7 @@ export function registerEvent<TPayload, TName extends string | undefined = strin
 
   const normalizedDefinition = normalizeEventDefinition(definition)
   const name = resolveRegisteredEventName(normalizedDefinition, options)
+  const sourcePath = eventInternals.normalizeOptionalString(options.sourcePath, 'Event source path')
   const state = getEventRegistryState()
 
   if (state.events.has(name) && options.replaceExisting !== true) {
@@ -182,7 +183,7 @@ export function registerEvent<TPayload, TName extends string | undefined = strin
 
   const entry = Object.freeze({
     name,
-    ...(options.sourcePath ? { sourcePath: options.sourcePath } : {}),
+    ...(typeof sourcePath === 'undefined' ? {} : { sourcePath }),
     definition: Object.freeze({
       ...normalizedDefinition,
       name,
@@ -236,6 +237,7 @@ export function registerListener(
 
   const normalizedDefinition = normalizeListenerDefinition(definition)
   const id = resolveRegisteredListenerId(normalizedDefinition, options)
+  const sourcePath = eventInternals.normalizeOptionalString(options.sourcePath, 'Listener source path')
   const state = getEventRegistryState()
 
   if (state.listeners.has(id) && options.replaceExisting !== true) {
@@ -250,7 +252,7 @@ export function registerListener(
 
   const listener = Object.freeze({
     id,
-    ...(options.sourcePath ? { sourcePath: options.sourcePath } : {}),
+    ...(typeof sourcePath === 'undefined' ? {} : { sourcePath }),
     eventNames,
     definition: Object.freeze({
       ...normalizedDefinition,

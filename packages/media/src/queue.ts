@@ -81,6 +81,13 @@ export async function runMediaGenerateConversionsJob(
   payload: MediaGenerateConversionsPayload,
 ): Promise<MediaGenerateConversionsResult> {
   const normalized = normalizePayload(payload)
+  if (normalized.conversionNames.length === 0) {
+    return Object.freeze({
+      status: 'processed',
+      conversionNames: normalized.conversionNames,
+    })
+  }
+
   const media = typeof normalized.mediaId === 'number'
     ? await Media.find(normalized.mediaId)
     : await Media.where('id', normalized.mediaId).first()

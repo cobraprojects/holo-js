@@ -132,4 +132,49 @@ describe('@holo-js/flux typing', () => {
       expectTypeOf(payload).toMatchTypeOf<BroadcastJsonObject>()
     })
   })
+
+  it('rejects manifest events that do not target the subscribed channel', () => {
+    const client = createFluxClient({
+      manifest: {
+        version: 1,
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        events: [{
+          name: 'orders.updated',
+          channels: [{
+            type: 'private',
+            pattern: 'orders.{orderId}',
+          }],
+        }, {
+          name: 'chat.message',
+          channels: [{
+            type: 'presence',
+            pattern: 'chat.{roomId}',
+          }],
+        }],
+        channels: [{
+          name: 'orders.{orderId}',
+          pattern: 'orders.{orderId}',
+          type: 'private',
+          params: ['orderId'],
+          whispers: [],
+        }, {
+          name: 'chat.{roomId}',
+          pattern: 'chat.{roomId}',
+          type: 'presence',
+          params: ['roomId'],
+          whispers: [],
+          member: {
+            id: 'user-1',
+          },
+        }],
+      },
+      connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+    })
+
+    client.private('orders.{orderId}').listen('orders.updated', (payload) => {
+      expectTypeOf(payload).toMatchTypeOf<BroadcastJsonObject>()
+    })
+    // @ts-expect-error event exists in the manifest but is not emitted on orders.{orderId}
+    client.private('orders.{orderId}').listen('chat.message', () => {})
+  })
 })

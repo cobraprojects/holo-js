@@ -109,6 +109,11 @@ describe('@holo-js/flux package surface', () => {
     expect(presenceSubscription.members).toEqual([{ id: 'user_1' }, { id: 'user_2' }])
 
     await privateSubscription.whisper('typing.start' as never, { editing: false })
+    expect(debug!.getJoinedChannels()).toEqual([
+      'public:orders.1',
+      'private:orders.1',
+      'presence:chat.1',
+    ])
     privateSubscription.leave()
     publicSubscription.leaveChannel()
     presenceSubscription.leaveChannel()
@@ -198,7 +203,9 @@ describe('@holo-js/flux package surface', () => {
     const channel = connector.subscribe('orders.2', 'private')
     const events: unknown[] = []
     const notifications: unknown[] = []
+    const stopFirstListener = channel.onEvent('orders.updated', payload => events.push({ first: payload }))
     channel.onEvent('orders.updated', payload => events.push(payload))
+    stopFirstListener()
     channel.onNotification(payload => notifications.push(payload))
     ;(connector as unknown as { __debug: { emitEvent(channel: string, event: string, payload: object): void, emitNotification(channel: string, payload: object): void } }).__debug.emitEvent('orders.2', 'orders.updated', { ok: true })
     ;(connector as unknown as { __debug: { emitEvent(channel: string, event: string, payload: object): void, emitNotification(channel: string, payload: object): void } }).__debug.emitNotification('orders.2', { type: 'done' })

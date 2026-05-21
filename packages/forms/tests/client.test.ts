@@ -280,6 +280,98 @@ describe('@holo-js/forms client', () => {
     expect(emailErrors).toEqual([])
   })
 
+  it('ignores stale async change validation results that resolve out of order', async () => {
+    const validations: Array<{
+      readonly value: string
+      readonly deferred: ReturnType<typeof createDeferred<true | string>>
+    }> = []
+    const registerUser = schema({
+      email: field.string().required().customAsync(async (value) => {
+        const deferred = createDeferred<true | string>()
+        validations.push({
+          value,
+          deferred,
+        })
+        return deferred.promise
+      }),
+    })
+
+    const client = useForm(registerUser, {
+      initialValues: {
+        email: 'ava@example.com',
+      },
+      validateOn: 'change',
+    })
+
+    const first = client.fields.email.onInput('bad')
+    await vi.waitFor(() => {
+      expect(validations).toHaveLength(1)
+    })
+
+    const second = client.fields.email.onInput('next@example.com')
+    await vi.waitFor(() => {
+      expect(validations).toHaveLength(2)
+    })
+
+    expect(validations[0]?.value).toBe('bad')
+    expect(validations[1]?.value).toBe('next@example.com')
+
+    validations[1]?.deferred.resolve(true)
+    await second
+    expect(client.errors.first('email')).toBeUndefined()
+
+    validations[0]?.deferred.resolve('Stale validation error.')
+    await first
+
+    expect(client.values.email).toBe('next@example.com')
+    expect(client.errors.first('email')).toBeUndefined()
+
+    const setValueValidations: Array<{
+      readonly value: string
+      readonly deferred: ReturnType<typeof createDeferred<true | string>>
+    }> = []
+    const setValueSchema = schema({
+      email: field.string().required().customAsync(async (value) => {
+        const deferred = createDeferred<true | string>()
+        setValueValidations.push({
+          value,
+          deferred,
+        })
+        return deferred.promise
+      }),
+    })
+
+    const setValueClient = useForm(setValueSchema, {
+      initialValues: {
+        email: 'ava@example.com',
+      },
+      validateOn: 'change',
+    })
+
+    const firstSetValue = setValueClient.setValue('email', 'bad')
+    await vi.waitFor(() => {
+      expect(setValueValidations).toHaveLength(1)
+    })
+
+    const secondSetValue = setValueClient.setValue('email', 'next@example.com')
+    await vi.waitFor(() => {
+      expect(setValueValidations).toHaveLength(2)
+    })
+
+    expect(setValueValidations[0]?.value).toBe('bad')
+    expect(setValueValidations[1]?.value).toBe('next@example.com')
+
+    setValueValidations[1]?.deferred.resolve(true)
+    await secondSetValue
+    expect(setValueClient.errors.first('email')).toBeUndefined()
+
+    setValueValidations[0]?.deferred.resolve('Stale validation error.')
+    await firstSetValue
+
+    expect(setValueClient.values.email).toBe('next@example.com')
+    expect(setValueClient.errors.first('email')).toBeUndefined()
+  })
+
   it('keeps untouched field errors hidden when blur validation runs', async () => {
     const registerUser = schema({
       name: field.string().required(),
@@ -980,6 +1072,39 @@ describe('@holo-js/forms client', () => {
     expect(client.errors.first('email')).toBe('Email is already taken.')
   })
 
+  it('supports destructuring submit from the form client', async () => {
+    const registerUser = schema({
+      email: field.string().required().email(),
+    })
+
+    const submitter = vi.fn(() => ({
+      ok: false as const,
+      status: 422,
+      valid: false as const,
+      values: {
+        email: 'taken@example.com',
+      },
+      errors: {
+        email: ['Email is already taken.'],
+      },
+    }))
+
+    const client = useForm(registerUser, {
+      initialValues: {
+        email: 'ava@example.com',
+      },
+      submitter,
+    })
+    const submit = client.submit
+
+    const result = await submit()
+
+    expect(submitter).toHaveBeenCalledTimes(1)
+    expect('ok' in result && result.ok === false).toBe(true)
+    expect(client.values.email).toBe('taken@example.com')
+    expect(client.errors.first('email')).toBe('Email is already taken.')
+  })
+
   it('normalizes submitter transport errors into form failures', async () => {
     const registerUser = schema({
       email: field.string().required().email(),
@@ -1018,6 +1143,49 @@ describe('@holo-js/forms client', () => {
       errors: {
         _root: ['Unable to submit the form right now. Please try again.'],
       },
+    })
+  })
+
+  it('removes sensitive values from transport failure payloads', async () => {
+    const registerUser = schema({
+      email: field.string().required().email(),
+      password: field.password().required().min(8),
+      passwordConfirmation: field.password().required(),
+      nationalId: field.string().sensitive().required(),
+    })
+
+    const client = useForm(registerUser, {
+      initialValues: {
+        email: 'ava@example.com',
+        password: 'super-secret',
+        passwordConfirmation: 'super-secret',
+        nationalId: 'private-id',
+      },
+      async submitter() {
+        throw new SyntaxError('Unexpected token < in JSON')
+      },
+    })
+
+    const result = await client.submit()
+
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      submitted: true,
+      valid: false,
+      values: {
+        email: 'ava@example.com',
+      },
+      errors: {
+        _root: ['Unable to submit the form right now. Please try again.'],
+      },
+    })
+    expect(client.lastSubmission).toEqual(result)
+    expect(client.values).toEqual({
+      email: 'ava@example.com',
+      password: '',
+      passwordConfirmation: '',
+      nationalId: '',
     })
   })
 

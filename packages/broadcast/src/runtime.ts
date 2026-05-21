@@ -195,10 +195,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function normalizeJsonValue(value: unknown, path: string): unknown {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new Error(`[@holo-js/broadcast] ${path} must be JSON-serializable.`)
+    }
+
+    return value
+  }
+
   if (
     value === null
     || typeof value === 'string'
-    || typeof value === 'number'
     || typeof value === 'boolean'
   ) {
     return value

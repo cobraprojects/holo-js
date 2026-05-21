@@ -207,6 +207,237 @@ export default defineConfig({
     }
   })
 
+  it('excludes Next config files from output file tracing', () => {
+    const config = withHolo({
+      outputFileTracingExcludes: {
+        '/*': ['custom-ignore'],
+        '/api/*': ['api-ignore'],
+      },
+    })
+
+    expect(config.outputFileTracingExcludes?.['/*']).toEqual(expect.arrayContaining([
+      './next.config.ts',
+      './next.config.mjs',
+      './next.config.js',
+      'custom-ignore',
+    ]))
+    expect(config.outputFileTracingExcludes?.['/api/*']).toEqual(['api-ignore'])
+  })
+
+  it('preserves existing Turbopack ignore issue rules', () => {
+    const existingRule = {
+      path: /custom-config$/,
+      title: /Custom config warning/,
+    }
+
+    const config = withHolo({
+      turbopack: {
+        customFlag: true,
+        ignoreIssue: [existingRule],
+      },
+    })
+
+    expect(config.turbopack?.customFlag).toBe(true)
+    expect(config.turbopack?.ignoreIssue).toEqual([
+      existingRule,
+      {
+        path: /next\.config\.(ts|mjs|js)$/,
+        title: /Encountered unexpected file in NFT list/,
+      },
+    ])
+  })
+
+  it('returns user rewrites when the storage route prefix does not need an alias', async () => {
+    const previousStorageRoutePrefix = process.env.STORAGE_ROUTE_PREFIX
+    process.env.STORAGE_ROUTE_PREFIX = '/'
+
+    try {
+      const config = withHolo({
+        rewrites: async () => [{
+          source: '/existing/:path*',
+          destination: '/existing/:path*',
+        }],
+      })
+
+      await expect(config.rewrites()).resolves.toEqual([{
+        source: '/existing/:path*',
+        destination: '/existing/:path*',
+      }])
+    } finally {
+      process.env.STORAGE_ROUTE_PREFIX = previousStorageRoutePrefix
+    }
+  })
+
+  it('returns an empty rewrite list when no storage alias or user rewrites exist', async () => {
+    const previousStorageRoutePrefix = process.env.STORAGE_ROUTE_PREFIX
+    delete process.env.STORAGE_ROUTE_PREFIX
+
+    try {
+      await expect(withHolo().rewrites?.()).resolves.toEqual([])
+    } finally {
+      process.env.STORAGE_ROUTE_PREFIX = previousStorageRoutePrefix
+    }
+  })
+
+  it('appends the storage route rewrite to array rewrites', async () => {
+    const previousStorageRoutePrefix = process.env.STORAGE_ROUTE_PREFIX
+    process.env.STORAGE_ROUTE_PREFIX = ' /assets/ '
+
+    try {
+      const config = withHolo({
+        rewrites: async () => [{
+          source: '/existing/:path*',
+          destination: '/existing/:path*',
+        }],
+      })
+
+      await expect(config.rewrites()).resolves.toEqual([
+        {
+          source: '/existing/:path*',
+          destination: '/existing/:path*',
+        },
+        {
+          source: '/assets/:path*',
+          destination: '/storage/:path*',
+        },
+      ])
+    } finally {
+      process.env.STORAGE_ROUTE_PREFIX = previousStorageRoutePrefix
+    }
+  })
+
+  it('adds the storage route rewrite to shaped rewrite results', async () => {
+    const previousStorageRoutePrefix = process.env.STORAGE_ROUTE_PREFIX
+    process.env.STORAGE_ROUTE_PREFIX = '/files'
+
+    try {
+      const config = withHolo({
+        rewrites: async () => ({
+          beforeFiles: [{
+            source: '/before/:path*',
+            destination: '/before/:path*',
+          }],
+          afterFiles: [{
+            source: '/after/:path*',
+            destination: '/after/:path*',
+          }],
+        }),
+      })
+
+      await expect(config.rewrites()).resolves.toEqual({
+        beforeFiles: [
+          {
+            source: '/before/:path*',
+            destination: '/before/:path*',
+          },
+          {
+            source: '/files/:path*',
+            destination: '/storage/:path*',
+          },
+        ],
+        afterFiles: [{
+          source: '/after/:path*',
+          destination: '/after/:path*',
+        }],
+      })
+    } finally {
+      process.env.STORAGE_ROUTE_PREFIX = previousStorageRoutePrefix
+    }
+  })
+
+  it('creates shaped rewrite beforeFiles when the user result omits them', async () => {
+    const previousStorageRoutePrefix = process.env.STORAGE_ROUTE_PREFIX
+    process.env.STORAGE_ROUTE_PREFIX = '/files'
+
+    try {
+      const config = withHolo({
+        rewrites: async () => ({
+          fallback: [{
+            source: '/fallback/:path*',
+            destination: '/fallback/:path*',
+          }],
+        }),
+      })
+
+      await expect(config.rewrites()).resolves.toEqual({
+        beforeFiles: [{
+          source: '/files/:path*',
+          destination: '/storage/:path*',
+        }],
+        fallback: [{
+          source: '/fallback/:path*',
+          destination: '/fallback/:path*',
+        }],
+      })
+    } finally {
+      process.env.STORAGE_ROUTE_PREFIX = previousStorageRoutePrefix
+    }
+  })
+
+  it('uses the storage route rewrite when user rewrites have an unsupported shape', async () => {
+    const previousStorageRoutePrefix = process.env.STORAGE_ROUTE_PREFIX
+    process.env.STORAGE_ROUTE_PREFIX = '/files'
+
+    try {
+      const config = withHolo({
+        rewrites: async () => false,
+      })
+
+      await expect(config.rewrites()).resolves.toEqual([{
+        source: '/files/:path*',
+        destination: '/storage/:path*',
+      }])
+    } finally {
+      process.env.STORAGE_ROUTE_PREFIX = previousStorageRoutePrefix
+    }
+  })
+
+  it('skips optional Holo packages when package.json is not an object', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'package.json'), 'null', 'utf8')
+
+    const previousCwd = process.cwd()
+    process.chdir(root)
+
+    try {
+      const config = withHolo()
+
+      expect(config.serverExternalPackages).toEqual(expect.arrayContaining([
+        '@holo-js/core',
+        '@holo-js/adapter-next',
+      ]))
+      expect(config.serverExternalPackages).not.toContain('@holo-js/auth')
+    } finally {
+      process.chdir(previousCwd)
+    }
+  })
+
+  it('ignores malformed package dependency fields', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'package.json'), JSON.stringify({
+      dependencies: {
+        '@holo-js/auth': 1,
+      },
+      devDependencies: ['@holo-js/auth-social-google'],
+      optionalDependencies: {
+        '@holo-js/auth-social': 'workspace:*',
+      },
+    }), 'utf8')
+
+    const previousCwd = process.cwd()
+    process.chdir(root)
+
+    try {
+      const config = withHolo()
+
+      expect(config.serverExternalPackages).toContain('@holo-js/auth-social')
+      expect(config.serverExternalPackages).not.toContain('@holo-js/auth')
+      expect(config.serverExternalPackages).not.toContain('@holo-js/auth-social-google')
+    } finally {
+      process.chdir(previousCwd)
+    }
+  })
+
   it('skips optional Holo packages when package.json cannot be parsed', async () => {
     const root = await createProject()
     await writeFile(join(root, 'package.json'), '{', 'utf8')

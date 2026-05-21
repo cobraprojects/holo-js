@@ -22,6 +22,7 @@
     },
     "./next/server": {
       "types": "./dist/next/server.d.ts",
+      "browser": "./dist/next/server.edge.mjs",
       "import": "./dist/next/server.mjs",
       "default": "./dist/next/server.mjs"
     },

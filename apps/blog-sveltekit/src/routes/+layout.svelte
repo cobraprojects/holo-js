@@ -27,8 +27,17 @@
         return
       }
 
-      await auth.refreshUser()
-      await invalidateAll()
+      try {
+        await auth.refreshUser()
+      } catch (error) {
+        console.warn('Auth refresh failed after logout.', error)
+      }
+
+      try {
+        await invalidateAll()
+      } catch (error) {
+        console.warn('Auth invalidation failed after logout.', error)
+      }
     } catch (error) {
       console.warn('Logout failed.', error)
     } finally {

@@ -32,6 +32,14 @@ export interface NormalizedMediaCollectionDefinition<TName extends string = stri
   readonly maxSize?: number
 }
 
+function normalizePositiveInteger(value: number, fieldName: string): number {
+  if (!Number.isFinite(value)) {
+    throw new Error(`[Holo Media] Media collection ${fieldName} must be a finite number.`)
+  }
+
+  return Math.max(1, Math.floor(value))
+}
+
 function decorateCollection<TName extends string>(
   definition: MediaCollectionDefinition<TName>,
 ): MediaCollectionBuilder<TName> {
@@ -57,7 +65,7 @@ function decorateCollection<TName extends string>(
     },
     onlyKeepLatest(limit: number) {
       return clone({
-        onlyKeepLatest: Math.max(1, Math.floor(limit)),
+        onlyKeepLatest: normalizePositiveInteger(limit, 'onlyKeepLatest'),
       })
     },
     acceptsMimeTypes(mimeTypes: readonly string[]) {
@@ -81,7 +89,7 @@ function decorateCollection<TName extends string>(
     },
     maxSize(bytes: number) {
       return clone({
-        maxFileSize: Math.max(1, Math.floor(bytes)),
+        maxFileSize: normalizePositiveInteger(bytes, 'maxFileSize'),
       })
     },
   })
@@ -111,7 +119,7 @@ export function normalizeCollectionDefinitions<
       conversionsDisk: definition.conversionsDiskName?.trim() || undefined,
       singleFile: Boolean(definition.singleFile),
       onlyKeepLatest: typeof definition.onlyKeepLatest === 'number'
-        ? Math.max(1, Math.floor(definition.onlyKeepLatest))
+        ? normalizePositiveInteger(definition.onlyKeepLatest, 'onlyKeepLatest')
         : undefined,
       acceptedMimeTypes: Object.freeze(
         definition.acceptedMimeTypes
@@ -125,7 +133,7 @@ export function normalizeCollectionDefinitions<
           .filter(Boolean),
       ),
       maxSize: typeof definition.maxFileSize === 'number'
-        ? Math.max(1, Math.floor(definition.maxFileSize))
+        ? normalizePositiveInteger(definition.maxFileSize, 'maxFileSize')
         : undefined,
     })
   }))

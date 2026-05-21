@@ -1,4 +1,4 @@
-import { readFile, realpath } from 'node:fs/promises'
+import { open, realpath, stat } from 'node:fs/promises'
 import { extname, resolve, sep } from 'node:path'
 import type { RuntimeDiskConfig, HoloStorageRuntimeConfig } from '@holo-js/storage'
 import { useRuntimeConfig } from '#imports'
@@ -108,21 +108,42 @@ function isPathWithinRoot(root: string, absolutePath: string): boolean {
   return absolutePath === root || absolutePath.startsWith(`${root}${sep}`)
 }
 
+type FileIdentity = {
+  dev: number
+  ino: number
+}
+
+function isSameFile(left: FileIdentity, right: FileIdentity): boolean {
+  return left.dev === right.dev && left.ino === right.ino
+}
+
 async function readPublicFile(
   event: unknown,
   disk: PublicLocalDisk,
   absolutePath: string,
 ): Promise<Buffer> {
   const resolvedRoot = await realpath(resolve(disk.root))
-  const resolvedPath = await realpath(absolutePath)
+  const file = await open(absolutePath, 'r')
 
-  if (!isPathWithinRoot(resolvedRoot, resolvedPath)) {
-    throw createMissingFileError('Storage file not found.')
+  try {
+    const openedFile = await file.stat()
+    const resolvedPath = await realpath(absolutePath)
+
+    if (!isPathWithinRoot(resolvedRoot, resolvedPath)) {
+      throw createMissingFileError('Storage file not found.')
+    }
+
+    const resolvedFile = await stat(resolvedPath)
+    if (!isSameFile(openedFile, resolvedFile)) {
+      throw createMissingFileError('Storage file not found.')
+    }
+
+    const contents = await file.readFile()
+    setResponseHeader(event, 'content-type', resolveContentType(absolutePath))
+    return contents
+  } finally {
+    await file.close()
   }
-
-  const contents = await readFile(absolutePath)
-  setResponseHeader(event, 'content-type', resolveContentType(absolutePath))
-  return contents
 }
 
 function resolveRouteSegments(routePath: string): string[] | null {

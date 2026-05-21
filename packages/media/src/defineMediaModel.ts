@@ -11,10 +11,14 @@ import { Media } from './model/Media'
 import { installEntityMediaMethods } from './model/entity'
 import { registerMediaDefinition } from './registry'
 import type {
+  CursorPaginatedResult,
   DynamicRelationResolver,
   Entity,
   ModelCollection,
-  ModelRecord,
+  ModelQueryBuilder,
+  PaginatedResult,
+  RelationMap,
+  SimplePaginatedResult,
   TableDefinition,
 } from '@holo-js/db'
 import type { MediaAdder, MediaSourceInput } from './model/adder'
@@ -26,16 +30,20 @@ type MediaCollectionName<TDefinition extends MediaDefinitionInput>
 type MediaConversionName<TDefinition extends MediaDefinitionInput>
   = ConversionNamesOf<TDefinition>
 
-type ModelTableOf<TModel>
-  = TModel extends { readonly definition: { readonly table: infer TTable extends TableDefinition } }
-    ? TTable
-    : TableDefinition
-
 export type MediaEnabledEntity<
   TTable extends TableDefinition = TableDefinition,
   TCollectionName extends string = string,
   TConversionName extends string = string,
-> = Entity<TTable> & {
+  TRelations extends RelationMap = RelationMap,
+> = Entity<TTable, TRelations> & MediaEnabledEntityMethods<
+  TCollectionName,
+  TConversionName
+>
+
+type MediaEnabledEntityMethods<
+  TCollectionName extends string,
+  TConversionName extends string,
+> = {
   addMedia(source: MediaSourceInput): MediaAdder<Entity<TableDefinition>, TCollectionName, TConversionName>
   addMediaFromUrl(url: string): MediaAdder<Entity<TableDefinition>, TCollectionName, TConversionName>
   getMedia(collectionName?: TCollectionName): Promise<MediaItem<TCollectionName, TConversionName, Entity<TableDefinition>>[]>
@@ -54,11 +62,107 @@ export type MediaEnabledEntity<
   regenerateMedia(collectionName?: TCollectionName, conversions?: TConversionName | readonly TConversionName[]): Promise<void>
 }
 
-type MediaEnabledCollection<
-  TTable extends TableDefinition,
+type MediaEnabledEntityResult<
+  TEntity,
   TCollectionName extends string,
   TConversionName extends string,
-> = ModelCollection<TTable> & MediaEnabledEntity<TTable, TCollectionName, TConversionName>[]
+> = TEntity extends Entity<infer _TTable extends TableDefinition, infer _TRelations extends RelationMap>
+  ? TEntity & MediaEnabledEntityMethods<TCollectionName, TConversionName>
+  : TEntity
+
+type MediaEnabledFunction<
+  TFunction,
+  TCollectionName extends string,
+  TConversionName extends string,
+> = TFunction extends {
+  (...args: infer TArgs1): infer TReturn1
+  (...args: infer TArgs2): infer TReturn2
+  (...args: infer TArgs3): infer TReturn3
+  (...args: infer TArgs4): infer TReturn4
+}
+  ? {
+      (...args: TArgs1): MediaEnabledResult<TReturn1, TCollectionName, TConversionName>
+      (...args: TArgs2): MediaEnabledResult<TReturn2, TCollectionName, TConversionName>
+      (...args: TArgs3): MediaEnabledResult<TReturn3, TCollectionName, TConversionName>
+      (...args: TArgs4): MediaEnabledResult<TReturn4, TCollectionName, TConversionName>
+    }
+  : TFunction extends {
+    (...args: infer TArgs1): infer TReturn1
+    (...args: infer TArgs2): infer TReturn2
+    (...args: infer TArgs3): infer TReturn3
+  }
+    ? {
+        (...args: TArgs1): MediaEnabledResult<TReturn1, TCollectionName, TConversionName>
+        (...args: TArgs2): MediaEnabledResult<TReturn2, TCollectionName, TConversionName>
+        (...args: TArgs3): MediaEnabledResult<TReturn3, TCollectionName, TConversionName>
+      }
+    : TFunction extends {
+      (...args: infer TArgs1): infer TReturn1
+      (...args: infer TArgs2): infer TReturn2
+    }
+      ? {
+          (...args: TArgs1): MediaEnabledResult<TReturn1, TCollectionName, TConversionName>
+          (...args: TArgs2): MediaEnabledResult<TReturn2, TCollectionName, TConversionName>
+        }
+      : TFunction extends (...args: infer TArgs) => infer TReturn
+        ? (...args: TArgs) => MediaEnabledResult<TReturn, TCollectionName, TConversionName>
+        : TFunction
+
+type MediaEnabledQueryBuilder<
+  TBuilder,
+  TCollectionName extends string,
+  TConversionName extends string,
+> = {
+  [K in keyof TBuilder]: MediaEnabledFunction<TBuilder[K], TCollectionName, TConversionName>
+}
+
+type MediaEnabledPaginatedResult<
+  TResult,
+  TPaginator,
+  TCollectionName extends string,
+  TConversionName extends string,
+> = Omit<TResult, keyof TPaginator>
+  & TPaginator
+  & (TResult extends { readonly data: infer TData }
+    ? { readonly data: MediaEnabledResult<TData, TCollectionName, TConversionName> }
+    : Record<never, never>)
+
+type MediaEnabledResult<
+  TValue,
+  TCollectionName extends string,
+  TConversionName extends string,
+> = TValue extends Promise<infer TResult>
+  ? Promise<MediaEnabledResult<TResult, TCollectionName, TConversionName>>
+  : TValue extends AsyncGenerator<infer TYield, infer TReturn, infer TNext>
+    ? AsyncGenerator<MediaEnabledResult<TYield, TCollectionName, TConversionName>, TReturn, TNext>
+    : TValue extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded>
+      ? MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded>, TCollectionName, TConversionName>
+      : TValue extends ModelCollection<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TItem>
+        ? TItem extends Entity<TTable, TRelations>
+          ? ModelCollection<TTable, TRelations, MediaEnabledEntityResult<TItem, TCollectionName, TConversionName>>
+          : TValue
+        : TValue extends PaginatedResult<infer TItem>
+          ? MediaEnabledPaginatedResult<
+              TValue,
+              PaginatedResult<MediaEnabledResult<TItem, TCollectionName, TConversionName>>,
+              TCollectionName,
+              TConversionName
+            >
+          : TValue extends SimplePaginatedResult<infer TItem>
+            ? MediaEnabledPaginatedResult<
+                TValue,
+                SimplePaginatedResult<MediaEnabledResult<TItem, TCollectionName, TConversionName>>,
+                TCollectionName,
+                TConversionName
+              >
+            : TValue extends CursorPaginatedResult<infer TItem>
+              ? MediaEnabledPaginatedResult<
+                  TValue,
+                  CursorPaginatedResult<MediaEnabledResult<TItem, TCollectionName, TConversionName>>,
+                  TCollectionName,
+                  TConversionName
+                >
+              : MediaEnabledEntityResult<TValue, TCollectionName, TConversionName>
 
 type MediaModelStatic = {
   readonly definition: {
@@ -68,46 +172,17 @@ type MediaModelStatic = {
   readonly resolveRelationUsing: (name: string, resolver: DynamicRelationResolver) => unknown
 }
 
-type OverrideKeys
-  = | 'find'
-    | 'findOrFail'
-    | 'first'
-    | 'firstOrFail'
-    | 'sole'
-    | 'get'
-    | 'all'
-    | 'findMany'
-    | 'make'
-    | 'create'
-    | 'createQuietly'
-    | 'createMany'
-    | 'createManyQuietly'
-    | 'firstOrNew'
-    | 'firstOrCreate'
-    | 'updateOrCreate'
-    | 'upsert'
-
 export type MediaEnabledModel<
   TModel extends MediaModelStatic,
   TDefinition extends MediaDefinitionInput,
-> = Omit<TModel, OverrideKeys> & {
-  find(value: unknown): Promise<MediaEnabledEntity<ModelTableOf<TModel>, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>> | undefined>
-  findOrFail(value: unknown): Promise<MediaEnabledEntity<ModelTableOf<TModel>, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>>>
-  first(): Promise<MediaEnabledEntity<ModelTableOf<TModel>, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>> | undefined>
-  firstOrFail(): Promise<MediaEnabledEntity<ModelTableOf<TModel>, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>>>
-  sole(): Promise<MediaEnabledEntity<ModelTableOf<TModel>, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>>>
-  get(): Promise<MediaEnabledCollection<ModelTableOf<TModel>, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>>>
-  all(): Promise<MediaEnabledCollection<ModelTableOf<TModel>, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>>>
-  findMany(values: readonly unknown[]): Promise<MediaEnabledCollection<ModelTableOf<TModel>, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>>>
-  make(values?: Partial<ModelRecord<ModelTableOf<TModel>>>): MediaEnabledEntity<ModelTableOf<TModel>, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>>
-  create(values: Partial<ModelRecord<ModelTableOf<TModel>>>): Promise<MediaEnabledEntity<ModelTableOf<TModel>, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>>>
-  createQuietly(values: Partial<ModelRecord<ModelTableOf<TModel>>>): Promise<MediaEnabledEntity<ModelTableOf<TModel>, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>>>
-  createMany(values: readonly Partial<ModelRecord<ModelTableOf<TModel>>>[]): Promise<MediaEnabledCollection<ModelTableOf<TModel>, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>>>
-  createManyQuietly(values: readonly Partial<ModelRecord<ModelTableOf<TModel>>>[]): Promise<MediaEnabledCollection<ModelTableOf<TModel>, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>>>
-  firstOrNew(match: Partial<ModelRecord<ModelTableOf<TModel>>>, values?: Partial<ModelRecord<ModelTableOf<TModel>>>): Promise<MediaEnabledEntity<ModelTableOf<TModel>, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>>>
-  firstOrCreate(match: Partial<ModelRecord<ModelTableOf<TModel>>>, values?: Partial<ModelRecord<ModelTableOf<TModel>>>): Promise<MediaEnabledEntity<ModelTableOf<TModel>, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>>>
-  updateOrCreate(match: Partial<ModelRecord<ModelTableOf<TModel>>>, values?: Partial<ModelRecord<ModelTableOf<TModel>>>): Promise<MediaEnabledEntity<ModelTableOf<TModel>, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>>>
-  upsert(match: Partial<ModelRecord<ModelTableOf<TModel>>>, values?: Partial<ModelRecord<ModelTableOf<TModel>>>): Promise<MediaEnabledEntity<ModelTableOf<TModel>, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>>>
+> = {
+  [K in keyof TModel]: K extends 'with'
+    ? TModel[K]
+    : MediaEnabledFunction<
+        TModel[K],
+        MediaCollectionName<TDefinition>,
+        MediaConversionName<TDefinition>
+      >
 }
 
 export function defineMediaModel<

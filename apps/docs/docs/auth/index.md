@@ -256,6 +256,7 @@ export const config = {
 import { authOnly } from '@holo-js/auth/nuxt/server'
 
 export default authOnly({
+  // guard is optional here; omitted means the configured default guard.
   routes: ['/admin/*'],
   redirectTo: '/login',
 })
@@ -265,6 +266,7 @@ export default authOnly({
 import { guestOnly } from '@holo-js/auth/nuxt/server'
 
 export default guestOnly({
+  // guard is optional here; omitted means the configured default guard.
   routes: ['/login', '/register', '/forgot-password', '/reset-password'],
   redirectTo: '/admin',
 })
@@ -287,6 +289,41 @@ export const handle = sequence(
 ```
 
 :::
+
+Nuxt route middleware accepts an optional `guard`. Omit it for the configured default guard:
+
+```ts
+authOnly({ routes, redirectTo, guard?: string })
+guestOnly({ routes, redirectTo, guard?: string })
+```
+
+Pass `guard` only when that middleware protects pages for a non-default guard:
+
+```ts [Nuxt 4 app/middleware/super-admin.global.ts]
+import { authOnly, guestOnly } from '@holo-js/auth/nuxt/server'
+
+const superAdminGuestOnly = guestOnly({
+  guard: 'admin',
+  routes: ['/super-admin/login'],
+  redirectTo: '/super-admin',
+})
+
+const superAdminAuthOnly = authOnly({
+  guard: 'admin',
+  routes: ['/super-admin/*'],
+  redirectTo: '/super-admin/login',
+})
+
+export default defineNuxtRouteMiddleware(async (to, from) => {
+  const guestRedirect = await superAdminGuestOnly(to, from)
+
+  if (guestRedirect) {
+    return guestRedirect
+  }
+
+  return superAdminAuthOnly(to, from)
+})
+```
 
 You can compose your own framework middleware with the Holo helpers. Keep custom logic in the same native entrypoint and
 return a response only when it wants to stop the request.

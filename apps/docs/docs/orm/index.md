@@ -330,6 +330,37 @@ export async function createUser(input: { name: string, email: string }) {
 This is the normal pattern: server handlers and services call models, models call the repository layer,
 and the framework handles the configured request lifecycle.
 
+For slug fields, use `uniqueSlug(...)` from the ORM instead of hand-rolling route or app-local
+allocation logic:
+
+```ts
+import { uniqueSlug } from '@holo-js/db'
+import Category from '../models/Category'
+
+export async function createCategory(input: { name: string }) {
+  return await Category.create({
+    name: input.name,
+    slug: await uniqueSlug(Category, input.name),
+  })
+}
+
+export async function updateCategory(id: number, input: { name: string }) {
+  const category = await Category.findOrFail(id)
+
+  return await category.update({
+    name: input.name,
+    slug: await uniqueSlug(Category, input.name, { ignore: id }),
+  })
+}
+```
+
+`uniqueSlug(...)` defaults to the model's `slug` column. If your model uses another string column,
+pass it explicitly and TypeScript will infer the allowed column names from the model:
+
+```ts
+await uniqueSlug(Page, input.title, { column: 'public_slug' })
+```
+
 ## Mass Assignment
 
 Use `fillable` and `guarded` to control write surfaces explicitly.

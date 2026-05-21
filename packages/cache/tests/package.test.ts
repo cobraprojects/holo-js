@@ -395,13 +395,41 @@ describe('@holo-js/cache package surface', () => {
       }
     })
 
+    let nullableRememberCalls = 0
+    const firstNullableRemember = await cache.remember('nullable', 60, async () => {
+      nullableRememberCalls += 1
+      return null
+    })
+    const secondNullableRemember = await cache.remember('nullable', 60, async () => {
+      nullableRememberCalls += 1
+      return null
+    })
+
+    let nullableForeverCalls = 0
+    const firstNullableForever = await cache.rememberForever('nullable-forever', async () => {
+      nullableForeverCalls += 1
+      return null
+    })
+    const secondNullableForever = await cache.rememberForever('nullable-forever', async () => {
+      nullableForeverCalls += 1
+      return null
+    })
+
     expect(firstRemember).toEqual({ version: 1 })
     expect(secondRemember).toEqual({ version: 1 })
     expect(thirdRemember).toEqual({ version: 2 })
     expect(firstForever).toEqual({ version: 1 })
     expect(secondForever).toEqual({ version: 1 })
+    expect(firstNullableRemember).toBeNull()
+    expect(secondNullableRemember).toBeNull()
+    expect(firstNullableForever).toBeNull()
+    expect(secondNullableForever).toBeNull()
+    expect(await cache.has('nullable')).toBe(true)
+    expect(await cache.has('nullable-forever')).toBe(true)
     expect(rememberCalls).toBe(2)
     expect(foreverCalls).toBe(1)
+    expect(nullableRememberCalls).toBe(1)
+    expect(nullableForeverCalls).toBe(1)
   })
 
   it('supports flexible stale-while-revalidate and lock contention', async () => {
@@ -689,6 +717,10 @@ describe('@holo-js/cache package surface', () => {
     const heldLock = driver.lock('held', 1)
     expect(await heldLock.get()).toBe(true)
     await expect(driver.lock('held', 1).block(0)).resolves.toBe(false)
+    expect(() => driver.lock('invalid-nan', Number.NaN)).toThrow(CacheInvalidTtlError)
+    expect(() => driver.lock('invalid-infinity', Number.POSITIVE_INFINITY)).toThrow(CacheInvalidTtlError)
+    await expect(driver.lock('invalid-wait', 1).block(Number.NaN)).rejects.toThrow(CacheInvalidTtlError)
+    await expect(driver.lock('invalid-infinite-wait', 1).block(Number.POSITIVE_INFINITY)).rejects.toThrow(CacheInvalidTtlError)
   })
 
   it('supports file driver reads, writes, expiration, forever values, and deletes', async () => {
@@ -1022,6 +1054,11 @@ describe('@holo-js/cache package surface', () => {
       await vi.advanceTimersByTimeAsync(2_001)
       await expect(blockedIncrement).rejects.toThrow(CacheLockAcquisitionError)
 
+      expect(() => driver.lock('invalid-nan', Number.NaN)).toThrow(CacheInvalidTtlError)
+      expect(() => driver.lock('invalid-infinity', Number.POSITIVE_INFINITY)).toThrow(CacheInvalidTtlError)
+      await expect(driver.lock('invalid-wait', 1).block(Number.NaN)).rejects.toThrow(CacheInvalidTtlError)
+      await expect(driver.lock('invalid-infinite-wait', 1).block(Number.POSITIVE_INFINITY)).rejects.toThrow(CacheInvalidTtlError)
+
       expect(await cache.increment('counter')).toBe(1)
       expect(await cache.decrement('counter', 2)).toBe(-1)
 
@@ -1029,6 +1066,97 @@ describe('@holo-js/cache package surface', () => {
       await expect(cache.increment('label')).rejects.toThrow(CacheInvalidNumericMutationError)
     } finally {
       vi.useRealTimers()
+      await rm(cachePath, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps a newly acquired file lock when an expired owner releases late', async () => {
+    const cachePath = await createTempCacheDirectory('file-lock-race')
+
+    try {
+      let now = 0
+      const owners = ['owner-a', 'owner-b', 'owner-c']
+      const driver = createFileCacheDriver({
+        name: 'file',
+        path: cachePath,
+        now: () => now,
+        ownerFactory: () => {
+          const owner = owners.shift()
+          if (!owner) {
+            throw new Error('Expected a test lock owner.')
+          }
+
+          return owner
+        },
+      })
+
+      const firstLock = driver.lock('race', 1)
+      const secondLock = driver.lock('race', 1)
+      const thirdLock = driver.lock('race', 1)
+
+      expect(await firstLock.get()).toBe(true)
+
+      now = 1_001
+      expect(await secondLock.get()).toBe(true)
+
+      expect(await firstLock.release()).toBe(false)
+      expect(await thirdLock.get()).toBe(false)
+      expect(await secondLock.release()).toBe(true)
+      expect(await thirdLock.get()).toBe(true)
+    } finally {
+      await rm(cachePath, { recursive: true, force: true })
+    }
+  })
+
+  it('recovers file locks from legacy files and malformed owner markers', async () => {
+    const cachePath = await createTempCacheDirectory('file-lock-compat')
+
+    try {
+      let now = 0
+      let ownerIndex = 0
+      const driver = createFileCacheDriver({
+        name: 'file',
+        path: cachePath,
+        now: () => now,
+        ownerFactory: () => `owner-${ownerIndex++}`,
+      })
+
+      const legacyLockPath = fileDriverInternals.resolveLockFilePath(cachePath, 'legacy')
+      await mkdir(dirname(legacyLockPath), { recursive: true })
+      await writeFile(legacyLockPath, JSON.stringify({
+        name: 'legacy',
+        owner: 'legacy-owner',
+        expiresAt: 1_000,
+      }), 'utf8')
+
+      expect(await driver.lock('legacy', 1).get()).toBe(false)
+
+      now = 1_001
+      expect(await driver.lock('legacy', 1).get()).toBe(true)
+
+      const emptyLockPath = fileDriverInternals.resolveLockFilePath(cachePath, 'empty')
+      await mkdir(emptyLockPath, { recursive: true })
+      expect(await driver.lock('empty', 1).get()).toBe(false)
+      await rm(emptyLockPath, { recursive: true, force: true })
+
+      const malformedLockPath = fileDriverInternals.resolveLockFilePath(cachePath, 'malformed-marker')
+      await mkdir(malformedLockPath, { recursive: true })
+      await writeFile(join(malformedLockPath, 'owner.json'), '{"broken"', 'utf8')
+      expect(await driver.lock('malformed-marker', 1).get()).toBe(true)
+
+      expect(await driver.lock('never-acquired', 1).release()).toBe(false)
+
+      const prefixedDriver = createFileCacheDriver({
+        name: 'prefixed',
+        path: cachePath,
+        prefix: 'p:',
+        ownerFactory: () => 'prefixed-owner',
+      })
+      const prefixedLock = prefixedDriver.lock('p:flush-lock', 1)
+      expect(await prefixedLock.get()).toBe(true)
+      await prefixedDriver.flush()
+      expect(await prefixedLock.get()).toBe(true)
+    } finally {
       await rm(cachePath, { recursive: true, force: true })
     }
   })
@@ -1462,6 +1590,7 @@ describe('@holo-js/cache package surface', () => {
     cacheRedisInternals.setRedisDriverModuleLoader(async () => {
       throw cacheRedisInternals.normalizeRedisModuleLoadError({
         code: 'ERR_MODULE_NOT_FOUND',
+        message: 'Cannot find package "@holo-js/cache-redis" imported from packages/cache/src/redis.ts',
       })
     })
 
@@ -1771,17 +1900,39 @@ describe('@holo-js/cache package surface', () => {
     expect(cacheRedisInternals.normalizeRuntimeRedisConfig(undefined)).toBeUndefined()
     expect(cacheRedisInternals.isNormalizedRedisConfig(normalizedRedisConfig)).toBe(true)
     expect(cacheRedisInternals.normalizeRuntimeRedisConfig(normalizedRedisConfig)).toBe(normalizedRedisConfig)
-    expect(cacheRedisInternals.isModuleNotFoundError({ code: 'ERR_MODULE_NOT_FOUND' })).toBe(true)
+    expect(cacheRedisInternals.isModuleNotFoundError({
+      code: 'ERR_MODULE_NOT_FOUND',
+      message: 'Cannot find package "@holo-js/cache-redis" imported from packages/cache/src/redis.ts',
+    })).toBe(true)
+    expect(cacheRedisInternals.isModuleNotFoundError({
+      code: 'ERR_MODULE_NOT_FOUND',
+      message: 'Cannot find package "ioredis" imported from packages/cache-redis/src/index.ts',
+    })).toBe(false)
+    expect(cacheRedisInternals.isModuleNotFoundError(undefined)).toBe(false)
     expect(cacheRedisInternals.isModuleNotFoundError(new Error('nope'))).toBe(false)
 
     const missingPackageError = cacheRedisInternals.normalizeRedisModuleLoadError({
       code: 'ERR_MODULE_NOT_FOUND',
+      message: 'Cannot find package "@holo-js/cache-redis" imported from packages/cache/src/redis.ts',
     })
     expect(missingPackageError).toBeInstanceOf(CacheOptionalPackageError)
     expect((missingPackageError as CacheOptionalPackageError).message).toContain('@holo-js/cache-redis')
 
+    const nestedMissingPackageError = cacheRedisInternals.normalizeRedisModuleLoadError({
+      cause: {
+        code: 'ERR_MODULE_NOT_FOUND',
+        message: 'Cannot find module "@holo-js/cache-redis"',
+      },
+    })
+    expect(nestedMissingPackageError).toBeInstanceOf(CacheOptionalPackageError)
+
     const passthroughError = new Error('boom')
     expect(cacheRedisInternals.normalizeRedisModuleLoadError(passthroughError)).toBe(passthroughError)
+
+    const unrelatedModuleError = Object.assign(new Error('Cannot find package "ioredis" imported from packages/cache-redis/src/index.ts'), {
+      code: 'ERR_MODULE_NOT_FOUND',
+    })
+    expect(cacheRedisInternals.normalizeRedisModuleLoadError(unrelatedModuleError)).toBe(unrelatedModuleError)
   })
 
   it('loads the optional redis module through the runtime loader and exposes lazy driver metadata', async () => {
@@ -1957,6 +2108,50 @@ describe('@holo-js/cache package surface', () => {
     expect(await cache.get('users:list')).toBeNull()
     expect(await cache.driver('secondary').get('posts:list')).toBeNull()
     expect(await dependencyIndex.listRegisteredKeys()).toEqual([])
+  })
+
+  it('scopes query dependency invalidation to the requested driver', async () => {
+    configureCacheRuntime({
+      config: {
+        default: 'memory',
+        prefix: 'app:',
+        drivers: {
+          memory: {
+            driver: 'memory',
+          },
+          secondary: {
+            driver: 'memory',
+            prefix: 'secondary:',
+          },
+        },
+      },
+    })
+
+    const queryBridge = getCacheRuntime().queryBridge
+    const dependencyIndex = getCacheRuntime().dependencyIndex
+    if (!queryBridge || !dependencyIndex) {
+      throw new Error('Expected cache query bridge bindings.')
+    }
+
+    await queryBridge.put('users:list', [{ id: 1 }], {
+      ttl: 60,
+      dependencies: ['db:main:users'],
+    })
+    await queryBridge.put('users:list', [{ id: 2 }], {
+      ttl: 60,
+      driver: 'secondary',
+      dependencies: ['db:main:users'],
+    })
+
+    await queryBridge.invalidateDependencies(['db:main:users'], {
+      driver: 'secondary',
+    })
+
+    expect(await cache.get('users:list')).toEqual([{ id: 1 }])
+    expect(await cache.driver('secondary').get('users:list')).toBeNull()
+    expect(await dependencyIndex.listRegisteredKeys()).toEqual([
+      'memory\u0000app:users:list',
+    ])
   })
 
   it('cleans dependency registrations on query-bridge forget, flexible writes, and repository flush', async () => {

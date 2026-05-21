@@ -8,6 +8,7 @@ export { ModelRepository, getModelDefinition } from './ModelRepository'
 export { defineModel } from './defineModel'
 export { listMorphModels, resetMorphRegistry, resolveMorphModel } from './morphRegistry'
 export { serializeModels } from './serialize'
+export { uniqueSlug } from './slug'
 export {
   belongsTo,
   belongsToMany,
@@ -79,4 +80,5 @@ export type {
   UniqueIdTrait,
   UniqueIdTraitKind,
 } from './types'
+export type { UniqueSlugOptions } from './slug'
 export type { SerializeModels } from './serialize'

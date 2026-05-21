@@ -2,12 +2,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HoloStorageRuntimeConfig } from '@holo-js/storage'
 
 const readFile = vi.fn()
+const open = vi.fn()
 const realpath = vi.fn()
+const stat = vi.fn()
 const setResponseHeader = vi.fn()
 
 vi.mock('node:fs/promises', () => ({
-  readFile,
+  open,
   realpath,
+  stat,
 }))
 
 vi.mock('#imports', () => ({
@@ -59,11 +62,31 @@ function createReadError(code: string): Error & { code: string } {
   return error
 }
 
+type MockFileIdentity = {
+  dev: number
+  ino: number
+}
+
+function createMockFileHandle(
+  path: string,
+  identity: MockFileIdentity = { dev: 1, ino: 1 },
+) {
+  return {
+    close: vi.fn(async () => undefined),
+    readFile: vi.fn(async () => readFile(path)),
+    stat: vi.fn(async () => identity),
+  }
+}
+
 describe('public storage route resolution', () => {
   beforeEach(() => {
+    open.mockReset()
     readFile.mockReset()
     realpath.mockReset()
     realpath.mockImplementation(async (path: string) => path)
+    stat.mockReset()
+    stat.mockResolvedValue({ dev: 1, ino: 1 })
+    open.mockImplementation(async (path: string) => createMockFileHandle(path))
     setResponseHeader.mockReset()
     vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/test.txt'))
   })
@@ -310,6 +333,80 @@ describe('public storage route resolution', () => {
       message: 'Storage file not found.',
     })
     expect(readFile).not.toHaveBeenCalled()
+  })
+
+  it('reads from the resolved public path after symlink containment succeeds', async () => {
+    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/linked/report.txt'))
+    realpath.mockImplementation(async (path: string) => {
+      if (path.endsWith('/storage/app/public')) {
+        return '/resolved/storage/app/public'
+      }
+
+      if (path.endsWith('/storage/app/public/linked/report.txt')) {
+        return '/resolved/storage/app/public/report.txt'
+      }
+
+      throw new Error(`unexpected realpath: ${path}`)
+    })
+    readFile.mockResolvedValue(Buffer.from('public-report'))
+
+    await expect(storageHandler({})).resolves.toEqual(Buffer.from('public-report'))
+    expect(open).toHaveBeenCalledWith(
+      expect.stringContaining('/storage/app/public/linked/report.txt'),
+      'r',
+    )
+    expect(readFile).toHaveBeenCalledWith(expect.stringContaining('/storage/app/public/linked/report.txt'))
+    expect(setResponseHeader).toHaveBeenCalledWith({}, 'content-type', 'text/plain; charset=utf-8')
+  })
+
+  it('reads from the opened file handle when the checked path is swapped before read', async () => {
+    const openedHandle = createMockFileHandle('/storage/app/public/report.txt', { dev: 1, ino: 10 })
+    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/report.txt'))
+    realpath.mockImplementation(async (path: string) => {
+      if (path.endsWith('/storage/app/public')) {
+        return '/resolved/storage/app/public'
+      }
+
+      if (path.endsWith('/storage/app/public/report.txt')) {
+        return '/resolved/storage/app/public/report.txt'
+      }
+
+      throw new Error(`unexpected realpath: ${path}`)
+    })
+    stat.mockResolvedValue({ dev: 1, ino: 10 })
+    open.mockResolvedValue(openedHandle)
+    readFile.mockResolvedValue(Buffer.from('leaked-data'))
+    openedHandle.readFile.mockResolvedValue(Buffer.from('public-data'))
+
+    await expect(storageHandler({})).resolves.toEqual(Buffer.from('public-data'))
+    expect(readFile).not.toHaveBeenCalled()
+    expect(openedHandle.readFile).toHaveBeenCalledTimes(1)
+    expect(openedHandle.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a file path swapped to another target between open and containment validation', async () => {
+    const openedHandle = createMockFileHandle('/storage/app/public/report.txt', { dev: 1, ino: 10 })
+    vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/report.txt'))
+    realpath.mockImplementation(async (path: string) => {
+      if (path.endsWith('/storage/app/public')) {
+        return '/resolved/storage/app/public'
+      }
+
+      if (path.endsWith('/storage/app/public/report.txt')) {
+        return '/resolved/storage/app/public/report.txt'
+      }
+
+      throw new Error(`unexpected realpath: ${path}`)
+    })
+    stat.mockResolvedValue({ dev: 2, ino: 20 })
+    open.mockResolvedValue(openedHandle)
+
+    await expect(storageHandler({})).rejects.toMatchObject({
+      statusCode: 404,
+      message: 'Storage file not found.',
+    })
+    expect(openedHandle.readFile).not.toHaveBeenCalled()
+    expect(openedHandle.close).toHaveBeenCalledTimes(1)
   })
 
   it('maps known file extensions to content types and falls back for unknown types', async () => {

@@ -1988,10 +1988,10 @@ function createEmailVerificationFacade(): AuthEmailVerificationFacade {
           throwAuthError('email_verification_token_expired', 'Invalid or expired email verification token.')
         }
 
+        await store.delete(record.id)
         const updated = await updateUserRecord(record.provider, record.userId, {
           email_verified_at: new Date(),
         })
-        await store.delete(record.id)
         return updated
       }, EXPECTED_EMAIL_VERIFICATION_CONSUME_ERRORS, createEmailVerificationConsumeFailure)
     },
@@ -2142,14 +2142,14 @@ async function resetPasswordUsingRuntime<TInput extends AuthPasswordResetInput>(
       user,
       '[@holo-js/auth] Password reset token user is invalid.',
     )
-    const updated = await updateUserRecord(record.provider, userId, {
-      password,
-    })
     await store.delete(record.id, {
       table: record.table,
     })
     await store.deleteByEmail(record.provider, record.email, {
       table: record.table,
+    })
+    const updated = await updateUserRecord(record.provider, userId, {
+      password,
     })
     return updated
   }, EXPECTED_PASSWORD_RESET_CONSUME_ERRORS, error => createPasswordResetConsumeFailure(error, input))

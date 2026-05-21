@@ -19,11 +19,18 @@ type FileRateLimitBucket = {
   expiresAt: Date
 }
 
+type FileBucketLock = {
+  readonly ownerId: string
+  readonly path: string
+}
+
 export interface FileRateLimitStoreOptions {
   readonly now?: () => Date
   readonly lockRetryDelayMs?: number
   readonly lockTimeoutMs?: number
 }
+
+const LOCK_OWNER_FILE = 'owner'
 
 function createBucketHash(key: string): string {
   return createHash('sha256').update(key).digest('hex')
@@ -141,6 +148,14 @@ function getBucketLockPath(path: string): string {
   return `${path}.lock`
 }
 
+function getBucketLockCleanupPath(lockPath: string): string {
+  return `${lockPath}.cleanup`
+}
+
+function getBucketLockOwnerPath(lockPath: string): string {
+  return join(lockPath, LOCK_OWNER_FILE)
+}
+
 async function sleep(delayMs: number): Promise<void> {
   await new Promise((resolve) => {
     setTimeout(resolve, delayMs)
@@ -150,6 +165,7 @@ async function sleep(delayMs: number): Promise<void> {
 function startLockHeartbeat(lockPath: string, timeoutMs: number): ReturnType<typeof setInterval> {
   const heartbeat = setInterval(() => {
     const now = new Date()
+    /* v8 ignore next -- defensive handler for lock paths removed between heartbeat ticks. */
     void utimes(lockPath, now, now).catch(() => {})
   }, Math.max(1, Math.floor(timeoutMs / 2)))
 
@@ -157,30 +173,88 @@ function startLockHeartbeat(lockPath: string, timeoutMs: number): ReturnType<typ
   return heartbeat
 }
 
-async function withBucketLock<TValue>(
-  path: string,
+async function tryCreateBucketLock(lockPath: string): Promise<FileBucketLock> {
+  const ownerId = `${process.pid}:${randomUUID()}`
+  await mkdir(lockPath)
+
+  try {
+    await writeFile(getBucketLockOwnerPath(lockPath), ownerId, 'utf8')
+  } catch (error) {
+    /* v8 ignore start -- defensive cleanup for a filesystem race after mkdir succeeds. */
+    await rm(lockPath, { recursive: true, force: true })
+    throw error
+    /* v8 ignore stop */
+  }
+
+  return { ownerId, path: lockPath }
+}
+
+async function removeOwnedBucketLock(lock: FileBucketLock): Promise<void> {
+  const ownerId = await readFile(getBucketLockOwnerPath(lock.path), 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') {
+      return undefined
+    }
+
+    throw error
+  })
+
+  if (ownerId === lock.ownerId) {
+    await rm(lock.path, { recursive: true, force: true })
+  }
+}
+
+async function isBucketLockStale(lockPath: string, timeoutMs: number): Promise<boolean> {
+  return await stat(lockPath)
+    .then(stats => stats.mtimeMs <= (Date.now() - timeoutMs))
+    .catch(() => false)
+}
+
+async function reclaimStaleBucketLock(lockPath: string, timeoutMs: number): Promise<boolean> {
+  const cleanupPath = getBucketLockCleanupPath(lockPath)
+  let cleanupLock: FileBucketLock
+
+  try {
+    cleanupLock = await tryCreateBucketLock(cleanupPath)
+  } catch (error) {
+    const candidate = error as NodeJS.ErrnoException
+    if (candidate.code === 'EEXIST') {
+      return false
+    }
+
+    throw error
+  }
+
+  try {
+    if (await isBucketLockStale(lockPath, timeoutMs)) {
+      await rm(lockPath, { recursive: true, force: true })
+      return true
+    }
+
+    return false
+  } finally {
+    await removeOwnedBucketLock(cleanupLock)
+  }
+}
+
+async function acquireBucketLock(
+  lockPath: string,
   options: { readonly retryDelayMs: number, readonly timeoutMs: number },
-  operation: () => Promise<TValue>,
-): Promise<TValue> {
-  const lockPath = getBucketLockPath(path)
+): Promise<FileBucketLock> {
   const deadline = Date.now() + options.timeoutMs
-  await mkdir(dirname(lockPath), { recursive: true })
 
   while (true) {
     try {
-      await mkdir(lockPath)
-      break
+      return await tryCreateBucketLock(lockPath)
     } catch (error) {
       const candidate = error as NodeJS.ErrnoException
       if (candidate.code !== 'EEXIST') {
         throw error
       }
 
-      const stale = await stat(lockPath)
-        .then(stats => stats.mtimeMs <= (Date.now() - options.timeoutMs))
-        .catch(() => false)
-      if (stale) {
-        await rm(lockPath, { recursive: true, force: true })
+      if (
+        await isBucketLockStale(lockPath, options.timeoutMs)
+        && await reclaimStaleBucketLock(lockPath, options.timeoutMs)
+      ) {
         continue
       }
 
@@ -191,6 +265,17 @@ async function withBucketLock<TValue>(
       await sleep(options.retryDelayMs)
     }
   }
+}
+
+async function withBucketLock<TValue>(
+  path: string,
+  options: { readonly retryDelayMs: number, readonly timeoutMs: number },
+  operation: () => Promise<TValue>,
+): Promise<TValue> {
+  const lockPath = getBucketLockPath(path)
+  await mkdir(dirname(lockPath), { recursive: true })
+
+  const acquiredLock = await acquireBucketLock(lockPath, options)
 
   const heartbeat = startLockHeartbeat(lockPath, options.timeoutMs)
 
@@ -198,7 +283,7 @@ async function withBucketLock<TValue>(
     return await operation()
   } finally {
     clearInterval(heartbeat)
-    await rm(lockPath, { recursive: true, force: true })
+    await removeOwnedBucketLock(acquiredLock)
   }
 }
 
@@ -375,6 +460,9 @@ export const fileRateLimitDriverInternals = {
   serializeBucket,
   sleep,
   getBucketLockPath,
+  acquireBucketLock,
+  reclaimStaleBucketLock,
+  removeOwnedBucketLock,
   withBucketLock,
   writeBucket,
 }

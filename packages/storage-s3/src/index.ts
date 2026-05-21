@@ -63,7 +63,13 @@ function encodeObjectKey(key = ''): string {
   return normalized
     .split('/')
     .filter(Boolean)
-    .map(segment => encodeRfc3986(segment))
+    .map((segment) => {
+      if (segment === '.' || segment === '..') {
+        throw createDriverError('S3 object keys cannot contain period-only path segments.')
+      }
+
+      return encodeRfc3986(segment)
+    })
     .join('/')
 }
 

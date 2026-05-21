@@ -4,6 +4,7 @@ import clientAuth, { type provider as clientProvider, type refreshUser as refres
 import type { useAuth as useNextAuth } from '../src/next/client'
 import type { useAuth as useNuxtAuth } from '../src/nuxt'
 import type { useAuth as useSvelteKitAuth } from '../src/sveltekit/client'
+import type { authOnly as svelteKitAuthOnly, SvelteKitHandleEvent } from '../src/sveltekit/server'
 
 declare module '../src' {
   interface HoloAuthTypeRegistry {
@@ -31,6 +32,27 @@ declare global {
 }
 
 describe('@holo-js/auth typing', () => {
+  it('keeps SvelteKit route guards compatible with native resolve options', () => {
+    type NativeSvelteKitHandle = <TEvent extends SvelteKitHandleEvent>(input: {
+      readonly event: TEvent
+      readonly resolve: (event: TEvent, options?: {
+        readonly transformPageChunk?: (input: {
+          readonly html: string
+          readonly done: boolean
+        }) => string | Promise<string>
+        readonly filterSerializedResponseHeaders?: (name: string, value: string) => boolean
+        readonly preload?: (input: {
+          readonly type: 'js' | 'css' | 'font' | 'asset'
+          readonly path: string
+        }) => boolean
+      }) => Response | Promise<Response>
+    }) => Response | Promise<Response>
+
+    type AuthOnlyHandle = ReturnType<typeof svelteKitAuthOnly>
+
+    expectTypeOf<AuthOnlyHandle>().toMatchTypeOf<NativeSvelteKitHandle>()
+  })
+
   it('preserves the augmented auth user shape across server and client helpers', () => {
     type AppAuthUser = {
       readonly id: number

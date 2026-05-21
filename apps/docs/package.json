@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Holo-JS Framework - multi-framework documentation site",
   "scripts": {
-    "dev": "vitepress dev docs --host",
+    "dev": "vitepress dev docs",
+    "dev:host": "vitepress dev docs --host 0.0.0.0",
     "build": "vitepress build docs",
     "preview": "vitepress preview docs"
   },

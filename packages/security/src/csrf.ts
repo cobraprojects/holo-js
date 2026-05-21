@@ -246,18 +246,14 @@ export async function verify(request: Request): Promise<void> {
 }
 
 export async function protect(request: Request, options: SecurityProtectOptions = {}): Promise<void> {
-  if (!resolveShouldProtect(request, options)) {
-    if (typeof options.throttle !== 'string') {
-      return
-    }
-  } else {
+  if (typeof options.throttle === 'string') {
+    await rateLimit(options.throttle, { request })
+  }
+
+  if (resolveShouldProtect(request, options)) {
     await verifyRequest(request, {
       allowExcludedPath: options.csrf !== true,
     })
-  }
-
-  if (typeof options.throttle === 'string') {
-    await rateLimit(options.throttle, { request })
   }
 }
 

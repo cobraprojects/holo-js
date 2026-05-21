@@ -30,6 +30,15 @@ type NormalizedFlexibleTtl = {
   readonly staleSeconds: number
 }
 
+type CachedValueLookup<TValue> =
+  | {
+      readonly hit: true
+      readonly value: TValue
+    }
+  | {
+      readonly hit: false
+    }
+
 const MAX_REFRESH_BLOCK_SECONDS = 30
 
 function resolveFallback<TValue>(fallback: CacheFallback<TValue>): Promise<TValue> | TValue {
@@ -125,11 +134,16 @@ function createCacheRepository(driverName?: string): CacheRepository {
     })
   }
 
-  async function getCachedValue<TValue>(key: CacheKeyInput<TValue>): Promise<TValue | null> {
+  async function getCachedValue<TValue>(key: CacheKeyInput<TValue>): Promise<CachedValueLookup<TValue>> {
     const payload = await getEntryPayload(key)
-    return typeof payload === 'string'
-      ? deserializeCacheValue<TValue>(payload)
-      : null
+    if (typeof payload !== 'string') {
+      return Object.freeze({ hit: false })
+    }
+
+    return Object.freeze({
+      hit: true,
+      value: deserializeCacheValue<TValue>(payload),
+    })
   }
 
   async function putFlexibleEnvelope<TValue>(
@@ -247,8 +261,8 @@ function createCacheRepository(driverName?: string): CacheRepository {
       callback: CacheValueResolver<TValue>,
     ): Promise<Awaited<TValue>> {
       const cached = await getCachedValue<Awaited<TValue>>(key)
-      if (cached !== null) {
-        return cached
+      if (cached.hit) {
+        return cached.value
       }
 
       const value = await resolveValue(callback)
@@ -260,8 +274,8 @@ function createCacheRepository(driverName?: string): CacheRepository {
       callback: CacheValueResolver<TValue>,
     ): Promise<Awaited<TValue>> {
       const cached = await getCachedValue<Awaited<TValue>>(key)
-      if (cached !== null) {
-        return cached
+      if (cached.hit) {
+        return cached.value
       }
 
       const value = await resolveValue(callback)
@@ -277,19 +291,19 @@ function createCacheRepository(driverName?: string): CacheRepository {
       const now = Date.now()
       const cached = await getCachedValue<unknown>(key)
 
-      if (isFlexibleEnvelope<Awaited<TValue>>(cached)) {
-        if (now <= cached.freshUntil) {
-          return cached.value
+      if (cached.hit && isFlexibleEnvelope<Awaited<TValue>>(cached.value)) {
+        if (now <= cached.value.freshUntil) {
+          return cached.value.value
         }
 
-        if (now <= cached.staleUntil) {
+        if (now <= cached.value.staleUntil) {
           const refreshLock = createRefreshLock(key, normalizedTtl.staleSeconds)
           void refreshLock.get(async () => {
             await refreshFlexibleValue(key, normalizedTtl, callback)
             return true
           }).catch(() => undefined)
 
-          return cached.value
+          return cached.value.value
         }
       }
 
@@ -307,9 +321,9 @@ function createCacheRepository(driverName?: string): CacheRepository {
       }
 
       const retried = await getCachedValue<unknown>(key)
-      if (isFlexibleEnvelope<Awaited<TValue>>(retried)) {
-        if (Date.now() <= retried.staleUntil) {
-          return retried.value
+      if (retried.hit && isFlexibleEnvelope<Awaited<TValue>>(retried.value)) {
+        if (Date.now() <= retried.value.staleUntil) {
+          return retried.value.value
         }
       }
 

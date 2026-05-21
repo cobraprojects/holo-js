@@ -74,10 +74,17 @@ function normalizeLookupChannel(channel: string, label: string): string {
 }
 
 function normalizeJsonValue(value: unknown, path: string): unknown {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new Error(`[@holo-js/broadcast] ${path} must be JSON-serializable.`)
+    }
+
+    return value
+  }
+
   if (
     value === null
     || typeof value === 'string'
-    || typeof value === 'number'
     || typeof value === 'boolean'
   ) {
     return value
@@ -233,7 +240,16 @@ async function loadChannelDefinitions(
 
   getRuntimeState().byBindings ??= new WeakMap()
   getRuntimeState().byBindings!.set(bindings, pending)
-  return await pending
+  try {
+    return await pending
+  } catch (error) {
+    const cache = getRuntimeState().byBindings!
+    if (cache.get(bindings) === pending) {
+      cache.delete(bindings)
+    }
+
+    throw error
+  }
 }
 
 function matchPattern(pattern: string, channel: string): Readonly<Record<string, string>> | null {

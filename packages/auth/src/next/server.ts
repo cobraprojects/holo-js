@@ -1,6 +1,33 @@
-import holoAuth, { authRuntimeInternals, provider as currentProvider, user as currentUser } from '../index'
 import type { HoloAuthUser } from '../contracts'
+import {
+  createSignedCsrfToken,
+  defaultCsrfCookieName,
+  isCsrfCookieRequest,
+  resolveCsrfCookieOptions,
+} from '../runtime/csrfCookie'
+import type * as AuthRuntime from '../index'
 import { runWithNextAuthRequest, type NextAuthRequestLike } from './request-context'
+
+type AuthRuntimeModule = typeof AuthRuntime
+const sourceAuthRuntimePath = '../index'
+
+type NextResponseCookieOptions = {
+  readonly path?: string
+  readonly secure?: boolean
+  readonly sameSite?: 'lax' | 'strict' | 'none'
+}
+
+type NextResponseWithCookies = Response & {
+  readonly cookies: {
+    set(name: string, value: string, options?: NextResponseCookieOptions): void
+  }
+}
+
+type NextServerModule = {
+  readonly NextResponse: {
+    next(): NextResponseWithCookies
+  }
+}
 
 export type AuthState = {
   readonly authenticated: boolean
@@ -28,6 +55,7 @@ export type AuthOnlyOptions = AuthOptions & {
 }
 
 type NextRouteProtectionRequest = NextAuthRequestLike & {
+  readonly method?: string
   readonly nextUrl?: URL
   readonly url: string
 }
@@ -37,6 +65,32 @@ type NextRouteProtectionResult = Response | undefined | void
 type NextRouteProtectionProxy = (
   request: NextRouteProtectionRequest,
 ) => NextRouteProtectionResult | Promise<NextRouteProtectionResult>
+
+function hasCsrfCookie(request: NextRouteProtectionRequest): boolean {
+  return Boolean(request.cookies.get(defaultCsrfCookieName)?.value)
+}
+
+async function createCsrfCookieResponse(request: NextRouteProtectionRequest): Promise<Response | undefined> {
+  if (!isCsrfCookieRequest(request.method) || hasCsrfCookie(request)) {
+    return undefined
+  }
+
+  const signingKey = process.env.APP_KEY?.trim()
+  if (!signingKey) {
+    return undefined
+  }
+
+  const token = await createSignedCsrfToken(signingKey)
+  if (!token) {
+    return undefined
+  }
+
+  const { NextResponse } = await import('next/server') as NextServerModule
+  const response = NextResponse.next()
+  response.cookies.set(defaultCsrfCookieName, token, resolveCsrfCookieOptions(request.url))
+
+  return response
+}
 
 function toClientAuthUser(user: HoloAuthUser | null): HoloAuthUser | null {
   return user ? { ...user } : null
@@ -81,7 +135,17 @@ function isSameUrl(left: URL, right: URL): boolean {
     && left.hash === right.hash
 }
 
+async function loadAuthRuntime(): Promise<AuthRuntimeModule> {
+  return await import(sourceAuthRuntimePath) as AuthRuntimeModule
+}
+
 export async function auth(options: AuthOptions = {}): Promise<AuthState> {
+  const {
+    authRuntimeInternals,
+    default: holoAuth,
+    provider: currentProvider,
+    user: currentUser,
+  } = await loadAuthRuntime()
   const guard = options.guard ?? authRuntimeInternals.getRuntimeBindings().config.defaults.guard
   try {
     const user = options.guard
@@ -164,11 +228,13 @@ export function protectRoutes(...proxies: readonly NextRouteProtectionProxy[]): 
       }
     }
 
-    return undefined
+    return await createCsrfCookieResponse(request)
   }
 }
 
 export const routeProtectionInternals = {
+  createCsrfCookieResponse,
+  createCsrfToken: createSignedCsrfToken,
   isSameUrl,
   matchesRoute,
   matchesRoutes,

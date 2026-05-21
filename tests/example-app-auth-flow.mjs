@@ -1,4 +1,37 @@
 import assert from 'node:assert/strict'
+import { createHmac, randomBytes } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+
+let csrfSigningKey = null
+
+async function loadCsrfSigningKey() {
+  if (csrfSigningKey) {
+    return csrfSigningKey
+  }
+
+  if (process.env.APP_KEY?.trim()) {
+    csrfSigningKey = process.env.APP_KEY.trim()
+    return csrfSigningKey
+  }
+
+  const envSource = await readFile(`${process.cwd()}/.env`, 'utf8')
+  const appKey = envSource.match(/^APP_KEY=(.*)$/m)?.[1]?.trim()
+  if (!appKey) {
+    throw new Error('Expected APP_KEY to be configured for CSRF auth-flow tests.')
+  }
+
+  csrfSigningKey = appKey.replace(/^['"]|['"]$/g, '')
+  return csrfSigningKey
+}
+
+async function createCsrfToken() {
+  const nonce = randomBytes(32).toString('base64url')
+  const signature = createHmac('sha256', await loadCsrfSigningKey())
+    .update(nonce)
+    .digest('base64url')
+
+  return `${nonce}.${signature}`
+}
 
 function createCookieJar() {
   const cookies = new Map()
@@ -62,6 +95,11 @@ function listSetCookieHeaders(response) {
 
   const fallback = response.headers.get('set-cookie')
   return fallback ? [fallback] : []
+}
+
+function appendCookieHeader(headers, cookie) {
+  const existing = headers.get('cookie')
+  headers.set('cookie', existing ? `${existing}; ${cookie}` : cookie)
 }
 
 async function fetchText(baseUrl, path, options = {}) {
@@ -197,6 +235,7 @@ export async function assertExampleAppAuthFlow({
   appName,
   sessionCookieName,
   checkPages = true,
+  loginRequiresCsrf = false,
 }) {
   const email = `${appName}-${Date.now()}@app.test`
   const password = 'secret-secret'
@@ -223,6 +262,42 @@ export async function assertExampleAppAuthFlow({
       ...(options.headers ?? {}),
     },
   })
+  const fetchCsrfProtectedAuthJson = async (path, options = {}) => {
+    if (!loginRequiresCsrf) {
+      return await fetchAuthJson(path, options)
+    }
+
+    const csrfToken = await createCsrfToken()
+    const csrfCookie = `XSRF-TOKEN=${encodeURIComponent(csrfToken)}`
+    const fields = {
+      ...(options.fields ?? {}),
+      _token: csrfToken,
+    }
+
+    if (options.jar) {
+      options.jar.capture(new Response(null, {
+        headers: {
+          'set-cookie': `${csrfCookie}; Path=/; SameSite=Lax`,
+        },
+      }))
+
+      return await fetchAuthJson(path, {
+        ...options,
+        fields,
+      })
+    }
+
+    const headers = new Headers(options.headers ?? {})
+    appendCookieHeader(headers, csrfCookie)
+
+    return await fetchAuthJson(path, {
+      ...options,
+      fields,
+      headers: Object.fromEntries(headers),
+    })
+  }
+  const fetchLoginJson = (options = {}) => fetchCsrfProtectedAuthJson('/api/login', options)
+  const fetchRegisterJson = (options = {}) => fetchCsrfProtectedAuthJson('/api/register', options)
 
   const assertGuestNav = (text) => {
     assert.match(text, />Login</i)
@@ -310,7 +385,23 @@ export async function assertExampleAppAuthFlow({
     'Expected WorkOS callback redirect to include an error query parameter.',
   )
 
-  const badCredentials = await fetchAuthJson('/api/login', {
+  if (loginRequiresCsrf) {
+    const missingLoginCsrf = await fetchAuthJson('/api/login', {
+      fields: {
+        email,
+        password,
+      },
+      headers: {
+        'x-forwarded-for': '127.0.0.229',
+        'x-real-ip': '127.0.0.229',
+      },
+      allowFailure: true,
+    })
+    assert.equal(missingLoginCsrf.response.status, 419)
+    assertFieldFailure(missingLoginCsrf, ['_root'])
+  }
+
+  const badCredentials = await fetchLoginJson({
     fields: {
       email,
       password: 'wrong-password',
@@ -327,7 +418,7 @@ export async function assertExampleAppAuthFlow({
   let throttledLogin
   const throttledEmail = `${appName}-throttled-login-${Date.now()}@app.test`
   for (let attempt = 0; attempt < 6; attempt += 1) {
-    throttledLogin = await fetchAuthJson('/api/login', {
+    throttledLogin = await fetchLoginJson({
       fields: {
         email: throttledEmail,
         password: 'wrong-password',
@@ -343,7 +434,7 @@ export async function assertExampleAppAuthFlow({
 
   let throttledRegister
   for (let attempt = 0; attempt < 11; attempt += 1) {
-    throttledRegister = await fetchAuthJson('/api/register', {
+    throttledRegister = await fetchRegisterJson({
       fields: {
         name: 'No',
         email: 'not-an-email',
@@ -362,7 +453,7 @@ export async function assertExampleAppAuthFlow({
   const loggedInVerificationEmail = `${appName}-logged-in-verification-${Date.now()}@app.test`
   const loggedInVerificationOutputStart = getOutput().length
   const loggedInVerificationJar = createCookieJar()
-  const loggedInVerification = await fetchAuthJson('/api/register', {
+  const loggedInVerification = await fetchRegisterJson({
     fields: {
       name: 'Logged In Verification User',
       email: loggedInVerificationEmail,
@@ -399,7 +490,7 @@ export async function assertExampleAppAuthFlow({
 
   const registerOutputStart = getOutput().length
   const registeredJar = createCookieJar()
-  const registered = await fetchAuthJson('/api/register', {
+  const registered = await fetchRegisterJson({
     fields: {
       name: 'Auth Flow User',
       email,
@@ -433,7 +524,7 @@ export async function assertExampleAppAuthFlow({
   assert.equal(invalidVerification.response.status, 422)
   assertFieldFailure(invalidVerification, ['token'])
 
-  const duplicateRegistration = await fetchAuthJson('/api/register', {
+  const duplicateRegistration = await fetchRegisterJson({
     fields: {
       name: 'Duplicate Auth Flow User',
       email,
@@ -450,7 +541,7 @@ export async function assertExampleAppAuthFlow({
   assertFieldFailure(duplicateRegistration, ['email'])
 
   const pendingVerificationJar = createCookieJar()
-  const unverifiedLogin = await fetchAuthJson('/api/login', {
+  const unverifiedLogin = await fetchLoginJson({
     fields: {
       email,
       password,
@@ -496,6 +587,20 @@ export async function assertExampleAppAuthFlow({
   assert.equal(verified.json.ok, true)
   assert.equal(verified.json.data?.redirectTo, '/login')
 
+  const alreadyVerifiedResend = await fetchAuthJson('/api/verify-email/resend', {
+    method: 'POST',
+    fields: {
+      email,
+    },
+    headers: {
+      'x-forwarded-for': '127.0.0.226',
+      'x-real-ip': '127.0.0.226',
+    },
+    allowFailure: true,
+  })
+  assert.equal(alreadyVerifiedResend.response.status, 409)
+  assertFieldFailure(alreadyVerifiedResend, ['_root'])
+
   const consumedVerification = await fetchAuthJson('/api/verify-email', {
     method: 'POST',
     fields: {
@@ -507,7 +612,7 @@ export async function assertExampleAppAuthFlow({
   assertFieldFailure(consumedVerification, ['token'])
 
   const authenticatedJar = createCookieJar()
-  const loggedIn = await fetchAuthJson('/api/login', {
+  const loggedIn = await fetchLoginJson({
     fields: {
       email,
       password,
@@ -643,7 +748,7 @@ export async function assertExampleAppAuthFlow({
 
   const rememberCookieName = `${sessionCookieName}_remember`
   const rememberedJar = createCookieJar()
-  const rememberedLogin = await fetchAuthJson('/api/login', {
+  const rememberedLogin = await fetchLoginJson({
     fields: {
       email,
       password,
@@ -671,7 +776,7 @@ export async function assertExampleAppAuthFlow({
   assert.equal(rememberedUser.json.guard, 'web')
   assert.equal(rememberedUser.json.user?.email, email)
 
-  const optOutLogin = await fetchAuthJson('/api/login', {
+  const optOutLogin = await fetchLoginJson({
     fields: {
       email,
       password,
@@ -783,7 +888,7 @@ export async function assertExampleAppAuthFlow({
   assert.equal(consumedReset.response.status, 422)
   assertFieldFailure(consumedReset, ['token'])
 
-  const oldPasswordLogin = await fetchAuthJson('/api/login', {
+  const oldPasswordLogin = await fetchLoginJson({
     fields: {
       email,
       password,
@@ -793,7 +898,7 @@ export async function assertExampleAppAuthFlow({
   assert.equal(oldPasswordLogin.json.ok, false)
 
   const refreshedJar = createCookieJar()
-  const newPasswordLogin = await fetchAuthJson('/api/login', {
+  const newPasswordLogin = await fetchLoginJson({
     fields: {
       email,
       password: nextPassword,

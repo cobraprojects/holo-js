@@ -104,6 +104,222 @@ describe('@holo-js/queue config', () => {
     })
   })
 
+  it('normalizes inline Redis connection options without shared config', () => {
+    expect(normalizeQueueConfig({
+      default: 'redis',
+      connections: {
+        redis: {
+          driver: 'redis',
+          queue: 'critical',
+          retryAfter: '60',
+          blockFor: '0',
+          redis: {
+            host: ' redis.internal ',
+            port: '6380',
+            username: ' worker ',
+            password: ' secret ',
+            db: '2',
+          },
+        },
+      },
+    })).toEqual({
+      default: 'redis',
+      failed: {
+        driver: 'database',
+        connection: 'default',
+        table: 'failed_jobs',
+      },
+      connections: {
+        redis: {
+          name: 'redis',
+          driver: 'redis',
+          connection: 'redis',
+          queue: 'critical',
+          retryAfter: 60,
+          blockFor: 0,
+          redis: {
+            host: 'redis.internal',
+            port: 6380,
+            username: 'worker',
+            password: 'secret',
+            db: 2,
+          },
+        },
+      },
+    })
+  })
+
+  it('merges inline Redis options over shared Redis defaults', () => {
+    expect(normalizeQueueConfig({
+      default: 'redis',
+      connections: {
+        redis: {
+          driver: 'redis',
+          connection: 'cache',
+          redis: {
+            host: 'queue.internal',
+            port: '6381',
+            db: '2',
+          },
+        },
+      },
+    }, sharedRedisConfig).connections.redis).toEqual({
+      name: 'redis',
+      driver: 'redis',
+      connection: 'cache',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 5,
+      redis: {
+        host: 'queue.internal',
+        port: 6381,
+        password: 'secret',
+        username: 'worker',
+        db: 2,
+      },
+    })
+
+    expect(normalizeQueueConfig({
+      default: 'redis',
+      connections: {
+        redis: {
+          driver: 'redis',
+          connection: 'cache',
+          redis: {
+            db: '2',
+          },
+        },
+      },
+    }, sharedRedisConfig).connections.redis).toMatchObject({
+      redis: {
+        url: 'redis://cache.internal:6380/4',
+        db: 2,
+      },
+    })
+  })
+
+  it('normalizes inline Redis urls and cluster nodes', () => {
+    expect(normalizeQueueConfig({
+      default: 'redis',
+      connections: {
+        redis: {
+          driver: 'redis',
+          redis: {
+            url: 'redis://queue.internal:6380/3',
+          },
+        },
+        cluster: {
+          driver: 'redis',
+          redis: {
+            clusters: [
+              { url: 'redis://cluster-a.internal:6380' },
+              { host: ' cluster-b.internal ', port: '6381' },
+            ],
+          },
+        },
+      },
+    }).connections).toMatchObject({
+      redis: {
+        redis: {
+          url: 'redis://queue.internal:6380/3',
+          host: '127.0.0.1',
+          port: 6379,
+          db: 3,
+        },
+      },
+      cluster: {
+        redis: {
+          clusters: [
+            { url: 'redis://cluster-a.internal:6380', host: '127.0.0.1', port: 6379 },
+            { host: 'cluster-b.internal', port: 6381 },
+          ],
+          host: '127.0.0.1',
+          port: 6379,
+          db: 0,
+        },
+      },
+    })
+  })
+
+  it('rejects invalid inline Redis options', () => {
+    expect(() => normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+          redis: {
+            url: 'not a url',
+          },
+        },
+      },
+    })).toThrow('queue connection "redis" redis url is invalid')
+
+    expect(() => normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+          redis: {
+            url: 'http://redis.internal',
+          },
+        },
+      },
+    })).toThrow('unsupported protocol "http:"')
+
+    expect(() => normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+          redis: {
+            url: 'redis://redis.internal/one',
+          },
+        },
+      },
+    })).toThrow('must include at most one integer database path segment')
+
+    expect(normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+          redis: {
+            clusters: [],
+          },
+        },
+      },
+    }).connections.redis).toMatchObject({
+      redis: {
+        host: '127.0.0.1',
+        port: 6379,
+        db: 0,
+      },
+    })
+
+    expect(() => normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+          redis: {
+            clusters: [
+              { url: 'redis://cluster.internal/1' },
+            ],
+          },
+        },
+      },
+    })).toThrow('url cannot include a database path in cluster mode')
+
+    expect(() => normalizeQueueConfig({
+      connections: {
+        redis: {
+          driver: 'redis',
+          redis: {
+            clusters: [
+              { host: 'cluster.internal' },
+            ],
+            db: 1,
+          },
+        },
+      },
+    })).toThrow('Redis Cluster only supports database 0')
+  })
+
   it('supports disabling failed job storage explicitly', () => {
     expect(normalizeQueueConfig({
       failed: false,

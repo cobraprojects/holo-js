@@ -376,6 +376,17 @@ function getPolicyByTarget(target: AuthorizationPolicyTarget | object): Register
   throw new PolicyNotFoundError('[@holo-js/authorization] Policy definition was not found for the target.')
 }
 
+function assertPolicyMatchesTarget(
+  policy: RegisteredPolicy,
+  policyName: string,
+  target: AuthorizationPolicyTarget | object,
+): void {
+  const targetPolicy = getPolicyByTarget(target)
+  if (targetPolicy !== policy) {
+    throw new PolicyNotFoundError(`[@holo-js/authorization] Policy "${policyName}" was not found for the selected target.`)
+  }
+}
+
 function getTargetConstructor(target: object): AuthorizationTargetConstructor | null {
   const candidate = (target as { constructor?: AuthorizationTargetConstructor | undefined }).constructor
   return isAuthorizationTargetConstructor(candidate)
@@ -389,10 +400,29 @@ function isAuthorizationTargetConstructor(value: unknown): value is Authorizatio
 }
 
 function isAuthorizationTargetModel(value: unknown): value is AuthorizationTargetModel<object> {
-  return !!value
-    && typeof value === 'object'
-    && 'definition' in value
-    && isAuthorizationTargetModelDefinition((value as { definition?: unknown }).definition)
+  if (!value || typeof value !== 'object' || !('definition' in value)) {
+    return false
+  }
+
+  const candidate = value as {
+    definition?: unknown
+    query?: () => unknown
+  }
+
+  const query = candidate.query
+  if (!isAuthorizationTargetModelDefinition(candidate.definition) || typeof query !== 'function') {
+    return false
+  }
+
+  try {
+    const queryFacade = query.call(candidate)
+    return !!queryFacade
+      && typeof queryFacade === 'object'
+      && typeof (queryFacade as { first?: unknown }).first === 'function'
+      && typeof (queryFacade as { firstOrFail?: unknown }).firstOrFail === 'function'
+  } catch {
+    return false
+  }
 }
 
 function isAuthorizationTargetModelDefinition(value: unknown): value is AuthorizationTargetModelDefinition {
@@ -543,6 +573,8 @@ async function evaluatePolicyByName(
   guard?: string,
 ): Promise<AuthorizationDecision> {
   const policy = getPolicyByName(policyName)
+  assertPolicyMatchesTarget(policy, policyName, target)
+
   const context = typeof guard === 'string'
     ? resolveContext(actor, guard)
     : resolveContext(actor)

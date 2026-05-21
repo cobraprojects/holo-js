@@ -47,6 +47,7 @@ import {
   MEDIA_GENERATE_CONVERSIONS_JOB,
   MediaItem,
   normalizeCollectionDefinitions,
+  normalizeConversionDefinitions,
   normalizeMediaDefinition,
   resetMediaPathGenerator,
   resetMediaRuntime,
@@ -59,7 +60,9 @@ import {
   runMediaGenerateConversionsJob,
   setMediaConversionExecutor,
   setMediaPathGenerator,
+  type MediaEnabledEntity,
 } from '../src'
+import { getContentSize } from '../src/runtime/binary'
 
 const sharedRedisConfig = {
   default: 'default',
@@ -584,6 +587,71 @@ describe('@holo-js/media', () => {
     expect(resolved.collections?.[0]?.name).toBe('factory')
   })
 
+  it('reports binary content sizes for every supported input', () => {
+    expect(getContentSize(Buffer.from('node'))).toBe(4)
+    expect(getContentSize(new Uint8Array([1, 2, 3, 4, 5]))).toBe(5)
+    expect(getContentSize(new ArrayBuffer(3))).toBe(3)
+    expect(getContentSize(new Blob([Buffer.from('blob')]))).toBe(4)
+  })
+
+  it('rejects non-finite numeric media definition values', () => {
+    const nonFiniteValues = [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    ] as const
+
+    for (const value of nonFiniteValues) {
+      expect(() => collection('docs').onlyKeepLatest(value)).toThrow('onlyKeepLatest must be a finite number')
+      expect(() => collection('docs').maxSize(value)).toThrow('maxFileSize must be a finite number')
+      expect(() => conversion('thumb').width(value)).toThrow('width must be a finite number')
+      expect(() => conversion('thumb').height(value)).toThrow('height must be a finite number')
+      expect(() => conversion('thumb').quality(value)).toThrow('quality must be a finite number')
+
+      expect(() => normalizeCollectionDefinitions([{
+        kind: 'collection',
+        name: 'docs',
+        singleFile: false,
+        onlyKeepLatest: value,
+        acceptedMimeTypes: [],
+        acceptedExtensions: [],
+      }])).toThrow('onlyKeepLatest must be a finite number')
+
+      expect(() => normalizeCollectionDefinitions([{
+        kind: 'collection',
+        name: 'docs',
+        singleFile: false,
+        acceptedMimeTypes: [],
+        acceptedExtensions: [],
+        maxFileSize: value,
+      }])).toThrow('maxFileSize must be a finite number')
+
+      expect(() => normalizeConversionDefinitions([{
+        kind: 'conversion',
+        name: 'thumb',
+        collections: [],
+        width: value,
+        queued: false,
+      }])).toThrow('width must be a finite number')
+
+      expect(() => normalizeConversionDefinitions([{
+        kind: 'conversion',
+        name: 'thumb',
+        collections: [],
+        height: value,
+        queued: false,
+      }])).toThrow('height must be a finite number')
+
+      expect(() => normalizeConversionDefinitions([{
+        kind: 'conversion',
+        name: 'thumb',
+        collections: [],
+        quality: value,
+        queued: false,
+      }])).toThrow('quality must be a finite number')
+    }
+  })
+
   it('resolves registry fallbacks and path generator overrides', async () => {
     const PlainPost = defineModel(postsTable, {
       fillable: ['title'],
@@ -663,6 +731,41 @@ describe('@holo-js/media', () => {
     await expect(runtimePost.regenerateMedia()).resolves.toBeUndefined()
     await expect(runtimePost.addMedia(Buffer.from('x')).toMediaCollection()).rejects.toThrow('is not configured for media')
     await expect(runtimePost.addMediaFromUrl('https://example.test/image.jpg').toMediaCollection()).rejects.toThrow('is not configured for media')
+  })
+
+  it('preserves media model method contracts and wraps entity-producing results', () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('images'),
+      ],
+      conversions: [
+        conversion('thumb').performOnCollections('images'),
+      ],
+    })
+
+    type PostMediaEntity = MediaEnabledEntity<typeof postsTable, 'default' | 'images', 'thumb'>
+    type PostQuery = ReturnType<typeof Post.query>
+    type PostPage = Awaited<ReturnType<typeof Post.paginate>>
+    type PostQueryPage = Awaited<ReturnType<PostQuery['paginate']>>
+
+    const acceptsFindValue = (_value: Parameters<typeof Post.find>[0]) => {}
+
+    acceptsFindValue(1)
+    // @ts-expect-error media models must preserve the base model primary-key type.
+    acceptsFindValue({})
+
+    expectTypeOf<Parameters<typeof Post.find>[0]>().toEqualTypeOf<number>()
+    expectTypeOf<Parameters<typeof Post.findMany>[0]>().toEqualTypeOf<readonly number[]>()
+    expectTypeOf<Awaited<ReturnType<typeof Post.firstWhere>>>().toEqualTypeOf<PostMediaEntity | undefined>()
+    expectTypeOf<Awaited<ReturnType<typeof Post.update>>>().toEqualTypeOf<PostMediaEntity>()
+    expectTypeOf<PostPage['data'][number]>().toEqualTypeOf<PostMediaEntity>()
+    expectTypeOf<PostQueryPage['data'][number]>().toMatchTypeOf<PostMediaEntity>()
+    expectTypeOf<Awaited<ReturnType<PostQuery['first']>>>().toMatchTypeOf<PostMediaEntity | undefined>()
+    expectTypeOf<ReturnType<PostQuery['cursor']>>().toMatchTypeOf<AsyncGenerator<PostMediaEntity, void, unknown>>()
   })
 
   it('keeps the undeclared default collection multi-file', async () => {
@@ -754,6 +857,14 @@ describe('@holo-js/media', () => {
       fileName: 'hero.jpg',
       mimeType: 'image/png',
     }).toMediaCollection('images')).rejects.toThrow('accepted extension')
+
+    const storedFileCount = storageState.getDiskStore('public').size
+    await expect(post.addMedia({
+      contents: Buffer.from('ok'),
+      fileName: 'hero.png',
+      mimeType: 'image/png',
+    }).toMediaCollection('iamges' as never)).rejects.toThrow('Unknown media collection "iamges"')
+    expect(storageState.getDiskStore('public').size).toBe(storedFileCount)
   })
 
   it('accepts MIME types case-insensitively during validation', async () => {
@@ -873,7 +984,11 @@ describe('@holo-js/media', () => {
 
     const post = await Post.create({ title: 'Hero' })
     expectTypeOf(post.getFirstMediaUrl('images', 'thumb')).toEqualTypeOf<Promise<string | null>>()
-    expect(Post.getRepository().getRelationDefinition('media').kind).toBe('morphMany')
+    const mediaRelation = Post.getRepository().getRelationDefinition('media')
+    expect(mediaRelation.kind).toBe('morphMany')
+    if (mediaRelation.kind === 'morphMany') {
+      expect(mediaRelation.related()).toBe(Media)
+    }
 
     const media = await post
       .addMedia({
@@ -900,7 +1015,7 @@ describe('@holo-js/media', () => {
 
     const items = await post.getMedia('images')
     expect(items).toHaveLength(1)
-    expect(resolveMediaCollection(Post, 'missing').name).toBe('missing')
+    expect(() => resolveMediaCollection(Post, 'missing')).toThrow('Unknown media collection "missing"')
     expect(resolveMediaConversion(Post, 'thumb')?.name).toBe('thumb')
     expect(items[0]?.toJSON().generated_conversions).toMatchObject({
       thumb: {
@@ -962,6 +1077,38 @@ describe('@holo-js/media', () => {
     expect(metadata.format).toBe('webp')
     expect(metadata.width).toBe(2)
     expect(metadata.height).toBe(2)
+  })
+
+  it('cleans up the stored original when conversion generation fails', async () => {
+    setMediaConversionExecutor({
+      async generate() {
+        throw new Error('conversion failed')
+      },
+    })
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('images').disk('public'),
+      ],
+      conversions: [
+        conversion('thumb').performOnCollections('images'),
+      ],
+    })
+
+    const post = await Post.create({ title: 'Failed Conversion Cleanup' })
+
+    await expect(post.addMedia({
+      contents: Buffer.from('image'),
+      fileName: 'hero.jpg',
+      mimeType: 'image/jpeg',
+    }).toMediaCollection('images')).rejects.toThrow('conversion failed')
+
+    expect(storageState.getDiskStore('public').size).toBe(0)
+    expect(await Media.query().count()).toBe(0)
   })
 
   it('covers the default sharp executor output branches', async () => {
@@ -2191,13 +2338,17 @@ describe('@holo-js/media', () => {
     })
 
     const post = await Post.create({ title: 'Queued Rollback' })
+    let originalPath: string | undefined
+    let conversionPath: string | undefined
 
     await expect(DB.transaction(async () => {
-      await post.addMedia({
+      const media = await post.addMedia({
         contents: Buffer.from('image'),
         fileName: 'hero.jpg',
         mimeType: 'image/jpeg',
       }).toMediaCollection('images')
+      originalPath = media.record.path
+      conversionPath = media.record.generated_conversions.card?.path
 
       throw new Error('rollback now')
     })).rejects.toThrow('rollback now')
@@ -2206,6 +2357,10 @@ describe('@holo-js/media', () => {
     expect(await DB.table('jobs').get()).toHaveLength(0)
     expect(generate).toHaveBeenCalledTimes(1)
     expect(generate.mock.calls[0]?.[0].conversion.name).toBe('card')
+    expect(originalPath).toBeTypeOf('string')
+    expect(conversionPath).toBeTypeOf('string')
+    expect(storageState.getDiskStore('public').has(originalPath!)).toBe(false)
+    expect(storageState.getDiskStore('public').has(conversionPath!)).toBe(false)
   })
 
   it('reports queued conversion worker failures for unknown conversions and missing originals', async () => {
@@ -2305,6 +2460,50 @@ describe('@holo-js/media', () => {
       conversionNames: [],
     })
     expect(generate).not.toHaveBeenCalled()
+  })
+
+  it('treats empty queued conversion names as a no-op for existing media rows', async () => {
+    const generate = vi.fn(async ({ conversion }: { conversion: { name: string } }) => ({
+      contents: Buffer.from(`generated:${conversion.name}`),
+      fileName: `${conversion.name}.txt`,
+      mimeType: 'text/plain',
+    }))
+
+    setMediaConversionExecutor({ generate })
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('images').disk('public'),
+      ],
+      conversions: [
+        conversion('card').performOnCollections('images'),
+      ],
+    })
+
+    const post = await Post.create({ title: 'Empty Conversion Names' })
+    const media = await post.addMedia({
+      contents: Buffer.from('image'),
+      fileName: 'hero.jpg',
+      mimeType: 'image/jpeg',
+    }).toMediaCollection('images')
+    const generatedConversions = media.record.generated_conversions
+    generate.mockClear()
+
+    await expect(runMediaGenerateConversionsJob({
+      mediaId: media.record.id,
+      conversionNames: ['   ', ''],
+    })).resolves.toEqual({
+      status: 'processed',
+      conversionNames: [],
+    })
+
+    const unchanged = await Media.findOrFail(media.record.id)
+    expect(generate).not.toHaveBeenCalled()
+    expect(unchanged.get('generated_conversions')).toEqual(generatedConversions)
   })
 
   it('defers the exported queued conversion helper until the surrounding transaction commits', async () => {

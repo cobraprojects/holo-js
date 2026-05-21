@@ -114,6 +114,7 @@ type MutableState<TData, TSuccess> = {
   submitting: boolean
   lastSubmission?: SerializedFormSubmission<TData> | FormFailurePayload<TData> | FormSuccessPayload<TSuccess>
   listeners: Set<() => void>
+  validationSequence: number
 }
 
 type SchemaFieldLike = {
@@ -459,6 +460,18 @@ function notifyListeners<TData, TSuccess>(state: MutableState<TData, TSuccess>):
   }
 }
 
+function nextValidationSequence<TData, TSuccess>(state: MutableState<TData, TSuccess>): number {
+  state.validationSequence += 1
+  return state.validationSequence
+}
+
+function isLatestValidation<TData, TSuccess>(
+  state: MutableState<TData, TSuccess>,
+  sequence: number,
+): boolean {
+  return sequence === state.validationSequence
+}
+
 function collectErrorsForPath(
   flattenedErrors: Record<string, readonly string[]>,
   path: string,
@@ -528,8 +541,14 @@ function buildFieldsTree<TData>(
         }
 
         if (validateOn === 'change') {
-          const submission = await validateClientValues(state.values, schemaDefinition) as FormSubmissionResult<TData>
-          state.flattenedErrors = submission.errors.flatten()
+          const sequence = nextValidationSequence(state)
+          const submission = await validateClientValues(
+            cloneValue(state.values),
+            schemaDefinition,
+          ) as FormSubmissionResult<TData>
+          if (isLatestValidation(state, sequence)) {
+            state.flattenedErrors = submission.errors.flatten()
+          }
         }
 
         notifyListeners(state)
@@ -540,20 +559,29 @@ function buildFieldsTree<TData>(
       async onBlur() {
         state.touched.add(path)
         if (validateOn === 'blur') {
-          const submission = await validateClientValues(state.values, schemaDefinition) as FormSubmissionResult<TData>
-          state.flattenedErrors = replaceErrorsForPath(
-            state.flattenedErrors,
-            path,
-            submission.errors.flatten(),
-          )
+          const sequence = nextValidationSequence(state)
+          const submission = await validateClientValues(
+            cloneValue(state.values),
+            schemaDefinition,
+          ) as FormSubmissionResult<TData>
+          if (isLatestValidation(state, sequence)) {
+            state.flattenedErrors = replaceErrorsForPath(
+              state.flattenedErrors,
+              path,
+              submission.errors.flatten(),
+            )
+          }
         }
 
         notifyListeners(state)
       },
       async validate() {
-        const submission = await validateClientValues(state.values, schemaDefinition)
-        state.flattenedErrors = submission.errors.flatten()
-        notifyListeners(state)
+        const sequence = nextValidationSequence(state)
+        const submission = await validateClientValues(cloneValue(state.values), schemaDefinition)
+        if (isLatestValidation(state, sequence)) {
+          state.flattenedErrors = submission.errors.flatten()
+          notifyListeners(state)
+        }
         return state.flattenedErrors[path] ?? []
       },
     }) as unknown as FormFieldTree<TData>
@@ -732,6 +760,7 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
     submitting: false,
     lastSubmission: options.initialState,
     listeners: new Set(),
+    validationSequence: 0,
   }
 
   const validateOn = options.validateOn ?? 'submit'
@@ -744,10 +773,53 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
   ) as unknown as InferFormFieldTree<TSchema>
 
   async function runValidation(): Promise<FormSubmissionResult<TData>> {
-    const submission = await validateClientValues(state.values, schemaDefinition) as FormSubmissionResult<TData>
-    state.flattenedErrors = submission.errors.flatten()
-    notifyListeners(state)
+    const sequence = nextValidationSequence(state)
+    const submission = await validateClientValues(cloneValue(state.values), schemaDefinition) as FormSubmissionResult<TData>
+    if (isLatestValidation(state, sequence)) {
+      state.flattenedErrors = submission.errors.flatten()
+      notifyListeners(state)
+    }
     return submission
+  }
+
+  function applyServerState(result: ClientSubmitResult<TData, TSuccess>): ClientSubmitResult<TData, TSuccess> {
+    const normalized = normalizeSubmissionLike(
+      schemaDefinition,
+      state.values,
+      result,
+    )
+
+    if ('ok' in normalized && normalized.ok === true) {
+      state.lastSubmission = normalized
+      state.flattenedErrors = {}
+      notifyListeners(state)
+      return normalized
+    }
+
+    if ('ok' in normalized && normalized.ok === false) {
+      const sanitized = {
+        ...normalized,
+        values: sanitizeFlashedInput(normalized.values, schemaDefinition),
+      }
+
+      state.values = mergeValues(state.values, sanitized.values)
+      clearSensitiveInputValues(state.values, schemaDefinition)
+      state.flattenedErrors = sanitized.errors
+      state.lastSubmission = sanitized
+      notifyListeners(state)
+      return sanitized
+    }
+
+    const normalizedSubmission = normalized as FormSubmissionResult<TData>
+    state.values = mergeValues(state.values, normalizedSubmission.values)
+    clearSensitiveInputValues(state.values, schemaDefinition)
+    state.flattenedErrors = normalizedSubmission.errors.flatten()
+    state.lastSubmission = normalizedSubmission.valid
+      ? undefined
+      : normalizedSubmission.fail()
+    notifyListeners(state)
+
+    return normalizedSubmission
   }
 
   return Object.freeze({
@@ -807,10 +879,10 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
             formData,
           })
         } catch {
-          return this.applyServerState(createTransportFailure(state.values))
+          return applyServerState(createTransportFailure(state.values))
         }
 
-        return this.applyServerState(response)
+        return applyServerState(response)
       } finally {
         state.submitting = false
         notifyListeners(state)
@@ -836,46 +908,14 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
       }
 
       if (validateOn === 'change' && fieldPaths.includes(path)) {
-        const submission = await runValidation()
-        state.flattenedErrors = submission.errors.flatten()
+        await runValidation()
         return
       }
 
       notifyListeners(state)
     },
     applyServerState(result: ClientSubmitResult<TData, TSuccess>) {
-      const normalized = normalizeSubmissionLike(
-        schemaDefinition,
-        state.values,
-        result,
-      )
-
-      if ('ok' in normalized && normalized.ok === true) {
-        state.lastSubmission = normalized
-        state.flattenedErrors = {}
-        notifyListeners(state)
-        return normalized
-      }
-
-      if ('ok' in normalized && normalized.ok === false) {
-        state.values = mergeValues(state.values, normalized.values)
-        clearSensitiveInputValues(state.values, schemaDefinition)
-        state.flattenedErrors = normalized.errors
-        state.lastSubmission = normalized
-        notifyListeners(state)
-        return normalized
-      }
-
-      const normalizedSubmission = normalized as FormSubmissionResult<TData>
-      state.values = mergeValues(state.values, normalizedSubmission.values)
-      clearSensitiveInputValues(state.values, schemaDefinition)
-      state.flattenedErrors = normalizedSubmission.errors.flatten()
-      state.lastSubmission = normalizedSubmission.valid
-        ? undefined
-        : normalizedSubmission.fail()
-      notifyListeners(state)
-
-      return normalizedSubmission
+      return applyServerState(result)
     },
   }) satisfies UseFormResult<TData, TSuccess, InferFormFieldTree<TSchema>>
 }

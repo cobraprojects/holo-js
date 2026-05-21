@@ -5,6 +5,7 @@ const redisMock = vi.hoisted(() => {
     connect: 0,
     constructorArgs: [] as unknown[][],
     del: [] as string[][],
+    disconnect: 0,
     multi: [] as Array<{
       zadd: Array<[string, number, string]>
       zremrangebyscore: Array<[string, string | number, string | number]>
@@ -13,6 +14,7 @@ const redisMock = vi.hoisted(() => {
     }>,
     pexpireat: [] as Array<[string, number]>,
     quit: 0,
+    quitFailures: 0,
     scan: [] as Array<[string, string, string, string, number]>,
   }
 
@@ -53,9 +55,15 @@ const redisMock = vi.hoisted(() => {
 
       async quit(): Promise<void> {
         calls.quit += 1
+        if (calls.quitFailures > 0) {
+          calls.quitFailures -= 1
+          throw new Error('quit failed')
+        }
       }
 
-      disconnect(): void {}
+      disconnect(): void {
+        calls.disconnect += 1
+      }
     }
 
     constructor(...args: unknown[]) {
@@ -135,6 +143,14 @@ const redisMock = vi.hoisted(() => {
 
     async quit(): Promise<void> {
       calls.quit += 1
+      if (calls.quitFailures > 0) {
+        calls.quitFailures -= 1
+        throw new Error('quit failed')
+      }
+    }
+
+    disconnect(): void {
+      calls.disconnect += 1
     }
   }
 
@@ -157,9 +173,11 @@ describe('security redis adapter', () => {
     redisMock.calls.connect = 0
     redisMock.calls.constructorArgs.length = 0
     redisMock.calls.del.length = 0
+    redisMock.calls.disconnect = 0
     redisMock.calls.multi.length = 0
     redisMock.calls.pexpireat.length = 0
     redisMock.calls.quit = 0
+    redisMock.calls.quitFailures = 0
     redisMock.calls.scan.length = 0
     redisMock.execResponses.length = 0
     redisMock.scanResponses.length = 0
@@ -357,6 +375,8 @@ describe('security redis adapter', () => {
     expect(securityRedisAdapterInternals.isRedisSocketConnectionTarget('unix:///tmp/redis.sock')).toBe(true)
     expect(securityRedisAdapterInternals.isRedisSocketConnectionTarget('/tmp/redis.sock')).toBe(true)
     expect(securityRedisAdapterInternals.isRedisSocketConnectionTarget('cache')).toBe(false)
+    expect(securityRedisAdapterInternals.toRedisSocketPath('unix:///tmp/redis.sock')).toBe('/tmp/redis.sock')
+    expect(securityRedisAdapterInternals.toRedisSocketPath('/tmp/redis.sock')).toBe('/tmp/redis.sock')
 
     expect(securityRedisAdapterInternals.createRedisClientOptions({
       host: '127.0.0.1',
@@ -367,6 +387,21 @@ describe('security redis adapter', () => {
     })).toEqual({
       host: '127.0.0.1',
       port: 6379,
+      password: undefined,
+      username: undefined,
+      db: 0,
+      lazyConnect: true,
+      maxRetriesPerRequest: 3,
+    })
+
+    expect(securityRedisAdapterInternals.createRedisClientOptions({
+      host: '/tmp/redis.sock',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:rate-limit:',
+    })).toEqual({
+      path: '/tmp/redis.sock',
       password: undefined,
       username: undefined,
       db: 0,
@@ -441,6 +476,26 @@ describe('security redis adapter', () => {
       },
     })
 
+    expect(securityRedisAdapterInternals.createRedisClusterOptions({
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:rate-limit:',
+      clusters: [{
+        url: 'redis://cache.internal',
+        host: 'cache.internal',
+        port: 6379,
+      }],
+    })).toEqual({
+      redisOptions: {
+        password: undefined,
+        username: undefined,
+        lazyConnect: true,
+        maxRetriesPerRequest: 3,
+      },
+    })
+
     expect(() => securityRedisAdapterInternals.createRedisClusterOptions({
       host: '127.0.0.1',
       port: 6379,
@@ -453,6 +508,88 @@ describe('security redis adapter', () => {
         port: 6380,
       }],
     })).toThrow('Redis Cluster does not support selecting a non-zero database')
+  })
+
+  it('validates malformed cluster node urls and socket cluster nodes', () => {
+    expect(() => securityRedisAdapterInternals.parseClusterNodeUrl('http://cache.internal:6380', 'node url'))
+      .toThrow('unsupported protocol "http:"')
+    expect(() => securityRedisAdapterInternals.parseClusterNodeUrl('redis://', 'node url'))
+      .toThrow('node url is invalid')
+    expect(() => securityRedisAdapterInternals.resolveClusterStartupNodes({
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:rate-limit:',
+      clusters: [{
+        host: '/tmp/redis.sock',
+        port: 6379,
+      }],
+    })).toThrow('cannot use a Unix socket path')
+    expect(securityRedisAdapterInternals.resolveClusterStartupNodes({
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:rate-limit:',
+      clusters: [{
+        host: 'cache.internal',
+        port: 6380,
+      }],
+    })).toEqual([{
+      host: 'cache.internal',
+      port: 6380,
+    }])
+    expect(securityRedisAdapterInternals.resolveClusterStartupNodes({
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:rate-limit:',
+    })).toEqual([])
+    expect(securityRedisAdapterInternals.parseClusterNodeUrl('redis://cache.internal', 'node url')).toEqual({
+      host: 'cache.internal',
+      port: 6379,
+    })
+  })
+
+  it('constructs redis clients from explicit normalized urls', () => {
+    createSecurityRedisAdapter({
+      url: 'redis://cache.internal:6380/4',
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:rate-limit:',
+    })
+
+    expect(redisMock.calls.constructorArgs).toEqual([[
+      'redis://cache.internal:6380/4',
+      {
+        password: undefined,
+        username: undefined,
+        db: 0,
+        lazyConnect: true,
+        maxRetriesPerRequest: 3,
+      },
+    ]])
+  })
+
+  it('falls back to disconnect when redis quit fails', async () => {
+    const adapter = createSecurityRedisAdapter({
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:rate-limit:',
+    })
+
+    redisMock.calls.quitFailures = 1
+
+    await adapter.close()
+
+    expect(redisMock.calls.quit).toBe(1)
+    expect(redisMock.calls.disconnect).toBe(1)
   })
 
   it('counts repeated hits within the same window instead of overwriting a single sorted-set member', async () => {
@@ -729,6 +866,37 @@ describe('security redis adapter', () => {
       decaySeconds: 60,
     })).rejects.toThrow('zcard failed')
     expect(redisMock.calls.pexpireat).toEqual([])
+
+    redisMock.execResponses.push([
+      [null, 1],
+      [null, 0],
+      [null, '2'],
+      [null, ['member', '1713240000000']],
+    ] as never)
+
+    await expect(adapter.increment('limiter:login|user%3A1', {
+      decaySeconds: 60,
+    })).rejects.toThrow('invalid attempt count')
+
+    redisMock.execResponses.push([
+      [null, 1],
+      [null, 0],
+      ['WRONGTYPE', null],
+      [null, ['member', '1713240000000']],
+    ] as never)
+
+    await expect(adapter.increment('limiter:login|user%3A1', {
+      decaySeconds: 60,
+    })).rejects.toThrow('Redis transaction failed for attempt count: WRONGTYPE')
+
+    redisMock.execResponses.push([
+      [null, 1],
+      [null, 0],
+    ] as never)
+
+    await expect(adapter.increment('limiter:login|user%3A1', {
+      decaySeconds: 60,
+    })).rejects.toThrow('failed to return the attempt count')
   })
 
   it('accepts numeric oldest-hit scores returned by redis transactions', async () => {

@@ -1,36 +1,12 @@
 <script lang="ts">
-  import { goto, invalidateAll } from '$app/navigation'
-  import { useAuth } from '@holo-js/auth/sveltekit/client'
-  import { useForm } from '@holo-js/adapter-sveltekit/client'
-  import { verifyEmailForm } from '$lib/schemas/auth'
+  import { type ActionData, type PageData } from './$types'
 
-  export let data: {
-    email: string
-    token: string
-  }
+  export let data: PageData
+  export let form: ActionData
 
   let resendMessage = ''
   let resendError = ''
   let resending = false
-
-  const auth = useAuth()
-  const form = useForm(verifyEmailForm, {
-    initialValues: { token: data.token },
-    async submitter({ formData }) {
-      const response = await fetch('/api/verify-email', { method: 'POST', body: formData })
-      const submission = await response.json()
-      if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
-        try {
-          await auth.refreshUser()
-        } catch (error) {
-          console.error('Failed to refresh the current user after email verification.', error)
-        }
-        await invalidateAll()
-        await goto(submission.data.redirectTo)
-      }
-      return submission
-    },
-  })
 
   async function resendVerificationEmail() {
     resending = true
@@ -67,15 +43,22 @@
     <p>Use the verification link from your inbox to confirm the account.</p>
   </div>
 
-  {#if data.token}
-    <form class="stack" on:submit={(event) => { event.preventDefault(); form.submit() }}>
-      <input name="token" type="hidden" value={form.values.token} />
-      {#if form.errors.has('token')}
-        <span class="error">{form.errors.first('token')}</span>
-      {/if}
-      <button disabled={form.submitting}>
-        {form.submitting ? 'Verifying...' : 'Verify email'}
+  {#if form?.verificationError}
+    <div class="stack">
+      <p class="error">{form.verificationError}</p>
+      <button type="button" disabled={resending} on:click={() => { void resendVerificationEmail() }}>
+        {resending ? 'Sending...' : 'Resend verification email'}
       </button>
+      {#if resendMessage}
+        <p class="success">{resendMessage}</p>
+      {/if}
+      {#if resendError}
+        <p class="error">{resendError}</p>
+      {/if}
+    </div>
+  {:else if data.hasVerificationToken}
+    <form class="stack" method="POST">
+      <button>Verify email</button>
     </form>
   {:else}
     <div class="stack">
@@ -96,13 +79,6 @@
     </div>
   {/if}
 
-  {#if form.lastSubmission?.ok === true}
-    <div class="success">
-      <p>Your email address has been verified.</p>
-      <a href="/login">Sign in</a>
-    </div>
-  {/if}
-
   <div class="links">
     <a href="/register">Create another account</a>
     <a href="/login">Back to sign in</a>
@@ -116,5 +92,5 @@
   .error { color: #fca5a5; margin: 0; }
   .success { color: #86efac; }
   .links { display: flex; gap: 1rem; flex-wrap: wrap; }
-  .success a, .links a { color: #7dd3fc; text-decoration: none; }
+  .links a { color: #7dd3fc; text-decoration: none; }
 </style>

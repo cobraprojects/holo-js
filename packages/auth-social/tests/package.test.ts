@@ -113,8 +113,22 @@ class InMemoryTokenStore implements AuthTokenStore {
 }
 
 class InMemoryStateStore {
-  readonly records = new Map<string, { provider: string, state: string, codeVerifier: string, guard: string, createdAt: Date }>()
-  async create(record: { provider: string, state: string, codeVerifier: string, guard: string, createdAt: Date }): Promise<void> {
+  readonly records = new Map<string, {
+    provider: string
+    state: string
+    codeVerifier: string
+    guard: string
+    browserBinding?: string
+    createdAt: Date
+  }>()
+  async create(record: {
+    provider: string
+    state: string
+    codeVerifier: string
+    guard: string
+    browserBinding?: string
+    createdAt: Date
+  }): Promise<void> {
     this.records.set(`${record.provider}:${record.state}`, record)
   }
   async read(provider: string, state: string) {
@@ -289,11 +303,70 @@ function configureRuntime(options: {
   }
 }
 
+function reconfigureSocialMapping(runtime: ReturnType<typeof configureRuntime>, mapToProvider: 'users' | 'admins'): void {
+  configureAuthRuntime({
+    config: defineAuthConfig({
+      defaults: {
+        guard: 'web',
+        passwords: 'users',
+      },
+      guards: {
+        web: { driver: 'session', provider: 'users' },
+        admin: { driver: 'session', provider: 'admins' },
+        api: { driver: 'token', provider: 'users' },
+      },
+      providers: {
+        users: { model: 'User' },
+        admins: { model: 'Admin' },
+      },
+      social: {
+        google: {
+          clientId: 'google-client',
+          clientSecret: 'google-secret',
+          redirectUri: 'https://app.test/auth/google/callback',
+          scopes: ['openid', 'email', 'profile'],
+          mapToProvider,
+        },
+      },
+    }),
+    session: getSessionRuntime(),
+    providers: {
+      users: runtime.usersProvider,
+      admins: runtime.adminsProvider,
+    },
+    tokens: new InMemoryTokenStore(),
+    context: runtime.context,
+  })
+}
+
 afterEach(() => {
   resetSocialAuthRuntime()
   resetAuthRuntime()
   resetSessionRuntime()
 })
+
+function getStateCookie(response: Response): string {
+  const header = response.headers.get('set-cookie')
+  if (!header) {
+    throw new Error('Expected OAuth redirect response to set a state cookie.')
+  }
+
+  const cookie = header.split(';', 1)[0]
+  if (!cookie) {
+    throw new Error('Expected OAuth redirect response to set a non-empty state cookie.')
+  }
+
+  return cookie
+}
+
+function createCallbackRequest(redirectResponse: Response, url: string, init: RequestInit = {}): Request {
+  const headers = new Headers(init.headers)
+  headers.set('cookie', getStateCookie(redirectResponse))
+  return new Request(url, {
+    ...init,
+    headers,
+  })
+}
 
 describe('@holo-js/auth-social', () => {
   it('exports the social auth facade and helpers', () => {
@@ -353,6 +426,7 @@ describe('@holo-js/auth-social', () => {
           url: `/auth/google/callback?state=${encodeURIComponent(state!)}&code=event-code`,
           headers: {
             host: 'app.test',
+            cookie: getStateCookie(redirectResponse),
             'x-forwarded-proto': 'https',
           },
         },
@@ -440,6 +514,9 @@ describe('@holo-js/auth-social', () => {
     const url = new URL(location!)
     expect(url.searchParams.get('state')).toBeTruthy()
     expect(url.searchParams.get('code_challenge')).toBeTruthy()
+    expect(response.headers.get('set-cookie')).toContain('holo_oauth_state_google=')
+    expect(response.headers.get('set-cookie')).toContain('HttpOnly')
+    expect(response.headers.get('set-cookie')).toContain('SameSite=Lax')
     expect(runtime.stateStore.records.size).toBe(1)
 
     const invalid = await callback('google', new Request('https://app.test/auth/google/callback?state=bad&code=demo'))
@@ -448,6 +525,32 @@ describe('@holo-js/auth-social', () => {
       status: 400,
       message: 'Invalid or expired OAuth state.',
     })
+  })
+
+  it('rejects callbacks that do not carry the browser-bound state cookie', async () => {
+    const runtime = configureRuntime()
+    const redirectResponse = await redirect('google', new Request('https://app.test/auth/google'))
+    const state = new URL(redirectResponse.headers.get('location')!).searchParams.get('state')!
+    runtime.exchangeProfiles.set('code-without-cookie', {
+      profile: {
+        id: 'google-without-cookie',
+        email: 'without-cookie@example.com',
+        emailVerified: true,
+      },
+      tokens: {
+        accessToken: 'without-cookie-token',
+      },
+    })
+
+    const response = await callback('google', new Request(`https://app.test/auth/google/callback?state=${state}&code=code-without-cookie`))
+
+    expect(response).toMatchObject({
+      ok: false,
+      status: 400,
+      message: 'Invalid or expired OAuth state.',
+    })
+    expect(await runtime.stateStore.read('google', state)).toBeTruthy()
+    expect(runtime.identityStore.records.size).toBe(0)
   })
 
   it('links by existing identity first and signs the linked local user in', async () => {
@@ -486,7 +589,7 @@ describe('@holo-js/auth-social', () => {
       },
     })
 
-    const response = await callback('google', new Request(`https://app.test/auth/google/callback?state=${state}&code=code-1`))
+    const response = await callback('google', createCallbackRequest(redirectResponse, `https://app.test/auth/google/callback?state=${state}&code=code-1`))
     expect(response).toMatchObject({
       ok: true,
       provider: 'google',
@@ -503,6 +606,145 @@ describe('@holo-js/auth-social', () => {
     const session = await auth.guard(response.guard).loginUsing(response.user)
     expect(session.cookies.join('; ')).toContain('holo_session=')
     expect(runtime.context.getSessionId('web')).toBeTypeOf('string')
+  })
+
+  it('uses the persisted guard and auth provider for an existing social identity after mapping changes', async () => {
+    const runtime = configureRuntime()
+    const localUser = await runtime.usersProvider.create({
+      name: 'Original User',
+      email: 'original@example.com',
+      password: null,
+      email_verified_at: null,
+    })
+    const adminUser = await runtime.adminsProvider.create({
+      name: 'Admin With Same Id',
+      email: 'admin@example.com',
+      password: null,
+      email_verified_at: null,
+    })
+    expect(adminUser.id).toBe(localUser.id)
+
+    await runtime.identityStore.save({
+      provider: 'google',
+      providerUserId: 'google-rebound',
+      guard: 'web',
+      authProvider: 'users',
+      userId: localUser.id,
+      email: localUser.email,
+      emailVerified: true,
+      profile: {},
+      tokens: undefined,
+      linkedAt: new Date('2026-04-08T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-08T00:00:00.000Z'),
+    })
+    reconfigureSocialMapping(runtime, 'admins')
+
+    const redirectResponse = await redirect('google', new Request('https://app.test/auth/google'))
+    const state = new URL(redirectResponse.headers.get('location')!).searchParams.get('state')!
+    runtime.exchangeProfiles.set('code-rebound', {
+      profile: {
+        id: 'google-rebound',
+        email: 'updated@example.com',
+        emailVerified: true,
+        name: 'Updated Provider Name',
+      },
+      tokens: {
+        accessToken: 'updated-token',
+      },
+    })
+
+    const response = await callback('google', createCallbackRequest(redirectResponse, `https://app.test/auth/google/callback?state=${state}&code=code-rebound`))
+
+    expect(response).toMatchObject({
+      ok: true,
+      guard: 'web',
+      authProvider: 'users',
+      provider: 'google',
+      user: {
+        id: localUser.id,
+        email: 'original@example.com',
+      },
+    })
+    expect(response.ok && response.user.email).not.toBe(adminUser.email)
+    const storedIdentity = await runtime.identityStore.findByProviderUserId('google', 'google-rebound')
+    expect(storedIdentity).toMatchObject({
+      guard: 'web',
+      authProvider: 'users',
+      userId: localUser.id,
+    })
+  })
+
+  it('fails closed when a persisted social identity binding is no longer configured', async () => {
+    const runtime = configureRuntime()
+    const localUser = await runtime.usersProvider.create({
+      name: 'Bound User',
+      email: 'bound@example.com',
+      password: null,
+      email_verified_at: null,
+    })
+
+    await runtime.identityStore.save({
+      provider: 'google',
+      providerUserId: 'google-missing-guard',
+      guard: 'missing',
+      authProvider: 'users',
+      userId: localUser.id,
+      email: localUser.email,
+      emailVerified: true,
+      profile: {},
+      tokens: undefined,
+      linkedAt: new Date('2026-04-08T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-08T00:00:00.000Z'),
+    })
+    await expect(socialAuthInternals.resolveLinkedUser('google', {
+      id: 'google-missing-guard',
+      email: 'bound@example.com',
+      emailVerified: true,
+    }, {
+      accessToken: 'bound-token',
+    })).rejects.toThrow('Guard "missing" is not configured for linked social identity "google:google-missing-guard"')
+
+    await runtime.identityStore.save({
+      provider: 'google',
+      providerUserId: 'google-missing-provider',
+      guard: 'web',
+      authProvider: 'missing',
+      userId: localUser.id,
+      email: localUser.email,
+      emailVerified: true,
+      profile: {},
+      tokens: undefined,
+      linkedAt: new Date('2026-04-08T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-08T00:00:00.000Z'),
+    })
+    await expect(socialAuthInternals.resolveLinkedUser('google', {
+      id: 'google-missing-provider',
+      email: 'bound@example.com',
+      emailVerified: true,
+    }, {
+      accessToken: 'bound-token',
+    })).rejects.toThrow('Auth provider runtime "missing" is not configured for linked social identity "google:google-missing-provider"')
+
+    await runtime.identityStore.save({
+      provider: 'google',
+      providerUserId: 'google-missing-user',
+      guard: 'web',
+      authProvider: 'users',
+      userId: 999,
+      email: localUser.email,
+      emailVerified: true,
+      profile: {},
+      tokens: undefined,
+      linkedAt: new Date('2026-04-08T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-08T00:00:00.000Z'),
+    })
+    await expect(socialAuthInternals.resolveLinkedUser('google', {
+      id: 'google-missing-user',
+      email: 'bound@example.com',
+      emailVerified: true,
+    }, {
+      accessToken: 'bound-token',
+    })).rejects.toThrow('Linked social identity "google:google-missing-user" references a missing local user')
   })
 
   it('links to an existing local user by verified email and creates a new user when no local match exists', async () => {
@@ -527,7 +769,7 @@ describe('@holo-js/auth-social', () => {
         accessToken: 'link-token',
       },
     })
-    let response = await callback('google', new Request(`https://app.test/auth/google/callback?state=${state}&code=code-link`))
+    let response = await callback('google', createCallbackRequest(redirectResponse, `https://app.test/auth/google/callback?state=${state}&code=code-link`))
     expect(response.ok).toBe(true)
     expect((await runtime.identityStore.findByProviderUserId('google', 'google-link'))?.userId).toBe(existing.id)
 
@@ -545,7 +787,7 @@ describe('@holo-js/auth-social', () => {
         accessToken: 'create-token',
       },
     })
-    response = await callback('google', new Request(`https://app.test/auth/google/callback?state=${state}&code=code-create`))
+    response = await callback('google', createCallbackRequest(redirectResponse, `https://app.test/auth/google/callback?state=${state}&code=code-create`))
     expect(response).toMatchObject({
       ok: true,
       user: {
@@ -568,7 +810,7 @@ describe('@holo-js/auth-social', () => {
         accessToken: 'redirect-token',
       },
     })
-    response = await callback('google', new Request(`https://app.test/auth/google/callback?state=${state}&code=code-redirect`))
+    response = await callback('google', createCallbackRequest(redirectResponse, `https://app.test/auth/google/callback?state=${state}&code=code-redirect`))
     expect(response).toMatchObject({
       ok: true,
       user: {
@@ -619,7 +861,7 @@ describe('@holo-js/auth-social', () => {
       },
     })
 
-    const response = await callback('google', new Request(`https://app.test/auth/google/callback?state=${state}&code=code-map-to-provider`))
+    const response = await callback('google', createCallbackRequest(redirectResponse, `https://app.test/auth/google/callback?state=${state}&code=code-map-to-provider`))
     expect(response).toMatchObject({
       ok: true,
       provider: 'google',
@@ -665,7 +907,7 @@ describe('@holo-js/auth-social', () => {
       },
     })
 
-    const response = await callback('google', new Request(`https://app.test/auth/google/callback?state=${state}&code=code-unverified-existing`))
+    const response = await callback('google', createCallbackRequest(redirectResponse, `https://app.test/auth/google/callback?state=${state}&code=code-unverified-existing`))
     expect(response.ok).toBe(true)
 
     const storedIdentity = await runtime.identityStore.findByProviderUserId('google', 'google-unverified-existing')
@@ -690,7 +932,7 @@ describe('@holo-js/auth-social', () => {
       },
     })
 
-    const response = await callback('google', new Request('https://app.test/auth/google/callback', {
+    const response = await callback('google', createCallbackRequest(redirectResponse, 'https://app.test/auth/google/callback', {
       method: 'POST',
       headers: {
         'content-type': 'application/x-www-form-urlencoded',
@@ -727,7 +969,7 @@ describe('@holo-js/auth-social', () => {
         accessToken: 'blocked-token',
       },
     })
-    await expect(callback('google', new Request(`https://app.test/auth/google/callback?state=${state}&code=code-block`))).rejects.toThrow(
+    await expect(callback('google', createCallbackRequest(redirectResponse, `https://app.test/auth/google/callback?state=${state}&code=code-block`))).rejects.toThrow(
       'requires a verified email',
     )
 
@@ -747,7 +989,7 @@ describe('@holo-js/auth-social', () => {
         accessToken: 'allow-token',
       },
     })
-    const response = await callback('google', new Request(`https://app.test/auth/google/callback?state=${state}&code=code-allow`))
+    const response = await callback('google', createCallbackRequest(redirectResponse, `https://app.test/auth/google/callback?state=${state}&code=code-allow`))
     expect(response).toMatchObject({
       ok: true,
       user: {
@@ -776,7 +1018,7 @@ describe('@holo-js/auth-social', () => {
       },
     })
 
-    const response = await callback('google', new Request(`https://app.test/auth/google/callback?state=${state}&code=code-admin`))
+    const response = await callback('google', createCallbackRequest(redirectResponse, `https://app.test/auth/google/callback?state=${state}&code=code-admin`))
     expect(response).toMatchObject({
       ok: true,
       guard: 'admin',
@@ -825,7 +1067,7 @@ describe('@holo-js/auth-social', () => {
       },
     })
 
-    const response = await callback('google', new Request(`https://app.test/auth/google/callback?state=${state}&code=code-api`))
+    const response = await callback('google', createCallbackRequest(redirectResponse, `https://app.test/auth/google/callback?state=${state}&code=code-api`))
 
     expect(response).toMatchObject({
       ok: true,
@@ -916,7 +1158,7 @@ describe('@holo-js/auth-social', () => {
       stateStore: runtime.stateStore,
       identityStore: runtime.identityStore,
     })
-    await expect(callback('google', new Request(`https://app.test/auth/google/callback?state=${state}&code=code-pkce`))).rejects.toThrow(
+    await expect(callback('google', createCallbackRequest(configuredRedirect, `https://app.test/auth/google/callback?state=${state}&code=code-pkce`))).rejects.toThrow(
       'PKCE verification failed.',
     )
 

@@ -49,6 +49,11 @@ describe('@holo-js/events contracts', () => {
     })).toThrow('Event name must be a non-empty string when provided.')
 
     expect(() => normalizeEventDefinition(null as never)).toThrow('Events must be plain objects.')
+    expect(() => defineEvent(new Date() as never)).toThrow('Events must be plain objects.')
+    expect(() => normalizeEventDefinition(new Map() as never)).toThrow('Events must be plain objects.')
+    expect(() => defineEvent({
+      name: 123,
+    } as never)).toThrow('Event name must be a non-empty string when provided.')
 
     expect(() => eventInternals.deriveEventNameFromSourcePath('server/events/.ts')).toThrow(
       'Derived event names require a non-empty source path.',
@@ -177,10 +182,18 @@ describe('@holo-js/events contracts', () => {
     }
 
     expect(isEventDefinition(event)).toBe(true)
+    const nullPrototypeEvent = Object.create(null) as { name: string }
+    nullPrototypeEvent.name = 'audit.null-prototype'
+    expect(isEventDefinition(nullPrototypeEvent)).toBe(true)
+    expect(isEventDefinition([])).toBe(false)
+    expect(isEventDefinition(new Date())).toBe(false)
     expect(isEventDefinition(undefined)).toBe(false)
     expect(isListenerDefinition(listener)).toBe(true)
     expect(isListenerDefinition({ listensTo: [] })).toBe(false)
     expect(eventInternals.normalizeOptionalString(undefined, 'Event name')).toBeUndefined()
+    expect(() => eventInternals.normalizeOptionalString(123, 'Event name')).toThrow(
+      'Event name must be a non-empty string when provided.',
+    )
     expect(eventInternals.normalizeOptionalBoolean(undefined, 'Listener queue')).toBeUndefined()
     expect(eventInternals.normalizeOptionalDelay(undefined)).toBeUndefined()
     expect(eventInternals.toPosixPath('server\\events\\user\\registered.ts')).toBe('server/events/user/registered.ts')

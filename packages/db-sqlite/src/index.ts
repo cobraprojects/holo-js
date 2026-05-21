@@ -14,6 +14,7 @@ export interface DriverAdapter {
   initialize(): Promise<void>
   disconnect(): Promise<void>
   isConnected(): boolean
+  runWithTransactionScope?<T>(callback: () => Promise<T>): Promise<T>
   query<TRow extends Record<string, unknown> = Record<string, unknown>>(
     sql: string,
     bindings?: readonly unknown[],
@@ -52,6 +53,7 @@ export interface SQLiteAdapterOptions {
 export class SQLiteAdapter implements DriverAdapter {
   private database?: SQLiteDatabaseLike
   private connected: boolean
+  private transactionTail: Promise<void> = Promise.resolve()
   private readonly filename: string
   private readonly createDatabaseInstance: (filename: string) => SQLiteDatabaseLike
 
@@ -83,6 +85,26 @@ export class SQLiteAdapter implements DriverAdapter {
 
   isConnected(): boolean {
     return this.connected
+  }
+
+  async runWithTransactionScope<T>(callback: () => Promise<T>): Promise<T> {
+    const previous = this.transactionTail
+    let release!: () => void
+    const current = previous.then(() => new Promise<void>((resolve) => {
+      release = resolve
+    }))
+    this.transactionTail = current
+
+    await previous
+
+    try {
+      return await callback()
+    } finally {
+      release()
+      if (this.transactionTail === current) {
+        this.transactionTail = Promise.resolve()
+      }
+    }
   }
 
   async query<TRow extends Record<string, unknown> = Record<string, unknown>>(

@@ -75,8 +75,8 @@ function safeDecodeCookieSegment(value: string): string {
 }
 
 function parseResponseCookie(cookie: string): ParsedResponseCookie | null {
-  const [nameValue, ...attributes] = cookie.split(';')
-  const separator = nameValue?.indexOf('=') ?? -1
+  const [nameValue = '', ...attributes] = cookie.split(';')
+  const separator = nameValue.indexOf('=')
   if (!nameValue || separator <= 0) {
     return null
   }

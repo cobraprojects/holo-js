@@ -435,6 +435,35 @@ export default defineAppConfig({
     ].join('\n'))
   })
 
+  it('generates server model imports from the configured model path', async () => {
+    const root = await createProject()
+    await mkdir(join(root, 'app/models'), { recursive: true })
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  paths: {
+    models: 'app/models',
+    generatedSchema: '.holo-js/generated/schema.generated.ts',
+  },
+})
+`, 'utf8')
+    await writeFile(join(root, 'app/models/Profile.ts'), 'export default class Profile {}\n', 'utf8')
+
+    const { module, addServerImportsDir } = await loadAdapterModule()
+    const nuxt = createNuxtHarness(root)
+
+    await module.setup({}, nuxt as never)
+
+    expect(addServerImportsDir).toHaveBeenCalledWith(resolve(root, '.holo-js/generated/nuxt-server-imports'))
+    expect(await readFile(join(root, '.holo-js/generated/nuxt-server-imports/models.ts'), 'utf8')).toBe([
+      "import '../schema.generated'",
+      '',
+      "export { default as Profile } from '../../../app/models/Profile'",
+      '',
+    ].join('\n'))
+  })
+
   it('registers the built s3 runtime driver path for object storage disks', async () => {
     const root = await createProject()
     await writeFile(join(root, 'config/storage.ts'), `

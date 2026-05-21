@@ -42,7 +42,12 @@ export function AuthNav() {
         return
       }
 
-      await auth.refreshUser()
+      try {
+        await auth.refreshUser()
+      } catch (error) {
+        console.warn('Auth refresh failed after logout.', error)
+      }
+
       router.replace('/')
     } catch (error) {
       console.warn('Logout failed.', error)

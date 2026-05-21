@@ -431,10 +431,17 @@ function normalizeDelayValue(value: BroadcastDelayValue | undefined): BroadcastD
 }
 
 function normalizeJsonValue(value: unknown, path: string): BroadcastJsonValue {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new Error(`[Holo Broadcast] ${path} must be JSON-serializable.`)
+    }
+
+    return value
+  }
+
   if (
     value === null
     || typeof value === 'string'
-    || typeof value === 'number'
     || typeof value === 'boolean'
   ) {
     return value
@@ -515,6 +522,19 @@ function normalizePatternSegment(segment: string, label: string): string {
   return segment
 }
 
+function normalizeChannelTargetParamValue(pattern: string, key: string, value: unknown): string {
+  const normalized = String(value).trim()
+  if (!normalized) {
+    throw new Error(`[Holo Broadcast] Channel target param "${key}" for "${pattern}" must be a non-empty channel segment.`)
+  }
+
+  if (!/^[A-Za-z0-9_-]+$/.test(normalized)) {
+    throw new Error(`[Holo Broadcast] Channel target param "${key}" for "${pattern}" contains invalid segment "${normalized}".`)
+  }
+
+  return normalized
+}
+
 export function extractChannelPatternParamNames(pattern: string): readonly string[] {
   const normalized = normalizeChannelPattern(pattern, 'Channel pattern')
   const params = normalized
@@ -553,7 +573,7 @@ function normalizeTargetParams<TPattern extends string>(
         throw new Error('[Holo Broadcast] Channel target params must not include empty keys.')
       }
 
-      return [normalizedKey, String(value)] as const
+      return [normalizedKey, normalizeChannelTargetParamValue(pattern, normalizedKey, value)] as const
     })
 
   const provided = Object.freeze(Object.fromEntries(providedEntries)) as ChannelPatternParams<TPattern>

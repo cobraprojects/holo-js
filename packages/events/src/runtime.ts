@@ -124,6 +124,10 @@ function createRuntimeBinding(state: RuntimeState): EventRuntimeBinding {
 }
 
 function normalizeEventName(name: string): string {
+  if (typeof name !== 'string') {
+    throw new Error('[Holo Events] Event names must be non-empty strings.')
+  }
+
   const normalized = name.trim()
   if (!normalized) {
     throw new Error('[Holo Events] Event names must be non-empty strings.')
@@ -143,7 +147,7 @@ function resolveDispatchedEventName<TPayload>(
     throw new Error('[Holo Events] Events must be plain objects.')
   }
 
-  const explicitName = event.name?.trim()
+  const explicitName = eventInternals.normalizeOptionalString(event.name, 'Event name')
   if (!explicitName) {
     throw new Error('[Holo Events] Dispatching an event definition requires an explicit event name.')
   }

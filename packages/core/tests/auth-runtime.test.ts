@@ -1534,6 +1534,7 @@ export default undefined
       state: 'state-1',
       codeVerifier: 'verifier-1',
       guard: 'web',
+      browserBinding: 'browser-binding-1',
       createdAt: new Date('2026-01-01T00:00:00.000Z'),
     })
 
@@ -1543,6 +1544,7 @@ export default undefined
       state: 'state-1',
       codeVerifier: 'verifier-1',
       guard: 'web',
+      browserBinding: 'browser-binding-1',
     })
     expect(pending?.createdAt).toBeInstanceOf(Date)
 

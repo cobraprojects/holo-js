@@ -35,6 +35,7 @@ export default function SuperAdminLoginPage() {
       return submission
     },
   })
+  const formError = form.errors.first('_root')
 
   return (
     <section style={panelStyle}>
@@ -43,7 +44,9 @@ export default function SuperAdminLoginPage() {
         <p style={{ margin: 0, color: '#94a3b8' }}>Use a super admin account to access the super admin area.</p>
       </div>
 
-      <form onSubmit={(event) => { event.preventDefault(); form.submit() }} style={{ display: 'grid', gap: '0.9rem' }}>
+      <form onSubmit={(event) => { event.preventDefault(); void form.submit() }} style={{ display: 'grid', gap: '0.9rem' }}>
+        {formError ? <p style={{ margin: 0, color: '#fca5a5' }}>{formError}</p> : null}
+
         <label style={{ display: 'grid', gap: '0.35rem' }}>
           <span>Email</span>
           <input
