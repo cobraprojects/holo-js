@@ -1280,6 +1280,102 @@ describe('@holo-js/media', () => {
     expect(await post.getMedia('avatars')).toHaveLength(1)
   })
 
+  it('restores single-file storage when a replacement transaction rolls back', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('avatars').disk('public').singleFile(),
+      ],
+    })
+
+    const post = await Post.create({ title: 'Avatar Rollback' })
+
+    await post.addMedia({
+      contents: Buffer.from('first'),
+      fileName: 'first.jpg',
+    }).toMediaCollection('avatars')
+
+    const firstPath = [...storageState.getDiskStore('public').keys()][0]
+    expect(firstPath).toContain('first.jpg')
+
+    await expect(DB.transaction(async () => {
+      await post.addMedia({
+        contents: Buffer.from('second'),
+        fileName: 'second.jpg',
+      }).toMediaCollection('avatars')
+
+      throw new Error('rollback media replacement')
+    })).rejects.toThrow('rollback media replacement')
+
+    const storedPaths = [...storageState.getDiskStore('public').keys()]
+    expect(storedPaths).toEqual([firstPath])
+    expect(new TextDecoder().decode(storageState.getDiskStore('public').get(firstPath!)!)).toBe('first')
+
+    const media = await post.getMedia('avatars')
+    expect(media).toHaveLength(1)
+    expect(media[0]?.record.path).toBe(firstPath)
+  })
+
+  it('restores deleted single-file media when queued dispatch fails outside transactions', async () => {
+    const queueHarness = createAsyncQueueHarness()
+    configureQueueRuntime({
+      config: {
+        default: 'redis',
+        connections: {
+          redis: {
+            driver: 'redis',
+            queue: 'media',
+          },
+        },
+      },
+      redisConfig: sharedRedisConfig,
+      driverFactories: [queueHarness.factory],
+    })
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('avatars').disk('public').singleFile(),
+      ],
+      conversions: [
+        conversion('thumb').performOnCollections('avatars').queued(),
+      ],
+    })
+
+    const post = await Post.create({ title: 'Avatar Queue Failure' })
+
+    await post.addMedia({
+      contents: Buffer.from('first'),
+      fileName: 'first.jpg',
+    }).toMediaCollection('avatars')
+
+    const firstPath = [...storageState.getDiskStore('public').keys()][0]
+    expect(firstPath).toContain('first.jpg')
+
+    vi.spyOn(queueHarness.driver, 'dispatch')
+      .mockRejectedValueOnce(new Error('failed to enqueue replacement'))
+
+    await expect(post.addMedia({
+      contents: Buffer.from('second'),
+      fileName: 'second.jpg',
+    }).toMediaCollection('avatars')).rejects.toThrow('failed to enqueue replacement')
+
+    const storedPaths = [...storageState.getDiskStore('public').keys()]
+    expect(storedPaths).toEqual([firstPath])
+    expect(new TextDecoder().decode(storageState.getDiskStore('public').get(firstPath!)!)).toBe('first')
+
+    const media = await post.getMedia('avatars')
+    expect(media).toHaveLength(1)
+    expect(media[0]?.fileName).toBe('first.jpg')
+    expect(media[0]?.record.path).toBe(firstPath)
+  })
+
   it('preserves the existing single-file media when replacement conversion fails', async () => {
     setMediaConversionExecutor({
       async generate({ conversion }) {
@@ -1836,6 +1932,54 @@ describe('@holo-js/media', () => {
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+
+  it('restores overwritten conversion storage when regeneration transaction rolls back', async () => {
+    let revision = 'v1'
+
+    setMediaConversionExecutor({
+      async generate({ conversion }) {
+        return {
+          contents: Buffer.from(`${revision}:${conversion.name}`),
+          fileName: `${conversion.name}.txt`,
+          mimeType: 'text/plain',
+        }
+      },
+    })
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('images').disk('public'),
+      ],
+      conversions: [
+        conversion('thumb').performOnCollections('images'),
+      ],
+    })
+
+    const post = await Post.create({ title: 'Rollback Conversion' })
+    const media = await post.addMedia({
+      contents: Buffer.from('image'),
+      fileName: 'image.jpg',
+    }).toMediaCollection('images')
+    const thumbPath = media.record.generated_conversions.thumb?.path
+    expect(thumbPath).toBeTruthy()
+
+    revision = 'v2'
+    await expect(DB.transaction(async () => {
+      const [transactionMedia] = await post.getMedia('images')
+      await transactionMedia!.regenerate('thumb')
+      expect(new TextDecoder().decode(storageState.getDiskStore('public').get(thumbPath!)!)).toBe('v2:thumb')
+
+      throw new Error('rollback conversion regeneration')
+    })).rejects.toThrow('rollback conversion regeneration')
+
+    await media.getEntity().refresh()
+    expect(media.record.generated_conversions.thumb?.path).toBe(thumbPath)
+    expect(new TextDecoder().decode(storageState.getDiskStore('public').get(thumbPath!)!)).toBe('v1:thumb')
   })
 
   it('rejects oversized remote uploads before buffering the response body', async () => {

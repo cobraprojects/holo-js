@@ -53,6 +53,7 @@
         "@holo-js/db-sqlite": "workspace:*",
         "@holo-js/events": "workspace:*",
         "@holo-js/flux": "workspace:*",
+        "@holo-js/forms": "workspace:*",
         "@holo-js/media": "workspace:*",
         "@holo-js/queue": "workspace:*",
         "@holo-js/queue-db": "workspace:*",
@@ -61,16 +62,16 @@
         "@holo-js/session": "workspace:*",
         "@holo-js/storage": "workspace:*",
         "@holo-js/storage-s3": "workspace:*",
-        "esbuild": "^0.27.4",
+        "esbuild": "catalog:",
         "next": "catalog:",
-        "react": "^19.0.0",
-        "react-dom": "^19.0.0",
+        "react": "catalog:",
+        "react-dom": "catalog:",
       },
       "devDependencies": {
-        "@types/node": "^22.10.2",
-        "@types/react": "^19.0.0",
-        "@types/react-dom": "^19.0.0",
-        "typescript": "^5.7.2",
+        "@types/node": "catalog:",
+        "@types/react": "catalog:",
+        "@types/react-dom": "catalog:",
+        "typescript": "catalog:",
       },
     },
     "apps/Nuxt_test_app": {
@@ -102,12 +103,13 @@
         "@holo-js/session": "workspace:*",
         "@holo-js/storage": "workspace:*",
         "@holo-js/storage-s3": "workspace:*",
-        "esbuild": "^0.27.4",
-        "nuxt": "^4.0.0",
+        "esbuild": "catalog:",
+        "nuxt": "catalog:",
       },
       "devDependencies": {
-        "@types/node": "^22.10.2",
-        "typescript": "^5.7.2",
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
+        "vue-tsc": "catalog:",
       },
     },
     "apps/blog-next": {
@@ -149,6 +151,7 @@
         "@types/node": "catalog:",
         "@types/react": "catalog:",
         "@types/react-dom": "catalog:",
+        "react-test-renderer": "catalog:",
         "typescript": "catalog:",
       },
     },
@@ -275,13 +278,13 @@
         "@sveltejs/adapter-node": "catalog:",
         "@sveltejs/kit": "catalog:",
         "@sveltejs/vite-plugin-svelte": "catalog:",
-        "esbuild": "^0.27.4",
+        "esbuild": "catalog:",
         "svelte": "catalog:",
         "vite": "catalog:",
       },
       "devDependencies": {
-        "@types/node": "^22.10.2",
-        "typescript": "^5.7.2",
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
       },
     },
     "packages/adapter-next": {
@@ -355,9 +358,6 @@
         "@holo-js/forms": "catalog:",
         "@sveltejs/kit": "catalog:",
       },
-      "optionalPeers": [
-        "@holo-js/forms",
-      ],
     },
     "packages/auth": {
       "name": "@holo-js/auth",
@@ -792,14 +792,20 @@
       "version": "0.1.4",
       "dependencies": {
         "@holo-js/db": "catalog:",
-        "@holo-js/queue": "catalog:",
       },
       "devDependencies": {
+        "@holo-js/queue": "catalog:",
         "@types/node": "catalog:",
         "tsup": "catalog:",
         "typescript": "catalog:",
         "vitest": "catalog:",
       },
+      "peerDependencies": {
+        "@holo-js/queue": "catalog:",
+      },
+      "optionalPeers": [
+        "@holo-js/queue",
+      ],
     },
     "packages/flux": {
       "name": "@holo-js/flux",
@@ -942,9 +948,11 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
+        "@holo-js/db": "catalog:",
         "@holo-js/queue": "catalog:",
       },
       "optionalPeers": [
+        "@holo-js/db",
         "@holo-js/queue",
       ],
     },

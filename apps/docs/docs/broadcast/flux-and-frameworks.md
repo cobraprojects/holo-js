@@ -57,17 +57,47 @@ const presence = useFluxPresence(`chat.${roomId}`, {
   onHere(members) {
     console.log(members)
   },
+  onJoining(member) {
+    console.log(member)
+  },
+  onLeaving(member) {
+    console.log(member)
+  },
 })
 
 console.log(presence.members)
 ```
+
+The direct Flux client exposes Echo-style presence callbacks:
+
+```ts
+import { flux } from '@holo-js/flux'
+
+const presence = flux
+  .presence(`chat.${roomId}`)
+  .here(members => {
+    console.log(members)
+  })
+  .joining(member => {
+    console.log(member)
+  })
+  .leaving(member => {
+    console.log(member)
+  })
+  .listen()
+
+console.log(presence.members)
+```
+
+`here(...)` receives the full current member list. `joining(...)` and `leaving(...)` receive one member at a time as
+the presence list changes.
 
 ## Client Events (Whispers)
 
 Use the direct client API for whisper send/listen:
 
 ```ts
-import flux from '@holo-js/flux'
+import { flux } from '@holo-js/flux'
 
 const room = flux.presence(`chat.${roomId}`)
 room.listenForWhisper('typing', payload => {
@@ -115,7 +145,7 @@ Helpers leave channels automatically on unmount.
 ## Direct Flux API
 
 ```ts
-import flux from '@holo-js/flux'
+import { flux } from '@holo-js/flux'
 
 flux.private(`orders.${orderId}`).listen('OrderShipmentStatusUpdated', payload => {
   console.log(payload)
@@ -128,6 +158,19 @@ flux.channel('feed.global').listen('FeedUpdated', payload => {
 flux.private(`App.Models.User.${userId}`).notification(notification => {
   console.log(notification)
 })
+
+flux
+  .presence(`chat.${roomId}`)
+  .here(members => {
+    console.log(members)
+  })
+  .joining(member => {
+    console.log(member)
+  })
+  .leaving(member => {
+    console.log(member)
+  })
+  .listen()
 ```
 
 ## Channel Name Format

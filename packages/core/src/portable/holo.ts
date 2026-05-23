@@ -11,6 +11,7 @@ import {
   loadConfigDirectory,
   resetConfigRuntime,
   useConfig as globalUseConfig,
+  type AuthHostedIdentityStore,
   type DotPath,
   type LoadedHoloConfig,
   type HoloConfigMap,
@@ -55,6 +56,23 @@ type HoloAuthResult<TData> = {
     readonly status: number
     readonly fields: Readonly<Partial<Record<string, readonly string[]>>>
   }
+}
+
+type CoreHostedIdentityRecord = {
+  readonly provider: string
+  readonly providerUserId: string
+  readonly guard: string
+  readonly authProvider: string
+  readonly userId: string | number
+  readonly email?: string
+  readonly emailVerified: boolean
+  readonly profile: Readonly<Record<string, unknown>>
+  readonly linkedAt: Date
+  readonly updatedAt: Date
+}
+
+type CoreHostedIdentityStore = AuthHostedIdentityStore & {
+  claim(record: CoreHostedIdentityRecord): Promise<CoreHostedIdentityRecord>
 }
 
 async function preloadGeneratedSchemaModule(
@@ -824,11 +842,7 @@ type HostedAuthVerifierRuntime = {
 type WorkosModule = {
   configureWorkosAuthRuntime(options?: {
     readonly providers?: Readonly<Record<string, HostedAuthVerifierRuntime>>
-    readonly identityStore?: {
-      findByProviderUserId(provider: string, providerUserId: string): Promise<unknown | null>
-      findByUserId(provider: string, authProvider: string, userId: string | number): Promise<unknown | null>
-      save(record: unknown): Promise<void>
-    }
+    readonly identityStore?: AuthHostedIdentityStore
   }): void
   resetWorkosAuthRuntime(): void
 }
@@ -836,11 +850,7 @@ type WorkosModule = {
 type ClerkModule = {
   configureClerkAuthRuntime(options?: {
     readonly providers?: Readonly<Record<string, HostedAuthVerifierRuntime>>
-    readonly identityStore?: {
-      findByProviderUserId(provider: string, providerUserId: string): Promise<unknown | null>
-      findByUserId(provider: string, authProvider: string, userId: string | number): Promise<unknown | null>
-      save(record: unknown): Promise<void>
-    }
+    readonly identityStore?: AuthHostedIdentityStore
   }): void
   resetClerkAuthRuntime(): void
 }
@@ -1160,14 +1170,16 @@ function authConfigUsesWorkosProviders<TCustom extends HoloConfigMap>(
   loadedConfig: LoadedHoloConfig<TCustom>,
 ): boolean {
   return Object.entries(loadedConfig.auth.workos).some(([name, provider]) => (
-    name !== 'provider' && typeof provider === 'object' && provider !== null
+    name !== 'provider' && name !== 'identityStore' && typeof provider === 'object' && provider !== null
   ))
 }
 
 function authConfigUsesClerkProviders<TCustom extends HoloConfigMap>(
   loadedConfig: LoadedHoloConfig<TCustom>,
 ): boolean {
-  return Object.keys(loadedConfig.auth.clerk).length > 0
+  return Object.entries(loadedConfig.auth.clerk).some(([name, provider]) => (
+    name !== 'provider' && name !== 'identityStore' && typeof provider === 'object' && provider !== null
+  ))
 }
 
 const HOLO_AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
@@ -2857,39 +2869,72 @@ function fromHostedIdentityProviderValue(namespace: string, provider: string): s
   return provider.startsWith(prefix) ? provider.slice(prefix.length) : provider
 }
 
-function createCoreHostedIdentityStore(namespace: string): {
-  findByProviderUserId(provider: string, providerUserId: string): Promise<unknown | null>
-  findByUserId(provider: string, authProvider: string, userId: string | number): Promise<unknown | null>
-  save(record: unknown): Promise<void>
-} {
+function createCoreHostedIdentityStore(namespace: string): CoreHostedIdentityStore {
+  const normalizeRow = (
+    row: Record<string, unknown>,
+    fallback: {
+      readonly provider: string
+      readonly providerUserId: string
+      readonly authProvider: string
+    },
+  ): CoreHostedIdentityRecord => {
+    const profile = normalizeJsonValue(row.profile)
+
+    /* v8 ignore start -- external identity rows may omit fields; these defaults are defensive normalization guards. */
+    return {
+      provider: fromHostedIdentityProviderValue(namespace, String(row.provider ?? fallback.provider)),
+      providerUserId: String(row.provider_user_id ?? fallback.providerUserId),
+      guard: String(row.guard ?? 'web'),
+      authProvider: String(row.auth_provider ?? fallback.authProvider),
+      userId: normalizeStoredUserId(row.user_id),
+      email: typeof row.email === 'string' ? row.email : undefined,
+      emailVerified: row.email_verified === true || row.email_verified === 1 || row.email_verified === '1',
+      profile: typeof profile === 'object' && profile
+        ? profile as Record<string, unknown>
+        /* v8 ignore next -- external identity rows with missing or malformed profiles normalize to an empty object. */
+        : {},
+      linkedAt: normalizeDateValue(row.created_at ?? new Date()),
+      updatedAt: normalizeDateValue(row.updated_at ?? new Date()),
+    }
+    /* v8 ignore stop */
+  }
+
+  const findStoredIdentity = async (
+    provider: string,
+    providerUserId: string,
+    authProvider = 'users',
+  ): Promise<CoreHostedIdentityRecord | null> => {
+    const providerValue = toHostedIdentityProviderValue(namespace, provider)
+    const row = await DB.table('auth_identities')
+      .where('provider', providerValue)
+      .where('provider_user_id', providerUserId)
+      .first<Record<string, unknown>>()
+
+    return row
+      ? normalizeRow(row, { provider, providerUserId, authProvider })
+      : null
+  }
+
+  const toPayload = (record: CoreHostedIdentityRecord): Record<string, unknown> => {
+    const providerValue = toHostedIdentityProviderValue(namespace, record.provider)
+
+    return {
+      user_id: String(record.userId),
+      provider: providerValue,
+      provider_user_id: record.providerUserId,
+      guard: record.guard,
+      auth_provider: record.authProvider,
+      email: record.email ?? null,
+      email_verified: record.emailVerified ? 1 : 0,
+      profile: JSON.stringify(record.profile),
+      created_at: record.linkedAt.toISOString(),
+      updated_at: record.updatedAt.toISOString(),
+    }
+  }
+
   return Object.freeze({
     async findByProviderUserId(provider: string, providerUserId: string) {
-      const providerValue = toHostedIdentityProviderValue(namespace, provider)
-      const row = await DB.table('auth_identities')
-        .where('provider', providerValue)
-        .where('provider_user_id', providerUserId)
-        .first<Record<string, unknown>>()
-      if (!row) {
-        return null
-      }
-
-      /* v8 ignore start -- external identity rows may omit fields; these defaults are defensive normalization guards. */
-      return {
-        provider: fromHostedIdentityProviderValue(namespace, String(row.provider ?? provider)),
-        providerUserId: String(row.provider_user_id ?? providerUserId),
-        guard: String(row.guard ?? 'web'),
-        authProvider: String(row.auth_provider ?? 'users'),
-        userId: normalizeStoredUserId(row.user_id),
-        email: typeof row.email === 'string' ? row.email : undefined,
-        emailVerified: row.email_verified === true || row.email_verified === 1 || row.email_verified === '1',
-        profile: typeof normalizeJsonValue(row.profile) === 'object' && normalizeJsonValue(row.profile)
-          ? normalizeJsonValue(row.profile) as Record<string, unknown>
-          /* v8 ignore next -- external identity rows with missing or malformed profiles normalize to an empty object. */
-          : {},
-        linkedAt: normalizeDateValue(row.created_at ?? new Date()),
-        updatedAt: normalizeDateValue(row.updated_at ?? new Date()),
-      }
-      /* v8 ignore stop */
+      return await findStoredIdentity(provider, providerUserId)
     },
     async findByUserId(provider: string, authProvider: string, userId: string | number) {
       const providerValue = toHostedIdentityProviderValue(namespace, provider)
@@ -2902,54 +2947,30 @@ function createCoreHostedIdentityStore(namespace: string): {
         return null
       }
 
-      /* v8 ignore start -- external identity rows may omit fields; these defaults are defensive normalization guards. */
-      return {
-        provider: fromHostedIdentityProviderValue(namespace, String(row.provider ?? provider)),
+      return normalizeRow(row, {
+        provider,
         providerUserId: String(row.provider_user_id),
-        guard: String(row.guard ?? 'web'),
-        authProvider: String(row.auth_provider ?? authProvider),
-        userId: normalizeStoredUserId(row.user_id),
-        email: typeof row.email === 'string' ? row.email : undefined,
-        emailVerified: row.email_verified === true || row.email_verified === 1 || row.email_verified === '1',
-        profile: typeof normalizeJsonValue(row.profile) === 'object' && normalizeJsonValue(row.profile)
-          ? normalizeJsonValue(row.profile) as Record<string, unknown>
-          /* v8 ignore next -- external identity rows with missing or malformed profiles normalize to an empty object. */
-          : {},
-        linkedAt: normalizeDateValue(row.created_at ?? new Date()),
-        updatedAt: normalizeDateValue(row.updated_at ?? new Date()),
-      }
-      /* v8 ignore stop */
+        authProvider,
+      })
     },
-    async save(record: unknown) {
-      const value = record as {
-        readonly provider: string
-        readonly providerUserId: string
-        readonly guard: string
-        readonly authProvider: string
-        readonly userId: string | number
-        readonly email?: string
-        readonly emailVerified: boolean
-        readonly profile: Readonly<Record<string, unknown>>
-        readonly linkedAt: Date
-        readonly updatedAt: Date
+    async claim(record: CoreHostedIdentityRecord) {
+      const value = record
+      await DB.table('auth_identities').insertOrIgnore(toPayload(value))
+      const claimed = await findStoredIdentity(value.provider, value.providerUserId, value.authProvider)
+      if (!claimed) {
+        throw new Error('[@holo-js/core] Claimed hosted identity could not be read back from auth_identities.')
       }
+
+      return claimed
+    },
+    async save(record: CoreHostedIdentityRecord) {
+      const value = record
       const providerValue = toHostedIdentityProviderValue(namespace, value.provider)
       const existing = await DB.table('auth_identities')
         .where('provider', providerValue)
         .where('provider_user_id', value.providerUserId)
         .first<Record<string, unknown>>()
-      const payload = {
-        user_id: String(value.userId),
-        provider: providerValue,
-        provider_user_id: value.providerUserId,
-        guard: value.guard,
-        auth_provider: value.authProvider,
-        email: value.email ?? null,
-        email_verified: value.emailVerified ? 1 : 0,
-        profile: JSON.stringify(value.profile),
-        created_at: value.linkedAt.toISOString(),
-        updated_at: value.updatedAt.toISOString(),
-      }
+      const payload = toPayload(value)
 
       if (existing && typeof existing.id !== 'undefined') {
         await DB.table('auth_identities').where('id', existing.id).update(payload)
@@ -4136,13 +4157,13 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
 
     if (workosModule) {
       workosModule.configureWorkosAuthRuntime({
-        identityStore: createCoreHostedIdentityStore('workos'),
+        identityStore: loadedConfig.auth.workos.identityStore ?? createCoreHostedIdentityStore('workos'),
       })
     }
 
     if (clerkModule) {
       clerkModule.configureClerkAuthRuntime({
-        identityStore: createCoreHostedIdentityStore('clerk'),
+        identityStore: loadedConfig.auth.clerk.identityStore ?? createCoreHostedIdentityStore('clerk'),
       })
     }
   } else if (authorizationModule) {

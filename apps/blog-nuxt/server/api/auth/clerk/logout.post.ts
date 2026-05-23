@@ -2,32 +2,25 @@ import { provider } from '@holo-js/auth'
 import { logoutWithClerk } from '@holo-js/auth-clerk'
 import { createError, sendRedirect } from 'h3'
 
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
 export default defineEventHandler(async (event) => {
   let currentProvider: string | null
   try {
     currentProvider = await provider()
-  } catch (error) {
-    throw createError({
-      statusCode: 500,
-      statusMessage: getErrorMessage(error),
-    })
+  } catch {
+    return await sendRedirect(event, '/', 303)
   }
 
   if (currentProvider !== 'clerk') {
     return await sendRedirect(event, '/', 303)
   }
 
-  const result = await logoutWithClerk(event)
-  if (!result.ok) {
+  const { data, error } = await logoutWithClerk(event)
+  if (error) {
     throw createError({
-      statusCode: 422,
-      statusMessage: result.message,
+      statusCode: error.status,
+      statusMessage: error.message,
     })
   }
 
-  return await sendRedirect(event, result.url, 303)
+  return await sendRedirect(event, data.url, 303)
 })

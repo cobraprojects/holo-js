@@ -46,6 +46,11 @@ function isHex(value: string): boolean {
   return HEX_PATTERN.test(value)
 }
 
+function isInvalidScryptParamsError(error: unknown): boolean {
+  return error instanceof Error
+    && (error as Error & { readonly code?: unknown }).code === 'ERR_CRYPTO_INVALID_SCRYPT_PARAMS'
+}
+
 function parseScryptDigest(digest: string): {
   readonly params: ScryptParams
   readonly legacy: boolean
@@ -100,7 +105,17 @@ export function createScryptPasswordHasher(): AuthPasswordHasher {
       }
       const salt = Buffer.from(parsed.saltHex, 'hex')
       const expected = Buffer.from(parsed.hashHex, 'hex')
-      const derived = await deriveScryptKey(password, salt, expected.length, parsed.params)
+      const derived = await deriveScryptKey(password, salt, expected.length, parsed.params).catch((error: unknown) => {
+        if (isInvalidScryptParamsError(error)) {
+          return null
+        }
+
+        throw error
+      })
+      if (!derived) {
+        return false
+      }
+
       return derived.length === expected.length && timingSafeEqual(derived, expected)
     },
     needsRehash(digest) {

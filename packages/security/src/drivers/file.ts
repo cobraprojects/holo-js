@@ -4,7 +4,8 @@ import { dirname, join } from 'node:path'
 import type { SecurityRateLimitHitResult, SecurityRateLimitStore } from '../contracts'
 
 type StoredFileRateLimitBucket = {
-  namespace: string
+  namespace?: string
+  namespaceHash?: string
   keyHash: string
   prefixHashes: string[]
   attempts: number
@@ -12,7 +13,7 @@ type StoredFileRateLimitBucket = {
 }
 
 type FileRateLimitBucket = {
-  namespace: string
+  namespaceHash: string
   keyHash: string
   prefixHashes: readonly string[]
   attempts: number
@@ -41,6 +42,10 @@ function createBucketNamespace(key: string): string {
   return separatorIndex >= 0 ? key.slice(0, separatorIndex + 1) : key
 }
 
+function createBucketNamespaceHash(key: string): string {
+  return createBucketHash(createBucketNamespace(key))
+}
+
 function createBucketPrefixHashes(key: string): string[] {
   const prefixHashes: string[] = []
 
@@ -58,7 +63,7 @@ function getBucketPath(root: string, key: string): string {
 
 function serializeBucket(bucket: FileRateLimitBucket): string {
   return JSON.stringify({
-    namespace: bucket.namespace,
+    namespaceHash: bucket.namespaceHash,
     keyHash: bucket.keyHash,
     prefixHashes: [...bucket.prefixHashes],
     attempts: bucket.attempts,
@@ -68,9 +73,11 @@ function serializeBucket(bucket: FileRateLimitBucket): string {
 
 function deserializeBucket(raw: string): FileRateLimitBucket {
   const parsed = JSON.parse(raw) as Partial<StoredFileRateLimitBucket>
-  const namespace = typeof parsed.namespace === 'string' && parsed.namespace.length > 0
-    ? parsed.namespace
-    : undefined
+  const namespaceHash = typeof parsed.namespaceHash === 'string' && parsed.namespaceHash.length > 0
+    ? parsed.namespaceHash
+    : typeof parsed.namespace === 'string' && parsed.namespace.length > 0
+      ? createBucketHash(parsed.namespace)
+      : undefined
   const keyHash = typeof parsed.keyHash === 'string' && parsed.keyHash.length > 0
     ? parsed.keyHash
     : undefined
@@ -81,8 +88,8 @@ function deserializeBucket(raw: string): FileRateLimitBucket {
     : undefined
   const { attempts, expiresAt: expiresAtValue } = parsed
 
-  if (typeof namespace !== 'string' || namespace.length === 0) {
-    throw new TypeError('[@holo-js/security] File rate-limit buckets must contain a non-empty string namespace.')
+  if (typeof namespaceHash !== 'string' || namespaceHash.length === 0) {
+    throw new TypeError('[@holo-js/security] File rate-limit buckets must contain a non-empty string namespace hash.')
   }
 
   if (typeof keyHash !== 'string' || keyHash.length === 0) {
@@ -108,7 +115,7 @@ function deserializeBucket(raw: string): FileRateLimitBucket {
   }
 
   return Object.freeze({
-    namespace,
+    namespaceHash,
     keyHash,
     prefixHashes: Object.freeze([...prefixHashes]),
     attempts: normalizedAttempts,
@@ -354,7 +361,7 @@ export function createFileRateLimitStore(root: string, options: FileRateLimitSto
               attempts: existing.attempts + 1,
             }
           : {
-              namespace: createBucketNamespace(key),
+              namespaceHash: createBucketNamespaceHash(key),
               keyHash: createBucketHash(key),
               prefixHashes: Object.freeze(createBucketPrefixHashes(key)),
               attempts: 1,

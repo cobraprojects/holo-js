@@ -3,7 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { createRedisSessionStore, type SessionRecord } from '../src'
 import { createSessionRedisAdapter } from '../src/drivers/redis-adapter'
 
-describe('@holo-js/session real Redis usage', () => {
+const describeRealRedis = process.env.HOLO_SESSION_REAL_REDIS === '1'
+  ? describe
+  : describe.skip
+
+describeRealRedis('@holo-js/session real Redis usage', () => {
   it('writes, reads, and deletes sessions through the public Redis store adapter', async () => {
     const prefix = `holo:session:${randomUUID()}:`
     const adapter = createSessionRedisAdapter({

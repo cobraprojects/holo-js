@@ -106,7 +106,7 @@ function encodeCsrfToken(nonce: string): string {
 }
 
 function decodeCsrfToken(token: string): { readonly nonce: string, readonly signature: string } | null {
-  const separator = token.indexOf('.')
+  const separator = token.lastIndexOf('.')
   if (separator <= 0 || separator === token.length - 1) {
     return null
   }

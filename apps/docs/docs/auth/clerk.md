@@ -84,10 +84,10 @@ The callback verifies the Clerk session on the request, syncs or creates the loc
 import { completeClerkAuth } from '@holo-js/auth-clerk'
 
 export async function GET(request: Request) {
-  const result = await completeClerkAuth(request)
+  const { error } = await completeClerkAuth(request)
 
-  if (!result.ok) {
-    return Response.redirect(new URL(`/login?error=${result.code}`, request.url))
+  if (error) {
+    return Response.redirect(new URL(`/login?error=${error.code}`, request.url))
   }
 
   return Response.redirect(new URL('/', request.url))
@@ -105,15 +105,15 @@ export async function POST(request: Request) {
     return Response.redirect(new URL('/', request.url), 303)
   }
 
-  const result = await logoutWithClerk(request, {
+  const { data, error } = await logoutWithClerk(request, {
     returnTo: '/login',
   })
 
-  if (!result.ok) {
-    return Response.json(result, { status: 422 })
+  if (error) {
+    return Response.json({ data, error }, { status: error.status })
   }
 
-  return Response.redirect(result.url, 303)
+  return Response.redirect(data.url, 303)
 }
 ```
 
@@ -126,7 +126,7 @@ returns a typed failure because there is no Clerk session to revoke upstream.
 `completeClerkAuth()` passes a fully typed Clerk user to the optional mapper. Return any local user attributes you want Holo to save on create, update, or link.
 
 ```ts
-const result = await completeClerkAuth(request, {
+const { error } = await completeClerkAuth(request, {
   user: (clerkUser) => ({
     email: clerkUser.email,
     name: clerkUser.name,
@@ -137,6 +137,140 @@ const result = await completeClerkAuth(request, {
 ```
 
 The normalized `clerkUser` includes `email` and `name`, derived from Clerk identity data with stable fallbacks. If no mapper is provided, Holo saves `email` and `name` by default. If your mapper omits either field, Holo still fills the missing `email` or `name` before writing the local user.
+
+## Identity Store
+
+The default Holo runtime stores Clerk links in `auth_identities`. It uses the scaffolded unique index on `provider` and
+`provider_user_id` to claim a Clerk identity once, so two first sign-ins for the same Clerk user reuse the same local
+identity.
+
+Most apps should not configure an identity store:
+
+```ts
+import { defineAuthConfig, env } from '@holo-js/config'
+
+export default defineAuthConfig({
+  clerk: {
+    provider: env('AUTH_CLERK_PROVIDER', 'app'),
+    app: {
+      publishableKey: env('CLERK_PUBLISHABLE_KEY'),
+      secretKey: env('CLERK_SECRET_KEY'),
+      frontendApi: env('CLERK_FRONTEND_API'),
+      redirectUri: env('CLERK_REDIRECT_URI'),
+    },
+  },
+})
+```
+
+Add `identityStore` only when Clerk identities live outside the default `auth_identities` table. The key is optional and
+does not change the Clerk route API.
+
+```ts
+import { defineAuthConfig, env, type AuthHostedIdentityRecord, type AuthHostedIdentityStore } from '@holo-js/config'
+import { DB } from '@holo-js/db'
+
+type ExternalIdentityRow = {
+  provider: string
+  provider_user_id: string
+  guard: string
+  auth_provider: string
+  user_id: string
+  email: string | null
+  email_verified: boolean | number
+  profile: string | Readonly<Record<string, unknown>>
+  created_at: Date | string
+  updated_at: Date | string
+}
+
+function toHostedIdentity(row: ExternalIdentityRow): AuthHostedIdentityRecord {
+  return {
+    provider: row.provider,
+    providerUserId: row.provider_user_id,
+    guard: row.guard,
+    authProvider: row.auth_provider,
+    userId: row.user_id,
+    email: row.email ?? undefined,
+    emailVerified: row.email_verified === true || row.email_verified === 1,
+    profile: typeof row.profile === 'string' ? JSON.parse(row.profile) : row.profile,
+    linkedAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+  }
+}
+
+function toExternalIdentityRow(record: AuthHostedIdentityRecord) {
+  return {
+    provider: record.provider,
+    provider_user_id: record.providerUserId,
+    guard: record.guard,
+    auth_provider: record.authProvider,
+    user_id: String(record.userId),
+    email: record.email ?? null,
+    email_verified: record.emailVerified ? 1 : 0,
+    profile: JSON.stringify(record.profile),
+    created_at: record.linkedAt.toISOString(),
+    updated_at: record.updatedAt.toISOString(),
+  }
+}
+
+async function findExternalIdentity(provider: string, providerUserId: string) {
+  const row = await DB.table('external_identities')
+    .where('provider', provider)
+    .where('provider_user_id', providerUserId)
+    .first<ExternalIdentityRow>()
+
+  return row ? toHostedIdentity(row) : null
+}
+
+const externalIdentityStore = {
+  async findByProviderUserId(provider, providerUserId) {
+    return await findExternalIdentity(provider, providerUserId)
+  },
+  async findByUserId(provider, authProvider, userId) {
+    const row = await DB.table('external_identities')
+      .where('provider', provider)
+      .where('auth_provider', authProvider)
+      .where('user_id', String(userId))
+      .first<ExternalIdentityRow>()
+
+    return row ? toHostedIdentity(row) : null
+  },
+  async claim(record) {
+    await DB.table('external_identities').insertOrIgnore(toExternalIdentityRow(record))
+
+    const claimed = await findExternalIdentity(record.provider, record.providerUserId)
+    if (!claimed) {
+      throw new Error('Clerk identity was not stored.')
+    }
+
+    return claimed
+  },
+  async save(record) {
+    await DB.table('external_identities')
+      .where('provider', record.provider)
+      .where('provider_user_id', record.providerUserId)
+      .update(toExternalIdentityRow(record))
+  },
+} satisfies AuthHostedIdentityStore
+
+export default defineAuthConfig({
+  clerk: {
+    provider: env('AUTH_CLERK_PROVIDER', 'app'),
+    identityStore: externalIdentityStore,
+    app: {
+      publishableKey: env('CLERK_PUBLISHABLE_KEY'),
+      secretKey: env('CLERK_SECRET_KEY'),
+      frontendApi: env('CLERK_FRONTEND_API'),
+      redirectUri: env('CLERK_REDIRECT_URI'),
+    },
+  },
+})
+```
+
+`toHostedIdentity()` should return Holo's hosted identity shape: `provider`, `providerUserId`, `guard`, `authProvider`,
+`userId`, optional `email`, `emailVerified`, `profile`, `linkedAt`, and `updatedAt`. `toExternalIdentityRow()` should
+persist the same data in your custom table's column names. If you provide `claim()`, make sure your custom table has a
+unique index on `(provider, provider_user_id)`. Holo calls `claim()` only when linking a new Clerk identity. It calls
+`save()` when refreshing an already-linked identity.
 
 ## Lower-Level APIs
 

@@ -2536,6 +2536,31 @@ export default defineConfig({
       },
     })).toThrow('cookie sameSite')
 
+    const hostedIdentityStore = {
+      async findByProviderUserId() {
+        return null
+      },
+      async findByUserId() {
+        return null
+      },
+      async claim(record: {
+        readonly provider: string
+        readonly providerUserId: string
+        readonly guard: string
+        readonly authProvider: string
+        readonly userId: string | number
+        readonly email?: string
+        readonly emailVerified: boolean
+        readonly profile: Readonly<Record<string, unknown>>
+        readonly linkedAt: Date
+        readonly updatedAt: Date
+      }) {
+        return record
+      },
+      async save() {
+        await Promise.resolve()
+      },
+    }
     const auth = defineAuthConfig({
       defaults: {
         guard: 'admin',
@@ -2576,6 +2601,7 @@ export default defineConfig({
       },
       workos: {
         provider: ' dashboard ',
+        identityStore: hostedIdentityStore,
         dashboard: {
           clientId: ' workos-client ',
           apiKey: ' workos-key ',
@@ -2586,6 +2612,7 @@ export default defineConfig({
       },
       clerk: {
         provider: ' admin ',
+        identityStore: hostedIdentityStore,
         admin: {
           publishableKey: ' pk_test ',
           secretKey: ' sk_test ',
@@ -2653,6 +2680,7 @@ export default defineConfig({
       },
       workos: {
         provider: 'dashboard',
+        identityStore: hostedIdentityStore,
         dashboard: {
           name: 'dashboard',
           clientId: 'workos-client',
@@ -2665,6 +2693,7 @@ export default defineConfig({
       },
       clerk: {
         provider: 'admin',
+        identityStore: hostedIdentityStore,
         admin: {
           name: 'admin',
           publishableKey: 'pk_test',
@@ -2809,6 +2838,16 @@ export default defineConfig({
     })).toThrow('WorkOS provider "dashboard" must be an object')
     expect(() => normalizeAuthConfig({
       workos: {
+        identityStore: {
+          async findByProviderUserId() {
+            return null
+          },
+        } as never,
+        dashboard: {},
+      },
+    })).toThrow('WorkOS identityStore must implement the hosted identity store contract')
+    expect(() => normalizeAuthConfig({
+      workos: {
         dashboard: {
           guard: 'admin',
         },
@@ -2849,6 +2888,16 @@ export default defineConfig({
         app: 'invalid' as never,
       },
     })).toThrow('Clerk provider "app" must be a Clerk provider config object.')
+    expect(() => normalizeAuthConfig({
+      clerk: {
+        identityStore: {
+          async findByProviderUserId() {
+            return null
+          },
+        } as never,
+        app: {},
+      },
+    })).toThrow('Clerk identityStore must implement the hosted identity store contract')
     expect(() => normalizeAuthConfig({
       clerk: {
         admin: {

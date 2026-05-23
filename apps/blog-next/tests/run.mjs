@@ -302,7 +302,7 @@ try {
   await rm(join(cwd, '.next'), { recursive: true, force: true })
   await assertRootLayoutSharesAuthProviderState()
   await assertHeaderLogoutRedirectsHome()
-  await run('npx', ['vitest', '--run', 'tests/api-v1-routes.test.mjs', 'tests/auth-nav.test.mjs', 'tests/forgot-password-route.test.mjs', 'tests/register-page.test.mjs', 'tests/reset-password-page.test.mjs', 'tests/reset-password-route.test.mjs', 'tests/super-admin-logout-button.test.mjs', 'tests/super-admin-login-page.test.mjs', 'tests/super-admin-login-route.test.mjs', 'tests/verify-email-page.test.mjs', '--reporter=json'])
+  await run('npx', ['vitest', '--run', 'tests/api-v1-routes.test.mjs', 'tests/auth-nav.test.mjs', 'tests/current-auth-route.test.mjs', 'tests/forgot-password-route.test.mjs', 'tests/hosted-logout-routes.test.mjs', 'tests/package-checks.test.mjs', 'tests/register-page.test.mjs', 'tests/reset-password-page.test.mjs', 'tests/reset-password-route.test.mjs', 'tests/social-auth-routes.test.mjs', 'tests/super-admin-logout-button.test.mjs', 'tests/super-admin-login-page.test.mjs', 'tests/super-admin-login-route.test.mjs', 'tests/verify-email-page.test.mjs', '--reporter=json'])
   await run('bun', ['run', 'prepare'])
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await run('npx', ['tsx', 'tests/blog-logic.mjs'])

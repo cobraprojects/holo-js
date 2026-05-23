@@ -5,6 +5,7 @@ import {
 import type {
   AuthGuardConfig,
   AuthClerkProviderConfig,
+  AuthHostedIdentityStore,
   AuthPasswordBrokerConfig,
   AuthProviderConfig,
   AuthSocialProviderConfig,
@@ -1538,8 +1539,16 @@ function normalizeWorkosProvider(
   /* v8 ignore stop */
 }
 
-function isWorkosProviderConfig(value: AuthWorkosProviderConfig | string | undefined): value is AuthWorkosProviderConfig {
-  return typeof value === 'object' && value !== null
+function isHostedIdentityStore(value: unknown): value is AuthHostedIdentityStore {
+  return Boolean(value)
+    && typeof value === 'object'
+    && typeof (value as { findByProviderUserId?: unknown }).findByProviderUserId === 'function'
+    && typeof (value as { findByUserId?: unknown }).findByUserId === 'function'
+    && typeof (value as { save?: unknown }).save === 'function'
+}
+
+function isWorkosProviderConfig(value: AuthHostedIdentityStore | AuthWorkosProviderConfig | string | undefined): value is AuthWorkosProviderConfig {
+  return typeof value === 'object' && value !== null && !isHostedIdentityStore(value)
 }
 
 function getWorkosProviderEntries(
@@ -1554,6 +1563,12 @@ function getWorkosProviderEntries(
     if (name === 'provider') {
       if (typeof value !== 'undefined' && typeof value !== 'string') {
         throw new Error('[Holo Auth] WorkOS provider key "provider" is reserved for the default provider name.')
+      }
+      continue
+    }
+    if (name === 'identityStore') {
+      if (typeof value !== 'undefined' && !isHostedIdentityStore(value)) {
+        throw new Error('[Holo Auth] WorkOS identityStore must implement the hosted identity store contract.')
       }
       continue
     }
@@ -1578,6 +1593,12 @@ function normalizeWorkosConfig(
       throw new Error(`[Holo Auth] WorkOS provider "${provider}" is not configured.`)
     }
 
+    if (config?.identityStore) {
+      return Object.freeze({
+        identityStore: config.identityStore,
+      })
+    }
+
     return holoAuthDefaults.workos
   }
 
@@ -1591,6 +1612,7 @@ function normalizeWorkosConfig(
 
   return Object.freeze({
     ...(typeof provider === 'undefined' ? {} : { provider }),
+    ...(config?.identityStore ? { identityStore: config.identityStore } : {}),
     ...Object.fromEntries(normalizedEntries.map(([name, providerConfig]) => [
       name,
       normalizeWorkosProvider(name, providerConfig, guards, providers),
@@ -1668,6 +1690,12 @@ function getClerkProviderEntries(config: HoloAuthClerkConfig | undefined): reado
       }
       continue
     }
+    if (name === 'identityStore') {
+      if (typeof value !== 'undefined' && !isHostedIdentityStore(value)) {
+        throw new Error('[Holo Auth] Clerk identityStore must implement the hosted identity store contract.')
+      }
+      continue
+    }
     if (!isClerkProviderConfig(value)) {
       throw new Error(`[Holo Auth] Clerk provider "${name}" must be a Clerk provider config object.`)
     }
@@ -1689,6 +1717,12 @@ function normalizeClerkConfig(
       throw new Error(`[Holo Auth] Clerk provider "${provider}" is not configured.`)
     }
 
+    if (config?.identityStore) {
+      return Object.freeze({
+        identityStore: config.identityStore,
+      })
+    }
+
     return holoAuthDefaults.clerk
   }
 
@@ -1702,6 +1736,7 @@ function normalizeClerkConfig(
 
   return Object.freeze({
     ...(typeof provider === 'undefined' ? {} : { provider }),
+    ...(config?.identityStore ? { identityStore: config.identityStore } : {}),
     ...Object.fromEntries(normalizedEntries.map(([name, providerConfig]) => [
       name,
       normalizeClerkProvider(name, providerConfig, guards, providers),

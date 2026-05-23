@@ -626,6 +626,53 @@ describe('@holo-js/notifications runtime', () => {
     expect(broadcaster.send).toHaveBeenCalledTimes(1)
   })
 
+  it('does not queue immediate notifications from queue config defaults alone', async () => {
+    const mailer = {
+      send: vi.fn(async () => {}),
+    }
+    const loadQueue = vi.fn(async () => createQueueModuleStub().module)
+
+    notificationsRuntimeInternals.setQueueModuleLoader(loadQueue)
+    configureNotificationsRuntime({
+      mailer,
+      config: {
+        table: 'notifications',
+        queue: {
+          connection: 'config-connection',
+          queue: 'config-queue',
+          afterCommit: true,
+        },
+      },
+    })
+
+    const result = await notify({
+      id: 'user-1',
+      email: 'ava@example.com',
+    }, defineNotification({
+      via() {
+        return ['email']
+      },
+      build: {
+        email() {
+          return {
+            subject: 'Immediate',
+          }
+        },
+      },
+    }))
+
+    expect(result.channels).toEqual([
+      {
+        channel: 'email',
+        targetIndex: 0,
+        queued: false,
+        success: true,
+      },
+    ])
+    expect(mailer.send).toHaveBeenCalledTimes(1)
+    expect(loadQueue).not.toHaveBeenCalled()
+  })
+
   it('throws a clear error when queue-backed delivery is requested without @holo-js/queue', async () => {
     notificationsRuntimeInternals.setQueueModuleLoader(async () => {
       const error = new Error('missing queue module') as Error & { code?: string }
@@ -1076,6 +1123,51 @@ describe('@holo-js/notifications runtime', () => {
         name: 'slack',
       }),
     ])
+  })
+
+  it('lets registered channels replace built-in dispatch channels', async () => {
+    const send = vi.fn(async () => 'custom-email')
+
+    registerNotificationChannel('email', {
+      send,
+    }, {
+      replaceExisting: true,
+    })
+
+    configureNotificationsRuntime({})
+
+    const result = await notifyUsing()
+      .channel('email', { address: 'ava@example.com' } as never)
+      .notify({
+        via() {
+          return ['email']
+        },
+        build: {
+          email() {
+            return {
+              subject: 'Custom email',
+            }
+          },
+        },
+      } as never)
+
+    expect(result.channels).toEqual([
+      {
+        channel: 'email',
+        targetIndex: 0,
+        queued: false,
+        success: true,
+        result: 'custom-email',
+      },
+    ])
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      route: {
+        address: 'ava@example.com',
+      },
+      payload: {
+        subject: 'Custom email',
+      },
+    }))
   })
 
   it('validates anonymous custom channel routes before send', async () => {

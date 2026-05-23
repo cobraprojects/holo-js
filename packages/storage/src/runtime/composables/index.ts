@@ -111,7 +111,12 @@ function assertNoTraversal(path: string): void {
 }
 
 function normalizeKey(input: string): string {
-  return normalizeRelativePath(input)
+  const normalized = normalizeRelativePath(input)
+  if (normalized.split('/').includes('..')) {
+    throw new Error('[Holo Storage] Storage paths must not contain ".." segments.')
+  }
+
+  return normalized
     .split('/')
     .filter(Boolean)
     .map(encodeStorageSegment)
@@ -449,7 +454,7 @@ export function createS3TemporaryUrl(
     })
 
   const canonicalQueryString = sortedEntries
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .map(([key, value]) => `${encodeRfc3986(key)}=${encodeRfc3986(value)}`)
     .join('&')
 
   const canonicalRequest = [
@@ -520,27 +525,33 @@ function createDisk(diskName?: string): StorageInstance {
 
     async delete(path) {
       const paths = Array.isArray(path) ? path : [path]
-      await Promise.all(paths.map(item => backend.removeItem(normalizeKey(item))))
+      const keys = paths.map(normalizeKey)
+      await Promise.all(keys.map(key => backend.removeItem(key)))
       return true
     },
 
     async copy(from, to) {
-      const value = await backend.getItemRaw(normalizeKey(from))
+      const fromKey = normalizeKey(from)
+      const toKey = normalizeKey(to)
+      const value = await backend.getItemRaw(fromKey)
       if (value === null) {
         return false
       }
 
-      await backend.setItemRaw(normalizeKey(to), value)
+      await backend.setItemRaw(toKey, value)
       return true
     },
 
     async move(from, to) {
-      const copied = await this.copy(from, to)
-      if (!copied) {
+      const fromKey = normalizeKey(from)
+      const toKey = normalizeKey(to)
+      const value = await backend.getItemRaw(fromKey)
+      if (value === null) {
         return false
       }
 
-      await backend.removeItem(normalizeKey(from))
+      await backend.setItemRaw(toKey, value)
+      await backend.removeItem(fromKey)
       return true
     },
 

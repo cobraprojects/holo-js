@@ -645,9 +645,30 @@ export interface AuthWorkosProviderConfig {
   readonly mapToProvider?: string
 }
 
+export interface AuthHostedIdentityRecord {
+  readonly provider: string
+  readonly providerUserId: string
+  readonly guard: string
+  readonly authProvider: string
+  readonly userId: string | number
+  readonly email?: string
+  readonly emailVerified: boolean
+  readonly profile: Readonly<Record<string, unknown>>
+  readonly linkedAt: Date
+  readonly updatedAt: Date
+}
+
+export interface AuthHostedIdentityStore {
+  findByProviderUserId(provider: string, providerUserId: string): Promise<AuthHostedIdentityRecord | null>
+  findByUserId(provider: string, authProvider: string, userId: string | number): Promise<AuthHostedIdentityRecord | null>
+  claim?(record: AuthHostedIdentityRecord): Promise<AuthHostedIdentityRecord>
+  save(record: AuthHostedIdentityRecord): Promise<void>
+}
+
 export interface HoloAuthWorkosConfig {
   readonly provider?: string
-  readonly [provider: string]: AuthWorkosProviderConfig | string | undefined
+  readonly identityStore?: AuthHostedIdentityStore
+  readonly [provider: string]: AuthHostedIdentityStore | AuthWorkosProviderConfig | string | undefined
 }
 
 export interface AuthClerkProviderConfig {
@@ -664,7 +685,8 @@ export interface AuthClerkProviderConfig {
 
 export interface HoloAuthClerkConfig {
   readonly provider?: string
-  readonly [provider: string]: AuthClerkProviderConfig | string | undefined
+  readonly identityStore?: AuthHostedIdentityStore
+  readonly [provider: string]: AuthHostedIdentityStore | AuthClerkProviderConfig | string | undefined
 }
 
 export interface HoloAuthConfig {
@@ -728,7 +750,8 @@ export interface NormalizedAuthWorkosProviderConfig {
 
 export interface NormalizedHoloAuthWorkosConfig {
   readonly provider?: string
-  readonly [provider: string]: NormalizedAuthWorkosProviderConfig | string | undefined
+  readonly identityStore?: AuthHostedIdentityStore
+  readonly [provider: string]: AuthHostedIdentityStore | NormalizedAuthWorkosProviderConfig | string | undefined
 }
 
 export interface NormalizedAuthClerkProviderConfig {
@@ -746,7 +769,8 @@ export interface NormalizedAuthClerkProviderConfig {
 
 export interface NormalizedHoloAuthClerkConfig {
   readonly provider?: string
-  readonly [provider: string]: NormalizedAuthClerkProviderConfig | string | undefined
+  readonly identityStore?: AuthHostedIdentityStore
+  readonly [provider: string]: AuthHostedIdentityStore | NormalizedAuthClerkProviderConfig | string | undefined
 }
 
 export interface NormalizedHoloAuthConfig {

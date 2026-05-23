@@ -46,7 +46,7 @@ async function exchangeToken(
   return await readJson(response) as Record<string, unknown>
 }
 
-function normalizeTokens(payload: Record<string, unknown>): SocialProviderTokens {
+function normalizeTokensWithAccessToken(payload: Record<string, unknown>, accessToken: string): SocialProviderTokens {
   const expiresIn = typeof payload.expires_in === 'number'
     ? payload.expires_in
     : typeof payload.expires_in === 'string'
@@ -54,12 +54,21 @@ function normalizeTokens(payload: Record<string, unknown>): SocialProviderTokens
       : undefined
 
   return {
-    accessToken: String(payload.access_token ?? ''),
+    accessToken,
     refreshToken: typeof payload.refresh_token === 'string' ? payload.refresh_token : undefined,
     expiresAt: Number.isFinite(expiresIn) ? new Date(Date.now() + (expiresIn! * 1000)) : undefined,
     idToken: payload.id_token,
     tokenType: payload.token_type,
   }
+}
+
+function readAccessToken(payload: Record<string, unknown>): string {
+  const accessToken = typeof payload.access_token === 'string' ? payload.access_token.trim() : ''
+  if (!accessToken) {
+    throw new Error('[@holo-js/auth-social-google] Google token response did not include "access_token".')
+  }
+
+  return accessToken
 }
 
 function normalizeProfile(payload: Record<string, unknown>): SocialProviderProfile {
@@ -92,7 +101,7 @@ export const googleSocialProvider: SocialProviderRuntime = Object.freeze({
   },
   async exchangeCode(context: SocialCallbackContext) {
     const tokenPayload = await exchangeToken(context, 'https://oauth2.googleapis.com/token')
-    const accessToken = String(tokenPayload.access_token ?? '')
+    const accessToken = readAccessToken(tokenPayload)
     const profileResponse = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
       headers: {
         authorization: `Bearer ${accessToken}`,
@@ -106,7 +115,7 @@ export const googleSocialProvider: SocialProviderRuntime = Object.freeze({
     const profilePayload = await readJson(profileResponse) as Record<string, unknown>
     return {
       profile: normalizeProfile(profilePayload),
-      tokens: normalizeTokens(tokenPayload),
+      tokens: normalizeTokensWithAccessToken(tokenPayload, accessToken),
     }
   },
 })

@@ -1,5 +1,8 @@
+import { spawnSync } from 'node:child_process'
 import { createHash, createHmac, randomUUID } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, relative, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { configureSessionRuntime, getSessionRuntime, resetSessionRuntime } from '../../session/src'
 import type { SessionRecord, SessionStore } from '../../session/src'
@@ -62,6 +65,11 @@ function hashPasswordResetEmail(email: string, csrfSigningKey?: string): string 
   }
 
   return createHash('sha256').update(canonicalEmail).digest('hex')
+}
+
+function importSpecifier(fromDirectory: string, targetPath: string): string {
+  const specifier = relative(fromDirectory, targetPath).replaceAll('\\', '/')
+  return specifier.startsWith('.') ? specifier : `./${specifier}`
 }
 import type {
   AuthenticatedAuthUser,
@@ -3146,6 +3154,37 @@ describe('@holo-js/auth package runtime', () => {
     expect(runtime.deliveries).toHaveLength(1)
   })
 
+  it('rethrows transitive optional security import failures during password reset throttling', async () => {
+    const runtime = configureRuntime({
+      authConfig: {
+        passwords: {
+          users: {
+            provider: 'users',
+            table: 'password_reset_tokens',
+            expire: 60,
+            throttle: 60,
+          },
+        },
+      },
+    })
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    vi.stubGlobal('__holoAuthSecurityImport__', async () => {
+      const error = new Error('Cannot find package "redis" imported from /app/node_modules/@holo-js/security/dist/index.mjs')
+      Object.assign(error, { code: 'ERR_MODULE_NOT_FOUND' })
+      throw error
+    })
+
+    await expect(requestPasswordReset({ email: 'ava@example.com' })).rejects.toThrow('Cannot find package "redis"')
+    expect(runtime.deliveries).toHaveLength(0)
+  })
+
   it('returns cached users from user() and refetches with refreshUser()', async () => {
     const runtime = configureRuntime()
     const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
@@ -4724,6 +4763,7 @@ describe('@holo-js/auth package runtime', () => {
     await expect(hasher.verify('secret-secret', `scrypt$N=16384,r=8$${saltHex ?? ''}$${hashHex ?? ''}`)).resolves.toBe(false)
     await expect(hasher.verify('secret-secret', `scrypt$N=999999999999999999999,r=8,p=1$${saltHex ?? ''}$${hashHex ?? ''}`)).resolves.toBe(false)
     await expect(hasher.verify('secret-secret', `scrypt$N=0,r=8,p=1$${saltHex ?? ''}$${hashHex ?? ''}`)).resolves.toBe(false)
+    await expect(hasher.verify('secret-secret', `scrypt$N=16384,r=16,p=1$${saltHex ?? ''}$${hashHex ?? ''}`)).resolves.toBe(false)
     await expect(hasher.verify('secret-secret', `scrypt$ N = 16384 , r = 8 , p = 1 $${saltHex ?? ''}$${hashHex ?? ''}`)).resolves.toBe(true)
     expect(hasher.needsRehash?.(`scrypt$N=8192,r=8,p=1$${saltHex ?? ''}$${hashHex ?? ''}`)).toBe(true)
     expect(hasher.needsRehash?.(`scrypt$N=16384,r=4,p=1$${saltHex ?? ''}$${hashHex ?? ''}`)).toBe(true)
@@ -5286,7 +5326,61 @@ describe('@holo-js/auth package runtime', () => {
     })).rejects.toThrow('Unable to resolve a provider for the given user.')
   })
 
-  it('supports provider adapters without explicit serialize or credential helper hooks', async () => {
+  it('requires serialize for provider records when no public auth user type is registered', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'holo-auth-provider-contract-'))
+    const entryPath = join(root, 'provider-contract.ts')
+    const authSource = importSpecifier(root, resolve(new URL('../src/contracts', import.meta.url).pathname))
+
+    try {
+      await writeFile(entryPath, [
+        `import type { AuthProviderAdapter } from ${JSON.stringify(authSource)}`,
+        ``,
+        `type ProviderRecord = {`,
+        `  readonly id: number`,
+        `  readonly email: string`,
+        `  readonly passwordHash: string`,
+        `}`,
+        ``,
+        `const adapter: AuthProviderAdapter<ProviderRecord> = {`,
+        `  async findById() { return null },`,
+        `  async findByCredentials() { return null },`,
+        `  async create() {`,
+        `    return { id: 1, email: 'ava@example.com', passwordHash: 'secret' }`,
+        `  },`,
+        `  getId(user: ProviderRecord) { return user.id },`,
+        `}`,
+        ``,
+        `void adapter`,
+        ``,
+      ].join('\n'), 'utf8')
+
+      const tsc = spawnSync(resolve('node_modules/.bin/tsc'), [
+        '--strict',
+        '--target',
+        'ES2022',
+        '--module',
+        'ESNext',
+        '--moduleResolution',
+        'Bundler',
+        '--skipLibCheck',
+        '--noEmit',
+        entryPath,
+      ], {
+        cwd: root,
+        encoding: 'utf8',
+      })
+
+      expect(tsc.status).not.toBe(0)
+      expect(`${tsc.stdout}\n${tsc.stderr}`).toContain('serialize')
+    } finally {
+      await rm(root, {
+        recursive: true,
+        force: true,
+      })
+    }
+  })
+
+  it('supports explicit provider serialization without credential helper hooks', async () => {
     const sessionStore = new InMemorySessionStore()
     const users = new Map<number, UserRecord>()
 
@@ -5366,6 +5460,14 @@ describe('@holo-js/auth package runtime', () => {
           getId(user: { id: number }) {
             return user.id
           },
+          serialize(user) {
+            return {
+              id: user.id,
+              email: user.email,
+              name: user.name,
+              role: user.role,
+            }
+          },
         },
       },
       context: authRuntimeInternals.createMemoryAuthContext(),
@@ -5378,7 +5480,7 @@ describe('@holo-js/auth package runtime', () => {
       user: {
         id: 1,
         email: 'ava@example.com',
-        password: hashedPassword,
+        role: 'member',
       },
     })
   })

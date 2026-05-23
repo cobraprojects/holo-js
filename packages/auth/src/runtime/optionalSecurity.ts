@@ -14,6 +14,7 @@ export type OptionalSecurityModule = {
 }
 
 let optionalSecurityModulePromise: Promise<OptionalSecurityModule | undefined> | undefined
+const OPTIONAL_SECURITY_PACKAGE = '@holo-js/security'
 
 function getOptionalSecurityModuleOverride(): OptionalSecurityModule | undefined {
   const runtime = globalThis as typeof globalThis & {
@@ -37,23 +38,21 @@ function isMissingOptionalPackageError(error: unknown): boolean {
   }
 
   const message = error.message
-  const mentionsSecurityPackage = message.includes('@holo-js/security')
   const code = (error as Error & { readonly code?: unknown }).code
+  const quotedPackage = String.raw`["']${OPTIONAL_SECURITY_PACKAGE}["']`
+  const missingPackage = new RegExp(String.raw`Cannot find package ${quotedPackage}`).test(message)
+  const missingModule = new RegExp(String.raw`Cannot find module ${quotedPackage}`).test(message)
+  const unresolvedSpecifier = new RegExp(String.raw`(?:Failed to resolve module specifier|Could not resolve) ${quotedPackage}`).test(message)
+  const failedLoadUrl = new RegExp(String.raw`Failed to load url ${OPTIONAL_SECURITY_PACKAGE}(?:\b|[/?#])`).test(message)
 
   if (
-    mentionsSecurityPackage
+    (missingPackage || missingModule)
     && (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND')
   ) {
     return true
   }
 
-  return mentionsSecurityPackage && (
-    message.includes('Cannot find package')
-    || message.includes('Cannot find module')
-    || message.includes('Failed to resolve module specifier')
-    || message.includes('Failed to load url')
-    || message.includes('Could not resolve')
-  )
+  return missingPackage || missingModule || unresolvedSpecifier || failedLoadUrl
 }
 
 export async function loadOptionalSecurityModule(): Promise<OptionalSecurityModule | undefined> {

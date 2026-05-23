@@ -146,6 +146,8 @@ export type {
   AuthProviderConfig,
   AuthPasswordBrokerConfig,
   AuthEmailVerificationConfig,
+  AuthHostedIdentityRecord,
+  AuthHostedIdentityStore,
   AuthPersonalAccessTokenConfig,
   AuthClerkProviderConfig,
   AuthSocialProviderConfig,

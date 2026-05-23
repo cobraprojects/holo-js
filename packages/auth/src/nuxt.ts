@@ -43,11 +43,13 @@ export async function useAuth(options: UseAuthOptions = {}): Promise<UseAuthResu
   const endpoint = options.endpoint ?? '/api/auth/user'
   const requestUrl = createCurrentAuthUrl(endpoint, options.guard)
   const stateKey = options.key ?? `holo-auth:${requestUrl}`
+  const currentAuthenticated = useState<boolean>(`${stateKey}:authenticated`, () => false)
   const currentProvider = useState<string | null>(`${stateKey}:provider`, () => null)
   const currentUser = useState<HoloAuthUser | null>(`${stateKey}:user`, () => null)
-  const authenticated = computed(() => currentUser.value !== null)
+  const authenticated = computed(() => currentAuthenticated.value)
   const { data, refresh } = await useCurrentAuthFetch(requestUrl, stateKey)
 
+  currentAuthenticated.value = data.value?.authenticated ?? false
   currentProvider.value = data.value?.provider ?? null
   currentUser.value = data.value?.user ?? null
 
@@ -57,6 +59,7 @@ export async function useAuth(options: UseAuthOptions = {}): Promise<UseAuthResu
     user: currentUser,
     async refreshUser() {
       await refresh()
+      currentAuthenticated.value = data.value?.authenticated ?? false
       currentProvider.value = data.value?.provider ?? null
       currentUser.value = data.value?.user ?? null
 

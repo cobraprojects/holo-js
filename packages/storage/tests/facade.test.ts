@@ -75,6 +75,12 @@ function encodeCanonicalUri(pathname: string): string {
   })
 }
 
+function encodeCanonicalQueryComponent(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => {
+    return `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+  })
+}
+
 function restoreGlobalProperty(
   property: 'useRuntimeConfig' | 'useStorage',
   descriptor: PropertyDescriptor | undefined,
@@ -520,6 +526,21 @@ describe('Storage facade', () => {
     expect(() => Storage.disk('media').path('../exports/report.pdf')).toThrow('must not contain')
   })
 
+  it('rejects traversing segments before backend storage operations', async () => {
+    await expect(Storage.put('../secret.txt', 'x')).rejects.toThrow('must not contain')
+    await expect(Storage.putJson('../secret.json', { ok: true })).rejects.toThrow('must not contain')
+    await expect(Storage.get('../secret.txt')).rejects.toThrow('must not contain')
+    await expect(Storage.getBytes('../secret.txt')).rejects.toThrow('must not contain')
+    await expect(Storage.exists('../secret.txt')).rejects.toThrow('must not contain')
+    await expect(Storage.delete('../secret.txt')).rejects.toThrow('must not contain')
+    await expect(Storage.delete(['reports/daily.txt', '../secret.txt'])).rejects.toThrow('must not contain')
+    await expect(Storage.copy('../secret.txt', 'reports/copied.txt')).rejects.toThrow('must not contain')
+    await expect(Storage.copy('reports/daily.txt', '../secret.txt')).rejects.toThrow('must not contain')
+    await expect(Storage.move('../secret.txt', 'reports/moved.txt')).rejects.toThrow('must not contain')
+    await expect(Storage.move('reports/daily.txt', '../secret.txt')).rejects.toThrow('must not contain')
+    await expect(Storage.files('../')).rejects.toThrow('must not contain')
+  })
+
   it('builds public urls for s3-compatible disks', () => {
     expect(Storage.disk('publicMedia').url('images/photo.jpg')).toBe(
       'https://public-bucket.s3.us-east-1.amazonaws.com/images/photo.jpg',
@@ -751,7 +772,7 @@ describe('createS3TemporaryUrl', () => {
 
         return leftKey.localeCompare(rightKey)
       })
-      .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+      .map(([key, value]) => `${encodeCanonicalQueryComponent(key)}=${encodeCanonicalQueryComponent(value)}`)
       .join('&')
     const canonicalRequest = [
       'GET',
@@ -771,6 +792,59 @@ describe('createS3TemporaryUrl', () => {
       ].join('\n'))
       .digest('hex')
 
+    expect(url.searchParams.get('X-Amz-Signature')).toBe(expectedSignature)
+  })
+
+  it('RFC3986-encodes endpoint query parameters when presigning', () => {
+    const secretAccessKey = 'supersecretquerychars'
+    const region = 'us-east-1'
+    const responseDisposition = 'attachment; filename=photo(1)!.jpg'
+    const url = new URL(createS3TemporaryUrl({
+      name: 'queryfulMedia',
+      driver: 's3',
+      visibility: 'public',
+      bucket: 'queryful-bucket',
+      region,
+      endpoint: `https://gateway.example.com/storage?response-content-disposition=${encodeURIComponent(responseDisposition)}`,
+      accessKeyId: 'AKIAQUERYCHARS',
+      secretAccessKey,
+      forcePathStyleEndpoint: false,
+    }, 'exports/report.pdf', { expiresIn: 120 }))
+
+    const amzDate = url.searchParams.get('X-Amz-Date')!
+    const credential = decodeURIComponent(url.searchParams.get('X-Amz-Credential')!)
+    const credentialScope = credential.split('/').slice(1).join('/')
+    const scopeDate = credentialScope.split('/')[0]!
+    const canonicalQueryString = Array.from(url.searchParams.entries())
+      .filter(([key]) => key !== 'X-Amz-Signature')
+      .sort(([leftKey, leftValue], [rightKey, rightValue]) => {
+        if (leftKey === rightKey) {
+          return leftValue.localeCompare(rightValue)
+        }
+
+        return leftKey.localeCompare(rightKey)
+      })
+      .map(([key, value]) => `${encodeCanonicalQueryComponent(key)}=${encodeCanonicalQueryComponent(value)}`)
+      .join('&')
+    const canonicalRequest = [
+      'GET',
+      url.pathname,
+      canonicalQueryString,
+      `host:${url.host}`,
+      '',
+      'host',
+      'UNSIGNED-PAYLOAD',
+    ].join('\n')
+    const expectedSignature = createHmac('sha256', getSigningKey(secretAccessKey, scopeDate, region))
+      .update([
+        'AWS4-HMAC-SHA256',
+        amzDate,
+        credentialScope,
+        sha256(canonicalRequest),
+      ].join('\n'))
+      .digest('hex')
+
+    expect(canonicalQueryString).toContain('response-content-disposition=attachment%3B%20filename%3Dphoto%281%29%21.jpg')
     expect(url.searchParams.get('X-Amz-Signature')).toBe(expectedSignature)
   })
 
@@ -803,7 +877,7 @@ describe('createS3TemporaryUrl', () => {
 
         return leftKey.localeCompare(rightKey)
       })
-      .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+      .map(([key, value]) => `${encodeCanonicalQueryComponent(key)}=${encodeCanonicalQueryComponent(value)}`)
       .join('&')
     const canonicalRequest = [
       'GET',

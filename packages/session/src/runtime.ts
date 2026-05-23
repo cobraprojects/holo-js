@@ -363,17 +363,6 @@ export async function consumeRememberMeToken(token: string, options?: RememberTo
   const stores = options?.store
     ? [getStore(options.store).store]
     : Object.values(bindings.stores)
-  let record: SessionRecord | null = null
-  for (const store of stores) {
-    record = await store.read(parsed.sessionId)
-    if (record) {
-      break
-    }
-  }
-
-  if (!record?.rememberTokenHash) {
-    return null
-  }
 
   if (parsed.issuedAt) {
     const rememberExpiry = parsed.issuedAt + (getSessionRuntimeBindings().config.rememberMeLifetime * 60_000)
@@ -382,7 +371,15 @@ export async function consumeRememberMeToken(token: string, options?: RememberTo
     }
   }
 
-  return record.rememberTokenHash === hashRememberToken(parsed.secretPayload) ? record : null
+  const tokenHash = hashRememberToken(parsed.secretPayload)
+  for (const store of stores) {
+    const record = await store.read(parsed.sessionId)
+    if (record?.rememberTokenHash === tokenHash) {
+      return record
+    }
+  }
+
+  return null
 }
 
 export const cookies = Object.freeze({

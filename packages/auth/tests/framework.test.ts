@@ -748,6 +748,43 @@ describe('@holo-js/auth framework helpers', () => {
     expect(routeProtectionInternals.matchesRoutes(undefined, '/anything')).toBe(true)
   })
 
+  it('keeps Nuxt useAuth authenticated state from the current-auth response', async () => {
+    const data = {
+      value: {
+        authenticated: true,
+        guard: 'web',
+        provider: null,
+        user: null,
+      },
+    }
+    const refresh = vi.fn(async () => {
+      data.value = {
+        authenticated: false,
+        guard: 'web',
+        provider: null,
+        user: null,
+      }
+    })
+    const useFetch = vi.fn(async () => ({
+      data,
+      refresh,
+    }))
+
+    vi.doMock('#imports', () => createNuxtImportsMock({ useFetch }))
+
+    const { useAuth } = await import('../src/nuxt')
+    const auth = await useAuth()
+
+    expect(auth.authenticated.value).toBe(true)
+    expect(auth.provider.value).toBeNull()
+    expect(auth.user.value).toBeNull()
+
+    await expect(auth.refreshUser()).resolves.toBeNull()
+
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(auth.authenticated.value).toBe(false)
+  })
+
   it('passes the configured guard through Nuxt guest-only middleware', async () => {
     const useAuth = vi.fn(async (_options?: { readonly guard?: string }) => ({
       authenticated: { value: true },

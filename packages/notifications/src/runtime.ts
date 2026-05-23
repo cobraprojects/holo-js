@@ -275,11 +275,16 @@ type QueuedNotificationDeliveryPayload = Readonly<{
 const builtInChannels = createBuiltInChannels(getRuntimeBindings)
 
 function getNotificationChannel(name: string): NotificationChannel | BuiltInChannelDefinition | undefined {
+  const registered = getRegisteredNotificationChannel(name)?.channel
+  if (registered) {
+    return registered
+  }
+
   if (name in builtInChannels) {
     return builtInChannels[name as keyof typeof builtInChannels]
   }
 
-  return getRegisteredNotificationChannel(name)?.channel
+  return undefined
 }
 
 function resolveTargets(target: NotificationDispatchTarget): readonly ResolvedTarget[] {
@@ -414,6 +419,13 @@ function resolveRoute(
     }
 
     const route = target.routes?.[channel]
+    const registered = getRegisteredNotificationChannel(channel)?.channel
+    if (registered) {
+      return typeof registered.validateRoute === 'function'
+        ? registered.validateRoute(route)
+        : route
+    }
+
     if (channel === 'email') {
       return normalizeEmailRouteFromValue(route)
     }
@@ -489,21 +501,25 @@ function resolveChannelDispatchPlan(
   const resolvedDelay = options.delayByChannel?.[channel]
     ?? options.delay
     ?? resolveNotificationDelay(notification, target, channel)
-  const resolvedConnection = options.connection
-    ?? notificationQueueOptions?.connection
-    ?? config.queue.connection
-  const resolvedQueue = options.queue
-    ?? notificationQueueOptions?.queue
-    ?? config.queue.queue
-  const afterCommit = options.afterCommit
-    ?? notificationQueueOptions?.afterCommit
-    ?? config.queue.afterCommit
 
   const queued = notificationQueue === true
     || !!notificationQueueOptions
+    || typeof options.connection !== 'undefined'
+    || typeof options.queue !== 'undefined'
     || typeof resolvedDelay !== 'undefined'
-    || typeof resolvedConnection !== 'undefined'
-    || typeof resolvedQueue !== 'undefined'
+  const resolvedConnection = queued
+    ? options.connection
+      ?? notificationQueueOptions?.connection
+      ?? config.queue.connection
+    : undefined
+  const resolvedQueue = queued
+    ? options.queue
+      ?? notificationQueueOptions?.queue
+      ?? config.queue.queue
+    : undefined
+  const afterCommit = options.afterCommit
+    ?? notificationQueueOptions?.afterCommit
+    ?? (queued ? config.queue.afterCommit : false)
 
   return Object.freeze({
     channel,

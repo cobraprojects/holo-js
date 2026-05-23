@@ -1,4 +1,5 @@
 import { Storage } from '@holo-js/storage/runtime'
+import { connectionAsyncContext, type Entity, type TableDefinition } from '@holo-js/db'
 import {
   getMediaConversionExecutor,
   getMediaPathGenerator,
@@ -18,13 +19,79 @@ import type {
   NormalizedMediaCollectionDefinition,
 } from '../definitions/collections'
 import type { NormalizedMediaDefinition } from '../definitions/config'
-import type {
-  Entity,
-  TableDefinition,
-} from '@holo-js/db'
 
 type MediaEntity = Entity<typeof Media.definition.table>
 type MediaOwnerEntity = Entity<TableDefinition>
+type StoredFileSnapshot = {
+  readonly disk: string
+  readonly path: string
+  readonly contents: Uint8Array | null
+}
+
+function getActiveTransaction() {
+  const active = connectionAsyncContext.getActive()?.connection
+  if (!active || active.getScope().kind === 'root') {
+    return undefined
+  }
+
+  return active
+}
+
+function registerStorageWriteRollback(snapshot: StoredFileSnapshot): void {
+  const active = getActiveTransaction()
+  if (!active) {
+    return
+  }
+
+  active.afterRollback(async () => {
+    await restoreStoredFileSnapshot(snapshot)
+  })
+}
+
+async function restoreStoredFileSnapshot(snapshot: StoredFileSnapshot): Promise<void> {
+  if (snapshot.contents) {
+    await Storage.disk(snapshot.disk).put(snapshot.path, snapshot.contents)
+    return
+  }
+
+  await Storage.disk(snapshot.disk).delete(snapshot.path)
+}
+
+async function restoreStoredFileSnapshots(snapshots: readonly StoredFileSnapshot[]): Promise<void> {
+  for (const snapshot of [...snapshots].reverse()) {
+    /* v8 ignore next -- cleanup failures are intentionally swallowed. */
+    await restoreStoredFileSnapshot(snapshot).catch(() => undefined)
+  }
+}
+
+async function putFileWithRollbackRestore(
+  disk: string,
+  path: string,
+  contents: Uint8Array,
+): Promise<StoredFileSnapshot> {
+  const previous = await Storage.disk(disk).getBytes(path)
+  await Storage.disk(disk).put(path, contents)
+  const snapshot = {
+    disk,
+    path,
+    contents: previous,
+  }
+  registerStorageWriteRollback(snapshot)
+  return snapshot
+}
+
+async function deleteFileWithRollbackRestore(
+  disk: string,
+  path: string,
+): Promise<void> {
+  const previous = await Storage.disk(disk).getBytes(path)
+  await Storage.disk(disk).delete(path)
+  registerStorageWriteRollback({
+    disk,
+    path,
+    contents: previous,
+  })
+}
 
 function fallbackCollectionDefinition(
   collectionName: string,
@@ -151,6 +218,7 @@ export async function generateStoredConversions(options: {
 
   const generatedConversions = Object.create(null) as Record<string, StoredMediaConversion>
   const executor = getMediaConversionExecutor()
+  const writtenSnapshots: StoredFileSnapshot[] = []
 
   try {
     for (const conversion of matchingConversions) {
@@ -177,7 +245,7 @@ export async function generateStoredConversions(options: {
       const conversionMimeType = inferMimeType(generatedFileName, generated.mimeType)
       const conversionContents = await toBinaryContent(generated.contents)
 
-      await Storage.disk(targetDisk).put(conversionPath, conversionContents)
+      writtenSnapshots.push(await putFileWithRollbackRestore(targetDisk, conversionPath, conversionContents))
       generatedConversions[conversion.name] = Object.freeze({
         path: conversionPath,
         disk: targetDisk,
@@ -187,23 +255,11 @@ export async function generateStoredConversions(options: {
       })
     }
   } catch (error) {
-    await deleteStoredConversions(
-      generatedConversions as GeneratedMediaConversions,
-      options.conversionsDisk,
-    )
+    await restoreStoredFileSnapshots(writtenSnapshots)
     throw error
   }
 
   return Object.freeze(generatedConversions)
-}
-
-async function deleteStoredConversions(
-  conversions: GeneratedMediaConversions,
-  _fallbackDisk: string,
-): Promise<void> {
-  for (const conversion of Object.values(conversions)) {
-    await Storage.disk(conversion.disk).delete(conversion.path)
-  }
 }
 
 async function deleteObsoleteConversions(
@@ -229,7 +285,7 @@ async function deleteObsoleteConversions(
       continue
     }
 
-    await Storage.disk(conversion.disk ?? fallbackDisk).delete(conversion.path)
+    await deleteFileWithRollbackRestore(conversion.disk ?? fallbackDisk, conversion.path)
   }
 }
 

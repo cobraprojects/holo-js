@@ -1,3 +1,9 @@
+import type {
+  NormalizedAuthClerkProviderConfig,
+  NormalizedAuthWorkosProviderConfig,
+  NormalizedHoloAuthClerkConfig,
+  NormalizedHoloAuthWorkosConfig,
+} from '@holo-js/config'
 import {
   type CookieOptions,
   type CookieSerializationOptions,
@@ -5,16 +11,13 @@ import {
 } from './cookieSerialization'
 import { parseSetCookieDefinition } from './setCookieParser'
 
-type HostedProviderConfig = {
-  readonly guard?: string
-  readonly sessionCookie: string
-}
+type NormalizedHostedProviderConfig = NormalizedAuthWorkosProviderConfig | NormalizedAuthClerkProviderConfig
 
 type AuthCookieBindings = {
   readonly config: {
     readonly defaults: { readonly guard: string }
-    readonly workos: Readonly<Record<string, HostedProviderConfig | string | undefined>>
-    readonly clerk: Readonly<Record<string, HostedProviderConfig | string | undefined>>
+    readonly workos: NormalizedHoloAuthWorkosConfig
+    readonly clerk: NormalizedHoloAuthClerkConfig
   }
   readonly session: {
     cookie?(name: string, value: string, options: CookieSerializationOptions): string
@@ -46,12 +49,18 @@ function getHostedSessionCookieNamesForGuard(
   guardName: string,
 ): readonly string[] {
   const names = new Set<string>()
-  for (const provider of Object.values(config.workos).filter(isHostedProviderConfig)) {
+  for (const provider of Object.values(config.workos)) {
+    if (!isHostedProviderConfig(provider)) {
+      continue
+    }
     if ((provider.guard ?? config.defaults.guard) === guardName) {
       names.add(provider.sessionCookie)
     }
   }
-  for (const provider of Object.values(config.clerk).filter(isHostedProviderConfig)) {
+  for (const provider of Object.values(config.clerk)) {
+    if (!isHostedProviderConfig(provider)) {
+      continue
+    }
     if ((provider.guard ?? config.defaults.guard) === guardName) {
       names.add(provider.sessionCookie)
     }
@@ -60,7 +69,9 @@ function getHostedSessionCookieNamesForGuard(
   return [...names]
 }
 
-function isHostedProviderConfig(value: HostedProviderConfig | string | undefined): value is HostedProviderConfig {
+function isHostedProviderConfig(
+  value: NormalizedHoloAuthWorkosConfig[string] | NormalizedHoloAuthClerkConfig[string],
+): value is NormalizedHostedProviderConfig {
   return !!(
     value
     && typeof value === 'object'

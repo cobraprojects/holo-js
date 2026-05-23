@@ -47,6 +47,10 @@ type RedisClientLike = {
   disconnect(): void
 }
 
+type RedisClusterClientLike = RedisClientLike & {
+  nodes(role: 'master'): readonly RedisClientLike[]
+}
+
 type RedisCtor = typeof Redis & {
   Cluster: new (
     startupNodes: readonly RedisClusterStartupNode[],
@@ -55,6 +59,10 @@ type RedisCtor = typeof Redis & {
 }
 
 const REDIS_SCAN_COUNT = 100
+
+function isRedisClusterClientLike(client: RedisClientLike): client is RedisClusterClientLike {
+  return typeof (client as { readonly nodes?: unknown }).nodes === 'function'
+}
 
 function isRedisConnectionTarget(value: string): boolean {
   return value.startsWith('redis://')
@@ -222,12 +230,12 @@ export class RedisSecurityAdapter implements SecurityRateLimitRedisDriverAdapter
     }
   }
 
-  private async clearMatchingKeys(pattern: string): Promise<number> {
+  private async clearMatchingKeysForClient(client: RedisClientLike, pattern: string): Promise<number> {
     let cursor = '0'
     let cleared = 0
 
     do {
-      const page = this.normalizeScanResponse(await this.client.scan(
+      const page = this.normalizeScanResponse(await client.scan(
         cursor,
         'MATCH',
         pattern,
@@ -237,11 +245,43 @@ export class RedisSecurityAdapter implements SecurityRateLimitRedisDriverAdapter
       cursor = page.cursor
 
       if (page.keys.length > 0) {
-        cleared += await this.client.del(...page.keys)
+        cleared += await client.del(...page.keys)
       }
     } while (cursor !== '0')
 
     return cleared
+  }
+
+  private async clearMatchingKeysForCluster(client: RedisClusterClientLike, pattern: string): Promise<number> {
+    let cleared = 0
+    for (const node of client.nodes('master')) {
+      let cursor = '0'
+
+      do {
+        const page = this.normalizeScanResponse(await node.scan(
+          cursor,
+          'MATCH',
+          pattern,
+          'COUNT',
+          REDIS_SCAN_COUNT,
+        ))
+        cursor = page.cursor
+
+        for (const key of page.keys) {
+          cleared += await node.del(key)
+        }
+      } while (cursor !== '0')
+    }
+
+    return cleared
+  }
+
+  private async clearMatchingKeys(pattern: string): Promise<number> {
+    if (isRedisClusterClientLike(this.client)) {
+      return await this.clearMatchingKeysForCluster(this.client, pattern)
+    }
+
+    return await this.clearMatchingKeysForClient(this.client, pattern)
   }
 
   private parseOldestScore(result: unknown): number {

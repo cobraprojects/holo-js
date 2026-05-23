@@ -14,11 +14,15 @@ export type {
   WorkosAuthFacade,
   WorkosAuthenticatedUser,
   WorkosAuthenticationResult,
+  WorkosCompleteAuthData,
   WorkosCompleteAuthOptions,
   WorkosCompleteAuthResult,
   WorkosDefaultUserAttributes,
+  WorkosHostedAuthFailureFields,
   WorkosIdentityProfile,
   WorkosJsonValue,
+  WorkosLogoutData,
+  WorkosLogoutErrorCode,
   WorkosLogoutResult,
   WorkosLogoutSession,
   WorkosProviderRuntime,
@@ -568,7 +572,7 @@ function resolveConfiguredProviderName(provider?: string): string {
   }
 
   const configuredProviders = Object.entries(bindings.config.workos).flatMap(([name, value]) => (
-    name !== 'provider' && typeof value === 'object' && value !== null
+    name !== 'provider' && name !== 'identityStore' && isNormalizedWorkosProviderConfig(value)
       ? [name]
       : []
   ))
@@ -587,13 +591,20 @@ function resolveConfiguredProviderName(provider?: string): string {
   throw new Error('[@holo-js/auth-workos] WorkOS provider name is required when multiple auth.workos entries exist.')
 }
 
+function isNormalizedWorkosProviderConfig(value: unknown): value is NormalizedAuthWorkosProviderConfig {
+  return value !== null
+    && typeof value === 'object'
+    && 'sessionCookie' in value
+    && typeof (value as { sessionCookie?: unknown }).sessionCookie === 'string'
+}
+
 function getConfiguredProviderConfig(provider?: string): {
   readonly name: string
 } & NormalizedAuthWorkosProviderConfig {
   const providerName = resolveConfiguredProviderName(provider)
   const authBindings = authRuntimeInternals.getRuntimeBindings()
   const configured = authBindings.config.workos[providerName]
-  if (!configured || typeof configured !== 'object') {
+  if (!isNormalizedWorkosProviderConfig(configured)) {
     throw new Error(`[@holo-js/auth-workos] WorkOS provider "${providerName}" is not configured in auth.workos.`)
   }
 
@@ -1436,6 +1447,27 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'WorkOS authentication failed.'
 }
 
+function createHostedAuthSuccess<TData>(data: TData) {
+  return Object.freeze({
+    data,
+    error: null,
+  } as const)
+}
+
+function createHostedAuthFailure<TCode extends string>(code: TCode, message: string, status: number) {
+  return Object.freeze({
+    data: null,
+    error: Object.freeze({
+      code,
+      message,
+      status,
+      fields: Object.freeze({
+        _root: Object.freeze([message]),
+      }),
+    }),
+  } as const)
+}
+
 export async function loginWithWorkos(
   input: WorkosRequestInput,
   options: {
@@ -1495,25 +1527,20 @@ export async function logoutWithWorkos(
     }
     const workosSession = await readCurrentWorkosLogoutSession(guard, providerName)
     if (!workosSession) {
-      return Object.freeze({
-        ok: false,
-        code: 'workos_session_missing',
-        message: 'The current Holo session was not created by WorkOS.',
-      } as const)
+      return createHostedAuthFailure(
+        'workos_session_missing',
+        'The current Holo session was not created by WorkOS.',
+        422,
+      )
     }
 
     const local = await getAuthRuntime().guard(guard).logout()
-    return Object.freeze({
-      ok: true,
+    return createHostedAuthSuccess(Object.freeze({
       url: createLogoutUrl(workosSession.sessionId, request, options.returnTo),
       local,
-    } as const)
-  } catch (error) {
-    return Object.freeze({
-      ok: false,
-      code: 'workos_logout_failed',
-      message: getErrorMessage(error),
-    } as const)
+    } as const))
+  } catch {
+    return createHostedAuthFailure('workos_logout_failed', 'Unable to complete WorkOS logout.', 500)
   }
 }
 
@@ -1526,31 +1553,31 @@ export async function completeWorkosAuth<TUserAttributes extends WorkosUserAttri
     const url = new URL(request.url)
     const callbackError = url.searchParams.get('error')?.trim()
     if (callbackError) {
-      return Object.freeze({
-        ok: false,
-        code: callbackError,
-        message: url.searchParams.get('error_description')?.trim() || 'WorkOS authentication failed.',
-      } as const)
+      return createHostedAuthFailure(
+        callbackError,
+        url.searchParams.get('error_description')?.trim() || 'WorkOS authentication failed.',
+        422,
+      )
     }
 
     const code = url.searchParams.get('code')?.trim()
     if (!code) {
-      return Object.freeze({
-        ok: false,
-        code: 'workos_code_required',
-        message: 'WorkOS callback did not include an authorization code.',
-      } as const)
+      return createHostedAuthFailure(
+        'workos_code_required',
+        'WorkOS callback did not include an authorization code.',
+        422,
+      )
     }
 
     const providerConfig = getConfiguredProviderConfig(options.provider)
     const callbackState = url.searchParams.get('state')?.trim()
     const expectedState = getWorkosStateFromRequest(request, providerConfig.name)
     if (!callbackState || !expectedState || !Object.is(callbackState, expectedState)) {
-      return Object.freeze({
-        ok: false,
-        code: 'workos_state_mismatch',
-        message: 'WorkOS callback state did not match the login request.',
-      } as const)
+      return createHostedAuthFailure(
+        'workos_state_mismatch',
+        'WorkOS callback state did not match the login request.',
+        422,
+      )
     }
 
     const session = await authenticateWorkosCode(request, code, providerConfig)
@@ -1563,8 +1590,7 @@ export async function completeWorkosAuth<TUserAttributes extends WorkosUserAttri
       payload: createWorkosSessionPayload(authenticated, session),
     })
 
-    return Object.freeze({
-      ok: true,
+    return createHostedAuthSuccess(Object.freeze({
       provider: authenticated.provider,
       guard: authenticated.guard,
       authProvider: authenticated.authProvider,
@@ -1579,13 +1605,13 @@ export async function completeWorkosAuth<TUserAttributes extends WorkosUserAttri
           clearStateCookie(providerConfig.name, request),
         ]),
       }),
-    } as const)
+    } as const))
   } catch (error) {
-    return Object.freeze({
-      ok: false,
-      code: error instanceof WorkosAuthConflictError ? error.code : 'workos_auth_failed',
-      message: getErrorMessage(error),
-    } as const)
+    return createHostedAuthFailure(
+      error instanceof WorkosAuthConflictError ? error.code : 'workos_auth_failed',
+      getErrorMessage(error),
+      error instanceof WorkosAuthConflictError ? 409 : 422,
+    )
   }
 }
 

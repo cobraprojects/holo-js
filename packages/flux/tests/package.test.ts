@@ -169,27 +169,29 @@ describe('@holo-js/flux package surface', () => {
       connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
     })
     const debug = (client as unknown as { __debug?: ReturnType<typeof fluxInternals.createPusherConnector>['__debug'] }).__debug
-    const presenceSubscription = client.presence('chat.2') as unknown as typeof client extends never
-      ? never
-      : {
-          __onPresenceChange(callback: (members: readonly BroadcastJsonObject[]) => void): () => void
-          leaveChannel(): void
-        }
+    const presenceSubscription = client.presence('chat.2')
     const seen: Array<readonly BroadcastJsonObject[]> = []
+    const joined: BroadcastJsonObject[] = []
+    const left: BroadcastJsonObject[] = []
 
-    const stop = presenceSubscription.__onPresenceChange((members) => {
+    presenceSubscription.here((members) => {
       seen.push(members)
     })
+    presenceSubscription.joining(member => joined.push(member))
+    presenceSubscription.leaving(member => left.push(member))
 
     debug!.updatePresenceMembers('chat.2', [{ id: 'user_1' }])
+    debug!.updatePresenceMembers('chat.2', [{ id: 'user_1' }, { id: 'user_2' }])
     debug!.updatePresenceMembers('chat.2', [{ id: 'user_2' }])
-    stop()
+    presenceSubscription.stopListening()
     debug!.updatePresenceMembers('chat.2', [{ id: 'user_3' }])
+    presenceSubscription.listen()
+    debug!.updatePresenceMembers('chat.2', [{ id: 'user_3' }, { id: 'user_4' }])
 
-    expect(seen).toEqual([
-      [{ id: 'user_1' }],
-      [{ id: 'user_2' }],
-    ])
+    expect(seen).toEqual([[]])
+    expect(joined).toEqual([{ id: 'user_1' }, { id: 'user_2' }, { id: 'user_4' }])
+    expect(left).toEqual([{ id: 'user_1' }])
+    expect(presenceSubscription.members).toEqual([{ id: 'user_3' }, { id: 'user_4' }])
     presenceSubscription.leaveChannel()
   })
 
@@ -343,6 +345,30 @@ describe('@holo-js/flux package surface', () => {
 
     // verify both are left (double leave is no-op)
     sub2.leaveChannel()
+  })
+
+  it('keeps shared connector channels while duplicate subscriptions remain active', () => {
+    const client = createFluxClient({
+      connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+    })
+    const debug = (client as unknown as { __debug?: ReturnType<typeof fluxInternals.createPusherConnector>['__debug'] }).__debug
+    const first = client.channel('orders.1')
+    const second = client.channel('orders.1')
+    const received: unknown[] = []
+
+    second.listen('orders.updated', (payload) => {
+      received.push(payload)
+    })
+    first.leaveChannel()
+
+    expect(debug!.getJoinedChannels()).toEqual(['public:orders.1'])
+
+    debug!.emitEvent('orders.1', 'orders.updated', { id: 'ord_1' })
+
+    expect(received).toEqual([{ id: 'ord_1' }])
+
+    second.leaveChannel()
+    expect(debug!.getJoinedChannels()).toEqual([])
   })
 
   it('does not subscribe to sibling channel variants when leaving a subscription', () => {

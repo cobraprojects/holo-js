@@ -379,6 +379,7 @@ try {
   await rm(join(cwd, 'build'), { recursive: true, force: true })
   await assertSuperAdminLogoutStillNavigatesAfterInvalidationFailure()
   await assertHeaderLogoutTreatsRefreshFailureAsNonBlocking()
+  await run('npx', ['vitest', '--run', 'tests/register-route.test.mjs', '--reporter=json'])
   await run('bun', ['run', 'prepare'])
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await run('npx', ['tsx', 'tests/blog-logic.mjs'])

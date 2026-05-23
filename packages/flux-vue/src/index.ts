@@ -76,8 +76,30 @@ interface FluxPresenceState<TMember = BroadcastJsonObject> {
 }
 
 type AnyFluxSubscription = ReturnType<FluxClient['channel']>
-type AnyFluxPresenceSubscription = ReturnType<FluxClient['presence']> & {
-  __onPresenceChange?(callback: (members: readonly BroadcastJsonObject[]) => void): () => void
+type AnyFluxPresenceSubscription = ReturnType<FluxClient['presence']>
+
+function memberKey<TMember>(member: TMember): string {
+  return JSON.stringify(member) ?? String(member)
+}
+
+function appendPresenceMember<TMember>(
+  members: readonly TMember[],
+  member: TMember,
+): readonly TMember[] {
+  return Object.freeze([...members, member])
+}
+
+function removePresenceMember<TMember>(
+  members: readonly TMember[],
+  member: TMember,
+): readonly TMember[] {
+  const key = memberKey(member)
+  const index = members.findIndex(candidate => Object.is(candidate, member) || memberKey(candidate) === key)
+  if (index < 0) {
+    return members
+  }
+
+  return Object.freeze(members.filter((_, candidateIndex) => candidateIndex !== index))
 }
 
 function resolveClient<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
@@ -195,20 +217,48 @@ export function useFluxPresence<
   const subscription = resolveClient(options).presence(channel) as unknown as AnyFluxPresenceSubscription
   type TResolvedMember = ManifestComposablePresenceMember<TMember, TManifest, TChannel>
   const members = shallowRef(subscription.members as readonly TResolvedMember[])
-  callbacks.onHere?.(members.value)
+  let active = true
 
-  const stop = subscription.__onPresenceChange?.((nextMembers) => {
+  const updateMembers = (nextMembers: readonly TResolvedMember[]) => {
+    if (!active) {
+      return
+    }
+
     members.value = nextMembers as readonly TResolvedMember[]
     callbacks.onHere?.(members.value)
+  }
+  subscription.here((nextMembers) => {
+    updateMembers(nextMembers as readonly TResolvedMember[])
+  }).joining((member) => {
+    updateMembers(appendPresenceMember(members.value, member as TResolvedMember))
+  }).leaving((member) => {
+    updateMembers(removePresenceMember(members.value, member as TResolvedMember))
   })
 
   registerCleanup(options, () => {
-    stop?.()
+    active = false
     subscription.leaveChannel()
   })
 
   return Object.freeze({
-    ...createControls(subscription),
+    leave: () => {
+      active = false
+      subscription.leave()
+    },
+    leaveChannel: () => {
+      active = false
+      subscription.leaveChannel()
+    },
+    listen: () => {
+      active = true
+      subscription.listen()
+      updateMembers(subscription.members as readonly TResolvedMember[])
+      return subscription
+    },
+    stopListening: () => {
+      active = false
+      subscription.stopListening()
+    },
     get members() {
       return members.value
     },

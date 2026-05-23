@@ -137,6 +137,15 @@ class InMemoryProviderAdapter implements AuthProviderAdapter<UserRecord> {
     return created
   }
 
+  async delete(id: string | number): Promise<void> {
+    const normalized = typeof id === 'number' ? id : Number.parseInt(String(id), 10)
+    const user = this.users.get(normalized)
+    if (user) {
+      this.usersByEmail.delete(user.email)
+    }
+    this.users.delete(normalized)
+  }
+
   async update(user: UserRecord, input: {
     readonly name?: string
     readonly email?: string
@@ -290,6 +299,28 @@ class InMemoryIdentityStore {
     updatedAt: Date
   }): Promise<void> {
     this.records.set(`${record.provider}:${record.providerUserId}`, record)
+  }
+
+  async claim(record: {
+    provider: string
+    providerUserId: string
+    guard: string
+    authProvider: string
+    userId: string | number
+    email?: string
+    emailVerified: boolean
+    profile: Readonly<Record<string, unknown>>
+    linkedAt: Date
+    updatedAt: Date
+  }) {
+    const key = `${record.provider}:${record.providerUserId}`
+    const existing = this.records.get(key)
+    if (existing) {
+      return existing
+    }
+
+    this.records.set(key, record)
+    return record
   }
 }
 
@@ -1289,26 +1320,28 @@ describe('@holo-js/auth-clerk', () => {
     })
 
     expect(result).toMatchObject({
-      ok: true,
-      provider: 'app',
-      guard: 'web',
-      authProvider: 'users',
-      status: 'created',
-      user: {
-        email: 'callback@app.test',
-        name: 'Callback User',
-        avatar: 'https://cdn.test/callback.png',
-        clerkUserId: 'user_callback',
-      },
-      identity: {
+      data: {
         provider: 'app',
-        providerUserId: 'user_callback',
-        email: 'callback@app.test',
+        guard: 'web',
+        authProvider: 'users',
+        status: 'created',
+        user: {
+          email: 'callback@app.test',
+          name: 'Callback User',
+          avatar: 'https://cdn.test/callback.png',
+          clerkUserId: 'user_callback',
+        },
+        identity: {
+          provider: 'app',
+          providerUserId: 'user_callback',
+          email: 'callback@app.test',
+        },
+        session: {
+          sessionId: 'sess_callback',
+          accessToken: 'callback-token',
+        },
       },
-      session: {
-        sessionId: 'sess_callback',
-        accessToken: 'callback-token',
-      },
+      error: null,
     })
     await expect(provider()).resolves.toBe('clerk')
     expect(runtime.usersProvider.users.get(1)).toMatchObject({
@@ -1445,20 +1478,22 @@ describe('@holo-js/auth-clerk', () => {
     }
     expect(authenticatedRequest.url).toBe('https://app.test/api/auth/clerk/callback?__clerk_handshake_nonce=nonce')
     expect(result).toMatchObject({
-      ok: true,
-      status: 'created',
-      user: {
-        email: 'sdk-callback@app.test',
-        name: 'SDK Callback',
+      data: {
+        status: 'created',
+        user: {
+          email: 'sdk-callback@app.test',
+          name: 'SDK Callback',
+        },
+        identity: {
+          providerUserId: 'user_sdk_callback',
+          email: 'sdk-callback@app.test',
+        },
+        session: {
+          sessionId: 'sess_sdk_callback',
+          accessToken: token,
+        },
       },
-      identity: {
-        providerUserId: 'user_sdk_callback',
-        email: 'sdk-callback@app.test',
-      },
-      session: {
-        sessionId: 'sess_sdk_callback',
-        accessToken: token,
-      },
+      error: null,
     })
     expect(runtime.usersProvider.users.get(1)).toMatchObject({
       email: 'sdk-callback@app.test',
@@ -1499,30 +1534,30 @@ describe('@holo-js/auth-clerk', () => {
         cookie: '__session=logout-callback-token',
       },
     }))
-    expect(callback.ok).toBe(true)
-    if (!callback.ok || !callback.authSession) {
+    expect(callback.error).toBeNull()
+    if (!callback.data?.authSession) {
       throw new Error('Expected Clerk callback to establish an auth session.')
     }
-    const sessionCookie = callback.authSession.cookies[0]?.split(';', 1)[0]
+    const sessionCookie = callback.data.authSession.cookies[0]?.split(';', 1)[0]
 
     authRuntimeInternals.getRuntimeBindings().context.setSessionId('web')
     authRuntimeInternals.getRuntimeBindings().context.setCachedUser('web', null)
 
-    const result = await logoutWithClerk(new Request('https://app.test/api/auth/clerk/logout', {
+    const { data, error } = await logoutWithClerk(new Request('https://app.test/api/auth/clerk/logout', {
       method: 'POST',
       headers: sessionCookie ? { cookie: sessionCookie } : undefined,
     }), {
       returnTo: '/login',
     })
 
-    expect(result).toMatchObject({
-      ok: true,
+    expect(data).toMatchObject({
       url: 'https://app.test/login',
       local: {
         guard: 'web',
       },
     })
-    expect(result.ok ? result.local.cookies : []).toContainEqual(expect.stringContaining('holo_session=;'))
+    expect(error).toBeNull()
+    expect(data?.local.cookies ?? []).toContainEqual(expect.stringContaining('holo_session=;'))
   })
 
   it('normalizes Clerk logout return URLs to relative or same-origin destinations', async () => {
@@ -1550,11 +1585,11 @@ describe('@holo-js/auth-clerk', () => {
           cookie: '__session=logout-callback-token',
         },
       }))
-      expect(callback.ok).toBe(true)
-      if (!callback.ok || !callback.authSession) {
+      expect(callback.error).toBeNull()
+      if (!callback.data?.authSession) {
         throw new Error('Expected Clerk callback to establish an auth session.')
       }
-      const sessionCookie = callback.authSession.cookies[0]?.split(';', 1)[0]
+      const sessionCookie = callback.data.authSession.cookies[0]?.split(';', 1)[0]
 
       authRuntimeInternals.getRuntimeBindings().context.setSessionId('web')
       authRuntimeInternals.getRuntimeBindings().context.setCachedUser('web', null)
@@ -1568,36 +1603,48 @@ describe('@holo-js/auth-clerk', () => {
     }
 
     await expect(completeAndLogout('/login')).resolves.toMatchObject({
-      ok: true,
-      url: 'https://app.test/login',
+      data: {
+        url: 'https://app.test/login',
+      },
+      error: null,
     })
     await expect(completeAndLogout('https://app.test/settings')).resolves.toMatchObject({
-      ok: true,
-      url: 'https://app.test/settings',
+      data: {
+        url: 'https://app.test/settings',
+      },
+      error: null,
     })
     await expect(completeAndLogout('https://evil.test/phish')).resolves.toMatchObject({
-      ok: true,
-      url: 'https://app.test/',
+      data: {
+        url: 'https://app.test/',
+      },
+      error: null,
     })
     await expect(completeAndLogout('//evil.test/phish')).resolves.toMatchObject({
-      ok: true,
-      url: 'https://app.test/',
+      data: {
+        url: 'https://app.test/',
+      },
+      error: null,
     })
   })
 
   it('returns typed callback failures without combining response behavior', async () => {
     configureRuntime()
 
-    await expect(completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback'))).resolves.toEqual({
-      ok: false,
-      code: 'clerk_session_required',
-      message: 'Clerk callback did not include an active session.',
+    await expect(completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback'))).resolves.toMatchObject({
+      data: null,
+      error: {
+        code: 'clerk_session_required',
+        message: 'Clerk callback did not include an active session.',
+      },
     })
 
-    await expect(completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback?error=access_denied&error_description=Denied'))).resolves.toEqual({
-      ok: false,
-      code: 'access_denied',
-      message: 'Denied',
+    await expect(completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback?error=access_denied&error_description=Denied'))).resolves.toMatchObject({
+      data: null,
+      error: {
+        code: 'access_denied',
+        message: 'Denied',
+      },
     })
   })
 
@@ -1741,6 +1788,43 @@ describe('@holo-js/auth-clerk', () => {
         id: relinkTarget.id,
         name: 'Relinked User',
       },
+    })
+  })
+
+  it('claims a Clerk identity once under concurrent first syncs', async () => {
+    const runtime = configureRuntime()
+    const originalCreate = runtime.usersProvider.create.bind(runtime.usersProvider)
+    let createCalls = 0
+
+    vi.spyOn(runtime.usersProvider, 'create').mockImplementation(async (input) => {
+      createCalls += 1
+      await new Promise(resolve => setTimeout(resolve, 5))
+      return await originalCreate(input)
+    })
+
+    const session = {
+      sessionId: 'sess_concurrent',
+      user: clerkAuthInternals.normalizeClerkUserProfile({
+        id: 'user_concurrent',
+        email: 'concurrent@app.test',
+        emailVerified: true,
+        name: 'Concurrent User',
+      }),
+      accessToken: 'token-concurrent',
+    }
+
+    const [first, second] = await Promise.all([
+      syncIdentity(session, 'app'),
+      syncIdentity(session, 'app'),
+    ])
+
+    expect(createCalls).toBe(1)
+    expect(runtime.usersProvider.users.size).toBe(1)
+    expect(first.identity.userId).toBe(second.identity.userId)
+    expect(first.user.id).toBe(second.user.id)
+    expect(runtime.identityStore.records.get('app:user_concurrent')).toMatchObject({
+      userId: first.user.id,
+      email: 'concurrent@app.test',
     })
   })
 
@@ -1991,6 +2075,14 @@ describe('@holo-js/auth-clerk', () => {
         authorization: 'Bearer token',
       },
     }))).rejects.toThrow('Clerk auth runtime is not configured yet')
+    const logoutResult = await logoutWithClerk(new Request('https://app.test/api/auth/clerk/logout', {
+      method: 'POST',
+    }))
+    expect(logoutResult.data).toBeNull()
+    expect(logoutResult.error).toMatchObject({
+      code: 'clerk_session_missing',
+      message: 'The current Holo session was not created by Clerk.',
+    })
 
     resetClerkAuthRuntime()
     resetAuthRuntime()
@@ -2001,5 +2093,18 @@ describe('@holo-js/auth-clerk', () => {
     })
 
     await expect(verifySession('token')).rejects.toThrow('is not configured in auth.clerk')
+    await expect(logoutWithClerk(new Request('https://app.test/api/auth/clerk/logout', {
+      method: 'POST',
+    }))).resolves.toEqual({
+      data: null,
+      error: {
+        code: 'clerk_logout_failed',
+        message: 'Unable to complete Clerk logout.',
+        status: 500,
+        fields: {
+          _root: ['Unable to complete Clerk logout.'],
+        },
+      },
+    })
   })
 })

@@ -169,10 +169,10 @@ export async function createPublicStorageResponse(projectRoot: string, storageCo
         return null
       }
 
-      const contents = await readFile(entry.absolutePath)
+      const contents = await readFile(resolvedPath)
       return new Response(contents, {
         status: 200,
-        headers: { 'content-type': resolveContentType(entry.absolutePath) },
+        headers: { 'content-type': resolveContentType(resolvedPath) },
       })
     } catch {
       return null

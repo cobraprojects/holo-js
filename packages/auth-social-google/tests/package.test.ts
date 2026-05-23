@@ -105,7 +105,7 @@ describe('@holo-js/auth-social-google', () => {
   it('normalizes optional token and profile fields', async () => {
     globalThis.fetch = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        access_token: undefined,
+        access_token: 'access',
         refresh_token: 123,
         expires_in: '120',
         id_token: 'id-token',
@@ -133,7 +133,7 @@ describe('@holo-js/auth-social-google', () => {
       name: undefined,
       avatar: undefined,
     })
-    expect(exchanged.tokens.accessToken).toBe('')
+    expect(exchanged.tokens.accessToken).toBe('access')
     expect(exchanged.tokens.refreshToken).toBeUndefined()
     expect(exchanged.tokens.expiresAt).toBeInstanceOf(Date)
     expect(exchanged.tokens.idToken).toBe('id-token')
@@ -164,23 +164,19 @@ describe('@holo-js/auth-social-google', () => {
     expect(exchanged.tokens.expiresAt).toBeUndefined()
   })
 
-  it('treats an empty token response body as an empty payload', async () => {
+  it('rejects empty token responses before requesting the Google profile', async () => {
     globalThis.fetch = vi.fn()
-      .mockResolvedValueOnce(new Response('', { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        sub: 'google-user',
-      }), { status: 200 })) as typeof fetch
+      .mockResolvedValueOnce(new Response('', { status: 200 })) as typeof fetch
 
-    const exchanged = await googleSocialProvider.exchangeCode({
+    await expect(googleSocialProvider.exchangeCode({
       provider: 'google',
       request: new Request('https://app.test/auth/google/callback?code=test'),
       code: 'test-code',
       codeVerifier: 'verifier',
       config: {},
-    })
+    })).rejects.toThrow('Google token response did not include "access_token"')
 
-    expect(exchanged.tokens.accessToken).toBe('')
-    expect(exchanged.profile.id).toBe('google-user')
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
   })
 
   it('fails when the token or profile request is invalid', async () => {

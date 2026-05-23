@@ -189,14 +189,28 @@ describe('@holo-js/flux-react package surface', () => {
       ...baseClient,
       presence<TChannel extends string>(name: TChannel) {
         const subscription = baseClient.presence(name)
+        let wrapped: ReturnType<typeof baseClient.presence>
 
-        return Object.freeze({
+        wrapped = Object.freeze({
           ...subscription,
+          here(callback) {
+            subscription.here(callback)
+            return wrapped
+          },
+          joining(callback) {
+            subscription.joining(callback)
+            return wrapped
+          },
+          leaving(callback) {
+            subscription.leaving(callback)
+            return wrapped
+          },
           listen(...args: Parameters<typeof subscription.listen>) {
             listenedPresenceChannels.push(String(name))
             return subscription.listen(...args)
           },
         })
+        return wrapped
       },
     }) as typeof baseClient
     const here: unknown[] = []
@@ -275,6 +289,72 @@ describe('@holo-js/flux-react package surface', () => {
       renderer!.unmount()
     })
     expect(debug.getJoinedChannels()).toEqual([])
+  })
+
+  it('reacts to Echo-like presence subscriptions without hidden methods', async () => {
+    const baseClient = createFluxClient({
+      connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+    })
+    const joiningCallbacks = new Set<(member: { id: string }) => void>()
+    let members: readonly { id: string }[] = []
+    const client = Object.freeze({
+      ...baseClient,
+      presence<TChannel extends string>(name: TChannel) {
+        const baseSubscription = baseClient.presence(name)
+        let subscription: ReturnType<typeof baseClient.presence>
+        subscription = Object.freeze({
+          ...baseSubscription,
+          get members() {
+            return members
+          },
+          here(callback) {
+            callback(members)
+            return subscription
+          },
+          joining(callback) {
+            joiningCallbacks.add(callback as (member: { id: string }) => void)
+            return subscription
+          },
+          leaving(callback) {
+            void callback
+            return subscription
+          },
+        })
+        return subscription
+      },
+    }) as typeof baseClient
+    const snapshots: Array<readonly { id: string }[]> = []
+
+    function Probe() {
+      const presence = useFluxPresence<{ id: string }>('chat.custom', {}, { client })
+
+      useEffect(() => {
+        snapshots.push(presence.members)
+      }, [presence.members])
+
+      return null
+    }
+
+    const { act, create } = await loadRenderer()
+    let renderer: Renderer | undefined
+    await act(async () => {
+      renderer = create(renderElement(Probe))
+    })
+
+    const hiddenProbe = client.presence('chat.hidden')
+    expect('__onPresenceChange' in hiddenProbe).toBe(false)
+    hiddenProbe.leaveChannel()
+
+    members = [{ id: 'user_1' }]
+    for (const callback of joiningCallbacks) {
+      callback({ id: 'user_1' })
+    }
+    await act(async () => undefined)
+
+    expect(snapshots.at(-1)).toEqual([{ id: 'user_1' }])
+    await act(async () => {
+      renderer!.unmount()
+    })
   })
 
   it('registers explicit unmount callbacks when provided', async () => {

@@ -140,11 +140,11 @@ function resolveDefaultDiskName(
 export function normalizeStorageDriver(
   driver: StorageDriver,
 ): NormalizedStorageDriver {
-  return driver === 'local'
-    ? 'local'
-    : driver === 'public'
-      ? 'public'
-      : 's3'
+  if (driver === 'local' || driver === 'public' || driver === 's3') {
+    return driver
+  }
+
+  throw new Error(`[Holo Storage] Invalid storage driver "${String(driver)}". Expected "local", "public", or "s3".`)
 }
 
 export function applyEnvOverrides(diskName: string, config: DiskConfig): DiskConfig {

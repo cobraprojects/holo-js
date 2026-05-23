@@ -39,7 +39,8 @@ describe('@holo-js/auth-clerk typing', () => {
 
     expectTypeOf(result).toEqualTypeOf<Promise<ClerkCompleteAuthResult<MappedUser>>>()
 
-    const assertFacadeSyncTypes = (facade: ClerkAuthFacade, session: ClerkVerifiedSession): void => {
+    const assertFacadeTypes = (facade: ClerkAuthFacade, session: ClerkVerifiedSession): void => {
+      const defaultCompleteResult = facade.completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback'))
       const syncResult = facade.syncIdentity(session, 'app', {
         user: (clerkUser): MappedUser => ({
           email: clerkUser.email,
@@ -49,9 +50,13 @@ describe('@holo-js/auth-clerk typing', () => {
         }),
       })
 
+      expectTypeOf(defaultCompleteResult).toEqualTypeOf<Promise<ClerkCompleteAuthResult<{
+        readonly email: string
+        readonly name: string
+      }>>>()
       expectTypeOf(syncResult).toEqualTypeOf<Promise<ClerkAuthenticationResult<MappedUser>>>()
     }
 
-    expectTypeOf(assertFacadeSyncTypes).returns.toEqualTypeOf<void>()
+    expectTypeOf(assertFacadeTypes).returns.toEqualTypeOf<void>()
   })
 })

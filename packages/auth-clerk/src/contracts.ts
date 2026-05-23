@@ -1,4 +1,4 @@
-import type { AuthenticatedAuthUser, AuthEstablishedSession, AuthLogoutResult } from '@holo-js/auth'
+import type { AuthenticatedAuthUser, AuthEstablishedSession, AuthFieldErrors, AuthLogoutResult, AuthResult } from '@holo-js/auth'
 import type { AuthClerkProviderConfig } from '@holo-js/config'
 
 export interface ClerkEmailAddress {
@@ -48,23 +48,21 @@ export interface ClerkLogoutSession {
   readonly sessionId: string
 }
 
+export type ClerkHostedAuthFailureFields = AuthFieldErrors<'_root'>
+
+export interface ClerkCompleteAuthData<TUser extends Readonly<Record<string, unknown>> = Readonly<Record<string, unknown>>> {
+  readonly provider: string
+  readonly guard: string
+  readonly authProvider: string
+  readonly status: ClerkSyncStatus
+  readonly user: ClerkAuthenticatedUser<TUser>
+  readonly identity: HostedIdentityRecord
+  readonly session: ClerkVerifiedSession
+  readonly authSession?: AuthEstablishedSession
+}
+
 export type ClerkCompleteAuthResult<TUser extends Readonly<Record<string, unknown>> = Readonly<Record<string, unknown>>> =
-  | Readonly<{
-    readonly ok: true
-    readonly provider: string
-    readonly guard: string
-    readonly authProvider: string
-    readonly status: ClerkSyncStatus
-    readonly user: ClerkAuthenticatedUser<TUser>
-    readonly identity: HostedIdentityRecord
-    readonly session: ClerkVerifiedSession
-    readonly authSession?: AuthEstablishedSession
-  }>
-  | Readonly<{
-    readonly ok: false
-    readonly code: string
-    readonly message: string
-  }>
+  AuthResult<ClerkCompleteAuthData<TUser>, string, ClerkHostedAuthFailureFields>
 
 export type ClerkRequestHeaders =
   | Headers
@@ -101,18 +99,14 @@ export type ClerkRequestLike = {
 
 export type ClerkRequestInput = Request | ClerkRequestLike
 
-export type ClerkLogoutResult =
-  | Readonly<{
-    readonly ok: true
-    readonly url: string
-    readonly local: AuthLogoutResult
-  }>
-  | Readonly<{
-    readonly ok: false
-    readonly code: 'clerk_logout_failed' | 'clerk_session_missing'
-    readonly message: string
-    readonly local?: AuthLogoutResult
-  }>
+export type ClerkLogoutErrorCode = 'clerk_logout_failed' | 'clerk_session_missing'
+
+export interface ClerkLogoutData {
+  readonly url: string
+  readonly local: AuthLogoutResult
+}
+
+export type ClerkLogoutResult = AuthResult<ClerkLogoutData, ClerkLogoutErrorCode, ClerkHostedAuthFailureFields>
 
 export interface ClerkVerifyRequestContext {
   readonly provider: string
@@ -147,6 +141,7 @@ export interface HostedIdentityRecord {
 export interface HostedIdentityStore {
   findByProviderUserId(provider: string, providerUserId: string): Promise<HostedIdentityRecord | null>
   findByUserId(provider: string, authProvider: string, userId: string | number): Promise<HostedIdentityRecord | null>
+  claim?(record: HostedIdentityRecord): Promise<HostedIdentityRecord>
   save(record: HostedIdentityRecord): Promise<void>
 }
 
@@ -187,7 +182,7 @@ export interface ClerkAuthFacade {
   loginWithClerk(request: ClerkRequestInput, options?: { readonly provider?: string }): Promise<Response>
   registerWithClerk(request: ClerkRequestInput, options?: { readonly provider?: string }): Promise<Response>
   logoutWithClerk(request: ClerkRequestInput, options?: { readonly provider?: string, readonly returnTo?: string }): Promise<ClerkLogoutResult>
-  completeClerkAuth<TUserAttributes extends ClerkUserAttributes = ClerkUserAttributes>(
+  completeClerkAuth<TUserAttributes extends ClerkUserAttributes = ClerkDefaultUserAttributes>(
     request: ClerkRequestInput,
     options?: {
       readonly provider?: string

@@ -1,4 +1,5 @@
 import { Storage } from '@holo-js/storage/runtime'
+import { connectionAsyncContext } from '@holo-js/db'
 import { resolveQueuedConversionNames, regenerateMediaEntityConversions } from './conversions'
 import { dispatchQueuedMediaConversionsForModel } from '../queue'
 import { requireMediaDefinition, requireMediaDefinitionForMorphClass } from '../registry'
@@ -17,6 +18,22 @@ type VariantRecord = {
 
 type StoredVariantSnapshot = VariantRecord & {
   readonly contents: Uint8Array
+}
+
+function registerDeletedVariantRollbackRestore(
+  snapshots: readonly StoredVariantSnapshot[],
+): void {
+  const active = connectionAsyncContext.getActive()?.connection
+  if (!active || active.getScope().kind === 'root') {
+    return
+  }
+
+  active.afterRollback(async () => {
+    for (const snapshot of [...snapshots].reverse()) {
+      /* v8 ignore next -- rollback cleanup failures are intentionally swallowed. */
+      await Storage.disk(snapshot.disk).put(snapshot.path, snapshot.contents).catch(() => undefined)
+    }
+  })
 }
 
 export class MediaItem<
@@ -120,6 +137,7 @@ export class MediaItem<
       }
 
       await this.entity.delete()
+      registerDeletedVariantRollbackRestore(deletedSnapshots)
       this.owner?.forgetRelation('media')
     } catch (error) {
       for (const snapshot of deletedSnapshots.reverse()) {

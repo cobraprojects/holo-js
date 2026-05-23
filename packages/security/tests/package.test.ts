@@ -590,6 +590,19 @@ describe('@holo-js/security csrf', () => {
     const decoded = securityExports.csrfInternals.decodeCsrfToken(decodeURIComponent(encodedValue ?? ''))
     expect(decoded?.nonce).toBe('raw-nonce')
 
+    const dottedCookie = await csrf.cookie(new Request('https://app.test/register'), 'raw.nonce')
+    const dottedValue = dottedCookie.split(';', 1)[0]?.slice('XSRF-TOKEN='.length)
+    expect(dottedValue).toBeDefined()
+    const dottedToken = decodeURIComponent(dottedValue ?? '')
+    expect(securityExports.csrfInternals.decodeCsrfToken(dottedToken)?.nonce).toBe('raw.nonce')
+    await expect(csrf.verify(new Request('https://app.test/register', {
+      method: 'POST',
+      headers: {
+        cookie: `XSRF-TOKEN=${dottedValue}`,
+        'X-CSRF-TOKEN': dottedToken,
+      },
+    }))).resolves.toBeUndefined()
+
     const token = securityExports.csrfInternals.encodeCsrfToken('body-token')
     await expect(csrf.verify(new Request('https://app.test/login', {
       method: 'POST',
@@ -1030,10 +1043,31 @@ describe('@holo-js/security rate-limit drivers', () => {
 
       const serialized = await readFile(bucketPath, 'utf8')
       expect(serialized).not.toContain('pii@example.com')
-      expect(serialized).toContain('"namespace":"limiter:login|"')
+      expect(serialized).not.toContain('limiter:login|')
+      expect(serialized).toContain('"namespaceHash":"')
       expect(serialized).toContain('"keyHash":"')
       expect(serialized).toContain('"prefixHashes":[')
       await expect(store.clearByPrefix('limiter:login|')).resolves.toBe(1)
+    })
+
+    it('keeps direct file bucket keys opaque while preserving prefix clearing', async () => {
+      const harness = await createHarness()
+      const store = harness.createStore()
+      const key = 'user:pii@example.com'
+      const bucketPath = fileRateLimitDriverInternals.getBucketPath(harness.root, key)
+
+      await store.hit(key, {
+        maxAttempts: 2,
+        decaySeconds: 60,
+      })
+
+      const serialized = await readFile(bucketPath, 'utf8')
+      expect(serialized).not.toContain(key)
+      expect(serialized).not.toContain('pii@example.com')
+      expect(serialized).toContain('"namespaceHash":"')
+      expect(serialized).toContain('"keyHash":"')
+      expect(serialized).toContain('"prefixHashes":[')
+      await expect(store.clearByPrefix('user:')).resolves.toBe(1)
     })
 
     it('does not leak raw limiter keys when file bucket hashes collide', async () => {
@@ -1847,7 +1881,7 @@ describe('@holo-js/security coverage edge cases', () => {
       prefixHashes: ['prefix'],
       attempts: 1,
       expiresAt: '2026-04-16T12:01:00.000Z',
-    }))).toThrow('non-empty string namespace')
+    }))).toThrow('non-empty string namespace hash')
     expect(() => fileRateLimitDriverInternals.deserializeBucket(JSON.stringify({
       namespace: 'limiter:login|',
       prefixHashes: ['prefix'],

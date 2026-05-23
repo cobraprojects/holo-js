@@ -64,7 +64,12 @@ If a provider-backed Clawpatch command fails with a Codex app-server or permissi
    - If the fix is unsafe or needs user/API approval, mark neither fixed nor false-positive; explain the blocker.
 8. Continue.
    - Run `clawpatch next --json`.
-   - If no open findings remain, run another `clawpatch review --limit <n> --jobs <n> --json` batch.
+   - If no open findings remain, do not start another review batch yet.
+   - First run the full release-level validation:
+     - `bun run build`
+     - `bun run test`
+   - Fix any build or test failures before asking Clawpatch for more findings.
+   - Only after both full validation commands pass, run another `clawpatch review --limit <n> --jobs <n> --json` batch.
 
 ## Parallel Fixing
 

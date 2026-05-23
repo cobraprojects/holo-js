@@ -648,6 +648,9 @@ describe('@holo-js/session package surface', () => {
     const rememberToken = await issueRememberMeToken(created.id, {
       store: 'file',
     })
+    databaseMap.set(created.id, createRecord(created.id, {
+      rememberTokenHash: 'not-the-token',
+    }))
 
     await expect(consumeRememberMeToken(rememberToken)).resolves.toMatchObject({
       id: created.id,

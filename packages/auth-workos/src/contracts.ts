@@ -1,4 +1,4 @@
-import type { AuthenticatedAuthUser, AuthEstablishedSession, AuthLogoutResult } from '@holo-js/auth'
+import type { AuthenticatedAuthUser, AuthEstablishedSession, AuthFieldErrors, AuthLogoutResult, AuthResult } from '@holo-js/auth'
 import type { NormalizedAuthWorkosProviderConfig } from '@holo-js/config'
 
 export type WorkosJsonValue =
@@ -73,36 +73,30 @@ export type WorkosAuthenticatedUser<TUserAttributes extends WorkosUserAttributes
     readonly id: string | number
   }
 
-export type WorkosCompleteAuthResult<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes> =
-  | Readonly<{
-    readonly ok: true
-    readonly provider: string
-    readonly guard: string
-    readonly authProvider: string
-    readonly status: WorkosSyncStatus
-    readonly user: WorkosAuthenticatedUser<TUserAttributes>
-    readonly identity: HostedIdentityRecord
-    readonly session: WorkosVerifiedSession
-    readonly authSession?: AuthEstablishedSession
-  }>
-  | Readonly<{
-    readonly ok: false
-    readonly code: string
-    readonly message: string
-  }>
+export type WorkosHostedAuthFailureFields = AuthFieldErrors<'_root'>
 
-export type WorkosLogoutResult =
-  | Readonly<{
-    readonly ok: true
-    readonly url: string
-    readonly local: AuthLogoutResult
-  }>
-  | Readonly<{
-    readonly ok: false
-    readonly code: 'workos_logout_failed' | 'workos_session_missing'
-    readonly message: string
-    readonly local?: AuthLogoutResult
-  }>
+export interface WorkosCompleteAuthData<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes> {
+  readonly provider: string
+  readonly guard: string
+  readonly authProvider: string
+  readonly status: WorkosSyncStatus
+  readonly user: WorkosAuthenticatedUser<TUserAttributes>
+  readonly identity: HostedIdentityRecord
+  readonly session: WorkosVerifiedSession
+  readonly authSession?: AuthEstablishedSession
+}
+
+export type WorkosCompleteAuthResult<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes> =
+  AuthResult<WorkosCompleteAuthData<TUserAttributes>, string, WorkosHostedAuthFailureFields>
+
+export type WorkosLogoutErrorCode = 'workos_logout_failed' | 'workos_session_missing'
+
+export interface WorkosLogoutData {
+  readonly url: string
+  readonly local: AuthLogoutResult
+}
+
+export type WorkosLogoutResult = AuthResult<WorkosLogoutData, WorkosLogoutErrorCode, WorkosHostedAuthFailureFields>
 
 export interface WorkosVerifyRequestContext {
   readonly provider: string

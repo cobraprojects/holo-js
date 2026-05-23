@@ -50,6 +50,7 @@ async function createProject(options: {
   workos?: boolean
   workosProviderName?: string
   clerk?: boolean
+  hostedIdentityStore?: boolean
 } = {}): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-core-auth-'))
   tempDirs.push(root)
@@ -112,7 +113,20 @@ export default defineSessionConfig({
 
   if (options.auth) {
     await writeFile(join(root, 'config/auth.ts'), `
-import { defineAuthConfig } from ${configEntry}
+import { defineAuthConfig, type AuthHostedIdentityStore } from ${configEntry}
+
+const hostedIdentityStore = {
+  async findByProviderUserId() {
+    return null
+  },
+  async findByUserId() {
+    return null
+  },
+  async claim(record) {
+    return record
+  },
+  async save() {},
+} satisfies AuthHostedIdentityStore
 
 export default defineAuthConfig({
   defaults: {
@@ -138,11 +152,13 @@ export default defineAuthConfig({
     },
   },` : ''}
   ${options.workos ? `workos: {
+    ${options.hostedIdentityStore ? 'identityStore: hostedIdentityStore,' : ''}
     ${options.workosProviderName ?? 'dashboard'}: {
       clientId: 'client',
     },
   },` : ''}
   ${options.clerk ? `clerk: {
+    ${options.hostedIdentityStore ? 'identityStore: hostedIdentityStore,' : ''}
     app: {
       publishableKey: 'pk_test',
     },
@@ -2535,6 +2551,71 @@ export default {
     await clerkRuntime.shutdown()
   })
 
+  it('passes configured hosted identity stores to hosted auth runtimes', async () => {
+    const workosRoot = await createProject({
+      auth: true,
+      workos: true,
+      hostedIdentityStore: true,
+    })
+    const clerkRoot = await createProject({
+      auth: true,
+      clerk: true,
+      hostedIdentityStore: true,
+    })
+    const configureWorkosAuthRuntime = vi.fn()
+    const configureClerkAuthRuntime = vi.fn()
+    const original = holoRuntimeInternals.moduleInternals.importOptionalModule
+    vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule')
+      .mockImplementation(async (specifier: string) => {
+        if (specifier === '@holo-js/auth-workos') {
+          return {
+            configureWorkosAuthRuntime,
+            resetWorkosAuthRuntime: vi.fn(),
+          }
+        }
+        if (specifier === '@holo-js/auth-clerk') {
+          return {
+            configureClerkAuthRuntime,
+            resetClerkAuthRuntime: vi.fn(),
+          }
+        }
+
+        return original(specifier)
+      })
+
+    const workosRuntime = await createHolo(workosRoot, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+    const clerkRuntime = await createHolo(clerkRoot, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    await expect(workosRuntime.initialize()).resolves.toBeUndefined()
+    expect(configureWorkosAuthRuntime).toHaveBeenCalledWith({
+      identityStore: expect.objectContaining({
+        findByProviderUserId: expect.any(Function),
+        findByUserId: expect.any(Function),
+        claim: expect.any(Function),
+        save: expect.any(Function),
+      }),
+    })
+    await workosRuntime.shutdown()
+
+    await expect(clerkRuntime.initialize()).resolves.toBeUndefined()
+    expect(configureClerkAuthRuntime).toHaveBeenCalledWith({
+      identityStore: expect.objectContaining({
+        findByProviderUserId: expect.any(Function),
+        findByUserId: expect.any(Function),
+        claim: expect.any(Function),
+        save: expect.any(Function),
+      }),
+    })
+
+    await clerkRuntime.shutdown()
+  })
+
   it('namespaces WorkOS and Clerk hosted identities independently', async () => {
     const root = await createProject({
       auth: true,
@@ -2600,6 +2681,74 @@ export default {
       providerUserId: 'clerk-user',
       email: 'clerk@app.test',
     })
+  })
+
+  it('claims hosted identities with the database unique constraint', async () => {
+    const root = await createProject({
+      auth: true,
+      clerk: true,
+    })
+    const runtime = await createHolo(root, {
+      processEnv: process.env,
+      preferCache: false,
+    })
+
+    await runtime.initialize()
+
+    const schema = createSchemaService(DB.connection())
+    await schema.createTable('auth_identities', table => {
+      table.id()
+      table.string('user_id')
+      table.string('guard').default('web')
+      table.string('auth_provider').default('users')
+      table.string('provider')
+      table.string('provider_user_id')
+      table.string('email').nullable()
+      table.boolean('email_verified').default(false)
+      table.json('profile').default({})
+      table.timestamps()
+      table.unique(['provider', 'provider_user_id'], 'auth_identities_provider_user_unique')
+    })
+
+    const clerkStore = holoRuntimeInternals.createCoreHostedIdentityStore('clerk')
+    const first = await clerkStore.claim({
+      provider: 'app',
+      providerUserId: 'clerk-user',
+      guard: 'web',
+      authProvider: 'users',
+      userId: 'user-1',
+      email: 'first@app.test',
+      emailVerified: true,
+      profile: { id: 'clerk-user', version: 'first' },
+      linkedAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    })
+    const second = await clerkStore.claim({
+      provider: 'app',
+      providerUserId: 'clerk-user',
+      guard: 'web',
+      authProvider: 'users',
+      userId: 'user-2',
+      email: 'second@app.test',
+      emailVerified: true,
+      profile: { id: 'clerk-user', version: 'second' },
+      linkedAt: new Date('2026-01-02T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-02T00:00:00.000Z'),
+    })
+
+    expect(first).toMatchObject({
+      userId: 'user-1',
+      email: 'first@app.test',
+    })
+    expect(second).toMatchObject({
+      userId: 'user-1',
+      email: 'first@app.test',
+    })
+    await expect(clerkStore.findByProviderUserId('app', 'clerk-user')).resolves.toMatchObject({
+      userId: 'user-1',
+      email: 'first@app.test',
+    })
+    await expect(DB.table('auth_identities').get()).resolves.toHaveLength(1)
   })
 
   it('does not match social identity rows when resolving hosted identity fallbacks', async () => {

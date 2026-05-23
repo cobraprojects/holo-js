@@ -86,6 +86,18 @@ describe('applyEnvOverrides', () => {
       region: 'us-east-1',
     }).forcePathStyleEndpoint).toBe(true)
   })
+
+  it('rejects invalid storage driver env overrides', () => {
+    vi.stubEnv('STORAGE_DISKS_PUBLIC_DRIVER', 'ftp')
+
+    expect(() => normalizeModuleOptions({
+      disks: {
+        public: {
+          driver: 'public',
+        },
+      },
+    })).toThrow('Invalid storage driver "ftp"')
+  })
 })
 
 describe('normalizeDiskConfig', () => {

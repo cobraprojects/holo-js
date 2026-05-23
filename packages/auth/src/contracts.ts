@@ -80,7 +80,7 @@ export type AuthInputFieldErrors<
   TExtraField extends string = never,
 > = AuthFieldErrors<Extract<keyof TInput, string> | TExtraField>
 
-export interface AuthFailure<TCode extends AuthErrorCode = AuthErrorCode, TFields extends AuthFieldErrors = AuthFieldErrors> {
+export interface AuthFailure<TCode extends string = AuthErrorCode, TFields extends AuthFieldErrors = AuthFieldErrors> {
   readonly code: TCode
   readonly message: string
   readonly status: number
@@ -93,7 +93,7 @@ export interface AuthSuccessResult<TData> {
 }
 
 export interface AuthFailureResult<
-  TCode extends AuthErrorCode = AuthErrorCode,
+  TCode extends string = AuthErrorCode,
   TFields extends AuthFieldErrors = AuthFieldErrors,
 > {
   readonly data: null
@@ -102,7 +102,7 @@ export interface AuthFailureResult<
 
 export type AuthResult<
   TData,
-  TCode extends AuthErrorCode = AuthErrorCode,
+  TCode extends string = AuthErrorCode,
   TFields extends AuthFieldErrors = AuthFieldErrors,
 >
   = AuthSuccessResult<TData>
@@ -179,13 +179,19 @@ type AuthGuardFacadeForDriver<TDriver extends AuthGuardDriverName> = TDriver ext
 
 export type AuthGuardFacadeFor<TName extends string> = AuthGuardFacadeForDriver<RegisteredAuthGuardDriver<TName>>
 
-export type AuthUser = HoloAuthTypeRegistry extends {
+type RegisteredAuthUser = HoloAuthTypeRegistry extends {
   readonly user: infer TUser
 }
   ? TUser extends AuthUserLike
     ? TUser
     : AuthUserLike
-  : AuthUserLike
+  : never
+
+type RegisteredAuthUserOrFallback = [RegisteredAuthUser] extends [never]
+  ? AuthUserLike
+  : RegisteredAuthUser
+
+export type AuthUser = RegisteredAuthUserOrFallback
 
 export type AuthenticatedAuthUser = AuthUser & AuthAuthorizable
 
@@ -334,7 +340,7 @@ type AuthProviderAdapterBase<TUser> = {
 }
 
 export type AuthProviderAdapter<TUser = AuthUser> = AuthProviderAdapterBase<TUser> & (
-  TUser extends AuthUser
+  [TUser] extends [RegisteredAuthUser]
     ? {
         serialize?(user: TUser): AuthUser
       }

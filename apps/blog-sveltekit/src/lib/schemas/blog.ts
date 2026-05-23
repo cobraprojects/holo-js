@@ -8,3 +8,7 @@ export const postForm = schema({
   categoryId: field.string().optional(),
   tagIds: field.array(field.number()).default([]),
 })
+
+export const tagForm = schema({
+  name: field.string().required('Tag name is required.'),
+})

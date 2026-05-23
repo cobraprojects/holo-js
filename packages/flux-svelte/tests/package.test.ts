@@ -98,6 +98,7 @@ describe('@holo-js/flux-svelte package surface', () => {
     const unmounts: Array<() => void> = []
     const here: unknown[] = []
     const statusChanges: string[] = []
+    const statusReads: string[] = []
 
     const presence = useFluxPresence('chat.1', {
       onHere(members) {
@@ -117,9 +118,17 @@ describe('@holo-js/flux-svelte package surface', () => {
     expect('update' in presence.members).toBe(false)
     debug.updatePresenceMembers('chat.1', [{ id: 'user_1' }, { id: 'user_2' }])
     expect(get(presence.members)).toEqual([{ id: 'user_1' }, { id: 'user_2' }])
+    expect(here.at(-1)).toEqual([{ id: 'user_1' }, { id: 'user_2' }])
     presence.stopListening()
+    debug.updatePresenceMembers('chat.1', [{ id: 'muted' }])
+    expect(get(presence.members)).toEqual([{ id: 'user_1' }, { id: 'user_2' }])
+    expect(here.at(-1)).toEqual([{ id: 'user_1' }, { id: 'user_2' }])
     presence.listen()
-    expect(get(useFluxConnectionStatus({
+    expect(get(presence.members)).toEqual([{ id: 'muted' }])
+    debug.updatePresenceMembers('chat.1', [{ id: 'user_3' }])
+    expect(get(presence.members)).toEqual([{ id: 'user_3' }])
+    expect(here.at(-1)).toEqual([{ id: 'user_3' }])
+    const statusStore = useFluxConnectionStatus({
       client,
       onChange(status) {
         statusChanges.push(status)
@@ -127,14 +136,45 @@ describe('@holo-js/flux-svelte package surface', () => {
       onUnmount(cleanup) {
         unmounts.push(cleanup)
       },
-    }))).toBe('idle')
+    })
+    const unsubscribeStatus = statusStore.subscribe((status) => {
+      statusReads.push(status)
+    })
+    expect(statusReads).toEqual(['idle'])
     expect(get(useFluxConnectionStatus({ client }))).toBe('idle')
 
     await client.connect()
     await client.disconnect()
     expect(statusChanges).toEqual(['connecting', 'connected', 'disconnected'])
+    expect(statusReads).toEqual(['idle', 'connecting', 'connected', 'disconnected'])
+    unsubscribeStatus()
     unmounts.forEach(cleanup => cleanup())
     expect(debug.getJoinedChannels()).toEqual([])
+  })
+
+  it('removes connection status listeners when the store unsubscribes', async () => {
+    const client = createFluxClient({
+      connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+    })
+    const statusChanges: string[] = []
+    const statusReads: string[] = []
+    const unsubscribe = useFluxConnectionStatus({
+      client,
+      onChange(status) {
+        statusChanges.push(status)
+      },
+    }).subscribe((status) => {
+      statusReads.push(status)
+    })
+
+    expect(statusReads).toEqual(['idle'])
+    unsubscribe()
+
+    await client.connect()
+    await client.disconnect()
+
+    expect(statusChanges).toEqual([])
+    expect(statusReads).toEqual(['idle'])
   })
 
   it('registers cleanup through Svelte onDestroy when a component context is available', async () => {

@@ -5,6 +5,9 @@ const redisMock = vi.hoisted(() => {
     connect: 0,
     constructorArgs: [] as unknown[][],
     del: [] as string[][],
+    clusterDel: [] as Array<[number, string[]]>,
+    clusterNodes: [] as string[],
+    clusterScan: [] as Array<[number, string, string, string, string, number]>,
     disconnect: 0,
     multi: [] as Array<{
       zadd: Array<[string, number, string]>
@@ -19,7 +22,33 @@ const redisMock = vi.hoisted(() => {
   }
 
   const execResponses: Array<Array<[null, number]> | null> = []
+  const clusterScanResponses: Array<Array<[string, string[]]>> = []
   const scanResponses: Array<[string, string[]]> = []
+  let clusterNodeCount = 2
+
+  class FakeRedisClusterNode {
+    constructor(private readonly index: number) {}
+
+    async scan(
+      cursor: string,
+      matchLabel: string,
+      pattern: string,
+      countLabel: string,
+      count: number,
+    ): Promise<[string, string[]]> {
+      calls.clusterScan.push([this.index, cursor, matchLabel, pattern, countLabel, count])
+      return clusterScanResponses[this.index]?.shift() ?? ['0', []]
+    }
+
+    async del(...keys: string[]): Promise<number> {
+      calls.clusterDel.push([this.index, keys])
+      if (keys.length > 1) {
+        throw new Error('CROSSSLOT Keys in request do not hash to the same slot')
+      }
+
+      return keys.length
+    }
+  }
 
   class FakeRedis {
     static Cluster = class FakeRedisCluster {
@@ -47,6 +76,11 @@ const redisMock = vi.hoisted(() => {
         count: number,
       ): Promise<[string, string[]]> {
         return new FakeRedis().scan(cursor, matchLabel, pattern, countLabel, count)
+      }
+
+      nodes(role: 'master') {
+        calls.clusterNodes.push(role)
+        return Array.from({ length: clusterNodeCount }, (_, index) => new FakeRedisClusterNode(index))
       }
 
       async pexpireat(key: string, timestampMs: number): Promise<number> {
@@ -156,9 +190,16 @@ const redisMock = vi.hoisted(() => {
 
   return {
     calls,
+    clusterScanResponses,
     execResponses,
     FakeRedis,
+    get clusterNodeCount() {
+      return clusterNodeCount
+    },
     scanResponses,
+    set clusterNodeCount(value: number) {
+      clusterNodeCount = value
+    },
   }
 })
 
@@ -173,12 +214,17 @@ describe('security redis adapter', () => {
     redisMock.calls.connect = 0
     redisMock.calls.constructorArgs.length = 0
     redisMock.calls.del.length = 0
+    redisMock.calls.clusterDel.length = 0
+    redisMock.calls.clusterNodes.length = 0
+    redisMock.calls.clusterScan.length = 0
     redisMock.calls.disconnect = 0
     redisMock.calls.multi.length = 0
     redisMock.calls.pexpireat.length = 0
     redisMock.calls.quit = 0
     redisMock.calls.quitFailures = 0
     redisMock.calls.scan.length = 0
+    redisMock.clusterNodeCount = 2
+    redisMock.clusterScanResponses.length = 0
     redisMock.execResponses.length = 0
     redisMock.scanResponses.length = 0
   })
@@ -314,6 +360,56 @@ describe('security redis adapter', () => {
         },
       },
     ]])
+  })
+
+  it('clears redis cluster keys from every primary node without cross-slot del', async () => {
+    const adapter = createSecurityRedisAdapter({
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      connection: 'default',
+      prefix: 'holo:rate-limit:',
+      clusters: [
+        {
+          host: 'cache-a.internal',
+          port: 6379,
+        },
+        {
+          host: 'cache-b.internal',
+          port: 6379,
+        },
+      ],
+    })
+
+    redisMock.clusterScanResponses.push([
+      ['13', [
+        'holo:rate-limit:bucket:{slot-a}',
+        'holo:rate-limit:bucket:{slot-b}',
+      ]],
+      ['0', [
+        'holo:rate-limit:bucket:{slot-c}',
+      ]],
+    ])
+    redisMock.clusterScanResponses.push([
+      ['0', [
+        'holo:rate-limit:bucket:{slot-d}',
+      ]],
+    ])
+
+    await expect(adapter.clearAll()).resolves.toBe(4)
+
+    expect(redisMock.calls.clusterNodes).toEqual(['master'])
+    expect(redisMock.calls.clusterScan).toEqual([
+      [0, '0', 'MATCH', 'holo:rate-limit:*', 'COUNT', 100],
+      [0, '13', 'MATCH', 'holo:rate-limit:*', 'COUNT', 100],
+      [1, '0', 'MATCH', 'holo:rate-limit:*', 'COUNT', 100],
+    ])
+    expect(redisMock.calls.clusterDel).toEqual([
+      [0, ['holo:rate-limit:bucket:{slot-a}']],
+      [0, ['holo:rate-limit:bucket:{slot-b}']],
+      [0, ['holo:rate-limit:bucket:{slot-c}']],
+      [1, ['holo:rate-limit:bucket:{slot-d}']],
+    ])
   })
 
   it('preserves the configured redis db for socket-style connections', async () => {

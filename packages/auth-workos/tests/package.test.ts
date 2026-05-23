@@ -474,7 +474,7 @@ describe('@holo-js/auth-workos', () => {
       return workosAuth.completeWorkosAuth(new Request('https://app.test/callback'))
     }
     type CompleteWorkosAuthReturn = Awaited<ReturnType<typeof defaultCompleteAuthResult>>
-    type CompleteWorkosAuthSuccess = Extract<CompleteWorkosAuthReturn, { readonly ok: true }>
+    type CompleteWorkosAuthSuccess = Extract<CompleteWorkosAuthReturn, { readonly error: null }>['data']
     type CompleteWorkosAuthSessionOptional = IsOptionalProperty<CompleteWorkosAuthSuccess, 'authSession'>
     type WorkosAuthenticationSessionOptional = IsOptionalProperty<WorkosAuthenticationResult, 'authSession'>
     type _CompleteAuthSessionOptionalityMatches = AssertExtends<
@@ -507,7 +507,7 @@ describe('@holo-js/auth-workos', () => {
         }),
       })
     }
-    type MappedCompleteAuthSuccess = Extract<Awaited<ReturnType<typeof mappedCompleteAuthResult>>, { readonly ok: true }>
+    type MappedCompleteAuthSuccess = Extract<Awaited<ReturnType<typeof mappedCompleteAuthResult>>, { readonly error: null }>['data']
     expectTypeOf<MappedCompleteAuthSuccess['user']['timezone']>().toEqualTypeOf<string>()
     expectTypeOf<MappedCompleteAuthSuccess['user']['email']>().toEqualTypeOf<string>()
 
@@ -1101,28 +1101,30 @@ describe('@holo-js/auth-workos', () => {
     })
 
     expect(result).toMatchObject({
-      ok: true,
-      provider: 'dashboard',
-      guard: 'web',
-      authProvider: 'users',
-      status: 'created',
-      user: {
-        email: 'callback@app.test',
-        name: 'Callback User',
-        avatar: 'https://cdn.test/callback.png',
-        timezone: 'Africa/Cairo',
-      },
-      identity: {
+      data: {
         provider: 'dashboard',
-        providerUserId: 'workos_callback',
-        email: 'callback@app.test',
+        guard: 'web',
+        authProvider: 'users',
+        status: 'created',
+        user: {
+          email: 'callback@app.test',
+          name: 'Callback User',
+          avatar: 'https://cdn.test/callback.png',
+          timezone: 'Africa/Cairo',
+        },
+        identity: {
+          provider: 'dashboard',
+          providerUserId: 'workos_callback',
+          email: 'callback@app.test',
+        },
+        session: {
+          sessionId: 'session_workos_callback',
+          accessToken,
+        },
       },
-      session: {
-        sessionId: 'session_workos_callback',
-        accessToken,
-      },
+      error: null,
     })
-    expect(result.ok ? result.authSession?.cookies : []).toContainEqual(expect.stringContaining('holo_workos_dashboard_state=;'))
+    expect(result.data?.authSession?.cookies ?? []).toContainEqual(expect.stringContaining('holo_workos_dashboard_state=;'))
     await expect(provider()).resolves.toBe('workos')
     expect(runtime.usersProvider.users.get(1)).toMatchObject({
       email: 'callback@app.test',
@@ -1150,43 +1152,47 @@ describe('@holo-js/auth-workos', () => {
     }))
 
     const callback = await completeWorkosAuth(await createWorkosCallbackRequest())
-    expect(callback.ok).toBe(true)
-    if (!callback.ok || !callback.authSession) {
+    expect(callback.error).toBeNull()
+    if (!callback.data?.authSession) {
       throw new Error('Expected WorkOS callback to establish an auth session.')
     }
-    const sessionCookie = callback.authSession.cookies[0]?.split(';', 1)[0]
+    const sessionCookie = callback.data.authSession.cookies[0]?.split(';', 1)[0]
 
     authRuntimeInternals.getRuntimeBindings().context.setSessionId('web')
     authRuntimeInternals.getRuntimeBindings().context.setCachedUser('web', null)
 
-    const result = await logoutWithWorkos(new Request('https://app.test/api/auth/workos/logout', {
+    const { data, error } = await logoutWithWorkos(new Request('https://app.test/api/auth/workos/logout', {
       method: 'POST',
       headers: sessionCookie ? { cookie: sessionCookie } : undefined,
     }))
 
-    expect(result).toMatchObject({
-      ok: true,
+    expect(data).toMatchObject({
       url: 'https://api.workos.com/user_management/sessions/logout?session_id=session_workos_logout',
       local: {
         guard: 'web',
       },
     })
-    expect(result.ok ? result.local.cookies : []).toContainEqual(expect.stringContaining('holo_session=;'))
+    expect(error).toBeNull()
+    expect(data?.local.cookies ?? []).toContainEqual(expect.stringContaining('holo_session=;'))
   })
 
   it('returns typed callback failures without combining response behavior', async () => {
     configureRuntime()
 
-    await expect(completeWorkosAuth(new Request('https://app.test/api/auth/workos/callback'))).resolves.toEqual({
-      ok: false,
-      code: 'workos_code_required',
-      message: 'WorkOS callback did not include an authorization code.',
+    await expect(completeWorkosAuth(new Request('https://app.test/api/auth/workos/callback'))).resolves.toMatchObject({
+      data: null,
+      error: {
+        code: 'workos_code_required',
+        message: 'WorkOS callback did not include an authorization code.',
+      },
     })
 
-    await expect(completeWorkosAuth(new Request('https://app.test/api/auth/workos/callback?error=access_denied&error_description=Denied'))).resolves.toEqual({
-      ok: false,
-      code: 'access_denied',
-      message: 'Denied',
+    await expect(completeWorkosAuth(new Request('https://app.test/api/auth/workos/callback?error=access_denied&error_description=Denied'))).resolves.toMatchObject({
+      data: null,
+      error: {
+        code: 'access_denied',
+        message: 'Denied',
+      },
     })
   })
 
@@ -1195,20 +1201,24 @@ describe('@holo-js/auth-workos', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(completeWorkosAuth(new Request('https://app.test/api/auth/workos/callback?code=code_123'))).resolves.toEqual({
-      ok: false,
-      code: 'workos_state_mismatch',
-      message: 'WorkOS callback state did not match the login request.',
+    await expect(completeWorkosAuth(new Request('https://app.test/api/auth/workos/callback?code=code_123'))).resolves.toMatchObject({
+      data: null,
+      error: {
+        code: 'workos_state_mismatch',
+        message: 'WorkOS callback state did not match the login request.',
+      },
     })
 
     await expect(completeWorkosAuth(new Request('https://app.test/api/auth/workos/callback?code=code_123&state=callback-state', {
       headers: {
         cookie: 'holo_workos_dashboard_state=login-state',
       },
-    }))).resolves.toEqual({
-      ok: false,
-      code: 'workos_state_mismatch',
-      message: 'WorkOS callback state did not match the login request.',
+    }))).resolves.toMatchObject({
+      data: null,
+      error: {
+        code: 'workos_state_mismatch',
+        message: 'WorkOS callback state did not match the login request.',
+      },
     })
     expect(fetchMock).not.toHaveBeenCalled()
   })
@@ -1651,6 +1661,14 @@ describe('@holo-js/auth-workos', () => {
         authorization: 'Bearer token',
       },
     }))).rejects.toThrow('WorkOS auth runtime is not configured yet')
+    const logoutResult = await logoutWithWorkos(new Request('https://app.test/api/auth/workos/logout', {
+      method: 'POST',
+    }))
+    expect(logoutResult.data).toBeNull()
+    expect(logoutResult.error).toMatchObject({
+      code: 'workos_session_missing',
+      message: 'The current Holo session was not created by WorkOS.',
+    })
 
     resetWorkosAuthRuntime()
     resetAuthRuntime()
@@ -1661,5 +1679,18 @@ describe('@holo-js/auth-workos', () => {
     })
 
     await expect(verifySession('token')).rejects.toThrow('is not configured in auth.workos')
+    await expect(logoutWithWorkos(new Request('https://app.test/api/auth/workos/logout', {
+      method: 'POST',
+    }))).resolves.toEqual({
+      data: null,
+      error: {
+        code: 'workos_logout_failed',
+        message: 'Unable to complete WorkOS logout.',
+        status: 500,
+        fields: {
+          _root: ['Unable to complete WorkOS logout.'],
+        },
+      },
+    })
   })
 })

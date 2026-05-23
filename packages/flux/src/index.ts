@@ -64,6 +64,15 @@ export interface FluxPresenceState<TMember = unknown> {
   readonly members: readonly TMember[]
 }
 
+export interface FluxPresenceListenerControls<
+  TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest,
+  TChannel extends string = string,
+> {
+  here(callback: (members: readonly ManifestPresenceMember<TManifest, TChannel>[]) => void): FluxPresenceSubscription<TManifest, TChannel>
+  joining(callback: (member: ManifestPresenceMember<TManifest, TChannel>) => void): FluxPresenceSubscription<TManifest, TChannel>
+  leaving(callback: (member: ManifestPresenceMember<TManifest, TChannel>) => void): FluxPresenceSubscription<TManifest, TChannel>
+}
+
 export interface FluxConnectionControls {
   connect(): Promise<void>
   disconnect(): Promise<void>
@@ -115,7 +124,9 @@ export interface FluxSubscription<
 export interface FluxPresenceSubscription<
   TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest,
   TChannel extends string = string,
-> extends FluxSubscription<TManifest, TChannel>, FluxPresenceState<ManifestPresenceMember<TManifest, TChannel>> {}
+> extends FluxSubscription<TManifest, TChannel>,
+    FluxPresenceState<ManifestPresenceMember<TManifest, TChannel>>,
+    FluxPresenceListenerControls<TManifest, TChannel> {}
 
 export interface FluxClient<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest> extends FluxConnectionControls {
   readonly options: Readonly<FluxClientOptions<TManifest>>
@@ -166,6 +177,54 @@ function normalizeRequiredString(value: string, label: string): string {
 
 function toReadonlyArray<T>(value: T | readonly T[]): readonly T[] {
   return (Array.isArray(value) ? [...value] : [value]) as readonly T[]
+}
+
+function presenceMemberKey(member: BroadcastJsonObject): string {
+  return JSON.stringify(member) ?? String(member)
+}
+
+function presenceMemberDiff(
+  previousMembers: readonly BroadcastJsonObject[],
+  nextMembers: readonly BroadcastJsonObject[],
+): {
+  readonly joining: readonly BroadcastJsonObject[]
+  readonly leaving: readonly BroadcastJsonObject[]
+} {
+  const previousCounts = new Map<string, number>()
+  const nextCounts = new Map<string, number>()
+
+  for (const member of previousMembers) {
+    const key = presenceMemberKey(member)
+    previousCounts.set(key, (previousCounts.get(key) ?? 0) + 1)
+  }
+
+  for (const member of nextMembers) {
+    const key = presenceMemberKey(member)
+    nextCounts.set(key, (nextCounts.get(key) ?? 0) + 1)
+  }
+
+  const joining = nextMembers.filter((member) => {
+    const key = presenceMemberKey(member)
+    const previousCount = previousCounts.get(key) ?? 0
+    if (previousCount > 0) {
+      previousCounts.set(key, previousCount - 1)
+      return false
+    }
+
+    return true
+  })
+  const leaving = previousMembers.filter((member) => {
+    const key = presenceMemberKey(member)
+    const nextCount = nextCounts.get(key) ?? 0
+    if (nextCount > 0) {
+      nextCounts.set(key, nextCount - 1)
+      return false
+    }
+
+    return true
+  })
+
+  return { joining, leaving }
 }
 
 function addCallback(map: CallbackMap, event: string, callback: (payload: BroadcastJsonObject) => void): () => void {
@@ -452,8 +511,8 @@ function createSubscription<
     registeredSubscriptions.delete(leaveChannel)
     if (registeredSubscriptions.size === 0) {
       registry.delete(registryKey)
+      connectorChannel.leave()
     }
-    connectorChannel.leave()
   }
 
   const leaveRelated = () => {
@@ -497,7 +556,12 @@ function createSubscription<
       return connectorChannel.members
     },
     __onPresenceChange(callback: (members: readonly BroadcastJsonObject[]) => void) {
-      return connectorChannel.onMembersChange(callback)
+      const stop = connectorChannel.onMembersChange(callback)
+      detachCallbacks.add(stop)
+      return () => {
+        detachCallbacks.delete(stop)
+        stop()
+      }
     },
   } satisfies FluxSubscription<TManifest, TChannel> & {
     readonly __presenceMembers: () => readonly BroadcastJsonObject[]
@@ -516,12 +580,85 @@ function createPresenceSubscription<
   registry: SubscriptionRegistry,
 ): FluxPresenceSubscription<TManifest, TChannel> {
   const base = createSubscription<TManifest, TChannel>(name, 'presence', connector, registry)
-  return Object.freeze({
-    ...base,
+  type TMember = ManifestPresenceMember<TManifest, TChannel>
+  const joiningCallbacks = new Set<(member: TMember) => void>()
+  const leavingCallbacks = new Set<(member: TMember) => void>()
+  let active = true
+  let previousMembers = base.__presenceMembers()
+  const stopPresenceChanges = base.__onPresenceChange((nextMembers) => {
+    if (!active) {
+      previousMembers = nextMembers
+      return
+    }
+
+    const diff = presenceMemberDiff(previousMembers, nextMembers)
+    previousMembers = nextMembers
+    for (const member of diff.joining) {
+      for (const callback of joiningCallbacks) {
+        callback(member as TMember)
+      }
+    }
+    for (const member of diff.leaving) {
+      for (const callback of leavingCallbacks) {
+        callback(member as TMember)
+      }
+    }
+  })
+  const stopPresenceSubscription = () => {
+    active = false
+    joiningCallbacks.clear()
+    leavingCallbacks.clear()
+    stopPresenceChanges()
+  }
+  const subscription: FluxPresenceSubscription<TManifest, TChannel> = Object.freeze({
+    name: base.name,
+    type: base.type,
     get members() {
-      return base.__presenceMembers() as readonly ManifestPresenceMember<TManifest, TChannel>[]
+      return base.__presenceMembers() as readonly TMember[]
     },
-  }) as FluxPresenceSubscription<TManifest, TChannel>
+    here(callback: (members: readonly TMember[]) => void) {
+      callback(subscription.members)
+      return subscription
+    },
+    joining(callback: (member: TMember) => void) {
+      joiningCallbacks.add(callback)
+      return subscription
+    },
+    leaving(callback: (member: TMember) => void) {
+      leavingCallbacks.add(callback)
+      return subscription
+    },
+    leaveChannel() {
+      stopPresenceSubscription()
+      base.leaveChannel()
+    },
+    leave() {
+      stopPresenceSubscription()
+      base.leave()
+    },
+    stopListening() {
+      active = false
+      base.stopListening()
+    },
+    listen<TEvent extends ManifestSubscriptionEventName<TManifest, TChannel>>(
+      event?: TEvent | readonly TEvent[],
+      callback?: (payload: BroadcastJsonObject) => void,
+    ) {
+      active = true
+      base.listen(event, callback)
+      return subscription
+    },
+    notification(callback: (payload: BroadcastJsonObject) => void) {
+      return base.notification(callback) as FluxPresenceSubscription<TManifest, TChannel>
+    },
+    listenForWhisper(name: string, callback: (payload: BroadcastJsonObject) => void) {
+      return base.listenForWhisper(name, callback) as FluxPresenceSubscription<TManifest, TChannel>
+    },
+    async whisper(name: string, payload: BroadcastJsonObject) {
+      await base.whisper(name, payload)
+    },
+  })
+  return subscription
 }
 
 export function createFluxClient<const TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(

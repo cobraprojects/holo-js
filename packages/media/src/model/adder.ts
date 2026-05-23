@@ -343,7 +343,7 @@ async function resolveNextOrderColumn(
 
 async function deleteMediaItemsWithRollback(
   items: readonly MediaItem[],
-): Promise<void> {
+): Promise<DeletedMediaSnapshot[]> {
   const deletedSnapshots: DeletedMediaSnapshot[] = []
 
   try {
@@ -353,24 +353,23 @@ async function deleteMediaItemsWithRollback(
       deletedSnapshots.push(snapshot)
     }
   } catch (error) {
-    for (const snapshot of deletedSnapshots.reverse()) {
-      /* v8 ignore next -- rollback cleanup failures are intentionally swallowed. */
-      await restoreDeletedMediaSnapshot(snapshot).catch(() => undefined)
-    }
+    await restoreDeletedMediaSnapshots(deletedSnapshots)
 
     throw error
   }
+
+  return deletedSnapshots
 }
 
 async function deleteOverflowItems(
   items: readonly MediaItem[],
   limit: number,
-): Promise<void> {
+): Promise<DeletedMediaSnapshot[]> {
   if (items.length <= limit) {
-    return
+    return []
   }
 
-  await deleteMediaItemsWithRollback(items.slice(0, items.length - limit))
+  return await deleteMediaItemsWithRollback(items.slice(0, items.length - limit))
 }
 
 async function cleanupGeneratedConversions(
@@ -454,6 +453,15 @@ async function restoreDeletedMediaSnapshot(snapshot: DeletedMediaSnapshot): Prom
   await Media.create(snapshot.record as Partial<MediaRecord>)
 }
 
+async function restoreDeletedMediaSnapshots(
+  snapshots: DeletedMediaSnapshot[],
+): Promise<void> {
+  for (const snapshot of snapshots.reverse()) {
+    /* v8 ignore next -- rollback cleanup failures are intentionally swallowed. */
+    await restoreDeletedMediaSnapshot(snapshot).catch(() => undefined)
+  }
+}
+
 export class MediaAdder<
   TEntity extends Entity<TableDefinition> = Entity<TableDefinition>,
   TCollectionName extends string = string,
@@ -532,6 +540,7 @@ export class MediaAdder<
     let originalStored = false
     let createdMedia: Entity<MediaTable> | undefined
     let generatedConversions = Object.freeze({}) as GeneratedMediaConversions
+    const deletedMediaSnapshots: DeletedMediaSnapshot[] = []
 
     try {
       await Storage.disk(diskName).put(originalPath, source.contents)
@@ -581,11 +590,11 @@ export class MediaAdder<
 
       this.entity.forgetRelation('media')
 
-      await deleteMediaItemsWithRollback(existing)
+      deletedMediaSnapshots.push(...await deleteMediaItemsWithRollback(existing))
 
       if (typeof collection.onlyKeepLatest === 'number') {
         const items = await (this.entity as MediaCapableEntity).getMedia(collectionName)
-        await deleteOverflowItems(items, collection.onlyKeepLatest)
+        deletedMediaSnapshots.push(...await deleteOverflowItems(items, collection.onlyKeepLatest))
       }
 
       const queuedConversions = resolveQueuedConversionNames({
@@ -617,6 +626,8 @@ export class MediaAdder<
         /* v8 ignore next -- media-row cleanup failures are intentionally swallowed. */
         await createdMedia.delete().catch(() => undefined)
       }
+
+      await restoreDeletedMediaSnapshots(deletedMediaSnapshots)
       this.entity.forgetRelation('media')
 
       throw error

@@ -10,8 +10,12 @@ export type {
   ClerkAuthFacade,
   ClerkAuthenticatedUser,
   ClerkAuthenticationResult,
+  ClerkCompleteAuthData,
   ClerkCompleteAuthResult,
   ClerkEmailAddress,
+  ClerkHostedAuthFailureFields,
+  ClerkLogoutData,
+  ClerkLogoutErrorCode,
   ClerkLogoutResult,
   ClerkLogoutSession,
   ClerkProviderRuntime,
@@ -47,6 +51,7 @@ import {
   type ClerkVerifySessionContext,
   type ConfigureClerkAuthRuntimeOptions,
   type HostedIdentityRecord,
+  type HostedIdentityStore,
 } from './contracts'
 import {
   CLERK_API_BASE_URL,
@@ -92,6 +97,7 @@ type ClerkRuntimeStateHost = {
 }
 
 const clerkDefaultProviderRuntimeCache = new Map<string, ClerkProviderRuntime>()
+const clerkIdentitySyncLocks = new Map<string, Promise<void>>()
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
 
 function getRuntimeState(): ClerkRuntimeState {
@@ -454,7 +460,7 @@ function resolveConfiguredProviderName(provider?: string): string {
   }
 
   const configuredProviders = Object.entries(bindings.config.clerk).flatMap(([name, value]) => (
-    name !== 'provider' && typeof value === 'object' && value !== null
+    name !== 'provider' && name !== 'identityStore' && isNormalizedClerkProviderConfig(value)
       ? [name]
       : []
   ))
@@ -473,13 +479,22 @@ function resolveConfiguredProviderName(provider?: string): string {
   throw new Error('[@holo-js/auth-clerk] Clerk provider name is required when multiple auth.clerk entries exist.')
 }
 
+function isNormalizedClerkProviderConfig(value: unknown): value is NormalizedAuthClerkProviderConfig {
+  return value !== null
+    && typeof value === 'object'
+    && 'sessionCookie' in value
+    && typeof (value as { sessionCookie?: unknown }).sessionCookie === 'string'
+    && 'authorizedParties' in value
+    && Array.isArray((value as { authorizedParties?: unknown }).authorizedParties)
+}
+
 function getConfiguredProviderConfig(provider?: string): {
   readonly name: string
 } & NormalizedAuthClerkProviderConfig {
   const providerName = resolveConfiguredProviderName(provider)
   const authBindings = authRuntimeInternals.getRuntimeBindings()
   const configured = authBindings.config.clerk[providerName]
-  if (!configured || typeof configured !== 'object') {
+  if (!isNormalizedClerkProviderConfig(configured)) {
     throw new Error(`[@holo-js/auth-clerk] Clerk provider "${providerName}" is not configured in auth.clerk.`)
   }
 
@@ -954,6 +969,67 @@ function createIdentityRecord(input: {
   })
 }
 
+async function withIdentitySyncLock<TResult>(key: string, callback: () => Promise<TResult>): Promise<TResult> {
+  const previous = clerkIdentitySyncLocks.get(key) ?? Promise.resolve()
+  let release: () => void = () => {}
+  const current = previous.then(() => new Promise<void>((resolve) => {
+    release = resolve
+  }))
+  clerkIdentitySyncLocks.set(key, current)
+
+  await previous
+
+  try {
+    return await callback()
+  } finally {
+    release()
+    if (clerkIdentitySyncLocks.get(key) === current) {
+      clerkIdentitySyncLocks.delete(key)
+    }
+  }
+}
+
+async function claimNewIdentity(
+  identityStore: HostedIdentityStore,
+  identity: HostedIdentityRecord,
+): Promise<HostedIdentityRecord> {
+  if (identityStore.claim) {
+    return await identityStore.claim(identity)
+  }
+
+  await identityStore.save(identity)
+  return identity
+}
+
+function sameUserId(left: string | number, right: string | number): boolean {
+  return String(left) === String(right)
+}
+
+async function resolveClaimedIdentityUser(
+  adapter: RuntimeAuthProviderAdapter,
+  identity: HostedIdentityRecord,
+  fallback: {
+    readonly user: Record<string, unknown>
+    readonly userId: string | number
+    readonly deleteOnMismatch?: boolean
+  },
+): Promise<Record<string, unknown>> {
+  if (sameUserId(identity.userId, fallback.userId)) {
+    return fallback.user
+  }
+
+  const claimedUser = requireUserRecord(
+    await adapter.findById(identity.userId),
+    '[@holo-js/auth-clerk] Claimed Clerk identities must reference an existing local user.',
+  )
+
+  if (fallback.deleteOnMismatch && adapter.delete) {
+    await adapter.delete(fallback.userId)
+  }
+
+  return claimedUser
+}
+
 function getSessionTokenFromRequest(request: Request, sessionCookie: string): string | null {
   const authorization = request.headers.get('authorization')?.trim()
   if (authorization) {
@@ -1248,41 +1324,78 @@ export async function syncIdentity<TUserAttributes extends ClerkUserAttributes =
     throw new Error(`[@holo-js/auth-clerk] Clerk identity "${profile.id}" must provide a verified email address.`)
   }
 
-  const identityStore = getBindings().identityStore
-  const existingIdentity = await identityStore.findByProviderUserId(providerName, profile.id)
+  return await withIdentitySyncLock(`${providerName}:${profile.id}`, async () => {
+    const identityStore = getBindings().identityStore
+    const existingIdentity = await identityStore.findByProviderUserId(providerName, profile.id)
 
-  if (existingIdentity) {
-    const existingLinkedUser = await adapter.findById(existingIdentity.userId)
-    let linkedUser = existingLinkedUser
-      ? requireUserRecord(existingLinkedUser, '[@holo-js/auth-clerk] Auth provider lookups must return object users.')
-      : null
-
-    if (!linkedUser) {
-      linkedUser = verifiedEmail
-        ? await findUserByEmail(adapter, verifiedEmail)
+    if (existingIdentity) {
+      const existingLinkedUser = await adapter.findById(existingIdentity.userId)
+      let linkedUser = existingLinkedUser
+        ? requireUserRecord(existingLinkedUser, '[@holo-js/auth-clerk] Auth provider lookups must return object users.')
         : null
 
-      if (linkedUser) {
-        await assertUserLinkAvailable(providerName, authProvider, adapter, linkedUser, profile.id)
-      }
-
       if (!linkedUser) {
-        linkedUser = requireUserRecord(
-          await adapter.create(resolveCreateUserInput(profile, options.user)),
-          '[@holo-js/auth-clerk] Auth provider create() must return an object user.',
-        )
+        linkedUser = verifiedEmail
+          ? await findUserByEmail(adapter, verifiedEmail)
+          : null
+
+        if (linkedUser) {
+          await assertUserLinkAvailable(providerName, authProvider, adapter, linkedUser, profile.id)
+        }
+
+        if (!linkedUser) {
+          linkedUser = requireUserRecord(
+            await adapter.create(resolveCreateUserInput(profile, options.user)),
+            '[@holo-js/auth-clerk] Auth provider create() must return an object user.',
+          )
+        }
+
+        const relinked = await updateLocalUser(adapter, linkedUser, resolveUpdateUserInput(profile, options.user))
+        const relinkedUser = relinked.user
+        const identity = createIdentityRecord({
+          provider: providerName,
+          guard,
+          authProvider,
+          userId: requireUserId(
+            adapter,
+            relinkedUser,
+            '[@holo-js/auth-clerk] Relinked local users must expose a serializable id.',
+          ),
+          profile,
+          previous: existingIdentity,
+        })
+        await identityStore.save(identity)
+
+        return Object.freeze({
+          provider: providerName,
+          guard,
+          authProvider,
+          status: 'relinked',
+          user: serializeLocalUser<TUserAttributes>(adapter, relinkedUser, authProvider),
+          identity,
+          session,
+        })
       }
 
-      const relinked = await updateLocalUser(adapter, linkedUser, resolveUpdateUserInput(profile, options.user))
-      const relinkedUser = relinked.user
+      await ensureNoUnexpectedEmailCollision(
+        adapter,
+        providerName,
+        profile,
+        requireUserId(
+          adapter,
+          linkedUser,
+          '[@holo-js/auth-clerk] Linked local users must expose a serializable id.',
+        ),
+      )
+      const updated = await updateLocalUser(adapter, linkedUser, resolveUpdateUserInput(profile, options.user))
       const identity = createIdentityRecord({
         provider: providerName,
         guard,
         authProvider,
         userId: requireUserId(
           adapter,
-          relinkedUser,
-          '[@holo-js/auth-clerk] Relinked local users must expose a serializable id.',
+          updated.user,
+          '[@holo-js/auth-clerk] Updated local users must expose a serializable id.',
         ),
         profile,
         previous: existingIdentity,
@@ -1293,105 +1406,80 @@ export async function syncIdentity<TUserAttributes extends ClerkUserAttributes =
         provider: providerName,
         guard,
         authProvider,
-        status: 'relinked',
-        user: serializeLocalUser<TUserAttributes>(adapter, relinkedUser, authProvider),
+        status: updated.changed ? 'updated' : 'linked',
+        user: serializeLocalUser<TUserAttributes>(adapter, updated.user, authProvider),
         identity,
         session,
       })
     }
 
-    await ensureNoUnexpectedEmailCollision(
-      adapter,
-      providerName,
-      profile,
-      requireUserId(
-        adapter,
-        linkedUser,
-        '[@holo-js/auth-clerk] Linked local users must expose a serializable id.',
-      ),
+    let localUser = verifiedEmail
+      ? await findUserByEmail(adapter, verifiedEmail)
+      : null
+
+    if (localUser) {
+      await assertUserLinkAvailable(providerName, authProvider, adapter, localUser, profile.id)
+      const linked = await updateLocalUser(adapter, localUser, resolveUpdateUserInput(profile, options.user))
+      const identity = createIdentityRecord({
+        provider: providerName,
+        guard,
+        authProvider,
+        userId: requireUserId(
+          adapter,
+          linked.user,
+          '[@holo-js/auth-clerk] Linked local users must expose a serializable id.',
+        ),
+        profile,
+      })
+      const claimedIdentity = await claimNewIdentity(identityStore, identity)
+      const claimedUser = await resolveClaimedIdentityUser(adapter, claimedIdentity, {
+        user: linked.user,
+        userId: identity.userId,
+      })
+
+      return Object.freeze({
+        provider: providerName,
+        guard,
+        authProvider,
+        status: 'linked',
+        user: serializeLocalUser<TUserAttributes>(adapter, claimedUser, authProvider),
+        identity: claimedIdentity,
+        session,
+      })
+    }
+
+    localUser = requireUserRecord(
+      await adapter.create(resolveCreateUserInput(profile, options.user)),
+      '[@holo-js/auth-clerk] Auth provider create() must return an object user.',
     )
-    const updated = await updateLocalUser(adapter, linkedUser, resolveUpdateUserInput(profile, options.user))
     const identity = createIdentityRecord({
       provider: providerName,
       guard,
       authProvider,
       userId: requireUserId(
         adapter,
-        updated.user,
-        '[@holo-js/auth-clerk] Updated local users must expose a serializable id.',
+        localUser,
+        '[@holo-js/auth-clerk] Created local users must expose a serializable id.',
       ),
       profile,
-      previous: existingIdentity,
     })
-    await identityStore.save(identity)
+    const claimedIdentity = await claimNewIdentity(identityStore, identity)
+    const claimedUser = await resolveClaimedIdentityUser(adapter, claimedIdentity, {
+      user: localUser,
+      userId: identity.userId,
+      deleteOnMismatch: true,
+    })
+    const claimedStatus = sameUserId(claimedIdentity.userId, identity.userId) ? 'created' : 'linked'
 
     return Object.freeze({
       provider: providerName,
       guard,
       authProvider,
-      status: updated.changed ? 'updated' : 'linked',
-      user: serializeLocalUser<TUserAttributes>(adapter, updated.user, authProvider),
-      identity,
+      status: claimedStatus,
+      user: serializeLocalUser<TUserAttributes>(adapter, claimedUser, authProvider),
+      identity: claimedIdentity,
       session,
     })
-  }
-
-  let localUser = verifiedEmail
-    ? await findUserByEmail(adapter, verifiedEmail)
-    : null
-
-  if (localUser) {
-    await assertUserLinkAvailable(providerName, authProvider, adapter, localUser, profile.id)
-    const linked = await updateLocalUser(adapter, localUser, resolveUpdateUserInput(profile, options.user))
-    const identity = createIdentityRecord({
-      provider: providerName,
-      guard,
-      authProvider,
-      userId: requireUserId(
-        adapter,
-        linked.user,
-        '[@holo-js/auth-clerk] Linked local users must expose a serializable id.',
-      ),
-      profile,
-    })
-    await identityStore.save(identity)
-
-    return Object.freeze({
-      provider: providerName,
-      guard,
-      authProvider,
-      status: 'linked',
-      user: serializeLocalUser<TUserAttributes>(adapter, linked.user, authProvider),
-      identity,
-      session,
-    })
-  }
-
-  localUser = requireUserRecord(
-    await adapter.create(resolveCreateUserInput(profile, options.user)),
-    '[@holo-js/auth-clerk] Auth provider create() must return an object user.',
-  )
-  const identity = createIdentityRecord({
-    provider: providerName,
-    guard,
-    authProvider,
-    userId: requireUserId(
-      adapter,
-      localUser,
-      '[@holo-js/auth-clerk] Created local users must expose a serializable id.',
-    ),
-    profile,
-  })
-  await identityStore.save(identity)
-
-  return Object.freeze({
-    provider: providerName,
-    guard,
-    authProvider,
-    status: 'created',
-    user: serializeLocalUser<TUserAttributes>(adapter, localUser, authProvider),
-    identity,
-    session,
   })
 }
 
@@ -1417,6 +1505,27 @@ export async function authenticate(input: ClerkRequestInput, provider?: string):
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Clerk authentication failed.'
+}
+
+function createHostedAuthSuccess<TData>(data: TData) {
+  return Object.freeze({
+    data,
+    error: null,
+  } as const)
+}
+
+function createHostedAuthFailure<TCode extends string>(code: TCode, message: string, status: number) {
+  return Object.freeze({
+    data: null,
+    error: Object.freeze({
+      code,
+      message,
+      status,
+      fields: Object.freeze({
+        _root: Object.freeze([message]),
+      }),
+    }),
+  } as const)
 }
 
 export async function loginWithClerk(
@@ -1495,26 +1604,21 @@ export async function logoutWithClerk(
     }
     const clerkSession = await readCurrentClerkLogoutSession(guard, providerName)
     if (!clerkSession) {
-      return Object.freeze({
-        ok: false,
-        code: 'clerk_session_missing',
-        message: 'The current Holo session was not created by Clerk.',
-      } as const)
+      return createHostedAuthFailure(
+        'clerk_session_missing',
+        'The current Holo session was not created by Clerk.',
+        422,
+      )
     }
 
     await revokeClerkSession(providerConfig, clerkSession.sessionId)
     const local = await getAuthRuntime().guard(guard).logout()
-    return Object.freeze({
-      ok: true,
+    return createHostedAuthSuccess(Object.freeze({
       url: createClerkReturnUrl(request, options.returnTo),
       local,
-    } as const)
-  } catch (error) {
-    return Object.freeze({
-      ok: false,
-      code: 'clerk_logout_failed',
-      message: getErrorMessage(error),
-    } as const)
+    } as const))
+  } catch {
+    return createHostedAuthFailure('clerk_logout_failed', 'Unable to complete Clerk logout.', 500)
   }
 }
 
@@ -1527,21 +1631,21 @@ export async function completeClerkAuth<TUserAttributes extends ClerkUserAttribu
     const url = new URL(request.url)
     const callbackError = url.searchParams.get('error')?.trim()
     if (callbackError) {
-      return Object.freeze({
-        ok: false,
-        code: callbackError,
-        message: url.searchParams.get('error_description')?.trim() || 'Clerk authentication failed.',
-      } as const)
+      return createHostedAuthFailure(
+        callbackError,
+        url.searchParams.get('error_description')?.trim() || 'Clerk authentication failed.',
+        422,
+      )
     }
 
     const providerConfig = getConfiguredProviderConfig(options.provider)
     const session = await verifyRequest(request, providerConfig.name)
     if (!session) {
-      return Object.freeze({
-        ok: false,
-        code: 'clerk_session_required',
-        message: 'Clerk callback did not include an active session.',
-      } as const)
+      return createHostedAuthFailure(
+        'clerk_session_required',
+        'Clerk callback did not include an active session.',
+        422,
+      )
     }
 
     const authenticated = await syncIdentity(session, providerConfig.name, {
@@ -1553,8 +1657,7 @@ export async function completeClerkAuth<TUserAttributes extends ClerkUserAttribu
       payload: createClerkSessionPayload(authenticated, session),
     })
 
-    return Object.freeze({
-      ok: true,
+    return createHostedAuthSuccess(Object.freeze({
       provider: authenticated.provider,
       guard: authenticated.guard,
       authProvider: authenticated.authProvider,
@@ -1563,17 +1666,17 @@ export async function completeClerkAuth<TUserAttributes extends ClerkUserAttribu
       identity: authenticated.identity,
       session,
       authSession,
-    } as const)
+    } as const))
   } catch (error) {
     if (authRuntimeInternals.isResponseInterrupt(error)) {
       throw error
     }
 
-    return Object.freeze({
-      ok: false,
-      code: error instanceof ClerkAuthConflictError ? error.code : 'clerk_auth_failed',
-      message: getErrorMessage(error),
-    } as const)
+    return createHostedAuthFailure(
+      error instanceof ClerkAuthConflictError ? error.code : 'clerk_auth_failed',
+      getErrorMessage(error),
+      error instanceof ClerkAuthConflictError ? 409 : 422,
+    )
   }
 }
 

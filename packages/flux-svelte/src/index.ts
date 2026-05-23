@@ -5,7 +5,6 @@ import {
   type FluxClient,
   type FluxConnectionStatus,
   type FluxListenerControls,
-  type FluxSubscription,
 } from '@holo-js/flux'
 import type { BroadcastJsonObject, BroadcastPayloadFor, GeneratedBroadcastManifest } from '@holo-js/broadcast'
 
@@ -83,11 +82,33 @@ export type FluxPresenceHelperState<TMember = BroadcastJsonObject> = FluxListene
 type AnyFluxSubscription = ReturnType<FluxClient['channel']>
 type FluxPresenceSubscriptionWithChange<
   TManifest extends GeneratedBroadcastManifest,
-  TChannel extends string,
   TMember,
-> = FluxSubscription<TManifest, TChannel> & {
+> = ReturnType<FluxClient<TManifest>['presence']> & {
   readonly members: readonly TMember[]
-  __onPresenceChange?(callback: (members: readonly TMember[]) => void): () => void
+}
+
+function memberKey<TMember>(member: TMember): string {
+  return JSON.stringify(member) ?? String(member)
+}
+
+function appendPresenceMember<TMember>(
+  members: readonly TMember[],
+  member: TMember,
+): readonly TMember[] {
+  return Object.freeze([...members, member])
+}
+
+function removePresenceMember<TMember>(
+  members: readonly TMember[],
+  member: TMember,
+): readonly TMember[] {
+  const key = memberKey(member)
+  const index = members.findIndex(candidate => Object.is(candidate, member) || memberKey(candidate) === key)
+  if (index < 0) {
+    return members
+  }
+
+  return Object.freeze(members.filter((_, candidateIndex) => candidateIndex !== index))
 }
 
 function resolveClient<TManifest extends GeneratedBroadcastManifest = GeneratedBroadcastManifest>(
@@ -212,25 +233,73 @@ export function useFluxPresence<
   options: FluxHelperOptions<TManifest> = {},
 ): FluxPresenceHelperState<ManifestHelperPresenceMember<TMember, TManifest, TChannel>> {
   type TResolvedMember = ManifestHelperPresenceMember<TMember, TManifest, TChannel>
-  const subscription = resolveClient(options).presence(channel) as FluxPresenceSubscriptionWithChange<TManifest, TChannel, TResolvedMember>
-  callbacks.onHere?.(subscription.members)
-  const members = writable(subscription.members)
-  const stop = subscription.__onPresenceChange?.((nextMembers) => {
+  const subscription = resolveClient(options).presence(channel) as unknown as FluxPresenceSubscriptionWithChange<TManifest, TResolvedMember>
+  const members = writable<readonly TResolvedMember[]>(subscription.members)
+  let active = true
+  const updateMembers = (nextMembers: readonly TResolvedMember[]) => {
+    if (!active) {
+      return
+    }
+
     callbacks.onHere?.(nextMembers)
     members.set(nextMembers)
+  }
+  subscription.here((nextMembers) => {
+    updateMembers(nextMembers as readonly TResolvedMember[])
+  }).joining((member) => {
+    if (!active) {
+      return
+    }
+
+    let nextMembers: readonly TResolvedMember[] = []
+    members.update((currentMembers) => {
+      nextMembers = appendPresenceMember(currentMembers, member as TResolvedMember)
+      return nextMembers
+    })
+    callbacks.onHere?.(nextMembers)
+  }).leaving((member) => {
+    if (!active) {
+      return
+    }
+
+    let nextMembers: readonly TResolvedMember[] = []
+    members.update((currentMembers) => {
+      nextMembers = removePresenceMember(currentMembers, member as TResolvedMember)
+      return nextMembers
+    })
+    callbacks.onHere?.(nextMembers)
   })
 
   registerCleanup(options, () => {
-    stop?.()
+    active = false
     subscription.leaveChannel()
   })
 
-  return Object.freeze({
-    ...controlsFromSubscription(subscription),
+  const controls = controlsFromSubscription(subscription)
+  const state: FluxPresenceHelperState<TResolvedMember> = Object.freeze({
+    leave: () => {
+      active = false
+      controls.leave()
+    },
+    leaveChannel: () => {
+      active = false
+      controls.leaveChannel()
+    },
+    listen: () => {
+      active = true
+      controls.listen()
+      updateMembers(subscription.members)
+      return state
+    },
+    stopListening: () => {
+      active = false
+      controls.stopListening()
+    },
     members: {
       subscribe: members.subscribe,
     },
   })
+  return state
 }
 
 export function useFluxNotification<
@@ -265,17 +334,21 @@ export function useFluxConnectionStatus<TManifest extends GeneratedBroadcastMani
   options: FluxConnectionStatusHelperOptions<TManifest> = {},
 ): Readable<FluxConnectionStatus> {
   const client = resolveClient(options)
-  const status = writable(client.getStatus())
-  const unsubscribe = client.onStatusChange((nextStatus) => {
-    options.onChange?.(nextStatus)
-    status.set(nextStatus)
-  })
+  let unsubscribe: (() => void) | undefined
+  const cleanup = () => {
+    unsubscribe?.()
+    unsubscribe = undefined
+  }
 
-  registerCleanup(options, unsubscribe)
+  registerCleanup(options, cleanup)
   return readable(client.getStatus(), (set) => {
-    const stop = status.subscribe(set)
-    return () => {
-      stop()
-    }
+    set(client.getStatus())
+    cleanup()
+    unsubscribe = client.onStatusChange((nextStatus) => {
+      options.onChange?.(nextStatus)
+      set(nextStatus)
+    })
+
+    return cleanup
   })
 }

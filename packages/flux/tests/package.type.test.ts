@@ -78,6 +78,22 @@ describe('@holo-js/flux typing', () => {
       readonly id: 'user-1'
       readonly name: 'Ada'
     }[]>()
+    presenceSubscription.here((members) => {
+      expectTypeOf(members).toEqualTypeOf<readonly {
+        readonly id: 'user-1'
+        readonly name: 'Ada'
+      }[]>()
+    }).joining((member) => {
+      expectTypeOf(member).toEqualTypeOf<{
+        readonly id: 'user-1'
+        readonly name: 'Ada'
+      }>()
+    }).leaving((member) => {
+      expectTypeOf(member).toEqualTypeOf<{
+        readonly id: 'user-1'
+        readonly name: 'Ada'
+      }>()
+    })
 
     // @ts-expect-error not in manifest event names
     subscription.listen('orders.deleted', () => {})

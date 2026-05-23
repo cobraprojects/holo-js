@@ -11,6 +11,8 @@ import Admin from '../server/models/Admin.ts'
 import Post from '../server/models/Post.ts'
 import Tag from '../server/models/Tag.ts'
 import User from '../server/models/User.ts'
+import { actions as updateTagPageActions } from '../src/routes/admin/tags/[id]/edit/+page.server.ts'
+import { actions as createTagPageActions } from '../src/routes/admin/tags/+page.server.ts'
 import { actions as updatePostPageActions } from '../src/routes/admin/posts/[id]/edit/+page.server.ts'
 import { actions as createPostPageActions } from '../src/routes/admin/posts/new/+page.server.ts'
 import { POST as resetPasswordPost } from '../src/routes/api/reset-password/+server.ts'
@@ -78,6 +80,11 @@ function createApiRequest(path, fields) {
 function assertInvalidPostStatusFailure(result) {
   assert.equal(result.status, 400)
   assert.deepEqual(result.data?.errors?.status, ['Select a valid post status.'])
+}
+
+function assertInvalidTagNameFailure(result) {
+  assert.equal(result.status, 400)
+  assert.deepEqual(result.data?.errors?.name, ['Tag name is required.'])
 }
 
 async function expectRedirect(action) {
@@ -292,6 +299,22 @@ try {
   await updateTag(createdTag.id, { name: 'Deep Guides' })
   const updatedTag = await Tag.findOrFail(createdTag.id)
   assert.equal(updatedTag.slug, 'deep-guides')
+
+  assertInvalidTagNameFailure(await createTagPageActions.create({
+    request: createActionRequest({
+      name: '',
+    }),
+  }))
+  assert.equal(await Tag.where('slug', '').first(), undefined)
+
+  assertInvalidTagNameFailure(await updateTagPageActions.update({
+    params: { id: String(updatedTag.id) },
+    request: createActionRequest({
+      name: '',
+    }),
+  }))
+  const retainedTag = await Tag.findOrFail(updatedTag.id)
+  assert.equal(retainedTag.slug, 'deep-guides')
 
   const frameworkTag = await Tag.where('slug', 'framework').first()
   const releaseTag = await Tag.where('slug', 'release').first()

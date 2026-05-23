@@ -55,10 +55,10 @@ The callback completes the WorkOS code exchange, syncs or creates the local user
 import { completeWorkosAuth } from '@holo-js/auth-workos'
 
 export async function GET(request: Request) {
-  const result = await completeWorkosAuth(request)
+  const { error } = await completeWorkosAuth(request)
 
-  if (!result.ok) {
-    return Response.redirect(new URL(`/login?error=${result.code}`, request.url))
+  if (error) {
+    return Response.redirect(new URL(`/login?error=${error.code}`, request.url))
   }
 
   return Response.redirect(new URL('/admin', request.url))
@@ -72,10 +72,10 @@ import { completeWorkosAuth } from '@holo-js/auth-workos'
 import { sendRedirect } from 'h3'
 
 export default defineEventHandler(async (event) => {
-  const result = await completeWorkosAuth(event)
+  const { error } = await completeWorkosAuth(event)
 
-  if (!result.ok) {
-    return await sendRedirect(event, `/login?error=${result.code}`, 303)
+  if (error) {
+    return await sendRedirect(event, `/login?error=${error.code}`, 303)
   }
 
   return await sendRedirect(event, '/admin', 303)
@@ -93,13 +93,13 @@ export async function POST(request: Request) {
     return Response.redirect(new URL('/', request.url), 303)
   }
 
-  const result = await logoutWithWorkos(request)
+  const { data, error } = await logoutWithWorkos(request)
 
-  if (!result.ok) {
-    return Response.json(result, { status: 422 })
+  if (error) {
+    return Response.json({ data, error }, { status: error.status })
   }
 
-  return Response.redirect(result.url, 303)
+  return Response.redirect(data.url, 303)
 }
 ```
 
@@ -112,7 +112,7 @@ returns a typed failure because there is no WorkOS session to end upstream.
 `completeWorkosAuth()` passes a fully typed WorkOS user to the optional mapper. Return any local user attributes you want Holo to save on create, update, or link.
 
 ```ts
-const result = await completeWorkosAuth(request, {
+const { error } = await completeWorkosAuth(request, {
   user: (workosUser) => ({
     email: workosUser.email,
     name: workosUser.name,
@@ -126,3 +126,115 @@ const result = await completeWorkosAuth(request, {
 The normalized `workosUser` includes `name`, derived from `firstName` and `lastName`, falling back to email. It also exposes WorkOS fields such as `id`, `emailVerified`, `profilePictureUrl`, `organizationId`, `metadata`, and the raw WorkOS payload.
 
 If no mapper is provided, Holo saves `email` and `name` by default. If your mapper omits either field, Holo still fills the missing `email` or `name` before writing the local user.
+
+## Identity Store
+
+The default Holo runtime stores WorkOS links in `auth_identities`. Most apps should keep that default:
+
+```ts
+import { defineAuthConfig, env } from '@holo-js/config'
+
+export default defineAuthConfig({
+  workos: {
+    provider: env('AUTH_WORKOS_PROVIDER', 'dashboard'),
+    dashboard: {
+      clientId: env('WORKOS_CLIENT_ID'),
+      apiKey: env('WORKOS_API_KEY'),
+      redirectUri: env('WORKOS_REDIRECT_URI'),
+    },
+  },
+})
+```
+
+Add `identityStore` only when WorkOS identities live outside the default `auth_identities` table:
+
+```ts
+import { defineAuthConfig, env, type AuthHostedIdentityRecord, type AuthHostedIdentityStore } from '@holo-js/config'
+import { DB } from '@holo-js/db'
+
+type ExternalIdentityRow = {
+  provider: string
+  provider_user_id: string
+  guard: string
+  auth_provider: string
+  user_id: string
+  email: string | null
+  email_verified: boolean | number
+  profile: string | Readonly<Record<string, unknown>>
+  created_at: Date | string
+  updated_at: Date | string
+}
+
+function toHostedIdentity(row: ExternalIdentityRow): AuthHostedIdentityRecord {
+  return {
+    provider: row.provider,
+    providerUserId: row.provider_user_id,
+    guard: row.guard,
+    authProvider: row.auth_provider,
+    userId: row.user_id,
+    email: row.email ?? undefined,
+    emailVerified: row.email_verified === true || row.email_verified === 1,
+    profile: typeof row.profile === 'string' ? JSON.parse(row.profile) : row.profile,
+    linkedAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+  }
+}
+
+function toExternalIdentityRow(record: AuthHostedIdentityRecord) {
+  return {
+    provider: record.provider,
+    provider_user_id: record.providerUserId,
+    guard: record.guard,
+    auth_provider: record.authProvider,
+    user_id: String(record.userId),
+    email: record.email ?? null,
+    email_verified: record.emailVerified ? 1 : 0,
+    profile: JSON.stringify(record.profile),
+    created_at: record.linkedAt.toISOString(),
+    updated_at: record.updatedAt.toISOString(),
+  }
+}
+
+async function findExternalIdentity(provider: string, providerUserId: string) {
+  const row = await DB.table('external_identities')
+    .where('provider', provider)
+    .where('provider_user_id', providerUserId)
+    .first<ExternalIdentityRow>()
+
+  return row ? toHostedIdentity(row) : null
+}
+
+const externalIdentityStore = {
+  async findByProviderUserId(provider, providerUserId) {
+    return await findExternalIdentity(provider, providerUserId)
+  },
+  async findByUserId(provider, authProvider, userId) {
+    const row = await DB.table('external_identities')
+      .where('provider', provider)
+      .where('auth_provider', authProvider)
+      .where('user_id', String(userId))
+      .first<ExternalIdentityRow>()
+
+    return row ? toHostedIdentity(row) : null
+  },
+  async save(record) {
+    await DB.table('external_identities').insertOrIgnore(toExternalIdentityRow(record))
+    await DB.table('external_identities')
+      .where('provider', record.provider)
+      .where('provider_user_id', record.providerUserId)
+      .update(toExternalIdentityRow(record))
+  },
+} satisfies AuthHostedIdentityStore
+
+export default defineAuthConfig({
+  workos: {
+    provider: env('AUTH_WORKOS_PROVIDER', 'dashboard'),
+    identityStore: externalIdentityStore,
+    dashboard: {
+      clientId: env('WORKOS_CLIENT_ID'),
+      apiKey: env('WORKOS_API_KEY'),
+      redirectUri: env('WORKOS_REDIRECT_URI'),
+    },
+  },
+})
+```
