@@ -566,7 +566,7 @@ describe('sqlite schema compiler', () => {
     expect(statements[0]!.sql).toContain('"account_uuid" TEXT NOT NULL REFERENCES "accounts" ("uuid")')
     expect(statements[0]!.sql).toContain('"session_ulid" TEXT NOT NULL REFERENCES "sessions" ("id")')
     expect(statements[0]!.sql).toContain('"actor_snowflake" TEXT NOT NULL REFERENCES "actors" ("snowflake_id")')
-    expect(statements[1]!.sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "users_nickname_unique"')
+    expect(statements[1]!.sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "users_nickname_fxf0kt_unique"')
 
     expect(compiler.compile(dropTableOperation('users'))).toEqual([{
       sql: 'DROP TABLE IF EXISTS "users"',
@@ -607,7 +607,30 @@ describe('sqlite schema compiler', () => {
 
     const statements = compiler.compile(createTableOperation(posts))
     expect(statements[1]!.sql).toBe(
-      'CREATE INDEX IF NOT EXISTS "posts_title_index" ON "posts" ("title")',
+      'CREATE INDEX IF NOT EXISTS "posts_title_1b1lae3_index" ON "posts" ("title")',
+    )
+  })
+
+  it('derives collision-resistant index names for underscored column groups', () => {
+    const compiler = new SQLiteSchemaCompiler(identifier => `"${identifier}"`)
+    const first = defineTable('events', {
+      a: column.string(),
+      a_b: column.string(),
+      b_c: column.string(),
+      c: column.string(),
+    }, {
+      indexes: [
+        { columns: ['a_b', 'c'], unique: false },
+        { columns: ['a', 'b_c'], unique: false },
+      ],
+    })
+
+    const statements = compiler.compile(createTableOperation(first))
+    expect(statements[1]!.sql).toBe(
+      'CREATE INDEX IF NOT EXISTS "events_a_b_c_1ddsko2_index" ON "events" ("a_b", "c")',
+    )
+    expect(statements[2]!.sql).toBe(
+      'CREATE INDEX IF NOT EXISTS "events_a_b_c_1batapi_index" ON "events" ("a", "b_c")',
     )
   })
 
@@ -904,8 +927,8 @@ describe('multi-dialect schema compilers', () => {
     expect(sqliteCompiler.compile(createIndexOperation('users', {
       columns: ['email'],
       unique: true }))).toEqual([{
-      sql: 'CREATE UNIQUE INDEX IF NOT EXISTS "users_email_unique" ON "users" ("email")',
-      source: 'schema:createIndex:users:users_email_unique' }])
+      sql: 'CREATE UNIQUE INDEX IF NOT EXISTS "users_email_yfr781_unique" ON "users" ("email")',
+      source: 'schema:createIndex:users:users_email_yfr781_unique' }])
 
     expect(postgresCompiler.compile(createIndexOperation('public.users', {
       name: 'users_name_index',
@@ -924,8 +947,8 @@ describe('multi-dialect schema compilers', () => {
     expect(mysqlCompiler.compile(createIndexOperation('analytics.users', {
       columns: ['email'],
       unique: false }))).toEqual([{
-      sql: 'CREATE INDEX `analytics_users_email_index` ON `analytics`.`users` (`email`)',
-      source: 'schema:createIndex:analytics.users:analytics_users_email_index' }])
+      sql: 'CREATE INDEX `analytics_users_email_yfr781_index` ON `analytics`.`users` (`email`)',
+      source: 'schema:createIndex:analytics.users:analytics_users_email_yfr781_index' }])
 
     expect(mysqlCompiler.compile(dropIndexOperation('analytics.users', 'users_email_unique'))).toEqual([{
       sql: 'DROP INDEX `users_email_unique` ON `analytics`.`users`',
@@ -1219,8 +1242,8 @@ describe('schema service', () => {
     ) => string
 
     expect(resolveIndexName('users', { columns: ['email'], unique: true, name: 'users_email_unique' })).toBe('users_email_unique')
-    expect(resolveIndexName('users', { columns: ['email'], unique: true })).toBe('users_email_unique')
-    expect(resolveIndexName('users', { columns: ['display_name'], unique: false })).toBe('users_display_name_index')
+    expect(resolveIndexName('users', { columns: ['email'], unique: true })).toBe('users_email_yfr781_unique')
+    expect(resolveIndexName('users', { columns: ['display_name'], unique: false })).toBe('users_display_name_1mdvyy9_index')
   })
 
   it('renames indexes where the active dialect supports it and fails closed otherwise', async () => {
@@ -1666,7 +1689,7 @@ describe('schema service', () => {
     await schema.table('users', (table) => {
       table.renameColumn('nickname', 'display_name')
       table.renameIndex('users_email_unique', 'users_email_address_unique')
-      table.dropIndex('users_nickname_index')
+      table.dropIndex('users_nickname_fxf0kt_index')
     })
 
     const updated = registry.get('users')
@@ -1678,7 +1701,7 @@ describe('schema service', () => {
     expect(adapter.executed).toEqual([
       'ALTER TABLE "users" RENAME COLUMN "nickname" TO "display_name"',
       'ALTER INDEX "users_email_unique" RENAME TO "users_email_address_unique"',
-      'DROP INDEX IF EXISTS "users_nickname_index"',
+      'DROP INDEX IF EXISTS "users_nickname_fxf0kt_index"',
     ])
   })
 

@@ -401,7 +401,11 @@ function createFormDataRequestHeaders(requestHeaders: Headers): Headers {
 function resolveAmbientRequestUrl(headers: Headers): string {
   const referer = headers.get('referer')
   if (referer) {
-    return referer
+    try {
+      return new URL(referer).href
+    } catch {
+      // Ignore malformed client-controlled Referer headers and fall back to trusted request headers.
+    }
   }
 
   const protocol = headers.get('x-forwarded-proto') ?? 'http'

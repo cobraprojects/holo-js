@@ -183,7 +183,10 @@ async function ensureCsrfCookie(event: SvelteKitHandleEvent): Promise<void> {
     return
   }
 
-  event.cookies.set(defaultCsrfCookieName, token, resolveCsrfCookieOptions(event.url))
+  event.cookies.set(defaultCsrfCookieName, token, resolveCsrfCookieOptions({
+    url: event.url,
+    headers: event.request.headers,
+  }))
 }
 
 export async function auth(options: AuthOptions = {}): Promise<AuthState> {

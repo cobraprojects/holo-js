@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  csrfField: vi.fn(),
-  fail: vi.fn((status, data) => ({
-    status,
-    data,
-  })),
   guardLogin: vi.fn(),
   guardLogout: vi.fn(),
+  json: vi.fn((data, init) => new Response(JSON.stringify(data), {
+    status: init?.status ?? 200,
+    headers: {
+      'content-type': 'application/json',
+    },
+  })),
   login: vi.fn(),
   loginForm: Symbol('loginForm'),
   loginUsing: vi.fn(),
@@ -20,18 +21,11 @@ const mocks = vi.hoisted(() => ({
   }),
   register: vi.fn(),
   registerForm: Symbol('registerForm'),
-  securityRuntime: vi.fn(() => ({
-    config: {
-      csrf: {
-        cookie: 'XSRF-TOKEN',
-      },
-    },
-  })),
   validate: vi.fn(),
 }))
 
 vi.mock('@sveltejs/kit', () => ({
-  fail: mocks.fail,
+  json: mocks.json,
   redirect: mocks.redirect,
 }))
 
@@ -62,23 +56,16 @@ vi.mock('@holo-js/forms', () => ({
   validate: mocks.validate,
 }))
 
-vi.mock('@holo-js/security', () => ({
-  csrf: {
-    field: mocks.csrfField,
-  },
-  getSecurityRuntime: mocks.securityRuntime,
-}))
-
 vi.mock('$lib/schemas/auth', () => ({
   loginForm: mocks.loginForm,
   registerForm: mocks.registerForm,
 }))
 
-const loginPage = await import('../src/routes/login/+page.server.ts')
+const loginRoute = await import('../src/routes/api/login/+server.ts')
 const logoutRoute = await import('../src/routes/logout/+server.ts')
-const registerPage = await import('../src/routes/register/+page.server.ts')
+const registerRoute = await import('../src/routes/api/register/+server.ts')
 const superAdminPage = await import('../src/routes/super-admin/+page.server.ts')
-const superAdminLoginPage = await import('../src/routes/super-admin/login/+page.server.ts')
+const superAdminLoginRoute = await import('../src/routes/api/super-admin/login/+server.ts')
 
 function createRequest(path = '/login') {
   return new Request(`http://localhost${path}`, {
@@ -86,70 +73,12 @@ function createRequest(path = '/login') {
   })
 }
 
-function createCookies() {
-  return {
-    set: vi.fn(),
-  }
-}
-
-describe('SvelteKit auth page loads', () => {
+describe('SvelteKit login API route', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('sets the csrf cookie and returns the hidden field for login', async () => {
-    const cookies = createCookies()
-    const csrfField = {
-      name: '_token',
-      value: 'signed-token',
-    }
-    mocks.csrfField.mockResolvedValue(csrfField)
-
-    await expect(loginPage.load({
-      cookies,
-      request: createRequest('/login'),
-      url: new URL('http://localhost/login'),
-    })).resolves.toEqual({
-      csrf: csrfField,
-    })
-
-    expect(cookies.set).toHaveBeenCalledWith('XSRF-TOKEN', 'signed-token', {
-      path: '/',
-      sameSite: 'lax',
-      secure: false,
-    })
-  })
-
-  it('sets the csrf cookie and returns the hidden field for register', async () => {
-    const cookies = createCookies()
-    const csrfField = {
-      name: '_token',
-      value: 'signed-register-token',
-    }
-    mocks.csrfField.mockResolvedValue(csrfField)
-
-    await expect(registerPage.load({
-      cookies,
-      request: createRequest('/register'),
-      url: new URL('https://localhost/register'),
-    })).resolves.toEqual({
-      csrf: csrfField,
-    })
-
-    expect(cookies.set).toHaveBeenCalledWith('XSRF-TOKEN', 'signed-register-token', {
-      path: '/',
-      sameSite: 'lax',
-      secure: true,
-    })
-  })
-})
-
-describe('SvelteKit login page action', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  it('returns SvelteKit action failures before logging in', async () => {
+  it('returns form failures before logging in', async () => {
     const failure = {
       ok: false,
       status: 422,
@@ -163,13 +92,12 @@ describe('SvelteKit login page action', () => {
     }
     mocks.validate.mockResolvedValue(submission)
 
-    await expect(loginPage.actions.default({
-      request: createRequest('/login'),
-    })).resolves.toEqual({
-      status: 422,
-      data: failure,
+    const response = await loginRoute.POST({
+      request: createRequest('/api/login'),
     })
 
+    expect(response.status).toBe(422)
+    await expect(response.json()).resolves.toEqual(failure)
     expect(mocks.validate).toHaveBeenCalledWith(expect.any(Request), mocks.loginForm, {
       csrf: true,
       throttle: 'login',
@@ -177,7 +105,7 @@ describe('SvelteKit login page action', () => {
     expect(mocks.login).not.toHaveBeenCalled()
   })
 
-  it('redirects from the server after successful login', async () => {
+  it('returns the login redirect target after successful login', async () => {
     const submission = {
       valid: true,
       data: {
@@ -186,6 +114,11 @@ describe('SvelteKit login page action', () => {
         remember: false,
       },
       fail: vi.fn(),
+      success: vi.fn((data, status = 200) => ({
+        ok: true,
+        status,
+        data,
+      })),
     }
     mocks.validate.mockResolvedValue(submission)
     mocks.login.mockResolvedValue({
@@ -198,24 +131,27 @@ describe('SvelteKit login page action', () => {
       error: null,
     })
 
-    await expect(loginPage.actions.default({
-      request: createRequest('/login'),
-    })).rejects.toMatchObject({
-      status: 303,
-      location: '/admin',
+    const response = await loginRoute.POST({
+      request: createRequest('/api/login'),
     })
 
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      data: {
+        redirectTo: '/admin',
+      },
+    })
     expect(mocks.login).toHaveBeenCalledWith(submission.data)
-    expect(mocks.redirect).toHaveBeenCalledWith(303, '/admin')
   })
 })
 
-describe('SvelteKit register page action', () => {
+describe('SvelteKit register API route', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('returns SvelteKit action failures before registering', async () => {
+  it('returns form failures before registering', async () => {
     const failure = {
       ok: false,
       status: 422,
@@ -229,13 +165,12 @@ describe('SvelteKit register page action', () => {
     }
     mocks.validate.mockResolvedValue(submission)
 
-    await expect(registerPage.actions.default({
-      request: createRequest('/register'),
-    })).resolves.toEqual({
-      status: 422,
-      data: failure,
+    const response = await registerRoute.POST({
+      request: createRequest('/api/register'),
     })
 
+    expect(response.status).toBe(422)
+    await expect(response.json()).resolves.toEqual(failure)
     expect(mocks.validate).toHaveBeenCalledWith(expect.any(Request), mocks.registerForm, {
       csrf: true,
       throttle: 'register',
@@ -243,7 +178,7 @@ describe('SvelteKit register page action', () => {
     expect(mocks.register).not.toHaveBeenCalled()
   })
 
-  it('redirects from the server after successful registration', async () => {
+  it('returns the registration redirect target after successful registration', async () => {
     const created = {
       email: 'reader@example.com',
     }
@@ -256,6 +191,11 @@ describe('SvelteKit register page action', () => {
         passwordConfirmation: 'secret-secret',
       },
       fail: vi.fn(),
+      success: vi.fn((data, status = 200) => ({
+        ok: true,
+        status,
+        data,
+      })),
     }
     mocks.validate.mockResolvedValue(submission)
     mocks.register.mockResolvedValue({
@@ -268,16 +208,19 @@ describe('SvelteKit register page action', () => {
       user: created,
     })
 
-    await expect(registerPage.actions.default({
-      request: createRequest('/register'),
-    })).rejects.toMatchObject({
-      status: 303,
-      location: '/verify-email?email=reader%40example.com',
+    const response = await registerRoute.POST({
+      request: createRequest('/api/register'),
     })
 
+    expect(response.status).toBe(201)
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      data: {
+        redirectTo: '/verify-email?email=reader%40example.com',
+      },
+    })
     expect(mocks.register).toHaveBeenCalledWith(submission.data)
     expect(mocks.loginUsing).toHaveBeenCalledWith(created)
-    expect(mocks.redirect).toHaveBeenCalledWith(303, '/verify-email?email=reader%40example.com')
   })
 })
 
@@ -321,12 +264,12 @@ describe('SvelteKit super admin page action', () => {
   })
 })
 
-describe('SvelteKit super admin login page action', () => {
+describe('SvelteKit super admin login API route', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('returns SvelteKit action failures before logging in the admin guard', async () => {
+  it('returns form failures before logging in the admin guard', async () => {
     const failure = {
       ok: false,
       status: 422,
@@ -340,20 +283,19 @@ describe('SvelteKit super admin login page action', () => {
     }
     mocks.validate.mockResolvedValue(submission)
 
-    await expect(superAdminLoginPage.actions.default({
-      request: createRequest('/super-admin/login'),
-    })).resolves.toEqual({
-      status: 422,
-      data: failure,
+    const response = await superAdminLoginRoute.POST({
+      request: createRequest('/api/super-admin/login'),
     })
 
+    expect(response.status).toBe(422)
+    await expect(response.json()).resolves.toEqual(failure)
     expect(mocks.validate).toHaveBeenCalledWith(expect.any(Request), mocks.loginForm, {
       throttle: 'login',
     })
     expect(mocks.guardLogin).not.toHaveBeenCalled()
   })
 
-  it('redirects from the server after super admin login', async () => {
+  it('returns the super admin redirect target after login', async () => {
     const submission = {
       valid: true,
       data: {
@@ -362,6 +304,11 @@ describe('SvelteKit super admin login page action', () => {
         remember: false,
       },
       fail: vi.fn(),
+      success: vi.fn((data, status = 200) => ({
+        ok: true,
+        status,
+        data,
+      })),
     }
     mocks.validate.mockResolvedValue(submission)
     mocks.guardLogin.mockResolvedValue({
@@ -374,14 +321,17 @@ describe('SvelteKit super admin login page action', () => {
       error: null,
     })
 
-    await expect(superAdminLoginPage.actions.default({
-      request: createRequest('/super-admin/login'),
-    })).rejects.toMatchObject({
-      status: 303,
-      location: '/super-admin',
+    const response = await superAdminLoginRoute.POST({
+      request: createRequest('/api/super-admin/login'),
     })
 
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      data: {
+        redirectTo: '/super-admin',
+      },
+    })
     expect(mocks.guardLogin).toHaveBeenCalledWith(submission.data)
-    expect(mocks.redirect).toHaveBeenCalledWith(303, '/super-admin')
   })
 })

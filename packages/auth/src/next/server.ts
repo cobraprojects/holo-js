@@ -88,7 +88,7 @@ async function createCsrfCookieResponse(request: NextRouteProtectionRequest): Pr
 
   const { NextResponse } = await import('next/server') as NextServerModule
   const response = NextResponse.next()
-  response.cookies.set(defaultCsrfCookieName, token, resolveCsrfCookieOptions(request.url))
+  response.cookies.set(defaultCsrfCookieName, token, resolveCsrfCookieOptions(request))
 
   return response
 }

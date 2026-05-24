@@ -11,9 +11,8 @@ export const POST: RequestHandler = async ({ request }) => {
   })
 
   if (!submission.valid) {
-    return json(submission.fail(), {
-      status: submission.fail().status,
-    })
+    const failure = submission.fail()
+    return json(failure, { status: failure.status })
   }
 
   const { data: session, error } = await auth.guard('admin').login(submission.data)

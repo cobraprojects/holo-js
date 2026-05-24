@@ -166,3 +166,9 @@ export const queueDbFailedJobStore: QueueFailedJobStore = {
     return result.affectedRows ?? 0
   },
 }
+
+export const queueDbFailedStoreInternals = {
+  getFailedStoreConfig,
+  getFailedStoreConnection,
+  loadFailedJobs,
+}

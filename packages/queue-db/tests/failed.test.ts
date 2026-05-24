@@ -192,39 +192,41 @@ describe('@holo-js/queue-db failed job store', () => {
   it('falls back to error.message and zero affected rows when the store driver omits them', async () => {
     const spy = vi.spyOn(DB, 'connection').mockReturnValue(createQueueDatabaseContextMock())
 
-    configureQueueRuntime({
-      config: {
-        default: 'database',
-        failed: {
-          driver: 'database',
-          connection: 'default',
-          table: 'failed_jobs',
-        },
-        connections: {
-          database: {
+    try {
+      configureQueueRuntime({
+        config: {
+          default: 'database',
+          failed: {
             driver: 'database',
             connection: 'default',
-            table: 'jobs',
+            table: 'failed_jobs',
+          },
+          connections: {
+            database: {
+              driver: 'database',
+              connection: 'default',
+              table: 'jobs',
+            },
           },
         },
-      },
-      ...createQueueDbRuntimeOptions(),
-    })
+        ...createQueueDbRuntimeOptions(),
+      })
 
-    const error = new Error('message fallback')
-    error.stack = ''
+      const error = new Error('message fallback')
+      error.stack = ''
 
-    await expect(persistFailedQueueJob({
-      reservationId: 'reservation-1',
-      reservedAt: 1,
-      envelope: createEnvelope('jobs.fallback', 'fallback-job'),
-    }, error)).resolves.toMatchObject({
-      exception: 'message fallback',
-    })
-    await expect(forgetFailedQueueJob('missing')).resolves.toBe(false)
-    await expect(flushFailedQueueJobs()).resolves.toBe(0)
-
-    spy.mockRestore()
+      await expect(persistFailedQueueJob({
+        reservationId: 'reservation-1',
+        reservedAt: 1,
+        envelope: createEnvelope('jobs.fallback', 'fallback-job'),
+      }, error)).resolves.toMatchObject({
+        exception: 'message fallback',
+      })
+      await expect(forgetFailedQueueJob('missing')).resolves.toBe(false)
+      await expect(flushFailedQueueJobs()).resolves.toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('persists worker failures before removing exhausted jobs', async () => {
@@ -278,42 +280,44 @@ describe('@holo-js/queue-db failed job store', () => {
       throw new Error('DB.connection() should not be used when an active matching connection exists.')
     })
 
-    configureQueueRuntime({
-      config: {
-        default: 'database',
-        failed: {
-          driver: 'database',
-          connection: 'default',
-          table: 'failed_jobs',
-        },
-        connections: {
-          database: {
+    try {
+      configureQueueRuntime({
+        config: {
+          default: 'database',
+          failed: {
             driver: 'database',
             connection: 'default',
-            table: 'jobs',
+            table: 'failed_jobs',
+          },
+          connections: {
+            database: {
+              driver: 'database',
+              connection: 'default',
+              table: 'jobs',
+            },
           },
         },
-      },
-      ...createQueueDbRuntimeOptions(),
-    })
+        ...createQueueDbRuntimeOptions(),
+      })
 
-    const error = new Error('active-context failure')
-    error.stack = ''
+      const error = new Error('active-context failure')
+      error.stack = ''
 
-    await expect(connectionAsyncContext.run({
-      connectionName: 'default',
-      connection: activeConnection,
-    }, async () => persistFailedQueueJob({
-      reservationId: 'reservation-1',
-      reservedAt: 1,
-      envelope: createEnvelope('jobs.active-context', 'active-context-job'),
-    }, error))).resolves.toMatchObject({
-      jobId: 'active-context-job',
-      exception: 'active-context failure',
-    })
+      await expect(connectionAsyncContext.run({
+        connectionName: 'default',
+        connection: activeConnection,
+      }, async () => persistFailedQueueJob({
+        reservationId: 'reservation-1',
+        reservedAt: 1,
+        envelope: createEnvelope('jobs.active-context', 'active-context-job'),
+      }, error))).resolves.toMatchObject({
+        jobId: 'active-context-job',
+        exception: 'active-context failure',
+      })
 
-    expect(executeCompiled).toHaveBeenCalledTimes(1)
-
-    spy.mockRestore()
+      expect(executeCompiled).toHaveBeenCalledTimes(1)
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

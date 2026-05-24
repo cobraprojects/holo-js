@@ -1,11 +1,25 @@
 <script lang="ts">
-  import { type ActionData } from './$types'
+  import { goto } from '$app/navigation'
+  import { useAuth } from '@holo-js/auth/sveltekit/client'
+  import { useForm } from '@holo-js/adapter-sveltekit/client'
+  import { loginForm } from '$lib/schemas/auth'
 
-  export let form: ActionData
+  const auth = useAuth({ guard: 'admin' })
+  const form = useForm(loginForm, {
+    validateOn: 'blur',
+    initialValues: { email: '', password: '', remember: false },
+    async submitter({ formData }) {
+      const response = await fetch('/api/super-admin/login', { method: 'POST', body: formData })
+      const submission = await response.json()
+      if (submission.ok === true && typeof submission.data?.redirectTo === 'string') {
+        await auth.refreshUser()
+        await goto(submission.data.redirectTo, { invalidateAll: true })
+      }
 
-  $: values = form?.values ?? {}
-  $: errors = form?.errors ?? {}
-  $: formError = errors._root?.[0]
+      return submission
+    },
+  })
+  $: formError = form.errors.first('_root')
 </script>
 
 <section class="panel">
@@ -14,7 +28,7 @@
     <p>Use a super admin account to access the super admin area.</p>
   </div>
 
-  <form class="stack" method="post">
+  <form class="stack" on:submit={(event) => { event.preventDefault(); void form.submit() }}>
     {#if formError}
       <p class="error">{formError}</p>
     {/if}
@@ -24,10 +38,12 @@
       <input
         name="email"
         type="email"
-        value={values.email ?? ''}
+        value={form.values.email}
+        on:input={(event) => form.fields.email.onInput(event.currentTarget.value)}
+        on:blur={() => form.fields.email.onBlur()}
       />
-      {#if errors.email?.[0]}
-        <span class="error">{errors.email[0]}</span>
+      {#if form.errors.has('email')}
+        <span class="error">{form.errors.first('email')}</span>
       {/if}
     </label>
 
@@ -36,9 +52,12 @@
       <input
         name="password"
         type="password"
+        value={form.values.password}
+        on:input={(event) => form.fields.password.onInput(event.currentTarget.value)}
+        on:blur={() => form.fields.password.onBlur()}
       />
-      {#if errors.password?.[0]}
-        <span class="error">{errors.password[0]}</span>
+      {#if form.errors.has('password')}
+        <span class="error">{form.errors.first('password')}</span>
       {/if}
     </label>
 
@@ -46,12 +65,15 @@
       <input
         name="remember"
         type="checkbox"
-        checked={values.remember === true}
+        checked={form.values.remember}
+        on:change={(event) => form.fields.remember.onInput(event.currentTarget.checked)}
       />
       Remember me
     </label>
 
-    <button type="submit">Sign in as super admin</button>
+    <button type="submit" disabled={form.submitting}>
+      {form.submitting ? 'Signing in...' : 'Sign in as super admin'}
+    </button>
   </form>
 </section>
 

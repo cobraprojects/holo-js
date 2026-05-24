@@ -48,6 +48,19 @@ function normalizeImportSpecifier(specifier: string): string {
   return specifier.startsWith('file://') ? fileURLToPath(specifier) : specifier
 }
 
+function normalizeImportTarget(value: string): string {
+  return normalizeImportSpecifier(value).replace(/\\/g, '/')
+}
+
+function matchesRelativeImportTarget(failedTarget: string | undefined, specifier: string): boolean {
+  if (!failedTarget || !specifier.startsWith('.')) {
+    return false
+  }
+
+  const suffix = specifier.startsWith('./') ? specifier.slice(2) : specifier
+  return normalizeImportTarget(failedTarget).endsWith(`/${suffix}`)
+}
+
 function isMissingOptionalModule(error: unknown, specifier: string, resolvedSpecifier: string): boolean {
   if (!error || typeof error !== 'object') {
     return false
@@ -58,14 +71,15 @@ function isMissingOptionalModule(error: unknown, specifier: string, resolvedSpec
   const expectedTargets = new Set([
     specifier,
     resolvedSpecifier,
-    normalizeImportSpecifier(specifier),
-    normalizeImportSpecifier(resolvedSpecifier),
+    normalizeImportTarget(specifier),
+    normalizeImportTarget(resolvedSpecifier),
   ])
-  const matchesRequestedTarget = typeof failedTarget === 'string' && expectedTargets.has(failedTarget)
+  const normalizedFailedTarget = typeof failedTarget === 'string' ? normalizeImportTarget(failedTarget) : undefined
+  const matchesRequestedTarget = typeof normalizedFailedTarget === 'string'
+    && (expectedTargets.has(normalizedFailedTarget) || matchesRelativeImportTarget(normalizedFailedTarget, specifier))
 
   return (
     ('code' in error && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND' && matchesRequestedTarget)
-    || ('code' in error && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND' && specifier.startsWith('.'))
     || (message.startsWith('Cannot find package \'') && matchesRequestedTarget)
     || (message.startsWith('Cannot find module \'') && matchesRequestedTarget)
     || (message.includes('Does the file exist?') && message.startsWith('Failed to load url ') && matchesRequestedTarget)

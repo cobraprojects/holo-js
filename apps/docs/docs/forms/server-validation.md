@@ -246,8 +246,9 @@ in other frameworks:
 
 ## Full page flow
 
-These examples show the real failure and redirect path. Next.js and SvelteKit keep auth redirects on the server.
-Nuxt uses the client submitter pattern shown by the Nuxt blog app.
+These examples show the real failure and redirect path. Next.js keeps the auth redirect in a server action.
+Nuxt and SvelteKit use the client submitter pattern shown by the blog apps: submit to an API route,
+refresh the current user, then navigate.
 
 ::: code-group
 
@@ -383,71 +384,75 @@ Bind displayed values from `form.values.*` across frameworks and keep `form.fiel
 state can also be set during input and value updates through helpers like `form.fields.email.onInput(...)`
 and `form.setValue(...)`.
 
-```ts [SvelteKit — src/routes/login/+page.server.ts]
-import { fail, redirect } from '@sveltejs/kit'
+```ts [SvelteKit — src/routes/api/login/+server.ts]
+import { json } from '@sveltejs/kit'
 import { login } from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
-import { csrf, getSecurityRuntime } from '@holo-js/security'
 import { loginForm } from '$lib/schemas/login'
-import type { Actions, PageServerLoad } from './$types'
 
-export const load = (async ({ cookies, request, url }) => {
-  const field = await csrf.field(request)
-  cookies.set(getSecurityRuntime().config.csrf.cookie, field.value, {
-    path: '/',
-    sameSite: 'lax',
-    secure: url.protocol === 'https:',
+export async function POST({ request }: { request: Request }) {
+  const submission = await validate(request, loginForm, {
+    csrf: true,
+    throttle: 'login',
   })
 
-  return { csrf: field }
-}) satisfies PageServerLoad
+  if (!submission.valid) {
+    const failure = submission.fail()
+    return json(failure, { status: failure.status })
+  }
 
-export const actions = {
-  default: async ({ request }) => {
-    const submission = await validate(request, loginForm, {
-      csrf: true,
-      throttle: 'login',
-    })
+  const { data: session, error } = await login(submission.data)
+  if (error) {
+    const failure = submission.fail({ status: error.status, errors: error.fields })
+    return json(failure, { status: failure.status })
+  }
 
-    if (!submission.valid) {
-      const failure = submission.fail()
-      return fail(failure.status, failure)
-    }
-
-    const { data: session, error } = await login(submission.data)
-    if (error) {
-      const failure = submission.fail({ status: error.status, errors: error.fields })
-      return fail(failure.status, failure)
-    }
-
-    redirect(303, session.emailVerificationRequired ? session.emailVerificationRoute ?? '/verify-email' : '/admin')
-  },
-} satisfies Actions
+  return json(submission.success({
+    redirectTo: session.emailVerificationRequired ? session.emailVerificationRoute ?? '/verify-email' : '/admin',
+  }))
+}
 ```
 
 ```svelte [SvelteKit — src/routes/login/+page.svelte]
 <script lang="ts">
-  let { form, data } = $props()
+  import { goto } from '$app/navigation'
+  import { useAuth } from '@holo-js/auth/sveltekit/client'
+  import { useForm } from '@holo-js/adapter-sveltekit/client'
+  import { loginForm } from '$lib/schemas/login'
+
+  const auth = useAuth()
+  const form = useForm(loginForm, {
+    csrf: true,
+    initialValues: { email: '', password: '', remember: false },
+    async submitter({ formData }) {
+      const submission = await (await fetch('/api/login', { method: 'POST', body: formData })).json()
+      if (submission.ok === true && typeof submission.data?.redirectTo === 'string') {
+        await auth.refreshUser()
+        await goto(submission.data.redirectTo, { invalidateAll: true })
+      }
+
+      return submission
+    },
+  })
 </script>
 
-<form method="post">
-  <input type="hidden" name={data.csrf.name} value={data.csrf.value} />
-  <input name="email" type="email" value={form?.values?.email ?? ''} />
-  {#if form?.errors?.email?.[0]}
-    <p>{form.errors.email[0]}</p>
+<form on:submit={(event) => { event.preventDefault(); void form.submit() }}>
+  <input name="email" type="email" value={form.values.email} on:input={(event) => form.fields.email.onInput(event.currentTarget.value)} />
+  {#if form.errors.has('email')}
+    <p>{form.errors.first('email')}</p>
   {/if}
 
-  <input name="password" type="password" />
-  {#if form?.errors?.password?.[0]}
-    <p>{form.errors.password[0]}</p>
+  <input name="password" type="password" value={form.values.password} on:input={(event) => form.fields.password.onInput(event.currentTarget.value)} />
+  {#if form.errors.has('password')}
+    <p>{form.errors.first('password')}</p>
   {/if}
 
   <label>
-    <input name="remember" type="checkbox" value="true" checked={form?.values?.remember ?? false} />
+    <input name="remember" type="checkbox" checked={form.values.remember} on:change={(event) => form.fields.remember.onInput(event.currentTarget.checked)} />
     Remember me
   </label>
 
-  <button type="submit">Sign in</button>
+  <button type="submit" disabled={form.submitting}>Sign in</button>
 </form>
 ```
 
@@ -562,8 +567,8 @@ export default defineEventHandler(async (event) => {
 })
 ```
 
-```ts [SvelteKit — src/routes/register/+page.server.ts]
-import { fail } from '@sveltejs/kit'
+```ts [SvelteKit — src/routes/api/register/+server.ts]
+import { json } from '@sveltejs/kit'
 import { field, schema, validate } from '@holo-js/forms'
 
 const registerUser = schema({
@@ -573,22 +578,20 @@ const registerUser = schema({
   passwordConfirmation: field.password().required(),
 })
 
-export const actions = {
-  default: async ({ request }) => {
-    const submission = await validate(request, registerUser, {
-      csrf: true,
-      throttle: 'register',
-    })
+export async function POST({ request }: { request: Request }) {
+  const submission = await validate(request, registerUser, {
+    csrf: true,
+    throttle: 'register',
+  })
 
-    if (!submission.valid) {
-      const failure = submission.fail()
-      return fail(failure.status, failure)
-    }
+  if (!submission.valid) {
+    const failure = submission.fail()
+    return json(failure, { status: failure.status })
+  }
 
-    await auth.register(submission.data)
+  await auth.register(submission.data)
 
-    return submission.success({ message: 'Account created.' })
-  },
+  return json(submission.success({ message: 'Account created.' }))
 }
 ```
 

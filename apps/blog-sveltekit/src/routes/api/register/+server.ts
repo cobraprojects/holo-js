@@ -11,9 +11,8 @@ export async function POST({ request }: { request: Request }) {
   })
 
   if (!submission.valid) {
-    return json(submission.fail(), {
-      status: submission.fail().status,
-    })
+    const failure = submission.fail()
+    return json(failure, { status: failure.status })
   }
 
   const { data: created, error } = await register(submission.data)

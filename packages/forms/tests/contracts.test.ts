@@ -725,6 +725,33 @@ describe('@holo-js/forms contracts', () => {
     expect(throttled.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
   })
 
+  it('falls back to forwarded headers when ambient Next action referer is malformed', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+    const runtime = globalThis as FormsTestGlobal
+
+    runtime.__holoFormsSecurityModule__ = createSecurityModule()
+    runtime.__holoFormsNextHeadersImport__ = async () => ({
+      headers: () => new Headers({
+        cookie: 'XSRF-TOKEN=login-token',
+        'X-CSRF-TOKEN': 'login-token',
+        'x-forwarded-host': 'app.test',
+        'x-forwarded-proto': 'https',
+        referer: 'http://%',
+      }),
+    })
+
+    const formData = new FormData()
+    formData.set('email', 'ava@example.com')
+
+    const submission = await validate(formData, login, {
+      csrf: true,
+    })
+
+    expect(submission.valid).toBe(true)
+  })
+
   it('preserves cookie semantics for request-like header arrays during csrf validation', async () => {
     const login = schema({
       email: field.string().required().email(),

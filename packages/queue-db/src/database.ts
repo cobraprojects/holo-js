@@ -241,6 +241,23 @@ export function resolveDatabaseConnection(name: string): DatabaseContext {
   return DB.connection(name)
 }
 
+export const queueDatabaseInternals = {
+  assertQueueJsonValue,
+  coerceOptionalInteger,
+  coerceRequiredInteger,
+  coerceRequiredString,
+  createPlaceholderList,
+  ensureConnectionReady,
+  normalizeIdentifierPath,
+  parseStoredFailedQueueJobRow,
+  parseStoredPayload,
+  parseStoredQueueEnvelope,
+  parseStoredQueueJobRow,
+  quoteIdentifierPath,
+  resolveDatabaseConnection,
+  serializeQueueJson,
+}
+
 export type {
   StoredFailedQueueJobRow,
   StoredQueueJobRow,

@@ -189,60 +189,63 @@ const form = useForm(loginForm, {
 })
 ```
 
-```ts [SvelteKit — src/routes/login/+page.server.ts]
-import { fail, redirect } from '@sveltejs/kit'
+```ts [SvelteKit — src/routes/api/login/+server.ts]
+import { json } from '@sveltejs/kit'
 import { login } from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
-import { csrf, getSecurityRuntime } from '@holo-js/security'
 import { loginForm } from '$lib/schemas/login'
-import type { Actions, PageServerLoad } from './$types'
 
-export const load = (async ({ cookies, request, url }) => {
-  const field = await csrf.field(request)
-  cookies.set(getSecurityRuntime().config.csrf.cookie, field.value, {
-    path: '/',
-    sameSite: 'lax',
-    secure: url.protocol === 'https:',
+export async function POST({ request }: { request: Request }) {
+  const submission = await validate(request, loginForm, {
+    csrf: true,
+    throttle: 'login',
   })
 
-  return { csrf: field }
-}) satisfies PageServerLoad
+  if (!submission.valid) {
+    const failure = submission.fail()
+    return json(failure, { status: failure.status })
+  }
 
-export const actions = {
-  default: async ({ request }) => {
-    const submission = await validate(request, loginForm, {
-      csrf: true,
-      throttle: 'login',
-    })
+  const { data: session, error } = await login(submission.data)
+  if (error) {
+    const failure = submission.fail({ status: error.status, errors: error.fields })
+    return json(failure, { status: failure.status })
+  }
 
-    if (!submission.valid) {
-      const failure = submission.fail()
-      return fail(failure.status, failure)
-    }
-
-    const { data: session, error } = await login(submission.data)
-    if (error) {
-      const failure = submission.fail({ status: error.status, errors: error.fields })
-      return fail(failure.status, failure)
-    }
-
-    redirect(303, session.emailVerificationRequired ? session.emailVerificationRoute ?? '/verify-email' : '/admin')
-  },
-} satisfies Actions
+  return json(submission.success({
+    redirectTo: session.emailVerificationRequired ? session.emailVerificationRoute ?? '/verify-email' : '/admin',
+  }))
+}
 ```
 
 ```svelte [SvelteKit — src/routes/login/+page.svelte]
 <script lang="ts">
-  let { form, data } = $props()
+  import { goto } from '$app/navigation'
+  import { useAuth } from '@holo-js/auth/sveltekit/client'
+  import { useForm } from '@holo-js/adapter-sveltekit/client'
+  import { loginForm } from '$lib/schemas/login'
+
+  const auth = useAuth()
+  const form = useForm(loginForm, {
+    csrf: true,
+    async submitter({ formData }) {
+      const submission = await (await fetch('/api/login', { method: 'POST', body: formData })).json()
+      if (submission.ok === true && typeof submission.data?.redirectTo === 'string') {
+        await auth.refreshUser()
+        await goto(submission.data.redirectTo, { invalidateAll: true })
+      }
+
+      return submission
+    },
+  })
 </script>
 
-<form method="post">
-  <input type="hidden" name={data.csrf.name} value={data.csrf.value} />
-  <input name="email" type="email" value={form?.values?.email ?? ''} />
-  {#if form?.errors?.email?.[0]}<p>{form.errors.email[0]}</p>{/if}
-  <input name="password" type="password" />
-  {#if form?.errors?.password?.[0]}<p>{form.errors.password[0]}</p>{/if}
-  <button type="submit">Sign in</button>
+<form on:submit={(event) => { event.preventDefault(); void form.submit() }}>
+  <input name="email" type="email" value={form.values.email} on:input={(event) => form.fields.email.onInput(event.currentTarget.value)} />
+  {#if form.errors.has('email')}<p>{form.errors.first('email')}</p>{/if}
+  <input name="password" type="password" value={form.values.password} on:input={(event) => form.fields.password.onInput(event.currentTarget.value)} />
+  {#if form.errors.has('password')}<p>{form.errors.first('password')}</p>{/if}
+  <button type="submit" disabled={form.submitting}>Sign in</button>
 </form>
 ```
 
@@ -262,6 +265,9 @@ Pick the one that fits your app. They are not mutually exclusive.
 
 `useForm(...)` may opt into `csrf: true`, but it does not expose `throttle`. The browser only forwards the CSRF
 token so the server can verify it. Throttling is always enforced on the server.
+
+For the `useForm(...)` path, the CSRF cookie is created by the SvelteKit auth/framework hook before guest
+pages render. App pages should not call `csrf.field(...)` or set the CSRF cookie manually.
 
 ## Standard Schema interop
 

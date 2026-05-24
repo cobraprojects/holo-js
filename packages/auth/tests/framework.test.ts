@@ -514,9 +514,11 @@ describe('@holo-js/auth framework helpers', () => {
         cookies: {
           get: vi.fn(() => undefined),
         },
-        headers: new Headers(),
-        nextUrl: new URL('https://app.test/login'),
-        url: 'https://app.test/login',
+        headers: new Headers({
+          'x-forwarded-proto': 'https',
+        }),
+        nextUrl: new URL('http://app.test/login'),
+        url: 'http://app.test/login',
       }
       const response = await protectRoutes(async () => undefined)(request)
       const setCookie = response?.headers.get('set-cookie') ?? ''
@@ -802,14 +804,16 @@ describe('@holo-js/auth framework helpers', () => {
         redirectTo: '/admin',
       })({
         event: {
-          url: new URL('https://app.test/login'),
+          url: new URL('http://app.test/login'),
           cookies: {
             get: vi.fn(() => undefined),
             set: setCookie,
           },
           request: {
             method: 'GET',
-            headers: new Headers(),
+            headers: new Headers({
+              'x-forwarded-proto': 'https',
+            }),
           },
         },
         resolve,

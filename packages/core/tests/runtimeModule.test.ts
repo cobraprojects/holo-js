@@ -91,6 +91,22 @@ describe('@holo-js/core runtime module helpers', () => {
     }
   })
 
+  it('does not hide missing transitive dependencies in optional runtime modules', async () => {
+    const projectRoot = await createTempProject()
+    const missingPath = join(projectRoot, 'missing.mjs')
+    const entryPath = join(projectRoot, 'optional.mjs')
+
+    await expect(
+      runtimeModuleInternals.importOptionalRuntimeModule(pathToFileURL(missingPath).href),
+    ).resolves.toBeUndefined()
+
+    await writeFile(entryPath, 'import "./missing-child.mjs"\nexport const loaded = true\n', 'utf8')
+
+    await expect(
+      runtimeModuleInternals.importOptionalRuntimeModule(pathToFileURL(entryPath).href),
+    ).rejects.toThrow()
+  })
+
   it('returns the default esbuild export when the imported module does not expose build directly', async () => {
     await expect(runtimeModuleInternals.loadEsbuild()).resolves.toEqual(expect.objectContaining({
       build: expect.any(Function),

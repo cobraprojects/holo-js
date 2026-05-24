@@ -313,3 +313,10 @@ export const databaseQueueDriverFactory: QueueDriverFactory<NormalizedQueueDatab
     return new DatabaseQueueDriver(connection, context)
   },
 }
+
+export const databaseQueueDriverInternals = {
+  createPlaceholders,
+  normalizeDatabaseErrorMessage,
+  normalizeQueueNames,
+  wrapDatabaseError,
+}
