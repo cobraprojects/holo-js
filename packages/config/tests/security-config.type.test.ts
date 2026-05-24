@@ -1,10 +1,10 @@
 import { describe, it } from 'vitest'
 import {
-  createConfigAccessors,
   defineCorsConfig,
   defineSecurityConfig,
   type HoloConfigRegistry,
 } from '../src'
+import { createConfigAccessorFixture } from './support/configAccessors'
 
 describe('@holo-js/config security typing', () => {
   it('preserves security inference through config helpers and dot-path access', () => {
@@ -34,21 +34,9 @@ describe('@holo-js/config security typing', () => {
       statefulDomains: ['app.example.com'],
     })
 
-    const accessors = createConfigAccessors({
-      app: {} as HoloConfigRegistry['app'],
-      database: {} as HoloConfigRegistry['database'],
-      redis: {} as HoloConfigRegistry['redis'],
-      cache: {} as HoloConfigRegistry['cache'],
+    const accessors = createConfigAccessorFixture({
       cors: cors as unknown as HoloConfigRegistry['cors'],
-      storage: {} as HoloConfigRegistry['storage'],
-      queue: {} as HoloConfigRegistry['queue'],
-      broadcast: {} as HoloConfigRegistry['broadcast'],
-      mail: {} as HoloConfigRegistry['mail'],
-      notifications: {} as HoloConfigRegistry['notifications'],
-      media: {} as HoloConfigRegistry['media'],
-      session: {} as HoloConfigRegistry['session'],
       security: security as unknown as HoloConfigRegistry['security'],
-      auth: {} as HoloConfigRegistry['auth'],
       services: {
         mailgun: {
           secret: 'secret',

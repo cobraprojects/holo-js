@@ -7,7 +7,7 @@ import type {
 } from '@holo-js/auth-social'
 
 function applyScopes(url: URL, config: SocialRedirectContext['config']): void {
-  const scopes = (config.scopes ?? []).length > 0 ? config.scopes ?? [] : ['read:user', 'user:email']
+  const scopes = config.scopes?.length ? config.scopes : ['read:user', 'user:email']
   url.searchParams.set('scope', scopes.join(' '))
 }
 

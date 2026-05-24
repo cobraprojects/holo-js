@@ -1,6 +1,7 @@
 import { CapabilityError } from '../core/errors'
 import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createTableOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropTableOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
 import { defineTable } from './defineTable'
+import { resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
 import { SQLiteSchemaCompiler } from './SQLiteSchemaCompiler'
 import { PostgresSchemaCompiler } from './PostgresSchemaCompiler'
@@ -766,11 +767,11 @@ export class SchemaService {
   }
 
   private resolveIndexName(tableName: string, index: TableIndexDefinition): string {
-    return index.name ?? `${tableName.replaceAll('.', '_')}_${index.columns.join('_')}_${index.unique ? 'unique' : 'index'}`
+    return resolveGeneratedIndexName(tableName, index)
   }
 
   private resolveForeignKeyName(tableName: string, columnName: string): string {
-    return `${tableName.replaceAll('.', '_')}_${columnName}_foreign`
+    return resolveGeneratedForeignKeyName(tableName, columnName)
   }
 
   private createForeignKeyConstraintStatement(enable: boolean): { sql: string, source: string } {

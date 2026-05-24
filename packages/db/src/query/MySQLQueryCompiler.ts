@@ -1,5 +1,5 @@
 import { SQLQueryCompiler } from './SQLQueryCompiler'
-import type { InsertQueryPlan, QueryDatePredicate, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLockMode, UpsertQueryPlan } from './ast'
+import type { InsertQueryPlan, QueryFullTextPredicate, QueryJsonPredicate, QueryJsonUpdateOperation, QueryLockMode, UpsertQueryPlan } from './ast'
 
 export class MySQLQueryCompiler extends SQLQueryCompiler {
   protected override compileLateralJoinSource(subquery: string, alias: string): string {
@@ -76,26 +76,5 @@ export class MySQLQueryCompiler extends SQLQueryCompiler {
       ? ' IN BOOLEAN MODE'
       : ' IN NATURAL LANGUAGE MODE'
     return `MATCH (${columns}) AGAINST (${this.createPlaceholder(bindings.length)}${modifier})`
-  }
-
-  protected override compileDatePredicate(
-    predicate: QueryDatePredicate,
-    placeholder: string,
-  ): string {
-    const column = this.compileColumnReference(predicate.column)
-    switch (predicate.part) {
-      case 'date':
-        return `DATE(${column}) ${predicate.operator.toUpperCase()} ${placeholder}`
-      case 'time':
-        return `TIME(${column}) ${predicate.operator.toUpperCase()} ${placeholder}`
-      case 'year':
-        return `EXTRACT(YEAR FROM ${column}) ${predicate.operator.toUpperCase()} ${placeholder}`
-      case 'month':
-        return `EXTRACT(MONTH FROM ${column}) ${predicate.operator.toUpperCase()} ${placeholder}`
-      case 'day':
-        return `EXTRACT(DAY FROM ${column}) ${predicate.operator.toUpperCase()} ${placeholder}`
-      default:
-        return super.compileDatePredicate(predicate, placeholder)
-    }
   }
 }

@@ -1,21 +1,19 @@
 import { randomUUID } from 'node:crypto'
-import { DB } from '@holo-js/db'
 import type { DatabaseContext } from '@holo-js/db'
-import { connectionAsyncContext } from '@holo-js/db'
 import { getQueueRuntime, type QueueFailedJobRecord, type QueueFailedJobStore, type QueueReservedJob } from '@holo-js/queue'
-import { queueDatabaseInternals, type StoredFailedQueueJobRow } from './database'
+import {
+  createPlaceholderList,
+  ensureConnectionReady,
+  normalizeIdentifierPath,
+  parseStoredFailedQueueJobRow,
+  quoteIdentifierPath,
+  resolveDatabaseConnection,
+  serializeQueueJson,
+  type StoredFailedQueueJobRow,
+} from './database'
 
 function getFailedStoreConfig() {
   return getQueueRuntime().config.failed
-}
-
-function resolveDatabaseConnection(name: string): DatabaseContext {
-  const active = connectionAsyncContext.getActive()?.connection
-  if (active && active.getConnectionName() === name) {
-    return active
-  }
-
-  return DB.connection(name)
 }
 
 async function getFailedStoreConnection(): Promise<{ connection: DatabaseContext, tableName: string } | null> {
@@ -24,12 +22,38 @@ async function getFailedStoreConnection(): Promise<{ connection: DatabaseContext
     return null
   }
 
-  const tableName = queueDatabaseInternals.normalizeIdentifierPath(config.table, 'Failed jobs table name')
-  const connection = await queueDatabaseInternals.ensureConnectionReady(resolveDatabaseConnection(config.connection))
+  const tableName = normalizeIdentifierPath(config.table, 'Failed jobs table name')
+  const connection = await ensureConnectionReady(resolveDatabaseConnection(config.connection))
   return {
     connection,
     tableName,
   }
+}
+
+async function loadFailedJobs(
+  failedStore: { connection: DatabaseContext, tableName: string },
+  id?: string,
+): Promise<readonly QueueFailedJobRecord[]> {
+  const quotedTable = quoteIdentifierPath(failedStore.connection.getDialect(), failedStore.tableName)
+  const dialect = failedStore.connection.getDialect()
+  const filter = typeof id === 'string'
+    ? {
+        clause: ` WHERE id = ${dialect.createPlaceholder(1)}`,
+        bindings: [id],
+        source: 'queue:failed:load',
+      }
+    : {
+        clause: '',
+        bindings: undefined,
+        source: 'queue:failed:list',
+      }
+  const result = await failedStore.connection.queryCompiled<StoredFailedQueueJobRow>({
+    sql: `SELECT id, job_id, payload, exception, failed_at FROM ${quotedTable}${filter.clause} ORDER BY failed_at DESC, id DESC`,
+    bindings: filter.bindings,
+    source: filter.source,
+  })
+
+  return Object.freeze(result.rows.map((row: StoredFailedQueueJobRow) => parseStoredFailedQueueJobRow(row)))
 }
 
 export const queueDbFailedJobStore: QueueFailedJobStore = {
@@ -42,8 +66,8 @@ export const queueDbFailedJobStore: QueueFailedJobStore = {
       return null
     }
 
-    const quotedTable = queueDatabaseInternals.quoteIdentifierPath(failedStore.connection.getDialect(), failedStore.tableName)
-    const placeholders = queueDatabaseInternals.createPlaceholderList(failedStore.connection.getDialect(), 7)
+    const quotedTable = quoteIdentifierPath(failedStore.connection.getDialect(), failedStore.tableName)
+    const placeholders = createPlaceholderList(failedStore.connection.getDialect(), 7)
     const record = Object.freeze({
       id: randomUUID(),
       jobId: reserved.envelope.id,
@@ -62,7 +86,7 @@ export const queueDbFailedJobStore: QueueFailedJobStore = {
         reserved.envelope.name,
         reserved.envelope.connection,
         reserved.envelope.queue,
-        queueDatabaseInternals.serializeQueueJson(reserved.envelope),
+        serializeQueueJson(reserved.envelope),
         record.exception,
         record.failedAt,
       ],
@@ -78,13 +102,7 @@ export const queueDbFailedJobStore: QueueFailedJobStore = {
       return Object.freeze([])
     }
 
-    const quotedTable = queueDatabaseInternals.quoteIdentifierPath(failedStore.connection.getDialect(), failedStore.tableName)
-    const result = await failedStore.connection.queryCompiled<StoredFailedQueueJobRow>({
-      sql: `SELECT id, job_id, payload, exception, failed_at FROM ${quotedTable} ORDER BY failed_at DESC, id DESC`,
-      source: 'queue:failed:list',
-    })
-
-    return Object.freeze(result.rows.map((row: StoredFailedQueueJobRow) => queueDatabaseInternals.parseStoredFailedQueueJobRow(row)))
+    return loadFailedJobs(failedStore)
   },
 
   async retryFailedJobs(
@@ -96,18 +114,9 @@ export const queueDbFailedJobStore: QueueFailedJobStore = {
       return 0
     }
 
-    const quotedTable = queueDatabaseInternals.quoteIdentifierPath(failedStore.connection.getDialect(), failedStore.tableName)
+    const quotedTable = quoteIdentifierPath(failedStore.connection.getDialect(), failedStore.tableName)
     const dialect = failedStore.connection.getDialect()
-    const records = await (identifier === 'all'
-      ? await this.listFailedJobs()
-      : (() => {
-          const placeholder = dialect.createPlaceholder(1)
-          return failedStore.connection.queryCompiled<StoredFailedQueueJobRow>({
-            sql: `SELECT id, job_id, payload, exception, failed_at FROM ${quotedTable} WHERE id = ${placeholder}`,
-            bindings: [identifier],
-            source: 'queue:failed:load',
-          }).then((result) => Object.freeze(result.rows.map((row: StoredFailedQueueJobRow) => queueDatabaseInternals.parseStoredFailedQueueJobRow(row))))
-        })())
+    const records = await loadFailedJobs(failedStore, identifier === 'all' ? undefined : identifier)
 
     let retried = 0
 
@@ -131,7 +140,7 @@ export const queueDbFailedJobStore: QueueFailedJobStore = {
       return false
     }
 
-    const quotedTable = queueDatabaseInternals.quoteIdentifierPath(failedStore.connection.getDialect(), failedStore.tableName)
+    const quotedTable = quoteIdentifierPath(failedStore.connection.getDialect(), failedStore.tableName)
     const placeholder = failedStore.connection.getDialect().createPlaceholder(1)
     const result = await failedStore.connection.executeCompiled({
       sql: `DELETE FROM ${quotedTable} WHERE id = ${placeholder}`,
@@ -148,7 +157,7 @@ export const queueDbFailedJobStore: QueueFailedJobStore = {
       return 0
     }
 
-    const quotedTable = queueDatabaseInternals.quoteIdentifierPath(failedStore.connection.getDialect(), failedStore.tableName)
+    const quotedTable = quoteIdentifierPath(failedStore.connection.getDialect(), failedStore.tableName)
     const result = await failedStore.connection.executeCompiled({
       sql: `DELETE FROM ${quotedTable}`,
       source: 'queue:failed:flush',
@@ -156,9 +165,4 @@ export const queueDbFailedJobStore: QueueFailedJobStore = {
 
     return result.affectedRows ?? 0
   },
-}
-
-export const queueDbFailedStoreInternals = {
-  getFailedStoreConfig,
-  getFailedStoreConnection,
 }

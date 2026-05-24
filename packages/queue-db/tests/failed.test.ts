@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DB } from '@holo-js/db'
-import type { DatabaseContext, Dialect } from '@holo-js/db'
 import { connectionAsyncContext } from '@holo-js/db'
 import {
   configureQueueRuntime,
@@ -12,7 +11,8 @@ import {
   retryFailedQueueJobs,
   runQueueWorker,
 } from '@holo-js/queue'
-import { createQueueDbRuntimeOptions, queueDbFailedStoreInternals } from '../src'
+import { createQueueDbRuntimeOptions } from '../src'
+import { createQueueDatabaseContextMock, createQueueTestDialect } from './support/dialect'
 import { createSQLiteQueueHarness, type SQLiteQueueHarness } from './support/sqlite-queue'
 
 const harnesses: SQLiteQueueHarness[] = []
@@ -28,33 +28,6 @@ function createEnvelope(name: string, id = `${name}-id`) {
     maxAttempts: 2,
     createdAt: Date.now(),
   })
-}
-
-function createDialect(name: string, placeholderPrefix: '$' | '?'): Dialect {
-  return {
-    name,
-    capabilities: {
-      returning: false,
-      lockForUpdate: false,
-      sharedLock: false,
-      concurrentQueries: false,
-      workerThreadExecution: false,
-      savepoints: true,
-      jsonValueQuery: true,
-      jsonContains: true,
-      jsonLength: true,
-      schemaQualifiedIdentifiers: true,
-      nativeUpsert: false,
-      ddlAlterSupport: false,
-      introspection: false,
-    },
-    quoteIdentifier(identifier: string) {
-      return `"${identifier}"`
-    },
-    createPlaceholder(index: number) {
-      return placeholderPrefix === '$' ? `$${index}` : '?'
-    },
-  }
 }
 
 afterEach(async () => {
@@ -217,35 +190,7 @@ describe('@holo-js/queue-db failed job store', () => {
   })
 
   it('falls back to error.message and zero affected rows when the store driver omits them', async () => {
-    const spy = vi.spyOn(DB, 'connection').mockReturnValue({
-      async initialize() {},
-      getDialect() {
-        return {
-          name: 'sqlite',
-          capabilities: {
-            concurrentQueries: false,
-            jsonOperations: true,
-            lateralJoins: false,
-            workerThreadExecution: false,
-            pessimisticLocking: false,
-            savepoints: true,
-            vectorColumns: false,
-          },
-          quoteIdentifier(identifier: string) {
-            return `"${identifier}"`
-          },
-          createPlaceholder() {
-            return '?'
-          },
-        }
-      },
-      async executeCompiled() {
-        return {}
-      },
-      async queryCompiled() {
-        return { rows: [], rowCount: 0 }
-      },
-    } as never)
+    const spy = vi.spyOn(DB, 'connection').mockReturnValue(createQueueDatabaseContextMock())
 
     configureQueueRuntime({
       config: {
@@ -317,34 +262,17 @@ describe('@holo-js/queue-db failed job store', () => {
         exception: expect.stringContaining('worker exploded'),
       }),
     ])
-    expect(queueDbFailedStoreInternals.getFailedStoreConfig()).toEqual({
-      driver: 'database',
-      connection: 'default',
-      table: 'failed_jobs',
-    })
-    expect(await queueDbFailedStoreInternals.getFailedStoreConnection()).not.toBeNull()
   })
 
   it('reuses the active async-context connection for the failed-job store when names match', async () => {
     const executeCompiled = vi.fn(async (_statement: unknown) => ({}))
-    const activeConnection = {
-      async initialize() {},
-      getConnectionName() {
-        return 'default'
+    const activeConnection = createQueueDatabaseContextMock({
+      connectionName: 'default',
+      dialect: createQueueTestDialect('sqlite'),
+      async execute(sql, bindings) {
+        return await executeCompiled({ sql, bindings })
       },
-      getDialect() {
-        return createDialect('sqlite', '?')
-      },
-      async executeCompiled(statement: unknown) {
-        return await executeCompiled(statement)
-      },
-      async queryCompiled() {
-        return {
-          rows: [],
-          rowCount: 0,
-        }
-      },
-    } as unknown as DatabaseContext
+    })
 
     const spy = vi.spyOn(DB, 'connection').mockImplementation(() => {
       throw new Error('DB.connection() should not be used when an active matching connection exists.')

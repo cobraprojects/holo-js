@@ -1,7 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { DB } from '@holo-js/db'
 import type { DatabaseContext } from '@holo-js/db'
-import { connectionAsyncContext } from '@holo-js/db'
 import type {
   NormalizedQueueDatabaseConnectionConfig,
   QueueAsyncDriver,
@@ -13,7 +11,16 @@ import type {
   QueueReleaseOptions,
   QueueReservedJob,
 } from '@holo-js/queue'
-import { queueDatabaseInternals } from '../database'
+import {
+  coerceRequiredInteger,
+  createPlaceholderList,
+  ensureConnectionReady,
+  normalizeIdentifierPath,
+  parseStoredQueueJobRow,
+  quoteIdentifierPath,
+  resolveDatabaseConnection,
+  serializeQueueJson,
+} from '../database'
 
 type DatabaseQueuedJobRow = {
   id: unknown
@@ -78,16 +85,7 @@ function createPlaceholders(
   count: number,
   startIndex = 1,
 ): readonly string[] {
-  return queueDatabaseInternals.createPlaceholderList(connection.getDialect(), count, startIndex).split(', ')
-}
-
-function resolveDatabaseConnection(name: string): DatabaseContext {
-  const active = connectionAsyncContext.getActive()?.connection
-  if (active && active.getConnectionName() === name) {
-    return active
-  }
-
-  return DB.connection(name)
+  return createPlaceholderList(connection.getDialect(), count, startIndex).split(', ')
 }
 
 export class DatabaseQueueDriver implements QueueAsyncDriver {
@@ -102,15 +100,15 @@ export class DatabaseQueueDriver implements QueueAsyncDriver {
     private readonly context: QueueDriverFactoryContext,
   ) {
     this.name = connection.name
-    this.tableName = queueDatabaseInternals.normalizeIdentifierPath(connection.table, 'Queue table name')
+    this.tableName = normalizeIdentifierPath(connection.table, 'Queue table name')
   }
 
   private async getConnection(): Promise<DatabaseContext> {
-    return queueDatabaseInternals.ensureConnectionReady(resolveDatabaseConnection(this.connection.connection))
+    return ensureConnectionReady(resolveDatabaseConnection(this.connection.connection))
   }
 
   private getQuotedTable(connection: DatabaseContext): string {
-    return queueDatabaseInternals.quoteIdentifierPath(connection.getDialect(), this.tableName)
+    return quoteIdentifierPath(connection.getDialect(), this.tableName)
   }
 
   private getExpiredReservationCutoff(now: number): number {
@@ -125,7 +123,7 @@ export class DatabaseQueueDriver implements QueueAsyncDriver {
     return Object.freeze({
       reservationId,
       reservedAt,
-      envelope: queueDatabaseInternals.parseStoredQueueJobRow(row),
+      envelope: parseStoredQueueJobRow(row),
     })
   }
 
@@ -144,7 +142,7 @@ export class DatabaseQueueDriver implements QueueAsyncDriver {
           job.name,
           job.connection,
           job.queue,
-          queueDatabaseInternals.serializeQueueJson(job.payload),
+          serializeQueueJson(job.payload),
           job.attempts,
           job.maxAttempts,
           job.availableAt ?? job.createdAt,
@@ -195,7 +193,7 @@ export class DatabaseQueueDriver implements QueueAsyncDriver {
             }
 
             const reservationId = `${input.workerId}:${randomUUID()}`
-            const nextAttempts = queueDatabaseInternals.coerceRequiredInteger(row.attempts, 'Stored queue job attempts') + 1
+            const nextAttempts = coerceRequiredInteger(row.attempts, 'Stored queue job attempts') + 1
             const [
               reservedAtPlaceholder,
               reservationPlaceholder,
@@ -314,10 +312,4 @@ export const databaseQueueDriverFactory: QueueDriverFactory<NormalizedQueueDatab
   create(connection, context) {
     return new DatabaseQueueDriver(connection, context)
   },
-}
-
-export const databaseQueueDriverInternals = {
-  normalizeDatabaseErrorMessage,
-  normalizeQueueNames,
-  wrapDatabaseError,
 }

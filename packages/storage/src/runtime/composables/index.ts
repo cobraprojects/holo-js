@@ -82,10 +82,14 @@ function encodeStorageSegment(segment: string): string {
   return encodeURIComponent(segment)
 }
 
-function encodeRfc3986(value: string): string {
-  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => {
+function encodeRfc3986ExtraCharacters(value: string): string {
+  return value.replace(/[!'()*]/g, (character) => {
     return `%${character.charCodeAt(0).toString(16).toUpperCase()}`
   })
+}
+
+function encodeRfc3986(value: string): string {
+  return encodeRfc3986ExtraCharacters(encodeURIComponent(value))
 }
 
 function decodeStorageSegment(segment: string): string {
@@ -387,9 +391,7 @@ function resolveS3RequestTarget(disk: RuntimeDiskConfig, path: string): URL {
 }
 
 function canonicalizeUriPath(pathname: string): string {
-  return pathname.replace(/[!'()*]/g, (character) => {
-    return `%${character.charCodeAt(0).toString(16).toUpperCase()}`
-  })
+  return encodeRfc3986ExtraCharacters(pathname)
 }
 
 function resolveExpiration(options?: TemporaryUrlOptions): number {

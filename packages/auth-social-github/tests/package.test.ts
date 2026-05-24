@@ -2,6 +2,39 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import githubSocialProvider from '../src'
 
 const originalFetch = globalThis.fetch
+type GithubRedirectContext = Parameters<typeof githubSocialProvider.buildAuthorizationUrl>[0]
+type GithubCallbackContext = Parameters<typeof githubSocialProvider.exchangeCode>[0]
+
+function createRedirectContext(): GithubRedirectContext {
+  return {
+    provider: 'github',
+    request: new Request('https://app.test/auth/github'),
+    state: 'state-1',
+    codeVerifier: 'verifier',
+    codeChallenge: 'challenge',
+    config: createProviderConfig(),
+  }
+}
+
+function createCallbackContext(scopes: readonly string[] = []): GithubCallbackContext {
+  return {
+    provider: 'github',
+    request: new Request('https://app.test/auth/github/callback?code=test'),
+    code: 'test-code',
+    codeVerifier: 'verifier',
+    config: createProviderConfig(scopes),
+  }
+}
+
+function createProviderConfig(scopes: readonly string[] = []) {
+  return {
+    clientId: 'client',
+    clientSecret: 'secret',
+    redirectUri: 'https://app.test/auth/github/callback',
+    scopes: [...scopes],
+    encryptTokens: false,
+  }
+}
 
 afterEach(() => {
   globalThis.fetch = originalFetch
@@ -10,20 +43,7 @@ afterEach(() => {
 
 describe('@holo-js/auth-social-github', () => {
   it('builds the authorization url with GitHub defaults', async () => {
-    const url = await githubSocialProvider.buildAuthorizationUrl({
-      provider: 'github',
-      request: new Request('https://app.test/auth/github'),
-      state: 'state-1',
-      codeVerifier: 'verifier',
-      codeChallenge: 'challenge',
-      config: {
-        clientId: 'client',
-        clientSecret: 'secret',
-        redirectUri: 'https://app.test/auth/github/callback',
-        scopes: [],
-        encryptTokens: false,
-      },
-    })
+    const url = await githubSocialProvider.buildAuthorizationUrl(createRedirectContext())
 
     expect(url).toContain('github.com/login/oauth/authorize')
     expect(url).toContain('scope=read%3Auser+user%3Aemail')
@@ -46,19 +66,7 @@ describe('@holo-js/auth-social-github', () => {
         { email: 'verified@example.com', verified: true, primary: false },
       ]), { status: 200 })) as typeof fetch
 
-    const exchanged = await githubSocialProvider.exchangeCode({
-      provider: 'github',
-      request: new Request('https://app.test/auth/github/callback?code=test'),
-      code: 'test-code',
-      codeVerifier: 'verifier',
-      config: {
-        clientId: 'client',
-        clientSecret: 'secret',
-        redirectUri: 'https://app.test/auth/github/callback',
-        scopes: [],
-        encryptTokens: false,
-      },
-    })
+    const exchanged = await githubSocialProvider.exchangeCode(createCallbackContext())
 
     expect(exchanged.profile).toEqual({
       id: '42',
@@ -73,56 +81,20 @@ describe('@holo-js/auth-social-github', () => {
     globalThis.fetch = vi.fn()
       .mockResolvedValueOnce(new Response('nope', { status: 401 })) as typeof fetch
 
-    await expect(githubSocialProvider.exchangeCode({
-      provider: 'github',
-      request: new Request('https://app.test/auth/github/callback?code=test'),
-      code: 'test-code',
-      codeVerifier: 'verifier',
-      config: {
-        clientId: 'client',
-        clientSecret: 'secret',
-        redirectUri: 'https://app.test/auth/github/callback',
-        scopes: [],
-        encryptTokens: false,
-      },
-    })).rejects.toThrow('GitHub token exchange failed')
+    await expect(githubSocialProvider.exchangeCode(createCallbackContext())).rejects.toThrow('GitHub token exchange failed')
 
     globalThis.fetch = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'access' }), { status: 200 }))
       .mockResolvedValueOnce(new Response('nope', { status: 500 })) as typeof fetch
 
-    await expect(githubSocialProvider.exchangeCode({
-      provider: 'github',
-      request: new Request('https://app.test/auth/github/callback?code=test'),
-      code: 'test-code',
-      codeVerifier: 'verifier',
-      config: {
-        clientId: 'client',
-        clientSecret: 'secret',
-        redirectUri: 'https://app.test/auth/github/callback',
-        scopes: [],
-        encryptTokens: false,
-      },
-    })).rejects.toThrow('GitHub user request failed')
+    await expect(githubSocialProvider.exchangeCode(createCallbackContext())).rejects.toThrow('GitHub user request failed')
 
     globalThis.fetch = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'access' }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ id: 1, login: 'octocat' }), { status: 200 }))
       .mockResolvedValueOnce(new Response('nope', { status: 500 })) as typeof fetch
 
-    await expect(githubSocialProvider.exchangeCode({
-      provider: 'github',
-      request: new Request('https://app.test/auth/github/callback?code=test'),
-      code: 'test-code',
-      codeVerifier: 'verifier',
-      config: {
-        clientId: 'client',
-        clientSecret: 'secret',
-        redirectUri: 'https://app.test/auth/github/callback',
-        scopes: [],
-        encryptTokens: false,
-      },
-    })).rejects.toThrow('GitHub email request failed')
+    await expect(githubSocialProvider.exchangeCode(createCallbackContext())).rejects.toThrow('GitHub email request failed')
   })
 
   it('fails when the GitHub profile does not include an id', async () => {
@@ -131,18 +103,6 @@ describe('@holo-js/auth-social-github', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ login: 'octocat' }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 })) as typeof fetch
 
-    await expect(githubSocialProvider.exchangeCode({
-      provider: 'github',
-      request: new Request('https://app.test/auth/github/callback?code=test'),
-      code: 'test-code',
-      codeVerifier: 'verifier',
-      config: {
-        clientId: 'client',
-        clientSecret: 'secret',
-        redirectUri: 'https://app.test/auth/github/callback',
-        scopes: ['read:user'],
-        encryptTokens: false,
-      },
-    })).rejects.toThrow('did not include "id"')
+    await expect(githubSocialProvider.exchangeCode(createCallbackContext(['read:user']))).rejects.toThrow('did not include "id"')
   })
 })

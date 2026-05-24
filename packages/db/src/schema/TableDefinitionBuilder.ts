@@ -1,8 +1,8 @@
 import { SchemaError } from '../core/errors'
 import { column, type AnyColumnBuilder, type ColumnInput } from './columns'
 import { defineTable, type BoundTableDefinition, type DefineTableOptions } from './defineTable'
-import { inferConstrainedTableName } from './pluralize'
-import type { ForeignKeyReference, TableIndexDefinition } from './types'
+import { ForeignKeyBuilderState } from './foreignKeyBuilderState'
+import type { TableIndexDefinition } from './types'
 
 type ColumnShapeInput = Record<string, ColumnInput>
 
@@ -389,44 +389,41 @@ class TableCreateForeignIdBuilder<
   TName extends string,
   TColumns extends ColumnShapeInput,
 > extends TableCreateColumnBuilder<TName, TColumns> {
-  private referenceTable?: string
-  private referenceColumn = 'id'
-  private onDeleteAction?: ForeignKeyReference['onDelete']
-  private onUpdateAction?: ForeignKeyReference['onUpdate']
+  private readonly foreignKeyState: ForeignKeyBuilderState
 
   constructor(
     root: TableDefinitionBuilder<TName, TColumns>,
     builderRef: ColumnReference,
-    private readonly columnName: string,
+    columnName: string,
   ) {
     super(root, builderRef)
+    this.foreignKeyState = new ForeignKeyBuilderState(columnName)
   }
 
   references(
     columnName: string,
   ): this {
-    this.referenceColumn = columnName
+    this.foreignKeyState.references(columnName)
     return this.applyReference()
   }
 
   on(table: string): this {
-    this.referenceTable = table
+    this.foreignKeyState.on(table)
     return this.applyReference()
   }
 
   constrained(table?: string, columnName = 'id'): this {
-    this.referenceTable = table ?? inferConstrainedTableName(this.columnName)
-    this.referenceColumn = columnName
+    this.foreignKeyState.constrained(table, columnName)
     return this.applyReference()
   }
 
-  onDelete(action: NonNullable<ForeignKeyReference['onDelete']>): this {
-    this.onDeleteAction = action
+  onDelete(action: Parameters<ForeignKeyBuilderState['onDelete']>[0]): this {
+    this.foreignKeyState.onDelete(action)
     return this.applyReference()
   }
 
-  onUpdate(action: NonNullable<ForeignKeyReference['onUpdate']>): this {
-    this.onUpdateAction = action
+  onUpdate(action: Parameters<ForeignKeyBuilderState['onUpdate']>[0]): this {
+    this.foreignKeyState.onUpdate(action)
     return this.applyReference()
   }
 
@@ -463,17 +460,7 @@ class TableCreateForeignIdBuilder<
   }
 
   private applyReference(): this {
-    let builder = this.builderRef.builder.references(this.referenceColumn)
-    if (this.referenceTable) {
-      builder = builder.on(this.referenceTable)
-    }
-    if (this.onDeleteAction) {
-      builder = builder.onDelete(this.onDeleteAction)
-    }
-    if (this.onUpdateAction) {
-      builder = builder.onUpdate(this.onUpdateAction)
-    }
-    this.builderRef.builder = builder
+    this.builderRef.builder = this.foreignKeyState.applyToColumnBuilder(this.builderRef.builder)
     return this
   }
 }
@@ -482,40 +469,38 @@ class TableCreateForeignKeyBuilder<
   TName extends string,
   TColumns extends ColumnShapeInput,
 > {
-  private referenceTable?: string
-  private referenceColumn = 'id'
-  private onDeleteAction?: ForeignKeyReference['onDelete']
-  private onUpdateAction?: ForeignKeyReference['onUpdate']
+  private readonly foreignKeyState: ForeignKeyBuilderState
 
   constructor(
     private readonly root: TableDefinitionBuilder<TName, TColumns>,
     private readonly builderRef: ColumnReference,
-    private readonly columnName: string,
-  ) {}
+    columnName: string,
+  ) {
+    this.foreignKeyState = new ForeignKeyBuilderState(columnName)
+  }
 
   references(columnName: string): this {
-    this.referenceColumn = columnName
+    this.foreignKeyState.references(columnName)
     return this.applyReference()
   }
 
   on(table: string): this {
-    this.referenceTable = table
+    this.foreignKeyState.on(table)
     return this.applyReference()
   }
 
   constrained(table?: string, columnName = 'id'): this {
-    this.referenceTable = table ?? inferConstrainedTableName(this.columnName)
-    this.referenceColumn = columnName
+    this.foreignKeyState.constrained(table, columnName)
     return this.applyReference()
   }
 
-  onDelete(action: NonNullable<ForeignKeyReference['onDelete']>): this {
-    this.onDeleteAction = action
+  onDelete(action: Parameters<ForeignKeyBuilderState['onDelete']>[0]): this {
+    this.foreignKeyState.onDelete(action)
     return this.applyReference()
   }
 
-  onUpdate(action: NonNullable<ForeignKeyReference['onUpdate']>): this {
-    this.onUpdateAction = action
+  onUpdate(action: Parameters<ForeignKeyBuilderState['onUpdate']>[0]): this {
+    this.foreignKeyState.onUpdate(action)
     return this.applyReference()
   }
 
@@ -556,17 +541,7 @@ class TableCreateForeignKeyBuilder<
   }
 
   private applyReference(): this {
-    let builder = this.builderRef.builder.references(this.referenceColumn)
-    if (this.referenceTable) {
-      builder = builder.on(this.referenceTable)
-    }
-    if (this.onDeleteAction) {
-      builder = builder.onDelete(this.onDeleteAction)
-    }
-    if (this.onUpdateAction) {
-      builder = builder.onUpdate(this.onUpdateAction)
-    }
-    this.builderRef.builder = builder
+    this.builderRef.builder = this.foreignKeyState.applyToColumnBuilder(this.builderRef.builder)
     return this
   }
 }

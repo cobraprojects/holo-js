@@ -47,8 +47,6 @@
     "@holo-js/db-mysql": "catalog:",
     "@holo-js/db-postgres": "catalog:",
     "@holo-js/db-sqlite": "catalog:",
-    "@types/better-sqlite3": "catalog:",
-    "@types/pg": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:"
   }

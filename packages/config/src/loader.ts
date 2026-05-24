@@ -273,25 +273,7 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
   const auth = normalizeAuthConfig(resolvedRawConfig.auth as HoloAuthConfig | undefined, {
     appKey: app.key,
   })
-
-  const customEntries = Object.entries(resolvedRawConfig).filter(([key]) => {
-    return key !== 'app'
-      && key !== 'database'
-      && key !== 'redis'
-      && key !== 'cache'
-      && key !== 'cors'
-      && key !== 'storage'
-      && key !== 'queue'
-      && key !== 'broadcast'
-      && key !== 'mail'
-      && key !== 'notifications'
-      && key !== 'media'
-      && key !== 'session'
-      && key !== 'security'
-      && key !== 'auth'
-  })
-  const custom = Object.freeze(Object.fromEntries(customEntries)) as Readonly<TCustom>
-  const all = Object.freeze({
+  const firstPartyConfig = {
     app,
     database,
     redis,
@@ -306,24 +288,19 @@ function normalizeLoadedConfig<TCustom extends HoloConfigMap = HoloConfigMap>(
     session,
     security,
     auth,
+  }
+  const firstPartyConfigKeys = new Set(Object.keys(firstPartyConfig))
+  const customEntries = Object.entries(resolvedRawConfig).filter(([key]) => {
+    return !firstPartyConfigKeys.has(key)
+  })
+  const custom = Object.freeze(Object.fromEntries(customEntries)) as Readonly<TCustom>
+  const all = Object.freeze({
+    ...firstPartyConfig,
     ...custom,
   }) as Readonly<LoadedHoloConfig<TCustom>['all']>
 
   return {
-    app,
-    database,
-    redis,
-    cache,
-    cors,
-    storage,
-    queue,
-    broadcast,
-    mail,
-    notifications,
-    media,
-    session,
-    security,
-    auth,
+    ...firstPartyConfig,
     custom,
     all,
     environment: options.environment,

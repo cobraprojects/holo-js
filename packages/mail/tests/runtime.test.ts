@@ -10,7 +10,6 @@ import {
   listFakeSentMails,
   listPreviewMailArtifacts,
   MailSendError,
-  mailRuntimeInternals,
   previewMail,
   registerMailDriver,
   renderMailPreview,
@@ -25,6 +24,7 @@ import {
   type MailSendResult,
   type NormalizedHoloMailConfig,
 } from '../src'
+import { mailRuntimeInternals } from '../src/runtime'
 
 const previousAppEnv = process.env.APP_ENV
 const previousNodeEnv = process.env.NODE_ENV

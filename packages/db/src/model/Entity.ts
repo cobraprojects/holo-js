@@ -430,19 +430,94 @@ class EntityBase<
     return this.toAttributes()
   }
 
-  async save(): Promise<this> {
+  private applyPersistedEntity(persisted: EntityBase<TTable, TRelations>, changes: Record<string, unknown>): void {
+    this.attributes = { ...persisted.toAttributes() }
+    this.original = { ...persisted.toAttributes() }
+    this.changes = { ...changes }
+    this.persisted = true
+  }
+
+  private async persistEntity(
+    methodName: 'saveEntity' | 'saveEntityQuietly',
+    errorMessage: string,
+  ): Promise<this> {
     const repo = this.getRepositoryRuntime()
-    if (typeof repo.saveEntity !== 'function') {
-      throw new HydrationError('The bound repository cannot persist entities.')
+    const method = repo[methodName]
+    if (typeof method !== 'function') {
+      throw new HydrationError(errorMessage)
     }
 
     const pendingChanges = this.persisted ? this.getDirty() : this.toAttributes()
-    const persisted = await repo.saveEntity(this)
-    this.attributes = { ...persisted.toAttributes() }
-    this.original = { ...persisted.toAttributes() }
-    this.changes = { ...pendingChanges }
-    this.persisted = true
+    const persisted = await method.call(repo, this)
+    this.applyPersistedEntity(persisted, pendingChanges)
     return this
+  }
+
+  private async deletePersistedEntity(
+    methodName: 'deleteEntity' | 'deleteEntityQuietly',
+    errorMessage: string,
+  ): Promise<void> {
+    if (!this.persisted) {
+      throw new HydrationError('Cannot delete an entity that has not been persisted yet.')
+    }
+
+    const repo = this.getRepositoryRuntime()
+    const method = repo[methodName]
+    if (typeof method !== 'function') {
+      throw new HydrationError(errorMessage)
+    }
+
+    await method.call(repo, this)
+    this.persisted = typeof repo.shouldKeepEntityPersistedOnDelete === 'function'
+      ? repo.shouldKeepEntityPersistedOnDelete(this)
+      : false
+  }
+
+  private async restoreEntity(
+    methodName: 'restoreEntity' | 'restoreEntityQuietly',
+    errorMessage: string,
+  ): Promise<this> {
+    const repo = this.getRepositoryRuntime()
+    const method = repo[methodName]
+    if (typeof method !== 'function') {
+      throw new HydrationError(errorMessage)
+    }
+
+    const restored = await method.call(repo, this)
+    this.applyPersistedEntity(restored, restored.getChanges())
+    return this
+  }
+
+  private async forceDeletePersistedEntity(
+    methodName: 'forceDeleteEntity' | 'forceDeleteEntityQuietly',
+    errorMessage: string,
+  ): Promise<void> {
+    if (!this.persisted) {
+      throw new HydrationError('Cannot force-delete an entity that has not been persisted yet.')
+    }
+
+    const repo = this.getRepositoryRuntime()
+    const method = repo[methodName]
+    if (typeof method !== 'function') {
+      throw new HydrationError(errorMessage)
+    }
+
+    await method.call(repo, this)
+    this.persisted = false
+  }
+
+  private async loadAggregateDefinitions(aggregates: readonly ModelAggregateLoad[]): Promise<this> {
+    const repo = this.getRepositoryRuntime()
+    if (typeof repo.loadRelationAggregates !== 'function') {
+      throw new HydrationError('The bound repository cannot load relation aggregates.')
+    }
+
+    await repo.loadRelationAggregates([this], aggregates)
+    return this
+  }
+
+  async save(): Promise<this> {
+    return this.persistEntity('saveEntity', 'The bound repository cannot persist entities.')
   }
 
   async push(): Promise<this> {
@@ -492,106 +567,31 @@ class EntityBase<
   }
 
   async saveQuietly(): Promise<this> {
-    const repo = this.getRepositoryRuntime()
-    if (typeof repo.saveEntityQuietly !== 'function') {
-      throw new HydrationError('The bound repository cannot persist entities quietly.')
-    }
-
-    const pendingChanges = this.persisted ? this.getDirty() : this.toAttributes()
-    const persisted = await repo.saveEntityQuietly(this)
-    this.attributes = { ...persisted.toAttributes() }
-    this.original = { ...persisted.toAttributes() }
-    this.changes = { ...pendingChanges }
-    this.persisted = true
-    return this
+    return this.persistEntity('saveEntityQuietly', 'The bound repository cannot persist entities quietly.')
   }
 
   async delete(): Promise<void> {
-    if (!this.persisted) {
-      throw new HydrationError('Cannot delete an entity that has not been persisted yet.')
-    }
-
-    const repo = this.getRepositoryRuntime()
-    if (typeof repo.deleteEntity !== 'function') {
-      throw new HydrationError('The bound repository cannot delete entities.')
-    }
-
-    await repo.deleteEntity(this)
-    this.persisted = typeof repo.shouldKeepEntityPersistedOnDelete === 'function'
-      ? repo.shouldKeepEntityPersistedOnDelete(this)
-      : false
+    await this.deletePersistedEntity('deleteEntity', 'The bound repository cannot delete entities.')
   }
 
   async deleteQuietly(): Promise<void> {
-    if (!this.persisted) {
-      throw new HydrationError('Cannot delete an entity that has not been persisted yet.')
-    }
-
-    const repo = this.getRepositoryRuntime()
-    if (typeof repo.deleteEntityQuietly !== 'function') {
-      throw new HydrationError('The bound repository cannot delete entities quietly.')
-    }
-
-    await repo.deleteEntityQuietly(this)
-    this.persisted = typeof repo.shouldKeepEntityPersistedOnDelete === 'function'
-      ? repo.shouldKeepEntityPersistedOnDelete(this)
-      : false
+    await this.deletePersistedEntity('deleteEntityQuietly', 'The bound repository cannot delete entities quietly.')
   }
 
   async restore(): Promise<this> {
-    const repo = this.getRepositoryRuntime()
-    if (typeof repo.restoreEntity !== 'function') {
-      throw new HydrationError('The bound repository cannot restore entities.')
-    }
-
-    const restored = await repo.restoreEntity(this)
-    this.attributes = { ...restored.toAttributes() }
-    this.original = { ...restored.toAttributes() }
-    this.changes = { ...restored.getChanges() }
-    this.persisted = true
-    return this
+    return this.restoreEntity('restoreEntity', 'The bound repository cannot restore entities.')
   }
 
   async restoreQuietly(): Promise<this> {
-    const repo = this.getRepositoryRuntime()
-    if (typeof repo.restoreEntityQuietly !== 'function') {
-      throw new HydrationError('The bound repository cannot restore entities quietly.')
-    }
-
-    const restored = await repo.restoreEntityQuietly(this)
-    this.attributes = { ...restored.toAttributes() }
-    this.original = { ...restored.toAttributes() }
-    this.changes = { ...restored.getChanges() }
-    this.persisted = true
-    return this
+    return this.restoreEntity('restoreEntityQuietly', 'The bound repository cannot restore entities quietly.')
   }
 
   async forceDelete(): Promise<void> {
-    if (!this.persisted) {
-      throw new HydrationError('Cannot force-delete an entity that has not been persisted yet.')
-    }
-
-    const repo = this.getRepositoryRuntime()
-    if (typeof repo.forceDeleteEntity !== 'function') {
-      throw new HydrationError('The bound repository cannot force-delete entities.')
-    }
-
-    await repo.forceDeleteEntity(this)
-    this.persisted = false
+    await this.forceDeletePersistedEntity('forceDeleteEntity', 'The bound repository cannot force-delete entities.')
   }
 
   async forceDeleteQuietly(): Promise<void> {
-    if (!this.persisted) {
-      throw new HydrationError('Cannot force-delete an entity that has not been persisted yet.')
-    }
-
-    const repo = this.getRepositoryRuntime()
-    if (typeof repo.forceDeleteEntityQuietly !== 'function') {
-      throw new HydrationError('The bound repository cannot force-delete entities quietly.')
-    }
-
-    await repo.forceDeleteEntityQuietly(this)
-    this.persisted = false
+    await this.forceDeletePersistedEntity('forceDeleteEntityQuietly', 'The bound repository cannot force-delete entities quietly.')
   }
 
   async fresh(): Promise<Entity<TTable, TRelations> | undefined> {
@@ -683,63 +683,27 @@ class EntityBase<
   }
 
   async loadCount(...relations: readonly ModelRelationName<TRelations>[]): Promise<this> {
-    const repo = this.getRepositoryRuntime()
-    if (typeof repo.loadRelationAggregates !== 'function') {
-      throw new HydrationError('The bound repository cannot load relation aggregates.')
-    }
-
-    await repo.loadRelationAggregates([this], relations.map(relation => ({ relation, kind: 'count' })))
-    return this
+    return this.loadAggregateDefinitions(relations.map(relation => ({ relation, kind: 'count' })))
   }
 
   async loadExists(...relations: readonly ModelRelationName<TRelations>[]): Promise<this> {
-    const repo = this.getRepositoryRuntime()
-    if (typeof repo.loadRelationAggregates !== 'function') {
-      throw new HydrationError('The bound repository cannot load relation aggregates.')
-    }
-
-    await repo.loadRelationAggregates([this], relations.map(relation => ({ relation, kind: 'exists' })))
-    return this
+    return this.loadAggregateDefinitions(relations.map(relation => ({ relation, kind: 'exists' })))
   }
 
   async loadSum<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>): Promise<this> {
-    const repo = this.getRepositoryRuntime()
-    if (typeof repo.loadRelationAggregates !== 'function') {
-      throw new HydrationError('The bound repository cannot load relation aggregates.')
-    }
-
-    await repo.loadRelationAggregates([this], [{ relation, kind: 'sum', column }])
-    return this
+    return this.loadAggregateDefinitions([{ relation, kind: 'sum', column }])
   }
 
   async loadAvg<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>): Promise<this> {
-    const repo = this.getRepositoryRuntime()
-    if (typeof repo.loadRelationAggregates !== 'function') {
-      throw new HydrationError('The bound repository cannot load relation aggregates.')
-    }
-
-    await repo.loadRelationAggregates([this], [{ relation, kind: 'avg', column }])
-    return this
+    return this.loadAggregateDefinitions([{ relation, kind: 'avg', column }])
   }
 
   async loadMin<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>): Promise<this> {
-    const repo = this.getRepositoryRuntime()
-    if (typeof repo.loadRelationAggregates !== 'function') {
-      throw new HydrationError('The bound repository cannot load relation aggregates.')
-    }
-
-    await repo.loadRelationAggregates([this], [{ relation, kind: 'min', column }])
-    return this
+    return this.loadAggregateDefinitions([{ relation, kind: 'min', column }])
   }
 
   async loadMax<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>): Promise<this> {
-    const repo = this.getRepositoryRuntime()
-    if (typeof repo.loadRelationAggregates !== 'function') {
-      throw new HydrationError('The bound repository cannot load relation aggregates.')
-    }
-
-    await repo.loadRelationAggregates([this], [{ relation, kind: 'max', column }])
-    return this
+    return this.loadAggregateDefinitions([{ relation, kind: 'max', column }])
   }
 
   associate<TRelated extends TableDefinition>(relation: string, related: Entity<TRelated> | null): this {

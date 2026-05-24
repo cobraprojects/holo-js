@@ -470,7 +470,6 @@
       "version": "0.1.4",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
-        "@holo-js/config": "catalog:",
       },
       "devDependencies": {
         "@types/node": "catalog:",
@@ -726,8 +725,6 @@
         "@holo-js/db-mysql": "catalog:",
         "@holo-js/db-postgres": "catalog:",
         "@holo-js/db-sqlite": "catalog:",
-        "@types/better-sqlite3": "catalog:",
-        "@types/pg": "catalog:",
         "tsup": "catalog:",
         "typescript": "catalog:",
       },

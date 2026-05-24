@@ -1,9 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { existsSync } from 'node:fs'
 import { createHash, createHmac } from 'node:crypto'
-import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import {
   config as globalConfig,
   configureConfigRuntime,
@@ -23,7 +21,7 @@ import {
   Entity,
   resetDB,
 } from '@holo-js/db'
-import { importBundledRuntimeModule } from '../runtimeModule'
+import { importBundledRuntimeModule, importOptionalRuntimeModule } from '../runtimeModule'
 import { resolveRuntimeConnectionManagerOptions } from './dbRuntime'
 import { loadGeneratedProjectRegistry, type GeneratedProjectRegistry } from './registry'
 import { configurePlainNodeStorageRuntime, resetOptionalStorageRuntime } from '../storageRuntime'
@@ -1071,54 +1069,13 @@ function restoreOptionalSubsystemRuntimeBindings(
 
 const BROADCAST_PUBLISH_TIMEOUT_MS = 10_000
 
-const portableRuntimeRequire = createRequire(import.meta.url)
-
-function resolveOptionalImportSpecifier(specifier: string, projectRoot?: string): string {
-  if (!projectRoot) {
-    return specifier
-  }
-
-  try {
-    const resolved = portableRuntimeRequire.resolve(specifier, {
-      paths: [projectRoot],
-    })
-    return pathToFileURL(resolved).href
-  } catch {
-    return specifier
-  }
-}
-
 async function importOptionalModule<TModule>(
   specifier: string,
   options: {
     readonly projectRoot?: string
   } = {},
 ): Promise<TModule | undefined> {
-  const resolvedSpecifier = resolveOptionalImportSpecifier(specifier, options.projectRoot)
-
-  try {
-    return await import(/* webpackIgnore: true */ resolvedSpecifier as string) as TModule
-  } catch (error) {
-    /* v8 ignore start -- optional-package absence is validated in published-package integration, not in this monorepo test graph */
-    if (
-      error instanceof Error
-      && (
-        error.message.includes(`Cannot find package '${specifier}'`)
-        || error.message.includes(`Cannot find module '${specifier}'`)
-        || error.message.includes(`Failed to load url ${specifier}`)
-        || error.message.includes(`Could not resolve "${specifier}"`)
-        || error.message.includes(`Cannot find package '${resolvedSpecifier}'`)
-        || error.message.includes(`Cannot find module '${resolvedSpecifier}'`)
-        || error.message.includes(`Failed to load url ${resolvedSpecifier}`)
-        || error.message.includes(`Could not resolve "${resolvedSpecifier}"`)
-      )
-    ) {
-      return undefined
-    }
-    /* v8 ignore stop */
-
-    throw error
-  }
+  return importOptionalRuntimeModule<TModule>(specifier, options)
 }
 
 const portableRuntimeModuleInternals = {

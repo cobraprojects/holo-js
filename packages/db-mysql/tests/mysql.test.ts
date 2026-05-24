@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
+import type { DriverAdapter } from '@holo-js/db'
 import { createMySQLAdapter } from '../src'
+
+const runLiveMySql = process.env.HOLO_MYSQL_INTEGRATION === '1' ? it : it.skip
 
 describe('@holo-js/db-mysql', () => {
   it('supports direct clients without creating a pool', async () => {
@@ -20,6 +23,7 @@ describe('@holo-js/db-mysql', () => {
         end: vi.fn(async () => {}),
       },
     })
+    const canonicalAdapter: DriverAdapter = adapter
 
     await expect(adapter.query('select 1')).resolves.toEqual({
       rows: [{ sql: 'select 1' }],
@@ -34,9 +38,10 @@ describe('@holo-js/db-mysql', () => {
     await adapter.rollback()
     expect(query).toHaveBeenNthCalledWith(3, 'START TRANSACTION', [])
     expect(query).toHaveBeenNthCalledWith(4, 'ROLLBACK', [])
+    void canonicalAdapter
   })
 
-  it('runs queries against a local MySQL server through the public adapter', async () => {
+  runLiveMySql('runs queries against a local MySQL server through the public adapter', async () => {
     const tableName = `holo_real_usage_mysql_${randomUUID().replaceAll('-', '_')}`
     const adapter = createMySQLAdapter({
       config: {

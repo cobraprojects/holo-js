@@ -24,7 +24,7 @@ import { getGlobalModel } from './ModelRegistry'
 import { RelationError } from '../core/errors'
 import type { TableDefinition } from '../schema/types'
 
-type PivotMethodKeys = 'withPivot' | 'wherePivot' | 'orderByPivot' | 'as' | 'using'
+type PivotMethodKeys = keyof PivotRelationMethods<unknown>
 type BareBelongsToManyRelation = Omit<BelongsToManyRelationDefinition, PivotMethodKeys>
 type BareMorphToManyRelation = Omit<MorphToManyRelationDefinition, PivotMethodKeys>
 type BareMorphedByManyRelation = Omit<MorphedByManyRelationDefinition, PivotMethodKeys>

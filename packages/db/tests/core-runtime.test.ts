@@ -684,6 +684,36 @@ describe('new core runtime slice', () => {
     await running
   })
 
+  it('sleeps queued scheduler work until timer-backed active work completes', async () => {
+    const scheduler = createQueryScheduler({
+      connectionName: 'default',
+      supportsConcurrentQueries: true,
+      supportsWorkerThreads: false,
+      concurrency: {
+        maxConcurrentQueries: 1,
+        queueLimit: 1,
+      },
+    })
+    const order: string[] = []
+
+    const first = scheduler.schedule({ transactional: false }, async () => {
+      order.push('first-start')
+      await new Promise(resolve => setTimeout(resolve, 0))
+      order.push('first-end')
+      return 'first'
+    })
+    const second = scheduler.schedule({ transactional: false }, async () => {
+      order.push('second-start')
+      return 'second'
+    })
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { result: 'first', schedulingMode: 'concurrent' },
+      { result: 'second', schedulingMode: 'concurrent' },
+    ])
+    expect(order).toEqual(['first-start', 'first-end', 'second-start'])
+  })
+
   it('uses worker scheduling mode when the dialect supports it and the connection prefers worker threads', async () => {
     const adapter = new FakeAdapter()
     let schedulingMode: string | undefined

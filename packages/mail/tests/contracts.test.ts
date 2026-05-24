@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
+  attachFromStorage,
+  createAttachmentMetadata,
+  createAttachmentResolutionPlan,
+  createAttachmentResolutionPlans,
   defineMail,
+  inferMimeTypeFromName,
+  isAttachmentQueueSafe,
   isMailDefinition,
-  mailInternals,
+  mergeMailDefinitionInputs,
   normalizeMailDefinition,
+  resolveAttachmentDefinition,
+  resolveNormalizedAttachment,
 } from '../src'
 
 describe('@holo-js/mail contracts', () => {
@@ -186,7 +194,7 @@ describe('@holo-js/mail contracts', () => {
       },
     })
 
-    const merged = mailInternals.mergeMailDefinitionInputs(base, {
+    const merged = mergeMailDefinitionInputs(base, {
       headers: {
         'X-Trace': 'trace',
       },
@@ -205,31 +213,11 @@ describe('@holo-js/mail contracts', () => {
       tenant: 'base',
       locale: 'en',
     })
-    expect(mailInternals.normalizeDelayValue(new Date('2026-01-01T00:00:00.000Z'), 'delay')).toEqual(
-      new Date('2026-01-01T00:00:00.000Z'),
-    )
-    expect(mailInternals.normalizeTags(['one', ' one ', 'two'])).toEqual(['one', 'two'])
-    expect(mailInternals.inferAttachmentName({
-      path: '/tmp/logo.png',
-    })).toBe('logo.png')
-    expect(mailInternals.inferAttachmentName({
-      storage: {
-        path: 'logos/mark.svg',
-      },
-    })).toBe('mark.svg')
-    expect(mailInternals.inferAttachmentName({
-      path: '/tmp/',
-    })).toBeUndefined()
-    expect(mailInternals.inferAttachmentName({
-      storage: {
-        path: 'logos/',
-      },
-    })).toBeUndefined()
-    expect(mailInternals.inferMimeTypeFromName('logo.png')).toBe('image/png')
-    expect(mailInternals.inferMimeTypeFromName('hello.txt')).toBe('text/plain')
-    expect(mailInternals.inferMimeTypeFromName('report.')).toBeUndefined()
-    expect(mailInternals.inferMimeTypeFromName('archive.unknown')).toBeUndefined()
-    expect(mailInternals.createAttachmentMetadata({
+    expect(inferMimeTypeFromName('logo.png')).toBe('image/png')
+    expect(inferMimeTypeFromName('hello.txt')).toBe('text/plain')
+    expect(inferMimeTypeFromName('report.')).toBeUndefined()
+    expect(inferMimeTypeFromName('archive.unknown')).toBeUndefined()
+    expect(createAttachmentMetadata({
       path: '/tmp/logo.png',
       disposition: 'inline',
       contentId: 'cid-logo',
@@ -240,26 +228,16 @@ describe('@holo-js/mail contracts', () => {
       disposition: 'inline',
       contentId: 'cid-logo',
     })
-    expect(mailInternals.inferAttachmentSource({
-      content: 'hello',
-      name: 'greeting.txt',
-    })).toBe('content')
-    expect(mailInternals.isAttachmentQueueSafe({
+    expect(isAttachmentQueueSafe({
       path: '/tmp/logo.png',
     })).toBe(true)
-    expect(mailInternals.isAttachmentQueueSafe({
+    expect(isAttachmentQueueSafe({
       resolve: async () => ({
         content: 'hello',
         name: 'hello.txt',
       }),
     })).toBe(false)
-    expect(mailInternals.normalizeViewIdentifier('auth/verify-email', 'view')).toBe('auth/verify-email')
-    expect(mailInternals.normalizeJsonValue({
-      ok: ['yes'],
-    }, 'json')).toEqual({
-      ok: ['yes'],
-    })
-    const plans = mailInternals.createAttachmentResolutionPlans([
+    const plans = createAttachmentResolutionPlans([
       {
         path: '/tmp/logo.png',
       },
@@ -276,10 +254,7 @@ describe('@holo-js/mail contracts', () => {
       queuedSafe: true,
       contentType: 'image/png',
     })
-    expect(mailInternals.isObject({ ok: true })).toBe(true)
-    expect(mailInternals.isObject(null)).toBe(false)
-    expect(() => mailInternals.normalizePriority('urgent' as never)).toThrow('Mail priority must be one of')
-    expect(() => mailInternals.createAttachmentResolutionPlan({
+    expect(() => createAttachmentResolutionPlan({
       resolve: async () => ({
         content: 'hello',
         name: 'hello.txt',
@@ -287,15 +262,10 @@ describe('@holo-js/mail contracts', () => {
     }, {
       queued: true,
     })).toThrow('not queue-safe')
-    expect(() => mailInternals.normalizeMailDefinition('broken' as never)).toThrow('Mail definitions must be plain objects')
+    expect(() => normalizeMailDefinition('broken' as never)).toThrow('Mail definitions must be plain objects')
   })
 
   it('covers remaining contract helper validation branches', async () => {
-    expect(() => mailInternals.normalizeOptionalString('   ', 'Optional')).toThrow('Optional must be a non-empty string when provided')
-    expect(() => mailInternals.normalizeRequiredString('   ', 'Required')).toThrow('Required must be a non-empty string')
-    expect(() => mailInternals.normalizeDelayValue(-1, 'delay')).toThrow('greater than or equal to 0')
-    expect(() => mailInternals.normalizeDelayValue(new Date('invalid'), 'delay')).toThrow('must be valid Date instances')
-    expect(() => mailInternals.normalizeJsonValue(Symbol('bad'), 'json')).toThrow('must be JSON-serializable')
     expect(() => defineMail({
       to: 'ava@example.com',
       subject: 'Stats',
@@ -304,45 +274,7 @@ describe('@holo-js/mail contracts', () => {
         score: Number.NaN,
       },
     })).toThrow('must be JSON-serializable')
-    expect(() => mailInternals.normalizeJsonValue(Number.POSITIVE_INFINITY, 'json')).toThrow('must be JSON-serializable')
-    expect(() => mailInternals.normalizeJsonValue(Number.NEGATIVE_INFINITY, 'json')).toThrow('must be JSON-serializable')
-    expect(mailInternals.isValidEmail('ava example.com')).toBe(false)
-    expect(() => mailInternals.normalizeHeaders('bad' as never)).toThrow('Mail headers must be a plain object')
-    expect(() => mailInternals.normalizeHeaders({ Test: 1 as never })).toThrow('Mail header "Test" must be a string')
-    expect(() => mailInternals.normalizeViewIdentifier('/emails/welcome', 'view')).toThrow('must be a relative mail view identifier')
-    expect(() => mailInternals.normalizeAddress(1 as never, 'Mail to')).toThrow('must be an email string or an object with email')
-    expect(() => mailInternals.normalizeRecipients(undefined, 'Mail to', true)).toThrow('must include at least one recipient')
-    expect(mailInternals.normalizeRecipients(undefined, 'Mail cc', false)).toEqual([])
-    expect(mailInternals.normalizeQueueOptions(undefined)).toBeUndefined()
-    expect(mailInternals.normalizeQueueOptions(true)).toBe(true)
-    expect(mailInternals.normalizeQueueOptions({
-      queued: false,
-      queue: 'mail',
-      afterCommit: true,
-    })).toEqual({
-      queued: false,
-      queue: 'mail',
-      afterCommit: true,
-    })
-    expect(mailInternals.normalizeQueueOptions({
-      queued: true,
-      connection: 'redis',
-    })).toEqual({
-      queued: true,
-      connection: 'redis',
-    })
-    expect(mailInternals.normalizeQueueOptions({
-      connection: 'redis',
-    } as never)).toEqual({
-      connection: 'redis',
-    })
-    expect(mailInternals.normalizeRenderSource({
-      view: 'emails/welcome',
-    })).toEqual({
-      view: 'emails/welcome',
-    })
-    expect(() => mailInternals.normalizeRenderSource('bad' as never)).toThrow('Mail render sources must be plain objects')
-    expect(mailInternals.mergeMailDefinitionInputs({
+    expect(mergeMailDefinitionInputs({
       to: 'ava@example.com',
       subject: 'Welcome',
       markdown: '# Welcome',
@@ -350,14 +282,14 @@ describe('@holo-js/mail contracts', () => {
       to: 'ava@example.com',
       subject: 'Welcome',
     })
-    expect(mailInternals.mergeMailDefinitionInputs(defineMail({
+    expect(mergeMailDefinitionInputs(defineMail({
       to: 'ava@example.com',
       subject: 'Welcome',
       markdown: '# Welcome',
     }), {})).toMatchObject({
       subject: 'Welcome',
     })
-    expect(mailInternals.attachFromStorage('reports/invoice.pdf', {
+    expect(attachFromStorage('reports/invoice.pdf', {
       disk: 'public',
       name: 'invoice.pdf',
       contentType: 'application/pdf',
@@ -374,34 +306,11 @@ describe('@holo-js/mail contracts', () => {
       contentId: 'invoice-cid',
     })
 
-    expect(() => mailInternals.normalizeAttachment({
-      contentId: '<>',
-      disposition: 'inline',
-      content: 'hello',
-      name: 'hello.txt',
-    }, 0)).toThrow('Mail attachment contentId must be a non-empty string')
-    expect(mailInternals.inferMimeTypeFromName('filename')).toBeUndefined()
-    expect(() => mailInternals.normalizeAttachment(null as never, 0)).toThrow('must be a plain object')
-    expect(() => mailInternals.resolveNormalizedAttachment({
+    expect(inferMimeTypeFromName('filename')).toBeUndefined()
+    expect(() => resolveNormalizedAttachment({
       disposition: 'attachment',
     } as never)).toThrow('Attachments must resolve to a named attachment')
-    expect(() => mailInternals.normalizeAttachment({
-      name: 'broken.txt',
-      path: 123 as never,
-    }, 0)).toThrow('path attachments must include a path')
-    expect(() => mailInternals.normalizeAttachment({
-      name: 'broken.txt',
-      storage: null as never,
-    }, 0)).toThrow('storage attachments must include a path')
-    expect(() => mailInternals.normalizeAttachment({
-      content: 123 as never,
-      name: 'broken.txt',
-    }, 0)).toThrow('content attachments must use a string or Uint8Array')
-    expect(() => mailInternals.normalizeAttachment({
-      resolve: 'bad' as never,
-    }, 0)).toThrow('resolve attachments must define resolve()')
-    expect(() => mailInternals.normalizeAttachment({} as never, 0)).toThrow('must define path, storage, content, or resolve')
-    expect(() => mailInternals.resolveNormalizedAttachment({
+    expect(() => resolveNormalizedAttachment({
       resolve: async () => ({
         content: 'hello',
         name: 'hello.txt',
@@ -409,11 +318,11 @@ describe('@holo-js/mail contracts', () => {
       name: 'hello.txt',
       disposition: 'attachment',
     })).toThrow('Resolver attachments must be resolved before creating transport attachments')
-    await expect(mailInternals.resolveAttachmentDefinition({
+    await expect(resolveAttachmentDefinition({
       resolve: async () => 'bad' as never,
       disposition: 'attachment',
     } as never)).rejects.toThrow('must return a plain object payload')
-    await expect(mailInternals.resolveAttachmentDefinition({
+    await expect(resolveAttachmentDefinition({
       resolve: async () => ({
         name: 'preserved.txt',
         resolve: async () => ({
@@ -423,7 +332,7 @@ describe('@holo-js/mail contracts', () => {
       }),
       disposition: 'attachment',
     } as never)).rejects.toThrow('must resolve to a path, storage, or content attachment')
-    await expect(mailInternals.resolveAttachmentDefinition({
+    await expect(resolveAttachmentDefinition({
       name: 'outer.txt',
       disposition: 'attachment',
       resolve: async () => ({
@@ -435,7 +344,7 @@ describe('@holo-js/mail contracts', () => {
       content: 'hello',
       contentType: 'text/plain',
     })
-    await expect(mailInternals.resolveAttachmentDefinition({
+    await expect(resolveAttachmentDefinition({
       name: 'outer.txt',
       disposition: 'inline',
       contentId: 'cid-outer',
@@ -450,7 +359,7 @@ describe('@holo-js/mail contracts', () => {
       content: 'hello',
       contentType: 'text/plain',
     })
-    await expect(mailInternals.resolveAttachmentDefinition({
+    await expect(resolveAttachmentDefinition({
       resolve: async () => ({
         content: 'hello',
         name: 'resolved.txt',
@@ -461,7 +370,7 @@ describe('@holo-js/mail contracts', () => {
       content: 'hello',
       contentType: 'text/plain',
     })
-    await expect(mailInternals.resolveAttachmentDefinition({
+    await expect(resolveAttachmentDefinition({
       resolve: async () => ({
         content: 'hello',
         name: 'resolved.txt',

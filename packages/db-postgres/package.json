@@ -20,7 +20,8 @@
     "build": "tsup",
     "stub": "tsup --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest --run"
+    "test": "vitest --run",
+    "test:integration": "HOLO_POSTGRES_INTEGRATION=1 vitest --run tests/postgres.test.ts"
   },
   "peerDependencies": {
     "@holo-js/db": "catalog:"

@@ -5,21 +5,6 @@ function createSqliteJsonExtractExpression(column: string, pathLiteral: string):
   return `json_extract(${column}, ${pathLiteral})`
 }
 
-function compileSqliteJsonValuePredicate(
-  extracted: string,
-  predicate: QueryJsonPredicate,
-  bindings: unknown[],
-  createPlaceholder: (index: number) => string,
-): string {
-  bindings.push(predicate.value)
-  const operator = predicate.operator!.toUpperCase()
-  const placeholder = createPlaceholder(bindings.length)
-  return `${extracted} ${operator} ${placeholder}`
-}
-const SQLITE_JSON_HELPERS = Object.freeze({
-  compileValuePredicate: compileSqliteJsonValuePredicate,
-  createExtractExpression: createSqliteJsonExtractExpression,
-})
 const SQLITE_EMPTY_JSON_OBJECT = 'json(\'{}\')'
 
 export class SQLiteQueryCompiler extends SQLQueryCompiler {
@@ -30,18 +15,14 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
   protected override compileJsonPredicate(predicate: QueryJsonPredicate, bindings: unknown[]): string {
     const column = this.compileColumnReference(predicate.column)
     const pathLiteral = this.createJsonPathLiteral(predicate.path)
+    const extracted = createSqliteJsonExtractExpression(column, pathLiteral)
 
     if (predicate.jsonMode === 'value') {
-      return SQLITE_JSON_HELPERS.compileValuePredicate(
-        SQLITE_JSON_HELPERS.createExtractExpression(column, pathLiteral),
-        predicate,
-        bindings,
-        index => this.createPlaceholder(index),
-      )
+      bindings.push(predicate.value)
+      return `${extracted} ${predicate.operator!.toUpperCase()} ${this.createPlaceholder(bindings.length)}`
     }
 
     if (predicate.jsonMode === 'contains') {
-      const extracted = SQLITE_JSON_HELPERS.createExtractExpression(column, pathLiteral)
       if (predicate.value === null || ['string', 'number', 'boolean'].includes(typeof predicate.value)) {
         bindings.push(predicate.value)
         return `EXISTS (SELECT 1 FROM json_each(${extracted}) WHERE value = ${this.createPlaceholder(bindings.length)})`
@@ -52,7 +33,7 @@ export class SQLiteQueryCompiler extends SQLQueryCompiler {
     }
 
     bindings.push(predicate.value)
-    return `json_array_length(${SQLITE_JSON_HELPERS.createExtractExpression(column, pathLiteral)}) ${predicate.operator!.toUpperCase()} ${this.createPlaceholder(bindings.length)}`
+    return `json_array_length(${extracted}) ${predicate.operator!.toUpperCase()} ${this.createPlaceholder(bindings.length)}`
   }
 
   protected override compileJsonUpdateOperations(

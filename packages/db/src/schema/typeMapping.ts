@@ -147,3 +147,53 @@ export function resolveDialectColumnType(
 
   return typeof entry === 'function' ? entry(column) : entry
 }
+
+export function resolveDialectComparisonColumnType(
+  dialect: SchemaDialectName,
+  column: AnyColumnDefinition,
+): string {
+  const compiledType = resolveDialectColumnType(dialect, column)
+  const normalized = compiledType.toLowerCase()
+
+  if (dialect === 'sqlite') {
+    return normalized.split(/\s+/, 1)[0]!.toUpperCase()
+  }
+
+  if (dialect === 'postgres') {
+    if (normalized.startsWith('varchar')) {
+      return 'character varying'
+    }
+
+    if (normalized.startsWith('bigint')) {
+      return 'bigint'
+    }
+
+    return normalized
+  }
+
+  if (normalized.startsWith('varchar')) {
+    return 'varchar'
+  }
+
+  if (normalized.startsWith('char')) {
+    return 'char'
+  }
+
+  if (normalized.startsWith('tinyint')) {
+    return 'tinyint'
+  }
+
+  if (normalized.startsWith('decimal')) {
+    return 'decimal'
+  }
+
+  if (normalized.startsWith('enum')) {
+    return 'enum'
+  }
+
+  if (normalized.startsWith('bigint')) {
+    return 'bigint'
+  }
+
+  return normalized
+}

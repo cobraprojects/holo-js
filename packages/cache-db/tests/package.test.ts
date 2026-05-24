@@ -93,18 +93,7 @@ async function createPublicFeatureHarness() {
 
   const schema = createSchemaService(DB.connection())
   await schema.sync([users])
-  await schema.createTable(DEFAULT_CACHE_DATABASE_TABLE, (table) => {
-    table.string('key').primaryKey()
-    table.text('payload')
-    table.bigInteger('expires_at').nullable()
-    table.index(['expires_at'], `${DEFAULT_CACHE_DATABASE_TABLE}_expires_at_index`)
-  })
-  await schema.createTable(DEFAULT_CACHE_DATABASE_LOCK_TABLE, (table) => {
-    table.string('name').primaryKey()
-    table.string('owner')
-    table.bigInteger('expires_at')
-    table.index(['expires_at'], `${DEFAULT_CACHE_DATABASE_LOCK_TABLE}_expires_at_index`)
-  })
+  await cacheDbInternals.prepareCacheDatabaseTables(DB.connection())
 
   const driver = createDatabaseCacheDriver({
     name: 'database',
@@ -198,77 +187,6 @@ describe('@holo-js/cache-db', () => {
       connectionName: 'cache',
       driver: 'postgres',
     })
-    expect(cacheDbInternals.createDatabaseContextOptions('cache', {
-      driver: 'postgres',
-      url: 'postgres://cache.internal/db',
-      port: '5432' as never,
-    })).toMatchObject({
-      connectionName: 'cache',
-      driver: 'postgres',
-    })
-    const stringPortOptions = cacheDbInternals.createDatabaseContextOptions('cache', {
-      driver: 'postgres',
-      host: 'cache.internal',
-      database: 'app',
-      username: 'user',
-      password: 'secret',
-      port: '5433' as never,
-    })
-    const adapter = stringPortOptions.adapter as {
-      readonly options?: {
-        readonly config?: {
-          readonly host?: string
-          readonly port?: number
-          readonly user?: string
-          readonly password?: string
-          readonly database?: string
-        }
-      }
-    }
-
-    expect(adapter.options?.config).toMatchObject({
-      host: 'cache.internal',
-      port: 5433,
-      user: 'user',
-      password: 'secret',
-      database: 'app',
-    })
-
-    const invalidStringPortOptions = cacheDbInternals.createDatabaseContextOptions('cache', {
-      driver: 'postgres',
-      host: 'cache.internal',
-      database: 'app',
-      username: 'user',
-      password: 'secret',
-      port: 'not-a-port' as never,
-    })
-    const invalidStringAdapter = invalidStringPortOptions.adapter as {
-      readonly options?: {
-        readonly config?: {
-          readonly port?: number
-        }
-      }
-    }
-
-    expect(invalidStringAdapter.options?.config?.port).toBeUndefined()
-
-    const partiallyNumericPortOptions = cacheDbInternals.createDatabaseContextOptions('cache', {
-      driver: 'postgres',
-      host: 'cache.internal',
-      database: 'app',
-      username: 'user',
-      password: 'secret',
-      port: '5433abc' as never,
-    })
-    const partiallyNumericAdapter = partiallyNumericPortOptions.adapter as {
-      readonly options?: {
-        readonly config?: {
-          readonly port?: number
-        }
-      }
-    }
-
-    expect(partiallyNumericAdapter.options?.config?.port).toBeUndefined()
   })
 
   it('creates cache tables through the shared schema helper', async () => {

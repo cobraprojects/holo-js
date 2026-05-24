@@ -1,5 +1,5 @@
 import { column, type AnyColumnBuilder } from './columns'
-import { inferConstrainedTableName } from './pluralize'
+import { ForeignKeyBuilderState } from './foreignKeyBuilderState'
 import type { ForeignKeyReference, TableIndexDefinition } from './types'
 
 interface AddColumnMutationOperation {
@@ -74,45 +74,41 @@ type ColumnMutationMode = 'addColumn' | 'alterColumn'
 type ColumnFactory<TBuilder extends AnyColumnBuilder = AnyColumnBuilder> = () => TBuilder
 
 class TableForeignKeyBuilder {
+  private readonly foreignKeyState: ForeignKeyBuilderState
+
   constructor(
     private readonly operation: CreateForeignKeyMutationOperation,
-  ) {}
+  ) {
+    this.foreignKeyState = new ForeignKeyBuilderState(operation.columnName, operation.reference.column)
+  }
 
   references(columnName: string): this {
-    this.operation.reference = {
-      ...this.operation.reference,
-      column: columnName,
-    }
+    this.foreignKeyState.references(columnName)
+    this.applyReference()
     return this
   }
 
   on(table: string): this {
-    this.operation.reference = {
-      ...this.operation.reference,
-      table,
-    }
+    this.foreignKeyState.on(table)
+    this.applyReference()
     return this
   }
 
   constrained(table?: string, columnName = 'id'): this {
+    this.foreignKeyState.constrained(table, columnName)
+    this.applyReference()
     return this
-      .on(table ?? inferConstrainedTableName(this.operation.columnName))
-      .references(columnName)
   }
 
   onDelete(action: NonNullable<ForeignKeyReference['onDelete']>): this {
-    this.operation.reference = {
-      ...this.operation.reference,
-      onDelete: action,
-    }
+    this.foreignKeyState.onDelete(action)
+    this.applyReference()
     return this
   }
 
   onUpdate(action: NonNullable<ForeignKeyReference['onUpdate']>): this {
-    this.operation.reference = {
-      ...this.operation.reference,
-      onUpdate: action,
-    }
+    this.foreignKeyState.onUpdate(action)
+    this.applyReference()
     return this
   }
 
@@ -146,6 +142,10 @@ class TableForeignKeyBuilder {
 
   noActionOnUpdate(): this {
     return this.onUpdate('no action')
+  }
+
+  private applyReference(): void {
+    this.operation.reference = this.foreignKeyState.toReference()
   }
 }
 
@@ -245,11 +245,8 @@ class TableColumnMutationBuilder {
 }
 
 class TableForeignIdMutationBuilder extends TableColumnMutationBuilder {
+  private readonly foreignKeyState: ForeignKeyBuilderState
   private foreignOperation?: CreateForeignKeyMutationOperation
-  private referenceTable?: string
-  private referenceColumn = 'id'
-  private onDeleteAction?: ForeignKeyReference['onDelete']
-  private onUpdateAction?: ForeignKeyReference['onUpdate']
 
   constructor(
     root: TableMutationBuilder,
@@ -258,33 +255,33 @@ class TableForeignIdMutationBuilder extends TableColumnMutationBuilder {
     private readonly columnName: string,
   ) {
     super(root, operation)
+    this.foreignKeyState = new ForeignKeyBuilderState(columnName)
   }
 
   references(
     columnName: string,
   ): this {
-    this.referenceColumn = columnName
+    this.foreignKeyState.references(columnName)
     return this.applyForeignKey()
   }
 
   on(table: string): this {
-    this.referenceTable = table
+    this.foreignKeyState.on(table)
     return this.applyForeignKey()
   }
 
   constrained(table?: string, columnName = 'id'): this {
-    this.referenceTable = table ?? inferConstrainedTableName(this.columnName)
-    this.referenceColumn = columnName
+    this.foreignKeyState.constrained(table, columnName)
     return this.applyForeignKey()
   }
 
   onDelete(action: NonNullable<ForeignKeyReference['onDelete']>): this {
-    this.onDeleteAction = action
+    this.foreignKeyState.onDelete(action)
     return this.applyForeignKey()
   }
 
   onUpdate(action: NonNullable<ForeignKeyReference['onUpdate']>): this {
-    this.onUpdateAction = action
+    this.foreignKeyState.onUpdate(action)
     return this.applyForeignKey()
   }
 
@@ -322,12 +319,7 @@ class TableForeignIdMutationBuilder extends TableColumnMutationBuilder {
 
   private applyForeignKey(): this {
     const operation = this.ensureForeignOperation()
-    operation.reference = {
-      table: this.referenceTable ?? '',
-      column: this.referenceColumn,
-      onDelete: this.onDeleteAction,
-      onUpdate: this.onUpdateAction,
-    }
+    operation.reference = this.foreignKeyState.toReference()
     return this
   }
 
@@ -336,12 +328,7 @@ class TableForeignIdMutationBuilder extends TableColumnMutationBuilder {
       this.foreignOperation = {
         kind: 'createForeignKey',
         columnName: this.columnName,
-        reference: {
-          table: this.referenceTable ?? '',
-          column: this.referenceColumn,
-          onDelete: this.onDeleteAction,
-          onUpdate: this.onUpdateAction,
-        },
+        reference: this.foreignKeyState.toReference(),
       }
       this.operations.push(this.foreignOperation)
     }

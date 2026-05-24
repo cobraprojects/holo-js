@@ -14,6 +14,7 @@ type QueueState = {
   active: number
   queued: number
   readonly limit: number
+  readonly waiters: Array<() => void>
 }
 
 export class QueryScheduler {
@@ -48,16 +49,19 @@ export class QueryScheduler {
       active: 0,
       queued: 0,
       limit: concurrencyLimit,
+      waiters: [],
     }
     this.serializedState = {
       active: 0,
       queued: 0,
       limit: 1,
+      waiters: [],
     }
     this.workerState = {
       active: 0,
       queued: 0,
       limit: concurrencyLimit,
+      waiters: [],
     }
   }
 
@@ -71,6 +75,8 @@ export class QueryScheduler {
     const schedulingMode = this.preview(options)
     const state = this.resolveState(schedulingMode)
 
+    let slotReserved = false
+
     if (state.active >= state.limit) {
       if (state.queued >= this.queueLimit) {
         throw new DatabaseError(
@@ -79,24 +85,13 @@ export class QueryScheduler {
         )
       }
 
-      await new Promise<void>((resolve) => {
-        state.queued += 1
-
-        const poll = () => {
-          if (state.active < state.limit) {
-            state.queued -= 1
-            resolve()
-            return
-          }
-
-          queueMicrotask(poll)
-        }
-
-        queueMicrotask(poll)
-      })
+      await this.waitForSlot(state)
+      slotReserved = true
     }
 
-    state.active += 1
+    if (!slotReserved) {
+      state.active += 1
+    }
 
     try {
       return {
@@ -105,6 +100,7 @@ export class QueryScheduler {
       }
     } finally {
       state.active -= 1
+      this.wakeNext(state)
     }
   }
 
@@ -144,6 +140,26 @@ export class QueryScheduler {
     }
 
     return this.serializedState
+  }
+
+  private waitForSlot(state: QueueState): Promise<void> {
+    state.queued += 1
+
+    return new Promise((resolve) => {
+      state.waiters.push(() => {
+        state.queued -= 1
+        state.active += 1
+        resolve()
+      })
+    })
+  }
+
+  private wakeNext(state: QueueState): void {
+    if (state.active >= state.limit) {
+      return
+    }
+
+    state.waiters.shift()?.()
   }
 }
 

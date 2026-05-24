@@ -6,37 +6,9 @@ import mysql, {
   type ResultSetHeader,
   type RowDataPacket,
 } from 'mysql2/promise'
+import type { DriverAdapter, DriverExecutionResult, DriverQueryResult } from '@holo-js/db'
 
-export interface DriverQueryResult<TRow extends Record<string, unknown> = Record<string, unknown>> {
-  rows: TRow[]
-  rowCount: number
-}
-
-export interface DriverExecutionResult {
-  affectedRows?: number
-  lastInsertId?: number | string
-}
-
-export interface DriverAdapter {
-  initialize(): Promise<void>
-  disconnect(): Promise<void>
-  isConnected(): boolean
-  runWithTransactionScope?<T>(callback: () => Promise<T>): Promise<T>
-  query<TRow extends Record<string, unknown> = Record<string, unknown>>(
-    sql: string,
-    bindings?: readonly unknown[],
-  ): Promise<DriverQueryResult<TRow>>
-  execute(
-    sql: string,
-    bindings?: readonly unknown[],
-  ): Promise<DriverExecutionResult>
-  beginTransaction(): Promise<void>
-  commit(): Promise<void>
-  rollback(): Promise<void>
-  createSavepoint?(name: string): Promise<void>
-  rollbackToSavepoint?(name: string): Promise<void>
-  releaseSavepoint?(name: string): Promise<void>
-}
+export type { DriverAdapter, DriverExecutionResult, DriverQueryResult } from '@holo-js/db'
 
 class TransactionError extends Error {}
 
@@ -65,7 +37,6 @@ export interface MySQLAdapterOptions {
 type ScopedMySQLTransaction = {
   client: MySQLClientLike
   leased: boolean
-  released: boolean
 }
 
 type RawMySQLClientLike = {
@@ -121,8 +92,8 @@ export class MySQLAdapter implements DriverAdapter {
   private readonly transactionScope = new AsyncLocalStorage<ScopedMySQLTransaction>()
 
   constructor(options: MySQLAdapterOptions = {}) {
-    this.directClient = options.client ? wrapMySQLClient(options.client) : undefined
-    this.pool = options.pool ? wrapMySQLPool(options.pool) : undefined
+    this.directClient = options.client
+    this.pool = options.pool
     this.createPoolInstance = options.createPool ?? (options.client || options.pool
       ? undefined
       : config => wrapMySQLPool(mysql.createPool(config)))
@@ -179,7 +150,6 @@ export class MySQLAdapter implements DriverAdapter {
       return this.transactionScope.run({
         client: this.directClient,
         leased: false,
-        released: false,
       }, callback)
     }
 
@@ -190,7 +160,6 @@ export class MySQLAdapter implements DriverAdapter {
     const state: ScopedMySQLTransaction = {
       client: await this.pool.getConnection(),
       leased: true,
-      released: false,
     }
 
     return this.transactionScope.run(state, async () => {
@@ -237,31 +206,31 @@ export class MySQLAdapter implements DriverAdapter {
 
   async beginTransaction(): Promise<void> {
     const client = await this.leaseTransactionClient()
-    await client.query('START TRANSACTION')
+    await client.query('START TRANSACTION', [])
   }
 
   async commit(): Promise<void> {
     const client = this.requireTransactionClient()
-    await client.query('COMMIT')
+    await client.query('COMMIT', [])
     this.releaseTransactionClient()
   }
 
   async rollback(): Promise<void> {
     const client = this.requireTransactionClient()
-    await client.query('ROLLBACK')
+    await client.query('ROLLBACK', [])
     this.releaseTransactionClient()
   }
 
   async createSavepoint(name: string): Promise<void> {
-    await this.requireTransactionClient().query(`SAVEPOINT ${this.normalizeSavepointName(name)}`)
+    await this.requireTransactionClient().query(`SAVEPOINT ${this.normalizeSavepointName(name)}`, [])
   }
 
   async rollbackToSavepoint(name: string): Promise<void> {
-    await this.requireTransactionClient().query(`ROLLBACK TO SAVEPOINT ${this.normalizeSavepointName(name)}`)
+    await this.requireTransactionClient().query(`ROLLBACK TO SAVEPOINT ${this.normalizeSavepointName(name)}`, [])
   }
 
   async releaseSavepoint(name: string): Promise<void> {
-    await this.requireTransactionClient().query(`RELEASE SAVEPOINT ${this.normalizeSavepointName(name)}`)
+    await this.requireTransactionClient().query(`RELEASE SAVEPOINT ${this.normalizeSavepointName(name)}`, [])
   }
 
   private async getQueryable(): Promise<MySQLQueryableLike> {
@@ -337,12 +306,11 @@ export class MySQLAdapter implements DriverAdapter {
   }
 
   private releaseScopedTransaction(state: ScopedMySQLTransaction): void {
-    if (!state.leased || state.released) {
+    if (!state.leased) {
       return
     }
 
     state.client.release?.()
-    state.released = true
   }
 
   private normalizeSavepointName(name: string): string {

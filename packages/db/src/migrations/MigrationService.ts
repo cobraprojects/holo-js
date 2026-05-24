@@ -133,11 +133,7 @@ export class MigrationService {
       const executed: RegisteredMigrationDefinition[] = []
       for (const migration of pending) {
         const log = this.createMigrationLog(migration.name, 'up', nextBatch)
-        const startedAt = Date.now()
-
-        await this.connection.getLogger()?.onMigrationStart?.(log)
-
-        try {
+        await this.runMigrationLifecycle(log, async () => {
           await this.connection.transaction(async (tx) => {
             const context = this.createContext(tx)
             await migration.up(context)
@@ -147,18 +143,7 @@ export class MigrationService {
               migrated_at: new Date().toISOString(),
             })
           })
-          await this.connection.getLogger()?.onMigrationSuccess?.({
-            ...log,
-            durationMs: Date.now() - startedAt,
-          })
-        } catch (error) {
-          await this.connection.getLogger()?.onMigrationError?.({
-            ...log,
-            durationMs: Date.now() - startedAt,
-            error,
-          })
-          throw error
-        }
+        })
         executed.push(migration)
       }
 
@@ -189,11 +174,7 @@ export class MigrationService {
         }
 
         const log = this.createMigrationLog(record.name, 'down', record.batch)
-        const startedAt = Date.now()
-
-        await this.connection.getLogger()?.onMigrationStart?.(log)
-
-        try {
+        await this.runMigrationLifecycle(log, async () => {
           await this.connection.transaction(async (tx) => {
             const context = this.createContext(tx)
             if (migration.down) {
@@ -204,18 +185,7 @@ export class MigrationService {
               .where('name', record.name)
               .delete()
           })
-          await this.connection.getLogger()?.onMigrationSuccess?.({
-            ...log,
-            durationMs: Date.now() - startedAt,
-          })
-        } catch (error) {
-          await this.connection.getLogger()?.onMigrationError?.({
-            ...log,
-            durationMs: Date.now() - startedAt,
-            error,
-          })
-          throw error
-        }
+        })
 
         rolledBack.push(migration)
       }
@@ -264,6 +234,31 @@ export class MigrationService {
     return {
       db: connection,
       schema: createSchemaService(connection),
+    }
+  }
+
+  private async runMigrationLifecycle<T>(
+    log: MigrationStartLog,
+    callback: () => Promise<T>,
+  ): Promise<T> {
+    const startedAt = Date.now()
+
+    await this.connection.getLogger()?.onMigrationStart?.(log)
+
+    try {
+      const result = await callback()
+      await this.connection.getLogger()?.onMigrationSuccess?.({
+        ...log,
+        durationMs: Date.now() - startedAt,
+      })
+      return result
+    } catch (error) {
+      await this.connection.getLogger()?.onMigrationError?.({
+        ...log,
+        durationMs: Date.now() - startedAt,
+        error,
+      })
+      throw error
     }
   }
 

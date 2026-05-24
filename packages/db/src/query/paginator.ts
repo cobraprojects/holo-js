@@ -1,4 +1,5 @@
 import { SecurityError } from '../core/errors'
+import { normalizePaginationParameterName } from './pagination'
 import type {
   CursorPaginatedResult,
   PaginationMeta,
@@ -15,7 +16,7 @@ export function createPaginator<T>(
     data,
     meta: {
       ...meta,
-      pageName: normalizeParameterName(meta.pageName, 'page'),
+      pageName: normalizePaginationParameterName(meta.pageName, 'page', message => new SecurityError(message)),
     },
   } as PaginatedResult<T>
 
@@ -43,7 +44,7 @@ export function createSimplePaginator<T>(
     data,
     meta: {
       ...meta,
-      pageName: normalizeParameterName(meta.pageName, 'page'),
+      pageName: normalizePaginationParameterName(meta.pageName, 'page', message => new SecurityError(message)),
     },
   } as SimplePaginatedResult<T>
 
@@ -70,7 +71,7 @@ export function createCursorPaginator<T>(
   const result = {
     data,
     perPage: meta.perPage,
-    cursorName: normalizeParameterName(meta.cursorName, 'cursor'),
+    cursorName: normalizePaginationParameterName(meta.cursorName, 'cursor', message => new SecurityError(message)),
     nextCursor: meta.nextCursor,
     prevCursor: meta.prevCursor,
   } as CursorPaginatedResult<T>
@@ -91,18 +92,6 @@ export function createCursorPaginator<T>(
   })
 
   return result
-}
-
-function normalizeParameterName(value: string | undefined, fallback: string): string {
-  if (typeof value === 'undefined') {
-    return fallback
-  }
-
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new SecurityError(`${fallback === 'cursor' ? 'Cursor' : 'Page'} parameter name must be a non-empty string.`)
-  }
-
-  return value
 }
 
 function attachMethods<T extends object>(
