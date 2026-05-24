@@ -683,9 +683,11 @@ describe('@holo-js/auth package runtime', () => {
 
     expect(packageJson.peerDependencies?.['@holo-js/security']).toBe('catalog:')
     expect(packageJson.peerDependenciesMeta?.['@holo-js/security']?.optional).toBe(true)
+    expect(packageJson.peerDependencies?.next).toBe('catalog:')
     expect(packageJson.peerDependencies?.react).toBeDefined()
     expect(packageJson.peerDependencies?.svelte).toBeDefined()
     expect(packageJson.peerDependencies?.nuxt).toBeDefined()
+    expect(packageJson.peerDependenciesMeta?.next?.optional).toBe(true)
     expect(packageJson.peerDependenciesMeta?.react?.optional).toBe(true)
     expect(packageJson.peerDependenciesMeta?.svelte?.optional).toBe(true)
     expect(packageJson.peerDependenciesMeta?.nuxt?.optional).toBe(true)

@@ -63,12 +63,16 @@
   },
   "peerDependencies": {
     "@holo-js/security": "catalog:",
+    "next": "catalog:",
     "nuxt": "catalog:",
     "react": "catalog:",
     "svelte": "catalog:"
   },
   "peerDependenciesMeta": {
     "@holo-js/security": {
+      "optional": true
+    },
+    "next": {
       "optional": true
     },
     "nuxt": {
@@ -83,6 +87,7 @@
   },
   "devDependencies": {
     "@types/react": "catalog:",
+    "next": "catalog:",
     "nuxt": "catalog:",
     "react": "catalog:",
     "svelte": "catalog:",

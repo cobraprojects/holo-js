@@ -105,6 +105,7 @@ function serializeEventDependency<TEvent extends string>(events: TEvent | readon
 }
 
 function memberKey<TMember>(member: TMember): string {
+  /* v8 ignore next -- supported presence members are JSON-compatible, but keep a defensive fallback */
   return JSON.stringify(member) ?? String(member)
 }
 

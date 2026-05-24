@@ -193,15 +193,15 @@ describe('@holo-js/flux-react package surface', () => {
 
         wrapped = Object.freeze({
           ...subscription,
-          here(callback) {
+          here(callback: Parameters<typeof subscription.here>[0]) {
             subscription.here(callback)
             return wrapped
           },
-          joining(callback) {
+          joining(callback: Parameters<typeof subscription.joining>[0]) {
             subscription.joining(callback)
             return wrapped
           },
-          leaving(callback) {
+          leaving(callback: Parameters<typeof subscription.leaving>[0]) {
             subscription.leaving(callback)
             return wrapped
           },
@@ -295,7 +295,9 @@ describe('@holo-js/flux-react package surface', () => {
     const baseClient = createFluxClient({
       connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
     })
+    const hereCallbacks = new Set<(members: readonly { id: string }[]) => void>()
     const joiningCallbacks = new Set<(member: { id: string }) => void>()
+    const leavingCallbacks = new Set<(member: { id: string }) => void>()
     let members: readonly { id: string }[] = []
     const client = Object.freeze({
       ...baseClient,
@@ -307,16 +309,17 @@ describe('@holo-js/flux-react package surface', () => {
           get members() {
             return members
           },
-          here(callback) {
+          here(callback: (members: readonly { id: string }[]) => void) {
+            hereCallbacks.add(callback)
             callback(members)
             return subscription
           },
-          joining(callback) {
-            joiningCallbacks.add(callback as (member: { id: string }) => void)
+          joining(callback: (member: { id: string }) => void) {
+            joiningCallbacks.add(callback)
             return subscription
           },
-          leaving(callback) {
-            void callback
+          leaving(callback: (member: { id: string }) => void) {
+            leavingCallbacks.add(callback)
             return subscription
           },
         })
@@ -352,9 +355,27 @@ describe('@holo-js/flux-react package surface', () => {
     await act(async () => undefined)
 
     expect(snapshots.at(-1)).toEqual([{ id: 'user_1' }])
+    for (const callback of leavingCallbacks) {
+      callback({ id: 'user_1' })
+      callback({ id: 'missing' })
+    }
+    await act(async () => undefined)
+
+    expect(snapshots.at(-1)).toEqual([])
     await act(async () => {
       renderer!.unmount()
     })
+    for (const callback of hereCallbacks) {
+      callback([{ id: 'inactive' }])
+    }
+    for (const callback of joiningCallbacks) {
+      callback({ id: 'inactive' })
+    }
+    for (const callback of leavingCallbacks) {
+      callback({ id: 'inactive' })
+    }
+
+    expect(snapshots.at(-1)).toEqual([])
   })
 
   it('registers explicit unmount callbacks when provided', async () => {

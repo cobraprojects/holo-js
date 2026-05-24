@@ -44,7 +44,6 @@ export interface RuntimeConfigInput {
 const DEFAULT_RUNTIME_CONNECTION = Object.freeze({
   driver: 'sqlite' as const,
   url: './data/database.sqlite',
-  schema: 'public',
   logging: false,
 })
 
@@ -182,46 +181,6 @@ function resolveConnectionConfig(
       }
 
   return createRuntimeConnectionOptions(driver, connection, logging, schemaName, name)
-}
-
-function mergeConnectionGroups(
-  ...groups: Array<RuntimeDatabaseConfig | undefined>
-): Record<string, RuntimeConnectionConfig | string> {
-  const merged: Record<string, RuntimeConnectionConfig | string> = {}
-
-  for (const group of groups) {
-    if (!group?.connections) {
-      continue
-    }
-
-    Object.assign(merged, group.connections)
-  }
-
-  return merged
-}
-
-function resolveConfiguredDefaultConnection(
-  ...groups: Array<RuntimeDatabaseConfig | undefined>
-): string | undefined {
-  for (const group of groups) {
-    const configured = group?.defaultConnection
-    if (configured) {
-      return configured
-    }
-  }
-
-  return undefined
-}
-
-function resolveImplicitDefaultConnectionName(
-  connectionNames: readonly string[],
-): string {
-  if (connectionNames.includes('default')) {
-    return 'default'
-  }
-
-  /* v8 ignore next */
-  return connectionNames[0] ?? 'default'
 }
 
 export function isSupportedDatabaseDriver(value: string): value is SupportedDatabaseDriver {
@@ -423,10 +382,10 @@ export function resolveRuntimeConnectionManagerOptions(
   config: RuntimeConfigInput,
 ): ConnectionManager {
   const topLevelDb = asRecord(config.db) as RuntimeDatabaseConfig | undefined
-  const mergedConnections = mergeConnectionGroups(topLevelDb)
-  const connectionNames = Object.keys(mergedConnections)
+  const connections = topLevelDb?.connections ?? {}
+  const connectionEntries = Object.entries(connections)
 
-  if (connectionNames.length === 0) {
+  if (connectionEntries.length === 0) {
     return createConnectionManager({
       defaultConnection: 'default',
       connections: {
@@ -435,11 +394,24 @@ export function resolveRuntimeConnectionManagerOptions(
     })
   }
 
-  const configuredDefault = resolveConfiguredDefaultConnection(topLevelDb)
-  const defaultConnection = configuredDefault
-    ?? resolveImplicitDefaultConnectionName(connectionNames)
+  const [firstConnectionEntry] = connectionEntries
+  if (!firstConnectionEntry) {
+    return createConnectionManager({
+      defaultConnection: 'default',
+      connections: {
+        default: resolveConnectionConfig('default', undefined),
+      },
+    })
+  }
 
-  const connectionEntries = Object.entries(mergedConnections)
+  const configuredDefault = topLevelDb?.defaultConnection
+  const defaultConnection = configuredDefault
+    ? configuredDefault
+    : Object.hasOwn(connections, 'default')
+      ? 'default'
+      : firstConnectionEntry[0]
+
+  const resolvedConnections = connectionEntries
     .map(([name, input]) => [
       name,
       resolveConnectionConfig(name, input),
@@ -447,6 +419,6 @@ export function resolveRuntimeConnectionManagerOptions(
 
   return createConnectionManager({
     defaultConnection,
-    connections: Object.fromEntries(connectionEntries),
+    connections: Object.fromEntries(resolvedConnections),
   })
 }

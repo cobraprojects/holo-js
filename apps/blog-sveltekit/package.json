@@ -7,7 +7,7 @@
     "prepare": "holo prepare",
     "dev": "holo dev",
     "build": "holo build",
-    "lint": "npx eslint src config server tests --fix --no-warn-ignored",
+    "lint": "npx eslint src config server tests svelte.config.js vite.config.ts --fix --no-warn-ignored",
     "typecheck": "npx svelte-kit sync && npx svelte-check --tsconfig ./tsconfig.json",
     "config:cache": "holo config:cache",
     "config:clear": "holo config:clear",
@@ -52,6 +52,7 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "svelte-check": "catalog:",
     "typescript": "catalog:"
   }
 }

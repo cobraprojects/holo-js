@@ -1,4 +1,3 @@
-import type { BroadcastJsonObject } from '@holo-js/broadcast'
 import { afterEach, describe, expect, it } from 'vitest'
 import flux, {
   configureFluxClient,
@@ -67,6 +66,8 @@ describe('@holo-js/flux package surface', () => {
     const receivedEvents: unknown[] = []
     const receivedNotifications: unknown[] = []
     const receivedWhispers: unknown[] = []
+    const receivedPresenceNotifications: unknown[] = []
+    const receivedPresenceWhispers: unknown[] = []
 
     const publicSubscription = client.channel('orders.1')
     const privateSubscription = client.private('orders.1')
@@ -84,18 +85,28 @@ describe('@holo-js/flux package surface', () => {
     publicSubscription.listenForWhisper('typing.start' as never, (payload) => {
       receivedWhispers.push({ duplicate: payload })
     })
+    presenceSubscription.notification((payload) => {
+      receivedPresenceNotifications.push(payload)
+    })
+    presenceSubscription.listenForWhisper('typing.start' as never, (payload) => {
+      receivedPresenceWhispers.push(payload)
+    })
     expect(() => publicSubscription.listen('   ' as never, () => undefined)).toThrow('must be a non-empty string')
     expect(() => publicSubscription.listenForWhisper('   ' as never, () => undefined)).toThrow('must be a non-empty string')
 
     debug!.emitEvent('orders.1', 'orders.updated', { id: 'ord_1' })
     debug!.emitNotification('orders.1', { type: 'OrderUpdated' })
+    debug!.emitNotification('chat.1', { type: 'PresenceUpdated' })
     await publicSubscription.whisper('typing.start' as never, { editing: true })
+    await presenceSubscription.whisper('typing.start' as never, { editing: 'presence' })
     expect(receivedEvents).toEqual([{ id: 'ord_1' }])
     expect(receivedNotifications).toEqual([{ type: 'OrderUpdated' }])
+    expect(receivedPresenceNotifications).toEqual([{ type: 'PresenceUpdated' }])
     expect(receivedWhispers).toEqual([
       { editing: true },
       { duplicate: { editing: true } },
     ])
+    expect(receivedPresenceWhispers).toEqual([{ editing: 'presence' }])
 
     publicSubscription.stopListening()
     debug!.emitEvent('orders.1', 'orders.updated', { id: 'ord_2' })
@@ -116,7 +127,7 @@ describe('@holo-js/flux package surface', () => {
     ])
     privateSubscription.leave()
     publicSubscription.leaveChannel()
-    presenceSubscription.leaveChannel()
+    presenceSubscription.leave()
     expect(debug!.getJoinedChannels()).toEqual([])
   })
 
@@ -170,9 +181,9 @@ describe('@holo-js/flux package surface', () => {
     })
     const debug = (client as unknown as { __debug?: ReturnType<typeof fluxInternals.createPusherConnector>['__debug'] }).__debug
     const presenceSubscription = client.presence('chat.2')
-    const seen: Array<readonly BroadcastJsonObject[]> = []
-    const joined: BroadcastJsonObject[] = []
-    const left: BroadcastJsonObject[] = []
+    const seen: Array<readonly unknown[]> = []
+    const joined: unknown[] = []
+    const left: unknown[] = []
 
     presenceSubscription.here((members) => {
       seen.push(members)

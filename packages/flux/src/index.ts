@@ -180,6 +180,7 @@ function toReadonlyArray<T>(value: T | readonly T[]): readonly T[] {
 }
 
 function presenceMemberKey(member: BroadcastJsonObject): string {
+  /* v8 ignore next -- supported presence members are JSON objects, but keep a defensive fallback */
   return JSON.stringify(member) ?? String(member)
 }
 

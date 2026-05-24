@@ -6,7 +6,7 @@ description: Review this repo with the Clawpatch CLI, create new findings, fix f
 # Clawpatch
 
 Use Clawpatch as a review queue, not just a patch generator. The loop is:
-review for new findings, inspect findings, fix valid ones, validate locally, ask Clawpatch to revalidate, triage, then ask for the next finding.
+review for new findings, inspect findings, fix valid ones, validate locally, ask Clawpatch to revalidate, triage, then ask for the next finding. When the queue is empty, run full build and test validation, then start a new review batch. Repeat until Clawpatch reports no new findings.
 
 ## Commands
 
@@ -16,6 +16,7 @@ Run from repo root.
 clawpatch doctor --json
 clawpatch status --json
 clawpatch review --limit <n> --jobs <n> --json
+clawpatch review --project packages --mode deslopify --limit <n> --jobs <n> --json
 clawpatch report --status open --json
 clawpatch next --json
 clawpatch show --finding <id> --json
@@ -25,6 +26,8 @@ clawpatch triage --finding <id> --status fixed --note "<short validation note>" 
 ```
 
 Use `--limit` for batches. Prefer `--jobs 3` to `--jobs 5` for broad repo review unless the user asks for more parallelism.
+
+`deslopify` is a review mode, not a global mode. Use `clawpatch review --mode deslopify ...`; do not pass `--mode deslopify` to `clawpatch`, `report`, `fix`, or `revalidate`. For this repo's package-only cleanup campaigns, include `--project packages`.
 
 If a provider-backed Clawpatch command fails with a Codex app-server or permission error inside the sandbox, rerun that same command with escalated execution.
 
@@ -36,7 +39,8 @@ If a provider-backed Clawpatch command fails with a Codex app-server or permissi
    - Run `git status --short --untracked-files=all`.
    - Do not overwrite unrelated dirty files. Treat pre-existing edits as user work.
 2. Generate findings.
-   - Run `clawpatch review --limit <n> --jobs <n> --json`.
+   - For normal bug review, run `clawpatch review --limit <n> --jobs <n> --json`.
+   - For cleanup/deslop work in this repo, run `clawpatch review --project packages --mode deslopify --limit <n> --jobs <n> --json`.
    - Use a small batch first, usually `--limit 10 --jobs 3`.
    - If the user wants everything, repeat review batches after the current queue is fixed or triaged.
 3. Select work.
@@ -69,7 +73,27 @@ If a provider-backed Clawpatch command fails with a Codex app-server or permissi
      - `bun run build`
      - `bun run test`
    - Fix any build or test failures before asking Clawpatch for more findings.
-   - Only after both full validation commands pass, run another `clawpatch review --limit <n> --jobs <n> --json` batch.
+   - Only after both full validation commands pass, run another review batch with the same mode used for the current campaign.
+   - For deslopify campaigns, repeat `clawpatch review --project packages --mode deslopify --limit <n> --jobs <n> --json`.
+   - Continue this cycle until the review command adds no new actionable findings and `clawpatch report --status open --json` is empty.
+
+## Deslopify Campaigns
+
+Use deslopify mode when the user asks Clawpatch to clean up AI-written, overcomplicated, or style-inconsistent code across the project.
+
+Deslopify campaigns in this repo are package-level only. Do not edit docs, blog apps, playground apps, example apps, route examples, public API docs, or user-facing examples unless the user explicitly approves that exact scope first. Do not introduce, rename, remove, or reshape any user-facing API. User-facing API means the final shape users write against: exported package APIs, documented examples, app code patterns, configuration shape, routes, middleware, environment variables, scaffolding, and integration code. Internal package structure and cross-package implementation reuse are allowed when the exported/user-facing surface stays the same.
+
+Full-project deslopify loop:
+
+1. Run `clawpatch doctor --json`, `clawpatch status --json`, and `git status --short --untracked-files=all`.
+2. Run `clawpatch review --project packages --mode deslopify --limit 10 --jobs 3 --json`.
+3. Run `clawpatch report --status open --json`.
+4. For each open finding, run `clawpatch next --json`, inspect with `clawpatch show --finding <id> --json`, confirm the issue is limited to package internals, fix it, validate it, run `clawpatch revalidate --finding <id> --json`, and triage it.
+5. When no open findings remain, run `bun run build` and `bun run test`.
+6. If build and tests pass, start the next deslopify batch with `clawpatch review --project packages --mode deslopify --limit 10 --jobs 3 --json`.
+7. Stop only when a deslopify review batch produces no new actionable findings and the open report is empty.
+
+Do not skip validation between batches. Build or test failures discovered after a batch must be fixed before starting the next review batch.
 
 ## Parallel Fixing
 
