@@ -62,6 +62,7 @@ export default defineEventHandler(async (event) => {
 ```
 
 ```ts [SvelteKit actions — src/routes/login/+page.server.ts]
+import { fail } from '@sveltejs/kit'
 import { field, schema, validate } from '@holo-js/forms'
 
 const loginForm = schema({
@@ -78,7 +79,8 @@ export const actions = {
     })
 
     if (!submission.valid) {
-      return submission.fail()
+      const failure = submission.fail()
+      return fail(failure.status, failure)
     }
 
     return submission.success({ message: 'Logged in.' })
@@ -113,28 +115,59 @@ Use the framework-native request input with `validate(...)`: `request` in Next.j
 Nuxt `server/api/*`. `useRequestHeaders()` is a Nuxt app-context composable for pages, components, and plugins,
 not h3 route handlers.
 
-## Client submit examples
+## Submit examples
+
+For auth flows that redirect after login, register, or logout, use the framework's server-side navigation primitive.
+Use `refreshUser()` only for client-side mutations that stay on the current route.
 
 ::: code-group
 
-```ts [Next.js — app/login/page.tsx]
-import { useAuth } from '@holo-js/auth/next/client'
-import { useForm } from '@holo-js/adapter-next/client'
+```ts [Next.js — app/login/actions.ts]
+'use server'
+
+import { login } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { revalidatePath } from 'next/cache'
+import { redirect } from 'next/navigation'
 import { loginForm } from '@/lib/schemas/login'
 
-const auth = useAuth()
-const form = useForm(loginForm, {
-  csrf: true,
-  async submitter({ formData }) {
-    const response = await fetch('/api/login', { method: 'POST', body: formData })
-    const submission = await response.json()
-    if (submission?.ok === true) {
-      await auth.refreshUser()
-    }
+export async function loginAction(formData: FormData) {
+  const submission = await validate(formData, loginForm, {
+    csrf: true,
+    throttle: 'login',
+  })
 
-    return submission
-  },
-})
+  if (!submission.valid) {
+    return submission.fail()
+  }
+
+  const { data: session, error } = await login(submission.data)
+  if (error) {
+    return submission.fail({ status: error.status, errors: error.fields })
+  }
+
+  revalidatePath('/', 'layout')
+  redirect(session.emailVerificationRequired ? session.emailVerificationRoute ?? '/verify-email' : '/admin')
+}
+```
+
+```tsx [Next.js — app/login/page.tsx]
+'use client'
+
+import { useForm } from '@holo-js/adapter-next/client'
+import { loginForm } from '@/lib/schemas/login'
+import { loginAction } from './actions'
+
+export default function LoginPage() {
+  const form = useForm(loginForm, {
+    csrf: true,
+    async submitter({ formData }) {
+      return await loginAction(formData)
+    },
+  })
+
+  return <form onSubmit={(event) => { event.preventDefault(); form.submit() }} />
+}
 ```
 
 ```ts [Nuxt — app/pages/login.vue]
@@ -156,26 +189,61 @@ const form = useForm(loginForm, {
 })
 ```
 
-```ts [SvelteKit — src/routes/login/+page.svelte]
-import { invalidateAll } from '$app/navigation'
-import { useAuth } from '@holo-js/auth/sveltekit/client'
-import { useForm } from '@holo-js/adapter-sveltekit/client'
+```ts [SvelteKit — src/routes/login/+page.server.ts]
+import { fail, redirect } from '@sveltejs/kit'
+import { login } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { csrf, getSecurityRuntime } from '@holo-js/security'
 import { loginForm } from '$lib/schemas/login'
+import type { Actions, PageServerLoad } from './$types'
 
-const auth = useAuth()
-const form = useForm(loginForm, {
-  csrf: true,
-  async submitter({ formData }) {
-    const response = await fetch('/api/login', { method: 'POST', body: formData })
-    const submission = await response.json()
-    if (submission?.ok === true) {
-      await auth.refreshUser()
-      await invalidateAll()
+export const load = (async ({ cookies, request, url }) => {
+  const field = await csrf.field(request)
+  cookies.set(getSecurityRuntime().config.csrf.cookie, field.value, {
+    path: '/',
+    sameSite: 'lax',
+    secure: url.protocol === 'https:',
+  })
+
+  return { csrf: field }
+}) satisfies PageServerLoad
+
+export const actions = {
+  default: async ({ request }) => {
+    const submission = await validate(request, loginForm, {
+      csrf: true,
+      throttle: 'login',
+    })
+
+    if (!submission.valid) {
+      const failure = submission.fail()
+      return fail(failure.status, failure)
     }
 
-    return submission
+    const { data: session, error } = await login(submission.data)
+    if (error) {
+      const failure = submission.fail({ status: error.status, errors: error.fields })
+      return fail(failure.status, failure)
+    }
+
+    redirect(303, session.emailVerificationRequired ? session.emailVerificationRoute ?? '/verify-email' : '/admin')
   },
-})
+} satisfies Actions
+```
+
+```svelte [SvelteKit — src/routes/login/+page.svelte]
+<script lang="ts">
+  let { form, data } = $props()
+</script>
+
+<form method="post">
+  <input type="hidden" name={data.csrf.name} value={data.csrf.value} />
+  <input name="email" type="email" value={form?.values?.email ?? ''} />
+  {#if form?.errors?.email?.[0]}<p>{form.errors.email[0]}</p>{/if}
+  <input name="password" type="password" />
+  {#if form?.errors?.password?.[0]}<p>{form.errors.password[0]}</p>{/if}
+  <button type="submit">Sign in</button>
+</form>
 ```
 
 :::

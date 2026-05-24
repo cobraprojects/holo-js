@@ -30,8 +30,9 @@ Each framework auth entrypoint exposes `useAuth()`. The returned `user` is infer
 `refreshUser()` makes a new request to the current-user endpoint, updates that current auth state, and returns the fresh
 user. It also refreshes `provider`.
 
-Use `user` to render the current navigation, profile link, or authenticated UI. Use `refreshUser()` after an action that
-can change auth state, such as login, register, logout, switching guards, or updating the user's profile.
+Use `user` to render the current navigation, profile link, or authenticated UI. Prefer framework-native server redirects
+for login, register, and logout. Use `refreshUser()` for client-side mutations that stay on the current route, such as
+updating the user's profile or switching state without a full navigation.
 
 ```ts
 const current = auth.user
@@ -39,40 +40,55 @@ const sessionSource = auth.provider
 const fresh = await auth.refreshUser()
 ```
 
-## Refreshing After Auth Actions
+## Auth Actions And Redirects
 
-The client helper does not perform login or register itself. Your route changes the cookie/session, then the client
-calls `refreshUser()` so the framework state matches the new server state before rendering auth-aware UI.
+The client helper does not perform login or register itself. Your route or server action changes the cookie/session, then
+the framework redirects using its native primitive. Next.js and SvelteKit auth pages should not call `router.replace(...)`,
+`goto(...)`, or `refreshUser()` after successful login/register.
 
 ::: code-group
 
-```tsx [Next.js — login/register success]
-'use client'
+```ts [Next.js — app/login/actions.ts]
+'use server'
 
-import { useRouter } from 'next/navigation'
-import { useAuth } from '@holo-js/auth/next/client'
-import { useForm } from '@holo-js/adapter-next/client'
+import { login } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { revalidatePath } from 'next/cache'
+import { redirect } from 'next/navigation'
 import { loginForm } from '@/lib/schemas/login'
 
+export async function loginAction(formData: FormData) {
+  const submission = await validate(formData, loginForm, {
+    csrf: true,
+    throttle: 'login',
+  })
+
+  if (!submission.valid) {
+    return submission.fail()
+  }
+
+  const { data: session, error } = await login(submission.data)
+  if (error) {
+    return submission.fail({ status: error.status, errors: error.fields })
+  }
+
+  revalidatePath('/', 'layout')
+  redirect(session.emailVerificationRequired ? session.emailVerificationRoute ?? '/verify-email' : '/admin')
+}
+```
+
+```tsx [Next.js — app/login/page.tsx]
+'use client'
+
+import { useForm } from '@holo-js/adapter-next/client'
+import { loginForm } from '@/lib/schemas/login'
+import { loginAction } from './actions'
+
 export default function LoginPage() {
-  const router = useRouter()
-  const auth = useAuth()
   const form = useForm(loginForm, {
+    csrf: true,
     async submitter({ formData }) {
-      const response = await fetch('/api/login', { method: 'POST', body: formData })
-      const submission = await response.json()
-
-      if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
-        try {
-          await auth.refreshUser()
-        } catch (error) {
-          console.warn('Auth refresh failed after login.', error)
-        }
-
-        router.replace(submission.data.redirectTo)
-      }
-
-      return submission
+      return await loginAction(formData)
     },
   })
 
@@ -107,34 +123,61 @@ const form = useForm(loginForm, {
 </script>
 ```
 
-```svelte [SvelteKit — login/register success]
-<script lang="ts">
-  import { goto, invalidateAll } from '$app/navigation'
-  import { useAuth } from '@holo-js/auth/sveltekit/client'
-  import { useForm } from '@holo-js/adapter-sveltekit/client'
-  import { loginForm } from '$lib/schemas/login'
+```ts [SvelteKit — src/routes/login/+page.server.ts]
+import { fail, redirect } from '@sveltejs/kit'
+import { login } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { csrf, getSecurityRuntime } from '@holo-js/security'
+import { loginForm } from '$lib/schemas/login'
+import type { Actions, PageServerLoad } from './$types'
 
-  const auth = useAuth()
-  const form = useForm(loginForm, {
-    async submitter({ formData }) {
-      const response = await fetch('/api/login', { method: 'POST', body: formData })
-      const submission = await response.json()
-
-      if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
-        try {
-          await auth.refreshUser()
-        } catch (error) {
-          console.warn('Auth refresh failed after login.', error)
-        }
-
-        await invalidateAll()
-        await goto(submission.data.redirectTo)
-      }
-
-      return submission
-    },
+export const load = (async ({ cookies, request, url }) => {
+  const field = await csrf.field(request)
+  cookies.set(getSecurityRuntime().config.csrf.cookie, field.value, {
+    path: '/',
+    sameSite: 'lax',
+    secure: url.protocol === 'https:',
   })
+
+  return { csrf: field }
+}) satisfies PageServerLoad
+
+export const actions = {
+  default: async ({ request }) => {
+    const submission = await validate(request, loginForm, {
+      csrf: true,
+      throttle: 'login',
+    })
+
+    if (!submission.valid) {
+      const failure = submission.fail()
+      return fail(failure.status, failure)
+    }
+
+    const { data: session, error } = await login(submission.data)
+    if (error) {
+      const failure = submission.fail({ status: error.status, errors: error.fields })
+      return fail(failure.status, failure)
+    }
+
+    redirect(303, session.emailVerificationRequired ? session.emailVerificationRoute ?? '/verify-email' : '/admin')
+  },
+} satisfies Actions
+```
+
+```svelte [SvelteKit — src/routes/login/+page.svelte]
+<script lang="ts">
+  let { form, data } = $props()
 </script>
+
+<form method="post">
+  <input type="hidden" name={data.csrf.name} value={data.csrf.value} />
+  <input name="email" type="email" value={form?.values?.email ?? ''} />
+  {#if form?.errors?.email?.[0]}<p>{form.errors.email[0]}</p>{/if}
+  <input name="password" type="password" />
+  {#if form?.errors?.password?.[0]}<p>{form.errors.password[0]}</p>{/if}
+  <button type="submit">Sign in</button>
+</form>
 ```
 
 :::
@@ -147,27 +190,11 @@ const form = useForm(loginForm, {
 'use client'
 
 import { useAuth } from '@holo-js/auth/next/client'
-import { useRouter } from 'next/navigation'
+import { logoutAction } from './logout/actions'
 
 export function AuthNav() {
   const auth = useAuth()
-  const router = useRouter()
   const displayName = auth.user?.name ?? auth.user?.email ?? 'Account'
-
-  async function logout() {
-    const response = await fetch('/api/logout', { method: 'POST' })
-    if (!response.ok) {
-      return
-    }
-
-    try {
-      await auth.refreshUser()
-    } catch (error) {
-      console.warn('Auth refresh failed after logout.', error)
-    }
-
-    router.replace('/')
-  }
 
   if (!auth.authenticated) {
     return (
@@ -181,7 +208,9 @@ export function AuthNav() {
   return (
     <>
       <span>{displayName}</span>
-      <button type="button" onClick={logout}>Logout</button>
+      <form action={logoutAction}>
+        <button type="submit">Logout</button>
+      </form>
     </>
   )
 }
@@ -220,7 +249,6 @@ async function logout() {
 
 ```svelte [SvelteKit]
 <script lang="ts">
-  import { invalidateAll } from '$app/navigation'
   import { untrack } from 'svelte'
   import { useAuth } from '@holo-js/auth/sveltekit/client'
   import type { LayoutProps } from './$types'
@@ -232,30 +260,13 @@ async function logout() {
     initialUser: untrack(() => data.auth.user),
   })
   const displayName = $derived(auth.user?.name ?? auth.user?.email ?? 'Account')
-
-  async function logout() {
-    const response = await fetch('/api/logout', { method: 'POST' })
-    if (!response.ok) {
-      return
-    }
-
-    try {
-      await auth.refreshUser()
-    } catch (error) {
-      console.warn('Auth refresh failed after logout.', error)
-    }
-
-    try {
-      await invalidateAll()
-    } catch (error) {
-      console.warn('Auth invalidation failed after logout.', error)
-    }
-  }
 </script>
 
 {#if auth.authenticated}
   <span>{displayName}</span>
-  <button type="button" onclick={logout}>Logout</button>
+  <form action="/logout" method="post">
+    <button type="submit">Logout</button>
+  </form>
 {:else}
   <a href="/login">Login</a>
   <a href="/register">Register</a>

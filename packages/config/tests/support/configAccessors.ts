@@ -4,6 +4,12 @@ import {
   type HoloConfigRegistry,
 } from '../../src'
 
+type ServicesFixtureConfig = {
+  readonly mailgun: {
+    readonly secret: string
+  }
+}
+
 const defaultConfigRegistry = {
   app: {} as HoloConfigRegistry['app'],
   database: {} as HoloConfigRegistry['database'],
@@ -23,8 +29,8 @@ const defaultConfigRegistry = {
     mailgun: {
       secret: 'secret',
     },
-  } as HoloConfigRegistry['services'],
-}
+  },
+} satisfies HoloConfigRegistry & { readonly services: ServicesFixtureConfig }
 
 export function createConfigAccessorFixture<TOverrides extends HoloConfigMap>(
   overrides: TOverrides,

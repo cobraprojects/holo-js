@@ -279,10 +279,10 @@ describe('@holo-js/queue-db database driver', () => {
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({ affectedRows: 1 })
     const spy = vi.spyOn(DB, 'connection').mockReturnValue(createQueueDatabaseContextMock({
-      async query<TRow extends Record<string, unknown>>(sql, bindings) {
+      async query<TRow extends Record<string, unknown>>(sql: string, bindings: readonly unknown[]) {
         return await queryCompiled({ sql, bindings }) as { rows: TRow[], rowCount: number }
       },
-      async execute(sql, bindings) {
+      async execute(sql: string, bindings: readonly unknown[]) {
         return await executeCompiled({ sql, bindings })
       },
     }))
@@ -331,7 +331,7 @@ describe('@holo-js/queue-db database driver', () => {
     const executeCompiled = vi.fn(async (_statement: unknown) => ({}))
     const activeConnection = createQueueDatabaseContextMock({
       connectionName: 'default',
-      async execute(sql, bindings) {
+      async execute(sql: string, bindings: readonly unknown[]) {
         return await executeCompiled({ sql, bindings })
       },
     })

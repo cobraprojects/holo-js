@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict'
 import { jsx } from 'react/jsx-runtime'
 import { act, create } from 'react-test-renderer'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   loginUsing: vi.fn(),
-  fetch: vi.fn(),
+  redirect: vi.fn((location) => {
+    const error = new Error('NEXT_REDIRECT')
+    error.location = location
+    throw error
+  }),
   register: vi.fn(),
   registerForm: Symbol('registerForm'),
-  replace: vi.fn(),
+  revalidatePath: vi.fn(),
   useForm: vi.fn(),
   validate: vi.fn(),
 }))
@@ -26,10 +30,12 @@ vi.mock('@holo-js/forms', () => ({
   validate: mocks.validate,
 }))
 
+vi.mock('next/cache', () => ({
+  revalidatePath: mocks.revalidatePath,
+}))
+
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({
-    replace: mocks.replace,
-  }),
+  redirect: mocks.redirect,
 }))
 
 vi.mock('next/link', () => ({
@@ -40,10 +46,8 @@ vi.mock('@/lib/schemas/auth', () => ({
   registerForm: mocks.registerForm,
 }))
 
-const originalFetch = globalThis.fetch
-
 const { default: RegisterPage } = await import('../app/register/page.tsx')
-const registerRoute = await import('../app/api/register/route.ts')
+const { registerAction } = await import('../app/register/actions.ts')
 
 function createFormState(submit) {
   return {
@@ -81,84 +85,65 @@ function createFormState(submit) {
   }
 }
 
-async function renderPageWithRedirect(redirectTo = '/login') {
-  mocks.fetch.mockResolvedValue(new Response(JSON.stringify({
-    ok: true,
-    data: {
-      redirectTo,
-    },
-  })))
-  mocks.useForm.mockImplementation((_schema, options) => createFormState(vi.fn(async () => {
-    const formData = new FormData()
-    formData.set('name', 'Reader')
-    formData.set('email', 'reader@example.com')
-    formData.set('password', 'password123')
-    formData.set('passwordConfirmation', 'password123')
-
-    return options.submitter({ formData })
-  })))
-
-  let renderer
-  await act(async () => {
-    renderer = create(jsx(RegisterPage, {}))
-  })
-
-  assert.ok(renderer, 'Expected register page to render.')
-  return renderer
-}
-
 describe('register page', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    globalThis.fetch = mocks.fetch
   })
 
-  afterEach(() => {
-    globalThis.fetch = originalFetch
-  })
+  it('submits through the register server action', async () => {
+    const failure = {
+      ok: false,
+      status: 422,
+      errors: {
+        email: ['Enter a valid email address.'],
+      },
+    }
+    const submission = {
+      valid: false,
+      fail: vi.fn(() => failure),
+    }
+    mocks.validate.mockResolvedValue(submission)
+    mocks.useForm.mockImplementation((_schema, options) => createFormState(vi.fn(async () => {
+      const formData = new FormData()
+      formData.set('name', 'Reader')
+      formData.set('email', 'bad')
+      formData.set('password', 'password123')
+      formData.set('passwordConfirmation', 'password123')
 
-  it('navigates to same-app redirect targets after successful registration', async () => {
-    const renderer = await renderPageWithRedirect('/login')
+      return await options.submitter({ formData })
+    })))
+
+    let renderer
+    await act(async () => {
+      renderer = create(jsx(RegisterPage, {}))
+    })
+
+    assert.ok(renderer, 'Expected register page to render.')
 
     await act(async () => {
-      renderer.root.findByType('form').props.onSubmit({
+      await renderer.root.findByType('form').props.onSubmit({
         preventDefault: vi.fn(),
       })
     })
 
-    expect(mocks.fetch).toHaveBeenCalledWith('/api/register', {
-      method: 'POST',
-      body: expect.any(FormData),
-    })
     expect(mocks.useForm).toHaveBeenCalledWith(mocks.registerForm, expect.objectContaining({
       csrf: true,
+      validateOn: 'blur',
     }))
-    expect(mocks.replace).toHaveBeenCalledWith('/login')
+    expect(mocks.validate).toHaveBeenCalledWith(expect.any(FormData), mocks.registerForm, {
+      csrf: true,
+      throttle: 'register',
+    })
+    expect(mocks.register).not.toHaveBeenCalled()
+    expect(mocks.redirect).not.toHaveBeenCalled()
 
     await act(async () => {
       renderer.unmount()
     })
   })
-
-  it('ignores response-provided register redirect targets', async () => {
-    const renderer = await renderPageWithRedirect('https://evil.test/login')
-
-    await act(async () => {
-      renderer.root.findByType('form').props.onSubmit({
-        preventDefault: vi.fn(),
-      })
-    })
-
-    expect(mocks.replace).toHaveBeenCalledWith('/login')
-
-    await act(async () => {
-      renderer.unmount()
-    })
-  })
-
 })
 
-describe('POST /api/register', () => {
+describe('registerAction', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -175,17 +160,11 @@ describe('POST /api/register', () => {
       valid: false,
       fail: vi.fn(() => failure),
     }
-    const request = new Request('http://localhost/api/register', {
-      method: 'POST',
-    })
 
     mocks.validate.mockResolvedValue(submission)
 
-    const response = await registerRoute.POST(request)
-
-    expect(response.status).toBe(422)
-    await expect(response.json()).resolves.toEqual(failure)
-    expect(mocks.validate).toHaveBeenCalledWith(request, mocks.registerForm, {
+    await expect(registerAction(new FormData())).resolves.toBe(failure)
+    expect(mocks.validate).toHaveBeenCalledWith(expect.any(FormData), mocks.registerForm, {
       csrf: true,
       throttle: 'register',
     })
@@ -193,14 +172,45 @@ describe('POST /api/register', () => {
     expect(mocks.loginUsing).not.toHaveBeenCalled()
   })
 
-  it('keeps the verified registration success redirect unchanged', async () => {
+  it('returns registration failures without starting a session', async () => {
+    const failure = {
+      ok: false,
+      status: 422,
+      errors: {
+        email: ['The email has already been taken.'],
+      },
+    }
+    const submission = {
+      valid: true,
+      data: {
+        name: 'Reader',
+        email: 'reader@example.com',
+        password: 'password123',
+        passwordConfirmation: 'password123',
+      },
+      fail: vi.fn(() => failure),
+    }
+    mocks.validate.mockResolvedValue(submission)
+    mocks.register.mockResolvedValue({
+      data: null,
+      error: {
+        status: 422,
+        fields: {
+          email: ['The email has already been taken.'],
+        },
+      },
+    })
+
+    await expect(registerAction(new FormData())).resolves.toBe(failure)
+    expect(mocks.register).toHaveBeenCalledWith(submission.data)
+    expect(mocks.loginUsing).not.toHaveBeenCalled()
+    expect(mocks.redirect).not.toHaveBeenCalled()
+  })
+
+  it('uses the native Next redirect after verified registration', async () => {
     const created = {
       id: 7,
       email: 'reader@example.com',
-    }
-    const session = {
-      emailVerificationRequired: false,
-      user: created,
     }
     const submission = {
       valid: true,
@@ -211,34 +221,58 @@ describe('POST /api/register', () => {
         passwordConfirmation: 'password123',
       },
       fail: vi.fn(),
-      success: vi.fn((data, status) => ({
-        ok: true,
-        status,
-        data,
-      })),
     }
     mocks.validate.mockResolvedValue(submission)
     mocks.register.mockResolvedValue({
       data: created,
       error: null,
     })
-    mocks.loginUsing.mockResolvedValue(session)
-
-    const response = await registerRoute.POST(new Request('http://localhost/api/register', {
-      method: 'POST',
-    }))
-
-    expect(response.status).toBe(201)
-    await expect(response.json()).resolves.toEqual({
-      ok: true,
-      status: 201,
-      data: {
-        message: 'Account created and signed in successfully.',
-        redirectTo: '/admin',
-        user: created,
-      },
+    mocks.loginUsing.mockResolvedValue({
+      emailVerificationRequired: false,
+      user: created,
     })
+
+    await expect(registerAction(new FormData())).rejects.toMatchObject({
+      location: '/admin',
+    })
+
     expect(mocks.register).toHaveBeenCalledWith(submission.data)
     expect(mocks.loginUsing).toHaveBeenCalledWith(created)
+    expect(mocks.revalidatePath).toHaveBeenCalledWith('/', 'layout')
+    expect(mocks.redirect).toHaveBeenCalledWith('/admin')
+  })
+
+  it('redirects to email verification when the new session requires it', async () => {
+    const created = {
+      id: 7,
+      email: 'reader@example.com',
+    }
+    const submission = {
+      valid: true,
+      data: {
+        name: 'Reader',
+        email: 'reader@example.com',
+        password: 'password123',
+        passwordConfirmation: 'password123',
+      },
+      fail: vi.fn(),
+    }
+    mocks.validate.mockResolvedValue(submission)
+    mocks.register.mockResolvedValue({
+      data: created,
+      error: null,
+    })
+    mocks.loginUsing.mockResolvedValue({
+      emailVerificationRequired: true,
+      emailVerificationRoute: '/verify-email',
+      user: created,
+    })
+
+    await expect(registerAction(new FormData())).rejects.toMatchObject({
+      location: '/verify-email',
+    })
+
+    expect(mocks.revalidatePath).toHaveBeenCalledWith('/', 'layout')
+    expect(mocks.redirect).toHaveBeenCalledWith('/verify-email')
   })
 })

@@ -1,10 +1,9 @@
 'use client'
 
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { useAuth } from '@holo-js/auth/next/client'
 import { useForm } from '@holo-js/adapter-next/client'
 import { loginForm } from '@/lib/schemas/auth'
+import { loginAction } from './actions'
 
 const panelStyle = {
   display: 'grid',
@@ -17,24 +16,12 @@ const panelStyle = {
 } satisfies React.CSSProperties
 
 export default function LoginPage() {
-  const router = useRouter()
-  const auth = useAuth()
   const form = useForm(loginForm, {
     csrf: true,
     validateOn: 'blur',
     initialValues: { email: '', password: '', remember: false },
     async submitter({ formData }) {
-      const response = await fetch('/api/login', { method: 'POST', body: formData })
-      const submission = await response.json()
-      if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
-        try {
-          await auth.refreshUser()
-        } catch (error) {
-          console.warn('Auth refresh failed after login.', error)
-        }
-        router.replace(submission.data.redirectTo)
-      }
-      return submission
+      return await loginAction(formData)
     },
   })
   const formError = form.errors.first('_root')
@@ -95,15 +82,8 @@ export default function LoginPage() {
         </button>
       </form>
 
-      {form.lastSubmission?.ok === true ? (
-        <div style={{ color: '#86efac' }}>
-          <p style={{ marginTop: 0 }}>Signed in successfully.</p>
-          <Link href="/admin" style={{ color: '#7dd3fc' }}>Continue to admin</Link>
-        </div>
-      ) : null}
-
       <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-      <Link href="/register" style={{ color: '#7dd3fc' }}>Create account</Link>
+        <Link href="/register" style={{ color: '#7dd3fc' }}>Create account</Link>
         <Link href="/forgot-password" style={{ color: '#7dd3fc' }}>Forgot password?</Link>
       </div>
     </section>

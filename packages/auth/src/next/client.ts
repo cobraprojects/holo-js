@@ -1,5 +1,6 @@
 'use client'
 
+import { usePathname } from 'next/navigation'
 import { createContext, createElement, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { authClientInternals } from '../client'
 import type { AuthClientRequestOptions, HoloAuthUser } from '../contracts'
@@ -33,12 +34,14 @@ function hasExplicitUseAuthOptions(options: UseAuthOptions | undefined): options
 
 function useAuthState(
   options: UseAuthOptions = {},
-  stateOptions: { readonly refreshOnMount?: boolean } = {},
+  stateOptions: { readonly refreshOnMount?: boolean, readonly refreshOnRouteChange?: boolean } = {},
 ): UseAuthResult {
   const { initialProvider, initialUser, ...requestOptions } = options
+  const pathname = usePathname()
   const [currentProvider, setCurrentProvider] = useState<string | null>(initialProvider ?? null)
   const [currentUser, setCurrentUser] = useState<HoloAuthUser | null>(initialUser ?? null)
   const requestOptionsRef = useRef<AuthClientRequestOptions>(requestOptions)
+  const observedInitialPathname = useRef(false)
 
   requestOptionsRef.current = requestOptions
 
@@ -62,6 +65,29 @@ function useAuthState(
     }
   }, [initialUser, refreshUser, stateOptions.refreshOnMount])
 
+  useEffect(() => {
+    if (stateOptions.refreshOnRouteChange === false) {
+      return
+    }
+
+    if (!observedInitialPathname.current) {
+      observedInitialPathname.current = true
+      return
+    }
+
+    void refreshUser()
+  }, [pathname, refreshUser, stateOptions.refreshOnRouteChange])
+
+  useEffect(() => {
+    if (typeof initialProvider !== 'undefined') {
+      setCurrentProvider(initialProvider)
+    }
+
+    if (typeof initialUser !== 'undefined') {
+      setCurrentUser(initialUser)
+    }
+  }, [initialProvider, initialUser])
+
   return {
     authenticated: currentUser !== null,
     provider: currentProvider,
@@ -81,6 +107,7 @@ export function useAuth(options?: UseAuthOptions): UseAuthResult {
   const hasOptions = hasExplicitUseAuthOptions(options)
   const localAuth = useAuthState(options, {
     refreshOnMount: hasOptions || !context,
+    refreshOnRouteChange: hasOptions || !context,
   })
 
   if (!hasOptions && context) {

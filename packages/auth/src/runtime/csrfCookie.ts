@@ -4,6 +4,7 @@ export type CsrfCookieOptions = {
   readonly path: '/'
   readonly sameSite: 'lax'
   readonly secure: boolean
+  readonly httpOnly: false
 }
 
 type WebCryptoSubtle = {
@@ -95,5 +96,6 @@ export function resolveCsrfCookieOptions(url: string | URL): CsrfCookieOptions {
     path: '/',
     sameSite: 'lax',
     secure: requestUrl.protocol === 'https:',
+    httpOnly: false,
   }
 }

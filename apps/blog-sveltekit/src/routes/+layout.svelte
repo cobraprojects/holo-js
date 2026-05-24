@@ -1,11 +1,9 @@
 <script lang="ts">
-  import { invalidateAll } from '$app/navigation'
   import { untrack } from 'svelte'
   import { useAuth } from '@holo-js/auth/sveltekit/client'
   import type { LayoutProps } from './$types'
 
   let { data, children }: LayoutProps = $props()
-  let isLoggingOut = $state(false)
 
   const auth = useAuth({
     initialProvider: untrack(() => data?.auth?.provider ?? null),
@@ -13,37 +11,6 @@
   })
   const displayName = $derived(auth.user?.name ?? auth.user?.email ?? 'Account')
   const usesHostedLogout = $derived(auth.provider === 'workos' || auth.provider === 'clerk')
-
-  async function logout() {
-    if (isLoggingOut) {
-      return
-    }
-
-    isLoggingOut = true
-    try {
-      const response = await fetch('/api/logout', { method: 'POST' })
-      if (!response.ok) {
-        console.warn('Logout failed.', { status: response.status })
-        return
-      }
-
-      try {
-        await auth.refreshUser()
-      } catch (error) {
-        console.warn('Auth refresh failed after logout.', error)
-      }
-
-      try {
-        await invalidateAll()
-      } catch (error) {
-        console.warn('Auth invalidation failed after logout.', error)
-      }
-    } catch (error) {
-      console.warn('Logout failed.', error)
-    } finally {
-      isLoggingOut = false
-    }
-  }
 </script>
 
 <div class="shell">
@@ -57,7 +24,9 @@
       {#if auth.authenticated}
         <span class="user-name">{displayName}</span>
         {#if !usesHostedLogout}
-          <button type="button" class="logout-button" disabled={isLoggingOut} aria-busy={isLoggingOut} onclick={logout}>Logout</button>
+          <form action="/logout" method="post" class="logout-form">
+            <button type="submit" class="logout-button">Logout</button>
+          </form>
         {/if}
         {#if auth.provider === 'workos'}
           <form action="/api/auth/workos/logout" method="post" class="logout-form">

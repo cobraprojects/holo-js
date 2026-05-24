@@ -12,6 +12,11 @@ import {
   type FormFailureErrors,
 } from '../src'
 
+type FormsTestGlobal = typeof globalThis & {
+  __holoFormsSecurityModule__?: unknown
+  __holoFormsNextHeadersImport__?: () => Promise<unknown>
+}
+
 function createSecurityModule() {
   const attempts = new Map<string, number>()
 
@@ -75,7 +80,9 @@ function createSecurityModule() {
 }
 
 afterEach(() => {
-  delete (globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__
+  const runtime = globalThis as FormsTestGlobal
+  delete runtime.__holoFormsSecurityModule__
+  delete runtime.__holoFormsNextHeadersImport__
 })
 
 describe('@holo-js/forms contracts', () => {
@@ -655,6 +662,56 @@ describe('@holo-js/forms contracts', () => {
     expect(firstAllowed.valid).toBe(true)
 
     const throttled = await validate(event, login, {
+      throttle: 'login',
+    })
+    expect(throttled.valid).toBe(false)
+    if (throttled.valid) {
+      throw new Error('Expected throttle failure.')
+    }
+
+    expect(throttled.values).toEqual({
+      email: 'ava@example.com',
+    })
+    expect(throttled.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
+  })
+
+  it('accepts Next server action FormData for security-aware validation', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+    const runtime = globalThis as FormsTestGlobal
+
+    runtime.__holoFormsSecurityModule__ = createSecurityModule()
+    runtime.__holoFormsNextHeadersImport__ = async () => ({
+      headers: () => new Headers({
+        cookie: 'XSRF-TOKEN=login-token',
+        'X-CSRF-TOKEN': 'login-token',
+        'x-forwarded-for': '203.0.113.11',
+        host: 'app.test',
+        referer: 'https://app.test/login',
+        'content-type': 'multipart/form-data; boundary=stale-action-boundary',
+        'content-length': '123',
+      }),
+    })
+
+    const formData = new FormData()
+    formData.set('email', 'ava@example.com')
+
+    const firstAllowed = await validate(formData, login, {
+      csrf: true,
+      throttle: 'login',
+    })
+
+    expect(firstAllowed.valid).toBe(true)
+    if (!firstAllowed.valid) {
+      throw new Error('Expected Next action form validation success.')
+    }
+
+    expect(firstAllowed.data).toEqual({
+      email: 'ava@example.com',
+    })
+
+    const throttled = await validate(formData, login, {
       throttle: 'login',
     })
     expect(throttled.valid).toBe(false)

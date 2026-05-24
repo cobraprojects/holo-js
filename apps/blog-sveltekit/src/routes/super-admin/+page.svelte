@@ -1,37 +1,8 @@
 <script lang="ts">
-  import { goto, invalidateAll } from '$app/navigation'
   import type { PageProps } from './$types'
 
   let { data }: PageProps = $props()
-  let isLoggingOut = $state(false)
   const displayName = $derived(data.admin?.name ?? data.admin?.email ?? 'Super Admin')
-
-  async function logout() {
-    if (isLoggingOut) {
-      return
-    }
-
-    isLoggingOut = true
-    try {
-      const response = await fetch('/api/super-admin/logout', { method: 'POST' })
-      if (!response.ok) {
-        console.warn('Super admin logout failed.', { status: response.status })
-        return
-      }
-
-      try {
-        await invalidateAll()
-      } catch (error) {
-        console.warn('Super admin auth invalidation failed after logout.', error)
-      }
-
-      await goto('/super-admin/login')
-    } catch (error) {
-      console.warn('Super admin logout failed.', error)
-    } finally {
-      isLoggingOut = false
-    }
-  }
 </script>
 
 <section class="stack">
@@ -39,9 +10,9 @@
   <h1>Super Admin</h1>
   <p>Signed in as {displayName} through the admin guard.</p>
   <div>
-    <button type="button" disabled={isLoggingOut} onclick={logout}>
-      {isLoggingOut ? 'Signing out...' : 'Sign out of super admin'}
-    </button>
+    <form method="post">
+      <button type="submit">Sign out of super admin</button>
+    </form>
   </div>
 </section>
 
