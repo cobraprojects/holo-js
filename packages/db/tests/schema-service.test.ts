@@ -2226,6 +2226,12 @@ describe('schema service', () => {
       'Index name "users_a_b_c_index" is used by multiple indexes on table "users".',
     )
     expect(adapter.executed).toHaveLength(executedBeforeLongIndex)
+    await expect(postgresSchema.table('users', (table) => {
+      table.index(['email'], 'users_email_lookup')
+      table.renameIndex('users_email_index', 'users_email_lookup')
+    })).rejects.toThrow(
+      'Index name "users_email_lookup" is used by multiple indexes on table "users".',
+    )
     await expect(schema.table('users', (table) => {
       table.dropIndex('users bad')
     })).rejects.toThrow('Index name must be a valid SQL identifier segment.')

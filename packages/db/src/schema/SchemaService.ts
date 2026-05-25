@@ -534,6 +534,7 @@ export class SchemaService {
         case 'renameIndex':
           assertValidIndexName(operation.fromIndexName)
           assertValidIndexName(operation.toIndexName)
+          indexes.push({ columns: [], name: operation.toIndexName, unique: false })
           break
       }
     }
