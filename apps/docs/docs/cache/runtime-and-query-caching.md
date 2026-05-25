@@ -3,13 +3,10 @@
 ## Basic runtime API
 
 ```ts
-import cache, { defineCacheKey } from '@holo-js/cache'
+import cache from '@holo-js/cache'
 
-const reportKey = defineCacheKey<{ total: number }>('reports.daily')
-
-await cache.put(reportKey, { total: 42 }, 300)
-
-const report = await cache.get(reportKey)
+await cache.put('reports.daily', { total: 42 }, 300)
+const report = await cache.get('reports.daily')
 const fallbackReport = await cache.get('reports.weekly', () => ({ total: 0 }))
 
 await cache.forever('flags:beta', true)
@@ -18,9 +15,6 @@ await cache.increment('counters:pageviews')
 await cache.decrement('counters:pageviews')
 await cache.forget('flags:beta')
 ```
-
-Raw string keys work, but `defineCacheKey(...)` preserves value inference across `get`, `put`, `remember`, and
-`flexible`.
 
 `cache.add(key, value, ttl)` only writes when the key does not already exist, so it does not overwrite existing
 values. `cache.put(key, value, ttl)` always writes and overwrites the key. Use `cache.add` for idempotent first-write
@@ -75,6 +69,65 @@ await cache.flexible('feed.home', {
   stale: 300,
 }, buildHomeFeed)
 ```
+
+During the stale window, `flexible(...)` returns the cached value immediately and starts one protected refresh in the
+background. If the value is missing or outside the stale window, the current caller recomputes it before returning.
+
+## Advanced: typed keys and inference
+
+Most cache reads get useful types from a callback, fallback, or query builder:
+
+```ts
+const stats = await cache.remember('dashboard.stats', 300, async () => {
+  return { users: 10, posts: 42 }
+})
+
+const fallbackStats = await cache.get('dashboard.stats', () => {
+  return { users: 0, posts: 0 }
+})
+```
+
+In both examples, TypeScript infers `{ users: number; posts: number }` from the callback result.
+
+Raw string keys do not create a permanent type relationship between separate calls. A `put(...)` call validates the
+value for that write, but a later `get(...)` with the same string cannot infer from the earlier write:
+
+```ts
+await cache.put('dashboard.stats', { users: 10, posts: 42 }, 300)
+
+const stats = await cache.get('dashboard.stats')
+// stats is unknown/null unless you provide a fallback or use a typed key.
+```
+
+Use `defineCacheKey(...)` when the same key is shared across files or operations and later reads need to know the
+stored value shape:
+
+```ts
+import cache, { defineCacheKey } from '@holo-js/cache'
+
+const dashboardStats = defineCacheKey<{
+  users: number
+  posts: number
+}>('dashboard.stats')
+
+await cache.put(dashboardStats, { users: 10, posts: 42 }, 300)
+
+const stats = await cache.get(dashboardStats)
+// stats is { users: number; posts: number } | null
+```
+
+Type inference by API:
+
+| API | Inference source |
+| --- | --- |
+| `cache.remember(key, ttl, callback)` | callback return type |
+| `cache.rememberForever(key, callback)` | callback return type |
+| `cache.flexible(key, windows, callback)` | callback return type |
+| `cache.get(key, fallback)` | fallback value or callback return type |
+| `query.cache(...).get()` | query builder result type |
+| `cache.put('raw.key', value, ttl)` | value is typed for that write only; later raw-string reads do not infer from it |
+| `cache.get('raw.key')` | no value type unless the key is typed |
+| `cache.get(defineCacheKey<T>(...))` | typed key value shape |
 
 ## Locks
 
