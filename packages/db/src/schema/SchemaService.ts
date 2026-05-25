@@ -1,7 +1,7 @@
 import { CapabilityError } from '../core/errors'
 import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createTableOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropTableOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
 import { defineTable } from './defineTable'
-import { assertValidIndexName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
+import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
 import { SQLiteSchemaCompiler } from './SQLiteSchemaCompiler'
 import { PostgresSchemaCompiler } from './PostgresSchemaCompiler'
@@ -521,9 +521,11 @@ export class SchemaService {
     tableName: string,
     operations: ReturnType<TableMutationBuilder['getOperations']>,
   ): void {
+    const indexes: TableIndexDefinition[] = []
     for (const operation of operations) {
       switch (operation.kind) {
         case 'createIndex':
+          indexes.push(operation.index)
           this.resolveIndexName(tableName, operation.index)
           break
         case 'dropIndex':
@@ -535,6 +537,8 @@ export class SchemaService {
           break
       }
     }
+
+    assertUniqueResolvedIndexNames(tableName, indexes)
   }
 
   private async executeTableMutation(

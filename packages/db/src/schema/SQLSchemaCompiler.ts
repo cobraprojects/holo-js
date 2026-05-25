@@ -1,6 +1,6 @@
 import { SchemaError } from '../core/errors'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
-import { assertValidIndexName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
+import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
 import type { AnyColumnDefinition, TableDefinition, TableIndexDefinition } from './types'
 import type { DDLOperation, DDLStatement } from './ddl'
 
@@ -68,6 +68,7 @@ export abstract class SQLSchemaCompiler {
 
   compileCreateTable(table: TableDefinition): DDLStatement[] {
     assertValidIdentifierPath(table.tableName, 'Table name')
+    assertUniqueResolvedIndexNames(table.tableName, table.indexes)
     const columnSql = Object.values(table.columns).map(column => this.compileColumn(column))
     const sql = `CREATE TABLE IF NOT EXISTS ${this.compileIdentifierPath(table.tableName)} (${columnSql.join(', ')})`
     const statements: DDLStatement[] = [{

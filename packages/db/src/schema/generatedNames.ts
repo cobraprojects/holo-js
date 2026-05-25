@@ -3,13 +3,13 @@ import { assertValidIdentifierSegment, sanitizeIdentifierForGeneratedName } from
 import type { TableIndexDefinition } from './types'
 
 export interface IndexNameLengthPolicy {
-  readonly maxLength: number
+  readonly maxBytes: number
   readonly label: string
 }
 
 export const DEFAULT_INDEX_NAME_LENGTH_POLICY: IndexNameLengthPolicy = Object.freeze({
-  maxLength: 63,
-  label: 'portable PostgreSQL-compatible',
+  maxBytes: 63,
+  label: 'portable PostgreSQL-compatible (NAMEDATALEN-1)',
 })
 
 export function assertValidIndexName(
@@ -17,10 +17,28 @@ export function assertValidIndexName(
   policy = DEFAULT_INDEX_NAME_LENGTH_POLICY,
 ): void {
   assertValidIdentifierSegment(indexName, 'Index name')
-  if (indexName.length > policy.maxLength) {
+  const byteLength = new TextEncoder().encode(indexName).length
+  if (byteLength > policy.maxBytes) {
     throw new SchemaError(
-      `Index name "${indexName}" is ${indexName.length} characters long; ${policy.label} index names must be ${policy.maxLength} characters or fewer. Provide a shorter explicit index name.`,
+      `Index name "${indexName}" is ${byteLength} bytes long; ${policy.label} index names must be ${policy.maxBytes} bytes or fewer. Provide a shorter explicit index name.`,
     )
+  }
+}
+
+export function assertUniqueResolvedIndexNames(
+  tableName: string,
+  indexes: readonly TableIndexDefinition[],
+): void {
+  const names = new Set<string>()
+  for (const index of indexes) {
+    const indexName = resolveGeneratedIndexName(tableName, index)
+    if (names.has(indexName)) {
+      throw new SchemaError(
+        `Index name "${indexName}" is used by multiple indexes on table "${tableName}". Provide explicit unique index names.`,
+      )
+    }
+
+    names.add(indexName)
   }
 }
 

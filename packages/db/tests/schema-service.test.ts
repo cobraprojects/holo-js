@@ -612,9 +612,9 @@ describe('sqlite schema compiler', () => {
     )
   })
 
-  it('derives conventional index names for underscored column groups', () => {
+  it('fails closed when derived index names collide for underscored column groups', () => {
     const compiler = new SQLiteSchemaCompiler(identifier => `"${identifier}"`)
-    const first = defineTable('events', {
+    const events = defineTable('events', {
       a: column.string(),
       a_b: column.string(),
       b_c: column.string(),
@@ -626,12 +626,8 @@ describe('sqlite schema compiler', () => {
       ],
     })
 
-    const statements = compiler.compile(createTableOperation(first))
-    expect(statements[1]!.sql).toBe(
-      'CREATE INDEX IF NOT EXISTS "events_a_b_c_index" ON "events" ("a_b", "c")',
-    )
-    expect(statements[2]!.sql).toBe(
-      'CREATE INDEX IF NOT EXISTS "events_a_b_c_index" ON "events" ("a", "b_c")',
+    expect(() => compiler.compile(createTableOperation(events))).toThrow(
+      'Index name "events_a_b_c_index" is used by multiple indexes on table "events".',
     )
   })
 
@@ -1260,7 +1256,7 @@ describe('schema service', () => {
     expect(() => resolveIndexName('very_long_table_name_for_testing', {
       columns: ['very_long_column_name_for_testing'],
       unique: false,
-    })).toThrow('portable PostgreSQL-compatible index names must be 63 characters or fewer')
+    })).toThrow('portable PostgreSQL-compatible (NAMEDATALEN-1) index names must be 63 bytes or fewer')
     expect(() => resolveIndexName('users', {
       columns: ['email'],
       name: `users_${'x'.repeat(64)}_index`,
@@ -2220,7 +2216,14 @@ describe('schema service', () => {
     await expect(schema.table('users', (table) => {
       table.string('nickname').index(`users_${'x'.repeat(64)}_index`)
     })).rejects.toThrow(
-      'portable PostgreSQL-compatible index names must be 63 characters or fewer',
+      'portable PostgreSQL-compatible (NAMEDATALEN-1) index names must be 63 bytes or fewer',
+    )
+    expect(adapter.executed).toHaveLength(executedBeforeLongIndex)
+    await expect(schema.table('users', (table) => {
+      table.index(['a_b', 'c'])
+      table.index(['a', 'b_c'])
+    })).rejects.toThrow(
+      'Index name "users_a_b_c_index" is used by multiple indexes on table "users".',
     )
     expect(adapter.executed).toHaveLength(executedBeforeLongIndex)
     await expect(schema.table('users', (table) => {

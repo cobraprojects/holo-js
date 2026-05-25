@@ -587,9 +587,11 @@ table.unique(['account_id', 'slug'])
 ```
 
 ::: warning Index name length
-Index names must be 63 characters or fewer. Holo-JS validates both generated and explicit index names
-before running schema SQL, so a migration with a name that is too long fails before DDL is sent to the
-database. If the generated name is too long, pass a shorter explicit name.
+Index names must be 63 bytes or fewer for PostgreSQL compatibility (`NAMEDATALEN-1`). This is a byte
+limit, not a character count, so multibyte names can reach it sooner than ASCII-only names. Holo-JS
+validates both generated and explicit index names before running schema SQL, so a migration with a name
+that is too long fails before DDL is sent to the database. If the generated name is too long, pass a
+shorter explicit name.
 :::
 
 For example:
