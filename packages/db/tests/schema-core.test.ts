@@ -335,9 +335,21 @@ describe('native schema core', () => {
 
     const quick = new TableDefinitionBuilder('quick_users')
       .string('email')
+      .index()
       .unique()
       .build()
     expect(quick.email.unique).toBe(true)
+    expect(quick.indexes).toEqual([
+      { columns: ['email'], name: 'quick_users_email_index', unique: false },
+    ])
+
+    const explicitIndex = new TableDefinitionBuilder('explicit_users')
+      .string('email')
+      .index('explicit_users_email_lookup')
+      .build()
+    expect(explicitIndex.indexes).toEqual([
+      { columns: ['email'], name: 'explicit_users_email_lookup', unique: false },
+    ])
 
     const forwarded = new TableDefinitionBuilder('forwarded')
       .string('title')
@@ -414,14 +426,14 @@ describe('native schema core', () => {
     expect(table.operator_id.nullable).toBe(true)
 
     expect(table.indexes).toEqual([
-      { columns: ['subject_type', 'subject_id'], name: undefined, unique: false },
-      { columns: ['owner_type', 'owner_id'], name: undefined, unique: false },
-      { columns: ['session_type', 'session_id'], name: undefined, unique: false },
-      { columns: ['actor_type', 'actor_id'], name: undefined, unique: false },
-      { columns: ['commentable_type', 'commentable_id'], name: undefined, unique: false },
-      { columns: ['auditable_type', 'auditable_id'], name: undefined, unique: false },
-      { columns: ['traceable_type', 'traceable_id'], name: undefined, unique: false },
-      { columns: ['operator_type', 'operator_id'], name: undefined, unique: false },
+      { columns: ['subject_type', 'subject_id'], name: 'activities_subject_type_subject_id_index', unique: false },
+      { columns: ['owner_type', 'owner_id'], name: 'activities_owner_type_owner_id_index', unique: false },
+      { columns: ['session_type', 'session_id'], name: 'activities_session_type_session_id_index', unique: false },
+      { columns: ['actor_type', 'actor_id'], name: 'activities_actor_type_actor_id_index', unique: false },
+      { columns: ['commentable_type', 'commentable_id'], name: 'activities_commentable_type_commentable_id_index', unique: false },
+      { columns: ['auditable_type', 'auditable_id'], name: 'activities_auditable_type_auditable_id_index', unique: false },
+      { columns: ['traceable_type', 'traceable_id'], name: 'activities_traceable_type_traceable_id_index', unique: false },
+      { columns: ['operator_type', 'operator_id'], name: 'activities_operator_type_operator_id_index', unique: false },
     ])
   })
 
@@ -604,6 +616,8 @@ describe('native schema core', () => {
     builder.foreignSnowflake('actor_snowflake').constrained('actors', 'snowflake_id')
     builder.bigInteger('login_count')
     builder.string('email').notNull().unique()
+    builder.string('indexed_email').index()
+    builder.string('lookup_email').index('users_lookup_email_index')
     builder.string('display_name').nullable()
     builder.text('bio')
     builder.boolean('active').default(true)
@@ -644,6 +658,10 @@ describe('native schema core', () => {
       { kind: 'createForeignKey', columnName: 'actor_snowflake', reference: { table: 'actors', column: 'snowflake_id', onDelete: undefined, onUpdate: undefined }, constraintName: undefined },
       expect.objectContaining({ kind: 'addColumn', columnName: 'login_count' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'email' }),
+      expect.objectContaining({ kind: 'addColumn', columnName: 'indexed_email' }),
+      { kind: 'createIndex', index: { columns: ['indexed_email'], name: 'users_indexed_email_index', unique: false } },
+      expect.objectContaining({ kind: 'addColumn', columnName: 'lookup_email' }),
+      { kind: 'createIndex', index: { columns: ['lookup_email'], name: 'users_lookup_email_index', unique: false } },
       expect.objectContaining({ kind: 'addColumn', columnName: 'display_name' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'bio' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'active' }),
@@ -969,28 +987,28 @@ describe('native schema core', () => {
     expect(builder.getOperations()).toEqual([
       expect.objectContaining({ kind: 'addColumn', columnName: 'subject_type' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'subject_id' }),
-      { kind: 'createIndex', index: { columns: ['subject_type', 'subject_id'], name: undefined, unique: false } },
+      { kind: 'createIndex', index: { columns: ['subject_type', 'subject_id'], name: 'activities_subject_type_subject_id_index', unique: false } },
       expect.objectContaining({ kind: 'addColumn', columnName: 'owner_type' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'owner_id' }),
-      { kind: 'createIndex', index: { columns: ['owner_type', 'owner_id'], name: undefined, unique: false } },
+      { kind: 'createIndex', index: { columns: ['owner_type', 'owner_id'], name: 'activities_owner_type_owner_id_index', unique: false } },
       expect.objectContaining({ kind: 'addColumn', columnName: 'session_type' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'session_id' }),
-      { kind: 'createIndex', index: { columns: ['session_type', 'session_id'], name: undefined, unique: false } },
+      { kind: 'createIndex', index: { columns: ['session_type', 'session_id'], name: 'activities_session_type_session_id_index', unique: false } },
       expect.objectContaining({ kind: 'addColumn', columnName: 'actor_type' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'actor_id' }),
-      { kind: 'createIndex', index: { columns: ['actor_type', 'actor_id'], name: undefined, unique: false } },
+      { kind: 'createIndex', index: { columns: ['actor_type', 'actor_id'], name: 'activities_actor_type_actor_id_index', unique: false } },
       expect.objectContaining({ kind: 'addColumn', columnName: 'commentable_type' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'commentable_id' }),
-      { kind: 'createIndex', index: { columns: ['commentable_type', 'commentable_id'], name: undefined, unique: false } },
+      { kind: 'createIndex', index: { columns: ['commentable_type', 'commentable_id'], name: 'activities_commentable_type_commentable_id_index', unique: false } },
       expect.objectContaining({ kind: 'addColumn', columnName: 'auditable_type' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'auditable_id' }),
-      { kind: 'createIndex', index: { columns: ['auditable_type', 'auditable_id'], name: undefined, unique: false } },
+      { kind: 'createIndex', index: { columns: ['auditable_type', 'auditable_id'], name: 'activities_auditable_type_auditable_id_index', unique: false } },
       expect.objectContaining({ kind: 'addColumn', columnName: 'traceable_type' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'traceable_id' }),
-      { kind: 'createIndex', index: { columns: ['traceable_type', 'traceable_id'], name: undefined, unique: false } },
+      { kind: 'createIndex', index: { columns: ['traceable_type', 'traceable_id'], name: 'activities_traceable_type_traceable_id_index', unique: false } },
       expect.objectContaining({ kind: 'addColumn', columnName: 'operator_type' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'operator_id' }),
-      { kind: 'createIndex', index: { columns: ['operator_type', 'operator_id'], name: undefined, unique: false } },
+      { kind: 'createIndex', index: { columns: ['operator_type', 'operator_id'], name: 'activities_operator_type_operator_id_index', unique: false } },
     ])
   })
 
@@ -1012,28 +1030,28 @@ describe('native schema core', () => {
       expect.objectContaining({ kind: 'addColumn', columnName: 'label' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'attachable_type' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'attachable_id' }),
-      { kind: 'createIndex', index: { columns: ['attachable_type', 'attachable_id'], name: undefined, unique: false } },
+      { kind: 'createIndex', index: { columns: ['attachable_type', 'attachable_id'], name: 'activities_attachable_type_attachable_id_index', unique: false } },
       expect.objectContaining({ kind: 'addColumn', columnName: 'commentable_type' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'commentable_id' }),
-      { kind: 'createIndex', index: { columns: ['commentable_type', 'commentable_id'], name: undefined, unique: false } },
+      { kind: 'createIndex', index: { columns: ['commentable_type', 'commentable_id'], name: 'activities_commentable_type_commentable_id_index', unique: false } },
       expect.objectContaining({ kind: 'addColumn', columnName: 'owner_type' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'owner_id' }),
-      { kind: 'createIndex', index: { columns: ['owner_type', 'owner_id'], name: undefined, unique: false } },
+      { kind: 'createIndex', index: { columns: ['owner_type', 'owner_id'], name: 'activities_owner_type_owner_id_index', unique: false } },
       expect.objectContaining({ kind: 'addColumn', columnName: 'auditable_type' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'auditable_id' }),
-      { kind: 'createIndex', index: { columns: ['auditable_type', 'auditable_id'], name: undefined, unique: false } },
+      { kind: 'createIndex', index: { columns: ['auditable_type', 'auditable_id'], name: 'activities_auditable_type_auditable_id_index', unique: false } },
       expect.objectContaining({ kind: 'addColumn', columnName: 'session_type' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'session_id' }),
-      { kind: 'createIndex', index: { columns: ['session_type', 'session_id'], name: undefined, unique: false } },
+      { kind: 'createIndex', index: { columns: ['session_type', 'session_id'], name: 'activities_session_type_session_id_index', unique: false } },
       expect.objectContaining({ kind: 'addColumn', columnName: 'traceable_type' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'traceable_id' }),
-      { kind: 'createIndex', index: { columns: ['traceable_type', 'traceable_id'], name: undefined, unique: false } },
+      { kind: 'createIndex', index: { columns: ['traceable_type', 'traceable_id'], name: 'activities_traceable_type_traceable_id_index', unique: false } },
       expect.objectContaining({ kind: 'addColumn', columnName: 'actor_type' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'actor_id' }),
-      { kind: 'createIndex', index: { columns: ['actor_type', 'actor_id'], name: undefined, unique: false } },
+      { kind: 'createIndex', index: { columns: ['actor_type', 'actor_id'], name: 'activities_actor_type_actor_id_index', unique: false } },
       expect.objectContaining({ kind: 'addColumn', columnName: 'operator_type' }),
       expect.objectContaining({ kind: 'addColumn', columnName: 'operator_id' }),
-      { kind: 'createIndex', index: { columns: ['operator_type', 'operator_id'], name: undefined, unique: false } },
+      { kind: 'createIndex', index: { columns: ['operator_type', 'operator_id'], name: 'activities_operator_type_operator_id_index', unique: false } },
     ])
   })
 

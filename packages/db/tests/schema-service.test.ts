@@ -567,7 +567,7 @@ describe('sqlite schema compiler', () => {
     expect(statements[0]!.sql).toContain('"account_uuid" TEXT NOT NULL REFERENCES "accounts" ("uuid")')
     expect(statements[0]!.sql).toContain('"session_ulid" TEXT NOT NULL REFERENCES "sessions" ("id")')
     expect(statements[0]!.sql).toContain('"actor_snowflake" TEXT NOT NULL REFERENCES "actors" ("snowflake_id")')
-    expect(statements[1]!.sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "users_nickname_fxf0kt_unique"')
+    expect(statements[1]!.sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "users_nickname_unique"')
 
     expect(compiler.compile(dropTableOperation('users'))).toEqual([{
       sql: 'DROP TABLE IF EXISTS "users"',
@@ -608,11 +608,11 @@ describe('sqlite schema compiler', () => {
 
     const statements = compiler.compile(createTableOperation(posts))
     expect(statements[1]!.sql).toBe(
-      'CREATE INDEX IF NOT EXISTS "posts_title_1b1lae3_index" ON "posts" ("title")',
+      'CREATE INDEX IF NOT EXISTS "posts_title_index" ON "posts" ("title")',
     )
   })
 
-  it('derives collision-resistant index names for underscored column groups', () => {
+  it('derives conventional index names for underscored column groups', () => {
     const compiler = new SQLiteSchemaCompiler(identifier => `"${identifier}"`)
     const first = defineTable('events', {
       a: column.string(),
@@ -628,10 +628,10 @@ describe('sqlite schema compiler', () => {
 
     const statements = compiler.compile(createTableOperation(first))
     expect(statements[1]!.sql).toBe(
-      'CREATE INDEX IF NOT EXISTS "events_a_b_c_1ddsko2_index" ON "events" ("a_b", "c")',
+      'CREATE INDEX IF NOT EXISTS "events_a_b_c_index" ON "events" ("a_b", "c")',
     )
     expect(statements[2]!.sql).toBe(
-      'CREATE INDEX IF NOT EXISTS "events_a_b_c_1batapi_index" ON "events" ("a", "b_c")',
+      'CREATE INDEX IF NOT EXISTS "events_a_b_c_index" ON "events" ("a", "b_c")',
     )
   })
 
@@ -928,8 +928,8 @@ describe('multi-dialect schema compilers', () => {
     expect(sqliteCompiler.compile(createIndexOperation('users', {
       columns: ['email'],
       unique: true }))).toEqual([{
-      sql: 'CREATE UNIQUE INDEX IF NOT EXISTS "users_email_yfr781_unique" ON "users" ("email")',
-      source: 'schema:createIndex:users:users_email_yfr781_unique' }])
+      sql: 'CREATE UNIQUE INDEX IF NOT EXISTS "users_email_unique" ON "users" ("email")',
+      source: 'schema:createIndex:users:users_email_unique' }])
 
     expect(postgresCompiler.compile(createIndexOperation('public.users', {
       name: 'users_name_index',
@@ -948,8 +948,8 @@ describe('multi-dialect schema compilers', () => {
     expect(mysqlCompiler.compile(createIndexOperation('analytics.users', {
       columns: ['email'],
       unique: false }))).toEqual([{
-      sql: 'CREATE INDEX `analytics_users_email_yfr781_index` ON `analytics`.`users` (`email`)',
-      source: 'schema:createIndex:analytics.users:analytics_users_email_yfr781_index' }])
+      sql: 'CREATE INDEX `analytics_users_email_index` ON `analytics`.`users` (`email`)',
+      source: 'schema:createIndex:analytics.users:analytics_users_email_index' }])
 
     expect(mysqlCompiler.compile(dropIndexOperation('analytics.users', 'users_email_unique'))).toEqual([{
       sql: 'DROP INDEX `users_email_unique` ON `analytics`.`users`',
@@ -1247,16 +1247,25 @@ describe('schema service', () => {
     ) => string
 
     expect(resolveIndexName('users', { columns: ['email'], unique: true, name: 'users_email_unique' })).toBe('users_email_unique')
-    expect(resolveIndexName('users', { columns: ['email'], unique: true })).toBe('users_email_yfr781_unique')
-    expect(resolveIndexName('users', { columns: ['display_name'], unique: false })).toBe('users_display_name_1mdvyy9_index')
+    expect(resolveIndexName('users', { columns: ['email'], unique: true })).toBe('users_email_unique')
+    expect(resolveIndexName('users', { columns: ['display_name'], unique: false })).toBe('users_display_name_index')
     expect(resolveIndexName('mysql_device_links', {
       columns: ['user_public_id', 'device_key_id', 'label'],
       unique: true,
-    })).toBe('mysql_device_links_user_public_id_device_key_id_1mb4nd2_unique')
+    })).toBe('mysql_device_links_user_public_id_device_key_id_label_unique')
     expect(resolveIndexName('mysql_device_links', {
       columns: ['user_public_id', 'device_key_id', 'label'],
       unique: true,
     }).length).toBeLessThanOrEqual(63)
+    expect(() => resolveIndexName('very_long_table_name_for_testing', {
+      columns: ['very_long_column_name_for_testing'],
+      unique: false,
+    })).toThrow('portable PostgreSQL-compatible index names must be 63 characters or fewer')
+    expect(() => resolveIndexName('users', {
+      columns: ['email'],
+      name: `users_${'x'.repeat(64)}_index`,
+      unique: false,
+    })).toThrow('Provide a shorter explicit index name.')
   })
 
   it('renames indexes where the active dialect supports it and fails closed otherwise', async () => {
@@ -1702,7 +1711,7 @@ describe('schema service', () => {
     await schema.table('users', (table) => {
       table.renameColumn('nickname', 'display_name')
       table.renameIndex('users_email_unique', 'users_email_address_unique')
-      table.dropIndex('users_nickname_fxf0kt_index')
+      table.dropIndex('users_nickname_index')
     })
 
     const updated = registry.get('users')
@@ -1714,7 +1723,7 @@ describe('schema service', () => {
     expect(adapter.executed).toEqual([
       'ALTER TABLE "users" RENAME COLUMN "nickname" TO "display_name"',
       'ALTER INDEX "users_email_unique" RENAME TO "users_email_address_unique"',
-      'DROP INDEX IF EXISTS "users_nickname_fxf0kt_index"',
+      'DROP INDEX IF EXISTS "users_nickname_index"',
     ])
   })
 
@@ -2207,13 +2216,20 @@ describe('schema service', () => {
     })).rejects.toThrow(
       'Table name must be a valid SQL identifier segment.',
     )
+    const executedBeforeLongIndex = adapter.executed.length
+    await expect(schema.table('users', (table) => {
+      table.string('nickname').index(`users_${'x'.repeat(64)}_index`)
+    })).rejects.toThrow(
+      'portable PostgreSQL-compatible index names must be 63 characters or fewer',
+    )
+    expect(adapter.executed).toHaveLength(executedBeforeLongIndex)
     await expect(schema.table('users', (table) => {
       table.dropIndex('users bad')
     })).rejects.toThrow('Index name must be a valid SQL identifier segment.')
     await expect(schema.table('users', (table) => {
       table.renameIndex('users_email_index', 'users bad')
     })).rejects.toThrow(
-      'SchemaService does not support renaming indexes for dialect "sqlite".',
+      'Index name must be a valid SQL identifier segment.',
     )
     await expect(postgresSchema.table('users', (table) => {
       table.string('display name')

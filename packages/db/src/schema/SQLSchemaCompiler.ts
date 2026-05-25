@@ -1,6 +1,6 @@
 import { SchemaError } from '../core/errors'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
-import { resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
+import { assertValidIndexName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
 import type { AnyColumnDefinition, TableDefinition, TableIndexDefinition } from './types'
 import type { DDLOperation, DDLStatement } from './ddl'
 
@@ -179,7 +179,7 @@ export abstract class SQLSchemaCompiler {
 
   compileDropIndex(tableName: string, indexName: string): DDLStatement {
     assertValidIdentifierPath(tableName, 'Table name')
-    assertValidIdentifierSegment(indexName, 'Index name')
+    assertValidIndexName(indexName)
 
     return {
       sql: `DROP INDEX IF EXISTS ${this.quoteIdentifier(indexName)}`,
@@ -199,8 +199,8 @@ export abstract class SQLSchemaCompiler {
 
   compileRenameIndex(tableName: string, fromIndexName: string, toIndexName: string): DDLStatement {
     assertValidIdentifierPath(tableName, 'Table name')
-    assertValidIdentifierSegment(fromIndexName, 'Index name')
-    assertValidIdentifierSegment(toIndexName, 'Index name')
+    assertValidIndexName(fromIndexName)
+    assertValidIndexName(toIndexName)
 
     return {
       sql: `ALTER INDEX ${this.quoteIdentifier(fromIndexName)} RENAME TO ${this.quoteIdentifier(toIndexName)}`,

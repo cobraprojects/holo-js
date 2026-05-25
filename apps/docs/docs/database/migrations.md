@@ -534,11 +534,28 @@ Use this when the field should be removed from the database entirely.
 
 ### Creating Indexes
 
-Create normal indexes:
+For a single column, use the column builder:
+
+```ts
+await schema.table('users', (table) => {
+  table.string('email').index()
+})
+```
+
+Pass a name when you want the migration to use a shorter or more explicit index name:
+
+```ts
+await schema.table('users', (table) => {
+  table.string('email').index('users_email_index')
+})
+```
+
+Use table-level indexes for existing columns or indexes that span multiple columns:
 
 ```ts
 await schema.table('users', (table) => {
   table.index(['email'], 'users_email_index')
+  table.index(['account_id', 'email'], 'users_account_email_index')
 })
 ```
 
@@ -550,8 +567,44 @@ await schema.table('users', (table) => {
 })
 ```
 
-Use table-level indexes when the index spans one or more columns as a schema concern. Use the column
-builder’s `.unique()` when the uniqueness rule clearly belongs to a single column definition.
+Use the column builder’s `.unique()` when the uniqueness rule clearly belongs to a single column
+definition:
+
+```ts
+await schema.createTable('users', (table) => {
+  table.string('email').unique()
+})
+```
+
+When an index name is not provided, Holo-JS generates a conventional name:
+
+```ts
+table.string('email').index()
+// users_email_index
+
+table.unique(['account_id', 'slug'])
+// users_account_id_slug_unique
+```
+
+::: warning Index name length
+Index names must be 63 characters or fewer. Holo-JS validates both generated and explicit index names
+before running schema SQL, so a migration with a name that is too long fails before DDL is sent to the
+database. If the generated name is too long, pass a shorter explicit name.
+:::
+
+For example:
+
+```ts
+await schema.table('audit_events', (table) => {
+  table.index(
+    ['very_long_account_identifier_column', 'very_long_event_identifier_column'],
+    'audit_events_lookup_idx',
+  )
+})
+```
+
+The same limit applies to normal indexes, unique indexes, index renames, and index drops. Keep names
+short enough for PostgreSQL compatibility even when the active database is MySQL or SQLite.
 
 ### Renaming Indexes
 
