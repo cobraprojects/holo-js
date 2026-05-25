@@ -1,5 +1,6 @@
 import { column, type AnyColumnBuilder } from './columns'
 import { ForeignKeyBuilderState } from './foreignKeyBuilderState'
+import { resolveConventionalIndexName } from './generatedNames'
 import type { ForeignKeyReference, TableIndexDefinition } from './types'
 
 interface AddColumnMutationOperation {
@@ -187,6 +188,14 @@ class TableColumnMutationBuilder {
 
   unique(): this {
     this.operation.column = this.operation.column.unique()
+    return this
+  }
+
+  index(name?: string): this {
+    this.root.index(
+      [this.operation.columnName],
+      name ?? resolveConventionalIndexName(this.root.table, [this.operation.columnName]),
+    )
     return this
   }
 
@@ -563,7 +572,10 @@ export class TableMutationBuilder {
 
     this.columnMutation(typeColumn, () => nullable ? column.string().nullable() : column.string())
     this.columnMutation(idColumn, () => nullable ? createIdBuilder().nullable() : createIdBuilder())
-    this.index([typeColumn, idColumn], indexName)
+    this.index(
+      [typeColumn, idColumn],
+      indexName ?? resolveConventionalIndexName(this.table, [typeColumn, idColumn]),
+    )
 
     return this
   }

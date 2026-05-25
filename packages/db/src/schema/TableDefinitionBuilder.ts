@@ -2,6 +2,7 @@ import { SchemaError } from '../core/errors'
 import { column, type AnyColumnBuilder, type ColumnInput } from './columns'
 import { defineTable, type BoundTableDefinition, type DefineTableOptions } from './defineTable'
 import { ForeignKeyBuilderState } from './foreignKeyBuilderState'
+import { resolveConventionalIndexName } from './generatedNames'
 import type { TableIndexDefinition } from './types'
 
 type ColumnShapeInput = Record<string, ColumnInput>
@@ -54,6 +55,7 @@ class TableCreateColumnBuilder<
   constructor(
     protected readonly root: TableDefinitionBuilder<TName, TColumns>,
     protected readonly builderRef: ColumnReference,
+    protected readonly columnName: string,
   ) {}
 
   build(): BoundTableDefinition<TName, TColumns> {
@@ -98,6 +100,24 @@ class TableCreateColumnBuilder<
     }
 
     this.builderRef.builder = this.builderRef.builder.unique()
+    return this
+  }
+
+  index(): this
+  index(name: string): this
+  index(columns: readonly string[], name?: string): TableDefinitionBuilder<TName, TColumns>
+  index(
+    nameOrColumns?: string | readonly string[],
+    name?: string,
+  ): this | TableDefinitionBuilder<TName, TColumns> {
+    if (typeof nameOrColumns !== 'string' && nameOrColumns !== undefined) {
+      return this.root.index(nameOrColumns, name)
+    }
+
+    this.root.index(
+      [this.columnName],
+      nameOrColumns ?? resolveConventionalIndexName(this.root.tableName, [this.columnName]),
+    )
     return this
   }
 
@@ -314,10 +334,6 @@ class TableCreateColumnBuilder<
     return this.root.enum(columnName, values)
   }
 
-  index(columns: readonly string[], name?: string): TableDefinitionBuilder<TName, TColumns> {
-    return this.root.index(columns, name)
-  }
-
   timestamps(): TableDefinitionBuilder<TName, WithTimestamps<TColumns>> {
     return this.root.timestamps()
   }
@@ -396,7 +412,7 @@ class TableCreateForeignIdBuilder<
     builderRef: ColumnReference,
     columnName: string,
   ) {
-    super(root, builderRef)
+    super(root, builderRef, columnName)
     this.foreignKeyState = new ForeignKeyBuilderState(columnName)
   }
 
@@ -877,6 +893,7 @@ export class TableDefinitionBuilder<
     return new TableCreateColumnBuilder(
       this as unknown as TableDefinitionBuilder<TName, WithColumn<TColumns, TColumnName, TColumn>>,
       builderRef,
+      columnName,
     )
   }
 
@@ -917,7 +934,10 @@ export class TableDefinitionBuilder<
 
     this.column(typeColumn, typeBuilder)
     this.column(idColumn, idBuilder)
-    this.index([typeColumn, idColumn], indexName)
+    this.index(
+      [typeColumn, idColumn],
+      indexName ?? resolveConventionalIndexName(this.tableName, [typeColumn, idColumn]),
+    )
 
     return this as unknown as TResult
   }

@@ -1,5 +1,6 @@
 import { SQLSchemaCompiler } from './SQLSchemaCompiler'
 import { compileDialectDefaultLiteral } from './defaultLiterals'
+import { assertValidIndexName } from './generatedNames'
 import { resolveDialectColumnType } from './typeMapping'
 import type { ColumnDefinition, TableIndexDefinition } from './types'
 
@@ -24,6 +25,8 @@ export class MySQLSchemaCompiler extends SQLSchemaCompiler {
   }
 
   override compileRenameIndex(tableName: string, fromIndexName: string, toIndexName: string): { sql: string, source: string } {
+    assertValidIndexName(fromIndexName)
+    assertValidIndexName(toIndexName)
     return {
       sql: `ALTER TABLE ${this.compileIdentifierPath(tableName)} RENAME INDEX ${this.quoteIdentifier(fromIndexName)} TO ${this.quoteIdentifier(toIndexName)}`,
       source: `schema:renameIndex:${tableName}:${fromIndexName}:${toIndexName}`,
@@ -41,6 +44,7 @@ export class MySQLSchemaCompiler extends SQLSchemaCompiler {
   }
 
   override compileDropIndex(tableName: string, indexName: string): { sql: string, source: string } {
+    assertValidIndexName(indexName)
     return {
       sql: `DROP INDEX ${this.quoteIdentifier(indexName)} ON ${this.compileIdentifierPath(tableName)}`,
       source: `schema:dropIndex:${tableName}:${indexName}`,

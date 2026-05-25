@@ -1,7 +1,7 @@
 import { CapabilityError } from '../core/errors'
 import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createTableOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropTableOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
 import { defineTable } from './defineTable'
-import { resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
+import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
 import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
 import { SQLiteSchemaCompiler } from './SQLiteSchemaCompiler'
 import { PostgresSchemaCompiler } from './PostgresSchemaCompiler'
@@ -157,8 +157,10 @@ export class SchemaService {
     assertValidIdentifierPath(tableName, 'Table name')
     const builder = new TableMutationBuilder(tableName)
     await callback(builder)
+    const operations = builder.getOperations()
+    this.assertTableMutationIndexNames(tableName, operations)
 
-    for (const operation of builder.getOperations()) {
+    for (const operation of operations) {
       await this.executeTableMutation(tableName, operation)
     }
   }
@@ -508,10 +510,36 @@ export class SchemaService {
   }
 
   private async createDefinedTable(table: TableDefinition): Promise<void> {
+    const statements = this.createCompiler().compile(createTableOperation(table))
     if (!this.connection.getSchemaRegistry().has(table.tableName)) {
       this.register(table)
     }
-    await this.execute(this.createCompiler().compile(createTableOperation(table)))
+    await this.execute(statements)
+  }
+
+  private assertTableMutationIndexNames(
+    tableName: string,
+    operations: ReturnType<TableMutationBuilder['getOperations']>,
+  ): void {
+    const indexes: TableIndexDefinition[] = []
+    for (const operation of operations) {
+      switch (operation.kind) {
+        case 'createIndex':
+          indexes.push(operation.index)
+          this.resolveIndexName(tableName, operation.index)
+          break
+        case 'dropIndex':
+          assertValidIndexName(operation.indexName)
+          break
+        case 'renameIndex':
+          assertValidIndexName(operation.fromIndexName)
+          assertValidIndexName(operation.toIndexName)
+          indexes.push({ columns: [], name: operation.toIndexName, unique: false })
+          break
+      }
+    }
+
+    assertUniqueResolvedIndexNames(tableName, indexes)
   }
 
   private async executeTableMutation(
