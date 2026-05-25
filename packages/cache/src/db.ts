@@ -1,3 +1,6 @@
+import { createRequire } from 'node:module'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   normalizeDatabaseConfig,
   type HoloDatabaseConfig,
@@ -112,12 +115,25 @@ function normalizeDatabaseModuleLoadError(
 }
 
 /* v8 ignore start -- optional-peer loading failures are covered through normalizeDatabaseModuleLoadError in this monorepo test graph. */
+async function importDatabaseDriverModuleFromProject(specifier: string): Promise<DatabaseCacheDriverModule> {
+  const projectRequire = createRequire(join(process.cwd(), 'package.json'))
+  return await import(pathToFileURL(projectRequire.resolve(specifier)).href) as DatabaseCacheDriverModule
+}
+
 async function loadDatabaseDriverModule(): Promise<DatabaseCacheDriverModule> {
+  const specifier = '@holo-js/cache-db' as string
   try {
-    const specifier = '@holo-js/cache-db' as string
     return await import(/* webpackIgnore: true */ specifier) as DatabaseCacheDriverModule
   } catch (error) {
-    throw normalizeDatabaseModuleLoadError(error, '@holo-js/cache-db')
+    if (!isModuleNotFoundError(error, specifier)) {
+      throw normalizeDatabaseModuleLoadError(error, specifier)
+    }
+
+    try {
+      return await importDatabaseDriverModuleFromProject(specifier)
+    } catch (fallbackError) {
+      throw normalizeDatabaseModuleLoadError(fallbackError, specifier)
+    }
   }
 }
 /* v8 ignore stop */

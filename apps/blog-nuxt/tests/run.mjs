@@ -7,11 +7,14 @@ import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { DEFAULT_SESSION_COOKIE_NAME } from '@holo-js/config'
+import Database from 'better-sqlite3'
 import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 
 const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
+const configCachePath = join(cwd, '.holo-js/generated/config-cache.json')
+const databasePath = join(cwd, 'storage/database.sqlite')
 const nuxtCachePath = join(cwd, '.nuxt')
 const port = await new Promise((resolve, reject) => {
   const server = createServer()
@@ -187,6 +190,42 @@ async function waitForRedirect(url, expectedPath, timeoutMs = 30000) {
   throw new Error(`Timed out waiting for ${url} to redirect to ${expectedPath}${lastError instanceof Error ? `: ${lastError.message}` : ''}`)
 }
 
+function countCacheRows() {
+  const database = new Database(databasePath, { readonly: true })
+  try {
+    return database.prepare('select count(*) as count from cache').get().count
+  } finally {
+    database.close()
+  }
+}
+
+async function assertConfigCacheCommands() {
+  await run('bun', ['run', 'config:cache'])
+  assert.equal(existsSync(configCachePath), true)
+  assert.ok((await readFile(configCachePath, 'utf8')).includes('blog-nuxt'))
+
+  await run('bun', ['run', 'config:clear'])
+  assert.equal(existsSync(configCachePath), false)
+}
+
+async function assertCacheBackedHttpBehavior(baseUrl) {
+  await run('bun', ['x', 'holo', 'cache:clear'])
+  assert.equal(countCacheRows(), 0)
+
+  await waitForText(`${baseUrl}/`, payload => payload.includes('Shipping a Real Holo Blog on Nuxt'))
+  const homeCacheRows = countCacheRows()
+  assert.ok(homeCacheRows >= 1, 'Expected the home page request to store query cache rows.')
+
+  await waitForText(`${baseUrl}/posts`, payload => payload.includes('Shipping a Real Holo Blog on Nuxt'))
+  assert.ok(countCacheRows() > homeCacheRows, 'Expected the posts page request to store an additional query cache row.')
+
+  await run('bun', ['x', 'holo', 'cache:clear'])
+  assert.equal(countCacheRows(), 0)
+
+  await waitForText(`${baseUrl}/`, payload => payload.includes('Shipping a Real Holo Blog on Nuxt'))
+  assert.ok(countCacheRows() >= 1, 'Expected cache rows to be recreated after cache clear.')
+}
+
 async function assertSuperAdminLogoutStillNavigatesAfterRefreshFailure() {
   const source = await readFile(join(cwd, 'app/pages/super-admin/index.vue'), 'utf8')
   const refreshWarning = "console.warn('Super admin auth refresh failed after logout.', error)"
@@ -271,6 +310,7 @@ try {
   await assertHeaderLogoutStillNavigatesAfterRefreshFailure()
   await assertSuperAdminLoginUsesVerificationRedirect()
   await run('bun', ['run', 'prepare'])
+  await assertConfigCacheCommands()
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await run('npx', ['tsx', 'tests/blog-logic.mjs'])
 
@@ -293,6 +333,7 @@ try {
   const initial = await waitForJson(healthUrl, payload => payload.ok === true)
   assert.equal(initial.app, 'blog-nuxt')
   await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Nuxt'))
+  await assertCacheBackedHttpBehavior(`http://localhost:${port}`)
   await waitForRedirect(`http://localhost:${port}/admin/posts`, '/login')
   await assertExampleAppAuthFlow({
     baseUrl: `http://localhost:${port}`,

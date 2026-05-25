@@ -1,3 +1,6 @@
+import { createRequire } from 'node:module'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   normalizeRedisConfig,
   type HoloRedisConfig,
@@ -124,12 +127,25 @@ function normalizeRedisModuleLoadError(
 }
 
 /* v8 ignore start -- optional-peer loading failures are covered through normalizeRedisModuleLoadError in this monorepo test graph. */
+async function importRedisDriverModuleFromProject(specifier: string): Promise<RedisCacheDriverModule> {
+  const projectRequire = createRequire(join(process.cwd(), 'package.json'))
+  return await import(pathToFileURL(projectRequire.resolve(specifier)).href) as RedisCacheDriverModule
+}
+
 async function loadRedisDriverModule(): Promise<RedisCacheDriverModule> {
+  const specifier = '@holo-js/cache-redis' as string
   try {
-    const specifier = '@holo-js/cache-redis' as string
     return await import(/* webpackIgnore: true */ specifier) as RedisCacheDriverModule
   } catch (error) {
-    throw normalizeRedisModuleLoadError(error, '@holo-js/cache-redis')
+    if (!isModuleNotFoundError(error, specifier)) {
+      throw normalizeRedisModuleLoadError(error, specifier)
+    }
+
+    try {
+      return await importRedisDriverModuleFromProject(specifier)
+    } catch (fallbackError) {
+      throw normalizeRedisModuleLoadError(fallbackError, specifier)
+    }
   }
 }
 /* v8 ignore stop */
