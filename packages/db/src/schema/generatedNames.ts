@@ -44,7 +44,8 @@ export function resolveGeneratedForeignKeyName(
   columnName: string,
   constraintName?: string,
 ): string {
-  const resolvedName = constraintName ?? `${sanitizeIdentifierForGeneratedName(tableName)}_${columnName}_foreign`
+  const resolvedName = constraintName
+    ?? `${sanitizeIdentifierForGeneratedName(tableName)}_${sanitizeIdentifierForGeneratedName(columnName)}_foreign`
   assertValidIdentifierSegment(resolvedName, 'Foreign key name')
   return resolvedName
 }

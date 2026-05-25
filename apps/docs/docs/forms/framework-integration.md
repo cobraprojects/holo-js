@@ -180,8 +180,11 @@ const form = useForm(loginForm, {
   csrf: true,
   async submitter({ formData }) {
     const submission = await $fetch('/api/login', { method: 'POST', body: formData })
-    if (submission?.ok === true) {
+    if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
       await refreshUser()
+      await navigateTo(submission.data.redirectTo, {
+        external: true,
+      })
     }
 
     return submission

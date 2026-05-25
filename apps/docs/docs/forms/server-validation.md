@@ -243,7 +243,7 @@ and applies the returned values and errors to `useForm(...)`:
 </form>
 ```
 
-## Full page flow
+## Full-page flow
 
 These examples show the recommended auth form flow. Next.js keeps the redirect in a server action,
 SvelteKit keeps the redirect in a page action, and Nuxt submits to an API route before refreshing the

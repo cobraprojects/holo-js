@@ -25,6 +25,7 @@ import {
   type DriverAdapter,
   type DriverExecutionResult,
   type DriverQueryResult } from '../src'
+import { resolveGeneratedForeignKeyName } from '../src/schema/generatedNames'
 import { defineTable } from './support/internal'
 
 function parseIdentifierTail(identifierPath: string): string {
@@ -1068,6 +1069,10 @@ describe('multi-dialect schema compilers', () => {
     ))).toThrow(
       'Foreign key column "team_id" must include a referenced table for Postgres compilation.',
     )
+  })
+
+  it('sanitizes generated foreign-key names from table and column names', () => {
+    expect(resolveGeneratedForeignKeyName('public.users', 'team.id')).toBe('public_users_team_id_foreign')
   })
 
   it('rejects malformed identifier paths before schema SQL is compiled', () => {

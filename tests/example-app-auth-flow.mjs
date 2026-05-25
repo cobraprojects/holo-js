@@ -182,6 +182,90 @@ function assertFieldFailure(result, fields) {
   }
 }
 
+function isRecord(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function hydrateFlattenedActionData(values, index, seen = new Map()) {
+  if (!Array.isArray(values) || !Number.isInteger(index) || index < 0 || index >= values.length) {
+    return undefined
+  }
+
+  if (seen.has(index)) {
+    return seen.get(index)
+  }
+
+  const value = values[index]
+  if (Array.isArray(value)) {
+    const hydrated = []
+    seen.set(index, hydrated)
+    for (const itemIndex of value) {
+      hydrated.push(typeof itemIndex === 'number'
+        ? hydrateFlattenedActionData(values, itemIndex, seen)
+        : itemIndex)
+    }
+    return hydrated
+  }
+
+  if (isRecord(value)) {
+    const hydrated = {}
+    seen.set(index, hydrated)
+    for (const [key, itemIndex] of Object.entries(value)) {
+      hydrated[key] = typeof itemIndex === 'number'
+        ? hydrateFlattenedActionData(values, itemIndex, seen)
+        : itemIndex
+    }
+    return hydrated
+  }
+
+  return value
+}
+
+function parseActionData(value) {
+  if (isRecord(value)) {
+    return value
+  }
+
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(value)
+    if (isRecord(parsed)) {
+      return parsed
+    }
+
+    const hydrated = hydrateFlattenedActionData(parsed, 0)
+    if (isRecord(hydrated)) {
+      return hydrated
+    }
+  } catch {
+    // Non-JSON action data falls back to a root form failure.
+  }
+
+  return null
+}
+
+function normalizeActionFailure(actionResult) {
+  const failure = parseActionData(actionResult.data) ?? actionResult
+  const errors = isRecord(failure.errors)
+    ? failure.errors
+    : (
+        isRecord(actionResult.errors)
+          ? actionResult.errors
+          : { _root: ['Form submission failed.'] }
+      )
+
+  return {
+    ...failure,
+    ok: failure.ok === true,
+    valid: failure.valid === true,
+    errors,
+    actionResult,
+  }
+}
+
 function assertThrottleFailure(result) {
   assert.equal(result.response.status, 429)
   assert.equal(result.json.ok, false)
@@ -359,6 +443,13 @@ export async function assertExampleAppAuthFlow({
           },
         }
       }
+
+      if (actionResult?.type === 'failure') {
+        return {
+          response: result.response,
+          json: normalizeActionFailure(actionResult),
+        }
+      }
     } catch {
       // Non-JSON action responses are handled as form failures below.
     }
@@ -392,6 +483,7 @@ export async function assertExampleAppAuthFlow({
       )
       assert.equal(result.json.ok, false)
       assert.equal(result.json.valid, false)
+      assertFieldFailure(result, fields)
       return
     }
 
