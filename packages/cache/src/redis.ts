@@ -90,11 +90,11 @@ function isModuleNotFoundError(error: unknown, expectedSpecifier = '@holo-js/cac
   const message = 'message' in error && typeof (error as { message?: unknown }).message === 'string'
     ? (error as { message: string }).message
     : ''
+  const code = 'code' in error ? (error as { code?: unknown }).code : undefined
   const escapedSpecifier = escapeRegExp(expectedSpecifier)
 
   if (
-    'code' in error
-    && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
+    (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND')
     && [
       new RegExp(`Cannot find package ['"]${escapedSpecifier}['"]`),
       new RegExp(`Cannot find module ['"]${escapedSpecifier}['"]`),

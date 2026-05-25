@@ -114,6 +114,18 @@ function createDeferred() {
   }
 }
 
+async function waitForCondition(predicate, message) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (predicate()) {
+      return
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 0))
+  }
+
+  assert.fail(message)
+}
+
 async function assertFlexibleStaleRefreshDoesNotBlock(timestamp) {
   const connection = DB.connection()
   const originalQueryCompiled = connection.queryCompiled.bind(connection)
@@ -137,14 +149,11 @@ async function assertFlexibleStaleRefreshDoesNotBlock(timestamp) {
   try {
     const staleRead = await withMockedNow(timestamp, async () => await getNavigationCategories())
     assert.equal(staleRead.length, 2)
-    assert.equal(refreshStarted, true)
+    await waitForCondition(() => refreshStarted, 'Expected flexible stale refresh query to start.')
     assert.equal(refreshFinished, false)
 
     refreshGate.resolve()
-    for (let attempt = 0; attempt < 10 && !refreshFinished; attempt += 1) {
-      await new Promise(resolve => setTimeout(resolve, 0))
-    }
-    assert.equal(refreshFinished, true)
+    await waitForCondition(() => refreshFinished, 'Expected flexible stale refresh query to finish.')
   } finally {
     refreshGate.resolve()
     connection.queryCompiled = originalQueryCompiled

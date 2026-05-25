@@ -41,7 +41,7 @@ export function parseTagIds(value: string): number[] {
 
 export async function getHomePageData() {
   const [posts, categories, tags] = await Promise.all([
-    Post.with('category', 'tags').where('status', 'published').orderBy('published_at', 'desc').get(),
+    getPublishedPosts(),
     getNavigationCategories(),
     Tag.orderBy('name').get(),
   ])

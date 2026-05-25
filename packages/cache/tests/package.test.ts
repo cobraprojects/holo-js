@@ -1505,6 +1505,41 @@ describe('@holo-js/cache package surface', () => {
     expect(disposeRedisDriver).toHaveBeenCalledTimes(1)
   })
 
+  it('ignores rejected pending redis driver disposal after runtime reset', async () => {
+    let rejectModule: ((error: Error) => void) | undefined
+
+    cacheRedisInternals.setRedisDriverModuleLoader(() => new Promise((_, reject) => {
+      rejectModule = reject
+    }))
+
+    configureCacheRuntime({
+      config: {
+        default: 'redis',
+        drivers: {
+          redis: {
+            driver: 'redis',
+            connection: 'cache',
+          },
+        },
+      },
+      redisConfig: {
+        default: 'cache',
+        connections: {
+          cache: {
+            host: '127.0.0.1',
+            port: 6379,
+          },
+        },
+      },
+    })
+
+    const read = cache.get('alpha')
+    resetCacheRuntime()
+    rejectModule?.(new Error('load failed'))
+
+    await expect(read).rejects.toThrow('load failed')
+  })
+
   it('continues disposing runtime drivers when one driver dispose hook throws', () => {
     const firstDispose = vi.fn(() => {
       throw new Error('first dispose failed')
@@ -1905,6 +1940,10 @@ describe('@holo-js/cache package surface', () => {
       message: 'Cannot find package "@holo-js/cache-redis" imported from packages/cache/src/redis.ts',
     })).toBe(true)
     expect(cacheRedisInternals.isModuleNotFoundError({
+      code: 'MODULE_NOT_FOUND',
+      message: 'Cannot find module "@holo-js/cache-redis"',
+    })).toBe(true)
+    expect(cacheRedisInternals.isModuleNotFoundError({
       code: 'ERR_MODULE_NOT_FOUND',
       message: 'Cannot find package "ioredis" imported from packages/cache-redis/src/index.ts',
     })).toBe(false)
@@ -1917,6 +1956,12 @@ describe('@holo-js/cache package surface', () => {
     })
     expect(missingPackageError).toBeInstanceOf(CacheOptionalPackageError)
     expect((missingPackageError as CacheOptionalPackageError).message).toContain('@holo-js/cache-redis')
+
+    const requireMissingPackageError = cacheRedisInternals.normalizeRedisModuleLoadError({
+      code: 'MODULE_NOT_FOUND',
+      message: 'Cannot find module "@holo-js/cache-redis"',
+    })
+    expect(requireMissingPackageError).toBeInstanceOf(CacheOptionalPackageError)
 
     const nestedMissingPackageError = cacheRedisInternals.normalizeRedisModuleLoadError({
       cause: {
@@ -2038,6 +2083,11 @@ describe('@holo-js/cache package surface', () => {
       code: 'ERR_MODULE_NOT_FOUND',
       message: 'Cannot find package "@holo-js/cache-db" imported from "/tmp/app.mjs"',
     })).toBe(true)
+    expect(cacheDbInternals.isModuleNotFoundError({
+      code: 'MODULE_NOT_FOUND',
+      message: 'Cannot find module "@holo-js/cache-db"',
+    })).toBe(true)
+    expect(cacheDbInternals.isModuleNotFoundError(undefined)).toBe(false)
     expect(cacheDbInternals.isModuleNotFoundError(new Error('nope'))).toBe(false)
     expect(cacheDbInternals.isModuleNotFoundError({
       cause: {
@@ -2056,6 +2106,12 @@ describe('@holo-js/cache package surface', () => {
     })
     expect(missingPackageError).toBeInstanceOf(CacheOptionalPackageError)
     expect((missingPackageError as CacheOptionalPackageError).message).toContain('@holo-js/cache-db')
+
+    const requireMissingPackageError = cacheDbInternals.normalizeDatabaseModuleLoadError({
+      code: 'MODULE_NOT_FOUND',
+      message: 'Cannot find module "@holo-js/cache-db"',
+    })
+    expect(requireMissingPackageError).toBeInstanceOf(CacheOptionalPackageError)
 
     const passthroughError = Object.assign(new Error('boom'), {
       code: 'ERR_MODULE_NOT_FOUND',
