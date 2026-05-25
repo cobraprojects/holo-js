@@ -26,6 +26,7 @@ import security, {
   getSecurityRuntimeBindings,
   getSecurityRuntime,
   ip,
+  isSecureRequest,
   limit,
   memoryRateLimitDriverInternals,
   protect,
@@ -417,6 +418,25 @@ describe('@holo-js/security csrf', () => {
       value: signedToken,
     })
     await expect(csrf.cookie(request)).resolves.toBe(`XSRF-TOKEN=${encodeURIComponent(signedToken)}; Path=/; SameSite=Lax; Secure`)
+
+    const proxiedRequest = new Request('http://app.test/register', {
+      headers: {
+        'x-forwarded-proto': 'https',
+      },
+    })
+    expect(isSecureRequest(proxiedRequest)).toBe(true)
+    await expect(csrf.cookie(proxiedRequest, signedToken)).resolves.toBe(`XSRF-TOKEN=${encodeURIComponent(signedToken)}; Path=/; SameSite=Lax; Secure`)
+
+    expect(isSecureRequest(new Request('http://app.test/register', {
+      headers: {
+        forwarded: 'for=203.0.113.10;proto="https";host=app.test',
+      },
+    }))).toBe(true)
+    expect(isSecureRequest(new Request('http://app.test/register', {
+      headers: {
+        forwarded: 'for=203.0.113.10;host=app.test',
+      },
+    }))).toBe(false)
   })
 
   it('generates tokens when no cookie is present', async () => {

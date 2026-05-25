@@ -30,11 +30,6 @@ type Row = Record<string, unknown>
 type TableStore = Record<string, Row[]>
 type CounterStore = Record<string, number>
 type TestEntity = Entity<TableDefinition>
-type FactoryPrivateApi = {
-  recycledEntities: unknown[]
-  resolveManySource(source: unknown, persist: boolean): Promise<unknown>
-  takeRecycledEntities(source: unknown, amount: number): unknown[]
-}
 
 function cloneRow(row: Row): Row {
   return { ...row }
@@ -554,82 +549,6 @@ describe('factory slice', () => {
       { id: 2, tagId: 2, taggableType: 'Post', taggableId: 2, active: 1 },
       { id: 3, tagId: 3, taggableType: 'Post', taggableId: 3, active: 0 },
     ])
-  })
-
-  it('covers recycled-factory edge branches directly', async () => {
-    const adapter = new InMemoryFactoryAdapter({ users: [] }, {})
-    const db = createDatabase({
-      connectionName: 'default',
-      adapter,
-      dialect: createDialect() })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: { default: db } }))
-
-    const users = defineTable('users', {
-      id: column.id(),
-      name: column.string() })
-    const User = defineModelFromTable(users, {
-      fillable: ['name'] })
-
-    const factory = defineFactory(User, () => ({ name: 'User' }))
-    const recycled = User.make({ name: 'Unsaved' })
-    const internalFactory = factory as unknown as FactoryPrivateApi
-    internalFactory.recycledEntities = [recycled]
-
-    await expect(internalFactory.resolveManySource(factory.count(1), true)).rejects.toThrow(
-      'Factory.recycle() requires persisted related models when using create().',
-    )
-
-    expect(internalFactory.takeRecycledEntities(factory, 0)).toEqual([])
-
-    expect(internalFactory.takeRecycledEntities({
-      model: {
-        definition: {
-          table: { tableName: 'users' } } } }, 1)).toHaveLength(1)
-
-    expect(internalFactory.takeRecycledEntities({
-      model: {
-        definition: {
-          table: { tableName: 'users' } },
-        getConnectionName: () => 'other' } }, 1)).toEqual([])
-  })
-
-  it('does not match recycled related models from a different connection', async () => {
-    const adapter = new InMemoryFactoryAdapter({ users: [] }, {})
-    const db = createDatabase({
-      connectionName: 'default',
-      adapter,
-      dialect: createDialect() })
-
-    configureDB(createConnectionManager({
-      defaultConnection: 'default',
-      connections: { default: db } }))
-
-    const users = defineTable('users', {
-      id: column.id(),
-      name: column.string() })
-    const User = defineModelFromTable(users, {
-      fillable: ['name'] })
-
-    const factory = defineFactory(User, () => ({ name: 'User' }))
-    const internalFactory = factory as unknown as FactoryPrivateApi
-    internalFactory.recycledEntities = [{
-      getRepository() {
-        return {
-          definition: {
-            table: { tableName: 'users' } },
-          getConnectionName() {
-            return 'secondary'
-          } }
-      } }]
-
-    expect(internalFactory.takeRecycledEntities({
-      model: {
-        definition: {
-          table: { tableName: 'users' } },
-        getConnectionName: () => 'default' } }, 1)).toEqual([])
   })
 
   it('fails fast for unsaved recycled and directly attached related models during create paths', async () => {

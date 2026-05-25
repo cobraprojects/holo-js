@@ -103,12 +103,17 @@ function renderMigrationTemplate(options: {
   kind: MigrationTemplateKind
   tableName?: string
 }): string {
+  return wrapMigrationTemplate(renderMigrationBody(options))
+}
+
+function renderMigrationBody(options: {
+  migrationName: string
+  kind: MigrationTemplateKind
+  tableName?: string
+}): string[] {
   switch (options.kind) {
     case 'create_table':
       return [
-        'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
-        '',
-        'export default defineMigration({',
         '  async up({ schema }: MigrationContext) {',
         `    await schema.createTable('${options.tableName}', (table) => {`,
         '      table.id()',
@@ -118,14 +123,9 @@ function renderMigrationTemplate(options: {
         '  async down({ schema }: MigrationContext) {',
         `    await schema.dropTable('${options.tableName}')`,
         '  },',
-        '})',
-        '',
-      ].join('\n')
+      ]
     case 'alter_table':
       return [
-        'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
-        '',
-        'export default defineMigration({',
         '  async up({ schema }: MigrationContext) {',
         `    await schema.table('${options.tableName}', (table) => {`,
         '      void table',
@@ -136,28 +136,18 @@ function renderMigrationTemplate(options: {
         '      void table',
         '    })',
         '  },',
-        '})',
-        '',
-      ].join('\n')
+      ]
     case 'drop_table':
       return [
-        'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
-        '',
-        'export default defineMigration({',
         '  async up({ schema }: MigrationContext) {',
         `    await schema.dropTable('${options.tableName}')`,
         '  },',
         '  async down() {',
         `    throw new Error('Recreate "${options.tableName}" manually in this migration if rollback support is required.')`,
         '  },',
-        '})',
-        '',
-      ].join('\n')
+      ]
     case 'blank':
       return [
-        'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
-        '',
-        'export default defineMigration({',
         '  async up({ schema, db }: MigrationContext) {',
         '    void schema',
         '    void db',
@@ -166,8 +156,17 @@ function renderMigrationTemplate(options: {
         '    void schema',
         '    void db',
         '  },',
-        '})',
-        '',
-      ].join('\n')
+      ]
   }
+}
+
+function wrapMigrationTemplate(body: readonly string[]): string {
+  return [
+    'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
+    '',
+    'export default defineMigration({',
+    ...body,
+    '})',
+    '',
+  ].join('\n')
 }

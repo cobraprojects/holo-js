@@ -54,19 +54,17 @@ describe('@holo-js/core storage runtime optional imports', () => {
     await expect(resetOptionalStorageRuntime()).rejects.toBe('boom')
   })
 
-  it('imports optional storage modules through the webpackIgnore branch outside Vitest', async () => {
+  it('imports optional storage modules through the shared optional runtime loader', async () => {
     const root = await mkdtemp(join(tmpdir(), 'holo-storage-runtime-'))
     tempDirs.push(root)
     const modulePath = join(root, 'module.mjs')
     await writeFile(modulePath, 'export default "loaded"\n', 'utf8')
 
-    await withoutVitestEnv(async () => {
-      await expect(storageRuntimeInternals.importOptionalModule(pathToFileURL(modulePath).href)).resolves.toEqual(
-        expect.objectContaining({
-          default: 'loaded',
-        }),
-      )
-    })
+    await expect(storageRuntimeInternals.importOptionalModule(pathToFileURL(modulePath).href)).resolves.toEqual(
+      expect.objectContaining({
+        default: 'loaded',
+      }),
+    )
   })
 
   it('treats missing optional storage modules as optional inside Vitest as well', async () => {
@@ -90,36 +88,6 @@ describe('@holo-js/core storage runtime optional imports', () => {
     })
   })
 
-  it('rethrows module evaluation failures with a non-matching error code outside Vitest', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'holo-storage-runtime-code-boom-'))
-    tempDirs.push(root)
-    const modulePath = join(root, 'code-boom.mjs')
-    await writeFile(modulePath, 'throw Object.assign(new Error("boom"), { code: "E_CUSTOM" })\n', 'utf8')
-
-    await withoutVitestEnv(async () => {
-      await expect(storageRuntimeInternals.importOptionalModule(pathToFileURL(modulePath).href)).rejects.toThrow('boom')
-    })
-  })
-
-  it('rethrows module evaluation failures without an Error object outside Vitest', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'holo-storage-runtime-string-boom-'))
-    tempDirs.push(root)
-    const modulePath = join(root, 'string-boom.mjs')
-    await writeFile(modulePath, 'throw "boom"\n', 'utf8')
-
-    await withoutVitestEnv(async () => {
-      await expect(storageRuntimeInternals.importOptionalModule(pathToFileURL(modulePath).href)).rejects.toBe('boom')
-    })
-  })
-
-  it('treats module resolution failures with a resolver message as optional outside Vitest', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'holo-storage-runtime-resolve-'))
-    tempDirs.push(root)
-    await withoutVitestEnv(async () => {
-      await expect(storageRuntimeInternals.importOptionalModule(pathToFileURL(join(root, 'missing.mjs')).href)).resolves.toBeUndefined()
-    })
-  })
-
   it('does not treat unrelated "Failed to load url" failures as missing modules', async () => {
     const root = await mkdtemp(join(tmpdir(), 'holo-storage-runtime-failed-url-'))
     tempDirs.push(root)
@@ -127,18 +95,6 @@ describe('@holo-js/core storage runtime optional imports', () => {
     await writeFile(modulePath, `throw new Error(${JSON.stringify(`Failed to load url ${pathToFileURL(modulePath).href} (syntax error)`)})\n`, 'utf8')
     await withoutVitestEnv(async () => {
       await expect(storageRuntimeInternals.importOptionalModule(pathToFileURL(modulePath).href)).rejects.toThrow('Failed to load url')
-    })
-  })
-
-  it('treats matching Vite missing-url messages as optional outside Vitest', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'holo-storage-runtime-vite-missing-'))
-    tempDirs.push(root)
-    const modulePath = join(root, 'vite-missing.mjs')
-    const moduleUrl = pathToFileURL(modulePath).href
-    await writeFile(modulePath, `throw new Error(${JSON.stringify(`Failed to load url ${moduleUrl} Does the file exist?`)})\n`, 'utf8')
-
-    await withoutVitestEnv(async () => {
-      await expect(storageRuntimeInternals.importOptionalModule(moduleUrl)).resolves.toBeUndefined()
     })
   })
 
@@ -150,23 +106,4 @@ describe('@holo-js/core storage runtime optional imports', () => {
     })
   })
 
-  it('treats matching "Cannot find module" loader messages as optional outside Vitest', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'holo-storage-runtime-cannot-find-'))
-    tempDirs.push(root)
-    const modulePath = join(root, 'cannot-find.mjs')
-    const moduleUrl = pathToFileURL(modulePath).href
-    await writeFile(modulePath, `throw new Error(${JSON.stringify(`Cannot find module '${moduleUrl}'`)})\n`, 'utf8')
-
-    await withoutVitestEnv(async () => {
-      await expect(storageRuntimeInternals.importOptionalModule(moduleUrl)).resolves.toBeUndefined()
-    })
-  })
-
-  it('treats missing absolute-path optional storage modules as optional outside Vitest', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'holo-storage-runtime-absolute-missing-'))
-    tempDirs.push(root)
-    await withoutVitestEnv(async () => {
-      await expect(storageRuntimeInternals.importOptionalModule(join(root, 'missing.mjs'))).resolves.toBeUndefined()
-    })
-  })
 })

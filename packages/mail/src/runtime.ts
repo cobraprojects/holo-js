@@ -302,80 +302,62 @@ function dynamicImport<TModule>(specifier: string): Promise<TModule> {
   return import(/* webpackIgnore: true */ specifier) as Promise<TModule>
 }
 
-async function loadQueueModule(): Promise<QueueModule> {
-  const override = getRuntimeState().loadQueueModule
-  if (override) {
-    try {
-      return await override()
-    } catch (error) {
-      if (
-        error
-        && typeof error === 'object'
-        && 'code' in error
-        && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-      ) {
-        throw new MailError(
-          '[@holo-js/mail] Queued or delayed mail delivery requires @holo-js/queue to be installed.',
-          'MAIL_QUEUE_MODULE_MISSING',
-        )
-      }
+type PeerModuleLoaderOptions<TModule, TResolved> = {
+  readonly loadOverride?: () => Promise<TModule>
+  readonly missing: (error: unknown) => TResolved
+  readonly resolve?: (module: TModule) => TResolved
+  readonly specifier: string
+}
 
-      throw error
-    }
-  }
+function isModuleNotFoundError(error: unknown): boolean {
+  return !!(
+    error
+    && typeof error === 'object'
+    && 'code' in error
+    && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
+  )
+}
 
+async function loadPeerModule<TModule, TResolved = TModule>(
+  options: PeerModuleLoaderOptions<TModule, TResolved>,
+): Promise<TResolved> {
   try {
-    return await dynamicImport<QueueModule>('@holo-js/queue')
+    const module = options.loadOverride
+      ? await options.loadOverride()
+      : await dynamicImport<TModule>(options.specifier)
+    return options.resolve
+      ? options.resolve(module)
+      : module as unknown as TResolved
   } catch (error) {
-    if (
-      error
-      && typeof error === 'object'
-      && 'code' in error
-      && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-    ) {
-      throw new MailError(
-        '[@holo-js/mail] Queued or delayed mail delivery requires @holo-js/queue to be installed.',
-        'MAIL_QUEUE_MODULE_MISSING',
-      )
+    if (isModuleNotFoundError(error)) {
+      return options.missing(error)
     }
 
     throw error
   }
 }
 
+async function loadQueueModule(): Promise<QueueModule> {
+  return loadPeerModule({
+    loadOverride: getRuntimeState().loadQueueModule,
+    specifier: '@holo-js/queue',
+    missing() {
+      throw new MailError(
+        '[@holo-js/mail] Queued or delayed mail delivery requires @holo-js/queue to be installed.',
+        'MAIL_QUEUE_MODULE_MISSING',
+      )
+    },
+  })
+}
+
 async function loadDbModule(): Promise<DbModule | null> {
-  const override = getRuntimeState().loadDbModule
-  if (override) {
-    try {
-      return await override()
-    } catch (error) {
-      if (
-        error
-        && typeof error === 'object'
-        && 'code' in error
-        && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-      ) {
-        return null
-      }
-
-      throw error
-    }
-  }
-
-  try {
-    return await dynamicImport<DbModule>('@holo-js/db')
-  } catch (error) {
-    if (
-      error
-      && typeof error === 'object'
-      && 'code' in error
-      && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-    ) {
+  return loadPeerModule<DbModule | null>({
+    loadOverride: getRuntimeState().loadDbModule,
+    specifier: '@holo-js/db',
+    missing() {
       return null
-    }
-
-    throw error
-  }
+    },
+  })
 }
 
 function resolveNodemailerModule(module: unknown): NodemailerModule {
@@ -405,46 +387,18 @@ function resolveNodemailerModule(module: unknown): NodemailerModule {
 }
 
 async function loadNodemailerModule(): Promise<NodemailerModule> {
-  const override = getRuntimeState().loadNodemailerModule
-  if (override) {
-    try {
-      return resolveNodemailerModule(await override())
-    } catch (error) {
-      if (
-        error
-        && typeof error === 'object'
-        && 'code' in error
-        && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-      ) {
-        throw new MailError(
-          '[@holo-js/mail] SMTP delivery requires nodemailer to be installed.',
-          'MAIL_SMTP_MODULE_MISSING',
-          { cause: error },
-        )
-      }
-
-      throw error
-    }
-  }
-
-  try {
-    return resolveNodemailerModule(await dynamicImport<unknown>('nodemailer'))
-  } catch (error) {
-    if (
-      error
-      && typeof error === 'object'
-      && 'code' in error
-      && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-    ) {
+  return loadPeerModule({
+    loadOverride: getRuntimeState().loadNodemailerModule,
+    specifier: 'nodemailer',
+    resolve: resolveNodemailerModule,
+    missing(error) {
       throw new MailError(
         '[@holo-js/mail] SMTP delivery requires nodemailer to be installed.',
         'MAIL_SMTP_MODULE_MISSING',
         { cause: error },
       )
-    }
-
-    throw error
-  }
+    },
+  })
 }
 
 function resolveStorageModule(module: unknown): StorageModule {
@@ -465,46 +419,18 @@ function resolveStorageModule(module: unknown): StorageModule {
 }
 
 async function loadStorageModule(): Promise<StorageModule> {
-  const override = getRuntimeState().loadStorageModule
-  if (override) {
-    try {
-      return resolveStorageModule(await override())
-    } catch (error) {
-      if (
-        error
-        && typeof error === 'object'
-        && 'code' in error
-        && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-      ) {
-        throw new MailError(
-          '[@holo-js/mail] Storage-backed attachments require @holo-js/storage to be installed.',
-          'MAIL_STORAGE_MODULE_MISSING',
-          { cause: error },
-        )
-      }
-
-      throw error
-    }
-  }
-
-  try {
-    return resolveStorageModule(await dynamicImport<unknown>('@holo-js/storage'))
-  } catch (error) {
-    if (
-      error
-      && typeof error === 'object'
-      && 'code' in error
-      && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-    ) {
+  return loadPeerModule({
+    loadOverride: getRuntimeState().loadStorageModule,
+    specifier: '@holo-js/storage',
+    resolve: resolveStorageModule,
+    missing(error) {
       throw new MailError(
         '[@holo-js/mail] Storage-backed attachments require @holo-js/storage to be installed.',
         'MAIL_STORAGE_MODULE_MISSING',
         { cause: error },
       )
-    }
-
-    throw error
-  }
+    },
+  })
 }
 
 function getFakeSentState(): FakeSentMail[] {

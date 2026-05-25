@@ -18,7 +18,8 @@ import {
   notify,
   resetNotificationsRuntime,
 } from '@holo-js/notifications'
-import { configureMailRuntime, listFakeSentMails, mailRuntimeInternals, previewMail, resetFakeSentMails } from '@holo-js/mail'
+import { configureMailRuntime, listFakeSentMails, previewMail, resetFakeSentMails } from '@holo-js/mail'
+import { mailRuntimeInternals } from '../../mail/src/runtime'
 import {
   Event,
   defineEvent,

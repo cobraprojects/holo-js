@@ -52,10 +52,7 @@ type SvelteKitStoredRequestEvent = SvelteKitHandleEvent & {
     get(name: string): string | undefined
     set(name: string, value: string, options: SvelteKitCookieOptions): void
   }
-  readonly request: {
-    readonly headers: Headers
-    readonly method?: string
-  }
+  readonly request: Request
 }
 
 type SvelteKitResolveOptions = {
@@ -183,7 +180,17 @@ async function ensureCsrfCookie(event: SvelteKitHandleEvent): Promise<void> {
     return
   }
 
-  event.cookies.set(defaultCsrfCookieName, token, resolveCsrfCookieOptions(event.url))
+  try {
+    const { csrfInternals } = await import('@holo-js/security')
+    csrfInternals.generatedTokenCache.set(event.request, token)
+  } catch {
+    // @holo-js/security is optional for auth-only installs.
+  }
+
+  event.cookies.set(defaultCsrfCookieName, token, resolveCsrfCookieOptions({
+    url: event.url,
+    headers: event.request.headers,
+  }))
 }
 
 export async function auth(options: AuthOptions = {}): Promise<AuthState> {

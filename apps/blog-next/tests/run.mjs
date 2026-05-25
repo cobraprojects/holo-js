@@ -75,17 +75,40 @@ function containsJsxNode(node, tagName) {
   return ts.forEachChild(node, child => containsJsxNode(child, tagName)) === true
 }
 
-function containsRouterReplaceHome(node) {
+function containsLogoutActionForm(node) {
   if (
-    ts.isCallExpression(node)
-    && ts.isPropertyAccessExpression(node.expression)
-    && node.expression.name.text === 'replace'
-    && node.arguments.some(argument => ts.isStringLiteral(argument) && argument.text === '/')
+    ts.isJsxSelfClosingElement(node)
+    && getJsxTagName(node.tagName) === 'form'
+    && node.attributes.properties.some(attribute => (
+      ts.isJsxAttribute(attribute)
+      && attribute.name.text === 'action'
+      && attribute.initializer
+      && ts.isJsxExpression(attribute.initializer)
+      && attribute.initializer.expression
+      && ts.isIdentifier(attribute.initializer.expression)
+      && attribute.initializer.expression.text === 'logoutAction'
+    ))
   ) {
     return true
   }
 
-  return ts.forEachChild(node, containsRouterReplaceHome) === true
+  if (
+    ts.isJsxElement(node)
+    && getJsxTagName(node.openingElement.tagName) === 'form'
+    && node.openingElement.attributes.properties.some(attribute => (
+      ts.isJsxAttribute(attribute)
+      && attribute.name.text === 'action'
+      && attribute.initializer
+      && ts.isJsxExpression(attribute.initializer)
+      && attribute.initializer.expression
+      && ts.isIdentifier(attribute.initializer.expression)
+      && attribute.initializer.expression.text === 'logoutAction'
+    ))
+  ) {
+    return true
+  }
+
+  return ts.forEachChild(node, containsLogoutActionForm) === true
 }
 
 async function assertRootLayoutSharesAuthProviderState() {
@@ -109,8 +132,8 @@ async function assertHeaderLogoutRedirectsHome() {
   const sourceFile = ts.createSourceFile('auth-nav.tsx', authNavSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
 
   assert.ok(
-    containsRouterReplaceHome(sourceFile),
-    'Expected header logout to redirect home after clearing the session.',
+    containsLogoutActionForm(sourceFile),
+    'Expected header logout to use the logout server action form.',
   )
 }
 
@@ -302,7 +325,7 @@ try {
   await rm(join(cwd, '.next'), { recursive: true, force: true })
   await assertRootLayoutSharesAuthProviderState()
   await assertHeaderLogoutRedirectsHome()
-  await run('npx', ['vitest', '--run', 'tests/api-v1-routes.test.mjs', 'tests/auth-nav.test.mjs', 'tests/current-auth-route.test.mjs', 'tests/forgot-password-route.test.mjs', 'tests/hosted-logout-routes.test.mjs', 'tests/package-checks.test.mjs', 'tests/register-page.test.mjs', 'tests/reset-password-page.test.mjs', 'tests/reset-password-route.test.mjs', 'tests/social-auth-routes.test.mjs', 'tests/super-admin-logout-button.test.mjs', 'tests/super-admin-login-page.test.mjs', 'tests/super-admin-login-route.test.mjs', 'tests/verify-email-page.test.mjs', '--reporter=json'])
+  await run('npx', ['vitest', '--run', 'tests/api-v1-routes.test.mjs', 'tests/auth-nav.test.mjs', 'tests/current-auth-route.test.mjs', 'tests/forgot-password-route.test.mjs', 'tests/hosted-logout-routes.test.mjs', 'tests/login-page.test.mjs', 'tests/logout-actions.test.mjs', 'tests/package-checks.test.mjs', 'tests/register-page.test.mjs', 'tests/reset-password-page.test.mjs', 'tests/reset-password-route.test.mjs', 'tests/social-auth-routes.test.mjs', 'tests/super-admin-logout-button.test.mjs', 'tests/super-admin-login-page.test.mjs', 'tests/super-admin-login-route.test.mjs', 'tests/verify-email-page.test.mjs', '--reporter=json'])
   await run('bun', ['run', 'prepare'])
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await run('npx', ['tsx', 'tests/blog-logic.mjs'])

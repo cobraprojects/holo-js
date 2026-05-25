@@ -1,12 +1,11 @@
-import { SchemaError } from '../core/errors'
 import type {
   AnyColumnDefinition,
   ForeignKeyReference,
-  LogicalColumnKind,
   TableDefinition,
   TableIndexDefinition,
 } from './types'
 import type { IntrospectedForeignKey, SchemaService } from './SchemaService'
+import { resolveDialectComparisonColumnType, type SchemaDialectName } from './typeMapping'
 
 export interface SchemaColumnMismatch {
   readonly column: string
@@ -256,121 +255,18 @@ async function diffTable(
 
 function lowerLogicalColumnType(column: AnyColumnDefinition, dialectName: string): string {
   if (dialectName.startsWith('postgres')) {
-    return lowerPostgresLogicalColumnType(column)
+    return resolveDialectComparisonColumnType('postgres', column)
   }
 
   if (dialectName.startsWith('mysql')) {
-    return lowerMySqlLogicalColumnType(column)
+    return resolveDialectComparisonColumnType('mysql', column)
   }
 
-  switch (column.kind as LogicalColumnKind) {
-    case 'id':
-    case 'integer':
-    case 'bigInteger':
-    case 'boolean':
-      return 'INTEGER'
-    case 'string':
-    case 'uuid':
-    case 'ulid':
-    case 'snowflake':
-    case 'date':
-    case 'datetime':
-    case 'timestamp':
-    case 'text':
-    case 'json':
-    case 'enum':
-      return 'TEXT'
-    case 'real':
-      return 'REAL'
-    case 'decimal':
-      return 'NUMERIC'
-    case 'blob':
-      return 'BLOB'
-    case 'vector':
-      throw new SchemaError('SQLite schema diffing does not support logical vector columns.')
-    default:
-      throw new SchemaError(`Unsupported logical column kind "${String(column.kind)}" for SQLite schema diffing.`)
+  if (dialectName.startsWith('sqlite')) {
+    return resolveDialectComparisonColumnType('sqlite', column)
   }
-}
 
-function lowerPostgresLogicalColumnType(column: AnyColumnDefinition): string {
-  switch (column.kind as LogicalColumnKind) {
-    case 'id':
-    case 'bigInteger':
-      return 'bigint'
-    case 'integer':
-      return 'integer'
-    case 'boolean':
-      return 'boolean'
-    case 'string':
-      return 'character varying'
-    case 'text':
-    case 'enum':
-      return 'text'
-    case 'uuid':
-      return 'uuid'
-    case 'ulid':
-    case 'snowflake':
-      return 'character varying'
-    case 'date':
-      return 'date'
-    case 'datetime':
-    case 'timestamp':
-      return 'timestamp'
-    case 'json':
-      return 'jsonb'
-    case 'real':
-      return 'double precision'
-    case 'decimal':
-      return 'numeric'
-    case 'blob':
-      return 'bytea'
-    case 'vector':
-      return `vector(${column.vectorDimensions})`
-    default:
-      throw new SchemaError(`Unsupported logical column kind "${String(column.kind)}" for Postgres schema diffing.`)
-  }
-}
-
-function lowerMySqlLogicalColumnType(column: AnyColumnDefinition): string {
-  switch (column.kind as LogicalColumnKind) {
-    case 'id':
-    case 'bigInteger':
-      return 'bigint'
-    case 'integer':
-      return 'int'
-    case 'boolean':
-      return 'tinyint'
-    case 'string':
-      return 'varchar'
-    case 'text':
-      return 'text'
-    case 'uuid':
-    case 'ulid':
-      return 'char'
-    case 'snowflake':
-      return 'varchar'
-    case 'date':
-      return 'date'
-    case 'datetime':
-      return 'datetime'
-    case 'timestamp':
-      return 'timestamp'
-    case 'enum':
-      return 'enum'
-    case 'json':
-      return 'json'
-    case 'real':
-      return 'double'
-    case 'decimal':
-      return 'decimal'
-    case 'blob':
-      return 'blob'
-    case 'vector':
-      throw new SchemaError('MySQL schema diffing does not support logical vector columns.')
-    default:
-      throw new SchemaError(`Unsupported logical column kind "${String(column.kind)}" for MySQL schema diffing.`)
-  }
+  return resolveDialectComparisonColumnType(dialectName as SchemaDialectName, column)
 }
 
 function normalizeExpectedIndex(

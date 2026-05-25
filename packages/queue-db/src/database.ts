@@ -1,4 +1,4 @@
-import type { DatabaseContext, Dialect } from '@holo-js/db'
+import { connectionAsyncContext, DB, type DatabaseContext, type Dialect } from '@holo-js/db'
 import type {
   QueueFailedJobRecord,
   QueueJobEnvelope,
@@ -46,7 +46,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null
 }
 
-function assertQueueJsonValue(
+export function assertQueueJsonValue(
   value: unknown,
   path: string,
   seen = new Set<unknown>(),
@@ -95,7 +95,7 @@ function assertQueueJsonValue(
   seen.delete(value)
 }
 
-function normalizeIdentifierPath(value: string, label: string): string {
+export function normalizeIdentifierPath(value: string, label: string): string {
   const normalized = value.trim()
   if (!normalized) {
     throw new Error(`[Holo Queue] ${label} must be a non-empty string.`)
@@ -109,14 +109,14 @@ function normalizeIdentifierPath(value: string, label: string): string {
   return normalized
 }
 
-function quoteIdentifierPath(dialect: Dialect, path: string): string {
+export function quoteIdentifierPath(dialect: Dialect, path: string): string {
   return normalizeIdentifierPath(path, 'Queue table name')
     .split('.')
     .map(segment => dialect.quoteIdentifier(segment))
     .join('.')
 }
 
-function createPlaceholderList(
+export function createPlaceholderList(
   dialect: Dialect,
   count: number,
   startIndex = 1,
@@ -128,7 +128,7 @@ function createPlaceholderList(
   return Array.from({ length: count }, (_, index) => dialect.createPlaceholder(startIndex + index)).join(', ')
 }
 
-function coerceRequiredString(value: unknown, label: string): string {
+export function coerceRequiredString(value: unknown, label: string): string {
   if (typeof value !== 'string' || value.length === 0) {
     throw new Error(`[Holo Queue] ${label} must be a non-empty string.`)
   }
@@ -136,7 +136,7 @@ function coerceRequiredString(value: unknown, label: string): string {
   return value
 }
 
-function coerceRequiredInteger(value: unknown, label: string): number {
+export function coerceRequiredInteger(value: unknown, label: string): number {
   if (typeof value === 'number') {
     if (!Number.isInteger(value)) {
       throw new Error(`[Holo Queue] ${label} must be an integer.`)
@@ -152,7 +152,7 @@ function coerceRequiredInteger(value: unknown, label: string): number {
   throw new Error(`[Holo Queue] ${label} must be an integer.`)
 }
 
-function coerceOptionalInteger(value: unknown, label: string): number | undefined {
+export function coerceOptionalInteger(value: unknown, label: string): number | undefined {
   if (value === null || typeof value === 'undefined') {
     return undefined
   }
@@ -160,32 +160,30 @@ function coerceOptionalInteger(value: unknown, label: string): number | undefine
   return coerceRequiredInteger(value, label)
 }
 
-function parseStoredPayload(value: unknown, label: string): QueueJsonValue {
+export function parseStoredPayload(value: unknown, label: string): QueueJsonValue {
   const serialized = coerceRequiredString(value, label)
   const parsed = JSON.parse(serialized) as unknown
   assertQueueJsonValue(parsed, label)
   return parsed
 }
 
-function parseStoredQueueJobRow(
+export function parseStoredQueueJobRow(
   row: StoredQueueJobRow,
 ): QueueJobEnvelope<QueueJsonValue> {
-  return Object.freeze({
-    id: coerceRequiredString(row.id, 'Stored queue job id'),
-    name: coerceRequiredString(row.job, 'Stored queue job name'),
-    connection: coerceRequiredString(row.connection, 'Stored queue job connection'),
-    queue: coerceRequiredString(row.queue, 'Stored queue job queue'),
+  return parseStoredQueueEnvelope({
+    id: row.id,
+    name: row.job,
+    connection: row.connection,
+    queue: row.queue,
     payload: parseStoredPayload(row.payload, 'Stored queue job payload'),
-    attempts: coerceRequiredInteger(row.attempts, 'Stored queue job attempts'),
-    maxAttempts: coerceRequiredInteger(row.max_attempts, 'Stored queue job max attempts'),
-    ...(typeof row.available_at === 'undefined' || row.available_at === null
-      ? {}
-      : { availableAt: coerceRequiredInteger(row.available_at, 'Stored queue job availability') }),
-    createdAt: coerceRequiredInteger(row.created_at, 'Stored queue job creation time'),
+    attempts: row.attempts,
+    maxAttempts: row.max_attempts,
+    availableAt: row.available_at,
+    createdAt: row.created_at,
   })
 }
 
-function parseStoredQueueEnvelope(
+export function parseStoredQueueEnvelope(
   value: unknown,
 ): QueueJobEnvelope<QueueJsonValue> {
   if (!isPlainObject(value)) {
@@ -212,7 +210,7 @@ function parseStoredQueueEnvelope(
   })
 }
 
-function parseStoredFailedQueueJobRow(
+export function parseStoredFailedQueueJobRow(
   row: StoredFailedQueueJobRow,
 ): QueueFailedJobRecord {
   return Object.freeze({
@@ -224,19 +222,23 @@ function parseStoredFailedQueueJobRow(
   })
 }
 
-function serializeQueueJson(value: unknown): string {
+export function serializeQueueJson(value: unknown): string {
   assertQueueJsonValue(value, 'Queue JSON payload')
   return JSON.stringify(value)
 }
 
-async function ensureConnectionReady(connection: DatabaseContext): Promise<DatabaseContext> {
+export async function ensureConnectionReady(connection: DatabaseContext): Promise<DatabaseContext> {
   await connection.initialize()
   return connection
 }
 
-export type {
-  StoredFailedQueueJobRow,
-  StoredQueueJobRow,
+export function resolveDatabaseConnection(name: string): DatabaseContext {
+  const active = connectionAsyncContext.getActive()?.connection
+  if (active && active.getConnectionName() === name) {
+    return active
+  }
+
+  return DB.connection(name)
 }
 
 export const queueDatabaseInternals = {
@@ -246,12 +248,17 @@ export const queueDatabaseInternals = {
   coerceRequiredString,
   createPlaceholderList,
   ensureConnectionReady,
-  isPlainObject,
   normalizeIdentifierPath,
   parseStoredFailedQueueJobRow,
-  parseStoredQueueEnvelope,
   parseStoredPayload,
+  parseStoredQueueEnvelope,
   parseStoredQueueJobRow,
   quoteIdentifierPath,
+  resolveDatabaseConnection,
   serializeQueueJson,
+}
+
+export type {
+  StoredFailedQueueJobRow,
+  StoredQueueJobRow,
 }

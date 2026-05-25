@@ -3,6 +3,7 @@ declare module 'next/server' {
     readonly path?: string
     readonly secure?: boolean
     readonly sameSite?: 'lax' | 'strict' | 'none'
+    readonly httpOnly?: boolean
   }
 
   type NextResponseWithCookies = Response & {

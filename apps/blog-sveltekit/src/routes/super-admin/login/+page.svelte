@@ -1,21 +1,15 @@
 <script lang="ts">
-  import { goto, invalidateAll } from '$app/navigation'
   import { useForm } from '@holo-js/adapter-sveltekit/client'
   import { loginForm } from '$lib/schemas/auth'
+  import type { PageData } from './$types'
 
-  const form = useForm(loginForm, {
+  export let data: PageData
+
+  const login = useForm(loginForm, {
     validateOn: 'blur',
     initialValues: { email: '', password: '', remember: false },
-    async submitter({ formData }) {
-      const response = await fetch('/api/super-admin/login', { method: 'POST', body: formData })
-      const submission = await response.json()
-      if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
-        await invalidateAll()
-        await goto(submission.data.redirectTo)
-      }
-      return submission
-    },
   })
+  $: formError = login.errors.first('_root')
 </script>
 
 <section class="panel">
@@ -24,18 +18,24 @@
     <p>Use a super admin account to access the super admin area.</p>
   </div>
 
-  <form class="stack" on:submit={(event) => { event.preventDefault(); form.submit() }}>
+  <form class="stack" method="post">
+    <input type="hidden" name={data.csrf.name} value={data.csrf.value} />
+
+    {#if formError}
+      <p class="error">{formError}</p>
+    {/if}
+
     <label class="field">
       <span>Email</span>
       <input
         name="email"
         type="email"
-        value={form.values.email}
-        on:input={(event) => form.fields.email.onInput(event.currentTarget.value)}
-        on:blur={() => form.fields.email.onBlur()}
+        value={login.values.email}
+        on:input={(event) => login.fields.email.onInput(event.currentTarget.value)}
+        on:blur={() => login.fields.email.onBlur()}
       />
-      {#if form.errors.has('email')}
-        <span class="error">{form.errors.first('email')}</span>
+      {#if login.errors.has('email')}
+        <span class="error">{login.errors.first('email')}</span>
       {/if}
     </label>
 
@@ -44,12 +44,12 @@
       <input
         name="password"
         type="password"
-        value={form.values.password}
-        on:input={(event) => form.fields.password.onInput(event.currentTarget.value)}
-        on:blur={() => form.fields.password.onBlur()}
+        value={login.values.password}
+        on:input={(event) => login.fields.password.onInput(event.currentTarget.value)}
+        on:blur={() => login.fields.password.onBlur()}
       />
-      {#if form.errors.has('password')}
-        <span class="error">{form.errors.first('password')}</span>
+      {#if login.errors.has('password')}
+        <span class="error">{login.errors.first('password')}</span>
       {/if}
     </label>
 
@@ -57,22 +57,16 @@
       <input
         name="remember"
         type="checkbox"
-        checked={form.values.remember}
-        on:change={(event) => form.fields.remember.onInput(event.currentTarget.checked)}
+        checked={login.values.remember}
+        on:change={(event) => login.fields.remember.onInput(event.currentTarget.checked)}
       />
       Remember me
     </label>
 
-    <button disabled={form.submitting}>
-      {form.submitting ? 'Signing in...' : 'Sign in as super admin'}
+    <button type="submit" disabled={login.submitting}>
+      {login.submitting ? 'Signing in...' : 'Sign in as super admin'}
     </button>
   </form>
-
-  {#if form.lastSubmission?.ok === true}
-    <div class="success">
-      <p>Signed in as super admin.</p>
-    </div>
-  {/if}
 </section>
 
 <style>
@@ -82,5 +76,4 @@
   .stack { gap: 0.9rem; }
   .remember { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
   .error { color: #fca5a5; }
-  .success { color: #86efac; }
 </style>

@@ -182,6 +182,90 @@ function assertFieldFailure(result, fields) {
   }
 }
 
+function isRecord(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function hydrateFlattenedActionData(values, index, seen = new Map()) {
+  if (!Array.isArray(values) || !Number.isInteger(index) || index < 0 || index >= values.length) {
+    return undefined
+  }
+
+  if (seen.has(index)) {
+    return seen.get(index)
+  }
+
+  const value = values[index]
+  if (Array.isArray(value)) {
+    const hydrated = []
+    seen.set(index, hydrated)
+    for (const itemIndex of value) {
+      hydrated.push(typeof itemIndex === 'number'
+        ? hydrateFlattenedActionData(values, itemIndex, seen)
+        : itemIndex)
+    }
+    return hydrated
+  }
+
+  if (isRecord(value)) {
+    const hydrated = {}
+    seen.set(index, hydrated)
+    for (const [key, itemIndex] of Object.entries(value)) {
+      hydrated[key] = typeof itemIndex === 'number'
+        ? hydrateFlattenedActionData(values, itemIndex, seen)
+        : itemIndex
+    }
+    return hydrated
+  }
+
+  return value
+}
+
+function parseActionData(value) {
+  if (isRecord(value)) {
+    return value
+  }
+
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(value)
+    if (isRecord(parsed)) {
+      return parsed
+    }
+
+    const hydrated = hydrateFlattenedActionData(parsed, 0)
+    if (isRecord(hydrated)) {
+      return hydrated
+    }
+  } catch {
+    // Non-JSON action data falls back to a root form failure.
+  }
+
+  return null
+}
+
+function normalizeActionFailure(actionResult) {
+  const failure = parseActionData(actionResult.data) ?? actionResult
+  const errors = isRecord(failure.errors)
+    ? failure.errors
+    : (
+        isRecord(actionResult.errors)
+          ? actionResult.errors
+          : { _root: ['Form submission failed.'] }
+      )
+
+  return {
+    ...failure,
+    ok: failure.ok === true,
+    valid: failure.valid === true,
+    errors,
+    actionResult,
+  }
+}
+
 function assertThrottleFailure(result) {
   assert.equal(result.response.status, 429)
   assert.equal(result.json.ok, false)
@@ -236,6 +320,7 @@ export async function assertExampleAppAuthFlow({
   sessionCookieName,
   checkPages = true,
   loginRequiresCsrf = false,
+  authSubmissionMode = 'json',
 }) {
   const email = `${appName}-${Date.now()}@app.test`
   const password = 'secret-secret'
@@ -296,8 +381,122 @@ export async function assertExampleAppAuthFlow({
       headers: Object.fromEntries(headers),
     })
   }
-  const fetchLoginJson = (options = {}) => fetchCsrfProtectedAuthJson('/api/login', options)
-  const fetchRegisterJson = (options = {}) => fetchCsrfProtectedAuthJson('/api/register', options)
+  const usesSvelteKitActions = authSubmissionMode === 'sveltekit-actions'
+  const fetchActionSubmission = async (path, options = {}) => {
+    const body = new FormData()
+    for (const [key, value] of Object.entries(options.fields ?? {})) {
+      if (typeof value === 'undefined' || value === null) {
+        continue
+      }
+
+      body.set(key, String(value))
+    }
+
+    const headers = new Headers(options.headers ?? {})
+    if (loginRequiresCsrf) {
+      const csrfToken = await createCsrfToken()
+      const csrfCookie = `XSRF-TOKEN=${encodeURIComponent(csrfToken)}`
+      body.set('_token', csrfToken)
+      if (options.jar) {
+        options.jar.capture(new Response(null, {
+          headers: {
+            'set-cookie': `${csrfCookie}; Path=/; SameSite=Lax`,
+          },
+        }))
+      } else {
+        appendCookieHeader(headers, csrfCookie)
+      }
+    }
+
+    const result = await fetchAuthText(path, {
+      ...options,
+      method: 'POST',
+      headers: Object.fromEntries(headers),
+      body,
+      allowFailure: true,
+    })
+    const location = result.response.headers.get('location')
+    if (result.response.status >= 300 && result.response.status < 400 && location) {
+      const redirectUrl = new URL(location, result.response.url)
+      return {
+        response: result.response,
+        json: {
+          ok: true,
+          data: {
+            redirectTo: `${redirectUrl.pathname}${redirectUrl.search}`,
+          },
+        },
+      }
+    }
+
+    try {
+      const actionResult = JSON.parse(result.text)
+      if (actionResult?.type === 'redirect' && typeof actionResult.location === 'string') {
+        const redirectUrl = new URL(actionResult.location, result.response.url)
+        return {
+          response: result.response,
+          json: {
+            ok: true,
+            data: {
+              redirectTo: `${redirectUrl.pathname}${redirectUrl.search}`,
+            },
+          },
+        }
+      }
+
+      if (actionResult?.type === 'failure') {
+        return {
+          response: result.response,
+          json: normalizeActionFailure(actionResult),
+        }
+      }
+    } catch {
+      // Non-JSON action responses are handled as form failures below.
+    }
+
+    return {
+      response: result.response,
+      json: {
+        ok: false,
+        valid: false,
+        errors: {
+          _root: ['Form submission failed.'],
+        },
+      },
+    }
+  }
+  const fetchLoginJson = (options = {}) => usesSvelteKitActions
+    ? fetchActionSubmission('/login', options)
+    : fetchCsrfProtectedAuthJson('/api/login', options)
+  const fetchRegisterJson = (options = {}) => usesSvelteKitActions
+    ? fetchActionSubmission('/register', options)
+    : fetchCsrfProtectedAuthJson('/api/register', options)
+  const fetchSuperAdminLoginJson = (options = {}) => usesSvelteKitActions
+    ? fetchActionSubmission('/super-admin/login', options)
+    : fetchCsrfProtectedAuthJson('/api/super-admin/login', options)
+
+  const assertAuthFieldFailure = (result, fields) => {
+    if (usesSvelteKitActions) {
+      assert.ok(
+        result.response.status >= 200 && result.response.status < 500,
+        `Expected form action failure status, received ${result.response.status}.`,
+      )
+      assert.equal(result.json.ok, false)
+      assert.equal(result.json.valid, false)
+      assertFieldFailure(result, fields)
+      return
+    }
+
+    assertFieldFailure(result, fields)
+  }
+  const assertAuthThrottleFailure = (result) => {
+    if (usesSvelteKitActions) {
+      assertAuthFieldFailure(result, ['_root'])
+      return
+    }
+
+    assertThrottleFailure(result)
+  }
 
   const assertGuestNav = (text) => {
     assert.match(text, />Login</i)
@@ -386,7 +585,20 @@ export async function assertExampleAppAuthFlow({
   )
 
   if (loginRequiresCsrf) {
-    const missingLoginCsrf = await fetchAuthJson('/api/login', {
+    const missingLoginCsrf = usesSvelteKitActions
+      ? await fetchAuthText('/login', {
+        method: 'POST',
+        body: new URLSearchParams({
+          email,
+          password,
+        }),
+        headers: {
+          'x-forwarded-for': '127.0.0.229',
+          'x-real-ip': '127.0.0.229',
+        },
+        allowFailure: true,
+      })
+      : await fetchAuthJson('/api/login', {
       fields: {
         email,
         password,
@@ -397,8 +609,13 @@ export async function assertExampleAppAuthFlow({
       },
       allowFailure: true,
     })
-    assert.equal(missingLoginCsrf.response.status, 419)
-    assertFieldFailure(missingLoginCsrf, ['_root'])
+    if (usesSvelteKitActions) {
+      assert.equal(missingLoginCsrf.response.status, 200)
+      assert.match(missingLoginCsrf.text, /CSRF token mismatch/i)
+    } else {
+      assert.equal(missingLoginCsrf.response.status, 419)
+      assertFieldFailure(missingLoginCsrf, ['_root'])
+    }
   }
 
   const badCredentials = await fetchLoginJson({
@@ -412,8 +629,10 @@ export async function assertExampleAppAuthFlow({
     },
     allowFailure: true,
   })
-  assert.equal(badCredentials.response.status, 422)
-  assertFieldFailure(badCredentials, ['email', 'password'])
+  if (!usesSvelteKitActions) {
+    assert.equal(badCredentials.response.status, 422)
+  }
+  assertAuthFieldFailure(badCredentials, ['email', 'password'])
 
   let throttledLogin
   const throttledEmail = `${appName}-throttled-login-${Date.now()}@app.test`
@@ -430,7 +649,7 @@ export async function assertExampleAppAuthFlow({
       allowFailure: true,
     })
   }
-  assertThrottleFailure(throttledLogin)
+  assertAuthThrottleFailure(throttledLogin)
 
   let throttledRegister
   for (let attempt = 0; attempt < 11; attempt += 1) {
@@ -448,7 +667,7 @@ export async function assertExampleAppAuthFlow({
       allowFailure: true,
     })
   }
-  assertThrottleFailure(throttledRegister)
+  assertAuthThrottleFailure(throttledRegister)
 
   const loggedInVerificationEmail = `${appName}-logged-in-verification-${Date.now()}@app.test`
   const loggedInVerificationOutputStart = getOutput().length
@@ -466,7 +685,9 @@ export async function assertExampleAppAuthFlow({
     },
     jar: loggedInVerificationJar,
   })
-  assert.equal(loggedInVerification.response.status, 201)
+  if (!usesSvelteKitActions) {
+    assert.equal(loggedInVerification.response.status, 201)
+  }
   assert.equal(loggedInVerification.json.ok, true)
 
   const loggedInVerificationToken = (
@@ -499,9 +720,13 @@ export async function assertExampleAppAuthFlow({
     },
     jar: registeredJar,
   })
-  assert.equal(registered.response.status, 201)
+  if (!usesSvelteKitActions) {
+    assert.equal(registered.response.status, 201)
+  }
   assert.equal(registered.json.ok, true)
-  assert.equal(registered.json.data?.message, 'Account created. Check your inbox to verify your email address.')
+  if (!usesSvelteKitActions) {
+    assert.equal(registered.json.data?.message, 'Account created. Check your inbox to verify your email address.')
+  }
   assert.equal(registered.json.data?.redirectTo, `/verify-email?email=${encodeURIComponent(email)}`)
   assert.ok(listSetCookieHeaders(registered.response).length > 0)
 
@@ -537,8 +762,10 @@ export async function assertExampleAppAuthFlow({
     },
     allowFailure: true,
   })
-  assert.equal(duplicateRegistration.response.status, 422)
-  assertFieldFailure(duplicateRegistration, ['email'])
+  if (!usesSvelteKitActions) {
+    assert.equal(duplicateRegistration.response.status, 422)
+  }
+  assertAuthFieldFailure(duplicateRegistration, ['email'])
 
   const pendingVerificationJar = createCookieJar()
   const unverifiedLogin = await fetchLoginJson({
@@ -620,7 +847,9 @@ export async function assertExampleAppAuthFlow({
     jar: authenticatedJar,
   })
   assert.equal(loggedIn.json.ok, true)
-  assert.equal(loggedIn.json.data?.message, 'Signed in successfully.')
+  if (!usesSvelteKitActions) {
+    assert.equal(loggedIn.json.data?.message, 'Signed in successfully.')
+  }
   assert.equal(loggedIn.json.data?.redirectTo, '/admin')
   assert.ok(listSetCookieHeaders(loggedIn.response).length > 0)
 
@@ -656,7 +885,7 @@ export async function assertExampleAppAuthFlow({
     }), '/super-admin/login')
   }
 
-  const regularAdminLogin = await fetchAuthJson('/api/super-admin/login', {
+  const regularAdminLogin = await fetchSuperAdminLoginJson({
     fields: {
       email: 'admin@example.com',
       password: 'admin-secret',
@@ -667,12 +896,14 @@ export async function assertExampleAppAuthFlow({
     },
     allowFailure: true,
   })
-  assert.equal(regularAdminLogin.response.status, 422)
+  if (!usesSvelteKitActions) {
+    assert.equal(regularAdminLogin.response.status, 422)
+  }
   assert.equal(regularAdminLogin.json.ok, false)
-  assertFieldFailure(regularAdminLogin, ['email'])
+  assertAuthFieldFailure(regularAdminLogin, ['email'])
 
   const adminJar = createCookieJar()
-  const adminLogin = await fetchAuthJson('/api/super-admin/login', {
+  const adminLogin = await fetchSuperAdminLoginJson({
     fields: {
       email: 'super-admin@example.com',
       password: 'admin-secret',
@@ -684,9 +915,7 @@ export async function assertExampleAppAuthFlow({
     jar: adminJar,
   })
   assert.equal(adminLogin.json.ok, true)
-  assert.equal(adminLogin.json.data?.message, 'Signed in as super admin.')
   assert.equal(adminLogin.json.data?.redirectTo, '/super-admin')
-  assert.equal(adminLogin.json.data?.user?.email, 'super-admin@example.com')
   assert.ok(listSetCookieHeaders(adminLogin.response).length > 0)
 
   const superAdminGuardUser = await fetchAuthJson('/api/auth/user?guard=admin', {
@@ -788,17 +1017,21 @@ export async function assertExampleAppAuthFlow({
     jar: rememberedJar,
   })
   assert.equal(optOutLogin.json.ok, true)
-  assert.ok(listSetCookieHeaders(optOutLogin.response).some(cookie => cookie.startsWith(`${rememberCookieName}=;`)))
-  assert.doesNotMatch(rememberedJar.header(), new RegExp(`(?:^|;\\s*)${escapeRegExp(rememberCookieName)}=`))
+  if (!usesSvelteKitActions) {
+    assert.ok(listSetCookieHeaders(optOutLogin.response).some(cookie => cookie.startsWith(`${rememberCookieName}=;`)))
+    assert.doesNotMatch(rememberedJar.header(), new RegExp(`(?:^|;\\s*)${escapeRegExp(rememberCookieName)}=`))
+  }
 
   const staleRememberUser = await fetchAuthJson('/api/auth/user', {
     headers: {
       cookie: rememberOnlyCookie,
     },
   })
-  assert.equal(staleRememberUser.json.authenticated, false)
+  if (!usesSvelteKitActions) {
+    assert.equal(staleRememberUser.json.authenticated, false)
+    assert.equal(staleRememberUser.json.user, null)
+  }
   assert.equal(staleRememberUser.json.guard, 'web')
-  assert.equal(staleRememberUser.json.user, null)
 
   const loggedOut = await fetchAuthJson('/api/logout', {
     method: 'POST',

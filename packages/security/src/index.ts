@@ -13,6 +13,7 @@ import {
   csrfInternals,
   cookie as createCsrfCookie,
   field as createCsrfField,
+  isSecureRequest,
   protect,
   token as createCsrfToken,
   verify as verifyCsrfRequest,
@@ -108,6 +109,7 @@ export {
   verifyCsrfRequest,
   csrfInternals,
   corsInternals,
+  isSecureRequest,
 }
 export type {
   SecurityClearRateLimitOptions,

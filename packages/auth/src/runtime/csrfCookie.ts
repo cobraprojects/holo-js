@@ -4,7 +4,15 @@ export type CsrfCookieOptions = {
   readonly path: '/'
   readonly sameSite: 'lax'
   readonly secure: boolean
+  readonly httpOnly: false
 }
+
+type CsrfCookieRequest = {
+  readonly url: string | URL
+  readonly headers: Headers
+}
+
+type CsrfCookieTarget = string | URL | CsrfCookieRequest
 
 type WebCryptoSubtle = {
   importKey(
@@ -88,12 +96,49 @@ export function isCsrfCookieRequest(method: string | undefined): boolean {
   return normalized === 'GET' || normalized === 'HEAD'
 }
 
-export function resolveCsrfCookieOptions(url: string | URL): CsrfCookieOptions {
-  const requestUrl = typeof url === 'string' ? new URL(url) : url
+function normalizeForwardedValue(value: string): string {
+  return value.trim().replace(/^"|"$/g, '').toLowerCase()
+}
+
+function getForwardedProto(headers: Headers): string | undefined {
+  const forwardedProto = headers.get('x-forwarded-proto')?.split(',', 1)[0]?.trim()
+  if (forwardedProto) {
+    return normalizeForwardedValue(forwardedProto)
+  }
+
+  const forwarded = headers.get('forwarded')?.split(',', 1)[0]
+  if (!forwarded) {
+    return undefined
+  }
+
+  for (const segment of forwarded.split(';')) {
+    const [name, value] = segment.split('=', 2)
+    if (name?.trim().toLowerCase() === 'proto' && value) {
+      return normalizeForwardedValue(value)
+    }
+  }
+
+  return undefined
+}
+
+function isCsrfCookieRequestTarget(target: CsrfCookieTarget): target is CsrfCookieRequest {
+  return typeof target === 'object'
+    && !(target instanceof URL)
+    && target.headers instanceof Headers
+}
+
+export function resolveCsrfCookieOptions(target: CsrfCookieTarget): CsrfCookieOptions {
+  const requestUrl = isCsrfCookieRequestTarget(target)
+    ? typeof target.url === 'string' ? new URL(target.url) : target.url
+    : typeof target === 'string' ? new URL(target) : target
+  const forwardedProto = isCsrfCookieRequestTarget(target)
+    ? getForwardedProto(target.headers)
+    : undefined
 
   return {
     path: '/',
     sameSite: 'lax',
-    secure: requestUrl.protocol === 'https:',
+    secure: forwardedProto === 'https' || requestUrl.protocol === 'https:',
+    httpOnly: false,
   }
 }

@@ -1,6 +1,7 @@
 import { mkdtemp, mkdir, rm, stat, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { basename, extname, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { BuildOptions, BuildResult } from 'esbuild'
 
 type EsbuildModule = {
@@ -13,6 +14,96 @@ async function importModule<TModule>(specifier: string): Promise<TModule> {
   }
 
   return import(/* webpackIgnore: true */ specifier) as Promise<TModule>
+}
+
+const runtimeModuleRequire = createRequire(import.meta.url)
+
+function resolveOptionalImportSpecifier(specifier: string, projectRoot?: string): string {
+  if (!projectRoot) {
+    return specifier
+  }
+
+  try {
+    return pathToFileURL(runtimeModuleRequire.resolve(specifier, {
+      paths: [projectRoot],
+    })).href
+  } catch {
+    return specifier
+  }
+}
+
+function getErrorMessage(error: unknown): string {
+  return error && typeof error === 'object' && 'message' in error
+    && typeof (error as { message?: unknown }).message === 'string'
+    ? (error as { message: string }).message
+    : ''
+}
+
+function getMissingModuleTarget(message: string): string | undefined {
+  const match = message.match(/Cannot find package '([^']+)'|Cannot find module '([^']+)'|Failed to load url ([^ ]+)|Could not resolve "([^"]+)"/)
+  return match?.slice(1).find((value): value is string => typeof value === 'string')
+}
+
+function normalizeImportSpecifier(specifier: string): string {
+  return specifier.startsWith('file://') ? fileURLToPath(specifier) : specifier
+}
+
+function normalizeImportTarget(value: string): string {
+  return normalizeImportSpecifier(value).replace(/\\/g, '/')
+}
+
+function matchesRelativeImportTarget(failedTarget: string | undefined, specifier: string): boolean {
+  if (!failedTarget || !specifier.startsWith('.')) {
+    return false
+  }
+
+  const suffix = specifier.startsWith('./') ? specifier.slice(2) : specifier
+  return normalizeImportTarget(failedTarget).endsWith(`/${suffix}`)
+}
+
+function isMissingOptionalModule(error: unknown, specifier: string, resolvedSpecifier: string): boolean {
+  if (!error || typeof error !== 'object') {
+    return false
+  }
+
+  const message = getErrorMessage(error)
+  const failedTarget = getMissingModuleTarget(message)
+  const expectedTargets = new Set([
+    specifier,
+    resolvedSpecifier,
+    normalizeImportTarget(specifier),
+    normalizeImportTarget(resolvedSpecifier),
+  ])
+  const normalizedFailedTarget = typeof failedTarget === 'string' ? normalizeImportTarget(failedTarget) : undefined
+  const matchesRequestedTarget = typeof normalizedFailedTarget === 'string'
+    && (expectedTargets.has(normalizedFailedTarget) || matchesRelativeImportTarget(normalizedFailedTarget, specifier))
+
+  return (
+    ('code' in error && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND' && matchesRequestedTarget)
+    || (message.startsWith('Cannot find package \'') && matchesRequestedTarget)
+    || (message.startsWith('Cannot find module \'') && matchesRequestedTarget)
+    || (message.includes('Does the file exist?') && message.startsWith('Failed to load url ') && matchesRequestedTarget)
+    || (message.startsWith('Could not resolve "') && matchesRequestedTarget)
+  )
+}
+
+export async function importOptionalRuntimeModule<TModule>(
+  specifier: string,
+  options: {
+    readonly projectRoot?: string
+  } = {},
+): Promise<TModule | undefined> {
+  const resolvedSpecifier = resolveOptionalImportSpecifier(specifier, options.projectRoot)
+
+  try {
+    return await importModule<TModule>(resolvedSpecifier)
+  } catch (error) {
+    if (isMissingOptionalModule(error, specifier, resolvedSpecifier)) {
+      return undefined
+    }
+
+    throw error
+  }
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -144,6 +235,7 @@ async function runEsbuild(options: BuildOptions): Promise<BuildResult> {
 export const runtimeModuleInternals = {
   bundleRuntimeModule,
   importModule,
+  importOptionalRuntimeModule,
   loadEsbuild,
   pathExists,
   runEsbuild,

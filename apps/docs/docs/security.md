@@ -307,7 +307,9 @@ const field = await csrf.field(request)
 
 ### Setting the readable cookie
 
-`useForm(..., { csrf: true })` needs the CSRF cookie to already exist:
+`useForm(..., { csrf: true })` needs the CSRF cookie to already exist. In the Next.js, Nuxt, and
+SvelteKit auth/framework integrations, the route protection hooks create this cookie before guest pages
+render. Use `csrf.cookie(request)` directly only for custom server-rendered HTML outside those helpers:
 
 ```ts
 import { csrf } from '@holo-js/security'

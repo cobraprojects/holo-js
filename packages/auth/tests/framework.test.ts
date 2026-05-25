@@ -86,6 +86,7 @@ describe('@holo-js/auth framework helpers', () => {
     vi.resetModules()
     vi.clearAllMocks()
     vi.doUnmock('#imports')
+    vi.doUnmock('next/navigation')
     vi.doUnmock('react')
     vi.doUnmock('../src/client')
     vi.doUnmock('../src/index')
@@ -95,6 +96,9 @@ describe('@holo-js/auth framework helpers', () => {
     const refreshUser = vi.fn(async () => null)
     vi.doMock('../src/client', () => ({
       refreshUser,
+    }))
+    vi.doMock('next/navigation', () => ({
+      usePathname: () => '/admin',
     }))
     vi.doMock('react', () => createReactMock())
 
@@ -114,6 +118,116 @@ describe('@holo-js/auth framework helpers', () => {
 
     expect(auth.user?.email).toBe('ava@example.com')
     expect(refreshUser).not.toHaveBeenCalled()
+  })
+
+  it('refreshes the Next auth provider after client route changes', async () => {
+    let currentPathname = '/login'
+    let stateCursor = 0
+    let refCursor = 0
+    const states: unknown[] = []
+    const refs: { current: unknown }[] = []
+    const fetchCurrentUser = vi.fn(async () => ({
+      authenticated: true,
+      guard: 'web',
+      provider: 'users',
+      user: {
+        id: 1,
+        email: 'ava@example.com',
+        name: 'Ava',
+      },
+    }))
+
+    function resetRenderCursors() {
+      stateCursor = 0
+      refCursor = 0
+    }
+
+    vi.doMock('../src/client', () => ({
+      authClientInternals: {
+        fetchCurrentUser,
+      },
+    }))
+    vi.doMock('next/navigation', () => ({
+      usePathname: () => currentPathname,
+    }))
+    vi.doMock('react', () => ({
+      createContext<TValue>(defaultValue: TValue): MockReactContext<TValue> {
+        const context: MockReactContext<TValue> = {
+          currentRenderValue: defaultValue,
+          Provider({ value, children }) {
+            context.currentRenderValue = value
+            return children
+          },
+        }
+
+        return context
+      },
+      createElement(type: unknown, props: Record<string, unknown> | null, ...children: readonly unknown[]): unknown {
+        if (typeof type === 'function') {
+          return (type as (props: Record<string, unknown>) => unknown)({
+            ...(props ?? {}),
+            children: children.length === 1 ? children[0] : children,
+          })
+        }
+
+        return { type, props, children }
+      },
+      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
+        return callback
+      },
+      useContext<TValue>(context: MockReactContext<TValue>): TValue {
+        return context.currentRenderValue
+      },
+      useEffect(effect: () => void | (() => void)) {
+        return effect()
+      },
+      useRef<TValue>(initialValue?: TValue) {
+        const index = refCursor
+        refCursor += 1
+        refs[index] ??= { current: initialValue }
+        return refs[index] as { current: TValue | undefined }
+      },
+      useState<TValue>(initialState: TValue | (() => TValue)) {
+        const index = stateCursor
+        stateCursor += 1
+        if (!(index in states)) {
+          states[index] = typeof initialState === 'function'
+            ? (initialState as () => TValue)()
+            : initialState
+        }
+
+        return [
+          states[index] as TValue,
+          (value: TValue | ((previous: TValue) => TValue)) => {
+            states[index] = typeof value === 'function'
+              ? (value as (previous: TValue) => TValue)(states[index] as TValue)
+              : value
+          },
+        ] as const
+      },
+    }))
+
+    const { AuthProvider } = await import('../src/next/client')
+
+    resetRenderCursors()
+    AuthProvider({
+      initialProvider: null,
+      initialUser: null,
+      children: null,
+    })
+    expect(fetchCurrentUser).not.toHaveBeenCalled()
+
+    currentPathname = '/admin'
+    resetRenderCursors()
+    AuthProvider({
+      initialProvider: null,
+      initialUser: null,
+      children: null,
+    })
+
+    expect(fetchCurrentUser).toHaveBeenCalledWith({}, {
+      force: true,
+    })
   })
 
   it('does not reuse the SvelteKit auth context when explicit request options are passed', async () => {
@@ -379,12 +493,13 @@ describe('@holo-js/auth framework helpers', () => {
 
             return Object.assign(response, {
               cookies: {
-                set(name: string, value: string, options: { readonly path?: string, readonly sameSite?: string, readonly secure?: boolean }) {
+                set(name: string, value: string, options: { readonly path?: string, readonly sameSite?: string, readonly secure?: boolean, readonly httpOnly?: boolean }) {
                   headers.append('set-cookie', [
                     `${name}=${encodeURIComponent(value)}`,
                     options.path ? `Path=${options.path}` : undefined,
                     options.sameSite ? `SameSite=${options.sameSite[0]?.toUpperCase()}${options.sameSite.slice(1)}` : undefined,
                     options.secure ? 'Secure' : undefined,
+                    options.httpOnly ? 'HttpOnly' : undefined,
                   ].filter((attribute): attribute is string => typeof attribute === 'string').join('; '))
                 },
               },
@@ -399,9 +514,11 @@ describe('@holo-js/auth framework helpers', () => {
         cookies: {
           get: vi.fn(() => undefined),
         },
-        headers: new Headers(),
-        nextUrl: new URL('https://app.test/login'),
-        url: 'https://app.test/login',
+        headers: new Headers({
+          'x-forwarded-proto': 'https',
+        }),
+        nextUrl: new URL('http://app.test/login'),
+        url: 'http://app.test/login',
       }
       const response = await protectRoutes(async () => undefined)(request)
       const setCookie = response?.headers.get('set-cookie') ?? ''
@@ -416,6 +533,7 @@ describe('@holo-js/auth framework helpers', () => {
       expect(setCookie).toContain('Path=/')
       expect(setCookie).toContain('SameSite=Lax')
       expect(setCookie).toContain('Secure')
+      expect(setCookie).not.toContain('HttpOnly')
       expect(separator).toBeGreaterThan(0)
       expect(signature).toBe(createHmac('sha256', 'next-csrf-signing-key')
         .update(nonce)
@@ -686,14 +804,16 @@ describe('@holo-js/auth framework helpers', () => {
         redirectTo: '/admin',
       })({
         event: {
-          url: new URL('https://app.test/login'),
+          url: new URL('http://app.test/login'),
           cookies: {
             get: vi.fn(() => undefined),
             set: setCookie,
           },
           request: {
             method: 'GET',
-            headers: new Headers(),
+            headers: new Headers({
+              'x-forwarded-proto': 'https',
+            }),
           },
         },
         resolve,
@@ -708,6 +828,7 @@ describe('@holo-js/auth framework helpers', () => {
         path: '/',
         sameSite: 'lax',
         secure: true,
+        httpOnly: false,
       })
       expect(signature).toBe(createHmac('sha256', 'sveltekit-csrf-signing-key')
         .update(nonce)
@@ -850,6 +971,7 @@ describe('@holo-js/auth framework helpers', () => {
         path: '/',
         sameSite: 'lax',
         secure: true,
+        httpOnly: false,
       })
       expect(signature).toBe(createHmac('sha256', 'nuxt-csrf-signing-key')
         .update(nonce)

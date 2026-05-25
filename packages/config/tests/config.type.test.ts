@@ -1,6 +1,5 @@
 import { describe, it } from 'vitest'
 import {
-  createConfigAccessors,
   defineAuthConfig,
   defineBroadcastConfig,
   defineCacheConfig,
@@ -15,6 +14,7 @@ import {
   type HoloAppEnv,
   type HoloConfigRegistry,
 } from '../src'
+import { createConfigAccessorFixture } from './support/configAccessors'
 
 declare module '../src/types' {
   interface HoloConfigRegistry {
@@ -148,18 +148,12 @@ describe('@holo-js/config typing', () => {
         },
       },
     })
-    const accessors = createConfigAccessors({
-      app: {} as HoloConfigRegistry['app'],
-      database: {} as HoloConfigRegistry['database'],
-      redis: {} as HoloConfigRegistry['redis'],
+    const accessors = createConfigAccessorFixture({
       cache: cache as unknown as HoloConfigRegistry['cache'],
-      cors: {} as HoloConfigRegistry['cors'],
-      storage: {} as HoloConfigRegistry['storage'],
       queue: queue as unknown as HoloConfigRegistry['queue'],
       broadcast: broadcast as unknown as HoloConfigRegistry['broadcast'],
       mail: mail as unknown as HoloConfigRegistry['mail'],
       notifications: notifications as unknown as HoloConfigRegistry['notifications'],
-      media: {} as HoloConfigRegistry['media'],
       session: session as unknown as HoloConfigRegistry['session'],
       security: security as unknown as HoloConfigRegistry['security'],
       auth: auth as unknown as HoloConfigRegistry['auth'],

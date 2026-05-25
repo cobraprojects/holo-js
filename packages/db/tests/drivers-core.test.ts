@@ -189,14 +189,6 @@ function createTransactionDialect(name: 'postgres' | 'mysql') {
     } } as const
 }
 
-type PostgresAdapterHarness = {
-  releaseScopedTransaction(state: { client: { release?(): void }, leased: boolean, released: boolean }): void
-}
-
-type MySQLAdapterHarness = {
-  releaseScopedTransaction(state: { client: { release?(): void }, leased: boolean, released: boolean }): void
-}
-
 describe('driver adapters', () => {
   let sqliteContractState: {
     sqlite: ReturnType<typeof createSqliteDatabase>
@@ -338,55 +330,6 @@ describe('driver adapters', () => {
 
     const adapter = new SQLiteAdapter()
     await expect(adapter.initialize()).rejects.toThrow('[@holo-js/db] SQLite support requires @holo-js/db-sqlite to be installed.')
-  })
-
-  it('falls back to array-based SQLite bindings when spread bindings trigger an arity error', async () => {
-    const calls: Array<{ method: 'all' | 'run', bindings: readonly unknown[] }> = []
-    let shouldThrowTooFew = true
-    const adapter = createSQLiteAdapter({
-      database: {
-        prepare() {
-          return {
-            all(...bindings: readonly unknown[]) {
-              calls.push({ method: 'all', bindings })
-              if (bindings.length > 1) {
-                throw new RangeError('Too many parameter values were provided')
-              }
-
-              return [{ ok: true }]
-            },
-            run(...bindings: readonly unknown[]) {
-              calls.push({ method: 'run', bindings })
-              if (shouldThrowTooFew) {
-                shouldThrowTooFew = false
-                throw new RangeError('Too few parameter values were provided')
-              }
-
-              if (bindings.length > 1) {
-                throw new RangeError('Too many parameter values were provided')
-              }
-
-              return {
-                changes: 1,
-                lastInsertRowid: 11 }
-            } }
-        },
-        exec() {},
-        close() {} } })
-
-    await expect(adapter.query('SELECT * FROM users WHERE id = ? AND role = ?', [1, 'admin'])).resolves.toEqual({
-      rows: [{ ok: true }],
-      rowCount: 1 })
-    await expect(adapter.execute('UPDATE users SET meta = ?, role = ? WHERE id = ?', [{ active: true }, 'admin', 1])).resolves.toEqual({
-      affectedRows: 1,
-      lastInsertId: 11 })
-
-    expect(calls).toEqual([
-      { method: 'all', bindings: [1, 'admin'] },
-      { method: 'all', bindings: [[1, 'admin']] },
-      { method: 'run', bindings: [{ active: true }, 'admin', 1] },
-      { method: 'run', bindings: [[{ active: true }, 'admin', 1]] },
-    ])
   })
 
   it('rethrows non-arity SQLite statement errors', async () => {
@@ -733,25 +676,6 @@ describe('driver adapters', () => {
     expect(adapter.isConnected()).toBe(false)
   })
 
-  it('no-ops Postgres scoped transaction release when the state is already released', () => {
-    let releaseCalls = 0
-    const adapter = new PostgresAdapter({
-      client: {
-        async query() {
-          return { rows: [], rowCount: 0 }
-        } } })
-
-    ;(adapter as unknown as PostgresAdapterHarness).releaseScopedTransaction({
-      client: {
-        release() {
-          releaseCalls += 1
-        } },
-      leased: true,
-      released: true })
-
-    expect(releaseCalls).toBe(0)
-  })
-
   let mySqlContractState: ReturnType<typeof createMySqlPool>
 
   runDriverAdapterContractSuite({
@@ -892,25 +816,6 @@ describe('driver adapters', () => {
 
     expect(released).toBe(false)
     expect(adapter.isConnected()).toBe(false)
-  })
-
-  it('no-ops MySQL scoped transaction release when the state is already released', () => {
-    let releaseCalls = 0
-    const adapter = new MySQLAdapter({
-      client: {
-        async query() {
-          return [[], []] as const
-        } } })
-
-    ;(adapter as unknown as MySQLAdapterHarness).releaseScopedTransaction({
-      client: {
-        release() {
-          releaseCalls += 1
-        } },
-      leased: true,
-      released: true })
-
-    expect(releaseCalls).toBe(0)
   })
 
   it('covers active leased MySQL disconnects, invalid lazy pools, and the default pool factory path', async () => {

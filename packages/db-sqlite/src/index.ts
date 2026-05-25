@@ -1,35 +1,11 @@
 import Database from 'better-sqlite3'
+import type {
+  DriverAdapter,
+  DriverExecutionResult,
+  DriverQueryResult,
+} from '@holo-js/db'
 
-export interface DriverQueryResult<TRow extends Record<string, unknown> = Record<string, unknown>> {
-  rows: TRow[]
-  rowCount: number
-}
-
-export interface DriverExecutionResult {
-  affectedRows?: number
-  lastInsertId?: number | string
-}
-
-export interface DriverAdapter {
-  initialize(): Promise<void>
-  disconnect(): Promise<void>
-  isConnected(): boolean
-  runWithTransactionScope?<T>(callback: () => Promise<T>): Promise<T>
-  query<TRow extends Record<string, unknown> = Record<string, unknown>>(
-    sql: string,
-    bindings?: readonly unknown[],
-  ): Promise<DriverQueryResult<TRow>>
-  execute(
-    sql: string,
-    bindings?: readonly unknown[],
-  ): Promise<DriverExecutionResult>
-  beginTransaction(): Promise<void>
-  commit(): Promise<void>
-  rollback(): Promise<void>
-  createSavepoint?(name: string): Promise<void>
-  rollbackToSavepoint?(name: string): Promise<void>
-  releaseSavepoint?(name: string): Promise<void>
-}
+export type { DriverAdapter, DriverExecutionResult, DriverQueryResult } from '@holo-js/db'
 
 class TransactionError extends Error {}
 
@@ -112,7 +88,7 @@ export class SQLiteAdapter implements DriverAdapter {
     bindings: readonly unknown[] = [],
   ): Promise<DriverQueryResult<TRow>> {
     const statement = this.getDatabase().prepare(sql)
-    const rows = this.invokeStatement(statement, 'all', bindings) as TRow[]
+    const rows = statement.all(...bindings) as TRow[]
     return {
       rows,
       rowCount: rows.length,
@@ -131,7 +107,7 @@ export class SQLiteAdapter implements DriverAdapter {
     bindings: readonly unknown[] = [],
   ): Promise<DriverExecutionResult> {
     const statement = this.getDatabase().prepare(sql)
-    const result = this.invokeStatement(statement, 'run', bindings)
+    const result = statement.run(...bindings)
     return {
       affectedRows: result.changes,
       lastInsertId: typeof result.lastInsertRowid === 'bigint'
@@ -179,32 +155,6 @@ export class SQLiteAdapter implements DriverAdapter {
     }
 
     return name
-  }
-
-  private invokeStatement<
-    TMethod extends 'all' | 'run',
-  >(
-    statement: SQLiteStatementLike,
-    method: TMethod,
-    bindings: readonly unknown[],
-  ): ReturnType<SQLiteStatementLike[TMethod]> {
-    try {
-      return statement[method](...bindings) as ReturnType<SQLiteStatementLike[TMethod]>
-    } catch (error) {
-      if (bindings.length > 0 && this.isBindingArityError(error)) {
-        return statement[method](bindings as never) as ReturnType<SQLiteStatementLike[TMethod]>
-      }
-
-      throw error
-    }
-  }
-
-  private isBindingArityError(error: unknown): boolean {
-    return error instanceof RangeError
-      && (
-        error.message.includes('Too many parameter values were provided')
-        || error.message.includes('Too few parameter values were provided')
-      )
   }
 }
 

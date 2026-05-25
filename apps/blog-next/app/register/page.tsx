@@ -1,11 +1,11 @@
 'use client'
 
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 
 import { useForm } from '@holo-js/adapter-next/client'
 
 import { registerForm } from '@/lib/schemas/auth'
+import { registerAction } from './actions'
 
 const panelStyle = {
   display: 'grid',
@@ -18,18 +18,12 @@ const panelStyle = {
 } satisfies React.CSSProperties
 
 export default function RegisterPage() {
-  const router = useRouter()
   const form = useForm(registerForm, {
     csrf: true,
     validateOn: 'blur',
     initialValues: { name: '', email: '', password: '', passwordConfirmation: '' },
     async submitter({ formData }) {
-      const response = await fetch('/api/register', { method: 'POST', body: formData })
-      const submission = await response.json()
-      if (submission?.ok === true) {
-        router.replace('/login')
-      }
-      return submission
+      return await registerAction(formData)
     },
   })
 
@@ -92,13 +86,6 @@ export default function RegisterPage() {
           {form.submitting ? 'Creating account...' : 'Create account'}
         </button>
       </form>
-
-      {form.lastSubmission?.ok === true ? (
-        <div style={{ color: '#86efac', display: 'grid', gap: '0.5rem' }}>
-          <p style={{ margin: 0 }}>Account created. Check your inbox to verify your email address.</p>
-          <Link href="/login" style={{ color: '#7dd3fc' }}>Return to sign in</Link>
-        </div>
-      ) : null}
 
       <Link href="/login" style={{ color: '#7dd3fc' }}>Already have an account?</Link>
       <a href="/api/auth/workos/register" style={{ color: '#7dd3fc' }}>Register with WorkOS</a>

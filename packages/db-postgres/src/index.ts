@@ -1,36 +1,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { Pool, type PoolConfig, type QueryResult } from 'pg'
+import type {
+  DriverAdapter,
+  DriverExecutionResult,
+  DriverQueryResult,
+} from '@holo-js/db'
 
-export interface DriverQueryResult<TRow extends Record<string, unknown> = Record<string, unknown>> {
-  rows: TRow[]
-  rowCount: number
-}
-
-export interface DriverExecutionResult {
-  affectedRows?: number
-  lastInsertId?: number | string
-}
-
-export interface DriverAdapter {
-  initialize(): Promise<void>
-  disconnect(): Promise<void>
-  isConnected(): boolean
-  runWithTransactionScope?<T>(callback: () => Promise<T>): Promise<T>
-  query<TRow extends Record<string, unknown> = Record<string, unknown>>(
-    sql: string,
-    bindings?: readonly unknown[],
-  ): Promise<DriverQueryResult<TRow>>
-  execute(
-    sql: string,
-    bindings?: readonly unknown[],
-  ): Promise<DriverExecutionResult>
-  beginTransaction(): Promise<void>
-  commit(): Promise<void>
-  rollback(): Promise<void>
-  createSavepoint?(name: string): Promise<void>
-  rollbackToSavepoint?(name: string): Promise<void>
-  releaseSavepoint?(name: string): Promise<void>
-}
+export type { DriverAdapter, DriverExecutionResult, DriverQueryResult } from '@holo-js/db'
 
 class TransactionError extends Error {}
 

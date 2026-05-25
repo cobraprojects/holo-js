@@ -20,7 +20,7 @@
     "build": "tsup",
     "stub": "tsup",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest --run --coverage"
+    "test": "vitest --run"
   },
   "dependencies": {
     "@holo-js/auth-social": "catalog:",

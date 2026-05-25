@@ -16,7 +16,8 @@ import {
   type QueueAsyncDriver,
   type HoloQueueConfig,
 } from '@holo-js/queue'
-import { createQueueDbRuntimeOptions, queueDatabaseInternals } from '../../src'
+import { createQueueDbRuntimeOptions } from '../../src'
+import { quoteIdentifierPath } from '../../src/database'
 
 type SQLiteQueueHarnessOptions = {
   readonly createFailedTable?: boolean
@@ -112,7 +113,7 @@ export async function createSQLiteQueueHarness(
   }
 
   const readRows = async (path: string): Promise<readonly Record<string, unknown>[]> => {
-    const quotedTable = queueDatabaseInternals.quoteIdentifierPath(connection.getDialect(), path)
+    const quotedTable = quoteIdentifierPath(connection.getDialect(), path)
     const result = await connection.queryCompiled<Record<string, unknown>>({
       sql: `SELECT * FROM ${quotedTable} ORDER BY id ASC`,
       source: `test:queue:${path}:rows`,

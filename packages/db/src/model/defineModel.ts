@@ -83,6 +83,60 @@ type ModelTableBuilderResult<
 > = {
   build(): BoundTableDefinition<TName, TColumns>
 }
+type SharedModelDefinitionFields<
+  TTable extends TableDefinition,
+  TScopes extends ModelScopesDefinition,
+  TRelations extends RelationMap,
+> = Omit<
+  ModelDefinition<TTable, TScopes, TRelations>,
+  'table' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig'
+>
+
+function createSharedModelDefinitionFields<
+  TTable extends TableDefinition,
+  TScopes extends ModelScopesDefinition,
+  TRelations extends RelationMap,
+>(
+  inferredName: string,
+  relations: TRelations,
+  touches: readonly string[],
+  options: DefineModelOptions<TTable, TScopes, TRelations>,
+): SharedModelDefinitionFields<TTable, TScopes, TRelations> {
+  return {
+    kind: 'model',
+    name: inferredName,
+    connectionName: options.connectionName,
+    morphClass: options.morphClass ?? inferredName,
+    with: Object.freeze([...(options.with ?? [])]),
+    pendingAttributes: Object.freeze({ ...(options.pendingAttributes ?? {}) }),
+    preventLazyLoading: options.preventLazyLoading ?? false,
+    preventAccessingMissingAttributes: options.preventAccessingMissingAttributes ?? false,
+    automaticEagerLoading: options.automaticEagerLoading ?? false,
+    timestamps: options.timestamps ?? true,
+    fillable: Object.freeze([...(options.fillable ?? [])]),
+    hasExplicitFillable: typeof options.fillable !== 'undefined',
+    guarded: Object.freeze([...(options.guarded ?? [])]),
+    scopes: (options.scopes ?? {}) as TScopes,
+    globalScopes: { ...(options.globalScopes ?? {}) },
+    relations,
+    casts: { ...(options.casts ?? {}) },
+    accessors: { ...(options.accessors ?? {}) },
+    mutators: { ...(options.mutators ?? {}) },
+    hidden: Object.freeze([...(options.hidden ?? [])]),
+    visible: Object.freeze([...(options.visible ?? [])]),
+    appended: Object.freeze([...(options.appended ?? [])]),
+    serializeDate: options.serializeDate,
+    collection: options.collection,
+    prunable: options.prunable,
+    massPrunable: options.massPrunable ?? false,
+    touches,
+    traits: Object.freeze([...(options.traits ?? [])]),
+    replicationExcludes: Object.freeze([...(options.replicationExcludes ?? [])]),
+    softDeletes: options.softDeletes ?? false,
+    events: normalizeEventHandlers(options.events),
+    observers: Object.freeze([...(options.observers ?? [])]),
+  }
+}
 
 export function defineModel<
   TTable extends TableDefinition,
@@ -210,38 +264,7 @@ function defineModelFromGeneratedTableName<
   }
 
   const definition = {
-    kind: 'model' as const,
-    name: inferredName,
-    connectionName: options.connectionName,
-    morphClass: options.morphClass ?? inferredName,
-    with: Object.freeze([...(options.with ?? [])]),
-    pendingAttributes: Object.freeze({ ...(options.pendingAttributes ?? {}) }),
-    preventLazyLoading: options.preventLazyLoading ?? false,
-    preventAccessingMissingAttributes: options.preventAccessingMissingAttributes ?? false,
-    automaticEagerLoading: options.automaticEagerLoading ?? false,
-    timestamps: options.timestamps ?? true,
-    fillable: Object.freeze([...(options.fillable ?? [])]),
-    hasExplicitFillable: typeof options.fillable !== 'undefined',
-    guarded: Object.freeze([...(options.guarded ?? [])]),
-    scopes: (options.scopes ?? {}) as TScopes,
-    globalScopes: { ...(options.globalScopes ?? {}) },
-    relations,
-    casts: { ...(options.casts ?? {}) },
-    accessors: { ...(options.accessors ?? {}) },
-    mutators: { ...(options.mutators ?? {}) },
-    hidden: Object.freeze([...(options.hidden ?? [])]),
-    visible: Object.freeze([...(options.visible ?? [])]),
-    appended: Object.freeze([...(options.appended ?? [])]),
-    serializeDate: options.serializeDate,
-    collection: options.collection,
-    prunable: options.prunable,
-    massPrunable: options.massPrunable ?? false,
-    touches,
-    traits: Object.freeze([...(options.traits ?? [])]),
-    replicationExcludes: Object.freeze([...(options.replicationExcludes ?? [])]),
-    softDeletes: options.softDeletes ?? false,
-    events: normalizeEventHandlers(options.events),
-    observers: Object.freeze([...(options.observers ?? [])]),
+    ...createSharedModelDefinitionFields(inferredName, relations, touches, options),
   } as Omit<ModelDefinition<GeneratedSchemaTable<TName>, TScopes, TRelations>, 'table' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig'>
     & Pick<ModelDefinition<GeneratedSchemaTable<TName>, TScopes, TRelations>, 'table' | 'primaryKey' | 'createdAtColumn' | 'updatedAtColumn' | 'deletedAtColumn' | 'uniqueIdConfig'>
 
@@ -304,44 +327,13 @@ function defineModelFromResolvedTable<
   const touches = validateTouches(inferredName, relations, options.touches ?? [])
 
   const definition: ModelDefinition<TTable, TScopes, TRelations> = Object.freeze({
-    kind: 'model',
+    ...createSharedModelDefinitionFields(inferredName, relations, touches, options),
     table,
-    name: inferredName,
     primaryKey,
-    connectionName: options.connectionName,
-    morphClass: options.morphClass ?? inferredName,
-    with: Object.freeze([...(options.with ?? [])]),
-    pendingAttributes: Object.freeze({ ...(options.pendingAttributes ?? {}) }),
-    preventLazyLoading: options.preventLazyLoading ?? false,
-    preventAccessingMissingAttributes: options.preventAccessingMissingAttributes ?? false,
-    automaticEagerLoading: options.automaticEagerLoading ?? false,
-    timestamps,
     createdAtColumn,
     updatedAtColumn,
-    fillable: Object.freeze([...(options.fillable ?? [])]),
-    hasExplicitFillable: typeof options.fillable !== 'undefined',
-    guarded: Object.freeze([...(options.guarded ?? [])]),
-    scopes: (options.scopes ?? {}) as TScopes,
-    globalScopes: { ...(options.globalScopes ?? {}) },
-    relations,
-    casts: { ...(options.casts ?? {}) },
-    accessors: { ...(options.accessors ?? {}) },
-    mutators: { ...(options.mutators ?? {}) },
-    hidden: Object.freeze([...(options.hidden ?? [])]),
-    visible: Object.freeze([...(options.visible ?? [])]),
-    appended: Object.freeze([...(options.appended ?? [])]),
-    serializeDate: options.serializeDate,
-    collection: options.collection,
-    prunable: options.prunable,
-    massPrunable: options.massPrunable ?? false,
-    touches,
-    traits: Object.freeze([...(options.traits ?? [])]),
     uniqueIdConfig,
-    replicationExcludes: Object.freeze([...(options.replicationExcludes ?? [])]),
-    softDeletes: options.softDeletes ?? false,
     deletedAtColumn,
-    events: normalizeEventHandlers(options.events),
-    observers: Object.freeze([...(options.observers ?? [])]),
   })
 
   return createStaticModelApi(definition)

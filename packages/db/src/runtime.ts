@@ -41,6 +41,10 @@ export interface RuntimeConfigInput {
   db?: RuntimeDatabaseConfig
 }
 
+type RuntimeConnectionEntry = [string, RuntimeConnectionConfig | string]
+type RuntimeConnectionEntries = RuntimeConnectionEntry[]
+type NonEmptyRuntimeConnectionEntries = [RuntimeConnectionEntry, ...RuntimeConnectionEntry[]]
+
 const DEFAULT_RUNTIME_CONNECTION = Object.freeze({
   driver: 'sqlite' as const,
   url: './data/database.sqlite',
@@ -59,6 +63,12 @@ function normalizeConnectionInput(input: RuntimeConnectionConfig | string | unde
   }
 
   return input ?? {}
+}
+
+function hasRuntimeConnectionEntries(
+  entries: RuntimeConnectionEntries,
+): entries is NonEmptyRuntimeConnectionEntries {
+  return entries.length > 0
 }
 
 function inferDatabaseDriver(value: string | undefined): SupportedDatabaseDriver | undefined {
@@ -385,17 +395,7 @@ export function resolveRuntimeConnectionManagerOptions(
   const connections = topLevelDb?.connections ?? {}
   const connectionEntries = Object.entries(connections)
 
-  if (connectionEntries.length === 0) {
-    return createConnectionManager({
-      defaultConnection: 'default',
-      connections: {
-        default: resolveConnectionConfig('default', undefined),
-      },
-    })
-  }
-
-  const [firstConnectionEntry] = connectionEntries
-  if (!firstConnectionEntry) {
+  if (!hasRuntimeConnectionEntries(connectionEntries)) {
     return createConnectionManager({
       defaultConnection: 'default',
       connections: {
@@ -409,7 +409,7 @@ export function resolveRuntimeConnectionManagerOptions(
     ? configuredDefault
     : Object.hasOwn(connections, 'default')
       ? 'default'
-      : firstConnectionEntry[0]
+      : connectionEntries[0][0]
 
   const resolvedConnections = connectionEntries
     .map(([name, input]) => [

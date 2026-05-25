@@ -1,7 +1,6 @@
 import { createHash, createHmac } from 'node:crypto'
 
 type DriverValue = string | Uint8Array | ArrayBuffer
-type DriverHeaders = Record<string, string>
 
 export interface S3DriverOptions {
   accessKeyId?: string
@@ -27,12 +26,12 @@ function createDriverError(message: string): Error {
   return new Error(`[unstorage] [s3] ${message}`)
 }
 
-function normalizeKey(key = '', separator = ':'): string {
+function normalizeKey(key = ''): string {
   if (!key) {
     return ''
   }
 
-  return key.replace(/[:/\\]/g, separator).replace(/^[:/\\]|[:/\\]$/g, '')
+  return key.replace(/[:/\\]/g, '/').replace(/^[:/\\]|[:/\\]$/g, '')
 }
 
 function normalizeListPrefix(key = ''): string {
@@ -40,7 +39,7 @@ function normalizeListPrefix(key = ''): string {
     return ''
   }
 
-  const normalized = normalizeKey(key, '/')
+  const normalized = normalizeKey(key)
   if (!normalized) {
     return ''
   }
@@ -48,14 +47,18 @@ function normalizeListPrefix(key = ''): string {
   return /[:/\\]\s*$/.test(key) ? `${normalized}/` : normalized
 }
 
-function encodeRfc3986(value: string): string {
-  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => {
+function encodeRfc3986ExtraCharacters(value: string): string {
+  return value.replace(/[!'()*]/g, (character) => {
     return `%${character.charCodeAt(0).toString(16).toUpperCase()}`
   })
 }
 
+function encodeRfc3986(value: string): string {
+  return encodeRfc3986ExtraCharacters(encodeURIComponent(value))
+}
+
 function encodeObjectKey(key = ''): string {
-  const normalized = normalizeKey(key, '/')
+  const normalized = normalizeKey(key)
   if (!normalized) {
     return ''
   }
@@ -74,9 +77,7 @@ function encodeObjectKey(key = ''): string {
 }
 
 function canonicalizeUriPath(pathname: string): string {
-  return pathname.replace(/[!'()*]/g, (character) => {
-    return `%${character.charCodeAt(0).toString(16).toUpperCase()}`
-  })
+  return encodeRfc3986ExtraCharacters(pathname)
 }
 
 function appendPath(basePath: string, encodedPath?: string): string {
@@ -171,7 +172,6 @@ function createSignedRequest(
   method: string,
   url: URL,
   body?: DriverValue,
-  initHeaders?: DriverHeaders,
 ): Request {
   const now = new Date()
   const amzDate = formatAmzDate(now)
@@ -179,7 +179,7 @@ function createSignedRequest(
   const payloadBytes = toBodyBytes(body)
   const payloadHash = sha256Hex(payloadBytes ?? '')
   const credentialScope = `${scopeDate}/${options.region}/s3/aws4_request`
-  const headers = new Headers(initHeaders)
+  const headers = new Headers()
 
   headers.set('host', url.host)
   headers.set('x-amz-content-sha256', payloadHash)
@@ -328,9 +328,8 @@ async function s3Fetch(
   method: string,
   url: URL,
   body?: DriverValue,
-  headers?: DriverHeaders,
 ): Promise<Response | null> {
-  const request = createSignedRequest(options, method, url, body, headers)
+  const request = createSignedRequest(options, method, url, body)
   const response = await fetch(request)
 
   if (response.status === 404) {

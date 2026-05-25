@@ -88,6 +88,8 @@ type AggregateLoad = {
 type RelationConstraintMap<TRelations extends RelationMap> = Readonly<
   Partial<Record<ModelRelationPath<TRelations>, RelationConstraint>>
 >
+type TableQueryPredicates<TTable extends TableDefinition> =
+  ReturnType<TableQueryBuilder<TTable, Record<string, unknown>>['getPlan']>['predicates']
 
 export class ModelQueryBuilder<
   TTable extends TableDefinition = TableDefinition,
@@ -115,6 +117,37 @@ export class ModelQueryBuilder<
     return this.tableQuery
   }
 
+  private collectNestedPredicates(
+    callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded>>,
+  ): TableQueryPredicates<TTable> {
+    const nested = new ModelQueryBuilder<TTable, TRelations, TLoaded>(
+      this.repository,
+      new TableQueryBuilder(this.repository.definition.table, this.getConnection()),
+    )
+    const callbackResult = callback(nested)
+    const result = callbackResult instanceof ModelQueryBuilder ? callbackResult : nested
+    return result.getTableQueryBuilder().getPlan().predicates
+  }
+
+  private replayNestedPredicates(
+    query: TableQueryBuilder<TTable, Record<string, unknown>>,
+    predicates: TableQueryPredicates<TTable>,
+  ): TableQueryBuilder<TTable, Record<string, unknown>> {
+    let next = query
+    for (const predicate of predicates) {
+      next = new TableQueryBuilder(
+        this.repository.definition.table,
+        this.getConnection(),
+        {
+          ...next.getPlan(),
+          predicates: Object.freeze([...next.getPlan().predicates, predicate]),
+        },
+      )
+    }
+
+    return next
+  }
+
   from(table: string): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     return this.clone(this.tableQuery.from(table) as unknown as TableQueryBuilder<TTable, Record<string, unknown>>)
   }
@@ -129,31 +162,12 @@ export class ModelQueryBuilder<
     value?: unknown,
   ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     if (typeof columnOrCallback === 'function') {
-      const nested = new ModelQueryBuilder<TTable, TRelations, TLoaded>(
-        this.repository,
-        new TableQueryBuilder(this.repository.definition.table, this.getConnection()),
-      )
-      const callbackResult = columnOrCallback(nested)
-      const result = callbackResult instanceof ModelQueryBuilder ? callbackResult : nested
-      const predicates = result.getTableQueryBuilder().getPlan().predicates
+      const predicates = this.collectNestedPredicates(columnOrCallback)
       if (predicates.length === 0) {
         return this
       }
 
-      return this.clone(this.tableQuery.where((query) => {
-        let next = query
-        for (const predicate of predicates) {
-          next = new TableQueryBuilder(
-            this.repository.definition.table,
-            this.getConnection(),
-            {
-              ...next.getPlan(),
-              predicates: Object.freeze([...next.getPlan().predicates, predicate]),
-            },
-          )
-        }
-        return next
-      }))
+      return this.clone(this.tableQuery.where(query => this.replayNestedPredicates(query, predicates)))
     }
 
     return this.clone(this.tableQuery.where(columnOrCallback as never, operator, value))
@@ -169,31 +183,12 @@ export class ModelQueryBuilder<
     value?: unknown,
   ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
     if (typeof columnOrCallback === 'function') {
-      const nested = new ModelQueryBuilder<TTable, TRelations, TLoaded>(
-        this.repository,
-        new TableQueryBuilder(this.repository.definition.table, this.getConnection()),
-      )
-      const callbackResult = columnOrCallback(nested)
-      const result = callbackResult instanceof ModelQueryBuilder ? callbackResult : nested
-      const predicates = result.getTableQueryBuilder().getPlan().predicates
+      const predicates = this.collectNestedPredicates(columnOrCallback)
       if (predicates.length === 0) {
         return this
       }
 
-      return this.clone(this.tableQuery.orWhere((query) => {
-        let next = query
-        for (const predicate of predicates) {
-          next = new TableQueryBuilder(
-            this.repository.definition.table,
-            this.getConnection(),
-            {
-              ...next.getPlan(),
-              predicates: Object.freeze([...next.getPlan().predicates, predicate]),
-            },
-          )
-        }
-        return next
-      }))
+      return this.clone(this.tableQuery.orWhere(query => this.replayNestedPredicates(query, predicates)))
     }
 
     return this.clone(this.tableQuery.orWhere(columnOrCallback as never, operator, value))
@@ -202,61 +197,23 @@ export class ModelQueryBuilder<
   whereNot(
     callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded>>,
   ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
-    const nested = new ModelQueryBuilder<TTable, TRelations, TLoaded>(
-      this.repository,
-      new TableQueryBuilder(this.repository.definition.table, this.getConnection()),
-    )
-    const callbackResult = callback(nested)
-    const result = callbackResult instanceof ModelQueryBuilder ? callbackResult : nested
-    const predicates = result.getTableQueryBuilder().getPlan().predicates
+    const predicates = this.collectNestedPredicates(callback)
     if (predicates.length === 0) {
       return this
     }
 
-    return this.clone(this.tableQuery.whereNot((query) => {
-      let next = query
-      for (const predicate of predicates) {
-        next = new TableQueryBuilder(
-          this.repository.definition.table,
-          this.getConnection(),
-          {
-            ...next.getPlan(),
-            predicates: Object.freeze([...next.getPlan().predicates, predicate]),
-          },
-        )
-      }
-      return next
-    }))
+    return this.clone(this.tableQuery.whereNot(query => this.replayNestedPredicates(query, predicates)))
   }
 
   orWhereNot(
     callback: BuilderCallback<ModelQueryBuilder<TTable, TRelations, TLoaded>>,
   ): ModelQueryBuilder<TTable, TRelations, TLoaded> {
-    const nested = new ModelQueryBuilder<TTable, TRelations, TLoaded>(
-      this.repository,
-      new TableQueryBuilder(this.repository.definition.table, this.getConnection()),
-    )
-    const callbackResult = callback(nested)
-    const result = callbackResult instanceof ModelQueryBuilder ? callbackResult : nested
-    const predicates = result.getTableQueryBuilder().getPlan().predicates
+    const predicates = this.collectNestedPredicates(callback)
     if (predicates.length === 0) {
       return this
     }
 
-    return this.clone(this.tableQuery.orWhereNot((query) => {
-      let next = query
-      for (const predicate of predicates) {
-        next = new TableQueryBuilder(
-          this.repository.definition.table,
-          this.getConnection(),
-          {
-            ...next.getPlan(),
-            predicates: Object.freeze([...next.getPlan().predicates, predicate]),
-          },
-        )
-      }
-      return next
-    }))
+    return this.clone(this.tableQuery.orWhereNot(query => this.replayNestedPredicates(query, predicates)))
   }
 
   whereExists<TSubTable extends TableDefinition>(

@@ -251,38 +251,29 @@ async function assertResetPasswordApiValidation(devUrl) {
   assertFieldFailure(invalidSubmission, ['token', 'password', 'passwordConfirmation'])
 }
 
-async function assertSuperAdminLogoutStillNavigatesAfterInvalidationFailure() {
+async function assertSuperAdminLogoutUsesServerActionForm() {
   const source = await readFile(join(cwd, 'src/routes/super-admin/+page.svelte'), 'utf8')
-  const invalidationWarning = "console.warn('Super admin auth invalidation failed after logout.', error)"
-  const navigation = "await goto('/super-admin/login')"
 
   assert.ok(
-    source.includes(invalidationWarning),
-    'Expected super-admin logout to treat post-logout auth invalidation failures as non-blocking.',
+    source.includes('<form method="post">'),
+    'Expected super-admin logout to use the page action form.',
   )
   assert.ok(
-    source.indexOf(navigation) > source.indexOf(invalidationWarning),
-    'Expected super-admin logout to navigate after the best-effort auth invalidation.',
+    source.includes('<button type="submit">Sign out of super admin</button>'),
+    'Expected super-admin logout to submit through the server action.',
   )
 }
 
-async function assertHeaderLogoutTreatsRefreshFailureAsNonBlocking() {
+async function assertHeaderLogoutUsesServerRedirectForm() {
   const source = await readFile(join(cwd, 'src/routes/+layout.svelte'), 'utf8')
-  const refreshWarning = "console.warn('Auth refresh failed after logout.', error)"
-  const invalidation = 'await invalidateAll()'
-  const requestFailureWarning = "console.warn('Logout failed.', error)"
 
   assert.ok(
-    source.includes(refreshWarning),
-    'Expected header logout to treat post-logout auth refresh failures as non-blocking.',
+    source.includes('<form action="/logout" method="post" class="logout-form">'),
+    'Expected header logout to post to the server redirect route.',
   )
   assert.ok(
-    source.indexOf(invalidation) > source.indexOf(refreshWarning),
-    'Expected header logout to invalidate auth state after the best-effort auth refresh.',
-  )
-  assert.ok(
-    source.indexOf(requestFailureWarning) > source.indexOf(invalidation),
-    'Expected header logout to distinguish post-logout auth refresh failures from logout request failures.',
+    source.includes('<button type="submit" class="logout-button">Logout</button>'),
+    'Expected header logout to submit through a native form.',
   )
 }
 
@@ -377,9 +368,9 @@ function killChildTree() {
 try {
   await rm(join(cwd, '.svelte-kit'), { recursive: true, force: true })
   await rm(join(cwd, 'build'), { recursive: true, force: true })
-  await assertSuperAdminLogoutStillNavigatesAfterInvalidationFailure()
-  await assertHeaderLogoutTreatsRefreshFailureAsNonBlocking()
-  await run('npx', ['vitest', '--run', 'tests/register-route.test.mjs', '--reporter=json'])
+  await assertSuperAdminLogoutUsesServerActionForm()
+  await assertHeaderLogoutUsesServerRedirectForm()
+  await run('npx', ['vitest', '--run', 'tests/auth-page-actions.test.mjs', '--reporter=json'])
   await run('bun', ['run', 'prepare'])
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await run('npx', ['tsx', 'tests/blog-logic.mjs'])
@@ -407,6 +398,7 @@ try {
     getOutput: () => capturedOutput,
     appName: 'blog-sveltekit',
     sessionCookieName: DEFAULT_SESSION_COOKIE_NAME,
+    authSubmissionMode: 'sveltekit-actions',
     loginRequiresCsrf: true,
   })
   await assertExampleAppTokenAuthFlow({

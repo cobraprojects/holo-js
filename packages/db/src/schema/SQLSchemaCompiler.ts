@@ -1,5 +1,6 @@
 import { SchemaError } from '../core/errors'
-import { assertValidIdentifierPath, assertValidIdentifierSegment, sanitizeIdentifierForGeneratedName } from './identifiers'
+import { assertValidIdentifierPath, assertValidIdentifierSegment } from './identifiers'
+import { resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
 import type { AnyColumnDefinition, TableDefinition, TableIndexDefinition } from './types'
 import type { DDLOperation, DDLStatement } from './ddl'
 
@@ -316,15 +317,11 @@ export abstract class SQLSchemaCompiler {
   }
 
   protected resolveIndexName(tableName: string, index: TableIndexDefinition): string {
-    const indexName = index.name ?? `${sanitizeIdentifierForGeneratedName(tableName)}_${index.columns.join('_')}_${index.unique ? 'unique' : 'index'}`
-    assertValidIdentifierSegment(indexName, 'Index name')
-    return indexName
+    return resolveGeneratedIndexName(tableName, index)
   }
 
   protected resolveForeignKeyName(tableName: string, columnName: string, constraintName?: string): string {
-    const resolvedName = constraintName ?? `${sanitizeIdentifierForGeneratedName(tableName)}_${columnName}_foreign`
-    assertValidIdentifierSegment(resolvedName, 'Foreign key name')
-    return resolvedName
+    return resolveGeneratedForeignKeyName(tableName, columnName, constraintName)
   }
 
   protected assertSupportedAlterColumnDefinition(column: AnyColumnDefinition): void {

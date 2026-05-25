@@ -32,7 +32,7 @@ export function redactBindings(
     return limited.map(() => '[REDACTED]')
   }
 
-  return [...limited]
+  return limited
 }
 
 export function redactSql(

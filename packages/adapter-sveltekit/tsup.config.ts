@@ -13,7 +13,7 @@ export default defineConfig({
   clean: true,
   outDir,
   outExtension: () => ({ js: '.mjs' }),
-  external: ['svelte/reactivity'],
+  external: ['$app/stores', 'svelte/reactivity', 'svelte/store'],
   esbuildOptions(options) {
     options.logLevel = 'warning'
   },

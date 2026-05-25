@@ -1,114 +1,81 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { field, schema } from '@holo-js/forms'
 
-const subscriberCleanups: Array<() => void> = []
+import { useForm } from '../src/client'
+import { setPageForm } from './stubs/app-stores'
 
-function cleanupSubscribers(): void {
-  for (const cleanup of subscriberCleanups.splice(0)) {
-    cleanup()
-  }
+async function waitForActionHydration(): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, 0))
+  await new Promise<void>(resolve => queueMicrotask(() => resolve()))
 }
 
-vi.mock('svelte/reactivity', () => ({
-  createSubscriber(start: (update: () => void) => void | (() => void)) {
-    let initialized = false
-
-    return () => {
-      if (!initialized) {
-        const cleanup = start(() => {})
-        if (cleanup) {
-          subscriberCleanups.push(cleanup)
-        }
-        initialized = true
-      }
-    }
-  },
-}))
-
-describe('@holo-js/adapter-sveltekit client', () => {
+describe('@holo-js/adapter-sveltekit client forms', () => {
   afterEach(() => {
-    cleanupSubscribers()
-    vi.resetModules()
-    vi.clearAllMocks()
-    vi.doUnmock('svelte')
+    vi.unstubAllGlobals()
+    setPageForm(null)
   })
 
-  it('wraps the shared form client with a Svelte reactive subscriber bridge', async () => {
-    const { useForm } = await import('../src/client')
-    const login = schema({
+  it('hydrates matching SvelteKit page action failures without userland initialState wiring', async () => {
+    vi.stubGlobal('window', {})
+    const loginForm = schema({
       email: field.string().required().email(),
+      password: field.password().required(),
     })
 
-    const form = useForm(login, {
-      initialValues: {
-        email: 'ava@example.com',
+    setPageForm({
+      ok: false,
+      status: 422,
+      valid: false,
+      values: {
+        email: 'bad-email',
+      },
+      errors: {
+        email: ['Enter a valid email address.'],
       },
     })
 
-    expect(form.fields.email).toBe(form.fields.email)
-    expect(form.fields.email.value).toBe('ava@example.com')
-    form.fields.email.value = 'broken'
-    await form.fields.email.onInput('ava@example.com')
-    expect(form.values.email).toBe('ava@example.com')
+    const login = useForm(loginForm, {
+      initialValues: {
+        email: '',
+        password: '',
+      },
+    })
+
+    await waitForActionHydration()
+
+    expect(login.values.email).toBe('bad-email')
+    expect(login.errors.first('email')).toBe('Enter a valid email address.')
   })
 
-  it('exposes nested keys that are added after the wrapper is created', async () => {
-    const { useForm } = await import('../src/client')
-    const login = schema({
-      profile: {
-        city: field.string().required(),
-      },
-    })
-
-    const form = useForm(login, {
-      initialValues: {
-        profile: {
-          city: 'Cairo',
-        },
-      },
-    })
-
-    void form.values.profile
-    await form.setValue('profile.country.code', 'EG')
-
-    expect((form.values.profile as Record<string, unknown>).country).toEqual({
-      code: 'EG',
-    })
-  })
-
-  it('returns undefined descriptors for missing proxy keys', async () => {
-    const { useForm } = await import('../src/client')
-    const login = schema({
+  it('ignores action failures that belong to a different schema', async () => {
+    vi.stubGlobal('window', {})
+    const loginForm = schema({
       email: field.string().required().email(),
+      password: field.password().required(),
     })
 
-    const form = useForm(login, {
-      initialValues: {
-        email: 'ava@example.com',
+    setPageForm({
+      ok: false,
+      status: 422,
+      valid: false,
+      values: {
+        title: '',
+      },
+      errors: {
+        title: ['Title is required.'],
       },
     })
 
-    expect(Object.getOwnPropertyDescriptor(form, 'missing')).toBeUndefined()
-  })
-
-  it('preserves array and date values as native objects through the proxy', async () => {
-    const { useForm } = await import('../src/client')
-    const publishPost = schema({
-      publishedAt: field.date().required(),
-      tags: field.array(field.string().required()).optional(),
-    })
-
-    const publishedAt = new Date('2026-04-05T00:00:00.000Z')
-    const form = useForm(publishPost, {
+    const login = useForm(loginForm, {
       initialValues: {
-        publishedAt,
-        tags: ['news'],
+        email: '',
+        password: '',
       },
     })
 
-    expect(form.values.publishedAt).toBeInstanceOf(Date)
-    expect(form.values.publishedAt.getTime()).toBe(publishedAt.getTime())
-    expect(Array.isArray(form.values.tags)).toBe(true)
-    expect(form.values.tags).toEqual(['news'])
+    await waitForActionHydration()
+
+    expect(login.values.email).toBe('')
+    expect(login.errors.has('title')).toBe(false)
   })
 })

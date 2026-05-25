@@ -82,11 +82,11 @@ export function useConfig<TKey extends Extract<keyof RuntimeConfigMap, string>>(
 export function useConfig<TPath extends DotPath<RuntimeConfigMap>>(path: TPath): ValueAtPath<RuntimeConfigMap, TPath>
 export function useConfig(path: string): unknown
 export function useConfig(path: string): unknown {
-  return createConfigAccessors(requireConfigRuntime()).useConfig(path)
+  return getValueAtPath(requireConfigRuntime() as Record<string, unknown>, path)
 }
 
 export function config<TPath extends DotPath<RuntimeConfigMap>>(path: TPath): ValueAtPath<RuntimeConfigMap, TPath>
 export function config(path: string): unknown
 export function config(path: string): unknown {
-  return createConfigAccessors(requireConfigRuntime()).config(path)
+  return getValueAtPath(requireConfigRuntime() as Record<string, unknown>, path)
 }

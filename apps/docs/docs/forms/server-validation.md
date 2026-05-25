@@ -72,6 +72,7 @@ export default defineEventHandler(async (event) => {
 ```
 
 ```ts [SvelteKit — src/routes/login/+page.server.ts]
+import { fail } from '@sveltejs/kit'
 import { field, schema, validate } from '@holo-js/forms'
 
 const loginForm = schema({
@@ -89,7 +90,8 @@ export const actions = {
     })
 
     if (!submission.valid) {
-      return submission.fail()
+      const failure = submission.fail()
+      return fail(failure.status, failure)
     }
 
     return submission.success({
@@ -195,79 +197,102 @@ export const createPost = command(createPostSchema, async (data) => {
 
 ### Using `useForm(...)` in SvelteKit
 
-If you prefer the Holo client form helper over SvelteKit's native form binding, it works the same way as
-in other frameworks:
+When a SvelteKit page action returns `fail(...)`, the SvelteKit adapter reads the native action result
+and applies the returned values and errors to `useForm(...)`:
 
 ```svelte
 <!-- src/routes/register/+page.svelte -->
 <script lang="ts">
   import { useForm } from '@holo-js/adapter-sveltekit/client'
   import { registerUser } from '$lib/schemas/register'
+  import type { PageData } from './$types'
 
-  const form = useForm(registerUser, {
+  export let data: PageData
+
+  const register = useForm(registerUser, {
     validateOn: 'blur',
-    csrf: true,
     initialValues: { name: '', email: '', password: '', passwordConfirmation: '' },
-    async submitter({ formData }) {
-      const response = await fetch('/api/register', { method: 'POST', body: formData })
-      return await response.json()
-    },
   })
 </script>
 
-<form onsubmit={(e) => { e.preventDefault(); form.submit() }}>
+<form method="post">
+  <input type="hidden" name={data.csrf.name} value={data.csrf.value} />
   <input
     name="name"
-    value={form.values.name}
-    oninput={(event) => form.fields.name.onInput(event.currentTarget.value)}
-    onblur={() => form.fields.name.onBlur()}
+    value={register.values.name}
+    oninput={(event) => register.fields.name.onInput(event.currentTarget.value)}
+    onblur={() => register.fields.name.onBlur()}
   />
-  {#if form.errors.has('name')}
-    <p>{form.errors.first('name')}</p>
+  {#if register.errors.has('name')}
+    <p>{register.errors.first('name')}</p>
   {/if}
 
   <input
     name="email"
-    value={form.values.email}
-    oninput={(event) => form.fields.email.onInput(event.currentTarget.value)}
-    onblur={() => form.fields.email.onBlur()}
+    value={register.values.email}
+    oninput={(event) => register.fields.email.onInput(event.currentTarget.value)}
+    onblur={() => register.fields.email.onBlur()}
   />
-  {#if form.errors.has('email')}
-    <p>{form.errors.first('email')}</p>
+  {#if register.errors.has('email')}
+    <p>{register.errors.first('email')}</p>
   {/if}
 
-  <button disabled={form.submitting}>
-    {form.submitting ? 'Creating account...' : 'Create account'}
+  <button disabled={register.submitting}>
+    {register.submitting ? 'Creating account...' : 'Create account'}
   </button>
 </form>
 ```
 
-## Full page flow
+## Full-page flow
 
-These examples show the real failure and success handling path using `useForm(...)`.
+These examples show the recommended auth form flow. Next.js keeps the redirect in a server action,
+SvelteKit keeps the redirect in a page action, and Nuxt submits to an API route before refreshing the
+current user and navigating to the returned redirect target.
 
 ::: code-group
+
+```ts [Next.js — app/login/actions.ts]
+'use server'
+
+import { login } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { revalidatePath } from 'next/cache'
+import { redirect } from 'next/navigation'
+import { loginForm } from '@/lib/schemas/login'
+
+export async function loginAction(formData: FormData) {
+  const submission = await validate(formData, loginForm, {
+    csrf: true,
+    throttle: 'login',
+  })
+
+  if (!submission.valid) {
+    return submission.fail()
+  }
+
+  const { data: session, error } = await login(submission.data)
+  if (error) {
+    return submission.fail({ status: error.status, errors: error.fields })
+  }
+
+  revalidatePath('/', 'layout')
+  redirect(session.emailVerificationRequired ? session.emailVerificationRoute ?? '/verify-email' : '/admin')
+}
+```
 
 ```tsx [Next.js — app/login/page.tsx]
 'use client'
 
-import { useAuth } from '@holo-js/auth/next/client'
 import { useForm } from '@holo-js/adapter-next/client'
 import { loginForm } from '@/lib/schemas/login'
+import { loginAction } from './actions'
 
 export default function LoginPage() {
-  const auth = useAuth()
   const form = useForm(loginForm, {
     csrf: true,
     initialValues: { email: '', password: '', remember: false },
     async submitter({ formData }) {
-      const response = await fetch('/api/login', { method: 'POST', body: formData })
-      const submission = await response.json()
-      if (submission?.ok === true) {
-        await auth.refreshUser()
-      }
-
-      return submission
+      return await loginAction(formData)
     },
   })
 
@@ -305,7 +330,6 @@ export default function LoginPage() {
         {form.submitting ? 'Signing in...' : 'Sign in'}
       </button>
 
-      {form.lastSubmission?.ok === true ? <p>{form.lastSubmission.data.message}</p> : null}
     </form>
   )
 }
@@ -323,8 +347,11 @@ const form = useForm(loginForm, {
   initialValues: { email: '', password: '', remember: false },
   async submitter({ formData }) {
     const submission = await $fetch('/api/login', { method: 'POST', body: formData })
-    if (submission?.ok === true) {
+    if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
       await refreshUser()
+      await navigateTo(submission.data.redirectTo, {
+        external: true,
+      })
     }
 
     return submission
@@ -354,102 +381,72 @@ const form = useForm(loginForm, {
 </template>
 ```
 
-```svelte [SvelteKit — src/routes/login/+page.svelte (useForm client)]
-<script lang="ts">
-  import { useAuth } from '@holo-js/auth/sveltekit/client'
-  import { useForm } from '@holo-js/adapter-sveltekit/client'
-  import { loginForm } from '$lib/schemas/login'
-
-  const auth = useAuth()
-  const form = useForm(loginForm, {
-    csrf: true,
-    initialValues: { email: '', password: '', remember: false },
-    async submitter({ formData }) {
-      const response = await fetch('/api/login', { method: 'POST', body: formData })
-      const submission = await response.json()
-      if (submission?.ok === true) {
-        await auth.refreshUser()
-      }
-
-      return submission
-    },
-  })
-</script>
-
-<form onsubmit={(event) => { event.preventDefault(); void form.submit() }}>
-  <input
-    name="email"
-    type="email"
-    value={form.values.email}
-    oninput={(event) => form.fields.email.onInput(event.currentTarget.value)}
-    onblur={() => form.fields.email.onBlur()}
-  />
-  {#if form.errors.has('email')}
-    <p>{form.errors.first('email')}</p>
-  {/if}
-
-  <input
-    name="password"
-    type="password"
-    value={form.values.password}
-    oninput={(event) => form.fields.password.onInput(event.currentTarget.value)}
-    onblur={() => form.fields.password.onBlur()}
-  />
-  {#if form.errors.has('password')}
-    <p>{form.errors.first('password')}</p>
-  {/if}
-
-  <label>
-    <input
-      name="remember"
-      type="checkbox"
-      checked={form.values.remember}
-      onchange={(event) => form.fields.remember.onInput(event.currentTarget.checked)}
-    />
-    Remember me
-  </label>
-
-  <button type="submit" disabled={form.submitting}>
-    {form.submitting ? 'Signing in...' : 'Sign in'}
-  </button>
-
-  {#if form.lastSubmission?.ok === true}
-    <p>{form.lastSubmission.data.message}</p>
-  {/if}
-</form>
-```
-
 Bind displayed values from `form.values.*` across frameworks and keep `form.fields.*` for field lifecycle helpers.
 `form.fields.email.onBlur()` is the blur-validation hook when `validateOn: 'blur'` is enabled, while touched
 state can also be set during input and value updates through helpers like `form.fields.email.onInput(...)`
 and `form.setValue(...)`.
 
-```svelte [SvelteKit — src/routes/login/+page.svelte (form actions)]
+```ts [SvelteKit — src/routes/login/+page.server.ts]
+import { fail, redirect } from '@sveltejs/kit'
+import { login } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
+import { loginForm } from '$lib/schemas/login'
+
+export const actions = {
+  default: async ({ request }) => {
+    const submission = await validate(request, loginForm, {
+      csrf: true,
+      throttle: 'login',
+    })
+
+    if (!submission.valid) {
+      const failure = submission.fail()
+      return fail(failure.status, failure)
+    }
+
+    const { data: session, error } = await login(submission.data)
+    if (error) {
+      const failure = submission.fail({ status: error.status, errors: error.fields })
+      return fail(failure.status, failure)
+    }
+
+    redirect(303, session.emailVerificationRequired ? session.emailVerificationRoute ?? '/verify-email' : '/admin')
+  },
+}
+```
+
+```svelte [SvelteKit — src/routes/login/+page.svelte]
 <script lang="ts">
-  let { form } = $props()
+  import { useForm } from '@holo-js/adapter-sveltekit/client'
+  import { loginForm } from '$lib/schemas/login'
+  import type { PageData } from './$types'
+
+  export let data: PageData
+
+  const login = useForm(loginForm, {
+    initialValues: { email: '', password: '', remember: false },
+  })
 </script>
 
-<form method="POST">
-  <input name="email" type="email" value={form?.values?.email ?? ''} />
-  {#if form?.errors?.email?.[0]}
-    <p>{form.errors.email[0]}</p>
+<form method="post">
+  <input type="hidden" name={data.csrf.name} value={data.csrf.value} />
+
+  <input name="email" type="email" value={login.values.email} on:input={(event) => login.fields.email.onInput(event.currentTarget.value)} />
+  {#if login.errors.has('email')}
+    <p>{login.errors.first('email')}</p>
   {/if}
 
-  <input name="password" type="password" />
-  {#if form?.errors?.password?.[0]}
-    <p>{form.errors.password[0]}</p>
+  <input name="password" type="password" value={login.values.password} on:input={(event) => login.fields.password.onInput(event.currentTarget.value)} />
+  {#if login.errors.has('password')}
+    <p>{login.errors.first('password')}</p>
   {/if}
 
   <label>
-    <input name="remember" type="checkbox" value="true" checked={form?.values?.remember ?? false} />
+    <input name="remember" type="checkbox" checked={login.values.remember} on:change={(event) => login.fields.remember.onInput(event.currentTarget.checked)} />
     Remember me
   </label>
 
-  <button type="submit">Sign in</button>
-
-  {#if form?.ok === true}
-    <p>{form.data.message}</p>
-  {/if}
+  <button type="submit" disabled={login.submitting}>Sign in</button>
 </form>
 ```
 
@@ -565,6 +562,7 @@ export default defineEventHandler(async (event) => {
 ```
 
 ```ts [SvelteKit — src/routes/register/+page.server.ts]
+import { fail, redirect } from '@sveltejs/kit'
 import { field, schema, validate } from '@holo-js/forms'
 
 const registerUser = schema({
@@ -582,12 +580,13 @@ export const actions = {
     })
 
     if (!submission.valid) {
-      return submission.fail()
+      const failure = submission.fail()
+      return fail(failure.status, failure)
     }
 
     await auth.register(submission.data)
 
-    return submission.success({ message: 'Account created.' })
+    redirect(303, '/admin')
   },
 }
 ```
@@ -660,6 +659,7 @@ export default defineEventHandler(async (event) => {
 ```
 
 ```ts [SvelteKit — src/routes/avatar/+page.server.ts]
+import { fail } from '@sveltejs/kit'
 import { field, schema, validate } from '@holo-js/forms'
 
 const uploadAvatar = schema({
@@ -671,7 +671,8 @@ export const actions = {
     const submission = await validate(request, uploadAvatar)
 
     if (!submission.valid) {
-      return submission.fail()
+      const failure = submission.fail()
+      return fail(failure.status, failure)
     }
 
     await media.store(submission.data.avatar)

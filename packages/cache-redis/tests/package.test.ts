@@ -1,225 +1,72 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const redisMock = vi.hoisted(() => {
-  const state = new Map<string, { value: string, expiresAt?: number }>()
-  const lockOwners = new Map<string, string>()
-  const calls = {
-    constructorArgs: [] as unknown[][],
-    del: [] as string[][],
-    disconnect: [] as true[],
-    eval: [] as Array<[string, number, ...string[]]>,
-    get: [] as string[],
-    incrby: [] as Array<[string, number]>,
-    scan: [] as Array<[string, string, string, string, number]>,
-    set: [] as Array<[string, string, ...(string | number)[]]>,
-  }
-
-  function resolveExpiresAt(arguments_: readonly (string | number)[], now: number): number | undefined {
-    const pxAtIndex = arguments_.findIndex(argument_ => argument_ === 'PXAT')
-    if (pxAtIndex >= 0) {
-      const expiresAt = arguments_[pxAtIndex + 1]
-      return typeof expiresAt === 'number' ? expiresAt : undefined
-    }
-
-    const pxIndex = arguments_.findIndex(argument_ => argument_ === 'PX')
-    if (pxIndex >= 0) {
-      const ttlMilliseconds = arguments_[pxIndex + 1]
-      return typeof ttlMilliseconds === 'number' ? now + ttlMilliseconds : undefined
-    }
-
-    return undefined
-  }
-
-  function hasNx(arguments_: readonly (string | number)[]): boolean {
-    return arguments_.includes('NX')
-  }
-
-  function isExpired(key: string, now: number): boolean {
-    const entry = state.get(key)
-    if (!entry || typeof entry.expiresAt === 'undefined' || entry.expiresAt > now) {
-      return false
-    }
-
-    state.delete(key)
-    return true
-  }
-
-  class FakeRedis {
-    static Cluster = class FakeRedisCluster {
-      readonly isCluster = true
-
-      constructor(...args: unknown[]) {
-        calls.constructorArgs.push(args)
-      }
-
-      async get(key: string): Promise<string | null> {
-        return new FakeRedis().get(key)
-      }
-
-      async set(key: string, value: string, ...arguments_: readonly (string | number)[]): Promise<'OK' | null> {
-        return new FakeRedis().set(key, value, ...arguments_)
-      }
-
-      async del(...keys: string[]): Promise<number> {
-        return new FakeRedis().del(...keys)
-      }
-
-      async scan(
-        cursor: string,
-        matchLabel: string,
-        pattern: string,
-        countLabel: string,
-        count: number,
-      ): Promise<[string, string[]]> {
-        return new FakeRedis().scan(cursor, matchLabel, pattern, countLabel, count)
-      }
-
-      async incrby(key: string, amount: number): Promise<number> {
-        return new FakeRedis().incrby(key, amount)
-      }
-
-      async decrby(key: string, amount: number): Promise<number> {
-        return new FakeRedis().decrby(key, amount)
-      }
-
-      async eval(script: string, numberOfKeys: number, ...arguments_: readonly string[]): Promise<number> {
-        return new FakeRedis().eval(script, numberOfKeys, ...arguments_)
-      }
-
-      disconnect(): void {
-        calls.disconnect.push(true)
-      }
-
-      nodes(): readonly FakeRedis[] {
-        return [new FakeRedis(), new FakeRedis()]
-      }
-    }
-
-    constructor(...args: unknown[]) {
-      calls.constructorArgs.push(args)
-    }
-
-    disconnect(): void {
-      calls.disconnect.push(true)
-    }
-
-    async get(key: string): Promise<string | null> {
-      calls.get.push(key)
-      if (isExpired(key, Date.now())) {
-        return null
-      }
-
-      return state.get(key)?.value ?? null
-    }
-
-    async set(key: string, value: string, ...arguments_: readonly (string | number)[]): Promise<'OK' | null> {
-      calls.set.push([key, value, ...arguments_])
-      if (isExpired(key, Date.now())) {
-        state.delete(key)
-      }
-
-      if (hasNx(arguments_) && state.has(key)) {
-        return null
-      }
-
-      state.set(key, {
-        value,
-        expiresAt: resolveExpiresAt(arguments_, Date.now()),
-      })
-      if (key.includes(':lock:')) {
-        lockOwners.set(key, value)
-      }
-
-      return 'OK'
-    }
-
-    async del(...keys: string[]): Promise<number> {
-      calls.del.push(keys)
-      let deleted = 0
-      for (const key of keys) {
-        if (state.delete(key)) {
-          deleted += 1
-          lockOwners.delete(key)
-        }
-      }
-
-      return deleted
-    }
-
-    async scan(
+  class MockRedisClient {
+    readonly get = vi.fn<(key: string) => Promise<string | null>>(async () => null)
+    readonly set = vi.fn<(key: string, value: string, ...arguments_: readonly (string | number)[]) => Promise<'OK' | null>>(async () => 'OK')
+    readonly del = vi.fn<(...keys: string[]) => Promise<number>>(async () => 0)
+    readonly scan = vi.fn<(
       cursor: string,
       matchLabel: string,
       pattern: string,
       countLabel: string,
       count: number,
-    ): Promise<[string, string[]]> {
-      calls.scan.push([cursor, matchLabel, pattern, countLabel, count])
-      const regex = new RegExp(`^${pattern.replace(/\\\*/g, '\\*').replace(/\*/g, '.*')}$`)
-      const keys = [...state.keys()].filter(key => regex.test(key))
-      return ['0', keys]
+    ) => Promise<[string, string[]]>>(async () => ['0', []])
+    readonly incrby = vi.fn<(key: string, amount: number) => Promise<number>>(async () => 0)
+    readonly decrby = vi.fn<(key: string, amount: number) => Promise<number>>(async () => 0)
+    readonly eval = vi.fn<(script: string, numberOfKeys: number, ...arguments_: readonly string[]) => Promise<number>>(async () => 0)
+    readonly disconnect = vi.fn<() => void>()
+    nodes?: ReturnType<typeof vi.fn<(role: 'master') => readonly MockRedisClient[]>>
+  }
+
+  const constructorArgs: unknown[][] = []
+  const standaloneClients: MockRedisClient[] = []
+  const clusterClients: MockRedisClient[] = []
+  let clusterNodes: readonly MockRedisClient[] = []
+  let exposeClusterNodes = true
+
+  class FakeRedis extends MockRedisClient {
+    static Cluster = class FakeRedisCluster extends MockRedisClient {
+      readonly isCluster = true
+
+      constructor(...args: unknown[]) {
+        super()
+        constructorArgs.push(args)
+        clusterClients.push(this)
+        if (exposeClusterNodes) {
+          this.nodes = vi.fn<(role: 'master') => readonly MockRedisClient[]>(() => clusterNodes)
+        }
+      }
     }
 
-    async incrby(key: string, amount: number): Promise<number> {
-      calls.incrby.push([key, amount])
-      if (key.includes('timeout')) {
-        throw new Error('ETIMEDOUT')
-      }
-
-      if (key.includes('wrongtype')) {
-        throw new Error('WRONGTYPE Operation against a key holding the wrong kind of value')
-      }
-
-      const current = await this.get(key)
-      const currentNumber = current === null ? 0 : Number(current)
-      if (!Number.isInteger(currentNumber)) {
-        throw new Error('ERR value is not an integer or out of range')
-      }
-
-      const nextValue = currentNumber + amount
-      state.set(key, {
-        value: String(nextValue),
-        expiresAt: state.get(key)?.expiresAt,
-      })
-      return nextValue
-    }
-
-    async decrby(key: string, amount: number): Promise<number> {
-      return this.incrby(key, -amount)
-    }
-
-    async eval(script: string, numberOfKeys: number, ...arguments_: readonly string[]): Promise<number> {
-      calls.eval.push([script, numberOfKeys, ...arguments_])
-      const [key, owner] = arguments_
-      if (typeof key !== 'string' || typeof owner !== 'string') {
-        return 0
-      }
-
-      if (lockOwners.get(key) !== owner) {
-        return 0
-      }
-
-      lockOwners.delete(key)
-      return state.delete(key) ? 1 : 0
+    constructor(...args: unknown[]) {
+      super()
+      constructorArgs.push(args)
+      standaloneClients.push(this)
     }
   }
 
   return {
-    calls,
     FakeRedis,
-    lockOwners,
-    reset() {
-      state.clear()
-      lockOwners.clear()
-      calls.constructorArgs.length = 0
-      calls.del.length = 0
-      calls.disconnect.length = 0
-      calls.eval.length = 0
-      calls.get.length = 0
-      calls.incrby.length = 0
-      calls.scan.length = 0
-      calls.set.length = 0
+    clusterClients,
+    constructorArgs,
+    createClient() {
+      return new MockRedisClient()
     },
-    state,
+    disableClusterNodes() {
+      exposeClusterNodes = false
+    },
+    reset() {
+      constructorArgs.length = 0
+      standaloneClients.length = 0
+      clusterClients.length = 0
+      clusterNodes = []
+      exposeClusterNodes = true
+    },
+    setClusterNodes(nodes: readonly MockRedisClient[]) {
+      clusterNodes = nodes
+    },
+    standaloneClients,
   }
 })
 
@@ -232,13 +79,59 @@ import { createRedisCacheDriver, redisCacheDriverInternals } from '../src/index'
 
 const cacheDriverDisposeSymbol = Symbol.for('holo.cache.driver.dispose')
 
+type RedisLockClient = Parameters<typeof redisCacheDriverInternals.createRedisLock>[0]
+
+function lastStandaloneClient(): (typeof redisMock.standaloneClients)[number] {
+  const client = redisMock.standaloneClients.at(-1)
+  if (!client) {
+    throw new Error('Expected a standalone Redis client to be created.')
+  }
+
+  return client
+}
+
+function lastClusterClient(): (typeof redisMock.clusterClients)[number] {
+  const client = redisMock.clusterClients.at(-1)
+  if (!client) {
+    throw new Error('Expected a Redis cluster client to be created.')
+  }
+
+  return client
+}
+
+function createLockClient(): RedisLockClient {
+  return {
+    async get() {
+      return null
+    },
+    async set() {
+      return 'OK'
+    },
+    async del() {
+      return 0
+    },
+    async scan() {
+      return ['0', []]
+    },
+    async incrby() {
+      return 0
+    },
+    async decrby() {
+      return 0
+    },
+    async eval() {
+      return 0
+    },
+  }
+}
+
 describe('@holo-js/cache-redis', () => {
   beforeEach(() => {
     redisMock.reset()
     vi.useRealTimers()
   })
 
-  it('reads, writes, adds, forgets, and flushes within the configured prefix scope', async () => {
+  it('maps cache operations to the configured redis prefix scope', async () => {
     const driver = createRedisCacheDriver({
       name: 'redis',
       connectionName: 'cache',
@@ -249,6 +142,19 @@ describe('@holo-js/cache-redis', () => {
         db: 0,
       },
     })
+    const client = lastStandaloneClient()
+
+    client.get.mockResolvedValueOnce('"one"')
+    client.set
+      .mockResolvedValueOnce('OK')
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce('OK')
+      .mockResolvedValueOnce('OK')
+    client.del
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(1)
+    client.scan.mockResolvedValueOnce(['0', ['holo:cache:alpha']])
 
     expect(await driver.put({
       key: 'holo:cache:alpha',
@@ -278,14 +184,14 @@ describe('@holo-js/cache-redis', () => {
     })
     await driver.flush()
 
-    expect(await driver.get('holo:cache:alpha')).toEqual({ hit: false })
-    expect(await driver.get('other:gamma')).toEqual({
-      hit: true,
-      payload: '"outside"',
-    })
-    expect(redisMock.calls.scan).toEqual([
-      ['0', 'MATCH', 'holo:cache:*', 'COUNT', 100],
+    expect(client.set.mock.calls).toEqual([
+      ['holo:cache:alpha', '"one"', 'PXAT', expect.any(Number)],
+      ['holo:cache:alpha', '"two"', 'PXAT', expect.any(Number), 'NX'],
+      ['holo:cache:beta', '"two"', 'PXAT', expect.any(Number), 'NX'],
+      ['other:gamma', '"outside"'],
     ])
+    expect(client.scan).toHaveBeenCalledWith('0', 'MATCH', 'holo:cache:*', 'COUNT', 100)
+    expect(client.del).toHaveBeenLastCalledWith('holo:cache:alpha')
   })
 
   it('disconnects its redis client through the runtime lifecycle hook', () => {
@@ -299,6 +205,7 @@ describe('@holo-js/cache-redis', () => {
         db: 0,
       },
     }) as ReturnType<typeof createRedisCacheDriver> & Record<symbol, () => void>
+    const client = lastStandaloneClient()
 
     const dispose = driver[cacheDriverDisposeSymbol]
     if (!dispose) {
@@ -307,10 +214,10 @@ describe('@holo-js/cache-redis', () => {
 
     dispose()
 
-    expect(redisMock.calls.disconnect).toEqual([true])
+    expect(client.disconnect).toHaveBeenCalledOnce()
   })
 
-  it('supports expiration and immediate-expiry writes', async () => {
+  it('passes expiration options to redis and deletes immediate-expiry writes', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-22T00:00:00.000Z'))
 
@@ -324,48 +231,40 @@ describe('@holo-js/cache-redis', () => {
         db: 0,
       },
     })
+    const client = lastStandaloneClient()
+
+    client.set
+      .mockResolvedValueOnce('OK')
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce('OK')
 
     await driver.put({
       key: 'holo:cache:ttl',
       payload: '"ok"',
       expiresAt: Date.now() + 1_000,
     })
-    expect(await driver.get('holo:cache:ttl')).toEqual({
-      hit: true,
-      payload: '"ok"',
-    })
-
-    vi.advanceTimersByTime(1_001)
-    expect(await driver.get('holo:cache:ttl')).toEqual({ hit: false })
-
     await driver.put({
       key: 'holo:cache:expired',
       payload: '"gone"',
       expiresAt: Date.now() - 1,
-    })
-    expect(await driver.get('holo:cache:expired')).toEqual({ hit: false })
-
-    expect(await driver.add({
-      key: 'holo:cache:stale-add',
-      payload: '"gone"',
-      expiresAt: Date.now() - 1,
-    })).toBe(true)
-    expect(await driver.get('holo:cache:stale-add')).toEqual({ hit: false })
-
-    await driver.put({
-      key: 'holo:cache:live-add',
-      payload: '"original"',
-      expiresAt: Date.now() + 60_000,
     })
     expect(await driver.add({
       key: 'holo:cache:live-add',
       payload: '"expired-replacement"',
       expiresAt: Date.now() - 1,
     })).toBe(false)
-    expect(await driver.get('holo:cache:live-add')).toEqual({
-      hit: true,
-      payload: '"original"',
-    })
+    expect(await driver.add({
+      key: 'holo:cache:stale-add',
+      payload: '"gone"',
+      expiresAt: Date.now() - 1,
+    })).toBe(true)
+
+    expect(client.set.mock.calls).toEqual([
+      ['holo:cache:ttl', '"ok"', 'PXAT', Date.now() + 1_000],
+      ['holo:cache:live-add', '"expired-replacement"', 'PXAT', Date.now() - 1, 'NX'],
+      ['holo:cache:stale-add', '"gone"', 'PXAT', Date.now() - 1, 'NX'],
+    ])
+    expect(client.del).toHaveBeenCalledWith('holo:cache:expired')
   })
 
   it('supports numeric mutation and rejects non-numeric values', async () => {
@@ -379,86 +278,134 @@ describe('@holo-js/cache-redis', () => {
         db: 0,
       },
     })
+    const client = lastStandaloneClient()
+
+    client.incrby
+      .mockResolvedValueOnce(2)
+      .mockRejectedValueOnce(new Error('ERR value is not an integer or out of range'))
+    client.decrby
+      .mockResolvedValueOnce(1)
+      .mockRejectedValueOnce(new Error('WRONGTYPE Operation against a key holding the wrong kind of value'))
 
     expect(await driver.increment('holo:cache:counter', 2)).toBe(2)
     expect(await driver.decrement('holo:cache:counter', 1)).toBe(1)
 
-    await driver.put({
-      key: 'holo:cache:label',
-      payload: '"text"',
-    })
     await expect(driver.increment('holo:cache:label', 1)).rejects.toThrow(CacheInvalidNumericMutationError)
     await expect(driver.decrement('holo:cache:label', 1)).rejects.toThrow(CacheInvalidNumericMutationError)
   })
 
-  it('implements redis-backed locks with owner-safe release and blocking', async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-04-22T00:00:00.000Z'))
+  it('implements redis-backed locks with owner-safe release', async () => {
+    const client = createLockClient()
+    const set = vi.spyOn(client, 'set')
+    const evaluate = vi.spyOn(client, 'eval')
+    let counter = 0
 
-    const driver = createRedisCacheDriver({
-      name: 'redis',
-      connectionName: 'cache',
-      prefix: 'holo:cache:',
-      redis: {
-        host: '127.0.0.1',
-        port: 6379,
-        db: 0,
-      },
-      sleep: async (milliseconds) => {
-        vi.advanceTimersByTime(milliseconds)
-      },
-      ownerFactory: (() => {
-        let counter = 0
-        return () => `owner-${++counter}`
-      })(),
-    })
+    set
+      .mockResolvedValueOnce('OK')
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce('OK')
+    evaluate
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(1)
 
-    const firstLock = driver.lock('holo:cache:lock:report', 1)
-    const secondLock = driver.lock('holo:cache:lock:report', 1)
+    const firstLock = redisCacheDriverInternals.createRedisLock(
+      client,
+      'holo:cache:lock:report',
+      1,
+      () => `owner-${++counter}`,
+      async () => {},
+      Date.now,
+    )
+    const secondLock = redisCacheDriverInternals.createRedisLock(
+      client,
+      'holo:cache:lock:report',
+      1,
+      () => `owner-${++counter}`,
+      async () => {},
+      Date.now,
+    )
 
     expect(await firstLock.get()).toBe(true)
     expect(await secondLock.get()).toBe(false)
     expect(await secondLock.release()).toBe(false)
     expect(await firstLock.release()).toBe(true)
     expect(await secondLock.get(async () => 'after-release')).toBe('after-release')
-
-    const blockingLock = driver.lock('holo:cache:lock:wait', 0.02)
-    expect(await blockingLock.get()).toBe(true)
-
-    const waited = driver.lock('holo:cache:lock:wait', 0.02).block(0.05, async () => 'after-wait')
-    await expect(waited).resolves.toBe('after-wait')
-
-    const heldLock = driver.lock('holo:cache:lock:timeout', 1)
-    expect(await heldLock.get()).toBe(true)
-    await expect(driver.lock('holo:cache:lock:timeout', 1).block(0)).resolves.toBe(false)
+    expect(evaluate).toHaveBeenCalledTimes(3)
   })
 
-  it('uses the injected clock for blocking lock deadlines', async () => {
+  it('uses injected sleep and clocks for blocking lock deadlines', async () => {
     let currentTime = 0
-    const driver = createRedisCacheDriver({
-      name: 'redis',
-      connectionName: 'cache',
-      prefix: 'holo:cache:',
-      redis: {
-        host: '127.0.0.1',
-        port: 6379,
-        db: 0,
-      },
-      now: () => currentTime,
-      sleep: async (milliseconds) => {
+    const client = createLockClient()
+    const set = vi.spyOn(client, 'set')
+    const sleepCalls: number[] = []
+
+    set
+      .mockResolvedValueOnce('OK')
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce('OK')
+      .mockResolvedValueOnce('OK')
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+
+    const heldLock = redisCacheDriverInternals.createRedisLock(
+      client,
+      'holo:cache:lock:wait',
+      0.02,
+      () => 'owner-1',
+      async (milliseconds) => {
+        sleepCalls.push(milliseconds)
         currentTime += milliseconds
       },
-    })
+      () => currentTime,
+    )
+    expect(await heldLock.get()).toBe(true)
 
-    expect(await driver.lock('holo:cache:lock:clock', 1).get()).toBe(true)
-    await expect(driver.lock('holo:cache:lock:clock', 1).block(0.02)).resolves.toBe(false)
+    const waitedLock = redisCacheDriverInternals.createRedisLock(
+      client,
+      'holo:cache:lock:wait',
+      0.02,
+      () => 'owner-2',
+      async (milliseconds) => {
+        sleepCalls.push(milliseconds)
+        currentTime += milliseconds
+      },
+      () => currentTime,
+    )
+    await expect(waitedLock.block(0.05, async () => 'after-wait')).resolves.toBe('after-wait')
+
+    const clockLock = redisCacheDriverInternals.createRedisLock(
+      client,
+      'holo:cache:lock:clock',
+      1,
+      () => 'owner-3',
+      async (milliseconds) => {
+        sleepCalls.push(milliseconds)
+        currentTime += milliseconds
+      },
+      () => currentTime,
+    )
+    expect(await clockLock.get()).toBe(true)
+    await expect(redisCacheDriverInternals.createRedisLock(
+      client,
+      'holo:cache:lock:clock',
+      1,
+      () => 'owner-4',
+      async (milliseconds) => {
+        sleepCalls.push(milliseconds)
+        currentTime += milliseconds
+      },
+      () => currentTime,
+    ).block(0.02)).resolves.toBe(false)
+
+    expect(sleepCalls).toEqual([10, 10, 10])
   })
 
   it('does not retry blocking lock acquisition after the wait deadline', async () => {
     let currentTime = 0
     let setCalls = 0
     const sleepCalls: number[] = []
-    const client: Parameters<typeof redisCacheDriverInternals.createRedisLock>[0] = {
+    const client: RedisLockClient = {
       async get() {
         return null
       },
@@ -502,6 +449,14 @@ describe('@holo-js/cache-redis', () => {
   })
 
   it('flushes every cluster master when using a redis cluster client', async () => {
+    const firstNode = redisMock.createClient()
+    const secondNode = redisMock.createClient()
+    redisMock.setClusterNodes([firstNode, secondNode])
+    firstNode.scan.mockResolvedValueOnce(['0', ['holo:cache:alpha']])
+    secondNode.scan.mockResolvedValueOnce(['0', ['holo:cache:beta']])
+    firstNode.del.mockResolvedValueOnce(1)
+    secondNode.del.mockResolvedValueOnce(1)
+
     const driver = createRedisCacheDriver({
       name: 'redis-cluster',
       connectionName: 'cache',
@@ -513,49 +468,34 @@ describe('@holo-js/cache-redis', () => {
         ],
       },
     })
+    const clusterClient = lastClusterClient()
 
-    await driver.put({
-      key: 'holo:cache:alpha',
-      payload: '"one"',
-    })
-    await driver.put({
-      key: 'holo:cache:beta',
-      payload: '"two"',
-    })
     await driver.flush()
 
-    expect(redisMock.calls.scan).toEqual([
-      ['0', 'MATCH', 'holo:cache:*', 'COUNT', 100],
-      ['0', 'MATCH', 'holo:cache:*', 'COUNT', 100],
-    ])
-    expect(redisMock.calls.del.every(keys => keys.length === 1)).toBe(true)
+    expect(clusterClient.nodes).toHaveBeenCalledWith('master')
+    expect(firstNode.scan).toHaveBeenCalledWith('0', 'MATCH', 'holo:cache:*', 'COUNT', 100)
+    expect(secondNode.scan).toHaveBeenCalledWith('0', 'MATCH', 'holo:cache:*', 'COUNT', 100)
+    expect(firstNode.del).toHaveBeenCalledWith('holo:cache:alpha')
+    expect(secondNode.del).toHaveBeenCalledWith('holo:cache:beta')
   })
 
   it('handles cluster clients that do not expose master node iteration', async () => {
-    const clusterPrototype = redisMock.FakeRedis.Cluster.prototype as {
-      nodes?: (role: 'master') => readonly unknown[]
-    }
-    const originalNodes = clusterPrototype.nodes
-    clusterPrototype.nodes = undefined
+    redisMock.disableClusterNodes()
+    const driver = createRedisCacheDriver({
+      name: 'redis-cluster',
+      connectionName: 'cache',
+      prefix: 'holo:cache:',
+      redis: {
+        db: 0,
+        clusters: [
+          { host: 'cache-a.internal', port: 6379 },
+        ],
+      },
+    })
+    const clusterClient = lastClusterClient()
 
-    try {
-      const driver = createRedisCacheDriver({
-        name: 'redis-cluster',
-        connectionName: 'cache',
-        prefix: 'holo:cache:',
-        redis: {
-          db: 0,
-          clusters: [
-            { host: 'cache-a.internal', port: 6379 },
-          ],
-        },
-      })
-
-      await expect(driver.flush()).resolves.toBeUndefined()
-      expect(redisMock.calls.scan).toEqual([])
-    } finally {
-      clusterPrototype.nodes = originalNodes
-    }
+    await expect(driver.flush()).resolves.toBeUndefined()
+    expect(clusterClient.nodes).toBeUndefined()
   })
 
   it('prefers url, then clusters, then host/socket when creating redis clients', async () => {
@@ -592,7 +532,7 @@ describe('@holo-js/cache-redis', () => {
       },
     })
 
-    expect(redisMock.calls.constructorArgs).toEqual([
+    expect(redisMock.constructorArgs).toEqual([
       [
         'redis://cache.internal:6380/2',
         {
@@ -641,6 +581,7 @@ describe('@holo-js/cache-redis', () => {
         db: 0,
       },
     })
+    lastStandaloneClient().set.mockResolvedValueOnce('OK')
     expect(await hostDriver.add({
       key: 'holo:cache:forever-add',
       payload: '"ok"',
@@ -680,6 +621,12 @@ describe('@holo-js/cache-redis', () => {
         db: 0,
       },
     })
+    const client = lastStandaloneClient()
+
+    client.incrby
+      .mockRejectedValueOnce(new Error('WRONGTYPE boom'))
+      .mockRejectedValueOnce(new Error('ETIMEDOUT'))
+    client.decrby.mockRejectedValueOnce(new Error('ETIMEDOUT'))
 
     await expect(driver.increment('holo:cache:wrongtype', 1)).rejects.toThrow(CacheInvalidNumericMutationError)
     await expect(driver.increment('holo:cache:timeout', 1)).rejects.toThrow('ETIMEDOUT')
@@ -781,6 +728,11 @@ describe('@holo-js/cache-redis', () => {
         db: 0,
       },
     })
+    const client = lastStandaloneClient()
+
+    client.set
+      .mockResolvedValueOnce('OK')
+      .mockResolvedValueOnce(null)
 
     const heldLock = driver.lock('holo:cache:lock:default-sleep', 1)
     expect(await heldLock.get()).toBe(true)

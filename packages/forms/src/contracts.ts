@@ -87,6 +87,16 @@ interface FormFailureMetadata {
   readonly retryAt?: string
 }
 
+type NextHeadersModule = {
+  readonly headers: () => Headers | Promise<Headers>
+}
+
+type FormsRuntimeGlobal = typeof globalThis & {
+  readonly __holoFormsNextHeadersImport__?: () => Promise<unknown>
+}
+
+const nextHeadersModuleSpecifier = 'next/headers'
+
 export interface FormRequestLikeInput {
   readonly method?: string
   readonly path?: string
@@ -279,6 +289,10 @@ function isRequestLikeBody(value: unknown): value is RequestLikeBody {
     && (Symbol.asyncIterator in value || 'pipe' in value || 'getReader' in value)
 }
 
+function isFormDataInput(value: unknown): value is FormData {
+  return typeof FormData !== 'undefined' && value instanceof FormData
+}
+
 function isHeadersTupleArray(value: unknown): value is ReadonlyArray<readonly [string, string]> {
   return Array.isArray(value)
     && value.every(entry =>
@@ -369,6 +383,73 @@ function normalizeRequestHeaders(input: unknown): Headers {
   }
 
   return headers
+}
+
+function createFormDataRequestHeaders(requestHeaders: Headers): Headers {
+  const formHeaders = new Headers()
+
+  requestHeaders.forEach((value, name) => {
+    const normalizedName = name.toLowerCase()
+    if (normalizedName !== 'content-length' && normalizedName !== 'content-type') {
+      formHeaders.append(name, value)
+    }
+  })
+
+  return formHeaders
+}
+
+function resolveAmbientRequestUrl(headers: Headers): string {
+  const referer = headers.get('referer')
+  if (referer) {
+    try {
+      return new URL(referer).href
+    } catch {
+      // Ignore malformed client-controlled Referer headers and fall back to trusted request headers.
+    }
+  }
+
+  const protocol = headers.get('x-forwarded-proto') ?? 'http'
+  const host = headers.get('x-forwarded-host') ?? headers.get('host') ?? 'localhost'
+
+  return `${protocol}://${host}/`
+}
+
+function isNextHeadersModule(value: unknown): value is NextHeadersModule {
+  return !!value
+    && typeof value === 'object'
+    && typeof (value as { readonly headers?: unknown }).headers === 'function'
+}
+
+async function importNextHeadersModule(): Promise<NextHeadersModule | undefined> {
+  try {
+    const runtime = globalThis as FormsRuntimeGlobal
+    const module = runtime.__holoFormsNextHeadersImport__
+      ? await runtime.__holoFormsNextHeadersImport__()
+      : await import(/* @vite-ignore */ nextHeadersModuleSpecifier)
+
+    return isNextHeadersModule(module) ? module : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function resolveAmbientFormDataRequest(input: unknown): Promise<Request | undefined> {
+  if (!isFormDataInput(input)) {
+    return undefined
+  }
+
+  const nextHeadersModule = await importNextHeadersModule()
+  if (!nextHeadersModule) {
+    return undefined
+  }
+
+  const requestHeaders = await nextHeadersModule.headers()
+
+  return new Request(resolveAmbientRequestUrl(requestHeaders), {
+    method: 'POST',
+    headers: createFormDataRequestHeaders(requestHeaders),
+    body: input,
+  })
 }
 
 function getStructuredWebRequest(input: FormRequestLikeInput): StructuredRequestLikeObject | undefined {
@@ -600,6 +681,7 @@ export async function validate<TShape extends SchemaInputShape>(
     | undefined
   const usesSecurityOptions = options.csrf === true || typeof options.throttle === 'string'
   const normalizedRequestInput = normalizeRequestLikeInput(input)
+    ?? (usesSecurityOptions ? await resolveAmbientFormDataRequest(input) : undefined)
   const validationInput = normalizedRequestInput ?? input
 
   if (usesSecurityOptions && !normalizedRequestInput) {

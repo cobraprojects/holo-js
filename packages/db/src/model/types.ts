@@ -153,7 +153,7 @@ export interface MorphToRelationDefinition<TTable extends TableDefinition = Tabl
 export interface BelongsToManyRelationDefinition<
   TRelated extends ModelDefinitionLike = ModelDefinitionLike,
   TPivotTable extends string | TableDefinition = string | TableDefinition,
-> extends ScopedRelationDefinition {
+> extends ScopedRelationDefinition, PivotRelationMethods<BelongsToManyRelationDefinition<TRelated, TPivotTable>, TPivotTable> {
   readonly kind: 'belongsToMany'
   readonly related: () => TRelated
   readonly pivotTable: TPivotTable
@@ -166,17 +166,12 @@ export interface BelongsToManyRelationDefinition<
   readonly pivotOrderBy: readonly PivotOrderDefinition[]
   readonly pivotAccessor: string
   readonly pivotModel?: () => ModelDefinitionLike
-  withPivot(...columns: readonly PivotTableColumnName<TPivotTable>[]): BelongsToManyRelationDefinition<TRelated, TPivotTable>
-  wherePivot(column: PivotTableColumnName<TPivotTable>, operator: unknown, value?: unknown): BelongsToManyRelationDefinition<TRelated, TPivotTable>
-  orderByPivot(column: PivotTableColumnName<TPivotTable>, direction?: 'asc' | 'desc'): BelongsToManyRelationDefinition<TRelated, TPivotTable>
-  as(accessor: string): BelongsToManyRelationDefinition<TRelated, TPivotTable>
-  using(model: () => ModelDefinitionLike): BelongsToManyRelationDefinition<TRelated, TPivotTable>
 }
 
 export interface MorphToManyRelationDefinition<
   TRelated extends ModelDefinitionLike = ModelDefinitionLike,
   TPivotTable extends string | TableDefinition = string | TableDefinition,
-> extends ScopedRelationDefinition {
+> extends ScopedRelationDefinition, PivotRelationMethods<MorphToManyRelationDefinition<TRelated, TPivotTable>, TPivotTable> {
   readonly kind: 'morphToMany'
   readonly related: () => TRelated
   readonly pivotTable: TPivotTable
@@ -191,17 +186,12 @@ export interface MorphToManyRelationDefinition<
   readonly pivotOrderBy: readonly PivotOrderDefinition[]
   readonly pivotAccessor: string
   readonly pivotModel?: () => ModelDefinitionLike
-  withPivot(...columns: readonly PivotTableColumnName<TPivotTable>[]): MorphToManyRelationDefinition<TRelated, TPivotTable>
-  wherePivot(column: PivotTableColumnName<TPivotTable>, operator: unknown, value?: unknown): MorphToManyRelationDefinition<TRelated, TPivotTable>
-  orderByPivot(column: PivotTableColumnName<TPivotTable>, direction?: 'asc' | 'desc'): MorphToManyRelationDefinition<TRelated, TPivotTable>
-  as(accessor: string): MorphToManyRelationDefinition<TRelated, TPivotTable>
-  using(model: () => ModelDefinitionLike): MorphToManyRelationDefinition<TRelated, TPivotTable>
 }
 
 export interface MorphedByManyRelationDefinition<
   TRelated extends ModelDefinitionLike = ModelDefinitionLike,
   TPivotTable extends string | TableDefinition = string | TableDefinition,
-> extends ScopedRelationDefinition {
+> extends ScopedRelationDefinition, PivotRelationMethods<MorphedByManyRelationDefinition<TRelated, TPivotTable>, TPivotTable> {
   readonly kind: 'morphedByMany'
   readonly related: () => TRelated
   readonly pivotTable: TPivotTable
@@ -216,11 +206,6 @@ export interface MorphedByManyRelationDefinition<
   readonly pivotOrderBy: readonly PivotOrderDefinition[]
   readonly pivotAccessor: string
   readonly pivotModel?: () => ModelDefinitionLike
-  withPivot(...columns: readonly PivotTableColumnName<TPivotTable>[]): MorphedByManyRelationDefinition<TRelated, TPivotTable>
-  wherePivot(column: PivotTableColumnName<TPivotTable>, operator: unknown, value?: unknown): MorphedByManyRelationDefinition<TRelated, TPivotTable>
-  orderByPivot(column: PivotTableColumnName<TPivotTable>, direction?: 'asc' | 'desc'): MorphedByManyRelationDefinition<TRelated, TPivotTable>
-  as(accessor: string): MorphedByManyRelationDefinition<TRelated, TPivotTable>
-  using(model: () => ModelDefinitionLike): MorphedByManyRelationDefinition<TRelated, TPivotTable>
 }
 
 export interface PivotWhereDefinition {

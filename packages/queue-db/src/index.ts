@@ -1,7 +1,6 @@
+export type { StoredFailedQueueJobRow, StoredQueueJobRow } from './database'
 export {
   queueDatabaseInternals,
-  type StoredFailedQueueJobRow,
-  type StoredQueueJobRow,
 } from './database'
 export {
   databaseQueueDriverFactory,
@@ -10,8 +9,8 @@ export {
   DatabaseQueueDriverError,
 } from './drivers/database'
 export {
-  queueDbFailedJobStore,
   queueDbFailedStoreInternals,
+  queueDbFailedJobStore,
 } from './failed'
 export {
   createQueueDbRuntimeOptions,

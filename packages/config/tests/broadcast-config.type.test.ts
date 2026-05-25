@@ -1,9 +1,9 @@
 import { describe, it } from 'vitest'
 import {
-  createConfigAccessors,
   defineBroadcastConfig,
   type HoloConfigRegistry,
 } from '../src'
+import { createConfigAccessorFixture } from './support/configAccessors'
 
 describe('@holo-js/config broadcast typing', () => {
   it('preserves broadcast inference through config helpers and dot-path access', () => {
@@ -27,21 +27,8 @@ describe('@holo-js/config broadcast typing', () => {
       },
     })
 
-    const accessors = createConfigAccessors({
-      app: {} as HoloConfigRegistry['app'],
-      database: {} as HoloConfigRegistry['database'],
-      redis: {} as HoloConfigRegistry['redis'],
-      cache: {} as HoloConfigRegistry['cache'],
-      cors: {} as HoloConfigRegistry['cors'],
-      storage: {} as HoloConfigRegistry['storage'],
-      queue: {} as HoloConfigRegistry['queue'],
+    const accessors = createConfigAccessorFixture({
       broadcast: broadcast as unknown as HoloConfigRegistry['broadcast'],
-      mail: {} as HoloConfigRegistry['mail'],
-      notifications: {} as HoloConfigRegistry['notifications'],
-      media: {} as HoloConfigRegistry['media'],
-      session: {} as HoloConfigRegistry['session'],
-      security: {} as HoloConfigRegistry['security'],
-      auth: {} as HoloConfigRegistry['auth'],
       services: {
         mailgun: {
           secret: 'secret',

@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
+import type { DriverAdapter } from '@holo-js/db'
 import { createPostgresAdapter } from '../src'
+
+const runLivePostgres = process.env.HOLO_POSTGRES_INTEGRATION === '1' ? it : it.skip
 
 describe('@holo-js/db-postgres', () => {
   it('supports direct clients without creating a pool', async () => {
@@ -23,6 +26,7 @@ describe('@holo-js/db-postgres', () => {
         end: vi.fn(async () => {}),
       },
     })
+    const canonicalAdapter: DriverAdapter = adapter
 
     await expect(adapter.query('select 1')).resolves.toEqual({
       rows: [{ sql: 'select 1' }],
@@ -37,9 +41,10 @@ describe('@holo-js/db-postgres', () => {
     await adapter.commit()
     expect(query).toHaveBeenNthCalledWith(3, 'BEGIN')
     expect(query).toHaveBeenNthCalledWith(4, 'COMMIT')
+    void canonicalAdapter
   })
 
-  it('runs queries against a local Postgres server through the public adapter', async () => {
+  runLivePostgres('runs queries against a local Postgres server through the public adapter', async () => {
     const tableName = `holo_real_usage_postgres_${randomUUID().replaceAll('-', '_')}`
     const adapter = createPostgresAdapter({
       config: {

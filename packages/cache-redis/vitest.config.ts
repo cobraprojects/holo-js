@@ -16,7 +16,7 @@ export default defineConfig({
     name: '@holo-js/cache-redis',
     environment: 'node',
     include: runRedisIntegration
-      ? ['tests/**/*.test.ts']
+      ? ['tests/real-redis.test.ts']
       : ['tests/package.test.ts'],
     coverage: {
       provider: 'v8',

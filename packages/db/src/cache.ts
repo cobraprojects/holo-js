@@ -20,13 +20,8 @@ export interface QueryCacheConfig {
   readonly invalidate?: readonly string[]
 }
 
-export interface NormalizedQueryCacheConfig {
-  readonly ttl?: QueryCacheTtlInput
-  readonly key?: string
-  readonly driver?: string
-  readonly flexible?: QueryCacheFlexibleTtlInput
-  readonly invalidate?: readonly string[]
-}
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- preserve the exported interface shape while deriving from QueryCacheConfig.
+export interface NormalizedQueryCacheConfig extends QueryCacheConfig {}
 
 export interface DatabaseQueryCacheBridge {
   get<TValue>(key: string, options?: { readonly driver?: string }): Promise<TValue | null>

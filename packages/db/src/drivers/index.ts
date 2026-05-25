@@ -1,5 +1,5 @@
-import { TransactionError } from '../core/errors'
 import type { DriverAdapter, DriverExecutionResult, DriverQueryResult, DatabaseOperationOptions } from '../core/types'
+import { normalizeSavepointName } from './savepoints'
 
 function isModuleNotFoundError(error: unknown): boolean {
   return !!error
@@ -193,27 +193,15 @@ export class SQLiteAdapter extends LazyDriverAdapter {
   }
 
   override async createSavepoint(name: string, options?: DatabaseOperationOptions): Promise<void> {
-    if (!/^[A-Z_]\w*$/i.test(name)) {
-      throw new TransactionError(`Invalid savepoint name "${name}".`)
-    }
-
-    await super.createSavepoint(name, options)
+    await super.createSavepoint(normalizeSavepointName(name), options)
   }
 
   override async rollbackToSavepoint(name: string, options?: DatabaseOperationOptions): Promise<void> {
-    if (!/^[A-Z_]\w*$/i.test(name)) {
-      throw new TransactionError(`Invalid savepoint name "${name}".`)
-    }
-
-    await super.rollbackToSavepoint(name, options)
+    await super.rollbackToSavepoint(normalizeSavepointName(name), options)
   }
 
   override async releaseSavepoint(name: string, options?: DatabaseOperationOptions): Promise<void> {
-    if (!/^[A-Z_]\w*$/i.test(name)) {
-      throw new TransactionError(`Invalid savepoint name "${name}".`)
-    }
-
-    await super.releaseSavepoint(name, options)
+    await super.releaseSavepoint(normalizeSavepointName(name), options)
   }
 }
 
@@ -282,40 +270,16 @@ export class PostgresAdapter<TConfig extends PostgresConnectionConfig = Postgres
     return createPostgresAdapter(this.options as unknown as PostgresAdapterOptions)
   }
 
-  releaseScopedTransaction(state: { client: { release?(): void }, leased: boolean, released: boolean }): void {
-    if (state.released) {
-      return
-    }
-
-    if (state.leased) {
-      state.client.release?.()
-    }
-
-    state.released = true
-  }
-
   override async createSavepoint(name: string, options?: DatabaseOperationOptions): Promise<void> {
-    if (!/^[A-Z_]\w*$/i.test(name)) {
-      throw new TransactionError(`Invalid savepoint name "${name}".`)
-    }
-
-    await super.createSavepoint(name, options)
+    await super.createSavepoint(normalizeSavepointName(name), options)
   }
 
   override async rollbackToSavepoint(name: string, options?: DatabaseOperationOptions): Promise<void> {
-    if (!/^[A-Z_]\w*$/i.test(name)) {
-      throw new TransactionError(`Invalid savepoint name "${name}".`)
-    }
-
-    await super.rollbackToSavepoint(name, options)
+    await super.rollbackToSavepoint(normalizeSavepointName(name), options)
   }
 
   override async releaseSavepoint(name: string, options?: DatabaseOperationOptions): Promise<void> {
-    if (!/^[A-Z_]\w*$/i.test(name)) {
-      throw new TransactionError(`Invalid savepoint name "${name}".`)
-    }
-
-    await super.releaseSavepoint(name, options)
+    await super.releaseSavepoint(normalizeSavepointName(name), options)
   }
 }
 
@@ -383,40 +347,16 @@ export class MySQLAdapter<TConfig extends MySQLConnectionConfig = MySQLConnectio
     return createMySQLAdapter(this.options as unknown as MySQLAdapterOptions)
   }
 
-  releaseScopedTransaction(state: { client: { release?(): void }, leased: boolean, released: boolean }): void {
-    if (state.released) {
-      return
-    }
-
-    if (state.leased) {
-      state.client.release?.()
-    }
-
-    state.released = true
-  }
-
   override async createSavepoint(name: string, options?: DatabaseOperationOptions): Promise<void> {
-    if (!/^[A-Z_]\w*$/i.test(name)) {
-      throw new TransactionError(`Invalid savepoint name "${name}".`)
-    }
-
-    await super.createSavepoint(name, options)
+    await super.createSavepoint(normalizeSavepointName(name), options)
   }
 
   override async rollbackToSavepoint(name: string, options?: DatabaseOperationOptions): Promise<void> {
-    if (!/^[A-Z_]\w*$/i.test(name)) {
-      throw new TransactionError(`Invalid savepoint name "${name}".`)
-    }
-
-    await super.rollbackToSavepoint(name, options)
+    await super.rollbackToSavepoint(normalizeSavepointName(name), options)
   }
 
   override async releaseSavepoint(name: string, options?: DatabaseOperationOptions): Promise<void> {
-    if (!/^[A-Z_]\w*$/i.test(name)) {
-      throw new TransactionError(`Invalid savepoint name "${name}".`)
-    }
-
-    await super.releaseSavepoint(name, options)
+    await super.releaseSavepoint(normalizeSavepointName(name), options)
   }
 }
 

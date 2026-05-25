@@ -1,9 +1,8 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
-import { useAuth } from '@holo-js/auth/next/client'
 import { useForm } from '@holo-js/adapter-next/client'
 import { loginForm } from '@/lib/schemas/auth'
+import { superAdminLoginAction } from './actions'
 
 const panelStyle = {
   display: 'grid',
@@ -16,23 +15,11 @@ const panelStyle = {
 } satisfies React.CSSProperties
 
 export default function SuperAdminLoginPage() {
-  const router = useRouter()
-  const auth = useAuth({ guard: 'admin' })
   const form = useForm(loginForm, {
     validateOn: 'blur',
     initialValues: { email: '', password: '', remember: false },
     async submitter({ formData }) {
-      const response = await fetch('/api/super-admin/login', { method: 'POST', body: formData })
-      const submission = await response.json()
-      if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
-        try {
-          await auth.refreshUser()
-        } catch (error) {
-          console.warn('Super admin auth refresh failed after login.', error)
-        }
-        router.replace(submission.data.redirectTo)
-      }
-      return submission
+      return await superAdminLoginAction(formData)
     },
   })
   const formError = form.errors.first('_root')
@@ -86,11 +73,6 @@ export default function SuperAdminLoginPage() {
         </button>
       </form>
 
-      {form.lastSubmission?.ok === true ? (
-        <div style={{ color: '#86efac' }}>
-          <p style={{ margin: 0 }}>Signed in as super admin.</p>
-        </div>
-      ) : null}
     </section>
   )
 }

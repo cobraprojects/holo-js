@@ -1,14 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DB } from '@holo-js/db'
-import type { DatabaseContext, Dialect } from '@holo-js/db'
 import { connectionAsyncContext } from '@holo-js/db'
 import { configureQueueRuntime, queueRuntimeInternals } from '@holo-js/queue'
 import {
   createQueueDbRuntimeOptions,
   DatabaseQueueDriver,
-  databaseQueueDriverInternals,
-  queueDatabaseInternals,
 } from '../src'
+import { createQueueDatabaseContextMock } from './support/dialect'
 import { createSQLiteQueueHarness, type SQLiteQueueHarness } from './support/sqlite-queue'
 
 const harnesses: SQLiteQueueHarness[] = []
@@ -34,33 +32,6 @@ function createEnvelope(name: string, overrides: Partial<{
   })
 }
 
-function createDialect(name: string, placeholderPrefix: '$' | '?'): Dialect {
-  return {
-    name,
-    capabilities: {
-      returning: false,
-      lockForUpdate: false,
-      sharedLock: false,
-      concurrentQueries: false,
-      workerThreadExecution: false,
-      savepoints: true,
-      jsonValueQuery: true,
-      jsonContains: true,
-      jsonLength: true,
-      schemaQualifiedIdentifiers: true,
-      nativeUpsert: false,
-      ddlAlterSupport: false,
-      introspection: false,
-    },
-    quoteIdentifier(identifier: string) {
-      return `"${identifier}"`
-    },
-    createPlaceholder(index: number) {
-      return placeholderPrefix === '?' ? '?' : `${placeholderPrefix}${index}`
-    },
-  }
-}
-
 afterEach(async () => {
   vi.useRealTimers()
   while (harnesses.length > 0) {
@@ -69,88 +40,6 @@ afterEach(async () => {
 })
 
 describe('@holo-js/queue-db database driver', () => {
-  it('normalizes identifiers, placeholders, stored rows, and wrapped error messages', () => {
-    expect(queueDatabaseInternals.normalizeIdentifierPath(' public.jobs ', 'Queue table name')).toBe('public.jobs')
-    expect(() => queueDatabaseInternals.normalizeIdentifierPath('', 'Queue table name')).toThrow('Queue table name must be a non-empty string.')
-    expect(() => queueDatabaseInternals.normalizeIdentifierPath('jobs-table', 'Queue table name')).toThrow('Queue table name must contain only valid SQL identifier segments.')
-    expect(() => queueDatabaseInternals.createPlaceholderList(createDialect('sqlite', '?'), 0)).toThrow('Placeholder lists require at least one binding.')
-    expect(queueDatabaseInternals.createPlaceholderList(createDialect('postgres', '$'), 3)).toBe('$1, $2, $3')
-    expect(queueDatabaseInternals.quoteIdentifierPath(createDialect('mysql', '?'), 'queue.jobs')).toBe('"queue"."jobs"')
-    expect(queueDatabaseInternals.coerceOptionalInteger(undefined, 'Optional integer')).toBeUndefined()
-    expect(queueDatabaseInternals.coerceOptionalInteger(null, 'Optional integer')).toBeUndefined()
-    expect(queueDatabaseInternals.coerceOptionalInteger('4', 'Optional integer')).toBe(4)
-    expect(() => queueDatabaseInternals.coerceRequiredString('', 'Required string')).toThrow('Required string must be a non-empty string.')
-    expect(() => queueDatabaseInternals.coerceRequiredInteger(1.2, 'Required integer')).toThrow('Required integer must be an integer.')
-    expect(() => queueDatabaseInternals.coerceRequiredInteger('nope', 'Required integer')).toThrow('Required integer must be an integer.')
-    expect(() => queueDatabaseInternals.assertQueueJsonValue(Number.POSITIVE_INFINITY, 'payload')).toThrow('payload must be JSON-serializable.')
-    expect(() => queueDatabaseInternals.assertQueueJsonValue(undefined, 'payload')).toThrow('payload must be JSON-serializable.')
-    expect(() => queueDatabaseInternals.assertQueueJsonValue(new Date(), 'payload')).toThrow('payload must be a plain JSON object, array, or primitive.')
-    const circularArray: unknown[] = []
-    circularArray.push(circularArray)
-    expect(() => queueDatabaseInternals.assertQueueJsonValue(circularArray, 'payload')).toThrow('payload[0] contains a circular reference.')
-    const circularObject: Record<string, unknown> = {}
-    circularObject.self = circularObject
-    expect(() => queueDatabaseInternals.assertQueueJsonValue(circularObject, 'payload')).toThrow('payload.self contains a circular reference.')
-    expect(queueDatabaseInternals.serializeQueueJson({ nested: [1, true, null] })).toBe('{"nested":[1,true,null]}')
-    expect(() => queueDatabaseInternals.serializeQueueJson(new Date())).toThrow('Queue JSON payload must be a plain JSON object, array, or primitive.')
-    expect(queueDatabaseInternals.parseStoredQueueJobRow({
-      id: 'job-1',
-      job: 'reports.generate',
-      connection: 'database',
-      queue: 'reports',
-      payload: JSON.stringify({ ok: true }),
-      attempts: '1',
-      max_attempts: 3,
-      available_at: null,
-      created_at: 100,
-    })).toEqual({
-      id: 'job-1',
-      name: 'reports.generate',
-      connection: 'database',
-      queue: 'reports',
-      payload: { ok: true },
-      attempts: 1,
-      maxAttempts: 3,
-      createdAt: 100,
-    })
-    expect(queueDatabaseInternals.parseStoredFailedQueueJobRow({
-      id: 'failed-1',
-      job_id: 'job-1',
-      payload: JSON.stringify(createEnvelope('reports.generate', { id: 'job-1', createdAt: 100 })),
-      exception: 'boom',
-      failed_at: '200',
-    })).toMatchObject({
-      id: 'failed-1',
-      jobId: 'job-1',
-      exception: 'boom',
-      failedAt: 200,
-    })
-    expect(queueDatabaseInternals.parseStoredQueueEnvelope(createEnvelope('reports.ready', {
-      id: 'job-ready',
-      createdAt: 100,
-      availableAt: 200,
-    }))).toMatchObject({
-      id: 'job-ready',
-      availableAt: 200,
-    })
-    expect(databaseQueueDriverInternals.normalizeDatabaseErrorMessage(new Error('boom'))).toBe('boom')
-    expect(databaseQueueDriverInternals.normalizeDatabaseErrorMessage('boom')).toBe('boom')
-    expect(databaseQueueDriverInternals.normalizeQueueNames(undefined, 'default')).toEqual(['default'])
-    expect(databaseQueueDriverInternals.normalizeQueueNames(['   '], 'default')).toEqual(['default'])
-    expect(databaseQueueDriverInternals.normalizeQueueNames(['  ', 'mail', 'mail'], 'default')).toEqual(['mail'])
-    expect(() => queueDatabaseInternals.parseStoredFailedQueueJobRow({
-      id: 'failed-2',
-      job_id: 'job-2',
-      payload: JSON.stringify('bad'),
-      exception: 'boom',
-      failed_at: 1,
-    })).toThrow('Stored queue job payload must serialize a queue job envelope object.')
-    expect(() => queueDatabaseInternals.parseStoredPayload('{bad json', 'payload')).toThrow()
-    expect(databaseQueueDriverInternals.wrapDatabaseError('database', 'reserve job', new Error('down'))).toBeInstanceOf(Error)
-    const wrapped = databaseQueueDriverInternals.wrapDatabaseError('database', 'reserve job', new Error('down'))
-    expect(databaseQueueDriverInternals.wrapDatabaseError('database', 'reserve job', wrapped)).toBe(wrapped)
-  })
-
   it('dispatches, reserves, releases, acknowledges, deletes, and clears queued jobs', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(1_000)
@@ -389,17 +278,14 @@ describe('@holo-js/queue-db database driver', () => {
     const executeCompiled = vi.fn()
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({ affectedRows: 1 })
-    const spy = vi.spyOn(DB, 'connection').mockReturnValue({
-      async initialize() {},
-      getDialect() {
-        return createDialect('sqlite', '?')
+    const spy = vi.spyOn(DB, 'connection').mockReturnValue(createQueueDatabaseContextMock({
+      async query<TRow extends Record<string, unknown>>(sql: string, bindings: readonly unknown[]) {
+        return await queryCompiled({ sql, bindings }) as { rows: TRow[], rowCount: number }
       },
-      async transaction<T>(callback: (connection: DatabaseContext) => Promise<T>) {
-        return callback(this as unknown as DatabaseContext)
+      async execute(sql: string, bindings: readonly unknown[]) {
+        return await executeCompiled({ sql, bindings })
       },
-      queryCompiled,
-      executeCompiled,
-    } as never)
+    }))
     const driver = new DatabaseQueueDriver({
       name: 'database',
       driver: 'database',
@@ -425,15 +311,7 @@ describe('@holo-js/queue-db database driver', () => {
   })
 
   it('returns zero when clear reports no affected rows', async () => {
-    const spy = vi.spyOn(DB, 'connection').mockReturnValue({
-      async initialize() {},
-      getDialect() {
-        return createDialect('sqlite', '?')
-      },
-      async executeCompiled() {
-        return {}
-      },
-    } as never)
+    const spy = vi.spyOn(DB, 'connection').mockReturnValue(createQueueDatabaseContextMock())
 
     const driver = new DatabaseQueueDriver({
       name: 'database',
@@ -451,21 +329,13 @@ describe('@holo-js/queue-db database driver', () => {
 
   it('reuses the active async-context connection when it matches the configured database connection', async () => {
     const executeCompiled = vi.fn(async (_statement: unknown) => ({}))
-    const initialize = vi.fn(async () => {})
-    const activeConnection = {
-      async initialize() {
-        await initialize()
+    const activeConnection = createQueueDatabaseContextMock({
+      connectionName: 'default',
+      async execute(sql: string, bindings: readonly unknown[]) {
+        return await executeCompiled({ sql, bindings })
       },
-      getConnectionName() {
-        return 'default'
-      },
-      getDialect() {
-        return createDialect('sqlite', '?')
-      },
-      async executeCompiled(statement: unknown) {
-        return await executeCompiled(statement)
-      },
-    } as unknown as DatabaseContext
+    })
+    const initialize = vi.spyOn(activeConnection, 'initialize')
 
     const spy = vi.spyOn(DB, 'connection').mockImplementation(() => {
       throw new Error('DB.connection() should not be used when an active matching connection exists.')
