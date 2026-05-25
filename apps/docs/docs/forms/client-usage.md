@@ -113,46 +113,41 @@ const form = useForm(registerUser, {
 <script lang="ts">
   import { useForm } from '@holo-js/adapter-sveltekit/client'
   import { registerUser } from '$lib/schemas/register'
+  import type { PageData } from './$types'
 
-  const form = useForm(registerUser, {
+  export let data: PageData
+
+  const register = useForm(registerUser, {
     validateOn: 'blur',
-    csrf: true,
     initialValues: { name: '', email: '', password: '', passwordConfirmation: '' },
-    async submitter({ formData }) {
-      const response = await fetch('/api/register', { method: 'POST', body: formData })
-      return await response.json()
-    },
   })
 </script>
 
-<form onsubmit={(e) => { e.preventDefault(); form.submit() }}>
+<form method="post">
+  <input type="hidden" name={data.csrf.name} value={data.csrf.value} />
   <input
     name="name"
-    value={form.values.name}
-    oninput={(event) => form.fields.name.onInput(event.currentTarget.value)}
-    onblur={() => form.fields.name.onBlur()}
+    value={register.values.name}
+    oninput={(event) => register.fields.name.onInput(event.currentTarget.value)}
+    onblur={() => register.fields.name.onBlur()}
   />
-  {#if form.errors.has('name')}
-    <p>{form.errors.first('name')}</p>
+  {#if register.errors.has('name')}
+    <p>{register.errors.first('name')}</p>
   {/if}
 
   <input
     name="email"
-    value={form.values.email}
-    oninput={(event) => form.fields.email.onInput(event.currentTarget.value)}
-    onblur={() => form.fields.email.onBlur()}
+    value={register.values.email}
+    oninput={(event) => register.fields.email.onInput(event.currentTarget.value)}
+    onblur={() => register.fields.email.onBlur()}
   />
-  {#if form.errors.has('email')}
-    <p>{form.errors.first('email')}</p>
+  {#if register.errors.has('email')}
+    <p>{register.errors.first('email')}</p>
   {/if}
 
-  <button disabled={form.submitting}>
-    {form.submitting ? 'Creating account...' : 'Create account'}
+  <button disabled={register.submitting}>
+    {register.submitting ? 'Creating account...' : 'Create account'}
   </button>
-
-  {#if form.lastSubmission?.ok === true}
-    <p>{form.lastSubmission.data.message}</p>
-  {/if}
 </form>
 ```
 

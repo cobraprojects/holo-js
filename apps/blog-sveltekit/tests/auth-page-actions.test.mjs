@@ -1,14 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
+  fail: vi.fn((status, data) => ({
+    ...data,
+    status,
+  })),
   guardLogin: vi.fn(),
   guardLogout: vi.fn(),
-  json: vi.fn((data, init) => new Response(JSON.stringify(data), {
-    status: init?.status ?? 200,
-    headers: {
-      'content-type': 'application/json',
-    },
-  })),
   login: vi.fn(),
   loginForm: Symbol('loginForm'),
   loginUsing: vi.fn(),
@@ -25,7 +23,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@sveltejs/kit', () => ({
-  json: mocks.json,
+  fail: mocks.fail,
   redirect: mocks.redirect,
 }))
 
@@ -61,11 +59,11 @@ vi.mock('$lib/schemas/auth', () => ({
   registerForm: mocks.registerForm,
 }))
 
-const loginRoute = await import('../src/routes/api/login/+server.ts')
+const loginPage = await import('../src/routes/login/+page.server.ts')
 const logoutRoute = await import('../src/routes/logout/+server.ts')
-const registerRoute = await import('../src/routes/api/register/+server.ts')
+const registerPage = await import('../src/routes/register/+page.server.ts')
 const superAdminPage = await import('../src/routes/super-admin/+page.server.ts')
-const superAdminLoginRoute = await import('../src/routes/api/super-admin/login/+server.ts')
+const superAdminLoginPage = await import('../src/routes/super-admin/login/+page.server.ts')
 
 function createRequest(path = '/login') {
   return new Request(`http://localhost${path}`, {
@@ -73,7 +71,7 @@ function createRequest(path = '/login') {
   })
 }
 
-describe('SvelteKit login API route', () => {
+describe('SvelteKit login page action', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -92,12 +90,12 @@ describe('SvelteKit login API route', () => {
     }
     mocks.validate.mockResolvedValue(submission)
 
-    const response = await loginRoute.POST({
-      request: createRequest('/api/login'),
+    const response = await loginPage.actions.default({
+      request: createRequest('/login'),
     })
 
     expect(response.status).toBe(422)
-    await expect(response.json()).resolves.toEqual(failure)
+    expect(response).toEqual(failure)
     expect(mocks.validate).toHaveBeenCalledWith(expect.any(Request), mocks.loginForm, {
       csrf: true,
       throttle: 'login',
@@ -131,22 +129,17 @@ describe('SvelteKit login API route', () => {
       error: null,
     })
 
-    const response = await loginRoute.POST({
-      request: createRequest('/api/login'),
-    })
-
-    expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toMatchObject({
-      ok: true,
-      data: {
-        redirectTo: '/admin',
-      },
+    await expect(loginPage.actions.default({
+      request: createRequest('/login'),
+    })).rejects.toMatchObject({
+      status: 303,
+      location: '/admin',
     })
     expect(mocks.login).toHaveBeenCalledWith(submission.data)
   })
 })
 
-describe('SvelteKit register API route', () => {
+describe('SvelteKit register page action', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -165,12 +158,12 @@ describe('SvelteKit register API route', () => {
     }
     mocks.validate.mockResolvedValue(submission)
 
-    const response = await registerRoute.POST({
-      request: createRequest('/api/register'),
+    const response = await registerPage.actions.default({
+      request: createRequest('/register'),
     })
 
     expect(response.status).toBe(422)
-    await expect(response.json()).resolves.toEqual(failure)
+    expect(response).toEqual(failure)
     expect(mocks.validate).toHaveBeenCalledWith(expect.any(Request), mocks.registerForm, {
       csrf: true,
       throttle: 'register',
@@ -208,16 +201,11 @@ describe('SvelteKit register API route', () => {
       user: created,
     })
 
-    const response = await registerRoute.POST({
-      request: createRequest('/api/register'),
-    })
-
-    expect(response.status).toBe(201)
-    await expect(response.json()).resolves.toMatchObject({
-      ok: true,
-      data: {
-        redirectTo: '/verify-email?email=reader%40example.com',
-      },
+    await expect(registerPage.actions.default({
+      request: createRequest('/register'),
+    })).rejects.toMatchObject({
+      status: 303,
+      location: '/verify-email?email=reader%40example.com',
     })
     expect(mocks.register).toHaveBeenCalledWith(submission.data)
     expect(mocks.loginUsing).toHaveBeenCalledWith(created)
@@ -264,7 +252,7 @@ describe('SvelteKit super admin page action', () => {
   })
 })
 
-describe('SvelteKit super admin login API route', () => {
+describe('SvelteKit super admin login page action', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -283,13 +271,14 @@ describe('SvelteKit super admin login API route', () => {
     }
     mocks.validate.mockResolvedValue(submission)
 
-    const response = await superAdminLoginRoute.POST({
-      request: createRequest('/api/super-admin/login'),
+    const response = await superAdminLoginPage.actions.default({
+      request: createRequest('/super-admin/login'),
     })
 
     expect(response.status).toBe(422)
-    await expect(response.json()).resolves.toEqual(failure)
+    expect(response).toEqual(failure)
     expect(mocks.validate).toHaveBeenCalledWith(expect.any(Request), mocks.loginForm, {
+      csrf: true,
       throttle: 'login',
     })
     expect(mocks.guardLogin).not.toHaveBeenCalled()
@@ -321,16 +310,11 @@ describe('SvelteKit super admin login API route', () => {
       error: null,
     })
 
-    const response = await superAdminLoginRoute.POST({
-      request: createRequest('/api/super-admin/login'),
-    })
-
-    expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toMatchObject({
-      ok: true,
-      data: {
-        redirectTo: '/super-admin',
-      },
+    await expect(superAdminLoginPage.actions.default({
+      request: createRequest('/super-admin/login'),
+    })).rejects.toMatchObject({
+      status: 303,
+      location: '/super-admin',
     })
     expect(mocks.guardLogin).toHaveBeenCalledWith(submission.data)
   })

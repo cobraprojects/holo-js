@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict'
 
 async function fetchJson(baseUrl, path, options = {}) {
+  const headers = new Headers(options.headers)
+  if (!headers.has('x-forwarded-for')) {
+    headers.set('x-forwarded-for', `127.20.0.${Math.floor(Math.random() * 200) + 1}`)
+  }
+
   const response = await fetch(new URL(path, baseUrl), {
     method: options.method ?? 'GET',
-    headers: options.headers,
+    headers,
     body: options.body,
     redirect: 'manual',
   })
@@ -39,6 +44,9 @@ async function createTokenFromCredentials(baseUrl) {
 
   const result = await fetchJson(baseUrl, '/api/v1/tokens', {
     method: 'POST',
+    headers: {
+      'x-forwarded-for': `127.10.0.${(Date.now() % 200) + 1}`,
+    },
     body: formData,
   })
 

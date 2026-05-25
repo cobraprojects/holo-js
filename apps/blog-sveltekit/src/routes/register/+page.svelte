@@ -1,26 +1,15 @@
 <script lang="ts">
-  import { goto } from '$app/navigation'
-  import { useAuth } from '@holo-js/auth/sveltekit/client'
   import { useForm } from '@holo-js/adapter-sveltekit/client'
   import { registerForm } from '$lib/schemas/auth'
+  import type { PageData } from './$types'
 
-  const auth = useAuth()
-  const form = useForm(registerForm, {
-    csrf: true,
+  export let data: PageData
+
+  const register = useForm(registerForm, {
     validateOn: 'blur',
     initialValues: { name: '', email: '', password: '', passwordConfirmation: '' },
-    async submitter({ formData }) {
-      const response = await fetch('/api/register', { method: 'POST', body: formData })
-      const submission = await response.json()
-      if (submission.ok === true && typeof submission.data?.redirectTo === 'string') {
-        await auth.refreshUser()
-        await goto(submission.data.redirectTo, { invalidateAll: true })
-      }
-
-      return submission
-    },
   })
-  $: formError = form.errors.first('_root')
+  $: formError = register.errors.first('_root')
 </script>
 
 <section class="panel">
@@ -29,7 +18,9 @@
     <p>Create a local user account and verify the email address before signing in.</p>
   </div>
 
-  <form class="stack" on:submit={(event) => { event.preventDefault(); void form.submit() }}>
+  <form class="stack" method="post">
+    <input type="hidden" name={data.csrf.name} value={data.csrf.value} />
+
     {#if formError}
       <p class="error">{formError}</p>
     {/if}
@@ -38,12 +29,12 @@
       <span>Name</span>
       <input
         name="name"
-        value={form.values.name}
-        on:input={(event) => form.fields.name.onInput(event.currentTarget.value)}
-        on:blur={() => form.fields.name.onBlur()}
+        value={register.values.name}
+        on:input={(event) => register.fields.name.onInput(event.currentTarget.value)}
+        on:blur={() => register.fields.name.onBlur()}
       />
-      {#if form.errors.has('name')}
-        <span class="error">{form.errors.first('name')}</span>
+      {#if register.errors.has('name')}
+        <span class="error">{register.errors.first('name')}</span>
       {/if}
     </label>
 
@@ -52,12 +43,12 @@
       <input
         name="email"
         type="email"
-        value={form.values.email}
-        on:input={(event) => form.fields.email.onInput(event.currentTarget.value)}
-        on:blur={() => form.fields.email.onBlur()}
+        value={register.values.email}
+        on:input={(event) => register.fields.email.onInput(event.currentTarget.value)}
+        on:blur={() => register.fields.email.onBlur()}
       />
-      {#if form.errors.has('email')}
-        <span class="error">{form.errors.first('email')}</span>
+      {#if register.errors.has('email')}
+        <span class="error">{register.errors.first('email')}</span>
       {/if}
     </label>
 
@@ -66,12 +57,12 @@
       <input
         name="password"
         type="password"
-        value={form.values.password}
-        on:input={(event) => form.fields.password.onInput(event.currentTarget.value)}
-        on:blur={() => form.fields.password.onBlur()}
+        value={register.values.password}
+        on:input={(event) => register.fields.password.onInput(event.currentTarget.value)}
+        on:blur={() => register.fields.password.onBlur()}
       />
-      {#if form.errors.has('password')}
-        <span class="error">{form.errors.first('password')}</span>
+      {#if register.errors.has('password')}
+        <span class="error">{register.errors.first('password')}</span>
       {/if}
     </label>
 
@@ -80,17 +71,17 @@
       <input
         name="passwordConfirmation"
         type="password"
-        value={form.values.passwordConfirmation}
-        on:input={(event) => form.fields.passwordConfirmation.onInput(event.currentTarget.value)}
-        on:blur={() => form.fields.passwordConfirmation.onBlur()}
+        value={register.values.passwordConfirmation}
+        on:input={(event) => register.fields.passwordConfirmation.onInput(event.currentTarget.value)}
+        on:blur={() => register.fields.passwordConfirmation.onBlur()}
       />
-      {#if form.errors.has('passwordConfirmation')}
-        <span class="error">{form.errors.first('passwordConfirmation')}</span>
+      {#if register.errors.has('passwordConfirmation')}
+        <span class="error">{register.errors.first('passwordConfirmation')}</span>
       {/if}
     </label>
 
-    <button type="submit" disabled={form.submitting}>
-      {form.submitting ? 'Creating account...' : 'Create account'}
+    <button type="submit" disabled={register.submitting}>
+      {register.submitting ? 'Creating account...' : 'Create account'}
     </button>
   </form>
 

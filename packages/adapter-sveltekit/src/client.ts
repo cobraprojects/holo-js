@@ -7,6 +7,8 @@ import {
   createFormClient,
 } from '@holo-js/forms/internal/client'
 
+type InitialFormState<TData> = UseFormOptions<TData>['initialState']
+
 export {
   type ClientSubmitContext,
   type ClientSubmitResult,
@@ -23,6 +25,79 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
     && !Array.isArray(value)
     && !(value instanceof Date)
     && !(value instanceof Blob)
+}
+
+function isSchemaField(value: unknown): boolean {
+  return isPlainObject(value)
+    && value.kind === 'field'
+    && isPlainObject(value.definition)
+}
+
+function collectSchemaPaths(value: unknown, prefix = ''): readonly string[] {
+  if (isSchemaField(value)) {
+    return [prefix].filter(Boolean)
+  }
+
+  if (!isPlainObject(value)) {
+    return []
+  }
+
+  return Object.entries(value).flatMap(([key, nested]) => {
+    const next = prefix ? `${prefix}.${key}` : key
+    return collectSchemaPaths(nested, next)
+  })
+}
+
+function collectValuePaths(value: unknown, prefix = ''): readonly string[] {
+  if (!isPlainObject(value)) {
+    return [prefix].filter(Boolean)
+  }
+
+  return Object.entries(value).flatMap(([key, nested]) => {
+    const next = prefix ? `${prefix}.${key}` : key
+    return collectValuePaths(nested, next)
+  })
+}
+
+function isFormState<TData>(value: unknown): value is NonNullable<InitialFormState<TData>> {
+  return isPlainObject(value)
+    && typeof value.valid === 'boolean'
+    && isPlainObject(value.values)
+    && isPlainObject(value.errors)
+}
+
+function stateMatchesSchema<TData>(schemaDefinition: FormSchema, state: NonNullable<InitialFormState<TData>>): boolean {
+  const schemaPaths = collectSchemaPaths(schemaDefinition.fields)
+  const statePaths = [
+    ...Object.keys(state.errors),
+    ...collectValuePaths(state.values),
+  ]
+
+  return statePaths.every(path => path === '_root' || schemaPaths.includes(path))
+}
+
+async function hydrateActionFormState<TData, TSuccess>(
+  form: Pick<UseFormResult<TData, TSuccess>, 'applyServerState'>,
+  schemaDefinition: FormSchema,
+): Promise<void> {
+  if (typeof (globalThis as { readonly window?: unknown }).window === 'undefined') {
+    return
+  }
+
+  const stores = await import('$app/stores') as {
+    readonly page: {
+      subscribe(listener: (value: { readonly form: unknown }) => void): () => void
+    }
+  }
+  let unsubscribe = () => {}
+  unsubscribe = stores.page.subscribe((value) => {
+    const state = value.form
+    if (isFormState<TData>(state) && stateMatchesSchema(schemaDefinition, state)) {
+      form.applyServerState(state)
+    }
+
+    queueMicrotask(unsubscribe)
+  })
 }
 
 function createReactiveView<TValue extends object>(
@@ -86,8 +161,13 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
   options: UseFormOptions<InferFormData<TSchema>, TSuccess> = {},
 ): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {
   type TData = InferFormData<TSchema>
+  const formOptions: UseFormOptions<TData, TSuccess> = {
+    ...options,
+    initialState: options.initialState ?? undefined,
+  }
 
-  const form = createFormClient(schemaDefinition, options)
+  const form = createFormClient(schemaDefinition, formOptions)
+  void hydrateActionFormState(form, schemaDefinition)
   const subscribe = createSubscriber((update) => form.subscribe(update))
   const cache = new WeakMap<object, object>()
 

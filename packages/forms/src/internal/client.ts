@@ -50,7 +50,7 @@ export interface UseFormOptions<TData, TSuccess = unknown> {
   readonly csrf?: boolean
   readonly validateOn?: ValidateOnMode
   readonly initialValues?: Partial<TData>
-  readonly initialState?: SerializedFormSubmission<TData>
+  readonly initialState?: SerializedFormSubmission<TData> | FormFailurePayload<TData> | null
   readonly submitter?: (
     context: ClientSubmitContext<TData>,
   ) => Promise<ClientSubmitResult<TData, TSuccess>> | ClientSubmitResult<TData, TSuccess>
@@ -745,20 +745,21 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
   options: UseFormOptions<InferFormData<TSchema>, TSuccess> = {},
 ): UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>> {
   type TData = InferFormData<TSchema>
+  const initialState = options.initialState ?? undefined
 
   const initialValues = mergeValues(
-    normalizeObject<TData>(options.initialState?.values),
-    options.initialValues,
+    normalizeObject<TData>(options.initialValues),
+    normalizeObject<TData>(initialState?.values),
   )
 
   const state: MutableState<TData, TSuccess> = {
     values: cloneValue(initialValues),
     initialValues: cloneValue(initialValues),
-    flattenedErrors: { ...(options.initialState?.errors ?? {}) },
+    flattenedErrors: { ...(initialState?.errors ?? {}) },
     touched: new Set<string>(),
     dirty: new Set<string>(),
     submitting: false,
-    lastSubmission: options.initialState,
+    lastSubmission: initialState,
     listeners: new Set(),
     validationSequence: 0,
   }

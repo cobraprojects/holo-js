@@ -1442,6 +1442,28 @@ describe('@holo-js/forms client', () => {
     expect(client.lastSubmission).toEqual(initialState)
   })
 
+  it('lets initial server state override default initial values', () => {
+    const registerUser = schema({
+      email: field.string().required().email(),
+    })
+
+    const initialState = createFailedSubmission(registerUser, {
+      email: 'submitted-bad',
+    }, {
+      email: ['Submitted email is invalid.'],
+    }).fail()
+
+    const client = useForm(registerUser, {
+      initialValues: {
+        email: '',
+      },
+      initialState,
+    })
+
+    expect(client.values.email).toBe('submitted-bad')
+    expect(client.errors.first('email')).toBe('Submitted email is invalid.')
+  })
+
   it('tracks submitting while an async submitter is in flight', async () => {
     const registerUser = schema({
       email: field.string().required().email(),

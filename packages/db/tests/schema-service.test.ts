@@ -1244,6 +1244,14 @@ describe('schema service', () => {
     expect(resolveIndexName('users', { columns: ['email'], unique: true, name: 'users_email_unique' })).toBe('users_email_unique')
     expect(resolveIndexName('users', { columns: ['email'], unique: true })).toBe('users_email_yfr781_unique')
     expect(resolveIndexName('users', { columns: ['display_name'], unique: false })).toBe('users_display_name_1mdvyy9_index')
+    expect(resolveIndexName('mysql_device_links', {
+      columns: ['user_public_id', 'device_key_id', 'label'],
+      unique: true,
+    })).toBe('mysql_device_links_user_public_id_device_key_id_1mb4nd2_unique')
+    expect(resolveIndexName('mysql_device_links', {
+      columns: ['user_public_id', 'device_key_id', 'label'],
+      unique: true,
+    }).length).toBeLessThanOrEqual(63)
   })
 
   it('renames indexes where the active dialect supports it and fails closed otherwise', async () => {

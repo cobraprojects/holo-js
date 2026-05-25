@@ -370,7 +370,7 @@ try {
   await rm(join(cwd, 'build'), { recursive: true, force: true })
   await assertSuperAdminLogoutUsesServerActionForm()
   await assertHeaderLogoutUsesServerRedirectForm()
-  await run('npx', ['vitest', '--run', 'tests/auth-page-actions.test.mjs', 'tests/register-route.test.mjs', '--reporter=json'])
+  await run('npx', ['vitest', '--run', 'tests/auth-page-actions.test.mjs', '--reporter=json'])
   await run('bun', ['run', 'prepare'])
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await run('npx', ['tsx', 'tests/blog-logic.mjs'])
@@ -398,6 +398,7 @@ try {
     getOutput: () => capturedOutput,
     appName: 'blog-sveltekit',
     sessionCookieName: DEFAULT_SESSION_COOKIE_NAME,
+    authSubmissionMode: 'sveltekit-actions',
     loginRequiresCsrf: true,
   })
   await assertExampleAppTokenAuthFlow({

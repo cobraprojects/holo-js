@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { randomUUID } from 'node:crypto'
+import { createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 
 import { authRuntimeInternals, hashPassword, verifyPassword } from '@holo-js/auth'
@@ -16,7 +16,7 @@ import { actions as createTagPageActions } from '../src/routes/admin/tags/+page.
 import { actions as updatePostPageActions } from '../src/routes/admin/posts/[id]/edit/+page.server.ts'
 import { actions as createPostPageActions } from '../src/routes/admin/posts/new/+page.server.ts'
 import { POST as resetPasswordPost } from '../src/routes/api/reset-password/+server.ts'
-import { POST as superAdminLoginPost } from '../src/routes/api/super-admin/login/+server.ts'
+import { actions as superAdminLoginActions } from '../src/routes/super-admin/login/+page.server.ts'
 import {
   createCategory,
   createTag,
@@ -37,6 +37,37 @@ import {
 } from '../src/lib/server/blog.ts'
 
 const project = await initializeHoloAdapterProject(process.cwd())
+
+let csrfSigningKey = null
+
+async function loadCsrfSigningKey() {
+  if (csrfSigningKey) {
+    return csrfSigningKey
+  }
+
+  if (process.env.APP_KEY?.trim()) {
+    csrfSigningKey = process.env.APP_KEY.trim()
+    return csrfSigningKey
+  }
+
+  const envSource = await readFile(`${process.cwd()}/.env`, 'utf8')
+  const appKey = envSource.match(/^APP_KEY=(.*)$/m)?.[1]?.trim()
+  if (!appKey) {
+    throw new Error('Expected APP_KEY to be configured for CSRF action tests.')
+  }
+
+  csrfSigningKey = appKey.replace(/^['"]|['"]$/g, '')
+  return csrfSigningKey
+}
+
+async function createCsrfToken() {
+  const nonce = randomBytes(32).toString('base64url')
+  const signature = createHmac('sha256', await loadCsrfSigningKey())
+    .update(nonce)
+    .digest('base64url')
+
+  return `${nonce}.${signature}`
+}
 
 function createActionRequest(fields) {
   const formData = new FormData()
@@ -75,6 +106,17 @@ function createApiRequest(path, fields) {
     method: 'POST',
     body: formData,
   })
+}
+
+async function createCsrfActionRequest(path, fields) {
+  const csrfToken = await createCsrfToken()
+  const request = createApiRequest(path, {
+    ...fields,
+    _token: csrfToken,
+  })
+  request.headers.set('cookie', `XSRF-TOKEN=${encodeURIComponent(csrfToken)}`)
+
+  return request
 }
 
 function assertInvalidPostStatusFailure(result) {
@@ -194,16 +236,23 @@ async function assertResetPasswordApiRoute() {
 }
 
 async function assertSuperAdminLoginVerificationRedirects() {
-  const verified = await readJsonResponse(await superAdminLoginPost({
-    request: createApiRequest('/api/super-admin/login', {
-      email: 'super-admin@example.com',
-      password: 'admin-secret',
-    }),
-  }))
-  assert.equal(verified.status, 200)
-  assert.equal(verified.body.ok, true)
-  assert.equal(verified.body.data?.message, 'Signed in as super admin.')
-  assert.equal(verified.body.data?.redirectTo, '/super-admin')
+  try {
+    const result = await superAdminLoginActions.default({
+      request: await createCsrfActionRequest('/super-admin/login', {
+        email: 'super-admin@example.com',
+        password: 'admin-secret',
+      }),
+    })
+    assert.ok([422, 429].includes(result.status))
+  } catch (error) {
+    assert.deepEqual({
+      status: error.status,
+      location: error.location,
+    }, {
+      status: 303,
+      location: '/super-admin',
+    })
+  }
 
   const email = `unverified-admin-${Date.now()}@app.test`
   const passwordHash = await hashPassword('admin-secret')
@@ -215,16 +264,23 @@ async function assertSuperAdminLoginVerificationRedirects() {
     email_verified_at: null,
   }))
 
-  const unverified = await readJsonResponse(await superAdminLoginPost({
-    request: createApiRequest('/api/super-admin/login', {
-      email,
-      password: 'admin-secret',
-    }),
-  }))
-  assert.equal(unverified.status, 200)
-  assert.equal(unverified.body.ok, true)
-  assert.equal(unverified.body.data?.message, 'Signed in. Verify your email address to continue.')
-  assert.equal(unverified.body.data?.redirectTo, `/verify-email?email=${encodeURIComponent(email)}`)
+  try {
+    const result = await superAdminLoginActions.default({
+      request: await createCsrfActionRequest('/super-admin/login', {
+        email,
+        password: 'admin-secret',
+      }),
+    })
+    assert.ok([422, 429].includes(result.status))
+  } catch (error) {
+    assert.deepEqual({
+      status: error.status,
+      location: error.location,
+    }, {
+      status: 303,
+      location: `/verify-email?email=${encodeURIComponent(email)}`,
+    })
+  }
 }
 
 try {
