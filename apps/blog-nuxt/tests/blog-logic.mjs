@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 
+import cache, { configureCacheRuntime, getCacheRuntimeBindings } from '@holo-js/cache'
 import { initializeHoloAdapterProject } from '@holo-js/core'
+import { DB } from '@holo-js/db'
 
 import Category from '../server/models/Category.ts'
 import Post from '../server/models/Post.ts'
@@ -19,6 +21,8 @@ import {
   getAdminTagsData,
   getCategoryArchive,
   getHomePageData,
+  getNavigationCategories,
+  getPublishedPosts,
   getPublishedPostBySlug,
   getTagArchive,
   parseTagIds,
@@ -28,6 +32,125 @@ import {
 } from '../server/lib/blog.ts'
 
 const project = await initializeHoloAdapterProject(process.cwd())
+const blogCache = cache.driver('memory')
+const cacheBindings = getCacheRuntimeBindings()
+if (!cacheBindings) {
+  throw new Error('Expected cache runtime bindings to be configured.')
+}
+configureCacheRuntime({
+  config: {
+    ...cacheBindings.config,
+    default: 'memory',
+  },
+  databaseConfig: cacheBindings.databaseConfig,
+  redisConfig: cacheBindings.redisConfig,
+  drivers: cacheBindings.drivers,
+  dependencyIndex: cacheBindings.dependencyIndex,
+  queryBridge: cacheBindings.queryBridge,
+})
+
+async function countRegisteredCacheKeys() {
+  return (await getCacheRuntimeBindings()?.dependencyIndex?.listRegisteredKeys() ?? []).length
+}
+
+async function getRegisteredCacheKeys() {
+  return [...(await getCacheRuntimeBindings()?.dependencyIndex?.listRegisteredKeys() ?? [])]
+}
+
+function resolveDriverCacheKey(indexedKey) {
+  const delimiterIndex = indexedKey.indexOf('\u0000')
+  return delimiterIndex === -1 ? indexedKey : indexedKey.slice(delimiterIndex + 1)
+}
+
+async function countTableSelectQueryExecutions(tableName, callback) {
+  const connection = DB.connection()
+  const originalQueryCompiled = connection.queryCompiled.bind(connection)
+  let queryCount = 0
+  connection.queryCompiled = async (statement, ...parameters) => {
+    if (statement.sql.includes(`"${tableName}"`) && statement.sql.toLowerCase().startsWith('select')) {
+      queryCount += 1
+    }
+
+    return await originalQueryCompiled(statement, ...parameters)
+  }
+
+  try {
+    await callback()
+    await new Promise(resolve => setTimeout(resolve, 0))
+  } finally {
+    connection.queryCompiled = originalQueryCompiled
+  }
+
+  return queryCount
+}
+
+async function withMockedNow(timestamp, callback) {
+  const originalNow = Date.now
+  Date.now = () => timestamp
+  try {
+    return await callback()
+  } finally {
+    Date.now = originalNow
+  }
+}
+
+function createDeferred() {
+  let resolveDeferred = () => {}
+  const promise = new Promise(resolve => {
+    resolveDeferred = resolve
+  })
+
+  return {
+    promise,
+    resolve: resolveDeferred,
+  }
+}
+
+async function waitForCondition(predicate, message) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (predicate()) {
+      return
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 0))
+  }
+
+  assert.fail(message)
+}
+
+async function assertFlexibleStaleRefreshDoesNotBlock(timestamp) {
+  const connection = DB.connection()
+  const originalQueryCompiled = connection.queryCompiled.bind(connection)
+  const refreshGate = createDeferred()
+  let refreshStarted = false
+  let refreshFinished = false
+
+  connection.queryCompiled = async (statement, ...parameters) => {
+    if (statement.sql.includes('"categories"') && statement.sql.toLowerCase().startsWith('select')) {
+      refreshStarted = true
+      await refreshGate.promise
+      const result = await originalQueryCompiled(statement, ...parameters)
+      refreshFinished = true
+
+      return result
+    }
+
+    return await originalQueryCompiled(statement, ...parameters)
+  }
+
+  try {
+    const staleRead = await withMockedNow(timestamp, async () => await getNavigationCategories())
+    assert.equal(staleRead.length, 2)
+    await waitForCondition(() => refreshStarted, 'Expected flexible stale refresh query to start.')
+    assert.equal(refreshFinished, false)
+
+    refreshGate.resolve()
+    await waitForCondition(() => refreshFinished, 'Expected flexible stale refresh query to finish.')
+  } finally {
+    refreshGate.resolve()
+    connection.queryCompiled = originalQueryCompiled
+  }
+}
 
 try {
   assert.deepEqual(parseTagIds('1, 2, 2, nope, 0, -1, 3'), [1, 2, 3])
@@ -59,6 +182,42 @@ try {
   const frameworkArchive = await getTagArchive('framework')
   assert.ok(frameworkArchive)
   assert.equal(frameworkArchive.posts.length, 2)
+
+  await blogCache.flush()
+  await getCacheRuntimeBindings()?.dependencyIndex?.clear()
+  const cachedPublishedPosts = await getPublishedPosts()
+  assert.equal(cachedPublishedPosts.length, 2)
+  const registeredCacheKeys = await getRegisteredCacheKeys()
+  assert.equal(registeredCacheKeys.length, 1)
+  assert.equal(await blogCache.has(resolveDriverCacheKey(registeredCacheKeys[0])), true)
+  const cachedQueryCount = await countTableSelectQueryExecutions('posts', async () => {
+    assert.equal((await getPublishedPosts()).length, 2)
+  })
+  assert.equal(cachedQueryCount, 0)
+  assert.equal(await countRegisteredCacheKeys(), 1)
+
+  await blogCache.flush()
+  await getCacheRuntimeBindings()?.dependencyIndex?.clear()
+  const flexibleMissQueryCount = await countTableSelectQueryExecutions('categories', async () => {
+    assert.equal((await getNavigationCategories()).length, 2)
+  })
+  assert.equal(flexibleMissQueryCount, 1)
+  const registeredFlexibleCacheKeys = await getRegisteredCacheKeys()
+  assert.equal(registeredFlexibleCacheKeys.length, 1)
+  assert.equal(await blogCache.has(resolveDriverCacheKey(registeredFlexibleCacheKeys[0])), true)
+  const flexibleHitQueryCount = await countTableSelectQueryExecutions('categories', async () => {
+    assert.equal((await getNavigationCategories()).length, 2)
+  })
+  assert.equal(flexibleHitQueryCount, 0)
+  assert.equal(await countRegisteredCacheKeys(), 1)
+  const flexibleCachedAt = Date.now()
+  await assertFlexibleStaleRefreshDoesNotBlock(flexibleCachedAt + 61_000)
+  const flexibleExpiredQueryCount = await withMockedNow(flexibleCachedAt + 362_000, async () =>
+    await countTableSelectQueryExecutions('categories', async () => {
+      assert.equal((await getNavigationCategories()).length, 2)
+    }),
+  )
+  assert.equal(flexibleExpiredQueryCount, 1)
 
   await createCategory({
     name: 'Platform Ops',
@@ -96,6 +255,8 @@ try {
     categoryId: String(updatedCategory.id),
     tagIds: String(frameworkTag.id),
   })
+  assert.equal(await countRegisteredCacheKeys(), 0)
+  assert.ok((await getPublishedPosts()).some(post => post.slug === 'logic-coverage-post'))
 
   let logicPost = await Post.with('category', 'tags').where('slug', 'logic-coverage-post').first()
   assert.ok(logicPost)
@@ -111,6 +272,7 @@ try {
     categoryId: '',
     tagIds: String(releaseTag.id),
   })
+  assert.equal(await countRegisteredCacheKeys(), 0)
 
   logicPost = await Post.with('category', 'tags').where('id', logicPost.id).first()
   assert.ok(logicPost)

@@ -4356,6 +4356,38 @@ export default defineRedisConfig({
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('REDIS_HOST=')
   }, 30_000)
 
+  it('switches cache drivers after the user updates cache config and reruns the public install command', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    expect(runCliProcess(projectRoot, ['install', 'cache']).status).toBe(0)
+    await writeProjectFile(projectRoot, 'config/cache.ts', `
+import { defineCacheConfig } from '@holo-js/config'
+
+export default defineCacheConfig({
+  default: 'redis',
+  drivers: {
+    redis: {
+      driver: 'redis',
+      connection: 'default',
+    },
+  },
+})
+`)
+
+    const result = runCliProcess(projectRoot, ['install', 'cache', '--driver', 'redis'])
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('Installed cache support.')
+    expect(result.stdout).toContain('  - created config/redis.ts')
+    expect(result.stdout).toContain('  - updated package.json')
+    expect(await readFile(join(projectRoot, 'config/cache.ts'), 'utf8')).toContain('default: \'redis\'')
+    expect(await readFile(join(projectRoot, 'config/redis.ts'), 'utf8')).toContain('defineRedisConfig')
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('REDIS_HOST=')
+    expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('REDIS_HOST=')
+    expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/cache-redis": "${expectedHoloPackageRange}"`)
+  }, 30_000)
+
   it('fails instead of partially installing a mismatched cache driver when cache config already exists', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

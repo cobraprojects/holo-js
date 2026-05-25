@@ -1,10 +1,13 @@
 import { hashPassword } from '@holo-js/auth'
 import { DB, uniqueSlug } from '@holo-js/db'
 
-import Post from '../../../server/models/Post'
-import User from '../../../server/models/User'
 import Category from '../../../server/models/Category'
+import Post from '../../../server/models/Post'
 import Tag from '../../../server/models/Tag'
+import User from '../../../server/models/User'
+
+const BLOG_QUERY_CACHE_SECONDS = 60
+const BLOG_FLEXIBLE_CACHE_SECONDS = [60, 300] as const
 
 function now(): Date {
   return new Date()
@@ -37,8 +40,8 @@ export function parseTagIds(value: string): number[] {
 
 export async function getHomePageData() {
   const [posts, categories, tags] = await Promise.all([
-    Post.with('category', 'tags').where('status', 'published').orderBy('published_at', 'desc').get(),
-    Category.orderBy('name').get(),
+    getPublishedPosts(),
+    getNavigationCategories(),
     Tag.orderBy('name').get(),
   ])
   return {
@@ -49,8 +52,20 @@ export async function getHomePageData() {
   }
 }
 
+export async function getNavigationCategories() {
+  return await Category
+    .orderBy('name')
+    .cache({ flexible: BLOG_FLEXIBLE_CACHE_SECONDS })
+    .get()
+}
+
 export async function getPublishedPosts() {
-  return await Post.with('category', 'tags').where('status', 'published').orderBy('published_at', 'desc').get()
+  return await Post
+    .with('category', 'tags')
+    .where('status', 'published')
+    .orderBy('published_at', 'desc')
+    .cache(BLOG_QUERY_CACHE_SECONDS)
+    .get()
 }
 
 export async function getPublishedPostBySlug(slug: string) {

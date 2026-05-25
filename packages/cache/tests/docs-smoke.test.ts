@@ -43,7 +43,11 @@ describe('cache documentation smoke checks', () => {
     const commands = await readFile(resolve(root, 'apps/docs/docs/database/commands.md'), 'utf8')
 
     expect(runtime).toContain('defineCacheKey')
-    expect(runtime).toContain('cache.put(reportKey, { total: 42 }, 300)')
+    expect(runtime).toContain("await cache.put('reports.daily', { total: 42 }, 300)")
+    expect(runtime).toContain('Advanced: typed keys and inference')
+    expect(runtime).toContain('Type inference by API')
+    expect(runtime).toContain('cache.put(dashboardStats, { users: 10, posts: 42 }, 300)')
+    expect(runtime).toContain('later raw-string reads do not infer from it')
     expect(runtime).toContain('cache.add(key, value, ttl)')
     expect(runtime).toContain('cache.put(key, value, ttl)')
     expect(runtime).toContain('cache.remember(')

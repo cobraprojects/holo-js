@@ -1,3 +1,6 @@
+import { createRequire } from 'node:module'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   normalizeDatabaseConfig,
   type HoloDatabaseConfig,
@@ -75,11 +78,11 @@ function isModuleNotFoundError(error: unknown, expectedSpecifier = '@holo-js/cac
   const message = 'message' in error && typeof (error as { message?: unknown }).message === 'string'
     ? (error as { message: string }).message
     : ''
+  const code = 'code' in error ? (error as { code?: unknown }).code : undefined
   const escapedSpecifier = escapeRegExp(expectedSpecifier)
 
   if (
-    'code' in error
-    && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
+    (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND')
     && [
       new RegExp(`Cannot find package ['"]${escapedSpecifier}['"]`),
       new RegExp(`Cannot find module ['"]${escapedSpecifier}['"]`),
@@ -112,12 +115,25 @@ function normalizeDatabaseModuleLoadError(
 }
 
 /* v8 ignore start -- optional-peer loading failures are covered through normalizeDatabaseModuleLoadError in this monorepo test graph. */
+async function importDatabaseDriverModuleFromProject(specifier: string): Promise<DatabaseCacheDriverModule> {
+  const projectRequire = createRequire(join(process.cwd(), 'package.json'))
+  return await import(pathToFileURL(projectRequire.resolve(specifier)).href) as DatabaseCacheDriverModule
+}
+
 async function loadDatabaseDriverModule(): Promise<DatabaseCacheDriverModule> {
+  const specifier = '@holo-js/cache-db' as string
   try {
-    const specifier = '@holo-js/cache-db' as string
     return await import(/* webpackIgnore: true */ specifier) as DatabaseCacheDriverModule
   } catch (error) {
-    throw normalizeDatabaseModuleLoadError(error, '@holo-js/cache-db')
+    if (!isModuleNotFoundError(error, specifier)) {
+      throw normalizeDatabaseModuleLoadError(error, specifier)
+    }
+
+    try {
+      return await importDatabaseDriverModuleFromProject(specifier)
+    } catch (fallbackError) {
+      throw normalizeDatabaseModuleLoadError(fallbackError, specifier)
+    }
   }
 }
 /* v8 ignore stop */

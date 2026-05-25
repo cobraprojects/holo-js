@@ -7,11 +7,14 @@ import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { DEFAULT_SESSION_COOKIE_NAME } from '@holo-js/config'
+import Database from 'better-sqlite3'
 import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 
 const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
+const configCachePath = join(cwd, '.holo-js/generated/config-cache.json')
+const databasePath = join(cwd, 'storage/database.sqlite')
 const originalConfig = await readFile(configPath, 'utf8')
 const runtimeSchemaPath = join(cwd, '.holo-js/generated/schema.mjs')
 const escapeCharacter = String.fromCharCode(27)
@@ -193,6 +196,42 @@ async function waitForRedirect(url, expectedPath, timeoutMs = 30000) {
   throw new Error(`Timed out waiting for ${url} to redirect to ${expectedPath}${lastError instanceof Error ? `: ${lastError.message}` : ''}`)
 }
 
+function countCacheRows() {
+  const database = new Database(databasePath, { readonly: true })
+  try {
+    return database.prepare('select count(*) as count from cache').get().count
+  } finally {
+    database.close()
+  }
+}
+
+async function assertConfigCacheCommands() {
+  await run('bun', ['run', 'config:cache'])
+  assert.equal(existsSync(configCachePath), true)
+  assert.ok((await readFile(configCachePath, 'utf8')).includes('blog-sveltekit'))
+
+  await run('bun', ['run', 'config:clear'])
+  assert.equal(existsSync(configCachePath), false)
+}
+
+async function assertCacheBackedHttpBehavior(baseUrl) {
+  await run('bun', ['x', 'holo', 'cache:clear'])
+  assert.equal(countCacheRows(), 0)
+
+  await waitForText(`${baseUrl}/`, payload => payload.includes('Shipping a Real Holo Blog on SvelteKit'))
+  const homeCacheRows = countCacheRows()
+  assert.ok(homeCacheRows >= 1, 'Expected the home page request to store query cache rows.')
+
+  await waitForText(`${baseUrl}/posts`, payload => payload.includes('Shipping a Real Holo Blog on SvelteKit'))
+  assert.ok(countCacheRows() >= homeCacheRows, 'Expected the posts page request to reuse existing query cache rows.')
+
+  await run('bun', ['x', 'holo', 'cache:clear'])
+  assert.equal(countCacheRows(), 0)
+
+  await waitForText(`${baseUrl}/`, payload => payload.includes('Shipping a Real Holo Blog on SvelteKit'))
+  assert.ok(countCacheRows() >= 1, 'Expected cache rows to be recreated after cache clear.')
+}
+
 async function fetchJson(url, options = {}) {
   const headers = new Headers(options.headers ?? {})
   let body = options.body
@@ -372,6 +411,7 @@ try {
   await assertHeaderLogoutUsesServerRedirectForm()
   await run('npx', ['vitest', '--run', 'tests/auth-page-actions.test.mjs', '--reporter=json'])
   await run('bun', ['run', 'prepare'])
+  await assertConfigCacheCommands()
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await run('npx', ['tsx', 'tests/blog-logic.mjs'])
 
@@ -391,6 +431,7 @@ try {
   const initial = await waitForJson(healthUrl, payload => payload.ok === true)
   assert.equal(initial.app, 'blog-sveltekit')
   await waitForText(`${devUrl}/`, payload => payload.includes('Shipping a Real Holo Blog on SvelteKit'))
+  await assertCacheBackedHttpBehavior(devUrl)
   await waitForRedirect(`${devUrl}/admin/posts`, '/login')
   await assertResetPasswordApiValidation(devUrl)
   await assertExampleAppAuthFlow({

@@ -7,12 +7,15 @@ import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { DEFAULT_SESSION_COOKIE_NAME } from '@holo-js/config'
+import Database from 'better-sqlite3'
 import ts from 'typescript'
 import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 
 const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
+const configCachePath = join(cwd, '.holo-js/generated/config-cache.json')
+const databasePath = join(cwd, 'storage/database.sqlite')
 const port = await new Promise((resolve, reject) => {
   const server = createServer()
   server.once('error', reject)
@@ -291,6 +294,42 @@ async function waitForRedirect(url, expectedPath, timeoutMs = 30000) {
   throw new Error(`Timed out waiting for ${url} to redirect to ${expectedPath}${lastError instanceof Error ? `: ${lastError.message}` : ''}`)
 }
 
+function countCacheRows() {
+  const database = new Database(databasePath, { readonly: true })
+  try {
+    return database.prepare('select count(*) as count from cache').get().count
+  } finally {
+    database.close()
+  }
+}
+
+async function assertConfigCacheCommands() {
+  await run('bun', ['run', 'config:cache'])
+  assert.equal(existsSync(configCachePath), true)
+  assert.ok((await readFile(configCachePath, 'utf8')).includes('blog-next'))
+
+  await run('bun', ['run', 'config:clear'])
+  assert.equal(existsSync(configCachePath), false)
+}
+
+async function assertCacheBackedHttpBehavior(baseUrl) {
+  await run('bun', ['x', 'holo', 'cache:clear'])
+  assert.equal(countCacheRows(), 0)
+
+  await waitForText(`${baseUrl}/`, payload => payload.includes('Shipping a Real Holo Blog on Next'))
+  const homeCacheRows = countCacheRows()
+  assert.ok(homeCacheRows >= 1, 'Expected the home page request to store query cache rows.')
+
+  await waitForText(`${baseUrl}/posts`, payload => payload.includes('Shipping a Real Holo Blog on Next'))
+  assert.ok(countCacheRows() >= homeCacheRows, 'Expected the posts page request to reuse existing query cache rows.')
+
+  await run('bun', ['x', 'holo', 'cache:clear'])
+  assert.equal(countCacheRows(), 0)
+
+  await waitForText(`${baseUrl}/`, payload => payload.includes('Shipping a Real Holo Blog on Next'))
+  assert.ok(countCacheRows() >= 1, 'Expected cache rows to be recreated after cache clear.')
+}
+
 function pipeOutput(stream, target) {
   if (!stream) {
     return
@@ -327,6 +366,7 @@ try {
   await assertHeaderLogoutRedirectsHome()
   await run('npx', ['vitest', '--run', 'tests/api-v1-routes.test.mjs', 'tests/auth-nav.test.mjs', 'tests/current-auth-route.test.mjs', 'tests/forgot-password-route.test.mjs', 'tests/hosted-logout-routes.test.mjs', 'tests/login-page.test.mjs', 'tests/logout-actions.test.mjs', 'tests/package-checks.test.mjs', 'tests/register-page.test.mjs', 'tests/reset-password-page.test.mjs', 'tests/reset-password-route.test.mjs', 'tests/social-auth-routes.test.mjs', 'tests/super-admin-logout-button.test.mjs', 'tests/super-admin-login-page.test.mjs', 'tests/super-admin-login-route.test.mjs', 'tests/verify-email-page.test.mjs', '--reporter=json'])
   await run('bun', ['run', 'prepare'])
+  await assertConfigCacheCommands()
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await run('npx', ['tsx', 'tests/blog-logic.mjs'])
 
@@ -348,6 +388,7 @@ try {
   const initial = await waitForJson(healthUrl, payload => payload.ok === true)
   assert.equal(initial.app, 'blog-next')
   await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Next'))
+  await assertCacheBackedHttpBehavior(`http://localhost:${port}`)
   await waitForRedirect(`http://localhost:${port}/admin`, '/login')
   await waitForRedirect(`http://localhost:${port}/admin/posts`, '/login')
   await assertExampleAppAuthFlow({
