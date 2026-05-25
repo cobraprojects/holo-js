@@ -41,6 +41,10 @@ type StrictStorageRuntime = {
 async function createProjectRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-core-adapter-'))
   tempDirs.push(root)
+  await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
+  await symlink(resolve(import.meta.dirname, '../../authorization'), join(root, 'node_modules/@holo-js/authorization'))
+  await symlink(resolve(import.meta.dirname, '../../events'), join(root, 'node_modules/@holo-js/events'))
+  await symlink(resolve(import.meta.dirname, '../../queue'), join(root, 'node_modules/@holo-js/queue'))
   await mkdir(join(root, 'config'), { recursive: true })
   await mkdir(join(root, 'server/models'), { recursive: true })
   await mkdir(join(root, 'server/db/migrations'), { recursive: true })
@@ -111,6 +115,13 @@ describe('@holo-js/core adapter helpers', () => {
         preferCache: false,
         processEnv: { APP_SECRET: 'explicit' },
       })
+
+      const createError = () => new Error('Denied')
+      const withAuthorizationError = resolveHoloFrameworkOptions({
+        authorizationError: { createError },
+      })
+
+      expect(withAuthorizationError.runtime.authorizationError?.createError).toBe(createError)
     } finally {
       process.env.NODE_ENV = previousNodeEnv
     }

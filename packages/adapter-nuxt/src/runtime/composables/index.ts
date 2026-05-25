@@ -4,6 +4,7 @@ import {
   initializeHoloAdapterProject,
   type CreateHoloOptions,
 } from '@holo-js/core'
+import { createNuxtAuthorizationError } from '../authorization-error'
 
 type RuntimeConfigShape = {
   holo: {
@@ -213,6 +214,9 @@ export const holo = createHoloProjectAccessors(async () => {
     preferCache: process.env.NODE_ENV === 'production',
     processEnv: process.env,
     authRequest: createNuxtAuthRequestAccessors(),
+    authorizationError: {
+      createError: createNuxtAuthorizationError,
+    },
   })
 })
 

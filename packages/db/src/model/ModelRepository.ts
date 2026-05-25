@@ -80,6 +80,15 @@ function resolveModelConnection<TTable extends TableDefinition>(
   return DB.connection(definition.connectionName)
 }
 
+function resolveActiveConnection(connection: DatabaseContext): DatabaseContext {
+  const active = connectionAsyncContext.getActive()
+  if (active && active.connectionName === connection.getConnectionName()) {
+    return active.connection
+  }
+
+  return connection
+}
+
 export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   readonly definition: ModelDefinition<TTable>
 
@@ -99,11 +108,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   }
 
   getConnection(): DatabaseContext {
-    return this.connection
+    return resolveActiveConnection(this.connection)
   }
 
   getConnectionName(): string {
-    return this.connection.getConnectionName()
+    return this.getConnection().getConnectionName()
   }
 
   getDeletedAtColumn(): string | undefined {
@@ -1163,11 +1172,12 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   }
 
   private async runWriteUnit<TResult>(callback: () => Promise<TResult>): Promise<TResult> {
-    if (this.connection.getScope().kind !== 'root') {
+    const connection = this.getConnection()
+    if (connection.getScope().kind !== 'root') {
       return callback()
     }
 
-    return this.connection.transaction(async () => callback())
+    return connection.transaction(async () => callback())
   }
 
   async forceDeleteEntityQuietly(entity: Entity<TTable>): Promise<void> {
@@ -1215,7 +1225,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       return
     }
 
-    await this.connection.transaction(async (tx) => {
+    await this.getConnection().transaction(async (tx) => {
       const currentRows = await this.getPivotRows(context, tx, entries.map(entry => entry.id))
       const currentMap = this.indexPivotRows(currentRows, this.getPivotRelatedIdColumn(context.relation))
 
@@ -1240,7 +1250,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   ): Promise<number> {
     const context = this.getPivotMutationContext(entity, relationName)
 
-    return this.connection.transaction(async (tx) => {
+    return this.getConnection().transaction(async (tx) => {
       if (typeof ids === 'undefined' || ids === null) {
         return this.deletePivotRows(context, tx)
       }
@@ -1266,7 +1276,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     const desiredMap = new Map(entries.map(entry => [String(entry.id), entry]))
     const result: PivotSyncResult = { attached: [], detached: [], updated: [] }
 
-    await this.connection.transaction(async (tx) => {
+    await this.getConnection().transaction(async (tx) => {
       const currentRows = await this.getPivotRows(context, tx)
       const currentMap = this.indexPivotRows(currentRows, this.getPivotRelatedIdColumn(context.relation))
 
@@ -1309,10 +1319,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     const context = this.getPivotMutationContext(entity, relationName)
     this.assertValidPivotAttributes(relationName, attributes, context.relation)
     if (Object.keys(attributes).length === 0) return 0
-    const [existing] = await this.getPivotRows(context, this.connection, [id])
+    const [existing] = await this.getPivotRows(context, this.getConnection(), [id])
     if (!existing) return 0
     if (!this.pivotAttributesChanged(existing, attributes, context.relation)) return 0
-    await this.updatePivotRow(context, this.connection, id, attributes)
+    await this.updatePivotRow(context, this.getConnection(), id, attributes)
     return 1
   }
 
@@ -1330,7 +1340,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       return result
     }
 
-    await this.connection.transaction(async (tx) => {
+    await this.getConnection().transaction(async (tx) => {
       const currentRows = await this.getPivotRows(context, tx, entries.map(entry => entry.id))
       const currentMap = this.indexPivotRows(currentRows, this.getPivotRelatedIdColumn(context.relation))
 
@@ -1406,7 +1416,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   ): ModelQueryBuilder<TTable> {
     let query = new ModelQueryBuilder(
       this,
-      new TableQueryBuilder(this.definition.table, this.connection),
+      new TableQueryBuilder(this.definition.table, this.getConnection()),
     )
 
     const deletedAtColumn = this.getDeletedAtColumn()
@@ -1660,7 +1670,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       return
     }
 
-    const pivotRows = await this.createBelongsToManyPivotQuery(relation, this.connection)
+    const pivotRows = await this.createBelongsToManyPivotQuery(relation, this.getConnection())
       .where(relation.foreignPivotKey, 'in', parentKeys)
       .get<Record<string, unknown>>()
 
@@ -1910,7 +1920,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       }
       case 'belongsToMany': {
         const related = this.resolveRelatedRepository(relation.related)
-        const pivotSubquery = this.createBelongsToManyPivotQuery(relation, this.connection)
+        const pivotSubquery = this.createBelongsToManyPivotQuery(relation, this.getConnection())
           .select(relation.relatedPivotKey)
           .whereColumn(relation.foreignPivotKey, '=', this.qualifyParentColumn(relation.parentKey))
 
@@ -1920,7 +1930,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       }
       case 'morphToMany': {
         const related = this.resolveRelatedRepository(relation.related)
-        const pivotSubquery = this.createMorphToManyPivotQuery(relation, this.connection)
+        const pivotSubquery = this.createMorphToManyPivotQuery(relation, this.getConnection())
           .select(relation.foreignPivotKey)
           .where(relation.morphTypeColumn, this.getMorphTypeValue())
           .whereColumn(relation.morphIdColumn, '=', this.qualifyParentColumn(relation.parentKey))
@@ -1931,7 +1941,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       }
       case 'morphedByMany': {
         const related = this.resolveRelatedRepository(relation.related)
-        const pivotSubquery = this.createMorphedByManyPivotQuery(relation, related.definition.morphClass, this.connection)
+        const pivotSubquery = this.createMorphedByManyPivotQuery(relation, related.definition.morphClass, this.getConnection())
           .select(relation.morphIdColumn)
           .whereColumn(relation.foreignPivotKey, '=', this.qualifyParentColumn(relation.parentKey))
 
@@ -2801,7 +2811,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       return new Set()
     }
 
-    const pivotRows = await this.createBelongsToManyPivotQuery(relation, this.connection)
+    const pivotRows = await this.createBelongsToManyPivotQuery(relation, this.getConnection())
       .where(relation.foreignPivotKey, 'in', parentKeys)
       .get<Record<string, unknown>>()
 
@@ -2864,7 +2874,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       return new Map()
     }
 
-    const pivotRows = await this.createBelongsToManyPivotQuery(relation, this.connection)
+    const pivotRows = await this.createBelongsToManyPivotQuery(relation, this.getConnection())
       .where(relation.foreignPivotKey, 'in', parentKeys)
       .get<Record<string, unknown>>()
 
@@ -2942,7 +2952,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       return new Map()
     }
 
-    const pivotRows = await this.createBelongsToManyPivotQuery(relation, this.connection)
+    const pivotRows = await this.createBelongsToManyPivotQuery(relation, this.getConnection())
       .where(relation.foreignPivotKey, 'in', parentKeys)
       .get<Record<string, unknown>>()
 
@@ -2996,7 +3006,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       return new Map()
     }
 
-    const pivotRows = await this.createMorphToManyPivotQuery(relation, this.connection)
+    const pivotRows = await this.createMorphToManyPivotQuery(relation, this.getConnection())
       .where(relation.morphTypeColumn, this.getMorphTypeValue())
       .where(relation.morphIdColumn, 'in', parentKeys)
       .get<Record<string, unknown>>()
@@ -3052,7 +3062,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    const pivotRows = await this.createMorphedByManyPivotQuery(relation, related.definition.morphClass, this.connection)
+    const pivotRows = await this.createMorphedByManyPivotQuery(relation, related.definition.morphClass, this.getConnection())
       .where(relation.foreignPivotKey, 'in', parentKeys)
       .get<Record<string, unknown>>()
 
@@ -3836,7 +3846,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   }
 
   private getSchemaDialectName(): SchemaDialectName {
-    return this.connection.getDriver() as SchemaDialectName
+    return this.getConnection().getDriver() as SchemaDialectName
   }
 
   private applyCastGet(cast: ModelCastDefinition | undefined, value: unknown): unknown {

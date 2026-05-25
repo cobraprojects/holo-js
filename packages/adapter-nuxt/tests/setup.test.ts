@@ -97,6 +97,7 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
       await symlink(resolve(packageDir, '../db/node_modules/tsup'), join(tempRootNodeModules, 'tsup'))
       await symlink(resolve(repoRoot, 'node_modules/typescript'), join(tempRootNodeModules, 'typescript'))
       await symlink(resolve(packageDir, 'node_modules/@nuxt'), join(tempRootNodeModules, '@nuxt'))
+      await symlink(resolve(packageDir, 'node_modules/h3'), join(tempRootNodeModules, 'h3'))
       await symlink(nitropackPackageDir, join(tempRootNodeModules, 'nitropack'))
       await linkInstalledDependenciesForPackage({
         repoRoot,
@@ -518,6 +519,7 @@ export default defineStorageConfig({
     expect(references).toEqual([
       { types: '@holo-js/adapter-nuxt' },
       { path: join(root, '.holo-js/generated/auth.d.ts') },
+      { path: join(root, '.holo-js/generated/authorization/types.d.ts') },
       { path: join(root, '.holo-js/generated/model-registry.d.ts') },
     ])
   }, 30000)

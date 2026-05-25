@@ -786,6 +786,7 @@ type AuthorizationModule = {
       hasGuard(guardName: string): boolean
       resolveDefaultActor(): Promise<object | null> | object | null
       resolveGuardActor(guardName: string): Promise<object | null> | object | null
+      createError?(decision: { readonly message?: string, readonly status: 200 | 403 | 404 }): Error
     }
     registerPolicyDefinition?(definition: unknown): unknown
     registerAbilityDefinition?(definition: unknown): unknown
@@ -793,6 +794,7 @@ type AuthorizationModule = {
       hasGuard(guardName: string): boolean
       resolveDefaultActor(): Promise<object | null> | object | null
       resolveGuardActor(guardName: string): Promise<object | null> | object | null
+      createError?(decision: { readonly message?: string, readonly status: 200 | 403 | 404 }): Error
     }): void
     resetAuthorizationAuthIntegration(): void
     resetAuthorizationRuntimeState(): void
@@ -880,6 +882,9 @@ export interface CreateHoloOptions {
     readonly getHeader?: (name: string) => string | undefined | Promise<string | undefined>
     readonly appendResponseCookie?: (cookie: string) => void | Promise<void>
     readonly redirectResponse?: (url: string, status?: 301 | 302 | 303 | 307 | 308) => void | Promise<void>
+  }
+  readonly authorizationError?: {
+    readonly createError?: (decision: { readonly message?: string, readonly status: 200 | 403 | 404 }) => Error
   }
 }
 
@@ -3784,6 +3789,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   options: {
     readonly renderView?: HoloServerViewRenderer
     readonly authRequest?: CreateHoloOptions['authRequest']
+    readonly authorizationError?: CreateHoloOptions['authorizationError']
   } = {},
 ): Promise<{
   readonly queueModule?: QueueModule
@@ -4102,6 +4108,9 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
         },
         resolveDefaultActor: async () => authRuntime.user(),
         resolveGuardActor: async (guardName: string) => authRuntime.guard(guardName).user(),
+        ...(options.authorizationError?.createError
+          ? { createError: options.authorizationError.createError }
+          : {}),
       })
     }
 
@@ -4281,6 +4290,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
         const optionalSubsystems = await reconfigureOptionalHoloSubsystems(projectRoot, loadedConfig, {
           renderView: options.renderView,
           authRequest: options.authRequest,
+          authorizationError: options.authorizationError,
         })
         activeQueueModule = optionalSubsystems.queueModule
         activeSessionRuntime = optionalSubsystems.session

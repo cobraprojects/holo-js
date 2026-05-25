@@ -161,8 +161,8 @@ describe('@holo-js/cli authorization registry discovery', () => {
     expect(types).toContain('AuthorizationGuardRegistry')
     const policyEntry = /"posts": \{[\s\S]*?recordActions:/.exec(types)?.[0]
     const abilityEntry = /"reports\.export": \{[\s\S]*?input:/.exec(types)?.[0]
-    expect(policyEntry).toContain('actor: object')
-    expect(abilityEntry).toContain('actor: object')
+    expect(policyEntry).toContain('actor: HoloAuthUser')
+    expect(abilityEntry).toContain('actor: HoloAuthUser')
     expect(types).toContain('"web": {')
     expect(types).toContain('user: HoloAuthUser')
     expect(types).toContain('"admin": {')
@@ -223,10 +223,10 @@ export default defineAuthConfig({
     ] satisfies readonly GeneratedAuthorizationAbilityRegistryEntry[], ['web'])
 
     expect(output).toContain('"posts": {')
-    expect(output).toContain('actor: object')
+    expect(output).toContain('actor: HoloAuthUser')
     expect(output).toContain('target: object')
     expect(output).toContain('"reports.export": {')
-    expect(output).toContain('actor: object')
+    expect(output).toContain('actor: HoloAuthUser')
     expect(output).toContain('input: object')
     expect(output).toContain('"web": {')
     expect(output).toContain('user: HoloAuthUser')

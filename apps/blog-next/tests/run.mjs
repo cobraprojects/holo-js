@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { get } from 'node:http'
+import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -40,6 +41,8 @@ const port = await new Promise((resolve, reject) => {
 const healthUrl = `http://localhost:${port}/api/holo/health`
 const originalConfig = await readFile(configPath, 'utf8')
 const runtimeSchemaPath = join(cwd, '.holo-js/generated/schema.mjs')
+const require = createRequire(import.meta.url)
+const { encodeReply } = require('next/dist/compiled/react-server-dom-turbopack/client.node')
 let capturedOutput = ''
 
 function getJsxTagName(tagName) {
@@ -330,6 +333,142 @@ async function assertCacheBackedHttpBehavior(baseUrl) {
   assert.ok(countCacheRows() >= 1, 'Expected cache rows to be recreated after cache clear.')
 }
 
+function collectHiddenInputs(formHtml) {
+  const fields = new Map()
+  const inputPattern = /<input\b[^>]*>/gi
+  for (const [input] of formHtml.matchAll(inputPattern)) {
+    const type = input.match(/\btype=(["'])hidden\1/i)
+    if (!type) {
+      continue
+    }
+
+    const name = input.match(/\bname=(["'])(.*?)\1/i)?.[2]
+    const value = input.match(/\bvalue=(["'])(.*?)\1/i)?.[2] ?? ''
+    if (name) {
+      fields.set(decodeHtmlAttribute(name), decodeHtmlAttribute(value))
+    }
+  }
+
+  return fields
+}
+
+function findFormByButtonText(pageHtml, buttonText) {
+  const formPattern = /<form\b[\s\S]*?<\/form>/gi
+  for (const [form] of pageHtml.matchAll(formPattern)) {
+    if (form.includes(`<button type="submit">${buttonText}</button>`)) {
+      return form
+    }
+  }
+
+  return undefined
+}
+
+async function collectServerActionRequest(formHtml, submittedArgs) {
+  const fields = collectHiddenInputs(formHtml)
+  const actionReferenceName = [...fields.keys()].find(name => name.startsWith('$ACTION_REF_'))
+  const actionIdName = [...fields.keys()].find(name => name.startsWith('$ACTION_ID_'))
+
+  if (actionIdName) {
+    return {
+      actionId: actionIdName.slice('$ACTION_ID_'.length),
+      body: await encodeReply(submittedArgs ?? []),
+    }
+  }
+
+  assert.ok(actionReferenceName, 'Expected the Next server action form to include an action reference.')
+
+  const actionReference = actionReferenceName.slice('$ACTION_REF_'.length)
+  const descriptor = fields.get(`$ACTION_${actionReference}:0`)
+  assert.equal(typeof descriptor, 'string', 'Expected the Next server action form to include an action descriptor.')
+
+  const action = JSON.parse(descriptor)
+  assert.equal(typeof action.id, 'string', 'Expected the Next server action descriptor to include an action id.')
+
+  const boundArgs = fields.get(`$ACTION_${actionReference}:1`)
+  const args = typeof boundArgs === 'string' ? JSON.parse(boundArgs) : []
+
+  return {
+    actionId: action.id,
+    body: await encodeReply(submittedArgs ?? args),
+  }
+}
+
+function decodeHtmlAttribute(value) {
+  return value
+    .replaceAll('&quot;', '"')
+    .replaceAll('&#34;', '"')
+    .replaceAll('&#x22;', '"')
+    .replaceAll('&apos;', "'")
+    .replaceAll('&#39;', "'")
+    .replaceAll('&#x27;', "'")
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&amp;', '&')
+}
+
+async function assertAuthenticatedUserCannotDeletePost({ baseUrl, jar, fetchText }) {
+  const postsPage = await fetchText('/admin/posts', { jar })
+  const deleteForm = findFormByButtonText(postsPage.text, 'Delete')
+  assert.ok(deleteForm, 'Expected the admin posts page to render a delete form.')
+
+  const actionRequest = await collectServerActionRequest(deleteForm)
+
+  const denied = await fetchText('/admin/posts', {
+    method: 'POST',
+    body: actionRequest.body,
+    headers: {
+      accept: 'text/x-component',
+      'next-action': actionRequest.actionId,
+      'next-url': '/admin/posts',
+      origin: baseUrl,
+      referer: `${baseUrl}/admin/posts`,
+    },
+    jar,
+    allowFailure: true,
+  })
+  assert.equal(denied.response.status, 403)
+}
+
+async function assertAuthenticatedUserCanCreateDraftPost({ baseUrl, jar, fetchText }) {
+  const newPostPage = await fetchText('/admin/posts/new', { jar })
+  const createForm = findFormByButtonText(newPostPage.text, 'Create post')
+  assert.ok(createForm, 'Expected the new post page to render a create form.')
+
+  const title = `User flow draft ${Date.now()}`
+  const formData = new FormData()
+  formData.set('title', title)
+  formData.set('excerpt', 'Created through the real Next server action flow.')
+  formData.set('body', 'This draft exercises model writes while the database query cache is warm.')
+  formData.set('status', 'draft')
+  formData.set('categoryId', '')
+
+  const actionRequest = await collectServerActionRequest(createForm, [formData])
+  const created = await fetchText('/admin/posts/new', {
+    method: 'POST',
+    body: actionRequest.body,
+    headers: {
+      accept: 'text/x-component',
+      'next-action': actionRequest.actionId,
+      'next-url': '/admin/posts/new',
+      origin: baseUrl,
+      referer: `${baseUrl}/admin/posts/new`,
+    },
+    jar,
+    allowFailure: true,
+  })
+
+  assert.notEqual(created.response.status, 500, created.text)
+  assert.doesNotMatch(created.text, /database is locked|Runtime DatabaseError/i)
+
+  const postsPage = await fetchText('/admin/posts', { jar })
+  assert.ok(postsPage.text.includes(title), 'Expected the admin posts page to show the created draft post.')
+}
+
+async function assertAuthenticatedAdminPostFlows(context) {
+  await assertAuthenticatedUserCanCreateDraftPost(context)
+  await assertAuthenticatedUserCannotDeletePost(context)
+}
+
 function pipeOutput(stream, target) {
   if (!stream) {
     return
@@ -397,6 +536,7 @@ try {
     appName: 'blog-next',
     sessionCookieName: DEFAULT_SESSION_COOKIE_NAME,
     loginRequiresCsrf: true,
+    afterAuthenticated: assertAuthenticatedAdminPostFlows,
   })
   await assertExampleAppTokenAuthFlow({
     baseUrl: `http://localhost:${port}`,

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { error as svelteKitError } from '@sveltejs/kit'
 import {
   createHoloFrameworkAdapter,
   type HoloAdapterProject,
@@ -167,6 +168,12 @@ function resolveSvelteKitOptions(options: SvelteKitHoloOptions): SvelteKitHoloOp
   return {
     ...options,
     authRequest: options.authRequest ?? resolveSvelteKitAuthRequestAccessors(),
+    authorizationError: options.authorizationError ?? {
+      createError(decision) {
+        const status = decision.status === 404 ? 404 : 403
+        svelteKitError(status, decision.message ?? 'You are not authorized to perform this action.')
+      },
+    },
   }
 }
 

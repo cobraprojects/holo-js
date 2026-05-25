@@ -1,4 +1,5 @@
 import { cookies, headers } from 'next/headers'
+import { forbidden, notFound } from 'next/navigation'
 import { initializeHolo, type CreateHoloOptions } from '@holo-js/core'
 import type { DotPath, HoloConfigMap, LoadedHoloConfig, ValueAtPath } from '@holo-js/config'
 import { getCurrentNextRequest } from './request-context'
@@ -146,6 +147,15 @@ export function createNextHoloHelpers<TCustom extends HoloConfigMap = HoloConfig
   const resolveRuntime = async () => await initializeHolo<TCustom>(options.projectRoot, {
     ...options,
     authRequest: options.authRequest ?? resolveNextAuthRequestAccessors(),
+    authorizationError: options.authorizationError ?? {
+      createError(decision) {
+        if (decision.status === 404) {
+          notFound()
+        }
+
+        forbidden()
+      },
+    },
   })
 
   const useConfig = async <TPath extends DotPath<LoadedHoloConfig<TCustom>['all']>>(

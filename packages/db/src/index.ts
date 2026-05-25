@@ -339,6 +339,7 @@ export type {
   ModelScopeMap,
   ModelTrait,
   ModelUpdatePayload,
+  PivotRelationMethods,
   ResolveEagerLoads,
   ResolveEagerLoadPath,
   ResolveEagerLoadUnion,

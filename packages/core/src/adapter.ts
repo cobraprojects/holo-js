@@ -172,6 +172,7 @@ export function resolveHoloFrameworkOptions(
       processEnv,
       renderView: options.renderView,
       authRequest: options.authRequest,
+      authorizationError: options.authorizationError,
       registerProjectQueueJobs: options.registerProjectQueueJobs,
     },
   }
@@ -258,6 +259,7 @@ async function initializeSingletonFrameworkProject<
       await reconfigureOptionalHoloSubsystems(state.project.projectRoot, currentRuntime.loadedConfig, {
         renderView: resolved.runtime.renderView,
         authRequest: resolved.runtime.authRequest,
+        authorizationError: resolved.runtime.authorizationError,
       })
 
       if (state.project.runtime !== currentRuntime) {
@@ -397,6 +399,7 @@ export async function initializeHoloAdapterProject<TCustom extends HoloConfigMap
   await reconfigureOptionalHoloSubsystems(project.projectRoot, runtime.loadedConfig, {
     renderView: options.renderView,
     authRequest: options.authRequest,
+    authorizationError: options.authorizationError,
   })
 
   return {

@@ -1,4 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit'
+import { authorize } from '@holo-js/authorization'
 import { validate } from '@holo-js/forms'
 import { uniqueSlug } from '@holo-js/db'
 
@@ -20,6 +21,11 @@ export const actions = {
     }
 
     const data = submission.data
+    await authorize('create', Post)
+    if (data.status === 'published') {
+      await authorize('publish', Post)
+    }
+
     const post = await Post.create({
       user_id: await ensureAuthorId(),
       category_id: data.categoryId ? Number(data.categoryId) : null,

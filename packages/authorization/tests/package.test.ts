@@ -300,6 +300,40 @@ describe('@holo-js/authorization package', () => {
     expect(() => authorization.guard('missing')).toThrow(AuthorizationGuardNotFoundError)
   })
 
+  it('lets framework integrations convert authorization denials to native errors', async () => {
+    class FrameworkHttpError extends Error {
+      constructor(
+        public readonly status: number,
+        message: string,
+      ) {
+        super(message)
+      }
+    }
+
+    authorizationInternals.configureAuthorizationAuthIntegration({
+      hasGuard: () => true,
+      resolveDefaultActor: () => ({ id: 'user-1', role: 'user' }),
+      resolveGuardActor: () => ({ id: 'user-1', role: 'user' }),
+      createError(decision) {
+        return new FrameworkHttpError(decision.status, decision.message ?? 'Denied')
+      },
+    })
+
+    definePolicy('articles', Article, {
+      record: {
+        view() {
+          return deny('Framework denied this request.')
+        },
+      },
+    })
+
+    await expect(authorization.authorize('view', new Article('admin-1')))
+      .rejects.toMatchObject({
+        message: 'Framework denied this request.',
+        status: 403,
+      })
+  })
+
   it('throws targeted runtime errors for missing auth integration and missing lookups', async () => {
     await expect(authorization.authorize('view', new Article('user-1')))
       .rejects.toBeInstanceOf(AuthorizationAuthIntegrationMissingErrorClass)

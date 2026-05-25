@@ -1,4 +1,5 @@
 import { error, fail, redirect } from '@sveltejs/kit'
+import { authorize } from '@holo-js/authorization'
 import { validate } from '@holo-js/forms'
 import { DB, uniqueSlug } from '@holo-js/db'
 
@@ -29,6 +30,10 @@ export const actions = {
 
     await DB.transaction(async () => {
       const post = await Post.findOrFail(id)
+      await authorize('update', post)
+      if (data.status === 'published') {
+        await authorize('publish', post)
+      }
 
       await post.update({
         category_id: data.categoryId ? Number(data.categoryId) : null,

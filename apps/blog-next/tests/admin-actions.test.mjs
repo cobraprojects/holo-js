@@ -14,6 +14,14 @@ const mocks = vi.hoisted(() => ({
   createTag: vi.fn(),
   updateTag: vi.fn(),
   deleteTag: vi.fn(),
+  authorize: vi.fn(),
+  Category: { model: 'Category' },
+  Post: {
+    model: 'Post',
+    findOrFail: vi.fn(),
+  },
+  Tag: { model: 'Tag' },
+  postRecord: { id: 1, title: 'Protected post' },
 }))
 
 vi.mock('@holo-js/auth/next/server', () => ({
@@ -22,6 +30,10 @@ vi.mock('@holo-js/auth/next/server', () => ({
 
 vi.mock('next/navigation', () => ({
   redirect: mocks.redirect,
+}))
+
+vi.mock('@holo-js/authorization', () => ({
+  authorize: mocks.authorize,
 }))
 
 vi.mock('@/server/lib/blog', () => ({
@@ -34,6 +46,18 @@ vi.mock('@/server/lib/blog', () => ({
   createTag: mocks.createTag,
   updateTag: mocks.updateTag,
   deleteTag: mocks.deleteTag,
+}))
+
+vi.mock('@/server/models/Category', () => ({
+  default: mocks.Category,
+}))
+
+vi.mock('@/server/models/Post', () => ({
+  default: mocks.Post,
+}))
+
+vi.mock('@/server/models/Tag', () => ({
+  default: mocks.Tag,
 }))
 
 const actions = await import('../app/admin/actions.ts')
@@ -122,6 +146,7 @@ const cases = [
 describe('admin actions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.Post.findOrFail.mockResolvedValue(mocks.postRecord)
   })
 
   it.each(cases)('redirects unauthenticated $name before mutating', async ({ mutate, run }) => {
@@ -131,22 +156,24 @@ describe('admin actions', () => {
 
     expect(mocks.auth).toHaveBeenCalledTimes(1)
     expect(mocks.redirect).toHaveBeenCalledWith('/login')
+    expect(mocks.authorize).not.toHaveBeenCalled()
     expect(mutate).not.toHaveBeenCalled()
   })
 
   it.each(cases)('runs authenticated $name before redirecting', async ({ mutate, run, redirectTo }) => {
-    mocks.auth.mockResolvedValue({ authenticated: true })
+    mocks.auth.mockResolvedValue({ authenticated: true, user: { id: 1, email: 'editor@example.com' } })
     mutate.mockResolvedValue(undefined)
 
     await expect(run()).rejects.toThrow(`NEXT_REDIRECT:${redirectTo}`)
 
     expect(mocks.auth).toHaveBeenCalledTimes(1)
+    expect(mocks.authorize).toHaveBeenCalledWith('viewAny', mocks.Post)
     expect(mutate).toHaveBeenCalledTimes(1)
     expect(mocks.redirect).toHaveBeenCalledWith(redirectTo)
   })
 
   it('normalizes empty post form fields before creating and updating', async () => {
-    mocks.auth.mockResolvedValue({ authenticated: true })
+    mocks.auth.mockResolvedValue({ authenticated: true, user: { id: 1, email: 'editor@example.com' } })
     mocks.createPost.mockResolvedValue(undefined)
     mocks.updatePost.mockResolvedValue(undefined)
 
@@ -166,7 +193,7 @@ describe('admin actions', () => {
   })
 
   it('normalizes empty category and tag form fields before mutating', async () => {
-    mocks.auth.mockResolvedValue({ authenticated: true })
+    mocks.auth.mockResolvedValue({ authenticated: true, user: { id: 1, email: 'editor@example.com' } })
     mocks.createCategory.mockResolvedValue(undefined)
     mocks.updateCategory.mockResolvedValue(undefined)
     mocks.createTag.mockResolvedValue(undefined)

@@ -56,6 +56,7 @@ async function ensureIsolatedCoreBuild(): Promise<{ coreEntryUrl: string }> {
       const root = await mkdtemp(join(tmpdir(), 'holo-sveltekit-build-'))
       tempBuildRoots.push(root)
       const dbPackageRoot = join(root, 'packages/db')
+      const dbSqlitePackageRoot = join(root, 'packages/db-sqlite')
       const configPackageRoot = join(root, 'packages/config')
       const eventsPackageRoot = join(root, 'packages/events')
       const queuePackageRoot = join(root, 'packages/queue')
@@ -70,6 +71,16 @@ async function ensureIsolatedCoreBuild(): Promise<{ coreEntryUrl: string }> {
         packageJsonPath: resolve(repoRoot, 'packages/db/package.json'),
       })
       buildWorkspacePackage('@holo-js/db', join(dbPackageRoot, 'dist'))
+
+      await writePackageWrapper(resolve(repoRoot, 'packages/db-sqlite'), dbSqlitePackageRoot)
+      await linkInstalledDependenciesForPackage({
+        repoRoot,
+        nodeModulesRoot: join(dbSqlitePackageRoot, 'node_modules'),
+        packageJsonPath: resolve(repoRoot, 'packages/db-sqlite/package.json'),
+      })
+      await linkPackageDependency(dbSqlitePackageRoot, '@holo-js/db', dbPackageRoot)
+      buildWorkspacePackage('@holo-js/db-sqlite', join(dbSqlitePackageRoot, 'dist'))
+      await linkPackageDependency(dbPackageRoot, '@holo-js/db-sqlite', dbSqlitePackageRoot)
 
       await writePackageWrapper(resolve(repoRoot, 'packages/queue'), queuePackageRoot)
       await linkInstalledDependenciesForPackage({

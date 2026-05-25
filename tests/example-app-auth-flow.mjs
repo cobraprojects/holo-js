@@ -318,6 +318,7 @@ export async function assertExampleAppAuthFlow({
   getOutput,
   appName,
   sessionCookieName,
+  afterAuthenticated,
   checkPages = true,
   loginRequiresCsrf = false,
   authSubmissionMode = 'json',
@@ -860,6 +861,13 @@ export async function assertExampleAppAuthFlow({
   assert.equal(authenticatedUser.json.guard, 'web')
   assert.equal(authenticatedUser.json.user?.email, email)
   assert.equal(authenticatedUser.json.user?.name, 'Auth Flow User')
+
+  await afterAuthenticated?.({
+    baseUrl,
+    jar: authenticatedJar,
+    fetchText: fetchAuthText,
+    fetchJson: fetchAuthJson,
+  })
 
   if (checkPages) {
     const authenticatedHome = await fetchAuthText('/', {
