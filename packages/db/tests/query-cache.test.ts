@@ -4,6 +4,7 @@ import {
   configureDB,
   configureDatabaseQueryCacheBridge,
   createConnectionManager,
+  DatabaseContext,
   DB,
   queryCacheInternals,
   resetDB,
@@ -16,10 +17,12 @@ import {
   type DriverQueryResult,
   type SelectQueryPlan,
 } from '../src'
+import { ModelRepository } from '../src/model/ModelRepository'
 import { defineModelFromTable, defineTable } from './support/internal'
 
 class QueryCacheAdapter implements DriverAdapter {
   connected = false
+  inTransaction = false
   queryRows: Record<string, unknown>[] = []
   queryCount = 0
   executionCount = 0
@@ -52,9 +55,17 @@ class QueryCacheAdapter implements DriverAdapter {
     }
   }
 
-  async beginTransaction(): Promise<void> {}
-  async commit(): Promise<void> {}
-  async rollback(): Promise<void> {}
+  async beginTransaction(): Promise<void> {
+    this.inTransaction = true
+  }
+
+  async commit(): Promise<void> {
+    this.inTransaction = false
+  }
+
+  async rollback(): Promise<void> {
+    this.inTransaction = false
+  }
 }
 
 class MemoryQueryCacheBridge implements DatabaseQueryCacheBridge {
@@ -69,7 +80,10 @@ class MemoryQueryCacheBridge implements DatabaseQueryCacheBridge {
     ttl: readonly [number, number] | { readonly fresh: number, readonly stale: number }
   }> = []
   readonly invalidatedDependencies: string[][] = []
+  readonly invalidationTransactionStates: boolean[] = []
   readonly inFlightFlexible = new Map<string, Promise<unknown>>()
+
+  constructor(private readonly isInTransaction: () => boolean = () => false) {}
 
   private buildKey(key: string, driver?: string): string {
     return `${driver ?? '__default__'}\u0000${key}`
@@ -171,6 +185,7 @@ class MemoryQueryCacheBridge implements DatabaseQueryCacheBridge {
     dependencies: readonly string[],
     _options?: { readonly driver?: string },
   ): Promise<void> {
+    this.invalidationTransactionStates.push(this.isInTransaction())
     this.invalidatedDependencies.push([...dependencies])
     for (const dependency of dependencies) {
       const keys = this.dependencyKeys.get(dependency) ?? new Set<string>()
@@ -215,7 +230,7 @@ describe('@holo-js/db query cache integration', () => {
 
   beforeEach(() => {
     adapter = new QueryCacheAdapter()
-    bridge = new MemoryQueryCacheBridge()
+    bridge = new MemoryQueryCacheBridge(() => adapter.inTransaction)
     configureDB(createConnectionManager({
       defaultConnection: 'main',
       connections: {
@@ -449,6 +464,50 @@ describe('@holo-js/db query cache integration', () => {
     })
 
     expect(bridge.invalidatedDependencies).toContainEqual(['db:main:users'])
+  })
+
+  it('defers model write invalidation until its implicit transaction commits', async () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+    })
+    const User = defineModelFromTable(users, {
+      fillable: ['name'],
+    })
+
+    await User.create({
+      name: 'Ava',
+    })
+
+    expect(bridge.invalidatedDependencies).toEqual([
+      ['db:main:users'],
+    ])
+    expect(bridge.invalidationTransactionStates).toEqual([false])
+  })
+
+  it('keeps repositories on their original context when another context shares the same connection name', async () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+    })
+    const User = defineModelFromTable(users, {})
+    const first = new DatabaseContext({
+      connectionName: 'main',
+      adapter: new QueryCacheAdapter(),
+      dialect: createDialect(),
+      driver: 'sqlite',
+    })
+    const second = new DatabaseContext({
+      connectionName: 'main',
+      adapter: new QueryCacheAdapter(),
+      dialect: createDialect(),
+      driver: 'sqlite',
+    })
+    const secondRepository = new ModelRepository(User.definition, second)
+
+    await first.transaction(async () => {
+      expect(secondRepository.getConnection()).toBe(second)
+    })
   })
 
   it('normalizes explicit invalidation dependencies and disables automatic invalidation for raw order clauses', () => {

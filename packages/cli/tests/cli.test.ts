@@ -10329,6 +10329,9 @@ export default defineConfig({
     const generatedServerHooks = await readFile(join(projectRoot, '.holo-js/generated/hooks.server.ts'), 'utf8')
     expect(generatedServerHooks).toContain("from '../../src/hooks.server'")
     expect(generatedServerHooks).toContain('handleFetch')
+    expect(generatedServerHooks).toContain('error as svelteKitError')
+    expect(generatedServerHooks).toContain('cause.name !== \'AuthorizationError\'')
+    expect(generatedServerHooks).toContain('svelteKitError(cause.decision.status, cause.message)')
     expect(generatedServerHooks).not.toContain('event.url.pathname =')
 
     // Legacy .user.ts files are deleted, not left as empty artifacts.

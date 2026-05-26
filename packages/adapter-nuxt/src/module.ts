@@ -348,6 +348,7 @@ export default defineNuxtModule<ModuleOptions>({
     const rootDir = opts.rootDir ?? opts.srcDir ?? process.cwd()
     const sourceDir = opts.srcDir ?? rootDir
     const authTypesPath = resolve(rootDir, '.holo-js/generated/auth.d.ts')
+    const authorizationTypesPath = resolve(rootDir, '.holo-js/generated/authorization/types.d.ts')
     const modelRegistryTypesPath = resolve(rootDir, '.holo-js/generated/model-registry.d.ts')
     addViteOptimizeDeps(opts, resolveClientOptimizeDeps(rootDir))
     const loaded = await loadConfigDirectory(rootDir, {
@@ -463,10 +464,12 @@ export default defineNuxtModule<ModuleOptions>({
     if (!opts._holoTypesRegistered) {
       opts._holoTypesRegistered = true
       await ensureModelRegistryTypesPlaceholder(authTypesPath)
+      await ensureModelRegistryTypesPlaceholder(authorizationTypesPath)
       await ensureModelRegistryTypesPlaceholder(modelRegistryTypesPath)
       nuxt.hook('prepare:types', ({ references }) => {
         references.push({ types: '@holo-js/adapter-nuxt' })
         references.push({ path: authTypesPath })
+        references.push({ path: authorizationTypesPath })
         references.push({ path: modelRegistryTypesPath })
       })
     }

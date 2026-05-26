@@ -272,6 +272,19 @@ async function assertSuperAdminLoginUsesVerificationRedirect() {
   )
 }
 
+async function assertAuthenticatedUserCannotDeletePost({ jar, fetchText }) {
+  const postsPage = await fetchText('/admin/posts', { jar })
+  const postId = postsPage.text.match(/\/admin\/posts\/(\d+)\/delete/)?.[1]
+  assert.ok(postId, 'Expected the admin posts page to render a delete form with a post id.')
+
+  const denied = await fetchText(`/admin/posts/${postId}/delete`, {
+    method: 'POST',
+    jar,
+    allowFailure: true,
+  })
+  assert.equal(denied.response.status, 403, denied.text)
+}
+
 function pipeOutput(stream, target) {
   if (!stream) {
     return
@@ -341,6 +354,7 @@ try {
     appName: 'blog-nuxt',
     sessionCookieName: DEFAULT_SESSION_COOKIE_NAME,
     loginRequiresCsrf: true,
+    afterAuthenticated: assertAuthenticatedUserCannotDeletePost,
   })
   await assertExampleAppTokenAuthFlow({
     baseUrl: `http://localhost:${port}`,

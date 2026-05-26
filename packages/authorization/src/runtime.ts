@@ -6,7 +6,6 @@ import type {
   AuthorizationActorBuilder,
   AuthorizationDecision,
   AuthorizationDecisionInput,
-  AuthorizationError,
   AuthorizationGuardActorContext,
   AuthorizationPolicyClassHandler,
   AuthorizationPolicyBeforeHandler,
@@ -62,6 +61,7 @@ type AuthorizationAuthIntegration = {
   hasGuard(guardName: string): boolean
   resolveDefaultActor(): Promise<object | null> | object | null
   resolveGuardActor(guardName: string): Promise<object | null> | object | null
+  createError?(decision: AuthorizationDecision): Error
 }
 
 type AuthorizationRuntimeState = {
@@ -509,7 +509,12 @@ function resolveContext<TActor extends object, TGuardName extends string>(
   return Object.freeze(baseContext)
 }
 
-function createAuthorizationError(decision: AuthorizationDecision): AuthorizationError {
+function createAuthorizationError(decision: AuthorizationDecision): Error {
+  const customError = getAuthorizationRuntimeState().authIntegration?.createError?.(decision)
+  if (customError) {
+    return customError
+  }
+
   return new AuthorizationErrorClass(
     decision.message ?? 'You are not authorized to perform this action.',
     decision,

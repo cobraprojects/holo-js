@@ -63,6 +63,7 @@ interface TurbopackConfig {
 interface NextConfig {
   readonly serverExternalPackages?: string[]
   readonly outputFileTracingExcludes?: Record<string, string[]>
+  readonly experimental?: Record<string, unknown>
   readonly turbopack?: TurbopackConfig
   readonly rewrites?: () => Promise<unknown>
   readonly [key: string]: unknown
@@ -133,6 +134,10 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
 
   return {
     ...nextConfig,
+    experimental: {
+      ...(nextConfig.experimental ?? {}),
+      authInterrupts: true,
+    },
     serverExternalPackages: mergedExternal,
     outputFileTracingExcludes: mergedExcludes,
     turbopack: mergedTurbopack,

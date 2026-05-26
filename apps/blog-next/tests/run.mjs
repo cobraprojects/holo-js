@@ -330,6 +330,104 @@ async function assertCacheBackedHttpBehavior(baseUrl) {
   assert.ok(countCacheRows() >= 1, 'Expected cache rows to be recreated after cache clear.')
 }
 
+function collectHiddenInputs(formHtml) {
+  const fields = new Map()
+  const inputPattern = /<input\b[^>]*>/gi
+  for (const [input] of formHtml.matchAll(inputPattern)) {
+    const type = input.match(/\btype=(["'])hidden\1/i)
+    if (!type) {
+      continue
+    }
+
+    const name = input.match(/\bname=(["'])(.*?)\1/i)?.[2]
+    const value = input.match(/\bvalue=(["'])(.*?)\1/i)?.[2] ?? ''
+    if (name) {
+      fields.set(decodeHtmlAttribute(name), decodeHtmlAttribute(value))
+    }
+  }
+
+  return fields
+}
+
+function findFormByButtonText(pageHtml, buttonText) {
+  const formPattern = /<form\b[\s\S]*?<\/form>/gi
+  const escapedButtonText = escapeRegExp(buttonText)
+  const buttonPattern = new RegExp(
+    `<button\\b[^>]*\\btype\\s*=\\s*["']?submit["']?[^>]*>\\s*${escapedButtonText}\\s*<\\/button>`,
+    'i',
+  )
+
+  for (const [form] of pageHtml.matchAll(formPattern)) {
+    if (buttonPattern.test(form)) {
+      return form
+    }
+  }
+
+  return undefined
+}
+
+function collectFormData(formHtml) {
+  const fields = collectHiddenInputs(formHtml)
+  const formData = new FormData()
+  for (const [name, value] of fields) {
+    formData.set(name, value)
+  }
+
+  return formData
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function decodeHtmlAttribute(value) {
+  return value
+    .replaceAll('&quot;', '"')
+    .replaceAll('&#34;', '"')
+    .replaceAll('&#x22;', '"')
+    .replaceAll('&apos;', "'")
+    .replaceAll('&#39;', "'")
+    .replaceAll('&#x27;', "'")
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&amp;', '&')
+}
+
+async function assertAuthenticatedUserCanCreateDraftPost({ baseUrl, jar, fetchText }) {
+  const newPostPage = await fetchText('/admin/posts/new', { jar })
+  const createForm = findFormByButtonText(newPostPage.text, 'Create post')
+  assert.ok(createForm, 'Expected the new post page to render a create form.')
+
+  const title = `User flow draft ${Date.now()}`
+  const formData = collectFormData(createForm)
+  formData.set('title', title)
+  formData.set('excerpt', 'Created through the real Next server action flow.')
+  formData.set('body', 'This draft exercises model writes while the database query cache is warm.')
+  formData.set('status', 'draft')
+  formData.set('categoryId', '')
+
+  const created = await fetchText('/admin/posts/new', {
+    method: 'POST',
+    body: formData,
+    headers: {
+      origin: baseUrl,
+      referer: `${baseUrl}/admin/posts/new`,
+    },
+    jar,
+    allowFailure: true,
+  })
+
+  assert.notEqual(created.response.status, 500, created.text)
+  assert.doesNotMatch(created.text, /database is locked|Runtime DatabaseError/i)
+
+  const postsPage = await fetchText('/admin/posts', { jar })
+  assert.ok(postsPage.text.includes(title), 'Expected the admin posts page to show the created draft post.')
+}
+
+async function assertAuthenticatedAdminPostFlows(context) {
+  await assertAuthenticatedUserCanCreateDraftPost(context)
+}
+
 function pipeOutput(stream, target) {
   if (!stream) {
     return
@@ -397,6 +495,7 @@ try {
     appName: 'blog-next',
     sessionCookieName: DEFAULT_SESSION_COOKIE_NAME,
     loginRequiresCsrf: true,
+    afterAuthenticated: assertAuthenticatedAdminPostFlows,
   })
   await assertExampleAppTokenAuthFlow({
     baseUrl: `http://localhost:${port}`,

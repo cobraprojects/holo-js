@@ -1,6 +1,8 @@
-import { redirect } from '@sveltejs/kit'
+import { error, redirect } from '@sveltejs/kit'
+import { authorize } from '@holo-js/authorization'
 
 import { createCategory, deleteCategory, getAdminCategoriesData } from '$lib/server/blog'
+import Category from '../../../../server/models/Category'
 import type { Actions, PageServerLoad } from './$types'
 
 export const load = (async () => {
@@ -10,6 +12,7 @@ export const load = (async () => {
 export const actions = {
   create: async ({ request }) => {
     const formData = await request.formData()
+    await authorize('manage', Category)
     await createCategory({
       name: String(formData.get('name') || ''),
       description: String(formData.get('description') || ''),
@@ -19,7 +22,14 @@ export const actions = {
   },
   delete: async ({ request }) => {
     const formData = await request.formData()
-    await deleteCategory(Number(formData.get('id')))
+    const id = Number(formData.get('id'))
+    const category = await Category.find(id)
+    if (!category) {
+      throw error(404, 'Category not found')
+    }
+
+    await authorize('delete', category)
+    await deleteCategory(id)
 
     redirect(303, '/admin/categories')
   },

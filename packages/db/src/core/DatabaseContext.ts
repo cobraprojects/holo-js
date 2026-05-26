@@ -48,6 +48,7 @@ type TransactionCallbackState = {
 }
 
 type ContextInternals = {
+  contextId: number
   connectionName: string
   schemaName?: string
   adapter: DriverAdapter
@@ -63,7 +64,10 @@ type ContextInternals = {
   transactionCallbacks?: TransactionCallbackState
 }
 
+let nextDatabaseContextId = 0
+
 export class DatabaseContext {
+  private readonly _contextId: number
   private readonly _connectionName: string
   private readonly _schemaName?: string
   private readonly _adapter: DriverAdapter
@@ -85,6 +89,7 @@ export class DatabaseContext {
     if (!options.adapter) throw new ConfigurationError('DatabaseContext requires an adapter.')
     if (!options.dialect) throw new ConfigurationError('DatabaseContext requires a dialect.')
 
+    this._contextId = 'contextId' in options ? options.contextId : nextDatabaseContextId += 1
     this._connectionName = options.connectionName || 'default'
     this._schemaName = 'schemaName' in options ? options.schemaName : undefined
     this._adapter = options.adapter
@@ -138,6 +143,10 @@ export class DatabaseContext {
 
   getConnectionName(): string {
     return this._connectionName
+  }
+
+  getContextId(): number {
+    return this._contextId
   }
 
   getSchemaName(): string | undefined {
@@ -471,6 +480,7 @@ export class DatabaseContext {
     transactionCallbacks?: TransactionCallbackState,
   ): DatabaseContext {
     return new DatabaseContext({
+      contextId: this._contextId,
       adapter: this._adapter,
       dialect: this._dialect,
       driver: this._driver,

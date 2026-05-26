@@ -1,8 +1,10 @@
-import { fail, redirect } from '@sveltejs/kit'
+import { error, fail, redirect } from '@sveltejs/kit'
+import { authorize } from '@holo-js/authorization'
 import { validate } from '@holo-js/forms'
 
 import { tagForm } from '$lib/schemas/blog'
 import { createTag, deleteTag, getAdminTagsData } from '$lib/server/blog'
+import Tag from '../../../../server/models/Tag'
 import type { Actions, PageServerLoad } from './$types'
 
 export const load = (async () => {
@@ -17,13 +19,21 @@ export const actions = {
       return fail(failure.status, failure)
     }
 
+    await authorize('manage', Tag)
     await createTag({ name: submission.data.name })
 
     redirect(303, '/admin/tags')
   },
   delete: async ({ request }) => {
     const formData = await request.formData()
-    await deleteTag(Number(formData.get('id')))
+    const id = Number(formData.get('id'))
+    const tag = await Tag.find(id)
+    if (!tag) {
+      throw error(404, 'Tag not found')
+    }
+
+    await authorize('delete', tag)
+    await deleteTag(id)
 
     redirect(303, '/admin/tags')
   },

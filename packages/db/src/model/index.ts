@@ -71,6 +71,7 @@ export type {
   ModelScopeArgs,
   ModelScopeMap,
   ModelUpdatePayload,
+  PivotRelationMethods,
   ResolveEagerLoads,
   ResolveEagerLoadPath,
   ResolveEagerLoadUnion,

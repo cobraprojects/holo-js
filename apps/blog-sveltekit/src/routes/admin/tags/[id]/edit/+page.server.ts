@@ -1,8 +1,10 @@
 import { error, fail, redirect } from '@sveltejs/kit'
+import { authorize } from '@holo-js/authorization'
 import { validate } from '@holo-js/forms'
 
 import { tagForm } from '$lib/schemas/blog'
 import { getAdminTagById, updateTag } from '$lib/server/blog'
+import Tag from '../../../../../../server/models/Tag'
 import type { Actions, PageServerLoad } from './$types'
 
 export const load = (async ({ params }) => {
@@ -22,7 +24,14 @@ export const actions = {
       return fail(failure.status, failure)
     }
 
-    await updateTag(Number(params.id), { name: submission.data.name })
+    const id = Number(params.id)
+    const tag = await Tag.find(id)
+    if (!tag) {
+      throw error(404, 'Tag not found')
+    }
+
+    await authorize('update', tag)
+    await updateTag(id, { name: submission.data.name })
 
     redirect(303, '/admin/tags')
   },

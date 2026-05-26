@@ -569,6 +569,7 @@ export function renderGeneratedAuthorizationTypes(
   const typedAbilityEntries = authorizationAbilities.filter(entry => ['.ts', '.mts', '.cts'].includes(extname(entry.sourcePath)))
   const policyImportNameByName = new Map(typedPolicyEntries.map((entry, index) => [entry.name, `holoAuthorizationPolicyModule${index}`]))
   const abilityImportNameByName = new Map(typedAbilityEntries.map((entry, index) => [entry.name, `holoAuthorizationAbilityModule${index}`]))
+  const usesHoloAuthUser = authorizationPolicies.length > 0 || authorizationAbilities.length > 0 || guardNames.length > 0
 
   const imports = [
     ...(typedPolicyEntries.length > 0
@@ -577,7 +578,7 @@ export function renderGeneratedAuthorizationTypes(
     ...(typedAbilityEntries.length > 0
       ? ['import type { AuthorizationAbilityDefinition as HoloAuthorizationAbilityDefinition } from \'@holo-js/authorization/contracts\'']
       : []),
-    ...(guardNames.length > 0
+    ...(usesHoloAuthUser
       ? ['import type { AuthUser as HoloAuthUser } from \'@holo-js/auth\'']
       : []),
     ...typedPolicyEntries.map((entry, index) => {
@@ -600,7 +601,7 @@ export function renderGeneratedAuthorizationTypes(
     if (!importName || !entry.exportName) {
       return [
         `    ${JSON.stringify(entry.name)}: {`,
-        '      actor: object',
+        '      actor: HoloAuthUser',
         `      target: object`,
         '      classActions: {',
         ...classActionEntries,
@@ -614,7 +615,7 @@ export function renderGeneratedAuthorizationTypes(
 
     return [
       `    ${JSON.stringify(entry.name)}: {`,
-      '      actor: object',
+      '      actor: HoloAuthUser',
       `      target: typeof ${importName}[${JSON.stringify(entry.exportName)}] extends HoloAuthorizationPolicyDefinition<infer _TName, infer TTarget, infer _TClassActions, infer _TRecordActions, infer _TActor> ? TTarget : object`,
       '      classActions: {',
       ...classActionEntries,
@@ -630,12 +631,12 @@ export function renderGeneratedAuthorizationTypes(
     const importName = abilityImportNameByName.get(entry.name)
 
     if (!importName || !entry.exportName) {
-      return `    ${JSON.stringify(entry.name)}: { actor: object, input: object }`
+      return `    ${JSON.stringify(entry.name)}: { actor: HoloAuthUser, input: object }`
     }
 
     return [
       `    ${JSON.stringify(entry.name)}: {`,
-      '      actor: object',
+      '      actor: HoloAuthUser',
       `      input: typeof ${importName}[${JSON.stringify(entry.exportName)}] extends HoloAuthorizationAbilityDefinition<infer _TName, infer TInput, infer _TActor> ? TInput : object`,
       '    }',
     ].join('\n')

@@ -1,12 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { field, schema } from '@holo-js/forms'
 
+vi.mock('$app/stores', async () => await import('./stubs/app-stores'))
+
 import { useForm } from '../src/client'
 import { setPageForm } from './stubs/app-stores'
 
-async function waitForActionHydration(): Promise<void> {
-  await new Promise(resolve => setTimeout(resolve, 0))
-  await new Promise<void>(resolve => queueMicrotask(() => resolve()))
+async function waitForActionHydration(predicate: () => boolean): Promise<void> {
+  const attempts = 20
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await new Promise<void>(resolve => queueMicrotask(() => resolve()))
+
+    if (predicate()) {
+      return
+    }
+  }
+
+  throw new Error(`waitForActionHydration: predicate not satisfied after ${attempts} attempts.`)
 }
 
 describe('@holo-js/adapter-sveltekit client forms', () => {
@@ -41,7 +52,7 @@ describe('@holo-js/adapter-sveltekit client forms', () => {
       },
     })
 
-    await waitForActionHydration()
+    await waitForActionHydration(() => login.values.email === 'bad-email')
 
     expect(login.values.email).toBe('bad-email')
     expect(login.errors.first('email')).toBe('Enter a valid email address.')
@@ -73,7 +84,7 @@ describe('@holo-js/adapter-sveltekit client forms', () => {
       },
     })
 
-    await waitForActionHydration()
+    await waitForActionHydration(() => login.values.email === '')
 
     expect(login.values.email).toBe('')
     expect(login.errors.has('title')).toBe(false)

@@ -290,6 +290,23 @@ async function assertResetPasswordApiValidation(devUrl) {
   assertFieldFailure(invalidSubmission, ['token', 'password', 'passwordConfirmation'])
 }
 
+async function assertAuthenticatedUserCannotDeletePost({ jar, fetchText }) {
+  const postsPage = await fetchText('/admin/posts', { jar })
+  const postId = postsPage.text.match(/name="id" value="(\d+)"/)?.[1]
+  assert.ok(postId, 'Expected the admin posts page to render a delete form with a post id.')
+
+  const body = new FormData()
+  body.set('id', postId)
+
+  const denied = await fetchText('/admin/posts?/delete', {
+    method: 'POST',
+    body,
+    jar,
+    allowFailure: true,
+  })
+  assert.equal(denied.response.status, 403)
+}
+
 async function assertSuperAdminLogoutUsesServerActionForm() {
   const source = await readFile(join(cwd, 'src/routes/super-admin/+page.svelte'), 'utf8')
 
@@ -441,6 +458,7 @@ try {
     sessionCookieName: DEFAULT_SESSION_COOKIE_NAME,
     authSubmissionMode: 'sveltekit-actions',
     loginRequiresCsrf: true,
+    afterAuthenticated: assertAuthenticatedUserCannotDeletePost,
   })
   await assertExampleAppTokenAuthFlow({
     baseUrl: devUrl,

@@ -3,12 +3,14 @@ import { createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 
 import { authRuntimeInternals, hashPassword, verifyPassword } from '@holo-js/auth'
+import authorization, { AuthorizationError, authorizationInternals } from '@holo-js/authorization'
 import cache, { configureCacheRuntime, getCacheRuntimeBindings } from '@holo-js/cache'
 import { initializeHoloAdapterProject } from '@holo-js/core'
 import { DB } from '@holo-js/db'
 
 import Category from '../server/models/Category.ts'
 import Admin from '../server/models/Admin.ts'
+import Comment from '../server/models/Comment.ts'
 import Post from '../server/models/Post.ts'
 import Tag from '../server/models/Tag.ts'
 import User from '../server/models/User.ts'
@@ -269,13 +271,29 @@ async function expectRedirect(action) {
   }
 }
 
+async function signInEditor() {
+  const editor = await User.where('email', 'editor@example.com').firstOrFail()
+  const adminActor = { id: 'admin-guard-1', email: 'admin-guard@example.com', role: 'admin' }
+  authorizationInternals.configureAuthorizationAuthIntegration({
+    hasGuard: guardName => ['admin', 'api', 'web'].includes(guardName),
+    resolveDefaultActor: () => editor,
+    resolveGuardActor: (guardName) => {
+      if (guardName === 'web') return editor
+      if (guardName === 'admin') return adminActor
+      return null
+    },
+  })
+}
+
 async function createPost(fields) {
+  await signInEditor()
   await expectRedirect(() => createPostPageActions.create({
     request: createActionRequest(fields),
   }))
 }
 
 async function updatePost(id, fields) {
+  await signInEditor()
   await expectRedirect(() => updatePostPageActions.update({
     params: { id: String(id) },
     request: createActionRequest(fields),
@@ -433,6 +451,43 @@ try {
   const featuredPost = await Post.with('user').where('slug', home.featured?.slug ?? '').first()
   assert.ok(featuredPost?.user)
 
+  const authorActor = { id: featuredPost.user_id, email: 'author@example.com', role: 'author' }
+  const editorActor = { id: 'editor-1', email: 'editor@example.com', role: 'editor' }
+  const adminActor = { id: 'admin-1', email: 'super-admin@example.com', role: 'admin' }
+  const postPolicy = authorization.forUser(authorActor).policy('posts')
+  assert.equal(await postPolicy.can('view', featuredPost), true)
+  await assert.rejects(
+    () => postPolicy.authorize('publish', featuredPost),
+    AuthorizationError,
+  )
+  await authorization.forUser(editorActor).policy('posts').authorize('publish', featuredPost)
+  await authorization.forUser(editorActor).authorize('update', featuredPost)
+  await authorization.forUser(editorActor).authorize('publish', featuredPost)
+  await assert.rejects(
+    () => authorization.forUser(editorActor).authorize('delete', featuredPost),
+    AuthorizationError,
+  )
+  await authorization.forUser(adminActor).authorize('delete', featuredPost)
+  await assert.rejects(
+    () => authorization.forUser(authorActor).authorize('manage', Category),
+    AuthorizationError,
+  )
+  await authorization.forUser(editorActor).authorize('manage', Category)
+  await authorization.forUser(adminActor).authorize('delete', Category)
+  await authorization.forUser(editorActor).authorize('manage', Tag)
+  await assert.rejects(
+    () => authorization.forUser(authorActor).authorize('moderate', Comment),
+    AuthorizationError,
+  )
+  await authorization.forUser(editorActor).authorize('moderate', Comment)
+  await authorization.forUser(adminActor).authorize('moderate', Comment)
+  await assert.rejects(
+    () => authorization.guard('admin').authorize('delete', featuredPost),
+    AuthorizationError,
+  )
+  await signInEditor()
+  await authorization.guard('admin').authorize('delete', featuredPost)
+
   const dashboard = await getAdminDashboardData()
   assert.equal(dashboard.postCount, 2)
   assert.equal(dashboard.publishedCount, 2)
@@ -514,6 +569,7 @@ try {
   const updatedTag = await Tag.findOrFail(createdTag.id)
   assert.equal(updatedTag.slug, 'deep-guides')
 
+  await signInEditor()
   assertInvalidTagNameFailure(await createTagPageActions.create({
     request: createActionRequest({
       name: '',
@@ -521,6 +577,7 @@ try {
   }))
   assert.equal(await Tag.where('slug', '').first(), undefined)
 
+  await signInEditor()
   assertInvalidTagNameFailure(await updateTagPageActions.update({
     params: { id: String(updatedTag.id) },
     request: createActionRequest({
@@ -535,6 +592,7 @@ try {
   assert.ok(frameworkTag)
   assert.ok(releaseTag)
 
+  await signInEditor()
   assertInvalidPostStatusFailure(await createPostPageActions.create({
     request: createActionRequest({
       title: 'Missing Route Status Post',
@@ -543,6 +601,7 @@ try {
   }))
   assert.equal(await Post.where('slug', 'missing-route-status-post').first(), undefined)
 
+  await signInEditor()
   assertInvalidPostStatusFailure(await createPostPageActions.create({
     request: createActionRequest({
       title: 'Unknown Route Status Post',
@@ -597,6 +656,7 @@ try {
   let routeStatusPost = await Post.where('slug', 'route-status-draft').first()
   assert.ok(routeStatusPost)
 
+  await signInEditor()
   assertInvalidPostStatusFailure(await updatePostPageActions.update({
     params: { id: String(routeStatusPost.id) },
     request: createActionRequest({
@@ -608,6 +668,7 @@ try {
   assert.equal(routeStatusPost.status, 'draft')
   assert.equal(routeStatusPost.title, 'Route Status Draft')
 
+  await signInEditor()
   assertInvalidPostStatusFailure(await updatePostPageActions.update({
     params: { id: String(routeStatusPost.id) },
     request: createActionRequest({

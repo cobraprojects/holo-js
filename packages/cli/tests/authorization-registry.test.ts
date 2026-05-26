@@ -161,8 +161,8 @@ describe('@holo-js/cli authorization registry discovery', () => {
     expect(types).toContain('AuthorizationGuardRegistry')
     const policyEntry = /"posts": \{[\s\S]*?recordActions:/.exec(types)?.[0]
     const abilityEntry = /"reports\.export": \{[\s\S]*?input:/.exec(types)?.[0]
-    expect(policyEntry).toContain('actor: object')
-    expect(abilityEntry).toContain('actor: object')
+    expect(policyEntry).toContain('actor: HoloAuthUser')
+    expect(abilityEntry).toContain('actor: HoloAuthUser')
     expect(types).toContain('"web": {')
     expect(types).toContain('user: HoloAuthUser')
     expect(types).toContain('"admin": {')
@@ -223,10 +223,10 @@ export default defineAuthConfig({
     ] satisfies readonly GeneratedAuthorizationAbilityRegistryEntry[], ['web'])
 
     expect(output).toContain('"posts": {')
-    expect(output).toContain('actor: object')
+    expect(output).toContain('actor: HoloAuthUser')
     expect(output).toContain('target: object')
     expect(output).toContain('"reports.export": {')
-    expect(output).toContain('actor: object')
+    expect(output).toContain('actor: HoloAuthUser')
     expect(output).toContain('input: object')
     expect(output).toContain('"web": {')
     expect(output).toContain('user: HoloAuthUser')
@@ -247,6 +247,34 @@ export default defineAuthConfig({
     expect(output).toContain('classActions: {')
     expect(output).toContain('recordActions: {')
     expect(output).not.toContain('[key: string]: true')
+  })
+
+  it('imports auth user types when authorization entries exist without guards', () => {
+    const output = renderGeneratedAuthorizationTypes([
+      {
+        sourcePath: 'server/policies/posts.ts',
+        name: 'posts',
+        exportName: 'postPolicy',
+        target: 'Post',
+        classActions: ['create'],
+        recordActions: ['view'],
+      },
+    ] satisfies readonly GeneratedAuthorizationPolicyRegistryEntry[], [], [])
+
+    expect(output).toContain('import type { AuthUser as HoloAuthUser } from \'@holo-js/auth\'')
+    expect(output).toContain('actor: HoloAuthUser')
+  })
+
+  it('imports auth user types when authorization abilities exist without guards', () => {
+    const output = renderGeneratedAuthorizationTypes([], [
+      {
+        sourcePath: 'server/abilities/reports.export.ts',
+        name: 'reports.export',
+      },
+    ] satisfies readonly GeneratedAuthorizationAbilityRegistryEntry[], [])
+
+    expect(output).toContain('import type { AuthUser as HoloAuthUser } from \'@holo-js/auth\'')
+    expect(output).toContain('actor: HoloAuthUser')
   })
 
   it('renders authorization registry entries without optional export names', () => {
