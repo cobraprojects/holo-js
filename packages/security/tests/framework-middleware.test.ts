@@ -109,8 +109,9 @@ describe('@holo-js/security framework csrf middleware', () => {
       },
     })
     const staleConfigResponse = await csrfProtection()(staleConfigRequest)
-    expect(staleConfigResponse?.headers.get('set-cookie')).not.toContain(`XSRF-TOKEN=${encodeURIComponent(token)}`)
-    expect(staleConfigResponse?.headers.get('set-cookie')).toContain(`${SECURITY_CLIENT_CONFIG_COOKIE}=`)
+    const staleConfigSetCookie = staleConfigResponse?.headers.get('set-cookie')
+    expect(staleConfigSetCookie).not.toContain('XSRF-TOKEN=')
+    expect(staleConfigSetCookie).toContain(`${SECURITY_CLIENT_CONFIG_COOKIE}=`)
 
     const invalidCsrfRequest = Object.assign(new Request('https://app.test/login', {
       headers: {
