@@ -1,4 +1,4 @@
-import { csrf, isSecureRequest, protect } from '../index'
+import { csrf, csrfInternals, isSecureRequest, protect } from '../index'
 import { SecurityCsrfError } from '../contracts'
 import {
   SECURITY_CLIENT_CONFIG_COOKIE,
@@ -9,6 +9,9 @@ import { getSecurityRuntime } from '../runtime'
 
 type NextCsrfRequest = Request & {
   readonly nextUrl?: URL
+  readonly cookies?: {
+    get(name: string): string | { readonly value?: string } | undefined
+  }
 }
 
 type NextResponseCookieOptions = {
@@ -48,6 +51,15 @@ function createCsrfErrorResponse(error: SecurityCsrfError): Response {
   })
 }
 
+function getRequestCookie(request: NextCsrfRequest, name: string): string | undefined {
+  const cookie = request.cookies?.get(name)
+  if (typeof cookie === 'string') {
+    return cookie
+  }
+
+  return typeof cookie?.value === 'string' ? cookie.value : undefined
+}
+
 async function issueCsrfCookie(request: NextCsrfRequest): Promise<Response | undefined> {
   const { config } = getSecurityRuntime()
 
@@ -55,20 +67,32 @@ async function issueCsrfCookie(request: NextCsrfRequest): Promise<Response | und
     return undefined
   }
 
+  const existingCsrfToken = getRequestCookie(request, config.csrf.cookie)
+  const shouldIssueCsrfToken = !existingCsrfToken
+    || !csrfInternals.isValidSignedCsrfToken(existingCsrfToken)
+  const clientConfig = serializeSecurityClientConfig(createSecurityClientConfig(config))
+  const shouldIssueClientConfig = getRequestCookie(request, SECURITY_CLIENT_CONFIG_COOKIE) !== clientConfig
+
+  if (!shouldIssueCsrfToken && !shouldIssueClientConfig) {
+    return undefined
+  }
+
   const { NextResponse } = await import('next/server') as NextServerModule
   const response = NextResponse.next()
-  response.cookies.set(config.csrf.cookie, await csrf.token(request), {
+  const cookieOptions = {
     httpOnly: false,
     path: '/',
-    sameSite: 'lax',
+    sameSite: 'lax' as const,
     secure: isSecureRequest(request),
-  })
-  response.cookies.set(SECURITY_CLIENT_CONFIG_COOKIE, serializeSecurityClientConfig(createSecurityClientConfig(config)), {
-    httpOnly: false,
-    path: '/',
-    sameSite: 'lax',
-    secure: isSecureRequest(request),
-  })
+  }
+
+  if (shouldIssueCsrfToken) {
+    response.cookies.set(config.csrf.cookie, await csrf.token(request), cookieOptions)
+  }
+
+  if (shouldIssueClientConfig) {
+    response.cookies.set(SECURITY_CLIENT_CONFIG_COOKIE, clientConfig, cookieOptions)
+  }
 
   return response
 }

@@ -3,9 +3,15 @@ import { defineSecurityConfig } from '@holo-js/config'
 import {
   configureSecurityRuntime,
   csrf,
+  csrfInternals,
   resetSecurityRuntime,
 } from '../src'
-import { SECURITY_CLIENT_CONFIG_COOKIE } from '../src/client-config'
+import {
+  SECURITY_CLIENT_CONFIG_COOKIE,
+  createSecurityClientConfig,
+  serializeSecurityClientConfig,
+} from '../src/client-config'
+import { getSecurityRuntime } from '../src/runtime'
 
 function configureSecurity(except: readonly string[] = []): void {
   configureSecurityRuntime({
@@ -56,6 +62,7 @@ describe('@holo-js/security framework csrf middleware', () => {
     configureSecurity()
 
     const { csrfProtection } = await import('../src/next/server')
+    const clientConfig = serializeSecurityClientConfig(createSecurityClientConfig(getSecurityRuntime().config))
     const getRequest = Object.assign(new Request('https://app.test/login'), {
       cookies: {
         get: vi.fn(() => undefined),
@@ -74,28 +81,70 @@ describe('@holo-js/security framework csrf middleware', () => {
 
     const existingCookieRequest = Object.assign(new Request('https://app.test/login', {
       headers: {
-        cookie: `XSRF-TOKEN=${token}`,
+        cookie: `XSRF-TOKEN=${token}; ${SECURITY_CLIENT_CONFIG_COOKIE}=${encodeURIComponent(clientConfig)}`,
       },
     }), {
       cookies: {
-        get: vi.fn(() => token),
+        get: vi.fn((name: string) => {
+          if (name === 'XSRF-TOKEN') return { value: token }
+          if (name === SECURITY_CLIENT_CONFIG_COOKIE) return { value: clientConfig }
+          return undefined
+        }),
       },
     })
     const existingCookieResponse = await csrfProtection()(existingCookieRequest)
-    expect(existingCookieResponse?.headers.get('set-cookie')).toContain(`XSRF-TOKEN=${encodeURIComponent(token)}`)
+    expect(existingCookieResponse).toBeUndefined()
+
+    const staleConfigRequest = Object.assign(new Request('https://app.test/login', {
+      headers: {
+        cookie: `XSRF-TOKEN=${token}; ${SECURITY_CLIENT_CONFIG_COOKIE}=stale`,
+      },
+    }), {
+      cookies: {
+        get: vi.fn((name: string) => {
+          if (name === 'XSRF-TOKEN') return token
+          if (name === SECURITY_CLIENT_CONFIG_COOKIE) return { value: 'stale' }
+          return undefined
+        }),
+      },
+    })
+    const staleConfigResponse = await csrfProtection()(staleConfigRequest)
+    expect(staleConfigResponse?.headers.get('set-cookie')).not.toContain(`XSRF-TOKEN=${encodeURIComponent(token)}`)
+    expect(staleConfigResponse?.headers.get('set-cookie')).toContain(`${SECURITY_CLIENT_CONFIG_COOKIE}=`)
+
+    const invalidCsrfRequest = Object.assign(new Request('https://app.test/login', {
+      headers: {
+        cookie: `XSRF-TOKEN=forged-token; ${SECURITY_CLIENT_CONFIG_COOKIE}=${encodeURIComponent(clientConfig)}`,
+      },
+    }), {
+      cookies: {
+        get: vi.fn((name: string) => {
+          if (name === 'XSRF-TOKEN') return { value: 'forged-token' }
+          if (name === SECURITY_CLIENT_CONFIG_COOKIE) return { value: clientConfig }
+          return undefined
+        }),
+      },
+    })
+    const invalidCsrfResponse = await csrfProtection()(invalidCsrfRequest)
+    expect(invalidCsrfResponse?.headers.get('set-cookie')).toContain('XSRF-TOKEN=')
+    expect(invalidCsrfResponse?.headers.get('set-cookie')).not.toContain(`${SECURITY_CLIENT_CONFIG_COOKIE}=`)
 
     const headRequest = Object.assign(new Request('https://app.test/login', {
       method: 'HEAD',
       headers: {
-        cookie: `XSRF-TOKEN=${token}`,
+        cookie: `XSRF-TOKEN=${token}; ${SECURITY_CLIENT_CONFIG_COOKIE}=${encodeURIComponent(clientConfig)}`,
       },
     }), {
       cookies: {
-        get: vi.fn(() => ({ value: token })),
+        get: vi.fn((name: string) => {
+          if (name === 'XSRF-TOKEN') return { value: token }
+          if (name === SECURITY_CLIENT_CONFIG_COOKIE) return { value: clientConfig }
+          return undefined
+        }),
       },
     })
     const headResponse = await csrfProtection()(headRequest)
-    expect(headResponse?.headers.get('set-cookie')).toContain(`XSRF-TOKEN=${encodeURIComponent(token)}`)
+    expect(headResponse).toBeUndefined()
 
     resetSecurityRuntime()
     await expect(csrfProtection()(Object.assign(new Request('https://app.test/login', {
@@ -146,6 +195,7 @@ describe('@holo-js/security framework csrf middleware', () => {
       url: new URL('https://app.test/login'),
       headers: {} as Record<string, string | undefined>,
       cookie: undefined as string | undefined,
+      clientConfigCookie: undefined as string | undefined,
       body: undefined as Buffer | undefined,
     }
     vi.doMock('h3', () => ({
@@ -156,7 +206,9 @@ describe('@holo-js/security framework csrf middleware', () => {
         return handler
       },
       getCookie(_event: unknown, name: string) {
-        return name === 'XSRF-TOKEN' ? state.cookie : undefined
+        if (name === 'XSRF-TOKEN') return state.cookie
+        if (name === SECURITY_CLIENT_CONFIG_COOKIE) return state.clientConfigCookie
+        return undefined
       },
       getMethod() {
         return state.method
@@ -180,6 +232,7 @@ describe('@holo-js/security framework csrf middleware', () => {
     const middleware = csrfProtection()
     await middleware({ node: { req: { headers: {} } } })
     const token = writes[0]?.value ?? ''
+    const clientConfig = serializeSecurityClientConfig(createSecurityClientConfig(getSecurityRuntime().config))
 
     expect(writes).toEqual([
       {
@@ -208,6 +261,49 @@ describe('@holo-js/security framework csrf middleware', () => {
         },
       },
     ])
+
+    writes.length = 0
+    state.cookie = token
+    state.clientConfigCookie = clientConfig
+    state.headers = {
+      cookie: `XSRF-TOKEN=${token}; ${SECURITY_CLIENT_CONFIG_COOKIE}=${encodeURIComponent(clientConfig)}`,
+    }
+    await middleware({ node: { req: { headers: {} } } })
+    expect(writes).toEqual([])
+
+    state.clientConfigCookie = 'stale'
+    await middleware({ node: { req: { headers: {} } } })
+    expect(writes).toEqual([
+      {
+        name: SECURITY_CLIENT_CONFIG_COOKIE,
+        value: clientConfig,
+        options: {
+          httpOnly: false,
+          path: '/',
+          sameSite: 'lax',
+          secure: true,
+        },
+      },
+    ])
+    writes.length = 0
+
+    state.cookie = csrfInternals.encodeCsrfToken('old-token')
+    state.clientConfigCookie = clientConfig
+    state.headers = {
+      cookie: `XSRF-TOKEN=${state.cookie}; ${SECURITY_CLIENT_CONFIG_COOKIE}=${encodeURIComponent(clientConfig)}`,
+    }
+    await middleware({ node: { req: { headers: {} } } })
+    expect(writes).toEqual([])
+    writes.length = 0
+
+    state.cookie = 'forged-token'
+    state.headers = {
+      cookie: `XSRF-TOKEN=forged-token; ${SECURITY_CLIENT_CONFIG_COOKIE}=${encodeURIComponent(clientConfig)}`,
+    }
+    await middleware({ node: { req: { headers: {} } } })
+    expect(writes).toHaveLength(1)
+    expect(writes[0]?.name).toBe('XSRF-TOKEN')
+    writes.length = 0
 
     state.method = 'POST'
     state.headers = {
