@@ -234,11 +234,11 @@ function createTransportFailure<TData>(
 }
 
 async function validateClientValues<TData>(
-  values: TData,
+  values: TData | FormLikeValidationInput,
   schemaDefinition: FormSchema,
 ): Promise<FormSubmissionResult<TData>> {
   const result = await validateInput(
-    values as unknown as FormLikeValidationInput,
+    values as FormLikeValidationInput,
     schemaDefinition as ValidationSchema<SchemaInputShape>,
   )
 
@@ -447,6 +447,26 @@ function buildFormData(value: unknown, path = '', formData: FormData = new FormD
 
   formData.append(path, String(value))
   return formData
+}
+
+function getActiveBrowserFormData(): FormData | undefined {
+  const activeElement = (globalThis as {
+    readonly document?: {
+      readonly activeElement?: {
+        readonly form?: object | null
+      } | null
+    }
+  }).document?.activeElement
+  const form = activeElement?.form
+  if (!form) {
+    return undefined
+  }
+
+  try {
+    return Reflect.construct(FormData, [form]) as FormData
+  } catch {
+    return undefined
+  }
 }
 
 function createTypedErrorBag<TData>(flattenedErrors: Record<string, readonly string[]>): ValidationErrorBag<TData> {
@@ -773,9 +793,17 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
   ) as unknown as InferFormFieldTree<TSchema>
 
   async function runValidation(): Promise<FormSubmissionResult<TData>> {
+    return await runValidationForInput(cloneValue(state.values))
+  }
+
+  async function runValidationForInput(input: TData | FormLikeValidationInput): Promise<FormSubmissionResult<TData>> {
     const sequence = nextValidationSequence(state)
-    const submission = await validateClientValues(cloneValue(state.values), schemaDefinition) as FormSubmissionResult<TData>
+    const submission = await validateClientValues<TData>(input, schemaDefinition)
     if (isLatestValidation(state, sequence)) {
+      state.values = mergeValues(
+        state.values,
+        submission.valid ? submission.data : submission.values,
+      )
       state.flattenedErrors = submission.errors.flatten()
       notifyListeners(state)
     }
@@ -856,14 +884,17 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
       state.submitting = true
       notifyListeners(state)
       try {
-        const local = await runValidation()
-        if (!local.valid) {
-          return local
-        }
-
         const submitter = options.submitter ?? defaultSubmitter<TData, TSuccess>
         const method = options.method ?? 'POST'
-        const formData = buildFormData(state.values)
+        const liveFormData = getActiveBrowserFormData()
+        const formData = liveFormData ?? buildFormData(state.values)
+        const localSubmission = liveFormData
+          ? await runValidationForInput(liveFormData)
+          : await runValidation()
+
+        if (!localSubmission.valid) {
+          return localSubmission
+        }
 
         if (!isSafeMethod(method)) {
           const csrfField = await getClientCsrfField()
@@ -877,7 +908,7 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
           response = await submitter({
             action: options.action,
             method,
-            values: state.values,
+            values: localSubmission.data,
             formData,
           })
         } catch {

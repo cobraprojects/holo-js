@@ -1,8 +1,6 @@
 <script setup lang="ts">
-import type { CategoryArchiveData } from '../../../server/lib/blog'
-
 const route = useRoute()
-const { data } = await useFetch<CategoryArchiveData>(`/api/blog/categories/${route.params.slug}`)
+const { data } = await useFetch(`/api/blog/categories/${route.params.slug}`)
 
 if (!data.value) {
   throw createError({ statusCode: 404, statusMessage: 'Category not found' })

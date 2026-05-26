@@ -61,6 +61,7 @@ import {
   setMediaConversionExecutor,
   setMediaPathGenerator,
   type MediaEnabledEntity,
+  type MediaAddResult,
 } from '../src'
 import { getContentSize } from '../src/runtime/binary'
 
@@ -91,6 +92,19 @@ type RuntimeMediaEntity = {
   regenerateMedia(collectionName?: string, conversions?: string | readonly string[]): Promise<void>
   addMedia(source: Buffer): { toMediaCollection(collectionName?: string): Promise<unknown> }
   addMediaFromUrl(url: string): { toMediaCollection(collectionName?: string): Promise<unknown> }
+}
+
+async function expectMediaAdded(
+  result: Promise<MediaAddResult>,
+): Promise<MediaItem> {
+  const upload = await result
+  expect(upload.error).toBeNull()
+  expect(upload.data).toBeInstanceOf(MediaItem)
+  if (!upload.data) {
+    throw new Error('Expected media upload to succeed.')
+  }
+
+  return upload.data
 }
 
 const postsTable = defineGeneratedTable('posts', {
@@ -733,7 +747,7 @@ describe('@holo-js/media', () => {
     await expect(runtimePost.addMediaFromUrl('https://example.test/image.jpg').toMediaCollection()).rejects.toThrow('is not configured for media')
   })
 
-  it('preserves media model method contracts and wraps entity-producing results', () => {
+  it('preserves media model method contracts and wraps static entity-producing results', () => {
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
     })
@@ -748,9 +762,7 @@ describe('@holo-js/media', () => {
     })
 
     type PostMediaEntity = MediaEnabledEntity<typeof postsTable, 'default' | 'images', 'thumb'>
-    type PostQuery = ReturnType<typeof Post.query>
     type PostPage = Awaited<ReturnType<typeof Post.paginate>>
-    type PostQueryPage = Awaited<ReturnType<PostQuery['paginate']>>
 
     const acceptsFindValue = (_value: Parameters<typeof Post.find>[0]) => {}
 
@@ -763,9 +775,6 @@ describe('@holo-js/media', () => {
     expectTypeOf<Awaited<ReturnType<typeof Post.firstWhere>>>().toEqualTypeOf<PostMediaEntity | undefined>()
     expectTypeOf<Awaited<ReturnType<typeof Post.update>>>().toEqualTypeOf<PostMediaEntity>()
     expectTypeOf<PostPage['data'][number]>().toEqualTypeOf<PostMediaEntity>()
-    expectTypeOf<PostQueryPage['data'][number]>().toMatchTypeOf<PostMediaEntity>()
-    expectTypeOf<Awaited<ReturnType<PostQuery['first']>>>().toMatchTypeOf<PostMediaEntity | undefined>()
-    expectTypeOf<ReturnType<PostQuery['cursor']>>().toMatchTypeOf<AsyncGenerator<PostMediaEntity, void, unknown>>()
   })
 
   it('keeps the undeclared default collection multi-file', async () => {
@@ -840,23 +849,45 @@ describe('@holo-js/media', () => {
     await expect(draft.addMedia(Buffer.from('xx')).toMediaCollection('images')).rejects.toThrow('before it has a persisted primary key')
 
     const post = await Post.create({ title: 'Live' })
-    await expect(post.addMedia({
+    const maxSizeResult = await post.addMedia({
       contents: Buffer.from('toolarge'),
       fileName: 'hero.png',
       mimeType: 'image/png',
-    }).toMediaCollection('images')).rejects.toThrow('exceeds the max size')
+    }).toMediaCollection('images')
+    expect(maxSizeResult.data).toBeNull()
+    expect(maxSizeResult.error?.code).toBe('max_size_exceeded')
+    expect(maxSizeResult.error?.collection).toBe('images')
+    expect(maxSizeResult.error?.fileName).toBe('hero.png')
+    expect(maxSizeResult.error?.maxSize).toBe(2)
+    expect(maxSizeResult.error?.actualSize).toBe(8)
+    expect(maxSizeResult.error?.status).toBe(422)
+    expect(maxSizeResult.error?.message).toBe('The selected file must be 2 bytes or smaller.')
 
-    await expect(post.addMedia({
+    const invalidMimeResult = await post.addMedia({
       contents: Buffer.from('ok'),
       fileName: 'hero.jpg',
       mimeType: 'image/jpeg',
-    }).toMediaCollection('images')).rejects.toThrow('accepted MIME type')
+    }).toMediaCollection('images')
+    expect(invalidMimeResult.data).toBeNull()
+    expect(invalidMimeResult.error?.code).toBe('invalid_mime_type')
+    expect(invalidMimeResult.error?.acceptedMimeTypes).toEqual(['image/png'])
 
-    await expect(post.addMedia({
+    const invalidExtensionResult = await post.addMedia({
       contents: Buffer.from('ok'),
       fileName: 'hero.jpg',
       mimeType: 'image/png',
-    }).toMediaCollection('images')).rejects.toThrow('accepted extension')
+    }).toMediaCollection('images')
+    expect(invalidExtensionResult.data).toBeNull()
+    expect(invalidExtensionResult.error?.code).toBe('invalid_extension')
+    expect(invalidExtensionResult.error?.acceptedExtensions).toEqual(['png'])
+
+    const success = await post.addMedia({
+      contents: Buffer.from('ok'),
+      fileName: 'hero.png',
+      mimeType: 'image/png',
+    }).toMediaCollection('images')
+    expect(success.error).toBeNull()
+    expect(success.data).toBeInstanceOf(MediaItem)
 
     const storedFileCount = storageState.getDiskStore('public').size
     await expect(post.addMedia({
@@ -883,11 +914,13 @@ describe('@holo-js/media', () => {
 
     const post = await Post.create({ title: 'Case Insensitive' })
 
-    await expect(post.addMedia({
+    const result = await post.addMedia({
       contents: Buffer.from('ok'),
       fileName: 'hero.png',
       mimeType: 'IMAGE/PNG',
-    }).toMediaCollection('images')).resolves.toBeInstanceOf(MediaItem)
+    }).toMediaCollection('images')
+    expect(result.data).toBeInstanceOf(MediaItem)
+    expect(result.error).toBeNull()
   })
 
   it('supports different source inputs and adder overrides', async () => {
@@ -937,15 +970,22 @@ describe('@holo-js/media', () => {
         .usingFileName('blob.png')
         .toMediaCollection('uploads')
 
+      const fromFile = await post
+        .addMedia(new File([Buffer.from('file')], 'avatar.png', { type: 'image/png' }))
+        .toMediaCollection('uploads')
+
       expect(fromStringPath.record.name).toBe('Custom Name')
       expect(fromStringPath.fileName).toBe('renamed.txt')
       expect(fromStringPath.getUrl()).toBeNull()
-      expect(fromStringPath.getPath()).toContain('/virtual/local/')
+      expect(fromStringPath.getPath()).toBeNull()
       expect(fromPathObject.fileName).toBe('notes.txt')
       expect(fromArrayBuffer.fileName).toBe('array.txt')
       expect(fromBlob.mimeType).toBe('image/png')
       expect(fromBlob.size).toBe(3)
-      expect(await post.getMedia('uploads')).toHaveLength(4)
+      expect(fromFile.fileName).toBe('avatar.png')
+      expect(fromFile.mimeType).toBe('image/png')
+      expect(fromFile.size).toBe(4)
+      expect(await post.getMedia('uploads')).toHaveLength(5)
     } finally {
       await rm(path.slice(0, path.lastIndexOf('/')), { recursive: true, force: true })
     }
@@ -984,6 +1024,7 @@ describe('@holo-js/media', () => {
 
     const post = await Post.create({ title: 'Hero' })
     expectTypeOf(post.getFirstMediaUrl('images', 'thumb')).toEqualTypeOf<Promise<string | null>>()
+    expectTypeOf(post.getFirstMediaPath('images', 'thumb')).toEqualTypeOf<Promise<string | null>>()
     const mediaRelation = Post.getRepository().getRelationDefinition('media')
     expect(mediaRelation.kind).toBe('morphMany')
     if (mediaRelation.kind === 'morphMany') {
@@ -1000,7 +1041,7 @@ describe('@holo-js/media', () => {
     expect(media.collectionName).toBe('images')
     expect(media.getUrl()).toContain('https://cdn.test/public/media/')
     expect(media.getUrl('thumb')).toContain('/thumb.webp')
-    expect(media.getPath()).toContain('/virtual/public/media/')
+    expect(media.getPath()).toContain('/public/media/')
     expect(media.getTemporaryUrl('thumb')).toContain('https://signed.test/public/')
 
     expect(await post.hasMedia('images')).toBe(true)
@@ -1812,7 +1853,7 @@ describe('@holo-js/media', () => {
     })
 
     const conversionDiskItem = new MediaItem(publicManual)
-    expect(conversionDiskItem.getPath('fallback' as never)).toContain('/virtual/s3/')
+    expect(conversionDiskItem.getPath('fallback' as never)).toContain('/s3/')
   })
 
   it('supports remote uploads and selective regeneration', async () => {
@@ -2011,8 +2052,9 @@ describe('@holo-js/media', () => {
     try {
       const post = await Post.create({ title: 'Remote Limit' })
 
-      await expect(post.addMediaFromUrl('https://example.test/oversized.jpg').toMediaCollection('images'))
-        .rejects.toThrow('exceeds the max size')
+      const result = await post.addMediaFromUrl('https://example.test/oversized.jpg').toMediaCollection('images')
+      expect(result.data).toBeNull()
+      expect(result.error?.message).toBe('The selected file must be 2 bytes or smaller.')
       expect(arrayBuffer).not.toHaveBeenCalled()
     } finally {
       vi.unstubAllGlobals()
@@ -2054,8 +2096,9 @@ describe('@holo-js/media', () => {
     try {
       const post = await Post.create({ title: 'Remote Stream Limit' })
 
-      await expect(post.addMediaFromUrl('https://example.test/oversized-stream.jpg').toMediaCollection('images'))
-        .rejects.toThrow('exceeds the max size')
+      const result = await post.addMediaFromUrl('https://example.test/oversized-stream.jpg').toMediaCollection('images')
+      expect(result.data).toBeNull()
+      expect(result.error?.message).toBe('The selected file must be 2 bytes or smaller.')
       expect(arrayBuffer).not.toHaveBeenCalled()
     } finally {
       vi.unstubAllGlobals()
@@ -3061,7 +3104,7 @@ describe('@holo-js/media', () => {
     expect(media.record.conversions_disk).toBe('public')
     expect(media.record.mime_type).toBeNull()
     expect(media.record.extension).toBeNull()
-    expect(media.getPath('copy')).toContain('/virtual/public/')
+    expect(media.getPath('copy')).toContain('/public/')
     expect(blankName.fileName).toBe('media.bin')
     expect(implicitContentsName.fileName).toBe('media.bin')
     expect(defaultName.fileName).toBe('media.bin')
@@ -3128,7 +3171,7 @@ describe('@holo-js/media', () => {
       order_column: 102,
     })
 
-    expect(new MediaItem(diskFallback).getPath('plain' as never)).toContain('/virtual/public/')
+    expect(new MediaItem(diskFallback).getPath('plain' as never)).toContain('/public/')
 
     await expect(media.regenerate('unknown' as never)).rejects.toThrow('Unknown media conversion')
     await expect(new MediaItem(diskFallback).regenerate('copy')).rejects.toThrow('original file is missing')

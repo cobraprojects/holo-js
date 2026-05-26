@@ -341,6 +341,26 @@ console.log(JSON.stringify({
     }
   })
 
+  it('loads the optional security module outside the Vitest branch', async () => {
+    vi.resetModules()
+    const currentProcess = process
+    vi.stubGlobal('process', {
+      ...currentProcess,
+      env: {},
+    })
+
+    try {
+      const mod = await import('../src/security')
+      const security = await mod.loadSecurityModule()
+
+      expect(security.rateLimit).toEqual(expect.any(Function))
+    } finally {
+      vi.resetModules()
+      vi.unstubAllGlobals()
+      formsSecurityInternals.resetSecurityModuleCache()
+    }
+  })
+
   it('loads the optional security client module when process.env is unavailable', async () => {
     vi.resetModules()
     vi.stubGlobal('process', {
@@ -483,6 +503,28 @@ console.log(JSON.stringify(client.getSecurityClientConfig().csrf))
     await expect(getClientCsrfField()).resolves.toBeUndefined()
     await expect(loadSecurityModule()).rejects.toBeInstanceOf(FormContractError)
     await expect(loadSecurityClientModule()).rejects.toBeInstanceOf(FormContractError)
+  })
+
+  it('swallows optional client security load failures while reading csrf fields', async () => {
+    ;(globalThis as typeof globalThis & { document?: Document }).document = {
+      cookie: 'XSRF-TOKEN=client-token',
+    } as Document
+    ;(globalThis as typeof globalThis & { __holoFormsSecurityClientImport__?: () => Promise<unknown> }).__holoFormsSecurityClientImport__ = async () => {
+      throw new Error('Cannot find package @holo-js/security')
+    }
+
+    await expect(getClientCsrfField()).resolves.toBeUndefined()
+  })
+
+  it('rethrows unexpected client security load failures while reading csrf fields', async () => {
+    ;(globalThis as typeof globalThis & { document?: Document }).document = {
+      cookie: 'XSRF-TOKEN=client-token',
+    } as Document
+    ;(globalThis as typeof globalThis & { __holoFormsSecurityClientImport__?: () => Promise<unknown> }).__holoFormsSecurityClientImport__ = async () => {
+      throw new Error('client security exploded')
+    }
+
+    await expect(getClientCsrfField()).rejects.toThrow('client security exploded')
   })
 
   it('rethrows unexpected module load failures for both security entrypoints', async () => {

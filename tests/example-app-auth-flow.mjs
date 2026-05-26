@@ -341,24 +341,11 @@ export async function assertExampleAppAuthFlow({
       ...(options.headers ?? {}),
     },
   })
-  const fetchAuthJson = (path, options = {}) => fetchJson(baseUrl, path, {
-    ...options,
-    headers: {
-      ...requestHeaders,
-      ...(options.headers ?? {}),
-    },
-  })
-  const fetchCsrfProtectedAuthJson = async (path, options = {}) => {
-    if (!loginRequiresCsrf) {
-      return await fetchAuthJson(path, options)
-    }
-
+  const applyCsrf = async (options = {}) => {
     const csrfToken = await createCsrfToken()
     const csrfCookie = `XSRF-TOKEN=${encodeURIComponent(csrfToken)}`
-    const fields = {
-      ...(options.fields ?? {}),
-      _token: csrfToken,
-    }
+    const headers = new Headers(options.headers ?? {})
+    headers.set('X-CSRF-TOKEN', csrfToken)
 
     if (options.jar) {
       options.jar.capture(new Response(null, {
@@ -367,21 +354,36 @@ export async function assertExampleAppAuthFlow({
         },
       }))
 
-      return await fetchAuthJson(path, {
+      return {
         ...options,
-        fields,
-      })
+        ...(options.fields ? { fields: { ...options.fields, _token: csrfToken } } : {}),
+        headers: Object.fromEntries(headers),
+      }
     }
 
-    const headers = new Headers(options.headers ?? {})
     appendCookieHeader(headers, csrfCookie)
 
-    return await fetchAuthJson(path, {
+    return {
       ...options,
-      fields,
+      ...(options.fields ? { fields: { ...options.fields, _token: csrfToken } } : {}),
       headers: Object.fromEntries(headers),
+    }
+  }
+  const fetchAuthJson = async (path, options = {}) => {
+    const method = options.method ?? (options.fields ? 'POST' : 'GET')
+    const protectedOptions = loginRequiresCsrf && options.skipCsrf !== true && method !== 'GET'
+      ? await applyCsrf(options)
+      : options
+
+    return await fetchJson(baseUrl, path, {
+      ...protectedOptions,
+      headers: {
+        ...requestHeaders,
+        ...(protectedOptions.headers ?? {}),
+      },
     })
   }
+  const fetchCsrfProtectedAuthJson = async (path, options = {}) => await fetchAuthJson(path, options)
   const usesSvelteKitActions = authSubmissionMode === 'sveltekit-actions'
   const fetchActionSubmission = async (path, options = {}) => {
     const body = new FormData()
@@ -599,24 +601,19 @@ export async function assertExampleAppAuthFlow({
         },
         allowFailure: true,
       })
-      : await fetchAuthJson('/api/login', {
-      fields: {
-        email,
-        password,
-      },
-      headers: {
-        'x-forwarded-for': '127.0.0.229',
-        'x-real-ip': '127.0.0.229',
-      },
-      allowFailure: true,
-    })
-    if (usesSvelteKitActions) {
-      assert.equal(missingLoginCsrf.response.status, 200)
-      assert.match(missingLoginCsrf.text, /CSRF token mismatch/i)
-    } else {
-      assert.equal(missingLoginCsrf.response.status, 419)
-      assertFieldFailure(missingLoginCsrf, ['_root'])
-    }
+      : await fetchAuthText('/api/login', {
+        method: 'POST',
+        body: new URLSearchParams({
+          email,
+          password,
+        }),
+        headers: {
+          'x-forwarded-for': '127.0.0.229',
+          'x-real-ip': '127.0.0.229',
+        },
+        allowFailure: true,
+      })
+    assert.equal(missingLoginCsrf.response.status, 419)
   }
 
   const badCredentials = await fetchLoginJson({

@@ -244,7 +244,7 @@ async function createCsrfActionRequest(path, fields) {
 }
 
 function assertInvalidPostStatusFailure(result) {
-  assert.equal(result.status, 400)
+  assert.equal(result.status, 422)
   assert.deepEqual(result.data?.errors?.status, ['Select a valid post status.'])
 }
 

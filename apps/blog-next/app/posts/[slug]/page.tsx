@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import Image from 'next/image'
 import { notFound } from 'next/navigation'
 
 import { getPublishedPostBySlug } from '@/server/lib/blog'
@@ -13,10 +14,13 @@ export default async function PostDetailPage({ params }: { params: Promise<{ slu
     notFound()
   }
 
+  const imagePath = await post.getFirstMediaPath('images', 'thumb')
+
   return (
     <article style={{ display: 'grid', gap: '1rem' }}>
       <Link href="/posts" style={{ color: '#7dd3fc' }}>Back to posts</Link>
       <h1 style={{ margin: 0 }}>{post.title}</h1>
+      {imagePath ? <Image src={imagePath} alt="" width={1200} height={675} style={{ width: '100%', height: 'auto', borderRadius: '1rem', background: '#111827' }} /> : null}
       <p style={{ margin: 0, color: '#cbd5e1' }}>{post.excerpt}</p>
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
         {post.category ? <Link href={`/categories/${post.category.slug}`} style={{ color: '#7dd3fc' }}>{post.category.name}</Link> : null}

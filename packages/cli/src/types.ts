@@ -23,6 +23,6 @@ export interface HoloAppCommand {
   run(context: CommandExecutionContext): unknown | Promise<unknown>
 }
 
-export function defineCommand<TCommand extends HoloAppCommand>(command: TCommand): TCommand {
+export function defineCommand(command: HoloAppCommand): Readonly<HoloAppCommand> {
   return Object.freeze({ ...command })
 }

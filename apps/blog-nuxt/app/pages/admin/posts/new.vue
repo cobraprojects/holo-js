@@ -1,16 +1,15 @@
 <script setup lang="ts">
-import type { AdminPostsData } from '../../../../server/lib/blog'
-
-const { data } = await useFetch<AdminPostsData>('/api/admin/posts')
+const { data } = await useFetch('/api/admin/posts')
 </script>
 
 <template>
   <section class="stack">
     <h1>New post</h1>
-    <form action="/admin/posts/create" method="post" class="stack">
+    <form action="/admin/posts/create" method="post" enctype="multipart/form-data" class="stack">
       <input name="title" placeholder="Title" required>
       <textarea name="excerpt" placeholder="Excerpt" rows="3"></textarea>
       <textarea name="body" placeholder="Body" rows="10" required></textarea>
+      <input name="image" type="file" accept="image/png,image/jpeg,image/webp">
       <select name="categoryId">
         <option value="">Uncategorized</option>
         <option v-for="category in data?.categories || []" :key="category.id" :value="category.id">{{ category.name }}</option>
@@ -32,4 +31,5 @@ const { data } = await useFetch<AdminPostsData>('/api/admin/posts')
 
 <style scoped>
 .stack { display: grid; gap: 1rem; }
+.error { margin: 0; color: #fca5a5; }
 </style>

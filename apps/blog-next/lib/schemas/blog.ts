@@ -9,7 +9,3 @@ export const postForm = schema({
   tagIds: field.array(field.number()).default([]),
   image: field.file().optional().image('The selected file must be an image.').maxSize('2mb', 'The selected file must be 2 MB or smaller.'),
 })
-
-export const tagForm = schema({
-  name: field.string().required('Tag name is required.'),
-})

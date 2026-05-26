@@ -557,6 +557,10 @@ describe('@holo-js/forms contracts', () => {
     }, login, {
       throttle: 'login',
     })).rejects.toThrow('Security-aware validate() options require a Request or request-like event input.')
+
+    await expect(validate(new FormData(), login, {
+      throttle: 'login',
+    })).rejects.toThrow('Security-aware validate() options require a Request or request-like event input.')
   })
 
   it('accepts h3-style event objects for security-aware validation', async () => {
@@ -600,6 +604,45 @@ describe('@holo-js/forms contracts', () => {
       email: 'ava@example.com',
     })
     expect(throttled.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
+  })
+
+  it('accepts h3-style event objects after middleware cached the raw body', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+    const rawBodySymbol = Symbol.for('h3RawBody')
+
+    ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
+
+    const event = {
+      method: 'POST',
+      path: '/login',
+      node: {
+        req: {
+          method: 'POST',
+          url: '/login',
+          headers: {
+            'content-type': 'application/x-www-form-urlencoded',
+            'x-forwarded-for': '203.0.113.8',
+            host: 'app.test',
+          },
+          [rawBodySymbol]: Promise.resolve(new TextEncoder().encode('email=ava%40example.com')),
+          pipe() {
+            throw new Error('The drained request stream should not be reused.')
+          },
+        },
+      },
+    }
+
+    const submission = await validate(event, login, {
+      throttle: 'login',
+    })
+    expect(submission.valid).toBe(true)
+    if (!submission.valid) {
+      throw new Error('Expected cached h3 raw-body validation to pass.')
+    }
+
+    expect(submission.data.email).toBe('ava@example.com')
   })
 
   it('accepts Next server action FormData for security-aware validation', async () => {
@@ -648,9 +691,77 @@ describe('@holo-js/forms contracts', () => {
       email: 'ava@example.com',
     })
     expect(throttled.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
+
+    runtime.__holoFormsSecurityModule__ = createSecurityModule()
+    runtime.__holoFormsNextHeadersImport__ = async () => ({
+      headers: () => new Headers({
+        'x-forwarded-for': '203.0.113.12',
+        'x-forwarded-host': 'forms.example.test',
+        'x-forwarded-proto': 'https',
+        'content-type': 'multipart/form-data; boundary=stale-action-boundary',
+      }),
+    })
+    const noRefererFormData = new FormData()
+    noRefererFormData.set('email', 'noreferer@example.com')
+    const noRefererResult = await validate(noRefererFormData, login, {
+      throttle: 'login',
+    })
+    expect(noRefererResult.valid).toBe(true)
+
+    runtime.__holoFormsSecurityModule__ = createSecurityModule()
+    runtime.__holoFormsNextHeadersImport__ = async () => ({
+      headers: () => new Headers({
+        host: 'forms.example.test',
+        'content-type': 'multipart/form-data; boundary=stale-action-boundary',
+      }),
+    })
+    const hostOnlyFormData = new FormData()
+    hostOnlyFormData.set('email', 'hostonly@example.com')
+    const hostOnlyResult = await validate(hostOnlyFormData, login, {
+      throttle: 'login',
+    })
+    expect(hostOnlyResult.valid).toBe(true)
+
+    runtime.__holoFormsSecurityModule__ = createSecurityModule()
+    runtime.__holoFormsNextHeadersImport__ = async () => ({
+      headers: () => new Headers({
+        'content-type': 'multipart/form-data; boundary=stale-action-boundary',
+      }),
+    })
+    const defaultHostFormData = new FormData()
+    defaultHostFormData.set('email', 'default@example.com')
+    const defaultHostResult = await validate(defaultHostFormData, login, {
+      throttle: 'login',
+    })
+    expect(defaultHostResult.valid).toBe(true)
+
+    runtime.__holoFormsNextHeadersImport__ = async () => ({})
+    await expect(validate(new FormData(), login, {
+      throttle: 'login',
+    })).rejects.toThrow('Security-aware validate() options require a Request or request-like event input.')
+  })
+
+  it('rejects security-aware FormData when ambient Next headers are unavailable', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+    const runtime = globalThis as FormsTestGlobal
+
+    runtime.__holoFormsSecurityModule__ = createSecurityModule()
+    runtime.__holoFormsNextHeadersImport__ = async () => ({})
+
+    const formData = new FormData()
+    formData.set('email', 'ava@example.com')
+
+    await expect(validate(formData, login, {
+      throttle: 'login',
+    })).rejects.toThrow('Security-aware validate() options require a Request or request-like event input.')
   })
 
   it('reuses embedded Request instances when normalizing request-like inputs', () => {
+    const directRequest = new Request('https://app.test/direct', {
+      method: 'POST',
+    })
     const webRequest = new Request('https://app.test/web', {
       method: 'POST',
     })
@@ -658,6 +769,7 @@ describe('@holo-js/forms contracts', () => {
       method: 'PATCH',
     })
 
+    expect(formsInternals.normalizeRequestLikeInput(directRequest)).toBe(directRequest)
     expect(formsInternals.normalizeRequestLikeInput({
       web: {
         request: webRequest,
@@ -666,6 +778,100 @@ describe('@holo-js/forms contracts', () => {
     expect(formsInternals.normalizeRequestLikeInput({
       req: nodeRequest,
     })).toBe(nodeRequest)
+  })
+
+  it('validates embedded Request instances from request-like inputs', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+
+    const webResult = await validate({
+      web: {
+        request: new Request('https://app.test/web', {
+          method: 'POST',
+          body: new URLSearchParams({
+            email: 'web@example.com',
+          }),
+        }),
+      },
+    }, login)
+    expect(webResult.valid).toBe(true)
+    if (!webResult.valid) {
+      throw new Error('Expected web request validation success.')
+    }
+    expect(webResult.data.email).toBe('web@example.com')
+
+    const reqResult = await validate({
+      req: new Request('https://app.test/node', {
+        method: 'POST',
+        body: new URLSearchParams({
+          email: 'node@example.com',
+        }),
+      }),
+    }, login)
+    expect(reqResult.valid).toBe(true)
+    if (!reqResult.valid) {
+      throw new Error('Expected req request validation success.')
+    }
+    expect(reqResult.data.email).toBe('node@example.com')
+  })
+
+  it('validates request-like inputs without request bodies', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+
+    const getResult = await validate({
+      method: 'GET',
+      path: '/login',
+      node: {
+        req: {
+          method: 'GET',
+          headers: {
+            host: 'app.test',
+          },
+          body: new URLSearchParams({
+            email: 'ignored@example.com',
+          }),
+        },
+      },
+    }, login)
+    expect(getResult.valid).toBe(false)
+    if (getResult.valid) {
+      throw new Error('Expected GET validation failure.')
+    }
+    expect(getResult.values).toEqual({})
+
+    const postResult = await validate({
+      method: 'POST',
+      path: '/login',
+      node: {
+        req: {
+          method: 'POST',
+          headers: {
+            host: 'app.test',
+          },
+        },
+      },
+    }, login)
+    expect(postResult.valid).toBe(false)
+    if (postResult.valid) {
+      throw new Error('Expected empty POST validation failure.')
+    }
+    expect(postResult.values).toEqual({})
+
+    const topLevelPostResult = await validate({
+      method: 'POST',
+      path: '/login',
+      headers: {
+        host: 'app.test',
+      },
+    }, login)
+    expect(topLevelPostResult.valid).toBe(false)
+    if (topLevelPostResult.valid) {
+      throw new Error('Expected top-level empty POST validation failure.')
+    }
+    expect(topLevelPostResult.values).toEqual({})
   })
 
   it('does not treat arbitrary nested request containers as requests', () => {
@@ -740,9 +946,13 @@ describe('@holo-js/forms contracts', () => {
       cookie: ['a=1', 'XSRF-TOKEN=token'],
       'x-forwarded-proto': 'https',
       'x-trace': ['trace-1', 'trace-2'],
+      'x-empty': [],
+      'x-number': 1 as never,
     })
     expect(objectHeaders.get('cookie')).toBe('a=1; XSRF-TOKEN=token')
     expect(objectHeaders.get('x-trace')).toBe('trace-1,trace-2')
+    expect(objectHeaders.has('x-empty')).toBe(false)
+    expect(objectHeaders.has('x-number')).toBe(false)
 
     class ForEachHeaders {
       forEach(callback: (value: string, name: string) => void) {
@@ -862,6 +1072,18 @@ describe('@holo-js/forms contracts', () => {
     })
     expect(directUrlRequest?.url).toBe('https://forms.example.test/direct')
 
+    const fallbackUrlRequest = formsInternals.normalizeRequestLikeInput({
+      method: 'POST',
+      body: 'email=ava@example.com',
+    })
+    expect(fallbackUrlRequest?.url).toBe('http://localhost/')
+
+    const defaultMethodRequest = formsInternals.normalizeRequestLikeInput({
+      path: '/default-method',
+      body: 'ignored',
+    })
+    expect(defaultMethodRequest?.method).toBe('GET')
+
     const jsonRequest = formsInternals.normalizeRequestLikeInput({
       req: {
         method: 'PUT',
@@ -877,6 +1099,22 @@ describe('@holo-js/forms contracts', () => {
     expect(jsonRequest?.headers.get('content-type')).toBe('application/json')
     await expect(jsonRequest?.json()).resolves.toEqual({
       city: 'Cairo',
+    })
+
+    const jsonWithContentTypeRequest = formsInternals.normalizeRequestLikeInput({
+      method: 'POST',
+      path: '/json-custom',
+      headers: {
+        host: 'forms.example.test',
+        'content-type': 'application/vnd.forms+json',
+      },
+      body: {
+        city: 'Giza',
+      },
+    })
+    expect(jsonWithContentTypeRequest?.headers.get('content-type')).toBe('application/vnd.forms+json')
+    await expect(jsonWithContentTypeRequest?.json()).resolves.toEqual({
+      city: 'Giza',
     })
 
     const typedArrayRequest = formsInternals.normalizeRequestLikeInput({
@@ -1061,6 +1299,138 @@ describe('@holo-js/forms contracts', () => {
     }), login, {
       throttle: 'login',
     })).rejects.toThrow('security exploded')
+  })
+
+  it('returns csrf-like root security failures without rate-limit metadata', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+
+    ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = {
+      async rateLimit() {
+        const error = new Error('CSRF token mismatch.') as Error & { status: number }
+        error.status = 419
+        throw error
+      },
+    }
+
+    const result = await validate(new Request('https://app.test/login', {
+      method: 'POST',
+      body: new URLSearchParams({
+        email: 'ava@example.com',
+      }),
+    }), login, {
+      throttle: 'login',
+    })
+
+    expect(result.valid).toBe(false)
+    if (result.valid) {
+      throw new Error('Expected csrf-like root failure.')
+    }
+
+    const failure = result.fail()
+    expect(failure.status).toBe(419)
+    expect(failure.errors._root).toEqual(['CSRF token mismatch.'])
+    expect('retryAfterSeconds' in failure).toBe(false)
+    expect('retryAt' in failure).toBe(false)
+  })
+
+  it('revalidates request values when root security errors happen before submission validation is captured', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+    ;(globalThis as typeof globalThis & { __holoFormsSecurityImport__?: () => Promise<unknown> }).__holoFormsSecurityImport__ = async () => {
+      const error = new Error('Too many attempts. Please try again later.') as Error & { status: number }
+      error.status = 429
+      throw error
+    }
+
+    const result = await validate(new Request('https://app.test/login', {
+      method: 'POST',
+      body: new URLSearchParams({
+        email: 'ava@example.com',
+      }),
+    }), login, {
+      throttle: 'login',
+    })
+
+    expect(result.valid).toBe(false)
+    if (result.valid) {
+      throw new Error('Expected root security failure.')
+    }
+
+    expect(result.values).toEqual({
+      email: 'ava@example.com',
+    })
+    expect(result.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
+    expect(result.fail()).toMatchObject({
+      status: 429,
+    })
+  })
+
+  it('preserves validation errors when root security errors happen before submission validation is captured', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+    ;(globalThis as typeof globalThis & { __holoFormsSecurityImport__?: () => Promise<unknown> }).__holoFormsSecurityImport__ = async () => {
+      const error = new Error('Too many attempts. Please try again later.') as Error & { status: number }
+      error.status = 429
+      throw error
+    }
+
+    const result = await validate(new Request('https://app.test/login', {
+      method: 'POST',
+      body: new URLSearchParams({
+        email: 'bad',
+      }),
+    }), login, {
+      throttle: 'login',
+    })
+
+    expect(result.valid).toBe(false)
+    if (result.valid) {
+      throw new Error('Expected validation and root security failure.')
+    }
+
+    expect(result.values).toEqual({
+      email: 'bad',
+    })
+    expect(result.errors.first('email')).toBeDefined()
+    expect(result.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
+  })
+
+  it('falls back to empty values when security failure revalidation cannot read the request', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+
+    ;(globalThis as typeof globalThis & { __holoFormsSecurityImport__?: () => Promise<unknown> }).__holoFormsSecurityImport__ = async () => {
+      const error = new Error('Too many attempts. Please try again later.') as Error & { status: number }
+      error.status = 429
+      throw error
+    }
+
+    const request = new Request('https://app.test/login', {
+      method: 'POST',
+      body: new URLSearchParams({
+        email: 'ava@example.com',
+      }),
+    })
+    await request.text()
+
+    const result = await validate(request, login, {
+      throttle: 'login',
+    })
+
+    expect(result.valid).toBe(false)
+    if (result.valid) {
+      throw new Error('Expected root security failure.')
+    }
+
+    expect(result.values).toEqual({})
+    expect(result.errors.flatten()).toEqual({
+      _root: ['Too many attempts. Please try again later.'],
+    })
   })
 
   it('rejects malformed submission status codes', () => {

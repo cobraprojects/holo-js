@@ -9,5 +9,8 @@ export const load = (async ({ params }) => {
     throw error(404, 'Post not found')
   }
 
-  return { post }
+  return {
+    post: post.toJSON(),
+    imageUrl: await post.getFirstMediaUrl('images', 'thumb'),
+  }
 }) satisfies PageServerLoad

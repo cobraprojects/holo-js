@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { get } from 'node:http'
+import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -40,6 +41,20 @@ const port = await new Promise((resolve, reject) => {
 const healthUrl = `http://localhost:${port}/api/holo/health`
 const originalConfig = await readFile(configPath, 'utf8')
 const runtimeSchemaPath = join(cwd, '.holo-js/generated/schema.mjs')
+const require = createRequire(import.meta.url)
+const { encodeReply } = require('next/dist/compiled/react-server-dom-webpack/client.node.js')
+const pngPixel = Uint8Array.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+  0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+  0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41,
+  0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+  0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
+  0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+  0x42, 0x60, 0x82,
+])
+const oversizedImage = new Uint8Array((2 * 1024 * 1024) + 1)
 let capturedOutput = ''
 
 function getJsxTagName(tagName) {
@@ -303,6 +318,59 @@ function countCacheRows() {
   }
 }
 
+function getUploadedPostImage(title) {
+  const database = new Database(databasePath, { readonly: true })
+  try {
+    const post = database.prepare('select id, slug from posts where title = ?').get(title)
+    assert.ok(post, 'Expected the uploaded-image post to exist.')
+
+    const mediaRows = database.prepare('select path, generated_conversions from media where model_id = ? and collection_name = ?').all(String(post.id), 'images')
+    assert.equal(mediaRows.length, 1, 'Expected the post image collection to keep exactly one image.')
+    const media = mediaRows[0]
+    assert.ok(media, 'Expected the uploaded post image to create a media record.')
+    assert.ok(existsSync(join(cwd, 'storage/app/public', media.path)), 'Expected the original image to be stored on the public disk.')
+
+    const conversions = typeof media.generated_conversions === 'string'
+      ? JSON.parse(media.generated_conversions)
+      : media.generated_conversions
+    const thumb = conversions.thumb
+    assert.ok(thumb?.path, 'Expected the image thumbnail conversion to be recorded.')
+    assert.ok(existsSync(join(cwd, 'storage/app/public', thumb.path)), 'Expected the image thumbnail conversion to be stored on the public disk.')
+    return {
+      id: post.id,
+      slug: post.slug,
+      thumbUrl: `/storage/${thumb.path}`,
+    }
+  } finally {
+    database.close()
+  }
+}
+
+async function assertPublicImageUrlResponds(baseUrl, imageUrl) {
+  const response = await fetch(new URL(imageUrl, baseUrl))
+  assert.equal(response.status, 200)
+  const body = await response.arrayBuffer()
+  assert.ok(body.byteLength > 0, 'Expected the public image endpoint to return image bytes.')
+}
+
+async function assertAdminEditEndpointRendersImage({ baseUrl, fetchText, jar, postId, title, imageUrl }) {
+  const editPage = await fetchText(`/admin/posts/${postId}/edit`, { jar })
+  assert.ok(editPage.text.includes(title), 'Expected the edit endpoint to render the uploaded post.')
+  assert.ok(editPage.text.includes(imageUrl), 'Expected the edit endpoint to render the uploaded image URL.')
+  await assertPublicImageUrlResponds(baseUrl, imageUrl)
+}
+
+async function findServerActionId(exportedName, manifestPath) {
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  for (const [id, action] of Object.entries(manifest.node ?? {})) {
+    if (action.exportedName === exportedName) {
+      return id
+    }
+  }
+
+  throw new Error(`Expected ${exportedName} in ${manifestPath}.`)
+}
+
 async function assertConfigCacheCommands() {
   await run('bun', ['run', 'config:cache'])
   assert.equal(existsSync(configCachePath), true)
@@ -376,6 +444,22 @@ function collectFormData(formHtml) {
   return formData
 }
 
+function readCookieValue(header, name) {
+  for (const segment of header.split(';')) {
+    const [cookieName, cookieValue] = segment.trim().split('=', 2)
+    if (cookieName === name && cookieValue) {
+      return decodeURIComponent(cookieValue)
+    }
+  }
+
+  return undefined
+}
+
+function applyCsrfToken(formData, token) {
+  assert.ok(token, 'Expected the browser flow to have a CSRF token.')
+  formData.set('_token', token)
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -397,19 +481,60 @@ async function assertAuthenticatedUserCanCreateDraftPost({ baseUrl, jar, fetchTe
   const newPostPage = await fetchText('/admin/posts/new', { jar })
   const createForm = findFormByButtonText(newPostPage.text, 'Create post')
   assert.ok(createForm, 'Expected the new post page to render a create form.')
+  const csrfToken = readCookieValue(newPostPage.response.headers.get('set-cookie') ?? '', 'XSRF-TOKEN')
+    ?? readCookieValue(jar.header(), 'XSRF-TOKEN')
+  assert.ok(csrfToken, 'Expected the new post page request to issue a CSRF token.')
 
-  const title = `User flow draft ${Date.now()}`
+  const createActionId = await findServerActionId(
+    'createPostAction',
+    join(cwd, '.next/dev/server/app/admin/posts/new/page/server-reference-manifest.json'),
+  )
+
+  const oversizedFormData = collectFormData(createForm)
+  oversizedFormData.set('title', `Oversized image ${Date.now()}`)
+  oversizedFormData.set('excerpt', 'Created through the real Next server action flow.')
+  oversizedFormData.set('body', 'This post should return a media validation failure.')
+  oversizedFormData.set('status', 'draft')
+  oversizedFormData.set('categoryId', '')
+  oversizedFormData.set('image', new Blob([oversizedImage], { type: 'image/png' }), 'too-large.png')
+  applyCsrfToken(oversizedFormData, csrfToken)
+
+  const oversized = await fetchText('/admin/posts/new', {
+    method: 'POST',
+    body: await encodeReply([oversizedFormData]),
+    headers: {
+      accept: 'text/x-component',
+      'next-action': createActionId,
+      'X-CSRF-TOKEN': csrfToken,
+      origin: baseUrl,
+      referer: `${baseUrl}/admin/posts/new`,
+    },
+    jar,
+    allowFailure: true,
+  })
+  assert.notEqual(oversized.response.status, 500, oversized.text)
+  assert.ok(
+    oversized.text.includes('The selected file must be 2 MB or smaller.'),
+    `Expected oversized upload response to include image error, received ${oversized.text}.`,
+  )
+
+  const title = `User flow image ${Date.now()}`
   const formData = collectFormData(createForm)
   formData.set('title', title)
   formData.set('excerpt', 'Created through the real Next server action flow.')
-  formData.set('body', 'This draft exercises model writes while the database query cache is warm.')
+  formData.set('body', 'This post exercises image upload through the real Next server action flow.')
   formData.set('status', 'draft')
   formData.set('categoryId', '')
+  formData.set('image', new Blob([pngPixel], { type: 'image/png' }), 'draft.png')
+  applyCsrfToken(formData, csrfToken)
 
   const created = await fetchText('/admin/posts/new', {
     method: 'POST',
-    body: formData,
+    body: await encodeReply([formData]),
     headers: {
+      accept: 'text/x-component',
+      'next-action': createActionId,
+      'X-CSRF-TOKEN': csrfToken,
       origin: baseUrl,
       referer: `${baseUrl}/admin/posts/new`,
     },
@@ -418,10 +543,21 @@ async function assertAuthenticatedUserCanCreateDraftPost({ baseUrl, jar, fetchTe
   })
 
   assert.notEqual(created.response.status, 500, created.text)
+  assert.equal(created.response.status, 303, created.text)
+  assert.match(created.response.headers.get('x-action-redirect') ?? '', /^\/admin\/posts;/)
   assert.doesNotMatch(created.text, /database is locked|Runtime DatabaseError/i)
 
   const postsPage = await fetchText('/admin/posts', { jar })
-  assert.ok(postsPage.text.includes(title), 'Expected the admin posts page to show the created draft post.')
+  assert.ok(postsPage.text.includes(title), 'Expected the admin posts page to show the created post.')
+  const uploaded = getUploadedPostImage(title)
+  await assertAdminEditEndpointRendersImage({
+    baseUrl,
+    fetchText,
+    jar,
+    postId: uploaded.id,
+    title,
+    imageUrl: uploaded.thumbUrl,
+  })
 }
 
 async function assertAuthenticatedAdminPostFlows(context) {

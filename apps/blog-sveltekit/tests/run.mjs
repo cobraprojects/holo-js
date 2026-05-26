@@ -19,6 +19,18 @@ const originalConfig = await readFile(configPath, 'utf8')
 const runtimeSchemaPath = join(cwd, '.holo-js/generated/schema.mjs')
 const escapeCharacter = String.fromCharCode(27)
 const ansiEscapePattern = new RegExp(`${escapeCharacter}(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~])`, 'g')
+const pngPixel = Uint8Array.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+  0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+  0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41,
+  0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+  0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
+  0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+  0x42, 0x60, 0x82,
+])
+const oversizedImage = new Uint8Array((2 * 1024 * 1024) + 1)
 const port = await new Promise((resolve, reject) => {
   const server = createServer()
   server.once('error', reject)
@@ -205,6 +217,49 @@ function countCacheRows() {
   }
 }
 
+function getUploadedPostImage(title) {
+  const database = new Database(databasePath, { readonly: true })
+  try {
+    const post = database.prepare('select id, slug from posts where title = ?').get(title)
+    assert.ok(post, 'Expected the uploaded-image post to exist.')
+
+    const mediaRows = database.prepare('select path, generated_conversions from media where model_id = ? and collection_name = ?').all(String(post.id), 'images')
+    assert.equal(mediaRows.length, 1, 'Expected the post image collection to keep exactly one image.')
+    const media = mediaRows[0]
+    assert.ok(media, 'Expected the uploaded post image to create a media record.')
+    assert.ok(existsSync(join(cwd, 'storage/app/public', media.path)), 'Expected the original image to be stored on the public disk.')
+
+    const conversions = typeof media.generated_conversions === 'string'
+      ? JSON.parse(media.generated_conversions)
+      : media.generated_conversions
+    const thumb = conversions.thumb
+    assert.ok(thumb?.path, 'Expected the image thumbnail conversion to be recorded.')
+    assert.ok(existsSync(join(cwd, 'storage/app/public', thumb.path)), 'Expected the image thumbnail conversion to be stored on the public disk.')
+
+    return {
+      id: post.id,
+      slug: post.slug,
+      thumbUrl: `/storage/${thumb.path}`,
+    }
+  } finally {
+    database.close()
+  }
+}
+
+async function assertPublicImageUrlResponds(baseUrl, imageUrl) {
+  const response = await fetch(new URL(imageUrl, baseUrl))
+  assert.equal(response.status, 200)
+  const body = await response.arrayBuffer()
+  assert.ok(body.byteLength > 0, 'Expected the public image endpoint to return image bytes.')
+}
+
+async function assertAdminEditEndpointRendersImage({ baseUrl, fetchText, jar, postId, title, imageUrl }) {
+  const editPage = await fetchText(`/admin/posts/${postId}/edit`, { jar })
+  assert.ok(editPage.text.includes(title), 'Expected the edit endpoint to render the uploaded post.')
+  assert.ok(editPage.text.includes(imageUrl), 'Expected the edit endpoint to render the uploaded image URL.')
+  await assertPublicImageUrlResponds(baseUrl, imageUrl)
+}
+
 async function assertConfigCacheCommands() {
   await run('bun', ['run', 'config:cache'])
   assert.equal(existsSync(configCachePath), true)
@@ -270,6 +325,33 @@ async function fetchJson(url, options = {}) {
   }
 }
 
+async function fetchCsrfField(baseUrl, path = '/login') {
+  const response = await fetch(`${baseUrl}${path}`)
+  const html = await response.text()
+  const setCookie = response.headers.get('set-cookie') ?? ''
+  const csrfCookie = setCookie.split(';', 1)[0]
+  const csrfName = html.match(/<input[^>]+name="([^"]+)"[^>]+value="([^"]+)"/)?.[1]
+  const csrfValue = html.match(/<input[^>]+name="([^"]+)"[^>]+value="([^"]+)"/)?.[2]
+
+  assert.ok(csrfCookie, 'Expected CSRF middleware to issue a cookie.')
+  assert.ok(csrfName, 'Expected CSRF input name to be rendered.')
+  assert.ok(csrfValue, 'Expected CSRF input value to be rendered.')
+
+  return {
+    cookie: csrfCookie,
+    name: csrfName,
+    value: csrfValue,
+  }
+}
+
+function findCsrfInput(pageHtml) {
+  const match = pageHtml.match(/<input[^>]+name="_token"[^>]+value="([^"]+)"/)
+    ?? pageHtml.match(/<input[^>]+value="([^"]+)"[^>]+name="_token"/)
+  const value = match?.[1]
+  assert.ok(value, 'Expected the page to render a CSRF input.')
+  return value
+}
+
 function assertFieldFailure(result, fields) {
   assert.equal(result.json.ok, false)
   assert.equal(result.json.valid, false)
@@ -282,29 +364,110 @@ function assertFieldFailure(result, fields) {
 }
 
 async function assertResetPasswordApiValidation(devUrl) {
+  const csrfField = await fetchCsrfField(devUrl)
   const invalidSubmission = await fetchJson(`${devUrl}/api/reset-password`, {
-    fields: {},
+    fields: {
+      [csrfField.name]: csrfField.value,
+    },
+    headers: {
+      cookie: csrfField.cookie,
+    },
     allowFailure: true,
   })
   assert.equal(invalidSubmission.response.status, 422)
   assertFieldFailure(invalidSubmission, ['token', 'password', 'passwordConfirmation'])
 }
 
-async function assertAuthenticatedUserCannotDeletePost({ jar, fetchText }) {
+async function assertAuthenticatedUserCannotDeletePost({ baseUrl, jar, fetchText }) {
   const postsPage = await fetchText('/admin/posts', { jar })
   const postId = postsPage.text.match(/name="id" value="(\d+)"/)?.[1]
   assert.ok(postId, 'Expected the admin posts page to render a delete form with a post id.')
 
   const body = new FormData()
+  body.set('_token', findCsrfInput(postsPage.text))
   body.set('id', postId)
 
   const denied = await fetchText('/admin/posts?/delete', {
     method: 'POST',
     body,
+    headers: {
+      origin: baseUrl,
+    },
     jar,
     allowFailure: true,
   })
   assert.equal(denied.response.status, 403)
+}
+
+async function assertAuthenticatedUserCanCreatePostImage({ baseUrl, jar, fetchText }) {
+  const newPostPage = await fetchText('/admin/posts/new', { jar })
+  const csrfToken = findCsrfInput(newPostPage.text)
+
+  const oversizedFormData = new FormData()
+  oversizedFormData.set('_token', csrfToken)
+  oversizedFormData.set('title', `Oversized image ${Date.now()}`)
+  oversizedFormData.set('excerpt', 'Created through the real SvelteKit action flow.')
+  oversizedFormData.set('body', 'This post should return a media validation failure.')
+  oversizedFormData.set('status', 'draft')
+  oversizedFormData.set('categoryId', '')
+  oversizedFormData.set('image', new Blob([oversizedImage], { type: 'image/png' }), 'too-large.png')
+
+  const oversized = await fetchText('/admin/posts/new?/create', {
+    method: 'POST',
+    body: oversizedFormData,
+    headers: {
+      origin: baseUrl,
+    },
+    jar,
+    allowFailure: true,
+  })
+  assert.notEqual(oversized.response.status, 500, oversized.text)
+  assert.ok(oversized.text.includes('The selected file must be 2 MB or smaller.'))
+  const oversizedResult = JSON.parse(oversized.text)
+  assert.equal(oversizedResult.type, 'failure')
+  assert.equal(oversizedResult.status, 422)
+
+  const title = `User flow image ${Date.now()}`
+  const formData = new FormData()
+  formData.set('_token', csrfToken)
+  formData.set('title', title)
+  formData.set('excerpt', 'Created through the real SvelteKit action flow.')
+  formData.set('body', 'This post exercises image upload through the real SvelteKit action flow.')
+  formData.set('status', 'draft')
+  formData.set('categoryId', '')
+  formData.set('image', new Blob([pngPixel], { type: 'image/png' }), 'draft.png')
+
+  const created = await fetchText('/admin/posts/new?/create', {
+    method: 'POST',
+    body: formData,
+    headers: {
+      origin: baseUrl,
+    },
+    jar,
+    allowFailure: true,
+  })
+  const createdResult = JSON.parse(created.text)
+  assert.equal(createdResult.type, 'redirect')
+  assert.equal(createdResult.status, 303)
+  assert.equal(new URL(createdResult.location, baseUrl).pathname, '/admin/posts')
+
+  const postsPage = await fetchText('/admin/posts', { jar })
+  assert.ok(postsPage.text.includes(title), 'Expected the admin posts page to show the created post.')
+
+  const uploaded = getUploadedPostImage(title)
+  await assertAdminEditEndpointRendersImage({
+    baseUrl,
+    fetchText,
+    jar,
+    postId: uploaded.id,
+    title,
+    imageUrl: uploaded.thumbUrl,
+  })
+}
+
+async function assertAuthenticatedAdminPostFlows(context) {
+  await assertAuthenticatedUserCanCreatePostImage(context)
+  await assertAuthenticatedUserCannotDeletePost(context)
 }
 
 async function assertSuperAdminLogoutUsesServerActionForm() {
@@ -458,7 +621,7 @@ try {
     sessionCookieName: DEFAULT_SESSION_COOKIE_NAME,
     authSubmissionMode: 'sveltekit-actions',
     loginRequiresCsrf: true,
-    afterAuthenticated: assertAuthenticatedUserCannotDeletePost,
+    afterAuthenticated: assertAuthenticatedAdminPostFlows,
   })
   await assertExampleAppTokenAuthFlow({
     baseUrl: devUrl,

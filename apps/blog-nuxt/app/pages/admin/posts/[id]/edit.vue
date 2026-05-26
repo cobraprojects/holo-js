@@ -1,8 +1,6 @@
 <script setup lang="ts">
-import type { AdminPostData } from '../../../../../server/lib/blog'
-
 const route = useRoute()
-const { data } = await useFetch<AdminPostData>(`/api/admin/posts/${route.params.id}`)
+const { data } = await useFetch(`/api/admin/posts/${route.params.id}`)
 const selectedTagIds = computed(() => new Set((data.value?.post?.tags ?? []).map(tag => tag.id)))
 
 if (!data.value) {
@@ -13,10 +11,12 @@ if (!data.value) {
 <template>
   <section class="stack">
     <h1>Edit post</h1>
-    <form :action="`/admin/posts/${data?.post.id}/update`" method="post" class="stack">
+    <form :action="`/admin/posts/${data?.post.id}/update`" method="post" enctype="multipart/form-data" class="stack">
       <input name="title" :value="data?.post.title" required>
       <textarea name="excerpt" rows="3">{{ data?.post.excerpt }}</textarea>
       <textarea name="body" rows="10" required>{{ data?.post.body }}</textarea>
+      <img v-if="data?.imageUrl" :src="data.imageUrl" alt="" style="width: 100%; max-width: 28rem; border-radius: 0.75rem;">
+      <input name="image" type="file" accept="image/png,image/jpeg,image/webp">
       <select name="categoryId" :value="data?.post.category_id || ''">
         <option value="">Uncategorized</option>
         <option v-for="category in data?.categories || []" :key="category.id" :value="category.id">{{ category.name }}</option>
@@ -38,4 +38,5 @@ if (!data.value) {
 
 <style scoped>
 .stack { display: grid; gap: 1rem; }
+.error { margin: 0; color: #fca5a5; }
 </style>

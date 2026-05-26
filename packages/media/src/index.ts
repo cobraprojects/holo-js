@@ -32,7 +32,11 @@ export {
   type NormalizedMediaDefinition,
 } from './definitions/config'
 export { Media } from './model/Media'
-export { MediaAdder, type MediaSourceInput } from './model/adder'
+export {
+  MediaAdder,
+  type MediaAddResult,
+  type MediaSourceInput,
+} from './model/adder'
 export { MediaItem } from './model/item'
 export {
   dispatchQueuedMediaConversions,

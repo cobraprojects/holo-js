@@ -1,16 +1,18 @@
-<script lang="ts">
-  import { type PageData } from './$types'
-
-  export let data: PageData
+<script>
+  export let data
+  export let form
 </script>
 
 {#if data}
   <section class="stack">
     <h1>New post</h1>
-    <form action="?/create" method="post" class="stack">
+    <form action="?/create" method="post" enctype="multipart/form-data" class="stack">
+      <input {...data.csrf.input}>
       <input name="title" placeholder="Title" required>
       <textarea name="excerpt" placeholder="Excerpt" rows="3"></textarea>
       <textarea name="body" placeholder="Body" rows="10" required></textarea>
+      <input name="image" type="file" accept="image/png,image/jpeg,image/webp">
+      {#if form?.errors?.image?.[0]}<p class="error">{form.errors.image[0]}</p>{/if}
       <select name="categoryId">
         <option value="">Uncategorized</option>
         {#each data.categories as category}<option value={category.id}>{category.name}</option>{/each}
@@ -34,4 +36,5 @@
 
 <style>
   .stack { display: grid; gap: 1rem; }
+  .error { margin: 0; color: #fca5a5; }
 </style>

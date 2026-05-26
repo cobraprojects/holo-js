@@ -512,6 +512,7 @@ export default defineStorageConfig({
     })
     expect(addServerPlugin).toHaveBeenCalledWith('./runtime/plugins/storage')
     expect(addServerPlugin).toHaveBeenCalledWith('./runtime/plugins/init')
+    expect(addServerPlugin).toHaveBeenCalledWith('./runtime/plugins/forms')
 
     const prepareTypesHook = nuxt.hook.mock.calls.find(([name]) => name === 'prepare:types')?.[1]
     const references: Array<{ path?: string, types?: string }> = []

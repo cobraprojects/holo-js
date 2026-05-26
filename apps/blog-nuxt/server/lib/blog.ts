@@ -1,5 +1,5 @@
 import { hashPassword } from '@holo-js/auth'
-import { uniqueSlug } from '@holo-js/db'
+import { DB, uniqueSlug } from '@holo-js/db'
 
 import Category from '../models/Category'
 import Post from '../models/Post'
@@ -68,7 +68,12 @@ export async function getPublishedPosts() {
 }
 
 export async function getPublishedPostBySlug(slug: string) {
-  return await Post.with('category', 'tags').where('slug', slug).where('status', 'published').first()
+  const post = await Post.firstWhere('slug', slug)
+  if (!post || post.status !== 'published') {
+    return undefined
+  }
+
+  return await post.load('category', 'tags')
 }
 
 export async function getCategoryArchive(slug: string) {
@@ -114,13 +119,13 @@ export async function getAdminPostsData() {
 
 export async function getAdminPostById(id: number) {
   const [post, categories, tags] = await Promise.all([
-    Post.with('category', 'tags').where('id', id).first(),
+    Post.firstWhere('id', id),
     Category.orderBy('name').get(),
     Tag.orderBy('name').get(),
   ])
   if (!post) return null
 
-  return { post, categories, tags }
+  return { post: await post.load('category', 'tags'), categories, tags }
 }
 
 export async function getAdminCategoriesData() {
@@ -188,45 +193,67 @@ export async function deleteTag(id: number) {
   await Tag.delete(id)
 }
 
-export async function createPost(input: { title: string, excerpt?: string, body: string, status: string, categoryId?: string, tagIds?: string }) {
-  const publishedAt = now()
-  const authorId = await ensureAuthorId()
-  const postStatus = input.status === 'draft' ? 'draft' : 'published'
+export async function createPost(input: { title: string, excerpt?: string, body: string, status: string, categoryId?: string, tagIds?: string, image?: Blob }) {
+  return await DB.transaction(async () => {
+    const publishedAt = now()
+    const authorId = await ensureAuthorId()
+    const postStatus = input.status === 'draft' ? 'draft' : 'published'
 
-  const post = await Post.create({
-    user_id: authorId,
-    category_id: input.categoryId ? Number(input.categoryId) : null,
-    title: input.title.trim(),
-    slug: await uniqueSlug(Post, input.title),
-    excerpt: input.excerpt?.trim() || null,
-    body: input.body.trim(),
-    status: postStatus,
-    published_at: postStatus === 'published' ? publishedAt : null,
+    const post = await Post.create({
+      user_id: authorId,
+      category_id: input.categoryId ? Number(input.categoryId) : null,
+      title: input.title.trim(),
+      slug: await uniqueSlug(Post, input.title),
+      excerpt: input.excerpt?.trim() || null,
+      body: input.body.trim(),
+      status: postStatus,
+      published_at: postStatus === 'published' ? publishedAt : null,
+    })
+
+    const tagIds = parseTagIds(input.tagIds || '')
+    if (tagIds.length > 0) {
+      await post.tags().attach(tagIds)
+    }
+
+    if (input.image) {
+      const { error } = await post.addMedia(input.image).toMediaCollection('images')
+      if (error) {
+        return { data: null, error }
+      }
+    }
+
+    return { data: post, error: null }
   })
-
-  const tagIds = parseTagIds(input.tagIds || '')
-  if (tagIds.length > 0) {
-    await post.tags().attach(tagIds)
-  }
 }
 
-export async function updatePost(id: number, input: { title: string, excerpt?: string, body: string, status: string, categoryId?: string, tagIds?: string }) {
-  const publishedAt = now()
-  const postStatus = input.status === 'draft' ? 'draft' : 'published'
-  const post = await Post.findOrFail(id)
+export async function updatePost(id: number, input: { title: string, excerpt?: string, body: string, status: string, categoryId?: string, tagIds?: string, image?: Blob }) {
+  return await DB.transaction(async () => {
+    const publishedAt = now()
+    const postStatus = input.status === 'draft' ? 'draft' : 'published'
+    const post = await Post.findOrFail(id)
 
-  await post.update({
-    category_id: input.categoryId ? Number(input.categoryId) : null,
-    title: input.title.trim(),
-    slug: await uniqueSlug(Post, input.title, { ignore: id }),
-    excerpt: input.excerpt?.trim() || null,
-    body: input.body.trim(),
-    status: postStatus,
-    published_at: postStatus === 'published' ? post.published_at ?? publishedAt : null,
+    if (input.image) {
+      const { error } = await post.addMedia(input.image).toMediaCollection('images')
+      if (error) {
+        return { data: null, error }
+      }
+    }
+
+    await post.update({
+      category_id: input.categoryId ? Number(input.categoryId) : null,
+      title: input.title.trim(),
+      slug: await uniqueSlug(Post, input.title, { ignore: id }),
+      excerpt: input.excerpt?.trim() || null,
+      body: input.body.trim(),
+      status: postStatus,
+      published_at: postStatus === 'published' ? post.published_at ?? publishedAt : null,
+    })
+
+    const tagIds = parseTagIds(input.tagIds || '')
+    await post.tags().sync(tagIds)
+
+    return { data: post, error: null }
   })
-
-  const tagIds = parseTagIds(input.tagIds || '')
-  await post.tags().sync(tagIds)
 }
 
 export async function deletePost(id: number) {

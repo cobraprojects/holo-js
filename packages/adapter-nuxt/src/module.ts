@@ -412,6 +412,7 @@ export default defineNuxtModule<ModuleOptions>({
         )
       }
       addServerPlugin(resolver.resolve('./runtime/plugins/init'))
+      addServerPlugin(resolver.resolve('./runtime/plugins/forms'))
       addImports(imports)
       addServerImportsDir(resolver.resolve('./runtime/server/imports'))
       const serverModelImports = await createServerModelImports(

@@ -370,6 +370,7 @@ export default defineDatabaseConfig({
       },
     })
     expect(addServerPlugin).toHaveBeenCalledWith('./runtime/plugins/init')
+    expect(addServerPlugin).toHaveBeenCalledWith('./runtime/plugins/forms')
     expect(addImports).toHaveBeenCalledTimes(1)
     expect(addImports.mock.calls[0]?.[0]).toHaveLength(6)
     expect(addImports.mock.calls[0]?.[0]).toEqual(expect.arrayContaining([

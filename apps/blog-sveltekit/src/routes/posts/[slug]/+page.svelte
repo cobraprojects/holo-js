@@ -8,6 +8,7 @@
   <article class="stack">
     <a href="/posts">Back to posts</a>
     <h1>{data.post.title}</h1>
+    {#if data.imageUrl}<img src={data.imageUrl} alt="" style="width: 100%; border-radius: 1rem; background: #111827;">{/if}
     <p>{data.post.excerpt}</p>
     <div class="panel">{data.post.body}</div>
   </article>

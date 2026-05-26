@@ -422,6 +422,28 @@ describe('@holo-js/validation contracts', () => {
     }
   })
 
+  it('treats empty optional file inputs as missing files', async () => {
+    const postSchema = schema({
+      image: field.file().optional().image('The selected file must be an image.').maxSize('2mb', 'The selected file must be 2 MB or smaller.'),
+    })
+    const formData = new FormData()
+    formData.set('image', new File([], '', { type: 'application/octet-stream' }))
+
+    const result = await validate(formData, postSchema)
+
+    expect(result.valid).toBe(true)
+    if (result.valid) {
+      expect(result.data.image).toBeUndefined()
+    }
+
+    const zeroByteNamedFile = new File([], 'empty.png', { type: 'image/png' })
+    const namedFile = await validate({ image: zeroByteNamedFile }, postSchema)
+    expect(namedFile.valid).toBe(true)
+    if (namedFile.valid) {
+      expect(namedFile.data.image).toBe(zeroByteNamedFile)
+    }
+  })
+
   it('supports custom and async custom rules', async () => {
     const userSchema = schema({
       username: field.string()

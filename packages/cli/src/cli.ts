@@ -35,6 +35,7 @@ import type * as QueueModule from './queue'
 import type * as CacheModule from './cache'
 import type * as QueueMigrationsModule from './queue-migrations'
 import type * as CacheMigrationsModule from './cache-migrations'
+import type * as MediaMigrationsModule from './media-migrations'
 import type * as GeneratorsModule from './generators'
 import type * as BroadcastModule from './broadcast'
 import type * as SecurityModule from './security'
@@ -76,6 +77,9 @@ type CacheCommandExecutors = {
   runCacheClearCommand?: typeof CacheModule.runCacheClearCommand
   runCacheForgetCommand?: typeof CacheModule.runCacheForgetCommand
 }
+type MediaCommandExecutors = {
+  runMediaTableCommand?: typeof MediaMigrationsModule.runMediaTableCommand
+}
 type BroadcastCommandExecutors = {
   runBroadcastWorkCommand?: typeof BroadcastModule.runBroadcastWorkCommand
 }
@@ -88,6 +92,7 @@ let queueModulePromise: Promise<typeof QueueModule> | undefined
 let cacheModulePromise: Promise<typeof CacheModule> | undefined
 let queueMigrationsModulePromise: Promise<typeof QueueMigrationsModule> | undefined
 let cacheMigrationsModulePromise: Promise<typeof CacheMigrationsModule> | undefined
+let mediaMigrationsModulePromise: Promise<typeof MediaMigrationsModule> | undefined
 let generatorsModulePromise: Promise<typeof GeneratorsModule> | undefined
 let broadcastModulePromise: Promise<typeof BroadcastModule> | undefined
 let securityModulePromise: Promise<typeof SecurityModule> | undefined
@@ -120,6 +125,11 @@ function loadQueueMigrationsModule(): Promise<typeof QueueMigrationsModule> {
 function loadCacheMigrationsModule(): Promise<typeof CacheMigrationsModule> {
   cacheMigrationsModulePromise ??= import('./cache-migrations')
   return cacheMigrationsModulePromise
+}
+
+function loadMediaMigrationsModule(): Promise<typeof MediaMigrationsModule> {
+  mediaMigrationsModulePromise ??= import('./media-migrations')
+  return mediaMigrationsModulePromise
 }
 
 function loadGeneratorsModule(): Promise<typeof GeneratorsModule> {
@@ -169,6 +179,10 @@ type QueueExecutorLoaderMap = {
 type CacheExecutorKey = keyof CacheCommandExecutors
 type CacheExecutorLoaderMap = {
   [TKey in CacheExecutorKey]: () => Promise<NonNullable<CacheCommandExecutors[TKey]>>
+}
+type MediaExecutorKey = keyof MediaCommandExecutors
+type MediaExecutorLoaderMap = {
+  [TKey in MediaExecutorKey]: () => Promise<NonNullable<MediaCommandExecutors[TKey]>>
 }
 type ProjectExecutorKey = keyof ProjectCommandExecutors
 type ProjectExecutorLoaderMap = {
@@ -232,6 +246,10 @@ const cacheExecutorLoaders: CacheExecutorLoaderMap = {
   runCacheForgetCommand: async () => (await loadCacheModule()).runCacheForgetCommand,
 }
 
+const mediaExecutorLoaders: MediaExecutorLoaderMap = {
+  runMediaTableCommand: async () => (await loadMediaMigrationsModule()).runMediaTableCommand,
+}
+
 const broadcastExecutorLoaders: BroadcastExecutorLoaderMap = {
   runBroadcastWorkCommand: async () => (await loadBroadcastModule()).runBroadcastWorkCommand,
 }
@@ -258,6 +276,18 @@ async function resolveCacheExecutor<TKey extends CacheExecutorKey>(
   }
 
   return cacheExecutorLoaders[key]()
+}
+
+async function resolveMediaExecutor<TKey extends MediaExecutorKey>(
+  mediaExecutors: MediaCommandExecutors,
+  key: TKey,
+): Promise<NonNullable<MediaCommandExecutors[TKey]>> {
+  const existing = mediaExecutors[key]
+  if (existing) {
+    return existing as NonNullable<MediaCommandExecutors[TKey]>
+  }
+
+  return mediaExecutorLoaders[key]()
 }
 
 async function resolveBroadcastExecutor<TKey extends BroadcastExecutorKey>(
@@ -353,6 +383,7 @@ export function createInternalCommands(
   broadcastExecutors: BroadcastCommandExecutors = {},
   securityExecutors: SecurityCommandExecutors = {},
   cacheExecutors: CacheCommandExecutors = {},
+  mediaExecutors: MediaCommandExecutors = {},
 ): CommandDefinition[] {
   return [
     {
@@ -439,7 +470,7 @@ export function createInternalCommands(
     {
       name: 'install',
       description: 'Install first-party Holo support into an existing project.',
-      usage: 'holo install <queue|events|auth|authorization|notifications|mail|broadcast|security|cache> [--driver <queue: sync|file|redis|database; cache: file|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
+      usage: 'holo install <queue|events|auth|authorization|notifications|mail|broadcast|security|cache|media> [--driver <queue: sync|file|redis|database; cache: file|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
       source: 'internal',
       async prepare(input) {
         const target = normalizeChoice(
@@ -468,6 +499,9 @@ export function createInternalCommands(
         }
         if (target === 'security' && requestedDriver) {
           throw new Error('The security installer does not support --driver.')
+        }
+        if (target === 'media' && requestedDriver) {
+          throw new Error('The media installer does not support --driver.')
         }
 
         const driver = target === 'queue'
@@ -704,6 +738,21 @@ export function createInternalCommands(
           return
         }
 
+        if (target === 'media') {
+          const { installMediaIntoProject } = await loadProjectScaffoldModule()
+          const result = await installMediaIntoProject(context.projectRoot)
+
+          const changed = result.createdMediaConfig
+            || result.updatedPackageJson
+            || result.createdMigrationFiles.length > 0
+
+          writeLine(context.stdout, changed ? 'Installed media support.' : 'Media support is already installed.')
+          if (result.createdMediaConfig) writeLine(context.stdout, '  - created config/media.ts')
+          if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
+          if (result.createdMigrationFiles.length > 0) writeLine(context.stdout, '  - created media migration')
+          return
+        }
+
         if (target !== 'queue') {
           throw new Error(`Unsupported install target: ${target || '(empty)'}.`)
         }
@@ -874,6 +923,19 @@ export function createInternalCommands(
           String(commandContext.args[0] ?? ''),
           typeof commandContext.flags.driver === 'string' ? commandContext.flags.driver : undefined,
         )
+      },
+    },
+    {
+      name: 'media:table',
+      description: 'Generate the media table migration.',
+      usage: 'holo media:table',
+      source: 'internal',
+      async prepare() {
+        return { args: [], flags: {} }
+      },
+      async run() {
+        const runMediaTableCommand = await resolveMediaExecutor(mediaExecutors, 'runMediaTableCommand')
+        await runMediaTableCommand(context, context.projectRoot)
       },
     },
     {
@@ -1662,6 +1724,7 @@ export async function runCli(argv: readonly string[], io: IoStreams): Promise<nu
       || requestedCommandName === 'cache:table'
       || requestedCommandName === 'cache:clear'
       || requestedCommandName === 'cache:forget'
+      || requestedCommandName === 'media:table'
       || requestedCommandName === 'broadcast:work'
       || requestedCommandName === 'queue:table'
       || requestedCommandName === 'queue:failed-table'

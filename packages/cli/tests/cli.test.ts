@@ -2556,7 +2556,7 @@ export default defineAppConfig({
 
     const unsupportedTarget = runCliProcess(projectRoot, ['install', 'mailer'])
     expect(unsupportedTarget.status).toBe(1)
-    expect(unsupportedTarget.stderr).toContain('Unsupported install target: mailer. Expected one of queue, events, auth, authorization, notifications, mail, broadcast, security, cache.')
+    expect(unsupportedTarget.stderr).toContain('Unsupported install target: mailer. Expected one of queue, events, auth, authorization, notifications, mail, broadcast, security, cache, media.')
 
     const unsupportedDriver = runCliProcess(projectRoot, ['install', 'queue', '--driver', 'sqs'])
     expect(unsupportedDriver.status).toBe(1)
@@ -2585,6 +2585,10 @@ export default defineAppConfig({
     const broadcastDriver = runCliProcess(projectRoot, ['install', 'broadcast', '--driver', 'redis'])
     expect(broadcastDriver.status).toBe(1)
     expect(broadcastDriver.stderr).toContain('The broadcast installer does not support --driver.')
+
+    const mediaDriver = runCliProcess(projectRoot, ['install', 'media', '--driver', 'redis'])
+    expect(mediaDriver.status).toBe(1)
+    expect(mediaDriver.stderr).toContain('The media installer does not support --driver.')
   }, 30000)
 
   it('covers the install command and queue installer helpers in-process', async () => {
@@ -2704,6 +2708,17 @@ export default defineAppConfig({
       args: ['security'],
       flags: { driver: 'redis' },
     }, commandContext as never)).rejects.toThrow('The security installer does not support --driver.')
+    await expect(installCommand?.prepare?.({
+      args: ['media'],
+      flags: {},
+    }, commandContext as never)).resolves.toEqual({
+      args: ['media'],
+      flags: {},
+    })
+    await expect(installCommand?.prepare?.({
+      args: ['media'],
+      flags: { driver: 'redis' },
+    }, commandContext as never)).rejects.toThrow('The media installer does not support --driver.')
     await expect(installCommand?.run({
       projectRoot,
       cwd: projectRoot,
@@ -4310,6 +4325,47 @@ export const limit = Object.freeze({
     const second = runCliProcess(projectRoot, ['install', 'cache'])
     expect(second.status).toBe(0)
     expect(second.stdout).toContain('Cache support is already installed.')
+  }, 30_000)
+
+  it('installs media support through the CLI and is idempotent', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    const first = runCliProcess(projectRoot, ['install', 'media'])
+    expect(first.status, first.stderr || first.stdout).toBe(0)
+    expect(first.stdout).toContain('Installed media support.')
+    expect(first.stdout).toContain('  - created config/media.ts')
+    expect(first.stdout).toContain('  - updated package.json')
+    expect(first.stdout).toContain('  - created media migration')
+    expect(await readFile(join(projectRoot, 'config/media.ts'), 'utf8')).toContain('defineMediaConfig')
+    expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/media": "${expectedHoloPackageRange}"`)
+
+    const migrations = await readdir(join(projectRoot, 'server/db/migrations'))
+    expect(migrations.filter(entry => entry.endsWith('_create_media_table.ts'))).toHaveLength(1)
+    expect(await readFile(join(projectRoot, 'server/db/migrations', migrations.find(entry => entry.endsWith('_create_media_table.ts'))!), 'utf8'))
+      .toContain('schema.createTable("media"')
+
+    const second = runCliProcess(projectRoot, ['install', 'media'])
+    expect(second.status, second.stderr || second.stdout).toBe(0)
+    expect(second.stdout).toContain('Media support is already installed.')
+    expect((await readdir(join(projectRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('_create_media_table.ts'))).toHaveLength(1)
+  }, 30_000)
+
+  it('generates the media table migration through the CLI', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await linkWorkspaceDb(projectRoot)
+
+    const first = runCliProcess(projectRoot, ['media:table'])
+    expect(first.status, first.stderr || first.stdout).toBe(0)
+    expect(first.stdout).toContain('Created migration: server/db/migrations/')
+
+    const migrations = await readdir(join(projectRoot, 'server/db/migrations'))
+    expect(migrations.filter(entry => entry.endsWith('_create_media_table.ts'))).toHaveLength(1)
+
+    const second = runCliProcess(projectRoot, ['media:table'])
+    expect(second.status).toBe(1)
+    expect(second.stderr).toContain('A migration for table "media" already exists.')
   }, 30_000)
 
   it('installs cache support with the redis driver', async () => {
@@ -8413,7 +8469,7 @@ export default defineEvent({ name: 'audit.activity' })
     expect(factoryCommandIo.read().stdout).toContain('Created factory: server/db/factories/CourseFactory.ts')
   }, 30000)
 
-  it('lazy-loads project, dev, runtime, queue, cache migration, queue migration, and generator modules when executors are not injected', { timeout: 30000 }, async () => {
+  it('lazy-loads project, dev, runtime, queue, cache migration, media migration, queue migration, and generator modules when executors are not injected', { timeout: 30000 }, async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
     const io = createIo(projectRoot)
@@ -8435,6 +8491,7 @@ export default defineEvent({ name: 'audit.activity' })
     const queueWork = vi.fn(async () => {})
     const queueTable = vi.fn(async () => {})
     const cacheTable = vi.fn(async () => {})
+    const mediaTable = vi.fn(async () => {})
     const cacheProjectConfig = vi.fn(async () => '/tmp/holo-config-cache.json')
     const withRuntimeEnvironment = vi.fn(async (_projectRoot: string, _kind: string, _options: Record<string, unknown>, callback: (stdout: string) => Promise<void>) => {
       await callback('')
@@ -8475,6 +8532,11 @@ export default defineEvent({ name: 'audit.activity' })
       updatedEnv: true,
       updatedEnvExample: true,
     }))
+    const installMediaIntoProject = vi.fn(async () => ({
+      updatedPackageJson: true,
+      createdMediaConfig: true,
+      createdMigrationFiles: ['server/db/migrations/2026_01_01_000001_create_media_table.ts'],
+    }))
     const installSecurityIntoProject = vi.fn(async () => ({
       updatedPackageJson: true,
       createdSecurityConfig: true,
@@ -8513,6 +8575,9 @@ export default defineEvent({ name: 'audit.activity' })
     vi.doMock('../src/cache-migrations', () => ({
       runCacheTableCommand: cacheTable,
     }))
+    vi.doMock('../src/media-migrations', () => ({
+      runMediaTableCommand: mediaTable,
+    }))
     vi.doMock('../src/runtime', () => ({
       cacheProjectConfig,
       withRuntimeEnvironment,
@@ -8532,6 +8597,7 @@ export default defineEvent({ name: 'audit.activity' })
         installAuthorizationIntoProject,
         installEventsIntoProject,
         installMailIntoProject,
+        installMediaIntoProject,
         installNotificationsIntoProject,
         installQueueIntoProject,
         installSecurityIntoProject,
@@ -8650,6 +8716,13 @@ export default defineEvent({ name: 'audit.activity' })
         flags: {},
         loadProject: baseContext.loadProject,
       })
+      await commands.find(command => command.name === 'media:table')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: [],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
       await commands.find(command => command.name === 'config:cache')!.run({
         projectRoot,
         cwd: projectRoot,
@@ -8717,6 +8790,13 @@ export default defineEvent({ name: 'audit.activity' })
         projectRoot,
         cwd: projectRoot,
         args: ['mail'],
+        flags: {},
+        loadProject: baseContext.loadProject,
+      })
+      await commands.find(command => command.name === 'install')!.run({
+        projectRoot,
+        cwd: projectRoot,
+        args: ['media'],
         flags: {},
         loadProject: baseContext.loadProject,
       })
@@ -11157,6 +11237,48 @@ export default {
     expect(runCacheTable).toHaveBeenCalledWith(expect.anything(), projectRoot)
     expect(runCacheClear).toHaveBeenCalledWith(expect.anything(), projectRoot, 'redis')
     expect(runCacheForget).toHaveBeenCalledWith(expect.anything(), projectRoot, 'users', 'memory')
+  })
+
+  it('prepares media table command and routes the media executor through the internal command registry', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const commandIo = createIo(projectRoot)
+    const runMediaTable = vi.fn(async () => {})
+    const commandContext = {
+      ...commandIo.io,
+      projectRoot,
+      loadProject: async () => ({ manifestPath: undefined, config: await loadProjectConfig(projectRoot, { required: true }).then(entry => entry.config) }),
+      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+    }
+
+    const commands = cliInternals.createInternalCommands(
+      commandContext as never,
+      async (_projectRoot, _kind, _options, callback) => callback(''),
+      {},
+      {},
+      {},
+      {},
+      {},
+      {
+        runMediaTableCommand: runMediaTable as never,
+      },
+    )
+    const mediaTable = commands.find(command => command.name === 'media:table')
+
+    expect(await mediaTable?.prepare?.({ args: [], flags: {} }, commandContext as never)).toEqual({
+      args: [],
+      flags: {},
+    })
+
+    await mediaTable?.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: [],
+      flags: {},
+      loadProject: commandContext.loadProject,
+    })
+
+    expect(runMediaTable).toHaveBeenCalledWith(expect.anything(), projectRoot)
   })
 
   it('loads cache command executors lazily and falls back when cache command inputs are missing or non-string', async () => {

@@ -1,8 +1,6 @@
 <script setup lang="ts">
-import type { TagArchiveData } from '../../../server/lib/blog'
-
 const route = useRoute()
-const { data } = await useFetch<TagArchiveData>(`/api/blog/tags/${route.params.slug}`)
+const { data } = await useFetch(`/api/blog/tags/${route.params.slug}`)
 
 if (!data.value) {
   throw createError({ statusCode: 404, statusMessage: 'Tag not found' })

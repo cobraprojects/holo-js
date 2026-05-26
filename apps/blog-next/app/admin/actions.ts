@@ -2,6 +2,8 @@
 
 import { redirect } from 'next/navigation'
 import { authorize } from '@holo-js/authorization'
+import { validate } from '@holo-js/forms'
+import { postForm } from '@/lib/schemas/blog'
 import {
   createPost,
   updatePost,
@@ -20,40 +22,64 @@ import { requireAdminAuth } from './auth'
 
 export async function createPostAction(formData: FormData) {
   await requireAdminAuth()
-  const status = String(formData.get('status') || 'published')
+  const submission = await validate(formData, postForm)
+  if (!submission.valid) {
+    return submission.fail()
+  }
+
+  const data = submission.data
+  const status = data.status
   await authorize('create', Post)
   if (status === 'published') {
     await authorize('publish', Post)
   }
 
-  await createPost({
-    title: String(formData.get('title') || ''),
-    excerpt: String(formData.get('excerpt') || ''),
-    body: String(formData.get('body') || ''),
-    status,
-    categoryId: String(formData.get('categoryId') || ''),
-    tagIds: formData.getAll('tagIds').map(String).join(','),
+  const result = await createPost({
+    ...data,
+    tagIds: data.tagIds.join(','),
+    ...(data.image?.size ? { image: data.image } : {}),
   })
+  if (result.error) {
+    return submission.fail({
+      status: result.error.status,
+      errors: {
+        image: [result.error.message],
+      },
+    })
+  }
+
   redirect('/admin/posts')
 }
 
 export async function updatePostAction(id: number, formData: FormData) {
   await requireAdminAuth()
-  const status = String(formData.get('status') || 'published')
+  const submission = await validate(formData, postForm)
+  if (!submission.valid) {
+    return submission.fail()
+  }
+
+  const data = submission.data
+  const status = data.status
   const post = await Post.findOrFail(id)
   await authorize('update', post)
   if (status === 'published') {
     await authorize('publish', post)
   }
 
-  await updatePost(id, {
-    title: String(formData.get('title') || ''),
-    excerpt: String(formData.get('excerpt') || ''),
-    body: String(formData.get('body') || ''),
-    status,
-    categoryId: String(formData.get('categoryId') || ''),
-    tagIds: formData.getAll('tagIds').map(String).join(','),
+  const result = await updatePost(id, {
+    ...data,
+    tagIds: data.tagIds.join(','),
+    ...(data.image?.size ? { image: data.image } : {}),
   })
+  if (result.error) {
+    return submission.fail({
+      status: result.error.status,
+      errors: {
+        image: [result.error.message],
+      },
+    })
+  }
+
   redirect('/admin/posts')
 }
 

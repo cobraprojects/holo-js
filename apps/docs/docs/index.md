@@ -114,6 +114,7 @@ If you are contributing to the framework packages inside this repository, use:
 - `config/queue.ts` is scaffolded by default and starts on the `sync` driver.
 - `holo install broadcast` scaffolds `config/broadcast.ts`, `server/broadcast`, `server/channels`, and `/broadcasting/auth`.
 - `holo install cache` scaffolds `config/cache.ts` and cache maintenance commands.
+- `holo install media` scaffolds `config/media.ts` and the media table migration.
 - `holo install authorization` scaffolds `server/policies` and `server/abilities`.
 - `holo dev` reruns discovery, watches Holo-JS files, and then starts the selected framework.
 - `holo build` refreshes discovery before the framework build.
