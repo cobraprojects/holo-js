@@ -3,6 +3,7 @@
 import { redirect } from 'next/navigation'
 import { authorize } from '@holo-js/authorization'
 import { validate } from '@holo-js/forms'
+import { isValidationException } from '@holo-js/validation'
 import { postForm } from '@/lib/schemas/blog'
 import {
   createPost,
@@ -21,66 +22,56 @@ import Tag from '@/server/models/Tag'
 import { requireAdminAuth } from './auth'
 
 export async function createPostAction(formData: FormData) {
-  await requireAdminAuth()
-  const submission = await validate(formData, postForm)
-  if (!submission.valid) {
-    return submission.fail()
-  }
+  try {
+    await requireAdminAuth()
+    const data = await validate(formData, postForm)
+    const status = data.status
+    await authorize('create', Post)
+    if (status === 'published') {
+      await authorize('publish', Post)
+    }
 
-  const data = submission.data
-  const status = data.status
-  await authorize('create', Post)
-  if (status === 'published') {
-    await authorize('publish', Post)
-  }
-
-  const result = await createPost({
-    ...data,
-    tagIds: data.tagIds.join(','),
-    ...(data.image?.size ? { image: data.image } : {}),
-  })
-  if (result.error) {
-    return submission.fail({
-      status: result.error.status,
-      errors: {
-        image: [result.error.message],
-      },
+    await createPost({
+      ...data,
+      tagIds: data.tagIds.join(','),
+      ...(data.image?.size ? { image: data.image } : {}),
     })
-  }
 
-  redirect('/admin/posts')
+    redirect('/admin/posts')
+  } catch (error) {
+    if (isValidationException(error)) {
+      return error.toJSON()
+    }
+
+    throw error
+  }
 }
 
 export async function updatePostAction(id: number, formData: FormData) {
-  await requireAdminAuth()
-  const submission = await validate(formData, postForm)
-  if (!submission.valid) {
-    return submission.fail()
-  }
+  try {
+    await requireAdminAuth()
+    const data = await validate(formData, postForm)
+    const status = data.status
+    const post = await Post.findOrFail(id)
+    await authorize('update', post)
+    if (status === 'published') {
+      await authorize('publish', post)
+    }
 
-  const data = submission.data
-  const status = data.status
-  const post = await Post.findOrFail(id)
-  await authorize('update', post)
-  if (status === 'published') {
-    await authorize('publish', post)
-  }
-
-  const result = await updatePost(id, {
-    ...data,
-    tagIds: data.tagIds.join(','),
-    ...(data.image?.size ? { image: data.image } : {}),
-  })
-  if (result.error) {
-    return submission.fail({
-      status: result.error.status,
-      errors: {
-        image: [result.error.message],
-      },
+    await updatePost(id, {
+      ...data,
+      tagIds: data.tagIds.join(','),
+      ...(data.image?.size ? { image: data.image } : {}),
     })
-  }
 
-  redirect('/admin/posts')
+    redirect('/admin/posts')
+  } catch (error) {
+    if (isValidationException(error)) {
+      return error.toJSON()
+    }
+
+    throw error
+  }
 }
 
 export async function deletePostAction(id: number) {

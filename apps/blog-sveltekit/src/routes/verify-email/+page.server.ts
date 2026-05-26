@@ -23,16 +23,10 @@ export const actions: Actions = {
       })
     }
 
-    const [wasAuthenticated, { error }] = await Promise.all([
+    const [wasAuthenticated] = await Promise.all([
       check(),
       verifyEmail(token),
     ])
-
-    if (error) {
-      return fail(error.status, {
-        verificationError: error.fields.token?.[0] ?? 'Could not verify this email address.',
-      })
-    }
 
     throw redirect(303, wasAuthenticated ? '/admin' : '/login')
   },

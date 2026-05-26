@@ -6,31 +6,17 @@ import { resendEmailVerificationForm } from '#shared/schemas/auth'
 const resendSuccessMessage = 'A fresh verification email has been sent.'
 
 export default defineEventHandler(async (event) => {
-  const submission = await validate(event, resendEmailVerificationForm, {
+  const input = await validate(event, resendEmailVerificationForm, {
     throttle: 'emailVerificationResend',
   })
 
-  const success = () => submission.success({
-    message: resendSuccessMessage,
-  })
+  await resendEmailVerification(input.email)
 
-  if (!submission.valid) {
-    const failure = submission.fail()
-
-    setResponseStatus(event, failure.status)
-    return failure
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      message: resendSuccessMessage,
+    },
   }
-
-  const { error } = await resendEmailVerification(submission.data.email)
-  if (error) {
-    const failure = submission.fail({
-      status: error.status,
-      errors: error.fields,
-    })
-
-    setResponseStatus(event, failure.status)
-    return failure
-  }
-
-  return success()
 })

@@ -8,6 +8,7 @@ import {
   type AuthResult,
   type AuthSuccessResult,
 } from '../contracts'
+import { ValidationException, validationInternals } from '@holo-js/validation'
 
 function createAuthError(
   code: AuthErrorCode,
@@ -43,6 +44,12 @@ function createAuthFailure<TCode extends AuthErrorCode, TFields extends AuthFiel
   })
 }
 
+function normalizeFieldErrors(fields: AuthFieldErrors): Record<string, readonly string[]> {
+  return Object.fromEntries(
+    Object.entries(fields).filter((entry): entry is [string, readonly string[]] => Array.isArray(entry[1])),
+  )
+}
+
 export async function captureExpectedAuthResult<
   TData,
   TCode extends AuthErrorCode,
@@ -61,4 +68,17 @@ export async function captureExpectedAuthResult<
 
     throw error
   }
+}
+
+export function unwrapExpectedAuthResult<TData, TCode extends AuthErrorCode, TFields extends AuthFieldErrors>(
+  result: AuthResult<TData, TCode, TFields>,
+): TData {
+  if (result.error) {
+    throw validationInternals.setValidationExceptionStatus(
+      ValidationException.withMessages(normalizeFieldErrors(result.error.fields)),
+      result.error.status,
+    )
+  }
+
+  return result.data
 }

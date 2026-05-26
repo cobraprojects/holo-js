@@ -1,6 +1,6 @@
-import { fail, redirect } from '@sveltejs/kit'
+import { redirect } from '@sveltejs/kit'
 import { authorize } from '@holo-js/authorization'
-import { validate } from '@holo-js/forms'
+import { ValidationException, validate } from '@holo-js/forms'
 import { DB, uniqueSlug } from '@holo-js/db'
 import { csrf } from '@holo-js/security'
 
@@ -21,19 +21,13 @@ export const load = (async ({ request }) => {
 export const actions = {
   create: async ({ request }) => {
     const formData = await request.formData()
-    const submission = await validate(formData, postForm)
-    if (!submission.valid) {
-      const failure = submission.fail()
-      return fail(failure.status, failure)
-    }
-
-    const data = submission.data
+    const data = await validate(formData, postForm)
     await authorize('create', Post)
     if (data.status === 'published') {
       await authorize('publish', Post)
     }
 
-    const result = await DB.transaction(async () => {
+    const post = await DB.transaction(async () => {
       const post = await Post.create({
         user_id: await ensureAuthorId(),
         category_id: data.categoryId ? Number(data.categoryId) : null,
@@ -49,23 +43,16 @@ export const actions = {
         await post.tags().attach(data.tagIds)
       }
 
-      if (data.image?.size) {
-        const { error } = await post.addMedia(data.image).toMediaCollection('images')
-        if (error) {
-          return { data: null, error }
-        }
-      }
-
-      return { data: post, error: null }
+      return post
     })
-    if (result.error) {
-      const failure = submission.fail({
-        status: result.error.status,
-        errors: {
+
+    if (data.image?.size) {
+      const result = await post.addMedia(data.image).toMediaCollection('images')
+      if (result.error) {
+        throw ValidationException.withMessages({
           image: [result.error.message],
-        },
-      })
-      return fail(failure.status, failure)
+        })
+      }
     }
 
     redirect(303, '/admin/posts')

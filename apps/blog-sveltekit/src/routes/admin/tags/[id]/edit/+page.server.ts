@@ -1,4 +1,4 @@
-import { error, fail, redirect } from '@sveltejs/kit'
+import { error, redirect } from '@sveltejs/kit'
 import { authorize } from '@holo-js/authorization'
 import { validate } from '@holo-js/forms'
 
@@ -18,12 +18,7 @@ export const load = (async ({ params }) => {
 
 export const actions = {
   update: async ({ params, request }) => {
-    const submission = await validate(request, tagForm)
-    if (!submission.valid) {
-      const failure = submission.fail(400)
-      return fail(failure.status, failure)
-    }
-
+    const input = await validate(request, tagForm)
     const id = Number(params.id)
     const tag = await Tag.find(id)
     if (!tag) {
@@ -31,7 +26,7 @@ export const actions = {
     }
 
     await authorize('update', tag)
-    await updateTag(id, { name: submission.data.name })
+    await updateTag(id, { name: input.name })
 
     redirect(303, '/admin/tags')
   },

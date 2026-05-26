@@ -1,5 +1,8 @@
 <script setup lang="ts">
+import { useValidationErrors } from '@holo-js/adapter-nuxt/client'
+
 const { data } = await useFetch('/api/admin/posts')
+const errors = useValidationErrors()
 </script>
 
 <template>
@@ -10,6 +13,7 @@ const { data } = await useFetch('/api/admin/posts')
       <textarea name="excerpt" placeholder="Excerpt" rows="3"></textarea>
       <textarea name="body" placeholder="Body" rows="10" required></textarea>
       <input name="image" type="file" accept="image/png,image/jpeg,image/webp">
+      <p v-if="errors.has('image')" class="error">{{ errors.first('image') }}</p>
       <select name="categoryId">
         <option value="">Uncategorized</option>
         <option v-for="category in data?.categories || []" :key="category.id" :value="category.id">{{ category.name }}</option>

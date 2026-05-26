@@ -38,6 +38,7 @@
     "@holo-js/config": "catalog:",
     "@holo-js/core": "catalog:",
     "@holo-js/db": "catalog:",
+    "@holo-js/validation": "catalog:",
     "h3": "catalog:"
   },
   "peerDependencies": {

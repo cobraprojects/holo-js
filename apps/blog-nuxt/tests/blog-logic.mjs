@@ -4,6 +4,7 @@ import authorization, { AuthorizationError } from '@holo-js/authorization'
 import cache, { configureCacheRuntime, getCacheRuntimeBindings } from '@holo-js/cache'
 import { initializeHoloAdapterProject } from '@holo-js/core'
 import { DB } from '@holo-js/db'
+import { isValidationException } from '@holo-js/forms'
 
 import Category from '../server/models/Category.ts'
 import Comment from '../server/models/Comment.ts'
@@ -35,6 +36,7 @@ import {
 
 const project = await initializeHoloAdapterProject(process.cwd())
 const blogCache = cache.driver('memory')
+const imageUploadFailureMessage = 'The selected file must be 2 MB or smaller.'
 const cacheBindings = getCacheRuntimeBindings()
 if (!cacheBindings) {
   throw new Error('Expected cache runtime bindings to be configured.')
@@ -301,6 +303,64 @@ try {
   assert.equal(logicPost.tags.length, 1)
   assert.equal(logicPost.tags[0]?.id, frameworkTag.id)
 
+  let mediaFailurePost = null
+  const entityPrototype = Object.getPrototypeOf(logicPost)
+  const originalAddMedia = entityPrototype.addMedia
+  entityPrototype.addMedia = function addMediaWithForcedFailure() {
+    return {
+      toMediaCollection: async () => {
+        return {
+          error: {
+            message: imageUploadFailureMessage,
+          },
+        }
+      },
+    }
+  }
+  try {
+    await assert.rejects(async () => await createPost({
+      title: 'Media Side Effect Post',
+      excerpt: 'Media side effect excerpt',
+      body: 'Media side effect body',
+      status: 'published',
+      categoryId: String(updatedCategory.id),
+      tagIds: String(frameworkTag.id),
+      image: new Blob(['image'], { type: 'image/png' }),
+    }), (error) => {
+      assert.equal(isValidationException(error), true)
+      assert.deepEqual(error.errors.flatten().image, [imageUploadFailureMessage])
+      return true
+    })
+
+    mediaFailurePost = await Post.with('category', 'tags').where('slug', 'media-side-effect-post').first()
+    assert.ok(mediaFailurePost)
+    assert.equal(mediaFailurePost.category?.id, updatedCategory.id)
+    assert.equal(mediaFailurePost.tags[0]?.id, frameworkTag.id)
+
+    await assert.rejects(async () => await updatePost(mediaFailurePost.id, {
+      title: 'Media Side Effect Post Revised',
+      excerpt: 'Updated media side effect excerpt',
+      body: 'Updated media side effect body',
+      status: 'draft',
+      categoryId: '',
+      tagIds: String(releaseTag.id),
+      image: new Blob(['image'], { type: 'image/png' }),
+    }), (error) => {
+      assert.equal(isValidationException(error), true)
+      assert.deepEqual(error.errors.flatten().image, [imageUploadFailureMessage])
+      return true
+    })
+
+    mediaFailurePost = await Post.with('category', 'tags').where('id', mediaFailurePost.id).first()
+    assert.ok(mediaFailurePost)
+    assert.equal(mediaFailurePost.slug, 'media-side-effect-post-revised')
+    assert.equal(mediaFailurePost.status, 'draft')
+    assert.equal(mediaFailurePost.category, null)
+    assert.equal(mediaFailurePost.tags[0]?.id, releaseTag.id)
+  } finally {
+    entityPrototype.addMedia = originalAddMedia
+  }
+
   await updatePost(logicPost.id, {
     title: 'Logic Coverage Post Revised',
     excerpt: 'Changed excerpt',
@@ -338,8 +398,14 @@ try {
 
   await deletePost(logicPost.id)
   await deletePost(cleanupPost.id)
+  if (mediaFailurePost) {
+    await deletePost(mediaFailurePost.id)
+  }
   assert.equal(await Post.find(logicPost.id), undefined)
   assert.equal(await Post.find(cleanupPost.id), undefined)
+  if (mediaFailurePost) {
+    assert.equal(await Post.find(mediaFailurePost.id), undefined)
+  }
 
   await deleteTag(updatedTag.id)
   assert.equal(await Tag.find(updatedTag.id), undefined)

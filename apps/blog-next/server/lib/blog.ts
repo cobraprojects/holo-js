@@ -1,5 +1,6 @@
 import { hashPassword } from '@holo-js/auth'
 import { DB, uniqueSlug } from '@holo-js/db'
+import { ValidationException } from '@holo-js/forms'
 
 import Category from '../models/Category'
 import Post from '../models/Post'
@@ -208,7 +209,7 @@ export async function deleteTag(id: number) {
 }
 
 export async function createPost(input: { title: string, excerpt?: string, body: string, status: string, categoryId?: string, tagIds?: string, image?: Blob }) {
-  return await DB.transaction(async () => {
+  const post = await DB.transaction(async () => {
     const publishedAt = now()
     const authorId = await ensureAuthorId()
     const postStatus = input.status === 'draft' ? 'draft' : 'published'
@@ -229,29 +230,26 @@ export async function createPost(input: { title: string, excerpt?: string, body:
       await post.tags().attach(tagIds)
     }
 
-    if (input.image) {
-      const { error } = await post.addMedia(input.image).toMediaCollection('images')
-      if (error) {
-        return { data: null, error }
-      }
-    }
-
-    return { data: post, error: null }
+    return post
   })
+
+  if (input.image) {
+    const result = await post.addMedia(input.image).toMediaCollection('images')
+    if (result.error) {
+      throw ValidationException.withMessages({
+        image: [result.error.message],
+      })
+    }
+  }
+
+  return post
 }
 
 export async function updatePost(id: number, input: { title: string, excerpt?: string, body: string, status: string, categoryId?: string, tagIds?: string, image?: Blob }) {
-  return await DB.transaction(async () => {
+  const post = await DB.transaction(async () => {
     const publishedAt = now()
     const postStatus = input.status === 'draft' ? 'draft' : 'published'
     const post = await Post.findOrFail(id)
-
-    if (input.image) {
-      const { error } = await post.addMedia(input.image).toMediaCollection('images')
-      if (error) {
-        return { data: null, error }
-      }
-    }
 
     await post.update({
       category_id: input.categoryId ? Number(input.categoryId) : null,
@@ -266,8 +264,19 @@ export async function updatePost(id: number, input: { title: string, excerpt?: s
     const tagIds = parseTagIds(input.tagIds || '')
     await post.tags().sync(tagIds)
 
-    return { data: post, error: null }
+    return post
   })
+
+  if (input.image) {
+    const result = await post.addMedia(input.image).toMediaCollection('images')
+    if (result.error) {
+      throw ValidationException.withMessages({
+        image: [result.error.message],
+      })
+    }
+  }
+
+  return post
 }
 
 export async function deletePost(id: number) {

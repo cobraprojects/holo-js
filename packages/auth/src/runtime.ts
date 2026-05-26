@@ -2,13 +2,10 @@ import { createHash, createHmac } from 'node:crypto'
 import { normalizeAuthConfig } from '@holo-js/config'
 import type {
   AuthenticatedAuthUser,
-  AuthFieldErrors,
   AuthCredentials,
   AuthCurrentAccessToken,
   AuthDeliveryHook,
-  AuthEmailVerificationConsumeErrorCode,
   AuthEmailVerificationFacade,
-  AuthEmailVerificationResendErrorCode,
   AuthEmailVerificationSendOptions,
   AuthEstablishedSession,
   AuthFacade,
@@ -16,7 +13,6 @@ import type {
   AuthGuardFacadeFor,
   AuthImpersonationOptions,
   AuthImpersonationState,
-  AuthLoginErrorCode,
   AuthLogoutResult,
   AuthPasswordResetInput,
   AuthPasswordResetRequestInput,
@@ -24,7 +20,6 @@ import type {
   AuthPasswordHasher,
   AuthPasswordResetConsumeErrorCode,
   AuthPasswordResetRequestErrorCode,
-  AuthRegistrationErrorCode,
   AuthResult,
   AuthRegistrationInput,
   AuthSessionGuardFacade,
@@ -85,8 +80,8 @@ import {
   buildLogoutCookies,
   forgetDefaultRememberCookie,
 } from './runtime/responseCookies'
-import { captureExpectedAuthResult, throwAuthError } from './runtime/result'
-import { createLoginFailure, createRegistrationFailure } from './runtime/sessionFailures'
+import { captureExpectedAuthResult, throwAuthError, unwrapExpectedAuthResult } from './runtime/result'
+import { createLoginFailure, createRegistrationFailure, createTokenLoginFailure } from './runtime/sessionFailures'
 import {
   createDefaultPasswordHasher,
   createPersonalAccessTokenId,
@@ -1941,8 +1936,8 @@ function createEmailVerificationFacade(): AuthEmailVerificationFacade {
       })
       return result
     },
-    resend(options: { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string } = {}): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>> {
-      return captureExpectedAuthResult(async () => {
+    async resend(options: { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string } = {}): Promise<EmailVerificationTokenResult> {
+      return unwrapExpectedAuthResult(await captureExpectedAuthResult(async () => {
         const guardName = options.guard ?? getDefaultGuardName()
         let currentUser: AuthenticatedAuthUser | null
         if (typeof options.email === 'string' && options.email.trim().length > 0) {
@@ -1973,10 +1968,10 @@ function createEmailVerificationFacade(): AuthEmailVerificationFacade {
           guard: guardName,
           expiresAt: options.expiresAt,
         })
-      }, EXPECTED_EMAIL_VERIFICATION_RESEND_ERRORS, createEmailVerificationResendFailure)
+      }, EXPECTED_EMAIL_VERIFICATION_RESEND_ERRORS, createEmailVerificationResendFailure))
     },
-    consume(plainTextToken: string): Promise<AuthResult<AuthenticatedAuthUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>> {
-      return captureExpectedAuthResult(async () => {
+    async consume(plainTextToken: string): Promise<AuthenticatedAuthUser> {
+      return unwrapExpectedAuthResult(await captureExpectedAuthResult(async () => {
         const parsed = parsePlainTextToken(plainTextToken)
         if (!parsed) {
           throwAuthError('email_verification_token_invalid', 'Invalid email verification token.')
@@ -1993,7 +1988,7 @@ function createEmailVerificationFacade(): AuthEmailVerificationFacade {
           email_verified_at: new Date(),
         })
         return updated
-      }, EXPECTED_EMAIL_VERIFICATION_CONSUME_ERRORS, createEmailVerificationConsumeFailure)
+      }, EXPECTED_EMAIL_VERIFICATION_CONSUME_ERRORS, createEmailVerificationConsumeFailure))
     },
   })
 }
@@ -2230,6 +2225,7 @@ function createTokenFacade(): AuthTokenFacade {
 }
 
 function createGuardFacade(guardName: string): AuthSessionGuardFacade | AuthTokenGuardFacade {
+  const guard = getGuardConfig(guardName)
   const base = {
     check() {
       return checkForGuard(guardName)
@@ -2249,26 +2245,28 @@ function createGuardFacade(guardName: string): AuthSessionGuardFacade | AuthToke
     currentAccessToken() {
       return resolveCurrentAccessTokenForGuard(guardName)
     },
-    login<TCredentials extends AuthCredentials>(credentials: TCredentials) {
-      return captureExpectedAuthResult(
+    async login<TCredentials extends AuthCredentials>(credentials: TCredentials) {
+      return unwrapExpectedAuthResult(await captureExpectedAuthResult(
         () => loginForGuard(guardName, credentials),
         EXPECTED_LOGIN_ERRORS,
-        error => createLoginFailure(error, credentials),
-      )
+        error => guard.driver === 'token'
+          ? createTokenLoginFailure(error, credentials)
+          : createLoginFailure(error, credentials),
+      ))
     },
-    register<TInput extends AuthRegistrationInput>(input: TInput) {
-      return captureExpectedAuthResult(
+    async register<TInput extends AuthRegistrationInput>(input: TInput) {
+      return unwrapExpectedAuthResult(await captureExpectedAuthResult(
         () => registerForGuard(guardName, input),
         EXPECTED_REGISTRATION_ERRORS,
         error => createRegistrationFailure(error, input),
-      )
+      ))
     },
     logout() {
       return logoutForGuard(guardName)
     },
   }
 
-  if (getGuardConfig(guardName).driver === 'token') {
+  if (guard.driver === 'token') {
     return Object.freeze(base) as AuthTokenGuardFacade
   }
 
@@ -2347,12 +2345,12 @@ export function getAuthRuntime(): AuthRuntimeFacade {
     currentAccessToken() {
       return resolveCurrentAccessTokenForGuard(getDefaultGuardName())
     },
-    login<TCredentials extends AuthCredentials>(credentials: TCredentials) {
-      return captureExpectedAuthResult(
+    async login<TCredentials extends AuthCredentials>(credentials: TCredentials) {
+      return unwrapExpectedAuthResult(await captureExpectedAuthResult(
         () => loginForSessionGuard(getDefaultGuardName(), credentials),
         EXPECTED_LOGIN_ERRORS,
         error => createLoginFailure(error, credentials),
-      )
+      ))
     },
     loginUsing(user, options) {
       return loginUsingForGuard(getDefaultGuardName(), user, options)
@@ -2375,18 +2373,18 @@ export function getAuthRuntime(): AuthRuntimeFacade {
     logout() {
       return logoutForGuard(getDefaultGuardName())
     },
-    register<TInput extends AuthRegistrationInput>(input: TInput) {
-      return captureExpectedAuthResult(
+    async register<TInput extends AuthRegistrationInput>(input: TInput) {
+      return unwrapExpectedAuthResult(await captureExpectedAuthResult(
         () => registerDefaultUser(input),
         EXPECTED_REGISTRATION_ERRORS,
         error => createRegistrationFailure(error, input),
-      )
+      ))
     },
-    requestPasswordReset<TInput extends AuthPasswordResetRequestInput>(input: TInput, options?: AuthPasswordResetRequestOptions) {
-      return requestPasswordResetUsingRuntime(input, options)
+    async requestPasswordReset<TInput extends AuthPasswordResetRequestInput>(input: TInput, options?: AuthPasswordResetRequestOptions) {
+      return unwrapExpectedAuthResult(await requestPasswordResetUsingRuntime(input, options))
     },
-    resetPassword<TInput extends AuthPasswordResetInput>(input: TInput) {
-      return resetPasswordUsingRuntime(input)
+    async resetPassword<TInput extends AuthPasswordResetInput>(input: TInput) {
+      return unwrapExpectedAuthResult(await resetPasswordUsingRuntime(input))
     },
     verifyEmail(token: string) {
       return verification.consume(token)
@@ -2499,7 +2497,7 @@ export async function currentAccessToken(): Promise<AuthCurrentAccessToken | nul
 
 export async function login<TCredentials extends AuthCredentials>(
   credentials: TCredentials,
-): Promise<AuthResult<AuthEstablishedSession, AuthLoginErrorCode, Partial<Record<InputFieldName<TCredentials>, readonly string[]>>>> {
+): Promise<AuthEstablishedSession> {
   return getAuthRuntime().login(credentials)
 }
 
@@ -2566,48 +2564,48 @@ export async function logout(): Promise<AuthLogoutResult> {
 
 export async function register<TInput extends AuthRegistrationInput>(
   input: TInput,
-): Promise<AuthResult<AuthenticatedAuthUser, AuthRegistrationErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>>> {
+): Promise<AuthenticatedAuthUser> {
   return getAuthRuntime().register(input)
 }
 
 export async function requestPasswordReset<TInput extends AuthPasswordResetRequestInput>(
   input: TInput,
   options?: AuthPasswordResetRequestOptions,
-): Promise<AuthResult<void, AuthPasswordResetRequestErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>>> {
+): Promise<void> {
   return getAuthRuntime().requestPasswordReset(input, options)
 }
 
 export async function resetPassword<TInput extends AuthPasswordResetInput>(
   input: TInput,
-): Promise<AuthResult<AuthenticatedAuthUser, AuthPasswordResetConsumeErrorCode, Partial<Record<InputFieldName<TInput>, readonly string[]>>>> {
+): Promise<AuthenticatedAuthUser> {
   return getAuthRuntime().resetPassword(input)
 }
 
 export function verifyEmail(
   token: string,
-): Promise<AuthResult<AuthenticatedAuthUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>> {
+): Promise<AuthenticatedAuthUser> {
   return getAuthRuntime().verifyEmail(token)
 }
 
-export function sendEmailVerification(): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
-export function sendEmailVerification(email: string): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
-export function sendEmailVerification(email: string | undefined): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
-export function sendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+export function sendEmailVerification(): Promise<EmailVerificationTokenResult>
+export function sendEmailVerification(email: string): Promise<EmailVerificationTokenResult>
+export function sendEmailVerification(email: string | undefined): Promise<EmailVerificationTokenResult>
+export function sendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<EmailVerificationTokenResult>
 export function sendEmailVerification(
   email?: string,
   options?: AuthEmailVerificationSendOptions,
-): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>> {
+): Promise<EmailVerificationTokenResult> {
   return getAuthRuntime().verification.resend(createEmailVerificationResendInput(email, options))
 }
 
-export function resendEmailVerification(): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
-export function resendEmailVerification(email: string): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
-export function resendEmailVerification(email: string | undefined): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
-export function resendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+export function resendEmailVerification(): Promise<EmailVerificationTokenResult>
+export function resendEmailVerification(email: string): Promise<EmailVerificationTokenResult>
+export function resendEmailVerification(email: string | undefined): Promise<EmailVerificationTokenResult>
+export function resendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<EmailVerificationTokenResult>
 export function resendEmailVerification(
   email?: string,
   options?: AuthEmailVerificationSendOptions,
-): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>> {
+): Promise<EmailVerificationTokenResult> {
   return getAuthRuntime().verification.resend(createEmailVerificationResendInput(email, options))
 }
 

@@ -1,6 +1,5 @@
 import { defineEventHandler, getHeaders, getRequestURL, readRawBody } from 'h3'
 import { renderBroadcastAuthResponse } from '@holo-js/broadcast/auth'
-import { holo } from '#imports'
 
 export default defineEventHandler(async (event) => {
   const app = await holo.getApp()

@@ -42,6 +42,7 @@ interface HoloRuntimeConfig extends RuntimeConfigInput {
  */
 declare module '#app' {
   export function useRuntimeConfig(): HoloRuntimeConfig
+  export function useCookie<T = string | null>(name: string): { value: T | null | undefined }
 }
 
 declare module '#imports' {
@@ -67,6 +68,7 @@ declare module 'nitropack/runtime/storage' {
 
 declare global {
   function createError(input: { statusCode: number, statusMessage: string }): Error
+  function defineNitroErrorHandler<T>(handler: T): T
   function defineNitroPlugin<T>(plugin: T): T
   function defineEventHandler<T>(
     handler: (event: unknown) => T | Promise<T>,

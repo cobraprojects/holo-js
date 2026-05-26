@@ -69,7 +69,7 @@ function createSubmitterBridge<TData, TSuccess>(
   optionsRef: { current: UseFormOptions<TData, TSuccess> | undefined },
 ): (
   context: ClientSubmitContext<TData>,
-) => Promise<ClientSubmitResult<TData, TSuccess>> | ClientSubmitResult<TData, TSuccess> {
+) => Promise<ClientSubmitResult<TData, TSuccess> | void> | ClientSubmitResult<TData, TSuccess> | void {
   return (context) => {
     const submitter = optionsRef.current?.submitter
 

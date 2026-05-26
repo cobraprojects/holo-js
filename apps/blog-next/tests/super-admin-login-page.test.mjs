@@ -146,21 +146,11 @@ describe('superAdminLoginAction', () => {
   })
 
   it('returns validation failures before logging in', async () => {
-    const failure = {
-      ok: false,
-      status: 422,
-      errors: {
-        email: ['Enter a valid email address.'],
-      },
-    }
-    const submission = {
-      valid: false,
-      fail: vi.fn(() => failure),
-    }
+    const validationError = new Error('Validation failed.')
 
-    mocks.validate.mockResolvedValue(submission)
+    mocks.validate.mockRejectedValue(validationError)
 
-    await expect(superAdminLoginAction(new FormData())).resolves.toBe(failure)
+    await expect(superAdminLoginAction(new FormData())).rejects.toBe(validationError)
     expect(mocks.validate).toHaveBeenCalledWith(expect.any(FormData), expect.anything(), {
       throttle: 'login',
     })
@@ -168,88 +158,58 @@ describe('superAdminLoginAction', () => {
   })
 
   it('returns auth failures without redirecting', async () => {
-    const failure = {
-      ok: false,
-      status: 401,
-      errors: {
-        _root: ['These credentials do not match our records.'],
-      },
+    const input = {
+      email: 'admin@example.com',
+      password: 'bad-password',
+      remember: false,
     }
-    const submission = {
-      valid: true,
-      data: {
-        email: 'admin@example.com',
-        password: 'bad-password',
-        remember: false,
-      },
-      fail: vi.fn(() => failure),
-    }
-    mocks.validate.mockResolvedValue(submission)
-    mocks.guardLogin.mockResolvedValue({
-      data: null,
-      error: {
-        status: 401,
-        fields: {
-          _root: ['These credentials do not match our records.'],
-        },
-      },
+    const authError = new Error('These credentials do not match our records.')
+    mocks.validate.mockResolvedValue(input)
+    mocks.guardLogin.mockImplementation(async () => {
+      throw authError
     })
 
-    await expect(superAdminLoginAction(new FormData())).resolves.toBe(failure)
-    expect(mocks.guardLogin).toHaveBeenCalledWith(submission.data)
+    await expect(superAdminLoginAction(new FormData())).rejects.toBe(authError)
+    expect(mocks.guardLogin).toHaveBeenCalledWith(input)
     expect(mocks.redirect).not.toHaveBeenCalled()
   })
 
   it('uses the native Next redirect after super admin login', async () => {
-    const submission = {
-      valid: true,
-      data: {
-        email: 'admin@example.com',
-        password: 'secret-secret',
-        remember: false,
-      },
-      fail: vi.fn(),
+    const input = {
+      email: 'admin@example.com',
+      password: 'secret-secret',
+      remember: false,
     }
-    mocks.validate.mockResolvedValue(submission)
+    mocks.validate.mockResolvedValue(input)
     mocks.guardLogin.mockResolvedValue({
-      data: {
-        emailVerificationRequired: false,
-        user: {
-          email: 'admin@example.com',
-        },
+      emailVerificationRequired: false,
+      user: {
+        email: 'admin@example.com',
       },
-      error: null,
     })
 
     await expect(superAdminLoginAction(new FormData())).rejects.toMatchObject({
       location: '/super-admin',
     })
 
-    expect(mocks.guardLogin).toHaveBeenCalledWith(submission.data)
+    expect(mocks.guardLogin).toHaveBeenCalledWith(input)
     expect(mocks.revalidatePath).toHaveBeenCalledWith('/', 'layout')
     expect(mocks.redirect).toHaveBeenCalledWith('/super-admin')
   })
 
   it('redirects to email verification when the admin session requires it', async () => {
-    const submission = {
-      valid: true,
-      data: {
-        email: 'admin@example.com',
-        password: 'secret-secret',
-        remember: false,
-      },
-      fail: vi.fn(),
+    const input = {
+      email: 'admin@example.com',
+      password: 'secret-secret',
+      remember: false,
     }
-    mocks.validate.mockResolvedValue(submission)
+    mocks.validate.mockResolvedValue(input)
     mocks.guardLogin.mockResolvedValue({
-      data: {
-        emailVerificationRequired: true,
-        emailVerificationRoute: '/verify-email',
-        user: {
-          email: 'admin@example.com',
-        },
+      emailVerificationRequired: true,
+      emailVerificationRoute: '/verify-email',
+      user: {
+        email: 'admin@example.com',
       },
-      error: null,
     })
 
     await expect(superAdminLoginAction(new FormData())).rejects.toMatchObject({

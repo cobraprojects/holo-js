@@ -237,4 +237,141 @@ describe('@holo-js/adapter-sveltekit request context', () => {
     expect(redirect).toHaveBeenCalledWith(307, '/login')
   })
 
+  it('maps validation exceptions to SvelteKit API errors inside the request context', async () => {
+    const svelteKitError = vi.fn((status: number, body: unknown): never => {
+      throw Object.assign(new Error('sveltekit error'), { status, body })
+    })
+
+    vi.doMock('@holo-js/core', () => makeHoloCoreMock(() => {}))
+    vi.doMock('@sveltejs/kit', () => ({ error: svelteKitError }))
+
+    const { runWithSvelteKitRequestEvent } = await import('../src')
+    const { field, schema, validate } = await import('@holo-js/validation')
+
+    await expect(runWithSvelteKitRequestEvent({
+      url: new URL('https://app.test/api/reset-password'),
+      cookies: {
+        get() {
+          return undefined
+        },
+        set() {},
+      },
+      request: {
+        headers: new Headers(),
+      },
+    }, async () => await validate({}, schema({
+      token: field.string().required(),
+    })))).rejects.toMatchObject({
+      status: 422,
+      body: {
+        ok: false,
+        status: 422,
+        valid: false,
+        errors: {
+          token: ['This field is required.'],
+        },
+      },
+    })
+    expect(svelteKitError).toHaveBeenCalledOnce()
+  })
+
+  it('maps SvelteKit action error JSON carrying validation payloads to action failures', async () => {
+    vi.doMock('@holo-js/core', () => makeHoloCoreMock(() => {}))
+
+    const { adapterSvelteKitInternals } = await import('../src')
+    const payload = {
+      ok: false,
+      status: 422,
+      valid: false,
+      message: 'email: These credentials do not match our records.',
+      bag: 'default',
+      values: {
+        email: 'user@app.test',
+      },
+      errors: {
+        email: ['These credentials do not match our records.'],
+      },
+    } as const
+
+    const response = await adapterSvelteKitInternals.mapValidationActionResponse({
+      url: new URL('https://app.test/login'),
+      cookies: {
+        get() {
+          return undefined
+        },
+        set() {},
+      },
+      request: {
+        method: 'POST',
+        headers: new Headers({
+          accept: 'application/json',
+        }),
+      },
+    }, Response.json({
+      type: 'error',
+      error: payload,
+    }, {
+      status: 500,
+    }))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      type: 'failure',
+      status: 422,
+      data: JSON.stringify(payload),
+    })
+  })
+
+  it('maps remembered validation action failures for plain SvelteKit posts', async () => {
+    vi.doMock('@holo-js/core', () => makeHoloCoreMock(() => {}))
+
+    const { adapterSvelteKitInternals } = await import('../src')
+    const event = {
+      url: new URL('https://app.test/login'),
+      cookies: {
+        get() {
+          return undefined
+        },
+        set() {},
+      },
+      request: {
+        method: 'POST',
+        headers: new Headers({
+          accept: 'text/html',
+        }),
+      },
+    }
+    const payload = {
+      ok: false,
+      status: 422,
+      valid: false,
+      message: 'email: These credentials do not match our records.',
+      bag: 'default',
+      values: {
+        email: 'user@app.test',
+      },
+      errors: {
+        email: ['These credentials do not match our records.'],
+      },
+    } as const
+
+    adapterSvelteKitInternals.rememberValidationActionFailure(event, payload)
+    const response = await adapterSvelteKitInternals.mapValidationActionResponse(
+      event,
+      new Response('<h1>Error</h1>', {
+        status: 500,
+        headers: {
+          'content-type': 'text/html',
+        },
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      type: 'failure',
+      status: 422,
+      data: JSON.stringify(payload),
+    })
+  })
+
 })

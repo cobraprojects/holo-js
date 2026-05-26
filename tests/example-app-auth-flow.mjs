@@ -396,6 +396,8 @@ export async function assertExampleAppAuthFlow({
     }
 
     const headers = new Headers(options.headers ?? {})
+    headers.set('accept', 'application/json')
+    headers.set('x-sveltekit-action', 'true')
     if (loginRequiresCsrf) {
       const csrfToken = await createCsrfToken()
       const csrfCookie = `XSRF-TOKEN=${encodeURIComponent(csrfToken)}`

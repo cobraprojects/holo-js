@@ -7,7 +7,7 @@ import {
   createSuccessfulSubmission,
   field,
   schema,
-  validate,
+  safeParse,
 } from '../src'
 
 describe('@holo-js/forms typing', () => {
@@ -64,7 +64,7 @@ describe('@holo-js/forms typing', () => {
     const emailErrors = failure.errors.email
 
     async function expectsTypedSubmission(request: Request) {
-      const submission = await validate(request, registerUser)
+      const submission = await safeParse(request, registerUser)
 
       if (submission.valid) {
         const typedName: string = submission.data.name
@@ -87,7 +87,7 @@ describe('@holo-js/forms typing', () => {
     void typedSubmitResult
 
     async function expectsTypedSecuritySubmission(request: Request) {
-      const submission = await validate(request, registerUser, {
+      const submission = await safeParse(request, registerUser, {
         throttle: 'login',
       })
 
@@ -103,7 +103,7 @@ describe('@holo-js/forms typing', () => {
     }
 
     async function expectsTypedEnumSubmission(request: Request) {
-      const submission = await validate(request, publishPost)
+      const submission = await safeParse(request, publishPost)
 
       if (submission.valid) {
         const typedStatus: 'draft' | 'published' = submission.data.status
@@ -114,7 +114,7 @@ describe('@holo-js/forms typing', () => {
     }
 
     async function expectsTypedEventSubmission(event: FormRequestLikeInput) {
-      const submission = await validate(event, registerUser, {
+      const submission = await safeParse(event, registerUser, {
         throttle: 'login',
       })
 

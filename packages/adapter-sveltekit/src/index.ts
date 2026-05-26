@@ -5,6 +5,11 @@ import {
   type HoloAdapterProject,
   type HoloFrameworkOptions,
 } from '@holo-js/core'
+import {
+  type SerializedValidationException,
+  isValidationException,
+  validationInternals,
+} from '@holo-js/forms/schema'
 import type { HoloConfigMap } from '@holo-js/config'
 export {
   holoSvelteKitTransport,
@@ -16,11 +21,13 @@ export type SvelteKitHoloOptions = HoloFrameworkOptions
 export type SvelteKitHoloProject<TCustom extends HoloConfigMap = HoloConfigMap> = HoloAdapterProject<TCustom>
 
 type SvelteKitRequestEvent = {
+  readonly url?: URL
   readonly cookies: {
     get(name: string): string | undefined
     set(name: string, value: string, options: SvelteKitCookieOptions): void
   }
   readonly request: {
+    readonly method?: string
     readonly headers: Headers
   }
 }
@@ -42,6 +49,11 @@ type ParsedResponseCookie = {
   readonly options: SvelteKitCookieOptions
 }
 
+type SvelteKitActionResult = {
+  readonly type?: unknown
+  readonly error?: unknown
+}
+
 type SvelteKitRuntimeGlobal = typeof globalThis & {
   __holoSvelteKitRequestEventStore?: AsyncLocalStorage<SvelteKitRequestEvent>
 }
@@ -51,6 +63,8 @@ type SvelteKitModule = {
 }
 
 type SvelteKitRedirectStatus = 301 | 302 | 303 | 307 | 308
+type SvelteKitErrorStatus = Parameters<typeof svelteKitError>[0]
+type SvelteKitErrorBody = Parameters<typeof svelteKitError>[1]
 
 // Shared AsyncLocalStorage contract with packages/auth/src/sveltekit/server.ts:
 // keep this exact global key and compatible AsyncLocalStorage<SvelteKitRequestEvent>
@@ -59,12 +73,174 @@ const svelteKitAdapter = createHoloFrameworkAdapter<SvelteKitHoloOptions>({
   stateKey: '__holoSvelteKitAdapter__',
   displayName: 'SvelteKit',
 })
+let validationExceptionThrowerRegistered = false
+const validationActionFailures = new WeakMap<object, SerializedValidationException>()
+const validationActionFailureKeys = new Map<string, SerializedValidationException>()
 
 function getSvelteKitRequestEventStore(): AsyncLocalStorage<SvelteKitRequestEvent> {
   const runtimeGlobal = globalThis as SvelteKitRuntimeGlobal
   runtimeGlobal.__holoSvelteKitRequestEventStore ??= new AsyncLocalStorage<SvelteKitRequestEvent>()
 
   return runtimeGlobal.__holoSvelteKitRequestEventStore
+}
+
+function toSvelteKitErrorStatus(status: number): SvelteKitErrorStatus {
+  return status >= 400 && status <= 599 ? status as SvelteKitErrorStatus : 500
+}
+
+function isApiEvent(event: SvelteKitRequestEvent): boolean {
+  return event.url?.pathname.startsWith('/api/') === true
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isSerializedValidationException(value: unknown): value is SerializedValidationException {
+  return isPlainObject(value)
+    && value.ok === false
+    && typeof value.status === 'number'
+    && value.valid === false
+    && typeof value.message === 'string'
+    && typeof value.bag === 'string'
+    && isPlainObject(value.values)
+    && isPlainObject(value.errors)
+}
+
+function serializeValidationException(error: unknown): SerializedValidationException | undefined {
+  return isValidationException(error) ? error.toJSON() : undefined
+}
+
+function toSvelteKitValidationBody(payload: SerializedValidationException): SvelteKitErrorBody {
+  return payload as SvelteKitErrorBody
+}
+
+function isSvelteKitActionJsonRequest(event: SvelteKitRequestEvent): boolean {
+  return event.request.method?.toUpperCase() === 'POST'
+    && event.request.headers.get('accept')?.toLowerCase().includes('application/json') === true
+}
+
+async function mapValidationActionResponse(
+  event: SvelteKitRequestEvent,
+  response: Response,
+): Promise<Response> {
+  if (isApiEvent(event)) {
+    const apiPayload = takeValidationActionFailure(event)
+    if (apiPayload) {
+      return Response.json(apiPayload, { status: apiPayload.status })
+    }
+
+    return response
+  }
+
+  const flashedPayload = takeValidationActionFailure(event)
+  if (flashedPayload) {
+    return createValidationActionFailureResponse(flashedPayload, response)
+  }
+
+  if (!isSvelteKitActionJsonRequest(event)) {
+    return response
+  }
+
+  const contentType = response.headers.get('content-type') ?? ''
+  if (!contentType.toLowerCase().includes('application/json')) {
+    return response
+  }
+
+  let actionResult: SvelteKitActionResult
+  try {
+    actionResult = await response.clone().json() as SvelteKitActionResult
+  } catch {
+    return response
+  }
+  if (actionResult.type !== 'error' || !isSerializedValidationException(actionResult.error)) {
+    return response
+  }
+
+  return createValidationActionFailureResponse(actionResult.error, response)
+}
+
+function createValidationActionFailureResponse(
+  payload: SerializedValidationException,
+  response: Response,
+): Response {
+  const headers = new Headers(response.headers)
+  headers.delete('content-length')
+  headers.set('content-type', 'application/json')
+
+  return Response.json({
+    type: 'failure',
+    status: payload.status,
+    data: JSON.stringify(payload),
+  }, {
+    status: 200,
+    headers,
+  })
+}
+
+function getValidationActionFailureKey(event: SvelteKitRequestEvent): string | undefined {
+  if (!event.url) {
+    return undefined
+  }
+
+  return `${event.request.method?.toUpperCase() ?? 'GET'} ${event.url.href}`
+}
+
+function takeValidationActionFailure(event: SvelteKitRequestEvent): SerializedValidationException | undefined {
+  const key = getValidationActionFailureKey(event)
+  const eventPayload = validationActionFailures.get(event)
+  if (eventPayload) {
+    validationActionFailures.delete(event)
+    validationActionFailures.delete(event.request)
+    if (key) {
+      validationActionFailureKeys.delete(key)
+    }
+    return eventPayload
+  }
+
+  const requestPayload = validationActionFailures.get(event.request)
+  if (requestPayload) {
+    validationActionFailures.delete(event)
+    validationActionFailures.delete(event.request)
+    if (key) {
+      validationActionFailureKeys.delete(key)
+    }
+    return requestPayload
+  }
+
+  if (!key) {
+    return undefined
+  }
+
+  const keyedPayload = validationActionFailureKeys.get(key)
+  validationActionFailureKeys.delete(key)
+  return keyedPayload
+}
+
+function rememberValidationActionFailure(event: SvelteKitRequestEvent, payload: SerializedValidationException): void {
+  validationActionFailures.set(event, payload)
+  validationActionFailures.set(event.request, payload)
+  const key = getValidationActionFailureKey(event)
+  if (key) {
+    validationActionFailureKeys.set(key, payload)
+  }
+}
+
+function registerValidationExceptionThrower(): void {
+  if (validationExceptionThrowerRegistered) {
+    return
+  }
+
+  validationExceptionThrowerRegistered = true
+  validationInternals.setValidationExceptionThrower((exception) => {
+    const event = getSvelteKitRequestEventStore().getStore()
+    if (!event || !isApiEvent(event)) {
+      return
+    }
+
+    const payload = exception.toJSON()
+    svelteKitError(toSvelteKitErrorStatus(payload.status), toSvelteKitValidationBody(payload))
+  })
 }
 
 function safeDecodeCookieSegment(value: string): string {
@@ -183,6 +359,7 @@ export function runWithSvelteKitRequestEvent<TValue>(
   event: SvelteKitRequestEvent,
   callback: () => TValue,
 ): TValue {
+  registerValidationExceptionThrower()
   return getSvelteKitRequestEventStore().run(event, callback)
 }
 
@@ -208,4 +385,9 @@ export async function resetSvelteKitHoloProject(): Promise<void> {
   await svelteKitAdapter.resetProject()
 }
 
-export const adapterSvelteKitInternals = svelteKitAdapter.internals
+export const adapterSvelteKitInternals = {
+  ...svelteKitAdapter.internals,
+  mapValidationActionResponse,
+  rememberValidationActionFailure,
+  serializeValidationException,
+}

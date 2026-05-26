@@ -36,13 +36,10 @@ async function readJson(response) {
 
 function createValidSubmission(data = {}) {
   return {
-    valid: true,
-    data: {
-      email: 'reader@example.com',
-      password: 'password123',
-      remember: false,
-      ...data,
-    },
+    email: 'reader@example.com',
+    password: 'password123',
+    remember: false,
+    ...data,
   }
 }
 
@@ -62,39 +59,26 @@ describe('POST /api/v1/tokens', () => {
   })
 
   it('returns validation failures without attempting login', async () => {
-    const failure = {
-      ok: false,
-      status: 422,
-      errors: {
-        email: ['Email is required.'],
-      },
-    }
-    const submission = {
-      valid: false,
-      fail: vi.fn(() => failure),
-    }
+    const validationError = new Error('Validation failed.')
     const request = new Request('http://localhost/api/v1/tokens', {
       method: 'POST',
     })
 
-    mocks.validate.mockResolvedValue(submission)
+    mocks.validate.mockRejectedValue(validationError)
 
-    const response = await tokensRoute.POST(request)
+    await expect(tokensRoute.POST(request)).rejects.toBe(validationError)
 
-    expect(response.status).toBe(422)
-    await expect(readJson(response)).resolves.toEqual(failure)
     expect(mocks.validate).toHaveBeenCalledWith(request, mocks.loginForm, {
       throttle: 'login',
     })
-    expect(submission.fail).toHaveBeenCalledTimes(1)
     expect(mocks.auth.guard).not.toHaveBeenCalled()
   })
 
-  it('returns 401 when API token login fails', async () => {
-    const login = vi.fn(async () => ({
-      data: null,
-      error: new Error('bad credentials'),
-    }))
+  it('throws when API token login fails', async () => {
+    const authError = new Error('bad credentials')
+    const login = vi.fn(async () => {
+      throw authError
+    })
     const request = new Request('http://localhost/api/v1/tokens', {
       method: 'POST',
     })
@@ -102,13 +86,8 @@ describe('POST /api/v1/tokens', () => {
     mocks.validate.mockResolvedValue(createValidSubmission())
     mocks.auth.guard.mockReturnValue({ login })
 
-    const response = await tokensRoute.POST(request)
+    await expect(tokensRoute.POST(request)).rejects.toBe(authError)
 
-    expect(response.status).toBe(401)
-    await expect(readJson(response)).resolves.toEqual({
-      ok: false,
-      message: 'Invalid credentials.',
-    })
     expect(mocks.auth.guard).toHaveBeenCalledWith('api')
     expect(login).toHaveBeenCalledWith({
       email: 'reader@example.com',
@@ -124,10 +103,7 @@ describe('POST /api/v1/tokens', () => {
       plainTextToken: 'plain-token',
       abilities: ['posts.read'],
     }
-    const login = vi.fn(async () => ({
-      data: token,
-      error: null,
-    }))
+    const login = vi.fn(async () => token)
     const request = new Request('http://localhost/api/v1/tokens', {
       method: 'POST',
     })

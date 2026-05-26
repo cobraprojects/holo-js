@@ -23,9 +23,10 @@ import {
   type ValidationErrorBag,
   type ValidationSchema,
   type WebFileLike,
-  validate as validateInput,
+  safeParse,
 } from '@holo-js/validation'
 import { getClientCsrfField } from '../client-security'
+import { validationExceptionToFailure } from './validation-exception'
 
 type PrimitiveLike = string | number | boolean | bigint | symbol | null | undefined | Date | Blob | WebFileLike
 
@@ -43,6 +44,20 @@ export type ClientSubmitResult<TData, TSuccess = unknown>
   | SerializedFormSubmission<TData>
   | FormFailurePayload<TData>
   | FormSuccessPayload<TSuccess>
+  | {
+    readonly ok: boolean
+    readonly status: number
+    readonly data: TSuccess
+  }
+
+type NormalizedClientSubmitResult<TData, TSuccess>
+  = FormSubmissionResult<TData>
+  | SubmittedFormFailurePayload<TData>
+  | FormSuccessPayload<TSuccess>
+
+type SubmittedFormFailurePayload<TData> = FormFailurePayload<TData> & {
+  readonly submitted: true
+}
 
 export interface UseFormOptions<TData, TSuccess = unknown> {
   readonly action?: string
@@ -52,7 +67,7 @@ export interface UseFormOptions<TData, TSuccess = unknown> {
   readonly initialState?: SerializedFormSubmission<TData> | FormFailurePayload<TData> | null
   readonly submitter?: (
     context: ClientSubmitContext<TData>,
-  ) => Promise<ClientSubmitResult<TData, TSuccess>> | ClientSubmitResult<TData, TSuccess>
+  ) => Promise<ClientSubmitResult<TData, TSuccess> | void> | ClientSubmitResult<TData, TSuccess> | void
 }
 
 export interface FormFieldState<TValue> {
@@ -221,10 +236,11 @@ function createFailedSubmission<TData>(
 function createTransportFailure<TData>(
   values: Partial<TData> | TData,
   status = 500,
-): FormFailurePayload<TData> {
+): SubmittedFormFailurePayload<TData> {
   return {
     ok: false,
     status: normalizeStatus(status, 500),
+    submitted: true,
     valid: false,
     values: values as Partial<TData>,
     errors: {
@@ -237,7 +253,7 @@ async function validateClientValues<TData>(
   values: TData | FormLikeValidationInput,
   schemaDefinition: FormSchema,
 ): Promise<FormSubmissionResult<TData>> {
-  const result = await validateInput(
+  const result = await safeParse(
     values as FormLikeValidationInput,
     schemaDefinition as ValidationSchema<SchemaInputShape>,
   )
@@ -636,15 +652,21 @@ function normalizeSubmissionLike<TData, TSuccess>(
   schemaDefinition: FormSchema,
   values: TData,
   result: ClientSubmitResult<TData, TSuccess>,
-): ClientSubmitResult<TData, TSuccess> {
+): NormalizedClientSubmitResult<TData, TSuccess> {
   if (isSubmissionResult(result)) {
     return result
   }
 
-  if ('ok' in result && result.ok === false && 'errors' in result && 'values' in result) {
+  if ('ok' in result && result.ok === false && 'status' in result && 'errors' in result && 'values' in result) {
     return {
-      ...result,
+      ok: false,
+      status: result.status,
       submitted: true,
+      valid: false,
+      values: result.values,
+      errors: result.errors,
+      ...(result.status === 429 && 'retryAfter' in result ? { retryAfter: result.retryAfter } : {}),
+      ...(result.status === 429 && 'retryAt' in result ? { retryAt: result.retryAt } : {}),
     }
   }
 
@@ -657,7 +679,11 @@ function normalizeSubmissionLike<TData, TSuccess>(
   }
 
   if ('ok' in result && result.ok === true) {
-    return result
+    return {
+      ok: true,
+      status: result.status,
+      data: result.data,
+    }
   }
 
   return createSuccessfulSubmission(schemaDefinition, values) as FormSubmissionResult<TData>
@@ -903,7 +929,7 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
           }
         }
 
-        let response: ClientSubmitResult<TData, TSuccess>
+        let response: ClientSubmitResult<TData, TSuccess> | void
         try {
           response = await submitter({
             action: options.action,
@@ -911,11 +937,18 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
             values: localSubmission.data,
             formData,
           })
-        } catch {
-          return applyServerState(createTransportFailure(state.values))
+        } catch (error) {
+          return applyServerState(
+            validationExceptionToFailure<TData>(error, state.values)
+              ?? createTransportFailure(state.values),
+          )
         }
 
-        return applyServerState(response)
+        return applyServerState(response ?? {
+          ok: true,
+          status: 204,
+          data: undefined,
+        } as FormSuccessPayload<TSuccess>)
       } finally {
         state.submitting = false
         notifyListeners(state)

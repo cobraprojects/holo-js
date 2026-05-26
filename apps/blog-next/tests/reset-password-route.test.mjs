@@ -32,17 +32,9 @@ function createRequest() {
 
 function createValidSubmission() {
   return {
-    valid: true,
-    data: {
-      token: 'reset-token',
-      password: 'password123',
-      passwordConfirmation: 'password123',
-    },
-    fail: vi.fn(),
-    success: vi.fn(data => ({
-      ok: true,
-      data,
-    })),
+    token: 'reset-token',
+    password: 'password123',
+    passwordConfirmation: 'password123',
   }
 }
 
@@ -52,80 +44,46 @@ describe('POST /api/reset-password', () => {
   })
 
   it('returns validation failures without attempting a password reset', async () => {
-    const failure = {
-      ok: false,
-      status: 422,
-      errors: {
-        token: ['Reset token is required.'],
-      },
-    }
-    const submission = {
-      valid: false,
-      fail: vi.fn(() => failure),
-    }
+    const validationError = new Error('Validation failed.')
     const request = createRequest()
 
-    mocks.validate.mockResolvedValue(submission)
+    mocks.validate.mockRejectedValue(validationError)
 
-    const response = await resetPasswordRoute.POST(request)
+    await expect(resetPasswordRoute.POST(request)).rejects.toBe(validationError)
 
-    expect(response.status).toBe(422)
-    await expect(readJson(response)).resolves.toEqual(failure)
     expect(mocks.validate).toHaveBeenCalledWith(request, mocks.resetPasswordForm)
     expect(mocks.resetPassword).not.toHaveBeenCalled()
   })
 
-  it('maps password reset errors onto the form submission response', async () => {
-    const failure = {
-      ok: false,
-      status: 400,
-      errors: {
-        token: ['This reset link is invalid.'],
-      },
-    }
+  it('throws password reset errors without mapping them in userland', async () => {
+    const resetError = new Error('This reset link is invalid.')
     const submission = createValidSubmission()
-    submission.fail.mockReturnValue(failure)
     mocks.validate.mockResolvedValue(submission)
-    mocks.resetPassword.mockResolvedValue({
-      error: {
-        status: 400,
-        fields: failure.errors,
-      },
+    mocks.resetPassword.mockImplementation(async () => {
+      throw resetError
     })
 
-    const response = await resetPasswordRoute.POST(createRequest())
+    await expect(resetPasswordRoute.POST(createRequest())).rejects.toBe(resetError)
 
-    expect(response.status).toBe(400)
-    await expect(readJson(response)).resolves.toEqual(failure)
-    expect(mocks.resetPassword).toHaveBeenCalledWith(submission.data)
-    expect(submission.fail).toHaveBeenCalledWith({
-      status: 400,
-      errors: failure.errors,
-    })
-    expect(submission.success).not.toHaveBeenCalled()
+    expect(mocks.resetPassword).toHaveBeenCalledWith(submission)
   })
 
   it('returns a success payload after resetting the password', async () => {
     const submission = createValidSubmission()
     mocks.validate.mockResolvedValue(submission)
-    mocks.resetPassword.mockResolvedValue({
-      error: null,
-    })
+    mocks.resetPassword.mockResolvedValue(undefined)
 
     const response = await resetPasswordRoute.POST(createRequest())
 
     expect(response.status).toBe(200)
     await expect(readJson(response)).resolves.toEqual({
       ok: true,
+      status: 200,
       data: {
         message: 'Password reset successfully. You can sign in with your new password.',
         redirectTo: '/login',
       },
     })
-    expect(mocks.resetPassword).toHaveBeenCalledWith(submission.data)
-    expect(submission.success).toHaveBeenCalledWith({
-      message: 'Password reset successfully. You can sign in with your new password.',
-      redirectTo: '/login',
-    })
+    expect(mocks.resetPassword).toHaveBeenCalledWith(submission)
   })
 })

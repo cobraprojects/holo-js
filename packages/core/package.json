@@ -98,6 +98,7 @@
   },
   "devDependencies": {
     "@holo-js/auth": "catalog:",
+    "@holo-js/auth-social-google": "catalog:",
     "@holo-js/authorization": "catalog:",
     "@holo-js/events": "catalog:",
     "@holo-js/mail": "catalog:",

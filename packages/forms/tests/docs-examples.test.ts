@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { field, schema, validate } from '../src'
+import { field, safeParse, schema } from '../src'
 import { createFormClient as useForm } from '../src/internal/client'
 
 describe('@holo-js/forms documented examples', () => {
@@ -24,7 +24,7 @@ describe('@holo-js/forms documented examples', () => {
       }),
     })
 
-    const registerFailure = await validate(registerFailureRequest, registerUser)
+    const registerFailure = await safeParse(registerFailureRequest, registerUser)
     expect(registerFailure.valid).toBe(false)
     if (!registerFailure.valid) {
       expect(registerFailure.errors.first('email')).toBeDefined()
@@ -54,7 +54,7 @@ describe('@holo-js/forms documented examples', () => {
       }),
     })
 
-    const registerSuccess = await validate(registerSuccessRequest, registerUser)
+    const registerSuccess = await safeParse(registerSuccessRequest, registerUser)
     expect(registerSuccess.valid).toBe(true)
     if (registerSuccess.valid) {
       expect(registerSuccess.data.email).toBe('ava@example.com')
@@ -83,7 +83,7 @@ describe('@holo-js/forms documented examples', () => {
       }),
     })
 
-    const passwordResetSubmission = await validate(passwordResetRequest, passwordReset)
+    const passwordResetSubmission = await safeParse(passwordResetRequest, passwordReset)
     expect(passwordResetSubmission.valid).toBe(true)
     if (passwordResetSubmission.valid) {
       expect(passwordResetSubmission.success({
@@ -162,7 +162,7 @@ describe('@holo-js/forms documented examples', () => {
     })
     await profileForm.setValue('avatar', image)
 
-    const uploadSubmission = await validate(profileForm.values, updateProfile)
+    const uploadSubmission = await safeParse(profileForm.values, updateProfile)
     expect(uploadSubmission.valid).toBe(false)
     if (!uploadSubmission.valid) {
       expect(uploadSubmission.errors.first('profile.city')).toBe('This field is required.')

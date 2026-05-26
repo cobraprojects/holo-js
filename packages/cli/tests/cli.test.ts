@@ -10366,6 +10366,7 @@ export default defineConfig({
   it('manages SvelteKit hook entrypoints during prepare and preserves user hook extensions separately', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
+    await linkWorkspaceDb(projectRoot)
     await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
     await writeProjectFile(projectRoot, 'src/hooks.ts', 'export const reroute = ({ url }) => url.pathname\n')
     await writeProjectFile(projectRoot, 'src/hooks.server.ts', 'export const handleFetch = async ({ request, fetch }) => fetch(request)\n')
@@ -10412,6 +10413,11 @@ export default defineConfig({
     expect(generatedServerHooks).toContain('error as svelteKitError')
     expect(generatedServerHooks).toContain('cause.name !== \'AuthorizationError\'')
     expect(generatedServerHooks).toContain('svelteKitError(cause.decision.status, cause.message)')
+    expect(generatedServerHooks).toContain('serializeHoloValidationException')
+    expect(generatedServerHooks).toContain('adapterSvelteKitInternals.serializeValidationException(cause)')
+    expect(generatedServerHooks).toContain('adapterSvelteKitInternals.mapValidationActionResponse(event, response)')
+    expect(generatedServerHooks).toContain('adapterSvelteKitInternals.rememberValidationActionFailure(input.event, validationPayload)')
+    expect(generatedServerHooks).toContain('export const handleError = holoHandleError')
     expect(generatedServerHooks).not.toContain('event.url.pathname =')
 
     // Legacy .user.ts files are deleted, not left as empty artifacts.

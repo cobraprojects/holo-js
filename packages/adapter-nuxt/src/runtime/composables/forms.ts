@@ -1,5 +1,7 @@
 import { onScopeDispose, reactive, shallowRef, watchEffect } from 'vue'
+import { useCookie } from '#app'
 import type { FormSchema, InferFormData } from '@holo-js/forms'
+import { DEFAULT_VALIDATION_BAG, createErrorBag, type ValidationErrorBag } from '@holo-js/validation'
 import {
   type InferFormFieldTree,
   type UseFormOptions,
@@ -23,6 +25,13 @@ type FormValuesBridge = {
 }
 
 type FormValuesGetter = () => FormValuesBridge
+type FlashedValidationPayload = {
+  readonly bag?: string
+  readonly errors?: Record<string, readonly string[]>
+}
+type NuxtCookieValue = string | FlashedValidationPayload | null
+
+const FORM_FAILURE_COOKIE = 'holo_form_failure'
 
 const ARRAY_MUTATION_METHODS = new Set([
   'copyWithin',
@@ -48,6 +57,74 @@ function isLeafValue(value: unknown): boolean {
   return value instanceof Date
     || value instanceof Blob
     || (!Array.isArray(value) && !isPlainObject(value))
+}
+
+function readBrowserCookie(name: string): string | undefined {
+  const cookie = (globalThis as { readonly document?: { readonly cookie?: string } }).document?.cookie
+  if (!cookie) {
+    return undefined
+  }
+
+  for (const segment of cookie.split(';')) {
+    const trimmed = segment.trim()
+    const separator = trimmed.indexOf('=')
+    if (separator <= 0) {
+      continue
+    }
+
+    if (trimmed.slice(0, separator) === name) {
+      return trimmed.slice(separator + 1)
+    }
+  }
+
+  return undefined
+}
+
+function readCookie(name: string): NuxtCookieValue | undefined {
+  try {
+    const cookie = useCookie<NuxtCookieValue>(name)
+    if (typeof cookie.value === 'string' || isPlainObject(cookie.value)) {
+      return cookie.value
+    }
+  } catch {
+    return readBrowserCookie(name)
+  }
+
+  return readBrowserCookie(name)
+}
+
+function parseFlashedValidationPayload(): FlashedValidationPayload | undefined {
+  const value = readCookie(FORM_FAILURE_COOKIE)
+  if (!value) {
+    return undefined
+  }
+
+  try {
+    const decoded = typeof value === 'string'
+      ? JSON.parse(decodeURIComponent(value)) as unknown
+      : value
+    if (!isPlainObject(decoded) || !isPlainObject(decoded.errors)) {
+      return undefined
+    }
+
+    return {
+      bag: typeof decoded.bag === 'string' ? decoded.bag : DEFAULT_VALIDATION_BAG,
+      errors: decoded.errors as Record<string, readonly string[]>,
+    }
+  } catch {
+    return undefined
+  }
+}
+
+export function useValidationErrors<TData = Record<string, unknown>>(
+  bag = DEFAULT_VALIDATION_BAG,
+): ValidationErrorBag<TData> {
+  const payload = parseFlashedValidationPayload()
+  if (!payload || (payload.bag ?? DEFAULT_VALIDATION_BAG) !== bag) {
+    return createErrorBag<TData>()
+  }
+
+  return createErrorBag<TData>(payload.errors ?? {})
 }
 
 function getValueAtPath(root: unknown, path: string): unknown {

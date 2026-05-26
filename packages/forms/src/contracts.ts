@@ -4,8 +4,10 @@ import {
   type SchemaInputShape,
   type ValidationErrorBag,
   type ValidationSchema,
+  ValidationException,
   createErrorBag,
-  validate as validateInput,
+  safeParse as safeParseInput,
+  validationInternals,
 } from '@holo-js/validation'
 import { FormContractError } from './errors'
 import {
@@ -57,6 +59,7 @@ export interface SerializedFormSubmission<TData> {
 
 export interface FormSecurityOptions {
   readonly throttle?: string
+  readonly bag?: string
 }
 
 type RequestLikeBody =
@@ -724,7 +727,7 @@ async function createSecurityFailureSubmission<TShape extends SchemaInputShape>(
   let flattenedErrors: Record<string, readonly string[]> = {}
 
   try {
-    const inspection = await validateInput(input.clone(), schemaDefinition as ValidationSchema<TShape>)
+    const inspection = await safeParseInput(input.clone(), schemaDefinition as ValidationSchema<TShape>)
 
     if (inspection.valid) {
       values = inspection.data
@@ -752,7 +755,7 @@ async function createSecurityFailureSubmission<TShape extends SchemaInputShape>(
   )
 }
 
-export async function validate<TShape extends SchemaInputShape>(
+export async function safeParse<TShape extends SchemaInputShape>(
   input: FormLikeValidationInput | FormRequestLikeInput,
   schemaDefinition: FormSchema<TShape>,
   options: FormSecurityOptions = {},
@@ -768,7 +771,7 @@ export async function validate<TShape extends SchemaInputShape>(
 
   if (usesSecurityOptions && !normalizedRequestInput) {
     throw new FormContractError(
-      'Security-aware validate() options require a Request or request-like event input.',
+      'Security-aware safeParse() options require a Request or request-like event input.',
     )
   }
 
@@ -778,7 +781,7 @@ export async function validate<TShape extends SchemaInputShape>(
     try {
       const { loadSecurityModule } = await import('./security')
       const security = await loadSecurityModule()
-      const inspection = await validateInput(request.clone(), schemaDefinition as ValidationSchema<TShape>)
+      const inspection = await safeParseInput(request.clone(), schemaDefinition as ValidationSchema<TShape>)
       const throttleValues = inspection.valid ? inspection.data : inspection.values
       validatedSubmission = inspection.valid
         ? createSuccessfulSubmission(schemaDefinition, inspection.data)
@@ -823,13 +826,41 @@ export async function validate<TShape extends SchemaInputShape>(
     return validatedSubmission
   }
 
-  const result = await validateInput(validationInput as FormLikeValidationInput, schemaDefinition as ValidationSchema<TShape>)
+  const result = await safeParseInput(validationInput as FormLikeValidationInput, schemaDefinition as ValidationSchema<TShape>)
 
   if (result.valid) {
     return createSuccessfulSubmission(schemaDefinition, result.data)
   }
 
   return createFailedSubmission(schemaDefinition, result.values, result.errors.flatten())
+}
+
+export async function validate<TShape extends SchemaInputShape>(
+  input: FormLikeValidationInput | FormRequestLikeInput,
+  schemaDefinition: FormSchema<TShape>,
+  options: FormSecurityOptions = {},
+): Promise<InferSchemaData<TShape>> {
+  const result = await safeParse(input, schemaDefinition, options)
+
+  if (result.valid) {
+    return result.data
+  }
+
+  const failure = result.fail()
+  const exception = validationInternals.setValidationExceptionValues(
+    ValidationException.withMessages(result.errors.flatten(), {
+      bag: options.bag,
+    }),
+    result.values,
+  )
+
+  validationInternals.setValidationExceptionStatus(exception, failure.status)
+  validationInternals.setValidationExceptionMetadata(exception, {
+    ...(typeof failure.retryAfterSeconds === 'number' ? { retryAfterSeconds: failure.retryAfterSeconds } : {}),
+    ...(typeof failure.retryAt === 'string' ? { retryAt: failure.retryAt } : {}),
+  })
+
+  return validationInternals.throwValidationException(exception)
 }
 
 export const formsInternals = {

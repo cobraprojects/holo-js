@@ -37,10 +37,14 @@ export function isFormSchema(value: unknown): value is FormSchema {
 
 export {
   createErrorBag,
+  DEFAULT_VALIDATION_BAG,
   defineSchema,
   field,
+  isValidationException,
   parse,
   safeParse,
+  ValidationException,
+  validationInternals,
 } from '@holo-js/validation'
 
 export type {
@@ -53,7 +57,9 @@ export type {
   StandardSchemaV1Issue,
   StandardSchemaV1Props,
   StandardSchemaV1Result,
+  SerializedValidationException,
   ValidationErrorBag,
+  ValidationExceptionOptions,
   ValidationFailure,
   ValidationResult,
   ValidationSchema,

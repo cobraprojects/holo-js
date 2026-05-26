@@ -5,6 +5,7 @@ describe('@holo-js/adapter-nuxt client', () => {
   afterEach(() => {
     vi.resetModules()
     vi.clearAllMocks()
+    vi.unstubAllGlobals()
     vi.doUnmock('#imports')
   })
 
@@ -58,6 +59,38 @@ describe('@holo-js/adapter-nuxt client', () => {
 
     expect(form.values.email).toBe('ava@example.com')
     expect((globalThis as unknown as { __holoNuxtClientDisposed?: boolean }).__holoNuxtClientDisposed).toBe(true)
+  })
+
+  it('reads flashed validation errors from the default and named bags', async () => {
+    vi.doMock('vue', () => ({
+      onScopeDispose() {},
+      reactive<TValue extends object>(value: TValue) {
+        return value
+      },
+      shallowRef<TValue>(value: TValue) {
+        return { value }
+      },
+      watchEffect() {
+        return () => {}
+      },
+    }))
+
+    const payload = encodeURIComponent(JSON.stringify({
+      bag: 'post',
+      errors: {
+        image: ['The selected file must be 2 MB or smaller.'],
+      },
+    }))
+    vi.stubGlobal('document', {
+      cookie: `holo_form_failure=${payload}`,
+    })
+
+    const { useValidationErrors } = await import('../src/runtime/composables/forms')
+    const defaultBag = useValidationErrors()
+    const postBag = useValidationErrors('post')
+
+    expect(defaultBag.has('image')).toBe(false)
+    expect(postBag.first('image')).toBe('The selected file must be 2 MB or smaller.')
   })
 
   it('exposes nested keys that are added after the wrapper is created', async () => {

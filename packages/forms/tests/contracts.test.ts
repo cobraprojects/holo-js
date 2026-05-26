@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   FormContractError,
+  ValidationException,
   createFailedSubmission,
   createSuccessfulSubmission,
   defineSchema,
@@ -8,6 +9,7 @@ import {
   formsInternals,
   isFormSchema,
   schema,
+  safeParse,
   validate,
   type FormFailureErrors,
 } from '../src'
@@ -86,6 +88,49 @@ afterEach(() => {
 })
 
 describe('@holo-js/forms contracts', () => {
+  it('returns validated data from validate and throws validation exceptions for failures', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+      password: field.password().required(),
+    })
+
+    const data = await validate({
+      email: 'ava@example.com',
+      password: 'secret123',
+    }, login)
+
+    expect(data).toEqual({
+      email: 'ava@example.com',
+      password: 'secret123',
+    })
+
+    await expect(validate({
+      email: 'bad',
+      password: '',
+    }, login, { bag: 'login' })).rejects.toMatchObject({
+      name: 'ValidationException',
+      bag: 'login',
+      status: 422,
+    })
+
+    try {
+      await validate({
+        email: 'bad',
+        password: '',
+      }, login)
+      throw new Error('Expected validation to fail.')
+    } catch (error) {
+      expect(error).toBeInstanceOf(ValidationException)
+      const exception = error as ValidationException
+      expect(exception.errors.first('email')).toBeDefined()
+      expect(exception.errors.first('password')).toBe('This field is required.')
+      expect(exception.values).toEqual({
+        email: 'bad',
+        password: '',
+      })
+    }
+  })
+
   it('creates form schemas from shapes and validation schemas', () => {
     const direct = schema({
       email: field.string().required().email(),
@@ -188,7 +233,7 @@ describe('@holo-js/forms contracts', () => {
       },
     })
 
-    const success = await validate({
+    const success = await safeParse({
       email: 'ava@example.com',
       age: '42',
       profile: {
@@ -208,7 +253,7 @@ describe('@holo-js/forms contracts', () => {
       data: { message: 'ok' },
     })
 
-    const failure = await validate({
+    const failure = await safeParse({
       email: 'bad',
       age: '4.2',
       profile: {
@@ -252,7 +297,7 @@ describe('@holo-js/forms contracts', () => {
     })
     const avatar = new File(['avatar'], 'avatar.png', { type: 'image/png' })
 
-    const failure = await validate({
+    const failure = await safeParse({
       avatar,
     }, profile)
 
@@ -286,7 +331,7 @@ describe('@holo-js/forms contracts', () => {
       nationalId: field.string().sensitive().required(),
     })
 
-    const failure = await validate({
+    const failure = await safeParse({
       email: 'bad',
       password: 'super-secret',
       passwordConfirmation: 'super-secret',
@@ -435,7 +480,7 @@ describe('@holo-js/forms contracts', () => {
       path: field.string().required(),
     })
 
-    const submission = await validate({
+    const submission = await safeParse({
       method: 'POST',
       url: '/login',
       headers: 'content-type: application/x-www-form-urlencoded',
@@ -460,7 +505,7 @@ describe('@holo-js/forms contracts', () => {
       email: field.string().required().email(),
     })
 
-    const submission = await validate({
+    const submission = await safeParse({
       method: 'POST',
       path: '/forgot-password',
       headers: {
@@ -482,7 +527,7 @@ describe('@holo-js/forms contracts', () => {
     })
   })
 
-  it('runs throttle checks through validate() and returns form-shaped security failures', async () => {
+  it('runs throttle checks through safeParse() and returns form-shaped security failures', async () => {
     const login = schema({
       email: field.string().required().email(),
     })
@@ -499,12 +544,12 @@ describe('@holo-js/forms contracts', () => {
       }),
     })
 
-    const firstAllowed = await validate(allowedRequest, login, {
+    const firstAllowed = await safeParse(allowedRequest, login, {
       throttle: 'login',
     })
     expect(firstAllowed.valid).toBe(true)
 
-    const differentEmail = await validate(new Request('https://app.test/login', {
+    const differentEmail = await safeParse(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
         'x-forwarded-for': '203.0.113.7',
@@ -517,7 +562,7 @@ describe('@holo-js/forms contracts', () => {
     })
     expect(differentEmail.valid).toBe(true)
 
-    const throttled = await validate(new Request('https://app.test/login', {
+    const throttled = await safeParse(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
         'x-forwarded-for': '203.0.113.7',
@@ -543,6 +588,29 @@ describe('@holo-js/forms contracts', () => {
       retryAfterSeconds: 60,
       retryAt: '2026-05-20T12:34:56.000Z',
     })
+
+    try {
+      await validate(new Request('https://app.test/login', {
+        method: 'POST',
+        headers: {
+          'x-forwarded-for': '203.0.113.7',
+        },
+        body: new URLSearchParams({
+          email: 'other@example.com',
+        }),
+      }), login, {
+        throttle: 'login',
+      })
+      throw new Error('Expected throttled validation to fail.')
+    } catch (error) {
+      expect(error).toBeInstanceOf(ValidationException)
+      const exception = error as ValidationException
+      expect(exception.toJSON()).toMatchObject({
+        status: 429,
+        retryAfterSeconds: 60,
+        retryAt: '2026-05-20T12:34:56.000Z',
+      })
+    }
   })
 
   it('requires Request inputs for throttle-aware validation', async () => {
@@ -552,15 +620,15 @@ describe('@holo-js/forms contracts', () => {
 
     ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
 
-    await expect(validate({
+    await expect(safeParse({
       email: 'ava@example.com',
     }, login, {
       throttle: 'login',
-    })).rejects.toThrow('Security-aware validate() options require a Request or request-like event input.')
+    })).rejects.toThrow('Security-aware safeParse() options require a Request or request-like event input.')
 
-    await expect(validate(new FormData(), login, {
+    await expect(safeParse(new FormData(), login, {
       throttle: 'login',
-    })).rejects.toThrow('Security-aware validate() options require a Request or request-like event input.')
+    })).rejects.toThrow('Security-aware safeParse() options require a Request or request-like event input.')
   })
 
   it('accepts h3-style event objects for security-aware validation', async () => {
@@ -587,12 +655,12 @@ describe('@holo-js/forms contracts', () => {
       },
     }
 
-    const firstAllowed = await validate(event, login, {
+    const firstAllowed = await safeParse(event, login, {
       throttle: 'login',
     })
     expect(firstAllowed.valid).toBe(true)
 
-    const throttled = await validate(event, login, {
+    const throttled = await safeParse(event, login, {
       throttle: 'login',
     })
     expect(throttled.valid).toBe(false)
@@ -634,7 +702,7 @@ describe('@holo-js/forms contracts', () => {
       },
     }
 
-    const submission = await validate(event, login, {
+    const submission = await safeParse(event, login, {
       throttle: 'login',
     })
     expect(submission.valid).toBe(true)
@@ -666,7 +734,7 @@ describe('@holo-js/forms contracts', () => {
     const formData = new FormData()
     formData.set('email', 'ava@example.com')
 
-    const firstAllowed = await validate(formData, login, {
+    const firstAllowed = await safeParse(formData, login, {
       throttle: 'login',
     })
 
@@ -679,7 +747,7 @@ describe('@holo-js/forms contracts', () => {
       email: 'ava@example.com',
     })
 
-    const throttled = await validate(formData, login, {
+    const throttled = await safeParse(formData, login, {
       throttle: 'login',
     })
     expect(throttled.valid).toBe(false)
@@ -703,7 +771,7 @@ describe('@holo-js/forms contracts', () => {
     })
     const noRefererFormData = new FormData()
     noRefererFormData.set('email', 'noreferer@example.com')
-    const noRefererResult = await validate(noRefererFormData, login, {
+    const noRefererResult = await safeParse(noRefererFormData, login, {
       throttle: 'login',
     })
     expect(noRefererResult.valid).toBe(true)
@@ -717,7 +785,7 @@ describe('@holo-js/forms contracts', () => {
     })
     const hostOnlyFormData = new FormData()
     hostOnlyFormData.set('email', 'hostonly@example.com')
-    const hostOnlyResult = await validate(hostOnlyFormData, login, {
+    const hostOnlyResult = await safeParse(hostOnlyFormData, login, {
       throttle: 'login',
     })
     expect(hostOnlyResult.valid).toBe(true)
@@ -730,15 +798,15 @@ describe('@holo-js/forms contracts', () => {
     })
     const defaultHostFormData = new FormData()
     defaultHostFormData.set('email', 'default@example.com')
-    const defaultHostResult = await validate(defaultHostFormData, login, {
+    const defaultHostResult = await safeParse(defaultHostFormData, login, {
       throttle: 'login',
     })
     expect(defaultHostResult.valid).toBe(true)
 
     runtime.__holoFormsNextHeadersImport__ = async () => ({})
-    await expect(validate(new FormData(), login, {
+    await expect(safeParse(new FormData(), login, {
       throttle: 'login',
-    })).rejects.toThrow('Security-aware validate() options require a Request or request-like event input.')
+    })).rejects.toThrow('Security-aware safeParse() options require a Request or request-like event input.')
   })
 
   it('rejects security-aware FormData when ambient Next headers are unavailable', async () => {
@@ -753,9 +821,9 @@ describe('@holo-js/forms contracts', () => {
     const formData = new FormData()
     formData.set('email', 'ava@example.com')
 
-    await expect(validate(formData, login, {
+    await expect(safeParse(formData, login, {
       throttle: 'login',
-    })).rejects.toThrow('Security-aware validate() options require a Request or request-like event input.')
+    })).rejects.toThrow('Security-aware safeParse() options require a Request or request-like event input.')
   })
 
   it('reuses embedded Request instances when normalizing request-like inputs', () => {
@@ -785,7 +853,7 @@ describe('@holo-js/forms contracts', () => {
       email: field.string().required().email(),
     })
 
-    const webResult = await validate({
+    const webResult = await safeParse({
       web: {
         request: new Request('https://app.test/web', {
           method: 'POST',
@@ -801,7 +869,7 @@ describe('@holo-js/forms contracts', () => {
     }
     expect(webResult.data.email).toBe('web@example.com')
 
-    const reqResult = await validate({
+    const reqResult = await safeParse({
       req: new Request('https://app.test/node', {
         method: 'POST',
         body: new URLSearchParams({
@@ -821,7 +889,7 @@ describe('@holo-js/forms contracts', () => {
       email: field.string().required().email(),
     })
 
-    const getResult = await validate({
+    const getResult = await safeParse({
       method: 'GET',
       path: '/login',
       node: {
@@ -842,7 +910,7 @@ describe('@holo-js/forms contracts', () => {
     }
     expect(getResult.values).toEqual({})
 
-    const postResult = await validate({
+    const postResult = await safeParse({
       method: 'POST',
       path: '/login',
       node: {
@@ -860,7 +928,7 @@ describe('@holo-js/forms contracts', () => {
     }
     expect(postResult.values).toEqual({})
 
-    const topLevelPostResult = await validate({
+    const topLevelPostResult = await safeParse({
       method: 'POST',
       path: '/login',
       headers: {
@@ -1016,7 +1084,7 @@ describe('@holo-js/forms contracts', () => {
       get: expect.any(Function),
     })
 
-    const structuredSubmission = await validate({
+    const structuredSubmission = await safeParse({
       web: {
         request: {
           method: 'POST',
@@ -1217,7 +1285,7 @@ describe('@holo-js/forms contracts', () => {
 
     ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
 
-    const result = await validate(new Request('https://app.test/login', {
+    const result = await safeParse(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
         'x-forwarded-for': '203.0.113.7',
@@ -1240,7 +1308,7 @@ describe('@holo-js/forms contracts', () => {
 
     ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
 
-    const firstAttempt = await validate(new Request('https://app.test/login', {
+    const firstAttempt = await safeParse(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
         cookie: 'XSRF-TOKEN=login-token',
@@ -1256,7 +1324,7 @@ describe('@holo-js/forms contracts', () => {
 
     expect(firstAttempt.valid).toBe(false)
 
-    const throttled = await validate(new Request('https://app.test/login', {
+    const throttled = await safeParse(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
         cookie: 'XSRF-TOKEN=login-token',
@@ -1280,7 +1348,7 @@ describe('@holo-js/forms contracts', () => {
     expect(throttled.fail().status).toBe(429)
   })
 
-  it('rethrows unexpected security errors from validate()', async () => {
+  it('rethrows unexpected security errors from safeParse()', async () => {
     const login = schema({
       email: field.string().required().email(),
     })
@@ -1291,7 +1359,7 @@ describe('@holo-js/forms contracts', () => {
       },
     }
 
-    await expect(validate(new Request('https://app.test/login', {
+    await expect(safeParse(new Request('https://app.test/login', {
       method: 'POST',
       body: new URLSearchParams({
         email: 'ava@example.com',
@@ -1314,7 +1382,7 @@ describe('@holo-js/forms contracts', () => {
       },
     }
 
-    const result = await validate(new Request('https://app.test/login', {
+    const result = await safeParse(new Request('https://app.test/login', {
       method: 'POST',
       body: new URLSearchParams({
         email: 'ava@example.com',
@@ -1345,7 +1413,7 @@ describe('@holo-js/forms contracts', () => {
       throw error
     }
 
-    const result = await validate(new Request('https://app.test/login', {
+    const result = await safeParse(new Request('https://app.test/login', {
       method: 'POST',
       body: new URLSearchParams({
         email: 'ava@example.com',
@@ -1378,7 +1446,7 @@ describe('@holo-js/forms contracts', () => {
       throw error
     }
 
-    const result = await validate(new Request('https://app.test/login', {
+    const result = await safeParse(new Request('https://app.test/login', {
       method: 'POST',
       body: new URLSearchParams({
         email: 'bad',
@@ -1418,7 +1486,7 @@ describe('@holo-js/forms contracts', () => {
     })
     await request.text()
 
-    const result = await validate(request, login, {
+    const result = await safeParse(request, login, {
       throttle: 'login',
     })
 

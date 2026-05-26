@@ -1299,7 +1299,7 @@ describe('@holo-js/forms client', () => {
     const result = await client.submit()
 
     expect('ok' in result && result.ok === false).toBe(true)
-    if ('ok' in result && result.ok === false && 'status' in result) {
+    if ('ok' in result && result.ok === false && 'status' in result && 'valid' in result && result.valid === false) {
       expect(result.status).toBe(409)
       expect(result.errors.email).toEqual(['Email is already taken.'])
     }
