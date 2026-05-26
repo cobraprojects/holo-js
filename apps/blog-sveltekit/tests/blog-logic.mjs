@@ -276,7 +276,7 @@ async function signInEditor() {
   authorizationInternals.configureAuthorizationAuthIntegration({
     hasGuard: guardName => ['admin', 'api', 'web'].includes(guardName),
     resolveDefaultActor: () => editor,
-    resolveGuardActor: guardName => guardName === 'web' ? editor : null,
+    resolveGuardActor: guardName => guardName === 'web' || guardName === 'admin' ? editor : null,
   })
 }
 
@@ -480,6 +480,8 @@ try {
     () => authorization.guard('admin').authorize('delete', featuredPost),
     AuthorizationError,
   )
+  await signInEditor()
+  await authorization.guard('admin').authorize('update', featuredPost)
 
   const dashboard = await getAdminDashboardData()
   assert.equal(dashboard.postCount, 2)

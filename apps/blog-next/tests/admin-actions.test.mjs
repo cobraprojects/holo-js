@@ -188,6 +188,7 @@ describe('admin actions', () => {
     expect(mocks.auth).toHaveBeenCalledTimes(1)
     expect(mocks.authorize).toHaveBeenCalledWith(...expectedAuth)
     expect(mutate).toHaveBeenCalledTimes(1)
+    expect(mocks.authorize.mock.invocationCallOrder[0]).toBeLessThan(mutate.mock.invocationCallOrder[0])
     expect(mocks.redirect).toHaveBeenCalledWith(redirectTo)
   })
 

@@ -12,6 +12,8 @@ export const load = (async ({ params }) => {
     throw error(404, 'Category not found')
   }
 
+  await authorize('update', category)
+
   return { category }
 }) satisfies PageServerLoad
 
