@@ -1,14 +1,20 @@
 import { fail, redirect } from '@sveltejs/kit'
 import { loginUsing, register } from '@holo-js/auth'
 import { validate } from '@holo-js/forms'
+import { csrf } from '@holo-js/security'
 
 import { registerForm } from '$lib/schemas/auth'
-import type { Actions } from './$types'
+import type { Actions, PageServerLoad } from './$types'
+
+export const load = (async ({ request }) => ({
+  csrf: {
+    input: await csrf.input(request),
+  },
+})) satisfies PageServerLoad
 
 export const actions = {
   default: async ({ request }) => {
     const submission = await validate(request, registerForm, {
-      csrf: true,
       throttle: 'register',
     })
 

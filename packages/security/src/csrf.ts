@@ -1,5 +1,11 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import { SecurityCsrfError, type SecurityCsrfFacade, type SecurityCsrfField, type SecurityProtectOptions } from './contracts'
+import {
+  SecurityCsrfError,
+  type SecurityCsrfFacade,
+  type SecurityCsrfField,
+  type SecurityCsrfInput,
+  type SecurityProtectOptions,
+} from './contracts'
 import { rateLimit } from './rate-limit'
 import { getSecurityRuntime } from './runtime'
 
@@ -163,6 +169,38 @@ function getCookieToken(request: Request): string | undefined {
   return parseCookieHeader(request.headers.get('cookie'))[cookie]
 }
 
+function getHeaderToken(request: Request): string | undefined {
+  const { header } = getSecurityRuntime().config.csrf
+  return request.headers.get(header)?.trim() || undefined
+}
+
+function getRequestOrigin(request: Request): string | undefined {
+  const origin = request.headers.get('origin')?.trim()
+  if (origin) {
+    return origin
+  }
+
+  const referer = request.headers.get('referer')?.trim()
+  if (!referer) {
+    return undefined
+  }
+
+  try {
+    return new URL(referer).origin
+  } catch {
+    return undefined
+  }
+}
+
+function isSameOriginRequest(request: Request): boolean {
+  const requestOrigin = getRequestOrigin(request)
+  if (!requestOrigin) {
+    return false
+  }
+
+  return requestOrigin === new URL(request.url).origin
+}
+
 async function readFormToken(request: Request): Promise<string | undefined> {
   const { field } = getSecurityRuntime().config.csrf
   try {
@@ -172,16 +210,6 @@ async function readFormToken(request: Request): Promise<string | undefined> {
   } catch {
     return undefined
   }
-}
-
-async function getRequestToken(request: Request): Promise<string | undefined> {
-  const { header } = getSecurityRuntime().config.csrf
-  const headerToken = request.headers.get(header)?.trim()
-  if (headerToken) {
-    return headerToken
-  }
-
-  return await readFormToken(request)
 }
 
 async function verifyRequest(
@@ -197,13 +225,25 @@ async function verifyRequest(
   }
 
   const cookieToken = getCookieToken(request)
-  const requestToken = await getRequestToken(request)
-  if (
-    !cookieToken
-    || !requestToken
-    || cookieToken !== requestToken
-    || !isValidSignedCsrfToken(cookieToken)
-  ) {
+  if (!cookieToken || !isValidSignedCsrfToken(cookieToken)) {
+    throw new SecurityCsrfError()
+  }
+
+  const headerToken = getHeaderToken(request)
+  if (headerToken) {
+    if (headerToken !== cookieToken) {
+      throw new SecurityCsrfError()
+    }
+
+    return
+  }
+
+  if (isSameOriginRequest(request)) {
+    return
+  }
+
+  const requestToken = await readFormToken(request)
+  if (requestToken !== cookieToken) {
     throw new SecurityCsrfError()
   }
 }
@@ -257,6 +297,16 @@ export async function field(request: Request): Promise<SecurityCsrfField> {
   })
 }
 
+export async function input(request: Request): Promise<SecurityCsrfInput> {
+  const csrfField = await field(request)
+
+  return Object.freeze({
+    type: 'hidden' as const,
+    name: csrfField.name,
+    value: csrfField.value,
+  })
+}
+
 export async function cookie(request: Request, explicitToken?: string): Promise<string> {
   const config = getSecurityRuntime().config.csrf
   const value = explicitToken
@@ -286,6 +336,7 @@ export async function protect(request: Request, options: SecurityProtectOptions 
 export const csrf = Object.freeze({
   token,
   field,
+  input,
   cookie,
   verify,
 }) satisfies SecurityCsrfFacade
@@ -295,8 +346,10 @@ export const csrfInternals = {
   generatedTokenCache,
   getForwardedProto,
   getCookieToken,
+  getHeaderToken,
   isSecureRequest,
-  getRequestToken,
+  isSameOriginRequest,
+  readFormToken,
   isExcludedPath,
   isSafeMethod,
   matchesPathPattern,

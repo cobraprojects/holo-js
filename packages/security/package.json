@@ -20,6 +20,21 @@
       "import": "./dist/contracts.mjs",
       "default": "./dist/contracts.mjs"
     },
+    "./next/server": {
+      "types": "./dist/next/server.d.ts",
+      "import": "./dist/next/server.mjs",
+      "default": "./dist/next/server.mjs"
+    },
+    "./nuxt/server": {
+      "types": "./dist/nuxt/server.d.ts",
+      "import": "./dist/nuxt/server.mjs",
+      "default": "./dist/nuxt/server.mjs"
+    },
+    "./sveltekit/server": {
+      "types": "./dist/sveltekit/server.d.ts",
+      "import": "./dist/sveltekit/server.mjs",
+      "default": "./dist/sveltekit/server.mjs"
+    },
     "./drivers/redis-adapter": {
       "types": "./dist/drivers/redis-adapter.d.ts",
       "import": "./dist/drivers/redis-adapter.mjs",
@@ -41,16 +56,26 @@
     "@holo-js/config": "catalog:"
   },
   "peerDependencies": {
+    "h3": "catalog:",
+    "next": "catalog:",
     "ioredis": "catalog:"
   },
   "peerDependenciesMeta": {
+    "h3": {
+      "optional": true
+    },
+    "next": {
+      "optional": true
+    },
     "ioredis": {
       "optional": true
     }
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "h3": "catalog:",
     "ioredis": "catalog:",
+    "next": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

@@ -47,7 +47,6 @@ export type ClientSubmitResult<TData, TSuccess = unknown>
 export interface UseFormOptions<TData, TSuccess = unknown> {
   readonly action?: string
   readonly method?: string
-  readonly csrf?: boolean
   readonly validateOn?: ValidateOnMode
   readonly initialValues?: Partial<TData>
   readonly initialState?: SerializedFormSubmission<TData> | FormFailurePayload<TData> | null
@@ -866,9 +865,11 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
         const method = options.method ?? 'POST'
         const formData = buildFormData(state.values)
 
-        if (options.csrf === true && !isSafeMethod(method)) {
+        if (!isSafeMethod(method)) {
           const csrfField = await getClientCsrfField()
-          formData.set(csrfField.name, csrfField.value)
+          if (csrfField) {
+            formData.set(csrfField.name, csrfField.value)
+          }
         }
 
         let response: ClientSubmitResult<TData, TSuccess>

@@ -24,8 +24,6 @@ const loginForm = schema({
 
 export async function POST(request: Request) {
   const submission = await validate(request, loginForm, {
-    // Optional: requires @holo-js/security.
-    csrf: true,
     throttle: 'login',
   })
 
@@ -48,8 +46,6 @@ const loginForm = schema({
 
 export default defineEventHandler(async (event) => {
   const submission = await validate(event, loginForm, {
-    // Optional: requires @holo-js/security.
-    csrf: true,
     throttle: 'login',
   })
 
@@ -73,8 +69,6 @@ const loginForm = schema({
 export const actions = {
   default: async ({ request }) => {
     const submission = await validate(request, loginForm, {
-      // Optional: requires @holo-js/security.
-      csrf: true,
       throttle: 'login',
     })
 
@@ -107,9 +101,8 @@ export const login = form(loginForm, async (data, invalid) => {
 
 :::
 
-`csrf` and `throttle` in these examples are optional security features. Use them only when
-`@holo-js/security` is installed and configured. Without that package, call `validate(...)` without those
-options.
+`throttle` is optional and requires `@holo-js/security`. CSRF is not a `validate(...)` option; the
+framework middleware verifies unsafe requests before these handlers run.
 
 Use the framework-native request input with `validate(...)`: `request` in Next.js and SvelteKit, `event` in
 Nuxt `server/api/*`. `useRequestHeaders()` is a Nuxt app-context composable for pages, components, and plugins,
@@ -133,7 +126,6 @@ import { loginForm } from '@/lib/schemas/login'
 
 export async function loginAction(formData: FormData) {
   const submission = await validate(formData, loginForm, {
-    csrf: true,
     throttle: 'login',
   })
 
@@ -160,7 +152,6 @@ import { loginAction } from './actions'
 
 export default function LoginPage() {
   const form = useForm(loginForm, {
-    csrf: true,
     async submitter({ formData }) {
       return await loginAction(formData)
     },
@@ -177,7 +168,6 @@ import { loginForm } from '~/lib/schemas/login'
 
 const { refreshUser } = await useAuth()
 const form = useForm(loginForm, {
-  csrf: true,
   async submitter({ formData }) {
     const submission = await $fetch('/api/login', { method: 'POST', body: formData })
     if (submission?.ok === true && typeof submission.data?.redirectTo === 'string') {
@@ -201,7 +191,6 @@ import { loginForm } from '$lib/schemas/login'
 export const actions = {
   default: async ({ request }) => {
     const submission = await validate(request, loginForm, {
-      csrf: true,
       throttle: 'login',
     })
 
@@ -235,7 +224,7 @@ export const actions = {
 </script>
 
 <form method="post">
-  <input type="hidden" name={data.csrf.name} value={data.csrf.value} />
+  <input {...data.csrf.input}>
   <input name="email" type="email" value={login.values.email} on:input={(event) => login.fields.email.onInput(event.currentTarget.value)} />
   {#if login.errors.has('email')}<p>{login.errors.first('email')}</p>{/if}
   <input name="password" type="password" value={login.values.password} on:input={(event) => login.fields.password.onInput(event.currentTarget.value)} />
@@ -258,12 +247,17 @@ SvelteKit users have three options for server validation. All three accept Holo 
 
 Pick the one that fits your app. They are not mutually exclusive.
 
-`useForm(...)` may opt into `csrf: true`, but it does not expose `throttle`. The browser only forwards the CSRF
-token so the server can verify it. Throttling is always enforced on the server.
+When `@holo-js/security` is installed, `useForm(...)` automatically forwards the CSRF token for unsafe
+submissions. It does not expose `throttle`; throttling is always enforced on the server.
 
-For native SvelteKit form actions, render the CSRF field from server data as a hidden input and validate
-the action with `validate(request, schema, { csrf: true })`. The SvelteKit auth/framework hook creates the
-CSRF cookie before guest pages render, so app pages should not set the CSRF cookie manually.
+For native SvelteKit form actions, render the CSRF field from server data as a hidden input:
+
+```svelte
+<input {...data.csrf.input}>
+```
+
+The security middleware creates the CSRF cookie before pages render, so app pages should not set the
+CSRF cookie manually.
 
 ## Standard Schema interop
 

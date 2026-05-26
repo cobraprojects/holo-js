@@ -15,11 +15,11 @@ it is installed.
 
 - CSRF token helpers for server-rendered forms and browser clients
 - CORS headers for separate frontend/API deployments
-- request protection for plain routes with `protect(...)`
+- request protection for unsafe HTTP methods through framework middleware
+- route-level protection for plain routes with `protect(...)`
 - named rate limiters with `limit.perMinute(...)` and `limit.perHour(...)`
 - low-level `rateLimit(...)` and `clearRateLimit(...)` helpers
-- optional integration with `@holo-js/forms` through `validate(..., { csrf, throttle })` and
-  `useForm(..., { csrf: true })`
+- optional integration with `@holo-js/forms` for named request throttles
 
 `throttle` stays server-only. The browser never meaningfully enforces the rate limit.
 
@@ -116,7 +116,7 @@ Holo-JS falls back to standalone `host`, which may also be a Unix socket path.
 - `csrf.enabled` controls the default CSRF behavior for route protection.
 - `csrf.field` is the hidden form field name for normal form posts.
 - `csrf.header` is the header accepted for XHR and `fetch` requests.
-- `csrf.cookie` stores the signed token cookie that `useForm(..., { csrf: true })` reads on the client.
+- `csrf.cookie` stores the signed readable token cookie that browser clients and native forms submit back.
 - `csrf.except` skips CSRF verification for matching paths such as webhooks.
 - `cors.origins` lists frontend origins allowed to call the API.
 - `cors.credentials` must be true when the frontend uses cookie-backed auth with `fetch(..., { credentials: 'include' })`.
@@ -136,11 +136,13 @@ Holo-JS falls back to standalone `host`, which may also be a Unix socket path.
 
 ## Forms
 
-When `@holo-js/forms` is installed, forms can opt into security directly through `validate(...)`.
+CSRF is enforced by middleware before route handlers run. Form validation does not opt into CSRF; it only
+validates field data after the request passes the middleware.
 
-Validation failures and auth failures stay separate:
+Validation failures, CSRF failures, and auth failures stay separate:
 
-- `validate(...)` returns form validation failures such as missing fields, bad formats, CSRF errors, and throttling.
+- `csrfProtection()` verifies unsafe requests before route handlers run and returns `419` on token mismatch.
+- `validate(...)` returns form validation failures such as missing fields, bad formats, and throttling.
 - `login(...)`, `register(...)`, `verifyEmail(...)`, `requestPasswordReset(...)`, and `resetPassword(...)` return auth failures in `error`.
 - Auth failures are plain data with `status` and `fields`, so routes can forward them directly into the normal form response shape.
 
@@ -157,7 +159,6 @@ const loginForm = schema({
 
 export async function POST(request: Request) {
   const submission = await validate(request, loginForm, {
-    csrf: true,
     throttle: 'login',
   })
 
@@ -198,7 +199,6 @@ const registerUser = schema({
 
 export async function POST(request: Request) {
   const submission = await validate(request, registerUser, {
-    csrf: true,
     throttle: 'register',
   })
 
@@ -227,7 +227,7 @@ export async function POST(request: Request) {
 ### Failure statuses
 
 - validation failures return `422`
-- CSRF failures return `419`
+- CSRF middleware failures return `419`
 - rate-limit failures return `429`
 
 `submission.fail()` preserves that status:
@@ -240,12 +240,12 @@ return Response.json(submission.fail(), {
 
 ### `useForm(...)`
 
-`useForm(...)` only gets one security option:
+When `@holo-js/security` is installed and its CSRF cookie exists, `useForm(...)` automatically attaches
+the CSRF field to unsafe `FormData` submissions. No CSRF option is needed:
 
 ```ts
 const form = useForm(registerUser, {
   validateOn: 'blur',
-  csrf: true,
   initialValues: {
     name: '',
     email: '',
@@ -261,77 +261,73 @@ const form = useForm(registerUser, {
 })
 ```
 
-`csrf: true` tells the client helper to read the CSRF cookie and attach the hidden field to outgoing
-`FormData` for unsafe methods. The actual protection still happens on the server when `validate(...)`
-or `protect(...)` verifies the token.
+The actual protection happens in the framework middleware before route code runs. The middleware also
+passes the configured CSRF field and cookie names to browser helpers, so `config/security.ts` stays the
+only source of truth.
 
 Do not put `throttle` on `useForm(...)`. Throttling is enforced on the server through
 `validate(request, schema, { throttle: 'name' })` or `protect(request, { throttle: 'name' })`.
 
-If the browser should use custom CSRF field or cookie names instead of the defaults (`_token` and
-`XSRF-TOKEN`), configure the browser helper explicitly:
-
-```ts
-import { configureSecurityClient } from '@holo-js/security/client'
-
-configureSecurityClient({
-  config: {
-    csrf: {
-      field: '_csrf',
-      cookie: 'csrf-token',
-    },
-  },
-})
-```
-
 ## CSRF helpers
 
-Use the CSRF helpers directly when you are not going through `validate(...)`.
+Use CSRF helpers when rendering native server forms or building custom request handling. The framework
+middleware remains the normal verification path.
 
 ### Server-rendered hidden field
 
 ```ts
 import { csrf } from '@holo-js/security'
 
-const field = await csrf.field(request)
+const input = await csrf.input(request)
 ```
 
-`field` has the shape:
+`input` has the shape:
 
 ```ts
 {
+  type: 'hidden',
   name: '_token',
   value: '...',
 }
 ```
 
-### Setting the readable cookie
+### Global CSRF middleware
 
-`useForm(..., { csrf: true })` needs the CSRF cookie to already exist. In the Next.js, Nuxt, and
-SvelteKit auth/framework integrations, the route protection hooks create this cookie before guest pages
-render. Use `csrf.cookie(request)` directly only for custom server-rendered HTML outside those helpers:
+Framework middleware issues the readable CSRF cookie on safe requests and verifies unsafe requests before
+route actions run. Generated apps wire this globally. If you wire it manually, use the framework entrypoint:
 
-```ts
-import { csrf } from '@holo-js/security'
+::: code-group
 
-export async function GET(request: Request) {
-  return new Response('<html>...</html>', {
-    headers: {
-      'content-type': 'text/html; charset=utf-8',
-      'set-cookie': await csrf.cookie(request),
-    },
-  })
-}
+```ts [Next.js — proxy.ts]
+export { csrfProtection as proxy } from '@holo-js/security/next/server'
 ```
 
-### Route protection without forms
+```ts [Nuxt — server/middleware/csrf.ts]
+export { csrfProtection as default } from '@holo-js/security/nuxt/server'
+```
+
+```ts [SvelteKit — src/hooks.server.ts]
+import { sequence } from '@sveltejs/kit/hooks'
+import { csrfProtection } from '@holo-js/security/sveltekit/server'
+
+export const handle = sequence(
+  csrfProtection(),
+)
+```
+
+:::
+
+`csrfProtection()` respects `security.csrf.except`, so webhook paths can opt out from verification.
+
+Use `csrf.cookie(request)` directly only for custom server-rendered HTML outside framework middleware.
+
+### Route protection without framework middleware
 
 ```ts
 import { protect } from '@holo-js/security'
 
 export async function POST(request: Request) {
   await protect(request, {
-    csrf: true,
     throttle: 'api',
   })
 
@@ -456,8 +452,8 @@ Use `redis` when the app runs on multiple instances or when rate-limit state mus
 
 ## Nuxt request handling
 
-Security-aware `validate(...)` calls need a real web `Request` or request-like event. In Nuxt, pass the h3
-event directly when you want CSRF or throttling:
+Throttle-aware `validate(...)` calls need a real web `Request` or request-like event. In Nuxt, pass the h3
+event directly when you want request-based limiter keys:
 
 ```ts
 import { defineEventHandler } from 'h3'
@@ -470,7 +466,6 @@ const loginForm = schema({
 
 export default defineEventHandler(async (event) => {
   const submission = await validate(event, loginForm, {
-    csrf: true,
     throttle: 'login',
   })
 
@@ -484,7 +479,7 @@ export default defineEventHandler(async (event) => {
 })
 ```
 
-If you pass only a plain body object, validation still works, but CSRF and request-based limiter keys cannot be generated.
+If you pass only a plain body object, validation still works, but request-based limiter keys cannot be generated.
 
 ## Typing
 
@@ -494,8 +489,8 @@ Examples:
 
 - `defineSecurityConfig(...)` infers `memory`, `file`, and `redis` driver config correctly
 - limiter callbacks infer `request` and `values`
-- `validate(requestOrEvent, schema, { csrf, throttle })` keeps the schema-derived success and failure types
-- `useForm(schema, { csrf: true })` keeps field, value, and error inference
+- `validate(requestOrEvent, schema, { throttle })` keeps the schema-derived success and failure types
+- `useForm(schema)` keeps field, value, and error inference while client CSRF attachment stays automatic
 - public contracts such as `SecurityRateLimitStore`, `SecurityRateLimitHitResult`, and
   `SecurityRateLimitRedisDriverAdapter` are exported when you need explicit annotations
 
@@ -506,7 +501,7 @@ Security stays optional:
 - install it with `npx holo install security`
 - include it during project creation only if the app needs it
 - apps that do not install it do not pay dependency or runtime cost
-- `@holo-js/forms` loads it lazily only when security-aware options are actually used
+- `@holo-js/forms` loads it lazily only when server throttling or browser CSRF attachment is actually used
 
-If code uses `validate(..., { csrf, throttle })` or `useForm(..., { csrf: true })` without the package
-installed, Holo throws a targeted error instead of silently pretending the route is protected.
+If code uses `validate(..., { throttle })` without the package installed, Holo throws a targeted error
+instead of silently pretending the route is rate-limited.

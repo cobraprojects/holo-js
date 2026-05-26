@@ -6,9 +6,6 @@ import {
 } from './security-shared'
 
 type SecurityModule = {
-  csrf: {
-    verify(request: Request): Promise<void>
-  }
   rateLimit(name: string, options: { readonly request?: Request, readonly key?: string, readonly values?: Readonly<Record<string, unknown>> }): Promise<unknown>
 }
 

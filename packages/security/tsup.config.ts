@@ -7,6 +7,9 @@ export default defineConfig({
     index: 'src/index.ts',
     client: 'src/client.ts',
     contracts: 'src/contracts.ts',
+    'next/server': 'src/next/server.ts',
+    'nuxt/server': 'src/nuxt/server.ts',
+    'sveltekit/server': 'src/sveltekit/server.ts',
     'drivers/redis-adapter': 'src/drivers/redis-adapter.ts',
   },
   format: ['esm'],
@@ -14,6 +17,7 @@ export default defineConfig({
   clean: true,
   outDir,
   outExtension: () => ({ js: '.mjs' }),
+  external: ['h3', 'next/server'],
   esbuildOptions(options) {
     options.logLevel = 'warning'
   },

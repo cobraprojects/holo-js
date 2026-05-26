@@ -59,23 +59,28 @@ export function resetSecurityClientModuleCache(): void {
   securityClientModulePromise = undefined
 }
 
-export async function getClientCsrfField(): Promise<{ readonly name: string, readonly value: string }> {
+export async function getClientCsrfField(): Promise<{ readonly name: string, readonly value: string } | undefined> {
   const runtime = globalThis as BrowserLikeGlobal
 
   if (!runtime.document || typeof runtime.document.cookie !== 'string') {
-    throw new FormContractError(
-      '[@holo-js/forms] useForm({ csrf: true }) requires a browser-like document.cookie environment.',
-    )
+    return undefined
   }
 
-  const security = await loadSecurityClientModule()
+  let security: SecurityClientModule
+  try {
+    security = await loadSecurityClientModule()
+  } catch (error) {
+    if (error instanceof FormContractError) {
+      return undefined
+    }
+
+    throw error
+  }
   const config = security.getSecurityClientConfig().csrf
   const value = parseCookieHeader(runtime.document.cookie)[config.cookie]
 
   if (!value) {
-    throw new FormContractError(
-      `[@holo-js/forms] Missing CSRF cookie "${config.cookie}" required by useForm({ csrf: true }).`,
-    )
+    return undefined
   }
 
   return Object.freeze({

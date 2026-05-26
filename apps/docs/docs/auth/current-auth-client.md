@@ -59,7 +59,6 @@ import { loginForm } from '@/lib/schemas/login'
 
 export async function loginAction(formData: FormData) {
   const submission = await validate(formData, loginForm, {
-    csrf: true,
     throttle: 'login',
   })
 
@@ -86,7 +85,6 @@ import { loginAction } from './actions'
 
 export default function LoginPage() {
   const form = useForm(loginForm, {
-    csrf: true,
     async submitter({ formData }) {
       return await loginAction(formData)
     },
@@ -131,7 +129,6 @@ import { loginForm } from '$lib/schemas/login'
 
 export async function POST({ request }: { request: Request }) {
   const submission = await validate(request, loginForm, {
-    csrf: true,
     throttle: 'login',
   })
 
@@ -161,7 +158,6 @@ export async function POST({ request }: { request: Request }) {
 
   const auth = useAuth()
   const form = useForm(loginForm, {
-    csrf: true,
     async submitter({ formData }) {
       const submission = await (await fetch('/api/login', { method: 'POST', body: formData })).json()
       if (submission.ok === true && typeof submission.data?.redirectTo === 'string') {

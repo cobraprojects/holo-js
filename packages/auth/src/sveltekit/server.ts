@@ -1,12 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import holoAuth, { authRuntimeInternals, provider as currentProvider, user as currentUser } from '../index'
 import type { AuthUserLike, HoloAuthUser } from '../contracts'
-import {
-  createSignedCsrfToken,
-  defaultCsrfCookieName,
-  isCsrfCookieRequest,
-  resolveCsrfCookieOptions,
-} from '../runtime/csrfCookie'
 
 export type AuthState = {
   readonly authenticated: boolean
@@ -161,38 +155,6 @@ function isSameUrl(left: URL, right: URL): boolean {
     && left.hash === right.hash
 }
 
-async function ensureCsrfCookie(event: SvelteKitHandleEvent): Promise<void> {
-  if (!isSvelteKitStoredRequestEvent(event)) {
-    return
-  }
-
-  if (!isCsrfCookieRequest(event.request.method) || event.cookies.get(defaultCsrfCookieName)) {
-    return
-  }
-
-  const signingKey = process.env.APP_KEY?.trim()
-  if (!signingKey) {
-    return
-  }
-
-  const token = await createSignedCsrfToken(signingKey)
-  if (!token) {
-    return
-  }
-
-  try {
-    const { csrfInternals } = await import('@holo-js/security')
-    csrfInternals.generatedTokenCache.set(event.request, token)
-  } catch {
-    // @holo-js/security is optional for auth-only installs.
-  }
-
-  event.cookies.set(defaultCsrfCookieName, token, resolveCsrfCookieOptions({
-    url: event.url,
-    headers: event.request.headers,
-  }))
-}
-
 export async function auth(options: AuthOptions = {}): Promise<AuthState> {
   const guard = options.guard ?? authRuntimeInternals.getRuntimeBindings().config.defaults.guard
   let user: HoloAuthUser | null
@@ -233,13 +195,11 @@ export function guestOnly(options: GuestOnlyOptions): SvelteKitHandle {
 
       const currentAuth = await auth({ guard: options.guard })
       if (!currentAuth.authenticated) {
-        await ensureCsrfCookie(event)
         return resolve(event)
       }
 
       const redirectUrl = new URL(options.redirectTo, event.url)
       if (isSameUrl(event.url, redirectUrl)) {
-        await ensureCsrfCookie(event)
         return resolve(event)
       }
 
@@ -257,13 +217,11 @@ export function authOnly(options: AuthOnlyOptions): SvelteKitHandle {
 
       const currentAuth = await auth({ guard: options.guard })
       if (currentAuth.authenticated) {
-        await ensureCsrfCookie(event)
         return resolve(event)
       }
 
       const redirectUrl = new URL(options.redirectTo, event.url)
       if (isSameUrl(event.url, redirectUrl)) {
-        await ensureCsrfCookie(event)
         return resolve(event)
       }
 
@@ -273,7 +231,6 @@ export function authOnly(options: AuthOnlyOptions): SvelteKitHandle {
 }
 
 export const routeProtectionInternals = {
-  ensureCsrfCookie,
   isSameUrl,
   matchesRoute,
   matchesRoutes,

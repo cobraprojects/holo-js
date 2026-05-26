@@ -56,13 +56,13 @@ export interface SecurityClientConfig {
   }
 }
 
-export interface SecurityClientBindings {
-  readonly config?: {
-    readonly csrf?: Partial<SecurityClientConfig['csrf']>
-  }
+export interface SecurityCsrfField {
+  readonly name: string
+  readonly value: string
 }
 
-export interface SecurityCsrfField {
+export interface SecurityCsrfInput {
+  readonly type: 'hidden'
   readonly name: string
   readonly value: string
 }
@@ -87,6 +87,7 @@ export interface SecurityClearRateLimitOptions {
 export interface SecurityCsrfFacade {
   token(request: Request): Promise<string>
   field(request: Request): Promise<SecurityCsrfField>
+  input(request: Request): Promise<SecurityCsrfInput>
   cookie(request: Request, token?: string): Promise<string>
   verify(request: Request): Promise<void>
 }

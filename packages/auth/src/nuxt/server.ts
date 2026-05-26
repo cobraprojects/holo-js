@@ -1,5 +1,5 @@
 import { useAuth } from '../nuxt'
-import { defineNuxtRouteMiddleware, navigateTo, useCookie } from '#imports'
+import { defineNuxtRouteMiddleware, navigateTo } from '#imports'
 
 export type RouteMatcher = string | RegExp | ((pathname: string) => boolean)
 
@@ -83,31 +83,6 @@ function createUseAuthOptions(guard: string | undefined): { readonly guard: stri
   return guard ? { guard } : undefined
 }
 
-async function ensureCsrfCookie(path: string): Promise<void> {
-  if ('window' in globalThis) {
-    return
-  }
-
-  const signingKey = process.env.APP_KEY?.trim()
-  if (!signingKey) {
-    return
-  }
-
-  const {
-    createSignedCsrfToken,
-    defaultCsrfCookieName,
-    resolveCsrfCookieOptions,
-  } = await import('../runtime/csrfCookie')
-  const cookie = useCookie<string | undefined>(defaultCsrfCookieName, resolveCsrfCookieOptions(
-    new URL(path, process.env.APP_URL || 'http://localhost'),
-  ))
-  if (cookie.value) {
-    return
-  }
-
-  cookie.value = await createSignedCsrfToken(signingKey)
-}
-
 export function guestOnly(options: GuestOnlyOptions): GuestOnlyRouteMiddleware {
   return defineNuxtRouteMiddleware(async (to) => {
     if (!matchesRoutes(options.routes, to.path)) {
@@ -116,12 +91,10 @@ export function guestOnly(options: GuestOnlyOptions): GuestOnlyRouteMiddleware {
 
     const currentAuth = await useAuth(createUseAuthOptions(options.guard))
     if (!currentAuth.authenticated.value) {
-      await ensureCsrfCookie(to.path)
       return undefined
     }
 
     if (isSamePath(to.path, options.redirectTo)) {
-      await ensureCsrfCookie(to.path)
       return undefined
     }
 
@@ -139,12 +112,10 @@ export function authOnly(options: AuthOnlyOptions): AuthOnlyRouteMiddleware {
 
     const currentAuth = await useAuth(createUseAuthOptions(options.guard))
     if (currentAuth.authenticated.value) {
-      await ensureCsrfCookie(to.path)
       return undefined
     }
 
     if (isSamePath(to.path, options.redirectTo)) {
-      await ensureCsrfCookie(to.path)
       return undefined
     }
 
@@ -155,7 +126,6 @@ export function authOnly(options: AuthOnlyOptions): AuthOnlyRouteMiddleware {
 }
 
 export const routeProtectionInternals = {
-  ensureCsrfCookie,
   isSamePath,
   matchesRoute,
   matchesRoutes,

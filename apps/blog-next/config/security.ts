@@ -6,7 +6,7 @@ export default defineSecurityConfig({
     field: '_token',
     header: 'X-CSRF-TOKEN',
     cookie: 'XSRF-TOKEN',
-    except: [],
+    except: ['/api/v1/*'],
   },
   rateLimit: {
     driver: 'file',

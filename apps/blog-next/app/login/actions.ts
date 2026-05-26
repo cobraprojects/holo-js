@@ -9,7 +9,6 @@ import { loginForm } from '@/lib/schemas/auth'
 
 export async function loginAction(formData: FormData) {
   const submission = await validate(formData, loginForm, {
-    csrf: true,
     throttle: 'login',
   })
 

@@ -1,5 +1,4 @@
 import { execFile } from 'node:child_process'
-import { createHmac } from 'node:crypto'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
@@ -72,7 +71,6 @@ function createNuxtImportsMock(overrides: Readonly<Record<string, unknown>> = {}
       return middleware
     },
     navigateTo: vi.fn(),
-    useCookie: vi.fn(() => ({ value: undefined })),
     useFetch: vi.fn(),
     useState<TValue>(_key: string, init: () => TValue) {
       return { value: init() }
@@ -476,75 +474,22 @@ describe('@holo-js/auth framework helpers', () => {
     expect(response?.headers.get('location')).toBe('https://app.test/admin')
   })
 
-  it('issues a signed CSRF cookie when Next route protection lets a guest page continue', async () => {
-    const previousAppKey = process.env.APP_KEY
-    process.env.APP_KEY = 'next-csrf-signing-key'
-
-    try {
-      vi.doMock('next/server', () => ({
-        NextResponse: {
-          next() {
-            const response = new Response(null, {
-              headers: {
-                'x-middleware-next': '1',
-              },
-            })
-            const headers = response.headers
-
-            return Object.assign(response, {
-              cookies: {
-                set(name: string, value: string, options: { readonly path?: string, readonly sameSite?: string, readonly secure?: boolean, readonly httpOnly?: boolean }) {
-                  headers.append('set-cookie', [
-                    `${name}=${encodeURIComponent(value)}`,
-                    options.path ? `Path=${options.path}` : undefined,
-                    options.sameSite ? `SameSite=${options.sameSite[0]?.toUpperCase()}${options.sameSite.slice(1)}` : undefined,
-                    options.secure ? 'Secure' : undefined,
-                    options.httpOnly ? 'HttpOnly' : undefined,
-                  ].filter((attribute): attribute is string => typeof attribute === 'string').join('; '))
-                },
-              },
-            })
-          },
-        },
-      }))
-
-      const { protectRoutes } = await import('../src/next/server')
-      const request = {
-        method: 'GET',
-        cookies: {
-          get: vi.fn(() => undefined),
-        },
-        headers: new Headers({
-          'x-forwarded-proto': 'https',
-        }),
-        nextUrl: new URL('http://app.test/login'),
-        url: 'http://app.test/login',
-      }
-      const response = await protectRoutes(async () => undefined)(request)
-      const setCookie = response?.headers.get('set-cookie') ?? ''
-      const encodedToken = setCookie.split(';', 1)[0]?.slice('XSRF-TOKEN='.length)
-      const token = decodeURIComponent(encodedToken ?? '')
-      const separator = token.indexOf('.')
-      const nonce = token.slice(0, separator)
-      const signature = token.slice(separator + 1)
-
-      expect(response?.headers.get('x-middleware-next')).toBe('1')
-      expect(setCookie).toContain('XSRF-TOKEN=')
-      expect(setCookie).toContain('Path=/')
-      expect(setCookie).toContain('SameSite=Lax')
-      expect(setCookie).toContain('Secure')
-      expect(setCookie).not.toContain('HttpOnly')
-      expect(separator).toBeGreaterThan(0)
-      expect(signature).toBe(createHmac('sha256', 'next-csrf-signing-key')
-        .update(nonce)
-        .digest('base64url'))
-    } finally {
-      if (typeof previousAppKey === 'undefined') {
-        delete process.env.APP_KEY
-      } else {
-        process.env.APP_KEY = previousAppKey
-      }
+  it('leaves Next CSRF cookies to the security middleware when route protection lets a guest page continue', async () => {
+    const { protectRoutes } = await import('../src/next/server')
+    const request = {
+      method: 'GET',
+      cookies: {
+        get: vi.fn(() => undefined),
+      },
+      headers: new Headers({
+        'x-forwarded-proto': 'https',
+      }),
+      nextUrl: new URL('http://app.test/login'),
+      url: 'http://app.test/login',
     }
+    const response = await protectRoutes(async () => undefined)(request)
+
+    expect(response).toBeUndefined()
   })
 
   it('keeps Next route protection branch behavior unchanged', async () => {
@@ -767,79 +712,56 @@ describe('@holo-js/auth framework helpers', () => {
     expect(authResponse.headers.get('location')).toBe('https://other.test/login')
   })
 
-  it('issues a signed SvelteKit CSRF cookie before resolving guest pages', async () => {
-    const previousAppKey = process.env.APP_KEY
-    process.env.APP_KEY = 'sveltekit-csrf-signing-key'
-
-    try {
-      vi.doMock('../src/index', () => ({
-        default: {
-          guard() {
-            return {
-              provider: vi.fn(async () => null),
-              user: vi.fn(async () => null),
-            }
-          },
+  it('leaves SvelteKit CSRF cookies to the security middleware', async () => {
+    vi.doMock('../src/index', () => ({
+      default: {
+        guard() {
+          return {
+            provider: vi.fn(async () => null),
+            user: vi.fn(async () => null),
+          }
         },
-        authRuntimeInternals: {
-          getRuntimeBindings() {
-            return {
-              config: {
-                defaults: {
-                  guard: 'web',
-                },
+      },
+      authRuntimeInternals: {
+        getRuntimeBindings() {
+          return {
+            config: {
+              defaults: {
+                guard: 'web',
               },
-            }
-          },
+            },
+          }
         },
-        provider: vi.fn(async () => null),
-        user: vi.fn(async () => null),
-      }))
+      },
+      provider: vi.fn(async () => null),
+      user: vi.fn(async () => null),
+    }))
 
-      const setCookie = vi.fn()
-      const { guestOnly } = await import('../src/sveltekit/server')
-      const resolve = vi.fn(() => new Response('ok'))
-      await guestOnly({
-        routes: ['/login'],
-        redirectTo: '/admin',
-      })({
-        event: {
-          url: new URL('http://app.test/login'),
-          cookies: {
-            get: vi.fn(() => undefined),
-            set: setCookie,
-          },
-          request: {
-            method: 'GET',
-            headers: new Headers({
-              'x-forwarded-proto': 'https',
-            }),
-          },
+    const setCookie = vi.fn()
+    const { guestOnly } = await import('../src/sveltekit/server')
+    const resolve = vi.fn(() => new Response('ok'))
+    await guestOnly({
+      routes: ['/login'],
+      redirectTo: '/admin',
+    })({
+      event: {
+        url: new URL('http://app.test/login'),
+        cookies: {
+          get: vi.fn(() => undefined),
+          set: setCookie,
         },
-        resolve,
-      })
-      const [name, token, options] = setCookie.mock.calls[0] ?? []
-      const separator = typeof token === 'string' ? token.indexOf('.') : -1
-      const nonce = typeof token === 'string' ? token.slice(0, separator) : ''
-      const signature = typeof token === 'string' ? token.slice(separator + 1) : ''
+        request: {
+          method: 'GET',
+          headers: new Headers({
+            'x-forwarded-proto': 'https',
+          }),
+        },
+      },
+      resolve,
+    })
 
-      expect(name).toBe('XSRF-TOKEN')
-      expect(options).toEqual({
-        path: '/',
-        sameSite: 'lax',
-        secure: true,
-        httpOnly: false,
-      })
-      expect(signature).toBe(createHmac('sha256', 'sveltekit-csrf-signing-key')
-        .update(nonce)
-        .digest('base64url'))
-    } finally {
-      if (typeof previousAppKey === 'undefined') {
-        delete process.env.APP_KEY
-      } else {
-        process.env.APP_KEY = previousAppKey
-      }
-    }
+    expect(resolve).toHaveBeenCalledOnce()
+    expect(setCookie).not.toHaveBeenCalled()
   })
 
   it('compares Nuxt self redirects by pathname without query strings', async () => {
@@ -939,56 +861,21 @@ describe('@holo-js/auth framework helpers', () => {
     expect(navigateTo).toHaveBeenCalledWith('/super-admin', { redirectCode: 302 })
   })
 
-  it('issues a signed Nuxt CSRF cookie before allowing guest pages', async () => {
-    const previousAppKey = process.env.APP_KEY
-    const previousAppUrl = process.env.APP_URL
-    process.env.APP_KEY = 'nuxt-csrf-signing-key'
-    process.env.APP_URL = 'https://app.test'
+  it('leaves Nuxt CSRF cookies to the security middleware before allowing guest pages', async () => {
+    vi.doMock('../src/nuxt', () => ({
+      useAuth: vi.fn(async () => ({
+        authenticated: { value: false },
+      })),
+    }))
+    vi.doMock('#imports', () => createNuxtImportsMock())
 
-    try {
-      const cookie = { value: undefined as string | undefined }
-      const useCookie = vi.fn(() => cookie)
-      vi.doMock('../src/nuxt', () => ({
-        useAuth: vi.fn(async () => ({
-          authenticated: { value: false },
-        })),
-      }))
-      vi.doMock('#imports', () => createNuxtImportsMock({ useCookie }))
+    const { guestOnly } = await import('../src/nuxt/server')
+    const middleware = guestOnly({
+      routes: ['/login'],
+      redirectTo: '/admin',
+    })
 
-      const { guestOnly } = await import('../src/nuxt/server')
-      const middleware = guestOnly({
-        routes: ['/login'],
-        redirectTo: '/admin',
-      })
-
-      await expect(middleware({ path: '/login' }, { path: '/' })).resolves.toBeUndefined()
-
-      const separator = cookie.value?.indexOf('.') ?? -1
-      const nonce = cookie.value?.slice(0, separator) ?? ''
-      const signature = cookie.value?.slice(separator + 1) ?? ''
-
-      expect(useCookie).toHaveBeenCalledWith('XSRF-TOKEN', {
-        path: '/',
-        sameSite: 'lax',
-        secure: true,
-        httpOnly: false,
-      })
-      expect(signature).toBe(createHmac('sha256', 'nuxt-csrf-signing-key')
-        .update(nonce)
-        .digest('base64url'))
-    } finally {
-      if (typeof previousAppKey === 'undefined') {
-        delete process.env.APP_KEY
-      } else {
-        process.env.APP_KEY = previousAppKey
-      }
-
-      if (typeof previousAppUrl === 'undefined') {
-        delete process.env.APP_URL
-      } else {
-        process.env.APP_URL = previousAppUrl
-      }
-    }
+    await expect(middleware({ path: '/login' }, { path: '/' })).resolves.toBeUndefined()
   })
 
   it('passes the configured guard through Nuxt auth-only middleware', async () => {
