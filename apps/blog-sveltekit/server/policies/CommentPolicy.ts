@@ -3,8 +3,8 @@ import { definePolicy, deny } from '@holo-js/authorization'
 import Comment from '../models/Comment'
 
 export default definePolicy('comments', Comment, {
-  before({ user, guard }) {
-    return guard === 'admin' || user?.email === 'super-admin@example.com'
+  before({ user, authenticated, guard }) {
+    return (guard === 'admin' && authenticated) || user?.email === 'super-admin@example.com'
       ? true
       : undefined
   },

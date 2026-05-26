@@ -569,6 +569,7 @@ export function renderGeneratedAuthorizationTypes(
   const typedAbilityEntries = authorizationAbilities.filter(entry => ['.ts', '.mts', '.cts'].includes(extname(entry.sourcePath)))
   const policyImportNameByName = new Map(typedPolicyEntries.map((entry, index) => [entry.name, `holoAuthorizationPolicyModule${index}`]))
   const abilityImportNameByName = new Map(typedAbilityEntries.map((entry, index) => [entry.name, `holoAuthorizationAbilityModule${index}`]))
+  const usesHoloAuthUser = authorizationPolicies.length > 0 || authorizationAbilities.length > 0 || guardNames.length > 0
 
   const imports = [
     ...(typedPolicyEntries.length > 0
@@ -577,7 +578,7 @@ export function renderGeneratedAuthorizationTypes(
     ...(typedAbilityEntries.length > 0
       ? ['import type { AuthorizationAbilityDefinition as HoloAuthorizationAbilityDefinition } from \'@holo-js/authorization/contracts\'']
       : []),
-    ...(guardNames.length > 0
+    ...(usesHoloAuthUser
       ? ['import type { AuthUser as HoloAuthUser } from \'@holo-js/auth\'']
       : []),
     ...typedPolicyEntries.map((entry, index) => {

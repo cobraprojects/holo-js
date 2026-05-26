@@ -476,6 +476,10 @@ try {
   )
   await authorization.forUser(editorActor).authorize('moderate', Comment)
   await authorization.forUser(adminActor).authorize('moderate', Comment)
+  await assert.rejects(
+    () => authorization.guard('admin').authorize('delete', featuredPost),
+    AuthorizationError,
+  )
 
   const dashboard = await getAdminDashboardData()
   assert.equal(dashboard.postCount, 2)
@@ -558,6 +562,7 @@ try {
   const updatedTag = await Tag.findOrFail(createdTag.id)
   assert.equal(updatedTag.slug, 'deep-guides')
 
+  await signInEditor()
   assertInvalidTagNameFailure(await createTagPageActions.create({
     request: createActionRequest({
       name: '',
@@ -565,6 +570,7 @@ try {
   }))
   assert.equal(await Tag.where('slug', '').first(), undefined)
 
+  await signInEditor()
   assertInvalidTagNameFailure(await updateTagPageActions.update({
     params: { id: String(updatedTag.id) },
     request: createActionRequest({
@@ -579,6 +585,7 @@ try {
   assert.ok(frameworkTag)
   assert.ok(releaseTag)
 
+  await signInEditor()
   assertInvalidPostStatusFailure(await createPostPageActions.create({
     request: createActionRequest({
       title: 'Missing Route Status Post',
@@ -587,6 +594,7 @@ try {
   }))
   assert.equal(await Post.where('slug', 'missing-route-status-post').first(), undefined)
 
+  await signInEditor()
   assertInvalidPostStatusFailure(await createPostPageActions.create({
     request: createActionRequest({
       title: 'Unknown Route Status Post',
@@ -641,6 +649,7 @@ try {
   let routeStatusPost = await Post.where('slug', 'route-status-draft').first()
   assert.ok(routeStatusPost)
 
+  await signInEditor()
   assertInvalidPostStatusFailure(await updatePostPageActions.update({
     params: { id: String(routeStatusPost.id) },
     request: createActionRequest({
@@ -652,6 +661,7 @@ try {
   assert.equal(routeStatusPost.status, 'draft')
   assert.equal(routeStatusPost.title, 'Route Status Draft')
 
+  await signInEditor()
   assertInvalidPostStatusFailure(await updatePostPageActions.update({
     params: { id: String(routeStatusPost.id) },
     request: createActionRequest({

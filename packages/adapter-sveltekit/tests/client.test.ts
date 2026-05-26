@@ -7,7 +7,8 @@ import { useForm } from '../src/client'
 import { setPageForm } from './stubs/app-stores'
 
 async function waitForActionHydration(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  const attempts = 20
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     await new Promise(resolve => setTimeout(resolve, 0))
     await new Promise<void>(resolve => queueMicrotask(() => resolve()))
 
@@ -15,6 +16,8 @@ async function waitForActionHydration(predicate: () => boolean): Promise<void> {
       return
     }
   }
+
+  throw new Error(`waitForActionHydration: predicate not satisfied after ${attempts} attempts.`)
 }
 
 describe('@holo-js/adapter-sveltekit client forms', () => {

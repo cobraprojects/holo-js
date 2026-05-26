@@ -18,8 +18,14 @@ export const load = (async ({ params }) => {
 export const actions = {
   update: async ({ params, request }) => {
     const formData = await request.formData()
-    await authorize('manage', Category)
-    await updateCategory(Number(params.id), {
+    const id = Number(params.id)
+    const category = await Category.find(id)
+    if (!category) {
+      throw error(404, 'Category not found')
+    }
+
+    await authorize('update', category)
+    await updateCategory(id, {
       name: String(formData.get('name') || ''),
       description: String(formData.get('description') || ''),
     })

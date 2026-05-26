@@ -78,7 +78,8 @@ export async function createCategoryAction(formData: FormData) {
 
 export async function updateCategoryAction(id: number, formData: FormData) {
   await requireAdminAuth()
-  await authorize('manage', Category)
+  const category = await Category.findOrFail(id)
+  await authorize('update', category)
 
   await updateCategory(id, {
     name: String(formData.get('name') || ''),
@@ -89,7 +90,8 @@ export async function updateCategoryAction(id: number, formData: FormData) {
 
 export async function deleteCategoryAction(id: number) {
   await requireAdminAuth()
-  await authorize('manage', Category)
+  const category = await Category.findOrFail(id)
+  await authorize('delete', category)
 
   await deleteCategory(id)
   redirect('/admin/categories')
@@ -105,7 +107,8 @@ export async function createTagAction(formData: FormData) {
 
 export async function updateTagAction(id: number, formData: FormData) {
   await requireAdminAuth()
-  await authorize('manage', Tag)
+  const tag = await Tag.findOrFail(id)
+  await authorize('update', tag)
 
   await updateTag(id, { name: String(formData.get('name') || '') })
   redirect('/admin/tags')
@@ -113,7 +116,8 @@ export async function updateTagAction(id: number, formData: FormData) {
 
 export async function deleteTagAction(id: number) {
   await requireAdminAuth()
-  await authorize('manage', Tag)
+  const tag = await Tag.findOrFail(id)
+  await authorize('delete', tag)
 
   await deleteTag(id)
   redirect('/admin/tags')

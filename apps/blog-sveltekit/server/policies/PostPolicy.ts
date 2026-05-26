@@ -3,8 +3,8 @@ import { definePolicy, deny, denyAsNotFound } from '@holo-js/authorization'
 import Post from '../models/Post'
 
 export default definePolicy('posts', Post, {
-  before({ user, guard }) {
-    return guard === 'admin' || user?.email === 'super-admin@example.com'
+  before({ user, authenticated, guard }) {
+    return (guard === 'admin' && authenticated) || user?.email === 'super-admin@example.com'
       ? true
       : undefined
   },

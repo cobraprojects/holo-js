@@ -1,4 +1,4 @@
-import { fail, redirect } from '@sveltejs/kit'
+import { error, fail, redirect } from '@sveltejs/kit'
 import { authorize } from '@holo-js/authorization'
 import { validate } from '@holo-js/forms'
 
@@ -26,8 +26,14 @@ export const actions = {
   },
   delete: async ({ request }) => {
     const formData = await request.formData()
-    await authorize('manage', Tag)
-    await deleteTag(Number(formData.get('id')))
+    const id = Number(formData.get('id'))
+    const tag = await Tag.find(id)
+    if (!tag) {
+      throw error(404, 'Tag not found')
+    }
+
+    await authorize('delete', tag)
+    await deleteTag(id)
 
     redirect(303, '/admin/tags')
   },

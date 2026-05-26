@@ -1,4 +1,4 @@
-import { redirect } from '@sveltejs/kit'
+import { error, redirect } from '@sveltejs/kit'
 import { authorize } from '@holo-js/authorization'
 
 import { createCategory, deleteCategory, getAdminCategoriesData } from '$lib/server/blog'
@@ -22,8 +22,14 @@ export const actions = {
   },
   delete: async ({ request }) => {
     const formData = await request.formData()
-    await authorize('manage', Category)
-    await deleteCategory(Number(formData.get('id')))
+    const id = Number(formData.get('id'))
+    const category = await Category.find(id)
+    if (!category) {
+      throw error(404, 'Category not found')
+    }
+
+    await authorize('delete', category)
+    await deleteCategory(id)
 
     redirect(303, '/admin/categories')
   },

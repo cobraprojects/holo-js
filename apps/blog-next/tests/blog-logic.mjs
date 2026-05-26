@@ -188,6 +188,10 @@ try {
   )
   await authorization.forUser(adminActor).authorize('delete', featuredPost)
   await assert.rejects(
+    () => authorization.guard('admin').authorize('delete', featuredPost),
+    AuthorizationError,
+  )
+  await assert.rejects(
     () => authorization.forUser(authorActor).authorize('manage', Category),
     AuthorizationError,
   )

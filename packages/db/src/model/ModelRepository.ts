@@ -82,7 +82,11 @@ function resolveModelConnection<TTable extends TableDefinition>(
 
 function resolveActiveConnection(connection: DatabaseContext): DatabaseContext {
   const active = connectionAsyncContext.getActive()
-  if (active && active.connectionName === connection.getConnectionName()) {
+  if (
+    active
+    && active.connectionName === connection.getConnectionName()
+    && active.connection.getContextId() === connection.getContextId()
+  ) {
     return active.connection
   }
 

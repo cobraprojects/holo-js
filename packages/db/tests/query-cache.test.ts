@@ -4,6 +4,7 @@ import {
   configureDB,
   configureDatabaseQueryCacheBridge,
   createConnectionManager,
+  DatabaseContext,
   DB,
   queryCacheInternals,
   resetDB,
@@ -16,6 +17,7 @@ import {
   type DriverQueryResult,
   type SelectQueryPlan,
 } from '../src'
+import { ModelRepository } from '../src/model/ModelRepository'
 import { defineModelFromTable, defineTable } from './support/internal'
 
 class QueryCacheAdapter implements DriverAdapter {
@@ -481,6 +483,31 @@ describe('@holo-js/db query cache integration', () => {
       ['db:main:users'],
     ])
     expect(bridge.invalidationTransactionStates).toEqual([false])
+  })
+
+  it('keeps repositories on their original context when another context shares the same connection name', async () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+    })
+    const User = defineModelFromTable(users, {})
+    const first = new DatabaseContext({
+      connectionName: 'main',
+      adapter: new QueryCacheAdapter(),
+      dialect: createDialect(),
+      driver: 'sqlite',
+    })
+    const second = new DatabaseContext({
+      connectionName: 'main',
+      adapter: new QueryCacheAdapter(),
+      dialect: createDialect(),
+      driver: 'sqlite',
+    })
+    const secondRepository = new ModelRepository(User.definition, second)
+
+    await first.transaction(async () => {
+      expect(secondRepository.getConnection()).toBe(second)
+    })
   })
 
   it('normalizes explicit invalidation dependencies and disables automatic invalidation for raw order clauses', () => {

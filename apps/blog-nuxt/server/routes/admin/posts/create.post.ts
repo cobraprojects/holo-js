@@ -5,7 +5,7 @@ import Post from '../../../models/Post'
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<Record<string, string>>(event)
-  const status = body.status || 'published'
+  const status = body.status === 'draft' ? 'draft' : 'published'
   await authorize('create', Post)
   if (status === 'published') {
     await authorize('publish', Post)

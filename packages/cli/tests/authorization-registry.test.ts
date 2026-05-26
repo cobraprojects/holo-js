@@ -249,6 +249,22 @@ export default defineAuthConfig({
     expect(output).not.toContain('[key: string]: true')
   })
 
+  it('imports auth user types when authorization entries exist without guards', () => {
+    const output = renderGeneratedAuthorizationTypes([
+      {
+        sourcePath: 'server/policies/posts.ts',
+        name: 'posts',
+        exportName: 'postPolicy',
+        target: 'Post',
+        classActions: ['create'],
+        recordActions: ['view'],
+      },
+    ] satisfies readonly GeneratedAuthorizationPolicyRegistryEntry[], [], [])
+
+    expect(output).toContain('import type { AuthUser as HoloAuthUser } from \'@holo-js/auth\'')
+    expect(output).toContain('actor: HoloAuthUser')
+  })
+
   it('renders authorization registry entries without optional export names', () => {
     const output = renderGeneratedAuthorizationRegistry({
       generatedAt: '2026-01-01T00:00:00.000Z',
