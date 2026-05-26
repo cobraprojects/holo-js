@@ -1,6 +1,8 @@
 import { authOnly, guestOnly, protectRoutes } from '@holo-js/auth/next/server'
+import { csrfProtection } from '@holo-js/security/next/server'
 
-export const proxy = protectRoutes(
+const csrf = csrfProtection()
+const auth = protectRoutes(
   guestOnly({
     routes: ['/login', '/register', '/forgot-password', '/reset-password'],
     redirectTo: '/admin',
@@ -21,6 +23,25 @@ export const proxy = protectRoutes(
   }),
 )
 
+export async function proxy(request: Parameters<typeof csrf>[0]) {
+  const csrfResponse = await csrf(request)
+  if (csrfResponse?.status === 419) {
+    return csrfResponse
+  }
+
+  const authResponse = await auth(request)
+  return authResponse ?? csrfResponse
+}
+
 export const config = {
-  matcher: ['/login', '/register', '/forgot-password', '/reset-password', '/admin/:path*', '/super-admin', '/super-admin/login'],
+  matcher: [
+    '/login',
+    '/register',
+    '/forgot-password',
+    '/reset-password',
+    '/admin/:path*',
+    '/super-admin',
+    '/super-admin/login',
+    '/api/:path*',
+  ],
 }

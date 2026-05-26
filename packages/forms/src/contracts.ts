@@ -56,7 +56,6 @@ export interface SerializedFormSubmission<TData> {
 }
 
 export interface FormSecurityOptions {
-  readonly csrf?: boolean
   readonly throttle?: string
 }
 
@@ -679,7 +678,7 @@ export async function validate<TShape extends SchemaInputShape>(
   let validatedSubmission:
     | FormSubmissionResult<InferSchemaData<TShape>>
     | undefined
-  const usesSecurityOptions = options.csrf === true || typeof options.throttle === 'string'
+  const usesSecurityOptions = typeof options.throttle === 'string'
   const normalizedRequestInput = normalizeRequestLikeInput(input)
     ?? (usesSecurityOptions ? await resolveAmbientFormDataRequest(input) : undefined)
   const validationInput = normalizedRequestInput ?? input
@@ -696,14 +695,6 @@ export async function validate<TShape extends SchemaInputShape>(
     try {
       const { loadSecurityModule } = await import('./security')
       const security = await loadSecurityModule()
-      const verificationRequest = (() => {
-        try {
-          return request.clone()
-        } catch {
-          return request
-        }
-      })()
-
       if (typeof options.throttle === 'string') {
         const inspection = await validateInput(request.clone(), schemaDefinition as ValidationSchema<TShape>)
         const throttleValues = inspection.valid ? inspection.data : inspection.values
@@ -714,10 +705,6 @@ export async function validate<TShape extends SchemaInputShape>(
           request,
           values: throttleValues,
         })
-      }
-
-      if (options.csrf === true) {
-        await security.csrf.verify(verificationRequest)
       }
     } catch (error) {
       const { formsSecurityInternals } = await import('./security')

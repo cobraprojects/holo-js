@@ -5,7 +5,6 @@ import { registerForm } from '@/lib/schemas/auth'
 
 export async function POST(request: Request) {
   const submission = await validate(request, registerForm, {
-    csrf: true,
     throttle: 'register',
   })
 

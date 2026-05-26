@@ -97,7 +97,6 @@ describe('SvelteKit login page action', () => {
     expect(response.status).toBe(422)
     expect(response).toEqual(failure)
     expect(mocks.validate).toHaveBeenCalledWith(expect.any(Request), mocks.loginForm, {
-      csrf: true,
       throttle: 'login',
     })
     expect(mocks.login).not.toHaveBeenCalled()
@@ -165,7 +164,6 @@ describe('SvelteKit register page action', () => {
     expect(response.status).toBe(422)
     expect(response).toEqual(failure)
     expect(mocks.validate).toHaveBeenCalledWith(expect.any(Request), mocks.registerForm, {
-      csrf: true,
       throttle: 'register',
     })
     expect(mocks.register).not.toHaveBeenCalled()
@@ -278,7 +276,6 @@ describe('SvelteKit super admin login page action', () => {
     expect(response.status).toBe(422)
     expect(response).toEqual(failure)
     expect(mocks.validate).toHaveBeenCalledWith(expect.any(Request), mocks.loginForm, {
-      csrf: true,
       throttle: 'login',
     })
     expect(mocks.guardLogin).not.toHaveBeenCalled()

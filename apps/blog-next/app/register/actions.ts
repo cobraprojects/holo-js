@@ -9,7 +9,6 @@ import { registerForm } from '@/lib/schemas/auth'
 
 export async function registerAction(formData: FormData) {
   const submission = await validate(formData, registerForm, {
-    csrf: true,
     throttle: 'register',
   })
 

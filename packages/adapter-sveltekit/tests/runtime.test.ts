@@ -236,4 +236,5 @@ describe('@holo-js/adapter-sveltekit request context', () => {
     })
     expect(redirect).toHaveBeenCalledWith(307, '/login')
   })
+
 })

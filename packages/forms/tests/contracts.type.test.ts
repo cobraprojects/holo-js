@@ -64,9 +64,7 @@ describe('@holo-js/forms typing', () => {
     const emailErrors = failure.errors.email
 
     async function expectsTypedSubmission(request: Request) {
-      const submission = await validate(request, registerUser, {
-        csrf: false,
-      })
+      const submission = await validate(request, registerUser)
 
       if (submission.valid) {
         const typedName: string = submission.data.name
@@ -90,7 +88,6 @@ describe('@holo-js/forms typing', () => {
 
     async function expectsTypedSecuritySubmission(request: Request) {
       const submission = await validate(request, registerUser, {
-        csrf: false,
         throttle: 'login',
       })
 
@@ -118,7 +115,6 @@ describe('@holo-js/forms typing', () => {
 
     async function expectsTypedEventSubmission(event: FormRequestLikeInput) {
       const submission = await validate(event, registerUser, {
-        csrf: false,
         throttle: 'login',
       })
 

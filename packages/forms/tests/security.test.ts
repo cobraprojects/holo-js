@@ -187,12 +187,8 @@ describe('@holo-js/forms security helpers', () => {
 
   it('loads the server security entrypoint through the Vitest literal import branch', async () => {
     vi.resetModules()
-    const verify = vi.fn(async () => {})
     const rateLimit = vi.fn(async () => ({ limited: false }))
     vi.doMock('@holo-js/security', () => ({
-      csrf: {
-        verify,
-      },
       rateLimit,
     }))
 
@@ -200,7 +196,6 @@ describe('@holo-js/forms security helpers', () => {
       const mod = await import('../src/security')
       const security = await mod.loadSecurityModule()
 
-      expect(security.csrf.verify).toBe(verify)
       expect(security.rateLimit).toBe(rateLimit)
     } finally {
       vi.doUnmock('@holo-js/security')
@@ -458,7 +453,7 @@ console.log(JSON.stringify(client.getSecurityClientConfig().csrf))
     })
   })
 
-  it('fails clearly when the configured csrf token cookie is missing', async () => {
+  it('returns no client csrf field when the configured csrf token cookie is missing', async () => {
     ;(globalThis as typeof globalThis & { __holoFormsSecurityClientModule__?: unknown }).__holoFormsSecurityClientModule__ = {
       getSecurityClientConfig() {
         return {
@@ -474,10 +469,10 @@ console.log(JSON.stringify(client.getSecurityClientConfig().csrf))
       cookie: 'tracking=one',
     } as Document
 
-    await expect(getClientCsrfField()).rejects.toThrow('Missing CSRF cookie "XSRF-TOKEN"')
+    await expect(getClientCsrfField()).resolves.toBeUndefined()
   })
 
-  it('fails clearly when csrf helpers run without a browser document or a test override', async () => {
+  it('returns no client csrf field without a browser document and still reports missing server security imports', async () => {
     ;(globalThis as typeof globalThis & { __holoFormsSecurityImport__?: () => Promise<unknown> }).__holoFormsSecurityImport__ = async () => {
       throw new Error('Cannot find package @holo-js/security')
     }
@@ -485,7 +480,7 @@ console.log(JSON.stringify(client.getSecurityClientConfig().csrf))
       throw new Error('Cannot find package @holo-js/security')
     }
 
-    await expect(getClientCsrfField()).rejects.toBeInstanceOf(FormContractError)
+    await expect(getClientCsrfField()).resolves.toBeUndefined()
     await expect(loadSecurityModule()).rejects.toBeInstanceOf(FormContractError)
     await expect(loadSecurityClientModule()).rejects.toBeInstanceOf(FormContractError)
   })

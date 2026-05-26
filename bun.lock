@@ -1016,16 +1016,22 @@
       },
       "devDependencies": {
         "@types/node": "catalog:",
+        "h3": "catalog:",
         "ioredis": "catalog:",
+        "next": "catalog:",
         "tsup": "catalog:",
         "typescript": "catalog:",
         "vitest": "catalog:",
       },
       "peerDependencies": {
+        "h3": "catalog:",
         "ioredis": "catalog:",
+        "next": "catalog:",
       },
       "optionalPeers": [
+        "h3",
         "ioredis",
+        "next",
       ],
     },
     "packages/session": {

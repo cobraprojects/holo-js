@@ -5,7 +5,6 @@ import { registerForm } from '#shared/schemas/auth'
 
 export default defineEventHandler(async (event) => {
   const submission = await validate(event, registerForm, {
-    csrf: true,
     throttle: 'register',
   })
 

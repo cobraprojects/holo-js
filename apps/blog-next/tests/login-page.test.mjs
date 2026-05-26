@@ -83,7 +83,6 @@ describe('login action', () => {
     })
 
     expect(mocks.validate).toHaveBeenCalledWith(formData, {}, {
-      csrf: true,
       throttle: 'login',
     })
     expect(mocks.login).toHaveBeenCalledWith({

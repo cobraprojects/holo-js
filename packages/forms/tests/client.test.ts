@@ -67,7 +67,7 @@ function createSensitiveSchemaFixture(fields: Record<string, unknown>): Sensitiv
 }
 
 describe('@holo-js/forms client', () => {
-  it('attaches the configured csrf token to outgoing form data when enabled', async () => {
+  it('attaches the configured csrf token to unsafe outgoing form data when the cookie exists', async () => {
     const registerUser = schema({
       email: field.string().required().email(),
     })
@@ -79,7 +79,6 @@ describe('@holo-js/forms client', () => {
     } as Document
 
     const client = useForm(registerUser, {
-      csrf: true,
       initialValues: {
         email: 'ava@example.com',
       },
@@ -100,7 +99,7 @@ describe('@holo-js/forms client', () => {
     })
   })
 
-  it('supports client-side csrf configuration without requiring the server security runtime in the browser', async () => {
+  it('uses csrf names exposed by the security client module without requiring the server runtime in the browser', async () => {
     const registerUser = schema({
       email: field.string().required().email(),
     })
@@ -115,7 +114,6 @@ describe('@holo-js/forms client', () => {
     } as Document
 
     const client = useForm(registerUser, {
-      csrf: true,
       initialValues: {
         email: 'ava@example.com',
       },
@@ -137,7 +135,7 @@ describe('@holo-js/forms client', () => {
     })
   })
 
-  it('does not attach csrf tokens for safe methods and fails clearly when the csrf cookie is missing', async () => {
+  it('does not attach csrf tokens for safe methods or when the csrf cookie is missing', async () => {
     const registerUser = schema({
       email: field.string().required().email(),
     })
@@ -149,7 +147,6 @@ describe('@holo-js/forms client', () => {
     } as Document
 
     const safeClient = useForm(registerUser, {
-      csrf: true,
       method: 'GET',
       initialValues: {
         email: 'ava@example.com',
@@ -170,17 +167,21 @@ describe('@holo-js/forms client', () => {
       cookie: '',
     } as Document
 
-    const failingClient = useForm(registerUser, {
-      csrf: true,
+    const clientWithoutCookie = useForm(registerUser, {
       initialValues: {
         email: 'ava@example.com',
       },
-      async submitter() {
-        throw new Error('submitter should not run')
+      async submitter({ formData }) {
+        expect(formData.has('_token')).toBe(false)
+        return {
+          ok: true,
+          status: 200,
+          data: undefined,
+        }
       },
     })
 
-    await expect(failingClient.submit()).rejects.toThrow('Missing CSRF cookie "XSRF-TOKEN"')
+    await clientWithoutCookie.submit()
   })
 
   it('creates a typed field tree with initial values and no initial errors', () => {

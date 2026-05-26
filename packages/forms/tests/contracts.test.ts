@@ -246,6 +246,37 @@ describe('@holo-js/forms contracts', () => {
     })
   })
 
+  it('does not flash uploaded files in serialized failure payloads', async () => {
+    const profile = schema({
+      avatar: field.file().required().image().maxSize(1),
+    })
+    const avatar = new File(['avatar'], 'avatar.png', { type: 'image/png' })
+
+    const failure = await validate({
+      avatar,
+    }, profile)
+
+    expect(failure.valid).toBe(false)
+    if (failure.valid) {
+      throw new Error('Expected form submission failure.')
+    }
+
+    expect(failure.values.avatar).toBe(avatar)
+    expect(failure.serialize()).toEqual({
+      valid: false,
+      submitted: true,
+      values: {},
+      errors: failure.errors.flatten(),
+    })
+    expect(failure.fail()).toEqual({
+      ok: false,
+      status: 422,
+      valid: false,
+      values: {},
+      errors: failure.errors.flatten(),
+    })
+  })
+
   it('excludes password-like dontFlash fields while preserving transport tokens in serialized failure payloads', async () => {
     const registerUser = schema({
       email: field.string().required().email(),
@@ -451,48 +482,16 @@ describe('@holo-js/forms contracts', () => {
     })
   })
 
-  it('runs csrf and throttle checks through validate() and returns form-shaped security failures', async () => {
+  it('runs throttle checks through validate() and returns form-shaped security failures', async () => {
     const login = schema({
       email: field.string().required().email(),
     })
 
     ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
 
-    const csrfFailure = await validate(new Request('https://app.test/login', {
-      method: 'POST',
-      body: new URLSearchParams({
-        email: 'ava@example.com',
-      }),
-    }), login, {
-      csrf: true,
-    })
-
-    expect(csrfFailure.valid).toBe(false)
-    if (csrfFailure.valid) {
-      throw new Error('Expected csrf failure.')
-    }
-
-    expect(csrfFailure.values).toEqual({
-      email: 'ava@example.com',
-    })
-    expect(csrfFailure.errors.get('_root')).toEqual(['CSRF token mismatch.'])
-    expect(csrfFailure.fail()).toEqual({
-      ok: false,
-      status: 419,
-      valid: false,
-      values: {
-        email: 'ava@example.com',
-      },
-      errors: {
-        _root: ['CSRF token mismatch.'],
-      },
-    })
-
     const allowedRequest = new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: 'XSRF-TOKEN=login-token',
-        'X-CSRF-TOKEN': 'login-token',
         'x-forwarded-for': '203.0.113.7',
       },
       body: new URLSearchParams({
@@ -501,7 +500,6 @@ describe('@holo-js/forms contracts', () => {
     })
 
     const firstAllowed = await validate(allowedRequest, login, {
-      csrf: true,
       throttle: 'login',
     })
     expect(firstAllowed.valid).toBe(true)
@@ -509,8 +507,6 @@ describe('@holo-js/forms contracts', () => {
     const differentEmail = await validate(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: 'XSRF-TOKEN=login-token',
-        'X-CSRF-TOKEN': 'login-token',
         'x-forwarded-for': '203.0.113.7',
       },
       body: new URLSearchParams({
@@ -524,8 +520,6 @@ describe('@holo-js/forms contracts', () => {
     const throttled = await validate(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: 'XSRF-TOKEN=login-token',
-        'X-CSRF-TOKEN': 'login-token',
         'x-forwarded-for': '203.0.113.7',
       },
       body: new URLSearchParams({
@@ -551,81 +545,17 @@ describe('@holo-js/forms contracts', () => {
     })
   })
 
-  it('applies throttle before csrf verification when both checks are enabled', async () => {
-    const register = schema({
-      email: field.string().required().email(),
-    })
-
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
-
-    const firstAttempt = await validate(new Request('https://app.test/register', {
-      method: 'POST',
-      headers: {
-        'x-forwarded-for': '203.0.113.8',
-      },
-      body: new URLSearchParams({
-        email: 'ava@example.com',
-      }),
-    }), register, {
-      csrf: true,
-      throttle: 'register',
-    })
-
-    expect(firstAttempt.valid).toBe(false)
-    if (firstAttempt.valid) {
-      throw new Error('Expected csrf failure.')
-    }
-    expect(firstAttempt.fail().status).toBe(419)
-
-    const throttled = await validate(new Request('https://app.test/register', {
-      method: 'POST',
-      headers: {
-        'x-forwarded-for': '203.0.113.8',
-      },
-      body: new URLSearchParams({
-        email: 'ava@example.com',
-      }),
-    }), register, {
-      csrf: true,
-      throttle: 'register',
-    })
-
-    expect(throttled.valid).toBe(false)
-    if (throttled.valid) {
-      throw new Error('Expected throttle failure.')
-    }
-    expect(throttled.fail().status).toBe(429)
-    expect(throttled.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
-  })
-
-  it('merges validation errors with security root failures and requires Request inputs for security-aware validation', async () => {
+  it('requires Request inputs for throttle-aware validation', async () => {
     const login = schema({
       email: field.string().required().email(),
     })
 
     ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
 
-    const failure = await validate(new Request('https://app.test/login', {
-      method: 'POST',
-      body: new URLSearchParams({
-        email: 'bad',
-      }),
-    }), login, {
-      csrf: true,
-    })
-
-    expect(failure.valid).toBe(false)
-    if (failure.valid) {
-      throw new Error('Expected combined failure.')
-    }
-
-    expect(failure.errors.first('email')).toBeDefined()
-    expect(failure.errors.get('_root')).toEqual(['CSRF token mismatch.'])
-
     await expect(validate({
       email: 'ava@example.com',
     }, login, {
-      csrf: true,
+      throttle: 'login',
     })).rejects.toThrow('Security-aware validate() options require a Request or request-like event input.')
   })
 
@@ -643,8 +573,6 @@ describe('@holo-js/forms contracts', () => {
         req: {
           method: 'POST',
           headers: {
-            cookie: 'XSRF-TOKEN=login-token',
-            'X-CSRF-TOKEN': 'login-token',
             'x-forwarded-for': '203.0.113.7',
             host: 'app.test',
           },
@@ -656,7 +584,6 @@ describe('@holo-js/forms contracts', () => {
     }
 
     const firstAllowed = await validate(event, login, {
-      csrf: true,
       throttle: 'login',
     })
     expect(firstAllowed.valid).toBe(true)
@@ -685,7 +612,6 @@ describe('@holo-js/forms contracts', () => {
     runtime.__holoFormsNextHeadersImport__ = async () => ({
       headers: () => new Headers({
         cookie: 'XSRF-TOKEN=login-token',
-        'X-CSRF-TOKEN': 'login-token',
         'x-forwarded-for': '203.0.113.11',
         host: 'app.test',
         referer: 'https://app.test/login',
@@ -698,7 +624,6 @@ describe('@holo-js/forms contracts', () => {
     formData.set('email', 'ava@example.com')
 
     const firstAllowed = await validate(formData, login, {
-      csrf: true,
       throttle: 'login',
     })
 
@@ -723,68 +648,6 @@ describe('@holo-js/forms contracts', () => {
       email: 'ava@example.com',
     })
     expect(throttled.errors.get('_root')).toEqual(['Too many attempts. Please try again later.'])
-  })
-
-  it('falls back to forwarded headers when ambient Next action referer is malformed', async () => {
-    const login = schema({
-      email: field.string().required().email(),
-    })
-    const runtime = globalThis as FormsTestGlobal
-
-    runtime.__holoFormsSecurityModule__ = createSecurityModule()
-    runtime.__holoFormsNextHeadersImport__ = async () => ({
-      headers: () => new Headers({
-        cookie: 'XSRF-TOKEN=login-token',
-        'X-CSRF-TOKEN': 'login-token',
-        'x-forwarded-host': 'app.test',
-        'x-forwarded-proto': 'https',
-        referer: 'http://%',
-      }),
-    })
-
-    const formData = new FormData()
-    formData.set('email', 'ava@example.com')
-
-    const submission = await validate(formData, login, {
-      csrf: true,
-    })
-
-    expect(submission.valid).toBe(true)
-  })
-
-  it('preserves cookie semantics for request-like header arrays during csrf validation', async () => {
-    const login = schema({
-      email: field.string().required().email(),
-    })
-
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
-
-    const submission = await validate({
-      method: 'POST',
-      path: '/login',
-      headers: {
-        cookie: [
-          'tracking=1',
-          'XSRF-TOKEN=login-token',
-        ],
-        'X-CSRF-TOKEN': 'login-token',
-        host: 'app.test',
-      },
-      body: new URLSearchParams({
-        email: 'ava@example.com',
-      }),
-    }, login, {
-      csrf: true,
-    })
-
-    expect(submission.valid).toBe(true)
-    if (!submission.valid) {
-      throw new Error('Expected csrf validation success.')
-    }
-
-    expect(submission.data).toEqual({
-      email: 'ava@example.com',
-    })
   })
 
   it('reuses embedded Request instances when normalizing request-like inputs', () => {
@@ -1097,98 +960,6 @@ describe('@holo-js/forms contracts', () => {
     expect(formsInternals.normalizeRequestLikeInput(null)).toBeUndefined()
   })
 
-  it('falls back to empty values when request inspection cannot be replayed after a security failure', async () => {
-    const login = schema({
-      email: field.string().required().email(),
-    })
-
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
-
-    const request = new Request('https://app.test/login', {
-      method: 'POST',
-      body: new URLSearchParams({
-        email: 'ava@example.com',
-      }),
-    })
-
-    await request.text()
-
-    const failure = await validate(request, login, {
-      csrf: true,
-    })
-
-    expect(failure.valid).toBe(false)
-    if (failure.valid) {
-      throw new Error('Expected security failure.')
-    }
-
-    expect(failure.values).toEqual({})
-    expect(failure.errors.flatten()).toEqual({
-      _root: ['CSRF token mismatch.'],
-    })
-    expect(failure.fail()).toEqual({
-      ok: false,
-      status: 419,
-      valid: false,
-      values: {},
-      errors: {
-        _root: ['CSRF token mismatch.'],
-      },
-    })
-  })
-
-  it('preserves existing root validation errors when returning security failures', async () => {
-    const base = schema({
-      email: field.string().required().email(),
-    })
-    const login = {
-      ...base,
-      '~standard': {
-        ...base['~standard'],
-        async validate(value: unknown) {
-          const result = await base['~standard'].validate(value)
-
-          if (result.issues) {
-            return result
-          }
-
-          return {
-            issues: [
-              {
-                message: 'Passwords do not match.',
-              },
-            ],
-          }
-        },
-      },
-    } as typeof base
-
-    ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = createSecurityModule()
-
-    const failure = await validate(new Request('https://app.test/login', {
-      method: 'POST',
-      body: new URLSearchParams({
-        email: 'ava@example.com',
-      }),
-    }), login, {
-      csrf: true,
-    })
-
-    expect(failure.valid).toBe(false)
-    if (failure.valid) {
-      throw new Error('Expected combined root failure.')
-    }
-
-    expect(failure.errors.get('_root')).toEqual([
-      'Passwords do not match.',
-      'CSRF token mismatch.',
-    ])
-    expect(failure.fail().errors._root).toEqual([
-      'Passwords do not match.',
-      'CSRF token mismatch.',
-    ])
-  })
-
   it('validates throttled requests only once per submission', async () => {
     let validateCalls = 0
 
@@ -1211,15 +982,12 @@ describe('@holo-js/forms contracts', () => {
     const result = await validate(new Request('https://app.test/login', {
       method: 'POST',
       headers: {
-        cookie: 'XSRF-TOKEN=login-token',
-        'X-CSRF-TOKEN': 'login-token',
         'x-forwarded-for': '203.0.113.7',
       },
       body: new URLSearchParams({
         email: 'ava@example.com',
       }),
     }), login, {
-      csrf: true,
       throttle: 'login',
     })
 
@@ -1280,11 +1048,6 @@ describe('@holo-js/forms contracts', () => {
     })
 
     ;(globalThis as typeof globalThis & { __holoFormsSecurityModule__?: unknown }).__holoFormsSecurityModule__ = {
-      csrf: {
-        async verify() {
-          return undefined
-        },
-      },
       async rateLimit() {
         throw new Error('security exploded')
       },

@@ -13,6 +13,7 @@ import {
   csrfInternals,
   cookie as createCsrfCookie,
   field as createCsrfField,
+  input as createCsrfInput,
   isSecureRequest,
   protect,
   token as createCsrfToken,
@@ -91,6 +92,7 @@ export {
   csrf,
   createCsrfCookie,
   createCsrfField,
+  createCsrfInput,
   createCsrfToken,
   defineRateLimiter,
   defineSecurityRuntimeBindings,
@@ -113,10 +115,10 @@ export {
 }
 export type {
   SecurityClearRateLimitOptions,
-  SecurityClientBindings,
   SecurityClientConfig,
   SecurityCsrfFacade,
   SecurityCorsFacade,
+  SecurityCsrfInput,
   SecurityCsrfField,
   SecurityDefaultRateLimitKeyResolver,
   SecurityProtectOptions,

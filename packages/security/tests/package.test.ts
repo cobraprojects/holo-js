@@ -417,6 +417,11 @@ describe('@holo-js/security csrf', () => {
       name: '_token',
       value: signedToken,
     })
+    await expect(csrf.input(request)).resolves.toEqual({
+      type: 'hidden',
+      name: '_token',
+      value: signedToken,
+    })
     await expect(csrf.cookie(request)).resolves.toBe(`XSRF-TOKEN=${encodeURIComponent(signedToken)}; Path=/; SameSite=Lax; Secure`)
 
     const proxiedRequest = new Request('http://app.test/register', {
@@ -454,6 +459,11 @@ describe('@holo-js/security csrf', () => {
 
     expect(token.length).toBeGreaterThan(10)
     await expect(csrf.field(request)).resolves.toEqual({
+      name: '_token',
+      value: token,
+    })
+    await expect(csrf.input(request)).resolves.toEqual({
+      type: 'hidden',
       name: '_token',
       value: token,
     })
@@ -506,6 +516,18 @@ describe('@holo-js/security csrf', () => {
     })
     await expect(csrf.verify(blankHeaderRequest)).resolves.toBeUndefined()
 
+    const nativeFormRequest = new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        cookie: `XSRF-TOKEN=${formToken}`,
+        origin: 'https://app.test',
+      },
+      body: new URLSearchParams({
+        email: 'ava@example.com',
+      }),
+    })
+    await expect(csrf.verify(nativeFormRequest)).resolves.toBeUndefined()
+
     const fileTokenFormData = new FormData()
     fileTokenFormData.set('_token', new Blob(['not-a-string']))
     await expect(csrf.verify(new Request('https://app.test/login', {
@@ -537,6 +559,37 @@ describe('@holo-js/security csrf', () => {
       status: 419,
       name: 'SecurityCsrfError',
     })
+
+    const signedToken = securityExports.csrfInternals.encodeCsrfToken('same-origin-token')
+    await expect(csrf.verify(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        cookie: `XSRF-TOKEN=${signedToken}`,
+        'X-CSRF-TOKEN': securityExports.csrfInternals.encodeCsrfToken('wrong-token'),
+      },
+    }))).rejects.toBeInstanceOf(SecurityCsrfError)
+
+    await expect(csrf.verify(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        cookie: `XSRF-TOKEN=${signedToken}`,
+        origin: 'https://evil.test',
+      },
+      body: new URLSearchParams({
+        email: 'ava@example.com',
+      }),
+    }))).rejects.toBeInstanceOf(SecurityCsrfError)
+
+    await expect(csrf.verify(new Request('https://app.test/login', {
+      method: 'POST',
+      headers: {
+        cookie: `XSRF-TOKEN=${signedToken}`,
+        referer: 'not a url',
+      },
+      body: new URLSearchParams({
+        email: 'ava@example.com',
+      }),
+    }))).rejects.toBeInstanceOf(SecurityCsrfError)
 
     await expect(csrf.verify(new Request('https://app.test/login', {
       method: 'POST',

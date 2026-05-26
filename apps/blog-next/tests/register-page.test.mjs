@@ -127,11 +127,9 @@ describe('register page', () => {
     })
 
     expect(mocks.useForm).toHaveBeenCalledWith(mocks.registerForm, expect.objectContaining({
-      csrf: true,
       validateOn: 'blur',
     }))
     expect(mocks.validate).toHaveBeenCalledWith(expect.any(FormData), mocks.registerForm, {
-      csrf: true,
       throttle: 'register',
     })
     expect(mocks.register).not.toHaveBeenCalled()
@@ -165,7 +163,6 @@ describe('registerAction', () => {
 
     await expect(registerAction(new FormData())).resolves.toBe(failure)
     expect(mocks.validate).toHaveBeenCalledWith(expect.any(FormData), mocks.registerForm, {
-      csrf: true,
       throttle: 'register',
     })
     expect(mocks.register).not.toHaveBeenCalled()

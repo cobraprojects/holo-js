@@ -19,7 +19,7 @@
   </div>
 
   <form class="stack" method="post">
-    <input type="hidden" name={data.csrf.name} value={data.csrf.value} />
+    <input {...data.csrf.input} />
 
     {#if formError}
       <p class="error">{formError}</p>

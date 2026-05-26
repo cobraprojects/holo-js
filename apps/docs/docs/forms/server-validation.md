@@ -27,8 +27,6 @@ const loginForm = schema({
 
 export async function POST(request: Request) {
   const submission = await validate(request, loginForm, {
-    // Optional: requires @holo-js/security.
-    csrf: true,
     throttle: 'login',
   })
 
@@ -56,8 +54,6 @@ const loginForm = schema({
 
 export default defineEventHandler(async (event) => {
   const submission = await validate(event, loginForm, {
-    // Optional: requires @holo-js/security.
-    csrf: true,
     throttle: 'login',
   })
 
@@ -84,8 +80,6 @@ const loginForm = schema({
 export const actions = {
   default: async ({ request }) => {
     const submission = await validate(request, loginForm, {
-      // Optional: requires @holo-js/security.
-      csrf: true,
       throttle: 'login',
     })
 
@@ -103,12 +97,11 @@ export const actions = {
 
 :::
 
-`csrf` and `throttle` in these examples are optional security features. Use them only when
-`@holo-js/security` is installed and configured. Without that package, call `validate(...)` without those
-options.
+`throttle` is optional and requires `@holo-js/security`. CSRF is not a `validate(...)` option; the
+framework middleware verifies unsafe requests before these handlers run.
 
-When you add `csrf` or `throttle`, pass a real web `Request` or request-like event into `validate(...)`. In
-Nuxt `server/api/*`, you can pass the h3 event directly instead of validating only the parsed body.
+When you add `throttle`, pass a real web `Request` or request-like event into `validate(...)`. In Nuxt
+`server/api/*`, you can pass the h3 event directly instead of validating only the parsed body.
 
 ## SvelteKit remote functions
 
@@ -216,7 +209,7 @@ and applies the returned values and errors to `useForm(...)`:
 </script>
 
 <form method="post">
-  <input type="hidden" name={data.csrf.name} value={data.csrf.value} />
+  <input {...data.csrf.input}>
   <input
     name="name"
     value={register.values.name}
@@ -262,7 +255,6 @@ import { loginForm } from '@/lib/schemas/login'
 
 export async function loginAction(formData: FormData) {
   const submission = await validate(formData, loginForm, {
-    csrf: true,
     throttle: 'login',
   })
 
@@ -289,7 +281,6 @@ import { loginAction } from './actions'
 
 export default function LoginPage() {
   const form = useForm(loginForm, {
-    csrf: true,
     initialValues: { email: '', password: '', remember: false },
     async submitter({ formData }) {
       return await loginAction(formData)
@@ -343,7 +334,6 @@ import { loginForm } from '~/lib/schemas/login'
 
 const { refreshUser } = await useAuth()
 const form = useForm(loginForm, {
-  csrf: true,
   initialValues: { email: '', password: '', remember: false },
   async submitter({ formData }) {
     const submission = await $fetch('/api/login', { method: 'POST', body: formData })
@@ -395,7 +385,6 @@ import { loginForm } from '$lib/schemas/login'
 export const actions = {
   default: async ({ request }) => {
     const submission = await validate(request, loginForm, {
-      csrf: true,
       throttle: 'login',
     })
 
@@ -429,7 +418,7 @@ export const actions = {
 </script>
 
 <form method="post">
-  <input type="hidden" name={data.csrf.name} value={data.csrf.value} />
+  <input {...data.csrf.input}>
 
   <input name="email" type="email" value={login.values.email} on:input={(event) => login.fields.email.onInput(event.currentTarget.value)} />
   {#if login.errors.has('email')}
@@ -518,8 +507,6 @@ export const registerUser = schema({
 
 export async function POST(request: Request) {
   const submission = await validate(request, registerUser, {
-    // Optional: requires @holo-js/security.
-    csrf: true,
     throttle: 'register',
   })
 
@@ -546,8 +533,6 @@ const registerUser = schema({
 
 export default defineEventHandler(async (event) => {
   const submission = await validate(event, registerUser, {
-    // Optional: requires @holo-js/security.
-    csrf: true,
     throttle: 'register',
   })
 
@@ -575,7 +560,6 @@ const registerUser = schema({
 export const actions = {
   default: async ({ request }) => {
     const submission = await validate(request, registerUser, {
-      csrf: true,
       throttle: 'register',
     })
 
