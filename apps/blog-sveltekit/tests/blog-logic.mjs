@@ -273,10 +273,15 @@ async function expectRedirect(action) {
 
 async function signInEditor() {
   const editor = await User.where('email', 'editor@example.com').firstOrFail()
+  const adminActor = { id: 'admin-guard-1', email: 'admin-guard@example.com', role: 'admin' }
   authorizationInternals.configureAuthorizationAuthIntegration({
     hasGuard: guardName => ['admin', 'api', 'web'].includes(guardName),
     resolveDefaultActor: () => editor,
-    resolveGuardActor: guardName => guardName === 'web' || guardName === 'admin' ? editor : null,
+    resolveGuardActor: (guardName) => {
+      if (guardName === 'web') return editor
+      if (guardName === 'admin') return adminActor
+      return null
+    },
   })
 }
 
@@ -481,7 +486,7 @@ try {
     AuthorizationError,
   )
   await signInEditor()
-  await authorization.guard('admin').authorize('update', featuredPost)
+  await authorization.guard('admin').authorize('delete', featuredPost)
 
   const dashboard = await getAdminDashboardData()
   assert.equal(dashboard.postCount, 2)
