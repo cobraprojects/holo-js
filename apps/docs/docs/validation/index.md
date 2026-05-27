@@ -33,7 +33,7 @@ the lower-level engine.
 
 It does not own:
 
-- server submission helpers like `safeParse(...)`, `submission.fail()`, and `submission.success(...)`
+- server submission helpers like `submission.fail()` and `submission.success(...)`
 - client form state like `useForm(...)`
 
 Those belong to `@holo-js/forms` and adapter packages.
