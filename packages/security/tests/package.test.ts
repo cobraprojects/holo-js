@@ -1468,6 +1468,7 @@ describe('@holo-js/security rate-limit drivers', () => {
       const bucketPath = fileRateLimitDriverInternals.getBucketPath(harness.root, 'limiter:login|user:bad')
 
       expect(bucketPath.startsWith(harness.root)).toBe(true)
+      expect(bucketPath.startsWith(join(harness.root, 'buckets'))).toBe(true)
       expect(bucketPath.endsWith('.json')).toBe(true)
 
       await mkdir(join(harness.root, 'aa', 'bb'), { recursive: true })
