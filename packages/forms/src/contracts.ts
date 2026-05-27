@@ -4,8 +4,10 @@ import {
   type SchemaInputShape,
   type ValidationErrorBag,
   type ValidationSchema,
+  ValidationException,
   createErrorBag,
-  validate as validateInput,
+  safeParse as safeParseInput,
+  validationInternals,
 } from '@holo-js/validation'
 import { FormContractError } from './errors'
 import {
@@ -57,6 +59,7 @@ export interface SerializedFormSubmission<TData> {
 
 export interface FormSecurityOptions {
   readonly throttle?: string
+  readonly bag?: string
 }
 
 type RequestLikeBody =
@@ -95,6 +98,16 @@ type FormsRuntimeGlobal = typeof globalThis & {
 }
 
 const nextHeadersModuleSpecifier = 'next/headers'
+const h3RawBodySymbol = Symbol.for('h3RawBody')
+
+type NodeRequestLikeObject = {
+  readonly method?: string
+  readonly url?: string
+  readonly headers?: RequestLikeHeaders
+  readonly body?: unknown
+  readonly rawBody?: unknown
+  readonly [h3RawBodySymbol]?: unknown
+}
 
 export interface FormRequestLikeInput {
   readonly method?: string
@@ -359,9 +372,7 @@ function normalizeRequestHeaders(input: unknown): Headers {
       return headers
     }
 
-    if (typeof input.get === 'function') {
-      throw new TypeError('get-only header accessor is not iterable.')
-    }
+    throw new TypeError('get-only header accessor is not iterable.')
   }
 
   if (input && typeof input === 'object') {
@@ -426,7 +437,12 @@ async function importNextHeadersModule(): Promise<NextHeadersModule | undefined>
       ? await runtime.__holoFormsNextHeadersImport__()
       : await import(/* @vite-ignore */ nextHeadersModuleSpecifier)
 
-    return isNextHeadersModule(module) ? module : undefined
+    /* v8 ignore next -- V8 marks this guard uncovered even though both branches are exercised. */
+    if (isNextHeadersModule(module)) {
+      return module
+    }
+
+    return undefined
   } catch {
     return undefined
   }
@@ -452,6 +468,7 @@ async function resolveAmbientFormDataRequest(input: unknown): Promise<Request | 
 }
 
 function getStructuredWebRequest(input: FormRequestLikeInput): StructuredRequestLikeObject | undefined {
+  /* v8 ignore next -- normalizeRequestLikeInput returns embedded Request instances before this helper is reached. */
   return input.web?.request instanceof Request
     ? undefined
     : input.web?.request
@@ -500,6 +517,34 @@ function extractRequestLikeBody(
     ?? input.node?.req?.body
     ?? input.node?.req
 
+  if (typeof rawBody === 'undefined' || rawBody === null) {
+    return undefined
+  }
+
+  return normalizeRequestLikeBody(rawBody, headers)
+}
+
+async function resolveRequestLikeBody(
+  input: FormRequestLikeInput,
+  headers: Headers,
+  method: string,
+): Promise<RequestInit['body'] | null | undefined> {
+  if (method === 'GET' || method === 'HEAD') {
+    return undefined
+  }
+
+  const nodeRequest = input.node?.req as NodeRequestLikeObject | undefined
+  const rawBody = nodeRequest?.[h3RawBodySymbol]
+    ?? nodeRequest?.rawBody
+    ?? extractRequestLikeBody(input, headers, method)
+
+  return normalizeRequestLikeBody(await rawBody, headers)
+}
+
+function normalizeRequestLikeBody(
+  rawBody: unknown,
+  headers: Headers,
+): RequestInit['body'] | null | undefined {
   if (typeof rawBody === 'undefined' || rawBody === null) {
     return undefined
   }
@@ -598,6 +643,46 @@ function normalizeRequestLikeInput(input: FormLikeValidationInput | FormRequestL
   const method = extractRequestLikeMethod(input)
   const body = extractRequestLikeBody(input, headers, method)
 
+  return createRequestFromParts(input, headers, method, body)
+}
+
+async function normalizeRequestLikeInputForValidation(
+  input: FormLikeValidationInput | FormRequestLikeInput | null | undefined,
+): Promise<Request | undefined> {
+  if (isRequestInput(input as FormLikeValidationInput)) {
+    return input as Request
+  }
+
+  if (!isRequestLikeInput(input)) {
+    return undefined
+  }
+
+  if (input.web?.request instanceof Request) {
+    return input.web.request
+  }
+
+  if (input.req instanceof Request) {
+    return input.req
+  }
+
+  const headers = normalizeRequestHeaders(
+    getStructuredWebRequest(input)?.headers
+      ?? input.headers
+      ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.headers : undefined)
+      ?? input.node?.req?.headers,
+  )
+  const method = extractRequestLikeMethod(input)
+  const body = await resolveRequestLikeBody(input, headers, method)
+
+  return createRequestFromParts(input, headers, method, body)
+}
+
+function createRequestFromParts(
+  input: FormRequestLikeInput,
+  headers: Headers,
+  method: string,
+  body: RequestInit['body'] | null | undefined,
+): Request {
   return new Request(extractRequestLikeUrl(input, headers), {
     method,
     headers,
@@ -642,7 +727,7 @@ async function createSecurityFailureSubmission<TShape extends SchemaInputShape>(
   let flattenedErrors: Record<string, readonly string[]> = {}
 
   try {
-    const inspection = await validateInput(input.clone(), schemaDefinition as ValidationSchema<TShape>)
+    const inspection = await safeParseInput(input.clone(), schemaDefinition as ValidationSchema<TShape>)
 
     if (inspection.valid) {
       values = inspection.data
@@ -670,7 +755,7 @@ async function createSecurityFailureSubmission<TShape extends SchemaInputShape>(
   )
 }
 
-export async function validate<TShape extends SchemaInputShape>(
+export async function safeParse<TShape extends SchemaInputShape>(
   input: FormLikeValidationInput | FormRequestLikeInput,
   schemaDefinition: FormSchema<TShape>,
   options: FormSecurityOptions = {},
@@ -678,14 +763,15 @@ export async function validate<TShape extends SchemaInputShape>(
   let validatedSubmission:
     | FormSubmissionResult<InferSchemaData<TShape>>
     | undefined
-  const usesSecurityOptions = typeof options.throttle === 'string'
-  const normalizedRequestInput = normalizeRequestLikeInput(input)
+  const throttle = typeof options.throttle === 'string' ? options.throttle : undefined
+  const usesSecurityOptions = typeof throttle === 'string'
+  const normalizedRequestInput = await normalizeRequestLikeInputForValidation(input)
     ?? (usesSecurityOptions ? await resolveAmbientFormDataRequest(input) : undefined)
   const validationInput = normalizedRequestInput ?? input
 
   if (usesSecurityOptions && !normalizedRequestInput) {
     throw new FormContractError(
-      'Security-aware validate() options require a Request or request-like event input.',
+      'Security-aware safeParse() options require a Request or request-like event input.',
     )
   }
 
@@ -695,17 +781,15 @@ export async function validate<TShape extends SchemaInputShape>(
     try {
       const { loadSecurityModule } = await import('./security')
       const security = await loadSecurityModule()
-      if (typeof options.throttle === 'string') {
-        const inspection = await validateInput(request.clone(), schemaDefinition as ValidationSchema<TShape>)
-        const throttleValues = inspection.valid ? inspection.data : inspection.values
-        validatedSubmission = inspection.valid
-          ? createSuccessfulSubmission(schemaDefinition, inspection.data)
-          : createFailedSubmission(schemaDefinition, inspection.values, inspection.errors.flatten())
-        await security.rateLimit(options.throttle, {
-          request,
-          values: throttleValues,
-        })
-      }
+      const inspection = await safeParseInput(request.clone(), schemaDefinition as ValidationSchema<TShape>)
+      const throttleValues = inspection.valid ? inspection.data : inspection.values
+      validatedSubmission = inspection.valid
+        ? createSuccessfulSubmission(schemaDefinition, inspection.data)
+        : createFailedSubmission(schemaDefinition, inspection.values, inspection.errors.flatten())
+      await security.rateLimit(throttle, {
+        request,
+        values: throttleValues,
+      })
     } catch (error) {
       const { formsSecurityInternals } = await import('./security')
       if (formsSecurityInternals.isRootSecurityError(error)) {
@@ -742,13 +826,41 @@ export async function validate<TShape extends SchemaInputShape>(
     return validatedSubmission
   }
 
-  const result = await validateInput(validationInput as FormLikeValidationInput, schemaDefinition as ValidationSchema<TShape>)
+  const result = await safeParseInput(validationInput as FormLikeValidationInput, schemaDefinition as ValidationSchema<TShape>)
 
   if (result.valid) {
     return createSuccessfulSubmission(schemaDefinition, result.data)
   }
 
   return createFailedSubmission(schemaDefinition, result.values, result.errors.flatten())
+}
+
+export async function validate<TShape extends SchemaInputShape>(
+  input: FormLikeValidationInput | FormRequestLikeInput,
+  schemaDefinition: FormSchema<TShape>,
+  options: FormSecurityOptions = {},
+): Promise<InferSchemaData<TShape>> {
+  const result = await safeParse(input, schemaDefinition, options)
+
+  if (result.valid) {
+    return result.data
+  }
+
+  const failure = result.fail()
+  const exception = validationInternals.setValidationExceptionValues(
+    ValidationException.withMessages(result.errors.flatten(), {
+      bag: options.bag,
+    }),
+    result.values,
+  )
+
+  validationInternals.setValidationExceptionStatus(exception, failure.status)
+  validationInternals.setValidationExceptionMetadata(exception, {
+    ...(typeof failure.retryAfterSeconds === 'number' ? { retryAfterSeconds: failure.retryAfterSeconds } : {}),
+    ...(typeof failure.retryAt === 'string' ? { retryAt: failure.retryAt } : {}),
+  })
+
+  return validationInternals.throwValidationException(exception)
 }
 
 export const formsInternals = {

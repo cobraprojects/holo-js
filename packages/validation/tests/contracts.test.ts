@@ -4,8 +4,11 @@ import {
   SUPPORTED_RULE_FAMILIES,
   type ValidationSchema,
   ValidationContractError,
+  ValidationException,
   createErrorBag,
+  DEFAULT_VALIDATION_BAG,
   field,
+  isValidationException,
   isValidationSchema,
   parse,
   safeParse,
@@ -21,6 +24,92 @@ function objectPrototypeHas(key: string): boolean {
 }
 
 describe('@holo-js/validation contracts', () => {
+  it('returns validated data from validate and throws validation exceptions for failures', async () => {
+    const updatePost = schema({
+      title: field.string().required(),
+      image: field.file().optional().image('The selected file must be an image.'),
+    })
+
+    const data = await validate({
+      title: 'Hello',
+    }, updatePost)
+
+    expect(data).toEqual({
+      title: 'Hello',
+      image: undefined,
+    })
+
+    await expect(validate({
+      title: '',
+      image: new Blob(['text'], { type: 'text/plain' }),
+    }, updatePost)).rejects.toMatchObject({
+      name: 'ValidationException',
+      status: 422,
+      bag: DEFAULT_VALIDATION_BAG,
+    })
+
+    try {
+      await validate({
+        title: '',
+        image: new Blob(['text'], { type: 'text/plain' }),
+      }, updatePost, { bag: 'post' })
+      throw new Error('Expected validation to fail.')
+    } catch (error) {
+      expect(error).toBeInstanceOf(ValidationException)
+      const exception = error as ValidationException
+      expect(exception.bag).toBe('post')
+      expect(exception.errors.first('title')).toBe('This field is required.')
+      expect(exception.errors.first('image')).toBe('The selected file must be an image.')
+      expect(exception.toJSON()).toEqual({
+        ok: false,
+        status: 422,
+        valid: false,
+        message: 'title: This field is required.',
+        bag: 'post',
+        values: {
+          title: '',
+          image: expect.any(Blob),
+        },
+        errors: {
+          title: ['This field is required.'],
+          image: ['The selected file must be an image.'],
+        },
+      })
+    }
+  })
+
+  it('creates manual validation exceptions in the default bag', () => {
+    const exception = ValidationException.withMessages({
+      image: ['The selected file must be 2 MB or smaller.'],
+    })
+
+    expect(exception.bag).toBe(DEFAULT_VALIDATION_BAG)
+    expect(exception.errors.first('image')).toBe('The selected file must be 2 MB or smaller.')
+  })
+
+  it('recognizes serialized-compatible validation exceptions from another module instance', () => {
+    const exception = ValidationException.withMessages({
+      email: ['Invalid credentials.'],
+    })
+    class ForeignValidationException extends Error {
+      constructor() {
+        super(exception.message)
+        this.name = exception.name
+      }
+
+      toJSON(): unknown {
+        return exception.toJSON()
+      }
+    }
+    const crossBundleException = {
+      name: exception.name,
+      toJSON: () => exception.toJSON(),
+    }
+
+    expect(isValidationException(crossBundleException)).toBe(true)
+    expect(isValidationException(new ForeignValidationException())).toBe(true)
+  })
+
   it('defines schemas, field builders, and rule families', () => {
     const registerUser = schema({
       name: field.string().required().min(3).max(255),
@@ -113,7 +202,7 @@ describe('@holo-js/validation contracts', () => {
       },
     })
 
-    const result = await validate({
+    const result = await safeParse({
       name: 'Ava',
       email: 'ava@example.com',
       age: '42',
@@ -227,7 +316,7 @@ describe('@holo-js/validation contracts', () => {
     formData.append('tags[]', 'editor')
     formData.append('profile.city', 'Cairo')
 
-    const formDataResult = await validate(formData, registerUser)
+    const formDataResult = await safeParse(formData, registerUser)
     expect(formDataResult.valid).toBe(true)
     if (formDataResult.valid) {
       expect(formDataResult.data.newsletter).toBe(true)
@@ -240,7 +329,7 @@ describe('@holo-js/validation contracts', () => {
     searchParams.set('age', '21')
     searchParams.set('profile.city', 'Alexandria')
 
-    const searchResult = await validate(searchParams, registerUser)
+    const searchResult = await safeParse(searchParams, registerUser)
     expect(searchResult.valid).toBe(true)
     if (searchResult.valid) {
       expect(searchResult.data.age).toBe(21)
@@ -261,7 +350,7 @@ describe('@holo-js/validation contracts', () => {
       }),
     })
 
-    const requestResult = await validate(jsonRequest, registerUser)
+    const requestResult = await safeParse(jsonRequest, registerUser)
     expect(requestResult.valid).toBe(true)
     if (requestResult.valid) {
       expect(requestResult.data.age).toBe(33)
@@ -276,7 +365,7 @@ describe('@holo-js/validation contracts', () => {
     try {
       const formData = new FormData()
       formData.append('__proto__.polluted', 'yes')
-      await expect(validate(formData, s)).rejects.toThrow(ValidationContractError)
+      await expect(safeParse(formData, s)).rejects.toThrow(ValidationContractError)
 
       const searchParams = new URLSearchParams()
       searchParams.append('constructor.prototype.polluted', 'yes')
@@ -296,7 +385,7 @@ describe('@holo-js/validation contracts', () => {
       },
     })
 
-    const success = await validate({
+    const success = await safeParse({
       profile: { tags: ['a'], bio: 'hello' },
     }, nestedSchema)
 
@@ -305,7 +394,7 @@ describe('@holo-js/validation contracts', () => {
       expect(success.data.profile.tags).toEqual(['a'])
     }
 
-    const failure = await validate({
+    const failure = await safeParse({
       profile: { tags: [] },
     }, nestedSchema)
 
@@ -324,7 +413,7 @@ describe('@holo-js/validation contracts', () => {
       ).required(),
     })
 
-    const missingValue = await validate({
+    const missingValue = await safeParse({
       tags: [''],
     }, memberSchema)
     expect(missingValue.valid).toBe(false)
@@ -332,7 +421,7 @@ describe('@holo-js/validation contracts', () => {
       expect(missingValue.errors.first('tags.0')).toBe('This field is required.')
     }
 
-    const customFailure = await validate({
+    const customFailure = await safeParse({
       tags: ['blocked'],
     }, memberSchema)
     expect(customFailure.valid).toBe(false)
@@ -352,7 +441,7 @@ describe('@holo-js/validation contracts', () => {
       ).required(),
     })
 
-    const missingValue = await validate({
+    const missingValue = await safeParse({
       matrix: [['']],
     }, memberSchema)
     expect(missingValue.valid).toBe(false)
@@ -360,7 +449,7 @@ describe('@holo-js/validation contracts', () => {
       expect(missingValue.errors.first('matrix.0.0')).toBe('This field is required.')
     }
 
-    const customFailure = await validate({
+    const customFailure = await safeParse({
       matrix: [['blocked']],
     }, memberSchema)
     expect(customFailure.valid).toBe(false)
@@ -368,7 +457,7 @@ describe('@holo-js/validation contracts', () => {
       expect(customFailure.errors.first('matrix.0.0')).toBe('Blocked cell.')
     }
 
-    const success = await validate({
+    const success = await safeParse({
       matrix: [['allowed']],
     }, memberSchema)
     expect(success.valid).toBe(true)
@@ -393,7 +482,7 @@ describe('@holo-js/validation contracts', () => {
     const defaultParsed = await parse({}, defaultNameSchema)
     expect(defaultParsed.nameLength).toBe(3)
 
-    const result = await validate({
+    const result = await safeParse({
       nameLength: 'Lina',
     }, nameSchema)
     expect(result.valid).toBe(true)
@@ -411,14 +500,36 @@ describe('@holo-js/validation contracts', () => {
     const image = new File([new Uint8Array(128)], 'avatar.png', { type: 'image/png' })
     const text = new File([new Uint8Array(2048)], 'notes.txt', { type: 'text/plain' })
 
-    const success = await validate({ avatar: image }, uploadAvatar)
+    const success = await safeParse({ avatar: image }, uploadAvatar)
     expect(success.valid).toBe(true)
 
-    const failure = await validate({ avatar: text }, uploadAvatar)
+    const failure = await safeParse({ avatar: text }, uploadAvatar)
     expect(failure.valid).toBe(false)
     if (!failure.valid) {
       expect(failure.errors.first('avatar')).toBe('File must be an image.')
       expect(failure.errors.get('avatar')).toContain('File size must be at most 1024 bytes.')
+    }
+  })
+
+  it('treats empty optional file inputs as missing files', async () => {
+    const postSchema = schema({
+      image: field.file().optional().image('The selected file must be an image.').maxSize('2mb', 'The selected file must be 2 MB or smaller.'),
+    })
+    const formData = new FormData()
+    formData.set('image', new File([], '', { type: 'application/octet-stream' }))
+
+    const result = await safeParse(formData, postSchema)
+
+    expect(result.valid).toBe(true)
+    if (result.valid) {
+      expect(result.data.image).toBeUndefined()
+    }
+
+    const zeroByteNamedFile = new File([], 'empty.png', { type: 'image/png' })
+    const namedFile = await safeParse({ image: zeroByteNamedFile }, postSchema)
+    expect(namedFile.valid).toBe(true)
+    if (namedFile.valid) {
+      expect(namedFile.data.image).toBe(zeroByteNamedFile)
     }
   })
 
@@ -430,13 +541,13 @@ describe('@holo-js/validation contracts', () => {
         .customAsync(async value => value !== 'blocked' || 'Username is blocked.'),
     })
 
-    const blocked = await validate({ username: 'blocked' }, userSchema)
+    const blocked = await safeParse({ username: 'blocked' }, userSchema)
     expect(blocked.valid).toBe(false)
     if (!blocked.valid) {
       expect(blocked.errors.first('username')).toBe('Username is blocked.')
     }
 
-    const available = await validate({ username: 'available' }, userSchema)
+    const available = await safeParse({ username: 'available' }, userSchema)
     expect(available.valid).toBe(true)
   })
 
@@ -454,7 +565,7 @@ describe('@holo-js/validation contracts', () => {
         .beforeOrToday('Publish date cannot be in the future.'),
     })
 
-    const result = await validate({
+    const result = await safeParse({
       email: 'bad',
       password: 'short',
       avatar: new File([new Uint8Array(2048)], 'avatar.txt', { type: 'text/plain' }),
@@ -472,7 +583,7 @@ describe('@holo-js/validation contracts', () => {
     expect(result.errors.get('avatar')).toContain('Avatar must be smaller than 1kb.')
     expect(result.errors.first('publishedAt')).toBe('Publish date cannot be in the future.')
 
-    const missing = await validate({
+    const missing = await safeParse({
       email: '',
       password: 'supersecret',
       avatar: new File([new Uint8Array(10)], 'avatar.png', { type: 'image/png' }),
@@ -500,7 +611,7 @@ describe('@holo-js/validation contracts', () => {
       checkedAt: field.date().today(),
     })
 
-    const success = await validate({
+    const success = await safeParse({
       publishedAt: new Date().toISOString(),
       archivedAt: new Date().toISOString(),
       expiresAt: new Date().toISOString(),
@@ -510,7 +621,7 @@ describe('@holo-js/validation contracts', () => {
 
     expect(success.valid).toBe(true)
 
-    const failure = await validate({
+    const failure = await safeParse({
       publishedAt: tomorrow.toISOString(),
       archivedAt: yesterday.toISOString(),
       expiresAt: yesterday.toISOString(),
@@ -596,7 +707,7 @@ describe('@holo-js/validation coverage completeness', () => {
       score: field.number().required().size(100),
     })
 
-    const success = await validate({
+    const success = await safeParse({
       endpoint: 'https://example.com',
       id: '550e8400-e29b-41d4-a716-446655440000',
       code: 'ABCDEF',
@@ -609,7 +720,7 @@ describe('@holo-js/validation coverage completeness', () => {
       expect(success.data.slug).toBe('hello-world')
     }
 
-    const failure = await validate({
+    const failure = await safeParse({
       endpoint: 'not-a-url',
       id: 'not-a-uuid',
       code: 'AB',
@@ -640,7 +751,7 @@ describe('@holo-js/validation coverage completeness', () => {
       futureOrToday: field.date().afterOrToday(),
     })
 
-    const success = await validate({
+    const success = await safeParse({
       pastOnly: yesterday.toISOString(),
       pastOrToday: new Date().toISOString(),
       futureOnly: tomorrow.toISOString(),
@@ -649,7 +760,7 @@ describe('@holo-js/validation coverage completeness', () => {
 
     expect(success.valid).toBe(true)
 
-    const failure = await validate({
+    const failure = await safeParse({
       pastOnly: tomorrow.toISOString(),
       pastOrToday: tomorrow.toISOString(),
       futureOnly: yesterday.toISOString(),
@@ -780,7 +891,7 @@ describe('@holo-js/validation coverage completeness', () => {
       method: 'GET',
     })
 
-    const result = await validate(getRequest, searchSchema)
+    const result = await safeParse(getRequest, searchSchema)
     expect(result.valid).toBe(true)
     if (result.valid) {
       expect(result.data.q).toBe('hello')
@@ -791,7 +902,7 @@ describe('@holo-js/validation coverage completeness', () => {
       method: 'HEAD',
     })
 
-    const headResult = await validate(headRequest, searchSchema)
+    const headResult = await safeParse(headRequest, searchSchema)
     expect(headResult.valid).toBe(true)
   })
 
@@ -806,7 +917,7 @@ describe('@holo-js/validation coverage completeness', () => {
       body: 'email=ava%40example.com',
     })
 
-    const result = await validate(request, loginSchema)
+    const result = await safeParse(request, loginSchema)
     expect(result.valid).toBe(true)
     if (result.valid) {
       expect(result.data.email).toBe('ava@example.com')
@@ -824,7 +935,7 @@ describe('@holo-js/validation coverage completeness', () => {
       body: '   ',
     })
 
-    const result = await validate(request, loginSchema)
+    const result = await safeParse(request, loginSchema)
     expect(result.valid).toBe(false)
   })
 
@@ -839,7 +950,7 @@ describe('@holo-js/validation coverage completeness', () => {
       body: '<email>test</email>',
     })
 
-    await expect(validate(request, loginSchema)).rejects.toThrow('Unsupported request content type')
+    await expect(safeParse(request, loginSchema)).rejects.toThrow('Unsupported request content type')
   })
 
   it('rejects unsupported requests with missing content type', async () => {
@@ -852,7 +963,7 @@ describe('@holo-js/validation coverage completeness', () => {
       body: new Blob(['raw-body']),
     })
 
-    await expect(validate(request, loginSchema)).rejects.toThrow('Unsupported request content type: (missing).')
+    await expect(safeParse(request, loginSchema)).rejects.toThrow('Unsupported request content type: (missing).')
   })
 
   it('rejects non-object non-web inputs', async () => {
@@ -860,7 +971,7 @@ describe('@holo-js/validation coverage completeness', () => {
       email: field.string().required(),
     })
 
-    await expect(validate('bad-input' as never, loginSchema)).rejects.toThrow('Validation input must be')
+    await expect(safeParse('bad-input' as never, loginSchema)).rejects.toThrow('Validation input must be')
   })
 
   it('coerces boolean strings from form data', async () => {
@@ -873,7 +984,7 @@ describe('@holo-js/validation coverage completeness', () => {
       noFlag: field.boolean().required(),
     })
 
-    const result = await validate({
+    const result = await safeParse({
       enabled: 'true',
       disabled: 'false',
       onFlag: 'on',
@@ -901,7 +1012,7 @@ describe('@holo-js/validation coverage completeness', () => {
       emptyDate: field.date().optional(),
     })
 
-    const result = await validate({
+    const result = await safeParse({
       age: '25',
       emptyAge: '',
       birthday: '2024-01-01',
@@ -916,7 +1027,7 @@ describe('@holo-js/validation coverage completeness', () => {
       expect(result.data.emptyDate).toBeUndefined()
     }
 
-    const invalidDate = await validate({ birthday: 'not-a-date' }, schema({
+    const invalidDate = await safeParse({ birthday: 'not-a-date' }, schema({
       birthday: field.date().optional(),
     }))
     expect(invalidDate.valid).toBe(false)
@@ -928,7 +1039,7 @@ describe('@holo-js/validation coverage completeness', () => {
       emptyTags: field.array(field.string()).optional(),
     })
 
-    const result = await validate({
+    const result = await safeParse({
       tags: 'single',
       emptyTags: undefined,
     }, tagsSchema)
@@ -970,10 +1081,10 @@ describe('@holo-js/validation coverage completeness', () => {
     const exact = new File([new Uint8Array(256)], 'doc.pdf', { type: 'application/pdf' })
     const wrong = new File([new Uint8Array(128)], 'doc.pdf', { type: 'application/pdf' })
 
-    const success = await validate({ doc: exact }, uploadSchema)
+    const success = await safeParse({ doc: exact }, uploadSchema)
     expect(success.valid).toBe(true)
 
-    const failure = await validate({ doc: wrong }, uploadSchema)
+    const failure = await safeParse({ doc: wrong }, uploadSchema)
     expect(failure.valid).toBe(false)
     if (!failure.valid) {
       expect(failure.errors.first('doc')).toContain('exactly')
@@ -989,7 +1100,7 @@ describe('@holo-js/validation coverage completeness', () => {
     formData.append('contacts[]', 'alice')
     formData.append('contacts[]', 'bob')
 
-    const result = await validate(formData, contactSchema)
+    const result = await safeParse(formData, contactSchema)
     expect(result.valid).toBe(true)
     if (result.valid) {
       expect(result.data.contacts).toEqual(['alice', 'bob'])
@@ -1001,13 +1112,13 @@ describe('@holo-js/validation coverage completeness', () => {
       status: field.string().required().in(['draft', 'published', 'archived']),
     })
 
-    const success = await validate({ status: 'draft' }, statusSchema)
+    const success = await safeParse({ status: 'draft' }, statusSchema)
     expect(success.valid).toBe(true)
 
-    const failure = await validate({ status: 'deleted' }, statusSchema)
+    const failure = await safeParse({ status: 'deleted' }, statusSchema)
     expect(failure.valid).toBe(false)
 
-    const missing = await validate({}, statusSchema)
+    const missing = await safeParse({}, statusSchema)
     expect(missing.valid).toBe(false)
     if (!missing.valid) {
       expect(missing.errors.get('status')).toEqual(['This field is required.'])
@@ -1019,10 +1130,10 @@ describe('@holo-js/validation coverage completeness', () => {
       slug: field.string().required().regex(/^[a-z0-9-]+$/),
     })
 
-    const success = await validate({ slug: 'hello-world' }, slugSchema)
+    const success = await safeParse({ slug: 'hello-world' }, slugSchema)
     expect(success.valid).toBe(true)
 
-    const failure = await validate({ slug: 'Hello World!' }, slugSchema)
+    const failure = await safeParse({ slug: 'Hello World!' }, slugSchema)
     expect(failure.valid).toBe(false)
   })
 
@@ -1031,13 +1142,13 @@ describe('@holo-js/validation coverage completeness', () => {
       bio: field.string().nullable(),
     })
 
-    const withNull = await validate({ bio: null }, profileSchema)
+    const withNull = await safeParse({ bio: null }, profileSchema)
     expect(withNull.valid).toBe(true)
     if (withNull.valid) {
       expect(withNull.data.bio).toBeNull()
     }
 
-    const withValue = await validate({ bio: 'hello' }, profileSchema)
+    const withValue = await safeParse({ bio: 'hello' }, profileSchema)
     expect(withValue.valid).toBe(true)
   })
 
@@ -1046,13 +1157,13 @@ describe('@holo-js/validation coverage completeness', () => {
       age: field.number().required().min(18).max(120),
     })
 
-    const success = await validate({ age: 25 }, ageSchema)
+    const success = await safeParse({ age: 25 }, ageSchema)
     expect(success.valid).toBe(true)
 
-    const tooLow = await validate({ age: 10 }, ageSchema)
+    const tooLow = await safeParse({ age: 10 }, ageSchema)
     expect(tooLow.valid).toBe(false)
 
-    const tooHigh = await validate({ age: 200 }, ageSchema)
+    const tooHigh = await safeParse({ age: 200 }, ageSchema)
     expect(tooHigh.valid).toBe(false)
   })
 
@@ -1061,13 +1172,13 @@ describe('@holo-js/validation coverage completeness', () => {
       tags: field.array(field.string()).required().min(1).max(3),
     })
 
-    const success = await validate({ tags: ['a', 'b'] }, tagsSchema)
+    const success = await safeParse({ tags: ['a', 'b'] }, tagsSchema)
     expect(success.valid).toBe(true)
 
-    const tooFew = await validate({ tags: [] }, tagsSchema)
+    const tooFew = await safeParse({ tags: [] }, tagsSchema)
     expect(tooFew.valid).toBe(false)
 
-    const tooMany = await validate({ tags: ['a', 'b', 'c', 'd'] }, tagsSchema)
+    const tooMany = await safeParse({ tags: ['a', 'b', 'c', 'd'] }, tagsSchema)
     expect(tooMany.valid).toBe(false)
   })
 
@@ -1076,7 +1187,7 @@ describe('@holo-js/validation coverage completeness', () => {
       password: field.password().required().confirmed(),
     })
 
-    const failure = await validate({ password: 'secret123' }, passwordSchema)
+    const failure = await safeParse({ password: 'secret123' }, passwordSchema)
     expect(failure.valid).toBe(false)
     if (!failure.valid) {
       expect(failure.errors.first('password')).toBe('This field does not match its confirmation.')
@@ -1088,7 +1199,7 @@ describe('@holo-js/validation coverage completeness', () => {
       value: field.string().required().custom(() => false),
     })
 
-    const failure = await validate({ value: 'anything' }, customSchema)
+    const failure = await safeParse({ value: 'anything' }, customSchema)
     expect(failure.valid).toBe(false)
     if (!failure.valid) {
       expect(failure.errors.first('value')).toBe('Validation failed.')
@@ -1100,7 +1211,7 @@ describe('@holo-js/validation coverage completeness', () => {
       value: field.string().required().customAsync(async () => false),
     })
 
-    const failure = await validate({ value: 'anything' }, customSchema)
+    const failure = await safeParse({ value: 'anything' }, customSchema)
     expect(failure.valid).toBe(false)
     if (!failure.valid) {
       expect(failure.errors.first('value')).toBe('Validation failed.')
@@ -1112,7 +1223,7 @@ describe('@holo-js/validation coverage completeness', () => {
       flag: field.boolean().optional(),
     })
 
-    const result = await validate({ flag: true }, boolSchema)
+    const result = await safeParse({ flag: true }, boolSchema)
     expect(result.valid).toBe(true)
     if (result.valid) {
       expect(result.data.flag).toBe(true)
@@ -1124,7 +1235,7 @@ describe('@holo-js/validation coverage completeness', () => {
       value: field.number().optional(),
     })
 
-    const result = await validate({ value: 'not-a-number' }, numSchema)
+    const result = await safeParse({ value: 'not-a-number' }, numSchema)
     expect(result.valid).toBe(false)
   })
 
@@ -1133,7 +1244,7 @@ describe('@holo-js/validation coverage completeness', () => {
       when: field.date().required(),
     })
 
-    const result = await validate({ when: 'not-a-date' }, dateSchema)
+    const result = await safeParse({ when: 'not-a-date' }, dateSchema)
     expect(result.valid).toBe(false)
   })
 
@@ -1150,7 +1261,7 @@ describe('@holo-js/validation coverage completeness', () => {
       body: formData,
     })
 
-    const result = await validate(request, uploadSchema)
+    const result = await safeParse(request, uploadSchema)
     expect(result.valid).toBe(true)
     if (result.valid) {
       expect(result.data.name).toBe('Ava')
@@ -1200,7 +1311,7 @@ describe('@holo-js/validation coverage completeness', () => {
       },
     })
 
-    const result = await validate({}, s)
+    const result = await safeParse({}, s)
     expect(result.valid).toBe(true)
     if (result.valid) {
       expect(result.data.profile.city).toBe('Cairo')
@@ -1212,7 +1323,7 @@ describe('@holo-js/validation coverage completeness', () => {
       tags: field.array(field.string().custom(value => value !== 'blocked' || 'Blocked.')),
     })
 
-    const result = await validate({ tags: 'blocked' }, s)
+    const result = await safeParse({ tags: 'blocked' }, s)
     expect(result.valid).toBe(false)
     if (!result.valid) {
       expect(result.errors.first('tags.0')).toBe('Blocked.')
@@ -1228,13 +1339,13 @@ describe('@holo-js/validation edge case coverage', () => {
     })
 
     const fileLike = { name: 'test.png', type: 'image/png', size: 100 }
-    const result = await validate({ avatar: fileLike }, uploadSchema)
+    const result = await safeParse({ avatar: fileLike }, uploadSchema)
     expect(result.valid).toBe(true)
 
-    const blobResult = await validate({ avatar: new Blob(['avatar']) }, uploadSchema)
+    const blobResult = await safeParse({ avatar: new Blob(['avatar']) }, uploadSchema)
     expect(blobResult.valid).toBe(true)
 
-    const invalidResult = await validate({ avatar: {} }, uploadSchema)
+    const invalidResult = await safeParse({ avatar: {} }, uploadSchema)
     expect(invalidResult.valid).toBe(false)
   })
 
@@ -1263,7 +1374,7 @@ describe('@holo-js/validation edge case coverage', () => {
       } as never,
     })
 
-    const result = await validate({ code: 'ABC' }, malformed)
+    const result = await safeParse({ code: 'ABC' }, malformed)
     expect(result.valid).toBe(true)
     if (result.valid) {
       expect(result.data.code).toBe('ABC')
@@ -1348,7 +1459,7 @@ describe('@holo-js/validation edge case coverage', () => {
       method: 'POST',
       body: '',
     })
-    const result = await validate(request, loginSchema)
+    const result = await safeParse(request, loginSchema)
     expect(result.valid).toBe(false)
   })
 
@@ -1356,7 +1467,7 @@ describe('@holo-js/validation edge case coverage', () => {
     const dateSchema = schema({
       when: field.date().required().after(new Date('2024-01-01')),
     })
-    const result = await validate({ when: new Date('invalid') }, dateSchema)
+    const result = await safeParse({ when: new Date('invalid') }, dateSchema)
     expect(result.valid).toBe(false)
   })
 
@@ -1364,7 +1475,7 @@ describe('@holo-js/validation edge case coverage', () => {
     const dateSchema = schema({
       when: field.date().required().today(),
     })
-    const result = await validate({ when: 42 }, dateSchema)
+    const result = await safeParse({ when: 42 }, dateSchema)
     expect(result.valid).toBe(false)
   })
 
@@ -1379,7 +1490,7 @@ describe('@holo-js/validation edge case coverage', () => {
       end: field.date().required().beforeOrEqual(yesterday),
     })
 
-    const result = await validate({
+    const result = await safeParse({
       start: yesterday.toISOString(),
       end: tomorrow.toISOString(),
     }, dateSchema)
@@ -1401,7 +1512,7 @@ describe('@holo-js/validation edge case coverage', () => {
       when: field.date().required().after(yesterday),
     })
 
-    const result = await validate({ when: twoDaysAgo.toISOString() }, dateSchema)
+    const result = await safeParse({ when: twoDaysAgo.toISOString() }, dateSchema)
     expect(result.valid).toBe(false)
   })
 
@@ -1415,7 +1526,7 @@ describe('@holo-js/validation edge case coverage', () => {
       when: field.date().required().before(tomorrow),
     })
 
-    const result = await validate({ when: dayAfter.toISOString() }, dateSchema)
+    const result = await safeParse({ when: dayAfter.toISOString() }, dateSchema)
     expect(result.valid).toBe(false)
   })
 
@@ -1436,7 +1547,7 @@ describe('@holo-js/validation edge case coverage', () => {
       },
     } as typeof badSchema
 
-    const result = await validate({ name: 'test' }, broken)
+    const result = await safeParse({ name: 'test' }, broken)
     expect(result.valid).toBe(false)
     if (!result.valid) {
       expect(result.errors.first('_root')).toBe('Boom')
@@ -1495,7 +1606,7 @@ describe('@holo-js/validation edge case coverage', () => {
 
   it('covers lastValue with array input', async () => {
     const numSchema = schema({ val: field.number().optional() })
-    const result = await validate({ val: ['1', '2'] }, numSchema)
+    const result = await safeParse({ val: ['1', '2'] }, numSchema)
     expect(result.valid).toBe(true)
     if (result.valid) {
       expect(result.data.val).toBe(2)
@@ -1504,7 +1615,7 @@ describe('@holo-js/validation edge case coverage', () => {
 
   it('covers empty string coercion for non-string fields', async () => {
     const numSchema = schema({ val: field.number().optional() })
-    const result = await validate({ val: '' }, numSchema)
+    const result = await safeParse({ val: '' }, numSchema)
     expect(result.valid).toBe(true)
     if (result.valid) {
       expect(result.data.val).toBeUndefined()
@@ -1513,25 +1624,25 @@ describe('@holo-js/validation edge case coverage', () => {
 
   it('covers coerceDate with non-string non-Date input', async () => {
     const dateSchema = schema({ when: field.date().optional() })
-    const result = await validate({ when: 42 }, dateSchema)
+    const result = await safeParse({ when: 42 }, dateSchema)
     expect(result.valid).toBe(false)
   })
 
   it('covers coerceBoolean with non-string non-boolean input', async () => {
     const boolSchema = schema({ flag: field.boolean().optional() })
-    const result = await validate({ flag: 42 }, boolSchema)
+    const result = await safeParse({ flag: 42 }, boolSchema)
     expect(result.valid).toBe(false)
   })
 
   it('covers coerceNumber with non-string non-number input', async () => {
     const numSchema = schema({ val: field.number().optional() })
-    const result = await validate({ val: true }, numSchema)
+    const result = await safeParse({ val: true }, numSchema)
     expect(result.valid).toBe(false)
   })
 
   it('covers coerceBoolean with unrecognized string', async () => {
     const boolSchema = schema({ flag: field.boolean().optional() })
-    const result = await validate({ flag: 'maybe' }, boolSchema)
+    const result = await safeParse({ flag: 'maybe' }, boolSchema)
     expect(result.valid).toBe(false)
   })
 })
@@ -1568,7 +1679,7 @@ describe('@holo-js/validation remaining branch coverage', () => {
     const dateSchema = schema({
       when: field.date().required().before(target),
     })
-    const result = await validate({ when: new Date('2025-06-14').toISOString() }, dateSchema)
+    const result = await safeParse({ when: new Date('2025-06-14').toISOString() }, dateSchema)
     expect(result.valid).toBe(true)
   })
 
@@ -1577,7 +1688,7 @@ describe('@holo-js/validation remaining branch coverage', () => {
       when: field.date().required().before('2030-01-01'),
     })
     // Pass a number which coerces to Date but resolveDateRuleValue gets the rule arg as string
-    const result = await validate({ when: new Date('2025-01-01').toISOString() }, dateSchema)
+    const result = await safeParse({ when: new Date('2025-01-01').toISOString() }, dateSchema)
     expect(result.valid).toBe(true)
   })
 
@@ -1592,14 +1703,14 @@ describe('@holo-js/validation remaining branch coverage', () => {
       headers: { 'content-type': 'application/json; charset=utf-8' },
       body: JSON.stringify({ name: 'Ava' }),
     })
-    const result = await validate(request, s)
+    const result = await safeParse(request, s)
     expect(result.valid).toBe(true)
   })
 
   it('covers URLSearchParams input path', async () => {
     const s = schema({ q: field.string().required() })
     const params = new URLSearchParams('q=hello')
-    const result = await validate(params, s)
+    const result = await safeParse(params, s)
     expect(result.valid).toBe(true)
     if (result.valid) {
       expect(result.data.q).toBe('hello')
@@ -1617,7 +1728,7 @@ describe('@holo-js/validation remaining branch coverage', () => {
 
   it('covers isMissingValue for array kind', async () => {
     const s = schema({ tags: field.array(field.string()).required() })
-    const empty = await validate({ tags: [] }, s)
+    const empty = await safeParse({ tags: [] }, s)
     expect(empty.valid).toBe(false)
     if (!empty.valid) {
       expect(empty.errors.first('tags')).toBe('This field is required.')
@@ -1626,10 +1737,10 @@ describe('@holo-js/validation remaining branch coverage', () => {
 
   it('covers isMissingValue for null and undefined', async () => {
     const s = schema({ name: field.string().required() })
-    const nullResult = await validate({ name: null }, s)
+    const nullResult = await safeParse({ name: null }, s)
     expect(nullResult.valid).toBe(false)
 
-    const undefinedResult = await validate({}, s)
+    const undefinedResult = await safeParse({}, s)
     expect(undefinedResult.valid).toBe(false)
   })
 
@@ -1637,7 +1748,7 @@ describe('@holo-js/validation remaining branch coverage', () => {
     const s = schema({
       bio: field.string().optional().custom(() => false),
     })
-    const result = await validate({ bio: undefined }, s)
+    const result = await safeParse({ bio: undefined }, s)
     expect(result.valid).toBe(true)
   })
 
@@ -1675,7 +1786,7 @@ describe('@holo-js/validation final branch coverage', () => {
   it('covers coerceDate with Date object input', async () => {
     const s = schema({ when: field.date().optional() })
     const date = new Date('2024-06-15')
-    const result = await validate({ when: date }, s)
+    const result = await safeParse({ when: date }, s)
     expect(result.valid).toBe(true)
     if (result.valid) {
       expect(result.data.when).toBeInstanceOf(Date)
@@ -1684,7 +1795,7 @@ describe('@holo-js/validation final branch coverage', () => {
 
   it('covers coerceDate with empty string', async () => {
     const s = schema({ when: field.date().optional() })
-    const result = await validate({ when: '' }, s)
+    const result = await safeParse({ when: '' }, s)
     expect(result.valid).toBe(true)
     if (result.valid) {
       expect(result.data.when).toBeUndefined()
@@ -1696,7 +1807,7 @@ describe('@holo-js/validation final branch coverage', () => {
       when: field.date().required().after('2020-01-01'),
     })
     // Pass a valid date that triggers the after check
-    const result = await validate({ when: new Date('2025-01-01') }, s)
+    const result = await safeParse({ when: new Date('2025-01-01') }, s)
     expect(result.valid).toBe(true)
   })
 
@@ -1717,7 +1828,7 @@ describe('@holo-js/validation final branch coverage', () => {
 
   it('covers isWebFileLike non-Blob branch with size-only object', async () => {
     const s = schema({ doc: field.file().required() })
-    const result = await validate({ doc: { size: 100 } }, s)
+    const result = await safeParse({ doc: { size: 100 } }, s)
     expect(result.valid).toBe(true)
   })
 
@@ -1750,7 +1861,7 @@ describe('@holo-js/validation deep branch coverage', () => {
 
   it('covers coerceNumber with empty string returning undefined', async () => {
     const s = schema({ count: field.number().optional() })
-    const result = await validate({ count: '  ' }, s)
+    const result = await safeParse({ count: '  ' }, s)
     expect(result.valid).toBe(true)
     if (result.valid) {
       expect(result.data.count).toBeUndefined()
@@ -1759,7 +1870,7 @@ describe('@holo-js/validation deep branch coverage', () => {
 
   it('covers coerceDate with empty trimmed string returning undefined', async () => {
     const s = schema({ when: field.date().optional() })
-    const result = await validate({ when: '  ' }, s)
+    const result = await safeParse({ when: '  ' }, s)
     expect(result.valid).toBe(true)
     if (result.valid) {
       expect(result.data.when).toBeUndefined()
@@ -1771,7 +1882,7 @@ describe('@holo-js/validation deep branch coverage', () => {
       when: field.date().required().before('2030-01-01'),
     })
     // Pass an invalid Date — resolveDateRuleValue should return undefined for the value
-    const result = await validate({ when: new Date('invalid') }, s)
+    const result = await safeParse({ when: new Date('invalid') }, s)
     expect(result.valid).toBe(false)
     if (!result.valid) {
       expect(result.errors.has('when')).toBe(true)
@@ -1782,7 +1893,7 @@ describe('@holo-js/validation deep branch coverage', () => {
     const s = schema({
       when: field.date().required().after('2020-01-01'),
     })
-    const result = await validate({ when: 'not-a-date' }, s)
+    const result = await safeParse({ when: 'not-a-date' }, s)
     expect(result.valid).toBe(false)
   })
 
@@ -1790,7 +1901,7 @@ describe('@holo-js/validation deep branch coverage', () => {
     const s = schema({
       items: field.array(field.string()).optional(),
     })
-    const result = await validate({ items: undefined }, s)
+    const result = await safeParse({ items: undefined }, s)
     expect(result.valid).toBe(true)
   })
 
@@ -1798,7 +1909,7 @@ describe('@holo-js/validation deep branch coverage', () => {
     const s = schema({
       bio: field.string().nullable().default('none'),
     })
-    const result = await validate({}, s)
+    const result = await safeParse({}, s)
     expect(result.valid).toBe(true)
     if (result.valid) {
       expect(result.data.bio).toBe('none')
@@ -1829,7 +1940,7 @@ describe('@holo-js/validation deep branch coverage', () => {
       },
     } as typeof s
 
-    const result = await validate({ name: 'test' }, broken)
+    const result = await safeParse({ name: 'test' }, broken)
     expect(result.valid).toBe(false)
     if (!result.valid) {
       expect(result.errors.first('_root')).toBe('Validation failed.')
@@ -1840,7 +1951,7 @@ describe('@holo-js/validation deep branch coverage', () => {
     const s = schema({
       avatar: field.file().required().image(),
     })
-    const result = await validate({ avatar: { name: 'test', size: 100 } }, s)
+    const result = await safeParse({ avatar: { name: 'test', size: 100 } }, s)
     expect(result.valid).toBe(false)
     if (!result.valid) {
       expect(result.errors.first('avatar')).toBe('File must be an image.')
@@ -1852,7 +1963,7 @@ describe('@holo-js/validation deep branch coverage', () => {
       doc: field.file().required().maxSize(10),
     })
     const bigFile = new File([new Uint8Array(100)], 'big.pdf', { type: 'application/pdf' })
-    const result = await validate({ doc: bigFile }, s)
+    const result = await safeParse({ doc: bigFile }, s)
     expect(result.valid).toBe(false)
     if (!result.valid) {
       expect(result.errors.first('doc')).toContain('at most')
@@ -1865,7 +1976,7 @@ describe('@holo-js/validation deep branch coverage', () => {
         name: field.string().required(),
       },
     })
-    const result = await validate({ profile: null }, s)
+    const result = await safeParse({ profile: null }, s)
     expect(result.valid).toBe(false)
   })
 
@@ -1904,7 +2015,7 @@ describe('@holo-js/validation unreachable-branch coverage', () => {
   it('covers resolveDateRuleValue with Date instance for rule arg', async () => {
     const target = new Date('2025-06-15')
     const s = schema({ when: field.date().required().afterOrEqual(target) })
-    const result = await validate({ when: target.toISOString() }, s)
+    const result = await safeParse({ when: target.toISOString() }, s)
     expect(result.valid).toBe(true)
   })
 
@@ -1920,19 +2031,19 @@ describe('@holo-js/validation unreachable-branch coverage', () => {
     // field.array() always requires an item, so the v.unknown() fallback
     // in makeBaseSchema is defensive. We can't reach it through the public API.
     const s = schema({ tags: field.array(field.string()).optional() })
-    const result = await validate({}, s)
+    const result = await safeParse({}, s)
     expect(result.valid).toBe(true)
   })
 
   it('covers file type check with undefined type', async () => {
     const s = schema({ avatar: field.file().required().image() })
-    const result = await validate({ avatar: { name: 'test' } }, s)
+    const result = await safeParse({ avatar: { name: 'test' } }, s)
     expect(result.valid).toBe(false)
   })
 
   it('covers file maxSize with undefined size', async () => {
     const s = schema({ doc: field.file().required().maxSize('1kb') })
-    const result = await validate({ doc: { name: 'test', type: 'application/pdf' } }, s)
+    const result = await safeParse({ doc: { name: 'test', type: 'application/pdf' } }, s)
     // size is undefined, so (undefined ?? 0) > 1024 is false — passes
     expect(result.valid).toBe(true)
   })

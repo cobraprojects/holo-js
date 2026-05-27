@@ -45,6 +45,7 @@
     "@holo-js/storage": "workspace:*",
     "@holo-js/validation": "workspace:*",
     "esbuild": "catalog:",
+    "h3": "catalog:",
     "nuxt": "catalog:",
     "vue": "catalog:",
     "vue-router": "catalog:"

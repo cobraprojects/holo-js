@@ -961,10 +961,7 @@ export default {
       password: 'secret',
       passwordConfirmation: 'secret',
     })).resolves.toMatchObject({
-      data: {
-        role: 'first',
-      },
-      error: null,
+      role: 'first',
     })
 
     await new Promise(resolvePromise => setTimeout(resolvePromise, 25))
@@ -1010,10 +1007,7 @@ export default {
       password: 'secret',
       passwordConfirmation: 'secret',
     })).resolves.toMatchObject({
-      data: {
-        role: 'second',
-      },
-      error: null,
+      role: 'second',
     })
   })
 

@@ -31,16 +31,8 @@ function createRequest() {
 
 function createValidSubmission() {
   return {
-    valid: true,
-    data: {
-      email: 'super-admin@example.com',
-      password: 'admin-secret',
-    },
-    fail: vi.fn(),
-    success: vi.fn(data => ({
-      ok: true,
-      data,
-    })),
+    email: 'super-admin@example.com',
+    password: 'admin-secret',
   }
 }
 
@@ -60,11 +52,8 @@ describe('POST /api/super-admin/login', () => {
     }
     mocks.validate.mockResolvedValue(submission)
     mocks.login.mockResolvedValue({
-      data: {
-        emailVerificationRequired: false,
-        user,
-      },
-      error: null,
+      emailVerificationRequired: false,
+      user,
     })
 
     const response = await route.POST(createRequest())
@@ -72,6 +61,7 @@ describe('POST /api/super-admin/login', () => {
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({
       ok: true,
+      status: 200,
       data: {
         message: 'Signed in as super admin.',
         redirectTo: '/super-admin',
@@ -82,7 +72,7 @@ describe('POST /api/super-admin/login', () => {
       throttle: 'login',
     })
     expect(mocks.guard).toHaveBeenCalledWith('admin')
-    expect(mocks.login).toHaveBeenCalledWith(submission.data)
+    expect(mocks.login).toHaveBeenCalledWith(submission)
   })
 
   it('redirects unverified super admins to the email verification route', async () => {
@@ -93,12 +83,9 @@ describe('POST /api/super-admin/login', () => {
     }
     mocks.validate.mockResolvedValue(submission)
     mocks.login.mockResolvedValue({
-      data: {
-        emailVerificationRequired: true,
-        emailVerificationRoute: '/verify-email?email=unverified-admin%40example.com',
-        user,
-      },
-      error: null,
+      emailVerificationRequired: true,
+      emailVerificationRoute: '/verify-email?email=unverified-admin%40example.com',
+      user,
     })
 
     const response = await route.POST(createRequest())
@@ -106,6 +93,7 @@ describe('POST /api/super-admin/login', () => {
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({
       ok: true,
+      status: 200,
       data: {
         message: 'Signed in. Verify your email address to continue.',
         redirectTo: '/verify-email?email=unverified-admin%40example.com',
@@ -118,14 +106,11 @@ describe('POST /api/super-admin/login', () => {
     const submission = createValidSubmission()
     mocks.validate.mockResolvedValue(submission)
     mocks.login.mockResolvedValue({
-      data: {
-        emailVerificationRequired: true,
-        user: {
-          id: 3,
-          email: 'fallback-admin@example.com',
-        },
+      emailVerificationRequired: true,
+      user: {
+        id: 3,
+        email: 'fallback-admin@example.com',
       },
-      error: null,
     })
 
     const response = await route.POST(createRequest())

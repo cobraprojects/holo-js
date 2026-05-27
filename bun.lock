@@ -186,6 +186,7 @@
         "@holo-js/storage": "workspace:*",
         "@holo-js/validation": "workspace:*",
         "esbuild": "catalog:",
+        "h3": "catalog:",
         "nuxt": "catalog:",
         "vue": "catalog:",
         "vue-router": "catalog:",
@@ -319,6 +320,7 @@
         "@holo-js/config": "catalog:",
         "@holo-js/core": "catalog:",
         "@holo-js/db": "catalog:",
+        "@holo-js/validation": "catalog:",
         "@nuxt/kit": "catalog:",
         "h3": "catalog:",
       },
@@ -366,6 +368,7 @@
       "version": "0.1.4",
       "dependencies": {
         "@holo-js/config": "catalog:",
+        "@holo-js/validation": "catalog:",
       },
       "devDependencies": {
         "@types/node": "catalog:",
@@ -650,6 +653,7 @@
       },
       "devDependencies": {
         "@holo-js/auth": "catalog:",
+        "@holo-js/auth-social-google": "catalog:",
         "@holo-js/authorization": "catalog:",
         "@holo-js/events": "catalog:",
         "@holo-js/mail": "catalog:",

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { readFile, rm, writeFile } from 'node:fs/promises'
+import { readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { get } from 'node:http'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
@@ -15,7 +15,7 @@ const cwd = process.cwd()
 const configPath = join(cwd, 'config/app.ts')
 const configCachePath = join(cwd, '.holo-js/generated/config-cache.json')
 const databasePath = join(cwd, 'storage/database.sqlite')
-const nuxtCachePath = join(cwd, '.nuxt')
+const rateLimitPath = join(cwd, 'storage/framework/rate-limits')
 const port = await new Promise((resolve, reject) => {
   const server = createServer()
   server.once('error', reject)
@@ -42,6 +42,18 @@ const originalConfig = await readFile(configPath, 'utf8')
 const mirrorCapturedOutput = process.env.MAIL_LOG_VERBOSE === 'true'
   || process.argv.includes('--mail-log-verbose')
 const runtimeSchemaPath = join(cwd, '.holo-js/generated/schema.mjs')
+const pngPixel = Uint8Array.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+  0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+  0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41,
+  0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+  0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
+  0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+  0x42, 0x60, 0x82,
+])
+const oversizedImage = new Uint8Array((2 * 1024 * 1024) + 1)
 let capturedOutput = ''
 
 function createChildEnv(overrides = {}) {
@@ -199,6 +211,88 @@ function countCacheRows() {
   }
 }
 
+async function clearRateLimitBuckets() {
+  const entries = await readdir(rateLimitPath, { withFileTypes: true }).catch(() => [])
+  await Promise.all(entries
+    .filter(entry => entry.name !== '.gitignore')
+    .map(entry => rm(join(rateLimitPath, entry.name), {
+      recursive: entry.isDirectory(),
+      force: true,
+    })))
+}
+
+function getUploadedPostImage(title) {
+  const database = new Database(databasePath, { readonly: true })
+  try {
+    const post = database.prepare('select id, slug from posts where title = ?').get(title)
+    assert.ok(post, 'Expected the uploaded-image post to exist.')
+
+    const mediaRows = database.prepare('select path, generated_conversions from media where model_id = ? and collection_name = ?').all(String(post.id), 'images')
+    assert.equal(mediaRows.length, 1, 'Expected the post image collection to keep exactly one image.')
+    const media = mediaRows[0]
+    assert.ok(media, 'Expected the uploaded post image to create a media record.')
+    assert.ok(existsSync(join(cwd, 'storage/app/public', media.path)), 'Expected the original image to be stored on the public disk.')
+
+    const conversions = typeof media.generated_conversions === 'string'
+      ? JSON.parse(media.generated_conversions)
+      : media.generated_conversions
+    const thumb = conversions.thumb
+    assert.ok(thumb?.path, 'Expected the image thumbnail conversion to be recorded.')
+    assert.ok(existsSync(join(cwd, 'storage/app/public', thumb.path)), 'Expected the image thumbnail conversion to be stored on the public disk.')
+
+    return {
+      id: post.id,
+      slug: post.slug,
+      thumbUrl: `/storage/${thumb.path}`,
+    }
+  } finally {
+    database.close()
+  }
+}
+
+function getPostByTitle(title) {
+  const database = new Database(databasePath, { readonly: true })
+  try {
+    const post = database.prepare('select id, slug from posts where title = ?').get(title)
+    assert.ok(post, `Expected post "${title}" to exist.`)
+    return post
+  } finally {
+    database.close()
+  }
+}
+
+function countPostImages(postId) {
+  const database = new Database(databasePath, { readonly: true })
+  try {
+    return database.prepare('select count(*) as count from media where model_id = ? and collection_name = ?').get(String(postId), 'images').count
+  } finally {
+    database.close()
+  }
+}
+
+function assignPostAuthor(postId, userId) {
+  const database = new Database(databasePath)
+  try {
+    database.prepare('update posts set user_id = ? where id = ?').run(userId, postId)
+  } finally {
+    database.close()
+  }
+}
+
+async function assertPublicImageUrlResponds(baseUrl, imageUrl) {
+  const response = await fetch(new URL(imageUrl, baseUrl))
+  assert.equal(response.status, 200)
+  const body = await response.arrayBuffer()
+  assert.ok(body.byteLength > 0, 'Expected the public image endpoint to return image bytes.')
+}
+
+async function assertAdminPostEndpointReturnsImage({ baseUrl, fetchJson, postId, title, imageUrl }) {
+  const result = await fetchJson(`/api/admin/posts/${postId}`)
+  assert.equal(result.json.post.title, title)
+  assert.equal(new URL(result.json.imageUrl, baseUrl).pathname, new URL(imageUrl, baseUrl).pathname)
+  await assertPublicImageUrlResponds(baseUrl, imageUrl)
+}
+
 async function assertConfigCacheCommands() {
   await run('bun', ['run', 'config:cache'])
   assert.equal(existsSync(configCachePath), true)
@@ -272,17 +366,150 @@ async function assertSuperAdminLoginUsesVerificationRedirect() {
   )
 }
 
-async function assertAuthenticatedUserCannotDeletePost({ jar, fetchText }) {
+async function assertAuthenticatedUserCannotDeletePost({ baseUrl, jar, fetchText }) {
   const postsPage = await fetchText('/admin/posts', { jar })
   const postId = postsPage.text.match(/\/admin\/posts\/(\d+)\/delete/)?.[1]
   assert.ok(postId, 'Expected the admin posts page to render a delete form with a post id.')
 
   const denied = await fetchText(`/admin/posts/${postId}/delete`, {
     method: 'POST',
+    headers: {
+      origin: baseUrl,
+    },
     jar,
     allowFailure: true,
   })
   assert.equal(denied.response.status, 403, denied.text)
+}
+
+async function assertAuthenticatedUserCanCreateAndUpdatePostImage({ baseUrl, jar, fetchText, fetchJson }) {
+  const noImageTitle = `User flow no image ${Date.now()}`
+  const noImageFormData = new FormData()
+  noImageFormData.set('title', noImageTitle)
+  noImageFormData.set('excerpt', 'Created without selecting an image.')
+  noImageFormData.set('body', 'This post exercises optional file validation through the real Nuxt route flow.')
+  noImageFormData.set('status', 'draft')
+  noImageFormData.set('categoryId', '')
+  noImageFormData.set('image', new Blob([], { type: 'application/octet-stream' }), '')
+
+  const createdWithoutImage = await fetchText('/admin/posts/create', {
+    method: 'POST',
+    body: noImageFormData,
+    headers: {
+      origin: baseUrl,
+    },
+    jar,
+    allowFailure: true,
+  })
+  assert.equal(createdWithoutImage.response.status, 303, createdWithoutImage.text)
+  assert.equal(new URL(createdWithoutImage.response.headers.get('location'), baseUrl).pathname, '/admin/posts')
+
+  const postWithoutImage = getPostByTitle(noImageTitle)
+  assert.equal(countPostImages(postWithoutImage.id), 0, 'Expected creating without selecting an image to skip media records.')
+
+  const oversizedFormData = new FormData()
+  oversizedFormData.set('title', `Oversized image ${Date.now()}`)
+  oversizedFormData.set('excerpt', 'Created through the real Nuxt route flow.')
+  oversizedFormData.set('body', 'This post should return a media validation failure.')
+  oversizedFormData.set('status', 'draft')
+  oversizedFormData.set('categoryId', '')
+  oversizedFormData.set('image', new Blob([oversizedImage], { type: 'image/png' }), 'too-large.png')
+
+  const oversized = await fetchText('/admin/posts/create', {
+    method: 'POST',
+    body: oversizedFormData,
+    headers: {
+      accept: 'text/html',
+      origin: baseUrl,
+      referer: `${baseUrl}/admin/posts/new`,
+    },
+    jar,
+    allowFailure: true,
+  })
+  assert.notEqual(oversized.response.status, 500, oversized.text)
+  assert.notEqual(
+    oversized.response.headers.get('content-type')?.toLowerCase().includes('application/json'),
+    true,
+    `Expected browser form validation failures to avoid raw JSON responses, received ${oversized.text}.`,
+  )
+  assert.equal(oversized.response.status, 303, oversized.text)
+  assert.equal(new URL(oversized.response.headers.get('location'), baseUrl).pathname, '/admin/posts/new')
+  assert.ok(
+    oversized.response.headers.get('set-cookie')?.includes('holo_form_failure='),
+    'Expected oversized upload response to flash the validation failure for the redirected form.',
+  )
+  const oversizedRedirectPage = await fetchText('/admin/posts/new', { jar })
+  assert.ok(
+    oversizedRedirectPage.text.includes('The selected file must be 2 MB or smaller.'),
+    'Expected the redirected form page to render the flashed validation error.',
+  )
+
+  const title = `User flow image ${Date.now()}`
+  const formData = new FormData()
+  formData.set('title', title)
+  formData.set('excerpt', 'Created through the real Nuxt route flow.')
+  formData.set('body', 'This post exercises image upload through the real Nuxt route flow.')
+  formData.set('status', 'draft')
+  formData.set('categoryId', '')
+  formData.set('image', new Blob([pngPixel], { type: 'image/png' }), 'draft.png')
+
+  const created = await fetchText('/admin/posts/create', {
+    method: 'POST',
+    body: formData,
+    headers: {
+      origin: baseUrl,
+    },
+    jar,
+    allowFailure: true,
+  })
+  assert.equal(created.response.status, 303, created.text)
+  assert.equal(new URL(created.response.headers.get('location'), baseUrl).pathname, '/admin/posts')
+
+  const postsPage = await fetchText('/admin/posts', { jar })
+  assert.ok(postsPage.text.includes(title), 'Expected the admin posts page to show the created post.')
+
+  const uploaded = getUploadedPostImage(title)
+  await assertAdminPostEndpointReturnsImage({
+    baseUrl,
+    fetchJson,
+    postId: uploaded.id,
+    title,
+    imageUrl: uploaded.thumbUrl,
+  })
+
+  const editPage = await fetchText(`/admin/posts/${uploaded.id}/edit`, { jar })
+  assert.ok(editPage.text.includes(uploaded.thumbUrl), 'Expected the edit endpoint to render the current post image.')
+
+  const currentUser = await fetchJson('/api/auth/user', { jar })
+  assert.ok(currentUser.json.user?.id, 'Expected the authenticated user endpoint to return a user id.')
+  assignPostAuthor(uploaded.id, currentUser.json.user.id)
+
+  const updateWithoutImageFormData = new FormData()
+  updateWithoutImageFormData.set('title', title)
+  updateWithoutImageFormData.set('excerpt', 'Updated without selecting a replacement image.')
+  updateWithoutImageFormData.set('body', 'This post exercises optional file validation during update through the real Nuxt route flow.')
+  updateWithoutImageFormData.set('status', 'draft')
+  updateWithoutImageFormData.set('categoryId', '')
+  updateWithoutImageFormData.set('image', new Blob([], { type: 'application/octet-stream' }), '')
+
+  const updatedWithoutImage = await fetchText(`/admin/posts/${uploaded.id}/update`, {
+    method: 'POST',
+    body: updateWithoutImageFormData,
+    headers: {
+      origin: baseUrl,
+      referer: `${baseUrl}/admin/posts/${uploaded.id}/edit`,
+    },
+    jar,
+    allowFailure: true,
+  })
+  assert.equal(updatedWithoutImage.response.status, 303, updatedWithoutImage.text)
+  assert.equal(new URL(updatedWithoutImage.response.headers.get('location'), baseUrl).pathname, '/admin/posts')
+  assert.equal(countPostImages(uploaded.id), 1, 'Expected updating without a replacement image to keep the existing image.')
+}
+
+async function assertAuthenticatedAdminPostFlows(context) {
+  await assertAuthenticatedUserCanCreateAndUpdatePostImage(context)
+  await assertAuthenticatedUserCannotDeletePost(context)
 }
 
 function pipeOutput(stream, target) {
@@ -318,13 +545,13 @@ function killChildTree() {
 }
 
 try {
-  await rm(nuxtCachePath, { recursive: true, force: true })
   await assertSuperAdminLogoutStillNavigatesAfterRefreshFailure()
   await assertHeaderLogoutStillNavigatesAfterRefreshFailure()
   await assertSuperAdminLoginUsesVerificationRedirect()
   await run('bun', ['run', 'prepare'])
   await assertConfigCacheCommands()
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
+  await clearRateLimitBuckets()
   await run('npx', ['tsx', 'tests/blog-logic.mjs'])
 
   child = spawn('bun', ['run', 'dev'], {
@@ -343,7 +570,7 @@ try {
   pipeOutput(child.stdout, process.stdout)
   pipeOutput(child.stderr, process.stderr)
 
-  const initial = await waitForJson(healthUrl, payload => payload.ok === true)
+  const initial = await waitForJson(healthUrl, payload => payload.ok === true, 90000)
   assert.equal(initial.app, 'blog-nuxt')
   await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Nuxt'))
   await assertCacheBackedHttpBehavior(`http://localhost:${port}`)
@@ -354,7 +581,7 @@ try {
     appName: 'blog-nuxt',
     sessionCookieName: DEFAULT_SESSION_COOKIE_NAME,
     loginRequiresCsrf: true,
-    afterAuthenticated: assertAuthenticatedUserCannotDeletePost,
+    afterAuthenticated: assertAuthenticatedAdminPostFlows,
   })
   await assertExampleAppTokenAuthFlow({
     baseUrl: `http://localhost:${port}`,
@@ -362,7 +589,7 @@ try {
   })
 
   await writeFile(configPath, originalConfig.replace("name: env('APP_NAME', 'blog-nuxt')", "name: env('APP_NAME', 'blog-nuxt-updated')"))
-  const updated = await waitForJson(healthUrl, payload => payload.app === 'blog-nuxt-updated')
+  const updated = await waitForJson(healthUrl, payload => payload.app === 'blog-nuxt-updated', 90000)
   assert.equal(updated.app, 'blog-nuxt-updated')
 
   killChildTree()

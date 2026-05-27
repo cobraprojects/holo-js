@@ -59,7 +59,8 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "catalog:"
+    "@holo-js/config": "catalog:",
+    "@holo-js/validation": "catalog:"
   },
   "peerDependencies": {
     "@holo-js/security": "catalog:",

@@ -91,27 +91,8 @@ describe('register page', () => {
   })
 
   it('submits through the register server action', async () => {
-    const failure = {
-      ok: false,
-      status: 422,
-      errors: {
-        email: ['Enter a valid email address.'],
-      },
-    }
-    const submission = {
-      valid: false,
-      fail: vi.fn(() => failure),
-    }
-    mocks.validate.mockResolvedValue(submission)
-    mocks.useForm.mockImplementation((_schema, options) => createFormState(vi.fn(async () => {
-      const formData = new FormData()
-      formData.set('name', 'Reader')
-      formData.set('email', 'bad')
-      formData.set('password', 'password123')
-      formData.set('passwordConfirmation', 'password123')
-
-      return await options.submitter({ formData })
-    })))
+    const submit = vi.fn()
+    mocks.useForm.mockImplementation(() => createFormState(submit))
 
     let renderer
     await act(async () => {
@@ -120,18 +101,18 @@ describe('register page', () => {
 
     assert.ok(renderer, 'Expected register page to render.')
 
+    const event = { preventDefault: vi.fn() }
     await act(async () => {
-      await renderer.root.findByType('form').props.onSubmit({
-        preventDefault: vi.fn(),
-      })
+      renderer.root.findByType('form').props.onSubmit(event)
     })
 
     expect(mocks.useForm).toHaveBeenCalledWith(mocks.registerForm, expect.objectContaining({
       validateOn: 'blur',
+      submitter: expect.any(Function),
     }))
-    expect(mocks.validate).toHaveBeenCalledWith(expect.any(FormData), mocks.registerForm, {
-      throttle: 'register',
-    })
+    expect(event.preventDefault).toHaveBeenCalledTimes(1)
+    expect(submit).toHaveBeenCalledTimes(1)
+    expect(mocks.validate).not.toHaveBeenCalled()
     expect(mocks.register).not.toHaveBeenCalled()
     expect(mocks.redirect).not.toHaveBeenCalled()
 
@@ -147,21 +128,11 @@ describe('registerAction', () => {
   })
 
   it('returns validation failures before creating an account', async () => {
-    const failure = {
-      ok: false,
-      status: 422,
-      errors: {
-        email: ['Enter a valid email address.'],
-      },
-    }
-    const submission = {
-      valid: false,
-      fail: vi.fn(() => failure),
-    }
+    const validationError = new Error('Validation failed.')
 
-    mocks.validate.mockResolvedValue(submission)
+    mocks.validate.mockRejectedValue(validationError)
 
-    await expect(registerAction(new FormData())).resolves.toBe(failure)
+    await expect(registerAction(new FormData())).rejects.toBe(validationError)
     expect(mocks.validate).toHaveBeenCalledWith(expect.any(FormData), mocks.registerForm, {
       throttle: 'register',
     })
@@ -170,36 +141,20 @@ describe('registerAction', () => {
   })
 
   it('returns registration failures without starting a session', async () => {
-    const failure = {
-      ok: false,
-      status: 422,
-      errors: {
-        email: ['The email has already been taken.'],
-      },
+    const input = {
+      name: 'Reader',
+      email: 'reader@example.com',
+      password: 'password123',
+      passwordConfirmation: 'password123',
     }
-    const submission = {
-      valid: true,
-      data: {
-        name: 'Reader',
-        email: 'reader@example.com',
-        password: 'password123',
-        passwordConfirmation: 'password123',
-      },
-      fail: vi.fn(() => failure),
-    }
-    mocks.validate.mockResolvedValue(submission)
-    mocks.register.mockResolvedValue({
-      data: null,
-      error: {
-        status: 422,
-        fields: {
-          email: ['The email has already been taken.'],
-        },
-      },
+    const registrationError = new Error('The email has already been taken.')
+    mocks.validate.mockResolvedValue(input)
+    mocks.register.mockImplementation(async () => {
+      throw registrationError
     })
 
-    await expect(registerAction(new FormData())).resolves.toBe(failure)
-    expect(mocks.register).toHaveBeenCalledWith(submission.data)
+    await expect(registerAction(new FormData())).rejects.toBe(registrationError)
+    expect(mocks.register).toHaveBeenCalledWith(input)
     expect(mocks.loginUsing).not.toHaveBeenCalled()
     expect(mocks.redirect).not.toHaveBeenCalled()
   })
@@ -209,21 +164,14 @@ describe('registerAction', () => {
       id: 7,
       email: 'reader@example.com',
     }
-    const submission = {
-      valid: true,
-      data: {
-        name: 'Reader',
-        email: 'reader@example.com',
-        password: 'password123',
-        passwordConfirmation: 'password123',
-      },
-      fail: vi.fn(),
+    const input = {
+      name: 'Reader',
+      email: 'reader@example.com',
+      password: 'password123',
+      passwordConfirmation: 'password123',
     }
-    mocks.validate.mockResolvedValue(submission)
-    mocks.register.mockResolvedValue({
-      data: created,
-      error: null,
-    })
+    mocks.validate.mockResolvedValue(input)
+    mocks.register.mockResolvedValue(created)
     mocks.loginUsing.mockResolvedValue({
       emailVerificationRequired: false,
       user: created,
@@ -233,7 +181,7 @@ describe('registerAction', () => {
       location: '/admin',
     })
 
-    expect(mocks.register).toHaveBeenCalledWith(submission.data)
+    expect(mocks.register).toHaveBeenCalledWith(input)
     expect(mocks.loginUsing).toHaveBeenCalledWith(created)
     expect(mocks.revalidatePath).toHaveBeenCalledWith('/', 'layout')
     expect(mocks.redirect).toHaveBeenCalledWith('/admin')
@@ -244,21 +192,14 @@ describe('registerAction', () => {
       id: 7,
       email: 'reader@example.com',
     }
-    const submission = {
-      valid: true,
-      data: {
-        name: 'Reader',
-        email: 'reader@example.com',
-        password: 'password123',
-        passwordConfirmation: 'password123',
-      },
-      fail: vi.fn(),
+    const input = {
+      name: 'Reader',
+      email: 'reader@example.com',
+      password: 'password123',
+      passwordConfirmation: 'password123',
     }
-    mocks.validate.mockResolvedValue(submission)
-    mocks.register.mockResolvedValue({
-      data: created,
-      error: null,
-    })
+    mocks.validate.mockResolvedValue(input)
+    mocks.register.mockResolvedValue(created)
     mocks.loginUsing.mockResolvedValue({
       emailVerificationRequired: true,
       emailVerificationRoute: '/verify-email',

@@ -2,6 +2,9 @@
 
 import { redirect } from 'next/navigation'
 import { authorize } from '@holo-js/authorization'
+import { validate } from '@holo-js/forms'
+import { isValidationException } from '@holo-js/validation'
+import { postForm } from '@/lib/schemas/blog'
 import {
   createPost,
   updatePost,
@@ -19,42 +22,56 @@ import Tag from '@/server/models/Tag'
 import { requireAdminAuth } from './auth'
 
 export async function createPostAction(formData: FormData) {
-  await requireAdminAuth()
-  const status = String(formData.get('status') || 'published')
-  await authorize('create', Post)
-  if (status === 'published') {
-    await authorize('publish', Post)
-  }
+  try {
+    await requireAdminAuth()
+    const data = await validate(formData, postForm)
+    const status = data.status
+    await authorize('create', Post)
+    if (status === 'published') {
+      await authorize('publish', Post)
+    }
 
-  await createPost({
-    title: String(formData.get('title') || ''),
-    excerpt: String(formData.get('excerpt') || ''),
-    body: String(formData.get('body') || ''),
-    status,
-    categoryId: String(formData.get('categoryId') || ''),
-    tagIds: formData.getAll('tagIds').map(String).join(','),
-  })
-  redirect('/admin/posts')
+    await createPost({
+      ...data,
+      tagIds: data.tagIds.join(','),
+      ...(data.image?.size ? { image: data.image } : {}),
+    })
+
+    redirect('/admin/posts')
+  } catch (error) {
+    if (isValidationException(error)) {
+      return error.toJSON()
+    }
+
+    throw error
+  }
 }
 
 export async function updatePostAction(id: number, formData: FormData) {
-  await requireAdminAuth()
-  const status = String(formData.get('status') || 'published')
-  const post = await Post.findOrFail(id)
-  await authorize('update', post)
-  if (status === 'published') {
-    await authorize('publish', post)
-  }
+  try {
+    await requireAdminAuth()
+    const data = await validate(formData, postForm)
+    const status = data.status
+    const post = await Post.findOrFail(id)
+    await authorize('update', post)
+    if (status === 'published') {
+      await authorize('publish', post)
+    }
 
-  await updatePost(id, {
-    title: String(formData.get('title') || ''),
-    excerpt: String(formData.get('excerpt') || ''),
-    body: String(formData.get('body') || ''),
-    status,
-    categoryId: String(formData.get('categoryId') || ''),
-    tagIds: formData.getAll('tagIds').map(String).join(','),
-  })
-  redirect('/admin/posts')
+    await updatePost(id, {
+      ...data,
+      tagIds: data.tagIds.join(','),
+      ...(data.image?.size ? { image: data.image } : {}),
+    })
+
+    redirect('/admin/posts')
+  } catch (error) {
+    if (isValidationException(error)) {
+      return error.toJSON()
+    }
+
+    throw error
+  }
 }
 
 export async function deletePostAction(id: number) {

@@ -40,10 +40,7 @@ async function resendVerificationEmail() {
       return
     }
 
-    const message = Array.isArray(payload?.errors?._root)
-      ? payload.errors._root[0]
-      : 'Could not send another verification email.'
-    resendError.value = typeof message === 'string' ? message : 'Could not send another verification email.'
+    resendError.value = 'Could not send another verification email.'
   } catch {
     resendError.value = 'Could not send another verification email.'
   } finally {

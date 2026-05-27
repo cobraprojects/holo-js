@@ -9,6 +9,7 @@ import { configureNotificationsRuntime } from '@holo-js/notifications'
 import { createHolo, holoRuntimeInternals, initializeHolo, resetHoloRuntime } from '../src'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
+const securityEntry = JSON.stringify(resolve(import.meta.dirname, '../../security/src/index.ts'))
 const tempDirs: string[] = []
 type VerificationTokenLike = {
   readonly id: string
@@ -20,17 +21,34 @@ type SessionRecordLike = {
   readonly rememberTokenHash?: string
 }
 
-function unwrapAuthResult<TData>(result: {
+type AuthSuccessResult<TData> = {
   readonly data: TData
   readonly error: null
-} | {
+}
+
+type AuthFailureResult = {
   readonly data: null
   readonly error: {
     readonly code: string
   }
-} | null | undefined): TData {
+}
+
+function isAuthResult<TData>(result: TData | AuthSuccessResult<TData> | AuthFailureResult): result is AuthSuccessResult<TData> | AuthFailureResult {
+  return !!result
+    && typeof result === 'object'
+    && 'data' in result
+    && 'error' in result
+}
+
+function unwrapAuthResult<TData>(
+  result: TData | AuthSuccessResult<TData> | AuthFailureResult | null | undefined,
+): TData {
   if (!result) {
     throw new Error('Expected auth result but received nothing.')
+  }
+
+  if (!isAuthResult(result)) {
+    return result
   }
 
   if (result.error) {
@@ -3063,7 +3081,7 @@ export default {
       mail: true,
     })
     await writeFile(join(root, 'config/security.ts'), `
-import { defineSecurityConfig } from '@holo-js/security'
+import { defineSecurityConfig } from ${securityEntry}
 
 export default defineSecurityConfig({
   rateLimit: {

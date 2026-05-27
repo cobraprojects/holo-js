@@ -28,15 +28,7 @@ function createRequest() {
 
 function createValidSubmission() {
   return {
-    valid: true,
-    data: {
-      email: 'ava@example.com',
-    },
-    fail: vi.fn(),
-    success: vi.fn(data => ({
-      ok: true,
-      data,
-    })),
+    email: 'ava@example.com',
   }
 }
 
@@ -46,78 +38,45 @@ describe('POST /api/forgot-password', () => {
   })
 
   it('returns validation failures without requesting a reset', async () => {
-    const failure = {
-      ok: false,
-      status: 422,
-      errors: {
-        email: ['Email is required.'],
-      },
-    }
-    const submission = {
-      valid: false,
-      fail: vi.fn(() => failure),
-    }
+    const validationError = new Error('Validation failed.')
     const request = createRequest()
 
-    mocks.validate.mockResolvedValue(submission)
+    mocks.validate.mockRejectedValue(validationError)
 
-    const response = await forgotPasswordRoute.POST(request)
+    await expect(forgotPasswordRoute.POST(request)).rejects.toBe(validationError)
 
-    expect(response.status).toBe(422)
-    await expect(response.json()).resolves.toEqual(failure)
     expect(mocks.validate).toHaveBeenCalledWith(request, mocks.forgotPasswordForm)
     expect(mocks.requestPasswordReset).not.toHaveBeenCalled()
   })
 
-  it('maps reset request errors onto the form submission response', async () => {
-    const failure = {
-      ok: false,
-      status: 429,
-      errors: {
-        email: ['Try again later.'],
-      },
-    }
+  it('throws reset request errors without mapping them in userland', async () => {
+    const resetError = new Error('Try again later.')
     const submission = createValidSubmission()
-    submission.fail.mockReturnValue(failure)
     mocks.validate.mockResolvedValue(submission)
-    mocks.requestPasswordReset.mockResolvedValue({
-      error: {
-        status: 429,
-        fields: failure.errors,
-      },
+    mocks.requestPasswordReset.mockImplementation(async () => {
+      throw resetError
     })
 
-    const response = await forgotPasswordRoute.POST(createRequest())
+    await expect(forgotPasswordRoute.POST(createRequest())).rejects.toBe(resetError)
 
-    expect(response.status).toBe(429)
-    await expect(response.json()).resolves.toEqual(failure)
-    expect(mocks.requestPasswordReset).toHaveBeenCalledWith(submission.data)
-    expect(submission.fail).toHaveBeenCalledWith({
-      status: 429,
-      errors: failure.errors,
-    })
-    expect(submission.success).not.toHaveBeenCalled()
+    expect(mocks.requestPasswordReset).toHaveBeenCalledWith(submission)
   })
 
   it('returns the generic success message after requesting a reset', async () => {
     const submission = createValidSubmission()
     mocks.validate.mockResolvedValue(submission)
-    mocks.requestPasswordReset.mockResolvedValue({
-      error: null,
-    })
+    mocks.requestPasswordReset.mockResolvedValue(undefined)
 
     const response = await forgotPasswordRoute.POST(createRequest())
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({
       ok: true,
+      status: 200,
       data: {
         message: 'If an account exists for that email, a reset link has been sent.',
       },
     })
-    expect(mocks.requestPasswordReset).toHaveBeenCalledWith(submission.data)
-    expect(submission.success).toHaveBeenCalledWith({
-      message: 'If an account exists for that email, a reset link has been sent.',
-    })
+    expect(mocks.requestPasswordReset).toHaveBeenCalledWith(submission)
   })
 })

@@ -49,7 +49,7 @@ function collectSensitivePathsFromFields(
     }
 
     if (isSchemaField(value)) {
-      if (value.definition.sensitive === true) {
+      if (value.definition.sensitive === true || value.definition.kind === 'file') {
         output.push(path)
       }
       continue

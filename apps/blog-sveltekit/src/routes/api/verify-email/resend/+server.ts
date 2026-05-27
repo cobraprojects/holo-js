@@ -8,31 +8,17 @@ import type { RequestHandler } from './$types'
 const resendSuccessMessage = 'A fresh verification email has been sent.'
 
 export const POST: RequestHandler = async ({ request }) => {
-  const submission = await validate(request, resendEmailVerificationForm, {
+  const input = await validate(request, resendEmailVerificationForm, {
     throttle: 'emailVerificationResend',
   })
 
-  const success = () => json(submission.success({
-    message: resendSuccessMessage,
-  }))
+  await resendEmailVerification(input.email)
 
-  if (!submission.valid) {
-    const failure = submission.fail()
-
-    return json(failure, {
-      status: failure.status,
-    })
-  }
-
-  const { error } = await resendEmailVerification(submission.data.email)
-  if (error) {
-    const failure = submission.fail({
-      status: error.status,
-      errors: error.fields,
-    })
-
-    return json(failure, { status: failure.status })
-  }
-
-  return success()
+  return json({
+    ok: true,
+    status: 200,
+    data: {
+      message: resendSuccessMessage,
+    },
+  })
 }

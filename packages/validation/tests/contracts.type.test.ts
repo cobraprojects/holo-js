@@ -6,8 +6,8 @@ import {
   type ValidationErrorBag,
   field,
   parse,
+  safeParse,
   schema,
-  validate,
 } from '../src'
 
 describe('@holo-js/validation typing', () => {
@@ -98,7 +98,7 @@ describe('@holo-js/validation typing', () => {
 
     async function assertTransformParserInference() {
       const parsed = await parse({ nameLength: 'Ava' }, transformedSchema)
-      const validated = await validate({ nameLength: 'Ava' }, transformedSchema)
+      const validated = await safeParse({ nameLength: 'Ava' }, transformedSchema)
       type ParsedAssertion = Expect<Equal<typeof parsed, { nameLength: number }>>
 
       void (0 as unknown as ParsedAssertion)
@@ -108,7 +108,7 @@ describe('@holo-js/validation typing', () => {
         void (0 as unknown as ValidatedAssertion)
       }
 
-      const publishValidation = await validate({ status: 'draft' }, publishSchema)
+      const publishValidation = await safeParse({ status: 'draft' }, publishSchema)
       if (publishValidation.valid) {
         type PublishValidationAssertion = Expect<Equal<typeof publishValidation.data, { status: 'draft' | 'published' }>>
         void (0 as unknown as PublishValidationAssertion)

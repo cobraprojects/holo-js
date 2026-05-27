@@ -11,6 +11,7 @@ import {
   CACHE_CONFIG_FILE_NAMES,
   CORS_CONFIG_FILE_NAMES,
   MAIL_CONFIG_FILE_NAMES,
+  MEDIA_CONFIG_FILE_NAMES,
   NOTIFICATIONS_CONFIG_FILE_NAMES,
   QUEUE_CONFIG_FILE_NAMES,
   SECURITY_CONFIG_FILE_NAMES,
@@ -22,6 +23,7 @@ import {
   type CacheInstallResult,
   type EventsInstallResult,
   type MailInstallResult,
+  type MediaInstallResult,
   type NotificationsInstallResult,
   type QueueInstallResult,
   type SecurityInstallResult,
@@ -77,6 +79,7 @@ import {
   upsertCachePackageDependencies,
   upsertEventsPackageDependency,
   upsertMailPackageDependency,
+  upsertMediaPackageDependency,
   upsertNotificationsPackageDependency,
   upsertQueuePackageDependency,
   upsertSecurityPackageDependency,
@@ -595,6 +598,30 @@ export async function installMailIntoProject(
   }
 }
 
+export async function installMediaIntoProject(
+  projectRoot: string,
+): Promise<MediaInstallResult> {
+  await loadProjectConfig(projectRoot, { required: true })
+  const mediaConfigPath = await resolveFirstExistingPath(projectRoot, MEDIA_CONFIG_FILE_NAMES)
+
+  await mkdir(resolve(projectRoot, 'config'), { recursive: true })
+
+  if (!mediaConfigPath) {
+    await writeTextFile(resolve(projectRoot, 'config/media.ts'), renderMediaConfig())
+  }
+
+  const { createMediaTableMigration } = await import('../media-migrations')
+  const migrationFilePath = await createMediaTableMigration(projectRoot, {
+    skipIfExists: true,
+  })
+
+  return {
+    updatedPackageJson: await upsertMediaPackageDependency(projectRoot),
+    createdMediaConfig: !mediaConfigPath,
+    createdMigrationFiles: migrationFilePath ? [migrationFilePath] : [],
+  }
+}
+
 export async function installSecurityIntoProject(
   projectRoot: string,
 ): Promise<SecurityInstallResult> {
@@ -818,6 +845,7 @@ export {
   upsertCachePackageDependencies,
   upsertEventsPackageDependency,
   upsertMailPackageDependency,
+  upsertMediaPackageDependency,
   upsertNotificationsPackageDependency,
   upsertSecurityPackageDependency,
 }

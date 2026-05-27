@@ -260,10 +260,10 @@ export interface AuthBaseGuardFacade {
   currentAccessToken(): Promise<AuthCurrentAccessToken | null>
   login<TCredentials extends AuthCredentials>(
     credentials: TCredentials,
-  ): Promise<AuthResult<AuthGuardLoginData, AuthLoginErrorCode, AuthInputFieldErrors<TCredentials>>>
+  ): Promise<AuthGuardLoginData>
   register<TInput extends AuthRegistrationInput>(
     input: TInput,
-  ): Promise<AuthResult<AuthGuardRegistrationData, AuthRegistrationErrorCode, AuthInputFieldErrors<TInput>>>
+  ): Promise<AuthGuardRegistrationData>
   logout(): Promise<AuthLogoutResult>
 }
 
@@ -281,44 +281,44 @@ export interface AuthGuardFacade extends AuthBaseGuardFacade, AuthSessionOnlyFac
 export interface AuthSessionGuardFacade extends AuthBaseGuardFacade, AuthSessionOnlyFacade {
   login<TCredentials extends AuthCredentials>(
     credentials: TCredentials,
-  ): Promise<AuthResult<AuthEstablishedSession, AuthLoginErrorCode, AuthInputFieldErrors<TCredentials>>>
+  ): Promise<AuthEstablishedSession>
   register<TInput extends AuthRegistrationInput>(
     input: TInput,
-  ): Promise<AuthResult<AuthenticatedAuthUser, AuthRegistrationErrorCode, AuthInputFieldErrors<TInput>>>
+  ): Promise<AuthenticatedAuthUser>
 }
 
 export interface AuthTokenGuardFacade extends AuthBaseGuardFacade {
   login<TCredentials extends AuthCredentials>(
     credentials: TCredentials,
-  ): Promise<AuthResult<PersonalAccessTokenResult, AuthLoginErrorCode, AuthInputFieldErrors<TCredentials>>>
+  ): Promise<PersonalAccessTokenResult>
   register<TInput extends AuthRegistrationInput>(
     input: TInput,
-  ): Promise<AuthResult<PersonalAccessTokenResult, AuthRegistrationErrorCode, AuthInputFieldErrors<TInput>>>
+  ): Promise<PersonalAccessTokenResult>
 }
 
 export interface AuthFacade extends AuthGuardFacade {
   login<TCredentials extends AuthCredentials>(
     credentials: TCredentials,
-  ): Promise<AuthResult<AuthEstablishedSession, AuthLoginErrorCode, AuthInputFieldErrors<TCredentials>>>
+  ): Promise<AuthEstablishedSession>
   register<TInput extends AuthRegistrationInput>(
     input: TInput,
-  ): Promise<AuthResult<AuthenticatedAuthUser, AuthRegistrationErrorCode, AuthInputFieldErrors<TInput>>>
+  ): Promise<AuthenticatedAuthUser>
   requestPasswordReset<TInput extends AuthPasswordResetRequestInput>(
     input: TInput,
     options?: AuthPasswordResetRequestOptions,
-  ): Promise<AuthResult<void, AuthPasswordResetRequestErrorCode, AuthInputFieldErrors<TInput>>>
+  ): Promise<void>
   resetPassword<TInput extends AuthPasswordResetInput>(
     input: TInput,
-  ): Promise<AuthResult<AuthenticatedAuthUser, AuthPasswordResetConsumeErrorCode, AuthInputFieldErrors<TInput>>>
-  verifyEmail(token: string): Promise<AuthResult<AuthenticatedAuthUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>>
-  sendEmailVerification(): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
-  sendEmailVerification(email: string): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
-  sendEmailVerification(email: string | undefined): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
-  sendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
-  resendEmailVerification(): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
-  resendEmailVerification(email: string): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
-  resendEmailVerification(email: string | undefined): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
-  resendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
+  ): Promise<AuthenticatedAuthUser>
+  verifyEmail(token: string): Promise<AuthenticatedAuthUser>
+  sendEmailVerification(): Promise<EmailVerificationTokenResult>
+  sendEmailVerification(email: string): Promise<EmailVerificationTokenResult>
+  sendEmailVerification(email: string | undefined): Promise<EmailVerificationTokenResult>
+  sendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<EmailVerificationTokenResult>
+  resendEmailVerification(): Promise<EmailVerificationTokenResult>
+  resendEmailVerification(email: string): Promise<EmailVerificationTokenResult>
+  resendEmailVerification(email: string | undefined): Promise<EmailVerificationTokenResult>
+  resendEmailVerification(email: string | undefined, options: AuthEmailVerificationSendOptions): Promise<EmailVerificationTokenResult>
   hashPassword(password: string): Promise<string>
   verifyPassword(password: string, digest: string): Promise<boolean>
   needsPasswordRehash(digest: string): Promise<boolean>
@@ -490,8 +490,8 @@ export interface AuthDeliveryHook {
 
 export interface AuthEmailVerificationFacade {
   create(user: unknown, options?: { readonly guard?: string, readonly expiresAt?: Date }): Promise<EmailVerificationTokenResult>
-  resend(options?: { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string }): Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>
-  consume(plainTextToken: string): Promise<AuthResult<AuthenticatedAuthUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>>
+  resend(options?: { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string }): Promise<EmailVerificationTokenResult>
+  consume(plainTextToken: string): Promise<AuthenticatedAuthUser>
 }
 
 export interface AuthSessionRecord {

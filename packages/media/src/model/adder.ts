@@ -55,6 +55,11 @@ type ResolvedMediaSource = {
   readonly name: string
 }
 
+type NamedBinaryContent = BinaryContent & {
+  readonly name?: string
+  readonly type?: string
+}
+
 type StoredMediaFileSnapshot = {
   readonly disk: string
   readonly path: string
@@ -80,6 +85,68 @@ type DeletedMediaSnapshot = {
     | 'order_column'
   >
   readonly files: readonly StoredMediaFileSnapshot[]
+}
+
+type MediaAddErrorCode
+  = | 'max_size_exceeded'
+    | 'invalid_mime_type'
+    | 'invalid_extension'
+
+type MediaAddErrorDetails
+  = | {
+    readonly code: 'max_size_exceeded'
+    readonly collection: string
+    readonly fileName: string
+    readonly maxSize: number
+    readonly actualSize: number
+  }
+    | {
+      readonly code: 'invalid_mime_type'
+      readonly collection: string
+      readonly fileName: string
+      readonly mimeType?: string
+      readonly acceptedMimeTypes: readonly string[]
+    }
+    | {
+      readonly code: 'invalid_extension'
+      readonly collection: string
+      readonly fileName: string
+      readonly extension?: string
+    readonly acceptedExtensions: readonly string[]
+  }
+
+type MediaAddError = {
+  readonly code: MediaAddErrorCode
+  readonly status: 422
+  readonly message: string
+  readonly collection: string
+  readonly fileName: string
+  readonly maxSize?: number
+  readonly actualSize?: number
+  readonly mimeType?: string
+  readonly acceptedMimeTypes?: readonly string[]
+  readonly extension?: string
+  readonly acceptedExtensions?: readonly string[]
+}
+
+export type MediaAddResult<
+  TCollectionName extends string = string,
+  TConversionName extends string = string,
+  TEntity extends Entity<TableDefinition> = Entity<TableDefinition>,
+> = MediaItem<TCollectionName, TConversionName, TEntity> & {
+  readonly data: MediaItem<TCollectionName, TConversionName, TEntity> | null
+  readonly error: MediaAddError | null
+}
+
+class MediaAddValidationException extends Error {
+  readonly error: MediaAddError
+
+  constructor(details: MediaAddErrorDetails) {
+    const error = createMediaAddError(details)
+    super(error.message)
+    this.name = 'MediaAddValidationException'
+    this.error = error
+  }
 }
 
 function resolveImplicitDiskName(): string {
@@ -109,10 +176,59 @@ function parseRemoteFileName(url: string): string {
   }
 }
 
-function createMaxSizeError(fileName: string, collectionName?: string): Error {
-  return new Error(
-    `[Holo Media] File "${fileName}" exceeds the max size for collection "${collectionName}".`,
-  )
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return '0 bytes'
+  }
+
+  const units = ['bytes', 'KB', 'MB', 'GB'] as const
+  let value = bytes
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+
+  const formatted = unitIndex === 0
+    ? String(Math.round(value))
+    : value.toFixed(value >= 10 ? 0 : 1).replace(/\.0$/, '')
+
+  return `${formatted} ${units[unitIndex]}`
+}
+
+function createMediaValidationMessage(details: MediaAddErrorDetails): string {
+  if (details.code === 'max_size_exceeded') {
+    return `The selected file must be ${formatBytes(details.maxSize)} or smaller.`
+  }
+
+  if (details.code === 'invalid_mime_type') {
+    return `The selected file must be one of these types: ${details.acceptedMimeTypes.join(', ')}.`
+  }
+
+  return `The selected file must use one of these extensions: ${details.acceptedExtensions.join(', ')}.`
+}
+
+function createMediaAddError(details: MediaAddErrorDetails): MediaAddError {
+  return Object.freeze({
+    ...details,
+    status: 422,
+    message: createMediaValidationMessage(details),
+  })
+}
+
+function createMaxSizeError(
+  fileName: string,
+  collectionName: string,
+  maxSize: number,
+  actualSize: number,
+): MediaAddValidationException {
+  return new MediaAddValidationException({
+    code: 'max_size_exceeded',
+    collection: collectionName,
+    fileName,
+    maxSize,
+    actualSize,
+  })
 }
 
 async function readRemoteMediaContents(
@@ -144,7 +260,7 @@ async function readRemoteMediaContents(
       if (totalSize > maxSize) {
         /* v8 ignore next -- reader cancellation failures are intentionally swallowed. */
         await reader.cancel().catch(() => undefined)
-        throw createMaxSizeError(fileName, collectionName)
+        throw createMaxSizeError(fileName, collectionName ?? 'default', maxSize, totalSize)
       }
 
       chunks.push(value)
@@ -220,16 +336,26 @@ async function resolveMediaSource(
   }
 
   const contents = await toBinaryContent(input)
-  const fileName = sanitizeFileName(overrideFileName ?? 'media.bin')
+  const fileName = sanitizeFileName(overrideFileName ?? getBinaryFileName(input))
 
   return {
     contents,
     fileName,
-    mimeType: inferMimeType(fileName),
+    mimeType: inferMimeType(fileName, getBinaryMimeType(input)),
     extension: getExtension(fileName),
     size: getContentSize(contents),
     name: getDisplayName(fileName, overrideName),
   }
+}
+
+function getBinaryFileName(input: BinaryContent): string {
+  const name = (input as NamedBinaryContent).name
+  return typeof name === 'string' && name.trim() ? name : 'media.bin'
+}
+
+function getBinaryMimeType(input: BinaryContent): string | undefined {
+  const type = (input as NamedBinaryContent).type
+  return typeof type === 'string' && type.trim() ? type : undefined
 }
 
 function isPathInput(
@@ -278,7 +404,7 @@ async function resolveRemoteMediaSource(
     : Number.NaN
 
   if (typeof maxSize === 'number' && Number.isFinite(contentLength) && contentLength > maxSize) {
-    throw createMaxSizeError(fileName, collectionName)
+    throw createMaxSizeError(fileName, collectionName ?? 'default', maxSize, contentLength)
   }
 
   const contents = await readRemoteMediaContents(
@@ -303,26 +429,32 @@ function validateSource(
   source: ResolvedMediaSource,
 ): void {
   if (typeof collection.maxSize === 'number' && source.size > collection.maxSize) {
-    throw new Error(
-      `[Holo Media] File "${source.fileName}" exceeds the max size for collection "${collection.name}".`,
-    )
+    throw createMaxSizeError(source.fileName, collection.name, collection.maxSize, source.size)
   }
 
   if (collection.acceptedMimeTypes.length > 0) {
     const mimeType = source.mimeType?.trim().toLowerCase()
 
     if (!mimeType || !collection.acceptedMimeTypes.includes(mimeType)) {
-      throw new Error(
-        `[Holo Media] File "${source.fileName}" is not an accepted MIME type for collection "${collection.name}".`,
-      )
+      throw new MediaAddValidationException({
+        code: 'invalid_mime_type',
+        collection: collection.name,
+        fileName: source.fileName,
+        mimeType,
+        acceptedMimeTypes: collection.acceptedMimeTypes,
+      })
     }
   }
 
   if (collection.acceptedExtensions.length > 0) {
     if (!source.extension || !collection.acceptedExtensions.includes(source.extension)) {
-      throw new Error(
-        `[Holo Media] File "${source.fileName}" is not an accepted extension for collection "${collection.name}".`,
-      )
+      throw new MediaAddValidationException({
+        code: 'invalid_extension',
+        collection: collection.name,
+        fileName: source.fileName,
+        extension: source.extension,
+        acceptedExtensions: collection.acceptedExtensions,
+      })
     }
   }
 }
@@ -499,6 +631,28 @@ export class MediaAdder<
   }
 
   async toMediaCollection(
+    collectionName: TCollectionName | 'default' = 'default',
+  ): Promise<MediaAddResult<TCollectionName | 'default', TConversionName, TEntity>> {
+    try {
+      const media = await this.storeInMediaCollection(collectionName)
+
+      return Object.assign(media, {
+        data: media,
+        error: null,
+      })
+    } catch (error) {
+      if (error instanceof MediaAddValidationException) {
+        return {
+          data: null,
+          error: error.error,
+        } as MediaAddResult<TCollectionName | 'default', TConversionName, TEntity>
+      }
+
+      throw error
+    }
+  }
+
+  private async storeInMediaCollection(
     collectionName: TCollectionName | 'default' = 'default',
   ): Promise<MediaItem<TCollectionName | 'default', TConversionName, TEntity>> {
     const mediaDefinition = requireMediaDefinition(this.entity)

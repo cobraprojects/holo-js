@@ -1,12 +1,18 @@
 import { redirect } from '@sveltejs/kit'
 import { authorize } from '@holo-js/authorization'
+import { csrf } from '@holo-js/security'
 
 import { deletePost, getAdminPostsData } from '$lib/server/blog'
 import Post from '../../../../server/models/Post'
 import type { Actions, PageServerLoad } from './$types'
 
-export const load = (async () => {
-  return await getAdminPostsData()
+export const load = (async ({ request }) => {
+  return {
+    ...await getAdminPostsData(),
+    csrf: {
+      input: await csrf.input(request),
+    },
+  }
 }) satisfies PageServerLoad
 
 export const actions = {

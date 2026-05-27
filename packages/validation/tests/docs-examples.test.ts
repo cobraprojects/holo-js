@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { field, parse, schema, validate } from '../src'
+import { field, parse, safeParse, schema } from '../src'
 
 describe('@holo-js/validation documented examples', () => {
   it('covers the documented JSON API validation flow without forms', async () => {
@@ -18,7 +18,7 @@ describe('@holo-js/validation documented examples', () => {
     expect(success.displayName).toBe('Ava')
     expect(success.birthday).toBeInstanceOf(Date)
 
-    const failure = await validate({
+    const failure = await safeParse({
       displayName: 'Av',
       timezone: '',
       birthday: '3024-01-10T00:00:00.000Z',

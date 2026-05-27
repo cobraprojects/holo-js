@@ -192,24 +192,24 @@ describe('admin actions', () => {
     expect(mocks.redirect).toHaveBeenCalledWith(redirectTo)
   })
 
-  it('normalizes empty post form fields before creating and updating', async () => {
+  it('returns post validation failures before creating and updating', async () => {
     mocks.auth.mockResolvedValue({ authenticated: true, user: { id: 1, email: 'editor@example.com' } })
     mocks.createPost.mockResolvedValue(undefined)
     mocks.updatePost.mockResolvedValue(undefined)
 
-    await expect(actions.createPostAction(new FormData())).rejects.toThrow('NEXT_REDIRECT:/admin/posts')
-    await expect(actions.updatePostAction(1, new FormData())).rejects.toThrow('NEXT_REDIRECT:/admin/posts')
+    await expect(actions.createPostAction(new FormData())).rejects.toThrow('Title is required.')
+    await expect(actions.updatePostAction(1, new FormData())).rejects.toThrow('Title is required.')
 
-    const expectedPostInput = {
-      title: '',
-      excerpt: '',
-      body: '',
-      status: 'published',
-      categoryId: '',
-      tagIds: '',
-    }
-    expect(mocks.createPost).toHaveBeenCalledWith(expectedPostInput)
-    expect(mocks.updatePost).toHaveBeenCalledWith(1, expectedPostInput)
+    expect(mocks.createPost).not.toHaveBeenCalled()
+    expect(mocks.updatePost).not.toHaveBeenCalled()
+  })
+
+  it('lets post image validation failures bubble without redirecting', async () => {
+    mocks.auth.mockResolvedValue({ authenticated: true, user: { id: 1, email: 'editor@example.com' } })
+    mocks.createPost.mockRejectedValue(new Error('The selected file must be 2 MB or smaller.'))
+
+    await expect(actions.createPostAction(createPostFormData())).rejects.toThrow('The selected file must be 2 MB or smaller.')
+    expect(mocks.redirect).not.toHaveBeenCalledWith('/admin/posts')
   })
 
   it('normalizes empty category and tag form fields before mutating', async () => {

@@ -77,25 +77,13 @@ describe('SvelteKit login page action', () => {
   })
 
   it('returns form failures before logging in', async () => {
-    const failure = {
-      ok: false,
-      status: 422,
-      errors: {
-        email: ['Enter a valid email address.'],
-      },
-    }
-    const submission = {
-      valid: false,
-      fail: vi.fn(() => failure),
-    }
-    mocks.validate.mockResolvedValue(submission)
+    const validationError = new Error('Validation failed.')
+    mocks.validate.mockRejectedValue(validationError)
 
-    const response = await loginPage.actions.default({
+    await expect(loginPage.actions.default({
       request: createRequest('/login'),
-    })
+    })).rejects.toBe(validationError)
 
-    expect(response.status).toBe(422)
-    expect(response).toEqual(failure)
     expect(mocks.validate).toHaveBeenCalledWith(expect.any(Request), mocks.loginForm, {
       throttle: 'login',
     })
@@ -103,29 +91,17 @@ describe('SvelteKit login page action', () => {
   })
 
   it('returns the login redirect target after successful login', async () => {
-    const submission = {
-      valid: true,
-      data: {
-        email: 'editor@example.com',
-        password: 'secret-secret',
-        remember: false,
-      },
-      fail: vi.fn(),
-      success: vi.fn((data, status = 200) => ({
-        ok: true,
-        status,
-        data,
-      })),
+    const input = {
+      email: 'editor@example.com',
+      password: 'secret-secret',
+      remember: false,
     }
-    mocks.validate.mockResolvedValue(submission)
+    mocks.validate.mockResolvedValue(input)
     mocks.login.mockResolvedValue({
-      data: {
-        emailVerificationRequired: false,
-        user: {
-          email: 'editor@example.com',
-        },
+      emailVerificationRequired: false,
+      user: {
+        email: 'editor@example.com',
       },
-      error: null,
     })
 
     await expect(loginPage.actions.default({
@@ -134,7 +110,7 @@ describe('SvelteKit login page action', () => {
       status: 303,
       location: '/admin',
     })
-    expect(mocks.login).toHaveBeenCalledWith(submission.data)
+    expect(mocks.login).toHaveBeenCalledWith(input)
   })
 })
 
@@ -144,25 +120,13 @@ describe('SvelteKit register page action', () => {
   })
 
   it('returns form failures before registering', async () => {
-    const failure = {
-      ok: false,
-      status: 422,
-      errors: {
-        email: ['Enter a valid email address.'],
-      },
-    }
-    const submission = {
-      valid: false,
-      fail: vi.fn(() => failure),
-    }
-    mocks.validate.mockResolvedValue(submission)
+    const validationError = new Error('Validation failed.')
+    mocks.validate.mockRejectedValue(validationError)
 
-    const response = await registerPage.actions.default({
+    await expect(registerPage.actions.default({
       request: createRequest('/register'),
-    })
+    })).rejects.toBe(validationError)
 
-    expect(response.status).toBe(422)
-    expect(response).toEqual(failure)
     expect(mocks.validate).toHaveBeenCalledWith(expect.any(Request), mocks.registerForm, {
       throttle: 'register',
     })
@@ -173,26 +137,14 @@ describe('SvelteKit register page action', () => {
     const created = {
       email: 'reader@example.com',
     }
-    const submission = {
-      valid: true,
-      data: {
-        name: 'Reader',
-        email: 'reader@example.com',
-        password: 'secret-secret',
-        passwordConfirmation: 'secret-secret',
-      },
-      fail: vi.fn(),
-      success: vi.fn((data, status = 200) => ({
-        ok: true,
-        status,
-        data,
-      })),
+    const input = {
+      name: 'Reader',
+      email: 'reader@example.com',
+      password: 'secret-secret',
+      passwordConfirmation: 'secret-secret',
     }
-    mocks.validate.mockResolvedValue(submission)
-    mocks.register.mockResolvedValue({
-      data: created,
-      error: null,
-    })
+    mocks.validate.mockResolvedValue(input)
+    mocks.register.mockResolvedValue(created)
     mocks.loginUsing.mockResolvedValue({
       emailVerificationRequired: true,
       emailVerificationRoute: '/verify-email?email=reader%40example.com',
@@ -205,7 +157,7 @@ describe('SvelteKit register page action', () => {
       status: 303,
       location: '/verify-email?email=reader%40example.com',
     })
-    expect(mocks.register).toHaveBeenCalledWith(submission.data)
+    expect(mocks.register).toHaveBeenCalledWith(input)
     expect(mocks.loginUsing).toHaveBeenCalledWith(created)
   })
 })
@@ -256,25 +208,13 @@ describe('SvelteKit super admin login page action', () => {
   })
 
   it('returns form failures before logging in the admin guard', async () => {
-    const failure = {
-      ok: false,
-      status: 422,
-      errors: {
-        email: ['Enter a valid email address.'],
-      },
-    }
-    const submission = {
-      valid: false,
-      fail: vi.fn(() => failure),
-    }
-    mocks.validate.mockResolvedValue(submission)
+    const validationError = new Error('Validation failed.')
+    mocks.validate.mockRejectedValue(validationError)
 
-    const response = await superAdminLoginPage.actions.default({
+    await expect(superAdminLoginPage.actions.default({
       request: createRequest('/super-admin/login'),
-    })
+    })).rejects.toBe(validationError)
 
-    expect(response.status).toBe(422)
-    expect(response).toEqual(failure)
     expect(mocks.validate).toHaveBeenCalledWith(expect.any(Request), mocks.loginForm, {
       throttle: 'login',
     })
@@ -282,29 +222,17 @@ describe('SvelteKit super admin login page action', () => {
   })
 
   it('returns the super admin redirect target after login', async () => {
-    const submission = {
-      valid: true,
-      data: {
-        email: 'super-admin@example.com',
-        password: 'admin-secret',
-        remember: false,
-      },
-      fail: vi.fn(),
-      success: vi.fn((data, status = 200) => ({
-        ok: true,
-        status,
-        data,
-      })),
+    const input = {
+      email: 'super-admin@example.com',
+      password: 'admin-secret',
+      remember: false,
     }
-    mocks.validate.mockResolvedValue(submission)
+    mocks.validate.mockResolvedValue(input)
     mocks.guardLogin.mockResolvedValue({
-      data: {
-        emailVerificationRequired: false,
-        user: {
-          email: 'super-admin@example.com',
-        },
+      emailVerificationRequired: false,
+      user: {
+        email: 'super-admin@example.com',
       },
-      error: null,
     })
 
     await expect(superAdminLoginPage.actions.default({
@@ -313,6 +241,6 @@ describe('SvelteKit super admin login page action', () => {
       status: 303,
       location: '/super-admin',
     })
-    expect(mocks.guardLogin).toHaveBeenCalledWith(submission.data)
+    expect(mocks.guardLogin).toHaveBeenCalledWith(input)
   })
 })

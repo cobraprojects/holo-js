@@ -3,6 +3,7 @@ export {
   createFailedSubmission,
   createSuccessfulSubmission,
   formsInternals,
+  safeParse,
   sanitizeFlashedInput,
   validate,
 } from './contracts'
@@ -28,10 +29,12 @@ export type {
 } from './contracts'
 export {
   createErrorBag,
+  DEFAULT_VALIDATION_BAG,
   defineSchema,
   field,
+  isValidationException,
   parse,
-  safeParse,
+  ValidationException,
 } from './schema'
 export type {
   ErrorTree,
@@ -43,7 +46,9 @@ export type {
   StandardSchemaV1Issue,
   StandardSchemaV1Props,
   StandardSchemaV1Result,
+  SerializedValidationException,
   ValidationErrorBag,
+  ValidationExceptionOptions,
   ValidationFailure,
   ValidationResult,
   ValidationSchema,

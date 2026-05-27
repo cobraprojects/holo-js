@@ -1,3 +1,5 @@
+import type { HoloAdapterProjectAccessors } from '@holo-js/core'
+
 export interface HoloRuntimeConnection {
   driver?: 'sqlite' | 'postgres' | 'mysql'
   url?: string
@@ -23,6 +25,7 @@ export interface HoloRuntimeDefaultConnection extends HoloRuntimeConnection {
   }
 }
 
+export declare const holo: HoloAdapterProjectAccessors
 export declare function useHoloDb(): HoloRuntimeDatabaseGroup | HoloRuntimeDefaultConnection
 export declare function useHoloEnv(): 'production' | 'development' | 'test'
 export declare function useHoloDebug(): boolean

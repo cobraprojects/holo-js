@@ -11,23 +11,31 @@ Queued conversions are now backed by the queue subsystem instead of a dormant fl
 
 ## Installation
 
-Install the media package alongside DB and storage:
+Install the media package, config file, and table migration:
 
 ```bash
-npm install @holo-js/media
+npx holo install media
 ```
 
 `@holo-js/media` is not a framework adapter. It builds on top of `@holo-js/db` and `@holo-js/storage`.
 
 ## Create the media table
 
-Create a `media` table before attaching files to models.
+`holo install media` creates the `media` table migration. For projects that already installed the
+package manually, create only the table migration:
+
+```bash
+npx holo media:table
+npx holo migrate
+```
+
+The generated migration creates this table:
 
 ```ts
-import { defineMigration } from '@holo-js/db'
+import { defineMigration, type MigrationContext } from '@holo-js/db'
 
 export default defineMigration({
-  async up(schema) {
+  async up({ schema }: MigrationContext) {
     await schema.createTable('media', (table) => {
       table.id()
       table.uuid('uuid').unique()
@@ -48,6 +56,9 @@ export default defineMigration({
       table.index(['model_type', 'model_id'])
       table.index(['model_type', 'model_id', 'collection_name'])
     })
+  },
+  async down({ schema }: MigrationContext) {
+    await schema.dropTable('media')
   },
 })
 ```

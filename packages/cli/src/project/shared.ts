@@ -286,6 +286,12 @@ export type CacheInstallResult = {
   readonly databaseDriver: boolean
 }
 
+export type MediaInstallResult = {
+  readonly updatedPackageJson: boolean
+  readonly createdMediaConfig: boolean
+  readonly createdMigrationFiles: readonly string[]
+}
+
 export type BroadcastInstallResult = {
   readonly updatedPackageJson: boolean
   readonly createdBroadcastConfig: boolean
@@ -388,6 +394,15 @@ export const MAIL_CONFIG_FILE_NAMES = [
   'config/mail.mjs',
   'config/mail.cts',
   'config/mail.cjs',
+] as const
+
+export const MEDIA_CONFIG_FILE_NAMES = [
+  'config/media.ts',
+  'config/media.mts',
+  'config/media.js',
+  'config/media.mjs',
+  'config/media.cts',
+  'config/media.cjs',
 ] as const
 
 export const SECURITY_CONFIG_FILE_NAMES = [

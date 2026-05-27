@@ -36,20 +36,6 @@ vi.mock('@/lib/schemas/auth', () => ({
 
 const { loginAction } = await import('../app/login/actions.ts')
 
-function createValidSubmission(data) {
-  return {
-    valid: true,
-    data,
-  }
-}
-
-function createInvalidSubmission(payload) {
-  return {
-    valid: false,
-    fail: vi.fn(() => payload),
-  }
-}
-
 describe('login action', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -59,20 +45,18 @@ describe('login action', () => {
     const formData = new FormData()
     formData.set('email', 'editor@example.com')
     formData.set('password', 'secret-secret')
-    mocks.validate.mockResolvedValue(createValidSubmission({
+    const input = {
       email: 'editor@example.com',
       password: 'secret-secret',
       remember: false,
-    }))
+    }
+    mocks.validate.mockResolvedValue(input)
     mocks.login.mockResolvedValue({
-      data: {
-        emailVerificationRequired: false,
-        user: {
-          id: 'user-1',
-          email: 'editor@example.com',
-        },
+      emailVerificationRequired: false,
+      user: {
+        id: 'user-1',
+        email: 'editor@example.com',
       },
-      error: null,
     })
     mocks.redirect.mockImplementation((url) => {
       throw new RedirectSignal(url)
@@ -85,30 +69,16 @@ describe('login action', () => {
     expect(mocks.validate).toHaveBeenCalledWith(formData, {}, {
       throttle: 'login',
     })
-    expect(mocks.login).toHaveBeenCalledWith({
-      email: 'editor@example.com',
-      password: 'secret-secret',
-      remember: false,
-    })
+    expect(mocks.login).toHaveBeenCalledWith(input)
     expect(mocks.revalidatePath).toHaveBeenCalledWith('/', 'layout')
     expect(mocks.redirect).toHaveBeenCalledWith('/admin')
   })
 
   it('returns validation failures without logging in', async () => {
-    const failure = {
-      ok: false,
-      status: 422,
-      valid: false,
-      values: {
-        email: '',
-      },
-      errors: {
-        email: ['Email is required.'],
-      },
-    }
-    mocks.validate.mockResolvedValue(createInvalidSubmission(failure))
+    const validationError = new Error('Validation failed.')
+    mocks.validate.mockRejectedValue(validationError)
 
-    await expect(loginAction(new FormData())).resolves.toBe(failure)
+    await expect(loginAction(new FormData())).rejects.toBe(validationError)
 
     expect(mocks.login).not.toHaveBeenCalled()
     expect(mocks.revalidatePath).not.toHaveBeenCalled()

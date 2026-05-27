@@ -1,7 +1,5 @@
 <script setup lang="ts">
-import type { HomePageData } from '../../server/lib/blog'
-
-const { data } = await useFetch<HomePageData>('/api/blog/home')
+const { data } = await useFetch('/api/blog/home')
 </script>
 
 <template>

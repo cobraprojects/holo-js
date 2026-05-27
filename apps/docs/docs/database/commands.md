@@ -79,6 +79,15 @@ npx holo cache:table
 Use this when your cache config uses the `database` driver. The generator creates a normal migration file under
 `server/db/migrations` for the cache entry and cache lock tables.
 
+### Create the media table
+
+```bash
+npx holo media:table
+```
+
+Use this when `@holo-js/media` was installed manually. `npx holo install media` already creates this
+migration.
+
 ### Create a seeder
 
 ```bash

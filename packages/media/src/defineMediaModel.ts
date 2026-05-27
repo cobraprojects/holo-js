@@ -14,10 +14,12 @@ import type {
   CursorPaginatedResult,
   DynamicRelationResolver,
   Entity,
+  EntityWithLoaded,
   ModelCollection,
   ModelQueryBuilder,
   PaginatedResult,
   RelationMap,
+  ResolveEagerLoads,
   SimplePaginatedResult,
   TableDefinition,
 } from '@holo-js/db'
@@ -66,7 +68,9 @@ type MediaEnabledEntityResult<
   TEntity,
   TCollectionName extends string,
   TConversionName extends string,
-> = TEntity extends Entity<infer _TTable extends TableDefinition, infer _TRelations extends RelationMap>
+> = TEntity extends EntityWithLoaded<infer _TTable extends TableDefinition, infer _TRelations extends RelationMap, infer _TLoaded>
+  ? TEntity & MediaEnabledEntityMethods<TCollectionName, TConversionName>
+  : TEntity extends Entity<infer _TTable extends TableDefinition, infer _TRelations extends RelationMap>
   ? TEntity & MediaEnabledEntityMethods<TCollectionName, TConversionName>
   : TEntity
 
@@ -112,7 +116,7 @@ type MediaEnabledQueryBuilder<
   TBuilder,
   TCollectionName extends string,
   TConversionName extends string,
-> = {
+> = TBuilder & {
   [K in keyof TBuilder]: MediaEnabledFunction<TBuilder[K], TCollectionName, TConversionName>
 }
 
@@ -172,18 +176,88 @@ type MediaModelStatic = {
   readonly resolveRelationUsing: (name: string, resolver: DynamicRelationResolver) => unknown
 }
 
+type MediaRelationPath<TRelations extends RelationMap>
+  = Extract<keyof TRelations, string> | `${Extract<keyof TRelations, string>}.${string}`
+
+type MediaRelationConstraint<
+  TTable extends TableDefinition,
+  TRelations extends RelationMap,
+> = (query: ModelQueryBuilder<TTable, TRelations>) => unknown
+
+type MediaEnabledStaticMethodKey =
+  | 'create'
+  | 'cursorPaginate'
+  | 'find'
+  | 'findMany'
+  | 'findOrFail'
+  | 'first'
+  | 'firstOrFail'
+  | 'firstWhere'
+  | 'make'
+  | 'paginate'
+  | 'simplePaginate'
+  | 'update'
+  | 'with'
+
+type MediaEnabledStaticMethods<
+  TModel extends MediaModelStatic,
+  TCollectionName extends string,
+  TConversionName extends string,
+> = {
+  [K in keyof TModel as K extends MediaEnabledStaticMethodKey ? K : never]: K extends 'with'
+    ? MediaEnabledWith<TModel, TCollectionName, TConversionName>
+    : MediaEnabledFunction<
+        TModel[K],
+        TCollectionName,
+        TConversionName
+      >
+}
+
+type MediaEnabledWith<
+  TModel extends MediaModelStatic,
+  TCollectionName extends string,
+  TConversionName extends string,
+> = TModel extends { query(): ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap> }
+  ? {
+      <TPaths extends readonly MediaRelationPath<TRelations>[]>(
+        ...relations: TPaths
+      ): MediaEnabledQueryBuilder<
+        ModelQueryBuilder<TTable, TRelations, ResolveEagerLoads<TRelations, TPaths>>,
+        TCollectionName,
+        TConversionName
+      >
+      <TPath extends MediaRelationPath<TRelations>>(
+        relation: TPath,
+        constraint: MediaRelationConstraint<TTable, TRelations>
+      ): MediaEnabledQueryBuilder<
+        ModelQueryBuilder<TTable, TRelations, ResolveEagerLoads<TRelations, readonly [TPath]>>,
+        TCollectionName,
+        TConversionName
+      >
+      (
+        relations: Readonly<Partial<Record<MediaRelationPath<TRelations>, MediaRelationConstraint<TTable, TRelations>>>>
+      ): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations>, TCollectionName, TConversionName>
+      <TPaths extends readonly MediaRelationPath<TRelations>[]>(
+        relations: TPaths
+      ): MediaEnabledQueryBuilder<
+        ModelQueryBuilder<TTable, TRelations, ResolveEagerLoads<TRelations, TPaths>>,
+        TCollectionName,
+        TConversionName
+      >
+    }
+  : TModel extends { with: infer TWith }
+    ? MediaEnabledFunction<TWith, TCollectionName, TConversionName>
+    : never
+
 export type MediaEnabledModel<
   TModel extends MediaModelStatic,
   TDefinition extends MediaDefinitionInput,
-> = {
-  [K in keyof TModel]: K extends 'with'
-    ? TModel[K]
-    : MediaEnabledFunction<
-        TModel[K],
-        MediaCollectionName<TDefinition>,
-        MediaConversionName<TDefinition>
-      >
-}
+> = Omit<TModel, MediaEnabledStaticMethodKey>
+  & MediaEnabledStaticMethods<
+    TModel,
+    MediaCollectionName<TDefinition>,
+    MediaConversionName<TDefinition>
+  >
 
 export function defineMediaModel<
   TModel extends MediaModelStatic,

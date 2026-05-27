@@ -71,10 +71,8 @@ export type FieldKind = PrimitiveFieldKind
 export type SupportedRuleFamily = typeof SUPPORTED_RULE_FAMILIES[number]
 export type SchemaSourceInput = Request | FormData | URLSearchParams | Record<string, unknown>
 
-export interface WebFileLike {
+export interface WebFileLike extends Blob {
   readonly name?: string
-  readonly type?: string
-  readonly size?: number
   readonly lastModified?: number
 }
 

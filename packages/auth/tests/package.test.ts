@@ -56,6 +56,7 @@ import {
   resolveRequiredFieldName,
 } from '../src/runtime/failureFields'
 import { createLoginFailure, createRegistrationFailure } from '../src/runtime/sessionFailures'
+import { isValidationException, type ValidationErrorBag } from '@holo-js/validation'
 
 function hashPasswordResetEmail(email: string, csrfSigningKey?: string): string {
   const canonicalEmail = email.trim().toLowerCase()
@@ -102,7 +103,18 @@ declare global {
   }
 }
 
-function unwrapAuthResult<TData>(result: AuthResult<TData>): TData {
+function isAuthResult<TData>(result: AuthResult<TData> | TData): result is AuthResult<TData> {
+  return !!result
+    && typeof result === 'object'
+    && 'data' in result
+    && 'error' in result
+}
+
+function unwrapAuthResult<TData>(result: AuthResult<TData> | TData): TData {
+  if (!isAuthResult(result)) {
+    return result
+  }
+
   if (result.error) {
     throw new Error(`Expected auth success but received ${result.error.code}.`)
   }
@@ -110,17 +122,24 @@ function unwrapAuthResult<TData>(result: AuthResult<TData>): TData {
   return result.data
 }
 
-function expectAuthFailureCode<TData, TCode extends AuthErrorCode>(
-  result: AuthResult<TData, TCode>,
-  code: TCode,
-): NonNullable<typeof result.error> {
-  expect(result.error?.code).toBe(code)
-  if (!result.error) {
-    throw new Error(`Expected auth failure "${code}" but received success.`)
+async function expectAuthValidationError<TCode extends AuthErrorCode>(
+  operation: () => Promise<unknown>,
+  _code: TCode,
+  status = 422,
+): Promise<ValidationErrorBag<Record<string, unknown>>> {
+  try {
+    await operation()
+  } catch (error) {
+    expect(isValidationException(error)).toBe(true)
+    if (!isValidationException(error)) {
+      throw error
+    }
+
+    expect(error.status).toBe(status)
+    return error.errors
   }
 
-  expect(result.error.code).toBe(code)
-  return result.error
+  throw new Error(`Expected auth validation failure "${_code}" but received success.`)
 }
 
 type UserRecord = {
@@ -1470,14 +1489,14 @@ describe('@holo-js/auth package runtime', () => {
       passwordConfirmation: 'secret-secret',
     })
 
-    expectAuthFailureCode(await register({
+    await expectAuthValidationError(() => register({
       name: 'Ava',
       email: 'ava@example.com',
       password: 'secret-secret',
       passwordConfirmation: 'secret-secret',
     }), 'registration_identifier_taken')
 
-    expectAuthFailureCode(await register({
+    await expectAuthValidationError(() => register({
       name: 'Mina',
       email: 'mina@example.com',
       password: 'secret-secret',
@@ -1608,7 +1627,7 @@ describe('@holo-js/auth package runtime', () => {
       passwordConfirmation: 'secret-secret',
     })
 
-    expectAuthFailureCode(await register({
+    await expectAuthValidationError(() => register({
       name: 'Mina',
       email: 'ava@example.com',
       phone: '99999999',
@@ -1617,7 +1636,7 @@ describe('@holo-js/auth package runtime', () => {
       passwordConfirmation: 'secret-secret',
     }), 'registration_identifier_taken')
 
-    expectAuthFailureCode(await register({
+    await expectAuthValidationError(() => register({
       name: 'Noor',
       email: 'noor@example.com',
       phone: '45545454',
@@ -1667,14 +1686,14 @@ describe('@holo-js/auth package runtime', () => {
       }),
     })
 
-    expectAuthFailureCode(await register({
+    await expectAuthValidationError(() => register({
       name: 'Ava',
       country: 'EG',
       password: 'secret-secret',
       passwordConfirmation: 'secret-secret',
     }), 'credentials_identifier_missing')
 
-    expectAuthFailureCode(await login({
+    await expectAuthValidationError(() => login({
       country: 'EG',
       password: 'secret-secret',
     }), 'credentials_identifier_missing')
@@ -1693,22 +1712,19 @@ describe('@holo-js/auth package runtime', () => {
       email_verified_at: null,
     })
 
-    const missingCredentialsError = expectAuthFailureCode(await login({
+    const missingCredentialsErrors = await expectAuthValidationError(() => login({
       email: 'missing@example.com',
       password: 'secret-secret',
     }), 'invalid_credentials')
-    expect(missingCredentialsError.message).toBe('These credentials do not match our records.')
-    expect(missingCredentialsError.status).toBe(422)
-    expect(missingCredentialsError.fields).toEqual({
+    expect(missingCredentialsErrors).toMatchObject({
       email: ['These credentials do not match our records.'],
       password: ['These credentials do not match our records.'],
     })
 
-    const badPasswordError = expectAuthFailureCode(await login({
+    await expectAuthValidationError(() => login({
       email: 'ava@example.com',
       password: 'bad-password',
     }), 'invalid_credentials')
-    expect(badPasswordError.status).toBe(422)
 
     expect(unwrapAuthResult(await login({
       email: 'ava@example.com',
@@ -1742,12 +1758,7 @@ describe('@holo-js/auth package runtime', () => {
     await expect(auth.login({
       email: 'missing@example.com',
       password: 'secret-secret',
-    })).resolves.toMatchObject({
-      data: null,
-      error: {
-        code: 'invalid_credentials',
-      },
-    })
+    })).rejects.toThrow('These credentials do not match our records.')
 
     expect(verify).toHaveBeenCalledWith('secret-secret', '')
   })
@@ -1771,14 +1782,14 @@ describe('@holo-js/auth package runtime', () => {
     })
     expect(runtime.deliveries[0]?.tokenValue).toBe(token.plainTextToken)
 
-    const invalidVerificationError = expectAuthFailureCode(
-      await verifyEmail('bad-token'),
+    const invalidVerificationErrors = await expectAuthValidationError(
+      () => verifyEmail('bad-token'),
       'email_verification_token_invalid',
     )
-    expect(invalidVerificationError.message).toContain('Invalid email verification token')
+    expect(invalidVerificationErrors.token?.[0]).toContain('Invalid email verification token')
 
-    expectAuthFailureCode(
-      await verifyEmail(`${token.id}.wrong-secret`),
+    await expectAuthValidationError(
+      () => verifyEmail(`${token.id}.wrong-secret`),
       'email_verification_token_expired',
     )
 
@@ -1790,12 +1801,12 @@ describe('@holo-js/auth package runtime', () => {
     expect(runtime.usersProvider.users.get(1)?.email_verified_at).toBeInstanceOf(Date)
     expect(runtime.emailVerificationTokenStore.records.size).toBe(0)
 
-    expectAuthFailureCode(await verifyEmail(token.plainTextToken), 'email_verification_token_expired')
+    await expectAuthValidationError(() => verifyEmail(token.plainTextToken), 'email_verification_token_expired')
 
     const expired = await verification.create(created, {
       expiresAt: new Date('2026-04-07T00:00:00.000Z'),
     })
-    expectAuthFailureCode(await verifyEmail(expired.plainTextToken), 'email_verification_token_expired')
+    await expectAuthValidationError(() => verifyEmail(expired.plainTextToken), 'email_verification_token_expired')
   })
 
   it('resends verification tokens by email without requiring an active session', async () => {
@@ -1830,10 +1841,10 @@ describe('@holo-js/auth package runtime', () => {
       tokenValue: legacyResent.plainTextToken,
     })
 
-    expectAuthFailureCode(await resendEmailVerification('missing@example.com'), 'email_verification_user_missing')
+    await expectAuthValidationError(() => resendEmailVerification('missing@example.com'), 'email_verification_user_missing', 401)
 
     await verifyEmail(legacyResent.plainTextToken)
-    expectAuthFailureCode(await resendEmailVerification('ava@example.com'), 'email_already_verified')
+    await expectAuthValidationError(() => resendEmailVerification('ava@example.com'), 'email_already_verified', 409)
   })
 
   it('fails verification and password reset flows when a provider cannot persist user changes', async () => {
@@ -1930,20 +1941,21 @@ describe('@holo-js/auth package runtime', () => {
     })
 
     const verificationToken = await verification.create(created)
-    expectAuthFailureCode(
-      await verification.consume(verificationToken.plainTextToken),
+    await expectAuthValidationError(
+      () => verification.consume(verificationToken.plainTextToken),
       'provider_update_unsupported',
+      500,
     )
     expect(usersProvider.users.get(1)?.email_verified_at).toBeNull()
 
     await requestPasswordReset({ email: 'ava@example.com' })
     const resetDelivery = deliveries.find(delivery => delivery.type === 'password-reset')
     expect(resetDelivery).toBeDefined()
-    expectAuthFailureCode(await resetPassword({
+    await expectAuthValidationError(() => resetPassword({
       token: resetDelivery!.tokenValue,
       password: 'new-secret',
       passwordConfirmation: 'new-secret',
-    }), 'provider_update_unsupported')
+    }), 'provider_update_unsupported', 500)
     await expect(
       authRuntimeInternals.createDefaultPasswordHasher().verify(
         'secret-secret',
@@ -2054,18 +2066,18 @@ describe('@holo-js/auth package runtime', () => {
     const firstDelivery = runtime.deliveries[0]!
     expect(firstDelivery.type).toBe('password-reset')
 
-    expectAuthFailureCode(await resetPassword({
+    await expectAuthValidationError(() => resetPassword({
       token: 'bad-token',
       password: 'new-secret',
       passwordConfirmation: 'new-secret',
     }), 'password_reset_token_invalid')
 
-    expectAuthFailureCode(await resetPassword({
+    await expectAuthValidationError(() => resetPassword({
       token: firstDelivery.tokenValue,
       password: 'new-secret',
     } as never), 'password_confirmation_mismatch')
 
-    expectAuthFailureCode(await resetPassword({
+    await expectAuthValidationError(() => resetPassword({
       token: firstDelivery.tokenValue,
       password: 'new-secret',
       passwordConfirmation: 'wrong-secret',
@@ -2073,7 +2085,7 @@ describe('@holo-js/auth package runtime', () => {
 
     await requestPasswordReset({ email: 'ava@example.com' })
     expect(runtime.deliveries).toHaveLength(2)
-    expectAuthFailureCode(await resetPassword({
+    await expectAuthValidationError(() => resetPassword({
       token: firstDelivery.tokenValue,
       password: 'new-secret',
       passwordConfirmation: 'new-secret',
@@ -2101,7 +2113,7 @@ describe('@holo-js/auth package runtime', () => {
       expiresAt: new Date('2026-04-07T00:00:00.000Z'),
     })
     const expiredDelivery = runtime.deliveries[2]!
-    expectAuthFailureCode(await resetPassword({
+    await expectAuthValidationError(() => resetPassword({
       token: expiredDelivery.tokenValue,
       password: 'another-secret',
       passwordConfirmation: 'another-secret',
@@ -2169,7 +2181,7 @@ describe('@holo-js/auth package runtime', () => {
   it('rejects registration when password confirmation is omitted', async () => {
     configureRuntime()
 
-    expectAuthFailureCode(await register({
+    await expectAuthValidationError(() => register({
       email: 'ava@example.com',
       password: 'secret-secret',
     } as never), 'password_confirmation_mismatch')
@@ -5291,7 +5303,7 @@ describe('@holo-js/auth package runtime', () => {
     await expect(verification.create(noEmail, {
       guard: 'web',
     })).rejects.toThrow('Email verification requires a user with an email address.')
-    expectAuthFailureCode(await requestPasswordReset({ email: '   ' }), 'password_reset_email_required')
+    await expectAuthValidationError(() => requestPasswordReset({ email: '   ' }), 'password_reset_email_required')
     await expect(requestPasswordReset({ email: 'ava@example.com' }, {
       broker: 'missing',
     })).rejects.toThrow('Password broker "missing" is not configured.')
@@ -5301,7 +5313,7 @@ describe('@holo-js/auth package runtime', () => {
     const resetDelivery = runtime.deliveries.find(entry => entry.type === 'password-reset')
     runtime.usersProvider.users.delete(created.id)
     runtime.usersProvider.usersByEmail.delete(created.email)
-    expectAuthFailureCode(await resetPassword({
+    await expectAuthValidationError(() => resetPassword({
       token: resetDelivery!.tokenValue,
       password: 'new-secret',
       passwordConfirmation: 'new-secret',

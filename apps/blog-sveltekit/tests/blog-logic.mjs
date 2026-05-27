@@ -7,6 +7,7 @@ import authorization, { AuthorizationError, authorizationInternals } from '@holo
 import cache, { configureCacheRuntime, getCacheRuntimeBindings } from '@holo-js/cache'
 import { initializeHoloAdapterProject } from '@holo-js/core'
 import { DB } from '@holo-js/db'
+import { isValidationException } from '@holo-js/forms'
 
 import Category from '../server/models/Category.ts'
 import Admin from '../server/models/Admin.ts'
@@ -43,6 +44,7 @@ import {
 
 const project = await initializeHoloAdapterProject(process.cwd())
 const blogCache = cache.driver('memory')
+const imageUploadFailureMessage = 'The selected file must be 2 MB or smaller.'
 const cacheBindings = getCacheRuntimeBindings()
 if (!cacheBindings) {
   throw new Error('Expected cache runtime bindings to be configured.')
@@ -200,6 +202,11 @@ function createActionRequest(fields) {
       continue
     }
 
+    if (value instanceof Blob) {
+      formData.set(name, value, 'upload.png')
+      continue
+    }
+
     if (Array.isArray(value)) {
       for (const item of value) {
         formData.append(name, String(item))
@@ -243,14 +250,16 @@ async function createCsrfActionRequest(path, fields) {
   return request
 }
 
-function assertInvalidPostStatusFailure(result) {
-  assert.equal(result.status, 400)
-  assert.deepEqual(result.data?.errors?.status, ['Select a valid post status.'])
+function assertInvalidPostStatusFailure(error) {
+  assert.equal(isValidationException(error), true)
+  assert.deepEqual(error.errors.flatten().status, ['Select a valid post status.'])
+  return true
 }
 
-function assertInvalidTagNameFailure(result) {
-  assert.equal(result.status, 400)
-  assert.deepEqual(result.data?.errors?.name, ['Tag name is required.'])
+function assertInvalidTagNameFailure(error) {
+  assert.equal(isValidationException(error), true)
+  assert.deepEqual(error.errors.flatten().name, ['Tag name is required.'])
+  return true
 }
 
 async function expectRedirect(action) {
@@ -319,21 +328,25 @@ function assertFieldFailure(result, fields) {
 }
 
 async function assertResetPasswordApiRoute() {
-  const invalidSubmission = await readJsonResponse(await resetPasswordPost({
+  await assert.rejects(async () => await resetPasswordPost({
     request: createApiRequest('/api/reset-password', {}),
-  }))
-  assert.equal(invalidSubmission.status, 422)
-  assertFieldFailure(invalidSubmission, ['token', 'password', 'passwordConfirmation'])
+  }), (error) => {
+    assert.equal(isValidationException(error), true)
+    assertFieldFailure({ body: error.toJSON() }, ['token', 'password', 'passwordConfirmation'])
+    return true
+  })
 
-  const invalidToken = await readJsonResponse(await resetPasswordPost({
+  await assert.rejects(async () => await resetPasswordPost({
     request: createApiRequest('/api/reset-password', {
       token: 'bad-token',
       password: 'secret-secret-2',
       passwordConfirmation: 'secret-secret-2',
     }),
-  }))
-  assert.equal(invalidToken.status, 422)
-  assertFieldFailure(invalidToken, ['token'])
+  }), (error) => {
+    assert.equal(isValidationException(error), true)
+    assertFieldFailure({ body: error.toJSON() }, ['token'])
+    return true
+  })
 
   const email = `reset-route-${Date.now()}@app.test`
   const password = 'secret-secret'
@@ -570,20 +583,20 @@ try {
   assert.equal(updatedTag.slug, 'deep-guides')
 
   await signInEditor()
-  assertInvalidTagNameFailure(await createTagPageActions.create({
+  await assert.rejects(async () => await createTagPageActions.create({
     request: createActionRequest({
       name: '',
     }),
-  }))
+  }), assertInvalidTagNameFailure)
   assert.equal(await Tag.where('slug', '').first(), undefined)
 
   await signInEditor()
-  assertInvalidTagNameFailure(await updateTagPageActions.update({
+  await assert.rejects(async () => await updateTagPageActions.update({
     params: { id: String(updatedTag.id) },
     request: createActionRequest({
       name: '',
     }),
-  }))
+  }), assertInvalidTagNameFailure)
   const retainedTag = await Tag.findOrFail(updatedTag.id)
   assert.equal(retainedTag.slug, 'deep-guides')
 
@@ -593,22 +606,22 @@ try {
   assert.ok(releaseTag)
 
   await signInEditor()
-  assertInvalidPostStatusFailure(await createPostPageActions.create({
+  await assert.rejects(async () => await createPostPageActions.create({
     request: createActionRequest({
       title: 'Missing Route Status Post',
       body: 'Missing status body',
     }),
-  }))
+  }), assertInvalidPostStatusFailure)
   assert.equal(await Post.where('slug', 'missing-route-status-post').first(), undefined)
 
   await signInEditor()
-  assertInvalidPostStatusFailure(await createPostPageActions.create({
+  await assert.rejects(async () => await createPostPageActions.create({
     request: createActionRequest({
       title: 'Unknown Route Status Post',
       body: 'Unknown status body',
       status: 'archived',
     }),
-  }))
+  }), assertInvalidPostStatusFailure)
   assert.equal(await Post.where('slug', 'unknown-route-status-post').first(), undefined)
 
   await createPost({
@@ -629,6 +642,71 @@ try {
   assert.equal(logicPost.tags.length, 1)
   assert.equal(logicPost.tags[0]?.id, frameworkTag.id)
   assert.ok(logicPost.published_at)
+
+  let mediaFailurePost = null
+  const entityPrototype = Object.getPrototypeOf(logicPost)
+  const originalAddMedia = entityPrototype.addMedia
+  entityPrototype.addMedia = function addMediaWithForcedFailure() {
+    return {
+      toMediaCollection: async () => {
+        return {
+          error: {
+            message: imageUploadFailureMessage,
+          },
+        }
+      },
+    }
+  }
+  try {
+    await signInEditor()
+    await assert.rejects(async () => await createPostPageActions.create({
+      request: createActionRequest({
+        title: 'Media Side Effect Post',
+        excerpt: 'Media side effect excerpt',
+        body: 'Media side effect body',
+        status: 'published',
+        categoryId: String(updatedCategory.id),
+        tagIds: [frameworkTag.id],
+        image: new Blob(['image'], { type: 'image/png' }),
+      }),
+    }), (error) => {
+      assert.equal(isValidationException(error), true)
+      assert.deepEqual(error.errors.flatten().image, [imageUploadFailureMessage])
+      return true
+    })
+
+    mediaFailurePost = await Post.with('category', 'tags').where('slug', 'media-side-effect-post').first()
+    assert.ok(mediaFailurePost)
+    assert.equal(mediaFailurePost.category?.id, updatedCategory.id)
+    assert.equal(mediaFailurePost.tags[0]?.id, frameworkTag.id)
+
+    await signInEditor()
+    await assert.rejects(async () => await updatePostPageActions.update({
+      params: { id: String(mediaFailurePost.id) },
+      request: createActionRequest({
+        title: 'Media Side Effect Post Revised',
+        excerpt: 'Updated media side effect excerpt',
+        body: 'Updated media side effect body',
+        status: 'draft',
+        categoryId: '',
+        tagIds: [releaseTag.id],
+        image: new Blob(['image'], { type: 'image/png' }),
+      }),
+    }), (error) => {
+      assert.equal(isValidationException(error), true)
+      assert.deepEqual(error.errors.flatten().image, [imageUploadFailureMessage])
+      return true
+    })
+
+    mediaFailurePost = await Post.with('category', 'tags').where('id', mediaFailurePost.id).first()
+    assert.ok(mediaFailurePost)
+    assert.equal(mediaFailurePost.slug, 'media-side-effect-post-revised')
+    assert.equal(mediaFailurePost.status, 'draft')
+    assert.equal(mediaFailurePost.category, null)
+    assert.equal(mediaFailurePost.tags[0]?.id, releaseTag.id)
+  } finally {
+    entityPrototype.addMedia = originalAddMedia
+  }
 
   const originalPublishedAt = logicPost.published_at
 
@@ -657,26 +735,26 @@ try {
   assert.ok(routeStatusPost)
 
   await signInEditor()
-  assertInvalidPostStatusFailure(await updatePostPageActions.update({
+  await assert.rejects(async () => await updatePostPageActions.update({
     params: { id: String(routeStatusPost.id) },
     request: createActionRequest({
       title: 'Route Status Published',
       body: 'Published body',
     }),
-  }))
+  }), assertInvalidPostStatusFailure)
   routeStatusPost = await Post.findOrFail(routeStatusPost.id)
   assert.equal(routeStatusPost.status, 'draft')
   assert.equal(routeStatusPost.title, 'Route Status Draft')
 
   await signInEditor()
-  assertInvalidPostStatusFailure(await updatePostPageActions.update({
+  await assert.rejects(async () => await updatePostPageActions.update({
     params: { id: String(routeStatusPost.id) },
     request: createActionRequest({
       title: 'Route Status Published',
       body: 'Published body',
       status: 'archived',
     }),
-  }))
+  }), assertInvalidPostStatusFailure)
   routeStatusPost = await Post.findOrFail(routeStatusPost.id)
   assert.equal(routeStatusPost.status, 'draft')
   assert.equal(routeStatusPost.title, 'Route Status Draft')
@@ -774,12 +852,18 @@ try {
   await deletePost(logicPost.id)
   await deletePost(cleanupPost.id)
   await deletePost(routeStatusPost.id)
+  if (mediaFailurePost) {
+    await deletePost(mediaFailurePost.id)
+  }
   for (const post of concurrentPosts) {
     await deletePost(post.id)
   }
   assert.equal(await Post.find(logicPost.id), undefined)
   assert.equal(await Post.find(cleanupPost.id), undefined)
   assert.equal(await Post.find(routeStatusPost.id), undefined)
+  if (mediaFailurePost) {
+    assert.equal(await Post.find(mediaFailurePost.id), undefined)
+  }
   assert.equal(await DB.table('post_tags').where('post_id', logicPost.id).count(), 0)
   assert.equal(await DB.table('post_tags').where('post_id', cleanupPost.id).count(), 0)
 

@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createFailedSubmission, createSuccessfulSubmission, field, schema } from '../src'
+import { createFailedSubmission, createSuccessfulSubmission, field, schema, type WebFileLike } from '../src'
 import { createFormClient as useForm } from '../src/internal/client'
 import { clearSensitiveInputValues, sanitizeFlashedInput } from '../src/sensitiveInput'
 
 const browserGlobal = globalThis as typeof globalThis & { document?: Document }
 const originalFetch = globalThis.fetch
+const originalFormData = globalThis.FormData
 const originalDocument = browserGlobal.document
 type SensitiveSchemaFixture = NonNullable<Parameters<typeof clearSensitiveInputValues>[1]>
 
@@ -23,6 +24,7 @@ function createSecurityClientModule(config: { readonly field: string, readonly c
 
 afterEach(() => {
   globalThis.fetch = originalFetch
+  globalThis.FormData = originalFormData
   if (typeof originalDocument === 'undefined') {
     delete (browserGlobal as { document?: Document }).document
   } else {
@@ -371,6 +373,78 @@ describe('@holo-js/forms client', () => {
 
     expect(setValueClient.values.email).toBe('next@example.com')
     expect(setValueClient.errors.first('email')).toBeUndefined()
+
+    const blurValidations: Array<{
+      readonly value: string
+      readonly deferred: ReturnType<typeof createDeferred<true | string>>
+    }> = []
+    const blurSchema = schema({
+      email: field.string().required().customAsync(async (value) => {
+        const deferred = createDeferred<true | string>()
+        blurValidations.push({
+          value,
+          deferred,
+        })
+        return deferred.promise
+      }),
+    })
+
+    const blurStaleClient = useForm(blurSchema, {
+      initialValues: {
+        email: 'ava@example.com',
+      },
+      validateOn: 'blur',
+    })
+
+    const firstBlur = blurStaleClient.fields.email.onBlur()
+    await vi.waitFor(() => {
+      expect(blurValidations).toHaveLength(1)
+    })
+
+    const secondBlur = blurStaleClient.fields.email.onBlur()
+    await vi.waitFor(() => {
+      expect(blurValidations).toHaveLength(2)
+    })
+
+    blurValidations[1]?.deferred.resolve(true)
+    await secondBlur
+    expect(blurStaleClient.errors.first('email')).toBeUndefined()
+
+    blurValidations[0]?.deferred.resolve('Stale blur validation error.')
+    await firstBlur
+    expect(blurStaleClient.errors.first('email')).toBeUndefined()
+
+    const fieldValidations: Array<ReturnType<typeof createDeferred<true | string>>> = []
+    const fieldSchema = schema({
+      email: field.string().required().customAsync(async () => {
+        const deferred = createDeferred<true | string>()
+        fieldValidations.push(deferred)
+        return deferred.promise
+      }),
+    })
+    const fieldClient = useForm(fieldSchema, {
+      initialValues: {
+        email: 'ava@example.com',
+      },
+    })
+
+    const firstValidate = fieldClient.fields.email.validate()
+    await vi.waitFor(() => {
+      expect(fieldValidations).toHaveLength(1)
+    })
+
+    const secondValidate = fieldClient.fields.email.validate()
+    await vi.waitFor(() => {
+      expect(fieldValidations).toHaveLength(2)
+    })
+
+    fieldValidations[1]?.resolve(true)
+    await secondValidate
+    expect(fieldClient.errors.first('email')).toBeUndefined()
+
+    fieldValidations[0]?.resolve('Stale field validation error.')
+    await firstValidate
+    expect(fieldClient.errors.first('email')).toBeUndefined()
   })
 
   it('keeps untouched field errors hidden when blur validation runs', async () => {
@@ -488,6 +562,17 @@ describe('@holo-js/forms client', () => {
     expect(client.values.email).toBe('reset@example.com')
     expect(client.errors.flatten()).toEqual({})
     expect(client.lastSubmission).toBeUndefined()
+
+    const secondClient = useForm(registerUser, {
+      initialValues: {
+        email: 'second@example.com',
+        profile: {
+          city: 'Giza',
+        },
+      },
+    })
+    secondClient.reset()
+    expect(secondClient.values.email).toBe('second@example.com')
   })
 
   it('serializes valid client submissions and can convert them to failures', async () => {
@@ -1040,6 +1125,155 @@ describe('@holo-js/forms client', () => {
     }
   })
 
+  it('preserves files from the active browser form during submit', async () => {
+    const uploadSchema = schema({
+      title: field.string().required(),
+      image: field.file().optional(),
+    })
+    const image = new File(['avatar'], 'avatar.png', { type: 'image/png' })
+    const liveForm = {
+      __entries: [
+        ['title', 'Uploaded from browser form'],
+        ['image', image],
+      ],
+    }
+
+    class BrowserFormData {
+      readonly #entries: [string, FormDataEntryValue][] = []
+
+      constructor(source?: { readonly __entries?: readonly (readonly [string, FormDataEntryValue])[] }) {
+        for (const [key, value] of source?.__entries ?? []) {
+          this.append(key, value)
+        }
+      }
+
+      append(key: string, value: FormDataEntryValue): void {
+        this.#entries.push([key, value])
+      }
+
+      set(key: string, value: FormDataEntryValue): void {
+        const filtered = this.#entries.filter(([entryKey]) => entryKey !== key)
+        filtered.push([key, value])
+        this.#entries.length = 0
+        this.#entries.push(...filtered)
+      }
+
+      get(key: string): FormDataEntryValue | null {
+        return this.#entries.find(([entryKey]) => entryKey === key)?.[1] ?? null
+      }
+
+      getAll(key: string): FormDataEntryValue[] {
+        return this.#entries
+          .filter(([entryKey]) => entryKey === key)
+          .map(([, value]) => value)
+      }
+
+      has(key: string): boolean {
+        return this.#entries.some(([entryKey]) => entryKey === key)
+      }
+
+      entries(): IterableIterator<[string, FormDataEntryValue]> {
+        return this.#entries[Symbol.iterator]()
+      }
+
+      [Symbol.iterator](): IterableIterator<[string, FormDataEntryValue]> {
+        return this.entries()
+      }
+    }
+
+    vi.stubGlobal('FormData', BrowserFormData)
+    vi.stubGlobal('document', {
+      activeElement: {
+        form: liveForm,
+      },
+    })
+
+    const submitter = vi.fn(async ({ values, formData }: { values: { title: string, image?: WebFileLike }, formData: FormData }) => {
+      expect(values.image).toBe(image)
+      expect(formData.get('image')).toBe(image)
+      return {
+        ok: true as const,
+        status: 200,
+        data: undefined,
+      }
+    })
+
+    const client = useForm(uploadSchema, {
+      initialValues: {
+        title: '',
+      },
+      submitter,
+    })
+
+    await client.submit()
+
+    expect(submitter).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to tracked values when the active browser form cannot be serialized', async () => {
+    const uploadSchema = schema({
+      title: field.string().required(),
+    })
+
+    class ThrowingBrowserFormData {
+      readonly #entries: [string, FormDataEntryValue][] = []
+
+      constructor(source?: object) {
+        if (source) {
+          throw new Error('Cannot serialize this form.')
+        }
+      }
+
+      append(key: string, value: FormDataEntryValue): void {
+        this.#entries.push([key, value])
+      }
+
+      set(key: string, value: FormDataEntryValue): void {
+        this.#entries.splice(0, this.#entries.length, [key, value])
+      }
+
+      get(key: string): FormDataEntryValue | null {
+        return this.#entries.find(([entryKey]) => entryKey === key)?.[1] ?? null
+      }
+
+      entries(): IterableIterator<[string, FormDataEntryValue]> {
+        return this.#entries[Symbol.iterator]()
+      }
+
+      [Symbol.iterator](): IterableIterator<[string, FormDataEntryValue]> {
+        return this.entries()
+      }
+    }
+
+    vi.stubGlobal('FormData', ThrowingBrowserFormData)
+    vi.stubGlobal('document', {
+      activeElement: {
+        form: {},
+      },
+    })
+
+    const submitter = vi.fn(async ({ values, formData }: { values: { title: string }, formData: FormData }) => {
+      expect(values.title).toBe('Tracked title')
+      expect(formData.get('title')).toBe('Tracked title')
+      return {
+        ok: true as const,
+        status: 200,
+        data: undefined,
+      }
+    })
+
+    const client = useForm(uploadSchema, {
+      initialValues: {
+        title: 'Tracked title',
+      },
+      submitter,
+    })
+
+    await client.submit()
+
+    expect(submitter).toHaveBeenCalledTimes(1)
+  })
+
   it('preserves failure payload status codes returned by submitters', async () => {
     const registerUser = schema({
       email: field.string().required().email(),
@@ -1065,7 +1299,7 @@ describe('@holo-js/forms client', () => {
     const result = await client.submit()
 
     expect('ok' in result && result.ok === false).toBe(true)
-    if ('ok' in result && result.ok === false && 'status' in result) {
+    if ('ok' in result && result.ok === false && 'status' in result && 'valid' in result && result.valid === false) {
       expect(result.status).toBe(409)
       expect(result.errors.email).toEqual(['Email is already taken.'])
     }

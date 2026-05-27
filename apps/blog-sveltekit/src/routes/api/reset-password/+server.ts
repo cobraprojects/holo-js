@@ -5,26 +5,16 @@ import { validate } from '@holo-js/forms'
 import { resetPasswordForm } from '$lib/schemas/auth'
 
 export async function POST({ request }: { request: Request }) {
-  const submission = await validate(request, resetPasswordForm)
+  const input = await validate(request, resetPasswordForm)
 
-  if (!submission.valid) {
-    return json(submission.fail(), {
-      status: submission.fail().status,
-    })
-  }
+  await resetPassword(input)
 
-  const { error } = await resetPassword(submission.data)
-  if (error) {
-    const failure = submission.fail({
-      status: error.status,
-      errors: error.fields,
-    })
-
-    return json(failure, { status: failure.status })
-  }
-
-  return json(submission.success({
-    message: 'Password reset successfully. You can sign in with your new password.',
-    redirectTo: '/login',
-  }))
+  return json({
+    ok: true,
+    status: 200,
+    data: {
+      message: 'Password reset successfully. You can sign in with your new password.',
+      redirectTo: '/login',
+    },
+  })
 }

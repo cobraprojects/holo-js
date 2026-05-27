@@ -1,7 +1,5 @@
-<script lang="ts">
-  import { type PageData } from './$types'
-
-  export let data: PageData
+<script>
+  export let data
 </script>
 
 {#if data}
@@ -16,6 +14,7 @@
         <div class="row">
           <a href={`/admin/posts/${post.id}/edit`}>Edit</a>
           <form action="?/delete" method="post">
+            <input {...data.csrf.input}>
             <input type="hidden" name="id" value={post.id}>
             <button type="submit">Delete</button>
           </form>

@@ -2,7 +2,6 @@ import { access, mkdir, readdir, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { basename, dirname, extname, relative, resolve } from 'node:path'
 import {
-  addImports,
   addServerHandler,
   addServerImportsDir,
   addServerPlugin,
@@ -153,6 +152,7 @@ type NuxtViteOptions = {
 interface NuxtOptionsWithNitro {
   nitro: {
     storage: Record<string, unknown>
+    errorHandler?: string | string[]
     experimental?: {
       asyncContext?: boolean
       [key: string]: unknown
@@ -213,6 +213,19 @@ function addViteOptimizeDeps(opts: NuxtOptionsWithNitro, deps: readonly string[]
       ...deps,
     ]),
   ]
+}
+
+function addNitroErrorHandler(opts: NuxtOptionsWithNitro, handler: string): void {
+  const current = opts.nitro.errorHandler
+  const handlers = Array.isArray(current)
+    ? current
+    : typeof current === 'string'
+      ? [current]
+      : []
+
+  if (!handlers.includes(handler)) {
+    opts.nitro.errorHandler = [...handlers, handler]
+  }
 }
 
 /* v8 ignore next 15 -- optional-package absence is validated in published-package integration, not in this monorepo test graph */
@@ -361,6 +374,7 @@ export default defineNuxtModule<ModuleOptions>({
 
     opts.nitro = opts.nitro || { storage: {} }
     opts.nitro.storage = opts.nitro.storage || {}
+    addNitroErrorHandler(opts, resolver.resolve('./runtime/server/error'))
     opts.nitro.experimental = {
       ...(opts.nitro.experimental || {}),
       asyncContext: true,
@@ -399,20 +413,8 @@ export default defineNuxtModule<ModuleOptions>({
     }
 
     if (!opts._holoCoreRuntimeRegistered) {
-      const imports = [
-        { name: 'holo', as: 'holo', from: '@holo-js/adapter-nuxt/runtime' },
-        { name: 'useHoloDb', as: 'useHoloDb', from: '@holo-js/adapter-nuxt/runtime' },
-        { name: 'useHoloEnv', as: 'useHoloEnv', from: '@holo-js/adapter-nuxt/runtime' },
-        { name: 'useHoloDebug', as: 'useHoloDebug', from: '@holo-js/adapter-nuxt/runtime' },
-      ]
-      if (storageModule) {
-        imports.push(
-          { name: 'useStorage', as: 'useStorage', from: '@holo-js/adapter-nuxt/storage' },
-          { name: 'Storage', as: 'Storage', from: '@holo-js/adapter-nuxt/storage' },
-        )
-      }
       addServerPlugin(resolver.resolve('./runtime/plugins/init'))
-      addImports(imports)
+      addServerPlugin(resolver.resolve('./runtime/plugins/forms'))
       addServerImportsDir(resolver.resolve('./runtime/server/imports'))
       const serverModelImports = await createServerModelImports(
         sourceDir,

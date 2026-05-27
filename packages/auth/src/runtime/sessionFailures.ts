@@ -2,6 +2,7 @@ import type {
   AuthCredentials,
   AuthError,
   AuthFailure,
+  AuthFieldErrors,
   AuthLoginErrorCode,
   AuthRegistrationErrorCode,
   AuthRegistrationInput,
@@ -48,6 +49,22 @@ export function createLoginFailure<TCredentials extends AuthCredentials>(
       return createAuthFailurePayload(error.code, error.message, 422, createFieldErrors([field], error.message))
     }
   }
+}
+
+export function createTokenLoginFailure<TCredentials extends AuthCredentials>(
+  error: AuthError<AuthLoginErrorCode>,
+  credentials: TCredentials,
+): AuthFailure<AuthLoginErrorCode, AuthFieldErrors> {
+  if (error.code !== 'invalid_credentials') {
+    return createLoginFailure(error, credentials)
+  }
+
+  return createAuthFailurePayload(
+    error.code,
+    error.message,
+    401,
+    createFieldErrors(['_root'], error.message),
+  )
 }
 
 export function createRegistrationFailure<TInput extends AuthRegistrationInput>(

@@ -97,7 +97,7 @@ describe('@holo-js/auth typing', () => {
     expectTypeOf<AuthUser>().toEqualTypeOf<AppAuthUser>()
     expectTypeOf<AuthenticatedAuthUser>().toEqualTypeOf<AppAuthenticatedUser>()
     expectTypeOf<HoloAuthUser>().toEqualTypeOf<AppAuthUser>()
-    expectTypeOf<RegisteredUser>().toEqualTypeOf<AuthResult<AppAuthenticatedUser, AuthRegistrationErrorCode>>()
+    expectTypeOf<RegisteredUser>().toEqualTypeOf<AppAuthenticatedUser>()
     expectTypeOf<CurrentServerUser>().toEqualTypeOf<AppAuthenticatedUser | null>()
     expectTypeOf<CurrentClientUser>().toEqualTypeOf<AppAuthUser | null>()
     expectTypeOf<CurrentClientAuth>().toEqualTypeOf<CurrentAuthResponse & {
@@ -115,14 +115,14 @@ describe('@holo-js/auth typing', () => {
     expectTypeOf<GuardProvider>().toEqualTypeOf<string | null>()
     expectTypeOf<GuardUser>().toEqualTypeOf<AppAuthenticatedUser | null>()
     expectTypeOf<GuardRefreshedUser>().toEqualTypeOf<AppAuthenticatedUser | null>()
-    expectTypeOf<WebGuardLogin>().toEqualTypeOf<AuthResult<AuthEstablishedSession, AuthLoginErrorCode>>()
-    expectTypeOf<ApiGuardLogin>().toEqualTypeOf<AuthResult<PersonalAccessTokenResult, AuthLoginErrorCode>>()
-    expectTypeOf<ApiGuardRegister>().toEqualTypeOf<AuthResult<PersonalAccessTokenResult, AuthRegistrationErrorCode>>()
+    expectTypeOf<WebGuardLogin>().toEqualTypeOf<AuthEstablishedSession>()
+    expectTypeOf<ApiGuardLogin>().toEqualTypeOf<PersonalAccessTokenResult>()
+    expectTypeOf<ApiGuardRegister>().toEqualTypeOf<PersonalAccessTokenResult>()
     expectTypeOf<ApiGuardHasLoginUsing>().toEqualTypeOf<false>()
     expectTypeOf<ApiGuardHasImpersonate>().toEqualTypeOf<false>()
     expectTypeOf<DynamicGuardTrustedSession>().toEqualTypeOf<AuthEstablishedSession>()
-    expectTypeOf<GuardLogin>().toEqualTypeOf<AuthResult<AuthEstablishedSession | PersonalAccessTokenResult, AuthLoginErrorCode>>()
-    expectTypeOf<GuardRegister>().toEqualTypeOf<AuthResult<AppAuthenticatedUser | PersonalAccessTokenResult, AuthRegistrationErrorCode>>()
+    expectTypeOf<GuardLogin>().toEqualTypeOf<AuthEstablishedSession | PersonalAccessTokenResult>()
+    expectTypeOf<GuardRegister>().toEqualTypeOf<AppAuthenticatedUser | PersonalAccessTokenResult>()
     expectTypeOf<TrustedSession>().toEqualTypeOf<AuthEstablishedSession>()
     expectTypeOf<TrustedIdSession>().toEqualTypeOf<AuthEstablishedSession>()
     expectTypeOf<ImpersonatedSession>().toEqualTypeOf<AuthEstablishedSession>()
@@ -173,7 +173,7 @@ describe('@holo-js/auth typing', () => {
     expectTypeOf(adapter.delete).toEqualTypeOf<((id: string | number) => Promise<void>) | undefined>()
     expectTypeOf(auth.user).returns.toEqualTypeOf<Promise<AppAuthenticatedUser | null>>()
     expectTypeOf(auth.provider).returns.toEqualTypeOf<Promise<string | null>>()
-    expectTypeOf(auth.login).returns.toEqualTypeOf<Promise<AuthResult<AuthEstablishedSession, AuthLoginErrorCode>>>()
+    expectTypeOf(auth.login).returns.toEqualTypeOf<Promise<AuthEstablishedSession>>()
     expectTypeOf(auth.loginUsing).returns.toEqualTypeOf<Promise<AuthEstablishedSession>>()
     expectTypeOf(auth.loginUsingId).returns.toEqualTypeOf<Promise<AuthEstablishedSession>>()
     expectTypeOf(auth.hashPassword).returns.toEqualTypeOf<Promise<string>>()
@@ -184,11 +184,11 @@ describe('@holo-js/auth typing', () => {
     expectTypeOf(auth.stopImpersonating).returns.toEqualTypeOf<Promise<AppAuthenticatedUser | null>>()
     expectTypeOf(auth.logout).returns.toEqualTypeOf<Promise<AuthLogoutResult>>()
     expectTypeOf(auth.verifyEmail).parameter(0).toEqualTypeOf<string>()
-    expectTypeOf(auth.verifyEmail).returns.toEqualTypeOf<Promise<AuthResult<AppAuthenticatedUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>>>()
+    expectTypeOf(auth.verifyEmail).returns.toEqualTypeOf<Promise<AppAuthenticatedUser>>()
     expectTypeOf(auth.sendEmailVerification).parameter(0).toEqualTypeOf<string | undefined>()
-    expectTypeOf(auth.sendEmailVerification).returns.toEqualTypeOf<Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>>()
+    expectTypeOf(auth.sendEmailVerification).returns.toEqualTypeOf<Promise<EmailVerificationTokenResult>>()
     expectTypeOf(auth.resendEmailVerification).parameter(0).toEqualTypeOf<string | undefined>()
-    expectTypeOf(auth.resendEmailVerification).returns.toEqualTypeOf<Promise<AuthResult<EmailVerificationTokenResult, AuthEmailVerificationResendErrorCode, AuthFieldErrors<'_root'>>>>()
+    expectTypeOf(auth.resendEmailVerification).returns.toEqualTypeOf<Promise<EmailVerificationTokenResult>>()
     expectTypeOf(clientAuth.user).returns.toEqualTypeOf<Promise<AppAuthUser | null>>()
     expectTypeOf(clientAuth.provider).returns.toEqualTypeOf<Promise<string | null>>()
     expectTypeOf(clientAuth.useAuth).returns.toEqualTypeOf<Promise<CurrentAuthResponse & {
@@ -210,21 +210,9 @@ describe('@holo-js/auth typing', () => {
       })
     }
 
-    expectTypeOf<Awaited<ReturnType<typeof requestPasswordResetResult>>>().toEqualTypeOf<
-      AuthResult<void, AuthPasswordResetRequestErrorCode, {
-        email?: readonly string[]
-      }>
-    >()
-    expectTypeOf<Awaited<ReturnType<typeof resetPasswordResult>>>().toEqualTypeOf<
-      AuthResult<AppAuthenticatedUser, AuthPasswordResetConsumeErrorCode, {
-        token?: readonly string[]
-        password?: readonly string[]
-        passwordConfirmation?: readonly string[]
-      }>
-    >()
-    expectTypeOf<Awaited<ReturnType<typeof verifyEmail>>>().toEqualTypeOf<
-      AuthResult<AppAuthenticatedUser, AuthEmailVerificationConsumeErrorCode, AuthFieldErrors<'token'>>
-    >()
+    expectTypeOf<Awaited<ReturnType<typeof requestPasswordResetResult>>>().toEqualTypeOf<void>()
+    expectTypeOf<Awaited<ReturnType<typeof resetPasswordResult>>>().toEqualTypeOf<AppAuthenticatedUser>()
+    expectTypeOf<Awaited<ReturnType<typeof verifyEmail>>>().toEqualTypeOf<AppAuthenticatedUser>()
   })
 
   it('keeps legacy custom session runtimes assignable to auth runtime bindings', () => {

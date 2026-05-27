@@ -5,28 +5,14 @@ import { validate } from '@holo-js/forms'
 import { loginForm } from '$lib/schemas/auth'
 
 export async function POST({ request }: { request: Request }) {
-  const submission = await validate(request, loginForm, {
+  const input = await validate(request, loginForm, {
     throttle: 'login',
   })
 
-  if (!submission.valid) {
-    const failure = submission.fail()
-    return json(failure, {
-      status: failure.status,
-    })
-  }
-
-  const { data: token, error } = await auth.guard('api').login({
-    ...submission.data,
+  const token = await auth.guard('api').login({
+    ...input,
     abilities: ['posts.read'],
   })
-
-  if (error) {
-    return json({
-      ok: false,
-      message: 'Invalid credentials.',
-    }, { status: 401 })
-  }
 
   return json({
     ok: true,

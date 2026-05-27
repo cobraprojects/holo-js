@@ -20,6 +20,19 @@ type StoredVariantSnapshot = VariantRecord & {
   readonly contents: Uint8Array
 }
 
+function toUrlPath(url: string): string {
+  if (url.startsWith('/')) {
+    return url
+  }
+
+  try {
+    const parsed = new URL(url)
+    return `${parsed.pathname}${parsed.search}`
+  } catch {
+    return `/${url.replace(/^\/+/, '')}`
+  }
+}
+
 function registerDeletedVariantRollbackRestore(
   snapshots: readonly StoredVariantSnapshot[],
 ): void {
@@ -78,16 +91,8 @@ export class MediaItem<
   }
 
   getPath(conversion?: TConversionName): string | null {
-    const variant = this.resolveVariant(conversion)
-    if (!variant) {
-      return null
-    }
-
-    try {
-      return Storage.disk(variant.disk).path(variant.path)
-    } catch {
-      return null
-    }
+    const url = this.getUrl(conversion)
+    return url ? toUrlPath(url) : null
   }
 
   getUrl(conversion?: TConversionName): string | null {

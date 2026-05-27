@@ -615,6 +615,13 @@ export function coerceFieldValue(definition: FieldDefinition, value: unknown): u
 
   const normalizedValue = lastValue(value)
 
+  if (definition.kind === 'file' && isWebFileLike(normalizedValue)) {
+    const file = normalizedValue as WebFileLike
+    if (file.name === '' && file.size === 0) {
+      return undefined
+    }
+  }
+
   if (normalizedValue === '' && definition.kind !== 'string') {
     return undefined
   }

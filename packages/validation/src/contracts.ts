@@ -9,6 +9,7 @@ import {
   type StandardSchemaV1Props,
   type StandardSchemaV1Types,
   type ValidationField,
+  type ValidationErrorBag,
   type ValidationResult,
   type ValidationSchema,
   type WebFileLike,
@@ -278,6 +279,141 @@ export function defineSchema<TShape extends SchemaInputShape>(
 export const schema = defineSchema
 export { createErrorBag }
 
+export const DEFAULT_VALIDATION_BAG = 'default'
+const validationMetadataSymbol: unique symbol = Symbol('holo.validation.metadata')
+const validationValuesSymbol: unique symbol = Symbol('holo.validation.values')
+let validationExceptionThrower: (<TData>(exception: ValidationException<TData>) => void) | undefined
+
+export interface ValidationExceptionOptions {
+  readonly bag?: string
+}
+
+export interface SerializedValidationException<TData = Record<string, unknown>> {
+  readonly ok: false
+  readonly status: number
+  readonly valid: false
+  readonly message: string
+  readonly bag: string
+  readonly values: Partial<TData>
+  readonly errors: Record<string, readonly string[]>
+  readonly retryAfterSeconds?: number
+  readonly retryAt?: string
+}
+
+export class ValidationException<TData = Record<string, unknown>> extends Error {
+  readonly status = 422
+  readonly bag: string
+  readonly errors: ValidationErrorBag<TData>
+  [validationMetadataSymbol]: Pick<SerializedValidationException<TData>, 'retryAfterSeconds' | 'retryAt'>
+  [validationValuesSymbol]: Partial<TData>
+
+  constructor(
+    messages: Record<string, readonly string[]>,
+    options: ValidationExceptionOptions = {},
+  ) {
+    super(summarizeErrors(messages))
+    this.name = 'ValidationException'
+    this.bag = options.bag ?? DEFAULT_VALIDATION_BAG
+    this[validationMetadataSymbol] = {}
+    this[validationValuesSymbol] = {}
+    this.errors = createErrorBag<TData>(messages)
+  }
+
+  get values(): Partial<TData> {
+    return this[validationValuesSymbol]
+  }
+
+  static withMessages<TData = Record<string, unknown>>(
+    messages: Record<string, readonly string[]>,
+    options: ValidationExceptionOptions = {},
+  ): ValidationException<TData> {
+    return new ValidationException<TData>(messages, options)
+  }
+
+  toJSON(): SerializedValidationException<TData> {
+    return {
+      ok: false,
+      status: this.status,
+      valid: false,
+      message: this.message,
+      bag: this.bag,
+      values: this.values,
+      errors: this.errors.flatten(),
+      ...this[validationMetadataSymbol],
+    }
+  }
+}
+
+function setValidationExceptionValues<TData>(
+  exception: ValidationException<TData>,
+  values: Partial<TData>,
+): ValidationException<TData> {
+  exception[validationValuesSymbol] = values
+  return exception
+}
+
+function setValidationExceptionStatus<TData>(
+  exception: ValidationException<TData>,
+  status: number,
+): ValidationException<TData> {
+  Object.defineProperty(exception, 'status', {
+    value: status,
+    enumerable: true,
+    configurable: true,
+  })
+  return exception
+}
+
+function setValidationExceptionMetadata<TData>(
+  exception: ValidationException<TData>,
+  metadata: Pick<SerializedValidationException<TData>, 'retryAfterSeconds' | 'retryAt'>,
+): ValidationException<TData> {
+  exception[validationMetadataSymbol] = metadata
+  return exception
+}
+
+function setValidationExceptionThrower(
+  thrower: (<TData>(exception: ValidationException<TData>) => void) | undefined,
+): void {
+  validationExceptionThrower = thrower
+}
+
+function throwValidationException<TData>(exception: ValidationException<TData>): never {
+  validationExceptionThrower?.(exception)
+  throw exception
+}
+
+export function isValidationException(value: unknown): value is ValidationException {
+  if (value instanceof ValidationException) {
+    return true
+  }
+
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const candidate = value as {
+    readonly name?: unknown
+    readonly toJSON?: () => unknown
+  }
+  if (candidate.name !== 'ValidationException' || typeof candidate.toJSON !== 'function') {
+    return false
+  }
+
+  try {
+    const payload = candidate.toJSON()
+    return isPlainObject(payload)
+      && payload.ok === false
+      && typeof payload.status === 'number'
+      && payload.valid === false
+      && typeof payload.bag === 'string'
+      && isPlainObject(payload.values)
+      && isPlainObject(payload.errors)
+  } catch {
+    return false
+  }
+}
+
 export function isValidationSchema(value: unknown): value is ValidationSchema {
   return isPlainObject(value)
     && value.kind === 'schema'
@@ -289,8 +425,19 @@ export function isValidationSchema(value: unknown): value is ValidationSchema {
 export async function validate<TSchema extends ValidationSchema>(
   input: Request | FormData | URLSearchParams | Record<string, unknown>,
   schemaDefinition: TSchema,
-): Promise<ValidationResult<InferValidationSchemaData<TSchema>>> {
-  return validateInternal(input, schemaDefinition)
+  options: ValidationExceptionOptions = {},
+): Promise<InferValidationSchemaData<TSchema>> {
+  const result = await validateInternal(input, schemaDefinition)
+  if (!result.valid) {
+    throwValidationException(setValidationExceptionValues(
+      ValidationException.withMessages(result.errors.flatten(), {
+        bag: options.bag,
+      }),
+      result.values,
+    ))
+  }
+
+  return result.data
 }
 
 export async function safeParse<TSchema extends ValidationSchema>(
@@ -327,6 +474,11 @@ export const validationInternals = {
   normalizeSchemaShape,
   parseByteSize,
   resolveCompiledSchema,
+  setValidationExceptionMetadata,
+  setValidationExceptionStatus,
+  setValidationExceptionThrower,
+  setValidationExceptionValues,
+  throwValidationException,
   issuesToFlat,
   flatToStandardIssues,
 }

@@ -11,6 +11,7 @@ if (!data.value) {
   <article class="stack">
     <NuxtLink to="/posts">Back to posts</NuxtLink>
     <h1>{{ data?.title }}</h1>
+    <img v-if="data?.imageUrl" :src="data.imageUrl" alt="" style="width: 100%; border-radius: 1rem; background: #111827;">
     <p>{{ data?.excerpt }}</p>
     <div class="panel">{{ data?.body }}</div>
   </article>

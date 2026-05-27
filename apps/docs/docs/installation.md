@@ -103,6 +103,12 @@ Cache setup can also be installed after scaffolding:
 npx holo install cache
 ```
 
+Media setup can also be installed after scaffolding:
+
+```bash
+npx holo install media
+```
+
 ## What the scaffold writes
 
 The generated project contains:

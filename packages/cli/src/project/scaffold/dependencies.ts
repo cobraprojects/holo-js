@@ -256,6 +256,7 @@ export async function syncManagedDriverDependencies(
   const broadcastConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'broadcast')
   const cacheConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'cache')
   const mailConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'mail')
+  const mediaConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'media')
   const notificationsConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'notifications')
   const queueConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'queue')
   const securityConfigured = hasLoadedConfigFile(loaded.loadedFiles, 'security')
@@ -320,6 +321,10 @@ export async function syncManagedDriverDependencies(
 
   if (mailConfigured) {
     requiredPackages.add('@holo-js/mail')
+  }
+
+  if (mediaConfigured) {
+    requiredPackages.add('@holo-js/media')
   }
 
   if (cacheDesired) {
@@ -403,6 +408,7 @@ export async function syncManagedDriverDependencies(
     '@holo-js/cache-redis',
     '@holo-js/events',
     '@holo-js/mail',
+    '@holo-js/media',
     '@holo-js/notifications',
     '@holo-js/queue',
     '@holo-js/queue-db',
@@ -576,6 +582,22 @@ async function upsertMailPackageDependency(projectRoot: string): Promise<boolean
 
   dependencies['@holo-js/mail'] = nextVersion
   delete devDependencies['@holo-js/mail']
+  await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
+  return true
+}
+
+async function upsertMediaPackageDependency(projectRoot: string): Promise<boolean> {
+  const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  const nextVersion = resolveManagedHoloPackageVersion('@holo-js/media', dependencies, devDependencies)
+  const currentVersion = dependencies['@holo-js/media']
+  const currentDevVersion = devDependencies['@holo-js/media']
+
+  if (currentVersion === nextVersion && typeof currentDevVersion === 'undefined') {
+    return false
+  }
+
+  dependencies['@holo-js/media'] = nextVersion
+  delete devDependencies['@holo-js/media']
   await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
   return true
 }
@@ -847,6 +869,7 @@ export {
   upsertCachePackageDependencies,
   upsertEventsPackageDependency,
   upsertMailPackageDependency,
+  upsertMediaPackageDependency,
   upsertNotificationsPackageDependency,
   upsertQueuePackageDependency,
   upsertSecurityPackageDependency,

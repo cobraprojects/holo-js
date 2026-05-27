@@ -1,17 +1,20 @@
-<script lang="ts">
-  import { type PageData } from './$types'
-
-  export let data: PageData
+<script>
+  export let data
+  export let form
 
   const selectedTagIds = new Set(data.post.tags.map(tag => tag.id))
 </script>
 
 <section class="stack">
   <h1>Edit post</h1>
-  <form action="?/update" method="post" class="stack">
+  <form action="?/update" method="post" enctype="multipart/form-data" class="stack">
+    <input {...data.csrf.input}>
     <input name="title" value={data.post.title} required>
     <textarea name="excerpt" rows="3">{data.post.excerpt || ''}</textarea>
     <textarea name="body" rows="10" required>{data.post.body}</textarea>
+    {#if data.imageUrl}<img src={data.imageUrl} alt="" style="width: 100%; max-width: 28rem; border-radius: 0.75rem;">{/if}
+    <input name="image" type="file" accept="image/png,image/jpeg,image/webp">
+    {#if form?.errors?.image?.[0]}<p class="error">{form.errors.image[0]}</p>{/if}
     <select name="categoryId" value={data.post.category_id || ''}>
       <option value="">Uncategorized</option>
       {#each data.categories as category}<option value={category.id}>{category.name}</option>{/each}
@@ -34,4 +37,5 @@
 
 <style>
   .stack { display: grid; gap: 1rem; }
+  .error { margin: 0; color: #fca5a5; }
 </style>
