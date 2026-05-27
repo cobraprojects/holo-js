@@ -73,6 +73,7 @@ const svelteKitAdapter = createHoloFrameworkAdapter<SvelteKitHoloOptions>({
   stateKey: '__holoSvelteKitAdapter__',
   displayName: 'SvelteKit',
 })
+const validationFlashCookie = 'HOLO-SVELTEKIT-VALIDATION'
 let validationExceptionThrowerRegistered = false
 const validationActionFailures = new WeakMap<object, SerializedValidationException>()
 const validationActionFailureKeys = new Map<string, SerializedValidationException>()
@@ -135,7 +136,9 @@ async function mapValidationActionResponse(
 
   const flashedPayload = takeValidationActionFailure(event)
   if (flashedPayload) {
-    return createValidationActionFailureResponse(flashedPayload, response)
+    return isSvelteKitActionJsonRequest(event)
+      ? createValidationActionFailureResponse(flashedPayload, response, true)
+      : createValidationActionRedirectResponse(event, flashedPayload)
   }
 
   if (!isSvelteKitActionJsonRequest(event)) {
@@ -157,16 +160,52 @@ async function mapValidationActionResponse(
     return response
   }
 
-  return createValidationActionFailureResponse(actionResult.error, response)
+  return createValidationActionFailureResponse(actionResult.error, response, false)
+}
+
+function encodeValidationFlashPayload(payload: SerializedValidationException): string {
+  return encodeURIComponent(JSON.stringify({
+    ...payload,
+    values: {},
+  }))
+}
+
+function flashValidationPayload(event: SvelteKitRequestEvent, payload: SerializedValidationException): void {
+  if (!event.url) {
+    return
+  }
+
+  event.cookies.set(validationFlashCookie, encodeValidationFlashPayload(payload), {
+    path: normalizeCookiePath(event),
+    maxAge: 60,
+    sameSite: 'lax',
+  })
+}
+
+function normalizeCookiePath(event: SvelteKitRequestEvent): string {
+  return (event.url?.pathname || '/').replace(/[;\r\n]/g, '') || '/'
+}
+
+function createValidationFlashCookie(event: SvelteKitRequestEvent, payload: SerializedValidationException): string {
+  return [
+    `${validationFlashCookie}=${encodeValidationFlashPayload(payload)}`,
+    'Max-Age=60',
+    `Path=${normalizeCookiePath(event)}`,
+    'SameSite=Lax',
+  ].join('; ')
 }
 
 function createValidationActionFailureResponse(
   payload: SerializedValidationException,
   response: Response,
+  reloadWithFlash: boolean,
 ): Response {
   const headers = new Headers(response.headers)
   headers.delete('content-length')
   headers.set('content-type', 'application/json')
+  if (reloadWithFlash) {
+    headers.set('x-holo-validation-flash', '1')
+  }
 
   return Response.json({
     type: 'failure',
@@ -175,6 +214,20 @@ function createValidationActionFailureResponse(
   }, {
     status: 200,
     headers,
+  })
+}
+
+function createValidationActionRedirectResponse(
+  event: SvelteKitRequestEvent,
+  payload: SerializedValidationException,
+): Response {
+  return new Response(null, {
+    status: 303,
+    headers: {
+      location: event.url?.pathname || '/',
+      'cache-control': 'no-store',
+      'set-cookie': createValidationFlashCookie(event, payload),
+    },
   })
 }
 
@@ -218,6 +271,7 @@ function takeValidationActionFailure(event: SvelteKitRequestEvent): SerializedVa
 }
 
 function rememberValidationActionFailure(event: SvelteKitRequestEvent, payload: SerializedValidationException): void {
+  flashValidationPayload(event, payload)
   validationActionFailures.set(event, payload)
   validationActionFailures.set(event.request, payload)
   const key = getValidationActionFailureKey(event)
@@ -234,11 +288,14 @@ function registerValidationExceptionThrower(): void {
   validationExceptionThrowerRegistered = true
   validationInternals.setValidationExceptionThrower((exception) => {
     const event = getSvelteKitRequestEventStore().getStore()
-    if (!event || !isApiEvent(event)) {
+    if (!event) {
       return
     }
 
     const payload = exception.toJSON()
+    if (!isApiEvent(event)) {
+      rememberValidationActionFailure(event, payload)
+    }
     svelteKitError(toSvelteKitErrorStatus(payload.status), toSvelteKitValidationBody(payload))
   })
 }
@@ -389,5 +446,7 @@ export const adapterSvelteKitInternals = {
   ...svelteKitAdapter.internals,
   mapValidationActionResponse,
   rememberValidationActionFailure,
+  isApiEvent,
   serializeValidationException,
+  validationFlashCookie,
 }

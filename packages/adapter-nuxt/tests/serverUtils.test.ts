@@ -12,7 +12,7 @@ import {
   useHoloDb,
   useHoloDebug,
   useHoloEnv,
-} from '../src/runtime/server/imports/holo'
+} from '../src/runtime/server/auto-imports/holo'
 import { Storage, useStorage } from '../src/runtime/server/utils/storage'
 
 describe('server utils', () => {

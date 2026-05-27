@@ -498,7 +498,7 @@ export default defineStorageConfig({
     expect(getHoloStorageRuntimeConfig(nuxt)?.routePrefix).toBe('/files')
     expect(nuxt.options.build.transpile).toContain('./runtime')
     expect(addImports).not.toHaveBeenCalled()
-    expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/imports')
+    expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/auto-imports')
     expect(addServerImportsDir).toHaveBeenCalledTimes(1)
     expect(addServerHandler).toHaveBeenCalledWith({
       route: '/files/**',

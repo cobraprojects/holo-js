@@ -1506,6 +1506,13 @@ throw new Error('APP_KEY is required before config can load')
       databaseDriver: 'sqlite',
       packageManager: 'bun',
       storageDefaultDisk: 'local',
+    }).find(file => file.path === 'svelte.config.js')?.contents).toContain('withHoloSvelteKit')
+    expect(projectInternals.renderFrameworkFiles({
+      projectName: 'Svelte App',
+      framework: 'sveltekit',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
     }).find(file => file.path === 'src/hooks.ts')?.contents).toContain('export {}')
     expect(projectInternals.renderFrameworkFiles({
       projectName: 'Svelte App',
@@ -10416,6 +10423,7 @@ export default defineConfig({
     expect(generatedServerHooks).toContain('serializeHoloValidationException')
     expect(generatedServerHooks).toContain('adapterSvelteKitInternals.serializeValidationException(cause)')
     expect(generatedServerHooks).toContain('adapterSvelteKitInternals.mapValidationActionResponse(event, response)')
+    expect(generatedServerHooks).toContain('adapterSvelteKitInternals.isApiEvent(event)')
     expect(generatedServerHooks).toContain('adapterSvelteKitInternals.rememberValidationActionFailure(input.event, validationPayload)')
     expect(generatedServerHooks).toContain('export const handleError = holoHandleError')
     expect(generatedServerHooks).not.toContain('event.url.pathname =')
@@ -10426,8 +10434,10 @@ export default defineConfig({
 
     // Existing svelte.config.js is patched with the hooks override.
     const svelteConfig = await readFile(join(projectRoot, 'svelte.config.js'), 'utf8')
-    expect(svelteConfig).toContain('.holo-js/generated/hooks.server')
-    expect(svelteConfig).toContain('.holo-js/generated/hooks')
+    expect(svelteConfig).toContain('withHoloSvelteKit')
+    expect(svelteConfig).toContain('@holo-js/adapter-sveltekit/config')
+    expect(svelteConfig).not.toContain('.holo-js/generated/hooks.server')
+    expect(svelteConfig).not.toContain('.holo-js/generated/hooks')
   }, 30000)
 
   it('preserves legacy SvelteKit hook extension files when no migration occurs', async () => {
@@ -10481,10 +10491,72 @@ export default defineConfig({
     const svelteConfig = await readFile(join(projectRoot, 'svelte.config.js'), 'utf8')
     expect(svelteConfig).toContain('kit: {')
     expect(svelteConfig).toContain('adapter: adapter()')
-    expect(svelteConfig).toContain('.holo-js/generated/hooks.server')
-    expect(svelteConfig).toContain('.holo-js/generated/hooks')
-    expect(svelteConfig).toContain('files: {')
+    expect(svelteConfig).toContain('withHoloSvelteKit')
+    expect(svelteConfig).not.toContain('.holo-js/generated/hooks.server')
+    expect(svelteConfig).not.toContain('.holo-js/generated/hooks')
     expect(svelteConfig).not.toContain('kit: { adapter: adapter() },\n    files:')
+  }, 30000)
+
+  it('wraps SvelteKit config without deleting unrelated user configuration', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
+    await writeProjectFile(projectRoot, 'svelte.config.js', [
+      'import adapter from \'@sveltejs/adapter-node\'',
+      'import { vitePreprocess } from \'@sveltejs/vite-plugin-svelte\'',
+      '',
+      'const config = {',
+      '  preprocess: vitePreprocess(),',
+      '  extensions: [\'.svelte\', \'.svx\'],',
+      '  kit: {',
+      '    adapter: adapter(),',
+      '    alias: {',
+      '      $components: \'./src/components\',',
+      '    },',
+      '    files: {',
+      '      assets: \'assets\',',
+      '    },',
+      '  },',
+      '}',
+      '',
+      'export default config',
+      '',
+    ].join('\n'))
+
+    await withFakeBun(async () => {
+      await cliInternals.runProjectPrepare(projectRoot)
+    })
+
+    const svelteConfig = await readFile(join(projectRoot, 'svelte.config.js'), 'utf8')
+    expect(svelteConfig).toContain('withHoloSvelteKit')
+    expect(svelteConfig).toContain('preprocess: vitePreprocess()')
+    expect(svelteConfig).toContain('extensions: [\'.svelte\', \'.svx\']')
+    expect(svelteConfig).toContain('$components: \'./src/components\'')
+    expect(svelteConfig).toContain('assets: \'assets\'')
+  }, 30000)
+
+  it('wraps SvelteKit config with compact export spacing', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
+    await writeProjectFile(projectRoot, 'svelte.config.js', [
+      'import adapter from \'@sveltejs/adapter-node\'',
+      '',
+      'const config = {',
+      '  kit: {',
+      '    adapter: adapter(),',
+      '  },',
+      '} export   default   config',
+      '',
+    ].join('\n'))
+
+    await withFakeBun(async () => {
+      await cliInternals.runProjectPrepare(projectRoot)
+    })
+
+    const svelteConfig = await readFile(join(projectRoot, 'svelte.config.js'), 'utf8')
+    expect(svelteConfig).toContain('withHoloSvelteKit')
+    expect(svelteConfig).toContain('})\n\nexport default config')
   }, 30000)
 
   it('fails prepare for unsupported custom SvelteKit hook entrypoints', async () => {

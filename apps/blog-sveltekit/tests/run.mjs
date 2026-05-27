@@ -246,6 +246,35 @@ function getUploadedPostImage(title) {
   }
 }
 
+function getPostByTitle(title) {
+  const database = new Database(databasePath, { readonly: true })
+  try {
+    const post = database.prepare('select id, slug from posts where title = ?').get(title)
+    assert.ok(post, `Expected post "${title}" to exist.`)
+    return post
+  } finally {
+    database.close()
+  }
+}
+
+function countPostImages(postId) {
+  const database = new Database(databasePath, { readonly: true })
+  try {
+    return database.prepare('select count(*) as count from media where model_id = ? and collection_name = ?').get(String(postId), 'images').count
+  } finally {
+    database.close()
+  }
+}
+
+function assignPostAuthor(postId, userId) {
+  const database = new Database(databasePath)
+  try {
+    database.prepare('update posts set user_id = ? where id = ?').run(userId, postId)
+  } finally {
+    database.close()
+  }
+}
+
 async function assertPublicImageUrlResponds(baseUrl, imageUrl) {
   const response = await fetch(new URL(imageUrl, baseUrl))
   assert.equal(response.status, 200)
@@ -363,6 +392,11 @@ function assertFieldFailure(result, fields) {
   }
 }
 
+function assertResponseRedirectsTo(result, expectedPath) {
+  assert.equal(result.response.status, 303, result.text)
+  assert.equal(new URL(result.response.headers.get('location'), result.response.url).pathname, expectedPath)
+}
+
 async function assertResetPasswordApiValidation(devUrl) {
   const csrfField = await fetchCsrfField(devUrl)
   const invalidSubmission = await fetchJson(`${devUrl}/api/reset-password`, {
@@ -399,9 +433,35 @@ async function assertAuthenticatedUserCannotDeletePost({ baseUrl, jar, fetchText
   assert.equal(denied.response.status, 403)
 }
 
-async function assertAuthenticatedUserCanCreatePostImage({ baseUrl, jar, fetchText }) {
+async function assertAuthenticatedUserCanCreateAndUpdatePostImage({ baseUrl, jar, fetchText, fetchJson }) {
   const newPostPage = await fetchText('/admin/posts/new', { jar })
   const csrfToken = findCsrfInput(newPostPage.text)
+
+  const noImageTitle = `User flow no image ${Date.now()}`
+  const noImageFormData = new FormData()
+  noImageFormData.set('_token', csrfToken)
+  noImageFormData.set('title', noImageTitle)
+  noImageFormData.set('excerpt', 'Created without selecting an image.')
+  noImageFormData.set('body', 'This post exercises optional file validation through the real SvelteKit action flow.')
+  noImageFormData.set('status', 'draft')
+  noImageFormData.set('categoryId', '')
+  noImageFormData.set('image', new Blob([], { type: 'application/octet-stream' }), '')
+
+  const createdWithoutImage = await fetchText('/admin/posts/new?/create', {
+    method: 'POST',
+    body: noImageFormData,
+    headers: {
+      accept: 'text/html',
+      origin: baseUrl,
+    },
+    jar,
+    allowFailure: true,
+  })
+  assert.notEqual(createdWithoutImage.response.status, 422, createdWithoutImage.text)
+  assertResponseRedirectsTo(createdWithoutImage, '/admin/posts')
+
+  const postWithoutImage = getPostByTitle(noImageTitle)
+  assert.equal(countPostImages(postWithoutImage.id), 0, 'Expected creating without selecting an image to skip media records.')
 
   const oversizedFormData = new FormData()
   oversizedFormData.set('_token', csrfToken)
@@ -416,16 +476,29 @@ async function assertAuthenticatedUserCanCreatePostImage({ baseUrl, jar, fetchTe
     method: 'POST',
     body: oversizedFormData,
     headers: {
+      accept: 'text/html',
       origin: baseUrl,
     },
     jar,
     allowFailure: true,
   })
   assert.notEqual(oversized.response.status, 500, oversized.text)
-  assert.ok(oversized.text.includes('The selected file must be 2 MB or smaller.'))
-  const oversizedResult = JSON.parse(oversized.text)
-  assert.equal(oversizedResult.type, 'failure')
-  assert.equal(oversizedResult.status, 422)
+  assert.notEqual(
+    oversized.response.headers.get('content-type')?.toLowerCase().includes('application/json'),
+    true,
+    `Expected browser form validation failures to avoid raw JSON responses, received ${oversized.text}.`,
+  )
+  assert.equal(oversized.response.status, 303, oversized.text)
+  assert.equal(new URL(oversized.response.headers.get('location'), baseUrl).pathname, '/admin/posts/new')
+  assert.ok(
+    oversized.response.headers.get('set-cookie')?.includes('HOLO-SVELTEKIT-VALIDATION='),
+    'Expected oversized upload response to flash the validation failure for the redirected form.',
+  )
+  const oversizedRedirectPage = await fetchText('/admin/posts/new', { jar })
+  assert.ok(
+    oversizedRedirectPage.text.includes('The selected file must be 2 MB or smaller.'),
+    'Expected the redirected form page to render the flashed validation error.',
+  )
 
   const title = `User flow image ${Date.now()}`
   const formData = new FormData()
@@ -441,15 +514,13 @@ async function assertAuthenticatedUserCanCreatePostImage({ baseUrl, jar, fetchTe
     method: 'POST',
     body: formData,
     headers: {
+      accept: 'text/html',
       origin: baseUrl,
     },
     jar,
     allowFailure: true,
   })
-  const createdResult = JSON.parse(created.text)
-  assert.equal(createdResult.type, 'redirect')
-  assert.equal(createdResult.status, 303)
-  assert.equal(new URL(createdResult.location, baseUrl).pathname, '/admin/posts')
+  assertResponseRedirectsTo(created, '/admin/posts')
 
   const postsPage = await fetchText('/admin/posts', { jar })
   assert.ok(postsPage.text.includes(title), 'Expected the admin posts page to show the created post.')
@@ -463,10 +534,39 @@ async function assertAuthenticatedUserCanCreatePostImage({ baseUrl, jar, fetchTe
     title,
     imageUrl: uploaded.thumbUrl,
   })
+
+  const currentUser = await fetchJson('/api/auth/user', { jar })
+  assert.ok(currentUser.json.user?.id, 'Expected the authenticated user endpoint to return a user id.')
+  assignPostAuthor(uploaded.id, currentUser.json.user.id)
+
+  const editPage = await fetchText(`/admin/posts/${uploaded.id}/edit`, { jar })
+  const editCsrfToken = findCsrfInput(editPage.text)
+  const updateWithoutImageFormData = new FormData()
+  updateWithoutImageFormData.set('_token', editCsrfToken)
+  updateWithoutImageFormData.set('title', title)
+  updateWithoutImageFormData.set('excerpt', 'Updated without selecting a replacement image.')
+  updateWithoutImageFormData.set('body', 'This post exercises optional file validation during update through the real SvelteKit action flow.')
+  updateWithoutImageFormData.set('status', 'draft')
+  updateWithoutImageFormData.set('categoryId', '')
+  updateWithoutImageFormData.set('image', new Blob([], { type: 'application/octet-stream' }), '')
+
+  const updatedWithoutImage = await fetchText(`/admin/posts/${uploaded.id}/edit?/update`, {
+    method: 'POST',
+    body: updateWithoutImageFormData,
+    headers: {
+      accept: 'text/html',
+      origin: baseUrl,
+    },
+    jar,
+    allowFailure: true,
+  })
+  assert.notEqual(updatedWithoutImage.response.status, 422, updatedWithoutImage.text)
+  assertResponseRedirectsTo(updatedWithoutImage, '/admin/posts')
+  assert.equal(countPostImages(uploaded.id), 1, 'Expected updating without a replacement image to keep the existing image.')
 }
 
 async function assertAuthenticatedAdminPostFlows(context) {
-  await assertAuthenticatedUserCanCreatePostImage(context)
+  await assertAuthenticatedUserCanCreateAndUpdatePostImage(context)
   await assertAuthenticatedUserCannotDeletePost(context)
 }
 

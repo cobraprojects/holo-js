@@ -415,7 +415,7 @@ export default defineNuxtModule<ModuleOptions>({
     if (!opts._holoCoreRuntimeRegistered) {
       addServerPlugin(resolver.resolve('./runtime/plugins/init'))
       addServerPlugin(resolver.resolve('./runtime/plugins/forms'))
-      addServerImportsDir(resolver.resolve('./runtime/server/imports'))
+      addServerImportsDir(resolver.resolve('./runtime/server/auto-imports'))
       const serverModelImports = await createServerModelImports(
         sourceDir,
         loaded.app.paths.models,

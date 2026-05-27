@@ -300,10 +300,25 @@ export interface SerializedValidationException<TData = Record<string, unknown>> 
   readonly retryAt?: string
 }
 
+export type ValidationExceptionDigestPayload<TData = Record<string, unknown>> = {
+  readonly ok: false
+  readonly status: number
+  readonly valid: false
+  readonly message: string
+  readonly bag: string
+  readonly errors: Record<string, readonly string[]>
+  readonly values?: Partial<TData>
+  readonly retryAfterSeconds?: number
+  readonly retryAt?: string
+}
+
+const VALIDATION_EXCEPTION_DIGEST_PREFIX = 'HOLO_VALIDATION;'
+
 export class ValidationException<TData = Record<string, unknown>> extends Error {
   readonly status = 422
   readonly bag: string
   readonly errors: ValidationErrorBag<TData>
+  readonly digest: string
   [validationMetadataSymbol]: Pick<SerializedValidationException<TData>, 'retryAfterSeconds' | 'retryAt'>
   [validationValuesSymbol]: Partial<TData>
 
@@ -317,6 +332,7 @@ export class ValidationException<TData = Record<string, unknown>> extends Error 
     this[validationMetadataSymbol] = {}
     this[validationValuesSymbol] = {}
     this.errors = createErrorBag<TData>(messages)
+    this.digest = createValidationExceptionDigest(this)
   }
 
   get values(): Partial<TData> {
@@ -337,10 +353,123 @@ export class ValidationException<TData = Record<string, unknown>> extends Error 
       valid: false,
       message: this.message,
       bag: this.bag,
-      values: this.values,
+      values: serializeValidationValues(this.values),
       errors: this.errors.flatten(),
       ...this[validationMetadataSymbol],
     }
+  }
+}
+
+function serializeValidationValue(value: unknown): unknown {
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return value
+  }
+
+  if (typeof value === 'undefined' || typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint') {
+    return undefined
+  }
+
+  if (typeof Blob !== 'undefined' && value instanceof Blob) {
+    return undefined
+  }
+
+  if (Array.isArray(value)) {
+    const serialized: unknown[] = []
+    for (const item of value) {
+      const next = serializeValidationValue(item)
+      if (typeof next !== 'undefined') {
+        serialized.push(next)
+      }
+    }
+
+    return serialized
+  }
+
+  if (!isSerializablePlainObject(value)) {
+    return undefined
+  }
+
+  const serialized: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value)) {
+    const next = serializeValidationValue(item)
+    if (typeof next !== 'undefined') {
+      serialized[key] = next
+    }
+  }
+
+  return serialized
+}
+
+function isSerializablePlainObject(value: unknown): value is Record<string, unknown> {
+  if (!isPlainObject(value)) {
+    return false
+  }
+
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+function serializeValidationValues<TData>(values: Partial<TData>): Partial<TData> {
+  const serialized = serializeValidationValue(values)
+  return isSerializablePlainObject(serialized) ? serialized as Partial<TData> : {}
+}
+
+function createValidationExceptionDigest<TData>(
+  exception: ValidationException<TData>,
+): string {
+  const payload: ValidationExceptionDigestPayload<TData> = {
+    ok: false,
+    status: exception.status,
+    valid: false,
+    message: exception.message,
+    bag: exception.bag,
+    errors: exception.errors.flatten(),
+    ...exception[validationMetadataSymbol],
+  }
+
+  return `${VALIDATION_EXCEPTION_DIGEST_PREFIX}${encodeURIComponent(JSON.stringify(payload))}`
+}
+
+function parseValidationExceptionDigest<TData = Record<string, unknown>>(
+  value: unknown,
+): ValidationExceptionDigestPayload<TData> | undefined {
+  const digest = value
+    && typeof value === 'object'
+    && 'digest' in value
+    && typeof (value as { readonly digest?: unknown }).digest === 'string'
+    ? (value as { readonly digest: string }).digest
+    : undefined
+
+  if (!digest?.startsWith(VALIDATION_EXCEPTION_DIGEST_PREFIX)) {
+    return undefined
+  }
+
+  try {
+    const payload = JSON.parse(decodeURIComponent(digest.slice(VALIDATION_EXCEPTION_DIGEST_PREFIX.length))) as unknown
+    if (!isPlainObject(payload)
+      || payload.ok !== false
+      || typeof payload.status !== 'number'
+      || payload.valid !== false
+      || typeof payload.message !== 'string'
+      || typeof payload.bag !== 'string'
+      || !isPlainObject(payload.errors)
+    ) {
+      return undefined
+    }
+
+    return {
+      ok: false,
+      status: payload.status,
+      valid: false,
+      message: payload.message,
+      bag: payload.bag,
+      errors: payload.errors as Record<string, readonly string[]>,
+      ...(isPlainObject(payload.values) ? { values: payload.values as Partial<TData> } : {}),
+      ...(typeof payload.retryAfterSeconds === 'number' ? { retryAfterSeconds: payload.retryAfterSeconds } : {}),
+      ...(typeof payload.retryAt === 'string' ? { retryAt: payload.retryAt } : {}),
+    }
+  } catch {
+    return undefined
   }
 }
 
@@ -361,6 +490,7 @@ function setValidationExceptionStatus<TData>(
     enumerable: true,
     configurable: true,
   })
+  refreshValidationExceptionDigest(exception)
   return exception
 }
 
@@ -369,7 +499,18 @@ function setValidationExceptionMetadata<TData>(
   metadata: Pick<SerializedValidationException<TData>, 'retryAfterSeconds' | 'retryAt'>,
 ): ValidationException<TData> {
   exception[validationMetadataSymbol] = metadata
+  refreshValidationExceptionDigest(exception)
   return exception
+}
+
+function refreshValidationExceptionDigest<TData>(
+  exception: ValidationException<TData>,
+): void {
+  Object.defineProperty(exception, 'digest', {
+    value: createValidationExceptionDigest(exception),
+    enumerable: true,
+    configurable: true,
+  })
 }
 
 function setValidationExceptionThrower(
@@ -473,6 +614,7 @@ export const validationInternals = {
   normalizeRequestInput,
   normalizeSchemaShape,
   parseByteSize,
+  parseValidationExceptionDigest,
   resolveCompiledSchema,
   setValidationExceptionMetadata,
   setValidationExceptionStatus,

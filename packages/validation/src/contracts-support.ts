@@ -269,42 +269,88 @@ function hasRule(definition: FieldDefinition, name: SupportedRuleFamily): boolea
 function makeBaseSchema(definition: FieldDefinition): v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> {
   switch (definition.kind) {
     case 'string':
-      return v.string()
+      return v.string('This field must be text.')
     case 'number':
-      return v.number()
+      return v.number('This field must be a number.')
     case 'boolean':
-      return v.boolean()
+      return v.boolean('This field must be true or false.')
     case 'date':
-      return v.date()
+      return v.date('This field must be a valid date.')
     case 'file':
-      return v.custom<WebFileLike>(value => isWebFileLike(value), 'Invalid file.')
+      return v.custom<WebFileLike>(value => isWebFileLike(value), 'The selected file must be a file.')
     case 'array':
-      return v.arrayAsync(definition.item ? makeCompiledFieldSchema(definition.item) as v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> : /* v8 ignore next */ v.unknown())
+      return v.arrayAsync(definition.item ? makeCompiledFieldSchema(definition.item) as v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> : /* v8 ignore next */ v.unknown(), 'This field must be a list.')
   }
 }
 
 function exactSizeAction(definition: FieldDefinition, value: number, message?: string): unknown {
+  const fallback = message ?? defaultSizeMessage(definition.kind, value)
+
   if (definition.kind === 'string' || definition.kind === 'array') {
-    return v.length(value, message)
+    return v.length(value, fallback)
   }
 
-  return v.check((input: unknown) => input === value, message ?? `Expected exactly ${value}.`)
+  return v.check((input: unknown) => input === value, fallback)
 }
 
 function minAction(definition: FieldDefinition, value: number, message?: string): unknown {
+  const fallback = message ?? defaultMinMessage(definition.kind, value)
+
   if (definition.kind === 'string' || definition.kind === 'array') {
-    return v.minLength(value, message)
+    return v.minLength(value, fallback)
   }
 
-  return v.minValue(value, message)
+  return v.minValue(value, fallback)
 }
 
 function maxAction(definition: FieldDefinition, value: number, message?: string): unknown {
+  const fallback = message ?? defaultMaxMessage(definition.kind, value)
+
   if (definition.kind === 'string' || definition.kind === 'array') {
-    return v.maxLength(value, message)
+    return v.maxLength(value, fallback)
   }
 
-  return v.maxValue(value, message)
+  return v.maxValue(value, fallback)
+}
+
+function defaultMaxMessage(kind: FieldKind, value: number): string {
+  if (kind === 'string') {
+    return `This field must be ${value} ${pluralize(value, 'character', 'characters')} or fewer.`
+  }
+
+  if (kind === 'array') {
+    return `This field must contain ${value} ${pluralize(value, 'item', 'items')} or fewer.`
+  }
+
+  return `This field must be ${value} or less.`
+}
+
+function defaultMinMessage(kind: FieldKind, value: number): string {
+  if (kind === 'string') {
+    return `This field must be at least ${value} ${pluralize(value, 'character', 'characters')}.`
+  }
+
+  if (kind === 'array') {
+    return `This field must contain at least ${value} ${pluralize(value, 'item', 'items')}.`
+  }
+
+  return `This field must be ${value} or greater.`
+}
+
+function defaultSizeMessage(kind: FieldKind, value: number): string {
+  if (kind === 'string') {
+    return `This field must be exactly ${value} ${pluralize(value, 'character', 'characters')}.`
+  }
+
+  if (kind === 'array') {
+    return `This field must contain exactly ${value} ${pluralize(value, 'item', 'items')}.`
+  }
+
+  return `This field must be exactly ${value}.`
+}
+
+function pluralize(value: number, singular: string, plural: string): string {
+  return value === 1 ? singular : plural
 }
 
 function asPipeItem(value: unknown): v.PipeItem<unknown, unknown, v.BaseIssue<unknown>> | v.PipeItemAsync<unknown, unknown, v.BaseIssue<unknown>> {
@@ -333,25 +379,25 @@ export function makeCompiledFieldSchema(definition: FieldDefinition): v.BaseSche
         }
         break
       case 'email':
-        actions.push(asPipeItem(v.email(rule.message)))
+        actions.push(asPipeItem(v.email(rule.message ?? 'This field must be a valid email address.')))
         break
       case 'url':
-        actions.push(asPipeItem(v.url(rule.message)))
+        actions.push(asPipeItem(v.url(rule.message ?? 'This field must be a valid URL.')))
         break
       case 'uuid':
-        actions.push(asPipeItem(v.uuid(rule.message)))
+        actions.push(asPipeItem(v.uuid(rule.message ?? 'This field must be a valid UUID.')))
         break
       case 'integer':
-        actions.push(asPipeItem(v.integer(rule.message)))
+        actions.push(asPipeItem(v.integer(rule.message ?? 'This field must be an integer.')))
         break
       case 'regex':
         if (rule.args[0] instanceof RegExp) {
-          actions.push(asPipeItem(v.regex(rule.args[0], rule.message)))
+          actions.push(asPipeItem(v.regex(rule.args[0], rule.message ?? 'This field format is invalid.')))
         }
         break
       case 'in': {
         const allowed = new Set(rule.args)
-        actions.push(asPipeItem(v.check((input: unknown) => allowed.has(input), rule.message ?? 'Value is not in the allowed list.')))
+        actions.push(asPipeItem(v.check((input: unknown) => allowed.has(input), rule.message ?? 'This field must be one of the allowed values.')))
         break
       }
       case 'transform':
@@ -617,7 +663,11 @@ export function coerceFieldValue(definition: FieldDefinition, value: unknown): u
 
   if (definition.kind === 'file' && isWebFileLike(normalizedValue)) {
     const file = normalizedValue as WebFileLike
-    if (file.name === '' && file.size === 0) {
+    if (file.size === 0 && (
+      typeof file.name !== 'string'
+      || file.name === ''
+      || file.type === 'application/octet-stream'
+    )) {
       return undefined
     }
   }

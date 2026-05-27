@@ -60,6 +60,10 @@ describe('@holo-js/validation contracts', () => {
       expect(exception.bag).toBe('post')
       expect(exception.errors.first('title')).toBe('This field is required.')
       expect(exception.errors.first('image')).toBe('The selected file must be an image.')
+      expect(exception.values).toMatchObject({
+        title: '',
+        image: expect.any(Blob),
+      })
       expect(exception.toJSON()).toEqual({
         ok: false,
         status: 422,
@@ -68,7 +72,6 @@ describe('@holo-js/validation contracts', () => {
         bag: 'post',
         values: {
           title: '',
-          image: expect.any(Blob),
         },
         errors: {
           title: ['This field is required.'],
@@ -78,13 +81,116 @@ describe('@holo-js/validation contracts', () => {
     }
   })
 
+  it('serializes validation exception values without file objects or non-plain values', () => {
+    const exception = ValidationException.withMessages({
+      image: ['The selected file must be 2 MB or smaller.'],
+    })
+    validationInternals.setValidationExceptionValues(exception, {
+      title: 'Draft',
+      image: new Blob(['large'], { type: 'image/png' }),
+      missing: undefined,
+      nested: {
+        keep: 'value',
+        skip: new Date('2026-05-20T00:00:00.000Z'),
+      },
+      files: [
+        new Blob(['large'], { type: 'image/png' }),
+        'caption',
+      ],
+    })
+
+    expect(exception.toJSON().values).toEqual({
+      title: 'Draft',
+      nested: {
+        keep: 'value',
+      },
+      files: ['caption'],
+    })
+
+    const nonPlainValues = Object.create(Date.prototype) as Partial<Record<string, unknown>>
+    validationInternals.setValidationExceptionValues(exception, nonPlainValues)
+    expect(exception.toJSON().values).toEqual({})
+  })
+
   it('creates manual validation exceptions in the default bag', () => {
     const exception = ValidationException.withMessages({
       image: ['The selected file must be 2 MB or smaller.'],
     })
+    const thrown: unknown[] = []
 
     expect(exception.bag).toBe(DEFAULT_VALIDATION_BAG)
+    expect(isValidationException(exception)).toBe(true)
     expect(exception.errors.first('image')).toBe('The selected file must be 2 MB or smaller.')
+    expect(validationInternals.parseValidationExceptionDigest(exception)).toEqual({
+      ok: false,
+      status: 422,
+      valid: false,
+      message: 'image: The selected file must be 2 MB or smaller.',
+      bag: DEFAULT_VALIDATION_BAG,
+      errors: {
+        image: ['The selected file must be 2 MB or smaller.'],
+      },
+    })
+
+    validationInternals.setValidationExceptionMetadata(exception, {
+      retryAfterSeconds: 30,
+      retryAt: '2026-05-20T00:00:00.000Z',
+    })
+    expect(validationInternals.parseValidationExceptionDigest(exception)).toMatchObject({
+      retryAfterSeconds: 30,
+      retryAt: '2026-05-20T00:00:00.000Z',
+    })
+
+    validationInternals.setValidationExceptionStatus(exception, 429)
+    expect(validationInternals.parseValidationExceptionDigest(exception)).toMatchObject({
+      status: 429,
+      errors: {
+        image: ['The selected file must be 2 MB or smaller.'],
+      },
+    })
+
+    const prefix = exception.digest.slice(0, exception.digest.indexOf(';') + 1)
+    const invalidPayload = encodeURIComponent(JSON.stringify({
+      ok: false,
+      status: 422,
+      valid: false,
+      message: 'Invalid.',
+      bag: DEFAULT_VALIDATION_BAG,
+      errors: null,
+    }))
+    const payloadWithValues = encodeURIComponent(JSON.stringify({
+      ok: false,
+      status: 422,
+      valid: false,
+      message: 'title: Invalid.',
+      bag: DEFAULT_VALIDATION_BAG,
+      values: {
+        title: 'a',
+      },
+      errors: {
+        title: ['Invalid.'],
+      },
+    }))
+    expect(validationInternals.parseValidationExceptionDigest('plain-error')).toBeUndefined()
+    expect(validationInternals.parseValidationExceptionDigest({ digest: 10 })).toBeUndefined()
+    expect(validationInternals.parseValidationExceptionDigest({ digest: 'plain-error' })).toBeUndefined()
+    expect(validationInternals.parseValidationExceptionDigest({ digest: `${prefix}${invalidPayload}` })).toBeUndefined()
+    expect(validationInternals.parseValidationExceptionDigest({ digest: `${prefix}%` })).toBeUndefined()
+    expect(validationInternals.parseValidationExceptionDigest({ digest: `${prefix}${payloadWithValues}` })).toMatchObject({
+      values: {
+        title: 'a',
+      },
+    })
+
+    try {
+      validationInternals.setValidationExceptionThrower(error => {
+        thrown.push(error)
+      })
+      expect(() => validationInternals.throwValidationException(exception)).toThrow(exception)
+      expect(thrown).toEqual([exception])
+    } finally {
+      validationInternals.setValidationExceptionThrower(undefined)
+    }
   })
 
   it('recognizes serialized-compatible validation exceptions from another module instance', () => {
@@ -108,6 +214,14 @@ describe('@holo-js/validation contracts', () => {
 
     expect(isValidationException(crossBundleException)).toBe(true)
     expect(isValidationException(new ForeignValidationException())).toBe(true)
+    expect(isValidationException(null)).toBe(false)
+    expect(isValidationException({ name: 'ValidationException' })).toBe(false)
+    expect(isValidationException({
+      name: 'ValidationException',
+      toJSON() {
+        throw new Error('Bad serialization.')
+      },
+    })).toBe(false)
   })
 
   it('defines schemas, field builders, and rule families', () => {
@@ -506,8 +620,107 @@ describe('@holo-js/validation contracts', () => {
     const failure = await safeParse({ avatar: text }, uploadAvatar)
     expect(failure.valid).toBe(false)
     if (!failure.valid) {
-      expect(failure.errors.first('avatar')).toBe('File must be an image.')
-      expect(failure.errors.get('avatar')).toContain('File size must be at most 1024 bytes.')
+      expect(failure.errors.first('avatar')).toBe('The selected file must be an image.')
+      expect(failure.errors.get('avatar')).toContain('The selected file must be 1 KB or smaller.')
+    }
+  })
+
+  it('uses friendly default max validation messages', async () => {
+    const maxSchema = schema({
+      title: field.string().required().max(5),
+      subtitle: field.string().required().max(1),
+      age: field.number().required().max(120),
+      tags: field.array(field.string()).required().max(2),
+      flags: field.array(field.string()).required().max(1),
+      image: field.file().required().maxSize('2mb'),
+      icon: field.file().required().maxSize(1),
+    })
+
+    const result = await safeParse({
+      title: 'Too long',
+      subtitle: 'AB',
+      age: 121,
+      tags: ['a', 'b', 'c'],
+      flags: ['a', 'b'],
+      image: new File([new Uint8Array((2 * 1024 * 1024) + 1)], 'large.png', { type: 'image/png' }),
+      icon: new File([new Uint8Array(2)], 'icon.png', { type: 'image/png' }),
+    }, maxSchema)
+
+    expect(result.valid).toBe(false)
+    if (!result.valid) {
+      expect(result.errors.first('title')).toBe('This field must be 5 characters or fewer.')
+      expect(result.errors.first('subtitle')).toBe('This field must be 1 character or fewer.')
+      expect(result.errors.first('age')).toBe('This field must be 120 or less.')
+      expect(result.errors.first('tags')).toBe('This field must contain 2 items or fewer.')
+      expect(result.errors.first('flags')).toBe('This field must contain 1 item or fewer.')
+      expect(result.errors.first('image')).toBe('The selected file must be 2 MB or smaller.')
+      expect(result.errors.first('icon')).toBe('The selected file must be 1 byte or smaller.')
+    }
+  })
+
+  it('uses friendly default messages for built-in validation rules', async () => {
+    const builtInSchema = schema({
+      textType: field.string().required(),
+      numberType: field.number().required(),
+      booleanType: field.boolean().required(),
+      dateType: field.date().required(),
+      fileType: field.file().required(),
+      email: field.string().required().email(),
+      url: field.string().required().url(),
+      uuid: field.string().required().uuid(),
+      integer: field.number().required().integer(),
+      pattern: field.string().required().regex(/^[A-Z]+$/),
+      choice: field.string().required().in(['yes']),
+      shortText: field.string().required().min(3),
+      smallNumber: field.number().required().min(10),
+      shortList: field.array(field.string()).required().min(2),
+      exactText: field.string().required().size(3),
+      exactNumber: field.number().required().size(10),
+      exactList: field.array(field.string()).required().size(2),
+      exactFile: field.file().required().size(1),
+    })
+
+    const result = await safeParse({
+      textType: 10,
+      numberType: 'abc',
+      booleanType: 'maybe',
+      dateType: 'not-a-date',
+      fileType: 'not-a-file',
+      email: 'not-email',
+      url: 'not-url',
+      uuid: 'not-uuid',
+      integer: 1.2,
+      pattern: 'abc',
+      choice: 'no',
+      shortText: 'ab',
+      smallNumber: 9,
+      shortList: ['one'],
+      exactText: 'abcd',
+      exactNumber: 9,
+      exactList: ['one'],
+      exactFile: new File([new Uint8Array(2)], 'two-bytes.txt', { type: 'text/plain' }),
+    }, builtInSchema)
+
+    expect(result.valid).toBe(false)
+    if (!result.valid) {
+      expect(result.errors.first('textType')).toBe('This field must be text.')
+      expect(result.errors.first('numberType')).toBe('This field must be a number.')
+      expect(result.errors.first('booleanType')).toBe('This field must be true or false.')
+      expect(result.errors.first('dateType')).toBe('This field must be a valid date.')
+      expect(result.errors.first('fileType')).toBe('The selected file must be a file.')
+      expect(result.errors.first('email')).toBe('This field must be a valid email address.')
+      expect(result.errors.first('url')).toBe('This field must be a valid URL.')
+      expect(result.errors.first('uuid')).toBe('This field must be a valid UUID.')
+      expect(result.errors.first('integer')).toBe('This field must be an integer.')
+      expect(result.errors.first('pattern')).toBe('This field format is invalid.')
+      expect(result.errors.first('choice')).toBe('This field must be one of the allowed values.')
+      expect(result.errors.first('shortText')).toBe('This field must be at least 3 characters.')
+      expect(result.errors.first('smallNumber')).toBe('This field must be 10 or greater.')
+      expect(result.errors.first('shortList')).toBe('This field must contain at least 2 items.')
+      expect(result.errors.first('exactText')).toBe('This field must be exactly 3 characters.')
+      expect(result.errors.first('exactNumber')).toBe('This field must be exactly 10.')
+      expect(result.errors.first('exactList')).toBe('This field must contain exactly 2 items.')
+      expect(result.errors.first('exactFile')).toBe('The selected file must be exactly 1 byte.')
     }
   })
 
@@ -523,6 +736,22 @@ describe('@holo-js/validation contracts', () => {
     expect(result.valid).toBe(true)
     if (result.valid) {
       expect(result.data.image).toBeUndefined()
+    }
+
+    const unnamedEmptyFile = await safeParse({
+      image: { size: 0, type: 'application/octet-stream' },
+    }, postSchema)
+    expect(unnamedEmptyFile.valid).toBe(true)
+    if (unnamedEmptyFile.valid) {
+      expect(unnamedEmptyFile.data.image).toBeUndefined()
+    }
+
+    const transportedEmptyFile = await safeParse({
+      image: new File([], 'blob', { type: 'application/octet-stream' }),
+    }, postSchema)
+    expect(transportedEmptyFile.valid).toBe(true)
+    if (transportedEmptyFile.valid) {
+      expect(transportedEmptyFile.data.image).toBeUndefined()
     }
 
     const zeroByteNamedFile = new File([], 'empty.png', { type: 'image/png' })
@@ -632,9 +861,9 @@ describe('@holo-js/validation contracts', () => {
     expect(failure.valid).toBe(false)
     if (!failure.valid) {
       expect(failure.errors.first('publishedAt')).toContain('before')
-      expect(failure.errors.first('expiresAt')).toBe('Date must be today or after.')
-      expect(failure.errors.first('openedAt')).toBe('Date must be today or before.')
-      expect(failure.errors.first('checkedAt')).toBe('Date must be today.')
+      expect(failure.errors.first('expiresAt')).toBe('This field must be today or after.')
+      expect(failure.errors.first('openedAt')).toBe('This field must be today or before.')
+      expect(failure.errors.first('checkedAt')).toBe('This field must be today.')
     }
   })
 
@@ -1954,7 +2183,7 @@ describe('@holo-js/validation deep branch coverage', () => {
     const result = await safeParse({ avatar: { name: 'test', size: 100 } }, s)
     expect(result.valid).toBe(false)
     if (!result.valid) {
-      expect(result.errors.first('avatar')).toBe('File must be an image.')
+      expect(result.errors.first('avatar')).toBe('The selected file must be an image.')
     }
   })
 
@@ -1966,7 +2195,7 @@ describe('@holo-js/validation deep branch coverage', () => {
     const result = await safeParse({ doc: bigFile }, s)
     expect(result.valid).toBe(false)
     if (!result.valid) {
-      expect(result.errors.first('doc')).toContain('at most')
+      expect(result.errors.first('doc')).toBe('The selected file must be 10 bytes or smaller.')
     }
   })
 

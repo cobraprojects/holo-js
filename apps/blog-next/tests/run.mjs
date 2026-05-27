@@ -346,6 +346,35 @@ function getUploadedPostImage(title) {
   }
 }
 
+function getPostByTitle(title) {
+  const database = new Database(databasePath, { readonly: true })
+  try {
+    const post = database.prepare('select id, slug from posts where title = ?').get(title)
+    assert.ok(post, `Expected post "${title}" to exist.`)
+    return post
+  } finally {
+    database.close()
+  }
+}
+
+function countPostImages(postId) {
+  const database = new Database(databasePath, { readonly: true })
+  try {
+    return database.prepare('select count(*) as count from media where model_id = ? and collection_name = ?').get(String(postId), 'images').count
+  } finally {
+    database.close()
+  }
+}
+
+function assignPostAuthor(postId, userId) {
+  const database = new Database(databasePath)
+  try {
+    database.prepare('update posts set user_id = ? where id = ?').run(userId, postId)
+  } finally {
+    database.close()
+  }
+}
+
 async function assertPublicImageUrlResponds(baseUrl, imageUrl) {
   const response = await fetch(new URL(imageUrl, baseUrl))
   assert.equal(response.status, 200)
@@ -477,7 +506,7 @@ function decodeHtmlAttribute(value) {
     .replaceAll('&amp;', '&')
 }
 
-async function assertAuthenticatedUserCanCreateDraftPost({ baseUrl, jar, fetchText }) {
+async function assertAuthenticatedUserCanCreateDraftPost({ baseUrl, jar, fetchText, fetchJson }) {
   const newPostPage = await fetchText('/admin/posts/new', { jar })
   const createForm = findFormByButtonText(newPostPage.text, 'Create post')
   assert.ok(createForm, 'Expected the new post page to render a create form.')
@@ -489,6 +518,36 @@ async function assertAuthenticatedUserCanCreateDraftPost({ baseUrl, jar, fetchTe
     'createPostAction',
     join(cwd, '.next/dev/server/app/admin/posts/new/page/server-reference-manifest.json'),
   )
+
+  const noImageTitle = `User flow no image ${Date.now()}`
+  const noImageFormData = collectFormData(createForm)
+  noImageFormData.set('title', noImageTitle)
+  noImageFormData.set('excerpt', 'Created without selecting an image.')
+  noImageFormData.set('body', 'This post exercises optional file validation through the real Next server action flow.')
+  noImageFormData.set('status', 'draft')
+  noImageFormData.set('categoryId', '')
+  noImageFormData.set('image', new Blob([], { type: 'application/octet-stream' }), '')
+  applyCsrfToken(noImageFormData, csrfToken)
+
+  const createdWithoutImage = await fetchText('/admin/posts/new', {
+    method: 'POST',
+    body: await encodeReply([noImageFormData]),
+    headers: {
+      accept: 'text/x-component',
+      'next-action': createActionId,
+      'X-CSRF-TOKEN': csrfToken,
+      origin: baseUrl,
+      referer: `${baseUrl}/admin/posts/new`,
+    },
+    jar,
+    allowFailure: true,
+  })
+  assert.notEqual(createdWithoutImage.response.status, 500, createdWithoutImage.text)
+  assert.equal(createdWithoutImage.response.status, 303, createdWithoutImage.text)
+  assert.match(createdWithoutImage.response.headers.get('x-action-redirect') ?? '', /^\/admin\/posts;/)
+
+  const postWithoutImage = getPostByTitle(noImageTitle)
+  assert.equal(countPostImages(postWithoutImage.id), 0, 'Expected creating without selecting an image to skip media records.')
 
   const oversizedFormData = collectFormData(createForm)
   oversizedFormData.set('title', `Oversized image ${Date.now()}`)
@@ -558,6 +617,44 @@ async function assertAuthenticatedUserCanCreateDraftPost({ baseUrl, jar, fetchTe
     title,
     imageUrl: uploaded.thumbUrl,
   })
+
+  const currentUser = await fetchJson('/api/auth/user', { jar })
+  assert.ok(currentUser.json.user?.id, 'Expected the authenticated user endpoint to return a user id.')
+  assignPostAuthor(uploaded.id, currentUser.json.user.id)
+
+  const editPage = await fetchText(`/admin/posts/${uploaded.id}/edit`, { jar })
+  const editForm = findFormByButtonText(editPage.text, 'Save post')
+  assert.ok(editForm, 'Expected the edit post page to render an update form.')
+  const updateActionId = await findServerActionId(
+    'updatePostAction',
+    join(cwd, '.next/dev/server/app/admin/posts/[id]/edit/page/server-reference-manifest.json'),
+  )
+  const updateWithoutImageFormData = collectFormData(editForm)
+  updateWithoutImageFormData.set('title', title)
+  updateWithoutImageFormData.set('excerpt', 'Updated without selecting a replacement image.')
+  updateWithoutImageFormData.set('body', 'This post exercises optional file validation during update through the real Next server action flow.')
+  updateWithoutImageFormData.set('status', 'draft')
+  updateWithoutImageFormData.set('categoryId', '')
+  updateWithoutImageFormData.set('image', new Blob([], { type: 'application/octet-stream' }), '')
+  applyCsrfToken(updateWithoutImageFormData, csrfToken)
+
+  const updatedWithoutImage = await fetchText(`/admin/posts/${uploaded.id}/edit`, {
+    method: 'POST',
+    body: await encodeReply([uploaded.id, updateWithoutImageFormData]),
+    headers: {
+      accept: 'text/x-component',
+      'next-action': updateActionId,
+      'X-CSRF-TOKEN': csrfToken,
+      origin: baseUrl,
+      referer: `${baseUrl}/admin/posts/${uploaded.id}/edit`,
+    },
+    jar,
+    allowFailure: true,
+  })
+  assert.notEqual(updatedWithoutImage.response.status, 500, updatedWithoutImage.text)
+  assert.equal(updatedWithoutImage.response.status, 303, updatedWithoutImage.text)
+  assert.match(updatedWithoutImage.response.headers.get('x-action-redirect') ?? '', /^\/admin\/posts;/)
+  assert.equal(countPostImages(uploaded.id), 1, 'Expected updating without a replacement image to keep the existing image.')
 }
 
 async function assertAuthenticatedAdminPostFlows(context) {
