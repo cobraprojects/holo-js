@@ -17,7 +17,7 @@ form workflow.
 
 1. Define one shared schema.
 2. Validate on the server by default.
-3. Return errors and values through a typed submission object.
+3. Let `validate(...)` return typed data or throw a validation exception.
 4. Optionally reuse the same schema on the client for blur or change validation.
 
 ```ts
@@ -57,8 +57,10 @@ profile updates.
 ## Package boundaries
 
 - `@holo-js/validation` owns schema parsing, coercion, error normalization, and Standard Schema conformance.
-- `@holo-js/forms` owns the submission contract (`fail()`, `success()`, `serialize()`) and client form state.
-- All frameworks use the same `validate(...)` function from `@holo-js/forms`.
+- `@holo-js/forms` owns the submission contract (`safeParse(...)`, `fail()`, `success()`, `serialize()`) and client form state.
+- All frameworks use the same `validate(...)` function from `@holo-js/forms`; invalid input throws
+  `ValidationException` and adapters serialize it for the host framework.
+- Use `safeParse(...)` from `@holo-js/forms` when you explicitly need a non-throwing submission object.
 - SvelteKit users can also pass schemas directly to native `form()`, `query()`, and `command()` remote functions.
 
 ## Continue

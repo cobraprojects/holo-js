@@ -24,6 +24,19 @@ type FlashedValidationPayload<TData> = FormFailurePayload<TData> & {
 
 type BrowserDocument = {
   cookie?: string
+  querySelectorAll?(selector: string): ArrayLike<BrowserFormControl> | Iterable<BrowserFormControl>
+}
+
+type BrowserWindow = {
+  requestAnimationFrame?(callback: () => void): number
+  setTimeout?(callback: () => void, delay?: number): number
+}
+
+type BrowserFormControl = {
+  readonly name?: string
+  readonly type?: string
+  value?: string
+  checked?: boolean
 }
 
 type BrowserEventTarget = {
@@ -100,6 +113,7 @@ type RegisteredForm = {
 }
 
 const registeredForms = new Set<RegisteredForm>()
+const invalidActionFailureMessage = 'Unable to read the form response. Please try again.'
 const validationFlashCookie = 'HOLO-SVELTEKIT-VALIDATION'
 let submitListenerTarget: BrowserEventTarget | undefined
 
@@ -153,6 +167,73 @@ function collectValuePaths(value: unknown, prefix = ''): readonly string[] {
   })
 }
 
+function flattenRestorableValues(value: unknown, prefix = ''): readonly [string, string][] {
+  if (typeof value === 'undefined' || value instanceof Blob) {
+    return []
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap(item => flattenRestorableValues(item, prefix))
+  }
+
+  if (isPlainObject(value)) {
+    return Object.entries(value).flatMap(([key, nested]) => {
+      const next = prefix ? `${prefix}.${key}` : key
+      return flattenRestorableValues(nested, next)
+    })
+  }
+
+  return prefix ? [[prefix, String(value)]] : []
+}
+
+function restoreBrowserFormValues(values: Record<string, unknown>): void {
+  const controls = (globalThis as { readonly document?: BrowserDocument }).document
+    ?.querySelectorAll?.('input[name], textarea[name], select[name]')
+  if (!controls) {
+    return
+  }
+
+  const valuesByName = new Map<string, string[]>()
+  for (const [name, value] of flattenRestorableValues(values)) {
+    valuesByName.set(name, [...(valuesByName.get(name) ?? []), value])
+  }
+
+  for (const control of Array.from(controls)) {
+    const name = control.name
+    const nextValues = name ? valuesByName.get(name) : undefined
+    if (!name || !nextValues) {
+      continue
+    }
+
+    const type = control.type?.toLowerCase()
+    if (type === 'file') {
+      continue
+    }
+
+    if (type === 'checkbox' || type === 'radio') {
+      control.checked = nextValues.includes(control.value ?? 'on')
+      continue
+    }
+
+    control.value = nextValues[0] ?? ''
+  }
+}
+
+function scheduleBrowserFormValueRestore(values: Record<string, unknown>): void {
+  restoreBrowserFormValues(values)
+
+  const browserWindow = (globalThis as { readonly window?: BrowserWindow }).window
+  const restore = () => restoreBrowserFormValues(values)
+  queueMicrotask(restore)
+
+  if (typeof browserWindow?.requestAnimationFrame === 'function') {
+    browserWindow.requestAnimationFrame(restore)
+    return
+  }
+
+  browserWindow?.setTimeout?.(restore, 0)
+}
+
 function isFormState<TData>(value: unknown): value is NonNullable<InitialFormState<TData>> {
   return isPlainObject(value)
     && typeof value.valid === 'boolean'
@@ -175,6 +256,21 @@ function parseJsonObject(value: string): unknown {
     return JSON.parse(value) as unknown
   } catch {
     return undefined
+  }
+}
+
+function createInvalidActionFailure<TData>(
+  values: TData,
+  status: number,
+): FormFailurePayload<TData> {
+  return {
+    ok: false,
+    status,
+    valid: false,
+    values: values as Partial<TData>,
+    errors: {
+      _root: [invalidActionFailureMessage],
+    },
   }
 }
 
@@ -280,16 +376,11 @@ function takeValidationErrors<TData>(
   }
 
   if (event) {
-    event.cookies.set(validationFlashCookie, '', {
-      path: event.url?.pathname || '/',
-      maxAge: 0,
-      sameSite: 'lax',
-      httpOnly: true,
-    })
-  } else {
-    clearBrowserCookie(validationFlashCookie)
+    return payload
   }
 
+  scheduleBrowserFormValueRestore(payload.values)
+  clearBrowserCookie(validationFlashCookie)
   return payload
 }
 
@@ -391,20 +482,29 @@ function ensureSubmitListener(): void {
 function registerForm<TData, TSuccess>(
   schemaDefinition: FormSchema,
   form: Pick<UseFormResult<TData, TSuccess>, 'submit'>,
-): void {
+): () => void {
   if (typeof (globalThis as { readonly window?: unknown }).window === 'undefined') {
-    return
+    return () => {}
   }
 
-  registeredForms.add({
+  const registeredForm: RegisteredForm = {
     paths: collectSchemaPaths(schemaDefinition.fields),
     async submit(liveForm) {
-      await runWithBrowserFormElement(liveForm, async () => {
-        await form.submit()
-      })
+      await runWithBrowserFormElement(form, liveForm)
     },
-  })
+  }
+  registeredForms.add(registeredForm)
   ensureSubmitListener()
+
+  let registered = true
+  return () => {
+    if (!registered) {
+      return
+    }
+
+    registered = false
+    registeredForms.delete(registeredForm)
+  }
 }
 
 function currentLocationHref(): string | undefined {
@@ -497,7 +597,10 @@ async function submitSvelteKitAction<TData, TSuccess>(
   }
 
   if (result.type === 'failure') {
-    return parseJsonObject(result.data) as ClientSubmitResult<TData, TSuccess>
+    const parsed = parseJsonObject(result.data)
+    return isPlainObject(parsed)
+      ? parsed as ClientSubmitResult<TData, TSuccess>
+      : createInvalidActionFailure<TData>(context.values, result.status)
   }
 
   if (result.type === 'error') {
@@ -614,8 +717,14 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
 
   const form = createFormClient(schemaDefinition, formOptions)
   void hydrateActionFormState(form, schemaDefinition)
-  registerForm(schemaDefinition, form)
-  const subscribe = createSubscriber((update) => form.subscribe(update))
+  const unregisterForm = registerForm(schemaDefinition, form)
+  const subscribe = createSubscriber((update) => {
+    const unsubscribe = form.subscribe(update)
+    return () => {
+      unsubscribe()
+      unregisterForm()
+    }
+  })
   const cache = new WeakMap<object, object>()
 
   return createReactiveView<UseFormResult<TData, TSuccess, InferFormFieldTree<TSchema>>>(form, subscribe, cache)

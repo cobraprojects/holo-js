@@ -121,6 +121,8 @@ The generated project contains:
 - auth scaffold including `config/auth.ts`, `config/session.ts`, user/session migrations, and the framework current-auth endpoint at `/api/auth/user` when `auth` is selected
 - machine-owned generated output under `.holo-js/generated`
 - framework lifecycle scripts such as `dev` and `build`
+- for SvelteKit, `svelte.config.js` is wrapped with `withHoloSvelteKit(...)` so Holo can install the
+  generated hook bridge without asking users to edit hook paths by hand
 
 The auth scaffold does not generate application flows such as `/login`, `/register`, `/logout`, password reset, email
 verification, admin pages, or route-protection middleware. Those routes depend on the app's forms, redirects, and page
@@ -138,6 +140,10 @@ to work are:
 - `server/jobs`
 - `server/events`
 - `server/listeners`
+
+SvelteKit users normally leave the `withHoloSvelteKit(...)` wrapper in place and edit the config object
+inside it. `holo prepare` preserves unrelated user configuration and owns the generated server and
+universal hook entrypoints.
 
 ## First commands
 

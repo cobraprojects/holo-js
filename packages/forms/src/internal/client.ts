@@ -75,6 +75,18 @@ type BrowserFormElement = {
   readonly method?: string
 }
 
+const browserFormSubmitSymbol: unique symbol = Symbol('browserFormSubmit')
+
+type BrowserFormSubmitter<TData, TSuccess> = {
+  readonly [browserFormSubmitSymbol]: (form: BrowserFormElement) => Promise<ClientSubmitResult<TData, TSuccess>>
+}
+
+function isBrowserFormSubmitter<TData, TSuccess>(
+  value: Pick<UseFormResult<TData, TSuccess>, 'submit'>,
+): value is Pick<UseFormResult<TData, TSuccess>, 'submit'> & BrowserFormSubmitter<TData, TSuccess> {
+  return browserFormSubmitSymbol in value
+}
+
 export interface UseFormOptions<TData, TSuccess = unknown> {
   readonly action?: string
   readonly method?: string
@@ -146,8 +158,6 @@ type MutableState<TData, TSuccess> = {
   listeners: Set<() => void>
   validationSequence: number
 }
-
-let activeBrowserForm: BrowserFormElement | undefined
 
 type SchemaFieldLike = {
   readonly kind: 'field'
@@ -487,11 +497,7 @@ function buildFormData(value: unknown, path = '', formData: FormData = new FormD
   return formData
 }
 
-function getActiveBrowserForm(): BrowserFormElement | undefined {
-  if (activeBrowserForm) {
-    return activeBrowserForm
-  }
-
+function getActiveElementBrowserForm(): BrowserFormElement | undefined {
   const activeElement = (globalThis as {
     readonly document?: {
       readonly activeElement?: {
@@ -515,18 +521,15 @@ function getActiveBrowserFormData(form: BrowserFormElement | undefined): FormDat
   }
 }
 
-export async function runWithBrowserFormElement<TValue>(
+export async function runWithBrowserFormElement<TData, TSuccess>(
+  formClient: Pick<UseFormResult<TData, TSuccess>, 'submit'>,
   form: BrowserFormElement,
-  callback: () => Promise<TValue>,
-): Promise<TValue> {
-  activeBrowserForm = form
-  try {
-    return await callback()
-  } finally {
-    if (activeBrowserForm === form) {
-      activeBrowserForm = undefined
-    }
+): Promise<ClientSubmitResult<TData, TSuccess>> {
+  if (isBrowserFormSubmitter(formClient)) {
+    return await formClient[browserFormSubmitSymbol](form)
   }
+
+  return await formClient.submit()
 }
 
 function createTypedErrorBag<TData>(flattenedErrors: Record<string, readonly string[]>): ValidationErrorBag<TData> {
@@ -974,6 +977,57 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
     return normalizedSubmission
   }
 
+  async function submit(browserForm?: BrowserFormElement): Promise<ClientSubmitResult<TData, TSuccess>> {
+    state.submitting = true
+    notifyListeners(state)
+    try {
+      const submitter = options.submitter ?? defaultSubmitter<TData, TSuccess>
+      const liveForm = browserForm ?? getActiveElementBrowserForm()
+      const method = options.method ?? liveForm?.method ?? 'POST'
+      const action = options.action ?? liveForm?.action
+      const liveFormData = getActiveBrowserFormData(liveForm)
+      const formData = liveFormData ?? buildFormData(state.values)
+      const localSubmission = liveFormData
+        ? await runValidationForInput(liveFormData)
+        : await runValidation()
+
+      if (!localSubmission.valid) {
+        return localSubmission
+      }
+
+      if (!isSafeMethod(method)) {
+        const csrfField = await getClientCsrfField()
+        if (csrfField) {
+          formData.set(csrfField.name, csrfField.value)
+        }
+      }
+
+      let response: ClientSubmitResult<TData, TSuccess> | void
+      try {
+        response = await submitter({
+          action,
+          method,
+          values: localSubmission.data,
+          formData,
+        })
+      } catch (error) {
+        return applyServerState(
+          validationExceptionToFailure<TData>(error, state.values)
+            ?? createTransportFailure(state.values),
+        )
+      }
+
+      return applyServerState(response ?? {
+        ok: true,
+        status: 204,
+        data: undefined,
+      } as FormSuccessPayload<TSuccess>)
+    } finally {
+      state.submitting = false
+      notifyListeners(state)
+    }
+  }
+
   return Object.freeze({
     fields,
     get values() {
@@ -1004,55 +1058,11 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
       const submission = await runValidation()
       return submission.errors.get(path)
     },
-    async submit() {
-      state.submitting = true
-      notifyListeners(state)
-      try {
-        const submitter = options.submitter ?? defaultSubmitter<TData, TSuccess>
-        const liveForm = getActiveBrowserForm()
-        const method = options.method ?? liveForm?.method ?? 'POST'
-        const action = options.action ?? liveForm?.action
-        const liveFormData = getActiveBrowserFormData(liveForm)
-        const formData = liveFormData ?? buildFormData(state.values)
-        const localSubmission = liveFormData
-          ? await runValidationForInput(liveFormData)
-          : await runValidation()
-
-        if (!localSubmission.valid) {
-          return localSubmission
-        }
-
-        if (!isSafeMethod(method)) {
-          const csrfField = await getClientCsrfField()
-          if (csrfField) {
-            formData.set(csrfField.name, csrfField.value)
-          }
-        }
-
-        let response: ClientSubmitResult<TData, TSuccess> | void
-        try {
-          response = await submitter({
-            action,
-            method,
-            values: localSubmission.data,
-            formData,
-          })
-        } catch (error) {
-          return applyServerState(
-            validationExceptionToFailure<TData>(error, state.values)
-              ?? createTransportFailure(state.values),
-          )
-        }
-
-        return applyServerState(response ?? {
-          ok: true,
-          status: 204,
-          data: undefined,
-        } as FormSuccessPayload<TSuccess>)
-      } finally {
-        state.submitting = false
-        notifyListeners(state)
-      }
+    submit() {
+      return submit()
+    },
+    [browserFormSubmitSymbol](form: BrowserFormElement) {
+      return submit(form)
     },
     reset(values?: Partial<TData>) {
       const next = mergeValues(state.initialValues, values)

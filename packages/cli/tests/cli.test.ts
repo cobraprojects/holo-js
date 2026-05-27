@@ -530,9 +530,13 @@ async function linkWorkspaceBroadcast(projectRoot: string): Promise<void> {
 }
 
 async function writeFrameworkBinary(projectRoot: string, binaryName: string): Promise<void> {
+  await writeFrameworkBinaryScript(projectRoot, binaryName, '#!/usr/bin/env node\nconsole.log(process.argv.slice(2).join(" "))\n')
+}
+
+async function writeFrameworkBinaryScript(projectRoot: string, binaryName: string, script: string): Promise<void> {
   const binPath = join(projectRoot, 'node_modules', '.bin', binaryName)
   await mkdir(dirname(binPath), { recursive: true })
-  await writeFile(binPath, '#!/usr/bin/env node\nconsole.log(process.argv.slice(2).join(" "))\n', 'utf8')
+  await writeFile(binPath, script, 'utf8')
   await chmod(binPath, 0o755)
 }
 
@@ -1843,6 +1847,28 @@ throw new Error('APP_KEY is required before config can load')
     // Cover resolveBroadcastConfigTargetPath with cjs format
     expect(projectInternals.resolveBroadcastConfigTargetPath('/project', 'config/app.json', 'cjs')).toContain('broadcast.cjs')
   }, 30000)
+
+  it('suppresses SvelteKit semver circular dependency warnings in the framework runner', async () => {
+    const projectRoot = await createTempDirectory()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }))
+    await writeProjectFile(projectRoot, '.holo-js/framework/run.mjs', projectInternals.renderFrameworkRunner({ framework: 'sveltekit' }))
+    await writeFrameworkBinaryScript(projectRoot, 'vite', [
+      '#!/usr/bin/env node',
+      'console.log(process.argv.slice(2).join(" "))',
+      'console.warn(\'Circular dependency: ../../node_modules/.bun/semver@7.7.4/node_modules/semver/classes/range.js -> ../../node_modules/.bun/semver@7.7.4/node_modules/semver/classes/comparator.js -> ../../node_modules/.bun/semver@7.7.4/node_modules/semver/classes/range.js\')',
+      'console.warn(\'framework warning\')',
+      '',
+    ].join('\n'))
+
+    const result = runNodeScript(projectRoot, join(projectRoot, '.holo-js/framework/run.mjs'), ['build'])
+
+    expect(result.status, result.stderr || result.stdout).toBe(0)
+    expect(result.stdout).toContain('build --logLevel error')
+    expect(result.stderr).not.toContain('Circular dependency:')
+    expect(result.stderr).toContain('framework warning')
+  })
 
   it('normalizes scaffold env segments and renders empty env file contents directly', () => {
     expect(projectInternals.normalizeScaffoldEnvSegments(`

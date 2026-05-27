@@ -477,6 +477,14 @@ describe('@holo-js/adapter-sveltekit request context', () => {
     expect(mapped.headers.get('location')).toBe('/login')
     expect(mapped.headers.get('cache-control')).toBe('no-store')
     expect(mapped.headers.get('set-cookie')).toContain(`${adapterSvelteKitInternals.validationFlashCookie}=`)
+    const flashedCookieValue = mapped.headers.get('set-cookie')
+      ?.match(new RegExp(`${adapterSvelteKitInternals.validationFlashCookie}=([^;]+)`))?.[1]
+    expect(flashedCookieValue).toBeDefined()
+    expect(JSON.parse(decodeURIComponent(flashedCookieValue ?? '{}'))).toMatchObject({
+      values: {
+        email: 'user@app.test',
+      },
+    })
     expect(setCookie).toHaveBeenCalledWith(
       adapterSvelteKitInternals.validationFlashCookie,
       expect.any(String),

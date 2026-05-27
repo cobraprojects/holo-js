@@ -166,8 +166,51 @@ async function mapValidationActionResponse(
 function encodeValidationFlashPayload(payload: SerializedValidationException): string {
   return encodeURIComponent(JSON.stringify({
     ...payload,
-    values: {},
+    values: filterFlashValues(payload.values),
   }))
+}
+
+function isSensitiveFlashKey(key: string): boolean {
+  const normalized = key.toLowerCase().replace(/[-_\s]/g, '')
+  return normalized.startsWith('_')
+    || normalized.includes('password')
+    || normalized.includes('token')
+    || normalized.includes('secret')
+    || normalized.includes('credential')
+}
+
+function filterFlashValue(value: unknown): unknown {
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return value
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map(item => filterFlashValue(item))
+      .filter(item => typeof item !== 'undefined')
+  }
+
+  if (!isPlainObject(value)) {
+    return undefined
+  }
+
+  return filterFlashValues(value)
+}
+
+function filterFlashValues<TData extends Record<string, unknown>>(values: TData): Partial<TData> {
+  const filtered: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(values)) {
+    if (isSensitiveFlashKey(key)) {
+      continue
+    }
+
+    const next = filterFlashValue(value)
+    if (typeof next !== 'undefined') {
+      filtered[key] = next
+    }
+  }
+
+  return filtered as Partial<TData>
 }
 
 function flashValidationPayload(event: SvelteKitRequestEvent, payload: SerializedValidationException): void {

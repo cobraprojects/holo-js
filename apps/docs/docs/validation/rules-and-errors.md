@@ -50,9 +50,10 @@ const registerUser = schema({
 
 ### `validate(input, schema)`
 
-Validates input and returns a non-throwing result object.
+Validates input and returns typed data.
 
-Use this when you want `result.valid`, `result.data`, `result.values`, and `result.errors`.
+Use this when invalid input should become a `ValidationException` with a 422 status and field error
+bag.
 
 ```ts
 import { field, schema, validate } from '@holo-js/validation'
@@ -61,18 +62,16 @@ const login = schema({
   email: field.string().required().email(),
 })
 
-const result = await validate({ email: 'bad' }, login)
+const data = await validate({ email: 'ava@example.com' }, login)
 
-if (!result.valid) {
-  result.errors.first('email')
-}
+data.email
 ```
 
 ### `safeParse(input, schema)`
 
-Alias-style non-throwing parsing for callers that prefer parse-oriented naming.
+Non-throwing parsing.
 
-Use it the same way as `validate(...)` when you want a structured result instead of an exception.
+Use it when you want `result.valid`, `result.data`, `result.values`, and `result.errors`.
 
 ```ts
 import { field, schema, safeParse } from '@holo-js/validation'
@@ -82,13 +81,19 @@ const profile = schema({
 })
 
 const result = await safeParse({ birthday: '2024-01-01' }, profile)
+
+if (!result.valid) {
+  result.errors.first('birthday')
+}
 ```
 
 ### `parse(input, schema)`
 
-Validates input and throws on failure.
+Validates input and throws a contract error on failure.
 
-Use this when invalid input should stop execution immediately.
+Most app code should use `validate(...)` for validation errors or `safeParse(...)` for non-throwing
+inspection. Use `parse(...)` for low-level parsing where a validation exception is not the desired
+error type.
 
 ```ts
 import { field, schema, parse } from '@holo-js/validation'
@@ -417,9 +422,57 @@ field.file().maxSize('2mb')
 field.file().maxSize(1024)
 ```
 
+## Validation exceptions
+
+`validate(...)` throws `ValidationException` when input is invalid. Framework adapters serialize that
+exception behind the scenes so forms and API routes receive a consistent 422 error payload.
+
+Throw a validation error manually when the input shape is valid but the business rule should still
+point at a field:
+
+```ts
+import { ValidationException } from '@holo-js/validation'
+
+throw ValidationException.withMessages({
+  image: ['The selected file must be 2 MB or smaller.'],
+})
+```
+
+The default bag name is `default`. Pass `bag` only when the page needs multiple independent error
+bags:
+
+```ts
+throw ValidationException.withMessages({
+  title: ['The title is already taken.'],
+}, {
+  bag: 'post',
+})
+```
+
+Serialized validation exceptions use this shape:
+
+```ts
+{
+  ok: false,
+  status: 422,
+  valid: false,
+  message: 'image: The selected file must be 2 MB or smaller.',
+  bag: 'default',
+  values: {
+    title: 'Draft post',
+  },
+  errors: {
+    image: ['The selected file must be 2 MB or smaller.'],
+  },
+}
+```
+
+Uploaded files and sensitive values are omitted from `values`.
+
 ## Error bag methods
 
-On failure, `validate(...)` and `safeParse(...)` return a typed error bag.
+On failure, `safeParse(...)` returns a typed error bag. `ValidationException` also exposes the same
+bag API through `exception.errors`.
 
 ### `errors.first(path)`
 

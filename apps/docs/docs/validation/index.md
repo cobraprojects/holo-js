@@ -33,7 +33,7 @@ the lower-level engine.
 
 It does not own:
 
-- server submission helpers like `submission.fail()`
+- server submission helpers like `safeParse(...)`, `submission.fail()`, and `submission.success(...)`
 - client form state like `useForm(...)`
 
 Those belong to `@holo-js/forms` and adapter packages.
@@ -50,20 +50,20 @@ const createSession = schema({
   remember: field.boolean().default(false),
 })
 
-const result = await validate({
+const data = await validate({
   email: 'ava@example.com',
   password: 'super-secret',
 }, createSession)
 
-if (!result.valid) {
-  result.errors.first('email')
-} else {
-  result.data.email
-  result.data.remember
-}
+data.email
+data.remember
 ```
 
-`result.data`, `result.values`, and `result.errors` are inferred from the schema automatically.
+`validate(...)` returns the inferred data when valid. When invalid, it throws a `ValidationException`
+with a 422 status, a default error bag, sanitized submitted values, and field messages.
+
+Use `safeParse(...)` when you need a non-throwing result object with `valid`, `data`, `values`, and
+`errors`.
 
 ## Standard Schema V1
 
@@ -100,24 +100,17 @@ const uploadAvatar = schema({
 })
 
 export async function POST(request: Request) {
-  const result = await validate(request, uploadAvatar)
-
-  if (!result.valid) {
-    return Response.json({
-      ok: false,
-      errors: result.errors.flatten(),
-      values: result.values,
-    }, { status: 422 })
-  }
+  const data = await validate(request, uploadAvatar)
 
   return Response.json({
     ok: true,
-    userId: result.data.userId,
+    userId: data.userId,
   })
 }
 ```
 
-That same schema can also validate a plain object or `FormData`.
+That same schema can also validate a plain object or `FormData`. Holo framework adapters serialize
+validation exceptions into the same 422 error-bag shape for the host framework.
 
 ## JSON API validation without forms
 
@@ -125,7 +118,7 @@ Use validation directly when there is no form workflow:
 
 ```ts
 // server/api/profile.ts
-import { field, schema, parse } from '@holo-js/validation'
+import { field, schema, validate } from '@holo-js/validation'
 
 const updateProfile = schema({
   displayName: field.string().required().min(3).max(80),
@@ -135,7 +128,7 @@ const updateProfile = schema({
 
 export async function PATCH(request: Request) {
   const body = await request.json()
-  const data = await parse(body, updateProfile)
+  const data = await validate(body, updateProfile)
 
   return Response.json({
     ok: true,
@@ -144,8 +137,9 @@ export async function PATCH(request: Request) {
 }
 ```
 
-Use `parse(...)` when invalid input should throw. Use `validate(...)` or `safeParse(...)` when you want to
-return structured errors.
+Use `validate(...)` when invalid input should become a validation error. Use `safeParse(...)` when you
+want to inspect errors without throwing. `parse(...)` is the lower-level strict parser that throws a
+contract error instead of a validation exception.
 
 ## Rules, errors, and next steps
 

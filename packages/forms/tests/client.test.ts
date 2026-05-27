@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createFailedSubmission, createSuccessfulSubmission, field, schema, ValidationException, type WebFileLike } from '../src'
-import { createFormClient as useForm } from '../src/internal/client'
+import { createFormClient as useForm, runWithBrowserFormElement } from '../src/internal/client'
 import { clearSensitiveInputValues, sanitizeFlashedInput } from '../src/sensitiveInput'
 
 const browserGlobal = globalThis as typeof globalThis & { document?: Document }
@@ -9,6 +9,47 @@ const originalFormData = globalThis.FormData
 const originalDocument = browserGlobal.document
 type SensitiveSchemaFixture = NonNullable<Parameters<typeof clearSensitiveInputValues>[1]>
 type TestFormDataEntryValue = NonNullable<ReturnType<FormData['get']>>
+type TestBrowserFormControl = {
+  readonly name: string
+  readonly value: string
+}
+type TestBrowserFormElement = {
+  readonly action: string
+  readonly method: string
+  readonly controls: readonly TestBrowserFormControl[]
+}
+
+class TestBrowserFormData {
+  readonly #entries: Array<[string, string]> = []
+
+  constructor(form?: TestBrowserFormElement) {
+    for (const control of form?.controls ?? []) {
+      this.append(control.name, control.value)
+    }
+  }
+
+  append(name: string, value: string): void {
+    this.#entries.push([name, value])
+  }
+
+  set(name: string, value: string): void {
+    const index = this.#entries.findIndex(entry => entry[0] === name)
+    if (index === -1) {
+      this.append(name, value)
+      return
+    }
+
+    this.#entries.splice(index, 1, [name, value])
+  }
+
+  get(name: string): string | null {
+    return this.#entries.find(entry => entry[0] === name)?.[1] ?? null
+  }
+
+  * entries(): IterableIterator<[string, string]> {
+    yield * this.#entries
+  }
+}
 
 function createSecurityClientModule(config: { readonly field: string, readonly cookie: string } = {
   field: '_token',
@@ -1853,6 +1894,104 @@ describe('@holo-js/forms client', () => {
     const result = await pending
     expect('ok' in result && result.ok === true).toBe(true)
     expect(client.submitting).toBe(false)
+  })
+
+  it('submits concurrent browser forms with isolated explicit form context', async () => {
+    const registerUser = schema({
+      email: field.string().required().email(),
+    })
+    const submissions: Array<{
+      readonly action?: string
+      readonly email: string | undefined
+    }> = []
+    const firstForm: TestBrowserFormElement = {
+      action: 'https://example.com/first',
+      method: 'post',
+      controls: [
+        {
+          name: 'email',
+          value: 'first@example.com',
+        },
+      ],
+    }
+    const secondForm: TestBrowserFormElement = {
+      action: 'https://example.com/second',
+      method: 'post',
+      controls: [
+        {
+          name: 'email',
+          value: 'second@example.com',
+        },
+      ],
+    }
+
+    globalThis.FormData = TestBrowserFormData as unknown as typeof FormData
+
+    const firstClient = useForm(registerUser, {
+      submitter(context) {
+        submissions.push({
+          action: context.action,
+          email: context.formData.get('email')?.toString(),
+        })
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            saved: 'first',
+          },
+        }
+      },
+    })
+    const secondClient = useForm(registerUser, {
+      submitter(context) {
+        submissions.push({
+          action: context.action,
+          email: context.formData.get('email')?.toString(),
+        })
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            saved: 'second',
+          },
+        }
+      },
+    })
+
+    await Promise.all([
+      runWithBrowserFormElement(firstClient, firstForm),
+      runWithBrowserFormElement(secondClient, secondForm),
+    ])
+
+    expect(submissions).toEqual([
+      {
+        action: 'https://example.com/first',
+        email: 'first@example.com',
+      },
+      {
+        action: 'https://example.com/second',
+        email: 'second@example.com',
+      },
+    ])
+  })
+
+  it('falls back to submit when a form client has no explicit browser form context hook', async () => {
+    const result = await runWithBrowserFormElement({
+      submit: async () => ({
+        ok: true,
+        status: 200,
+        data: 'fallback',
+      }),
+    }, {
+      action: 'https://example.com/fallback',
+      method: 'post',
+    })
+
+    expect(result).toEqual({
+      ok: true,
+      status: 200,
+      data: 'fallback',
+    })
   })
 
   it('ignores empty paths when setting values', async () => {

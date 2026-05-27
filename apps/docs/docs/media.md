@@ -117,6 +117,29 @@ Available collection options:
 - `acceptsExtensions([...])`
 - `maxSize(bytes)`
 
+Collection rules protect the media collection. Put upload rules in the form schema too, so invalid
+files become normal field validation errors before the media write runs:
+
+```ts
+import { field, schema, validate } from '@holo-js/forms'
+
+const postForm = schema({
+  title: field.string().required().min(3),
+  image: field.file().optional().image().maxSize('2mb'),
+})
+
+const input = await validate(request, postForm)
+const post = await Post.create({ title: input.title })
+
+if (input.image) {
+  await post.addMedia(input.image).toMediaCollection('images')
+}
+```
+
+If the uploaded file is too large, the validation error is attached to `image` with the default message
+`The selected file must be 2 MB or smaller.` Existing media is not deleted and the form can render the
+field error wherever it renders `image` errors.
+
 ## Media conversions
 
 Conversions define derived files for one or more collections.
@@ -148,6 +171,15 @@ Attach media directly from a model instance.
 ```ts
 const post = await Post.findOrFail(1)
 
+await post.addMedia(input.image).toMediaCollection('images')
+```
+
+`input.image` can be a browser `File` returned from a Holo form schema. You do not need to read the file
+into an `ArrayBuffer` yourself.
+
+You can still attach from paths, buffers, or structured sources when that is the natural input:
+
+```ts
 await post
   .addMedia('/tmp/hero.jpg')
   .usingFileName('hero.jpg')

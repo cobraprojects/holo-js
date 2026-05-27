@@ -128,7 +128,7 @@ by the form schema before they are sent back to the client:
 
 ```ts
 import { login, logout, refreshUser, register, user } from '@holo-js/auth'
-import { field, schema, validate } from '@holo-js/forms'
+import { field, schema, validate, ValidationException } from '@holo-js/forms'
 
 const registerForm = schema({
   name: field.string().required(),
@@ -144,40 +144,24 @@ const loginForm = schema({
 })
 
 export async function POST(request: Request) {
-  const submission = await validate(request, registerForm)
-  if (!submission.valid) {
-    return Response.json(submission.fail(), { status: submission.fail().status })
-  }
+  const data = await validate(request, registerForm)
 
-  const { data: created, error: registerError } = await register(submission.data)
+  const { data: created, error: registerError } = await register(data)
 
   if (registerError) {
-    const failure = submission.fail({
-      status: registerError.status,
-      errors: registerError.fields,
-    })
-
-    return Response.json(failure, { status: failure.status })
+    throw ValidationException.withMessages(registerError.fields)
   }
 
   return Response.json(created, { status: 201 })
 }
 
 export async function PUT(request: Request) {
-  const submission = await validate(request, loginForm)
-  if (!submission.valid) {
-    return Response.json(submission.fail(), { status: submission.fail().status })
-  }
+  const data = await validate(request, loginForm)
 
-  const { data: session, error } = await login(submission.data)
+  const { data: session, error } = await login(data)
 
   if (error) {
-    const failure = submission.fail({
-      status: error.status,
-      errors: error.fields,
-    })
-
-    return Response.json(failure, { status: failure.status })
+    throw ValidationException.withMessages(error.fields)
   }
 
   return Response.json({
@@ -438,17 +422,12 @@ Successful auth calls put the result in `data`. Expected auth failures come back
 }
 ```
 
-That means a form-backed route can forward auth failures through the submission object. The forms
-package keeps sensitive values out of the response:
+That means a form-backed route can throw auth failures as validation exceptions. The forms package keeps
+sensitive values out of the serialized response:
 
 ```ts
 if (error) {
-  const failure = submission.fail({
-    status: error.status,
-    errors: error.fields,
-  })
-
-  return Response.json(failure, { status: failure.status })
+  throw ValidationException.withMessages(error.fields)
 }
 ```
 
