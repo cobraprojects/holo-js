@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/mail",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Holo-JS Framework - mail contracts, preview helpers, and fluent send helpers",
   "type": "module",
   "license": "MIT",

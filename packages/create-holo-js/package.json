@@ -1,6 +1,6 @@
 {
   "name": "create-holo-js",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Holo-JS project scaffolder",
   "type": "module",
   "license": "MIT",
