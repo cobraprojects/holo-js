@@ -67,38 +67,28 @@ then pass the typed form data to `register(...)`:
 
 ```ts
 import { register } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
+import { validate, ValidationException } from '@holo-js/forms'
 
 import { registerForm } from '@/lib/schemas/auth'
 
 export async function POST(request: Request) {
-  const submission = await validate(request, registerForm)
+  const data = await validate(request, registerForm)
 
-  if (!submission.valid) {
-    return Response.json(submission.fail(), {
-      status: submission.fail().status,
-    })
-  }
-
-  const { data: session, error } = await register(submission.data)
+  const { data: session, error } = await register(data)
 
   if (error) {
-    const failure = submission.fail({
-      status: error.status,
-      errors: error.fields,
-    })
-
-    return Response.json(failure, { status: failure.status })
+    throw ValidationException.withMessages(error.fields)
   }
 
-  return Response.json(submission.success({
+  return Response.json({
+    ok: true,
     message: session.emailVerificationRequired
       ? 'Account created. Check your email to verify your address.'
       : 'Account created.',
     redirectTo: session.emailVerificationRequired
       ? session.emailVerificationRoute ?? '/verify-email'
       : '/admin',
-  }))
+  })
 }
 ```
 
@@ -116,38 +106,28 @@ Unverified users can still sign in. Validate the login payload, then inspect the
 
 ```ts
 import { login } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
+import { validate, ValidationException } from '@holo-js/forms'
 
 import { loginForm } from '@/lib/schemas/auth'
 
 export async function POST(request: Request) {
-  const submission = await validate(request, loginForm)
+  const data = await validate(request, loginForm)
 
-  if (!submission.valid) {
-    return Response.json(submission.fail(), {
-      status: submission.fail().status,
-    })
-  }
-
-  const { data: session, error } = await login(submission.data)
+  const { data: session, error } = await login(data)
 
   if (error) {
-    const failure = submission.fail({
-      status: error.status,
-      errors: error.fields,
-    })
-
-    return Response.json(failure, { status: failure.status })
+    throw ValidationException.withMessages(error.fields)
   }
 
-  return Response.json(submission.success({
+  return Response.json({
+    ok: true,
     message: session.emailVerificationRequired
       ? 'Signed in. Verify your email address to continue.'
       : 'Signed in successfully.',
     redirectTo: session.emailVerificationRequired
       ? session.emailVerificationRoute ?? '/verify-email'
       : '/admin',
-  }))
+  })
 }
 ```
 
@@ -164,34 +144,24 @@ Verification pages submit the token from the emailed link. Validate the payload,
 
 ```ts
 import { verifyEmail } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
+import { validate, ValidationException } from '@holo-js/forms'
 
 import { verifyEmailForm } from '@/lib/schemas/auth'
 
 export async function POST(request: Request) {
-  const submission = await validate(request, verifyEmailForm)
+  const data = await validate(request, verifyEmailForm)
 
-  if (!submission.valid) {
-    return Response.json(submission.fail(), {
-      status: submission.fail().status,
-    })
-  }
-
-  const { data: verifiedUser, error } = await verifyEmail(submission.data.token)
+  const { data: verifiedUser, error } = await verifyEmail(data.token)
 
   if (error) {
-    const failure = submission.fail({
-      status: error.status,
-      errors: error.fields,
-    })
-
-    return Response.json(failure, { status: failure.status })
+    throw ValidationException.withMessages(error.fields)
   }
 
-  return Response.json(submission.success({
+  return Response.json({
+    ok: true,
     message: 'Email verified.',
     user: verifiedUser,
-  }))
+  })
 }
 ```
 
@@ -204,38 +174,28 @@ the typed email string to `resendEmailVerification(email)`:
 
 ```ts
 import { resendEmailVerification } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
+import { validate, ValidationException } from '@holo-js/forms'
 
 import { resendEmailVerificationForm } from '@/lib/schemas/auth'
 
 export async function POST(request: Request) {
-  const submission = await validate(request, resendEmailVerificationForm)
+  const data = await validate(request, resendEmailVerificationForm)
 
-  if (!submission.valid) {
-    return Response.json(submission.fail(), {
-      status: submission.fail().status,
-    })
-  }
-
-  const { error } = await resendEmailVerification(submission.data.email)
+  const { error } = await resendEmailVerification(data.email)
 
   if (error) {
-    const failure = submission.fail({
-      status: error.status,
-      errors: error.fields,
-    })
-
-    return Response.json(failure, { status: failure.status })
+    throw ValidationException.withMessages(error.fields)
   }
 
-  return Response.json(submission.success({
+  return Response.json({
+    ok: true,
     message: 'A fresh verification email has been sent.',
-  }))
+  })
 }
 ```
 
 This is the intended verify-page flow when the user lands on `/verify-email?email=...` after login. The route receives
-validated form data, so it can pass `submission.data.email` directly to auth without manual body parsing.
+validated form data, so it can pass `data.email` directly to auth without manual body parsing.
 
 When the route is not specifically a resend action, use the same parameter shape with the send-oriented name:
 

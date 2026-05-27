@@ -93,7 +93,11 @@ function renderManagedSvelteServerHooksModule(): string {
     '',
     '    const validationPayload = serializeHoloValidationException(cause)',
     '    if (validationPayload) {',
-    '      return Response.json(validationPayload, { status: validationPayload.status })',
+    '      if (adapterSvelteKitInternals.isApiEvent(event)) {',
+    '        return Response.json(validationPayload, { status: validationPayload.status })',
+    '      }',
+    '',
+    '      throw cause',
     '    }',
     '',
     '    throw cause',
@@ -209,6 +213,10 @@ const SVELTE_HOOKS_OVERRIDE_BLOCK = [
   '      },',
   '    },',
 ].join('\n')
+const SVELTE_CONFIG_WRAPPER_IMPORT = 'import { withHoloSvelteKit } from \'@holo-js/adapter-sveltekit/config\''
+const LEGACY_SVELTE_PREPROCESS_IMPORT = 'import { holoSveltePreprocess } from \'@holo-js/adapter-sveltekit\''
+const LEGACY_SVELTE_PREPROCESS_CALL = 'holoSveltePreprocess()'
+const SVELTE_CONFIG_WRAPPER_CALL = 'withHoloSvelteKit('
 
 function getSvelteConfigHooksOverrideState(contents: string): 'managed' | 'custom' | 'none' {
   if (contents.includes('.holo-js/generated/hooks')) {
@@ -222,46 +230,55 @@ function getSvelteConfigHooksOverrideState(contents: string): 'managed' | 'custo
   return 'none'
 }
 
-function patchSvelteConfigWithHooksOverride(contents: string): string | undefined {
+function assertSvelteConfigHasNoCustomHookOverride(contents: string): void {
   const hooksOverrideState = getSvelteConfigHooksOverrideState(contents)
-  if (hooksOverrideState === 'managed') return undefined
-
   if (hooksOverrideState === 'custom') {
     throw new Error('Custom SvelteKit hook entrypoints are not supported. Remove kit.files.hooks from svelte.config.js and let holo prepare manage the generated hook bridge.')
   }
+}
 
-  const singleLineKitPattern = /(kit:\s*\{)([^\n{}]*?)(\s*\},?)/m
-  const singleLineKitMatch = contents.match(singleLineKitPattern)
-  if (singleLineKitMatch) {
-    const opening = singleLineKitMatch[1] ?? 'kit: {'
-    const body = singleLineKitMatch[2] ?? ''
-    const closing = singleLineKitMatch[3] ?? '}'
-    const trimmedBody = body.trim()
-    const suffix = closing.trimStart().startsWith('},') ? ',' : ''
-    const bodyLines = trimmedBody
-      ? trimmedBody
-        .split(',')
-        .map(segment => segment.trim())
-        .filter(Boolean)
-        .map(segment => `    ${segment},`)
-      : []
-
-    const replacement = [
-      opening,
-      ...bodyLines,
-      SVELTE_HOOKS_OVERRIDE_BLOCK,
-      `  }${suffix}`,
-    ].join('\n')
-
-    return contents.replace(singleLineKitPattern, replacement)
+function ensureSvelteConfigWrapperImport(contents: string): string {
+  if (contents.includes(SVELTE_CONFIG_WRAPPER_IMPORT)) {
+    return contents
   }
 
-  const patched = contents.replace(
-    /(kit:\s*\{)([^\n]*\n?)/,
-    (match, opening: string, rest: string) => `${opening}${rest}${SVELTE_HOOKS_OVERRIDE_BLOCK}\n`,
-  )
+  const lastImport = [...contents.matchAll(/^import .+$/gm)].at(-1)
+  if (!lastImport || lastImport.index === undefined) {
+    return `${SVELTE_CONFIG_WRAPPER_IMPORT}\n${contents}`
+  }
 
-  return patched !== contents ? patched : undefined
+  const insertAt = lastImport.index + lastImport[0].length
+  return `${contents.slice(0, insertAt)}\n${SVELTE_CONFIG_WRAPPER_IMPORT}${contents.slice(insertAt)}`
+}
+
+function removeLegacySvelteConfigWiring(contents: string): string {
+  return contents
+    .replace(`${LEGACY_SVELTE_PREPROCESS_IMPORT}\n`, '')
+    .replace(new RegExp(String.raw`,\s*${LEGACY_SVELTE_PREPROCESS_CALL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'g'), '')
+    .replace(new RegExp(String.raw`${LEGACY_SVELTE_PREPROCESS_CALL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\s*,\s*`, 'g'), '')
+    .replace(`${SVELTE_HOOKS_OVERRIDE_BLOCK}\n`, '')
+}
+
+function patchSvelteConfigWithHoloWrapper(contents: string): string | undefined {
+  assertSvelteConfigHasNoCustomHookOverride(contents)
+
+  const cleaned = ensureSvelteConfigWrapperImport(removeLegacySvelteConfigWiring(contents))
+  if (cleaned.includes(SVELTE_CONFIG_WRAPPER_CALL)) {
+    return cleaned === contents ? undefined : cleaned
+  }
+
+  const constConfigPattern = /(const\s+config\s*=\s*)\{/
+  if (!constConfigPattern.test(cleaned)) {
+    throw new Error('Could not patch svelte.config.js with withHoloSvelteKit(). Export a const config object so holo prepare can manage the SvelteKit integration.')
+  }
+
+  const wrappedOpening = cleaned.replace(constConfigPattern, `$1${SVELTE_CONFIG_WRAPPER_CALL}{`)
+  const wrapped = wrappedOpening.replace(/\}\s*export\s+default\s+config\s*$/u, '})\n\nexport default config')
+  if (wrapped === wrappedOpening) {
+    throw new Error('Could not patch svelte.config.js with withHoloSvelteKit(). Export a const config object so holo prepare can manage the SvelteKit integration.')
+  }
+
+  return wrapped
 }
 
 async function ensureSvelteConfigHooksOverride(projectRoot: string): Promise<void> {
@@ -271,8 +288,8 @@ async function ensureSvelteConfigHooksOverride(projectRoot: string): Promise<voi
     return
   }
 
-  const patched = patchSvelteConfigWithHooksOverride(contents)
-  if (patched) {
+  const patched = patchSvelteConfigWithHoloWrapper(contents) ?? contents
+  if (patched !== contents) {
     await writeFile(configPath, patched, 'utf8')
   }
 }

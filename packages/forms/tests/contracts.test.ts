@@ -359,7 +359,7 @@ describe('@holo-js/forms contracts', () => {
         token: 'reset-token',
       },
       errors: {
-        email: ['Invalid email: Received "bad"'],
+        email: ['This field must be a valid email address.'],
       },
     })
     expect(failure.fail()).toEqual({
@@ -371,7 +371,7 @@ describe('@holo-js/forms contracts', () => {
         token: 'reset-token',
       },
       errors: {
-        email: ['Invalid email: Received "bad"'],
+        email: ['This field must be a valid email address.'],
       },
     })
     expect(failure.fail({

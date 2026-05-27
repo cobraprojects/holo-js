@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createFailedSubmission, createSuccessfulSubmission, field, schema, type WebFileLike } from '../src'
-import { createFormClient as useForm } from '../src/internal/client'
+import { createFailedSubmission, createSuccessfulSubmission, field, schema, ValidationException, type WebFileLike } from '../src'
+import { createFormClient as useForm, runWithBrowserFormElement } from '../src/internal/client'
 import { clearSensitiveInputValues, sanitizeFlashedInput } from '../src/sensitiveInput'
 
 const browserGlobal = globalThis as typeof globalThis & { document?: Document }
@@ -8,6 +8,48 @@ const originalFetch = globalThis.fetch
 const originalFormData = globalThis.FormData
 const originalDocument = browserGlobal.document
 type SensitiveSchemaFixture = NonNullable<Parameters<typeof clearSensitiveInputValues>[1]>
+type TestFormDataEntryValue = NonNullable<ReturnType<FormData['get']>>
+type TestBrowserFormControl = {
+  readonly name: string
+  readonly value: string
+}
+type TestBrowserFormElement = {
+  readonly action: string
+  readonly method: string
+  readonly controls: readonly TestBrowserFormControl[]
+}
+
+class TestBrowserFormData {
+  readonly #entries: Array<[string, string]> = []
+
+  constructor(form?: TestBrowserFormElement) {
+    for (const control of form?.controls ?? []) {
+      this.append(control.name, control.value)
+    }
+  }
+
+  append(name: string, value: string): void {
+    this.#entries.push([name, value])
+  }
+
+  set(name: string, value: string): void {
+    const index = this.#entries.findIndex(entry => entry[0] === name)
+    if (index === -1) {
+      this.append(name, value)
+      return
+    }
+
+    this.#entries.splice(index, 1, [name, value])
+  }
+
+  get(name: string): string | null {
+    return this.#entries.find(entry => entry[0] === name)?.[1] ?? null
+  }
+
+  * entries(): IterableIterator<[string, string]> {
+    yield * this.#entries
+  }
+}
 
 function createSecurityClientModule(config: { readonly field: string, readonly cookie: string } = {
   field: '_token',
@@ -710,6 +752,23 @@ describe('@holo-js/forms client', () => {
     expect(client.values.email).toBe('bad')
     expect(client.errors.first('profile.city')).toBe('City is required.')
 
+    const partialFailure = client.applyServerState({
+      ok: false,
+      status: 422,
+      valid: false,
+      values: {
+        email: 'partial@example.com',
+        profile: undefined,
+      },
+      errors: {
+        email: ['Email is not available.'],
+      },
+    })
+
+    expect('valid' in partialFailure && partialFailure.valid === false).toBe(true)
+    expect(client.values.email).toBe('partial@example.com')
+    expect(client.values.profile.city).toBe('')
+
     const directSubmission = createFailedSubmission(registerUser, {
       email: 'typed-bad',
       profile: {
@@ -996,6 +1055,38 @@ describe('@holo-js/forms client', () => {
     expect('valid' in fetchResult && fetchResult.valid === false).toBe(true)
     expect(fetchClient.errors.first('email')).toBe('Server says no.')
 
+    globalThis.fetch = vi.fn(async (): Promise<Response> => createJsonResponse({
+      type: 'failure',
+      status: 422,
+      data: JSON.stringify({
+        ok: false,
+        status: 422,
+        valid: false,
+        values: {
+          email: 'sveltekit-bad',
+          publishedAt: '2026-04-04T10:00:00.000Z',
+        },
+        errors: {
+          email: ['SvelteKit action says no.'],
+        },
+      }),
+    }))
+
+    const svelteKitActionClient = useForm(registerUser, {
+      action: '/register?/default',
+      initialValues: {
+        email: 'ava@example.com',
+        publishedAt: new Date('2026-04-04T10:00:00.000Z'),
+        profile: {
+          city: 'Cairo',
+        },
+      },
+    })
+    const svelteKitActionResult = await svelteKitActionClient.submit()
+    expect('ok' in svelteKitActionResult && svelteKitActionResult.ok === false).toBe(true)
+    expect(svelteKitActionClient.values.email).toBe('sveltekit-bad')
+    expect(svelteKitActionClient.errors.first('email')).toBe('SvelteKit action says no.')
+
     globalThis.fetch = vi.fn(async (): Promise<Response> => new Response(null, {
       status: 204,
     }))
@@ -1139,30 +1230,30 @@ describe('@holo-js/forms client', () => {
     }
 
     class BrowserFormData {
-      readonly #entries: [string, FormDataEntryValue][] = []
+      readonly #entries: [string, TestFormDataEntryValue][] = []
 
-      constructor(source?: { readonly __entries?: readonly (readonly [string, FormDataEntryValue])[] }) {
+      constructor(source?: { readonly __entries?: readonly (readonly [string, TestFormDataEntryValue])[] }) {
         for (const [key, value] of source?.__entries ?? []) {
           this.append(key, value)
         }
       }
 
-      append(key: string, value: FormDataEntryValue): void {
+      append(key: string, value: TestFormDataEntryValue): void {
         this.#entries.push([key, value])
       }
 
-      set(key: string, value: FormDataEntryValue): void {
+      set(key: string, value: TestFormDataEntryValue): void {
         const filtered = this.#entries.filter(([entryKey]) => entryKey !== key)
         filtered.push([key, value])
         this.#entries.length = 0
         this.#entries.push(...filtered)
       }
 
-      get(key: string): FormDataEntryValue | null {
+      get(key: string): TestFormDataEntryValue | null {
         return this.#entries.find(([entryKey]) => entryKey === key)?.[1] ?? null
       }
 
-      getAll(key: string): FormDataEntryValue[] {
+      getAll(key: string): TestFormDataEntryValue[] {
         return this.#entries
           .filter(([entryKey]) => entryKey === key)
           .map(([, value]) => value)
@@ -1172,11 +1263,11 @@ describe('@holo-js/forms client', () => {
         return this.#entries.some(([entryKey]) => entryKey === key)
       }
 
-      entries(): IterableIterator<[string, FormDataEntryValue]> {
+      entries(): IterableIterator<[string, TestFormDataEntryValue]> {
         return this.#entries[Symbol.iterator]()
       }
 
-      [Symbol.iterator](): IterableIterator<[string, FormDataEntryValue]> {
+      [Symbol.iterator](): IterableIterator<[string, TestFormDataEntryValue]> {
         return this.entries()
       }
     }
@@ -1216,7 +1307,7 @@ describe('@holo-js/forms client', () => {
     })
 
     class ThrowingBrowserFormData {
-      readonly #entries: [string, FormDataEntryValue][] = []
+      readonly #entries: [string, TestFormDataEntryValue][] = []
 
       constructor(source?: object) {
         if (source) {
@@ -1224,23 +1315,23 @@ describe('@holo-js/forms client', () => {
         }
       }
 
-      append(key: string, value: FormDataEntryValue): void {
+      append(key: string, value: TestFormDataEntryValue): void {
         this.#entries.push([key, value])
       }
 
-      set(key: string, value: FormDataEntryValue): void {
+      set(key: string, value: TestFormDataEntryValue): void {
         this.#entries.splice(0, this.#entries.length, [key, value])
       }
 
-      get(key: string): FormDataEntryValue | null {
+      get(key: string): TestFormDataEntryValue | null {
         return this.#entries.find(([entryKey]) => entryKey === key)?.[1] ?? null
       }
 
-      entries(): IterableIterator<[string, FormDataEntryValue]> {
+      entries(): IterableIterator<[string, TestFormDataEntryValue]> {
         return this.#entries[Symbol.iterator]()
       }
 
-      [Symbol.iterator](): IterableIterator<[string, FormDataEntryValue]> {
+      [Symbol.iterator](): IterableIterator<[string, TestFormDataEntryValue]> {
         return this.entries()
       }
     }
@@ -1379,6 +1470,74 @@ describe('@holo-js/forms client', () => {
         _root: ['Unable to submit the form right now. Please try again.'],
       },
     })
+  })
+
+  it('normalizes validation digests thrown across server action transports', async () => {
+    const registerUser = schema({
+      email: field.string().required().email(),
+      password: field.password().required(),
+    })
+    const validationError = ValidationException.withMessages({
+      email: ['These credentials do not match our records.'],
+      password: ['These credentials do not match our records.'],
+    })
+
+    const client = useForm(registerUser, {
+      initialValues: {
+        email: 'missing@example.com',
+        password: 'secret-secret',
+      },
+      async submitter() {
+        throw Object.assign(new Error(validationError.message), {
+          digest: validationError.digest,
+        })
+      },
+    })
+
+    const result = await client.submit()
+
+    expect('ok' in result && result.ok === false).toBe(true)
+    expect(client.values.email).toBe('missing@example.com')
+    expect(client.errors.first('email')).toBe('These credentials do not match our records.')
+    expect(client.errors.first('password')).toBe('These credentials do not match our records.')
+  })
+
+  it('normalizes thrown serialized form failures from fetch transports', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+      password: field.password().required(),
+    })
+
+    const client = useForm(login, {
+      initialValues: {
+        email: 'editor@example.com',
+        password: 'wrong-password',
+      },
+      async submitter() {
+        throw {
+          data: {
+            ok: false,
+            status: 422,
+            valid: false,
+            values: {
+              email: 'editor@example.com',
+            },
+            errors: {
+              email: ['These credentials do not match our records.'],
+              password: ['These credentials do not match our records.'],
+            },
+          },
+        }
+      },
+    })
+
+    const result = await client.submit()
+
+    expect('ok' in result && result.ok === false).toBe(true)
+    expect(client.values.email).toBe('editor@example.com')
+    expect(client.values.password).toBe('')
+    expect(client.errors.first('email')).toBe('These credentials do not match our records.')
+    expect(client.errors.first('password')).toBe('These credentials do not match our records.')
   })
 
   it('removes sensitive values from transport failure payloads', async () => {
@@ -1735,6 +1894,104 @@ describe('@holo-js/forms client', () => {
     const result = await pending
     expect('ok' in result && result.ok === true).toBe(true)
     expect(client.submitting).toBe(false)
+  })
+
+  it('submits concurrent browser forms with isolated explicit form context', async () => {
+    const registerUser = schema({
+      email: field.string().required().email(),
+    })
+    const submissions: Array<{
+      readonly action?: string
+      readonly email: string | undefined
+    }> = []
+    const firstForm: TestBrowserFormElement = {
+      action: 'https://example.com/first',
+      method: 'post',
+      controls: [
+        {
+          name: 'email',
+          value: 'first@example.com',
+        },
+      ],
+    }
+    const secondForm: TestBrowserFormElement = {
+      action: 'https://example.com/second',
+      method: 'post',
+      controls: [
+        {
+          name: 'email',
+          value: 'second@example.com',
+        },
+      ],
+    }
+
+    globalThis.FormData = TestBrowserFormData as unknown as typeof FormData
+
+    const firstClient = useForm(registerUser, {
+      submitter(context) {
+        submissions.push({
+          action: context.action,
+          email: context.formData.get('email')?.toString(),
+        })
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            saved: 'first',
+          },
+        }
+      },
+    })
+    const secondClient = useForm(registerUser, {
+      submitter(context) {
+        submissions.push({
+          action: context.action,
+          email: context.formData.get('email')?.toString(),
+        })
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            saved: 'second',
+          },
+        }
+      },
+    })
+
+    await Promise.all([
+      runWithBrowserFormElement(firstClient, firstForm),
+      runWithBrowserFormElement(secondClient, secondForm),
+    ])
+
+    expect(submissions).toEqual([
+      {
+        action: 'https://example.com/first',
+        email: 'first@example.com',
+      },
+      {
+        action: 'https://example.com/second',
+        email: 'second@example.com',
+      },
+    ])
+  })
+
+  it('falls back to submit when a form client has no explicit browser form context hook', async () => {
+    const result = await runWithBrowserFormElement({
+      submit: async () => ({
+        ok: true,
+        status: 200,
+        data: 'fallback',
+      }),
+    }, {
+      action: 'https://example.com/fallback',
+      method: 'post',
+    })
+
+    expect(result).toEqual({
+      ok: true,
+      status: 200,
+      data: 'fallback',
+    })
   })
 
   it('ignores empty paths when setting values', async () => {

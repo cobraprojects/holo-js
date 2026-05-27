@@ -6,9 +6,14 @@ everywhere, or pass schemas directly to framework-native tools that accept Stand
 ## The rule
 
 - `@holo-js/validation` owns parsing, errors, and Standard Schema conformance.
-- `@holo-js/forms` owns the submission contract and client form state.
+- `@holo-js/forms` owns form parsing, non-throwing `safeParse(...)` submissions, validation exceptions,
+  and client form state.
 - Adapters provide framework-reactive `useForm(...)` wrappers.
+- Adapters serialize `ValidationException` into the host framework response shape.
 - Schemas work natively with any tool that accepts Standard Schema V1.
+
+`validate(...)` returns typed data when valid and throws `ValidationException` when invalid. Use
+`safeParse(...)` only when you explicitly want to inspect `submission.valid` yourself.
 
 ## Server route examples
 
@@ -23,15 +28,11 @@ const loginForm = schema({
 })
 
 export async function POST(request: Request) {
-  const submission = await validate(request, loginForm, {
+  const data = await validate(request, loginForm, {
     throttle: 'login',
   })
 
-  if (!submission.valid) {
-    return Response.json(submission.fail(), { status: submission.fail().status })
-  }
-
-  return Response.json(submission.success({ message: 'Logged in.' }))
+  return Response.json({ ok: true, email: data.email })
 }
 ```
 
@@ -45,20 +46,15 @@ const loginForm = schema({
 })
 
 export default defineEventHandler(async (event) => {
-  const submission = await validate(event, loginForm, {
+  const data = await validate(event, loginForm, {
     throttle: 'login',
   })
 
-  if (!submission.valid) {
-    return submission.fail()
-  }
-
-  return submission.success({ message: 'Logged in.' })
+  return { ok: true, email: data.email }
 })
 ```
 
 ```ts [SvelteKit actions — src/routes/login/+page.server.ts]
-import { fail } from '@sveltejs/kit'
 import { field, schema, validate } from '@holo-js/forms'
 
 const loginForm = schema({
@@ -68,16 +64,11 @@ const loginForm = schema({
 
 export const actions = {
   default: async ({ request }) => {
-    const submission = await validate(request, loginForm, {
+    const data = await validate(request, loginForm, {
       throttle: 'login',
     })
 
-    if (!submission.valid) {
-      const failure = submission.fail()
-      return fail(failure.status, failure)
-    }
-
-    return submission.success({ message: 'Logged in.' })
+    return { ok: true, email: data.email }
   },
 }
 ```
@@ -119,23 +110,19 @@ Use `refreshUser()` only for client-side mutations that stay on the current rout
 'use server'
 
 import { login } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
+import { validate, ValidationException } from '@holo-js/forms'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { loginForm } from '@/lib/schemas/login'
 
 export async function loginAction(formData: FormData) {
-  const submission = await validate(formData, loginForm, {
+  const data = await validate(formData, loginForm, {
     throttle: 'login',
   })
 
-  if (!submission.valid) {
-    return submission.fail()
-  }
-
-  const { data: session, error } = await login(submission.data)
+  const { data: session, error } = await login(data)
   if (error) {
-    return submission.fail({ status: error.status, errors: error.fields })
+    throw ValidationException.withMessages(error.fields)
   }
 
   revalidatePath('/', 'layout')
@@ -183,26 +170,20 @@ const form = useForm(loginForm, {
 ```
 
 ```ts [SvelteKit — src/routes/login/+page.server.ts]
-import { fail, redirect } from '@sveltejs/kit'
+import { redirect } from '@sveltejs/kit'
 import { login } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
+import { validate, ValidationException } from '@holo-js/forms'
 import { loginForm } from '$lib/schemas/login'
 
 export const actions = {
   default: async ({ request }) => {
-    const submission = await validate(request, loginForm, {
+    const data = await validate(request, loginForm, {
       throttle: 'login',
     })
 
-    if (!submission.valid) {
-      const failure = submission.fail()
-      return fail(failure.status, failure)
-    }
-
-    const { data: session, error } = await login(submission.data)
+    const { data: session, error } = await login(data)
     if (error) {
-      const failure = submission.fail({ status: error.status, errors: error.fields })
-      return fail(failure.status, failure)
+      throw ValidationException.withMessages(error.fields)
     }
 
     redirect(303, session.emailVerificationRequired ? session.emailVerificationRoute ?? '/verify-email' : '/admin')
@@ -241,7 +222,7 @@ SvelteKit users have three options for server validation. All three accept Holo 
 
 | Path | Server entry | Client error handling |
 |---|---|---|
-| Form actions | `+page.server.ts` with `validate(...)` | SvelteKit `form` prop from `fail(...)` |
+| Form actions | `+page.server.ts` with `validate(...)` | `useValidationErrors()` or `useForm(...)` |
 | Remote functions | `.remote.ts` with `form()` / `query()` / `command()` | `login.issues` / `login.input` (SvelteKit native) |
 | `useForm(...)` | Any API route with `validate(...)` | `form.errors.has()` / `form.errors.first()` (Holo) |
 
@@ -258,6 +239,61 @@ For native SvelteKit form actions, render the CSRF field from server data as a h
 
 The security middleware creates the CSRF cookie before pages render, so app pages should not set the
 CSRF cookie manually.
+
+If a Nuxt or SvelteKit page is using native server forms instead of `useForm(...)`, read the current
+validation bag where you want to render the messages:
+
+::: code-group
+
+```vue [Nuxt]
+<script setup lang="ts">
+import { useValidationErrors } from '@holo-js/adapter-nuxt/client'
+
+const errors = useValidationErrors()
+</script>
+
+<template>
+  <p v-if="errors.has('image')">{{ errors.first('image') }}</p>
+</template>
+```
+
+```svelte [SvelteKit]
+<script lang="ts">
+  import { useValidationErrors } from '@holo-js/adapter-sveltekit/client'
+
+  const errors = useValidationErrors()
+</script>
+
+{#if errors.has('image')}
+  <p>{errors.first('image')}</p>
+{/if}
+```
+
+:::
+
+## SvelteKit config
+
+SvelteKit apps should wrap their config with `withHoloSvelteKit(...)`. The wrapper installs the generated
+Holo hook bridge and the Svelte compiler integration needed for reactive `useForm(...)` state.
+
+```js [svelte.config.js]
+import adapter from '@sveltejs/adapter-node'
+import { vitePreprocess } from '@sveltejs/vite-plugin-svelte'
+import { withHoloSvelteKit } from '@holo-js/adapter-sveltekit/config'
+
+/** @type {import('@sveltejs/kit').Config} */
+const config = withHoloSvelteKit({
+  preprocess: vitePreprocess(),
+  kit: {
+    adapter: adapter(),
+  },
+})
+
+export default config
+```
+
+`holo prepare` writes this wrapper during scaffold and preserves unrelated user config. Do not wire
+`.holo-js/generated/hooks.server` or `.holo-js/generated/hooks` manually; the wrapper owns those paths.
 
 ## Standard Schema interop
 

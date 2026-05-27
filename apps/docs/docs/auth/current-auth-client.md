@@ -52,23 +52,19 @@ routes from `useForm(...)`, then call `refreshUser()` and navigate with the fram
 'use server'
 
 import { login } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
+import { validate, ValidationException } from '@holo-js/forms'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { loginForm } from '@/lib/schemas/login'
 
 export async function loginAction(formData: FormData) {
-  const submission = await validate(formData, loginForm, {
+  const data = await validate(formData, loginForm, {
     throttle: 'login',
   })
 
-  if (!submission.valid) {
-    return submission.fail()
-  }
-
-  const { data: session, error } = await login(submission.data)
+  const { data: session, error } = await login(data)
   if (error) {
-    return submission.fail({ status: error.status, errors: error.fields })
+    throw ValidationException.withMessages(error.fields)
   }
 
   revalidatePath('/', 'layout')
@@ -124,28 +120,25 @@ const form = useForm(loginForm, {
 ```ts [SvelteKit — src/routes/api/login/+server.ts]
 import { json } from '@sveltejs/kit'
 import { login } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
+import { validate, ValidationException } from '@holo-js/forms'
 import { loginForm } from '$lib/schemas/login'
 
 export async function POST({ request }: { request: Request }) {
-  const submission = await validate(request, loginForm, {
+  const data = await validate(request, loginForm, {
     throttle: 'login',
   })
 
-  if (!submission.valid) {
-    const failure = submission.fail()
-    return json(failure, { status: failure.status })
-  }
-
-  const { data: session, error } = await login(submission.data)
+  const { data: session, error } = await login(data)
   if (error) {
-    const failure = submission.fail({ status: error.status, errors: error.fields })
-    return json(failure, { status: failure.status })
+    throw ValidationException.withMessages(error.fields)
   }
 
-  return json(submission.success({
-    redirectTo: session.emailVerificationRequired ? session.emailVerificationRoute ?? '/verify-email' : '/admin',
-  }))
+  return json({
+    ok: true,
+    data: {
+      redirectTo: session.emailVerificationRequired ? session.emailVerificationRoute ?? '/verify-email' : '/admin',
+    },
+  })
 }
 ```
 

@@ -32,6 +32,7 @@ export interface FileRateLimitStoreOptions {
 }
 
 const LOCK_OWNER_FILE = 'owner'
+const BUCKETS_DIRECTORY = 'buckets'
 
 function createBucketHash(key: string): string {
   return createHash('sha256').update(key).digest('hex')
@@ -58,7 +59,7 @@ function createBucketPrefixHashes(key: string): string[] {
 
 function getBucketPath(root: string, key: string): string {
   const hash = createBucketHash(key)
-  return join(root, hash.slice(0, 2), hash.slice(2, 4), `${hash}.json`)
+  return join(root, BUCKETS_DIRECTORY, hash.slice(0, 2), hash.slice(2, 4), `${hash}.json`)
 }
 
 function serializeBucket(bucket: FileRateLimitBucket): string {

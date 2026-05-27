@@ -530,9 +530,13 @@ async function linkWorkspaceBroadcast(projectRoot: string): Promise<void> {
 }
 
 async function writeFrameworkBinary(projectRoot: string, binaryName: string): Promise<void> {
+  await writeFrameworkBinaryScript(projectRoot, binaryName, '#!/usr/bin/env node\nconsole.log(process.argv.slice(2).join(" "))\n')
+}
+
+async function writeFrameworkBinaryScript(projectRoot: string, binaryName: string, script: string): Promise<void> {
   const binPath = join(projectRoot, 'node_modules', '.bin', binaryName)
   await mkdir(dirname(binPath), { recursive: true })
-  await writeFile(binPath, '#!/usr/bin/env node\nconsole.log(process.argv.slice(2).join(" "))\n', 'utf8')
+  await writeFile(binPath, script, 'utf8')
   await chmod(binPath, 0o755)
 }
 
@@ -1506,6 +1510,13 @@ throw new Error('APP_KEY is required before config can load')
       databaseDriver: 'sqlite',
       packageManager: 'bun',
       storageDefaultDisk: 'local',
+    }).find(file => file.path === 'svelte.config.js')?.contents).toContain('withHoloSvelteKit')
+    expect(projectInternals.renderFrameworkFiles({
+      projectName: 'Svelte App',
+      framework: 'sveltekit',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
     }).find(file => file.path === 'src/hooks.ts')?.contents).toContain('export {}')
     expect(projectInternals.renderFrameworkFiles({
       projectName: 'Svelte App',
@@ -1836,6 +1847,28 @@ throw new Error('APP_KEY is required before config can load')
     // Cover resolveBroadcastConfigTargetPath with cjs format
     expect(projectInternals.resolveBroadcastConfigTargetPath('/project', 'config/app.json', 'cjs')).toContain('broadcast.cjs')
   }, 30000)
+
+  it('suppresses SvelteKit semver circular dependency warnings in the framework runner', async () => {
+    const projectRoot = await createTempDirectory()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }))
+    await writeProjectFile(projectRoot, '.holo-js/framework/run.mjs', projectInternals.renderFrameworkRunner({ framework: 'sveltekit' }))
+    await writeFrameworkBinaryScript(projectRoot, 'vite', [
+      '#!/usr/bin/env node',
+      'console.log(process.argv.slice(2).join(" "))',
+      'console.warn(\'Circular dependency: ../../node_modules/.bun/semver@7.7.4/node_modules/semver/classes/range.js -> ../../node_modules/.bun/semver@7.7.4/node_modules/semver/classes/comparator.js -> ../../node_modules/.bun/semver@7.7.4/node_modules/semver/classes/range.js\')',
+      'console.warn(\'framework warning\')',
+      '',
+    ].join('\n'))
+
+    const result = runNodeScript(projectRoot, join(projectRoot, '.holo-js/framework/run.mjs'), ['build'])
+
+    expect(result.status, result.stderr || result.stdout).toBe(0)
+    expect(result.stdout).toContain('build --logLevel error')
+    expect(result.stderr).not.toContain('Circular dependency:')
+    expect(result.stderr).toContain('framework warning')
+  })
 
   it('normalizes scaffold env segments and renders empty env file contents directly', () => {
     expect(projectInternals.normalizeScaffoldEnvSegments(`
@@ -10416,6 +10449,7 @@ export default defineConfig({
     expect(generatedServerHooks).toContain('serializeHoloValidationException')
     expect(generatedServerHooks).toContain('adapterSvelteKitInternals.serializeValidationException(cause)')
     expect(generatedServerHooks).toContain('adapterSvelteKitInternals.mapValidationActionResponse(event, response)')
+    expect(generatedServerHooks).toContain('adapterSvelteKitInternals.isApiEvent(event)')
     expect(generatedServerHooks).toContain('adapterSvelteKitInternals.rememberValidationActionFailure(input.event, validationPayload)')
     expect(generatedServerHooks).toContain('export const handleError = holoHandleError')
     expect(generatedServerHooks).not.toContain('event.url.pathname =')
@@ -10426,8 +10460,10 @@ export default defineConfig({
 
     // Existing svelte.config.js is patched with the hooks override.
     const svelteConfig = await readFile(join(projectRoot, 'svelte.config.js'), 'utf8')
-    expect(svelteConfig).toContain('.holo-js/generated/hooks.server')
-    expect(svelteConfig).toContain('.holo-js/generated/hooks')
+    expect(svelteConfig).toContain('withHoloSvelteKit')
+    expect(svelteConfig).toContain('@holo-js/adapter-sveltekit/config')
+    expect(svelteConfig).not.toContain('.holo-js/generated/hooks.server')
+    expect(svelteConfig).not.toContain('.holo-js/generated/hooks')
   }, 30000)
 
   it('preserves legacy SvelteKit hook extension files when no migration occurs', async () => {
@@ -10481,10 +10517,72 @@ export default defineConfig({
     const svelteConfig = await readFile(join(projectRoot, 'svelte.config.js'), 'utf8')
     expect(svelteConfig).toContain('kit: {')
     expect(svelteConfig).toContain('adapter: adapter()')
-    expect(svelteConfig).toContain('.holo-js/generated/hooks.server')
-    expect(svelteConfig).toContain('.holo-js/generated/hooks')
-    expect(svelteConfig).toContain('files: {')
+    expect(svelteConfig).toContain('withHoloSvelteKit')
+    expect(svelteConfig).not.toContain('.holo-js/generated/hooks.server')
+    expect(svelteConfig).not.toContain('.holo-js/generated/hooks')
     expect(svelteConfig).not.toContain('kit: { adapter: adapter() },\n    files:')
+  }, 30000)
+
+  it('wraps SvelteKit config without deleting unrelated user configuration', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
+    await writeProjectFile(projectRoot, 'svelte.config.js', [
+      'import adapter from \'@sveltejs/adapter-node\'',
+      'import { vitePreprocess } from \'@sveltejs/vite-plugin-svelte\'',
+      '',
+      'const config = {',
+      '  preprocess: vitePreprocess(),',
+      '  extensions: [\'.svelte\', \'.svx\'],',
+      '  kit: {',
+      '    adapter: adapter(),',
+      '    alias: {',
+      '      $components: \'./src/components\',',
+      '    },',
+      '    files: {',
+      '      assets: \'assets\',',
+      '    },',
+      '  },',
+      '}',
+      '',
+      'export default config',
+      '',
+    ].join('\n'))
+
+    await withFakeBun(async () => {
+      await cliInternals.runProjectPrepare(projectRoot)
+    })
+
+    const svelteConfig = await readFile(join(projectRoot, 'svelte.config.js'), 'utf8')
+    expect(svelteConfig).toContain('withHoloSvelteKit')
+    expect(svelteConfig).toContain('preprocess: vitePreprocess()')
+    expect(svelteConfig).toContain('extensions: [\'.svelte\', \'.svx\']')
+    expect(svelteConfig).toContain('$components: \'./src/components\'')
+    expect(svelteConfig).toContain('assets: \'assets\'')
+  }, 30000)
+
+  it('wraps SvelteKit config with compact export spacing', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
+    await writeProjectFile(projectRoot, 'svelte.config.js', [
+      'import adapter from \'@sveltejs/adapter-node\'',
+      '',
+      'const config = {',
+      '  kit: {',
+      '    adapter: adapter(),',
+      '  },',
+      '} export   default   config',
+      '',
+    ].join('\n'))
+
+    await withFakeBun(async () => {
+      await cliInternals.runProjectPrepare(projectRoot)
+    })
+
+    const svelteConfig = await readFile(join(projectRoot, 'svelte.config.js'), 'utf8')
+    expect(svelteConfig).toContain('withHoloSvelteKit')
+    expect(svelteConfig).toContain('})\n\nexport default config')
   }, 30000)
 
   it('fails prepare for unsupported custom SvelteKit hook entrypoints', async () => {

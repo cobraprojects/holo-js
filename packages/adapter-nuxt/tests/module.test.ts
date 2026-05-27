@@ -372,7 +372,7 @@ export default defineDatabaseConfig({
     expect(addServerPlugin).toHaveBeenCalledWith('./runtime/plugins/init')
     expect(addServerPlugin).toHaveBeenCalledWith('./runtime/plugins/forms')
     expect(addImports).not.toHaveBeenCalled()
-    expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/imports')
+    expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/auto-imports')
     expect(addServerImportsDir).toHaveBeenCalledTimes(1)
     expect(nuxt.options.build.transpile).toContain('./runtime')
 
@@ -450,7 +450,7 @@ export default defineAppConfig({
 
     await module.setup({}, nuxt as never)
 
-    expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/imports')
+    expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/auto-imports')
     expect(addServerImportsDir).toHaveBeenCalledWith(resolve(root, '.holo-js/generated/nuxt-server-imports'))
     expect(addServerImportsDir).toHaveBeenCalledTimes(2)
     expect(addServerPlugin).toHaveBeenCalledWith(resolve(root, '.holo-js/generated/nuxt-server-imports/plugin.ts'))

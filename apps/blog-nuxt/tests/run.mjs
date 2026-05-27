@@ -415,33 +415,20 @@ async function assertAuthenticatedUserCanCreateAndUpdatePostImage({ baseUrl, jar
   oversizedFormData.set('categoryId', '')
   oversizedFormData.set('image', new Blob([oversizedImage], { type: 'image/png' }), 'too-large.png')
 
-  const oversized = await fetchText('/admin/posts/create', {
+  const oversized = await fetchJson('/admin/posts/create', {
     method: 'POST',
     body: oversizedFormData,
-    headers: {
-      accept: 'text/html',
-      origin: baseUrl,
-      referer: `${baseUrl}/admin/posts/new`,
-    },
+    headers: { origin: baseUrl },
     jar,
     allowFailure: true,
   })
-  assert.notEqual(oversized.response.status, 500, oversized.text)
-  assert.notEqual(
-    oversized.response.headers.get('content-type')?.toLowerCase().includes('application/json'),
-    true,
-    `Expected browser form validation failures to avoid raw JSON responses, received ${oversized.text}.`,
-  )
-  assert.equal(oversized.response.status, 303, oversized.text)
-  assert.equal(new URL(oversized.response.headers.get('location'), baseUrl).pathname, '/admin/posts/new')
-  assert.ok(
-    oversized.response.headers.get('set-cookie')?.includes('holo_form_failure='),
-    'Expected oversized upload response to flash the validation failure for the redirected form.',
-  )
-  const oversizedRedirectPage = await fetchText('/admin/posts/new', { jar })
-  assert.ok(
-    oversizedRedirectPage.text.includes('The selected file must be 2 MB or smaller.'),
-    'Expected the redirected form page to render the flashed validation error.',
+  assert.equal(oversized.response.status, 422)
+  assert.equal(oversized.json.ok, false)
+  assert.equal(oversized.json.valid, false)
+  assert.deepEqual(
+    oversized.json.errors?.image,
+    ['The selected file must be 2 MB or smaller.'],
+    'Expected the useForm submission path to return the oversized image validation error.',
   )
 
   const title = `User flow image ${Date.now()}`

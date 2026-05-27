@@ -56,7 +56,7 @@ import {
   resolveRequiredFieldName,
 } from '../src/runtime/failureFields'
 import { createLoginFailure, createRegistrationFailure } from '../src/runtime/sessionFailures'
-import { isValidationException, type ValidationErrorBag } from '@holo-js/validation'
+import { isValidationException, validationInternals, type ValidationErrorBag } from '@holo-js/validation'
 
 function hashPasswordResetEmail(email: string, csrfSigningKey?: string): string {
   const canonicalEmail = email.trim().toLowerCase()
@@ -686,6 +686,7 @@ function reconfigureAuthRuntimeWithSession(
 }
 
 afterEach(() => {
+  validationInternals.setValidationExceptionThrower(undefined)
   resetAuthRuntime()
   resetSessionRuntime()
   resetAuthClient()
@@ -1725,6 +1726,14 @@ describe('@holo-js/auth package runtime', () => {
       email: 'ava@example.com',
       password: 'bad-password',
     }), 'invalid_credentials')
+
+    const validationThrower = vi.fn()
+    validationInternals.setValidationExceptionThrower(validationThrower)
+    await expect(login({
+      email: 'ava@example.com',
+      password: 'bad-password',
+    })).rejects.toThrow('These credentials do not match our records.')
+    expect(validationThrower).toHaveBeenCalledOnce()
 
     expect(unwrapAuthResult(await login({
       email: 'ava@example.com',

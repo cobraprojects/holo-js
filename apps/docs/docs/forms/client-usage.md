@@ -9,8 +9,9 @@ Client validation is optional enhancement, not the source of truth.
 3. Submit to the server.
 4. Let the returned payload update client state automatically.
 
-The server validates with `validate(...)` and returns `submission.fail()` or `submission.success(...)`.
-`useForm(...)` applies that response and rebuilds the typed error bag on the client.
+The server validates with `validate(...)`. When validation fails, the framework adapter serializes the
+validation exception into the same error-bag payload that `useForm(...)` understands. When validation
+passes, return a normal success payload from the action or route.
 
 ## Shared schema
 
@@ -154,9 +155,121 @@ const form = useForm(registerUser, {
 With `validateOn: 'blur'`, calling `form.fields.name.onBlur()` validates that field path and updates that
 field's errors. It does not surface every other untouched field error in the form.
 
+## Nuxt submitter forms
+
+Use this path when JavaScript owns the form submission. The page uses `@submit.prevent`, the submitter sends
+the request, and validation messages come from `form.errors`.
+
+```vue [Nuxt — app/pages/posts/new.vue]
+<script setup lang="ts">
+import { useForm } from '@holo-js/adapter-nuxt/client'
+import { postForm } from '~/lib/schemas/post'
+
+const form = useForm(postForm, {
+  validateOn: 'blur',
+  initialValues: {
+    title: '',
+    body: '',
+    status: 'draft',
+  },
+  async submitter({ formData }) {
+    const submission = await $fetch('/api/posts', { method: 'POST', body: formData })
+    if (submission?.ok === true) {
+      await navigateTo('/posts')
+    }
+
+    return submission
+  },
+})
+</script>
+
+<template>
+  <form @submit.prevent="form.submit()">
+    <input name="title" v-model="form.values.title" @blur="form.fields.title.onBlur()" />
+    <p v-if="form.errors.has('title')">{{ form.errors.first('title') }}</p>
+
+    <textarea name="body" v-model="form.values.body" @blur="form.fields.body.onBlur()" />
+    <p v-if="form.errors.has('body')">{{ form.errors.first('body') }}</p>
+
+    <select name="status" v-model="form.values.status">
+      <option value="draft">Draft</option>
+      <option value="published">Published</option>
+    </select>
+
+    <button :disabled="form.submitting">
+      {{ form.submitting ? 'Saving...' : 'Save post' }}
+    </button>
+  </form>
+</template>
+```
+
+The server route validates with `validate(event, schema)` and returns a normal payload on success:
+
+```ts [Nuxt — server/api/posts.post.ts]
+import { validate } from '@holo-js/forms'
+import { postForm } from '~/lib/schemas/post'
+
+export default defineEventHandler(async (event) => {
+  const data = await validate(event, postForm)
+
+  await createPost(data)
+
+  return {
+    ok: true,
+    status: 201,
+  }
+})
+```
+
+Do not also add a native `action` to this form. `useValidationErrors(...)` is not part of this path.
+
+## Native form submits
+
+Use this path when the browser owns the form submission. The form has a native `action` and `method`, the
+server redirects back on validation failure, and the page reads flashed validation messages with
+`useValidationErrors(...)`.
+
+```vue [Nuxt — app/pages/posts/new.vue]
+<script setup lang="ts">
+import { useValidationErrors } from '@holo-js/adapter-nuxt/client'
+
+const errors = useValidationErrors()
+</script>
+
+<template>
+  <form action="/posts" method="post" enctype="multipart/form-data">
+    <input name="title" />
+    <p v-if="errors.has('title')">{{ errors.first('title') }}</p>
+
+    <textarea name="body" />
+    <p v-if="errors.has('body')">{{ errors.first('body') }}</p>
+
+    <button>Save post</button>
+  </form>
+</template>
+```
+
+```ts [Nuxt — server/routes/posts.post.ts]
+import { sendRedirect } from 'h3'
+import { validate } from '@holo-js/forms'
+import { postForm } from '~/lib/schemas/post'
+
+export default defineEventHandler(async (event) => {
+  const data = await validate(event, postForm)
+
+  await createPost(data)
+
+  return sendRedirect(event, '/posts', 303)
+})
+```
+
+Pick one path per form. `useForm(...)` owns client-side state and submitter responses. Native submits use
+redirects plus flashed errors.
+
 ## What happens on failure
 
-If the server returns `submission.fail()`, `useForm(...)` applies that payload automatically:
+If the server throws a validation exception or returns a compatible failure payload, `useForm(...)`
+applies it automatically:
 
 - `form.fields.email.errors` is updated
 - `form.errors.first('email')` works

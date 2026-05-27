@@ -59,6 +59,34 @@ type SubmittedFormFailurePayload<TData> = FormFailurePayload<TData> & {
   readonly submitted: true
 }
 
+type SvelteKitActionFailureResult = {
+  readonly type: 'failure'
+  readonly status: number
+  readonly data: string
+}
+
+type SvelteKitActionErrorResult = {
+  readonly type: 'error'
+  readonly error: unknown
+}
+
+type BrowserFormElement = {
+  readonly action?: string
+  readonly method?: string
+}
+
+const browserFormSubmitSymbol: unique symbol = Symbol('browserFormSubmit')
+
+type BrowserFormSubmitter<TData, TSuccess> = {
+  readonly [browserFormSubmitSymbol]: (form: BrowserFormElement) => Promise<ClientSubmitResult<TData, TSuccess>>
+}
+
+function isBrowserFormSubmitter<TData, TSuccess>(
+  value: Pick<UseFormResult<TData, TSuccess>, 'submit'>,
+): value is Pick<UseFormResult<TData, TSuccess>, 'submit'> & BrowserFormSubmitter<TData, TSuccess> {
+  return browserFormSubmitSymbol in value
+}
+
 export interface UseFormOptions<TData, TSuccess = unknown> {
   readonly action?: string
   readonly method?: string
@@ -350,6 +378,10 @@ function mergeValues<TData>(base: TData, override: Partial<TData> | undefined): 
 
   const output = cloneValue(base) as Record<string, unknown>
   for (const [key, value] of Object.entries(override)) {
+    if (typeof value === 'undefined' && key in output) {
+      continue
+    }
+
     if (isPlainObject(value) && isPlainObject(output[key])) {
       output[key] = mergeValues(output[key] as Record<string, unknown>, value)
       continue
@@ -465,15 +497,19 @@ function buildFormData(value: unknown, path = '', formData: FormData = new FormD
   return formData
 }
 
-function getActiveBrowserFormData(): FormData | undefined {
+function getActiveElementBrowserForm(): BrowserFormElement | undefined {
   const activeElement = (globalThis as {
     readonly document?: {
       readonly activeElement?: {
-        readonly form?: object | null
+        readonly form?: BrowserFormElement | null
       } | null
     }
   }).document?.activeElement
-  const form = activeElement?.form
+
+  return activeElement?.form ?? undefined
+}
+
+function getActiveBrowserFormData(form: BrowserFormElement | undefined): FormData | undefined {
   if (!form) {
     return undefined
   }
@@ -483,6 +519,17 @@ function getActiveBrowserFormData(): FormData | undefined {
   } catch {
     return undefined
   }
+}
+
+export async function runWithBrowserFormElement<TData, TSuccess>(
+  formClient: Pick<UseFormResult<TData, TSuccess>, 'submit'>,
+  form: BrowserFormElement,
+): Promise<ClientSubmitResult<TData, TSuccess>> {
+  if (isBrowserFormSubmitter(formClient)) {
+    return await formClient[browserFormSubmitSymbol](form)
+  }
+
+  return await formClient.submit()
 }
 
 function createTypedErrorBag<TData>(flattenedErrors: Record<string, readonly string[]>): ValidationErrorBag<TData> {
@@ -648,11 +695,65 @@ function isSerializedSubmission<TData, TSuccess>(
   return 'submitted' in value && 'errors' in value && 'values' in value && !('ok' in value)
 }
 
+function isFormFailurePayload<TData>(value: unknown): value is FormFailurePayload<TData> {
+  return isPlainObject(value)
+    && value.ok === false
+    && typeof value.status === 'number'
+    && value.valid === false
+    && isPlainObject(value.values)
+    && isPlainObject(value.errors)
+}
+
+function isSvelteKitActionFailureResult(value: unknown): value is SvelteKitActionFailureResult {
+  return isPlainObject(value)
+    && value.type === 'failure'
+    && typeof value.status === 'number'
+    && typeof value.data === 'string'
+}
+
+function isSvelteKitActionErrorResult(value: unknown): value is SvelteKitActionErrorResult {
+  return isPlainObject(value)
+    && value.type === 'error'
+    && isPlainObject(value.error)
+}
+
+function parseJsonObject(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    return undefined
+  }
+}
+
+function normalizeSvelteKitActionResult<TData>(
+  result: unknown,
+): SubmittedFormFailurePayload<TData> | undefined {
+  const payload = isSvelteKitActionFailureResult(result)
+    ? parseJsonObject(result.data)
+    : isSvelteKitActionErrorResult(result)
+      ? result.error
+      : undefined
+
+  if (!isFormFailurePayload<TData>(payload)) {
+    return undefined
+  }
+
+  return {
+    ...payload,
+    submitted: true,
+  }
+}
+
 function normalizeSubmissionLike<TData, TSuccess>(
   schemaDefinition: FormSchema,
   values: TData,
   result: ClientSubmitResult<TData, TSuccess>,
 ): NormalizedClientSubmitResult<TData, TSuccess> {
+  const svelteKitActionResult = normalizeSvelteKitActionResult<TData>(result)
+  if (svelteKitActionResult) {
+    return svelteKitActionResult
+  }
+
   if (isSubmissionResult(result)) {
     return result
   }
@@ -876,6 +977,57 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
     return normalizedSubmission
   }
 
+  async function submit(browserForm?: BrowserFormElement): Promise<ClientSubmitResult<TData, TSuccess>> {
+    state.submitting = true
+    notifyListeners(state)
+    try {
+      const submitter = options.submitter ?? defaultSubmitter<TData, TSuccess>
+      const liveForm = browserForm ?? getActiveElementBrowserForm()
+      const method = options.method ?? liveForm?.method ?? 'POST'
+      const action = options.action ?? liveForm?.action
+      const liveFormData = getActiveBrowserFormData(liveForm)
+      const formData = liveFormData ?? buildFormData(state.values)
+      const localSubmission = liveFormData
+        ? await runValidationForInput(liveFormData)
+        : await runValidation()
+
+      if (!localSubmission.valid) {
+        return localSubmission
+      }
+
+      if (!isSafeMethod(method)) {
+        const csrfField = await getClientCsrfField()
+        if (csrfField) {
+          formData.set(csrfField.name, csrfField.value)
+        }
+      }
+
+      let response: ClientSubmitResult<TData, TSuccess> | void
+      try {
+        response = await submitter({
+          action,
+          method,
+          values: localSubmission.data,
+          formData,
+        })
+      } catch (error) {
+        return applyServerState(
+          validationExceptionToFailure<TData>(error, state.values)
+            ?? createTransportFailure(state.values),
+        )
+      }
+
+      return applyServerState(response ?? {
+        ok: true,
+        status: 204,
+        data: undefined,
+      } as FormSuccessPayload<TSuccess>)
+    } finally {
+      state.submitting = false
+      notifyListeners(state)
+    }
+  }
+
   return Object.freeze({
     fields,
     get values() {
@@ -906,53 +1058,11 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
       const submission = await runValidation()
       return submission.errors.get(path)
     },
-    async submit() {
-      state.submitting = true
-      notifyListeners(state)
-      try {
-        const submitter = options.submitter ?? defaultSubmitter<TData, TSuccess>
-        const method = options.method ?? 'POST'
-        const liveFormData = getActiveBrowserFormData()
-        const formData = liveFormData ?? buildFormData(state.values)
-        const localSubmission = liveFormData
-          ? await runValidationForInput(liveFormData)
-          : await runValidation()
-
-        if (!localSubmission.valid) {
-          return localSubmission
-        }
-
-        if (!isSafeMethod(method)) {
-          const csrfField = await getClientCsrfField()
-          if (csrfField) {
-            formData.set(csrfField.name, csrfField.value)
-          }
-        }
-
-        let response: ClientSubmitResult<TData, TSuccess> | void
-        try {
-          response = await submitter({
-            action: options.action,
-            method,
-            values: localSubmission.data,
-            formData,
-          })
-        } catch (error) {
-          return applyServerState(
-            validationExceptionToFailure<TData>(error, state.values)
-              ?? createTransportFailure(state.values),
-          )
-        }
-
-        return applyServerState(response ?? {
-          ok: true,
-          status: 204,
-          data: undefined,
-        } as FormSuccessPayload<TSuccess>)
-      } finally {
-        state.submitting = false
-        notifyListeners(state)
-      }
+    submit() {
+      return submit()
+    },
+    [browserFormSubmitSymbol](form: BrowserFormElement) {
+      return submit(form)
     },
     reset(values?: Partial<TData>) {
       const next = mergeValues(state.initialValues, values)

@@ -91,6 +91,15 @@ function resolveRuleMessage(rule: FieldRule | undefined, fallback: string): stri
   return rule?.message ?? fallback
 }
 
+function formatByteSizeLimit(value: number | string, bytes: number): string {
+  if (typeof value === 'number') {
+    return `${bytes} ${bytes === 1 ? 'byte' : 'bytes'}`
+  }
+
+  const trimmed = value.trim()
+  return `${trimmed.slice(0, -2)} ${trimmed.slice(-2).toUpperCase()}`
+}
+
 function getRule(definition: FieldDefinition, name: FieldRule['name']): FieldRule | undefined {
   return definition.rules.find(rule => rule.name === name)
 }
@@ -105,11 +114,11 @@ function isMissingValue(value: unknown, kind: FieldKind): boolean {
   }
 
   if (kind === 'string') {
-    return typeof value !== 'string' || value.trim().length === 0
+    return typeof value === 'string' && value.trim().length === 0
   }
 
   if (kind === 'array') {
-    return !Array.isArray(value) || value.length === 0
+    return Array.isArray(value) && value.length === 0
   }
 
   return false
@@ -185,7 +194,7 @@ async function applyPostFieldRules(
           const rawMimeType = (value as WebFileLike).type
           const mimeType = typeof rawMimeType === 'string' ? rawMimeType : ''
           if (!mimeType.toLowerCase().startsWith('image/')) {
-            pushIssue(issues, context.path, resolveRuleMessage(rule, 'File must be an image.'))
+            pushIssue(issues, context.path, resolveRuleMessage(rule, 'The selected file must be an image.'))
           }
         }
         break
@@ -233,39 +242,39 @@ async function applyPostFieldRules(
         const todayEnd = endOfToday()
 
         if (rule.name === 'before' && targetDate && !(dateValue.getTime() < targetDate.getTime())) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, `Date must be before ${targetDate.toISOString()}.`))
+          pushIssue(issues, context.path, resolveRuleMessage(rule, `This field must be before ${targetDate.toISOString()}.`))
         }
 
         if (rule.name === 'after' && targetDate && !(dateValue.getTime() > targetDate.getTime())) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, `Date must be after ${targetDate.toISOString()}.`))
+          pushIssue(issues, context.path, resolveRuleMessage(rule, `This field must be after ${targetDate.toISOString()}.`))
         }
 
         if (rule.name === 'beforeOrEqual' && targetDate && !(dateValue.getTime() <= targetDate.getTime())) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, `Date must be before or equal to ${targetDate.toISOString()}.`))
+          pushIssue(issues, context.path, resolveRuleMessage(rule, `This field must be before or equal to ${targetDate.toISOString()}.`))
         }
 
         if (rule.name === 'afterOrEqual' && targetDate && !(dateValue.getTime() >= targetDate.getTime())) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, `Date must be after or equal to ${targetDate.toISOString()}.`))
+          pushIssue(issues, context.path, resolveRuleMessage(rule, `This field must be after or equal to ${targetDate.toISOString()}.`))
         }
 
         if (rule.name === 'today' && !isSameLocalDay(dateValue, todayStart)) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, 'Date must be today.'))
+          pushIssue(issues, context.path, resolveRuleMessage(rule, 'This field must be today.'))
         }
 
         if (rule.name === 'beforeToday' && !(dateValue.getTime() < todayStart.getTime())) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, 'Date must be before today.'))
+          pushIssue(issues, context.path, resolveRuleMessage(rule, 'This field must be before today.'))
         }
 
         if ((rule.name === 'todayOrBefore' || rule.name === 'beforeOrToday') && !(dateValue.getTime() <= todayEnd.getTime())) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, 'Date must be today or before.'))
+          pushIssue(issues, context.path, resolveRuleMessage(rule, 'This field must be today or before.'))
         }
 
         if (rule.name === 'afterToday' && !(dateValue.getTime() > todayEnd.getTime())) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, 'Date must be after today.'))
+          pushIssue(issues, context.path, resolveRuleMessage(rule, 'This field must be after today.'))
         }
 
         if ((rule.name === 'todayOrAfter' || rule.name === 'afterOrToday') && !(dateValue.getTime() >= todayStart.getTime())) {
-          pushIssue(issues, context.path, resolveRuleMessage(rule, 'Date must be today or after.'))
+          pushIssue(issues, context.path, resolveRuleMessage(rule, 'This field must be today or after.'))
         }
 
         break
@@ -273,9 +282,10 @@ async function applyPostFieldRules(
       case 'max': {
         const fileSize = (shapeRuleValue as WebFileLike).size
         if (definition.kind === 'file' && typeof fileSize === 'number') {
-          const limit = parseByteSize(rule.args[0] as number | string)
+          const rawLimit = rule.args[0] as number | string
+          const limit = parseByteSize(rawLimit)
           if (fileSize > limit) {
-            pushIssue(issues, context.path, resolveRuleMessage(rule, `File size must be at most ${limit} bytes.`))
+            pushIssue(issues, context.path, resolveRuleMessage(rule, `The selected file must be ${formatByteSizeLimit(rawLimit, limit)} or smaller.`))
           }
         }
         break
@@ -283,7 +293,7 @@ async function applyPostFieldRules(
       case 'size': {
         if (definition.kind === 'file' && typeof (shapeRuleValue as WebFileLike).size === 'number' && typeof rule.args[0] === 'number') {
           if ((shapeRuleValue as WebFileLike).size !== rule.args[0]) {
-            pushIssue(issues, context.path, resolveRuleMessage(rule, `File size must be exactly ${rule.args[0]} bytes.`))
+            pushIssue(issues, context.path, resolveRuleMessage(rule, `The selected file must be exactly ${formatByteSizeLimit(rule.args[0], rule.args[0])}.`))
           }
         }
         break

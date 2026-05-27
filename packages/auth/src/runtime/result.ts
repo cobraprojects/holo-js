@@ -74,10 +74,10 @@ export function unwrapExpectedAuthResult<TData, TCode extends AuthErrorCode, TFi
   result: AuthResult<TData, TCode, TFields>,
 ): TData {
   if (result.error) {
-    throw validationInternals.setValidationExceptionStatus(
+    return validationInternals.throwValidationException(validationInternals.setValidationExceptionStatus(
       ValidationException.withMessages(normalizeFieldErrors(result.error.fields)),
       result.error.status,
-    )
+    ))
   }
 
   return result.data

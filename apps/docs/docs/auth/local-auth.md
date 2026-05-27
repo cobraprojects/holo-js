@@ -425,7 +425,7 @@ Your framework route owns parsing and response formatting. The auth package only
 
 ```ts
 import { login } from '@holo-js/auth'
-import { field, schema, validate } from '@holo-js/forms'
+import { field, schema, validate, ValidationException } from '@holo-js/forms'
 
 const loginForm = schema({
   email: field.string().required().email(),
@@ -433,20 +433,12 @@ const loginForm = schema({
 })
 
 export async function POST(request: Request) {
-  const submission = await validate(request, loginForm)
-  if (!submission.valid) {
-    return Response.json(submission.fail(), { status: submission.fail().status })
-  }
+  const data = await validate(request, loginForm)
 
-  const { data: session, error } = await login(submission.data)
+  const { data: session, error } = await login(data)
 
   if (error) {
-    const failure = submission.fail({
-      status: error.status,
-      errors: error.fields,
-    })
-
-    return Response.json(failure, { status: failure.status })
+    throw ValidationException.withMessages(error.fields)
   }
 
   return Response.json({

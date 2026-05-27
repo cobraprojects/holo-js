@@ -7,12 +7,13 @@ validation as optional enhancement.
 
 ## Full server validation example
 
-The browser submits a form, the server validates it, and the response returns either `submission.fail()`
-or `submission.success(...)`.
+The browser submits a form and the server validates it. `validate(...)` returns typed data when valid.
+When invalid, it throws `ValidationException`; framework adapters serialize that exception into a 422
+error-bag payload for the current framework.
 
 Use `field.password()` for password values and `.sensitive()` for any other submitted value that must
-never be flashed back to the client. `submission.fail()` and `submission.serialize()` remove those
-fields automatically.
+never be flashed back to the client. Validation exception serialization removes those fields
+automatically.
 
 ::: code-group
 
@@ -26,19 +27,15 @@ const loginForm = schema({
 })
 
 export async function POST(request: Request) {
-  const submission = await validate(request, loginForm, {
+  const data = await validate(request, loginForm, {
     throttle: 'login',
   })
 
-  if (!submission.valid) {
-    return Response.json(submission.fail(), {
-      status: submission.fail().status,
-    })
-  }
-
-  return Response.json(submission.success({
+  return Response.json({
+    ok: true,
+    email: data.email,
     message: 'Logged in.',
-  }))
+  })
 }
 ```
 
@@ -53,22 +50,19 @@ const loginForm = schema({
 })
 
 export default defineEventHandler(async (event) => {
-  const submission = await validate(event, loginForm, {
+  const data = await validate(event, loginForm, {
     throttle: 'login',
   })
 
-  if (!submission.valid) {
-    return submission.fail()
-  }
-
-  return submission.success({
+  return {
+    ok: true,
+    email: data.email,
     message: 'Logged in.',
-  })
+  }
 })
 ```
 
 ```ts [SvelteKit — src/routes/login/+page.server.ts]
-import { fail } from '@sveltejs/kit'
 import { field, schema, validate } from '@holo-js/forms'
 
 const loginForm = schema({
@@ -79,18 +73,15 @@ const loginForm = schema({
 
 export const actions = {
   default: async ({ request }) => {
-    const submission = await validate(request, loginForm, {
+    const data = await validate(request, loginForm, {
       throttle: 'login',
     })
 
-    if (!submission.valid) {
-      const failure = submission.fail()
-      return fail(failure.status, failure)
-    }
-
-    return submission.success({
+    return {
+      ok: true,
+      email: data.email,
       message: 'Logged in.',
-    })
+    }
   },
 }
 ```
@@ -190,8 +181,8 @@ export const createPost = command(createPostSchema, async (data) => {
 
 ### Using `useForm(...)` in SvelteKit
 
-When a SvelteKit page action returns `fail(...)`, the SvelteKit adapter reads the native action result
-and applies the returned values and errors to `useForm(...)`:
+When a SvelteKit page action throws a validation exception, the SvelteKit adapter serializes it and
+applies the returned values and errors to `useForm(...)`:
 
 ```svelte
 <!-- src/routes/register/+page.svelte -->
@@ -248,23 +239,19 @@ current user and navigating to the returned redirect target.
 'use server'
 
 import { login } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
+import { validate, ValidationException } from '@holo-js/forms'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { loginForm } from '@/lib/schemas/login'
 
 export async function loginAction(formData: FormData) {
-  const submission = await validate(formData, loginForm, {
+  const data = await validate(formData, loginForm, {
     throttle: 'login',
   })
 
-  if (!submission.valid) {
-    return submission.fail()
-  }
-
-  const { data: session, error } = await login(submission.data)
+  const { data: session, error } = await login(data)
   if (error) {
-    return submission.fail({ status: error.status, errors: error.fields })
+    throw ValidationException.withMessages(error.fields)
   }
 
   revalidatePath('/', 'layout')
@@ -377,26 +364,20 @@ state can also be set during input and value updates through helpers like `form.
 and `form.setValue(...)`.
 
 ```ts [SvelteKit — src/routes/login/+page.server.ts]
-import { fail, redirect } from '@sveltejs/kit'
+import { redirect } from '@sveltejs/kit'
 import { login } from '@holo-js/auth'
-import { validate } from '@holo-js/forms'
+import { validate, ValidationException } from '@holo-js/forms'
 import { loginForm } from '$lib/schemas/login'
 
 export const actions = {
   default: async ({ request }) => {
-    const submission = await validate(request, loginForm, {
+    const data = await validate(request, loginForm, {
       throttle: 'login',
     })
 
-    if (!submission.valid) {
-      const failure = submission.fail()
-      return fail(failure.status, failure)
-    }
-
-    const { data: session, error } = await login(submission.data)
+    const { data: session, error } = await login(data)
     if (error) {
-      const failure = submission.fail({ status: error.status, errors: error.fields })
-      return fail(failure.status, failure)
+      throw ValidationException.withMessages(error.fields)
     }
 
     redirect(303, session.emailVerificationRequired ? session.emailVerificationRoute ?? '/verify-email' : '/admin')
@@ -443,13 +424,15 @@ export const actions = {
 
 ## Failure response shape
 
-When validation fails, `submission.fail()` returns:
+When validation fails, adapters serialize `ValidationException` into this shape:
 
 ```ts
 {
   ok: false,
   status: 422,
   valid: false,
+  message: 'email: Enter a valid email address.',
+  bag: 'default',
   values: {
     email: 'bad@example',
     remember: true,
@@ -476,19 +459,22 @@ On success:
 }
 ```
 
-## Accessing typed values and errors
+## Non-throwing submissions
+
+Use `safeParse(...)` when you want a submission object instead of an exception:
 
 ```ts
+import { safeParse } from '@holo-js/forms'
+
+const submission = await safeParse(request, loginForm)
+
 if (!submission.valid) {
-  submission.errors.has('email')
   submission.errors.first('email')
   submission.values.email
+  return Response.json(submission.fail(), { status: submission.fail().status })
 }
 
-if (submission.valid) {
-  submission.data.email
-  submission.data.remember
-}
+submission.data.email
 ```
 
 ## Registration example
@@ -506,17 +492,13 @@ export const registerUser = schema({
 })
 
 export async function POST(request: Request) {
-  const submission = await validate(request, registerUser, {
+  const data = await validate(request, registerUser, {
     throttle: 'register',
   })
 
-  if (!submission.valid) {
-    return Response.json(submission.fail(), { status: submission.fail().status })
-  }
+  await auth.register(data)
 
-  await auth.register(submission.data)
-
-  return Response.json(submission.success({ message: 'Account created.' }))
+  return Response.json({ ok: true, message: 'Account created.' })
 }
 ```
 
@@ -532,22 +514,18 @@ const registerUser = schema({
 })
 
 export default defineEventHandler(async (event) => {
-  const submission = await validate(event, registerUser, {
+  const data = await validate(event, registerUser, {
     throttle: 'register',
   })
 
-  if (!submission.valid) {
-    return submission.fail()
-  }
+  await auth.register(data)
 
-  await auth.register(submission.data)
-
-  return submission.success({ message: 'Account created.' })
+  return { ok: true, message: 'Account created.' }
 })
 ```
 
 ```ts [SvelteKit — src/routes/register/+page.server.ts]
-import { fail, redirect } from '@sveltejs/kit'
+import { redirect } from '@sveltejs/kit'
 import { field, schema, validate } from '@holo-js/forms'
 
 const registerUser = schema({
@@ -559,16 +537,11 @@ const registerUser = schema({
 
 export const actions = {
   default: async ({ request }) => {
-    const submission = await validate(request, registerUser, {
+    const data = await validate(request, registerUser, {
       throttle: 'register',
     })
 
-    if (!submission.valid) {
-      const failure = submission.fail()
-      return fail(failure.status, failure)
-    }
-
-    await auth.register(submission.data)
+    await auth.register(data)
 
     redirect(303, '/admin')
   },
@@ -609,15 +582,12 @@ const uploadAvatar = schema({
 })
 
 export async function POST(request: Request) {
-  const submission = await validate(request, uploadAvatar)
+  const data = await validate(request, uploadAvatar)
+  const user = await currentUser()
 
-  if (!submission.valid) {
-    return Response.json(submission.fail(), { status: submission.fail().status })
-  }
+  await user.addMedia(data.avatar).toMediaCollection('avatars')
 
-  await media.store(submission.data.avatar)
-
-  return Response.json(submission.success({ message: 'Avatar uploaded.' }))
+  return Response.json({ ok: true, message: 'Avatar uploaded.' })
 }
 ```
 
@@ -630,20 +600,16 @@ const uploadAvatar = schema({
 
 export default defineEventHandler(async (event) => {
   const formData = await readFormData(event)
-  const submission = await validate(formData, uploadAvatar)
+  const data = await validate(formData, uploadAvatar)
+  const user = await currentUser()
 
-  if (!submission.valid) {
-    return submission.fail()
-  }
+  await user.addMedia(data.avatar).toMediaCollection('avatars')
 
-  await media.store(submission.data.avatar)
-
-  return submission.success({ message: 'Avatar uploaded.' })
+  return { ok: true, message: 'Avatar uploaded.' }
 })
 ```
 
 ```ts [SvelteKit — src/routes/avatar/+page.server.ts]
-import { fail } from '@sveltejs/kit'
 import { field, schema, validate } from '@holo-js/forms'
 
 const uploadAvatar = schema({
@@ -652,16 +618,12 @@ const uploadAvatar = schema({
 
 export const actions = {
   default: async ({ request }) => {
-    const submission = await validate(request, uploadAvatar)
+    const data = await validate(request, uploadAvatar)
+    const user = await currentUser()
 
-    if (!submission.valid) {
-      const failure = submission.fail()
-      return fail(failure.status, failure)
-    }
+    await user.addMedia(data.avatar).toMediaCollection('avatars')
 
-    await media.store(submission.data.avatar)
-
-    return submission.success({ message: 'Avatar uploaded.' })
+    return { ok: true, message: 'Avatar uploaded.' }
   },
 }
 ```

@@ -246,7 +246,7 @@ describe('@holo-js/adapter-sveltekit request context', () => {
     vi.doMock('@sveltejs/kit', () => ({ error: svelteKitError }))
 
     const { runWithSvelteKitRequestEvent } = await import('../src')
-    const { field, schema, validate } = await import('@holo-js/validation')
+    const { ValidationException, validationInternals } = await import('@holo-js/forms/schema')
 
     await expect(runWithSvelteKitRequestEvent({
       url: new URL('https://app.test/api/reset-password'),
@@ -259,8 +259,8 @@ describe('@holo-js/adapter-sveltekit request context', () => {
       request: {
         headers: new Headers(),
       },
-    }, async () => await validate({}, schema({
-      token: field.string().required(),
+    }, async () => validationInternals.throwValidationException(ValidationException.withMessages({
+      token: ['This field is required.'],
     })))).rejects.toMatchObject({
       status: 422,
       body: {
@@ -269,6 +269,47 @@ describe('@holo-js/adapter-sveltekit request context', () => {
         valid: false,
         errors: {
           token: ['This field is required.'],
+        },
+      },
+    })
+    expect(svelteKitError).toHaveBeenCalledOnce()
+  })
+
+  it('maps validation exceptions to SvelteKit action 422 errors inside the request context', async () => {
+    const svelteKitError = vi.fn((status: number, body: unknown): never => {
+      throw Object.assign(new Error('sveltekit error'), { status, body })
+    })
+
+    vi.doMock('@holo-js/core', () => makeHoloCoreMock(() => {}))
+    vi.doMock('@sveltejs/kit', () => ({ error: svelteKitError }))
+
+    const { runWithSvelteKitRequestEvent } = await import('../src')
+    const { ValidationException, validationInternals } = await import('@holo-js/forms/schema')
+
+    await expect(runWithSvelteKitRequestEvent({
+      url: new URL('https://app.test/admin/posts/new?/create'),
+      cookies: {
+        get() {
+          return undefined
+        },
+        set() {},
+      },
+      request: {
+        method: 'POST',
+        headers: new Headers({
+          accept: 'text/html',
+        }),
+      },
+    }, async () => validationInternals.throwValidationException(ValidationException.withMessages({
+      image: ['The selected file must be 2 MB or smaller.'],
+    })))).rejects.toMatchObject({
+      status: 422,
+      body: {
+        ok: false,
+        status: 422,
+        valid: false,
+        errors: {
+          image: ['The selected file must be 2 MB or smaller.'],
         },
       },
     })
@@ -299,7 +340,7 @@ describe('@holo-js/adapter-sveltekit request context', () => {
         get() {
           return undefined
         },
-        set() {},
+        set: vi.fn(),
       },
       request: {
         method: 'POST',
@@ -315,6 +356,7 @@ describe('@holo-js/adapter-sveltekit request context', () => {
     }))
 
     expect(response.status).toBe(200)
+    expect(response.headers.get('x-holo-validation-flash')).toBeNull()
     await expect(response.json()).resolves.toEqual({
       type: 'failure',
       status: 422,
@@ -322,22 +364,23 @@ describe('@holo-js/adapter-sveltekit request context', () => {
     })
   })
 
-  it('maps remembered validation action failures for plain SvelteKit posts', async () => {
+  it('maps remembered validation action failures for SvelteKit action JSON posts', async () => {
     vi.doMock('@holo-js/core', () => makeHoloCoreMock(() => {}))
 
     const { adapterSvelteKitInternals } = await import('../src')
+    const setCookie = vi.fn()
     const event = {
       url: new URL('https://app.test/login'),
       cookies: {
         get() {
           return undefined
         },
-        set() {},
+        set: setCookie,
       },
       request: {
         method: 'POST',
         headers: new Headers({
-          accept: 'text/html',
+          accept: 'application/json',
         }),
       },
     }
@@ -367,11 +410,99 @@ describe('@holo-js/adapter-sveltekit request context', () => {
     )
 
     expect(response.status).toBe(200)
+    expect(response.headers.get('x-holo-validation-flash')).toBe('1')
+    expect(setCookie).toHaveBeenCalledWith(
+      adapterSvelteKitInternals.validationFlashCookie,
+      expect.any(String),
+      {
+        path: '/login',
+        maxAge: 60,
+        sameSite: 'lax',
+      },
+    )
     await expect(response.json()).resolves.toEqual({
       type: 'failure',
       status: 422,
       data: JSON.stringify(payload),
     })
+  })
+
+  it('redirects plain SvelteKit browser form validation failures back with a flashed error bag', async () => {
+    vi.doMock('@holo-js/core', () => makeHoloCoreMock(() => {}))
+
+    const { adapterSvelteKitInternals } = await import('../src')
+    const setCookie = vi.fn()
+    const event = {
+      url: new URL('https://app.test/login?/default'),
+      cookies: {
+        get() {
+          return undefined
+        },
+        set: setCookie,
+      },
+      request: {
+        method: 'POST',
+        headers: new Headers({
+          accept: 'text/html',
+        }),
+      },
+    }
+    const response = new Response('<h1>Error</h1>', {
+      status: 500,
+      headers: {
+        'content-type': 'text/html',
+      },
+    })
+
+    adapterSvelteKitInternals.rememberValidationActionFailure(event, {
+      ok: false,
+      status: 422,
+      valid: false,
+      message: 'email: These credentials do not match our records.',
+      bag: 'default',
+      values: {
+        email: 'user@app.test',
+      },
+      errors: {
+        email: ['These credentials do not match our records.'],
+      },
+    })
+
+    const mapped = await adapterSvelteKitInternals.mapValidationActionResponse(
+      event,
+      response,
+    )
+
+    expect(mapped.status).toBe(303)
+    expect(mapped.headers.get('location')).toBe('/login')
+    expect(mapped.headers.get('cache-control')).toBe('no-store')
+    expect(mapped.headers.get('set-cookie')).toContain(`${adapterSvelteKitInternals.validationFlashCookie}=`)
+    const setCookieHeader = mapped.headers.get('set-cookie')
+    const cookiePrefix = `${adapterSvelteKitInternals.validationFlashCookie}=`
+    const flashedCookieValue = setCookieHeader
+      ?.split(';')
+      .find(part => part.trimStart().startsWith(cookiePrefix))
+      ?.trimStart()
+      .slice(cookiePrefix.length)
+    expect(flashedCookieValue).toBeDefined()
+    if (typeof flashedCookieValue !== 'string') {
+      throw new Error('Expected validation flash cookie to be set.')
+    }
+
+    expect(JSON.parse(decodeURIComponent(flashedCookieValue))).toMatchObject({
+      values: {
+        email: 'user@app.test',
+      },
+    })
+    expect(setCookie).toHaveBeenCalledWith(
+      adapterSvelteKitInternals.validationFlashCookie,
+      expect.any(String),
+      {
+        path: '/login',
+        maxAge: 60,
+        sameSite: 'lax',
+      },
+    )
   })
 
 })

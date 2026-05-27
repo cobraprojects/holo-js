@@ -215,7 +215,7 @@ describe('@holo-js/broadcast channel auth runtime', () => {
     })
     await expect(validateBroadcastWhisperPayload('orders.ord_2', 'typing.start', {
       editing: 'nope' as never,
-    })).rejects.toThrow('Expected boolean')
+    })).rejects.toThrow('editing: This field must be true or false.')
     await expect(validateBroadcastWhisperPayload('chat.room_1', 'typing.start', {
       editing: true,
     })).rejects.toThrow('not allowed')

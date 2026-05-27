@@ -142,14 +142,16 @@ validates field data after the request passes the middleware.
 Validation failures, CSRF failures, and auth failures stay separate:
 
 - `csrfProtection()` verifies unsafe requests before route handlers run and returns `419` on token mismatch.
-- `validate(...)` returns form validation failures such as missing fields, bad formats, and throttling.
+- `validate(...)` throws validation failures such as missing fields, bad formats, and throttling as
+  `ValidationException`.
 - `login(...)`, `register(...)`, `verifyEmail(...)`, `requestPasswordReset(...)`, and `resetPassword(...)` return auth failures in `error`.
-- Auth failures are plain data with `status` and `fields`, so routes can forward them directly into the normal form response shape.
+- Auth failures are plain data with `status` and `fields`, so routes can throw `ValidationException`
+  when those failures should render as field errors.
 
 ### Login
 
 ```ts
-import { field, schema, validate } from '@holo-js/forms'
+import { field, schema, validate, ValidationException } from '@holo-js/forms'
 import { login } from '@holo-js/auth'
 
 const loginForm = schema({
@@ -158,36 +160,26 @@ const loginForm = schema({
 })
 
 export async function POST(request: Request) {
-  const submission = await validate(request, loginForm, {
+  const data = await validate(request, loginForm, {
     throttle: 'login',
   })
 
-  if (!submission.valid) {
-    return Response.json(submission.fail(), {
-      status: submission.fail().status,
-    })
-  }
-
-  const { error } = await login(submission.data)
+  const { error } = await login(data)
   if (error) {
-    const failure = submission.fail({
-      status: error.status,
-      errors: error.fields,
-    })
-
-    return Response.json(failure, { status: failure.status })
+    throw ValidationException.withMessages(error.fields)
   }
 
-  return Response.json(submission.success({
+  return Response.json({
+    ok: true,
     message: 'Logged in.',
-  }))
+  })
 }
 ```
 
 ### Register
 
 ```ts
-import { field, schema, validate } from '@holo-js/forms'
+import { field, schema, validate, ValidationException } from '@holo-js/forms'
 import { register } from '@holo-js/auth'
 
 const registerUser = schema({
@@ -198,29 +190,19 @@ const registerUser = schema({
 })
 
 export async function POST(request: Request) {
-  const submission = await validate(request, registerUser, {
+  const data = await validate(request, registerUser, {
     throttle: 'register',
   })
 
-  if (!submission.valid) {
-    return Response.json(submission.fail(), {
-      status: submission.fail().status,
-    })
-  }
-
-  const { error } = await register(submission.data)
+  const { error } = await register(data)
   if (error) {
-    const failure = submission.fail({
-      status: error.status,
-      errors: error.fields,
-    })
-
-    return Response.json(failure, { status: failure.status })
+    throw ValidationException.withMessages(error.fields)
   }
 
-  return Response.json(submission.success({
+  return Response.json({
+    ok: true,
     message: 'Account created.',
-  }))
+  })
 }
 ```
 
@@ -230,12 +212,14 @@ export async function POST(request: Request) {
 - CSRF middleware failures return `419`
 - rate-limit failures return `429`
 
-`submission.fail()` preserves that status:
+`validate(...)` includes rate-limit metadata on the serialized validation exception:
 
 ```ts
-return Response.json(submission.fail(), {
-  status: submission.fail().status,
-})
+{
+  ok: false,
+  status: 429,
+  retryAfterSeconds: 60,
+}
 ```
 
 ### `useForm(...)`
@@ -465,17 +449,15 @@ const loginForm = schema({
 })
 
 export default defineEventHandler(async (event) => {
-  const submission = await validate(event, loginForm, {
+  const data = await validate(event, loginForm, {
     throttle: 'login',
   })
 
-  if (!submission.valid) {
-    return submission.fail()
-  }
-
-  return submission.success({
+  return {
+    ok: true,
+    data,
     message: 'Logged in.',
-  })
+  }
 })
 ```
 
