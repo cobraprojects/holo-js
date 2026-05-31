@@ -85,10 +85,12 @@ import {
   upsertSecurityPackageDependency,
 } from './scaffold/dependencies'
 import {
+  renderAuthRouteFiles,
   renderAuthProviderRouteFiles,
   renderFrameworkFiles,
   renderFrameworkRunner,
   renderNextHoloHelper,
+  renderNextManagedHostedAuthRouteFiles,
   renderScaffoldPackageJson,
   renderSvelteHoloHelper,
   resolvePackageManagerVersion,
@@ -236,6 +238,29 @@ async function syncHostedAuthRouteFiles(projectRoot: string, features: AuthInsta
     await mkdir(dirname(targetPath), { recursive: true })
     await writeTextFile(targetPath, file.contents)
   }
+
+  if (framework === 'next') {
+    for (const file of renderNextManagedHostedAuthRouteFiles(features)) {
+      await writeTextFile(resolve(projectRoot, file.path), file.contents)
+    }
+  }
+}
+
+async function syncAuthRouteFiles(projectRoot: string): Promise<void> {
+  const { dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  const framework = detectProjectFrameworkFromPackageJson(dependencies, devDependencies)
+  if (!framework) {
+    return
+  }
+
+  for (const file of renderAuthRouteFiles(framework)) {
+    const targetPath = resolve(projectRoot, file.path)
+    if (await pathExists(targetPath)) {
+      continue
+    }
+
+    await writeTextFile(targetPath, file.contents)
+  }
 }
 
 export async function installAuthIntoProject(
@@ -298,6 +323,7 @@ export async function installAuthIntoProject(
     const createdCorsConfig = await ensureCorsConfigFile(projectRoot)
 
     await syncBroadcastAuthSupportAfterAuthInstall(projectRoot)
+    await syncAuthRouteFiles(projectRoot)
     await syncHostedAuthRouteFiles(projectRoot, nextAuthFeatures)
 
     return {
@@ -376,6 +402,7 @@ export async function installAuthIntoProject(
   }
 
   await syncBroadcastAuthSupportAfterAuthInstall(projectRoot)
+  await syncAuthRouteFiles(projectRoot)
   await syncHostedAuthRouteFiles(projectRoot, features)
 
   return {

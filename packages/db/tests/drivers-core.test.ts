@@ -481,8 +481,12 @@ describe('driver adapters', () => {
       'Postgres adapter is not initialized with a pool or client.',
     )
 
+    const defaultState = createPostgresPool()
     const defaultAdapter = createPostgresAdapter({
-      connectionString: 'postgres://localhost/test' })
+      connectionString: 'postgres://localhost/test',
+      createPool() {
+        return defaultState.pool
+      } })
     await defaultAdapter.initialize()
     expect(defaultAdapter.isConnected()).toBe(true)
     await defaultAdapter.disconnect()
@@ -841,8 +845,12 @@ describe('driver adapters', () => {
       'MySQL adapter is not initialized with a pool or client.',
     )
 
+    const defaultState = createMySqlPool()
     const defaultAdapter = createMySQLAdapter({
-      uri: 'mysql://localhost/test' })
+      uri: 'mysql://localhost/test',
+      createPool() {
+        return defaultState.pool
+      } })
     await defaultAdapter.initialize()
     expect(defaultAdapter.isConnected()).toBe(true)
     await defaultAdapter.disconnect()

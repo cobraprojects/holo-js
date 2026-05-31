@@ -675,12 +675,12 @@ export function runRuntimeInvocation(
 export function getRuntimeFailureMessage(kind: string, result: RuntimeSpawnResult): string {
   const stderr = result.stderr?.trim()
   if (stderr) {
-    return stderr
+    return formatRuntimeFailureText(stderr)
   }
 
   const stdout = result.stdout?.trim()
   if (stdout) {
-    return stdout
+    return formatRuntimeFailureText(stdout)
   }
 
   const errorCode = result.error && 'code' in result.error ? result.error.code : undefined
@@ -689,6 +689,36 @@ export function getRuntimeFailureMessage(kind: string, result: RuntimeSpawnResul
   }
 
   return `Runtime command "${kind}" failed.`
+}
+
+function stripRuntimeErrorPrefix(line: string): string {
+  return line.replace(/^(?:[A-Za-z][\w.]*Error|Error):\s+/, '')
+}
+
+function isRuntimeErrorSourceLine(line: string): boolean {
+  return line.startsWith('throw ')
+    || line.startsWith('at ')
+    || line === '^'
+    || /^\^+$/.test(line)
+}
+
+function formatRuntimeFailureText(text: string): string {
+  const lines = text
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+
+  const friendlyLine = lines.find(line => line.includes('Unable to ') && !isRuntimeErrorSourceLine(line))
+  if (friendlyLine) {
+    return stripRuntimeErrorPrefix(friendlyLine)
+  }
+
+  const errorLine = lines.find(line => /^(?:[A-Za-z][\w.]*Error|Error):\s+/.test(line))
+  if (errorLine) {
+    return stripRuntimeErrorPrefix(errorLine)
+  }
+
+  return lines[0] ?? text.trim()
 }
 
 /* v8 ignore start */

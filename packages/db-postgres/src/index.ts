@@ -41,6 +41,65 @@ type ScopedPostgresTransaction = {
   released: boolean
 }
 
+type BootstrapTarget = {
+  database: string
+  config: PoolConfig
+}
+
+function quoteDatabaseIdentifier(database: string): string {
+  return `"${database.replaceAll('"', '""')}"`
+}
+
+function stripDatabaseFromConnectionString(connectionString: string): { database?: string, connectionString: string } {
+  const parsed = new URL(connectionString)
+  const database = parsed.pathname.replace(/^\/+/, '')
+
+  parsed.pathname = '/postgres'
+
+  return {
+    database: database ? decodeURIComponent(database) : undefined,
+    connectionString: parsed.toString(),
+  }
+}
+
+function resolveBootstrapTarget(config?: PoolConfig): BootstrapTarget | undefined {
+  if (!config) {
+    return undefined
+  }
+
+  if (typeof config.database === 'string' && config.database.trim().length > 0) {
+    const { database, ...bootstrapConfig } = config
+    if (database === 'postgres') {
+      return undefined
+    }
+
+    return {
+      database,
+      config: {
+        ...bootstrapConfig,
+        database: 'postgres',
+      },
+    }
+  }
+
+  if (typeof config.connectionString === 'string' && config.connectionString.trim().length > 0) {
+    const stripped = stripDatabaseFromConnectionString(config.connectionString)
+    if (!stripped.database || stripped.database === 'postgres') {
+      return undefined
+    }
+
+    return {
+      database: stripped.database,
+      config: {
+        ...config,
+        connectionString: stripped.connectionString,
+      },
+    }
+  }
+
+  return undefined
+}
+
 export class PostgresAdapter implements DriverAdapter {
   private pool?: PostgresPoolLike
   private readonly directClient?: PostgresClientLike
@@ -67,6 +126,7 @@ export class PostgresAdapter implements DriverAdapter {
     }
 
     if (this.createPoolInstance) {
+      await this.ensureDatabaseExists()
       this.pool = this.createPoolInstance(this.config)
     }
 
@@ -216,6 +276,31 @@ export class PostgresAdapter implements DriverAdapter {
     }
 
     return this.pool
+  }
+
+  private async ensureDatabaseExists(): Promise<void> {
+    if (!this.createPoolInstance) {
+      return
+    }
+
+    const target = resolveBootstrapTarget(this.config)
+    if (!target) {
+      return
+    }
+
+    const bootstrapPool = this.createPoolInstance(target.config)
+
+    try {
+      const existing = await bootstrapPool.query('select 1 from pg_database where datname = $1', [target.database])
+      if (existing.rows.length === 0) {
+        await bootstrapPool.query(`create database ${quoteDatabaseIdentifier(target.database)}`)
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(`Unable to ensure Postgres database "${target.database}" exists: ${message}`, { cause: error })
+    } finally {
+      await bootstrapPool.end()
+    }
   }
 
   private async leaseTransactionClient(): Promise<PostgresClientLike> {

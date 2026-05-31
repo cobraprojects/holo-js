@@ -24,6 +24,10 @@ import {
   resolveFirstExistingPath,
   writeTextFile,
 } from '../runtime'
+import {
+  renderNextBroadcastAuthRoute,
+  renderNextGeneratedBroadcastAuthRoute,
+} from './framework-renderers'
 
 export function renderStorageConfig(): string {
   return [
@@ -544,29 +548,6 @@ export function renderBroadcastEnvFiles(): { env: readonly string[], example: re
   }
 }
 
-function renderNextBroadcastAuthRoute(): string {
-  return [
-    'import { renderBroadcastAuthResponse } from \'@holo-js/broadcast/auth\'',
-    'import { holo } from \'@/server/holo\'',
-    '',
-    'export async function POST(request: Request) {',
-    '  const app = await holo.getApp()',
-    '  const auth = await holo.getAuth()',
-    '',
-    '  return await renderBroadcastAuthResponse(request, {',
-    '    resolveUser: async () => await auth?.user(),',
-    '    channelAuth: {',
-    '      registry: {',
-    '        projectRoot: app.projectRoot,',
-    '        channels: app.registry?.channels ?? [],',
-    '      },',
-    '    },',
-    '  })',
-    '}',
-    '',
-  ].join('\n')
-}
-
 function renderNuxtBroadcastAuthRoute(): string {
   return [
     'import { defineEventHandler, getHeaders, getRequestURL, readRawBody } from \'h3\'',
@@ -665,10 +646,13 @@ export async function syncBroadcastAuthSupportAfterAuthInstall(projectRoot: stri
 
   if (framework === 'next') {
     const authRoutePath = resolve(projectRoot, 'app/broadcasting/auth/route.ts')
+    const generatedRoutePath = resolve(projectRoot, '.holo-js/generated/next/broadcast-auth-route.ts')
     if (!(await pathExists(authRoutePath))) {
       await writeTextFile(authRoutePath, renderNextBroadcastAuthRoute())
       createdBroadcastAuthRoute = true
     }
+    await writeTextFile(generatedRoutePath, renderNextGeneratedBroadcastAuthRoute())
+
     return {
       updatedBroadcastConfig,
       createdBroadcastAuthRoute,

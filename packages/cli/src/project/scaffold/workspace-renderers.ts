@@ -86,7 +86,7 @@ export function renderScaffoldTsconfig(options: Pick<ProjectScaffoldOptions, 'fr
     }, null, 2)}\n`
   }
 
-  const include = ['next-env.d.ts', 'instrumentation.ts', 'app/**/*.ts', 'app/**/*.tsx', 'server/**/*.ts', 'config/**/*.ts', '.holo-js/generated/**/*.ts', '.holo-js/generated/**/*.d.ts']
+  const include = ['next-env.d.ts', 'app/**/*.ts', 'app/**/*.tsx', 'server/**/*.ts', 'config/**/*.ts', '.holo-js/generated/**/*.ts', '.holo-js/generated/**/*.d.ts']
 
   return `${JSON.stringify({
     compilerOptions: {

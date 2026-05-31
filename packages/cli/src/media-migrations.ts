@@ -46,7 +46,7 @@ export function renderMediaTableMigration(tableName = DEFAULT_MEDIA_TABLE): stri
     '      table.string(\'extension\').nullable()',
     '      table.bigInteger(\'size\')',
     '      table.string(\'path\')',
-    '      table.json(\'generated_conversions\').default({})',
+    '      table.json(\'generated_conversions\')',
     '      table.integer(\'order_column\').default(1)',
     '      table.timestamps()',
     '      table.index([\'model_type\', \'model_id\'])',

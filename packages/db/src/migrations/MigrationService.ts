@@ -140,7 +140,7 @@ export class MigrationService {
             await new TableQueryBuilder(migrationsTable, tx).insert({
               name: migration.name,
               batch: nextBatch,
-              migrated_at: new Date().toISOString(),
+              migrated_at: new Date(),
             })
           })
         })

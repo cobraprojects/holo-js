@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { chmod, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import type * as FsPromisesModule from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
 import { pathToFileURL } from 'node:url'
@@ -19,6 +20,8 @@ import {
 import type * as HoloConfigModule from '@holo-js/config'
 import type * as HoloCoreModule from '@holo-js/core'
 import type * as HoloDbModule from '@holo-js/db'
+import type * as HoloDbMysqlModule from '../../db-mysql/src'
+import type * as HoloDbPostgresModule from '../../db-postgres/src'
 import type * as ProjectModule from '../src/project'
 import type * as ParsingInternalModule from '../src/parsing'
 import type * as CacheInternalModule from '../src/cache'
@@ -92,6 +95,8 @@ import type { FSWatcher } from 'node:fs'
 const workspaceRoot = resolve(import.meta.dirname, '../../..')
 type BuiltWorkspacePackages = {
   readonly root: string
+  readonly adapterNextPackageRoot: string
+  readonly authPackageRoot: string
   readonly broadcastPackageRoot: string
   readonly corePackageRoot: string
   readonly configPackageRoot: string
@@ -105,6 +110,8 @@ type BuiltWorkspacePackages = {
   readonly queuePackageRoot: string
   readonly queueRedisPackageRoot: string
   readonly queueDbPackageRoot: string
+  readonly securityPackageRoot: string
+  readonly sessionPackageRoot: string
   readonly storagePackageRoot: string
   readonly storageS3PackageRoot: string
   readonly validationPackageRoot: string
@@ -114,6 +121,7 @@ type BuiltWorkspacePackages = {
 
 const tempBuildRoots: string[] = []
 let builtWorkspacePackages: BuiltWorkspacePackages | null = null
+let fakePackageManagerBinRoot: string | null = null
 const expectedHoloPackageRange = `^${HOLO_PACKAGE_VERSION}`
 const expectedNextPackageRange = SCAFFOLD_FRAMEWORK_VERSIONS.next
 const expectedReactPackageRange = SCAFFOLD_NEXT_REACT_VERSIONS.react
@@ -137,6 +145,21 @@ function writePackageWrapperSync(sourcePackageDir: string, targetPackageDir: str
     readFileSync(join(sourcePackageDir, 'package.json'), 'utf8'),
     'utf8',
   )
+}
+
+function ensureFakePackageManagerBinRootSync(): string {
+  if (fakePackageManagerBinRoot) {
+    return fakePackageManagerBinRoot
+  }
+
+  const root = createTempBuildRootSync('holo-fake-package-manager-')
+  for (const packageManager of ['bun', 'npm', 'pnpm', 'yarn']) {
+    const binaryPath = join(root, packageManager)
+    writeFileSync(binaryPath, `#!/bin/sh\nprintf 'fake ${packageManager} %s\\n' "$*"\nexit 0\n`, 'utf8')
+    chmodSync(binaryPath, 0o755)
+  }
+  fakePackageManagerBinRoot = root
+  return root
 }
 
 function linkPackageDependencySync(
@@ -167,6 +190,8 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   }
 
   const root = createTempBuildRootSync('holo-cli-build-')
+  const adapterNextPackageRoot = join(root, 'packages/adapter-next')
+  const authPackageRoot = join(root, 'packages/auth')
   const dbPackageRoot = join(root, 'packages/db')
   const dbSqlitePackageRoot = join(root, 'packages/db-sqlite')
   const dbPostgresPackageRoot = join(root, 'packages/db-postgres')
@@ -180,6 +205,8 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   const broadcastPackageRoot = join(root, 'packages/broadcast')
   const mailPackageRoot = join(root, 'packages/mail')
   const notificationsPackageRoot = join(root, 'packages/notifications')
+  const securityPackageRoot = join(root, 'packages/security')
+  const sessionPackageRoot = join(root, 'packages/session')
   const storagePackageRoot = join(root, 'packages/storage')
   const storageS3PackageRoot = join(root, 'packages/storage-s3')
   const validationPackageRoot = join(root, 'packages/validation')
@@ -265,6 +292,23 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   const validationBuild = buildWorkspacePackageSync('@holo-js/validation', join(validationPackageRoot, 'dist'))
   expect(validationBuild.status, validationBuild.stderr || validationBuild.stdout).toBe(0)
 
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/session'), sessionPackageRoot)
+  linkPackageDependencySync(sessionPackageRoot, '@holo-js/config', configPackageRoot)
+  const sessionBuild = buildWorkspacePackageSync('@holo-js/session', join(sessionPackageRoot, 'dist'))
+  expect(sessionBuild.status, sessionBuild.stderr || sessionBuild.stdout).toBe(0)
+
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/security'), securityPackageRoot)
+  linkPackageDependencySync(securityPackageRoot, '@holo-js/config', configPackageRoot)
+  const securityBuild = buildWorkspacePackageSync('@holo-js/security', join(securityPackageRoot, 'dist'))
+  expect(securityBuild.status, securityBuild.stderr || securityBuild.stdout).toBe(0)
+
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/auth'), authPackageRoot)
+  linkPackageDependencySync(authPackageRoot, '@holo-js/config', configPackageRoot)
+  linkPackageDependencySync(authPackageRoot, '@holo-js/security', securityPackageRoot)
+  linkPackageDependencySync(authPackageRoot, '@holo-js/validation', validationPackageRoot)
+  const authBuild = buildWorkspacePackageSync('@holo-js/auth', join(authPackageRoot, 'dist'))
+  expect(authBuild.status, authBuild.stderr || authBuild.stdout).toBe(0)
+
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/broadcast'), broadcastPackageRoot)
   linkPackageDependencySync(broadcastPackageRoot, '@holo-js/config', configPackageRoot)
   linkPackageDependencySync(broadcastPackageRoot, '@holo-js/validation', validationPackageRoot)
@@ -304,6 +348,12 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   expect(mailBuild.status, mailBuild.stderr || mailBuild.stdout).toBe(0)
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/core'), corePackageRoot)
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(corePackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/core/package.json'),
+  })
+  linkPackageDependencySync(corePackageRoot, '@holo-js/auth', authPackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/config', configPackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/db', dbPackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/events', eventsPackageRoot)
@@ -311,9 +361,17 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   linkPackageDependencySync(corePackageRoot, '@holo-js/notifications', notificationsPackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/queue', queuePackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/queue-db', queueDbPackageRoot)
+  linkPackageDependencySync(corePackageRoot, '@holo-js/security', securityPackageRoot)
+  linkPackageDependencySync(corePackageRoot, '@holo-js/session', sessionPackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/storage', storagePackageRoot)
   const coreBuild = buildWorkspacePackageSync('@holo-js/core', join(corePackageRoot, 'dist'))
   expect(coreBuild.status, coreBuild.stderr || coreBuild.stdout).toBe(0)
+
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/adapter-next'), adapterNextPackageRoot)
+  linkPackageDependencySync(adapterNextPackageRoot, '@holo-js/config', configPackageRoot)
+  linkPackageDependencySync(adapterNextPackageRoot, '@holo-js/core', corePackageRoot)
+  const adapterNextBuild = buildWorkspacePackageSync('@holo-js/adapter-next', join(adapterNextPackageRoot, 'dist'))
+  expect(adapterNextBuild.status, adapterNextBuild.stderr || adapterNextBuild.stdout).toBe(0)
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/cli'), cliPackageRoot)
   linkPackageDependencySync(cliPackageRoot, '@holo-js/core', corePackageRoot)
@@ -334,6 +392,8 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
 
   builtWorkspacePackages = {
     root,
+    adapterNextPackageRoot,
+    authPackageRoot,
     broadcastPackageRoot,
     corePackageRoot,
     configPackageRoot,
@@ -347,6 +407,8 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
     queuePackageRoot,
     queueRedisPackageRoot,
     queueDbPackageRoot,
+    securityPackageRoot,
+    sessionPackageRoot,
     storagePackageRoot,
     storageS3PackageRoot,
     validationPackageRoot,
@@ -382,18 +444,197 @@ async function linkWorkspaceCli(projectRoot: string): Promise<void> {
   await symlink(cliBinPath, join(binariesDir, 'holo')).catch(() => {})
 }
 
+async function linkWorkspaceAuthFlowPackages(projectRoot: string): Promise<void> {
+  const {
+    adapterNextPackageRoot,
+    authPackageRoot,
+    corePackageRoot,
+    dbMysqlPackageRoot,
+    dbPostgresPackageRoot,
+    dbSqlitePackageRoot,
+    securityPackageRoot,
+    sessionPackageRoot,
+    validationPackageRoot,
+  } = ensureBuiltWorkspacePackagesSync()
+  const targetDir = join(projectRoot, 'node_modules', '@holo-js')
+
+  await linkWorkspaceCli(projectRoot)
+  await mkdir(targetDir, { recursive: true })
+
+  for (const [packageName, packageRoot] of [
+    ['adapter-next', adapterNextPackageRoot],
+    ['auth', authPackageRoot],
+    ['core', corePackageRoot],
+    ['db-mysql', dbMysqlPackageRoot],
+    ['db-postgres', dbPostgresPackageRoot],
+    ['db-sqlite', dbSqlitePackageRoot],
+    ['security', securityPackageRoot],
+    ['session', sessionPackageRoot],
+    ['validation', validationPackageRoot],
+  ] as const) {
+    await rm(join(targetDir, packageName), { recursive: true, force: true }).catch(() => {})
+    await symlink(packageRoot, join(targetDir, packageName)).catch(() => {})
+  }
+}
+
+type UserFlowDatabaseDriver = 'sqlite' | 'mysql' | 'postgres'
+
+function quoteMySqlIdentifier(identifier: string): string {
+  return `\`${identifier.replaceAll('`', '``')}\``
+}
+
+function quotePostgresIdentifier(identifier: string): string {
+  return `"${identifier.replaceAll('"', '""')}"`
+}
+
+async function importUserFlowMySQLDriver(): Promise<typeof HoloDbMysqlModule> {
+  const { dbMysqlPackageRoot } = ensureBuiltWorkspacePackagesSync()
+
+  return await import(pathToFileURL(join(dbMysqlPackageRoot, 'dist/index.mjs')).href) as typeof HoloDbMysqlModule
+}
+
+async function importUserFlowPostgresDriver(): Promise<typeof HoloDbPostgresModule> {
+  const { dbPostgresPackageRoot } = ensureBuiltWorkspacePackagesSync()
+
+  return await import(pathToFileURL(join(dbPostgresPackageRoot, 'dist/index.mjs')).href) as typeof HoloDbPostgresModule
+}
+
+async function dropUserFlowDatabase(driver: UserFlowDatabaseDriver, databaseName: string): Promise<void> {
+  if (driver === 'sqlite') {
+    await rm(databaseName, { force: true }).catch(() => {})
+    return
+  }
+
+  if (driver === 'mysql') {
+    const { createMySQLAdapter } = await importUserFlowMySQLDriver()
+    const admin = createMySQLAdapter({
+      config: {
+        host: '127.0.0.1',
+        port: 3306,
+        user: 'root',
+        database: 'mysql',
+      },
+    })
+
+    try {
+      await admin.execute(`drop database if exists ${quoteMySqlIdentifier(databaseName)}`)
+    } finally {
+      await admin.disconnect()
+    }
+    return
+  }
+
+  const { createPostgresAdapter } = await importUserFlowPostgresDriver()
+  const admin = createPostgresAdapter({
+    config: {
+      host: '127.0.0.1',
+      port: 5432,
+      user: 'postgres',
+      database: 'postgres',
+    },
+  })
+
+  try {
+    await admin.execute('select pg_terminate_backend(pid) from pg_stat_activity where datname = $1', [databaseName])
+    await admin.execute(`drop database if exists ${quotePostgresIdentifier(databaseName)}`)
+  } finally {
+    await admin.disconnect()
+  }
+}
+
+async function expectUserFlowDatabaseExists(driver: UserFlowDatabaseDriver, databaseName: string): Promise<void> {
+  if (driver === 'sqlite') {
+    await expect(stat(databaseName)).resolves.toBeDefined()
+    return
+  }
+
+  if (driver === 'mysql') {
+    const { createMySQLAdapter } = await importUserFlowMySQLDriver()
+    const admin = createMySQLAdapter({
+      config: {
+        host: '127.0.0.1',
+        port: 3306,
+        user: 'root',
+        database: 'mysql',
+      },
+    })
+
+    try {
+      const result = await admin.query<{ SCHEMA_NAME: string }>(
+        'SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?',
+        [databaseName],
+      )
+      expect(result.rows).toEqual([{ SCHEMA_NAME: databaseName }])
+    } finally {
+      await admin.disconnect()
+    }
+    return
+  }
+
+  const { createPostgresAdapter } = await importUserFlowPostgresDriver()
+  const admin = createPostgresAdapter({
+    config: {
+      host: '127.0.0.1',
+      port: 5432,
+      user: 'postgres',
+      database: 'postgres',
+    },
+  })
+
+  try {
+    const result = await admin.query<{ datname: string }>(
+      'select datname from pg_database where datname = $1',
+      [databaseName],
+    )
+    expect(result.rows).toEqual([{ datname: databaseName }])
+  } finally {
+    await admin.disconnect()
+  }
+}
+
+async function setUserFlowDatabaseEnv(
+  projectRoot: string,
+  driver: UserFlowDatabaseDriver,
+  databaseName: string,
+): Promise<void> {
+  const envPath = join(projectRoot, '.env')
+  const envContents = await readFile(envPath, 'utf8')
+  const nextContents = envContents
+    .replace(/^DB_DRIVER=.*$/m, `DB_DRIVER=${driver}`)
+    .replace(/^DB_URL=.*$/m, `DB_URL=${driver === 'sqlite' ? databaseName : './storage/database.sqlite'}`)
+    .replace(/^DB_DATABASE=.*$/m, `DB_DATABASE=${databaseName}`)
+
+  await writeFile(envPath, nextContents, 'utf8')
+}
+
+function parseLastJsonLine<TValue>(stdout: string): TValue {
+  const line = stdout
+    .split(/\r?\n/)
+    .map(entry => entry.trim())
+    .filter(Boolean)
+    .at(-1)
+
+  if (!line) {
+    throw new Error('Expected command stdout to contain a JSON line.')
+  }
+
+  return JSON.parse(line) as TValue
+}
+
 function runCliProcess(
   projectRoot: string,
   args: readonly string[],
   options: { env?: NodeJS.ProcessEnv } = {},
 ) {
   const { cliBinPath } = ensureBuiltWorkspacePackagesSync()
+  const fakePackageManagerRoot = ensureFakePackageManagerBinRootSync()
 
   return spawnSync('node', [cliBinPath, ...args], {
     cwd: projectRoot,
     encoding: 'utf8',
     env: {
       ...process.env,
+      PATH: `${fakePackageManagerRoot}:${process.env.PATH ?? ''}`,
       ...(options.env ?? {}),
     },
   })
@@ -554,6 +795,17 @@ async function withFakeBun<T>(callback: () => Promise<T>): Promise<T> {
   } finally {
     process.env.PATH = originalPath
     await rm(fakeBinRoot, { recursive: true, force: true })
+  }
+}
+
+async function withFakePackageManagers<T>(callback: () => Promise<T>): Promise<T> {
+  const originalPath = process.env.PATH
+  process.env.PATH = `${ensureFakePackageManagerBinRootSync()}:${originalPath ?? ''}`
+
+  try {
+    return await callback()
+  } finally {
+    process.env.PATH = originalPath
   }
 }
 
@@ -775,8 +1027,10 @@ throw new Error('APP_KEY is required before config can load')
 
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('Created Holo project:')
+    expect(result.stdout).toContain('fake pnpm install')
+    expect(result.stdout).toContain('  - installed dependencies')
     expect(result.stdout).toContain('Next steps')
-    expect(result.stdout).toContain('pnpm install')
+    expect(result.stdout).not.toContain('\n  pnpm install\n')
     expect(result.stdout).toContain('pnpm dev')
 
     const projectRoot = join(targetRoot, 'demo-app')
@@ -826,7 +1080,10 @@ throw new Error('APP_KEY is required before config can load')
     await expect(stat(join(projectRoot, 'server/listeners'))).rejects.toThrow()
     expect(await readFile(join(projectRoot, '.holo-js/framework/project.json'), 'utf8')).toContain('"framework": "next"')
     expect(await readFile(join(projectRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain('Missing framework binary')
-    expect(await readFile(join(projectRoot, 'app/api/holo/health/route.ts'), 'utf8')).toContain('holo.getApp')
+    expect(await readFile(join(projectRoot, 'app/api/holo/health/route.ts'), 'utf8')).toContain('.holo-js/generated/next/health-route')
+    expect(await readFile(join(projectRoot, 'app/api/holo/health/route.ts'), 'utf8')).not.toContain('holo.getApp')
+    expect(await readFile(join(projectRoot, '.holo-js/generated/next/health-route.ts'), 'utf8')).toContain('holo.getApp')
+    await expect(stat(join(projectRoot, 'instrumentation.ts'))).rejects.toThrow()
     expect(await readFile(join(projectRoot, 'server/holo.ts'), 'utf8')).toContain('createNextHoloHelpers')
     expect(await readFile(join(projectRoot, 'server/holo.ts'), 'utf8')).not.toContain('schema.generated')
     expect(await readFile(join(projectRoot, 'app/layout.tsx'), 'utf8')).not.toContain('schema.generated')
@@ -866,26 +1123,184 @@ throw new Error('APP_KEY is required before config can load')
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toBe(await readFile(join(secondRoot, 'demo-app/.env.example'), 'utf8'))
   }, 90000)
 
+  const authUserFlowCases: readonly {
+    readonly driver: UserFlowDatabaseDriver
+    readonly enabled: boolean
+  }[] = [
+    { driver: 'sqlite', enabled: true },
+    { driver: 'mysql', enabled: process.env.HOLO_MYSQL_INTEGRATION === '1' },
+    { driver: 'postgres', enabled: process.env.HOLO_POSTGRES_INTEGRATION === '1' },
+  ]
+
+  for (const { driver, enabled } of authUserFlowCases) {
+    const registerTest = enabled ? it : it.skip
+    registerTest(`runs the fresh app auth user flow against ${driver}`, async () => {
+      const targetRoot = await createTempDirectory()
+      tempDirs.push(targetRoot)
+
+      const projectName = `auth-flow-${driver}`
+      const databaseName = driver === 'sqlite'
+        ? join(targetRoot, `${projectName}.sqlite`)
+        : `holo_user_flow_${driver}_${randomUUID().replaceAll('-', '_')}`
+
+      await dropUserFlowDatabase(driver, databaseName)
+
+      try {
+        const created = runCliProcess(targetRoot, [
+          'new',
+          projectName,
+          '--framework',
+          'next',
+          '--database',
+          driver,
+          '--package-manager',
+          'npm',
+        ])
+        expect(created.status, created.stderr).toBe(0)
+
+        const projectRoot = join(targetRoot, projectName)
+        await linkWorkspaceAuthFlowPackages(projectRoot)
+        await setUserFlowDatabaseEnv(projectRoot, driver, databaseName)
+
+        const keyGenerated = runCliProcess(projectRoot, ['key:generate'])
+        expect(keyGenerated.status, keyGenerated.stderr).toBe(0)
+        expect(keyGenerated.stdout).toContain('Generated APP_KEY')
+
+        const installed = runCliProcess(projectRoot, ['install', 'auth'])
+        expect(installed.status, installed.stderr).toBe(0)
+        expect(installed.stdout).toContain('Installed auth support.')
+        expect(installed.stdout).toContain('created 6 auth migrations')
+        expect((await readdir(join(projectRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(6)
+        await expect(stat(join(projectRoot, 'instrumentation.ts'))).rejects.toThrow()
+        await expect(readFile(join(projectRoot, 'app/api/auth/user/route.ts'), 'utf8')).resolves.not.toContain('holo.getApp')
+
+        await writeProjectFile(projectRoot, 'server/commands/auth-flow.ts', `
+export default {
+  description: 'Run the generated auth user flow.',
+  async run(context) {
+    const { createHolo } = await import('@holo-js/core')
+    const auth = (await import('@holo-js/auth')).default
+    const app = await createHolo(context.projectRoot, { preferCache: false })
+    const email = 'ava.${driver}@example.com'
+
+    function unwrap(result) {
+      if (!result) {
+        throw new Error('Expected auth result.')
+      }
+
+      if (typeof result === 'object' && 'error' in result && result.error) {
+        throw new Error(\`Auth failed with \${result.error.code}.\`)
+      }
+
+      return typeof result === 'object' && 'data' in result ? result.data : result
+    }
+
+    await app.initialize()
+
+    try {
+      const registered = unwrap(await auth.register({
+        name: 'Ava',
+        email,
+        password: 'secret-secret',
+        passwordConfirmation: 'secret-secret',
+      }))
+      const loggedIn = unwrap(await auth.login({
+        email,
+        password: 'secret-secret',
+      }))
+      const current = await auth.user()
+      const authenticated = await auth.check()
+      const loggedOut = await auth.logout()
+      console.log(JSON.stringify({
+        registeredEmail: registered.email,
+        loginGuard: loggedIn.guard,
+        currentEmail: current?.email,
+        authenticated,
+        logoutGuard: loggedOut.guard,
+      }))
+    } finally {
+      await app.shutdown()
+    }
+  },
+}
+`)
+
+        const prepared = runCliProcess(projectRoot, ['prepare'])
+        expect(prepared.status, prepared.stderr).toBe(0)
+        await expect(readFile(join(projectRoot, '.holo-js/generated/next/auth-user-route.ts'), 'utf8')).resolves.toContain('await holo.getApp()')
+
+        const migratedFresh = runCliProcess(projectRoot, ['migrate:fresh'])
+        expect(migratedFresh.status, migratedFresh.stderr).toBe(0)
+        expect(migratedFresh.stdout).toContain('Migrations executed:')
+        expect(migratedFresh.stdout).toContain('create_users')
+        await expectUserFlowDatabaseExists(driver, databaseName)
+
+        const migratedAgain = runCliProcess(projectRoot, ['migrate'])
+        expect(migratedAgain.status, migratedAgain.stderr).toBe(0)
+        expect(migratedAgain.stdout).toContain('No migrations were executed.')
+
+        const authFlow = runCliProcess(projectRoot, ['auth-flow'])
+        expect(authFlow.status, authFlow.stderr).toBe(0)
+        expect(parseLastJsonLine<{
+          registeredEmail: string
+          loginGuard: string
+          currentEmail: string
+          authenticated: boolean
+          logoutGuard: string
+        }>(authFlow.stdout)).toEqual({
+          registeredEmail: `ava.${driver}@example.com`,
+          loginGuard: 'web',
+          currentEmail: `ava.${driver}@example.com`,
+          authenticated: true,
+          logoutGuard: 'web',
+        })
+
+        const failed = runCliProcess(projectRoot, ['migrate'], {
+          env: driver === 'sqlite'
+            ? { DB_URL: join(targetRoot, 'missing-directory/database.sqlite') }
+            : {
+                DB_DATABASE: `holo_user_flow_failure_${driver}_${randomUUID().replaceAll('-', '_')}`,
+                DB_PORT: '1',
+              },
+        })
+        expect(failed.status).toBe(1)
+        if (driver === 'sqlite') {
+          expect(failed.stderr).toContain('Unable to open SQLite database')
+        } else {
+          expect(failed.stderr).toContain(`Unable to ensure ${driver === 'mysql' ? 'MySQL' : 'Postgres'} database`)
+        }
+        expect(failed.stderr).not.toContain('\n    at ')
+      } finally {
+        await dropUserFlowDatabase(driver, databaseName)
+      }
+    }, 180000)
+  }
+
   it('covers the in-process new command and scaffold helpers directly', async () => {
     const baseRoot = await createTempDirectory()
     tempDirs.push(baseRoot)
 
     const io = createIo(baseRoot)
-    await expect(import('../src/cli').then(module => module.runCli([
-      'new',
-      'covered-app',
-      '--framework',
-      'next',
-      '--database',
-      'mysql',
-      '--package-manager',
-      'npm',
-    ], io.io))).resolves.toBe(0)
+    await withFakePackageManagers(async () => {
+      await expect(import('../src/cli').then(module => module.runCli([
+        'new',
+        'covered-app',
+        '--framework',
+        'next',
+        '--database',
+        'mysql',
+        '--package-manager',
+        'npm',
+      ], io.io))).resolves.toBe(0)
+    })
 
     const coveredRoot = join(baseRoot, 'covered-app')
-    expect(io.read().stdout).toContain('Created Holo project:')
-    expect(io.read().stdout).toContain('npm install')
-    expect(io.read().stdout).toContain('npm run dev')
+    const newOutput = io.read().stdout
+    expect(newOutput).toContain('Created Holo project:')
+    expect(newOutput).toContain('fake npm install')
+    expect(newOutput).toContain('  - installed dependencies')
+    expect(newOutput).not.toContain('\n  npm install\n')
+    expect(newOutput).toContain('npm run dev')
     expect(await readFile(join(coveredRoot, 'config/database.ts'), 'utf8')).toContain('driver: \'mysql\'')
 
     const directRoot = join(baseRoot, 'direct-app')
@@ -931,7 +1346,9 @@ throw new Error('APP_KEY is required before config can load')
 
     expect(await readFile(join(storageRoot, 'package.json'), 'utf8')).toContain('"@holo-js/storage":')
     expect(await readFile(join(storageRoot, 'config/storage.ts'), 'utf8')).toContain('defineStorageConfig')
-    expect(await readFile(join(storageRoot, 'app/storage/[[...path]]/route.ts'), 'utf8')).toContain('from \'@holo-js/storage\'')
+    expect(await readFile(join(storageRoot, 'app/storage/[[...path]]/route.ts'), 'utf8')).toContain('.holo-js/generated/next/storage-route')
+    expect(await readFile(join(storageRoot, 'app/storage/[[...path]]/route.ts'), 'utf8')).not.toContain('holo.getApp')
+    expect(await readFile(join(storageRoot, '.holo-js/generated/next/storage-route.ts'), 'utf8')).toContain('createPublicStorageResponse')
     expect(await stat(join(storageRoot, 'storage/app/public'))).toBeDefined()
     await expect(stat(join(storageRoot, 'server/lib/public-storage.ts'))).rejects.toThrow()
 
@@ -998,15 +1415,21 @@ throw new Error('APP_KEY is required before config can load')
     expect(await readFile(join(authRoot, 'config/session.ts'), 'utf8')).toContain('defineSessionConfig')
     expect(await readFile(join(authRoot, '.env'), 'utf8')).toContain('SESSION_CONNECTION=main')
     expect(await readFile(join(authRoot, 'server/models/User.ts'), 'utf8')).toContain('hidden: [\'password\']')
-    expect(await readFile(join(authRoot, 'app/api/auth/user/route.ts'), 'utf8')).toContain('await user()')
+    expect(await readFile(join(authRoot, 'app/api/auth/user/route.ts'), 'utf8')).toContain('.holo-js/generated/next/auth-user-route')
+    expect(await readFile(join(authRoot, 'app/api/auth/user/route.ts'), 'utf8')).not.toContain('holo.getApp')
+    expect(await readFile(join(authRoot, '.holo-js/generated/next/auth-user-route.ts'), 'utf8')).toContain('await holo.getApp()')
+    expect(await readFile(join(authRoot, '.holo-js/generated/next/auth-user-route.ts'), 'utf8')).toContain('await user()')
     await expect(stat(join(authRoot, 'app/api/logout/route.ts'))).rejects.toThrow()
     await expect(stat(join(authRoot, 'proxy.ts'))).rejects.toThrow()
     await expect(stat(join(authRoot, 'server/notifications/auth/email-verification.ts'))).rejects.toThrow()
+    await linkWorkspaceConfig(authRoot)
     await expect(projectInternals.installAuthIntoProject(authRoot, { workos: true, clerk: true })).resolves.toMatchObject({
       updatedPackageJson: true,
     })
-    expect(await readFile(join(authRoot, 'app/api/auth/workos/callback/route.ts'), 'utf8')).toContain('completeWorkosAuth')
-    expect(await readFile(join(authRoot, 'app/api/auth/clerk/callback/route.ts'), 'utf8')).toContain('completeClerkAuth')
+    expect(await readFile(join(authRoot, 'app/api/auth/workos/callback/route.ts'), 'utf8')).toContain('.holo-js/generated/next/auth-workos-callback-route')
+    expect(await readFile(join(authRoot, 'app/api/auth/clerk/callback/route.ts'), 'utf8')).toContain('.holo-js/generated/next/auth-clerk-callback-route')
+    expect(await readFile(join(authRoot, '.holo-js/generated/next/auth-workos-callback-route.ts'), 'utf8')).toContain('completeWorkosAuth')
+    expect(await readFile(join(authRoot, '.holo-js/generated/next/auth-clerk-callback-route.ts'), 'utf8')).toContain('completeClerkAuth')
     expect((await readdir(join(authRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(6)
 
     const authNotificationsRoot = join(baseRoot, 'auth-notifications-runtime-app')
@@ -1152,7 +1575,8 @@ throw new Error('APP_KEY is required before config can load')
     })
 
     expect(await readFile(join(authBroadcastRoot, 'config/broadcast.ts'), 'utf8')).toContain('authEndpoint:')
-    expect(await readFile(join(authBroadcastRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).toContain('renderBroadcastAuthResponse')
+    expect(await readFile(join(authBroadcastRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).toContain('.holo-js/generated/next/broadcast-auth-route')
+    expect(await readFile(join(authBroadcastRoot, '.holo-js/generated/next/broadcast-auth-route.ts'), 'utf8')).toContain('renderBroadcastAuthResponse')
 
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: '!!!',
@@ -1310,7 +1734,7 @@ throw new Error('APP_KEY is required before config can load')
     for (const route of hostedAuthRoutes) {
       expect(route.contents).not.toContain('/admin')
     }
-    expect(hostedAuthRoutes.find(route => route.path.startsWith('app/'))?.contents).toContain('new URL(\'/\', request.url)')
+    expect(hostedAuthRoutes.find(route => route.path.startsWith('app/'))?.contents).toContain('.holo-js/generated/next/auth-clerk-callback-route')
     expect(hostedAuthRoutes.find(route => route.path.startsWith('server/'))?.contents).toContain('sendRedirect(event, \'/\', 303)')
     expect(hostedAuthRoutes.find(route => route.path.startsWith('src/'))?.contents).toContain('redirect(303, \'/\')')
     expect(projectInternals.authFeaturesRequireConfigUpdate({ socialProviders: ['google'] })).toBe(true)
@@ -1490,7 +1914,15 @@ throw new Error('APP_KEY is required before config can load')
       packageManager: 'bun',
       storageDefaultDisk: 'local',
       optionalPackages: ['storage'],
-    }).find(file => file.path === 'app/storage/[[...path]]/route.ts')?.contents).toContain('createPublicStorageResponse')
+    }).find(file => file.path === 'app/storage/[[...path]]/route.ts')?.contents).toContain('.holo-js/generated/next/storage-route')
+    expect(projectInternals.renderFrameworkFiles({
+      projectName: 'Next App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['storage'],
+    }).find(file => file.path === '.holo-js/generated/next/storage-route.ts')?.contents).toContain('createPublicStorageResponse')
     expect(projectInternals.renderFrameworkFiles({
       projectName: 'Svelte App',
       framework: 'sveltekit',
@@ -1746,13 +2178,15 @@ throw new Error('APP_KEY is required before config can load')
         'package': ['forms', 'validation'],
       },
     })
-    await expect(newCommand!.run({
-      projectRoot: baseRoot,
-      cwd: baseRoot,
-      args: ['fallback-app'],
-      flags: {},
-      loadProject: async () => ({ config: defaultProjectConfig() }),
-    })).resolves.toBeUndefined()
+    await withFakePackageManagers(async () => {
+      await expect(newCommand!.run({
+        projectRoot: baseRoot,
+        cwd: baseRoot,
+        args: ['fallback-app'],
+        flags: {},
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      })).resolves.toBeUndefined()
+    })
     expect(fallbackIo.read().stdout).toContain('Created Holo project:')
 
     const nuxtRoot = join(baseRoot, 'nuxt-runner')
@@ -1827,13 +2261,15 @@ throw new Error('APP_KEY is required before config can load')
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }).find(command => command.name === 'new')
     expect(rootCommand).toBeDefined()
-    await expect(rootCommand!.run({
-      projectRoot: rootIo.io.cwd,
-      cwd: rootIo.io.cwd,
-      args: [],
-      flags: {},
-      loadProject: async () => ({ config: defaultProjectConfig() }),
-    })).resolves.toBeUndefined()
+    await withFakePackageManagers(async () => {
+      await expect(rootCommand!.run({
+        projectRoot: rootIo.io.cwd,
+        cwd: rootIo.io.cwd,
+        args: [],
+        flags: {},
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      })).resolves.toBeUndefined()
+    })
     expect(rootIo.read().stdout).toContain('Created Holo project:')
 
     // Cover injectBroadcastAuthEndpoint returning undefined (no regex match)
@@ -1902,7 +2338,11 @@ APP_ENV=development
       }).find(file => file.path === path)?.contents ?? ''
     }
 
-    const nextCurrentAuthRoute = renderCurrentAuthRoute('next', 'app/api/auth/user/route.ts')
+    const nextCurrentAuthRoute = renderCurrentAuthRoute('next', '.holo-js/generated/next/auth-user-route.ts')
+    const nextCurrentAuthBridge = renderCurrentAuthRoute('next', 'app/api/auth/user/route.ts')
+    expect(nextCurrentAuthBridge).toContain('.holo-js/generated/next/auth-user-route')
+    expect(nextCurrentAuthBridge).not.toContain('holo.getApp')
+    expect(nextCurrentAuthRoute).toContain('await holo.getApp()')
     expect(nextCurrentAuthRoute).toContain('new URL(request.url).searchParams.get(\'guard\')')
     expect(nextCurrentAuthRoute).toContain('const guardAuth = guard ? auth.guard(guard) : undefined')
     expect(nextCurrentAuthRoute).toContain('error.code === \'guard_not_configured\'')
@@ -2073,6 +2513,39 @@ export default defineAppConfig({
     const rerun = runCliProcess(projectRoot, ['install', 'auth'])
     expect(rerun.status).toBe(0)
     expect(rerun.stdout).toContain('Auth support is already installed.')
+  }, 30000)
+
+  it('runs the project package manager after auth install updates package.json', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const runProjectDependencyInstall = vi.fn(async () => {
+      io.io.stdout.write('package manager install\n')
+    })
+    const installCommand = cliInternals.createInternalCommands(
+      {
+        ...io.io,
+        projectRoot,
+        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      } as never,
+      undefined,
+      {},
+      { runProjectDependencyInstall },
+    ).find(command => command.name === 'install')
+
+    await installCommand?.run({
+      ...io.io,
+      projectRoot,
+      cwd: projectRoot,
+      args: ['auth'],
+      flags: {},
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    } as never)
+
+    expect(runProjectDependencyInstall).toHaveBeenCalledWith(expect.objectContaining({ projectRoot }), projectRoot)
+    expect(io.read().stdout).toContain('package manager install')
+    expect(io.read().stdout).toContain('  - installed dependencies')
   }, 30000)
 
   it('installs authorization support without forcing auth and is idempotent', async () => {
@@ -4643,7 +5116,9 @@ module.exports = {
       updatedEnv: true,
       updatedEnvExample: true,
     })
-    await expect(readFile(join(nextRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).resolves.toContain('channelAuth')
+    await expect(readFile(join(nextRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).resolves.toContain('.holo-js/generated/next/broadcast-auth-route')
+    await expect(readFile(join(nextRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).resolves.not.toContain('holo.getApp')
+    await expect(readFile(join(nextRoot, '.holo-js/generated/next/broadcast-auth-route.ts'), 'utf8')).resolves.toContain('channelAuth')
     await expect(readFile(join(nextRoot, 'server/holo.ts'), 'utf8')).resolves.toContain('createNextHoloHelpers')
     await expect(readFile(join(nextRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-react": "${expectedHoloPackageRange}"`)
     await expect(readFile(join(nextRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/adapter-next": "${expectedHoloPackageRange}"`)
@@ -4786,7 +5261,8 @@ export default defineBroadcastConfig({
     await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain(
       "authEndpoint: `${env('APP_URL', 'http://localhost:3000')}/broadcasting/auth`",
     )
-    await expect(readFile(join(nextRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).resolves.toContain('channelAuth')
+    await expect(readFile(join(nextRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).resolves.toContain('.holo-js/generated/next/broadcast-auth-route')
+    await expect(readFile(join(nextRoot, '.holo-js/generated/next/broadcast-auth-route.ts'), 'utf8')).resolves.toContain('channelAuth')
   }, 30000)
 
   it('backfills broadcast auth wiring when auth is installed after broadcast', async () => {
@@ -4815,7 +5291,8 @@ export default defineBroadcastConfig({
     await expect(readFile(join(nextRoot, 'config/broadcast.ts'), 'utf8')).resolves.toContain(
       "authEndpoint: `${env('APP_URL', 'http://localhost:3000')}/broadcasting/auth`",
     )
-    await expect(readFile(join(nextRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).resolves.toContain('channelAuth')
+    await expect(readFile(join(nextRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).resolves.toContain('.holo-js/generated/next/broadcast-auth-route')
+    await expect(readFile(join(nextRoot, '.holo-js/generated/next/broadcast-auth-route.ts'), 'utf8')).resolves.toContain('channelAuth')
 
     const formattedNextRoot = await createTempProject()
     tempDirs.push(formattedNextRoot)
@@ -4850,7 +5327,8 @@ export default defineBroadcastConfig({
     await expect(readFile(formattedBroadcastConfigPath, 'utf8')).resolves.toContain(
       "authEndpoint: `${env('APP_URL', 'http://localhost:3000')}/broadcasting/auth`",
     )
-    await expect(readFile(join(formattedNextRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).resolves.toContain('channelAuth')
+    await expect(readFile(join(formattedNextRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).resolves.toContain('.holo-js/generated/next/broadcast-auth-route')
+    await expect(readFile(join(formattedNextRoot, '.holo-js/generated/next/broadcast-auth-route.ts'), 'utf8')).resolves.toContain('channelAuth')
 
     const genericRoot = await createTempProject()
     tempDirs.push(genericRoot)
@@ -7107,6 +7585,18 @@ export default {
       stdout: 'seed output\n',
       stderr: '',
     })).toBe('seed output')
+    expect(cliInternals.getRuntimeFailureMessage('migrate', {
+      status: 1,
+      stdout: '',
+      stderr: [
+        'file:///app/.holo-js/runtime/index.mjs:12',
+        '    throw new Error(\'Unable to open SQLite database "./missing/database.sqlite": unable to open database file\')',
+        '          ^',
+        '',
+        'Error: Unable to open SQLite database "./missing/database.sqlite": unable to open database file',
+        '    at initialize (file:///app/.holo-js/runtime/index.mjs:12:11)',
+      ].join('\n'),
+    })).toBe('Unable to open SQLite database "./missing/database.sqlite": unable to open database file')
     expect(cliInternals.getRuntimeFailureMessage('seed', {
       status: 1,
       stdout: undefined,
@@ -8587,6 +9077,7 @@ export default defineEvent({ name: 'audit.activity' })
     const runProjectPrepare = vi.fn(async () => {})
     const runProjectDevServer = vi.fn(async () => {})
     const runProjectLifecycleScript = vi.fn(async () => {})
+    const runProjectDependencyInstall = vi.fn(async () => {})
     const findProjectRoot = vi.fn(async () => projectRoot)
     const loadProjectConfig = vi.fn(async () => ({ config: defaultProjectConfig() }))
     const discoverAppCommands = vi.fn(async () => [])
@@ -8645,6 +9136,7 @@ export default defineEvent({ name: 'audit.activity' })
         runProjectPrepare,
         runProjectDevServer,
         runProjectLifecycleScript,
+        runProjectDependencyInstall,
       }
     })
     vi.doMock('../src/project/runtime', async () => {
@@ -8919,6 +9411,11 @@ export default defineEvent({ name: 'audit.activity' })
       expect(runProjectPrepare).toHaveBeenCalledWith(projectRoot, baseContext)
       expect(runProjectDevServer).toHaveBeenCalledWith(baseContext, projectRoot)
       expect(runProjectLifecycleScript).toHaveBeenCalledWith(baseContext, projectRoot, 'holo:build')
+      expect(runProjectDependencyInstall).toHaveBeenCalledTimes(9)
+      expect(runProjectDependencyInstall).toHaveBeenCalledWith(
+        expect.objectContaining({ projectRoot }),
+        resolve(projectRoot, 'LazyProject'),
+      )
       expect(runBroadcastWorkCommand).toHaveBeenCalledWith(baseContext, projectRoot)
       expect(findProjectRoot).toHaveBeenCalledTimes(1)
       expect(findProjectRoot).toHaveBeenCalledWith(projectRoot)
@@ -10395,6 +10892,27 @@ export default defineConfig({
     const emptyModelTypes = await readFile(join(projectRoot, '.holo-js/generated/model-registry.d.ts'), 'utf8')
     expect(emptyModelTypes).toContain('schema.generated')
     expect(emptyModelTypes).not.toContain('ModelReference')
+  }, 30000)
+
+  it('regenerates Next managed route modules during prepare', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await linkWorkspaceDb(projectRoot)
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'next' }, null, 2))
+    await writeProjectFile(projectRoot, 'app/api/auth/user/route.ts', 'export { GET } from \'../../../../.holo-js/generated/next/auth-user-route\'\n')
+    await writeProjectFile(projectRoot, 'app/storage/[[...path]]/route.ts', 'export { GET } from \'../../../.holo-js/generated/next/storage-route\'\n')
+    await writeProjectFile(projectRoot, 'app/broadcasting/auth/route.ts', 'export { POST } from \'../../../.holo-js/generated/next/broadcast-auth-route\'\n')
+    await writeProjectFile(projectRoot, 'app/api/auth/clerk/login/route.ts', 'export { GET } from \'../../../../../.holo-js/generated/next/auth-clerk-login-route\'\n')
+
+    await withFakeBun(async () => {
+      await cliInternals.runProjectPrepare(projectRoot)
+    })
+
+    expect(await readFile(join(projectRoot, '.holo-js/generated/next/health-route.ts'), 'utf8')).toContain('holo.getApp')
+    expect(await readFile(join(projectRoot, '.holo-js/generated/next/auth-user-route.ts'), 'utf8')).toContain('await user()')
+    expect(await readFile(join(projectRoot, '.holo-js/generated/next/storage-route.ts'), 'utf8')).toContain('createPublicStorageResponse')
+    expect(await readFile(join(projectRoot, '.holo-js/generated/next/broadcast-auth-route.ts'), 'utf8')).toContain('channelAuth')
+    expect(await readFile(join(projectRoot, '.holo-js/generated/next/auth-clerk-login-route.ts'), 'utf8')).toContain('loginWithClerk')
   }, 30000)
 
   it('manages SvelteKit hook entrypoints during prepare and preserves user hook extensions separately', async () => {

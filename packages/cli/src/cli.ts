@@ -59,6 +59,7 @@ type ProjectCommandExecutors = {
   runProjectPrepare?: typeof DevModule.runProjectPrepare
   runProjectDevServer?: typeof DevModule.runProjectDevServer
   runProjectLifecycleScript?: typeof DevModule.runProjectLifecycleScript
+  runProjectDependencyInstall?: typeof DevModule.runProjectDependencyInstall
 }
 type QueueCommandExecutors = {
   runQueueFailedCommand?: typeof QueueModule.runQueueFailedCommand
@@ -213,6 +214,7 @@ const projectExecutorLoaders: ProjectExecutorLoaderMap = {
   runProjectPrepare: async () => (await loadDevModule()).runProjectPrepare,
   runProjectDevServer: async () => (await loadDevModule()).runProjectDevServer,
   runProjectLifecycleScript: async () => (await loadDevModule()).runProjectLifecycleScript,
+  runProjectDependencyInstall: async () => (await loadDevModule()).runProjectDependencyInstall,
 }
 
 async function resolveProjectExecutor<TKey extends ProjectExecutorKey>(
@@ -375,6 +377,28 @@ export function resolvePackageManagerDevCommand(packageManager: SupportedScaffol
   }
 }
 
+async function runProjectDependencyInstallAfterPackageJsonUpdate(
+  context: InternalCommandContext,
+  projectExecutors: ProjectCommandExecutors,
+  updatedPackageJson: boolean,
+): Promise<void> {
+  if (!updatedPackageJson) {
+    return
+  }
+
+  await runProjectDependencyInstallForProject(context, projectExecutors, context.projectRoot)
+}
+
+async function runProjectDependencyInstallForProject(
+  context: InternalCommandContext,
+  projectExecutors: ProjectCommandExecutors,
+  projectRoot: string,
+): Promise<void> {
+  const runProjectDependencyInstall = await resolveProjectExecutor(projectExecutors, 'runProjectDependencyInstall')
+  await runProjectDependencyInstall(context, projectRoot)
+  writeLine(context.stdout, '  - installed dependencies')
+}
+
 export function createInternalCommands(
   context: InternalCommandContext,
   runtimeExecutor?: RuntimeExecutor,
@@ -441,10 +465,10 @@ export function createInternalCommands(
         })
 
         writeLine(context.stdout, `Created Holo project: ${targetDir}`)
+        await runProjectDependencyInstallForProject(context, projectExecutors, targetDir)
         writeLine(context.stdout)
         writeLine(context.stdout, 'Next steps')
         writeLine(context.stdout, `  cd ${projectName}`)
-        writeLine(context.stdout, `  ${resolvePackageManagerInstallCommand(packageManager)}`)
         writeLine(context.stdout, `  ${resolvePackageManagerDevCommand(packageManager)}`)
       },
     },
@@ -591,6 +615,11 @@ export function createInternalCommands(
             if (queueResult.updatedEnvExample) writeLine(context.stdout, '  - updated .env.example')
             if (queueResult.createdJobsDirectory) writeLine(context.stdout, '  - created server/jobs')
           }
+          await runProjectDependencyInstallAfterPackageJsonUpdate(
+            context,
+            projectExecutors,
+            eventsResult.updatedPackageJson || queueResult?.updatedPackageJson === true,
+          )
           return
         }
 
@@ -625,6 +654,7 @@ export function createInternalCommands(
           if (result.updatedEnv) writeLine(context.stdout, '  - updated .env')
           if (result.updatedEnvExample) writeLine(context.stdout, '  - updated .env.example')
           if (result.createdMigrationFiles.length > 0) writeLine(context.stdout, `  - created ${result.createdMigrationFiles.length} auth migrations`)
+          await runProjectDependencyInstallAfterPackageJsonUpdate(context, projectExecutors, result.updatedPackageJson)
           return
         }
 
@@ -643,6 +673,7 @@ export function createInternalCommands(
           if (result.createdAbilitiesDirectory) writeLine(context.stdout, '  - created server/abilities')
           if (result.createdPoliciesReadme) writeLine(context.stdout, '  - created server/policies/README.md')
           if (result.createdAbilitiesReadme) writeLine(context.stdout, '  - created server/abilities/README.md')
+          await runProjectDependencyInstallAfterPackageJsonUpdate(context, projectExecutors, result.updatedPackageJson)
           return
         }
 
@@ -659,6 +690,7 @@ export function createInternalCommands(
           if (result.createdMigrationFiles.length > 0) {
             writeLine(context.stdout, `  - created ${result.createdMigrationFiles.length} notifications migration`)
           }
+          await runProjectDependencyInstallAfterPackageJsonUpdate(context, projectExecutors, result.updatedPackageJson)
           return
         }
 
@@ -677,6 +709,7 @@ export function createInternalCommands(
           if (result.updatedEnvExample) writeLine(context.stdout, '  - updated .env.example')
           if (result.createdMailConfig) writeLine(context.stdout, '  - created config/mail.ts')
           if (result.createdMailDirectory) writeLine(context.stdout, '  - created server/mail')
+          await runProjectDependencyInstallAfterPackageJsonUpdate(context, projectExecutors, result.updatedPackageJson)
           return
         }
 
@@ -701,6 +734,7 @@ export function createInternalCommands(
           if (result.createdChannelsDirectory) writeLine(context.stdout, '  - created server/channels')
           if (result.createdBroadcastAuthRoute) writeLine(context.stdout, '  - created /broadcasting/auth route')
           if (result.createdFrameworkSetup) writeLine(context.stdout, '  - created framework Flux setup')
+          await runProjectDependencyInstallAfterPackageJsonUpdate(context, projectExecutors, result.updatedPackageJson)
           return
         }
 
@@ -713,6 +747,7 @@ export function createInternalCommands(
           if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
           if (result.createdSecurityConfig) writeLine(context.stdout, '  - created config/security.ts')
           if (result.createdCorsConfig) writeLine(context.stdout, '  - created config/cors.ts')
+          await runProjectDependencyInstallAfterPackageJsonUpdate(context, projectExecutors, result.updatedPackageJson)
           return
         }
 
@@ -735,6 +770,7 @@ export function createInternalCommands(
           if (result.updatedEnv) writeLine(context.stdout, '  - updated .env')
           if (result.updatedEnvExample) writeLine(context.stdout, '  - updated .env.example')
           if (result.databaseDriver) writeLine(context.stdout, '  - run "holo cache:table" to create the cache tables')
+          await runProjectDependencyInstallAfterPackageJsonUpdate(context, projectExecutors, result.updatedPackageJson)
           return
         }
 
@@ -750,6 +786,7 @@ export function createInternalCommands(
           if (result.createdMediaConfig) writeLine(context.stdout, '  - created config/media.ts')
           if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
           if (result.createdMigrationFiles.length > 0) writeLine(context.stdout, '  - created media migration')
+          await runProjectDependencyInstallAfterPackageJsonUpdate(context, projectExecutors, result.updatedPackageJson)
           return
         }
 
@@ -774,6 +811,7 @@ export function createInternalCommands(
         if (result.updatedEnv) writeLine(context.stdout, '  - updated .env')
         if (result.updatedEnvExample) writeLine(context.stdout, '  - updated .env.example')
         if (result.createdJobsDirectory) writeLine(context.stdout, '  - created server/jobs')
+        await runProjectDependencyInstallAfterPackageJsonUpdate(context, projectExecutors, result.updatedPackageJson)
       },
     },
     {

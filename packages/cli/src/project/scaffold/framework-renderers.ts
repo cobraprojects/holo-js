@@ -311,6 +311,13 @@ function renderNextEnvDts(): string {
   ].join('\n')
 }
 
+function renderNextRouteBridge(modulePath: string, methods: readonly string[]): string {
+  return [
+    `export { ${methods.join(', ')} } from '${modulePath}'`,
+    '',
+  ].join('\n')
+}
+
 export function renderNextHoloHelper(): string {
   return [
     'import { createNextHoloHelpers } from \'@holo-js/adapter-next\'',
@@ -320,21 +327,13 @@ export function renderNextHoloHelper(): string {
   ].join('\n')
 }
 
-function renderNextInstrumentation(): string {
-  return [
-    'export async function register() {',
-    '  if (process.env.NEXT_RUNTIME === \'nodejs\') {',
-    '    const { holo } = await import(\'@/server/holo\')',
-    '    await holo.getApp()',
-    '  }',
-    '}',
-    '',
-  ].join('\n')
+function renderNextHealthRoute(): string {
+  return renderNextRouteBridge('../../../../.holo-js/generated/next/health-route', ['GET'])
 }
 
-function renderNextHealthRoute(): string {
+function renderNextGeneratedHealthRoute(): string {
   return [
-    'import { holo } from \'@/server/holo\'',
+    'import { holo } from \'../../../server/holo\'',
     '',
     'export async function GET() {',
     '  const app = await holo.getApp()',
@@ -352,10 +351,17 @@ function renderNextHealthRoute(): string {
 }
 
 function renderNextCurrentAuthRoute(): string {
+  return renderNextRouteBridge('../../../../.holo-js/generated/next/auth-user-route', ['GET'])
+}
+
+function renderNextGeneratedCurrentAuthRoute(): string {
   return [
     'import auth, { check, isAuthError, provider, user } from \'@holo-js/auth\'',
+    'import { holo } from \'../../../server/holo\'',
     '',
     'export async function GET(request: Request) {',
+    '  await holo.getApp()',
+    '',
     '  const guard = new URL(request.url).searchParams.get(\'guard\') ?? undefined',
     '  try {',
     '    const guardAuth = guard ? auth.guard(guard) : undefined',
@@ -384,10 +390,17 @@ function renderNextCurrentAuthRoute(): string {
 }
 
 function renderNextHostedAuthLoginRoute(spec: HostedAuthProviderSpec): string {
+  return renderNextRouteBridge(`../../../../../.holo-js/generated/next/auth-${spec.provider}-login-route`, ['GET'])
+}
+
+function renderNextGeneratedHostedAuthLoginRoute(spec: HostedAuthProviderSpec): string {
   return [
     `import { ${spec.loginFunction} } from '${spec.packageName}'`,
+    'import { holo } from \'../../../server/holo\'',
     '',
     'export async function GET(request: Request) {',
+    '  await holo.getApp()',
+    '',
     `  return await ${spec.loginFunction}(request)`,
     '}',
     '',
@@ -395,10 +408,17 @@ function renderNextHostedAuthLoginRoute(spec: HostedAuthProviderSpec): string {
 }
 
 function renderNextHostedAuthRegisterRoute(spec: HostedAuthProviderSpec): string {
+  return renderNextRouteBridge(`../../../../../.holo-js/generated/next/auth-${spec.provider}-register-route`, ['GET'])
+}
+
+function renderNextGeneratedHostedAuthRegisterRoute(spec: HostedAuthProviderSpec): string {
   return [
     `import { ${spec.registerFunction} } from '${spec.packageName}'`,
+    'import { holo } from \'../../../server/holo\'',
     '',
     'export async function GET(request: Request) {',
+    '  await holo.getApp()',
+    '',
     `  return await ${spec.registerFunction}(request)`,
     '}',
     '',
@@ -406,10 +426,17 @@ function renderNextHostedAuthRegisterRoute(spec: HostedAuthProviderSpec): string
 }
 
 function renderNextHostedAuthCallbackRoute(spec: HostedAuthProviderSpec): string {
+  return renderNextRouteBridge(`../../../../../.holo-js/generated/next/auth-${spec.provider}-callback-route`, ['GET'])
+}
+
+function renderNextGeneratedHostedAuthCallbackRoute(spec: HostedAuthProviderSpec): string {
   return [
     `import { ${spec.callbackFunction} } from '${spec.packageName}'`,
+    'import { holo } from \'../../../server/holo\'',
     '',
     'export async function GET(request: Request) {',
+    '  await holo.getApp()',
+    '',
     `  const { error } = await ${spec.callbackFunction}(request)`,
     '  if (error) {',
     '    return Response.redirect(new URL(`/login?error=${encodeURIComponent(error.code)}`, request.url))',
@@ -422,11 +449,18 @@ function renderNextHostedAuthCallbackRoute(spec: HostedAuthProviderSpec): string
 }
 
 function renderNextHostedAuthLogoutRoute(spec: HostedAuthProviderSpec): string {
+  return renderNextRouteBridge(`../../../../../.holo-js/generated/next/auth-${spec.provider}-logout-route`, ['POST'])
+}
+
+function renderNextGeneratedHostedAuthLogoutRoute(spec: HostedAuthProviderSpec): string {
   return [
     'import { provider } from \'@holo-js/auth\'',
     `import { ${spec.logoutFunction} } from '${spec.packageName}'`,
+    'import { holo } from \'../../../server/holo\'',
     '',
     'export async function POST(request: Request) {',
+    '  await holo.getApp()',
+    '',
     '  let currentProvider: string | null',
     '  try {',
     '    currentProvider = await provider()',
@@ -460,9 +494,13 @@ function renderNextHostedAuthRouteFiles(provider: HostedAuthProvider): readonly 
 }
 
 function renderNextStorageRoute(): string {
+  return renderNextRouteBridge('../../../.holo-js/generated/next/storage-route', ['GET'])
+}
+
+function renderNextGeneratedStorageRoute(): string {
   return [
-    'import { holo } from \'@/server/holo\'',
     'import { createPublicStorageResponse } from \'@holo-js/storage\'',
+    'import { holo } from \'../../../server/holo\'',
     '',
     'export async function GET(request: Request) {',
     '  const app = await holo.getApp()',
@@ -470,6 +508,64 @@ function renderNextStorageRoute(): string {
     '}',
     '',
   ].join('\n')
+}
+
+export function renderNextBroadcastAuthRoute(): string {
+  return renderNextRouteBridge('../../../.holo-js/generated/next/broadcast-auth-route', ['POST'])
+}
+
+export function renderNextGeneratedBroadcastAuthRoute(): string {
+  return [
+    'import { renderBroadcastAuthResponse } from \'@holo-js/broadcast/auth\'',
+    'import { holo } from \'../../../server/holo\'',
+    '',
+    'export async function POST(request: Request) {',
+    '  const app = await holo.getApp()',
+    '  const auth = await holo.getAuth()',
+    '',
+    '  return await renderBroadcastAuthResponse(request, {',
+    '    resolveUser: async () => await auth?.user(),',
+    '    channelAuth: {',
+    '      registry: {',
+    '        projectRoot: app.projectRoot,',
+    '        channels: app.registry?.channels ?? [],',
+    '      },',
+    '    },',
+    '  })',
+    '}',
+    '',
+  ].join('\n')
+}
+
+export function renderNextManagedRouteFiles(options: {
+  readonly authEnabled?: boolean
+  readonly storageEnabled?: boolean
+  readonly broadcastAuthEnabled?: boolean
+} = {}): readonly ScaffoldedFile[] {
+  return [
+    { path: '.holo-js/generated/next/health-route.ts', contents: renderNextGeneratedHealthRoute() },
+    ...(options.authEnabled
+      ? [{ path: '.holo-js/generated/next/auth-user-route.ts', contents: renderNextGeneratedCurrentAuthRoute() }]
+      : []),
+    ...(options.storageEnabled
+      ? [{ path: '.holo-js/generated/next/storage-route.ts', contents: renderNextGeneratedStorageRoute() }]
+      : []),
+    ...(options.broadcastAuthEnabled
+      ? [{ path: '.holo-js/generated/next/broadcast-auth-route.ts', contents: renderNextGeneratedBroadcastAuthRoute() }]
+      : []),
+  ]
+}
+
+export function renderNextManagedHostedAuthRouteFiles(features: AuthInstallFeatures): readonly ScaffoldedFile[] {
+  return getRequestedHostedAuthProviders(features).flatMap((provider) => {
+    const spec = HOSTED_AUTH_PROVIDERS[provider]
+    return [
+      { path: `.holo-js/generated/next/auth-${provider}-login-route.ts`, contents: renderNextGeneratedHostedAuthLoginRoute(spec) },
+      { path: `.holo-js/generated/next/auth-${provider}-register-route.ts`, contents: renderNextGeneratedHostedAuthRegisterRoute(spec) },
+      { path: `.holo-js/generated/next/auth-${provider}-callback-route.ts`, contents: renderNextGeneratedHostedAuthCallbackRoute(spec) },
+      { path: `.holo-js/generated/next/auth-${provider}-logout-route.ts`, contents: renderNextGeneratedHostedAuthLogoutRoute(spec) },
+    ]
+  })
 }
 
 function renderSvelteConfig(): string {
@@ -780,6 +876,25 @@ export function renderAuthProviderRouteFiles(
   })
 }
 
+export function renderAuthRouteFiles(framework: ProjectScaffoldOptions['framework']): readonly ScaffoldedFile[] {
+  if (framework === 'next') {
+    return [
+      { path: 'app/api/auth/user/route.ts', contents: renderNextCurrentAuthRoute() },
+      { path: '.holo-js/generated/next/auth-user-route.ts', contents: renderNextGeneratedCurrentAuthRoute() },
+    ]
+  }
+
+  if (framework === 'nuxt') {
+    return [
+      { path: 'server/api/auth/user.get.ts', contents: renderNuxtCurrentAuthRoute() },
+    ]
+  }
+
+  return [
+    { path: 'src/routes/api/auth/user/+server.ts', contents: renderSvelteCurrentAuthRoute() },
+  ]
+}
+
 function renderSvelteStorageRoute(): string {
   return [
     'import { holo } from \'$lib/server/holo\'',
@@ -805,9 +920,7 @@ export function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly 
       { path: 'server/api/holo/health.get.ts', contents: renderNuxtHealthRoute() },
       { path: 'shared/.gitkeep', contents: '' },
       ...(authEnabled
-        ? [
-            { path: 'server/api/auth/user.get.ts', contents: renderNuxtCurrentAuthRoute() },
-          ]
+        ? renderAuthRouteFiles('nuxt')
         : []),
     ]
   }
@@ -820,15 +933,13 @@ export function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly 
       { path: 'app/page.tsx', contents: renderNextPage(options.projectName) },
       { path: 'app/api/holo/health/route.ts', contents: renderNextHealthRoute() },
       ...(authEnabled
-        ? [
-            { path: 'app/api/auth/user/route.ts', contents: renderNextCurrentAuthRoute() },
-          ]
+        ? [{ path: 'app/api/auth/user/route.ts', contents: renderNextCurrentAuthRoute() }]
         : []),
       ...(storageEnabled
         ? [{ path: 'app/storage/[[...path]]/route.ts', contents: renderNextStorageRoute() }]
         : []),
       { path: 'server/holo.ts', contents: renderNextHoloHelper() },
-      { path: 'instrumentation.ts', contents: renderNextInstrumentation() },
+      ...renderNextManagedRouteFiles({ authEnabled, storageEnabled }),
     ]
   }
 
@@ -841,9 +952,7 @@ export function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly 
     { path: 'src/routes/+page.svelte', contents: renderSveltePage(options.projectName) },
     { path: 'src/routes/api/holo/health/+server.ts', contents: renderSvelteHealthRoute() },
     ...(authEnabled
-      ? [
-          { path: 'src/routes/api/auth/user/+server.ts', contents: renderSvelteCurrentAuthRoute() },
-        ]
+      ? renderAuthRouteFiles('sveltekit')
       : []),
     ...(storageEnabled
       ? [{ path: 'src/routes/storage/[...path]/+server.ts', contents: renderSvelteStorageRoute() }]

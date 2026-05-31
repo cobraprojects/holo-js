@@ -45,7 +45,12 @@ export class SQLiteAdapter implements DriverAdapter {
       return
     }
 
-    this.database = this.createDatabaseInstance(this.filename)
+    try {
+      this.database = this.createDatabaseInstance(this.filename)
+    } catch (error) {
+      const message = error instanceof Error && error.message ? error.message : 'Unknown SQLite driver error.'
+      throw new Error(`Unable to open SQLite database "${this.filename}": ${message}`, { cause: error })
+    }
     this.connected = true
   }
 

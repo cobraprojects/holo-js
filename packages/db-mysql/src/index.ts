@@ -51,8 +51,57 @@ type RawMySQLPoolLike = {
   end(): Promise<void>
 }
 
+type BootstrapTarget = {
+  database: string
+  config: PoolOptions
+}
+
 function toMutableBindings(bindings: readonly unknown[] = []): unknown[] {
   return [...bindings]
+}
+
+function quoteDatabaseIdentifier(database: string): string {
+  return `\`${database.replaceAll('`', '``')}\``
+}
+
+function stripDatabaseFromUri(uri: string): { database?: string, uri: string } {
+  const parsed = new URL(uri)
+  const database = parsed.pathname.replace(/^\/+/, '')
+
+  parsed.pathname = ''
+
+  return {
+    database: database ? decodeURIComponent(database) : undefined,
+    uri: parsed.toString(),
+  }
+}
+
+function resolveBootstrapTarget(config: PoolOptions): BootstrapTarget | undefined {
+  if (typeof config.database === 'string' && config.database.trim().length > 0) {
+    const { database, ...bootstrapConfig } = config
+
+    return {
+      database,
+      config: bootstrapConfig,
+    }
+  }
+
+  if (typeof config.uri === 'string' && config.uri.trim().length > 0) {
+    const stripped = stripDatabaseFromUri(config.uri)
+    if (!stripped.database) {
+      return undefined
+    }
+
+    return {
+      database: stripped.database,
+      config: {
+        ...config,
+        uri: stripped.uri,
+      },
+    }
+  }
+
+  return undefined
 }
 
 function wrapMySQLClient(client: PoolConnection | MySQLClientLike): MySQLClientLike {
@@ -107,6 +156,7 @@ export class MySQLAdapter implements DriverAdapter {
     }
 
     if (this.createPoolInstance) {
+      await this.ensureDatabaseExists()
       this.pool = this.createPoolInstance(this.config)
     }
 
@@ -254,6 +304,34 @@ export class MySQLAdapter implements DriverAdapter {
     }
 
     return this.pool
+  }
+
+  private async ensureDatabaseExists(): Promise<void> {
+    if (!this.createPoolInstance) {
+      return
+    }
+
+    const target = resolveBootstrapTarget(this.config)
+    if (!target) {
+      return
+    }
+
+    const bootstrapPool = this.createPoolInstance(target.config)
+
+    try {
+      const [existing] = await bootstrapPool.query(
+        'SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?',
+        [target.database],
+      )
+      if (Array.isArray(existing) && existing.length === 0) {
+        await bootstrapPool.query(`CREATE DATABASE ${quoteDatabaseIdentifier(target.database)}`, [])
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(`Unable to ensure MySQL database "${target.database}" exists: ${message}`, { cause: error })
+    } finally {
+      await bootstrapPool.end()
+    }
   }
 
   private async leaseTransactionClient(): Promise<MySQLClientLike> {

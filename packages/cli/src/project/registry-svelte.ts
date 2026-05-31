@@ -4,6 +4,10 @@ import {
   GENERATED_SVELTE_HOOKS_PATH,
   GENERATED_SVELTE_SERVER_HOOKS_PATH,
 } from './shared'
+import {
+  renderNextManagedHostedAuthRouteFiles,
+  renderNextManagedRouteFiles,
+} from './scaffold/framework-renderers'
 
 function renderManagedSvelteHooksModule(): string {
   return [
@@ -205,6 +209,10 @@ async function unlinkIfPresent(path: string): Promise<void> {
   }
 }
 
+async function pathExists(path: string): Promise<boolean> {
+  return (await readFileIfPresent(path)) !== undefined
+}
+
 const SVELTE_HOOKS_OVERRIDE_BLOCK = [
   '    files: {',
   '      hooks: {',
@@ -346,6 +354,29 @@ async function ensureSvelteManagedHooks(projectRoot: string): Promise<void> {
   await ensureSvelteConfigHooksOverride(projectRoot)
 }
 
+async function ensureNextManagedRoutes(projectRoot: string): Promise<void> {
+  const authEnabled = await pathExists(resolve(projectRoot, 'app/api/auth/user/route.ts'))
+  const storageEnabled = await pathExists(resolve(projectRoot, 'app/storage/[[...path]]/route.ts'))
+  const broadcastAuthEnabled = await pathExists(resolve(projectRoot, 'app/broadcasting/auth/route.ts'))
+  const clerkEnabled = await pathExists(resolve(projectRoot, 'app/api/auth/clerk/login/route.ts'))
+  const workosEnabled = await pathExists(resolve(projectRoot, 'app/api/auth/workos/login/route.ts'))
+  const files = [
+    ...renderNextManagedRouteFiles({
+      authEnabled,
+      storageEnabled,
+      broadcastAuthEnabled,
+    }),
+    ...renderNextManagedHostedAuthRouteFiles({
+      clerk: clerkEnabled,
+      workos: workosEnabled,
+    }),
+  ]
+
+  for (const file of files) {
+    await writeFileIfChanged(resolve(projectRoot, file.path), file.contents)
+  }
+}
+
 export async function syncManagedFrameworkArtifacts(projectRoot: string): Promise<void> {
   let manifest: { framework?: string }
   try {
@@ -357,5 +388,9 @@ export async function syncManagedFrameworkArtifacts(projectRoot: string): Promis
 
   if (manifest.framework === 'sveltekit') {
     await ensureSvelteManagedHooks(projectRoot)
+  }
+
+  if (manifest.framework === 'next') {
+    await ensureNextManagedRoutes(projectRoot)
   }
 }

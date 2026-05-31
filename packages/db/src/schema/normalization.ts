@@ -57,8 +57,54 @@ function parseDateLike(value: unknown): unknown {
   return new Date(String(value))
 }
 
-function stringifyDateLike(value: unknown): unknown {
-  return value instanceof Date ? value.toISOString() : value
+function padDatePart(value: number, length = 2): string {
+  return String(value).padStart(length, '0')
+}
+
+function formatUtcDate(value: Date): string {
+  return [
+    value.getUTCFullYear(),
+    padDatePart(value.getUTCMonth() + 1),
+    padDatePart(value.getUTCDate()),
+  ].join('-')
+}
+
+function formatUtcDateTime(value: Date): string {
+  return [
+    formatUtcDate(value),
+    [
+      padDatePart(value.getUTCHours()),
+      padDatePart(value.getUTCMinutes()),
+      padDatePart(value.getUTCSeconds()),
+    ].join(':'),
+  ].join(' ')
+}
+
+function parseIsoTemporalString(value: string): Date | undefined {
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(value)) {
+    return undefined
+  }
+
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed
+}
+
+function stringifyDateLike(dialect: SchemaDialectName, column: AnyColumnDefinition, value: unknown): unknown {
+  if (dialect !== 'mysql') {
+    return value instanceof Date ? value.toISOString() : value
+  }
+
+  const date = value instanceof Date
+    ? value
+    : typeof value === 'string'
+      ? parseIsoTemporalString(value)
+      : undefined
+
+  if (!date) {
+    return value
+  }
+
+  return column.kind === 'date' ? formatUtcDate(date) : formatUtcDateTime(date)
 }
 
 function parseVectorString(value: string): number[] {
@@ -161,7 +207,7 @@ export function normalizeDialectWriteValue(
     case 'date':
     case 'datetime':
     case 'timestamp':
-      return stringifyDateLike(value)
+      return stringifyDateLike(dialect, column, value)
     case 'vector':
       if (!DIALECT_VECTOR_SUPPORT[dialect]) {
         throw new CapabilityError(`${DIALECT_DISPLAY_NAME[dialect]} does not support logical vector columns.`)

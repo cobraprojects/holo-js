@@ -58,6 +58,12 @@ class MigrationAdapter implements DriverAdapter {
         rowCount: this.state.tables.length }
     }
 
+    if (sql.includes('information_schema.tables')) {
+      return {
+        rows: this.state.tables.map(name => ({ name })) as unknown as TRow[],
+        rowCount: this.state.tables.length }
+    }
+
     if (sql === 'SELECT * FROM "_holo_migrations" ORDER BY "batch" ASC, "id" ASC') {
       return {
         rows: [...this.state.records].sort((left, right) => (
@@ -75,21 +81,32 @@ class MigrationAdapter implements DriverAdapter {
   ): Promise<DriverExecutionResult> {
     this.executed.push({ sql, bindings })
 
-    const createTable = sql.match(/^CREATE TABLE IF NOT EXISTS "([^"]+)"/)
+    const createTable = sql.match(/^CREATE TABLE IF NOT EXISTS (?:"([^"]+)"|`([^`]+)`)/)
     if (createTable) {
-      if (!this.state.tables.includes(createTable[1]!)) {
-        this.state.tables.push(createTable[1]!)
+      const tableName = createTable[1] ?? createTable[2]!
+      if (!this.state.tables.includes(tableName)) {
+        this.state.tables.push(tableName)
       }
       return { affectedRows: 1 }
     }
 
-    const dropTable = sql.match(/^DROP TABLE IF EXISTS "([^"]+)"/)
+    const dropTable = sql.match(/^DROP TABLE IF EXISTS (?:"([^"]+)"|`([^`]+)`)/)
     if (dropTable) {
-      this.state.tables = this.state.tables.filter(name => name !== dropTable[1]!)
+      const tableName = dropTable[1] ?? dropTable[2]!
+      this.state.tables = this.state.tables.filter(name => name !== tableName)
       return { affectedRows: 1 }
     }
 
     if (sql === 'INSERT INTO "_holo_migrations" ("name", "batch", "migrated_at") VALUES (?1, ?2, ?3)') {
+      this.state.records.push({
+        id: this.state.records.length + 1,
+        name: String(bindings[0]),
+        batch: Number(bindings[1]),
+        migrated_at: String(bindings[2]) })
+      return { affectedRows: 1, lastInsertId: this.state.records.length }
+    }
+
+    if (sql === 'INSERT INTO `_holo_migrations` (`name`, `batch`, `migrated_at`) VALUES (?, ?, ?)') {
       this.state.records.push({
         id: this.state.records.length + 1,
         name: String(bindings[0]),
@@ -128,9 +145,9 @@ class MigrationAdapter implements DriverAdapter {
   }
 }
 
-function createDialect(): Dialect {
+function createDialect(name: 'sqlite' | 'mysql' = 'sqlite'): Dialect {
   return {
-    name: 'sqlite',
+    name,
     capabilities: {
       returning: false,
       savepoints: false,
@@ -146,10 +163,10 @@ function createDialect(): Dialect {
       ddlAlterSupport: false,
       introspection: true },
     quoteIdentifier(identifier: string) {
-      return `"${identifier}"`
+      return name === 'mysql' ? `\`${identifier}\`` : `"${identifier}"`
     },
     createPlaceholder(index: number) {
-      return `?${index}`
+      return name === 'mysql' ? '?' : `?${index}`
     } }
 }
 
@@ -440,6 +457,42 @@ describe('migration service slice', () => {
       batch: 1,
       migrated_at: 'not-a-date' })
     await expect(migrator.status()).rejects.toThrow(HydrationError)
+  })
+
+  it('records migration timestamps using dialect-compatible write values', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-31T19:10:35.314Z'))
+
+    const adapter = new MigrationAdapter({
+      tables: [],
+      records: [] })
+    const db = createDatabase({
+      connectionName: 'main',
+      adapter,
+      dialect: createDialect('mysql') })
+    const migration = defineMigration({
+      name: '2026_05_31_000001_create_users',
+      async up({ schema }) {
+        await schema.createTable('users', (table) => {
+          table.id()
+          table.string('email')
+        })
+      } })
+
+    try {
+      await expect(createMigrationService(db, [migration]).migrate()).resolves.toEqual([migration])
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(adapter.executed).toContainEqual({
+      sql: 'INSERT INTO `_holo_migrations` (`name`, `batch`, `migrated_at`) VALUES (?, ?, ?)',
+      bindings: [
+        migration.name,
+        1,
+        '2026-05-31 19:10:35',
+      ],
+    })
   })
 
   it('rejects invalid migration names, sorts migrations by name, and prevents overlapping runs', async () => {

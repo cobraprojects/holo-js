@@ -494,6 +494,22 @@ describe('model core slice', () => {
     )
   })
 
+  it('allows repeated pending generated-schema model imports during dev startup', () => {
+    const FirstUser = defineModel('users', {
+      fillable: ['name'],
+      timestamps: true,
+    })
+    const SecondUser = defineModel('users', {
+      fillable: ['name'],
+      timestamps: true,
+    })
+
+    expect(SecondUser.definition.name).toBe(FirstUser.definition.name)
+    expect(() => SecondUser.getTableName()).toThrow(
+      'Model "users" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.',
+    )
+  })
+
   it('supports the public defineModel(tableName) authoring path without options', () => {
     const auditLogs = defineTable('audit_logs', {
       id: column.id(),
@@ -731,16 +747,20 @@ describe('model core slice', () => {
     )
   })
 
-  it('rethrows unresolved generated-schema errors while comparing duplicate model metadata', () => {
+  it('compares pending generated-schema model metadata without resolving the table', () => {
     const Ghost = defineModel('ghosts', {
       name: 'Ghost',
       morphClass: 'ghost',
     })
 
-    expect(() => defineModel('ghosts', {
+    expect(defineModel('ghosts', {
       name: 'Ghost',
       morphClass: 'ghost',
-    })).toThrow('Model "ghosts" is not present in the generated schema registry.')
+    }).definition.name).toBe('Ghost')
+    expect(() => defineModel('ghosts', {
+      name: 'Ghost',
+      morphClass: 'shadow',
+    })).toThrow('Model "Ghost" is already registered globally.')
     expect(getGlobalModel('Ghost')).toBe(Ghost)
   })
 

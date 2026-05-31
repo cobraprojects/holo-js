@@ -69,8 +69,10 @@ import {
 } from './framework-renderers'
 
 export {
+  renderAuthRouteFiles,
   renderFrameworkFiles,
   renderFrameworkRunner,
+  renderNextManagedHostedAuthRouteFiles,
   renderNextHoloHelper,
   renderSvelteHoloHelper,
 } from './framework-renderers'

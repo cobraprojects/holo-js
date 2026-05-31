@@ -5,7 +5,8 @@ import {
   HydrationError,
   column,
   normalizeDialectReadValue,
-  normalizeDialectWriteValue } from '../src'
+  normalizeDialectWriteValue,
+} from '../src'
 
 describe('schema normalization rules', () => {
   it('normalizes boolean, json, and timestamp values on reads and writes across dialects', () => {
@@ -48,6 +49,12 @@ describe('schema normalization rules', () => {
     expect(normalizeDialectReadValue('postgres', timestampColumn, date)).toBe(date)
     expect(normalizeDialectWriteValue('postgres', timestampColumn, date)).toBe('2025-01-02T03:04:05.000Z')
     expect(normalizeDialectWriteValue('postgres', timestampColumn, '2025-01-02T03:04:05.000Z')).toBe('2025-01-02T03:04:05.000Z')
+    expect(normalizeDialectWriteValue('mysql', dateColumn, date)).toBe('2025-01-02')
+    expect(normalizeDialectWriteValue('mysql', datetimeColumn, date)).toBe('2025-01-02 03:04:05')
+    expect(normalizeDialectWriteValue('mysql', timestampColumn, date)).toBe('2025-01-02 03:04:05')
+    expect(normalizeDialectWriteValue('mysql', timestampColumn, '2025-01-02T03:04:05.314Z')).toBe('2025-01-02 03:04:05')
+    expect(normalizeDialectWriteValue('mysql', timestampColumn, '2025-01-02 03:04:05')).toBe('2025-01-02 03:04:05')
+    expect(normalizeDialectWriteValue('sqlite', timestampColumn, date)).toBe('2025-01-02T03:04:05.000Z')
 
     expect(normalizeDialectReadValue('sqlite', stringColumn, 'Mohamed')).toBe('Mohamed')
     expect(normalizeDialectReadValue('mysql', stringColumn, 'Mohamed')).toBe('Mohamed')
@@ -63,7 +70,8 @@ describe('schema normalization rules', () => {
     expect(DIALECT_VECTOR_SUPPORT).toEqual({
       sqlite: false,
       postgres: true,
-      mysql: false })
+      mysql: false,
+    })
 
     expect(normalizeDialectReadValue('postgres', vectorColumn, '[1,2,3]')).toEqual([1, 2, 3])
     expect(normalizeDialectReadValue('postgres', vectorColumn, [1, 2, 3])).toEqual([1, 2, 3])

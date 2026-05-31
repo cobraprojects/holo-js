@@ -22,6 +22,18 @@ function tryGetDefinitionTableName(definition: AnyModelDefinition): string | und
   }
 }
 
+function tryGetDefinitionPrimaryKey(definition: AnyModelDefinition): string | undefined {
+  try {
+    return definition.primaryKey
+  } catch (error) {
+    if (isMissingGeneratedSchemaModelError(error)) {
+      return undefined
+    }
+
+    throw error
+  }
+}
+
 function definitionsReferToSameModel(left: AnyModelDefinition, right: AnyModelDefinition): boolean {
   if (left === right) {
     return true
@@ -30,8 +42,11 @@ function definitionsReferToSameModel(left: AnyModelDefinition, right: AnyModelDe
   const leftTableName = tryGetDefinitionTableName(left)
   const rightTableName = tryGetDefinitionTableName(right)
   if (!leftTableName || !rightTableName) {
+    const leftPrimaryKey = tryGetDefinitionPrimaryKey(left)
+    const rightPrimaryKey = tryGetDefinitionPrimaryKey(right)
+
     return left.name === right.name
-      && left.primaryKey === right.primaryKey
+      && (leftPrimaryKey === undefined || rightPrimaryKey === undefined || leftPrimaryKey === rightPrimaryKey)
       && left.morphClass === right.morphClass
   }
 
