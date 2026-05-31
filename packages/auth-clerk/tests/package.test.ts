@@ -480,7 +480,10 @@ function createSignedJwt(
   },
 ): string {
   const encodedHeader = encodeBase64Url(JSON.stringify(header))
-  const encodedPayload = encodeBase64Url(JSON.stringify(payload))
+  const encodedPayload = encodeBase64Url(JSON.stringify({
+    azp: 'https://app.test',
+    ...payload,
+  }))
   const signingInput = `${encodedHeader}.${encodedPayload}`
   const signature = signData('RSA-SHA256', Buffer.from(signingInput, 'utf8'), privateKey).toString('base64url')
   return `${signingInput}.${signature}`
@@ -710,6 +713,61 @@ describe('@holo-js/auth-clerk', () => {
         id: 'user_clerk_azp_match',
       },
     })
+  })
+
+  it('rejects built-in Clerk JWTs without required bound claims', async () => {
+    const runtime = configureRuntime({
+      configureClerkRuntime: false,
+    })
+    configureClerkAuthRuntime({
+      identityStore: runtime.identityStore,
+    })
+
+    const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+    })
+    const missingAuthorizedParty = createSignedJwt({
+      azp: undefined,
+      sub: 'user_clerk_no_azp',
+      sid: 'sess_clerk_no_azp',
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }, privateKey)
+    const missingExpiration = createSignedJwt({
+      sub: 'user_clerk_no_exp',
+      sid: 'sess_clerk_no_exp',
+      exp: undefined,
+    }, privateKey)
+
+    vi.stubGlobal('fetch', async (input: FetchMockInput) => {
+      const url = resolveFetchMockUrl(input)
+      if (url === 'https://api.clerk.com/v1/jwks') {
+        return createJwksResponse(publicKey)
+      }
+
+      return new Response(null, { status: 404 })
+    })
+
+    configureAuthRuntime({
+      ...authRuntimeInternals.getRuntimeBindings(),
+      config: defineAuthConfig({
+        ...authRuntimeInternals.getRuntimeBindings().config,
+        clerk: {
+          app: {
+            publishableKey: 'pk_test',
+            secretKey: 'sk_test',
+            sessionCookie: '__session',
+            authorizedParties: ['https://app.test'],
+          },
+        },
+      }),
+    })
+
+    await expect(verifyRequest(new Request('https://app.test/me', {
+      headers: {
+        authorization: `Bearer ${missingAuthorizedParty}`,
+      },
+    }))).rejects.toThrow('authorized party')
+    await expect(verifySession(missingExpiration)).rejects.toThrow('expiration')
   })
 
   it('uses frontendApi JWKS when apiUrl is not configured', async () => {
@@ -1760,7 +1818,7 @@ describe('@holo-js/auth-clerk', () => {
 
     runtime.usersProvider.users.delete(1)
     runtime.usersProvider.usersByEmail.delete('sync@app.test')
-    const relinkTarget = await runtime.usersProvider.create({
+    await runtime.usersProvider.create({
       name: 'Relink Target',
       email: 'sync@app.test',
       password: null,
@@ -1777,18 +1835,11 @@ describe('@holo-js/auth-clerk', () => {
       },
     })
 
-    const relinked = await authenticate(new Request('https://app.test/me', {
+    await expect(authenticate(new Request('https://app.test/me', {
       headers: {
         authorization: 'Bearer relink-token',
       },
-    }))
-    expect(relinked).toMatchObject({
-      status: 'relinked',
-      user: {
-        id: relinkTarget.id,
-        name: 'Relinked User',
-      },
-    })
+    }))).rejects.toBeInstanceOf(ClerkAuthConflictError)
   })
 
   it('claims a Clerk identity once under concurrent first syncs', async () => {

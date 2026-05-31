@@ -98,6 +98,30 @@ function resolveContentType(absolutePath: string): string {
   }
 }
 
+function isActiveContentPath(absolutePath: string): boolean {
+  switch (extname(absolutePath).toLowerCase()) {
+    case '.html':
+    case '.js':
+    case '.mjs':
+    case '.svg':
+      return true
+    default:
+      return false
+  }
+}
+
+function setStorageResponseHeaders(event: unknown, absolutePath: string): void {
+  if (isActiveContentPath(absolutePath)) {
+    setResponseHeader(event, 'content-disposition', 'attachment')
+    setResponseHeader(event, 'content-type', 'application/octet-stream')
+    setResponseHeader(event, 'x-content-type-options', 'nosniff')
+    return
+  }
+
+  setResponseHeader(event, 'content-type', resolveContentType(absolutePath))
+  setResponseHeader(event, 'x-content-type-options', 'nosniff')
+}
+
 function createMissingFileError(message: string): Error & { code: string } {
   const error = new Error(message) as Error & { code: string }
   error.code = 'ENOENT'
@@ -139,7 +163,7 @@ async function readPublicFile(
     }
 
     const contents = await file.readFile()
-    setResponseHeader(event, 'content-type', resolveContentType(absolutePath))
+    setStorageResponseHeaders(event, absolutePath)
     return contents
   } finally {
     await file.close()

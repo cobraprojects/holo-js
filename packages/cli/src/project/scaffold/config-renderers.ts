@@ -804,9 +804,6 @@ export function renderAuthConfig(
     '    required: false,',
     '    route: \'/verify-email\',',
     '  },',
-    '  personalAccessTokens: {',
-    '    defaultAbilities: [],',
-    '  },',
   ]
 
   if (socialProviders.length > 0) {

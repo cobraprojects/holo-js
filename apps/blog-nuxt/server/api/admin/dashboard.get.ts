@@ -1,3 +1,11 @@
-import { getAdminDashboardData } from '../../lib/blog'
+import auth from '@holo-js/auth'
+import authorization from '@holo-js/authorization'
 
-export default defineEventHandler(async () => await getAdminDashboardData())
+import { getAdminDashboardData } from '../../lib/blog'
+import Post from '../../models/Post'
+
+export default defineEventHandler(async () => {
+  await authorization.forUser(await auth.user()).authorize('viewAny', Post)
+
+  return await getAdminDashboardData()
+})

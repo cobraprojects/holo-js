@@ -142,6 +142,7 @@ describe('@holo-js/core authorization boot integration', () => {
     const resetAuthRuntime = vi.fn()
     const configureSessionRuntime = vi.fn()
     const resetSessionRuntime = vi.fn()
+    const authorizationCan = vi.fn(async () => true)
 
     vi.spyOn(holoRuntimeInternals.moduleInternals, 'importOptionalModule').mockImplementation(async (specifier: string) => {
       if (specifier === '@holo-js/session') {
@@ -187,6 +188,9 @@ describe('@holo-js/core authorization boot integration', () => {
         return {
           isAuthorizationPolicyDefinition: () => false,
           isAuthorizationAbilityDefinition: () => false,
+          forUser: () => ({
+            can: authorizationCan,
+          }),
           authorizationInternals: {
             getAuthorizationRuntimeState: () => ({
               policiesByName: new Map(),
@@ -216,6 +220,11 @@ describe('@holo-js/core authorization boot integration', () => {
     await expect(reconfigureOptionalHoloSubsystems(root, loadedConfig)).resolves.toBeDefined()
 
     expect(configureAuthorizationAuthIntegration).toHaveBeenCalledTimes(1)
+    expect(configureAuthRuntime.mock.calls[0]?.[0]?.authorization).toEqual({
+      can: expect.any(Function),
+    })
+    await expect(configureAuthRuntime.mock.calls[0]?.[0]?.authorization?.can({ id: 'user-1' }, 'viewAny', {})).resolves.toBe(true)
+    expect(authorizationCan).toHaveBeenCalledWith('viewAny', {})
     const integration = configureAuthorizationAuthIntegration.mock.calls[0]?.[0]
     expect(integration?.hasGuard('web')).toBe(true)
     expect(integration?.hasGuard('missing')).toBe(false)

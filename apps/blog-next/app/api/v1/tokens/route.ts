@@ -13,10 +13,7 @@ export async function POST(request: Request) {
 
     const token = await (async () => {
       try {
-        return await auth.guard('api').login({
-          ...input,
-          abilities: ['posts.read'],
-        })
+        return await auth.guard('api').login(input)
       } catch (error) {
         if (isValidationException(error)) {
           return Response.json({

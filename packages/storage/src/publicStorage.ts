@@ -16,6 +16,12 @@ type ResolvedPublicStorageRequest = {
   absolutePath: string
 }
 
+type PublicStorageResponseHeaders = {
+  readonly 'content-disposition'?: string
+  readonly 'content-type': string
+  readonly 'x-content-type-options': string
+}
+
 function normalizeRequestPath(value: string): string[] {
   return value
     .split('/')
@@ -68,6 +74,33 @@ function resolveContentType(absolutePath: string): string {
     case '.woff': return 'font/woff'
     case '.woff2': return 'font/woff2'
     default: return 'application/octet-stream'
+  }
+}
+
+function isActiveContentPath(absolutePath: string): boolean {
+  switch (extname(absolutePath).toLowerCase()) {
+    case '.html':
+    case '.js':
+    case '.mjs':
+    case '.svg':
+      return true
+    default:
+      return false
+  }
+}
+
+function resolvePublicFileHeaders(absolutePath: string): PublicStorageResponseHeaders {
+  if (isActiveContentPath(absolutePath)) {
+    return {
+      'content-disposition': 'attachment',
+      'content-type': 'application/octet-stream',
+      'x-content-type-options': 'nosniff',
+    }
+  }
+
+  return {
+    'content-type': resolveContentType(absolutePath),
+    'x-content-type-options': 'nosniff',
   }
 }
 
@@ -172,7 +205,7 @@ export async function createPublicStorageResponse(projectRoot: string, storageCo
       const contents = await readFile(resolvedPath)
       return new Response(contents, {
         status: 200,
-        headers: { 'content-type': resolveContentType(resolvedPath) },
+        headers: resolvePublicFileHeaders(resolvedPath),
       })
     } catch {
       return null

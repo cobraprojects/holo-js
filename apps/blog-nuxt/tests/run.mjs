@@ -286,11 +286,16 @@ async function assertPublicImageUrlResponds(baseUrl, imageUrl) {
   assert.ok(body.byteLength > 0, 'Expected the public image endpoint to return image bytes.')
 }
 
-async function assertAdminPostEndpointReturnsImage({ baseUrl, fetchJson, postId, title, imageUrl }) {
-  const result = await fetchJson(`/api/admin/posts/${postId}`)
+async function assertAdminPostEndpointReturnsImage({ baseUrl, fetchJson, jar, postId, title, imageUrl }) {
+  const result = await fetchJson(`/api/admin/posts/${postId}`, { jar })
   assert.equal(result.json.post.title, title)
   assert.equal(new URL(result.json.imageUrl, baseUrl).pathname, new URL(imageUrl, baseUrl).pathname)
   await assertPublicImageUrlResponds(baseUrl, imageUrl)
+}
+
+async function assertAdminApiRequiresAuthentication(baseUrl) {
+  const response = await fetch(`${baseUrl}/api/admin/dashboard`)
+  assert.equal(response.status, 403)
 }
 
 async function assertConfigCacheCommands() {
@@ -459,6 +464,7 @@ async function assertAuthenticatedUserCanCreateAndUpdatePostImage({ baseUrl, jar
   await assertAdminPostEndpointReturnsImage({
     baseUrl,
     fetchJson,
+    jar,
     postId: uploaded.id,
     title,
     imageUrl: uploaded.thumbUrl,
@@ -562,6 +568,7 @@ try {
   await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Nuxt'))
   await assertCacheBackedHttpBehavior(`http://localhost:${port}`)
   await waitForRedirect(`http://localhost:${port}/admin/posts`, '/login')
+  await assertAdminApiRequiresAuthentication(`http://localhost:${port}`)
   await assertExampleAppAuthFlow({
     baseUrl: `http://localhost:${port}`,
     getOutput: () => capturedOutput,

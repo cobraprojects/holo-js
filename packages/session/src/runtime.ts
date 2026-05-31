@@ -373,7 +373,7 @@ export async function consumeRememberMeToken(token: string, options?: RememberTo
 
   const tokenHash = hashRememberToken(parsed.secretPayload)
   for (const store of stores) {
-    const record = await store.read(parsed.sessionId)
+    const record = await readRecordFromStore(parsed.sessionId, store)
     if (record?.rememberTokenHash === tokenHash) {
       return record
     }

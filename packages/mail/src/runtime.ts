@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, realpath, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve, sep } from 'node:path'
 import {
   holoMailDefaults,
   normalizeAppEnv,
@@ -36,6 +37,10 @@ import {
 import { getRegisteredMailDriver } from './registry'
 
 const HOLO_MAIL_DELIVER_JOB = 'holo.mail.deliver'
+const LOCAL_ATTACHMENT_ROOTS = Object.freeze([
+  tmpdir(),
+  resolve(process.cwd(), 'storage'),
+])
 
 type RuntimeState = {
   bindings?: MailRuntimeBindings
@@ -506,7 +511,7 @@ function createPreviewHtml(preview: MailPreviewResult): string {
   ].filter(Boolean).join('')
 
   const body = preview.html
-    ? preview.html
+    ? `<pre>${escapeHtml(preview.html)}</pre>`
     : preview.text
       ? `<pre>${escapeHtml(preview.text)}</pre>`
       : '<p>No rendered content is available.</p>'
@@ -837,7 +842,7 @@ async function createSmtpAttachment(
   if (typeof attachment.path === 'string') {
     return {
       ...base,
-      path: attachment.path,
+      path: await resolveLocalAttachmentPath(attachment.path),
     }
   }
 
@@ -1281,10 +1286,38 @@ function stripMarkdownSyntax(markdown: string): string {
 
 function renderMarkdownInline(markdown: string): string {
   return escapeHtml(markdown)
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, href: string) => {
+      return isSafeMailHref(href)
+        ? `<a href="${escapeHtml(href)}">${label}</a>`
+        : label
+    })
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+}
+
+async function resolveLocalAttachmentPath(path: string): Promise<string> {
+  const resolvedPath = await realpath(path)
+  const allowedRoots = await Promise.all(LOCAL_ATTACHMENT_ROOTS.map(async root => await realpath(root).catch(() => null)))
+  if (allowedRoots.some(root => root && (resolvedPath === root || resolvedPath.startsWith(`${root}${sep}`)))) {
+    return resolvedPath
+  }
+
+  throw new MailError('[@holo-js/mail] Path attachments must resolve inside an allowed attachment directory.', 'MAIL_ATTACHMENT_UNSAFE_PATH')
+}
+
+function isSafeMailHref(href: string): boolean {
+  const trimmed = href.trim()
+  if (trimmed.startsWith('#') || trimmed.startsWith('/') || trimmed.startsWith('./') || trimmed.startsWith('../')) {
+    return true
+  }
+
+  try {
+    const url = new URL(trimmed)
+    return url.protocol === 'https:' || url.protocol === 'http:' || url.protocol === 'mailto:'
+  } catch {
+    return false
+  }
 }
 
 function renderMarkdown(markdown: string): string {

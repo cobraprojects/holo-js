@@ -28,7 +28,6 @@ import auth from '@holo-js/auth'
 const { data: token, error } = await auth.guard('api').login({
   email: 'ava@example.com',
   password: 'secret-secret',
-  abilities: ['orders.read'],
 })
 
 if (error) {
@@ -51,7 +50,12 @@ return Response.json({
 ```
 
 For token guards, `auth.guard('api').login(...)` verifies the credentials, creates a personal access token for the
-authenticated user, and returns the token result.
+authenticated user, and returns the token result. Token abilities are chosen by trusted server configuration or by
+explicit server-side token creation, not by the login request body.
+
+When no token abilities are provided by the server, personal access tokens use the configured default abilities. The
+default is `['*']`. Set `personalAccessTokens.defaultAbilities` to `[]` when a token should receive no scopes unless
+server code grants them explicitly.
 
 ## Token Registration
 
@@ -65,7 +69,6 @@ const { data: token, error } = await auth.guard('api').register({
   email: 'ava@example.com',
   password: 'secret-secret',
   passwordConfirmation: 'secret-secret',
-  abilities: ['orders.read'],
 })
 
 if (error) {
@@ -105,6 +108,7 @@ routes can then use the normal guard APIs:
 
 ```ts
 import auth from '@holo-js/auth'
+import Order from '@/server/models/Order'
 
 export async function GET() {
   const currentUser = await auth.guard('api').user()
@@ -113,11 +117,15 @@ export async function GET() {
     return Response.json({ ok: false, message: 'Unauthenticated.' }, { status: 401 })
   }
 
-  if (!currentUser.can('orders.read')) {
+  if (!await currentUser.can('viewAny', Order)) {
     return Response.json({ ok: false, message: 'Forbidden.' }, { status: 403 })
   }
 
   const token = await auth.guard('api').currentAccessToken()
+
+  if (!token?.can('orders.read')) {
+    return Response.json({ ok: false, message: 'Token scope missing.' }, { status: 403 })
+  }
 
   return Response.json({
     ok: true,
@@ -127,10 +135,9 @@ export async function GET() {
 }
 ```
 
-The ability check should match the abilities you issue during token creation. In the login example above, the token gets
-`orders.read`, so routes that expose order data should call `currentUser.can('orders.read')` before returning it. The
-current token also exposes `token.can('orders.read')` when the route needs to inspect the token directly. A token with
-`*` passes individual ability checks.
+`currentUser.can(action, target)` runs the same authorization policy check as `authorization.forUser(user).can(action,
+target)`. Token scope checks belong on the current token handle through `token.can('orders.read')`. A token with `*`
+passes individual token scope checks.
 
 `check()` follows the same guard context:
 
@@ -184,6 +191,7 @@ await tokens.can(created.plainTextToken, 'orders.write')
 Abilities can be:
 
 - explicit abilities such as `orders.read`
+- prefix wildcards such as `orders.*`
 - `*` for full access
 
 ## Listing Tokens

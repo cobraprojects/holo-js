@@ -55,7 +55,7 @@ describe('auth documentation smoke checks', () => {
     expect(tokens).toContain('config/auth.ts')
     expect(tokens).toContain('holo prepare')
     expect(tokens).toContain('abilities: [\'orders.read\']')
-    expect(tokens).toContain('currentUser.can(\'orders.read\')')
+    expect(tokens).toContain('currentUser.can(\'viewAny\', Order)')
     expect(tokens).toContain('token.can(\'orders.read\')')
     expect(tokens).toContain('Forbidden.')
     expect(tokens).toContain('Cache-Control')

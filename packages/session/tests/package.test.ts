@@ -350,6 +350,7 @@ describe('@holo-js/session package surface', () => {
     )).resolves.toBeNull()
 
     storeMap.set('legacy-remember', createRecord('legacy-remember', {
+      expiresAt: new Date(Date.now() + 60_000),
       rememberTokenHash: sessionRuntimeInternals.hashRememberToken('secret'),
     }))
     await expect(consumeRememberMeToken('legacy-remember.secret')).resolves.toMatchObject({
@@ -521,7 +522,7 @@ describe('@holo-js/session package surface', () => {
     expect(remainingLifetimeMs).toBeGreaterThan((14 * 60_000))
   })
 
-  it('accepts a remember-me token after the base session has expired but before its own TTL', async () => {
+  it('rejects a remember-me token after the base session has expired', async () => {
     const storeMap = new Map<string, SessionRecord>()
     configureSessionRuntime({
       config: {
@@ -574,9 +575,8 @@ describe('@holo-js/session package surface', () => {
       expiresAt: new Date(Date.now() - 1000),
     }))
 
-    await expect(consumeRememberMeToken(rememberToken)).resolves.toMatchObject({
-      id: created.id,
-    })
+    await expect(consumeRememberMeToken(rememberToken)).resolves.toBeNull()
+    expect(storeMap.has(created.id)).toBe(false)
 
     const now = Date.now()
     vi.spyOn(Date, 'now').mockReturnValue(now + (61 * 60_000))

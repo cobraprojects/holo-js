@@ -439,7 +439,7 @@ export const holoAuthDefaults: Readonly<NormalizedHoloAuthConfig> = Object.freez
     route: DEFAULT_AUTH_EMAIL_VERIFICATION_ROUTE,
   }),
   personalAccessTokens: Object.freeze({
-    defaultAbilities: Object.freeze([]),
+    defaultAbilities: Object.freeze(['*']),
   }),
   socialEncryptionKey: undefined,
   social: Object.freeze({}),
@@ -1821,7 +1821,7 @@ export function normalizeAuthConfig(
         : config.emailVerification?.route?.trim() || DEFAULT_AUTH_EMAIL_VERIFICATION_ROUTE,
     }),
     personalAccessTokens: Object.freeze({
-      defaultAbilities: Object.freeze([...(config.personalAccessTokens?.defaultAbilities ?? [])]),
+      defaultAbilities: Object.freeze([...(config.personalAccessTokens?.defaultAbilities ?? holoAuthDefaults.personalAccessTokens.defaultAbilities)]),
     }),
     socialEncryptionKey: config.socialEncryptionKey?.trim() || _options.appKey?.trim() || undefined,
     social,

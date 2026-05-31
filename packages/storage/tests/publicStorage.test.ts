@@ -52,6 +52,22 @@ describe('createPublicStorageResponse', () => {
     await expect(response.text()).resolves.toBe('{"ok":true}')
   })
 
+  it('serves active public file types as downloads', async () => {
+    const { projectRoot, publicRoot } = await createProject()
+    await writeFile(join(publicRoot, 'asset.svg'), '<svg><script>alert(1)</script></svg>')
+
+    const response = await createPublicStorageResponse(
+      projectRoot,
+      storageConfig('./storage/app/public'),
+      new Request('https://app.test/storage/asset.svg'),
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('application/octet-stream')
+    expect(response.headers.get('content-disposition')).toBe('attachment')
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+  })
+
   it('does not read public symlinks that resolve outside the disk root', async () => {
     const { projectRoot, publicRoot } = await createProject()
     const secretPath = join(projectRoot, 'secret.txt')

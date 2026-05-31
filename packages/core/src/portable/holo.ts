@@ -352,6 +352,29 @@ export interface HoloAuthRuntimeBinding {
   }): Promise<HoloAuthResult<unknown>>
 }
 
+interface HoloAuthAuthorizationTargetConstructor<TInstance = object> {
+  readonly prototype: TInstance
+}
+
+interface HoloAuthAuthorizationTargetModelDefinition {
+  readonly name: string
+  readonly table?: {
+    readonly tableName?: string
+  }
+}
+
+interface HoloAuthAuthorizationTargetModel<TInstance extends object = object> {
+  readonly definition: HoloAuthAuthorizationTargetModelDefinition
+  query(): {
+    first(): Promise<TInstance | undefined>
+    firstOrFail(): Promise<TInstance>
+  }
+}
+
+type HoloAuthAuthorizationSubject = object
+  | HoloAuthAuthorizationTargetConstructor
+  | HoloAuthAuthorizationTargetModel
+
 export interface HoloQueueRuntimeBinding {
   readonly config: LoadedHoloConfig['queue']
   readonly drivers: ReadonlyMap<string, HoloQueueDriverBinding>
@@ -756,6 +779,13 @@ type AuthModule = {
       getRememberToken?(guardName: string): string | undefined
       setRememberToken?(guardName: string, token?: string): void
     }
+    readonly authorization?: {
+      can(
+        user: object,
+        action: string,
+        target: HoloAuthAuthorizationSubject,
+      ): boolean | Promise<boolean>
+    }
   }): void
   createAsyncAuthContext(): {
     activate(): void
@@ -777,6 +807,9 @@ type AuthModule = {
 type AuthorizationModule = {
   isAuthorizationPolicyDefinition(value: unknown): boolean
   isAuthorizationAbilityDefinition(value: unknown): boolean
+  forUser(actor: object | null): {
+    can(action: string, target: HoloAuthAuthorizationSubject): Promise<boolean>
+  }
   authorizationInternals: {
     getAuthorizationRuntimeState(): {
       policiesByName: Map<string, unknown>
@@ -4098,6 +4131,15 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
           ? { delivery: createAuthMailDeliveryHook(mailModule, loadedConfig.app.url) }
           : {}),
       context: authContext,
+      ...(authorizationModule
+        ? {
+            authorization: {
+              can(user: object, action: string, target: HoloAuthAuthorizationSubject) {
+                return authorizationModule.forUser(user).can(action, target)
+              },
+            },
+          }
+        : {}),
     })
     const authRuntime = authModule.getAuthRuntime()
 

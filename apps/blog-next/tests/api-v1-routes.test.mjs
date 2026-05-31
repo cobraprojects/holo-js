@@ -93,7 +93,6 @@ describe('POST /api/v1/tokens', () => {
       email: 'reader@example.com',
       password: 'password123',
       remember: false,
-      abilities: ['posts.read'],
     })
   })
 
@@ -101,7 +100,7 @@ describe('POST /api/v1/tokens', () => {
     const token = {
       id: 'token_1',
       plainTextToken: 'plain-token',
-      abilities: ['posts.read'],
+      abilities: [],
     }
     const login = vi.fn(async () => token)
     const request = new Request('http://localhost/api/v1/tokens', {
@@ -119,13 +118,12 @@ describe('POST /api/v1/tokens', () => {
       ok: true,
       token: 'plain-token',
       tokenId: 'token_1',
-      abilities: ['posts.read'],
+      abilities: [],
     })
     expect(login).toHaveBeenCalledWith({
       email: 'reader@example.com',
       password: 'password123',
       remember: true,
-      abilities: ['posts.read'],
     })
   })
 })
@@ -155,7 +153,7 @@ describe('GET /api/v1/posts', () => {
   it('returns 403 when the API user cannot read posts', async () => {
     const currentUser = {
       id: 'user_1',
-      can: vi.fn(() => false),
+      can: vi.fn(async () => false),
     }
     const user = vi.fn(async () => currentUser)
 
@@ -168,7 +166,7 @@ describe('GET /api/v1/posts', () => {
       ok: false,
       message: 'Forbidden.',
     })
-    expect(currentUser.can).toHaveBeenCalledWith('posts.read')
+    expect(currentUser.can).toHaveBeenCalledWith('viewAny', mocks.Post)
     expect(mocks.Post.with).not.toHaveBeenCalled()
   })
 
@@ -183,7 +181,7 @@ describe('GET /api/v1/posts', () => {
     const query = createPostQuery(posts)
     const currentUser = {
       id: 'user_1',
-      can: vi.fn(() => true),
+      can: vi.fn(async () => true),
     }
     const user = vi.fn(async () => currentUser)
 

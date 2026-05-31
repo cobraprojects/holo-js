@@ -281,8 +281,22 @@ async function verifyClerkSessionToken(
   }
 
   const exp = typeof parsed.payload.exp === 'number' ? parsed.payload.exp : undefined
-  if (typeof exp === 'number' && (exp * 1000) <= Date.now()) {
+  if (typeof exp !== 'number') {
+    throw new Error('[@holo-js/auth-clerk] Clerk token did not include an expiration.')
+  }
+  if ((exp * 1000) <= Date.now()) {
     throw new Error('[@holo-js/auth-clerk] Clerk token has expired.')
+  }
+
+  if (typeof parsed.payload.sub !== 'string' || !parsed.payload.sub.trim()) {
+    throw new Error('[@holo-js/auth-clerk] Clerk token did not include a subject.')
+  }
+
+  if (
+    (typeof parsed.payload.sid !== 'string' || !parsed.payload.sid.trim())
+    && (typeof parsed.payload.session_id !== 'string' || !parsed.payload.session_id.trim())
+  ) {
+    throw new Error('[@holo-js/auth-clerk] Clerk token did not include a session id.')
   }
 
   const nbf = typeof parsed.payload.nbf === 'number' ? parsed.payload.nbf : undefined
@@ -291,13 +305,15 @@ async function verifyClerkSessionToken(
   }
 
   const azp = typeof parsed.payload.azp === 'string' ? parsed.payload.azp.trim() : ''
-  if (azp) {
-    const allowedAuthorizedParties = authorizedParties
-      .map(value => value.trim())
-      .filter(Boolean)
-    if (allowedAuthorizedParties.length > 0 && !allowedAuthorizedParties.includes(azp)) {
-      throw new Error(`[@holo-js/auth-clerk] Clerk token authorized party "${azp}" is not allowed.`)
-    }
+  const allowedAuthorizedParties = authorizedParties
+    .map(value => value.trim())
+    .filter(Boolean)
+  if (allowedAuthorizedParties.length > 0 && !azp) {
+    throw new Error('[@holo-js/auth-clerk] Clerk token did not include an authorized party.')
+  }
+
+  if (azp && allowedAuthorizedParties.length > 0 && !allowedAuthorizedParties.includes(azp)) {
+    throw new Error(`[@holo-js/auth-clerk] Clerk token authorized party "${azp}" is not allowed.`)
   }
 
   return parsed.payload
@@ -918,28 +934,6 @@ async function ensureNoUnexpectedEmailCollision(
   }
 }
 
-async function assertUserLinkAvailable(
-  providerName: string,
-  authProvider: string,
-  adapter: RuntimeAuthProviderAdapter,
-  user: Record<string, unknown>,
-  clerkUserId: string,
-): Promise<void> {
-  const existing = await getBindings().identityStore.findByUserId(
-    providerName,
-    authProvider,
-    requireUserId(adapter, user, '[@holo-js/auth-clerk] Linked users must expose a serializable id.'),
-  )
-  if (existing && existing.providerUserId !== clerkUserId) {
-    throw new ClerkAuthConflictError({
-      provider: providerName,
-      clerkUserId,
-      email: existing.email,
-      message: `[@holo-js/auth-clerk] Local user is already linked to Clerk identity "${existing.providerUserId}".`,
-    })
-  }
-}
-
 function isEmailVerificationRequired(): boolean {
   return authRuntimeInternals.getRuntimeBindings().config.emailVerification.required === true
 }
@@ -1335,20 +1329,22 @@ export async function syncIdentity<TUserAttributes extends ClerkUserAttributes =
         : null
 
       if (!linkedUser) {
-        linkedUser = verifiedEmail
+        const emailMatchedUser = verifiedEmail
           ? await findUserByEmail(adapter, verifiedEmail)
           : null
-
-        if (linkedUser) {
-          await assertUserLinkAvailable(providerName, authProvider, adapter, linkedUser, profile.id)
+        if (emailMatchedUser) {
+          throw new ClerkAuthConflictError({
+            provider: providerName,
+            clerkUserId: profile.id,
+            email: verifiedEmail,
+            message: `[@holo-js/auth-clerk] Clerk email "${verifiedEmail}" matches an existing local user and must be linked explicitly.`,
+          })
         }
 
-        if (!linkedUser) {
-          linkedUser = requireUserRecord(
-            await adapter.create(resolveCreateUserInput(profile, options.user)),
-            '[@holo-js/auth-clerk] Auth provider create() must return an object user.',
-          )
-        }
+        linkedUser = requireUserRecord(
+          await adapter.create(resolveCreateUserInput(profile, options.user)),
+          '[@holo-js/auth-clerk] Auth provider create() must return an object user.',
+        )
 
         const relinked = await updateLocalUser(adapter, linkedUser, resolveUpdateUserInput(profile, options.user))
         const relinkedUser = relinked.user
@@ -1418,33 +1414,11 @@ export async function syncIdentity<TUserAttributes extends ClerkUserAttributes =
       : null
 
     if (localUser) {
-      await assertUserLinkAvailable(providerName, authProvider, adapter, localUser, profile.id)
-      const linked = await updateLocalUser(adapter, localUser, resolveUpdateUserInput(profile, options.user))
-      const identity = createIdentityRecord({
+      throw new ClerkAuthConflictError({
         provider: providerName,
-        guard,
-        authProvider,
-        userId: requireUserId(
-          adapter,
-          linked.user,
-          '[@holo-js/auth-clerk] Linked local users must expose a serializable id.',
-        ),
-        profile,
-      })
-      const claimedIdentity = await claimNewIdentity(identityStore, identity)
-      const claimedUser = await resolveClaimedIdentityUser(adapter, claimedIdentity, {
-        user: linked.user,
-        userId: identity.userId,
-      })
-
-      return Object.freeze({
-        provider: providerName,
-        guard,
-        authProvider,
-        status: 'linked',
-        user: serializeLocalUser<TUserAttributes>(adapter, claimedUser, authProvider),
-        identity: claimedIdentity,
-        session,
+        clerkUserId: profile.id,
+        email: verifiedEmail,
+        message: `[@holo-js/auth-clerk] Clerk email "${verifiedEmail}" matches an existing local user and must be linked explicitly.`,
       })
     }
 

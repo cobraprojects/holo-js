@@ -14,7 +14,7 @@ export async function GET() {
 
   const userId = currentUser.id
 
-  if (!currentUser.can('posts.read')) {
+  if (!await currentUser.can('viewAny', Post)) {
     return Response.json({
       ok: false,
       message: 'Forbidden.',

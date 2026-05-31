@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -357,6 +357,13 @@ describe('@holo-js/mail runtime', () => {
     expect(htmlResponse.status).toBe(200)
     expect(htmlResponse.headers.get('content-type')).toContain('text/html')
     await expect(htmlResponse.text()).resolves.toContain('<h1>Preview</h1>')
+
+    const unsafeHtml = defineMail({
+      to: 'ava@example.com',
+      subject: 'Unsafe HTML',
+      html: '<img src=x onerror=alert(1)>',
+    })
+    await expect(renderMailPreview(unsafeHtml).then(response => response.text())).resolves.toContain('&lt;img src=x onerror=alert(1)&gt;')
 
     const jsonResponse = await renderMailPreview(markdown, undefined, 'json')
     expect(jsonResponse.status).toBe(200)
@@ -925,6 +932,9 @@ describe('@holo-js/mail runtime', () => {
   })
 
   it('translates smtp payloads through nodemailer with path, content, and storage attachments', async () => {
+    const attachmentRoot = await mkdtemp(join(tmpdir(), 'holo-mail-smtp-'))
+    const pathAttachment = join(attachmentRoot, 'report.pdf')
+    await writeFile(pathAttachment, 'report')
     const nodemailer = createNodemailerModuleStub({
       result: {
         messageId: 'smtp-provider-1',
@@ -976,7 +986,7 @@ describe('@holo-js/mail runtime', () => {
       priority: 'high',
       attachments: [
         {
-          path: '/tmp/report.pdf',
+          path: pathAttachment,
         },
         {
           content: new Uint8Array([9, 8, 7]),
@@ -1063,7 +1073,7 @@ describe('@holo-js/mail runtime', () => {
       attachments: [
         {
           filename: 'report.pdf',
-          path: '/tmp/report.pdf',
+          path: expect.stringContaining('report.pdf'),
           contentDisposition: 'attachment',
           contentType: 'application/pdf',
         },
@@ -1088,6 +1098,7 @@ describe('@holo-js/mail runtime', () => {
         },
       ],
     })
+    await rm(attachmentRoot, { recursive: true, force: true })
   })
 
   it('wraps smtp delivery failures with mail send context', async () => {
@@ -1532,6 +1543,7 @@ describe('@holo-js/mail runtime', () => {
       },
     })
     expect(mailRuntimeInternals.renderMarkdown('# Heading')).toBe('<h1>Heading</h1>')
+    expect(mailRuntimeInternals.renderMarkdown('[safe](https://example.test) [bad](javascript:alert)')).toBe('<p><a href="https://example.test">safe</a> bad</p>')
 
     expect(mailRuntimeInternals.createSmtpHeaders({
       headers: {},
@@ -1581,6 +1593,24 @@ describe('@holo-js/mail runtime', () => {
       name: 'broken.txt',
       disposition: 'attachment',
     } as never)).rejects.toThrow('could not be translated for SMTP delivery')
+
+    const attachmentRoot = await mkdtemp(join(tmpdir(), 'holo-mail-attachment-'))
+    const attachmentPath = join(attachmentRoot, 'report.txt')
+    await writeFile(attachmentPath, 'report')
+    const resolvedPathAttachment = await mailRuntimeInternals.createSmtpAttachment({
+      source: 'path',
+      name: 'report.txt',
+      disposition: 'attachment',
+      path: attachmentPath,
+    } as never)
+    expect(resolvedPathAttachment.path).toContain('report.txt')
+    await expect(mailRuntimeInternals.createSmtpAttachment({
+      source: 'path',
+      name: 'hosts.txt',
+      disposition: 'attachment',
+      path: '/etc/hosts',
+    } as never)).rejects.toThrow('allowed attachment directory')
+    await rm(attachmentRoot, { recursive: true, force: true })
 
     configureMailRuntime({
       config: {

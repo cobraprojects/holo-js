@@ -107,7 +107,6 @@ On a token guard, `login()` and `register()` return personal access token result
 const { data: token, error } = await auth.guard('api').login({
   email: 'ava@example.com',
   password: 'secret-secret',
-  abilities: ['orders.read'],
 })
 
 if (!error) {

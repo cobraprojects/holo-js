@@ -393,8 +393,32 @@ async function verifyWorkosSessionToken(
   }
 
   const exp = typeof parsed.payload.exp === 'number' ? parsed.payload.exp : undefined
-  if (typeof exp === 'number' && (exp * 1000) <= Date.now()) {
+  if (typeof exp !== 'number') {
+    throw new Error('[@holo-js/auth-workos] WorkOS token did not include an expiration.')
+  }
+  if ((exp * 1000) <= Date.now()) {
     throw new Error('[@holo-js/auth-workos] WorkOS token has expired.')
+  }
+
+  if (typeof parsed.payload.sub !== 'string' || !parsed.payload.sub.trim()) {
+    throw new Error('[@holo-js/auth-workos] WorkOS token did not include a subject.')
+  }
+
+  if (
+    (typeof parsed.payload.sid !== 'string' || !parsed.payload.sid.trim())
+    && (typeof parsed.payload.session_id !== 'string' || !parsed.payload.session_id.trim())
+  ) {
+    throw new Error('[@holo-js/auth-workos] WorkOS token did not include a session id.')
+  }
+
+  const audience = parsed.payload.aud
+  const audiences = Array.isArray(audience)
+    ? audience.filter((value): value is string => typeof value === 'string')
+    : typeof audience === 'string'
+      ? [audience]
+      : []
+  if (!audiences.includes(clientId)) {
+    throw new Error(`[@holo-js/auth-workos] WorkOS token audience is not valid for client "${clientId}".`)
   }
 
   const nbf = typeof parsed.payload.nbf === 'number' ? parsed.payload.nbf : undefined
@@ -705,10 +729,26 @@ function createLogoutUrl(sessionId: string, request: Request, returnTo?: string)
   const url = new URL(WORKOS_LOGOUT_URL)
   url.searchParams.set('session_id', sessionId)
   if (returnTo?.trim()) {
-    url.searchParams.set('return_to', new URL(returnTo, request.url).toString())
+    url.searchParams.set('return_to', createWorkosReturnUrl(returnTo, request))
   }
 
   return url.toString()
+}
+
+function createWorkosReturnUrl(returnTo: string, request: Request): string {
+  const requestUrl = new URL(request.url)
+  let target: URL
+  try {
+    target = new URL(returnTo, requestUrl.origin)
+  } catch {
+    return requestUrl.origin
+  }
+
+  if (target.origin !== requestUrl.origin) {
+    return requestUrl.origin
+  }
+
+  return target.toString()
 }
 
 function createWorkosErrorResponse(error: unknown, code: string): Response {
@@ -1022,28 +1062,6 @@ async function ensureNoUnexpectedEmailCollision(
   }
 }
 
-async function assertUserLinkAvailable(
-  providerName: string,
-  authProvider: string,
-  adapter: RuntimeAuthProviderAdapter,
-  user: Record<string, unknown>,
-  workosUserId: string,
-): Promise<void> {
-  const existing = await getBindings().identityStore.findByUserId(
-    providerName,
-    authProvider,
-    requireUserId(adapter, user, '[@holo-js/auth-workos] Linked users must expose a serializable id.'),
-  )
-  if (existing && existing.providerUserId !== workosUserId) {
-    throw new WorkosAuthConflictError({
-      provider: providerName,
-      workosUserId,
-      email: existing.email,
-      message: `[@holo-js/auth-workos] Local user is already linked to WorkOS identity "${existing.providerUserId}".`,
-    })
-  }
-}
-
 function isEmailVerificationRequired(): boolean {
   return authRuntimeInternals.getRuntimeBindings().config.emailVerification.required === true
 }
@@ -1286,20 +1304,22 @@ export async function syncIdentity<TUserAttributes extends WorkosUserAttributes 
       : null
 
     if (!linkedUser) {
-      linkedUser = verifiedEmail
+      const emailMatchedUser = verifiedEmail
         ? await findUserByEmail(adapter, verifiedEmail)
         : null
-
-      if (linkedUser) {
-        await assertUserLinkAvailable(providerName, authProvider, adapter, linkedUser, profile.id)
+      if (emailMatchedUser) {
+        throw new WorkosAuthConflictError({
+          provider: providerName,
+          workosUserId: profile.id,
+          email: verifiedEmail,
+          message: `[@holo-js/auth-workos] WorkOS email "${verifiedEmail}" matches an existing local user and must be linked explicitly.`,
+        })
       }
 
-      if (!linkedUser) {
-        linkedUser = requireUserRecord(
-          await adapter.create(resolveCreateUserInput(profile, options.user)),
-          '[@holo-js/auth-workos] Auth provider create() must return an object user.',
-        )
-      }
+      linkedUser = requireUserRecord(
+        await adapter.create(resolveCreateUserInput(profile, options.user)),
+        '[@holo-js/auth-workos] Auth provider create() must return an object user.',
+      )
 
       const relinked = await updateLocalUser(adapter, linkedUser, resolveUpdateUserInput(profile, options.user))
       const relinkedUser = relinked.user
@@ -1369,29 +1389,11 @@ export async function syncIdentity<TUserAttributes extends WorkosUserAttributes 
     : null
 
   if (localUser) {
-    await assertUserLinkAvailable(providerName, authProvider, adapter, localUser, profile.id)
-    const linked = await updateLocalUser(adapter, localUser, resolveUpdateUserInput(profile, options.user))
-    const identity = createIdentityRecord({
+    throw new WorkosAuthConflictError({
       provider: providerName,
-      guard,
-      authProvider,
-      userId: requireUserId(
-        adapter,
-        linked.user,
-        '[@holo-js/auth-workos] Linked local users must expose a serializable id.',
-      ),
-      profile,
-    })
-    await identityStore.save(identity)
-
-    return Object.freeze({
-      provider: providerName,
-      guard,
-      authProvider,
-      status: 'linked',
-      user: serializeLocalUser<TUserAttributes>(adapter, linked.user, authProvider),
-      identity,
-      session,
+      workosUserId: profile.id,
+      email: verifiedEmail,
+      message: `[@holo-js/auth-workos] WorkOS email "${verifiedEmail}" matches an existing local user and must be linked explicitly.`,
     })
   }
 

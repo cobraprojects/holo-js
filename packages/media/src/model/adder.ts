@@ -1,5 +1,7 @@
-import { basename } from 'node:path'
-import { readFile } from 'node:fs/promises'
+import { isIP } from 'node:net'
+import { tmpdir } from 'node:os'
+import { basename, resolve, sep } from 'node:path'
+import { readFile, realpath } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { Storage } from '@holo-js/storage/runtime'
 import { connectionAsyncContext, type Entity, type ModelRecord, type TableDefinition } from '@holo-js/db'
@@ -86,6 +88,12 @@ type DeletedMediaSnapshot = {
   >
   readonly files: readonly StoredMediaFileSnapshot[]
 }
+
+const DEFAULT_REMOTE_MEDIA_MAX_SIZE = 10 * 1024 * 1024
+const LOCAL_MEDIA_SOURCE_ROOTS = Object.freeze([
+  tmpdir(),
+  resolve(process.cwd(), 'storage'),
+])
 
 type MediaAddErrorCode
   = | 'max_size_exceeded'
@@ -237,8 +245,15 @@ async function readRemoteMediaContents(
   maxSize?: number,
   collectionName?: string,
 ): Promise<Uint8Array> {
-  if (typeof maxSize !== 'number' || !response.body) {
-    return new Uint8Array(await response.arrayBuffer())
+  const resolvedMaxSize = typeof maxSize === 'number' ? maxSize : DEFAULT_REMOTE_MEDIA_MAX_SIZE
+
+  if (!response.body) {
+    const contents = new Uint8Array(await response.arrayBuffer())
+    if (contents.byteLength > resolvedMaxSize) {
+      throw createMaxSizeError(fileName, collectionName ?? 'default', resolvedMaxSize, contents.byteLength)
+    }
+
+    return contents
   }
 
   const reader = response.body.getReader()
@@ -257,10 +272,10 @@ async function readRemoteMediaContents(
       }
 
       totalSize += value.byteLength
-      if (totalSize > maxSize) {
+      if (totalSize > resolvedMaxSize) {
         /* v8 ignore next -- reader cancellation failures are intentionally swallowed. */
         await reader.cancel().catch(() => undefined)
-        throw createMaxSizeError(fileName, collectionName ?? 'default', maxSize, totalSize)
+        throw createMaxSizeError(fileName, collectionName ?? 'default', resolvedMaxSize, totalSize)
       }
 
       chunks.push(value)
@@ -309,7 +324,7 @@ async function resolveMediaSource(
   }
 
   if (typeof input === 'string' || isPathInput(input)) {
-    const path = typeof input === 'string' ? input : input.path
+    const path = await resolveLocalMediaSourcePath(typeof input === 'string' ? input : input.path)
     const contents = await readFile(path)
     const fileName = sanitizeFileName(overrideFileName ?? basename(path))
     return {
@@ -387,15 +402,22 @@ async function resolveRemoteMediaSource(
   maxSize?: number,
   collectionName?: string,
 ): Promise<ResolvedMediaSource> {
-  const response = await fetch(input.url)
+  const remoteUrl = resolveRemoteMediaUrl(input.url)
+  const response = await fetch(remoteUrl, {
+    redirect: 'manual',
+  })
+  if (response.status >= 300 && response.status < 400) {
+    throw new Error('[@holo-js/media] Remote media downloads do not follow redirects.')
+  }
+
   if (!response.ok) {
     throw new Error(
-      `[Holo Media] Failed to download media from "${input.url}" (${response.status} ${response.statusText}).`,
+      `[Holo Media] Failed to download media from "${remoteUrl}" (${response.status} ${response.statusText}).`,
     )
   }
 
   const fileName = sanitizeFileName(
-    overrideFileName ?? input.fileName ?? parseRemoteFileName(input.url),
+    overrideFileName ?? input.fileName ?? parseRemoteFileName(remoteUrl),
   )
   const responseMimeType = response.headers.get('content-type')?.split(';')[0]
   const contentLengthHeader = response.headers.get('content-length')
@@ -403,8 +425,9 @@ async function resolveRemoteMediaSource(
     ? Number(contentLengthHeader)
     : Number.NaN
 
-  if (typeof maxSize === 'number' && Number.isFinite(contentLength) && contentLength > maxSize) {
-    throw createMaxSizeError(fileName, collectionName ?? 'default', maxSize, contentLength)
+  const resolvedMaxSize = typeof maxSize === 'number' ? maxSize : DEFAULT_REMOTE_MEDIA_MAX_SIZE
+  if (Number.isFinite(contentLength) && contentLength > resolvedMaxSize) {
+    throw createMaxSizeError(fileName, collectionName ?? 'default', resolvedMaxSize, contentLength)
   }
 
   const contents = await readRemoteMediaContents(
@@ -422,6 +445,72 @@ async function resolveRemoteMediaSource(
     size: contents.byteLength,
     name: getDisplayName(fileName, overrideName ?? input.name),
   }
+}
+
+async function resolveLocalMediaSourcePath(path: string): Promise<string> {
+  const resolvedPath = await realpath(path)
+  const allowedRoots = await Promise.all(LOCAL_MEDIA_SOURCE_ROOTS.map(async root => await realpath(root).catch(() => null)))
+  if (allowedRoots.some(root => root && isPathWithinRoot(resolvedPath, root))) {
+    return resolvedPath
+  }
+
+  throw new Error('[@holo-js/media] Media path sources must resolve inside an allowed upload directory.')
+}
+
+function isPathWithinRoot(path: string, root: string): boolean {
+  return path === root || path.startsWith(`${root}${sep}`)
+}
+
+function resolveRemoteMediaUrl(value: string): string {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw new Error('[@holo-js/media] Remote media URLs must be valid absolute URLs.')
+  }
+
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('[@holo-js/media] Remote media URLs must use http or https.')
+  }
+
+  if (url.username || url.password) {
+    throw new Error('[@holo-js/media] Remote media URLs must not include credentials.')
+  }
+
+  if (isBlockedRemoteMediaHost(url.hostname)) {
+    throw new Error('[@holo-js/media] Remote media URLs must not target local or private hosts.')
+  }
+
+  return url.toString()
+}
+
+function isBlockedRemoteMediaHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase()
+  if (normalized === 'localhost' || normalized.endsWith('.localhost')) {
+    return true
+  }
+
+  const ipVersion = isIP(normalized)
+  if (ipVersion === 4) {
+    const [first = 0, second = 0] = normalized.split('.').map(Number)
+    return first === 0
+      || first === 10
+      || first === 127
+      || (first === 169 && second === 254)
+      || (first === 172 && second >= 16 && second <= 31)
+      || (first === 192 && second === 168)
+      || first >= 224
+  }
+
+  if (ipVersion === 6) {
+    return normalized === '::1'
+      || normalized === '::'
+      || normalized.startsWith('fc')
+      || normalized.startsWith('fd')
+      || normalized.startsWith('fe80:')
+  }
+
+  return false
 }
 
 function validateSource(

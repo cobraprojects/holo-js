@@ -54,7 +54,7 @@ async function createTokenFromCredentials(baseUrl) {
   assert.equal(result.json.ok, true)
   assert.match(result.json.token, /^[^.]+\..+$/)
   assert.equal(result.json.tokenId, result.json.token.split('.', 1)[0])
-  assert.deepEqual(result.json.abilities, ['posts.read'])
+  assert.deepEqual(result.json.abilities, [])
 
   return result.json.token
 }

@@ -8,10 +8,7 @@ export default defineEventHandler(async (event) => {
     throttle: 'login',
   })
 
-  const token = await auth.guard('api').login({
-    ...input,
-    abilities: ['posts.read'],
-  })
+  const token = await auth.guard('api').login(input)
 
   setResponseHeader(event, 'Cache-Control', 'no-store')
   return {

@@ -414,16 +414,16 @@ describe('public storage route resolution', () => {
       ['asset.avif', 'image/avif'],
       ['asset.css', 'text/css; charset=utf-8'],
       ['asset.gif', 'image/gif'],
-      ['asset.html', 'text/html; charset=utf-8'],
+      ['asset.html', 'application/octet-stream'],
       ['asset.jpeg', 'image/jpeg'],
       ['asset.jpg', 'image/jpeg'],
-      ['asset.js', 'text/javascript; charset=utf-8'],
-      ['asset.mjs', 'text/javascript; charset=utf-8'],
+      ['asset.js', 'application/octet-stream'],
+      ['asset.mjs', 'application/octet-stream'],
       ['asset.json', 'application/json; charset=utf-8'],
       ['asset.mp3', 'audio/mpeg'],
       ['asset.pdf', 'application/pdf'],
       ['asset.png', 'image/png'],
-      ['asset.svg', 'image/svg+xml'],
+      ['asset.svg', 'application/octet-stream'],
       ['asset.txt', 'text/plain; charset=utf-8'],
       ['asset.webp', 'image/webp'],
       ['asset.woff', 'font/woff'],
@@ -438,6 +438,10 @@ describe('public storage route resolution', () => {
 
       await expect(storageHandler({})).resolves.toEqual(Buffer.from(fileName))
       expect(setResponseHeader).toHaveBeenCalledWith({}, 'content-type', contentType)
+      expect(setResponseHeader).toHaveBeenCalledWith({}, 'x-content-type-options', 'nosniff')
+      if (['asset.html', 'asset.js', 'asset.mjs', 'asset.svg'].includes(fileName)) {
+        expect(setResponseHeader).toHaveBeenCalledWith({}, 'content-disposition', 'attachment')
+      }
     }
   })
 

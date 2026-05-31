@@ -2631,12 +2631,20 @@ export default defineConfig({
       defaults: {
         guard: 'web',
       },
+      personalAccessTokens: {
+        defaultAbilities: ['*'],
+      },
       providers: {
         users: {
           identifiers: ['email'],
         },
       },
     })
+    expect(normalizeAuthConfig({
+      personalAccessTokens: {
+        defaultAbilities: [],
+      },
+    }).personalAccessTokens.defaultAbilities).toEqual([])
     expect(normalizeAuthConfig()).not.toHaveProperty('currentUserEndpoint')
     expect(normalizeAuthConfig(auth)).toMatchObject({
       defaults: {

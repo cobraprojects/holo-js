@@ -1,3 +1,11 @@
-import { getAdminTagsData } from '../../../lib/blog'
+import auth from '@holo-js/auth'
+import authorization from '@holo-js/authorization'
 
-export default defineEventHandler(async () => await getAdminTagsData())
+import { getAdminTagsData } from '../../../lib/blog'
+import Tag from '../../../models/Tag'
+
+export default defineEventHandler(async () => {
+  await authorization.forUser(await auth.user()).authorize('viewAny', Tag)
+
+  return await getAdminTagsData()
+})

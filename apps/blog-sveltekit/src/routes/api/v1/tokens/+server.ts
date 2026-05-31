@@ -9,10 +9,7 @@ export async function POST({ request }: { request: Request }) {
     throttle: 'login',
   })
 
-  const token = await auth.guard('api').login({
-    ...input,
-    abilities: ['posts.read'],
-  })
+  const token = await auth.guard('api').login(input)
 
   return json({
     ok: true,

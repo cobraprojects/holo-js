@@ -31,6 +31,7 @@ import type {
   AuthRuntimeBindings,
   AuthRuntimeContext,
   AuthRuntimeFacade,
+  AuthAuthorizationSubject,
   AuthSessionRecord,
   EmailVerificationTokenRecord,
   EmailVerificationTokenResult,
@@ -145,6 +146,7 @@ type RuntimeBindings = {
   readonly delivery: AuthDeliveryHook
   readonly context: AuthRuntimeContext
   readonly passwordHasher: AuthPasswordHasher
+  readonly authorization?: AuthRuntimeBindings['authorization']
 }
 
 type ActivatableAuthRuntimeContext = AuthRuntimeContext & {
@@ -197,6 +199,7 @@ function getExposedRuntimeBindings(): {
   readonly delivery: AuthDeliveryHook
   readonly context: AuthRuntimeContext
   readonly passwordHasher: AuthPasswordHasher
+  readonly authorization?: AuthRuntimeBindings['authorization']
 } {
   const bindings = getRuntimeBindings()
 
@@ -212,6 +215,19 @@ function requireRecordValue(value: unknown, message: string): Record<string, unk
   }
 
   return value as Record<string, unknown>
+}
+
+async function resolveUserAuthorization(
+  user: SerializedAuthUser,
+  action: string,
+  target: AuthAuthorizationSubject,
+): Promise<boolean> {
+  const authorization = getAuthRuntimeState().bindings?.authorization
+  if (!authorization) {
+    return false
+  }
+
+  return await authorization.can(user, action, target)
 }
 
 function createPasswordResetThrottleKey(
@@ -581,7 +597,6 @@ function serializeUser(
   adapter: ErasedAuthProviderAdapter,
   user: unknown,
   providerName?: string,
-  options: { readonly can?: (ability: string) => boolean } = {},
 ): SerializedAuthUser {
   const serialized = adapter.serialize
     ? adapter.serialize(user)
@@ -595,7 +610,7 @@ function serializeUser(
     id,
   }
   Object.defineProperty(result, 'can', {
-    value: options.can ?? (() => false),
+    value: (action: string, target: AuthAuthorizationSubject) => resolveUserAuthorization(result as SerializedAuthUser, action, target),
     enumerable: false,
     configurable: true,
   })
@@ -619,7 +634,7 @@ function rehydrateSerializedUser(
     id: user.id,
   }
   Object.defineProperty(restored, 'can', {
-    value: () => false,
+    value: (action: string, target: AuthAuthorizationSubject) => resolveUserAuthorization(restored as SerializedAuthUser, action, target),
     enumerable: false,
     configurable: true,
   })
@@ -910,12 +925,28 @@ function parsePlainTextToken(token: string): { id: string, secret: string } | nu
   return { id, secret }
 }
 
-function tokenHasAbility(record: PersonalAccessTokenRecord, ability: string): boolean {
-  if (!ability.trim()) {
+function tokenAbilityMatches(grantedAbility: string, requestedAbility: string): boolean {
+  const granted = grantedAbility.trim()
+  const requested = requestedAbility.trim()
+
+  if (!granted || !requested) {
     return false
   }
 
-  return record.abilities.includes('*') || record.abilities.includes(ability)
+  if (granted === '*') {
+    return true
+  }
+
+  if (granted.endsWith('.*')) {
+    const prefix = granted.slice(0, -1)
+    return requested.startsWith(prefix) && requested.length > prefix.length
+  }
+
+  return granted === requested
+}
+
+function tokenHasAbility(record: PersonalAccessTokenRecord, ability: string): boolean {
+  return record.abilities.some(grantedAbility => tokenAbilityMatches(grantedAbility, ability))
 }
 
 async function authenticateAccessTokenRecord(
@@ -949,9 +980,7 @@ async function authenticateAccessTokenRecord(
 
   return {
     token: updatedRecord,
-    user: serializeUser(adapter, resolvedUser, tokenRecord.provider, {
-      can: ability => tokenHasAbility(updatedRecord, ability),
-    }),
+    user: serializeUser(adapter, resolvedUser, tokenRecord.provider),
   }
 }
 
@@ -1108,7 +1137,7 @@ async function loginForGuard(guardName: string, credentials: AuthCredentials): P
   }
 
   const serialized = serializeUser(adapter, user, guard.provider)
-  return createLoginTokenForGuard(guardName, serialized, credentials)
+  return createLoginTokenForGuard(guardName, serialized)
 }
 
 function assertTrustedUserProvider(
@@ -1617,7 +1646,7 @@ async function registerForGuard(guardName: string, input: AuthRegistrationInput)
     ensureTokenStore()
     const user = await registerUserForGuard(guardName, input)
     try {
-      return await createLoginTokenForGuard(guardName, user, input)
+      return await createLoginTokenForGuard(guardName, user)
     } catch (error) {
       await rollbackSerializedUserForGuard(guardName, user).catch(() => undefined)
       throw error
@@ -1832,23 +1861,13 @@ function toPlainTextTokenResult(
   })
 }
 
-function getTokenAbilitiesFromInput(input?: Readonly<Record<string, unknown>>): readonly string[] | undefined {
-  const abilities = input?.abilities
-  return Array.isArray(abilities) && abilities.every(ability => typeof ability === 'string')
-    ? abilities
-    : undefined
-}
-
 function createLoginTokenForGuard(
   guardName: string,
   user: AuthUser,
-  input?: Readonly<Record<string, unknown>>,
 ): Promise<PersonalAccessTokenResult> {
-  const abilities = getTokenAbilitiesFromInput(input)
   return createTokenFacade().create(user, {
     guard: guardName,
     name: guardName,
-    ...(abilities ? { abilities } : {}),
   })
 }
 
@@ -2318,6 +2337,7 @@ export function configureAuthRuntime(bindings?: AuthRuntimeBindings): void {
     delivery: bindings.delivery ?? createDefaultDeliveryHook(),
     context: bindings.context ?? createMemoryAuthContext(),
     passwordHasher: bindings.passwordHasher ?? createDefaultPasswordHasher(),
+    authorization: bindings.authorization,
   }
 }
 

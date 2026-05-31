@@ -146,8 +146,33 @@ export interface AuthUserLike {
   readonly [key: string]: unknown
 }
 
+export interface AuthAuthorizationTargetConstructor<TInstance = object> {
+  readonly prototype: TInstance
+}
+
+export interface AuthAuthorizationTargetModelDefinition {
+  readonly name: string
+  readonly table?: {
+    readonly tableName?: string
+  }
+}
+
+export interface AuthAuthorizationTargetModel<TInstance extends object = object> {
+  readonly definition: AuthAuthorizationTargetModelDefinition
+  query(): {
+    first(): Promise<TInstance | undefined>
+    firstOrFail(): Promise<TInstance>
+  }
+}
+
+export type AuthAuthorizationTarget<TInstance extends object = object>
+  = | AuthAuthorizationTargetConstructor<TInstance>
+    | AuthAuthorizationTargetModel<TInstance>
+
+export type AuthAuthorizationSubject = AuthAuthorizationTarget | object
+
 export interface AuthAuthorizable {
-  can(ability: string): boolean
+  can(action: string, target: AuthAuthorizationSubject): Promise<boolean>
 }
 
 declare global {
@@ -561,6 +586,14 @@ export interface AuthRuntimeContext {
   setRememberToken?(guardName: string, token?: string): void
 }
 
+export interface AuthRuntimeAuthorization {
+  can(
+    user: AuthenticatedAuthUser,
+    action: string,
+    target: AuthAuthorizationSubject,
+  ): boolean | Promise<boolean>
+}
+
 export interface AuthRuntimeBindings {
   readonly config: HoloAuthConfig | NormalizedHoloAuthConfig
   readonly session: AuthSessionRuntime
@@ -571,6 +604,7 @@ export interface AuthRuntimeBindings {
   readonly delivery?: AuthDeliveryHook
   readonly context?: AuthRuntimeContext
   readonly passwordHasher?: AuthPasswordHasher
+  readonly authorization?: AuthRuntimeAuthorization
 }
 
 export interface AuthRuntimeFacade extends AuthFacade {

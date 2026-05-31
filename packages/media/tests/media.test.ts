@@ -991,6 +991,22 @@ describe('@holo-js/media', () => {
     }
   })
 
+  it('rejects local media paths outside upload directories', async () => {
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('uploads').disk('public'),
+      ],
+    })
+
+    const post = await Post.create({ title: 'Unsafe Path' })
+
+    await expect(post.addMedia('/etc/hosts').toMediaCollection('uploads')).rejects.toThrow('allowed upload directory')
+  })
+
   it('attaches media, generates conversions, and exposes direct model helpers', async () => {
     setMediaConversionExecutor({
       async generate({ conversion }) {
@@ -1942,11 +1958,7 @@ describe('@holo-js/media', () => {
       expect(download.fileName).toBe('media.bin')
       await expect(post.regenerateMedia('downloads', 'thumb' as never)).rejects.toThrow('not registered for collection')
 
-      const fallbackNamed = await post
-        .addMediaFromUrl('%%%%')
-        .toMediaCollection('downloads')
-
-      expect(fallbackNamed.fileName).toBe('media.bin')
+      await expect(post.addMediaFromUrl('%%%%').toMediaCollection('downloads')).rejects.toThrow('valid absolute URLs')
 
       const mimeOverride = await post
         .addMedia({
@@ -2056,6 +2068,68 @@ describe('@holo-js/media', () => {
       expect(result.data).toBeNull()
       expect(result.error?.message).toBe('The selected file must be 2 bytes or smaller.')
       expect(arrayBuffer).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('rejects remote uploads that target local hosts or redirects', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, {
+      status: 302,
+      headers: {
+        location: 'http://127.0.0.1/private.jpg',
+      },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('images').disk('public'),
+      ],
+    })
+
+    try {
+      const post = await Post.create({ title: 'Remote SSRF' })
+      await expect(post.addMediaFromUrl('http://127.0.0.1/private.jpg').toMediaCollection('images')).rejects.toThrow('local or private hosts')
+      await expect(post.addMediaFromUrl('https://example.test/redirect.jpg').toMediaCollection('images')).rejects.toThrow('do not follow redirects')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('enforces the default remote upload byte limit when collection max size is not configured', async () => {
+    const arrayBuffer = vi.fn(async () => new Uint8Array((10 * 1024 * 1024) + 1).buffer)
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({
+        'content-type': 'image/jpeg',
+      }),
+      arrayBuffer,
+    } as unknown as Response)))
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+
+    const Post = defineMediaModel(BasePost, {
+      collections: [
+        collection('images').disk('public'),
+      ],
+    })
+
+    try {
+      const post = await Post.create({ title: 'Remote Default Limit' })
+      const result = await post.addMediaFromUrl('https://example.test/default-limit.jpg').toMediaCollection('images')
+      expect(result.data).toBeNull()
+      expect(result.error?.message).toBe('The selected file must be 10 MB or smaller.')
+      expect(arrayBuffer).toHaveBeenCalledTimes(1)
     } finally {
       vi.unstubAllGlobals()
     }

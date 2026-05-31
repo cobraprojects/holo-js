@@ -427,7 +427,10 @@ function createSignedJwt(
   },
 ): string {
   const encodedHeader = encodeBase64Url(JSON.stringify(header))
-  const encodedPayload = encodeBase64Url(JSON.stringify(payload))
+  const encodedPayload = encodeBase64Url(JSON.stringify({
+    aud: 'workos-client',
+    ...payload,
+  }))
   const signingInput = `${encodedHeader}.${encodedPayload}`
   const signature = signData('RSA-SHA256', Buffer.from(signingInput, 'utf8'), privateKey).toString('base64url')
   return `${signingInput}.${signature}`
@@ -671,6 +674,48 @@ describe('@holo-js/auth-workos', () => {
     })
   })
 
+  it('rejects built-in WorkOS JWTs without required bound claims', async () => {
+    const runtime = configureRuntime({
+      configureWorkosRuntime: false,
+    })
+    configureWorkosAuthRuntime({
+      identityStore: runtime.identityStore,
+    })
+
+    const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+    })
+    const wrongAudience = createSignedJwt({
+      aud: 'other-client',
+      sub: 'user_workos_bad_aud',
+      sid: 'sess_workos_bad_aud',
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }, privateKey)
+    const missingExpiration = createSignedJwt({
+      sub: 'user_workos_no_exp',
+      sid: 'sess_workos_no_exp',
+      exp: undefined,
+    }, privateKey)
+    const publicJwk = publicKey.export({ format: 'jwk' })
+
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === 'https://api.workos.com/sso/jwks/workos-client') {
+        return new Response(JSON.stringify({
+          keys: [{ ...publicJwk, kid: 'workos-test-key', alg: 'RS256', use: 'sig' }],
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+
+      return new Response(null, { status: 404 })
+    })
+
+    await expect(verifySession(wrongAudience)).rejects.toThrow('audience')
+    await expect(verifySession(missingExpiration)).rejects.toThrow('expiration')
+  })
+
   it('clears built-in WorkOS verifier caches when the runtime is reset', async () => {
     const runtime = configureRuntime({
       configureWorkosRuntime: false,
@@ -743,6 +788,7 @@ describe('@holo-js/auth-workos', () => {
       modulusLength: 2048,
     })
     const token = createSignedJwt({
+      aud: 'workos-client-future',
       sub: 'user_workos_future',
       sid: 'sess_workos_future',
       nbf: Math.floor(Date.now() / 1000) + 3600,
@@ -809,6 +855,7 @@ describe('@holo-js/auth-workos', () => {
       modulusLength: 2048,
     })
     const firstToken = createSignedJwt({
+      aud: 'workos-client-rotate',
       sub: 'user_workos_rotate_first',
       sid: 'sess_workos_rotate_first',
       exp: Math.floor(Date.now() / 1000) + 3600,
@@ -818,6 +865,7 @@ describe('@holo-js/auth-workos', () => {
       typ: 'JWT',
     })
     const secondToken = createSignedJwt({
+      aud: 'workos-client-rotate',
       sub: 'user_workos_rotate_second',
       sid: 'sess_workos_rotate_second',
       exp: Math.floor(Date.now() / 1000) + 3600,
@@ -1164,14 +1212,18 @@ describe('@holo-js/auth-workos', () => {
     const { data, error } = await logoutWithWorkos(new Request('https://app.test/api/auth/workos/logout', {
       method: 'POST',
       headers: sessionCookie ? { cookie: sessionCookie } : undefined,
-    }))
+    }), {
+      returnTo: 'https://evil.test/after-logout',
+    })
 
     expect(data).toMatchObject({
-      url: 'https://api.workos.com/user_management/sessions/logout?session_id=session_workos_logout',
       local: {
         guard: 'web',
       },
     })
+    const hostedLogoutUrl = new URL(data?.url ?? '')
+    expect(hostedLogoutUrl.searchParams.get('session_id')).toBe('session_workos_logout')
+    expect(hostedLogoutUrl.searchParams.get('return_to')).toBe('https://app.test')
     expect(error).toBeNull()
     expect(data?.local.cookies ?? []).toContainEqual(expect.stringContaining('holo_session=;'))
   })
@@ -1333,7 +1385,7 @@ describe('@holo-js/auth-workos', () => {
 
     runtime.usersProvider.users.delete(1)
     runtime.usersProvider.usersByEmail.delete('sync@app.test')
-    const relinkTarget = await runtime.usersProvider.create({
+    await runtime.usersProvider.create({
       name: 'Relink Target',
       email: 'sync@app.test',
       password: null,
@@ -1350,18 +1402,11 @@ describe('@holo-js/auth-workos', () => {
       },
     })
 
-    const relinked = await authenticate(new Request('https://app.test/me', {
+    await expect(authenticate(new Request('https://app.test/me', {
       headers: {
         authorization: 'Bearer relink-token',
       },
-    }))
-    expect(relinked).toMatchObject({
-      status: 'relinked',
-      user: {
-        id: relinkTarget.id,
-        name: 'Relinked User',
-      },
-    })
+    }))).rejects.toBeInstanceOf(WorkosAuthConflictError)
   })
 
   it('does not overwrite linked users with synthetic fallback fields when WorkOS omits profile data', async () => {

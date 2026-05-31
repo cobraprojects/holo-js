@@ -16,7 +16,7 @@ export default defineEventHandler(async (event) => {
 
   const userId = currentUser.id
 
-  if (!currentUser.can('posts.read')) {
+  if (!await currentUser.can('viewAny', Post)) {
     setResponseStatus(event, 403)
 
     return {

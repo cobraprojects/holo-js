@@ -502,6 +502,7 @@ function configureRuntime(options: {
   authConfig?: HoloAuthConfig
   delivery?: Partial<AuthDeliveryHook>
   passwordHasher?: NonNullable<Parameters<typeof configureAuthRuntime>[0]>['passwordHasher']
+  authorization?: NonNullable<Parameters<typeof configureAuthRuntime>[0]>['authorization']
 } = {}) {
   const sessionStore = new InMemorySessionStore()
   const tokenStore = new InMemoryTokenStore()
@@ -626,6 +627,7 @@ function configureRuntime(options: {
     delivery,
     context,
     passwordHasher: options.passwordHasher,
+    authorization: options.authorization,
   })
 
   return {
@@ -4153,7 +4155,7 @@ describe('@holo-js/auth package runtime', () => {
     await expect(tokens.can(created.plainTextToken, 'orders.write')).resolves.toBe(false)
   })
 
-  it('returns a personal access token when logging into a token guard with credentials', async () => {
+  it('returns a configured default-scope personal access token when logging into a token guard with credentials', async () => {
     const runtime = configureRuntime()
     const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
     const userRecord = await runtime.usersProvider.create({
@@ -4177,7 +4179,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(token.name).toBe('api')
     expect(token.provider).toBe('users')
     expect(token.userId).toBe(userRecord.id)
-    expect(token.abilities).toEqual(['posts.read'])
+    expect(token.abilities).toEqual(['*'])
     await expect(tokens.authenticate(token.plainTextToken)).resolves.toMatchObject({
       id: userRecord.id,
       email: 'ava@example.com',
@@ -4185,7 +4187,7 @@ describe('@holo-js/auth package runtime', () => {
     expect(runtime.context.getSessionId('api')).toBeUndefined()
   })
 
-  it('registers users through a token guard and returns a personal access token', async () => {
+  it('registers users through a token guard and returns a configured default-scope personal access token', async () => {
     const runtime = configureRuntime()
 
     const token = unwrapAuthResult(await auth.guard('api').register({
@@ -4203,7 +4205,7 @@ describe('@holo-js/auth package runtime', () => {
 
     expect(token.name).toBe('api')
     expect(token.provider).toBe('users')
-    expect(token.abilities).toEqual(['posts.read'])
+    expect(token.abilities).toEqual(['*'])
     await expect(tokens.authenticate(token.plainTextToken)).resolves.toMatchObject({
       id: token.userId,
       email: 'mina@example.com',
@@ -4314,6 +4316,38 @@ describe('@holo-js/auth package runtime', () => {
     expect(runtime.tokenStore.records.get(created.id)?.abilities).toEqual(['projects.read'])
   })
 
+  it('allows exact, prefix wildcard, and global wildcard token abilities', async () => {
+    const runtime = configureRuntime()
+    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
+    const userRecord = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password,
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    const postsToken = await tokens.create(userRecord, {
+      name: 'posts-token',
+      abilities: ['posts.*', 'orders.read'],
+    })
+    const globalToken = await tokens.create(userRecord, {
+      name: 'global-token',
+      abilities: ['*'],
+    })
+    const emptyToken = await tokens.create(userRecord, {
+      name: 'empty-token',
+      abilities: [],
+    })
+
+    await expect(tokens.can(postsToken.plainTextToken, 'posts.read')).resolves.toBe(true)
+    await expect(tokens.can(postsToken.plainTextToken, 'posts.comments.read')).resolves.toBe(true)
+    await expect(tokens.can(postsToken.plainTextToken, 'orders.read')).resolves.toBe(true)
+    await expect(tokens.can(postsToken.plainTextToken, 'posts')).resolves.toBe(false)
+    await expect(tokens.can(postsToken.plainTextToken, 'users.read')).resolves.toBe(false)
+    await expect(tokens.can(globalToken.plainTextToken, 'users.delete')).resolves.toBe(true)
+    await expect(tokens.can(emptyToken.plainTextToken, 'posts.read')).resolves.toBe(false)
+  })
+
   it('lists tokens, revokes the current token, revokes all tokens for a user, and isolates revocation by user', async () => {
     const runtime = configureRuntime()
     const hasher = authRuntimeInternals.createDefaultPasswordHasher()
@@ -4416,13 +4450,44 @@ describe('@holo-js/auth package runtime', () => {
     expect(current?.can('orders.read')).toBe(true)
     expect(current?.can('orders.write')).toBe(false)
 
-    const currentUser = await auth.guard('api').user()
-    expect(currentUser?.can('orders.read')).toBe(true)
-    expect(currentUser?.can('orders.write')).toBe(false)
-
     await current?.delete()
     expect(runtime.context.getAccessToken('api')).toBeUndefined()
     expect(await tokens.authenticate(token.plainTextToken)).toBeNull()
+  })
+
+  it('delegates authenticated user authorization checks to the configured authorization integration', async () => {
+    class Project {}
+
+    const authorization = vi.fn(async (_user, action: string, target) => action === 'viewAny' && target === Project)
+    const runtime = configureRuntime({
+      authorization: {
+        can: authorization,
+      },
+    })
+    const hasher = authRuntimeInternals.createDefaultPasswordHasher()
+    const userRecord = await runtime.usersProvider.create({
+      name: 'Ava',
+      email: 'ava@example.com',
+      password: await hasher.hash('secret-secret'),
+      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
+    })
+
+    await auth.login({
+      email: 'ava@example.com',
+      password: 'secret-secret',
+    })
+
+    const currentUser = await auth.user()
+    if (!currentUser) {
+      throw new Error('Expected authenticated user.')
+    }
+
+    await expect(currentUser.can('viewAny', Project)).resolves.toBe(true)
+    await expect(currentUser.can('delete', Project)).resolves.toBe(false)
+    expect(authorization).toHaveBeenCalledWith(expect.objectContaining({
+      id: userRecord.id,
+      email: 'ava@example.com',
+    }), 'viewAny', Project)
   })
 
   it('ignores current-token revocation when the selected guard has no active token', async () => {
@@ -4943,7 +5008,7 @@ describe('@holo-js/auth package runtime', () => {
       email: 'ava@example.com',
       name: 'Ava',
       role: 'member',
-      can: () => false,
+      can: async () => false,
     }
     Object.defineProperty(cachedUser, 'can', {
       value: cachedUser.can,
@@ -4960,7 +5025,11 @@ describe('@holo-js/auth package runtime', () => {
       name: 'Ava',
       role: 'member',
     })
-    expect(context.getCachedUser('web')?.can('posts.read')).toBe(false)
+    const restoredCachedUser = context.getCachedUser('web')
+    if (!restoredCachedUser) {
+      throw new Error('Expected cached user.')
+    }
+    await expect(restoredCachedUser.can('viewAny', {})).resolves.toBe(false)
     expect(context.getAccessToken?.('api')).toBe('token-value')
     expect(context.getRememberToken?.('web')).toBe('remember-value')
   })
@@ -5597,7 +5666,7 @@ describe('@holo-js/auth package runtime', () => {
       email: 'ava@example.com',
       name: 'Ava',
       role: 'member',
-      can: () => false,
+      can: async () => false,
     }, {
       guard: 'web',
       provider: 'users',
@@ -5819,7 +5888,7 @@ describe('@holo-js/auth package runtime', () => {
       email: 'ava@example.com',
       name: 'Ava',
       role: 'member',
-      can: () => false,
+      can: async () => false,
     }, {
       guard: 'web',
       provider: 'users',
