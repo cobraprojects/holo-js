@@ -417,7 +417,6 @@ Successful auth calls put the result in `data`. Expected auth failures come back
   status: 401,
   fields: {
     email: ['These credentials do not match our records.'],
-    password: ['These credentials do not match our records.'],
   },
 }
 ```

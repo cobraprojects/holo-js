@@ -632,7 +632,7 @@ export async function assertExampleAppAuthFlow({
   if (!usesSvelteKitActions) {
     assert.equal(badCredentials.response.status, 422)
   }
-  assertAuthFieldFailure(badCredentials, ['email', 'password'])
+  assertAuthFieldFailure(badCredentials, ['email'])
 
   let throttledLogin
   const throttledEmail = `${appName}-throttled-login-${Date.now()}@app.test`

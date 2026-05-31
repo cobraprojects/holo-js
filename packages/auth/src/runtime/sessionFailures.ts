@@ -12,7 +12,6 @@ import {
   createAuthFailurePayload,
   createFieldErrors,
   createPasswordConfirmationMismatchFailure,
-  hasInputField,
   resolveIdentifierFieldName,
   resolveRequiredFieldName,
 } from './failureFields'
@@ -24,16 +23,14 @@ export function createLoginFailure<TCredentials extends AuthCredentials>(
   switch (error.code) {
     case 'invalid_credentials': {
       const message = 'These credentials do not match our records.'
-      const fields = [
-        resolveIdentifierFieldName(credentials, error),
-        hasInputField(credentials, 'password') ? 'password' : undefined,
-      ].filter((field): field is InputFieldName<TCredentials> => typeof field === 'string')
+      const field = resolveIdentifierFieldName(credentials, error)
+        ?? resolveRequiredFieldName(credentials, ['password'])
 
       return createAuthFailurePayload(
         error.code,
         message,
         422,
-        createFieldErrors(fields.length > 0 ? fields : [resolveRequiredFieldName(credentials, ['password'])], message),
+        createFieldErrors([field], message),
       )
     }
 

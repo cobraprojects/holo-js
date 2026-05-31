@@ -55,7 +55,7 @@ import {
   pickInputField,
   resolveRequiredFieldName,
 } from '../src/runtime/failureFields'
-import { createLoginFailure, createRegistrationFailure } from '../src/runtime/sessionFailures'
+import { createLoginFailure, createRegistrationFailure, createTokenLoginFailure } from '../src/runtime/sessionFailures'
 import { isValidationException, validationInternals, type ValidationErrorBag } from '@holo-js/validation'
 
 function hashPasswordResetEmail(email: string, csrfSigningKey?: string): string {
@@ -1212,7 +1212,6 @@ describe('@holo-js/auth package runtime', () => {
       status: 422,
       fields: {
         username: ['These credentials do not match our records.'],
-        password: ['These credentials do not match our records.'],
       },
     })
     expect(() => createLoginFailure(new AuthError(
@@ -1232,6 +1231,27 @@ describe('@holo-js/auth package runtime', () => {
     })
     expect(verificationPasswordFallback.fields).toEqual({
       password: ['Verify your email address before signing in.'],
+    })
+    expect(createTokenLoginFailure(new AuthError(
+      'email_verification_required',
+      'Verify your email address before signing in.',
+    ), {
+      email: 'ava@example.com',
+      password: 'secret-secret',
+    })).toEqual(verificationFailure)
+    expect(createTokenLoginFailure(new AuthError(
+      'invalid_credentials',
+      'Invalid credentials.',
+    ), {
+      email: 'ava@example.com',
+      password: 'secret-secret',
+    })).toEqual({
+      code: 'invalid_credentials',
+      message: 'Invalid credentials.',
+      status: 401,
+      fields: {
+        _root: ['Invalid credentials.'],
+      },
     })
     expect(takenPasswordFallback.fields).toEqual({
       password: ['The selected credentials are already in use.'],
@@ -1721,7 +1741,6 @@ describe('@holo-js/auth package runtime', () => {
     }), 'invalid_credentials')
     expect(missingCredentialsErrors).toMatchObject({
       email: ['These credentials do not match our records.'],
-      password: ['These credentials do not match our records.'],
     })
 
     await expectAuthValidationError(() => login({
