@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/authorization",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Holo-JS Framework - policy contracts, abilities, and typed authorization surfaces",
   "type": "module",
   "license": "MIT",
