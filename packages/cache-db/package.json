@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/cache-db",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Holo-JS Framework - DB-backed cache driver",
   "type": "module",
   "license": "MIT",
