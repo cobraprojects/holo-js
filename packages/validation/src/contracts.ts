@@ -1,6 +1,8 @@
 import {
+  type ArrayFieldBuilderInput,
   type FieldBuilderInput,
   type FieldRule,
+  type InferArrayItemOutput,
   type InferFieldOutput,
   type InferSchemaData,
   type InferValidationSchemaData,
@@ -27,6 +29,7 @@ import {
   createField,
   isFieldDefinition,
   isPlainObject,
+  isValidationFieldBuilderLike,
   isValidationField,
   issuesToFlat,
   normalizeDateRuleValue,
@@ -230,11 +233,18 @@ export class ValidationFieldBuilder<TOutput> implements StandardSchemaV1<unknown
   }
 }
 
-export function arrayField<TItemInput extends FieldBuilderInput>(
+export function arrayField<TItemInput extends ArrayFieldBuilderInput>(
   item: TItemInput,
-): ValidationFieldBuilder<InferFieldOutput<TItemInput>[]> {
-  const normalized = normalizeFieldBuilder(item)
-  return new ValidationFieldBuilder<InferFieldOutput<TItemInput>[]>(createField('array', normalized.definition))
+): ValidationFieldBuilder<InferArrayItemOutput<TItemInput>[]> {
+  const normalized = isValidationFieldBuilderLike(item) || isValidationField(item)
+    ? normalizeFieldBuilder(item)
+    : normalizeSchemaShape(item as SchemaInputShape)
+
+  const itemDefinition = isValidationField(normalized)
+    ? normalized.definition
+    : normalized
+
+  return new ValidationFieldBuilder<InferArrayItemOutput<TItemInput>[]>(createField('array', itemDefinition))
 }
 
 export const field = Object.freeze({

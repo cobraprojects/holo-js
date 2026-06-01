@@ -21,6 +21,7 @@ import {
   coerceFieldValue,
   coerceShapeInput,
   createErrorBag,
+  isFieldDefinition,
   isPlainObject,
   issuesToFlat,
   makeCompiledFieldSchema,
@@ -321,12 +322,19 @@ async function applyPostFieldRulesRecursively(
 
   for (const [index, item] of value.entries()) {
     const key = String(index)
-    await applyPostFieldRulesRecursively(definition.item, item, inputItems[index], {
-      root: context.root,
-      parent: value,
-      key,
-      path: [...context.path, key],
-    }, issues)
+    const nextPath = [...context.path, key]
+
+    if (isFieldDefinition(definition.item)) {
+      await applyPostFieldRulesRecursively(definition.item, item, inputItems[index], {
+        root: context.root,
+        parent: value,
+        key,
+        path: nextPath,
+      }, issues)
+      continue
+    }
+
+    await applyPostValidation(definition.item, item, context.root, issues, nextPath, inputItems[index])
   }
 }
 

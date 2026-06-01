@@ -82,11 +82,13 @@ export interface FieldRule {
   readonly message?: string
 }
 
+export type FieldArrayItemDefinition = FieldDefinition | NormalizedSchemaShape<SchemaInputShape>
+
 export interface FieldDefinition {
   readonly kind: FieldKind
   readonly rules: readonly FieldRule[]
   readonly sensitive?: boolean
-  readonly item?: FieldDefinition
+  readonly item?: FieldArrayItemDefinition
 }
 
 export interface ValidationField<TOutput = unknown> {
@@ -100,6 +102,7 @@ export interface ValidationFieldBuilderLike<TOutput = unknown> {
 }
 
 export type FieldBuilderInput<TOutput = unknown> = ValidationFieldBuilderLike<TOutput> | ValidationField<TOutput>
+export type ArrayFieldBuilderInput<TOutput = unknown> = FieldBuilderInput<TOutput> | SchemaInputShape
 
 export type NormalizeFieldInput<TInput> = TInput extends ValidationFieldBuilderLike<infer TOutput>
   ? ValidationField<TOutput>
@@ -108,6 +111,11 @@ export type NormalizeFieldInput<TInput> = TInput extends ValidationFieldBuilderL
     : never
 
 export type InferFieldOutput<TInput> = NormalizeFieldInput<TInput> extends ValidationField<infer TOutput> ? TOutput : never
+export type InferArrayItemOutput<TInput> = TInput extends FieldBuilderInput
+  ? InferFieldOutput<TInput>
+  : TInput extends SchemaInputShape
+    ? InferSchemaData<TInput>
+    : never
 
 export type NormalizedSchemaShape<TShape extends SchemaInputShape> = {
   readonly [K in Extract<keyof TShape, string>]:

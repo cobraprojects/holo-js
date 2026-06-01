@@ -687,6 +687,18 @@ describe('@holo-js/media', () => {
     expect(getMediaDefinitionForMorphClass('ManualOnly')).toBe(manualDefinition)
     expect(requireMediaDefinitionForMorphClass('ManualOnly')).toBe(manualDefinition)
 
+    const RegistryPost = defineMediaModel(defineModel(postsTable, {
+      name: 'RegistryPost',
+      fillable: ['title'],
+    }), {
+      collections: [collection('images')],
+    })
+    const registryCopyPath = `../src/registry.ts?registry-copy=${Date.now()}`
+    const registryCopy = await import(registryCopyPath) as typeof import('../src/registry')
+
+    expect(registryCopy.getMediaDefinition(RegistryPost as never)).toBe(getMediaDefinition(RegistryPost))
+    expect(registryCopy.resolveMediaCollection(RegistryPost as never, 'images').name).toBe('images')
+
     const generatedDefault = getMediaPathGenerator().conversionPath({
       uuid: 'abc/123',
       fileName: 'hero',

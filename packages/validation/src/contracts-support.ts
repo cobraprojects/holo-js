@@ -41,6 +41,8 @@ function isValidationFieldBuilderLike(value: unknown): value is ValidationFieldB
     && isValidationField(value.field)
 }
 
+export { isValidationFieldBuilderLike }
+
 function isBlobLike(value: unknown): value is Blob {
   return typeof Blob !== 'undefined' && value instanceof Blob
 }
@@ -139,7 +141,7 @@ export function normalizeSchemaShape<TShape extends SchemaInputShape>(shape: TSh
   return Object.freeze(Object.fromEntries(normalizedEntries)) as NormalizedSchemaShape<TShape>
 }
 
-export function createField<TOutput>(kind: FieldKind, item?: FieldDefinition, sensitive = false): ValidationField<TOutput> {
+export function createField<TOutput>(kind: FieldKind, item?: FieldDefinition['item'], sensitive = false): ValidationField<TOutput> {
   return Object.freeze({
     kind: 'field' as const,
     definition: Object.freeze({
@@ -266,6 +268,18 @@ function hasRule(definition: FieldDefinition, name: SupportedRuleFamily): boolea
   return definition.rules.some(rule => rule.name === name)
 }
 
+function makeCompiledArrayItemSchema(item: FieldDefinition['item']): v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> {
+  if (!item) {
+    return v.unknown()
+  }
+
+  if (isFieldDefinition(item)) {
+    return makeCompiledFieldSchema(item)
+  }
+
+  return v.objectAsync(compileSchemaShape(item))
+}
+
 function makeBaseSchema(definition: FieldDefinition): v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> {
   switch (definition.kind) {
     case 'string':
@@ -279,7 +293,7 @@ function makeBaseSchema(definition: FieldDefinition): v.BaseSchema<unknown, unkn
     case 'file':
       return v.custom<WebFileLike>(value => isWebFileLike(value), 'The selected file must be a file.')
     case 'array':
-      return v.arrayAsync(definition.item ? makeCompiledFieldSchema(definition.item) as v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> : /* v8 ignore next */ v.unknown(), 'This field must be a list.')
+      return v.arrayAsync(makeCompiledArrayItemSchema(definition.item) as v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>>, 'This field must be a list.')
   }
 }
 
@@ -656,7 +670,15 @@ export function coerceFieldValue(definition: FieldDefinition, value: unknown): u
     }
 
     const rawItems = Array.isArray(value) ? value : [value]
-    return rawItems.map(item => definition.item ? coerceFieldValue(definition.item, item) : item)
+    if (!definition.item) {
+      return rawItems
+    }
+
+    if (isFieldDefinition(definition.item)) {
+      return rawItems.map(item => coerceFieldValue(definition.item as FieldDefinition, item))
+    }
+
+    return rawItems.map(item => coerceShapeInput(definition.item as NormalizedSchemaShape<SchemaInputShape>, item))
   }
 
   const normalizedValue = lastValue(value)

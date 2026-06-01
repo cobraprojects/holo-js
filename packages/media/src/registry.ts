@@ -98,8 +98,20 @@ export interface MediaPathGenerator {
   ): string
 }
 
-const mediaDefinitionRegistry = new WeakMap<object, NormalizedMediaDefinition>()
-const mediaDefinitionMorphClassRegistry = new Map<string, NormalizedMediaDefinition>()
+type MediaRegistryState = {
+  readonly definitions: WeakMap<object, NormalizedMediaDefinition>
+  readonly morphClasses: Map<string, NormalizedMediaDefinition>
+}
+
+const mediaRegistrySymbol = Symbol.for('@holo-js/media.registry')
+const mediaRegistryState = ((globalThis as typeof globalThis & {
+  [mediaRegistrySymbol]?: MediaRegistryState
+})[mediaRegistrySymbol] ??= {
+  definitions: new WeakMap<object, NormalizedMediaDefinition>(),
+  morphClasses: new Map<string, NormalizedMediaDefinition>(),
+})
+const mediaDefinitionRegistry = mediaRegistryState.definitions
+const mediaDefinitionMorphClassRegistry = mediaRegistryState.morphClasses
 
 function sanitizePathSegment(value: string): string {
   return value
