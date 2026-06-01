@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/queue-redis",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Holo-JS Framework - Redis queue driver",
   "type": "module",
   "license": "MIT",
