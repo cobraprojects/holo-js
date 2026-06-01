@@ -387,6 +387,8 @@ async function runProjectDependencyInstallAfterPackageJsonUpdate(
   }
 
   await runProjectDependencyInstallForProject(context, projectExecutors, context.projectRoot)
+  const runProjectPrepare = await resolveProjectExecutor(projectExecutors, 'runProjectPrepare')
+  await runProjectPrepare(context.projectRoot, context)
 }
 
 async function runProjectDependencyInstallForProject(

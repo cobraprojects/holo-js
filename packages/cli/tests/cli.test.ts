@@ -5233,6 +5233,50 @@ export const limit = Object.freeze({
     expect(cached.stdout).toContain('Config cached:')
   }, 30000)
 
+  it('runs prepare after installing dependencies for first-party support', async () => {
+    const projectRoot = await createTempDirectory()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      type: 'module',
+      dependencies: {},
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'config/app.mjs', 'export default {}\n')
+
+    const io = createIo(projectRoot)
+    const runProjectDependencyInstall = vi.fn(async () => {})
+    const runProjectPrepare = vi.fn(async () => {})
+    const context = {
+      ...io.io,
+      projectRoot,
+      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    }
+    const commands = cliInternals.createInternalCommands(
+      context,
+      async (_projectRoot, _kind, _options, callback) => callback(''),
+      {},
+      {
+        runProjectDependencyInstall,
+        runProjectPrepare,
+      },
+    )
+    const installCommand = commands.find(command => command.name === 'install')
+    const prepared = await installCommand?.prepare?.({ args: ['security'], flags: {} }, context as never)
+    await installCommand?.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: prepared?.args ?? [],
+      flags: prepared?.flags ?? {},
+      loadProject: context.loadProject,
+    } as never)
+
+    expect(runProjectDependencyInstall).toHaveBeenCalledWith(context, projectRoot)
+    expect(runProjectPrepare).toHaveBeenCalledWith(projectRoot, context)
+    expect(runProjectDependencyInstall.mock.invocationCallOrder[0]).toBeLessThan(runProjectPrepare.mock.invocationCallOrder[0] ?? 0)
+  })
+
   it('installs cache support through the CLI with the default file driver and is idempotent', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
@@ -10097,6 +10141,16 @@ throw 'string discovery failure'
     expect(fallbackRoots).toContain(join(projectRoot, 'server/policies'))
     expect(fallbackRoots).toContain(join(projectRoot, 'server/abilities'))
   }, 20000)
+
+  it('treats package manifests and lockfiles as discovery relevant', () => {
+    const project = { config: defaultProjectConfig() }
+
+    expect(isDiscoveryRelevantPath('package.json', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('package-lock.json', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('pnpm-lock.yaml', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('yarn.lock', project as never)).toBe(true)
+    expect(isDiscoveryRelevantPath('bun.lock', project as never)).toBe(true)
+  })
 
   it('uses configured broadcast and channel paths for holo dev discovery watches', async () => {
     const projectRoot = await createTempProject()

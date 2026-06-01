@@ -291,6 +291,14 @@ export function toPosixSlashes(value: string): string {
   return value.replaceAll('\\', '/')
 }
 
+const PACKAGE_MANIFEST_DISCOVERY_PATHS = new Set([
+  'package.json',
+  'bun.lock',
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+])
+
 function resolveConfiguredBroadcastPath(project: LoadedProjectConfig): string {
   const configuredPaths = project.config.paths as typeof project.config.paths & {
     readonly broadcast?: string
@@ -310,6 +318,10 @@ export function isDiscoveryRelevantPath(
   project: LoadedProjectConfig,
 ): boolean {
   const normalized = toPosixSlashes(filePath)
+  if (PACKAGE_MANIFEST_DISCOVERY_PATHS.has(normalized)) {
+    return true
+  }
+
   const generatedSchemaPath = toPosixSlashes(project.config.paths.generatedSchema ?? '.holo-js/generated/schema.generated.ts')
   if (normalized === generatedSchemaPath) {
     return true
