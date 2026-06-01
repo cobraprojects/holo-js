@@ -580,6 +580,40 @@ describe('@holo-js/validation contracts', () => {
     }
   })
 
+  it('validates arrays of nested objects from form data', async () => {
+    const landing = schema({
+      items: field.array({
+        title: field.string().required(),
+        caption: field.string().optional(),
+      }).required(),
+    })
+
+    const formData = new FormData()
+    formData.set('items[0].title', 'Operations')
+    formData.set('items[0].caption', 'Industry Solutions')
+    formData.set('items[1].title', 'Retail')
+
+    const success = await safeParse(formData, landing)
+
+    expect(success.valid).toBe(true)
+    if (success.valid) {
+      expect(success.data.items).toEqual([
+        { title: 'Operations', caption: 'Industry Solutions' },
+        { title: 'Retail', caption: undefined },
+      ])
+    }
+
+    const invalidFormData = new FormData()
+    invalidFormData.set('items[0].caption', 'Missing title')
+
+    const failure = await safeParse(invalidFormData, landing)
+
+    expect(failure.valid).toBe(false)
+    if (!failure.valid) {
+      expect(failure.errors.first('items.0.title')).toBe('This field is required.')
+    }
+  })
+
   it('infers and returns shape-changing transform output', async () => {
     const nameSchema = schema({
       nameLength: field.string().required().transform(value => value.length),

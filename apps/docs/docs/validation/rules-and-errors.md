@@ -165,12 +165,17 @@ Creates a file field for `File` or file-like web inputs.
 field.file().required().image().maxSize('2mb')
 ```
 
-### `field.array(itemField)`
+### `field.array(itemFieldOrShape)`
 
-Creates an array field from another field definition.
+Creates an array field from another field definition or from a nested object shape.
 
 ```ts
 field.array(field.string().required()).min(1)
+
+field.array({
+  title: field.string().required(),
+  caption: field.string().optional(),
+})
 ```
 
 ## Fluent field methods

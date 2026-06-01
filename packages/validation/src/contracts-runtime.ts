@@ -141,6 +141,18 @@ function collectRequiredMissingPaths(
       if (getRule(fieldDef, 'required') && isMissingValue(data[key], fieldDef.kind)) {
         target.add(toIssuePath(nextPath))
       }
+      if (fieldDef.kind === 'array' && fieldDef.item && Array.isArray(data[key])) {
+        for (const [index, item] of (data[key] as unknown[]).entries()) {
+          const itemPath = [...nextPath, String(index)]
+          if (isFieldDefinition(fieldDef.item)) {
+            if (getRule(fieldDef.item, 'required') && isMissingValue(item, fieldDef.item.kind)) {
+              target.add(toIssuePath(itemPath))
+            }
+          } else {
+            collectRequiredMissingPaths(fieldDef.item, item as Record<string, unknown>, itemPath, target)
+          }
+        }
+      }
       continue
     }
 

@@ -14,6 +14,10 @@ describe('@holo-js/forms client typing', () => {
       email: field.string().required().email(),
       age: field.number().optional(),
       tags: field.array(field.string().required()).optional(),
+      contacts: field.array({
+        label: field.string().required(),
+        value: field.string().required(),
+      }).optional(),
       profile: {
         city: field.string().required(),
       },
@@ -24,6 +28,7 @@ describe('@holo-js/forms client typing', () => {
         email: 'ava@example.com',
         age: undefined,
         tags: ['admin'],
+        contacts: [{ label: 'Work', value: 'work@example.com' }],
         profile: {
           city: 'Cairo',
         },
@@ -39,6 +44,10 @@ describe('@holo-js/forms client typing', () => {
         email: string
         age: number | undefined
         tags: string[] | undefined
+        contacts: {
+          label: string
+          value: string
+        }[] | undefined
         profile: {
           city: string
         }
@@ -48,6 +57,7 @@ describe('@holo-js/forms client typing', () => {
     const emailField: FormFieldState<string> = client.fields.email
     const ageField: FormFieldState<number | undefined> = client.fields.age
     const tagsField: FormFieldState<string[] | undefined> = client.fields.tags
+    const contactsField: FormFieldState<{ label: string, value: string }[] | undefined> = client.fields.contacts
     const cityField: FormFieldState<string> = client.fields.profile.city
     const emailValue: string = client.values.email
     const applyServerStateResult: ClientSubmitResult<{
@@ -75,6 +85,7 @@ describe('@holo-js/forms client typing', () => {
     void emailField
     void ageField
     void tagsField
+    void contactsField
     void cityField
     void emailValue
     void applyServerStateResult
