@@ -1,6 +1,6 @@
 'use client'
 
-import { usePathname } from 'next/navigation'
+import { usePathname } from 'next/navigation.js'
 import { createContext, createElement, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { authClientInternals } from '../client'
 import type { AuthClientRequestOptions, HoloAuthUser } from '../contracts'

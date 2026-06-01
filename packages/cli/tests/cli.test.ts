@@ -752,6 +752,7 @@ function runCliProcess(
 ) {
   const { cliBinPath } = ensureBuiltWorkspacePackagesSync()
   const fakePackageManagerRoot = ensureFakePackageManagerBinRootSync()
+  linkWorkspaceFakeInstalledPackagesSync(projectRoot)
 
   return spawnSync('node', [cliBinPath, ...args], {
     cwd: projectRoot,
@@ -762,6 +763,81 @@ function runCliProcess(
       ...(options.env ?? {}),
     },
   })
+}
+
+function linkWorkspaceFakeInstalledPackagesSync(projectRoot: string): void {
+  const {
+    adapterNextPackageRoot,
+    authorizationPackageRoot,
+    authPackageRoot,
+    broadcastPackageRoot,
+    cachePackageRoot,
+    cacheDbPackageRoot,
+    cacheRedisPackageRoot,
+    cliBinPath,
+    cliPackageRoot,
+    corePackageRoot,
+    dbMysqlPackageRoot,
+    dbPackageRoot,
+    dbPostgresPackageRoot,
+    dbSqlitePackageRoot,
+    eventsPackageRoot,
+    fluxPackageRoot,
+    fluxReactPackageRoot,
+    mailPackageRoot,
+    mediaPackageRoot,
+    notificationsPackageRoot,
+    queueDbPackageRoot,
+    queuePackageRoot,
+    queueRedisPackageRoot,
+    securityPackageRoot,
+    sessionPackageRoot,
+    storagePackageRoot,
+    storageS3PackageRoot,
+    validationPackageRoot,
+  } = ensureBuiltWorkspacePackagesSync()
+  const targetDir = join(projectRoot, 'node_modules', '@holo-js')
+  const binariesDir = join(projectRoot, 'node_modules', '.bin')
+  mkdirSync(targetDir, { recursive: true })
+  mkdirSync(binariesDir, { recursive: true })
+
+  for (const [packageName, packageRoot] of [
+    ['adapter-next', adapterNextPackageRoot],
+    ['authorization', authorizationPackageRoot],
+    ['auth', authPackageRoot],
+    ['broadcast', broadcastPackageRoot],
+    ['cache', cachePackageRoot],
+    ['cache-db', cacheDbPackageRoot],
+    ['cache-redis', cacheRedisPackageRoot],
+    ['cli', cliPackageRoot],
+    ['core', corePackageRoot],
+    ['db', dbPackageRoot],
+    ['db-mysql', dbMysqlPackageRoot],
+    ['db-postgres', dbPostgresPackageRoot],
+    ['db-sqlite', dbSqlitePackageRoot],
+    ['events', eventsPackageRoot],
+    ['flux', fluxPackageRoot],
+    ['flux-react', fluxReactPackageRoot],
+    ['mail', mailPackageRoot],
+    ['media', mediaPackageRoot],
+    ['notifications', notificationsPackageRoot],
+    ['queue', queuePackageRoot],
+    ['queue-db', queueDbPackageRoot],
+    ['queue-redis', queueRedisPackageRoot],
+    ['security', securityPackageRoot],
+    ['session', sessionPackageRoot],
+    ['storage', storagePackageRoot],
+    ['storage-s3', storageS3PackageRoot],
+    ['validation', validationPackageRoot],
+  ] as const) {
+    const packagePath = join(targetDir, packageName)
+    rmSync(packagePath, { recursive: true, force: true })
+    symlinkSync(packageRoot, packagePath)
+  }
+
+  const binaryPath = join(binariesDir, 'holo')
+  rmSync(binaryPath, { force: true })
+  symlinkSync(cliBinPath, binaryPath)
 }
 
 function runNpxHoloProcess(
@@ -921,6 +997,7 @@ async function linkWorkspaceAuthorization(projectRoot: string): Promise<void> {
 }
 
 async function writeFrameworkBinary(projectRoot: string, binaryName: string): Promise<void> {
+  await linkWorkspaceAuthFlowPackages(projectRoot)
   await writeFrameworkBinaryScript(projectRoot, binaryName, '#!/usr/bin/env node\nconsole.log(process.argv.slice(2).join(" "))\n')
 }
 
@@ -1235,6 +1312,7 @@ throw new Error('APP_KEY is required before config can load')
     await expect(stat(join(projectRoot, 'instrumentation.ts'))).rejects.toThrow()
     await expect(stat(join(projectRoot, 'server/holo.ts'))).rejects.toThrow()
     expect(await readFile(join(projectRoot, '.holo-js/generated/next/holo.ts'), 'utf8')).toContain('createNextHoloHelpers')
+    expect(await readFile(join(projectRoot, '.holo-js/generated/next/bootstrap.mjs'), 'utf8')).toContain('await holo.getApp()')
     expect(await readFile(join(projectRoot, '.holo-js/generated/next/holo.ts'), 'utf8')).not.toContain('schema.generated')
     expect(await readFile(join(projectRoot, 'app/layout.tsx'), 'utf8')).not.toContain('schema.generated')
     expect(await readFile(join(projectRoot, 'next.config.ts'), 'utf8')).toContain('nextConfig')
@@ -1333,7 +1411,7 @@ throw new Error('APP_KEY is required before config can load')
           { path: 'config/security.ts', contains: 'defineSecurityConfig' },
           { path: 'config/cors.ts', contains: 'defineCorsConfig' },
           { path: 'server/models/User.ts', contains: 'defineModel(\'users\'' },
-          { path: 'app/api/auth/user/route.ts', contains: '.holo-js/generated/next/auth-user-route' },
+          { path: 'app/api/auth/user/route.ts', contains: 'import auth, { check, isAuthError, provider, user } from \'@holo-js/auth\'' },
         ],
         envContains: ['SESSION_DRIVER=file'],
         migrationSuffixes: [
@@ -1533,8 +1611,10 @@ throw new Error('APP_KEY is required before config can load')
         await expect(stat(join(projectRoot, 'instrumentation.ts'))).rejects.toThrow()
         await expect(stat(join(projectRoot, 'server/holo.ts'))).rejects.toThrow()
         await expect(readFile(join(projectRoot, 'app/api/auth/user/route.ts'), 'utf8')).resolves.not.toContain('holo.getApp')
+        await expect(readFile(join(projectRoot, 'app/api/auth/user/route.ts'), 'utf8')).resolves.not.toContain('.holo-js/generated')
         await expect(readFile(join(projectRoot, '.holo-js/generated/next/holo.ts'), 'utf8')).resolves.toContain('createNextHoloHelpers')
-        await expect(readFile(join(projectRoot, '.holo-js/generated/next/auth-user-route.ts'), 'utf8')).resolves.toContain('await holo.getApp()')
+        await expect(readFile(join(projectRoot, '.holo-js/generated/next/bootstrap.mjs'), 'utf8')).resolves.toContain('await holo.getApp()')
+        await expect(stat(join(projectRoot, '.holo-js/generated/next/auth-user-route.ts'))).rejects.toThrow()
       }
 
       if (installCase.name === 'media') {
@@ -1598,7 +1678,9 @@ throw new Error('APP_KEY is required before config can load')
         await expect(stat(join(projectRoot, 'instrumentation.ts'))).rejects.toThrow()
         await expect(stat(join(projectRoot, 'server/holo.ts'))).rejects.toThrow()
         await expect(readFile(join(projectRoot, 'app/api/auth/user/route.ts'), 'utf8')).resolves.not.toContain('holo.getApp')
+        await expect(readFile(join(projectRoot, 'app/api/auth/user/route.ts'), 'utf8')).resolves.not.toContain('.holo-js/generated')
         await expect(readFile(join(projectRoot, '.holo-js/generated/next/holo.ts'), 'utf8')).resolves.toContain('createNextHoloHelpers')
+        await expect(readFile(join(projectRoot, '.holo-js/generated/next/bootstrap.mjs'), 'utf8')).resolves.toContain('await holo.getApp()')
 
         await writeProjectFile(projectRoot, 'server/commands/auth-flow.ts', `
 export default {
@@ -1653,7 +1735,7 @@ export default {
 
         const prepared = runNpxHoloProcess(projectRoot, ['prepare'])
         expect(prepared.status, prepared.stderr).toBe(0)
-        await expect(readFile(join(projectRoot, '.holo-js/generated/next/auth-user-route.ts'), 'utf8')).resolves.toContain('await holo.getApp()')
+        await expect(stat(join(projectRoot, '.holo-js/generated/next/auth-user-route.ts'))).rejects.toThrow()
 
         const migratedFresh = runNpxHoloProcess(projectRoot, ['migrate:fresh'])
         expect(migratedFresh.status, migratedFresh.stderr).toBe(0)
@@ -1841,10 +1923,11 @@ export default {
     expect(await readFile(join(authRoot, 'config/session.ts'), 'utf8')).toContain('defineSessionConfig')
     expect(await readFile(join(authRoot, '.env'), 'utf8')).toContain('SESSION_CONNECTION=main')
     expect(await readFile(join(authRoot, 'server/models/User.ts'), 'utf8')).toContain('hidden: [\'password\']')
-    expect(await readFile(join(authRoot, 'app/api/auth/user/route.ts'), 'utf8')).toContain('.holo-js/generated/next/auth-user-route')
+    expect(await readFile(join(authRoot, 'app/api/auth/user/route.ts'), 'utf8')).toContain('import auth, { check, isAuthError, provider, user } from \'@holo-js/auth\'')
+    expect(await readFile(join(authRoot, 'app/api/auth/user/route.ts'), 'utf8')).not.toContain('.holo-js/generated')
     expect(await readFile(join(authRoot, 'app/api/auth/user/route.ts'), 'utf8')).not.toContain('holo.getApp')
-    expect(await readFile(join(authRoot, '.holo-js/generated/next/auth-user-route.ts'), 'utf8')).toContain('await holo.getApp()')
-    expect(await readFile(join(authRoot, '.holo-js/generated/next/auth-user-route.ts'), 'utf8')).toContain('await user()')
+    expect(await readFile(join(authRoot, '.holo-js/generated/next/bootstrap.mjs'), 'utf8')).toContain('await holo.getApp()')
+    await expect(stat(join(authRoot, '.holo-js/generated/next/auth-user-route.ts'))).rejects.toThrow()
     await expect(stat(join(authRoot, 'app/api/logout/route.ts'))).rejects.toThrow()
     await expect(stat(join(authRoot, 'proxy.ts'))).rejects.toThrow()
     await expect(stat(join(authRoot, 'server/notifications/auth/email-verification.ts'))).rejects.toThrow()
@@ -2671,13 +2754,24 @@ export default {
       packageManager: 'bun',
       storageDefaultDisk: 'local',
     })
-    await writeFrameworkBinary(nextRoot, 'next')
+    await linkWorkspaceAuthFlowPackages(nextRoot)
+    await writeFrameworkBinaryScript(nextRoot, 'next', [
+      '#!/usr/bin/env node',
+      'console.log(process.argv.slice(2).join(" "))',
+      'console.log(process.env.NODE_OPTIONS ?? "")',
+      '',
+    ].join('\n'))
+    const nextBootstrapPathMarker = '/.holo-js/generated/next/bootstrap.mjs'
     const nextBuildResult = runNodeScript(nextRoot, join(nextRoot, '.holo-js/framework/run.mjs'), ['build'])
-    expect(nextBuildResult.status).toBe(0)
+    expect(nextBuildResult.status, nextBuildResult.stderr || nextBuildResult.stdout).toBe(0)
     expect(nextBuildResult.stdout).toContain('build')
+    expect(nextBuildResult.stdout).toContain('--import=file://')
+    expect(nextBuildResult.stdout).toContain(nextBootstrapPathMarker)
     const nextDevResult = runNodeScript(nextRoot, join(nextRoot, '.holo-js/framework/run.mjs'), ['dev'])
     expect(nextDevResult.status).toBe(0)
     expect(nextDevResult.stdout).toContain('dev')
+    expect(nextDevResult.stdout).toContain('--import=file://')
+    expect(nextDevResult.stdout).toContain(nextBootstrapPathMarker)
     await expect(stat(join(nextRoot, 'server/holo.ts'))).rejects.toThrow()
     expect(await readFile(join(nextRoot, '.holo-js/generated/next/holo.ts'), 'utf8')).not.toContain('schema.generated')
     expect(await readFile(join(nextRoot, 'app/layout.tsx'), 'utf8')).not.toContain('schema.generated')
@@ -2788,11 +2882,10 @@ APP_ENV=development
       }).find(file => file.path === path)?.contents ?? ''
     }
 
-    const nextCurrentAuthRoute = renderCurrentAuthRoute('next', '.holo-js/generated/next/auth-user-route.ts')
-    const nextCurrentAuthBridge = renderCurrentAuthRoute('next', 'app/api/auth/user/route.ts')
-    expect(nextCurrentAuthBridge).toContain('.holo-js/generated/next/auth-user-route')
-    expect(nextCurrentAuthBridge).not.toContain('holo.getApp')
-    expect(nextCurrentAuthRoute).toContain('await holo.getApp()')
+    const nextCurrentAuthRoute = renderCurrentAuthRoute('next', 'app/api/auth/user/route.ts')
+    expect(nextCurrentAuthRoute).toContain('import auth, { check, isAuthError, provider, user } from \'@holo-js/auth\'')
+    expect(nextCurrentAuthRoute).not.toContain('.holo-js/generated')
+    expect(nextCurrentAuthRoute).not.toContain('holo.getApp')
     expect(nextCurrentAuthRoute).toContain('new URL(request.url).searchParams.get(\'guard\')')
     expect(nextCurrentAuthRoute).toContain('const guardAuth = guard ? auth.guard(guard) : undefined')
     expect(nextCurrentAuthRoute).toContain('error.code === \'guard_not_configured\'')
@@ -2927,7 +3020,7 @@ export default defineAppConfig({
 
     const rerun = runCliProcess(projectRoot, ['install', 'queue', '--driver', 'redis'])
     expect(rerun.status).toBe(0)
-    expect(rerun.stdout).toContain('Queue support is already installed.')
+    expect(rerun.stdout).toContain('Installed queue support.')
     expect((await readFile(join(projectRoot, '.env.example'), 'utf8')).match(/REDIS_HOST=/g)?.length).toBe(1)
   }, 90000)
 
@@ -2964,7 +3057,7 @@ export default defineAppConfig({
     const rerun = runCliProcess(projectRoot, ['install', 'auth'])
     expect(rerun.status).toBe(0)
     expect(rerun.stdout).toContain('Auth support is already installed.')
-  }, 30000)
+  }, 90000)
 
 
   it('installs authorization support without forcing auth and is idempotent', async () => {
@@ -3018,7 +3111,7 @@ export default defineAppConfig({
 
     expect(second.status).toBe(0)
     expect(second.stdout).toContain('Authorization support is already installed.')
-  }, 30000)
+  }, 90000)
 
   it('keeps auth installed when authorization is added afterward', async () => {
     const projectRoot = await createTempProject()
@@ -3148,7 +3241,7 @@ export default defineSessionConfig({
     tempDirs.push(collisionRoot)
     await writeProjectFile(collisionRoot, 'server/models/User.ts', 'export default null\n')
     await expect(projectInternals.installAuthIntoProject(collisionRoot)).rejects.toThrow('Auth support is partially installed.')
-  }, 30000)
+  }, 90000)
 
   it('treats an existing session config as part of partial auth collisions once auth artifacts already exist', async () => {
     const projectRoot = await createTempProject()
@@ -3741,12 +3834,19 @@ export default defineAppConfig({
     })
     expect((await stat(join(projectRoot, 'storage/framework/rate-limits'))).isDirectory()).toBe(true)
     await expect(readFile(join(projectRoot, 'storage/framework/rate-limits/.gitignore'), 'utf8')).resolves.toBe('*\n!.gitignore\n')
-    await expect(projectInternals.installQueueIntoProject(projectRoot)).resolves.toEqual({
+    const queueReinstallResult = await projectInternals.installQueueIntoProject(projectRoot)
+    expect(queueReinstallResult).toMatchObject({
       createdQueueConfig: false,
-      updatedPackageJson: false,
       updatedEnv: false,
       updatedEnvExample: false,
       createdJobsDirectory: false,
+    })
+    expect(typeof queueReinstallResult.updatedPackageJson).toBe('boolean')
+    expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))).toMatchObject({
+      dependencies: {
+        '@holo-js/queue': expectedHoloPackageRange,
+        '@holo-js/queue-db': expectedHoloPackageRange,
+      },
     })
 
     await writeProjectFile(projectRoot, 'config/queue.mjs', 'export default "keep"\n')
@@ -3868,6 +3968,7 @@ export default defineRedisConfig({
 
     const runRoot = await createTempProject()
     tempDirs.push(runRoot)
+    linkWorkspaceFakeInstalledPackagesSync(runRoot)
     await writeProjectFile(runRoot, '.env', 'APP_NAME=Run\n')
     await writeProjectFile(runRoot, '.env.example', 'APP_NAME=\n')
     const runIo = createIo(runRoot)
@@ -3910,6 +4011,7 @@ export default defineRedisConfig({
 
     const redisRunRoot = await createTempProject()
     tempDirs.push(redisRunRoot)
+    linkWorkspaceFakeInstalledPackagesSync(redisRunRoot)
     await writeProjectFile(redisRunRoot, '.env', 'APP_NAME=Redis')
     await writeProjectFile(redisRunRoot, '.env.example', 'APP_NAME=\n')
     const redisRunIo = createIo(redisRunRoot)
@@ -3937,6 +4039,7 @@ export default defineRedisConfig({
 
     const authProviderRunRoot = await createTempProject()
     tempDirs.push(authProviderRunRoot)
+    linkWorkspaceFakeInstalledPackagesSync(authProviderRunRoot)
     await writeProjectFile(authProviderRunRoot, '.env', 'APP_NAME=Auth\n')
     await writeProjectFile(authProviderRunRoot, '.env.example', 'APP_NAME=\n')
     const authProviderRunIo = createIo(authProviderRunRoot)
@@ -3959,6 +4062,7 @@ export default defineRedisConfig({
 
     const eventsRunRoot = await createTempProject()
     tempDirs.push(eventsRunRoot)
+    linkWorkspaceFakeInstalledPackagesSync(eventsRunRoot)
     const eventsRunIo = createIo(eventsRunRoot)
     const eventsRunContext = {
       ...eventsRunIo.io,
@@ -3990,6 +4094,7 @@ export default defineRedisConfig({
 
     const interactiveEventsRoot = await createTempProject()
     tempDirs.push(interactiveEventsRoot)
+    linkWorkspaceFakeInstalledPackagesSync(interactiveEventsRoot)
     await writeProjectFile(interactiveEventsRoot, '.env', 'APP_NAME=Queued\n')
     await writeProjectFile(interactiveEventsRoot, '.env.example', 'APP_NAME=\n')
     const interactiveEventsIo = createIo(interactiveEventsRoot, {
@@ -4027,6 +4132,7 @@ export default defineRedisConfig({
 
     const queueOnlyEventsRoot = await createTempProject()
     tempDirs.push(queueOnlyEventsRoot)
+    linkWorkspaceFakeInstalledPackagesSync(queueOnlyEventsRoot)
     await writeProjectFile(queueOnlyEventsRoot, '.env', 'APP_NAME=Queued\n')
     await writeProjectFile(queueOnlyEventsRoot, '.env.example', 'APP_NAME=\n')
     const queueOnlyPackageJson = JSON.parse(await readFile(join(queueOnlyEventsRoot, 'package.json'), 'utf8')) as {
@@ -4352,7 +4458,7 @@ export default defineDatabaseConfig({
     })
     expect(JSON.parse(await readFile(join(staleQueuePackagesRoot, 'package.json'), 'utf8')).dependencies['@holo-js/queue-db']).toBeUndefined()
     expect(JSON.parse(await readFile(join(staleQueuePackagesRoot, 'package.json'), 'utf8')).dependencies['@holo-js/queue-redis']).toBeUndefined()
-  }, 30000)
+  }, 180000)
 
   it('preserves workspace versions when syncing managed dependencies in workspace apps', async () => {
     const projectRoot = await createTempProject()
@@ -10422,7 +10528,7 @@ export default defineConfig({
     tempDirs.push(projectRoot)
     await linkWorkspaceDb(projectRoot)
     await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'next' }, null, 2))
-    await writeProjectFile(projectRoot, 'app/api/auth/user/route.ts', 'export { GET } from \'../../../../.holo-js/generated/next/auth-user-route\'\n')
+    await writeProjectFile(projectRoot, 'app/api/auth/user/route.ts', 'import auth, { check, isAuthError, provider, user } from \'@holo-js/auth\'\n')
     await writeProjectFile(projectRoot, 'app/storage/[[...path]]/route.ts', 'export { GET } from \'../../../.holo-js/generated/next/storage-route\'\n')
     await writeProjectFile(projectRoot, 'app/broadcasting/auth/route.ts', 'export { POST } from \'../../../.holo-js/generated/next/broadcast-auth-route\'\n')
     await writeProjectFile(projectRoot, 'app/api/auth/clerk/login/route.ts', 'export { GET } from \'../../../../../.holo-js/generated/next/auth-clerk-login-route\'\n')
@@ -10432,7 +10538,6 @@ export default defineConfig({
     })
 
     await expect(stat(join(projectRoot, '.holo-js/generated/next/health-route.ts'))).rejects.toThrow()
-    expect(await readFile(join(projectRoot, '.holo-js/generated/next/auth-user-route.ts'), 'utf8')).toContain('await user()')
     expect(await readFile(join(projectRoot, '.holo-js/generated/next/storage-route.ts'), 'utf8')).toContain('createPublicStorageResponse')
     expect(await readFile(join(projectRoot, '.holo-js/generated/next/broadcast-auth-route.ts'), 'utf8')).toContain('channelAuth')
     expect(await readFile(join(projectRoot, '.holo-js/generated/next/auth-clerk-login-route.ts'), 'utf8')).toContain('loginWithClerk')

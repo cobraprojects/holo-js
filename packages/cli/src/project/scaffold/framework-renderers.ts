@@ -314,18 +314,25 @@ export function renderNextHoloHelper(): string {
   ].join('\n')
 }
 
-function renderNextCurrentAuthRoute(): string {
-  return renderNextRouteBridge('../../../../.holo-js/generated/next/auth-user-route', ['GET'])
+export function renderNextRuntimeBootstrap(): string {
+  return [
+    'import { dirname, resolve } from \'node:path\'',
+    'import { fileURLToPath } from \'node:url\'',
+    'import { createNextHoloHelpers } from \'@holo-js/adapter-next/runtime\'',
+    '',
+    'const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), \'../../..\')',
+    'const holo = createNextHoloHelpers({ projectRoot })',
+    '',
+    'await holo.getApp()',
+    '',
+  ].join('\n')
 }
 
-function renderNextGeneratedCurrentAuthRoute(): string {
+function renderNextCurrentAuthRoute(): string {
   return [
     'import auth, { check, isAuthError, provider, user } from \'@holo-js/auth\'',
-    'import { holo } from \'./holo\'',
     '',
     'export async function GET(request: Request) {',
-    '  await holo.getApp()',
-    '',
     '  const guard = new URL(request.url).searchParams.get(\'guard\') ?? undefined',
     '  try {',
     '    const guardAuth = guard ? auth.guard(guard) : undefined',
@@ -508,9 +515,7 @@ export function renderNextManagedRouteFiles(options: {
 } = {}): readonly ScaffoldedFile[] {
   return [
     { path: '.holo-js/generated/next/holo.ts', contents: renderNextHoloHelper() },
-    ...(options.authEnabled
-      ? [{ path: '.holo-js/generated/next/auth-user-route.ts', contents: renderNextGeneratedCurrentAuthRoute() }]
-      : []),
+    { path: '.holo-js/generated/next/bootstrap.mjs', contents: renderNextRuntimeBootstrap() },
     ...(options.storageEnabled
       ? [{ path: '.holo-js/generated/next/storage-route.ts', contents: renderNextGeneratedStorageRoute() }]
       : []),
@@ -521,16 +526,24 @@ export function renderNextManagedRouteFiles(options: {
 }
 
 export function renderNextManagedHostedAuthRouteFiles(features: AuthInstallFeatures): readonly ScaffoldedFile[] {
-  return getRequestedHostedAuthProviders(features).flatMap((provider) => {
-    const spec = HOSTED_AUTH_PROVIDERS[provider]
-    return [
-      { path: '.holo-js/generated/next/holo.ts', contents: renderNextHoloHelper() },
-      { path: `.holo-js/generated/next/auth-${provider}-login-route.ts`, contents: renderNextGeneratedHostedAuthLoginRoute(spec) },
-      { path: `.holo-js/generated/next/auth-${provider}-register-route.ts`, contents: renderNextGeneratedHostedAuthRegisterRoute(spec) },
-      { path: `.holo-js/generated/next/auth-${provider}-callback-route.ts`, contents: renderNextGeneratedHostedAuthCallbackRoute(spec) },
-      { path: `.holo-js/generated/next/auth-${provider}-logout-route.ts`, contents: renderNextGeneratedHostedAuthLogoutRoute(spec) },
-    ]
-  })
+  const providers = getRequestedHostedAuthProviders(features)
+  if (providers.length === 0) {
+    return []
+  }
+
+  return [
+    { path: '.holo-js/generated/next/holo.ts', contents: renderNextHoloHelper() },
+    { path: '.holo-js/generated/next/bootstrap.mjs', contents: renderNextRuntimeBootstrap() },
+    ...providers.flatMap((provider) => {
+      const spec = HOSTED_AUTH_PROVIDERS[provider]
+      return [
+        { path: `.holo-js/generated/next/auth-${provider}-login-route.ts`, contents: renderNextGeneratedHostedAuthLoginRoute(spec) },
+        { path: `.holo-js/generated/next/auth-${provider}-register-route.ts`, contents: renderNextGeneratedHostedAuthRegisterRoute(spec) },
+        { path: `.holo-js/generated/next/auth-${provider}-callback-route.ts`, contents: renderNextGeneratedHostedAuthCallbackRoute(spec) },
+        { path: `.holo-js/generated/next/auth-${provider}-logout-route.ts`, contents: renderNextGeneratedHostedAuthLogoutRoute(spec) },
+      ]
+    }),
+  ]
 }
 
 export function renderSvelteManagedRuntimeFiles(): readonly ScaffoldedFile[] {
@@ -804,7 +817,7 @@ export function renderAuthRouteFiles(framework: ProjectScaffoldOptions['framewor
     return [
       { path: 'app/api/auth/user/route.ts', contents: renderNextCurrentAuthRoute() },
       { path: '.holo-js/generated/next/holo.ts', contents: renderNextHoloHelper() },
-      { path: '.holo-js/generated/next/auth-user-route.ts', contents: renderNextGeneratedCurrentAuthRoute() },
+      { path: '.holo-js/generated/next/bootstrap.mjs', contents: renderNextRuntimeBootstrap() },
     ]
   }
 
@@ -881,6 +894,7 @@ export function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'fra
     'const manifestPath = fileURLToPath(new URL(\'./project.json\', import.meta.url))',
     'const projectRoot = resolve(dirname(manifestPath), \'../..\')',
     'const runtimeSchemaPath = resolve(projectRoot, \'.holo-js/generated/schema.mjs\')',
+    'const nextRuntimeBootstrapPath = resolve(projectRoot, \'.holo-js/generated/next/bootstrap.mjs\')',
     'const manifest = JSON.parse(readFileSync(manifestPath, \'utf8\'))',
     'const framework = String(manifest.framework ?? \'\')',
     `const commandName = ${JSON.stringify(commandName)}`,
@@ -1100,11 +1114,18 @@ export function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'fra
     '  while (true) {',
     '    const stderrLines = []',
     '    const childEnv = { ...process.env }',
-    '    if (existsSync(runtimeSchemaPath)) {',
-    '      const preload = `--import=${pathToFileURL(runtimeSchemaPath).href}`',
-      '      childEnv.NODE_OPTIONS = childEnv.NODE_OPTIONS',
-      '        ? `${childEnv.NODE_OPTIONS} ${preload}`',
-      '        : preload',
+    '    const preloads = [runtimeSchemaPath]',
+    '    if (framework === \'next\') {',
+    '      preloads.push(nextRuntimeBootstrapPath)',
+    '    }',
+    '    const preloadOptions = preloads',
+    '      .filter(path => existsSync(path))',
+    '      .map(path => `--import=${pathToFileURL(path).href}`)',
+    '    if (preloadOptions.length > 0) {',
+    '      const preload = preloadOptions.join(\' \')',
+    '      childEnv.NODE_OPTIONS = childEnv.NODE_OPTIONS',
+    '        ? `${childEnv.NODE_OPTIONS} ${preload}`',
+    '        : preload',
     '    }',
     '    child = spawn(binaryPath, commandArgs, {',
     '      cwd: projectRoot,',

@@ -10,7 +10,6 @@ const HOLO_SERVER_EXTERNAL_PACKAGES = [
 ]
 
 const HOLO_OPTIONAL_SERVER_EXTERNAL_PACKAGES = [
-  '@holo-js/auth',
   '@holo-js/auth-clerk',
   '@holo-js/auth-social',
   '@holo-js/auth-social-apple',
@@ -39,6 +38,11 @@ const HOLO_OPTIONAL_SERVER_EXTERNAL_PACKAGES = [
   '@holo-js/validation',
 ] as const
 
+const HOLO_TRANSPILED_PACKAGES = [
+  '@holo-js/auth',
+] as const
+const HOLO_TRANSPILED_PACKAGE_SET = new Set<string>(HOLO_TRANSPILED_PACKAGES)
+
 type PackageDependencyField = 'dependencies' | 'devDependencies' | 'optionalDependencies' | 'peerDependencies'
 type PackageDependencyMap = Readonly<Record<string, string>>
 type PackageManifest = Partial<Record<PackageDependencyField, PackageDependencyMap>>
@@ -62,6 +66,7 @@ interface TurbopackConfig {
 
 interface NextConfig {
   readonly serverExternalPackages?: string[]
+  readonly transpilePackages?: string[]
   readonly outputFileTracingExcludes?: Record<string, string[]>
   readonly experimental?: Record<string, unknown>
   readonly turbopack?: TurbopackConfig
@@ -108,6 +113,9 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
   ))
   const mergedExternal = [
     ...new Set([...HOLO_SERVER_EXTERNAL_PACKAGES, ...installedOptionalExternal, ...existingExternal]),
+  ].filter(packageName => !HOLO_TRANSPILED_PACKAGE_SET.has(packageName))
+  const mergedTranspilePackages = [
+    ...new Set([...HOLO_TRANSPILED_PACKAGES, ...(nextConfig.transpilePackages ?? [])]),
   ]
 
   const existingExcludes = nextConfig.outputFileTracingExcludes ?? {}
@@ -139,6 +147,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
       authInterrupts: true,
     },
     serverExternalPackages: mergedExternal,
+    transpilePackages: mergedTranspilePackages,
     outputFileTracingExcludes: mergedExcludes,
     turbopack: mergedTurbopack,
     async rewrites() {

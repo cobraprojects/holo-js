@@ -84,7 +84,7 @@ describe('@holo-js/auth framework helpers', () => {
     vi.resetModules()
     vi.clearAllMocks()
     vi.doUnmock('#imports')
-    vi.doUnmock('next/navigation')
+    vi.doUnmock('next/navigation.js')
     vi.doUnmock('react')
     vi.doUnmock('../src/client')
     vi.doUnmock('../src/index')
@@ -95,7 +95,7 @@ describe('@holo-js/auth framework helpers', () => {
     vi.doMock('../src/client', () => ({
       refreshUser,
     }))
-    vi.doMock('next/navigation', () => ({
+    vi.doMock('next/navigation.js', () => ({
       usePathname: () => '/admin',
     }))
     vi.doMock('react', () => createReactMock())
@@ -145,7 +145,7 @@ describe('@holo-js/auth framework helpers', () => {
         fetchCurrentUser,
       },
     }))
-    vi.doMock('next/navigation', () => ({
+    vi.doMock('next/navigation.js', () => ({
       usePathname: () => currentPathname,
     }))
     vi.doMock('react', () => ({

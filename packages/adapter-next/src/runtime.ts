@@ -1,5 +1,4 @@
-import { cookies, headers } from 'next/headers'
-import { forbidden, notFound } from 'next/navigation'
+import { createRequire } from 'node:module'
 import { initializeHolo, type CreateHoloOptions } from '@holo-js/core'
 import type { DotPath, HoloConfigMap, LoadedHoloConfig, ValueAtPath } from '@holo-js/config'
 import { getCurrentNextRequest } from './request-context'
@@ -31,8 +30,20 @@ type MutableNextCookieStore = {
 }
 
 type NextNavigationModule = {
+  readonly forbidden: () => never
+  readonly notFound: () => never
   readonly redirect: (url: string) => never
 }
+
+type NextHeadersModule = {
+  readonly cookies: () => Promise<{
+    get(name: string): { value?: string } | undefined
+    set?(name: string, value: string, options?: ResponseCookieOptions): void
+  }>
+  readonly headers: () => Promise<Headers>
+}
+
+const requireNextModule = createRequire(import.meta.url)
 
 function safeDecodeCookieSegment(value: string): string {
   try {
@@ -113,6 +124,7 @@ function resolveNextAuthRequestAccessors(): NonNullable<CreateHoloOptions['authR
         return request.cookies.get(name)?.value
       }
 
+      const { cookies } = await import('next/headers.js') as NextHeadersModule
       const store = await cookies()
       return store.get(name)?.value
     },
@@ -122,6 +134,7 @@ function resolveNextAuthRequestAccessors(): NonNullable<CreateHoloOptions['authR
         return request.headers.get(name) ?? undefined
       }
 
+      const { headers } = await import('next/headers.js') as NextHeadersModule
       const requestHeaders = await headers()
       return requestHeaders.get(name) ?? undefined
     },
@@ -131,11 +144,12 @@ function resolveNextAuthRequestAccessors(): NonNullable<CreateHoloOptions['authR
         return
       }
 
-      const store = await cookies() as unknown as MutableNextCookieStore
+      const { cookies } = await import('next/headers.js') as NextHeadersModule
+      const store = await cookies() as MutableNextCookieStore
       store.set(parsed.name, parsed.value, parsed.options)
     },
     async redirectResponse(url: string) {
-      const { redirect } = await import('next/navigation') as NextNavigationModule
+      const { redirect } = await import('next/navigation.js') as NextNavigationModule
       redirect(url)
     },
   }
@@ -149,11 +163,12 @@ export function createNextHoloHelpers<TCustom extends HoloConfigMap = HoloConfig
     authRequest: options.authRequest ?? resolveNextAuthRequestAccessors(),
     authorizationError: options.authorizationError ?? {
       createError(decision) {
+        const { forbidden, notFound } = requireNextModule('next/navigation.js') as NextNavigationModule
         if (decision.status === 404) {
-          notFound()
+          return notFound()
         }
 
-        forbidden()
+        return forbidden()
       },
     },
   })

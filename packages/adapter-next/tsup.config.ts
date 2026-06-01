@@ -1,5 +1,7 @@
 import { defineConfig } from 'tsup'
 
+const outDir = process.env.HOLO_BUILD_OUT_DIR ?? 'dist'
+
 export default defineConfig({
   entry: {
     index: 'src/index.ts',
@@ -10,9 +12,9 @@ export default defineConfig({
   format: ['esm'],
   dts: true,
   clean: true,
-  outDir: 'dist',
+  outDir,
   outExtension: () => ({ js: '.mjs' }),
-  external: ['react', 'next/headers'],
+  external: ['react', 'next/headers.js', 'next/navigation.js'],
   esbuildOptions(options) {
     options.logLevel = 'warning'
   },

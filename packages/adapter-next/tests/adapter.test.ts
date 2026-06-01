@@ -191,14 +191,18 @@ export default defineConfig({
     try {
       const config = withHolo({
         serverExternalPackages: ['custom-runtime'],
+        transpilePackages: [],
       })
 
       expect(config.serverExternalPackages).toEqual(expect.arrayContaining([
         '@holo-js/core',
-        '@holo-js/auth',
         '@holo-js/auth-social',
         '@holo-js/auth-social-google',
         'custom-runtime',
+      ]))
+      expect(config.serverExternalPackages).not.toContain('@holo-js/auth')
+      expect(config.transpilePackages).toEqual(expect.arrayContaining([
+        '@holo-js/auth',
       ]))
       expect(config.serverExternalPackages).not.toContain('@holo-js/auth-social-github')
       expect(config.serverExternalPackages).not.toContain('@holo-js/auth-clerk')
