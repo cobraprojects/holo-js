@@ -46,13 +46,11 @@ import {
 import {
   createAuthMigrationFiles,
   createNotificationsMigrationFiles,
-  normalizeScaffoldEnvSegments,
   renderAuthEmailVerificationNotification,
   renderAuthPasswordResetNotification,
   renderAuthUserModel,
   renderAuthorizationAbilitiesReadme,
   renderAuthorizationPoliciesReadme,
-  renderEnvFileContents,
   renderScaffoldAppConfig,
   renderScaffoldDatabaseConfig,
   renderScaffoldEnvFiles,
@@ -217,6 +215,23 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
   }, null, 2)}\n`
 }
 
+function appendScaffoldEnvGroup(contents: string, group: readonly string[] | undefined): string {
+  const normalizedGroup = group
+    ?.map(line => line.trim())
+    .filter(line => line.length > 0) ?? []
+
+  if (normalizedGroup.length === 0) {
+    return contents
+  }
+
+  const normalizedContents = contents.trimEnd()
+  if (normalizedContents.length === 0) {
+    return `${normalizedGroup.join('\n')}\n`
+  }
+
+  return `${normalizedContents}\n\n${normalizedGroup.join('\n')}\n`
+}
+
 export async function scaffoldProject(
   projectRoot: string,
   options: ProjectScaffoldOptions,
@@ -241,16 +256,8 @@ export async function scaffoldProject(
   const securityEnabled = optionalPackages.includes('security')
   const cacheEnabled = optionalPackages.includes('cache')
   const broadcastEnvFiles = broadcastEnabled ? renderBroadcastEnvFiles() : undefined
-  const baseEnv = normalizeScaffoldEnvSegments(env)
-  const baseExample = normalizeScaffoldEnvSegments(example)
-  const scaffoldEnvSegments = broadcastEnvFiles
-    ? [...baseEnv, ...broadcastEnvFiles.env]
-    : baseEnv
-  const scaffoldEnvExampleSegments = broadcastEnvFiles
-    ? [...baseExample, ...broadcastEnvFiles.example]
-    : baseExample
-  const scaffoldEnv = renderEnvFileContents(scaffoldEnvSegments)
-  const scaffoldEnvExample = renderEnvFileContents(scaffoldEnvExampleSegments)
+  const scaffoldEnv = appendScaffoldEnvGroup(env, broadcastEnvFiles?.env)
+  const scaffoldEnvExample = appendScaffoldEnvGroup(example, broadcastEnvFiles?.example)
 
   await mkdir(projectRoot, { recursive: true })
   await mkdir(resolve(projectRoot, 'config'), { recursive: true })

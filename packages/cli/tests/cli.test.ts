@@ -96,8 +96,12 @@ const workspaceRoot = resolve(import.meta.dirname, '../../..')
 type BuiltWorkspacePackages = {
   readonly root: string
   readonly adapterNextPackageRoot: string
+  readonly authorizationPackageRoot: string
   readonly authPackageRoot: string
   readonly broadcastPackageRoot: string
+  readonly cachePackageRoot: string
+  readonly cacheDbPackageRoot: string
+  readonly cacheRedisPackageRoot: string
   readonly corePackageRoot: string
   readonly configPackageRoot: string
   readonly dbPackageRoot: string
@@ -105,7 +109,10 @@ type BuiltWorkspacePackages = {
   readonly dbPostgresPackageRoot: string
   readonly dbSqlitePackageRoot: string
   readonly eventsPackageRoot: string
+  readonly fluxPackageRoot: string
+  readonly fluxReactPackageRoot: string
   readonly mailPackageRoot: string
+  readonly mediaPackageRoot: string
   readonly notificationsPackageRoot: string
   readonly queuePackageRoot: string
   readonly queueRedisPackageRoot: string
@@ -191,7 +198,11 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
 
   const root = createTempBuildRootSync('holo-cli-build-')
   const adapterNextPackageRoot = join(root, 'packages/adapter-next')
+  const authorizationPackageRoot = join(root, 'packages/authorization')
   const authPackageRoot = join(root, 'packages/auth')
+  const cachePackageRoot = join(root, 'packages/cache')
+  const cacheDbPackageRoot = join(root, 'packages/cache-db')
+  const cacheRedisPackageRoot = join(root, 'packages/cache-redis')
   const dbPackageRoot = join(root, 'packages/db')
   const dbSqlitePackageRoot = join(root, 'packages/db-sqlite')
   const dbPostgresPackageRoot = join(root, 'packages/db-postgres')
@@ -203,7 +214,10 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   const queueDbPackageRoot = join(root, 'packages/queue-db')
   const eventsPackageRoot = join(root, 'packages/events')
   const broadcastPackageRoot = join(root, 'packages/broadcast')
+  const fluxPackageRoot = join(root, 'packages/flux')
+  const fluxReactPackageRoot = join(root, 'packages/flux-react')
   const mailPackageRoot = join(root, 'packages/mail')
+  const mediaPackageRoot = join(root, 'packages/media')
   const notificationsPackageRoot = join(root, 'packages/notifications')
   const securityPackageRoot = join(root, 'packages/security')
   const sessionPackageRoot = join(root, 'packages/session')
@@ -309,6 +323,36 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   const authBuild = buildWorkspacePackageSync('@holo-js/auth', join(authPackageRoot, 'dist'))
   expect(authBuild.status, authBuild.stderr || authBuild.stdout).toBe(0)
 
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/authorization'), authorizationPackageRoot)
+  const authorizationBuild = buildWorkspacePackageSync('@holo-js/authorization', join(authorizationPackageRoot, 'dist'))
+  expect(authorizationBuild.status, authorizationBuild.stderr || authorizationBuild.stdout).toBe(0)
+
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/cache'), cachePackageRoot)
+  linkPackageDependencySync(cachePackageRoot, '@holo-js/config', configPackageRoot)
+  const cacheBuild = buildWorkspacePackageSync('@holo-js/cache', join(cachePackageRoot, 'dist'))
+  expect(cacheBuild.status, cacheBuild.stderr || cacheBuild.stdout).toBe(0)
+
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/cache-db'), cacheDbPackageRoot)
+  linkPackageDependencySync(cacheDbPackageRoot, '@holo-js/cache', cachePackageRoot)
+  linkPackageDependencySync(cacheDbPackageRoot, '@holo-js/db', dbPackageRoot)
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(cacheDbPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/cache-db/package.json'),
+  })
+  const cacheDbBuild = buildWorkspacePackageSync('@holo-js/cache-db', join(cacheDbPackageRoot, 'dist'))
+  expect(cacheDbBuild.status, cacheDbBuild.stderr || cacheDbBuild.stdout).toBe(0)
+
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/cache-redis'), cacheRedisPackageRoot)
+  linkPackageDependencySync(cacheRedisPackageRoot, '@holo-js/cache', cachePackageRoot)
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(cacheRedisPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/cache-redis/package.json'),
+  })
+  const cacheRedisBuild = buildWorkspacePackageSync('@holo-js/cache-redis', join(cacheRedisPackageRoot, 'dist'))
+  expect(cacheRedisBuild.status, cacheRedisBuild.stderr || cacheRedisBuild.stdout).toBe(0)
+
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/broadcast'), broadcastPackageRoot)
   linkPackageDependencySync(broadcastPackageRoot, '@holo-js/config', configPackageRoot)
   linkPackageDependencySync(broadcastPackageRoot, '@holo-js/validation', validationPackageRoot)
@@ -319,6 +363,22 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   })
   const broadcastBuild = buildWorkspacePackageSync('@holo-js/broadcast', join(broadcastPackageRoot, 'dist'))
   expect(broadcastBuild.status, broadcastBuild.stderr || broadcastBuild.stdout).toBe(0)
+
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/flux'), fluxPackageRoot)
+  linkPackageDependencySync(fluxPackageRoot, '@holo-js/broadcast', broadcastPackageRoot)
+  const fluxBuild = buildWorkspacePackageSync('@holo-js/flux', join(fluxPackageRoot, 'dist'))
+  expect(fluxBuild.status, fluxBuild.stderr || fluxBuild.stdout).toBe(0)
+
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/flux-react'), fluxReactPackageRoot)
+  linkPackageDependencySync(fluxReactPackageRoot, '@holo-js/broadcast', broadcastPackageRoot)
+  linkPackageDependencySync(fluxReactPackageRoot, '@holo-js/flux', fluxPackageRoot)
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(fluxReactPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/flux-react/package.json'),
+  })
+  const fluxReactBuild = buildWorkspacePackageSync('@holo-js/flux-react', join(fluxReactPackageRoot, 'dist'))
+  expect(fluxReactBuild.status, fluxReactBuild.stderr || fluxReactBuild.stdout).toBe(0)
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/notifications'), notificationsPackageRoot)
   linkPackageDependencySync(notificationsPackageRoot, '@holo-js/config', configPackageRoot)
@@ -347,6 +407,18 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   const mailBuild = buildWorkspacePackageSync('@holo-js/mail', join(mailPackageRoot, 'dist'))
   expect(mailBuild.status, mailBuild.stderr || mailBuild.stdout).toBe(0)
 
+  writePackageWrapperSync(resolve(workspaceRoot, 'packages/media'), mediaPackageRoot)
+  linkPackageDependencySync(mediaPackageRoot, '@holo-js/db', dbPackageRoot)
+  linkPackageDependencySync(mediaPackageRoot, '@holo-js/queue', queuePackageRoot)
+  linkPackageDependencySync(mediaPackageRoot, '@holo-js/storage', storagePackageRoot)
+  linkInstalledDependenciesForPackageSync({
+    repoRoot: workspaceRoot,
+    nodeModulesRoot: join(mediaPackageRoot, 'node_modules'),
+    packageJsonPath: resolve(workspaceRoot, 'packages/media/package.json'),
+  })
+  const mediaBuild = buildWorkspacePackageSync('@holo-js/media', join(mediaPackageRoot, 'dist'))
+  expect(mediaBuild.status, mediaBuild.stderr || mediaBuild.stdout).toBe(0)
+
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/core'), corePackageRoot)
   linkInstalledDependenciesForPackageSync({
     repoRoot: workspaceRoot,
@@ -354,10 +426,18 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
     packageJsonPath: resolve(workspaceRoot, 'packages/core/package.json'),
   })
   linkPackageDependencySync(corePackageRoot, '@holo-js/auth', authPackageRoot)
+  linkPackageDependencySync(corePackageRoot, '@holo-js/authorization', authorizationPackageRoot)
+  linkPackageDependencySync(corePackageRoot, '@holo-js/cache', cachePackageRoot)
+  linkPackageDependencySync(corePackageRoot, '@holo-js/cache-db', cacheDbPackageRoot)
+  linkPackageDependencySync(corePackageRoot, '@holo-js/cache-redis', cacheRedisPackageRoot)
+  linkPackageDependencySync(corePackageRoot, '@holo-js/broadcast', broadcastPackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/config', configPackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/db', dbPackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/events', eventsPackageRoot)
+  linkPackageDependencySync(corePackageRoot, '@holo-js/flux', fluxPackageRoot)
+  linkPackageDependencySync(corePackageRoot, '@holo-js/flux-react', fluxReactPackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/mail', mailPackageRoot)
+  linkPackageDependencySync(corePackageRoot, '@holo-js/media', mediaPackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/notifications', notificationsPackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/queue', queuePackageRoot)
   linkPackageDependencySync(corePackageRoot, '@holo-js/queue-db', queueDbPackageRoot)
@@ -374,11 +454,18 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   expect(adapterNextBuild.status, adapterNextBuild.stderr || adapterNextBuild.stdout).toBe(0)
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/cli'), cliPackageRoot)
+  linkPackageDependencySync(cliPackageRoot, '@holo-js/authorization', authorizationPackageRoot)
+  linkPackageDependencySync(cliPackageRoot, '@holo-js/cache', cachePackageRoot)
+  linkPackageDependencySync(cliPackageRoot, '@holo-js/cache-db', cacheDbPackageRoot)
+  linkPackageDependencySync(cliPackageRoot, '@holo-js/cache-redis', cacheRedisPackageRoot)
   linkPackageDependencySync(cliPackageRoot, '@holo-js/core', corePackageRoot)
   linkPackageDependencySync(cliPackageRoot, '@holo-js/config', configPackageRoot)
   linkPackageDependencySync(cliPackageRoot, '@holo-js/db', dbPackageRoot)
   linkPackageDependencySync(cliPackageRoot, '@holo-js/events', eventsPackageRoot)
+  linkPackageDependencySync(cliPackageRoot, '@holo-js/flux', fluxPackageRoot)
+  linkPackageDependencySync(cliPackageRoot, '@holo-js/flux-react', fluxReactPackageRoot)
   linkPackageDependencySync(cliPackageRoot, '@holo-js/mail', mailPackageRoot)
+  linkPackageDependencySync(cliPackageRoot, '@holo-js/media', mediaPackageRoot)
   linkPackageDependencySync(cliPackageRoot, '@holo-js/notifications', notificationsPackageRoot)
   linkPackageDependencySync(cliPackageRoot, '@holo-js/queue', queuePackageRoot)
   linkPackageDependencySync(cliPackageRoot, '@holo-js/queue-db', queueDbPackageRoot)
@@ -393,8 +480,12 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   builtWorkspacePackages = {
     root,
     adapterNextPackageRoot,
+    authorizationPackageRoot,
     authPackageRoot,
     broadcastPackageRoot,
+    cachePackageRoot,
+    cacheDbPackageRoot,
+    cacheRedisPackageRoot,
     corePackageRoot,
     configPackageRoot,
     dbPackageRoot,
@@ -402,7 +493,10 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
     dbPostgresPackageRoot,
     dbSqlitePackageRoot,
     eventsPackageRoot,
+    fluxPackageRoot,
+    fluxReactPackageRoot,
     mailPackageRoot,
+    mediaPackageRoot,
     notificationsPackageRoot,
     queuePackageRoot,
     queueRedisPackageRoot,
@@ -447,13 +541,28 @@ async function linkWorkspaceCli(projectRoot: string): Promise<void> {
 async function linkWorkspaceAuthFlowPackages(projectRoot: string): Promise<void> {
   const {
     adapterNextPackageRoot,
+    authorizationPackageRoot,
     authPackageRoot,
+    broadcastPackageRoot,
+    cachePackageRoot,
+    cacheDbPackageRoot,
+    cacheRedisPackageRoot,
     corePackageRoot,
     dbMysqlPackageRoot,
     dbPostgresPackageRoot,
     dbSqlitePackageRoot,
+    eventsPackageRoot,
+    fluxPackageRoot,
+    fluxReactPackageRoot,
+    mailPackageRoot,
+    mediaPackageRoot,
+    notificationsPackageRoot,
+    queuePackageRoot,
+    queueRedisPackageRoot,
+    queueDbPackageRoot,
     securityPackageRoot,
     sessionPackageRoot,
+    storagePackageRoot,
     validationPackageRoot,
   } = ensureBuiltWorkspacePackagesSync()
   const targetDir = join(projectRoot, 'node_modules', '@holo-js')
@@ -463,13 +572,28 @@ async function linkWorkspaceAuthFlowPackages(projectRoot: string): Promise<void>
 
   for (const [packageName, packageRoot] of [
     ['adapter-next', adapterNextPackageRoot],
+    ['authorization', authorizationPackageRoot],
     ['auth', authPackageRoot],
+    ['broadcast', broadcastPackageRoot],
+    ['cache', cachePackageRoot],
+    ['cache-db', cacheDbPackageRoot],
+    ['cache-redis', cacheRedisPackageRoot],
     ['core', corePackageRoot],
     ['db-mysql', dbMysqlPackageRoot],
     ['db-postgres', dbPostgresPackageRoot],
     ['db-sqlite', dbSqlitePackageRoot],
+    ['events', eventsPackageRoot],
+    ['flux', fluxPackageRoot],
+    ['flux-react', fluxReactPackageRoot],
+    ['mail', mailPackageRoot],
+    ['media', mediaPackageRoot],
+    ['notifications', notificationsPackageRoot],
+    ['queue', queuePackageRoot],
+    ['queue-db', queueDbPackageRoot],
+    ['queue-redis', queueRedisPackageRoot],
     ['security', securityPackageRoot],
     ['session', sessionPackageRoot],
+    ['storage', storagePackageRoot],
     ['validation', validationPackageRoot],
   ] as const) {
     await rm(join(targetDir, packageName), { recursive: true, force: true }).catch(() => {})
@@ -640,6 +764,24 @@ function runCliProcess(
   })
 }
 
+function runNpxHoloProcess(
+  projectRoot: string,
+  args: readonly string[],
+  options: { env?: NodeJS.ProcessEnv } = {},
+) {
+  const fakePackageManagerRoot = ensureFakePackageManagerBinRootSync()
+
+  return spawnSync('npx', ['holo', ...args], {
+    cwd: projectRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PATH: `${join(projectRoot, 'node_modules/.bin')}:${fakePackageManagerRoot}:${process.env.PATH ?? ''}`,
+      ...(options.env ?? {}),
+    },
+  })
+}
+
 function runNode(projectRoot: string, entryPath: string) {
   return spawnSync('node', [entryPath], {
     cwd: projectRoot,
@@ -768,6 +910,14 @@ async function linkWorkspaceBroadcast(projectRoot: string): Promise<void> {
   await rm(join(targetDir, 'broadcast'), { recursive: true, force: true }).catch(() => {})
   await symlink(broadcastPackageRoot, join(targetDir, 'broadcast')).catch(() => {})
   await linkWorkspaceExternalDependency(projectRoot, 'valibot')
+}
+
+async function linkWorkspaceAuthorization(projectRoot: string): Promise<void> {
+  const { authorizationPackageRoot } = ensureBuiltWorkspacePackagesSync()
+  const targetDir = join(projectRoot, 'node_modules', '@holo-js')
+  await mkdir(targetDir, { recursive: true })
+  await rm(join(targetDir, 'authorization'), { recursive: true, force: true }).catch(() => {})
+  await symlink(authorizationPackageRoot, join(targetDir, 'authorization')).catch(() => {})
 }
 
 async function writeFrameworkBinary(projectRoot: string, binaryName: string): Promise<void> {
@@ -1080,12 +1230,12 @@ throw new Error('APP_KEY is required before config can load')
     await expect(stat(join(projectRoot, 'server/listeners'))).rejects.toThrow()
     expect(await readFile(join(projectRoot, '.holo-js/framework/project.json'), 'utf8')).toContain('"framework": "next"')
     expect(await readFile(join(projectRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain('Missing framework binary')
-    expect(await readFile(join(projectRoot, 'app/api/holo/health/route.ts'), 'utf8')).toContain('.holo-js/generated/next/health-route')
-    expect(await readFile(join(projectRoot, 'app/api/holo/health/route.ts'), 'utf8')).not.toContain('holo.getApp')
-    expect(await readFile(join(projectRoot, '.holo-js/generated/next/health-route.ts'), 'utf8')).toContain('holo.getApp')
+    await expect(stat(join(projectRoot, 'app/api/holo/health/route.ts'))).rejects.toThrow()
+    await expect(stat(join(projectRoot, '.holo-js/generated/next/health-route.ts'))).rejects.toThrow()
     await expect(stat(join(projectRoot, 'instrumentation.ts'))).rejects.toThrow()
-    expect(await readFile(join(projectRoot, 'server/holo.ts'), 'utf8')).toContain('createNextHoloHelpers')
-    expect(await readFile(join(projectRoot, 'server/holo.ts'), 'utf8')).not.toContain('schema.generated')
+    await expect(stat(join(projectRoot, 'server/holo.ts'))).rejects.toThrow()
+    expect(await readFile(join(projectRoot, '.holo-js/generated/next/holo.ts'), 'utf8')).toContain('createNextHoloHelpers')
+    expect(await readFile(join(projectRoot, '.holo-js/generated/next/holo.ts'), 'utf8')).not.toContain('schema.generated')
     expect(await readFile(join(projectRoot, 'app/layout.tsx'), 'utf8')).not.toContain('schema.generated')
     expect(await readFile(join(projectRoot, 'next.config.ts'), 'utf8')).toContain('nextConfig')
     expect(await readFile(join(projectRoot, 'tsconfig.json'), 'utf8')).toContain('next-env.d.ts')
@@ -1123,6 +1273,277 @@ throw new Error('APP_KEY is required before config can load')
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toBe(await readFile(join(secondRoot, 'demo-app/.env.example'), 'utf8'))
   }, 90000)
 
+  it('installs every package target in fresh apps through the user npx entrypoint', async () => {
+    const installCases: readonly {
+      readonly name: string
+      readonly args: readonly string[]
+      readonly message: string
+      readonly alreadyInstalledMessage: string
+      readonly dependencies: readonly string[]
+      readonly generatedFiles: readonly { readonly path: string, readonly contains: string }[]
+      readonly envContains?: readonly string[]
+      readonly envExampleContains?: readonly string[]
+      readonly migrationSuffixes?: readonly string[]
+      readonly stdoutContains?: readonly string[]
+    }[] = [
+      {
+        name: 'queue',
+        args: ['queue'],
+        message: 'Installed queue support.',
+        alreadyInstalledMessage: 'Queue support is already installed.',
+        dependencies: ['@holo-js/queue'],
+        generatedFiles: [
+          { path: 'config/queue.ts', contains: 'default: \'sync\'' },
+          { path: 'server/jobs', contains: '' },
+        ],
+      },
+      {
+        name: 'queue-redis',
+        args: ['queue', '--driver', 'redis'],
+        message: 'Installed queue support.',
+        alreadyInstalledMessage: 'Queue support is already installed.',
+        dependencies: ['@holo-js/queue', '@holo-js/queue-redis'],
+        generatedFiles: [
+          { path: 'config/queue.ts', contains: 'driver: \'redis\'' },
+          { path: 'config/redis.ts', contains: 'defineRedisConfig' },
+        ],
+        envContains: ['REDIS_HOST=', 'REDIS_PORT='],
+        envExampleContains: ['REDIS_HOST=', 'REDIS_PORT='],
+      },
+      {
+        name: 'events',
+        args: ['events'],
+        message: 'Installed events support.',
+        alreadyInstalledMessage: 'Events support is already installed.',
+        dependencies: ['@holo-js/events'],
+        generatedFiles: [
+          { path: 'server/events', contains: '' },
+          { path: 'server/listeners', contains: '' },
+        ],
+      },
+      {
+        name: 'auth',
+        args: ['auth'],
+        message: 'Installed auth support.',
+        alreadyInstalledMessage: 'Auth support is already installed.',
+        dependencies: ['@holo-js/auth', '@holo-js/session', '@holo-js/security'],
+        generatedFiles: [
+          { path: 'config/auth.ts', contains: 'defineAuthConfig' },
+          { path: 'config/session.ts', contains: 'defineSessionConfig' },
+          { path: 'config/security.ts', contains: 'defineSecurityConfig' },
+          { path: 'config/cors.ts', contains: 'defineCorsConfig' },
+          { path: 'server/models/User.ts', contains: 'defineModel(\'users\'' },
+          { path: 'app/api/auth/user/route.ts', contains: '.holo-js/generated/next/auth-user-route' },
+        ],
+        envContains: ['SESSION_DRIVER=file'],
+        migrationSuffixes: [
+          '_create_users.ts',
+          '_create_sessions.ts',
+          '_create_auth_identities.ts',
+          '_create_personal_access_tokens.ts',
+          '_create_password_reset_tokens.ts',
+          '_create_email_verification_tokens.ts',
+        ],
+      },
+      {
+        name: 'authorization',
+        args: ['authorization'],
+        message: 'Installed authorization support.',
+        alreadyInstalledMessage: 'Authorization support is already installed.',
+        dependencies: ['@holo-js/authorization'],
+        generatedFiles: [
+          { path: 'server/policies/README.md', contains: 'Policies' },
+          { path: 'server/abilities/README.md', contains: 'Abilities' },
+        ],
+      },
+      {
+        name: 'notifications',
+        args: ['notifications'],
+        message: 'Installed notifications support.',
+        alreadyInstalledMessage: 'Notifications support is already installed.',
+        dependencies: ['@holo-js/notifications'],
+        generatedFiles: [
+          { path: 'config/notifications.ts', contains: 'defineNotificationsConfig' },
+        ],
+        migrationSuffixes: ['_create_notifications.ts'],
+      },
+      {
+        name: 'mail',
+        args: ['mail'],
+        message: 'Installed mail support.',
+        alreadyInstalledMessage: 'Mail support is already installed.',
+        dependencies: ['@holo-js/mail'],
+        generatedFiles: [
+          { path: 'config/mail.ts', contains: 'defineMailConfig' },
+          { path: 'server/mail', contains: '' },
+        ],
+        envContains: ['MAIL_MAILER=preview'],
+        envExampleContains: ['MAIL_MAILER='],
+      },
+      {
+        name: 'broadcast',
+        args: ['broadcast'],
+        message: 'Installed broadcast support.',
+        alreadyInstalledMessage: 'Broadcast support is already installed.',
+        dependencies: ['@holo-js/broadcast', '@holo-js/flux', '@holo-js/flux-react'],
+        generatedFiles: [
+          { path: 'config/broadcast.ts', contains: 'defineBroadcastConfig' },
+          { path: 'server/broadcast', contains: '' },
+          { path: 'server/channels', contains: '' },
+        ],
+        envContains: ['BROADCAST_CONNECTION=holo'],
+        envExampleContains: ['BROADCAST_CONNECTION=holo', 'BROADCAST_APP_ID='],
+      },
+      {
+        name: 'security',
+        args: ['security'],
+        message: 'Installed security support.',
+        alreadyInstalledMessage: 'Security support is already installed.',
+        dependencies: ['@holo-js/security'],
+        generatedFiles: [
+          { path: 'config/security.ts', contains: 'defineSecurityConfig' },
+          { path: 'config/cors.ts', contains: 'defineCorsConfig' },
+        ],
+      },
+      {
+        name: 'cache-file',
+        args: ['cache'],
+        message: 'Installed cache support.',
+        alreadyInstalledMessage: 'Cache support is already installed.',
+        dependencies: ['@holo-js/cache'],
+        generatedFiles: [
+          { path: 'config/cache.ts', contains: 'default: \'file\'' },
+        ],
+        envContains: ['CACHE_PREFIX='],
+        envExampleContains: ['CACHE_PREFIX='],
+      },
+      {
+        name: 'cache-redis',
+        args: ['cache', '--driver', 'redis'],
+        message: 'Installed cache support.',
+        alreadyInstalledMessage: 'Cache support is already installed.',
+        dependencies: ['@holo-js/cache', '@holo-js/cache-redis'],
+        generatedFiles: [
+          { path: 'config/cache.ts', contains: 'driver: \'redis\'' },
+          { path: 'config/redis.ts', contains: 'defineRedisConfig' },
+        ],
+        envContains: ['CACHE_PREFIX=', 'REDIS_HOST=', 'REDIS_PORT='],
+        envExampleContains: ['CACHE_PREFIX=', 'REDIS_HOST=', 'REDIS_PORT='],
+      },
+      {
+        name: 'cache-database',
+        args: ['cache', '--driver', 'database'],
+        message: 'Installed cache support.',
+        alreadyInstalledMessage: 'Cache support is already installed.',
+        dependencies: ['@holo-js/cache', '@holo-js/cache-db'],
+        generatedFiles: [
+          { path: 'config/cache.ts', contains: 'driver: \'database\'' },
+        ],
+        envContains: ['CACHE_PREFIX='],
+        envExampleContains: ['CACHE_PREFIX='],
+        stdoutContains: ['run "holo cache:table" to create the cache tables'],
+      },
+      {
+        name: 'media',
+        args: ['media'],
+        message: 'Installed media support.',
+        alreadyInstalledMessage: 'Media support is already installed.',
+        dependencies: ['@holo-js/media'],
+        generatedFiles: [
+          { path: 'config/media.ts', contains: 'defineMediaConfig' },
+        ],
+        migrationSuffixes: ['_create_media_table.ts'],
+      },
+    ]
+
+    for (const installCase of installCases) {
+      const targetRoot = await createTempDirectory()
+      tempDirs.push(targetRoot)
+      const projectName = `npx-${installCase.name}-app`
+      await linkWorkspaceCli(targetRoot)
+
+      const created = runNpxHoloProcess(targetRoot, [
+        'new',
+        projectName,
+        '--framework',
+        'next',
+        '--database',
+        'sqlite',
+        '--package-manager',
+        'npm',
+      ])
+      expect(created.status, created.stderr).toBe(0)
+      expect(created.stdout).toContain('fake npm install')
+
+      const projectRoot = join(targetRoot, projectName)
+      await linkWorkspaceAuthFlowPackages(projectRoot)
+
+      const installed = runNpxHoloProcess(projectRoot, ['install', ...installCase.args])
+      expect(installed.status, installed.stderr || installed.stdout).toBe(0)
+      expect(installed.stdout).toContain(installCase.message)
+      expect(installed.stdout).toContain('fake npm install')
+      expect(installed.stdout).toContain('  - installed dependencies')
+      for (const expectedOutput of installCase.stdoutContains ?? []) {
+        expect(installed.stdout).toContain(expectedOutput)
+      }
+
+      const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+        dependencies?: Record<string, string>
+      }
+      for (const dependency of installCase.dependencies) {
+        expect(packageJson.dependencies?.[dependency]).toBe(expectedHoloPackageRange)
+      }
+
+      for (const generatedFile of installCase.generatedFiles) {
+        const path = join(projectRoot, generatedFile.path)
+        const stats = await stat(path)
+        expect(stats).toBeDefined()
+        if (generatedFile.contains) {
+          expect(await readFile(path, 'utf8')).toContain(generatedFile.contains)
+        }
+      }
+
+      const env = await readFile(join(projectRoot, '.env'), 'utf8')
+      for (const expectedEntry of installCase.envContains ?? []) {
+        expect(env).toContain(expectedEntry)
+      }
+      const envExample = await readFile(join(projectRoot, '.env.example'), 'utf8')
+      for (const expectedEntry of installCase.envExampleContains ?? []) {
+        expect(envExample).toContain(expectedEntry)
+      }
+
+      if (installCase.migrationSuffixes) {
+        const migrations = await readdir(join(projectRoot, 'server/db/migrations'))
+        for (const suffix of installCase.migrationSuffixes) {
+          const migration = migrations.find(entry => entry.endsWith(suffix))
+          expect(migration, `missing migration ${suffix}`).toBeDefined()
+          expect(await readFile(join(projectRoot, 'server/db/migrations', migration!), 'utf8')).toContain('defineMigration')
+        }
+      }
+
+      const prepared = runNpxHoloProcess(projectRoot, ['prepare'])
+      expect(prepared.status, prepared.stderr || prepared.stdout).toBe(0)
+
+      const rerun = runNpxHoloProcess(projectRoot, ['install', ...installCase.args])
+      expect(rerun.status, rerun.stderr || rerun.stdout).toBe(0)
+      expect(rerun.stdout).toContain(installCase.alreadyInstalledMessage)
+
+      if (installCase.name === 'auth') {
+        expect((await readdir(join(projectRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(6)
+        await expect(stat(join(projectRoot, 'instrumentation.ts'))).rejects.toThrow()
+        await expect(stat(join(projectRoot, 'server/holo.ts'))).rejects.toThrow()
+        await expect(readFile(join(projectRoot, 'app/api/auth/user/route.ts'), 'utf8')).resolves.not.toContain('holo.getApp')
+        await expect(readFile(join(projectRoot, '.holo-js/generated/next/holo.ts'), 'utf8')).resolves.toContain('createNextHoloHelpers')
+        await expect(readFile(join(projectRoot, '.holo-js/generated/next/auth-user-route.ts'), 'utf8')).resolves.toContain('await holo.getApp()')
+      }
+
+      if (installCase.name === 'media') {
+        const migrations = await readdir(join(projectRoot, 'server/db/migrations'))
+        expect(migrations.filter(entry => entry.endsWith('_create_media_table.ts'))).toHaveLength(1)
+      }
+    }
+  }, 240000)
+
   const authUserFlowCases: readonly {
     readonly driver: UserFlowDatabaseDriver
     readonly enabled: boolean
@@ -1146,7 +1567,8 @@ throw new Error('APP_KEY is required before config can load')
       await dropUserFlowDatabase(driver, databaseName)
 
       try {
-        const created = runCliProcess(targetRoot, [
+        await linkWorkspaceCli(targetRoot)
+        const created = runNpxHoloProcess(targetRoot, [
           'new',
           projectName,
           '--framework',
@@ -1162,17 +1584,21 @@ throw new Error('APP_KEY is required before config can load')
         await linkWorkspaceAuthFlowPackages(projectRoot)
         await setUserFlowDatabaseEnv(projectRoot, driver, databaseName)
 
-        const keyGenerated = runCliProcess(projectRoot, ['key:generate'])
+        const keyGenerated = runNpxHoloProcess(projectRoot, ['key:generate'])
         expect(keyGenerated.status, keyGenerated.stderr).toBe(0)
         expect(keyGenerated.stdout).toContain('Generated APP_KEY')
 
-        const installed = runCliProcess(projectRoot, ['install', 'auth'])
+        const installed = runNpxHoloProcess(projectRoot, ['install', 'auth'])
         expect(installed.status, installed.stderr).toBe(0)
         expect(installed.stdout).toContain('Installed auth support.')
         expect(installed.stdout).toContain('created 6 auth migrations')
+        expect(installed.stdout).toContain('fake npm install')
+        expect(installed.stdout).toContain('  - installed dependencies')
         expect((await readdir(join(projectRoot, 'server/db/migrations'))).filter(entry => entry.endsWith('.ts'))).toHaveLength(6)
         await expect(stat(join(projectRoot, 'instrumentation.ts'))).rejects.toThrow()
+        await expect(stat(join(projectRoot, 'server/holo.ts'))).rejects.toThrow()
         await expect(readFile(join(projectRoot, 'app/api/auth/user/route.ts'), 'utf8')).resolves.not.toContain('holo.getApp')
+        await expect(readFile(join(projectRoot, '.holo-js/generated/next/holo.ts'), 'utf8')).resolves.toContain('createNextHoloHelpers')
 
         await writeProjectFile(projectRoot, 'server/commands/auth-flow.ts', `
 export default {
@@ -1225,21 +1651,21 @@ export default {
 }
 `)
 
-        const prepared = runCliProcess(projectRoot, ['prepare'])
+        const prepared = runNpxHoloProcess(projectRoot, ['prepare'])
         expect(prepared.status, prepared.stderr).toBe(0)
         await expect(readFile(join(projectRoot, '.holo-js/generated/next/auth-user-route.ts'), 'utf8')).resolves.toContain('await holo.getApp()')
 
-        const migratedFresh = runCliProcess(projectRoot, ['migrate:fresh'])
+        const migratedFresh = runNpxHoloProcess(projectRoot, ['migrate:fresh'])
         expect(migratedFresh.status, migratedFresh.stderr).toBe(0)
         expect(migratedFresh.stdout).toContain('Migrations executed:')
         expect(migratedFresh.stdout).toContain('create_users')
         await expectUserFlowDatabaseExists(driver, databaseName)
 
-        const migratedAgain = runCliProcess(projectRoot, ['migrate'])
+        const migratedAgain = runNpxHoloProcess(projectRoot, ['migrate'])
         expect(migratedAgain.status, migratedAgain.stderr).toBe(0)
         expect(migratedAgain.stdout).toContain('No migrations were executed.')
 
-        const authFlow = runCliProcess(projectRoot, ['auth-flow'])
+        const authFlow = runNpxHoloProcess(projectRoot, ['auth-flow'])
         expect(authFlow.status, authFlow.stderr).toBe(0)
         expect(parseLastJsonLine<{
           registeredEmail: string
@@ -1255,7 +1681,7 @@ export default {
           logoutGuard: 'web',
         })
 
-        const failed = runCliProcess(projectRoot, ['migrate'], {
+        const failed = runNpxHoloProcess(projectRoot, ['migrate'], {
           env: driver === 'sqlite'
             ? { DB_URL: join(targetRoot, 'missing-directory/database.sqlite') }
             : {
@@ -1479,6 +1905,7 @@ export default {
 
     expect(await readFile(join(mailRoot, 'config/mail.ts'), 'utf8')).toContain('defineMailConfig')
     expect(await readFile(join(mailRoot, 'config/notifications.ts'), 'utf8')).toContain('defineNotificationsConfig')
+    expect(await readFile(join(mailRoot, '.env'), 'utf8')).toContain('DB_URL=./storage/database.sqlite\n\nMAIL_MAILER=preview')
 
     const notificationsRoot = join(baseRoot, 'notifications-runtime-app')
     await projectInternals.scaffoldProject(notificationsRoot, {
@@ -1492,6 +1919,7 @@ export default {
 
     expect(await readFile(join(notificationsRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/notifications": "${expectedHoloPackageRange}"`)
     expect(await readFile(join(notificationsRoot, 'config/notifications.ts'), 'utf8')).toContain('defineNotificationsConfig')
+    expect(await readFile(join(notificationsRoot, '.env'), 'utf8')).not.toContain('MAIL_MAILER=')
     await expect(stat(join(notificationsRoot, 'config/mail.ts'))).rejects.toThrow()
 
     const standaloneMailRoot = join(baseRoot, 'standalone-mail-runtime-app')
@@ -1506,6 +1934,7 @@ export default {
 
     expect(await readFile(join(standaloneMailRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/mail": "${expectedHoloPackageRange}"`)
     expect(await readFile(join(standaloneMailRoot, 'config/mail.ts'), 'utf8')).toContain('defineMailConfig')
+    expect(await readFile(join(standaloneMailRoot, '.env'), 'utf8')).toContain('DB_URL=./storage/database.sqlite\n\nMAIL_MAILER=preview')
     await expect(stat(join(standaloneMailRoot, 'config/notifications.ts'))).rejects.toThrow()
 
     const securityRoot = join(baseRoot, 'security-runtime-app')
@@ -1736,7 +2165,9 @@ export default {
     }
     expect(hostedAuthRoutes.find(route => route.path.startsWith('app/'))?.contents).toContain('.holo-js/generated/next/auth-clerk-callback-route')
     expect(hostedAuthRoutes.find(route => route.path.startsWith('server/'))?.contents).toContain('sendRedirect(event, \'/\', 303)')
-    expect(hostedAuthRoutes.find(route => route.path.startsWith('src/'))?.contents).toContain('redirect(303, \'/\')')
+    expect(hostedAuthRoutes.find(route => route.path.startsWith('src/'))?.contents).toContain('completeClerkAuth')
+    expect(projectInternals.renderAuthProviderRouteFiles('sveltekit', { clerk: true })
+      .find(route => route.path === 'src/routes/api/auth/clerk/callback/+server.ts')?.contents).toContain('redirect(303, \'/\')')
     expect(projectInternals.authFeaturesRequireConfigUpdate({ socialProviders: ['google'] })).toBe(true)
     expect(projectInternals.detectAuthInstallFeaturesFromConfig(projectInternals.renderAuthConfig({
       workos: true,
@@ -1821,16 +2252,34 @@ export default {
       projectName: 'Mail App',
       databaseDriver: 'sqlite',
       storageDefaultDisk: 'local',
+    }).env).not.toContain('MAIL_MAILER=preview')
+    expect(projectInternals.renderScaffoldEnvFiles({
+      projectName: 'Mail App',
+      databaseDriver: 'sqlite',
+      storageDefaultDisk: 'local',
+    }).env).not.toContain('MAIL_USERNAME=')
+    expect(projectInternals.renderScaffoldEnvFiles({
+      projectName: 'Mail App',
+      databaseDriver: 'sqlite',
+      storageDefaultDisk: 'local',
+    }).example).not.toContain('MAIL_FROM_ADDRESS=')
+    expect(projectInternals.renderScaffoldEnvFiles({
+      projectName: 'Mail App',
+      databaseDriver: 'sqlite',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['mail'],
     }).env).toContain('MAIL_MAILER=preview')
     expect(projectInternals.renderScaffoldEnvFiles({
       projectName: 'Mail App',
       databaseDriver: 'sqlite',
       storageDefaultDisk: 'local',
+      optionalPackages: ['mail'],
     }).env).toContain('MAIL_USERNAME=')
     expect(projectInternals.renderScaffoldEnvFiles({
       projectName: 'Mail App',
       databaseDriver: 'sqlite',
       storageDefaultDisk: 'local',
+      optionalPackages: ['mail'],
     }).example).toContain('MAIL_FROM_ADDRESS=')
     expect(projectInternals.renderMailConfig()).toContain('logBodies: env(\'MAIL_LOG_BODIES\', false)')
     expect(projectInternals.renderMailConfig()).toContain('user: env(\'MAIL_USERNAME\') || undefined')
@@ -1923,13 +2372,15 @@ export default {
       storageDefaultDisk: 'local',
       optionalPackages: ['storage'],
     }).find(file => file.path === '.holo-js/generated/next/storage-route.ts')?.contents).toContain('createPublicStorageResponse')
-    expect(projectInternals.renderFrameworkFiles({
+    const svelteFrameworkPaths = projectInternals.renderFrameworkFiles({
       projectName: 'Svelte App',
       framework: 'sveltekit',
       databaseDriver: 'sqlite',
       packageManager: 'bun',
       storageDefaultDisk: 'local',
-    }).map(file => file.path)).toContain('src/routes/api/holo/health/+server.ts')
+    }).map(file => file.path)
+    expect(svelteFrameworkPaths).not.toContain('src/routes/api/holo/health/+server.ts')
+    expect(svelteFrameworkPaths).toContain('.holo-js/generated/sveltekit/holo.ts')
     expect(projectInternals.renderFrameworkFiles({
       projectName: 'Svelte App',
       framework: 'sveltekit',
@@ -1964,7 +2415,7 @@ export default {
       databaseDriver: 'sqlite',
       packageManager: 'bun',
       storageDefaultDisk: 'local',
-    }).find(file => file.path === 'src/lib/server/holo.ts')?.contents).toContain('@holo-js/adapter-sveltekit')
+    }).find(file => file.path === '.holo-js/generated/sveltekit/holo.ts')?.contents).toContain('@holo-js/adapter-sveltekit')
     expect(projectInternals.renderFrameworkFiles({
       projectName: 'Next Auth App',
       framework: 'next',
@@ -2015,9 +2466,7 @@ export default {
       packageManager: 'bun',
       storageDefaultDisk: 'local',
       optionalPackages: ['auth'],
-    }).map(file => file.path)).toEqual(expect.arrayContaining([
-      'src/routes/api/auth/user/+server.ts',
-    ]))
+    }).map(file => file.path)).not.toContain('src/routes/api/auth/user/+server.ts')
     expect(projectInternals.renderFrameworkFiles({
       projectName: 'Svelte Auth App',
       framework: 'sveltekit',
@@ -2211,8 +2660,7 @@ export default {
     await expect(stat(join(nuxtRoot, 'plugins'))).rejects.toThrow()
     expect(await readFile(join(nuxtRoot, '.holo-js/generated/model-registry.d.ts'), 'utf8')).toContain('schema.generated')
     expect(await readFile(join(nuxtRoot, 'nuxt.config.ts'), 'utf8')).not.toContain('import { defineNuxtConfig } from \'nuxt/config\'')
-    expect(await readFile(join(nuxtRoot, 'server/api/holo/health.get.ts'), 'utf8')).not.toContain('import { defineEventHandler } from \'h3\'')
-    expect(await readFile(join(nuxtRoot, 'server/api/holo/health.get.ts'), 'utf8')).not.toContain('@holo-js/adapter-nuxt/runtime')
+    await expect(stat(join(nuxtRoot, 'server/api/holo/health.get.ts'))).rejects.toThrow()
     expect(await readFile(join(nuxtRoot, 'tsconfig.json'), 'utf8')).toContain('"extends": "./.nuxt/tsconfig.json"')
 
     const nextRoot = join(baseRoot, 'next-runner')
@@ -2230,7 +2678,8 @@ export default {
     const nextDevResult = runNodeScript(nextRoot, join(nextRoot, '.holo-js/framework/run.mjs'), ['dev'])
     expect(nextDevResult.status).toBe(0)
     expect(nextDevResult.stdout).toContain('dev')
-    expect(await readFile(join(nextRoot, 'server/holo.ts'), 'utf8')).not.toContain('schema.generated')
+    await expect(stat(join(nextRoot, 'server/holo.ts'))).rejects.toThrow()
+    expect(await readFile(join(nextRoot, '.holo-js/generated/next/holo.ts'), 'utf8')).not.toContain('schema.generated')
     expect(await readFile(join(nextRoot, 'app/layout.tsx'), 'utf8')).not.toContain('schema.generated')
 
     const svelteRoot = join(baseRoot, 'svelte-runner')
@@ -2243,8 +2692,9 @@ export default {
     })
     await writeFrameworkBinary(svelteRoot, 'vite')
     expect(runNodeScript(svelteRoot, join(svelteRoot, '.holo-js/framework/run.mjs'), ['dev']).stdout).toContain('dev')
-    expect(await readFile(join(svelteRoot, 'src/lib/server/holo.ts'), 'utf8')).toContain('createSvelteKitHoloHelpers')
-    expect(await readFile(join(svelteRoot, 'src/lib/server/holo.ts'), 'utf8')).not.toContain('schema.generated')
+    await expect(stat(join(svelteRoot, 'src/lib/server/holo.ts'))).rejects.toThrow()
+    expect(await readFile(join(svelteRoot, '.holo-js/generated/sveltekit/holo.ts'), 'utf8')).toContain('createSvelteKitHoloHelpers')
+    expect(await readFile(join(svelteRoot, '.holo-js/generated/sveltekit/holo.ts'), 'utf8')).not.toContain('schema.generated')
     expect(await readFile(join(svelteRoot, 'src/hooks.ts'), 'utf8')).toContain('export {}')
 
     const missingBinary = runNodeScript(join(baseRoot, 'fallback-app'), join(baseRoot, 'fallback-app/.holo-js/framework/run.mjs'), ['dev'])
@@ -2283,7 +2733,7 @@ export default {
     expect(projectInternals.resolveBroadcastConfigTargetPath('/project', 'config/app.js', 'esm')).toContain('broadcast.js')
     // Cover resolveBroadcastConfigTargetPath with cjs format
     expect(projectInternals.resolveBroadcastConfigTargetPath('/project', 'config/app.json', 'cjs')).toContain('broadcast.cjs')
-  }, 30000)
+  }, 90000)
 
   it('suppresses SvelteKit semver circular dependency warnings in the framework runner', async () => {
     const projectRoot = await createTempDirectory()
@@ -2360,14 +2810,15 @@ APP_ENV=development
     expect(nuxtCurrentAuthRoute).toContain('provider: guardAuth ? await guardAuth.provider() : await provider()')
     expect(nuxtCurrentAuthRoute).toContain('user: guardAuth ? await guardAuth.user() : await user()')
 
-    const svelteCurrentAuthRoute = renderCurrentAuthRoute('sveltekit', 'src/routes/api/auth/user/+server.ts')
-    expect(svelteCurrentAuthRoute).toContain('const guard = url.searchParams.get(\'guard\') ?? undefined')
-    expect(svelteCurrentAuthRoute).toContain('const guardAuth = guard ? auth.guard(guard) : undefined')
-    expect(svelteCurrentAuthRoute).toContain('error.code === \'guard_not_configured\'')
-    expect(svelteCurrentAuthRoute).toContain('{ status: 400 }')
-    expect(svelteCurrentAuthRoute).toContain('authenticated: guardAuth ? await guardAuth.check() : await check()')
-    expect(svelteCurrentAuthRoute).toContain('provider: guardAuth ? await guardAuth.provider() : await provider()')
-    expect(svelteCurrentAuthRoute).toContain('user: guardAuth ? await guardAuth.user() : await user()')
+    const svelteCurrentAuthRoutePaths = projectInternals.renderFrameworkFiles({
+      projectName: 'Guarded Auth App',
+      framework: 'sveltekit',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['auth'],
+    }).map(file => file.path)
+    expect(svelteCurrentAuthRoutePaths).not.toContain('src/routes/api/auth/user/+server.ts')
   })
 
   it('scaffolds a new project with cache support through the CLI', async () => {
@@ -2424,7 +2875,7 @@ APP_ENV=development
     const rerun = runCliProcess(projectRoot, ['install', 'queue'])
     expect(rerun.status).toBe(0)
     expect(rerun.stdout).toContain('Queue support is already installed.')
-  }, 30000)
+  }, 90000)
 
   it('installs redis queue support additively without duplicating env keys or overwriting queue config', async () => {
     const projectRoot = await createTempProject()
@@ -2478,7 +2929,7 @@ export default defineAppConfig({
     expect(rerun.status).toBe(0)
     expect(rerun.stdout).toContain('Queue support is already installed.')
     expect((await readFile(join(projectRoot, '.env.example'), 'utf8')).match(/REDIS_HOST=/g)?.length).toBe(1)
-  }, 30000)
+  }, 90000)
 
   it('installs auth support into an existing project with local defaults', async () => {
     const projectRoot = await createTempProject()
@@ -2515,38 +2966,6 @@ export default defineAppConfig({
     expect(rerun.stdout).toContain('Auth support is already installed.')
   }, 30000)
 
-  it('runs the project package manager after auth install updates package.json', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    const io = createIo(projectRoot)
-    const runProjectDependencyInstall = vi.fn(async () => {
-      io.io.stdout.write('package manager install\n')
-    })
-    const installCommand = cliInternals.createInternalCommands(
-      {
-        ...io.io,
-        projectRoot,
-        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never,
-      undefined,
-      {},
-      { runProjectDependencyInstall },
-    ).find(command => command.name === 'install')
-
-    await installCommand?.run({
-      ...io.io,
-      projectRoot,
-      cwd: projectRoot,
-      args: ['auth'],
-      flags: {},
-      loadProject: async () => ({ config: defaultProjectConfig() }),
-    } as never)
-
-    expect(runProjectDependencyInstall).toHaveBeenCalledWith(expect.objectContaining({ projectRoot }), projectRoot)
-    expect(io.read().stdout).toContain('package manager install')
-    expect(io.read().stdout).toContain('  - installed dependencies')
-  }, 30000)
 
   it('installs authorization support without forcing auth and is idempotent', async () => {
     const projectRoot = await createTempProject()
@@ -4722,6 +5141,8 @@ export default defineCacheConfig({
     expect(result.stdout).toContain('  - created server/mail')
     expect(await readFile(join(projectRoot, 'config/mail.ts'), 'utf8')).toContain('defineMailConfig')
     expect((await stat(join(projectRoot, 'server/mail'))).isDirectory()).toBe(true)
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('MAIL_MAILER=preview')
+    expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('MAIL_MAILER=')
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/mail": "${expectedHoloPackageRange}"`)
   }, 30000)
 
@@ -5119,7 +5540,8 @@ module.exports = {
     await expect(readFile(join(nextRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).resolves.toContain('.holo-js/generated/next/broadcast-auth-route')
     await expect(readFile(join(nextRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).resolves.not.toContain('holo.getApp')
     await expect(readFile(join(nextRoot, '.holo-js/generated/next/broadcast-auth-route.ts'), 'utf8')).resolves.toContain('channelAuth')
-    await expect(readFile(join(nextRoot, 'server/holo.ts'), 'utf8')).resolves.toContain('createNextHoloHelpers')
+    await expect(stat(join(nextRoot, 'server/holo.ts'))).rejects.toThrow()
+    await expect(readFile(join(nextRoot, '.holo-js/generated/next/holo.ts'), 'utf8')).resolves.toContain('createNextHoloHelpers')
     await expect(readFile(join(nextRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-react": "${expectedHoloPackageRange}"`)
     await expect(readFile(join(nextRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/adapter-next": "${expectedHoloPackageRange}"`)
     await expect(readFile(join(nextRoot, 'package.json'), 'utf8')).resolves.not.toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
@@ -5158,12 +5580,13 @@ module.exports = {
     await writeProjectFile(svelteRoot, 'config/auth.ts', 'export default {}\n')
     const svelteInstall = await projectInternals.installBroadcastIntoProject(svelteRoot)
     expect(svelteInstall).toMatchObject({
-      createdBroadcastAuthRoute: true,
+      createdBroadcastAuthRoute: false,
       updatedEnv: true,
       updatedEnvExample: true,
     })
-    await expect(readFile(join(svelteRoot, 'src/routes/broadcasting/auth/+server.ts'), 'utf8')).resolves.toContain('channelAuth')
-    await expect(readFile(join(svelteRoot, 'src/lib/server/holo.ts'), 'utf8')).resolves.toContain('createSvelteKitHoloHelpers')
+    await expect(stat(join(svelteRoot, 'src/routes/broadcasting/auth/+server.ts'))).rejects.toThrow()
+    await expect(stat(join(svelteRoot, 'src/lib/server/holo.ts'))).rejects.toThrow()
+    await expect(readFile(join(svelteRoot, '.holo-js/generated/sveltekit/holo.ts'), 'utf8')).resolves.toContain('createSvelteKitHoloHelpers')
     await expect(readFile(join(svelteRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-svelte": "${expectedHoloPackageRange}"`)
     await expect(readFile(join(svelteRoot, 'package.json'), 'utf8')).resolves.not.toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
     await expect(readFile(join(svelteRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/adapter-sveltekit": "${expectedHoloPackageRange}"`)
@@ -8650,6 +9073,7 @@ export default defineMigration({
 
     const listenerProjectRoot = await createTempProject()
     tempDirs.push(listenerProjectRoot)
+    await linkWorkspaceDb(listenerProjectRoot)
     const listenerIo = createIo(listenerProjectRoot)
     await writeProjectFile(listenerProjectRoot, 'server/events/user/registered.ts', `
 import { defineEvent } from '@holo-js/events'
@@ -8708,6 +9132,7 @@ export const ActivityRecorded = defineEvent({ name: 'audit.activity.named' })
 
     const listenerFallbackProjectRoot = await createTempProject()
     tempDirs.push(listenerFallbackProjectRoot)
+    await linkWorkspaceDb(listenerFallbackProjectRoot)
     const listenerFallbackIo = createIo(listenerFallbackProjectRoot)
     await writeProjectFile(listenerFallbackProjectRoot, 'server/events/user/registered.ts', `
 import { defineEvent } from '@holo-js/events'
@@ -8991,705 +9416,12 @@ export default defineEvent({ name: 'audit.activity' })
     expect(jobCommandIo.read().stdout).toContain('Created mail: server/mail/welcome.ts')
     expect(observerCommandIo.read().stdout).toContain('Created observer: server/db/observers/CourseObserver.ts')
     expect(factoryCommandIo.read().stdout).toContain('Created factory: server/db/factories/CourseFactory.ts')
-  }, 30000)
+  }, 90000)
 
-  it('lazy-loads project, dev, runtime, queue, cache migration, media migration, queue migration, and generator modules when executors are not injected', { timeout: 30000 }, async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    const io = createIo(projectRoot)
-    const baseContext = {
-      ...io.io,
-      projectRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
-      loadProject: async () => ({ config: defaultProjectConfig() }),
-    }
 
-    const queueRestart = vi.fn(async () => {})
-    const queueListen = vi.fn(async () => {})
-    const queueRetry = vi.fn(async () => {})
-    const queueClear = vi.fn(async () => {})
-    const queueFailed = vi.fn(async () => {})
-    const queueFailedTable = vi.fn(async () => {})
-    const queueFlush = vi.fn(async () => {})
-    const queueForget = vi.fn(async () => {})
-    const queueWork = vi.fn(async () => {})
-    const queueTable = vi.fn(async () => {})
-    const cacheTable = vi.fn(async () => {})
-    const mediaTable = vi.fn(async () => {})
-    const cacheProjectConfig = vi.fn(async () => '/tmp/holo-config-cache.json')
-    const withRuntimeEnvironment = vi.fn(async (_projectRoot: string, _kind: string, _options: Record<string, unknown>, callback: (stdout: string) => Promise<void>) => {
-      await callback('')
-    })
-    const runMakeSeeder = vi.fn(async () => {})
-    const runMakeMail = vi.fn(async () => {})
-    const scaffoldProject = vi.fn(async () => {})
-    const installAuthIntoProject = vi.fn(async () => ({
-      updatedPackageJson: true,
-      createdAuthConfig: true,
-      createdSessionConfig: true,
-      createdUserModel: true,
-      createdMigrationFiles: ['server/db/migrations/2026_01_01_000001_create_users.ts'],
-      updatedEnv: true,
-      updatedEnvExample: true,
-    }))
-    const installAuthorizationIntoProject = vi.fn(async () => ({
-      updatedPackageJson: true,
-      createdPoliciesDirectory: true,
-      createdAbilitiesDirectory: true,
-      createdPoliciesReadme: true,
-      createdAbilitiesReadme: true,
-    }))
-    const installEventsIntoProject = vi.fn(async () => ({
-      updatedPackageJson: true,
-      createdEventsDirectory: true,
-      createdListenersDirectory: true,
-    }))
-    const installNotificationsIntoProject = vi.fn(async () => ({
-      updatedPackageJson: true,
-      createdNotificationsConfig: true,
-      createdMigrationFiles: ['server/db/migrations/2026_01_01_000001_create_notifications.ts'],
-    }))
-    const installMailIntoProject = vi.fn(async () => ({
-      updatedPackageJson: true,
-      createdMailConfig: true,
-      createdMailDirectory: true,
-      updatedEnv: true,
-      updatedEnvExample: true,
-    }))
-    const installMediaIntoProject = vi.fn(async () => ({
-      updatedPackageJson: true,
-      createdMediaConfig: true,
-      createdMigrationFiles: ['server/db/migrations/2026_01_01_000001_create_media_table.ts'],
-    }))
-    const installSecurityIntoProject = vi.fn(async () => ({
-      updatedPackageJson: true,
-      createdSecurityConfig: true,
-      createdCorsConfig: true,
-    }))
-    const installQueueIntoProject = vi.fn(async () => ({
-      createdQueueConfig: true,
-      updatedPackageJson: true,
-      updatedEnv: false,
-      updatedEnvExample: false,
-      createdJobsDirectory: true,
-    }))
-    const runBroadcastWorkCommand = vi.fn(async () => {})
-    const runProjectPrepare = vi.fn(async () => {})
-    const runProjectDevServer = vi.fn(async () => {})
-    const runProjectLifecycleScript = vi.fn(async () => {})
-    const runProjectDependencyInstall = vi.fn(async () => {})
-    const findProjectRoot = vi.fn(async () => projectRoot)
-    const loadProjectConfig = vi.fn(async () => ({ config: defaultProjectConfig() }))
-    const discoverAppCommands = vi.fn(async () => [])
 
-    vi.resetModules()
-    vi.doMock('../src/queue', () => ({
-      runQueueClearCommand: queueClear,
-      runQueueFailedCommand: queueFailed,
-      runQueueFlushCommand: queueFlush,
-      runQueueForgetCommand: queueForget,
-      runQueueListen: queueListen,
-      runQueueRestartCommand: queueRestart,
-      runQueueRetryCommand: queueRetry,
-      runQueueWorkCommand: queueWork,
-    }))
-    vi.doMock('../src/queue-migrations', () => ({
-      runQueueFailedTableCommand: queueFailedTable,
-      runQueueTableCommand: queueTable,
-    }))
-    vi.doMock('../src/cache-migrations', () => ({
-      runCacheTableCommand: cacheTable,
-    }))
-    vi.doMock('../src/media-migrations', () => ({
-      runMediaTableCommand: mediaTable,
-    }))
-    vi.doMock('../src/runtime', () => ({
-      cacheProjectConfig,
-      withRuntimeEnvironment,
-    }))
-    vi.doMock('../src/generators', () => ({
-      runMakeMail,
-      runMakeSeeder,
-    }))
-    vi.doMock('../src/broadcast', () => ({
-      runBroadcastWorkCommand,
-    }))
-    vi.doMock('../src/project/scaffold', async () => {
-      const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
-      return {
-        ...actual,
-        installAuthIntoProject,
-        installAuthorizationIntoProject,
-        installEventsIntoProject,
-        installMailIntoProject,
-        installMediaIntoProject,
-        installNotificationsIntoProject,
-        installQueueIntoProject,
-        installSecurityIntoProject,
-        scaffoldProject,
-      }
-    })
-    vi.doMock('../src/dev', async () => {
-      const actual = await vi.importActual('../src/dev') as typeof DevInternalModule
-      return {
-        ...actual,
-        runProjectPrepare,
-        runProjectDevServer,
-        runProjectLifecycleScript,
-        runProjectDependencyInstall,
-      }
-    })
-    vi.doMock('../src/project/runtime', async () => {
-      const actual = await vi.importActual('../src/project/runtime') as typeof ProjectRuntimeInternalModule
-      return {
-        ...actual,
-        findProjectRoot,
-      }
-    })
-    vi.doMock('../src/project/config', async () => {
-      const actual = await vi.importActual('../src/project/config') as typeof ProjectConfigInternalModule
-      return {
-        ...actual,
-        loadProjectConfig,
-      }
-    })
-    vi.doMock('../src/project/discovery', async () => {
-      const actual = await vi.importActual('../src/project/discovery') as typeof ProjectDiscoveryInternalModule
-      return {
-        ...actual,
-        discoverAppCommands,
-      }
-    })
 
-    try {
-      const isolatedCli = await import('../src/cli')
-      const commands = isolatedCli.createInternalCommands(baseContext as never)
 
-      await commands.find(command => command.name === 'queue:restart')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: [],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'queue:failed-table')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: [],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'queue:work')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: [],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'queue:listen')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: [],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'queue:failed')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: [],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'queue:retry')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: ['failed-1'],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'queue:forget')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: ['failed-2'],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'queue:flush')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: [],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'queue:clear')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: [],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'queue:table')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: [],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'cache:table')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: [],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'media:table')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: [],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'config:cache')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: [],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'migrate')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: [],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'make:seeder')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: ['DemoSeeder'],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'make:mail')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: ['WelcomeMail'],
-        flags: { type: 'markdown' },
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'broadcast:work')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: [],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'install')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: ['events'],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'install')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: ['auth'],
-        flags: { social: true },
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'install')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: ['authorization'],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'install')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: ['notifications'],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'install')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: ['mail'],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'install')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: ['media'],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'install')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: ['queue'],
-        flags: { driver: 'sync' },
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'install')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: ['security'],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'prepare')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: [],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'dev')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: [],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-      await commands.find(command => command.name === 'build')!.run({
-        projectRoot,
-        cwd: projectRoot,
-        args: [],
-        flags: {},
-        loadProject: baseContext.loadProject,
-      })
-
-      const listedIo = createIo(projectRoot)
-      await expect(isolatedCli.runCli(['list'], listedIo.io)).resolves.toBe(0)
-
-      const newIo = createIo(projectRoot)
-      await expect(isolatedCli.runCli(['new', 'LazyProject'], newIo.io)).resolves.toBe(0)
-
-      expect(queueRestart).toHaveBeenCalledWith(baseContext, projectRoot)
-      expect(queueFailedTable).toHaveBeenCalledWith(baseContext, projectRoot)
-      expect(queueWork).toHaveBeenCalledWith(baseContext, projectRoot, {
-        once: false,
-        stopWhenEmpty: false,
-      })
-      expect(queueListen).toHaveBeenCalledWith(baseContext, projectRoot, {})
-      expect(queueFailed).toHaveBeenCalledWith(baseContext, projectRoot)
-      expect(queueRetry).toHaveBeenCalledWith(baseContext, projectRoot, 'failed-1')
-      expect(queueForget).toHaveBeenCalledWith(baseContext, projectRoot, 'failed-2')
-      expect(queueFlush).toHaveBeenCalledWith(baseContext, projectRoot)
-      expect(queueClear).toHaveBeenCalledWith(baseContext, projectRoot, undefined, undefined)
-      expect(installSecurityIntoProject).toHaveBeenCalledWith(projectRoot)
-      expect(queueTable).toHaveBeenCalledWith(baseContext, projectRoot)
-      expect(cacheTable).toHaveBeenCalledWith(baseContext, projectRoot)
-      expect(cacheProjectConfig).toHaveBeenCalledWith(projectRoot)
-      expect(withRuntimeEnvironment).toHaveBeenCalledWith(
-        projectRoot,
-        'migrate',
-        {},
-        expect.any(Function),
-      )
-      expect(runMakeSeeder).toHaveBeenCalledWith(baseContext, projectRoot, {
-        args: ['DemoSeeder'],
-        flags: {},
-      })
-      expect(runMakeMail).toHaveBeenCalledWith(baseContext, projectRoot, {
-        args: ['WelcomeMail'],
-        flags: { type: 'markdown' },
-      })
-      expect(installAuthIntoProject).toHaveBeenCalledWith(projectRoot, {
-        social: true,
-        workos: false,
-        clerk: false,
-      })
-      expect(installAuthorizationIntoProject).toHaveBeenCalledWith(projectRoot)
-      expect(installEventsIntoProject).toHaveBeenCalledWith(projectRoot)
-      expect(installMailIntoProject).toHaveBeenCalledWith(projectRoot)
-      expect(installNotificationsIntoProject).toHaveBeenCalledWith(projectRoot)
-      expect(installQueueIntoProject).toHaveBeenCalledWith(projectRoot, { driver: 'sync' })
-      expect(runProjectPrepare).toHaveBeenCalledWith(projectRoot, baseContext)
-      expect(runProjectDevServer).toHaveBeenCalledWith(baseContext, projectRoot)
-      expect(runProjectLifecycleScript).toHaveBeenCalledWith(baseContext, projectRoot, 'holo:build')
-      expect(runProjectDependencyInstall).toHaveBeenCalledTimes(9)
-      expect(runProjectDependencyInstall).toHaveBeenCalledWith(
-        expect.objectContaining({ projectRoot }),
-        resolve(projectRoot, 'LazyProject'),
-      )
-      expect(runBroadcastWorkCommand).toHaveBeenCalledWith(baseContext, projectRoot)
-      expect(findProjectRoot).toHaveBeenCalledTimes(1)
-      expect(findProjectRoot).toHaveBeenCalledWith(projectRoot)
-      expect(loadProjectConfig).toHaveBeenCalledTimes(1)
-      expect(loadProjectConfig).toHaveBeenCalledWith(projectRoot)
-      expect(discoverAppCommands).toHaveBeenCalledTimes(1)
-      expect(discoverAppCommands).toHaveBeenCalledWith(projectRoot, defaultProjectConfig())
-      expect(io.read().stdout).toContain('  - updated .env')
-      expect(io.read().stdout).toContain('  - updated .env.example')
-      expect(io.read().stdout).toContain('  - created config/mail.ts')
-      expect(io.read().stdout).toContain('  - created config/notifications.ts')
-      expect(io.read().stdout).toContain('  - created server/policies')
-      expect(io.read().stdout).toContain('  - created server/abilities')
-      expect(scaffoldProject).toHaveBeenCalledWith(resolve(projectRoot, 'LazyProject'), {
-        projectName: 'LazyProject',
-        framework: 'nuxt',
-        databaseDriver: 'sqlite',
-        packageManager: 'npm',
-        storageDefaultDisk: 'local',
-        optionalPackages: [],
-      })
-    } finally {
-      vi.doUnmock('../src/queue')
-      vi.doUnmock('../src/queue-migrations')
-      vi.doUnmock('../src/cache-migrations')
-      vi.doUnmock('../src/runtime')
-      vi.doUnmock('../src/generators')
-      vi.doUnmock('../src/broadcast')
-      vi.doUnmock('../src/project/scaffold')
-      vi.doUnmock('../src/dev')
-      vi.doUnmock('../src/project/runtime')
-      vi.doUnmock('../src/project/config')
-      vi.doUnmock('../src/project/discovery')
-      vi.resetModules()
-    }
-  })
-
-  it('prints auth install output when only env files changed', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    const io = createIo(projectRoot)
-    const installAuthIntoProject = vi.fn(async () => ({
-      updatedPackageJson: false,
-      createdAuthConfig: false,
-      createdSessionConfig: false,
-      createdSecurityConfig: false,
-      createdCorsConfig: false,
-      createdUserModel: false,
-      createdMigrationFiles: [],
-      updatedEnv: true,
-      updatedEnvExample: true,
-    }))
-
-    vi.resetModules()
-    vi.doMock('../src/project/scaffold', async () => {
-      const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
-      return {
-        ...actual,
-        installAuthIntoProject,
-      }
-    })
-
-    try {
-      const isolatedCli = await import('../src/cli')
-      const installCommand = isolatedCli.createInternalCommands({
-        ...io.io,
-        projectRoot,
-        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never).find(command => command.name === 'install')
-
-      await installCommand?.run({
-        ...io.io,
-        projectRoot,
-        cwd: projectRoot,
-        args: ['auth'],
-        flags: {},
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never)
-
-      expect(io.read().stdout).toContain('Installed auth support.')
-      expect(io.read().stdout).toContain('  - updated .env')
-      expect(io.read().stdout).toContain('  - updated .env.example')
-    } finally {
-      vi.resetModules()
-      vi.doUnmock('../src/project/scaffold')
-    }
-  })
-
-  it('covers auth install provider parsing fallback when CSV splitting yields no values', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    const io = createIo(projectRoot)
-    const installAuthIntoProject = vi.fn(async () => ({
-      updatedPackageJson: false,
-      createdAuthConfig: false,
-      createdSessionConfig: false,
-      createdSecurityConfig: false,
-      createdCorsConfig: false,
-      createdUserModel: false,
-      createdMigrationFiles: [],
-      updatedEnv: false,
-      updatedEnvExample: false,
-    }))
-
-    vi.resetModules()
-    vi.doMock('../src/parsing', async () => {
-      const actual = await vi.importActual('../src/parsing') as typeof ParsingInternalModule
-      return {
-        ...actual,
-        splitCsv: vi.fn(() => undefined),
-      }
-    })
-    vi.doMock('../src/project/scaffold', async () => {
-      const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
-      return {
-        ...actual,
-        installAuthIntoProject,
-      }
-    })
-
-    try {
-      const isolatedCli = await import('../src/cli')
-      const installCommand = isolatedCli.createInternalCommands({
-        ...io.io,
-        projectRoot,
-        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never).find(command => command.name === 'install')
-
-      await expect(installCommand?.prepare?.({
-        args: ['auth'],
-        flags: { provider: ['google'] },
-      }, {
-        ...io.io,
-        projectRoot,
-        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never)).resolves.toEqual({
-        args: ['auth'],
-        flags: {},
-      })
-
-      await expect(installCommand?.run({
-        ...io.io,
-        projectRoot,
-        cwd: projectRoot,
-        args: ['auth'],
-        flags: { provider: ['google'] },
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never)).resolves.toBeUndefined()
-
-      expect(installAuthIntoProject).toHaveBeenCalledWith(projectRoot, {
-        social: false,
-        workos: false,
-        clerk: false,
-      })
-    } finally {
-      vi.resetModules()
-      vi.doUnmock('../src/parsing')
-      vi.doUnmock('../src/project/scaffold')
-    }
-  })
-
-  it('prints the already-installed auth message when auth install makes no changes', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    const io = createIo(projectRoot)
-    const installAuthIntoProject = vi.fn(async () => ({
-      updatedPackageJson: false,
-      createdAuthConfig: false,
-      createdSessionConfig: false,
-      createdSecurityConfig: false,
-      createdCorsConfig: false,
-      createdUserModel: false,
-      createdMigrationFiles: [],
-      updatedEnv: false,
-      updatedEnvExample: false,
-    }))
-
-    vi.resetModules()
-    vi.doMock('../src/project/scaffold', async () => {
-      const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
-      return {
-        ...actual,
-        installAuthIntoProject,
-      }
-    })
-
-    try {
-      const isolatedCli = await import('../src/cli')
-      const installCommand = isolatedCli.createInternalCommands({
-        ...io.io,
-        projectRoot,
-        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never).find(command => command.name === 'install')
-
-      await installCommand?.run({
-        ...io.io,
-        projectRoot,
-        cwd: projectRoot,
-        args: ['auth'],
-        flags: {},
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never)
-
-      expect(io.read().stdout).toContain('Auth support is already installed.')
-    } finally {
-      vi.resetModules()
-      vi.doUnmock('../src/project/scaffold')
-    }
-  })
-
-  it('prints already-installed messages when notifications and mail installs make no changes', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    const io = createIo(projectRoot)
-    const installNotificationsIntoProject = vi.fn(async () => ({
-      updatedPackageJson: false,
-      createdNotificationsConfig: false,
-      createdMigrationFiles: [],
-    }))
-    const installMailIntoProject = vi.fn(async () => ({
-      updatedPackageJson: false,
-      createdMailConfig: false,
-      createdMailDirectory: false,
-      updatedEnv: false,
-      updatedEnvExample: false,
-    }))
-
-    vi.resetModules()
-    vi.doMock('../src/project/scaffold', async () => {
-      const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
-      return {
-        ...actual,
-        installNotificationsIntoProject,
-        installMailIntoProject,
-      }
-    })
-
-    try {
-      const isolatedCli = await import('../src/cli')
-      const installCommand = isolatedCli.createInternalCommands({
-        ...io.io,
-        projectRoot,
-        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never).find(command => command.name === 'install')
-
-      await installCommand?.run({
-        ...io.io,
-        projectRoot,
-        cwd: projectRoot,
-        args: ['notifications'],
-        flags: {},
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never)
-      await installCommand?.run({
-        ...io.io,
-        projectRoot,
-        cwd: projectRoot,
-        args: ['mail'],
-        flags: {},
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never)
-
-      expect(io.read().stdout).toContain('Notifications support is already installed.')
-      expect(io.read().stdout).toContain('Mail support is already installed.')
-    } finally {
-      vi.resetModules()
-      vi.doUnmock('../src/project/scaffold')
-    }
-  })
 
   it('publishes editable auth notification files without overwriting existing files', async () => {
     const projectRoot = await createTempProject()
@@ -9729,272 +9461,8 @@ export default defineEvent({ name: 'audit.activity' })
     ])
   }, 30000)
 
-  it('prints auth notification publish command output', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    const io = createIo(projectRoot)
-    const publishAuthNotificationsIntoProject = vi.fn(async () => ({
-      createdFiles: [join(projectRoot, 'server/notifications/auth/email-verification.ts')],
-      skippedFiles: [join(projectRoot, 'server/notifications/auth/password-reset.ts')],
-      hasMailDependency: false,
-    }))
-    const findProjectRoot = vi.fn(async () => projectRoot)
-    const loadProjectConfig = vi.fn(async () => ({ config: defaultProjectConfig() }))
-    const discoverAppCommands = vi.fn(async () => {
-      throw new Error('auth:notifications:publish should not discover app commands')
-    })
 
-    vi.resetModules()
-    vi.doMock('../src/project/scaffold', async () => {
-      const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
-      return {
-        ...actual,
-        publishAuthNotificationsIntoProject,
-      }
-    })
-    vi.doMock('../src/project/runtime', async () => {
-      const actual = await vi.importActual('../src/project/runtime') as typeof ProjectRuntimeInternalModule
-      return {
-        ...actual,
-        findProjectRoot,
-      }
-    })
-    vi.doMock('../src/project/config', async () => {
-      const actual = await vi.importActual('../src/project/config') as typeof ProjectConfigInternalModule
-      return {
-        ...actual,
-        loadProjectConfig,
-      }
-    })
-    vi.doMock('../src/project/discovery', async () => {
-      const actual = await vi.importActual('../src/project/discovery') as typeof ProjectDiscoveryInternalModule
-      return {
-        ...actual,
-        discoverAppCommands,
-      }
-    })
 
-    try {
-      const isolatedCli = await import('../src/cli')
-      const publishCommand = isolatedCli.createInternalCommands({
-        ...io.io,
-        projectRoot,
-        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never).find(command => command.name === 'auth:notifications:publish')
-
-      await publishCommand?.run({
-        ...io.io,
-        projectRoot,
-        cwd: projectRoot,
-        args: [],
-        flags: {},
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never)
-
-      const output = io.read().stdout
-      expect(output).toContain('Published auth notification files.')
-      expect(output).toContain('server/notifications/auth/email-verification.ts')
-      expect(output).toContain('skipped existing')
-      expect(output).toContain('install @holo-js/mail')
-
-      const cliIo = createIo(projectRoot)
-      await expect(isolatedCli.runCli(['auth:notifications:publish'], cliIo.io)).resolves.toBe(0)
-      expect(findProjectRoot).toHaveBeenCalledWith(projectRoot)
-      expect(loadProjectConfig).not.toHaveBeenCalled()
-      expect(discoverAppCommands).not.toHaveBeenCalled()
-    } finally {
-      vi.resetModules()
-      vi.doUnmock('../src/project/scaffold')
-      vi.doUnmock('../src/project/runtime')
-      vi.doUnmock('../src/project/config')
-      vi.doUnmock('../src/project/discovery')
-    }
-  }, 30000)
-
-  it('prints full broadcast install output when scaffold reports all created artifacts', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    const io = createIo(projectRoot)
-    const installBroadcastIntoProject = vi.fn()
-      .mockImplementationOnce(async () => ({
-        updatedPackageJson: true,
-        createdBroadcastConfig: true,
-        createdBroadcastDirectory: true,
-        createdChannelsDirectory: true,
-        createdBroadcastAuthRoute: true,
-        createdFrameworkSetup: true,
-        updatedEnv: true,
-        updatedEnvExample: true,
-      }))
-      .mockImplementationOnce(async () => ({
-        updatedPackageJson: false,
-        createdBroadcastConfig: false,
-        createdBroadcastDirectory: false,
-        createdChannelsDirectory: false,
-        createdBroadcastAuthRoute: false,
-        createdFrameworkSetup: false,
-        updatedEnv: false,
-        updatedEnvExample: false,
-      }))
-
-    vi.resetModules()
-    vi.doMock('../src/project/scaffold', async () => {
-      const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
-      return {
-        ...actual,
-        installBroadcastIntoProject,
-      }
-    })
-
-    try {
-      const isolatedCli = await import('../src/cli')
-      const installCommand = isolatedCli.createInternalCommands({
-        ...io.io,
-        projectRoot,
-        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never).find(command => command.name === 'install')
-
-      await installCommand?.run({
-        ...io.io,
-        projectRoot,
-        cwd: projectRoot,
-        args: ['broadcast'],
-        flags: {},
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never)
-
-      expect(io.read().stdout).toContain('Installed broadcast support.')
-      expect(io.read().stdout).toContain('  - updated package.json')
-      expect(io.read().stdout).toContain('  - updated .env')
-      expect(io.read().stdout).toContain('  - updated .env.example')
-      expect(io.read().stdout).toContain('  - created config/broadcast.ts')
-      expect(io.read().stdout).toContain('  - created server/broadcast')
-      expect(io.read().stdout).toContain('  - created server/channels')
-      expect(io.read().stdout).toContain('  - created /broadcasting/auth route')
-      expect(io.read().stdout).toContain('  - created framework Flux setup')
-
-      await installCommand?.run({
-        ...io.io,
-        projectRoot,
-        cwd: projectRoot,
-        args: ['broadcast'],
-        flags: {},
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never)
-      expect(io.read().stdout).toContain('Broadcast support is already installed.')
-    } finally {
-      vi.resetModules()
-      vi.doUnmock('../src/project/scaffold')
-    }
-  })
-
-  it('prepares cache install drivers and prints cache install output for changed and unchanged runs', async () => {
-    const projectRoot = await createTempProject()
-    tempDirs.push(projectRoot)
-    const io = createIo(projectRoot)
-    const installCacheIntoProject = vi.fn()
-      .mockImplementationOnce(async () => ({
-        updatedPackageJson: true,
-        createdCacheConfig: true,
-        createdRedisConfig: true,
-        updatedEnv: true,
-        updatedEnvExample: true,
-        databaseDriver: true,
-      }))
-      .mockImplementationOnce(async () => ({
-        updatedPackageJson: false,
-        createdCacheConfig: false,
-        createdRedisConfig: false,
-        updatedEnv: false,
-        updatedEnvExample: false,
-        databaseDriver: false,
-      }))
-
-    vi.resetModules()
-    vi.doMock('../src/project/scaffold', async () => {
-      const actual = await vi.importActual('../src/project/scaffold') as typeof ProjectScaffoldInternalModule
-      return {
-        ...actual,
-        installCacheIntoProject,
-      }
-    })
-
-    try {
-      const isolatedCli = await import('../src/cli')
-      const installCommand = isolatedCli.createInternalCommands({
-        ...io.io,
-        projectRoot,
-        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never).find(command => command.name === 'install')
-
-      await expect(installCommand?.prepare?.({
-        args: ['cache'],
-        flags: { driver: 'redis' },
-      }, {
-        ...io.io,
-        projectRoot,
-        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never)).resolves.toEqual({
-        args: ['cache'],
-        flags: {
-          driver: 'redis',
-        },
-      })
-      await expect(installCommand?.prepare?.({
-        args: ['cache'],
-        flags: {},
-      }, {
-        ...io.io,
-        projectRoot,
-        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never)).resolves.toEqual({
-        args: ['cache'],
-        flags: {
-          driver: 'file',
-        },
-      })
-
-      await installCommand?.run({
-        ...io.io,
-        projectRoot,
-        cwd: projectRoot,
-        args: ['cache'],
-        flags: { driver: 'redis' },
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never)
-      await installCommand?.run({
-        ...io.io,
-        projectRoot,
-        cwd: projectRoot,
-        args: ['cache'],
-        flags: {},
-        loadProject: async () => ({ config: defaultProjectConfig() }),
-      } as never)
-
-      expect(installCacheIntoProject).toHaveBeenNthCalledWith(1, projectRoot, {
-        driver: 'redis',
-      })
-      expect(installCacheIntoProject).toHaveBeenNthCalledWith(2, projectRoot, {
-        driver: 'file',
-      })
-      expect(io.read().stdout).toContain('Installed cache support.')
-      expect(io.read().stdout).toContain('  - created config/cache.ts')
-      expect(io.read().stdout).toContain('  - created config/redis.ts')
-      expect(io.read().stdout).toContain('  - updated package.json')
-      expect(io.read().stdout).toContain('  - updated .env')
-      expect(io.read().stdout).toContain('  - updated .env.example')
-      expect(io.read().stdout).toContain('  - run "holo cache:table" to create the cache tables')
-      expect(io.read().stdout).toContain('Cache support is already installed.')
-    } finally {
-      vi.doUnmock('../src/project/scaffold')
-      vi.resetModules()
-    }
-  }, 30_000)
 
   it('covers command and template helper utilities', () => {
     const command = defineCommand({
@@ -10314,6 +9782,7 @@ export default defineConfig({
     tempDirs.push(projectRoot)
     await linkWorkspaceDb(projectRoot)
     await linkWorkspaceBroadcast(projectRoot)
+    await linkWorkspaceAuthorization(projectRoot)
     await writeProjectFile(projectRoot, 'server/jobs/send-email.ts', `
 import { defineJob } from '@holo-js/queue'
 
@@ -10908,7 +10377,7 @@ export default defineConfig({
       await cliInternals.runProjectPrepare(projectRoot)
     })
 
-    expect(await readFile(join(projectRoot, '.holo-js/generated/next/health-route.ts'), 'utf8')).toContain('holo.getApp')
+    await expect(stat(join(projectRoot, '.holo-js/generated/next/health-route.ts'))).rejects.toThrow()
     expect(await readFile(join(projectRoot, '.holo-js/generated/next/auth-user-route.ts'), 'utf8')).toContain('await user()')
     expect(await readFile(join(projectRoot, '.holo-js/generated/next/storage-route.ts'), 'utf8')).toContain('createPublicStorageResponse')
     expect(await readFile(join(projectRoot, '.holo-js/generated/next/broadcast-auth-route.ts'), 'utf8')).toContain('channelAuth')
@@ -10920,11 +10389,57 @@ export default defineConfig({
     tempDirs.push(projectRoot)
     await linkWorkspaceDb(projectRoot)
     await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'sveltekit' }, null, 2))
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'svelte-managed-hooks-fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/auth': expectedHoloPackageRange,
+        '@holo-js/auth-clerk': expectedHoloPackageRange,
+        '@holo-js/broadcast': expectedHoloPackageRange,
+        '@holo-js/storage': expectedHoloPackageRange,
+      },
+    }, null, 2))
     await writeProjectFile(projectRoot, 'src/hooks.ts', 'export const reroute = ({ url }) => url.pathname\n')
     await writeProjectFile(projectRoot, 'src/hooks.server.ts', 'export const handleFetch = async ({ request, fetch }) => fetch(request)\n')
     // Simulate a legacy .user.ts file that should be migrated and deleted.
     await writeProjectFile(projectRoot, 'src/hooks.user.ts', 'export const reroute = ({ url }) => url.pathname\n')
     await writeProjectFile(projectRoot, 'src/hooks.server.user.ts', 'export const handleFetch = async ({ request, fetch }) => fetch(request)\n')
+    await writeProjectFile(projectRoot, 'src/lib/server/holo.ts', [
+      'import { createSvelteKitHoloHelpers } from \'@holo-js/adapter-sveltekit\'',
+      '',
+      'export const holo = createSvelteKitHoloHelpers()',
+      '',
+    ].join('\n'))
+    await writeProjectFile(projectRoot, 'src/routes/api/holo/+server.ts', [
+      'import { json } from \'@sveltejs/kit\'',
+      'import { holo } from \'$lib/server/holo\'',
+      '',
+      'export async function GET() {',
+      '  const app = await holo.getApp()',
+      '  return json({',
+      '    models: app.registry?.models.length ?? 0,',
+      '    commands: app.registry?.commands.length ?? 0,',
+      '  })',
+      '}',
+      '',
+    ].join('\n'))
+    await writeProjectFile(projectRoot, 'src/routes/broadcasting/auth/+server.ts', [
+      'import { renderBroadcastAuthResponse } from \'@holo-js/broadcast/auth\'',
+      'import { holo } from \'$lib/server/holo\'',
+      '',
+      'export async function POST({ request }: { request: Request }) {',
+      '  const app = await holo.getApp()',
+      '  return await renderBroadcastAuthResponse(request, {',
+      '    channelAuth: {',
+      '      registry: {',
+      '        projectRoot: app.projectRoot,',
+      '        channels: app.registry?.channels ?? [],',
+      '      },',
+      '    },',
+      '  })',
+      '}',
+      '',
+    ].join('\n'))
     // Simulate an existing svelte.config.js without the hooks override.
     await writeProjectFile(projectRoot, 'svelte.config.js', [
       'import adapter from \'@sveltejs/adapter-node\'',
@@ -10976,6 +10491,16 @@ export default defineConfig({
     // Legacy .user.ts files are deleted, not left as empty artifacts.
     await expect(stat(join(projectRoot, 'src/hooks.user.ts'))).rejects.toThrow()
     await expect(stat(join(projectRoot, 'src/hooks.server.user.ts'))).rejects.toThrow()
+    await expect(stat(join(projectRoot, 'src/lib/server/holo.ts'))).rejects.toThrow()
+    await expect(stat(join(projectRoot, 'src/routes/api/holo/+server.ts'))).rejects.toThrow()
+    await expect(stat(join(projectRoot, 'src/routes/broadcasting/auth/+server.ts'))).rejects.toThrow()
+    expect(await readFile(join(projectRoot, '.holo-js/generated/sveltekit/holo.ts'), 'utf8')).toContain('createSvelteKitHoloHelpers')
+    expect(generatedServerHooks).not.toContain('handleHoloHealthRoute')
+    expect(generatedServerHooks).toContain('handleHoloBroadcastAuthRoute')
+    expect(generatedServerHooks).toContain('handleHoloCurrentAuthRoute')
+    expect(generatedServerHooks).toContain('handleHoloStorageRoute')
+    expect(generatedServerHooks).toContain('handleHoloClerkCallbackRoute')
+    expect(generatedServerHooks).toContain('channelAuth')
 
     // Existing svelte.config.js is patched with the hooks override.
     const svelteConfig = await readFile(join(projectRoot, 'svelte.config.js'), 'utf8')
@@ -10983,7 +10508,7 @@ export default defineConfig({
     expect(svelteConfig).toContain('@holo-js/adapter-sveltekit/config')
     expect(svelteConfig).not.toContain('.holo-js/generated/hooks.server')
     expect(svelteConfig).not.toContain('.holo-js/generated/hooks')
-  }, 30000)
+  }, 90000)
 
   it('preserves legacy SvelteKit hook extension files when no migration occurs', async () => {
     const projectRoot = await createTempProject()

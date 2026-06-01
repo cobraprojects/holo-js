@@ -788,13 +788,13 @@ export async function installBroadcastIntoProject(
   let createdFrameworkSetup = false
 
   if (framework === 'next') {
-    const holoHelperPath = resolve(projectRoot, 'server/holo.ts')
+    const holoHelperPath = resolve(projectRoot, '.holo-js/generated/next/holo.ts')
     if (!(await pathExists(holoHelperPath))) {
       await writeTextFile(holoHelperPath, renderNextHoloHelper())
       createdFrameworkSetup = true
     }
   } else if (framework === 'sveltekit') {
-    const holoHelperPath = resolve(projectRoot, 'src/lib/server/holo.ts')
+    const holoHelperPath = resolve(projectRoot, '.holo-js/generated/sveltekit/holo.ts')
     if (!(await pathExists(holoHelperPath))) {
       await writeTextFile(holoHelperPath, renderSvelteHoloHelper())
       createdFrameworkSetup = true

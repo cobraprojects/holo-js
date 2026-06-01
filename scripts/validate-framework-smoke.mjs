@@ -774,7 +774,7 @@ export async function startServer(app, readinessTimeoutMs = 20000) {
 
   try {
     await waitForServer(
-      `http://127.0.0.1:${app.port}/api/holo/health`,
+      `http://127.0.0.1:${app.port}/`,
       child,
       logs,
       readinessTimeoutMs,
@@ -1744,15 +1744,6 @@ async function runFrameworkFluxHelperSmokeCheck(app) {
   await runCommand(helperCwd, 'node', ['--input-type=module', '--eval', createFrameworkFluxHelperSmokeScript(app)])
 }
 
-function assertHealthPayload(app, payload) {
-  assert.equal(payload.ok, true)
-  assert.equal(payload.framework, app.framework)
-  assert.equal(payload.app, app.appName)
-  assert.equal(payload.defaultConnection, 'main')
-  assert.equal(typeof payload.models, 'number')
-  assert.equal(typeof payload.commands, 'number')
-}
-
 function assertMatrixPayload(app, payload) {
   assert.equal(payload.framework, app.framework)
   assert.equal(payload.app, app.appName)
@@ -2139,9 +2130,6 @@ async function validateFrameworkApp(app) {
   const server = await startServer(app)
   try {
     const baseUrl = `http://127.0.0.1:${app.port}`
-    const health = await fetchJson(`${baseUrl}/api/holo/health`)
-    assertHealthPayload(app, health)
-
     await assertSmokeMutationGetRejected(app, baseUrl, '/api/holo/matrix')
     const matrix = await fetchJson(`${baseUrl}/api/holo/matrix`, smokeMutationRequest())
     assertMatrixPayload(app, matrix)

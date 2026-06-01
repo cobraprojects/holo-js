@@ -38,7 +38,6 @@ const port = await new Promise((resolve, reject) => {
     })
   })
 })
-const healthUrl = `http://localhost:${port}/api/holo/health`
 const originalConfig = await readFile(configPath, 'utf8')
 const runtimeSchemaPath = join(cwd, '.holo-js/generated/schema.mjs')
 const require = createRequire(import.meta.url)
@@ -189,49 +188,6 @@ function run(command, args) {
       reject(new Error(`Command failed: ${command} ${args.join(' ')} (${code})`))
     })
   })
-}
-
-async function waitForJson(url, predicate, timeoutMs = 30000) {
-  const startedAt = Date.now()
-  let lastError = null
-
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const payload = await new Promise((resolve, reject) => {
-        const request = get(url, (response) => {
-          let body = ''
-          response.setEncoding('utf8')
-          response.on('data', chunk => {
-            body += chunk
-          })
-          response.on('end', () => {
-            if ((response.statusCode ?? 500) < 200 || (response.statusCode ?? 500) >= 300) {
-              reject(new Error(`Unexpected status ${response.statusCode ?? 'unknown'}`))
-              return
-            }
-
-            try {
-              resolve(JSON.parse(body))
-            } catch (error) {
-              reject(error)
-            }
-          })
-        })
-
-        request.on('error', reject)
-      })
-
-      if (predicate(payload)) {
-        return payload
-      }
-    } catch (error) {
-      lastError = error
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 250))
-  }
-
-  throw new Error(`Timed out waiting for ${url}${lastError instanceof Error ? `: ${lastError.message}` : ''}`)
 }
 
 async function waitForText(url, predicate, timeoutMs = 30000) {
@@ -716,8 +672,6 @@ try {
   pipeOutput(child.stdout, process.stdout)
   pipeOutput(child.stderr, process.stderr)
 
-  const initial = await waitForJson(healthUrl, payload => payload.ok === true)
-  assert.equal(initial.app, 'blog-next')
   await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Next'))
   await assertCacheBackedHttpBehavior(`http://localhost:${port}`)
   await waitForRedirect(`http://localhost:${port}/admin`, '/login')
@@ -736,8 +690,7 @@ try {
   })
 
   await writeFile(configPath, originalConfig.replace("name: env('APP_NAME', 'blog-next')", "name: env('APP_NAME', 'blog-next-updated')"))
-  const updated = await waitForJson(healthUrl, payload => payload.app === 'blog-next-updated')
-  assert.equal(updated.app, 'blog-next-updated')
+  await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Next'))
 
   killChildTree()
   await new Promise(resolve => child.once('close', resolve))

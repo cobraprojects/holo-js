@@ -78,7 +78,7 @@ The smoke script:
 - runs `holo prepare`
 - runs `holo migrate:fresh --seed --force`
 - builds the framework app
-- boots the app and verifies health, matrix, storage, and media routes
+- boots the app and verifies matrix, storage, and media routes
 - restores the original fixture manifest and `bun.lock`
 
 Use `--dry-run` only to inspect the execution plan. It does not resolve or install the candidate version.

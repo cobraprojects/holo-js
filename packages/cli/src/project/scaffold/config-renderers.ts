@@ -27,6 +27,8 @@ import {
 import {
   renderNextBroadcastAuthRoute,
   renderNextGeneratedBroadcastAuthRoute,
+  renderNextHoloHelper,
+  renderSvelteHoloHelper,
 } from './framework-renderers'
 
 export function renderStorageConfig(): string {
@@ -583,29 +585,6 @@ function renderNuxtBroadcastAuthRoute(): string {
   ].join('\n')
 }
 
-function renderSvelteBroadcastAuthRoute(): string {
-  return [
-    'import { renderBroadcastAuthResponse } from \'@holo-js/broadcast/auth\'',
-    'import { holo } from \'$lib/server/holo\'',
-    '',
-    'export async function POST({ request }: { request: Request }) {',
-    '  const app = await holo.getApp()',
-    '  const auth = await holo.getAuth()',
-    '',
-    '  return await renderBroadcastAuthResponse(request, {',
-    '    resolveUser: async () => await auth?.user(),',
-    '    channelAuth: {',
-    '      registry: {',
-    '        projectRoot: app.projectRoot,',
-    '        channels: app.registry?.channels ?? [],',
-    '      },',
-    '    },',
-    '  })',
-    '}',
-    '',
-  ].join('\n')
-}
-
 export async function syncBroadcastAuthSupportAfterAuthInstall(projectRoot: string): Promise<{
   readonly updatedBroadcastConfig: boolean
   readonly createdBroadcastAuthRoute: boolean
@@ -646,11 +625,13 @@ export async function syncBroadcastAuthSupportAfterAuthInstall(projectRoot: stri
 
   if (framework === 'next') {
     const authRoutePath = resolve(projectRoot, 'app/broadcasting/auth/route.ts')
+    const holoHelperPath = resolve(projectRoot, '.holo-js/generated/next/holo.ts')
     const generatedRoutePath = resolve(projectRoot, '.holo-js/generated/next/broadcast-auth-route.ts')
     if (!(await pathExists(authRoutePath))) {
       await writeTextFile(authRoutePath, renderNextBroadcastAuthRoute())
       createdBroadcastAuthRoute = true
     }
+    await writeTextFile(holoHelperPath, renderNextHoloHelper())
     await writeTextFile(generatedRoutePath, renderNextGeneratedBroadcastAuthRoute())
 
     return {
@@ -672,11 +653,8 @@ export async function syncBroadcastAuthSupportAfterAuthInstall(projectRoot: stri
   }
 
   if (framework === 'sveltekit') {
-    const authRoutePath = resolve(projectRoot, 'src/routes/broadcasting/auth/+server.ts')
-    if (!(await pathExists(authRoutePath))) {
-      await writeTextFile(authRoutePath, renderSvelteBroadcastAuthRoute())
-      createdBroadcastAuthRoute = true
-    }
+    const holoHelperPath = resolve(projectRoot, '.holo-js/generated/sveltekit/holo.ts')
+    await writeTextFile(holoHelperPath, renderSvelteHoloHelper())
   }
 
   return {

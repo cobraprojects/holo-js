@@ -37,7 +37,6 @@ const port = await new Promise((resolve, reject) => {
     })
   })
 })
-const healthUrl = `http://localhost:${port}/api/holo/health`
 const originalConfig = await readFile(configPath, 'utf8')
 const mirrorCapturedOutput = process.env.MAIL_LOG_VERBOSE === 'true'
   || process.argv.includes('--mail-log-verbose')
@@ -90,49 +89,6 @@ function run(command, args) {
       reject(new Error(`Command failed: ${command} ${args.join(' ')} (${code})`))
     })
   })
-}
-
-async function waitForJson(url, predicate, timeoutMs = 30000) {
-  const startedAt = Date.now()
-  let lastError = null
-
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const payload = await new Promise((resolve, reject) => {
-        const request = get(url, (response) => {
-          let body = ''
-          response.setEncoding('utf8')
-          response.on('data', chunk => {
-            body += chunk
-          })
-          response.on('end', () => {
-            if ((response.statusCode ?? 500) < 200 || (response.statusCode ?? 500) >= 300) {
-              reject(new Error(`Unexpected status ${response.statusCode ?? 'unknown'}`))
-              return
-            }
-
-            try {
-              resolve(JSON.parse(body))
-            } catch (error) {
-              reject(error)
-            }
-          })
-        })
-
-        request.on('error', reject)
-      })
-
-      if (predicate(payload)) {
-        return payload
-      }
-    } catch (error) {
-      lastError = error
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 250))
-  }
-
-  throw new Error(`Timed out waiting for ${url}${lastError instanceof Error ? `: ${lastError.message}` : ''}`)
 }
 
 async function waitForText(url, predicate, timeoutMs = 30000) {
@@ -563,8 +519,6 @@ try {
   pipeOutput(child.stdout, process.stdout)
   pipeOutput(child.stderr, process.stderr)
 
-  const initial = await waitForJson(healthUrl, payload => payload.ok === true, 90000)
-  assert.equal(initial.app, 'blog-nuxt')
   await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Nuxt'))
   await assertCacheBackedHttpBehavior(`http://localhost:${port}`)
   await waitForRedirect(`http://localhost:${port}/admin/posts`, '/login')
@@ -583,8 +537,7 @@ try {
   })
 
   await writeFile(configPath, originalConfig.replace("name: env('APP_NAME', 'blog-nuxt')", "name: env('APP_NAME', 'blog-nuxt-updated')"))
-  const updated = await waitForJson(healthUrl, payload => payload.app === 'blog-nuxt-updated', 90000)
-  assert.equal(updated.app, 'blog-nuxt-updated')
+  await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Nuxt'))
 
   killChildTree()
   await new Promise(resolve => child.once('close', resolve))

@@ -492,6 +492,7 @@ export function renderScaffoldEnvFiles(
 ): { env: string, example: string } {
   const defaultDatabaseConnection = 'main'
   const defaultUrl = resolveFrameworkDefaultUrl(options.framework)
+  const optionalPackageNames = normalizeScaffoldOptionalPackages(options.optionalPackages)
   const baseLines = [
     'APP_NAME=',
     'APP_KEY=',
@@ -512,28 +513,61 @@ export function renderScaffoldEnvFiles(
         `DB_DATABASE=${sanitizePackageName(options.projectName) || 'holo_app'}`,
         ...(options.databaseDriver === 'postgres' ? ['DB_SCHEMA=public'] : []),
       ]
-  const storageLines = normalizeScaffoldOptionalPackages(options.optionalPackages).includes('storage')
+  const storageLines = optionalPackageNames.includes('storage')
     ? [
         `STORAGE_DEFAULT_DISK=${options.storageDefaultDisk}`,
         'STORAGE_ROUTE_PREFIX=/storage',
       ]
     : []
-  const authLines = normalizeScaffoldOptionalPackages(options.optionalPackages).includes('auth')
+  const authLines = optionalPackageNames.includes('auth')
     ? [...renderAuthEnvFiles({}, defaultDatabaseConnection).env]
     : []
-  const cacheLines = normalizeScaffoldOptionalPackages(options.optionalPackages).includes('cache')
+  const cacheLines = optionalPackageNames.includes('cache')
     ? [...renderCacheEnvFiles('file').env]
     : []
-  const mailLines = renderMailEnvFiles().env
-  const env = [...baseLines, ...driverLines, ...storageLines, ...authLines, ...cacheLines, ...mailLines, ''].join('\n')
+  const mailLines = optionalPackageNames.includes('mail')
+    ? [...renderMailEnvFiles().env]
+    : []
+  const mailExampleLines = optionalPackageNames.includes('mail')
+    ? [...renderMailEnvFiles().example]
+    : []
+  const envGroups = [
+    baseLines,
+    driverLines,
+    storageLines,
+    authLines,
+    cacheLines,
+    mailLines,
+  ]
+  const exampleGroups = [
+    baseLines.map(renderEnvExampleLine),
+    driverLines.map(renderEnvExampleLine),
+    storageLines.map(renderEnvExampleLine),
+    authLines.map(renderEnvExampleLine),
+    cacheLines.map(renderEnvExampleLine),
+    mailExampleLines.map(renderEnvExampleLine),
+  ]
+  const env = renderEnvGroups(envGroups)
   const example = [
     '# Copy this file to .env and fill in your local values.',
     '# Supported layered env files: .env.local, .env.development, .env.production, .env.prod, .env.test',
-    ...[...baseLines, ...driverLines, ...storageLines, ...authLines, ...cacheLines, ...renderMailEnvFiles().example].map(line => `${line.split('=')[0]}=`),
+    renderEnvGroups(exampleGroups).trimEnd(),
     '',
   ].join('\n')
 
   return { env, example }
+}
+
+function renderEnvGroups(groups: readonly (readonly string[])[]): string {
+  return `${groups
+    .filter(group => group.length > 0)
+    .map(group => group.join('\n'))
+    .join('\n\n')}\n`
+}
+
+function renderEnvExampleLine(line: string): string {
+  const [key] = line.split('=')
+  return `${key ?? line}=`
 }
 
 export function renderMailEnvFiles(): { env: readonly string[], example: readonly string[] } {
