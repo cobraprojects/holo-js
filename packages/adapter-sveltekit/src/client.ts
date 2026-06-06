@@ -658,7 +658,7 @@ function createReactiveView<TValue extends object>(
     return cached as TValue
   }
 
-  const proxy = new Proxy({}, {
+  const proxy = new Proxy(Array.isArray(target) ? [] : {}, {
     get(_shell, key) {
       subscribe()
       const value = Reflect.get(target as object, key)

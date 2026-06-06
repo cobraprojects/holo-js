@@ -1474,6 +1474,24 @@ throw new Error('APP_KEY is required before config can load')
         envExampleContains: ['BROADCAST_CONNECTION=holo', 'BROADCAST_APP_ID='],
       },
       {
+        name: 'realtime',
+        args: ['realtime'],
+        message: 'Installed realtime support.',
+        alreadyInstalledMessage: 'Realtime support is already installed.',
+        dependencies: ['@holo-js/broadcast', '@holo-js/flux', '@holo-js/flux-react', '@holo-js/realtime'],
+        generatedFiles: [
+          { path: 'server/realtime', contains: '' },
+          { path: 'app/holo/realtime/provider.tsx', contains: '@holo-js/adapter-next/realtime' },
+          { path: 'app/holo/realtime/query/route.ts', contains: 'realtime-query-route' },
+          { path: 'app/holo/realtime/mutation/route.ts', contains: 'realtime-mutation-route' },
+          { path: 'app/holo/realtime/stream/route.ts', contains: 'realtime-stream-route' },
+          { path: '.holo-js/generated/next/realtime-query-route.ts', contains: 'handleRealtimeQueryRequest' },
+          { path: '.holo-js/generated/next/realtime-mutation-route.ts', contains: 'handleRealtimeMutationRequest' },
+          { path: '.holo-js/generated/next/realtime-stream-route.ts', contains: 'handleRealtimeStreamRequest' },
+        ],
+        stdoutContains: ['created realtime framework routes'],
+      },
+      {
         name: 'security',
         args: ['security'],
         message: 'Installed security support.',
@@ -2191,6 +2209,31 @@ export default {
       storageDefaultDisk: 'local',
       optionalPackages: ['broadcast'],
     })).toContain(`"@holo-js/flux-react": "${expectedHoloPackageRange}"`)
+    const realtimeScaffoldDependencies = JSON.parse(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Realtime Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['realtime'],
+    })).dependencies
+    expect(realtimeScaffoldDependencies).toMatchObject({
+      '@holo-js/broadcast': expectedHoloPackageRange,
+      '@holo-js/flux': expectedHoloPackageRange,
+      '@holo-js/flux-react': expectedHoloPackageRange,
+      '@holo-js/realtime': expectedHoloPackageRange,
+    })
+    const baseNextDependencies = JSON.parse(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Base Runtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+    })).dependencies
+    expect(baseNextDependencies['@holo-js/realtime']).toBeUndefined()
+    expect(baseNextDependencies['@holo-js/broadcast']).toBeUndefined()
+    expect(baseNextDependencies['@holo-js/flux']).toBeUndefined()
+    expect(baseNextDependencies['@holo-js/flux-react']).toBeUndefined()
     expect(projectInternals.renderScaffoldPackageJson({
       projectName: 'Auth Runtime App',
       framework: 'next',
@@ -2467,6 +2510,35 @@ export default {
     }).map(file => file.path)
     expect(svelteFrameworkPaths).not.toContain('src/routes/api/holo/health/+server.ts')
     expect(svelteFrameworkPaths).toContain('.holo-js/generated/sveltekit/holo.ts')
+    expect(svelteFrameworkPaths).not.toContain('src/hooks.client.ts')
+    const nextFrameworkFiles = projectInternals.renderFrameworkFiles({
+      projectName: 'Next App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+    })
+    expect(nextFrameworkFiles.map(file => file.path)).not.toContain('app/holo/realtime/provider.tsx')
+    expect(nextFrameworkFiles.find(file => file.path === 'app/layout.tsx')?.contents).not.toContain('HoloRealtime')
+    const nextRealtimeFrameworkFiles = projectInternals.renderFrameworkFiles({
+      projectName: 'Next Realtime App',
+      framework: 'next',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['realtime'],
+    })
+    expect(nextRealtimeFrameworkFiles.find(file => file.path === 'app/holo/realtime/provider.tsx')?.contents).toContain('@holo-js/adapter-next/realtime')
+    expect(nextRealtimeFrameworkFiles.find(file => file.path === 'app/layout.tsx')?.contents).toContain('HoloRealtime')
+    const svelteRealtimeFrameworkPaths = projectInternals.renderFrameworkFiles({
+      projectName: 'Svelte Realtime App',
+      framework: 'sveltekit',
+      databaseDriver: 'sqlite',
+      packageManager: 'bun',
+      storageDefaultDisk: 'local',
+      optionalPackages: ['realtime'],
+    })
+    expect(svelteRealtimeFrameworkPaths.find(file => file.path === 'src/hooks.client.ts')?.contents).toContain('@holo-js/adapter-sveltekit/realtime')
     expect(projectInternals.renderFrameworkFiles({
       projectName: 'Svelte App',
       framework: 'sveltekit',
@@ -2662,14 +2734,16 @@ export default {
     expect(projectInternals.isSupportedScaffoldOptionalPackage('storage')).toBe(true)
     expect(projectInternals.isSupportedScaffoldOptionalPackage('auth')).toBe(true)
     expect(projectInternals.isSupportedScaffoldOptionalPackage('authorization')).toBe(true)
+    expect(projectInternals.isSupportedScaffoldOptionalPackage('realtime')).toBe(true)
     expect(projectInternals.normalizeScaffoldOptionalPackages(['forms'])).toEqual(['forms', 'validation'])
     expect(projectInternals.normalizeScaffoldOptionalPackages(['validation', 'forms', 'validation'])).toEqual(['forms', 'validation'])
-    expect(projectInternals.normalizeScaffoldOptionalPackages(['validate', 'form', 'storage', 'queue', 'events', 'auth', 'authorization'])).toEqual([
+    expect(projectInternals.normalizeScaffoldOptionalPackages(['validate', 'form', 'storage', 'queue', 'events', 'auth', 'authorization', 'realtime'])).toEqual([
       'auth',
       'authorization',
       'events',
       'forms',
       'queue',
+      'realtime',
       'storage',
       'validation',
     ])
@@ -3578,7 +3652,7 @@ export default defineAppConfig({
 
     const unsupportedTarget = runCliProcess(projectRoot, ['install', 'mailer'])
     expect(unsupportedTarget.status).toBe(1)
-    expect(unsupportedTarget.stderr).toContain('Unsupported install target: mailer. Expected one of queue, events, auth, authorization, notifications, mail, broadcast, security, cache, media.')
+    expect(unsupportedTarget.stderr).toContain('Unsupported install target: mailer. Expected one of queue, events, auth, authorization, notifications, mail, broadcast, realtime, security, cache, media.')
 
     const unsupportedDriver = runCliProcess(projectRoot, ['install', 'queue', '--driver', 'sqs'])
     expect(unsupportedDriver.status).toBe(1)
@@ -6130,6 +6204,7 @@ export default defineBroadcastConfig({
     expect(() => cliInternals.normalizeChoice(undefined, ['nuxt', 'next'], 'Framework')).toThrow('(empty)')
     expect(() => cliInternals.normalizeOptionalPackages(['weird-package'])).toThrow('Unsupported optional package')
     expect(cliInternals.normalizeOptionalPackages(['broadcast'])).toEqual(['broadcast'])
+    expect(cliInternals.normalizeOptionalPackages(['realtime'])).toEqual(['realtime'])
     expect(cliInternals.normalizeOptionalPackages(['security'])).toEqual(['security'])
     expect(cliInternals.normalizeOptionalPackages(['forms'])).toEqual(['forms', 'validation'])
     expect(cliInternals.normalizeOptionalPackages(['forms', 'validation', 'forms'])).toEqual(['forms', 'validation'])

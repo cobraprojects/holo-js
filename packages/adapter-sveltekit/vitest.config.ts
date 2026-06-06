@@ -13,6 +13,8 @@ export default defineConfig({
       '@holo-js/forms/internal/client': resolve(__dirname, '../forms/src/internal/client.ts'),
       '@holo-js/forms/schema': resolve(__dirname, '../forms/src/schema.ts'),
       '@holo-js/forms': resolve(__dirname, '../forms/src/index.ts'),
+      '@holo-js/realtime/client': resolve(__dirname, '../realtime/src/client.ts'),
+      '@holo-js/realtime': resolve(__dirname, '../realtime/src/index.ts'),
       '@holo-js/queue': resolve(__dirname, '../queue/src/index.ts'),
       '@holo-js/queue-redis': resolve(__dirname, '../queue-redis/src/index.ts'),
       '@holo-js/queue-db': resolve(__dirname, '../queue-db/src/index.ts'),

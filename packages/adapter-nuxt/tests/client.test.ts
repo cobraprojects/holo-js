@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { field, schema } from '@holo-js/forms'
+import type { RealtimeSubscriptionSnapshot } from '@holo-js/realtime'
 
 describe('@holo-js/adapter-nuxt client', () => {
   afterEach(() => {
@@ -59,6 +60,84 @@ describe('@holo-js/adapter-nuxt client', () => {
 
     expect(form.values.email).toBe('ava@example.com')
     expect((globalThis as unknown as { __holoNuxtClientDisposed?: boolean }).__holoNuxtClientDisposed).toBe(true)
+  })
+
+  it('returns updated realtime query arrays by calling the query definition', async () => {
+    type Post = { readonly id: number, readonly title: string }
+    type PostSnapshot = RealtimeSubscriptionSnapshot<readonly Post[]>
+    let realtimeListener: ((snapshot: PostSnapshot) => void) | undefined
+
+    vi.doMock('vue', () => ({
+      onScopeDispose() {},
+      reactive<TValue extends object>(value: TValue) {
+        return value
+      },
+      shallowRef<TValue>(value: TValue) {
+        return { value }
+      },
+      watchEffect() {
+        return () => {}
+      },
+    }))
+
+    const {
+      configureRealtimeClientTransport,
+      hydrateRealtimeQuery,
+      resetRealtimeClientRuntime,
+    } = await import('@holo-js/realtime/client')
+    const { query } = await import('@holo-js/realtime')
+    await import('../src/runtime/composables/realtime')
+
+    const listPosts = query({
+      name: 'posts.list',
+      access: 'public',
+      handler: async () => [{ id: 1, title: 'First' }],
+    })
+
+    configureRealtimeClientTransport({
+      async query<TResult>() {
+        return {
+          name: 'posts.list',
+          data: [{ id: 1, title: 'First' }] as TResult,
+          dependencies: [],
+          version: 1,
+        }
+      },
+      async mutate<TResult>() {
+        return {
+          name: 'posts.create',
+          data: { created: true } as TResult,
+          dependencies: [],
+        }
+      },
+      subscribe<TResult>(_name: string, _args: Record<string, unknown>, listener: (snapshot: RealtimeSubscriptionSnapshot<TResult>) => void) {
+        realtimeListener = snapshot => listener(snapshot as unknown as RealtimeSubscriptionSnapshot<TResult>)
+        return () => {}
+      },
+    })
+    hydrateRealtimeQuery(listPosts, {}, {
+      name: 'posts.list',
+      data: [{ id: 1, title: 'First' }],
+      dependencies: [],
+      version: 1,
+    })
+
+    const posts = listPosts()
+    realtimeListener?.({
+      name: 'posts.list',
+      data: [
+        { id: 1, title: 'First' },
+        { id: 2, title: 'Second' },
+      ],
+      dependencies: [],
+      version: 2,
+    })
+
+    expect(posts).toEqual([
+      { id: 1, title: 'First' },
+      { id: 2, title: 'Second' },
+    ])
+    resetRealtimeClientRuntime()
   })
 
   it('reads flashed validation errors from the default and named bags', async () => {

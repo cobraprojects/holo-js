@@ -163,7 +163,7 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
     dependencies['@holo-js/mail'] = `^${HOLO_PACKAGE_VERSION}`
   }
 
-  if (optionalPackages.includes('broadcast')) {
+  if (optionalPackages.includes('broadcast') || optionalPackages.includes('realtime')) {
     dependencies['@holo-js/broadcast'] = `^${HOLO_PACKAGE_VERSION}`
     dependencies['@holo-js/flux'] = `^${HOLO_PACKAGE_VERSION}`
     if (options.framework === 'next') {
@@ -173,6 +173,10 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
     } else if (options.framework === 'sveltekit') {
       dependencies['@holo-js/flux-svelte'] = `^${HOLO_PACKAGE_VERSION}`
     }
+  }
+
+  if (optionalPackages.includes('realtime')) {
+    dependencies['@holo-js/realtime'] = `^${HOLO_PACKAGE_VERSION}`
   }
 
   if (optionalPackages.includes('security')) {
@@ -253,6 +257,7 @@ export async function scaffoldProject(
   const notificationsEnabled = optionalPackages.includes('notifications')
   const mailEnabled = optionalPackages.includes('mail')
   const broadcastEnabled = optionalPackages.includes('broadcast')
+  const realtimeEnabled = optionalPackages.includes('realtime')
   const securityEnabled = optionalPackages.includes('security')
   const cacheEnabled = optionalPackages.includes('cache')
   const broadcastEnvFiles = broadcastEnabled ? renderBroadcastEnvFiles() : undefined
@@ -281,6 +286,9 @@ export async function scaffoldProject(
   if (broadcastEnabled) {
     await mkdir(resolve(projectRoot, 'server/broadcast'), { recursive: true })
     await mkdir(resolve(projectRoot, 'server/channels'), { recursive: true })
+  }
+  if (realtimeEnabled) {
+    await mkdir(resolve(projectRoot, 'server/realtime'), { recursive: true })
   }
   await mkdir(resolve(projectRoot, 'server/db/factories'), { recursive: true })
   await mkdir(resolve(projectRoot, 'server/db/migrations'), { recursive: true })

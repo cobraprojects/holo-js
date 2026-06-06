@@ -14,6 +14,7 @@ declare module '@nuxt/kit' {
   }
 
   export function addImports(imports: Array<{ name: string, as?: string, from: string }>): void
+  export function addPlugin(input: { src: string, mode?: 'client' | 'server' | 'all' }): void
   export function addServerPlugin(path: string): void
   export function addServerImportsDir(path: string): void
   export function addServerHandler(input: { route: string, handler: string }): void

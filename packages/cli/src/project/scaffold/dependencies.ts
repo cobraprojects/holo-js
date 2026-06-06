@@ -243,6 +243,10 @@ async function projectHasEventsScaffold(projectRoot: string): Promise<boolean> {
   return await pathExists(eventsRoot) || await pathExists(listenersRoot)
 }
 
+async function projectHasRealtimeScaffold(projectRoot: string): Promise<boolean> {
+  return await pathExists(resolve(projectRoot, 'server/realtime'))
+}
+
 export async function syncManagedDriverDependencies(
   projectRoot: string,
   registry?: GeneratedProjectRegistry,
@@ -265,6 +269,7 @@ export async function syncManagedDriverDependencies(
   const requiredPackages = new Set<string>()
   const hasAuthorizationScaffold = await projectHasAuthorizationScaffold(projectRoot)
   const hasEventsScaffold = await projectHasEventsScaffold(projectRoot)
+  const hasRealtimeScaffold = await projectHasRealtimeScaffold(projectRoot)
   const {
     packageJsonPath,
     parsed,
@@ -346,8 +351,24 @@ export async function syncManagedDriverDependencies(
     requiredPackages.add('@holo-js/notifications')
   }
 
-  if (broadcastConfigured || registryHasBroadcastDefinitions(discoveredRegistry)) {
+  if (broadcastConfigured || registryHasBroadcastDefinitions(discoveredRegistry) || hasRealtimeScaffold) {
     requiredPackages.add('@holo-js/broadcast')
+    requiredPackages.add('@holo-js/flux')
+    const framework = detectProjectFrameworkFromPackageJson(dependencies, devDependencies)
+    if (framework === 'next') {
+      requiredPackages.add('@holo-js/flux-react')
+      requiredPackages.add('@holo-js/adapter-next')
+    } else if (framework === 'nuxt') {
+      requiredPackages.add('@holo-js/flux-vue')
+      requiredPackages.add('@holo-js/adapter-nuxt')
+    } else if (framework === 'sveltekit') {
+      requiredPackages.add('@holo-js/flux-svelte')
+      requiredPackages.add('@holo-js/adapter-sveltekit')
+    }
+  }
+
+  if (hasRealtimeScaffold) {
+    requiredPackages.add('@holo-js/realtime')
   }
 
   if (registryHasAuthorizationDefinitions(discoveredRegistry) || hasAuthorizationScaffold) {
@@ -407,12 +428,17 @@ export async function syncManagedDriverDependencies(
     '@holo-js/cache-db',
     '@holo-js/cache-redis',
     '@holo-js/events',
+    '@holo-js/flux',
+    '@holo-js/flux-react',
+    '@holo-js/flux-svelte',
+    '@holo-js/flux-vue',
     '@holo-js/mail',
     '@holo-js/media',
     '@holo-js/notifications',
     '@holo-js/queue',
     '@holo-js/queue-db',
     '@holo-js/queue-redis',
+    '@holo-js/realtime',
     '@holo-js/security',
     '@holo-js/session',
     '@holo-js/storage',
@@ -863,6 +889,24 @@ async function upsertAuthorizationPackageDependency(projectRoot: string): Promis
   return true
 }
 
+async function upsertRealtimePackageDependency(projectRoot: string): Promise<boolean> {
+  const broadcastResult = await upsertBroadcastPackageDependencies(projectRoot)
+  const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  const nextVersion = resolveManagedHoloPackageVersion('@holo-js/realtime', dependencies, devDependencies)
+  const currentVersion = dependencies['@holo-js/realtime']
+  const currentDevVersion = devDependencies['@holo-js/realtime']
+
+  if (currentVersion === nextVersion && typeof currentDevVersion === 'undefined') {
+    return broadcastResult.updated
+  }
+
+  dependencies['@holo-js/realtime'] = nextVersion
+  delete devDependencies['@holo-js/realtime']
+
+  await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
+  return true
+}
+
 export {
   upsertAuthPackageDependencies,
   upsertAuthorizationPackageDependency,
@@ -872,5 +916,6 @@ export {
   upsertMediaPackageDependency,
   upsertNotificationsPackageDependency,
   upsertQueuePackageDependency,
+  upsertRealtimePackageDependency,
   upsertSecurityPackageDependency,
 }

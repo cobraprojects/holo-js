@@ -4,7 +4,11 @@ export { unsafeSql } from './core/unsafe'
 export { createCapabilities, DEFAULT_CAPABILITIES } from './core/capabilities'
 export {
   configureDatabaseQueryCacheBridge,
+  collectDatabaseQueryDependencies,
   getDatabaseQueryCacheBridge,
+  onDatabaseDependencyInvalidated,
+  recordDatabaseQueryDependencies,
+  resetDatabaseDependencyInvalidationListeners,
   resetDatabaseQueryCacheBridge,
   queryCacheInternals,
 } from './cache'
@@ -204,6 +208,9 @@ export type {
 } from './core/types'
 export type {
   DatabaseQueryCacheBridge,
+  DatabaseDependencyCollectionResult,
+  DatabaseDependencyInvalidationEvent,
+  DatabaseDependencyInvalidationListener,
   QueryCacheConfig,
   QueryCacheFlexibleTtlInput,
   QueryCacheTtlInput,

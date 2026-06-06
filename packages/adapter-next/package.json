@@ -20,6 +20,11 @@
       "import": "./dist/client.mjs",
       "default": "./dist/client.mjs"
     },
+    "./realtime": {
+      "types": "./dist/realtime.d.ts",
+      "import": "./dist/realtime.mjs",
+      "default": "./dist/realtime.mjs"
+    },
     "./runtime": {
       "types": "./dist/runtime.d.ts",
       "import": "./dist/runtime.mjs",
@@ -43,15 +48,20 @@
   },
   "peerDependencies": {
     "@holo-js/forms": "catalog:",
+    "@holo-js/realtime": "catalog:",
     "next": "catalog:",
     "react": "catalog:"
   },
   "peerDependenciesMeta": {
     "@holo-js/forms": {
       "optional": true
+    },
+    "@holo-js/realtime": {
+      "optional": true
     }
   },
   "devDependencies": {
+    "@holo-js/realtime": "catalog:",
     "@types/node": "catalog:",
     "next": "catalog:",
     "tsup": "catalog:",

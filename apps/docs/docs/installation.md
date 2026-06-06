@@ -33,7 +33,7 @@ bun create holo-js my-app
 
 :::
 - storage default disk: `local` or `public`
-- optional packages: `validation`, `forms`, `security`, `notifications`, `mail`, `storage`, `events`, `queue`, `cache`, `auth`, `authorization`, `broadcast`, or none
+- optional packages: `validation`, `forms`, `security`, `notifications`, `mail`, `storage`, `events`, `queue`, `cache`, `auth`, `authorization`, `broadcast`, `realtime`, or none
 
 ## Create a project non-interactively
 
@@ -79,7 +79,7 @@ bun create holo-js my-app \
 
 Use the non-interactive flags for CI, templates, or internal automation.
 
-`validation`, `forms`, `security`, `notifications`, `mail`, `storage`, `events`, `queue`, `cache`, `auth`, `authorization`, and `broadcast` are optional packages. Add them during scaffolding only if the
+`validation`, `forms`, `security`, `notifications`, `mail`, `storage`, `events`, `queue`, `cache`, `auth`, `authorization`, `broadcast`, and `realtime` are optional packages. Add them during scaffolding only if the
 app needs them.
 
 Example optional package sets include `--package forms,validation,notifications`,
@@ -95,6 +95,12 @@ Broadcast setup is installed after scaffolding:
 
 ```bash
 npx holo install broadcast
+```
+
+Realtime setup can also be installed after scaffolding:
+
+```bash
+npx holo install realtime
 ```
 
 Cache setup can also be installed after scaffolding:
@@ -277,6 +283,7 @@ Holo-JS owns:
 - [Notifications](/notifications/)
 - [Mail](/mail/)
 - [Broadcast](/broadcast/)
+- [Realtime](/realtime/)
 - [Cache](/cache/)
 - [Development Workflow](/development/workflow)
 - [Database Getting Started](/database/)

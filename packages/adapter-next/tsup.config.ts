@@ -7,6 +7,7 @@ export default defineConfig({
     index: 'src/index.ts',
     config: 'src/config.ts',
     client: 'src/client.ts',
+    realtime: 'src/realtime.ts',
     runtime: 'src/runtime.ts',
   },
   format: ['esm'],
@@ -14,7 +15,7 @@ export default defineConfig({
   clean: true,
   outDir,
   outExtension: () => ({ js: '.mjs' }),
-  external: ['react', 'next/headers.js', 'next/navigation.js'],
+  external: ['@holo-js/realtime', '@holo-js/realtime/client', 'react', 'next/headers.js', 'next/navigation.js'],
   esbuildOptions(options) {
     options.logLevel = 'warning'
   },

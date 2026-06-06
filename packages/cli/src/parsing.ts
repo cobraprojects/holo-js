@@ -13,8 +13,8 @@ export const SUPPORTED_NEW_FRAMEWORKS = ['nuxt', 'next', 'sveltekit'] as const
 export const SUPPORTED_NEW_DATABASE_DRIVERS = ['sqlite', 'mysql', 'postgres'] as const
 export const SUPPORTED_NEW_PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn', 'bun'] as const
 export const SUPPORTED_NEW_STORAGE_DISKS = ['local', 'public'] as const
-export const SUPPORTED_NEW_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms', 'auth', 'authorization', 'notifications', 'mail', 'broadcast', 'security', 'cache'] as const
-export const SUPPORTED_INSTALL_TARGETS = ['queue', 'events', 'auth', 'authorization', 'notifications', 'mail', 'broadcast', 'security', 'cache', 'media'] as const
+export const SUPPORTED_NEW_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms', 'auth', 'authorization', 'notifications', 'mail', 'broadcast', 'realtime', 'security', 'cache'] as const
+export const SUPPORTED_INSTALL_TARGETS = ['queue', 'events', 'auth', 'authorization', 'notifications', 'mail', 'broadcast', 'realtime', 'security', 'cache', 'media'] as const
 export const SUPPORTED_QUEUE_INSTALL_DRIVERS = ['sync', 'redis', 'database'] as const
 export const SUPPORTED_CACHE_INSTALL_DRIVERS = ['file', 'redis', 'database'] as const
 
@@ -57,6 +57,7 @@ const promptLabels: Readonly<Record<string, string>> = {
   postgres: 'Postgres',
   public: 'Public',
   queue: 'Queue',
+  realtime: 'Realtime',
   redis: 'Redis',
   security: 'Security',
   sqlite: 'SQLite',

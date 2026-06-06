@@ -2,6 +2,7 @@ import { access, mkdir, readdir, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { basename, dirname, extname, relative, resolve } from 'node:path'
 import {
+  addPlugin,
   addServerHandler,
   addServerImportsDir,
   addServerPlugin,
@@ -178,6 +179,7 @@ interface NuxtOptionsWithNitro {
   _holoStorageFinalizeRegistered?: boolean
   _holoStorageRuntimeRegistered?: boolean
   _holoBroadcastAuthRouteRegistered?: boolean
+  _holoRealtimeRouteRegistered?: boolean
   _holoCoreRuntimeRegistered?: boolean
   _holoTypesRegistered?: boolean
 }
@@ -458,6 +460,26 @@ export default defineNuxtModule<ModuleOptions>({
         handler: resolver.resolve('./runtime/server/routes/broadcast-auth.post'),
       })
       opts._holoBroadcastAuthRouteRegistered = true
+    }
+
+    if (hasProjectPackage(rootDir, '@holo-js/realtime') && !opts._holoRealtimeRouteRegistered) {
+      addPlugin({
+        src: resolver.resolve('./runtime/plugins/realtime.client'),
+        mode: 'client',
+      })
+      addServerHandler({
+        route: '/holo/realtime/query',
+        handler: resolver.resolve('./runtime/server/routes/realtime-query.post'),
+      })
+      addServerHandler({
+        route: '/holo/realtime/mutation',
+        handler: resolver.resolve('./runtime/server/routes/realtime-mutation.post'),
+      })
+      addServerHandler({
+        route: '/holo/realtime/stream',
+        handler: resolver.resolve('./runtime/server/routes/realtime-stream.get'),
+      })
+      opts._holoRealtimeRouteRegistered = true
     }
 
     if (

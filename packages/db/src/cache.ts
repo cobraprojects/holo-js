@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { ConfigurationError } from './core/errors'
 import type { DatabaseContext } from './core/DatabaseContext'
 import type { CompiledStatement } from './core/types'
@@ -50,12 +51,30 @@ export interface DatabaseQueryCacheBridge {
   ): Promise<void>
 }
 
+export interface DatabaseDependencyInvalidationEvent {
+  readonly connectionName: string
+  readonly dependencies: readonly string[]
+}
+
+export type DatabaseDependencyInvalidationListener = (
+  event: DatabaseDependencyInvalidationEvent,
+) => void | Promise<void>
+
+export interface DatabaseDependencyCollectionResult<TValue> {
+  readonly value: TValue
+  readonly dependencies: readonly string[]
+}
+
+const databaseDependencyCollector = new AsyncLocalStorage<Set<string>>()
+
 function getQueryCacheBridgeState(): {
   bridge?: DatabaseQueryCacheBridge
+  dependencyInvalidationListeners?: Set<DatabaseDependencyInvalidationListener>
 } {
   const runtime = globalThis as typeof globalThis & {
     __holoDbQueryCacheBridge__?: {
       bridge?: DatabaseQueryCacheBridge
+      dependencyInvalidationListeners?: Set<DatabaseDependencyInvalidationListener>
     }
   }
 
@@ -73,6 +92,60 @@ export function getDatabaseQueryCacheBridge(): DatabaseQueryCacheBridge | undefi
 
 export function resetDatabaseQueryCacheBridge(): void {
   getQueryCacheBridgeState().bridge = undefined
+}
+
+export function onDatabaseDependencyInvalidated(
+  listener: DatabaseDependencyInvalidationListener,
+): () => void {
+  const state = getQueryCacheBridgeState()
+  state.dependencyInvalidationListeners ??= new Set<DatabaseDependencyInvalidationListener>()
+  state.dependencyInvalidationListeners.add(listener)
+
+  return () => {
+    state.dependencyInvalidationListeners?.delete(listener)
+  }
+}
+
+export function resetDatabaseDependencyInvalidationListeners(): void {
+  getQueryCacheBridgeState().dependencyInvalidationListeners = undefined
+}
+
+export async function collectDatabaseQueryDependencies<TValue>(
+  callback: () => TValue | Promise<TValue>,
+): Promise<DatabaseDependencyCollectionResult<TValue>> {
+  const dependencies = new Set<string>()
+  const value = await databaseDependencyCollector.run(dependencies, callback)
+
+  return Object.freeze({
+    value,
+    dependencies: Object.freeze([...dependencies]),
+  })
+}
+
+export function recordDatabaseQueryDependencies(dependencies: readonly string[] | undefined): void {
+  if (!dependencies || dependencies.length === 0) {
+    return
+  }
+
+  const active = databaseDependencyCollector.getStore()
+  if (!active) {
+    return
+  }
+
+  for (const dependency of dependencies) {
+    active.add(dependency)
+  }
+}
+
+async function notifyDatabaseDependencyInvalidationListeners(
+  event: DatabaseDependencyInvalidationEvent,
+): Promise<void> {
+  const listeners = getQueryCacheBridgeState().dependencyInvalidationListeners
+  if (!listeners || listeners.size === 0) {
+    return
+  }
+
+  await Promise.all([...listeners].map(listener => listener(event)))
 }
 
 export function normalizeQueryCacheConfig(
@@ -228,22 +301,29 @@ export async function invalidateQueryCacheDependencies(
   connection: DatabaseContext,
   dependencies: readonly string[],
 ): Promise<void> {
-  const bridge = getDatabaseQueryCacheBridge()
-  if (!bridge || dependencies.length === 0) {
+  if (dependencies.length === 0) {
     return
+  }
+
+  const invalidate = async () => {
+    const bridge = getDatabaseQueryCacheBridge()
+    await bridge?.invalidateDependencies(dependencies)
+    await notifyDatabaseDependencyInvalidationListeners({
+      connectionName: connection.getConnectionName(),
+      dependencies,
+    })
   }
 
   if (connection.getScope().kind === 'root') {
-    await bridge.invalidateDependencies(dependencies)
+    await invalidate()
     return
   }
 
-  connection.afterCommit(async () => {
-    await bridge.invalidateDependencies(dependencies)
-  })
+  connection.afterCommit(invalidate)
 }
 
 export const queryCacheInternals = {
+  collectDatabaseQueryDependencies,
   configureDatabaseQueryCacheBridge,
   createDeterministicQueryCacheKey,
   createTableCacheDependency,
@@ -251,8 +331,12 @@ export const queryCacheInternals = {
   inferAutomaticQueryCacheDependencies,
   normalizeQueryCacheConfig,
   normalizeQueryCacheDependencies,
+  notifyDatabaseDependencyInvalidationListeners,
+  onDatabaseDependencyInvalidated,
+  recordDatabaseQueryDependencies,
   resolveQueryCacheDependencies,
   resolveQueryCacheKey,
+  resetDatabaseDependencyInvalidationListeners,
   supportsAutomaticPredicateInvalidation,
   supportsAutomaticQueryCacheInvalidation,
 }

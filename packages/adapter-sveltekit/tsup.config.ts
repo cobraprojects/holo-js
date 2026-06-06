@@ -7,6 +7,7 @@ export default defineConfig({
     index: 'src/index.ts',
     config: 'src/config.ts',
     client: 'src/client.ts',
+    realtime: 'src/realtime.ts',
     transport: 'src/transport.ts',
   },
   format: ['esm'],
@@ -14,7 +15,7 @@ export default defineConfig({
   clean: true,
   outDir,
   outExtension: () => ({ js: '.mjs' }),
-  external: ['$app/stores', 'svelte/reactivity', 'svelte/store'],
+  external: ['$app/stores', '@holo-js/realtime', '@holo-js/realtime/client', 'svelte/reactivity', 'svelte/store'],
   esbuildOptions(options) {
     options.logLevel = 'warning'
   },

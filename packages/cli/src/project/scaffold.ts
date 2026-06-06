@@ -26,6 +26,7 @@ import {
   type MediaInstallResult,
   type NotificationsInstallResult,
   type QueueInstallResult,
+  type RealtimeInstallResult,
   type SecurityInstallResult,
   type SupportedCacheInstallerDriver,
   type SupportedQueueInstallerDriver,
@@ -82,6 +83,7 @@ import {
   upsertMediaPackageDependency,
   upsertNotificationsPackageDependency,
   upsertQueuePackageDependency,
+  upsertRealtimePackageDependency,
   upsertSecurityPackageDependency,
 } from './scaffold/dependencies'
 import {
@@ -99,6 +101,15 @@ import {
 import {
   renderNextBroadcastConfigRoute,
   renderNextGeneratedBroadcastConfigRoute,
+  renderNextGeneratedRealtimeMutationRoute,
+  renderNextGeneratedRealtimeQueryRoute,
+  renderNextGeneratedRealtimeStreamRoute,
+  renderNextRealtimeMutationRoute,
+  renderNextRealtimeProvider,
+  renderNextRealtimeQueryRoute,
+  renderNextRealtimeStreamRoute,
+  renderNextRuntimeBootstrap,
+  renderSvelteRealtimeClientHook,
 } from './scaffold/framework-renderers'
 import {
   createAuthMigrationFiles,
@@ -146,6 +157,32 @@ async function resolveExistingModelPath(modelsRoot: string, modelName: string): 
   }
 
   return undefined
+}
+
+function injectNextRealtimeProvider(layoutContents: string): string | undefined {
+  if (layoutContents.includes('HoloRealtime')) {
+    return undefined
+  }
+
+  const nextContents = layoutContents
+    .replace(
+      '<body>{children}</body>',
+      '<body><HoloRealtime>{children}</HoloRealtime></body>',
+    )
+
+  if (nextContents === layoutContents) {
+    return undefined
+  }
+
+  return `import { HoloRealtime } from './holo/realtime/provider'\n${nextContents}`
+}
+
+function injectSvelteRealtimeClientHook(hookContents: string): string | undefined {
+  if (hookContents.includes('@holo-js/adapter-sveltekit/realtime')) {
+    return undefined
+  }
+
+  return `${renderSvelteRealtimeClientHook()}${hookContents}`
 }
 
 async function resolveExistingAuthMigrationFiles(migrationsRoot: string): Promise<Map<AuthMigrationSlug, string>> {
@@ -529,6 +566,112 @@ export async function installEventsIntoProject(
     updatedPackageJson: await upsertEventsPackageDependency(projectRoot),
     createdEventsDirectory: !eventsDirectoryExists,
     createdListenersDirectory: !listenersDirectoryExists,
+  }
+}
+
+export async function installRealtimeIntoProject(
+  projectRoot: string,
+): Promise<RealtimeInstallResult> {
+  await loadProjectConfig(projectRoot, { required: true })
+  const realtimeRoot = resolve(projectRoot, 'server/realtime')
+  const realtimeDirectoryExists = await pathExists(realtimeRoot)
+  const { dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  const framework = detectProjectFrameworkFromPackageJson(dependencies, devDependencies)
+  let createdFrameworkSetup = false
+
+  await mkdir(realtimeRoot, { recursive: true })
+
+  if (framework === 'next') {
+    const routes = [
+      { path: 'app/holo/realtime/provider.tsx', contents: renderNextRealtimeProvider() },
+      { path: 'app/holo/realtime/query/route.ts', contents: renderNextRealtimeQueryRoute() },
+      { path: 'app/holo/realtime/mutation/route.ts', contents: renderNextRealtimeMutationRoute() },
+      { path: 'app/holo/realtime/stream/route.ts', contents: renderNextRealtimeStreamRoute() },
+      { path: '.holo-js/generated/next/holo.ts', contents: renderNextHoloHelper() },
+      { path: '.holo-js/generated/next/bootstrap.mjs', contents: renderNextRuntimeBootstrap() },
+      { path: '.holo-js/generated/next/realtime-query-route.ts', contents: renderNextGeneratedRealtimeQueryRoute() },
+      { path: '.holo-js/generated/next/realtime-mutation-route.ts', contents: renderNextGeneratedRealtimeMutationRoute() },
+      { path: '.holo-js/generated/next/realtime-stream-route.ts', contents: renderNextGeneratedRealtimeStreamRoute() },
+    ] as const
+
+    for (const route of routes) {
+      const routePath = resolve(projectRoot, route.path)
+      if (!(await pathExists(routePath))) {
+        createdFrameworkSetup = true
+      }
+      await writeTextFile(routePath, route.contents)
+    }
+    const layoutPath = resolve(projectRoot, 'app/layout.tsx')
+    if (await pathExists(layoutPath)) {
+      const layoutContents = await readTextFile(layoutPath)
+      const nextLayoutContents = layoutContents ? injectNextRealtimeProvider(layoutContents) : undefined
+      if (nextLayoutContents) {
+        createdFrameworkSetup = true
+        await writeTextFile(layoutPath, nextLayoutContents)
+      }
+    }
+  } else if (framework === 'sveltekit') {
+    const routes = [
+      {
+        path: 'src/routes/holo/realtime/query/+server.ts',
+        contents: [
+          'import { handleRealtimeQueryRequest } from \'@holo-js/realtime/server\'',
+          '',
+          'export async function POST({ request }: { request: Request }) {',
+          '  return await handleRealtimeQueryRequest(request, { projectRoot: process.cwd() })',
+          '}',
+          '',
+        ].join('\n'),
+      },
+      {
+        path: 'src/routes/holo/realtime/mutation/+server.ts',
+        contents: [
+          'import { handleRealtimeMutationRequest } from \'@holo-js/realtime/server\'',
+          '',
+          'export async function POST({ request }: { request: Request }) {',
+          '  return await handleRealtimeMutationRequest(request, { projectRoot: process.cwd() })',
+          '}',
+          '',
+        ].join('\n'),
+      },
+      {
+        path: 'src/routes/holo/realtime/stream/+server.ts',
+        contents: [
+          'import { handleRealtimeStreamRequest } from \'@holo-js/realtime/server\'',
+          '',
+          'export async function GET({ request }: { request: Request }) {',
+          '  return await handleRealtimeStreamRequest(request, { projectRoot: process.cwd() })',
+          '}',
+          '',
+        ].join('\n'),
+      },
+    ] as const
+
+    for (const route of routes) {
+      const routePath = resolve(projectRoot, route.path)
+      if (!(await pathExists(routePath))) {
+        createdFrameworkSetup = true
+      }
+      await writeTextFile(routePath, route.contents)
+    }
+    const clientHookPath = resolve(projectRoot, 'src/hooks.client.ts')
+    if (await pathExists(clientHookPath)) {
+      const existingHookContents = await readTextFile(clientHookPath)
+      const hookContents = existingHookContents ? injectSvelteRealtimeClientHook(existingHookContents) : undefined
+      if (hookContents) {
+        createdFrameworkSetup = true
+        await writeTextFile(clientHookPath, hookContents)
+      }
+    } else {
+      createdFrameworkSetup = true
+      await writeTextFile(clientHookPath, renderSvelteRealtimeClientHook())
+    }
+  }
+
+  return {
+    updatedPackageJson: await upsertRealtimePackageDependency(projectRoot),
+    createdRealtimeDirectory: !realtimeDirectoryExists,
+    createdFrameworkSetup,
   }
 }
 
