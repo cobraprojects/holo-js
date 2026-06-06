@@ -22,8 +22,13 @@ This generates:
 - `config/broadcast.ts`
 - `server/broadcast/`
 - `server/channels/`
-- `/broadcasting/auth` route scaffold
+- `/broadcasting/config` route integration
+- `/broadcasting/auth` route integration
 - framework Flux package dependency (`@holo-js/flux-react`, `@holo-js/flux-vue`, or `@holo-js/flux-svelte`)
+
+Next.js receives generated public route files for `/broadcasting/config` and `/broadcasting/auth`.
+Nuxt and SvelteKit receive internal framework route integration for the same URLs.
+User code does not create or import these routes directly.
 
 ## File Generation
 

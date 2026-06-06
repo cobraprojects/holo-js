@@ -177,8 +177,23 @@ interface NuxtOptionsWithNitro {
   _holoStorageModuleOptions?: StorageModuleOptions
   _holoStorageFinalizeRegistered?: boolean
   _holoStorageRuntimeRegistered?: boolean
+  _holoBroadcastAuthRouteRegistered?: boolean
   _holoCoreRuntimeRegistered?: boolean
   _holoTypesRegistered?: boolean
+}
+
+function hasProjectPackage(rootDir: string, packageName: string): boolean {
+  const projectRequire = createRequire(resolve(rootDir, 'package.json'))
+  try {
+    projectRequire.resolve(packageName)
+    return true
+  } catch (error) {
+    if (isModuleResolutionFailure(error)) {
+      return false
+    }
+
+    throw error
+  }
 }
 
 function resolveClientOptimizeDeps(rootDir: string): string[] {
@@ -431,6 +446,18 @@ export default defineNuxtModule<ModuleOptions>({
     if (storageModule && !opts._holoStorageRuntimeRegistered) {
       addServerPlugin(resolver.resolve('./runtime/plugins/storage'))
       opts._holoStorageRuntimeRegistered = true
+    }
+
+    if (hasProjectPackage(rootDir, '@holo-js/broadcast') && !opts._holoBroadcastAuthRouteRegistered) {
+      addServerHandler({
+        route: '/broadcasting/config',
+        handler: resolver.resolve('./runtime/server/routes/broadcast-config.get'),
+      })
+      addServerHandler({
+        route: '/broadcasting/auth',
+        handler: resolver.resolve('./runtime/server/routes/broadcast-auth.post'),
+      })
+      opts._holoBroadcastAuthRouteRegistered = true
     }
 
     if (

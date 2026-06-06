@@ -1935,16 +1935,21 @@ function normalizeBroadcastConnectionOptions(
 
 function normalizeBroadcastWorkerConfig(
   worker: BroadcastWorkerConfig | undefined,
+  connectionOptions?: NormalizedBroadcastConnectionOptionsConfig,
+  configuredConnectionPort?: BroadcastConnectionOptionsConfig['port'],
 ): NormalizedBroadcastWorkerConfig {
   const scaling = worker?.scaling
-  const publicScheme = normalizeBroadcastScheme(worker?.publicScheme, 'https', 'Broadcast worker public scheme')
+  const publicScheme = normalizeBroadcastScheme(worker?.publicScheme, connectionOptions?.scheme ?? 'https', 'Broadcast worker public scheme')
+  const fallbackPort = typeof configuredConnectionPort === 'undefined'
+    ? DEFAULT_BROADCAST_WORKER_PORT
+    : normalizeBroadcastPort(configuredConnectionPort, DEFAULT_BROADCAST_WORKER_PORT, 'Broadcast worker port')
   if (scaling && scaling.driver !== 'redis') {
     throw new Error('[Holo Broadcast] Broadcast worker scaling driver must be "redis".')
   }
 
   return Object.freeze({
     host: normalizeOptionalBroadcastString(worker?.host, 'Broadcast worker host') ?? DEFAULT_BROADCAST_WORKER_HOST,
-    port: normalizeBroadcastPort(worker?.port, DEFAULT_BROADCAST_WORKER_PORT, 'Broadcast worker port'),
+    port: normalizeBroadcastPort(worker?.port, fallbackPort, 'Broadcast worker port'),
     path: normalizeOptionalBroadcastString(worker?.path, 'Broadcast worker path') ?? DEFAULT_BROADCAST_WORKER_PATH,
     publicHost: normalizeOptionalBroadcastString(worker?.publicHost, 'Broadcast worker public host') ?? undefined,
     publicPort: typeof worker?.publicPort === 'undefined'
@@ -2072,11 +2077,21 @@ export function normalizeBroadcastConfig(
       + `Available connections: ${Object.keys(normalizedConnections).join(', ')}`,
     )
   }
+  const defaultBroadcastConnection = normalizedConnections[defaultConnection]
+  const defaultHoloConnectionOptions = defaultBroadcastConnection
+    && defaultBroadcastConnection.driver === 'holo'
+    && 'options' in defaultBroadcastConnection
+    ? defaultBroadcastConnection.options
+    : undefined
+  const configuredDefaultConnection = config.connections?.[defaultConnection]
+  const configuredDefaultHoloConnectionPort = configuredDefaultConnection?.driver === 'holo'
+    ? configuredDefaultConnection.options?.port
+    : undefined
 
   return Object.freeze({
     default: defaultConnection,
     connections: Object.freeze(normalizedConnections),
-    worker: normalizeBroadcastWorkerConfig(config.worker),
+    worker: normalizeBroadcastWorkerConfig(config.worker, defaultHoloConnectionOptions, configuredDefaultHoloConnectionPort),
   })
 }
 

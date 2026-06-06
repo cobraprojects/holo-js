@@ -6,6 +6,7 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     auth: 'src/auth.ts',
+    'client-config': 'src/client-config.ts',
     contracts: 'src/contracts.ts',
     runtime: 'src/runtime.ts',
   },

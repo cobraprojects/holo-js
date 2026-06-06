@@ -331,6 +331,9 @@ describe('@holo-js/security framework csrf middleware', () => {
     state.url = new URL('https://app.test/webhooks/stripe')
     await expect(middleware({ node: { req: { headers: {} } } })).resolves.toBeUndefined()
 
+    state.url = new URL('https://app.test/broadcasting/auth')
+    await expect(middleware({ node: { req: { headers: {} } } })).resolves.toBeUndefined()
+
     resetSecurityRuntime()
     state.url = new URL('https://app.test/login')
     await expect(middleware({ node: { req: { headers: {} } } })).rejects.toThrow(/Security runtime/)

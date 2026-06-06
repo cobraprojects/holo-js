@@ -140,6 +140,15 @@ type PusherConnectorOptions = {
   readonly transport?: 'mock'
 }
 
+type HoloWebSocketConnectorOptions = {
+  readonly key?: string
+  readonly host?: string
+  readonly port?: number
+  readonly path?: string
+  readonly scheme?: 'http' | 'https' | 'ws' | 'wss'
+  readonly configEndpoint?: string
+}
+
 type PusherConnectorDebug = {
   emitEvent(channel: string, event: string, payload: BroadcastJsonObject): void
   emitNotification(channel: string, payload: BroadcastJsonObject): void
@@ -164,7 +173,46 @@ type PusherChannelState = {
   members: readonly BroadcastJsonObject[]
 }
 
+type HoloWebSocketLike = {
+  readonly readyState: number
+  send(data: string): void
+  close(): void
+  addEventListener(event: 'open', listener: () => void): void
+  addEventListener(event: 'message', listener: (event: { readonly data: unknown }) => void): void
+  addEventListener(event: 'close', listener: () => void): void
+  addEventListener(event: 'error', listener: () => void): void
+}
+
+type HoloWebSocketConstructor = new (url: string) => HoloWebSocketLike
+type HoloWebSocketConfigResponse = {
+  readonly ok: boolean
+  json(): Promise<unknown>
+}
+type HoloWebSocketFetch = (
+  input: string,
+  init?: {
+    readonly headers?: Readonly<Record<string, string>>
+    readonly credentials?: 'same-origin'
+  },
+) => Promise<HoloWebSocketConfigResponse>
+
+type HoloWebSocketGlobals = typeof globalThis & {
+  readonly WebSocket?: HoloWebSocketConstructor
+  readonly fetch?: HoloWebSocketFetch
+  readonly window?: unknown
+  readonly location?: {
+    readonly hostname?: string
+    readonly protocol?: string
+  }
+}
+
+type HoloConnectorChannelState = PusherChannelState & {
+  subscribed: boolean
+}
+
 type SubscriptionRegistry = Map<string, Set<() => void>>
+
+const WEB_SOCKET_OPEN = 1
 
 function normalizeRequiredString(value: string, label: string): string {
   const normalized = value.trim()
@@ -401,6 +449,416 @@ function createPusherConnector(options: PusherConnectorOptions = {}): FluxConnec
           }
         },
         leave() {
+          channels.delete(`${state.kind}:${state.name}`)
+        },
+      })
+    },
+  })
+}
+
+function parseJsonObject(value: string): BroadcastJsonObject {
+  const parsed = JSON.parse(value) as unknown
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return Object.freeze({})
+  }
+
+  return parsed as BroadcastJsonObject
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function parseWireData(value: unknown): BroadcastJsonObject {
+  if (typeof value === 'string') {
+    return parseJsonObject(value)
+  }
+
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as BroadcastJsonObject
+  }
+
+  return Object.freeze({})
+}
+
+function normalizeOptionalConnectorString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function normalizeOptionalConnectorPort(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined
+}
+
+function normalizeOptionalConnectorScheme(value: unknown): HoloWebSocketConnectorOptions['scheme'] | undefined {
+  if (value === 'http' || value === 'https' || value === 'ws' || value === 'wss') {
+    return value
+  }
+
+  return undefined
+}
+
+function mergeHoloWebSocketConnectorOptions(
+  discovered: HoloWebSocketConnectorOptions,
+  explicit: HoloWebSocketConnectorOptions,
+): HoloWebSocketConnectorOptions {
+  return Object.freeze({
+    ...discovered,
+    ...(typeof explicit.key === 'undefined' ? {} : { key: explicit.key }),
+    ...(typeof explicit.host === 'undefined' ? {} : { host: explicit.host }),
+    ...(typeof explicit.port === 'undefined' ? {} : { port: explicit.port }),
+    ...(typeof explicit.path === 'undefined' ? {} : { path: explicit.path }),
+    ...(typeof explicit.scheme === 'undefined' ? {} : { scheme: explicit.scheme }),
+    ...(typeof explicit.configEndpoint === 'undefined' ? {} : { configEndpoint: explicit.configEndpoint }),
+  })
+}
+
+function normalizeHoloWebSocketConnectorConfig(value: unknown): HoloWebSocketConnectorOptions {
+  if (!isRecord(value)) {
+    return Object.freeze({})
+  }
+
+  return Object.freeze({
+    ...(normalizeOptionalConnectorString(value.key) ? { key: normalizeOptionalConnectorString(value.key) } : {}),
+    ...(normalizeOptionalConnectorString(value.host) ? { host: normalizeOptionalConnectorString(value.host) } : {}),
+    ...(normalizeOptionalConnectorPort(value.port) ? { port: normalizeOptionalConnectorPort(value.port) } : {}),
+    ...(normalizeOptionalConnectorString(value.path) ? { path: normalizeOptionalConnectorString(value.path) } : {}),
+    ...(normalizeOptionalConnectorScheme(value.scheme) ? { scheme: normalizeOptionalConnectorScheme(value.scheme) } : {}),
+  })
+}
+
+function canDiscoverHoloWebSocketConnectorOptions(globals: HoloWebSocketGlobals): boolean {
+  return !!globals.fetch && !!globals.location && typeof globals.window !== 'undefined'
+}
+
+async function resolveHoloWebSocketConnectorOptions(
+  options: HoloWebSocketConnectorOptions,
+  globals: HoloWebSocketGlobals,
+): Promise<HoloWebSocketConnectorOptions> {
+  if (!canDiscoverHoloWebSocketConnectorOptions(globals)) {
+    return options
+  }
+
+  try {
+    const response = await globals.fetch(options.configEndpoint ?? '/broadcasting/config', {
+      headers: {
+        accept: 'application/json',
+      },
+      credentials: 'same-origin',
+    })
+    if (!response.ok) {
+      return options
+    }
+
+    return mergeHoloWebSocketConnectorOptions(
+      normalizeHoloWebSocketConnectorConfig(await response.json()),
+      options,
+    )
+  } catch {
+    return options
+  }
+}
+
+function wireChannelName(kind: FluxChannelKind, name: string): string {
+  if (kind === 'private') {
+    return `private-${name}`
+  }
+
+  if (kind === 'presence') {
+    return `presence-${name}`
+  }
+
+  return name
+}
+
+function resolveWireChannelKey(channel: string): string {
+  if (channel.startsWith('private-')) {
+    return `private:${channel.slice('private-'.length)}`
+  }
+
+  if (channel.startsWith('presence-')) {
+    return `presence:${channel.slice('presence-'.length)}`
+  }
+
+  return `public:${channel}`
+}
+
+function resolveBrowserHost(host: string | undefined, globals: HoloWebSocketGlobals): string {
+  const normalized = host?.trim()
+  if (!normalized || normalized === '0.0.0.0' || normalized === '127.0.0.1') {
+    return globals.location?.hostname?.trim() || normalized || '127.0.0.1'
+  }
+
+  return normalized
+}
+
+function resolveWebSocketScheme(
+  scheme: HoloWebSocketConnectorOptions['scheme'],
+  globals: HoloWebSocketGlobals,
+): 'ws' | 'wss' {
+  if (scheme === 'wss' || scheme === 'https') {
+    return 'wss'
+  }
+
+  if (scheme === 'ws' || scheme === 'http') {
+    return 'ws'
+  }
+
+  return globals.location?.protocol === 'https:' ? 'wss' : 'ws'
+}
+
+function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {}): FluxConnector {
+  const channels = new Map<string, HoloConnectorChannelState>()
+  const statusListeners = new Set<(status: FluxConnectionStatus) => void>()
+  let status: FluxConnectionStatus = 'idle'
+  let socket: HoloWebSocketLike | undefined
+  let connecting: Promise<void> | undefined
+
+  const setStatus = (next: FluxConnectionStatus): void => {
+    if (status === next) {
+      return
+    }
+
+    status = next
+    notifyStatusListeners(statusListeners, status)
+  }
+
+  const sendMessage = (message: Record<string, unknown>): void => {
+    if (socket?.readyState === WEB_SOCKET_OPEN) {
+      socket.send(JSON.stringify(message))
+    }
+  }
+
+  const flushSubscriptions = (): void => {
+    for (const state of channels.values()) {
+      if (state.subscribed) {
+        continue
+      }
+
+      sendMessage({
+        event: 'pusher:subscribe',
+        data: {
+          channel: wireChannelName(state.kind, state.name),
+        },
+      })
+      state.subscribed = true
+    }
+  }
+
+  const handleMessage = (event: { readonly data: unknown }): void => {
+    if (typeof event.data !== 'string') {
+      return
+    }
+
+    const message = parseJsonObject(event.data)
+    const eventName = typeof message.event === 'string' ? message.event : ''
+    const channel = typeof message.channel === 'string' ? message.channel : undefined
+    const payload = parseWireData(message.data)
+
+    if (eventName === 'pusher:connection_established') {
+      flushSubscriptions()
+      return
+    }
+
+    if (!channel) {
+      return
+    }
+
+    const state = channels.get(resolveWireChannelKey(channel))
+    if (!state) {
+      return
+    }
+
+    if (eventName === 'pusher_internal:subscription_succeeded') {
+      const presence = payload.presence
+      if (presence && typeof presence === 'object' && !Array.isArray(presence)) {
+        const hash = (presence as { readonly hash?: unknown }).hash
+        state.members = Object.freeze(
+          hash && typeof hash === 'object' && !Array.isArray(hash)
+            ? Object.values(hash as Record<string, BroadcastJsonObject>)
+            : [],
+        )
+        for (const callback of state.memberListeners) {
+          callback(state.members)
+        }
+      }
+      return
+    }
+
+    if (eventName === 'pusher_internal:member_added') {
+      const member = parseWireData(payload.member)
+      state.members = Object.freeze([...state.members, member])
+      for (const callback of state.memberListeners) {
+        callback(state.members)
+      }
+      return
+    }
+
+    if (eventName === 'pusher_internal:member_removed') {
+      const member = parseWireData(payload.member)
+      const key = presenceMemberKey(member)
+      state.members = Object.freeze(state.members.filter(candidate => presenceMemberKey(candidate) !== key))
+      for (const callback of state.memberListeners) {
+        callback(state.members)
+      }
+      return
+    }
+
+    if (eventName.startsWith('client-')) {
+      const whisper = eventName.slice('client-'.length)
+      for (const callback of state.whisperListeners.get(whisper) ?? []) {
+        callback(payload)
+      }
+      return
+    }
+
+    for (const callback of state.eventListeners.get(eventName) ?? []) {
+      callback(payload)
+    }
+  }
+
+  const ensureConnected = async (): Promise<void> => {
+    const globals = globalThis as HoloWebSocketGlobals
+    const WebSocketConstructor = globals.WebSocket
+    if (!WebSocketConstructor) {
+      return
+    }
+
+    if (socket?.readyState === WEB_SOCKET_OPEN) {
+      flushSubscriptions()
+      return
+    }
+
+    if (connecting) {
+      await connecting
+      return
+    }
+
+    const resolvedOptions = canDiscoverHoloWebSocketConnectorOptions(globals)
+      ? await resolveHoloWebSocketConnectorOptions(options, globals)
+      : options
+    const scheme = resolveWebSocketScheme(resolvedOptions.scheme, globals)
+    const host = resolveBrowserHost(resolvedOptions.host, globals)
+    const port = resolvedOptions.port ?? 8080
+    const path = resolvedOptions.path?.trim() || '/app'
+    const key = resolvedOptions.key?.trim() || 'app-key'
+    const normalizedPath = `/${path.replace(/^\/+|\/+$/g, '')}`
+    const url = `${scheme}://${host}:${port}${normalizedPath}/${encodeURIComponent(key)}`
+
+    setStatus('connecting')
+    connecting = new Promise<void>((resolve, reject) => {
+      const nextSocket = new WebSocketConstructor(url)
+      socket = nextSocket
+      nextSocket.addEventListener('open', () => {
+        setStatus('connected')
+        flushSubscriptions()
+        resolve()
+      })
+      nextSocket.addEventListener('message', handleMessage)
+      nextSocket.addEventListener('close', () => {
+        socket = undefined
+        connecting = undefined
+        for (const state of channels.values()) {
+          state.subscribed = false
+        }
+        setStatus('disconnected')
+      })
+      nextSocket.addEventListener('error', () => {
+        connecting = undefined
+        setStatus('disconnected')
+        reject(new Error('[@holo-js/flux] WebSocket connection failed.'))
+      })
+    }).finally(() => {
+      connecting = undefined
+    })
+
+    await connecting
+  }
+
+  const ensureChannel = (name: string, kind: FluxChannelKind): HoloConnectorChannelState => {
+    const key = `${kind}:${name}`
+    const existing = channels.get(key)
+    if (existing) {
+      return existing
+    }
+
+    const state: HoloConnectorChannelState = {
+      name,
+      kind,
+      eventListeners: new Map(),
+      whisperListeners: new Map(),
+      notificationListeners: new Set(),
+      memberListeners: new Set(),
+      members: Object.freeze([]),
+      subscribed: false,
+    }
+    channels.set(key, state)
+    return state
+  }
+
+  return Object.freeze({
+    async connect() {
+      await ensureConnected()
+    },
+    async disconnect() {
+      socket?.close()
+      socket = undefined
+      connecting = undefined
+      channels.clear()
+      setStatus('disconnected')
+    },
+    getStatus() {
+      return status
+    },
+    onStatusChange(callback: (status: FluxConnectionStatus) => void) {
+      statusListeners.add(callback)
+      return () => {
+        statusListeners.delete(callback)
+      }
+    },
+    subscribe(channel: string, kind: FluxChannelKind) {
+      const state = ensureChannel(channel, kind)
+      void ensureConnected().catch(() => undefined)
+      return Object.freeze({
+        name: state.name,
+        kind: state.kind,
+        get members() {
+          return state.members
+        },
+        onEvent(event: string, callback: (payload: BroadcastJsonObject) => void) {
+          return addCallback(state.eventListeners, event, callback)
+        },
+        onMembersChange(callback: (members: readonly BroadcastJsonObject[]) => void) {
+          state.memberListeners.add(callback)
+          return () => {
+            state.memberListeners.delete(callback)
+          }
+        },
+        onNotification(callback: (payload: BroadcastJsonObject) => void) {
+          state.notificationListeners.add(callback)
+          return () => {
+            state.notificationListeners.delete(callback)
+          }
+        },
+        onWhisper(name: string, callback: (payload: BroadcastJsonObject) => void) {
+          return addCallback(state.whisperListeners, name, callback)
+        },
+        async sendWhisper(name: string, payload: BroadcastJsonObject) {
+          await ensureConnected()
+          sendMessage({
+            event: `client-${name}`,
+            channel: wireChannelName(state.kind, state.name),
+            data: payload,
+          })
+        },
+        leave() {
+          if (state.subscribed) {
+            sendMessage({
+              event: 'pusher:unsubscribe',
+              data: {
+                channel: wireChannelName(state.kind, state.name),
+              },
+            })
+          }
           channels.delete(`${state.kind}:${state.name}`)
         },
       })
@@ -702,7 +1160,13 @@ export function createFluxClient<const TManifest extends GeneratedBroadcastManif
   return Object.freeze(client) as FluxClient<TManifest> & ConnectorDebugCarrier
 }
 
-let defaultFluxClient = createFluxClient()
+function createDefaultFluxClient(): FluxClient {
+  return createFluxClient({
+    connector: createHoloWebSocketConnector(),
+  })
+}
+
+let defaultFluxClient = createDefaultFluxClient()
 
 export function configureFluxClient(options: FluxClientOptions | FluxClient): FluxClient {
   defaultFluxClient = 'channel' in options ? options : createFluxClient(options)
@@ -714,7 +1178,7 @@ export function getFluxClient(): FluxClient {
 }
 
 export function resetFluxClient(): void {
-  defaultFluxClient = createFluxClient()
+  defaultFluxClient = createDefaultFluxClient()
 }
 
 export const flux = new Proxy({} as FluxClient, {
@@ -730,6 +1194,7 @@ export const flux = new Proxy({} as FluxClient, {
 })
 
 export const fluxInternals = {
+  createHoloWebSocketConnector,
   createUnavailableConnector,
   createPusherConnector,
   createPresenceSubscription,

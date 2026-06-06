@@ -2832,6 +2832,13 @@ export default defineConfig({
         provider: '   ',
       },
     }).workos).toEqual(normalizeAuthConfig().workos)
+    expect(normalizeAuthConfig({
+      workos: {
+        identityStore: hostedIdentityStore,
+      },
+    }).workos).toEqual({
+      identityStore: hostedIdentityStore,
+    })
     expect(() => normalizeAuthConfig({
       workos: {
         provider: {
@@ -2884,6 +2891,13 @@ export default defineConfig({
         provider: '   ',
       },
     }).clerk).toEqual(normalizeAuthConfig().clerk)
+    expect(normalizeAuthConfig({
+      clerk: {
+        identityStore: hostedIdentityStore,
+      },
+    }).clerk).toEqual({
+      identityStore: hostedIdentityStore,
+    })
     expect(() => normalizeAuthConfig({
       clerk: {
         provider: {

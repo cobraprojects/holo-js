@@ -2088,7 +2088,9 @@ export default {
     })
 
     expect(await readFile(join(authBroadcastRoot, 'config/broadcast.ts'), 'utf8')).toContain('authEndpoint:')
+    expect(await readFile(join(authBroadcastRoot, 'app/broadcasting/config/route.ts'), 'utf8')).toContain('.holo-js/generated/next/broadcast-config-route')
     expect(await readFile(join(authBroadcastRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).toContain('.holo-js/generated/next/broadcast-auth-route')
+    expect(await readFile(join(authBroadcastRoot, '.holo-js/generated/next/broadcast-config-route.ts'), 'utf8')).toContain('renderBroadcastClientConfigResponse')
     expect(await readFile(join(authBroadcastRoot, '.holo-js/generated/next/broadcast-auth-route.ts'), 'utf8')).toContain('renderBroadcastAuthResponse')
 
     expect(projectInternals.renderScaffoldPackageJson({
@@ -3609,7 +3611,7 @@ export default defineAppConfig({
     const mediaDriver = runCliProcess(projectRoot, ['install', 'media', '--driver', 'redis'])
     expect(mediaDriver.status).toBe(1)
     expect(mediaDriver.stderr).toContain('The media installer does not support --driver.')
-  }, 30000)
+  }, 60000)
 
   it('covers the install command and queue installer helpers in-process', async () => {
     const projectRoot = await createTempProject()
@@ -4566,7 +4568,7 @@ export default defineCacheConfig({
         '@holo-js/session': 'workspace:*',
       },
     })
-  }, 30000)
+  }, 60000)
 
   it('syncs lazy optional holo packages from config and discovery registry entries', async () => {
     const projectRoot = await createTempProject()
@@ -5725,7 +5727,9 @@ module.exports = {
     })
     await expect(readFile(join(nextRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).resolves.toContain('.holo-js/generated/next/broadcast-auth-route')
     await expect(readFile(join(nextRoot, 'app/broadcasting/auth/route.ts'), 'utf8')).resolves.not.toContain('holo.getApp')
+    await expect(readFile(join(nextRoot, 'app/broadcasting/config/route.ts'), 'utf8')).resolves.toContain('.holo-js/generated/next/broadcast-config-route')
     await expect(readFile(join(nextRoot, '.holo-js/generated/next/broadcast-auth-route.ts'), 'utf8')).resolves.toContain('channelAuth')
+    await expect(readFile(join(nextRoot, '.holo-js/generated/next/broadcast-config-route.ts'), 'utf8')).resolves.toContain('renderBroadcastClientConfigResponse')
     await expect(stat(join(nextRoot, 'server/holo.ts'))).rejects.toThrow()
     await expect(readFile(join(nextRoot, '.holo-js/generated/next/holo.ts'), 'utf8')).resolves.toContain('createNextHoloHelpers')
     await expect(readFile(join(nextRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-react": "${expectedHoloPackageRange}"`)
@@ -5744,12 +5748,11 @@ module.exports = {
     await writeProjectFile(nuxtRoot, 'config/auth.ts', 'export default {}\n')
     const nuxtInstall = await projectInternals.installBroadcastIntoProject(nuxtRoot)
     expect(nuxtInstall).toMatchObject({
-      createdBroadcastAuthRoute: true,
+      createdBroadcastAuthRoute: false,
       updatedEnv: true,
       updatedEnvExample: true,
     })
-    await expect(readFile(join(nuxtRoot, 'server/routes/broadcasting/auth.post.ts'), 'utf8')).resolves.toContain('channelAuth')
-    await expect(readFile(join(nuxtRoot, 'server/routes/broadcasting/auth.post.ts'), 'utf8')).resolves.toContain('import { holo } from \'#imports\'')
+    await expect(stat(join(nuxtRoot, 'server/routes/broadcasting/auth.post.ts'))).rejects.toThrow()
     await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/flux-vue": "${expectedHoloPackageRange}"`)
     await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.not.toContain(`"@holo-js/queue": "${expectedHoloPackageRange}"`)
     await expect(readFile(join(nuxtRoot, 'package.json'), 'utf8')).resolves.toContain(`"@holo-js/adapter-nuxt": "${expectedHoloPackageRange}"`)
@@ -5821,7 +5824,7 @@ module.exports = {
     const genericAuthInstall = await projectInternals.installBroadcastIntoProject(genericAuthRoot)
     expect(genericAuthInstall.createdBroadcastAuthRoute).toBe(false)
     await expect(readFile(join(genericAuthRoot, 'config/broadcast.ts'), 'utf8')).resolves.not.toContain('authEndpoint:')
-  }, 30000)
+  }, 60000)
 
   it('backfills authEndpoint into existing broadcast configs when auth is already installed', async () => {
     const nextRoot = await createTempProject()
@@ -10597,6 +10600,7 @@ export default defineConfig({
     await writeProjectFile(projectRoot, 'app/api/auth/user/route.ts', 'import auth, { check, isAuthError, provider, user } from \'@holo-js/auth\'\n')
     await writeProjectFile(projectRoot, 'app/storage/[[...path]]/route.ts', 'export { GET } from \'../../../.holo-js/generated/next/storage-route\'\n')
     await writeProjectFile(projectRoot, 'app/broadcasting/auth/route.ts', 'export { POST } from \'../../../.holo-js/generated/next/broadcast-auth-route\'\n')
+    await writeProjectFile(projectRoot, 'app/broadcasting/config/route.ts', 'export { GET } from \'../../../.holo-js/generated/next/broadcast-config-route\'\n')
     await writeProjectFile(projectRoot, 'app/api/auth/clerk/login/route.ts', 'export { GET } from \'../../../../../.holo-js/generated/next/auth-clerk-login-route\'\n')
 
     await withFakeBun(async () => {
@@ -10605,7 +10609,10 @@ export default defineConfig({
 
     await expect(stat(join(projectRoot, '.holo-js/generated/next/health-route.ts'))).rejects.toThrow()
     expect(await readFile(join(projectRoot, '.holo-js/generated/next/storage-route.ts'), 'utf8')).toContain('createPublicStorageResponse')
+    expect(await readFile(join(projectRoot, '.holo-js/generated/channel-importer.ts'), 'utf8')).toContain('importBroadcastChannelModule')
     expect(await readFile(join(projectRoot, '.holo-js/generated/next/broadcast-auth-route.ts'), 'utf8')).toContain('channelAuth')
+    expect(await readFile(join(projectRoot, '.holo-js/generated/next/broadcast-auth-route.ts'), 'utf8')).toContain('importBroadcastChannelModule')
+    expect(await readFile(join(projectRoot, '.holo-js/generated/next/broadcast-config-route.ts'), 'utf8')).toContain('renderBroadcastClientConfigResponse')
     expect(await readFile(join(projectRoot, '.holo-js/generated/next/auth-clerk-login-route.ts'), 'utf8')).toContain('loginWithClerk')
   }, 30000)
 

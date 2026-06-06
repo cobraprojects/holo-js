@@ -485,9 +485,27 @@ export function renderNextBroadcastAuthRoute(): string {
   return renderNextRouteBridge('../../../.holo-js/generated/next/broadcast-auth-route', ['POST'])
 }
 
+export function renderNextBroadcastConfigRoute(): string {
+  return renderNextRouteBridge('../../../.holo-js/generated/next/broadcast-config-route', ['GET'])
+}
+
+export function renderNextGeneratedBroadcastConfigRoute(): string {
+  return [
+    'import { renderBroadcastClientConfigResponse } from \'@holo-js/broadcast/client-config\'',
+    'import { holo } from \'./holo\'',
+    '',
+    'export async function GET() {',
+    '  const app = await holo.getApp()',
+    '  return renderBroadcastClientConfigResponse(app.config.broadcast)',
+    '}',
+    '',
+  ].join('\n')
+}
+
 export function renderNextGeneratedBroadcastAuthRoute(): string {
   return [
     'import { renderBroadcastAuthResponse } from \'@holo-js/broadcast/auth\'',
+    'import { importBroadcastChannelModule } from \'../channel-importer\'',
     'import { holo } from \'./holo\'',
     '',
     'export async function POST(request: Request) {',
@@ -495,12 +513,16 @@ export function renderNextGeneratedBroadcastAuthRoute(): string {
     '  const auth = await holo.getAuth()',
     '',
     '  return await renderBroadcastAuthResponse(request, {',
-    '    resolveUser: async () => await auth?.user(),',
+    '    resolveUser: async (_request, context) => {',
+    '      const guardAuth = context.guard ? auth?.guard(context.guard) : undefined',
+    '      return guardAuth ? await guardAuth.user() : await auth?.user()',
+    '    },',
     '    channelAuth: {',
     '      registry: {',
     '        projectRoot: app.projectRoot,',
     '        channels: app.registry?.channels ?? [],',
     '      },',
+    '      importModule: importBroadcastChannelModule,',
     '    },',
     '  })',
     '}',
@@ -510,6 +532,7 @@ export function renderNextGeneratedBroadcastAuthRoute(): string {
 
 export function renderNextManagedRouteFiles(options: {
   readonly authEnabled?: boolean
+  readonly broadcastEnabled?: boolean
   readonly storageEnabled?: boolean
   readonly broadcastAuthEnabled?: boolean
 } = {}): readonly ScaffoldedFile[] {
@@ -518,6 +541,9 @@ export function renderNextManagedRouteFiles(options: {
     { path: '.holo-js/generated/next/bootstrap.mjs', contents: renderNextRuntimeBootstrap() },
     ...(options.storageEnabled
       ? [{ path: '.holo-js/generated/next/storage-route.ts', contents: renderNextGeneratedStorageRoute() }]
+      : []),
+    ...(options.broadcastEnabled
+      ? [{ path: '.holo-js/generated/next/broadcast-config-route.ts', contents: renderNextGeneratedBroadcastConfigRoute() }]
       : []),
     ...(options.broadcastAuthEnabled
       ? [{ path: '.holo-js/generated/next/broadcast-auth-route.ts', contents: renderNextGeneratedBroadcastAuthRoute() }]
@@ -836,6 +862,7 @@ export function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly 
   const optionalPackages = normalizeScaffoldOptionalPackages(options.optionalPackages)
   const storageEnabled = optionalPackages.includes('storage')
   const authEnabled = optionalPackages.includes('auth')
+  const broadcastEnabled = optionalPackages.includes('broadcast')
 
   if (options.framework === 'nuxt') {
     return [
@@ -860,7 +887,10 @@ export function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly 
       ...(storageEnabled
         ? [{ path: 'app/storage/[[...path]]/route.ts', contents: renderNextStorageRoute() }]
         : []),
-      ...renderNextManagedRouteFiles({ authEnabled, storageEnabled }),
+      ...(broadcastEnabled
+        ? [{ path: 'app/broadcasting/config/route.ts', contents: renderNextBroadcastConfigRoute() }]
+        : []),
+      ...renderNextManagedRouteFiles({ authEnabled, broadcastEnabled, storageEnabled }),
     ]
   }
 

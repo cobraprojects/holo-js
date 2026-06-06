@@ -79,6 +79,8 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
       const dbPackageRoot = join(buildRoot, 'packages/db')
       const configPackageRoot = join(buildRoot, 'packages/config')
       const corePackageRoot = join(buildRoot, 'packages/core')
+      const validationPackageRoot = join(buildRoot, 'packages/validation')
+      const broadcastPackageRoot = join(buildRoot, 'packages/broadcast')
       const eventsPackageRoot = join(buildRoot, 'packages/events')
       const queuePackageRoot = join(buildRoot, 'packages/queue')
       const queueDbPackageRoot = join(buildRoot, 'packages/queue-db')
@@ -110,10 +112,23 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
         packageJsonPath: resolve(packageDir, '../queue/package.json'),
         extraDependencyNames: ['bullmq'],
       })
+      await linkInstalledDependenciesForPackage({
+        repoRoot,
+        nodeModulesRoot: tempRootNodeModules,
+        packageJsonPath: resolve(packageDir, '../validation/package.json'),
+      })
+      await linkInstalledDependenciesForPackage({
+        repoRoot,
+        nodeModulesRoot: tempRootNodeModules,
+        packageJsonPath: resolve(packageDir, '../broadcast/package.json'),
+        extraDependencyNames: ['@types/ws'],
+      })
 
       await provisionTempPackage(resolve(packageDir, '../db'), dbPackageRoot)
       await provisionTempPackage(resolve(packageDir, '../config'), configPackageRoot)
       await provisionTempPackage(resolve(packageDir, '../core'), corePackageRoot)
+      await provisionTempPackage(resolve(packageDir, '../validation'), validationPackageRoot)
+      await provisionTempPackage(resolve(packageDir, '../broadcast'), broadcastPackageRoot)
       await provisionTempPackage(resolve(packageDir, '../events'), eventsPackageRoot)
       await provisionTempPackage(resolve(packageDir, '../queue'), queuePackageRoot)
       await provisionTempPackage(resolve(packageDir, '../queue-db'), queueDbPackageRoot)
@@ -127,6 +142,8 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
       await symlink(dbPackageRoot, join(tempNodeModulesRoot, 'db'))
       await symlink(configPackageRoot, join(tempNodeModulesRoot, 'config'))
       await symlink(corePackageRoot, join(tempNodeModulesRoot, 'core'))
+      await symlink(validationPackageRoot, join(tempNodeModulesRoot, 'validation'))
+      await symlink(broadcastPackageRoot, join(tempNodeModulesRoot, 'broadcast'))
       await symlink(eventsPackageRoot, join(tempNodeModulesRoot, 'events'))
       await symlink(queuePackageRoot, join(tempNodeModulesRoot, 'queue'))
       await symlink(queueDbPackageRoot, join(tempNodeModulesRoot, 'queue-db'))
@@ -136,7 +153,9 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
       await runPackageBuild(resolve(packageDir, '../queue/node_modules/.bin/tsup'), [], queuePackageRoot)
       await runPackageBuild(resolve(packageDir, '../queue/node_modules/.bin/tsup'), [], queueDbPackageRoot)
       await runPackageBuild(resolve(packageDir, '../config/node_modules/.bin/tsup'), [], configPackageRoot)
+      await runPackageBuild(resolve(packageDir, '../validation/node_modules/.bin/tsup'), [], validationPackageRoot)
       await runPackageBuild(resolve(packageDir, '../storage/node_modules/.bin/tsup'), [], storagePackageRoot)
+      await runPackageBuild(resolve(packageDir, '../broadcast/node_modules/.bin/tsup'), [], broadcastPackageRoot)
       await runPackageBuild(resolve(packageDir, '../events/node_modules/.bin/tsup'), [], eventsPackageRoot)
       await runPackageBuild(resolve(packageDir, '../core/node_modules/.bin/tsup'), [], corePackageRoot)
       await runPackageBuild(resolve(packageDir, 'node_modules/.bin/nuxt-module-build'), ['build'], adapterPackageRoot)
@@ -252,6 +271,7 @@ describe('@holo-js/adapter-nuxt module setup', () => {
     expect(existsSync(resolve(build.adapterOutDir, 'runtime/composables/index.d.ts'))).toBe(true)
     expect(existsSync(resolve(build.adapterOutDir, 'runtime/composables/storage.js'))).toBe(true)
     expect(existsSync(resolve(build.adapterOutDir, 'runtime/composables/storage.d.ts'))).toBe(true)
+    expect(existsSync(resolve(build.adapterOutDir, 'runtime/server/routes/broadcast-auth.post.js'))).toBe(true)
   }, 60000)
 
   it('publishes a runtime declaration that type-checks under NodeNext resolution', async () => {
@@ -542,6 +562,24 @@ export default defineStorageConfig({
     expect(addServerHandler).toHaveBeenCalledWith({
       route: '/storage/**',
       handler: './runtime/server/routes/storage.get',
+    })
+  }, 30000)
+
+  it('registers the internal broadcast routes when broadcast is installed', async () => {
+    const root = await createProject()
+    await linkHoloPackage(root, 'broadcast')
+    const { module, addServerHandler } = await loadAdapterModule()
+    const nuxt = createNuxtHarness(root)
+
+    await module.setup({}, nuxt as never)
+
+    expect(addServerHandler).toHaveBeenCalledWith({
+      route: '/broadcasting/config',
+      handler: './runtime/server/routes/broadcast-config.get',
+    })
+    expect(addServerHandler).toHaveBeenCalledWith({
+      route: '/broadcasting/auth',
+      handler: './runtime/server/routes/broadcast-auth.post',
     })
   }, 30000)
 

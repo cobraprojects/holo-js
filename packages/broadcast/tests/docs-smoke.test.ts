@@ -46,6 +46,8 @@ describe('broadcast documentation smoke checks', () => {
     expect(authoring).toContain('/broadcasting/auth')
     expect(authoring).toContain('privateChannel')
     expect(authoring).toContain('defineChannel')
+    expect(authoring).toContain('default auth guard')
+    expect(authoring).toContain('guard: \'admin\'')
     expect(flux).toContain('No manual client bootstrap is required')
     expect(flux).toContain('useFluxPublic(...)')
     expect(flux).toContain('useFluxPrivate(...)')

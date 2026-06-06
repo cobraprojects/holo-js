@@ -35,7 +35,6 @@
   "include": [
     "next-env.d.ts",
     "next.config.ts",
-    "instrumentation.ts",
     "app/**/*.ts",
     "app/**/*.tsx",
     "lib/**/*.ts",

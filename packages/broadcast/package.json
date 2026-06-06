@@ -15,6 +15,11 @@
       "import": "./dist/auth.mjs",
       "default": "./dist/auth.mjs"
     },
+    "./client-config": {
+      "types": "./dist/client-config.d.ts",
+      "import": "./dist/client-config.mjs",
+      "default": "./dist/client-config.mjs"
+    },
     "./contracts": {
       "types": "./dist/contracts.d.ts",
       "import": "./dist/contracts.mjs",

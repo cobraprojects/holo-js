@@ -81,7 +81,7 @@ function matchesPathPattern(pathname: string, pattern: string): boolean {
 function isExcludedPath(request: Request): boolean {
   const { except } = getSecurityRuntime().config.csrf
   const pathname = new URL(request.url).pathname
-  return except.some(pattern => matchesPathPattern(pathname, pattern))
+  return pathname === '/broadcasting/auth' || except.some(pattern => matchesPathPattern(pathname, pattern))
 }
 
 function normalizeForwardedValue(value: string): string {

@@ -590,6 +590,78 @@ describe('@holo-js/broadcast channel auth runtime', () => {
     }))).rejects.toThrow('Broadcast auth channel must be a non-empty string')
   })
 
+  it('resolves channel guards before loading the endpoint user', async () => {
+    const selectedGuards: Array<string | undefined> = []
+    const channelAuth = {
+      definitions: [
+        defineChannel('admin.blog', {
+          type: 'private',
+          guard: 'admin',
+          authorize(user) {
+            return (user as { role: string }).role === 'admin'
+          },
+        }),
+        defineChannel('users.{userId}', {
+          type: 'private',
+          authorize(user, params) {
+            return String((user as { id: number }).id) === params.userId
+          },
+        }),
+        defineChannel('dynamic.{area}', {
+          type: 'private',
+          guard({ params }) {
+            return params.area === 'admin' ? 'admin' : 'web'
+          },
+          authorize(user) {
+            return Boolean(user)
+          },
+        }),
+      ],
+    }
+    const resolveUser = async (_request: Request, context: { readonly guard?: string }) => {
+      selectedGuards.push(context.guard)
+      if (context.guard === 'admin') {
+        return { id: 1, role: 'admin' }
+      }
+
+      return { id: 42, role: 'user' }
+    }
+
+    const adminResponse = await renderBroadcastAuthResponse(new Request('http://localhost/broadcasting/auth', {
+      method: 'POST',
+      body: new URLSearchParams({
+        channel_name: 'admin.blog',
+      }),
+    }), {
+      resolveUser,
+      channelAuth,
+    })
+    expect(adminResponse.status).toBe(200)
+
+    const userResponse = await renderBroadcastAuthResponse(new Request('http://localhost/broadcasting/auth', {
+      method: 'POST',
+      body: new URLSearchParams({
+        channel_name: 'users.42',
+      }),
+    }), {
+      resolveUser,
+      channelAuth,
+    })
+    expect(userResponse.status).toBe(200)
+
+    const dynamicResponse = await renderBroadcastAuthResponse(new Request('http://localhost/broadcasting/auth', {
+      method: 'POST',
+      body: new URLSearchParams({
+        channel_name: 'dynamic.admin',
+      }),
+    }), {
+      resolveUser,
+      channelAuth,
+    })
+    expect(dynamicResponse.status).toBe(200)
+    expect(selectedGuards).toEqual(['admin', undefined, 'admin'])
+  })
+
   it('covers auth error branches and internals', async () => {
     await expect(authorizeBroadcastChannel({
       channel: 'orders.ord_1',
@@ -714,6 +786,16 @@ describe('@holo-js/broadcast channel auth runtime', () => {
     }), {
       resolveUser() {
         throw new Error('user resolver exploded')
+      },
+      channelAuth: {
+        definitions: [
+          defineChannel('orders.{orderId}', {
+            type: 'private',
+            authorize() {
+              return true
+            },
+          }),
+        ],
       },
     })).rejects.toThrow('user resolver exploded')
 

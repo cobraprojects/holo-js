@@ -77,7 +77,10 @@ function renderManagedSvelteServerHooksModule(features: SvelteManagedFeatures): 
       ? ['import auth, { check, isAuthError, provider, user } from \'@holo-js/auth\'']
       : []),
     ...(features.broadcastEnabled
-      ? ['import { renderBroadcastAuthResponse } from \'@holo-js/broadcast/auth\'']
+      ? [
+          'import { renderBroadcastAuthResponse } from \'@holo-js/broadcast/auth\'',
+          'import { renderBroadcastClientConfigResponse } from \'@holo-js/broadcast/client-config\'',
+        ]
       : []),
     ...(features.storageEnabled
       ? ['import { createPublicStorageResponse } from \'@holo-js/storage\'']
@@ -95,7 +98,7 @@ function renderManagedSvelteServerHooksModule(features: SvelteManagedFeatures): 
   const routeHandlers = [
     ...(features.authEnabled ? ['handleHoloCurrentAuthRoute'] : []),
     ...(features.storageEnabled ? ['handleHoloStorageRoute'] : []),
-    ...(features.broadcastEnabled ? ['handleHoloBroadcastAuthRoute'] : []),
+    ...(features.broadcastEnabled ? ['handleHoloBroadcastConfigRoute', 'handleHoloBroadcastAuthRoute'] : []),
     ...(features.clerkEnabled
       ? [
           'handleHoloClerkLoginRoute',
@@ -198,6 +201,14 @@ function renderManagedSvelteServerHooksModule(features: SvelteManagedFeatures): 
       : []),
     ...(features.broadcastEnabled
       ? [
+          'async function handleHoloBroadcastConfigRoute(event: RequestEvent, app: HoloApp): Promise<Response | undefined> {',
+          '  if (!isRoute(event, \'GET\', [\'/broadcasting/config\'])) {',
+          '    return undefined',
+          '  }',
+          '',
+          '  return renderBroadcastClientConfigResponse(app.config.broadcast)',
+          '}',
+          '',
           'async function handleHoloBroadcastAuthRoute(event: RequestEvent, app: HoloApp): Promise<Response | undefined> {',
           '  if (!isRoute(event, \'POST\', [\'/broadcasting/auth\'])) {',
           '    return undefined',
@@ -205,7 +216,10 @@ function renderManagedSvelteServerHooksModule(features: SvelteManagedFeatures): 
           '',
           '  const auth = await holo.getAuth()',
           '  return await renderBroadcastAuthResponse(event.request, {',
-          '    resolveUser: async () => await auth?.user(),',
+          '    resolveUser: async (_request, context) => {',
+          '      const guardAuth = context.guard ? auth?.guard(context.guard) : undefined',
+          '      return guardAuth ? await guardAuth.user() : await auth?.user()',
+          '    },',
           '    channelAuth: {',
           '      registry: {',
           '        projectRoot: app.projectRoot,',
@@ -634,12 +648,14 @@ async function directoryContainsText(path: string, pattern: string): Promise<boo
 async function ensureNextManagedRoutes(projectRoot: string): Promise<void> {
   const authEnabled = await pathExists(resolve(projectRoot, 'app/api/auth/user/route.ts'))
   const storageEnabled = await pathExists(resolve(projectRoot, 'app/storage/[[...path]]/route.ts'))
+  const broadcastEnabled = await pathExists(resolve(projectRoot, 'app/broadcasting/config/route.ts'))
   const broadcastAuthEnabled = await pathExists(resolve(projectRoot, 'app/broadcasting/auth/route.ts'))
   const clerkEnabled = await pathExists(resolve(projectRoot, 'app/api/auth/clerk/login/route.ts'))
   const workosEnabled = await pathExists(resolve(projectRoot, 'app/api/auth/workos/login/route.ts'))
   const files = [
     ...renderNextManagedRouteFiles({
       authEnabled,
+      broadcastEnabled,
       storageEnabled,
       broadcastAuthEnabled,
     }),

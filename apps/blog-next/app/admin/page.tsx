@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { user } from '@holo-js/auth'
 
 import { getAdminDashboardData } from '@/server/lib/blog'
+import { BroadcastFeed } from './broadcast-feed'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,6 +25,7 @@ export default async function AdminDashboardPage() {
         <article style={{ padding: '1rem', borderRadius: '1rem', background: '#111827' }}><strong>{dashboard.categoryCount}</strong><div>Categories</div></article>
         <article style={{ padding: '1rem', borderRadius: '1rem', background: '#111827' }}><strong>{dashboard.tagCount}</strong><div>Tags</div></article>
       </div>
+      <BroadcastFeed />
       <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
         <Link href="/admin/posts" style={{ color: '#7dd3fc' }}>Manage posts</Link>
         <Link href="/admin/categories" style={{ color: '#7dd3fc' }}>Manage categories</Link>

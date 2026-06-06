@@ -76,9 +76,11 @@ export interface BroadcastDefinition<
 }
 
 export type ExportedBroadcastDefinition<TValue>
-  = Extract<TValue, BroadcastDefinition> extends never
-    ? BroadcastDefinition
-    : Extract<TValue, BroadcastDefinition>
+  = TValue extends (...args: infer _TArgs) => infer TResult
+    ? ExportedBroadcastDefinition<TResult>
+    : Extract<TValue, BroadcastDefinition> extends never
+      ? BroadcastDefinition
+      : Extract<TValue, BroadcastDefinition>
 
 export type BroadcastAuthorizeResult<TType extends BroadcastChannelType, TPresenceMember extends BroadcastJsonObject>
   = TType extends 'presence'
@@ -89,6 +91,33 @@ export type BroadcastWhisperSchema = ValidationSchema
 export type BroadcastWhisperDefinitions = Readonly<Record<string, BroadcastWhisperSchema>>
 export type InferBroadcastWhisperPayload<TSchema> = TSchema extends { readonly $data?: infer TData } ? TData : never
 
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace HoloAuth {
+    interface TypeRegistry {
+      readonly __holoBroadcastAuthRegistry?: never
+    }
+  }
+}
+
+type RegisteredAuthGuards = HoloAuth.TypeRegistry extends {
+  readonly guards: infer TGuards
+}
+  ? TGuards
+  : Readonly<Record<string, 'session'>>
+
+export type BroadcastAuthGuardName = Extract<keyof RegisteredAuthGuards, string>
+
+export interface ChannelGuardResolverContext<TPattern extends string = string> {
+  readonly channel: string
+  readonly socketId?: string
+  readonly params: ChannelPatternParams<TPattern>
+}
+
+export type ChannelGuardResolver<TPattern extends string = string>
+  = BroadcastAuthGuardName
+  | ((context: ChannelGuardResolverContext<TPattern>) => BroadcastAuthGuardName | Promise<BroadcastAuthGuardName>)
+
 export interface ChannelDefinitionInput<
   TPattern extends string = string,
   TType extends Extract<BroadcastChannelType, 'private' | 'presence'> = Extract<BroadcastChannelType, 'private' | 'presence'>,
@@ -97,6 +126,7 @@ export interface ChannelDefinitionInput<
   TWhispers extends BroadcastWhisperDefinitions = BroadcastWhisperDefinitions,
 > {
   readonly type: TType
+  readonly guard?: ChannelGuardResolver<TPattern>
   readonly authorize: (
     user: TUser,
     params: ChannelPatternParams<TPattern>,
@@ -113,6 +143,7 @@ export interface ChannelDefinition<
 > {
   readonly pattern: TPattern
   readonly type: TType
+  readonly guard?: ChannelGuardResolver<TPattern>
   readonly authorize: ChannelDefinitionInput<TPattern, TType, TUser, TPresenceMember, TWhispers>['authorize']
   readonly whispers: Readonly<TWhispers>
 }
@@ -244,6 +275,7 @@ export interface GeneratedChannelAuthRegistryEntry {
   readonly sourcePath: string
   readonly pattern: string
   readonly exportName?: string
+  readonly guard?: string
   readonly type: 'private' | 'presence'
   readonly params: readonly string[]
   readonly whispers: readonly string[]
@@ -259,6 +291,7 @@ export interface BroadcastChannelAuthRuntimeBindings {
     readonly headers: Headers
     readonly socketId: string
     readonly channel: string
+    readonly guard?: string
     readonly appId: string
     readonly connection: string
   }) => unknown | Promise<unknown>
@@ -313,7 +346,14 @@ export type BroadcastAuthEndpointBody = BroadcastAuthEndpointSuccessBody | Broad
 
 export interface BroadcastAuthEndpointOptions {
   readonly user?: unknown
-  readonly resolveUser?: (request: Request) => unknown | Promise<unknown>
+  readonly resolveUser?: (
+    request: Request,
+    context: {
+      readonly channel: string
+      readonly socketId?: string
+      readonly guard?: string
+    },
+  ) => unknown | Promise<unknown>
   readonly channelAuth?: BroadcastChannelAuthRuntimeBindings
 }
 
@@ -746,6 +786,7 @@ export function normalizeChannelDefinition<
   return {
     pattern: normalizeChannelPattern(pattern, 'Channel pattern') as TPattern,
     type: definition.type,
+    ...(typeof definition.guard === 'undefined' ? {} : { guard: definition.guard }),
     authorize: definition.authorize,
     whispers: normalizeWhisperDefinitions(definition.whispers) as Readonly<TWhispers>,
   }

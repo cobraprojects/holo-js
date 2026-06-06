@@ -42,11 +42,15 @@
     "h3": "catalog:"
   },
   "peerDependencies": {
+    "@holo-js/broadcast": "catalog:",
     "@holo-js/forms": "catalog:",
     "@holo-js/storage": "catalog:",
     "@holo-js/storage-s3": "catalog:"
   },
   "peerDependenciesMeta": {
+    "@holo-js/broadcast": {
+      "optional": true
+    },
     "@holo-js/forms": {
       "optional": true
     },
@@ -58,6 +62,7 @@
     }
   },
   "devDependencies": {
+    "@holo-js/broadcast": "catalog:",
     "@holo-js/storage-s3": "catalog:",
     "@nuxt/module-builder": "catalog:",
     "@types/node": "catalog:",

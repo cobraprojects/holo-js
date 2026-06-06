@@ -550,41 +550,6 @@ export function renderBroadcastEnvFiles(): { env: readonly string[], example: re
   }
 }
 
-function renderNuxtBroadcastAuthRoute(): string {
-  return [
-    'import { defineEventHandler, getHeaders, getRequestURL, readRawBody } from \'h3\'',
-    'import { renderBroadcastAuthResponse } from \'@holo-js/broadcast/auth\'',
-    'import { holo } from \'#imports\'',
-    '',
-    'export default defineEventHandler(async (event) => {',
-    '  const app = await holo.getApp()',
-    '  const auth = await holo.getAuth()',
-    '  const headers = new Headers()',
-    '  for (const [key, value] of Object.entries(getHeaders(event))) {',
-    '    if (typeof value === \'string\') {',
-    '      headers.set(key, value)',
-    '    }',
-    '  }',
-    '  const request = new Request(getRequestURL(event), {',
-    '    method: event.method,',
-    '    headers,',
-    '    body: await readRawBody(event),',
-    '  })',
-    '',
-    '  return await renderBroadcastAuthResponse(request, {',
-    '    resolveUser: async () => await auth?.user(),',
-    '    channelAuth: {',
-    '      registry: {',
-    '        projectRoot: app.projectRoot,',
-    '        channels: app.registry?.channels ?? [],',
-    '      },',
-    '    },',
-    '  })',
-    '})',
-    '',
-  ].join('\n')
-}
-
 export async function syncBroadcastAuthSupportAfterAuthInstall(projectRoot: string): Promise<{
   readonly updatedBroadcastConfig: boolean
   readonly createdBroadcastAuthRoute: boolean
@@ -634,18 +599,6 @@ export async function syncBroadcastAuthSupportAfterAuthInstall(projectRoot: stri
     await writeTextFile(holoHelperPath, renderNextHoloHelper())
     await writeTextFile(generatedRoutePath, renderNextGeneratedBroadcastAuthRoute())
 
-    return {
-      updatedBroadcastConfig,
-      createdBroadcastAuthRoute,
-    }
-  }
-
-  if (framework === 'nuxt') {
-    const authRoutePath = resolve(projectRoot, 'server/routes/broadcasting/auth.post.ts')
-    if (!(await pathExists(authRoutePath))) {
-      await writeTextFile(authRoutePath, renderNuxtBroadcastAuthRoute())
-      createdBroadcastAuthRoute = true
-    }
     return {
       updatedBroadcastConfig,
       createdBroadcastAuthRoute,

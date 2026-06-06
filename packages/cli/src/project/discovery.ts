@@ -66,6 +66,50 @@ import {
   unregisterAuthorizationDefinitionNames,
   validateMigrationName,
 } from './discovery-helpers'
+import type { BroadcastDiscoveryModule } from './shared'
+
+type BroadcastExportEntry = {
+  readonly exportName: string
+  readonly value: {
+    readonly name?: string
+    readonly channels: readonly {
+      readonly type: 'public' | 'private' | 'presence'
+      readonly pattern: string
+    }[]
+  }
+}
+
+function resolveBroadcastExportEntry(
+  moduleValue: unknown,
+  discovery: BroadcastDiscoveryModule,
+): BroadcastExportEntry | undefined {
+  if (!moduleValue || typeof moduleValue !== 'object') {
+    return undefined
+  }
+
+  const entries = Object.entries(moduleValue)
+  const orderedEntries = 'default' in moduleValue
+    ? [
+        ['default', (moduleValue as { default?: unknown }).default] as const,
+        ...entries.filter(([exportName]) => exportName !== 'default'),
+      ]
+    : entries
+
+  for (const [exportName, value] of orderedEntries) {
+    if (discovery.isBroadcastDefinition(value)) {
+      return { exportName, value: value as BroadcastExportEntry['value'] }
+    }
+
+    if (typeof value === 'function') {
+      const resolved = value(...Array.from({ length: value.length }, () => '__holo_discovery__'))
+      if (discovery.isBroadcastDefinition(resolved)) {
+        return { exportName, value: resolved as BroadcastExportEntry['value'] }
+      }
+    }
+  }
+
+  return undefined
+}
 
 export async function prepareProjectDiscovery(
   projectRoot: string,
@@ -310,21 +354,15 @@ export async function prepareProjectDiscovery(
   const broadcast: GeneratedBroadcastRegistryEntry[] = []
   for (const filePath of broadcastFiles) {
     const relativePath = makeProjectRelativePath(projectRoot, filePath)
-    const exportedBroadcast = resolveNamedExportEntry(
+    const exportedBroadcast = resolveBroadcastExportEntry(
       await importProjectModule(projectRoot, filePath),
-      (value): value is object => broadcastDiscovery!.isBroadcastDefinition(value),
+      broadcastDiscovery!,
     )
     if (!exportedBroadcast) {
       throw new Error(`Discovered broadcast "${relativePath}" does not export a Holo broadcast definition.`)
     }
 
-    const normalizedBroadcast = exportedBroadcast.value as {
-      readonly name?: string
-      readonly channels: readonly {
-        readonly type: 'public' | 'private' | 'presence'
-        readonly pattern: string
-      }[]
-    }
+    const normalizedBroadcast = exportedBroadcast.value
     broadcast.push({
       sourcePath: relativePath,
       name: normalizedBroadcast.name?.trim() || deriveBroadcastNameFromPath(broadcastRoot, filePath),
@@ -352,6 +390,7 @@ export async function prepareProjectDiscovery(
     const normalizedChannel = exportedChannel.value as {
       readonly pattern: string
       readonly type: 'private' | 'presence'
+      readonly guard?: unknown
       readonly whispers: Readonly<Record<string, unknown>>
     }
     const pattern = normalizedChannel.pattern || deriveChannelPatternFromPath(channelsRoot, filePath)
@@ -359,6 +398,7 @@ export async function prepareProjectDiscovery(
       sourcePath: relativePath,
       pattern,
       exportName: exportedChannel.exportName,
+      ...(typeof normalizedChannel.guard === 'string' ? { guard: normalizedChannel.guard } : {}),
       type: normalizedChannel.type,
       params: broadcastDiscovery!.broadcastInternals.extractChannelPatternParamNames(pattern),
       whispers: Object.freeze(Object.keys(normalizedChannel.whispers)),

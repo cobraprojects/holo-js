@@ -21,6 +21,7 @@ import broadcast, {
   privateChannel,
   registerBroadcastDriver,
   renderBroadcastAuthResponse,
+  resolveBroadcastChannelGuard,
   resolveBroadcastWhisperSchema,
   resetBroadcastDriverRegistry,
   resetBroadcastRuntime,
@@ -82,6 +83,7 @@ describe('@holo-js/broadcast package surface', () => {
     expect(typeof authorizeBroadcastChannel).toBe('function')
     expect(typeof renderBroadcastAuthResponse).toBe('function')
     expect(typeof parseBroadcastAuthEndpointPayload).toBe('function')
+    expect(typeof resolveBroadcastChannelGuard).toBe('function')
     expect(typeof resolveBroadcastWhisperSchema).toBe('function')
     expect(typeof validateBroadcastWhisperPayload).toBe('function')
     configureBroadcastRuntime()

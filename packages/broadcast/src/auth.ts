@@ -11,6 +11,7 @@ import {
   type BroadcastChannelAuthRuntimeBindings,
   type BroadcastWhisperValidationResult,
   type ChannelDefinition,
+  type ChannelGuardResolverContext,
   type GeneratedChannelAuthRegistryEntry,
   isChannelDefinition,
 } from './contracts'
@@ -158,6 +159,9 @@ function normalizeRegistryEntry(
     type: entry.type,
     params: Object.freeze([...entry.params]),
     whispers: Object.freeze([...entry.whispers]),
+    ...(typeof entry.guard === 'string'
+      ? { guard: normalizeRequiredString(entry.guard, 'Broadcast channel guard') }
+      : {}),
     ...(typeof entry.exportName === 'string'
       ? { exportName: normalizeRequiredString(entry.exportName, 'Broadcast channel exportName') }
       : {}),
@@ -322,22 +326,41 @@ async function resolveAuthDefinitions(
   return await loadChannelDefinitions(bindings)
 }
 
-export async function authorizeBroadcastChannel(
-  input: BroadcastChannelAuthRequest,
+async function resolveBroadcastChannelMatch(
+  channel: string,
   channelAuth?: BroadcastChannelAuthRuntimeBindings,
-): Promise<BroadcastChannelAuthResult> {
-  const channel = normalizeRequiredString(input.channel, 'Broadcast auth channel')
+): Promise<MatchedChannelDefinition | null> {
   const definitions = await resolveAuthDefinitions(channelAuth)
-  const match = resolveChannelMatch(normalizeLookupChannel(channel, 'Broadcast auth channel'), definitions)
-  if (!match) {
-    return Object.freeze({
-      ok: false,
-      channel,
-      code: 'not-found',
-    })
+  return resolveChannelMatch(normalizeLookupChannel(channel, 'Broadcast auth channel'), definitions)
+}
+
+async function resolveChannelGuard(
+  channel: string,
+  socketId: string | undefined,
+  match: MatchedChannelDefinition,
+): Promise<string | undefined> {
+  if (typeof match.definition.guard === 'undefined') {
+    return undefined
   }
 
-  const decision = await match.definition.authorize(input.user, match.params as never)
+  if (typeof match.definition.guard === 'function') {
+    const context: ChannelGuardResolverContext = {
+      channel,
+      ...(typeof socketId === 'undefined' ? {} : { socketId }),
+      params: match.params as ChannelGuardResolverContext['params'],
+    }
+    return await match.definition.guard(context)
+  }
+
+  return match.definition.guard
+}
+
+async function authorizeMatchedBroadcastChannel(
+  channel: string,
+  user: unknown,
+  match: MatchedChannelDefinition,
+): Promise<BroadcastChannelAuthResult> {
+  const decision = await match.definition.authorize(user, match.params as never)
   if (match.definition.type === 'private') {
     if (decision !== true) {
       return Object.freeze({
@@ -374,6 +397,36 @@ export async function authorizeBroadcastChannel(
     member: normalizePresenceMember(decision),
     whispers: Object.freeze(Object.keys(match.definition.whispers)),
   })
+}
+
+export async function authorizeBroadcastChannel(
+  input: BroadcastChannelAuthRequest,
+  channelAuth?: BroadcastChannelAuthRuntimeBindings,
+): Promise<BroadcastChannelAuthResult> {
+  const channel = normalizeRequiredString(input.channel, 'Broadcast auth channel')
+  const match = await resolveBroadcastChannelMatch(channel, channelAuth)
+  if (!match) {
+    return Object.freeze({
+      ok: false,
+      channel,
+      code: 'not-found',
+    })
+  }
+
+  return await authorizeMatchedBroadcastChannel(channel, input.user, match)
+}
+
+export async function resolveBroadcastChannelGuard(
+  input: Pick<BroadcastChannelAuthRequest, 'channel' | 'socketId'>,
+  channelAuth?: BroadcastChannelAuthRuntimeBindings,
+): Promise<string | undefined> {
+  const channel = normalizeRequiredString(input.channel, 'Broadcast auth channel')
+  const match = await resolveBroadcastChannelMatch(channel, channelAuth)
+  if (!match) {
+    return undefined
+  }
+
+  return await resolveChannelGuard(channel, input.socketId, match)
 }
 
 export async function resolveBroadcastWhisperSchema(
@@ -488,8 +541,23 @@ export async function renderBroadcastAuthResponse(
     }, 400)
   }
 
+  const channel = normalizeRequiredString(payload.channel, 'Broadcast auth channel')
+  const match = await resolveBroadcastChannelMatch(channel, options.channelAuth)
+  if (!match) {
+    return jsonResponse({
+      ok: false,
+      error: 'not-found',
+      message: `No channel authorization rule matches "${channel}".`,
+    }, 404)
+  }
+
+  const guard = await resolveChannelGuard(channel, payload.socketId, match)
   const user = typeof options.resolveUser === 'function'
-    ? await options.resolveUser(request)
+    ? await options.resolveUser(request, {
+      channel,
+      ...(typeof payload.socketId === 'undefined' ? {} : { socketId: payload.socketId }),
+      ...(typeof guard === 'undefined' ? {} : { guard }),
+    })
     : options.user
   if (typeof user === 'undefined' || user === null) {
     return jsonResponse({
@@ -499,21 +567,9 @@ export async function renderBroadcastAuthResponse(
     }, 401)
   }
 
-  const result = await authorizeBroadcastChannel({
-    channel: payload.channel,
-    socketId: payload.socketId,
-    user,
-  }, options.channelAuth)
+  const result = await authorizeMatchedBroadcastChannel(channel, user, match)
 
   if (!result.ok) {
-    if (result.code === 'not-found') {
-      return jsonResponse({
-        ok: false,
-        error: 'not-found',
-        message: `No channel authorization rule matches "${result.channel}".`,
-      }, 404)
-    }
-
     return jsonResponse({
       ok: false,
       error: 'unauthorized',

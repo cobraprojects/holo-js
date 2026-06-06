@@ -22,7 +22,7 @@ Both Bun and Node runtimes are supported for the worker process.
 
 ## Running In Production
 
-- App server handles API and `/broadcasting/auth`.
+- App server handles API, `/broadcasting/config`, and `/broadcasting/auth`.
 - Websocket worker handles realtime transport and fan-out.
 - Worker can run on the same host or a separate host.
 

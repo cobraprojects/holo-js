@@ -95,6 +95,7 @@ export type GeneratedChannelRegistryEntry = {
   readonly sourcePath: string
   readonly pattern: string
   readonly exportName?: string
+  readonly guard?: string
   readonly type: 'private' | 'presence'
   readonly params: readonly string[]
   readonly whispers: readonly string[]
@@ -455,6 +456,7 @@ export const GENERATED_EVENTS_PATH = join(GENERATED_ROOT, 'events.ts')
 export const GENERATED_LISTENERS_PATH = join(GENERATED_ROOT, 'listeners.ts')
 export const GENERATED_BROADCAST_PATH = join(GENERATED_ROOT, 'broadcast.ts')
 export const GENERATED_CHANNELS_PATH = join(GENERATED_ROOT, 'channels.ts')
+export const GENERATED_CHANNEL_IMPORTER_PATH = join(GENERATED_ROOT, 'channel-importer.ts')
 export const GENERATED_BROADCAST_MANIFEST_PATH = join(GENERATED_ROOT, 'broadcast-manifest.ts')
 export const GENERATED_AUTHORIZATION_ROOT = join(GENERATED_ROOT, 'authorization')
 export const GENERATED_AUTHORIZATION_REGISTRY_PATH = join(GENERATED_AUTHORIZATION_ROOT, 'registry.ts')

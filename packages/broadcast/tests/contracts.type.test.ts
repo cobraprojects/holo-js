@@ -20,6 +20,18 @@ declare module '../src/contracts' {
   }
 }
 
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace HoloAuth {
+    interface TypeRegistry {
+      guards: {
+        readonly web: 'session'
+        readonly admin: 'session'
+      }
+    }
+  }
+}
+
 describe('@holo-js/broadcast typing', () => {
   it('preserves contract typing for definitions, channel params, and whisper inference', () => {
     type Expect<TValue extends true> = TValue
@@ -47,6 +59,7 @@ describe('@holo-js/broadcast typing', () => {
 
     const presence = defineChannel('chat.{roomId}', {
       type: 'presence',
+      guard: 'admin',
       authorize() {
         return {
           id: 'user_1',
@@ -55,6 +68,21 @@ describe('@holo-js/broadcast typing', () => {
       },
       whispers: {
         'typing.start': typingSchema,
+      },
+    })
+    const defaultGuardChannel = defineChannel('orders.{orderId}', {
+      type: 'private',
+      authorize() {
+        return true
+      },
+    })
+    const dynamicGuardChannel = defineChannel('areas.{area}', {
+      type: 'private',
+      guard({ params }) {
+        return params.area === 'admin' ? 'admin' : 'web'
+      },
+      authorize() {
+        return true
       },
     })
 
@@ -82,6 +110,8 @@ describe('@holo-js/broadcast typing', () => {
     void params
     void member
     void whisper
+    void defaultGuardChannel
+    void dynamicGuardChannel
     void (0 as unknown as DefinitionAssertion)
     void (0 as unknown as ParamsAssertion)
   })

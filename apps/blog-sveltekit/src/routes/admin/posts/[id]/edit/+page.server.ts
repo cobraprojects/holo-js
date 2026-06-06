@@ -1,11 +1,13 @@
 import { error, redirect } from '@sveltejs/kit'
 import { authorize } from '@holo-js/authorization'
+import { broadcast } from '@holo-js/broadcast'
 import { ValidationException, validate } from '@holo-js/forms'
 import { DB, uniqueSlug } from '@holo-js/db'
 import { csrf } from '@holo-js/security'
 
 import { postForm } from '$lib/schemas/blog'
 import { getAdminPostById } from '$lib/server/blog'
+import { blogPostChanged } from '../../../../../../server/broadcast/blog-post-changed'
 import Post from '../../../../../../server/models/Post'
 import type { Actions, PageServerLoad } from './$types'
 
@@ -59,6 +61,8 @@ export const actions = {
         })
       }
     }
+
+    await broadcast(blogPostChanged('updated', post.id, post.title, post.status, post.slug))
 
     redirect(303, '/admin/posts')
   },

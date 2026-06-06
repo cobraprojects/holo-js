@@ -1,5 +1,6 @@
 import { defineEventHandler, getHeaders, getRequestURL, readRawBody } from 'h3'
 import { renderBroadcastAuthResponse } from '@holo-js/broadcast/auth'
+import { holo } from '../../composables'
 
 export default defineEventHandler(async (event) => {
   const app = await holo.getApp()
@@ -17,7 +18,10 @@ export default defineEventHandler(async (event) => {
   })
 
   return await renderBroadcastAuthResponse(request, {
-    resolveUser: async () => await auth?.user(),
+    resolveUser: async (_request, context) => {
+      const guardAuth = context.guard ? auth?.guard(context.guard) : undefined
+      return guardAuth ? await guardAuth.user() : await auth?.user()
+    },
     channelAuth: {
       registry: {
         projectRoot: app.projectRoot,

@@ -68,6 +68,7 @@ const typingSchema = {
 
 export default defineChannel('orders.{orderId}', {
   type: 'private',
+  guard: 'admin',
   authorize() {
     return true
   },
@@ -121,6 +122,7 @@ export default defineChannel('chat.{roomId}', {
       sourcePath: 'server/channels/orders-channel.ts',
       pattern: 'orders.{orderId}',
       exportName: 'default',
+      guard: 'admin',
       type: 'private',
       params: ['orderId'],
       whispers: ['typing.start'],
@@ -132,6 +134,7 @@ export default defineChannel('chat.{roomId}', {
     })
     await expect(readFile(join(root, '.holo-js/generated/broadcast.ts'), 'utf8')).resolves.toContain('"exportName": "orderUpdated"')
     await expect(readFile(join(root, '.holo-js/generated/channels.ts'), 'utf8')).resolves.toContain('"whispers": [')
+    await expect(readFile(join(root, '.holo-js/generated/broadcast-manifest.ts'), 'utf8')).resolves.toContain('guard: "admin"')
     await expect(readFile(join(root, '.holo-js/generated/broadcast-manifest.ts'), 'utf8')).resolves.toContain('events: [')
     await expect(readFile(join(root, '.holo-js/generated/broadcast-manifest.ts'), 'utf8')).resolves.toContain('"typing.start"')
     await expect(readFile(join(root, '.holo-js/generated/broadcast-manifest.ts'), 'utf8')).resolves.not.toContain('import type { GeneratedBroadcastManifest } from \'@holo-js/core\'')
@@ -228,6 +231,49 @@ export default Object.freeze({
       params: ['orderId'],
       whispers: [],
     }])
+  })
+
+  it('discovers documented broadcast event factories', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'server/broadcast/orders/factory.ts'), `
+import { defineBroadcast, privateChannel } from ${JSON.stringify(broadcastContractsModulePath)}
+
+export function orderShipmentUpdated(orderId: string, status: 'shipped' | 'delayed') {
+  return defineBroadcast({
+    name: 'orders.shipment-updated',
+    channels: [
+      privateChannel('orders.{orderId}', { orderId }),
+    ],
+    payload: {
+      orderId,
+      status,
+    },
+  })
+}
+`, 'utf8')
+    await writeFile(join(root, 'server/channels/orders-channel.ts'), `
+import { defineChannel } from ${JSON.stringify(broadcastContractsModulePath)}
+
+export default defineChannel('orders.{orderId}', {
+  type: 'private',
+  authorize() {
+    return true
+  },
+})
+`, 'utf8')
+
+    const registry = await prepareProjectDiscovery(root, normalizeHoloProjectConfig())
+
+    expect(registry.broadcast).toEqual([{
+      sourcePath: 'server/broadcast/orders/factory.ts',
+      name: 'orders.shipment-updated',
+      exportName: 'orderShipmentUpdated',
+      channels: [{
+        type: 'private',
+        pattern: 'orders.{orderId}',
+      }],
+    }])
+    await expect(readFile(join(root, '.holo-js/generated/broadcast.d.ts'), 'utf8')).resolves.toContain('"orders.shipment-updated": ExportedBroadcastDefinition<typeof holoBroadcastModule0["orderShipmentUpdated"]>')
   })
 
   it('uses broad fallback types for JavaScript broadcast/channel entries', async () => {

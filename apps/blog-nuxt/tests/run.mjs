@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url'
 import { DEFAULT_SESSION_COOKIE_NAME } from '@holo-js/config'
 import Database from 'better-sqlite3'
 import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
+import { assertExampleAppBroadcastBrowserFlow } from '../../../tests/example-app-broadcast-browser-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 
 const cwd = process.cwd()
@@ -37,6 +38,30 @@ const port = await new Promise((resolve, reject) => {
     })
   })
 })
+async function getAvailablePort() {
+  return await new Promise((resolve, reject) => {
+    const server = createServer()
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        reject(new Error('Could not determine an available port.'))
+        return
+      }
+
+      const selected = String(address.port)
+      server.close((error) => {
+        if (error) {
+          reject(error)
+          return
+        }
+
+        resolve(selected)
+      })
+    })
+  })
+}
+const broadcastPort = await getAvailablePort()
 const originalConfig = await readFile(configPath, 'utf8')
 const mirrorCapturedOutput = process.env.MAIL_LOG_VERBOSE === 'true'
   || process.argv.includes('--mail-log-verbose')
@@ -60,6 +85,8 @@ function createChildEnv(overrides = {}) {
     ...process.env,
     APP_NAME: '',
     HOLO_SECURITY_TRUST_PROXY: 'true',
+    BROADCAST_HOST: '127.0.0.1',
+    BROADCAST_PORT: broadcastPort,
     ...overrides,
   }
 
@@ -457,6 +484,11 @@ async function assertAuthenticatedUserCanCreateAndUpdatePostImage({ baseUrl, jar
 }
 
 async function assertAuthenticatedAdminPostFlows(context) {
+  await assertExampleAppBroadcastBrowserFlow({
+    baseUrl: context.baseUrl,
+    appName: 'blog-nuxt',
+    cookieHeader: context.jar.header(),
+  })
   await assertAuthenticatedUserCanCreateAndUpdatePostImage(context)
   await assertAuthenticatedUserCannotDeletePost(context)
 }
@@ -476,21 +508,50 @@ function pipeOutput(stream, target) {
 }
 
 let child = null
+let broadcastChild = null
 
-function killChildTree() {
-  if (!child || child.exitCode !== null) {
+function killProcessTree(target) {
+  if (!target || target.exitCode !== null) {
     return
   }
 
   try {
-    process.kill(-child.pid, 'SIGTERM')
+    process.kill(-target.pid, 'SIGTERM')
   } catch {
     try {
-      child.kill('SIGTERM')
+      target.kill('SIGTERM')
     } catch {
-      // Already exited.
+      return
     }
   }
+}
+
+async function stopProcessTree(target) {
+  if (!target || target.exitCode !== null) {
+    return
+  }
+
+  const closed = new Promise(resolve => target.once('close', resolve))
+  killProcessTree(target)
+  await closed
+}
+
+async function startBroadcastWorker(appUrl) {
+  if (broadcastChild) {
+    return
+  }
+
+  broadcastChild = spawn('bun', ['x', 'holo', 'broadcast:work'], {
+    cwd,
+    detached: true,
+    env: createChildEnv({
+      APP_URL: appUrl,
+    }),
+    stdio: ['inherit', 'pipe', 'pipe'],
+  })
+  pipeOutput(broadcastChild.stdout, process.stdout)
+  pipeOutput(broadcastChild.stderr, process.stderr)
+  await waitForText(`http://127.0.0.1:${broadcastPort}/health`, payload => payload.includes('"ok":true'))
 }
 
 try {
@@ -501,6 +562,7 @@ try {
   await assertConfigCacheCommands()
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
   await clearRateLimitBuckets()
+  await startBroadcastWorker(`http://localhost:${port}`)
   await run('npx', ['tsx', 'tests/blog-logic.mjs'])
 
   child = spawn('bun', ['run', 'dev'], {
@@ -520,6 +582,7 @@ try {
   pipeOutput(child.stderr, process.stderr)
 
   await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Nuxt'))
+  await startBroadcastWorker(`http://localhost:${port}`)
   await assertCacheBackedHttpBehavior(`http://localhost:${port}`)
   await waitForRedirect(`http://localhost:${port}/admin/posts`, '/login')
   await assertAdminApiRequiresAuthentication(`http://localhost:${port}`)
@@ -539,17 +602,16 @@ try {
   await writeFile(configPath, originalConfig.replace("name: env('APP_NAME', 'blog-nuxt')", "name: env('APP_NAME', 'blog-nuxt-updated')"))
   await waitForText(`http://localhost:${port}/`, payload => payload.includes('Shipping a Real Holo Blog on Nuxt'))
 
-  killChildTree()
-  await new Promise(resolve => child.once('close', resolve))
+  await stopProcessTree(child)
   child = null
+  await stopProcessTree(broadcastChild)
+  broadcastChild = null
 
   await run('bun', ['run', 'lint'])
   await run('bun', ['run', 'typecheck'])
   await run('bun', ['run', 'build'])
 } finally {
   await writeFile(configPath, originalConfig)
-  killChildTree()
-  if (child && child.exitCode === null) {
-    await new Promise(resolve => child.once('close', resolve))
-  }
+  await stopProcessTree(child)
+  await stopProcessTree(broadcastChild)
 }

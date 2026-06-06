@@ -13,6 +13,10 @@ hero:
     - theme: alt
       text: Configure your app
       link: /configuration
+features:
+  - title: Broadcast And Flux
+    details: Self-hosted realtime broadcasting with generated config and auth routes, channel guards, and framework-native Flux helpers.
+    link: /broadcast/
 ---
 
 ## What Holo-JS gives you
@@ -112,7 +116,7 @@ If you are contributing to the framework packages inside this repository, use:
 - `npm create holo-js@latest` scaffolds the project and asks for framework, database, package manager, and storage defaults.
 - `holo prepare` scans Holo-JS-owned directories and regenerates typed registries under `.holo-js/generated`.
 - `config/queue.ts` is scaffolded by default and starts on the `sync` driver.
-- `holo install broadcast` scaffolds `config/broadcast.ts`, `server/broadcast`, `server/channels`, and `/broadcasting/auth`.
+- `holo install broadcast` scaffolds `config/broadcast.ts`, `server/broadcast`, `server/channels`, and the generated `/broadcasting/config` and `/broadcasting/auth` routes.
 - `holo install cache` scaffolds `config/cache.ts` and cache maintenance commands.
 - `holo install media` scaffolds `config/media.ts` and the media table migration.
 - `holo install authorization` scaffolds `server/policies` and `server/abilities`.

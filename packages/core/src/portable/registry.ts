@@ -63,6 +63,7 @@ export interface GeneratedChannelRegistryEntry {
   readonly sourcePath: string
   readonly pattern: string
   readonly exportName?: string
+  readonly guard?: string
   readonly type: 'private' | 'presence'
   readonly params: readonly string[]
   readonly whispers: readonly string[]
@@ -124,6 +125,7 @@ export interface GeneratedBroadcastManifestEvent {
 export interface GeneratedBroadcastManifestChannel {
   readonly name: string
   readonly pattern: string
+  readonly guard?: string
   readonly type: 'private' | 'presence'
   readonly params: readonly string[]
   readonly whispers: readonly string[]
@@ -258,6 +260,7 @@ export function createGeneratedBroadcastManifest(
     channels: Object.freeze(registry.channels.map(entry => Object.freeze({
       name: entry.pattern,
       pattern: entry.pattern,
+      ...(typeof entry.guard === 'undefined' ? {} : { guard: entry.guard }),
       type: entry.type,
       params: Object.freeze([...entry.params]),
       whispers: Object.freeze([...entry.whispers]),

@@ -75,6 +75,7 @@ export const WORKSPACE_CATALOG = Object.freeze({
   "nodemailer": "^6.10.1",
   "nuxt": "^4.4.4",
   "pg": "^8.13.0",
+  "playwright": "^1.57.0",
   "react": "^19.2.6",
   "react-dom": "^19.2.6",
   "react-test-renderer": "^19.2.6",

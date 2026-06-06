@@ -163,6 +163,35 @@ describe('@holo-js/config broadcast normalization', () => {
     })
   })
 
+  it('keeps the worker bind host internal while deriving public networking from the Holo connection', () => {
+    expect(normalizeBroadcastConfig({
+      default: 'holo',
+      connections: {
+        holo: {
+          driver: 'holo',
+          key: 'app-key',
+          secret: 'app-secret',
+          appId: 'app-id',
+          options: {
+            host: '127.0.0.1',
+            port: '61234',
+            scheme: 'http',
+          },
+        },
+      },
+    }).worker).toEqual({
+      host: '0.0.0.0',
+      port: 61234,
+      path: '/app',
+      publicHost: undefined,
+      publicPort: 80,
+      publicScheme: 'http',
+      healthPath: '/health',
+      statsPath: '/stats',
+      scaling: false,
+    })
+  })
+
   it('rejects malformed broadcast connections and worker config', () => {
     expect(normalizeBroadcastConfig()).toEqual({
       default: 'null',

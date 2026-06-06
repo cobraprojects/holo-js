@@ -11,6 +11,8 @@
       "nitropack/runtime/context": ["./src/runtime/shims.d.ts"],
       "nitropack/runtime/plugin": ["./src/runtime/shims.d.ts"],
       "nitropack/runtime/storage": ["./src/runtime/shims.d.ts"],
+      "@holo-js/broadcast": ["../broadcast/src/index.ts"],
+      "@holo-js/broadcast/auth": ["../broadcast/src/auth.ts"],
       "@holo-js/forms": ["../forms/src/index.ts"],
       "@holo-js/forms/internal/client": ["../forms/src/internal/client.ts"],
       "@holo-js/security": ["../security/src/index.ts"],

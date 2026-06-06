@@ -556,6 +556,70 @@ describe('@holo-js/broadcast worker runtime', () => {
     })
   })
 
+  it('passes resolved channel guards to in-process subscription auth', async () => {
+    const selectedGuards: Array<string | undefined> = []
+    const runtime = createBroadcastWorkerRuntime({
+      config: createConfig(),
+      channelAuth: {
+        definitions: [
+          defineChannel('admin.{roomId}', {
+            type: 'private',
+            guard: 'admin',
+            authorize(user) {
+              return (user as { guard?: string }).guard === 'admin'
+            },
+          }),
+          defineChannel('users.{userId}', {
+            type: 'private',
+            authorize(user) {
+              return (user as { guard?: string }).guard === undefined
+            },
+          }),
+          defineChannel('dynamic.{area}', {
+            type: 'private',
+            guard({ params }) {
+              return params.area === 'admin' ? 'admin' : 'web'
+            },
+            authorize(user) {
+              return Boolean(user)
+            },
+          }),
+        ],
+        resolveUser({ guard }) {
+          selectedGuards.push(guard)
+          return {
+            guard,
+          }
+        },
+      },
+      now: () => FIXED_NOW_MS,
+    })
+    const app = workerInternals.buildWorkerApps(createConfig())['key-main']!
+    const socket = createSocket(app)
+    runtime.connectWebSocket(socket.socket)
+
+    await runtime.receiveWebSocketMessage(socket.socket.socketId, JSON.stringify({
+      event: 'pusher:subscribe',
+      data: {
+        channel: 'private-admin.room_1',
+      },
+    }))
+    await runtime.receiveWebSocketMessage(socket.socket.socketId, JSON.stringify({
+      event: 'pusher:subscribe',
+      data: {
+        channel: 'private-users.user_1',
+      },
+    }))
+    await runtime.receiveWebSocketMessage(socket.socket.socketId, JSON.stringify({
+      event: 'pusher:subscribe',
+      data: {
+        channel: 'private-dynamic.admin',
+      },
+    }))
+
+    expect(selectedGuards).toEqual(['admin', undefined, 'admin'])
+  })
+
   it('tracks whisper permissions per socket for the same channel', async () => {
     const fetch = vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
       const request = input instanceof Request ? input : new Request(input, init)

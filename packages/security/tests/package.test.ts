@@ -705,6 +705,9 @@ describe('@holo-js/security csrf', () => {
     await expect(csrf.verify(new Request('https://app.test/webhooks/stripe', {
       method: 'POST',
     }))).resolves.toBeUndefined()
+    await expect(csrf.verify(new Request('https://app.test/broadcasting/auth', {
+      method: 'POST',
+    }))).resolves.toBeUndefined()
   })
 
   it('honors configured header field and cookie overrides', async () => {

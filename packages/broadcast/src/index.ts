@@ -9,9 +9,14 @@ import {
   authorizeBroadcastChannel,
   parseBroadcastAuthEndpointPayload,
   renderBroadcastAuthResponse,
+  resolveBroadcastChannelGuard,
   resolveBroadcastWhisperSchema,
   validateBroadcastWhisperPayload,
 } from './auth'
+import {
+  renderBroadcastClientConfigResponse,
+  resolveBroadcastClientConfig,
+} from './client-config'
 import {
   createBroadcastWorkerRuntime,
   startBroadcastWorker,
@@ -36,9 +41,17 @@ export {
   broadcastAuthInternals,
   parseBroadcastAuthEndpointPayload,
   renderBroadcastAuthResponse,
+  resolveBroadcastChannelGuard,
   resolveBroadcastWhisperSchema,
   validateBroadcastWhisperPayload,
 } from './auth'
+export {
+  renderBroadcastClientConfigResponse,
+  resolveBroadcastClientConfig,
+} from './client-config'
+export type {
+  BroadcastClientConfig,
+} from './client-config'
 export {
   createBroadcastWorkerRuntime,
   startBroadcastWorker,
@@ -68,6 +81,7 @@ export type {
   BroadcastChannelAuthRequest,
   BroadcastChannelAuthResult,
   BroadcastChannelAuthRuntimeBindings,
+  BroadcastAuthGuardName,
   BroadcastChannelAuthSuccess,
   BroadcastDefinition,
   BroadcastDefinitionInput,
@@ -150,8 +164,11 @@ const broadcastPackage = Object.freeze({
   parseBroadcastAuthEndpointPayload,
   presenceChannel,
   privateChannel,
+  renderBroadcastClientConfigResponse,
   renderBroadcastAuthResponse,
   resetBroadcastRuntime,
+  resolveBroadcastClientConfig,
+  resolveBroadcastChannelGuard,
   resolveBroadcastWhisperSchema,
   startBroadcastWorker,
   validateBroadcastWhisperPayload,

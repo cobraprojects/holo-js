@@ -1,7 +1,9 @@
 import { hashPassword } from '@holo-js/auth'
+import { broadcast } from '@holo-js/broadcast'
 import { DB, uniqueSlug } from '@holo-js/db'
 import { ValidationException } from '@holo-js/forms'
 
+import { blogPostChanged } from '../broadcast/blog-post-changed'
 import Category from '../models/Category'
 import Post from '../models/Post'
 import Tag from '../models/Tag'
@@ -228,6 +230,8 @@ export async function createPost(input: { title: string, excerpt?: string, body:
     }
   }
 
+  await broadcast(blogPostChanged('created', post.id, post.title, post.status, post.slug))
+
   return post
 }
 
@@ -262,11 +266,17 @@ export async function updatePost(id: number, input: { title: string, excerpt?: s
     }
   }
 
+  await broadcast(blogPostChanged('updated', post.id, post.title, post.status, post.slug))
+
   return post
 }
 
 export async function deletePost(id: number) {
+  const post = await Post.find(id)
   await Post.delete(id)
+  if (post) {
+    await broadcast(blogPostChanged('deleted', post.id, post.title, post.status, post.slug))
+  }
 }
 
 export type HomePageData = Awaited<ReturnType<typeof getHomePageData>>

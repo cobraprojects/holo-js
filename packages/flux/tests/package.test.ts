@@ -11,6 +11,15 @@ afterEach(() => {
   resetFluxClient()
 })
 
+type TestWebSocketEventMap = {
+  open: () => void
+  message: (event: { readonly data: unknown }) => void
+  close: () => void
+  error: () => void
+}
+
+type TestWebSocketEventName = keyof TestWebSocketEventMap
+
 describe('@holo-js/flux package surface', () => {
   it('requires an explicit connector before subscriptions can be created', () => {
     const client = createFluxClient()
@@ -20,6 +29,662 @@ describe('@holo-js/flux package surface', () => {
     expect(() => client.channel('orders.1')).toThrow('No realtime connector configured')
     expect(() => client.private('orders.1')).toThrow('No realtime connector configured')
     expect(() => client.presence('chat.1')).toThrow('No realtime connector configured')
+  })
+
+  it('configures the default client with the Holo websocket connector', async () => {
+    const originalWebSocket = globalThis.WebSocket
+    const sentMessages: unknown[] = []
+    let openedUrl = ''
+    let socketReadyState = 0
+    const listeners = new Map<TestWebSocketEventName, Set<TestWebSocketEventMap[TestWebSocketEventName]>>()
+
+    class TestWebSocket {
+      static readonly CONNECTING = 0
+      static readonly OPEN = 1
+      static readonly CLOSING = 2
+      static readonly CLOSED = 3
+
+      get readyState() {
+        return socketReadyState
+      }
+
+      constructor(url: string | URL) {
+        openedUrl = url.toString()
+      }
+
+      send(data: string): void {
+        sentMessages.push(JSON.parse(data) as unknown)
+      }
+
+      close(): void {
+        emit('close', undefined)
+      }
+
+      addEventListener<TEvent extends TestWebSocketEventName>(event: TEvent, listener: TestWebSocketEventMap[TEvent]): void {
+        const eventListeners = listeners.get(event) ?? new Set<TestWebSocketEventMap[TestWebSocketEventName]>()
+        eventListeners.add(listener)
+        listeners.set(event, eventListeners)
+      }
+    }
+
+    function emit<TEvent extends TestWebSocketEventName>(event: TEvent, payload: Parameters<TestWebSocketEventMap[TEvent]>[0]): void {
+      if (event === 'open') {
+        socketReadyState = 1
+      }
+
+      if (event === 'close') {
+        socketReadyState = 3
+      }
+
+      for (const listener of listeners.get(event) ?? []) {
+        listener(payload as never)
+      }
+    }
+
+    try {
+      Object.defineProperty(globalThis, 'WebSocket', {
+        configurable: true,
+        writable: true,
+        value: TestWebSocket,
+      })
+      resetFluxClient()
+      const received: unknown[] = []
+
+      getFluxClient().private('blog.admin').listen('blog.post.changed', (payload) => {
+        received.push(payload)
+      })
+      emit('open', undefined)
+      emit('message', {
+        data: JSON.stringify({
+          event: 'pusher:connection_established',
+          data: JSON.stringify({ socket_id: '1.1' }),
+        }),
+      })
+      emit('message', {
+        data: JSON.stringify({
+          event: 'blog.post.changed',
+          channel: 'private-blog.admin',
+          data: JSON.stringify({ action: 'created', title: 'Live post' }),
+        }),
+      })
+
+      expect(openedUrl).toBe('ws://127.0.0.1:8080/app/app-key')
+      expect(sentMessages).toContainEqual({
+        event: 'pusher:subscribe',
+        data: {
+          channel: 'private-blog.admin',
+        },
+      })
+      expect(received).toEqual([{ action: 'created', title: 'Live post' }])
+    } finally {
+      Object.defineProperty(globalThis, 'WebSocket', {
+        configurable: true,
+        writable: true,
+        value: originalWebSocket,
+      })
+      resetFluxClient()
+    }
+  })
+
+  it('discovers Holo websocket options from the framework broadcast config endpoint', async () => {
+    const originalFetch = globalThis.fetch
+    const originalLocation = globalThis.location
+    const originalWebSocket = globalThis.WebSocket
+    const browserGlobal = globalThis as typeof globalThis & { window?: unknown }
+    const originalWindow = browserGlobal.window
+    let openedUrl = ''
+    let requestedUrl = ''
+
+    class TestWebSocket {
+      readonly readyState = 0
+
+      constructor(url: string | URL) {
+        openedUrl = url.toString()
+      }
+
+      send(): void {}
+
+      close(): void {}
+
+      addEventListener(event: TestWebSocketEventName, listener: TestWebSocketEventMap[TestWebSocketEventName]): void {
+        if (event === 'open') {
+          queueMicrotask(() => listener(undefined as never))
+        }
+      }
+    }
+
+    try {
+      Object.defineProperty(globalThis, 'fetch', {
+        configurable: true,
+        writable: true,
+        value: async (url: string) => {
+          requestedUrl = url
+          return {
+            ok: true,
+            async json() {
+              return {
+                key: 'browser-key',
+                host: '127.0.0.1',
+                port: 6100,
+                path: '/broadcast',
+                scheme: 'http',
+              }
+            },
+          }
+        },
+      })
+      Object.defineProperty(globalThis, 'location', {
+        configurable: true,
+        value: {
+          hostname: 'blog.test',
+          protocol: 'http:',
+        },
+      })
+      Object.defineProperty(globalThis, 'window', {
+        configurable: true,
+        value: {},
+      })
+      Object.defineProperty(globalThis, 'WebSocket', {
+        configurable: true,
+        writable: true,
+        value: TestWebSocket,
+      })
+
+      resetFluxClient()
+      await getFluxClient().connect()
+
+      expect(requestedUrl).toBe('/broadcasting/config')
+      expect(openedUrl).toBe('ws://blog.test:6100/broadcast/browser-key')
+    } finally {
+      Object.defineProperty(globalThis, 'fetch', {
+        configurable: true,
+        writable: true,
+        value: originalFetch,
+      })
+      Object.defineProperty(globalThis, 'location', {
+        configurable: true,
+        value: originalLocation,
+      })
+      Object.defineProperty(globalThis, 'WebSocket', {
+        configurable: true,
+        writable: true,
+        value: originalWebSocket,
+      })
+      Object.defineProperty(globalThis, 'window', {
+        configurable: true,
+        value: originalWindow,
+      })
+      resetFluxClient()
+    }
+  })
+
+  it('drives Holo websocket subscriptions through the Pusher wire protocol', async () => {
+    const originalWebSocket = globalThis.WebSocket
+    const originalLocation = globalThis.location
+    const sockets: TestWebSocket[] = []
+    const sentMessages: unknown[] = []
+    const transitions: string[] = []
+    let openedUrl = ''
+
+    class TestWebSocket {
+      static readonly CONNECTING = 0
+      static readonly OPEN = 1
+      static readonly CLOSING = 2
+      static readonly CLOSED = 3
+
+      readyState = 0
+      readonly listeners = new Map<TestWebSocketEventName, Set<TestWebSocketEventMap[TestWebSocketEventName]>>()
+
+      constructor(url: string | URL) {
+        openedUrl = url.toString()
+        sockets.push(this)
+      }
+
+      send(data: string): void {
+        sentMessages.push(JSON.parse(data) as unknown)
+      }
+
+      close(): void {
+        this.emit('close', undefined)
+      }
+
+      addEventListener<TEvent extends TestWebSocketEventName>(event: TEvent, listener: TestWebSocketEventMap[TEvent]): void {
+        const eventListeners = this.listeners.get(event) ?? new Set<TestWebSocketEventMap[TestWebSocketEventName]>()
+        eventListeners.add(listener)
+        this.listeners.set(event, eventListeners)
+      }
+
+      emit<TEvent extends TestWebSocketEventName>(event: TEvent, payload: Parameters<TestWebSocketEventMap[TEvent]>[0]): void {
+        if (event === 'open') {
+          this.readyState = 1
+        }
+
+        if (event === 'close') {
+          this.readyState = 3
+        }
+
+        for (const listener of this.listeners.get(event) ?? []) {
+          listener(payload as never)
+        }
+      }
+    }
+
+    try {
+      Object.defineProperty(globalThis, 'WebSocket', {
+        configurable: true,
+        writable: true,
+        value: TestWebSocket,
+      })
+      Object.defineProperty(globalThis, 'location', {
+        configurable: true,
+        value: {
+          hostname: 'blog.test',
+          protocol: 'https:',
+        },
+      })
+
+      const connector = fluxInternals.createHoloWebSocketConnector({
+        host: '0.0.0.0',
+        port: 6001,
+        path: 'broadcast',
+        key: 'key with spaces',
+      })
+      const client = configureFluxClient({
+        connector,
+      })
+      client.onStatusChange(status => transitions.push(status))
+
+      const receivedEvents: unknown[] = []
+      const receivedWhispers: unknown[] = []
+      const members: Array<readonly unknown[]> = []
+      const joined: unknown[] = []
+      const left: unknown[] = []
+      const publicSubscription = client.channel('public.news')
+      const privateSubscription = client.private('orders.1')
+      const presenceSubscription = client.presence('chat.1')
+
+      publicSubscription.listen('news.updated', payload => receivedEvents.push(payload))
+      privateSubscription.listenForWhisper('typing.start' as never, payload => receivedWhispers.push(payload))
+      presenceSubscription.here(value => members.push(value))
+      presenceSubscription.joining(member => joined.push(member))
+      presenceSubscription.leaving(member => left.push(member))
+
+      const connection = client.connect()
+      expect(sockets).toHaveLength(1)
+      const socket = sockets[0]!
+      socket.emit('open', undefined)
+      await connection
+      socket.emit('message', {
+        data: JSON.stringify({
+          event: 'pusher:connection_established',
+          data: JSON.stringify({ socket_id: '1.1' }),
+        }),
+      })
+      socket.emit('message', {
+        data: JSON.stringify({
+          event: 'pusher_internal:subscription_succeeded',
+          channel: 'presence-chat.1',
+          data: {
+            presence: {
+              hash: {
+                user_1: { id: 'user_1' },
+              },
+            },
+          },
+        }),
+      })
+      socket.emit('message', {
+        data: JSON.stringify({
+          event: 'pusher_internal:member_added',
+          channel: 'presence-chat.1',
+          data: {
+            member: JSON.stringify({ id: 'user_2' }),
+          },
+        }),
+      })
+      socket.emit('message', {
+        data: JSON.stringify({
+          event: 'pusher_internal:member_removed',
+          channel: 'presence-chat.1',
+          data: {
+            member: { id: 'user_1' },
+          },
+        }),
+      })
+      socket.emit('message', {
+        data: JSON.stringify({
+          event: 'client-typing.start',
+          channel: 'private-orders.1',
+          data: JSON.stringify({ editing: true }),
+        }),
+      })
+      socket.emit('message', {
+        data: JSON.stringify({
+          event: 'news.updated',
+          channel: 'public.news',
+          data: { id: 'post_1' },
+        }),
+      })
+      socket.emit('message', { data: JSON.stringify({ event: 'ignored' }) })
+      socket.emit('message', { data: JSON.stringify({ event: 'news.updated', channel: 'missing.channel' }) })
+      socket.emit('message', { data: 'null' })
+      socket.emit('message', { data: { event: 'ignored' } })
+
+      await privateSubscription.whisper('typing.stop' as never, { editing: false })
+      await client.connect()
+      privateSubscription.leaveChannel()
+      presenceSubscription.leaveChannel()
+      await client.disconnect()
+
+      expect(openedUrl).toBe('wss://blog.test:6001/broadcast/key%20with%20spaces')
+      expect(sentMessages).toEqual([
+        {
+          event: 'pusher:subscribe',
+          data: {
+            channel: 'public.news',
+          },
+        },
+        {
+          event: 'pusher:subscribe',
+          data: {
+            channel: 'private-orders.1',
+          },
+        },
+        {
+          event: 'pusher:subscribe',
+          data: {
+            channel: 'presence-chat.1',
+          },
+        },
+        {
+          event: 'client-typing.stop',
+          channel: 'private-orders.1',
+          data: {
+            editing: false,
+          },
+        },
+        {
+          event: 'pusher:unsubscribe',
+          data: {
+            channel: 'private-orders.1',
+          },
+        },
+        {
+          event: 'pusher:unsubscribe',
+          data: {
+            channel: 'presence-chat.1',
+          },
+        },
+      ])
+      expect(receivedEvents).toEqual([{ id: 'post_1' }])
+      expect(receivedWhispers).toEqual([{ editing: true }])
+      expect(members).toEqual([[]])
+      expect(joined).toEqual([{ id: 'user_1' }, { id: 'user_2' }])
+      expect(left).toEqual([{ id: 'user_1' }])
+      expect(transitions).toEqual(['connecting', 'connected', 'disconnected'])
+    } finally {
+      Object.defineProperty(globalThis, 'WebSocket', {
+        configurable: true,
+        writable: true,
+        value: originalWebSocket,
+      })
+      Object.defineProperty(globalThis, 'location', {
+        configurable: true,
+        value: originalLocation,
+      })
+      resetFluxClient()
+    }
+  })
+
+  it('handles Holo websocket connection failures and missing browser websocket support', async () => {
+    const originalWebSocket = globalThis.WebSocket
+    const sockets: TestWebSocket[] = []
+    const transitions: string[] = []
+
+    class TestWebSocket {
+      readonly readyState = 0
+      readonly listeners = new Map<TestWebSocketEventName, Set<TestWebSocketEventMap[TestWebSocketEventName]>>()
+
+      constructor() {
+        sockets.push(this)
+      }
+
+      send(): void {}
+
+      close(): void {
+        this.emit('close', undefined)
+      }
+
+      addEventListener<TEvent extends TestWebSocketEventName>(event: TEvent, listener: TestWebSocketEventMap[TEvent]): void {
+        const eventListeners = this.listeners.get(event) ?? new Set<TestWebSocketEventMap[TestWebSocketEventName]>()
+        eventListeners.add(listener)
+        this.listeners.set(event, eventListeners)
+      }
+
+      emit<TEvent extends TestWebSocketEventName>(event: TEvent, payload: Parameters<TestWebSocketEventMap[TEvent]>[0]): void {
+        for (const listener of this.listeners.get(event) ?? []) {
+          listener(payload as never)
+        }
+      }
+    }
+
+    try {
+      Object.defineProperty(globalThis, 'WebSocket', {
+        configurable: true,
+        writable: true,
+        value: undefined,
+      })
+      const unsupported = fluxInternals.createHoloWebSocketConnector()
+      await expect(unsupported.connect()).resolves.toBeUndefined()
+      const unsupportedChannel = unsupported.subscribe('orders.1', 'private')
+      await expect(unsupportedChannel.sendWhisper('typing.start', { editing: true })).resolves.toBeUndefined()
+      unsupportedChannel.leave()
+
+      Object.defineProperty(globalThis, 'WebSocket', {
+        configurable: true,
+        writable: true,
+        value: TestWebSocket,
+      })
+      const connector = fluxInternals.createHoloWebSocketConnector({
+        scheme: 'http',
+      })
+      connector.onStatusChange(status => transitions.push(status))
+      const connection = connector.connect()
+      expect(sockets).toHaveLength(1)
+      sockets[0]!.emit('error', undefined)
+
+      await expect(connection).rejects.toThrow('WebSocket connection failed')
+      fluxInternals.createHoloWebSocketConnector().subscribe('orders.background', 'private')
+      expect(sockets).toHaveLength(2)
+      sockets[1]!.emit('error', undefined)
+      await Promise.resolve()
+      expect(connector.getStatus()).toBe('disconnected')
+      expect(transitions).toEqual(['connecting', 'disconnected'])
+    } finally {
+      Object.defineProperty(globalThis, 'WebSocket', {
+        configurable: true,
+        writable: true,
+        value: originalWebSocket,
+      })
+    }
+  })
+
+  it('reuses Holo websocket channels and detaches listener callbacks', async () => {
+    const originalWebSocket = globalThis.WebSocket
+    const originalLocation = globalThis.location
+    const sockets: TestWebSocket[] = []
+    const sentMessages: unknown[] = []
+    const transitions: string[] = []
+    const received: unknown[] = []
+    let openedUrl = ''
+
+    class TestWebSocket {
+      static readonly CONNECTING = 0
+      static readonly OPEN = 1
+      static readonly CLOSING = 2
+      static readonly CLOSED = 3
+
+      readyState = 0
+      readonly listeners = new Map<TestWebSocketEventName, Set<TestWebSocketEventMap[TestWebSocketEventName]>>()
+
+      constructor(url: string | URL) {
+        openedUrl = url.toString()
+        sockets.push(this)
+      }
+
+      send(data: string): void {
+        sentMessages.push(JSON.parse(data) as unknown)
+      }
+
+      close(): void {
+        this.emit('close', undefined)
+      }
+
+      addEventListener<TEvent extends TestWebSocketEventName>(event: TEvent, listener: TestWebSocketEventMap[TEvent]): void {
+        const eventListeners = this.listeners.get(event) ?? new Set<TestWebSocketEventMap[TestWebSocketEventName]>()
+        eventListeners.add(listener)
+        this.listeners.set(event, eventListeners)
+      }
+
+      emit<TEvent extends TestWebSocketEventName>(event: TEvent, payload: Parameters<TestWebSocketEventMap[TEvent]>[0]): void {
+        if (event === 'open') {
+          this.readyState = 1
+        }
+
+        if (event === 'close') {
+          this.readyState = 3
+        }
+
+        for (const listener of this.listeners.get(event) ?? []) {
+          listener(payload as never)
+        }
+      }
+    }
+
+    try {
+      Object.defineProperty(globalThis, 'WebSocket', {
+        configurable: true,
+        writable: true,
+        value: TestWebSocket,
+      })
+      Object.defineProperty(globalThis, 'location', {
+        configurable: true,
+        value: {
+          hostname: 'ignored.test',
+          protocol: 'http:',
+        },
+      })
+
+      const connector = fluxInternals.createHoloWebSocketConnector({
+        host: ' socket.example.test ',
+        scheme: 'https',
+        port: 443,
+        path: '/realtime/',
+        key: 'browser key',
+      })
+      const stopIgnoredStatus = connector.onStatusChange(() => {
+        transitions.push('ignored')
+      })
+      stopIgnoredStatus()
+      connector.onStatusChange(status => transitions.push(status))
+
+      const connection = connector.connect()
+      expect(sockets).toHaveLength(1)
+      sockets[0]!.emit('open', undefined)
+      await connection
+
+      const first = connector.subscribe('orders.1', 'private')
+      const second = connector.subscribe('orders.1', 'private')
+      const presence = connector.subscribe('chat.1', 'presence')
+      const memberSnapshots: Array<readonly unknown[]> = []
+      const stopEvent = first.onEvent('orders.updated', payload => received.push({ first: payload }))
+      second.onEvent('orders.updated', payload => received.push({ second: payload }))
+      presence.onMembersChange(members => memberSnapshots.push(members))
+      const stopNotification = first.onNotification(payload => received.push({ notification: payload }))
+      stopNotification()
+      stopEvent()
+
+      sockets[0]!.emit('message', {
+        data: JSON.stringify({
+          event: 'pusher_internal:subscription_succeeded',
+          channel: 'presence-chat.1',
+          data: {
+            presence: {
+              hash: null,
+            },
+          },
+        }),
+      })
+      sockets[0]!.emit('message', {
+        data: JSON.stringify({
+          event: 'pusher_internal:subscription_succeeded',
+          channel: 'presence-chat.1',
+          data: {
+            presence: [],
+          },
+        }),
+      })
+      sockets[0]!.emit('message', {
+        data: JSON.stringify({
+          event: 'client-typing.stop',
+          channel: 'private-orders.1',
+          data: JSON.stringify({ editing: false }),
+        }),
+      })
+      sockets[0]!.emit('message', {
+        data: JSON.stringify({
+          event: 'orders.shipped',
+          channel: 'private-orders.1',
+          data: JSON.stringify({ id: 'ord_2' }),
+        }),
+      })
+      sockets[0]!.emit('message', {
+        data: JSON.stringify({
+          event: 'orders.updated',
+          channel: 'private-orders.1',
+          data: JSON.stringify({ id: 'ord_1' }),
+        }),
+      })
+      await second.sendWhisper('typing.start', { editing: true })
+      await connector.disconnect()
+
+      expect(openedUrl).toBe('wss://socket.example.test:443/realtime/browser%20key')
+      expect(sentMessages).toEqual([
+        {
+          event: 'pusher:subscribe',
+          data: {
+            channel: 'private-orders.1',
+          },
+        },
+        {
+          event: 'pusher:subscribe',
+          data: {
+            channel: 'presence-chat.1',
+          },
+        },
+        {
+          event: 'client-typing.start',
+          channel: 'private-orders.1',
+          data: {
+            editing: true,
+          },
+        },
+      ])
+      expect(received).toEqual([{ second: { id: 'ord_1' } }])
+      expect(memberSnapshots).toEqual([[]])
+      expect(transitions).toEqual(['connecting', 'connected', 'disconnected'])
+    } finally {
+      Object.defineProperty(globalThis, 'WebSocket', {
+        configurable: true,
+        writable: true,
+        value: originalWebSocket,
+      })
+      Object.defineProperty(globalThis, 'location', {
+        configurable: true,
+        value: originalLocation,
+      })
+      resetFluxClient()
+    }
   })
 
   it('supports connection state lifecycle and default-client proxy helpers', async () => {

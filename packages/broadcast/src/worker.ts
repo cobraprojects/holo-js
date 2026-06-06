@@ -4,6 +4,7 @@ import type { Duplex } from 'node:stream'
 import type { NormalizedHoloBroadcastConfig, NormalizedHoloQueueConfig, NormalizedHoloRedisConfig } from '@holo-js/config'
 import {
   authorizeBroadcastChannel,
+  resolveBroadcastChannelGuard,
   validateBroadcastWhisperPayload,
 } from './auth'
 import type {
@@ -813,11 +814,16 @@ async function authenticateSubscription(
     })
   }
 
+  const guard = await resolveBroadcastChannelGuard({
+    channel: canonical,
+    socketId: connection.socketId,
+  }, channelAuth)
   const resolvedUser = typeof channelAuth?.resolveUser === 'function'
     ? await channelAuth.resolveUser({
       headers: connection.headers,
       socketId: connection.socketId,
       channel: canonical,
+      ...(typeof guard === 'undefined' ? {} : { guard }),
       appId: app.appId,
       connection: app.connection,
     })

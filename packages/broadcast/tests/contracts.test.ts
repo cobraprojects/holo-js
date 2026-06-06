@@ -114,6 +114,7 @@ describe('@holo-js/broadcast contracts', () => {
 
     const definition = defineChannel('chat.{roomId}', {
       type: 'presence',
+      guard: 'admin',
       authorize() {
         return {
           id: 'user_1',
@@ -129,9 +130,18 @@ describe('@holo-js/broadcast contracts', () => {
     expect(broadcastInternals.hasChannelDefinitionMarker(definition)).toBe(true)
     expect(definition.pattern).toBe('chat.{roomId}')
     expect(definition.type).toBe('presence')
+    expect(definition.guard).toBe('admin')
     expect(Object.keys(definition.whispers)).toEqual(['typing.start'])
     expect(broadcastInternals.extractChannelPatternParamNames('chat.{roomId}')).toEqual(['roomId'])
     expect(Object.isFrozen(definition.whispers)).toBe(true)
+
+    const defaultGuardDefinition = defineChannel('orders.{orderId}', {
+      type: 'private',
+      authorize() {
+        return true
+      },
+    })
+    expect('guard' in defaultGuardDefinition).toBe(false)
   })
 
   it('rejects invalid queue, channel, and whisper definitions', () => {

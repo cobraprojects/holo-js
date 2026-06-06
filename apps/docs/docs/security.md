@@ -65,7 +65,7 @@ export default defineSecurityConfig({
 import { defineCorsConfig, env } from '@holo-js/config'
 
 export default defineCorsConfig({
-  paths: ['/api/*', '/broadcasting/auth'],
+  paths: ['/api/*', '/broadcasting/config', '/broadcasting/auth'],
   origins: [
     env('FRONTEND_URL', 'http://localhost:3000'),
   ],
@@ -118,6 +118,7 @@ Holo-JS falls back to standalone `host`, which may also be a Unix socket path.
 - `csrf.header` is the header accepted for XHR and `fetch` requests.
 - `csrf.cookie` stores the signed readable token cookie that browser clients and native forms submit back.
 - `csrf.except` skips CSRF verification for matching paths such as webhooks.
+- `/broadcasting/auth` is skipped by CSRF protection automatically when broadcast is installed.
 - `cors.origins` lists frontend origins allowed to call the API.
 - `cors.credentials` must be true when the frontend uses cookie-backed auth with `fetch(..., { credentials: 'include' })`.
 - `cors.statefulDomains` lists browser hosts that should be treated as first-party cookie clients.

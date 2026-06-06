@@ -97,6 +97,10 @@ import {
   scaffoldProject,
 } from './scaffold/framework'
 import {
+  renderNextBroadcastConfigRoute,
+  renderNextGeneratedBroadcastConfigRoute,
+} from './scaffold/framework-renderers'
+import {
   createAuthMigrationFiles,
   createNotificationsMigrationFiles,
   normalizeScaffoldEnvSegments,
@@ -789,10 +793,17 @@ export async function installBroadcastIntoProject(
 
   if (framework === 'next') {
     const holoHelperPath = resolve(projectRoot, '.holo-js/generated/next/holo.ts')
+    const broadcastConfigRoutePath = resolve(projectRoot, 'app/broadcasting/config/route.ts')
+    const generatedBroadcastConfigRoutePath = resolve(projectRoot, '.holo-js/generated/next/broadcast-config-route.ts')
     if (!(await pathExists(holoHelperPath))) {
       await writeTextFile(holoHelperPath, renderNextHoloHelper())
       createdFrameworkSetup = true
     }
+    if (!(await pathExists(broadcastConfigRoutePath))) {
+      await writeTextFile(broadcastConfigRoutePath, renderNextBroadcastConfigRoute())
+      createdFrameworkSetup = true
+    }
+    await writeTextFile(generatedBroadcastConfigRoutePath, renderNextGeneratedBroadcastConfigRoute())
   } else if (framework === 'sveltekit') {
     const holoHelperPath = resolve(projectRoot, '.holo-js/generated/sveltekit/holo.ts')
     if (!(await pathExists(holoHelperPath))) {
@@ -843,6 +854,7 @@ export {
   renderEnvFileContents,
   renderFrameworkFiles,
   renderFrameworkRunner,
+  renderNextBroadcastConfigRoute,
   renderMailConfig,
   renderMailEnvFiles,
   renderMediaConfig,
