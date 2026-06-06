@@ -35,6 +35,71 @@ const user = await DB.transaction(async (tx) => {
 Return values from the transaction callback when the calling workflow needs the created record or some
 derived result. The transaction itself remains the boundary, not a side channel.
 
+## Write transactions
+
+Use `DB.writeTransaction(...)` for read-then-write workflows where the operation is expected to modify data:
+
+```ts
+await DB.writeTransaction(async (tx) => {
+  const product = await tx.table('products')
+    .where('id', productId)
+    .first<{ id: number, quantity: number }>()
+
+  if (!product || product.quantity < requestedQty) {
+    throw new Error('Out of stock')
+  }
+
+  await tx.table('products')
+    .where('id', productId)
+    .update({ quantity: product.quantity - requestedQty })
+})
+```
+
+On SQLite, `writeTransaction(...)` starts the transaction in write mode so competing write workflows coordinate
+earlier. On other drivers, it behaves like a normal transaction.
+
+The same connection argument shape is available when you need a named connection:
+
+```ts
+await DB.writeTransaction(async (tx) => {
+  await tx.table('jobs').where('status', 'pending').update({ status: 'running' })
+}, 'primary')
+```
+
+## SQLite transaction modes
+
+SQLite transactions can receive an explicit mode:
+
+```ts
+await DB.transaction(async (tx) => {
+  await tx.table('accounts')
+    .where('id', accountId)
+    .update({ balance: newBalance })
+}, { mode: 'immediate' })
+```
+
+For a named connection, pass the mode after the connection name:
+
+```ts
+await DB.transaction(async (tx) => {
+  await tx.table('accounts')
+    .where('id', accountId)
+    .update({ balance: newBalance })
+}, 'sqlite', { mode: 'immediate' })
+```
+
+Available SQLite modes:
+
+- `deferred`: the default SQLite transaction behavior
+- `immediate`: reserve the writer when the transaction starts
+- `exclusive`: use an exclusive transaction when the workflow intentionally needs that stronger boundary
+
+Use `writeTransaction(...)` when you simply want the recommended write workflow. Use `transaction(..., { mode })`
+when the SQLite mode itself is part of the application decision.
+
+Pass `mode` only to the outermost SQLite transaction. Nested workflows should keep using the active transaction
+boundary.
+
 ## Model usage inside a transaction
 
 ```ts
@@ -112,5 +177,6 @@ await DB.transaction(
 - keep a transaction scoped to one business workflow
 - avoid long-running external I/O inside the transaction callback
 - return a value from the callback instead of mutating outer state when possible
+- use `writeTransaction(...)` for SQLite read-then-write workflows that should reserve the writer immediately
 - use model and relation helpers freely inside the transaction; they stay bound to the active context
 - do not wrap unrelated route work in one large transaction just because it is convenient

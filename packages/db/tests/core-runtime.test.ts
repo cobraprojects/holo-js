@@ -33,6 +33,7 @@ import {
   resolveMorphModel,
   unsafeSql,
   type DatabaseLogger,
+  type DatabaseTransactionOptions,
   type Dialect,
   type DriverAdapter,
   type UnsafeStatement,
@@ -82,8 +83,8 @@ class FakeAdapter implements DriverAdapter {
     return { affectedRows: bindings.length, lastInsertId: 7 }
   }
 
-  async beginTransaction(): Promise<void> {
-    this.calls.push('begin')
+  async beginTransaction(options?: DatabaseTransactionOptions): Promise<void> {
+    this.calls.push(options?.mode ? `begin:${options.mode}` : 'begin')
     if (this.failBegin) throw new Error('begin failed')
   }
 
@@ -921,6 +922,49 @@ describe('new core runtime slice', () => {
     expect(entries).toContain('tx-commit:transaction:1:-')
   })
 
+  it('supports explicit SQLite transaction modes and write transactions', async () => {
+    const adapter = new FakeAdapter()
+    const db = createDatabase({
+      adapter,
+      dialect: createDialect(true),
+    })
+
+    await db.transaction(async () => 'explicit', { mode: 'immediate' })
+    await db.writeTransaction(async () => 'write')
+    await db.transaction(async (tx) => {
+      await tx.writeTransaction(async () => 'nested')
+    })
+
+    expect(adapter.calls).toEqual([
+      'initialize',
+      'begin:immediate',
+      'commit',
+      'begin:immediate',
+      'commit',
+      'begin',
+      'savepoint:sp_0',
+      'release:sp_0',
+      'commit',
+    ])
+  })
+
+  it('rejects transaction modes outside SQLite root transactions', async () => {
+    const postgresDb = createDatabase({
+      adapter: new FakeAdapter(),
+      dialect: createConcurrentDialect(),
+    })
+    const sqliteDb = createDatabase({
+      adapter: new FakeAdapter(),
+      dialect: createDialect(true),
+    })
+
+    await expect(postgresDb.transaction(async () => 'blocked', { mode: 'immediate' })).rejects.toThrow(CapabilityError)
+    await expect(sqliteDb.transaction(async () => 'blocked', { mode: 'invalid' as never })).rejects.toThrow(ConfigurationError)
+    await expect(sqliteDb.transaction(async (tx) => {
+      await tx.transaction(async () => 'blocked', { mode: 'immediate' })
+    })).rejects.toThrow(TransactionError)
+  })
+
   it('serializes overlapping root transactions when the adapter owns a single transaction connection', async () => {
     const adapter = new SlowAdapter(0, 0, 5)
     const db = createDatabase({
@@ -1491,9 +1535,15 @@ describe('connection manager and facade', () => {
       expect(tx.getConnectionName()).toBe('existing')
       await tx.unsafeQuery(unsafeSql('select from manager tx'))
     })
+    await manager.writeTransaction(async (tx) => {
+      expect(tx.getConnectionName()).toBe('existing')
+      await tx.unsafeQuery(unsafeSql('select from manager write tx'))
+    })
 
     expect(adapter.calls).toContain('begin')
     expect(adapter.calls).toContain('query:select from manager tx:0')
+    expect(adapter.calls).toContain('begin:immediate')
+    expect(adapter.calls).toContain('query:select from manager write tx:0')
     expect(adapter.calls).toContain('commit')
   })
 
@@ -1526,9 +1576,21 @@ describe('connection manager and facade', () => {
       expect(DB.table('posts').getConnection()).toBe(tx)
       await DB.unsafeExecute(unsafeSql('delete from posts where id = ?', [7]))
     })
+    await DB.transaction(async () => 'mode', { mode: 'immediate' })
+    await DB.transaction(async () => 'undefined connection mode', undefined, { mode: 'exclusive' })
+    await DB.writeTransaction(async () => 'write')
+    await DB.writeTransaction(async () => 'undefined connection write mode', undefined, { mode: 'exclusive' })
+    await DB.writeTransaction(async (tx) => {
+      expect(tx.getConnectionName()).toBe('analytics')
+      return 'named write'
+    }, 'analytics')
 
     expect(defaultAdapter.calls).toContain('begin')
+    expect(defaultAdapter.calls).toContain('begin:immediate')
+    expect(defaultAdapter.calls).toContain('begin:exclusive')
+    expect(defaultAdapter.calls.filter(call => call === 'begin:exclusive')).toHaveLength(2)
     expect(defaultAdapter.calls).toContain('execute:delete from posts where id = ?:1')
+    expect(analyticsAdapter.calls).toContain('begin:immediate')
 
     const queryResult = await DB.table('users').unsafeQuery<{ ok: boolean }>({
       unsafe: true,

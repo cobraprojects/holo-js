@@ -57,7 +57,7 @@ import auth, { authRuntimeInternals, configureAuthRuntime } from '@holo-js/auth'
 import authorization, { authorize, can, cannot, inspect } from '@holo-js/authorization'
 import { holo } from './server/holo.ts'
 
-await holo.getApp()
+const project = await holo.getApp()
 
 const { default: Post } = await import('./server/models/Post.ts')
 const { default: User } = await import('./server/models/User.ts')
@@ -121,6 +121,7 @@ try {
   }))
 } finally {
   configureAuthRuntime(bindings)
+  await project.runtime.shutdown()
 }
 `.trim()
 

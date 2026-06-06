@@ -1,6 +1,6 @@
 import { DatabaseContext, createDatabase } from '../core/DatabaseContext'
 import { ConfigurationError } from '../core/errors'
-import type { DatabaseContextOptions } from '../core/types'
+import type { DatabaseContextOptions, DatabaseTransactionOptions } from '../core/types'
 
 export interface ConnectionManagerOptions {
   defaultConnection: string
@@ -69,8 +69,17 @@ export class ConnectionManager {
   async transaction<T>(
     callback: (connection: DatabaseContext) => Promise<T>,
     connectionName = this.defaultConnection,
+    options?: DatabaseTransactionOptions,
   ): Promise<T> {
-    return this.connection(connectionName).transaction(callback)
+    return this.connection(connectionName).transaction(callback, options)
+  }
+
+  async writeTransaction<T>(
+    callback: (connection: DatabaseContext) => Promise<T>,
+    connectionName = this.defaultConnection,
+    options?: DatabaseTransactionOptions,
+  ): Promise<T> {
+    return this.connection(connectionName).writeTransaction(callback, options)
   }
 }
 

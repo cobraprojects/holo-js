@@ -118,7 +118,7 @@ export class MigrationService {
 
   async migrate(options: MigrateOptions = {}): Promise<RegisteredMigrationDefinition[]> {
     return this.runExclusively(async () => {
-      await this.ensureTrackingTable()
+      await this.ensureTrackingTableForMigration()
       const step = options.step ?? Number.POSITIVE_INFINITY
       const ran = await this.getRanRecords()
       const ranNames = new Set(ran.map(record => record.name))
@@ -149,6 +149,25 @@ export class MigrationService {
 
       return executed
     })
+  }
+
+  private async ensureTrackingTableForMigration(): Promise<void> {
+    try {
+      await this.ensureTrackingTable()
+    } catch (error) {
+      if (!this.isDatabaseMissingError(error)) {
+        throw error
+      }
+
+      const adapter = this.connection.getAdapter()
+      if (typeof adapter.ensureDatabaseExists !== 'function') {
+        throw error
+      }
+
+      await this.disconnectFailedConnection()
+      await adapter.ensureDatabaseExists()
+      await this.ensureTrackingTable()
+    }
   }
 
   async rollback(options: RollbackOptions = {}): Promise<RegisteredMigrationDefinition[]> {
@@ -260,6 +279,29 @@ export class MigrationService {
       })
       throw error
     }
+  }
+
+  private isDatabaseMissingError(error: unknown): boolean {
+    const adapter = this.connection.getAdapter()
+    if (typeof adapter.isDatabaseMissingError !== 'function') {
+      return false
+    }
+
+    if (adapter.isDatabaseMissingError(error)) {
+      return true
+    }
+
+    return error instanceof DatabaseError
+      && typeof error.cause !== 'undefined'
+      && adapter.isDatabaseMissingError(error.cause)
+  }
+
+  private async disconnectFailedConnection(): Promise<void> {
+    if (!this.connection.isConnected()) {
+      return
+    }
+
+    await this.connection.disconnect()
   }
 
   private normalizeMigratedAt(value: string | Date): Date {

@@ -39,6 +39,7 @@ import {
   renderEnvWithAppKey,
 } from '../src/app-key'
 import { cliInternals } from '../src/cli-internals'
+import { promptMultiChoice } from '../src/parsing'
 import { cleanupRuntimeDependencyLink, ensureRuntimeDependencyLink, runRuntimeInvocation } from '../src/runtime'
 import { collectDiscoveryWatchRoots, isDiscoveryRelevantPath } from '../src/dev'
 import { generatorInternals } from '../src/generators'
@@ -4099,7 +4100,7 @@ export default defineRedisConfig({
     await writeProjectFile(interactiveEventsRoot, '.env.example', 'APP_NAME=\n')
     const interactiveEventsIo = createIo(interactiveEventsRoot, {
       tty: true,
-      input: 'y\n',
+      input: 'enable\n',
     })
     const interactiveEventsContext = {
       ...interactiveEventsIo.io,
@@ -4148,7 +4149,7 @@ export default defineRedisConfig({
 
     const queueOnlyEventsIo = createIo(queueOnlyEventsRoot, {
       tty: true,
-      input: 'y\n',
+      input: 'enable\n',
     })
     const queueOnlyEventsContext = {
       ...queueOnlyEventsIo.io,
@@ -4459,6 +4460,41 @@ export default defineDatabaseConfig({
     expect(JSON.parse(await readFile(join(staleQueuePackagesRoot, 'package.json'), 'utf8')).dependencies['@holo-js/queue-db']).toBeUndefined()
     expect(JSON.parse(await readFile(join(staleQueuePackagesRoot, 'package.json'), 'utf8')).dependencies['@holo-js/queue-redis']).toBeUndefined()
   }, 180000)
+
+  it('prepares selectable install prompts in-process', async () => {
+    const projectRoot = await createTempDirectory()
+    tempDirs.push(projectRoot)
+
+    const prepareInstall = async (input: string, args: readonly string[] = []) => {
+      const io = createIo(projectRoot, { tty: true, input })
+      const context = {
+        ...io.io,
+        projectRoot,
+        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+        loadProject: async () => ({ config: defaultProjectConfig() }),
+      }
+      const installCommand = cliInternals.createInternalCommands(context as never)
+        .find(command => command.name === 'install')
+
+      return installCommand?.prepare?.({ args, flags: {} }, context as never)
+    }
+
+    await expect(prepareInstall('media\n')).resolves.toEqual({
+      args: ['media'],
+      flags: {},
+    })
+    await expect(prepareInstall('redis\n', ['cache'])).resolves.toEqual({
+      args: ['cache'],
+      flags: { driver: 'redis' },
+    })
+    await expect(prepareInstall('workos,clerk\n', ['auth'])).resolves.toEqual({
+      args: ['auth'],
+      flags: {
+        workos: true,
+        clerk: true,
+      },
+    })
+  })
 
   it('preserves workspace versions when syncing managed dependencies in workspace apps', async () => {
     const projectRoot = await createTempProject()
@@ -6066,6 +6102,11 @@ export default defineBroadcastConfig({
       input: 'forms,validation\n',
     })
     await expect(cliInternals.promptOptionalPackages(optionalPromptIo.io)).resolves.toEqual(['forms', 'validation'])
+    const multiChoicePromptIo = createIo(baseRoot, {
+      tty: true,
+      input: 'workos, clerk\n',
+    })
+    await expect(promptMultiChoice(multiChoicePromptIo.io, 'Auth providers', ['social', 'workos', 'clerk'])).resolves.toEqual(['workos', 'clerk'])
     const securityPromptIo = createIo(baseRoot, {
       tty: true,
       input: 'security\n',
@@ -8565,6 +8606,31 @@ export default {
         observer: false,
         seeder: false,
         factory: false,
+      },
+    })
+
+    const interactiveModelIo = createIo(projectRoot, {
+      tty: true,
+      input: 'migration,factory\n',
+    })
+    const interactiveModelContext = {
+      ...interactiveModelIo.io,
+      projectRoot,
+      registry,
+      loadProject: context.loadProject,
+    }
+    const interactiveModelCommands = cliInternals.createInternalCommands(interactiveModelContext as never)
+    const interactiveModelPrepared = await interactiveModelCommands.find(command => command.name === 'make:model')!.prepare!(
+      { args: ['Lesson'], flags: {} },
+      interactiveModelContext as never,
+    )
+    expect(interactiveModelPrepared).toEqual({
+      args: ['Lesson'],
+      flags: {
+        migration: true,
+        observer: false,
+        seeder: false,
+        factory: true,
       },
     })
 

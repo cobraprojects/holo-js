@@ -185,6 +185,8 @@ export type {
   ConcurrencyOptions,
   DatabaseDriverName,
   DatabaseOperationOptions,
+  DatabaseTransactionOptions,
+  TransactionMode,
   TransactionCallback,
   UnsafeStatement,
   DriverQueryResult,

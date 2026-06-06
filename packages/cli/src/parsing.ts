@@ -1,4 +1,11 @@
 import { createInterface } from 'node:readline/promises'
+import {
+  cancel as cancelPrompt,
+  isCancel,
+  multiselect,
+  select,
+  text,
+} from '@clack/prompts'
 import type { CommandFlagValue } from './types'
 import type { IoStreams, RawParsedInput, SupportedScaffoldOptionalPackage, NewProjectInput } from './cli-types'
 
@@ -10,6 +17,98 @@ export const SUPPORTED_NEW_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'v
 export const SUPPORTED_INSTALL_TARGETS = ['queue', 'events', 'auth', 'authorization', 'notifications', 'mail', 'broadcast', 'security', 'cache', 'media'] as const
 export const SUPPORTED_QUEUE_INSTALL_DRIVERS = ['sync', 'redis', 'database'] as const
 export const SUPPORTED_CACHE_INSTALL_DRIVERS = ['file', 'redis', 'database'] as const
+
+type SelectablePromptOptions<TValue extends string> = {
+  readonly defaultValue?: TValue
+  readonly labels?: Readonly<Partial<Record<TValue, string>>>
+  readonly hints?: Readonly<Partial<Record<TValue, string>>>
+}
+
+type MultiSelectablePromptOptions<TValue extends string> = {
+  readonly initialValues?: readonly TValue[]
+  readonly labels?: Readonly<Partial<Record<TValue, string>>>
+  readonly hints?: Readonly<Partial<Record<TValue, string>>>
+  readonly required?: boolean
+}
+
+const promptLabels: Readonly<Record<string, string>> = {
+  auth: 'Auth',
+  authorization: 'Authorization',
+  broadcast: 'Broadcast',
+  bun: 'Bun',
+  cache: 'Cache',
+  database: 'Database',
+  discord: 'Discord',
+  events: 'Events',
+  facebook: 'Facebook',
+  file: 'File',
+  forms: 'Forms',
+  github: 'GitHub',
+  google: 'Google',
+  linkedin: 'LinkedIn',
+  local: 'Local',
+  mail: 'Mail',
+  media: 'Media',
+  mysql: 'MySQL',
+  next: 'Next.js',
+  notifications: 'Notifications',
+  npm: 'npm',
+  nuxt: 'Nuxt',
+  postgres: 'Postgres',
+  public: 'Public',
+  queue: 'Queue',
+  redis: 'Redis',
+  security: 'Security',
+  sqlite: 'SQLite',
+  sveltekit: 'SvelteKit',
+  sync: 'Sync',
+  validation: 'Validation',
+  yarn: 'Yarn',
+}
+
+function isClackInteractive(io: IoStreams): boolean {
+  return io.stdin.isTTY === true
+    && io.stdout.isTTY === true
+    && typeof io.stdin.setRawMode === 'function'
+}
+
+function clackCommonOptions(io: IoStreams): { input: NodeJS.ReadStream, output: NodeJS.WriteStream } {
+  return {
+    input: io.stdin,
+    output: io.stdout,
+  }
+}
+
+function optionLabel<TValue extends string>(
+  value: TValue,
+  labels: Readonly<Partial<Record<TValue, string>>> | undefined,
+): string {
+  return labels?.[value] ?? promptLabels[value] ?? value
+}
+
+function promptOptions<TValue extends string>(
+  allowed: readonly TValue[],
+  options: Pick<SelectablePromptOptions<TValue>, 'labels' | 'hints'> = {},
+): Array<{ value: string, label: string, hint?: string }> {
+  return allowed.map((value) => {
+    const hint = options.hints?.[value]
+    const option = {
+      value,
+      label: optionLabel(value, options.labels),
+    }
+
+    return hint ? { ...option, hint } : option
+  })
+}
+
+function resolvePromptValue<TValue>(value: TValue | symbol): TValue {
+  if (isCancel(value)) {
+    cancelPrompt('Command cancelled.')
+    throw new Error('Command cancelled.')
+  }
+
+  return value
+}
 
 export function parseTokens(tokens: readonly string[]): RawParsedInput {
   const args: string[] = []
@@ -94,6 +193,17 @@ export function isInteractive(io: IoStreams, flags: Record<string, string | bool
 
 /* v8 ignore start */
 export async function prompt(io: IoStreams, label: string): Promise<string> {
+  if (isClackInteractive(io)) {
+    const value = await text({
+      message: label.replace(/:\s*$/, ''),
+      placeholder: 'Type a value',
+      validate: current => current?.trim() ? undefined : 'This value is required.',
+      ...clackCommonOptions(io),
+    })
+
+    return resolvePromptValue(value).trim()
+  }
+
   const rl = createInterface({
     input: io.stdin,
     output: io.stdout,
@@ -138,13 +248,50 @@ export async function promptChoice<TValue extends string>(
   label: string,
   allowed: readonly TValue[],
   defaultValue: TValue,
+  options: SelectablePromptOptions<TValue> = {},
 ): Promise<TValue> {
+  if (isClackInteractive(io)) {
+    const value = await select<string>({
+      message: label,
+      options: promptOptions(allowed, options),
+      initialValue: options.defaultValue ?? defaultValue,
+      ...clackCommonOptions(io),
+    })
+
+    return normalizeChoice(resolvePromptValue(value), allowed, label)
+  }
+
   const answer = (await prompt(io, `${label} (${allowed.join('/')}) [${defaultValue}]: `)).trim().toLowerCase()
   if (!answer) {
     return defaultValue
   }
 
   return normalizeChoice(answer, allowed, label)
+}
+/* v8 ignore stop */
+
+/* v8 ignore start */
+export async function promptMultiChoice<TValue extends string>(
+  io: IoStreams,
+  label: string,
+  allowed: readonly TValue[],
+  options: MultiSelectablePromptOptions<TValue> = {},
+): Promise<readonly TValue[]> {
+  if (isClackInteractive(io)) {
+    const values = await multiselect<string>({
+      message: label,
+      options: promptOptions(allowed, options),
+      initialValues: [...(options.initialValues ?? [])],
+      required: options.required ?? false,
+      ...clackCommonOptions(io),
+    })
+
+    return resolvePromptValue(values).map(value => normalizeChoice(value, allowed, label))
+  }
+
+  const answer = await prompt(io, `${label} (${allowed.join('/')}): `)
+  return (splitCsv(answer) ?? [])
+    .map(value => normalizeChoice(value, allowed, label))
 }
 /* v8 ignore stop */
 
@@ -191,6 +338,16 @@ export function normalizeOptionalPackages(value: readonly string[] | undefined):
 
 /* v8 ignore start */
 export async function promptOptionalPackages(io: IoStreams): Promise<readonly SupportedScaffoldOptionalPackage[]> {
+  if (isClackInteractive(io)) {
+    const selected = await promptMultiChoice(io, 'Optional packages', SUPPORTED_NEW_OPTIONAL_PACKAGES, {
+      hints: {
+        forms: 'also enables validation',
+      },
+    })
+
+    return normalizeOptionalPackages(selected)
+  }
+
   const answer = await prompt(io, `Optional packages (${[...SUPPORTED_NEW_OPTIONAL_PACKAGES, 'none'].join('/')}): `)
   return normalizeOptionalPackages(splitCsv(answer) ?? (answer ? [answer] : []))
 }

@@ -17,6 +17,7 @@ import type {
   DatabaseDriverName,
   DatabaseLogger,
   DatabaseOperationOptions,
+  DatabaseTransactionOptions,
   Dialect,
   DriverAdapter,
   DriverExecutionResult,
@@ -301,10 +302,11 @@ export class DatabaseContext {
 
   async transaction<T>(
     callback: (tx: DatabaseContext) => Promise<T>,
-    options?: DatabaseOperationOptions,
+    options?: DatabaseTransactionOptions,
   ): Promise<T> {
     await this.initialize()
     this._assertValidOperationOptions(options)
+    this._assertValidTransactionOptions(options)
     this._throwIfAborted(options?.signal, 'transaction')
 
     if (this._scope.kind === 'root') {
@@ -314,9 +316,16 @@ export class DatabaseContext {
     return this._runNestedTransaction(callback, options)
   }
 
+  async writeTransaction<T>(
+    callback: (tx: DatabaseContext) => Promise<T>,
+    options?: DatabaseTransactionOptions,
+  ): Promise<T> {
+    return this.transaction(callback, this._resolveWriteTransactionOptions(options))
+  }
+
   private async _runRootTransaction<T>(
     callback: (tx: DatabaseContext) => Promise<T>,
-    options?: DatabaseOperationOptions,
+    options?: DatabaseTransactionOptions,
   ): Promise<T> {
     const runWithinScope = this._adapter.runWithTransactionScope?.bind(this._adapter)
       ?? (async <TResult>(runner: () => Promise<TResult>) => runner())
@@ -404,7 +413,7 @@ export class DatabaseContext {
 
   private async _runNestedTransaction<T>(
     callback: (tx: DatabaseContext) => Promise<T>,
-    options?: DatabaseOperationOptions,
+    options?: DatabaseTransactionOptions,
   ): Promise<T> {
     if (!this._dialect.capabilities.savepoints) {
       throw new CapabilityError(
@@ -752,6 +761,35 @@ export class DatabaseContext {
 
     if (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1) {
       throw new ConfigurationError('Database operation timeouts must be positive integers in milliseconds.')
+    }
+  }
+
+  private _assertValidTransactionOptions(options?: DatabaseTransactionOptions): void {
+    if (typeof options?.mode === 'undefined') {
+      return
+    }
+
+    if (options.mode !== 'deferred' && options.mode !== 'immediate' && options.mode !== 'exclusive') {
+      throw new ConfigurationError('Database transaction mode must be one of deferred, immediate, or exclusive.')
+    }
+
+    if (!this._dialect.name.startsWith('sqlite')) {
+      throw new CapabilityError(`Transaction mode "${options.mode}" is only supported for SQLite connections.`)
+    }
+
+    if (this._scope.kind !== 'root') {
+      throw new TransactionError('Transaction mode can only be set when starting a root transaction.')
+    }
+  }
+
+  private _resolveWriteTransactionOptions(options?: DatabaseTransactionOptions): DatabaseTransactionOptions | undefined {
+    if (this._scope.kind !== 'root' || !this._dialect.name.startsWith('sqlite')) {
+      return options
+    }
+
+    return {
+      ...options,
+      mode: options?.mode ?? 'immediate',
     }
   }
 

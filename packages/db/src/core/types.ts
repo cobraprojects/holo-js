@@ -19,6 +19,12 @@ export interface DatabaseOperationOptions {
   timeoutMs?: number
 }
 
+export type TransactionMode = 'deferred' | 'immediate' | 'exclusive'
+
+export interface DatabaseTransactionOptions extends DatabaseOperationOptions {
+  mode?: TransactionMode
+}
+
 export type TransactionCallback = () => void | Promise<void>
 
 export interface UnsafeStatement {
@@ -87,6 +93,8 @@ export interface DriverAdapter {
   initialize(): Promise<void>
   disconnect(): Promise<void>
   isConnected(): boolean
+  isDatabaseMissingError?(error: unknown): boolean
+  ensureDatabaseExists?(): Promise<void>
   runWithTransactionScope?<T>(callback: () => Promise<T>): Promise<T>
   introspect?<TRow extends Record<string, unknown> = Record<string, unknown>>(
     sql: string,
@@ -103,7 +111,7 @@ export interface DriverAdapter {
     bindings?: readonly unknown[],
     options?: DatabaseOperationOptions,
   ): Promise<DriverExecutionResult>
-  beginTransaction(options?: DatabaseOperationOptions): Promise<void>
+  beginTransaction(options?: DatabaseTransactionOptions): Promise<void>
   commit(options?: DatabaseOperationOptions): Promise<void>
   rollback(options?: DatabaseOperationOptions): Promise<void>
   createSavepoint?(name: string, options?: DatabaseOperationOptions): Promise<void>

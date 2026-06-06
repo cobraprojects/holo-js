@@ -292,7 +292,7 @@
     },
     "packages/adapter-next": {
       "name": "@holo-js/adapter-next",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/core": "catalog:",
@@ -315,7 +315,7 @@
     },
     "packages/adapter-nuxt": {
       "name": "@holo-js/adapter-nuxt",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/core": "catalog:",
@@ -345,7 +345,7 @@
     },
     "packages/adapter-sveltekit": {
       "name": "@holo-js/adapter-sveltekit",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/core": "catalog:",
@@ -365,7 +365,7 @@
     },
     "packages/auth": {
       "name": "@holo-js/auth",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/validation": "catalog:",
@@ -398,7 +398,7 @@
     },
     "packages/auth-clerk": {
       "name": "@holo-js/auth-clerk",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@clerk/backend": "catalog:",
         "@holo-js/auth": "catalog:",
@@ -414,7 +414,7 @@
     },
     "packages/auth-social": {
       "name": "@holo-js/auth-social",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/auth": "catalog:",
         "@holo-js/config": "catalog:",
@@ -428,7 +428,7 @@
     },
     "packages/auth-social-apple": {
       "name": "@holo-js/auth-social-apple",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
         "@holo-js/config": "catalog:",
@@ -442,7 +442,7 @@
     },
     "packages/auth-social-discord": {
       "name": "@holo-js/auth-social-discord",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
         "@holo-js/config": "catalog:",
@@ -456,7 +456,7 @@
     },
     "packages/auth-social-facebook": {
       "name": "@holo-js/auth-social-facebook",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
         "@holo-js/config": "catalog:",
@@ -470,7 +470,7 @@
     },
     "packages/auth-social-github": {
       "name": "@holo-js/auth-social-github",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
       },
@@ -483,7 +483,7 @@
     },
     "packages/auth-social-google": {
       "name": "@holo-js/auth-social-google",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
         "@holo-js/config": "catalog:",
@@ -497,7 +497,7 @@
     },
     "packages/auth-social-linkedin": {
       "name": "@holo-js/auth-social-linkedin",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
         "@holo-js/config": "catalog:",
@@ -511,7 +511,7 @@
     },
     "packages/auth-workos": {
       "name": "@holo-js/auth-workos",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/auth": "catalog:",
         "@holo-js/config": "catalog:",
@@ -526,7 +526,7 @@
     },
     "packages/authorization": {
       "name": "@holo-js/authorization",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "devDependencies": {
         "@types/node": "catalog:",
         "tsup": "catalog:",
@@ -536,7 +536,7 @@
     },
     "packages/broadcast": {
       "name": "@holo-js/broadcast",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/validation": "catalog:",
@@ -559,7 +559,7 @@
     },
     "packages/cache": {
       "name": "@holo-js/cache",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/config": "catalog:",
       },
@@ -572,7 +572,7 @@
     },
     "packages/cache-db": {
       "name": "@holo-js/cache-db",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "tslib": "catalog:",
       },
@@ -591,7 +591,7 @@
     },
     "packages/cache-redis": {
       "name": "@holo-js/cache-redis",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "ioredis": "catalog:",
         "tslib": "catalog:",
@@ -609,12 +609,13 @@
     },
     "packages/cli": {
       "name": "@holo-js/cli",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "bin": {
         "holo": "./dist/bin/holo.mjs",
         "holo-js": "./dist/bin/holo.mjs",
       },
       "dependencies": {
+        "@clack/prompts": "catalog:",
         "@holo-js/config": "catalog:",
         "@holo-js/core": "catalog:",
         "@holo-js/db": "catalog:",
@@ -633,7 +634,7 @@
     },
     "packages/config": {
       "name": "@holo-js/config",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/db": "catalog:",
       },
@@ -645,7 +646,7 @@
     },
     "packages/core": {
       "name": "@holo-js/core",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/db": "catalog:",
@@ -703,7 +704,7 @@
     },
     "packages/create-holo-js": {
       "name": "create-holo-js",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "bin": {
         "create-holo-js": "dist/bin/create-holo-js.mjs",
       },
@@ -719,7 +720,7 @@
     },
     "packages/db": {
       "name": "@holo-js/db",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "inflection": "catalog:",
         "ulid": "catalog:",
@@ -745,7 +746,7 @@
     },
     "packages/db-mysql": {
       "name": "@holo-js/db-mysql",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "mysql2": "catalog:",
       },
@@ -761,7 +762,7 @@
     },
     "packages/db-postgres": {
       "name": "@holo-js/db-postgres",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "pg": "catalog:",
       },
@@ -778,7 +779,7 @@
     },
     "packages/db-sqlite": {
       "name": "@holo-js/db-sqlite",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "better-sqlite3": "catalog:",
       },
@@ -795,7 +796,7 @@
     },
     "packages/events": {
       "name": "@holo-js/events",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/db": "catalog:",
       },
@@ -815,7 +816,7 @@
     },
     "packages/flux": {
       "name": "@holo-js/flux",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/broadcast": "catalog:",
       },
@@ -828,7 +829,7 @@
     },
     "packages/flux-react": {
       "name": "@holo-js/flux-react",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/broadcast": "catalog:",
         "@holo-js/flux": "catalog:",
@@ -851,7 +852,7 @@
     },
     "packages/flux-svelte": {
       "name": "@holo-js/flux-svelte",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/broadcast": "catalog:",
         "@holo-js/flux": "catalog:",
@@ -869,7 +870,7 @@
     },
     "packages/flux-vue": {
       "name": "@holo-js/flux-vue",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/broadcast": "catalog:",
         "@holo-js/flux": "catalog:",
@@ -887,7 +888,7 @@
     },
     "packages/forms": {
       "name": "@holo-js/forms",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/validation": "catalog:",
       },
@@ -906,7 +907,7 @@
     },
     "packages/mail": {
       "name": "@holo-js/mail",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/config": "catalog:",
         "nodemailer": "catalog:",
@@ -928,7 +929,7 @@
     },
     "packages/media": {
       "name": "@holo-js/media",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/db": "catalog:",
         "@holo-js/queue": "catalog:",
@@ -943,7 +944,7 @@
     },
     "packages/notifications": {
       "name": "@holo-js/notifications",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/config": "catalog:",
       },
@@ -964,7 +965,7 @@
     },
     "packages/queue": {
       "name": "@holo-js/queue",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "devDependencies": {
         "@holo-js/queue-redis": "catalog:",
         "@types/node": "catalog:",
@@ -981,7 +982,7 @@
     },
     "packages/queue-db": {
       "name": "@holo-js/queue-db",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/db": "catalog:",
         "@holo-js/queue": "catalog:",
@@ -995,7 +996,7 @@
     },
     "packages/queue-redis": {
       "name": "@holo-js/queue-redis",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "bullmq": "catalog:",
         "ioredis": "catalog:",
@@ -1014,7 +1015,7 @@
     },
     "packages/security": {
       "name": "@holo-js/security",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/config": "catalog:",
       },
@@ -1040,7 +1041,7 @@
     },
     "packages/session": {
       "name": "@holo-js/session",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/config": "catalog:",
       },
@@ -1060,7 +1061,7 @@
     },
     "packages/storage": {
       "name": "@holo-js/storage",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "@holo-js/config": "catalog:",
       },
@@ -1080,7 +1081,7 @@
     },
     "packages/storage-s3": {
       "name": "@holo-js/storage-s3",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "devDependencies": {
         "@types/node": "catalog:",
         "tsup": "catalog:",
@@ -1090,7 +1091,7 @@
     },
     "packages/validation": {
       "name": "@holo-js/validation",
-      "version": "0.1.4",
+      "version": "0.1.9",
       "dependencies": {
         "valibot": "catalog:",
       },
@@ -1116,50 +1117,51 @@
     "sharp",
   ],
   "catalog": {
+    "@clack/prompts": "^1.5.1",
     "@clerk/backend": "^3.4.7",
     "@eslint/js": "^9.17.0",
-    "@holo-js/adapter-next": "^0.1.4",
-    "@holo-js/adapter-nuxt": "^0.1.4",
-    "@holo-js/adapter-sveltekit": "^0.1.4",
-    "@holo-js/auth": "^0.1.4",
-    "@holo-js/auth-clerk": "^0.1.4",
-    "@holo-js/auth-social": "^0.1.4",
-    "@holo-js/auth-social-apple": "^0.1.4",
-    "@holo-js/auth-social-discord": "^0.1.4",
-    "@holo-js/auth-social-facebook": "^0.1.4",
-    "@holo-js/auth-social-github": "^0.1.4",
-    "@holo-js/auth-social-google": "^0.1.4",
-    "@holo-js/auth-social-linkedin": "^0.1.4",
-    "@holo-js/auth-workos": "^0.1.4",
-    "@holo-js/authorization": "^0.1.4",
-    "@holo-js/broadcast": "^0.1.4",
-    "@holo-js/cache": "^0.1.4",
-    "@holo-js/cache-db": "^0.1.4",
-    "@holo-js/cache-redis": "^0.1.4",
-    "@holo-js/cli": "^0.1.4",
-    "@holo-js/config": "^0.1.4",
-    "@holo-js/core": "^0.1.4",
-    "@holo-js/db": "^0.1.4",
-    "@holo-js/db-mysql": "^0.1.4",
-    "@holo-js/db-postgres": "^0.1.4",
-    "@holo-js/db-sqlite": "^0.1.4",
-    "@holo-js/events": "^0.1.4",
-    "@holo-js/flux": "^0.1.4",
-    "@holo-js/flux-react": "^0.1.4",
-    "@holo-js/flux-svelte": "^0.1.4",
-    "@holo-js/flux-vue": "^0.1.4",
-    "@holo-js/forms": "^0.1.4",
-    "@holo-js/mail": "^0.1.4",
-    "@holo-js/media": "^0.1.4",
-    "@holo-js/notifications": "^0.1.4",
-    "@holo-js/queue": "^0.1.4",
-    "@holo-js/queue-db": "^0.1.4",
-    "@holo-js/queue-redis": "^0.1.4",
-    "@holo-js/security": "^0.1.4",
-    "@holo-js/session": "^0.1.4",
-    "@holo-js/storage": "^0.1.4",
-    "@holo-js/storage-s3": "^0.1.4",
-    "@holo-js/validation": "^0.1.4",
+    "@holo-js/adapter-next": "^0.1.9",
+    "@holo-js/adapter-nuxt": "^0.1.9",
+    "@holo-js/adapter-sveltekit": "^0.1.9",
+    "@holo-js/auth": "^0.1.9",
+    "@holo-js/auth-clerk": "^0.1.9",
+    "@holo-js/auth-social": "^0.1.9",
+    "@holo-js/auth-social-apple": "^0.1.9",
+    "@holo-js/auth-social-discord": "^0.1.9",
+    "@holo-js/auth-social-facebook": "^0.1.9",
+    "@holo-js/auth-social-github": "^0.1.9",
+    "@holo-js/auth-social-google": "^0.1.9",
+    "@holo-js/auth-social-linkedin": "^0.1.9",
+    "@holo-js/auth-workos": "^0.1.9",
+    "@holo-js/authorization": "^0.1.9",
+    "@holo-js/broadcast": "^0.1.9",
+    "@holo-js/cache": "^0.1.9",
+    "@holo-js/cache-db": "^0.1.9",
+    "@holo-js/cache-redis": "^0.1.9",
+    "@holo-js/cli": "^0.1.9",
+    "@holo-js/config": "^0.1.9",
+    "@holo-js/core": "^0.1.9",
+    "@holo-js/db": "^0.1.9",
+    "@holo-js/db-mysql": "^0.1.9",
+    "@holo-js/db-postgres": "^0.1.9",
+    "@holo-js/db-sqlite": "^0.1.9",
+    "@holo-js/events": "^0.1.9",
+    "@holo-js/flux": "^0.1.9",
+    "@holo-js/flux-react": "^0.1.9",
+    "@holo-js/flux-svelte": "^0.1.9",
+    "@holo-js/flux-vue": "^0.1.9",
+    "@holo-js/forms": "^0.1.9",
+    "@holo-js/mail": "^0.1.9",
+    "@holo-js/media": "^0.1.9",
+    "@holo-js/notifications": "^0.1.9",
+    "@holo-js/queue": "^0.1.9",
+    "@holo-js/queue-db": "^0.1.9",
+    "@holo-js/queue-redis": "^0.1.9",
+    "@holo-js/security": "^0.1.9",
+    "@holo-js/session": "^0.1.9",
+    "@holo-js/storage": "^0.1.9",
+    "@holo-js/storage-s3": "^0.1.9",
+    "@holo-js/validation": "^0.1.9",
     "@nuxt/kit": "^4.4.4",
     "@nuxt/module-builder": "^1.0.2",
     "@sveltejs/adapter-node": "^5.5.4",
@@ -1176,7 +1178,7 @@
     "@vitest/coverage-v8": "^4.1.5",
     "better-sqlite3": "^11.7.0",
     "bullmq": "^5.71.0",
-    "create-holo-js": "^0.1.4",
+    "create-holo-js": "^0.1.9",
     "esbuild": "^0.27.4",
     "eslint": "^9.17.0",
     "fast-check": "^4.5.3",
@@ -1339,9 +1341,9 @@
 
     "@changesets/write": ["@changesets/write@0.4.0", "", { "dependencies": { "@changesets/types": "^6.1.0", "fs-extra": "^7.0.1", "human-id": "^4.1.1", "prettier": "^2.7.1" } }, "sha512-CdTLvIOPiCNuH71pyDu3rA+Q0n65cmAbXnwWH84rKGiFumFzkmHNT8KHTMEchcxN+Kl8I54xGUhJ7l3E7X396Q=="],
 
-    "@clack/core": ["@clack/core@1.1.0", "", { "dependencies": { "sisteransi": "^1.0.5" } }, "sha512-SVcm4Dqm2ukn64/8Gub2wnlA5nS2iWJyCkdNHcvNHPIeBTGojpdJ+9cZKwLfmqy7irD4N5qLteSilJlE0WLAtA=="],
+    "@clack/core": ["@clack/core@1.4.1", "", { "dependencies": { "fast-wrap-ansi": "^0.2.0", "sisteransi": "^1.0.5" } }, "sha512-FILJa1gGKEFTGZAJE9RpVhrjKz3c3h4ar60dSv6cGuDqufQ84YEIS3GAGvZiN+H6yaLbbvTFNejjCC4tXpZEuw=="],
 
-    "@clack/prompts": ["@clack/prompts@1.1.0", "", { "dependencies": { "@clack/core": "1.1.0", "sisteransi": "^1.0.5" } }, "sha512-pkqbPGtohJAvm4Dphs2M8xE29ggupihHdy1x84HNojZuMtFsHiUlRvqD24tM2+XmI+61LlfNceM3Wr7U5QES5g=="],
+    "@clack/prompts": ["@clack/prompts@1.5.1", "", { "dependencies": { "@clack/core": "1.4.1", "fast-string-width": "^3.0.2", "fast-wrap-ansi": "^0.2.0", "sisteransi": "^1.0.5" } }, "sha512-zccHj2z2oCCO4yrDiRSlFOxWerGqRiysP7a5jPK6uoI9URKAquwY42Dd/iUP8JWHxEzdRe4TlbvZCo8z1/mhrw=="],
 
     "@clerk/backend": ["@clerk/backend@3.4.7", "", { "dependencies": { "@clerk/shared": "^4.10.2", "standardwebhooks": "^1.0.0", "tslib": "2.8.1" } }, "sha512-zAELfaYtrlxlxxB6PT3EHPsHck6IPuyTQSKm7hWQqXp9GoFOM6wKOflFZgI0Q2M1C5SgrkDcrMNchkWXRwbsQw=="],
 
@@ -3525,6 +3527,8 @@
 
     "@manypkg/get-packages/fs-extra": ["fs-extra@8.1.0", "", { "dependencies": { "graceful-fs": "^4.2.0", "jsonfile": "^4.0.0", "universalify": "^0.1.0" } }, "sha512-yhlQgA6mnOJUKOsRUFsgJdQCvkKhcz8tlZG5HBQfReYZy46OwLcY+Zia0mtdHsOo9y/hP+CxMN0TU9QxoOtG4g=="],
 
+    "@nuxt/cli/@clack/prompts": ["@clack/prompts@1.1.0", "", { "dependencies": { "@clack/core": "1.1.0", "sisteransi": "^1.0.5" } }, "sha512-pkqbPGtohJAvm4Dphs2M8xE29ggupihHdy1x84HNojZuMtFsHiUlRvqD24tM2+XmI+61LlfNceM3Wr7U5QES5g=="],
+
     "@nuxt/cli/c12": ["c12@3.3.3", "", { "dependencies": { "chokidar": "^5.0.0", "confbox": "^0.2.2", "defu": "^6.1.4", "dotenv": "^17.2.3", "exsolve": "^1.0.8", "giget": "^2.0.0", "jiti": "^2.6.1", "ohash": "^2.0.11", "pathe": "^2.0.3", "perfect-debounce": "^2.0.0", "pkg-types": "^2.3.0", "rc9": "^2.1.2" }, "peerDependencies": { "magicast": "*" }, "optionalPeers": ["magicast"] }, "sha512-750hTRvgBy5kcMNPdh95Qo+XUBeGo8C7nsKSmedDmaQI+E0r82DwHeM6vBewDe4rGFbnxoa4V9pw+sPh5+Iz8Q=="],
 
     "@nuxt/cli/citty": ["citty@0.2.1", "", {}, "sha512-kEV95lFBhQgtogAPlQfJJ0WGVSokvLr/UEoFPiKKOXF7pl98HfUVUD0ejsuTCld/9xH9vogSywZ5KqHzXrZpqg=="],
@@ -3548,6 +3552,8 @@
     "@nuxt/devtools/which": ["which@6.0.1", "", { "dependencies": { "isexe": "^4.0.0" }, "bin": { "node-which": "bin/which.js" } }, "sha512-oGLe46MIrCRqX7ytPUf66EAYvdeMIZYn3WaocqqKZAxrBpkqHfL/qvTyJ/bTk5+AqHCjXmrv3CEWgy368zhRUg=="],
 
     "@nuxt/devtools-kit/@nuxt/kit": ["@nuxt/kit@4.4.2", "", { "dependencies": { "c12": "^3.3.3", "consola": "^3.4.2", "defu": "^6.1.4", "destr": "^2.0.5", "errx": "^0.1.0", "exsolve": "^1.0.8", "ignore": "^7.0.5", "jiti": "^2.6.1", "klona": "^2.0.6", "mlly": "^1.8.1", "ohash": "^2.0.11", "pathe": "^2.0.3", "pkg-types": "^2.3.0", "rc9": "^3.0.0", "scule": "^1.3.0", "semver": "^7.7.4", "tinyglobby": "^0.2.15", "ufo": "^1.6.3", "unctx": "^2.5.0", "untyped": "^2.0.0" } }, "sha512-5+IPRNX2CjkBhuWUwz0hBuLqiaJPRoKzQ+SvcdrQDbAyE+VDeFt74VpSFr5/R0ujrK4b+XnSHUJWdS72w6hsog=="],
+
+    "@nuxt/devtools-wizard/@clack/prompts": ["@clack/prompts@1.1.0", "", { "dependencies": { "@clack/core": "1.1.0", "sisteransi": "^1.0.5" } }, "sha512-pkqbPGtohJAvm4Dphs2M8xE29ggupihHdy1x84HNojZuMtFsHiUlRvqD24tM2+XmI+61LlfNceM3Wr7U5QES5g=="],
 
     "@nuxt/kit/defu": ["defu@6.1.7", "", {}, "sha512-7z22QmUWiQ/2d0KkdYmANbRUVABpZ9SNYyH5vx6PZ+nE5bcC0l7uFvEfHlyld/HcGBFTL536ClDt3DEcSlEJAQ=="],
 
@@ -3949,6 +3955,8 @@
 
     "@manypkg/find-root/find-up/locate-path": ["locate-path@5.0.0", "", { "dependencies": { "p-locate": "^4.1.0" } }, "sha512-t7hw9pI+WvuwNJXwk5zVHpyhIqzg2qTlklJOf0mVxGSbe3Fp2VieZcduNYjaLDoy6p9uGpQEGWG87WpMKlNq8g=="],
 
+    "@nuxt/cli/@clack/prompts/@clack/core": ["@clack/core@1.1.0", "", { "dependencies": { "sisteransi": "^1.0.5" } }, "sha512-SVcm4Dqm2ukn64/8Gub2wnlA5nS2iWJyCkdNHcvNHPIeBTGojpdJ+9cZKwLfmqy7irD4N5qLteSilJlE0WLAtA=="],
+
     "@nuxt/cli/c12/chokidar": ["chokidar@5.0.0", "", { "dependencies": { "readdirp": "^5.0.0" } }, "sha512-TQMmc3w+5AxjpL8iIiwebF73dRDF4fBIieAqGn9RGCWaEVwQ6Fb2cGe31Yns0RRIzii5goJ1Y7xbMwo1TxMplw=="],
 
     "@nuxt/cli/c12/giget": ["giget@2.0.0", "", { "dependencies": { "citty": "^0.1.6", "consola": "^3.4.0", "defu": "^6.1.4", "node-fetch-native": "^1.6.6", "nypm": "^0.6.0", "pathe": "^2.0.3" }, "bin": { "giget": "dist/cli.mjs" } }, "sha512-L5bGsVkxJbJgdnwyuheIunkGatUF/zssUoxxjACCseZYAVbaqdh9Tsmmlkl8vYan09H7sbvKt4pS8GqKLBrEzA=="],
@@ -3964,6 +3972,8 @@
     "@nuxt/devtools-kit/@nuxt/kit/tinyglobby": ["tinyglobby@0.2.15", "", { "dependencies": { "fdir": "^6.5.0", "picomatch": "^4.0.3" } }, "sha512-j2Zq4NyQYG5XMST4cbs02Ak8iJUdxRM0XI5QyxXuZOzKOINmWurp3smXu3y5wDcJrptwpSjgXHzIQxR0omXljQ=="],
 
     "@nuxt/devtools-kit/@nuxt/kit/ufo": ["ufo@1.6.3", "", {}, "sha512-yDJTmhydvl5lJzBmy/hyOAA0d+aqCBuwl818haVdYCRrWV84o7YyeVm4QlVHStqNrrJSTb6jKuFAVqAFsr+K3Q=="],
+
+    "@nuxt/devtools-wizard/@clack/prompts/@clack/core": ["@clack/core@1.1.0", "", { "dependencies": { "sisteransi": "^1.0.5" } }, "sha512-SVcm4Dqm2ukn64/8Gub2wnlA5nS2iWJyCkdNHcvNHPIeBTGojpdJ+9cZKwLfmqy7irD4N5qLteSilJlE0WLAtA=="],
 
     "@nuxt/devtools/@nuxt/kit/c12": ["c12@3.3.3", "", { "dependencies": { "chokidar": "^5.0.0", "confbox": "^0.2.2", "defu": "^6.1.4", "dotenv": "^17.2.3", "exsolve": "^1.0.8", "giget": "^2.0.0", "jiti": "^2.6.1", "ohash": "^2.0.11", "pathe": "^2.0.3", "perfect-debounce": "^2.0.0", "pkg-types": "^2.3.0", "rc9": "^2.1.2" }, "peerDependencies": { "magicast": "*" }, "optionalPeers": ["magicast"] }, "sha512-750hTRvgBy5kcMNPdh95Qo+XUBeGo8C7nsKSmedDmaQI+E0r82DwHeM6vBewDe4rGFbnxoa4V9pw+sPh5+Iz8Q=="],
 

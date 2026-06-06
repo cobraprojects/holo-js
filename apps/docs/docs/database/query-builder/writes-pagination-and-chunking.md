@@ -126,4 +126,5 @@ const rows = await DB.table('orders')
 
 Locks compile only on dialects that support them.
 
-Use locking only inside transactions and only when concurrent writes are a real risk.
+Use locking only inside transactions and only when concurrent writes are a real risk. On SQLite, use
+`DB.writeTransaction(...)` for read-then-write workflows because row-lock methods do not lock selected rows.

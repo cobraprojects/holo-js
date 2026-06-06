@@ -130,6 +130,15 @@ function wrapMySQLPool(pool: Pool | MySQLPoolLike): MySQLPoolLike {
   }
 }
 
+function isMySQLDatabaseMissing(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && (
+      ('code' in error && error.code === 'ER_BAD_DB_ERROR')
+      || ('errno' in error && error.errno === 1049)
+    )
+}
+
 export class MySQLAdapter implements DriverAdapter {
   private pool?: MySQLPoolLike
   private readonly directClient?: MySQLClientLike
@@ -156,11 +165,14 @@ export class MySQLAdapter implements DriverAdapter {
     }
 
     if (this.createPoolInstance) {
-      await this.ensureDatabaseExists()
       this.pool = this.createPoolInstance(this.config)
     }
 
     this.connected = true
+  }
+
+  isDatabaseMissingError(error: unknown): boolean {
+    return isMySQLDatabaseMissing(error)
   }
 
   async disconnect(): Promise<void> {
@@ -306,7 +318,7 @@ export class MySQLAdapter implements DriverAdapter {
     return this.pool
   }
 
-  private async ensureDatabaseExists(): Promise<void> {
+  async ensureDatabaseExists(): Promise<void> {
     if (!this.createPoolInstance) {
       return
     }
@@ -328,7 +340,10 @@ export class MySQLAdapter implements DriverAdapter {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      throw new Error(`Unable to ensure MySQL database "${target.database}" exists: ${message}`, { cause: error })
+      throw new Error(
+        `MySQL database "${target.database}" could not be found or created. Please create the database and try again. Original error: ${message}`,
+        { cause: error },
+      )
     } finally {
       await bootstrapPool.end()
     }

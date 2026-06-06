@@ -100,6 +100,13 @@ function resolveBootstrapTarget(config?: PoolConfig): BootstrapTarget | undefine
   return undefined
 }
 
+function isPostgresDatabaseMissing(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && error.code === '3D000'
+}
+
 export class PostgresAdapter implements DriverAdapter {
   private pool?: PostgresPoolLike
   private readonly directClient?: PostgresClientLike
@@ -126,11 +133,14 @@ export class PostgresAdapter implements DriverAdapter {
     }
 
     if (this.createPoolInstance) {
-      await this.ensureDatabaseExists()
       this.pool = this.createPoolInstance(this.config)
     }
 
     this.connected = true
+  }
+
+  isDatabaseMissingError(error: unknown): boolean {
+    return isPostgresDatabaseMissing(error)
   }
 
   async disconnect(): Promise<void> {
@@ -278,7 +288,7 @@ export class PostgresAdapter implements DriverAdapter {
     return this.pool
   }
 
-  private async ensureDatabaseExists(): Promise<void> {
+  async ensureDatabaseExists(): Promise<void> {
     if (!this.createPoolInstance) {
       return
     }
@@ -297,7 +307,10 @@ export class PostgresAdapter implements DriverAdapter {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      throw new Error(`Unable to ensure Postgres database "${target.database}" exists: ${message}`, { cause: error })
+      throw new Error(
+        `Postgres database "${target.database}" could not be found or created. Please create the database and try again. Original error: ${message}`,
+        { cause: error },
+      )
     } finally {
       await bootstrapPool.end()
     }

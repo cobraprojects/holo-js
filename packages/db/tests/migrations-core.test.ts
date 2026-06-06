@@ -145,6 +145,34 @@ class MigrationAdapter implements DriverAdapter {
   }
 }
 
+class MissingDatabaseMigrationAdapter extends MigrationAdapter {
+  ensureDatabaseCalls = 0
+  missingDatabaseFailures = 1
+
+  override async query<TRow extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    bindings: readonly unknown[] = [],
+  ): Promise<DriverQueryResult<TRow>> {
+    if (this.missingDatabaseFailures > 0) {
+      this.missingDatabaseFailures -= 1
+      throw Object.assign(new Error('database "app" does not exist'), { code: '3D000' })
+    }
+
+    return super.query<TRow>(sql, bindings)
+  }
+
+  isDatabaseMissingError(error: unknown): boolean {
+    return typeof error === 'object'
+      && error !== null
+      && 'code' in error
+      && error.code === '3D000'
+  }
+
+  async ensureDatabaseExists(): Promise<void> {
+    this.ensureDatabaseCalls += 1
+  }
+}
+
 function createDialect(name: 'sqlite' | 'mysql' = 'sqlite'): Dialect {
   return {
     name,
@@ -171,6 +199,31 @@ function createDialect(name: 'sqlite' | 'mysql' = 'sqlite'): Dialect {
 }
 
 describe('migration service slice', () => {
+  it('creates a missing database during migrate before retrying migration setup', async () => {
+    const adapter = new MissingDatabaseMigrationAdapter({
+      tables: [],
+      records: [] })
+    const db = createDatabase({
+      connectionName: 'default',
+      adapter,
+      dialect: createDialect() })
+    const migration = defineMigration({
+      name: '2026_01_01_000001_create_users',
+      async up({ schema }) {
+        await schema.createTable('users', (table) => {
+          table.id()
+        })
+      } })
+    const migrator = createMigrationService(db, [migration])
+
+    await expect(migrator.migrate()).resolves.toEqual([migration])
+
+    expect(adapter.ensureDatabaseCalls).toBe(1)
+    expect(adapter.state.tables).toContain('_holo_migrations')
+    expect(adapter.state.tables).toContain('users')
+    expect(adapter.isConnected()).toBe(true)
+  })
+
   it('registers migrations, reports status, migrates in order, and rolls back the latest batch', async () => {
     const adapter = new MigrationAdapter({
       tables: [],

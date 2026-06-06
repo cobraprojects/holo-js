@@ -3,7 +3,8 @@ import { clearConfigCache, resolveConfigCachePath } from '@holo-js/config'
 import {
   parseTokens,
   isInteractive,
-  confirm,
+  promptChoice,
+  promptMultiChoice,
   normalizeChoice,
   normalizeOptionalPackages,
   resolveNewProjectInput,
@@ -19,7 +20,7 @@ import {
 } from './parsing'
 import { generateProjectAppKey } from './app-key'
 import { fileExists } from './fs-utils'
-import { writeLine } from './io'
+import { runWithSpinner, supportsSpinner, writeLine } from './io'
 import { hasProjectDependency } from './package-json'
 import type * as DevModule from './dev'
 import type * as ProjectConfigModule from './project/config'
@@ -53,6 +54,16 @@ import type {
   ProjectScaffoldOptions,
   DiscoveredAppCommand,
 } from './cli-types'
+
+const AUTH_INSTALL_FEATURES = ['social', 'workos', 'clerk'] as const
+const AUTH_SOCIAL_PROVIDER_MODES = ['default', 'specific'] as const
+const EVENTS_QUEUE_ACTIONS = ['skip', 'enable'] as const
+const MODEL_GENERATOR_OPTIONS = ['migration', 'observer', 'seeder', 'factory'] as const
+
+type AuthInstallFeature = typeof AUTH_INSTALL_FEATURES[number]
+type AuthSocialProviderMode = typeof AUTH_SOCIAL_PROVIDER_MODES[number]
+type EventsQueueAction = typeof EVENTS_QUEUE_ACTIONS[number]
+type ModelGeneratorOption = typeof MODEL_GENERATOR_OPTIONS[number]
 
 type RuntimeExecutor = typeof RuntimeModule.withRuntimeEnvironment
 type ProjectCommandExecutors = {
@@ -395,10 +406,13 @@ async function runProjectDependencyInstallForProject(
   context: InternalCommandContext,
   projectExecutors: ProjectCommandExecutors,
   projectRoot: string,
+  options: { readonly writeStatus?: boolean } = {},
 ): Promise<void> {
   const runProjectDependencyInstall = await resolveProjectExecutor(projectExecutors, 'runProjectDependencyInstall')
   await runProjectDependencyInstall(context, projectRoot)
-  writeLine(context.stdout, '  - installed dependencies')
+  if (options.writeStatus ?? true) {
+    writeLine(context.stdout, '  - installed dependencies')
+  }
 }
 
 export function createInternalCommands(
@@ -457,17 +471,29 @@ export function createInternalCommands(
         const targetDir = resolve(commandContext.cwd, projectName)
 
         const { scaffoldProject } = await loadProjectScaffoldModule()
-        await scaffoldProject(targetDir, {
-          projectName,
-          framework,
-          databaseDriver,
-          packageManager,
-          storageDefaultDisk,
-          optionalPackages,
-        })
+        await runWithSpinner(
+          context,
+          'Creating project files...',
+          () => scaffoldProject(targetDir, {
+            projectName,
+            framework,
+            databaseDriver,
+            packageManager,
+            storageDefaultDisk,
+            optionalPackages,
+          }),
+          'Project files created.',
+        )
 
         writeLine(context.stdout, `Created Holo project: ${targetDir}`)
-        await runProjectDependencyInstallForProject(context, projectExecutors, targetDir)
+        await runWithSpinner(
+          context,
+          'Installing dependencies...',
+          () => runProjectDependencyInstallForProject(context, projectExecutors, targetDir, {
+            writeStatus: !supportsSpinner(context),
+          }),
+          'Dependencies installed.',
+        )
         writeLine(context.stdout)
         writeLine(context.stdout, 'Next steps')
         writeLine(context.stdout, `  cd ${projectName}`)
@@ -499,8 +525,12 @@ export function createInternalCommands(
       usage: 'holo install <queue|events|auth|authorization|notifications|mail|broadcast|security|cache|media> [--driver <queue: sync|file|redis|database; cache: file|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
       source: 'internal',
       async prepare(input) {
+        const interactive = isInteractive(context, input.flags)
+        const requestedTarget = input.args[0]?.trim()
         const target = normalizeChoice(
-          await ensureRequiredArg(context, input, 0, 'Install target'),
+          requestedTarget || (interactive
+            ? await promptChoice(context, 'Install target', SUPPORTED_INSTALL_TARGETS, 'queue')
+            : await ensureRequiredArg(context, input, 0, 'Install target')),
           SUPPORTED_INSTALL_TARGETS,
           'install target',
         )
@@ -533,26 +563,81 @@ export function createInternalCommands(
         const driver = target === 'queue'
           ? (requestedDriver
               ? normalizeChoice(requestedDriver, SUPPORTED_QUEUE_INSTALL_DRIVERS, 'queue driver')
-              : 'sync')
+              : interactive
+                ? await promptChoice(context, 'Queue driver', SUPPORTED_QUEUE_INSTALL_DRIVERS, 'sync')
+                : 'sync')
           : target === 'cache'
             ? (requestedDriver
                 ? normalizeChoice(requestedDriver, SUPPORTED_CACHE_INSTALL_DRIVERS, 'cache driver')
-                : 'file')
-          : undefined
-        const socialProviders = target === 'auth'
+                : interactive
+                  ? await promptChoice(context, 'Cache driver', SUPPORTED_CACHE_INSTALL_DRIVERS, 'file')
+                  : 'file')
+            : undefined
+        let socialProviders = target === 'auth'
           ? ((collectMultiStringFlag(input.flags, 'provider') ?? [])
               .flatMap(entry => splitCsv(entry) ?? [])
               .map(provider => normalizeChoice(provider, SUPPORTED_AUTH_SOCIAL_PROVIDERS, 'auth social provider')) as SupportedAuthSocialProvider[])
           : []
-        const social = target === 'auth'
+        let social = target === 'auth'
           ? resolveBooleanFlag(input.flags, 'social') === true || socialProviders.length > 0
           : false
-        const workos = target === 'auth'
+        let workos = target === 'auth'
           ? resolveBooleanFlag(input.flags, 'workos') === true
           : false
-        const clerk = target === 'auth'
+        let clerk = target === 'auth'
           ? resolveBooleanFlag(input.flags, 'clerk') === true
           : false
+        const authFlagsProvided = 'social' in input.flags
+          || 'provider' in input.flags
+          || 'workos' in input.flags
+          || 'clerk' in input.flags
+
+        if (target === 'auth' && interactive && !authFlagsProvided) {
+          const features = await promptMultiChoice<AuthInstallFeature>(
+            context,
+            'Auth providers',
+            AUTH_INSTALL_FEATURES,
+            {
+              labels: {
+                social: 'Social OAuth',
+                workos: 'WorkOS',
+                clerk: 'Clerk',
+              },
+              hints: {
+                social: 'Google, GitHub, Discord, Facebook, Apple, or LinkedIn',
+              },
+            },
+          )
+          social = features.includes('social')
+          workos = features.includes('workos')
+          clerk = features.includes('clerk')
+
+          if (social) {
+            const providerMode = await promptChoice<AuthSocialProviderMode>(
+              context,
+              'Social provider setup',
+              AUTH_SOCIAL_PROVIDER_MODES,
+              'default',
+              {
+                labels: {
+                  default: 'Default social setup',
+                  specific: 'Choose specific providers',
+                },
+              },
+            )
+
+            if (providerMode === 'specific') {
+              socialProviders = [
+                ...(await promptMultiChoice<SupportedAuthSocialProvider>(
+                  context,
+                  'Social providers',
+                  SUPPORTED_AUTH_SOCIAL_PROVIDERS,
+                  { required: true },
+                )),
+              ]
+            }
+          }
+        }
 
         return {
           args: [target],
@@ -588,13 +673,20 @@ export function createInternalCommands(
             !queueConfigured
             && isInteractive(context, commandContext.flags as Record<string, string | boolean | readonly string[]>)
           ) {
-            const enableQueuedListeners = await confirm(
+            const queueAction = await promptChoice<EventsQueueAction>(
               context,
-              'Enable queued listeners too?',
-              false,
+              'Queued listeners',
+              EVENTS_QUEUE_ACTIONS,
+              'skip',
+              {
+                labels: {
+                  skip: 'Skip queued listeners',
+                  enable: 'Enable queued listeners',
+                },
+              },
             )
 
-            if (enableQueuedListeners) {
+            if (queueAction === 'enable') {
               queueResult = await installQueueIntoProject(context.projectRoot, { driver: 'sync' })
             }
           }
@@ -1269,17 +1361,26 @@ export function createInternalCommands(
         /* v8 ignore start */
         if (isInteractive(context, input.flags)) {
           const noneSelected = [flags.migration, flags.observer, flags.seeder, flags.factory].every(value => value !== true)
-          if (noneSelected && await confirm(context, 'Generate a migration?', true)) {
-            flags.migration = true
-          }
-          if (!flags.observer && await confirm(context, 'Generate an observer?')) {
-            flags.observer = true
-          }
-          if (!flags.seeder && await confirm(context, 'Generate a seeder?')) {
-            flags.seeder = true
-          }
-          if (!flags.factory && await confirm(context, 'Generate a factory?')) {
-            flags.factory = true
+          if (noneSelected) {
+            const selectedArtifacts = await promptMultiChoice<ModelGeneratorOption>(
+              context,
+              'Model artifacts',
+              MODEL_GENERATOR_OPTIONS,
+              {
+                initialValues: ['migration'],
+                labels: {
+                  migration: 'Migration',
+                  observer: 'Observer',
+                  seeder: 'Seeder',
+                  factory: 'Factory',
+                },
+              },
+            )
+
+            flags.migration = selectedArtifacts.includes('migration')
+            flags.observer = selectedArtifacts.includes('observer')
+            flags.seeder = selectedArtifacts.includes('seeder')
+            flags.factory = selectedArtifacts.includes('factory')
           }
         }
         /* v8 ignore stop */

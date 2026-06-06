@@ -2,6 +2,7 @@
 
 export const WORKSPACE_CATALOG = Object.freeze({
   "@clerk/backend": "^3.4.7",
+  "@clack/prompts": "^1.5.1",
   "@eslint/js": "^9.17.0",
   "@holo-js/adapter-next": "^0.1.9",
   "@holo-js/adapter-nuxt": "^0.1.9",

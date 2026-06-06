@@ -8,6 +8,7 @@ import type { ConnectionManager } from '../connection/ConnectionManager'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type {
   DatabaseOperationOptions,
+  DatabaseTransactionOptions,
   DriverExecutionResult,
   DriverQueryResult,
   UnsafeStatement,
@@ -66,15 +67,60 @@ class DatabaseFacade {
 
   async transaction<T>(
     callback: (connection: DatabaseContext) => Promise<T>,
-    connectionName?: string,
-    options?: DatabaseOperationOptions,
+    options?: DatabaseTransactionOptions,
+  ): Promise<T>
+  async transaction<T>(
+    callback: (connection: DatabaseContext) => Promise<T>,
+    connectionName: string,
+    options?: DatabaseTransactionOptions,
+  ): Promise<T>
+  async transaction<T>(
+    callback: (connection: DatabaseContext) => Promise<T>,
+    connectionName: undefined,
+    options?: DatabaseTransactionOptions,
+  ): Promise<T>
+  async transaction<T>(
+    callback: (connection: DatabaseContext) => Promise<T>,
+    connectionNameOrOptions?: string | DatabaseTransactionOptions,
+    options?: DatabaseTransactionOptions,
   ): Promise<T> {
+    const connectionName = typeof connectionNameOrOptions === 'string' ? connectionNameOrOptions : undefined
+    const transactionOptions = typeof connectionNameOrOptions === 'string' ? options : options ?? connectionNameOrOptions
     const target = this.connection(connectionName)
 
     return target.transaction(tx => connectionAsyncContext.run({
       connectionName: tx.getConnectionName(),
       connection: tx,
-    }, () => callback(tx)), options)
+    }, () => callback(tx)), transactionOptions)
+  }
+
+  async writeTransaction<T>(
+    callback: (connection: DatabaseContext) => Promise<T>,
+    options?: DatabaseTransactionOptions,
+  ): Promise<T>
+  async writeTransaction<T>(
+    callback: (connection: DatabaseContext) => Promise<T>,
+    connectionName: string,
+    options?: DatabaseTransactionOptions,
+  ): Promise<T>
+  async writeTransaction<T>(
+    callback: (connection: DatabaseContext) => Promise<T>,
+    connectionName: undefined,
+    options?: DatabaseTransactionOptions,
+  ): Promise<T>
+  async writeTransaction<T>(
+    callback: (connection: DatabaseContext) => Promise<T>,
+    connectionNameOrOptions?: string | DatabaseTransactionOptions,
+    options?: DatabaseTransactionOptions,
+  ): Promise<T> {
+    const connectionName = typeof connectionNameOrOptions === 'string' ? connectionNameOrOptions : undefined
+    const transactionOptions = typeof connectionNameOrOptions === 'string' ? options : options ?? connectionNameOrOptions
+    const target = this.connection(connectionName)
+
+    return target.writeTransaction(tx => connectionAsyncContext.run({
+      connectionName: tx.getConnectionName(),
+      connection: tx,
+    }, () => callback(tx)), transactionOptions)
   }
 
   afterCommit(callback: () => void | Promise<void>, connectionName?: string): void {

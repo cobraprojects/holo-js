@@ -42,16 +42,24 @@ describe('@holo-js/db-sqlite', () => {
     })
 
     await adapter.beginTransaction()
+    await adapter.beginTransaction({ mode: 'immediate' })
+    await adapter.beginTransaction({ mode: 'exclusive' })
+    await expect(adapter.beginTransaction({ mode: 'invalid' as never })).rejects.toThrow('Unsupported SQLite transaction mode "invalid".')
     await adapter.createSavepoint?.('nested')
+    await expect(adapter.createSavepoint?.('not-valid;')).rejects.toThrow('Invalid savepoint name "not-valid;".')
     await adapter.rollbackToSavepoint?.('nested')
     await adapter.releaseSavepoint?.('nested')
+    await adapter.rollback()
     await adapter.commit()
 
     expect(executed).toEqual([
       'BEGIN',
+      'BEGIN IMMEDIATE',
+      'BEGIN EXCLUSIVE',
       'SAVEPOINT nested',
       'ROLLBACK TO SAVEPOINT nested',
       'RELEASE SAVEPOINT nested',
+      'ROLLBACK',
       'COMMIT',
     ])
   })

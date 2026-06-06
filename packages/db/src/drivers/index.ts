@@ -1,4 +1,10 @@
-import type { DriverAdapter, DriverExecutionResult, DriverQueryResult, DatabaseOperationOptions } from '../core/types'
+import type {
+  DatabaseOperationOptions,
+  DatabaseTransactionOptions,
+  DriverAdapter,
+  DriverExecutionResult,
+  DriverQueryResult,
+} from '../core/types'
 import { normalizeSavepointName } from './savepoints'
 
 function isModuleNotFoundError(error: unknown): boolean {
@@ -74,6 +80,19 @@ abstract class LazyDriverAdapter implements DriverAdapter {
     return this.adapter?.isConnected() ?? this.connected
   }
 
+  async ensureDatabaseExists(): Promise<void> {
+    const adapter = await this.resolveAdapter()
+    if (typeof adapter.ensureDatabaseExists !== 'function') {
+      return
+    }
+
+    await adapter.ensureDatabaseExists()
+  }
+
+  isDatabaseMissingError(error: unknown): boolean {
+    return this.adapter?.isDatabaseMissingError?.(error) ?? false
+  }
+
   async runWithTransactionScope<T>(callback: () => Promise<T>): Promise<T> {
     const adapter = await this.resolveAdapter()
     if (typeof adapter.runWithTransactionScope !== 'function') {
@@ -112,7 +131,7 @@ abstract class LazyDriverAdapter implements DriverAdapter {
     return (await this.resolveAdapter()).execute(sql, bindings, options)
   }
 
-  async beginTransaction(options?: DatabaseOperationOptions): Promise<void> {
+  async beginTransaction(options?: DatabaseTransactionOptions): Promise<void> {
     await (await this.resolveAdapter()).beginTransaction(options)
   }
 

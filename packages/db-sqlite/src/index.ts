@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3'
 import type {
+  DatabaseOperationOptions,
   DriverAdapter,
   DriverExecutionResult,
   DriverQueryResult,
@@ -8,6 +9,12 @@ import type {
 export type { DriverAdapter, DriverExecutionResult, DriverQueryResult } from '@holo-js/db'
 
 class TransactionError extends Error {}
+
+type SQLiteTransactionMode = 'deferred' | 'immediate' | 'exclusive'
+
+type SQLiteTransactionOptions = DatabaseOperationOptions & {
+  readonly mode?: SQLiteTransactionMode
+}
 
 export interface SQLiteStatementLike {
   all(...params: readonly unknown[]): Record<string, unknown>[]
@@ -121,8 +128,8 @@ export class SQLiteAdapter implements DriverAdapter {
     }
   }
 
-  async beginTransaction(): Promise<void> {
-    this.getDatabase().exec('BEGIN')
+  async beginTransaction(options?: SQLiteTransactionOptions): Promise<void> {
+    this.getDatabase().exec(this.resolveBeginStatement(options?.mode))
   }
 
   async commit(): Promise<void> {
@@ -160,6 +167,22 @@ export class SQLiteAdapter implements DriverAdapter {
     }
 
     return name
+  }
+
+  private resolveBeginStatement(mode: SQLiteTransactionMode = 'deferred'): string {
+    if (mode === 'deferred') {
+      return 'BEGIN'
+    }
+
+    if (mode === 'immediate') {
+      return 'BEGIN IMMEDIATE'
+    }
+
+    if (mode === 'exclusive') {
+      return 'BEGIN EXCLUSIVE'
+    }
+
+    throw new TransactionError(`Unsupported SQLite transaction mode "${String(mode)}".`)
   }
 }
 

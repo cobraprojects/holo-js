@@ -6,7 +6,7 @@ import { createPostgresAdapter } from '../src'
 const runLivePostgres = process.env.HOLO_POSTGRES_INTEGRATION === '1' ? it : it.skip
 
 describe('@holo-js/db-postgres', () => {
-  it('creates the configured database before opening the application pool', async () => {
+  it('creates the configured database when explicitly ensured', async () => {
     const bootstrapQuery = vi.fn(async (sql: string) => ({
       rows: sql.startsWith('select 1 from pg_database') ? [] : [{ ok: 1 }],
       rowCount: sql.startsWith('select 1 from pg_database') ? 0 : 1,
@@ -42,6 +42,7 @@ describe('@holo-js/db-postgres', () => {
       createPool,
     })
 
+    await adapter.ensureDatabaseExists()
     await expect(adapter.query('select 1')).resolves.toEqual({
       rows: [{ ok: 1 }],
       rowCount: 1,
@@ -70,11 +71,21 @@ describe('@holo-js/db-postgres', () => {
       rows: sql.startsWith('select 1 from pg_database') ? [] : [{ ok: 1 }],
       rowCount: sql.startsWith('select 1 from pg_database') ? 0 : 1,
     }))
-    const createPool = vi.fn((config) => ({
-      query: config?.database === 'tenant"prod' ? vi.fn(async () => ({ rows: [{ ok: 1 }], rowCount: 1 })) : bootstrapQuery,
-      connect: vi.fn(),
-      end: vi.fn(async () => {}),
-    }))
+    const createPool = vi.fn((config) => {
+      if (config?.database === 'tenant"prod') {
+        return {
+          query: vi.fn(async () => ({ rows: [{ ok: 1 }], rowCount: 1 })),
+          connect: vi.fn(),
+          end: vi.fn(async () => {}),
+        }
+      }
+
+      return {
+        query: bootstrapQuery,
+        connect: vi.fn(),
+        end: vi.fn(async () => {}),
+      }
+    })
     const adapter = createPostgresAdapter({
       config: {
         host: '127.0.0.1',
@@ -83,28 +94,37 @@ describe('@holo-js/db-postgres', () => {
       createPool,
     })
 
-    await adapter.initialize()
+    await adapter.ensureDatabaseExists()
 
     expect(bootstrapQuery).toHaveBeenNthCalledWith(2, 'create database "tenant""prod"')
   })
 
-  it('creates databases from connection strings before opening the application pool', async () => {
+  it('creates databases from connection strings when explicitly ensured', async () => {
     const bootstrapQuery = vi.fn(async (sql: string) => ({
       rows: sql.startsWith('select 1 from pg_database') ? [] : [{ ok: 1 }],
       rowCount: sql.startsWith('select 1 from pg_database') ? 0 : 1,
     }))
-    const createPool = vi.fn((config) => ({
-      query: config?.connectionString?.includes('/fresh_app')
-        ? vi.fn(async () => ({ rows: [{ ok: 1 }], rowCount: 1 }))
-        : bootstrapQuery,
-      connect: vi.fn(),
-      end: vi.fn(async () => {}),
-    }))
+    const createPool = vi.fn((config) => {
+      if (config?.connectionString?.includes('/fresh_app')) {
+        return {
+          query: vi.fn(async () => ({ rows: [{ ok: 1 }], rowCount: 1 })),
+          connect: vi.fn(),
+          end: vi.fn(async () => {}),
+        }
+      }
+
+      return {
+        query: bootstrapQuery,
+        connect: vi.fn(),
+        end: vi.fn(async () => {}),
+      }
+    })
     const adapter = createPostgresAdapter({
       connectionString: 'postgres://postgres:secret@127.0.0.1:5432/fresh_app?sslmode=disable',
       createPool,
     })
 
+    await adapter.ensureDatabaseExists()
     await adapter.initialize()
 
     expect(createPool).toHaveBeenNthCalledWith(1, {
@@ -117,13 +137,17 @@ describe('@holo-js/db-postgres', () => {
     expect(bootstrapQuery).toHaveBeenNthCalledWith(2, 'create database "fresh_app"')
   })
 
-  it('does not create a Postgres database when it already exists', async () => {
+  it('initializes without checking whether a Postgres database already exists', async () => {
+    const applicationQuery = vi.fn(async () => ({
+      rows: [{ '?column?': 1 }],
+      rowCount: 1,
+    }))
     const bootstrapQuery = vi.fn(async () => ({
       rows: [{ '?column?': 1 }],
       rowCount: 1,
     }))
     const createPool = vi.fn((config) => ({
-      query: config?.database === 'existing_app' ? vi.fn(async () => ({ rows: [], rowCount: 0 })) : bootstrapQuery,
+      query: config?.database === 'existing_app' ? applicationQuery : bootstrapQuery,
       connect: vi.fn(),
       end: vi.fn(async () => {}),
     }))
@@ -136,8 +160,9 @@ describe('@holo-js/db-postgres', () => {
 
     await adapter.initialize()
 
-    expect(bootstrapQuery).toHaveBeenCalledTimes(1)
-    expect(bootstrapQuery).toHaveBeenCalledWith('select 1 from pg_database where datname = $1', ['existing_app'])
+    expect(createPool).toHaveBeenCalledTimes(1)
+    expect(applicationQuery).not.toHaveBeenCalled()
+    expect(bootstrapQuery).not.toHaveBeenCalled()
   })
 
   it('reports Postgres database bootstrap failures with the configured database name', async () => {
@@ -155,8 +180,8 @@ describe('@holo-js/db-postgres', () => {
       createPool,
     })
 
-    await expect(adapter.initialize()).rejects.toThrow(
-      'Unable to ensure Postgres database "private_app" exists: permission denied',
+    await expect(adapter.ensureDatabaseExists()).rejects.toThrow(
+      'Postgres database "private_app" could not be found or created. Please create the database and try again. Original error: permission denied',
     )
   })
 
@@ -250,6 +275,7 @@ describe('@holo-js/db-postgres', () => {
 
     try {
       await admin.execute(`drop database if exists "${databaseName}"`)
+      await adapter.ensureDatabaseExists()
       await adapter.execute(`create table ${tableName} (id serial primary key, name text not null)`)
       const inserted = await adapter.execute(
         `insert into ${tableName} (name) values ($1) returning id`,

@@ -12,7 +12,7 @@ import { createMySQLAdapter } from '../src'
 const runLiveMySql = process.env.HOLO_MYSQL_INTEGRATION === '1' ? it : it.skip
 
 describe('@holo-js/db-mysql', () => {
-  it('creates the configured database before opening the application pool', async () => {
+  it('creates the configured database when explicitly ensured', async () => {
     const bootstrapQuery = vi.fn(async (sql: string) => [
       sql.startsWith('SELECT SCHEMA_NAME') ? [] : { affectedRows: 1 },
       undefined,
@@ -45,6 +45,7 @@ describe('@holo-js/db-mysql', () => {
       createPool,
     })
 
+    await adapter.ensureDatabaseExists()
     await expect(adapter.query('select 1')).resolves.toEqual({
       rows: [{ ok: 1 }],
       rowCount: 1,
@@ -76,11 +77,21 @@ describe('@holo-js/db-mysql', () => {
       sql.startsWith('SELECT SCHEMA_NAME') ? [] : { affectedRows: 1 },
       undefined,
     ] as const)
-    const createPool = vi.fn((config) => ({
-      query: 'database' in config ? vi.fn(async () => [[{ ok: 1 }], undefined] as const) : bootstrapQuery,
-      getConnection: vi.fn(),
-      end: vi.fn(async () => {}),
-    }))
+    const createPool = vi.fn((config) => {
+      if ('database' in config) {
+        return {
+          query: vi.fn(async () => [[{ ok: 1 }], undefined] as const),
+          getConnection: vi.fn(),
+          end: vi.fn(async () => {}),
+        }
+      }
+
+      return {
+        query: bootstrapQuery,
+        getConnection: vi.fn(),
+        end: vi.fn(async () => {}),
+      }
+    })
     const adapter = createMySQLAdapter({
       config: {
         host: '127.0.0.1',
@@ -89,28 +100,37 @@ describe('@holo-js/db-mysql', () => {
       createPool,
     })
 
-    await adapter.initialize()
+    await adapter.ensureDatabaseExists()
 
     expect(bootstrapQuery).toHaveBeenNthCalledWith(2, 'CREATE DATABASE `tenant``prod`', [])
   })
 
-  it('creates databases from connection URIs before opening the application pool', async () => {
+  it('creates databases from connection URIs when explicitly ensured', async () => {
     const bootstrapQuery = vi.fn(async (sql: string) => [
       sql.startsWith('SELECT SCHEMA_NAME') ? [] : { affectedRows: 1 },
       undefined,
     ] as const)
-    const createPool = vi.fn((config) => ({
-      query: 'uri' in config && String(config.uri).includes('/fresh_app')
-        ? vi.fn(async () => [[{ ok: 1 }], undefined] as const)
-        : bootstrapQuery,
-      getConnection: vi.fn(),
-      end: vi.fn(async () => {}),
-    }))
+    const createPool = vi.fn((config) => {
+      if ('uri' in config && String(config.uri).includes('/fresh_app')) {
+        return {
+          query: vi.fn(async () => [[{ ok: 1 }], undefined] as const),
+          getConnection: vi.fn(),
+          end: vi.fn(async () => {}),
+        }
+      }
+
+      return {
+        query: bootstrapQuery,
+        getConnection: vi.fn(),
+        end: vi.fn(async () => {}),
+      }
+    })
     const adapter = createMySQLAdapter({
       uri: 'mysql://root:secret@127.0.0.1:3306/fresh_app?timezone=Z',
       createPool,
     })
 
+    await adapter.ensureDatabaseExists()
     await adapter.initialize()
 
     expect(createPool).toHaveBeenNthCalledWith(1, {
@@ -127,10 +147,11 @@ describe('@holo-js/db-mysql', () => {
     expect(bootstrapQuery).toHaveBeenNthCalledWith(2, 'CREATE DATABASE `fresh_app`', [])
   })
 
-  it('does not create a MySQL database when it already exists', async () => {
+  it('initializes without checking whether a MySQL database already exists', async () => {
+    const applicationQuery = vi.fn(async () => [[{ ok: 1 }], undefined] as const)
     const bootstrapQuery = vi.fn(async () => [[{ SCHEMA_NAME: 'existing_app' }], undefined] as const)
     const createPool = vi.fn((config) => ({
-      query: 'database' in config ? vi.fn(async () => [[{ ok: 1 }], undefined] as const) : bootstrapQuery,
+      query: 'database' in config ? applicationQuery : bootstrapQuery,
       getConnection: vi.fn(),
       end: vi.fn(async () => {}),
     }))
@@ -143,11 +164,9 @@ describe('@holo-js/db-mysql', () => {
 
     await adapter.initialize()
 
-    expect(bootstrapQuery).toHaveBeenCalledTimes(1)
-    expect(bootstrapQuery).toHaveBeenCalledWith(
-      'SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?',
-      ['existing_app'],
-    )
+    expect(createPool).toHaveBeenCalledTimes(1)
+    expect(applicationQuery).not.toHaveBeenCalled()
+    expect(bootstrapQuery).not.toHaveBeenCalled()
   })
 
   it('reports MySQL database bootstrap failures with the configured database name', async () => {
@@ -165,8 +184,8 @@ describe('@holo-js/db-mysql', () => {
       createPool,
     })
 
-    await expect(adapter.initialize()).rejects.toThrow(
-      'Unable to ensure MySQL database "private_app" exists: access denied',
+    await expect(adapter.ensureDatabaseExists()).rejects.toThrow(
+      'MySQL database "private_app" could not be found or created. Please create the database and try again. Original error: access denied',
     )
   })
 
@@ -257,6 +276,7 @@ describe('@holo-js/db-mysql', () => {
 
     try {
       await admin.execute(`drop database if exists \`${databaseName}\``)
+      await adapter.ensureDatabaseExists()
       await adapter.execute(`create table ${tableName} (id int auto_increment primary key, name varchar(255) not null)`)
       const inserted = await adapter.execute(
         `insert into ${tableName} (name) values (?)`,

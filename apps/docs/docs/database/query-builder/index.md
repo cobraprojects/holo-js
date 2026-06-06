@@ -241,7 +241,8 @@ Dialect support:
   the same row-lock syntax as PostgreSQL or MySQL
 
 That means SQLite will not apply a pessimistic row lock for these methods. The query still runs, but the lock
-intent is ignored at the SQL level.
+intent is ignored at the SQL level. For SQLite write coordination, use `DB.writeTransaction(...)` or pass
+`{ mode: 'immediate' }` to `DB.transaction(...)`.
 
 Use locks inside `DB.transaction(...)`. Outside a transaction they do not provide a durable concurrency boundary
 for application workflows.
@@ -270,8 +271,9 @@ await DB.transaction(async (tx) => {
 The important behavior is that another transaction trying to lock or update the same row will wait until the
 current transaction commits or rolls back.
 
-On SQLite, `lockForUpdate()` does not emit a row-lock clause and does not lock the selected rows. Keep the workflow inside a transaction, and prefer
-an atomic conditional write when that expresses the business rule directly.
+On SQLite, `lockForUpdate()` does not emit a row-lock clause and does not lock the selected rows. Use
+`DB.writeTransaction(...)` for read-then-write workflows, and prefer an atomic conditional write when that
+expresses the business rule directly.
 
 ### `sharedLock()`
 
@@ -304,6 +306,7 @@ On SQLite, `sharedLock()` also degrades to a normal `SELECT` and does not block 
 - Keep the transaction short: do not perform network calls or slow external I/O while holding row locks.
 - Prefer deterministic predicates such as primary keys when locking.
 - Use a normal transaction with a conditional write when that solves the problem without a read-first lock step.
+- Use `DB.writeTransaction(...)` for SQLite write workflows instead of relying on row-lock methods.
 - Reach for cache locks only when you need cross-process coordination above the database layer; row locks are the
   stronger source of truth for database-backed state.
 
