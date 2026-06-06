@@ -62,6 +62,13 @@ export class RealtimeUnauthorizedError extends RealtimeError {
   }
 }
 
+export class RealtimeForbiddenError extends RealtimeError {
+  constructor(message = 'Realtime access forbidden.') {
+    super(message)
+    this.name = 'RealtimeForbiddenError'
+  }
+}
+
 export class RealtimeAuthUnavailableError extends RealtimeError {
   constructor(
     message = 'Realtime authenticated access requires @holo-js/auth to be installed and configured.',
@@ -246,7 +253,7 @@ async function authorize<TArgs>(
       db,
     })
     if (!allowed) {
-      throw new RealtimeUnauthorizedError()
+      throw new RealtimeForbiddenError()
     }
   }
 

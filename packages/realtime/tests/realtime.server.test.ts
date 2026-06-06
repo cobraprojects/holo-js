@@ -34,12 +34,12 @@ async function createRealtimeProject(): Promise<string> {
   await mkdir(realtimeRoot, { recursive: true })
   await writeFile(join(realtimeRoot, 'posts.mjs'), [
     'const marker = Symbol.for(\'holo-js.realtime.definition\')',
-    'function define(kind, name, handler) {',
+    'function define(kind, name, access, handler) {',
     '  const definition = function definition() {}',
     '  Object.defineProperties(definition, {',
     '    kind: { value: kind, enumerable: true },',
     '    name: { value: name, enumerable: true },',
-    '    access: { value: \'public\', enumerable: true },',
+    '    access: { value: access, enumerable: true },',
     '    handler: { value: handler, enumerable: true },',
     '    $types: { value: undefined, enumerable: true },',
     '  })',
@@ -48,15 +48,18 @@ async function createRealtimeProject(): Promise<string> {
     '}',
     'let shouldFail = false',
     'export function failNext() { shouldFail = true }',
-    'export const listPosts = define(\'query\', \'posts.list\', async () => {',
+    'export const listPosts = define(\'query\', \'posts.list\', \'public\', async () => {',
     '  if (shouldFail) {',
     '    shouldFail = false',
     '    throw new Error(\'refresh failed\')',
     '  }',
     '  return [{ id: 1, title: \'First\' }]',
     '})',
-    'export const createPost = define(\'mutation\', \'posts.create\', async ({ args }) => ({ id: 2, title: args.title }))',
-    'export const brokenStats = define(\'query\', \'stats.broken\', async () => { throw \'broken\' })',
+    'export const createPost = define(\'mutation\', \'posts.create\', \'public\', async ({ args }) => ({ id: 2, title: args.title }))',
+    'export const privateProfile = define(\'query\', \'private.profile\', \'authenticated\', async () => ({ id: 1 }))',
+    'export const privateCreate = define(\'mutation\', \'private.create\', \'authenticated\', async () => ({ id: 1 }))',
+    'export const deniedProfile = define(\'query\', \'private.denied\', { require: \'public\', authorize: async () => false }, async () => ({ id: 1 }))',
+    'export const brokenStats = define(\'query\', \'stats.broken\', \'public\', async () => { throw \'broken\' })',
     '',
   ].join('\n'))
   await writeFile(join(realtimeRoot, 'stats.js'), [
@@ -156,6 +159,72 @@ describe('@holo-js/realtime server handlers', () => {
       name: 'stats.broken',
     }), { projectRoot })).json()).resolves.toEqual({
       error: 'Realtime request failed.',
+    })
+  })
+
+  it('maps authenticated and denied access errors to HTTP responses', async () => {
+    const projectRoot = await createRealtimeProject()
+    configureRealtimeRuntime({
+      db: fakeDatabaseContext,
+      loadAuthModule: async () => null,
+    })
+
+    const unavailableQueryResponse = await handleRealtimeQueryRequest(request({
+      name: 'private.profile',
+    }), { projectRoot })
+    const unavailableMutationResponse = await handleRealtimeMutationRequest(request({
+      name: 'private.create',
+    }), { projectRoot })
+    const unavailableStreamResponse = await handleRealtimeStreamRequest(
+      new Request('http://localhost/holo/realtime/stream?name=private.profile'),
+      { projectRoot },
+    )
+    const deniedResponse = await handleRealtimeQueryRequest(request({
+      name: 'private.denied',
+    }), { projectRoot })
+
+    expect(unavailableQueryResponse.status).toBe(500)
+    expect(unavailableMutationResponse.status).toBe(500)
+    expect(unavailableStreamResponse.status).toBe(500)
+    expect(deniedResponse.status).toBe(403)
+    await expect(unavailableQueryResponse.json()).resolves.toEqual({
+      error: 'Realtime authenticated access requires @holo-js/auth to be installed and configured.',
+    })
+    await expect(unavailableMutationResponse.json()).resolves.toEqual({
+      error: 'Realtime authenticated access requires @holo-js/auth to be installed and configured.',
+    })
+    await expect(unavailableStreamResponse.json()).resolves.toEqual({
+      error: 'Realtime authenticated access requires @holo-js/auth to be installed and configured.',
+    })
+    await expect(deniedResponse.json()).resolves.toEqual({
+      error: 'Realtime access forbidden.',
+    })
+
+    configureRealtimeRuntime({
+      db: fakeDatabaseContext,
+      loadAuthModule: async () => ({
+        getAuthRuntime() {
+          return {
+            user: async () => null,
+            provider: async () => null,
+            guard() {
+              return {
+                user: async () => null,
+                provider: async () => null,
+              }
+            },
+          }
+        },
+      }),
+    })
+
+    const unauthorizedResponse = await handleRealtimeQueryRequest(request({
+      name: 'private.profile',
+    }), { projectRoot })
+
+    expect(unauthorizedResponse.status).toBe(401)
+    await expect(unauthorizedResponse.json()).resolves.toEqual({
+      error: 'Realtime access denied.',
     })
   })
 

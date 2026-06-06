@@ -2530,6 +2530,9 @@ export default {
     })
     expect(nextRealtimeFrameworkFiles.find(file => file.path === 'app/holo/realtime/provider.tsx')?.contents).toContain('@holo-js/adapter-next/realtime')
     expect(nextRealtimeFrameworkFiles.find(file => file.path === 'app/layout.tsx')?.contents).toContain('HoloRealtime')
+    expect(nextRealtimeFrameworkFiles.find(file => file.path === '.holo-js/generated/next/realtime-query-route.ts')?.contents).toContain('return await handleRealtimeQueryRequest(request, { projectRoot: app.projectRoot })')
+    expect(nextRealtimeFrameworkFiles.find(file => file.path === '.holo-js/generated/next/realtime-mutation-route.ts')?.contents).toContain('return await handleRealtimeMutationRequest(request, { projectRoot: app.projectRoot })')
+    expect(nextRealtimeFrameworkFiles.find(file => file.path === '.holo-js/generated/next/realtime-stream-route.ts')?.contents).toContain('return await handleRealtimeStreamRequest(request, { projectRoot: app.projectRoot })')
     const svelteRealtimeFrameworkPaths = projectInternals.renderFrameworkFiles({
       projectName: 'Svelte Realtime App',
       framework: 'sveltekit',
@@ -2539,6 +2542,9 @@ export default {
       optionalPackages: ['realtime'],
     })
     expect(svelteRealtimeFrameworkPaths.find(file => file.path === 'src/hooks.client.ts')?.contents).toContain('@holo-js/adapter-sveltekit/realtime')
+    expect(svelteRealtimeFrameworkPaths.find(file => file.path === 'src/routes/holo/realtime/query/+server.ts')?.contents).toContain('return await handleRealtimeQueryRequest(request, { projectRoot: process.cwd() })')
+    expect(svelteRealtimeFrameworkPaths.find(file => file.path === 'src/routes/holo/realtime/mutation/+server.ts')?.contents).toContain('return await handleRealtimeMutationRequest(request, { projectRoot: process.cwd() })')
+    expect(svelteRealtimeFrameworkPaths.find(file => file.path === 'src/routes/holo/realtime/stream/+server.ts')?.contents).toContain('return await handleRealtimeStreamRequest(request, { projectRoot: process.cwd() })')
     expect(projectInternals.renderFrameworkFiles({
       projectName: 'Svelte App',
       framework: 'sveltekit',

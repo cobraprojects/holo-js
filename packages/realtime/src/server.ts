@@ -5,6 +5,9 @@ import {
   executeRealtimeMutation,
   executeRealtimeQuery,
   isRealtimeDefinition,
+  RealtimeAuthUnavailableError,
+  RealtimeForbiddenError,
+  RealtimeUnauthorizedError,
   subscribeRealtimeQuery,
 } from './runtime'
 import type {
@@ -116,7 +119,23 @@ function jsonResponse(value: unknown, status = 200): Response {
   })
 }
 
-function errorResponse(error: unknown, status = 400): Response {
+function errorStatus(error: unknown): number {
+  if (error instanceof RealtimeAuthUnavailableError) {
+    return 500
+  }
+
+  if (error instanceof RealtimeUnauthorizedError) {
+    return 401
+  }
+
+  if (error instanceof RealtimeForbiddenError) {
+    return 403
+  }
+
+  return 400
+}
+
+function errorResponse(error: unknown, status = errorStatus(error)): Response {
   return jsonResponse({
     error: error instanceof Error ? error.message : 'Realtime request failed.',
   }, status)
@@ -179,23 +198,26 @@ export async function handleRealtimeStreamRequest(
       return errorResponse(new Error(`Realtime definition "${name}" is not a query.`), 404)
     }
 
-    let subscription: RealtimeSubscription<unknown> | undefined
+    const encoder = new TextEncoder()
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
+    const subscriptionRef: { current?: RealtimeSubscription<unknown> } = {}
     const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        const encoder = new TextEncoder()
-        subscription = await subscribeRealtimeQuery(definition, args as never, {
-          onData(snapshot) {
-            controller.enqueue(encoder.encode(encodeSnapshot(snapshot)))
-          },
-          onError(error) {
-            controller.error(error)
-          },
-        })
+      start(controller) {
+        streamController = controller
       },
       cancel() {
-        subscription?.unsubscribe()
+        subscriptionRef.current?.unsubscribe()
       },
     })
+    const subscription = await subscribeRealtimeQuery(definition, args as never, {
+      onData(snapshot) {
+        streamController?.enqueue(encoder.encode(encodeSnapshot(snapshot)))
+      },
+      onError(error) {
+        streamController?.error(error)
+      },
+    })
+    subscriptionRef.current = subscription
 
     request.signal.addEventListener('abort', () => {
       subscription?.unsubscribe()

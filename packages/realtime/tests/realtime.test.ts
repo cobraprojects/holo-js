@@ -27,6 +27,7 @@ import {
   executeRealtimeQuery,
   RealtimeAuthUnavailableError,
   RealtimeError,
+  RealtimeForbiddenError,
   RealtimeUnauthorizedError,
   isRealtimeDefinition,
   realtimeRuntimeInternals,
@@ -934,7 +935,7 @@ describe('@holo-js/realtime', () => {
       handler: async () => true,
     })
 
-    await expect(executeRealtimeQuery(query)).rejects.toBeInstanceOf(RealtimeUnauthorizedError)
+    await expect(executeRealtimeQuery(query)).rejects.toBeInstanceOf(RealtimeForbiddenError)
   })
 
   it('runs handlers when custom authorization allows access', async () => {

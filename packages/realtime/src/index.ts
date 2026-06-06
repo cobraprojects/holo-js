@@ -78,6 +78,7 @@ export {
   resetRealtimeRuntime,
   RealtimeAuthUnavailableError,
   RealtimeError,
+  RealtimeForbiddenError,
   RealtimeUnauthorizedError,
   subscribeRealtimeQuery,
 } from './runtime'

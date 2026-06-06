@@ -139,6 +139,10 @@ model updates, and model deletes can refresh consumers of that query after the d
 
 The important rule is: write through Holo's database or model APIs when you want realtime consumers to update.
 
+Realtime refreshes are transaction-aware. Writes inside `DB.transaction(...)`, `db.connection.transaction(...)`, or
+model APIs that open their own transaction do not notify subscribers until the transaction commits. If the transaction
+rolls back or the mutation throws before commit, no realtime refresh is sent for the reverted writes.
+
 Relation queries work the same way. A query that returns `Post.query().with('tags')` records the post table, the pivot
 table, and the tag table reads performed by eager loading. Attaching a tag through a Holo mutation refreshes consumers
 of that query after the write commits.
