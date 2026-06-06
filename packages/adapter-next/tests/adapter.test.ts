@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -14,6 +15,11 @@ import { withHolo } from '../src/config'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
 const tempDirs: string[] = []
+const requireNextModule = createRequire(import.meta.url)
+
+type NextNavigationModule = {
+  readonly forbidden: () => never
+}
 
 async function createProject(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-next-adapter-'))
@@ -208,6 +214,40 @@ export default defineConfig({
       expect(config.serverExternalPackages).not.toContain('@holo-js/auth-clerk')
     } finally {
       process.chdir(previousCwd)
+    }
+  })
+
+  it('lets externalized Next navigation calls throw a forbidden access interrupt', () => {
+    const previous = process.env.__NEXT_EXPERIMENTAL_AUTH_INTERRUPTS
+    delete process.env.__NEXT_EXPERIMENTAL_AUTH_INTERRUPTS
+
+    try {
+      const { forbidden } = requireNextModule('next/navigation.js') as NextNavigationModule
+      const config = withHolo({
+        experimental: {
+          serverActions: {
+            bodySizeLimit: '3mb',
+          },
+        },
+      })
+
+      expect(config.experimental?.serverActions).toEqual({
+        bodySizeLimit: '3mb',
+      })
+
+      let thrown: unknown
+      try {
+        forbidden()
+      } catch (error) {
+        thrown = error
+      }
+
+      expect(thrown).toBeInstanceOf(Error)
+      expect(thrown).toMatchObject({
+        digest: 'NEXT_HTTP_ERROR_FALLBACK;403',
+      })
+    } finally {
+      process.env.__NEXT_EXPERIMENTAL_AUTH_INTERRUPTS = previous
     }
   })
 

@@ -42,6 +42,7 @@ const HOLO_TRANSPILED_PACKAGES = [
   '@holo-js/auth',
 ] as const
 const HOLO_TRANSPILED_PACKAGE_SET = new Set<string>(HOLO_TRANSPILED_PACKAGES)
+const NEXT_AUTH_INTERRUPTS_ENV = '__NEXT_EXPERIMENTAL_AUTH_INTERRUPTS'
 
 type PackageDependencyField = 'dependencies' | 'devDependencies' | 'optionalDependencies' | 'peerDependencies'
 type PackageDependencyMap = Readonly<Record<string, string>>
@@ -106,6 +107,8 @@ function isOptionalServerExternalPackageInstalled(packageName: string, manifest:
 }
 
 export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as TConfig): TConfig {
+  process.env[NEXT_AUTH_INTERRUPTS_ENV] = '1'
+
   const existingExternal = nextConfig.serverExternalPackages ?? []
   const packageManifest = readProjectPackageManifest()
   const installedOptionalExternal = HOLO_OPTIONAL_SERVER_EXTERNAL_PACKAGES.filter(packageName => (
