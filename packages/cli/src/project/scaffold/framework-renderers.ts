@@ -530,11 +530,26 @@ export function renderNextGeneratedBroadcastAuthRoute(): string {
   ].join('\n')
 }
 
+export function renderNextGeneratedRealtimeDefinitions(importPaths: readonly string[] = []): string {
+  const imports = importPaths.map((importPath, index) => (
+    `import * as realtimeModule${index} from ${JSON.stringify(importPath)}`
+  ))
+  const values = importPaths.map((_importPath, index) => `...Object.values(realtimeModule${index})`)
+
+  return [
+    ...imports,
+    '',
+    `export const realtimeDefinitions = [${values.join(', ')}] as const`,
+    '',
+  ].join('\n')
+}
+
 export function renderNextManagedRouteFiles(options: {
   readonly authEnabled?: boolean
   readonly broadcastEnabled?: boolean
   readonly storageEnabled?: boolean
   readonly broadcastAuthEnabled?: boolean
+  readonly realtimeEnabled?: boolean
 } = {}): readonly ScaffoldedFile[] {
   return [
     { path: '.holo-js/generated/next/holo.ts', contents: renderNextHoloHelper() },
@@ -547,6 +562,9 @@ export function renderNextManagedRouteFiles(options: {
       : []),
     ...(options.broadcastAuthEnabled
       ? [{ path: '.holo-js/generated/next/broadcast-auth-route.ts', contents: renderNextGeneratedBroadcastAuthRoute() }]
+      : []),
+    ...(options.realtimeEnabled
+      ? [{ path: '.holo-js/generated/next/realtime-definitions.ts', contents: renderNextGeneratedRealtimeDefinitions() }]
       : []),
   ]
 }
@@ -611,7 +629,7 @@ function renderSvelteServerUserHooks(): string {
   ].join('\n')
 }
 
-function renderSvelteViteConfig(_storageEnabled: boolean): string {
+export function renderSvelteViteConfig(_storageEnabled: boolean, realtimeEnabled = false): string {
   const externals = [
     '      \'@holo-js/adapter-sveltekit\',',
     '      \'@holo-js/auth\',',
@@ -639,6 +657,7 @@ function renderSvelteViteConfig(_storageEnabled: boolean): string {
     '      \'@holo-js/queue\',',
     '      \'@holo-js/queue-db\',',
     '      \'@holo-js/queue-redis\',',
+    '      \'@holo-js/realtime\',',
     '      \'@holo-js/security\',',
     '      \'@holo-js/session\',',
     '      \'@holo-js/storage\',',
@@ -653,10 +672,13 @@ function renderSvelteViteConfig(_storageEnabled: boolean): string {
 
   return [
     'import { sveltekit } from \'@sveltejs/kit/vite\'',
+    ...(realtimeEnabled
+      ? ['import { holoSvelteKitRealtime } from \'@holo-js/adapter-sveltekit/vite\'']
+      : []),
     'import { defineConfig } from \'vite\'',
     '',
     'export default defineConfig({',
-    '  plugins: [sveltekit()],',
+    `  plugins: [${realtimeEnabled ? 'holoSvelteKitRealtime(), ' : ''}sveltekit()],`,
     '  server: {',
     '    fs: {',
     '      allow: [\'.holo-js/generated\'],',
@@ -863,6 +885,7 @@ export function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly 
   const storageEnabled = optionalPackages.includes('storage')
   const authEnabled = optionalPackages.includes('auth')
   const broadcastEnabled = optionalPackages.includes('broadcast')
+  const realtimeEnabled = optionalPackages.includes('realtime')
 
   if (options.framework === 'nuxt') {
     return [
@@ -890,13 +913,13 @@ export function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly 
       ...(broadcastEnabled
         ? [{ path: 'app/broadcasting/config/route.ts', contents: renderNextBroadcastConfigRoute() }]
         : []),
-      ...renderNextManagedRouteFiles({ authEnabled, broadcastEnabled, storageEnabled }),
+      ...renderNextManagedRouteFiles({ authEnabled, broadcastEnabled, storageEnabled, realtimeEnabled }),
     ]
   }
 
   return [
     { path: 'svelte.config.js', contents: renderSvelteConfig() },
-    { path: 'vite.config.ts', contents: renderSvelteViteConfig(storageEnabled) },
+    { path: 'vite.config.ts', contents: renderSvelteViteConfig(storageEnabled, realtimeEnabled) },
     { path: 'src/hooks.ts', contents: renderSvelteUserHooks() },
     { path: 'src/hooks.server.ts', contents: renderSvelteServerUserHooks() },
     { path: 'src/app.html', contents: renderSvelteAppHtml() },

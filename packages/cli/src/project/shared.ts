@@ -151,7 +151,7 @@ export type SupportedScaffoldFramework = 'nuxt' | 'next' | 'sveltekit'
 export type SupportedScaffoldPackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun'
 
 export type SupportedScaffoldStorageDisk = 'local' | 'public'
-export type SupportedScaffoldOptionalPackage = 'storage' | 'events' | 'queue' | 'validation' | 'forms' | 'auth' | 'authorization' | 'notifications' | 'mail' | 'broadcast' | 'security' | 'cache'
+export type SupportedScaffoldOptionalPackage = 'storage' | 'events' | 'queue' | 'validation' | 'forms' | 'auth' | 'authorization' | 'notifications' | 'mail' | 'broadcast' | 'realtime' | 'security' | 'cache'
 export type SupportedQueueInstallerDriver = 'sync' | 'redis' | 'database'
 export type SupportedCacheInstallerDriver = 'file' | 'redis' | 'database'
 export type SupportedAuthSocialProvider = 'google' | 'github' | 'discord' | 'facebook' | 'apple' | 'linkedin'
@@ -302,6 +302,12 @@ export type BroadcastInstallResult = {
   readonly createdFrameworkSetup: boolean
   readonly updatedEnv: boolean
   readonly updatedEnvExample: boolean
+}
+
+export type RealtimeInstallResult = {
+  readonly updatedPackageJson: boolean
+  readonly createdRealtimeDirectory: boolean
+  readonly createdFrameworkSetup: boolean
 }
 
 export const SUPPORTED_AUTH_SOCIAL_PROVIDERS = [
@@ -477,7 +483,7 @@ export const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIO
 export const SUPPORTED_SCAFFOLD_FRAMEWORKS = ['nuxt', 'next', 'sveltekit'] as const
 export const SUPPORTED_SCAFFOLD_PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn', 'bun'] as const
 export const SUPPORTED_SCAFFOLD_STORAGE_DISKS = ['local', 'public'] as const
-export const SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms', 'auth', 'authorization', 'notifications', 'mail', 'broadcast', 'security', 'cache'] as const
+export const SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms', 'auth', 'authorization', 'notifications', 'mail', 'broadcast', 'realtime', 'security', 'cache'] as const
 export const SUPPORTED_QUEUE_INSTALLER_DRIVERS = ['sync', 'redis', 'database'] as const
 export const SUPPORTED_CACHE_INSTALLER_DRIVERS = ['file', 'redis', 'database'] as const
 export const HOLO_EVENT_DEFINITION_MARKER = Symbol.for('holo-js.events.definition')

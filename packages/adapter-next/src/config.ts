@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 
 const HOLO_SERVER_EXTERNAL_PACKAGES = [
@@ -31,6 +32,7 @@ const HOLO_OPTIONAL_SERVER_EXTERNAL_PACKAGES = [
   '@holo-js/queue',
   '@holo-js/queue-db',
   '@holo-js/queue-redis',
+  '@holo-js/realtime',
   '@holo-js/security',
   '@holo-js/session',
   '@holo-js/storage',
@@ -62,6 +64,7 @@ interface TurbopackIgnoreIssueRule {
 
 interface TurbopackConfig {
   readonly ignoreIssue?: readonly TurbopackIgnoreIssueRule[]
+  readonly rules?: Record<string, unknown>
   readonly [key: string]: unknown
 }
 
@@ -72,6 +75,20 @@ interface NextConfig {
   readonly experimental?: Record<string, unknown>
   readonly turbopack?: TurbopackConfig
   readonly rewrites?: () => Promise<unknown>
+  readonly webpack?: (config: WebpackConfig, context: WebpackConfigContext) => WebpackConfig
+  readonly [key: string]: unknown
+}
+
+type WebpackConfig = {
+  module?: {
+    rules?: unknown[]
+    [key: string]: unknown
+  }
+  [key: string]: unknown
+}
+
+type WebpackConfigContext = {
+  readonly isServer: boolean
   readonly [key: string]: unknown
 }
 
@@ -106,6 +123,28 @@ function isOptionalServerExternalPackageInstalled(packageName: string, manifest:
   return PACKAGE_DEPENDENCY_FIELDS.some(field => Boolean(manifest?.[field]?.[packageName]))
 }
 
+function createRealtimeDefinitionWebpackRule(loaderPath: string): Record<string, unknown> {
+  return {
+    test: /(?:^|[\\/])server[\\/]realtime[\\/].+\.[cm]?[jt]sx?$/,
+    use: [loaderPath],
+  }
+}
+
+function createRealtimeDefinitionTurbopackRule(loaderPath: string): Record<string, unknown> {
+  return {
+    condition: {
+      all: [
+        'browser',
+        {
+          path: /(?:^|[\\/])server[\\/]realtime[\\/]/,
+        },
+      ],
+    },
+    loaders: [loaderPath],
+    as: '*.js',
+  }
+}
+
 export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as TConfig): TConfig {
   process.env[NEXT_AUTH_INTERRUPTS_ENV] = '1'
 
@@ -130,8 +169,20 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
 
   const existingTurbopack = nextConfig.turbopack ?? {}
   const existingIgnoreIssue = existingTurbopack.ignoreIssue ?? []
+  const hasRealtime = isOptionalServerExternalPackageInstalled('@holo-js/realtime', packageManifest)
+  const realtimeDefinitionLoader = fileURLToPath(new URL('./realtime-definition-loader.mjs', import.meta.url))
   const mergedTurbopack: TurbopackConfig = {
     ...existingTurbopack,
+    rules: {
+      ...(existingTurbopack.rules ?? {}),
+      ...(hasRealtime
+        ? {
+            '*.{ts,tsx,js,jsx,mts,mjs,cts,cjs}': [
+              createRealtimeDefinitionTurbopackRule(realtimeDefinitionLoader),
+            ],
+          }
+        : {}),
+    },
     ignoreIssue: [
       ...existingIgnoreIssue,
       {
@@ -142,6 +193,7 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
   }
 
   const userRewrites = nextConfig.rewrites
+  const userWebpack = nextConfig.webpack
 
   return {
     ...nextConfig,
@@ -153,6 +205,19 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
     transpilePackages: mergedTranspilePackages,
     outputFileTracingExcludes: mergedExcludes,
     turbopack: mergedTurbopack,
+    webpack(config, context) {
+      const nextWebpackConfig = userWebpack?.(config, context) ?? config
+      if (!hasRealtime || context.isServer) {
+        return nextWebpackConfig
+      }
+
+      nextWebpackConfig.module = nextWebpackConfig.module ?? {}
+      nextWebpackConfig.module.rules = [
+        ...(nextWebpackConfig.module.rules ?? []),
+        createRealtimeDefinitionWebpackRule(realtimeDefinitionLoader),
+      ]
+      return nextWebpackConfig
+    },
     async rewrites() {
       const userResult = await userRewrites?.call(this)
 

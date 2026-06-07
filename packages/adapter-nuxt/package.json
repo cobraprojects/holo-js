@@ -17,6 +17,10 @@
       "types": "./dist/runtime/composables/index.d.ts",
       "import": "./dist/runtime/composables/index.js"
     },
+    "./realtime": {
+      "types": "./dist/runtime/composables/realtime.d.ts",
+      "import": "./dist/runtime/composables/realtime.js"
+    },
     "./storage": {
       "types": "./dist/runtime/composables/storage.d.ts",
       "import": "./dist/runtime/composables/storage.js"
@@ -44,6 +48,7 @@
   "peerDependencies": {
     "@holo-js/broadcast": "catalog:",
     "@holo-js/forms": "catalog:",
+    "@holo-js/realtime": "catalog:",
     "@holo-js/storage": "catalog:",
     "@holo-js/storage-s3": "catalog:"
   },
@@ -52,6 +57,9 @@
       "optional": true
     },
     "@holo-js/forms": {
+      "optional": true
+    },
+    "@holo-js/realtime": {
       "optional": true
     },
     "@holo-js/storage": {
@@ -63,6 +71,7 @@
   },
   "devDependencies": {
     "@holo-js/broadcast": "catalog:",
+    "@holo-js/realtime": "catalog:",
     "@holo-js/storage-s3": "catalog:",
     "@nuxt/module-builder": "catalog:",
     "@types/node": "catalog:",

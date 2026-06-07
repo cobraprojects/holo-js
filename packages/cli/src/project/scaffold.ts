@@ -1,5 +1,5 @@
 import { mkdir, readdir } from 'node:fs/promises'
-import { dirname, extname, resolve } from 'node:path'
+import { dirname, extname, relative, resolve, sep } from 'node:path'
 import { loadConfigDirectory } from '@holo-js/config'
 import {
   loadProjectConfig,
@@ -26,6 +26,7 @@ import {
   type MediaInstallResult,
   type NotificationsInstallResult,
   type QueueInstallResult,
+  type RealtimeInstallResult,
   type SecurityInstallResult,
   type SupportedCacheInstallerDriver,
   type SupportedQueueInstallerDriver,
@@ -82,6 +83,7 @@ import {
   upsertMediaPackageDependency,
   upsertNotificationsPackageDependency,
   upsertQueuePackageDependency,
+  upsertRealtimePackageDependency,
   upsertSecurityPackageDependency,
 } from './scaffold/dependencies'
 import {
@@ -99,6 +101,9 @@ import {
 import {
   renderNextBroadcastConfigRoute,
   renderNextGeneratedBroadcastConfigRoute,
+  renderNextGeneratedRealtimeDefinitions,
+  renderNextRuntimeBootstrap,
+  renderSvelteViteConfig,
 } from './scaffold/framework-renderers'
 import {
   createAuthMigrationFiles,
@@ -146,6 +151,90 @@ async function resolveExistingModelPath(modelsRoot: string, modelName: string): 
   }
 
   return undefined
+}
+
+type SvelteRealtimeVitePluginInjectionResult = string | undefined | {
+  readonly error: string
+}
+
+function injectSvelteRealtimeVitePlugin(viteConfigContents: string): SvelteRealtimeVitePluginInjectionResult {
+  if (/\bholoSvelteKitRealtime\b/.test(viteConfigContents)) {
+    return undefined
+  }
+
+  const adapterImportPattern = /import\s*\{([^}]*)\}\s*from\s*(['"])@holo-js\/adapter-sveltekit\/vite\2/
+  const svelteKitImportPattern = /(import\s*\{[^}]*\bsveltekit\b[^}]*\}\s*from\s*(['"])@sveltejs\/kit\/vite\2)/
+  const existingAdapterImport = adapterImportPattern.exec(viteConfigContents)
+  let withImport = viteConfigContents
+
+  if (existingAdapterImport) {
+    const imports = existingAdapterImport[1]
+      ?.split(',')
+      .map(value => value.trim())
+      .filter(Boolean) ?? []
+    withImport = viteConfigContents.replace(adapterImportPattern, `import { ${['holoSvelteKitRealtime', ...imports].join(', ')} } from ${existingAdapterImport[2]}@holo-js/adapter-sveltekit/vite${existingAdapterImport[2]}`)
+  } else {
+    withImport = viteConfigContents.replace(
+      svelteKitImportPattern,
+      [
+        '$1',
+        'import { holoSvelteKitRealtime } from \'@holo-js/adapter-sveltekit/vite\'',
+      ].join('\n'),
+    )
+  }
+
+  if (withImport === viteConfigContents && !existingAdapterImport) {
+    return {
+      error: 'Unable to add holoSvelteKitRealtime() to vite.config.ts because the SvelteKit Vite import could not be found.',
+    }
+  }
+
+  const withPlugin = withImport.replace(/plugins\s*:\s*\[([\s\S]*?)\]/, (_match, plugins: string) => {
+    const separator = plugins.trim() ? ' ' : ''
+    return `plugins: [holoSvelteKitRealtime(),${separator}${plugins}]`
+  })
+
+  if (withPlugin === withImport) {
+    if (/\bplugins\s*:\s*(?!\[)|\bplugins\s*(?:,|})/.test(withImport)) {
+      return {
+        error: 'Unable to add holoSvelteKitRealtime() to vite.config.ts because the plugins option is not an inline array.',
+      }
+    }
+
+    return {
+      error: 'Unable to add holoSvelteKitRealtime() to vite.config.ts because no plugins array was found.',
+    }
+  }
+
+  return withPlugin
+}
+
+const realtimeDefinitionExtensions = new Set(['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'])
+
+async function collectRealtimeDefinitionFiles(root: string): Promise<readonly string[]> {
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
+  const files = await Promise.all(entries.map(async (entry) => {
+    const entryPath = resolve(root, entry.name)
+    if (entry.isDirectory()) {
+      return await collectRealtimeDefinitionFiles(entryPath)
+    }
+
+    return realtimeDefinitionExtensions.has(extname(entry.name)) ? [entryPath] : []
+  }))
+
+  return files.flat().sort((left, right) => left.localeCompare(right))
+}
+
+async function renderNextRealtimeDefinitions(projectRoot: string): Promise<string> {
+  const generatedRoot = resolve(projectRoot, '.holo-js/generated/next')
+  const files = await collectRealtimeDefinitionFiles(resolve(projectRoot, 'server/realtime'))
+  const importPaths = files.map((filePath) => {
+    const withoutExtension = filePath.slice(0, -extname(filePath).length)
+    const importPath = relative(generatedRoot, withoutExtension).split(sep).join('/')
+    return importPath.startsWith('.') ? importPath : `./${importPath}`
+  })
+
+  return renderNextGeneratedRealtimeDefinitions(importPaths)
 }
 
 async function resolveExistingAuthMigrationFiles(migrationsRoot: string): Promise<Map<AuthMigrationSlug, string>> {
@@ -529,6 +618,56 @@ export async function installEventsIntoProject(
     updatedPackageJson: await upsertEventsPackageDependency(projectRoot),
     createdEventsDirectory: !eventsDirectoryExists,
     createdListenersDirectory: !listenersDirectoryExists,
+  }
+}
+
+export async function installRealtimeIntoProject(
+  projectRoot: string,
+): Promise<RealtimeInstallResult> {
+  await loadProjectConfig(projectRoot, { required: true })
+  const realtimeRoot = resolve(projectRoot, 'server/realtime')
+  const realtimeDirectoryExists = await pathExists(realtimeRoot)
+  const { dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
+  const framework = detectProjectFrameworkFromPackageJson(dependencies, devDependencies)
+  let createdFrameworkSetup = false
+
+  await mkdir(realtimeRoot, { recursive: true })
+
+  if (framework === 'next') {
+    const routes = [
+      { path: '.holo-js/generated/next/holo.ts', contents: renderNextHoloHelper() },
+      { path: '.holo-js/generated/next/bootstrap.mjs', contents: renderNextRuntimeBootstrap() },
+      { path: '.holo-js/generated/next/realtime-definitions.ts', contents: await renderNextRealtimeDefinitions(projectRoot) },
+    ] as const
+
+    for (const route of routes) {
+      const routePath = resolve(projectRoot, route.path)
+      if (!(await pathExists(routePath))) {
+        createdFrameworkSetup = true
+      }
+      await writeTextFile(routePath, route.contents)
+    }
+  } else if (framework === 'sveltekit') {
+    const viteConfigPath = resolve(projectRoot, 'vite.config.ts')
+    if (await pathExists(viteConfigPath)) {
+      const existingViteConfig = await readTextFile(viteConfigPath)
+      const viteConfigContents = existingViteConfig ? injectSvelteRealtimeVitePlugin(existingViteConfig) : undefined
+      if (typeof viteConfigContents === 'string') {
+        createdFrameworkSetup = true
+        await writeTextFile(viteConfigPath, viteConfigContents)
+      } else if (viteConfigContents) {
+        throw new Error(viteConfigContents.error)
+      }
+    } else {
+      createdFrameworkSetup = true
+      await writeTextFile(viteConfigPath, renderSvelteViteConfig(false, true))
+    }
+  }
+
+  return {
+    updatedPackageJson: await upsertRealtimePackageDependency(projectRoot),
+    createdRealtimeDirectory: !realtimeDirectoryExists,
+    createdFrameworkSetup,
   }
 }
 

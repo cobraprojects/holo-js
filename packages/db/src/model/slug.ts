@@ -1,5 +1,4 @@
 import type { TableDefinition } from '../schema/types'
-import type { StaticModelApi } from './staticModelApi'
 import type { ModelAttributeKey, ModelColumnName, ModelRecord, ModelScopesDefinition, RelationMap } from './types'
 
 type StringModelAttributeKey<TTable extends TableDefinition> = Extract<{
@@ -27,9 +26,25 @@ export interface UniqueSlugOptions<
 
 type UniqueSlugModel<
   TTable extends TableDefinition,
-  TScopes extends ModelScopesDefinition,
-  TRelations extends RelationMap,
-> = StaticModelApi<TTable, TScopes, TRelations>
+  _TScopes extends ModelScopesDefinition,
+  _TRelations extends RelationMap,
+> = {
+  readonly definition: {
+    readonly connectionName?: string
+    readonly name: string
+    readonly primaryKey: string
+  }
+  whereLike(column: ModelColumnName<TTable>, value: string): {
+    when(
+      condition: boolean,
+      callback: (query: {
+        where(column: string, operator: string, value: unknown): unknown
+      }) => unknown,
+    ): {
+      pluck<TColumn extends ModelAttributeKey<TTable>>(column: TColumn): Promise<Array<ModelRecord<TTable>[TColumn]>>
+    }
+  }
+}
 
 const reservedSlugs = new Map<string, Set<string>>()
 const slugReservationQueues = new Map<string, Promise<void>>()

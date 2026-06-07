@@ -320,6 +320,7 @@ export async function assertExampleAppAuthFlow({
   sessionCookieName,
   afterAuthenticated,
   checkPages = true,
+  checkAdminPostsHtml = true,
   loginRequiresCsrf = false,
   authSubmissionMode = 'json',
 }) {
@@ -688,7 +689,7 @@ export async function assertExampleAppAuthFlow({
   if (!usesSvelteKitActions) {
     assert.equal(loggedInVerification.response.status, 201)
   }
-  assert.equal(loggedInVerification.json.ok, true)
+  assert.equal(loggedInVerification.json.ok, true, JSON.stringify(loggedInVerification.json))
 
   const loggedInVerificationToken = (
     await waitForOutputMatch(
@@ -881,10 +882,12 @@ export async function assertExampleAppAuthFlow({
       }), '/admin')
     }
 
-    const adminPostsPage = await fetchAuthText('/admin/posts', {
-      jar: authenticatedJar,
-    })
-    assert.match(adminPostsPage.text, /Designing the Example App Roadmap/i)
+    if (checkAdminPostsHtml) {
+      const adminPostsPage = await fetchAuthText('/admin/posts', {
+        jar: authenticatedJar,
+      })
+      assert.match(adminPostsPage.text, /Designing the Example App Roadmap/i)
+    }
 
     assertRedirectsTo(await fetchAuthText('/super-admin', {
       jar: authenticatedJar,

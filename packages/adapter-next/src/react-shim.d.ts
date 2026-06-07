@@ -20,4 +20,9 @@ declare module 'react' {
   export function useState<TValue>(
     initialState: TValue | (() => TValue),
   ): [TValue, (value: TValue | ((previous: TValue) => TValue)) => void]
+  export function useSyncExternalStore<TSnapshot>(
+    subscribe: (listener: () => void) => () => void,
+    getSnapshot: () => TSnapshot,
+    getServerSnapshot?: () => TSnapshot,
+  ): TSnapshot
 }

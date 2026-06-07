@@ -441,7 +441,7 @@ export function createInternalCommands(
     {
       name: 'new',
       description: 'Scaffold a new Holo project',
-      usage: 'holo new <name> [--framework <nuxt|next|sveltekit>] [--database <sqlite|mysql|postgres>] [--package-manager <bun|npm|pnpm|yarn>] [--package <storage|events|queue|validation|forms|auth|authorization|notifications|mail|broadcast|security|cache>] [--storage-default-disk <local|public>]',
+      usage: 'holo new <name> [--framework <nuxt|next|sveltekit>] [--database <sqlite|mysql|postgres>] [--package-manager <bun|npm|pnpm|yarn>] [--package <storage|events|queue|validation|forms|auth|authorization|notifications|mail|broadcast|realtime|security|cache>] [--storage-default-disk <local|public>]',
       source: 'internal',
       async prepare(input) {
         const resolved = await resolveNewProjectInput(context, input)
@@ -522,7 +522,7 @@ export function createInternalCommands(
     {
       name: 'install',
       description: 'Install first-party Holo support into an existing project.',
-      usage: 'holo install <queue|events|auth|authorization|notifications|mail|broadcast|security|cache|media> [--driver <queue: sync|file|redis|database; cache: file|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
+      usage: 'holo install <queue|events|auth|authorization|notifications|mail|broadcast|realtime|security|cache|media> [--driver <queue: sync|file|redis|database; cache: file|redis|database>] [--social] [--provider <google|github|discord|facebook|apple|linkedin>] [--workos] [--clerk]',
       source: 'internal',
       async prepare(input) {
         const interactive = isInteractive(context, input.flags)
@@ -552,6 +552,9 @@ export function createInternalCommands(
         }
         if (target === 'broadcast' && requestedDriver) {
           throw new Error('The broadcast installer does not support --driver.')
+        }
+        if (target === 'realtime' && requestedDriver) {
+          throw new Error('The realtime installer does not support --driver.')
         }
         if (target === 'security' && requestedDriver) {
           throw new Error('The security installer does not support --driver.')
@@ -828,6 +831,19 @@ export function createInternalCommands(
           if (result.createdChannelsDirectory) writeLine(context.stdout, '  - created server/channels')
           if (result.createdBroadcastAuthRoute) writeLine(context.stdout, '  - created /broadcasting/auth route')
           if (result.createdFrameworkSetup) writeLine(context.stdout, '  - created framework Flux setup')
+          await runProjectDependencyInstallAfterPackageJsonUpdate(context, projectExecutors, result.updatedPackageJson)
+          return
+        }
+
+        if (target === 'realtime') {
+          const { installRealtimeIntoProject } = await loadProjectScaffoldModule()
+          const result = await installRealtimeIntoProject(context.projectRoot)
+          const changed = result.updatedPackageJson || result.createdRealtimeDirectory || result.createdFrameworkSetup
+
+          writeLine(context.stdout, changed ? 'Installed realtime support.' : 'Realtime support is already installed.')
+          if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
+          if (result.createdRealtimeDirectory) writeLine(context.stdout, '  - created server/realtime')
+          if (result.createdFrameworkSetup) writeLine(context.stdout, '  - created realtime framework setup')
           await runProjectDependencyInstallAfterPackageJsonUpdate(context, projectExecutors, result.updatedPackageJson)
           return
         }

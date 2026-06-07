@@ -525,6 +525,8 @@ type SerializeLoadedValue<TValue>
     ? SerializeLoadedValue<TItem>[]
     : TValue extends null
       ? null
+      : TValue extends { toJSON(): infer TSerialized }
+        ? TSerialized
       : TValue extends Entity<infer TTable, infer _TRelations>
         ? ModelRecord<TTable> & SerializeLoaded<Omit<TValue, keyof Entity<TTable, _TRelations>>>
         : TValue

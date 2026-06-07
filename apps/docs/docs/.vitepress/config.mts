@@ -158,6 +158,12 @@ const frameworkSidebar = [
         { text: 'Deployment and Scaling', link: '/broadcast/deployment-and-scaling' },
       ],
     },
+    {
+      text: 'Realtime',
+      items: [
+        { text: 'Queries and Mutations', link: '/realtime/' },
+      ],
+    },
   {
     text: 'Security',
     items: [
@@ -258,6 +264,7 @@ export default defineConfig({
       { text: 'Queue', link: '/queue/' },
       { text: 'Events', link: '/events/' },
       { text: 'Broadcast', link: '/broadcast/' },
+      { text: 'Realtime', link: '/realtime/' },
       { text: 'Forms', link: '/forms/' },
       { text: 'Storage', link: '/storage' },
       { text: 'Development', link: '/development/' },

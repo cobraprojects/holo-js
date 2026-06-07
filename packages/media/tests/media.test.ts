@@ -5,6 +5,7 @@ import sharp from 'sharp'
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { Storage } from '@holo-js/storage/runtime'
 import {
+  belongsTo,
   column,
   createConnectionManager,
   createDatabase,
@@ -63,6 +64,10 @@ import {
   type MediaEnabledEntity,
   type MediaAddResult,
 } from '../src'
+import type {
+  getMediaDefinition as getRegistryMediaDefinition,
+  resolveMediaCollection as resolveRegistryMediaCollection,
+} from '../src/registry'
 import { getContentSize } from '../src/runtime/binary'
 
 const sharedRedisConfig = {
@@ -694,7 +699,10 @@ describe('@holo-js/media', () => {
       collections: [collection('images')],
     })
     const registryCopyPath = `../src/registry.ts?registry-copy=${Date.now()}`
-    const registryCopy = await import(registryCopyPath) as typeof import('../src/registry')
+    const registryCopy = await import(registryCopyPath) as {
+      getMediaDefinition: typeof getRegistryMediaDefinition
+      resolveMediaCollection: typeof resolveRegistryMediaCollection
+    }
 
     expect(registryCopy.getMediaDefinition(RegistryPost as never)).toBe(getMediaDefinition(RegistryPost))
     expect(registryCopy.resolveMediaCollection(RegistryPost as never, 'images').name).toBe('images')
@@ -760,6 +768,22 @@ describe('@holo-js/media', () => {
   })
 
   it('preserves media model method contracts and wraps static entity-producing results', () => {
+    const categoriesTable = defineGeneratedTable('media_test_categories', {
+      id: column.id(),
+      name: column.string(),
+    })
+    const relatedPostsTable = defineGeneratedTable('media_test_posts', {
+      id: column.id(),
+      category_id: column.integer(),
+      title: column.string(),
+    })
+    const Category = defineModel(categoriesTable)
+    const RelatedBasePost = defineModel(relatedPostsTable, {
+      fillable: ['title', 'category_id'],
+      relations: {
+        category: belongsTo(() => Category, { foreignKey: 'category_id' }),
+      },
+    })
     const BasePost = defineModel(postsTable, {
       fillable: ['title'],
     })
@@ -774,7 +798,18 @@ describe('@holo-js/media', () => {
     })
 
     type PostMediaEntity = MediaEnabledEntity<typeof postsTable, 'default' | 'images', 'thumb'>
-    type PostPage = Awaited<ReturnType<typeof Post.paginate>>
+    const RelatedPost = defineMediaModel(RelatedBasePost, {
+      collections: [
+        collection('images'),
+      ],
+      conversions: [
+        conversion('thumb').performOnCollections('images'),
+      ],
+    })
+    const acceptsPostMediaEntity = (_value: PostMediaEntity | undefined) => {}
+    const acceptsMediaEntityMethods = (
+      _value: { getFirstMediaPath(collectionName?: 'default' | 'images', conversionName?: 'thumb'): Promise<string | null> } | undefined,
+    ) => {}
 
     const acceptsFindValue = (_value: Parameters<typeof Post.find>[0]) => {}
 
@@ -782,11 +817,57 @@ describe('@holo-js/media', () => {
     // @ts-expect-error media models must preserve the base model primary-key type.
     acceptsFindValue({})
 
+    const assertUserCallTypes = async () => {
+      const firstWherePost = await Post.firstWhere('id', 1)
+      const queryFirstPost = await Post.query().first()
+      const whereFirstPost = await Post.where('id', 1).first()
+      const foundPost = await Post.find(1)
+      const foundOrFailPost = await Post.findOrFail(1)
+      const firstPost = await Post.first()
+      const firstOrFailPost = await Post.firstOrFail()
+      const solePost = await Post.sole()
+      const createdPost = await Post.create({ title: 'Created' })
+      const updatedPost = await Post.update(1, { title: 'Updated' })
+      const restoredPost = await Post.restore(1)
+      const queryFoundPost = await Post.query().find(1)
+      const queryFoundOrFailPost = await Post.query().findOrFail(1)
+      const queryFirstOrFailPost = await Post.query().firstOrFail()
+      const querySolePost = await Post.query().sole()
+      const page = await Post.paginate()
+      const relatedFirstWherePost = await RelatedPost.firstWhere('id', 1)
+      const relatedWhereFirstPost = await RelatedPost.where('id', 1).first()
+      const relatedWithFirstPost = await RelatedPost.with('category').where('id', 1).first()
+
+      acceptsPostMediaEntity(firstWherePost)
+      acceptsPostMediaEntity(queryFirstPost)
+      acceptsPostMediaEntity(whereFirstPost)
+      acceptsPostMediaEntity(foundPost)
+      acceptsPostMediaEntity(foundOrFailPost)
+      acceptsPostMediaEntity(firstPost)
+      acceptsPostMediaEntity(firstOrFailPost)
+      acceptsPostMediaEntity(solePost)
+      acceptsPostMediaEntity(createdPost)
+      acceptsPostMediaEntity(updatedPost)
+      acceptsPostMediaEntity(restoredPost)
+      acceptsPostMediaEntity(queryFoundPost)
+      acceptsPostMediaEntity(queryFoundOrFailPost)
+      acceptsPostMediaEntity(queryFirstOrFailPost)
+      acceptsPostMediaEntity(querySolePost)
+      acceptsPostMediaEntity(page.data[0])
+      acceptsMediaEntityMethods(relatedFirstWherePost)
+      acceptsMediaEntityMethods(relatedWhereFirstPost)
+      acceptsMediaEntityMethods(relatedWithFirstPost)
+      expectTypeOf(relatedWithFirstPost?.getFirstMediaPath).toEqualTypeOf<
+        ((collectionName?: 'default' | 'images', conversionName?: 'thumb') => Promise<string | null>) | undefined
+      >()
+      const acceptsLoadedCategory = (_value: object | null | undefined) => {}
+      acceptsLoadedCategory(relatedWithFirstPost?.category)
+    }
+
+    void assertUserCallTypes
+
     expectTypeOf<Parameters<typeof Post.find>[0]>().toEqualTypeOf<number>()
     expectTypeOf<Parameters<typeof Post.findMany>[0]>().toEqualTypeOf<readonly number[]>()
-    expectTypeOf<Awaited<ReturnType<typeof Post.firstWhere>>>().toEqualTypeOf<PostMediaEntity | undefined>()
-    expectTypeOf<Awaited<ReturnType<typeof Post.update>>>().toEqualTypeOf<PostMediaEntity>()
-    expectTypeOf<PostPage['data'][number]>().toEqualTypeOf<PostMediaEntity>()
   })
 
   it('keeps the undeclared default collection multi-file', async () => {

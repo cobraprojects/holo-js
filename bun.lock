@@ -54,6 +54,7 @@
         "@holo-js/db-sqlite": "workspace:*",
         "@holo-js/events": "workspace:*",
         "@holo-js/flux": "workspace:*",
+        "@holo-js/flux-react": "workspace:*",
         "@holo-js/forms": "workspace:*",
         "@holo-js/media": "workspace:*",
         "@holo-js/queue": "workspace:*",
@@ -96,6 +97,7 @@
         "@holo-js/db-sqlite": "workspace:*",
         "@holo-js/events": "workspace:*",
         "@holo-js/flux": "workspace:*",
+        "@holo-js/flux-vue": "workspace:*",
         "@holo-js/media": "workspace:*",
         "@holo-js/queue": "workspace:*",
         "@holo-js/queue-db": "workspace:*",
@@ -139,6 +141,7 @@
         "@holo-js/notifications": "workspace:*",
         "@holo-js/queue": "workspace:*",
         "@holo-js/queue-db": "workspace:*",
+        "@holo-js/realtime": "workspace:*",
         "@holo-js/security": "workspace:*",
         "@holo-js/session": "workspace:*",
         "@holo-js/storage": "workspace:*",
@@ -182,6 +185,7 @@
         "@holo-js/notifications": "workspace:*",
         "@holo-js/queue": "workspace:*",
         "@holo-js/queue-db": "workspace:*",
+        "@holo-js/realtime": "workspace:*",
         "@holo-js/security": "workspace:*",
         "@holo-js/session": "workspace:*",
         "@holo-js/storage": "workspace:*",
@@ -224,6 +228,7 @@
         "@holo-js/notifications": "workspace:*",
         "@holo-js/queue": "workspace:*",
         "@holo-js/queue-db": "workspace:*",
+        "@holo-js/realtime": "workspace:*",
         "@holo-js/security": "workspace:*",
         "@holo-js/session": "workspace:*",
         "@holo-js/storage": "workspace:*",
@@ -270,6 +275,7 @@
         "@holo-js/db-sqlite": "workspace:*",
         "@holo-js/events": "workspace:*",
         "@holo-js/flux": "workspace:*",
+        "@holo-js/flux-svelte": "workspace:*",
         "@holo-js/media": "workspace:*",
         "@holo-js/queue": "workspace:*",
         "@holo-js/queue-db": "workspace:*",
@@ -299,6 +305,7 @@
         "@holo-js/core": "catalog:",
       },
       "devDependencies": {
+        "@holo-js/realtime": "catalog:",
         "@types/node": "catalog:",
         "next": "catalog:",
         "tsup": "catalog:",
@@ -307,11 +314,13 @@
       },
       "peerDependencies": {
         "@holo-js/forms": "catalog:",
+        "@holo-js/realtime": "catalog:",
         "next": "catalog:",
         "react": "catalog:",
       },
       "optionalPeers": [
         "@holo-js/forms",
+        "@holo-js/realtime",
       ],
     },
     "packages/adapter-nuxt": {
@@ -327,6 +336,7 @@
       },
       "devDependencies": {
         "@holo-js/broadcast": "catalog:",
+        "@holo-js/realtime": "catalog:",
         "@holo-js/storage-s3": "catalog:",
         "@nuxt/module-builder": "catalog:",
         "@types/node": "catalog:",
@@ -337,12 +347,14 @@
       "peerDependencies": {
         "@holo-js/broadcast": "catalog:",
         "@holo-js/forms": "catalog:",
+        "@holo-js/realtime": "catalog:",
         "@holo-js/storage": "catalog:",
         "@holo-js/storage-s3": "catalog:",
       },
       "optionalPeers": [
         "@holo-js/broadcast",
         "@holo-js/forms",
+        "@holo-js/realtime",
         "@holo-js/storage",
         "@holo-js/storage-s3",
       ],
@@ -353,9 +365,11 @@
       "dependencies": {
         "@holo-js/config": "catalog:",
         "@holo-js/core": "catalog:",
+        "@holo-js/validation": "catalog:",
         "svelte": "catalog:",
       },
       "devDependencies": {
+        "@holo-js/realtime": "catalog:",
         "@sveltejs/kit": "catalog:",
         "@types/node": "catalog:",
         "tsup": "catalog:",
@@ -364,8 +378,13 @@
       },
       "peerDependencies": {
         "@holo-js/forms": "catalog:",
+        "@holo-js/realtime": "catalog:",
         "@sveltejs/kit": "catalog:",
       },
+      "optionalPeers": [
+        "@holo-js/forms",
+        "@holo-js/realtime",
+      ],
     },
     "packages/auth": {
       "name": "@holo-js/auth",
@@ -1017,6 +1036,28 @@
         "@holo-js/queue": "catalog:",
       },
     },
+    "packages/realtime": {
+      "name": "@holo-js/realtime",
+      "version": "0.1.9",
+      "dependencies": {
+        "@holo-js/db": "catalog:",
+        "@holo-js/validation": "catalog:",
+      },
+      "devDependencies": {
+        "@holo-js/auth": "catalog:",
+        "@holo-js/db-sqlite": "catalog:",
+        "@types/node": "catalog:",
+        "tsup": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "@holo-js/auth": "catalog:",
+      },
+      "optionalPeers": [
+        "@holo-js/auth",
+      ],
+    },
     "packages/security": {
       "name": "@holo-js/security",
       "version": "0.1.9",
@@ -1161,6 +1202,7 @@
     "@holo-js/queue": "^0.1.9",
     "@holo-js/queue-db": "^0.1.9",
     "@holo-js/queue-redis": "^0.1.9",
+    "@holo-js/realtime": "^0.1.9",
     "@holo-js/security": "^0.1.9",
     "@holo-js/session": "^0.1.9",
     "@holo-js/storage": "^0.1.9",
@@ -1517,6 +1559,8 @@
     "@holo-js/queue-db": ["@holo-js/queue-db@workspace:packages/queue-db"],
 
     "@holo-js/queue-redis": ["@holo-js/queue-redis@workspace:packages/queue-redis"],
+
+    "@holo-js/realtime": ["@holo-js/realtime@workspace:packages/realtime"],
 
     "@holo-js/security": ["@holo-js/security@workspace:packages/security"],
 

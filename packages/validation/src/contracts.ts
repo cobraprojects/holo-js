@@ -1,9 +1,7 @@
 import {
   type ArrayFieldBuilderInput,
-  type FieldBuilderInput,
   type FieldRule,
   type InferArrayItemOutput,
-  type InferFieldOutput,
   type InferSchemaData,
   type InferValidationSchemaData,
   type SchemaInputShape,

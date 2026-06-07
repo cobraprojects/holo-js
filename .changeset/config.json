@@ -41,6 +41,7 @@
       "@holo-js/queue",
       "@holo-js/queue-db",
       "@holo-js/queue-redis",
+      "@holo-js/realtime",
       "@holo-js/security",
       "@holo-js/session",
       "@holo-js/storage",

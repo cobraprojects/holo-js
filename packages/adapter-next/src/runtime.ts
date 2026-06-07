@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module'
 import { initializeHolo, type CreateHoloOptions } from '@holo-js/core'
 import type { DotPath, HoloConfigMap, LoadedHoloConfig, ValueAtPath } from '@holo-js/config'
-import { getCurrentNextRequest } from './request-context'
+import { getCurrentNextRequest, type NextRequestLike } from './request-context'
 export { runWithNextRequest, type NextRequestLike } from './request-context'
 
 export type NextHoloRuntimeOptions = CreateHoloOptions & {
@@ -44,6 +44,12 @@ type NextHeadersModule = {
 }
 
 const requireNextModule = createRequire(import.meta.url)
+
+type NextRequestWithCookies = Request & {
+  readonly cookies?: {
+    get(name: string): { readonly value?: string } | undefined
+  }
+}
 
 function safeDecodeCookieSegment(value: string): string {
   try {
@@ -113,6 +119,44 @@ function parseResponseCookie(cookie: string): ParsedResponseCookie | null {
     name: safeDecodeCookieSegment(nameValue.slice(0, separator)),
     value: safeDecodeCookieSegment(nameValue.slice(separator + 1)),
     options,
+  }
+}
+
+function parseRequestCookies(header: string | null): Map<string, string> {
+  const cookies = new Map<string, string>()
+  for (const segment of header?.split(';') ?? []) {
+    const separator = segment.indexOf('=')
+    if (separator <= 0) {
+      continue
+    }
+
+    const name = safeDecodeCookieSegment(segment.slice(0, separator).trim())
+    const value = safeDecodeCookieSegment(segment.slice(separator + 1).trim())
+    if (name) {
+      cookies.set(name, value)
+    }
+  }
+
+  return cookies
+}
+
+export function createNextRequestContext(request: Request): NextRequestLike {
+  const nextRequest = request as NextRequestWithCookies
+  const parsedCookies = nextRequest.cookies ? undefined : parseRequestCookies(request.headers.get('cookie'))
+
+  return {
+    headers: request.headers,
+    cookies: {
+      get(name) {
+        const nextCookie = nextRequest.cookies?.get(name)
+        if (nextCookie && typeof nextCookie.value === 'string') {
+          return { value: nextCookie.value }
+        }
+
+        const value = parsedCookies?.get(name)
+        return typeof value === 'string' ? { value } : undefined
+      },
+    },
   }
 }
 

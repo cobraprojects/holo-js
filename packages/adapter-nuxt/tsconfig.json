@@ -15,6 +15,9 @@
       "@holo-js/broadcast/auth": ["../broadcast/src/auth.ts"],
       "@holo-js/forms": ["../forms/src/index.ts"],
       "@holo-js/forms/internal/client": ["../forms/src/internal/client.ts"],
+      "@holo-js/realtime": ["../realtime/src/index.ts"],
+      "@holo-js/realtime/client": ["../realtime/src/client.ts"],
+      "@holo-js/realtime/server": ["../realtime/src/server.ts"],
       "@holo-js/security": ["../security/src/index.ts"],
       "@holo-js/security/client": ["../security/src/client.ts"],
       "@holo-js/validation": ["../validation/src/index.ts"]

@@ -35,6 +35,7 @@ export default defineWorkspace([
   'packages/notifications',
   'packages/queue',
   'packages/queue-db',
+  'packages/realtime',
   'packages/session',
   'packages/security',
   'packages/storage',

@@ -201,6 +201,51 @@ export interface BroadcastRuntimeBindings {
   readonly channelAuth?: BroadcastChannelAuthRuntimeBindings
 }
 
+export interface BroadcastRealtimeExecutionContext {
+  readonly headers: Headers
+  readonly socketId: string
+  readonly appId: string
+  readonly connection: string
+}
+
+export interface BroadcastRealtimeExecutionResult<TResult = unknown> {
+  readonly name: string
+  readonly data: TResult
+  readonly dependencies: readonly string[]
+}
+
+export interface BroadcastRealtimeSubscriptionSnapshot<TResult = unknown> extends BroadcastRealtimeExecutionResult<TResult> {
+  readonly version: number
+}
+
+export interface BroadcastRealtimeSubscription<TResult = unknown> {
+  readonly id: string
+  readonly current: BroadcastRealtimeSubscriptionSnapshot<TResult>
+  unsubscribe(): void
+}
+
+export interface BroadcastRealtimeRuntimeBindings {
+  query(
+    name: string,
+    args: Record<string, unknown>,
+    context: BroadcastRealtimeExecutionContext,
+  ): Promise<BroadcastRealtimeExecutionResult>
+  mutate(
+    name: string,
+    args: Record<string, unknown>,
+    context: BroadcastRealtimeExecutionContext,
+  ): Promise<BroadcastRealtimeExecutionResult>
+  subscribe(
+    name: string,
+    args: Record<string, unknown>,
+    options: {
+      readonly context: BroadcastRealtimeExecutionContext
+      readonly onData: (snapshot: BroadcastRealtimeSubscriptionSnapshot) => void | Promise<void>
+      readonly onError: (error: unknown) => void | Promise<void>
+    },
+  ): Promise<BroadcastRealtimeSubscription>
+}
+
 export interface BroadcastRuntimeFacade {
   broadcast(
     definition: BroadcastDefinition | BroadcastDefinitionInput,

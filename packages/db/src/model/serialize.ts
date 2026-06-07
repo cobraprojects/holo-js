@@ -2,11 +2,22 @@ type SerializableModel = {
   toJSON(): unknown
 }
 
+type MaterializeSerializedValue<TValue>
+  = TValue extends Date
+    ? Date
+    : TValue extends readonly (infer TItem)[]
+      ? MaterializeSerializedValue<TItem>[]
+      : TValue extends (...args: never[]) => unknown
+    ? TValue
+    : TValue extends object
+      ? { [K in keyof TValue]: MaterializeSerializedValue<TValue[K]> }
+      : TValue
+
 export type SerializeModels<TValue>
   = TValue extends Date
     ? Date
     : TValue extends SerializableModel
-      ? ReturnType<TValue['toJSON']>
+      ? MaterializeSerializedValue<ReturnType<TValue['toJSON']>>
       : TValue extends readonly (infer TItem)[]
         ? SerializeModels<TItem>[]
         : TValue extends object

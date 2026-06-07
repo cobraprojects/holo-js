@@ -4,6 +4,7 @@ import {
   getDatabaseQueryCacheBridge,
   invalidateQueryCacheDependencies,
   normalizeQueryCacheConfig,
+  recordDatabaseQueryDependencies,
   resolveQueryCacheDependencies,
   resolveQueryCacheKey,
   type NormalizedQueryCacheConfig,
@@ -1272,6 +1273,14 @@ export class TableQueryBuilder<
   async get<TRow extends Record<string, unknown> = TSelectedRow>(): Promise<TRow[]> {
     const statement = this.toSQL()
     const cacheConfig = this.queryCacheConfig
+    const dependencies = this.plan.lockMode
+      ? undefined
+      : resolveQueryCacheDependencies(
+          this.plan,
+          this.connection.getConnectionName(),
+          cacheConfig?.invalidate,
+        )
+    recordDatabaseQueryDependencies(dependencies)
     if (!cacheConfig || this.plan.lockMode) {
       const result = await this.connection.queryCompiled<TRow>(statement)
       return result.rows
@@ -1283,11 +1292,6 @@ export class TableQueryBuilder<
     }
 
     const cacheKey = resolveQueryCacheKey(statement, this.connection.getConnectionName(), cacheConfig)
-    const dependencies = resolveQueryCacheDependencies(
-      this.plan,
-      this.connection.getConnectionName(),
-      cacheConfig.invalidate,
-    )
 
     if (cacheConfig.flexible) {
       return bridge.flexible(

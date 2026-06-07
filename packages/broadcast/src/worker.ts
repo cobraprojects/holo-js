@@ -10,6 +10,8 @@ import {
 import type {
   BroadcastChannelAuthRuntimeBindings,
   BroadcastJsonObject,
+  BroadcastRealtimeRuntimeBindings,
+  BroadcastRealtimeSubscription,
   BroadcastRuntimeBindings,
 } from './contracts'
 
@@ -57,6 +59,7 @@ type SocketState = {
   readonly send: (payload: string) => void
   readonly close: (code?: number, reason?: string) => void
   readonly subscribedChannels: Set<string>
+  readonly realtimeSubscriptions: Map<string, BroadcastRealtimeSubscription>
   active: boolean
   pendingMessage: Promise<void>
 }
@@ -64,6 +67,7 @@ type SocketState = {
 type WorkerRuntimeOptions = {
   readonly config: NormalizedHoloBroadcastConfig
   readonly channelAuth?: BroadcastChannelAuthRuntimeBindings
+  readonly realtime?: BroadcastRealtimeRuntimeBindings
   readonly fetch?: typeof fetch
   readonly now?: () => number
   readonly scaling?: BroadcastWorkerScalingRuntime
@@ -180,6 +184,17 @@ type BroadcastScalingMessage =
   | BroadcastScalingEventMessage
   | BroadcastScalingPresenceMemberAddedMessage
   | BroadcastScalingPresenceMemberRemovedMessage
+
+type RealtimeSocketAction = 'query' | 'mutation' | 'subscribe' | 'unsubscribe'
+
+type RealtimeSocketMessage = {
+  readonly id: string
+  readonly action: RealtimeSocketAction
+  readonly name?: string
+  readonly args: Record<string, unknown>
+}
+
+type RealtimeWireErrorKind = 'authorization' | 'transport' | 'runtime'
 
 type BroadcastRedisScalingConnection = {
   readonly url?: string
@@ -301,6 +316,45 @@ function parseSocketMessage(rawMessage: string): { readonly event: string, reado
   })
 }
 
+function normalizeRealtimeAction(value: unknown): RealtimeSocketAction {
+  if (value === 'query' || value === 'mutation' || value === 'subscribe' || value === 'unsubscribe') {
+    return value
+  }
+
+  throw new Error('[@holo-js/broadcast] Realtime action is invalid.')
+}
+
+function normalizeRealtimeArgs(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {}
+  }
+
+  return value as Record<string, unknown>
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function parseRealtimeSocketMessage(data: Record<string, unknown>): RealtimeSocketMessage {
+  const id = normalizeRequiredString(String(data.id ?? ''), 'Realtime request id')
+  const action = normalizeRealtimeAction(data.action)
+  const name = typeof data.name === 'string'
+    ? normalizeRequiredString(data.name, 'Realtime definition name')
+    : undefined
+
+  if (action !== 'unsubscribe' && !name) {
+    throw new Error('[@holo-js/broadcast] Realtime definition name is required.')
+  }
+
+  return Object.freeze({
+    id,
+    action,
+    ...(typeof name === 'undefined' ? {} : { name }),
+    args: normalizeRealtimeArgs(data.args),
+  })
+}
+
 function normalizePublishBody(value: unknown): PublishBody {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('[@holo-js/broadcast] Publish payload must be a JSON object.')
@@ -385,6 +439,19 @@ function logScalingMessageError(error: unknown): void {
 function logSocketCleanupError(socketId: string, channel: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error)
   console.error(`[@holo-js/broadcast] Socket cleanup failed for socket "${socketId}" on "${channel}": ${message}`)
+}
+
+function logRealtimeSubscriptionCleanupError(socketId: string, subscriptionId: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  console.error(`[@holo-js/broadcast] Realtime subscription cleanup failed for socket "${socketId}" on "${subscriptionId}": ${message}`)
+}
+
+function unsubscribeRealtimeSubscription(socket: SocketState, id: string, subscription: BroadcastRealtimeSubscription): void {
+  try {
+    subscription.unsubscribe()
+  } catch (error) {
+    logRealtimeSubscriptionCleanupError(socket.socketId, id, error)
+  }
 }
 
 function parseChannelKind(channel: string): { readonly kind: 'public' | 'private' | 'presence', readonly canonical: string } {
@@ -1084,6 +1151,156 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     )
   }
 
+  function sendRealtimeMessage(socket: SocketState, event: string, data: Record<string, unknown>): void {
+    socket.send(pusherEvent(event, data))
+  }
+
+  function resolveRealtimeErrorStatus(error: unknown): number | undefined {
+    if (!isRecord(error)) {
+      return undefined
+    }
+
+    const decision = isRecord(error.decision) ? error.decision : undefined
+    const status = decision?.status ?? error.status ?? error.statusCode
+    if (typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599) {
+      return status
+    }
+
+    const name = typeof error.name === 'string' ? error.name : ''
+    if (name === 'RealtimeUnauthorizedError') {
+      return 401
+    }
+
+    if (name === 'RealtimeForbiddenError') {
+      return 403
+    }
+
+    return undefined
+  }
+
+  function resolveRealtimeErrorCode(error: unknown): string | undefined {
+    if (!isRecord(error)) {
+      return undefined
+    }
+
+    const decision = isRecord(error.decision) ? error.decision : undefined
+    const code = decision?.code ?? error.code
+    return typeof code === 'string' ? code : undefined
+  }
+
+  function resolveRealtimeErrorKind(error: unknown, status: number | undefined): RealtimeWireErrorKind {
+    if (!isRecord(error)) {
+      return 'runtime'
+    }
+
+    const name = typeof error.name === 'string' ? error.name : ''
+    if (
+      name === 'AuthorizationError'
+      || name === 'RealtimeUnauthorizedError'
+      || name === 'RealtimeForbiddenError'
+      || status === 401
+      || status === 403
+      || status === 404
+    ) {
+      return 'authorization'
+    }
+
+    return name === 'RealtimeAuthUnavailableError' ? 'transport' : 'runtime'
+  }
+
+  function sendRealtimeError(socket: SocketState, id: string, error: unknown): void {
+    const status = resolveRealtimeErrorStatus(error)
+    const code = resolveRealtimeErrorCode(error)
+    const name = error instanceof Error ? error.name : undefined
+    const kind = resolveRealtimeErrorKind(error, status)
+    sendRealtimeMessage(socket, 'holo:realtime:error', {
+      id,
+      message: error instanceof Error ? error.message : String(error),
+      kind,
+      ...(typeof name === 'undefined' ? {} : { name }),
+      ...(typeof status === 'undefined' ? {} : { status }),
+      ...(typeof code === 'undefined' ? {} : { code }),
+    })
+  }
+
+  function createRealtimeExecutionContext(socket: SocketState) {
+    return Object.freeze({
+      headers: socket.headers,
+      socketId: socket.socketId,
+      appId: socket.app.appId,
+      connection: socket.app.connection,
+    })
+  }
+
+  async function handleRealtimeMessage(socket: SocketState, data: Record<string, unknown>): Promise<void> {
+    const realtime = options.realtime
+    const request = parseRealtimeSocketMessage(data)
+    if (!realtime) {
+      sendRealtimeError(socket, request.id, new Error('[@holo-js/broadcast] Realtime requires broadcast worker support. Run "holo broadcast:work" from a project with @holo-js/realtime installed.'))
+      return
+    }
+
+    if (request.action === 'unsubscribe') {
+      const subscription = socket.realtimeSubscriptions.get(request.id)
+      if (subscription) {
+        unsubscribeRealtimeSubscription(socket, request.id, subscription)
+      }
+      socket.realtimeSubscriptions.delete(request.id)
+      sendRealtimeMessage(socket, 'holo:realtime:unsubscribed', {
+        id: request.id,
+      })
+      return
+    }
+
+    const context = createRealtimeExecutionContext(socket)
+    try {
+      if (request.action === 'query') {
+        const result = await realtime.query(request.name!, request.args, context)
+        sendRealtimeMessage(socket, 'holo:realtime:result', {
+          id: request.id,
+          action: request.action,
+          snapshot: {
+            ...result,
+            version: 1,
+          },
+        })
+        return
+      }
+
+      if (request.action === 'mutation') {
+        const result = await realtime.mutate(request.name!, request.args, context)
+        sendRealtimeMessage(socket, 'holo:realtime:result', {
+          id: request.id,
+          action: request.action,
+          result,
+        })
+        return
+      }
+
+      const previousSubscription = socket.realtimeSubscriptions.get(request.id)
+      if (previousSubscription) {
+        unsubscribeRealtimeSubscription(socket, request.id, previousSubscription)
+        socket.realtimeSubscriptions.delete(request.id)
+      }
+
+      const subscription = await realtime.subscribe(request.name!, request.args, {
+        context,
+        onData(snapshot) {
+          sendRealtimeMessage(socket, 'holo:realtime:snapshot', {
+            id: request.id,
+            snapshot,
+          })
+        },
+        onError(error) {
+          sendRealtimeError(socket, request.id, error)
+        },
+      })
+      socket.realtimeSubscriptions.set(request.id, subscription)
+    } catch (error) {
+      sendRealtimeError(socket, request.id, error)
+    }
+  }
+
   async function publishScalingEvent(body: ResolvedPublishBody): Promise<void> {
     if (!scaling) {
       return
@@ -1500,6 +1717,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         send: connection.send,
         close: connection.close,
         subscribedChannels: new Set(),
+        realtimeSubscriptions: new Map(),
         active: true,
         pendingMessage: Promise.resolve(),
       })
@@ -1538,6 +1756,11 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
 
         if (message.event.startsWith('client-')) {
           await handleClientEvent(socket, message)
+          return
+        }
+
+        if (message.event === 'holo:realtime') {
+          await handleRealtimeMessage(socket, message.data)
         }
       })
       socket.pendingMessage = task.catch(() => {})
@@ -1554,6 +1777,10 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
 
       socket.active = false
       connectedSockets.delete(socketId)
+      for (const [subscriptionId, subscription] of socket.realtimeSubscriptions) {
+        unsubscribeRealtimeSubscription(socket, subscriptionId, subscription)
+      }
+      socket.realtimeSubscriptions.clear()
       const channelsToCleanup = [...socket.subscribedChannels]
       const scalingCleanupTasks = channelsToCleanup.map((channel) => {
         const removedPresenceMember = removeSubscriptionLocal(socket.app.appId, socket.socketId, channel)
@@ -1703,6 +1930,7 @@ async function handleSubscribeFailure(
 
 export async function startBroadcastWorker(
   runtimeBindings: Pick<BroadcastRuntimeBindings, 'config' | 'channelAuth'> & {
+    readonly realtime?: BroadcastRealtimeRuntimeBindings
     readonly queue?: NormalizedHoloQueueConfig
     readonly redis?: NormalizedHoloRedisConfig
     readonly nodeId?: string
@@ -1741,6 +1969,7 @@ export async function startBroadcastWorker(
   const runtime = createBroadcastWorkerRuntime({
     config,
     channelAuth: runtimeBindings.channelAuth,
+    realtime: runtimeBindings.realtime,
     fetch: runtimeBindings.fetch ?? fetch,
     scaling: scalingConfig,
     scalingAutoSubscribe: false,

@@ -1,0 +1,474 @@
+import {
+  DB,
+  TableQueryBuilder,
+  collectDatabaseQueryDependencies,
+  onDatabaseDependencyInvalidated,
+  serializeModels,
+  type DatabaseContext,
+  type DatabaseDependencyInvalidationEvent,
+} from '@holo-js/db'
+import { validate } from '@holo-js/validation'
+import type { ValidationSchema } from '@holo-js/validation'
+import {
+  isRealtimeDefinition,
+  nextDefinitionName,
+  realtimeDefinitionInternals,
+} from './definition'
+import type {
+  RealtimeAccess,
+  RealtimeAccessObject,
+  RealtimeArgsFor,
+  RealtimeArgsForSchema,
+  RealtimeAuthModule,
+  RealtimeAuthState,
+  RealtimeDatabaseContext,
+  RealtimeExecutionResult,
+  RealtimeExecutionOptions,
+  RealtimeMutationDefinition,
+  RealtimeMutationDefinitionMetadata,
+  RealtimeQueryDefinition,
+  RealtimeQueryDefinitionMetadata,
+  RealtimeResultFor,
+  RealtimeRuntimeBindings,
+  RealtimeSubscribeOptions,
+  RealtimeSubscription,
+  RealtimeSubscriptionSnapshot,
+} from './contracts'
+
+type RuntimeState = {
+  bindings?: RealtimeRuntimeBindings
+  nextSubscriptionId: number
+  unsubscribeFromDatabase?: () => void
+  subscriptions: Map<string, ActiveSubscription<RealtimeQueryDefinitionMetadata>>
+}
+
+type ActiveSubscription<TDefinition extends RealtimeQueryDefinitionMetadata> = {
+  readonly id: string
+  readonly definition: TDefinition
+  readonly args: RealtimeArgsFor<TDefinition>
+  readonly options: RealtimeSubscribeOptions<RealtimeResultFor<TDefinition>>
+  readonly executionOptions?: RealtimeExecutionOptions
+  dependencies: readonly string[]
+  version: number
+  current: RealtimeSubscriptionSnapshot<RealtimeResultFor<TDefinition>>
+}
+
+export class RealtimeError extends Error {
+  constructor(message: string, options: ErrorOptions = {}) {
+    super(message, options)
+    this.name = 'RealtimeError'
+  }
+}
+
+export class RealtimeUnauthorizedError extends RealtimeError {
+  constructor(message = 'Realtime access denied.') {
+    super(message)
+    this.name = 'RealtimeUnauthorizedError'
+  }
+}
+
+export class RealtimeForbiddenError extends RealtimeError {
+  constructor(message = 'Realtime access forbidden.') {
+    super(message)
+    this.name = 'RealtimeForbiddenError'
+  }
+}
+
+export class RealtimeAuthUnavailableError extends RealtimeError {
+  constructor(
+    message = 'Realtime authenticated access requires @holo-js/auth to be installed and configured.',
+    options: ErrorOptions = {},
+  ) {
+    super(message, options)
+    this.name = 'RealtimeAuthUnavailableError'
+  }
+}
+
+function getRuntimeState(): RuntimeState {
+  const runtime = globalThis as typeof globalThis & {
+    __holoRealtimeRuntime__?: RuntimeState
+  }
+
+  runtime.__holoRealtimeRuntime__ ??= {
+    nextSubscriptionId: 0,
+    subscriptions: new Map<string, ActiveSubscription<RealtimeQueryDefinitionMetadata>>(),
+  }
+  return runtime.__holoRealtimeRuntime__
+}
+
+function createRealtimeDatabaseContext(connection: DatabaseContext): RealtimeDatabaseContext {
+  const context = {
+    connection,
+    table(table: string) {
+      return new TableQueryBuilder(table, connection)
+    },
+    model(...parameters: Parameters<DatabaseContext['model']>) {
+      return connection.model(...parameters)
+    },
+  } satisfies RealtimeDatabaseContext
+
+  return Object.freeze(context)
+}
+
+function getDatabaseContext(): RealtimeDatabaseContext {
+  return createRealtimeDatabaseContext(getRuntimeState().bindings?.db?.() ?? DB.connection())
+}
+
+async function runWithExecutionOptions<TResult>(
+  options: RealtimeExecutionOptions | undefined,
+  callback: () => Promise<TResult>,
+): Promise<TResult> {
+  if (options?.authRequest) {
+    const runner = getRuntimeState().bindings?.runWithAuthRequestAccessors
+    if (runner) {
+      return await runner(options.authRequest, callback)
+    }
+  }
+
+  return await callback()
+}
+
+async function defaultLoadAuthModule(): Promise<RealtimeAuthModule | null> {
+  try {
+    return await import('@holo-js/auth') as RealtimeAuthModule
+  /* v8 ignore start -- optional peer dependency absence depends on package installation state */
+  } catch (error) {
+    if (
+      error
+      && typeof error === 'object'
+      && 'code' in error
+      && (error as { readonly code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
+    ) {
+      return null
+    }
+
+    throw error
+  }
+  /* v8 ignore stop */
+}
+
+async function loadAuthModule(): Promise<RealtimeAuthModule | null> {
+  const load = getRuntimeState().bindings?.loadAuthModule ?? defaultLoadAuthModule
+  return await load()
+}
+
+function normalizeAccess<TArgs>(access: RealtimeAccess<TArgs>): RealtimeAccessObject<TArgs> {
+  if (access === 'public' || access === 'authenticated') {
+    return Object.freeze({
+      require: access,
+    })
+  }
+
+  if (access.guards && access.guard) {
+    throw new RealtimeError('Realtime access cannot define both guard and guards.')
+  }
+
+  if (access.guards && access.guards.length === 0) {
+    throw new RealtimeError('Realtime access guards must not be empty.')
+  }
+
+  return access
+}
+
+async function resolveGuardAuth(
+  authModule: RealtimeAuthModule,
+  guardName: string | undefined,
+): Promise<RealtimeAuthState | null> {
+  const runtime = authModule.getAuthRuntime()
+  const guard = guardName ? runtime.guard(guardName) : runtime
+  const user = await guard.user()
+  if (!user) {
+    return null
+  }
+
+  return Object.freeze({
+    user,
+    guard: guardName ?? 'default',
+    provider: await guard.provider(),
+  })
+}
+
+async function resolveAuthForAccess<TArgs>(
+  access: RealtimeAccessObject<TArgs>,
+): Promise<RealtimeAuthState | null> {
+  let authModule: RealtimeAuthModule | null = null
+  try {
+    authModule = await loadAuthModule()
+  } catch (error) {
+    if (access.require === 'authenticated') {
+      throw new RealtimeAuthUnavailableError('Realtime authenticated access requires @holo-js/auth to be installed and configured.', {
+        cause: error,
+      })
+    }
+
+    return null
+  }
+
+  if (!authModule) {
+    if (access.require === 'authenticated') {
+      throw new RealtimeAuthUnavailableError()
+    }
+
+    return null
+  }
+
+  const guardNames = access.guards ?? (access.guard ? [access.guard] : [undefined])
+  try {
+    for (const guardName of guardNames) {
+      const auth = await resolveGuardAuth(authModule, guardName)
+      if (auth) {
+        return auth
+      }
+    }
+  } catch (error) {
+    if (access.require === 'authenticated') {
+      throw new RealtimeAuthUnavailableError('Realtime authenticated access requires @holo-js/auth to be installed and configured.', {
+        cause: error,
+      })
+    }
+
+    return null
+  }
+
+  if (access.require === 'authenticated') {
+    throw new RealtimeUnauthorizedError()
+  }
+
+  return null
+}
+
+async function authorize<TArgs>(
+  accessInput: RealtimeAccess<TArgs>,
+  args: TArgs,
+  db: RealtimeDatabaseContext,
+): Promise<RealtimeAuthState | null> {
+  const access = normalizeAccess(accessInput)
+  const auth = await resolveAuthForAccess(access)
+
+  if (access.authorize) {
+    const allowed = await access.authorize({
+      args,
+      auth,
+      db,
+    })
+    if (!allowed) {
+      throw new RealtimeForbiddenError()
+    }
+  }
+
+  return auth
+}
+
+async function resolveArgs<TDefinition extends (RealtimeQueryDefinitionMetadata | RealtimeMutationDefinitionMetadata) & {
+  readonly args?: Parameters<typeof validate>[1]
+}>(
+  definition: TDefinition,
+  input: RealtimeArgsFor<TDefinition>,
+): Promise<RealtimeArgsFor<TDefinition>> {
+  if (!definition.args) {
+    return Object.freeze({}) as RealtimeArgsFor<TDefinition>
+  }
+
+  return await validate(input as Record<string, unknown>, definition.args) as RealtimeArgsFor<TDefinition>
+}
+
+export async function executeRealtimeQuery<
+  const TName extends string | undefined,
+  const TSchema extends ValidationSchema | undefined,
+  const TAccess extends RealtimeAccess<RealtimeArgsForSchema<TSchema>>,
+  TResult,
+>(
+  definition: RealtimeQueryDefinition<TName, TSchema, TAccess, TResult>,
+  input?: RealtimeArgsForSchema<TSchema>,
+  options?: RealtimeExecutionOptions,
+): Promise<RealtimeExecutionResult<TResult>>
+export async function executeRealtimeQuery<TDefinition extends RealtimeQueryDefinitionMetadata>(
+  definition: TDefinition,
+  input?: RealtimeArgsFor<TDefinition>,
+  options?: RealtimeExecutionOptions,
+): Promise<RealtimeExecutionResult<RealtimeResultFor<TDefinition>>>
+export async function executeRealtimeQuery<TDefinition extends RealtimeQueryDefinitionMetadata>(
+  definition: TDefinition,
+  input = {} as RealtimeArgsFor<TDefinition>,
+  options?: RealtimeExecutionOptions,
+): Promise<RealtimeExecutionResult<RealtimeResultFor<TDefinition>>> {
+  return await runWithExecutionOptions(options, async () => {
+    const db = getDatabaseContext()
+    const args = await resolveArgs(definition, input)
+    const auth = await authorize(definition.access, args, db)
+    const result = await collectDatabaseQueryDependencies(async () => {
+      return await definition.handler({
+        args,
+        auth: auth as never,
+        db,
+        name: definition.name,
+      })
+    })
+
+    return Object.freeze({
+      name: definition.name,
+      data: serializeModels(result.value) as RealtimeResultFor<TDefinition>,
+      dependencies: result.dependencies,
+    })
+  })
+}
+
+export async function executeRealtimeMutation<
+  const TName extends string | undefined,
+  const TSchema extends ValidationSchema | undefined,
+  const TAccess extends RealtimeAccess<RealtimeArgsForSchema<TSchema>>,
+  TResult,
+>(
+  definition: RealtimeMutationDefinition<TName, TSchema, TAccess, TResult>,
+  input?: RealtimeArgsForSchema<TSchema>,
+  options?: RealtimeExecutionOptions,
+): Promise<RealtimeExecutionResult<TResult>>
+export async function executeRealtimeMutation<TDefinition extends RealtimeMutationDefinitionMetadata>(
+  definition: TDefinition,
+  input?: RealtimeArgsFor<TDefinition>,
+  options?: RealtimeExecutionOptions,
+): Promise<RealtimeExecutionResult<RealtimeResultFor<TDefinition>>>
+export async function executeRealtimeMutation<TDefinition extends RealtimeMutationDefinitionMetadata>(
+  definition: TDefinition,
+  input = {} as RealtimeArgsFor<TDefinition>,
+  options?: RealtimeExecutionOptions,
+): Promise<RealtimeExecutionResult<RealtimeResultFor<TDefinition>>> {
+  return await runWithExecutionOptions(options, async () => {
+    const db = getDatabaseContext()
+    const args = await resolveArgs(definition, input)
+    const auth = await authorize(definition.access, args, db)
+    const data = await definition.handler({
+      args,
+      auth: auth as never,
+      db,
+      name: definition.name,
+    })
+
+    return Object.freeze({
+      name: definition.name,
+      data: serializeModels(data) as RealtimeResultFor<TDefinition>,
+      dependencies: Object.freeze([]),
+    })
+  })
+}
+
+function ensureDatabaseSubscription(): void {
+  const state = getRuntimeState()
+  state.unsubscribeFromDatabase ??= onDatabaseDependencyInvalidated(handleDatabaseInvalidation)
+}
+
+function dependenciesOverlap(left: readonly string[], right: readonly string[]): boolean {
+  const rightSet = new Set(right)
+  return left.some(dependency => rightSet.has(dependency))
+}
+
+async function refreshSubscription<TDefinition extends RealtimeQueryDefinitionMetadata>(
+  subscription: ActiveSubscription<TDefinition>,
+): Promise<void> {
+  try {
+    const result = await executeRealtimeQuery(subscription.definition, subscription.args, subscription.executionOptions)
+    subscription.dependencies = result.dependencies
+    subscription.version += 1
+    subscription.current = Object.freeze({
+      ...result,
+      version: subscription.version,
+    })
+    try {
+      await subscription.options.onData?.(subscription.current)
+    } catch (error) {
+      console.error('[@holo-js/realtime] Realtime subscription onData callback failed.', error)
+    }
+  } catch (error) {
+    try {
+      await subscription.options.onError?.(error)
+    } catch (handlerError) {
+      console.error('[@holo-js/realtime] Realtime subscription onError callback failed.', handlerError)
+    }
+  }
+}
+
+async function handleDatabaseInvalidation(event: DatabaseDependencyInvalidationEvent): Promise<void> {
+  const subscriptions = [...getRuntimeState().subscriptions.values()]
+    .filter(subscription => dependenciesOverlap(subscription.dependencies, event.dependencies))
+
+  await Promise.all(subscriptions.map(subscription => refreshSubscription(subscription)))
+}
+
+export async function subscribeRealtimeQuery<
+  const TName extends string | undefined,
+  const TSchema extends ValidationSchema | undefined,
+  const TAccess extends RealtimeAccess<RealtimeArgsForSchema<TSchema>>,
+  TResult,
+>(
+  definition: RealtimeQueryDefinition<TName, TSchema, TAccess, TResult>,
+  input?: RealtimeArgsForSchema<TSchema>,
+  options?: RealtimeSubscribeOptions<TResult>,
+  executionOptions?: RealtimeExecutionOptions,
+): Promise<RealtimeSubscription<TResult>>
+export async function subscribeRealtimeQuery<TDefinition extends RealtimeQueryDefinitionMetadata>(
+  definition: TDefinition,
+  input?: RealtimeArgsFor<TDefinition>,
+  options?: RealtimeSubscribeOptions<RealtimeResultFor<TDefinition>>,
+  executionOptions?: RealtimeExecutionOptions,
+): Promise<RealtimeSubscription<RealtimeResultFor<TDefinition>>>
+export async function subscribeRealtimeQuery<TDefinition extends RealtimeQueryDefinitionMetadata>(
+  definition: TDefinition,
+  input = {} as RealtimeArgsFor<TDefinition>,
+  options: RealtimeSubscribeOptions<RealtimeResultFor<TDefinition>> = {},
+  executionOptions?: RealtimeExecutionOptions,
+): Promise<RealtimeSubscription<RealtimeResultFor<TDefinition>>> {
+  ensureDatabaseSubscription()
+  const state = getRuntimeState()
+  state.nextSubscriptionId += 1
+  const result = await executeRealtimeQuery(definition, input, executionOptions)
+  const snapshot = Object.freeze({
+    ...result,
+    version: 1,
+  })
+  const subscription: ActiveSubscription<TDefinition> = {
+    id: `subscription.${state.nextSubscriptionId}`,
+    definition,
+    args: await resolveArgs(definition, input),
+    options,
+    executionOptions,
+    dependencies: result.dependencies,
+    version: 1,
+    current: snapshot,
+  }
+  state.subscriptions.set(subscription.id, subscription as ActiveSubscription<RealtimeQueryDefinitionMetadata>)
+  await options.onData?.(snapshot)
+
+  return Object.freeze({
+    id: subscription.id,
+    name: definition.name,
+    get current() {
+      return subscription.current
+    },
+    unsubscribe() {
+      getRuntimeState().subscriptions.delete(subscription.id)
+    },
+  })
+}
+
+export function configureRealtimeRuntime(bindings?: RealtimeRuntimeBindings): void {
+  getRuntimeState().bindings = bindings
+}
+
+export function resetRealtimeRuntime(): void {
+  const state = getRuntimeState()
+  state.unsubscribeFromDatabase?.()
+  state.bindings = undefined
+  state.nextSubscriptionId = 0
+  state.unsubscribeFromDatabase = undefined
+  state.subscriptions.clear()
+}
+
+export const realtimeRuntimeInternals = {
+  REALTIME_DEFINITION_MARKER: realtimeDefinitionInternals.REALTIME_DEFINITION_MARKER,
+  createRealtimeDatabaseContext,
+  getRuntimeState,
+  handleDatabaseInvalidation,
+  nextDefinitionName,
+}
+
+export { isRealtimeDefinition, nextDefinitionName }

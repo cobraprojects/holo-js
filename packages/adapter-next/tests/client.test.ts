@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { field, schema } from '@holo-js/forms'
+import type { RealtimeSubscriptionSnapshot } from '@holo-js/realtime'
 
 type MockReactContext<TValue> = {
   currentRenderValue: TValue
@@ -100,6 +101,157 @@ describe('@holo-js/adapter-next client', () => {
 
     expect(form).toBe(fakeForm)
     expect(rerenders).toEqual([1])
+  })
+
+  it('returns updated realtime query data by calling the query definition', async () => {
+    type Post = { readonly id: number, readonly title: string }
+    type PostSnapshot = RealtimeSubscriptionSnapshot<readonly Post[]>
+    let realtimeListener: ((snapshot: PostSnapshot) => void) | undefined
+
+    vi.doMock('react', () => createReactMock({
+      useEffect(effect: () => void | (() => void)) {
+        return effect()
+      },
+      useRef<TValue>(initialValue?: TValue) {
+        return { current: initialValue }
+      },
+      useState<TValue>(initialState: TValue | (() => TValue)) {
+        const value = typeof initialState === 'function'
+          ? (initialState as () => TValue)()
+          : initialState
+
+        return [value, () => {}] as const
+      },
+      useSyncExternalStore<TSnapshot>(
+        subscribe: (listener: () => void) => () => void,
+        getSnapshot: () => TSnapshot,
+      ) {
+        subscribe(() => {})
+        return getSnapshot()
+      },
+    }))
+
+    const {
+      configureRealtimeClientTransport,
+      hydrateRealtimeQuery,
+      resetRealtimeClientRuntime,
+    } = await import('@holo-js/realtime/client')
+    const { query } = await import('@holo-js/realtime')
+    await import('../src/realtime')
+
+    const listPosts = query({
+      name: 'posts.list',
+      access: 'public',
+      handler: async () => [{ id: 1, title: 'First' }],
+    })
+
+    configureRealtimeClientTransport({
+      async query<TResult>() {
+        return {
+          name: 'posts.list',
+          data: [{ id: 1, title: 'First' }] as TResult,
+          dependencies: [],
+          version: 1,
+        }
+      },
+      async mutate<TResult>() {
+        return {
+          name: 'posts.create',
+          data: { created: true } as TResult,
+          dependencies: [],
+        }
+      },
+      subscribe<TResult>(_name: string, _args: Record<string, unknown>, listener: (snapshot: RealtimeSubscriptionSnapshot<TResult>) => void) {
+        realtimeListener = snapshot => listener(snapshot as unknown as RealtimeSubscriptionSnapshot<TResult>)
+        return () => {}
+      },
+    })
+    hydrateRealtimeQuery(listPosts, {}, {
+      name: 'posts.list',
+      data: [{ id: 1, title: 'First' }],
+      dependencies: [],
+      version: 1,
+    })
+
+    expect(listPosts()).toEqual([{ id: 1, title: 'First' }])
+
+    realtimeListener?.({
+      name: 'posts.list',
+      data: [
+        { id: 1, title: 'First' },
+        { id: 2, title: 'Second' },
+      ],
+      dependencies: [],
+      version: 2,
+    })
+
+    expect(listPosts()).toEqual([
+      { id: 1, title: 'First' },
+      { id: 2, title: 'Second' },
+    ])
+    resetRealtimeClientRuntime()
+  })
+
+  it('returns undefined before the first realtime query snapshot arrives', async () => {
+    vi.doMock('react', () => createReactMock({
+      useEffect(effect: () => void | (() => void)) {
+        return effect()
+      },
+      useRef<TValue>(initialValue?: TValue) {
+        return { current: initialValue }
+      },
+      useState<TValue>(initialState: TValue | (() => TValue)) {
+        const value = typeof initialState === 'function'
+          ? (initialState as () => TValue)()
+          : initialState
+
+        return [value, () => {}] as const
+      },
+      useSyncExternalStore<TSnapshot>(
+        subscribe: (listener: () => void) => () => void,
+        getSnapshot: () => TSnapshot,
+      ) {
+        subscribe(() => {})
+        return getSnapshot()
+      },
+    }))
+
+    const {
+      configureRealtimeClientTransport,
+      resetRealtimeClientRuntime,
+    } = await import('@holo-js/realtime/client')
+    const { query } = await import('@holo-js/realtime')
+    await import('../src/realtime')
+
+    const listPosts = query({
+      name: 'posts.pending',
+      access: 'public',
+      handler: async () => [{ id: 1, title: 'First' }],
+    })
+
+    configureRealtimeClientTransport({
+      async query<TResult>() {
+        return {
+          name: 'posts.pending',
+          data: [{ id: 1, title: 'First' }] as TResult,
+          dependencies: [],
+          version: 1,
+        }
+      },
+      async mutate<TResult>() {
+        return {
+          name: 'posts.create',
+          data: { created: true } as TResult,
+          dependencies: [],
+        }
+      },
+      subscribe() {
+        return () => {}
+      },
+    })
+
+    expect(listPosts()).toBeUndefined()
+    resetRealtimeClientRuntime()
   })
 
   it('recreates the form instance when schema options change across rerenders', async () => {
