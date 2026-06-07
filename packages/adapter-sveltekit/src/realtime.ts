@@ -5,7 +5,28 @@ import {
   createBroadcastRealtimeTransport,
   getRealtimeQueryStore,
 } from '@holo-js/realtime/client'
-import type { RealtimeArgsFor, RealtimeQueryDefinition, RealtimeResultFor } from '@holo-js/realtime'
+import {
+  mutation as createRealtimeMutation,
+  query as createRealtimeQuery,
+} from '@holo-js/realtime'
+import type {
+  RealtimeArgsFor,
+  RealtimeQueryDefinition,
+  RealtimeResultFor,
+} from '@holo-js/realtime'
+import { normalizeSvelteKitClientHttpError, renderSvelteKitClientHttpErrorPage } from './client-errors'
+
+function emitRealtimeError(error: unknown): void {
+  const httpError = normalizeSvelteKitClientHttpError(error)
+
+  if (httpError) {
+    renderSvelteKitClientHttpErrorPage(httpError)
+  }
+}
+
+export const query = createRealtimeQuery
+
+export const mutation = createRealtimeMutation
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value
@@ -143,6 +164,7 @@ function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
 }
 
 configureRealtimeClientRuntime({
+  handleError: emitRealtimeError,
   useQuery: useReactiveRealtimeQuery,
 })
 configureRealtimeClientTransport(createBroadcastRealtimeTransport())

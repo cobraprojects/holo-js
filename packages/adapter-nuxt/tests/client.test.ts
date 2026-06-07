@@ -62,6 +62,55 @@ describe('@holo-js/adapter-nuxt client', () => {
     expect((globalThis as unknown as { __holoNuxtClientDisposed?: boolean }).__holoNuxtClientDisposed).toBe(true)
   })
 
+  it('renders custom submitter HTTP error payloads through the Nuxt client error handler', async () => {
+    const showError = vi.fn()
+    vi.stubGlobal('showError', showError)
+    vi.doMock('vue', () => ({
+      onScopeDispose() {},
+      reactive<TValue extends object>(value: TValue) {
+        return value
+      },
+      shallowRef<TValue>(value: TValue) {
+        return { value }
+      },
+      watchEffect(effect: (onCleanup: (cleanup: () => void) => void) => void) {
+        effect(() => {})
+        return () => {}
+      },
+    }))
+
+    const { useForm } = await import('../src/runtime/composables/forms')
+    const post = schema({
+      title: field.string().required(),
+    })
+    const form = useForm(post, {
+      initialValues: {
+        title: 'Denied post',
+      },
+      async submitter() {
+        return {
+          ok: false,
+          status: 403,
+          valid: false,
+          values: {
+            title: 'Denied post',
+          },
+          errors: {
+            _root: ['Only the author can update posts.'],
+          },
+        }
+      },
+    })
+
+    await form.submit()
+
+    expect(showError).toHaveBeenCalledWith({
+      statusCode: 403,
+      statusMessage: 'Only the author can update posts.',
+      message: 'Only the author can update posts.',
+    })
+  })
+
   it('returns updated realtime query arrays by calling the query definition', async () => {
     vi.stubGlobal('window', {})
     type Post = { readonly id: number, readonly title: string }
@@ -510,5 +559,63 @@ describe('@holo-js/adapter-nuxt client', () => {
     expect(form.fields.tags.touched).toBe(true)
     expect(form.fields.tags.dirty).toBe(true)
     expect(form.errors.first('tags')).toBeUndefined()
+  })
+
+  it('renders realtime mutation HTTP errors through the Nuxt client error handler', async () => {
+    vi.resetModules()
+    vi.stubGlobal('window', {})
+    const showError = vi.fn()
+    vi.stubGlobal('showError', showError)
+
+    vi.doMock('vue', () => ({
+      onScopeDispose() {},
+      reactive<TValue extends object>(value: TValue) {
+        return value
+      },
+      shallowRef<TValue>(value: TValue) {
+        return { value }
+      },
+      watchEffect() {
+        return () => {}
+      },
+    }))
+
+    const {
+      configureRealtimeClientTransport,
+      resetRealtimeClientRuntime,
+    } = await import('@holo-js/realtime/client')
+    const { mutation } = await import('../src/runtime/composables/realtime')
+    const renamePost = mutation({
+      name: 'posts.rename.denied',
+      access: 'public',
+      handler: async () => ({ id: 1 }),
+    })
+
+    configureRealtimeClientTransport({
+      async query<TResult>() {
+        return {
+          name: 'posts.list',
+          data: [] as TResult,
+          dependencies: [],
+          version: 1,
+        }
+      },
+      async mutate<TResult>() {
+        throw Object.assign(new Error('Only the author can update posts.'), {
+          status: 403,
+        }) as Error & { readonly status: 403 } & { readonly __result?: TResult }
+      },
+      subscribe() {
+        return () => {}
+      },
+    })
+
+    await expect(renamePost()).rejects.toThrow('Only the author can update posts.')
+    expect(showError).toHaveBeenCalledWith({
+      statusCode: 403,
+      statusMessage: 'Only the author can update posts.',
+      message: 'Only the author can update posts.',
+    })
+    resetRealtimeClientRuntime()
   })
 })

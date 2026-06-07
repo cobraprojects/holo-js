@@ -378,6 +378,8 @@ export interface BroadcastAuthEndpointSuccessBody {
   readonly type: 'private' | 'presence'
   readonly params: Readonly<Record<string, string>>
   readonly whispers: readonly string[]
+  readonly auth?: string
+  readonly channel_data?: string
   readonly member?: Readonly<BroadcastJsonObject>
 }
 
@@ -390,6 +392,8 @@ export interface BroadcastAuthEndpointErrorBody {
 export type BroadcastAuthEndpointBody = BroadcastAuthEndpointSuccessBody | BroadcastAuthEndpointErrorBody
 
 export interface BroadcastAuthEndpointOptions {
+  readonly appKey?: string
+  readonly appSecret?: string
   readonly user?: unknown
   readonly resolveUser?: (
     request: Request,

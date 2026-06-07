@@ -146,6 +146,7 @@ type HoloWebSocketConnectorOptions = {
   readonly port?: number
   readonly path?: string
   readonly scheme?: 'http' | 'https' | 'ws' | 'wss'
+  readonly authEndpoint?: string
   readonly configEndpoint?: string
 }
 
@@ -186,13 +187,16 @@ type HoloWebSocketLike = {
 type HoloWebSocketConstructor = new (url: string) => HoloWebSocketLike
 type HoloWebSocketConfigResponse = {
   readonly ok: boolean
+  readonly status: number
   json(): Promise<unknown>
 }
 type HoloWebSocketFetch = (
   input: string,
   init?: {
+    readonly method?: string
     readonly headers?: Readonly<Record<string, string>>
     readonly credentials?: 'same-origin'
+    readonly body?: URLSearchParams
   },
 ) => Promise<HoloWebSocketConfigResponse>
 
@@ -208,6 +212,11 @@ type HoloWebSocketGlobals = typeof globalThis & {
 
 type HoloConnectorChannelState = PusherChannelState & {
   subscribed: boolean
+}
+
+type HoloChannelAuthResponse = {
+  readonly auth?: string
+  readonly channel_data?: string
 }
 
 type SubscriptionRegistry = Map<string, Set<() => void>>
@@ -508,6 +517,7 @@ function mergeHoloWebSocketConnectorOptions(
     ...(typeof explicit.port === 'undefined' ? {} : { port: explicit.port }),
     ...(typeof explicit.path === 'undefined' ? {} : { path: explicit.path }),
     ...(typeof explicit.scheme === 'undefined' ? {} : { scheme: explicit.scheme }),
+    ...(typeof explicit.authEndpoint === 'undefined' ? {} : { authEndpoint: explicit.authEndpoint }),
     ...(typeof explicit.configEndpoint === 'undefined' ? {} : { configEndpoint: explicit.configEndpoint }),
   })
 }
@@ -523,11 +533,21 @@ function normalizeHoloWebSocketConnectorConfig(value: unknown): HoloWebSocketCon
     ...(normalizeOptionalConnectorPort(value.port) ? { port: normalizeOptionalConnectorPort(value.port) } : {}),
     ...(normalizeOptionalConnectorString(value.path) ? { path: normalizeOptionalConnectorString(value.path) } : {}),
     ...(normalizeOptionalConnectorScheme(value.scheme) ? { scheme: normalizeOptionalConnectorScheme(value.scheme) } : {}),
+    ...(normalizeOptionalConnectorString(value.authEndpoint) ? { authEndpoint: normalizeOptionalConnectorString(value.authEndpoint) } : {}),
   })
 }
 
 function canDiscoverHoloWebSocketConnectorOptions(globals: HoloWebSocketGlobals): boolean {
   return !!globals.fetch && !!globals.location && typeof globals.window !== 'undefined'
+}
+
+function hasExplicitHoloWebSocketConnectorOptions(options: HoloWebSocketConnectorOptions): boolean {
+  return typeof options.key !== 'undefined'
+    || typeof options.host !== 'undefined'
+    || typeof options.port !== 'undefined'
+    || typeof options.path !== 'undefined'
+    || typeof options.scheme !== 'undefined'
+    || typeof options.authEndpoint !== 'undefined'
 }
 
 async function resolveHoloWebSocketConnectorOptions(
@@ -612,6 +632,8 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
   let status: FluxConnectionStatus = 'idle'
   let socket: HoloWebSocketLike | undefined
   let connecting: Promise<void> | undefined
+  let resolvedOptions: HoloWebSocketConnectorOptions | undefined
+  let socketId: string | undefined
 
   const setStatus = (next: FluxConnectionStatus): void => {
     if (status === next) {
@@ -628,19 +650,78 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
     }
   }
 
+  const authorizeSubscription = async (state: HoloConnectorChannelState): Promise<HoloChannelAuthResponse> => {
+    if (state.kind === 'public') {
+      return Object.freeze({})
+    }
+
+    const endpoint = resolvedOptions?.authEndpoint
+    if (!endpoint) {
+      return Object.freeze({})
+    }
+
+    const globals = globalThis as HoloWebSocketGlobals
+    if (!globals.fetch) {
+      throw new Error('[@holo-js/flux] Private channel authorization requires fetch support in this runtime.')
+    }
+
+    const channel = wireChannelName(state.kind, state.name)
+    const currentSocketId = normalizeRequiredString(socketId ?? '', 'Socket id')
+    const response = await globals.fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      },
+      credentials: 'same-origin',
+      body: new URLSearchParams({
+        channel_name: channel,
+        socket_id: currentSocketId,
+      }),
+    })
+    if (!response.ok) {
+      throw new Error(`[@holo-js/flux] Channel authorization failed with HTTP ${response.status}.`)
+    }
+
+    const body = await response.json()
+    if (!isRecord(body) || typeof body.auth !== 'string') {
+      throw new Error('[@holo-js/flux] Channel authorization response is invalid.')
+    }
+
+    return Object.freeze({
+      auth: body.auth,
+      ...(typeof body.channel_data === 'string' ? { channel_data: body.channel_data } : {}),
+    })
+  }
+
   const flushSubscriptions = (): void => {
     for (const state of channels.values()) {
       if (state.subscribed) {
         continue
       }
 
-      sendMessage({
-        event: 'pusher:subscribe',
-        data: {
-          channel: wireChannelName(state.kind, state.name),
-        },
-      })
       state.subscribed = true
+      if (state.kind === 'public' || !resolvedOptions?.authEndpoint) {
+        sendMessage({
+          event: 'pusher:subscribe',
+          data: {
+            channel: wireChannelName(state.kind, state.name),
+          },
+        })
+        continue
+      }
+
+      void authorizeSubscription(state).then((auth) => {
+        sendMessage({
+          event: 'pusher:subscribe',
+          data: {
+            channel: wireChannelName(state.kind, state.name),
+            ...auth,
+          },
+        })
+      }, () => {
+        state.subscribed = false
+      })
     }
   }
 
@@ -655,6 +736,7 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
     const payload = parseWireData(message.data)
 
     if (eventName === 'pusher:connection_established') {
+      socketId = typeof payload.socket_id === 'string' ? payload.socket_id : undefined
       flushSubscriptions()
       return
     }
@@ -719,7 +801,7 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
   const ensureConnected = async (): Promise<void> => {
     const globals = globalThis as HoloWebSocketGlobals
     const WebSocketConstructor = globals.WebSocket
-    if (!WebSocketConstructor) {
+    if (!WebSocketConstructor || (!canDiscoverHoloWebSocketConnectorOptions(globals) && !hasExplicitHoloWebSocketConnectorOptions(options))) {
       return
     }
 
@@ -733,7 +815,7 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
       return
     }
 
-    const resolvedOptions = canDiscoverHoloWebSocketConnectorOptions(globals)
+    resolvedOptions = canDiscoverHoloWebSocketConnectorOptions(globals)
       ? await resolveHoloWebSocketConnectorOptions(options, globals)
       : options
     const scheme = resolveWebSocketScheme(resolvedOptions.scheme, globals)

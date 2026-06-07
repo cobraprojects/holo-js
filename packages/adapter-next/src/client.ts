@@ -10,6 +10,7 @@ import {
   type UseFormResult,
   createFormClient,
 } from '@holo-js/forms/internal/client'
+import { createNextRenderableError, normalizeNextClientHttpError, renderNextClientHttpErrorPage } from './client-errors'
 
 export {
   type ClientSubmitContext,
@@ -67,17 +68,29 @@ function areOptionsEqual<TData, TSuccess>(
 
 function createSubmitterBridge<TData, TSuccess>(
   optionsRef: { current: UseFormOptions<TData, TSuccess> | undefined },
+  onHttpError: (error: Error) => void,
 ): (
   context: ClientSubmitContext<TData>,
 ) => Promise<ClientSubmitResult<TData, TSuccess> | void> | ClientSubmitResult<TData, TSuccess> | void {
-  return (context) => {
+  return async (context) => {
     const submitter = optionsRef.current?.submitter
 
     if (!submitter) {
       throw new TypeError('Expected submitter to be defined.')
     }
 
-    return submitter(context)
+    try {
+      return await submitter(context)
+    } catch (error) {
+      const httpError = normalizeNextClientHttpError(error)
+
+      if (httpError) {
+        renderNextClientHttpErrorPage(httpError)
+        onHttpError(createNextRenderableError(httpError))
+      }
+
+      throw error
+    }
   }
 }
 
@@ -92,12 +105,17 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
   const previousOptionsRef = useRef<UseFormOptions<TData, TSuccess> | undefined>(undefined)
   const latestOptionsRef = useRef<UseFormOptions<TData, TSuccess> | undefined>(undefined)
   const submitterBridgeRef = useRef<UseFormOptions<TData, TSuccess>['submitter']>(undefined)
+  const [httpError, setHttpError] = useState<Error | undefined>(undefined)
   const [, setVersion] = useState(0)
+
+  if (httpError) {
+    throw httpError
+  }
 
   latestOptionsRef.current = options
 
   if (options.submitter && !submitterBridgeRef.current) {
-    submitterBridgeRef.current = createSubmitterBridge<TData, TSuccess>(latestOptionsRef)
+    submitterBridgeRef.current = createSubmitterBridge<TData, TSuccess>(latestOptionsRef, setHttpError)
   }
 
   const resolvedOptions: UseFormOptions<TData, TSuccess> = options.submitter

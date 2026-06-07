@@ -16,6 +16,7 @@ import {
   createFormClient,
   runWithBrowserFormElement,
 } from '@holo-js/forms/internal/client'
+import { normalizeSvelteKitClientHttpError, renderSvelteKitClientHttpErrorPage } from './client-errors'
 
 type InitialFormState<TData> = UseFormOptions<TData>['initialState']
 type FlashedValidationPayload<TData> = FormFailurePayload<TData> & {
@@ -76,6 +77,13 @@ type BrowserFormElement = {
   readonly tagName?: string
   readonly action?: string
   readonly method?: string
+  submit?(): void
+}
+
+type FormHttpFailure = {
+  readonly ok: false
+  readonly status: number
+  readonly errors?: Record<string, readonly string[]>
 }
 
 type SvelteKitActionFailureResult = {
@@ -274,6 +282,25 @@ function createInvalidActionFailure<TData>(
   }
 }
 
+function getHttpFailureMessage(result: FormHttpFailure): string | undefined {
+  return result.errors?._root?.[0]
+}
+
+function renderFormHttpFailure(result: unknown): void {
+  if (!isPlainObject(result) || result.ok !== false || typeof result.status !== 'number' || result.status === 422) {
+    return
+  }
+
+  const httpError = normalizeSvelteKitClientHttpError({
+    status: result.status,
+    message: getHttpFailureMessage(result as FormHttpFailure),
+  })
+
+  if (httpError) {
+    renderSvelteKitClientHttpErrorPage(httpError)
+  }
+}
+
 function safeDecodeURIComponent(value: string): string {
   try {
     return decodeURIComponent(value)
@@ -428,6 +455,23 @@ function isNativePostForm(form: BrowserFormElement): boolean {
   return (form.method || 'get').toLowerCase() === 'post'
 }
 
+function isSvelteKitActionForm(form: BrowserFormElement): boolean {
+  if (!isNativePostForm(form)) {
+    return false
+  }
+
+  const action = form.action ?? currentLocationHref()
+  if (!action) {
+    return false
+  }
+
+  try {
+    return new URL(action, currentLocationHref()).search.startsWith('?/')
+  } catch {
+    return action.includes('?/') || action.startsWith('?/')
+  }
+}
+
 function resolveRegisteredForm(form: BrowserFormElement): RegisteredForm | undefined {
   if (!isNativePostForm(form)) {
     return undefined
@@ -444,6 +488,30 @@ function resolveRegisteredForm(form: BrowserFormElement): RegisteredForm | undef
   }
 
   return match
+}
+
+function submitNativeForm(form: BrowserFormElement): void {
+  form.submit?.()
+}
+
+async function submitSvelteKitActionForm(form: BrowserFormElement): Promise<void> {
+  const formData = Reflect.construct(FormData, [form]) as FormData
+  const result = await submitSvelteKitAction<Record<string, unknown>, unknown>({
+    action: form.action,
+    method: form.method || 'POST',
+    values: {},
+    formData,
+  })
+  const httpError = normalizeSvelteKitClientHttpError(result)
+
+  if (httpError && httpError.status !== 422) {
+    renderSvelteKitClientHttpErrorPage(httpError)
+    return
+  }
+
+  if (isPlainObject(result) && result.ok === false) {
+    submitNativeForm(form)
+  }
 }
 
 function ensureSubmitListener(): void {
@@ -469,13 +537,22 @@ function ensureSubmitListener(): void {
   target.addEventListener('submit', (event) => {
     const form = resolveSubmittedForm(event.target)
     const registeredForm = form ? resolveRegisteredForm(form) : undefined
-    if (!form || !registeredForm) {
+    if (!form) {
       return
     }
 
-    event.preventDefault()
-    event.stopImmediatePropagation()
-    void registeredForm.submit(form)
+    if (registeredForm) {
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      void registeredForm.submit(form)
+      return
+    }
+
+    if (isSvelteKitActionForm(form)) {
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      void submitSvelteKitActionForm(form)
+    }
   }, true)
 }
 
@@ -604,7 +681,21 @@ async function submitSvelteKitAction<TData, TSuccess>(
   }
 
   if (result.type === 'error') {
-    return result.error as ClientSubmitResult<TData, TSuccess>
+    const actionError = isPlainObject(result.error)
+      ? {
+          ...result.error,
+          status: response.status,
+        }
+      : {
+          status: response.status,
+          message: response.statusText,
+        }
+    const httpError = normalizeSvelteKitClientHttpError(actionError)
+    if (httpError) {
+      renderSvelteKitClientHttpErrorPage(httpError)
+    }
+
+    return actionError as ClientSubmitResult<TData, TSuccess>
   }
 
   if (result.type === 'redirect') {
@@ -703,6 +794,62 @@ function createReactiveView<TValue extends object>(
   return proxy as TValue
 }
 
+ensureSubmitListener()
+
+function createHttpHandledForm<TData, TSuccess, TFields>(
+  form: UseFormResult<TData, TSuccess, TFields>,
+): UseFormResult<TData, TSuccess, TFields> {
+  const wrappedForm = Object.create(Object.getPrototypeOf(form)) as UseFormResult<TData, TSuccess, TFields>
+
+  for (const key of Reflect.ownKeys(form)) {
+    const descriptor = Object.getOwnPropertyDescriptor(form, key)
+    if (!descriptor) {
+      continue
+    }
+
+    if (key === 'submit') {
+      continue
+    }
+
+    if (typeof key === 'symbol' && typeof descriptor.value === 'function') {
+      continue
+    }
+
+    Object.defineProperty(wrappedForm, key, descriptor)
+  }
+
+  const submit = form.submit.bind(form)
+  Object.defineProperty(wrappedForm, 'submit', {
+    configurable: true,
+    enumerable: true,
+    value: async () => {
+      const result = await submit()
+      renderFormHttpFailure(result)
+      return result
+    },
+  })
+
+  for (const key of Object.getOwnPropertySymbols(form)) {
+    const descriptor = Object.getOwnPropertyDescriptor(form, key)
+    const value = descriptor?.value
+    if (!descriptor || typeof value !== 'function') {
+      continue
+    }
+
+    Object.defineProperty(wrappedForm, key, {
+      ...descriptor,
+      configurable: true,
+      value: async (...args: readonly unknown[]) => {
+        const result = await Reflect.apply(value, form, args)
+        renderFormHttpFailure(result)
+        return result
+      },
+    })
+  }
+
+  return wrappedForm
+}
+
 export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
   schemaDefinition: TSchema,
   options: UseFormOptions<InferFormData<TSchema>, TSuccess> = {},
@@ -715,7 +862,7 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
     submitter: options.submitter ?? submitSvelteKitAction,
   }
 
-  const form = createFormClient(schemaDefinition, formOptions)
+  const form = createHttpHandledForm(createFormClient(schemaDefinition, formOptions))
   void hydrateActionFormState(form, schemaDefinition)
   const unregisterForm = registerForm(schemaDefinition, form)
   const subscribe = createSubscriber((update) => {

@@ -568,6 +568,7 @@ describe('@holo-js/realtime client runtime', () => {
 
   it('observes ignored public mutation rejections while preserving awaitable failures', async () => {
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const handleError = vi.fn()
     const denied = Object.assign(new Error('Only the author, editors, or admins can update posts.'), {
       name: 'AuthorizationError',
       kind: 'authorization',
@@ -592,12 +593,14 @@ describe('@holo-js/realtime client runtime', () => {
     })
 
     configureRealtimeClientTransport(transport)
+    configureRealtimeClientRuntime({ handleError })
     void renamePost({})
     await Promise.resolve()
     await Promise.resolve()
 
     await expect(renamePost({})).rejects.toBe(denied)
     expect(consoleWarn).toHaveBeenCalledWith('[@holo-js/realtime] Only the author, editors, or admins can update posts.')
+    expect(handleError).toHaveBeenCalledWith(denied)
   })
 
   it('requires an explicit transport for callable mutations', async () => {

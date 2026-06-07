@@ -28,7 +28,7 @@ function isModuleNotFoundError(error: unknown): boolean {
 async function loadRedisDriverModule(): Promise<RedisDriverModule> {
   try {
     const specifier = '@holo-js/queue-redis' as string
-    return await import(specifier) as RedisDriverModule
+    return await import(/* @vite-ignore */ specifier) as RedisDriverModule
   } catch (error) {
     if (isModuleNotFoundError(error)) {
       throw new Error('[@holo-js/queue] Redis queue support requires @holo-js/queue-redis to be installed.', {

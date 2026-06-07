@@ -52,6 +52,11 @@ type BroadcastWorkerApp = {
 
 type PresenceMember = Readonly<Record<string, unknown>>
 
+type ClientChannelAuth = {
+  readonly auth: string
+  readonly channelData?: string
+}
+
 type SocketState = {
   readonly socketId: string
   readonly app: BroadcastWorkerApp
@@ -446,6 +451,68 @@ function logRealtimeSubscriptionCleanupError(socketId: string, subscriptionId: s
   console.error(`[@holo-js/broadcast] Realtime subscription cleanup failed for socket "${socketId}" on "${subscriptionId}": ${message}`)
 }
 
+function safeEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left)
+  const rightBuffer = Buffer.from(right)
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer)
+}
+
+function signChannelAuth(secret: string, socketId: string, channel: string, channelData: string): string {
+  const value = channelData ? `${socketId}:${channel}:${channelData}` : `${socketId}:${channel}`
+  return createHmac('sha256', secret).update(value).digest('hex')
+}
+
+function parseClientChannelAuth(data: Record<string, unknown>): ClientChannelAuth | undefined {
+  if (typeof data.auth !== 'string') {
+    return undefined
+  }
+
+  return Object.freeze({
+    auth: normalizeRequiredString(data.auth, 'Subscription auth'),
+    ...(typeof data.channel_data === 'string' ? { channelData: data.channel_data } : {}),
+  })
+}
+
+function parseSignedChannelData(value: string | undefined): { readonly whispers: readonly string[], readonly member?: PresenceMember } {
+  if (!value) {
+    return Object.freeze({
+      whispers: Object.freeze([]),
+    })
+  }
+
+  const data = parseJsonObject(value, 'Subscription channel data')
+  const whispers = Array.isArray(data.whispers)
+    ? Object.freeze(data.whispers.map(item => normalizeRequiredString(String(item), 'Auth whisper')))
+    : Object.freeze([])
+  const member = data.member && typeof data.member === 'object' && !Array.isArray(data.member)
+    ? Object.freeze(data.member as PresenceMember)
+    : undefined
+
+  return Object.freeze({
+    whispers,
+    ...(typeof member === 'undefined' ? {} : { member }),
+  })
+}
+
+function verifyClientChannelAuth(
+  app: BroadcastWorkerApp,
+  socketId: string,
+  channel: string,
+  clientAuth: ClientChannelAuth,
+): { readonly whispers: readonly string[], readonly member?: PresenceMember } {
+  const [key, signature] = clientAuth.auth.split(':', 2)
+  if (key !== app.key || !signature) {
+    throw new Error('[@holo-js/broadcast] Channel authorization signature is invalid.')
+  }
+
+  const expected = signChannelAuth(app.secret, socketId, channel, clientAuth.channelData ?? '')
+  if (!safeEqual(signature, expected)) {
+    throw new Error('[@holo-js/broadcast] Channel authorization signature is invalid.')
+  }
+
+  return parseSignedChannelData(clientAuth.channelData)
+}
+
 function unsubscribeRealtimeSubscription(socket: SocketState, id: string, subscription: BroadcastRealtimeSubscription): void {
   try {
     subscription.unsubscribe()
@@ -838,6 +905,7 @@ async function authenticateSubscription(
   app: BroadcastWorkerApp,
   connection: SocketState,
   channel: string,
+  clientAuth?: ClientChannelAuth,
   channelAuth?: BroadcastChannelAuthRuntimeBindings,
   fetcher?: typeof fetch,
 ): Promise<{ readonly whispers: readonly string[], readonly member?: PresenceMember }> {
@@ -846,6 +914,10 @@ async function authenticateSubscription(
     return Object.freeze({
       whispers: Object.freeze([]),
     })
+  }
+
+  if (clientAuth) {
+    return verifyClientChannelAuth(app, connection.socketId, channel, clientAuth)
   }
 
   if (app.authEndpoint && fetcher) {
@@ -1452,9 +1524,9 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     }
   }
 
-  async function handleSubscribe(socket: SocketState, rawChannel: string): Promise<void> {
+  async function handleSubscribe(socket: SocketState, rawChannel: string, clientAuth?: ClientChannelAuth): Promise<void> {
     const channel = normalizeRequiredString(rawChannel, 'Subscription channel')
-    const authorization = await authenticateSubscription(socket.app, socket, channel, options.channelAuth, options.fetch)
+    const authorization = await authenticateSubscription(socket.app, socket, channel, clientAuth, options.channelAuth, options.fetch)
     if (!socket.active || connectedSockets.get(socket.socketId) !== socket) {
       return
     }
@@ -1745,7 +1817,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         }
 
         if (message.event === 'pusher:subscribe') {
-          await handleSubscribe(socket, String(message.data.channel ?? ''))
+          await handleSubscribe(socket, String(message.data.channel ?? ''), parseClientChannelAuth(message.data))
           return
         }
 

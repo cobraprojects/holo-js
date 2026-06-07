@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import flux, {
   configureFluxClient,
   createFluxClient,
@@ -33,6 +33,10 @@ describe('@holo-js/flux package surface', () => {
 
   it('configures the default client with the Holo websocket connector', async () => {
     const originalWebSocket = globalThis.WebSocket
+    const originalFetch = globalThis.fetch
+    const originalLocation = globalThis.location
+    const browserGlobal = globalThis as typeof globalThis & { window?: unknown }
+    const originalWindow = browserGlobal.window
     const sentMessages: unknown[] = []
     let openedUrl = ''
     let socketReadyState = 0
@@ -87,11 +91,30 @@ describe('@holo-js/flux package surface', () => {
         writable: true,
         value: TestWebSocket,
       })
+      Object.defineProperty(globalThis, 'fetch', {
+        configurable: true,
+        writable: true,
+        value: async () => new Response(null, { status: 404 }),
+      })
+      Object.defineProperty(globalThis, 'location', {
+        configurable: true,
+        value: {
+          hostname: '127.0.0.1',
+          protocol: 'http:',
+        },
+      })
+      Object.defineProperty(browserGlobal, 'window', {
+        configurable: true,
+        value: {},
+      })
       resetFluxClient()
       const received: unknown[] = []
 
       getFluxClient().private('blog.admin').listen('blog.post.changed', (payload) => {
         received.push(payload)
+      })
+      await vi.waitFor(() => {
+        expect(openedUrl).toBe('ws://127.0.0.1:8080/app/app-key')
       })
       emit('open', undefined)
       emit('message', {
@@ -108,7 +131,6 @@ describe('@holo-js/flux package surface', () => {
         }),
       })
 
-      expect(openedUrl).toBe('ws://127.0.0.1:8080/app/app-key')
       expect(sentMessages).toContainEqual({
         event: 'pusher:subscribe',
         data: {
@@ -121,6 +143,19 @@ describe('@holo-js/flux package surface', () => {
         configurable: true,
         writable: true,
         value: originalWebSocket,
+      })
+      Object.defineProperty(globalThis, 'fetch', {
+        configurable: true,
+        writable: true,
+        value: originalFetch,
+      })
+      Object.defineProperty(globalThis, 'location', {
+        configurable: true,
+        value: originalLocation,
+      })
+      Object.defineProperty(browserGlobal, 'window', {
+        configurable: true,
+        value: originalWindow,
       })
       resetFluxClient()
     }
@@ -495,6 +530,12 @@ describe('@holo-js/flux package surface', () => {
 
       await expect(connection).rejects.toThrow('WebSocket connection failed')
       fluxInternals.createHoloWebSocketConnector().subscribe('orders.background', 'private')
+      expect(sockets).toHaveLength(1)
+
+      const explicit = fluxInternals.createHoloWebSocketConnector({
+        host: '127.0.0.1',
+      })
+      explicit.subscribe('orders.background', 'private')
       expect(sockets).toHaveLength(2)
       sockets[1]!.emit('error', undefined)
       await Promise.resolve()

@@ -269,8 +269,7 @@ export function createRealtimeClientDefinitionModule(source: string): string {
 
   const factories = [...new Set(definitions.map(definition => definition.factoryName))]
   return [
-    'import \'@holo-js/adapter-nuxt/realtime\'',
-    `import { ${factories.join(', ')} } from '@holo-js/realtime'`,
+    `import { ${factories.join(', ')} } from '@holo-js/adapter-nuxt/realtime'`,
     '',
     ...definitions.flatMap((definition) => [
       `export const ${definition.exportedName} = ${definition.factoryName}({`,

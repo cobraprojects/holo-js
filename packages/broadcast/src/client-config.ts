@@ -6,6 +6,7 @@ export type BroadcastClientConfig = {
   readonly port: number
   readonly path: string
   readonly scheme: 'http' | 'https'
+  readonly authEndpoint?: string
 }
 
 function resolveDefaultHoloConnection(config: LoadedHoloConfig['broadcast']) {
@@ -15,6 +16,20 @@ function resolveDefaultHoloConnection(config: LoadedHoloConfig['broadcast']) {
   }
 
   return connection
+}
+
+function resolveAuthEndpointPath(authEndpoint: string): string {
+  const trimmed = authEndpoint.trim()
+
+  if (trimmed.length === 0) {
+    return trimmed
+  }
+
+  try {
+    return new URL(trimmed).pathname
+  } catch {
+    return trimmed.startsWith('/') ? trimmed : `/${trimmed}`
+  }
 }
 
 export function resolveBroadcastClientConfig(config: LoadedHoloConfig['broadcast']): BroadcastClientConfig {
@@ -30,6 +45,9 @@ export function resolveBroadcastClientConfig(config: LoadedHoloConfig['broadcast
     port: publicPort,
     path: config.worker.path,
     scheme: config.worker.publicScheme,
+    ...(typeof connection.clientOptions.authEndpoint === 'string'
+      ? { authEndpoint: resolveAuthEndpointPath(connection.clientOptions.authEndpoint) }
+      : {}),
   })
 }
 

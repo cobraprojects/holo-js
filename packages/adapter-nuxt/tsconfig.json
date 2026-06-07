@@ -13,6 +13,7 @@
       "nitropack/runtime/storage": ["./src/runtime/shims.d.ts"],
       "@holo-js/broadcast": ["../broadcast/src/index.ts"],
       "@holo-js/broadcast/auth": ["../broadcast/src/auth.ts"],
+      "@holo-js/core/errors": ["../core/src/errors.ts"],
       "@holo-js/forms": ["../forms/src/index.ts"],
       "@holo-js/forms/internal/client": ["../forms/src/internal/client.ts"],
       "@holo-js/realtime": ["../realtime/src/index.ts"],

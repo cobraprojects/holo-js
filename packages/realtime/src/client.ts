@@ -26,10 +26,11 @@ export type RealtimeClientTransport = {
 }
 
 export type RealtimeFrameworkRuntime = {
-  useQuery<TDefinition extends RealtimeQueryDefinition>(
+  useQuery?<TDefinition extends RealtimeQueryDefinition>(
     definition: TDefinition,
     args: RealtimeArgsFor<TDefinition>,
   ): RealtimeResultFor<TDefinition> | undefined
+  handleError?(error: unknown): void
 }
 
 type RealtimeClientState = {
@@ -144,6 +145,11 @@ function warnRealtimeOnce(message: string): void {
 
   state.warnedMessages.add(message)
   console.warn(`[@holo-js/realtime] ${message}`)
+}
+
+function handleRealtimeError(error: unknown): void {
+  warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
+  getRealtimeClientState().framework?.handleError?.(error)
 }
 
 function stableStringify(value: unknown): string {
@@ -572,7 +578,7 @@ function createRealtimeQueryStore<TResult>(
           setSnapshot(nextSnapshot)
         }
       }, (error) => {
-        warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
+        handleRealtimeError(error)
       })
       try {
         unsubscribe = transport.subscribe<TResult>(name, args, (nextSnapshot) => {
@@ -584,13 +590,13 @@ function createRealtimeQueryStore<TResult>(
           setSnapshot(nextSnapshot)
         }, (error) => {
           connected = false
-          warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
+          handleRealtimeError(error)
         })
         connected = true
       } catch (error) {
         connected = false
         unsubscribe = () => {}
-        warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
+        handleRealtimeError(error)
       }
     },
     setSnapshot,
@@ -665,7 +671,7 @@ export function useRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
   args: RealtimeArgsFor<TDefinition>,
 ): RealtimeResultFor<TDefinition> | undefined {
   const framework = getRealtimeClientState().framework
-  if (!framework) {
+  if (!framework?.useQuery) {
     return getRealtimeQueryStore(definition, args).snapshot?.data
   }
 
@@ -683,7 +689,7 @@ export function useRealtimeMutation<TDefinition extends RealtimeMutationDefiniti
     .then(result => result.data)
 
   promise.catch((error) => {
-    warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
+    handleRealtimeError(error)
   })
 
   return promise
@@ -694,6 +700,7 @@ export const realtimeClientInternals = {
   createMissingRealtimeTransport,
   createRealtimeQueryStore,
   getRealtimeClientState,
+  handleRealtimeError,
   missingTransportMessage,
   stableStringify,
 }

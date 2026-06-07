@@ -78,6 +78,7 @@ async function waitForActionHydration(predicate: () => boolean): Promise<void> {
 describe('@holo-js/adapter-sveltekit client forms', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.doUnmock('@holo-js/realtime/client')
     setPageForm(null)
   })
 
@@ -718,5 +719,164 @@ describe('@holo-js/adapter-sveltekit client forms', () => {
     expect(login.values.email).toBe('missing@app.test')
     expect(login.errors.first('password')).toBe('These credentials do not match our records.')
     expect(assign).not.toHaveBeenCalled()
+  })
+
+  it('renders SvelteKit action JSON HTTP errors from the response status', async () => {
+    vi.stubGlobal('window', {
+      location: {
+        href: 'http://localhost/admin/posts/1/edit',
+      },
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      type: 'error',
+      error: {
+        message: 'Only the author can update posts.',
+      },
+    }), {
+      status: 403,
+      headers: {
+        'content-type': 'application/json',
+      },
+    })))
+
+    const bodyChildren: unknown[] = []
+    const createElement = (tagName: string) => ({
+      id: '',
+      className: '',
+      tagName,
+      textContent: null as string | null,
+      style: {
+        cssText: '',
+        display: '',
+      },
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(name: string, value: string) {
+        this.attributes[name] = value
+      },
+      append(...nodes: unknown[]) {
+        this.children.push(...nodes)
+      },
+      replaceChildren(...nodes: unknown[]) {
+        this.children = nodes
+      },
+    })
+    const documentStub = {
+      title: '',
+      body: {
+        children: bodyChildren,
+        append(node: unknown) {
+          bodyChildren.push(node)
+        },
+      },
+      createElement,
+      getElementById() {
+        return null
+      },
+    }
+    vi.stubGlobal('document', documentStub)
+
+    const titleSchema = schema({
+      title: field.string().required(),
+    })
+    const form = useForm(titleSchema, {
+      initialValues: {
+        title: 'Denied post',
+      },
+    })
+
+    await form.submit()
+
+    expect(documentStub.title).toBe('403: Only the author can update posts.')
+    expect(JSON.stringify(bodyChildren)).toContain('Only the author can update posts.')
+  })
+
+  it('renders realtime mutation HTTP errors through the SvelteKit client error page', async () => {
+    vi.resetModules()
+    vi.doUnmock('@holo-js/realtime/client')
+    vi.stubGlobal('window', {})
+
+    const bodyChildren: unknown[] = []
+    const createElement = (tagName: string) => ({
+      id: '',
+      className: '',
+      tagName,
+      textContent: null as string | null,
+      style: {
+        cssText: '',
+        display: '',
+      },
+      attributes: {} as Record<string, string>,
+      children: [] as unknown[],
+      setAttribute(name: string, value: string) {
+        this.attributes[name] = value
+      },
+      append(...nodes: unknown[]) {
+        this.children.push(...nodes)
+      },
+      replaceChildren(...nodes: unknown[]) {
+        this.children = nodes
+      },
+    })
+    const documentStub = {
+      title: '',
+      body: {
+        children: bodyChildren,
+        append(node: unknown) {
+          bodyChildren.push(node)
+        },
+      },
+      createElement,
+      getElementById() {
+        return null
+      },
+    }
+    vi.stubGlobal('document', documentStub)
+
+    vi.doMock('svelte/reactivity', () => ({
+      createSubscriber: (start: (update: () => void) => () => void) => {
+        let cleanup: (() => void) | undefined
+        return () => {
+          cleanup ??= start(() => {})
+          return cleanup
+        }
+      },
+    }))
+
+    const {
+      configureRealtimeClientTransport,
+      resetRealtimeClientRuntime,
+    } = await import('@holo-js/realtime/client')
+    const { mutation } = await import('../src/realtime')
+    const renamePost = mutation({
+      name: 'posts.rename.denied',
+      access: 'public',
+      handler: async () => ({ id: 1 }),
+    })
+
+    configureRealtimeClientTransport({
+      async query<TResult>() {
+        return {
+          name: 'posts.list',
+          data: [] as TResult,
+          dependencies: [],
+          version: 1,
+        }
+      },
+      async mutate<TResult>() {
+        throw Object.assign(new Error('Only the author can update posts.'), {
+          status: 403,
+        }) as Error & { readonly status: 403 } & { readonly __result?: TResult }
+      },
+      subscribe() {
+        return () => {}
+      },
+    })
+
+    await expect(renamePost()).rejects.toThrow('Only the author can update posts.')
+    expect(documentStub.title).toBe('403: Only the author can update posts.')
+    expect(bodyChildren).toHaveLength(1)
+    expect(JSON.stringify(bodyChildren)).toContain('Only the author can update posts.')
+    resetRealtimeClientRuntime()
   })
 })

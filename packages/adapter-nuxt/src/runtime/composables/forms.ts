@@ -8,6 +8,7 @@ import {
   type UseFormResult,
   createFormClient,
 } from '@holo-js/forms/internal/client'
+import { normalizeNuxtClientHttpError, renderNuxtClientHttpErrorPage } from './client-errors'
 
 export {
   type ClientSubmitContext,
@@ -30,6 +31,11 @@ type FlashedValidationPayload = {
   readonly errors?: Record<string, readonly string[]>
 }
 type NuxtCookieValue = string | FlashedValidationPayload | null
+type FormHttpFailure = {
+  readonly ok: false
+  readonly status: number
+  readonly errors?: Record<string, readonly string[]>
+}
 
 const FORM_FAILURE_COOKIE = 'holo_form_failure'
 
@@ -113,6 +119,52 @@ function parseFlashedValidationPayload(): FlashedValidationPayload | undefined {
     }
   } catch {
     return undefined
+  }
+}
+
+function getHttpFailureMessage(result: FormHttpFailure): string | undefined {
+  return result.errors?._root?.[0]
+}
+
+function renderFormHttpFailure(result: unknown): void {
+  if (!isPlainObject(result)) {
+    return
+  }
+
+  const httpError = result.ok === false && typeof result.status === 'number'
+    ? normalizeNuxtClientHttpError({
+        status: result.status,
+        message: getHttpFailureMessage(result as FormHttpFailure),
+      })
+    : normalizeNuxtClientHttpError(result)
+
+  if (!httpError || httpError.status === 422) {
+    return
+  }
+
+  renderNuxtClientHttpErrorPage(httpError)
+}
+
+function createHttpHandledFormOptions<TData, TSuccess>(
+  options: UseFormOptions<TData, TSuccess>,
+): UseFormOptions<TData, TSuccess> {
+  const submitter = options.submitter
+  if (!submitter) {
+    return options
+  }
+
+  return {
+    ...options,
+    async submitter(context) {
+      try {
+        const result = await submitter(context)
+        renderFormHttpFailure(result)
+        return result
+      } catch (error) {
+        renderFormHttpFailure(error)
+        throw error
+      }
+    },
   }
 }
 
@@ -337,7 +389,7 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
   }
 
   const stopWatching = watchEffect((onCleanup) => {
-    const localForm = createFormClient(schemaDefinition, options)
+    const localForm = createFormClient(schemaDefinition, createHttpHandledFormOptions(options))
     syncValuesFromForm(localForm)
     form.value = localForm
     version.value = ++versionCounter
@@ -384,7 +436,9 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
       return await currentForm().validateField(path)
     },
     async submit() {
-      return await currentForm().submit()
+      const result = await currentForm().submit()
+      renderFormHttpFailure(result)
+      return result
     },
     reset(nextValues?: Partial<InferFormData<TSchema>>) {
       currentForm().reset(nextValues)

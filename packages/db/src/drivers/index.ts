@@ -15,7 +15,7 @@ function isModuleNotFoundError(error: unknown): boolean {
 }
 
 function dynamicImport<TModule>(specifier: string): Promise<TModule> {
-  return import(/* webpackIgnore: true */ specifier) as Promise<TModule>
+  return import(/* webpackIgnore: true */ /* @vite-ignore */ specifier) as Promise<TModule>
 }
 
 async function importDriverModule<TModule>(specifier: string, errorMessage: string): Promise<TModule> {

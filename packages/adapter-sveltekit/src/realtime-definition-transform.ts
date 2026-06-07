@@ -349,8 +349,7 @@ export function createRealtimeClientDefinitionModule(source: string): string {
 
   const factories = [...new Set(definitions.map(definition => definition.factoryName))]
   return [
-    'import \'@holo-js/adapter-sveltekit/realtime\'',
-    `import { ${factories.join(', ')} } from '@holo-js/realtime'`,
+    `import { ${factories.join(', ')} } from '@holo-js/adapter-sveltekit/realtime'`,
     '',
     ...definitions.flatMap((definition) => [
       `export const ${definition.exportedName} = ${definition.factoryName}({`,

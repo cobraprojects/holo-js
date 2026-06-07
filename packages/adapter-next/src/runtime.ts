@@ -1,4 +1,3 @@
-import { createRequire } from 'node:module'
 import { initializeHolo, type CreateHoloOptions } from '@holo-js/core'
 import type { DotPath, HoloConfigMap, LoadedHoloConfig, ValueAtPath } from '@holo-js/config'
 import { getCurrentNextRequest, type NextRequestLike } from './request-context'
@@ -30,9 +29,11 @@ type MutableNextCookieStore = {
 }
 
 type NextNavigationModule = {
-  readonly forbidden: () => never
-  readonly notFound: () => never
   readonly redirect: (url: string) => never
+}
+
+type NextHttpAccessFallbackError = Error & {
+  digest: `NEXT_HTTP_ERROR_FALLBACK;${403 | 404}`
 }
 
 type NextHeadersModule = {
@@ -43,7 +44,11 @@ type NextHeadersModule = {
   readonly headers: () => Promise<Headers>
 }
 
-const requireNextModule = createRequire(import.meta.url)
+function createNextHttpAccessFallbackError(status: 403 | 404, message: string): never {
+  const error = new Error(message) as NextHttpAccessFallbackError
+  error.digest = `NEXT_HTTP_ERROR_FALLBACK;${status}`
+  throw error
+}
 
 type NextRequestWithCookies = Request & {
   readonly cookies?: {
@@ -207,12 +212,11 @@ export function createNextHoloHelpers<TCustom extends HoloConfigMap = HoloConfig
     authRequest: options.authRequest ?? resolveNextAuthRequestAccessors(),
     authorizationError: options.authorizationError ?? {
       createError(decision) {
-        const { forbidden, notFound } = requireNextModule('next/navigation.js') as NextNavigationModule
         if (decision.status === 404) {
-          return notFound()
+          return createNextHttpAccessFallbackError(404, decision.message ?? 'Resource not found.')
         }
 
-        return forbidden()
+        return createNextHttpAccessFallbackError(403, decision.message ?? 'Forbidden')
       },
     },
   })
