@@ -225,7 +225,12 @@ export type {
 export type { DatabaseCapabilities } from './core/capabilities'
 export type { SecurityPolicy } from './security/policy'
 export type { ConnectionManagerOptions } from './connection/ConnectionManager'
-export type { EmptyScopeMap } from './model'
+export type {
+  EmptyScopeMap,
+  ModelRelationPath,
+  RelatedColumnNameForRelationPath,
+  RelationConstraintDefinition,
+} from './model'
 export type {
   MySQLAdapterOptions,
   MySQLClientLike,
@@ -240,11 +245,27 @@ export type {
   SQLiteStatementLike,
 } from './drivers'
 export type {
+  AnyModelDefinition,
   BelongsToManyRelationDefinition,
+  BelongsToManyRelationMethods,
   BelongsToRelationDefinition,
+  BelongsToRelationMethods,
   HasManyRelationDefinition,
+  HasManyRelationMethods,
+  HasManyThroughRelationDefinition,
+  HasOneOfManyRelationDefinition,
   HasOneRelationDefinition,
+  HasOneRelationMethods,
+  HasOneThroughRelationDefinition,
+  ModelDefinitionLike,
   ModelCollection,
+  ModelRepositoryLike,
+  MorphedByManyRelationDefinition,
+  MorphManyRelationDefinition,
+  MorphOneOfManyRelationDefinition,
+  MorphOneRelationDefinition,
+  MorphToManyRelationDefinition,
+  MorphToRelationDefinition,
   StaticModelApi,
 } from './model'
 export type {

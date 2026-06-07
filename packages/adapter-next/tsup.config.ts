@@ -8,6 +8,7 @@ export default defineConfig({
     config: 'src/config.ts',
     client: 'src/client.ts',
     realtime: 'src/realtime.ts',
+    'realtime-definition-loader': 'src/realtime-definition-loader.ts',
     runtime: 'src/runtime.ts',
   },
   format: ['esm'],

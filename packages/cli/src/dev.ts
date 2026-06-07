@@ -137,23 +137,40 @@ export async function runProjectDependencyInstall(
   }
 }
 
-export async function runProjectPrepare(projectRoot: string, io?: IoStreams): Promise<void> {
+type ProjectPrepareOptions = {
+  readonly syncFramework?: boolean
+}
+
+export async function runProjectPrepare(
+  projectRoot: string,
+  io?: IoStreams,
+  options: ProjectPrepareOptions = {},
+): Promise<void> {
   const project = await ensureProjectConfig(projectRoot)
   await ensureGeneratedSchemaPlaceholder(projectRoot, project.config)
   await prepareProjectDiscovery(projectRoot, project.config)
   await refreshFrameworkRunner(projectRoot)
 
-  await runNuxtPrepare(projectRoot)
-  await runSvelteKitSync(projectRoot)
+  const syncFramework = options.syncFramework ?? true
+  if (syncFramework) {
+    await runNuxtPrepare(projectRoot)
+    await runSvelteKitSync(projectRoot)
+  }
 
   const updatedDependencies = await syncManagedDriverDependencies(projectRoot)
   if (updatedDependencies && io) {
     await runProjectDependencyInstall(io, projectRoot)
     await prepareProjectDiscovery(projectRoot, project.config)
     await refreshFrameworkRunner(projectRoot)
-    await runNuxtPrepare(projectRoot)
-    await runSvelteKitSync(projectRoot)
+    if (syncFramework) {
+      await runNuxtPrepare(projectRoot)
+      await runSvelteKitSync(projectRoot)
+    }
   }
+}
+
+async function runProjectHotPrepare(projectRoot: string, io?: IoStreams): Promise<void> {
+  await runProjectPrepare(projectRoot, io, { syncFramework: false })
 }
 
 async function refreshFrameworkRunner(projectRoot: string): Promise<void> {
@@ -313,6 +330,13 @@ function resolveConfiguredChannelsPath(project: LoadedProjectConfig): string {
   return configuredPaths.channels ?? 'server/channels'
 }
 
+function resolveConfiguredRealtimePath(project: LoadedProjectConfig): string {
+  const configuredPaths = project.config.paths as typeof project.config.paths & {
+    readonly realtime?: string
+  }
+  return configuredPaths.realtime ?? 'server/realtime'
+}
+
 export function isDiscoveryRelevantPath(
   filePath: string,
   project: LoadedProjectConfig,
@@ -335,6 +359,7 @@ export function isDiscoveryRelevantPath(
   const authorizationAbilitiesPath = project.config.paths.authorizationAbilities || 'server/abilities'
   const broadcastPath = resolveConfiguredBroadcastPath(project)
   const channelsPath = resolveConfiguredChannelsPath(project)
+  const realtimePath = resolveConfiguredRealtimePath(project)
   const roots = [
     project.config.paths.models,
     project.config.paths.migrations,
@@ -347,6 +372,7 @@ export function isDiscoveryRelevantPath(
     authorizationAbilitiesPath,
     broadcastPath,
     channelsPath,
+    realtimePath,
     'config',
   ]
 
@@ -400,6 +426,7 @@ export async function collectDiscoveryWatchRoots(
   const authorizationAbilitiesPath = project.config.paths.authorizationAbilities || 'server/abilities'
   const broadcastPath = resolveConfiguredBroadcastPath(project)
   const channelsPath = resolveConfiguredChannelsPath(project)
+  const realtimePath = resolveConfiguredRealtimePath(project)
   const roots = [
     projectRoot,
     resolve(projectRoot, 'config'),
@@ -414,6 +441,7 @@ export async function collectDiscoveryWatchRoots(
     resolve(projectRoot, authorizationAbilitiesPath),
     resolve(projectRoot, broadcastPath),
     resolve(projectRoot, channelsPath),
+    resolve(projectRoot, realtimePath),
     resolve(projectRoot, dirname(project.config.paths.generatedSchema ?? '.holo-js/generated/schema.generated.ts')),
   ]
 
@@ -442,14 +470,15 @@ export async function runProjectDevServer(
   let project = await ensureProjectConfig(projectRoot)
   let refreshNonRecursiveWatchers: (() => Promise<void>) | undefined
   let requestChildRestart: (() => void) | undefined
+  const hotPrepare = prepare === runProjectPrepare ? runProjectHotPrepare : prepare
 
-  const prepareDiscovery = async (): Promise<void> => {
-    await prepare(projectRoot, io)
+  const prepareDiscovery = async (syncFramework = false): Promise<void> => {
+    await (syncFramework ? prepare : hotPrepare)(projectRoot, io)
     project = await ensureProjectConfig(projectRoot)
     await refreshNonRecursiveWatchers?.()
   }
 
-  await prepareDiscovery()
+  await prepareDiscovery(true)
 
   let pendingPrepare: Promise<void> | undefined
   let queued = false

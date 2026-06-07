@@ -3,11 +3,17 @@ import {
   TableQueryBuilder,
   collectDatabaseQueryDependencies,
   onDatabaseDependencyInvalidated,
+  serializeModels,
   type DatabaseContext,
   type DatabaseDependencyInvalidationEvent,
 } from '@holo-js/db'
 import { validate } from '@holo-js/validation'
 import type { ValidationSchema } from '@holo-js/validation'
+import {
+  isRealtimeDefinition,
+  nextDefinitionName,
+  realtimeDefinitionInternals,
+} from './definition'
 import type {
   RealtimeAccess,
   RealtimeAccessObject,
@@ -28,11 +34,8 @@ import type {
   RealtimeSubscriptionSnapshot,
 } from './contracts'
 
-const REALTIME_DEFINITION_MARKER = Symbol.for('holo-js.realtime.definition')
-
 type RuntimeState = {
   bindings?: RealtimeRuntimeBindings
-  nextDefinitionId: number
   nextSubscriptionId: number
   unsubscribeFromDatabase?: () => void
   subscriptions: Map<string, ActiveSubscription<RealtimeQueryDefinitionMetadata>>
@@ -85,7 +88,6 @@ function getRuntimeState(): RuntimeState {
   }
 
   runtime.__holoRealtimeRuntime__ ??= {
-    nextDefinitionId: 0,
     nextSubscriptionId: 0,
     subscriptions: new Map<string, ActiveSubscription<RealtimeQueryDefinitionMetadata>>(),
   }
@@ -106,27 +108,6 @@ function createRealtimeDatabaseContext(connection: DatabaseContext): RealtimeDat
 
 function getDatabaseContext(): RealtimeDatabaseContext {
   return createRealtimeDatabaseContext(getRuntimeState().bindings?.db?.() ?? DB.connection())
-}
-
-function nextDefinitionName(kind: 'query' | 'mutation'): string {
-  const state = getRuntimeState()
-  state.nextDefinitionId += 1
-  return `realtime.${kind}.${state.nextDefinitionId}`
-}
-
-function markDefinition<TDefinition extends object>(definition: TDefinition): TDefinition {
-  return Object.freeze(Object.defineProperty(definition, REALTIME_DEFINITION_MARKER, {
-    value: true,
-    enumerable: false,
-  }))
-}
-
-export function isRealtimeDefinition(value: unknown): value is RealtimeQueryDefinitionMetadata | RealtimeMutationDefinitionMetadata {
-  return !!(
-    value
-    && (typeof value === 'object' || typeof value === 'function')
-    && (value as { readonly [REALTIME_DEFINITION_MARKER]?: unknown })[REALTIME_DEFINITION_MARKER] === true
-  )
 }
 
 async function defaultLoadAuthModule(): Promise<RealtimeAuthModule | null> {
@@ -281,7 +262,7 @@ export async function executeRealtimeQuery<
 >(
   definition: RealtimeQueryDefinition<TName, TSchema, TAccess, TResult>,
   input?: RealtimeArgsForSchema<TSchema>,
-): Promise<RealtimeExecutionResult<Awaited<TResult>>>
+): Promise<RealtimeExecutionResult<TResult>>
 export async function executeRealtimeQuery<TDefinition extends RealtimeQueryDefinitionMetadata>(
   definition: TDefinition,
   input?: RealtimeArgsFor<TDefinition>,
@@ -304,7 +285,7 @@ export async function executeRealtimeQuery<TDefinition extends RealtimeQueryDefi
 
   return Object.freeze({
     name: definition.name,
-    data: result.value as RealtimeResultFor<TDefinition>,
+    data: serializeModels(result.value) as RealtimeResultFor<TDefinition>,
     dependencies: result.dependencies,
   })
 }
@@ -317,7 +298,7 @@ export async function executeRealtimeMutation<
 >(
   definition: RealtimeMutationDefinition<TName, TSchema, TAccess, TResult>,
   input?: RealtimeArgsForSchema<TSchema>,
-): Promise<RealtimeExecutionResult<Awaited<TResult>>>
+): Promise<RealtimeExecutionResult<TResult>>
 export async function executeRealtimeMutation<TDefinition extends RealtimeMutationDefinitionMetadata>(
   definition: TDefinition,
   input?: RealtimeArgsFor<TDefinition>,
@@ -338,7 +319,7 @@ export async function executeRealtimeMutation<TDefinition extends RealtimeMutati
 
   return Object.freeze({
     name: definition.name,
-    data: data as RealtimeResultFor<TDefinition>,
+    data: serializeModels(data) as RealtimeResultFor<TDefinition>,
     dependencies: Object.freeze([]),
   })
 }
@@ -385,8 +366,8 @@ export async function subscribeRealtimeQuery<
 >(
   definition: RealtimeQueryDefinition<TName, TSchema, TAccess, TResult>,
   input?: RealtimeArgsForSchema<TSchema>,
-  options?: RealtimeSubscribeOptions<Awaited<TResult>>,
-): Promise<RealtimeSubscription<Awaited<TResult>>>
+  options?: RealtimeSubscribeOptions<TResult>,
+): Promise<RealtimeSubscription<TResult>>
 export async function subscribeRealtimeQuery<TDefinition extends RealtimeQueryDefinitionMetadata>(
   definition: TDefinition,
   input?: RealtimeArgsFor<TDefinition>,
@@ -437,18 +418,17 @@ export function resetRealtimeRuntime(): void {
   const state = getRuntimeState()
   state.unsubscribeFromDatabase?.()
   state.bindings = undefined
-  state.nextDefinitionId = 0
   state.nextSubscriptionId = 0
   state.unsubscribeFromDatabase = undefined
   state.subscriptions.clear()
 }
 
 export const realtimeRuntimeInternals = {
-  REALTIME_DEFINITION_MARKER,
+  REALTIME_DEFINITION_MARKER: realtimeDefinitionInternals.REALTIME_DEFINITION_MARKER,
   createRealtimeDatabaseContext,
   getRuntimeState,
   handleDatabaseInvalidation,
   nextDefinitionName,
 }
 
-export { markDefinition, nextDefinitionName }
+export { isRealtimeDefinition, nextDefinitionName }

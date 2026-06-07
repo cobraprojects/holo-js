@@ -112,8 +112,8 @@ export interface RealtimeQueryDefinitionMetadata<
   readonly access: TAccess
   handler(
     context: RealtimeHandlerContext<RealtimeArgsForSchema<TSchema>, TAccess>
-  ): TResult | Promise<TResult>
-  readonly $types: RealtimeDefinitionTypes<RealtimeArgsForSchema<TSchema>, Awaited<TResult>, TAccess>
+  ): unknown | Promise<unknown>
+  readonly $types: RealtimeDefinitionTypes<RealtimeArgsForSchema<TSchema>, TResult, TAccess>
 }
 
 export type RealtimeQueryDefinition<
@@ -121,7 +121,7 @@ export type RealtimeQueryDefinition<
   TSchema extends ValidationSchema | undefined = ValidationSchema | undefined,
   TAccess extends RealtimeAccess<RealtimeArgsForSchema<TSchema>> = RealtimeAccess<RealtimeArgsForSchema<TSchema>>,
   TResult = unknown,
-> = RealtimeCaller<RealtimeArgsForSchema<TSchema>, Awaited<TResult>>
+> = RealtimeCaller<RealtimeArgsForSchema<TSchema>, TResult>
   & RealtimeQueryDefinitionMetadata<TName, TSchema, TAccess, TResult>
 
 export interface RealtimeMutationDefinitionMetadata<
@@ -136,8 +136,8 @@ export interface RealtimeMutationDefinitionMetadata<
   readonly access: TAccess
   readonly handler: (
     context: RealtimeHandlerContext<RealtimeArgsForSchema<TSchema>, TAccess>
-  ) => TResult | Promise<TResult>
-  readonly $types: RealtimeDefinitionTypes<RealtimeArgsForSchema<TSchema>, Awaited<TResult>, TAccess>
+  ) => unknown | Promise<unknown>
+  readonly $types: RealtimeDefinitionTypes<RealtimeArgsForSchema<TSchema>, TResult, TAccess>
 }
 
 export type RealtimeMutationDefinition<
@@ -145,7 +145,7 @@ export type RealtimeMutationDefinition<
   TSchema extends ValidationSchema | undefined = ValidationSchema | undefined,
   TAccess extends RealtimeAccess<RealtimeArgsForSchema<TSchema>> = RealtimeAccess<RealtimeArgsForSchema<TSchema>>,
   TResult = unknown,
-> = RealtimeCaller<RealtimeArgsForSchema<TSchema>, Promise<Awaited<TResult>>>
+> = RealtimeCaller<RealtimeArgsForSchema<TSchema>, Promise<TResult>>
   & RealtimeMutationDefinitionMetadata<TName, TSchema, TAccess, TResult>
 
 export type RealtimeArgsFor<TDefinition>

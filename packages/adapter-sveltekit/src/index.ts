@@ -9,7 +9,7 @@ import {
   type SerializedValidationException,
   isValidationException,
   validationInternals,
-} from '@holo-js/forms/schema'
+} from '@holo-js/validation'
 import type { HoloConfigMap } from '@holo-js/config'
 export {
   holoSvelteKitTransport,

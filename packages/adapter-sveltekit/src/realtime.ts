@@ -1,6 +1,8 @@
 import { createSubscriber } from 'svelte/reactivity'
 import {
   configureRealtimeClientRuntime,
+  configureRealtimeClientTransport,
+  createBroadcastRealtimeTransport,
   getRealtimeQueryStore,
 } from '@holo-js/realtime/client'
 import type { RealtimeArgsFor, RealtimeQueryDefinition, RealtimeResultFor } from '@holo-js/realtime'
@@ -48,6 +50,10 @@ function createReactiveView<TValue extends object>(
         return undefined
       }
 
+      if (Array.isArray(target) && key === 'length') {
+        return descriptor
+      }
+
       return {
         ...descriptor,
         configurable: true,
@@ -64,6 +70,10 @@ function createReactiveView<TValue extends object>(
 }
 
 function createRealtimeReactiveValue<TValue>(value: TValue, subscribe: () => void): TValue {
+  if (value === undefined) {
+    return createReactiveView([], subscribe, new WeakMap<object, object>()) as TValue
+  }
+
   if (Array.isArray(value)) {
     return createReactiveView([...value], subscribe, new WeakMap<object, object>()) as TValue
   }
@@ -78,6 +88,18 @@ function createRealtimeReactiveValue<TValue>(value: TValue, subscribe: () => voi
 function replaceRealtimeReactiveValue<TValue>(target: TValue, value: TValue): TValue {
   if (Array.isArray(target) && Array.isArray(value)) {
     target.splice(0, target.length, ...value)
+    return target
+  }
+
+  if (Array.isArray(target) && isPlainObject(value)) {
+    target.splice(0, target.length)
+    for (const key of Object.keys(target)) {
+      if (!(key in value)) {
+        delete (target as Record<string, unknown>)[key]
+      }
+    }
+
+    Object.assign(target, value)
     return target
   }
 
@@ -111,12 +133,15 @@ function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
     store.snapshot?.data as RealtimeResultFor<TDefinition>,
     subscribe,
   )
-  store.connect()
+  if ('window' in globalThis) {
+    store.connect()
+  }
   return current
 }
 
 configureRealtimeClientRuntime({
   useQuery: useReactiveRealtimeQuery,
 })
+configureRealtimeClientTransport(createBroadcastRealtimeTransport())
 
 export {}

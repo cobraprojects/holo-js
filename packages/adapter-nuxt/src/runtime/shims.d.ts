@@ -41,6 +41,7 @@ interface HoloRuntimeConfig extends RuntimeConfigInput {
  * runtime config, storage access, and Nitro route/plugin globals.
  */
 declare module '#app' {
+  export function defineNuxtPlugin<T>(plugin: T): T
   export function useRuntimeConfig(): HoloRuntimeConfig
   export function useCookie<T = string | null>(name: string): { value: T | null | undefined }
 }
@@ -67,6 +68,13 @@ declare module 'nitropack/runtime/storage' {
 }
 
 declare global {
+  interface ImportMeta {
+    glob<TModule>(
+      pattern: string,
+      options: { readonly eager: true },
+    ): Record<string, TModule>
+  }
+
   function createError(input: { statusCode: number, statusMessage: string }): Error
   function defineNitroErrorHandler<T>(handler: T): T
   function defineNitroPlugin<T>(plugin: T): T

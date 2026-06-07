@@ -63,6 +63,7 @@ describe('@holo-js/adapter-nuxt client', () => {
   })
 
   it('returns updated realtime query arrays by calling the query definition', async () => {
+    vi.stubGlobal('window', {})
     type Post = { readonly id: number, readonly title: string }
     type PostSnapshot = RealtimeSubscriptionSnapshot<readonly Post[]>
     let realtimeListener: ((snapshot: PostSnapshot) => void) | undefined
@@ -134,6 +135,81 @@ describe('@holo-js/adapter-nuxt client', () => {
     })
 
     expect(posts).toEqual([
+      { id: 1, title: 'First' },
+      { id: 2, title: 'Second' },
+    ])
+    resetRealtimeClientRuntime()
+  })
+
+  it('updates realtime query objects when the first snapshot arrives after render', async () => {
+    vi.stubGlobal('window', {})
+    type Post = { readonly id: number, readonly title: string }
+    type PostsData = { readonly posts: readonly Post[] }
+    type PostsSnapshot = RealtimeSubscriptionSnapshot<PostsData>
+    let realtimeListener: ((snapshot: PostsSnapshot) => void) | undefined
+
+    vi.doMock('vue', () => ({
+      onScopeDispose() {},
+      reactive<TValue extends object>(value: TValue) {
+        return value
+      },
+      shallowRef<TValue>(value: TValue) {
+        return { value }
+      },
+      watchEffect() {
+        return () => {}
+      },
+    }))
+
+    const {
+      configureRealtimeClientTransport,
+      resetRealtimeClientRuntime,
+    } = await import('@holo-js/realtime/client')
+    const { query } = await import('@holo-js/realtime')
+    await import('../src/runtime/composables/realtime')
+
+    const listPosts = query({
+      name: 'posts.object',
+      access: 'public',
+      handler: async () => ({ posts: [{ id: 1, title: 'First' }] }),
+    })
+
+    configureRealtimeClientTransport({
+      async query<TResult>() {
+        return {
+          name: 'posts.object',
+          data: { posts: [{ id: 1, title: 'First' }] } as TResult,
+          dependencies: [],
+          version: 1,
+        }
+      },
+      async mutate<TResult>() {
+        return {
+          name: 'posts.update',
+          data: { updated: true } as TResult,
+          dependencies: [],
+        }
+      },
+      subscribe<TResult>(_name: string, _args: Record<string, unknown>, listener: (snapshot: RealtimeSubscriptionSnapshot<TResult>) => void) {
+        realtimeListener = snapshot => listener(snapshot as unknown as RealtimeSubscriptionSnapshot<TResult>)
+        return () => {}
+      },
+    })
+
+    const data = listPosts()
+    realtimeListener?.({
+      name: 'posts.object',
+      data: {
+        posts: [
+          { id: 1, title: 'First' },
+          { id: 2, title: 'Second' },
+        ],
+      },
+      dependencies: [],
+      version: 2,
+    })
+
+    expect(data.posts).toEqual([
       { id: 1, title: 'First' },
       { id: 2, title: 'Second' },
     ])

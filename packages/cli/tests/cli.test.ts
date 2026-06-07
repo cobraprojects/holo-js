@@ -1481,15 +1481,8 @@ throw new Error('APP_KEY is required before config can load')
         dependencies: ['@holo-js/broadcast', '@holo-js/flux', '@holo-js/flux-react', '@holo-js/realtime'],
         generatedFiles: [
           { path: 'server/realtime', contains: '' },
-          { path: 'app/holo/realtime/provider.tsx', contains: '@holo-js/adapter-next/realtime' },
-          { path: 'app/holo/realtime/query/route.ts', contains: 'realtime-query-route' },
-          { path: 'app/holo/realtime/mutation/route.ts', contains: 'realtime-mutation-route' },
-          { path: 'app/holo/realtime/stream/route.ts', contains: 'realtime-stream-route' },
-          { path: '.holo-js/generated/next/realtime-query-route.ts', contains: 'handleRealtimeQueryRequest' },
-          { path: '.holo-js/generated/next/realtime-mutation-route.ts', contains: 'handleRealtimeMutationRequest' },
-          { path: '.holo-js/generated/next/realtime-stream-route.ts', contains: 'handleRealtimeStreamRequest' },
         ],
-        stdoutContains: ['created realtime framework routes'],
+        stdoutContains: ['created realtime framework setup'],
       },
       {
         name: 'security',
@@ -2528,11 +2521,14 @@ export default {
       storageDefaultDisk: 'local',
       optionalPackages: ['realtime'],
     })
-    expect(nextRealtimeFrameworkFiles.find(file => file.path === 'app/holo/realtime/provider.tsx')?.contents).toContain('@holo-js/adapter-next/realtime')
-    expect(nextRealtimeFrameworkFiles.find(file => file.path === 'app/layout.tsx')?.contents).toContain('HoloRealtime')
-    expect(nextRealtimeFrameworkFiles.find(file => file.path === '.holo-js/generated/next/realtime-query-route.ts')?.contents).toContain('return await handleRealtimeQueryRequest(request, { projectRoot: app.projectRoot })')
-    expect(nextRealtimeFrameworkFiles.find(file => file.path === '.holo-js/generated/next/realtime-mutation-route.ts')?.contents).toContain('return await handleRealtimeMutationRequest(request, { projectRoot: app.projectRoot })')
-    expect(nextRealtimeFrameworkFiles.find(file => file.path === '.holo-js/generated/next/realtime-stream-route.ts')?.contents).toContain('return await handleRealtimeStreamRequest(request, { projectRoot: app.projectRoot })')
+    expect(nextRealtimeFrameworkFiles.map(file => file.path)).not.toContain('app/holo/realtime/provider.tsx')
+    expect(nextRealtimeFrameworkFiles.find(file => file.path === 'app/layout.tsx')?.contents).not.toContain('HoloRealtime')
+    expect(nextRealtimeFrameworkFiles.map(file => file.path)).not.toContain('app/holo/realtime/query/route.ts')
+    expect(nextRealtimeFrameworkFiles.map(file => file.path)).not.toContain('app/holo/realtime/mutation/route.ts')
+    expect(nextRealtimeFrameworkFiles.map(file => file.path)).not.toContain('app/holo/realtime/stream/route.ts')
+    expect(nextRealtimeFrameworkFiles.map(file => file.path)).not.toContain('.holo-js/generated/next/realtime-query-route.ts')
+    expect(nextRealtimeFrameworkFiles.map(file => file.path)).not.toContain('.holo-js/generated/next/realtime-mutation-route.ts')
+    expect(nextRealtimeFrameworkFiles.map(file => file.path)).not.toContain('.holo-js/generated/next/realtime-stream-route.ts')
     const svelteRealtimeFrameworkPaths = projectInternals.renderFrameworkFiles({
       projectName: 'Svelte Realtime App',
       framework: 'sveltekit',
@@ -2541,10 +2537,10 @@ export default {
       storageDefaultDisk: 'local',
       optionalPackages: ['realtime'],
     })
-    expect(svelteRealtimeFrameworkPaths.find(file => file.path === 'src/hooks.client.ts')?.contents).toContain('@holo-js/adapter-sveltekit/realtime')
-    expect(svelteRealtimeFrameworkPaths.find(file => file.path === 'src/routes/holo/realtime/query/+server.ts')?.contents).toContain('return await handleRealtimeQueryRequest(request, { projectRoot: process.cwd() })')
-    expect(svelteRealtimeFrameworkPaths.find(file => file.path === 'src/routes/holo/realtime/mutation/+server.ts')?.contents).toContain('return await handleRealtimeMutationRequest(request, { projectRoot: process.cwd() })')
-    expect(svelteRealtimeFrameworkPaths.find(file => file.path === 'src/routes/holo/realtime/stream/+server.ts')?.contents).toContain('return await handleRealtimeStreamRequest(request, { projectRoot: process.cwd() })')
+    expect(svelteRealtimeFrameworkPaths.map(file => file.path)).not.toContain('src/hooks.client.ts')
+    expect(svelteRealtimeFrameworkPaths.map(file => file.path)).not.toContain('src/routes/holo/realtime/query/+server.ts')
+    expect(svelteRealtimeFrameworkPaths.map(file => file.path)).not.toContain('src/routes/holo/realtime/mutation/+server.ts')
+    expect(svelteRealtimeFrameworkPaths.map(file => file.path)).not.toContain('src/routes/holo/realtime/stream/+server.ts')
     expect(projectInternals.renderFrameworkFiles({
       projectName: 'Svelte App',
       framework: 'sveltekit',

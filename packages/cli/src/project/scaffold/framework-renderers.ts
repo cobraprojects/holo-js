@@ -237,12 +237,9 @@ function renderNextConfig(): string {
   ].join('\n')
 }
 
-function renderNextLayout(projectName: string, realtimeEnabled = false): string {
+function renderNextLayout(projectName: string): string {
   return [
     'import type { ReactNode } from \'react\'',
-    ...(realtimeEnabled
-      ? ['import { HoloRealtime } from \'./holo/realtime/provider\'']
-      : []),
     '',
     'export const metadata = {',
     `  title: ${JSON.stringify(projectName)},`,
@@ -252,33 +249,10 @@ function renderNextLayout(projectName: string, realtimeEnabled = false): string 
     'export default function RootLayout({ children }: { children: ReactNode }) {',
     '  return (',
     '    <html lang="en">',
-    realtimeEnabled
-      ? '      <body><HoloRealtime>{children}</HoloRealtime></body>'
-      : '      <body>{children}</body>',
+    '      <body>{children}</body>',
     '    </html>',
     '  )',
     '}',
-    '',
-  ].join('\n')
-}
-
-export function renderNextRealtimeProvider(): string {
-  return [
-    '\'use client\'',
-    '',
-    'import \'@holo-js/adapter-next/realtime\'',
-    'import type { ReactNode } from \'react\'',
-    '',
-    'export function HoloRealtime({ children }: { readonly children: ReactNode }) {',
-    '  return children',
-    '}',
-    '',
-  ].join('\n')
-}
-
-export function renderSvelteRealtimeClientHook(): string {
-  return [
-    'import \'@holo-js/adapter-sveltekit/realtime\'',
     '',
   ].join('\n')
 }
@@ -515,18 +489,6 @@ export function renderNextBroadcastConfigRoute(): string {
   return renderNextRouteBridge('../../../.holo-js/generated/next/broadcast-config-route', ['GET'])
 }
 
-export function renderNextRealtimeQueryRoute(): string {
-  return renderNextRouteBridge('../../../../.holo-js/generated/next/realtime-query-route', ['POST'])
-}
-
-export function renderNextRealtimeMutationRoute(): string {
-  return renderNextRouteBridge('../../../../.holo-js/generated/next/realtime-mutation-route', ['POST'])
-}
-
-export function renderNextRealtimeStreamRoute(): string {
-  return renderNextRouteBridge('../../../../.holo-js/generated/next/realtime-stream-route', ['GET'])
-}
-
 export function renderNextGeneratedBroadcastConfigRoute(): string {
   return [
     'import { renderBroadcastClientConfigResponse } from \'@holo-js/broadcast/client-config\'',
@@ -568,41 +530,16 @@ export function renderNextGeneratedBroadcastAuthRoute(): string {
   ].join('\n')
 }
 
-export function renderNextGeneratedRealtimeQueryRoute(): string {
-  return [
-    'import { handleRealtimeQueryRequest } from \'@holo-js/realtime/server\'',
-    'import { holo } from \'./holo\'',
-    '',
-    'export async function POST(request: Request) {',
-    '  const app = await holo.getApp()',
-    '  return await handleRealtimeQueryRequest(request, { projectRoot: app.projectRoot })',
-    '}',
-    '',
-  ].join('\n')
-}
+export function renderNextGeneratedRealtimeDefinitions(importPaths: readonly string[] = []): string {
+  const imports = importPaths.map((importPath, index) => (
+    `import * as realtimeModule${index} from ${JSON.stringify(importPath)}`
+  ))
+  const values = importPaths.map((_importPath, index) => `...Object.values(realtimeModule${index})`)
 
-export function renderNextGeneratedRealtimeMutationRoute(): string {
   return [
-    'import { handleRealtimeMutationRequest } from \'@holo-js/realtime/server\'',
-    'import { holo } from \'./holo\'',
+    ...imports,
     '',
-    'export async function POST(request: Request) {',
-    '  const app = await holo.getApp()',
-    '  return await handleRealtimeMutationRequest(request, { projectRoot: app.projectRoot })',
-    '}',
-    '',
-  ].join('\n')
-}
-
-export function renderNextGeneratedRealtimeStreamRoute(): string {
-  return [
-    'import { handleRealtimeStreamRequest } from \'@holo-js/realtime/server\'',
-    'import { holo } from \'./holo\'',
-    '',
-    'export async function GET(request: Request) {',
-    '  const app = await holo.getApp()',
-    '  return await handleRealtimeStreamRequest(request, { projectRoot: app.projectRoot })',
-    '}',
+    `export const realtimeDefinitions = [${values.join(', ')}] as const`,
     '',
   ].join('\n')
 }
@@ -627,11 +564,7 @@ export function renderNextManagedRouteFiles(options: {
       ? [{ path: '.holo-js/generated/next/broadcast-auth-route.ts', contents: renderNextGeneratedBroadcastAuthRoute() }]
       : []),
     ...(options.realtimeEnabled
-      ? [
-          { path: '.holo-js/generated/next/realtime-query-route.ts', contents: renderNextGeneratedRealtimeQueryRoute() },
-          { path: '.holo-js/generated/next/realtime-mutation-route.ts', contents: renderNextGeneratedRealtimeMutationRoute() },
-          { path: '.holo-js/generated/next/realtime-stream-route.ts', contents: renderNextGeneratedRealtimeStreamRoute() },
-        ]
+      ? [{ path: '.holo-js/generated/next/realtime-definitions.ts', contents: renderNextGeneratedRealtimeDefinitions() }]
       : []),
   ]
 }
@@ -696,7 +629,7 @@ function renderSvelteServerUserHooks(): string {
   ].join('\n')
 }
 
-function renderSvelteViteConfig(_storageEnabled: boolean): string {
+export function renderSvelteViteConfig(_storageEnabled: boolean, realtimeEnabled = false): string {
   const externals = [
     '      \'@holo-js/adapter-sveltekit\',',
     '      \'@holo-js/auth\',',
@@ -724,6 +657,7 @@ function renderSvelteViteConfig(_storageEnabled: boolean): string {
     '      \'@holo-js/queue\',',
     '      \'@holo-js/queue-db\',',
     '      \'@holo-js/queue-redis\',',
+    '      \'@holo-js/realtime\',',
     '      \'@holo-js/security\',',
     '      \'@holo-js/session\',',
     '      \'@holo-js/storage\',',
@@ -738,10 +672,13 @@ function renderSvelteViteConfig(_storageEnabled: boolean): string {
 
   return [
     'import { sveltekit } from \'@sveltejs/kit/vite\'',
+    ...(realtimeEnabled
+      ? ['import { holoSvelteKitRealtime } from \'@holo-js/adapter-sveltekit/vite\'']
+      : []),
     'import { defineConfig } from \'vite\'',
     '',
     'export default defineConfig({',
-    '  plugins: [sveltekit()],',
+    `  plugins: [${realtimeEnabled ? 'holoSvelteKitRealtime(), ' : ''}sveltekit()],`,
     '  server: {',
     '    fs: {',
     '      allow: [\'.holo-js/generated\'],',
@@ -965,7 +902,7 @@ export function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly 
     return [
       { path: 'next.config.ts', contents: renderNextConfig() },
       { path: 'next-env.d.ts', contents: renderNextEnvDts() },
-      { path: 'app/layout.tsx', contents: renderNextLayout(options.projectName, realtimeEnabled) },
+      { path: 'app/layout.tsx', contents: renderNextLayout(options.projectName) },
       { path: 'app/page.tsx', contents: renderNextPage(options.projectName) },
       ...(authEnabled
         ? [{ path: 'app/api/auth/user/route.ts', contents: renderNextCurrentAuthRoute() }]
@@ -976,65 +913,19 @@ export function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly 
       ...(broadcastEnabled
         ? [{ path: 'app/broadcasting/config/route.ts', contents: renderNextBroadcastConfigRoute() }]
         : []),
-      ...(realtimeEnabled
-        ? [
-            { path: 'app/holo/realtime/provider.tsx', contents: renderNextRealtimeProvider() },
-            { path: 'app/holo/realtime/query/route.ts', contents: renderNextRealtimeQueryRoute() },
-            { path: 'app/holo/realtime/mutation/route.ts', contents: renderNextRealtimeMutationRoute() },
-            { path: 'app/holo/realtime/stream/route.ts', contents: renderNextRealtimeStreamRoute() },
-          ]
-        : []),
       ...renderNextManagedRouteFiles({ authEnabled, broadcastEnabled, storageEnabled, realtimeEnabled }),
     ]
   }
 
   return [
     { path: 'svelte.config.js', contents: renderSvelteConfig() },
-    { path: 'vite.config.ts', contents: renderSvelteViteConfig(storageEnabled) },
+    { path: 'vite.config.ts', contents: renderSvelteViteConfig(storageEnabled, realtimeEnabled) },
     { path: 'src/hooks.ts', contents: renderSvelteUserHooks() },
     { path: 'src/hooks.server.ts', contents: renderSvelteServerUserHooks() },
     { path: 'src/app.html', contents: renderSvelteAppHtml() },
     { path: 'src/routes/+page.svelte', contents: renderSveltePage(options.projectName) },
     ...(authEnabled
       ? renderAuthRouteFiles('sveltekit')
-      : []),
-    ...(realtimeEnabled
-      ? [
-          { path: 'src/hooks.client.ts', contents: renderSvelteRealtimeClientHook() },
-          {
-            path: 'src/routes/holo/realtime/query/+server.ts',
-            contents: [
-              'import { handleRealtimeQueryRequest } from \'@holo-js/realtime/server\'',
-              '',
-              'export async function POST({ request }: { request: Request }) {',
-              '  return await handleRealtimeQueryRequest(request, { projectRoot: process.cwd() })',
-              '}',
-              '',
-            ].join('\n'),
-          },
-          {
-            path: 'src/routes/holo/realtime/mutation/+server.ts',
-            contents: [
-              'import { handleRealtimeMutationRequest } from \'@holo-js/realtime/server\'',
-              '',
-              'export async function POST({ request }: { request: Request }) {',
-              '  return await handleRealtimeMutationRequest(request, { projectRoot: process.cwd() })',
-              '}',
-              '',
-            ].join('\n'),
-          },
-          {
-            path: 'src/routes/holo/realtime/stream/+server.ts',
-            contents: [
-              'import { handleRealtimeStreamRequest } from \'@holo-js/realtime/server\'',
-              '',
-              'export async function GET({ request }: { request: Request }) {',
-              '  return await handleRealtimeStreamRequest(request, { projectRoot: process.cwd() })',
-              '}',
-              '',
-            ].join('\n'),
-          },
-        ]
       : []),
     ...renderSvelteManagedRuntimeFiles(),
   ]

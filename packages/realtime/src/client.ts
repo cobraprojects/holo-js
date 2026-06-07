@@ -36,25 +36,52 @@ type RealtimeClientState = {
   framework?: RealtimeFrameworkRuntime
   transport?: RealtimeClientTransport
   stores: Map<string, MutableRealtimeQueryStore<unknown>>
+  warnedMessages: Set<string>
 }
 
 type MutableRealtimeQueryStore<TResult> = RealtimeQueryStore<TResult> & {
   setSnapshot(snapshot: RealtimeSubscriptionSnapshot<TResult>): void
 }
 
-type BrowserEventSource = {
-  onmessage: ((event: { readonly data: string }) => void) | null
-  onerror: ((event: unknown) => void) | null
+const missingTransportMessage = 'Realtime is not connected because broadcast support is not configured. Run "holo install broadcast" and start the broadcast worker with "holo broadcast:work" to enable live updates.'
+const unavailableTransportMessage = 'Realtime live updates are unavailable because the broadcast worker is not reachable. Start the worker with "holo broadcast:work" to enable live updates.'
+
+type BroadcastClientConfig = {
+  readonly key: string
+  readonly host: string
+  readonly port: number
+  readonly path: string
+  readonly scheme: 'http' | 'https'
+}
+
+type RealtimeWireAction = 'query' | 'mutation' | 'subscribe' | 'unsubscribe'
+
+type RealtimeWireResult<TResult> = {
+  readonly id: string
+  readonly result?: RealtimeExecutionResult<TResult>
+  readonly snapshot?: RealtimeSubscriptionSnapshot<TResult>
+}
+
+type RealtimeWebSocketLike = {
+  readonly readyState: number
+  send(value: string): void
   close(): void
+  addEventListener(event: 'open', listener: () => void): void
+  addEventListener(event: 'close', listener: () => void): void
+  addEventListener(event: 'error', listener: () => void): void
+  addEventListener(event: 'message', listener: (event: { readonly data: unknown }) => void): void
 }
 
-type BrowserEventSourceConstructor = new (url: string) => BrowserEventSource
+type RealtimeWebSocketConstructor = new (url: string) => RealtimeWebSocketLike
 
-type BrowserGlobals = typeof globalThis & {
-  EventSource?: BrowserEventSourceConstructor
+type RealtimeClientGlobals = typeof globalThis & {
+  readonly WebSocket?: RealtimeWebSocketConstructor
+  readonly fetch?: typeof fetch
+  readonly location?: {
+    readonly protocol?: string
+    readonly hostname?: string
+  }
 }
-
-const MAX_REALTIME_STREAM_URL_LENGTH = 8000
 
 function getRealtimeClientState(): RealtimeClientState {
   const runtime = globalThis as typeof globalThis & {
@@ -63,8 +90,19 @@ function getRealtimeClientState(): RealtimeClientState {
 
   runtime.__holoRealtimeClient__ ??= {
     stores: new Map<string, MutableRealtimeQueryStore<unknown>>(),
+    warnedMessages: new Set<string>(),
   }
   return runtime.__holoRealtimeClient__
+}
+
+function warnRealtimeOnce(message: string): void {
+  const state = getRealtimeClientState()
+  if (state.warnedMessages.has(message)) {
+    return
+  }
+
+  state.warnedMessages.add(message)
+  console.warn(`[@holo-js/realtime] ${message}`)
 }
 
 function stableStringify(value: unknown): string {
@@ -94,35 +132,291 @@ function createStoreKey(name: string, args: Record<string, unknown>): string {
   return `${name}:${stableStringify(args)}`
 }
 
-function createFetchRealtimeTransport(): RealtimeClientTransport {
+function createMissingRealtimeTransport(): RealtimeClientTransport {
   return {
-    async query<TResult>(name: string, args: Record<string, unknown>) {
-      const response = await fetch('/holo/realtime/query', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({ name, args }),
-      })
-      if (!response.ok) {
-        throw new Error(`Realtime query failed with status ${response.status}.`)
+    async query<TResult>(): Promise<RealtimeSubscriptionSnapshot<TResult>> {
+      warnRealtimeOnce(missingTransportMessage)
+      throw new Error(missingTransportMessage)
+    },
+    async mutate<TResult>(): Promise<RealtimeExecutionResult<TResult>> {
+      warnRealtimeOnce(missingTransportMessage)
+      throw new Error(missingTransportMessage)
+    },
+    subscribe<TResult>(
+      _name: string,
+      _args: Record<string, unknown>,
+      _listener: (snapshot: RealtimeSubscriptionSnapshot<TResult>) => void,
+      onError: (error: unknown) => void,
+    ) {
+      warnRealtimeOnce(missingTransportMessage)
+      onError(new Error(missingTransportMessage))
+      return () => {}
+    },
+  }
+}
+
+function parseRealtimeJsonObject(value: string): Record<string, unknown> {
+  const parsed = JSON.parse(value) as unknown
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return {}
+  }
+
+  return parsed as Record<string, unknown>
+}
+
+function parseWireData(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') {
+    return parseRealtimeJsonObject(value)
+  }
+
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {}
+  }
+
+  return value as Record<string, unknown>
+}
+
+function resolveWebSocketScheme(scheme: BroadcastClientConfig['scheme'], globals: RealtimeClientGlobals): 'ws' | 'wss' {
+  if (scheme === 'https') {
+    return 'wss'
+  }
+
+  if (globals.location?.protocol === 'https:') {
+    return 'wss'
+  }
+
+  return 'ws'
+}
+
+function resolveBrowserHost(host: string, globals: RealtimeClientGlobals): string {
+  const browserHostname = globals.location?.hostname
+  if (!browserHostname) {
+    return host === '0.0.0.0' ? '127.0.0.1' : host
+  }
+
+  const loopbackHosts = new Set(['0.0.0.0', '127.0.0.1', 'localhost', '::1', '[::1]'])
+  if (loopbackHosts.has(host) && loopbackHosts.has(browserHostname)) {
+    return browserHostname
+  }
+
+  return host
+}
+
+async function resolveBroadcastClientConfig(
+  endpoint: string,
+  globals: RealtimeClientGlobals,
+): Promise<BroadcastClientConfig> {
+  if (!globals.fetch) {
+    throw new Error('Realtime live updates require fetch support in this runtime.')
+  }
+
+  const response = await globals.fetch(endpoint, {
+    credentials: 'same-origin',
+  })
+  if (!response.ok) {
+    throw new Error(`Realtime broadcast config failed with HTTP ${response.status}.`)
+  }
+
+  const config = await response.json() as Partial<BroadcastClientConfig>
+  if (
+    typeof config.key !== 'string'
+    || typeof config.host !== 'string'
+    || typeof config.port !== 'number'
+    || typeof config.path !== 'string'
+    || (config.scheme !== 'http' && config.scheme !== 'https')
+  ) {
+    throw new Error('Realtime broadcast config response is invalid.')
+  }
+
+  return {
+    key: config.key,
+    host: config.host,
+    port: config.port,
+    path: config.path,
+    scheme: config.scheme,
+  }
+}
+
+export function createBroadcastRealtimeTransport(options: {
+  readonly configEndpoint?: string
+} = {}): RealtimeClientTransport {
+  const pending = new Map<string, {
+    readonly resolve: (value: RealtimeWireResult<unknown>) => void
+    readonly reject: (error: unknown) => void
+  }>()
+  const subscriptions = new Map<string, {
+    readonly listener: (snapshot: RealtimeSubscriptionSnapshot<unknown>) => void
+    readonly onError: (error: unknown) => void
+  }>()
+  let socket: RealtimeWebSocketLike | undefined
+  let connecting: Promise<RealtimeWebSocketLike> | undefined
+  let nextRequestId = 0
+
+  const rejectPending = (error: unknown): void => {
+    for (const request of pending.values()) {
+      request.reject(error)
+    }
+    pending.clear()
+    for (const subscription of subscriptions.values()) {
+      subscription.onError(error)
+    }
+  }
+
+  const handleMessage = (event: { readonly data: unknown }): void => {
+    if (typeof event.data !== 'string') {
+      return
+    }
+
+    const message = parseRealtimeJsonObject(event.data)
+    const eventName = typeof message.event === 'string' ? message.event : ''
+    const data = parseWireData(message.data)
+    const id = typeof data.id === 'string' ? data.id : ''
+    if (!id) {
+      return
+    }
+
+    if (eventName === 'holo:realtime:error') {
+      const error = new Error(typeof data.message === 'string' ? data.message : unavailableTransportMessage)
+      pending.get(id)?.reject(error)
+      pending.delete(id)
+      subscriptions.get(id)?.onError(error)
+      return
+    }
+
+    if (eventName === 'holo:realtime:result') {
+      pending.get(id)?.resolve(data as RealtimeWireResult<unknown>)
+      pending.delete(id)
+      return
+    }
+
+    if (eventName === 'holo:realtime:snapshot') {
+      const snapshot = data.snapshot
+      if (snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)) {
+        subscriptions.get(id)?.listener(snapshot as RealtimeSubscriptionSnapshot<unknown>)
+      }
+    }
+  }
+
+  const connect = async (): Promise<RealtimeWebSocketLike> => {
+    const globals = globalThis as RealtimeClientGlobals
+    if (socket?.readyState === 1) {
+      return socket
+    }
+
+    if (connecting) {
+      return await connecting
+    }
+
+    connecting = (async () => {
+      const WebSocketConstructor = globals.WebSocket
+      if (!WebSocketConstructor) {
+        throw new Error('Realtime live updates require WebSocket support in this runtime.')
       }
 
-      return await response.json() as RealtimeSubscriptionSnapshot<TResult>
+      const config = await resolveBroadcastClientConfig(options.configEndpoint ?? '/broadcasting/config', globals)
+      const scheme = resolveWebSocketScheme(config.scheme, globals)
+      const host = resolveBrowserHost(config.host, globals)
+      const normalizedPath = `/${config.path.replace(/^\/+|\/+$/g, '')}`
+      const url = `${scheme}://${host}:${config.port}${normalizedPath}/${encodeURIComponent(config.key)}`
+
+      return await new Promise<RealtimeWebSocketLike>((resolve, reject) => {
+        const nextSocket = new WebSocketConstructor(url)
+        socket = nextSocket
+        nextSocket.addEventListener('open', () => {
+          resolve(nextSocket)
+        })
+        nextSocket.addEventListener('message', handleMessage)
+        nextSocket.addEventListener('close', () => {
+          socket = undefined
+          connecting = undefined
+          const error = new Error(unavailableTransportMessage)
+          warnRealtimeOnce(unavailableTransportMessage)
+          rejectPending(error)
+        })
+        nextSocket.addEventListener('error', () => {
+          socket = undefined
+          connecting = undefined
+          const error = new Error(unavailableTransportMessage)
+          warnRealtimeOnce(unavailableTransportMessage)
+          reject(error)
+          rejectPending(error)
+        })
+      })
+    })().finally(() => {
+      connecting = undefined
+    })
+
+    return await connecting
+  }
+
+  const send = async <TResult>(
+    action: RealtimeWireAction,
+    name: string,
+    args: Record<string, unknown>,
+    id = `realtime.${++nextRequestId}`,
+  ): Promise<RealtimeWireResult<TResult>> => {
+    try {
+      const connectedSocket = await connect()
+      const response = new Promise<RealtimeWireResult<TResult>>((resolve, reject) => {
+        pending.set(id, {
+          resolve: value => resolve(value as RealtimeWireResult<TResult>),
+          reject,
+        })
+      })
+      connectedSocket.send(JSON.stringify({
+        event: 'holo:realtime',
+        data: {
+          id,
+          action,
+          name,
+          args,
+        },
+      }))
+      return await response
+    } catch (error) {
+      warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
+      throw error
+    }
+  }
+
+  const sendSubscription = async (
+    name: string,
+    args: Record<string, unknown>,
+    id: string,
+  ): Promise<void> => {
+    try {
+      const connectedSocket = await connect()
+      connectedSocket.send(JSON.stringify({
+        event: 'holo:realtime',
+        data: {
+          id,
+          action: 'subscribe',
+          name,
+          args,
+        },
+      }))
+    } catch (error) {
+      warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
+      throw error
+    }
+  }
+
+  const transport: RealtimeClientTransport = {
+    async query<TResult>(name: string, args: Record<string, unknown>) {
+      const response = await send<TResult>('query', name, args)
+      if (!response.snapshot) {
+        throw new Error('Realtime query response did not include a snapshot.')
+      }
+
+      return response.snapshot
     },
     async mutate<TResult>(name: string, args: Record<string, unknown>) {
-      const response = await fetch('/holo/realtime/mutation', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({ name, args }),
-      })
-      if (!response.ok) {
-        throw new Error(`Realtime mutation failed with status ${response.status}.`)
+      const response = await send<TResult>('mutation', name, args)
+      if (!response.result) {
+        throw new Error('Realtime mutation response did not include a result.')
       }
 
-      return await response.json() as RealtimeExecutionResult<TResult>
+      return response.result
     },
     subscribe<TResult>(
       name: string,
@@ -130,28 +424,33 @@ function createFetchRealtimeTransport(): RealtimeClientTransport {
       listener: (snapshot: RealtimeSubscriptionSnapshot<TResult>) => void,
       onError: (error: unknown) => void,
     ) {
-      const EventSourceConstructor = (globalThis as BrowserGlobals).EventSource
-      if (!EventSourceConstructor) {
-        return () => {}
-      }
-
-      const url = `/holo/realtime/stream?name=${encodeURIComponent(name)}&args=${encodeURIComponent(JSON.stringify(args))}`
-      if (url.length > MAX_REALTIME_STREAM_URL_LENGTH) {
-        onError(new Error('Realtime stream arguments are too large for EventSource transport.'))
-        return () => {}
-      }
-
-      const source = new EventSourceConstructor(url)
-      source.onmessage = (event) => {
-        listener(JSON.parse(event.data) as RealtimeSubscriptionSnapshot<TResult>)
-      }
-      source.onerror = onError
+      const id = `realtime.${++nextRequestId}`
+      subscriptions.set(id, {
+        listener: snapshot => listener(snapshot as RealtimeSubscriptionSnapshot<TResult>),
+        onError,
+      })
+      void sendSubscription(name, args, id).catch((error) => {
+        warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
+        onError(error)
+      })
 
       return () => {
-        source.close()
+        subscriptions.delete(id)
+        if (socket?.readyState === 1) {
+          socket.send(JSON.stringify({
+            event: 'holo:realtime',
+            data: {
+              id,
+              action: 'unsubscribe',
+              args: {},
+            },
+          }))
+        }
       }
     },
   }
+
+  return transport
 }
 
 function createRealtimeQueryStore<TResult>(
@@ -212,10 +511,19 @@ export function configureRealtimeClientTransport(transport?: RealtimeClientTrans
   getRealtimeClientState().transport = transport
 }
 
+export function hasConfiguredRealtimeClientTransport(): boolean {
+  return !!getRealtimeClientState().transport
+}
+
+export function hasConfiguredRealtimeClientRuntime(): boolean {
+  return !!getRealtimeClientState().framework
+}
+
 export function resetRealtimeClientRuntime(): void {
   const state = getRealtimeClientState()
   state.framework = undefined
   state.transport = undefined
+  state.warnedMessages.clear()
   state.stores.clear()
 }
 
@@ -231,7 +539,7 @@ export function getRealtimeQueryStore<TDefinition extends RealtimeQueryDefinitio
     return existing
   }
 
-  const transport = state.transport ?? createFetchRealtimeTransport()
+  const transport = state.transport ?? createMissingRealtimeTransport()
   const store = createRealtimeQueryStore<RealtimeResultFor<TDefinition>>(definition.name, args, transport)
   state.stores.set(key, store as MutableRealtimeQueryStore<unknown>)
   return store
@@ -252,7 +560,7 @@ export function useRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
 ): RealtimeResultFor<TDefinition> {
   const framework = getRealtimeClientState().framework
   if (!framework) {
-    throw new Error('Realtime queries require a Holo framework client runtime.')
+    return getRealtimeQueryStore(definition, args).snapshot?.data as RealtimeResultFor<TDefinition>
   }
 
   return framework.useQuery(definition, args)
@@ -263,15 +571,17 @@ export async function useRealtimeMutation<TDefinition extends RealtimeMutationDe
   input: RealtimeArgsFor<TDefinition>,
 ): Promise<RealtimeResultFor<TDefinition>> {
   const args = normalizeArgs(input)
-  const transport = getRealtimeClientState().transport ?? createFetchRealtimeTransport()
+  const transport = getRealtimeClientState().transport ?? createMissingRealtimeTransport()
   const result = await transport.mutate<RealtimeResultFor<TDefinition>>(definition.name, args)
 
   return result.data
 }
 
 export const realtimeClientInternals = {
-  createFetchRealtimeTransport,
+  createBroadcastRealtimeTransport,
+  createMissingRealtimeTransport,
   createRealtimeQueryStore,
   getRealtimeClientState,
+  missingTransportMessage,
   stableStringify,
 }

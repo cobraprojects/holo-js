@@ -1,5 +1,5 @@
 import { mkdir, readdir } from 'node:fs/promises'
-import { dirname, extname, resolve } from 'node:path'
+import { dirname, extname, relative, resolve, sep } from 'node:path'
 import { loadConfigDirectory } from '@holo-js/config'
 import {
   loadProjectConfig,
@@ -101,15 +101,9 @@ import {
 import {
   renderNextBroadcastConfigRoute,
   renderNextGeneratedBroadcastConfigRoute,
-  renderNextGeneratedRealtimeMutationRoute,
-  renderNextGeneratedRealtimeQueryRoute,
-  renderNextGeneratedRealtimeStreamRoute,
-  renderNextRealtimeMutationRoute,
-  renderNextRealtimeProvider,
-  renderNextRealtimeQueryRoute,
-  renderNextRealtimeStreamRoute,
+  renderNextGeneratedRealtimeDefinitions,
   renderNextRuntimeBootstrap,
-  renderSvelteRealtimeClientHook,
+  renderSvelteViteConfig,
 } from './scaffold/framework-renderers'
 import {
   createAuthMigrationFiles,
@@ -159,30 +153,52 @@ async function resolveExistingModelPath(modelsRoot: string, modelName: string): 
   return undefined
 }
 
-function injectNextRealtimeProvider(layoutContents: string): string | undefined {
-  if (layoutContents.includes('HoloRealtime')) {
+function injectSvelteRealtimeVitePlugin(viteConfigContents: string): string | undefined {
+  if (viteConfigContents.includes('@holo-js/adapter-sveltekit/vite')) {
     return undefined
   }
 
-  const nextContents = layoutContents
-    .replace(
-      '<body>{children}</body>',
-      '<body><HoloRealtime>{children}</HoloRealtime></body>',
-    )
+  const withImport = viteConfigContents.replace(
+    'import { sveltekit } from \'@sveltejs/kit/vite\'',
+    [
+      'import { sveltekit } from \'@sveltejs/kit/vite\'',
+      'import { holoSvelteKitRealtime } from \'@holo-js/adapter-sveltekit/vite\'',
+    ].join('\n'),
+  )
+  const withPlugin = withImport.replace(
+    'plugins: [sveltekit()]',
+    'plugins: [holoSvelteKitRealtime(), sveltekit()]',
+  )
 
-  if (nextContents === layoutContents) {
-    return undefined
-  }
-
-  return `import { HoloRealtime } from './holo/realtime/provider'\n${nextContents}`
+  return withPlugin === viteConfigContents ? undefined : withPlugin
 }
 
-function injectSvelteRealtimeClientHook(hookContents: string): string | undefined {
-  if (hookContents.includes('@holo-js/adapter-sveltekit/realtime')) {
-    return undefined
-  }
+const realtimeDefinitionExtensions = new Set(['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'])
 
-  return `${renderSvelteRealtimeClientHook()}${hookContents}`
+async function collectRealtimeDefinitionFiles(root: string): Promise<readonly string[]> {
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
+  const files = await Promise.all(entries.map(async (entry) => {
+    const entryPath = resolve(root, entry.name)
+    if (entry.isDirectory()) {
+      return await collectRealtimeDefinitionFiles(entryPath)
+    }
+
+    return realtimeDefinitionExtensions.has(extname(entry.name)) ? [entryPath] : []
+  }))
+
+  return files.flat().sort((left, right) => left.localeCompare(right))
+}
+
+async function renderNextRealtimeDefinitions(projectRoot: string): Promise<string> {
+  const generatedRoot = resolve(projectRoot, '.holo-js/generated/next')
+  const files = await collectRealtimeDefinitionFiles(resolve(projectRoot, 'server/realtime'))
+  const importPaths = files.map((filePath) => {
+    const withoutExtension = filePath.slice(0, -extname(filePath).length)
+    const importPath = relative(generatedRoot, withoutExtension).split(sep).join('/')
+    return importPath.startsWith('.') ? importPath : `./${importPath}`
+  })
+
+  return renderNextGeneratedRealtimeDefinitions(importPaths)
 }
 
 async function resolveExistingAuthMigrationFiles(migrationsRoot: string): Promise<Map<AuthMigrationSlug, string>> {
@@ -583,15 +599,9 @@ export async function installRealtimeIntoProject(
 
   if (framework === 'next') {
     const routes = [
-      { path: 'app/holo/realtime/provider.tsx', contents: renderNextRealtimeProvider() },
-      { path: 'app/holo/realtime/query/route.ts', contents: renderNextRealtimeQueryRoute() },
-      { path: 'app/holo/realtime/mutation/route.ts', contents: renderNextRealtimeMutationRoute() },
-      { path: 'app/holo/realtime/stream/route.ts', contents: renderNextRealtimeStreamRoute() },
       { path: '.holo-js/generated/next/holo.ts', contents: renderNextHoloHelper() },
       { path: '.holo-js/generated/next/bootstrap.mjs', contents: renderNextRuntimeBootstrap() },
-      { path: '.holo-js/generated/next/realtime-query-route.ts', contents: renderNextGeneratedRealtimeQueryRoute() },
-      { path: '.holo-js/generated/next/realtime-mutation-route.ts', contents: renderNextGeneratedRealtimeMutationRoute() },
-      { path: '.holo-js/generated/next/realtime-stream-route.ts', contents: renderNextGeneratedRealtimeStreamRoute() },
+      { path: '.holo-js/generated/next/realtime-definitions.ts', contents: await renderNextRealtimeDefinitions(projectRoot) },
     ] as const
 
     for (const route of routes) {
@@ -600,71 +610,19 @@ export async function installRealtimeIntoProject(
         createdFrameworkSetup = true
       }
       await writeTextFile(routePath, route.contents)
-    }
-    const layoutPath = resolve(projectRoot, 'app/layout.tsx')
-    if (await pathExists(layoutPath)) {
-      const layoutContents = await readTextFile(layoutPath)
-      const nextLayoutContents = layoutContents ? injectNextRealtimeProvider(layoutContents) : undefined
-      if (nextLayoutContents) {
-        createdFrameworkSetup = true
-        await writeTextFile(layoutPath, nextLayoutContents)
-      }
     }
   } else if (framework === 'sveltekit') {
-    const routes = [
-      {
-        path: 'src/routes/holo/realtime/query/+server.ts',
-        contents: [
-          'import { handleRealtimeQueryRequest } from \'@holo-js/realtime/server\'',
-          '',
-          'export async function POST({ request }: { request: Request }) {',
-          '  return await handleRealtimeQueryRequest(request, { projectRoot: process.cwd() })',
-          '}',
-          '',
-        ].join('\n'),
-      },
-      {
-        path: 'src/routes/holo/realtime/mutation/+server.ts',
-        contents: [
-          'import { handleRealtimeMutationRequest } from \'@holo-js/realtime/server\'',
-          '',
-          'export async function POST({ request }: { request: Request }) {',
-          '  return await handleRealtimeMutationRequest(request, { projectRoot: process.cwd() })',
-          '}',
-          '',
-        ].join('\n'),
-      },
-      {
-        path: 'src/routes/holo/realtime/stream/+server.ts',
-        contents: [
-          'import { handleRealtimeStreamRequest } from \'@holo-js/realtime/server\'',
-          '',
-          'export async function GET({ request }: { request: Request }) {',
-          '  return await handleRealtimeStreamRequest(request, { projectRoot: process.cwd() })',
-          '}',
-          '',
-        ].join('\n'),
-      },
-    ] as const
-
-    for (const route of routes) {
-      const routePath = resolve(projectRoot, route.path)
-      if (!(await pathExists(routePath))) {
+    const viteConfigPath = resolve(projectRoot, 'vite.config.ts')
+    if (await pathExists(viteConfigPath)) {
+      const existingViteConfig = await readTextFile(viteConfigPath)
+      const viteConfigContents = existingViteConfig ? injectSvelteRealtimeVitePlugin(existingViteConfig) : undefined
+      if (viteConfigContents) {
         createdFrameworkSetup = true
-      }
-      await writeTextFile(routePath, route.contents)
-    }
-    const clientHookPath = resolve(projectRoot, 'src/hooks.client.ts')
-    if (await pathExists(clientHookPath)) {
-      const existingHookContents = await readTextFile(clientHookPath)
-      const hookContents = existingHookContents ? injectSvelteRealtimeClientHook(existingHookContents) : undefined
-      if (hookContents) {
-        createdFrameworkSetup = true
-        await writeTextFile(clientHookPath, hookContents)
+        await writeTextFile(viteConfigPath, viteConfigContents)
       }
     } else {
       createdFrameworkSetup = true
-      await writeTextFile(clientHookPath, renderSvelteRealtimeClientHook())
+      await writeTextFile(viteConfigPath, renderSvelteViteConfig(false, true))
     }
   }
 

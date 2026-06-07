@@ -54,14 +54,21 @@ describe('@holo-js/realtime client runtime', () => {
     expect(calls).toEqual([{ limit: 2 }, {}])
   })
 
-  it('throws when a query is called before a framework runtime is configured', () => {
+  it('returns the hydrated snapshot when a query is called before a framework runtime is configured', () => {
     const listPosts = query({
       name: 'posts.list',
       access: 'public',
       handler: async () => [{ id: 1, title: 'First' }],
     })
 
-    expect(() => useRealtimeQuery(listPosts, {})).toThrow('Realtime queries require a Holo framework client runtime.')
+    hydrateRealtimeQuery(listPosts, {}, {
+      name: 'posts.list',
+      data: [{ id: 1, title: 'First' }],
+      dependencies: [],
+      version: 1,
+    })
+
+    expect(useRealtimeQuery(listPosts, {})).toEqual([{ id: 1, title: 'First' }])
   })
 
   it('hydrates and refreshes query stores through the configured transport', async () => {
@@ -259,36 +266,196 @@ describe('@holo-js/realtime client runtime', () => {
     expect(calls).toEqual(['failed unsubscribe'])
   })
 
-  it('rejects stream subscriptions before creating an oversized EventSource URL', () => {
+  it('does not create hidden route requests when no client transport is configured', async () => {
     const errors: unknown[] = []
-    const createdUrls: string[] = []
-    class TestEventSource {
-      onmessage: ((event: { readonly data: string }) => void) | null = null
-      onerror: ((event: unknown) => void) | null = null
+    const fetchSpy = vi.fn()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.stubGlobal('fetch', fetchSpy)
 
-      constructor(url: string) {
-        createdUrls.push(url)
-      }
-
-      close(): void {}
-    }
-
-    vi.stubGlobal('EventSource', TestEventSource)
-
-    const transport = realtimeClientInternals.createFetchRealtimeTransport()
+    const transport = realtimeClientInternals.createMissingRealtimeTransport()
     const unsubscribe = transport.subscribe(
       'posts.list',
-      { search: 'x'.repeat(9000) },
+      { search: 'x' },
       () => {},
       error => errors.push(error),
     )
 
     unsubscribe()
 
-    expect(createdUrls).toEqual([])
+    await expect(transport.query('posts.list', {})).rejects.toThrow(realtimeClientInternals.missingTransportMessage)
+    await expect(transport.mutate('posts.create', {})).rejects.toThrow(realtimeClientInternals.missingTransportMessage)
+    expect(fetchSpy).not.toHaveBeenCalled()
     expect(errors).toHaveLength(1)
     expect(errors[0]).toBeInstanceOf(Error)
-    expect((errors[0] as Error).message).toContain('Realtime stream arguments are too large')
+    expect((errors[0] as Error).message).toBe(realtimeClientInternals.missingTransportMessage)
+  })
+
+  it('uses the broadcast websocket transport for query, mutation, and subscriptions', async () => {
+    const sentFrames: string[] = []
+    const websocketUrls: string[] = []
+    const listeners = new Map<string, Set<(event?: { readonly data: unknown }) => void>>()
+
+    class TestWebSocket {
+      readonly readyState = 1
+
+      constructor(readonly url: string) {
+        websocketUrls.push(url)
+      }
+
+      send(value: string): void {
+        sentFrames.push(value)
+      }
+
+      close(): void {}
+
+      addEventListener(event: 'open' | 'close' | 'error' | 'message', listener: (payload?: { readonly data: unknown }) => void): void {
+        const eventListeners = listeners.get(event) ?? new Set<(payload?: { readonly data: unknown }) => void>()
+        eventListeners.add(listener)
+        listeners.set(event, eventListeners)
+        if (event === 'open') {
+          queueMicrotask(() => listener())
+        }
+      }
+    }
+
+    const emitMessage = (payload: Record<string, unknown>) => {
+      for (const listener of listeners.get('message') ?? []) {
+        listener({ data: JSON.stringify(payload) })
+      }
+    }
+
+    vi.stubGlobal('WebSocket', TestWebSocket)
+    const fetchSpy = vi.fn(async (url: string) => {
+      expect(url).toBe('/broadcasting/config')
+      return Response.json({
+        key: 'app-key',
+        host: '127.0.0.1',
+        port: 8080,
+        path: '/app',
+        scheme: 'http',
+      })
+    })
+    vi.stubGlobal('fetch', fetchSpy)
+    vi.stubGlobal('location', {
+      protocol: 'http:',
+      hostname: 'localhost',
+    })
+
+    const transport = realtimeClientInternals.createBroadcastRealtimeTransport()
+    const queryPromise = transport.query<readonly Post[]>('posts.list', { page: 1 })
+    await vi.waitUntil(() => sentFrames.length === 1)
+    expect(websocketUrls).toEqual(['ws://localhost:8080/app/app-key'])
+    const queryFrame = JSON.parse(sentFrames[0]!) as { data: { id: string } }
+    emitMessage({
+      event: 'holo:realtime:result',
+      data: JSON.stringify({
+        id: queryFrame.data.id,
+        snapshot: {
+          name: 'posts.list',
+          data: [{ id: 1, title: 'First' }],
+          dependencies: ['table:posts'],
+          version: 1,
+        },
+      }),
+    })
+
+    await expect(queryPromise).resolves.toEqual({
+      name: 'posts.list',
+      data: [{ id: 1, title: 'First' }],
+      dependencies: ['table:posts'],
+      version: 1,
+    })
+
+    const mutationPromise = transport.mutate<Post>('posts.update', { id: 1, title: 'Updated' })
+    await vi.waitUntil(() => sentFrames.length === 2)
+    const mutationFrame = JSON.parse(sentFrames[1]!) as { data: { id: string } }
+    emitMessage({
+      event: 'holo:realtime:result',
+      data: JSON.stringify({
+        id: mutationFrame.data.id,
+        result: {
+          name: 'posts.update',
+          data: { id: 1, title: 'Updated' },
+          dependencies: [],
+        },
+      }),
+    })
+
+    await expect(mutationPromise).resolves.toEqual({
+      name: 'posts.update',
+      data: { id: 1, title: 'Updated' },
+      dependencies: [],
+    })
+
+    const snapshots: Array<RealtimeSubscriptionSnapshot<readonly Post[]>> = []
+    const unsubscribe = transport.subscribe<readonly Post[]>(
+      'posts.list',
+      { page: 1 },
+      snapshot => snapshots.push(snapshot),
+      () => {},
+    )
+    await vi.waitUntil(() => sentFrames.length === 3)
+    const subscribeFrame = JSON.parse(sentFrames[2]!) as { data: { id: string } }
+    emitMessage({
+      event: 'holo:realtime:snapshot',
+      data: JSON.stringify({
+        id: subscribeFrame.data.id,
+        snapshot: {
+          name: 'posts.list',
+          data: [{ id: 2, title: 'Second' }],
+          dependencies: ['table:posts'],
+          version: 2,
+        },
+      }),
+    })
+
+    expect(snapshots).toEqual([{
+      name: 'posts.list',
+      data: [{ id: 2, title: 'Second' }],
+      dependencies: ['table:posts'],
+      version: 2,
+    }])
+
+    unsubscribe()
+
+    expect(sentFrames.map(frame => JSON.parse(frame) as { event: string, data: { action: string, name?: string } })).toEqual([
+      {
+        event: 'holo:realtime',
+        data: {
+          id: queryFrame.data.id,
+          action: 'query',
+          name: 'posts.list',
+          args: { page: 1 },
+        },
+      },
+      {
+        event: 'holo:realtime',
+        data: {
+          id: mutationFrame.data.id,
+          action: 'mutation',
+          name: 'posts.update',
+          args: { id: 1, title: 'Updated' },
+        },
+      },
+      {
+        event: 'holo:realtime',
+        data: {
+          id: subscribeFrame.data.id,
+          action: 'subscribe',
+          name: 'posts.list',
+          args: { page: 1 },
+        },
+      },
+      {
+        event: 'holo:realtime',
+        data: {
+          id: subscribeFrame.data.id,
+          action: 'unsubscribe',
+          args: {},
+        },
+      },
+    ])
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 
   it('executes mutations through the configured transport', async () => {
@@ -328,82 +495,8 @@ describe('@holo-js/realtime client runtime', () => {
     })
   })
 
-  it('uses fetch and EventSource for the default transport', async () => {
-    const messages: Array<{ readonly data: string }> = []
-    const closed: string[] = []
-    const fetchCalls: string[] = []
-    const eventSources: TestEventSource[] = []
-
-    class TestEventSource {
-      onmessage: ((event: { readonly data: string }) => void) | null = null
-      onerror: ((event: unknown) => void) | null = null
-
-      constructor(readonly url: string) {
-        fetchCalls.push(url)
-        eventSources.push(this)
-      }
-
-      close(): void {
-        closed.push(this.url)
-      }
-    }
-
-    vi.stubGlobal('EventSource', TestEventSource)
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-      fetchCalls.push(url)
-
-      return Response.json({
-        name: url.includes('mutation') ? 'posts.create' : 'posts.list',
-        data: url.includes('mutation') ? { created: true } : [{ id: 1, title: 'First' }],
-        dependencies: [],
-        version: 1,
-      })
-    }))
-
-    const transport = realtimeClientInternals.createFetchRealtimeTransport()
-    await expect(transport.query<readonly Post[]>('posts.list', { limit: 1 })).resolves.toMatchObject({
-      data: [{ id: 1, title: 'First' }],
-    })
-    await expect(transport.mutate('posts.create', { title: 'First' })).resolves.toMatchObject({
-      data: { created: true },
-    })
-
-    const unsubscribe = transport.subscribe<readonly Post[]>('posts.list', { limit: 1 }, (snapshot) => {
-      messages.push({ data: JSON.stringify(snapshot) })
-    }, () => {})
-    const source = realtimeClientInternals.getRealtimeClientState().stores
-    expect(source.size).toBe(0)
-
-    eventSources[0]!.onmessage?.({
-      data: JSON.stringify({
-        name: 'posts.list',
-        data: [{ id: 2, title: 'Second' }],
-        dependencies: [],
-        version: 2,
-      }),
-    })
-
-    unsubscribe()
-
-    expect(fetchCalls).toEqual([
-      '/holo/realtime/query',
-      '/holo/realtime/mutation',
-      '/holo/realtime/stream?name=posts.list&args=%7B%22limit%22%3A1%7D',
-    ])
-    expect(closed).toEqual(['/holo/realtime/stream?name=posts.list&args=%7B%22limit%22%3A1%7D'])
-    expect(messages).toEqual([
-      {
-        data: JSON.stringify({
-          name: 'posts.list',
-          data: [{ id: 2, title: 'Second' }],
-          dependencies: [],
-          version: 2,
-        }),
-      },
-    ])
-  })
-
-  it('uses the default fetch transport for callable mutations when no custom transport is configured', async () => {
+  it('requires an explicit transport for callable mutations', async () => {
+    vi.stubGlobal('window', {})
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({
       name: 'posts.create',
       data: { created: true },
@@ -415,19 +508,7 @@ describe('@holo-js/realtime client runtime', () => {
       handler: async () => ({ created: true }),
     })
 
-    await expect(createPost()).resolves.toEqual({ created: true })
-  })
-
-  it('surfaces failed default transport requests', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 500 })))
-
-    const transport = realtimeClientInternals.createFetchRealtimeTransport()
-    const unsubscribe = transport.subscribe('posts.list', {}, () => {}, () => {})
-
-    await expect(transport.query('posts.list', {})).rejects.toThrow('Realtime query failed with status 500.')
-    await expect(transport.mutate('posts.create', {})).rejects.toThrow('Realtime mutation failed with status 500.')
-    expect(unsubscribe).toEqual(expect.any(Function))
-    unsubscribe()
+    await expect(createPost()).rejects.toThrow(realtimeClientInternals.missingTransportMessage)
   })
 
   it('hydrates stores with normalized empty args', () => {

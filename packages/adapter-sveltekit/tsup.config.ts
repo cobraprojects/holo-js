@@ -9,6 +9,7 @@ export default defineConfig({
     client: 'src/client.ts',
     realtime: 'src/realtime.ts',
     transport: 'src/transport.ts',
+    vite: 'src/vite.ts',
   },
   format: ['esm'],
   dts: true,

@@ -10,6 +10,7 @@ export default defineConfig({
   dts: true,
   sourcemap: true,
   clean: true,
+  outExtension: () => ({ js: '.mjs' }),
   external: [
     '@holo-js/auth',
     '@holo-js/db',

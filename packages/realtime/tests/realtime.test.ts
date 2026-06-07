@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, expectTypeOf, it } from 'vitest'
 import {
   createCapabilities,
   createDatabase,
@@ -19,22 +19,24 @@ import {
 import { field, schema } from '@holo-js/validation'
 import {
   configureRealtimeClientTransport,
-  configureRealtimeRuntime,
   createRealtimeClient,
   defineRealtimeMutation,
   defineRealtimeQuery,
+  isRealtimeDefinition,
+  resetRealtimeClientRuntime,
+} from '../src/index'
+import {
+  configureRealtimeRuntime,
   executeRealtimeMutation,
   executeRealtimeQuery,
   RealtimeAuthUnavailableError,
   RealtimeError,
   RealtimeForbiddenError,
   RealtimeUnauthorizedError,
-  isRealtimeDefinition,
   realtimeRuntimeInternals,
-  resetRealtimeClientRuntime,
   resetRealtimeRuntime,
   subscribeRealtimeQuery,
-} from '../src/index'
+} from '../src/server'
 import type { AuthenticatedAuthUser } from '@holo-js/auth'
 import type { RealtimeAuthModule } from '../src/index'
 
@@ -362,6 +364,95 @@ describe('@holo-js/realtime', () => {
     })
   })
 
+  it('executes callable query and mutation definitions directly on the server', async () => {
+    const db = createContext()
+    configureRealtimeRuntime({
+      db: () => db,
+      loadAuthModule: async () => null,
+    })
+    const listPosts = defineRealtimeQuery({
+      args: schema({
+        limit: field.number().integer(),
+      }),
+      access: 'public',
+      handler: async ({ args, db: context }) => {
+        const rows = await context.table('posts').limit(args.limit).get()
+
+        return {
+          rows,
+          limit: args.limit,
+        }
+      },
+    })
+    const createPost = defineRealtimeMutation({
+      args: schema({
+        title: field.string().required(),
+      }),
+      access: 'public',
+      handler: async ({ args, db: context }) => {
+        await context.table('posts').insert({ title: args.title })
+
+        return {
+          created: args.title,
+        }
+      },
+    })
+
+    await expect(listPosts({ limit: 1 })).resolves.toEqual({
+      rows: [{ id: 1, title: 'First' }],
+      limit: 1,
+    })
+    await expect(createPost({ title: 'Second' })).resolves.toEqual({
+      created: 'Second',
+    })
+    await expect(listPosts({ limit: 2 })).resolves.toEqual({
+      rows: [
+        { id: 1, title: 'First' },
+        { id: 2, title: 'Post 2' },
+      ],
+      limit: 2,
+    })
+  })
+
+  it('persists mutation database writes without a broadcast worker or client transport', async () => {
+    const adapter = new RelationalMemoryAdapter({
+      posts: [
+        { id: 1, title: 'First' },
+      ],
+    })
+    const db = createContext(adapter)
+    configureRealtimeRuntime({
+      db: () => db,
+      loadAuthModule: async () => null,
+    })
+    const listPosts = defineRealtimeQuery({
+      access: 'public',
+      handler: async ({ db: context }) => await context.table('posts').orderBy('id').get(),
+    })
+    const renamePost = defineRealtimeMutation({
+      args: schema({
+        title: field.string().required(),
+      }),
+      access: 'public',
+      handler: async ({ args, db: context }) => {
+        await context.table('posts').insert({ title: args.title })
+
+        return await context.table('posts').orderBy('id').get()
+      },
+    })
+
+    await expect(renamePost({ title: 'Worker independent' })).resolves.toEqual([
+      { id: 1, title: 'First' },
+      { id: 2, title: 'Worker independent' },
+    ])
+    await expect(listPosts()).resolves.toEqual([
+      { id: 1, title: 'First' },
+      { id: 2, title: 'Worker independent' },
+    ])
+    expect(adapter.executions).toHaveLength(1)
+    expect(adapter.executions[0]?.sql).toContain('INSERT INTO "posts"')
+  })
+
   it('identifies realtime definitions and rejects invalid access guard configuration', async () => {
     const db = createContext()
     configureRealtimeRuntime({
@@ -481,7 +572,7 @@ describe('@holo-js/realtime', () => {
     const snapshots: unknown[] = []
     const query = defineRealtimeQuery({
       access: 'public',
-      handler: async ({ db: context }) => (await context.model(Post).query().with('tags').orderBy('id').get()).toJSON(),
+      handler: async ({ db: context }) => await context.model(Post).query().with('tags').orderBy('id').get(),
     })
     const mutation = defineRealtimeMutation({
       access: 'public',
@@ -543,9 +634,7 @@ describe('@holo-js/realtime', () => {
     const snapshots: unknown[] = []
     const query = defineRealtimeQuery({
       access: 'public',
-      handler: async ({ db: context }) => (
-        await context.table('posts').orderBy('id', 'desc').paginate(2, 1)
-      ).toJSON(),
+      handler: async ({ db: context }) => await context.table('posts').orderBy('id', 'desc').paginate(2, 1),
     })
     const mutation = defineRealtimeMutation({
       access: 'public',

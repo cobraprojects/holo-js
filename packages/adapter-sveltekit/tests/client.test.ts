@@ -83,6 +83,7 @@ describe('@holo-js/adapter-sveltekit client forms', () => {
 
   it('returns updated realtime query arrays by calling the query definition', async () => {
     vi.resetModules()
+    vi.stubGlobal('window', {})
 
     type Post = { readonly id: number, readonly title: string }
     type PostSnapshot = RealtimeSubscriptionSnapshot<readonly Post[]>
@@ -160,8 +161,84 @@ describe('@holo-js/adapter-sveltekit client forms', () => {
     resetRealtimeClientRuntime()
   })
 
+  it('updates realtime query objects when the first snapshot arrives after render', async () => {
+    vi.resetModules()
+    vi.stubGlobal('window', {})
+
+    type Post = { readonly id: number, readonly title: string }
+    type PostsData = { readonly posts: readonly Post[] }
+    type PostsSnapshot = RealtimeSubscriptionSnapshot<PostsData>
+    let realtimeListener: ((snapshot: PostsSnapshot) => void) | undefined
+
+    vi.doMock('svelte/reactivity', () => ({
+      createSubscriber: (start: (update: () => void) => () => void) => {
+        let cleanup: (() => void) | undefined
+        return () => {
+          cleanup ??= start(() => {})
+          return cleanup
+        }
+      },
+    }))
+
+    const {
+      configureRealtimeClientTransport,
+      resetRealtimeClientRuntime,
+    } = await import('@holo-js/realtime/client')
+    const { query } = await import('@holo-js/realtime')
+    await import('../src/realtime')
+
+    const listPosts = query({
+      name: 'posts.object',
+      access: 'public',
+      handler: async () => ({ posts: [{ id: 1, title: 'First' }] }),
+    })
+
+    configureRealtimeClientTransport({
+      async query<TResult>() {
+        return {
+          name: 'posts.object',
+          data: { posts: [{ id: 1, title: 'First' }] } as TResult,
+          dependencies: [],
+          version: 1,
+        }
+      },
+      async mutate<TResult>() {
+        return {
+          name: 'posts.update',
+          data: { updated: true } as TResult,
+          dependencies: [],
+        }
+      },
+      subscribe<TResult>(_name: string, _args: Record<string, unknown>, listener: (snapshot: RealtimeSubscriptionSnapshot<TResult>) => void) {
+        realtimeListener = snapshot => listener(snapshot as unknown as RealtimeSubscriptionSnapshot<TResult>)
+        return () => {}
+      },
+    })
+
+    const data = listPosts()
+    void data.posts
+    realtimeListener?.({
+      name: 'posts.object',
+      data: {
+        posts: [
+          { id: 1, title: 'First' },
+          { id: 2, title: 'Second' },
+        ],
+      },
+      dependencies: [],
+      version: 2,
+    })
+
+    expect(data.posts).toEqual([
+      { id: 1, title: 'First' },
+      { id: 2, title: 'Second' },
+    ])
+    resetRealtimeClientRuntime()
+  })
+
   it('defers realtime store subscriptions until reactive reads occur', async () => {
     vi.resetModules()
+    vi.stubGlobal('window', {})
 
     type RealtimeRuntime = {
       useQuery<TDefinition>(definition: TDefinition, args: unknown): unknown
@@ -191,6 +268,8 @@ describe('@holo-js/adapter-sveltekit client forms', () => {
       configureRealtimeClientRuntime(nextRuntime: RealtimeRuntime) {
         runtime = nextRuntime
       },
+      configureRealtimeClientTransport: vi.fn(),
+      createBroadcastRealtimeTransport: vi.fn(() => ({})),
       getRealtimeQueryStore: () => store,
     }))
 

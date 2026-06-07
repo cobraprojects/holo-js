@@ -16,9 +16,12 @@ import type {
   Entity,
   EntityWithLoaded,
   ModelCollection,
+  ModelRelationPath,
   ModelQueryBuilder,
   PaginatedResult,
+  RelatedColumnNameForRelationPath,
   RelationMap,
+  RelationConstraintDefinition,
   ResolveEagerLoads,
   SimplePaginatedResult,
   TableDefinition,
@@ -69,7 +72,9 @@ type MediaEnabledEntityResult<
   TCollectionName extends string,
   TConversionName extends string,
 > = TEntity extends EntityWithLoaded<infer _TTable extends TableDefinition, infer _TRelations extends RelationMap, infer _TLoaded>
-  ? TEntity & MediaEnabledEntityMethods<TCollectionName, TConversionName>
+  ? unknown extends _TLoaded
+    ? MediaEnabledEntity<_TTable, TCollectionName, TConversionName, _TRelations>
+    : TEntity & MediaEnabledEntityMethods<TCollectionName, TConversionName>
   : TEntity extends Entity<infer _TTable extends TableDefinition, infer _TRelations extends RelationMap>
   ? TEntity & MediaEnabledEntityMethods<TCollectionName, TConversionName>
   : TEntity
@@ -116,8 +121,14 @@ type MediaEnabledQueryBuilder<
   TBuilder,
   TCollectionName extends string,
   TConversionName extends string,
-> = TBuilder & {
-  [K in keyof TBuilder]: MediaEnabledFunction<TBuilder[K], TCollectionName, TConversionName>
+> = {
+  [K in keyof TBuilder]: K extends 'with'
+    ? MediaEnabledQueryBuilderWith<TBuilder, TCollectionName, TConversionName>
+    : K extends 'withCount' | 'withExists'
+      ? MediaEnabledRelationAggregate<TBuilder, TCollectionName, TConversionName>
+      : K extends 'withSum' | 'withAvg' | 'withMin' | 'withMax'
+        ? MediaEnabledRelationColumnAggregate<TBuilder, TCollectionName, TConversionName>
+    : MediaEnabledFunction<TBuilder[K], TCollectionName, TConversionName>
 }
 
 type MediaEnabledPaginatedResult<
@@ -177,52 +188,26 @@ type MediaModelStatic = {
 }
 
 type MediaRelationPath<TRelations extends RelationMap>
-  = Extract<keyof TRelations, string> | `${Extract<keyof TRelations, string>}.${string}`
+  = ModelRelationPath<TRelations>
 
 type MediaRelationConstraint<
   TTable extends TableDefinition,
   TRelations extends RelationMap,
-> = (query: ModelQueryBuilder<TTable, TRelations>) => unknown
+> = RelationConstraintDefinition & ((query: ModelQueryBuilder<TTable, TRelations>) => unknown)
 
-type MediaEnabledStaticMethodKey =
-  | 'create'
-  | 'cursorPaginate'
-  | 'find'
-  | 'findMany'
-  | 'findOrFail'
-  | 'first'
-  | 'firstOrFail'
-  | 'firstWhere'
-  | 'make'
-  | 'paginate'
-  | 'simplePaginate'
-  | 'update'
-  | 'with'
+type MediaRelationConstraintMap<TRelations extends RelationMap>
+  = Readonly<Partial<Record<MediaRelationPath<TRelations>, MediaRelationConstraint<TableDefinition, TRelations>>>>
 
-type MediaEnabledStaticMethods<
-  TModel extends MediaModelStatic,
+type MediaEnabledQueryBuilderWith<
+  TBuilder,
   TCollectionName extends string,
   TConversionName extends string,
-> = {
-  [K in keyof TModel as K extends MediaEnabledStaticMethodKey ? K : never]: K extends 'with'
-    ? MediaEnabledWith<TModel, TCollectionName, TConversionName>
-    : MediaEnabledFunction<
-        TModel[K],
-        TCollectionName,
-        TConversionName
-      >
-}
-
-type MediaEnabledWith<
-  TModel extends MediaModelStatic,
-  TCollectionName extends string,
-  TConversionName extends string,
-> = TModel extends { query(): ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap> }
+> = TBuilder extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded>
   ? {
       <TPaths extends readonly MediaRelationPath<TRelations>[]>(
         ...relations: TPaths
       ): MediaEnabledQueryBuilder<
-        ModelQueryBuilder<TTable, TRelations, ResolveEagerLoads<TRelations, TPaths>>,
+        ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, TPaths>>,
         TCollectionName,
         TConversionName
       >
@@ -230,21 +215,54 @@ type MediaEnabledWith<
         relation: TPath,
         constraint: MediaRelationConstraint<TTable, TRelations>
       ): MediaEnabledQueryBuilder<
-        ModelQueryBuilder<TTable, TRelations, ResolveEagerLoads<TRelations, readonly [TPath]>>,
+        ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, readonly [TPath]>>,
         TCollectionName,
         TConversionName
       >
       (
-        relations: Readonly<Partial<Record<MediaRelationPath<TRelations>, MediaRelationConstraint<TTable, TRelations>>>>
-      ): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations>, TCollectionName, TConversionName>
+        relations: MediaRelationConstraintMap<TRelations>
+      ): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded>, TCollectionName, TConversionName>
       <TPaths extends readonly MediaRelationPath<TRelations>[]>(
         relations: TPaths
       ): MediaEnabledQueryBuilder<
-        ModelQueryBuilder<TTable, TRelations, ResolveEagerLoads<TRelations, TPaths>>,
+        ModelQueryBuilder<TTable, TRelations, TLoaded & ResolveEagerLoads<TRelations, TPaths>>,
         TCollectionName,
         TConversionName
       >
     }
+  : TBuilder extends { with: infer TWith }
+    ? MediaEnabledFunction<TWith, TCollectionName, TConversionName>
+    : never
+
+type MediaEnabledRelationAggregate<
+  TBuilder,
+  TCollectionName extends string,
+  TConversionName extends string,
+> = TBuilder extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded>
+  ? {
+      (...relations: readonly MediaRelationPath<TRelations>[]): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded>, TCollectionName, TConversionName>
+      (relations: MediaRelationConstraintMap<TRelations>): MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded>, TCollectionName, TConversionName>
+    }
+  : never
+
+type MediaEnabledRelationColumnAggregate<
+  TBuilder,
+  TCollectionName extends string,
+  TConversionName extends string,
+> = TBuilder extends ModelQueryBuilder<infer TTable extends TableDefinition, infer TRelations extends RelationMap, infer TLoaded>
+  ? <TPath extends MediaRelationPath<TRelations>>(
+      first: TPath | MediaRelationConstraintMap<TRelations>,
+      column: RelatedColumnNameForRelationPath<TRelations, TPath>,
+      ...rest: readonly MediaRelationPath<TRelations>[]
+    ) => MediaEnabledQueryBuilder<ModelQueryBuilder<TTable, TRelations, TLoaded>, TCollectionName, TConversionName>
+  : never
+
+type MediaEnabledStaticWith<
+  TModel extends MediaModelStatic,
+  TCollectionName extends string,
+  TConversionName extends string,
+> = TModel extends { query(): infer TBuilder }
+  ? MediaEnabledQueryBuilderWith<TBuilder, TCollectionName, TConversionName>
   : TModel extends { with: infer TWith }
     ? MediaEnabledFunction<TWith, TCollectionName, TConversionName>
     : never
@@ -252,12 +270,15 @@ type MediaEnabledWith<
 export type MediaEnabledModel<
   TModel extends MediaModelStatic,
   TDefinition extends MediaDefinitionInput,
-> = Omit<TModel, MediaEnabledStaticMethodKey>
-  & MediaEnabledStaticMethods<
-    TModel,
-    MediaCollectionName<TDefinition>,
-    MediaConversionName<TDefinition>
-  >
+> = {
+  [K in keyof TModel]: K extends 'with'
+    ? MediaEnabledStaticWith<TModel, MediaCollectionName<TDefinition>, MediaConversionName<TDefinition>>
+    : MediaEnabledFunction<
+        TModel[K],
+        MediaCollectionName<TDefinition>,
+        MediaConversionName<TDefinition>
+      >
+} & TModel
 
 export function defineMediaModel<
   TModel extends MediaModelStatic,

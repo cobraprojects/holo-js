@@ -3,6 +3,8 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import {
   configureRealtimeClientRuntime,
+  configureRealtimeClientTransport,
+  createBroadcastRealtimeTransport,
   getRealtimeQueryStore,
 } from '@holo-js/realtime/client'
 import type { RealtimeArgsFor, RealtimeQueryDefinition, RealtimeResultFor } from '@holo-js/realtime'
@@ -27,5 +29,6 @@ function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
 configureRealtimeClientRuntime({
   useQuery: useReactiveRealtimeQuery,
 })
+configureRealtimeClientTransport(createBroadcastRealtimeTransport())
 
 export {}

@@ -1,15 +1,16 @@
 import type { ValidationSchema } from '@holo-js/validation'
-import { useRealtimeMutation, useRealtimeQuery } from './client'
+import type { SerializeModels } from '@holo-js/db'
 import {
-  configureRealtimeRuntime,
-  executeRealtimeMutation,
-  executeRealtimeQuery,
+  hasConfiguredRealtimeClientRuntime,
+  hasConfiguredRealtimeClientTransport,
+  useRealtimeMutation,
+  useRealtimeQuery,
+} from './client'
+import {
   isRealtimeDefinition,
-  markDefinition,
   nextDefinitionName,
-  resetRealtimeRuntime,
-  subscribeRealtimeQuery,
-} from './runtime'
+  markDefinition,
+} from './definition'
 import type {
   RealtimeAccess,
   RealtimeArgsFor,
@@ -19,14 +20,23 @@ import type {
   RealtimeMutationInput,
   RealtimeQueryDefinition,
   RealtimeQueryInput,
+  RealtimeResultFor,
   RealtimeSubscribeOptions,
   RealtimeSubscription,
 } from './contracts'
+import type {
+  executeRealtimeMutation,
+  executeRealtimeQuery,
+  subscribeRealtimeQuery,
+} from './runtime'
 
 export {
   configureRealtimeClientRuntime,
   configureRealtimeClientTransport,
+  createBroadcastRealtimeTransport,
   getRealtimeQueryStore,
+  hasConfiguredRealtimeClientRuntime,
+  hasConfiguredRealtimeClientTransport,
   hydrateRealtimeQuery,
   realtimeClientInternals,
   resetRealtimeClientRuntime,
@@ -70,18 +80,8 @@ export type {
 } from './contracts'
 
 export {
-  configureRealtimeRuntime,
-  executeRealtimeMutation,
-  executeRealtimeQuery,
   isRealtimeDefinition,
-  realtimeRuntimeInternals,
-  resetRealtimeRuntime,
-  RealtimeAuthUnavailableError,
-  RealtimeError,
-  RealtimeForbiddenError,
-  RealtimeUnauthorizedError,
-  subscribeRealtimeQuery,
-} from './runtime'
+} from './definition'
 
 export function defineRealtimeQuery<
   const TSchema extends ValidationSchema | undefined = undefined,
@@ -90,13 +90,23 @@ export function defineRealtimeQuery<
   const TName extends string | undefined = undefined,
 >(
   input: RealtimeQueryInput<TName, TSchema, TAccess, TResult>,
-): RealtimeQueryDefinition<TName, TSchema, TAccess, Awaited<TResult>> {
+): RealtimeQueryDefinition<TName, TSchema, TAccess, SerializeModels<Awaited<TResult>>> {
   const definition = ((args?: RealtimeArgsForSchema<TSchema>) => {
+    const normalizedArgs = (args ?? {}) as RealtimeArgsFor<RealtimeQueryDefinition<TName, TSchema, TAccess, SerializeModels<Awaited<TResult>>>>
+    if (shouldExecuteOnServer()) {
+      return importRealtimeRuntime()
+        .then(({ executeRealtimeQuery }) => executeRealtimeQuery(
+          definition as unknown as RealtimeQueryDefinition<TName, TSchema, TAccess, SerializeModels<Awaited<TResult>>>,
+          normalizedArgs,
+        ))
+        .then(result => result.data) as RealtimeResultFor<RealtimeQueryDefinition<TName, TSchema, TAccess, SerializeModels<Awaited<TResult>>>>
+    }
+
     return useRealtimeQuery(
       definition as unknown as RealtimeQueryDefinition,
-      (args ?? {}) as RealtimeArgsFor<RealtimeQueryDefinition<TName, TSchema, TAccess, Awaited<TResult>>>,
-    ) as Awaited<TResult>
-  }) as unknown as RealtimeQueryDefinition<TName, TSchema, TAccess, Awaited<TResult>>
+      normalizedArgs,
+    ) as RealtimeResultFor<RealtimeQueryDefinition<TName, TSchema, TAccess, SerializeModels<Awaited<TResult>>>>
+  }) as unknown as RealtimeQueryDefinition<TName, TSchema, TAccess, SerializeModels<Awaited<TResult>>>
 
   Object.defineProperties(definition, {
     kind: {
@@ -125,12 +135,12 @@ export function defineRealtimeQuery<
       enumerable: true,
     },
     $types: {
-      value: undefined as unknown as RealtimeQueryDefinition<TName, TSchema, TAccess, Awaited<TResult>>['$types'],
+      value: undefined as unknown as RealtimeQueryDefinition<TName, TSchema, TAccess, SerializeModels<Awaited<TResult>>>['$types'],
       enumerable: true,
     },
   })
 
-  const shapedDefinition = definition as unknown as RealtimeQueryDefinition<TName, TSchema, TAccess, Awaited<TResult>>
+  const shapedDefinition = definition as unknown as RealtimeQueryDefinition<TName, TSchema, TAccess, SerializeModels<Awaited<TResult>>>
 
   return markDefinition(shapedDefinition)
 }
@@ -142,13 +152,23 @@ export function defineRealtimeMutation<
   const TName extends string | undefined = undefined,
 >(
   input: RealtimeMutationInput<TName, TSchema, TAccess, TResult>,
-): RealtimeMutationDefinition<TName, TSchema, TAccess, Awaited<TResult>> {
+): RealtimeMutationDefinition<TName, TSchema, TAccess, SerializeModels<Awaited<TResult>>> {
   const definition = ((args?: RealtimeArgsForSchema<TSchema>) => {
+    const normalizedArgs = (args ?? {}) as RealtimeArgsFor<RealtimeMutationDefinition<TName, TSchema, TAccess, SerializeModels<Awaited<TResult>>>>
+    if (shouldExecuteOnServer()) {
+      return importRealtimeRuntime()
+        .then(({ executeRealtimeMutation }) => executeRealtimeMutation(
+          definition as unknown as RealtimeMutationDefinition<TName, TSchema, TAccess, SerializeModels<Awaited<TResult>>>,
+          normalizedArgs,
+        ))
+        .then(result => result.data)
+    }
+
     return useRealtimeMutation(
       definition as unknown as RealtimeMutationDefinition,
-      (args ?? {}) as RealtimeArgsFor<RealtimeMutationDefinition<TName, TSchema, TAccess, Awaited<TResult>>>,
-    ) as Promise<Awaited<TResult>>
-  }) as unknown as RealtimeMutationDefinition<TName, TSchema, TAccess, Awaited<TResult>>
+      normalizedArgs,
+    ) as Promise<RealtimeResultFor<RealtimeMutationDefinition<TName, TSchema, TAccess, SerializeModels<Awaited<TResult>>>>>
+  }) as unknown as RealtimeMutationDefinition<TName, TSchema, TAccess, SerializeModels<Awaited<TResult>>>
 
   Object.defineProperties(definition, {
     kind: {
@@ -177,18 +197,40 @@ export function defineRealtimeMutation<
       enumerable: true,
     },
     $types: {
-      value: undefined as unknown as RealtimeMutationDefinition<TName, TSchema, TAccess, Awaited<TResult>>['$types'],
+      value: undefined as unknown as RealtimeMutationDefinition<TName, TSchema, TAccess, SerializeModels<Awaited<TResult>>>['$types'],
       enumerable: true,
     },
   })
 
-  const shapedDefinition = definition as unknown as RealtimeMutationDefinition<TName, TSchema, TAccess, Awaited<TResult>>
+  const shapedDefinition = definition as unknown as RealtimeMutationDefinition<TName, TSchema, TAccess, SerializeModels<Awaited<TResult>>>
 
   return markDefinition(shapedDefinition)
 }
 
 export const query = defineRealtimeQuery
 export const mutation = defineRealtimeMutation
+
+const realtimeRuntimeSpecifier = '@holo-js/realtime/server'
+
+interface RealtimeRuntimeModule {
+  executeRealtimeMutation: typeof executeRealtimeMutation
+  executeRealtimeQuery: typeof executeRealtimeQuery
+  subscribeRealtimeQuery: typeof subscribeRealtimeQuery
+}
+
+function isBrowserRuntime(): boolean {
+  return 'window' in globalThis
+}
+
+function shouldExecuteOnServer(): boolean {
+  return !isBrowserRuntime()
+    && !hasConfiguredRealtimeClientRuntime()
+    && !hasConfiguredRealtimeClientTransport()
+}
+
+async function importRealtimeRuntime(): Promise<RealtimeRuntimeModule> {
+  return await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ /* @vite-ignore */ realtimeRuntimeSpecifier)
+}
 
 export function createRealtimeClient() {
   return Object.freeze({
@@ -200,8 +242,8 @@ export function createRealtimeClient() {
     >(
       definition: RealtimeQueryDefinition<TName, TSchema, TAccess, TResult>,
       args: RealtimeArgsForSchema<TSchema>,
-    ): Promise<RealtimeExecutionResult<Awaited<TResult>>> {
-      return executeRealtimeQuery(definition, args)
+    ): Promise<RealtimeExecutionResult<TResult>> {
+      return importRealtimeRuntime().then(({ executeRealtimeQuery }) => executeRealtimeQuery(definition, args))
     },
     mutate<
       const TName extends string | undefined,
@@ -211,8 +253,8 @@ export function createRealtimeClient() {
     >(
       definition: RealtimeMutationDefinition<TName, TSchema, TAccess, TResult>,
       args: RealtimeArgsForSchema<TSchema>,
-    ): Promise<RealtimeExecutionResult<Awaited<TResult>>> {
-      return executeRealtimeMutation(definition, args)
+    ): Promise<RealtimeExecutionResult<TResult>> {
+      return importRealtimeRuntime().then(({ executeRealtimeMutation }) => executeRealtimeMutation(definition, args))
     },
     subscribe<
       const TName extends string | undefined,
@@ -222,25 +264,20 @@ export function createRealtimeClient() {
     >(
       definition: RealtimeQueryDefinition<TName, TSchema, TAccess, TResult>,
       args: RealtimeArgsForSchema<TSchema>,
-      options?: RealtimeSubscribeOptions<Awaited<TResult>>,
-    ): Promise<RealtimeSubscription<Awaited<TResult>>> {
-      return subscribeRealtimeQuery(definition, args, options)
+      options?: RealtimeSubscribeOptions<TResult>,
+    ): Promise<RealtimeSubscription<TResult>> {
+      return importRealtimeRuntime().then(({ subscribeRealtimeQuery }) => subscribeRealtimeQuery(definition, args, options))
     },
   })
 }
 
 const realtime = Object.freeze({
-  configureRealtimeRuntime,
   createRealtimeClient,
   defineRealtimeMutation,
   defineRealtimeQuery,
-  executeRealtimeMutation,
-  executeRealtimeQuery,
   isRealtimeDefinition,
   mutation,
   query,
-  resetRealtimeRuntime,
-  subscribeRealtimeQuery,
 })
 
 export default realtime

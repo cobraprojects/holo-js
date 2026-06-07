@@ -123,8 +123,9 @@ import { listPosts } from '~/server/realtime/posts'
 const posts = listPosts({ limit: 10 })
 ```
 
-The same call shape works in Next, Nuxt, and SvelteKit. Holo creates the framework runtime and transport routes during
-scaffolding, so app code does not create a realtime client, subscribe to a query, or choose a channel name.
+The same call shape works in Next, Nuxt, and SvelteKit. Holo creates the framework runtime during scaffolding, so app
+code does not create a realtime client, subscribe to a query, or choose a channel name. Browser calls run over the
+broadcast websocket transport.
 
 `posts` has the same inferred type as the normal handler return value. If the handler returns
 `Promise<Post[]>`, the app receives `Post[]`.

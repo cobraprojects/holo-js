@@ -29,6 +29,11 @@
       "types": "./dist/transport.d.ts",
       "import": "./dist/transport.mjs",
       "default": "./dist/transport.mjs"
+    },
+    "./vite": {
+      "types": "./dist/vite.d.ts",
+      "import": "./dist/vite.mjs",
+      "default": "./dist/vite.mjs"
     }
   },
   "main": "./dist/index.mjs",
@@ -45,6 +50,7 @@
   "dependencies": {
     "@holo-js/config": "catalog:",
     "@holo-js/core": "catalog:",
+    "@holo-js/validation": "catalog:",
     "svelte": "catalog:"
   },
   "peerDependencies": {

@@ -1,11 +1,12 @@
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { dirname, extname, relative, resolve, sep } from 'node:path'
 import {
   GENERATED_SVELTE_HOOKS_PATH,
   GENERATED_SVELTE_SERVER_HOOKS_PATH,
 } from './shared'
 import {
   renderNextManagedHostedAuthRouteFiles,
+  renderNextGeneratedRealtimeDefinitions,
   renderNextManagedRouteFiles,
   renderNextHoloHelper,
   renderSvelteHoloHelper,
@@ -645,11 +646,40 @@ async function directoryContainsText(path: string, pattern: string): Promise<boo
   return false
 }
 
+const realtimeDefinitionExtensions = new Set(['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'])
+
+async function collectRealtimeDefinitionFiles(root: string): Promise<readonly string[]> {
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
+  const files = await Promise.all(entries.map(async (entry) => {
+    const entryPath = resolve(root, entry.name)
+    if (entry.isDirectory()) {
+      return await collectRealtimeDefinitionFiles(entryPath)
+    }
+
+    return realtimeDefinitionExtensions.has(extname(entry.name)) ? [entryPath] : []
+  }))
+
+  return files.flat().sort((left, right) => left.localeCompare(right))
+}
+
+async function renderNextRealtimeDefinitions(projectRoot: string): Promise<string> {
+  const generatedRoot = resolve(projectRoot, '.holo-js/generated/next')
+  const files = await collectRealtimeDefinitionFiles(resolve(projectRoot, 'server/realtime'))
+  const importPaths = files.map((filePath) => {
+    const withoutExtension = filePath.slice(0, -extname(filePath).length)
+    const importPath = relative(generatedRoot, withoutExtension).split(sep).join('/')
+    return importPath.startsWith('.') ? importPath : `./${importPath}`
+  })
+
+  return renderNextGeneratedRealtimeDefinitions(importPaths)
+}
+
 async function ensureNextManagedRoutes(projectRoot: string): Promise<void> {
   const authEnabled = await pathExists(resolve(projectRoot, 'app/api/auth/user/route.ts'))
   const storageEnabled = await pathExists(resolve(projectRoot, 'app/storage/[[...path]]/route.ts'))
   const broadcastEnabled = await pathExists(resolve(projectRoot, 'app/broadcasting/config/route.ts'))
   const broadcastAuthEnabled = await pathExists(resolve(projectRoot, 'app/broadcasting/auth/route.ts'))
+  const realtimeEnabled = await pathExists(resolve(projectRoot, 'server/realtime'))
   const clerkEnabled = await pathExists(resolve(projectRoot, 'app/api/auth/clerk/login/route.ts'))
   const workosEnabled = await pathExists(resolve(projectRoot, 'app/api/auth/workos/login/route.ts'))
   const files = [
@@ -658,6 +688,7 @@ async function ensureNextManagedRoutes(projectRoot: string): Promise<void> {
       broadcastEnabled,
       storageEnabled,
       broadcastAuthEnabled,
+      realtimeEnabled,
     }),
     ...renderNextManagedHostedAuthRouteFiles({
       clerk: clerkEnabled,
@@ -668,6 +699,14 @@ async function ensureNextManagedRoutes(projectRoot: string): Promise<void> {
   for (const file of files) {
     await writeFileIfChanged(resolve(projectRoot, file.path), file.contents)
   }
+
+  if (realtimeEnabled) {
+    await writeFileIfChanged(
+      resolve(projectRoot, '.holo-js/generated/next/realtime-definitions.ts'),
+      await renderNextRealtimeDefinitions(projectRoot),
+    )
+  }
+
   await removeLegacyManagedHoloHelper(resolve(projectRoot, 'server/holo.ts'), renderNextHoloHelper())
 }
 
@@ -709,6 +748,7 @@ async function ensureSvelteManagedRuntime(projectRoot: string): Promise<void> {
   for (const file of files) {
     await writeFileIfChanged(resolve(projectRoot, file.path), file.contents)
   }
+
 }
 
 async function ensureSvelteManagedRoutes(projectRoot: string): Promise<void> {

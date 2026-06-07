@@ -843,7 +843,7 @@ export function createInternalCommands(
           writeLine(context.stdout, changed ? 'Installed realtime support.' : 'Realtime support is already installed.')
           if (result.updatedPackageJson) writeLine(context.stdout, '  - updated package.json')
           if (result.createdRealtimeDirectory) writeLine(context.stdout, '  - created server/realtime')
-          if (result.createdFrameworkSetup) writeLine(context.stdout, '  - created realtime framework routes')
+          if (result.createdFrameworkSetup) writeLine(context.stdout, '  - created realtime framework setup')
           await runProjectDependencyInstallAfterPackageJsonUpdate(context, projectExecutors, result.updatedPackageJson)
           return
         }

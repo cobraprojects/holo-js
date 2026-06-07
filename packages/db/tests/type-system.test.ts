@@ -19,13 +19,23 @@ import {
   type EmptyScopeMap,
   type Entity,
   type HasManyRelationDefinition,
+  type HasManyThroughRelationDefinition,
+  type HasOneOfManyRelationDefinition,
+  type HasOneRelationDefinition,
+  type HasOneThroughRelationDefinition,
   type InferInsert,
   type InferSelect,
   type InferUpdate,
+  type MorphedByManyRelationDefinition,
+  type MorphManyRelationDefinition,
   type MySQLAdapterOptions,
   type ModelCollection,
   type ModelQueryBuilder,
   type ModelReference,
+  type MorphOneOfManyRelationDefinition,
+  type MorphOneRelationDefinition,
+  type MorphToManyRelationDefinition,
+  type MorphToRelationDefinition,
   type PaginatedResult,
   type PostgresAdapterOptions,
   type RelationMap,
@@ -70,6 +80,19 @@ declare module '../src' {
 }
 
 describe('type system contracts', () => {
+  it('exports every relation definition type from the public package barrel', () => {
+    expectTypeOf<HasOneRelationDefinition>().toMatchTypeOf<{ readonly kind: 'hasOne' }>()
+    expectTypeOf<HasOneOfManyRelationDefinition>().toMatchTypeOf<{ readonly kind: 'hasOneOfMany' }>()
+    expectTypeOf<HasManyThroughRelationDefinition>().toMatchTypeOf<{ readonly kind: 'hasManyThrough' }>()
+    expectTypeOf<HasOneThroughRelationDefinition>().toMatchTypeOf<{ readonly kind: 'hasOneThrough' }>()
+    expectTypeOf<MorphOneRelationDefinition>().toMatchTypeOf<{ readonly kind: 'morphOne' }>()
+    expectTypeOf<MorphManyRelationDefinition>().toMatchTypeOf<{ readonly kind: 'morphMany' }>()
+    expectTypeOf<MorphOneOfManyRelationDefinition>().toMatchTypeOf<{ readonly kind: 'morphOneOfMany' }>()
+    expectTypeOf<MorphToRelationDefinition>().toMatchTypeOf<{ readonly kind: 'morphTo' }>()
+    expectTypeOf<MorphToManyRelationDefinition>().toMatchTypeOf<{ readonly kind: 'morphToMany' }>()
+    expectTypeOf<MorphedByManyRelationDefinition>().toMatchTypeOf<{ readonly kind: 'morphedByMany' }>()
+  })
+
   it('infers schema select, insert, and update payloads from one schema definition', () => {
     const users = defineTable('users', {
       id: column.id(),
