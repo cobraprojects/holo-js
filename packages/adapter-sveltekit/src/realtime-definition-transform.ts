@@ -193,6 +193,11 @@ function findClosingBrace(source: string, index: number): number {
       continue
     }
 
+    if (char === '/' && isRegexStart(source, cursor)) {
+      cursor = skipRegex(source, cursor)
+      continue
+    }
+
     if (char === '{') {
       depth += 1
     } else if (char === '}') {

@@ -153,7 +153,11 @@ async function resolveExistingModelPath(modelsRoot: string, modelName: string): 
   return undefined
 }
 
-function injectSvelteRealtimeVitePlugin(viteConfigContents: string): string | undefined {
+type SvelteRealtimeVitePluginInjectionResult = string | undefined | {
+  readonly error: string
+}
+
+function injectSvelteRealtimeVitePlugin(viteConfigContents: string): SvelteRealtimeVitePluginInjectionResult {
   if (/\bholoSvelteKitRealtime\b/.test(viteConfigContents)) {
     return undefined
   }
@@ -180,7 +184,9 @@ function injectSvelteRealtimeVitePlugin(viteConfigContents: string): string | un
   }
 
   if (withImport === viteConfigContents && !existingAdapterImport) {
-    return undefined
+    return {
+      error: 'Unable to add holoSvelteKitRealtime() to vite.config.ts because the SvelteKit Vite import could not be found.',
+    }
   }
 
   const withPlugin = withImport.replace(/plugins\s*:\s*\[([\s\S]*?)\]/, (_match, plugins: string) => {
@@ -188,7 +194,19 @@ function injectSvelteRealtimeVitePlugin(viteConfigContents: string): string | un
     return `plugins: [holoSvelteKitRealtime(),${separator}${plugins}]`
   })
 
-  return withPlugin === withImport ? undefined : withPlugin
+  if (withPlugin === withImport) {
+    if (/\bplugins\s*:\s*(?!\[)|\bplugins\s*(?:,|})/.test(withImport)) {
+      return {
+        error: 'Unable to add holoSvelteKitRealtime() to vite.config.ts because the plugins option is not an inline array.',
+      }
+    }
+
+    return {
+      error: 'Unable to add holoSvelteKitRealtime() to vite.config.ts because no plugins array was found.',
+    }
+  }
+
+  return withPlugin
 }
 
 const realtimeDefinitionExtensions = new Set(['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'])
@@ -634,9 +652,11 @@ export async function installRealtimeIntoProject(
     if (await pathExists(viteConfigPath)) {
       const existingViteConfig = await readTextFile(viteConfigPath)
       const viteConfigContents = existingViteConfig ? injectSvelteRealtimeVitePlugin(existingViteConfig) : undefined
-      if (viteConfigContents) {
+      if (typeof viteConfigContents === 'string') {
         createdFrameworkSetup = true
         await writeTextFile(viteConfigPath, viteConfigContents)
+      } else if (viteConfigContents) {
+        throw new Error(viteConfigContents.error)
       }
     } else {
       createdFrameworkSetup = true

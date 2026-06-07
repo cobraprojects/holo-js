@@ -44,6 +44,7 @@ import { cleanupRuntimeDependencyLink, ensureRuntimeDependencyLink, runRuntimeIn
 import { collectDiscoveryWatchRoots, isDiscoveryRelevantPath } from '../src/dev'
 import { generatorInternals } from '../src/generators'
 import { loadSecurityCliModule } from '../src/security'
+import { installRealtimeIntoProject } from '../src/project/scaffold'
 import {
   bundleProjectModule,
   defaultProjectConfig,
@@ -3850,6 +3851,32 @@ export default defineAppConfig({
       loadProject: async () => ({ config: defaultProjectConfig() }),
     } as never)).resolves.toBeUndefined()
     expect(installCommandIo.read().stdout).toContain('Events support is already installed.')
+
+    const svelteRealtimeRoot = await createTempProject()
+    tempDirs.push(svelteRealtimeRoot)
+    await writeProjectFile(svelteRealtimeRoot, 'package.json', JSON.stringify({
+      name: 'svelte-realtime-variable',
+      private: true,
+      dependencies: {
+        '@sveltejs/kit': 'catalog:',
+      },
+    }, null, 2))
+    const variablePluginsConfig = [
+      'import { sveltekit } from \'@sveltejs/kit/vite\'',
+      'import { defineConfig } from \'vite\'',
+      '',
+      'const plugins = [sveltekit()]',
+      '',
+      'export default defineConfig({',
+      '  plugins,',
+      '})',
+      '',
+    ].join('\n')
+    await writeProjectFile(svelteRealtimeRoot, 'vite.config.ts', variablePluginsConfig)
+    await expect(installRealtimeIntoProject(svelteRealtimeRoot)).rejects.toThrow(
+      'Unable to add holoSvelteKitRealtime() to vite.config.ts because the plugins option is not an inline array.',
+    )
+    expect(await readFile(join(svelteRealtimeRoot, 'vite.config.ts'), 'utf8')).toBe(variablePluginsConfig)
 
     await expect(projectInternals.installAuthorizationIntoProject(projectRoot)).resolves.toMatchObject({
       updatedPackageJson: true,

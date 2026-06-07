@@ -7,13 +7,17 @@ describe('realtime definition transform', () => {
       'export const posts = query({',
       '  name: \'posts.list\',',
       '  handler: async () => ({',
-      '    ok: /[{}]/.test(\'{\'),',
+      '    ok: /}\\//.test(\'}/\'),',
       '  }),',
       '  access: \'public\',',
       '})',
     ].join('\n')
 
-    expect(stripRealtimeServerHandlers(source)).toContain('handler: undefined,')
-    expect(stripRealtimeServerHandlers(source)).toContain('access: \'public\'')
+    const stripped = stripRealtimeServerHandlers(source)
+
+    expect(stripped).toContain('handler: undefined,')
+    expect(stripped).toContain('access: \'public\'')
+    expect(stripped).not.toContain('/}\\//')
+    expect(stripped).not.toContain('ok:')
   })
 })
