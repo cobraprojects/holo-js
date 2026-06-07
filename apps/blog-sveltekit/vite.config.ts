@@ -1,8 +1,9 @@
 import { sveltekit } from '@sveltejs/kit/vite'
+import { holoSvelteKitRealtime } from '@holo-js/adapter-sveltekit/vite'
 import { defineConfig } from 'vite'
 
 export default defineConfig({
-  plugins: [sveltekit()],
+  plugins: [holoSvelteKitRealtime(), sveltekit()],
   server: {
     fs: {
       allow: ['.holo-js/generated'],
@@ -36,6 +37,7 @@ export default defineConfig({
       '@holo-js/queue',
       '@holo-js/queue-db',
       '@holo-js/queue-redis',
+      '@holo-js/realtime',
       '@holo-js/security',
       '@holo-js/session',
       '@holo-js/storage',

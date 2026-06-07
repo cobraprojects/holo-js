@@ -205,6 +205,7 @@ describe('@holo-js/realtime client runtime', () => {
 
   it('handles query store cleanup before connect and transport startup failures', async () => {
     const calls: string[] = []
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const idleTransport = {
       async query<TResult>(name: string) {
         return {
@@ -264,6 +265,8 @@ describe('@holo-js/realtime client runtime', () => {
     unsubscribeAfterReset()
 
     expect(calls).toEqual(['failed unsubscribe'])
+    expect(consoleWarn).toHaveBeenCalledWith('[@holo-js/realtime] query failed')
+    expect(consoleWarn).toHaveBeenCalledWith('[@holo-js/realtime] subscribe failed')
   })
 
   it('does not create hidden route requests when no client transport is configured', async () => {
@@ -458,6 +461,75 @@ describe('@holo-js/realtime client runtime', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 
+  it('recreates structured realtime authorization errors from websocket responses', async () => {
+    const sentFrames: string[] = []
+    const listeners = new Map<string, Set<(event?: { readonly data: unknown }) => void>>()
+
+    class TestWebSocket {
+      readonly readyState = 1
+
+      constructor(_url: string) {}
+
+      send(value: string): void {
+        sentFrames.push(value)
+      }
+
+      close(): void {}
+
+      addEventListener(event: 'open' | 'close' | 'error' | 'message', listener: (payload?: { readonly data: unknown }) => void): void {
+        const eventListeners = listeners.get(event) ?? new Set<(payload?: { readonly data: unknown }) => void>()
+        eventListeners.add(listener)
+        listeners.set(event, eventListeners)
+        if (event === 'open') {
+          queueMicrotask(() => listener())
+        }
+      }
+    }
+
+    const emitMessage = (payload: Record<string, unknown>) => {
+      for (const listener of listeners.get('message') ?? []) {
+        listener({ data: JSON.stringify(payload) })
+      }
+    }
+
+    vi.stubGlobal('WebSocket', TestWebSocket)
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      key: 'app-key',
+      host: '127.0.0.1',
+      port: 8080,
+      path: '/app',
+      scheme: 'http',
+    })))
+    vi.stubGlobal('location', {
+      protocol: 'http:',
+      hostname: 'localhost',
+    })
+
+    const transport = realtimeClientInternals.createBroadcastRealtimeTransport()
+    const mutationPromise = transport.mutate<Post>('posts.update', { id: 1 })
+    await vi.waitUntil(() => sentFrames.length === 1)
+    const mutationFrame = JSON.parse(sentFrames[0]!) as { data: { id: string } }
+    emitMessage({
+      event: 'holo:realtime:error',
+      data: JSON.stringify({
+        id: mutationFrame.data.id,
+        message: 'Only the author, editors, or admins can update posts.',
+        name: 'AuthorizationError',
+        kind: 'authorization',
+        status: 403,
+        code: 'posts.update.denied',
+      }),
+    })
+
+    await expect(mutationPromise).rejects.toMatchObject({
+      name: 'AuthorizationError',
+      message: 'Only the author, editors, or admins can update posts.',
+      kind: 'authorization',
+      status: 403,
+      code: 'posts.update.denied',
+    })
+  })
+
   it('executes mutations through the configured transport', async () => {
     const createPost = mutation({
       name: 'posts.create',
@@ -493,6 +565,40 @@ describe('@holo-js/realtime client runtime', () => {
       id: 1,
       title: 'First',
     })
+  })
+
+  it('observes ignored public mutation rejections while preserving awaitable failures', async () => {
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const denied = Object.assign(new Error('Only the author, editors, or admins can update posts.'), {
+      name: 'AuthorizationError',
+      kind: 'authorization',
+      status: 403,
+      code: 'posts.update.denied',
+    })
+    const transport: RealtimeClientTransport = {
+      async query() {
+        throw new Error('query should not run')
+      },
+      async mutate() {
+        throw denied
+      },
+      subscribe() {
+        return () => {}
+      },
+    }
+    const renamePost = mutation({
+      name: 'posts.rename',
+      access: 'public',
+      handler: async () => ({ ok: true }),
+    })
+
+    configureRealtimeClientTransport(transport)
+    void renamePost({})
+    await Promise.resolve()
+    await Promise.resolve()
+
+    await expect(renamePost({})).rejects.toBe(denied)
+    expect(consoleWarn).toHaveBeenCalledWith('[@holo-js/realtime] Only the author, editors, or admins can update posts.')
   })
 
   it('requires an explicit transport for callable mutations', async () => {

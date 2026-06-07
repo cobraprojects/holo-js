@@ -39,6 +39,7 @@
     "@holo-js/notifications": "workspace:*",
     "@holo-js/queue": "workspace:*",
     "@holo-js/queue-db": "workspace:*",
+    "@holo-js/realtime": "workspace:*",
     "@holo-js/security": "workspace:*",
     "@holo-js/session": "workspace:*",
     "@holo-js/storage": "workspace:*",

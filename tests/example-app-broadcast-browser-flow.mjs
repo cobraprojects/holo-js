@@ -40,6 +40,11 @@ function collectPageFailures(page) {
   page.on('pageerror', (error) => {
     failures.push(error.message)
   })
+  page.on('response', (response) => {
+    if (response.status() >= 500) {
+      failures.push(`${response.status()} ${response.url()}`)
+    }
+  })
 
   return failures
 }
@@ -118,10 +123,22 @@ async function createPostThroughBrowser(page, title) {
   await page.locator('select[name="status"]').selectOption('draft')
   await page.locator('select[name="categoryId"]').selectOption('')
 
-  await Promise.all([
-    page.waitForURL(url => url.pathname === '/admin/posts', { timeout: 20000 }),
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      candidate => candidate.url().includes('/admin/posts') && candidate.request().method() === 'POST',
+      { timeout: 20000 },
+    ),
     page.getByRole('button', { name: /create post/i }).click(),
   ])
+  const responseText = await response.text().catch(() => '')
+  assert.ok(
+    (response.status() >= 200 && response.status() < 400),
+    `Expected creating a post to return a successful response, received ${response.status()} ${response.statusText()} ${responseText}`,
+  )
+  await waitFor(
+    () => new URL(page.url()).pathname === '/admin/posts',
+    `Expected creating a post to navigate to /admin/posts, received ${page.url()}.`,
+  )
 }
 
 export async function assertExampleAppBroadcastBrowserFlow({ baseUrl, appName, cookieHeader }) {

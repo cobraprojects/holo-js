@@ -95,15 +95,17 @@ function getRuntimeState(): RuntimeState {
 }
 
 function createRealtimeDatabaseContext(connection: DatabaseContext): RealtimeDatabaseContext {
-  return Object.freeze({
+  const context = {
     connection,
     table(table: string) {
-      return new TableQueryBuilder(table, connection) as ReturnType<RealtimeDatabaseContext['table']>
+      return new TableQueryBuilder(table, connection)
     },
     model(...parameters: Parameters<DatabaseContext['model']>) {
-      return connection.model(...parameters) as ReturnType<DatabaseContext['model']>
+      return connection.model(...parameters)
     },
-  })
+  } satisfies RealtimeDatabaseContext
+
+  return Object.freeze(context)
 }
 
 function getDatabaseContext(): RealtimeDatabaseContext {
@@ -230,7 +232,7 @@ async function authorize<TArgs>(
   if (access.authorize) {
     const allowed = await access.authorize({
       args,
-      auth: auth as RealtimeAuthState,
+      auth,
       db,
     })
     if (!allowed) {
@@ -345,9 +347,17 @@ async function refreshSubscription<TDefinition extends RealtimeQueryDefinitionMe
       ...result,
       version: subscription.version,
     })
-    await subscription.options.onData?.(subscription.current)
+    try {
+      await subscription.options.onData?.(subscription.current)
+    } catch (error) {
+      console.error('[@holo-js/realtime] Realtime subscription onData callback failed.', error)
+    }
   } catch (error) {
-    await subscription.options.onError?.(error)
+    try {
+      await subscription.options.onError?.(error)
+    } catch (handlerError) {
+      console.error('[@holo-js/realtime] Realtime subscription onError callback failed.', handlerError)
+    }
   }
 }
 

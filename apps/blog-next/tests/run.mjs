@@ -12,6 +12,7 @@ import Database from 'better-sqlite3'
 import ts from 'typescript'
 import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
 import { assertExampleAppBroadcastBrowserFlow } from '../../../tests/example-app-broadcast-browser-flow.mjs'
+import { assertExampleAppRealtimeBrowserFlow, assertExampleAppRealtimeUnavailableBrowserFlow } from '../../../tests/example-app-realtime-browser-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 
 const cwd = process.cwd()
@@ -641,12 +642,24 @@ async function assertAuthenticatedUserCanCreateDraftPost({ baseUrl, jar, fetchTe
 }
 
 async function assertAuthenticatedAdminPostFlows(context) {
+  await stopProcessTree(broadcastChild)
+  broadcastChild = null
+  await assertExampleAppRealtimeUnavailableBrowserFlow({
+    baseUrl: context.baseUrl,
+    cookieHeader: context.jar.header(),
+  })
+  await startBroadcastWorker(context.baseUrl)
   await assertExampleAppBroadcastBrowserFlow({
     baseUrl: context.baseUrl,
     appName: 'blog-next',
     cookieHeader: context.jar.header(),
   })
   await assertAuthenticatedUserCanCreateDraftPost(context)
+  await assertExampleAppRealtimeBrowserFlow({
+    baseUrl: context.baseUrl,
+    appName: 'blog-next',
+    cookieHeader: context.jar.header(),
+  })
 }
 
 function pipeOutput(stream, target) {

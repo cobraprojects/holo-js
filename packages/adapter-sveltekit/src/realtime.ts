@@ -124,7 +124,10 @@ function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
   const store = getRealtimeQueryStore(definition, args)
   const subscribe = createSubscriber((update) => {
     const unsubscribe = store.subscribe(() => {
-      current = replaceRealtimeReactiveValue(current, store.snapshot?.data as RealtimeResultFor<TDefinition>)
+      const nextData = store.snapshot?.data
+      if (typeof nextData !== 'undefined') {
+        current = replaceRealtimeReactiveValue(current, nextData)
+      }
       update()
     })
     return unsubscribe

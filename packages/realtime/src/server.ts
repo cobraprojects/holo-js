@@ -1,6 +1,7 @@
 import { pathToFileURL } from 'node:url'
 import { readdir } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import type { Dirent } from 'node:fs'
 import {
   configureRealtimeRuntime,
   executeRealtimeMutation,
@@ -39,10 +40,19 @@ function resolveRealtimeRoot(options: RealtimeServerOptions): string {
 }
 
 async function collectRealtimeFiles(root: string): Promise<readonly string[]> {
-  const entries = await readdir(root, {
-    recursive: true,
-    withFileTypes: true,
-  }).catch(() => [])
+  let entries: Dirent<string>[]
+  try {
+    entries = await readdir(root, {
+      recursive: true,
+      withFileTypes: true,
+    })
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+      return []
+    }
+
+    throw error
+  }
 
   return entries
     .filter(entry => entry.isFile())

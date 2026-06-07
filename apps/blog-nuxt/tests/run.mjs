@@ -10,6 +10,7 @@ import { DEFAULT_SESSION_COOKIE_NAME } from '@holo-js/config'
 import Database from 'better-sqlite3'
 import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
 import { assertExampleAppBroadcastBrowserFlow } from '../../../tests/example-app-broadcast-browser-flow.mjs'
+import { assertExampleAppRealtimeBrowserFlow, assertExampleAppRealtimeUnavailableBrowserFlow } from '../../../tests/example-app-realtime-browser-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 
 const cwd = process.cwd()
@@ -484,12 +485,24 @@ async function assertAuthenticatedUserCanCreateAndUpdatePostImage({ baseUrl, jar
 }
 
 async function assertAuthenticatedAdminPostFlows(context) {
+  await stopProcessTree(broadcastChild)
+  broadcastChild = null
+  await assertExampleAppRealtimeUnavailableBrowserFlow({
+    baseUrl: context.baseUrl,
+    cookieHeader: context.jar.header(),
+  })
+  await startBroadcastWorker(context.baseUrl)
   await assertExampleAppBroadcastBrowserFlow({
     baseUrl: context.baseUrl,
     appName: 'blog-nuxt',
     cookieHeader: context.jar.header(),
   })
   await assertAuthenticatedUserCanCreateAndUpdatePostImage(context)
+  await assertExampleAppRealtimeBrowserFlow({
+    baseUrl: context.baseUrl,
+    appName: 'blog-nuxt',
+    cookieHeader: context.jar.header(),
+  })
   await assertAuthenticatedUserCannotDeletePost(context)
 }
 

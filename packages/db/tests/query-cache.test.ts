@@ -246,6 +246,7 @@ describe('@holo-js/db query cache integration', () => {
 
   afterEach(() => {
     resetDatabaseQueryCacheBridge()
+    queryCacheInternals.resetDatabaseDependencyInvalidationListeners()
     resetDB()
   })
 
@@ -301,6 +302,31 @@ describe('@holo-js/db query cache integration', () => {
     await expect(
       DB.table(users).cache(new Date('invalid')).get(),
     ).rejects.toThrow('Query cache Date TTL must be valid')
+  })
+
+  it('notifies remaining database dependency listeners when one listener fails', async () => {
+    const calls: string[] = []
+    const error = new Error('listener failed')
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    queryCacheInternals.onDatabaseDependencyInvalidated(() => {
+      calls.push('first')
+      throw error
+    })
+    queryCacheInternals.onDatabaseDependencyInvalidated(() => {
+      calls.push('second')
+    })
+
+    await expect(queryCacheInternals.notifyDatabaseDependencyInvalidationListeners({
+      connectionName: 'main',
+      dependencies: ['db:main:posts'],
+    })).resolves.toBeUndefined()
+
+    expect(calls).toEqual(['first', 'second'])
+    expect(consoleError).toHaveBeenCalledWith(
+      '[@holo-js/db] Database dependency invalidation listener failed.',
+      error,
+    )
   })
 
   it('supports flexible query caching and model-query cache passthrough without changing result behavior', async () => {

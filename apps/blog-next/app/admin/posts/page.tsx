@@ -11,7 +11,10 @@ export default async function AdminPostsPage() {
     <section style={{ display: 'grid', gap: '1.5rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h1 style={{ margin: 0 }}>Posts</h1>
-        <Link href="/admin/posts/new" style={{ color: '#7dd3fc' }}>New post</Link>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          <Link href="/admin/posts/realtime" style={{ color: '#7dd3fc' }}>Realtime demo</Link>
+          <Link href="/admin/posts/new" style={{ color: '#7dd3fc' }}>New post</Link>
+        </div>
       </div>
       {data.posts.map(post => (
         <article key={post.id} style={{ padding: '1.25rem', borderRadius: '1rem', background: '#111827' }}>

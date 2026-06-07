@@ -3307,6 +3307,69 @@ describe('@holo-js/broadcast worker runtime', () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1)
   })
 
+  it('serializes structured realtime authorization errors through websocket messages', async () => {
+    const app = {
+      connection: 'holo-main',
+      appId: 'app-main',
+      key: 'key-main',
+      secret: 'secret-main',
+    }
+    const socket = createSocket(app)
+    const runtime = createBroadcastWorkerRuntime({
+      config: createConfig(),
+      now: () => FIXED_NOW_MS,
+      realtime: {
+        async query() {
+          throw new Error('query should not run')
+        },
+        async mutate() {
+          const error = new Error('Only the author, editors, or admins can update posts.')
+          error.name = 'AuthorizationError'
+          throw Object.assign(error, {
+            decision: {
+              allowed: false,
+              status: 403,
+              message: error.message,
+              code: 'posts.update.denied',
+            },
+          })
+        },
+        async subscribe() {
+          throw new Error('subscribe should not run')
+        },
+      },
+    })
+
+    runtime.connectWebSocket(socket.socket)
+    await runtime.receiveWebSocketMessage(socket.socket.socketId, JSON.stringify({
+      event: 'holo:realtime',
+      data: {
+        id: 'mutation.1',
+        action: 'mutation',
+        name: 'posts.update',
+        args: { id: 1 },
+      },
+    }))
+
+    const realtimeMessages = decodeMessages(socket.messages).filter(message => message.event.startsWith('holo:realtime'))
+    expect(realtimeMessages.map(message => ({
+      event: message.event,
+      data: JSON.parse(message.data) as unknown,
+    }))).toEqual([
+      {
+        event: 'holo:realtime:error',
+        data: {
+          id: 'mutation.1',
+          message: 'Only the author, editors, or admins can update posts.',
+          kind: 'authorization',
+          name: 'AuthorizationError',
+          status: 403,
+          code: 'posts.update.denied',
+        },
+      },
+    ])
+  })
+
   it('covers scaling event socket_id fallback, log non-Error branches, whisper cleanup, publish body catch, Bun message error, and subscribe cleanup', async () => {
     const config = normalizeBroadcastConfig({
       default: 'holo-main',

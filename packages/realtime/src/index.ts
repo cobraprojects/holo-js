@@ -57,6 +57,7 @@ export type {
   RealtimeAccessRequirement,
   RealtimeArgsFor,
   RealtimeArgsForSchema,
+  RealtimeAuthorizationContext,
   RealtimeAuthForAccess,
   RealtimeAuthModule,
   RealtimeAuthRuntime,

@@ -29,7 +29,7 @@ export type RealtimeFrameworkRuntime = {
   useQuery<TDefinition extends RealtimeQueryDefinition>(
     definition: TDefinition,
     args: RealtimeArgsFor<TDefinition>,
-  ): RealtimeResultFor<TDefinition>
+  ): RealtimeResultFor<TDefinition> | undefined
 }
 
 type RealtimeClientState = {
@@ -37,6 +37,15 @@ type RealtimeClientState = {
   transport?: RealtimeClientTransport
   stores: Map<string, MutableRealtimeQueryStore<unknown>>
   warnedMessages: Set<string>
+}
+
+type RealtimeClientErrorKind = 'authorization' | 'transport' | 'runtime'
+
+type RealtimeClientErrorOptions = {
+  readonly name?: string
+  readonly status?: number
+  readonly code?: string
+  readonly kind?: RealtimeClientErrorKind
 }
 
 type MutableRealtimeQueryStore<TResult> = RealtimeQueryStore<TResult> & {
@@ -62,6 +71,14 @@ type RealtimeWireResult<TResult> = {
   readonly snapshot?: RealtimeSubscriptionSnapshot<TResult>
 }
 
+type RealtimeWireError = {
+  readonly message: string
+  readonly name?: string
+  readonly status?: number
+  readonly code?: string
+  readonly kind?: RealtimeClientErrorKind
+}
+
 type RealtimeWebSocketLike = {
   readonly readyState: number
   send(value: string): void
@@ -80,6 +97,30 @@ type RealtimeClientGlobals = typeof globalThis & {
   readonly location?: {
     readonly protocol?: string
     readonly hostname?: string
+  }
+}
+
+class RealtimeClientError extends Error {
+  readonly status: number | undefined
+  readonly code: string | undefined
+  readonly kind: RealtimeClientErrorKind
+
+  constructor(message: string, options: RealtimeClientErrorOptions = {}) {
+    super(message)
+    this.name = options.name ?? 'RealtimeClientError'
+    this.status = options.status
+    this.code = options.code
+    this.kind = options.kind ?? 'runtime'
+  }
+}
+
+class RealtimeAuthorizationError extends RealtimeClientError {
+  constructor(message: string, options: Omit<RealtimeClientErrorOptions, 'kind'> = {}) {
+    super(message, {
+      ...options,
+      name: options.name ?? 'RealtimeAuthorizationError',
+      kind: 'authorization',
+    })
   }
 }
 
@@ -174,6 +215,44 @@ function parseWireData(value: unknown): Record<string, unknown> {
   }
 
   return value as Record<string, unknown>
+}
+
+function normalizeRealtimeErrorKind(value: unknown): RealtimeClientErrorKind | undefined {
+  if (value === 'authorization' || value === 'transport' || value === 'runtime') {
+    return value
+  }
+
+  return undefined
+}
+
+function normalizeRealtimeErrorStatus(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 400 && value <= 599) {
+    return value
+  }
+
+  return undefined
+}
+
+function parseWireError(data: Record<string, unknown>): RealtimeWireError {
+  const status = normalizeRealtimeErrorStatus(data.status)
+  const kind = normalizeRealtimeErrorKind(data.kind)
+
+  return {
+    message: typeof data.message === 'string' ? data.message : unavailableTransportMessage,
+    ...(typeof data.name === 'string' ? { name: data.name } : {}),
+    ...(typeof data.code === 'string' ? { code: data.code } : {}),
+    ...(typeof status === 'undefined' ? {} : { status }),
+    ...(typeof kind === 'undefined' ? {} : { kind }),
+  }
+}
+
+function createWireError(data: Record<string, unknown>): RealtimeClientError {
+  const error = parseWireError(data)
+  if (error.kind === 'authorization') {
+    return new RealtimeAuthorizationError(error.message, error)
+  }
+
+  return new RealtimeClientError(error.message, error)
 }
 
 function resolveWebSocketScheme(scheme: BroadcastClientConfig['scheme'], globals: RealtimeClientGlobals): 'ws' | 'wss' {
@@ -276,7 +355,7 @@ export function createBroadcastRealtimeTransport(options: {
     }
 
     if (eventName === 'holo:realtime:error') {
-      const error = new Error(typeof data.message === 'string' ? data.message : unavailableTransportMessage)
+      const error = createWireError(data)
       pending.get(id)?.reject(error)
       pending.delete(id)
       subscriptions.get(id)?.onError(error)
@@ -485,8 +564,12 @@ function createRealtimeQueryStore<TResult>(
       }
 
       connected = true
-      void transport.query<TResult>(name, args).then(setSnapshot, () => {})
-      unsubscribe = transport.subscribe<TResult>(name, args, setSnapshot, () => {})
+      void transport.query<TResult>(name, args).then(setSnapshot, (error) => {
+        warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
+      })
+      unsubscribe = transport.subscribe<TResult>(name, args, setSnapshot, (error) => {
+        warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
+      })
     },
     setSnapshot,
     subscribe(listener) {
@@ -557,24 +640,30 @@ export function hydrateRealtimeQuery<TDefinition extends RealtimeQueryDefinition
 export function useRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
   definition: TDefinition,
   args: RealtimeArgsFor<TDefinition>,
-): RealtimeResultFor<TDefinition> {
+): RealtimeResultFor<TDefinition> | undefined {
   const framework = getRealtimeClientState().framework
   if (!framework) {
-    return getRealtimeQueryStore(definition, args).snapshot?.data as RealtimeResultFor<TDefinition>
+    return getRealtimeQueryStore(definition, args).snapshot?.data
   }
 
   return framework.useQuery(definition, args)
 }
 
-export async function useRealtimeMutation<TDefinition extends RealtimeMutationDefinition>(
+export function useRealtimeMutation<TDefinition extends RealtimeMutationDefinition>(
   definition: TDefinition,
   input: RealtimeArgsFor<TDefinition>,
 ): Promise<RealtimeResultFor<TDefinition>> {
   const args = normalizeArgs(input)
   const transport = getRealtimeClientState().transport ?? createMissingRealtimeTransport()
-  const result = await transport.mutate<RealtimeResultFor<TDefinition>>(definition.name, args)
+  const promise = transport
+    .mutate<RealtimeResultFor<TDefinition>>(definition.name, args)
+    .then(result => result.data)
 
-  return result.data
+  promise.catch((error) => {
+    warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
+  })
+
+  return promise
 }
 
 export const realtimeClientInternals = {

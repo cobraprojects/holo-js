@@ -4,7 +4,13 @@ const { data } = await useFetch('/api/admin/posts')
 
 <template>
   <section class="stack">
-    <div class="row"><h1>Posts</h1><NuxtLink to="/admin/posts/new">New post</NuxtLink></div>
+    <div class="row">
+      <h1>Posts</h1>
+      <div class="actions">
+        <NuxtLink to="/admin/posts/realtime">Realtime demo</NuxtLink>
+        <NuxtLink to="/admin/posts/new">New post</NuxtLink>
+      </div>
+    </div>
     <article v-for="post in data?.posts || []" :key="post.id" class="panel row">
       <div>
         <h2>{{ post.title }}</h2>
@@ -21,5 +27,6 @@ const { data } = await useFetch('/api/admin/posts')
 <style scoped>
 .stack { display: grid; gap: 1rem; }
 .row { display: flex; justify-content: space-between; gap: 1rem; align-items: center; }
+.actions { display: flex; gap: 0.75rem; align-items: center; }
 .panel { padding: 1rem; border-radius: 1rem; background: #111827; }
 </style>

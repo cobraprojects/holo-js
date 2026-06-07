@@ -194,6 +194,8 @@ type RealtimeSocketMessage = {
   readonly args: Record<string, unknown>
 }
 
+type RealtimeWireErrorKind = 'authorization' | 'transport' | 'runtime'
+
 type BroadcastRedisScalingConnection = {
   readonly url?: string
   readonly clusters?: readonly {
@@ -328,6 +330,10 @@ function normalizeRealtimeArgs(value: unknown): Record<string, unknown> {
   }
 
   return value as Record<string, unknown>
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
 function parseRealtimeSocketMessage(data: Record<string, unknown>): RealtimeSocketMessage {
@@ -1136,10 +1142,71 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     socket.send(pusherEvent(event, data))
   }
 
+  function resolveRealtimeErrorStatus(error: unknown): number | undefined {
+    if (!isRecord(error)) {
+      return undefined
+    }
+
+    const decision = isRecord(error.decision) ? error.decision : undefined
+    const status = decision?.status ?? error.status ?? error.statusCode
+    if (typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599) {
+      return status
+    }
+
+    const name = typeof error.name === 'string' ? error.name : ''
+    if (name === 'RealtimeUnauthorizedError') {
+      return 401
+    }
+
+    if (name === 'RealtimeForbiddenError') {
+      return 403
+    }
+
+    return undefined
+  }
+
+  function resolveRealtimeErrorCode(error: unknown): string | undefined {
+    if (!isRecord(error)) {
+      return undefined
+    }
+
+    const decision = isRecord(error.decision) ? error.decision : undefined
+    const code = decision?.code ?? error.code
+    return typeof code === 'string' ? code : undefined
+  }
+
+  function resolveRealtimeErrorKind(error: unknown, status: number | undefined): RealtimeWireErrorKind {
+    if (!isRecord(error)) {
+      return 'runtime'
+    }
+
+    const name = typeof error.name === 'string' ? error.name : ''
+    if (
+      name === 'AuthorizationError'
+      || name === 'RealtimeUnauthorizedError'
+      || name === 'RealtimeForbiddenError'
+      || status === 401
+      || status === 403
+      || status === 404
+    ) {
+      return 'authorization'
+    }
+
+    return name === 'RealtimeAuthUnavailableError' ? 'transport' : 'runtime'
+  }
+
   function sendRealtimeError(socket: SocketState, id: string, error: unknown): void {
+    const status = resolveRealtimeErrorStatus(error)
+    const code = resolveRealtimeErrorCode(error)
+    const name = error instanceof Error ? error.name : undefined
+    const kind = resolveRealtimeErrorKind(error, status)
     sendRealtimeMessage(socket, 'holo:realtime:error', {
       id,
       message: error instanceof Error ? error.message : String(error),
+      kind,
+      ...(typeof name === 'undefined' ? {} : { name }),
+      ...(typeof status === 'undefined' ? {} : { status }),
+      ...(typeof code === 'undefined' ? {} : { code }),
     })
   }
 

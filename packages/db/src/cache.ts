@@ -145,7 +145,13 @@ async function notifyDatabaseDependencyInvalidationListeners(
     return
   }
 
-  await Promise.all([...listeners].map(listener => listener(event)))
+  await Promise.all([...listeners].map(async (listener) => {
+    try {
+      await listener(event)
+    } catch (error) {
+      console.error('[@holo-js/db] Database dependency invalidation listener failed.', error)
+    }
+  }))
 }
 
 export function normalizeQueryCacheConfig(

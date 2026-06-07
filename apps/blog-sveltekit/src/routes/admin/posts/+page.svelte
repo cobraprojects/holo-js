@@ -4,7 +4,13 @@
 
 {#if data}
   <section class="stack">
-    <div class="row"><h1>Posts</h1><a href="/admin/posts/new">New post</a></div>
+    <div class="row">
+      <h1>Posts</h1>
+      <div class="actions">
+        <a href="/admin/posts/realtime">Realtime demo</a>
+        <a href="/admin/posts/new">New post</a>
+      </div>
+    </div>
     {#each data.posts as post}
       <article class="panel row">
         <div>
@@ -27,5 +33,6 @@
 <style>
   .stack { display: grid; gap: 1rem; }
   .row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+  .actions { display: flex; align-items: center; gap: 0.75rem; }
   .panel { padding: 1rem; border-radius: 1rem; background: #111827; }
 </style>

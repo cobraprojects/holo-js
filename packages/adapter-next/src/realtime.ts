@@ -12,7 +12,7 @@ import type { RealtimeArgsFor, RealtimeQueryDefinition, RealtimeResultFor } from
 function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
   definition: TDefinition,
   args: RealtimeArgsFor<TDefinition>,
-): RealtimeResultFor<TDefinition> {
+): RealtimeResultFor<TDefinition> | undefined {
   const store = getRealtimeQueryStore(definition, args)
   useEffect(() => {
     store.connect()
@@ -23,7 +23,7 @@ function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
     () => store.snapshot,
   )
 
-  return snapshot?.data as RealtimeResultFor<TDefinition>
+  return snapshot?.data
 }
 
 configureRealtimeClientRuntime({

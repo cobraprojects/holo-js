@@ -17,7 +17,7 @@ Core user APIs:
 Add realtime when creating the app:
 
 ```bash
-holo new my-app --package realtime
+npm create holo-js@latest my-app -- --package realtime
 ```
 
 Or install it in an existing app:
@@ -123,6 +123,10 @@ import { listPosts } from '~/server/realtime/posts'
 const posts = listPosts({ limit: 10 })
 ```
 
+The `~/` alias is emitted by the project scaffold through the TypeScript path mappings for `~/*` and `@/*` to `./*`,
+not by Nuxt alone. The scaffold workspace renderers and framework runtime expect the framework or bundler to honor
+those TypeScript `paths`; verify custom setups keep that resolution enabled.
+
 The same call shape works in Next, Nuxt, and SvelteKit. Holo creates the framework runtime during scaffolding, so app
 code does not create a realtime client, subscribe to a query, or choose a channel name. Browser calls run over the
 broadcast websocket transport.
@@ -211,7 +215,8 @@ export const staffQueue = query({
 })
 ```
 
-Use `authorize` for request-specific checks. In authenticated access, `auth` is non-null inside `authorize`.
+Use `authorize` for request-specific checks. The callback receives the resolved auth state when one exists, or `null`
+when no guard produced a user. Authenticated handlers still receive non-null `auth` after authorization succeeds.
 
 ```ts
 export const teamPosts = query({
@@ -221,6 +226,10 @@ export const teamPosts = query({
   access: {
     require: 'authenticated',
     authorize: async ({ args, auth, db }) => {
+      if (!auth) {
+        return false
+      }
+
       const membership = await db
         .table('team_members')
         .where('team_id', args.teamId)

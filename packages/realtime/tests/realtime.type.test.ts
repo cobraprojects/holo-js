@@ -40,6 +40,22 @@ const createPost = mutation({
   },
 })
 
+const guardedPost = query({
+  access: {
+    require: 'authenticated',
+    authorize: ({ auth }) => {
+      expectTypeOf(auth).toEqualTypeOf<RealtimeAuthState | null>()
+
+      return Boolean(auth)
+    },
+  },
+  handler: async ({ auth }) => {
+    expectTypeOf(auth).toEqualTypeOf<RealtimeAuthState>()
+
+    return auth.user.id
+  },
+})
+
 describe('@holo-js/realtime type inference', () => {
   it('preserves args, auth, result, and definition types through the user API', () => {
     expectTypeOf(listPosts.kind).toEqualTypeOf<'query'>()
@@ -50,5 +66,6 @@ describe('@holo-js/realtime type inference', () => {
     expectTypeOf<RealtimeArgsFor<typeof createPost>>().toEqualTypeOf<{ title: string }>()
     expectTypeOf<RealtimeResultFor<typeof createPost>>().toEqualTypeOf<{ id: string | number | undefined, title: string }>()
     expectTypeOf<ReturnType<typeof createPost>>().toEqualTypeOf<Promise<{ id: string | number | undefined, title: string }>>()
+    expectTypeOf<RealtimeResultFor<typeof guardedPost>>().toEqualTypeOf<string | number | undefined>()
   })
 })

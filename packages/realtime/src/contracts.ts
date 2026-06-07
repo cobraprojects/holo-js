@@ -29,10 +29,14 @@ export interface RealtimeAuthenticatedAccessContext<TArgs> {
   readonly db: RealtimeDatabaseContext
 }
 
-export type RealtimeAccessAuthorize<TArgs, TRequirement extends RealtimeAccessRequirement> = (
-  context: TRequirement extends 'authenticated'
-    ? RealtimeAuthenticatedAccessContext<TArgs>
-    : RealtimePublicAccessContext<TArgs>
+export interface RealtimeAuthorizationContext<TArgs> {
+  readonly args: TArgs
+  readonly auth: RealtimeAuthState | null
+  readonly db: RealtimeDatabaseContext
+}
+
+export type RealtimeAccessAuthorize<TArgs> = (
+  context: RealtimeAuthorizationContext<TArgs>
 ) => boolean | Promise<boolean>
 
 export interface RealtimeAccessObject<
@@ -42,7 +46,7 @@ export interface RealtimeAccessObject<
   readonly require: TRequirement
   readonly guard?: string
   readonly guards?: readonly string[]
-  readonly authorize?: RealtimeAccessAuthorize<TArgs, TRequirement>
+  readonly authorize?: RealtimeAccessAuthorize<TArgs>
 }
 
 export type RealtimeAccess<TArgs = Record<string, never>>

@@ -1,4 +1,4 @@
-import { onScopeDispose, reactive, shallowRef } from 'vue'
+import { onScopeDispose, reactive } from 'vue'
 import {
   configureRealtimeClientRuntime,
   configureRealtimeClientTransport,
@@ -80,11 +80,12 @@ function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
   args: RealtimeArgsFor<TDefinition>,
 ): RealtimeResultFor<TDefinition> {
   const store = getRealtimeQueryStore(definition, args)
-  const snapshot = shallowRef(store.snapshot)
-  let current = createRealtimeReactiveValue(snapshot.value?.data) as RealtimeResultFor<TDefinition>
+  let current = createRealtimeReactiveValue(store.snapshot?.data) as RealtimeResultFor<TDefinition>
   const unsubscribe = store.subscribe(() => {
-    snapshot.value = store.snapshot
-    current = replaceRealtimeReactiveValue(current, snapshot.value?.data as RealtimeResultFor<TDefinition>)
+    const nextData = store.snapshot?.data
+    if (typeof nextData !== 'undefined') {
+      current = replaceRealtimeReactiveValue(current, nextData)
+    }
   })
   if ('window' in globalThis) {
     store.connect()

@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, expectTypeOf, it } from 'vitest'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import {
   createCapabilities,
   createDatabase,
@@ -35,6 +37,7 @@ import {
   RealtimeUnauthorizedError,
   realtimeRuntimeInternals,
   resetRealtimeRuntime,
+  resolveRealtimeDefinition,
   subscribeRealtimeQuery,
 } from '../src/server'
 import type { AuthenticatedAuthUser } from '@holo-js/auth'
@@ -525,6 +528,81 @@ describe('@holo-js/realtime', () => {
         { id: 2, title: 'Post 2' },
       ],
     ])
+  })
+
+  it('isolates user subscription callback failures while refreshing matching subscriptions', async () => {
+    const adapter = new MemoryAdapter()
+    const db = createContext(adapter)
+    configureRealtimeRuntime({
+      db: () => db,
+      loadAuthModule: async () => null,
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let shouldFailQuery = false
+    let shouldFailOnData = false
+    const snapshots: unknown[][] = []
+    const query = defineRealtimeQuery({
+      name: 'posts.live',
+      access: 'public',
+      handler: async ({ db: context }) => context.table('posts').get(),
+    })
+    const failingQuery = defineRealtimeQuery({
+      name: 'posts.failing',
+      access: 'public',
+      handler: async ({ db: context }) => {
+        await context.table('posts').get()
+        if (shouldFailQuery) {
+          throw new Error('query failed')
+        }
+
+        return []
+      },
+    })
+    const mutation = defineRealtimeMutation({
+      name: 'posts.create',
+      access: 'public',
+      handler: async ({ db: context }) => {
+        await context.table('posts').insert({ title: 'Next' })
+        return { ok: true }
+      },
+    })
+
+    await subscribeRealtimeQuery(query, {}, {
+      onData: snapshot => {
+        snapshots.push(snapshot.data)
+      },
+    })
+    await subscribeRealtimeQuery(query, {}, {
+      onData: () => {
+        if (shouldFailOnData) {
+          throw new Error('onData failed')
+        }
+      },
+    })
+    await subscribeRealtimeQuery(failingQuery, {}, {
+      onError: () => {
+        throw new Error('onError failed')
+      },
+    })
+    shouldFailQuery = true
+    shouldFailOnData = true
+
+    await expect(executeRealtimeMutation(mutation)).resolves.toMatchObject({
+      data: { ok: true },
+    })
+
+    expect(snapshots.at(-1)).toEqual([
+      { id: 1, title: 'First' },
+      { id: 2, title: 'Post 2' },
+    ])
+    expect(consoleError).toHaveBeenCalledWith(
+      '[@holo-js/realtime] Realtime subscription onData callback failed.',
+      expect.any(Error),
+    )
+    expect(consoleError).toHaveBeenCalledWith(
+      '[@holo-js/realtime] Realtime subscription onError callback failed.',
+      expect.any(Error),
+    )
   })
 
   it('refreshes subscribed relation queries when related rows are attached', async () => {
@@ -1019,7 +1097,7 @@ describe('@holo-js/realtime', () => {
     const query = defineRealtimeQuery({
       access: {
         require: 'authenticated',
-        authorize: async ({ auth }) => auth.user.id === 20,
+        authorize: async ({ auth }) => auth?.user.id === 20,
       },
       handler: async () => true,
     })
@@ -1044,6 +1122,49 @@ describe('@holo-js/realtime', () => {
     await expect(executeRealtimeQuery(query)).resolves.toMatchObject({
       data: 'allowed',
     })
+  })
+
+  it('passes nullable auth into public custom authorization callbacks', async () => {
+    const db = createContext()
+    configureRealtimeRuntime({
+      db: () => db,
+      loadAuthModule: async () => null,
+    })
+    let receivedAuth: unknown = Symbol('unset')
+    const query = defineRealtimeQuery({
+      access: {
+        require: 'public',
+        authorize: async ({ auth }) => {
+          receivedAuth = auth
+          return true
+        },
+      },
+      handler: async () => 'allowed',
+    })
+
+    await expect(executeRealtimeQuery(query)).resolves.toMatchObject({
+      data: 'allowed',
+    })
+    expect(receivedAuth).toBeNull()
+  })
+
+  it('only treats missing realtime definition directories as empty', async () => {
+    const projectRoot = await mkdtemp(join(import.meta.dirname, '../.tmp-realtime-server-'))
+
+    try {
+      await expect(resolveRealtimeDefinition('posts.missing', {
+        projectRoot,
+      })).rejects.toThrow('Realtime definition "posts.missing" was not found.')
+
+      const filePath = join(projectRoot, 'server-realtime-file')
+      await writeFile(filePath, '')
+      await expect(resolveRealtimeDefinition('posts.missing', {
+        projectRoot,
+        realtimeRoot: 'server-realtime-file',
+      })).rejects.toThrow()
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
   })
 
   it('rejects custom authenticated authorization when no guard returns a user', async () => {

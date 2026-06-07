@@ -158,6 +158,17 @@ describe('@holo-js/adapter-sveltekit client forms', () => {
       { id: 1, title: 'First' },
       { id: 2, title: 'Second' },
     ])
+
+    realtimeListener?.({
+      name: 'posts.list',
+      dependencies: [],
+      version: 3,
+    } as unknown as PostSnapshot)
+
+    expect(Array.from(posts)).toEqual([
+      { id: 1, title: 'First' },
+      { id: 2, title: 'Second' },
+    ])
     resetRealtimeClientRuntime()
   })
 
