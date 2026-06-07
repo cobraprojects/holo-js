@@ -933,6 +933,10 @@ export interface HoloRuntime<TCustom extends HoloConfigMap = HoloConfigMap> {
   readonly initialized: boolean
   initialize(): Promise<void>
   shutdown(): Promise<void>
+  runWithAuthRequestAccessors<TValue>(
+    accessors: NonNullable<CreateHoloOptions['authRequest']>,
+    callback: () => Promise<TValue>,
+  ): Promise<TValue>
   useConfig<TKey extends Extract<keyof RuntimeConfigRegistry<TCustom>, string>>(
     key: TKey,
   ): RuntimeConfigRegistry<TCustom>[TKey]
@@ -1226,6 +1230,10 @@ function createRequestAwareAuthContext<TContext extends {
   appendResponseCookie?(cookie: string): void | Promise<void>
   redirectResponse?(url: string, status?: 301 | 302 | 303 | 307 | 308): void | Promise<void>
   setRequestAccessors(accessors?: CreateHoloOptions['authRequest']): void
+  runWithRequestAccessors<TValue>(
+    accessors: NonNullable<CreateHoloOptions['authRequest']>,
+    callback: () => Promise<TValue>,
+  ): Promise<TValue>
 } {
   const requestAccessorStorage = new AsyncLocalStorage<{
     readonly accessors?: CreateHoloOptions['authRequest']
@@ -1264,6 +1272,11 @@ function createRequestAwareAuthContext<TContext extends {
       requestAccessorStorage.enterWith({
         accessors: nextAccessors,
       })
+    },
+    async runWithRequestAccessors(nextAccessors, callback) {
+      return await requestAccessorStorage.run({
+        accessors: nextAccessors,
+      }, callback)
     },
   })
 }
@@ -3831,6 +3844,10 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   readonly authContext?: {
     activate(): void
     setRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
+    runWithRequestAccessors?<TValue>(
+      accessors: NonNullable<CreateHoloOptions['authRequest']>,
+      callback: () => Promise<TValue>,
+    ): Promise<TValue>
   }
 }> {
   const cacheConfigured = hasLoadedConfigFile(loadedConfig, 'cache')
@@ -4273,6 +4290,10 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   let activeAuthContext: {
     activate(): void
     setRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
+    runWithRequestAccessors?<TValue>(
+      accessors: NonNullable<CreateHoloOptions['authRequest']>,
+      callback: () => Promise<TValue>,
+    ): Promise<TValue>
   } | undefined
   let previousOptionalSubsystemBindings: OptionalSubsystemRuntimeBindings | undefined
   const previousRenderView = options.renderView
@@ -4305,6 +4326,10 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     config: accessors.config,
     setAuthRequestAccessors(authRequest) {
       activeAuthContext?.setRequestAccessors?.(authRequest)
+    },
+    async runWithAuthRequestAccessors(authRequest, callback) {
+      const runner = activeAuthContext?.runWithRequestAccessors
+      return runner ? await runner(authRequest, callback) : await callback()
     },
     async initialize() {
       if (runtime.initialized) {

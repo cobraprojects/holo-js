@@ -23,6 +23,7 @@ import type {
   RealtimeAuthState,
   RealtimeDatabaseContext,
   RealtimeExecutionResult,
+  RealtimeExecutionOptions,
   RealtimeMutationDefinition,
   RealtimeMutationDefinitionMetadata,
   RealtimeQueryDefinition,
@@ -46,6 +47,7 @@ type ActiveSubscription<TDefinition extends RealtimeQueryDefinitionMetadata> = {
   readonly definition: TDefinition
   readonly args: RealtimeArgsFor<TDefinition>
   readonly options: RealtimeSubscribeOptions<RealtimeResultFor<TDefinition>>
+  readonly executionOptions?: RealtimeExecutionOptions
   dependencies: readonly string[]
   version: number
   current: RealtimeSubscriptionSnapshot<RealtimeResultFor<TDefinition>>
@@ -110,6 +112,20 @@ function createRealtimeDatabaseContext(connection: DatabaseContext): RealtimeDat
 
 function getDatabaseContext(): RealtimeDatabaseContext {
   return createRealtimeDatabaseContext(getRuntimeState().bindings?.db?.() ?? DB.connection())
+}
+
+async function runWithExecutionOptions<TResult>(
+  options: RealtimeExecutionOptions | undefined,
+  callback: () => Promise<TResult>,
+): Promise<TResult> {
+  if (options?.authRequest) {
+    const runner = getRuntimeState().bindings?.runWithAuthRequestAccessors
+    if (runner) {
+      return await runner(options.authRequest, callback)
+    }
+  }
+
+  return await callback()
 }
 
 async function defaultLoadAuthModule(): Promise<RealtimeAuthModule | null> {
@@ -264,31 +280,36 @@ export async function executeRealtimeQuery<
 >(
   definition: RealtimeQueryDefinition<TName, TSchema, TAccess, TResult>,
   input?: RealtimeArgsForSchema<TSchema>,
+  options?: RealtimeExecutionOptions,
 ): Promise<RealtimeExecutionResult<TResult>>
 export async function executeRealtimeQuery<TDefinition extends RealtimeQueryDefinitionMetadata>(
   definition: TDefinition,
   input?: RealtimeArgsFor<TDefinition>,
+  options?: RealtimeExecutionOptions,
 ): Promise<RealtimeExecutionResult<RealtimeResultFor<TDefinition>>>
 export async function executeRealtimeQuery<TDefinition extends RealtimeQueryDefinitionMetadata>(
   definition: TDefinition,
   input = {} as RealtimeArgsFor<TDefinition>,
+  options?: RealtimeExecutionOptions,
 ): Promise<RealtimeExecutionResult<RealtimeResultFor<TDefinition>>> {
-  const db = getDatabaseContext()
-  const args = await resolveArgs(definition, input)
-  const auth = await authorize(definition.access, args, db)
-  const result = await collectDatabaseQueryDependencies(async () => {
-    return await definition.handler({
-      args,
-      auth: auth as never,
-      db,
-      name: definition.name,
+  return await runWithExecutionOptions(options, async () => {
+    const db = getDatabaseContext()
+    const args = await resolveArgs(definition, input)
+    const auth = await authorize(definition.access, args, db)
+    const result = await collectDatabaseQueryDependencies(async () => {
+      return await definition.handler({
+        args,
+        auth: auth as never,
+        db,
+        name: definition.name,
+      })
     })
-  })
 
-  return Object.freeze({
-    name: definition.name,
-    data: serializeModels(result.value) as RealtimeResultFor<TDefinition>,
-    dependencies: result.dependencies,
+    return Object.freeze({
+      name: definition.name,
+      data: serializeModels(result.value) as RealtimeResultFor<TDefinition>,
+      dependencies: result.dependencies,
+    })
   })
 }
 
@@ -300,29 +321,34 @@ export async function executeRealtimeMutation<
 >(
   definition: RealtimeMutationDefinition<TName, TSchema, TAccess, TResult>,
   input?: RealtimeArgsForSchema<TSchema>,
+  options?: RealtimeExecutionOptions,
 ): Promise<RealtimeExecutionResult<TResult>>
 export async function executeRealtimeMutation<TDefinition extends RealtimeMutationDefinitionMetadata>(
   definition: TDefinition,
   input?: RealtimeArgsFor<TDefinition>,
+  options?: RealtimeExecutionOptions,
 ): Promise<RealtimeExecutionResult<RealtimeResultFor<TDefinition>>>
 export async function executeRealtimeMutation<TDefinition extends RealtimeMutationDefinitionMetadata>(
   definition: TDefinition,
   input = {} as RealtimeArgsFor<TDefinition>,
+  options?: RealtimeExecutionOptions,
 ): Promise<RealtimeExecutionResult<RealtimeResultFor<TDefinition>>> {
-  const db = getDatabaseContext()
-  const args = await resolveArgs(definition, input)
-  const auth = await authorize(definition.access, args, db)
-  const data = await definition.handler({
-    args,
-    auth: auth as never,
-    db,
-    name: definition.name,
-  })
+  return await runWithExecutionOptions(options, async () => {
+    const db = getDatabaseContext()
+    const args = await resolveArgs(definition, input)
+    const auth = await authorize(definition.access, args, db)
+    const data = await definition.handler({
+      args,
+      auth: auth as never,
+      db,
+      name: definition.name,
+    })
 
-  return Object.freeze({
-    name: definition.name,
-    data: serializeModels(data) as RealtimeResultFor<TDefinition>,
-    dependencies: Object.freeze([]),
+    return Object.freeze({
+      name: definition.name,
+      data: serializeModels(data) as RealtimeResultFor<TDefinition>,
+      dependencies: Object.freeze([]),
+    })
   })
 }
 
@@ -340,7 +366,7 @@ async function refreshSubscription<TDefinition extends RealtimeQueryDefinitionMe
   subscription: ActiveSubscription<TDefinition>,
 ): Promise<void> {
   try {
-    const result = await executeRealtimeQuery(subscription.definition, subscription.args)
+    const result = await executeRealtimeQuery(subscription.definition, subscription.args, subscription.executionOptions)
     subscription.dependencies = result.dependencies
     subscription.version += 1
     subscription.current = Object.freeze({
@@ -377,21 +403,24 @@ export async function subscribeRealtimeQuery<
   definition: RealtimeQueryDefinition<TName, TSchema, TAccess, TResult>,
   input?: RealtimeArgsForSchema<TSchema>,
   options?: RealtimeSubscribeOptions<TResult>,
+  executionOptions?: RealtimeExecutionOptions,
 ): Promise<RealtimeSubscription<TResult>>
 export async function subscribeRealtimeQuery<TDefinition extends RealtimeQueryDefinitionMetadata>(
   definition: TDefinition,
   input?: RealtimeArgsFor<TDefinition>,
   options?: RealtimeSubscribeOptions<RealtimeResultFor<TDefinition>>,
+  executionOptions?: RealtimeExecutionOptions,
 ): Promise<RealtimeSubscription<RealtimeResultFor<TDefinition>>>
 export async function subscribeRealtimeQuery<TDefinition extends RealtimeQueryDefinitionMetadata>(
   definition: TDefinition,
   input = {} as RealtimeArgsFor<TDefinition>,
   options: RealtimeSubscribeOptions<RealtimeResultFor<TDefinition>> = {},
+  executionOptions?: RealtimeExecutionOptions,
 ): Promise<RealtimeSubscription<RealtimeResultFor<TDefinition>>> {
   ensureDatabaseSubscription()
   const state = getRuntimeState()
   state.nextSubscriptionId += 1
-  const result = await executeRealtimeQuery(definition, input)
+  const result = await executeRealtimeQuery(definition, input, executionOptions)
   const snapshot = Object.freeze({
     ...result,
     version: 1,
@@ -401,6 +430,7 @@ export async function subscribeRealtimeQuery<TDefinition extends RealtimeQueryDe
     definition,
     args: await resolveArgs(definition, input),
     options,
+    executionOptions,
     dependencies: result.dependencies,
     version: 1,
     current: snapshot,

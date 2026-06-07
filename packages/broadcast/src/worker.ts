@@ -441,6 +441,19 @@ function logSocketCleanupError(socketId: string, channel: string, error: unknown
   console.error(`[@holo-js/broadcast] Socket cleanup failed for socket "${socketId}" on "${channel}": ${message}`)
 }
 
+function logRealtimeSubscriptionCleanupError(socketId: string, subscriptionId: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  console.error(`[@holo-js/broadcast] Realtime subscription cleanup failed for socket "${socketId}" on "${subscriptionId}": ${message}`)
+}
+
+function unsubscribeRealtimeSubscription(socket: SocketState, id: string, subscription: BroadcastRealtimeSubscription): void {
+  try {
+    subscription.unsubscribe()
+  } catch (error) {
+    logRealtimeSubscriptionCleanupError(socket.socketId, id, error)
+  }
+}
+
 function parseChannelKind(channel: string): { readonly kind: 'public' | 'private' | 'presence', readonly canonical: string } {
   if (channel.startsWith('private-')) {
     return Object.freeze({
@@ -1228,7 +1241,10 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     }
 
     if (request.action === 'unsubscribe') {
-      socket.realtimeSubscriptions.get(request.id)?.unsubscribe()
+      const subscription = socket.realtimeSubscriptions.get(request.id)
+      if (subscription) {
+        unsubscribeRealtimeSubscription(socket, request.id, subscription)
+      }
       socket.realtimeSubscriptions.delete(request.id)
       sendRealtimeMessage(socket, 'holo:realtime:unsubscribed', {
         id: request.id,
@@ -1259,6 +1275,12 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
           result,
         })
         return
+      }
+
+      const previousSubscription = socket.realtimeSubscriptions.get(request.id)
+      if (previousSubscription) {
+        unsubscribeRealtimeSubscription(socket, request.id, previousSubscription)
+        socket.realtimeSubscriptions.delete(request.id)
       }
 
       const subscription = await realtime.subscribe(request.name!, request.args, {
@@ -1755,8 +1777,8 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
 
       socket.active = false
       connectedSockets.delete(socketId)
-      for (const subscription of socket.realtimeSubscriptions.values()) {
-        subscription.unsubscribe()
+      for (const [subscriptionId, subscription] of socket.realtimeSubscriptions) {
+        unsubscribeRealtimeSubscription(socket, subscriptionId, subscription)
       }
       socket.realtimeSubscriptions.clear()
       const channelsToCleanup = [...socket.subscribedChannels]

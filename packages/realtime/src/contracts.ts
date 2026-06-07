@@ -184,9 +184,24 @@ export interface RealtimeSubscribeOptions<TResult> {
   readonly onError?: (error: unknown) => void | Promise<void>
 }
 
+export interface RealtimeAuthRequestAccessors {
+  getCookie(name: string): Promise<string | undefined>
+  getHeader(name: string): Promise<string | undefined>
+  appendResponseCookie(cookie: string): Promise<void>
+  redirectResponse(url: string, status?: 301 | 302 | 303 | 307 | 308): Promise<void>
+}
+
+export interface RealtimeExecutionOptions {
+  readonly authRequest?: RealtimeAuthRequestAccessors
+}
+
 export interface RealtimeRuntimeBindings {
   readonly db?: () => DatabaseContext
   readonly loadAuthModule?: () => Promise<RealtimeAuthModule | null>
+  runWithAuthRequestAccessors?<TValue>(
+    accessors: RealtimeAuthRequestAccessors,
+    callback: () => Promise<TValue>,
+  ): Promise<TValue>
 }
 
 export interface RealtimeAuthGuardRuntime {

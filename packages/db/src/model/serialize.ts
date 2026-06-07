@@ -8,10 +8,10 @@ type MaterializeSerializedValue<TValue>
     : TValue extends readonly (infer TItem)[]
       ? MaterializeSerializedValue<TItem>[]
       : TValue extends (...args: never[]) => unknown
-        ? TValue
-        : TValue extends object
-          ? { readonly [K in keyof TValue]: MaterializeSerializedValue<TValue[K]> }
-          : TValue
+    ? TValue
+    : TValue extends object
+      ? { [K in keyof TValue]: MaterializeSerializedValue<TValue[K]> }
+      : TValue
 
 export type SerializeModels<TValue>
   = TValue extends Date

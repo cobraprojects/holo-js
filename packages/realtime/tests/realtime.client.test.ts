@@ -147,7 +147,6 @@ describe('@holo-js/realtime client runtime', () => {
         { id: 1, title: 'First' },
         { id: 2, title: 'Second' },
       ],
-      [{ id: 1, title: 'First' }],
     ])
     expect(calls).toEqual([
       'query:posts.list:news',

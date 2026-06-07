@@ -29,20 +29,9 @@ function replaceReactiveArray(target: unknown[], value: readonly unknown[]): voi
   target.splice(0, target.length, ...value)
 }
 
-function replaceReactiveArrayObject(target: unknown[], value: Record<string, unknown>): void {
-  target.splice(0, target.length)
-  for (const key of Object.keys(target)) {
-    if (!(key in value)) {
-      delete (target as unknown as Record<string, unknown>)[key]
-    }
-  }
-
-  Object.assign(target, value)
-}
-
-function createRealtimeReactiveValue<TValue>(value: TValue): TValue {
+function createRealtimeReactiveValue<TValue>(value: TValue | undefined): TValue | undefined {
   if (value === undefined) {
-    return reactive([]) as TValue
+    return undefined
   }
 
   if (Array.isArray(value)) {
@@ -56,14 +45,13 @@ function createRealtimeReactiveValue<TValue>(value: TValue): TValue {
   return value
 }
 
-function replaceRealtimeReactiveValue<TValue>(target: TValue, value: TValue): TValue {
-  if (Array.isArray(target) && Array.isArray(value)) {
-    replaceReactiveArray(target, value)
-    return target
+function replaceRealtimeReactiveValue<TValue>(target: TValue | undefined, value: TValue): TValue {
+  if (typeof target === 'undefined') {
+    return createRealtimeReactiveValue(value) as TValue
   }
 
-  if (Array.isArray(target) && isPlainObject(value)) {
-    replaceReactiveArrayObject(target, value)
+  if (Array.isArray(target) && Array.isArray(value)) {
+    replaceReactiveArray(target, value)
     return target
   }
 
@@ -80,7 +68,12 @@ function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
   args: RealtimeArgsFor<TDefinition>,
 ): RealtimeResultFor<TDefinition> {
   const store = getRealtimeQueryStore(definition, args)
-  let current = createRealtimeReactiveValue(store.snapshot?.data) as RealtimeResultFor<TDefinition>
+  const initialData = store.snapshot?.data
+  let current = (
+    typeof initialData === 'undefined'
+      ? reactive({})
+      : createRealtimeReactiveValue(initialData)
+  ) as RealtimeResultFor<TDefinition>
   const unsubscribe = store.subscribe(() => {
     const nextData = store.snapshot?.data
     if (typeof nextData !== 'undefined') {
@@ -91,7 +84,7 @@ function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
     store.connect()
   }
   onScopeDispose(unsubscribe)
-  return current
+  return current as RealtimeResultFor<TDefinition>
 }
 
 configureRealtimeClientRuntime({

@@ -45,6 +45,76 @@ function skipBlockComment(source: string, index: number): number {
   return end === -1 ? source.length : end + 2
 }
 
+function skipRegex(source: string, index: number): number {
+  let cursor = index + 1
+  let inCharacterClass = false
+  while (cursor < source.length) {
+    const char = source[cursor]
+    if (char === '\\') {
+      cursor += 2
+      continue
+    }
+
+    if (char === '[') {
+      inCharacterClass = true
+      cursor += 1
+      continue
+    }
+
+    if (char === ']') {
+      inCharacterClass = false
+      cursor += 1
+      continue
+    }
+
+    if (char === '/' && !inCharacterClass) {
+      cursor += 1
+      while (cursor < source.length && /[a-z]/i.test(source[cursor] ?? '')) {
+        cursor += 1
+      }
+      return cursor
+    }
+
+    cursor += 1
+  }
+
+  return cursor
+}
+
+function previousNonWhitespaceToken(source: string, index: number): string {
+  let cursor = index - 1
+  while (cursor >= 0 && /\s/.test(source[cursor] ?? '')) {
+    cursor -= 1
+  }
+
+  const char = source[cursor]
+  if (!char) {
+    return ''
+  }
+
+  if (/[$\w]/.test(char)) {
+    const end = cursor + 1
+    while (cursor >= 0 && /[$\w]/.test(source[cursor] ?? '')) {
+      cursor -= 1
+    }
+    return source.slice(cursor + 1, end)
+  }
+
+  if (char === '>' && source[cursor - 1] === '=') {
+    return '=>'
+  }
+
+  return char
+}
+
+function isRegexStart(source: string, index: number): boolean {
+  const token = previousNonWhitespaceToken(source, index)
+  return token === ''
+    || token === 'return'
+    || token === '=>'
+    || ['(', '[', '{', ',', ':', '=', '!', '?'].includes(token)
+}
+
 function findRealtimePropertyValueEnd(source: string, index: number): number {
   let cursor = index
   let braceDepth = 0
@@ -67,6 +137,11 @@ function findRealtimePropertyValueEnd(source: string, index: number): number {
 
     if (char === '/' && next === '*') {
       cursor = skipBlockComment(source, cursor)
+      continue
+    }
+
+    if (char === '/' && isRegexStart(source, cursor)) {
+      cursor = skipRegex(source, cursor)
       continue
     }
 

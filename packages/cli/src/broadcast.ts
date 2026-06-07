@@ -93,6 +93,12 @@ type RealtimeAuthRequestAccessors = {
 }
 
 type RealtimeServerModule = {
+  configureRealtimeRuntime?(bindings?: {
+    runWithAuthRequestAccessors<TValue>(
+      accessors: RealtimeAuthRequestAccessors,
+      callback: () => Promise<TValue>,
+    ): Promise<TValue>
+  }): void
   resolveRealtimeDefinition(
     name: string,
     options: {
@@ -100,8 +106,16 @@ type RealtimeServerModule = {
       readonly importModule?: (absolutePath: string) => Promise<unknown>
     },
   ): Promise<unknown>
-  executeRealtimeQuery(definition: unknown, args: Record<string, unknown>): Promise<BroadcastRealtimeExecutionResult>
-  executeRealtimeMutation(definition: unknown, args: Record<string, unknown>): Promise<BroadcastRealtimeExecutionResult>
+  executeRealtimeQuery(
+    definition: unknown,
+    args: Record<string, unknown>,
+    options?: { readonly authRequest?: RealtimeAuthRequestAccessors },
+  ): Promise<BroadcastRealtimeExecutionResult>
+  executeRealtimeMutation(
+    definition: unknown,
+    args: Record<string, unknown>,
+    options?: { readonly authRequest?: RealtimeAuthRequestAccessors },
+  ): Promise<BroadcastRealtimeExecutionResult>
   subscribeRealtimeQuery(
     definition: unknown,
     args: Record<string, unknown>,
@@ -109,11 +123,16 @@ type RealtimeServerModule = {
       readonly onData?: (snapshot: BroadcastRealtimeSubscriptionSnapshot) => void | Promise<void>
       readonly onError?: (error: unknown) => void | Promise<void>
     },
+    executionOptions?: { readonly authRequest?: RealtimeAuthRequestAccessors },
   ): Promise<BroadcastRealtimeSubscription>
 }
 
 type RequestAwareHoloRuntime = HoloRuntime & {
   setAuthRequestAccessors?(accessors?: RealtimeAuthRequestAccessors): void
+  runWithAuthRequestAccessors?<TValue>(
+    accessors: RealtimeAuthRequestAccessors,
+    callback: () => Promise<TValue>,
+  ): Promise<TValue>
 }
 
 type ProjectPackageManifest = {
@@ -156,11 +175,12 @@ export async function loadBroadcastCliModule(projectRoot: string): Promise<Broad
 }
 
 async function loadRealtimeServerModule(projectRoot: string): Promise<RealtimeServerModule | null> {
+  const specifier = resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/realtime/server')
   try {
-    return await import(resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/realtime/server')) as RealtimeServerModule
+    return await import(specifier) as RealtimeServerModule
   } catch (error) {
     const details = error instanceof Error ? error.message : String(error)
-    if (/Cannot find module|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND/i.test(details)) {
+    if (/Cannot find module|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND/i.test(details) && details.includes(specifier)) {
       return null
     }
 
@@ -218,6 +238,12 @@ async function createRealtimeWorkerBindings(projectRoot: string): Promise<Broadc
   }
 
   const runtime = await initializeProjectRuntime(projectRoot) as RequestAwareHoloRuntime
+  realtime.configureRealtimeRuntime?.({
+    async runWithAuthRequestAccessors(accessors, callback) {
+      const runner = runtime.runWithAuthRequestAccessors
+      return runner ? await runner(accessors, callback) : await callback()
+    },
+  })
   const resolveDefinition = async (name: string): Promise<unknown> => {
     return await realtime.resolveRealtimeDefinition(name, {
       projectRoot,
@@ -226,33 +252,28 @@ async function createRealtimeWorkerBindings(projectRoot: string): Promise<Broadc
   }
   const withRealtimeRequest = async <TValue>(
     context: BroadcastRealtimeExecutionContext,
-    callback: () => Promise<TValue>,
+    callback: (authRequest: RealtimeAuthRequestAccessors) => Promise<TValue>,
   ): Promise<TValue> => {
-    runtime.setAuthRequestAccessors?.(createRealtimeAuthRequestAccessors(context.headers))
-    try {
-      return await callback()
-    } finally {
-      runtime.setAuthRequestAccessors?.()
-    }
+    return await callback(createRealtimeAuthRequestAccessors(context.headers))
   }
 
   return {
     async query(name, args, context) {
-      return await withRealtimeRequest(context, async () => {
-        return await realtime.executeRealtimeQuery(await resolveDefinition(name), args)
+      return await withRealtimeRequest(context, async (authRequest) => {
+        return await realtime.executeRealtimeQuery(await resolveDefinition(name), args, { authRequest })
       })
     },
     async mutate(name, args, context) {
-      return await withRealtimeRequest(context, async () => {
-        return await realtime.executeRealtimeMutation(await resolveDefinition(name), args)
+      return await withRealtimeRequest(context, async (authRequest) => {
+        return await realtime.executeRealtimeMutation(await resolveDefinition(name), args, { authRequest })
       })
     },
     async subscribe(name, args, options) {
-      return await withRealtimeRequest(options.context, async () => {
+      return await withRealtimeRequest(options.context, async (authRequest) => {
         return await realtime.subscribeRealtimeQuery(await resolveDefinition(name), args, {
           onData: options.onData,
           onError: options.onError,
-        })
+        }, { authRequest })
       })
     },
   }

@@ -310,6 +310,10 @@ function exactSizeAction(definition: FieldDefinition, value: number, message?: s
 function minAction(definition: FieldDefinition, value: number, message?: string): unknown {
   const fallback = message ?? defaultMinMessage(definition.kind, value)
 
+  if (definition.kind === 'string' && !definition.sensitive) {
+    return v.check((input: unknown) => typeof input === 'string' && input.trim().length >= value, fallback)
+  }
+
   if (definition.kind === 'string' || definition.kind === 'array') {
     return v.minLength(value, fallback)
   }

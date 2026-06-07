@@ -3307,6 +3307,102 @@ describe('@holo-js/broadcast worker runtime', () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1)
   })
 
+  it('continues realtime cleanup when subscription unsubscribe throws', async () => {
+    const app = {
+      connection: 'holo-main',
+      appId: 'app-main',
+      key: 'key-main',
+      secret: 'secret-main',
+    }
+    const socket = createSocket(app)
+    const failingUnsubscribe = vi.fn(() => {
+      throw new Error('unsubscribe failed')
+    })
+    const secondUnsubscribe = vi.fn()
+    const disconnectUnsubscribe = vi.fn(() => {
+      throw new Error('disconnect unsubscribe failed')
+    })
+    const handles = [failingUnsubscribe, secondUnsubscribe, disconnectUnsubscribe]
+    const subscribe = vi.fn(async (name: string) => {
+      const unsubscribe = handles.shift()
+      if (!unsubscribe) {
+        throw new Error('missing unsubscribe handle')
+      }
+
+      return {
+        id: `server-subscription.${subscribe.mock.calls.length}`,
+        current: {
+          name,
+          data: {},
+          dependencies: [],
+          version: 1,
+        },
+        unsubscribe,
+      }
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const runtime = createBroadcastWorkerRuntime({
+      config: createConfig(),
+      now: () => FIXED_NOW_MS,
+      realtime: {
+        async query(name) {
+          return { name, data: {}, dependencies: [] }
+        },
+        async mutate(name) {
+          return { name, data: {}, dependencies: [] }
+        },
+        subscribe,
+      },
+    })
+
+    runtime.connectWebSocket(socket.socket)
+    await runtime.receiveWebSocketMessage(socket.socket.socketId, JSON.stringify({
+      event: 'holo:realtime',
+      data: {
+        id: 'subscription.1',
+        action: 'subscribe',
+        name: 'posts.list',
+        args: {},
+      },
+    }))
+    await runtime.receiveWebSocketMessage(socket.socket.socketId, JSON.stringify({
+      event: 'holo:realtime',
+      data: {
+        id: 'subscription.1',
+        action: 'subscribe',
+        name: 'posts.list',
+        args: {},
+      },
+    }))
+    await runtime.receiveWebSocketMessage(socket.socket.socketId, JSON.stringify({
+      event: 'holo:realtime',
+      data: {
+        id: 'subscription.1',
+        action: 'unsubscribe',
+        args: {},
+      },
+    }))
+    await runtime.receiveWebSocketMessage(socket.socket.socketId, JSON.stringify({
+      event: 'holo:realtime',
+      data: {
+        id: 'subscription.2',
+        action: 'subscribe',
+        name: 'posts.list',
+        args: {},
+      },
+    }))
+
+    expect(failingUnsubscribe).toHaveBeenCalledTimes(1)
+    expect(secondUnsubscribe).toHaveBeenCalledTimes(1)
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('unsubscribe failed'))
+
+    runtime.disconnectWebSocket(socket.socket.socketId)
+
+    expect(disconnectUnsubscribe).toHaveBeenCalledTimes(1)
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('disconnect unsubscribe failed'))
+    consoleError.mockRestore()
+  })
+
   it('serializes structured realtime authorization errors through websocket messages', async () => {
     const app = {
       connection: 'holo-main',

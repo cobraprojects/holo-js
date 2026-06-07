@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, extname, relative, resolve, sep } from 'node:path'
 import {
   GENERATED_SVELTE_HOOKS_PATH,
@@ -452,6 +452,10 @@ async function pathExists(path: string): Promise<boolean> {
   return (await readFileIfPresent(path)) !== undefined
 }
 
+async function directoryExists(path: string): Promise<boolean> {
+  return await stat(path).then(entry => entry.isDirectory(), () => false)
+}
+
 const SVELTE_HOOKS_OVERRIDE_BLOCK = [
   '    files: {',
   '      hooks: {',
@@ -679,7 +683,7 @@ async function ensureNextManagedRoutes(projectRoot: string): Promise<void> {
   const storageEnabled = await pathExists(resolve(projectRoot, 'app/storage/[[...path]]/route.ts'))
   const broadcastEnabled = await pathExists(resolve(projectRoot, 'app/broadcasting/config/route.ts'))
   const broadcastAuthEnabled = await pathExists(resolve(projectRoot, 'app/broadcasting/auth/route.ts'))
-  const realtimeEnabled = await pathExists(resolve(projectRoot, 'server/realtime'))
+  const realtimeEnabled = await directoryExists(resolve(projectRoot, 'server/realtime'))
   const clerkEnabled = await pathExists(resolve(projectRoot, 'app/api/auth/clerk/login/route.ts'))
   const workosEnabled = await pathExists(resolve(projectRoot, 'app/api/auth/workos/login/route.ts'))
   const files = [

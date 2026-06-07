@@ -541,6 +541,7 @@ function createRealtimeQueryStore<TResult>(
   let snapshot: RealtimeSubscriptionSnapshot<TResult> | undefined
   let connected = false
   let unsubscribe = () => {}
+  let startupId = 0
 
   const notify = () => {
     for (const listener of listeners) {
@@ -563,13 +564,34 @@ function createRealtimeQueryStore<TResult>(
         return
       }
 
-      connected = true
-      void transport.query<TResult>(name, args).then(setSnapshot, (error) => {
+      const currentStartupId = startupId + 1
+      startupId = currentStartupId
+      let seenLiveSnapshot = false
+      void transport.query<TResult>(name, args).then((nextSnapshot) => {
+        if (connected && startupId === currentStartupId && !seenLiveSnapshot) {
+          setSnapshot(nextSnapshot)
+        }
+      }, (error) => {
         warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
       })
-      unsubscribe = transport.subscribe<TResult>(name, args, setSnapshot, (error) => {
+      try {
+        unsubscribe = transport.subscribe<TResult>(name, args, (nextSnapshot) => {
+          if (startupId !== currentStartupId) {
+            return
+          }
+
+          seenLiveSnapshot = true
+          setSnapshot(nextSnapshot)
+        }, (error) => {
+          connected = false
+          warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
+        })
+        connected = true
+      } catch (error) {
+        connected = false
+        unsubscribe = () => {}
         warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
-      })
+      }
     },
     setSnapshot,
     subscribe(listener) {
@@ -579,6 +601,7 @@ function createRealtimeQueryStore<TResult>(
         if (listeners.size === 0) {
           unsubscribe()
           connected = false
+          startupId += 1
           unsubscribe = () => {}
         }
       }

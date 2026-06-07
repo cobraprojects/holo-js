@@ -327,6 +327,7 @@ describe('@holo-js/db query cache integration', () => {
       '[@holo-js/db] Database dependency invalidation listener failed.',
       error,
     )
+    consoleError.mockRestore()
   })
 
   it('supports flexible query caching and model-query cache passthrough without changing result behavior', async () => {

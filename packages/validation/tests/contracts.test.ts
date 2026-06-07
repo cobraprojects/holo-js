@@ -1592,6 +1592,22 @@ describe('@holo-js/validation coverage completeness', () => {
       expect(result.errors.first('tags.0')).toBe('Blocked.')
     }
   })
+
+  it('validates regular string min length against trimmed content', async () => {
+    const titleSchema = schema({
+      title: field.string().required().min(3),
+      password: field.password().required().min(3),
+    })
+
+    await expect(safeParse({ title: ' ab ', password: ' ab ' }, titleSchema)).resolves.toMatchObject({
+      valid: false,
+    })
+
+    await expect(parse({ title: ' abc ', password: ' ab ' }, titleSchema)).resolves.toEqual({
+      title: ' abc ',
+      password: ' ab ',
+    })
+  })
 })
 
 

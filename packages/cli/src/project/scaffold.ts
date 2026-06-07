@@ -154,23 +154,41 @@ async function resolveExistingModelPath(modelsRoot: string, modelName: string): 
 }
 
 function injectSvelteRealtimeVitePlugin(viteConfigContents: string): string | undefined {
-  if (viteConfigContents.includes('@holo-js/adapter-sveltekit/vite')) {
+  if (/\bholoSvelteKitRealtime\b/.test(viteConfigContents)) {
     return undefined
   }
 
-  const withImport = viteConfigContents.replace(
-    'import { sveltekit } from \'@sveltejs/kit/vite\'',
-    [
-      'import { sveltekit } from \'@sveltejs/kit/vite\'',
-      'import { holoSvelteKitRealtime } from \'@holo-js/adapter-sveltekit/vite\'',
-    ].join('\n'),
-  )
-  const withPlugin = withImport.replace(
-    'plugins: [sveltekit()]',
-    'plugins: [holoSvelteKitRealtime(), sveltekit()]',
-  )
+  const adapterImportPattern = /import\s*\{([^}]*)\}\s*from\s*(['"])@holo-js\/adapter-sveltekit\/vite\2/
+  const svelteKitImportPattern = /(import\s*\{[^}]*\bsveltekit\b[^}]*\}\s*from\s*(['"])@sveltejs\/kit\/vite\2)/
+  const existingAdapterImport = adapterImportPattern.exec(viteConfigContents)
+  let withImport = viteConfigContents
 
-  return withPlugin === viteConfigContents ? undefined : withPlugin
+  if (existingAdapterImport) {
+    const imports = existingAdapterImport[1]
+      ?.split(',')
+      .map(value => value.trim())
+      .filter(Boolean) ?? []
+    withImport = viteConfigContents.replace(adapterImportPattern, `import { ${['holoSvelteKitRealtime', ...imports].join(', ')} } from ${existingAdapterImport[2]}@holo-js/adapter-sveltekit/vite${existingAdapterImport[2]}`)
+  } else {
+    withImport = viteConfigContents.replace(
+      svelteKitImportPattern,
+      [
+        '$1',
+        'import { holoSvelteKitRealtime } from \'@holo-js/adapter-sveltekit/vite\'',
+      ].join('\n'),
+    )
+  }
+
+  if (withImport === viteConfigContents && !existingAdapterImport) {
+    return undefined
+  }
+
+  const withPlugin = withImport.replace(/plugins\s*:\s*\[([\s\S]*?)\]/, (_match, plugins: string) => {
+    const separator = plugins.trim() ? ' ' : ''
+    return `plugins: [holoSvelteKitRealtime(),${separator}${plugins}]`
+  })
+
+  return withPlugin === withImport ? undefined : withPlugin
 }
 
 const realtimeDefinitionExtensions = new Set(['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'])
