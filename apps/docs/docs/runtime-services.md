@@ -17,39 +17,23 @@ These are not client-side APIs.
 
 ## Shared app access
 
-Across Nuxt, Next.js, and SvelteKit, the canonical Holo-JS server helper is `holo.getApp()`.
+In Nuxt, Next.js, and SvelteKit, runtime context is prepared for you by the framework bootstrap.
+You do not usually import and pass an app object yourself.
 
-The framework route wrapper stays native, but the Holo-JS access pattern is shared:
-
-```ts
-const app = await holo.getApp()
-```
-
-Then use the returned runtime state:
+Use these public runtime config APIs directly:
 
 ```ts
-const app = await holo.getApp()
-
-return {
-  name: app.config.app.name,
-  env: app.config.app.env,
-  models: app.registry?.models.length ?? 0,
-}
+import { useConfig, config } from '@holo-js/config'
 ```
 
-Use `useConfig(...)` or `config(...)` when you only need configuration values. Use `holo.getApp()` when
-you need the full backend runtime surface: config, generated registry metadata, and the initialized
-runtime.
-
-## Config access
-
-Use file-level access when you want a whole config section:
+Use `useConfig(...)` when you need one config section:
 
 ```ts
 const services = useConfig('services')
+const appName = useConfig('app.name')
 ```
 
-Use dot-path access when you want one value:
+Use `config(...)` when you need one value:
 
 ```ts
 const secret = config('services.mailgun.secret')

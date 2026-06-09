@@ -322,9 +322,8 @@ Nuxt's `useAuth()` is async because it uses Nuxt's server/client data fetching s
 
 ## Current User Endpoint
 
-The framework auth helpers need an application-owned current-auth endpoint. The default endpoint is `/api/auth/user`.
-When `auth` is selected during scaffolding, Holo writes this endpoint for the selected framework so `useAuth()` works
-without extra setup.
+The framework auth helpers read current-auth state from `/api/auth/user` by default.
+When `auth` is selected during scaffolding, `useAuth()` works against that endpoint without extra setup.
 
 This endpoint is only for reading current auth state. Login, register, logout, password reset, email verification, and
 route protection remain application-owned routes and middleware.
@@ -419,27 +418,13 @@ export default defineEventHandler(async (event) => {
 })
 ```
 
-```ts [SvelteKit — src/routes/api/auth/user/+server.ts]
-import { json } from '@sveltejs/kit'
-import auth, { check, provider, user } from '@holo-js/auth'
-
-export async function GET({ url }: { url: URL }) {
-  const guard = url.searchParams.get('guard') ?? undefined
-  const guardAuth = guard ? auth.guard(guard) : undefined
-
-  return json({
-    authenticated: guardAuth ? await guardAuth.check() : await check(),
-    guard: guard ?? 'web',
-    provider: guardAuth ? await guardAuth.provider() : await provider(),
-    user: guardAuth ? await guardAuth.user() : await user(),
-  })
-}
-```
-
 :::
 
-The default scaffolded endpoint supports both the default guard and named guards. If you write your own endpoint, keep
-the same behavior when the app calls `useAuth({ guard: 'admin' })`.
+For SvelteKit, the same `/api/auth/user` endpoint is provided by the managed server hook bridge. You do not create
+your own `src/routes/api/auth/user/+server.ts` in the scaffolded app.
+
+The default scaffolded endpoint supports both the default guard and named guards. If you replace it with your own
+endpoint, keep the same behavior when the app calls `useAuth({ guard: 'admin' })`.
 
 ## Types
 

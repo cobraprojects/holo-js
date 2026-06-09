@@ -56,12 +56,13 @@ function getMatchingTabGroup(group: Element): TabGroup | null {
 
 function setCodeGroupTab(group: Element, tabGroup: TabGroup, tab: string): void {
   const labels = getCodeGroupLabels(group)
-  const matchedLabel = labels.find((label) => normalizeTab(label.dataset.title ?? label.textContent, tabGroup) === tab)
+  const matchedIndex = labels.findIndex((label) => normalizeTab(label.dataset.title ?? label.textContent, tabGroup) === tab)
 
-  if (!matchedLabel) {
+  if (matchedIndex === -1) {
     return
   }
 
+  const matchedLabel = labels[matchedIndex]
   const inputId = matchedLabel.getAttribute('for')
 
   if (!inputId) {
@@ -70,11 +71,17 @@ function setCodeGroupTab(group: Element, tabGroup: TabGroup, tab: string): void 
 
   const input = group.querySelector<HTMLInputElement>(`#${CSS.escape(inputId)}`)
 
-  if (!input || input.checked) {
+  if (!input) {
     return
   }
 
   input.checked = true
+
+  const blocks = Array.from(group.querySelectorAll<HTMLElement>('.blocks > div[class*="language-"]'))
+
+  blocks.forEach((block, index) => {
+    block.classList.toggle('active', index === matchedIndex)
+  })
 }
 
 function syncTabs(tabGroup: TabGroup, tab: string): void {

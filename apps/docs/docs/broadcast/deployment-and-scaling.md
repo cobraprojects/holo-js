@@ -10,12 +10,25 @@ holo broadcast:work
 
 If `holo` is not installed globally:
 
-```bash
+::: code-group
+
+```bash [npm]
 npx holo broadcast:work
+```
+
+```bash [pnpm]
 pnpm dlx holo broadcast:work
+```
+
+```bash [Yarn]
 yarn dlx holo broadcast:work
+```
+
+```bash [Bun]
 bunx holo broadcast:work
 ```
+
+:::
 
 Run it under your process manager (systemd, PM2, containers, orchestration platform).
 Both Bun and Node runtimes are supported for the worker process.

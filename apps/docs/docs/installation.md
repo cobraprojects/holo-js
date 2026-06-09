@@ -87,33 +87,113 @@ Example optional package sets include `--package forms,validation,notifications`
 
 Authorization can also be installed after scaffolding:
 
-```bash
+::: code-group
+
+```bash [npm]
 npx holo install authorization
 ```
 
+```bash [pnpm]
+pnpm dlx holo install authorization
+```
+
+```bash [Yarn]
+yarn dlx holo install authorization
+```
+
+```bash [Bun]
+bunx holo install authorization
+```
+
+:::
+
 Broadcast setup is installed after scaffolding:
 
-```bash
+::: code-group
+
+```bash [npm]
 npx holo install broadcast
 ```
 
+```bash [pnpm]
+pnpm dlx holo install broadcast
+```
+
+```bash [Yarn]
+yarn dlx holo install broadcast
+```
+
+```bash [Bun]
+bunx holo install broadcast
+```
+
+:::
+
 Realtime setup can also be installed after scaffolding:
 
-```bash
+::: code-group
+
+```bash [npm]
 npx holo install realtime
 ```
 
+```bash [pnpm]
+pnpm dlx holo install realtime
+```
+
+```bash [Yarn]
+yarn dlx holo install realtime
+```
+
+```bash [Bun]
+bunx holo install realtime
+```
+
+:::
+
 Cache setup can also be installed after scaffolding:
 
-```bash
+::: code-group
+
+```bash [npm]
 npx holo install cache
 ```
 
+```bash [pnpm]
+pnpm dlx holo install cache
+```
+
+```bash [Yarn]
+yarn dlx holo install cache
+```
+
+```bash [Bun]
+bunx holo install cache
+```
+
+:::
+
 Media setup can also be installed after scaffolding:
 
-```bash
+::: code-group
+
+```bash [npm]
 npx holo install media
 ```
+
+```bash [pnpm]
+pnpm dlx holo install media
+```
+
+```bash [Yarn]
+yarn dlx holo install media
+```
+
+```bash [Bun]
+bunx holo install media
+```
+
+:::
 
 ## What the scaffold writes
 
@@ -124,7 +204,7 @@ The generated project contains:
 - layered env support with `.env` and `.env.example`
 - canonical Holo-JS directories such as `server/models`, `server/db`, `server/commands`, `server/jobs`, `server/events`, and `server/listeners`
 - first-party queue scaffold including `config/queue.ts` with `sync` as the default driver
-- auth scaffold including `config/auth.ts`, `config/session.ts`, user/session migrations, and the framework current-auth endpoint at `/api/auth/user` when `auth` is selected
+- auth scaffold including `config/auth.ts`, `config/session.ts`, user/session migrations, and default current-auth support at `/api/auth/user` when `auth` is selected
 - machine-owned generated output under `.holo-js/generated`
 - framework lifecycle scripts such as `dev` and `build`
 - for SvelteKit, `svelte.config.js` is wrapped with `withHoloSvelteKit(...)` so Holo can install the
@@ -244,6 +324,40 @@ bunx holo seed
 ```
 
 :::
+
+### Global install (optional)
+
+If you prefer running `holo` directly from your terminal:
+
+::: code-group
+
+```bash [npm]
+npm install -g @holo-js/cli
+holo --version
+holo make:model User
+```
+
+```bash [pnpm]
+pnpm add -g @holo-js/cli
+holo --version
+holo make:model User
+```
+
+```bash [Yarn]
+yarn global add @holo-js/cli
+holo --version
+holo make:model User
+```
+
+```bash [Bun]
+bun add -g @holo-js/cli
+holo --version
+holo make:model User
+```
+
+:::
+
+When using a global install, `holo` is expected to be on your shell `PATH`.
 
 `holo ...` by itself is not expected to be on your global shell path unless you install it globally.
 

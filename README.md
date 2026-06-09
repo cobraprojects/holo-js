@@ -106,13 +106,17 @@ npx holo seed
 `holo dev` and `holo build` run discovery before handing control to the selected framework.
 `holo prepare` is available when you want to regenerate typed registries without starting dev or build.
 
-Across Nuxt, Next.js, and SvelteKit, the shared Holo-JS server helper is:
+ Across Nuxt, Next.js, and SvelteKit, request handlers run with the runtime context prepared by framework bootstrap.
+Use the public config accessors directly:
 
 ```ts
-const app = await holo.getApp()
+import { useConfig, config } from '@holo-js/config'
+
+const services = useConfig('services')
+const secret = config('services.mailgun.secret')
 ```
 
-The framework route wrapper stays native, but Holo-JS access stays consistent.
+The framework route wrapper stays native, while runtime APIs remain framework-neutral.
 
 Equivalent exec forms: `npx holo ...`, `pnpm dlx holo ...`, `yarn dlx holo ...`, `bunx holo ...`.
 

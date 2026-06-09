@@ -10,12 +10,25 @@ holo install broadcast
 
 If `holo` is not installed globally, run it through your package manager:
 
-```bash
+::: code-group
+
+```bash [npm]
 npx holo install broadcast
+```
+
+```bash [pnpm]
 pnpm dlx holo install broadcast
+```
+
+```bash [Yarn]
 yarn dlx holo install broadcast
+```
+
+```bash [Bun]
 bunx holo install broadcast
 ```
+
+:::
 
 This generates:
 
@@ -45,12 +58,25 @@ holo broadcast:work
 
 Or via package manager:
 
-```bash
+::: code-group
+
+```bash [npm]
 npx holo broadcast:work
+```
+
+```bash [pnpm]
 pnpm dlx holo broadcast:work
+```
+
+```bash [Yarn]
 yarn dlx holo broadcast:work
+```
+
+```bash [Bun]
 bunx holo broadcast:work
 ```
+
+:::
 
 `broadcast:work` is required for the self-hosted `holo` driver.
 Hosted providers do not require this local worker.

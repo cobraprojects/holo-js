@@ -16,21 +16,6 @@ export default defineListener({
 })
 ```
 
-## Internal model
-
-Queued listeners run through queue using one internal job:
-
-- `holo.events.invoke-listener`
-
-Queue payload includes:
-
-- listener id
-- event name
-- event payload
-- `occurredAt`
-
-This keeps events listener-first while reusing queue runtime, retries, and failure behavior.
-
 ## Connection and queue resolution
 
 Priority order:
