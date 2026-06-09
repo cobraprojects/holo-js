@@ -7,8 +7,9 @@ import {
 } from '../query/paginator'
 import {
   assertPositiveInteger,
-  decodeOffsetCursor,
-  encodeOffsetCursor,
+  decodeValueCursor,
+  encodeValueCursor,
+  isRowAfterCursor,
   normalizePaginationParameterName,
 } from '../query/pagination'
 import { compareChunkValuesAscending, compareChunkValuesDescending } from '../query/chunkOrdering'
@@ -1003,17 +1004,28 @@ export class ModelQueryBuilder<
   ): Promise<CursorPaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>> {
     assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
     const cursorName = normalizePaginationParameterName(options.cursorName, 'cursor', message => new HydrationError(message))
-    const offset = decodeOffsetCursor(cursor, message => new HydrationError(message))
+    const decodedCursor = decodeValueCursor(cursor, message => new HydrationError(message))
     const orderedQuery = this.prepareCursorPaginationQuery()
+    const cursorOrders = orderedQuery.resolveCursorOrders()
     const entities = await orderedQuery.getUnpaginatedEntities()
-    const pageEntities = entities.slice(offset, offset + perPage + 1)
+    const filteredEntities = decodedCursor
+      ? entities.filter(entity => isRowAfterCursor(
+        cursorOrders.map(order => orderedQuery.readCursorColumnValue(entity, order.column)),
+        decodedCursor.values,
+        cursorOrders,
+      ))
+      : entities
+    const pageEntities = filteredEntities.slice(0, perPage + 1)
     const hasMorePages = pageEntities.length > perPage
     const data = hasMorePages ? pageEntities.slice(0, perPage) : pageEntities
+    const lastEntity = data.at(-1)
 
     return createCursorPaginator(this.repository.createCollection(data), {
       perPage,
       cursorName,
-      nextCursor: hasMorePages ? encodeOffsetCursor(offset + perPage) : null,
+      nextCursor: hasMorePages && lastEntity
+        ? encodeValueCursor(cursorOrders.map(order => orderedQuery.readCursorColumnValue(lastEntity, order.column)))
+        : null,
       prevCursor: cursor,
     }) as CursorPaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>
   }
@@ -1726,5 +1738,24 @@ export class ModelQueryBuilder<
     }
 
     return this
+  }
+
+  private resolveCursorOrders(): readonly { readonly column: string, readonly direction: 'asc' | 'desc' }[] {
+    const plan = this.tableQuery.getPlan()
+    return plan.orderBy.map((orderBy) => {
+      if (orderBy.kind !== 'column') {
+        throw new HydrationError('Cursor pagination requires column orderBy clauses.')
+      }
+
+      return {
+        column: orderBy.column,
+        direction: orderBy.direction,
+      }
+    })
+  }
+
+  private readCursorColumnValue(entity: Entity<TTable>, column: string): unknown {
+    const unqualifiedColumn = column.split('.').at(-1) ?? column
+    return entity.get(unqualifiedColumn as ModelAttributeKey<TTable>)
   }
 }

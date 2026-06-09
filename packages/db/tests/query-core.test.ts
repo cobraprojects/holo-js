@@ -2749,6 +2749,16 @@ describe('query core slice', () => {
       { id: 4, name: 'Youssef' },
     ])
     expect(secondCursorPage.prevCursor).toBe(firstCursorPage.nextCursor)
+    adapter.queryRows = [
+      { id: 0, name: 'Earlier' },
+      ...adapter.queryRows,
+    ]
+    const anchoredSecondCursorPage = await DB.table(users).orderBy('id').cursorPaginate(2, firstCursorPage.nextCursor)
+    expect(anchoredSecondCursorPage.data).toEqual([
+      { id: 3, name: 'Salma' },
+      { id: 4, name: 'Youssef' },
+    ])
+    adapter.queryRows = adapter.queryRows.filter(row => row.id !== 0)
 
     const lastCursorPage = await DB.table(users).orderBy('id').cursorPaginate(10)
     expect(lastCursorPage.nextCursor).toBeNull()

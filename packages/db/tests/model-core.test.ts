@@ -1681,6 +1681,10 @@ describe('model core slice', () => {
     const secondCursorPage = await User.query().orderBy('id').cursorPaginate(2, firstCursorPage.nextCursor)
     expect(secondCursorPage.data.map(user => user.get('name'))).toEqual(['Salma', 'Youssef'])
     expect(secondCursorPage.prevCursor).toBe(firstCursorPage.nextCursor)
+    adapter.tables.users?.unshift({ id: 0, name: 'Earlier', email: 'earlier@example.com' })
+    const anchoredSecondCursorPage = await User.query().orderBy('id').cursorPaginate(2, firstCursorPage.nextCursor)
+    expect(anchoredSecondCursorPage.data.map(user => user.get('name'))).toEqual(['Salma', 'Youssef'])
+    adapter.tables.users = adapter.tables.users?.filter(row => row.id !== 0) ?? []
 
     const lastCursorPage = await User.query().orderBy('id').cursorPaginate(10)
     expect(lastCursorPage.nextCursor).toBeNull()

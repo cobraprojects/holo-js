@@ -38,12 +38,19 @@ import type {
 type RuntimeState = {
   bindings?: RealtimeRuntimeBindings
   nextSubscriptionId: number
+  refreshes: Map<string, ActiveRefresh>
   unsubscribeFromDatabase?: () => void
   subscriptions: Map<string, ActiveSubscription<RealtimeQueryDefinitionMetadata>>
 }
 
+type ActiveRefresh = {
+  pending: boolean
+  running?: Promise<void>
+}
+
 type ActiveSubscription<TDefinition extends RealtimeQueryDefinitionMetadata> = {
   readonly id: string
+  readonly refreshKey: string
   readonly definition: TDefinition
   readonly args: RealtimeArgsFor<TDefinition>
   readonly options: RealtimeSubscribeOptions<RealtimeResultFor<TDefinition>>
@@ -91,9 +98,38 @@ function getRuntimeState(): RuntimeState {
 
   runtime.__holoRealtimeRuntime__ ??= {
     nextSubscriptionId: 0,
+    refreshes: new Map<string, ActiveRefresh>(),
     subscriptions: new Map<string, ActiveSubscription<RealtimeQueryDefinitionMetadata>>(),
   }
   return runtime.__holoRealtimeRuntime__
+}
+
+function stableStringify(value: unknown): string {
+  if (!value || typeof value !== 'object') {
+    return JSON.stringify(value)
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`
+  }
+
+  return `{${Object.entries(value)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, nested]) => `${JSON.stringify(key)}:${stableStringify(nested)}`)
+    .join(',')}}`
+}
+
+function createRefreshKey(
+  definition: RealtimeQueryDefinitionMetadata,
+  args: Record<string, unknown>,
+  subscriptionId: string,
+  executionOptions: RealtimeExecutionOptions | undefined,
+): string {
+  if (executionOptions) {
+    return subscriptionId
+  }
+
+  return `${definition.name}:${stableStringify(args)}`
 }
 
 function createRealtimeDatabaseContext(connection: DatabaseContext): RealtimeDatabaseContext {
@@ -362,36 +398,103 @@ function dependenciesOverlap(left: readonly string[], right: readonly string[]):
   return left.some(dependency => rightSet.has(dependency))
 }
 
-async function refreshSubscription<TDefinition extends RealtimeQueryDefinitionMetadata>(
+function getRefreshGroupSubscriptions(refreshKey: string): ActiveSubscription<RealtimeQueryDefinitionMetadata>[] {
+  return [...getRuntimeState().subscriptions.values()]
+    .filter(subscription => subscription.refreshKey === refreshKey)
+}
+
+async function deliverRefreshData<TDefinition extends RealtimeQueryDefinitionMetadata>(
   subscription: ActiveSubscription<TDefinition>,
+  result: RealtimeExecutionResult<RealtimeResultFor<TDefinition>>,
+): Promise<void> {
+  subscription.dependencies = result.dependencies
+  subscription.version += 1
+  subscription.current = Object.freeze({
+    ...result,
+    version: subscription.version,
+  })
+  try {
+    await subscription.options.onData?.(subscription.current)
+  } catch (error) {
+    console.error('[@holo-js/realtime] Realtime subscription onData callback failed.', error)
+  }
+}
+
+async function deliverRefreshError(
+  subscription: ActiveSubscription<RealtimeQueryDefinitionMetadata>,
+  error: unknown,
 ): Promise<void> {
   try {
-    const result = await executeRealtimeQuery(subscription.definition, subscription.args, subscription.executionOptions)
-    subscription.dependencies = result.dependencies
-    subscription.version += 1
-    subscription.current = Object.freeze({
-      ...result,
-      version: subscription.version,
-    })
-    try {
-      await subscription.options.onData?.(subscription.current)
-    } catch (error) {
-      console.error('[@holo-js/realtime] Realtime subscription onData callback failed.', error)
-    }
+    await subscription.options.onError?.(error)
+  } catch (handlerError) {
+    console.error('[@holo-js/realtime] Realtime subscription onError callback failed.', handlerError)
+  }
+}
+
+async function refreshSubscriptionGroup(refreshKey: string): Promise<void> {
+  const subscriptions = getRefreshGroupSubscriptions(refreshKey)
+  const firstSubscription = subscriptions[0]
+  if (!firstSubscription) {
+    return
+  }
+
+  try {
+    const result = await executeRealtimeQuery(
+      firstSubscription.definition,
+      firstSubscription.args,
+      firstSubscription.executionOptions,
+    )
+    await Promise.all(getRefreshGroupSubscriptions(refreshKey).map(async (subscription) => {
+      await deliverRefreshData(subscription, result)
+    }))
   } catch (error) {
-    try {
-      await subscription.options.onError?.(error)
-    } catch (handlerError) {
-      console.error('[@holo-js/realtime] Realtime subscription onError callback failed.', handlerError)
+    await Promise.all(getRefreshGroupSubscriptions(refreshKey).map(async (subscription) => {
+      await deliverRefreshError(subscription, error)
+    }))
+  }
+}
+
+async function drainRefresh(refreshKey: string, refresh: ActiveRefresh): Promise<void> {
+  try {
+    do {
+      refresh.pending = false
+      await refreshSubscriptionGroup(refreshKey)
+    } while (refresh.pending)
+  } finally {
+    refresh.running = undefined
+    if (!refresh.pending) {
+      getRuntimeState().refreshes.delete(refreshKey)
     }
   }
+}
+
+function scheduleSubscriptionRefresh(subscription: ActiveSubscription<RealtimeQueryDefinitionMetadata>): Promise<void> {
+  const state = getRuntimeState()
+  const refresh = state.refreshes.get(subscription.refreshKey) ?? {
+    pending: false,
+  }
+  state.refreshes.set(subscription.refreshKey, refresh)
+
+  if (refresh.running) {
+    refresh.pending = true
+    return refresh.running
+  }
+
+  refresh.running = drainRefresh(subscription.refreshKey, refresh)
+  return refresh.running
 }
 
 async function handleDatabaseInvalidation(event: DatabaseDependencyInvalidationEvent): Promise<void> {
   const subscriptions = [...getRuntimeState().subscriptions.values()]
     .filter(subscription => dependenciesOverlap(subscription.dependencies, event.dependencies))
 
-  await Promise.all(subscriptions.map(subscription => refreshSubscription(subscription)))
+  const refreshKeys = new Set(subscriptions.map(subscription => subscription.refreshKey))
+  await Promise.all([...refreshKeys].map(async (refreshKey) => {
+    const subscription = subscriptions.find(candidate => candidate.refreshKey === refreshKey)
+    if (subscription) {
+      await scheduleSubscriptionRefresh(subscription)
+    }
+  }))
 }
 
 export async function subscribeRealtimeQuery<
@@ -420,15 +523,23 @@ export async function subscribeRealtimeQuery<TDefinition extends RealtimeQueryDe
   ensureDatabaseSubscription()
   const state = getRuntimeState()
   state.nextSubscriptionId += 1
-  const result = await executeRealtimeQuery(definition, input, executionOptions)
+  const args = await resolveArgs(definition, input)
+  const id = `subscription.${state.nextSubscriptionId}`
+  const result = await executeRealtimeQuery(definition, args, executionOptions)
   const snapshot = Object.freeze({
     ...result,
     version: 1,
   })
   const subscription: ActiveSubscription<TDefinition> = {
-    id: `subscription.${state.nextSubscriptionId}`,
+    id,
+    refreshKey: createRefreshKey(
+      definition,
+      args as Record<string, unknown>,
+      id,
+      executionOptions,
+    ),
     definition,
-    args: await resolveArgs(definition, input),
+    args,
     options,
     executionOptions,
     dependencies: result.dependencies,
@@ -460,15 +571,19 @@ export function resetRealtimeRuntime(): void {
   state.bindings = undefined
   state.nextSubscriptionId = 0
   state.unsubscribeFromDatabase = undefined
+  state.refreshes.clear()
   state.subscriptions.clear()
 }
 
 export const realtimeRuntimeInternals = {
   REALTIME_DEFINITION_MARKER: realtimeDefinitionInternals.REALTIME_DEFINITION_MARKER,
   createRealtimeDatabaseContext,
+  createRefreshKey,
   getRuntimeState,
   handleDatabaseInvalidation,
   nextDefinitionName,
+  scheduleSubscriptionRefresh,
+  stableStringify,
 }
 
 export { isRealtimeDefinition, nextDefinitionName }

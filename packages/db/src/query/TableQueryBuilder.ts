@@ -20,8 +20,9 @@ import {
 } from './paginator'
 import {
   assertPositiveInteger,
-  decodeOffsetCursor,
-  encodeOffsetCursor,
+  decodeValueCursor,
+  encodeValueCursor,
+  isRowAfterCursor,
   normalizePaginationParameterName,
 } from './pagination'
 import {
@@ -1402,17 +1403,28 @@ export class TableQueryBuilder<
   ): Promise<CursorPaginatedResult<TRow>> {
     assertPositiveInteger(perPage, 'Per-page value', message => new SecurityError(message))
     const cursorName = normalizePaginationParameterName(options.cursorName, 'cursor', message => new SecurityError(message))
-    const offset = decodeOffsetCursor(cursor, message => new SecurityError(message))
+    const decodedCursor = decodeValueCursor(cursor, message => new SecurityError(message))
     const orderedQuery = this.prepareCursorPaginationQuery()
+    const cursorOrders = orderedQuery.resolveCursorOrders()
     const rows = await orderedQuery.getUnpaginatedRows<TRow>()
-    const pageRows = rows.slice(offset, offset + perPage + 1)
+    const filteredRows = decodedCursor
+      ? rows.filter(row => isRowAfterCursor(
+        cursorOrders.map(order => orderedQuery.readCursorColumnValue(row, order.column)),
+        decodedCursor.values,
+        cursorOrders,
+      ))
+      : rows
+    const pageRows = filteredRows.slice(0, perPage + 1)
     const hasMorePages = pageRows.length > perPage
     const data = hasMorePages ? pageRows.slice(0, perPage) : pageRows
+    const lastRow = data.at(-1)
 
     return createCursorPaginator(data, {
       perPage,
       cursorName,
-      nextCursor: hasMorePages ? encodeOffsetCursor(offset + perPage) : null,
+      nextCursor: hasMorePages && lastRow
+        ? encodeValueCursor(cursorOrders.map(order => orderedQuery.readCursorColumnValue(lastRow, order.column)))
+        : null,
       prevCursor: cursor,
     })
   }
@@ -1886,6 +1898,28 @@ export class TableQueryBuilder<
     }
 
     return this
+  }
+
+  private resolveCursorOrders(): readonly { readonly column: string, readonly direction: 'asc' | 'desc' }[] {
+    return this.plan.orderBy.map((orderBy) => {
+      if (orderBy.kind !== 'column') {
+        throw new SecurityError('Cursor pagination requires column orderBy clauses.')
+      }
+
+      return {
+        column: orderBy.column,
+        direction: orderBy.direction,
+      }
+    })
+  }
+
+  private readCursorColumnValue(row: Record<string, unknown>, column: string): unknown {
+    if (column in row) {
+      return row[column]
+    }
+
+    const unqualifiedColumn = column.split('.').at(-1)
+    return unqualifiedColumn ? row[unqualifiedColumn] : undefined
   }
 
   private async aggregateNumeric(column: string, kind: 'sum'): Promise<number> {

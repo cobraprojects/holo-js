@@ -32,6 +32,16 @@ Realtime installs its transport dependencies automatically. Users should not ins
 Framework-specific realtime setup is only generated when realtime is installed, so base framework adapters do not pull
 realtime into apps that do not use it.
 
+Live browser updates use the broadcast websocket worker. Run the worker in development and production whenever realtime
+pages should update after mutations:
+
+```bash
+holo broadcast:work
+```
+
+If the worker is not running, realtime queries and mutations still execute normally, but browser live updates cannot be
+delivered.
+
 ## Define a query
 
 Queries are server definitions. They validate input, read from the Holo database context, and return serializable data.
@@ -123,9 +133,9 @@ import { listPosts } from '~/server/realtime/posts'
 const posts = listPosts({ limit: 10 })
 ```
 
-The `~/` alias is emitted by the project scaffold through the TypeScript path mappings for `~/*` and `@/*` to `./*`,
-not by Nuxt alone. The scaffold workspace renderers and framework runtime expect the framework or bundler to honor
-those TypeScript `paths`; verify custom setups keep that resolution enabled.
+The `~/` and `@/` aliases are global Holo project aliases, not realtime-specific aliases. New Holo apps scaffold both
+TypeScript path mappings as `~/*` and `@/*` to the project root, and all Holo packages and framework adapters expect
+the framework or bundler to honor those paths.
 
 The same call shape works in Next, Nuxt, and SvelteKit. Holo creates the framework runtime during scaffolding, so app
 code does not create a realtime client, subscribe to a query, or choose a channel name. Browser calls run over the
@@ -152,12 +162,32 @@ Relation queries work the same way. A query that returns `Post.query().with('tag
 table, and the tag table reads performed by eager loading. Attaching a tag through a Holo mutation refreshes consumers
 of that query after the write commits.
 
-Pagination also uses the same query result type as the normal Holo paginator. If the realtime query returns
-`paginate(...)`, the next snapshot contains the refreshed `data` and `meta` for that page. Cursor pagination is the
-better fit for feeds where inserts can move records between pages.
-
 Aggregates are regular query results. If a realtime query returns `count()`, `sum(...)`, `avg(...)`, or relation
 aggregate data, Holo reruns the query after matching writes and sends the recalculated result.
+
+## Pagination
+
+Realtime pagination uses the same result type as the normal Holo paginator. If the realtime query returns
+`paginate(...)`, the next snapshot contains the refreshed `data` and `meta` for that page. Page-number pagination can
+shift when new records are inserted before the current page, because realtime reruns the same query and returns the
+current state of that page.
+
+Use cursor pagination for realtime feeds and large lists:
+
+```ts
+export const feed = query({
+  access: 'public',
+  handler: async ({ db }) => {
+    return await db
+      .table('posts')
+      .orderBy('created_at', 'desc')
+      .cursorPaginate(20)
+  },
+})
+```
+
+Cursor pagination keeps the result window anchored by the cursor, so live updates do not behave like a moving
+page-number window.
 
 ## Access rules
 

@@ -530,6 +530,73 @@ describe('@holo-js/realtime', () => {
     ])
   })
 
+  it('coalesces duplicate subscription refreshes by query key during invalidation bursts', async () => {
+    const adapter = new MemoryAdapter()
+    const db = createContext(adapter)
+    configureRealtimeRuntime({
+      db: () => db,
+      loadAuthModule: async () => null,
+    })
+    let queryRuns = 0
+    let blockNextRefresh = false
+    let releaseRefresh = () => {}
+    let resolveRefreshStarted = () => {}
+    const refreshStarted = new Promise<void>((resolve) => {
+      resolveRefreshStarted = resolve
+    })
+    const firstSnapshots: unknown[][] = []
+    const secondSnapshots: unknown[][] = []
+    const query = defineRealtimeQuery({
+      name: 'posts.live',
+      access: 'public',
+      handler: async ({ db: context }) => {
+        queryRuns += 1
+        const rows = await context.table('posts').get()
+        if (blockNextRefresh) {
+          blockNextRefresh = false
+          resolveRefreshStarted()
+          await new Promise<void>((resolve) => {
+            releaseRefresh = resolve
+          })
+        }
+
+        return rows
+      },
+    })
+
+    await subscribeRealtimeQuery(query, {}, {
+      onData: snapshot => {
+        firstSnapshots.push(snapshot.data)
+      },
+    })
+    await subscribeRealtimeQuery(query, {}, {
+      onData: snapshot => {
+        secondSnapshots.push(snapshot.data)
+      },
+    })
+
+    expect(queryRuns).toBe(2)
+
+    blockNextRefresh = true
+    const firstInvalidation = realtimeRuntimeInternals.handleDatabaseInvalidation({
+      connectionName: 'main',
+      dependencies: ['db:main:posts'],
+    })
+    await refreshStarted
+
+    const burstInvalidations = Array.from({ length: 5 }, async () => await realtimeRuntimeInternals.handleDatabaseInvalidation({
+      connectionName: 'main',
+      dependencies: ['db:main:posts'],
+    }))
+    releaseRefresh()
+    await Promise.all([firstInvalidation, ...burstInvalidations])
+
+    expect(queryRuns).toBe(4)
+    expect(firstSnapshots).toHaveLength(3)
+    expect(secondSnapshots).toHaveLength(3)
+    expect(firstSnapshots).toEqual(secondSnapshots)
+  })
+
   it('isolates user subscription callback failures while refreshing matching subscriptions', async () => {
     const adapter = new MemoryAdapter()
     const db = createContext(adapter)
@@ -764,6 +831,77 @@ describe('@holo-js/realtime', () => {
           to: 2,
           hasMorePages: true,
         },
+      },
+    ])
+  })
+
+  it('keeps subscribed cursor-paginated query windows anchored after earlier inserts', async () => {
+    const adapter = new RelationalMemoryAdapter({
+      posts: [
+        { id: 1, title: 'First' },
+        { id: 2, title: 'Second' },
+        { id: 3, title: 'Third' },
+        { id: 4, title: 'Fourth' },
+      ],
+    })
+    const db = createContext(adapter)
+    configureRealtimeRuntime({
+      db: () => db,
+      loadAuthModule: async () => null,
+    })
+    const snapshots: Array<{
+      readonly ids: readonly number[]
+      readonly cursorName: string
+      readonly hasMorePages: boolean
+    }> = []
+    const firstPageQuery = defineRealtimeQuery({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        return await context.table('posts').orderBy('id', 'desc').cursorPaginate(2)
+      },
+    })
+    const query = defineRealtimeQuery({
+      args: schema({
+        cursor: field.string().nullable(),
+      }),
+      access: 'public',
+      handler: async ({ args, db: context }) => {
+        return await context.table('posts').orderBy('id', 'desc').cursorPaginate(2, args.cursor)
+      },
+    })
+    const mutation = defineRealtimeMutation({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        await context.table('posts').insert({ id: 5, title: 'Fifth' })
+        return true
+      },
+    })
+    const firstPage = await executeRealtimeQuery(firstPageQuery)
+
+    await subscribeRealtimeQuery(query, { cursor: firstPage.data.nextCursor }, {
+      onData: snapshot => {
+        snapshots.push({
+          ids: snapshot.data.data.map(post => Number(post.id)),
+          cursorName: snapshot.data.cursorName,
+          hasMorePages: snapshot.data.nextCursor !== null,
+        })
+      },
+      onError: error => {
+        throw error
+      },
+    })
+    await executeRealtimeMutation(mutation)
+
+    expect(snapshots).toEqual([
+      {
+        ids: [2, 1],
+        cursorName: 'cursor',
+        hasMorePages: false,
+      },
+      {
+        ids: [2, 1],
+        cursorName: 'cursor',
+        hasMorePages: false,
       },
     ])
   })
