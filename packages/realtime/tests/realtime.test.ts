@@ -597,6 +597,96 @@ describe('@holo-js/realtime', () => {
     expect(firstSnapshots).toEqual(secondSnapshots)
   })
 
+  it('batches committed write bursts into one visible refresh with the final data', async () => {
+    const adapter = new MemoryAdapter()
+    const db = createContext(adapter)
+    configureRealtimeRuntime({
+      db: () => db,
+      loadAuthModule: async () => null,
+    })
+    let queryRuns = 0
+    const snapshots: unknown[][] = []
+    const query = defineRealtimeQuery({
+      name: 'posts.live',
+      access: 'public',
+      handler: async ({ db: context }) => {
+        queryRuns += 1
+        return await context.table('posts').get()
+      },
+    })
+    const mutation = defineRealtimeMutation({
+      name: 'posts.create',
+      access: 'public',
+      handler: async ({ db: context }) => {
+        await context.table('posts').insert({ title: 'Next' })
+        return true
+      },
+    })
+
+    await subscribeRealtimeQuery(query, {}, {
+      onData: snapshot => {
+        snapshots.push(snapshot.data)
+      },
+    })
+    await Promise.all(Array.from({ length: 5 }, async () => await executeRealtimeMutation(mutation)))
+
+    expect(queryRuns).toBe(2)
+    expect(snapshots).toHaveLength(2)
+    expect(snapshots.at(-1)).toEqual([
+      { id: 1, title: 'First' },
+      { id: 2, title: 'Post 2' },
+      { id: 3, title: 'Post 3' },
+      { id: 4, title: 'Post 4' },
+      { id: 5, title: 'Post 5' },
+      { id: 6, title: 'Post 6' },
+    ])
+  })
+
+  it('refreshes same-query subscribers with one rerun after committed writes', async () => {
+    const adapter = new MemoryAdapter()
+    const db = createContext(adapter)
+    configureRealtimeRuntime({
+      db: () => db,
+      loadAuthModule: async () => null,
+    })
+    let queryRuns = 0
+    const firstSnapshots: unknown[][] = []
+    const secondSnapshots: unknown[][] = []
+    const query = defineRealtimeQuery({
+      name: 'posts.live',
+      access: 'public',
+      handler: async ({ db: context }) => {
+        queryRuns += 1
+        return await context.table('posts').get()
+      },
+    })
+    const mutation = defineRealtimeMutation({
+      name: 'posts.create',
+      access: 'public',
+      handler: async ({ db: context }) => {
+        await context.table('posts').insert({ title: 'Next' })
+        return true
+      },
+    })
+
+    await subscribeRealtimeQuery(query, {}, {
+      onData: snapshot => {
+        firstSnapshots.push(snapshot.data)
+      },
+    })
+    await subscribeRealtimeQuery(query, {}, {
+      onData: snapshot => {
+        secondSnapshots.push(snapshot.data)
+      },
+    })
+    await executeRealtimeMutation(mutation)
+
+    expect(queryRuns).toBe(3)
+    expect(firstSnapshots).toHaveLength(2)
+    expect(secondSnapshots).toHaveLength(2)
+    expect(firstSnapshots.at(-1)).toEqual(secondSnapshots.at(-1))
+  })
+
   it('isolates user subscription callback failures while refreshing matching subscriptions', async () => {
     const adapter = new MemoryAdapter()
     const db = createContext(adapter)
@@ -1083,6 +1173,91 @@ describe('@holo-js/realtime', () => {
     expect(snapshots).toEqual([[{ id: 1, title: 'First' }]])
     expect(errors).toHaveLength(1)
     expect(errors[0]).toBeInstanceOf(Error)
+  })
+
+  it('refreshes only for the current dependencies after a query changes what it reads', async () => {
+    const adapter = new RelationalMemoryAdapter({
+      posts: [{ id: 1, title: 'First' }],
+      comments: [{ id: 1, body: 'Initial' }],
+    })
+    const db = createContext(adapter)
+    configureRealtimeRuntime({
+      db: () => db,
+      loadAuthModule: async () => null,
+    })
+    let readComments = false
+    const snapshots: unknown[][] = []
+    const query = defineRealtimeQuery({
+      access: 'public',
+      handler: async ({ db: context }) => readComments
+        ? await context.table('comments').orderBy('id').get()
+        : await context.table('posts').orderBy('id').get(),
+    })
+
+    await subscribeRealtimeQuery(query, {}, {
+      onData: snapshot => {
+        snapshots.push(snapshot.data)
+      },
+    })
+    await realtimeRuntimeInternals.handleDatabaseInvalidation({
+      connectionName: 'main',
+      dependencies: ['db:main:comments'],
+    })
+    readComments = true
+    await realtimeRuntimeInternals.handleDatabaseInvalidation({
+      connectionName: 'main',
+      dependencies: ['db:main:posts'],
+    })
+    await realtimeRuntimeInternals.handleDatabaseInvalidation({
+      connectionName: 'main',
+      dependencies: ['db:main:posts'],
+    })
+    await realtimeRuntimeInternals.handleDatabaseInvalidation({
+      connectionName: 'main',
+      dependencies: ['db:main:comments'],
+    })
+
+    expect(snapshots).toEqual([
+      [{ id: 1, title: 'First' }],
+      [{ id: 1, body: 'Initial' }],
+      [{ id: 1, body: 'Initial' }],
+    ])
+  })
+
+  it('stops refreshing unsubscribed queries after matching writes', async () => {
+    const adapter = new MemoryAdapter()
+    const db = createContext(adapter)
+    configureRealtimeRuntime({
+      db: () => db,
+      loadAuthModule: async () => null,
+    })
+    let queryRuns = 0
+    const snapshots: unknown[][] = []
+    const query = defineRealtimeQuery({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        queryRuns += 1
+        return await context.table('posts').get()
+      },
+    })
+    const mutation = defineRealtimeMutation({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        await context.table('posts').insert({ title: 'Next' })
+        return true
+      },
+    })
+
+    const subscription = await subscribeRealtimeQuery(query, {}, {
+      onData: snapshot => {
+        snapshots.push(snapshot.data)
+      },
+    })
+    subscription.unsubscribe()
+    await executeRealtimeMutation(mutation)
+
+    expect(queryRuns).toBe(1)
+    expect(snapshots).toEqual([[{ id: 1, title: 'First' }]])
   })
 
   it('rejects authenticated access when auth is unavailable', async () => {

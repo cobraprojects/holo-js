@@ -330,6 +330,143 @@ describe('@holo-js/cli broadcast worker command', () => {
     await expect(promise).resolves.toBeUndefined()
   })
 
+  it('reuses resolved realtime definitions while preserving per-request auth accessors', async () => {
+    type RealtimeContextForTest = {
+      readonly headers: Headers
+      readonly socketId: string
+      readonly appId: string
+      readonly connection: string
+    }
+    type RealtimeSnapshotForTest = {
+      readonly name: string
+      readonly data: unknown
+      readonly dependencies: readonly string[]
+      readonly version: number
+    }
+    type RealtimeBindingForTest = {
+      query(name: string, args: Record<string, unknown>, context: RealtimeContextForTest): Promise<unknown>
+      mutate(name: string, args: Record<string, unknown>, context: RealtimeContextForTest): Promise<unknown>
+      subscribe(name: string, args: Record<string, unknown>, options: {
+        readonly context: RealtimeContextForTest
+        readonly onData: (snapshot: RealtimeSnapshotForTest) => void | Promise<void>
+        readonly onError: (error: unknown) => void | Promise<void>
+      }): Promise<unknown>
+    }
+    const createRealtimeContext = (cookie: string): RealtimeContextForTest => ({
+      headers: new Headers({ cookie }),
+      socketId: 'socket.1',
+      appId: 'app.1',
+      connection: 'holo',
+    })
+    const tempRoot = await createMinimalProject()
+    const moduleRoot = join(tempRoot, 'node_modules', '@holo-js')
+    const realtimeRoot = join(moduleRoot, 'realtime')
+    await mkdir(join(tempRoot, 'data'), { recursive: true })
+    await mkdir(join(tempRoot, 'config'), { recursive: true })
+    await mkdir(realtimeRoot, { recursive: true })
+    await writeFile(join(tempRoot, 'config/database.ts'), [
+      'import { defineDatabaseConfig } from \'@holo-js/config\'',
+      '',
+      'export default defineDatabaseConfig({',
+      '  defaultConnection: \'default\',',
+      '  connections: {',
+      '    default: {',
+      '      driver: \'sqlite\',',
+      `      filename: ${JSON.stringify(join(tempRoot, 'data/database.sqlite'))},`,
+      '    },',
+      '  },',
+      '})',
+      '',
+    ].join('\n'), 'utf8')
+    await writeFile(join(tempRoot, 'package.json'), JSON.stringify({
+      name: 'broadcast-realtime-cache-fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/realtime': 'workspace:*',
+      },
+    }, null, 2))
+    await writeFile(join(realtimeRoot, 'package.json'), JSON.stringify({
+      name: '@holo-js/realtime',
+      type: 'module',
+      exports: {
+        './server': './server.mjs',
+      },
+    }, null, 2))
+    await writeFile(join(realtimeRoot, 'server.mjs'), [
+      'globalThis.__holoCliRealtimeCacheTest = { resolveCount: 0, cookies: [] }',
+      'export function configureRealtimeRuntime() {}',
+      'export async function resolveRealtimeDefinition(name) {',
+      '  globalThis.__holoCliRealtimeCacheTest.resolveCount += 1',
+      '  return { name }',
+      '}',
+      'export async function executeRealtimeQuery(definition, args, options) {',
+      '  globalThis.__holoCliRealtimeCacheTest.cookies.push(await options.authRequest.getCookie(\'sid\'))',
+      '  return { name: definition.name, data: args, dependencies: [] }',
+      '}',
+      'export async function executeRealtimeMutation(definition, args, options) {',
+      '  globalThis.__holoCliRealtimeCacheTest.cookies.push(await options.authRequest.getCookie(\'sid\'))',
+      '  return { name: definition.name, data: args, dependencies: [] }',
+      '}',
+      'export async function subscribeRealtimeQuery(definition, args, options, executionOptions) {',
+      '  globalThis.__holoCliRealtimeCacheTest.cookies.push(await executionOptions.authRequest.getCookie(\'sid\'))',
+      '  const snapshot = { name: definition.name, data: args, dependencies: [], version: 1 }',
+      '  await options.onData(snapshot)',
+      '  return { id: \'subscription.1\', current: snapshot, unsubscribe() {} }',
+      '}',
+      '',
+    ].join('\n'), 'utf8')
+
+    const io = createIo(tempRoot)
+    const sigintListenersBefore = process.listeners('SIGINT').length
+    const promise = runBroadcastWorkCommand(io.io, tempRoot, {
+      loadConfig: vi.fn(async () => ({ broadcast: { ok: true }, queue: undefined })) as never,
+      loadRegistry: vi.fn(async () => undefined),
+      loadModule: vi.fn(async () => ({
+        startBroadcastWorker: vi.fn(async ({ realtime }: { readonly realtime?: RealtimeBindingForTest }) => {
+          expect(realtime).toBeDefined()
+          await realtime?.query('posts.list', { page: 1 }, createRealtimeContext('sid=one'))
+          await realtime?.query('posts.list', { page: 2 }, createRealtimeContext('sid=two'))
+          await realtime?.subscribe('posts.list', { page: 3 }, {
+            context: createRealtimeContext('sid=three'),
+            async onData() {},
+            async onError(error) {
+              throw error
+            },
+          })
+          await realtime?.mutate('posts.rename', { id: 1 }, createRealtimeContext('sid=four'))
+
+          return {
+            host: '127.0.0.1',
+            port: 7001,
+            stop: vi.fn(async () => {}),
+          }
+        }),
+      })),
+    })
+
+    await vi.waitUntil(() => {
+      const state = (globalThis as typeof globalThis & {
+        __holoCliRealtimeCacheTest?: { readonly cookies: readonly string[] }
+      }).__holoCliRealtimeCacheTest
+      return state?.cookies.length === 4
+    }, {
+      timeout: 5000,
+    })
+    process.listeners('SIGINT')[sigintListenersBefore]?.('SIGINT')
+    await expect(promise).resolves.toBeUndefined()
+
+    const state = (globalThis as typeof globalThis & {
+      __holoCliRealtimeCacheTest?: { readonly resolveCount: number, readonly cookies: readonly string[] }
+    }).__holoCliRealtimeCacheTest
+    expect(state).toEqual({
+      resolveCount: 2,
+      cookies: ['one', 'two', 'three', 'four'],
+    })
+    delete (globalThis as typeof globalThis & {
+      __holoCliRealtimeCacheTest?: unknown
+    }).__holoCliRealtimeCacheTest
+  })
+
   it('refreshes discovery even when loading the stale generated registry fails', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'holo-cli-broadcast-stale-registry-'))
     tempDirs.push(tempRoot)

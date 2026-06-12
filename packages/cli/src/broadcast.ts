@@ -244,11 +244,22 @@ async function createRealtimeWorkerBindings(projectRoot: string): Promise<Broadc
       return runner ? await runner(accessors, callback) : await callback()
     },
   })
+  const definitions = new Map<string, Promise<unknown>>()
   const resolveDefinition = async (name: string): Promise<unknown> => {
-    return await realtime.resolveRealtimeDefinition(name, {
+    const cached = definitions.get(name)
+    if (cached) {
+      return await cached
+    }
+
+    const resolved = realtime.resolveRealtimeDefinition(name, {
       projectRoot,
       importModule: async (absolutePath: string) => await importProjectModule(projectRoot, absolutePath),
+    }).catch((error) => {
+      definitions.delete(name)
+      throw error
     })
+    definitions.set(name, resolved)
+    return await resolved
   }
   const withRealtimeRequest = async <TValue>(
     context: BroadcastRealtimeExecutionContext,

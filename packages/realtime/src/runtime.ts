@@ -37,10 +37,24 @@ import type {
 
 type RuntimeState = {
   bindings?: RealtimeRuntimeBindings
+  dependencySubscribers: Map<string, Set<string>>
+  invalidationBatch?: PendingInvalidationBatch
   nextSubscriptionId: number
   refreshes: Map<string, ActiveRefresh>
   unsubscribeFromDatabase?: () => void
   subscriptions: Map<string, ActiveSubscription<RealtimeQueryDefinitionMetadata>>
+}
+
+type PendingInvalidationBatch = {
+  readonly dependencies: Set<string>
+  readonly deferred: Deferred<void>
+  timer: ReturnType<typeof setTimeout>
+}
+
+type Deferred<TValue> = {
+  readonly promise: Promise<TValue>
+  resolve(value: TValue): void
+  reject(error: unknown): void
 }
 
 type ActiveRefresh = {
@@ -96,12 +110,29 @@ function getRuntimeState(): RuntimeState {
     __holoRealtimeRuntime__?: RuntimeState
   }
 
-  runtime.__holoRealtimeRuntime__ ??= {
+  const state = runtime.__holoRealtimeRuntime__ ??= {
+    dependencySubscribers: new Map<string, Set<string>>(),
     nextSubscriptionId: 0,
     refreshes: new Map<string, ActiveRefresh>(),
     subscriptions: new Map<string, ActiveSubscription<RealtimeQueryDefinitionMetadata>>(),
   }
-  return runtime.__holoRealtimeRuntime__
+  state.dependencySubscribers ??= new Map<string, Set<string>>()
+  return state
+}
+
+function createDeferred<TValue>(): Deferred<TValue> {
+  let resolve: (value: TValue) => void = () => {}
+  let reject: (error: unknown) => void = () => {}
+  const promise = new Promise<TValue>((nextResolve, nextReject) => {
+    resolve = nextResolve
+    reject = nextReject
+  })
+
+  return {
+    promise,
+    resolve,
+    reject,
+  }
 }
 
 function stableStringify(value: unknown): string {
@@ -390,12 +421,65 @@ export async function executeRealtimeMutation<TDefinition extends RealtimeMutati
 
 function ensureDatabaseSubscription(): void {
   const state = getRuntimeState()
-  state.unsubscribeFromDatabase ??= onDatabaseDependencyInvalidated(handleDatabaseInvalidation)
+  state.unsubscribeFromDatabase ??= onDatabaseDependencyInvalidated(handleBatchedDatabaseInvalidation)
 }
 
-function dependenciesOverlap(left: readonly string[], right: readonly string[]): boolean {
-  const rightSet = new Set(right)
-  return left.some(dependency => rightSet.has(dependency))
+function addSubscriptionDependencies(subscription: ActiveSubscription<RealtimeQueryDefinitionMetadata>): void {
+  const state = getRuntimeState()
+  for (const dependency of subscription.dependencies) {
+    const subscribers = state.dependencySubscribers.get(dependency) ?? new Set<string>()
+    subscribers.add(subscription.id)
+    state.dependencySubscribers.set(dependency, subscribers)
+  }
+}
+
+function removeSubscriptionDependencies(subscription: ActiveSubscription<RealtimeQueryDefinitionMetadata>): void {
+  const state = getRuntimeState()
+  for (const dependency of subscription.dependencies) {
+    const subscribers = state.dependencySubscribers.get(dependency)
+    if (!subscribers) {
+      continue
+    }
+
+    subscribers.delete(subscription.id)
+    if (subscribers.size === 0) {
+      state.dependencySubscribers.delete(dependency)
+    }
+  }
+}
+
+function updateSubscriptionDependencies(
+  subscription: ActiveSubscription<RealtimeQueryDefinitionMetadata>,
+  dependencies: readonly string[],
+): void {
+  removeSubscriptionDependencies(subscription)
+  subscription.dependencies = dependencies
+  addSubscriptionDependencies(subscription)
+}
+
+function deleteSubscription(subscriptionId: string): void {
+  const state = getRuntimeState()
+  const subscription = state.subscriptions.get(subscriptionId)
+  if (!subscription) {
+    return
+  }
+
+  removeSubscriptionDependencies(subscription)
+  state.subscriptions.delete(subscriptionId)
+}
+
+function getSubscriptionsForDependencies(dependencies: Iterable<string>): ActiveSubscription<RealtimeQueryDefinitionMetadata>[] {
+  const state = getRuntimeState()
+  const subscriptionIds = new Set<string>()
+  for (const dependency of dependencies) {
+    for (const subscriptionId of state.dependencySubscribers.get(dependency) ?? []) {
+      subscriptionIds.add(subscriptionId)
+    }
+  }
+
+  return [...subscriptionIds]
+    .map(subscriptionId => state.subscriptions.get(subscriptionId))
+    .filter(subscription => typeof subscription !== 'undefined')
 }
 
 function getRefreshGroupSubscriptions(refreshKey: string): ActiveSubscription<RealtimeQueryDefinitionMetadata>[] {
@@ -407,7 +491,7 @@ async function deliverRefreshData<TDefinition extends RealtimeQueryDefinitionMet
   subscription: ActiveSubscription<TDefinition>,
   result: RealtimeExecutionResult<RealtimeResultFor<TDefinition>>,
 ): Promise<void> {
-  subscription.dependencies = result.dependencies
+  updateSubscriptionDependencies(subscription as ActiveSubscription<RealtimeQueryDefinitionMetadata>, result.dependencies)
   subscription.version += 1
   subscription.current = Object.freeze({
     ...result,
@@ -485,9 +569,7 @@ function scheduleSubscriptionRefresh(subscription: ActiveSubscription<RealtimeQu
 }
 
 async function handleDatabaseInvalidation(event: DatabaseDependencyInvalidationEvent): Promise<void> {
-  const subscriptions = [...getRuntimeState().subscriptions.values()]
-    .filter(subscription => dependenciesOverlap(subscription.dependencies, event.dependencies))
-
+  const subscriptions = getSubscriptionsForDependencies(event.dependencies)
   const refreshKeys = new Set(subscriptions.map(subscription => subscription.refreshKey))
   await Promise.all([...refreshKeys].map(async (refreshKey) => {
     const subscription = subscriptions.find(candidate => candidate.refreshKey === refreshKey)
@@ -495,6 +577,46 @@ async function handleDatabaseInvalidation(event: DatabaseDependencyInvalidationE
       await scheduleSubscriptionRefresh(subscription)
     }
   }))
+}
+
+async function flushInvalidationBatch(batch: PendingInvalidationBatch): Promise<void> {
+  const state = getRuntimeState()
+  if (state.invalidationBatch === batch) {
+    state.invalidationBatch = undefined
+  }
+
+  try {
+    await handleDatabaseInvalidation({
+      connectionName: '',
+      dependencies: [...batch.dependencies],
+    })
+    batch.deferred.resolve(undefined)
+  } catch (error) {
+    batch.deferred.reject(error)
+  }
+}
+
+async function handleBatchedDatabaseInvalidation(event: DatabaseDependencyInvalidationEvent): Promise<void> {
+  const state = getRuntimeState()
+  const batch = state.invalidationBatch
+  if (batch) {
+    for (const dependency of event.dependencies) {
+      batch.dependencies.add(dependency)
+    }
+
+    return await batch.deferred.promise
+  }
+
+  const deferred = createDeferred<void>()
+  const nextBatch: PendingInvalidationBatch = {
+    dependencies: new Set(event.dependencies),
+    deferred,
+    timer: setTimeout(() => {
+      void flushInvalidationBatch(nextBatch)
+    }, 10),
+  }
+  state.invalidationBatch = nextBatch
+  return await deferred.promise
 }
 
 export async function subscribeRealtimeQuery<
@@ -547,6 +669,7 @@ export async function subscribeRealtimeQuery<TDefinition extends RealtimeQueryDe
     current: snapshot,
   }
   state.subscriptions.set(subscription.id, subscription as ActiveSubscription<RealtimeQueryDefinitionMetadata>)
+  addSubscriptionDependencies(subscription as ActiveSubscription<RealtimeQueryDefinitionMetadata>)
   await options.onData?.(snapshot)
 
   return Object.freeze({
@@ -556,7 +679,7 @@ export async function subscribeRealtimeQuery<TDefinition extends RealtimeQueryDe
       return subscription.current
     },
     unsubscribe() {
-      getRuntimeState().subscriptions.delete(subscription.id)
+      deleteSubscription(subscription.id)
     },
   })
 }
@@ -568,7 +691,13 @@ export function configureRealtimeRuntime(bindings?: RealtimeRuntimeBindings): vo
 export function resetRealtimeRuntime(): void {
   const state = getRuntimeState()
   state.unsubscribeFromDatabase?.()
+  if (state.invalidationBatch) {
+    clearTimeout(state.invalidationBatch.timer)
+    state.invalidationBatch.deferred.resolve(undefined)
+  }
   state.bindings = undefined
+  state.dependencySubscribers.clear()
+  state.invalidationBatch = undefined
   state.nextSubscriptionId = 0
   state.unsubscribeFromDatabase = undefined
   state.refreshes.clear()
@@ -580,6 +709,7 @@ export const realtimeRuntimeInternals = {
   createRealtimeDatabaseContext,
   createRefreshKey,
   getRuntimeState,
+  handleBatchedDatabaseInvalidation,
   handleDatabaseInvalidation,
   nextDefinitionName,
   scheduleSubscriptionRefresh,
