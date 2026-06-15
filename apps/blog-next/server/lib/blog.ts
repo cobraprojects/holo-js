@@ -134,6 +134,14 @@ export async function getAdminPostsData() {
   return { posts, categories, tags }
 }
 
+export async function getAdminPostFormData() {
+  const [categories, tags] = await Promise.all([
+    Category.orderBy('name').get(),
+    Tag.orderBy('name').get(),
+  ])
+  return { categories, tags }
+}
+
 export async function getAdminPostById(id: number) {
   const [post, categories, tags] = await Promise.all([
     Post.firstWhere('id', id),
@@ -210,10 +218,10 @@ export async function deleteTag(id: number) {
   await Tag.delete(id)
 }
 
-export async function createPost(input: { title: string, excerpt?: string, body: string, status: string, categoryId?: string, tagIds?: string, image?: Blob }) {
+export async function createPost(input: { title: string, excerpt?: string, body: string, status: string, categoryId?: string, tagIds?: string, authorId?: number, image?: Blob }) {
   const post = await DB.transaction(async () => {
     const publishedAt = now()
-    const authorId = await ensureAuthorId()
+    const authorId = input.authorId ?? await ensureAuthorId()
     const postStatus = input.status === 'draft' ? 'draft' : 'published'
 
     const post = await Post.create({

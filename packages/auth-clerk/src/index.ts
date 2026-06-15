@@ -39,7 +39,6 @@ import {
   type ClerkAuthenticationResult,
   type ClerkCompleteAuthResult,
   type ClerkEmailAddress,
-  type ClerkLogoutResult,
   type ClerkLogoutSession,
   type ClerkProviderRuntime,
   type ClerkRequestHeaders,
@@ -1566,7 +1565,7 @@ export async function logoutWithClerk(
     readonly provider?: string
     readonly returnTo?: string
   } = {},
-): Promise<ClerkLogoutResult> {
+): Promise<Response> {
   const request = normalizeClerkRequest(input)
   try {
     const providerConfig = getConfiguredProviderConfig(options.provider)
@@ -1578,21 +1577,26 @@ export async function logoutWithClerk(
     }
     const clerkSession = await readCurrentClerkLogoutSession(guard, providerName)
     if (!clerkSession) {
-      return createHostedAuthFailure(
-        'clerk_session_missing',
-        'The current Holo session was not created by Clerk.',
-        422,
-      )
+      return Response.redirect(new URL('/', request.url), 303)
     }
 
     await revokeClerkSession(providerConfig, clerkSession.sessionId)
     const local = await getAuthRuntime().guard(guard).logout()
-    return createHostedAuthSuccess(Object.freeze({
-      url: createClerkReturnUrl(request, options.returnTo),
-      local,
-    } as const))
+    const response = new Response(null, {
+      status: 303,
+      headers: {
+        Location: createClerkReturnUrl(request, options.returnTo),
+      },
+    })
+    for (const cookie of local.cookies) {
+      response.headers.append('Set-Cookie', cookie)
+    }
+
+    return response
   } catch {
-    return createHostedAuthFailure('clerk_logout_failed', 'Unable to complete Clerk logout.', 500)
+    return Response.json(createHostedAuthFailure('clerk_logout_failed', 'Unable to complete Clerk logout.', 500), {
+      status: 500,
+    })
   }
 }
 

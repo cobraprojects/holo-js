@@ -824,10 +824,10 @@ export async function assertExampleAppAuthFlow({
       'x-forwarded-for': '127.0.0.226',
       'x-real-ip': '127.0.0.226',
     },
-    allowFailure: true,
   })
-  assert.equal(alreadyVerifiedResend.response.status, 409)
-  assertFieldFailure(alreadyVerifiedResend, ['_root'])
+  assert.equal(alreadyVerifiedResend.response.status, 200)
+  assert.equal(alreadyVerifiedResend.json.ok, true)
+  assert.equal(alreadyVerifiedResend.json.data?.message, 'A fresh verification email has been sent.')
 
   const consumedVerification = await fetchAuthJson('/api/verify-email', {
     method: 'POST',

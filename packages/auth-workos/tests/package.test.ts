@@ -1209,23 +1209,18 @@ describe('@holo-js/auth-workos', () => {
     authRuntimeInternals.getRuntimeBindings().context.setSessionId('web')
     authRuntimeInternals.getRuntimeBindings().context.setCachedUser('web', null)
 
-    const { data, error } = await logoutWithWorkos(new Request('https://app.test/api/auth/workos/logout', {
+    const response = await logoutWithWorkos(new Request('https://app.test/api/auth/workos/logout', {
       method: 'POST',
       headers: sessionCookie ? { cookie: sessionCookie } : undefined,
     }), {
       returnTo: 'https://evil.test/after-logout',
     })
 
-    expect(data).toMatchObject({
-      local: {
-        guard: 'web',
-      },
-    })
-    const hostedLogoutUrl = new URL(data?.url ?? '')
+    expect(response.status).toBe(303)
+    const hostedLogoutUrl = new URL(response.headers.get('location') ?? '')
     expect(hostedLogoutUrl.searchParams.get('session_id')).toBe('session_workos_logout')
     expect(hostedLogoutUrl.searchParams.get('return_to')).toBe('https://app.test')
-    expect(error).toBeNull()
-    expect(data?.local.cookies ?? []).toContainEqual(expect.stringContaining('holo_session=;'))
+    expect(response.headers.get('set-cookie')).toContain('holo_session=;')
   })
 
   it('returns typed callback failures without combining response behavior', async () => {
@@ -1709,11 +1704,8 @@ describe('@holo-js/auth-workos', () => {
     const logoutResult = await logoutWithWorkos(new Request('https://app.test/api/auth/workos/logout', {
       method: 'POST',
     }))
-    expect(logoutResult.data).toBeNull()
-    expect(logoutResult.error).toMatchObject({
-      code: 'workos_session_missing',
-      message: 'The current Holo session was not created by WorkOS.',
-    })
+    expect(logoutResult.status).toBe(303)
+    expect(logoutResult.headers.get('location')).toBe('https://app.test/')
 
     resetWorkosAuthRuntime()
     resetAuthRuntime()
@@ -1724,9 +1716,10 @@ describe('@holo-js/auth-workos', () => {
     })
 
     await expect(verifySession('token')).rejects.toThrow('is not configured in auth.workos')
-    await expect(logoutWithWorkos(new Request('https://app.test/api/auth/workos/logout', {
+    const failedLogout = await logoutWithWorkos(new Request('https://app.test/api/auth/workos/logout', {
       method: 'POST',
-    }))).resolves.toEqual({
+    }))
+    await expect(failedLogout.json()).resolves.toEqual({
       data: null,
       error: {
         code: 'workos_logout_failed',
@@ -1737,5 +1730,6 @@ describe('@holo-js/auth-workos', () => {
         },
       },
     })
+    expect(failedLogout.status).toBe(500)
   })
 })

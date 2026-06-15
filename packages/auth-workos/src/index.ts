@@ -46,7 +46,6 @@ import {
   type WorkosDefaultUserAttributes,
   type WorkosIdentityProfile,
   type WorkosJsonValue,
-  type WorkosLogoutResult,
   type WorkosLogoutSession,
   type WorkosProviderRuntime,
   type WorkosSyncIdentityOptions,
@@ -1517,7 +1516,7 @@ export async function logoutWithWorkos(
     readonly provider?: string
     readonly returnTo?: string
   } = {},
-): Promise<WorkosLogoutResult> {
+): Promise<Response> {
   const request = normalizeWorkosRequest(input)
   try {
     const providerConfig = getConfiguredProviderConfig(options.provider)
@@ -1529,20 +1528,25 @@ export async function logoutWithWorkos(
     }
     const workosSession = await readCurrentWorkosLogoutSession(guard, providerName)
     if (!workosSession) {
-      return createHostedAuthFailure(
-        'workos_session_missing',
-        'The current Holo session was not created by WorkOS.',
-        422,
-      )
+      return Response.redirect(new URL('/', request.url), 303)
     }
 
     const local = await getAuthRuntime().guard(guard).logout()
-    return createHostedAuthSuccess(Object.freeze({
-      url: createLogoutUrl(workosSession.sessionId, request, options.returnTo),
-      local,
-    } as const))
+    const response = new Response(null, {
+      status: 303,
+      headers: {
+        Location: createLogoutUrl(workosSession.sessionId, request, options.returnTo),
+      },
+    })
+    for (const cookie of local.cookies) {
+      response.headers.append('Set-Cookie', cookie)
+    }
+
+    return response
   } catch {
-    return createHostedAuthFailure('workos_logout_failed', 'Unable to complete WorkOS logout.', 500)
+    return Response.json(createHostedAuthFailure('workos_logout_failed', 'Unable to complete WorkOS logout.', 500), {
+      status: 500,
+    })
   }
 }
 

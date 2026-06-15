@@ -1,5 +1,7 @@
 <script setup lang="ts">
-const { data } = await useFetch('/api/blog/home')
+const { data } = await useFetch('/api/blog/home', {
+  pick: ['featured', 'posts', 'categories', 'tags'],
+})
 </script>
 
 <template>

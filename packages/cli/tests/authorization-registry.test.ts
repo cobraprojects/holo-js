@@ -203,7 +203,35 @@ export default defineAuthConfig({
   })
 
   it('renders fallback auth guard types when no guard metadata exists', () => {
-    expect(renderGeneratedAuthTypes({})).toContain('guards: Readonly<Record<string, \'session\'>>')
+    expect(renderGeneratedAuthTypes(undefined)).toContain('guards: Readonly<Record<string, \'session\'>>')
+  })
+
+  it('renders auth user types from configured provider models', () => {
+    const output = renderGeneratedAuthTypes({
+      guards: {
+        web: {
+          name: 'web',
+          driver: 'session',
+          provider: 'users',
+        },
+      },
+      providers: {
+        users: {
+          name: 'users',
+          model: 'User',
+          identifiers: ['email'],
+        },
+      },
+    } as Parameters<typeof renderGeneratedAuthTypes>[0], [
+      {
+        name: 'User',
+        tableName: 'users',
+      },
+    ])
+
+    expect(output).toContain('import type { AuthUserLike } from \'@holo-js/auth\'')
+    expect(output).toContain('import type { GeneratedSchemaTable, InferSelect } from \'@holo-js/db\'')
+    expect(output).toContain('user: (InferSelect<GeneratedSchemaTable<"users">>) & AuthUserLike')
   })
 
   it('renders fallback authorization registry types for JavaScript entries without import metadata', () => {

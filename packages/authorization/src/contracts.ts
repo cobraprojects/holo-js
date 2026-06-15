@@ -54,10 +54,22 @@ export type AuthorizationPolicyTarget<TInstance extends object = object>
   = | AuthorizationTargetConstructor<TInstance>
     | AuthorizationTargetModel<TInstance>
 
+type AuthorizationQueryTargetInstance<TTarget> = TTarget extends {
+  query(): {
+    first(): Promise<infer TResult>
+  }
+}
+  ? NonNullable<TResult> extends object
+    ? NonNullable<TResult>
+    : object
+  : object
+
 export type AuthorizationTargetInstance<TTarget extends AuthorizationPolicyTarget> = TTarget extends AuthorizationTargetConstructor<infer TInstance>
   ? TInstance
   : TTarget extends AuthorizationTargetModel<infer TInstance>
-  ? TInstance
+  ? unknown extends TInstance
+    ? AuthorizationQueryTargetInstance<TTarget>
+    : TInstance
   : object
 
 export interface AuthorizationPolicyClassHandler<

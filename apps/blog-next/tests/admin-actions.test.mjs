@@ -197,8 +197,20 @@ describe('admin actions', () => {
     mocks.createPost.mockResolvedValue(undefined)
     mocks.updatePost.mockResolvedValue(undefined)
 
-    await expect(actions.createPostAction(new FormData())).rejects.toThrow('Title is required.')
-    await expect(actions.updatePostAction(1, new FormData())).rejects.toThrow('Title is required.')
+    await expect(actions.createPostAction(new FormData())).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      errors: {
+        title: ['Title is required.'],
+      },
+    })
+    await expect(actions.updatePostAction(1, new FormData())).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      errors: {
+        title: ['Title is required.'],
+      },
+    })
 
     expect(mocks.createPost).not.toHaveBeenCalled()
     expect(mocks.updatePost).not.toHaveBeenCalled()

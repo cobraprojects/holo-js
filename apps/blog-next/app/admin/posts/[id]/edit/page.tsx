@@ -1,5 +1,8 @@
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
+import { auth } from '@holo-js/auth/next/server'
+import { authorize } from '@holo-js/authorization'
 import { getAdminPostById } from '@/server/lib/blog'
+import Post from '@/server/models/Post'
 import { PostForm } from '../../post-form'
 import { updatePostAction } from '../../../actions'
 
@@ -11,11 +14,19 @@ export default async function EditPostPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
+  const currentAuth = await auth()
+  if (!currentAuth.authenticated || !currentAuth.user) {
+    redirect('/login')
+  }
+  await authorize('viewAny', Post)
+
   const data = await getAdminPostById(Number(id))
 
   if (!data) {
     notFound()
   }
+
+  await authorize('update', data.post)
 
   const updateWithId = updatePostAction.bind(null, data.post.id)
   const imagePath = await data.post.getFirstMediaPath('images', 'thumb')

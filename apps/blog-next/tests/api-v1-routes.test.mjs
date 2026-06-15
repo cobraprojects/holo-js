@@ -1,3 +1,4 @@
+import { ValidationException } from '@holo-js/validation'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -53,29 +54,67 @@ function createPostQuery(posts = []) {
   return query
 }
 
+function createValidationError(field, message, status = 422) {
+  return ValidationException.withMessages({
+    [field]: [message],
+  }, {
+    status,
+  })
+}
+
 describe('POST /api/v1/tokens', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
   it('returns validation failures without attempting login', async () => {
-    const validationError = new Error('Validation failed.')
+    const validationError = createValidationError('email', 'Enter a valid email address.')
     const request = new Request('http://localhost/api/v1/tokens', {
       method: 'POST',
     })
 
     mocks.validate.mockRejectedValue(validationError)
 
-    await expect(tokensRoute.POST(request)).rejects.toBe(validationError)
+    const response = await tokensRoute.POST(request)
 
+    expect(response.status).toBe(422)
+    await expect(readJson(response)).resolves.toEqual(validationError.toJSON())
     expect(mocks.validate).toHaveBeenCalledWith(request, mocks.loginForm, {
       throttle: 'login',
     })
     expect(mocks.auth.guard).not.toHaveBeenCalled()
   })
 
-  it('throws when API token login fails', async () => {
-    const authError = new Error('bad credentials')
+  it('returns generic credential failures without exposing validation details', async () => {
+    const authError = createValidationError('password', 'Password was incorrect.')
+    const login = vi.fn(async () => {
+      throw authError
+    })
+    const request = new Request('http://localhost/api/v1/tokens', {
+      method: 'POST',
+    })
+
+    mocks.validate.mockResolvedValue(createValidSubmission())
+    mocks.auth.guard.mockReturnValue({ login })
+
+    const response = await tokensRoute.POST(request)
+
+    expect(response.status).toBe(401)
+    await expect(readJson(response)).resolves.toEqual({
+      ok: false,
+      status: 401,
+      message: 'Invalid credentials.',
+    })
+    expect(mocks.auth.guard).toHaveBeenCalledWith('api')
+    expect(login).toHaveBeenCalledWith({
+      email: 'reader@example.com',
+      password: 'password123',
+      remember: false,
+    })
+  })
+
+  it('throws unexpected API token login failures', async () => {
+    const authError = new Error('token driver unavailable')
     const login = vi.fn(async () => {
       throw authError
     })
@@ -87,13 +126,6 @@ describe('POST /api/v1/tokens', () => {
     mocks.auth.guard.mockReturnValue({ login })
 
     await expect(tokensRoute.POST(request)).rejects.toBe(authError)
-
-    expect(mocks.auth.guard).toHaveBeenCalledWith('api')
-    expect(login).toHaveBeenCalledWith({
-      email: 'reader@example.com',
-      password: 'password123',
-      remember: false,
-    })
   })
 
   it('returns the issued API token with no-store caching', async () => {

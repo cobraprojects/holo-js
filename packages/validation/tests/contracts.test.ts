@@ -211,9 +211,15 @@ describe('@holo-js/validation contracts', () => {
       name: exception.name,
       toJSON: () => exception.toJSON(),
     }
+    const svelteKitError = {
+      status: exception.status,
+      body: exception.toJSON(),
+    }
 
     expect(isValidationException(crossBundleException)).toBe(true)
     expect(isValidationException(new ForeignValidationException())).toBe(true)
+    expect(isValidationException(exception.toJSON())).toBe(true)
+    expect(isValidationException(svelteKitError)).toBe(true)
     expect(isValidationException(null)).toBe(false)
     expect(isValidationException({ name: 'ValidationException' })).toBe(false)
     expect(isValidationException({

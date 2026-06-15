@@ -6,6 +6,10 @@ export const dynamic = 'force-dynamic'
 
 export default async function EditTagPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
+  if (!/^[1-9]\d*$/.test(id)) {
+    notFound()
+  }
+
   const tag = await getAdminTagById(Number(id))
 
   if (!tag) {

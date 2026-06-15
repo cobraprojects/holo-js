@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { useFlux } from '@holo-js/flux-vue'
 
-const { data } = await useFetch('/api/admin/dashboard')
+const { data } = await useFetch('/api/admin/dashboard', {
+  pick: ['postCount', 'publishedCount', 'categoryCount', 'tagCount'],
+})
 const latestPostChange = ref('Waiting for post activity')
 
 useFlux('blog.admin', 'blog.post.changed', (payload) => {

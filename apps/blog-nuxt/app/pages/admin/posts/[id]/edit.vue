@@ -3,7 +3,9 @@ import { useForm } from '@holo-js/adapter-nuxt/client'
 import { postForm } from '#shared/schemas/blog'
 
 const route = useRoute()
-const { data } = await useFetch(`/api/admin/posts/${route.params.id}`)
+const { data } = await useFetch(`/api/admin/posts/${route.params.id}`, {
+  pick: ['post', 'categories', 'tags', 'imageUrl'],
+})
 
 if (!data.value) {
   throw createError({ statusCode: 404, statusMessage: 'Post not found' })

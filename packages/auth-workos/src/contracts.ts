@@ -160,7 +160,7 @@ export interface ConfigureWorkosAuthRuntimeOptions {
 export interface WorkosAuthFacade {
   loginWithWorkos(request: Request, options?: { readonly provider?: string }): Promise<Response>
   registerWithWorkos(request: Request, options?: { readonly provider?: string }): Promise<Response>
-  logoutWithWorkos(request: Request, options?: { readonly provider?: string, readonly returnTo?: string }): Promise<WorkosLogoutResult>
+  logoutWithWorkos(request: Request, options?: { readonly provider?: string, readonly returnTo?: string }): Promise<Response>
   completeWorkosAuth<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes>(
     request: Request,
     options?: WorkosCompleteAuthOptions<TUserAttributes>,
