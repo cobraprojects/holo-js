@@ -8,6 +8,15 @@ type MockReactContext<TValue> = {
   readonly Provider: (props: { readonly value: TValue, readonly children?: unknown }) => unknown
 }
 
+type ReactHookState = {
+  currentHookIndex: number
+  hookValues: unknown[]
+}
+
+type ReactHookStateOptions = {
+  readonly onStateChange?: (index: number, value: unknown) => void
+}
+
 function createReactMock(overrides: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
   return {
     createContext<TValue>(defaultValue: TValue): MockReactContext<TValue> {
@@ -36,6 +45,57 @@ function createReactMock(overrides: Readonly<Record<string, unknown>>): Readonly
     },
     ...overrides,
   }
+}
+
+function createReactHookState(): ReactHookState {
+  return {
+    currentHookIndex: 0,
+    hookValues: [],
+  }
+}
+
+function createReactHookStateMock(
+  state: ReactHookState,
+  options: ReactHookStateOptions = {},
+): Readonly<Record<string, unknown>> {
+  return createReactMock({
+    useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
+      return callback
+    },
+    useEffect(effect: () => void | (() => void)) {
+      return effect()
+    },
+    useRef<TValue>(initialValue?: TValue) {
+      const index = state.currentHookIndex++
+
+      if (!(index in state.hookValues)) {
+        state.hookValues[index] = { current: initialValue }
+      }
+
+      return state.hookValues[index] as { current: TValue | undefined }
+    },
+    useState<TValue>(initialState: TValue | (() => TValue)) {
+      const index = state.currentHookIndex++
+
+      if (!(index in state.hookValues)) {
+        state.hookValues[index] = typeof initialState === 'function'
+          ? (initialState as () => TValue)()
+          : initialState
+      }
+
+      const setState = (next: TValue | ((previous: TValue) => TValue)) => {
+        const previous = state.hookValues[index] as TValue
+        const value = typeof next === 'function'
+          ? (next as (previous: TValue) => TValue)(previous)
+          : next
+
+        state.hookValues[index] = value
+        options.onStateChange?.(index, value)
+      }
+
+      return [state.hookValues[index] as TValue, setState] as const
+    },
+  })
 }
 
 describe('@holo-js/adapter-next client', () => {
@@ -108,15 +168,7 @@ describe('@holo-js/adapter-next client', () => {
     type PostFormData = {
       readonly title: string
     }
-    type ReactState = {
-      currentHookIndex: number
-      hookValues: unknown[]
-    }
-
-    ;(globalThis as unknown as { __holoNextHttpFormState?: ReactState }).__holoNextHttpFormState = {
-      currentHookIndex: 0,
-      hookValues: [],
-    }
+    const state = createReactHookState()
 
     let capturedSubmitter: UseFormOptions<PostFormData, unknown>['submitter']
     const forbidden = Object.assign(new Error('Only the author can update posts.'), {
@@ -135,41 +187,7 @@ describe('@holo-js/adapter-next client', () => {
       }),
     }))
 
-    vi.doMock('react', () => createReactMock({
-      useEffect(effect: () => void | (() => void)) {
-        return effect()
-      },
-      useRef<TValue>(initialValue?: TValue) {
-        const state = (globalThis as unknown as {
-          __holoNextHttpFormState: ReactState
-        }).__holoNextHttpFormState
-        const index = state.currentHookIndex++
-
-        if (!(index in state.hookValues)) {
-          state.hookValues[index] = { current: initialValue }
-        }
-
-        return state.hookValues[index] as { current: TValue | undefined }
-      },
-      useState<TValue>(initialState: TValue | (() => TValue)) {
-        const state = (globalThis as unknown as {
-          __holoNextHttpFormState: ReactState
-        }).__holoNextHttpFormState
-        const index = state.currentHookIndex++
-
-        if (!(index in state.hookValues)) {
-          state.hookValues[index] = typeof initialState === 'function'
-            ? (initialState as () => TValue)()
-            : initialState
-        }
-
-        return [state.hookValues[index] as TValue, (next: TValue | ((previous: TValue) => TValue)) => {
-          state.hookValues[index] = typeof next === 'function'
-            ? (next as (previous: TValue) => TValue)(state.hookValues[index] as TValue)
-            : next
-        }] as const
-      },
-    }))
+    vi.doMock('react', () => createReactHookStateMock(state))
 
     const { useForm } = await import('../src/client')
     const post = schema({
@@ -189,9 +207,6 @@ describe('@holo-js/adapter-next client', () => {
       formData: new FormData(),
     } satisfies ClientSubmitContext<PostFormData>)).rejects.toBe(forbidden)
 
-    const state = (globalThis as unknown as {
-      __holoNextHttpFormState: ReactState
-    }).__holoNextHttpFormState
     state.currentHookIndex = 0
 
     expect(() => useForm(post, {
@@ -555,17 +570,7 @@ describe('@holo-js/adapter-next client', () => {
   })
 
   it('recreates the form instance when schema options change across rerenders', async () => {
-    type ReactState = {
-      rerenders: number[]
-      currentHookIndex: number
-      hookValues: unknown[]
-    }
-
-    ;(globalThis as unknown as { __holoNextClientTestState?: ReactState }).__holoNextClientTestState = {
-      rerenders: [],
-      currentHookIndex: 0,
-      hookValues: [],
-    }
+    const state = createReactHookState()
 
     vi.doMock('@holo-js/forms/internal/client', () => ({
       createFormClient: vi.fn((_schema, options: { initialValues?: { email?: string } }) => ({
@@ -578,48 +583,7 @@ describe('@holo-js/adapter-next client', () => {
       })),
     }))
 
-    vi.doMock('react', () => createReactMock({
-      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
-        return callback
-      },
-      useEffect(effect: () => void | (() => void)) {
-        return effect()
-      },
-      useRef<TValue>(initialValue?: TValue) {
-        const state = (globalThis as unknown as {
-          __holoNextClientTestState: ReactState
-        }).__holoNextClientTestState
-        const index = state.currentHookIndex++
-
-        if (!(index in state.hookValues)) {
-          state.hookValues[index] = { current: initialValue }
-        }
-
-        return state.hookValues[index] as { current: TValue | undefined }
-      },
-      useState<TValue>(initialState: TValue | (() => TValue)) {
-        const state = (globalThis as unknown as {
-          __holoNextClientTestState: ReactState
-        }).__holoNextClientTestState
-        const index = state.currentHookIndex++
-
-        if (!(index in state.hookValues)) {
-          state.hookValues[index] = typeof initialState === 'function'
-            ? (initialState as () => TValue)()
-            : initialState
-        }
-
-        return [state.hookValues[index] as TValue, (next: TValue | ((previous: TValue) => TValue)) => {
-          const previous = state.hookValues[index] as TValue
-          state.hookValues[index] = typeof next === 'function'
-            ? (next as (previous: TValue) => TValue)(previous)
-            : next
-          if (index === 0 && typeof state.hookValues[index] === 'number') {
-            state.rerenders.push(state.hookValues[index] as number)
-          }
-        }] as const
-      },
-    }))
+    vi.doMock('react', () => createReactHookStateMock(state))
 
     const { useForm } = await import('../src/client')
     const login = schema({
@@ -633,9 +597,6 @@ describe('@holo-js/adapter-next client', () => {
     }
     const firstForm = useForm(login, firstOptions)
 
-    const state = (globalThis as unknown as {
-      __holoNextClientTestState: ReactState
-    }).__holoNextClientTestState
     state.currentHookIndex = 0
 
     const secondForm = useForm(login, {
@@ -649,15 +610,7 @@ describe('@holo-js/adapter-next client', () => {
   })
 
   it('preserves the form instance across rerenders when option values are unchanged', async () => {
-    type ReactState = {
-      currentHookIndex: number
-      hookValues: unknown[]
-    }
-
-    ;(globalThis as unknown as { __holoNextClientStableOptionsState?: ReactState }).__holoNextClientStableOptionsState = {
-      currentHookIndex: 0,
-      hookValues: [],
-    }
+    const state = createReactHookState()
 
     const createForm = vi.fn((_schema, options: { initialValues?: { email?: string } }) => ({
       id: Symbol(options.initialValues?.email ?? 'empty'),
@@ -673,40 +626,7 @@ describe('@holo-js/adapter-next client', () => {
       createFormClient: createForm,
     }))
 
-    vi.doMock('react', () => createReactMock({
-      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
-        return callback
-      },
-      useEffect(effect: () => void | (() => void)) {
-        return effect()
-      },
-      useRef<TValue>(initialValue?: TValue) {
-        const state = (globalThis as unknown as {
-          __holoNextClientStableOptionsState: ReactState
-        }).__holoNextClientStableOptionsState
-        const index = state.currentHookIndex++
-
-        if (!(index in state.hookValues)) {
-          state.hookValues[index] = { current: initialValue }
-        }
-
-        return state.hookValues[index] as { current: TValue | undefined }
-      },
-      useState<TValue>(initialState: TValue | (() => TValue)) {
-        const state = (globalThis as unknown as {
-          __holoNextClientStableOptionsState: ReactState
-        }).__holoNextClientStableOptionsState
-        const index = state.currentHookIndex++
-
-        if (!(index in state.hookValues)) {
-          state.hookValues[index] = typeof initialState === 'function'
-            ? (initialState as () => TValue)()
-            : initialState
-        }
-
-        return [state.hookValues[index] as TValue, vi.fn()] as const
-      },
-    }))
+    vi.doMock('react', () => createReactHookStateMock(state))
 
     const { useForm } = await import('../src/client')
     const login = schema({
@@ -723,9 +643,6 @@ describe('@holo-js/adapter-next client', () => {
       },
     })
 
-    const state = (globalThis as unknown as {
-      __holoNextClientStableOptionsState: ReactState
-    }).__holoNextClientStableOptionsState
     state.currentHookIndex = 0
 
     const secondForm = useForm(login, {
@@ -741,15 +658,7 @@ describe('@holo-js/adapter-next client', () => {
   })
 
   it('preserves the form instance across rerenders when submitter identity changes', async () => {
-    type ReactState = {
-      currentHookIndex: number
-      hookValues: unknown[]
-    }
-
-    ;(globalThis as unknown as { __holoNextClientSubmitterState?: ReactState }).__holoNextClientSubmitterState = {
-      currentHookIndex: 0,
-      hookValues: [],
-    }
+    const state = createReactHookState()
 
     const createForm = vi.fn(() => ({
       id: Symbol('form'),
@@ -762,40 +671,7 @@ describe('@holo-js/adapter-next client', () => {
       createFormClient: createForm,
     }))
 
-    vi.doMock('react', () => createReactMock({
-      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
-        return callback
-      },
-      useEffect(effect: () => void | (() => void)) {
-        return effect()
-      },
-      useRef<TValue>(initialValue?: TValue) {
-        const state = (globalThis as unknown as {
-          __holoNextClientSubmitterState: ReactState
-        }).__holoNextClientSubmitterState
-        const index = state.currentHookIndex++
-
-        if (!(index in state.hookValues)) {
-          state.hookValues[index] = { current: initialValue }
-        }
-
-        return state.hookValues[index] as { current: TValue | undefined }
-      },
-      useState<TValue>(initialState: TValue | (() => TValue)) {
-        const state = (globalThis as unknown as {
-          __holoNextClientSubmitterState: ReactState
-        }).__holoNextClientSubmitterState
-        const index = state.currentHookIndex++
-
-        if (!(index in state.hookValues)) {
-          state.hookValues[index] = typeof initialState === 'function'
-            ? (initialState as () => TValue)()
-            : initialState
-        }
-
-        return [state.hookValues[index] as TValue, vi.fn()] as const
-      },
-    }))
+    vi.doMock('react', () => createReactHookStateMock(state))
 
     const { useForm } = await import('../src/client')
     const login = schema({
@@ -813,9 +689,6 @@ describe('@holo-js/adapter-next client', () => {
       }),
     })
 
-    const state = (globalThis as unknown as {
-      __holoNextClientSubmitterState: ReactState
-    }).__holoNextClientSubmitterState
     state.currentHookIndex = 0
 
     const secondForm = useForm(login, {
@@ -834,15 +707,7 @@ describe('@holo-js/adapter-next client', () => {
   })
 
   it('uses the latest inline submitter without recreating the form instance', async () => {
-    type ReactState = {
-      currentHookIndex: number
-      hookValues: unknown[]
-    }
-
-    ;(globalThis as unknown as { __holoNextClientSubmitterBridgeState?: ReactState }).__holoNextClientSubmitterBridgeState = {
-      currentHookIndex: 0,
-      hookValues: [],
-    }
+    const state = createReactHookState()
 
     const firstSubmitter = vi.fn(async () => ({
       ok: true as const,
@@ -874,40 +739,7 @@ describe('@holo-js/adapter-next client', () => {
       createFormClient: createForm,
     }))
 
-    vi.doMock('react', () => createReactMock({
-      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
-        return callback
-      },
-      useEffect(effect: () => void | (() => void)) {
-        return effect()
-      },
-      useRef<TValue>(initialValue?: TValue) {
-        const state = (globalThis as unknown as {
-          __holoNextClientSubmitterBridgeState: ReactState
-        }).__holoNextClientSubmitterBridgeState
-        const index = state.currentHookIndex++
-
-        if (!(index in state.hookValues)) {
-          state.hookValues[index] = { current: initialValue }
-        }
-
-        return state.hookValues[index] as { current: TValue | undefined }
-      },
-      useState<TValue>(initialState: TValue | (() => TValue)) {
-        const state = (globalThis as unknown as {
-          __holoNextClientSubmitterBridgeState: ReactState
-        }).__holoNextClientSubmitterBridgeState
-        const index = state.currentHookIndex++
-
-        if (!(index in state.hookValues)) {
-          state.hookValues[index] = typeof initialState === 'function'
-            ? (initialState as () => TValue)()
-            : initialState
-        }
-
-        return [state.hookValues[index] as TValue, vi.fn()] as const
-      },
-    }))
+    vi.doMock('react', () => createReactHookStateMock(state))
 
     const { useForm } = await import('../src/client')
     const login = schema({
@@ -921,9 +753,6 @@ describe('@holo-js/adapter-next client', () => {
       submitter: firstSubmitter,
     })
 
-    const state = (globalThis as unknown as {
-      __holoNextClientSubmitterBridgeState: ReactState
-    }).__holoNextClientSubmitterBridgeState
     state.currentHookIndex = 0
 
     const secondForm = useForm(login, {
@@ -942,15 +771,7 @@ describe('@holo-js/adapter-next client', () => {
   })
 
   it('throws if a stale bridged submitter runs after submitter support is removed', async () => {
-    type ReactState = {
-      currentHookIndex: number
-      hookValues: unknown[]
-    }
-
-    ;(globalThis as unknown as { __holoNextClientSubmitterRemovalState?: ReactState }).__holoNextClientSubmitterRemovalState = {
-      currentHookIndex: 0,
-      hookValues: [],
-    }
+    const state = createReactHookState()
 
     const capturedSubmitters: Array<((context: { values: { email: string } }) => Promise<unknown> | unknown) | undefined> = []
 
@@ -970,40 +791,7 @@ describe('@holo-js/adapter-next client', () => {
       createFormClient: createForm,
     }))
 
-    vi.doMock('react', () => createReactMock({
-      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
-        return callback
-      },
-      useEffect(effect: () => void | (() => void)) {
-        return effect()
-      },
-      useRef<TValue>(initialValue?: TValue) {
-        const state = (globalThis as unknown as {
-          __holoNextClientSubmitterRemovalState: ReactState
-        }).__holoNextClientSubmitterRemovalState
-        const index = state.currentHookIndex++
-
-        if (!(index in state.hookValues)) {
-          state.hookValues[index] = { current: initialValue }
-        }
-
-        return state.hookValues[index] as { current: TValue | undefined }
-      },
-      useState<TValue>(initialState: TValue | (() => TValue)) {
-        const state = (globalThis as unknown as {
-          __holoNextClientSubmitterRemovalState: ReactState
-        }).__holoNextClientSubmitterRemovalState
-        const index = state.currentHookIndex++
-
-        if (!(index in state.hookValues)) {
-          state.hookValues[index] = typeof initialState === 'function'
-            ? (initialState as () => TValue)()
-            : initialState
-        }
-
-        return [state.hookValues[index] as TValue, vi.fn()] as const
-      },
-    }))
+    vi.doMock('react', () => createReactHookStateMock(state))
 
     const { useForm } = await import('../src/client')
     const login = schema({
@@ -1021,9 +809,6 @@ describe('@holo-js/adapter-next client', () => {
       }),
     })
 
-    const state = (globalThis as unknown as {
-      __holoNextClientSubmitterRemovalState: ReactState
-    }).__holoNextClientSubmitterRemovalState
     state.currentHookIndex = 0
 
     useForm(login, {
@@ -1041,15 +826,7 @@ describe('@holo-js/adapter-next client', () => {
   })
 
   it('recreates the form instance when file-valued options change across rerenders', async () => {
-    type ReactState = {
-      currentHookIndex: number
-      hookValues: unknown[]
-    }
-
-    ;(globalThis as unknown as { __holoNextClientFileOptionsState?: ReactState }).__holoNextClientFileOptionsState = {
-      currentHookIndex: 0,
-      hookValues: [],
-    }
+    const state = createReactHookState()
 
     const createForm = vi.fn((_schema, options: { initialValues?: { avatar?: File } }) => ({
       id: Symbol(options.initialValues?.avatar?.name ?? 'empty'),
@@ -1062,40 +839,7 @@ describe('@holo-js/adapter-next client', () => {
       createFormClient: createForm,
     }))
 
-    vi.doMock('react', () => createReactMock({
-      useCallback<TCallback extends (...args: never[]) => unknown>(callback: TCallback) {
-        return callback
-      },
-      useEffect(effect: () => void | (() => void)) {
-        return effect()
-      },
-      useRef<TValue>(initialValue?: TValue) {
-        const state = (globalThis as unknown as {
-          __holoNextClientFileOptionsState: ReactState
-        }).__holoNextClientFileOptionsState
-        const index = state.currentHookIndex++
-
-        if (!(index in state.hookValues)) {
-          state.hookValues[index] = { current: initialValue }
-        }
-
-        return state.hookValues[index] as { current: TValue | undefined }
-      },
-      useState<TValue>(initialState: TValue | (() => TValue)) {
-        const state = (globalThis as unknown as {
-          __holoNextClientFileOptionsState: ReactState
-        }).__holoNextClientFileOptionsState
-        const index = state.currentHookIndex++
-
-        if (!(index in state.hookValues)) {
-          state.hookValues[index] = typeof initialState === 'function'
-            ? (initialState as () => TValue)()
-            : initialState
-        }
-
-        return [state.hookValues[index] as TValue, vi.fn()] as const
-      },
-    }))
+    vi.doMock('react', () => createReactHookStateMock(state))
 
     const { useForm } = await import('../src/client')
     const upload = schema({
@@ -1108,9 +852,6 @@ describe('@holo-js/adapter-next client', () => {
       },
     })
 
-    const state = (globalThis as unknown as {
-      __holoNextClientFileOptionsState: ReactState
-    }).__holoNextClientFileOptionsState
     state.currentHookIndex = 0
 
     const secondForm = useForm(upload, {

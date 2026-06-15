@@ -38,17 +38,13 @@ export function createConfigAccessors<TConfig extends RuntimeConfigMap>(configMa
   useConfig: UseConfigAccessor<TConfig>
   config: ConfigAccessor<TConfig>
 } {
-  const useConfig = ((path: string) => {
+  const accessor = ((path: string) => {
     return getValueAtPath(configMap as Record<string, unknown>, path)
-  }) as UseConfigAccessor<TConfig>
-
-  const config = ((path: string) => {
-    return getValueAtPath(configMap as Record<string, unknown>, path)
-  }) as ConfigAccessor<TConfig>
+  }) as UseConfigAccessor<TConfig> & ConfigAccessor<TConfig>
 
   return {
-    useConfig,
-    config,
+    useConfig: accessor,
+    config: accessor,
   }
 }
 
@@ -78,15 +74,19 @@ function requireConfigRuntime(): RuntimeConfigMap {
   return runtimeConfigMap
 }
 
+function getRuntimeConfigValue(path: string): unknown {
+  return getValueAtPath(requireConfigRuntime() as Record<string, unknown>, path)
+}
+
 export function useConfig<TKey extends Extract<keyof RuntimeConfigMap, string>>(key: TKey): RuntimeConfigMap[TKey]
 export function useConfig<TPath extends DotPath<RuntimeConfigMap>>(path: TPath): ValueAtPath<RuntimeConfigMap, TPath>
 export function useConfig(path: string): unknown
 export function useConfig(path: string): unknown {
-  return getValueAtPath(requireConfigRuntime() as Record<string, unknown>, path)
+  return getRuntimeConfigValue(path)
 }
 
 export function config<TPath extends DotPath<RuntimeConfigMap>>(path: TPath): ValueAtPath<RuntimeConfigMap, TPath>
 export function config(path: string): unknown
 export function config(path: string): unknown {
-  return getValueAtPath(requireConfigRuntime() as Record<string, unknown>, path)
+  return getRuntimeConfigValue(path)
 }

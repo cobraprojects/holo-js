@@ -19,13 +19,9 @@ export type UseAuthResult = {
 
 const authContextKey = Symbol('holo-js.auth.client')
 
-function hasExplicitUseAuthOptions(options: UseAuthOptions | undefined): options is UseAuthOptions {
+function hasDefinedOption(options: object | undefined): boolean {
   return typeof options !== 'undefined'
     && Object.values(options).some(value => typeof value !== 'undefined')
-}
-
-function hasExplicitRequestOptions(options: AuthClientRequestOptions): boolean {
-  return Object.values(options).some(value => typeof value !== 'undefined')
 }
 
 export function setAuthContext(auth: UseAuthResult): UseAuthResult {
@@ -121,7 +117,7 @@ class AuthClientState implements UseAuthResult {
 
 export function useAuth(options?: UseAuthOptions): UseAuthResult {
   const context = tryGetAuthContext()
-  const hasOptions = hasExplicitUseAuthOptions(options)
+  const hasOptions = hasDefinedOption(options)
   const resolvedOptions = options ?? {}
   const { initialProvider = null, initialUser = null, ...requestOptions } = resolvedOptions
   if (context && !hasOptions) {
@@ -134,7 +130,7 @@ export function useAuth(options?: UseAuthOptions): UseAuthResult {
 
   const auth = new AuthClientState(initialProvider, initialUser, requestOptions)
 
-  if (!hasExplicitRequestOptions(requestOptions)) {
+  if (!hasDefinedOption(requestOptions)) {
     trySetAuthContext(auth)
   }
 

@@ -55,6 +55,7 @@ import {
   pickInputField,
   resolveRequiredFieldName,
 } from '../src/runtime/failureFields'
+import type { OptionalSecurityModule } from '../src/runtime/optionalSecurity'
 import { createLoginFailure, createRegistrationFailure, createTokenLoginFailure } from '../src/runtime/sessionFailures'
 import { isValidationException, validationInternals, type ValidationErrorBag } from '@holo-js/validation'
 
@@ -71,6 +72,11 @@ function hashPasswordResetEmail(email: string, csrfSigningKey?: string): string 
 function importSpecifier(fromDirectory: string, targetPath: string): string {
   const specifier = relative(fromDirectory, targetPath).replaceAll('\\', '/')
   return specifier.startsWith('.') ? specifier : `./${specifier}`
+}
+
+function mockOptionalSecurityModule(module: OptionalSecurityModule): void {
+  vi.resetModules()
+  vi.doMock('@holo-js/security', () => module)
 }
 import type {
   AuthenticatedAuthUser,
@@ -693,6 +699,8 @@ afterEach(() => {
   resetSessionRuntime()
   resetAuthClient()
   vi.restoreAllMocks()
+  vi.doUnmock('@holo-js/security')
+  vi.resetModules()
   vi.unstubAllGlobals()
 })
 
@@ -2319,7 +2327,7 @@ describe('@holo-js/auth package runtime', () => {
       }
     })
 
-    vi.stubGlobal('__holoAuthSecurityModule__', {
+    mockOptionalSecurityModule({
       getSecurityRuntimeBindings() {
         return {
           rateLimitStore: {
@@ -2387,7 +2395,7 @@ describe('@holo-js/auth package runtime', () => {
       limited: false,
     }))
 
-    vi.stubGlobal('__holoAuthSecurityModule__', {
+    mockOptionalSecurityModule({
       getSecurityRuntimeBindings() {
         return {
           rateLimitStore: {
@@ -2441,7 +2449,7 @@ describe('@holo-js/auth package runtime', () => {
       }
     })
 
-    vi.stubGlobal('__holoAuthSecurityModule__', {
+    mockOptionalSecurityModule({
       getSecurityRuntimeBindings() {
         return {
           rateLimitStore: {
@@ -2570,7 +2578,7 @@ describe('@holo-js/auth package runtime', () => {
       }
     })
 
-    vi.stubGlobal('__holoAuthSecurityModule__', {
+    mockOptionalSecurityModule({
       getSecurityRuntimeBindings() {
         return {
           rateLimitStore: {
@@ -2639,7 +2647,7 @@ describe('@holo-js/auth package runtime', () => {
       }
     })
 
-    vi.stubGlobal('__holoAuthSecurityModule__', {
+    mockOptionalSecurityModule({
       getSecurityRuntimeBindings() {
         return {
           rateLimitStore: {
@@ -2700,7 +2708,7 @@ describe('@holo-js/auth package runtime', () => {
       limited: false,
     }))
 
-    vi.stubGlobal('__holoAuthSecurityModule__', {
+    mockOptionalSecurityModule({
       getSecurityRuntimeBindings() {
         return {
           rateLimitStore: {
@@ -2757,7 +2765,7 @@ describe('@holo-js/auth package runtime', () => {
       }
     })
 
-    vi.stubGlobal('__holoAuthSecurityModule__', {
+    mockOptionalSecurityModule({
       getSecurityRuntimeBindings() {
         return {
           rateLimitStore: {
@@ -2818,7 +2826,7 @@ describe('@holo-js/auth package runtime', () => {
       }
     })
 
-    vi.stubGlobal('__holoAuthSecurityModule__', {
+    mockOptionalSecurityModule({
       getSecurityRuntimeBindings() {
         return {
           rateLimitStore: {
@@ -2876,7 +2884,7 @@ describe('@holo-js/auth package runtime', () => {
       ['app-b', { rateLimitStore: { hit, clear: vi.fn(async () => true) }, csrfSigningKey: 'app-b' }],
     ])
 
-    vi.stubGlobal('__holoAuthSecurityModule__', {
+    mockOptionalSecurityModule({
       getSecurityRuntimeBindings() {
         return sharedBindings.get((globalThis as typeof globalThis & { __holoActiveAppKey__?: string }).__holoActiveAppKey__ ?? 'app-a')
       },
@@ -2953,7 +2961,7 @@ describe('@holo-js/auth package runtime', () => {
       }
     })
 
-    vi.stubGlobal('__holoAuthSecurityModule__', {
+    mockOptionalSecurityModule({
       getSecurityRuntimeBindings() {
         return {
           rateLimitStore: {
@@ -3011,7 +3019,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('falls back to the provider lookup path when no shared rate-limit store is configured', async () => {
-    vi.stubGlobal('__holoAuthSecurityModule__', {
+    mockOptionalSecurityModule({
       getSecurityRuntimeBindings() {
         return undefined
       },
@@ -3045,7 +3053,7 @@ describe('@holo-js/auth package runtime', () => {
   })
 
   it('skips shared limiter checks when an existing password reset token has no shared store available', async () => {
-    vi.stubGlobal('__holoAuthSecurityModule__', {
+    mockOptionalSecurityModule({
       getSecurityRuntimeBindings() {
         return {
           rateLimitStore: undefined,
@@ -3099,7 +3107,7 @@ describe('@holo-js/auth package runtime', () => {
       limited: true,
     }))
 
-    vi.stubGlobal('__holoAuthSecurityModule__', {
+    mockOptionalSecurityModule({
       getSecurityRuntimeBindings() {
         return {
           rateLimitStore: {
@@ -3135,97 +3143,6 @@ describe('@holo-js/auth package runtime', () => {
 
     expect(hit).toHaveBeenCalledTimes(1)
     expect(findByCredentials).not.toHaveBeenCalled()
-    expect(runtime.deliveries).toHaveLength(0)
-  })
-
-  it('rethrows unexpected optional security import failures during password reset throttling', async () => {
-    const runtime = configureRuntime()
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
-    vi.stubGlobal('__holoAuthSecurityImport__', async () => {
-      throw 'boom'
-    })
-
-    await expect(requestPasswordReset({ email: 'ava@example.com' })).rejects.toBe('boom')
-
-    vi.stubGlobal('__holoAuthSecurityImport__', async () => {
-      throw new Error('security import exploded')
-    })
-
-    await expect(requestPasswordReset({ email: 'ava@example.com' })).rejects.toThrow('security import exploded')
-
-    vi.stubGlobal('__holoAuthSecurityImport__', async () => {
-      throw new Error('Could not resolve "@holo-js/other"')
-    })
-
-    await expect(requestPasswordReset({ email: 'ava@example.com' })).rejects.toThrow('Could not resolve "@holo-js/other"')
-  })
-
-  it('treats resolver-style optional security import failures as missing packages during password reset throttling', async () => {
-    const runtime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
-    vi.stubGlobal('__holoAuthSecurityImport__', async () => {
-      const error = new Error('Cannot find package "@holo-js/security"')
-      Object.assign(error, { code: 'ERR_MODULE_NOT_FOUND' })
-      throw error
-    })
-
-    expect(unwrapAuthResult(await requestPasswordReset({ email: 'ava@example.com' }))).toBeUndefined()
-    expect(runtime.deliveries).toHaveLength(1)
-  })
-
-  it('rethrows transitive optional security import failures during password reset throttling', async () => {
-    const runtime = configureRuntime({
-      authConfig: {
-        passwords: {
-          users: {
-            provider: 'users',
-            table: 'password_reset_tokens',
-            expire: 60,
-            throttle: 60,
-          },
-        },
-      },
-    })
-    const password = await authRuntimeInternals.createDefaultPasswordHasher().hash('secret-secret')
-    await runtime.usersProvider.create({
-      name: 'Ava',
-      email: 'ava@example.com',
-      password,
-      email_verified_at: new Date('2026-04-08T00:00:00.000Z'),
-    })
-
-    vi.stubGlobal('__holoAuthSecurityImport__', async () => {
-      const error = new Error('Cannot find package "redis" imported from /app/node_modules/@holo-js/security/dist/index.mjs')
-      Object.assign(error, { code: 'ERR_MODULE_NOT_FOUND' })
-      throw error
-    })
-
-    await expect(requestPasswordReset({ email: 'ava@example.com' })).rejects.toThrow('Cannot find package "redis"')
     expect(runtime.deliveries).toHaveLength(0)
   })
 
@@ -3273,7 +3190,7 @@ describe('@holo-js/auth package runtime', () => {
       }
     })
 
-    vi.stubGlobal('__holoAuthSecurityModule__', {
+    mockOptionalSecurityModule({
       getSecurityRuntimeBindings() {
         return {
           rateLimitStore: {

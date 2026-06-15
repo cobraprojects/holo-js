@@ -1,24 +1,17 @@
-import { createPublicKey, type JsonWebKey, verify as verifySignature } from 'node:crypto'
+import { authRuntimeInternals } from '@holo-js/auth'
 import type {
   SocialCallbackContext,
   SocialProviderProfile,
   SocialProviderRuntime,
-  SocialProviderTokens,
   SocialRedirectContext,
 } from '@holo-js/auth-social'
+import { socialAuthInternals } from '@holo-js/auth-social'
 
 const APPLE_ISSUER = 'https://appleid.apple.com'
 const APPLE_JWKS_URL = 'https://appleid.apple.com/auth/keys'
 const APPLE_TOKEN_CLOCK_SKEW_MS = 60_000
 
-type JwkKey = Readonly<JsonWebKey> & {
-  readonly kid?: string
-}
-
-async function readJson(response: Response): Promise<unknown> {
-  const text = await response.text()
-  return text ? JSON.parse(text) as unknown : {}
-}
+type JwkKey = Parameters<typeof authRuntimeInternals.jwt.verifyJwtSignatureWithJwk>[1]
 
 async function readAppleUserPayload(request: Request): Promise<{
   readonly email?: string
@@ -54,31 +47,16 @@ async function readAppleUserPayload(request: Request): Promise<{
   }
 }
 
-function decodeJwtSegment<T>(value: string, label: string): T {
-  try {
-    return JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as T
-  } catch {
-    throw new Error(`[@holo-js/auth-social-apple] Apple id_token ${label} was not valid JSON.`)
-  }
-}
-
 function parseJwt(token: string): {
   readonly header: Readonly<Record<string, unknown>>
   readonly payload: Readonly<Record<string, unknown>>
   readonly signature: Buffer
   readonly signingInput: Buffer
 } {
-  const segments = token.split('.')
-  if (segments.length !== 3 || !segments[0] || !segments[1] || !segments[2]) {
-    throw new Error('[@holo-js/auth-social-apple] Apple id_token was malformed.')
-  }
-
-  return {
-    header: decodeJwtSegment<Readonly<Record<string, unknown>>>(segments[0], 'header'),
-    payload: decodeJwtSegment<Readonly<Record<string, unknown>>>(segments[1], 'payload'),
-    signature: Buffer.from(segments[2], 'base64url'),
-    signingInput: Buffer.from(`${segments[0]}.${segments[1]}`, 'utf8'),
-  }
+  return authRuntimeInternals.jwt.parseJwt(token, {
+    errorPrefix: '[@holo-js/auth-social-apple] Apple id_token',
+    malformedMessage: '[@holo-js/auth-social-apple] Apple id_token was malformed.',
+  })
 }
 
 function verifyJwtSignatureWithJwk(
@@ -90,22 +68,17 @@ function verifyJwtSignatureWithJwk(
     throw new Error(`[@holo-js/auth-social-apple] Unsupported Apple id_token algorithm "${algorithm || 'unknown'}".`)
   }
 
-  const key = createPublicKey({ key: jwk, format: 'jwk' })
-  return verifySignature('RSA-SHA256', token.signingInput, key, token.signature)
+  return authRuntimeInternals.jwt.verifyJwtSignatureWithJwk(token, jwk, {
+    unsupportedAlgorithmMessage: unsupportedAlgorithm => `[@holo-js/auth-social-apple] Unsupported Apple id_token algorithm "${unsupportedAlgorithm}".`,
+  })
 }
 
 async function fetchAppleJwks(): Promise<readonly JwkKey[]> {
-  const response = await fetch(APPLE_JWKS_URL, {
-    headers: {
-      accept: 'application/json',
-    },
+  return authRuntimeInternals.jwt.fetchCachedJwks(APPLE_JWKS_URL, {
+    cache: new Map(),
+    requestUrl: APPLE_JWKS_URL,
+    errorMessage: '[@holo-js/auth-social-apple] Failed to load Apple JWKS.',
   })
-  if (!response.ok) {
-    throw new Error('[@holo-js/auth-social-apple] Failed to load Apple JWKS.')
-  }
-
-  const payload = await response.json() as { keys?: readonly JwkKey[] }
-  return payload.keys ?? []
 }
 
 function hasExpectedAudience(audience: unknown, clientId: string): boolean {
@@ -169,45 +142,20 @@ async function verifyAppleIdToken(
 }
 
 async function exchangeToken(context: SocialCallbackContext): Promise<Record<string, unknown>> {
-  const body = new URLSearchParams({
-    code: context.code,
-    client_id: context.config.clientId ?? '',
-    client_secret: context.config.clientSecret ?? '',
-    redirect_uri: context.config.redirectUri ?? '',
-    grant_type: 'authorization_code',
-    code_verifier: context.codeVerifier,
-  })
-
   const response = await fetch('https://appleid.apple.com/auth/token', {
     method: 'POST',
     headers: {
       accept: 'application/json',
       'content-type': 'application/x-www-form-urlencoded',
     },
-    body,
+    body: socialAuthInternals.createAuthorizationCodeTokenBody(context),
   })
 
   if (!response.ok) {
     throw new Error('[@holo-js/auth-social-apple] Apple token exchange failed.')
   }
 
-  return await readJson(response) as Record<string, unknown>
-}
-
-function normalizeTokens(payload: Record<string, unknown>): SocialProviderTokens {
-  const expiresIn = typeof payload.expires_in === 'number'
-    ? payload.expires_in
-    : typeof payload.expires_in === 'string'
-      ? Number.parseInt(payload.expires_in, 10)
-      : undefined
-
-  return {
-    accessToken: String(payload.access_token ?? ''),
-    refreshToken: typeof payload.refresh_token === 'string' ? payload.refresh_token : undefined,
-    expiresAt: Number.isFinite(expiresIn) ? new Date(Date.now() + (expiresIn! * 1000)) : undefined,
-    idToken: payload.id_token,
-    tokenType: payload.token_type,
-  }
+  return await socialAuthInternals.readJsonResponse(response) as Record<string, unknown>
 }
 
 function normalizeProfile(
@@ -264,7 +212,12 @@ export const appleSocialProvider: SocialProviderRuntime = Object.freeze({
 
     return {
       profile: normalizeProfile(claims, userPayload),
-      tokens: normalizeTokens(tokenPayload),
+      tokens: socialAuthInternals.normalizeOAuthTokens(tokenPayload, {
+        includeScope: false,
+        extra: {
+          idToken: tokenPayload.id_token,
+        },
+      }),
     }
   },
 })

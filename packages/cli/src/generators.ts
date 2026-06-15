@@ -45,7 +45,6 @@ import { collectFiles } from './project/discovery-helpers'
 import type { IoStreams, PreparedInput } from './cli-types'
 
 type MailTemplateType = 'markdown' | 'view'
-type KnownMailViewFramework = 'nuxt' | 'next' | 'sveltekit'
 const MAIL_VIEW_SCAFFOLDING_UNAVAILABLE_MESSAGE
   = 'View-backed mail scaffolding requires a renderView runtime binding, which the first-party app scaffolds do not configure yet. Use "--markdown" instead.'
 
@@ -282,36 +281,6 @@ function resolveConfiguredChannelsPath(project: Awaited<ReturnType<typeof ensure
     readonly channels?: string
   }
   return configuredPaths.channels ?? 'server/channels'
-}
-
-async function resolveProjectMailViewFramework(projectRoot: string): Promise<KnownMailViewFramework | 'generic'> {
-  try {
-    const packageJson = await readFile(resolve(projectRoot, 'package.json'), 'utf8')
-    const parsed = JSON.parse(packageJson) as {
-      dependencies?: Record<string, unknown>
-      devDependencies?: Record<string, unknown>
-    }
-    const dependencies = {
-      ...(parsed.dependencies ?? {}),
-      ...(parsed.devDependencies ?? {}),
-    }
-
-    if (typeof dependencies.nuxt === 'string') {
-      return 'nuxt'
-    }
-
-    if (typeof dependencies.next === 'string') {
-      return 'next'
-    }
-
-    if (typeof dependencies['@sveltejs/kit'] === 'string') {
-      return 'sveltekit'
-    }
-  } catch {
-    return 'generic'
-  }
-
-  return 'generic'
 }
 
 export async function runMakeModel(
@@ -741,6 +710,5 @@ export async function runMakeMail(
 }
 
 export const generatorInternals = {
-  resolveProjectMailViewFramework,
   toChannelTemplateFileStem,
 }

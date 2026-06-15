@@ -1,5 +1,6 @@
 import { onScopeDispose, reactive, shallowRef, watchEffect } from 'vue'
 import { useCookie } from '#app'
+import { normalizeHoloHttpError } from '@holo-js/core/errors'
 import type { FormSchema, InferFormData } from '@holo-js/forms'
 import { DEFAULT_VALIDATION_BAG, createErrorBag, type ValidationErrorBag } from '@holo-js/validation'
 import {
@@ -8,7 +9,8 @@ import {
   type UseFormResult,
   createFormClient,
 } from '@holo-js/forms/internal/client'
-import { normalizeNuxtClientHttpError, renderNuxtClientHttpErrorPage } from './client-errors'
+import { renderNuxtClientHttpErrorPage } from './client-errors'
+import { isPlainObject } from './object'
 
 export {
   type ClientSubmitContext,
@@ -50,14 +52,6 @@ const ARRAY_MUTATION_METHODS = new Set([
   'splice',
   'unshift',
 ])
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return !!value
-    && typeof value === 'object'
-    && !Array.isArray(value)
-    && !(value instanceof Date)
-    && !(value instanceof Blob)
-}
 
 function isLeafValue(value: unknown): boolean {
   return value instanceof Date
@@ -132,11 +126,11 @@ function renderFormHttpFailure(result: unknown): void {
   }
 
   const httpError = result.ok === false && typeof result.status === 'number'
-    ? normalizeNuxtClientHttpError({
+    ? normalizeHoloHttpError({
         status: result.status,
         message: getHttpFailureMessage(result as FormHttpFailure),
       })
-    : normalizeNuxtClientHttpError(result)
+    : normalizeHoloHttpError(result)
 
   if (!httpError || httpError.status === 422) {
     return

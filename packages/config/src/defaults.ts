@@ -472,29 +472,74 @@ const DEFAULT_QUEUE_CONFIG: Readonly<NormalizedHoloQueueConfig> = Object.freeze(
   }),
 })
 
+type IntegerParser = 'number' | 'parse-int' | 'digits'
+
+function parseIntegerCandidate(value: number | string, parser: IntegerParser): number {
+  if (typeof value === 'number') {
+    return value
+  }
+
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return Number.NaN
+  }
+
+  if (parser === 'parse-int') {
+    return Number.parseInt(value, 10)
+  }
+
+  if (parser === 'digits') {
+    return /^\d+$/.test(trimmed) ? Number.parseInt(trimmed, 10) : Number.NaN
+  }
+
+  return Number(trimmed)
+}
+
+function parseScopedInteger(
+  value: number | string | undefined,
+  fallback: number,
+  namespace: string,
+  label: string,
+  options: { minimum?: number, parser?: IntegerParser } = {},
+): number {
+  const normalized = typeof value === 'undefined'
+    ? fallback
+    : parseIntegerCandidate(value, options.parser ?? 'number')
+
+  if (!Number.isFinite(normalized) || !Number.isInteger(normalized)) {
+    throw new Error(`[${namespace}] ${label} must be an integer.`)
+  }
+
+  if (typeof options.minimum === 'number' && normalized < options.minimum) {
+    throw new Error(`[${namespace}] ${label} must be greater than or equal to ${options.minimum}.`)
+  }
+
+  return normalized
+}
+
+function parseScopedOptionalInteger(
+  value: number | string | undefined,
+  namespace: string,
+  label: string,
+  options: { minimum?: number, parser?: IntegerParser } = {},
+): number | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  return parseScopedInteger(value, Number.NaN, namespace, label, options)
+}
+
 function parseInteger(
   value: number | string | undefined,
   fallback: number,
   label: string,
   options: { minimum?: number } = {},
 ): number {
-  if (typeof value === 'undefined') {
-    return fallback
-  }
-
-  const normalized = typeof value === 'number'
-    ? value
-    : Number.parseInt(value, 10)
-
-  if (!Number.isInteger(normalized)) {
-    throw new Error(`[Holo Queue] ${label} must be an integer.`)
-  }
-
-  if (typeof options.minimum === 'number' && normalized < options.minimum) {
-    throw new Error(`[Holo Queue] ${label} must be greater than or equal to ${options.minimum}.`)
-  }
-
-  return normalized
+  return parseScopedInteger(value, fallback, 'Holo Queue', label, {
+    ...options,
+    parser: 'parse-int',
+  })
 }
 
 function normalizeNonEmptyString(value: string | undefined, label: string): string {
@@ -506,22 +551,21 @@ function normalizeNonEmptyString(value: string | undefined, label: string): stri
   return normalized
 }
 
-function normalizeConnectionName(value: string | undefined, label: string): string {
+function normalizeScopedName(value: string | undefined, namespace: string, label: string): string {
   const normalized = value?.trim()
   if (!normalized) {
-    throw new Error(`[Holo Queue] ${label} must be a non-empty string.`)
+    throw new Error(`[${namespace}] ${label} must be a non-empty string.`)
   }
 
   return normalized
 }
 
-function normalizeCacheName(value: string | undefined, label: string): string {
-  const normalized = value?.trim()
-  if (!normalized) {
-    throw new Error(`[Holo Cache] ${label} must be a non-empty string.`)
-  }
+function normalizeConnectionName(value: string | undefined, label: string): string {
+  return normalizeScopedName(value, 'Holo Queue', label)
+}
 
-  return normalized
+function normalizeCacheName(value: string | undefined, label: string): string {
+  return normalizeScopedName(value, 'Holo Cache', label)
 }
 
 function normalizeCacheOptionalString(value: string | undefined): string | undefined {
@@ -534,30 +578,7 @@ function parseCacheInteger(
   label: string,
   options: { minimum?: number } = {},
 ): number | undefined {
-  if (typeof value === 'undefined') {
-    return undefined
-  }
-
-  const normalized = typeof value === 'number'
-    ? value
-    : (() => {
-        const trimmed = value.trim()
-        if (!trimmed) {
-          return Number.NaN
-        }
-
-        return Number(trimmed)
-      })()
-
-  if (!Number.isFinite(normalized) || !Number.isInteger(normalized)) {
-    throw new Error(`[Holo Cache] ${label} must be an integer.`)
-  }
-
-  if (typeof options.minimum === 'number' && normalized < options.minimum) {
-    throw new Error(`[Holo Cache] ${label} must be greater than or equal to ${options.minimum}.`)
-  }
-
-  return normalized
+  return parseScopedOptionalInteger(value, 'Holo Cache', label, options)
 }
 
 function resolveCachePrefix(globalPrefix: string, localPrefix: string | undefined): string {
@@ -672,39 +693,14 @@ function parseRedisInteger(
   label: string,
   options: { minimum?: number } = {},
 ): number {
-  if (typeof value === 'undefined') {
-    return fallback
-  }
-
-  const normalized = typeof value === 'number'
-    ? value
-    : (() => {
-        const trimmed = value.trim()
-        if (!trimmed || !/^\d+$/.test(trimmed)) {
-          return Number.NaN
-        }
-
-        return Number.parseInt(trimmed, 10)
-      })()
-
-  if (!Number.isInteger(normalized)) {
-    throw new Error(`[Holo Redis] ${label} must be an integer.`)
-  }
-
-  if (typeof options.minimum === 'number' && normalized < options.minimum) {
-    throw new Error(`[Holo Redis] ${label} must be greater than or equal to ${options.minimum}.`)
-  }
-
-  return normalized
+  return parseScopedInteger(value, fallback, 'Holo Redis', label, {
+    ...options,
+    parser: 'digits',
+  })
 }
 
 function normalizeRedisConnectionName(value: string | undefined, label: string): string {
-  const normalized = value?.trim()
-  if (!normalized) {
-    throw new Error(`[Holo Redis] ${label} must be a non-empty string.`)
-  }
-
-  return normalized
+  return normalizeScopedName(value, 'Holo Redis', label)
 }
 
 function normalizeOptionalRedisString(value: string | undefined, label: string): string | undefined {
@@ -908,37 +904,11 @@ function parseSecurityInteger(
   label: string,
   options: { minimum?: number } = {},
 ): number {
-  const normalized = typeof value === 'undefined'
-    ? fallback
-    : typeof value === 'number'
-      ? value
-      : (() => {
-          const trimmed = value.trim()
-          if (!trimmed) {
-            return Number.NaN
-          }
-
-          return Number(trimmed)
-        })()
-
-  if (!Number.isFinite(normalized) || !Number.isInteger(normalized)) {
-    throw new Error(`[Holo Security] ${label} must be an integer.`)
-  }
-
-  if (typeof options.minimum === 'number' && normalized < options.minimum) {
-    throw new Error(`[Holo Security] ${label} must be greater than or equal to ${options.minimum}.`)
-  }
-
-  return normalized
+  return parseScopedInteger(value, fallback, 'Holo Security', label, options)
 }
 
 function normalizeSecurityName(value: string | undefined, label: string): string {
-  const normalized = value?.trim()
-  if (!normalized) {
-    throw new Error(`[Holo Security] ${label} must be a non-empty string.`)
-  }
-
-  return normalized
+  return normalizeScopedName(value, 'Holo Security', label)
 }
 
 function normalizeSecurityOptionalString(value: string | undefined): string | undefined {

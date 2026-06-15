@@ -15,17 +15,15 @@ export type AuthOptions = {
 
 export type RouteMatcher = string | RegExp | ((pathname: string) => boolean)
 
-export type GuestOnlyOptions = AuthOptions & {
+type RouteProtectionOptions = AuthOptions & {
   readonly redirectTo: string
   readonly routes?: readonly RouteMatcher[]
   readonly status?: 301 | 302 | 303 | 307 | 308
 }
 
-export type AuthOnlyOptions = AuthOptions & {
-  readonly redirectTo: string
-  readonly routes?: readonly RouteMatcher[]
-  readonly status?: 301 | 302 | 303 | 307 | 308
-}
+export type GuestOnlyOptions = RouteProtectionOptions
+
+export type AuthOnlyOptions = RouteProtectionOptions
 
 export type SvelteKitHandleEvent = {
   readonly url: URL
@@ -186,7 +184,10 @@ export async function auth(options: AuthOptions = {}): Promise<AuthState> {
   }
 }
 
-export function guestOnly(options: GuestOnlyOptions): SvelteKitHandle {
+function createRouteProtectionHandle(
+  options: RouteProtectionOptions,
+  shouldRedirect: (auth: AuthState) => boolean,
+): SvelteKitHandle {
   return async ({ event, resolve }) => {
     return runWithSvelteKitRequestEvent(event, async () => {
       if (!matchesRoutes(options.routes, event.url.pathname)) {
@@ -194,7 +195,7 @@ export function guestOnly(options: GuestOnlyOptions): SvelteKitHandle {
       }
 
       const currentAuth = await auth({ guard: options.guard })
-      if (!currentAuth.authenticated) {
+      if (!shouldRedirect(currentAuth)) {
         return resolve(event)
       }
 
@@ -208,26 +209,12 @@ export function guestOnly(options: GuestOnlyOptions): SvelteKitHandle {
   }
 }
 
+export function guestOnly(options: GuestOnlyOptions): SvelteKitHandle {
+  return createRouteProtectionHandle(options, currentAuth => currentAuth.authenticated)
+}
+
 export function authOnly(options: AuthOnlyOptions): SvelteKitHandle {
-  return async ({ event, resolve }) => {
-    return runWithSvelteKitRequestEvent(event, async () => {
-      if (!matchesRoutes(options.routes, event.url.pathname)) {
-        return resolve(event)
-      }
-
-      const currentAuth = await auth({ guard: options.guard })
-      if (currentAuth.authenticated) {
-        return resolve(event)
-      }
-
-      const redirectUrl = new URL(options.redirectTo, event.url)
-      if (isSameUrl(event.url, redirectUrl)) {
-        return resolve(event)
-      }
-
-      return Response.redirect(redirectUrl, options.status ?? 303)
-    })
-  }
+  return createRouteProtectionHandle(options, currentAuth => !currentAuth.authenticated)
 }
 
 export const routeProtectionInternals = {

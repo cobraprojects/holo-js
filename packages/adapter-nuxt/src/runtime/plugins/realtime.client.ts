@@ -1,4 +1,1 @@
-import { defineNuxtPlugin } from '#app'
-import '../composables/realtime'
-
-export default defineNuxtPlugin(() => {})
+export { default } from './realtime'

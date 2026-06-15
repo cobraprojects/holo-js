@@ -45,6 +45,25 @@ function skipBlockComment(source: string, index: number): number {
   return end === -1 ? source.length : end + 2
 }
 
+function skipSyntax(source: string, index: number): number | undefined {
+  const char = source[index]
+  const next = source[index + 1]
+
+  if (char === '"' || char === '\'' || char === '`') {
+    return skipString(source, index, char)
+  }
+
+  if (char === '/' && next === '/') {
+    return skipLineComment(source, index)
+  }
+
+  if (char === '/' && next === '*') {
+    return skipBlockComment(source, index)
+  }
+
+  return undefined
+}
+
 function findRealtimePropertyValueEnd(source: string, index: number): number {
   let cursor = index
   let braceDepth = 0
@@ -52,24 +71,13 @@ function findRealtimePropertyValueEnd(source: string, index: number): number {
   let parenDepth = 0
 
   while (cursor < source.length) {
+    const syntaxEnd = skipSyntax(source, cursor)
+    if (typeof syntaxEnd === 'number') {
+      cursor = syntaxEnd
+      continue
+    }
+
     const char = source[cursor]
-    const next = source[cursor + 1]
-
-    if (char === '"' || char === '\'' || char === '`') {
-      cursor = skipString(source, cursor, char)
-      continue
-    }
-
-    if (char === '/' && next === '/') {
-      cursor = skipLineComment(source, cursor)
-      continue
-    }
-
-    if (char === '/' && next === '*') {
-      cursor = skipBlockComment(source, cursor)
-      continue
-    }
-
     if (char === '{') {
       braceDepth += 1
     } else if (char === '}') {
@@ -100,24 +108,13 @@ function findClosingBrace(source: string, index: number): number {
   let depth = 0
 
   while (cursor < source.length) {
+    const syntaxEnd = skipSyntax(source, cursor)
+    if (typeof syntaxEnd === 'number') {
+      cursor = syntaxEnd
+      continue
+    }
+
     const char = source[cursor]
-    const next = source[cursor + 1]
-
-    if (char === '"' || char === '\'' || char === '`') {
-      cursor = skipString(source, cursor, char)
-      continue
-    }
-
-    if (char === '/' && next === '/') {
-      cursor = skipLineComment(source, cursor)
-      continue
-    }
-
-    if (char === '/' && next === '*') {
-      cursor = skipBlockComment(source, cursor)
-      continue
-    }
-
     if (char === '{') {
       depth += 1
     } else if (char === '}') {
@@ -153,21 +150,9 @@ function applyReplacements(source: string, replacements: readonly Replacement[])
 function extractObjectPropertyValue(objectSource: string, propertyName: string): string | undefined {
   let cursor = 1
   while (cursor < objectSource.length - 1) {
-    const char = objectSource[cursor]
-    const next = objectSource[cursor + 1]
-
-    if (char === '"' || char === '\'' || char === '`') {
-      cursor = skipString(objectSource, cursor, char)
-      continue
-    }
-
-    if (char === '/' && next === '/') {
-      cursor = skipLineComment(objectSource, cursor)
-      continue
-    }
-
-    if (char === '/' && next === '*') {
-      cursor = skipBlockComment(objectSource, cursor)
+    const syntaxEnd = skipSyntax(objectSource, cursor)
+    if (typeof syntaxEnd === 'number') {
+      cursor = syntaxEnd
       continue
     }
 
@@ -207,21 +192,9 @@ function collectRealtimeDefinitionExports(source: string): readonly RealtimeDefi
   let cursor = 0
 
   while (cursor < source.length) {
-    const char = source[cursor]
-    const next = source[cursor + 1]
-
-    if (char === '"' || char === '\'' || char === '`') {
-      cursor = skipString(source, cursor, char)
-      continue
-    }
-
-    if (char === '/' && next === '/') {
-      cursor = skipLineComment(source, cursor)
-      continue
-    }
-
-    if (char === '/' && next === '*') {
-      cursor = skipBlockComment(source, cursor)
+    const syntaxEnd = skipSyntax(source, cursor)
+    if (typeof syntaxEnd === 'number') {
+      cursor = syntaxEnd
       continue
     }
 
@@ -286,21 +259,9 @@ export function stripRealtimeServerHandlers(source: string): string {
   let cursor = 0
 
   while (cursor < source.length) {
-    const char = source[cursor]
-    const next = source[cursor + 1]
-
-    if (char === '"' || char === '\'' || char === '`') {
-      cursor = skipString(source, cursor, char)
-      continue
-    }
-
-    if (char === '/' && next === '/') {
-      cursor = skipLineComment(source, cursor)
-      continue
-    }
-
-    if (char === '/' && next === '*') {
-      cursor = skipBlockComment(source, cursor)
+    const syntaxEnd = skipSyntax(source, cursor)
+    if (typeof syntaxEnd === 'number') {
+      cursor = syntaxEnd
       continue
     }
 

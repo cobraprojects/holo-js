@@ -453,6 +453,7 @@
       "name": "@holo-js/auth-social-apple",
       "version": "0.1.9",
       "dependencies": {
+        "@holo-js/auth": "catalog:",
         "@holo-js/auth-social": "catalog:",
         "@holo-js/config": "catalog:",
       },
@@ -482,7 +483,6 @@
       "version": "0.1.9",
       "dependencies": {
         "@holo-js/auth-social": "catalog:",
-        "@holo-js/config": "catalog:",
       },
       "devDependencies": {
         "@types/node": "catalog:",
@@ -639,6 +639,7 @@
       },
       "dependencies": {
         "@clack/prompts": "catalog:",
+        "@holo-js/cache-db": "catalog:",
         "@holo-js/config": "catalog:",
         "@holo-js/core": "catalog:",
         "@holo-js/db": "catalog:",

@@ -2,51 +2,27 @@ import type {
   SocialCallbackContext,
   SocialProviderProfile,
   SocialProviderRuntime,
-  SocialProviderTokens,
   SocialRedirectContext,
 } from '@holo-js/auth-social'
-
-async function readJson(response: Response): Promise<unknown> {
-  const text = await response.text()
-  return text ? JSON.parse(text) as unknown : {}
-}
+import { socialAuthInternals } from '@holo-js/auth-social'
 
 async function exchangeToken(context: SocialCallbackContext): Promise<Record<string, unknown>> {
-  const body = new URLSearchParams({
-    code: context.code,
-    client_id: context.config.clientId ?? '',
-    client_secret: context.config.clientSecret ?? '',
-    redirect_uri: context.config.redirectUri ?? '',
-    grant_type: 'authorization_code',
-  })
-
   const response = await fetch('https://www.linkedin.com/oauth/v2/accessToken', {
     method: 'POST',
     headers: {
       accept: 'application/json',
       'content-type': 'application/x-www-form-urlencoded',
     },
-    body,
+    body: socialAuthInternals.createAuthorizationCodeTokenBody(context, {
+      includeCodeVerifier: false,
+    }),
   })
 
   if (!response.ok) {
     throw new Error('[@holo-js/auth-social-linkedin] LinkedIn token exchange failed.')
   }
 
-  return await readJson(response) as Record<string, unknown>
-}
-
-function normalizeTokens(payload: Record<string, unknown>): SocialProviderTokens {
-  const expiresIn = typeof payload.expires_in === 'number'
-    ? payload.expires_in
-    : typeof payload.expires_in === 'string'
-      ? Number.parseInt(payload.expires_in, 10)
-      : undefined
-
-  return {
-    accessToken: String(payload.access_token ?? ''),
-    expiresAt: Number.isFinite(expiresIn) ? new Date(Date.now() + (expiresIn! * 1000)) : undefined,
-  }
+  return await socialAuthInternals.readJsonResponse(response) as Record<string, unknown>
 }
 
 function normalizeProfile(payload: Record<string, unknown>): SocialProviderProfile {
@@ -88,10 +64,14 @@ export const linkedinSocialProvider: SocialProviderRuntime = Object.freeze({
       throw new Error('[@holo-js/auth-social-linkedin] LinkedIn user info request failed.')
     }
 
-    const payload = await readJson(response) as Record<string, unknown>
+    const payload = await socialAuthInternals.readJsonResponse(response) as Record<string, unknown>
     return {
       profile: normalizeProfile(payload),
-      tokens: normalizeTokens(tokenPayload),
+      tokens: socialAuthInternals.normalizeOAuthTokens(tokenPayload, {
+        includeRefreshToken: false,
+        includeScope: false,
+        includeTokenType: false,
+      }),
     }
   },
 })

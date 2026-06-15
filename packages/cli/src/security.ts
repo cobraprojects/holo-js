@@ -18,7 +18,7 @@ type SecurityCliModule = {
     config: NormalizedHoloSecurityConfig,
     options?: {
       readonly projectRoot?: string
-      readonly redisAdapter?: unknown
+      readonly redisAdapter?: SecurityRedisAdapter
     },
   ): {
     clear(key: string): Promise<boolean>
@@ -86,14 +86,14 @@ export async function runRateLimitClearCommand(
 
   if (driver === 'redis') {
     const { createSecurityRedisAdapter } = await loadRedisAdapter(projectRoot)
-    redisAdapter = createSecurityRedisAdapter(securityConfig.rateLimit.redis) as SecurityRedisAdapter
+    redisAdapter = createSecurityRedisAdapter(securityConfig.rateLimit.redis)
   }
 
   try {
     await redisAdapter?.connect()
 
     const rateLimitStoreOptions = redisAdapter
-      ? { projectRoot, redisAdapter: redisAdapter as unknown }
+      ? { projectRoot, redisAdapter }
       : { projectRoot }
 
     const rateLimitStore = securityModule.createRateLimitStoreFromConfig(securityConfig, rateLimitStoreOptions)

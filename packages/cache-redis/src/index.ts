@@ -364,6 +364,25 @@ export function createRedisCacheDriver(options: RedisCacheDriverOptions): CacheD
     } while (cursor !== '0')
   }
 
+  async function mutateNumericValue(
+    key: string,
+    amount: number,
+    mutate: (key: string, amount: number) => Promise<number>,
+  ): Promise<number> {
+    try {
+      return await mutate(key, amount)
+    } catch (error) {
+      if (!isRedisNumericMutationError(error)) {
+        throw error
+      }
+
+      throw new CacheInvalidNumericMutationError(
+        `[@holo-js/cache] Cache key "${key}" does not contain a numeric value.`,
+        { cause: error },
+      )
+    }
+  }
+
   const driver: CacheDriverContract = {
     name: options.name,
     driver: 'redis',
@@ -413,32 +432,10 @@ export function createRedisCacheDriver(options: RedisCacheDriverOptions): CacheD
       await flushClient(client)
     },
     async increment(key: string, amount: number): Promise<number> {
-      try {
-        return await client.incrby(key, amount)
-      } catch (error) {
-        if (!isRedisNumericMutationError(error)) {
-          throw error
-        }
-
-        throw new CacheInvalidNumericMutationError(
-          `[@holo-js/cache] Cache key "${key}" does not contain a numeric value.`,
-          { cause: error },
-        )
-      }
+      return await mutateNumericValue(key, amount, async (targetKey, targetAmount) => await client.incrby(targetKey, targetAmount))
     },
     async decrement(key: string, amount: number): Promise<number> {
-      try {
-        return await client.decrby(key, amount)
-      } catch (error) {
-        if (!isRedisNumericMutationError(error)) {
-          throw error
-        }
-
-        throw new CacheInvalidNumericMutationError(
-          `[@holo-js/cache] Cache key "${key}" does not contain a numeric value.`,
-          { cause: error },
-        )
-      }
+      return await mutateNumericValue(key, amount, async (targetKey, targetAmount) => await client.decrby(targetKey, targetAmount))
     },
     lock(name: string, seconds: number): CacheLockContract {
       return createRedisLock(client, name, seconds, ownerFactory, sleep, now)

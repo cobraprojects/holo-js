@@ -2,11 +2,33 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import linkedinSocialProvider from '../src'
 
 const originalFetch = globalThis.fetch
+const callbackConfig = {
+  clientId: 'client',
+  clientSecret: 'secret',
+  redirectUri: 'https://app.test/auth/linkedin/callback',
+  scopes: [],
+  encryptTokens: false,
+}
 
 afterEach(() => {
   globalThis.fetch = originalFetch
   vi.restoreAllMocks()
 })
+
+function createCallbackContext(overrides: {
+  readonly scopes?: readonly string[]
+} = {}) {
+  return {
+    provider: 'linkedin',
+    request: new Request('https://app.test/auth/linkedin/callback?code=test'),
+    code: 'test-code',
+    codeVerifier: 'verifier',
+    config: {
+      ...callbackConfig,
+      scopes: overrides.scopes ?? callbackConfig.scopes,
+    },
+  } as const
+}
 
 describe('@holo-js/auth-social-linkedin', () => {
   it('builds the authorization url with LinkedIn defaults', async () => {
@@ -43,19 +65,7 @@ describe('@holo-js/auth-social-linkedin', () => {
         picture: 'https://example.com/avatar.png',
       }), { status: 200 })) as typeof fetch
 
-    const exchanged = await linkedinSocialProvider.exchangeCode({
-      provider: 'linkedin',
-      request: new Request('https://app.test/auth/linkedin/callback?code=test'),
-      code: 'test-code',
-      codeVerifier: 'verifier',
-      config: {
-        clientId: 'client',
-        clientSecret: 'secret',
-        redirectUri: 'https://app.test/auth/linkedin/callback',
-        scopes: [],
-        encryptTokens: false,
-      },
-    })
+    const exchanged = await linkedinSocialProvider.exchangeCode(createCallbackContext())
 
     expect(exchanged.profile).toEqual({
       id: 'linkedin-user',
@@ -70,37 +80,15 @@ describe('@holo-js/auth-social-linkedin', () => {
     globalThis.fetch = vi.fn()
       .mockResolvedValueOnce(new Response('nope', { status: 401 })) as typeof fetch
 
-    await expect(linkedinSocialProvider.exchangeCode({
-      provider: 'linkedin',
-      request: new Request('https://app.test/auth/linkedin/callback?code=test'),
-      code: 'test-code',
-      codeVerifier: 'verifier',
-      config: {
-        clientId: 'client',
-        clientSecret: 'secret',
-        redirectUri: 'https://app.test/auth/linkedin/callback',
-        scopes: [],
-        encryptTokens: false,
-      },
-    })).rejects.toThrow('LinkedIn token exchange failed')
+    await expect(linkedinSocialProvider.exchangeCode(createCallbackContext()))
+      .rejects.toThrow('LinkedIn token exchange failed')
 
     globalThis.fetch = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'access' }), { status: 200 }))
       .mockResolvedValueOnce(new Response('nope', { status: 500 })) as typeof fetch
 
-    await expect(linkedinSocialProvider.exchangeCode({
-      provider: 'linkedin',
-      request: new Request('https://app.test/auth/linkedin/callback?code=test'),
-      code: 'test-code',
-      codeVerifier: 'verifier',
-      config: {
-        clientId: 'client',
-        clientSecret: 'secret',
-        redirectUri: 'https://app.test/auth/linkedin/callback',
-        scopes: [],
-        encryptTokens: false,
-      },
-    })).rejects.toThrow('LinkedIn user info request failed')
+    await expect(linkedinSocialProvider.exchangeCode(createCallbackContext()))
+      .rejects.toThrow('LinkedIn user info request failed')
   })
 
   it('fails when LinkedIn user info does not include sub', async () => {
@@ -108,18 +96,8 @@ describe('@holo-js/auth-social-linkedin', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'access' }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ email: 'user@example.com' }), { status: 200 })) as typeof fetch
 
-    await expect(linkedinSocialProvider.exchangeCode({
-      provider: 'linkedin',
-      request: new Request('https://app.test/auth/linkedin/callback?code=test'),
-      code: 'test-code',
-      codeVerifier: 'verifier',
-      config: {
-        clientId: 'client',
-        clientSecret: 'secret',
-        redirectUri: 'https://app.test/auth/linkedin/callback',
-        scopes: ['openid'],
-        encryptTokens: false,
-      },
-    })).rejects.toThrow('did not include "sub"')
+    await expect(linkedinSocialProvider.exchangeCode(createCallbackContext({
+      scopes: ['openid'],
+    }))).rejects.toThrow('did not include "sub"')
   })
 })

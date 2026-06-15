@@ -13,24 +13,7 @@ export type OptionalSecurityModule = {
   } | undefined
 }
 
-let optionalSecurityModulePromise: Promise<OptionalSecurityModule | undefined> | undefined
 const OPTIONAL_SECURITY_PACKAGE = '@holo-js/security'
-
-function getOptionalSecurityModuleOverride(): OptionalSecurityModule | undefined {
-  const runtime = globalThis as typeof globalThis & {
-    __holoAuthSecurityModule__?: OptionalSecurityModule
-  }
-
-  return runtime.__holoAuthSecurityModule__
-}
-
-function getOptionalSecurityImportOverride(): (() => Promise<unknown>) | undefined {
-  const runtime = globalThis as typeof globalThis & {
-    __holoAuthSecurityImport__?: () => Promise<unknown>
-  }
-
-  return runtime.__holoAuthSecurityImport__
-}
 
 function isMissingOptionalPackageError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -56,29 +39,13 @@ function isMissingOptionalPackageError(error: unknown): boolean {
 }
 
 export async function loadOptionalSecurityModule(): Promise<OptionalSecurityModule | undefined> {
-  const override = getOptionalSecurityModuleOverride()
-  if (override) {
-    return override
-  }
-
-  const importOverride = getOptionalSecurityImportOverride()
-  optionalSecurityModulePromise ??= (importOverride
-    ? importOverride()
-    : import('@holo-js/security' as string))
+  return await import('@holo-js/security' as string)
     .then(module => module as OptionalSecurityModule)
     .catch(async (error) => {
-      optionalSecurityModulePromise = undefined
-
       if (isMissingOptionalPackageError(error)) {
         return undefined
       }
 
       throw error
     })
-
-  return await optionalSecurityModulePromise
-}
-
-export function resetOptionalSecurityModuleCache(): void {
-  optionalSecurityModulePromise = undefined
 }

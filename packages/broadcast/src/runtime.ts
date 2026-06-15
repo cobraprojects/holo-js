@@ -10,7 +10,6 @@ import {
   type BroadcastJsonObject,
   type BroadcastRuntimeBindings,
   type BroadcastRuntimeFacade,
-  type BroadcastSendInput,
   type BroadcastSendResult,
   type PendingBroadcastDispatch,
   type RawBroadcastSendInput,
@@ -19,6 +18,7 @@ import {
   formatChannelPattern,
   normalizeBroadcastDefinition,
 } from './contracts'
+import { isPlainObject, normalizeJsonValue } from './json'
 import { getRegisteredBroadcastDriver } from './registry'
 
 const HOLO_BROADCAST_DELIVER_JOB = 'holo.broadcast.deliver'
@@ -187,49 +187,12 @@ function normalizeDelayValue(value: BroadcastDelayValue, label: string): Broadca
   return value
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value
-    && typeof value === 'object'
-    && !Array.isArray(value)
-    && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
-}
-
-function normalizeJsonValue(value: unknown, path: string): unknown {
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) {
-      throw new Error(`[@holo-js/broadcast] ${path} must be JSON-serializable.`)
-    }
-
-    return value
-  }
-
-  if (
-    value === null
-    || typeof value === 'string'
-    || typeof value === 'boolean'
-  ) {
-    return value
-  }
-
-  if (Array.isArray(value)) {
-    return Object.freeze(value.map((entry, index) => normalizeJsonValue(entry, `${path}[${index}]`)))
-  }
-
-  if (!isRecord(value)) {
-    throw new Error(`[@holo-js/broadcast] ${path} must be JSON-serializable.`)
-  }
-
-  return Object.freeze(Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, normalizeJsonValue(entry, `${path}.${key}`)]),
-  ))
-}
-
 function normalizePayload(payload: unknown): Readonly<BroadcastJsonObject> {
-  if (!isRecord(payload)) {
+  if (!isPlainObject(payload)) {
     throw new Error('[@holo-js/broadcast] Broadcast payload must be a plain object.')
   }
 
-  return normalizeJsonValue(payload, 'Broadcast payload') as Readonly<BroadcastJsonObject>
+  return normalizeJsonValue(payload, 'Broadcast payload', path => `[@holo-js/broadcast] ${path} must be JSON-serializable.`) as Readonly<BroadcastJsonObject>
 }
 
 function normalizeRawChannels(channels: readonly string[]): readonly string[] {
@@ -381,7 +344,7 @@ function normalizeDriverResult(
     ? Object.freeze(result.publishedChannels.map(channel => normalizeRequiredString(channel, 'Published channel')))
     : Object.freeze([...channels])
 
-  const provider = result.provider && isRecord(result.provider)
+  const provider = result.provider && isPlainObject(result.provider)
     ? Object.freeze({ ...result.provider })
     : undefined
 
@@ -696,13 +659,6 @@ export function broadcast(
   return new PendingDispatch(async (options) => {
     const resolvedDefinition = resolveBroadcastDefinition(definition)
     const raw = createRawInputFromDefinition(resolvedDefinition, options.broadcaster)
-    const input: BroadcastSendInput = Object.freeze({
-      broadcast: resolvedDefinition,
-      raw,
-      options,
-    })
-
-    void input
     return await executeResolvedRawBroadcast(raw, resolvedDefinition, options)
   })
 }

@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@clack/prompts": "catalog:",
+    "@holo-js/cache-db": "catalog:",
     "@holo-js/config": "catalog:",
     "@holo-js/core": "catalog:",
     "@holo-js/db": "catalog:",

@@ -14,6 +14,7 @@ import type {
   BroadcastRealtimeSubscription,
   BroadcastRuntimeBindings,
 } from './contracts'
+import { isObjectRecord, isPlainObject, parseJsonObject } from './json'
 
 type WorkerConnectionInfo = {
   readonly socketId: string
@@ -291,28 +292,13 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function parseJsonObject(value: string, label: string): Record<string, unknown> {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(value)
-  } catch {
-    throw new Error(`[@holo-js/broadcast] ${label} must be valid JSON.`)
-  }
-
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`[@holo-js/broadcast] ${label} must be a JSON object.`)
-  }
-
-  return parsed as Record<string, unknown>
-}
-
 function parseSocketMessage(rawMessage: string): { readonly event: string, readonly channel?: string, readonly data: Record<string, unknown> } {
   const message = parseJsonObject(rawMessage, 'Websocket message')
   const event = normalizeRequiredString(String(message.event ?? ''), 'Websocket event')
   const channel = typeof message.channel === 'string' ? normalizeRequiredString(message.channel, 'Websocket channel') : undefined
   const data = typeof message.data === 'string'
     ? parseJsonObject(message.data, 'Websocket message data')
-    : (message.data && typeof message.data === 'object' && !Array.isArray(message.data) ? message.data as Record<string, unknown> : {})
+    : (isPlainObject(message.data) ? message.data : {})
 
   return Object.freeze({
     event,
@@ -330,15 +316,15 @@ function normalizeRealtimeAction(value: unknown): RealtimeSocketAction {
 }
 
 function normalizeRealtimeArgs(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+  if (!isPlainObject(value)) {
     return {}
   }
 
-  return value as Record<string, unknown>
+  return value
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
+  return isObjectRecord(value)
 }
 
 function parseRealtimeSocketMessage(data: Record<string, unknown>): RealtimeSocketMessage {
@@ -429,16 +415,12 @@ function verifyPusherSignature(providedSignature: string, expectedSignature: str
   return timingSafeEqual(Buffer.from(providedSignature, 'hex'), Buffer.from(expectedSignature, 'hex'))
 }
 
-function logSocketMessageError(socketId: string, error: unknown): void {
-  /* v8 ignore next -- defensive guard; callers always throw Error instances */
-  const message = error instanceof Error ? error.message : String(error)
-  console.error(`[@holo-js/broadcast] WebSocket message handling failed for socket "${socketId}": ${message}`)
+function logSocketMessageError(socketId: string, error: Error): void {
+  console.error(`[@holo-js/broadcast] WebSocket message handling failed for socket "${socketId}": ${error.message}`)
 }
 
-function logScalingMessageError(error: unknown): void {
-  /* v8 ignore next -- defensive guard; callers always throw Error instances */
-  const message = error instanceof Error ? error.message : String(error)
-  console.error(`[@holo-js/broadcast] Scaling message handling failed: ${message}`)
+function logScalingMessageError(error: Error): void {
+  console.error(`[@holo-js/broadcast] Scaling message handling failed: ${error.message}`)
 }
 
 function logSocketCleanupError(socketId: string, channel: string, error: unknown): void {
@@ -999,7 +981,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     : scaling && options.scalingAutoSubscribe !== false
       ? scaling.adapter.subscribe(scaling.eventChannel, (payload) => {
         void handleScalingMessage(payload).catch((error) => {
-          logScalingMessageError(error)
+          logScalingMessageError(error as Error)
         })
       })
     : Promise.resolve(async () => {})
@@ -1723,9 +1705,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     try {
       publishBody = normalizePublishBody(parseJsonObject(bodyText, 'Publish body'))
     } catch (error) {
-      /* v8 ignore next -- defensive guard; parseJsonObject and normalizePublishBody always throw Error */
-      const message = error instanceof Error ? error.message : 'Invalid publish payload'
-      return new Response(message, { status: 400 })
+      return new Response((error as Error).message, { status: 400 })
     }
     let result: PublishDelivery
     try {
@@ -1878,7 +1858,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         }))
       /* v8 ignore next 2 -- defensive guard; pendingMessage is always swallowed by .catch(() => {}) and inner tasks have their own catch handlers */
       }).catch((error) => {
-        logSocketMessageError(socket.socketId, error)
+        logSocketMessageError(socket.socketId, error as Error)
       })
       socket.pendingMessage = cleanupTask.catch(() => {})
     },
@@ -2053,7 +2033,7 @@ export async function startBroadcastWorker(
     scalingUnsubscribe = await scalingConfig.adapter.subscribe(scalingConfig.eventChannel, (payload) => {
       /* v8 ignore next 3 -- equivalent path is covered via createBroadcastWorkerRuntime auto-subscribe; V8 coverage does not instrument this callback instance */
       void runtime.receiveScalingMessage(payload).catch((error) => {
-        logScalingMessageError(error)
+        logScalingMessageError(error as Error)
       })
     }).catch((subscribeError: unknown) => handleSubscribeFailure(runtime, subscribeError))
   }
@@ -2107,7 +2087,7 @@ export async function startBroadcastWorker(
             ? message
             : new TextDecoder().decode(message)
           void runtime.receiveWebSocketMessage(socket.data.socketId, value).catch((error) => {
-            logSocketMessageError(socket.data.socketId, error)
+            logSocketMessageError(socket.data.socketId, error as Error)
             runtime.disconnectWebSocket(socket.data.socketId)
             socket.close(4001, 'Protocol error')
           })
@@ -2164,7 +2144,7 @@ export async function startBroadcastWorker(
     socket.on('message', (message) => {
       const value = decodeNodeWebSocketMessage(message)
       void runtime.receiveWebSocketMessage(socketId, value).catch((error) => {
-        logSocketMessageError(socketId, error)
+        logSocketMessageError(socketId, error as Error)
         runtime.disconnectWebSocket(socketId)
         socket.close(4001, 'Protocol error')
       })

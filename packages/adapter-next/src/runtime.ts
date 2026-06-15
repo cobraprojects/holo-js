@@ -228,24 +228,22 @@ export function createNextHoloHelpers<TCustom extends HoloConfigMap = HoloConfig
     return runtime.config(path)
   }
 
+  const resolveRuntimeProjection = async () => {
+    const runtime = await resolveRuntime()
+    return {
+      projectRoot: runtime.projectRoot,
+      config: runtime.loadedConfig,
+      registry: runtime.registry,
+      runtime,
+    }
+  }
+
   return {
     async getApp() {
-      const runtime = await resolveRuntime()
-      return {
-        projectRoot: runtime.projectRoot,
-        config: runtime.loadedConfig,
-        registry: runtime.registry,
-        runtime,
-      }
+      return await resolveRuntimeProjection()
     },
     async getProject() {
-      const runtime = await resolveRuntime()
-      return {
-        projectRoot: runtime.projectRoot,
-        config: runtime.loadedConfig,
-        registry: runtime.registry,
-        runtime,
-      }
+      return await resolveRuntimeProjection()
     },
     async getSession() {
       const runtime = await resolveRuntime()

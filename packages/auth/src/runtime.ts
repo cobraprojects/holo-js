@@ -67,7 +67,6 @@ import {
 import {
   type OptionalSecurityRateLimitStore,
   loadOptionalSecurityModule,
-  resetOptionalSecurityModuleCache,
 } from './runtime/optionalSecurity'
 import {
   appendResponseCookies,
@@ -77,6 +76,8 @@ import {
   resolveRequestCookie,
   resolveRequestHeader,
 } from './runtime/requestAccess'
+import { authJwtInternals } from './runtime/jwt'
+import { normalizeRequestInput } from './runtime/requestNormalization'
 import {
   buildLogoutCookies,
   forgetDefaultRememberCookie,
@@ -2454,7 +2455,6 @@ export function resetAuthRuntime(): void {
   const state = getAuthRuntimeState()
   state.bindings = undefined
   state.sharedPasswordResetThrottleFailures = undefined
-  resetOptionalSecurityModuleCache()
 }
 
 export async function checkForGuard(guardName: string): Promise<boolean> {
@@ -2675,6 +2675,8 @@ export const authRuntimeInternals = {
   getRuntimeBindings: getExposedRuntimeBindings,
   hashTokenSecret,
   isResponseInterrupt: isAuthResponseInterrupt,
+  jwt: authJwtInternals,
+  normalizeRequestInput,
   parsePlainTextToken,
   parseSetCookieDefinition,
   readSessionPayload,

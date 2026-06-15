@@ -1,5 +1,4 @@
 import {
-  CacheInvalidTtlError,
   resolveCacheKey,
   deserializeCacheValue,
   normalizeCacheTtl,
@@ -13,19 +12,13 @@ import {
   type CacheTtlInput,
   type CacheValueResolver,
 } from './contracts'
+import {
+  createFlexibleEnvelope,
+  normalizeFlexibleTtl,
+  resolveFlexibleCachedValue,
+  type NormalizedFlexibleTtl,
+} from './flexible'
 import { getCacheRuntime, resolveConfiguredDriver } from './runtime-shared'
-
-type FlexibleEnvelope<TValue> = {
-  readonly __holo_cache_flexible: true
-  readonly value: TValue
-  readonly freshUntil: number
-  readonly staleUntil: number
-}
-
-type NormalizedFlexibleTtl = {
-  readonly freshSeconds: number
-  readonly staleSeconds: number
-}
 
 type DependencyIndexState = {
   readonly keyToDependencies: Map<string, Set<CacheDependencyDescriptor>>
@@ -139,38 +132,6 @@ function resolveNormalizedKey(
 ): string {
   const context = resolveDriverContext(driverName)
   return `${context.normalizedKeyPrefix}${resolveCacheKey(key)}`
-}
-
-function normalizeFlexibleTtl(ttl: CacheFlexibleTtlInput): NormalizedFlexibleTtl {
-  const freshSeconds = 'fresh' in ttl ? ttl.fresh : ttl[0]
-  const staleSeconds = 'stale' in ttl ? ttl.stale : ttl[1]
-
-  if (!Number.isInteger(freshSeconds) || freshSeconds < 0) {
-    throw new CacheInvalidTtlError('[@holo-js/cache] Flexible fresh TTL must be an integer greater than or equal to 0.')
-  }
-
-  if (!Number.isInteger(staleSeconds) || staleSeconds < freshSeconds) {
-    throw new CacheInvalidTtlError('[@holo-js/cache] Flexible stale TTL must be an integer greater than or equal to the fresh TTL.')
-  }
-
-  return Object.freeze({
-    freshSeconds,
-    staleSeconds,
-  })
-}
-
-function isFlexibleEnvelope<TValue>(value: unknown): value is FlexibleEnvelope<TValue> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return false
-  }
-
-  const envelope = value as Partial<FlexibleEnvelope<TValue>>
-  return envelope.__holo_cache_flexible === true
-    && typeof envelope.freshUntil === 'number'
-    && Number.isFinite(envelope.freshUntil)
-    && typeof envelope.staleUntil === 'number'
-    && Number.isFinite(envelope.staleUntil)
-    && 'value' in envelope
 }
 
 async function getCachedValue<TValue>(
@@ -300,19 +261,10 @@ export function createCacheQueryBridge(
       } = {},
     ): Promise<Awaited<TValue>> {
       const indexedKey = createIndexedKey(key, options.driver)
-      const normalizedTtl = normalizeFlexibleTtl(ttl)
-      const now = Date.now()
-      const cached = await getCachedValue<unknown>(key, options.driver)
 
-      const refreshValue = async (): Promise<Awaited<TValue>> => {
+      const refreshValue = async (normalizedTtl: NormalizedFlexibleTtl): Promise<Awaited<TValue>> => {
         const value = await callback()
-        const refreshedAt = Date.now()
-        const envelope = {
-          __holo_cache_flexible: true,
-          value,
-          freshUntil: refreshedAt + (normalizedTtl.freshSeconds * 1000),
-          staleUntil: refreshedAt + (normalizedTtl.staleSeconds * 1000),
-        } satisfies FlexibleEnvelope<Awaited<TValue>>
+        const envelope = createFlexibleEnvelope(normalizedTtl, value)
         await putCachedValue(
           key,
           envelope,
@@ -323,35 +275,12 @@ export function createCacheQueryBridge(
         return value
       }
 
-      if (isFlexibleEnvelope<Awaited<TValue>>(cached)) {
-        if (now <= cached.freshUntil) {
-          return cached.value
-        }
-
-        if (now <= cached.staleUntil) {
-          const refreshLock = createFlexibleLock(key, normalizedTtl, options.driver)
-          void refreshLock.get(async () => {
-            await refreshValue()
-            return true
-          }).catch(() => undefined)
-          return cached.value
-        }
-      }
-
-      const refreshLock = createFlexibleLock(key, normalizedTtl, options.driver)
-      const refreshed = await refreshLock.block(1, async () => refreshValue())
-      if (refreshed !== false) {
-        return refreshed as Awaited<TValue>
-      }
-
-      const retried = await getCachedValue<unknown>(key, options.driver)
-      if (isFlexibleEnvelope<Awaited<TValue>>(retried)) {
-        if (Date.now() <= retried.staleUntil) {
-          return retried.value
-        }
-      }
-
-      return refreshValue()
+      return resolveFlexibleCachedValue<Awaited<TValue>>({
+        ttl,
+        read: async () => getCachedValue<unknown>(key, options.driver),
+        refresh: normalizedTtl => refreshValue(normalizedTtl),
+        createLock: normalizedTtl => createFlexibleLock(key, normalizedTtl, options.driver),
+      })
     },
     async forget(key: CacheKeyInput<unknown>, options?: { driver?: string }): Promise<boolean> {
       const indexedKey = createIndexedKey(key, options?.driver)

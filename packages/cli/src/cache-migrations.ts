@@ -1,4 +1,11 @@
 import { resolve } from 'node:path'
+import {
+  CACHE_DATABASE_TABLE_DEFINITIONS,
+  DEFAULT_CACHE_DATABASE_LOCK_TABLE as CACHE_DB_DEFAULT_LOCK_TABLE,
+  DEFAULT_CACHE_DATABASE_TABLE as CACHE_DB_DEFAULT_TABLE,
+  type CacheDatabaseTableColumnDefinition,
+  type CacheDatabaseTableDefinition,
+} from '@holo-js/cache-db'
 import { loadConfigDirectory } from '@holo-js/config'
 import { normalizeMigrationSlug } from '@holo-js/db'
 import {
@@ -19,8 +26,8 @@ import {
 import { writeLine } from './io'
 import type { IoStreams } from './cli-types'
 
-export const DEFAULT_CACHE_DATABASE_TABLE = 'cache'
-export const DEFAULT_CACHE_DATABASE_LOCK_TABLE = 'cache_locks'
+export const DEFAULT_CACHE_DATABASE_TABLE = CACHE_DB_DEFAULT_TABLE
+export const DEFAULT_CACHE_DATABASE_LOCK_TABLE = CACHE_DB_DEFAULT_LOCK_TABLE
 
 type DatabaseCacheMigrationTables = {
   readonly table: string
@@ -86,36 +93,61 @@ function escapeSingleQuotedString(value: string): string {
   return value.replaceAll('\\', '\\\\').replaceAll('\'', '\\\'')
 }
 
+function renderCacheTableColumn(columnDefinition: CacheDatabaseTableColumnDefinition): string {
+  const calls = [
+    `table.${columnDefinition.kind}('${escapeSingleQuotedString(columnDefinition.name)}')`,
+  ]
+
+  if (columnDefinition.primaryKey) {
+    calls.push('primaryKey()')
+  }
+
+  if (columnDefinition.nullable) {
+    calls.push('nullable()')
+  }
+
+  return `      ${calls.join('.')}`
+}
+
+function renderCacheTableCreateStatement(
+  tableName: string,
+  tableDefinition: CacheDatabaseTableDefinition,
+): readonly string[] {
+  return [
+    `    await schema.createTable('${escapeSingleQuotedString(tableName)}', (table) => {`,
+    ...tableDefinition.columns.map(renderCacheTableColumn),
+    `      table.index(['${escapeSingleQuotedString(tableDefinition.indexColumn)}'], '${escapeSingleQuotedString(tableDefinition.indexName(tableName))}')`,
+    '    })',
+  ]
+}
+
+function resolveCacheDatabaseTableDefinition(role: CacheDatabaseTableDefinition['role']): CacheDatabaseTableDefinition {
+  const tableDefinition = CACHE_DATABASE_TABLE_DEFINITIONS.find(definition => definition.role === role)
+  if (!tableDefinition) {
+    throw new Error(`Missing cache database table definition for "${role}".`)
+  }
+
+  return tableDefinition
+}
+
 export function renderCacheTableMigration(
   tableName = DEFAULT_CACHE_DATABASE_TABLE,
   lockTableName = DEFAULT_CACHE_DATABASE_LOCK_TABLE,
 ): string {
-  const escapedTableName = escapeSingleQuotedString(tableName)
-  const escapedLockTableName = escapeSingleQuotedString(lockTableName)
-  const escapedTableIndexName = escapeSingleQuotedString(`${tableName.replaceAll('.', '_')}_expires_at_index`)
-  const escapedLockTableIndexName = escapeSingleQuotedString(`${lockTableName.replaceAll('.', '_')}_expires_at_index`)
+  const entryTableDefinition = resolveCacheDatabaseTableDefinition('entries')
+  const lockTableDefinition = resolveCacheDatabaseTableDefinition('locks')
 
   return [
     'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
     '',
     'export default defineMigration({',
     '  async up({ schema }: MigrationContext) {',
-    `    await schema.createTable('${escapedTableName}', (table) => {`,
-    '      table.string(\'key\').primaryKey()',
-    '      table.text(\'payload\')',
-    '      table.bigInteger(\'expires_at\').nullable()',
-    `      table.index(['expires_at'], '${escapedTableIndexName}')`,
-    '    })',
-    `    await schema.createTable('${escapedLockTableName}', (table) => {`,
-    '      table.string(\'name\').primaryKey()',
-    '      table.string(\'owner\')',
-    '      table.bigInteger(\'expires_at\')',
-    `      table.index(['expires_at'], '${escapedLockTableIndexName}')`,
-    '    })',
+    ...renderCacheTableCreateStatement(tableName, entryTableDefinition),
+    ...renderCacheTableCreateStatement(lockTableName, lockTableDefinition),
     '  },',
     '  async down({ schema }: MigrationContext) {',
-    `    await schema.dropTable('${escapedLockTableName}')`,
-    `    await schema.dropTable('${escapedTableName}')`,
+    `    await schema.dropTable('${escapeSingleQuotedString(lockTableName)}')`,
+    `    await schema.dropTable('${escapeSingleQuotedString(tableName)}')`,
     '  },',
     '})',
     '',

@@ -542,26 +542,27 @@ async function evaluateBeforeHook(
   return normalizeAuthorizationDecision(outcome)
 }
 
-async function evaluatePolicyByTarget(
+async function evaluateResolvedPolicy(
+  policy: RegisteredPolicy,
   actor: object | null,
   action: string,
   target: AuthorizationPolicyTarget | object,
+  missingActionTarget: string,
   guard?: string,
 ): Promise<AuthorizationDecision> {
-  const policy = getPolicyByTarget(target)
   const context = typeof guard === 'string'
     ? resolveContext(actor, guard)
     : resolveContext(actor)
-  if (typeof target === 'function' || isAuthorizationTargetModel(target)) {
-    const beforeDecision = await evaluateBeforeHook(policy.before, context, target)
-    if (beforeDecision) {
-      return beforeDecision
-    }
+  const beforeDecision = await evaluateBeforeHook(policy.before, context, target)
+  if (beforeDecision) {
+    return beforeDecision
+  }
 
+  if (typeof target === 'function' || isAuthorizationTargetModel(target)) {
     const handler = policy.class?.[action]
     if (!handler) {
       throw new AuthorizationErrorClass(
-        `[@holo-js/authorization] Policy action "${action}" is not defined for the selected target.`,
+        `[@holo-js/authorization] Policy action "${action}" is not defined for ${missingActionTarget}.`,
         deny(),
       )
     }
@@ -569,20 +570,24 @@ async function evaluatePolicyByTarget(
     return await normalizeResult(handler(context, target))
   }
 
-  const beforeDecision = await evaluateBeforeHook(policy.before, context, target)
-  if (beforeDecision) {
-    return beforeDecision
-  }
-
   const handler = policy.record?.[action]
   if (!handler) {
     throw new AuthorizationErrorClass(
-      `[@holo-js/authorization] Policy action "${action}" is not defined for the selected target.`,
+      `[@holo-js/authorization] Policy action "${action}" is not defined for ${missingActionTarget}.`,
       deny(),
     )
   }
-
   return await normalizeResult(handler(context, target))
+}
+
+async function evaluatePolicyByTarget(
+  actor: object | null,
+  action: string,
+  target: AuthorizationPolicyTarget | object,
+  guard?: string,
+): Promise<AuthorizationDecision> {
+  const policy = getPolicyByTarget(target)
+  return await evaluateResolvedPolicy(policy, actor, action, target, 'the selected target', guard)
 }
 
 async function evaluatePolicyByName(
@@ -595,40 +600,7 @@ async function evaluatePolicyByName(
   const policy = getPolicyByName(policyName)
   assertPolicyMatchesTarget(policy, policyName, target)
 
-  const context = typeof guard === 'string'
-    ? resolveContext(actor, guard)
-    : resolveContext(actor)
-  if (typeof target === 'function' || isAuthorizationTargetModel(target)) {
-    const beforeDecision = await evaluateBeforeHook(policy.before, context, target)
-    if (beforeDecision) {
-      return beforeDecision
-    }
-
-    const handler = policy.class?.[action]
-    if (!handler) {
-      throw new AuthorizationErrorClass(
-        `[@holo-js/authorization] Policy action "${action}" is not defined for policy "${policyName}".`,
-        deny(),
-      )
-    }
-
-    return await normalizeResult(handler(context, target))
-  }
-
-  const beforeDecision = await evaluateBeforeHook(policy.before, context, target)
-  if (beforeDecision) {
-    return beforeDecision
-  }
-
-  const handler = policy.record?.[action]
-  if (!handler) {
-    throw new AuthorizationErrorClass(
-      `[@holo-js/authorization] Policy action "${action}" is not defined for policy "${policyName}".`,
-      deny(),
-    )
-  }
-
-  return await normalizeResult(handler(context, target))
+  return await evaluateResolvedPolicy(policy, actor, action, target, `policy "${policyName}"`, guard)
 }
 
 async function evaluateAbility<TInput extends object>(

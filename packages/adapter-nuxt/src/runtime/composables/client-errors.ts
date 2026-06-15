@@ -1,4 +1,4 @@
-import { normalizeHoloHttpError, type NormalizedHoloHttpError } from '@holo-js/core/errors'
+import type { NormalizedHoloHttpError } from '@holo-js/core/errors'
 
 type BrowserStyle = {
   cssText: string
@@ -33,10 +33,6 @@ type NuxtClientError = {
 
 type NuxtClientGlobal = typeof globalThis & {
   showError?: (error: NuxtClientError) => void
-}
-
-export function normalizeNuxtClientHttpError(error: unknown): NormalizedHoloHttpError | undefined {
-  return normalizeHoloHttpError(error)
 }
 
 export function renderNuxtClientHttpErrorPage(error: NormalizedHoloHttpError): void {

@@ -1,12 +1,7 @@
 import type { CookieOptions } from './cookieSerialization'
 
 type ParsedSetCookieOptions = {
-  path?: string
-  domain?: string
-  secure?: boolean
-  httpOnly?: boolean
-  sameSite?: CookieOptions['sameSite']
-  partitioned?: boolean
+  -readonly [TKey in keyof CookieOptions]?: CookieOptions[TKey]
 }
 
 function parseCookieAttribute(rawAttribute: string): {
@@ -78,16 +73,16 @@ export function parseSetCookieDefinition(header: string): {
   readonly name: string
   readonly options: CookieOptions
 } | null {
-  const [nameValue, ...attributes] = header.split(';')
-  /* v8 ignore next -- split() always yields a first string element for string input. */
-  const separator = nameValue?.indexOf('=') ?? -1
+  const attributeSeparator = header.indexOf(';')
+  const nameValue = attributeSeparator === -1 ? header : header.slice(0, attributeSeparator)
+  const separator = nameValue.indexOf('=')
   if (!nameValue || separator <= 0) {
     return null
   }
 
   const options: ParsedSetCookieOptions = {}
 
-  for (const rawAttribute of attributes) {
+  for (const rawAttribute of attributeSeparator === -1 ? [] : header.slice(attributeSeparator + 1).split(';')) {
     applyCookieAttribute(options, rawAttribute)
   }
 

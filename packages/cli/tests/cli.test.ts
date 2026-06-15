@@ -33,17 +33,139 @@ import type * as DevInternalModule from '../src/dev'
 import type * as HoloQueueModule from '@holo-js/queue'
 import type * as HoloQueueDbModule from '@holo-js/queue-db'
 import type { QueueWorkerRunOptions } from '@holo-js/queue'
-import { defineCommand } from '../src'
+import {
+  defineCommand,
+} from '../src'
+import {
+  createAppCommandDefinition,
+  createCommandContext,
+  createInternalCommands,
+  commandTokens,
+  findCommand,
+  findCommandConflict,
+  printCommandHelp,
+  printCommandList,
+  resolvePackageManagerDevCommand,
+  resolvePackageManagerInstallCommand,
+} from '../src/cli'
 import {
   generateProjectAppKey,
   renderEnvWithAppKey,
 } from '../src/app-key'
-import { cliInternals } from '../src/cli-internals'
-import { promptMultiChoice } from '../src/parsing'
-import { cleanupRuntimeDependencyLink, ensureRuntimeDependencyLink, runRuntimeInvocation } from '../src/runtime'
-import { collectDiscoveryWatchRoots, isDiscoveryRelevantPath } from '../src/dev'
-import { generatorInternals } from '../src/generators'
-import { loadSecurityCliModule } from '../src/security'
+import {
+  collectMultiStringFlag,
+  isInteractive,
+  normalizeChoice,
+  normalizeOptionalPackages,
+  parseNumberFlag,
+  parseTokens,
+  promptChoice,
+  promptMultiChoice,
+  promptOptionalPackages,
+  resolveBooleanFlag,
+  resolveNewProjectInput,
+  resolveStringFlag,
+  splitCsv,
+} from '../src/parsing'
+import {
+  cacheProjectConfig,
+  cleanupRuntimeDependencyLink,
+  createEnvRuntimeConfig,
+  createRuntimeInvocation,
+  dropAllTablesForFresh,
+  ensureRuntimeDependencyLink,
+  getRuntimeEnvironment,
+  getRuntimeFailureMessage,
+  inferRuntimeMigrationName,
+  mergeRuntimeDatabaseConfig,
+  normalizeRuntimeMigration,
+  parseBooleanEnv,
+  resolveConfigModuleUrl,
+  runRuntimeInvocation,
+  withRuntimeEnvironment,
+} from '../src/runtime'
+import {
+  buildQueueWorkArgs,
+  collectQueueWatchRoots,
+  getQueueRuntimeEnvironment,
+  hasQueueRestartSignalSince,
+  isQueueListenRelevantPath,
+  readQueueRestartSignal,
+  resolveCliEntrypointPath,
+  resolveModuleExport,
+  resolveQueueRestartSignalPath,
+  resolveRunnableCliEntrypoint,
+  runQueueClearCommand,
+  runQueueFailedCommand,
+  runQueueFlushCommand,
+  runQueueForgetCommand,
+  runQueueListen,
+  runQueueRestartCommand,
+  runQueueRetryCommand,
+  runQueueWorkCommand,
+  writeQueueRestartSignal,
+} from '../src/queue'
+import { runBroadcastWorkCommand } from '../src/broadcast'
+import {
+  loadSecurityCliModule,
+  runRateLimitClearCommand,
+} from '../src/security'
+import {
+  initializeCacheMaintenanceEnvironment,
+  loadCacheCliModule,
+  runCacheClearCommand,
+  runCacheForgetCommand,
+} from '../src/cache'
+import {
+  cacheMigrationInternals,
+  DEFAULT_CACHE_DATABASE_LOCK_TABLE,
+  DEFAULT_CACHE_DATABASE_TABLE,
+  loadCacheConfig,
+  normalizeCacheMigrationName,
+  renderCacheTableMigration,
+  resolveDatabaseCacheTables,
+  runCacheTableCommand,
+} from '../src/cache-migrations'
+import {
+  renderFailedJobsTableMigration,
+  renderQueueTableMigration,
+  resolveDatabaseQueueTables,
+  runQueueFailedTableCommand,
+  runQueueTableCommand,
+} from '../src/queue-migrations'
+import {
+  isIgnorableWatchError,
+  collectDiscoveryWatchRoots,
+  isDiscoveryRelevantPath,
+  resolvePackageManagerCommand,
+  resolvePackageManagerInstallInvocation,
+  runProjectDependencyInstall,
+  runProjectDevServer,
+  runProjectLifecycleScript,
+  runProjectPrepare,
+} from '../src/dev'
+import {
+  generatorInternals,
+  runMakeBroadcast,
+  runMakeChannel,
+  runMakeEvent,
+  runMakeFactory,
+  runMakeJob,
+  runMakeListener,
+  runMakeMail,
+  runMakeMigration,
+  runMakeModel,
+  runMakeObserver,
+  runMakeSeeder,
+} from '../src/generators'
+import { ensureAbsent, fileExists } from '../src/fs-utils'
+import { hasProjectDependency } from '../src/package-json'
+import {
+  getRegistryMigrationSlug,
+  hasRegisteredCreateTableMigration,
+  hasRegisteredMigrationSlug,
+  nextMigrationTemplate,
+} from '../src/migrations'
 import { installRealtimeIntoProject } from '../src/project/scaffold'
 import {
   bundleProjectModule,
@@ -1155,7 +1277,7 @@ export default {
 
     await writeProjectFile(commandRoot, '.env', 'APP_KEY=\n')
     const commandIo = createIo(commandRoot)
-    const keyCommand = cliInternals.createInternalCommands({
+    const keyCommand = createInternalCommands({
       ...commandIo.io,
       projectRoot: commandRoot,
       registry: [],
@@ -1178,7 +1300,7 @@ export default {
 
     await writeProjectFile(commandSkippedRoot, '.env', 'APP_KEY=already-set\n')
     const skippedCommandIo = createIo(commandSkippedRoot)
-    const skippedKeyCommand = cliInternals.createInternalCommands({
+    const skippedKeyCommand = createInternalCommands({
       ...skippedCommandIo.io,
       projectRoot: commandSkippedRoot,
       registry: [],
@@ -2762,7 +2884,7 @@ export default {
     })).rejects.toThrow('Refusing to scaffold into a non-empty directory')
 
     const fallbackIo = createIo(baseRoot)
-    const newCommand = cliInternals.createInternalCommands({
+    const newCommand = createInternalCommands({
       ...fallbackIo.io,
       projectRoot: baseRoot,
       registry: [],
@@ -2878,7 +3000,7 @@ export default {
     const rootDir = await createTempDirectory()
     tempDirs.push(rootDir)
     const rootIo = createIo(rootDir)
-    const rootCommand = cliInternals.createInternalCommands({
+    const rootCommand = createInternalCommands({
       ...rootIo.io,
       projectRoot: rootDir,
       registry: [],
@@ -3700,10 +3822,10 @@ export default defineAppConfig({
     const commandContext = {
       ...installCommandIo.io,
       projectRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const installCommand = cliInternals.createInternalCommands(commandContext as never)
+    const installCommand = createInternalCommands(commandContext as never)
       .find(command => command.name === 'install')
 
     expect(installCommand).toBeDefined()
@@ -4081,10 +4203,10 @@ export default defineRedisConfig({
     const runCommandContext = {
       ...runIo.io,
       projectRoot: runRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const runInstallCommand = cliInternals.createInternalCommands(runCommandContext as never)
+    const runInstallCommand = createInternalCommands(runCommandContext as never)
       .find(command => command.name === 'install')
 
     await expect(runInstallCommand?.run({
@@ -4101,10 +4223,10 @@ export default defineRedisConfig({
     const rerunContext = {
       ...rerunIo.io,
       projectRoot: runRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const rerunInstallCommand = cliInternals.createInternalCommands(rerunContext as never)
+    const rerunInstallCommand = createInternalCommands(rerunContext as never)
       .find(command => command.name === 'install')
     await expect(rerunInstallCommand?.run({
       projectRoot: runRoot,
@@ -4124,10 +4246,10 @@ export default defineRedisConfig({
     const redisRunContext = {
       ...redisRunIo.io,
       projectRoot: redisRunRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const redisInstallCommand = cliInternals.createInternalCommands(redisRunContext as never)
+    const redisInstallCommand = createInternalCommands(redisRunContext as never)
       .find(command => command.name === 'install')
     await expect(redisInstallCommand?.run({
       projectRoot: redisRunRoot,
@@ -4152,10 +4274,10 @@ export default defineRedisConfig({
     const authProviderRunContext = {
       ...authProviderRunIo.io,
       projectRoot: authProviderRunRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const authProviderInstallCommand = cliInternals.createInternalCommands(authProviderRunContext as never)
+    const authProviderInstallCommand = createInternalCommands(authProviderRunContext as never)
       .find(command => command.name === 'install')
     await expect(authProviderInstallCommand?.run({
       projectRoot: authProviderRunRoot,
@@ -4173,10 +4295,10 @@ export default defineRedisConfig({
     const eventsRunContext = {
       ...eventsRunIo.io,
       projectRoot: eventsRunRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const eventsInstallCommand = cliInternals.createInternalCommands(eventsRunContext as never)
+    const eventsInstallCommand = createInternalCommands(eventsRunContext as never)
       .find(command => command.name === 'install')
     await expect(eventsInstallCommand?.run({
       projectRoot: eventsRunRoot,
@@ -4210,10 +4332,10 @@ export default defineRedisConfig({
     const interactiveEventsContext = {
       ...interactiveEventsIo.io,
       projectRoot: interactiveEventsRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const interactiveEventsCommand = cliInternals.createInternalCommands(interactiveEventsContext as never)
+    const interactiveEventsCommand = createInternalCommands(interactiveEventsContext as never)
       .find(command => command.name === 'install')
     await expect(interactiveEventsCommand?.run({
       projectRoot: interactiveEventsRoot,
@@ -4259,10 +4381,10 @@ export default defineRedisConfig({
     const queueOnlyEventsContext = {
       ...queueOnlyEventsIo.io,
       projectRoot: queueOnlyEventsRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const queueOnlyEventsCommand = cliInternals.createInternalCommands(queueOnlyEventsContext as never)
+    const queueOnlyEventsCommand = createInternalCommands(queueOnlyEventsContext as never)
       .find(command => command.name === 'install')
     await expect(queueOnlyEventsCommand?.run({
       projectRoot: queueOnlyEventsRoot,
@@ -4575,10 +4697,10 @@ export default defineDatabaseConfig({
       const context = {
         ...io.io,
         projectRoot,
-        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+        registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
         loadProject: async () => ({ config: defaultProjectConfig() }),
       }
-      const installCommand = cliInternals.createInternalCommands(context as never)
+      const installCommand = createInternalCommands(context as never)
         .find(command => command.name === 'install')
 
       return installCommand?.prepare?.({ args, flags: {} }, context as never)
@@ -5281,12 +5403,12 @@ export default defineCacheConfig({
     const baseRoot = await createTempDirectory()
     tempDirs.push(baseRoot)
 
-    await expect(cliInternals.resolveNewProjectInput(createIo(baseRoot).io, {
+    await expect(resolveNewProjectInput(createIo(baseRoot).io, {
       args: [],
       flags: {},
     })).rejects.toThrow('Missing required argument: Project name.')
 
-    await expect(cliInternals.resolveNewProjectInput(createIo(baseRoot).io, {
+    await expect(resolveNewProjectInput(createIo(baseRoot).io, {
       args: ['optional-app'],
       flags: {
         'framework': 'nuxt',
@@ -5303,7 +5425,7 @@ export default defineCacheConfig({
       storageDefaultDisk: 'local',
       optionalPackages: ['forms', 'validation'],
     })
-    await expect(cliInternals.resolveNewProjectInput(createIo(baseRoot).io, {
+    await expect(resolveNewProjectInput(createIo(baseRoot).io, {
       args: ['optional-array-app'],
       flags: {
         package: ['validation', 'forms'],
@@ -5316,7 +5438,7 @@ export default defineCacheConfig({
       storageDefaultDisk: 'local',
       optionalPackages: ['forms', 'validation'],
     })
-    await expect(cliInternals.resolveNewProjectInput(createIo(baseRoot).io, {
+    await expect(resolveNewProjectInput(createIo(baseRoot).io, {
       args: ['forms-app'],
       flags: {
         package: 'forms',
@@ -5330,7 +5452,7 @@ export default defineCacheConfig({
       optionalPackages: ['forms', 'validation'],
     })
 
-    await expect(cliInternals.resolveNewProjectInput(createIo(baseRoot).io, {
+    await expect(resolveNewProjectInput(createIo(baseRoot).io, {
       args: ['defaults-app'],
       flags: {},
     })).resolves.toEqual({
@@ -5341,7 +5463,7 @@ export default defineCacheConfig({
       storageDefaultDisk: 'local',
       optionalPackages: [],
     })
-    await expect(cliInternals.resolveNewProjectInput(createIo(baseRoot).io, {
+    await expect(resolveNewProjectInput(createIo(baseRoot).io, {
       args: ['storage-flag-app'],
       flags: {
         framework: 'nuxt',
@@ -5359,7 +5481,7 @@ export default defineCacheConfig({
       optionalPackages: ['storage'],
     })
 
-    await expect(cliInternals.resolveNewProjectInput(createIo(baseRoot).io, {
+    await expect(resolveNewProjectInput(createIo(baseRoot).io, {
       args: ['storage-default-app'],
       flags: {
         framework: 'nuxt',
@@ -5497,10 +5619,10 @@ export const limit = Object.freeze({
     const context = {
       ...io.io,
       projectRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const commands = cliInternals.createInternalCommands(
+    const commands = createInternalCommands(
       context,
       async (_projectRoot, _kind, _options, callback) => callback(''),
       {},
@@ -6078,7 +6200,7 @@ export default defineBroadcastConfig({
       tty: true,
       input: 'default-prompt-app\n',
     })
-    await expect(cliInternals.resolveNewProjectInput(defaultNamePromptIo.io, {
+    await expect(resolveNewProjectInput(defaultNamePromptIo.io, {
       args: [],
       flags: {
         framework: 'nuxt',
@@ -6099,7 +6221,7 @@ export default defineBroadcastConfig({
       tty: true,
       input: 'next\n',
     })
-    await expect(cliInternals.resolveNewProjectInput(defaultChoicePromptIo.io, {
+    await expect(resolveNewProjectInput(defaultChoicePromptIo.io, {
       args: ['default-choice-app'],
       flags: {
         database: 'sqlite',
@@ -6119,7 +6241,7 @@ export default defineBroadcastConfig({
       tty: true,
       input: 'forms,validation\n',
     })
-    await expect(cliInternals.resolveNewProjectInput(defaultOptionalPackagesIo.io, {
+    await expect(resolveNewProjectInput(defaultOptionalPackagesIo.io, {
       args: ['default-packages-app'],
       flags: {
         framework: 'nuxt',
@@ -6137,7 +6259,7 @@ export default defineBroadcastConfig({
     })
 
     const io = createIo(baseRoot, { tty: true })
-    await expect(cliInternals.resolveNewProjectInput(io.io, { args: [], flags: {} }, {
+    await expect(resolveNewProjectInput(io.io, { args: [], flags: {} }, {
       prompt: async () => 'prompted-app',
       choose: async (label, _allowed, defaultValue) => {
         if (label === 'Framework') return 'sveltekit' as typeof defaultValue
@@ -6155,7 +6277,7 @@ export default defineBroadcastConfig({
       optionalPackages: ['validation'],
     })
 
-    await expect(cliInternals.resolveNewProjectInput(io.io, { args: [], flags: {} }, {
+    await expect(resolveNewProjectInput(io.io, { args: [], flags: {} }, {
       prompt: async () => 'storage-app',
       choose: async (label, _allowed, defaultValue) => {
         if (label === 'Framework') return 'nuxt' as typeof defaultValue
@@ -6173,7 +6295,7 @@ export default defineBroadcastConfig({
       optionalPackages: ['storage'],
     })
 
-    await expect(cliInternals.resolveNewProjectInput(io.io, { args: [], flags: {} }, {
+    await expect(resolveNewProjectInput(io.io, { args: [], flags: {} }, {
       prompt: async () => 'bad-app',
       choose: async () => {
         throw new Error('Unsupported Framework: invalid-framework. Expected one of nuxt, next, sveltekit.')
@@ -6181,7 +6303,7 @@ export default defineBroadcastConfig({
       optionalPackages: async () => [],
     })).rejects.toThrow('Unsupported')
 
-    await expect(cliInternals.resolveNewProjectInput(io.io, { args: [], flags: {} }, {
+    await expect(resolveNewProjectInput(io.io, { args: [], flags: {} }, {
       prompt: async () => '',
       choose: async (_label, _allowed, defaultValue) => defaultValue,
       optionalPackages: async () => [],
@@ -6196,18 +6318,18 @@ export default defineBroadcastConfig({
       tty: true,
       input: 'next\n',
     })
-    await expect(cliInternals.promptChoice(choiceIo.io, 'Framework', ['nuxt', 'next'], 'nuxt')).resolves.toBe('next')
+    await expect(promptChoice(choiceIo.io, 'Framework', ['nuxt', 'next'], 'nuxt')).resolves.toBe('next')
 
     const invalidChoiceIo = createIo(baseRoot, {
       tty: true,
       input: 'astro\n',
     })
-    await expect(cliInternals.promptChoice(invalidChoiceIo.io, 'Framework', ['nuxt', 'next'], 'nuxt')).rejects.toThrow('Unsupported Framework')
+    await expect(promptChoice(invalidChoiceIo.io, 'Framework', ['nuxt', 'next'], 'nuxt')).rejects.toThrow('Unsupported Framework')
     const optionalPromptIo = createIo(baseRoot, {
       tty: true,
       input: 'forms,validation\n',
     })
-    await expect(cliInternals.promptOptionalPackages(optionalPromptIo.io)).resolves.toEqual(['forms', 'validation'])
+    await expect(promptOptionalPackages(optionalPromptIo.io)).resolves.toEqual(['forms', 'validation'])
     const multiChoicePromptIo = createIo(baseRoot, {
       tty: true,
       input: 'workos, clerk\n',
@@ -6217,34 +6339,34 @@ export default defineBroadcastConfig({
       tty: true,
       input: 'security\n',
     })
-    await expect(cliInternals.promptOptionalPackages(securityPromptIo.io)).resolves.toEqual(['security'])
+    await expect(promptOptionalPackages(securityPromptIo.io)).resolves.toEqual(['security'])
     const broadcastPromptIo = createIo(baseRoot, {
       tty: true,
       input: 'broadcast\n',
     })
-    await expect(cliInternals.promptOptionalPackages(broadcastPromptIo.io)).resolves.toEqual(['broadcast'])
+    await expect(promptOptionalPackages(broadcastPromptIo.io)).resolves.toEqual(['broadcast'])
     const formsOnlyPromptIo = createIo(baseRoot, {
       tty: true,
       input: 'forms\n',
     })
-    await expect(cliInternals.promptOptionalPackages(formsOnlyPromptIo.io)).resolves.toEqual(['forms', 'validation'])
-    expect(cliInternals.normalizeChoice('next', ['nuxt', 'next'], 'Framework')).toBe('next')
-    expect(() => cliInternals.normalizeChoice('astro', ['nuxt', 'next'], 'Framework')).toThrow('Unsupported Framework')
-    expect(() => cliInternals.normalizeChoice(undefined, ['nuxt', 'next'], 'Framework')).toThrow('(empty)')
-    expect(() => cliInternals.normalizeOptionalPackages(['weird-package'])).toThrow('Unsupported optional package')
-    expect(cliInternals.normalizeOptionalPackages(['broadcast'])).toEqual(['broadcast'])
-    expect(cliInternals.normalizeOptionalPackages(['realtime'])).toEqual(['realtime'])
-    expect(cliInternals.normalizeOptionalPackages(['security'])).toEqual(['security'])
-    expect(cliInternals.normalizeOptionalPackages(['forms'])).toEqual(['forms', 'validation'])
-    expect(cliInternals.normalizeOptionalPackages(['forms', 'validation', 'forms'])).toEqual(['forms', 'validation'])
-    expect(cliInternals.normalizeOptionalPackages(['form', 'validate', 'storage', 'queue', 'events'])).toEqual([
+    await expect(promptOptionalPackages(formsOnlyPromptIo.io)).resolves.toEqual(['forms', 'validation'])
+    expect(normalizeChoice('next', ['nuxt', 'next'], 'Framework')).toBe('next')
+    expect(() => normalizeChoice('astro', ['nuxt', 'next'], 'Framework')).toThrow('Unsupported Framework')
+    expect(() => normalizeChoice(undefined, ['nuxt', 'next'], 'Framework')).toThrow('(empty)')
+    expect(() => normalizeOptionalPackages(['weird-package'])).toThrow('Unsupported optional package')
+    expect(normalizeOptionalPackages(['broadcast'])).toEqual(['broadcast'])
+    expect(normalizeOptionalPackages(['realtime'])).toEqual(['realtime'])
+    expect(normalizeOptionalPackages(['security'])).toEqual(['security'])
+    expect(normalizeOptionalPackages(['forms'])).toEqual(['forms', 'validation'])
+    expect(normalizeOptionalPackages(['forms', 'validation', 'forms'])).toEqual(['forms', 'validation'])
+    expect(normalizeOptionalPackages(['form', 'validate', 'storage', 'queue', 'events'])).toEqual([
       'events',
       'forms',
       'queue',
       'storage',
       'validation',
     ])
-    expect(cliInternals.normalizeOptionalPackages(['none'])).toEqual([])
+    expect(normalizeOptionalPackages(['none'])).toEqual([])
   })
 
   it('rejects conflicting flags, unsupported values, non-empty targets, and generated project regressions', async () => {
@@ -6253,17 +6375,17 @@ export default defineBroadcastConfig({
 
     await writeProjectFile(baseRoot, 'occupied/file.txt', 'taken')
 
-    await expect(cliInternals.resolveNewProjectInput(createIo(baseRoot).io, {
+    await expect(resolveNewProjectInput(createIo(baseRoot).io, {
       args: ['demo'],
       flags: { name: 'other' },
     })).rejects.toThrow('Conflicting project names')
 
-    await expect(cliInternals.resolveNewProjectInput(createIo(baseRoot).io, {
+    await expect(resolveNewProjectInput(createIo(baseRoot).io, {
       args: ['demo'],
       flags: { framework: 'astro' },
     })).rejects.toThrow('Unsupported framework')
 
-    await expect(cliInternals.resolveNewProjectInput(createIo(baseRoot).io, {
+    await expect(resolveNewProjectInput(createIo(baseRoot).io, {
       args: ['demo'],
       flags: { package: 'weird-package' },
     })).rejects.toThrow('Unsupported optional package')
@@ -6317,7 +6439,7 @@ export default defineBroadcastConfig({
     }, null, 2))
 
     await withFakeBun(async () => {
-      await cliInternals.runProjectPrepare(projectRoot)
+      await runProjectPrepare(projectRoot)
     })
     expect(await readFile(join(projectRoot, '.holo-js/generated/registry.json'), 'utf8')).toContain('"version": 1')
 
@@ -6392,7 +6514,7 @@ printf 'fake npm install\n'
     process.env.PATH = `${fakeBinRoot}:${originalPath ?? ''}`
     try {
       await withFakeBun(async () => {
-        await cliInternals.runProjectPrepare(projectRoot, io.io)
+        await runProjectPrepare(projectRoot, io.io)
       })
     } finally {
       process.env.PATH = originalPath
@@ -6455,7 +6577,7 @@ printf 'fake npm install\n'
 
     try {
       await withFakeBun(async () => {
-        await cliInternals.runProjectPrepare(projectRoot, io.io)
+        await runProjectPrepare(projectRoot, io.io)
       })
 
       const syncedDependencies = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies ?? {}
@@ -6480,7 +6602,7 @@ export default defineCacheConfig({
 `)
 
       await withFakeBun(async () => {
-        await cliInternals.runProjectPrepare(projectRoot, io.io)
+        await runProjectPrepare(projectRoot, io.io)
       })
     } finally {
       process.env.PATH = originalPath
@@ -6523,7 +6645,7 @@ printf 'fake npm install\n'
 
     try {
       await withFakeBun(async () => {
-        await cliInternals.runProjectPrepare(projectRoot, io.io)
+        await runProjectPrepare(projectRoot, io.io)
       })
     } finally {
       process.env.PATH = originalPath
@@ -7973,7 +8095,7 @@ export default {
       expect(defaultIo.read().stdout).toContain('Internal Commands')
 
       const listedIo = createIo(projectRoot)
-      await expect(cliInternals.findCommand([], 'missing')).toBeUndefined()
+      await expect(findCommand([], 'missing')).toBeUndefined()
       await expect(import('../src/cli').then(module => module.runCli(['list'], listedIo.io))).resolves.toBe(0)
       expect(listedIo.read().stdout).toContain('Internal Commands')
       expect(listedIo.read().stdout).toContain('holo courses:reindex')
@@ -8102,7 +8224,7 @@ export default {
       usage: 'holo example',
       async run() {},
     })
-    const appDefinition = cliInternals.createAppCommandDefinition({
+    const appDefinition = createAppCommandDefinition({
       sourcePath: 'server/commands/example.ts',
       name: 'example',
       aliases: ['sample'],
@@ -8115,7 +8237,7 @@ export default {
     const io = createIo('/tmp/project')
 
     expect(Object.isFrozen(command)).toBe(true)
-    expect(cliInternals.parseTokens(['name', '--step', '2', '--quietly', '-f'])).toEqual({
+    expect(parseTokens(['name', '--step', '2', '--quietly', '-f'])).toEqual({
       args: ['name'],
       flags: {
         step: '2',
@@ -8123,7 +8245,7 @@ export default {
         f: true,
       },
     })
-    expect(cliInternals.parseTokens(['--only=roles', '--only', 'users', '--only', 'teachers', '-o', 'admins', '-abc', '--', '--literal'])).toEqual({
+    expect(parseTokens(['--only=roles', '--only', 'users', '--only', 'teachers', '-o', 'admins', '-abc', '--', '--literal'])).toEqual({
       args: ['--literal'],
       flags: {
         only: ['roles', 'users', 'teachers'],
@@ -8133,45 +8255,49 @@ export default {
         c: true,
       },
     })
-    expect(cliInternals.parseTokens(['--step', '-1'])).toEqual({
+    expect(parseTokens(['--step', '-1'])).toEqual({
       args: [],
       flags: {
         step: '-1',
       },
     })
-    expect(cliInternals.parseTokens(['-s', '-1'])).toEqual({
+    expect(parseTokens(['-s', '-1'])).toEqual({
       args: [],
       flags: {
         s: '-1',
       },
     })
-    expect(cliInternals.resolveStringFlag({ only: ['roles', 'users'] }, 'only')).toBe('users')
-    expect(cliInternals.resolveStringFlag({ o: 'roles' }, 'only', 'o')).toBe('roles')
-    expect(cliInternals.resolveStringFlag({ step: 2 }, 'step')).toBeUndefined()
-    expect(cliInternals.resolveBooleanFlag({ force: 'true' }, 'force')).toBe(true)
-    expect(cliInternals.resolveBooleanFlag({ force: ['false', 'true'] }, 'force')).toBe(true)
-    expect(cliInternals.resolveBooleanFlag({ f: 'false' }, 'force', 'f')).toBe(false)
-    expect(cliInternals.parseNumberFlag({ step: '3' }, 'step')).toBe(3)
-    expect(() => cliInternals.parseNumberFlag({ step: '-1' }, 'step')).toThrow('Flag "--step" must be a non-negative integer.')
-    expect(cliInternals.parseNumberFlag({}, 'step')).toBeUndefined()
-    expect(() => cliInternals.parseNumberFlag({ step: 'abc' }, 'step')).toThrow('Flag "--step" must be a non-negative integer.')
-    expect(() => cliInternals.parseNumberFlag({ step: '1abc' }, 'step')).toThrow('Flag "--step" must be a non-negative integer.')
+    expect(resolveStringFlag({ only: ['roles', 'users'] }, 'only')).toBe('users')
+    expect(resolveStringFlag({ o: 'roles' }, 'only', 'o')).toBe('roles')
+    expect(resolveStringFlag({ step: 2 }, 'step')).toBeUndefined()
+    expect(resolveBooleanFlag({ force: 'true' }, 'force')).toBe(true)
+    expect(resolveBooleanFlag({ force: ['false', 'true'] }, 'force')).toBe(true)
+    expect(resolveBooleanFlag({ f: 'false' }, 'force', 'f')).toBe(false)
+    expect(parseNumberFlag({ step: '3' }, 'step')).toBe(3)
+    expect(() => parseNumberFlag({ step: '-1' }, 'step')).toThrow('Flag "--step" must be a non-negative integer.')
+    expect(parseNumberFlag({}, 'step')).toBeUndefined()
+    expect(() => parseNumberFlag({ step: 'abc' }, 'step')).toThrow('Flag "--step" must be a non-negative integer.')
+    expect(() => parseNumberFlag({ step: '1abc' }, 'step')).toThrow('Flag "--step" must be a non-negative integer.')
     const parseIntSpy = vi.spyOn(Number, 'parseInt').mockReturnValue(Number.POSITIVE_INFINITY)
-    expect(() => cliInternals.parseNumberFlag({ step: '7' }, 'step')).toThrow('Flag "--step" must be a non-negative integer.')
+    expect(() => parseNumberFlag({ step: '7' }, 'step')).toThrow('Flag "--step" must be a non-negative integer.')
     parseIntSpy.mockRestore()
-    expect(cliInternals.splitCsv('roles, users')).toEqual(['roles', 'users'])
-    expect(cliInternals.splitCsv(undefined)).toBeUndefined()
-    expect(cliInternals.isInteractive(io.io, {})).toBe(false)
-    expect(cliInternals.isInteractive(createIo('/tmp/project', { tty: true }).io, {})).toBe(true)
-    expect(cliInternals.isInteractive(createIo('/tmp/project', { tty: true }).io, { 'no-interactive': true })).toBe(false)
-    expect(cliInternals.findCommand([appDefinition], 'sample')).toBe(appDefinition)
-    expect(cliInternals.collectMultiStringFlag({ only: ['users', 'roles'] }, 'only')).toEqual(['users', 'roles'])
-    expect(cliInternals.collectMultiStringFlag({ only: 'users' }, 'only')).toEqual(['users'])
-    expect(cliInternals.collectMultiStringFlag({ o: 'users' }, 'only', 'o')).toEqual(['users'])
-    expect(cliInternals.collectMultiStringFlag({ only: '   ' }, 'only')).toBeUndefined()
-    expect(cliInternals.createRuntimeInvocation('console.log(1)')).toEqual({
+    expect(splitCsv('roles, users')).toEqual(['roles', 'users'])
+    expect(splitCsv(undefined)).toBeUndefined()
+    expect(isInteractive(io.io, {})).toBe(false)
+    expect(isInteractive(createIo('/tmp/project', { tty: true }).io, {})).toBe(true)
+    expect(isInteractive(createIo('/tmp/project', { tty: true }).io, { 'no-interactive': true })).toBe(false)
+    expect(findCommand([appDefinition], 'sample')).toBe(appDefinition)
+    expect(collectMultiStringFlag({ only: ['users', 'roles'] }, 'only')).toEqual(['users', 'roles'])
+    expect(collectMultiStringFlag({ only: 'users' }, 'only')).toEqual(['users'])
+    expect(collectMultiStringFlag({ o: 'users' }, 'only', 'o')).toEqual(['users'])
+    expect(collectMultiStringFlag({ only: '   ' }, 'only')).toBeUndefined()
+    expect(createRuntimeInvocation('/tmp/holo-runtime-worker.mjs')).toEqual({
       command: 'node',
-      args: ['--input-type=module', '--eval', 'console.log(1)'],
+      args: ['/tmp/holo-runtime-worker.mjs'],
+    })
+    expect(createRuntimeInvocation('/tmp/holo-runtime-worker.ts')).toEqual({
+      command: 'node',
+      args: ['--experimental-strip-types', '/tmp/holo-runtime-worker.ts'],
     })
     const largeRuntimeOutputSize = 1024 * 1024 + 1024
     const largeRuntimeOutput = await runRuntimeInvocation('node', [
@@ -8192,7 +8318,7 @@ export default {
     expect(missingRuntimeOutput.error).toBeInstanceOf(Error)
     const executed: string[] = []
     let foreignKeysScoped = false
-    await cliInternals.dropAllTablesForFresh(
+    await dropAllTablesForFresh(
       {
         getDialect: () => ({
           name: 'postgres',
@@ -8223,7 +8349,7 @@ export default {
       'DROP TABLE IF EXISTS "tenant_app"."users" CASCADE',
     ])
     const defaultSchemaExecuted: string[] = []
-    await cliInternals.dropAllTablesForFresh(
+    await dropAllTablesForFresh(
       {
         getDialect: () => ({
           name: 'postgres',
@@ -8252,7 +8378,7 @@ export default {
     ])
     const droppedTables: string[] = []
     let scopedDrops = 0
-    await cliInternals.dropAllTablesForFresh(
+    await dropAllTablesForFresh(
       {
         getDialect: () => ({
           name: 'sqlite',
@@ -8278,35 +8404,35 @@ export default {
     )
     expect(scopedDrops).toBe(1)
     expect(droppedTables).toEqual(['roles', 'users'])
-    expect(cliInternals.inferRuntimeMigrationName('file:///tmp/2026_01_01_000001_create_sessions_table.js')).toBe('2026_01_01_000001_create_sessions_table')
-    expect(() => cliInternals.inferRuntimeMigrationName('file:///tmp/create_sessions_table.js')).toThrow(
+    expect(inferRuntimeMigrationName('file:///tmp/2026_01_01_000001_create_sessions_table.js')).toBe('2026_01_01_000001_create_sessions_table')
+    expect(() => inferRuntimeMigrationName('file:///tmp/create_sessions_table.js')).toThrow(
       'Registered migration "file:///tmp/create_sessions_table.js" must use a timestamped file name matching YYYY_MM_DD_HHMMSS_description.',
     )
-    expect(cliInternals.normalizeRuntimeMigration(
+    expect(normalizeRuntimeMigration(
       'file:///tmp/2026_01_01_000001_create_sessions_table.js',
       { up() {} },
     )).toMatchObject({ name: '2026_01_01_000001_create_sessions_table' })
-    expect(cliInternals.normalizeRuntimeMigration(
+    expect(normalizeRuntimeMigration(
       'file:///tmp/ignored.js',
       { name: 'custom_name', up() {} },
     )).toMatchObject({ name: 'custom_name' })
-    expect(cliInternals.getRuntimeFailureMessage('prune', {
+    expect(getRuntimeFailureMessage('prune', {
       status: null,
       error: { code: 'ENOENT' },
       stdout: undefined,
       stderr: undefined,
     })).toContain('Failed to launch runtime command "prune"')
-    expect(cliInternals.getRuntimeFailureMessage('seed', {
+    expect(getRuntimeFailureMessage('seed', {
       status: 1,
       stdout: '',
       stderr: 'seed failed\n',
     })).toBe('seed failed')
-    expect(cliInternals.getRuntimeFailureMessage('seed', {
+    expect(getRuntimeFailureMessage('seed', {
       status: 1,
       stdout: 'seed output\n',
       stderr: '',
     })).toBe('seed output')
-    expect(cliInternals.getRuntimeFailureMessage('migrate', {
+    expect(getRuntimeFailureMessage('migrate', {
       status: 1,
       stdout: '',
       stderr: [
@@ -8318,18 +8444,18 @@ export default {
         '    at initialize (file:///app/.holo-js/runtime/index.mjs:12:11)',
       ].join('\n'),
     })).toBe('Unable to open SQLite database "./missing/database.sqlite": unable to open database file')
-    expect(cliInternals.getRuntimeFailureMessage('seed', {
+    expect(getRuntimeFailureMessage('seed', {
       status: 1,
       stdout: undefined,
       stderr: undefined,
       error: undefined,
     })).toBe('Runtime command "seed" failed.')
 
-    cliInternals.printCommandList(io.io, [
+    printCommandList(io.io, [
       { ...appDefinition, source: 'internal', usage: 'holo list' },
       appDefinition,
     ])
-    cliInternals.printCommandHelp(io.io, appDefinition)
+    printCommandHelp(io.io, appDefinition)
 
     const listed = io.read().stdout
     expect(listed).toContain('Internal Commands')
@@ -8346,24 +8472,24 @@ export default {
     process.env.DB_DRIVER = 'postgres'
     process.env.DB_SSL = 'true'
     process.env.DB_LOGGING = 'false'
-    expect(cliInternals.parseBooleanEnv(undefined)).toBeUndefined()
-    expect(cliInternals.parseBooleanEnv('true')).toBe(true)
-    expect(cliInternals.parseBooleanEnv('false')).toBe(false)
-    expect(cliInternals.parseBooleanEnv('wat')).toBeUndefined()
-    expect(cliInternals.getRegistryMigrationSlug('2026_01_01_000000_create_users_table')).toBe('create_users_table')
-    expect(() => cliInternals.getRegistryMigrationSlug('2026_01_01_000000_!!!')).toThrow()
-    expect(cliInternals.hasRegisteredMigrationSlug({
+    expect(parseBooleanEnv(undefined)).toBeUndefined()
+    expect(parseBooleanEnv('true')).toBe(true)
+    expect(parseBooleanEnv('false')).toBe(false)
+    expect(parseBooleanEnv('wat')).toBeUndefined()
+    expect(getRegistryMigrationSlug('2026_01_01_000000_create_users_table')).toBe('create_users_table')
+    expect(() => getRegistryMigrationSlug('2026_01_01_000000_!!!')).toThrow()
+    expect(hasRegisteredMigrationSlug({
       migrations: [
         { name: '2026_01_01_000000_create_users_table' },
         { name: '2026_01_01_000000_!!!' },
       ],
     } as never, 'create_users_table')).toBe(true)
-    expect(cliInternals.hasRegisteredMigrationSlug({
+    expect(hasRegisteredMigrationSlug({
       migrations: [
         { name: '2026_01_01_000000_!!!' },
       ],
     } as never, 'create_users_table')).toBe(false)
-    expect(cliInternals.hasRegisteredCreateTableMigration({
+    expect(hasRegisteredCreateTableMigration({
       migrations: [
         { name: '2026_01_01_000000_create_users_table' },
         { name: '2026_01_01_000001_add_status_to_users_table' },
@@ -8371,20 +8497,20 @@ export default {
         { name: '2026_01_01_000003_!!!' },
       ],
     } as never, 'users')).toBe(true)
-    expect(cliInternals.hasRegisteredCreateTableMigration({
+    expect(hasRegisteredCreateTableMigration({
       migrations: [
         { name: '2026_01_01_000001_add_status_to_users_table' },
         { name: '2026_01_01_000002_create_table' },
         { name: '2026_01_01_000003_!!!' },
       ],
     } as never, 'users')).toBe(false)
-    expect(cliInternals.resolvePackageManagerInstallCommand('pnpm')).toBe('pnpm install')
-    expect(cliInternals.resolvePackageManagerDevCommand('pnpm')).toBe('pnpm dev')
-    expect(cliInternals.resolvePackageManagerInstallCommand('yarn')).toBe('yarn install')
-    expect(cliInternals.resolvePackageManagerDevCommand('yarn')).toBe('yarn dev')
+    expect(resolvePackageManagerInstallCommand('pnpm')).toBe('pnpm install')
+    expect(resolvePackageManagerDevCommand('pnpm')).toBe('pnpm dev')
+    expect(resolvePackageManagerInstallCommand('yarn')).toBe('yarn install')
+    expect(resolvePackageManagerDevCommand('yarn')).toBe('yarn dev')
     expect(projectInternals.resolveNamedExport('nope', (_value): _value is { ok: true } => false)).toBeUndefined()
     expect(projectInternals.resolveNamedExportEntry('nope', (_value): _value is { ok: true } => false)).toBeUndefined()
-    expect(cliInternals.createEnvRuntimeConfig()).toMatchObject({
+    expect(createEnvRuntimeConfig()).toMatchObject({
       db: {
         defaultConnection: 'default',
         connections: {
@@ -8396,10 +8522,10 @@ export default {
         },
       },
     })
-    expect(cliInternals.mergeRuntimeDatabaseConfig(undefined, cliInternals.createEnvRuntimeConfig())).toEqual(
-      cliInternals.createEnvRuntimeConfig().db,
+    expect(mergeRuntimeDatabaseConfig(undefined, createEnvRuntimeConfig())).toEqual(
+      createEnvRuntimeConfig().db,
     )
-    expect(cliInternals.mergeRuntimeDatabaseConfig({
+    expect(mergeRuntimeDatabaseConfig({
       defaultConnection: 'primary',
       connections: {
         primary: {
@@ -8434,7 +8560,7 @@ export default {
         },
       },
     })
-    expect(cliInternals.mergeRuntimeDatabaseConfig({
+    expect(mergeRuntimeDatabaseConfig({
       defaultConnection: 'primary',
       connections: {
         primary: 'postgresql://manifest',
@@ -8474,7 +8600,7 @@ export default {
         },
       },
     })
-    expect(cliInternals.mergeRuntimeDatabaseConfig({}, {
+    expect(mergeRuntimeDatabaseConfig({}, {
       db: {
         defaultConnection: 'default',
         connections: {
@@ -8509,7 +8635,7 @@ export default {
         },
       },
     })
-    expect(cliInternals.mergeRuntimeDatabaseConfig({
+    expect(mergeRuntimeDatabaseConfig({
       defaultConnection: 'primary',
       connections: {
         primary: {
@@ -8545,7 +8671,7 @@ export default {
         },
       },
     })
-    expect(cliInternals.mergeRuntimeDatabaseConfig({
+    expect(mergeRuntimeDatabaseConfig({
       defaultConnection: 'primary',
       connections: {
         primary: {
@@ -8588,18 +8714,18 @@ export default {
         },
       },
     })
-    expect(cliInternals.resolveConfigModuleUrl()).toContain('/config/dist/index.mjs')
-    expect(cliInternals.resolveConfigModuleUrl(specifier => `mock:${specifier}`)).toBe('mock:@holo-js/config')
-    expect(cliInternals.resolveConfigModuleUrl(null as never)).toContain('/node_modules/@holo-js/config/dist/index.mjs')
-    expect(cliInternals.resolveConfigModuleUrl(() => pathToFileURL(join(workspaceRoot, 'packages/config/src/index.ts')).href))
+    expect(resolveConfigModuleUrl()).toContain('/config/dist/index.mjs')
+    expect(resolveConfigModuleUrl(specifier => `mock:${specifier}`)).toBe('mock:@holo-js/config')
+    expect(resolveConfigModuleUrl(null as never)).toContain('/node_modules/@holo-js/config/dist/index.mjs')
+    expect(resolveConfigModuleUrl(() => pathToFileURL(join(workspaceRoot, 'packages/config/src/index.ts')).href))
       .toBe(pathToFileURL(join(workspaceRoot, 'packages/config/dist/index.mjs')).href)
-    expect(cliInternals.resolveConfigModuleUrl(() => pathToFileURL(join(workspaceRoot, 'packages/config/src/index.mts')).href))
+    expect(resolveConfigModuleUrl(() => pathToFileURL(join(workspaceRoot, 'packages/config/src/index.mts')).href))
       .toBe(pathToFileURL(join(workspaceRoot, 'packages/config/dist/index.mjs')).href)
-    expect(cliInternals.resolveConfigModuleUrl(() => pathToFileURL(join(workspaceRoot, 'packages/config/src/index.js')).href))
+    expect(resolveConfigModuleUrl(() => pathToFileURL(join(workspaceRoot, 'packages/config/src/index.js')).href))
       .toBe(pathToFileURL(join(workspaceRoot, 'packages/config/dist/index.mjs')).href)
-    expect(cliInternals.resolveConfigModuleUrl(() => pathToFileURL(join(workspaceRoot, 'packages/config/src/index.mjs')).href))
+    expect(resolveConfigModuleUrl(() => pathToFileURL(join(workspaceRoot, 'packages/config/src/index.mjs')).href))
       .toBe(pathToFileURL(join(workspaceRoot, 'packages/config/dist/index.mjs')).href)
-    await expect(cliInternals.resolvePackageManagerInstallInvocation(projectRoot)).resolves.toEqual({
+    await expect(resolvePackageManagerInstallInvocation(projectRoot)).resolves.toEqual({
       command: 'bun',
       args: ['install'],
     })
@@ -8609,7 +8735,7 @@ export default {
       stdout: 'installed ok\n',
       stderr: 'warning\n',
     }))
-    await expect(cliInternals.runProjectDependencyInstall(installIo.io, projectRoot, spawnInstall as never)).resolves.toBeUndefined()
+    await expect(runProjectDependencyInstall(installIo.io, projectRoot, spawnInstall as never)).resolves.toBeUndefined()
     expect(installIo.read().stdout).toContain('installed ok')
     expect(installIo.read().stderr).toContain('warning')
     const spawnInstallFailure = vi.fn(() => ({
@@ -8617,55 +8743,55 @@ export default {
       stdout: '',
       stderr: 'install failed',
     }))
-    await expect(cliInternals.runProjectDependencyInstall(installIo.io, projectRoot, spawnInstallFailure as never))
+    await expect(runProjectDependencyInstall(installIo.io, projectRoot, spawnInstallFailure as never))
       .rejects.toThrow('install failed')
     const spawnInstallSilentFailure = vi.fn(() => ({
       status: 1,
       stdout: '',
       stderr: '',
     }))
-    await expect(cliInternals.runProjectDependencyInstall(installIo.io, projectRoot, spawnInstallSilentFailure as never))
+    await expect(runProjectDependencyInstall(installIo.io, projectRoot, spawnInstallSilentFailure as never))
       .rejects.toThrow('Project dependency installation failed.')
 
-    await expect(cliInternals.fileExists(notePath)).resolves.toBe(true)
-    await expect(cliInternals.fileExists(join(projectRoot, 'missing.txt'))).resolves.toBe(false)
-    await expect(cliInternals.hasProjectDependency(join(projectRoot, 'missing-project'), '@holo-js/queue')).resolves.toBe(false)
+    await expect(fileExists(notePath)).resolves.toBe(true)
+    await expect(fileExists(join(projectRoot, 'missing.txt'))).resolves.toBe(false)
+    await expect(hasProjectDependency(join(projectRoot, 'missing-project'), '@holo-js/queue')).resolves.toBe(false)
     await writeFile(join(projectRoot, 'package.json'), '{ invalid json', 'utf8')
-    await expect(cliInternals.hasProjectDependency(projectRoot, '@holo-js/queue')).resolves.toBe(false)
+    await expect(hasProjectDependency(projectRoot, '@holo-js/queue')).resolves.toBe(false)
     await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
       dependencies: {
         '@holo-js/queue': outdatedHoloPackageRange,
       },
     }), 'utf8')
-    await expect(cliInternals.hasProjectDependency(projectRoot, '@holo-js/queue')).resolves.toBe(true)
+    await expect(hasProjectDependency(projectRoot, '@holo-js/queue')).resolves.toBe(true)
     await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
       devDependencies: {
         '@holo-js/queue': outdatedHoloPackageRange,
       },
     }), 'utf8')
-    await expect(cliInternals.hasProjectDependency(projectRoot, '@holo-js/queue')).resolves.toBe(true)
-    await expect(cliInternals.ensureAbsent(join(projectRoot, 'missing.txt'))).resolves.toBeUndefined()
-    await expect(cliInternals.ensureAbsent(notePath)).rejects.toThrow('Refusing to overwrite existing file')
+    await expect(hasProjectDependency(projectRoot, '@holo-js/queue')).resolves.toBe(true)
+    await expect(ensureAbsent(join(projectRoot, 'missing.txt'))).resolves.toBeUndefined()
+    await expect(ensureAbsent(notePath)).rejects.toThrow('Refusing to overwrite existing file')
 
     const migrationsDir = join(projectRoot, 'server/db/migrations')
     await mkdir(migrationsDir, { recursive: true })
     await writeFile(join(migrationsDir, '20000101000000_create_users_table.ts'), '')
-    const template = await cliInternals.nextMigrationTemplate('create_users_table', migrationsDir)
+    const template = await nextMigrationTemplate('create_users_table', migrationsDir)
     expect(template.fileName).toMatch(/create_users_table/)
 
     const collisionNow = Date.now()
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(collisionNow)
     try {
-      const firstCollisionTemplate = await cliInternals.nextMigrationTemplate('create_posts_table', migrationsDir)
+      const firstCollisionTemplate = await nextMigrationTemplate('create_posts_table', migrationsDir)
       await writeFile(join(migrationsDir, firstCollisionTemplate.fileName), '')
-      const collisionTemplate = await cliInternals.nextMigrationTemplate('create_posts_table', migrationsDir)
+      const collisionTemplate = await nextMigrationTemplate('create_posts_table', migrationsDir)
       expect(collisionTemplate.fileName).not.toBe(firstCollisionTemplate.fileName)
     } finally {
       nowSpy.mockRestore()
     }
 
     const listIo = createIo(projectRoot)
-    const registry: Array<ReturnType<typeof cliInternals.createAppCommandDefinition>> = []
+    const registry: Array<ReturnType<typeof createAppCommandDefinition>> = []
     const runtimeCalls: Array<{ kind: string, options: Record<string, unknown> }> = []
     const context = {
       ...listIo.io,
@@ -8688,7 +8814,7 @@ export default {
             : '',
       )
     }
-    const internal = cliInternals.createInternalCommands(context, runtimeExecutor)
+    const internal = createInternalCommands(context, runtimeExecutor)
     registry.push(...internal)
 
     await expect(internal.find(command => command.name === 'list')?.run({
@@ -8726,7 +8852,7 @@ export default {
       registry,
       loadProject: context.loadProject,
     }
-    const interactiveModelCommands = cliInternals.createInternalCommands(interactiveModelContext as never)
+    const interactiveModelCommands = createInternalCommands(interactiveModelContext as never)
     const interactiveModelPrepared = await interactiveModelCommands.find(command => command.name === 'make:model')!.prepare!(
       { args: ['Lesson'], flags: {} },
       interactiveModelContext as never,
@@ -8836,7 +8962,7 @@ export default {
       registry: [] as typeof registry,
       loadProject: context.loadProject,
     }
-    const fallbackInternal = cliInternals.createInternalCommands(
+    const fallbackInternal = createInternalCommands(
       fallbackContext,
       async <T>(
         _projectRoot: string,
@@ -8931,10 +9057,10 @@ export default {
     expect(emptyOutputIo.read().stdout).toContain('No migrations were executed.')
     expect(emptyOutputIo.read().stdout).toContain('No seeders were executed.')
 
-    await expect(cliInternals.cacheProjectConfig(projectRoot, async () => {
+    await expect(cacheProjectConfig(projectRoot, async () => {
       throw new Error('cache failed')
     })).rejects.toThrow('cache failed')
-    await expect(cliInternals.cacheProjectConfig(projectRoot, async () => {
+    await expect(cacheProjectConfig(projectRoot, async () => {
       throw 'cache failed from stdout'
     })).rejects.toThrow('Failed to cache config.')
 
@@ -8965,7 +9091,7 @@ export default {
 
     const modelIo = createIo(modelProjectRoot)
     await withFakeBun(async () => {
-      await cliInternals.runMakeModel(modelIo.io, modelProjectRoot, {
+      await runMakeModel(modelIo.io, modelProjectRoot, {
         args: ['courses/Course'],
         flags: {
           migration: true,
@@ -8978,7 +9104,7 @@ export default {
     expect(modelIo.read().stdout).toContain('Created model: server/models/courses/Course.ts')
 
     await expect(withFakeBun(async () => {
-      await cliInternals.runMakeModel(modelIo.io, modelProjectRoot, {
+      await runMakeModel(modelIo.io, modelProjectRoot, {
         args: ['courses/Course'],
         flags: {
           migration: true,
@@ -8994,7 +9120,7 @@ export default {
     await linkWorkspaceDb(plainModelProjectRoot)
     const plainModelIo = createIo(plainModelProjectRoot)
     await withFakeBun(async () => {
-      await cliInternals.runMakeModel(plainModelIo.io, plainModelProjectRoot, {
+      await runMakeModel(plainModelIo.io, plainModelProjectRoot, {
         args: ['Lesson'],
         flags: {
           migration: false,
@@ -9011,7 +9137,7 @@ export default {
     await linkWorkspaceDb(sharedTableProjectRoot)
     const sharedTableIo = createIo(sharedTableProjectRoot)
     await withFakeBun(async () => {
-      await cliInternals.runMakeModel(sharedTableIo.io, sharedTableProjectRoot, {
+      await runMakeModel(sharedTableIo.io, sharedTableProjectRoot, {
         args: ['User'],
         flags: {
           migration: true,
@@ -9022,7 +9148,7 @@ export default {
       })
     })
     await expect(withFakeBun(async () => {
-      await cliInternals.runMakeModel(sharedTableIo.io, sharedTableProjectRoot, {
+      await runMakeModel(sharedTableIo.io, sharedTableProjectRoot, {
         args: ['Admin'],
         flags: {
           table: 'users',
@@ -9034,7 +9160,7 @@ export default {
       })
     })).rejects.toThrow('Discovered duplicate model "User"')
     await expect(withFakeBun(async () => {
-      await cliInternals.runMakeModel(sharedTableIo.io, sharedTableProjectRoot, {
+      await runMakeModel(sharedTableIo.io, sharedTableProjectRoot, {
         args: ['Person'],
         flags: {
           table: 'users',
@@ -9062,7 +9188,7 @@ export default defineMigration({
 `,
     )
     await expect(withFakeBun(async () => {
-      await cliInternals.runMakeModel(createIo(duplicateMigrationModelRoot).io, duplicateMigrationModelRoot, {
+      await runMakeModel(createIo(duplicateMigrationModelRoot).io, duplicateMigrationModelRoot, {
         args: ['Lesson'],
         flags: {
           migration: true,
@@ -9080,10 +9206,10 @@ export default defineMigration({
     const modelCommandContext = {
       ...modelCommandIo.io,
       projectRoot: modelCommandRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const modelCommands = cliInternals.createInternalCommands(modelCommandContext, async (_projectRoot, _kind, _options, callback) => callback(''))
+    const modelCommands = createInternalCommands(modelCommandContext, async (_projectRoot, _kind, _options, callback) => callback(''))
     const makeModel = modelCommands.find(command => command.name === 'make:model')
     await expect(withFakeBun(async () => makeModel?.run({
       projectRoot: modelCommandRoot,
@@ -9104,13 +9230,13 @@ export default defineMigration({
     tempDirs.push(migrationProjectRoot)
     await linkWorkspaceDb(migrationProjectRoot)
     const migrationIo = createIo(migrationProjectRoot)
-    await withFakeBun(async () => cliInternals.runMakeMigration(migrationIo.io, migrationProjectRoot, {
+    await withFakeBun(async () => runMakeMigration(migrationIo.io, migrationProjectRoot, {
       args: ['create_roles_table'],
       flags: {},
     }))
     expect(migrationIo.read().stdout).toContain('Created migration: server/db/migrations/')
 
-    await expect(withFakeBun(async () => cliInternals.runMakeMigration(migrationIo.io, migrationProjectRoot, {
+    await expect(withFakeBun(async () => runMakeMigration(migrationIo.io, migrationProjectRoot, {
       args: ['create_roles_table'],
       flags: {},
     }))).rejects.toThrow('A migration named "create_roles_table" already exists')
@@ -9119,12 +9245,12 @@ export default defineMigration({
     tempDirs.push(createMigrationProjectRoot)
     await linkWorkspaceDb(createMigrationProjectRoot)
     const createMigrationIo = createIo(createMigrationProjectRoot)
-    await withFakeBun(async () => cliInternals.runMakeMigration(createMigrationIo.io, createMigrationProjectRoot, {
+    await withFakeBun(async () => runMakeMigration(createMigrationIo.io, createMigrationProjectRoot, {
       args: ['create_audit_logs_table'],
       flags: { create: 'audit_logs' },
     }))
     expect(createMigrationIo.read().stdout).toContain('Created migration: server/db/migrations/')
-    await expect(withFakeBun(async () => cliInternals.runMakeMigration(createMigrationIo.io, createMigrationProjectRoot, {
+    await expect(withFakeBun(async () => runMakeMigration(createMigrationIo.io, createMigrationProjectRoot, {
       args: ['create_audit_logs_table'],
       flags: { create: 'audit_logs' },
     }))).rejects.toThrow('A migration for table "audit_logs" already exists')
@@ -9163,7 +9289,7 @@ export default defineMigration({
 `,
     )
     const createMigrationScanIo = createIo(createMigrationScanRoot)
-    await withFakeBun(async () => cliInternals.runMakeMigration(createMigrationScanIo.io, createMigrationScanRoot, {
+    await withFakeBun(async () => runMakeMigration(createMigrationScanIo.io, createMigrationScanRoot, {
       args: ['create_projects_table'],
       flags: { create: 'projects' },
     }))
@@ -9173,12 +9299,12 @@ export default defineMigration({
     tempDirs.push(alterMigrationProjectRoot)
     await linkWorkspaceDb(alterMigrationProjectRoot)
     const alterMigrationIo = createIo(alterMigrationProjectRoot)
-    await withFakeBun(async () => cliInternals.runMakeMigration(alterMigrationIo.io, alterMigrationProjectRoot, {
+    await withFakeBun(async () => runMakeMigration(alterMigrationIo.io, alterMigrationProjectRoot, {
       args: ['add_status_to_users_table'],
       flags: { table: 'users' },
     }))
     expect(alterMigrationIo.read().stdout).toContain('Created migration: server/db/migrations/')
-    await expect(withFakeBun(async () => cliInternals.runMakeMigration(alterMigrationIo.io, alterMigrationProjectRoot, {
+    await expect(withFakeBun(async () => runMakeMigration(alterMigrationIo.io, alterMigrationProjectRoot, {
       args: ['add_status_to_users_table'],
       flags: { table: 'users' },
     }))).rejects.toThrow('A migration named "add_status_to_users_table" already exists')
@@ -9193,7 +9319,7 @@ export default defineMigration({
     tempDirs.push(seederProjectRoot)
     await linkWorkspaceDb(seederProjectRoot)
     const seederIo = createIo(seederProjectRoot)
-    await withFakeBun(async () => cliInternals.runMakeSeeder(seederIo.io, seederProjectRoot, {
+    await withFakeBun(async () => runMakeSeeder(seederIo.io, seederProjectRoot, {
       args: ['RoleSeeder'],
       flags: {},
     }))
@@ -9202,13 +9328,13 @@ export default defineMigration({
     const markdownMailProjectRoot = await createTempProject()
     tempDirs.push(markdownMailProjectRoot)
     const markdownMailIo = createIo(markdownMailProjectRoot)
-    await withFakeBun(async () => cliInternals.runMakeMail(markdownMailIo.io, markdownMailProjectRoot, {
+    await withFakeBun(async () => runMakeMail(markdownMailIo.io, markdownMailProjectRoot, {
       args: ['auth/verify-email'],
       flags: { type: 'markdown' },
     }))
     expect(markdownMailIo.read().stdout).toContain('Created mail: server/mail/auth/verify-email.ts')
     await expect(readFile(join(markdownMailProjectRoot, 'server/mail/auth/verify-email.ts'), 'utf8')).resolves.toContain('defineMail')
-    await expect(withFakeBun(async () => cliInternals.runMakeMail(markdownMailIo.io, markdownMailProjectRoot, {
+    await expect(withFakeBun(async () => runMakeMail(markdownMailIo.io, markdownMailProjectRoot, {
       args: ['auth/verify-email'],
       flags: { type: 'markdown' },
     }))).rejects.toThrow('Refusing to overwrite existing file')
@@ -9216,7 +9342,7 @@ export default defineMigration({
     const viewMailProjectRoot = await createTempProject()
     tempDirs.push(viewMailProjectRoot)
     const viewMailIo = createIo(viewMailProjectRoot)
-    await expect(withFakeBun(async () => cliInternals.runMakeMail(viewMailIo.io, viewMailProjectRoot, {
+    await expect(withFakeBun(async () => runMakeMail(viewMailIo.io, viewMailProjectRoot, {
       args: ['billing/invoice-paid'],
       flags: { type: 'view' },
     }))).rejects.toThrow('View-backed mail scaffolding requires a renderView runtime binding')
@@ -9226,81 +9352,25 @@ export default defineMigration({
     expect(renderSvelteMailViewTemplate('ExampleMailInput', './example')).toContain('export let to: ExampleMailInput[\'to\']')
     expect(renderGenericMailViewTemplate('ExampleMail', 'ExampleMailInput', './example')).toContain('ExampleMailInput')
 
-    const brokenPackageMailProjectRoot = await createTempProject()
-    tempDirs.push(brokenPackageMailProjectRoot)
-    await writeProjectFile(brokenPackageMailProjectRoot, 'package.json', '{')
-    await expect(generatorInternals.resolveProjectMailViewFramework(brokenPackageMailProjectRoot)).resolves.toBe('generic')
-
-    const nuxtMailProjectRoot = await createTempProject()
-    tempDirs.push(nuxtMailProjectRoot)
-    await writeProjectFile(nuxtMailProjectRoot, 'package.json', JSON.stringify({
-      name: 'nuxt-mail-fixture',
-      private: true,
-      dependencies: {
-        nuxt: expectedNuxtPackageRange,
-      },
-    }, null, 2))
-    await expect(generatorInternals.resolveProjectMailViewFramework(nuxtMailProjectRoot)).resolves.toBe('nuxt')
-
-    const nextMailProjectRoot = await createTempProject()
-    tempDirs.push(nextMailProjectRoot)
-    await writeProjectFile(nextMailProjectRoot, 'package.json', JSON.stringify({
-      name: 'next-mail-fixture',
-      private: true,
-      dependencies: {
-        next: expectedNextPackageRange,
-      },
-    }, null, 2))
-    await expect(generatorInternals.resolveProjectMailViewFramework(nextMailProjectRoot)).resolves.toBe('next')
-
-    const svelteMailProjectRoot = await createTempProject()
-    tempDirs.push(svelteMailProjectRoot)
-    await writeProjectFile(svelteMailProjectRoot, 'package.json', JSON.stringify({
-      name: 'svelte-mail-fixture',
-      private: true,
-      dependencies: {
-        '@sveltejs/kit': expectedSvelteKitPackageRange,
-      },
-    }, null, 2))
-    await expect(generatorInternals.resolveProjectMailViewFramework(svelteMailProjectRoot)).resolves.toBe('sveltekit')
-
-    const genericMailProjectRoot = await createTempProject()
-    tempDirs.push(genericMailProjectRoot)
-    await writeProjectFile(genericMailProjectRoot, 'package.json', JSON.stringify({
-      name: 'generic-mail-fixture',
-      private: true,
-      dependencies: {},
-      devDependencies: {},
-    }, null, 2))
-    await expect(generatorInternals.resolveProjectMailViewFramework(genericMailProjectRoot)).resolves.toBe('generic')
-
-    const genericMailProjectNoDepsRoot = await createTempProject()
-    tempDirs.push(genericMailProjectNoDepsRoot)
-    await writeProjectFile(genericMailProjectNoDepsRoot, 'package.json', JSON.stringify({
-      name: 'generic-mail-no-deps-fixture',
-      private: true,
-    }, null, 2))
-    await expect(generatorInternals.resolveProjectMailViewFramework(genericMailProjectNoDepsRoot)).resolves.toBe('generic')
-
     const jobProjectRoot = await createTempProject()
     tempDirs.push(jobProjectRoot)
     const jobIo = createIo(jobProjectRoot)
-    await withFakeBun(async () => cliInternals.runMakeJob(jobIo.io, jobProjectRoot, {
+    await withFakeBun(async () => runMakeJob(jobIo.io, jobProjectRoot, {
       args: ['media/GenerateConversions'],
       flags: {},
     }))
     expect(jobIo.read().stdout).toContain('Created job: server/jobs/media/generate-conversions.ts')
     await expect(readFile(join(jobProjectRoot, 'server/jobs/media/generate-conversions.ts'), 'utf8')).resolves.toContain('defineJob')
-    await expect(withFakeBun(async () => cliInternals.runMakeJob(jobIo.io, jobProjectRoot, {
+    await expect(withFakeBun(async () => runMakeJob(jobIo.io, jobProjectRoot, {
       args: ['media/generate-conversions'],
       flags: {},
     }))).rejects.toThrow('Job with the same name already exists: media.generate-conversions.')
-    await withFakeBun(async () => cliInternals.runMakeJob(jobIo.io, jobProjectRoot, {
+    await withFakeBun(async () => runMakeJob(jobIo.io, jobProjectRoot, {
       args: ['SendDigest'],
       flags: {},
     }))
     expect(jobIo.read().stdout).toContain('Created job: server/jobs/send-digest.ts')
-    await expect(withFakeBun(async () => cliInternals.runMakeJob(jobIo.io, jobProjectRoot, {
+    await expect(withFakeBun(async () => runMakeJob(jobIo.io, jobProjectRoot, {
       args: [],
       flags: {},
     }))).rejects.toThrow('A name is required.')
@@ -9308,21 +9378,21 @@ export default defineMigration({
     const eventProjectRoot = await createTempProject()
     tempDirs.push(eventProjectRoot)
     const eventIo = createIo(eventProjectRoot)
-    await withFakeBun(async () => cliInternals.runMakeEvent(eventIo.io, eventProjectRoot, {
+    await withFakeBun(async () => runMakeEvent(eventIo.io, eventProjectRoot, {
       args: ['user/registered'],
       flags: {},
     }))
     expect(eventIo.read().stdout).toContain('Created event: server/events/user/registered.ts')
     await expect(readFile(join(eventProjectRoot, 'server/events/user/registered.ts'), 'utf8')).resolves.toContain('defineEvent')
-    await expect(withFakeBun(async () => cliInternals.runMakeEvent(eventIo.io, eventProjectRoot, {
+    await expect(withFakeBun(async () => runMakeEvent(eventIo.io, eventProjectRoot, {
       args: ['user/registered'],
       flags: {},
     }))).rejects.toThrow('Event with the same name already exists: user.registered.')
-    await expect(withFakeBun(async () => cliInternals.runMakeEvent(eventIo.io, eventProjectRoot, {
+    await expect(withFakeBun(async () => runMakeEvent(eventIo.io, eventProjectRoot, {
       args: [],
       flags: {},
     }))).rejects.toThrow('A name is required.')
-    await withFakeBun(async () => cliInternals.runMakeEvent(eventIo.io, eventProjectRoot, {
+    await withFakeBun(async () => runMakeEvent(eventIo.io, eventProjectRoot, {
       args: ['OrderPlaced'],
       flags: {},
     }))
@@ -9332,22 +9402,22 @@ export default defineMigration({
     tempDirs.push(broadcastProjectRoot)
     await linkWorkspaceBroadcast(broadcastProjectRoot)
     const broadcastIo = createIo(broadcastProjectRoot)
-    await withFakeBun(async () => cliInternals.runMakeBroadcast(broadcastIo.io, broadcastProjectRoot, {
+    await withFakeBun(async () => runMakeBroadcast(broadcastIo.io, broadcastProjectRoot, {
       args: ['orders/shipment-updated'],
       flags: {},
     }))
     expect(broadcastIo.read().stdout).toContain('Created broadcast: server/broadcast/orders/shipment-updated.ts')
     await expect(readFile(join(broadcastProjectRoot, 'server/broadcast/orders/shipment-updated.ts'), 'utf8')).resolves.toContain('defineBroadcast')
-    await expect(withFakeBun(async () => cliInternals.runMakeBroadcast(broadcastIo.io, broadcastProjectRoot, {
+    await expect(withFakeBun(async () => runMakeBroadcast(broadcastIo.io, broadcastProjectRoot, {
       args: ['orders/shipment-updated'],
       flags: {},
     }))).rejects.toThrow('Broadcast with the same name already exists: orders.shipment-updated.')
-    await withFakeBun(async () => cliInternals.runMakeBroadcast(broadcastIo.io, broadcastProjectRoot, {
+    await withFakeBun(async () => runMakeBroadcast(broadcastIo.io, broadcastProjectRoot, {
       args: ['ShipmentUpdated'],
       flags: {},
     }))
     expect(broadcastIo.read().stdout).toContain('Created broadcast: server/broadcast/shipment-updated.ts')
-    await expect(withFakeBun(async () => cliInternals.runMakeBroadcast(broadcastIo.io, broadcastProjectRoot, {
+    await expect(withFakeBun(async () => runMakeBroadcast(broadcastIo.io, broadcastProjectRoot, {
       args: [],
       flags: {},
     }))).rejects.toThrow('A name is required.')
@@ -9356,17 +9426,17 @@ export default defineMigration({
     tempDirs.push(channelProjectRoot)
     await linkWorkspaceBroadcast(channelProjectRoot)
     const channelIo = createIo(channelProjectRoot)
-    await withFakeBun(async () => cliInternals.runMakeChannel(channelIo.io, channelProjectRoot, {
+    await withFakeBun(async () => runMakeChannel(channelIo.io, channelProjectRoot, {
       args: ['orders.{orderId}'],
       flags: {},
     }))
     expect(channelIo.read().stdout).toContain('Created channel: server/channels/orders-order-id.ts')
     await expect(readFile(join(channelProjectRoot, 'server/channels/orders-order-id.ts'), 'utf8')).resolves.toContain('defineChannel')
-    await withFakeBun(async () => cliInternals.runMakeChannel(channelIo.io, channelProjectRoot, {
+    await withFakeBun(async () => runMakeChannel(channelIo.io, channelProjectRoot, {
       args: ['orders.{id}'],
       flags: {},
     }))
-    await withFakeBun(async () => cliInternals.runMakeChannel(channelIo.io, channelProjectRoot, {
+    await withFakeBun(async () => runMakeChannel(channelIo.io, channelProjectRoot, {
       args: ['orders.id'],
       flags: {},
     }))
@@ -9379,17 +9449,17 @@ export default defineMigration({
       expect.stringContaining("defineChannel('orders.{id}'"),
       expect.stringContaining("defineChannel('orders.id'"),
     ]))
-    await expect(withFakeBun(async () => cliInternals.runMakeChannel(channelIo.io, channelProjectRoot, {
+    await expect(withFakeBun(async () => runMakeChannel(channelIo.io, channelProjectRoot, {
       args: ['orders.{orderId}'],
       flags: {},
     }))).rejects.toThrow('Channel with the same pattern already exists: orders.{orderId}.')
-    await expect(withFakeBun(async () => cliInternals.runMakeChannel(channelIo.io, channelProjectRoot, {
+    await expect(withFakeBun(async () => runMakeChannel(channelIo.io, channelProjectRoot, {
       args: [],
       flags: {},
     }))).rejects.toThrow('A channel pattern is required.')
     expect(generatorInternals.toChannelTemplateFileStem('{}')).toBe('channel')
     expect(generatorInternals.toChannelTemplateFileStem('{orderId}')).not.toBe(generatorInternals.toChannelTemplateFileStem('{order-id}'))
-    await expect(withFakeBun(async () => cliInternals.runMakeChannel(channelIo.io, channelProjectRoot, {
+    await expect(withFakeBun(async () => runMakeChannel(channelIo.io, channelProjectRoot, {
       args: [''],
       flags: {},
     }))).rejects.toThrow('A channel pattern is required.')
@@ -9408,29 +9478,29 @@ import { defineEvent } from '@holo-js/events'
 export default defineEvent({ name: 'audit.activity' })
 `)
     await withFakeBun(async () => prepareProjectDiscovery(listenerProjectRoot))
-    await withFakeBun(async () => cliInternals.runMakeListener(listenerIo.io, listenerProjectRoot, {
+    await withFakeBun(async () => runMakeListener(listenerIo.io, listenerProjectRoot, {
       args: ['user/send-welcome-email'],
       flags: { event: 'user.registered' },
     }))
     expect(listenerIo.read().stdout).toContain('Created listener: server/listeners/user/send-welcome-email.ts')
     await expect(readFile(join(listenerProjectRoot, 'server/listeners/user/send-welcome-email.ts'), 'utf8')).resolves.toContain('defineListener')
-    await expect(withFakeBun(async () => cliInternals.runMakeListener(listenerIo.io, listenerProjectRoot, {
+    await expect(withFakeBun(async () => runMakeListener(listenerIo.io, listenerProjectRoot, {
       args: ['user/send-welcome-email'],
       flags: { event: 'user.registered' },
     }))).rejects.toThrow('Listener with the same id already exists: user.send-welcome-email.')
-    await expect(withFakeBun(async () => cliInternals.runMakeListener(listenerIo.io, listenerProjectRoot, {
+    await expect(withFakeBun(async () => runMakeListener(listenerIo.io, listenerProjectRoot, {
       args: ['user/other'],
       flags: { event: 'missing.event' },
     }))).rejects.toThrow('Unknown event: missing.event.')
-    await expect(withFakeBun(async () => cliInternals.runMakeListener(listenerIo.io, listenerProjectRoot, {
+    await expect(withFakeBun(async () => runMakeListener(listenerIo.io, listenerProjectRoot, {
       args: [],
       flags: { event: 'user.registered' },
     }))).rejects.toThrow('A name is required.')
-    await expect(withFakeBun(async () => cliInternals.runMakeListener(listenerIo.io, listenerProjectRoot, {
+    await expect(withFakeBun(async () => runMakeListener(listenerIo.io, listenerProjectRoot, {
       args: [],
       flags: {},
     }))).rejects.toThrow('A name is required.')
-    await withFakeBun(async () => cliInternals.runMakeListener(listenerIo.io, listenerProjectRoot, {
+    await withFakeBun(async () => runMakeListener(listenerIo.io, listenerProjectRoot, {
       args: ['user/audit-user-events'],
       flags: { event: ['user.registered', 'audit.activity'] },
     }))
@@ -9442,7 +9512,7 @@ import { defineEvent } from '@holo-js/events'
 export const ActivityRecorded = defineEvent({ name: 'audit.activity.named' })
 `)
     await withFakeBun(async () => prepareProjectDiscovery(listenerProjectRoot))
-    await withFakeBun(async () => cliInternals.runMakeListener(listenerIo.io, listenerProjectRoot, {
+    await withFakeBun(async () => runMakeListener(listenerIo.io, listenerProjectRoot, {
       args: ['user/audit-named-event'],
       flags: { event: 'audit.activity.named' },
     }))
@@ -9461,7 +9531,7 @@ export const ActivityRecorded = defineEvent({ name: 'audit.activity.named' })
 import { defineEvent } from '@holo-js/events'
 export default defineEvent({ name: 'user.registered' })
 `)
-    await withFakeBun(async () => cliInternals.runMakeListener(listenerFallbackIo.io, listenerFallbackProjectRoot, {
+    await withFakeBun(async () => runMakeListener(listenerFallbackIo.io, listenerFallbackProjectRoot, {
       args: ['SendInline'],
       flags: { event: 'user.registered' },
     }))
@@ -9471,7 +9541,7 @@ export default defineEvent({ name: 'user.registered' })
     tempDirs.push(observerProjectRoot)
     await linkWorkspaceDb(observerProjectRoot)
     const observerIo = createIo(observerProjectRoot)
-    await withFakeBun(async () => cliInternals.runMakeObserver(observerIo.io, observerProjectRoot, {
+    await withFakeBun(async () => runMakeObserver(observerIo.io, observerProjectRoot, {
       args: ['RoleObserver'],
       flags: {},
     }))
@@ -9481,7 +9551,7 @@ export default defineEvent({ name: 'user.registered' })
     tempDirs.push(factoryProjectRoot)
     await linkWorkspaceDb(factoryProjectRoot)
     const factoryIo = createIo(factoryProjectRoot)
-    await withFakeBun(async () => cliInternals.runMakeFactory(factoryIo.io, factoryProjectRoot, {
+    await withFakeBun(async () => runMakeFactory(factoryIo.io, factoryProjectRoot, {
       args: ['RoleFactory'],
       flags: {},
     }))
@@ -9494,10 +9564,10 @@ export default defineEvent({ name: 'user.registered' })
     const migrationCommandContext = {
       ...migrationCommandIo.io,
       projectRoot: migrationCommandRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const migrationCommands = cliInternals.createInternalCommands(migrationCommandContext, async (_projectRoot, _kind, _options, callback) => callback(''))
+    const migrationCommands = createInternalCommands(migrationCommandContext, async (_projectRoot, _kind, _options, callback) => callback(''))
     const makeMigration = migrationCommands.find(command => command.name === 'make:migration')
     const preparedMigration = await makeMigration?.prepare?.({ args: ['create_lessons_table'], flags: {} }, migrationCommandContext as never)
     const preparedCreateMigration = await makeMigration?.prepare?.({ args: ['create_audits_table'], flags: { create: 'audits' } }, migrationCommandContext as never)
@@ -9515,7 +9585,7 @@ export default defineEvent({ name: 'user.registered' })
       args: ['bad'],
       flags: { create: 'users', table: 'users' },
     }, migrationCommandContext as never)).rejects.toThrow('Use either "--create" or "--table", not both.')
-    await expect(withFakeBun(async () => cliInternals.runMakeMigration(migrationCommandIo.io, migrationCommandRoot, {
+    await expect(withFakeBun(async () => runMakeMigration(migrationCommandIo.io, migrationCommandRoot, {
       args: ['bad'],
       flags: { create: 'users', table: 'users' },
     }))).rejects.toThrow('Use either "--create" or "--table", not both.')
@@ -9527,10 +9597,10 @@ export default defineEvent({ name: 'user.registered' })
     const seederCommandContext = {
       ...seederCommandIo.io,
       projectRoot: seederCommandRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const seederCommands = cliInternals.createInternalCommands(seederCommandContext, async (_projectRoot, _kind, _options, callback) => callback(''))
+    const seederCommands = createInternalCommands(seederCommandContext, async (_projectRoot, _kind, _options, callback) => callback(''))
     const makeSeeder = seederCommands.find(command => command.name === 'make:seeder')
     const preparedSeeder = await makeSeeder?.prepare?.({ args: ['LessonSeeder'], flags: {} }, seederCommandContext as never)
     await expect(withFakeBun(async () => makeSeeder?.run({
@@ -9548,10 +9618,10 @@ export default defineEvent({ name: 'user.registered' })
     const jobCommandContext = {
       ...jobCommandIo.io,
       projectRoot: jobCommandRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const jobCommands = cliInternals.createInternalCommands(jobCommandContext, async (_projectRoot, _kind, _options, callback) => callback(''))
+    const jobCommands = createInternalCommands(jobCommandContext, async (_projectRoot, _kind, _options, callback) => callback(''))
     const makeBroadcast = jobCommands.find(command => command.name === 'make:broadcast')
     const makeChannel = jobCommands.find(command => command.name === 'make:channel')
     const makeEvent = jobCommands.find(command => command.name === 'make:event')
@@ -9571,10 +9641,10 @@ export default defineEvent({ name: 'user.registered' })
     const promptedMailContext = {
       ...promptedMailIo.io,
       projectRoot: jobCommandRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const promptedMakeMail = cliInternals.createInternalCommands(
+    const promptedMakeMail = createInternalCommands(
       promptedMailContext,
       async (_projectRoot, _kind, _options, callback) => callback(''),
     ).find(command => command.name === 'make:mail')
@@ -9641,7 +9711,7 @@ export default defineEvent({ name: 'user.registered' })
     const interactiveMailContext = {
       ...interactiveMailIo.io,
       projectRoot: jobCommandRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
     await expect(makeMail?.prepare?.({
@@ -9667,15 +9737,15 @@ export default defineEvent({ name: 'user.registered' })
       args: ['bad'],
       flags: { markdown: true, view: true },
     }, jobCommandContext as never)).rejects.toThrow('Use either "--markdown" or "--view", not both.')
-    await expect(withFakeBun(async () => cliInternals.runMakeListener(jobCommandIo.io, jobCommandRoot, {
+    await expect(withFakeBun(async () => runMakeListener(jobCommandIo.io, jobCommandRoot, {
       args: ['SendWelcomeEmail'],
       flags: { event: 'missing.event' },
     }))).rejects.toThrow('Unknown event: missing.event.')
-    await expect(withFakeBun(async () => cliInternals.runMakeJob(jobCommandIo.io, jobCommandRoot, {
+    await expect(withFakeBun(async () => runMakeJob(jobCommandIo.io, jobCommandRoot, {
       args: [],
       flags: {},
     }))).rejects.toThrow('A name is required.')
-    await expect(withFakeBun(async () => cliInternals.runMakeMail(jobCommandIo.io, jobCommandRoot, {
+    await expect(withFakeBun(async () => runMakeMail(jobCommandIo.io, jobCommandRoot, {
       args: [],
       flags: { type: 'markdown' },
     }))).rejects.toThrow('A name is required.')
@@ -9699,10 +9769,10 @@ export default defineEvent({ name: 'audit.activity' })
     const observerCommandContext = {
       ...observerCommandIo.io,
       projectRoot: observerCommandRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const observerCommands = cliInternals.createInternalCommands(observerCommandContext, async (_projectRoot, _kind, _options, callback) => callback(''))
+    const observerCommands = createInternalCommands(observerCommandContext, async (_projectRoot, _kind, _options, callback) => callback(''))
     const makeObserver = observerCommands.find(command => command.name === 'make:observer')
     const preparedObserver = await makeObserver?.prepare?.({ args: ['CourseObserver'], flags: {} }, observerCommandContext as never)
     await expect(withFakeBun(async () => makeObserver?.run({
@@ -9720,10 +9790,10 @@ export default defineEvent({ name: 'audit.activity' })
     const factoryCommandContext = {
       ...factoryCommandIo.io,
       projectRoot: factoryCommandRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const factoryCommands = cliInternals.createInternalCommands(factoryCommandContext, async (_projectRoot, _kind, _options, callback) => callback(''))
+    const factoryCommands = createInternalCommands(factoryCommandContext, async (_projectRoot, _kind, _options, callback) => callback(''))
     const makeFactory = factoryCommands.find(command => command.name === 'make:factory')
     const preparedFactory = await makeFactory?.prepare?.({ args: ['CourseFactory'], flags: {} }, factoryCommandContext as never)
     await expect(withFakeBun(async () => makeFactory?.run({
@@ -9939,7 +10009,7 @@ export default defineConfig({
 `)
 
     await withFakeBun(async () => {
-      await cliInternals.runProjectPrepare(projectRoot)
+      await runProjectPrepare(projectRoot)
     })
     const registry = await withFakeBun(async () => loadGeneratedProjectRegistry(projectRoot))
     expect(registry?.commands).toMatchObject([{ name: 'hello' }])
@@ -9955,14 +10025,14 @@ export default defineConfig({
     await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('"send-email": QueueJobDefinition')
     await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.not.toContain('server/jobs/send-email')
 
-    const pnpmResolution = await cliInternals.resolvePackageManagerCommand(projectRoot, 'holo:build')
+    const pnpmResolution = await resolvePackageManagerCommand(projectRoot, 'holo:build')
     expect(pnpmResolution).toEqual({ command: 'pnpm', args: ['run', 'holo:build'] })
 
     const yarnRoot = await createTempDirectory()
     tempDirs.push(yarnRoot)
     await writeProjectFile(yarnRoot, 'package.json', JSON.stringify({ name: 'fixture', private: true }, null, 2))
     await writeProjectFile(yarnRoot, 'yarn.lock', '')
-    await expect(cliInternals.resolvePackageManagerCommand(yarnRoot, 'holo:dev')).resolves.toEqual({
+    await expect(resolvePackageManagerCommand(yarnRoot, 'holo:dev')).resolves.toEqual({
       command: 'yarn',
       args: ['run', 'holo:dev'],
     })
@@ -9971,14 +10041,14 @@ export default defineConfig({
     tempDirs.push(npmRoot)
     await writeProjectFile(npmRoot, 'package.json', '{ invalid json')
     await writeProjectFile(npmRoot, 'package-lock.json', '')
-    await expect(cliInternals.resolvePackageManagerCommand(npmRoot, 'holo:dev')).resolves.toEqual({
+    await expect(resolvePackageManagerCommand(npmRoot, 'holo:dev')).resolves.toEqual({
       command: 'npm',
       args: ['run', 'holo:dev'],
     })
 
     const defaultRoot = await createTempDirectory()
     tempDirs.push(defaultRoot)
-    await expect(cliInternals.resolvePackageManagerCommand(defaultRoot, 'holo:dev')).resolves.toEqual({
+    await expect(resolvePackageManagerCommand(defaultRoot, 'holo:dev')).resolves.toEqual({
       command: 'bun',
       args: ['run', 'holo:dev'],
     })
@@ -9986,7 +10056,7 @@ export default defineConfig({
     const bunLockRoot = await createTempDirectory()
     tempDirs.push(bunLockRoot)
     await writeProjectFile(bunLockRoot, 'bun.lock', '')
-    await expect(cliInternals.resolvePackageManagerCommand(bunLockRoot, 'holo:dev')).resolves.toEqual({
+    await expect(resolvePackageManagerCommand(bunLockRoot, 'holo:dev')).resolves.toEqual({
       command: 'bun',
       args: ['run', 'holo:dev'],
     })
@@ -9994,13 +10064,13 @@ export default defineConfig({
     const pnpmLockRoot = await createTempDirectory()
     tempDirs.push(pnpmLockRoot)
     await writeProjectFile(pnpmLockRoot, 'pnpm-lock.yaml', '')
-    await expect(cliInternals.resolvePackageManagerCommand(pnpmLockRoot, 'holo:dev')).resolves.toEqual({
+    await expect(resolvePackageManagerCommand(pnpmLockRoot, 'holo:dev')).resolves.toEqual({
       command: 'pnpm',
       args: ['run', 'holo:dev'],
     })
 
     const lifecycleIo = createIo(projectRoot)
-    await expect(cliInternals.runProjectLifecycleScript(lifecycleIo.io, projectRoot, 'holo:build', () => ({
+    await expect(runProjectLifecycleScript(lifecycleIo.io, projectRoot, 'holo:build', () => ({
       status: 0,
       stdout: 'built\n',
       stderr: 'warned\n',
@@ -10010,7 +10080,7 @@ export default defineConfig({
     } as never))).resolves.toBeUndefined()
     expect(lifecycleIo.read().stdout).toContain('built')
     expect(lifecycleIo.read().stderr).toContain('warned')
-    await expect(cliInternals.runProjectLifecycleScript(lifecycleIo.io, projectRoot, 'holo:build', () => ({
+    await expect(runProjectLifecycleScript(lifecycleIo.io, projectRoot, 'holo:build', () => ({
       status: 0,
       stdout: 'built-again\n',
       stderr: '',
@@ -10019,7 +10089,7 @@ export default defineConfig({
       signal: null,
     } as never))).resolves.toBeUndefined()
     expect(lifecycleIo.read().stdout).toContain('built-again')
-    await expect(cliInternals.runProjectLifecycleScript(lifecycleIo.io, projectRoot, 'holo:build', () => ({
+    await expect(runProjectLifecycleScript(lifecycleIo.io, projectRoot, 'holo:build', () => ({
       status: 1,
       stdout: '',
       stderr: '',
@@ -10031,10 +10101,10 @@ export default defineConfig({
     const buildCommandContext = {
       ...createIo(projectRoot).io,
       projectRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const buildCommands = cliInternals.createInternalCommands(buildCommandContext, async (_projectRoot, _kind, _options, callback) => callback(''))
+    const buildCommands = createInternalCommands(buildCommandContext, async (_projectRoot, _kind, _options, callback) => callback(''))
     const buildCommand = buildCommands.find(command => command.name === 'build')
     expect(await buildCommand?.prepare?.({ args: [], flags: {} }, buildCommandContext as never)).toEqual({ args: [], flags: {} })
 
@@ -10054,10 +10124,10 @@ export default defineConfig({
     const lifecycleContext = {
       ...lifecycleCommandIo.io,
       projectRoot,
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
       loadProject: async () => ({ config: defaultProjectConfig() }),
     }
-    const lifecycleCommands = cliInternals.createInternalCommands(
+    const lifecycleCommands = createInternalCommands(
       lifecycleContext,
       async (_projectRoot, _kind, _options, callback) => callback(''),
       {},
@@ -10149,7 +10219,7 @@ export default defineAbility('reports.export', () => true)
 `)
 
     await withFakeBun(async () => {
-      await cliInternals.runProjectPrepare(projectRoot)
+      await runProjectPrepare(projectRoot)
     })
 
     await expect(readFile(join(projectRoot, '.holo-js/generated/queue.d.ts'), 'utf8')).resolves.toContain('"send-email": ExportedQueueJobDefinition')
@@ -10160,7 +10230,7 @@ export default defineAbility('reports.export', () => true)
   }, 30000)
 
   it('preserves manifest connection fields when env overrides are partial', () => {
-    expect(cliInternals.mergeRuntimeDatabaseConfig({
+    expect(mergeRuntimeDatabaseConfig({
       defaultConnection: 'primary',
       connections: {
         primary: {
@@ -10204,7 +10274,7 @@ export default defineAbility('reports.export', () => true)
 
     const cacheWriter = vi.fn(async () => '/tmp/config-cache.json')
 
-    await expect(cliInternals.cacheProjectConfig(projectRoot, cacheWriter)).resolves.toBe('/tmp/config-cache.json')
+    await expect(cacheProjectConfig(projectRoot, cacheWriter)).resolves.toBe('/tmp/config-cache.json')
     expect(cacheWriter).toHaveBeenCalledWith(
       projectRoot,
       expect.objectContaining({
@@ -10225,7 +10295,7 @@ export default {
 `)
 
     await withFakeBun(async () => {
-      await cliInternals.runProjectPrepare(projectRoot)
+      await runProjectPrepare(projectRoot)
     })
 
     const generatedTsconfigPath = join(projectRoot, '.holo-js/generated/tsconfig.json')
@@ -10237,7 +10307,7 @@ export default {
     await new Promise(resolvePromise => setTimeout(resolvePromise, 25))
 
     await withFakeBun(async () => {
-      await cliInternals.runProjectPrepare(projectRoot)
+      await runProjectPrepare(projectRoot)
     })
 
     const secondTsconfigStat = await stat(generatedTsconfigPath)
@@ -10274,7 +10344,7 @@ export default {
     let watchCallback: ((eventType: string, fileName: string | Buffer | null) => void) | undefined
     const closeWatcher = vi.fn()
 
-    const devPromise = withFakeBun(async () => cliInternals.runProjectDevServer(
+    const devPromise = withFakeBun(async () => runProjectDevServer(
       io.io,
       projectRoot,
       (() => child as never) as never,
@@ -10334,7 +10404,7 @@ throw 'string discovery failure'
 
     let watchCallback: ((eventType: string, fileName: string | Buffer | null) => void) | undefined
     const prepare = vi.fn(async () => {})
-    const devPromise = withFakeBun(async () => cliInternals.runProjectDevServer(
+    const devPromise = withFakeBun(async () => runProjectDevServer(
       io.io,
       projectRoot,
       (() => child as never) as never,
@@ -10475,7 +10545,7 @@ throw 'string discovery failure'
     let watchCallback: ((eventType: string, fileName: string | Buffer | null) => void) | undefined
     const prepare = vi.fn(async () => {})
 
-    const devPromise = withFakeBun(async () => cliInternals.runProjectDevServer(
+    const devPromise = withFakeBun(async () => runProjectDevServer(
       io.io,
       projectRoot,
       (() => child as never) as never,
@@ -10553,7 +10623,7 @@ export default undefined
     }))
 
     await withFakeBun(async () => {
-      await cliInternals.runProjectPrepare(projectRoot)
+      await runProjectPrepare(projectRoot)
     })
 
     await withFakeBun(async () => {
@@ -10586,7 +10656,7 @@ registerGeneratedTables(tables)
 `)
 
     await withFakeBun(async () => {
-      await cliInternals.runProjectPrepare(projectRoot)
+      await runProjectPrepare(projectRoot)
     })
 
     const schemaExists = await readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8')
@@ -10617,7 +10687,7 @@ export default defineConfig({
     await writeProjectFile(projectRoot, 'config/nested/hidden.ts', 'export default { hidden: true }')
 
     await withFakeBun(async () => {
-      await cliInternals.runProjectPrepare(projectRoot)
+      await runProjectPrepare(projectRoot)
     })
 
     const generatedTypes = await readFile(join(projectRoot, '.holo-js/generated/config.d.ts'), 'utf8')
@@ -10668,7 +10738,7 @@ export default defineConfig({
 `)
 
     await withFakeBun(async () => {
-      await cliInternals.runProjectPrepare(projectRoot)
+      await runProjectPrepare(projectRoot)
     })
 
     const generatedTypes = await readFile(join(projectRoot, '.holo-js/generated/config.d.ts'), 'utf8')
@@ -10683,7 +10753,7 @@ export default defineConfig({
     await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'nuxt' }, null, 2))
 
     await withFakeBun(async () => {
-      await cliInternals.runProjectPrepare(projectRoot)
+      await runProjectPrepare(projectRoot)
     })
 
     const generatedTsconfig = JSON.parse(
@@ -10708,7 +10778,7 @@ export default defineConfig({
     await writeProjectFile(projectRoot, 'app/api/auth/clerk/login/route.ts', 'export { GET } from \'../../../../../.holo-js/generated/next/auth-clerk-login-route\'\n')
 
     await withFakeBun(async () => {
-      await cliInternals.runProjectPrepare(projectRoot)
+      await runProjectPrepare(projectRoot)
     })
 
     await expect(stat(join(projectRoot, '.holo-js/generated/next/health-route.ts'))).rejects.toThrow()
@@ -10791,7 +10861,7 @@ export default defineConfig({
     ].join('\n'))
 
     await withFakeBun(async () => {
-      await cliInternals.runProjectPrepare(projectRoot)
+      await runProjectPrepare(projectRoot)
     })
 
     // User-owned files remain at the standard SvelteKit paths
@@ -10868,7 +10938,7 @@ export default defineConfig({
     ].join('\n'))
 
     await withFakeBun(async () => {
-      await cliInternals.runProjectPrepare(projectRoot)
+      await runProjectPrepare(projectRoot)
     })
 
     await expect(readFile(join(projectRoot, 'src/hooks.user.ts'), 'utf8')).resolves.toContain('export const transport')
@@ -10891,7 +10961,7 @@ export default defineConfig({
     ].join('\n'))
 
     await withFakeBun(async () => {
-      await cliInternals.runProjectPrepare(projectRoot)
+      await runProjectPrepare(projectRoot)
     })
 
     const svelteConfig = await readFile(join(projectRoot, 'svelte.config.js'), 'utf8')
@@ -10930,7 +11000,7 @@ export default defineConfig({
     ].join('\n'))
 
     await withFakeBun(async () => {
-      await cliInternals.runProjectPrepare(projectRoot)
+      await runProjectPrepare(projectRoot)
     })
 
     const svelteConfig = await readFile(join(projectRoot, 'svelte.config.js'), 'utf8')
@@ -10957,7 +11027,7 @@ export default defineConfig({
     ].join('\n'))
 
     await withFakeBun(async () => {
-      await cliInternals.runProjectPrepare(projectRoot)
+      await runProjectPrepare(projectRoot)
     })
 
     const svelteConfig = await readFile(join(projectRoot, 'svelte.config.js'), 'utf8')
@@ -10989,7 +11059,7 @@ export default defineConfig({
     ].join('\n'))
 
     await expect(withFakeBun(async () => {
-      await cliInternals.runProjectPrepare(projectRoot)
+      await runProjectPrepare(projectRoot)
     })).rejects.toThrow('Custom SvelteKit hook entrypoints are not supported')
   }, 30000)
 
@@ -11007,7 +11077,7 @@ export default defineConfig({
     errorChild.stderr = new PassThrough()
     errorChild.stdin = new PassThrough()
     const errorWatcherClose = vi.fn()
-    const devErrorPromise = withFakeBun(async () => cliInternals.runProjectDevServer(
+    const devErrorPromise = withFakeBun(async () => runProjectDevServer(
       io.io,
       projectRoot,
       (() => errorChild as never) as never,
@@ -11031,7 +11101,7 @@ export default defineConfig({
     closeChild.stderr = new PassThrough()
     closeChild.stdin = new PassThrough()
     const closeWatcher = vi.fn()
-    const devClosePromise = withFakeBun(async () => cliInternals.runProjectDevServer(
+    const devClosePromise = withFakeBun(async () => runProjectDevServer(
       io.io,
       projectRoot,
       (() => closeChild as never) as never,
@@ -11074,7 +11144,7 @@ export default defineConfig({
       })
     })
 
-    const devPromise = withFakeBun(async () => cliInternals.runProjectDevServer(
+    const devPromise = withFakeBun(async () => runProjectDevServer(
       io.io,
       projectRoot,
       (() => child as never) as never,
@@ -11122,7 +11192,7 @@ export default {
     let watchCallback: ((eventType: string, fileName: string | Buffer | null) => void) | undefined
     const prepare = vi.fn(async () => {})
 
-    const devPromise = withFakeBun(async () => cliInternals.runProjectDevServer(
+    const devPromise = withFakeBun(async () => runProjectDevServer(
       io.io,
       projectRoot,
       (() => {
@@ -11189,7 +11259,7 @@ export default {
     let watchCallback: ((eventType: string, fileName: string | Buffer | null) => void) | undefined
     const prepare = vi.fn(async () => {})
 
-    const devPromise = withFakeBun(async () => cliInternals.runProjectDevServer(
+    const devPromise = withFakeBun(async () => runProjectDevServer(
       io.io,
       projectRoot,
       (() => {
@@ -11271,7 +11341,7 @@ export default defineAppConfig({
       }
     })
 
-    const devPromise = withFakeBun(async () => cliInternals.runProjectDevServer(
+    const devPromise = withFakeBun(async () => runProjectDevServer(
       io.io,
       projectRoot,
       (() => child as never) as never,
@@ -11330,7 +11400,7 @@ export default {
     const watchModes: Array<boolean | undefined> = []
     const watchers = new Map<string, (eventType: string, fileName: string | Buffer | null) => void>()
     const prepare = vi.fn(async () => {})
-    const devPromise = withFakeBun(async () => cliInternals.runProjectDevServer(
+    const devPromise = withFakeBun(async () => runProjectDevServer(
       io.io,
       projectRoot,
       (() => child as never) as never,
@@ -11380,10 +11450,10 @@ export default {
       ...commandIo.io,
       projectRoot,
       loadProject: async () => ({ manifestPath: undefined, config: await loadProjectConfig(projectRoot, { required: true }).then(entry => entry.config) }),
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
     }
 
-    const commands = cliInternals.createInternalCommands(
+    const commands = createInternalCommands(
       commandContext as never,
       async (_projectRoot, _kind, _options, callback) => callback(''),
       {
@@ -11494,7 +11564,7 @@ export default {
       flags: {},
     })
 
-    expect(cliInternals.buildQueueWorkArgs({
+    expect(buildQueueWorkArgs({
       connection: 'redis',
       queue: ['emails', 'critical'],
       once: true,
@@ -11511,17 +11581,17 @@ export default {
       '--sleep',
       '3',
     ])
-    expect(cliInternals.isQueueListenRelevantPath('server/jobs/send-email.ts', await loadProjectConfig(projectRoot, { required: true }))).toBe(true)
-    expect(cliInternals.isQueueListenRelevantPath('server/services/mail/send.ts', await loadProjectConfig(projectRoot, { required: true }))).toBe(true)
-    expect(cliInternals.isQueueListenRelevantPath('.holo-js/generated/jobs.ts', await loadProjectConfig(projectRoot, { required: true }))).toBe(true)
-    expect(cliInternals.isQueueListenRelevantPath('.holo-js/runtime/cli/bundle/report.mjs', await loadProjectConfig(projectRoot, { required: true }))).toBe(false)
-    expect(cliInternals.isQueueListenRelevantPath('.holo-js\\runtime\\cli\\bundle\\report.mjs', await loadProjectConfig(projectRoot, { required: true }))).toBe(false)
-    expect(cliInternals.isQueueListenRelevantPath('.env.test', await loadProjectConfig(projectRoot, { required: true }))).toBe(true)
-    expect(cliInternals.isQueueListenRelevantPath('node_modules/example/index.js', await loadProjectConfig(projectRoot, { required: true }))).toBe(false)
-    expect(cliInternals.isQueueListenRelevantPath('README.md', await loadProjectConfig(projectRoot, { required: true }))).toBe(false)
-    expect(cliInternals.resolveModuleExport({ default: { ok: true } }, (value): value is { ok: true } => Boolean((value as { ok?: boolean } | undefined)?.ok))).toEqual({ ok: true })
-    expect(cliInternals.resolveModuleExport({ named: { ok: true } }, (value): value is { ok: true } => Boolean((value as { ok?: boolean } | undefined)?.ok))).toEqual({ ok: true })
-    expect(cliInternals.resolveModuleExport('nope', (_value): _value is { ok: true } => false)).toBeUndefined()
+    expect(isQueueListenRelevantPath('server/jobs/send-email.ts', await loadProjectConfig(projectRoot, { required: true }))).toBe(true)
+    expect(isQueueListenRelevantPath('server/services/mail/send.ts', await loadProjectConfig(projectRoot, { required: true }))).toBe(true)
+    expect(isQueueListenRelevantPath('.holo-js/generated/jobs.ts', await loadProjectConfig(projectRoot, { required: true }))).toBe(true)
+    expect(isQueueListenRelevantPath('.holo-js/runtime/cli/bundle/report.mjs', await loadProjectConfig(projectRoot, { required: true }))).toBe(false)
+    expect(isQueueListenRelevantPath('.holo-js\\runtime\\cli\\bundle\\report.mjs', await loadProjectConfig(projectRoot, { required: true }))).toBe(false)
+    expect(isQueueListenRelevantPath('.env.test', await loadProjectConfig(projectRoot, { required: true }))).toBe(true)
+    expect(isQueueListenRelevantPath('node_modules/example/index.js', await loadProjectConfig(projectRoot, { required: true }))).toBe(false)
+    expect(isQueueListenRelevantPath('README.md', await loadProjectConfig(projectRoot, { required: true }))).toBe(false)
+    expect(resolveModuleExport({ default: { ok: true } }, (value): value is { ok: true } => Boolean((value as { ok?: boolean } | undefined)?.ok))).toEqual({ ok: true })
+    expect(resolveModuleExport({ named: { ok: true } }, (value): value is { ok: true } => Boolean((value as { ok?: boolean } | undefined)?.ok))).toEqual({ ok: true })
+    expect(resolveModuleExport('nope', (_value): _value is { ok: true } => false)).toBeUndefined()
 
     await queueTable?.run({
       projectRoot,
@@ -11646,10 +11716,10 @@ export default {
       ...commandIo.io,
       projectRoot,
       loadProject: async () => ({ manifestPath: undefined, config: await loadProjectConfig(projectRoot, { required: true }).then(entry => entry.config) }),
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
     }
 
-    const commands = cliInternals.createInternalCommands(
+    const commands = createInternalCommands(
       commandContext as never,
       async (_projectRoot, _kind, _options, callback) => callback(''),
       {},
@@ -11732,10 +11802,10 @@ export default {
       ...commandIo.io,
       projectRoot,
       loadProject: async () => ({ manifestPath: undefined, config: await loadProjectConfig(projectRoot, { required: true }).then(entry => entry.config) }),
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
     }
 
-    const commands = cliInternals.createInternalCommands(
+    const commands = createInternalCommands(
       commandContext as never,
       async (_projectRoot, _kind, _options, callback) => callback(''),
       {},
@@ -11787,7 +11857,7 @@ export default {
       const commands = isolatedCli.createInternalCommands({
         ...io.io,
         projectRoot,
-        registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+        registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
         loadProject: async () => ({ config: defaultProjectConfig() }),
       } as never)
 
@@ -11838,10 +11908,10 @@ export default {
       ...commandIo.io,
       projectRoot,
       loadProject: async () => ({ manifestPath: undefined, config: await loadProjectConfig(projectRoot, { required: true }).then(entry => entry.config) }),
-      registry: [] as Array<ReturnType<typeof cliInternals.createAppCommandDefinition>>,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
     }
 
-    const commands = cliInternals.createInternalCommands(
+    const commands = createInternalCommands(
       commandContext as never,
       async (_projectRoot, _kind, _options, callback) => callback(''),
       {
@@ -11940,7 +12010,7 @@ export default {
       args: [],
       flags: {},
     })
-    expect(cliInternals.buildQueueWorkArgs({
+    expect(buildQueueWorkArgs({
       help: true,
       h: true,
       once: true,
@@ -12047,8 +12117,8 @@ export default {
     const builtEntrypointPath = resolve(workspaceRoot, 'packages/cli/src/bin/holo.mjs')
     await writeFile(builtEntrypointPath, '#!/usr/bin/env node\n', 'utf8')
     try {
-      expect(cliInternals.resolveCliEntrypointPath()).toBe(builtEntrypointPath)
-      const runnableEntrypoint = await cliInternals.resolveRunnableCliEntrypoint()
+      expect(resolveCliEntrypointPath()).toBe(builtEntrypointPath)
+      const runnableEntrypoint = await resolveRunnableCliEntrypoint()
       try {
         expect(runnableEntrypoint.path).toBe(builtEntrypointPath)
       } finally {
@@ -12093,7 +12163,7 @@ export default defineJob({
       return child as never
     })
     const watcherClose = vi.fn()
-    const listenPromise = withFakeBun(async () => cliInternals.runQueueListen(
+    const listenPromise = withFakeBun(async () => runQueueListen(
       io.io,
       projectRoot,
       {},
@@ -12133,23 +12203,23 @@ export default defineDatabaseConfig({
 `)
     const io = createIo(projectRoot)
 
-    await expect(cliInternals.readQueueRestartSignal(projectRoot)).resolves.toBeUndefined()
-    const signalPath = await cliInternals.writeQueueRestartSignal(projectRoot, 1234)
-    expect(signalPath).toBe(cliInternals.resolveQueueRestartSignalPath(projectRoot))
-    await expect(cliInternals.readQueueRestartSignal(projectRoot)).resolves.toBe(1234)
-    await expect(cliInternals.hasQueueRestartSignalSince(projectRoot, 1200)).resolves.toBe(true)
-    await expect(cliInternals.hasQueueRestartSignalSince(projectRoot, 1300)).resolves.toBe(false)
-    await writeFile(cliInternals.resolveQueueRestartSignalPath(projectRoot), 'NaN\n', 'utf8')
-    await expect(cliInternals.readQueueRestartSignal(projectRoot)).resolves.toBeUndefined()
+    await expect(readQueueRestartSignal(projectRoot)).resolves.toBeUndefined()
+    const signalPath = await writeQueueRestartSignal(projectRoot, 1234)
+    expect(signalPath).toBe(resolveQueueRestartSignalPath(projectRoot))
+    await expect(readQueueRestartSignal(projectRoot)).resolves.toBe(1234)
+    await expect(hasQueueRestartSignalSince(projectRoot, 1200)).resolves.toBe(true)
+    await expect(hasQueueRestartSignalSince(projectRoot, 1300)).resolves.toBe(false)
+    await writeFile(resolveQueueRestartSignalPath(projectRoot), 'NaN\n', 'utf8')
+    await expect(readQueueRestartSignal(projectRoot)).resolves.toBeUndefined()
 
-    await expect(withFakeBun(async () => cliInternals.runQueueRestartCommand(io.io, projectRoot))).resolves.toBeUndefined()
+    await expect(withFakeBun(async () => runQueueRestartCommand(io.io, projectRoot))).resolves.toBeUndefined()
     expect(io.read().stdout).toContain('Restart signal written')
 
-    await expect(withFakeBun(async () => cliInternals.runQueueWorkCommand(io.io, projectRoot, {
+    await expect(withFakeBun(async () => runQueueWorkCommand(io.io, projectRoot, {
       once: true,
     }))).rejects.toThrow('requires an async-capable driver')
 
-    await expect(withFakeBun(async () => cliInternals.runQueueClearCommand(io.io, projectRoot, undefined, undefined))).resolves.toBeUndefined()
+    await expect(withFakeBun(async () => runQueueClearCommand(io.io, projectRoot, undefined, undefined))).resolves.toBeUndefined()
     expect(io.read().stdout).toContain('Cleared 0 pending job(s).')
   })
 
@@ -12203,7 +12273,7 @@ export default defineJob({
     } as unknown as Awaited<ReturnType<typeof initializeHolo>>
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      const isolatedCliInternals = await import('../src/queue')
       const queueModule = await import('@holo-js/queue')
       mockedRuntime.shutdown = vi.fn(async () => {
         queueModule.resetQueueRuntime()
@@ -12330,7 +12400,7 @@ export default defineJob({
     const cleanup = vi.fn(async () => {})
     const onJobFailed = vi.fn()
 
-    await expect(cliInternals.runQueueWorkCommand(io.io, projectRoot, {
+    await expect(runQueueWorkCommand(io.io, projectRoot, {
       onJobFailed,
     }, {
       getEnvironment: async () => ({
@@ -12375,7 +12445,7 @@ export default defineJob({
     const io = createIo(projectRoot)
     const cleanup = vi.fn(async () => {})
 
-    await expect(cliInternals.runQueueWorkCommand(io.io, projectRoot, {
+    await expect(runQueueWorkCommand(io.io, projectRoot, {
       shouldStop: async () => false,
     }, {
       getEnvironment: async () => ({
@@ -12417,7 +12487,7 @@ export default defineJob({
     const io = createIo(projectRoot)
     const cleanup = vi.fn(async () => {})
 
-    await expect(cliInternals.runQueueWorkCommand(io.io, projectRoot, {
+    await expect(runQueueWorkCommand(io.io, projectRoot, {
       shouldStop: async () => true,
     }, {
       getEnvironment: async () => ({
@@ -12447,9 +12517,9 @@ export default defineJob({
     tempDirs.push(projectRoot)
     const io = createIo(projectRoot)
     const cleanup = vi.fn(async () => {})
-    await cliInternals.writeQueueRestartSignal(projectRoot, Date.now() + 1000)
+    await writeQueueRestartSignal(projectRoot, Date.now() + 1000)
 
-    await expect(cliInternals.runQueueWorkCommand(io.io, projectRoot, {}, {
+    await expect(runQueueWorkCommand(io.io, projectRoot, {}, {
       getEnvironment: async () => ({
         runtime: {} as never,
         project: await loadProjectConfig(projectRoot, { required: true }),
@@ -12478,7 +12548,7 @@ export default defineJob({
     const shutdown = vi.fn(async () => {})
     const clear = vi.fn(async () => 4)
 
-    await expect(cliInternals.runQueueClearCommand(io.io, projectRoot, 'redis', undefined, {
+    await expect(runQueueClearCommand(io.io, projectRoot, 'redis', undefined, {
       initialize: async () => ({ shutdown }) as never,
       clear: clear as never,
     })).resolves.toBeUndefined()
@@ -12495,7 +12565,7 @@ export default defineJob({
     const shutdown = vi.fn(async () => {})
     const clear = vi.fn(async () => 1)
 
-    await expect(cliInternals.runQueueClearCommand(io.io, projectRoot, 'redis', [], {
+    await expect(runQueueClearCommand(io.io, projectRoot, 'redis', [], {
       initialize: async () => ({ shutdown }) as never,
       clear: clear as never,
     })).resolves.toBeUndefined()
@@ -12503,7 +12573,7 @@ export default defineJob({
     expect(clear).toHaveBeenCalledWith('redis', {})
     expect(shutdown).toHaveBeenCalledTimes(1)
 
-    await expect(cliInternals.runQueueClearCommand(io.io, projectRoot, 'redis', ['emails'], {
+    await expect(runQueueClearCommand(io.io, projectRoot, 'redis', ['emails'], {
       initialize: async () => ({ shutdown }) as never,
       clear: clear as never,
     })).resolves.toBeUndefined()
@@ -12530,7 +12600,7 @@ export default defineJob({
     })
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      const isolatedCliInternals = await import('../src/queue')
       await expect(isolatedCliInternals.runQueueClearCommand(io.io, projectRoot, 'redis', undefined, {
         initialize: async () => ({ shutdown }) as never,
       })).resolves.toBeUndefined()
@@ -12561,7 +12631,7 @@ export default defineJob({
     })
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      const isolatedCliInternals = await import('../src/queue')
       const clear = vi.fn(async () => 0)
       const list = vi.fn(async () => [])
       const retry = vi.fn(async () => 0)
@@ -12652,7 +12722,7 @@ export default defineJob({
     })
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      const isolatedCliInternals = await import('../src/queue')
       await expect(isolatedCliInternals.runQueueClearCommand(io.io, projectRoot, 'redis', ['emails'])).resolves.toBeUndefined()
 
       const queueModule = await import(queueModuleSpecifier)
@@ -12744,7 +12814,7 @@ export default defineJob({
     }))
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      const isolatedCliInternals = await import('../src/queue')
       await expect(isolatedCliInternals.runQueueClearCommand(io.io, projectRoot, 'database', undefined)).resolves.toBeUndefined()
 
       const dbModule = await import('@holo-js/db') as typeof HoloDbModule
@@ -12853,7 +12923,7 @@ export default defineJob({
     }))
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      const isolatedCliInternals = await import('../src/queue')
       await expect(
         isolatedCliInternals.runQueueClearCommand(io.io, projectRoot, 'database', undefined),
       ).rejects.toThrow('database queue init failed')
@@ -12926,7 +12996,7 @@ export default defineJob({
     }))
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      const isolatedCliInternals = await import('../src/cache')
 
       await isolatedCliInternals.runCacheClearCommand(io.io, projectRoot)
       await isolatedCliInternals.runCacheForgetCommand(io.io, projectRoot, 'present')
@@ -13004,7 +13074,7 @@ export default defineJob({
     }))
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      const isolatedCliInternals = await import('../src/cache')
       await isolatedCliInternals.runCacheClearCommand(io.io, projectRoot)
       expect(flush).toHaveBeenCalledTimes(1)
     } finally {
@@ -13130,10 +13200,10 @@ export default defineCacheConfig({
     const defaultProjectRoot = await createTempProject()
     tempDirs.push(defaultProjectRoot)
 
-    await withFakeBun(async () => cliInternals.runQueueTableCommand(createIo(defaultProjectRoot).io, defaultProjectRoot))
-    await expect(withFakeBun(async () => cliInternals.runQueueTableCommand(createIo(defaultProjectRoot).io, defaultProjectRoot))).rejects.toThrow('A migration for table "jobs" already exists.')
-    await withFakeBun(async () => cliInternals.runQueueFailedTableCommand(createIo(defaultProjectRoot).io, defaultProjectRoot))
-    await expect(withFakeBun(async () => cliInternals.runQueueFailedTableCommand(createIo(defaultProjectRoot).io, defaultProjectRoot))).rejects.toThrow('A migration for table "failed_jobs" already exists.')
+    await withFakeBun(async () => runQueueTableCommand(createIo(defaultProjectRoot).io, defaultProjectRoot))
+    await expect(withFakeBun(async () => runQueueTableCommand(createIo(defaultProjectRoot).io, defaultProjectRoot))).rejects.toThrow('A migration for table "jobs" already exists.')
+    await withFakeBun(async () => runQueueFailedTableCommand(createIo(defaultProjectRoot).io, defaultProjectRoot))
+    await expect(withFakeBun(async () => runQueueFailedTableCommand(createIo(defaultProjectRoot).io, defaultProjectRoot))).rejects.toThrow('A migration for table "failed_jobs" already exists.')
 
     const defaultMigrationFiles = await readdir(join(defaultProjectRoot, 'server/db/migrations'))
     const jobsMigrationPath = join(defaultProjectRoot, 'server/db/migrations', defaultMigrationFiles.find(name => name.endsWith('create_jobs_table.ts'))!)
@@ -13168,19 +13238,19 @@ export default defineQueueConfig({
 })
 `)
 
-    expect(cliInternals.resolveDatabaseQueueTables(await loadConfigDirectory(customProjectRoot).then(config => config.queue))).toEqual(['jobs', 'report_jobs'])
-    await withFakeBun(async () => cliInternals.runQueueTableCommand(createIo(customProjectRoot).io, customProjectRoot))
-    await withFakeBun(async () => cliInternals.runQueueFailedTableCommand(createIo(customProjectRoot).io, customProjectRoot))
+    expect(resolveDatabaseQueueTables(await loadConfigDirectory(customProjectRoot).then(config => config.queue))).toEqual(['jobs', 'report_jobs'])
+    await withFakeBun(async () => runQueueTableCommand(createIo(customProjectRoot).io, customProjectRoot))
+    await withFakeBun(async () => runQueueFailedTableCommand(createIo(customProjectRoot).io, customProjectRoot))
     const customMigrations = await readdir(join(customProjectRoot, 'server/db/migrations'))
     expect(customMigrations.some(name => name.endsWith('create_jobs_table.ts'))).toBe(true)
     expect(customMigrations.some(name => name.endsWith('create_report_jobs_table.ts'))).toBe(true)
     expect(customMigrations.some(name => name.endsWith('create_queue_failed_jobs_table.ts'))).toBe(true)
-    expect(cliInternals.renderQueueTableMigration('jobs')).toContain('table.bigInteger(\'available_at\')')
-    expect(cliInternals.renderFailedJobsTableMigration('failed_jobs')).toContain('table.bigInteger(\'failed_at\')')
+    expect(renderQueueTableMigration('jobs')).toContain('table.bigInteger(\'available_at\')')
+    expect(renderFailedJobsTableMigration('failed_jobs')).toContain('table.bigInteger(\'failed_at\')')
 
     const failedOnlyProjectRoot = await createTempProject()
     tempDirs.push(failedOnlyProjectRoot)
-    await withFakeBun(async () => cliInternals.runQueueFailedTableCommand(createIo(failedOnlyProjectRoot).io, failedOnlyProjectRoot))
+    await withFakeBun(async () => runQueueFailedTableCommand(createIo(failedOnlyProjectRoot).io, failedOnlyProjectRoot))
     expect((await readdir(join(failedOnlyProjectRoot, 'server/db/migrations'))).some(name => name.endsWith('create_failed_jobs_table.ts'))).toBe(true)
 
     const disabledFailedProjectRoot = await createTempProject()
@@ -13192,7 +13262,7 @@ export default defineQueueConfig({
   failed: false,
 })
 `)
-    await withFakeBun(async () => cliInternals.runQueueFailedTableCommand(createIo(disabledFailedProjectRoot).io, disabledFailedProjectRoot))
+    await withFakeBun(async () => runQueueFailedTableCommand(createIo(disabledFailedProjectRoot).io, disabledFailedProjectRoot))
     expect((await readdir(join(disabledFailedProjectRoot, 'server/db/migrations'))).some(name => name.endsWith('create_failed_jobs_table.ts'))).toBe(true)
 
     const queueIo = createIo(customProjectRoot)
@@ -13220,19 +13290,19 @@ export default defineQueueConfig({
     const forget = vi.fn(async () => true)
     const flush = vi.fn(async () => 3)
 
-    await cliInternals.runQueueFailedCommand(queueIo.io, customProjectRoot, {
+    await runQueueFailedCommand(queueIo.io, customProjectRoot, {
       initialize,
       list: list as never,
     })
-    await cliInternals.runQueueRetryCommand(queueIo.io, customProjectRoot, 'all', {
+    await runQueueRetryCommand(queueIo.io, customProjectRoot, 'all', {
       initialize,
       retry: retry as never,
     })
-    await cliInternals.runQueueForgetCommand(queueIo.io, customProjectRoot, 'failed-1', {
+    await runQueueForgetCommand(queueIo.io, customProjectRoot, 'failed-1', {
       initialize,
       forget: forget as never,
     })
-    await cliInternals.runQueueFlushCommand(queueIo.io, customProjectRoot, {
+    await runQueueFlushCommand(queueIo.io, customProjectRoot, {
       initialize,
       flush: flush as never,
     })
@@ -13249,7 +13319,7 @@ export default defineQueueConfig({
     expect(queueIo.read().stdout).toContain('Flushed 3 failed job(s).')
 
     const emptyIo = createIo(customProjectRoot)
-    await cliInternals.runQueueFailedCommand(emptyIo.io, customProjectRoot, {
+    await runQueueFailedCommand(emptyIo.io, customProjectRoot, {
       initialize,
       list: vi.fn(async () => []),
     })
@@ -13327,9 +13397,9 @@ export default defineQueueConfig({
 
     const actualFlushIo = createIo(actualFlushProjectRoot)
     const actualFailedIo = createIo(actualFlushProjectRoot)
-    await cliInternals.runQueueFailedCommand(actualFailedIo.io, actualFlushProjectRoot)
+    await runQueueFailedCommand(actualFailedIo.io, actualFlushProjectRoot)
     expect(actualFailedIo.read().stdout).toContain('failed-2 reports.send connection=database queue=default failedAt=300')
-    await cliInternals.runQueueFlushCommand(actualFlushIo.io, actualFlushProjectRoot)
+    await runQueueFlushCommand(actualFlushIo.io, actualFlushProjectRoot)
     expect(actualFlushIo.read().stdout).toContain('Flushed 1 failed job(s).')
 
     const actualRetryRuntime = await initializeHolo(actualFlushProjectRoot)
@@ -13344,11 +13414,11 @@ export default defineQueueConfig({
     }
 
     const actualRetryIo = createIo(actualFlushProjectRoot)
-    await cliInternals.runQueueRetryCommand(actualRetryIo.io, actualFlushProjectRoot, 'failed-3')
+    await runQueueRetryCommand(actualRetryIo.io, actualFlushProjectRoot, 'failed-3')
     expect(actualRetryIo.read().stdout).toContain('Retried 1 failed job(s).')
 
     const actualForgetIo = createIo(actualFlushProjectRoot)
-    await cliInternals.runQueueForgetCommand(actualForgetIo.io, actualFlushProjectRoot, 'missing')
+    await runQueueForgetCommand(actualForgetIo.io, actualFlushProjectRoot, 'missing')
     expect(actualForgetIo.read().stdout).toContain('Failed job missing was not found.')
   })
 
@@ -13371,8 +13441,8 @@ export default defineCacheConfig({
 })
 `)
 
-    await withFakeBun(async () => cliInternals.runCacheTableCommand(createIo(defaultProjectRoot).io, defaultProjectRoot))
-    await expect(withFakeBun(async () => cliInternals.runCacheTableCommand(createIo(defaultProjectRoot).io, defaultProjectRoot))).rejects.toThrow('A migration for cache tables "cache" and "cache_locks" already exists.')
+    await withFakeBun(async () => runCacheTableCommand(createIo(defaultProjectRoot).io, defaultProjectRoot))
+    await expect(withFakeBun(async () => runCacheTableCommand(createIo(defaultProjectRoot).io, defaultProjectRoot))).rejects.toThrow('A migration for cache tables "cache" and "cache_locks" already exists.')
 
     const defaultMigrationFiles = await readdir(join(defaultProjectRoot, 'server/db/migrations'))
     const defaultMigrationPath = join(defaultProjectRoot, 'server/db/migrations', defaultMigrationFiles.find(name => name.endsWith('create_cache_cache_table.ts'))!)
@@ -13408,18 +13478,18 @@ export default defineCacheConfig({
 })
 `)
 
-    expect(cliInternals.resolveDatabaseCacheTables(await loadConfigDirectory(customProjectRoot).then(config => config.cache))).toEqual([
+    expect(resolveDatabaseCacheTables(await loadConfigDirectory(customProjectRoot).then(config => config.cache))).toEqual([
       { table: 'cache_entries', lockTable: 'cache_entry_locks' },
       { table: 'report_cache', lockTable: 'report_cache_locks' },
     ])
 
-    await withFakeBun(async () => cliInternals.runCacheTableCommand(createIo(customProjectRoot).io, customProjectRoot))
+    await withFakeBun(async () => runCacheTableCommand(createIo(customProjectRoot).io, customProjectRoot))
     const customMigrations = await readdir(join(customProjectRoot, 'server/db/migrations'))
     expect(customMigrations.some(name => name.endsWith('create_cache_entries_cache_table.ts'))).toBe(true)
     expect(customMigrations.some(name => name.endsWith('create_report_cache_cache_table.ts'))).toBe(true)
-    expect(cliInternals.renderCacheTableMigration('cache_entries', 'cache_entry_locks')).toContain('table.bigInteger(\'expires_at\').nullable()')
-    expect(cliInternals.renderCacheTableMigration(`cache'entries`, `cache\\locks`)).toContain('cache\\\'entries')
-    expect(cliInternals.renderCacheTableMigration(`cache'entries`, `cache\\locks`)).toContain('cache\\\\locks')
+    expect(renderCacheTableMigration('cache_entries', 'cache_entry_locks')).toContain('table.bigInteger(\'expires_at\').nullable()')
+    expect(renderCacheTableMigration(`cache'entries`, `cache\\locks`)).toContain('cache\\\'entries')
+    expect(renderCacheTableMigration(`cache'entries`, `cache\\locks`)).toContain('cache\\\\locks')
 
     const fileOnlyProjectRoot = await createTempProject()
     tempDirs.push(fileOnlyProjectRoot)
@@ -13438,7 +13508,7 @@ export default defineCacheConfig({
 `)
 
     await expect(
-      withFakeBun(async () => cliInternals.runCacheTableCommand(createIo(fileOnlyProjectRoot).io, fileOnlyProjectRoot)),
+      withFakeBun(async () => runCacheTableCommand(createIo(fileOnlyProjectRoot).io, fileOnlyProjectRoot)),
     ).rejects.toThrow('The configured cache drivers do not use the database driver.')
 
     vi.resetModules()
@@ -13452,7 +13522,7 @@ export default defineCacheConfig({
       }
     })
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      const isolatedCliInternals = await import('../src/cache-migrations')
       await expect(isolatedCliInternals.loadCacheConfig(fileOnlyProjectRoot)).rejects.toThrow('Cache config is missing or malformed')
     } finally {
       vi.doUnmock('@holo-js/config')
@@ -13478,7 +13548,7 @@ export default defineCacheConfig({
       }
     })
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      const isolatedCliInternals = await import('../src/cache-migrations')
       await expect(isolatedCliInternals.loadCacheConfig(fileOnlyProjectRoot)).rejects.toThrow('must define non-empty "table" and "lockTable" strings')
     } finally {
       vi.doUnmock('@holo-js/config')
@@ -13510,7 +13580,7 @@ export default defineCacheConfig({
 `)
 
     await expect(
-      withFakeBun(async () => cliInternals.runCacheTableCommand(createIo(duplicateProjectRoot).io, duplicateProjectRoot)),
+      withFakeBun(async () => runCacheTableCommand(createIo(duplicateProjectRoot).io, duplicateProjectRoot)),
     ).rejects.toThrow('A migration for cache tables "report_cache" and "other_cache_locks" already exists.')
   })
 
@@ -13542,7 +13612,7 @@ export default defineDatabaseConfig({
     })
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      const isolatedCliInternals = await import('../src/queue')
       const environment = await withFakeBun(async () => isolatedCliInternals.getQueueRuntimeEnvironment(projectRoot))
       expect(environment.bundledJobs).toEqual([])
       await environment.cleanup()
@@ -13566,7 +13636,7 @@ export default defineDatabaseConfig({
       clearAll: vi.fn(),
     }))
 
-    await expect(cliInternals.runRateLimitClearCommand(io.io, projectRoot, {
+    await expect(runRateLimitClearCommand(io.io, projectRoot, {
       limiter: 'login',
     }, {
       loadConfig: async () => ({
@@ -13640,13 +13710,13 @@ export default defineDatabaseConfig({
       } as never),
     })
 
-    await expect(cliInternals.runRateLimitClearCommand(io.io, projectRoot, {
+    await expect(runRateLimitClearCommand(io.io, projectRoot, {
       limiter: 'login',
     }, createDependencies(true))).resolves.toBeUndefined()
     expect(io.read().stdout).toContain('Cleared 1 rate-limit bucket(s).')
 
     const emptyIo = createIo(projectRoot)
-    await expect(cliInternals.runRateLimitClearCommand(emptyIo.io, projectRoot, {
+    await expect(runRateLimitClearCommand(emptyIo.io, projectRoot, {
       limiter: 'login',
     }, createDependencies(false))).resolves.toBeUndefined()
     expect(emptyIo.read().stdout).toContain('Cleared 0 rate-limit bucket(s).')
@@ -13657,7 +13727,7 @@ export default defineDatabaseConfig({
     tempDirs.push(projectRoot)
     const io = createIo(projectRoot)
 
-    await expect(cliInternals.runRateLimitClearCommand(io.io, projectRoot, {
+    await expect(runRateLimitClearCommand(io.io, projectRoot, {
       limiter: 'login',
     }, {
       loadConfig: async () => ({
@@ -13693,7 +13763,7 @@ export default defineDatabaseConfig({
       loadProject: vi.fn(async () => await loadProjectConfig(projectRoot, { required: true })),
     }
     const rateLimitExecutor = vi.fn(async () => {})
-    const commands = cliInternals.createInternalCommands(
+    const commands = createInternalCommands(
       internalContext as never,
       undefined,
       {},
@@ -13834,7 +13904,7 @@ export default defineDatabaseConfig({
     const close = vi.fn(async () => {})
     const resetSecurityRuntime = vi.fn()
 
-    await expect(cliInternals.runRateLimitClearCommand(io.io, projectRoot, {
+    await expect(runRateLimitClearCommand(io.io, projectRoot, {
       limiter: 'login',
     }, {
       loadConfig: async () => ({
@@ -13886,7 +13956,7 @@ export default defineDatabaseConfig({
     const close = vi.fn(async () => {})
     const resetSecurityRuntime = vi.fn()
 
-    await expect(cliInternals.runRateLimitClearCommand(io.io, projectRoot, {
+    await expect(runRateLimitClearCommand(io.io, projectRoot, {
       limiter: 'login',
     }, {
       loadConfig: async () => ({
@@ -13936,7 +14006,7 @@ export default defineDatabaseConfig({
     })
     const resetSecurityRuntime = vi.fn()
 
-    await expect(cliInternals.runRateLimitClearCommand(io.io, projectRoot, {
+    await expect(runRateLimitClearCommand(io.io, projectRoot, {
       limiter: 'login',
     }, {
       loadConfig: async () => ({
@@ -14067,7 +14137,7 @@ export function createSecurityRedisAdapter(config) {
     vi.stubGlobal('__holoCliSecurityCalls', [])
 
     try {
-      await expect(cliInternals.runRateLimitClearCommand(io.io, projectRoot, {
+      await expect(runRateLimitClearCommand(io.io, projectRoot, {
         limiter: 'login',
         key: 'user-1',
       })).resolves.toBeUndefined()
@@ -14165,7 +14235,7 @@ export default defineJob({
 `)
 
     await withFakeBun(async () => {
-      const environment = await cliInternals.getQueueRuntimeEnvironment(projectRoot)
+      const environment = await getQueueRuntimeEnvironment(projectRoot)
       try {
         const registry = await loadGeneratedProjectRegistry(projectRoot)
         expect(registry?.jobs).toEqual([
@@ -14250,7 +14320,7 @@ export default defineJob({
     })
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      const isolatedCliInternals = await import('../src/broadcast')
       const io = createIo(projectRoot)
       let sigintHandler: (() => void) | undefined
       const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((event: string, listener: (...args: unknown[]) => void) => {
@@ -14352,7 +14422,7 @@ export default defineJob({
     })
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      const isolatedCliInternals = await import('../src/queue')
       await expect(isolatedCliInternals.getQueueRuntimeEnvironment(projectRoot)).rejects.toThrow(
         'Discovered job "server/jobs/broken.mjs" does not export a Holo job.',
       )
@@ -14417,7 +14487,7 @@ export default defineJob({
     })
 
     try {
-      const { cliInternals: isolatedCliInternals } = await import('../src/cli-internals')
+      const isolatedCliInternals = await import('../src/queue')
       await withFakeBun(async () => {
         const environment = await isolatedCliInternals.getQueueRuntimeEnvironment(projectRoot)
         try {
@@ -14454,7 +14524,7 @@ export default defineJob({
     let watchCallback: ((eventType: string, fileName: string | Buffer | null) => void) | undefined
     const prepare = vi.fn(async () => {})
 
-    const listenPromise = withFakeBun(async () => cliInternals.runQueueListen(
+    const listenPromise = withFakeBun(async () => runQueueListen(
       io.io,
       projectRoot,
       {
@@ -14542,7 +14612,7 @@ export default defineJob({
       })
     })
 
-    const listenPromise = withFakeBun(async () => cliInternals.runQueueListen(
+    const listenPromise = withFakeBun(async () => runQueueListen(
       io.io,
       projectRoot,
       {},
@@ -14606,7 +14676,7 @@ export default defineJob({
       })
     })
 
-    const listenPromise = withFakeBun(async () => cliInternals.runQueueListen(
+    const listenPromise = withFakeBun(async () => runQueueListen(
       io.io,
       projectRoot,
       {},
@@ -14656,7 +14726,7 @@ export default defineJob({
       }
     })
 
-    const listenPromise = withFakeBun(async () => cliInternals.runQueueListen(
+    const listenPromise = withFakeBun(async () => runQueueListen(
       io.io,
       projectRoot,
       {},
@@ -14707,7 +14777,7 @@ export default defineJob({
       }
     })
 
-    const listenPromise = withFakeBun(async () => cliInternals.runQueueListen(
+    const listenPromise = withFakeBun(async () => runQueueListen(
       io.io,
       projectRoot,
       {},
@@ -14737,7 +14807,7 @@ export default defineJob({
     await mkdir(join(projectRoot, 'server/jobs'), { recursive: true })
     await mkdir(join(projectRoot, 'server/models'), { recursive: true })
 
-    const roots = await cliInternals.collectQueueWatchRoots(
+    const roots = await collectQueueWatchRoots(
       projectRoot,
       await loadProjectConfig(projectRoot, { required: true }),
     )
@@ -14762,7 +14832,7 @@ export default defineJob({
     await writeProjectFile(projectRoot, '.holo-js/runtime/cli/bundle/generated.mjs', 'export default true\n')
     await writeProjectFile(projectRoot, 'storage/app/media/originals/image.txt', 'binary\n')
 
-    const roots = await cliInternals.collectQueueWatchRoots(projectRoot, await loadProjectConfig(projectRoot, { required: true }))
+    const roots = await collectQueueWatchRoots(projectRoot, await loadProjectConfig(projectRoot, { required: true }))
     expect(roots).toContain(projectRoot)
     expect(roots).toContain(join(projectRoot, 'server/jobs'))
     expect(roots).toContain(join(projectRoot, 'server/services/mail'))
@@ -14779,7 +14849,7 @@ export default defineJob({
     const filePath = join(tempDir, 'project.txt')
     await writeFile(filePath, 'not a directory\n', 'utf8')
 
-    await expect(cliInternals.collectQueueWatchRoots(filePath, {} as never)).resolves.toEqual([])
+    await expect(collectQueueWatchRoots(filePath, {} as never)).resolves.toEqual([])
   })
 
   it('ignores invalid non-recursive queue:listen events and watcher registration errors', async () => {
@@ -14806,7 +14876,7 @@ export default defineJob({
     const watchers = new Map<string, (eventType: string, fileName: string | Buffer | null) => void>()
     const prepare = vi.fn(async () => {})
 
-    const listenPromise = withFakeBun(async () => cliInternals.runQueueListen(
+    const listenPromise = withFakeBun(async () => runQueueListen(
       io.io,
       projectRoot,
       {},
@@ -14861,7 +14931,7 @@ export default defineJob({
     failingWatcherChild.stderr = new PassThrough()
     failingWatcherChild.stdin = new PassThrough()
 
-    await expect(withFakeBun(async () => cliInternals.runQueueListen(
+    await expect(withFakeBun(async () => runQueueListen(
       io.io,
       projectRoot,
       {},
@@ -14880,7 +14950,7 @@ export default defineJob({
     errorChild.stderr = new PassThrough()
     errorChild.stdin = new PassThrough()
     const errorWatcherClose = vi.fn()
-    const errorPromise = withFakeBun(async () => cliInternals.runQueueListen(
+    const errorPromise = withFakeBun(async () => runQueueListen(
       io.io,
       projectRoot,
       {},
@@ -14905,7 +14975,7 @@ export default defineJob({
     closeChild.stderr = new PassThrough()
     closeChild.stdin = new PassThrough()
     const closeWatcher = vi.fn()
-    const closePromise = withFakeBun(async () => cliInternals.runQueueListen(
+    const closePromise = withFakeBun(async () => runQueueListen(
       io.io,
       projectRoot,
       {},
@@ -14943,7 +15013,7 @@ export default defineJob({
     let watchCallback: ((eventType: string, fileName: string | Buffer | null) => void) | undefined
     const prepare = vi.fn(async () => {})
 
-    const listenPromise = withFakeBun(async () => cliInternals.runQueueListen(
+    const listenPromise = withFakeBun(async () => runQueueListen(
       io.io,
       projectRoot,
       {},
@@ -15007,7 +15077,7 @@ export default defineJob({
     }> = []
     let watchCallback: ((eventType: string, fileName: string | Buffer | null) => void) | undefined
 
-    const listenPromise = withFakeBun(async () => cliInternals.runQueueListen(
+    const listenPromise = withFakeBun(async () => runQueueListen(
       io.io,
       projectRoot,
       {},
@@ -15035,7 +15105,7 @@ export default defineJob({
     }
 
     await new Promise(resolve => setTimeout(resolve, 10))
-    await cliInternals.writeQueueRestartSignal(projectRoot)
+    await writeQueueRestartSignal(projectRoot)
     spawnedChildren[0]?.emit('close', 0)
 
     for (let attempts = 0; attempts < 300 && spawnedChildren.length < 2; attempts += 1) {
@@ -15077,7 +15147,7 @@ export default defineJob({
     const watchers = new Map<string, (eventType: string, fileName: string | Buffer | null) => void>()
     const prepare = vi.fn(async () => {})
 
-    const listenPromise = withFakeBun(async () => cliInternals.runQueueListen(
+    const listenPromise = withFakeBun(async () => runQueueListen(
       io.io,
       projectRoot,
       {},
@@ -15154,7 +15224,7 @@ export default defineJob({
     child.stderr = new PassThrough()
     child.stdin = new PassThrough()
 
-    await expect(withFakeBun(async () => cliInternals.runQueueListen(
+    await expect(withFakeBun(async () => runQueueListen(
       io.io,
       projectRoot,
       {},
@@ -15174,9 +15244,9 @@ export default defineJob({
   })
 
   it('ignores ENOENT and EPERM errors while registering non-recursive fallback watchers', async () => {
-    expect(cliInternals.isIgnorableWatchError(Object.assign(new Error('missing'), { code: 'ENOENT' }))).toBe(true)
-    expect(cliInternals.isIgnorableWatchError(Object.assign(new Error('denied'), { code: 'EPERM' }))).toBe(true)
-    expect(cliInternals.isIgnorableWatchError(Object.assign(new Error('blocked'), { code: 'EACCES' }))).toBe(false)
+    expect(isIgnorableWatchError(Object.assign(new Error('missing'), { code: 'ENOENT' }))).toBe(true)
+    expect(isIgnorableWatchError(Object.assign(new Error('denied'), { code: 'EPERM' }))).toBe(true)
+    expect(isIgnorableWatchError(Object.assign(new Error('blocked'), { code: 'EACCES' }))).toBe(false)
 
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
@@ -15196,7 +15266,7 @@ export default {
     child.stderr = new PassThrough()
     child.stdin = new PassThrough()
 
-    const devPromise = withFakeBun(async () => cliInternals.runProjectDevServer(
+    const devPromise = withFakeBun(async () => runProjectDevServer(
       io.io,
       projectRoot,
       (() => child as never) as never,
@@ -15240,7 +15310,7 @@ export default {
     child.stderr = new PassThrough()
     child.stdin = new PassThrough()
 
-    await expect(withFakeBun(async () => cliInternals.runProjectDevServer(
+    await expect(withFakeBun(async () => runProjectDevServer(
       io.io,
       projectRoot,
       (() => child as never) as never,
@@ -15275,7 +15345,7 @@ export default {
     const closeWatcher = vi.fn()
     const watchers = new Map<string, (eventType: string, fileName: string | Buffer | null) => void>()
     const prepare = vi.fn(async () => {})
-    const devPromise = withFakeBun(async () => cliInternals.runProjectDevServer(
+    const devPromise = withFakeBun(async () => runProjectDevServer(
       io.io,
       projectRoot,
       (() => child as never) as never,
@@ -15323,7 +15393,7 @@ export default {
     child.stderr = new PassThrough()
     child.stdin = new PassThrough()
 
-    await expect(withFakeBun(async () => cliInternals.runProjectDevServer(
+    await expect(withFakeBun(async () => runProjectDevServer(
       io.io,
       projectRoot,
       (() => child as never) as never,
@@ -15953,7 +16023,7 @@ export default {
       } as never
     })
 
-    await expect(cliInternals.getRuntimeEnvironment(projectRoot)).rejects.toThrow('boom')
+    await expect(getRuntimeEnvironment(projectRoot)).rejects.toThrow('boom')
     await expect(readdir(join(projectRoot, '.holo-js/runtime/cli'))).resolves.toEqual([])
   })
 

@@ -270,272 +270,6 @@ export async function getRuntimeEnvironment(projectRoot: string): Promise<Runtim
 }
 /* v8 ignore stop */
 
-/* v8 ignore start */
-export const nodeRuntimeScript = `
-import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
-import {
-  configureDB,
-  createSchemaService,
-  createMigrationService,
-  createSeederService,
-  registerGeneratedTables,
-  renderGeneratedSchemaModule,
-  resetDB,
-  resolveRuntimeConnectionManagerOptions,
-} from '@holo-js/db'
-
-const payload = JSON.parse(process.env.HOLO_RUNTIME_PAYLOAD ?? '{}')
-process.chdir(payload.projectRoot)
-
-function isRecord(value) {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
-}
-
-async function loadModule(path) {
-  return import(\`\${path}?t=\${Date.now()}\`)
-}
-
-function resolveExport(moduleValue, matcher) {
-  if (isRecord(moduleValue) && matcher(moduleValue.default)) {
-    return moduleValue.default
-  }
-
-  if (isRecord(moduleValue)) {
-    for (const value of Object.values(moduleValue)) {
-      if (matcher(value)) {
-        return value
-      }
-    }
-  }
-
-  return undefined
-}
-
-const isModel = (value) => isRecord(value) && isRecord(value.definition) && value.definition.kind === 'model' && typeof value.prune === 'function'
-const isMigration = (value) => isRecord(value) && typeof value.up === 'function'
-const isSeeder = (value) => isRecord(value) && typeof value.name === 'string' && typeof value.run === 'function'
-const isTable = (value) => isRecord(value) && value.kind === 'table' && typeof value.tableName === 'string' && isRecord(value.columns)
-const RUNTIME_MIGRATION_NAME_PATTERN = ${RUNTIME_MIGRATION_NAME_PATTERN}
-const inferRuntimeMigrationName = ${inferRuntimeMigrationName.toString()}
-const normalizeRuntimeMigration = ${normalizeRuntimeMigration.toString()}
-const compileFreshDropIdentifierPath = ${compileFreshDropIdentifierPath.toString()}
-const dropAllTablesForFresh = ${dropAllTablesForFresh.toString()}
-
-function extractTables(moduleValue) {
-  if (isRecord(moduleValue) && isRecord(moduleValue.tables)) {
-    return Object.values(moduleValue.tables).filter(isTable)
-  }
-
-  if (isRecord(moduleValue) && isTable(moduleValue.default)) {
-    return [moduleValue.default]
-  }
-
-  if (isRecord(moduleValue)) {
-    return Object.values(moduleValue).filter(isTable)
-  }
-
-  return []
-}
-
-async function preloadGeneratedSchema(manager, entry) {
-  if (!entry) {
-    return
-  }
-
-  const tables = extractTables(await loadModule(entry))
-  for (const table of tables) {
-    manager.connection().getSchemaRegistry().replace(table)
-  }
-}
-
-async function writeGeneratedSchemaArtifact(manager, outputPath) {
-  if (!outputPath) {
-    return
-  }
-
-  const source = renderGeneratedSchemaModule(manager.connection().getSchemaRegistry().list())
-  await mkdir(dirname(outputPath), { recursive: true })
-  await writeFile(outputPath, source, 'utf8')
-}
-
-function syncGeneratedSchemaFromManager(manager) {
-  registerGeneratedTables(Object.fromEntries(
-    manager.connection().getSchemaRegistry().list().map(table => [table.tableName, table]),
-  ))
-}
-
-const manager = resolveRuntimeConnectionManagerOptions(payload.runtimeConfig)
-configureDB(manager)
-
-try {
-  await manager.initializeAll()
-
-  if (payload.kind === 'migrate') {
-    await preloadGeneratedSchema(manager, payload.generatedSchema)
-    const migrations = []
-    for (const entry of payload.migrations) {
-      const migration = resolveExport(await loadModule(entry), isMigration)
-      if (!migration) {
-        throw new Error(\`Registered migration "\${entry}" does not export a Holo migration.\`)
-      }
-      migrations.push(normalizeRuntimeMigration(entry, migration))
-    }
-
-    const executed = await createMigrationService(manager.connection(), migrations).migrate(payload.options ?? {})
-    await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath)
-    if (executed.length === 0) {
-      console.log('No migrations were executed.')
-    } else {
-      console.log('Migrations executed:')
-      for (const item of executed) {
-        console.log(\`  \${item.name}\`)
-      }
-    }
-  } else if (payload.kind === 'fresh') {
-    const migrations = []
-    for (const entry of payload.migrations) {
-      const migration = resolveExport(await loadModule(entry), isMigration)
-      if (!migration) {
-        throw new Error(\`Registered migration "\${entry}" does not export a Holo migration.\`)
-      }
-      migrations.push(normalizeRuntimeMigration(entry, migration))
-    }
-
-    const schema = createSchemaService(manager.connection())
-    await dropAllTablesForFresh(manager.connection(), schema)
-    manager.connection().getSchemaRegistry().clear()
-
-    const executed = await createMigrationService(manager.connection(), migrations).migrate({})
-    await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath)
-    syncGeneratedSchemaFromManager(manager)
-    if (executed.length === 0) {
-      console.log('No migrations were executed.')
-    } else {
-      console.log('Migrations executed:')
-      for (const item of executed) {
-        console.log(\`  \${item.name}\`)
-      }
-    }
-
-    if (payload.options?.seed) {
-      const seeders = []
-      for (const entry of payload.seeders) {
-        const seeder = resolveExport(await loadModule(entry), isSeeder)
-        if (!seeder) {
-          throw new Error(\`Registered seeder "\${entry}" does not export a Holo seeder.\`)
-        }
-        seeders.push(seeder)
-      }
-
-      const seeded = await createSeederService(manager.connection(), seeders).seed({
-        ...(Array.isArray(payload.options.only) ? { only: payload.options.only } : {}),
-        quietly: payload.options.quietly === true,
-        force: payload.options.force === true,
-        environment: payload.options.environment ?? 'development',
-      })
-      if (seeded.length === 0) {
-        console.log('No seeders were executed.')
-      } else {
-        console.log('Seeders executed:')
-        for (const item of seeded) {
-          console.log(\`  \${item.name}\`)
-        }
-      }
-    }
-  } else if (payload.kind === 'rollback') {
-    await preloadGeneratedSchema(manager, payload.generatedSchema)
-    const migrations = []
-    for (const entry of payload.migrations) {
-      const migration = resolveExport(await loadModule(entry), isMigration)
-      if (!migration) {
-        throw new Error(\`Registered migration "\${entry}" does not export a Holo migration.\`)
-      }
-      migrations.push(normalizeRuntimeMigration(entry, migration))
-    }
-
-    const rolledBack = await createMigrationService(manager.connection(), migrations).rollback(payload.options ?? {})
-    await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath)
-    if (rolledBack.length === 0) {
-      console.log('No migrations were rolled back.')
-    } else {
-      console.log('Migrations rolled back:')
-      for (const item of rolledBack) {
-        console.log(\`  \${item.name}\`)
-      }
-    }
-  } else if (payload.kind === 'seed') {
-    if (payload.generatedSchema) {
-      await preloadGeneratedSchema(manager, payload.generatedSchema)
-    }
-
-    const seeders = []
-    for (const entry of payload.seeders) {
-      const seeder = resolveExport(await loadModule(entry), isSeeder)
-      if (!seeder) {
-        throw new Error(\`Registered seeder "\${entry}" does not export a Holo seeder.\`)
-      }
-      seeders.push(seeder)
-    }
-
-    const executed = await createSeederService(manager.connection(), seeders).seed(payload.options ?? {})
-    if (executed.length === 0) {
-      console.log('No seeders were executed.')
-    } else {
-      console.log('Seeders executed:')
-      for (const item of executed) {
-        console.log(\`  \${item.name}\`)
-      }
-    }
-  } else if (payload.kind === 'prune') {
-    const models = []
-    for (const entry of payload.models) {
-      const model = resolveExport(await loadModule(entry), isModel)
-      if (!model) {
-        throw new Error(\`Registered model "\${entry}" does not export a Holo model.\`)
-      }
-      models.push(model)
-    }
-
-    const byName = new Map(models.map(model => [model.definition.name, model]))
-    const requested = payload.options?.models ?? []
-    const selected = []
-
-    if (requested.length === 0) {
-      selected.push(...models.filter(model => Boolean(model.definition.prunable)))
-    } else {
-      for (const name of requested) {
-        const model = byName.get(name)
-        if (!model) {
-          throw new Error(\`Unknown model "\${name}".\`)
-        }
-        if (!model.definition.prunable) {
-          throw new Error(\`Model "\${name}" does not define a prunable query.\`)
-        }
-        selected.push(model)
-      }
-    }
-
-    if (selected.length === 0) {
-      console.log('No prunable models were registered.')
-    } else {
-      let total = 0
-      for (const model of selected) {
-        const deleted = await model.prune()
-        total += deleted
-        console.log(\`\${model.definition.name}: deleted \${deleted}\`)
-      }
-      console.log(\`Total deleted: \${total}\`)
-    }
-  } else {
-    throw new Error(\`Unknown runtime command "\${payload.kind}".\`)
-  }
-} finally {
-  await manager.disconnectAll()
-  resetDB()
-}
-`
-
 export async function resolvePackageRootFromSpecifier(specifier: string): Promise<string> {
   let current = dirname(fileURLToPath(import.meta.resolve(specifier)))
 
@@ -628,10 +362,19 @@ export async function cleanupRuntimeDependencyLink(projectRoot: string): Promise
 }
 /* v8 ignore stop */
 
-export function createRuntimeInvocation(script: string): { command: string, args: string[] } {
+export function resolveRuntimeWorkerPath(): string {
+  const runtimePath = fileURLToPath(import.meta.url)
+  return runtimePath.endsWith('/src/runtime.ts')
+    ? resolve(dirname(runtimePath), 'runtime-worker.ts')
+    : resolve(dirname(runtimePath), 'runtime-worker.mjs')
+}
+
+export function createRuntimeInvocation(workerPath = resolveRuntimeWorkerPath()): { command: string, args: string[] } {
   return {
     command: 'node',
-    args: ['--input-type=module', '--eval', script],
+    args: workerPath.endsWith('.ts')
+      ? ['--experimental-strip-types', workerPath]
+      : [workerPath],
   }
 }
 
@@ -757,7 +500,7 @@ export async function withRuntimeEnvironment<T>(
       generatedSchemaOutputPath: resolveGeneratedSchemaPath(projectRoot, environment.project.config),
       options,
     })
-    const runtime = createRuntimeInvocation(nodeRuntimeScript)
+    const runtime = createRuntimeInvocation()
     const result = await runRuntimeInvocation(runtime.command, runtime.args, {
       cwd: runtimeRoot,
       env: {

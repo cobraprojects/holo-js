@@ -126,14 +126,6 @@ describe('@holo-js/cache-db', () => {
     }))
   })
 
-  it('renders the cache table migration scaffold', () => {
-    const migration = cacheDbInternals.renderCacheTableMigration('cache_entries', 'cache_entry_locks')
-
-    expect(migration).toContain('await schema.createTable(\'cache_entries\'')
-    expect(migration).toContain('await schema.createTable(\'cache_entry_locks\'')
-    expect(migration).toContain('await schema.dropTable(\'cache_entry_locks\')')
-  })
-
   it('resolves database drivers from explicit config and urls', () => {
     expect(cacheDbInternals.resolveDriver({ driver: 'mysql' })).toBe('mysql')
     expect(cacheDbInternals.resolveDriver('postgres://cache.internal/db')).toBe('postgres')

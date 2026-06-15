@@ -23,6 +23,7 @@
     "test": "vitest --run"
   },
   "dependencies": {
+    "@holo-js/auth": "catalog:",
     "@holo-js/auth-social": "catalog:",
     "@holo-js/config": "catalog:"
   },
