@@ -224,6 +224,15 @@ function applyCacheDatabaseTableDefinition(
   table.index([tableDefinition.indexColumn], tableDefinition.indexName(tableName))
 }
 
+function resolveCacheDatabaseTableDefinition(role: CacheDatabaseTableDefinition['role']): CacheDatabaseTableDefinition {
+  const tableDefinition = CACHE_DATABASE_TABLE_DEFINITIONS.find(definition => definition.role === role)
+  if (!tableDefinition) {
+    throw new Error(`Missing cache database table definition for "${role}".`)
+  }
+
+  return tableDefinition
+}
+
 async function prepareCacheDatabaseTables(
   connection: DatabaseContext,
   tableName = DEFAULT_CACHE_DATABASE_TABLE,
@@ -231,16 +240,18 @@ async function prepareCacheDatabaseTables(
 ): Promise<void> {
   const schema = createSchemaService(connection)
   await connection.initialize()
+  const entryTableDefinition = resolveCacheDatabaseTableDefinition('entries')
+  const lockTableDefinition = resolveCacheDatabaseTableDefinition('locks')
 
   if (!(await schema.hasTable(tableName))) {
     await schema.createTable(tableName, (table) => {
-      applyCacheDatabaseTableDefinition(table, tableName, CACHE_DATABASE_TABLE_DEFINITIONS[0])
+      applyCacheDatabaseTableDefinition(table, tableName, entryTableDefinition)
     })
   }
 
   if (!(await schema.hasTable(lockTableName))) {
     await schema.createTable(lockTableName, (table) => {
-      applyCacheDatabaseTableDefinition(table, lockTableName, CACHE_DATABASE_TABLE_DEFINITIONS[1])
+      applyCacheDatabaseTableDefinition(table, lockTableName, lockTableDefinition)
     })
   }
 }

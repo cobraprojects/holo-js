@@ -25,7 +25,7 @@ function createCallbackContext(overrides: {
     codeVerifier: 'verifier',
     config: {
       ...callbackConfig,
-      scopes: overrides.scopes ?? callbackConfig.scopes,
+      scopes: overrides.scopes ?? [...callbackConfig.scopes],
     },
   } as const
 }

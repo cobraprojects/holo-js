@@ -415,12 +415,14 @@ function verifyPusherSignature(providedSignature: string, expectedSignature: str
   return timingSafeEqual(Buffer.from(providedSignature, 'hex'), Buffer.from(expectedSignature, 'hex'))
 }
 
-function logSocketMessageError(socketId: string, error: Error): void {
-  console.error(`[@holo-js/broadcast] WebSocket message handling failed for socket "${socketId}": ${error.message}`)
+function logSocketMessageError(socketId: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  console.error(`[@holo-js/broadcast] WebSocket message handling failed for socket "${socketId}": ${message}`)
 }
 
-function logScalingMessageError(error: Error): void {
-  console.error(`[@holo-js/broadcast] Scaling message handling failed: ${error.message}`)
+function logScalingMessageError(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  console.error(`[@holo-js/broadcast] Scaling message handling failed: ${message}`)
 }
 
 function logSocketCleanupError(socketId: string, channel: string, error: unknown): void {
@@ -981,7 +983,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     : scaling && options.scalingAutoSubscribe !== false
       ? scaling.adapter.subscribe(scaling.eventChannel, (payload) => {
         void handleScalingMessage(payload).catch((error) => {
-          logScalingMessageError(error as Error)
+          logScalingMessageError(error)
         })
       })
     : Promise.resolve(async () => {})
@@ -1858,7 +1860,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         }))
       /* v8 ignore next 2 -- defensive guard; pendingMessage is always swallowed by .catch(() => {}) and inner tasks have their own catch handlers */
       }).catch((error) => {
-        logSocketMessageError(socket.socketId, error as Error)
+        logSocketMessageError(socket.socketId, error)
       })
       socket.pendingMessage = cleanupTask.catch(() => {})
     },
@@ -2033,7 +2035,7 @@ export async function startBroadcastWorker(
     scalingUnsubscribe = await scalingConfig.adapter.subscribe(scalingConfig.eventChannel, (payload) => {
       /* v8 ignore next 3 -- equivalent path is covered via createBroadcastWorkerRuntime auto-subscribe; V8 coverage does not instrument this callback instance */
       void runtime.receiveScalingMessage(payload).catch((error) => {
-        logScalingMessageError(error as Error)
+        logScalingMessageError(error)
       })
     }).catch((subscribeError: unknown) => handleSubscribeFailure(runtime, subscribeError))
   }
@@ -2087,7 +2089,7 @@ export async function startBroadcastWorker(
             ? message
             : new TextDecoder().decode(message)
           void runtime.receiveWebSocketMessage(socket.data.socketId, value).catch((error) => {
-            logSocketMessageError(socket.data.socketId, error as Error)
+            logSocketMessageError(socket.data.socketId, error)
             runtime.disconnectWebSocket(socket.data.socketId)
             socket.close(4001, 'Protocol error')
           })
@@ -2144,7 +2146,7 @@ export async function startBroadcastWorker(
     socket.on('message', (message) => {
       const value = decodeNodeWebSocketMessage(message)
       void runtime.receiveWebSocketMessage(socketId, value).catch((error) => {
-        logSocketMessageError(socketId, error as Error)
+        logSocketMessageError(socketId, error)
         runtime.disconnectWebSocket(socketId)
         socket.close(4001, 'Protocol error')
       })

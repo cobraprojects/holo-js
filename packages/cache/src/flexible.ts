@@ -124,7 +124,7 @@ export async function resolveFlexibleCachedValue<TValue>(
   const retried = await options.read()
   if (
     isFlexibleEnvelope<TValue>(retried)
-    && resolveFlexibleEnvelopeState(retried) !== 'expired'
+    && resolveFlexibleEnvelopeState(retried, now) !== 'expired'
   ) {
     return retried.value
   }

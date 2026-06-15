@@ -533,10 +533,11 @@ function parseScopedOptionalInteger(
 function parseInteger(
   value: number | string | undefined,
   fallback: number,
+  namespace: string,
   label: string,
   options: { minimum?: number } = {},
 ): number {
-  return parseScopedInteger(value, fallback, 'Holo Queue', label, {
+  return parseScopedInteger(value, fallback, namespace, label, {
     ...options,
     parser: 'parse-int',
   })
@@ -560,8 +561,8 @@ function normalizeScopedName(value: string | undefined, namespace: string, label
   return normalized
 }
 
-function normalizeConnectionName(value: string | undefined, label: string): string {
-  return normalizeScopedName(value, 'Holo Queue', label)
+function normalizeConnectionName(value: string | undefined, namespace: string, label: string): string {
+  return normalizeScopedName(value, namespace, label)
 }
 
 function normalizeCacheName(value: string | undefined, label: string): string {
@@ -999,10 +1000,10 @@ function normalizeRedisConnection(
     driver: 'redis',
     connection: resolvedRedisConnection.name,
     queue: normalizeQueueName(config.queue),
-    retryAfter: parseInteger(config.retryAfter, DEFAULT_QUEUE_RETRY_AFTER, `queue connection "${name}" retryAfter`, {
+    retryAfter: parseInteger(config.retryAfter, DEFAULT_QUEUE_RETRY_AFTER, 'Holo Queue', `queue connection "${name}" retryAfter`, {
       minimum: 0,
     }),
-    blockFor: parseInteger(config.blockFor, DEFAULT_QUEUE_BLOCK_FOR, `queue connection "${name}" blockFor`, {
+    blockFor: parseInteger(config.blockFor, DEFAULT_QUEUE_BLOCK_FOR, 'Holo Queue', `queue connection "${name}" blockFor`, {
       minimum: 0,
     }),
     redis: Object.freeze({
@@ -1025,10 +1026,10 @@ function normalizeDatabaseConnection(
     name,
     driver: 'database',
     queue: normalizeQueueName(config.queue),
-    retryAfter: parseInteger(config.retryAfter, DEFAULT_QUEUE_RETRY_AFTER, `queue connection "${name}" retryAfter`, {
+    retryAfter: parseInteger(config.retryAfter, DEFAULT_QUEUE_RETRY_AFTER, 'Holo Queue', `queue connection "${name}" retryAfter`, {
       minimum: 0,
     }),
-    sleep: parseInteger(config.sleep, DEFAULT_QUEUE_SLEEP, `queue connection "${name}" sleep`, {
+    sleep: parseInteger(config.sleep, DEFAULT_QUEUE_SLEEP, 'Holo Queue', `queue connection "${name}" sleep`, {
       minimum: 0,
     }),
     connection: config.connection?.trim() || DEFAULT_FAILED_JOBS_CONNECTION,
@@ -1062,7 +1063,7 @@ function normalizeConnections(
   }
 
   const normalizedEntries = Object.entries(connections).map(([name, config]) => {
-    const normalizedName = normalizeConnectionName(name, 'Queue connection name')
+    const normalizedName = normalizeConnectionName(name, 'Holo Queue', 'Queue connection name')
     return [normalizedName, normalizeConnectionConfig(normalizedName, config, redisConfig)] as const
   })
 
@@ -1196,7 +1197,7 @@ export function normalizeSessionConfig(
   const stores = !config.stores || Object.keys(config.stores).length === 0
     ? holoSessionDefaults.stores
     : Object.freeze(Object.fromEntries(Object.entries(config.stores).map(([name, store]) => {
-      const normalizedName = normalizeConnectionName(name, 'Session store name')
+      const normalizedName = normalizeConnectionName(name, 'Holo Session', 'Session store name')
       return [normalizedName, normalizeSessionStoreConfig(normalizedName, store, redisConfig)]
     })))
 
@@ -1217,12 +1218,13 @@ export function normalizeSessionConfig(
     throw new Error(`[Holo Session] cookie sameSite must be "lax", "strict", or "none".`)
   }
 
-  const idleTimeout = parseInteger(config.idleTimeout, DEFAULT_SESSION_IDLE_TIMEOUT, 'session idleTimeout', {
+  const idleTimeout = parseInteger(config.idleTimeout, DEFAULT_SESSION_IDLE_TIMEOUT, 'Holo Session', 'session idleTimeout', {
     minimum: 0,
   })
   const absoluteLifetime = parseInteger(
     config.absoluteLifetime,
     DEFAULT_SESSION_ABSOLUTE_LIFETIME,
+    'Holo Session',
     'session absoluteLifetime',
     {
       minimum: 0,
@@ -1231,6 +1233,7 @@ export function normalizeSessionConfig(
   const rememberMeLifetime = parseInteger(
     config.rememberMeLifetime,
     DEFAULT_SESSION_REMEMBER_ME_LIFETIME,
+    'Holo Session',
     'session rememberMeLifetime',
     {
       minimum: 0,
@@ -1248,7 +1251,7 @@ export function normalizeSessionConfig(
       httpOnly: cookie.httpOnly ?? true,
       sameSite,
       partitioned: cookie.partitioned ?? false,
-      maxAge: parseInteger(cookie.maxAge, absoluteLifetime, 'session cookie maxAge', {
+      maxAge: parseInteger(cookie.maxAge, absoluteLifetime, 'Holo Session', 'session cookie maxAge', {
         minimum: 0,
       }),
     }),
@@ -1438,10 +1441,10 @@ function normalizePasswordBroker(
     name,
     provider,
     table: config.table?.trim() || DEFAULT_AUTH_PASSWORD_RESET_TABLE,
-    expire: parseInteger(config.expire, DEFAULT_AUTH_PASSWORD_EXPIRE, `auth password broker "${name}" expire`, {
+    expire: parseInteger(config.expire, DEFAULT_AUTH_PASSWORD_EXPIRE, 'Holo Auth', `auth password broker "${name}" expire`, {
       minimum: 0,
     }),
-    throttle: parseInteger(config.throttle, DEFAULT_AUTH_PASSWORD_THROTTLE, `auth password broker "${name}" throttle`, {
+    throttle: parseInteger(config.throttle, DEFAULT_AUTH_PASSWORD_THROTTLE, 'Holo Auth', `auth password broker "${name}" throttle`, {
       minimum: 0,
     }),
     route: config.route?.trim() || DEFAULT_AUTH_PASSWORD_RESET_ROUTE,
@@ -1573,7 +1576,7 @@ function normalizeWorkosConfig(
   }
 
   const normalizedEntries = providerEntries.map(([name, providerConfig]) => {
-    const normalizedName = normalizeConnectionName(name, 'Auth WorkOS provider name')
+    const normalizedName = normalizeConnectionName(name, 'Holo Auth', 'Auth WorkOS provider name')
     return [normalizedName, providerConfig] as const
   })
   if (provider && !normalizedEntries.some(([name]) => name === provider)) {
@@ -1697,7 +1700,7 @@ function normalizeClerkConfig(
   }
 
   const normalizedEntries = providerEntries.map(([name, providerConfig]) => {
-    const normalizedName = normalizeConnectionName(name, 'Auth Clerk provider name')
+    const normalizedName = normalizeConnectionName(name, 'Holo Auth', 'Auth Clerk provider name')
     return [normalizedName, providerConfig] as const
   })
   if (provider && !normalizedEntries.some(([name]) => name === provider)) {
@@ -1723,7 +1726,7 @@ export function normalizeAuthConfig(
   const providers = !config.providers || Object.keys(config.providers).length === 0
     ? holoAuthDefaults.providers
     : Object.freeze(Object.fromEntries(Object.entries(config.providers).map(([name, provider]) => {
-      const normalizedName = normalizeConnectionName(name, 'Auth provider name')
+      const normalizedName = normalizeConnectionName(name, 'Holo Auth', 'Auth provider name')
       return [normalizedName, normalizeAuthProvider(normalizedName, provider)]
     })))
 
@@ -1736,7 +1739,7 @@ export function normalizeAuthConfig(
       ),
     })
     : Object.freeze(Object.fromEntries(Object.entries(config.guards).map(([name, guard]) => {
-      const normalizedName = normalizeConnectionName(name, 'Auth guard name')
+      const normalizedName = normalizeConnectionName(name, 'Holo Auth', 'Auth guard name')
       return [normalizedName, normalizeAuthGuard(normalizedName, guard, providers)]
     })))
 
@@ -1749,7 +1752,7 @@ export function normalizeAuthConfig(
       ),
     })
     : Object.freeze(Object.fromEntries(Object.entries(config.passwords).map(([name, broker]) => {
-      const normalizedName = normalizeConnectionName(name, 'Auth password broker name')
+      const normalizedName = normalizeConnectionName(name, 'Holo Auth', 'Auth password broker name')
       return [normalizedName, normalizePasswordBroker(normalizedName, broker, providers)]
     })))
 
@@ -1766,7 +1769,7 @@ export function normalizeAuthConfig(
   const social = !config.social || Object.keys(config.social).length === 0
     ? holoAuthDefaults.social
     : Object.freeze(Object.fromEntries(Object.entries(config.social).map(([name, provider]) => {
-      const normalizedName = normalizeConnectionName(name, 'Auth social provider name')
+      const normalizedName = normalizeConnectionName(name, 'Holo Auth', 'Auth social provider name')
       return [normalizedName, normalizeSocialProvider(normalizedName, provider, guards, providers)]
     })))
 

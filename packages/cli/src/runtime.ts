@@ -369,12 +369,31 @@ export function resolveRuntimeWorkerPath(): string {
     : resolve(dirname(runtimePath), 'runtime-worker.mjs')
 }
 
+function supportsNodeTypeStripping(version = process.versions.node): boolean {
+  const [major = '0', minor = '0'] = version.split('.')
+  const majorVersion = Number.parseInt(major, 10)
+  const minorVersion = Number.parseInt(minor, 10)
+
+  return majorVersion > 22 || (majorVersion === 22 && minorVersion >= 6)
+}
+
+function resolveCompiledRuntimeWorkerPath(workerPath: string): string {
+  return resolve(dirname(workerPath), '../dist/runtime-worker.mjs')
+}
+
 export function createRuntimeInvocation(workerPath = resolveRuntimeWorkerPath()): { command: string, args: string[] } {
+  if (workerPath.endsWith('.ts')) {
+    return {
+      command: 'node',
+      args: supportsNodeTypeStripping()
+        ? ['--experimental-strip-types', workerPath]
+        : [resolveCompiledRuntimeWorkerPath(workerPath)],
+    }
+  }
+
   return {
     command: 'node',
-    args: workerPath.endsWith('.ts')
-      ? ['--experimental-strip-types', workerPath]
-      : [workerPath],
+    args: [workerPath],
   }
 }
 

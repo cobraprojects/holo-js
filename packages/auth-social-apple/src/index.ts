@@ -12,6 +12,8 @@ const APPLE_JWKS_URL = 'https://appleid.apple.com/auth/keys'
 const APPLE_TOKEN_CLOCK_SKEW_MS = 60_000
 
 type JwkKey = Parameters<typeof authRuntimeInternals.jwt.verifyJwtSignatureWithJwk>[1]
+const APPLE_JWKS_CACHE = new Map<string, Promise<readonly JwkKey[]>>()
+let appleJwksCacheFetch: typeof fetch | undefined
 
 async function readAppleUserPayload(request: Request): Promise<{
   readonly email?: string
@@ -74,8 +76,13 @@ function verifyJwtSignatureWithJwk(
 }
 
 async function fetchAppleJwks(): Promise<readonly JwkKey[]> {
+  if (appleJwksCacheFetch !== globalThis.fetch) {
+    APPLE_JWKS_CACHE.clear()
+    appleJwksCacheFetch = globalThis.fetch
+  }
+
   return authRuntimeInternals.jwt.fetchCachedJwks(APPLE_JWKS_URL, {
-    cache: new Map(),
+    cache: APPLE_JWKS_CACHE,
     requestUrl: APPLE_JWKS_URL,
     errorMessage: '[@holo-js/auth-social-apple] Failed to load Apple JWKS.',
   })

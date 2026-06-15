@@ -30,18 +30,16 @@ export const query = createRealtimeQuery
 export const mutation = createRealtimeMutation
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value)
-    && typeof value === 'object'
-    && !Array.isArray(value)
-    && !(value instanceof Date)
-    && !(value instanceof Blob)
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
 }
 
 function isReactiveObject(value: unknown): value is object {
-  return Boolean(value)
-    && typeof value === 'object'
-    && !(value instanceof Date)
-    && !(value instanceof Blob)
+  return Array.isArray(value) || isPlainObject(value)
 }
 
 function createRealtimeReactiveValue<TValue>(value: TValue, subscribe: () => void): TValue {

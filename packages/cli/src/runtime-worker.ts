@@ -341,6 +341,7 @@ try {
     } else {
       for (const name of requested) {
         if (typeof name !== 'string') {
+          console.warn(`Ignoring non-string prunable model name: ${JSON.stringify(name)}`)
           continue
         }
 
