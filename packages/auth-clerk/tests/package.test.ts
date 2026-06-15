@@ -1601,21 +1601,16 @@ describe('@holo-js/auth-clerk', () => {
     authRuntimeInternals.getRuntimeBindings().context.setSessionId('web')
     authRuntimeInternals.getRuntimeBindings().context.setCachedUser('web', null)
 
-    const { data, error } = await logoutWithClerk(new Request('https://app.test/api/auth/clerk/logout', {
+    const response = await logoutWithClerk(new Request('https://app.test/api/auth/clerk/logout', {
       method: 'POST',
       headers: sessionCookie ? { cookie: sessionCookie } : undefined,
     }), {
       returnTo: '/login',
     })
 
-    expect(data).toMatchObject({
-      url: 'https://app.test/login',
-      local: {
-        guard: 'web',
-      },
-    })
-    expect(error).toBeNull()
-    expect(data?.local.cookies ?? []).toContainEqual(expect.stringContaining('holo_session=;'))
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe('https://app.test/login')
+    expect(response.headers.get('set-cookie')).toContain('holo_session=;')
   })
 
   it('normalizes Clerk logout return URLs to relative or same-origin destinations', async () => {
@@ -1660,30 +1655,10 @@ describe('@holo-js/auth-clerk', () => {
       })
     }
 
-    await expect(completeAndLogout('/login')).resolves.toMatchObject({
-      data: {
-        url: 'https://app.test/login',
-      },
-      error: null,
-    })
-    await expect(completeAndLogout('https://app.test/settings')).resolves.toMatchObject({
-      data: {
-        url: 'https://app.test/settings',
-      },
-      error: null,
-    })
-    await expect(completeAndLogout('https://evil.test/phish')).resolves.toMatchObject({
-      data: {
-        url: 'https://app.test/',
-      },
-      error: null,
-    })
-    await expect(completeAndLogout('//evil.test/phish')).resolves.toMatchObject({
-      data: {
-        url: 'https://app.test/',
-      },
-      error: null,
-    })
+    await expect(completeAndLogout('/login').then(response => response.headers.get('location'))).resolves.toBe('https://app.test/login')
+    await expect(completeAndLogout('https://app.test/settings').then(response => response.headers.get('location'))).resolves.toBe('https://app.test/settings')
+    await expect(completeAndLogout('https://evil.test/phish').then(response => response.headers.get('location'))).resolves.toBe('https://app.test/')
+    await expect(completeAndLogout('//evil.test/phish').then(response => response.headers.get('location'))).resolves.toBe('https://app.test/')
   })
 
   it('returns typed callback failures without combining response behavior', async () => {
@@ -2129,11 +2104,8 @@ describe('@holo-js/auth-clerk', () => {
     const logoutResult = await logoutWithClerk(new Request('https://app.test/api/auth/clerk/logout', {
       method: 'POST',
     }))
-    expect(logoutResult.data).toBeNull()
-    expect(logoutResult.error).toMatchObject({
-      code: 'clerk_session_missing',
-      message: 'The current Holo session was not created by Clerk.',
-    })
+    expect(logoutResult.status).toBe(303)
+    expect(logoutResult.headers.get('location')).toBe('https://app.test/')
 
     resetClerkAuthRuntime()
     resetAuthRuntime()
@@ -2144,9 +2116,10 @@ describe('@holo-js/auth-clerk', () => {
     })
 
     await expect(verifySession('token')).rejects.toThrow('is not configured in auth.clerk')
-    await expect(logoutWithClerk(new Request('https://app.test/api/auth/clerk/logout', {
+    const failedLogout = await logoutWithClerk(new Request('https://app.test/api/auth/clerk/logout', {
       method: 'POST',
-    }))).resolves.toEqual({
+    }))
+    await expect(failedLogout.json()).resolves.toEqual({
       data: null,
       error: {
         code: 'clerk_logout_failed',
@@ -2157,5 +2130,6 @@ describe('@holo-js/auth-clerk', () => {
         },
       },
     })
+    expect(failedLogout.status).toBe(500)
   })
 })

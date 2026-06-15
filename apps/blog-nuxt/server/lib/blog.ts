@@ -278,12 +278,3 @@ export async function deletePost(id: number) {
     await broadcast(blogPostChanged('deleted', post.id, post.title, post.status, post.slug))
   }
 }
-
-export type HomePageData = Awaited<ReturnType<typeof getHomePageData>>
-export type PublishedPostsData = Awaited<ReturnType<typeof getPublishedPosts>>
-export type CategoryArchiveData = Awaited<ReturnType<typeof getCategoryArchive>>
-export type TagArchiveData = Awaited<ReturnType<typeof getTagArchive>>
-export type AdminPostsData = Awaited<ReturnType<typeof getAdminPostsData>>
-export type AdminPostData = Awaited<ReturnType<typeof getAdminPostById>>
-export type AdminCategoriesData = Awaited<ReturnType<typeof getAdminCategoriesData>>
-export type AdminTagsData = Awaited<ReturnType<typeof getAdminTagsData>>

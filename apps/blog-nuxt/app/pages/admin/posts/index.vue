@@ -1,5 +1,7 @@
 <script setup lang="ts">
-const { data } = await useFetch('/api/admin/posts')
+const { data } = await useFetch('/api/admin/posts', {
+  pick: ['posts'],
+})
 </script>
 
 <template>

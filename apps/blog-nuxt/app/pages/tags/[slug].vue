@@ -1,6 +1,8 @@
 <script setup lang="ts">
 const route = useRoute()
-const { data } = await useFetch(`/api/blog/tags/${route.params.slug}`)
+const { data } = await useFetch(`/api/blog/tags/${route.params.slug}`, {
+  pick: ['tag', 'posts'],
+})
 
 if (!data.value) {
   throw createError({ statusCode: 404, statusMessage: 'Tag not found' })

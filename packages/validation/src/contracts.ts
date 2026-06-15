@@ -322,6 +322,36 @@ export type ValidationExceptionDigestPayload<TData = Record<string, unknown>> = 
 
 const VALIDATION_EXCEPTION_DIGEST_PREFIX = 'HOLO_VALIDATION;'
 
+function isSerializedValidationExceptionPayload(value: unknown): value is SerializedValidationException {
+  return isPlainObject(value)
+    && value.ok === false
+    && typeof value.status === 'number'
+    && value.valid === false
+    && typeof value.message === 'string'
+    && typeof value.bag === 'string'
+    && isPlainObject(value.values)
+    && isPlainObject(value.errors)
+}
+
+function findSerializedValidationExceptionPayload(value: unknown): SerializedValidationException | undefined {
+  if (isSerializedValidationExceptionPayload(value)) {
+    return value
+  }
+
+  if (!isPlainObject(value)) {
+    return undefined
+  }
+
+  const candidates = [
+    value.body,
+    value.data,
+    value.error,
+    value.cause,
+  ]
+
+  return candidates.find((candidate): candidate is SerializedValidationException => isSerializedValidationExceptionPayload(candidate))
+}
+
 export class ValidationException<TData = Record<string, unknown>> extends Error {
   readonly status = 422
   readonly bag: string
@@ -537,6 +567,10 @@ export function isValidationException(value: unknown): value is ValidationExcept
     return true
   }
 
+  if (findSerializedValidationExceptionPayload(value)) {
+    return true
+  }
+
   if (!value || typeof value !== 'object') {
     return false
   }
@@ -551,13 +585,7 @@ export function isValidationException(value: unknown): value is ValidationExcept
 
   try {
     const payload = candidate.toJSON()
-    return isPlainObject(payload)
-      && payload.ok === false
-      && typeof payload.status === 'number'
-      && payload.valid === false
-      && typeof payload.bag === 'string'
-      && isPlainObject(payload.values)
-      && isPlainObject(payload.errors)
+    return isSerializedValidationExceptionPayload(payload)
   } catch {
     return false
   }

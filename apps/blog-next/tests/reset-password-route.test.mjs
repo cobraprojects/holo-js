@@ -1,3 +1,4 @@
+import { ValidationException } from '@holo-js/validation'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -38,20 +39,41 @@ function createValidSubmission() {
   }
 }
 
+function createValidationError(field, message, status = 422) {
+  return ValidationException.withMessages({
+    [field]: [message],
+  }, {
+    status,
+  })
+}
+
 describe('POST /api/reset-password', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
   it('returns validation failures without attempting a password reset', async () => {
-    const validationError = new Error('Validation failed.')
+    const validationError = createValidationError('token', 'The reset token is required.')
     const request = createRequest()
 
     mocks.validate.mockRejectedValue(validationError)
 
-    await expect(resetPasswordRoute.POST(request)).rejects.toBe(validationError)
+    const response = await resetPasswordRoute.POST(request)
 
+    expect(response.status).toBe(422)
+    await expect(readJson(response)).resolves.toEqual(validationError.toJSON())
     expect(mocks.validate).toHaveBeenCalledWith(request, mocks.resetPasswordForm)
+    expect(mocks.resetPassword).not.toHaveBeenCalled()
+  })
+
+  it('returns password confirmation validation failures', async () => {
+    const validationError = createValidationError('passwordConfirmation', 'The password confirmation does not match.')
+    mocks.validate.mockRejectedValue(validationError)
+
+    const response = await resetPasswordRoute.POST(createRequest())
+
+    expect(response.status).toBe(422)
+    await expect(readJson(response)).resolves.toEqual(validationError.toJSON())
     expect(mocks.resetPassword).not.toHaveBeenCalled()
   })
 

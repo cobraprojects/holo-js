@@ -123,6 +123,10 @@ describe('reset password page', () => {
       method: 'POST',
       body: expect.any(FormData),
     })
+    const submittedFormData = mocks.fetch.mock.calls[0][1].body
+    expect(submittedFormData.get('token')).toBe('reset-token')
+    expect(submittedFormData.get('password')).toBe('password123')
+    expect(submittedFormData.get('passwordConfirmation')).toBe('password123')
     expect(mocks.useForm).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       initialValues: {
         token: 'reset-token',
@@ -150,6 +154,7 @@ describe('reset password page', () => {
     expect(renderer.root.findByProps({
       children: 'A reset token is required to complete this form.',
     }).type).toBe('p')
+    expect(renderer.root.findAllByType('form')).toHaveLength(0)
 
     await act(async () => {
       renderer.unmount()

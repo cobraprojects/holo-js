@@ -181,7 +181,7 @@ type ClerkDefaultUserAttributes = {
 export interface ClerkAuthFacade {
   loginWithClerk(request: ClerkRequestInput, options?: { readonly provider?: string }): Promise<Response>
   registerWithClerk(request: ClerkRequestInput, options?: { readonly provider?: string }): Promise<Response>
-  logoutWithClerk(request: ClerkRequestInput, options?: { readonly provider?: string, readonly returnTo?: string }): Promise<ClerkLogoutResult>
+  logoutWithClerk(request: ClerkRequestInput, options?: { readonly provider?: string, readonly returnTo?: string }): Promise<Response>
   completeClerkAuth<TUserAttributes extends ClerkUserAttributes = ClerkDefaultUserAttributes>(
     request: ClerkRequestInput,
     options?: {

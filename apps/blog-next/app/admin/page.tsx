@@ -1,17 +1,23 @@
 import Link from 'next/link'
-import { user } from '@holo-js/auth'
+import { redirect } from 'next/navigation'
+import { auth } from '@holo-js/auth/next/server'
+import { authorize } from '@holo-js/authorization'
 
 import { getAdminDashboardData } from '@/server/lib/blog'
+import Post from '@/server/models/Post'
 import { BroadcastFeed } from './broadcast-feed'
 
 export const dynamic = 'force-dynamic'
 
 export default async function AdminDashboardPage() {
-  const [dashboard, currentUser] = await Promise.all([
-    getAdminDashboardData(),
-    user(),
-  ])
-  const displayName = currentUser?.name ?? currentUser?.email ?? 'Editor'
+  const currentAuth = await auth()
+  if (!currentAuth.authenticated || !currentAuth.user) {
+    redirect('/login')
+  }
+  await authorize('viewAny', Post)
+
+  const dashboard = await getAdminDashboardData()
+  const displayName = currentAuth.user.name ?? currentAuth.user.email ?? 'Editor'
 
   return (
     <section style={{ display: 'grid', gap: '1rem' }}>

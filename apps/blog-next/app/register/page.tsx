@@ -25,6 +25,7 @@ export default function RegisterPage() {
       return await registerAction(formData)
     },
   })
+  const formError = form.errors.first('_root')
 
   return (
     <section style={panelStyle}>
@@ -33,7 +34,9 @@ export default function RegisterPage() {
         <p style={{ margin: 0, color: '#94a3b8' }}>Create a local user account and verify the email address before signing in.</p>
       </div>
 
-      <form onSubmit={(event) => { event.preventDefault(); form.submit() }} style={{ display: 'grid', gap: '0.9rem' }}>
+      <form onSubmit={(event) => { event.preventDefault(); void form.submit() }} style={{ display: 'grid', gap: '0.9rem' }}>
+        {formError ? <p style={{ margin: 0, color: '#fca5a5' }}>{formError}</p> : null}
+
         <label style={{ display: 'grid', gap: '0.35rem' }}>
           <span>Name</span>
           <input

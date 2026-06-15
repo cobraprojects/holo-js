@@ -49,7 +49,7 @@ vi.mock('@/lib/schemas/auth', () => ({
 const { default: RegisterPage } = await import('../app/register/page.tsx')
 const { registerAction } = await import('../app/register/actions.ts')
 
-function createFormState(submit) {
+function createFormState(submit, rootError) {
   return {
     values: {
       name: '',
@@ -77,7 +77,7 @@ function createFormState(submit) {
     },
     errors: {
       has: vi.fn(() => false),
-      first: vi.fn(),
+      first: vi.fn(field => field === '_root' ? rootError : undefined),
     },
     submitting: false,
     submit,
@@ -115,6 +115,23 @@ describe('register page', () => {
     expect(mocks.validate).not.toHaveBeenCalled()
     expect(mocks.register).not.toHaveBeenCalled()
     expect(mocks.redirect).not.toHaveBeenCalled()
+
+    await act(async () => {
+      renderer.unmount()
+    })
+  })
+
+  it('renders root submission errors above the fields', async () => {
+    mocks.useForm.mockImplementation(() => createFormState(vi.fn(), 'Registration is unavailable.'))
+
+    let renderer
+    await act(async () => {
+      renderer = create(jsx(RegisterPage, {}))
+    })
+
+    expect(renderer.root.findByProps({
+      children: 'Registration is unavailable.',
+    }).type).toBe('p')
 
     await act(async () => {
       renderer.unmount()

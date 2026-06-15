@@ -3,11 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   logoutWithClerk: vi.fn(),
   logoutWithWorkos: vi.fn(),
-  provider: vi.fn(),
-}))
-
-vi.mock('@holo-js/auth', () => ({
-  provider: mocks.provider,
 }))
 
 vi.mock('@holo-js/auth-clerk', () => ({
@@ -58,19 +53,19 @@ describe('hosted auth logout routes', () => {
   })
 
   for (const hosted of hostedLogoutRoutes) {
-    it(`redirects ${hosted.name} provider lookup failures without exposing the thrown message`, async () => {
-      mocks.provider.mockRejectedValue(new Error('secret config missing'))
+    it(`returns the ${hosted.name} framework helper response`, async () => {
+      const expected = Response.redirect('https://accounts.test/logout', 303)
+      hosted.logout.mockResolvedValue(expected)
 
-      const response = await hosted.route.POST(createRequest(hosted.url))
+      const request = createRequest(hosted.url)
+      const response = await hosted.route.POST(request)
 
-      expect(response.status).toBe(303)
-      expect(response.headers.get('location')).toBe('http://localhost/')
-      expect(hosted.logout).not.toHaveBeenCalled()
+      expect(response).toBe(expected)
+      expect(hosted.logout).toHaveBeenCalledWith(request)
     })
 
-    it(`returns sanitized ${hosted.name} logout failures from the framework helper`, async () => {
-      mocks.provider.mockResolvedValue(hosted.provider)
-      hosted.logout.mockResolvedValue({
+    it(`passes through sanitized ${hosted.name} logout failures from the framework helper`, async () => {
+      const expected = Response.json({
         data: null,
         error: {
           code: hosted.failureCode,
@@ -80,7 +75,8 @@ describe('hosted auth logout routes', () => {
             _root: [hosted.failureMessage],
           },
         },
-      })
+      }, { status: 500 })
+      hosted.logout.mockResolvedValue(expected)
 
       const response = await hosted.route.POST(createRequest(hosted.url))
       const payload = await response.json()

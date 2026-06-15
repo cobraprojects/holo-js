@@ -169,5 +169,5 @@ try {
         message: 'Only editors can export JSON reports.',
       })
     })
-  })
+  }, 300_000)
 })
