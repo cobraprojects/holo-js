@@ -19,7 +19,7 @@ vi.mock('@/server/lib/blog', () => ({
   getAdminTagById: mocks.getAdminTagById,
 }))
 
-vi.mock('../app/admin/tags/actions.ts', () => ({
+vi.mock('../app/admin/actions.ts', () => ({
   updateTagAction: mocks.updateTagAction,
 }))
 

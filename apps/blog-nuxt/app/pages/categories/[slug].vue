@@ -1,6 +1,6 @@
 <script setup lang="ts">
 const route = useRoute()
-const { data } = await useFetch(`/api/blog/categories/${route.params.slug}`, {
+const { data } = await useFetch(`/api/blog/categories/${encodeURIComponent(String(route.params.slug))}`, {
   pick: ['category', 'posts'],
 })
 
