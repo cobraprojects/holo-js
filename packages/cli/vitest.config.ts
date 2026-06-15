@@ -14,6 +14,7 @@ export default defineConfig({
       { find: '@holo-js/auth-social', replacement: resolve(__dirname, '../auth-social/src/index.ts') },
       { find: '@holo-js/auth-workos', replacement: resolve(__dirname, '../auth-workos/src/index.ts') },
       { find: '@holo-js/auth-clerk', replacement: resolve(__dirname, '../auth-clerk/src/index.ts') },
+      { find: '@holo-js/cache-db', replacement: resolve(__dirname, '../cache-db/src/index.ts') },
       { find: '@holo-js/config', replacement: resolve(__dirname, '../config/src/index.ts') },
       { find: '@holo-js/core', replacement: resolve(__dirname, '../core/src/index.ts') },
       { find: '@holo-js/db', replacement: resolve(__dirname, '../db/src/index.ts') },

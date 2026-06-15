@@ -14,6 +14,7 @@ import type {
   BroadcastRealtimeSubscription,
   BroadcastRuntimeBindings,
 } from './contracts'
+import { isObjectRecord, isPlainObject, parseJsonObject } from './json'
 
 type WorkerConnectionInfo = {
   readonly socketId: string
@@ -291,28 +292,13 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function parseJsonObject(value: string, label: string): Record<string, unknown> {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(value)
-  } catch {
-    throw new Error(`[@holo-js/broadcast] ${label} must be valid JSON.`)
-  }
-
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`[@holo-js/broadcast] ${label} must be a JSON object.`)
-  }
-
-  return parsed as Record<string, unknown>
-}
-
 function parseSocketMessage(rawMessage: string): { readonly event: string, readonly channel?: string, readonly data: Record<string, unknown> } {
   const message = parseJsonObject(rawMessage, 'Websocket message')
   const event = normalizeRequiredString(String(message.event ?? ''), 'Websocket event')
   const channel = typeof message.channel === 'string' ? normalizeRequiredString(message.channel, 'Websocket channel') : undefined
   const data = typeof message.data === 'string'
     ? parseJsonObject(message.data, 'Websocket message data')
-    : (message.data && typeof message.data === 'object' && !Array.isArray(message.data) ? message.data as Record<string, unknown> : {})
+    : (isPlainObject(message.data) ? message.data : {})
 
   return Object.freeze({
     event,
@@ -330,15 +316,15 @@ function normalizeRealtimeAction(value: unknown): RealtimeSocketAction {
 }
 
 function normalizeRealtimeArgs(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+  if (!isPlainObject(value)) {
     return {}
   }
 
-  return value as Record<string, unknown>
+  return value
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
+  return isObjectRecord(value)
 }
 
 function parseRealtimeSocketMessage(data: Record<string, unknown>): RealtimeSocketMessage {
@@ -430,13 +416,11 @@ function verifyPusherSignature(providedSignature: string, expectedSignature: str
 }
 
 function logSocketMessageError(socketId: string, error: unknown): void {
-  /* v8 ignore next -- defensive guard; callers always throw Error instances */
   const message = error instanceof Error ? error.message : String(error)
   console.error(`[@holo-js/broadcast] WebSocket message handling failed for socket "${socketId}": ${message}`)
 }
 
 function logScalingMessageError(error: unknown): void {
-  /* v8 ignore next -- defensive guard; callers always throw Error instances */
   const message = error instanceof Error ? error.message : String(error)
   console.error(`[@holo-js/broadcast] Scaling message handling failed: ${message}`)
 }
@@ -1723,9 +1707,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     try {
       publishBody = normalizePublishBody(parseJsonObject(bodyText, 'Publish body'))
     } catch (error) {
-      /* v8 ignore next -- defensive guard; parseJsonObject and normalizePublishBody always throw Error */
-      const message = error instanceof Error ? error.message : 'Invalid publish payload'
-      return new Response(message, { status: 400 })
+      return new Response((error as Error).message, { status: 400 })
     }
     let result: PublishDelivery
     try {

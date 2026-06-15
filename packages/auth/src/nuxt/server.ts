@@ -3,19 +3,16 @@ import { defineNuxtRouteMiddleware, navigateTo } from '#imports'
 
 export type RouteMatcher = string | RegExp | ((pathname: string) => boolean)
 
-export type GuestOnlyOptions = {
+type RouteProtectionOptions = {
   readonly guard?: string
   readonly redirectTo: string
   readonly routes?: readonly RouteMatcher[]
   readonly status?: 301 | 302 | 303 | 307 | 308
 }
 
-export type AuthOnlyOptions = {
-  readonly guard?: string
-  readonly redirectTo: string
-  readonly routes?: readonly RouteMatcher[]
-  readonly status?: 301 | 302 | 303 | 307 | 308
-}
+export type GuestOnlyOptions = RouteProtectionOptions
+
+export type AuthOnlyOptions = RouteProtectionOptions
 
 export type RouteProtectionLocation = {
   readonly path: string
@@ -83,14 +80,17 @@ function createUseAuthOptions(guard: string | undefined): { readonly guard: stri
   return guard ? { guard } : undefined
 }
 
-export function guestOnly(options: GuestOnlyOptions): GuestOnlyRouteMiddleware {
+function createRouteProtectionMiddleware(
+  options: RouteProtectionOptions,
+  shouldRedirect: (authenticated: boolean) => boolean,
+): RouteProtectionMiddleware {
   return defineNuxtRouteMiddleware(async (to) => {
     if (!matchesRoutes(options.routes, to.path)) {
       return undefined
     }
 
     const currentAuth = await useAuth(createUseAuthOptions(options.guard))
-    if (!currentAuth.authenticated.value) {
+    if (!shouldRedirect(currentAuth.authenticated.value)) {
       return undefined
     }
 
@@ -102,31 +102,12 @@ export function guestOnly(options: GuestOnlyOptions): GuestOnlyRouteMiddleware {
       redirectCode: options.status ?? 303,
     })
   })
+}
+
+export function guestOnly(options: GuestOnlyOptions): GuestOnlyRouteMiddleware {
+  return createRouteProtectionMiddleware(options, authenticated => authenticated)
 }
 
 export function authOnly(options: AuthOnlyOptions): AuthOnlyRouteMiddleware {
-  return defineNuxtRouteMiddleware(async (to) => {
-    if (!matchesRoutes(options.routes, to.path)) {
-      return undefined
-    }
-
-    const currentAuth = await useAuth(createUseAuthOptions(options.guard))
-    if (currentAuth.authenticated.value) {
-      return undefined
-    }
-
-    if (isSamePath(to.path, options.redirectTo)) {
-      return undefined
-    }
-
-    return navigateTo(options.redirectTo, {
-      redirectCode: options.status ?? 303,
-    })
-  })
-}
-
-export const routeProtectionInternals = {
-  isSamePath,
-  matchesRoute,
-  matchesRoutes,
+  return createRouteProtectionMiddleware(options, authenticated => !authenticated)
 }

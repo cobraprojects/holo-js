@@ -141,6 +141,35 @@ type ProjectPrepareOptions = {
   readonly syncFramework?: boolean
 }
 
+type FrameworkSyncDefinition = {
+  readonly framework: 'nuxt' | 'sveltekit'
+  readonly commands: Record<SupportedScaffoldPackageManager, readonly [string, ...string[]]>
+  readonly errorLabel: string
+}
+
+const FRAMEWORK_SYNC_DEFINITIONS = [
+  {
+    framework: 'nuxt',
+    commands: {
+      bun: ['bun', 'x', 'nuxt', 'prepare'],
+      npm: ['npm', 'exec', '--', 'nuxt', 'prepare'],
+      pnpm: ['pnpm', 'exec', 'nuxt', 'prepare'],
+      yarn: ['yarn', 'run', 'nuxt', 'prepare'],
+    },
+    errorLabel: 'nuxt prepare',
+  },
+  {
+    framework: 'sveltekit',
+    commands: {
+      bun: ['bun', 'x', 'svelte-kit', 'sync'],
+      npm: ['npm', 'exec', '--', 'svelte-kit', 'sync'],
+      pnpm: ['pnpm', 'exec', 'svelte-kit', 'sync'],
+      yarn: ['yarn', 'run', 'svelte-kit', 'sync'],
+    },
+    errorLabel: 'svelte-kit sync',
+  },
+] as const satisfies readonly FrameworkSyncDefinition[]
+
 export async function runProjectPrepare(
   projectRoot: string,
   io?: IoStreams,
@@ -153,8 +182,8 @@ export async function runProjectPrepare(
 
   const syncFramework = options.syncFramework ?? true
   if (syncFramework) {
-    await runNuxtPrepare(projectRoot)
-    await runSvelteKitSync(projectRoot)
+    await runFrameworkSync(projectRoot, FRAMEWORK_SYNC_DEFINITIONS[0])
+    await runFrameworkSync(projectRoot, FRAMEWORK_SYNC_DEFINITIONS[1])
   }
 
   const updatedDependencies = await syncManagedDriverDependencies(projectRoot)
@@ -163,8 +192,8 @@ export async function runProjectPrepare(
     await prepareProjectDiscovery(projectRoot, project.config)
     await refreshFrameworkRunner(projectRoot)
     if (syncFramework) {
-      await runNuxtPrepare(projectRoot)
-      await runSvelteKitSync(projectRoot)
+      await runFrameworkSync(projectRoot, FRAMEWORK_SYNC_DEFINITIONS[0])
+      await runFrameworkSync(projectRoot, FRAMEWORK_SYNC_DEFINITIONS[1])
     }
   }
 }
@@ -198,13 +227,13 @@ async function refreshFrameworkRunner(projectRoot: string): Promise<void> {
   await writeTextFile(frameworkRunnerPath, renderFrameworkRunner({ framework }))
 }
 
-async function runNuxtPrepare(projectRoot: string): Promise<void> {
+async function runFrameworkSync(projectRoot: string, definition: FrameworkSyncDefinition): Promise<void> {
   const frameworkProjectPath = resolve(projectRoot, '.holo-js/framework/project.json')
   try {
     const content = await readFile(frameworkProjectPath, 'utf8')
     const manifest = JSON.parse(content) as { framework?: string }
 
-    if (manifest.framework !== 'nuxt') {
+    if (manifest.framework !== definition.framework) {
       return
     }
   } catch {
@@ -212,92 +241,20 @@ async function runNuxtPrepare(projectRoot: string): Promise<void> {
   }
 
   const manager = await resolveProjectPackageManager(projectRoot)
-  let command: string
-  let args: string[]
-  switch (manager) {
-    case 'npm':
-      command = 'npm'
-      args = ['exec', '--', 'nuxt', 'prepare']
-      break
-    case 'pnpm':
-      command = 'pnpm'
-      args = ['exec', 'nuxt', 'prepare']
-      break
-    case 'yarn':
-      command = 'yarn'
-      args = ['run', 'nuxt', 'prepare']
-      break
-    case 'bun':
-    default:
-      command = 'bun'
-      args = ['x', 'nuxt', 'prepare']
-      break
-  }
+  const invocation = definition.commands[manager]
+  const command = invocation[0]
+  const args = invocation.slice(1)
 
-  const { spawn } = await import('node:child_process')
-  await new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: projectRoot,
       stdio: 'inherit',
     })
-    child.on('close', code => {
+    child.on('close', (code: number | null) => {
       if (code === 0) {
         resolve(undefined)
       } else {
-        reject(new Error(`nuxt prepare exited with ${code}`))
-      }
-    })
-    child.on('error', reject)
-  })
-}
-
-async function runSvelteKitSync(projectRoot: string): Promise<void> {
-  const frameworkProjectPath = resolve(projectRoot, '.holo-js/framework/project.json')
-  try {
-    const content = await readFile(frameworkProjectPath, 'utf8')
-    const manifest = JSON.parse(content) as { framework?: string }
-
-    if (manifest.framework !== 'sveltekit') {
-      return
-    }
-  } catch {
-    return
-  }
-
-  const manager = await resolveProjectPackageManager(projectRoot)
-  let command: string
-  let args: string[]
-  switch (manager) {
-    case 'npm':
-      command = 'npm'
-      args = ['exec', '--', 'svelte-kit', 'sync']
-      break
-    case 'pnpm':
-      command = 'pnpm'
-      args = ['exec', 'svelte-kit', 'sync']
-      break
-    case 'yarn':
-      command = 'yarn'
-      args = ['run', 'svelte-kit', 'sync']
-      break
-    case 'bun':
-    default:
-      command = 'bun'
-      args = ['x', 'svelte-kit', 'sync']
-      break
-  }
-
-  const { spawn } = await import('node:child_process')
-  await new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: projectRoot,
-      stdio: 'inherit',
-    })
-    child.on('close', code => {
-      if (code === 0) {
-        resolve(undefined)
-      } else {
-        reject(new Error(`svelte-kit sync exited with ${code}`))
+        reject(new Error(`${definition.errorLabel} exited with ${code}`))
       }
     })
     child.on('error', reject)
@@ -337,6 +294,26 @@ function resolveConfiguredRealtimePath(project: LoadedProjectConfig): string {
   return configuredPaths.realtime ?? 'server/realtime'
 }
 
+function resolveConfiguredDiscoveryRoots(project: LoadedProjectConfig): readonly string[] {
+  const authorizationPoliciesPath = project.config.paths.authorizationPolicies || 'server/policies'
+  const authorizationAbilitiesPath = project.config.paths.authorizationAbilities || 'server/abilities'
+  return [
+    project.config.paths.models,
+    project.config.paths.migrations,
+    project.config.paths.seeders,
+    project.config.paths.commands,
+    project.config.paths.jobs,
+    project.config.paths.events,
+    project.config.paths.listeners,
+    authorizationPoliciesPath,
+    authorizationAbilitiesPath,
+    resolveConfiguredBroadcastPath(project),
+    resolveConfiguredChannelsPath(project),
+    resolveConfiguredRealtimePath(project),
+    'config',
+  ]
+}
+
 export function isDiscoveryRelevantPath(
   filePath: string,
   project: LoadedProjectConfig,
@@ -355,32 +332,11 @@ export function isDiscoveryRelevantPath(
     return false
   }
 
-  const authorizationPoliciesPath = project.config.paths.authorizationPolicies || 'server/policies'
-  const authorizationAbilitiesPath = project.config.paths.authorizationAbilities || 'server/abilities'
-  const broadcastPath = resolveConfiguredBroadcastPath(project)
-  const channelsPath = resolveConfiguredChannelsPath(project)
-  const realtimePath = resolveConfiguredRealtimePath(project)
-  const roots = [
-    project.config.paths.models,
-    project.config.paths.migrations,
-    project.config.paths.seeders,
-    project.config.paths.commands,
-    project.config.paths.jobs,
-    project.config.paths.events,
-    project.config.paths.listeners,
-    authorizationPoliciesPath,
-    authorizationAbilitiesPath,
-    broadcastPath,
-    channelsPath,
-    realtimePath,
-    'config',
-  ]
-
   if (normalized === '.env' || normalized.startsWith('.env.')) {
     return true
   }
 
-  return roots.some(root => normalized === root || normalized.startsWith(`${toPosixSlashes(root)}/`))
+  return resolveConfiguredDiscoveryRoots(project).some(root => normalized === root || normalized.startsWith(`${toPosixSlashes(root)}/`))
 }
 
 export function isRecursiveWatchUnsupported(error: unknown): boolean {
@@ -422,26 +378,9 @@ export async function collectDiscoveryWatchRoots(
   project: LoadedProjectConfig,
 ): Promise<string[]> {
   const directories = new Set<string>()
-  const authorizationPoliciesPath = project.config.paths.authorizationPolicies || 'server/policies'
-  const authorizationAbilitiesPath = project.config.paths.authorizationAbilities || 'server/abilities'
-  const broadcastPath = resolveConfiguredBroadcastPath(project)
-  const channelsPath = resolveConfiguredChannelsPath(project)
-  const realtimePath = resolveConfiguredRealtimePath(project)
   const roots = [
     projectRoot,
-    resolve(projectRoot, 'config'),
-    resolve(projectRoot, project.config.paths.models),
-    resolve(projectRoot, project.config.paths.migrations),
-    resolve(projectRoot, project.config.paths.seeders),
-    resolve(projectRoot, project.config.paths.commands),
-    resolve(projectRoot, project.config.paths.jobs),
-    resolve(projectRoot, project.config.paths.events),
-    resolve(projectRoot, project.config.paths.listeners),
-    resolve(projectRoot, authorizationPoliciesPath),
-    resolve(projectRoot, authorizationAbilitiesPath),
-    resolve(projectRoot, broadcastPath),
-    resolve(projectRoot, channelsPath),
-    resolve(projectRoot, realtimePath),
+    ...resolveConfiguredDiscoveryRoots(project).map(root => resolve(projectRoot, root)),
     resolve(projectRoot, dirname(project.config.paths.generatedSchema ?? '.holo-js/generated/schema.generated.ts')),
   ]
 

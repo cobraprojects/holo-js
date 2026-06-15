@@ -88,6 +88,7 @@ describe('@holo-js/auth framework helpers', () => {
     vi.doUnmock('react')
     vi.doUnmock('../src/client')
     vi.doUnmock('../src/index')
+    vi.doUnmock('../src/nuxt')
   })
 
   it('reuses the Next auth provider when useAuth receives an empty options object', async () => {
@@ -765,30 +766,70 @@ describe('@holo-js/auth framework helpers', () => {
   })
 
   it('compares Nuxt self redirects by pathname without query strings', async () => {
-    vi.doMock('#imports', () => createNuxtImportsMock())
+    const navigateTo = vi.fn()
+    vi.doMock('#imports', () => createNuxtImportsMock({ navigateTo }))
+    vi.doMock('../src/nuxt', () => ({
+      useAuth: vi.fn(async () => ({
+        authenticated: { value: true },
+      })),
+    }))
 
-    const { routeProtectionInternals } = await import('../src/nuxt/server')
+    const { guestOnly } = await import('../src/nuxt/server')
 
-    expect(routeProtectionInternals.isSamePath('/login', '/login?returnUrl=/admin')).toBe(true)
-    expect(routeProtectionInternals.isSamePath('/login', 'https://app.test/login#top')).toBe(true)
-    expect(routeProtectionInternals.isSamePath('/login', '/register?returnUrl=/admin')).toBe(false)
-    expect(routeProtectionInternals.isSamePath('/login', 'http://[')).toBe(false)
+    const queryRedirect = guestOnly({
+      routes: ['/login'],
+      redirectTo: '/login?returnUrl=/admin',
+    })
+    const absoluteRedirect = guestOnly({
+      routes: ['/login'],
+      redirectTo: 'https://app.test/login#top',
+    })
+    const differentRedirect = guestOnly({
+      routes: ['/login'],
+      redirectTo: '/register?returnUrl=/admin',
+    })
+    const malformedRedirect = guestOnly({
+      routes: ['/login'],
+      redirectTo: 'http://[',
+    })
+
+    await queryRedirect({ path: '/login' }, { path: '/' })
+    await absoluteRedirect({ path: '/login' }, { path: '/' })
+    expect(navigateTo).not.toHaveBeenCalled()
+
+    await differentRedirect({ path: '/login' }, { path: '/' })
+    await malformedRedirect({ path: '/login' }, { path: '/' })
+
+    expect(navigateTo).toHaveBeenNthCalledWith(1, '/register?returnUrl=/admin', {
+      redirectCode: 303,
+    })
+    expect(navigateTo).toHaveBeenNthCalledWith(2, 'http://[', {
+      redirectCode: 303,
+    })
   })
 
   it('matches Nuxt protected routes across matcher types', async () => {
-    vi.doMock('#imports', () => createNuxtImportsMock())
+    const navigateTo = vi.fn()
+    vi.doMock('#imports', () => createNuxtImportsMock({ navigateTo }))
+    vi.doMock('../src/nuxt', () => ({
+      useAuth: vi.fn(async () => ({
+        authenticated: { value: true },
+      })),
+    }))
 
-    const { routeProtectionInternals } = await import('../src/nuxt/server')
+    const { guestOnly } = await import('../src/nuxt/server')
     const routeMatcher = vi.fn((pathname: string) => pathname === '/admin')
     const regexMatcher = /^\/admin$/g
 
-    expect(routeProtectionInternals.matchesRoute('/', '/')).toBe(true)
-    expect(routeProtectionInternals.matchesRoute(routeMatcher, '/admin/')).toBe(true)
+    await guestOnly({ routes: ['/'], redirectTo: '/dashboard' })({ path: '/' }, { path: '/' })
+    await guestOnly({ routes: [routeMatcher], redirectTo: '/dashboard' })({ path: '/admin/' }, { path: '/' })
     expect(routeMatcher).toHaveBeenCalledWith('/admin')
-    expect(routeProtectionInternals.matchesRoute(regexMatcher, '/admin/')).toBe(true)
-    expect(routeProtectionInternals.matchesRoute('/admin/*', '/admin/settings')).toBe(true)
-    expect(routeProtectionInternals.matchesRoute('/admin/*', '/administrator')).toBe(false)
-    expect(routeProtectionInternals.matchesRoutes(undefined, '/anything')).toBe(true)
+    await guestOnly({ routes: [regexMatcher], redirectTo: '/dashboard' })({ path: '/admin/' }, { path: '/' })
+    await guestOnly({ routes: ['/admin/*'], redirectTo: '/dashboard' })({ path: '/admin/settings' }, { path: '/' })
+    await guestOnly({ routes: ['/admin/*'], redirectTo: '/dashboard' })({ path: '/administrator' }, { path: '/' })
+    await guestOnly({ redirectTo: '/dashboard' })({ path: '/anything' }, { path: '/' })
+
+    expect(navigateTo).toHaveBeenCalledTimes(5)
   })
 
   it('keeps Nuxt useAuth authenticated state from the current-auth response', async () => {

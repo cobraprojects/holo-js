@@ -38,7 +38,6 @@ export interface PostgresAdapterOptions {
 type ScopedPostgresTransaction = {
   client: PostgresClientLike
   leased: boolean
-  released: boolean
 }
 
 type BootstrapTarget = {
@@ -100,13 +99,6 @@ function resolveBootstrapTarget(config?: PoolConfig): BootstrapTarget | undefine
   return undefined
 }
 
-function isPostgresDatabaseMissing(error: unknown): boolean {
-  return typeof error === 'object'
-    && error !== null
-    && 'code' in error
-    && error.code === '3D000'
-}
-
 export class PostgresAdapter implements DriverAdapter {
   private pool?: PostgresPoolLike
   private readonly directClient?: PostgresClientLike
@@ -140,7 +132,10 @@ export class PostgresAdapter implements DriverAdapter {
   }
 
   isDatabaseMissingError(error: unknown): boolean {
-    return isPostgresDatabaseMissing(error)
+    return typeof error === 'object'
+      && error !== null
+      && 'code' in error
+      && error.code === '3D000'
   }
 
   async disconnect(): Promise<void> {
@@ -180,7 +175,6 @@ export class PostgresAdapter implements DriverAdapter {
       return this.transactionScope.run({
         client: this.directClient,
         leased: false,
-        released: false,
       }, callback)
     }
 
@@ -191,7 +185,6 @@ export class PostgresAdapter implements DriverAdapter {
     const state: ScopedPostgresTransaction = {
       client: await this.pool.connect(),
       leased: true,
-      released: false,
     }
 
     return this.transactionScope.run(state, async () => {
@@ -366,12 +359,11 @@ export class PostgresAdapter implements DriverAdapter {
   }
 
   private releaseScopedTransaction(state: ScopedPostgresTransaction): void {
-    if (!state.leased || state.released) {
+    if (!state.leased) {
       return
     }
 
     state.client.release?.()
-    state.released = true
   }
 
   private normalizeSavepointName(name: string): string {

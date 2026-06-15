@@ -17,6 +17,7 @@ import {
   runWithBrowserFormElement,
 } from '@holo-js/forms/internal/client'
 import { normalizeSvelteKitClientHttpError, renderSvelteKitClientHttpErrorPage } from './client-errors'
+import { createReactiveView } from './reactive-view'
 
 type InitialFormState<TData> = UseFormOptions<TData>['initialState']
 type FlashedValidationPayload<TData> = FormFailurePayload<TData> & {
@@ -738,62 +739,6 @@ async function hydrateActionFormState<TData, TSuccess>(
   })
 }
 
-function createReactiveView<TValue extends object>(
-  target: TValue,
-  subscribe: () => void,
-  cache: WeakMap<object, object>,
-): TValue {
-  const cached = cache.get(target)
-
-  if (cached) {
-    return cached as TValue
-  }
-
-  const proxy = new Proxy(Array.isArray(target) ? [] : {}, {
-    get(_shell, key) {
-      subscribe()
-      const value = Reflect.get(target as object, key)
-
-      if (typeof value === 'function') {
-        return value.bind(target)
-      }
-
-      if (isPlainObject(value)) {
-        return createReactiveView(value as object, subscribe, cache)
-      }
-
-      return value
-    },
-    set(_shell, key, value) {
-      return Reflect.set(target as object, key, value)
-    },
-    ownKeys() {
-      subscribe()
-      return Reflect.ownKeys(target as object)
-    },
-    getOwnPropertyDescriptor(_shell, key) {
-      subscribe()
-      const descriptor = Reflect.getOwnPropertyDescriptor(target as object, key)
-
-      if (!descriptor) {
-        return undefined
-      }
-
-      return {
-        ...descriptor,
-        configurable: true,
-      }
-    },
-    has(_shell, key) {
-      subscribe()
-      return Reflect.has(target as object, key)
-    },
-  })
-
-  cache.set(target, proxy)
-  return proxy as TValue
-}
-
 ensureSubmitListener()
 
 function createHttpHandledForm<TData, TSuccess, TFields>(
@@ -874,7 +819,10 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
   })
   const cache = new WeakMap<object, object>()
 
-  return createReactiveView<UseFormResult<TData, TSuccess, InferFormFieldTree<TSchema>>>(form, subscribe, cache)
+  return createReactiveView<UseFormResult<TData, TSuccess, InferFormFieldTree<TSchema>>>(form, subscribe, cache, {
+    bindFunctions: true,
+    shouldWrapValue: isPlainObject,
+  })
 }
 
 export function useValidationErrors<TData = Record<string, unknown>>(

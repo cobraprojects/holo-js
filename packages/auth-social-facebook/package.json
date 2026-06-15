@@ -23,8 +23,7 @@
     "test": "vitest --run --coverage"
   },
   "dependencies": {
-    "@holo-js/auth-social": "catalog:",
-    "@holo-js/config": "catalog:"
+    "@holo-js/auth-social": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

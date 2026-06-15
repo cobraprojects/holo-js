@@ -2,52 +2,33 @@ import type {
   SocialCallbackContext,
   SocialProviderProfile,
   SocialProviderRuntime,
-  SocialProviderTokens,
   SocialRedirectContext,
 } from '@holo-js/auth-social'
+import { socialAuthInternals } from '@holo-js/auth-social'
 
 function applyScopes(url: URL, config: SocialRedirectContext['config']): void {
   const scopes = config.scopes?.length ? config.scopes : ['read:user', 'user:email']
   url.searchParams.set('scope', scopes.join(' '))
 }
 
-async function readJson(response: Response): Promise<unknown> {
-  const text = await response.text()
-  return text ? JSON.parse(text) as unknown : {}
-}
-
 async function exchangeToken(context: SocialCallbackContext): Promise<Record<string, unknown>> {
-  const body = new URLSearchParams({
-    code: context.code,
-    client_id: context.config.clientId ?? '',
-    client_secret: context.config.clientSecret ?? '',
-    redirect_uri: context.config.redirectUri ?? '',
-  })
-
   const response = await fetch('https://github.com/login/oauth/access_token', {
     method: 'POST',
     headers: {
       accept: 'application/json',
       'content-type': 'application/x-www-form-urlencoded',
     },
-    body,
+    body: socialAuthInternals.createAuthorizationCodeTokenBody(context, {
+      includeCodeVerifier: false,
+      includeGrantType: false,
+    }),
   })
 
   if (!response.ok) {
     throw new Error('[@holo-js/auth-social-github] GitHub token exchange failed.')
   }
 
-  return await readJson(response) as Record<string, unknown>
-}
-
-function normalizeTokens(payload: Record<string, unknown>): SocialProviderTokens {
-  return {
-    accessToken: String(payload.access_token ?? ''),
-    refreshToken: typeof payload.refresh_token === 'string' ? payload.refresh_token : undefined,
-    refreshTokenExpiresIn: payload.refresh_token_expires_in,
-    tokenType: payload.token_type,
-    scope: payload.scope,
-  }
+  return await socialAuthInternals.readJsonResponse(response) as Record<string, unknown>
 }
 
 function normalizeProfile(
@@ -102,12 +83,16 @@ export const githubSocialProvider: SocialProviderRuntime = Object.freeze({
       throw new Error('[@holo-js/auth-social-github] GitHub email request failed.')
     }
 
-    const profilePayload = await readJson(profileResponse) as Record<string, unknown>
-    const emailsPayload = await readJson(emailsResponse) as readonly Record<string, unknown>[]
+    const profilePayload = await socialAuthInternals.readJsonResponse(profileResponse) as Record<string, unknown>
+    const emailsPayload = await socialAuthInternals.readJsonResponse(emailsResponse) as readonly Record<string, unknown>[]
 
     return {
       profile: normalizeProfile(profilePayload, emailsPayload),
-      tokens: normalizeTokens(tokenPayload),
+      tokens: socialAuthInternals.normalizeOAuthTokens(tokenPayload, {
+        extra: {
+          refreshTokenExpiresIn: tokenPayload.refresh_token_expires_in,
+        },
+      }),
     }
   },
 })

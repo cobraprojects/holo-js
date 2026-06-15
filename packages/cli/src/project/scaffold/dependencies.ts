@@ -24,6 +24,8 @@ import {
 import { loadGeneratedProjectRegistry } from '../registry'
 import type { LoadedConfigWithCache } from './types'
 
+type ManagedHoloPackageName = `@holo-js/${string}`
+
 function normalizeDependencyMap(value: unknown): Record<string, string> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return {}
@@ -580,68 +582,36 @@ async function upsertEventsPackageDependency(projectRoot: string): Promise<boole
   return true
 }
 
-async function upsertNotificationsPackageDependency(projectRoot: string): Promise<boolean> {
+async function upsertManagedPackageDependency(projectRoot: string, packageName: ManagedHoloPackageName): Promise<boolean> {
   const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
-  const nextVersion = resolveManagedHoloPackageVersion('@holo-js/notifications', dependencies, devDependencies)
-  const currentVersion = dependencies['@holo-js/notifications']
-  const currentDevVersion = devDependencies['@holo-js/notifications']
+  const nextVersion = resolveManagedHoloPackageVersion(packageName, dependencies, devDependencies)
+  const currentVersion = dependencies[packageName]
+  const currentDevVersion = devDependencies[packageName]
 
   if (currentVersion === nextVersion && typeof currentDevVersion === 'undefined') {
     return false
   }
 
-  dependencies['@holo-js/notifications'] = nextVersion
-  delete devDependencies['@holo-js/notifications']
+  dependencies[packageName] = nextVersion
+  delete devDependencies[packageName]
   await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
   return true
+}
+
+async function upsertNotificationsPackageDependency(projectRoot: string): Promise<boolean> {
+  return await upsertManagedPackageDependency(projectRoot, '@holo-js/notifications')
 }
 
 async function upsertMailPackageDependency(projectRoot: string): Promise<boolean> {
-  const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
-  const nextVersion = resolveManagedHoloPackageVersion('@holo-js/mail', dependencies, devDependencies)
-  const currentVersion = dependencies['@holo-js/mail']
-  const currentDevVersion = devDependencies['@holo-js/mail']
-
-  if (currentVersion === nextVersion && typeof currentDevVersion === 'undefined') {
-    return false
-  }
-
-  dependencies['@holo-js/mail'] = nextVersion
-  delete devDependencies['@holo-js/mail']
-  await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
-  return true
+  return await upsertManagedPackageDependency(projectRoot, '@holo-js/mail')
 }
 
 async function upsertMediaPackageDependency(projectRoot: string): Promise<boolean> {
-  const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
-  const nextVersion = resolveManagedHoloPackageVersion('@holo-js/media', dependencies, devDependencies)
-  const currentVersion = dependencies['@holo-js/media']
-  const currentDevVersion = devDependencies['@holo-js/media']
-
-  if (currentVersion === nextVersion && typeof currentDevVersion === 'undefined') {
-    return false
-  }
-
-  dependencies['@holo-js/media'] = nextVersion
-  delete devDependencies['@holo-js/media']
-  await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
-  return true
+  return await upsertManagedPackageDependency(projectRoot, '@holo-js/media')
 }
 
 async function upsertSecurityPackageDependency(projectRoot: string): Promise<boolean> {
-  const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
-  const nextVersion = resolveManagedHoloPackageVersion('@holo-js/security', dependencies, devDependencies)
-  const currentVersion = dependencies['@holo-js/security']
-  const currentDevVersion = devDependencies['@holo-js/security']
-
-  if (currentVersion === nextVersion && typeof currentDevVersion === 'undefined') {
-    return false
-  }
-
-  dependencies['@holo-js/security'] = nextVersion
-  delete devDependencies['@holo-js/security']
-  await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
-  return true
+  return await upsertManagedPackageDependency(projectRoot, '@holo-js/security')
 }
 
 async function upsertCachePackageDependencies(
@@ -873,20 +843,7 @@ async function upsertAuthPackageDependencies(
 }
 
 async function upsertAuthorizationPackageDependency(projectRoot: string): Promise<boolean> {
-  const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
-  const nextVersion = resolveManagedHoloPackageVersion('@holo-js/authorization', dependencies, devDependencies)
-  const currentVersion = dependencies['@holo-js/authorization']
-  const currentDevVersion = devDependencies['@holo-js/authorization']
-
-  if (currentVersion === nextVersion && typeof currentDevVersion === 'undefined') {
-    return false
-  }
-
-  dependencies['@holo-js/authorization'] = nextVersion
-  delete devDependencies['@holo-js/authorization']
-
-  await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
-  return true
+  return await upsertManagedPackageDependency(projectRoot, '@holo-js/authorization')
 }
 
 async function upsertRealtimePackageDependency(projectRoot: string): Promise<boolean> {

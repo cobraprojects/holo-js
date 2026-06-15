@@ -142,7 +142,6 @@ export interface SocialCallbackFailure {
 
 const SOCIAL_BINDINGS_KEY = '__holoAuthSocialBindings__'
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
-const GET_ONLY_REQUEST_HEADER_NAMES = ['authorization', 'cookie', 'host', 'x-forwarded-host', 'x-forwarded-proto'] as const
 type RuntimeAuthProviderAdapter = ReturnType<typeof authRuntimeInternals.getRuntimeBindings>['providers'][string]
 type SocialRuntimeGlobal = typeof globalThis & {
   [SOCIAL_BINDINGS_KEY]?: SocialAuthBindings
@@ -150,98 +149,6 @@ type SocialRuntimeGlobal = typeof globalThis & {
 
 function getSocialRuntimeGlobal(): SocialRuntimeGlobal {
   return globalThis as SocialRuntimeGlobal
-}
-
-function isPlainHeaderRecord(value: unknown): value is Record<string, string | readonly string[] | undefined> {
-  return Boolean(value) && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype
-}
-
-// Header-like objects that only expose get() cannot be enumerated. OAuth needs only auth, cookie, host, and forwarded
-// host/proto metadata here; every other header is ignored unless this input path grows full iteration support.
-function appendKnownHeaders(headers: Headers, input: { readonly get?: (name: string) => string | null | undefined }): void {
-  for (const name of GET_ONLY_REQUEST_HEADER_NAMES) {
-    const value = input.get?.(name)
-    if (typeof value === 'string' && value) {
-      headers.set(name, value)
-    }
-  }
-}
-
-function hasHeaderForEach(input: SocialRequestHeaders): input is { readonly forEach: (callback: (value: string, key: string) => void) => void } {
-  return !Array.isArray(input) && 'forEach' in input && typeof input.forEach === 'function'
-}
-
-function hasHeaderEntries(input: SocialRequestHeaders): input is { readonly entries: () => Iterable<readonly [string, string]> } {
-  return !Array.isArray(input) && 'entries' in input && typeof input.entries === 'function'
-}
-
-function hasHeaderGet(input: SocialRequestHeaders): input is { readonly get: (name: string) => string | null | undefined } {
-  return !Array.isArray(input) && 'get' in input && typeof input.get === 'function'
-}
-
-function normalizeRequestHeaders(input: SocialRequestHeaders | undefined): Headers {
-  const headers = new Headers()
-  if (!input) {
-    return headers
-  }
-
-  if (input instanceof Headers || Array.isArray(input)) {
-    new Headers(input).forEach((value, name) => headers.append(name, value))
-    return headers
-  }
-
-  if (hasHeaderForEach(input)) {
-    input.forEach((value, name) => headers.append(name, value))
-    return headers
-  }
-
-  if (hasHeaderEntries(input)) {
-    for (const [name, value] of input.entries()) {
-      headers.append(name, value)
-    }
-    return headers
-  }
-
-  if (hasHeaderGet(input)) {
-    appendKnownHeaders(headers, input)
-    return headers
-  }
-
-  if (isPlainHeaderRecord(input)) {
-    for (const [name, value] of Object.entries(input)) {
-      if (typeof value === 'string') {
-        headers.append(name, value)
-        continue
-      }
-
-      if (Array.isArray(value)) {
-        const separator = name.toLowerCase() === 'cookie' ? '; ' : ','
-        const joined = value.filter((entry): entry is string => typeof entry === 'string').join(separator)
-        if (joined) {
-          headers.append(name, joined)
-        }
-      }
-    }
-  }
-
-  return headers
-}
-
-function getRequestFromLikeInput(input: SocialRequestLike): Request | undefined {
-  return input.request ?? input.web?.request ?? (input.req instanceof Request ? input.req : undefined)
-}
-
-function getRequestLikeHeaders(input: SocialRequestLike): SocialRequestHeaders | undefined {
-  return input.headers
-    ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.headers : undefined)
-    ?? input.node?.req?.headers
-}
-
-function getRequestLikeMethod(input: SocialRequestLike): string {
-  return input.method
-    ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.method : undefined)
-    ?? input.node?.req?.method
-    ?? 'GET'
 }
 
 function isProductionRuntime(): boolean {
@@ -260,34 +167,9 @@ function createRelativeRequestBaseUrl(headers: Headers): string {
   return `${protocol}://${host}`
 }
 
-function getRequestLikeUrl(input: SocialRequestLike, headers: Headers): string {
-  const url = (typeof input.url === 'string' ? input.url : input.url?.toString())
-    ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.url : undefined)
-    ?? input.node?.req?.url
-    ?? input.path
-    ?? '/'
-
-  try {
-    return new URL(url).toString()
-  } catch {
-    return new URL(url, createRelativeRequestBaseUrl(headers)).toString()
-  }
-}
-
 function normalizeSocialRequest(input: SocialRequestInput): Request {
-  if (input instanceof Request) {
-    return input
-  }
-
-  const request = getRequestFromLikeInput(input)
-  if (request) {
-    return request
-  }
-
-  const headers = normalizeRequestHeaders(getRequestLikeHeaders(input))
-  return new Request(getRequestLikeUrl(input, headers), {
-    method: getRequestLikeMethod(input),
-    headers,
+  return authRuntimeInternals.normalizeRequestInput(input, {
+    createRelativeRequestBaseUrl,
   })
 }
 
@@ -350,10 +232,6 @@ function getBindings(): SocialAuthBindings {
 
 function createState(): string {
   return randomBytes(24).toString('base64url')
-}
-
-function createBrowserBindingNonce(): string {
-  return createState()
 }
 
 function hashBrowserBinding(nonce: string): string {
@@ -494,6 +372,59 @@ export function decryptTokens(value: unknown, encryptionKey: string): unknown {
   return JSON.parse(decrypted.toString('utf8')) as unknown
 }
 
+async function readJsonResponse(response: Response): Promise<unknown> {
+  const text = await response.text()
+  return text ? JSON.parse(text) as unknown : {}
+}
+
+function createAuthorizationCodeTokenBody(
+  context: SocialCallbackContext,
+  options: { readonly includeCodeVerifier?: boolean, readonly includeGrantType?: boolean } = {},
+): URLSearchParams {
+  const body = new URLSearchParams({
+    code: context.code,
+    client_id: context.config.clientId ?? '',
+    client_secret: context.config.clientSecret ?? '',
+    redirect_uri: context.config.redirectUri ?? '',
+  })
+
+  if (options.includeGrantType !== false) {
+    body.set('grant_type', 'authorization_code')
+  }
+
+  if (options.includeCodeVerifier !== false) {
+    body.set('code_verifier', context.codeVerifier)
+  }
+
+  return body
+}
+
+function normalizeOAuthTokens(
+  payload: Record<string, unknown>,
+  options: {
+    readonly includeRefreshToken?: boolean
+    readonly includeTokenType?: boolean
+    readonly includeScope?: boolean
+    readonly extra?: Readonly<Record<string, unknown>>
+  } = {},
+): SocialProviderTokens {
+  const expiresIn = typeof payload.expires_in === 'number'
+    ? payload.expires_in
+    : typeof payload.expires_in === 'string'
+      ? Number.parseInt(payload.expires_in, 10)
+      : undefined
+  return {
+    ...(options.extra ?? {}),
+    accessToken: String(payload.access_token ?? ''),
+    expiresAt: Number.isFinite(expiresIn) ? new Date(Date.now() + (expiresIn! * 1000)) : undefined,
+    ...(options.includeRefreshToken !== false
+      ? { refreshToken: typeof payload.refresh_token === 'string' ? payload.refresh_token : undefined }
+      : {}),
+    ...(options.includeTokenType !== false ? { tokenType: payload.token_type } : {}),
+    ...(options.includeScope !== false ? { scope: payload.scope } : {}),
+  }
+}
+
 function getConfiguredProviderConfig(provider: string): {
   readonly name: string
   readonly clientId: string
@@ -531,13 +462,14 @@ function getProviderRuntime(provider: string): SocialProviderRuntime {
   return runtime
 }
 
-function resolveGuardAndProvider(provider: string): {
+type ConfiguredSocialProvider = ReturnType<typeof getConfiguredProviderConfig>
+
+function resolveGuardAndProvider(provider: string, providerConfig: ConfiguredSocialProvider): {
   readonly guard: string
   readonly authProvider: string
   readonly adapter: RuntimeAuthProviderAdapter
 } {
   const authBindings = authRuntimeInternals.getRuntimeBindings()
-  const providerConfig = getConfiguredProviderConfig(provider)
   const guardName = providerConfig.guard ?? authBindings.config.defaults.guard
   const guard = authBindings.config.guards[guardName]
   if (!guard) {
@@ -611,8 +543,9 @@ function resolveEmailForCreation(
   return `${profile.id}@${provider}.social.local`
 }
 
-async function resolveLinkedUser(
+async function resolveLinkedUserForProviderConfig(
   provider: string,
+  providerConfig: ConfiguredSocialProvider,
   profile: SocialProviderProfile,
   tokens: SocialProviderTokens,
 ): Promise<{
@@ -624,6 +557,9 @@ async function resolveLinkedUser(
   const existingIdentity = await bindings.identityStore.findByProviderUserId(provider, profile.id)
   const authBindings = authRuntimeInternals.getRuntimeBindings()
   const verificationRequired = authBindings.config.emailVerification.required === true
+  const storedTokens = providerConfig.encryptTokens
+    ? encryptTokens(tokens, bindings.encryptionKey)
+    : tokens
 
   if (existingIdentity) {
     if (!authBindings.config.guards[existingIdentity.guard]) {
@@ -654,9 +590,7 @@ async function resolveLinkedUser(
         name: profile.name,
         avatar: profile.avatar,
       },
-      tokens: getConfiguredProviderConfig(provider).encryptTokens
-        ? encryptTokens(tokens, bindings.encryptionKey)
-        : tokens,
+      tokens: storedTokens,
       updatedAt: new Date(),
     })
     return {
@@ -666,7 +600,7 @@ async function resolveLinkedUser(
     }
   }
 
-  const { guard, authProvider, adapter } = resolveGuardAndProvider(provider)
+  const { guard, authProvider, adapter } = resolveGuardAndProvider(provider, providerConfig)
   const hasVerifiedEmail = profile.emailVerified === true && typeof profile.email === 'string' && profile.email.trim().length > 0
   if (!hasVerifiedEmail && verificationRequired) {
     throw new Error(`[@holo-js/auth-social] Social sign-in with "${provider}" requires a verified email address.`)
@@ -701,9 +635,7 @@ async function resolveLinkedUser(
       name: profile.name,
       avatar: profile.avatar,
     },
-    tokens: getConfiguredProviderConfig(provider).encryptTokens
-      ? encryptTokens(tokens, bindings.encryptionKey)
-      : tokens,
+    tokens: storedTokens,
     linkedAt: new Date(),
     updatedAt: new Date(),
   })
@@ -715,13 +647,25 @@ async function resolveLinkedUser(
   }
 }
 
+async function resolveLinkedUser(
+  provider: string,
+  profile: SocialProviderProfile,
+  tokens: SocialProviderTokens,
+): Promise<{
+  readonly guard: string
+  readonly authProvider: string
+  readonly user: AuthUserLike
+}> {
+  return resolveLinkedUserForProviderConfig(provider, getConfiguredProviderConfig(provider), profile, tokens)
+}
+
 export async function redirect(provider: string, input: SocialRequestInput): Promise<Response> {
   const request = normalizeSocialRequest(input)
   const providerConfig = getConfiguredProviderConfig(provider)
   const runtime = getProviderRuntime(provider)
-  const { guard } = resolveGuardAndProvider(provider)
+  const { guard } = resolveGuardAndProvider(provider, providerConfig)
   const state = createState()
-  const browserNonce = createBrowserBindingNonce()
+  const browserNonce = createState()
   const codeVerifier = createCodeVerifier()
   const codeChallenge = createCodeChallenge(codeVerifier)
 
@@ -831,7 +775,7 @@ export async function callback(provider: string, input: SocialRequestInput): Pro
     config: providerConfig,
   })
 
-  const linked = await resolveLinkedUser(provider, exchanged.profile, exchanged.tokens)
+  const linked = await resolveLinkedUserForProviderConfig(provider, providerConfig, exchanged.profile, exchanged.tokens)
 
   return {
     ok: true,
@@ -859,9 +803,12 @@ export const socialAuthInternals = {
   createCodeChallenge,
   createCodeVerifier,
   createState,
+  createAuthorizationCodeTokenBody,
   decryptTokens,
   encryptTokens,
   getBindings,
+  normalizeOAuthTokens,
+  readJsonResponse,
   resolveEmailForCreation,
   resolveLinkedUser,
 }

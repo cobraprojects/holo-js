@@ -2,7 +2,6 @@ import { readdir } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { normalizeMigrationSlug } from '@holo-js/db'
 import {
-  getRegistryMigrationSlug,
   hasRegisteredCreateTableMigration,
   hasRegisteredMigrationSlug,
   nextMigrationTemplate,
@@ -74,6 +73,20 @@ async function hasMigrationFile(migrationsDir: string, migrationName: string): P
   ))
 }
 
+export function createMediaTableMigration(
+  projectRoot: string,
+  options?: {
+    readonly skipIfExists?: false
+  },
+): Promise<string>
+
+export function createMediaTableMigration(
+  projectRoot: string,
+  options: {
+    readonly skipIfExists: true
+  },
+): Promise<string | undefined>
+
 export async function createMediaTableMigration(
   projectRoot: string,
   options: {
@@ -116,18 +129,7 @@ export async function runMediaTableCommand(
   const migrationFilePath = await createMediaTableMigration(projectRoot)
   const { runProjectPrepare } = await import('./dev')
 
-  if (!migrationFilePath) {
-    throw new Error(`A migration for table "${DEFAULT_MEDIA_TABLE}" already exists.`)
-  }
-
   await runProjectPrepare(projectRoot)
 
   writeLine(io.stdout, `Created migration: ${makeProjectRelativePath(projectRoot, migrationFilePath)}`)
-}
-
-export const mediaMigrationInternals = {
-  getRegistryMigrationSlug,
-  hasRegisteredMigrationSlug,
-  hasRegisteredCreateTableMigration,
-  nextMigrationTemplate,
 }

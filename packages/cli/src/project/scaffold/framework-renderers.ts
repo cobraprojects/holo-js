@@ -792,7 +792,6 @@ function renderSvelteHostedAuthRouteFiles(provider: HostedAuthProvider): readonl
     { path: `src/routes/api/auth/${provider}/register/+server.ts`, contents: renderSvelteHostedAuthRegisterRoute(spec) },
     { path: `src/routes/api/auth/${provider}/callback/+server.ts`, contents: renderSvelteHostedAuthCallbackRoute(spec) },
     { path: `src/routes/api/auth/${provider}/logout/+server.ts`, contents: renderSvelteHostedAuthLogoutRoute(spec) },
-    ...renderSvelteManagedRuntimeFiles(),
   ]
 }
 
@@ -828,9 +827,7 @@ export function renderAuthRouteFiles(framework: ProjectScaffoldOptions['framewor
     ]
   }
 
-  return [
-    ...renderSvelteManagedRuntimeFiles(),
-  ]
+  return []
 }
 
 export function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly ScaffoldedFile[] {

@@ -112,15 +112,16 @@ export async function runQueueTableCommand(
   const queueConfig = await loadQueueConfig(projectRoot)
   const migrationsDir = resolve(projectRoot, project.config.paths.migrations)
   const createdFiles: string[] = []
+  const tableNames = resolveDatabaseQueueTables(queueConfig)
 
-  for (const tableName of resolveDatabaseQueueTables(queueConfig)) {
+  for (const tableName of tableNames) {
     const migrationName = normalizeQueueMigrationName(tableName)
     if (hasRegisteredMigrationSlug(registry, migrationName) || hasRegisteredCreateTableMigration(registry, tableName)) {
       throw new Error(`A migration for table "${tableName}" already exists.`)
     }
   }
 
-  for (const tableName of resolveDatabaseQueueTables(queueConfig)) {
+  for (const tableName of tableNames) {
     const migrationTemplate = await nextMigrationTemplate(normalizeQueueMigrationName(tableName), migrationsDir)
     const migrationFilePath = resolveDefaultArtifactPath(projectRoot, project.config.paths.migrations, migrationTemplate.fileName)
     await writeTextFile(migrationFilePath, renderQueueTableMigration(tableName))

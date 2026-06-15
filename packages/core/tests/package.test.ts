@@ -5,18 +5,18 @@ import { describe, expect, it } from 'vitest'
 describe('@holo-js/core package boundaries', () => {
   it('keeps queue and storage support optional in the published surface', async () => {
     const packageJsonPath = resolve(import.meta.dirname, '../package.json')
-    const runtimeTypesPath = resolve(import.meta.dirname, '../src/runtime/index.d.ts')
+    const runtimeSourcePath = resolve(import.meta.dirname, '../src/portable/holo.ts')
     const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8')) as {
       dependencies?: Record<string, string>
       peerDependencies?: Record<string, string>
       peerDependenciesMeta?: Record<string, { optional?: boolean }>
     }
-    const runtimeTypes = await readFile(runtimeTypesPath, 'utf8')
+    const runtimeSource = await readFile(runtimeSourcePath, 'utf8')
 
-    expect(runtimeTypes).not.toContain("from '@holo-js/queue'")
-    expect(runtimeTypes).not.toContain('ReadonlyMap<string, unknown>')
-    expect(runtimeTypes).toContain("readonly mode: 'async' | 'sync';")
-    expect(runtimeTypes).toContain('readonly driver: string;')
+    expect(runtimeSource).not.toContain("from '@holo-js/queue'")
+    expect(runtimeSource).not.toContain('ReadonlyMap<string, unknown>')
+    expect(runtimeSource).toContain("readonly mode: 'async' | 'sync'")
+    expect(runtimeSource).toContain('readonly driver: string')
     const optionalRuntimePackages = [
       '@holo-js/auth',
       '@holo-js/auth-clerk',

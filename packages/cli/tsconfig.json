@@ -4,6 +4,7 @@
     "outDir": "./dist",
     "baseUrl": ".",
     "paths": {
+      "@holo-js/cache-db": ["../cache-db/src/index.ts"],
       "@holo-js/config": ["../config/src/index.ts"],
       "@holo-js/db": ["../db/src/index.ts"],
       "@holo-js/events": ["../events/src/index.ts"],

@@ -136,16 +136,8 @@ export interface HostedIdentityStore {
 
 export type WorkosSyncStatus = 'created' | 'updated' | 'linked' | 'relinked'
 
-export interface WorkosAuthenticationResult<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes> {
-  readonly provider: string
-  readonly guard: string
-  readonly authProvider: string
-  readonly status: WorkosSyncStatus
-  readonly user: WorkosAuthenticatedUser<TUserAttributes>
-  readonly identity: HostedIdentityRecord
-  readonly session: WorkosVerifiedSession
-  readonly authSession?: AuthEstablishedSession
-}
+export type WorkosAuthenticationResult<TUserAttributes extends WorkosUserAttributes = WorkosDefaultUserAttributes> =
+  WorkosCompleteAuthData<TUserAttributes>
 
 export interface WorkosAuthBindings {
   readonly providers: Readonly<Record<string, WorkosProviderRuntime>>

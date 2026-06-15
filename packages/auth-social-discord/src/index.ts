@@ -2,14 +2,9 @@ import type {
   SocialCallbackContext,
   SocialProviderProfile,
   SocialProviderRuntime,
-  SocialProviderTokens,
   SocialRedirectContext,
 } from '@holo-js/auth-social'
-
-async function readJson(response: Response): Promise<unknown> {
-  const text = await response.text()
-  return text ? JSON.parse(text) as unknown : {}
-}
+import { socialAuthInternals } from '@holo-js/auth-social'
 
 function applyScopes(url: URL, config: SocialRedirectContext['config']): void {
   const scopes = config.scopes && config.scopes.length > 0 ? config.scopes : ['identify', 'email']
@@ -17,45 +12,20 @@ function applyScopes(url: URL, config: SocialRedirectContext['config']): void {
 }
 
 async function exchangeToken(context: SocialCallbackContext): Promise<Record<string, unknown>> {
-  const body = new URLSearchParams({
-    code: context.code,
-    client_id: context.config.clientId ?? '',
-    client_secret: context.config.clientSecret ?? '',
-    redirect_uri: context.config.redirectUri ?? '',
-    grant_type: 'authorization_code',
-    code_verifier: context.codeVerifier,
-  })
-
   const response = await fetch('https://discord.com/api/oauth2/token', {
     method: 'POST',
     headers: {
       accept: 'application/json',
       'content-type': 'application/x-www-form-urlencoded',
     },
-    body,
+    body: socialAuthInternals.createAuthorizationCodeTokenBody(context),
   })
 
   if (!response.ok) {
     throw new Error('[@holo-js/auth-social-discord] Discord token exchange failed.')
   }
 
-  return await readJson(response) as Record<string, unknown>
-}
-
-function normalizeTokens(payload: Record<string, unknown>): SocialProviderTokens {
-  const expiresIn = typeof payload.expires_in === 'number'
-    ? payload.expires_in
-    : typeof payload.expires_in === 'string'
-      ? Number.parseInt(payload.expires_in, 10)
-      : undefined
-
-  return {
-    accessToken: String(payload.access_token ?? ''),
-    refreshToken: typeof payload.refresh_token === 'string' ? payload.refresh_token : undefined,
-    expiresAt: Number.isFinite(expiresIn) ? new Date(Date.now() + (expiresIn! * 1000)) : undefined,
-    tokenType: payload.token_type,
-    scope: payload.scope,
-  }
+  return await socialAuthInternals.readJsonResponse(response) as Record<string, unknown>
 }
 
 function normalizeProfile(payload: Record<string, unknown>): SocialProviderProfile {
@@ -102,10 +72,10 @@ export const discordSocialProvider: SocialProviderRuntime = Object.freeze({
       throw new Error('[@holo-js/auth-social-discord] Discord user request failed.')
     }
 
-    const payload = await readJson(response) as Record<string, unknown>
+    const payload = await socialAuthInternals.readJsonResponse(response) as Record<string, unknown>
     return {
       profile: normalizeProfile(payload),
-      tokens: normalizeTokens(tokenPayload),
+      tokens: socialAuthInternals.normalizeOAuthTokens(tokenPayload),
     }
   },
 })

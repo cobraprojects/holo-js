@@ -1,4 +1,5 @@
 import { onScopeDispose, reactive } from 'vue'
+import { normalizeHoloHttpError } from '@holo-js/core/errors'
 import {
   configureRealtimeClientRuntime,
   configureRealtimeClientTransport,
@@ -14,10 +15,11 @@ import type {
   RealtimeQueryDefinition,
   RealtimeResultFor,
 } from '@holo-js/realtime'
-import { normalizeNuxtClientHttpError, renderNuxtClientHttpErrorPage } from './client-errors'
+import { renderNuxtClientHttpErrorPage } from './client-errors'
+import { isPlainObject } from './object'
 
 function emitRealtimeError(error: unknown): void {
-  const httpError = normalizeNuxtClientHttpError(error)
+  const httpError = normalizeHoloHttpError(error)
 
   if (httpError) {
     renderNuxtClientHttpErrorPage(httpError)
@@ -27,14 +29,6 @@ function emitRealtimeError(error: unknown): void {
 export const query = createRealtimeQuery
 
 export const mutation = createRealtimeMutation
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return !!value
-    && typeof value === 'object'
-    && !Array.isArray(value)
-    && !(value instanceof Date)
-    && !(value instanceof Blob)
-}
 
 function replaceReactiveObject(target: Record<string, unknown>, value: Record<string, unknown>): void {
   for (const key of Object.keys(target)) {

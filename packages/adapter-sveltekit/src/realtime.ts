@@ -15,6 +15,7 @@ import type {
   RealtimeResultFor,
 } from '@holo-js/realtime'
 import { normalizeSvelteKitClientHttpError, renderSvelteKitClientHttpErrorPage } from './client-errors'
+import { createReactiveView } from './reactive-view'
 
 function emitRealtimeError(error: unknown): void {
   const httpError = normalizeSvelteKitClientHttpError(error)
@@ -29,78 +30,38 @@ export const query = createRealtimeQuery
 export const mutation = createRealtimeMutation
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return !!value
-    && typeof value === 'object'
-    && !Array.isArray(value)
-    && !(value instanceof Date)
-    && !(value instanceof Blob)
-}
-
-function createReactiveView<TValue extends object>(
-  target: TValue,
-  subscribe: () => void,
-  cache: WeakMap<object, object>,
-): TValue {
-  const cached = cache.get(target)
-  if (cached) {
-    return cached as TValue
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
   }
 
-  const proxy = new Proxy(Array.isArray(target) ? [] : {}, {
-    get(_shell, key) {
-      subscribe()
-      const value = Reflect.get(target, key, target)
-      if (!value || typeof value !== 'object' || value instanceof Date || value instanceof Blob) {
-        return value
-      }
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
 
-      return createReactiveView(value as object, subscribe, cache)
-    },
-    set(_shell, key, value) {
-      return Reflect.set(target, key, value)
-    },
-    ownKeys() {
-      subscribe()
-      return Reflect.ownKeys(target)
-    },
-    getOwnPropertyDescriptor(_shell, key) {
-      subscribe()
-      const descriptor = Reflect.getOwnPropertyDescriptor(target, key)
-
-      if (!descriptor) {
-        return undefined
-      }
-
-      if (Array.isArray(target) && key === 'length') {
-        return descriptor
-      }
-
-      return {
-        ...descriptor,
-        configurable: true,
-      }
-    },
-    has(_shell, key) {
-      subscribe()
-      return Reflect.has(target, key)
-    },
-  })
-
-  cache.set(target, proxy)
-  return proxy as TValue
+function isReactiveObject(value: unknown): value is object {
+  return Array.isArray(value) || isPlainObject(value)
 }
 
 function createRealtimeReactiveValue<TValue>(value: TValue, subscribe: () => void): TValue {
   if (value === undefined) {
-    return createReactiveView([], subscribe, new WeakMap<object, object>()) as TValue
+    return createReactiveView([], subscribe, new WeakMap<object, object>(), {
+      preserveArrayLengthDescriptor: true,
+      shouldWrapValue: isReactiveObject,
+    }) as TValue
   }
 
   if (Array.isArray(value)) {
-    return createReactiveView([...value], subscribe, new WeakMap<object, object>()) as TValue
+    return createReactiveView([...value], subscribe, new WeakMap<object, object>(), {
+      preserveArrayLengthDescriptor: true,
+      shouldWrapValue: isReactiveObject,
+    }) as TValue
   }
 
   if (isPlainObject(value)) {
-    return createReactiveView({ ...value }, subscribe, new WeakMap<object, object>()) as TValue
+    return createReactiveView({ ...value }, subscribe, new WeakMap<object, object>(), {
+      preserveArrayLengthDescriptor: true,
+      shouldWrapValue: isReactiveObject,
+    }) as TValue
   }
 
   return value

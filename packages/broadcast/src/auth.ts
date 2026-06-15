@@ -16,6 +16,7 @@ import {
   type GeneratedChannelAuthRegistryEntry,
   isChannelDefinition,
 } from './contracts'
+import { isPlainObject, normalizeJsonValue } from './json'
 import { getBroadcastRuntimeBindings } from './runtime'
 
 type LoadedChannelDefinitions = Readonly<Record<string, ChannelDefinition>>
@@ -35,13 +36,6 @@ function getRuntimeState(): RuntimeState {
 
   runtime.__holoBroadcastAuthRuntime__ ??= {}
   return runtime.__holoBroadcastAuthRuntime__
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value
-    && typeof value === 'object'
-    && !Array.isArray(value)
-    && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
 }
 
 function normalizeRequiredString(value: string, label: string): string {
@@ -75,42 +69,12 @@ function normalizeLookupChannel(channel: string, label: string): string {
   return normalized
 }
 
-function normalizeJsonValue(value: unknown, path: string): unknown {
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) {
-      throw new Error(`[@holo-js/broadcast] ${path} must be JSON-serializable.`)
-    }
-
-    return value
-  }
-
-  if (
-    value === null
-    || typeof value === 'string'
-    || typeof value === 'boolean'
-  ) {
-    return value
-  }
-
-  if (Array.isArray(value)) {
-    return Object.freeze(value.map((entry, index) => normalizeJsonValue(entry, `${path}[${index}]`)))
-  }
-
-  if (!isRecord(value)) {
-    throw new Error(`[@holo-js/broadcast] ${path} must be JSON-serializable.`)
-  }
-
-  return Object.freeze(Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, normalizeJsonValue(entry, `${path}.${key}`)]),
-  ))
-}
-
 function normalizePresenceMember(value: unknown): Readonly<BroadcastJsonObject> {
-  if (!isRecord(value)) {
+  if (!isPlainObject(value)) {
     throw new Error('[@holo-js/broadcast] Presence authorization must return a serializable member object when allowed.')
   }
 
-  return normalizeJsonValue(value, 'Broadcast presence member') as Readonly<BroadcastJsonObject>
+  return normalizeJsonValue(value, 'Broadcast presence member', path => `[@holo-js/broadcast] ${path} must be JSON-serializable.`) as Readonly<BroadcastJsonObject>
 }
 
 function normalizeDefinitionMap(
@@ -182,7 +146,7 @@ async function importChannelDefinition(
   const importer = bindings.importModule
     ?? (async (absolutePath: string) => await import(pathToFileURL(absolutePath).href))
   const moduleValue = await importer(importPath)
-  if (!isRecord(moduleValue)) {
+  if (!isPlainObject(moduleValue)) {
     throw new Error(`[@holo-js/broadcast] Broadcast channel module "${entry.sourcePath}" must export an object module namespace.`)
   }
 

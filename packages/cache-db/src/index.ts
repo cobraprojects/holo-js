@@ -20,10 +20,53 @@ import {
   type DriverExecutionResult,
   type HoloProjectConnectionConfig,
   type SupportedDatabaseDriver,
+  type TableDefinitionBuilder,
 } from '@holo-js/db'
 
 export const DEFAULT_CACHE_DATABASE_TABLE = 'cache'
 export const DEFAULT_CACHE_DATABASE_LOCK_TABLE = 'cache_locks'
+
+export type CacheDatabaseTableColumnKind = 'string' | 'text' | 'bigInteger'
+
+export type CacheDatabaseTableColumnDefinition = {
+  readonly name: string
+  readonly kind: CacheDatabaseTableColumnKind
+  readonly nullable?: boolean
+  readonly primaryKey?: boolean
+}
+
+export type CacheDatabaseTableDefinition = {
+  readonly role: 'entries' | 'locks'
+  readonly defaultName: string
+  readonly columns: readonly CacheDatabaseTableColumnDefinition[]
+  readonly indexColumn: string
+  readonly indexName: (tableName: string) => string
+}
+
+export const CACHE_DATABASE_TABLE_DEFINITIONS = [
+  {
+    role: 'entries',
+    defaultName: DEFAULT_CACHE_DATABASE_TABLE,
+    columns: [
+      { name: 'key', kind: 'string', primaryKey: true },
+      { name: 'payload', kind: 'text' },
+      { name: 'expires_at', kind: 'bigInteger', nullable: true },
+    ],
+    indexColumn: 'expires_at',
+    indexName: tableName => `${tableName.replaceAll('.', '_')}_expires_at_index`,
+  },
+  {
+    role: 'locks',
+    defaultName: DEFAULT_CACHE_DATABASE_LOCK_TABLE,
+    columns: [
+      { name: 'name', kind: 'string', primaryKey: true },
+      { name: 'owner', kind: 'string' },
+      { name: 'expires_at', kind: 'bigInteger' },
+    ],
+    indexColumn: 'expires_at',
+    indexName: tableName => `${tableName.replaceAll('.', '_')}_expires_at_index`,
+  },
+] as const satisfies readonly CacheDatabaseTableDefinition[]
 
 export type DatabaseCacheDriverOptions = {
   readonly name: string
@@ -154,6 +197,42 @@ function createDatabaseConnection(
   }).connection(connectionName)
 }
 
+function applyCacheDatabaseColumnDefinition(
+  table: TableDefinitionBuilder<string>,
+  columnDefinition: CacheDatabaseTableColumnDefinition,
+): void {
+  let columnBuilder = table[columnDefinition.kind](columnDefinition.name)
+
+  if (columnDefinition.primaryKey) {
+    columnBuilder = columnBuilder.primaryKey()
+  }
+
+  if (columnDefinition.nullable) {
+    columnBuilder.nullable()
+  }
+}
+
+function applyCacheDatabaseTableDefinition(
+  table: TableDefinitionBuilder<string>,
+  tableName: string,
+  tableDefinition: CacheDatabaseTableDefinition,
+): void {
+  for (const columnDefinition of tableDefinition.columns) {
+    applyCacheDatabaseColumnDefinition(table, columnDefinition)
+  }
+
+  table.index([tableDefinition.indexColumn], tableDefinition.indexName(tableName))
+}
+
+function resolveCacheDatabaseTableDefinition(role: CacheDatabaseTableDefinition['role']): CacheDatabaseTableDefinition {
+  const tableDefinition = CACHE_DATABASE_TABLE_DEFINITIONS.find(definition => definition.role === role)
+  if (!tableDefinition) {
+    throw new Error(`Missing cache database table definition for "${role}".`)
+  }
+
+  return tableDefinition
+}
+
 async function prepareCacheDatabaseTables(
   connection: DatabaseContext,
   tableName = DEFAULT_CACHE_DATABASE_TABLE,
@@ -161,55 +240,20 @@ async function prepareCacheDatabaseTables(
 ): Promise<void> {
   const schema = createSchemaService(connection)
   await connection.initialize()
+  const entryTableDefinition = resolveCacheDatabaseTableDefinition('entries')
+  const lockTableDefinition = resolveCacheDatabaseTableDefinition('locks')
 
   if (!(await schema.hasTable(tableName))) {
     await schema.createTable(tableName, (table) => {
-      table.string('key').primaryKey()
-      table.text('payload')
-      table.bigInteger('expires_at').nullable()
-      table.index(['expires_at'], `${tableName.replaceAll('.', '_')}_expires_at_index`)
+      applyCacheDatabaseTableDefinition(table, tableName, entryTableDefinition)
     })
   }
 
   if (!(await schema.hasTable(lockTableName))) {
     await schema.createTable(lockTableName, (table) => {
-      table.string('name').primaryKey()
-      table.string('owner')
-      table.bigInteger('expires_at')
-      table.index(['expires_at'], `${lockTableName.replaceAll('.', '_')}_expires_at_index`)
+      applyCacheDatabaseTableDefinition(table, lockTableName, lockTableDefinition)
     })
   }
-}
-
-function renderCacheTableMigration(
-  tableName = DEFAULT_CACHE_DATABASE_TABLE,
-  lockTableName = DEFAULT_CACHE_DATABASE_LOCK_TABLE,
-): string {
-  return [
-    'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
-    '',
-    'export default defineMigration({',
-    '  async up({ schema }: MigrationContext) {',
-    `    await schema.createTable('${tableName}', (table) => {`,
-    '      table.string(\'key\').primaryKey()',
-    '      table.text(\'payload\')',
-    '      table.bigInteger(\'expires_at\').nullable()',
-    `      table.index(['expires_at'], '${tableName.replaceAll('.', '_')}_expires_at_index')`,
-    '    })',
-    `    await schema.createTable('${lockTableName}', (table) => {`,
-    '      table.string(\'name\').primaryKey()',
-    '      table.string(\'owner\')',
-    '      table.bigInteger(\'expires_at\')',
-    `      table.index(['expires_at'], '${lockTableName.replaceAll('.', '_')}_expires_at_index')`,
-    '    })',
-    '  },',
-    '  async down({ schema }: MigrationContext) {',
-    `    await schema.dropTable('${lockTableName}')`,
-    `    await schema.dropTable('${tableName}')`,
-    '  },',
-    '})',
-    '',
-  ].join('\n')
 }
 
 function resolveExecutionResultAffectedRows(result: DriverExecutionResult): number {
@@ -578,7 +622,6 @@ export const cacheDbInternals = {
   prepareCacheDatabaseTables,
   readEntry,
   readLock,
-  renderCacheTableMigration,
   resolveDriver,
   withDatabaseCacheTableGuard,
 }

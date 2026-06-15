@@ -1,4 +1,4 @@
-import { createPublicKey, randomBytes, verify as verifySignature } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { authRuntimeInternals, getAuthRuntime } from '@holo-js/auth'
 import type { AuthEstablishedSession, AuthUserLike } from '@holo-js/auth'
 import { cookie, parseCookieHeader } from '@holo-js/session'
@@ -54,9 +54,7 @@ import {
   type WorkosVerifySessionContext,
 } from './contracts'
 
-type JwkKey = Readonly<Record<string, unknown>> & {
-  readonly kid?: string
-}
+type JwkKey = Parameters<typeof authRuntimeInternals.jwt.verifyJwtSignatureWithJwk>[1]
 
 type RuntimeAuthProviderAdapter = ReturnType<typeof authRuntimeInternals.getRuntimeBindings>['providers'][string]
 
@@ -140,127 +138,8 @@ function throwUnconfigured(): never {
   throw new Error('[@holo-js/auth-workos] WorkOS auth runtime is not configured yet.')
 }
 
-function isPlainHeaderRecord(value: unknown): value is Record<string, string | readonly string[] | undefined> {
-  return Boolean(value) && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype
-}
-
-function appendKnownHeaders(headers: Headers, input: { readonly get?: (name: string) => string | null | undefined }): void {
-  for (const name of ['authorization', 'cookie', 'host', 'x-forwarded-host', 'x-forwarded-proto']) {
-    const value = input.get?.(name)
-    if (typeof value === 'string' && value) {
-      headers.set(name, value)
-    }
-  }
-}
-
-function hasHeaderForEach(input: WorkosRequestHeaders): input is { readonly forEach: (callback: (value: string, key: string) => void) => void } {
-  return !Array.isArray(input) && 'forEach' in input && typeof input.forEach === 'function'
-}
-
-function hasHeaderEntries(input: WorkosRequestHeaders): input is { readonly entries: () => Iterable<readonly [string, string]> } {
-  return !Array.isArray(input) && 'entries' in input && typeof input.entries === 'function'
-}
-
-function hasHeaderGet(input: WorkosRequestHeaders): input is { readonly get: (name: string) => string | null | undefined } {
-  return !Array.isArray(input) && 'get' in input && typeof input.get === 'function'
-}
-
-function normalizeRequestHeaders(input: WorkosRequestHeaders | undefined): Headers {
-  const headers = new Headers()
-  if (!input) {
-    return headers
-  }
-
-  if (input instanceof Headers || Array.isArray(input)) {
-    new Headers(input).forEach((value, name) => headers.append(name, value))
-    return headers
-  }
-
-  if (hasHeaderForEach(input)) {
-    input.forEach((value, name) => headers.append(name, value))
-    return headers
-  }
-
-  if (hasHeaderEntries(input)) {
-    for (const [name, value] of input.entries()) {
-      headers.append(name, value)
-    }
-    return headers
-  }
-
-  if (hasHeaderGet(input)) {
-    appendKnownHeaders(headers, input)
-    return headers
-  }
-
-  if (isPlainHeaderRecord(input)) {
-    for (const [name, value] of Object.entries(input)) {
-      if (typeof value === 'string') {
-        headers.append(name, value)
-        continue
-      }
-
-      if (Array.isArray(value)) {
-        const separator = name.toLowerCase() === 'cookie' ? '; ' : ','
-        const joined = value.filter((entry): entry is string => typeof entry === 'string').join(separator)
-        if (joined) {
-          headers.append(name, joined)
-        }
-      }
-    }
-  }
-
-  return headers
-}
-
-function getRequestFromLikeInput(input: WorkosRequestLike): Request | undefined {
-  return input.request ?? input.web?.request ?? (input.req instanceof Request ? input.req : undefined)
-}
-
-function getRequestLikeHeaders(input: WorkosRequestLike) {
-  return input.headers
-    ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.headers : undefined)
-    ?? input.node?.req?.headers
-}
-
-function getRequestLikeMethod(input: WorkosRequestLike): string {
-  return input.method
-    ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.method : undefined)
-    ?? input.node?.req?.method
-    ?? 'GET'
-}
-
-function getRequestLikeUrl(input: WorkosRequestLike, headers: Headers): string {
-  const url = (typeof input.url === 'string' ? input.url : input.url?.toString())
-    ?? (typeof input.req === 'object' && !(input.req instanceof Request) ? input.req.url : undefined)
-    ?? input.node?.req?.url
-    ?? input.path
-    ?? '/'
-
-  try {
-    return new URL(url).toString()
-  } catch {
-    const protocol = headers.get('x-forwarded-proto') ?? 'http'
-    const host = headers.get('x-forwarded-host') ?? headers.get('host') ?? 'localhost'
-    return new URL(url, `${protocol}://${host}`).toString()
-  }
-}
-
 function normalizeWorkosRequest(input: WorkosRequestInput): Request {
-  if (input instanceof Request) {
-    return input
-  }
-
-  const request = getRequestFromLikeInput(input)
-  if (request) {
-    return request
-  }
-
-  const headers = normalizeRequestHeaders(getRequestLikeHeaders(input))
-  return new Request(getRequestLikeUrl(input, headers), {
-    method: getRequestLikeMethod(input),
-    headers,
-  })
+  return authRuntimeInternals.normalizeRequestInput(input)
 }
 
 function getBindings(): WorkosAuthBindings {
@@ -275,94 +154,44 @@ function getBindings(): WorkosAuthBindings {
   }
 }
 
-function decodeJwtSegment<T>(value: string, label: string): T {
-  try {
-    return JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as T
-  } catch {
-    throw new Error(`[@holo-js/auth-workos] WorkOS token ${label} was not valid JSON.`)
-  }
-}
-
 function parseJwt(token: string): {
   readonly header: Readonly<Record<string, unknown>>
   readonly payload: Readonly<Record<string, unknown>>
   readonly signature: Buffer
   readonly signingInput: Buffer
 } {
-  const segments = token.split('.')
-  if (segments.length !== 3 || !segments[0] || !segments[1] || !segments[2]) {
-    throw new Error('[@holo-js/auth-workos] WorkOS token was not a valid JWT.')
-  }
-
-  return {
-    header: decodeJwtSegment<Readonly<Record<string, unknown>>>(segments[0], 'header'),
-    payload: decodeJwtSegment<Readonly<Record<string, unknown>>>(segments[1], 'payload'),
-    signature: Buffer.from(segments[2], 'base64url'),
-    signingInput: Buffer.from(`${segments[0]}.${segments[1]}`, 'utf8'),
-  }
+  return authRuntimeInternals.jwt.parseJwt(token, {
+    errorPrefix: '[@holo-js/auth-workos] WorkOS token',
+    malformedMessage: '[@holo-js/auth-workos] WorkOS token was not a valid JWT.',
+  })
 }
 
 function getJwtStringClaim(token: string, claim: string): string | undefined {
-  try {
-    const value = parseJwt(token).payload[claim]
-    return typeof value === 'string' && value.trim() ? value : undefined
-  } catch {
-    return undefined
-  }
+  return authRuntimeInternals.jwt.getJwtStringClaim(token, claim, {
+    errorPrefix: '[@holo-js/auth-workos] WorkOS token',
+    malformedMessage: '[@holo-js/auth-workos] WorkOS token was not a valid JWT.',
+  })
 }
 
 function verifyJwtSignatureWithJwk(
   token: ReturnType<typeof parseJwt>,
   jwk: JwkKey,
 ): boolean {
-  const algorithm = typeof token.header.alg === 'string' ? token.header.alg : ''
-  const key = createPublicKey({ key: jwk as never, format: 'jwk' })
-
-  switch (algorithm) {
-    case 'RS256':
-      return verifySignature('RSA-SHA256', token.signingInput, key, token.signature)
-    case 'RS384':
-      return verifySignature('RSA-SHA384', token.signingInput, key, token.signature)
-    case 'RS512':
-      return verifySignature('RSA-SHA512', token.signingInput, key, token.signature)
-    default:
-      throw new Error(`[@holo-js/auth-workos] Unsupported WorkOS JWT algorithm "${algorithm || 'unknown'}".`)
-  }
+  return authRuntimeInternals.jwt.verifyJwtSignatureWithJwk(token, jwk, {
+    unsupportedAlgorithmMessage: algorithm => `[@holo-js/auth-workos] Unsupported WorkOS JWT algorithm "${algorithm}".`,
+  })
 }
 
 async function fetchWorkosJwks(clientId: string, options: {
   readonly refresh?: boolean
 } = {}): Promise<readonly JwkKey[]> {
   const normalizedClientId = clientId.trim()
-  if (options.refresh) {
-    workosJwksCache.delete(normalizedClientId)
-  }
-  const existing = workosJwksCache.get(normalizedClientId)
-  if (existing) {
-    return existing
-  }
-
-  const pending = (async () => {
-    const response = await fetch(`${WORKOS_API_BASE_URL}/sso/jwks/${encodeURIComponent(normalizedClientId)}`, {
-      headers: {
-        accept: 'application/json',
-      },
-    })
-    if (!response.ok) {
-      throw new Error(`[@holo-js/auth-workos] Failed to load WorkOS JWKS for "${normalizedClientId}".`)
-    }
-
-    const payload = await response.json() as { keys?: readonly JwkKey[] }
-    return payload.keys ?? []
-  })()
-
-  workosJwksCache.set(normalizedClientId, pending)
-  try {
-    return await pending
-  } catch (error) {
-    workosJwksCache.delete(normalizedClientId)
-    throw error
-  }
+  return authRuntimeInternals.jwt.fetchCachedJwks(normalizedClientId, {
+    cache: workosJwksCache,
+    requestUrl: `${WORKOS_API_BASE_URL}/sso/jwks/${encodeURIComponent(normalizedClientId)}`,
+    refresh: options.refresh,
+    errorMessage: `[@holo-js/auth-workos] Failed to load WorkOS JWKS for "${normalizedClientId}".`,
+  })
 }
 
 async function verifyWorkosSessionToken(
@@ -1475,13 +1304,7 @@ export async function loginWithWorkos(
     readonly provider?: string
   } = {},
 ): Promise<Response> {
-  try {
-    const request = normalizeWorkosRequest(input)
-    const providerConfig = getConfiguredProviderConfig(options.provider)
-    return createWorkosRedirect(request, providerConfig, 'sign-in')
-  } catch (error) {
-    return createWorkosErrorResponse(error, 'workos_login_failed')
-  }
+  return createWorkosHostedAuthRedirect(input, options.provider, 'sign-in', 'workos_login_failed')
 }
 
 export async function registerWithWorkos(
@@ -1490,12 +1313,21 @@ export async function registerWithWorkos(
     readonly provider?: string
   } = {},
 ): Promise<Response> {
+  return createWorkosHostedAuthRedirect(input, options.provider, 'sign-up', 'workos_register_failed')
+}
+
+function createWorkosHostedAuthRedirect(
+  input: WorkosRequestInput,
+  provider: string | undefined,
+  screenHint: 'sign-in' | 'sign-up',
+  failureCode: string,
+): Response {
   try {
     const request = normalizeWorkosRequest(input)
-    const providerConfig = getConfiguredProviderConfig(options.provider)
-    return createWorkosRedirect(request, providerConfig, 'sign-up')
+    const providerConfig = getConfiguredProviderConfig(provider)
+    return createWorkosRedirect(request, providerConfig, screenHint)
   } catch (error) {
-    return createWorkosErrorResponse(error, 'workos_register_failed')
+    return createWorkosErrorResponse(error, failureCode)
   }
 }
 

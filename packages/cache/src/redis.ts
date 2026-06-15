@@ -1,6 +1,3 @@
-import { createRequire } from 'node:module'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import {
   normalizeRedisConfig,
   type HoloRedisConfig,
@@ -9,11 +6,15 @@ import {
 } from '@holo-js/config'
 import {
   CacheDriverResolutionError,
-  CacheOptionalPackageError,
   type CacheDriverContract,
-  type CacheDriverGetResult,
-  type CacheLockContract,
 } from './contracts'
+import {
+  createLazyOptionalCacheDriver,
+  createOptionalDriverModuleLoader,
+  isOptionalDriverModuleNotFoundError,
+  normalizeOptionalDriverModuleLoadError,
+  type OptionalDriverModuleLoader,
+} from './optional-driver'
 
 type RedisCacheDriverOptions = {
   readonly name: string
@@ -26,12 +27,9 @@ type RedisCacheDriverModule = {
   createRedisCacheDriver(options: RedisCacheDriverOptions): CacheDriverContract
 }
 
-type RedisDriverModuleLoader = () => Promise<RedisCacheDriverModule>
-const CACHE_DRIVER_DISPOSE_SYMBOL = Symbol.for('holo.cache.driver.dispose')
-
-type DisposableCacheDriver = CacheDriverContract & {
-  readonly [CACHE_DRIVER_DISPOSE_SYMBOL]?: () => void
-}
+type RedisDriverModuleLoader = OptionalDriverModuleLoader<RedisCacheDriverModule>
+const REDIS_CACHE_PACKAGE = '@holo-js/cache-redis'
+const REDIS_CACHE_MISSING_MESSAGE = '[@holo-js/cache] Redis cache support requires @holo-js/cache-redis to be installed.'
 
 function isNormalizedRedisConfig(
   config: HoloRedisConfig | NormalizedHoloRedisConfig,
@@ -58,10 +56,6 @@ function normalizeRuntimeRedisConfig(
   return isNormalizedRedisConfig(config) ? config : normalizeRedisConfig(config)
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 function resolveSharedRedisConnection(
   redisConfig: NormalizedHoloRedisConfig | undefined,
   connectionName: string,
@@ -83,72 +77,20 @@ function resolveSharedRedisConnection(
 }
 
 function isModuleNotFoundError(error: unknown, expectedSpecifier = '@holo-js/cache-redis'): boolean {
-  if (!error || typeof error !== 'object') {
-    return false
-  }
-
-  const message = 'message' in error && typeof (error as { message?: unknown }).message === 'string'
-    ? (error as { message: string }).message
-    : ''
-  const code = 'code' in error ? (error as { code?: unknown }).code : undefined
-  const escapedSpecifier = escapeRegExp(expectedSpecifier)
-
-  if (
-    (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND')
-    && [
-      new RegExp(`Cannot find package ['"]${escapedSpecifier}['"]`),
-      new RegExp(`Cannot find module ['"]${escapedSpecifier}['"]`),
-      new RegExp(`Could not resolve ['"]${escapedSpecifier}['"]`),
-      new RegExp(`Failed to load url\\s+(?:['"\`]${escapedSpecifier}['"\`]|${escapedSpecifier}(?=[\\s(]|$))`),
-    ].some(pattern => pattern.test(message))
-  ) {
-    return true
-  }
-
-  if ('cause' in error) {
-    return isModuleNotFoundError((error as { cause?: unknown }).cause, expectedSpecifier)
-  }
-
-  return false
+  return isOptionalDriverModuleNotFoundError(error, expectedSpecifier)
 }
 
 function normalizeRedisModuleLoadError(
   error: unknown,
   expectedSpecifier = '@holo-js/cache-redis',
-): CacheOptionalPackageError | unknown {
-  if (isModuleNotFoundError(error, expectedSpecifier)) {
-    return new CacheOptionalPackageError(
-      '[@holo-js/cache] Redis cache support requires @holo-js/cache-redis to be installed.',
-      { cause: error },
-    )
-  }
-
-  return error
+): ReturnType<typeof normalizeOptionalDriverModuleLoadError> {
+  return normalizeOptionalDriverModuleLoadError(error, expectedSpecifier, REDIS_CACHE_MISSING_MESSAGE)
 }
 
-/* v8 ignore start -- optional-peer loading failures are covered through normalizeRedisModuleLoadError in this monorepo test graph. */
-async function importRedisDriverModuleFromProject(specifier: string): Promise<RedisCacheDriverModule> {
-  const projectRequire = createRequire(join(process.cwd(), 'package.json'))
-  return await import(pathToFileURL(projectRequire.resolve(specifier)).href) as RedisCacheDriverModule
-}
-
-async function loadRedisDriverModule(): Promise<RedisCacheDriverModule> {
-  const specifier = '@holo-js/cache-redis' as string
-  try {
-    return await import(/* webpackIgnore: true */ specifier) as RedisCacheDriverModule
-  } catch (error) {
-    if (!isModuleNotFoundError(error, specifier)) {
-      throw normalizeRedisModuleLoadError(error, specifier)
-    }
-
-    try {
-      return await importRedisDriverModuleFromProject(specifier)
-    } catch (fallbackError) {
-      throw normalizeRedisModuleLoadError(fallbackError, specifier)
-    }
-  }
-}
-/* v8 ignore stop */
+const loadRedisDriverModule = createOptionalDriverModuleLoader<RedisCacheDriverModule>(
+  REDIS_CACHE_PACKAGE,
+  REDIS_CACHE_MISSING_MESSAGE,
+)
 
 let redisDriverModuleLoader: RedisDriverModuleLoader = loadRedisDriverModule
 
@@ -160,121 +102,17 @@ function resetRedisDriverModuleLoader(): void {
   redisDriverModuleLoader = loadRedisDriverModule
 }
 
-class LazyRedisCacheDriver implements CacheDriverContract {
-  readonly driver = 'redis' as const
-
-  private driverInstance?: CacheDriverContract
-  private pending?: Promise<CacheDriverContract>
-  private disposalGeneration = 0
-
-  constructor(private readonly options: RedisCacheDriverOptions) {}
-
-  get name(): string {
-    return this.options.name
-  }
-
-  private async resolveDriver(): Promise<CacheDriverContract> {
-    if (this.driverInstance) return this.driverInstance
-
-    const pendingGeneration = this.disposalGeneration
-    this.pending ??= redisDriverModuleLoader().then((module) => {
-      const driver = module.createRedisCacheDriver(this.options)
-      if (this.disposalGeneration === pendingGeneration) {
-        this.driverInstance = driver
-      }
-      return driver
-    }).finally(() => {
-      this.pending = undefined
-    })
-
-    return this.pending
-  }
-
-  private async withDriver<TValue>(
-    callback: (driver: CacheDriverContract) => Promise<TValue> | TValue,
-  ): Promise<TValue> {
-    return callback(await this.resolveDriver())
-  }
-
-  [CACHE_DRIVER_DISPOSE_SYMBOL](): void {
-    const pending = this.pending
-    const driverInstance = this.driverInstance
-
-    this.disposalGeneration += 1
-    this.driverInstance = undefined
-    this.pending = undefined
-
-    if (driverInstance) {
-      const disposable = driverInstance as DisposableCacheDriver
-      disposable[CACHE_DRIVER_DISPOSE_SYMBOL]?.()
-      return
-    }
-
-    pending?.then((driver) => {
-      const disposable = driver as DisposableCacheDriver
-      disposable[CACHE_DRIVER_DISPOSE_SYMBOL]?.()
-    }).catch(() => {})
-  }
-
-  private createLockProxy(name: string, seconds: number): CacheLockContract {
-    let lockPromise: Promise<CacheLockContract> | undefined
-
-    const resolveLock = async (): Promise<CacheLockContract> => {
-      lockPromise ??= this.withDriver((driver) => driver.lock(name, seconds))
-      return lockPromise
-    }
-
-    return {
-      name,
-      async get<TValue>(callback?: () => TValue | Promise<TValue>): Promise<boolean | TValue> {
-        return (await resolveLock()).get(callback)
-      },
-      async release(): Promise<boolean> {
-        return (await resolveLock()).release()
-      },
-      async block<TValue>(waitSeconds: number, callback?: () => TValue | Promise<TValue>): Promise<boolean | TValue> {
-        return (await resolveLock()).block(waitSeconds, callback)
-      },
-    }
-  }
-
-  async get(key: string): Promise<CacheDriverGetResult> {
-    return this.withDriver((driver) => driver.get(key))
-  }
-
-  async put(input: Parameters<CacheDriverContract['put']>[0]): Promise<boolean> {
-    return this.withDriver((driver) => driver.put(input))
-  }
-
-  async add(input: Parameters<CacheDriverContract['add']>[0]): Promise<boolean> {
-    return this.withDriver((driver) => driver.add(input))
-  }
-
-  async forget(key: string): Promise<boolean> {
-    return this.withDriver((driver) => driver.forget(key))
-  }
-
-  async flush(): Promise<void> {
-    await this.withDriver((driver) => driver.flush())
-  }
-
-  async increment(key: string, amount: number): Promise<number> {
-    return this.withDriver((driver) => driver.increment(key, amount))
-  }
-
-  async decrement(key: string, amount: number): Promise<number> {
-    return this.withDriver((driver) => driver.decrement(key, amount))
-  }
-
-  lock(name: string, seconds: number): CacheLockContract {
-    return this.createLockProxy(name, seconds)
-  }
-}
-
 function createRedisCacheDriver(
   options: RedisCacheDriverOptions,
 ): CacheDriverContract {
-  return new LazyRedisCacheDriver(options)
+  return createLazyOptionalCacheDriver({
+    name: options.name,
+    driver: 'redis',
+    options,
+    loadModule: redisDriverModuleLoader,
+    createDriver: (module, driverOptions) => module.createRedisCacheDriver(driverOptions),
+    disposeDriver: true,
+  })
 }
 
 export const cacheRedisInternals = {

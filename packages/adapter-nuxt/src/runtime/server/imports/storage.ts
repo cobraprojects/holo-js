@@ -1,4 +1,4 @@
 export {
   Storage,
   useStorage,
-} from '../utils/storage'
+} from '@holo-js/storage/runtime'

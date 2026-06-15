@@ -18,17 +18,15 @@ export type AuthOptions = {
 
 export type RouteMatcher = string | RegExp | ((pathname: string) => boolean)
 
-export type GuestOnlyOptions = AuthOptions & {
+type RouteProtectionOptions = AuthOptions & {
   readonly redirectTo: string
   readonly routes?: readonly RouteMatcher[]
   readonly status?: 301 | 302 | 303 | 307 | 308
 }
 
-export type AuthOnlyOptions = AuthOptions & {
-  readonly redirectTo: string
-  readonly routes?: readonly RouteMatcher[]
-  readonly status?: 301 | 302 | 303 | 307 | 308
-}
+export type GuestOnlyOptions = RouteProtectionOptions
+
+export type AuthOnlyOptions = RouteProtectionOptions
 
 type NextRouteProtectionRequest = NextAuthRequestLike & {
   readonly method?: string
@@ -123,7 +121,10 @@ export async function auth(options: AuthOptions = {}): Promise<AuthState> {
   }
 }
 
-export function guestOnly(options: GuestOnlyOptions): NextRouteProtectionProxy {
+function createRouteProtectionProxy(
+  options: RouteProtectionOptions,
+  shouldRedirect: (auth: AuthState) => boolean,
+): NextRouteProtectionProxy {
   return async function proxy(request) {
     const requestUrl = request.nextUrl ?? new URL(request.url)
     if (!matchesRoutes(options.routes, requestUrl.pathname)) {
@@ -132,7 +133,7 @@ export function guestOnly(options: GuestOnlyOptions): NextRouteProtectionProxy {
 
     return runWithNextAuthRequest(request, async () => {
       const currentAuth = await auth({ guard: options.guard })
-      if (!currentAuth.authenticated) {
+      if (!shouldRedirect(currentAuth)) {
         return undefined
       }
 
@@ -146,27 +147,12 @@ export function guestOnly(options: GuestOnlyOptions): NextRouteProtectionProxy {
   }
 }
 
+export function guestOnly(options: GuestOnlyOptions): NextRouteProtectionProxy {
+  return createRouteProtectionProxy(options, currentAuth => currentAuth.authenticated)
+}
+
 export function authOnly(options: AuthOnlyOptions): NextRouteProtectionProxy {
-  return async function proxy(request) {
-    const requestUrl = request.nextUrl ?? new URL(request.url)
-    if (!matchesRoutes(options.routes, requestUrl.pathname)) {
-      return undefined
-    }
-
-    return runWithNextAuthRequest(request, async () => {
-      const currentAuth = await auth({ guard: options.guard })
-      if (currentAuth.authenticated) {
-        return undefined
-      }
-
-      const redirectUrl = new URL(options.redirectTo, request.url)
-      if (isSameUrl(requestUrl, redirectUrl)) {
-        return undefined
-      }
-
-      return Response.redirect(redirectUrl, options.status ?? 303)
-    })
-  }
+  return createRouteProtectionProxy(options, currentAuth => !currentAuth.authenticated)
 }
 
 export function protectRoutes(...proxies: readonly NextRouteProtectionProxy[]): NextRouteProtectionProxy {

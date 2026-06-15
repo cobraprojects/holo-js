@@ -228,16 +228,27 @@ const projectExecutorLoaders: ProjectExecutorLoaderMap = {
   runProjectDependencyInstall: async () => (await loadDevModule()).runProjectDependencyInstall,
 }
 
+async function resolveExecutor<
+  TExecutors extends Readonly<Record<string, unknown>>,
+  TKey extends keyof TExecutors & string,
+>(
+  executors: TExecutors,
+  loaders: { readonly [TLoaderKey in TKey]: () => Promise<NonNullable<TExecutors[TLoaderKey]>> },
+  key: TKey,
+): Promise<NonNullable<TExecutors[TKey]>> {
+  const existing = executors[key]
+  if (existing) {
+    return existing as NonNullable<TExecutors[TKey]>
+  }
+
+  return await loaders[key]()
+}
+
 async function resolveProjectExecutor<TKey extends ProjectExecutorKey>(
   projectExecutors: ProjectCommandExecutors,
   key: TKey,
 ): Promise<NonNullable<ProjectCommandExecutors[TKey]>> {
-  const existing = projectExecutors[key]
-  if (existing) {
-    return existing as NonNullable<ProjectCommandExecutors[TKey]>
-  }
-
-  return projectExecutorLoaders[key]()
+  return await resolveExecutor(projectExecutors, projectExecutorLoaders, key)
 }
 
 const queueExecutorLoaders: QueueExecutorLoaderMap = {
@@ -271,48 +282,28 @@ async function resolveQueueExecutor<TKey extends QueueExecutorKey>(
   queueExecutors: QueueCommandExecutors,
   key: TKey,
 ): Promise<NonNullable<QueueCommandExecutors[TKey]>> {
-  const existing = queueExecutors[key]
-  if (existing) {
-    return existing as NonNullable<QueueCommandExecutors[TKey]>
-  }
-
-  return queueExecutorLoaders[key]()
+  return await resolveExecutor(queueExecutors, queueExecutorLoaders, key)
 }
 
 async function resolveCacheExecutor<TKey extends CacheExecutorKey>(
   cacheExecutors: CacheCommandExecutors,
   key: TKey,
 ): Promise<NonNullable<CacheCommandExecutors[TKey]>> {
-  const existing = cacheExecutors[key]
-  if (existing) {
-    return existing as NonNullable<CacheCommandExecutors[TKey]>
-  }
-
-  return cacheExecutorLoaders[key]()
+  return await resolveExecutor(cacheExecutors, cacheExecutorLoaders, key)
 }
 
 async function resolveMediaExecutor<TKey extends MediaExecutorKey>(
   mediaExecutors: MediaCommandExecutors,
   key: TKey,
 ): Promise<NonNullable<MediaCommandExecutors[TKey]>> {
-  const existing = mediaExecutors[key]
-  if (existing) {
-    return existing as NonNullable<MediaCommandExecutors[TKey]>
-  }
-
-  return mediaExecutorLoaders[key]()
+  return await resolveExecutor(mediaExecutors, mediaExecutorLoaders, key)
 }
 
 async function resolveBroadcastExecutor<TKey extends BroadcastExecutorKey>(
   broadcastExecutors: BroadcastCommandExecutors,
   key: TKey,
 ): Promise<NonNullable<BroadcastCommandExecutors[TKey]>> {
-  const existing = broadcastExecutors[key]
-  if (existing) {
-    return existing as NonNullable<BroadcastCommandExecutors[TKey]>
-  }
-
-  return broadcastExecutorLoaders[key]()
+  return await resolveExecutor(broadcastExecutors, broadcastExecutorLoaders, key)
 }
 
 async function resolveGeneratorCommand<TKey extends GeneratorCommandKey>(

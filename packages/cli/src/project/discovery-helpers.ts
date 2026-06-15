@@ -63,8 +63,8 @@ export function deriveJobNameFromPath(jobsRoot: string, sourcePath: string): str
     .join('.')
 }
 
-export function deriveEventNameFromPath(eventsRoot: string, sourcePath: string): string {
-  const relativePath = toPosixPath(relative(eventsRoot, sourcePath)).replace(COMMAND_FILE_PATTERN, '')
+function deriveDottedNameFromPath(root: string, sourcePath: string, emptyMessage: string): string {
+  const relativePath = toPosixPath(relative(root, sourcePath)).replace(COMMAND_FILE_PATTERN, '')
   const derived = relativePath
     .split('/')
     .map(part => part.trim())
@@ -72,58 +72,26 @@ export function deriveEventNameFromPath(eventsRoot: string, sourcePath: string):
     .join('.')
 
   if (!derived) {
-    throw new Error('[Holo Events] Derived event names require a non-empty source path.')
+    throw new Error(emptyMessage)
   }
 
   return derived
+}
+
+export function deriveEventNameFromPath(eventsRoot: string, sourcePath: string): string {
+  return deriveDottedNameFromPath(eventsRoot, sourcePath, '[Holo Events] Derived event names require a non-empty source path.')
 }
 
 export function deriveListenerIdFromPath(listenersRoot: string, sourcePath: string): string {
-  const relativePath = toPosixPath(relative(listenersRoot, sourcePath))
-  const derived = relativePath
-    .replace(COMMAND_FILE_PATTERN, '')
-    .split('/')
-    .map(part => part.trim())
-    .filter(Boolean)
-    .join('.')
-
-  if (!derived) {
-    throw new Error('[Holo Events] Derived listener identifiers require a non-empty source path.')
-  }
-
-  return derived
+  return deriveDottedNameFromPath(listenersRoot, sourcePath, '[Holo Events] Derived listener identifiers require a non-empty source path.')
 }
 
 export function deriveBroadcastNameFromPath(root: string, sourcePath: string): string {
-  const relativePath = toPosixPath(relative(root, sourcePath)).replace(COMMAND_FILE_PATTERN, '')
-  const derived = relativePath
-    .split('/')
-    .map(part => part.trim())
-    .filter(Boolean)
-    .join('.')
-
-  /* v8 ignore next 3 -- discovered file paths always produce a non-empty derived broadcast name */
-  if (!derived) {
-    throw new Error('[Holo Broadcast] Derived broadcast names require a non-empty source path.')
-  }
-
-  return derived
+  return deriveDottedNameFromPath(root, sourcePath, '[Holo Broadcast] Derived broadcast names require a non-empty source path.')
 }
 
 export function deriveChannelPatternFromPath(root: string, sourcePath: string): string {
-  const relativePath = toPosixPath(relative(root, sourcePath)).replace(COMMAND_FILE_PATTERN, '')
-  const derived = relativePath
-    .split('/')
-    .map(part => part.trim())
-    .filter(Boolean)
-    .join('.')
-
-  /* v8 ignore next 3 -- discovered file paths always produce a non-empty derived channel pattern */
-  if (!derived) {
-    throw new Error('[Holo Broadcast] Derived channel patterns require a non-empty source path.')
-  }
-
-  return derived
+  return deriveDottedNameFromPath(root, sourcePath, '[Holo Broadcast] Derived channel patterns require a non-empty source path.')
 }
 
 export function resolveDiscoveredJobMetadata(

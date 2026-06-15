@@ -2,9 +2,9 @@ import type {
   SocialCallbackContext,
   SocialProviderProfile,
   SocialProviderRuntime,
-  SocialProviderTokens,
   SocialRedirectContext,
 } from '@holo-js/auth-social'
+import { socialAuthInternals } from '@holo-js/auth-social'
 
 function applyScopes(url: URL, config: SocialRedirectContext['config'], fallback: readonly string[]): void {
   const configuredScopes = config.scopes ?? []
@@ -12,54 +12,21 @@ function applyScopes(url: URL, config: SocialRedirectContext['config'], fallback
   url.searchParams.set('scope', scopes.join(' '))
 }
 
-async function readJson(response: Response): Promise<unknown> {
-  const text = await response.text()
-  return text ? JSON.parse(text) as unknown : {}
-}
-
-async function exchangeToken(
-  context: SocialCallbackContext,
-  endpoint: string,
-): Promise<Record<string, unknown>> {
-  const body = new URLSearchParams({
-    code: context.code,
-    client_id: context.config.clientId ?? '',
-    client_secret: context.config.clientSecret ?? '',
-    redirect_uri: context.config.redirectUri ?? '',
-    grant_type: 'authorization_code',
-    code_verifier: context.codeVerifier,
-  })
-
-  const response = await fetch(endpoint, {
+async function exchangeToken(context: SocialCallbackContext): Promise<Record<string, unknown>> {
+  const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: {
       accept: 'application/json',
       'content-type': 'application/x-www-form-urlencoded',
     },
-    body,
+    body: socialAuthInternals.createAuthorizationCodeTokenBody(context),
   })
 
   if (!response.ok) {
     throw new Error('[@holo-js/auth-social-google] Google token exchange failed.')
   }
 
-  return await readJson(response) as Record<string, unknown>
-}
-
-function normalizeTokensWithAccessToken(payload: Record<string, unknown>, accessToken: string): SocialProviderTokens {
-  const expiresIn = typeof payload.expires_in === 'number'
-    ? payload.expires_in
-    : typeof payload.expires_in === 'string'
-      ? Number.parseInt(payload.expires_in, 10)
-      : undefined
-
-  return {
-    accessToken,
-    refreshToken: typeof payload.refresh_token === 'string' ? payload.refresh_token : undefined,
-    expiresAt: Number.isFinite(expiresIn) ? new Date(Date.now() + (expiresIn! * 1000)) : undefined,
-    idToken: payload.id_token,
-    tokenType: payload.token_type,
-  }
+  return await socialAuthInternals.readJsonResponse(response) as Record<string, unknown>
 }
 
 function readAccessToken(payload: Record<string, unknown>): string {
@@ -100,7 +67,7 @@ export const googleSocialProvider: SocialProviderRuntime = Object.freeze({
     return url.toString()
   },
   async exchangeCode(context: SocialCallbackContext) {
-    const tokenPayload = await exchangeToken(context, 'https://oauth2.googleapis.com/token')
+    const tokenPayload = await exchangeToken(context)
     const accessToken = readAccessToken(tokenPayload)
     const profileResponse = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
       headers: {
@@ -112,10 +79,16 @@ export const googleSocialProvider: SocialProviderRuntime = Object.freeze({
       throw new Error('[@holo-js/auth-social-google] Google user info request failed.')
     }
 
-    const profilePayload = await readJson(profileResponse) as Record<string, unknown>
+    const profilePayload = await socialAuthInternals.readJsonResponse(profileResponse) as Record<string, unknown>
     return {
       profile: normalizeProfile(profilePayload),
-      tokens: normalizeTokensWithAccessToken(tokenPayload, accessToken),
+      tokens: socialAuthInternals.normalizeOAuthTokens(tokenPayload, {
+        includeScope: false,
+        extra: {
+          accessToken,
+          idToken: tokenPayload.id_token,
+        },
+      }),
     }
   },
 })

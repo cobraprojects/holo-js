@@ -1,5 +1,6 @@
 import type { NormalizedHoloBroadcastConfig } from '@holo-js/config'
 import type { InferSchemaData, ValidationSchema } from '@holo-js/validation'
+import { isPlainObject, normalizeJsonValue as normalizeBroadcastJsonValue } from './json'
 
 const HOLO_BROADCAST_DEFINITION_MARKER = Symbol.for('holo-js.broadcast.definition')
 const HOLO_CHANNEL_DEFINITION_MARKER = Symbol.for('holo-js.broadcast.channel')
@@ -478,13 +479,6 @@ function isReadonlyArray(value: unknown): value is readonly unknown[] {
   return Array.isArray(value)
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null
-    && typeof value === 'object'
-    && !Array.isArray(value)
-    && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
-}
-
 function normalizeOptionalString(value: string | undefined, label: string): string | undefined {
   if (typeof value === 'undefined') {
     return undefined
@@ -519,42 +513,6 @@ function normalizeDelayValue(value: BroadcastDelayValue | undefined): BroadcastD
   return value
 }
 
-function normalizeJsonValue(value: unknown, path: string): BroadcastJsonValue {
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) {
-      throw new Error(`[Holo Broadcast] ${path} must be JSON-serializable.`)
-    }
-
-    return value
-  }
-
-  if (
-    value === null
-    || typeof value === 'string'
-    || typeof value === 'boolean'
-  ) {
-    return value
-  }
-
-  if (Array.isArray(value)) {
-    return Object.freeze(value.map((entry, index) => normalizeJsonValue(entry, `${path}[${index}]`)))
-  }
-
-  if (isPlainObject(value)) {
-    return Object.freeze(Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => {
-        if (!key.trim()) {
-          throw new Error(`[Holo Broadcast] ${path} must not include empty payload keys.`)
-        }
-
-        return [key, normalizeJsonValue(entry, `${path}.${key}`)] as const
-      }),
-    ))
-  }
-
-  throw new Error(`[Holo Broadcast] ${path} must be JSON-serializable.`)
-}
-
 function normalizePayload<TPayload extends BroadcastJsonObject>(
   payload: TPayload | (() => TPayload) | undefined,
 ): Readonly<TPayload> {
@@ -566,7 +524,18 @@ function normalizePayload<TPayload extends BroadcastJsonObject>(
     throw new Error('[Holo Broadcast] Broadcast payload must be a plain object.')
   }
 
-  return normalizeJsonValue(resolved, 'Broadcast payload') as Readonly<TPayload>
+  return normalizeBroadcastJsonValue(
+    resolved,
+    'Broadcast payload',
+    path => `[Holo Broadcast] ${path} must be JSON-serializable.`,
+    {
+      validateKey(key, path) {
+        if (!key.trim()) {
+          throw new Error(`[Holo Broadcast] ${path} must not include empty payload keys.`)
+        }
+      },
+    },
+  ) as Readonly<TPayload>
 }
 
 function normalizeQueueOptions(queue: boolean | BroadcastQueueOptions | undefined): NormalizedBroadcastQueueOptions {
@@ -912,7 +881,7 @@ export const broadcastInternals = {
   normalizeChannelDefinition,
   normalizeChannelPattern,
   normalizeDelayValue,
-  normalizeJsonValue,
+  normalizeJsonValue: normalizeBroadcastJsonValue,
   normalizeQueueOptions,
   normalizeWhisperDefinitions,
 }
