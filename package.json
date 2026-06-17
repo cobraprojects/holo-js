@@ -170,7 +170,7 @@
     "make:migration": "holo make:migration",
     "changeset": "changeset",
     "version-packages": "changeset version && node scripts/sync-workspace-catalog-versions.mjs",
-    "release": "bun run build && node scripts/publish-with-resolved-catalogs.mjs",
+    "release": "node scripts/publish-with-resolved-catalogs.mjs --preflight && bun run build && node scripts/publish-with-resolved-catalogs.mjs",
     "clean": "rm -rf node_modules packages/*/node_modules apps/*/node_modules playground/node_modules packages/*/dist apps/*/dist playground/.output .nuxt apps/*/.nuxt playground/.nuxt"
   },
   "devDependencies": {

@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { afterEach, test } from 'node:test'
 import {
   resolveCatalogRangesInManifest,
+  validateNpmPublishAuthentication,
   withResolvedCatalogManifests,
 } from './publish-with-resolved-catalogs.mjs'
 
@@ -135,4 +136,40 @@ test('catalog manifest publishing skips package directories without package mani
   }, repoRoot)
 
   assert.equal(await readFile(join(repoRoot, 'packages/example/package.json'), 'utf8'), originalManifest)
+})
+
+test('npm publish authentication preflight returns the authenticated user', () => {
+  const calls = []
+  const user = validateNpmPublishAuthentication({
+    root: '/repo',
+    spawn: (command, args, options) => {
+      calls.push({ command, args, options })
+
+      return {
+        status: 0,
+        stdout: 'cobra\n',
+        stderr: '',
+      }
+    },
+  })
+
+  assert.equal(user, 'cobra')
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].args, ['whoami'])
+  assert.equal(calls[0].options.cwd, '/repo')
+  assert.equal(calls[0].options.encoding, 'utf8')
+})
+
+test('npm publish authentication preflight rejects invalid npm credentials', () => {
+  assert.throws(
+    () => validateNpmPublishAuthentication({
+      root: '/repo',
+      spawn: () => ({
+        status: 1,
+        stdout: '',
+        stderr: 'npm error code E401\nnpm error 401 Unauthorized',
+      }),
+    }),
+    /Cannot publish Holo packages because npm authentication failed\.[\s\S]*npm login[\s\S]*E401/,
+  )
 })

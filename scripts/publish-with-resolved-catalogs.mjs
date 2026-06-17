@@ -10,6 +10,7 @@ const dependencySections = [
   'peerDependencies',
   'optionalDependencies',
 ]
+const npmBinary = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -17,6 +18,46 @@ function isObject(value) {
 
 async function readJson(filePath) {
   return JSON.parse(await readFile(filePath, 'utf8'))
+}
+
+function normalizeProcessOutput(output) {
+  if (typeof output === 'string') {
+    return output.trim()
+  }
+
+  if (Buffer.isBuffer(output)) {
+    return output.toString('utf8').trim()
+  }
+
+  return ''
+}
+
+export function validateNpmPublishAuthentication(options = {}) {
+  const spawn = options.spawn ?? spawnSync
+  const root = options.root ?? repoRoot
+  const result = spawn(npmBinary, ['whoami'], {
+    cwd: root,
+    encoding: 'utf8',
+  })
+
+  if (result.error) {
+    throw result.error
+  }
+
+  if (result.status !== 0) {
+    const output = [
+      normalizeProcessOutput(result.stderr),
+      normalizeProcessOutput(result.stdout),
+    ].filter(Boolean).join('\n')
+    const detail = output.length > 0 ? `\n\nnpm whoami output:\n${output}` : ''
+
+    throw new Error([
+      'Cannot publish Holo packages because npm authentication failed.',
+      'Run `npm login` or configure an npm token with publish access to the @holo-js scope, then retry `bun run release`.',
+    ].join('\n') + detail)
+  }
+
+  return normalizeProcessOutput(result.stdout)
 }
 
 async function listPackageManifestPaths(root = repoRoot) {
@@ -110,6 +151,7 @@ export async function withResolvedCatalogManifests(callback, root = repoRoot) {
 
 async function publishWithResolvedCatalogs() {
   let publishStatus = 0
+  validateNpmPublishAuthentication()
 
   await withResolvedCatalogManifests(async () => {
     const changesetBinary = join(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'changeset.cmd' : 'changeset')
@@ -129,5 +171,10 @@ async function publishWithResolvedCatalogs() {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  if (process.argv.includes('--preflight')) {
+    validateNpmPublishAuthentication()
+    process.exit(0)
+  }
+
   process.exit(await publishWithResolvedCatalogs())
 }
