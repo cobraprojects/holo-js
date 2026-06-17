@@ -1836,6 +1836,29 @@ export default defineQueueConfig({
     expect(() => useConfig('app')).toThrow('Holo config runtime is not configured.')
   })
 
+  it('skips eager service boot during generated framework builds', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root, join(root, 'missing', 'database.sqlite'))
+
+    const runtime = await createHolo(root, {
+      processEnv: {
+        ...process.env,
+        HOLO_INTERNAL_FRAMEWORK_BUILD: '1',
+      },
+    })
+
+    await expect(runtime.initialize()).resolves.toBeUndefined()
+    expect(runtime.initialized).toBe(true)
+    expect(runtime.manager.connection().isConnected()).toBe(false)
+    expect(getHolo()).toBe(runtime)
+    expect(useConfig('app').name).toBe('Runtime App')
+
+    await runtime.shutdown()
+
+    const normalRuntime = await createHolo(root)
+    await expect(normalRuntime.initialize()).rejects.toThrow()
+  })
+
   it('disconnects initialized DB connections when queue runtime setup fails after DB boot', async () => {
     const root = await createProject()
     await writeBaseConfig(root)

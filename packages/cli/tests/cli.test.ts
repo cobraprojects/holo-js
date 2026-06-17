@@ -2961,6 +2961,7 @@ export default {
       '#!/usr/bin/env node',
       'console.log(process.argv.slice(2).join(" "))',
       'console.log(process.env.NODE_OPTIONS ?? "")',
+      'console.log(process.env.HOLO_INTERNAL_FRAMEWORK_BUILD ?? "")',
       '',
     ].join('\n'))
     const nextBootstrapPathMarker = '/.holo-js/generated/next/bootstrap.mjs'
@@ -2969,11 +2970,13 @@ export default {
     expect(nextBuildResult.stdout).toContain('build')
     expect(nextBuildResult.stdout).toContain('--import=file://')
     expect(nextBuildResult.stdout).toContain(nextBootstrapPathMarker)
+    expect(nextBuildResult.stdout.split(/\r?\n/)).toContain('1')
     const nextDevResult = runNodeScript(nextRoot, join(nextRoot, '.holo-js/framework/run.mjs'), ['dev'])
     expect(nextDevResult.status).toBe(0)
     expect(nextDevResult.stdout).toContain('dev')
     expect(nextDevResult.stdout).toContain('--import=file://')
     expect(nextDevResult.stdout).toContain(nextBootstrapPathMarker)
+    expect(nextDevResult.stdout.split(/\r?\n/)).not.toContain('1')
     await expect(stat(join(nextRoot, 'server/holo.ts'))).rejects.toThrow()
     expect(await readFile(join(nextRoot, '.holo-js/generated/next/holo.ts'), 'utf8')).not.toContain('schema.generated')
     expect(await readFile(join(nextRoot, 'app/layout.tsx'), 'utf8')).not.toContain('schema.generated')

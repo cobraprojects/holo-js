@@ -921,6 +921,12 @@ export interface CreateHoloOptions {
   }
 }
 
+const frameworkBuildEnvKey = 'HOLO_INTERNAL_FRAMEWORK_BUILD'
+
+function shouldBootRuntimeServices(processEnv: NodeJS.ProcessEnv = process.env): boolean {
+  return processEnv[frameworkBuildEnvKey] !== '1'
+}
+
 export interface HoloRuntime<TCustom extends HoloConfigMap = HoloConfigMap> {
   readonly projectRoot: string
   readonly loadedConfig: LoadedHoloConfig<TCustom>
@@ -4352,62 +4358,64 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
       }
 
       try {
-        await manager.initializeAll()
+        if (shouldBootRuntimeServices(options.processEnv)) {
+          await manager.initializeAll()
 
-        const optionalSubsystems = await reconfigureOptionalHoloSubsystems(projectRoot, loadedConfig, {
-          renderView: options.renderView,
-          authRequest: options.authRequest,
-          authorizationError: options.authorizationError,
-        })
-        activeQueueModule = optionalSubsystems.queueModule
-        activeSessionRuntime = optionalSubsystems.session
-        activeAuthRuntime = optionalSubsystems.auth
-        activeAuthContext = optionalSubsystems.authContext
-        /* v8 ignore start -- exercised only when optional packages are absent outside the monorepo test graph */
-        const optionalEventsModule = activeQueueModule
-          ? await loadEventsModule()
-          : undefined
-        if (activeQueueModule && optionalEventsModule) {
-          await optionalEventsModule.ensureEventsQueueJobRegisteredAsync?.()
-        }
-        /* v8 ignore stop */
-
-        if (registryHasEvents(registry)) {
-          const eventsModule = await loadEventsModule(true)
-          /* v8 ignore start -- exercised only when the optional package is absent outside the monorepo test graph */
-          if (!eventsModule) {
-            throw new Error('[@holo-js/core] Events support requires @holo-js/events to be installed.')
+          const optionalSubsystems = await reconfigureOptionalHoloSubsystems(projectRoot, loadedConfig, {
+            renderView: options.renderView,
+            authRequest: options.authRequest,
+            authorizationError: options.authorizationError,
+          })
+          activeQueueModule = optionalSubsystems.queueModule
+          activeSessionRuntime = optionalSubsystems.session
+          activeAuthRuntime = optionalSubsystems.auth
+          activeAuthContext = optionalSubsystems.authContext
+          /* v8 ignore start -- exercised only when optional packages are absent outside the monorepo test graph */
+          const optionalEventsModule = activeQueueModule
+            ? await loadEventsModule()
+            : undefined
+          if (activeQueueModule && optionalEventsModule) {
+            await optionalEventsModule.ensureEventsQueueJobRegisteredAsync?.()
           }
           /* v8 ignore stop */
-          activeEventsModule = eventsModule
-          const eventRegistration = await registerProjectEventsAndListeners(
+
+          if (registryHasEvents(registry)) {
+            const eventsModule = await loadEventsModule(true)
+            /* v8 ignore start -- exercised only when the optional package is absent outside the monorepo test graph */
+            if (!eventsModule) {
+              throw new Error('[@holo-js/core] Events support requires @holo-js/events to be installed.')
+            }
+            /* v8 ignore stop */
+            activeEventsModule = eventsModule
+            const eventRegistration = await registerProjectEventsAndListeners(
+              projectRoot,
+              registry,
+              eventsModule,
+              activeQueueModule,
+            )
+            runtimeOwnedEventNames.splice(0, runtimeOwnedEventNames.length, ...eventRegistration.eventNames)
+            runtimeOwnedListenerIds.splice(0, runtimeOwnedListenerIds.length, ...eventRegistration.listenerIds)
+          }
+
+          activeAuthorizationModule = await loadAuthorizationModule()
+          const authorizationRegistration = await registerProjectAuthorizationDefinitions(
             projectRoot,
             registry,
-            eventsModule,
-            activeQueueModule,
+            activeAuthorizationModule,
           )
-          runtimeOwnedEventNames.splice(0, runtimeOwnedEventNames.length, ...eventRegistration.eventNames)
-          runtimeOwnedListenerIds.splice(0, runtimeOwnedListenerIds.length, ...eventRegistration.listenerIds)
-        }
+          runtimeOwnedAuthorizationPolicyNames.splice(0, runtimeOwnedAuthorizationPolicyNames.length, ...authorizationRegistration.policyNames)
+          runtimeOwnedAuthorizationAbilityNames.splice(0, runtimeOwnedAuthorizationAbilityNames.length, ...authorizationRegistration.abilityNames)
 
-        activeAuthorizationModule = await loadAuthorizationModule()
-        const authorizationRegistration = await registerProjectAuthorizationDefinitions(
-          projectRoot,
-          registry,
-          activeAuthorizationModule,
-        )
-        runtimeOwnedAuthorizationPolicyNames.splice(0, runtimeOwnedAuthorizationPolicyNames.length, ...authorizationRegistration.policyNames)
-        runtimeOwnedAuthorizationAbilityNames.splice(0, runtimeOwnedAuthorizationAbilityNames.length, ...authorizationRegistration.abilityNames)
+          if (options.registerProjectQueueJobs === true && registryHasJobs(registry)) {
+            /* v8 ignore start -- exercised only when the optional package is absent outside the monorepo test graph */
+            if (!activeQueueModule) {
+              throw new Error('[@holo-js/core] Project jobs require @holo-js/queue to be installed.')
+            }
+            /* v8 ignore stop */
 
-        if (options.registerProjectQueueJobs === true && registryHasJobs(registry)) {
-          /* v8 ignore start -- exercised only when the optional package is absent outside the monorepo test graph */
-          if (!activeQueueModule) {
-            throw new Error('[@holo-js/core] Project jobs require @holo-js/queue to be installed.')
+            runtimeOwnedQueueJobNames.splice(0, runtimeOwnedQueueJobNames.length)
+            runtimeOwnedQueueJobNames.push(...await registerProjectQueueJobs(projectRoot, registry, activeQueueModule))
           }
-          /* v8 ignore stop */
-
-          runtimeOwnedQueueJobNames.splice(0, runtimeOwnedQueueJobNames.length)
-          runtimeOwnedQueueJobNames.push(...await registerProjectQueueJobs(projectRoot, registry, activeQueueModule))
         }
 
         runtime.initialized = true
