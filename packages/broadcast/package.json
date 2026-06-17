@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/broadcast",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "description": "Holo-JS Framework - broadcast contracts, channel definitions, and driver registration seams",
   "type": "module",
   "license": "MIT",
