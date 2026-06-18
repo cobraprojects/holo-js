@@ -141,7 +141,6 @@ import {
   resolvePackageManagerInstallInvocation,
   runProjectDependencyInstall,
   runProjectDevServer,
-  runProjectLifecycleScript,
   runProjectPrepare,
   runProjectStartServer,
 } from '../src/dev'
@@ -1393,10 +1392,9 @@ throw new Error('APP_KEY is required before config can load')
         prepare: 'holo key:generate && holo prepare',
         dev: 'holo dev',
         build: 'holo build',
+        start: 'holo start',
         ['config:cache']: 'holo config:cache',
         ['config:clear']: 'holo config:clear',
-        ['holo:dev']: 'node ./.holo-js/framework/run.mjs dev',
-        ['holo:build']: 'node ./.holo-js/framework/run.mjs build',
       },
       dependencies: {
         'next': expectedNextPackageRange,
@@ -1442,7 +1440,9 @@ throw new Error('APP_KEY is required before config can load')
     expect(await readFile(join(projectRoot, 'app/layout.tsx'), 'utf8')).not.toContain('schema.generated')
     expect(await readFile(join(projectRoot, 'next.config.ts'), 'utf8')).toContain('nextConfig')
     expect(await readFile(join(projectRoot, 'tsconfig.json'), 'utf8')).toContain('next-env.d.ts')
-    expect(await readFile(join(projectRoot, '.gitignore'), 'utf8')).toContain('.holo-js/generated')
+    const scaffoldGitignore = await readFile(join(projectRoot, '.gitignore'), 'utf8')
+    expect(scaffoldGitignore).toContain('.holo-js/framework')
+    expect(scaffoldGitignore).toContain('.holo-js/generated')
     expect(await readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8')).toContain('Generated')
 
     const duplicateResult = runCliProcess(targetRoot, [
@@ -10082,9 +10082,6 @@ export default defineEvent({ name: 'audit.activity' })
       name: 'fixture',
       private: true,
       packageManager: 'pnpm@9.0.0',
-      scripts: {
-        'holo:build': 'node -e "console.log(\'build script ran\')"',
-      },
     }, null, 2))
     await writeProjectFile(projectRoot, 'server/commands/hello.mjs', `
 export default {
@@ -10137,78 +10134,51 @@ export default defineConfig({
     await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.toContain('"send-email": QueueJobDefinition')
     await expect(readFile(join(projectRoot, '.holo-js/generated', 'queue.d.ts'), 'utf8')).resolves.not.toContain('server/jobs/send-email')
 
-    const pnpmResolution = await resolvePackageManagerCommand(projectRoot, 'holo:build')
-    expect(pnpmResolution).toEqual({ command: 'pnpm', args: ['run', 'holo:build'] })
+    const pnpmResolution = await resolvePackageManagerCommand(projectRoot, 'build')
+    expect(pnpmResolution).toEqual({ command: 'pnpm', args: ['run', 'build'] })
 
     const yarnRoot = await createTempDirectory()
     tempDirs.push(yarnRoot)
     await writeProjectFile(yarnRoot, 'package.json', JSON.stringify({ name: 'fixture', private: true }, null, 2))
     await writeProjectFile(yarnRoot, 'yarn.lock', '')
-    await expect(resolvePackageManagerCommand(yarnRoot, 'holo:dev')).resolves.toEqual({
+    await expect(resolvePackageManagerCommand(yarnRoot, 'dev')).resolves.toEqual({
       command: 'yarn',
-      args: ['run', 'holo:dev'],
+      args: ['run', 'dev'],
     })
 
     const npmRoot = await createTempDirectory()
     tempDirs.push(npmRoot)
     await writeProjectFile(npmRoot, 'package.json', '{ invalid json')
     await writeProjectFile(npmRoot, 'package-lock.json', '')
-    await expect(resolvePackageManagerCommand(npmRoot, 'holo:dev')).resolves.toEqual({
+    await expect(resolvePackageManagerCommand(npmRoot, 'dev')).resolves.toEqual({
       command: 'npm',
-      args: ['run', 'holo:dev'],
+      args: ['run', 'dev'],
     })
 
     const defaultRoot = await createTempDirectory()
     tempDirs.push(defaultRoot)
-    await expect(resolvePackageManagerCommand(defaultRoot, 'holo:dev')).resolves.toEqual({
+    await expect(resolvePackageManagerCommand(defaultRoot, 'dev')).resolves.toEqual({
       command: 'bun',
-      args: ['run', 'holo:dev'],
+      args: ['run', 'dev'],
     })
 
     const bunLockRoot = await createTempDirectory()
     tempDirs.push(bunLockRoot)
     await writeProjectFile(bunLockRoot, 'bun.lock', '')
-    await expect(resolvePackageManagerCommand(bunLockRoot, 'holo:dev')).resolves.toEqual({
+    await expect(resolvePackageManagerCommand(bunLockRoot, 'dev')).resolves.toEqual({
       command: 'bun',
-      args: ['run', 'holo:dev'],
+      args: ['run', 'dev'],
     })
 
     const pnpmLockRoot = await createTempDirectory()
     tempDirs.push(pnpmLockRoot)
     await writeProjectFile(pnpmLockRoot, 'pnpm-lock.yaml', '')
-    await expect(resolvePackageManagerCommand(pnpmLockRoot, 'holo:dev')).resolves.toEqual({
+    await expect(resolvePackageManagerCommand(pnpmLockRoot, 'dev')).resolves.toEqual({
       command: 'pnpm',
-      args: ['run', 'holo:dev'],
+      args: ['run', 'dev'],
     })
 
     const lifecycleIo = createIo(projectRoot)
-    await expect(runProjectLifecycleScript(lifecycleIo.io, projectRoot, 'holo:build', () => ({
-      status: 0,
-      stdout: 'built\n',
-      stderr: 'warned\n',
-      output: [],
-      pid: 1,
-      signal: null,
-    } as never))).resolves.toBeUndefined()
-    expect(lifecycleIo.read().stdout).toContain('built')
-    expect(lifecycleIo.read().stderr).toContain('warned')
-    await expect(runProjectLifecycleScript(lifecycleIo.io, projectRoot, 'holo:build', () => ({
-      status: 0,
-      stdout: 'built-again\n',
-      stderr: '',
-      output: [],
-      pid: 1,
-      signal: null,
-    } as never))).resolves.toBeUndefined()
-    expect(lifecycleIo.read().stdout).toContain('built-again')
-    await expect(runProjectLifecycleScript(lifecycleIo.io, projectRoot, 'holo:build', () => ({
-      status: 1,
-      stdout: '',
-      stderr: '',
-      output: [],
-      pid: 1,
-      signal: null,
-    } as never))).rejects.toThrow('Project script "holo:build" failed.')
     const startChild = new EventEmitter() as EventEmitter & {
       stdout: PassThrough
       stderr: PassThrough
@@ -10243,16 +10213,11 @@ export default defineConfig({
       name: 'fixture',
       private: true,
       packageManager: 'bun@1.3.9',
-      scripts: {
-        'holo:dev': 'node -e "console.log(\'dev script ran\')"',
-        'holo:build': 'node -e "console.log(\'build script ran\')"',
-        'holo:start': 'node -e "console.log(\'start script ran\')"',
-      },
     }, null, 2))
     const lifecycleCommandIo = createIo(projectRoot)
     const runPrepare = vi.fn(async () => {})
     const runDevServer = vi.fn(async () => {})
-    const runLifecycleScript = vi.fn(async () => {})
+    const runBuild = vi.fn(async () => {})
     const runStartServer = vi.fn(async () => {})
     const lifecycleContext = {
       ...lifecycleCommandIo.io,
@@ -10267,7 +10232,7 @@ export default defineConfig({
       {
         runProjectPrepare: runPrepare,
         runProjectDevServer: runDevServer,
-        runProjectLifecycleScript: runLifecycleScript,
+        runProjectBuild: runBuild,
         runProjectStartServer: runStartServer,
       },
     )
@@ -10310,7 +10275,7 @@ export default defineConfig({
     expect(lifecycleOutput).toContain('Prepared Holo discovery artifacts.')
     expect(runPrepare).toHaveBeenCalledTimes(2)
     expect(runDevServer).toHaveBeenCalledWith(lifecycleContext, projectRoot)
-    expect(runLifecycleScript).toHaveBeenCalledWith(lifecycleContext, projectRoot, 'holo:build')
+    expect(runBuild).toHaveBeenCalledWith(lifecycleContext, projectRoot)
     expect(runStartServer).toHaveBeenCalledWith(lifecycleContext, projectRoot)
   })
 
@@ -11257,7 +11222,7 @@ export default defineConfig({
     }
 
     closeChild.emit('close', null)
-    await expect(devClosePromise).rejects.toThrow('Project script "holo:dev" failed with exit code unknown.')
+    await expect(devClosePromise).rejects.toThrow('Project development server failed with exit code unknown.')
     expect(closeWatcher).toHaveBeenCalledTimes(1)
   })
 

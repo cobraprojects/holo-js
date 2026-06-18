@@ -69,7 +69,7 @@ type RuntimeExecutor = typeof RuntimeModule.withRuntimeEnvironment
 type ProjectCommandExecutors = {
   runProjectPrepare?: typeof DevModule.runProjectPrepare
   runProjectDevServer?: typeof DevModule.runProjectDevServer
-  runProjectLifecycleScript?: typeof DevModule.runProjectLifecycleScript
+  runProjectBuild?: typeof DevModule.runProjectBuild
   runProjectStartServer?: typeof DevModule.runProjectStartServer
   runProjectDependencyInstall?: typeof DevModule.runProjectDependencyInstall
 }
@@ -225,7 +225,7 @@ async function resolveRuntimeExecutor(runtimeExecutor?: RuntimeExecutor): Promis
 const projectExecutorLoaders: ProjectExecutorLoaderMap = {
   runProjectPrepare: async () => (await loadDevModule()).runProjectPrepare,
   runProjectDevServer: async () => (await loadDevModule()).runProjectDevServer,
-  runProjectLifecycleScript: async () => (await loadDevModule()).runProjectLifecycleScript,
+  runProjectBuild: async () => (await loadDevModule()).runProjectBuild,
   runProjectStartServer: async () => (await loadDevModule()).runProjectStartServer,
   runProjectDependencyInstall: async () => (await loadDevModule()).runProjectDependencyInstall,
 }
@@ -987,9 +987,9 @@ export function createInternalCommands(
       },
       async run() {
         const runProjectPrepare = await resolveProjectExecutor(projectExecutors, 'runProjectPrepare')
-        const runProjectLifecycleScript = await resolveProjectExecutor(projectExecutors, 'runProjectLifecycleScript')
+        const runProjectBuild = await resolveProjectExecutor(projectExecutors, 'runProjectBuild')
         await runProjectPrepare(context.projectRoot, context)
-        await runProjectLifecycleScript(context, context.projectRoot, 'holo:build')
+        await runProjectBuild(context, context.projectRoot)
       },
     },
     {

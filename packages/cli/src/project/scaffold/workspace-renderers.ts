@@ -15,6 +15,7 @@ export function renderScaffoldGitignore(): string {
     '.env.*.local',
     '',
     '# Holo',
+    '.holo-js/framework',
     '.holo-js/generated',
     '.holo-js/runtime',
     '.holo-cli',

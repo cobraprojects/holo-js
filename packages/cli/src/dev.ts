@@ -86,13 +86,19 @@ export async function resolvePackageManagerInstallInvocation(projectRoot: string
   }
 }
 
-export async function runProjectLifecycleScript(
+function resolveFrameworkRunnerInvocation(projectRoot: string, mode: 'dev' | 'build' | 'start'): PackageManagerCommand {
+  return {
+    command: process.execPath,
+    args: [join(projectRoot, '.holo-js/framework/run.mjs'), mode],
+  }
+}
+
+export async function runProjectBuild(
   io: IoStreams,
   projectRoot: string,
-  scriptName: string,
   spawn: typeof spawnSync = spawnSync,
 ): Promise<void> {
-  const invocation = await resolvePackageManagerCommand(projectRoot, scriptName)
+  const invocation = resolveFrameworkRunnerInvocation(projectRoot, 'build')
   const result = spawn(invocation.command, [...invocation.args], {
     cwd: projectRoot,
     encoding: 'utf8',
@@ -108,7 +114,7 @@ export async function runProjectLifecycleScript(
   }
 
   if (result.status !== 0) {
-    throw new Error(result.stderr?.trim() || result.stdout?.trim() || `Project script "${scriptName}" failed.`)
+    throw new Error(result.stderr?.trim() || result.stdout?.trim() || 'Project build failed.')
   }
 }
 
@@ -117,8 +123,8 @@ export async function runProjectStartServer(
   projectRoot: string,
   spawnProcess: typeof spawn = spawn,
 ): Promise<void> {
-  const runnerPath = join(projectRoot, '.holo-js/framework/run.mjs')
-  const child = spawnProcess(process.execPath, [runnerPath, 'start'], {
+  const invocation = resolveFrameworkRunnerInvocation(projectRoot, 'start')
+  const child = spawnProcess(invocation.command, [...invocation.args], {
     cwd: projectRoot,
     env: process.env,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -538,7 +544,7 @@ export async function runProjectDevServer(
 
   await refreshNonRecursiveWatchers?.()
 
-  const invocation = await resolvePackageManagerCommand(projectRoot, 'holo:dev')
+  const invocation = resolveFrameworkRunnerInvocation(projectRoot, 'dev')
   while (!shuttingDown) {
     const child = spawnProcess(invocation.command, [...invocation.args], {
       cwd: projectRoot,
@@ -610,6 +616,6 @@ export async function runProjectDevServer(
       return
     }
 
-    throw new Error(`Project script "holo:dev" failed with exit code ${result.code ?? 'unknown'}.`)
+    throw new Error(`Project development server failed with exit code ${result.code ?? 'unknown'}.`)
   }
 }
