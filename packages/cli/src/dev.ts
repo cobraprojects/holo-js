@@ -246,8 +246,20 @@ async function runProjectHotPrepare(projectRoot: string, io?: IoStreams): Promis
 async function refreshFrameworkRunner(projectRoot: string): Promise<void> {
   const frameworkProjectPath = resolve(projectRoot, '.holo-js/framework/project.json')
   const frameworkRunnerPath = resolve(projectRoot, '.holo-js/framework/run.mjs')
+  const framework = await resolveProjectFramework(projectRoot, frameworkProjectPath)
 
-  let framework: 'next' | 'nuxt' | 'sveltekit'
+  if (!framework) {
+    return
+  }
+
+  await writeTextFile(frameworkProjectPath, `${JSON.stringify({ framework }, null, 2)}\n`)
+  await writeTextFile(frameworkRunnerPath, renderFrameworkRunner({ framework }))
+}
+
+async function resolveProjectFramework(
+  projectRoot: string,
+  frameworkProjectPath: string,
+): Promise<'next' | 'nuxt' | 'sveltekit' | undefined> {
   try {
     const content = await readFile(frameworkProjectPath, 'utf8')
     const manifest = JSON.parse(content) as { framework?: unknown }
@@ -260,12 +272,24 @@ async function refreshFrameworkRunner(projectRoot: string): Promise<void> {
       return
     }
 
-    framework = manifest.framework
+    return manifest.framework
   } catch {
-    return
+    // Regenerate ignored framework metadata from dependencies below.
   }
 
-  await writeTextFile(frameworkRunnerPath, renderFrameworkRunner({ framework }))
+  if (await hasProjectDependency(projectRoot, 'next')) {
+    return 'next'
+  }
+
+  if (await hasProjectDependency(projectRoot, 'nuxt')) {
+    return 'nuxt'
+  }
+
+  if (await hasProjectDependency(projectRoot, '@sveltejs/kit')) {
+    return 'sveltekit'
+  }
+
+  return undefined
 }
 
 async function runFrameworkSync(projectRoot: string, definition: FrameworkSyncDefinition): Promise<void> {

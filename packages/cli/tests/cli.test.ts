@@ -10279,6 +10279,36 @@ export default defineConfig({
     expect(runStartServer).toHaveBeenCalledWith(lifecycleContext, projectRoot)
   })
 
+  it('regenerates ignored framework runner metadata during prepare', async () => {
+    const projectRoot = await createTempDirectory()
+    tempDirs.push(projectRoot)
+    await linkWorkspaceDb(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/core': '^0.2.2',
+        '@holo-js/db': '^0.2.2',
+        next: '^16.0.0',
+      },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+import { defineAppConfig } from '@holo-js/config'
+
+export default defineAppConfig({})
+`)
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/config'
+
+export default defineDatabaseConfig({})
+`)
+
+    await runProjectPrepare(projectRoot, undefined, { syncFramework: false })
+
+    expect(await readFile(join(projectRoot, '.holo-js/framework/project.json'), 'utf8')).toContain('"framework": "next"')
+    expect(await readFile(join(projectRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain('const commandName = "next"')
+  }, 60_000)
+
   it('generates queue, broadcast, and authorization type artifacts during prepare', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
