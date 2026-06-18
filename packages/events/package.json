@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/events",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Holo-JS Framework - event contracts and runtime surface",
   "type": "module",
   "license": "MIT",
