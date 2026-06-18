@@ -8913,7 +8913,7 @@ export default {
     }
     const runtimeExecutor = async <T>(
       _projectRoot: string,
-      kind: 'migrate' | 'fresh' | 'rollback' | 'seed' | 'prune',
+      kind: 'migrate' | 'fresh' | 'rollback' | 'seed' | 'prune' | 'hydrate-schema',
       options: Record<string, unknown>,
       callback: (stdout: string) => Promise<T>,
     ): Promise<T> => {
@@ -9078,7 +9078,7 @@ export default {
       fallbackContext,
       async <T>(
         _projectRoot: string,
-        kind: 'migrate' | 'fresh' | 'rollback' | 'seed' | 'prune',
+        kind: 'migrate' | 'fresh' | 'rollback' | 'seed' | 'prune' | 'hydrate-schema',
         options: Record<string, unknown>,
         callback: (stdout: string) => Promise<T>,
       ): Promise<T> => {
@@ -10219,6 +10219,7 @@ export default defineConfig({
     const runDevServer = vi.fn(async () => {})
     const runBuild = vi.fn(async () => {})
     const runStartServer = vi.fn(async () => {})
+    const hydrateSchema = vi.fn(async (_projectRoot, kind: string, _options, callback) => callback(''))
     const lifecycleContext = {
       ...lifecycleCommandIo.io,
       projectRoot,
@@ -10227,7 +10228,7 @@ export default defineConfig({
     }
     const lifecycleCommands = createInternalCommands(
       lifecycleContext,
-      async (_projectRoot, _kind, _options, callback) => callback(''),
+      hydrateSchema,
       {},
       {
         runProjectPrepare: runPrepare,
@@ -10274,6 +10275,7 @@ export default defineConfig({
     const lifecycleOutput = lifecycleCommandIo.read().stdout
     expect(lifecycleOutput).toContain('Prepared Holo discovery artifacts.')
     expect(runPrepare).toHaveBeenCalledTimes(2)
+    expect(hydrateSchema).toHaveBeenCalledWith(projectRoot, 'hydrate-schema', {}, expect.any(Function))
     expect(runDevServer).toHaveBeenCalledWith(lifecycleContext, projectRoot)
     expect(runBuild).toHaveBeenCalledWith(lifecycleContext, projectRoot)
     expect(runStartServer).toHaveBeenCalledWith(lifecycleContext, projectRoot)

@@ -988,7 +988,9 @@ export function createInternalCommands(
       async run() {
         const runProjectPrepare = await resolveProjectExecutor(projectExecutors, 'runProjectPrepare')
         const runProjectBuild = await resolveProjectExecutor(projectExecutors, 'runProjectBuild')
+        const executeRuntime = await resolveRuntimeExecutor(runtimeExecutor)
         await runProjectPrepare(context.projectRoot, context)
+        await executeRuntime(context.projectRoot, 'hydrate-schema', {}, async () => undefined)
         await runProjectBuild(context, context.projectRoot)
       },
     },

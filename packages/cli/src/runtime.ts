@@ -487,7 +487,7 @@ function formatRuntimeFailureText(text: string): string {
 /* v8 ignore start */
 export async function withRuntimeEnvironment<T>(
   projectRoot: string,
-  kind: 'migrate' | 'fresh' | 'rollback' | 'seed' | 'prune',
+  kind: 'migrate' | 'fresh' | 'rollback' | 'seed' | 'prune' | 'hydrate-schema',
   options: Record<string, unknown>,
   callback: (stdout: string) => Promise<T>,
 ): Promise<T> {

@@ -134,6 +134,7 @@
     "test:example:blog-next": "bun run --cwd apps/blog-next test",
     "test:example:blog-sveltekit": "bun run --cwd apps/blog-sveltekit test",
     "test:examples": "bun run test:example:blog-nuxt && bun run test:example:blog-next && bun run test:example:blog-sveltekit",
+    "test:smoke:deploy-build": "node scripts/validate-deploy-build-smoke.mjs",
     "test:dependency-policy": "node --test scripts/validate-dependency-version-policy.test.mjs scripts/publish-with-resolved-catalogs.test.mjs scripts/generate-cli-workspace-catalog.test.mjs scripts/sync-workspace-catalog-versions.test.mjs scripts/run-coverage.test.mjs && node scripts/validate-dependency-version-policy.mjs",
     "test:config:coverage": "rm -rf coverage/config && bun run --cwd packages/config test -- --coverage --coverage.clean=false --coverage.reportsDirectory='../../coverage/config' --coverage.include='src/**/*.ts' --coverage.exclude='src/**/types.ts'",
     "test:core:coverage": "rm -rf coverage/core && bun run --cwd packages/core test -- --coverage --coverage.clean=false --coverage.reportsDirectory='../../coverage/core' --coverage.include='src/**/*.ts' --coverage.exclude='src/**/types.ts' --coverage.exclude='src/runtime/**/*.d.ts'",

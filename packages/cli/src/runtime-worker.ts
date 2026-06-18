@@ -354,6 +354,12 @@ try {
     const executed = await createMigrationService(manager.connection(), migrations).migrate(payload.options ?? {})
     await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
     printExecutedItems(executed, 'No migrations were executed.', 'Migrations executed:')
+  } else if (payload.kind === 'hydrate-schema') {
+    await preloadGeneratedSchema(manager, payload.generatedSchema)
+    const migrations = await loadMigrations(payloadEntries(payload.migrations))
+    await hydrateGeneratedSchemaFromRanMigrations(manager, migrations)
+    await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
+    writeOutput('Generated schema metadata refreshed.')
   } else if (payload.kind === 'fresh') {
     const migrations = await loadMigrations(payloadEntries(payload.migrations))
     const schema = createSchemaService(manager.connection())
