@@ -276,24 +276,31 @@ Use normal package scripts for framework lifecycle commands:
 ```bash [npm]
 npm run dev
 npm run build
+npm run start
 ```
 
 ```bash [pnpm]
 pnpm dev
 pnpm build
+pnpm start
 ```
 
 ```bash [Yarn]
 yarn dev
 yarn build
+yarn start
 ```
 
 ```bash [Bun]
 bun run dev
 bun run build
+bun run start
 ```
 
 :::
+
+The `start` script runs `holo start`, which starts the production server with Holo runtime preloads before
+handing off to Nuxt, Next.js, or SvelteKit.
 
 Use your package manager's exec wrapper for direct Holo-JS CLI commands:
 

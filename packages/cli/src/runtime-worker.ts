@@ -7,6 +7,7 @@ import {
   createSeederService,
   registerGeneratedTables,
   renderGeneratedSchemaModule,
+  renderGeneratedSchemaRuntimeModule,
   resetDB,
   resolveRuntimeConnectionManagerOptions,
   type TableDefinition,
@@ -23,6 +24,7 @@ type RuntimePayload = {
   readonly seeders?: readonly string[]
   readonly generatedSchema?: string
   readonly generatedSchemaOutputPath?: string
+  readonly generatedSchemaRuntimeOutputPath?: string
   readonly options?: Record<string, unknown>
 }
 
@@ -58,6 +60,16 @@ type FreshDropSchema = {
   getTables(): Promise<string[]>
   dropTable(tableName: string): Promise<void>
   withoutForeignKeyConstraints<TResult>(callback: () => TResult | Promise<TResult>): Promise<TResult>
+}
+
+type DryRunSchemaConnection = {
+  getDialect(): ReturnType<ReturnType<typeof resolveRuntimeConnectionManagerOptions>['connection']>['getDialect'] extends () => infer TDialect ? TDialect : never
+  getCapabilities(): ReturnType<ReturnType<typeof resolveRuntimeConnectionManagerOptions>['connection']>['getCapabilities'] extends () => infer TCapabilities ? TCapabilities : never
+  getSchemaName(): string | undefined
+  getSchemaRegistry(): ReturnType<ReturnType<typeof resolveRuntimeConnectionManagerOptions>['connection']>['getSchemaRegistry'] extends () => infer TRegistry ? TRegistry : never
+  executeCompiled(): Promise<undefined>
+  introspectCompiled(): Promise<{ rows: never[], rowCount: 0 }>
+  transaction<TResult>(callback: (connection: DryRunSchemaConnection) => TResult | Promise<TResult>): Promise<TResult>
 }
 
 const payload = JSON.parse(process.env.HOLO_RUNTIME_PAYLOAD ?? '{}') as RuntimePayload
@@ -211,14 +223,21 @@ async function preloadGeneratedSchema(
 async function writeGeneratedSchemaArtifact(
   manager: ReturnType<typeof resolveRuntimeConnectionManagerOptions>,
   outputPath: string | undefined,
+  runtimeOutputPath: string | undefined,
 ): Promise<void> {
-  if (!outputPath) {
+  if (!outputPath && !runtimeOutputPath) {
     return
   }
 
-  const source = renderGeneratedSchemaModule(manager.connection().getSchemaRegistry().list())
-  await mkdir(dirname(outputPath), { recursive: true })
-  await writeFile(outputPath, source, 'utf8')
+  const tables = manager.connection().getSchemaRegistry().list()
+  if (outputPath) {
+    await mkdir(dirname(outputPath), { recursive: true })
+    await writeFile(outputPath, renderGeneratedSchemaModule(tables), 'utf8')
+  }
+  if (runtimeOutputPath) {
+    await mkdir(dirname(runtimeOutputPath), { recursive: true })
+    await writeFile(runtimeOutputPath, renderGeneratedSchemaRuntimeModule(tables), 'utf8')
+  }
 }
 
 function syncGeneratedSchemaFromManager(
@@ -227,6 +246,40 @@ function syncGeneratedSchemaFromManager(
   registerGeneratedTables(Object.fromEntries(
     manager.connection().getSchemaRegistry().list().map(table => [table.tableName, table]),
   ))
+}
+
+async function hydrateGeneratedSchemaFromRanMigrations(
+  manager: ReturnType<typeof resolveRuntimeConnectionManagerOptions>,
+  migrations: readonly RuntimeMigration[],
+): Promise<void> {
+  const migrationService = createMigrationService(manager.connection(), migrations)
+  const ranNames = new Set(
+    (await migrationService.status())
+      .filter(status => status.status === 'ran')
+      .map(status => status.name),
+  )
+
+  if (ranNames.size === 0) {
+    return
+  }
+
+  const realConnection = manager.connection()
+  const dryRunConnection: DryRunSchemaConnection = {
+    getDialect: () => realConnection.getDialect(),
+    getCapabilities: () => realConnection.getCapabilities(),
+    getSchemaName: () => realConnection.getSchemaName(),
+    getSchemaRegistry: () => realConnection.getSchemaRegistry(),
+    executeCompiled: async () => undefined,
+    introspectCompiled: async () => ({ rows: [], rowCount: 0 }),
+    transaction: async <TResult>(callback: (connection: typeof dryRunConnection) => TResult | Promise<TResult>) => callback(dryRunConnection),
+  }
+  const schema = createSchemaService(dryRunConnection as never)
+
+  for (const migration of [...migrations].sort((left, right) => left.name.localeCompare(right.name))) {
+    if (ranNames.has(migration.name)) {
+      await migration.up({ db: dryRunConnection, schema } as never)
+    }
+  }
 }
 
 async function loadRuntimeItems<TValue>(
@@ -297,8 +350,9 @@ try {
   if (payload.kind === 'migrate') {
     await preloadGeneratedSchema(manager, payload.generatedSchema)
     const migrations = await loadMigrations(payloadEntries(payload.migrations))
+    await hydrateGeneratedSchemaFromRanMigrations(manager, migrations)
     const executed = await createMigrationService(manager.connection(), migrations).migrate(payload.options ?? {})
-    await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath)
+    await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
     printExecutedItems(executed, 'No migrations were executed.', 'Migrations executed:')
   } else if (payload.kind === 'fresh') {
     const migrations = await loadMigrations(payloadEntries(payload.migrations))
@@ -307,7 +361,7 @@ try {
     manager.connection().getSchemaRegistry().clear()
 
     const executed = await createMigrationService(manager.connection(), migrations).migrate({})
-    await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath)
+    await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
     syncGeneratedSchemaFromManager(manager)
     printExecutedItems(executed, 'No migrations were executed.', 'Migrations executed:')
 
@@ -323,8 +377,9 @@ try {
   } else if (payload.kind === 'rollback') {
     await preloadGeneratedSchema(manager, payload.generatedSchema)
     const migrations = await loadMigrations(payloadEntries(payload.migrations))
+    await hydrateGeneratedSchemaFromRanMigrations(manager, migrations)
     const rolledBack = await createMigrationService(manager.connection(), migrations).rollback(payload.options ?? {})
-    await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath)
+    await writeGeneratedSchemaArtifact(manager, payload.generatedSchemaOutputPath, payload.generatedSchemaRuntimeOutputPath)
     printExecutedItems(rolledBack, 'No migrations were rolled back.', 'Migrations rolled back:')
   } else if (payload.kind === 'seed') {
     await preloadGeneratedSchema(manager, payload.generatedSchema)

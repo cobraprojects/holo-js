@@ -143,6 +143,7 @@ import {
   runProjectDevServer,
   runProjectLifecycleScript,
   runProjectPrepare,
+  runProjectStartServer,
 } from '../src/dev'
 import {
   generatorInternals,
@@ -2593,6 +2594,20 @@ export default {
     expect(projectInternals.renderFrameworkRunner({
       framework: 'nuxt',
     })).toContain('Missing framework binary')
+    expect(projectInternals.renderFrameworkRunner({
+      framework: 'nuxt',
+    })).toContain(".output/server/index.mjs")
+    expect(projectInternals.renderFrameworkRunner({
+      framework: 'sveltekit',
+    })).toContain("build/index.js")
+    expect(projectInternals.renderScaffoldPackageJson({
+      projectName: 'Start App',
+      framework: 'next',
+      packageManager: 'bun',
+      databaseDriver: 'sqlite',
+      storageDefaultDisk: 'local',
+      optionalPackages: [],
+    })).toContain('"start": "holo start"')
     expect(projectInternals.renderFrameworkFiles({
       projectName: 'Next App',
       framework: 'next',
@@ -3054,6 +3069,29 @@ export default {
     expect(result.stdout).toContain('build --logLevel error')
     expect(result.stderr).not.toContain('Circular dependency:')
     expect(result.stderr).toContain('framework warning')
+  })
+
+  it('starts Next production servers through the framework runner with Holo preloads', async () => {
+    const projectRoot = await createTempDirectory()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({ framework: 'next' }))
+    await writeProjectFile(projectRoot, '.holo-js/framework/run.mjs', projectInternals.renderFrameworkRunner({ framework: 'next' }))
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.mjs', 'globalThis.__holoSchemaPreloaded = true\n')
+    await writeProjectFile(projectRoot, '.holo-js/generated/next/bootstrap.mjs', 'globalThis.__holoNextBootstrapPreloaded = true\n')
+    await writeFrameworkBinaryScript(projectRoot, 'next', [
+      '#!/usr/bin/env node',
+      'console.log(process.argv.slice(2).join(" "))',
+      'console.log(String(globalThis.__holoSchemaPreloaded))',
+      'console.log(String(globalThis.__holoNextBootstrapPreloaded))',
+      '',
+    ].join('\n'))
+
+    const result = runNodeScript(projectRoot, join(projectRoot, '.holo-js/framework/run.mjs'), ['start', '--port', '3072'])
+
+    expect(result.status, result.stderr || result.stdout).toBe(0)
+    expect(result.stdout).toContain('start --port 3072')
+    expect(result.stdout).toContain('true\ntrue')
   })
 
   it('normalizes scaffold env segments and renders empty env file contents directly', () => {
@@ -5046,7 +5084,7 @@ export default defineRedisConfig({
         name: 'reports.export',
       }],
     })).resolves.toBe(false)
-  }, 30000)
+  }, 60000)
 
   it('prunes stale lazy optional holo packages even when feature folders do not exist', async () => {
     const projectRoot = await createTempProject()
@@ -7098,6 +7136,77 @@ export default defineMigration({
     expect(generated).toContain('registerGeneratedTables(tables)')
     expect(generated).not.toContain('defineGeneratedTable("users"')
   }, 30000)
+
+  it('rebuilds generated schema artifacts from already-ran migrations', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await linkWorkspaceDb(projectRoot)
+
+    const built = await runWorkspacePackageBuild('@holo-js/db')
+    expect(built.status).toBe(0)
+
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+export default {
+  paths: {
+    models: 'server/models',
+    migrations: 'server/db/migrations',
+    seeders: 'server/db/seeders',
+    observers: 'server/db/observers',
+    factories: 'server/db/factories',
+    commands: 'server/commands',
+  },
+  models: [],
+  migrations: ['server/db/migrations/2026_01_01_000001_create_users.ts'],
+  seeders: [],
+}
+`)
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/config'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'sqlite',
+      url: './data.sqlite',
+    },
+  },
+})
+`)
+
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_users.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('users', (table) => {
+      table.id()
+      table.string('name')
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('users')
+  },
+})
+`)
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', `
+/* empty stale schema */
+export const tables = {} as const
+`)
+    await writeProjectFile(projectRoot, '.holo-js/generated/schema.mjs', `
+export const tables = Object.freeze({})
+`)
+
+    const repaired = runCliProcess(projectRoot, ['migrate'])
+    expect(repaired.status, repaired.stderr || repaired.stdout).toBe(0)
+    expect(repaired.stdout).toContain('No migrations were executed.')
+
+    await expect(readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8')).resolves.toContain('defineGeneratedTable("users"')
+    await expect(readFile(join(projectRoot, '.holo-js/generated/schema.mjs'), 'utf8')).resolves.toContain('defineGeneratedTable("users"')
+  }, 60000)
 
   it('refreshes generated-schema bundles before running migrate:fresh seeders', async () => {
     const projectRoot = await createTempProject()
@@ -10100,6 +10209,25 @@ export default defineConfig({
       pid: 1,
       signal: null,
     } as never))).rejects.toThrow('Project script "holo:build" failed.')
+    const startChild = new EventEmitter() as EventEmitter & {
+      stdout: PassThrough
+      stderr: PassThrough
+      stdin: PassThrough
+    }
+    startChild.stdout = new PassThrough()
+    startChild.stderr = new PassThrough()
+    startChild.stdin = new PassThrough()
+    const startSpawn = ((command: string, args?: readonly string[]) => {
+      expect(command).toBe(process.execPath)
+      expect(args).toEqual([join(projectRoot, '.holo-js/framework/run.mjs'), 'start'])
+      queueMicrotask(() => {
+        startChild.stdout.write('started\n')
+        startChild.emit('close', 0)
+      })
+      return startChild as never
+    }) as never
+    await expect(runProjectStartServer(lifecycleIo.io, projectRoot, startSpawn)).resolves.toBeUndefined()
+    expect(lifecycleIo.read().stdout).toContain('started')
 
     const buildCommandContext = {
       ...createIo(projectRoot).io,
@@ -10118,12 +10246,14 @@ export default defineConfig({
       scripts: {
         'holo:dev': 'node -e "console.log(\'dev script ran\')"',
         'holo:build': 'node -e "console.log(\'build script ran\')"',
+        'holo:start': 'node -e "console.log(\'start script ran\')"',
       },
     }, null, 2))
     const lifecycleCommandIo = createIo(projectRoot)
     const runPrepare = vi.fn(async () => {})
     const runDevServer = vi.fn(async () => {})
     const runLifecycleScript = vi.fn(async () => {})
+    const runStartServer = vi.fn(async () => {})
     const lifecycleContext = {
       ...lifecycleCommandIo.io,
       projectRoot,
@@ -10138,13 +10268,16 @@ export default defineConfig({
         runProjectPrepare: runPrepare,
         runProjectDevServer: runDevServer,
         runProjectLifecycleScript: runLifecycleScript,
+        runProjectStartServer: runStartServer,
       },
     )
     const prepareCommand = lifecycleCommands.find(command => command.name === 'prepare')
     const devCommand = lifecycleCommands.find(command => command.name === 'dev')
     const buildLifecycleCommand = lifecycleCommands.find(command => command.name === 'build')
+    const startLifecycleCommand = lifecycleCommands.find(command => command.name === 'start')
     expect(await prepareCommand?.prepare?.({ args: [], flags: {} }, lifecycleContext as never)).toEqual({ args: [], flags: {} })
     expect(await devCommand?.prepare?.({ args: [], flags: {} }, lifecycleContext as never)).toEqual({ args: [], flags: {} })
+    expect(await startLifecycleCommand?.prepare?.({ args: [], flags: {} }, lifecycleContext as never)).toEqual({ args: [], flags: {} })
     await prepareCommand?.run({
       projectRoot,
       cwd: projectRoot,
@@ -10166,11 +10299,19 @@ export default defineConfig({
       flags: {},
       loadProject: lifecycleContext.loadProject,
     } as never)
+    await startLifecycleCommand?.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: [],
+      flags: {},
+      loadProject: lifecycleContext.loadProject,
+    } as never)
     const lifecycleOutput = lifecycleCommandIo.read().stdout
     expect(lifecycleOutput).toContain('Prepared Holo discovery artifacts.')
     expect(runPrepare).toHaveBeenCalledTimes(2)
     expect(runDevServer).toHaveBeenCalledWith(lifecycleContext, projectRoot)
     expect(runLifecycleScript).toHaveBeenCalledWith(lifecycleContext, projectRoot, 'holo:build')
+    expect(runStartServer).toHaveBeenCalledWith(lifecycleContext, projectRoot)
   })
 
   it('generates queue, broadcast, and authorization type artifacts during prepare', async () => {

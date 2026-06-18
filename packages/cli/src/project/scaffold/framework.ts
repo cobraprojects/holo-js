@@ -199,6 +199,7 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
       prepare: 'holo key:generate && holo prepare',
       dev: 'holo dev',
       build: 'holo build',
+      start: 'holo start',
       lint: options.framework === 'nuxt'
         ? 'eslint app config server shared tests *.d.ts --fix --no-warn-ignored --no-error-on-unmatched-pattern'
         : options.framework === 'next'
@@ -213,6 +214,7 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
       ['config:clear']: 'holo config:clear',
       ['holo:dev']: 'node ./.holo-js/framework/run.mjs dev',
       ['holo:build']: 'node ./.holo-js/framework/run.mjs build',
+      ['holo:start']: 'node ./.holo-js/framework/run.mjs start',
     },
     dependencies,
     devDependencies,

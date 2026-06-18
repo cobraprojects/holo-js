@@ -91,6 +91,7 @@ Use your package manager's run command for framework lifecycle:
 ```bash
 npm run dev
 npm run build
+npm run start
 ```
 
 Use your package manager's exec wrapper for direct Holo-JS CLI commands:
@@ -104,6 +105,8 @@ npx holo seed
 ```
 
 `holo dev` and `holo build` run discovery before handing control to the selected framework.
+`holo start` starts the production server with Holo runtime preloads before handing off to Nuxt,
+Next.js, or SvelteKit.
 `holo prepare` is available when you want to regenerate typed registries without starting dev or build.
 
  Across Nuxt, Next.js, and SvelteKit, request handlers run with the runtime context prepared by framework bootstrap.

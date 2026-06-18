@@ -34,6 +34,25 @@ npm run build
 `holo prepare` refreshes discovery output. `holo config:cache` is optional but useful when you want
 production to read cached config instead of resolving live files on startup.
 
+## Start production through Holo
+
+Use the Holo production start command for self-hosted Node deployments:
+
+```bash
+npm run start
+```
+
+Scaffolded apps map that script to `holo start`. The command preloads Holo runtime artifacts before
+starting the selected framework:
+
+- Next.js runs `next start`
+- Nuxt runs `node .output/server/index.mjs`
+- SvelteKit runs `node build/index.js`
+
+Use `holo start` in process managers such as PM2, systemd, Docker, or Forge instead of calling the
+framework production entrypoint directly. That keeps database, auth, session, storage, and generated schema
+runtime state initialized before server-rendered code runs.
+
 ## Run migrations intentionally
 
 Do not treat schema changes as a hidden startup side effect in production.

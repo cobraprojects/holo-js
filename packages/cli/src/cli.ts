@@ -70,6 +70,7 @@ type ProjectCommandExecutors = {
   runProjectPrepare?: typeof DevModule.runProjectPrepare
   runProjectDevServer?: typeof DevModule.runProjectDevServer
   runProjectLifecycleScript?: typeof DevModule.runProjectLifecycleScript
+  runProjectStartServer?: typeof DevModule.runProjectStartServer
   runProjectDependencyInstall?: typeof DevModule.runProjectDependencyInstall
 }
 type QueueCommandExecutors = {
@@ -225,6 +226,7 @@ const projectExecutorLoaders: ProjectExecutorLoaderMap = {
   runProjectPrepare: async () => (await loadDevModule()).runProjectPrepare,
   runProjectDevServer: async () => (await loadDevModule()).runProjectDevServer,
   runProjectLifecycleScript: async () => (await loadDevModule()).runProjectLifecycleScript,
+  runProjectStartServer: async () => (await loadDevModule()).runProjectStartServer,
   runProjectDependencyInstall: async () => (await loadDevModule()).runProjectDependencyInstall,
 }
 
@@ -988,6 +990,19 @@ export function createInternalCommands(
         const runProjectLifecycleScript = await resolveProjectExecutor(projectExecutors, 'runProjectLifecycleScript')
         await runProjectPrepare(context.projectRoot, context)
         await runProjectLifecycleScript(context, context.projectRoot, 'holo:build')
+      },
+    },
+    {
+      name: 'start',
+      description: 'Run the production framework server with Holo runtime preloads.',
+      usage: 'holo start',
+      source: 'internal',
+      async prepare() {
+        return { args: [], flags: {} }
+      },
+      async run() {
+        const runProjectStartServer = await resolveProjectExecutor(projectExecutors, 'runProjectStartServer')
+        await runProjectStartServer(context, context.projectRoot)
       },
     },
     {

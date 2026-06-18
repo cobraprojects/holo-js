@@ -12,6 +12,7 @@ import {
   resolveGeneratedSchemaPath,
   CLI_RUNTIME_ROOT,
 } from './project'
+import { GENERATED_SCHEMA_RUNTIME_PATH } from './project/shared'
 import { fileExists } from './fs-utils'
 import type { RuntimeEnvironment, RuntimeSpawnResult, RuntimeMigrationCandidate, ProjectRuntimeInitializationOptions } from './cli-types'
 import type { HoloRuntime } from '@holo-js/core'
@@ -517,6 +518,7 @@ export async function withRuntimeEnvironment<T>(
       seeders: environment.bundledSeeders.map(entry => pathToFileURL(entry).href),
       generatedSchema: environment.bundledGeneratedSchema ? pathToFileURL(environment.bundledGeneratedSchema).href : undefined,
       generatedSchemaOutputPath: resolveGeneratedSchemaPath(projectRoot, environment.project.config),
+      generatedSchemaRuntimeOutputPath: resolve(projectRoot, GENERATED_SCHEMA_RUNTIME_PATH),
       options,
     })
     const runtime = createRuntimeInvocation()

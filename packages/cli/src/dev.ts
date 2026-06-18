@@ -112,6 +112,41 @@ export async function runProjectLifecycleScript(
   }
 }
 
+export async function runProjectStartServer(
+  io: IoStreams,
+  projectRoot: string,
+  spawnProcess: typeof spawn = spawn,
+): Promise<void> {
+  const runnerPath = join(projectRoot, '.holo-js/framework/run.mjs')
+  const child = spawnProcess(process.execPath, [runnerPath, 'start'], {
+    cwd: projectRoot,
+    env: process.env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  }) as SpawnProcessLike
+
+  child.stdout?.on('data', chunk => io.stdout.write(chunk))
+  child.stderr?.on('data', chunk => io.stderr.write(chunk))
+  if (child.stdin) {
+    io.stdin.pipe(child.stdin)
+  }
+
+  const result = await new Promise<
+    | { kind: 'close', code: number | null }
+    | { kind: 'error', error: Error }
+  >((resolvePromise) => {
+    child.on('error', (error: Error) => resolvePromise({ kind: 'error', error }))
+    child.on('close', (code: number | null) => resolvePromise({ kind: 'close', code }))
+  })
+
+  if (result.kind === 'error') {
+    throw result.error
+  }
+
+  if (result.code !== 0) {
+    throw new Error(`Project production server failed with exit code ${result.code ?? 'unknown'}.`)
+  }
+}
+
 export async function runProjectDependencyInstall(
   io: IoStreams,
   projectRoot: string,
