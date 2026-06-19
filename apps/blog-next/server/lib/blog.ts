@@ -5,7 +5,6 @@ import { ValidationException } from '@holo-js/forms'
 
 import { blogPostChanged } from '../broadcast/blog-post-changed'
 import BlogPostSaved from '../events/blog/post-saved'
-import IndexBlogPost from '../jobs/blog/index-post'
 import Category from '../models/Category'
 import Post from '../models/Post'
 import Tag from '../models/Tag'
@@ -262,10 +261,6 @@ export async function createPost(input: { title: string, excerpt?: string, body:
     status: post.status,
     slug: post.slug,
   })
-  await IndexBlogPost.dispatch({
-    action: 'created',
-    postId: post.id,
-  }).onQueue('default')
 
   return post
 }
@@ -309,10 +304,6 @@ export async function updatePost(id: number, input: { title: string, excerpt?: s
     status: post.status,
     slug: post.slug,
   })
-  await IndexBlogPost.dispatch({
-    action: 'updated',
-    postId: post.id,
-  }).onQueue('default')
 
   return post
 }
@@ -329,9 +320,5 @@ export async function deletePost(id: number) {
       status: post.status,
       slug: post.slug,
     })
-    await IndexBlogPost.dispatch({
-      action: 'deleted',
-      postId: post.id,
-    }).onQueue('default')
   }
 }

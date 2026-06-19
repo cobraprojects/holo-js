@@ -9,7 +9,6 @@ import { postForm } from '$lib/schemas/blog'
 import { ensureAuthorId, getAdminPostsData } from '$lib/server/blog'
 import { blogPostChanged } from '../../../../../server/broadcast/blog-post-changed'
 import BlogPostSaved from '../../../../../server/events/blog/post-saved'
-import IndexBlogPost from '../../../../../server/jobs/blog/index-post'
 import Post from '../../../../../server/models/Post'
 import type { Actions, PageServerLoad } from './$types'
 
@@ -67,10 +66,6 @@ export const actions = {
       status: post.status,
       slug: post.slug,
     })
-    await IndexBlogPost.dispatch({
-      action: 'created',
-      postId: post.id,
-    }).onQueue('default')
 
     redirect(303, '/admin/posts')
   },

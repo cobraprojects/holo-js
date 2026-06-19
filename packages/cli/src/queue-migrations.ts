@@ -30,8 +30,8 @@ export function normalizeQueueMigrationName(tableName: string): string {
   return normalizeMigrationSlug(`create_${tableName.replaceAll('.', '_')}_table`)
 }
 
-function escapeSingleQuotedString(value: string): string {
-  return value.replaceAll('\\', '\\\\').replaceAll('\'', '\\\'')
+function renderStringLiteral(value: string): string {
+  return JSON.stringify(value)
 }
 
 export function renderQueueTableMigration(tableName: string): string {
@@ -42,7 +42,7 @@ export function renderQueueTableMigration(tableName: string): string {
     '',
     'export default defineMigration({',
     '  async up({ schema }) {',
-    `    await schema.createTable('${escapeSingleQuotedString(tableName)}', (table) => {`,
+    `    await schema.createTable(${renderStringLiteral(tableName)}, (table) => {`,
     '      table.string(\'id\').primaryKey()',
     '      table.string(\'job\')',
     '      table.string(\'connection\')',
@@ -54,13 +54,13 @@ export function renderQueueTableMigration(tableName: string): string {
     '      table.bigInteger(\'reserved_at\').nullable()',
     '      table.string(\'reservation_id\').nullable()',
     '      table.bigInteger(\'created_at\')',
-    `      table.index(['queue', 'available_at'], '${escapeSingleQuotedString(`${indexPrefix}_queue_available_at_index`)}')`,
-    `      table.index(['queue', 'reserved_at'], '${escapeSingleQuotedString(`${indexPrefix}_queue_reserved_at_index`)}')`,
-    `      table.index(['reservation_id'], '${escapeSingleQuotedString(`${indexPrefix}_reservation_id_index`)}')`,
+    `      table.index(['queue', 'available_at'], ${renderStringLiteral(`${indexPrefix}_queue_available_at_index`)})`,
+    `      table.index(['queue', 'reserved_at'], ${renderStringLiteral(`${indexPrefix}_queue_reserved_at_index`)})`,
+    `      table.index(['reservation_id'], ${renderStringLiteral(`${indexPrefix}_reservation_id_index`)})`,
     '    })',
     '  },',
     '  async down({ schema }) {',
-    `    await schema.dropTable('${escapeSingleQuotedString(tableName)}')`,
+    `    await schema.dropTable(${renderStringLiteral(tableName)})`,
     '  },',
     '})',
     '',
@@ -75,7 +75,7 @@ export function renderFailedJobsTableMigration(tableName: string): string {
     '',
     'export default defineMigration({',
     '  async up({ schema }) {',
-    `    await schema.createTable('${escapeSingleQuotedString(tableName)}', (table) => {`,
+    `    await schema.createTable(${renderStringLiteral(tableName)}, (table) => {`,
     '      table.string(\'id\').primaryKey()',
     '      table.string(\'job_id\')',
     '      table.string(\'job\')',
@@ -84,12 +84,12 @@ export function renderFailedJobsTableMigration(tableName: string): string {
     '      table.text(\'payload\')',
     '      table.text(\'exception\')',
     '      table.bigInteger(\'failed_at\')',
-    `      table.index(['job_id'], '${escapeSingleQuotedString(`${indexPrefix}_job_id_index`)}')`,
-    `      table.index(['failed_at'], '${escapeSingleQuotedString(`${indexPrefix}_failed_at_index`)}')`,
+    `      table.index(['job_id'], ${renderStringLiteral(`${indexPrefix}_job_id_index`)})`,
+    `      table.index(['failed_at'], ${renderStringLiteral(`${indexPrefix}_failed_at_index`)})`,
     '    })',
     '  },',
     '  async down({ schema }) {',
-    `    await schema.dropTable('${escapeSingleQuotedString(tableName)}')`,
+    `    await schema.dropTable(${renderStringLiteral(tableName)})`,
     '  },',
     '})',
     '',
