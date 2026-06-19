@@ -17,6 +17,7 @@ Key points:
 - `name` is optional in code, but recommended
 - discovered app events can fall back to path-derived names
 - payload type is inferred from the generic
+- `dispatch(payload)` dispatches the event with the same payload type
 
 ## `defineListener(...)`
 
@@ -48,15 +49,32 @@ Options:
 - `afterCommit`
 - `handle(event)`
 
+## Event definition dispatch
+
+Primary dispatch API:
+
+```ts
+import UserRegistered from '../events/user/registered'
+
+await UserRegistered.dispatch({
+  userId: 'user_1',
+  email: 'ava@example.com',
+})
+```
+
+Event definition dispatch returns a pending dispatch builder.
+
 ## `Event`
 
 Facade API:
 
 ```ts
 import { Event } from '@holo-js/events'
+import UserRegistered from '../events/user/registered'
 
-await Event.dispatch('user.registered', {
+await Event.dispatch(UserRegistered, {
   userId: 'user_1',
+  email: 'ava@example.com',
 })
 ```
 
@@ -68,9 +86,11 @@ Helper API with the same semantics:
 
 ```ts
 import { dispatchEvent } from '@holo-js/events'
+import UserRegistered from '../events/user/registered'
 
-await dispatchEvent('user.registered', {
+await dispatchEvent(UserRegistered, {
   userId: 'user_1',
+  email: 'ava@example.com',
 })
 ```
 
@@ -78,7 +98,7 @@ This helper avoids naming conflicts with queue `dispatch(...)`.
 
 ## Pending dispatch fluent methods
 
-Available on `Event.dispatch(...)` and `dispatchEvent(...)`:
+Available on event definition dispatch, `Event.dispatch(...)`, and `dispatchEvent(...)`:
 
 - `.afterCommit()`
 - `.onConnection(name)`

@@ -41,6 +41,7 @@ holo broadcast:work
 
 If the worker is not running, realtime queries and mutations still execute normally, but browser live updates cannot be
 delivered.
+See [Deployment](/deployment) when choosing a production host for realtime apps.
 
 ## Define a query
 

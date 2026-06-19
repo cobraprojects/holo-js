@@ -38,6 +38,24 @@ describe('@holo-js/queue typing', () => {
     })
 
     const typedJob: QueueJobDefinition<{ reportId: string }, string> = job
+    const expectDefinedJobPayloadTypes = () => {
+      const jobDispatch: QueuePendingDispatch<{ reportId: string }> = job.dispatch({
+        reportId: 'rep-1',
+      })
+      const jobDispatchSync: Promise<string> = job.dispatchSync({
+        reportId: 'rep-1',
+      })
+      job.dispatch({
+        // @ts-expect-error defined job dispatch uses the handle payload type
+        wrong: 123,
+      })
+      job.dispatchSync({
+        // @ts-expect-error defined job dispatchSync uses the handle payload type
+        wrong: 123,
+      })
+      void jobDispatch
+      void jobDispatchSync
+    }
     const normalized: NormalizedHoloQueueConfig = normalizeQueueConfig()
     const sharedRedisConfig: QueueSharedRedisConfig = {
       default: 'cache',
@@ -134,6 +152,7 @@ describe('@holo-js/queue typing', () => {
     void normalizedWithSharedRedis
     void envelope
     void driver
+    void expectDefinedJobPayloadTypes
     void typedPending
     void expectRegisteredQueuePayloadTypes
     void dynamicPending

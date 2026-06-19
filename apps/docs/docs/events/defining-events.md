@@ -19,6 +19,9 @@ export default defineEvent<{
 
 Event names are normalized by trimming surrounding whitespace.
 
+The returned event definition exposes a typed `dispatch(payload)` method using the payload shape from
+`defineEvent<...>()`.
+
 ## Path-derived fallback names
 
 Discovered app events can omit `name`. In that case, Holo-JS derives the name from the file path under

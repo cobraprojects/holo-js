@@ -21,9 +21,10 @@ server/jobs/reports/send-digest.ts
 Use `defineJob(...)` from `@holo-js/queue`:
 
 ```ts
+// server/jobs/reports/send-digest.ts
 import { defineJob } from '@holo-js/queue'
 
-export default defineJob({
+const SendDigest = defineJob({
   queue: 'emails',
   connection: 'redis',
   tries: 3,
@@ -44,6 +45,8 @@ export default defineJob({
     void context
   },
 })
+
+export default SendDigest
 ```
 
 `defineJob(...)` supports:
@@ -68,18 +71,21 @@ Examples:
 
 `defineJob(...)` does not need a `name` field for discovered app jobs.
 
+The returned job definition exposes typed `dispatch(payload)` and `dispatchSync(payload)` methods using
+the payload shape from `handle(payload, context)`.
+
 ## Dispatching jobs
 
 Dispatch from any server-side code:
 
 ```ts
-import { dispatch, dispatchSync, Queue } from '@holo-js/queue'
+import SendDigest from '../jobs/reports/send-digest'
 
-await dispatch('reports.send-digest', {
+await SendDigest.dispatch({
   userId: 'user_1',
 })
 
-await dispatch('reports.send-digest', {
+await SendDigest.dispatch({
   userId: 'user_1',
 })
   .onConnection('redis')
@@ -92,7 +98,17 @@ await dispatch('reports.send-digest', {
     console.error(error)
   })
 
-await dispatchSync('reports.send-digest', {
+await SendDigest.dispatchSync({
+  userId: 'user_1',
+})
+```
+
+The string-based dispatch APIs remain available when you need to dispatch dynamically:
+
+```ts
+import { dispatch, Queue } from '@holo-js/queue'
+
+await dispatch('reports.send-digest', {
   userId: 'user_1',
 })
 
@@ -101,7 +117,7 @@ await Queue.connection('redis')
   .onQueue('emails')
 ```
 
-When dispatch must wait for a successful database commit, call `DB.afterCommit(() => dispatch(...).dispatch())` in your application layer instead of relying on queue-managed transaction deferral.
+When dispatch must wait for a successful database commit, call `DB.afterCommit(() => SendDigest.dispatch(...).dispatch())` in your application layer instead of relying on queue-managed transaction deferral.
 
 Connection and queue defaults are separate from job identity:
 
@@ -184,7 +200,6 @@ Holo-JS refreshes the generated job registry during:
 
 - `holo dev`
 - `holo build`
-- `npx holo prepare`
 
 Run `npx holo prepare` directly when you only want to rebuild discovery output.
 

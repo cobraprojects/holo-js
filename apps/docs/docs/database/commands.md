@@ -57,8 +57,8 @@ npx holo make:migration create_users_table --create users
 npx holo make:migration add_status_to_users_table --table users
 ```
 
-This creates a timestamped migration in `server/db/migrations`. `holo prepare`, `holo dev`, and
-`holo build` keep the generated registries current.
+This creates a timestamped migration in `server/db/migrations`. `holo dev` and `holo build` keep the
+generated registries current; `holo prepare` is available when you only want to refresh discovery output.
 
 Use:
 
@@ -94,8 +94,8 @@ migration.
 npx holo make:seeder RoleSeeder
 ```
 
-This creates a seeder in `server/db/seeders` and refreshes generated discovery artifacts when the next
-prepare step runs.
+This creates a seeder in `server/db/seeders` and refreshes generated discovery artifacts during the next
+`holo dev`, `holo build`, or manual discovery run.
 
 ### Create an observer
 
@@ -224,7 +224,8 @@ Runtime commands read generated registries under `.holo-js/generated` to find:
 - commands
 - discovery metadata
 
-Generator commands and `holo prepare` keep those artifacts in sync for you.
+Generator commands refresh those artifacts when they can. `holo dev` and `holo build` also keep them current
+before starting the framework lifecycle command.
 
 ## App commands
 

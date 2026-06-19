@@ -13,11 +13,10 @@ Defer the full dispatch fan-out:
 
 ```ts
 import { DB } from '@holo-js/db'
-import { Event } from '@holo-js/events'
 import UserRegistered from '../events/user/registered'
 
 await DB.transaction(async () => {
-  await Event.dispatch(UserRegistered, {
+  await UserRegistered.dispatch({
     userId: 'user_1',
     email: 'ava@example.com',
   }).afterCommit()

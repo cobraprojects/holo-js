@@ -7,6 +7,7 @@ import type {
 import {
   isQueueJobDefinition,
   normalizeQueueJobDefinition,
+  queueJobInternals,
 } from './contracts'
 
 function toPosixPath(value: string): string {
@@ -83,6 +84,8 @@ export function registerQueueJob<TPayload extends QueueJsonValue, TResult>(
     }),
   }) as QueueRegisteredJob<TPayload, TResult>
 
+  queueJobInternals.setQueueJobDefinitionName(definition, name)
+  queueJobInternals.setQueueJobDefinitionName(normalizedDefinition, name)
   registry.set(name, entry as unknown as QueueRegisteredJob)
   return entry
 }

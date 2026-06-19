@@ -1,6 +1,90 @@
 type QueueJsonPrimitive = string | number | boolean | null
 export type QueueJsonValue = QueueJsonPrimitive | readonly QueueJsonValue[] | { readonly [key: string]: QueueJsonValue }
 
+type QueueJobDispatcher = <TPayload extends QueueJsonValue>(
+  jobName: string,
+  payload: TPayload,
+) => QueuePendingDispatch<TPayload>
+
+type QueueJobSyncDispatcher = <TPayload extends QueueJsonValue, TResult>(
+  jobName: string,
+  payload: TPayload,
+) => Promise<TResult>
+
+function getQueueJobDispatcher(): QueueJobDispatcher | undefined {
+  return (globalThis as typeof globalThis & {
+    __holoQueueJobDispatcher__?: QueueJobDispatcher
+  }).__holoQueueJobDispatcher__
+}
+
+function setQueueJobDispatcher(dispatcher: QueueJobDispatcher): void {
+  const runtime = globalThis as typeof globalThis & {
+    __holoQueueJobDispatcher__?: QueueJobDispatcher
+  }
+
+  runtime.__holoQueueJobDispatcher__ = dispatcher
+}
+
+function getQueueJobSyncDispatcher(): QueueJobSyncDispatcher | undefined {
+  return (globalThis as typeof globalThis & {
+    __holoQueueJobSyncDispatcher__?: QueueJobSyncDispatcher
+  }).__holoQueueJobSyncDispatcher__
+}
+
+function setQueueJobSyncDispatcher(dispatcher: QueueJobSyncDispatcher): void {
+  const runtime = globalThis as typeof globalThis & {
+    __holoQueueJobSyncDispatcher__?: QueueJobSyncDispatcher
+  }
+
+  runtime.__holoQueueJobSyncDispatcher__ = dispatcher
+}
+
+function getQueueJobDefinitionNames(): WeakMap<object, string> {
+  const runtime = globalThis as typeof globalThis & {
+    __holoQueueJobDefinitionNames__?: WeakMap<object, string>
+  }
+
+  runtime.__holoQueueJobDefinitionNames__ ??= new WeakMap<object, string>()
+  return runtime.__holoQueueJobDefinitionNames__
+}
+
+function setQueueJobDefinitionName(definition: object, name: string): void {
+  getQueueJobDefinitionNames().set(definition, name)
+}
+
+function resolveQueueJobDefinitionName(definition: object): string {
+  const name = getQueueJobDefinitionNames().get(definition)
+  if (!name) {
+    throw new Error('[Holo Queue] Job definitions cannot dispatch before the job is registered.')
+  }
+
+  return name
+}
+
+function dispatchDefinedQueueJob<TPayload extends QueueJsonValue>(
+  definition: object,
+  payload: TPayload,
+): QueuePendingDispatch<TPayload> {
+  const dispatcher = getQueueJobDispatcher()
+  if (!dispatcher) {
+    throw new Error('[Holo Queue] Job definitions cannot dispatch before the queue runtime is loaded.')
+  }
+
+  return dispatcher(resolveQueueJobDefinitionName(definition), payload)
+}
+
+function dispatchDefinedQueueJobSync<TPayload extends QueueJsonValue, TResult>(
+  definition: object,
+  payload: TPayload,
+): Promise<TResult> {
+  const dispatcher = getQueueJobSyncDispatcher()
+  if (!dispatcher) {
+    throw new Error('[Holo Queue] Job definitions cannot dispatch before the queue runtime is loaded.')
+  }
+
+  return dispatcher(resolveQueueJobDefinitionName(definition), payload)
+}
+
 function normalizeOptionalString(
   value: string | undefined,
   label: string,
@@ -121,6 +205,11 @@ export interface QueueJobDefinition<TPayload extends QueueJsonValue = QueueJsonV
   readonly onCompleted?: QueueJobCompletedHook<TPayload, TResult>
   readonly onFailed?: QueueJobFailedHook<TPayload>
   handle(payload: TPayload, context: QueueJobContext): Promise<TResult> | TResult
+}
+
+export interface DefinedQueueJobDefinition<TPayload extends QueueJsonValue = QueueJsonValue, TResult = unknown> extends QueueJobDefinition<TPayload, TResult> {
+  dispatch(payload: TPayload): QueuePendingDispatch<TPayload>
+  dispatchSync(payload: TPayload): Promise<TResult>
 }
 
 export interface QueueJobEnvelope<TPayload extends QueueJsonValue = QueueJsonValue> {
@@ -393,7 +482,11 @@ export function isQueueJobDefinition(value: unknown): value is QueueJobDefinitio
     && typeof (value as QueueJobDefinition).handle === 'function'
 }
 
-export function normalizeQueueJobDefinition<TJob extends QueueJobDefinition>(job: TJob): TJob {
+export function normalizeQueueJobDefinition<
+  TPayload extends QueueJsonValue,
+  TResult,
+  TJob extends QueueJobDefinition<TPayload, TResult>,
+>(job: TJob): TJob {
   if (!isQueueJobDefinition(job)) {
     throw new Error('[Holo Queue] Jobs must define a "handle" function.')
   }
@@ -410,8 +503,23 @@ export function normalizeQueueJobDefinition<TJob extends QueueJobDefinition>(job
   } as TJob
 }
 
-export function defineJob<TJob extends QueueJobDefinition>(job: TJob): TJob {
-  return Object.freeze(normalizeQueueJobDefinition(job))
+export function defineJob<TPayload extends QueueJsonValue, TResult>(
+  job: QueueJobDefinition<TPayload, TResult>,
+): DefinedQueueJobDefinition<TPayload, TResult> {
+  const normalized = normalizeQueueJobDefinition<TPayload, TResult, QueueJobDefinition<TPayload, TResult>>(job) as DefinedQueueJobDefinition<TPayload, TResult>
+  Object.defineProperty(normalized, 'dispatch', {
+    value(payload: TPayload): QueuePendingDispatch<TPayload> {
+      return dispatchDefinedQueueJob(normalized, payload)
+    },
+    enumerable: false,
+  })
+  Object.defineProperty(normalized, 'dispatchSync', {
+    value(payload: TPayload): Promise<TResult> {
+      return dispatchDefinedQueueJobSync<TPayload, TResult>(normalized, payload)
+    },
+    enumerable: false,
+  })
+  return Object.freeze(normalized)
 }
 
 export interface QueueFailedStoreConfig {
@@ -542,9 +650,15 @@ export interface NormalizedHoloQueueConfig {
 }
 
 export const queueJobInternals = {
+  dispatchDefinedQueueJob,
+  dispatchDefinedQueueJobSync,
   normalizeQueueJobDefinition,
   normalizeBackoff,
   normalizeOptionalHook,
   normalizeOptionalInteger,
   normalizeOptionalString,
+  resolveQueueJobDefinitionName,
+  setQueueJobDefinitionName,
+  setQueueJobDispatcher,
+  setQueueJobSyncDispatcher,
 }

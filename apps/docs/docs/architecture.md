@@ -31,8 +31,9 @@ Holo-JS, not the host framework, owns discovery of canonical directories such as
 - `server/db`
 - `server/commands`
 
-`holo prepare` turns those directories into generated artifacts under `.holo-js/generated`. Adapters
-consume those generated registries instead of re-scanning the filesystem on every runtime path.
+Discovery turns those directories into generated artifacts under `.holo-js/generated`. `holo dev` and
+`holo build` refresh discovery before starting the framework lifecycle command, and adapters consume the
+generated registries instead of re-scanning the filesystem on every runtime path.
 
 ## Portable runtime
 
@@ -78,6 +79,8 @@ They should not own database semantics, storage semantics, or their own config m
 ## Hosting separation
 
 Framework support and hosting support are separate concerns.
+Deployment planning follows the web-runtime-plus-worker-runtime model described in
+[Deployment](/deployment).
 
 The adapter should stay free of direct assumptions about:
 

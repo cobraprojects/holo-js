@@ -11,7 +11,7 @@ The `@holo-js/events` package owns:
 
 - event definitions (`defineEvent(...)`)
 - listener definitions (`defineListener(...)`)
-- event dispatch (`Event.dispatch(...)`, `dispatchEvent(...)`)
+- event dispatch (`UserRegistered.dispatch(...)`, `Event.dispatch(...)`, `dispatchEvent(...)`)
 - listener fan-out (sync and queued listeners)
 - dispatch-level and listener-level `afterCommit` behavior
 
@@ -28,7 +28,7 @@ Queued listeners become queue jobs internally, but users still author listeners,
 ## Quick start
 
 ```ts
-import { defineEvent, defineListener, Event } from '@holo-js/events'
+import { defineEvent, defineListener } from '@holo-js/events'
 
 export const UserRegistered = defineEvent<{
   userId: string
@@ -47,7 +47,7 @@ export const SendWelcomeEmail = defineListener({
   },
 })
 
-await Event.dispatch(UserRegistered, {
+await UserRegistered.dispatch({
   userId: 'user_1',
   email: 'ava@example.com',
 }).afterCommit()

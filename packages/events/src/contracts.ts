@@ -3,6 +3,37 @@ export type EventDelayValue = number | Date
 const HOLO_EVENT_DEFINITION_MARKER = Symbol.for('holo-js.events.definition')
 const HOLO_LISTENER_DEFINITION_MARKER = Symbol.for('holo-js.events.listener')
 
+type EventDefinitionDispatcher = <TPayload>(
+  event: EventDefinition<TPayload, string | undefined>,
+  payload: TPayload,
+) => EventPendingDispatch<TPayload>
+
+function getEventDefinitionDispatcher(): EventDefinitionDispatcher | undefined {
+  return (globalThis as typeof globalThis & {
+    __holoEventDefinitionDispatcher__?: EventDefinitionDispatcher
+  }).__holoEventDefinitionDispatcher__
+}
+
+function setEventDefinitionDispatcher(dispatcher: EventDefinitionDispatcher): void {
+  const runtime = globalThis as typeof globalThis & {
+    __holoEventDefinitionDispatcher__?: EventDefinitionDispatcher
+  }
+
+  runtime.__holoEventDefinitionDispatcher__ = dispatcher
+}
+
+function dispatchDefinedEvent<TPayload>(
+  event: EventDefinition<TPayload, string | undefined>,
+  payload: TPayload,
+): EventPendingDispatch<TPayload> {
+  const dispatcher = getEventDefinitionDispatcher()
+  if (!dispatcher) {
+    throw new Error('[Holo Events] Event definitions cannot dispatch before the events runtime is loaded.')
+  }
+
+  return dispatcher(event, payload)
+}
+
 function normalizeOptionalString(
   value: unknown,
   label: string,
@@ -111,6 +142,13 @@ export interface EventDefinition<
 > {
   readonly name?: TName
   readonly __payloadType?: TPayload
+}
+
+export interface DefinedEventDefinition<
+  TPayload = unknown,
+  TName extends string | undefined = string | undefined,
+> extends EventDefinition<TPayload, TName> {
+  dispatch(payload: TPayload): EventPendingDispatch<TPayload>
 }
 
 export interface RegisteredEvent<
@@ -300,10 +338,16 @@ export function normalizeEventDefinition<TEvent extends EventDefinition>(event: 
 
 export function defineEvent<TPayload, TName extends string | undefined = string | undefined>(
   event: EventDefinition<TPayload, TName>,
-): EventDefinition<TPayload, TName> {
-  const normalized = { ...normalizeEventDefinition(event) }
+): DefinedEventDefinition<TPayload, TName> {
+  const normalized = { ...normalizeEventDefinition(event) } as DefinedEventDefinition<TPayload, TName>
   Object.defineProperty(normalized, HOLO_EVENT_DEFINITION_MARKER, {
     value: true,
+    enumerable: false,
+  })
+  Object.defineProperty(normalized, 'dispatch', {
+    value(payload: TPayload): EventPendingDispatch<TPayload> {
+      return dispatchDefinedEvent(normalized, payload)
+    },
     enumerable: false,
   })
   return Object.freeze(normalized)
@@ -406,6 +450,7 @@ export const eventInternals = {
   normalizeOptionalBoolean,
   normalizeOptionalDelay,
   normalizeOptionalString,
+  setEventDefinitionDispatcher,
   normalizeListensTo,
   normalizeListenerDefinition,
   toPosixPath,

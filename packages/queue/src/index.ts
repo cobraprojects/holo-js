@@ -10,6 +10,7 @@ export function defineQueueConfig<TConfig extends HoloQueueConfig>(config: TConf
 
 export { defineJob, isQueueJobDefinition, normalizeQueueJobDefinition, queueJobInternals } from './contracts'
 export type {
+  DefinedQueueJobDefinition,
   ExportedQueueJobDefinition,
   QueueAsyncDriver,
   NormalizedQueueConnectionConfig,

@@ -1,6 +1,8 @@
 # Queued Listeners
 
 Queued listeners are listener definitions with `queue: true`.
+If the selected queue connection uses an async driver, production needs a supervised queue worker. See
+[Deployment](/deployment) for host selection and [Queue Workers](/queue/workers) for worker commands.
 
 ```ts
 import { defineListener } from '@holo-js/events'

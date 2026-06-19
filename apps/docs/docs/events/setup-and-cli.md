@@ -55,7 +55,8 @@ This adds the `@holo-js/events` package dependency when needed and creates the d
 - `server/events`
 - `server/listeners`
 
-After install, run normal discovery through `holo dev`, `holo build`, or `holo prepare`.
+After install, the next `holo dev` or `holo build` refreshes discovery automatically. Use `holo prepare`
+only when you want to refresh discovery without starting dev or build.
 
 ## Generated metadata
 

@@ -32,6 +32,8 @@ bunx holo broadcast:work
 
 Run it under your process manager (systemd, PM2, containers, orchestration platform).
 Both Bun and Node runtimes are supported for the worker process.
+See [Deployment](/deployment) for the broader host decision when the web app runs on a serverless or edge
+platform.
 
 ## Running In Production
 
