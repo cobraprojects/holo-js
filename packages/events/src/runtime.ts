@@ -495,6 +495,8 @@ export function dispatchEvent<TPayload>(
   return new PendingEventDispatch(event, payload)
 }
 
+eventInternals.setEventDefinitionDispatcher(dispatchEvent)
+
 export const Event: EventFacade = {
   dispatch: dispatchEvent,
 }

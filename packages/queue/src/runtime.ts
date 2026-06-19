@@ -24,6 +24,7 @@ import type {
   HoloQueueJobRegistry,
   HoloQueueConfig,
 } from './contracts'
+import { queueJobInternals } from './contracts'
 import { DEFAULT_QUEUE_NAME } from './config'
 import { normalizeQueueConfig, holoQueueDefaults } from './config'
 import { redisQueueDriverFactory } from './drivers/redis'
@@ -742,6 +743,9 @@ export function dispatch<TPayload extends QueueJsonValue = QueueJsonValue>(
 ): QueuePendingDispatch<TPayload> {
   return new PendingQueueDispatch(jobName, payload, options)
 }
+
+queueJobInternals.setQueueJobDispatcher(dispatch)
+queueJobInternals.setQueueJobSyncDispatcher(dispatchSync)
 
 export const Queue = {
   connection(name?: string): QueueConnectionFacade {

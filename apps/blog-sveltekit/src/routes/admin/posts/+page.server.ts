@@ -5,6 +5,7 @@ import { csrf } from '@holo-js/security'
 
 import { deletePost, getAdminPostsData } from '$lib/server/blog'
 import { blogPostChanged } from '../../../../server/broadcast/blog-post-changed'
+import BlogPostSaved from '../../../../server/events/blog/post-saved'
 import Post from '../../../../server/models/Post'
 import type { Actions, PageServerLoad } from './$types'
 
@@ -25,6 +26,13 @@ export const actions = {
     await authorize('delete', post)
     await deletePost(id)
     await broadcast(blogPostChanged('deleted', post.id, post.title, post.status, post.slug))
+    await BlogPostSaved.dispatch({
+      action: 'deleted',
+      postId: post.id,
+      title: post.title,
+      status: post.status,
+      slug: post.slug,
+    })
 
     redirect(303, '/admin/posts')
   },

@@ -15,6 +15,9 @@ Most application code touches runtime services from server-side code:
 
 These are not client-side APIs.
 
+At deployment time, these services run inside either the web runtime or a worker runtime. Use
+[Deployment](/deployment) to decide whether the application needs separate long-running worker processes.
+
 ## Shared app access
 
 In Nuxt, Next.js, and SvelteKit, runtime context is prepared for you by the framework bootstrap.

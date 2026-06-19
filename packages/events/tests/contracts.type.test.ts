@@ -56,6 +56,14 @@ describe('@holo-js/events typing', () => {
     type ListenerContract = ListenerDefinition<readonly [typeof userRegistered, typeof userDeleted], string>
 
     const listenerContract: ListenerContract = multiListener
+    const eventMethodPending = userRegistered.dispatch({
+      userId: 'usr-1',
+      email: 'ava@example.com',
+    })
+    // @ts-expect-error wrong payload shape for userRegistered.dispatch
+    userRegistered.dispatch({
+      userId: 'usr-1',
+    })
     const explicitPending = dispatchEvent(userRegistered, {
       userId: 'usr-1',
       email: 'ava@example.com',
@@ -100,6 +108,7 @@ describe('@holo-js/events typing', () => {
     }
 
     void listenerContract
+    void eventMethodPending
     void explicitPending
     void namedPending
     void facadePending

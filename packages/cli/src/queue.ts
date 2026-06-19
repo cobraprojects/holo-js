@@ -326,7 +326,7 @@ export async function getQueueRuntimeEnvironment(projectRoot: string): Promise<Q
       }
 
       if (!queueModule?.getRegisteredQueueJob(entry.name)) {
-        queueModule!.registerQueueJob(queueModule!.normalizeQueueJobDefinition(job), {
+        queueModule!.registerQueueJob(job, {
           name: entry.name,
           sourcePath: entry.sourcePath,
         })

@@ -88,8 +88,9 @@ return Response.json({
 ```
 
 For session guards, `login()` and `register()` still return session results. For token guards, they return personal
-access token results. TypeScript infers the guard driver from `config/auth.ts` through the generated `holo prepare`
-types, so `auth.guard('api')` is token-backed when the `api` guard uses `driver: 'token'`.
+access token results. TypeScript infers the guard driver from `config/auth.ts` through generated discovery types,
+so `auth.guard('api')` is token-backed when the `api` guard uses `driver: 'token'`.
+Run `npx holo prepare` after changing guard configuration so those generated types stay current.
 
 ## Sending Tokens On Requests
 

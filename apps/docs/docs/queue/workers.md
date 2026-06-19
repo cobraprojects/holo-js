@@ -3,6 +3,9 @@
 Workers are only needed for async queue drivers such as `redis` and `database`. The `sync` driver runs
 jobs inline and does not need a worker process.
 
+In production, run queue workers as supervised long-running processes, separate from the web request process.
+See [Deployment](/deployment) when choosing a host for applications that use async queues.
+
 ## `queue:work`
 
 Run the queue worker:

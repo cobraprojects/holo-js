@@ -21,8 +21,12 @@ describe('@holo-js/events contracts', () => {
     expect(event).toEqual({
       name: 'user.registered',
     })
+    expect(typeof event.dispatch).toBe('function')
+    expect(Object.keys(event)).toEqual(['name'])
     expect(Object.isFrozen(event)).toBe(true)
     expect(unnamed).toEqual({})
+    expect(typeof unnamed.dispatch).toBe('function')
+    expect(Object.keys(unnamed)).toEqual([])
     expect(Object.isFrozen(unnamed)).toBe(true)
   })
 
@@ -41,6 +45,26 @@ describe('@holo-js/events contracts', () => {
     expect(eventInternals.hasEventDefinitionMarker({ name: 'audit.entry' })).toBe(false)
     expect(eventInternals.hasListenerDefinitionMarker(listener)).toBe(true)
     expect(eventInternals.hasListenerDefinitionMarker({ listensTo: ['audit.entry'], async handle() {} })).toBe(false)
+  })
+
+  it('rejects event definition dispatch before the runtime dispatcher is loaded', () => {
+    const runtime = globalThis as typeof globalThis & {
+      __holoEventDefinitionDispatcher__?: unknown
+    }
+    const existingDispatcher = runtime.__holoEventDefinitionDispatcher__
+    const event = defineEvent<object>({
+      name: 'audit.entry',
+    })
+
+    try {
+      delete runtime.__holoEventDefinitionDispatcher__
+
+      expect(() => event.dispatch({})).toThrow(
+        'Event definitions cannot dispatch before the events runtime is loaded.',
+      )
+    } finally {
+      runtime.__holoEventDefinitionDispatcher__ = existingDispatcher
+    }
   })
 
   it('rejects invalid event definitions and derived naming inputs', () => {

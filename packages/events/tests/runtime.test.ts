@@ -47,6 +47,24 @@ describe('@holo-js/events runtime', () => {
     expect(helperResult.occurredAt).toBeGreaterThan(0)
   })
 
+  it('dispatches through event definitions', async () => {
+    const userRegistered = defineEvent<{ userId: string }, 'user.registered'>({
+      name: 'user.registered',
+    })
+    registerEvent(userRegistered)
+
+    const result = await userRegistered.dispatch({
+      userId: 'usr-1',
+    })
+
+    expect(result).toMatchObject({
+      eventName: 'user.registered',
+      deferred: false,
+      syncListeners: 0,
+      queuedListeners: 0,
+    })
+  })
+
   it('executes synchronous listeners inline in registration order', async () => {
     registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
       name: 'user.registered',

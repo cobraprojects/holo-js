@@ -90,7 +90,8 @@ Put observers here when model lifecycle behavior should move out of the model fi
 
 ### `server/commands`
 
-Put app-specific CLI commands here. Holo-JS auto-discovers them during `holo prepare`.
+Put app-specific CLI commands here. Holo-JS auto-discovers them during `holo dev`, `holo build`, and
+manual discovery.
 
 Example:
 
@@ -101,7 +102,7 @@ server/commands/db/reset.ts
 
 ### `server/jobs`
 
-Put queue jobs here. Holo-JS auto-discovers them during `holo prepare`.
+Put queue jobs here. Holo-JS auto-discovers them during `holo dev`, `holo build`, and manual discovery.
 
 Example:
 
@@ -112,7 +113,8 @@ server/jobs/cache/prune.ts
 
 ### `server/events`
 
-Put event definitions here. Holo-JS auto-discovers them during `holo prepare`.
+Put event definitions here. Holo-JS auto-discovers them during `holo dev`, `holo build`, and manual
+discovery.
 
 Example:
 
@@ -123,7 +125,8 @@ server/events/billing/invoice-paid.ts
 
 ### `server/listeners`
 
-Put event listeners here. Holo-JS auto-discovers them during `holo prepare`.
+Put event listeners here. Holo-JS auto-discovers them during `holo dev`, `holo build`, and manual
+discovery.
 
 Example:
 
@@ -170,9 +173,9 @@ Use:
 ```bash
 holo dev
 holo build
-holo prepare
 ```
 
 `holo dev` and `holo build` keep `.holo-js/generated` in sync with `server/models`, `server/db`,
-`server/commands`, `server/jobs`, `server/events`, and `server/listeners`. Use `holo prepare` only when
-you want to refresh discovery output without starting the framework runtime.
+`server/commands`, `server/jobs`, `server/events`, and `server/listeners`.
+
+Use `holo prepare` only when you want to refresh discovery output without starting dev or build.

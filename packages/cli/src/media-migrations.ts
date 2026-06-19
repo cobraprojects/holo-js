@@ -27,10 +27,10 @@ export function renderMediaTableMigration(tableName = DEFAULT_MEDIA_TABLE): stri
   const tableNameLiteral = JSON.stringify(tableName)
 
   return [
-    'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
+    'import { defineMigration } from \'@holo-js/db\'',
     '',
     'export default defineMigration({',
-    '  async up({ schema }: MigrationContext) {',
+    '  async up({ schema }) {',
     `    await schema.createTable(${tableNameLiteral}, (table) => {`,
     '      table.id()',
     '      table.uuid(\'uuid\').unique()',
@@ -52,7 +52,7 @@ export function renderMediaTableMigration(tableName = DEFAULT_MEDIA_TABLE): stri
     '      table.index([\'model_type\', \'model_id\', \'collection_name\'])',
     '    })',
     '  },',
-    '  async down({ schema }: MigrationContext) {',
+    '  async down({ schema }) {',
     `    await schema.dropTable(${tableNameLiteral})`,
     '  },',
     '})',

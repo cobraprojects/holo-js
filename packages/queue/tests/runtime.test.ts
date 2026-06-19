@@ -4,6 +4,7 @@ import {
   Queue,
   QueueReleaseUnsupportedError,
   configureQueueRuntime,
+  defineJob,
   dispatch,
   dispatchSync,
   getQueueRuntime,
@@ -277,6 +278,36 @@ describe('@holo-js/queue runtime', () => {
     })
     expect(syncResult).toBe(42)
     expect(handled).toHaveBeenCalledTimes(2)
+  })
+
+  it('dispatches through registered job definitions', async () => {
+    const job = defineJob({
+      tries: 2,
+      async handle(payload: { readonly userId: string }, context) {
+        return {
+          userId: payload.userId,
+          attempt: context.attempt,
+        }
+      },
+    })
+    registerNamedJob('users.digest', job)
+
+    const asyncResult = await job.dispatch({
+      userId: 'usr-1',
+    })
+    const syncResult = await job.dispatchSync({
+      userId: 'usr-2',
+    })
+
+    expect(asyncResult).toMatchObject({
+      connection: 'sync',
+      queue: 'default',
+      synchronous: true,
+    })
+    expect(syncResult).toEqual({
+      userId: 'usr-2',
+      attempt: 1,
+    })
   })
 
   it('supports PromiseLike catch(), finally(), onComplete(), and onFailed() on pending dispatches', async () => {

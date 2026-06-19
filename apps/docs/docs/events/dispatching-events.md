@@ -1,8 +1,19 @@
 # Dispatching Events
 
-Use the `Event` facade or `dispatchEvent(...)` helper.
+Dispatch through the event definition for the strongest payload inference.
 
-## Primary API: `Event.dispatch(...)`
+## Primary API: event dispatch
+
+```ts
+import UserRegistered from '../events/user/registered'
+
+await UserRegistered.dispatch({
+  userId: 'user_1',
+  email: 'ava@example.com',
+})
+```
+
+## Facade API: `Event.dispatch(...)`
 
 ```ts
 import { Event } from '@holo-js/events'
@@ -26,15 +37,14 @@ await dispatchEvent(UserRegistered, {
 })
 ```
 
-`dispatchEvent(...)` is the conflict-free helper name. `@holo-js/events` does not use top-level
-`dispatch(...)` as the primary API.
+`dispatchEvent(...)` is the conflict-free helper name for code that should not call through the event object.
 
 ## Fluent controls
 
 Dispatch returns a pending builder:
 
 ```ts
-await Event.dispatch(UserRegistered, {
+await UserRegistered.dispatch({
   userId: 'user_1',
   email: 'ava@example.com',
 })

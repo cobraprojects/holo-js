@@ -30,14 +30,32 @@ declare module '../src/contracts' {
 
 describe('@holo-js/queue typing', () => {
   it('preserves typing for job definitions, envelopes, dispatch calls, and normalized config', () => {
-    const job = defineJob({
+    const job = defineJob<{ reportId: string }>({
       queue: 'reports',
-      async handle(payload: { reportId: string }) {
+      async handle(payload) {
         return payload.reportId
       },
     })
 
-    const typedJob: QueueJobDefinition<{ reportId: string }, string> = job
+    const typedJob: QueueJobDefinition<{ reportId: string }, unknown> = job
+    const expectDefinedJobPayloadTypes = () => {
+      const jobDispatch: QueuePendingDispatch<{ reportId: string }> = job.dispatch({
+        reportId: 'rep-1',
+      })
+      const jobDispatchSync: Promise<unknown> = job.dispatchSync({
+        reportId: 'rep-1',
+      })
+      job.dispatch({
+        // @ts-expect-error defined job dispatch uses the handle payload type
+        wrong: 123,
+      })
+      job.dispatchSync({
+        // @ts-expect-error defined job dispatchSync uses the handle payload type
+        wrong: 123,
+      })
+      void jobDispatch
+      void jobDispatchSync
+    }
     const normalized: NormalizedHoloQueueConfig = normalizeQueueConfig()
     const sharedRedisConfig: QueueSharedRedisConfig = {
       default: 'cache',
@@ -112,8 +130,8 @@ describe('@holo-js/queue typing', () => {
     })
     type SyncDispatchResult = Awaited<ReturnType<typeof dispatchSync<'reports.generate'>>>
     const syncResult: SyncDispatchResult = { ok: true }
-    const exportedJob = defineJob({
-      async handle(payload: { reportId: string }) {
+    const exportedJob = defineJob<{ reportId: string }>({
+      async handle(payload) {
         return {
           ok: payload.reportId.length > 0,
         }
@@ -125,15 +143,14 @@ describe('@holo-js/queue typing', () => {
     const selectedPayload: SelectedPayload = {
       reportId: 'rep-1',
     }
-    const selectedResult: SelectedResult = {
-      ok: true,
-    }
+    const selectedResult: SelectedResult = undefined
 
     void typedJob
     void normalized
     void normalizedWithSharedRedis
     void envelope
     void driver
+    void expectDefinedJobPayloadTypes
     void typedPending
     void expectRegisteredQueuePayloadTypes
     void dynamicPending

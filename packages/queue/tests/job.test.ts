@@ -21,6 +21,9 @@ describe('@holo-js/queue jobs', () => {
       backoff: [5, 30, 120],
       timeout: 60,
     })
+    expect(typeof job.dispatch).toBe('function')
+    expect(typeof job.dispatchSync).toBe('function')
+    expect(Object.keys(job)).toEqual(['connection', 'queue', 'tries', 'backoff', 'timeout', 'handle'])
     expect(Object.isFrozen(job)).toBe(true)
     expect(Object.isFrozen(job.backoff)).toBe(true)
   })
@@ -44,6 +47,54 @@ describe('@holo-js/queue jobs', () => {
     })).toBe(true)
     expect(isQueueJobDefinition(undefined)).toBe(false)
     expect(isQueueJobDefinition({})).toBe(false)
+  })
+
+  it('rejects job definition dispatch before registration', () => {
+    const job = defineJob({
+      async handle(payload: { readonly userId: string }) {
+        return payload.userId
+      },
+    })
+
+    expect(() => job.dispatch({
+      userId: 'usr-1',
+    })).toThrow('Job definitions cannot dispatch before the job is registered.')
+
+    expect(() => job.dispatchSync({
+      userId: 'usr-1',
+    })).toThrow('Job definitions cannot dispatch before the job is registered.')
+  })
+
+  it('rejects job definition dispatch before runtime dispatchers are loaded', () => {
+    const runtime = globalThis as typeof globalThis & {
+      __holoQueueJobDispatcher__?: unknown
+      __holoQueueJobSyncDispatcher__?: unknown
+    }
+    const existingDispatcher = runtime.__holoQueueJobDispatcher__
+    const existingSyncDispatcher = runtime.__holoQueueJobSyncDispatcher__
+    const job = defineJob({
+      async handle(payload: { readonly userId: string }) {
+        return payload.userId
+      },
+    })
+
+    queueJobInternals.setQueueJobDefinitionName(job, 'users.digest')
+
+    try {
+      delete runtime.__holoQueueJobDispatcher__
+      delete runtime.__holoQueueJobSyncDispatcher__
+
+      expect(() => job.dispatch({
+        userId: 'usr-1',
+      })).toThrow('Job definitions cannot dispatch before the queue runtime is loaded.')
+
+      expect(() => job.dispatchSync({
+        userId: 'usr-1',
+      })).toThrow('Job definitions cannot dispatch before the queue runtime is loaded.')
+    } finally {
+      runtime.__holoQueueJobDispatcher__ = existingDispatcher
+      runtime.__holoQueueJobSyncDispatcher__ = existingSyncDispatcher
+    }
   })
 
   it('rejects invalid job metadata and malformed definitions', () => {

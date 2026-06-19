@@ -61,6 +61,10 @@ async function getRegisteredCacheKeys() {
   return [...(await getCacheRuntimeBindings()?.dependencyIndex?.listRegisteredKeys() ?? [])]
 }
 
+async function countQueuedBlogIndexJobs() {
+  return await DB.table('jobs').where('job', 'blog.index-post').count()
+}
+
 function resolveDriverCacheKey(indexedKey) {
   const delimiterIndex = indexedKey.indexOf('\u0000')
   return delimiterIndex === -1 ? indexedKey : indexedKey.slice(delimiterIndex + 1)
@@ -286,6 +290,8 @@ try {
   assert.ok(frameworkTag)
   assert.ok(releaseTag)
 
+  const queuedJobsBeforePostLifecycle = await countQueuedBlogIndexJobs()
+
   await createPost({
     title: 'Logic Coverage Post',
     excerpt: 'Logic excerpt',
@@ -294,6 +300,7 @@ try {
     categoryId: String(updatedCategory.id),
     tagIds: String(frameworkTag.id),
   })
+  assert.equal(await countQueuedBlogIndexJobs(), queuedJobsBeforePostLifecycle + 1)
   assert.equal(await countRegisteredCacheKeys(), 0)
   assert.ok((await getPublishedPosts()).some(post => post.slug === 'logic-coverage-post'))
 
@@ -369,6 +376,7 @@ try {
     categoryId: '',
     tagIds: String(releaseTag.id),
   })
+  assert.equal(await countQueuedBlogIndexJobs(), queuedJobsBeforePostLifecycle + 2)
   assert.equal(await countRegisteredCacheKeys(), 0)
 
   logicPost = await Post.with('category', 'tags').where('id', logicPost.id).first()
@@ -397,6 +405,7 @@ try {
   assert.equal(await Category.find(updatedCategory.id), undefined)
 
   await deletePost(logicPost.id)
+  assert.equal(await countQueuedBlogIndexJobs(), queuedJobsBeforePostLifecycle + 4)
   await deletePost(cleanupPost.id)
   if (mediaFailurePost) {
     await deletePost(mediaFailurePost.id)

@@ -21,15 +21,18 @@ server/jobs/reports/send-digest.ts
 Use `defineJob(...)` from `@holo-js/queue`:
 
 ```ts
+// server/jobs/reports/send-digest.ts
 import { defineJob } from '@holo-js/queue'
 
-export default defineJob({
+const SendDigest = defineJob<{
+  userId: string
+}>({
   queue: 'emails',
   connection: 'redis',
   tries: 3,
   backoff: [5, 30, 120],
   timeout: 60,
-  async handle(payload: { userId: string }, context) {
+  async handle(payload, context) {
     void context
     await sendDigestEmail(payload.userId)
   },
@@ -44,6 +47,8 @@ export default defineJob({
     void context
   },
 })
+
+export default SendDigest
 ```
 
 `defineJob(...)` supports:
@@ -68,18 +73,22 @@ Examples:
 
 `defineJob(...)` does not need a `name` field for discovered app jobs.
 
+The returned job definition exposes typed `dispatch(payload)` and `dispatchSync(payload)` methods using
+the payload shape from `defineJob<...>()`. The `handle(payload, context)` parameter is inferred from that
+job payload type.
+
 ## Dispatching jobs
 
 Dispatch from any server-side code:
 
 ```ts
-import { dispatch, dispatchSync, Queue } from '@holo-js/queue'
+import SendDigest from '../jobs/reports/send-digest'
 
-await dispatch('reports.send-digest', {
+await SendDigest.dispatch({
   userId: 'user_1',
 })
 
-await dispatch('reports.send-digest', {
+await SendDigest.dispatch({
   userId: 'user_1',
 })
   .onConnection('redis')
@@ -92,7 +101,17 @@ await dispatch('reports.send-digest', {
     console.error(error)
   })
 
-await dispatchSync('reports.send-digest', {
+await SendDigest.dispatchSync({
+  userId: 'user_1',
+})
+```
+
+The string-based dispatch APIs remain available when you need to dispatch dynamically:
+
+```ts
+import { dispatch, Queue } from '@holo-js/queue'
+
+await dispatch('reports.send-digest', {
   userId: 'user_1',
 })
 
@@ -101,7 +120,7 @@ await Queue.connection('redis')
   .onQueue('emails')
 ```
 
-When dispatch must wait for a successful database commit, call `DB.afterCommit(() => dispatch(...).dispatch())` in your application layer instead of relying on queue-managed transaction deferral.
+When dispatch must wait for a successful database commit, call `DB.afterCommit(() => SendDigest.dispatch(...).dispatch())` in your application layer instead of relying on queue-managed transaction deferral.
 
 Connection and queue defaults are separate from job identity:
 
@@ -119,8 +138,10 @@ The `handle()` callback receives a job context:
 ```ts
 import { defineJob } from '@holo-js/queue'
 
-export default defineJob({
-  async handle(payload: { userId: string }, context) {
+export default defineJob<{
+  userId: string
+}>({
+  async handle(payload, context) {
     context.jobId
     context.jobName
     context.connection
@@ -184,7 +205,6 @@ Holo-JS refreshes the generated job registry during:
 
 - `holo dev`
 - `holo build`
-- `npx holo prepare`
 
 Run `npx holo prepare` directly when you only want to rebuild discovery output.
 

@@ -56,6 +56,8 @@ export default defineQueueConfig({
 ```
 
 `sync` runs the job inline. It is the simplest default and needs no worker process.
+Async drivers need a separate worker runtime in production. See [Deployment](/deployment) for host selection
+and [Workers](/queue/workers) for worker commands.
 
 ## End-to-end driver examples
 
@@ -64,9 +66,9 @@ export default defineQueueConfig({
 Use `sync` when you want immediate execution in local development, tests, or low-volume app flows.
 
 ```ts
-import { dispatch } from '@holo-js/queue'
+import SendDigest from '../jobs/reports/send-digest'
 
-await dispatch('reports.send-digest', {
+await SendDigest.dispatch({
   reportId: 'daily-summary',
 })
 ```
@@ -185,12 +187,12 @@ npx holo queue:work --connection database
 
 ## Dispatch overview
 
-Use `dispatch()` for normal queued execution:
+Use the job definition for typed queued execution:
 
 ```ts
-import { dispatch } from '@holo-js/queue'
+import SendDigest from '../jobs/reports/send-digest'
 
-await dispatch('reports.send-digest', {
+await SendDigest.dispatch({
   reportId: 'daily-summary',
 })
   .onConnection('redis')
@@ -204,12 +206,29 @@ await dispatch('reports.send-digest', {
   })
 ```
 
+Use the string-based dispatch helper when the job name is dynamic or when you prefer dispatching by name:
+
+```ts
+import { dispatch } from '@holo-js/queue'
+
+await dispatch('reports.send-digest', {
+  reportId: 'daily-summary',
+})
+  .onConnection('redis')
+  .onQueue('emails')
+```
+
 If dispatch must wait for a successful database commit, compose that explicitly with `DB.afterCommit()` from `@holo-js/db`.
 
 Use `dispatchSync()` when the current code path must execute the job immediately:
 
 ```ts
+import SendDigest from '../jobs/reports/send-digest'
 import { dispatchSync } from '@holo-js/queue'
+
+await SendDigest.dispatchSync({
+  reportId: 'daily-summary',
+})
 
 await dispatchSync('reports.send-digest', {
   reportId: 'daily-summary',

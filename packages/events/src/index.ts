@@ -20,6 +20,7 @@ export type {
   EventQueuedListenerDispatch,
   EventRuntimeBinding,
   EventRuntimeHooks,
+  DefinedEventDefinition,
   EventReference,
   EventReferenceInput,
   ExportedEventDefinition,

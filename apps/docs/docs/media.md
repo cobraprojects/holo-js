@@ -321,6 +321,8 @@ Run a worker for async queue drivers:
 npx holo queue:work --connection redis --queue media
 ```
 
+See [Deployment](/deployment) when choosing a production host for queued media conversions.
+
 ## Clearing and deleting media
 
 Clear a whole collection:

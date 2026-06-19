@@ -12,6 +12,8 @@ await notify(user, invoicePaid)
 ```
 
 This requires the `@holo-js/queue` package to be installed.
+If the configured queue connection uses an async driver, production also needs a supervised queue worker.
+See [Deployment](/deployment) for host selection and [Queue Workers](/queue/workers) for worker commands.
 
 ## Queue Configuration
 

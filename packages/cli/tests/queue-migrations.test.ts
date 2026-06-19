@@ -7,8 +7,8 @@ import {
 
 describe('queue migration rendering', () => {
   it('escapes configured queue table names and derived index names', () => {
-    const queueTable = 'jobs\'); throw new Error(\'owned\');//.queue'
-    const failedJobsTable = 'failed"jobs.queue'
+    const queueTable = 'jobs\'); throw new Error(\'owned\');//\n.queue'
+    const failedJobsTable = 'failed"jobs\r.queue'
     const queueIndexPrefix = queueTable.replaceAll('.', '_')
     const failedJobsIndexPrefix = failedJobsTable.replaceAll('.', '_')
     const queueMigration = renderQueueTableMigration(queueTable)

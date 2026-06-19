@@ -1,7 +1,7 @@
-import { defineMigration, type MigrationContext } from '@holo-js/db'
+import { defineMigration } from '@holo-js/db'
 
 export default defineMigration({
-  async up({ schema }: MigrationContext) {
+  async up({ schema }) {
     await schema.createTable('personal_access_tokens', (table) => {
       table.uuid('id').primaryKey()
       table.string('provider').default('users')
@@ -16,7 +16,7 @@ export default defineMigration({
       table.index(['user_id'])
     })
   },
-  async down({ schema }: MigrationContext) {
+  async down({ schema }) {
     await schema.dropTable('personal_access_tokens')
   },
 })
