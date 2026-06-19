@@ -1,7 +1,7 @@
-import { defineMigration, type MigrationContext } from '@holo-js/db'
+import { defineMigration } from '@holo-js/db'
 
 export default defineMigration({
-  async up({ schema }: MigrationContext) {
+  async up({ schema }) {
     await schema.createTable('cache', (table) => {
       table.string('key').primaryKey()
       table.text('payload')
@@ -15,7 +15,7 @@ export default defineMigration({
       table.index(['expires_at'], 'cache_locks_expires_at_index')
     })
   },
-  async down({ schema }: MigrationContext) {
+  async down({ schema }) {
     await schema.dropTable('cache_locks')
     await schema.dropTable('cache')
   },

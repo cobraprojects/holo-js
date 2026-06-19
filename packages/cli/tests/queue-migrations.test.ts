@@ -25,11 +25,11 @@ describe('queue migration rendering', () => {
       expect(result.diagnostics?.map(diagnostic => diagnostic.code) ?? []).toEqual([])
     }
 
-    expect(queueMigration).toContain(`schema.createTable(${JSON.stringify(queueTable)},`)
-    expect(queueMigration).toContain(`schema.dropTable(${JSON.stringify(queueTable)})`)
-    expect(queueMigration).toContain(`table.index(['queue', 'available_at'], ${JSON.stringify(`${queueIndexPrefix}_queue_available_at_index`)})`)
-    expect(failedJobsMigration).toContain(`schema.createTable(${JSON.stringify(failedJobsTable)},`)
-    expect(failedJobsMigration).toContain(`schema.dropTable(${JSON.stringify(failedJobsTable)})`)
-    expect(failedJobsMigration).toContain(`table.index(['job_id'], ${JSON.stringify(`${failedJobsIndexPrefix}_job_id_index`)})`)
+    expect(queueMigration).toContain('schema.createTable(\'jobs\\\'); throw new Error(\\\'owned\\\');//.queue\',')
+    expect(queueMigration).toContain('schema.dropTable(\'jobs\\\'); throw new Error(\\\'owned\\\');//.queue\')')
+    expect(queueMigration).toContain(`table.index(['queue', 'available_at'], '${queueIndexPrefix.replaceAll('\'', '\\\'')}_queue_available_at_index')`)
+    expect(failedJobsMigration).toContain('schema.createTable(\'failed"jobs.queue\',')
+    expect(failedJobsMigration).toContain('schema.dropTable(\'failed"jobs.queue\')')
+    expect(failedJobsMigration).toContain(`table.index(['job_id'], '${failedJobsIndexPrefix}_job_id_index')`)
   })
 })

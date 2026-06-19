@@ -10,12 +10,20 @@ const scrollToLearnMore = () => {
 const palette = [
   { name: 'Database', pkg: '@holo-js/db', picked: true },
   { name: 'Auth', pkg: '@holo-js/auth', picked: false },
+  { name: 'Session', pkg: '@holo-js/session', picked: false },
+  { name: 'Authorization', pkg: '@holo-js/authorization', picked: false },
+  { name: 'Security', pkg: '@holo-js/security', picked: false },
   { name: 'Queue', pkg: '@holo-js/queue', picked: true },
   { name: 'Cache', pkg: '@holo-js/cache', picked: false },
   { name: 'Storage', pkg: '@holo-js/storage', picked: true },
   { name: 'Events', pkg: '@holo-js/events', picked: false },
   { name: 'Broadcast', pkg: '@holo-js/broadcast', picked: false },
+  { name: 'Realtime', pkg: '@holo-js/realtime', picked: false },
   { name: 'Forms', pkg: '@holo-js/forms', picked: false },
+  { name: 'Validation', pkg: '@holo-js/validation', picked: false },
+  { name: 'Mail', pkg: '@holo-js/mail', picked: false },
+  { name: 'Notifications', pkg: '@holo-js/notifications', picked: false },
+  { name: 'Media', pkg: '@holo-js/media', picked: false },
 ]
 
 const stack = [
@@ -54,12 +62,20 @@ const gaps = [
 const modules = [
   { name: 'Database', pkg: '@holo-js/db', summary: 'Typed query builder, models, migrations, and seeders.' },
   { name: 'Auth', pkg: '@holo-js/auth', summary: 'Sessions, providers, tokens, and social login.' },
+  { name: 'Session', pkg: '@holo-js/session', summary: 'Cookie sessions, stores, guards, and framework-safe session access.' },
+  { name: 'Authorization', pkg: '@holo-js/authorization', summary: 'Policies, abilities, gates, and typed permission checks.' },
+  { name: 'Security', pkg: '@holo-js/security', summary: 'CSRF, CORS, rate limits, and request protection primitives.' },
   { name: 'Queue', pkg: '@holo-js/queue', summary: 'Background jobs with retries and failed-job tracking.' },
   { name: 'Cache', pkg: '@holo-js/cache', summary: 'Drivers, locks, and query-level caching.' },
   { name: 'Storage', pkg: '@holo-js/storage', summary: 'File storage across local and cloud drivers.' },
   { name: 'Events', pkg: '@holo-js/events', summary: 'Listeners, queued listeners, and after-commit hooks.' },
   { name: 'Broadcast', pkg: '@holo-js/broadcast', summary: 'Realtime channels, auth routes, and Flux helpers.' },
+  { name: 'Realtime', pkg: '@holo-js/realtime', summary: 'Typed queries, mutations, subscriptions, and live state wiring.' },
   { name: 'Forms', pkg: '@holo-js/forms', summary: 'Validated server actions with framework adapters.' },
+  { name: 'Validation', pkg: '@holo-js/validation', summary: 'Schema contracts, typed parsing, and reusable validation surfaces.' },
+  { name: 'Mail', pkg: '@holo-js/mail', summary: 'Mailables, fluent sending, previews, and delivery contracts.' },
+  { name: 'Notifications', pkg: '@holo-js/notifications', summary: 'Notification channels, dispatch helpers, and delivery routing.' },
+  { name: 'Media', pkg: '@holo-js/media', summary: 'Media collections, conversions, and model file attachments.' },
 ]
 
 const partners = [
@@ -90,7 +106,7 @@ const partners = [
           </div>
         </div>
 
-        <div class="builder" role="img" aria-label="A palette of Holo-JS modules with three picked blocks assembled into a backend stack">
+        <div class="builder" role="img" aria-label="A palette of Holo-JS feature modules with three picked blocks assembled into a backend stack">
           <div class="palette">
             <div
               v-for="(block, i) in palette"
@@ -102,8 +118,8 @@ const partners = [
               <span class="palette-name">{{ block.name }}</span>
               <span class="palette-pkg">{{ block.pkg }}</span>
             </div>
-            <a class="palette-more" href="/installation">
-              <span>+ 7 more modules</span>
+            <a class="palette-more" href="#modules">
+              <span>Explore all features</span>
               <span class="palette-more-arrow" aria-hidden="true">→</span>
             </a>
           </div>
@@ -146,9 +162,9 @@ const partners = [
       </div>
     </section>
 
-    <section class="section modules">
+    <section id="modules" class="section modules">
       <header class="section-header">
-        <p class="eyebrow">Modules</p>
+        <p class="eyebrow">Features</p>
         <h2 class="section-title">Pick the layers your app needs.</h2>
         <p class="section-lead">
           No bundled bloat. No defaults you didn't choose. Install one module, install all,

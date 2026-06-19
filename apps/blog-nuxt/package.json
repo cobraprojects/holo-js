@@ -33,6 +33,7 @@
     "@holo-js/core": "workspace:*",
     "@holo-js/db": "workspace:*",
     "@holo-js/db-sqlite": "workspace:*",
+    "@holo-js/events": "workspace:*",
     "@holo-js/flux": "workspace:*",
     "@holo-js/flux-vue": "workspace:*",
     "@holo-js/forms": "workspace:*",

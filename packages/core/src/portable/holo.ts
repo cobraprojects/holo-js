@@ -3543,7 +3543,7 @@ async function registerProjectQueueJobs(
         throw new Error(`Discovered job "${entry.sourcePath}" does not export a Holo job.`)
       }
 
-      queueModule.registerQueueJob(queueModule.normalizeQueueJobDefinition(job), {
+      queueModule.registerQueueJob(job, {
         name: entry.name,
         sourcePath: entry.sourcePath,
         replaceExisting: !!existing?.sourcePath,
@@ -4406,7 +4406,7 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
           runtimeOwnedAuthorizationPolicyNames.splice(0, runtimeOwnedAuthorizationPolicyNames.length, ...authorizationRegistration.policyNames)
           runtimeOwnedAuthorizationAbilityNames.splice(0, runtimeOwnedAuthorizationAbilityNames.length, ...authorizationRegistration.abilityNames)
 
-          if (options.registerProjectQueueJobs === true && registryHasJobs(registry)) {
+          if (options.registerProjectQueueJobs !== false && registryHasJobs(registry)) {
             /* v8 ignore start -- exercised only when the optional package is absent outside the monorepo test graph */
             if (!activeQueueModule) {
               throw new Error('[@holo-js/core] Project jobs require @holo-js/queue to be installed.')

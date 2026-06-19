@@ -4,6 +4,8 @@ import { DB, uniqueSlug } from '@holo-js/db'
 import { ValidationException } from '@holo-js/forms'
 
 import { blogPostChanged } from '../broadcast/blog-post-changed'
+import BlogPostSaved from '../events/blog/post-saved'
+import IndexBlogPost from '../jobs/blog/index-post'
 import Category from '../models/Category'
 import Post from '../models/Post'
 import Tag from '../models/Tag'
@@ -253,6 +255,17 @@ export async function createPost(input: { title: string, excerpt?: string, body:
   }
 
   await broadcast(blogPostChanged('created', post.id, post.title, post.status, post.slug))
+  await BlogPostSaved.dispatch({
+    action: 'created',
+    postId: post.id,
+    title: post.title,
+    status: post.status,
+    slug: post.slug,
+  })
+  await IndexBlogPost.dispatch({
+    action: 'created',
+    postId: post.id,
+  }).onQueue('default')
 
   return post
 }
@@ -289,6 +302,17 @@ export async function updatePost(id: number, input: { title: string, excerpt?: s
   }
 
   await broadcast(blogPostChanged('updated', post.id, post.title, post.status, post.slug))
+  await BlogPostSaved.dispatch({
+    action: 'updated',
+    postId: post.id,
+    title: post.title,
+    status: post.status,
+    slug: post.slug,
+  })
+  await IndexBlogPost.dispatch({
+    action: 'updated',
+    postId: post.id,
+  }).onQueue('default')
 
   return post
 }
@@ -298,5 +322,16 @@ export async function deletePost(id: number) {
   await Post.delete(id)
   if (post) {
     await broadcast(blogPostChanged('deleted', post.id, post.title, post.status, post.slug))
+    await BlogPostSaved.dispatch({
+      action: 'deleted',
+      postId: post.id,
+      title: post.title,
+      status: post.status,
+      slug: post.slug,
+    })
+    await IndexBlogPost.dispatch({
+      action: 'deleted',
+      postId: post.id,
+    }).onQueue('default')
   }
 }

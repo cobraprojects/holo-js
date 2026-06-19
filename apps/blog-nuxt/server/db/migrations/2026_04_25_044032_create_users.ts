@@ -1,7 +1,7 @@
-import { defineMigration, type MigrationContext } from '@holo-js/db'
+import { defineMigration } from '@holo-js/db'
 
 export default defineMigration({
-  async up({ schema }: MigrationContext) {
+  async up({ schema }) {
     await schema.createTable('users', (table) => {
       table.id()
       table.string('name')
@@ -12,7 +12,7 @@ export default defineMigration({
       table.timestamps()
     })
   },
-  async down({ schema }: MigrationContext) {
+  async down({ schema }) {
     await schema.dropTable('users')
   },
 })

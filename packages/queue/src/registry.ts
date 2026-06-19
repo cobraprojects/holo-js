@@ -108,11 +108,17 @@ export function listRegisteredQueueJobs(): readonly QueueRegisteredJob[] {
 }
 
 export function unregisterQueueJob(name: string): boolean {
-  return getQueueRegistryState().jobs.delete(name)
+  const deleted = getQueueRegistryState().jobs.delete(name)
+  if (deleted) {
+    queueJobInternals.deleteQueueJobDefinitionName(name)
+  }
+
+  return deleted
 }
 
 export function resetQueueRegistry(): void {
   getQueueRegistryState().jobs.clear()
+  queueJobInternals.clearQueueJobDefinitionNames()
 }
 
 export const queueRegistryInternals = {

@@ -138,14 +138,14 @@ export function renderCacheTableMigration(
   const lockTableDefinition = resolveCacheDatabaseTableDefinition('locks')
 
   return [
-    'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
+    'import { defineMigration } from \'@holo-js/db\'',
     '',
     'export default defineMigration({',
-    '  async up({ schema }: MigrationContext) {',
+    '  async up({ schema }) {',
     ...renderCacheTableCreateStatement(tableName, entryTableDefinition),
     ...renderCacheTableCreateStatement(lockTableName, lockTableDefinition),
     '  },',
-    '  async down({ schema }: MigrationContext) {',
+    '  async down({ schema }) {',
     `    await schema.dropTable('${escapeSingleQuotedString(lockTableName)}')`,
     `    await schema.dropTable('${escapeSingleQuotedString(tableName)}')`,
     '  },',

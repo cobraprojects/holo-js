@@ -69,6 +69,10 @@ async function getRegisteredCacheKeys() {
   return [...(await getCacheRuntimeBindings()?.dependencyIndex?.listRegisteredKeys() ?? [])]
 }
 
+async function countQueuedBlogIndexJobs() {
+  return await DB.table('jobs').where('job', 'blog.index-post').count()
+}
+
 function resolveDriverCacheKey(indexedKey) {
   const delimiterIndex = indexedKey.indexOf('\u0000')
   return delimiterIndex === -1 ? indexedKey : indexedKey.slice(delimiterIndex + 1)
@@ -624,6 +628,8 @@ try {
   }), assertInvalidPostStatusFailure)
   assert.equal(await Post.where('slug', 'unknown-route-status-post').first(), undefined)
 
+  const queuedJobsBeforePostLifecycle = await countQueuedBlogIndexJobs()
+
   await createPost({
     title: 'Logic Coverage Post',
     excerpt: 'Logic excerpt',
@@ -632,6 +638,7 @@ try {
     categoryId: String(updatedCategory.id),
     tagIds: [frameworkTag.id],
   })
+  assert.equal(await countQueuedBlogIndexJobs(), queuedJobsBeforePostLifecycle + 1)
   assert.equal(await countRegisteredCacheKeys(), 0)
   await getPublishedPosts()
   assert.equal(await countRegisteredCacheKeys(), 1)
@@ -718,6 +725,7 @@ try {
     categoryId: String(updatedCategory.id),
     tagIds: [frameworkTag.id],
   })
+  assert.equal(await countQueuedBlogIndexJobs(), queuedJobsBeforePostLifecycle + 2)
   assert.equal(await countRegisteredCacheKeys(), 0)
   await getPublishedPosts()
   assert.equal(await countRegisteredCacheKeys(), 1)
@@ -767,6 +775,7 @@ try {
     categoryId: '',
     tagIds: [releaseTag.id],
   })
+  assert.equal(await countQueuedBlogIndexJobs(), queuedJobsBeforePostLifecycle + 4)
   assert.equal(await countRegisteredCacheKeys(), 0)
 
   logicPost = await Post.with('category', 'tags').where('id', logicPost.id).first()

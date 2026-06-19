@@ -576,7 +576,7 @@ export default {}
     ).rejects.toThrow(/missing-transitive-dependency/)
   })
 
-  it('does not import discovered queue jobs during default runtime initialization', async () => {
+  it('does not import discovered queue jobs when runtime queue registration is disabled', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
     await mkdir(join(root, 'server/jobs/bad'), { recursive: true })
@@ -590,7 +590,9 @@ export default {}
       }],
     })
 
-    const runtime = await initializeHolo(root)
+    const runtime = await initializeHolo(root, {
+      registerProjectQueueJobs: false,
+    })
 
     expect(listRegisteredQueueJobs().map(job => job.name)).toEqual(['holo.events.invoke-listener'])
 

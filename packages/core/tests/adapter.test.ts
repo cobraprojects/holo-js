@@ -353,7 +353,7 @@ describe('@holo-js/core adapter helpers', () => {
     })
   })
 
-  it('does not import discovered queue jobs when initializing an adapter project runtime directly by default', async () => {
+  it('does not import discovered queue jobs when adapter project queue registration is disabled', async () => {
     const root = await createProjectRoot()
 
     await mkdir(join(root, '.holo-js/generated'), { recursive: true })
@@ -383,7 +383,9 @@ describe('@holo-js/core adapter helpers', () => {
     }, null, 2)}\n`, 'utf8')
 
     const loadEsbuildSpy = vi.spyOn(runtimeModuleInternals, 'loadEsbuild')
-    const project = await createHoloAdapterProject(root)
+    const project = await createHoloAdapterProject(root, {
+      registerProjectQueueJobs: false,
+    })
 
     await expect(project.runtime.initialize()).resolves.toBeUndefined()
     expect(listRegisteredQueueJobs().map(job => job.name)).toEqual(['holo.events.invoke-listener'])
@@ -503,7 +505,7 @@ export default defineAbility('manage-posts', () => true)
     await expect(Queue.dispatchSync('report', {})).resolves.toBe('ok')
   })
 
-  it('does not import discovered queue jobs during framework adapter initialization by default', async () => {
+  it('does not import discovered queue jobs during framework adapter initialization when queue registration is disabled', async () => {
     const adapter = createHoloFrameworkAdapter({
       stateKey: '__holoTestAdapter__',
       displayName: 'Test',
@@ -540,6 +542,7 @@ export default defineAbility('manage-posts', () => true)
 
     const project = await adapter.initializeProject({
       projectRoot: root,
+      registerProjectQueueJobs: false,
     })
 
     expect(project.runtime.initialized).toBe(true)

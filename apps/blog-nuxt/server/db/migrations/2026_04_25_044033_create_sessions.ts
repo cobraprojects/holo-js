@@ -1,7 +1,7 @@
-import { defineMigration, type MigrationContext } from '@holo-js/db'
+import { defineMigration } from '@holo-js/db'
 
 export default defineMigration({
-  async up({ schema }: MigrationContext) {
+  async up({ schema }) {
     await schema.createTable('sessions', (table) => {
       table.string('id').primaryKey()
       table.string('store').default('database')
@@ -14,7 +14,7 @@ export default defineMigration({
       table.index(['expires_at'])
     })
   },
-  async down({ schema }: MigrationContext) {
+  async down({ schema }) {
     await schema.dropTable('sessions')
   },
 })

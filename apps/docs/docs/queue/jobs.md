@@ -24,13 +24,15 @@ Use `defineJob(...)` from `@holo-js/queue`:
 // server/jobs/reports/send-digest.ts
 import { defineJob } from '@holo-js/queue'
 
-const SendDigest = defineJob({
+const SendDigest = defineJob<{
+  userId: string
+}>({
   queue: 'emails',
   connection: 'redis',
   tries: 3,
   backoff: [5, 30, 120],
   timeout: 60,
-  async handle(payload: { userId: string }, context) {
+  async handle(payload, context) {
     void context
     await sendDigestEmail(payload.userId)
   },
@@ -72,7 +74,8 @@ Examples:
 `defineJob(...)` does not need a `name` field for discovered app jobs.
 
 The returned job definition exposes typed `dispatch(payload)` and `dispatchSync(payload)` methods using
-the payload shape from `handle(payload, context)`.
+the payload shape from `defineJob<...>()`. The `handle(payload, context)` parameter is inferred from that
+job payload type.
 
 ## Dispatching jobs
 
@@ -135,8 +138,10 @@ The `handle()` callback receives a job context:
 ```ts
 import { defineJob } from '@holo-js/queue'
 
-export default defineJob({
-  async handle(payload: { userId: string }, context) {
+export default defineJob<{
+  userId: string
+}>({
+  async handle(payload, context) {
     context.jobId
     context.jobName
     context.connection

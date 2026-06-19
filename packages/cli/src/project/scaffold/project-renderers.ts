@@ -194,10 +194,10 @@ export function renderAuthMigration(slug: AuthMigrationSlug): string {
   switch (slug) {
     case 'create_users':
       return [
-        'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
+        'import { defineMigration } from \'@holo-js/db\'',
         '',
         'export default defineMigration({',
-        '  async up({ schema }: MigrationContext) {',
+        '  async up({ schema }) {',
         '    await schema.createTable(\'users\', (table) => {',
         '      table.id()',
         '      table.string(\'name\')',
@@ -208,7 +208,7 @@ export function renderAuthMigration(slug: AuthMigrationSlug): string {
         '      table.timestamps()',
         '    })',
         '  },',
-        '  async down({ schema }: MigrationContext) {',
+        '  async down({ schema }) {',
         '    await schema.dropTable(\'users\')',
         '  },',
         '})',
@@ -216,10 +216,10 @@ export function renderAuthMigration(slug: AuthMigrationSlug): string {
       ].join('\n')
     case 'create_sessions':
       return [
-        'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
+        'import { defineMigration } from \'@holo-js/db\'',
         '',
         'export default defineMigration({',
-        '  async up({ schema }: MigrationContext) {',
+        '  async up({ schema }) {',
         '    await schema.createTable(\'sessions\', (table) => {',
         '      table.string(\'id\').primaryKey()',
         '      table.string(\'store\').default(\'database\')',
@@ -232,7 +232,7 @@ export function renderAuthMigration(slug: AuthMigrationSlug): string {
         '      table.index([\'expires_at\'])',
         '    })',
         '  },',
-        '  async down({ schema }: MigrationContext) {',
+        '  async down({ schema }) {',
         '    await schema.dropTable(\'sessions\')',
         '  },',
         '})',
@@ -240,10 +240,10 @@ export function renderAuthMigration(slug: AuthMigrationSlug): string {
       ].join('\n')
     case 'create_auth_identities':
       return [
-        'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
+        'import { defineMigration } from \'@holo-js/db\'',
         '',
         'export default defineMigration({',
-        '  async up({ schema }: MigrationContext) {',
+        '  async up({ schema }) {',
         '    await schema.createTable(\'auth_identities\', (table) => {',
         '      table.id()',
         '      table.string(\'user_id\')',
@@ -260,7 +260,7 @@ export function renderAuthMigration(slug: AuthMigrationSlug): string {
         '      table.unique([\'provider\', \'provider_user_id\'], \'auth_identities_provider_user_unique\')',
         '    })',
         '  },',
-        '  async down({ schema }: MigrationContext) {',
+        '  async down({ schema }) {',
         '    await schema.dropTable(\'auth_identities\')',
         '  },',
         '})',
@@ -268,10 +268,10 @@ export function renderAuthMigration(slug: AuthMigrationSlug): string {
       ].join('\n')
     case 'create_personal_access_tokens':
       return [
-        'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
+        'import { defineMigration } from \'@holo-js/db\'',
         '',
         'export default defineMigration({',
-        '  async up({ schema }: MigrationContext) {',
+        '  async up({ schema }) {',
         '    await schema.createTable(\'personal_access_tokens\', (table) => {',
         '      table.uuid(\'id\').primaryKey()',
         '      table.string(\'provider\').default(\'users\')',
@@ -286,7 +286,7 @@ export function renderAuthMigration(slug: AuthMigrationSlug): string {
         '      table.index([\'user_id\'])',
         '    })',
         '  },',
-        '  async down({ schema }: MigrationContext) {',
+        '  async down({ schema }) {',
         '    await schema.dropTable(\'personal_access_tokens\')',
         '  },',
         '})',
@@ -294,10 +294,10 @@ export function renderAuthMigration(slug: AuthMigrationSlug): string {
       ].join('\n')
     case 'create_password_reset_tokens':
       return [
-        'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
+        'import { defineMigration } from \'@holo-js/db\'',
         '',
         'export default defineMigration({',
-        '  async up({ schema }: MigrationContext) {',
+        '  async up({ schema }) {',
         '    await schema.createTable(\'password_reset_tokens\', (table) => {',
         '      table.uuid(\'id\').primaryKey()',
         '      table.string(\'provider\').default(\'users\')',
@@ -310,7 +310,7 @@ export function renderAuthMigration(slug: AuthMigrationSlug): string {
         '      table.index([\'email\'])',
         '    })',
         '  },',
-        '  async down({ schema }: MigrationContext) {',
+        '  async down({ schema }) {',
         '    await schema.dropTable(\'password_reset_tokens\')',
         '  },',
         '})',
@@ -318,10 +318,10 @@ export function renderAuthMigration(slug: AuthMigrationSlug): string {
       ].join('\n')
     case 'create_email_verification_tokens':
       return [
-        'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
+        'import { defineMigration } from \'@holo-js/db\'',
         '',
         'export default defineMigration({',
-        '  async up({ schema }: MigrationContext) {',
+        '  async up({ schema }) {',
         '    await schema.createTable(\'email_verification_tokens\', (table) => {',
         '      table.uuid(\'id\').primaryKey()',
         '      table.string(\'provider\').default(\'users\')',
@@ -336,7 +336,7 @@ export function renderAuthMigration(slug: AuthMigrationSlug): string {
         '      table.index([\'email\'])',
         '    })',
         '  },',
-        '  async down({ schema }: MigrationContext) {',
+        '  async down({ schema }) {',
         '    await schema.dropTable(\'email_verification_tokens\')',
         '  },',
         '})',
@@ -354,10 +354,10 @@ export function createAuthMigrationFiles(date = new Date()): readonly Scaffolded
 
 export function renderNotificationsMigration(): string {
   return [
-    'import { defineMigration, type MigrationContext } from \'@holo-js/db\'',
+    'import { defineMigration } from \'@holo-js/db\'',
     '',
     'export default defineMigration({',
-    '  async up({ schema }: MigrationContext) {',
+    '  async up({ schema }) {',
     '    await schema.createTable(\'notifications\', (table) => {',
     '      table.string(\'id\').primaryKey()',
     '      table.string(\'type\').nullable()',
@@ -371,7 +371,7 @@ export function renderNotificationsMigration(): string {
     '      table.index([\'read_at\'])',
     '    })',
     '  },',
-    '  async down({ schema }: MigrationContext) {',
+    '  async down({ schema }) {',
     '    await schema.dropTable(\'notifications\')',
     '  },',
     '})',
