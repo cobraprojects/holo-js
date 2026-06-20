@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/adapter-next",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Holo-JS Framework - Next.js adapter",
   "type": "module",
   "license": "MIT",

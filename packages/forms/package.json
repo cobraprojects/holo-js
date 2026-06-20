@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/forms",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Holo-JS Framework - forms-first validation and submission contracts",
   "type": "module",
   "license": "MIT",

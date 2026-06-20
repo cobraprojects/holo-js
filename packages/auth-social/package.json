@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/auth-social",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Holo-JS Framework - social auth provider contracts",
   "type": "module",
   "license": "MIT",
