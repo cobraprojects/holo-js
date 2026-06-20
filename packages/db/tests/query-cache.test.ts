@@ -447,9 +447,95 @@ describe('@holo-js/db query cache integration', () => {
       .cache(300)
       .get()
 
-    expect(bridge.invalidatedDependencies).toContainEqual(['db:main:users'])
+    expect(bridge.invalidatedDependencies.some(dependencies => dependencies.includes('db:main:users'))).toBe(true)
+    expect(bridge.invalidatedDependencies.some(dependencies => dependencies.includes('db:main:users:row:id:1'))).toBe(true)
     expect(refreshed[0]?.name).toBe('Stale')
     expect(unsupported[0]?.name).toBe('Joined')
+  })
+
+  it('uses table dependencies for primary key predicates that are part of an or query', async () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+      active: column.boolean(),
+    })
+
+    adapter.queryRows = [{ id: 1, name: 'Ava', active: false }]
+    await DB.table(users)
+      .where('id', 1)
+      .orWhere('active', true)
+      .cache(300)
+      .get()
+
+    adapter.queryRows = [{ id: 2, name: 'Mina', active: true }]
+    await DB.table(users).where('id', 2).update({ name: 'Updated' })
+    const refreshed = await DB.table(users)
+      .where('id', 1)
+      .orWhere('active', true)
+      .cache(300)
+      .get()
+
+    expect(refreshed).toEqual([{ id: 2, name: 'Mina', active: true }])
+  })
+
+  it('falls back to broad dependencies for disjunctive primary key query plans', () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+      active: column.boolean(),
+    })
+    const directOrPlan = (
+      new TableQueryBuilder(users, DB.connection())
+        .where('id', 1)
+        .orWhere('active', true) as unknown as { readonly plan: SelectQueryPlan }
+    ).plan
+    const nestedOrPlan = (
+      new TableQueryBuilder(users, DB.connection())
+        .where(query => query.where('id', 1).orWhere('active', true)) as unknown as { readonly plan: SelectQueryPlan }
+    ).plan
+    const negatedGroupPlan = (
+      new TableQueryBuilder(users, DB.connection())
+        .whereNot(query => query.where('id', 1)) as unknown as { readonly plan: SelectQueryPlan }
+    ).plan
+
+    expect(queryCacheInternals.inferAutomaticQueryCacheDependencies(directOrPlan, 'main')).toEqual([
+      'db:main:users',
+    ])
+    expect(queryCacheInternals.inferAutomaticQueryCacheDependencies(nestedOrPlan, 'main')).toEqual([
+      'db:main:users',
+    ])
+    expect(queryCacheInternals.inferAutomaticQueryCacheInvalidationDependencies(directOrPlan, 'main')).toEqual([
+      'db:main:users',
+      'db:main:users:row:*',
+    ])
+    expect(queryCacheInternals.inferAutomaticQueryCacheInvalidationDependencies(negatedGroupPlan, 'main')).toEqual([
+      'db:main:users',
+      'db:main:users:row:*',
+    ])
+  })
+
+  it('keeps row dependencies for nested conjunctive primary key query plans', () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+      active: column.boolean(),
+    })
+    const nestedPrimaryKeyPlan = (
+      new TableQueryBuilder(users, DB.connection())
+        .where(query => query.where('id', 1).where('active', true)) as unknown as { readonly plan: SelectQueryPlan }
+    ).plan
+    const nestedNonPrimaryKeyPlan = (
+      new TableQueryBuilder(users, DB.connection())
+        .where(query => query.where('active', true)) as unknown as { readonly plan: SelectQueryPlan }
+    ).plan
+
+    expect(queryCacheInternals.inferAutomaticQueryCacheDependencies(nestedPrimaryKeyPlan, 'main')).toEqual([
+      'db:main:users:row:id:1',
+      'db:main:users:row:*',
+    ])
+    expect(queryCacheInternals.inferAutomaticQueryCacheDependencies(nestedNonPrimaryKeyPlan, 'main')).toEqual([
+      'db:main:users',
+    ])
   })
 
   it('skips query caching for locked queries and uses a fresh read during numeric adjustments', async () => {
@@ -490,7 +576,7 @@ describe('@holo-js/db query cache integration', () => {
       expect(bridge.invalidatedDependencies).toHaveLength(0)
     })
 
-    expect(bridge.invalidatedDependencies).toContainEqual(['db:main:users'])
+    expect(bridge.invalidatedDependencies).toContainEqual(['db:main:users', 'db:main:users:row:id:1'])
   })
 
   it('defers model write invalidation until its implicit transaction commits', async () => {
@@ -507,7 +593,7 @@ describe('@holo-js/db query cache integration', () => {
     })
 
     expect(bridge.invalidatedDependencies).toEqual([
-      ['db:main:users'],
+      ['db:main:users', 'db:main:users:row:*'],
     ])
     expect(bridge.invalidationTransactionStates).toEqual([false])
   })

@@ -2,7 +2,11 @@ import { CompilerError, ConfigurationError, SecurityError } from '../core/errors
 import { redactBindings } from '../security/policy'
 import {
   getDatabaseQueryCacheBridge,
+  hasActiveDatabaseDependencyCollector,
+  hasDatabaseDependencyInvalidationListeners,
   invalidateQueryCacheDependencies,
+  inferAutomaticInsertCacheInvalidationDependencies,
+  inferAutomaticQueryCacheInvalidationDependencies,
   normalizeQueryCacheConfig,
   recordDatabaseQueryDependencies,
   resolveQueryCacheDependencies,
@@ -1275,6 +1279,7 @@ export class TableQueryBuilder<
     const statement = this.toSQL()
     const cacheConfig = this.queryCacheConfig
     const dependencies = this.plan.lockMode
+      || (!cacheConfig && !hasActiveDatabaseDependencyCollector())
       ? undefined
       : resolveQueryCacheDependencies(
           this.plan,
@@ -1616,7 +1621,7 @@ export class TableQueryBuilder<
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createInsertQueryPlan(this.source, rows),
     ))
-    await this.invalidateSourceTableQueries()
+    await this.invalidateInsertQueries(rows, result.lastInsertId)
     return result
   }
 
@@ -1629,7 +1634,7 @@ export class TableQueryBuilder<
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createInsertQueryPlan(this.source, rows, { ignoreConflicts: true }),
     ))
-    await this.invalidateSourceTableQueries()
+    await this.invalidateInsertQueries(rows, result.lastInsertId)
     return result
   }
 
@@ -1649,7 +1654,7 @@ export class TableQueryBuilder<
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
       createUpsertQueryPlan(this.source, rows, uniqueBy, updateColumns),
     ))
-    await this.invalidateSourceTableQueries()
+    await this.invalidateInsertQueries(rows, result.lastInsertId)
     return result
   }
 
@@ -1674,7 +1679,7 @@ export class TableQueryBuilder<
       createUpdateQueryPlan(this.source, this.plan.predicates, this.normalizeUpdateValues(values)),
     ))
     if (result.affectedRows !== 0) {
-      await this.invalidateSourceTableQueries()
+      await this.invalidateMutationQueries()
     }
     return result
   }
@@ -1691,7 +1696,7 @@ export class TableQueryBuilder<
       createDeleteQueryPlan(this.source, this.plan.predicates),
     ))
     if (result.affectedRows !== 0) {
-      await this.invalidateSourceTableQueries()
+      await this.invalidateMutationQueries()
     }
     return result
   }
@@ -1721,10 +1726,34 @@ export class TableQueryBuilder<
     return new TableQueryBuilder<TTableOrName, TRow>(table, this.connection, plan, this.queryCacheConfig)
   }
 
-  private async invalidateSourceTableQueries(): Promise<void> {
-    await invalidateQueryCacheDependencies(this.connection, [
-      `db:${this.connection.getConnectionName()}:${this.source.tableName}`,
-    ])
+  private async invalidateInsertQueries(
+    rows: readonly Readonly<Record<string, unknown>>[],
+    lastInsertId?: number | string,
+  ): Promise<void> {
+    if (!getDatabaseQueryCacheBridge() && !hasDatabaseDependencyInvalidationListeners()) {
+      return
+    }
+
+    await invalidateQueryCacheDependencies(
+      this.connection,
+      inferAutomaticInsertCacheInvalidationDependencies(
+        this.connection.getConnectionName(),
+        this.source.tableName,
+        rows,
+        lastInsertId,
+      ),
+    )
+  }
+
+  private async invalidateMutationQueries(): Promise<void> {
+    if (!getDatabaseQueryCacheBridge() && !hasDatabaseDependencyInvalidationListeners()) {
+      return
+    }
+
+    await invalidateQueryCacheDependencies(
+      this.connection,
+      inferAutomaticQueryCacheInvalidationDependencies(this.plan, this.connection.getConnectionName()),
+    )
   }
 
   private getCompiler(): SQLQueryCompiler {

@@ -592,9 +592,106 @@ describe('@holo-js/realtime', () => {
     await Promise.all([firstInvalidation, ...burstInvalidations])
 
     expect(queryRuns).toBe(4)
-    expect(firstSnapshots).toHaveLength(3)
-    expect(secondSnapshots).toHaveLength(3)
+    expect(firstSnapshots).toHaveLength(1)
+    expect(secondSnapshots).toHaveLength(1)
     expect(firstSnapshots).toEqual(secondSnapshots)
+  })
+
+  it('does not publish duplicate snapshots when refreshed data is unchanged', async () => {
+    const db = createContext(new RelationalMemoryAdapter({
+      posts: [{ id: 1, title: 'First' }],
+    }))
+    configureRealtimeRuntime({
+      db: () => db,
+      loadAuthModule: async () => null,
+    })
+    let queryRuns = 0
+    const snapshots: unknown[][] = []
+    const query = defineRealtimeQuery({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        queryRuns += 1
+        return await context.table('posts').orderBy('id').get()
+      },
+    })
+
+    await subscribeRealtimeQuery(query, {}, {
+      onData: snapshot => {
+        snapshots.push(snapshot.data)
+      },
+    })
+    await realtimeRuntimeInternals.handleDatabaseInvalidation({
+      connectionName: 'main',
+      dependencies: ['db:main:posts'],
+    })
+
+    expect(queryRuns).toBe(2)
+    expect(snapshots).toEqual([[{ id: 1, title: 'First' }]])
+  })
+
+  it('skips detail subscriptions when a different row is invalidated', async () => {
+    const db = createContext(new RelationalMemoryAdapter({
+      posts: [
+        { id: 1, title: 'First' },
+        { id: 2, title: 'Second' },
+      ],
+    }))
+    configureRealtimeRuntime({
+      db: () => db,
+      loadAuthModule: async () => null,
+    })
+    let queryRuns = 0
+    const snapshots: unknown[] = []
+    const query = defineRealtimeQuery({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        queryRuns += 1
+        return await context.table('posts').where('id', 1).first()
+      },
+    })
+
+    await subscribeRealtimeQuery(query, {}, {
+      onData: snapshot => {
+        snapshots.push(snapshot.data)
+      },
+    })
+    await realtimeRuntimeInternals.handleDatabaseInvalidation({
+      connectionName: 'main',
+      dependencies: ['db:main:posts:row:id:2'],
+    })
+    await realtimeRuntimeInternals.handleDatabaseInvalidation({
+      connectionName: 'main',
+      dependencies: ['db:main:posts:row:id:1'],
+    })
+
+    expect(queryRuns).toBe(2)
+    expect(snapshots).toEqual([{ id: 1, title: 'First' }])
+  })
+
+  it('refreshes detail subscriptions after broad row invalidations', async () => {
+    const db = createContext(new RelationalMemoryAdapter({
+      posts: [{ id: 1, title: 'First' }],
+    }))
+    configureRealtimeRuntime({
+      db: () => db,
+      loadAuthModule: async () => null,
+    })
+    let queryRuns = 0
+    const query = defineRealtimeQuery({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        queryRuns += 1
+        return await context.table('posts').where('id', 1).first()
+      },
+    })
+
+    await subscribeRealtimeQuery(query)
+    await realtimeRuntimeInternals.handleDatabaseInvalidation({
+      connectionName: 'main',
+      dependencies: ['db:main:posts:row:*'],
+    })
+
+    expect(queryRuns).toBe(2)
   })
 
   it('batches committed write bursts into one visible refresh with the final data', async () => {
@@ -988,11 +1085,6 @@ describe('@holo-js/realtime', () => {
         cursorName: 'cursor',
         hasMorePages: false,
       },
-      {
-        ids: [2, 1],
-        cursorName: 'cursor',
-        hasMorePages: false,
-      },
     ])
   })
 
@@ -1219,7 +1311,6 @@ describe('@holo-js/realtime', () => {
 
     expect(snapshots).toEqual([
       [{ id: 1, title: 'First' }],
-      [{ id: 1, body: 'Initial' }],
       [{ id: 1, body: 'Initial' }],
     ])
   })

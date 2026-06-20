@@ -70,6 +70,7 @@ type ActiveSubscription<TDefinition extends RealtimeQueryDefinitionMetadata> = {
   readonly options: RealtimeSubscribeOptions<RealtimeResultFor<TDefinition>>
   readonly executionOptions?: RealtimeExecutionOptions
   dependencies: readonly string[]
+  resultHash: string
   version: number
   current: RealtimeSubscriptionSnapshot<RealtimeResultFor<TDefinition>>
 }
@@ -161,6 +162,10 @@ function createRefreshKey(
   }
 
   return `${definition.name}:${stableStringify(args)}`
+}
+
+function createResultHash(value: unknown): string {
+  return stableStringify(value)
 }
 
 function createRealtimeDatabaseContext(connection: DatabaseContext): RealtimeDatabaseContext {
@@ -492,6 +497,12 @@ async function deliverRefreshData<TDefinition extends RealtimeQueryDefinitionMet
   result: RealtimeExecutionResult<RealtimeResultFor<TDefinition>>,
 ): Promise<void> {
   updateSubscriptionDependencies(subscription as ActiveSubscription<RealtimeQueryDefinitionMetadata>, result.dependencies)
+  const resultHash = createResultHash(result.data)
+  if (subscription.resultHash === resultHash) {
+    return
+  }
+
+  subscription.resultHash = resultHash
   subscription.version += 1
   subscription.current = Object.freeze({
     ...result,
@@ -652,6 +663,7 @@ export async function subscribeRealtimeQuery<TDefinition extends RealtimeQueryDe
     ...result,
     version: 1,
   })
+  const resultHash = createResultHash(result.data)
   const subscription: ActiveSubscription<TDefinition> = {
     id,
     refreshKey: createRefreshKey(
@@ -665,6 +677,7 @@ export async function subscribeRealtimeQuery<TDefinition extends RealtimeQueryDe
     options,
     executionOptions,
     dependencies: result.dependencies,
+    resultHash,
     version: 1,
     current: snapshot,
   }

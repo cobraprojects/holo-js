@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { chromium } from 'playwright'
+import { getExampleAppBrowser } from './example-app-browser.mjs'
 
 const adminPath = '/admin'
 const createPostPath = '/admin/posts/new'
@@ -142,10 +142,10 @@ async function createPostThroughBrowser(page, title) {
 }
 
 export async function assertExampleAppBroadcastBrowserFlow({ baseUrl, appName, cookieHeader }) {
-  const browser = await chromium.launch({ headless: true })
+  const browser = await getExampleAppBrowser()
+  const context = await browser.newContext({ baseURL: baseUrl })
 
   try {
-    const context = await browser.newContext({ baseURL: baseUrl })
     await context.addCookies(cookieHeaderToBrowserCookies(baseUrl, cookieHeader))
     const dashboardPage = await context.newPage()
     const createPage = await context.newPage()
@@ -162,8 +162,7 @@ export async function assertExampleAppBroadcastBrowserFlow({ baseUrl, appName, c
     )
 
     assert.deepEqual([...dashboardFailures, ...createFailures], [])
-    await context.close()
   } finally {
-    await browser.close()
+    await context.close()
   }
 }

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { chromium } from 'playwright'
+import { getExampleAppBrowser } from './example-app-browser.mjs'
 
 const realtimePath = '/admin/posts/realtime'
 const postSelector = '[data-post-id]'
@@ -129,10 +129,10 @@ async function openRealtimePage(page, failures) {
 }
 
 export async function assertExampleAppRealtimeBrowserFlow({ baseUrl, appName, cookieHeader }) {
-  const browser = await chromium.launch({ headless: true })
+  const browser = await getExampleAppBrowser()
+  const context = await browser.newContext({ baseURL: baseUrl })
 
   try {
-    const context = await browser.newContext({ baseURL: baseUrl })
     await context.addCookies(cookieHeaderToBrowserCookies(baseUrl, cookieHeader))
     const observerPage = await context.newPage()
     const editorPage = await context.newPage()
@@ -158,17 +158,16 @@ export async function assertExampleAppRealtimeBrowserFlow({ baseUrl, appName, co
     )
 
     assert.deepEqual([...observerResult.failures, ...editorResult.failures], [])
-    await context.close()
   } finally {
-    await browser.close()
+    await context.close()
   }
 }
 
 export async function assertExampleAppRealtimeUnavailableBrowserFlow({ baseUrl, cookieHeader }) {
-  const browser = await chromium.launch({ headless: true })
+  const browser = await getExampleAppBrowser()
+  const context = await browser.newContext({ baseURL: baseUrl })
 
   try {
-    const context = await browser.newContext({ baseURL: baseUrl })
     await context.addCookies(cookieHeaderToBrowserCookies(baseUrl, cookieHeader))
     const page = await context.newPage()
     const result = collectPageFailures(page, { allowWebSocketConnectionErrors: true })
@@ -182,8 +181,7 @@ export async function assertExampleAppRealtimeUnavailableBrowserFlow({ baseUrl, 
     )
 
     assert.deepEqual(result.failures, [])
-    await context.close()
   } finally {
-    await browser.close()
+    await context.close()
   }
 }

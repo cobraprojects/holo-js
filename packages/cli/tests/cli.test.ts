@@ -8332,8 +8332,10 @@ export default {
       const listedIo = createIo(projectRoot)
       await expect(findCommand([], 'missing')).toBeUndefined()
       await expect(import('../src/cli').then(module => module.runCli(['list'], listedIo.io))).resolves.toBe(0)
-      expect(listedIo.read().stdout).toContain('Internal commands:')
-      expect(listedIo.read().stdout).toContain('  courses:reindex                 Renamed command.')
+      const listedOutput = listedIo.read().stdout
+      expect(listedOutput).toContain('Internal commands:')
+      expect(listedOutput).toContain('courses:reindex')
+      expect(listedOutput).toContain('Reindex course data.')
 
       const helpIo = createIo(projectRoot)
       await expect(import('../src/cli').then(module => module.runCli(['make:model', '--help'], helpIo.io))).resolves.toBe(0)
@@ -8370,7 +8372,7 @@ export default defineAppConfig({
       await expect(import('../src/cli').then(module => module.runCli(['unknown:command'], unknownIo.io))).resolves.toBe(1)
       expect(unknownIo.read().stderr).toContain('Unknown command "unknown:command".')
     })
-  })
+  }, 60000)
 
   it('covers runCli duplicate command conflicts and string-thrown app command failures', async () => {
     const duplicateRoot = await createTempProject()

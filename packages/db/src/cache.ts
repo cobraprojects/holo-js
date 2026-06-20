@@ -122,6 +122,10 @@ export async function collectDatabaseQueryDependencies<TValue>(
   })
 }
 
+export function hasActiveDatabaseDependencyCollector(): boolean {
+  return typeof databaseDependencyCollector.getStore() !== 'undefined'
+}
+
 export function recordDatabaseQueryDependencies(dependencies: readonly string[] | undefined): void {
   if (!dependencies || dependencies.length === 0) {
     return
@@ -135,6 +139,11 @@ export function recordDatabaseQueryDependencies(dependencies: readonly string[] 
   for (const dependency of dependencies) {
     active.add(dependency)
   }
+}
+
+export function hasDatabaseDependencyInvalidationListeners(): boolean {
+  const listeners = getQueryCacheBridgeState().dependencyInvalidationListeners
+  return typeof listeners !== 'undefined' && listeners.size > 0
 }
 
 async function notifyDatabaseDependencyInvalidationListeners(
@@ -230,6 +239,26 @@ export function createTableCacheDependency(
   return `db:${connectionName}:${tableName}`
 }
 
+export function createTableRowCacheDependency(
+  connectionName: string,
+  tableName: string,
+  columnName: string,
+  value: unknown,
+): string | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  return `db:${connectionName}:${tableName}:row:${columnName}:${encodeURIComponent(JSON.stringify(value))}`
+}
+
+export function createTableRowWildcardCacheDependency(
+  connectionName: string,
+  tableName: string,
+): string {
+  return `db:${connectionName}:${tableName}:row:*`
+}
+
 export function normalizeQueryCacheDependencies(
   connectionName: string,
   dependencies: readonly string[],
@@ -262,6 +291,54 @@ function supportsAutomaticPredicateInvalidation(predicate: QueryPredicateNode): 
   }
 }
 
+function getColumnName(column: string): string {
+  const segments = column.split('.')
+  return segments[segments.length - 1] ?? column
+}
+
+function getPrimaryKeyColumn(plan: SelectQueryPlan): string {
+  const columns = plan.source.table?.columns
+  if (!columns) {
+    return 'id'
+  }
+
+  return Object.values(columns).find(column => column.primaryKey)?.name ?? 'id'
+}
+
+function hasDisjunctivePredicate(predicates: readonly QueryPredicateNode[]): boolean {
+  return predicates.some((predicate) => {
+    if (predicate.boolean === 'or') {
+      return true
+    }
+
+    if (predicate.kind !== 'group') {
+      return false
+    }
+
+    return predicate.negated === true || hasDisjunctivePredicate(predicate.predicates)
+  })
+}
+
+function findExactPrimaryKeyValue(
+  predicates: readonly QueryPredicateNode[],
+  primaryKeyColumn: string,
+): unknown | undefined {
+  for (const predicate of predicates) {
+    if (predicate.kind === 'comparison' && predicate.operator === '=' && getColumnName(predicate.column) === primaryKeyColumn) {
+      return predicate.value
+    }
+
+    if (predicate.kind === 'group' && !predicate.negated && predicate.boolean !== 'or') {
+      const value = findExactPrimaryKeyValue(predicate.predicates, primaryKeyColumn)
+      if (typeof value !== 'undefined') {
+        return value
+      }
+    }
+  }
+
+  return undefined
+}
+
 export function supportsAutomaticQueryCacheInvalidation(plan: SelectQueryPlan): boolean {
   if (plan.joins.length > 0 || plan.unions.length > 0 || plan.having.length > 0) {
     return false
@@ -286,9 +363,77 @@ export function inferAutomaticQueryCacheDependencies(
     return undefined
   }
 
+  if (!hasDisjunctivePredicate(plan.predicates)) {
+    const primaryKeyColumn = getPrimaryKeyColumn(plan)
+    const primaryKeyValue = findExactPrimaryKeyValue(plan.predicates, primaryKeyColumn)
+    const primaryKeyDependency = createTableRowCacheDependency(
+      connectionName,
+      plan.source.tableName,
+      primaryKeyColumn,
+      primaryKeyValue,
+    )
+    if (primaryKeyDependency) {
+      return Object.freeze([
+        primaryKeyDependency,
+        createTableRowWildcardCacheDependency(connectionName, plan.source.tableName),
+      ])
+    }
+  }
+
   return Object.freeze([
     createTableCacheDependency(connectionName, plan.source.tableName),
   ])
+}
+
+export function inferAutomaticQueryCacheInvalidationDependencies(
+  plan: SelectQueryPlan,
+  connectionName: string,
+): readonly string[] {
+  const dependencies = [
+    createTableCacheDependency(connectionName, plan.source.tableName),
+  ]
+  if (hasDisjunctivePredicate(plan.predicates)) {
+    dependencies.push(createTableRowWildcardCacheDependency(connectionName, plan.source.tableName))
+    return Object.freeze(dependencies)
+  }
+
+  const primaryKeyColumn = getPrimaryKeyColumn(plan)
+  const primaryKeyValue = findExactPrimaryKeyValue(plan.predicates, primaryKeyColumn)
+  const primaryKeyDependency = createTableRowCacheDependency(
+    connectionName,
+    plan.source.tableName,
+    primaryKeyColumn,
+    primaryKeyValue,
+  )
+  dependencies.push(primaryKeyDependency ?? createTableRowWildcardCacheDependency(connectionName, plan.source.tableName))
+  return Object.freeze(dependencies)
+}
+
+export function inferAutomaticInsertCacheInvalidationDependencies(
+  connectionName: string,
+  tableName: string,
+  rows: readonly Readonly<Record<string, unknown>>[],
+  lastInsertId?: number | string,
+): readonly string[] {
+  const dependencies = new Set<string>([
+    createTableCacheDependency(connectionName, tableName),
+  ])
+  for (const row of rows) {
+    const dependency = createTableRowCacheDependency(connectionName, tableName, 'id', row.id)
+    if (dependency) {
+      dependencies.add(dependency)
+    }
+  }
+  const lastInsertDependency = createTableRowCacheDependency(connectionName, tableName, 'id', lastInsertId)
+  if (lastInsertDependency) {
+    dependencies.add(lastInsertDependency)
+  }
+
+  if (dependencies.size === 1) {
+    dependencies.add(createTableRowWildcardCacheDependency(connectionName, tableName))
+  }
+
+  return Object.freeze([...dependencies])
 }
 
 export function resolveQueryCacheDependencies(
@@ -333,8 +478,14 @@ export const queryCacheInternals = {
   configureDatabaseQueryCacheBridge,
   createDeterministicQueryCacheKey,
   createTableCacheDependency,
+  createTableRowCacheDependency,
+  createTableRowWildcardCacheDependency,
   getQueryCacheBridgeState,
+  hasActiveDatabaseDependencyCollector,
+  hasDatabaseDependencyInvalidationListeners,
+  inferAutomaticInsertCacheInvalidationDependencies,
   inferAutomaticQueryCacheDependencies,
+  inferAutomaticQueryCacheInvalidationDependencies,
   normalizeQueryCacheConfig,
   normalizeQueryCacheDependencies,
   notifyDatabaseDependencyInvalidationListeners,

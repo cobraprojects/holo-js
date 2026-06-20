@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url'
 import { DEFAULT_SESSION_COOKIE_NAME } from '@holo-js/config'
 import Database from 'better-sqlite3'
 import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
+import { closeExampleAppBrowser } from '../../../tests/example-app-browser.mjs'
 import { assertExampleAppBroadcastBrowserFlow } from '../../../tests/example-app-broadcast-browser-flow.mjs'
 import { assertExampleAppRealtimeBrowserFlow, assertExampleAppRealtimeUnavailableBrowserFlow } from '../../../tests/example-app-realtime-browser-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
@@ -624,6 +625,7 @@ try {
   await run('bun', ['run', 'typecheck'])
   await run('bun', ['run', 'build'])
 } finally {
+  await closeExampleAppBrowser()
   await writeFile(configPath, originalConfig)
   await stopProcessTree(child)
   await stopProcessTree(broadcastChild)
