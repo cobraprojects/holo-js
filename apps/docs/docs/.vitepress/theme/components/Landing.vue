@@ -99,6 +99,7 @@ const partners = [
           <p class="hero-stamp">What you pick is what you ship.</p>
           <div class="hero-actions">
             <a class="btn btn-primary" href="/installation">Read the docs</a>
+            <a class="btn btn-ghost" href="/learn/blog-app/">Build a blog app</a>
             <button type="button" class="btn btn-ghost" @click="scrollToLearnMore">
               Learn more
               <span aria-hidden="true" class="arrow">↓</span>

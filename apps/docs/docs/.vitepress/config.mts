@@ -16,6 +16,23 @@ const frameworkSidebar = [
     ],
   },
   {
+    text: 'Tutorial',
+    items: [
+      { text: 'Build a Blog App', link: '/learn/blog-app/' },
+      { text: 'Create the Project', link: '/learn/blog-app/create-project' },
+      { text: 'Database and Migrations', link: '/learn/blog-app/database-and-migrations' },
+      { text: 'Models and Queries', link: '/learn/blog-app/models-and-queries' },
+      { text: 'Public Blog Pages', link: '/learn/blog-app/public-pages' },
+      { text: 'Admin CRUD', link: '/learn/blog-app/admin-crud' },
+      { text: 'Forms and Validation', link: '/learn/blog-app/forms-and-validation' },
+      { text: 'Auth', link: '/learn/blog-app/auth' },
+      { text: 'Authorization', link: '/learn/blog-app/authorization' },
+      { text: 'Media Uploads', link: '/learn/blog-app/media-uploads' },
+      { text: 'Realtime and Notifications', link: '/learn/blog-app/realtime-and-notifications' },
+      { text: 'Testing and Deployment', link: '/learn/blog-app/testing-and-deployment' },
+    ],
+  },
+  {
     text: 'Architecture Concepts',
     items: [
       { text: 'Architecture', link: '/architecture' },
