@@ -1191,14 +1191,17 @@ export default {
 
     const listed = runCliProcess(projectRoot, ['list'])
     expect(listed.status).toBe(0)
-    expect(listed.stdout).toContain('Internal Commands')
-    expect(listed.stdout).toContain('holo make:broadcast <name>')
-    expect(listed.stdout).toContain('holo make:channel <pattern>')
-    expect(listed.stdout).toContain('holo make:job <name>')
-    expect(listed.stdout).toContain('holo make:mail <name> [--markdown]')
-    expect(listed.stdout).toContain('holo make:model <name>')
-    expect(listed.stdout).toContain('App Commands')
-    expect(listed.stdout).toContain('holo courses:reindex')
+    expect(listed.stdout).toContain('Usage:')
+    expect(listed.stdout).toContain('  holo <command> [options] [arguments]')
+    expect(listed.stdout).toContain('Internal commands:')
+    expect(listed.stdout).toContain('  list                            List all available internal and app commands.')
+    expect(listed.stdout).toContain('  make:broadcast                  Create and register a broadcast definition file.')
+    expect(listed.stdout).toContain('  make:channel                    Create and register a channel authorization definition file.')
+    expect(listed.stdout).toContain('  make:job                        Create and register a queue job file.')
+    expect(listed.stdout).toContain('  make:mail                       Create a mail definition file.')
+    expect(listed.stdout).toContain('  make:model                      Create a model and optionally related database artifacts.')
+    expect(listed.stdout).toContain('App commands:')
+    expect(listed.stdout).toContain('  courses:reindex                 Reindex course data.')
 
     const executed = runCliProcess(projectRoot, ['courses:reindex'])
     expect(executed.status).toBe(0)
@@ -3852,6 +3855,126 @@ export default defineAppConfig({
     expect(mediaDriver.status).toBe(1)
     expect(mediaDriver.stderr).toContain('The media installer does not support --driver.')
   }, 60000)
+
+  it('installs Holo agent skills for selected coding agents', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const commandIo = createIo(projectRoot)
+    const commandContext = {
+      ...commandIo.io,
+      projectRoot,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    }
+    const installCommand = createInternalCommands(commandContext as never)
+      .find(command => command.name === 'agents:install')
+
+    expect(installCommand).toBeDefined()
+    expect(installCommand?.aliases).toContain('ai:install')
+    await expect(installCommand?.prepare?.({
+      args: [],
+      flags: { agent: ['codex,cursor'], force: true },
+    }, commandContext as never)).resolves.toEqual({
+      args: [],
+      flags: {
+        agent: ['codex', 'cursor'],
+        force: true,
+      },
+    })
+    await expect(installCommand?.prepare?.({
+      args: [],
+      flags: { agent: 'unknown' },
+    }, commandContext as never)).rejects.toThrow('Unsupported agent skill target: unknown.')
+
+    const promptRoot = await createTempProject()
+    tempDirs.push(promptRoot)
+    const promptIo = createIo(promptRoot, {
+      tty: true,
+      input: 'codex, cursor\n',
+    })
+    const promptContext = {
+      ...promptIo.io,
+      projectRoot: promptRoot,
+      registry: [] as Array<ReturnType<typeof createAppCommandDefinition>>,
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    }
+    const promptInstallCommand = createInternalCommands(promptContext as never)
+      .find(command => command.name === 'agents:install')
+
+    await expect(promptInstallCommand?.prepare?.({
+      args: [],
+      flags: {},
+    }, promptContext as never)).resolves.toEqual({
+      args: [],
+      flags: {
+        agent: ['codex', 'cursor'],
+      },
+    })
+
+    await expect(installCommand?.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: [],
+      flags: {
+        agent: ['codex', 'cursor'],
+      },
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    } as never)).resolves.toBeUndefined()
+
+    const codexSkill = await readFile(join(projectRoot, '.codex/skills/holo-js/SKILL.md'), 'utf8')
+    const cursorSkill = await readFile(join(projectRoot, '.cursor/skills/holo-js/SKILL.md'), 'utf8')
+
+    expect(codexSkill).toContain('Primary documentation URL: https://docs.holo-js.com/')
+    expect(cursorSkill).toBe(codexSkill)
+    expect(commandIo.read().stdout).toContain('Installed Holo-JS agent skills.')
+
+    await expect(installCommand?.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: [],
+      flags: {
+        agent: ['codex'],
+      },
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    } as never)).resolves.toBeUndefined()
+    expect(commandIo.read().stdout).toContain('Holo-JS agent skills are already installed.')
+
+    await writeFile(join(projectRoot, '.codex/skills/holo-js/SKILL.md'), 'custom guidance', 'utf8')
+    await expect(installCommand?.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: [],
+      flags: {
+        agent: ['codex'],
+      },
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    } as never)).rejects.toThrow('Refusing to overwrite existing codex skill')
+
+    await expect(installCommand?.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: [],
+      flags: {
+        agent: ['codex'],
+        force: true,
+      },
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    } as never)).resolves.toBeUndefined()
+    await expect(readFile(join(projectRoot, '.codex/skills/holo-js/SKILL.md'), 'utf8'))
+      .resolves.toContain('Use the docs as the source of truth.')
+
+    const plainRoot = await createTempDirectory()
+    tempDirs.push(plainRoot)
+    const plainIo = createIo(plainRoot)
+
+    await expect(import('../src/cli').then(module => module.runCli([
+      'agents:install',
+      '--agent',
+      'codex',
+    ], plainIo.io))).resolves.toBe(0)
+    await expect(readFile(join(plainRoot, '.codex/skills/holo-js/SKILL.md'), 'utf8'))
+      .resolves.toContain('https://docs.holo-js.com/')
+  })
 
   it('covers the install command and queue installer helpers in-process', async () => {
     const projectRoot = await createTempProject()
@@ -6736,7 +6859,7 @@ export default defineAppConfig({
       },
     })
     expect(listed.status, listed.stderr || listed.stdout).toBe(0)
-    expect(listed.stdout).toContain('Internal Commands')
+    expect(listed.stdout).toContain('Internal commands:')
 
     const cleared = runCliProcess(projectRoot, ['config:clear'])
     expect(cleared.status, cleared.stderr || cleared.stdout).toBe(0)
@@ -6755,8 +6878,8 @@ export default defineAppConfig({
 
     const listedIo = createIo(projectRoot)
     await expect(import('../src/cli').then(module => module.runCli(['list'], listedIo.io))).resolves.toBe(0)
-    expect(listedIo.read().stdout).toContain('Internal Commands')
-    expect(listedIo.read().stdout).toContain('App Commands')
+    expect(listedIo.read().stdout).toContain('Internal commands:')
+    expect(listedIo.read().stdout).toContain('App commands:')
     expect(listedIo.read().stdout).toContain('(none)')
   })
 
@@ -8204,13 +8327,13 @@ export default {
     await withFakeBun(async () => {
       const defaultIo = createIo(projectRoot)
       await expect(import('../src/cli').then(module => module.runCli([], defaultIo.io))).resolves.toBe(0)
-      expect(defaultIo.read().stdout).toContain('Internal Commands')
+      expect(defaultIo.read().stdout).toContain('Internal commands:')
 
       const listedIo = createIo(projectRoot)
       await expect(findCommand([], 'missing')).toBeUndefined()
       await expect(import('../src/cli').then(module => module.runCli(['list'], listedIo.io))).resolves.toBe(0)
-      expect(listedIo.read().stdout).toContain('Internal Commands')
-      expect(listedIo.read().stdout).toContain('holo courses:reindex')
+      expect(listedIo.read().stdout).toContain('Internal commands:')
+      expect(listedIo.read().stdout).toContain('  courses:reindex                 Renamed command.')
 
       const helpIo = createIo(projectRoot)
       await expect(import('../src/cli').then(module => module.runCli(['make:model', '--help'], helpIo.io))).resolves.toBe(0)
@@ -8570,9 +8693,9 @@ export default {
     printCommandHelp(io.io, appDefinition)
 
     const listed = io.read().stdout
-    expect(listed).toContain('Internal Commands')
-    expect(listed).toContain('App Commands')
-    expect(listed).toContain('holo example')
+    expect(listed).toContain('Internal commands:')
+    expect(listed).toContain('App commands:')
+    expect(listed).toContain('  example                         Example command.')
   })
 
   it('covers env, file, and internal command preparation helpers', async () => {
@@ -9162,8 +9285,8 @@ export default {
       { kind: 'seed', options: { quietly: false, force: false, environment: 'development' } },
       { kind: 'prune', options: { models: [] } },
     ])
-    expect(listIo.read().stdout).toContain('Internal Commands')
-    expect(listIo.read().stdout).toContain('holo migrate:fresh [--seed] [--only a,b,c] [--quietly] [--force]')
+    expect(listIo.read().stdout).toContain('Internal commands:')
+    expect(listIo.read().stdout).toContain('  migrate:fresh                   Drop all tables and rerun all registered migrations.')
     expect(listIo.read().stdout).toContain('Dropped all tables')
     expect(listIo.read().stdout).toContain('Re-ran all migrations')
     expect(emptyOutputIo.read().stdout).toContain('No migrations were executed.')
@@ -16215,7 +16338,7 @@ export default {
     expect(publishedEntrypoints.some(entrypoint => entrypoint.includes('workspaces:'))).toBe(false)
     expect(publishedEntrypoints.some(entrypoint => entrypoint.includes('.workspaces.catalog'))).toBe(false)
     expect(executed.status, executed.stderr || executed.stdout).toBe(0)
-    expect(executed.stdout).toContain('Internal Commands')
+    expect(executed.stdout).toContain('Internal commands:')
   })
 
   it('runs non-runtime published CLI commands without loading runtime-only deps', async () => {
@@ -16233,7 +16356,7 @@ export default {
     })
 
     expect(listed.status, listed.stderr || listed.stdout).toBe(0)
-    expect(listed.stdout).toContain('Internal Commands')
+    expect(listed.stdout).toContain('Internal commands:')
     expect(help.status, help.stderr || help.stdout).toBe(0)
     expect(help.stdout).toContain('Create a model and optionally related database artifacts.')
   })

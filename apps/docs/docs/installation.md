@@ -310,27 +310,67 @@ Use your package manager's exec wrapper for direct Holo-JS CLI commands:
 npx holo make:model User
 npx holo migrate
 npx holo seed
+npx holo agents:install
 ```
 
 ```bash [pnpm]
 pnpm dlx holo make:model User
 pnpm dlx holo migrate
 pnpm dlx holo seed
+pnpm dlx holo agents:install
 ```
 
 ```bash [Yarn]
 yarn dlx holo make:model User
 yarn dlx holo migrate
 yarn dlx holo seed
+yarn dlx holo agents:install
 ```
 
 ```bash [Bun]
 bunx holo make:model User
 bunx holo migrate
 bunx holo seed
+bunx holo agents:install
 ```
 
 :::
+
+`holo agents:install` adds Holo-JS documentation-search skills for supported coding agents.
+
+Supported targets are:
+
+- `codex`
+- `claude`
+- `cursor`
+- `windsurf`
+- `opencode`
+- `gemini`
+- `kiro`
+
+Without flags, the command installs skills for every supported agent. Use `--agent` when you only want a subset:
+
+```bash
+npx holo agents:install --agent codex,cursor
+```
+
+By default, the command writes project-local skills such as `.codex/skills/holo-js/SKILL.md`,
+`.cursor/skills/holo-js/SKILL.md`, or `.kiro/skills/holo-js/SKILL.md` under the current directory.
+
+Use `--global` to install into the current user's agent skill directory instead:
+
+```bash
+npx holo agents:install --global
+```
+
+If a target skill file already exists and does not match Holo-JS's generated content, the command refuses to
+overwrite it. Re-run with `--force` when you intentionally want to replace the existing file:
+
+```bash
+npx holo agents:install --force
+```
+
+The command aliases are `agent:install` and `ai:install`.
 
 ### Global install (optional)
 

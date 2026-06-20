@@ -40,6 +40,7 @@ import type * as MediaMigrationsModule from './media-migrations'
 import type * as GeneratorsModule from './generators'
 import type * as BroadcastModule from './broadcast'
 import type * as SecurityModule from './security'
+import type * as AgentSkillsModule from './agent-skills'
 import type { LoadedProjectConfig, CommandFlagValue, CommandExecutionContext } from './types'
 import type {
   IoStreams,
@@ -59,6 +60,7 @@ const AUTH_INSTALL_FEATURES = ['social', 'workos', 'clerk'] as const
 const AUTH_SOCIAL_PROVIDER_MODES = ['default', 'specific'] as const
 const EVENTS_QUEUE_ACTIONS = ['skip', 'enable'] as const
 const MODEL_GENERATOR_OPTIONS = ['migration', 'observer', 'seeder', 'factory'] as const
+const COMMAND_LIST_DESCRIPTION_COLUMN = 32
 
 type AuthInstallFeature = typeof AUTH_INSTALL_FEATURES[number]
 type AuthSocialProviderMode = typeof AUTH_SOCIAL_PROVIDER_MODES[number]
@@ -114,6 +116,7 @@ let projectConfigModulePromise: Promise<typeof ProjectConfigModule> | undefined
 let projectDiscoveryModulePromise: Promise<typeof ProjectDiscoveryModule> | undefined
 let projectRuntimeModulePromise: Promise<typeof ProjectRuntimeModule> | undefined
 let projectScaffoldModulePromise: Promise<typeof ProjectScaffoldModule> | undefined
+let agentSkillsModulePromise: Promise<typeof AgentSkillsModule> | undefined
 
 function loadRuntimeModule(): Promise<typeof RuntimeModule> {
   runtimeModulePromise ??= import('./runtime')
@@ -183,6 +186,11 @@ function loadProjectRuntimeModule(): Promise<typeof ProjectRuntimeModule> {
 function loadProjectScaffoldModule(): Promise<typeof ProjectScaffoldModule> {
   projectScaffoldModulePromise ??= import('./project/scaffold')
   return projectScaffoldModulePromise
+}
+
+function loadAgentSkillsModule(): Promise<typeof AgentSkillsModule> {
+  agentSkillsModulePromise ??= import('./agent-skills')
+  return agentSkillsModulePromise
 }
 
 type QueueExecutorKey = keyof QueueCommandExecutors
@@ -333,21 +341,30 @@ export function printCommandList(io: IoStreams, registry: readonly CommandDefini
   const internal = registry.filter(command => command.source === 'internal')
   const app = registry.filter(command => command.source === 'app')
 
-  writeLine(io.stdout, 'Internal Commands')
-  for (const command of internal) {
-    writeLine(io.stdout, `  ${command.usage}  ${command.description}`)
-  }
+  writeLine(io.stdout, 'Usage:')
+  writeLine(io.stdout, '  holo <command> [options] [arguments]')
+  writeLine(io.stdout)
+  writeLine(io.stdout, 'Internal commands:')
+  printCommandListEntries(io, internal)
 
   writeLine(io.stdout)
-  writeLine(io.stdout, 'App Commands')
+  writeLine(io.stdout, 'App commands:')
   if (app.length === 0) {
     writeLine(io.stdout, '  (none)')
     return
   }
 
-  for (const command of app) {
-    writeLine(io.stdout, `  ${command.usage}  ${command.description}`)
+  printCommandListEntries(io, app)
+}
+
+function printCommandListEntries(io: IoStreams, commands: readonly CommandDefinition[]): void {
+  for (const command of commands) {
+    printCommandListEntry(io, command)
   }
+}
+
+function printCommandListEntry(io: IoStreams, command: CommandDefinition): void {
+  writeLine(io.stdout, `  ${command.name.padEnd(COMMAND_LIST_DESCRIPTION_COLUMN)}${command.description}`)
 }
 
 export function printCommandHelp(io: IoStreams, command: CommandDefinition): void {
@@ -491,6 +508,60 @@ export function createInternalCommands(
         writeLine(context.stdout, 'Next steps')
         writeLine(context.stdout, `  cd ${projectName}`)
         writeLine(context.stdout, `  ${resolvePackageManagerDevCommand(packageManager)}`)
+      },
+    },
+    {
+      name: 'agents:install',
+      aliases: ['agent:install', 'ai:install'],
+      description: 'Install Holo-JS docs-search skills for coding agents.',
+      usage: 'holo agents:install [--agent <all|codex|claude|cursor|windsurf|opencode|gemini|kiro>] [--global] [--force]',
+      source: 'internal',
+      async prepare(input) {
+        const { normalizeAgentSkillTargets, SUPPORTED_AGENT_SKILL_TARGETS } = await loadAgentSkillsModule()
+        const requestedAgents = (collectMultiStringFlag(input.flags, 'agent') ?? []).flatMap(entry => splitCsv(entry) ?? [])
+        const agents = requestedAgents.length > 0
+          ? normalizeAgentSkillTargets(requestedAgents)
+          : isInteractive(context, input.flags)
+            ? await promptMultiChoice(context, 'Coding agents', SUPPORTED_AGENT_SKILL_TARGETS, {
+                required: true,
+                initialValues: [...SUPPORTED_AGENT_SKILL_TARGETS],
+              })
+            : normalizeAgentSkillTargets([])
+
+        return {
+          args: [],
+          flags: {
+            agent: agents,
+            ...(resolveBooleanFlag(input.flags, 'global') === true ? { global: true } : {}),
+            ...(resolveBooleanFlag(input.flags, 'force') === true ? { force: true } : {}),
+          },
+        }
+      },
+      async run(commandContext) {
+        const { installAgentSkills } = await loadAgentSkillsModule()
+        const agents = (collectMultiStringFlag(commandContext.flags, 'agent') ?? []) as AgentSkillsModule.SupportedAgentSkillTarget[]
+        const results = await installAgentSkills(context.projectRoot, {
+          agents,
+          global: commandContext.flags.global === true,
+          force: commandContext.flags.force === true,
+        })
+        const created = results.filter(result => result.status === 'created').length
+        const updated = results.filter(result => result.status === 'updated').length
+        const unchanged = results.filter(result => result.status === 'unchanged').length
+        const changed = created + updated
+
+        writeLine(
+          context.stdout,
+          changed > 0
+            ? 'Installed Holo-JS agent skills.'
+            : 'Holo-JS agent skills are already installed.',
+        )
+
+        for (const result of results) {
+          writeLine(context.stdout, `  - ${result.status} ${result.agent}: ${result.path}`)
+        }
+
+        writeLine(context.stdout, `  - summary: ${created} created, ${updated} updated, ${unchanged} unchanged`)
       },
     },
     {
@@ -1859,7 +1930,11 @@ export function findCommand(
 export async function runCli(argv: readonly string[], io: IoStreams): Promise<number> {
   try {
     const requestedCommandName = argv[0]
-    const projectRoot = requestedCommandName === 'new'
+    const usesCurrentDirectoryAsProjectRoot = requestedCommandName === 'new'
+      || requestedCommandName === 'agents:install'
+      || requestedCommandName === 'agent:install'
+      || requestedCommandName === 'ai:install'
+    const projectRoot = usesCurrentDirectoryAsProjectRoot
       ? io.cwd
       : await (await loadProjectRuntimeModule()).findProjectRoot(io.cwd)
     let cachedProject: LoadedProjectConfig | undefined
@@ -1882,6 +1957,9 @@ export async function runCli(argv: readonly string[], io: IoStreams): Promise<nu
       || requestedCommandName === 'key:generate'
       || requestedCommandName === 'new'
       || requestedCommandName === 'install'
+      || requestedCommandName === 'agents:install'
+      || requestedCommandName === 'agent:install'
+      || requestedCommandName === 'ai:install'
       || requestedCommandName === 'auth:notifications:publish'
       || requestedCommandName === 'prepare'
       || requestedCommandName === 'dev'

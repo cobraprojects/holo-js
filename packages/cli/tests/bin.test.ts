@@ -211,8 +211,8 @@ describe('holo bin', () => {
         stdio: 'pipe',
       })
 
-      expect(output).toContain('Internal Commands')
-      expect(output).toContain('holo list')
+      expect(output).toContain('Internal commands:')
+      expect(output).toContain('  list')
     }
   }, 60000)
 })
