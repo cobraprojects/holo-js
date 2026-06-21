@@ -203,6 +203,10 @@ function parseExactPredicateDependency(dependency: string): ParsedPredicateDepen
   }
 }
 
+function hasMutationDependency(dependencies: readonly string[]): boolean {
+  return dependencies.some(dependency => /^db:[^:]+:[^:]+:mutation$/.test(dependency))
+}
+
 function collectPredicateDependencies(
   dependencies: readonly string[],
   parseDependency: (dependency: string) => ParsedPredicateDependency | undefined = parsePredicateDependency,
@@ -230,7 +234,7 @@ function isSubscriptionContradictedByInvalidation(
 ): boolean {
   const invalidatedPredicates = collectPredicateDependencies(event.dependencies)
   const exactInvalidatedPredicates = collectPredicateDependencies(event.dependencies, parseExactPredicateDependency)
-  if (invalidatedPredicates.size === 0 || exactInvalidatedPredicates.size === 0) {
+  if (invalidatedPredicates.size === 0 || exactInvalidatedPredicates.size === 0 || hasMutationDependency(event.dependencies)) {
     return false
   }
 

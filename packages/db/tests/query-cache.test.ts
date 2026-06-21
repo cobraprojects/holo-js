@@ -539,6 +539,22 @@ describe('@holo-js/db query cache integration', () => {
     ])
   })
 
+  it('includes exact record predicate dependencies for query invalidation values', () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+      active: column.boolean(),
+    })
+    const predicatePlan = (
+      new TableQueryBuilder(users, DB.connection())
+        .where('active', true) as unknown as { readonly plan: SelectQueryPlan }
+    ).plan
+
+    expect(queryCacheInternals.inferAutomaticQueryCacheInvalidationDependencies(predicatePlan, 'main', {
+      active: false,
+    })).toContain('db:main:users:where-exact:active:false')
+  })
+
   it('skips query caching for locked queries and uses a fresh read during numeric adjustments', async () => {
     const users = defineTable('users', {
       id: column.id(),

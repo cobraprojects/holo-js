@@ -272,6 +272,13 @@ export function createTablePredicateCacheDependency(
   return `db:${connectionName}:${tableName}:where:${columnName}:${encodeURIComponent(JSON.stringify(value))}`
 }
 
+function createTableMutationCacheDependency(
+  connectionName: string,
+  tableName: string,
+): string {
+  return `db:${connectionName}:${tableName}:mutation`
+}
+
 function createTableExactPredicateCacheDependency(
   connectionName: string,
   tableName: string,
@@ -495,6 +502,7 @@ export function inferAutomaticQueryCacheInvalidationDependencies(
     return Object.freeze(dependencies)
   }
 
+  dependencies.push(createTableMutationCacheDependency(connectionName, plan.source.tableName))
   const primaryKeyColumn = getPrimaryKeyColumn(plan)
   const primaryKeyValue = findExactPrimaryKeyValue(plan.predicates, primaryKeyColumn)
   const primaryKeyDependency = createTableRowCacheDependency(
@@ -507,6 +515,7 @@ export function inferAutomaticQueryCacheInvalidationDependencies(
   dependencies.push(...collectExactPredicateDependencies(plan.predicates, connectionName, plan.source.tableName))
   dependencies.push(...collectExactPredicateDependencies(plan.predicates, connectionName, plan.source.tableName, true))
   dependencies.push(...collectRecordPredicateDependencies(connectionName, plan.source.tableName, values))
+  dependencies.push(...collectRecordPredicateDependencies(connectionName, plan.source.tableName, values, true))
   return Object.freeze(dependencies)
 }
 

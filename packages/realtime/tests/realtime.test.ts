@@ -188,9 +188,18 @@ class RelationalMemoryAdapter implements DriverAdapter {
       const [, tableName, rawAssignments, rawWhere] = updateMatch
       const table = this.tables[tableName!] ?? []
       const assignments = rawAssignments!.split(', ').map((assignment, index) => {
-        const [, column, rawPlaceholder] = assignment.match(/^"([^"]+)" = \?(\d*)$/) ?? []
+        const assignmentMatch = assignment.match(/^"([^"]+)" = \?(\d*)$/)
+        if (!assignmentMatch) {
+          throw new Error(`Unexpected SQL assignment format: ${assignment}`)
+        }
+
+        const [, column, rawPlaceholder] = assignmentMatch
+        if (!column) {
+          throw new Error(`Unexpected SQL assignment format: ${assignment}`)
+        }
+
         const bindingIndex = rawPlaceholder ? Number(rawPlaceholder) - 1 : index
-        return { column: column!, value: bindings[bindingIndex] }
+        return { column, value: bindings[bindingIndex] }
       })
       const whereMatch = rawWhere!.match(/^"([^"]+)" = \?(\d*)$/)
       const whereColumn = whereMatch?.[1] ?? ''

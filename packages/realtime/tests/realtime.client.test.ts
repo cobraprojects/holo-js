@@ -286,6 +286,7 @@ describe('@holo-js/realtime client runtime', () => {
     const unsubscribeDisconnected = disconnectedStore.subscribe(() => {})
     unsubscribeDisconnected()
 
+    let subscribeAttempts = 0
     const failingTransport = {
       async query() {
         throw new Error('query failed')
@@ -303,6 +304,7 @@ describe('@holo-js/realtime client runtime', () => {
         _listener: (snapshot: RealtimeSubscriptionSnapshot<TResult>) => void,
         onError: (error: unknown) => void,
       ) {
+        subscribeAttempts += 1
         onError(new Error('subscribe failed'))
 
         return () => {
@@ -313,11 +315,13 @@ describe('@holo-js/realtime client runtime', () => {
     const failingStore = realtimeClientInternals.createRealtimeQueryStore<readonly Post[]>('posts.fail', {}, failingTransport)
     const unsubscribeFailing = failingStore.subscribe(() => {})
     failingStore.connect()
+    failingStore.connect()
     await Promise.resolve()
     unsubscribeFailing()
     const unsubscribeAfterReset = failingStore.subscribe(() => {})
     unsubscribeAfterReset()
 
+    expect(subscribeAttempts).toBe(2)
     expect(calls).toEqual(['failed unsubscribe'])
     expect(consoleWarn).toHaveBeenCalledWith('[@holo-js/realtime] query failed')
     expect(consoleWarn).toHaveBeenCalledWith('[@holo-js/realtime] subscribe failed')

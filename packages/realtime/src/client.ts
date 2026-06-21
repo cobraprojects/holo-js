@@ -610,6 +610,7 @@ function createRealtimeQueryStore<TResult>(
         handleRealtimeConnectionError(error)
       })
       try {
+        connected = true
         unsubscribe = transport.subscribe<TResult>(name, args, (nextSnapshot) => {
           if (startupId !== currentStartupId) {
             return
@@ -621,7 +622,6 @@ function createRealtimeQueryStore<TResult>(
           connected = false
           handleRealtimeConnectionError(error)
         })
-        connected = true
       } catch (error) {
         connected = false
         unsubscribe = () => {}
