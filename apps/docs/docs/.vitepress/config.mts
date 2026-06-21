@@ -11,6 +11,7 @@ const frameworkSidebar = [
     text: 'Getting Started',
     items: [
       { text: 'Installation', link: '/installation' },
+      { text: 'Agentic Coding', link: '/cli/agents-install' },
       { text: 'Configuration', link: '/configuration' },
       { text: 'Directory Structure', link: '/directory-structure' },
     ],
