@@ -40,6 +40,7 @@ type RuntimeState = {
   dependencySubscribers: Map<string, Set<string>>
   invalidationBatch?: PendingInvalidationBatch
   nextSubscriptionId: number
+  refreshGroups: Map<string, Set<string>>
   refreshes: Map<string, ActiveRefresh>
   unsubscribeFromDatabase?: () => void
   subscriptions: Map<string, ActiveSubscription<RealtimeQueryDefinitionMetadata>>
@@ -71,15 +72,31 @@ type ActiveSubscription<TDefinition extends RealtimeQueryDefinitionMetadata> = {
   readonly options: RealtimeSubscribeOptions<RealtimeResultFor<TDefinition>>
   readonly executionOptions?: RealtimeExecutionOptions
   dependencies: readonly string[]
+  predicateDependencies: PredicateDependencyIndex
   resultHash: string
   version: number
   current: RealtimeSubscriptionSnapshot<RealtimeResultFor<TDefinition>>
+}
+
+type RefreshDelivery<TDefinition extends RealtimeQueryDefinitionMetadata> = {
+  readonly result: RealtimeExecutionResult<RealtimeResultFor<TDefinition>>
+  readonly resultHash: string
+  predicateDependencies?: PredicateDependencyIndex
 }
 
 type ParsedPredicateDependency = {
   readonly tableKey: string
   readonly columnName: string
   readonly encodedValue: string
+}
+
+type PredicateDependencyIndex = Map<string, Map<string, Set<string>>>
+
+type ParsedInvalidationEvent = {
+  readonly dependencies: readonly string[]
+  readonly exactPredicates: PredicateDependencyIndex
+  readonly hasMutationDependency: boolean
+  readonly predicates: PredicateDependencyIndex
 }
 
 export class RealtimeError extends Error {
@@ -121,10 +138,12 @@ function getRuntimeState(): RuntimeState {
   const state = runtime.__holoRealtimeRuntime__ ??= {
     dependencySubscribers: new Map<string, Set<string>>(),
     nextSubscriptionId: 0,
+    refreshGroups: new Map<string, Set<string>>(),
     refreshes: new Map<string, ActiveRefresh>(),
     subscriptions: new Map<string, ActiveSubscription<RealtimeQueryDefinitionMetadata>>(),
   }
   state.dependencySubscribers ??= new Map<string, Set<string>>()
+  state.refreshGroups ??= new Map<string, Set<string>>()
   return state
 }
 
@@ -210,8 +229,8 @@ function hasMutationDependency(dependencies: readonly string[]): boolean {
 function collectPredicateDependencies(
   dependencies: readonly string[],
   parseDependency: (dependency: string) => ParsedPredicateDependency | undefined = parsePredicateDependency,
-): Map<string, Map<string, Set<string>>> {
-  const predicates = new Map<string, Map<string, Set<string>>>()
+): PredicateDependencyIndex {
+  const predicates: PredicateDependencyIndex = new Map<string, Map<string, Set<string>>>()
   for (const dependency of dependencies) {
     const parsed = parseDependency(dependency)
     if (!parsed) {
@@ -228,30 +247,41 @@ function collectPredicateDependencies(
   return predicates
 }
 
+function parseInvalidationEvent(event: DatabaseDependencyInvalidationEvent): ParsedInvalidationEvent {
+  return {
+    dependencies: event.dependencies,
+    exactPredicates: collectPredicateDependencies(event.dependencies, parseExactPredicateDependency),
+    hasMutationDependency: hasMutationDependency(event.dependencies),
+    predicates: collectPredicateDependencies(event.dependencies),
+  }
+}
+
 function isSubscriptionContradictedByInvalidation(
   subscription: ActiveSubscription<RealtimeQueryDefinitionMetadata>,
-  event: DatabaseDependencyInvalidationEvent,
+  event: ParsedInvalidationEvent,
 ): boolean {
-  const invalidatedPredicates = collectPredicateDependencies(event.dependencies)
-  const exactInvalidatedPredicates = collectPredicateDependencies(event.dependencies, parseExactPredicateDependency)
-  if (invalidatedPredicates.size === 0 || exactInvalidatedPredicates.size === 0 || hasMutationDependency(event.dependencies)) {
+  if (
+    subscription.predicateDependencies.size === 0
+    || event.predicates.size === 0
+    || event.exactPredicates.size === 0
+    || event.hasMutationDependency
+  ) {
     return false
   }
 
-  for (const dependency of subscription.dependencies) {
-    const parsed = parsePredicateDependency(dependency)
-    if (!parsed) {
-      continue
-    }
+  for (const [tableKey, tablePredicates] of subscription.predicateDependencies) {
+    for (const [columnName, values] of tablePredicates) {
+      const invalidatedValues = event.predicates.get(tableKey)?.get(columnName)
+      const exactInvalidatedValues = event.exactPredicates.get(tableKey)?.get(columnName)
+      for (const value of values) {
+        if (invalidatedValues?.has(value)) {
+          continue
+        }
 
-    const invalidatedValues = invalidatedPredicates.get(parsed.tableKey)?.get(parsed.columnName)
-    if (invalidatedValues?.has(parsed.encodedValue)) {
-      continue
-    }
-
-    const exactInvalidatedValues = exactInvalidatedPredicates.get(parsed.tableKey)?.get(parsed.columnName)
-    if (exactInvalidatedValues && !exactInvalidatedValues.has(parsed.encodedValue)) {
-      return true
+        if (exactInvalidatedValues && !exactInvalidatedValues.has(value)) {
+          return true
+        }
+      }
     }
   }
 
@@ -528,6 +558,13 @@ function addSubscriptionDependencies(subscription: ActiveSubscription<RealtimeQu
   }
 }
 
+function addSubscriptionRefreshGroup(subscription: ActiveSubscription<RealtimeQueryDefinitionMetadata>): void {
+  const state = getRuntimeState()
+  const group = state.refreshGroups.get(subscription.refreshKey) ?? new Set<string>()
+  group.add(subscription.id)
+  state.refreshGroups.set(subscription.refreshKey, group)
+}
+
 function removeSubscriptionDependencies(subscription: ActiveSubscription<RealtimeQueryDefinitionMetadata>): void {
   const state = getRuntimeState()
   for (const dependency of subscription.dependencies) {
@@ -543,13 +580,65 @@ function removeSubscriptionDependencies(subscription: ActiveSubscription<Realtim
   }
 }
 
+function removeSubscriptionRefreshGroup(subscription: ActiveSubscription<RealtimeQueryDefinitionMetadata>): void {
+  const state = getRuntimeState()
+  const group = state.refreshGroups.get(subscription.refreshKey)
+  if (!group) {
+    return
+  }
+
+  group.delete(subscription.id)
+  if (group.size === 0) {
+    state.refreshGroups.delete(subscription.refreshKey)
+  }
+}
+
+function areDependencySetsEqual(
+  currentDependencies: readonly string[],
+  nextDependencies: readonly string[],
+): boolean {
+  if (currentDependencies === nextDependencies) {
+    return true
+  }
+
+  if (currentDependencies.length !== nextDependencies.length) {
+    return false
+  }
+
+  for (let index = 0; index < currentDependencies.length; index += 1) {
+    if (currentDependencies[index] !== nextDependencies[index]) {
+      const currentDependencySet = new Set(currentDependencies)
+      if (currentDependencySet.size !== nextDependencies.length) {
+        return false
+      }
+
+      return nextDependencies.every(dependency => currentDependencySet.has(dependency))
+    }
+  }
+
+  return true
+}
+
 function updateSubscriptionDependencies(
   subscription: ActiveSubscription<RealtimeQueryDefinitionMetadata>,
   dependencies: readonly string[],
+  predicateDependencies?: PredicateDependencyIndex,
 ): void {
+  if (areDependencySetsEqual(subscription.dependencies, dependencies)) {
+    return
+  }
+
   removeSubscriptionDependencies(subscription)
   subscription.dependencies = dependencies
+  subscription.predicateDependencies = predicateDependencies ?? collectPredicateDependencies(dependencies)
   addSubscriptionDependencies(subscription)
+}
+
+function ensureRefreshDeliveryPredicateDependencies<TDefinition extends RealtimeQueryDefinitionMetadata>(
+  delivery: RefreshDelivery<TDefinition>,
+): PredicateDependencyIndex {
+  delivery.predicateDependencies ??= collectPredicateDependencies(delivery.result.dependencies)
+  return delivery.predicateDependencies
 }
 
 function deleteSubscription(subscriptionId: string): void {
@@ -560,6 +649,7 @@ function deleteSubscription(subscriptionId: string): void {
   }
 
   removeSubscriptionDependencies(subscription)
+  removeSubscriptionRefreshGroup(subscription)
   state.subscriptions.delete(subscriptionId)
 }
 
@@ -578,24 +668,32 @@ function getSubscriptionsForDependencies(dependencies: Iterable<string>): Active
 }
 
 function getRefreshGroupSubscriptions(refreshKey: string): ActiveSubscription<RealtimeQueryDefinitionMetadata>[] {
-  return [...getRuntimeState().subscriptions.values()]
-    .filter(subscription => subscription.refreshKey === refreshKey)
+  const state = getRuntimeState()
+  return [...state.refreshGroups.get(refreshKey) ?? []]
+    .map(subscriptionId => state.subscriptions.get(subscriptionId))
+    .filter(subscription => typeof subscription !== 'undefined')
 }
 
 async function deliverRefreshData<TDefinition extends RealtimeQueryDefinitionMetadata>(
   subscription: ActiveSubscription<TDefinition>,
-  result: RealtimeExecutionResult<RealtimeResultFor<TDefinition>>,
+  delivery: RefreshDelivery<TDefinition>,
 ): Promise<void> {
-  updateSubscriptionDependencies(subscription as ActiveSubscription<RealtimeQueryDefinitionMetadata>, result.dependencies)
-  const resultHash = createResultHash(result.data)
-  if (subscription.resultHash === resultHash) {
+  const predicateDependencies = areDependencySetsEqual(subscription.dependencies, delivery.result.dependencies)
+    ? undefined
+    : ensureRefreshDeliveryPredicateDependencies(delivery)
+  updateSubscriptionDependencies(
+    subscription as ActiveSubscription<RealtimeQueryDefinitionMetadata>,
+    delivery.result.dependencies,
+    predicateDependencies,
+  )
+  if (subscription.resultHash === delivery.resultHash) {
     return
   }
 
-  subscription.resultHash = resultHash
+  subscription.resultHash = delivery.resultHash
   subscription.version += 1
   subscription.current = Object.freeze({
-    ...result,
+    ...delivery.result,
     version: subscription.version,
   })
   try {
@@ -629,8 +727,12 @@ async function refreshSubscriptionGroup(refreshKey: string): Promise<void> {
       firstSubscription.args,
       firstSubscription.executionOptions,
     )
+    const delivery = {
+      result,
+      resultHash: createResultHash(result.data),
+    } satisfies RefreshDelivery<typeof firstSubscription.definition>
     await Promise.all(getRefreshGroupSubscriptions(refreshKey).map(async (subscription) => {
-      await deliverRefreshData(subscription, result)
+      await deliverRefreshData(subscription, delivery)
     }))
   } catch (error) {
     await Promise.all(getRefreshGroupSubscriptions(refreshKey).map(async (subscription) => {
@@ -653,34 +755,36 @@ async function drainRefresh(refreshKey: string, refresh: ActiveRefresh): Promise
   }
 }
 
-function scheduleSubscriptionRefresh(subscription: ActiveSubscription<RealtimeQueryDefinitionMetadata>): Promise<void> {
+function scheduleRefreshKey(refreshKey: string): Promise<void> {
   const state = getRuntimeState()
-  const refresh = state.refreshes.get(subscription.refreshKey) ?? {
+  const refresh = state.refreshes.get(refreshKey) ?? {
     pending: false,
   }
-  state.refreshes.set(subscription.refreshKey, refresh)
+  state.refreshes.set(refreshKey, refresh)
 
   if (refresh.running) {
     refresh.pending = true
     return refresh.running
   }
 
-  refresh.running = drainRefresh(subscription.refreshKey, refresh)
+  refresh.running = drainRefresh(refreshKey, refresh)
   return refresh.running
+}
+
+function scheduleSubscriptionRefresh(subscription: ActiveSubscription<RealtimeQueryDefinitionMetadata>): Promise<void> {
+  return scheduleRefreshKey(subscription.refreshKey)
 }
 
 async function handleDatabaseInvalidation(
   event: DatabaseDependencyInvalidationEvent,
   events: readonly DatabaseDependencyInvalidationEvent[] = [event],
 ): Promise<void> {
+  const parsedEvents = events.map(parseInvalidationEvent)
   const subscriptions = getSubscriptionsForDependencies(event.dependencies)
-    .filter(subscription => events.some(candidate => !isSubscriptionContradictedByInvalidation(subscription, candidate)))
+    .filter(subscription => parsedEvents.some(candidate => !isSubscriptionContradictedByInvalidation(subscription, candidate)))
   const refreshKeys = new Set(subscriptions.map(subscription => subscription.refreshKey))
   await Promise.all([...refreshKeys].map(async (refreshKey) => {
-    const subscription = subscriptions.find(candidate => candidate.refreshKey === refreshKey)
-    if (subscription) {
-      await scheduleSubscriptionRefresh(subscription)
-    }
+    await scheduleRefreshKey(refreshKey)
   }))
 }
 
@@ -773,12 +877,14 @@ export async function subscribeRealtimeQuery<TDefinition extends RealtimeQueryDe
     options,
     executionOptions,
     dependencies: result.dependencies,
+    predicateDependencies: collectPredicateDependencies(result.dependencies),
     resultHash,
     version: 1,
     current: snapshot,
   }
   state.subscriptions.set(subscription.id, subscription as ActiveSubscription<RealtimeQueryDefinitionMetadata>)
   addSubscriptionDependencies(subscription as ActiveSubscription<RealtimeQueryDefinitionMetadata>)
+  addSubscriptionRefreshGroup(subscription as ActiveSubscription<RealtimeQueryDefinitionMetadata>)
   await options.onData?.(snapshot)
 
   return Object.freeze({
@@ -808,6 +914,7 @@ export function resetRealtimeRuntime(): void {
   state.dependencySubscribers.clear()
   state.invalidationBatch = undefined
   state.nextSubscriptionId = 0
+  state.refreshGroups.clear()
   state.unsubscribeFromDatabase = undefined
   state.refreshes.clear()
   state.subscriptions.clear()
