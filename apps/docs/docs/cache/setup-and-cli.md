@@ -26,7 +26,7 @@ npx holo install cache --driver redis
 npx holo install cache --driver database
 ```
 
-`file` is the default install target and the default runtime driver.
+`file` is the default installer driver and the default runtime driver.
 
 Install output by driver:
 
@@ -43,7 +43,7 @@ Install output by driver:
   - installs `@holo-js/cache` and `@holo-js/cache-db`
   - writes `config/cache.ts`
   - writes `CACHE_PREFIX=`
-  - offers `holo cache:table`
+  - prints `holo cache:table` as the follow-up table-generation command
 
 ## Cache maintenance commands
 

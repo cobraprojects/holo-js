@@ -83,7 +83,7 @@ The builder supports:
 Unsafe SQL is supported, but it stays visibly separate from the safe query surface:
 
 ```ts
-await DB.executeUnsafe(DB.raw('VACUUM'))
+await DB.unsafeExecute(DB.raw('VACUUM'))
 ```
 
 Use raw SQL deliberately and sparingly. Most application queries should remain on the safe fluent path.

@@ -32,6 +32,7 @@ non-interactive environments, it installs every supported target unless `--agent
 
 Supported targets:
 
+- `all` installs skills for all available agents at once
 - `codex`
 - `claude`
 - `cursor`

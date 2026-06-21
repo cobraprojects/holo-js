@@ -23,7 +23,7 @@ such as `people -> Person` and `children -> Child`.
 ### Save or create the related model
 
 ```ts
-await user.profile().createRelated({
+await user.profile().create({
   locale: 'en',
   timezone: 'UTC',
 })
@@ -32,7 +32,9 @@ await user.profile().createRelated({
 ### Query through the relation
 
 ```ts
-const profile = await user.profile().first()
+await user.load('profile')
+
+const profile = user.getRelation('profile')
 ```
 
 ## `belongsTo`
@@ -53,7 +55,10 @@ const Profile = defineModel('profiles', {
 
 ```ts
 const profile = await Profile.findOrFail(1)
-const user = await profile.user
+
+await profile.load('user')
+
+const user = profile.getRelation('user')
 ```
 
 ### Eager load the inverse
@@ -89,7 +94,7 @@ const user = await User.create({
   email: 'amina@example.com',
 })
 
-await user.profile().createRelated({
+await user.profile().create({
   locale: 'en',
   timezone: 'UTC',
 })

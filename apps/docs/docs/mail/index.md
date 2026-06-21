@@ -53,7 +53,11 @@ await sendMail(welcomeMail({
 
 ## Continue
 
-- [Setup And CLI](/mail/setup-and-cli)
-- [Defining Mail](/mail/defining-mail)
-- [Sending And Preview](/mail/sending-and-preview)
-- [Attachments And Drivers](/mail/attachments-and-drivers)
+- [Creating Mails](/mail/creating-mails)
+- [Sending Mails](/mail/sending-mails)
+- [Previewing Mails](/mail/previewing-mails)
+- [Markdown Mails](/mail/markdown-mails)
+- [Notifications](/mail/notifications)
+- [Attachments](/mail/attachments)
+- [Queueing Mail](/mail/queueing-mail)
+- [Testing Mails](/mail/testing)

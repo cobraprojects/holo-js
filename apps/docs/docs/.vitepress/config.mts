@@ -226,7 +226,7 @@ const frameworkSidebar = [
     items: [
       { text: 'Application Development', link: '/development/' },
       { text: 'Application Workflow', link: '/development/workflow' },
-      { text: 'Contributing to Holo', link: '/development/contributing' },
+      { text: 'Contributing to Holo-JS', link: '/development/contributing' },
     ],
   },
   {

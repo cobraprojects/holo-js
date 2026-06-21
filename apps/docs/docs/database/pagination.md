@@ -37,7 +37,7 @@ This is a good fit for admin tables or internal tools where exact totals are not
 ```ts
 const page = await DB.table('users')
   .orderBy('id')
-  .cursorPaginate(25, { cursorName: 'usersCursor' })
+  .cursorPaginate(25, null, { cursorName: 'usersCursor' })
 ```
 
 Cursor pagination is usually the right choice for large datasets, infinite lists, and feeds. It avoids the
@@ -58,11 +58,11 @@ Avoid non-deterministic ordering for cursor-based flows.
 Paginator names can be changed when one screen contains multiple paginated resources.
 
 ```ts
-const users = await User.paginate(15, { pageName: 'usersPage' })
+const users = await User.paginate(15, 1, { pageName: 'usersPage' })
 
 const events = await DB.table('events')
   .orderBy('id')
-  .cursorPaginate(20, { cursorName: 'eventsCursor' })
+  .cursorPaginate(20, null, { cursorName: 'eventsCursor' })
 ```
 
 ## Model pagination
@@ -71,7 +71,7 @@ const events = await DB.table('events')
 const page = await User
   .where('active', true)
   .latest('created_at')
-  .paginate(15, { pageName: 'usersPage' })
+  .paginate(15, 1, { pageName: 'usersPage' })
 ```
 
 Model pagination keeps the result model-aware, so the page items still participate in relation loading,

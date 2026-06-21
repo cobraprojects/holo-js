@@ -343,25 +343,25 @@ If you prefer running `holo` directly from your terminal:
 
 ```bash [npm]
 npm install -g @holo-js/cli
-holo --version
+holo list
 holo make:model User
 ```
 
 ```bash [pnpm]
 pnpm add -g @holo-js/cli
-holo --version
+holo list
 holo make:model User
 ```
 
 ```bash [Yarn]
 yarn global add @holo-js/cli
-holo --version
+holo list
 holo make:model User
 ```
 
 ```bash [Bun]
 bun add -g @holo-js/cli
-holo --version
+holo list
 holo make:model User
 ```
 

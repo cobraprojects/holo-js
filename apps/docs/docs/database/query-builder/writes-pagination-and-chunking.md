@@ -77,7 +77,7 @@ await DB.table('posts')
 ```ts
 const page = await DB.table('users')
   .orderBy('id')
-  .paginate(25, { pageName: 'usersPage' })
+  .paginate(25, 1, { pageName: 'usersPage' })
 ```
 
 Supported paginator families:

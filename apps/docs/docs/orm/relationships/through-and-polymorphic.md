@@ -16,14 +16,8 @@ Examples:
 ```ts
 const Mechanic = defineModel('mechanics', {
   relations: {
-    carOwner: hasOneThrough(Owner, Car, {
-      firstKey: 'mechanic_id',
-      secondKey: 'car_id',
-    }),
-    serviceRecords: hasManyThrough(ServiceRecord, Car, {
-      firstKey: 'mechanic_id',
-      secondKey: 'car_id',
-    }),
+    carOwner: hasOneThrough(() => Owner, () => Car, 'mechanic_id', 'car_id'),
+    serviceRecords: hasManyThrough(() => ServiceRecord, () => Car, 'mechanic_id', 'car_id'),
   },
 })
 ```

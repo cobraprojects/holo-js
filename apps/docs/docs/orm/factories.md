@@ -30,13 +30,13 @@ The callback should return a valid baseline model state.
 
 ### Factory States
 
-States describe named variations:
+States describe reusable variations:
 
 ```ts
 const UserFactory = defineFactory(User, ({ sequence }) => ({
   name: `User ${sequence}`,
   email: `user${sequence}@example.com`,
-})).state('inactive', () => ({
+})).state(() => ({
   active: false,
 }))
 ```
@@ -48,8 +48,8 @@ Factories can run work after instantiation and after persistence:
 ```ts
 const UserFactory = defineFactory(User, () => ({
   name: 'Operations User',
-})).afterCreate(async user => {
-  await user.profile().createRelated({
+})).afterCreating(async user => {
+  await user.profile().create({
     locale: 'en',
     timezone: 'UTC',
   })
@@ -109,7 +109,7 @@ await UserFactory
 
 ```ts
 await PostFactory
-  .for(UserFactory.state('inactive'), 'author')
+  .for(UserFactory.state({ active: false }), 'author')
   .create()
 ```
 
@@ -117,7 +117,7 @@ await PostFactory
 
 ```ts
 await UserFactory
-  .hasAttached(RoleFactory.count(2), { expiresAt: '2026-12-31T00:00:00.000Z' }, 'roles')
+  .hasAttached(RoleFactory.count(2), 'roles', { expiresAt: '2026-12-31T00:00:00.000Z' })
   .create()
 ```
 

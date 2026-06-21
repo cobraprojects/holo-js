@@ -7,7 +7,7 @@
 Install Clerk auth and enable the Clerk Account Portal in the Clerk Dashboard.
 
 ```bash
-holo install auth --clerk
+npx holo install auth --clerk
 ```
 
 The command wires the hosted-auth route scaffolding. Keep Account Portal enabled in Clerk so those routes can redirect to Clerk's hosted forms.

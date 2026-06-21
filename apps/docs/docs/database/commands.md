@@ -91,11 +91,10 @@ migration.
 ### Create a seeder
 
 ```bash
-npx holo make:seeder RoleSeeder
+npx holo make:seeder RolesSeeder
 ```
 
-This creates a seeder in `server/db/seeders` and refreshes generated discovery artifacts during the next
-`holo dev`, `holo build`, or manual discovery run.
+This creates a seeder in `server/db/seeders` and refreshes generated discovery artifacts.
 
 ### Create an observer
 
@@ -130,7 +129,7 @@ npx holo migrate --step 1
 ```bash
 npx holo migrate:fresh
 npx holo migrate:fresh --seed
-npx holo migrate:fresh --seed --only roles,users
+npx holo migrate:fresh --seed --only roles,admin
 npx holo migrate:fresh --seed --force
 ```
 
@@ -138,9 +137,9 @@ npx holo migrate:fresh --seed --force
 scratch, and refreshes the internal generated schema metadata under `.holo-js/generated` at the end of the migration pass.
 
 Use `--seed` when you want the fresh database to be reseeded immediately after migrations finish.
-The seeding flags match `holo seed`:
+The seeding flags match `npx holo seed`:
 
-- `--only roles,users`
+- `--only roles,admin`
 - `--quietly`
 - `--force`
 
@@ -157,7 +156,7 @@ npx holo migrate:rollback --step 1
 ```bash
 npx holo seed
 npx holo seed --only database
-npx holo seed --only roles,users
+npx holo seed --only roles,admin
 npx holo seed --quietly
 npx holo seed --force
 ```

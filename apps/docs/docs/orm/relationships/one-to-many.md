@@ -36,7 +36,7 @@ const users = await User.whereHas('posts', query => {
 ### Save many related models
 
 ```ts
-await user.posts().createManyRelated([
+await user.posts().createMany([
   { title: 'First post' },
   { title: 'Second post' },
 ])
@@ -45,9 +45,9 @@ await user.posts().createManyRelated([
 ### Relation queries
 
 ```ts
-const posts = await user.posts()
-  .latest('created_at')
-  .get()
+await user.load('posts')
+
+const posts = user.getRelation('posts')
 ```
 
 ### Count and aggregate children
@@ -74,7 +74,10 @@ const Post = defineModel('posts', {
 
 ```ts
 const post = await Post.findOrFail(1)
-const author = await post.author
+
+await post.load('author')
+
+const author = post.getRelation('author')
 ```
 
 ### Constrain by the parent
