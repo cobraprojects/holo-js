@@ -24,13 +24,13 @@ machine-owned.
 Use `holo prepare` whenever you need to regenerate discovery output directly.
 
 ```bash
-holo prepare
+npx holo prepare
 ```
 
 In normal day-to-day work:
 
-- `holo dev` runs discovery first and watches Holo-JS-owned files
-- `holo build` runs discovery first and then starts the framework build
+- `npm run dev` runs `holo dev`, which runs discovery first and watches Holo-JS-owned files
+- `npm run build` runs `holo build`, which runs discovery first and then starts the framework build
 
 ## Prepare the database deliberately
 
@@ -57,8 +57,8 @@ Factories and seeders are the right place to keep that setup repeatable.
 Development and test usually use live config loading. Production can use cached config if you choose.
 
 ```bash
-holo config:cache
-holo config:clear
+npx holo config:cache
+npx holo config:clear
 ```
 
 If the cache is present, Holo-JS uses it. If not, Holo-JS falls back to `config/*.ts` plus layered env

@@ -103,7 +103,12 @@ message variables the notification needs on that object.
 
 ## Continue
 
-- [Setup And CLI](/notifications/setup-and-cli)
-- [Defining Notifications](/notifications/defining-notifications)
+- [Creating Notifications](/notifications/creating-notifications)
 - [Sending Notifications](/notifications/sending-notifications)
+- [On-Demand Notifications](/notifications/on-demand-notifications)
+- [Notification Channels](/notifications/notification-channels)
 - [Custom Channels](/notifications/custom-channels)
+- [Notification Events](/notifications/notification-events)
+- [Notification Storage](/notifications/notification-storage)
+- [Queueing Notifications](/notifications/queueing-notifications)
+- [Testing Notifications](/notifications/testing)

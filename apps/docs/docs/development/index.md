@@ -25,20 +25,21 @@ For most Holo-JS apps, the healthy loop is:
 ## Core commands
 
 ```bash
-holo dev
-holo build
-holo start
-holo prepare
-holo config:cache
-holo config:clear
+npm run dev
+npm run build
+npm run start
+npx holo prepare
+npx holo config:cache
+npx holo config:clear
 npm run typecheck
 npm run lint
 npm run test
 ```
 
-`holo dev` already runs discovery before starting the selected framework. `holo prepare` is the manual
-discovery command when you need generated artifacts refreshed without launching dev or build. `holo start`
-runs the production server with Holo runtime preloads and belongs in deployment or production-like smoke checks.
+The generated package scripts call `holo dev`, `holo build`, and `holo start` for you. `dev` runs discovery
+before starting the selected framework. `holo prepare` is the manual discovery command when you need generated
+artifacts refreshed without launching dev or build. `start` runs the production server with Holo runtime preloads
+and belongs in deployment or production-like smoke checks.
 
 ## What this section covers
 

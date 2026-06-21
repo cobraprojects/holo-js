@@ -23,7 +23,7 @@ Use a transaction when several writes must succeed or fail together.
 
 ```ts
 const user = await DB.transaction(async (tx) => {
-  const [id] = await tx.table('users').insertGetId({
+  const id = await tx.table('users').insertGetId({
     name: 'Ava',
     email: 'ava@example.com',
   })
@@ -105,7 +105,7 @@ boundary.
 ```ts
 await DB.transaction(async () => {
   const user = await User.create({ name: 'Ava', email: 'ava@example.com' })
-  await user.profile().createRelated({ locale: 'en' })
+  await user.profile().create({ locale: 'en' })
 })
 ```
 
@@ -123,7 +123,7 @@ bound for you.
 await DB.transaction(async () => {
   const user = await User.create({ name: 'Ava', email: 'ava@example.com' })
 
-  await user.posts().createManyRelated([
+  await user.posts().createMany([
     { title: 'First post' },
     { title: 'Second post' },
   ])

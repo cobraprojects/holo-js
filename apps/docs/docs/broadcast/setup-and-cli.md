@@ -2,13 +2,7 @@
 
 ## Installation
 
-Install broadcasting support:
-
-```bash
-holo install broadcast
-```
-
-If `holo` is not installed globally, run it through your package manager:
+Install broadcasting support through your package manager:
 
 ::: code-group
 
@@ -46,17 +40,11 @@ User code does not create or import these routes directly.
 ## File Generation
 
 ```bash
-holo make:broadcast orders/shipment-updated
-holo make:channel orders.{orderId}
+npx holo make:broadcast orders/shipment-updated
+npx holo make:channel orders.{orderId}
 ```
 
 ## Running The Worker
-
-```bash
-holo broadcast:work
-```
-
-Or via package manager:
 
 ::: code-group
 

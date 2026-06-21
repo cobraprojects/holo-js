@@ -104,21 +104,48 @@ not want that rule copied into every route.
 
 ### Retrieving Intermediate Table Columns
 
-Pivot updates and pivot attributes are managed through relation helpers such as `attach(...)`,
-`updateExistingPivot(...)`, and `sync(...)`.
+Use `withPivot(...)` on the relation definition when pivot attributes should be hydrated or written:
+
+```ts
+const User = defineModel('users', {
+  relations: {
+    roles: belongsToMany('Role', {
+      pivotTable: 'role_user',
+      foreignPivotKey: 'user_id',
+      relatedPivotKey: 'role_id',
+    }).withPivot('expires_at', 'approved'),
+  },
+})
+```
 
 Use pivot attributes when the association itself carries state, such as expiration, labeling, or approval
 metadata.
 
 ### Filtering Queries via Intermediate Table Columns
 
-Pivot-specific filtering is currently expressed through relation workflows and pivot mutation APIs instead
-of a separate pivot-filter chapter.
+Use `wherePivot(...)` when the relation should only load matching pivot rows:
+
+```ts
+const User = defineModel('users', {
+  relations: {
+    activeRoles: belongsToMany('Role', 'role_user', 'user_id', 'role_id')
+      .wherePivot('approved', true),
+  },
+})
+```
 
 ### Ordering Queries via Intermediate Table Columns
 
-Ordering is currently described through the relation query builder surface rather than a dedicated pivot
-ordering chapter.
+Use `orderByPivot(...)` when pivot metadata controls relation order:
+
+```ts
+const User = defineModel('users', {
+  relations: {
+    roles: belongsToMany('Role', 'role_user', 'user_id', 'role_id')
+      .orderByPivot('granted_at', 'desc'),
+  },
+})
+```
 
 ### Defining Custom Intermediate Table Models
 
@@ -195,7 +222,7 @@ Relations are a first-class persistence surface:
 ```ts
 const user = await User.findOrFail(1)
 
-await user.posts().createRelated({
+await user.posts().create({
   title: 'Shipping Notes',
   slug: 'shipping-notes',
 })
@@ -206,7 +233,7 @@ await user.roles().sync([1, 2, 3])
 The exact write helper depends on the relation family:
 
 - `associate(...)` / `dissociate(...)` for `belongsTo`
-- `saveRelated(...)`, `createRelated(...)`, and `createManyRelated(...)` for one-to-one and one-to-many
+- `save(...)`, `create(...)`, and `createMany(...)` for one-to-one and one-to-many relation methods
 - `attach(...)`, `detach(...)`, `sync(...)`, `toggle(...)`, and `updateExistingPivot(...)` for pivot relations
 
 Use relation-aware writes when the current model instance is already the natural starting point for the

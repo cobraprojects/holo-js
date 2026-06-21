@@ -65,7 +65,7 @@ should become the source of truth.
 
 ```ts
 await user.roles().sync([1, 2, 3])
-await user.roles().syncWithoutDetaching([3, 4])
+await user.syncWithoutDetaching('roles', [3, 4])
 await user.roles().toggle([4, 5])
 ```
 
@@ -88,7 +88,9 @@ await user.roles().updateExistingPivot(roleId, {
 ## Query through the relationship
 
 ```ts
-const roles = await user.roles().orderBy('name').get()
+await user.load('roles')
+
+const roles = user.getRelation('roles')
 ```
 
 ## Practical notes

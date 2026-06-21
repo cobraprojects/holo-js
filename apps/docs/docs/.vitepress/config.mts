@@ -11,6 +11,7 @@ const frameworkSidebar = [
     text: 'Getting Started',
     items: [
       { text: 'Installation', link: '/installation' },
+      { text: 'Agentic Coding', link: '/cli/agents-install' },
       { text: 'Configuration', link: '/configuration' },
       { text: 'Directory Structure', link: '/directory-structure' },
     ],
@@ -225,7 +226,7 @@ const frameworkSidebar = [
     items: [
       { text: 'Application Development', link: '/development/' },
       { text: 'Application Workflow', link: '/development/workflow' },
-      { text: 'Contributing to Holo', link: '/development/contributing' },
+      { text: 'Contributing to Holo-JS', link: '/development/contributing' },
     ],
   },
   {

@@ -2,13 +2,7 @@
 
 ## Running The Worker
 
-For `driver: 'holo'`, run the worker as a long-running process:
-
-```bash
-holo broadcast:work
-```
-
-If `holo` is not installed globally:
+For `driver: 'holo'`, run the worker as a supervised long-running process through your package manager:
 
 ::: code-group
 
@@ -128,10 +122,10 @@ Example process scaling:
 
 ```bash
 # node A
-holo broadcast:work
+npx holo broadcast:work
 
 # node B
-holo broadcast:work
+npx holo broadcast:work
 ```
 
 If each node has a different Redis target, presence and cross-node delivery will break.
