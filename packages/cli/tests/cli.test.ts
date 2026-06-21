@@ -3961,7 +3961,7 @@ export default defineAppConfig({
       loadProject: async () => ({ config: defaultProjectConfig() }),
     } as never)).resolves.toBeUndefined()
     await expect(readFile(join(projectRoot, '.codex/skills/holo-js/SKILL.md'), 'utf8'))
-      .resolves.toContain('Use the docs as the source of truth.')
+      .resolves.toContain('Use the docs as the source of truth, then act.')
 
     const plainRoot = await createTempDirectory()
     tempDirs.push(plainRoot)
