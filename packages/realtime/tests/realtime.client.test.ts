@@ -162,6 +162,61 @@ describe('@holo-js/realtime client runtime', () => {
     ])
   })
 
+  it('does not notify query store listeners for unchanged snapshot data', () => {
+    const observedSnapshots: Array<RealtimeSubscriptionSnapshot<readonly Post[]>> = []
+    const transport = {
+      async query<TResult>(name: string) {
+        return {
+          name,
+          data: [] as TResult,
+          dependencies: [],
+          version: 1,
+        }
+      },
+      async mutate<TResult>(name: string) {
+        return {
+          name,
+          data: {} as TResult,
+          dependencies: [],
+        }
+      },
+      subscribe() {
+        return () => {}
+      },
+    } satisfies RealtimeClientTransport
+    const store = realtimeClientInternals.createRealtimeQueryStore<readonly Post[]>('posts.list', {}, transport)
+
+    store.subscribe(() => {
+      if (store.snapshot) {
+        observedSnapshots.push(store.snapshot)
+      }
+    })
+    store.setSnapshot({
+      name: 'posts.list',
+      data: [{ id: 1, title: 'First' }],
+      dependencies: ['table:posts'],
+      version: 1,
+    })
+    store.setSnapshot({
+      name: 'posts.list',
+      data: [{ title: 'First', id: 1 }],
+      dependencies: ['table:posts', 'table:comments'],
+      version: 2,
+    })
+    store.setSnapshot({
+      name: 'posts.list',
+      data: [{ id: 2, title: 'Second' }],
+      dependencies: ['table:posts'],
+      version: 3,
+    })
+
+    expect(observedSnapshots.map(snapshot => snapshot.data)).toEqual([
+      [{ id: 1, title: 'First' }],
+      [{ id: 2, title: 'Second' }],
+    ])
+    expect(store.snapshot?.version).toBe(3)
+  })
+
   it('keeps query stores connected until the last listener unsubscribes', () => {
     const calls: string[] = []
     const transport = {
@@ -266,6 +321,42 @@ describe('@holo-js/realtime client runtime', () => {
     expect(calls).toEqual(['failed unsubscribe'])
     expect(consoleWarn).toHaveBeenCalledWith('[@holo-js/realtime] query failed')
     expect(consoleWarn).toHaveBeenCalledWith('[@holo-js/realtime] subscribe failed')
+  })
+
+  it('does not escalate unavailable live transport errors to the framework runtime', async () => {
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const handleError = vi.fn()
+    const transport = {
+      async query() {
+        throw new Error(realtimeClientInternals.unavailableTransportMessage)
+      },
+      async mutate<TResult>(name: string) {
+        return {
+          name,
+          data: {} as TResult,
+          dependencies: [],
+        }
+      },
+      subscribe<TResult>(
+        _name: string,
+        _args: Record<string, unknown>,
+        _listener: (snapshot: RealtimeSubscriptionSnapshot<TResult>) => void,
+        onError: (error: unknown) => void,
+      ) {
+        onError(new Error(realtimeClientInternals.unavailableTransportMessage))
+
+        return () => {}
+      },
+    } satisfies RealtimeClientTransport
+    const store = realtimeClientInternals.createRealtimeQueryStore<readonly Post[]>('posts.live', {}, transport)
+
+    configureRealtimeClientRuntime({ handleError })
+    store.subscribe(() => {})
+    store.connect()
+    await Promise.resolve()
+
+    expect(handleError).not.toHaveBeenCalled()
+    expect(consoleWarn).toHaveBeenCalledWith(`[@holo-js/realtime] ${realtimeClientInternals.unavailableTransportMessage}`)
   })
 
   it('does not create hidden route requests when no client transport is configured', async () => {

@@ -259,6 +259,32 @@ export function createTableRowWildcardCacheDependency(
   return `db:${connectionName}:${tableName}:row:*`
 }
 
+export function createTablePredicateCacheDependency(
+  connectionName: string,
+  tableName: string,
+  columnName: string,
+  value: unknown,
+): string | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  return `db:${connectionName}:${tableName}:where:${columnName}:${encodeURIComponent(JSON.stringify(value))}`
+}
+
+function createTableExactPredicateCacheDependency(
+  connectionName: string,
+  tableName: string,
+  columnName: string,
+  value: unknown,
+): string | undefined {
+  if (typeof value === 'undefined') {
+    return undefined
+  }
+
+  return `db:${connectionName}:${tableName}:where-exact:${columnName}:${encodeURIComponent(JSON.stringify(value))}`
+}
+
 export function normalizeQueryCacheDependencies(
   connectionName: string,
   dependencies: readonly string[],
@@ -339,6 +365,63 @@ function findExactPrimaryKeyValue(
   return undefined
 }
 
+function collectExactPredicateDependencies(
+  predicates: readonly QueryPredicateNode[],
+  connectionName: string,
+  tableName: string,
+  exact = false,
+): readonly string[] {
+  const dependencies = new Set<string>()
+  for (const predicate of predicates) {
+    if (predicate.kind === 'comparison' && predicate.operator === '=') {
+      const dependency = exact
+        ? createTableExactPredicateCacheDependency(
+            connectionName,
+            tableName,
+            getColumnName(predicate.column),
+            predicate.value,
+          )
+        : createTablePredicateCacheDependency(
+            connectionName,
+            tableName,
+            getColumnName(predicate.column),
+            predicate.value,
+          )
+      if (dependency) {
+        dependencies.add(dependency)
+      }
+      continue
+    }
+
+    if (predicate.kind === 'group' && !predicate.negated && predicate.boolean !== 'or') {
+      for (const dependency of collectExactPredicateDependencies(predicate.predicates, connectionName, tableName, exact)) {
+        dependencies.add(dependency)
+      }
+    }
+  }
+
+  return Object.freeze([...dependencies])
+}
+
+function collectRecordPredicateDependencies(
+  connectionName: string,
+  tableName: string,
+  record: Readonly<Record<string, unknown>>,
+  exact = false,
+): readonly string[] {
+  const dependencies = new Set<string>()
+  for (const [columnName, value] of Object.entries(record)) {
+    const dependency = exact
+      ? createTableExactPredicateCacheDependency(connectionName, tableName, getColumnName(columnName), value)
+      : createTablePredicateCacheDependency(connectionName, tableName, getColumnName(columnName), value)
+    if (dependency) {
+      dependencies.add(dependency)
+    }
+  }
+
+  return Object.freeze([...dependencies])
+}
+
 export function supportsAutomaticQueryCacheInvalidation(plan: SelectQueryPlan): boolean {
   if (plan.joins.length > 0 || plan.unions.length > 0 || plan.having.length > 0) {
     return false
@@ -380,6 +463,20 @@ export function inferAutomaticQueryCacheDependencies(
     }
   }
 
+  if (!hasDisjunctivePredicate(plan.predicates)) {
+    const predicateDependencies = collectExactPredicateDependencies(
+      plan.predicates,
+      connectionName,
+      plan.source.tableName,
+    )
+    if (predicateDependencies.length > 0) {
+      return Object.freeze([
+        createTableCacheDependency(connectionName, plan.source.tableName),
+        ...predicateDependencies,
+      ])
+    }
+  }
+
   return Object.freeze([
     createTableCacheDependency(connectionName, plan.source.tableName),
   ])
@@ -388,6 +485,7 @@ export function inferAutomaticQueryCacheDependencies(
 export function inferAutomaticQueryCacheInvalidationDependencies(
   plan: SelectQueryPlan,
   connectionName: string,
+  values: Readonly<Record<string, unknown>> = {},
 ): readonly string[] {
   const dependencies = [
     createTableCacheDependency(connectionName, plan.source.tableName),
@@ -406,6 +504,9 @@ export function inferAutomaticQueryCacheInvalidationDependencies(
     primaryKeyValue,
   )
   dependencies.push(primaryKeyDependency ?? createTableRowWildcardCacheDependency(connectionName, plan.source.tableName))
+  dependencies.push(...collectExactPredicateDependencies(plan.predicates, connectionName, plan.source.tableName))
+  dependencies.push(...collectExactPredicateDependencies(plan.predicates, connectionName, plan.source.tableName, true))
+  dependencies.push(...collectRecordPredicateDependencies(connectionName, plan.source.tableName, values))
   return Object.freeze(dependencies)
 }
 
@@ -422,6 +523,12 @@ export function inferAutomaticInsertCacheInvalidationDependencies(
     const dependency = createTableRowCacheDependency(connectionName, tableName, 'id', row.id)
     if (dependency) {
       dependencies.add(dependency)
+    }
+    for (const predicateDependency of collectRecordPredicateDependencies(connectionName, tableName, row)) {
+      dependencies.add(predicateDependency)
+    }
+    for (const predicateDependency of collectRecordPredicateDependencies(connectionName, tableName, row, true)) {
+      dependencies.add(predicateDependency)
     }
   }
   const lastInsertDependency = createTableRowCacheDependency(connectionName, tableName, 'id', lastInsertId)
@@ -477,6 +584,7 @@ export const queryCacheInternals = {
   collectDatabaseQueryDependencies,
   configureDatabaseQueryCacheBridge,
   createDeterministicQueryCacheKey,
+  createTablePredicateCacheDependency,
   createTableCacheDependency,
   createTableRowCacheDependency,
   createTableRowWildcardCacheDependency,

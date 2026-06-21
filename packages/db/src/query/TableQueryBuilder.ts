@@ -1675,11 +1675,12 @@ export class TableQueryBuilder<
   }
 
   async update(values: Readonly<Record<string, unknown>>): Promise<DriverExecutionResult> {
+    const normalizedValues = this.normalizeUpdateValues(values)
     const result = await this.connection.executeCompiled(this.getCompiler().compile(
-      createUpdateQueryPlan(this.source, this.plan.predicates, this.normalizeUpdateValues(values)),
+      createUpdateQueryPlan(this.source, this.plan.predicates, normalizedValues),
     ))
     if (result.affectedRows !== 0) {
-      await this.invalidateMutationQueries()
+      await this.invalidateMutationQueries(normalizedValues)
     }
     return result
   }
@@ -1745,14 +1746,14 @@ export class TableQueryBuilder<
     )
   }
 
-  private async invalidateMutationQueries(): Promise<void> {
+  private async invalidateMutationQueries(values: Readonly<Record<string, unknown>> = {}): Promise<void> {
     if (!getDatabaseQueryCacheBridge() && !hasDatabaseDependencyInvalidationListeners()) {
       return
     }
 
     await invalidateQueryCacheDependencies(
       this.connection,
-      inferAutomaticQueryCacheInvalidationDependencies(this.plan, this.connection.getConnectionName()),
+      inferAutomaticQueryCacheInvalidationDependencies(this.plan, this.connection.getConnectionName(), values),
     )
   }
 

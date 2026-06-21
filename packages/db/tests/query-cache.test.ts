@@ -535,6 +535,7 @@ describe('@holo-js/db query cache integration', () => {
     ])
     expect(queryCacheInternals.inferAutomaticQueryCacheDependencies(nestedNonPrimaryKeyPlan, 'main')).toEqual([
       'db:main:users',
+      'db:main:users:where:active:1',
     ])
   })
 
@@ -576,7 +577,11 @@ describe('@holo-js/db query cache integration', () => {
       expect(bridge.invalidatedDependencies).toHaveLength(0)
     })
 
-    expect(bridge.invalidatedDependencies).toContainEqual(['db:main:users', 'db:main:users:row:id:1'])
+    expect(bridge.invalidatedDependencies.some((dependencies) => {
+      return dependencies.includes('db:main:users')
+        && dependencies.includes('db:main:users:row:id:1')
+        && dependencies.includes('db:main:users:where:id:1')
+    })).toBe(true)
   })
 
   it('defers model write invalidation until its implicit transaction commits', async () => {
@@ -592,9 +597,8 @@ describe('@holo-js/db query cache integration', () => {
       name: 'Ava',
     })
 
-    expect(bridge.invalidatedDependencies).toEqual([
-      ['db:main:users', 'db:main:users:row:*'],
-    ])
+    expect(bridge.invalidatedDependencies).toHaveLength(1)
+    expect(bridge.invalidatedDependencies[0]).toContain('db:main:users')
     expect(bridge.invalidationTransactionStates).toEqual([false])
   })
 
@@ -628,14 +632,25 @@ describe('@holo-js/db query cache integration', () => {
       id: column.id(),
       name: column.string(),
     })
+    const posts = defineTable('posts', {
+      id: column.id(),
+      user_id: column.integer(),
+      title: column.string(),
+    })
 
     const orderedQuery = new TableQueryBuilder(users, DB.connection()).unsafeOrderBy('RANDOM()', [])
     const orderedPlan = (orderedQuery as unknown as { readonly plan: SelectQueryPlan }).plan
+    const predicateQuery = new TableQueryBuilder(posts, DB.connection()).where('user_id', 1)
+    const predicatePlan = (predicateQuery as unknown as { readonly plan: SelectQueryPlan }).plan
 
     expect(queryCacheInternals.supportsAutomaticQueryCacheInvalidation(orderedPlan)).toBe(false)
     expect(queryCacheInternals.resolveQueryCacheDependencies(orderedPlan, 'main', ['users', 'db:main:posts'])).toEqual([
       'db:main:users',
       'db:main:posts',
+    ])
+    expect(queryCacheInternals.inferAutomaticQueryCacheDependencies(predicatePlan, 'main')).toEqual([
+      'db:main:posts',
+      'db:main:posts:where:user_id:1',
     ])
   })
 

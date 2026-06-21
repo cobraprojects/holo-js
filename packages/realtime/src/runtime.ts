@@ -48,6 +48,7 @@ type RuntimeState = {
 type PendingInvalidationBatch = {
   readonly dependencies: Set<string>
   readonly deferred: Deferred<void>
+  readonly events: DatabaseDependencyInvalidationEvent[]
   timer: ReturnType<typeof setTimeout>
 }
 
@@ -73,6 +74,12 @@ type ActiveSubscription<TDefinition extends RealtimeQueryDefinitionMetadata> = {
   resultHash: string
   version: number
   current: RealtimeSubscriptionSnapshot<RealtimeResultFor<TDefinition>>
+}
+
+type ParsedPredicateDependency = {
+  readonly tableKey: string
+  readonly columnName: string
+  readonly encodedValue: string
 }
 
 export class RealtimeError extends Error {
@@ -166,6 +173,85 @@ function createRefreshKey(
 
 function createResultHash(value: unknown): string {
   return stableStringify(value)
+}
+
+function parsePredicateDependency(dependency: string): ParsedPredicateDependency | undefined {
+  const match = dependency.match(/^(db:[^:]+:[^:]+):where:([^:]+):(.+)$/)
+  if (!match) {
+    return undefined
+  }
+
+  const [, tableKey, columnName, encodedValue] = match
+  return {
+    tableKey: tableKey!,
+    columnName: columnName!,
+    encodedValue: encodedValue!,
+  }
+}
+
+function parseExactPredicateDependency(dependency: string): ParsedPredicateDependency | undefined {
+  const match = dependency.match(/^(db:[^:]+:[^:]+):where-exact:([^:]+):(.+)$/)
+  if (!match) {
+    return undefined
+  }
+
+  const [, tableKey, columnName, encodedValue] = match
+  return {
+    tableKey: tableKey!,
+    columnName: columnName!,
+    encodedValue: encodedValue!,
+  }
+}
+
+function collectPredicateDependencies(
+  dependencies: readonly string[],
+  parseDependency: (dependency: string) => ParsedPredicateDependency | undefined = parsePredicateDependency,
+): Map<string, Map<string, Set<string>>> {
+  const predicates = new Map<string, Map<string, Set<string>>>()
+  for (const dependency of dependencies) {
+    const parsed = parseDependency(dependency)
+    if (!parsed) {
+      continue
+    }
+
+    const tablePredicates = predicates.get(parsed.tableKey) ?? new Map<string, Set<string>>()
+    const values = tablePredicates.get(parsed.columnName) ?? new Set<string>()
+    values.add(parsed.encodedValue)
+    tablePredicates.set(parsed.columnName, values)
+    predicates.set(parsed.tableKey, tablePredicates)
+  }
+
+  return predicates
+}
+
+function isSubscriptionContradictedByInvalidation(
+  subscription: ActiveSubscription<RealtimeQueryDefinitionMetadata>,
+  event: DatabaseDependencyInvalidationEvent,
+): boolean {
+  const invalidatedPredicates = collectPredicateDependencies(event.dependencies)
+  const exactInvalidatedPredicates = collectPredicateDependencies(event.dependencies, parseExactPredicateDependency)
+  if (invalidatedPredicates.size === 0 || exactInvalidatedPredicates.size === 0) {
+    return false
+  }
+
+  for (const dependency of subscription.dependencies) {
+    const parsed = parsePredicateDependency(dependency)
+    if (!parsed) {
+      continue
+    }
+
+    const invalidatedValues = invalidatedPredicates.get(parsed.tableKey)?.get(parsed.columnName)
+    if (invalidatedValues?.has(parsed.encodedValue)) {
+      continue
+    }
+
+    const exactInvalidatedValues = exactInvalidatedPredicates.get(parsed.tableKey)?.get(parsed.columnName)
+    if (exactInvalidatedValues && !exactInvalidatedValues.has(parsed.encodedValue)) {
+      return true
+    }
+  }
+
+  return false
 }
 
 function createRealtimeDatabaseContext(connection: DatabaseContext): RealtimeDatabaseContext {
@@ -579,8 +665,12 @@ function scheduleSubscriptionRefresh(subscription: ActiveSubscription<RealtimeQu
   return refresh.running
 }
 
-async function handleDatabaseInvalidation(event: DatabaseDependencyInvalidationEvent): Promise<void> {
+async function handleDatabaseInvalidation(
+  event: DatabaseDependencyInvalidationEvent,
+  events: readonly DatabaseDependencyInvalidationEvent[] = [event],
+): Promise<void> {
   const subscriptions = getSubscriptionsForDependencies(event.dependencies)
+    .filter(subscription => events.some(candidate => !isSubscriptionContradictedByInvalidation(subscription, candidate)))
   const refreshKeys = new Set(subscriptions.map(subscription => subscription.refreshKey))
   await Promise.all([...refreshKeys].map(async (refreshKey) => {
     const subscription = subscriptions.find(candidate => candidate.refreshKey === refreshKey)
@@ -600,7 +690,7 @@ async function flushInvalidationBatch(batch: PendingInvalidationBatch): Promise<
     await handleDatabaseInvalidation({
       connectionName: '',
       dependencies: [...batch.dependencies],
-    })
+    }, batch.events)
     batch.deferred.resolve(undefined)
   } catch (error) {
     batch.deferred.reject(error)
@@ -614,6 +704,7 @@ async function handleBatchedDatabaseInvalidation(event: DatabaseDependencyInvali
     for (const dependency of event.dependencies) {
       batch.dependencies.add(dependency)
     }
+    batch.events.push(event)
 
     return await batch.deferred.promise
   }
@@ -622,6 +713,7 @@ async function handleBatchedDatabaseInvalidation(event: DatabaseDependencyInvali
   const nextBatch: PendingInvalidationBatch = {
     dependencies: new Set(event.dependencies),
     deferred,
+    events: [event],
     timer: setTimeout(() => {
       void flushInvalidationBatch(nextBatch)
     }, 10),

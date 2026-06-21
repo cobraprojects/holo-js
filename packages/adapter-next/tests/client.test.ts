@@ -317,6 +317,83 @@ describe('@holo-js/adapter-next client', () => {
     resetRealtimeClientRuntime()
   })
 
+  it('does not reconnect realtime queries on unrelated client rerenders', async () => {
+    type Post = { readonly id: number, readonly title: string }
+    const queryCalls: string[] = []
+    const subscribeCalls: string[] = []
+
+    vi.doMock('react', () => createReactMock({
+      useEffect(effect: () => void | (() => void)) {
+        return effect()
+      },
+      useRef<TValue>(initialValue?: TValue) {
+        return { current: initialValue }
+      },
+      useState<TValue>(initialState: TValue | (() => TValue)) {
+        const value = typeof initialState === 'function'
+          ? (initialState as () => TValue)()
+          : initialState
+
+        return [value, () => {}] as const
+      },
+      useSyncExternalStore<TSnapshot>(
+        subscribe: (listener: () => void) => () => void,
+        getSnapshot: () => TSnapshot,
+      ) {
+        subscribe(() => {})
+        return getSnapshot()
+      },
+    }))
+
+    const {
+      configureRealtimeClientTransport,
+      resetRealtimeClientRuntime,
+    } = await import('@holo-js/realtime/client')
+    const { query } = await import('@holo-js/realtime')
+    await import('../src/realtime')
+
+    const listPosts = query({
+      name: 'posts.rerender',
+      access: 'public',
+      handler: async () => [{ id: 1, title: 'First' }],
+    })
+
+    configureRealtimeClientTransport({
+      async query<TResult>(name: string) {
+        queryCalls.push(name)
+
+        return {
+          name,
+          data: [{ id: 1, title: 'First' }] as TResult,
+          dependencies: [],
+          version: queryCalls.length,
+        }
+      },
+      async mutate<TResult>(name: string) {
+        return {
+          name,
+          data: {} as TResult,
+          dependencies: [],
+        }
+      },
+      subscribe(name: string) {
+        subscribeCalls.push(name)
+
+        return () => {}
+      },
+    })
+
+    expect(listPosts()).toBeUndefined()
+    expect(listPosts()).toBeUndefined()
+    expect(listPosts()).toBeUndefined()
+    await Promise.resolve()
+    expect(listPosts()).toEqual([{ id: 1, title: 'First' }])
+
+    expect(queryCalls).toEqual(['posts.rerender'])
+    expect(subscribeCalls).toEqual(['posts.rerender'])
+    resetRealtimeClientRuntime()
+  })
+
   it('returns undefined before the first realtime query snapshot arrives', async () => {
     vi.doMock('react', () => createReactMock({
       useEffect(effect: () => void | (() => void)) {

@@ -104,17 +104,18 @@ function filterMemoryRows(sql: string, bindings: readonly unknown[], rows: reado
   }
 
   const clauses = whereMatch[1]!.split(' AND ')
-  return rows.filter(row => clauses.every((clause) => {
+  return rows.filter(row => clauses.every((clause, clauseIndex) => {
     const inMatch = clause.match(/^(?:"[^"]+"\.)?"([^"]+)" IN \((.+)\)$/)
     if (inMatch) {
       const [, column, rawPlaceholders] = inMatch
       return readPlaceholderIndexes(rawPlaceholders!).map(index => bindings[index]).includes(row[column!])
     }
 
-    const equalMatch = clause.match(/^(?:"[^"]+"\.)?"([^"]+)" = \?(\d+)$/)
+    const equalMatch = clause.match(/^(?:"[^"]+"\.)?"([^"]+)" = \?(\d*)$/)
     if (equalMatch) {
       const [, column, index] = equalMatch
-      return row[column!] === bindings[Number(index) - 1]
+      const bindingIndex = index ? Number(index) - 1 : clauseIndex
+      return row[column!] === bindings[bindingIndex]
     }
 
     return true
@@ -182,6 +183,33 @@ class RelationalMemoryAdapter implements DriverAdapter {
     bindings: readonly unknown[] = [],
   ): Promise<DriverExecutionResult> {
     this.executions.push({ sql, bindings })
+    const updateMatch = sql.match(/^UPDATE "([^"]+)" SET (.+?) WHERE (.+)$/)
+    if (updateMatch) {
+      const [, tableName, rawAssignments, rawWhere] = updateMatch
+      const table = this.tables[tableName!] ?? []
+      const assignments = rawAssignments!.split(', ').map((assignment, index) => {
+        const [, column, rawPlaceholder] = assignment.match(/^"([^"]+)" = \?(\d*)$/) ?? []
+        const bindingIndex = rawPlaceholder ? Number(rawPlaceholder) - 1 : index
+        return { column: column!, value: bindings[bindingIndex] }
+      })
+      const whereMatch = rawWhere!.match(/^"([^"]+)" = \?(\d*)$/)
+      const whereColumn = whereMatch?.[1] ?? ''
+      const whereBindingIndex = whereMatch?.[2] ? Number(whereMatch[2]) - 1 : assignments.length
+      let affectedRows = 0
+      for (const row of table) {
+        if (row[whereColumn] !== bindings[whereBindingIndex]) {
+          continue
+        }
+
+        for (const assignment of assignments) {
+          row[assignment.column] = assignment.value
+        }
+        affectedRows += 1
+      }
+
+      return { affectedRows }
+    }
+
     const insertMatch = sql.match(/^INSERT INTO "([^"]+)" \((.+)\) VALUES (.+)$/)
     if (!insertMatch) {
       return { affectedRows: 0 }
@@ -692,6 +720,208 @@ describe('@holo-js/realtime', () => {
     })
 
     expect(queryRuns).toBe(2)
+  })
+
+  it('skips predicate subscriptions when invalidation predicates prove a different value', async () => {
+    const db = createContext(new RelationalMemoryAdapter({
+      posts: [
+        { id: 1, author_id: 1, title: 'First' },
+        { id: 2, author_id: 2, title: 'Second' },
+      ],
+    }))
+    configureRealtimeRuntime({
+      db: () => db,
+      loadAuthModule: async () => null,
+    })
+    let queryRuns = 0
+    const snapshots: number[][] = []
+    const query = defineRealtimeQuery({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        queryRuns += 1
+        return await context
+          .table('posts')
+          .where('author_id', 1)
+          .orderBy('id')
+          .get()
+      },
+    })
+    const createForOtherAuthor = defineRealtimeMutation({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        await context.table('posts').insert({ author_id: 2, title: 'Other' })
+        return true
+      },
+    })
+    const createForSubscribedAuthor = defineRealtimeMutation({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        await context.table('posts').insert({ author_id: 1, title: 'Mine' })
+        return true
+      },
+    })
+
+    await subscribeRealtimeQuery(query, {}, {
+      onData: snapshot => {
+        snapshots.push(snapshot.data.map(row => Number(row.id)))
+      },
+    })
+    await executeRealtimeMutation(createForOtherAuthor)
+    await executeRealtimeMutation(createForSubscribedAuthor)
+
+    expect(queryRuns).toBe(2)
+    expect(snapshots).toEqual([
+      [1],
+      [1, 4],
+    ])
+  })
+
+  it('keeps predicate subscriptions fresh when a batched write also has a different exact value', async () => {
+    const db = createContext(new RelationalMemoryAdapter({
+      posts: [
+        { id: 1, author_id: 1, title: 'First' },
+        { id: 2, author_id: 2, title: 'Second' },
+      ],
+    }))
+    configureRealtimeRuntime({
+      db: () => db,
+      loadAuthModule: async () => null,
+    })
+    let queryRuns = 0
+    const snapshots: string[][] = []
+    const query = defineRealtimeQuery({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        queryRuns += 1
+        return await context
+          .table('posts')
+          .where('author_id', 1)
+          .orderBy('id')
+          .get()
+      },
+    })
+    const createForOtherAuthor = defineRealtimeMutation({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        await context.table('posts').insert({ author_id: 2, title: 'Other' })
+        return true
+      },
+    })
+    const updateSubscribedAuthor = defineRealtimeMutation({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        await context.table('posts').where('id', 1).update({ title: 'Updated' })
+        return true
+      },
+    })
+
+    await subscribeRealtimeQuery(query, {}, {
+      onData: snapshot => {
+        snapshots.push(snapshot.data.map(row => String(row.title)))
+      },
+    })
+    await Promise.all([
+      executeRealtimeMutation(createForOtherAuthor),
+      executeRealtimeMutation(updateSubscribedAuthor),
+    ])
+
+    expect(queryRuns).toBe(2)
+    expect(snapshots).toEqual([
+      ['First'],
+      ['Updated'],
+    ])
+  })
+
+  it('refreshes predicate subscriptions when an update moves a row out of the result set', async () => {
+    const db = createContext(new RelationalMemoryAdapter({
+      posts: [
+        { id: 1, author_id: 1, title: 'First' },
+        { id: 2, author_id: 2, title: 'Second' },
+      ],
+    }))
+    configureRealtimeRuntime({
+      db: () => db,
+      loadAuthModule: async () => null,
+    })
+    let queryRuns = 0
+    const snapshots: number[][] = []
+    const query = defineRealtimeQuery({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        queryRuns += 1
+        return await context
+          .table('posts')
+          .where('author_id', 1)
+          .orderBy('id')
+          .get()
+      },
+    })
+    const moveSubscribedRow = defineRealtimeMutation({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        await context.table('posts').where('id', 1).update({ author_id: 2 })
+        return true
+      },
+    })
+
+    await subscribeRealtimeQuery(query, {}, {
+      onData: snapshot => {
+        snapshots.push(snapshot.data.map(row => Number(row.id)))
+      },
+    })
+    await executeRealtimeMutation(moveSubscribedRow)
+
+    expect(queryRuns).toBe(2)
+    expect(snapshots).toEqual([
+      [1],
+      [],
+    ])
+  })
+
+  it('refreshes predicate subscriptions when an update moves a row into the result set', async () => {
+    const db = createContext(new RelationalMemoryAdapter({
+      posts: [
+        { id: 1, author_id: 1, title: 'First' },
+        { id: 2, author_id: 2, title: 'Second' },
+      ],
+    }))
+    configureRealtimeRuntime({
+      db: () => db,
+      loadAuthModule: async () => null,
+    })
+    let queryRuns = 0
+    const snapshots: number[][] = []
+    const query = defineRealtimeQuery({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        queryRuns += 1
+        return await context
+          .table('posts')
+          .where('author_id', 1)
+          .orderBy('id')
+          .get()
+      },
+    })
+    const moveOtherRow = defineRealtimeMutation({
+      access: 'public',
+      handler: async ({ db: context }) => {
+        await context.table('posts').where('author_id', 2).update({ author_id: 1 })
+        return true
+      },
+    })
+
+    await subscribeRealtimeQuery(query, {}, {
+      onData: snapshot => {
+        snapshots.push(snapshot.data.map(row => Number(row.id)))
+      },
+    })
+    await executeRealtimeMutation(moveOtherRow)
+
+    expect(queryRuns).toBe(2)
+    expect(snapshots).toEqual([
+      [1],
+      [1, 2],
+    ])
   })
 
   it('batches committed write bursts into one visible refresh with the final data', async () => {

@@ -152,6 +152,28 @@ function handleRealtimeError(error: unknown): void {
   getRealtimeClientState().framework?.handleError?.(error)
 }
 
+function isRealtimeTransportAvailabilityError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  return error.message === missingTransportMessage
+    || error.message === unavailableTransportMessage
+    || error.message === 'Realtime live updates require fetch support in this runtime.'
+    || error.message === 'Realtime live updates require WebSocket support in this runtime.'
+    || error.message === 'Realtime broadcast config response is invalid.'
+    || error.message.startsWith('Realtime broadcast config failed with HTTP ')
+}
+
+function handleRealtimeConnectionError(error: unknown): void {
+  if (isRealtimeTransportAvailabilityError(error)) {
+    warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
+    return
+  }
+
+  handleRealtimeError(error)
+}
+
 function stableStringify(value: unknown): string {
   if (!value || typeof value !== 'object') {
     return JSON.stringify(value)
@@ -545,6 +567,7 @@ function createRealtimeQueryStore<TResult>(
 ): MutableRealtimeQueryStore<TResult> {
   const listeners = new Set<() => void>()
   let snapshot: RealtimeSubscriptionSnapshot<TResult> | undefined
+  let snapshotDataHash: string | undefined
   let connected = false
   let unsubscribe = () => {}
   let startupId = 0
@@ -556,7 +579,13 @@ function createRealtimeQueryStore<TResult>(
   }
 
   const setSnapshot = (nextSnapshot: RealtimeSubscriptionSnapshot<TResult>) => {
+    const nextDataHash = stableStringify(nextSnapshot.data)
     snapshot = nextSnapshot
+    if (nextDataHash === snapshotDataHash) {
+      return
+    }
+
+    snapshotDataHash = nextDataHash
     notify()
   }
 
@@ -578,7 +607,7 @@ function createRealtimeQueryStore<TResult>(
           setSnapshot(nextSnapshot)
         }
       }, (error) => {
-        handleRealtimeError(error)
+        handleRealtimeConnectionError(error)
       })
       try {
         unsubscribe = transport.subscribe<TResult>(name, args, (nextSnapshot) => {
@@ -590,13 +619,13 @@ function createRealtimeQueryStore<TResult>(
           setSnapshot(nextSnapshot)
         }, (error) => {
           connected = false
-          handleRealtimeError(error)
+          handleRealtimeConnectionError(error)
         })
         connected = true
       } catch (error) {
         connected = false
         unsubscribe = () => {}
-        handleRealtimeError(error)
+        handleRealtimeConnectionError(error)
       }
     },
     setSnapshot,
@@ -701,6 +730,9 @@ export const realtimeClientInternals = {
   createRealtimeQueryStore,
   getRealtimeClientState,
   handleRealtimeError,
+  handleRealtimeConnectionError,
+  isRealtimeTransportAvailabilityError,
   missingTransportMessage,
   stableStringify,
+  unavailableTransportMessage,
 }

@@ -33,7 +33,7 @@ description: Help users build applications with the Holo-JS framework by researc
 
 # Holo-JS
 
-Use the docs as the source of truth. Do not answer from memory when exact commands, imports, API names, config shape, route shape, or framework integration details matter.
+Use the docs as the source of truth, then act. Do not answer from memory when exact commands, imports, API names, config shape, route shape, or framework integration details matter.
 
 Primary documentation URL: https://docs.holo-js.com/
 
@@ -41,10 +41,17 @@ Primary documentation URL: https://docs.holo-js.com/
 
 1. Clarify the user's task category in your own reasoning: setup, config, database, ORM, auth, authorization, validation/forms, storage/media, queue/events, broadcast/realtime, mail/notifications, testing, deployment, or framework integration.
 2. Search the live docs before giving implementation details.
-3. Open the most relevant docs pages and read the sections that match the task.
-4. Cross-check at least one adjacent or overview page when the task touches package setup, framework integration, auth/session/security, background workers, or deployment.
-5. Base commands and code on the docs you just read.
-6. Mention when docs do not cover the requested detail and ask for a docs link, local project context, or permission to inspect the package source.
+3. Open the most relevant docs page and read only the sections that match the task.
+4. Open at most one adjacent or overview page when the task touches package setup, framework integration, auth/session/security, background workers, or deployment.
+5. Stop researching as soon as the docs provide enough information to implement the requested task.
+6. Implement the task immediately using the docs you just read.
+7. Mention when docs do not cover the requested detail and ask for a docs link or local project context.
+
+Do not read package implementation files after docs lookup unless one of these is true:
+
+- the docs are missing the API detail required to compile the code
+- the implementation already failed and you need source to debug the failure
+- the user explicitly asks you to inspect package internals
 
 ## How To Search
 
@@ -95,7 +102,7 @@ These names are navigation hints, not an API reference. Confirm exact paths and 
 - Do not assume optional packages are installed. Check install/setup docs for the feature.
 - Do not expose secrets in client code or examples.
 - Do not hand-edit generated Holo-JS output unless docs explicitly instruct it.
-- If docs and installed package behavior disagree, tell the user what you found and treat the discrepancy as something to verify before coding.
+- If docs and installed package behavior disagree, tell the user what you found and verify the smallest relevant package surface before continuing.
 
 ## Coding Against An Existing App
 
