@@ -253,6 +253,68 @@ only source of truth.
 Do not put `throttle` on `useForm(...)`. Throttling is enforced on the server through
 `validate(request, schema, { throttle: 'name' })` or `protect(request, { throttle: 'name' })`.
 
+## Without form validation
+
+CSRF and rate limiting do not require `validate(...)`. Use the security package directly when a route
+does not parse a Holo form schema, or when request parsing is handled by another layer.
+
+Keep global framework middleware enabled for normal CSRF verification. It runs before route handlers and
+does not depend on form validation.
+
+Use `protect(...)` with no options when a route only needs CSRF verification. This follows
+`config/security.ts`, so safe methods and `security.csrf.except` paths are skipped:
+
+```ts
+import { protect } from '@holo-js/security'
+
+export async function POST(request: Request) {
+  await protect(request)
+
+  return Response.json({ ok: true })
+}
+```
+
+Use `protect(...)` with `throttle` when a route needs both CSRF verification and rate limiting without
+calling `validate(...)`:
+
+```ts
+import { protect } from '@holo-js/security'
+
+export async function POST(request: Request) {
+  await protect(request, {
+    throttle: 'api',
+  })
+
+  return Response.json({ ok: true })
+}
+```
+
+Use `protect(...)` with `csrf: false` when a route only needs rate limiting:
+
+```ts
+import { protect } from '@holo-js/security'
+
+export async function POST(request: Request) {
+  await protect(request, {
+    csrf: false,
+    throttle: 'api',
+  })
+
+  return Response.json({ ok: true })
+}
+```
+
+Use `rateLimit(...)` directly when the code is not route middleware:
+
+```ts
+import { rateLimit } from '@holo-js/security'
+
+await rateLimit('api', { request })
+await rateLimit('send-invite', {
+  key: `team:${teamId}:user:${userId}`,
+})
+```
+
 ## CSRF helpers
 
 Use CSRF helpers when rendering native server forms or building custom request handling. The framework
