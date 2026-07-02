@@ -337,6 +337,28 @@ export function createCommandContext(
   }
 }
 
+function serializePassthroughInput(input: Pick<CommandExecutionContext, 'args' | 'flags'>): string[] {
+  const tokens = [...input.args]
+
+  for (const [name, value] of Object.entries(input.flags)) {
+    if (value === false) {
+      continue
+    }
+
+    const flag = name.length === 1 ? `-${name}` : `--${name}`
+    const values = Array.isArray(value) ? value : [value]
+
+    for (const currentValue of values) {
+      tokens.push(flag)
+      if (currentValue !== true) {
+        tokens.push(String(currentValue))
+      }
+    }
+  }
+
+  return tokens
+}
+
 export function printCommandList(io: IoStreams, registry: readonly CommandDefinition[]): void {
   const internal = registry.filter(command => command.source === 'internal')
   const app = registry.filter(command => command.source === 'app')
@@ -1068,13 +1090,19 @@ export function createInternalCommands(
     {
       name: 'start',
       description: 'Run the production framework server with Holo runtime preloads.',
-      usage: 'holo start',
+      usage: 'holo start [...frameworkArgs]',
       source: 'internal',
-      async prepare() {
-        return { args: [], flags: {} }
+      async prepare(input) {
+        return { args: input.args, flags: input.flags }
       },
-      async run() {
+      async run(input) {
         const runProjectStartServer = await resolveProjectExecutor(projectExecutors, 'runProjectStartServer')
+        const passthroughArgs = serializePassthroughInput(input)
+        if (passthroughArgs.length > 0) {
+          await runProjectStartServer(context, context.projectRoot, undefined, passthroughArgs)
+          return
+        }
+
         await runProjectStartServer(context, context.projectRoot)
       },
     },
