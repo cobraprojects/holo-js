@@ -148,9 +148,10 @@ export class SQLQueryCompiler {
       return `${this.quoteIdentifier(column)} = ${this.compileUpdateValue(column, plan.values[column]!, bindings)}`
     }).join(', ')
     const whereClause = this.compilePredicates(plan.predicates, bindings)
+    const returningClause = this.compileReturningClause(plan.returning === true)
 
     return this.withMetadata({
-      sql: `UPDATE ${this.quoteIdentifier(plan.source.tableName)} SET ${assignments}${whereClause}`,
+      sql: `UPDATE ${this.quoteIdentifier(plan.source.tableName)} SET ${assignments}${whereClause}${returningClause}`,
       bindings,
       source: `query:update:${plan.source.tableName}`,
     }, this.createWriteMetadata('update', plan.source.tableName, this.calculatePlanComplexity(plan)))
@@ -159,9 +160,10 @@ export class SQLQueryCompiler {
   protected compileDelete(plan: DeleteQueryPlan): CompiledStatement {
     const bindings: unknown[] = []
     const whereClause = this.compilePredicates(plan.predicates, bindings)
+    const returningClause = this.compileReturningClause(plan.returning === true)
 
     return this.withMetadata({
-      sql: `DELETE FROM ${this.quoteIdentifier(plan.source.tableName)}${whereClause}`,
+      sql: `DELETE FROM ${this.quoteIdentifier(plan.source.tableName)}${whereClause}${returningClause}`,
       bindings,
       source: `query:delete:${plan.source.tableName}`,
     }, this.createWriteMetadata('delete', plan.source.tableName, this.calculatePlanComplexity(plan)))
@@ -541,19 +543,24 @@ export class SQLQueryCompiler {
   }
 
   protected compileInsertSuffix(_plan: InsertQueryPlan): string {
-    return ''
+    return _plan.returning === true ? ' RETURNING *' : ''
   }
 
   protected compileUpsertSuffix(plan: UpsertQueryPlan, _insertColumns: readonly string[]): string {
     const conflictColumns = plan.uniqueBy.map(column => this.quoteIdentifier(column)).join(', ')
+    const returning = plan.returning === true ? ' RETURNING *' : ''
     if (plan.updateColumns.length === 0) {
-      return ` ON CONFLICT (${conflictColumns}) DO NOTHING`
+      return ` ON CONFLICT (${conflictColumns}) DO NOTHING${returning}`
     }
 
     const updates = plan.updateColumns
       .map(column => `${this.quoteIdentifier(column)} = EXCLUDED.${this.quoteIdentifier(column)}`)
       .join(', ')
-    return ` ON CONFLICT (${conflictColumns}) DO UPDATE SET ${updates}`
+    return ` ON CONFLICT (${conflictColumns}) DO UPDATE SET ${updates}${returning}`
+  }
+
+  protected compileReturningClause(returning: boolean): string {
+    return returning ? ' RETURNING *' : ''
   }
 
   protected compileHavingExpression(expression: string): string {

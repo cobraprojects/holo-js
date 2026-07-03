@@ -1,7 +1,22 @@
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { DB } from '../facade/DB'
 import { ConfigurationError, DatabaseError, HydrationError, ModelNotFoundException, RelationError, SecurityError } from '../core/errors'
+import {
+  createDatabaseQueryObservation,
+  createTableCacheDependency,
+  createTablePredicateCacheDependency,
+  hasActiveDatabaseDependencyCollector,
+  readDatabaseQueryObservationCount,
+  recordDatabaseQueryObservation,
+  resolveQueryCacheDependencies,
+  truncateDatabaseQueryObservations,
+  type DatabaseQueryAggregateObservation,
+  type DatabaseQueryObservation,
+  type DatabaseQueryResultPathSegment,
+} from '../cache'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
+import { createAggregateValueCounts } from '../query/aggregateValueCounts'
+import { withPredicate, type SelectQueryPlan } from '../query/ast'
 import { Entity } from './Entity'
 import { createModelCollection, type ModelCollection } from './collection'
 import { listDynamicRelationNames, resolveDynamicRelation } from './dynamicRelations'
@@ -50,8 +65,25 @@ type AggregateLoad = {
   column?: string
   alias?: string
 }
+type RelationAggregateObservationTarget = {
+  readonly column: string
+  readonly connectionName: string
+  readonly tableName: string
+  readonly value: unknown
+}
+type RelationAggregateComputation = {
+  readonly metadata?: DatabaseQueryAggregateObservation
+  readonly value: number | null
+}
+type BelongsToManyRelatedObservationMetadata = {
+  readonly dependencies: readonly string[]
+  readonly values: readonly unknown[]
+}
 type PivotRelationDefinition = Extract<RelationDefinition, { kind: 'belongsToMany' | 'morphToMany' | 'morphedByMany' }>
 type PivotMutationRelationDefinition = PivotRelationDefinition
+
+const relationAggregateObservationMetadata = new WeakMap<object, Map<string, DatabaseQueryAggregateObservation>>()
+const relationQueryObservationMetadata = new WeakMap<object, Map<string, DatabaseQueryObservation>>()
 
 function hasDefinition<TTable extends TableDefinition>(
   reference: ModelDefinitionLike | ModelDefinition<TTable> | ModelReference<TTable>,
@@ -544,6 +576,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       return
     }
 
+    const observationCount = hasActiveDatabaseDependencyCollector()
+      ? readDatabaseQueryObservationCount()
+      : undefined
+
     for (const aggregate of aggregates) {
       if (aggregate.relation.includes('.')) {
         throw new SecurityError('Nested relation aggregates are not supported yet.')
@@ -559,6 +595,12 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
           const parentKey = this.getRelationParentValue(entity, relation)
           const count = counts.get(parentKey) ?? 0
           entity.setComputed(key, aggregate.kind === 'count' ? count : count > 0)
+          if (aggregate.kind === 'exists' && typeof observationCount === 'number') {
+            this.setRelationAggregateObservationMetadata(entity, key, Object.freeze({
+              count,
+              kind: 'count',
+            }))
+          }
         }
 
         continue
@@ -571,8 +613,651 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       const values = await this.getRelationAggregateValues(entities, relation, aggregate)
       for (const entity of entities) {
         const parentKey = this.getRelationParentValue(entity, relation)
-        entity.setComputed(key, values.get(parentKey) ?? null)
+        const computation = values.get(parentKey)
+        entity.setComputed(key, computation?.value ?? null)
+        if (computation?.metadata && typeof observationCount === 'number') {
+          this.setRelationAggregateObservationMetadata(entity, key, computation.metadata)
+        }
       }
+    }
+
+    if (typeof observationCount === 'number') {
+      truncateDatabaseQueryObservations(observationCount)
+    }
+  }
+
+  recordRelationAggregateObservations(
+    entities: readonly Entity<TTable>[],
+    aggregates: readonly AggregateLoad[],
+    createPath: (index: number, key: string) => readonly DatabaseQueryResultPathSegment[],
+  ): void {
+    if (!hasActiveDatabaseDependencyCollector() || entities.length === 0 || aggregates.length === 0) {
+      return
+    }
+
+    for (const aggregate of aggregates) {
+      if (aggregate.relation.includes('.')) {
+        continue
+      }
+
+      const relation = this.getRelationDefinition(aggregate.relation)
+      const key = this.getAggregateAttributeKey(aggregate)
+
+      for (let index = 0; index < entities.length; index += 1) {
+        const entity = entities[index]
+        if (!entity) {
+          continue
+        }
+
+        const target = this.createRelationAggregateObservationTarget(entity, relation)
+        if (!target) {
+          continue
+        }
+
+        const aggregateObservation = this.createRelationAggregateObservation(aggregate, entity, key)
+        if (!aggregateObservation) {
+          continue
+        }
+
+        const predicateDependency = createTablePredicateCacheDependency(
+          target.connectionName,
+          target.tableName,
+          target.column,
+          target.value,
+        )
+        const dependencies = predicateDependency
+          ? Object.freeze([
+              createTableCacheDependency(target.connectionName, target.tableName),
+              predicateDependency,
+            ])
+          : Object.freeze([createTableCacheDependency(target.connectionName, target.tableName)])
+        const resultPath = createPath(index, key)
+        const data = entity.toJSON() as Readonly<Record<string, unknown>>
+        recordDatabaseQueryObservation(Object.freeze({
+          aggregate: aggregate.kind === 'exists'
+            ? Object.freeze({
+                ...aggregateObservation,
+                output: 'boolean',
+              })
+            : aggregateObservation,
+          connectionName: target.connectionName,
+          dependencies,
+          orderBy: [],
+          patchable: true,
+          predicates: Object.freeze([Object.freeze({
+            column: target.column,
+            operator: '=' as const,
+            value: target.value,
+          })]),
+          result: data[key],
+          resultPath,
+          selections: [],
+          tableName: target.tableName,
+        }))
+      }
+    }
+  }
+
+  recordRelationObservations(
+    entities: readonly Entity<TTable>[],
+    relations: readonly (string | EagerLoad)[],
+    createPath: (index: number, relationName: string) => readonly DatabaseQueryResultPathSegment[],
+  ): void {
+    if (!hasActiveDatabaseDependencyCollector() || entities.length === 0 || relations.length === 0) {
+      return
+    }
+
+    for (const entry of this.normalizeEagerLoads(relations)) {
+      if (entry.relation.includes('.')) {
+        continue
+      }
+
+      const relationName = entry.relation
+      const relation = this.getRelationDefinition(relationName)
+
+      if (relation.kind === 'hasMany') {
+        this.recordHasManyRelationObservations(entities, relationName, relation, createPath)
+        continue
+      }
+
+      if (relation.kind === 'hasOne') {
+        this.recordHasOneRelationObservations(entities, relationName, relation, createPath)
+        continue
+      }
+
+      if (relation.kind === 'belongsTo') {
+        this.recordBelongsToRelationObservations(entities, relationName, relation, createPath)
+        continue
+      }
+
+      if (relation.constraint) {
+        continue
+      }
+
+      if (relation.kind === 'belongsToMany') {
+        this.recordBelongsToManyRelationObservations(entities, relationName, relation, createPath)
+      }
+    }
+  }
+
+  private recordHasManyRelationObservations(
+    entities: readonly Entity<TTable>[],
+    relationName: string,
+    relation: Extract<RelationDefinition, { kind: 'hasMany' }>,
+    createPath: (index: number, relationName: string) => readonly DatabaseQueryResultPathSegment[],
+  ): void {
+    const related = this.resolveRelatedRepository(relation.related)
+    for (let index = 0; index < entities.length; index += 1) {
+      const entity = entities[index]
+      if (!entity || !entity.hasRelation(relationName)) {
+        continue
+      }
+
+      const observed = this.getRelationQueryObservation(entity, relationName)
+      if (observed) {
+        recordDatabaseQueryObservation(Object.freeze({
+          ...observed,
+          resultPath: createPath(index, relationName),
+        }))
+        continue
+      }
+
+      if (relation.constraint) {
+        continue
+      }
+
+      const parentKey = this.getRelationParentValue(entity, relation)
+      const predicateDependency = createTablePredicateCacheDependency(
+        related.getConnectionName(),
+        related.definition.table.tableName,
+        relation.foreignKey,
+        parentKey,
+      )
+      const dependencies = predicateDependency
+        ? Object.freeze([
+            createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
+            predicateDependency,
+          ])
+        : Object.freeze([createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName)])
+
+      recordDatabaseQueryObservation(Object.freeze({
+        connectionName: related.getConnectionName(),
+        dependencies,
+        orderBy: [],
+        patchable: true,
+        predicates: Object.freeze([Object.freeze({
+          column: relation.foreignKey,
+          operator: '=' as const,
+          value: parentKey,
+        })]),
+        resultPath: createPath(index, relationName),
+        selections: [],
+        tableName: related.definition.table.tableName,
+      }))
+    }
+  }
+
+  private recordHasOneRelationObservations(
+    entities: readonly Entity<TTable>[],
+    relationName: string,
+    relation: Extract<RelationDefinition, { kind: 'hasOne' }>,
+    createPath: (index: number, relationName: string) => readonly DatabaseQueryResultPathSegment[],
+  ): void {
+    const related = this.resolveRelatedRepository(relation.related)
+    for (let index = 0; index < entities.length; index += 1) {
+      const entity = entities[index]
+      if (!entity || !entity.hasRelation(relationName)) {
+        continue
+      }
+
+      const resultPath = createPath(index, relationName)
+      const observed = this.getRelationQueryObservation(entity, relationName)
+      if (observed) {
+        recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation(observed, resultPath))
+        continue
+      }
+
+      if (relation.constraint) {
+        continue
+      }
+
+      const parentKey = this.getRelationParentValue(entity, relation)
+      const predicateDependency = createTablePredicateCacheDependency(
+        related.getConnectionName(),
+        related.definition.table.tableName,
+        relation.foreignKey,
+        parentKey,
+      )
+      const dependencies = predicateDependency
+        ? Object.freeze([
+            createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
+            predicateDependency,
+          ])
+        : Object.freeze([createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName)])
+
+      recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation(Object.freeze({
+        connectionName: related.getConnectionName(),
+        dependencies,
+        orderBy: [],
+        patchable: true,
+        predicates: Object.freeze([Object.freeze({
+          column: relation.foreignKey,
+          operator: '=' as const,
+          value: parentKey,
+        })]),
+        selections: [],
+        tableName: related.definition.table.tableName,
+      }), resultPath))
+    }
+  }
+
+  private recordBelongsToRelationObservations(
+    entities: readonly Entity<TTable>[],
+    relationName: string,
+    relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
+    createPath: (index: number, relationName: string) => readonly DatabaseQueryResultPathSegment[],
+  ): void {
+    const related = this.resolveRelatedRepository(relation.related)
+    for (let index = 0; index < entities.length; index += 1) {
+      const entity = entities[index]
+      if (!entity || !entity.hasRelation(relationName)) {
+        continue
+      }
+
+      const resultPath = createPath(index, relationName)
+      const observed = this.getRelationQueryObservation(entity, relationName)
+      recordDatabaseQueryObservation(this.createBelongsToParentKeyRelationObservation(
+        entity,
+        relationName,
+        relation,
+        resultPath.slice(0, -1),
+        !relation.constraint,
+      ))
+      if (observed) {
+        recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation(observed, resultPath))
+        continue
+      }
+
+      if (relation.constraint) {
+        continue
+      }
+
+      const ownerKey = this.getRelationParentValue(entity, relation)
+      if (ownerKey === null || typeof ownerKey === 'undefined') {
+        continue
+      }
+
+      const predicateDependency = createTablePredicateCacheDependency(
+        related.getConnectionName(),
+        related.definition.table.tableName,
+        relation.ownerKey,
+        ownerKey,
+      )
+      const dependencies = predicateDependency
+        ? Object.freeze([
+            createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
+            predicateDependency,
+          ])
+        : Object.freeze([createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName)])
+
+      recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation(Object.freeze({
+        connectionName: related.getConnectionName(),
+        dependencies,
+        orderBy: [],
+        patchable: true,
+        predicates: Object.freeze([Object.freeze({
+          column: relation.ownerKey,
+          operator: '=' as const,
+          value: ownerKey,
+        })]),
+        selections: [],
+        tableName: related.definition.table.tableName,
+      }), resultPath))
+    }
+  }
+
+  private createBelongsToParentKeyRelationObservation(
+    entity: Entity<TTable>,
+    relationName: string,
+    relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
+    resultPath: readonly DatabaseQueryResultPathSegment[],
+    patchable: boolean,
+  ): DatabaseQueryObservation | undefined {
+    const parentKey = entity.toAttributes()[this.definition.primaryKey as keyof ReturnType<typeof entity.toAttributes>]
+    if (parentKey === null || typeof parentKey === 'undefined') {
+      return undefined
+    }
+
+    const predicateDependency = createTablePredicateCacheDependency(
+      this.getConnectionName(),
+      this.definition.table.tableName,
+      this.definition.primaryKey,
+      parentKey,
+    )
+    const dependencies = predicateDependency
+      ? Object.freeze([
+          createTableCacheDependency(this.getConnectionName(), this.definition.table.tableName),
+          predicateDependency,
+        ])
+      : Object.freeze([createTableCacheDependency(this.getConnectionName(), this.definition.table.tableName)])
+    const related = this.resolveRelatedRepository(relation.related)
+
+    return Object.freeze({
+      connectionName: this.getConnectionName(),
+      dependencies,
+      orderBy: [],
+      patchable,
+      predicates: Object.freeze([Object.freeze({
+        column: this.definition.primaryKey,
+        operator: '=' as const,
+        value: parentKey,
+      })]),
+      relation: Object.freeze({
+        foreignKey: relation.foreignKey,
+        kind: 'belongsToParentKey' as const,
+        ownerKey: relation.ownerKey,
+        relationKey: relationName,
+        relatedConnectionName: related.getConnectionName(),
+        relatedTableName: related.definition.table.tableName,
+      }),
+      resultPath,
+      selections: Object.freeze([Object.freeze({
+        column: relation.foreignKey,
+        resultKey: relation.foreignKey,
+      })]),
+      tableName: this.definition.table.tableName,
+    })
+  }
+
+  private createNullableSingleRecordRelationObservation(
+    observation: DatabaseQueryObservation,
+    resultPath: readonly DatabaseQueryResultPathSegment[],
+  ): DatabaseQueryObservation {
+    return Object.freeze({
+      ...observation,
+      emptyRecordValue: null,
+      limit: 1,
+      resultPath,
+      rowWindowMode: 'single',
+    })
+  }
+
+  private rememberHasManyRelationObservation(
+    entity: Entity<TTable>,
+    relationName: string,
+    relation: Extract<RelationDefinition, { kind: 'hasMany' }>,
+    related: ModelRepository,
+    constrainedPlan: SelectQueryPlan,
+    parentKey: unknown,
+  ): void {
+    const observation = this.createHasManyRelationObservation(relation, related, constrainedPlan, parentKey)
+    if (!observation) {
+      return
+    }
+
+    const observations = relationQueryObservationMetadata.get(entity) ?? new Map<string, DatabaseQueryObservation>()
+    observations.set(relationName, observation)
+    relationQueryObservationMetadata.set(entity, observations)
+  }
+
+  private rememberBelongsToRelationObservation(
+    entity: Entity<TTable>,
+    relationName: string,
+    relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
+    related: ModelRepository,
+    constrainedPlan: SelectQueryPlan,
+    ownerKey: unknown,
+  ): void {
+    const observation = this.createBelongsToRelationObservation(relation, related, constrainedPlan, ownerKey)
+    if (!observation) {
+      return
+    }
+
+    const observations = relationQueryObservationMetadata.get(entity) ?? new Map<string, DatabaseQueryObservation>()
+    observations.set(relationName, observation)
+    relationQueryObservationMetadata.set(entity, observations)
+  }
+
+  private getRelationQueryObservation(
+    entity: Entity<TTable>,
+    relationName: string,
+  ): DatabaseQueryObservation | undefined {
+    return relationQueryObservationMetadata.get(entity)?.get(relationName)
+  }
+
+  private createHasManyRelationObservation(
+    relation: Extract<RelationDefinition, { kind: 'hasMany' }>,
+    related: ModelRepository,
+    constrainedPlan: SelectQueryPlan,
+    parentKey: unknown,
+  ): DatabaseQueryObservation | undefined {
+    if (parentKey === null || typeof parentKey === 'undefined') {
+      return undefined
+    }
+
+    const parentPlan = withPredicate(constrainedPlan, {
+      kind: 'comparison',
+      column: relation.foreignKey,
+      operator: '=',
+      value: parentKey,
+    })
+    const dependencies = resolveQueryCacheDependencies(parentPlan, related.getConnectionName())
+    return dependencies
+      ? createDatabaseQueryObservation(parentPlan, related.getConnectionName(), dependencies)
+      : undefined
+  }
+
+  private createBelongsToRelationObservation(
+    relation: Extract<RelationDefinition, { kind: 'belongsTo' }>,
+    related: ModelRepository,
+    constrainedPlan: SelectQueryPlan,
+    ownerKey: unknown,
+  ): DatabaseQueryObservation | undefined {
+    if (ownerKey === null || typeof ownerKey === 'undefined') {
+      return undefined
+    }
+
+    const ownerPlan = withPredicate(constrainedPlan, {
+      kind: 'comparison',
+      column: relation.ownerKey,
+      operator: '=',
+      value: ownerKey,
+    })
+    const dependencies = resolveQueryCacheDependencies(ownerPlan, related.getConnectionName())
+    return dependencies
+      ? createDatabaseQueryObservation(ownerPlan, related.getConnectionName(), dependencies)
+      : undefined
+  }
+
+  private recordBelongsToManyRelationObservations(
+    entities: readonly Entity<TTable>[],
+    relationName: string,
+    relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
+    createPath: (index: number, relationName: string) => readonly DatabaseQueryResultPathSegment[],
+  ): void {
+    const related = this.resolveRelatedRepository(relation.related)
+    const pivotTableName = this.resolvePivotTableName(relation.pivotTable)
+    for (let index = 0; index < entities.length; index += 1) {
+      const entity = entities[index]
+      if (!entity || !entity.hasRelation(relationName)) {
+        continue
+      }
+
+      const parentKey = this.getRelationParentValue(entity, relation)
+      const predicateDependency = createTablePredicateCacheDependency(
+        this.getConnectionName(),
+        pivotTableName,
+        relation.foreignPivotKey,
+        parentKey,
+      )
+      const relatedMetadata = this.createBelongsToManyRelatedObservationMetadata(entity, relationName, relation, related)
+      const dependencies = predicateDependency
+        ? Object.freeze([
+            createTableCacheDependency(this.getConnectionName(), pivotTableName),
+            predicateDependency,
+            ...relatedMetadata.dependencies,
+          ])
+        : Object.freeze([
+            createTableCacheDependency(this.getConnectionName(), pivotTableName),
+            ...relatedMetadata.dependencies,
+          ])
+
+      const relationObservation = Object.freeze({
+        foreignPivotKey: relation.foreignPivotKey,
+        kind: 'belongsToMany' as const,
+        pivotAccessor: relation.pivotAccessor,
+        pivotColumns: relation.pivotColumns,
+        pivotOrderBy: relation.pivotOrderBy,
+        relatedConnectionName: related.getConnectionName(),
+        relatedKey: relation.relatedKey,
+        relatedPivotKey: relation.relatedPivotKey,
+        relatedTableName: related.definition.table.tableName,
+      })
+
+      recordDatabaseQueryObservation(Object.freeze({
+        connectionName: this.getConnectionName(),
+        dependencies,
+        orderBy: relation.pivotOrderBy,
+        patchable: relation.pivotWheres.length === 0,
+        predicates: Object.freeze([Object.freeze({
+          column: relation.foreignPivotKey,
+          operator: '=' as const,
+          value: parentKey,
+        })]),
+        relation: relationObservation,
+        resultPath: createPath(index, relationName),
+        selections: [],
+        tableName: pivotTableName,
+      }))
+
+      if (relatedMetadata.values.length === 0) {
+        continue
+      }
+
+      recordDatabaseQueryObservation(Object.freeze({
+        connectionName: related.getConnectionName(),
+        dependencies: Object.freeze([
+          createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
+          ...relatedMetadata.dependencies,
+        ]),
+        orderBy: [],
+        patchable: true,
+        predicates: Object.freeze([Object.freeze({
+          column: relation.relatedKey,
+          operator: 'in' as const,
+          value: relatedMetadata.values,
+        })]),
+        relation: relationObservation,
+        resultPath: createPath(index, relationName),
+        selections: [],
+        tableName: related.definition.table.tableName,
+      }))
+    }
+  }
+
+  private createBelongsToManyRelatedObservationMetadata(
+    entity: Entity<TTable>,
+    relationName: string,
+    relation: Extract<RelationDefinition, { kind: 'belongsToMany' }>,
+    related: ModelRepository,
+  ): BelongsToManyRelatedObservationMetadata {
+    const loaded = entity.getRelation<readonly unknown[]>(relationName)
+    const dependencies: string[] = []
+    const values: unknown[] = []
+    for (const relatedEntity of loaded) {
+      if (!isEntity(relatedEntity)) {
+        continue
+      }
+
+      const relatedValue = relatedEntity.get(relation.relatedKey as never)
+      values.push(relatedValue)
+      const dependency = createTablePredicateCacheDependency(
+        related.getConnectionName(),
+        related.definition.table.tableName,
+        relation.relatedKey,
+        relatedValue,
+      )
+      if (dependency) {
+        dependencies.push(dependency)
+      }
+    }
+
+    return Object.freeze({
+      dependencies: Object.freeze(dependencies),
+      values: Object.freeze(values),
+    })
+  }
+
+  private createRelationAggregateObservation(
+    aggregate: AggregateLoad,
+    entity: Entity<TTable>,
+    key: string,
+  ): DatabaseQueryAggregateObservation | undefined {
+    const metadata = this.getRelationAggregateObservationMetadata(entity, key)
+    if (metadata) {
+      return metadata
+    }
+
+    if (aggregate.kind === 'count' || aggregate.kind === 'exists') {
+      return Object.freeze({
+        kind: 'count',
+      })
+    }
+
+    if (!aggregate.column) {
+      return undefined
+    }
+
+    return Object.freeze({
+      column: aggregate.column,
+      kind: aggregate.kind,
+    })
+  }
+
+  private setRelationAggregateObservationMetadata(
+    entity: Entity<TTable>,
+    key: string,
+    metadata: DatabaseQueryAggregateObservation,
+  ): void {
+    const byKey = relationAggregateObservationMetadata.get(entity) ?? new Map<string, DatabaseQueryAggregateObservation>()
+    byKey.set(key, metadata)
+    relationAggregateObservationMetadata.set(entity, byKey)
+  }
+
+  private getRelationAggregateObservationMetadata(
+    entity: Entity<TTable>,
+    key: string,
+  ): DatabaseQueryAggregateObservation | undefined {
+    return relationAggregateObservationMetadata.get(entity)?.get(key)
+  }
+
+  private createRelationAggregateObservationTarget(
+    entity: Entity<TTable>,
+    relation: RelationDefinition,
+  ): RelationAggregateObservationTarget | undefined {
+    switch (relation.kind) {
+      case 'belongsTo': {
+        const related = this.resolveRelatedRepository(relation.related)
+        return {
+          column: relation.ownerKey,
+          connectionName: related.getConnectionName(),
+          tableName: related.definition.table.tableName,
+          value: this.getRelationParentValue(entity, relation),
+        }
+      }
+      case 'hasMany':
+      case 'hasOne':
+      case 'hasOneOfMany': {
+        const related = this.resolveRelatedRepository(relation.related)
+        return {
+          column: relation.foreignKey,
+          connectionName: related.getConnectionName(),
+          tableName: related.definition.table.tableName,
+          value: this.getRelationParentValue(entity, relation),
+        }
+      }
+      default:
+        return undefined
     }
   }
 
@@ -1489,9 +2174,19 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    const relatedEntities = await this.applyRelationConstraint(relation, related, constraint)
+    const observationCount = hasActiveDatabaseDependencyCollector()
+      ? readDatabaseQueryObservationCount()
+      : undefined
+    const constrainedQuery = this.applyRelationConstraint(relation, related, constraint)
+    const constrainedPlan = typeof observationCount === 'number'
+      ? constrainedQuery.getTableQueryBuilder().getPlan()
+      : undefined
+    const relatedEntities = await constrainedQuery
       .where(relation.ownerKey, 'in', foreignKeys)
       .get()
+    if (typeof observationCount === 'number') {
+      truncateDatabaseQueryObservations(observationCount)
+    }
     const relatedMap = new Map(
       relatedEntities.map(entity => [entity.get(relation.ownerKey as never), entity]),
     )
@@ -1499,6 +2194,9 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     for (const entity of entities) {
       const foreignKey = entity.toAttributes()[relation.foreignKey as keyof ReturnType<typeof entity.toAttributes>]
       entity.setRelation(relationName, relatedMap.get(foreignKey) ?? null)
+      if (constrainedPlan) {
+        this.rememberBelongsToRelationObservation(entity, relationName, relation, related, constrainedPlan, foreignKey)
+      }
     }
   }
 
@@ -1522,9 +2220,19 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
 
     const related = this.resolveRelatedRepository(relation.related)
-    const relatedEntities = await this.applyRelationConstraint(relation, related, constraint)
+    const observationCount = hasActiveDatabaseDependencyCollector()
+      ? readDatabaseQueryObservationCount()
+      : undefined
+    const constrainedQuery = this.applyRelationConstraint(relation, related, constraint)
+    const constrainedPlan = typeof observationCount === 'number'
+      ? constrainedQuery.getTableQueryBuilder().getPlan()
+      : undefined
+    const relatedEntities = await constrainedQuery
       .where(relation.foreignKey, 'in', localKeys)
       .get()
+    if (typeof observationCount === 'number') {
+      truncateDatabaseQueryObservations(observationCount)
+    }
     const grouped = new Map<unknown, unknown[]>()
 
     for (const relatedEntity of relatedEntities) {
@@ -1537,6 +2245,9 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     for (const entity of entities) {
       const localKey = entity.toAttributes()[relation.localKey as keyof ReturnType<typeof entity.toAttributes>]
       entity.setRelation(relationName, grouped.get(localKey) ?? [])
+      if (constrainedPlan) {
+        this.rememberHasManyRelationObservation(entity, relationName, relation, related, constrainedPlan, localKey)
+      }
     }
   }
 
@@ -1674,11 +2385,17 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       return
     }
 
+    const observationCount = hasActiveDatabaseDependencyCollector()
+      ? readDatabaseQueryObservationCount()
+      : undefined
     const pivotRows = await this.createBelongsToManyPivotQuery(relation, this.getConnection())
       .where(relation.foreignPivotKey, 'in', parentKeys)
       .get<Record<string, unknown>>()
 
     if (pivotRows.length === 0) {
+      if (typeof observationCount === 'number') {
+        truncateDatabaseQueryObservations(observationCount)
+      }
       for (const entity of entities) {
         entity.setRelation(relationName, [])
       }
@@ -1692,6 +2409,9 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     )]
 
     if (relatedIds.length === 0) {
+      if (typeof observationCount === 'number') {
+        truncateDatabaseQueryObservations(observationCount)
+      }
       for (const entity of entities) {
         entity.setRelation(relationName, [])
       }
@@ -1702,6 +2422,9 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     const relatedEntities = await this.applyRelationConstraint(relation, related, constraint)
       .where(relation.relatedKey, 'in', relatedIds)
       .get()
+    if (typeof observationCount === 'number') {
+      truncateDatabaseQueryObservations(observationCount)
+    }
     const relatedMap = new Map(
       relatedEntities.map(entity => [entity.get(relation.relatedKey as never), entity]),
     )
@@ -2114,7 +2837,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entities: readonly Entity<TTable>[],
     relation: RelationDefinition,
     aggregate: AggregateLoad,
-  ): Promise<Map<unknown, unknown>> {
+  ): Promise<Map<unknown, RelationAggregateComputation>> {
     if (aggregate.kind === 'count' || aggregate.kind === 'exists') {
       throw new SecurityError(`Relation aggregate "${aggregate.kind}" does not require a value pipeline.`)
     }
@@ -2134,7 +2857,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
 
     const grouped = await this.getRelatedEntitiesByParentKey(entities, relation, aggregate.constraint)
-    const values = new Map<unknown, unknown>()
+    const values = new Map<unknown, RelationAggregateComputation>()
 
     for (const entity of entities) {
       const parentKey = this.getRelationParentValue(entity, relation)
@@ -2149,36 +2872,67 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     kind: Exclude<RelationAggregateKind, 'count' | 'exists'>,
     entities: readonly Entity[],
     column: string,
-  ): number | null {
+  ): RelationAggregateComputation {
     const values = entities.map(entity => entity.toAttributes()[column as keyof ReturnType<typeof entity.toAttributes>])
 
     switch (kind) {
       case 'sum': {
         const numbers = values.map(value => this.assertNumericAggregateValue(value, kind, column))
-        return numbers.reduce((sum, value) => sum + value, 0)
+        return Object.freeze({
+          value: numbers.reduce((sum, value) => sum + value, 0),
+        })
       }
       case 'avg': {
         const numbers = values.map(value => this.assertNumericAggregateValue(value, kind, column))
+        const sum = numbers.reduce((total, value) => total + value, 0)
+        const metadata = Object.freeze({
+          column,
+          count: numbers.length,
+          kind,
+          sum,
+        })
         if (numbers.length === 0) {
-          return null
+          return Object.freeze({
+            metadata,
+            value: null,
+          })
         }
-        return numbers.reduce((sum, value) => sum + value, 0) / numbers.length
+        return Object.freeze({
+          metadata,
+          value: sum / numbers.length,
+        })
       }
       case 'min': {
         const numbers = values.map(value => this.assertNumericAggregateValue(value, kind, column))
-        if (numbers.length === 0) {
-          return null
-        }
-        return Math.min(...numbers)
+        return this.computeExtremeAggregateValue(kind, column, numbers)
       }
       case 'max': {
         const numbers = values.map(value => this.assertNumericAggregateValue(value, kind, column))
-        if (numbers.length === 0) {
-          return null
-        }
-        return Math.max(...numbers)
+        return this.computeExtremeAggregateValue(kind, column, numbers)
       }
     }
+  }
+
+  private computeExtremeAggregateValue(
+    kind: 'min' | 'max',
+    column: string,
+    numbers: readonly number[],
+  ): RelationAggregateComputation {
+    const value = numbers.length === 0
+      ? null
+      : kind === 'min' ? Math.min(...numbers) : Math.max(...numbers)
+    const metadata = Object.freeze({
+      column,
+      currentValueCount: typeof value === 'number'
+        ? numbers.filter(number => number === value).length
+        : 0,
+      kind,
+      valueCounts: createAggregateValueCounts(numbers),
+    })
+    return Object.freeze({
+      metadata,
+      value,
+    })
   }
 
   private assertNumericAggregateValue(
@@ -3109,6 +3863,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     connection: DatabaseContext,
   ): TableQueryBuilder<string | TableDefinition> {
     return this.applyPivotQueryConfig(new TableQueryBuilder(relation.pivotTable, connection), relation)
+  }
+
+  private resolvePivotTableName(pivotTable: string | TableDefinition): string {
+    return typeof pivotTable === 'string' ? pivotTable : pivotTable.tableName
   }
 
   private createMorphToManyPivotQuery(

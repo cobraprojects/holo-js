@@ -1,5 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  SQLiteAdapter as ConcreteSQLiteAdapter,
+  createSQLiteAdapter as createConcreteSQLiteAdapter,
+} from '@holo-js/db-sqlite'
+import {
+  MySQLAdapter as ConcreteMySQLAdapter,
+  createMySQLAdapter as createConcreteMySQLAdapter,
+} from '@holo-js/db-mysql'
+import {
+  PostgresAdapter as ConcretePostgresAdapter,
+  createPostgresAdapter as createConcretePostgresAdapter,
+} from '@holo-js/db-postgres'
+import {
   MySQLAdapter,
   PostgresAdapter,
   SQLiteAdapter,
@@ -358,6 +370,50 @@ describe('driver adapters', () => {
     await adapter.disconnect()
   })
 
+  it('covers concrete SQLite open failures and transaction scope sequencing', async () => {
+    const missingAdapter = new ConcreteSQLiteAdapter({
+      filename: '/tmp/missing.sqlite',
+      createDatabase() {
+        throw new Error('')
+      },
+    })
+
+    await expect(missingAdapter.initialize()).rejects.toThrow(
+      'Unable to open SQLite database "/tmp/missing.sqlite": Unknown SQLite driver error.',
+    )
+
+    const sqlite = createSqliteDatabase()
+    const adapter = createConcreteSQLiteAdapter({
+      database: sqlite.db,
+    })
+    const order: string[] = []
+    const first = adapter.runWithTransactionScope(async () => {
+      order.push('first:start')
+      await new Promise<void>((resolveDelay) => {
+        setTimeout(resolveDelay, 0)
+      })
+      order.push('first:end')
+      return 'first'
+    })
+    const second = adapter.runWithTransactionScope(async () => {
+      order.push('second')
+      return 'second'
+    })
+
+    await expect(Promise.all([first, second])).resolves.toEqual(['first', 'second'])
+    expect(order).toEqual(['first:start', 'first:end', 'second'])
+
+    await adapter.beginTransaction({ mode: 'immediate' })
+    await adapter.beginTransaction({ mode: 'exclusive' })
+    await expect(adapter.beginTransaction({ mode: 'unsupported' as 'deferred' })).rejects.toThrow(
+      'Unsupported SQLite transaction mode "unsupported".',
+    )
+    expect(sqlite.executed).toEqual([
+      'BEGIN IMMEDIATE',
+      'BEGIN EXCLUSIVE',
+    ])
+  })
+
   let postgresContractState: ReturnType<typeof createPostgresPool>
 
   runDriverAdapterContractSuite({
@@ -661,6 +717,116 @@ describe('driver adapters', () => {
     expect(directState.ended).toBe(true)
   })
 
+  it('covers concrete Postgres connection-string bootstrap and missing database detection', async () => {
+    const bootstrapQuery = vi.fn(async (sql: string, bindings: readonly unknown[] = []) => ({
+      rows: sql.startsWith('select 1 from pg_database') ? [] : [{ sql, bindings }],
+      rowCount: sql.startsWith('select 1 from pg_database') ? 0 : 1,
+    }))
+    const applicationQuery = vi.fn(async (sql: string, bindings: readonly unknown[] = []) => ({
+      rows: [{ sql, bindings }],
+      rowCount: 1,
+    }))
+    const bootstrapEnd = vi.fn(async () => {})
+    const applicationEnd = vi.fn(async () => {})
+    const createPool = vi.fn((config) => {
+      if (config?.connectionString?.includes('/tenant%22app')) {
+        return {
+          query: applicationQuery,
+          connect: vi.fn(async () => createPostgresClient([]).client),
+          end: applicationEnd,
+        }
+      }
+
+      return {
+        query: bootstrapQuery,
+        connect: vi.fn(async () => createPostgresClient([]).client),
+        end: bootstrapEnd,
+      }
+    })
+    const adapter = createConcretePostgresAdapter({
+      connectionString: 'postgres://postgres:secret@127.0.0.1:5432/tenant%22app?sslmode=disable',
+      createPool,
+    })
+    const missingDetector = new ConcretePostgresAdapter()
+
+    await adapter.ensureDatabaseExists()
+    await expect(adapter.query('select 1')).resolves.toEqual({
+      rows: [{ sql: 'select 1', bindings: [] }],
+      rowCount: 1,
+    })
+
+    expect(createPool).toHaveBeenNthCalledWith(1, {
+      connectionString: 'postgres://postgres:secret@127.0.0.1:5432/postgres?sslmode=disable',
+    })
+    expect(createPool).toHaveBeenNthCalledWith(2, {
+      connectionString: 'postgres://postgres:secret@127.0.0.1:5432/tenant%22app?sslmode=disable',
+    })
+    expect(bootstrapQuery).toHaveBeenNthCalledWith(
+      1,
+      'select 1 from pg_database where datname = $1',
+      ['tenant"app'],
+    )
+    expect(bootstrapQuery).toHaveBeenNthCalledWith(2, 'create database "tenant""app"')
+    expect(bootstrapEnd).toHaveBeenCalledTimes(1)
+    expect(applicationQuery).toHaveBeenCalledWith('select 1', [])
+    expect(missingDetector.isDatabaseMissingError({ code: '3D000' })).toBe(true)
+    expect(missingDetector.isDatabaseMissingError({ code: 'OTHER' })).toBe(false)
+
+    await adapter.disconnect()
+    expect(applicationEnd).toHaveBeenCalledTimes(1)
+
+    const noTargetCreatePool = vi.fn(() => {
+      throw new Error('should not create a pool')
+    })
+    await expect(createConcretePostgresAdapter({
+      config: { database: 'postgres' },
+      createPool: noTargetCreatePool,
+    }).ensureDatabaseExists()).resolves.toBeUndefined()
+    await expect(createConcretePostgresAdapter({
+      createPool: noTargetCreatePool,
+    }).ensureDatabaseExists()).resolves.toBeUndefined()
+    expect(noTargetCreatePool).not.toHaveBeenCalled()
+
+    const configBootstrapQuery = vi.fn(async () => ({
+      rows: [{ exists: 1 }],
+      rowCount: 1,
+    }))
+    const configBootstrapEnd = vi.fn(async () => {})
+    const configCreatePool = vi.fn(() => ({
+      query: configBootstrapQuery,
+      connect: vi.fn(async () => createPostgresClient([]).client),
+      end: configBootstrapEnd,
+    }))
+    await expect(createConcretePostgresAdapter({
+      config: { database: 'tenant_config' },
+      createPool: configCreatePool,
+    }).ensureDatabaseExists()).resolves.toBeUndefined()
+    expect(configCreatePool).toHaveBeenCalledWith({ database: 'postgres' })
+    expect(configBootstrapQuery).toHaveBeenCalledWith(
+      'select 1 from pg_database where datname = $1',
+      ['tenant_config'],
+    )
+    expect(configBootstrapEnd).toHaveBeenCalledTimes(1)
+
+    const failingEnd = vi.fn(async () => {})
+    const failingAdapter = createConcretePostgresAdapter({
+      config: { database: 'private"app' },
+      createPool() {
+        return {
+          async query() {
+            throw new Error('permission denied')
+          },
+          connect: vi.fn(async () => createPostgresClient([]).client),
+          end: failingEnd,
+        }
+      },
+    })
+    await expect(failingAdapter.ensureDatabaseExists()).rejects.toThrow(
+      'Postgres database "private"app" could not be found or created. Please create the database and try again. Original error: permission denied',
+    )
+    expect(failingEnd).toHaveBeenCalledTimes(1)
+  })
+
   it('disconnects a direct Postgres client even when it does not expose end()', async () => {
     const log: PgLog = []
     let released = false
@@ -801,6 +967,115 @@ describe('driver adapters', () => {
     await adapter.disconnect()
     await adapter.disconnect()
     expect(directState.ended).toBe(true)
+  })
+
+  it('covers concrete MySQL URI bootstrap and missing database detection', async () => {
+    const bootstrapQuery = vi.fn(async (sql: string, bindings: readonly unknown[] = []) => {
+      if (sql.startsWith('SELECT SCHEMA_NAME')) {
+        return [[], []] as const
+      }
+
+      return [{ affectedRows: 1, insertId: 0 }, []] as const
+    })
+    const applicationQuery = vi.fn(async (sql: string, bindings: readonly unknown[] = []) => [[{ sql, bindings }], []] as const)
+    const bootstrapEnd = vi.fn(async () => {})
+    const applicationEnd = vi.fn(async () => {})
+    const createPool = vi.fn((config) => {
+      if (String(config.uri).includes('/tenant%60app')) {
+        return {
+          query: applicationQuery,
+          getConnection: vi.fn(async () => createMySqlClient([]).client),
+          end: applicationEnd,
+        }
+      }
+
+      return {
+        query: bootstrapQuery,
+        getConnection: vi.fn(async () => createMySqlClient([]).client),
+        end: bootstrapEnd,
+      }
+    })
+    const adapter = createConcreteMySQLAdapter({
+      uri: 'mysql://root:secret@127.0.0.1:3306/tenant%60app?timezone=Z',
+      createPool,
+    })
+    const missingDetector = new ConcreteMySQLAdapter()
+
+    await adapter.ensureDatabaseExists()
+    await expect(adapter.query('SELECT 1')).resolves.toEqual({
+      rows: [{ sql: 'SELECT 1', bindings: [] }],
+      rowCount: 1,
+    })
+
+    expect(createPool).toHaveBeenNthCalledWith(1, {
+      uri: 'mysql://root:secret@127.0.0.1:3306?timezone=Z',
+    })
+    expect(createPool).toHaveBeenNthCalledWith(2, {
+      uri: 'mysql://root:secret@127.0.0.1:3306/tenant%60app?timezone=Z',
+    })
+    expect(bootstrapQuery).toHaveBeenNthCalledWith(
+      1,
+      'SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?',
+      ['tenant`app'],
+    )
+    expect(bootstrapQuery).toHaveBeenNthCalledWith(2, 'CREATE DATABASE `tenant``app`', [])
+    expect(bootstrapEnd).toHaveBeenCalledTimes(1)
+    expect(applicationQuery).toHaveBeenCalledWith('SELECT 1', [])
+    expect(missingDetector.isDatabaseMissingError({ code: 'ER_BAD_DB_ERROR' })).toBe(true)
+    expect(missingDetector.isDatabaseMissingError({ errno: 1049 })).toBe(true)
+    expect(missingDetector.isDatabaseMissingError({ code: 'OTHER' })).toBe(false)
+
+    await adapter.disconnect()
+    expect(applicationEnd).toHaveBeenCalledTimes(1)
+
+    const noTargetCreatePool = vi.fn(() => {
+      throw new Error('should not create a pool')
+    })
+    await expect(createConcreteMySQLAdapter({
+      uri: 'mysql://root:secret@127.0.0.1:3306',
+      createPool: noTargetCreatePool,
+    }).ensureDatabaseExists()).resolves.toBeUndefined()
+    await expect(createConcreteMySQLAdapter({
+      config: {},
+      createPool: noTargetCreatePool,
+    }).ensureDatabaseExists()).resolves.toBeUndefined()
+    expect(noTargetCreatePool).not.toHaveBeenCalled()
+
+    const configBootstrapQuery = vi.fn(async () => [[{ SCHEMA_NAME: 'tenant_config' }], []] as const)
+    const configBootstrapEnd = vi.fn(async () => {})
+    const configCreatePool = vi.fn(() => ({
+      query: configBootstrapQuery,
+      getConnection: vi.fn(async () => createMySqlClient([]).client),
+      end: configBootstrapEnd,
+    }))
+    await expect(createConcreteMySQLAdapter({
+      config: { database: 'tenant_config' },
+      createPool: configCreatePool,
+    }).ensureDatabaseExists()).resolves.toBeUndefined()
+    expect(configCreatePool).toHaveBeenCalledWith({})
+    expect(configBootstrapQuery).toHaveBeenCalledWith(
+      'SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?',
+      ['tenant_config'],
+    )
+    expect(configBootstrapEnd).toHaveBeenCalledTimes(1)
+
+    const failingEnd = vi.fn(async () => {})
+    const failingAdapter = createConcreteMySQLAdapter({
+      config: { database: 'private`app' },
+      createPool() {
+        return {
+          async query() {
+            throw new Error('access denied')
+          },
+          getConnection: vi.fn(async () => createMySqlClient([]).client),
+          end: failingEnd,
+        }
+      },
+    })
+    await expect(failingAdapter.ensureDatabaseExists()).rejects.toThrow(
+      'MySQL database "private`app" could not be found or created. Please create the database and try again. Original error: access denied',
+    )
+    expect(failingEnd).toHaveBeenCalledTimes(1)
   })
 
   it('disconnects a direct MySQL client even when it does not expose end()', async () => {

@@ -24,8 +24,8 @@ export type SerializeModels<TValue>
           ? { [K in keyof TValue]: SerializeModels<TValue[K]> }
           : TValue
 
-function isSerializableModel(value: unknown): value is SerializableModel {
-  return Boolean(value && typeof value === 'object' && typeof (value as SerializableModel).toJSON === 'function')
+function isSerializableModel(value: object): value is SerializableModel {
+  return typeof (value as SerializableModel).toJSON === 'function'
 }
 
 export function serializeModels<TValue>(value: TValue): SerializeModels<TValue> {
@@ -34,7 +34,7 @@ export function serializeModels<TValue>(value: TValue): SerializeModels<TValue> 
   }
 
   if (isSerializableModel(value)) {
-    return value.toJSON() as SerializeModels<TValue>
+    return serializeModels(value.toJSON()) as SerializeModels<TValue>
   }
 
   if (Array.isArray(value)) {

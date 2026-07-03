@@ -2657,6 +2657,23 @@ describe('@holo-js/broadcast worker runtime', () => {
       data: { updated: args.id },
       dependencies: [],
     }))
+    type RealtimePatchOperationForTest =
+      | {
+        readonly op: 'replace'
+        readonly path: readonly (string | number)[]
+        readonly value: unknown
+      }
+      | {
+        readonly op: 'merge'
+        readonly path: readonly (string | number)[]
+        readonly fields: Readonly<Record<string, unknown>>
+      }
+      | {
+        readonly op: 'move'
+        readonly path: readonly (string | number)[]
+        readonly from: number
+        readonly to: number
+      }
     const subscribe = vi.fn(async (
       name: string,
       args: Record<string, unknown>,
@@ -2667,6 +2684,11 @@ describe('@holo-js/broadcast worker runtime', () => {
           readonly dependencies: readonly string[]
           readonly version: number
         }) => void | Promise<void>
+        readonly onPatch?: (patch: {
+          readonly dependencies?: readonly string[]
+          readonly operations: readonly RealtimePatchOperationForTest[]
+          readonly version: number
+        }) => void | Promise<void>
       },
     ) => {
       await options.onData({
@@ -2674,6 +2696,17 @@ describe('@holo-js/broadcast worker runtime', () => {
         data: { args },
         dependencies: ['table:posts'],
         version: 2,
+      })
+      await options.onPatch?.({
+        dependencies: ['table:posts'],
+        operations: [
+          {
+            op: 'replace',
+            path: ['args', 'page'],
+            value: 2,
+          },
+        ],
+        version: 3,
       })
 
       return {
@@ -2774,6 +2807,23 @@ describe('@holo-js/broadcast worker runtime', () => {
             data: { args: { page: 1 } },
             dependencies: ['table:posts'],
             version: 2,
+          },
+        },
+      },
+      {
+        event: 'holo:realtime:patch',
+        data: {
+          id: 'subscription.1',
+          patch: {
+            dependencies: ['table:posts'],
+            operations: [
+              {
+                op: 'replace',
+                path: ['args', 'page'],
+                value: 2,
+              },
+            ],
+            version: 3,
           },
         },
       },
@@ -2881,6 +2931,352 @@ describe('@holo-js/broadcast worker runtime', () => {
     expect(disconnectUnsubscribe).toHaveBeenCalledTimes(1)
     expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('disconnect unsubscribe failed'))
     consoleError.mockRestore()
+  })
+
+  it('ignores stale realtime subscription callbacks after resubscribe', async () => {
+    const app = {
+      connection: 'holo-main',
+      appId: 'app-main',
+      key: 'key-main',
+      secret: 'secret-main',
+    }
+    const socket = createSocket(app)
+    type RealtimeSubscribeOptionsForTest = {
+      readonly onData: (snapshot: {
+        readonly name: string
+        readonly data: unknown
+        readonly dependencies: readonly string[]
+        readonly version: number
+      }) => void | Promise<void>
+      readonly onPatch?: (patch: {
+        readonly operations: readonly {
+          readonly op: 'replace'
+          readonly path: readonly (string | number)[]
+          readonly value: unknown
+        }[]
+        readonly version: number
+      }) => void | Promise<void>
+      readonly onError: (error: unknown) => void | Promise<void>
+    }
+    const unsubscribeFirst = vi.fn()
+    const unsubscribeSecond = vi.fn()
+    const subscribeOptions: RealtimeSubscribeOptionsForTest[] = []
+    const subscribe = vi.fn(async (
+      name: string,
+      _args: Record<string, unknown>,
+      options: RealtimeSubscribeOptionsForTest,
+    ) => {
+      subscribeOptions.push(options)
+      return {
+        id: `server-subscription.${subscribeOptions.length}`,
+        current: {
+          name,
+          data: {},
+          dependencies: [],
+          version: 1,
+        },
+        unsubscribe: subscribeOptions.length === 1 ? unsubscribeFirst : unsubscribeSecond,
+      }
+    })
+    const runtime = createBroadcastWorkerRuntime({
+      config: createConfig(),
+      now: () => FIXED_NOW_MS,
+      realtime: {
+        async query(name) {
+          return { name, data: {}, dependencies: [] }
+        },
+        async mutate(name) {
+          return { name, data: {}, dependencies: [] }
+        },
+        subscribe,
+      },
+    })
+
+    runtime.connectWebSocket(socket.socket)
+    await runtime.receiveWebSocketMessage(socket.socket.socketId, JSON.stringify({
+      event: 'holo:realtime',
+      data: {
+        id: 'subscription.1',
+        action: 'subscribe',
+        name: 'posts.list',
+        args: { page: 1 },
+      },
+    }))
+    await runtime.receiveWebSocketMessage(socket.socket.socketId, JSON.stringify({
+      event: 'holo:realtime',
+      data: {
+        id: 'subscription.1',
+        action: 'subscribe',
+        name: 'posts.list',
+        args: { page: 2 },
+      },
+    }))
+
+    await subscribeOptions[0]?.onData({
+      name: 'posts.list',
+      data: { stale: true },
+      dependencies: [],
+      version: 2,
+    })
+    await subscribeOptions[0]?.onPatch?.({
+      operations: [{
+        op: 'replace',
+        path: ['stale'],
+        value: true,
+      }],
+      version: 3,
+    })
+    await subscribeOptions[0]?.onError(new Error('stale subscription error'))
+    await subscribeOptions[1]?.onPatch?.({
+      operations: [{
+        op: 'replace',
+        path: ['current'],
+        value: true,
+      }],
+      version: 2,
+    })
+
+    const realtimeMessages = decodeMessages(socket.messages).filter(message => message.event.startsWith('holo:realtime'))
+    expect(realtimeMessages.map(message => ({
+      event: message.event,
+      data: JSON.parse(message.data) as unknown,
+    }))).toEqual([{
+      event: 'holo:realtime:patch',
+      data: {
+        id: 'subscription.1',
+        patch: {
+          operations: [{
+            op: 'replace',
+            path: ['current'],
+            value: true,
+          }],
+          version: 2,
+        },
+      },
+    }])
+    expect(unsubscribeFirst).toHaveBeenCalledTimes(1)
+    expect(unsubscribeSecond).not.toHaveBeenCalled()
+  })
+
+  it('ignores stale realtime subscribe failures after disconnect', async () => {
+    const app = {
+      connection: 'holo-main',
+      appId: 'app-main',
+      key: 'key-main',
+      secret: 'secret-main',
+    }
+    const socket = createSocket(app)
+    const statusGetter = vi.fn(() => 500)
+    const staleError = Object.defineProperty({
+      message: 'subscribe failed',
+      name: 'RealtimeError',
+    }, 'status', {
+      get: statusGetter,
+    })
+    let rejectSubscribe: ((error: unknown) => void) | undefined
+    const subscribe = vi.fn(async () => {
+      await new Promise((_resolve, reject) => {
+        rejectSubscribe = reject
+      })
+
+      throw staleError
+    })
+    const runtime = createBroadcastWorkerRuntime({
+      config: createConfig(),
+      now: () => FIXED_NOW_MS,
+      realtime: {
+        async query(name) {
+          return { name, data: {}, dependencies: [] }
+        },
+        async mutate(name) {
+          return { name, data: {}, dependencies: [] }
+        },
+        subscribe,
+      },
+    })
+
+    runtime.connectWebSocket(socket.socket)
+    const subscribeTask = runtime.receiveWebSocketMessage(socket.socket.socketId, JSON.stringify({
+      event: 'holo:realtime',
+      data: {
+        id: 'subscription.1',
+        action: 'subscribe',
+        name: 'posts.list',
+        args: {},
+      },
+    }))
+    await vi.waitUntil(() => typeof rejectSubscribe === 'function')
+
+    runtime.disconnectWebSocket(socket.socket.socketId)
+    rejectSubscribe?.(staleError)
+    await subscribeTask
+
+    const realtimeMessages = decodeMessages(socket.messages).filter(message => message.event.startsWith('holo:realtime'))
+    expect(realtimeMessages).toEqual([])
+    expect(statusGetter).not.toHaveBeenCalled()
+  })
+
+  it('does not send realtime query results after the socket disconnects', async () => {
+    const app = {
+      connection: 'holo-main',
+      appId: 'app-main',
+      key: 'key-main',
+      secret: 'secret-main',
+    }
+    const socket = createSocket(app)
+    let resolveQuery: (() => void) | undefined
+    const runtime = createBroadcastWorkerRuntime({
+      config: createConfig(),
+      now: () => FIXED_NOW_MS,
+      realtime: {
+        async query(name: string) {
+          return await new Promise(resolve => {
+            resolveQuery = () => {
+              resolve({
+                name,
+                data: { late: true },
+                dependencies: [],
+              })
+            }
+          })
+        },
+        async mutate(name) {
+          return { name, data: {}, dependencies: [] }
+        },
+        async subscribe() {
+          throw new Error('subscribe should not run')
+        },
+      },
+    })
+
+    runtime.connectWebSocket(socket.socket)
+    const queryTask = runtime.receiveWebSocketMessage(socket.socket.socketId, JSON.stringify({
+      event: 'holo:realtime',
+      data: {
+        id: 'query.1',
+        action: 'query',
+        name: 'posts.list',
+        args: {},
+      },
+    }))
+    await vi.waitUntil(() => typeof resolveQuery === 'function')
+
+    runtime.disconnectWebSocket(socket.socket.socketId)
+    resolveQuery?.()
+    await queryTask
+
+    const realtimeMessages = decodeMessages(socket.messages).filter(message => message.event.startsWith('holo:realtime'))
+    expect(realtimeMessages).toEqual([])
+  })
+
+  it('unsubscribes realtime subscriptions that resolve after the socket disconnects', async () => {
+    const app = {
+      connection: 'holo-main',
+      appId: 'app-main',
+      key: 'key-main',
+      secret: 'secret-main',
+    }
+    const socket = createSocket(app)
+    const unsubscribe = vi.fn()
+    let resolveSubscribe: (() => void) | undefined
+    const runtime = createBroadcastWorkerRuntime({
+      config: createConfig(),
+      now: () => FIXED_NOW_MS,
+      realtime: {
+        async query(name) {
+          return { name, data: {}, dependencies: [] }
+        },
+        async mutate(name) {
+          return { name, data: {}, dependencies: [] }
+        },
+        async subscribe(name: string) {
+          return await new Promise(resolve => {
+            resolveSubscribe = () => {
+              resolve({
+                id: 'server-subscription.1',
+                current: {
+                  name,
+                  data: {},
+                  dependencies: [],
+                  version: 1,
+                },
+                unsubscribe,
+              })
+            }
+          })
+        },
+      },
+    })
+
+    runtime.connectWebSocket(socket.socket)
+    const subscribeTask = runtime.receiveWebSocketMessage(socket.socket.socketId, JSON.stringify({
+      event: 'holo:realtime',
+      data: {
+        id: 'subscription.1',
+        action: 'subscribe',
+        name: 'posts.list',
+        args: {},
+      },
+    }))
+    await vi.waitUntil(() => typeof resolveSubscribe === 'function')
+
+    runtime.disconnectWebSocket(socket.socket.socketId)
+    resolveSubscribe?.()
+    await subscribeTask
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+    const realtimeMessages = decodeMessages(socket.messages).filter(message => message.event.startsWith('holo:realtime'))
+    expect(realtimeMessages).toEqual([])
+  })
+
+  it('clears pending realtime subscription tokens when current subscribe startup fails', async () => {
+    const app = {
+      connection: 'holo-main',
+      appId: 'app-main',
+      key: 'key-main',
+      secret: 'secret-main',
+    }
+    const socket = createSocket(app)
+    const runtime = createBroadcastWorkerRuntime({
+      config: createConfig(),
+      now: () => FIXED_NOW_MS,
+      realtime: {
+        async query(name) {
+          return { name, data: {}, dependencies: [] }
+        },
+        async mutate(name) {
+          return { name, data: {}, dependencies: [] }
+        },
+        async subscribe() {
+          throw new Error('subscribe failed')
+        },
+      },
+    })
+
+    runtime.connectWebSocket(socket.socket)
+    await runtime.receiveWebSocketMessage(socket.socket.socketId, JSON.stringify({
+      event: 'holo:realtime',
+      data: {
+        id: 'subscription.1',
+        action: 'subscribe',
+        name: 'posts.list',
+        args: {},
+      },
+    }))
+    await runtime.receiveWebSocketMessage(socket.socket.socketId, JSON.stringify({
+      event: 'holo:realtime',
+      data: {
+        id: 'subscription.1',
+        action: 'unsubscribe',
+        args: {},
+      },
+    }))
+
+    const realtimeMessages = decodeMessages(socket.messages).filter(message => message.event.startsWith('holo:realtime'))
+    expect(realtimeMessages.map(message => message.event)).toEqual([
+      'holo:realtime:error',
+      'holo:realtime:unsubscribed',
+    ])
   })
 
   it('serializes structured realtime authorization errors through websocket messages', async () => {

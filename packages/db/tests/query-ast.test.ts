@@ -92,13 +92,22 @@ describe('query ast and planner normalization', () => {
 
     expect(insertPlan.kind).toBe('insert')
     expect(insertPlan.ignoreConflicts).toBe(true)
+    expect(insertPlan.returning).toBe(false)
     expect(upsertPlan.kind).toBe('upsert')
+    expect(upsertPlan.returning).toBe(false)
     expect(updatePlan.kind).toBe('update')
+    expect(updatePlan.returning).toBe(false)
     expect(deletePlan.kind).toBe('delete')
+    expect(deletePlan.returning).toBe(false)
     expect(Object.isFrozen(insertPlan.values)).toBe(true)
     expect(Object.isFrozen(upsertPlan.uniqueBy)).toBe(true)
     expect(Object.isFrozen(updatePlan.values)).toBe(true)
     expect(Object.isFrozen(deletePlan.predicates)).toBe(true)
+
+    expect(createInsertQueryPlan(createTableSource(users), [{ name: 'C' }], { returning: true }).returning).toBe(true)
+    expect(createUpsertQueryPlan(createTableSource(users), [{ id: 1, name: 'C' }], ['id'], [], { returning: true }).returning).toBe(true)
+    expect(createUpdateQueryPlan(createTableSource(users), [], { name: 'C' }, { returning: true }).returning).toBe(true)
+    expect(createDeleteQueryPlan(createTableSource(users), [], { returning: true }).returning).toBe(true)
   })
 
   it('validates handcrafted valid plans across the remaining shared AST families', () => {

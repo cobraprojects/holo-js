@@ -71,6 +71,12 @@ Use `holo start` in process managers such as PM2, systemd, Docker, Forge, or con
 calling the framework production entrypoint directly. That keeps database, auth, session, storage, and
 generated schema runtime state initialized before server-rendered code runs.
 
+Pass framework server options after `holo start` when your host assigns a specific interface or port:
+
+```bash
+holo start --hostname 0.0.0.0 --port 3072
+```
+
 If the deployment includes Holo workers, run them as separate supervised processes. Do not start queue or
 broadcast workers from inside the web request process.
 

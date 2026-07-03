@@ -25,6 +25,7 @@ import {
   morphedByMany,
   oldestOfMany,
   oldestMorphOne,
+  queryCacheInternals,
   resetDB,
   resetMorphRegistry,
   scopeRelation,
@@ -602,6 +603,377 @@ describe('model relation slice', () => {
     expect(loaded[0]?.getRelation<Entity<TableDefinition>>('authorWithTrashed')?.get('name')).toBe('Alive')
     expect(loaded[1]?.getRelation('author')).toBeNull()
     expect(loaded[1]?.getRelation<Entity<TableDefinition>>('authorWithTrashed')?.get('name')).toBe('Trashed')
+  })
+
+  it('keeps model eager-load observations scoped to active dependency collectors', async () => {
+    const adapter = new RelationAdapter({
+      users: [
+        { id: 1, name: 'Ava' },
+      ],
+      roles: [
+        { id: 10, name: 'Admin' },
+      ],
+      role_users: [
+        { id: 100, userId: 1, roleId: 10, active: true },
+      ],
+    })
+
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: {
+        default: createDatabase({
+          connectionName: 'default',
+          adapter,
+          dialect: createDialect(),
+        }),
+      },
+    }))
+
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+    })
+    const roles = defineTable('roles', {
+      id: column.id(),
+      name: column.string(),
+    })
+    const roleUsers = defineTable('role_users', {
+      id: column.id(),
+      userId: column.integer(),
+      roleId: column.integer(),
+      active: column.boolean(),
+    })
+
+    let Role: ReturnType<typeof defineModelFromTable<typeof roles>>
+    const User = defineModelFromTable(users, {
+      relations: {
+        roles: belongsToMany(() => Role, roleUsers, 'userId', 'roleId')
+          .withPivot('id', 'active')
+          .orderByPivot('id'),
+      },
+    })
+    Role = defineModelFromTable(roles)
+
+    const normalUsers = await User.query().with('roles').orderBy('id').get()
+    expect(normalUsers[0]?.getRelation<TestEntity[]>('roles').map(role => role.get('name'))).toEqual(['Admin'])
+    expect(queryCacheInternals.hasActiveDatabaseDependencyCollector()).toBe(false)
+
+    const result = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return await User.query().with('roles').orderBy('id').get()
+    })
+
+    expect(result.value[0]?.getRelation<TestEntity[]>('roles').map(role => role.get('name'))).toEqual(['Admin'])
+    expect(result.queries).toHaveLength(3)
+    expect(result.queries).toEqual([
+      expect.objectContaining({
+        connectionName: 'default',
+        orderBy: [{ column: 'id', direction: 'asc' }],
+        patchable: false,
+        tableName: 'users',
+      }),
+      expect.objectContaining({
+        connectionName: 'default',
+        orderBy: [{ column: 'id', direction: 'asc' }],
+        patchable: true,
+        predicates: [{ column: 'userId', operator: '=', value: 1 }],
+        relation: expect.objectContaining({
+          kind: 'belongsToMany',
+          relatedTableName: 'roles',
+        }),
+        tableName: 'role_users',
+      }),
+      expect.objectContaining({
+        connectionName: 'default',
+        patchable: true,
+        predicates: [{ column: 'id', operator: 'in', value: [10] }],
+        relation: expect.objectContaining({
+          kind: 'belongsToMany',
+          relatedTableName: 'roles',
+        }),
+        tableName: 'roles',
+      }),
+    ])
+  })
+
+  it('keeps patchable eager-load metadata work scoped to active dependency collectors', async () => {
+    const adapter = new RelationAdapter({
+      users: [
+        { id: 1, name: 'Ava' },
+      ],
+      posts: [
+        { id: 10, userId: 1, title: 'Post A', published: true },
+        { id: 11, userId: 1, title: 'Post B', published: false },
+      ],
+    })
+
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: {
+        default: createDatabase({
+          connectionName: 'default',
+          adapter,
+          dialect: createDialect(),
+        }),
+      },
+    }))
+
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+    })
+    const posts = defineTable('posts', {
+      id: column.id(),
+      userId: column.integer(),
+      title: column.string(),
+      published: column.boolean(),
+    })
+
+    let constraintCalls = 0
+    const Post = defineModelFromTable(posts)
+    const User = defineModelFromTable(users, {
+      relations: {
+        posts: scopeRelation(hasMany(() => Post, 'userId'), query => {
+          constraintCalls += 1
+          return query.where('published', true)
+        }),
+      },
+    })
+
+    const normalUsers = await User.query().with('posts').orderBy('id').get()
+    expect(normalUsers[0]?.getRelation<TestEntity[]>('posts').map(post => post.get('title'))).toEqual(['Post A'])
+    expect(constraintCalls).toBe(1)
+    expect(queryCacheInternals.hasActiveDatabaseDependencyCollector()).toBe(false)
+
+    constraintCalls = 0
+    const result = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return await User.query().with('posts').orderBy('id').get()
+    })
+
+    expect(result.value[0]?.getRelation<TestEntity[]>('posts').map(post => post.get('title'))).toEqual(['Post A'])
+    expect(constraintCalls).toBe(2)
+    expect(result.queries).toEqual([
+      expect.objectContaining({
+        connectionName: 'default',
+        orderBy: [{ column: 'id', direction: 'asc' }],
+        patchable: true,
+        relatedHydrations: [
+          expect.objectContaining({
+            foreignKey: 'userId',
+            kind: 'hasMany',
+            localKey: 'id',
+            predicates: [{ column: 'published', operator: '=', value: 1 }],
+            relationKey: 'posts',
+            relatedConnectionName: 'default',
+            relatedTableName: 'posts',
+          }),
+        ],
+        tableName: 'users',
+      }),
+      expect.objectContaining({
+        connectionName: 'default',
+        patchable: true,
+        predicates: [
+          { column: 'published', operator: '=', value: 1 },
+          { column: 'userId', operator: '=', value: 1 },
+        ],
+        resultPath: [0, 'posts'],
+        tableName: 'posts',
+      }),
+    ])
+  })
+
+  it('records hasOne, belongsTo, and aggregate relation observations for dependency collectors', async () => {
+    const adapter = new RelationAdapter({
+      users: [
+        { id: 1, name: 'Ava' },
+        { id: 2, name: 'Nora' },
+      ],
+      profiles: [
+        { id: 10, userId: 1, bio: 'Lead' },
+      ],
+      posts: [
+        { id: 20, userId: 1, title: 'Post A', score: 5 },
+        { id: 21, userId: 1, title: 'Post B', score: 3 },
+        { id: 22, userId: 2, title: 'Post C', score: 7 },
+        { id: 23, userId: null, title: 'Orphan', score: 9 },
+      ],
+      roles: [
+        { id: 30, name: 'Admin' },
+      ],
+      role_users: [
+        { id: 40, userId: 1, roleId: 30 },
+      ],
+    })
+
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: {
+        default: createDatabase({
+          connectionName: 'default',
+          adapter,
+          dialect: createDialect(),
+        }),
+      },
+    }))
+
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+    })
+    const profiles = defineTable('profiles', {
+      id: column.id(),
+      userId: column.integer(),
+      bio: column.string(),
+    })
+    const posts = defineTable('posts', {
+      id: column.id(),
+      userId: column.integer().nullable(),
+      title: column.string(),
+      score: column.integer(),
+    })
+    const roles = defineTable('roles', {
+      id: column.id(),
+      name: column.string(),
+    })
+    const roleUsers = defineTable('role_users', {
+      id: column.id(),
+      userId: column.integer(),
+      roleId: column.integer(),
+    })
+
+    let User: ReturnType<typeof defineModelFromTable<typeof users>>
+    const Profile = defineModelFromTable(profiles)
+    const Role = defineModelFromTable(roles)
+    const Post = defineModelFromTable(posts, {
+      relations: {
+        author: belongsTo(() => User, 'userId'),
+      },
+    })
+    User = defineModelFromTable(users, {
+      relations: {
+        posts: hasMany(() => Post, 'userId'),
+        profile: hasOne(() => Profile, 'userId'),
+        roles: belongsToMany(() => Role, roleUsers, 'userId', 'roleId'),
+      },
+    })
+
+    const userResult = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return await User.query()
+        .with('profile')
+        .withCount('posts')
+        .withExists('posts', 'roles')
+        .withMax('posts', 'score')
+        .orderBy('id')
+        .getJson()
+    })
+
+    expect(userResult.value.map(user => user.profile)).toEqual([
+      expect.objectContaining({ bio: 'Lead' }),
+      null,
+    ])
+    expect(userResult.queries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        connectionName: 'default',
+        emptyRecordValue: null,
+        limit: 1,
+        patchable: true,
+        predicates: [{ column: 'userId', operator: '=', value: 1 }],
+        resultPath: [0, 'profile'],
+        rowWindowMode: 'single',
+        tableName: 'profiles',
+      }),
+      expect.objectContaining({
+        aggregate: expect.objectContaining({
+          kind: 'count',
+        }),
+        result: 2,
+        resultPath: [0, 'posts_count'],
+        tableName: 'posts',
+      }),
+      expect.objectContaining({
+        aggregate: expect.objectContaining({
+          kind: 'count',
+          output: 'boolean',
+        }),
+        result: true,
+        resultPath: [0, 'posts_exists'],
+        tableName: 'posts',
+      }),
+      expect.objectContaining({
+        aggregate: expect.objectContaining({
+          column: 'score',
+          kind: 'max',
+        }),
+        result: 5,
+        resultPath: [0, 'posts_max_score'],
+        tableName: 'posts',
+      }),
+    ]))
+
+    const postResult = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return await Post.query()
+        .with('author')
+        .withCount('author')
+        .withExists('author')
+        .withMax('author', 'id')
+        .orderBy('id')
+        .getJson()
+    })
+
+    expect(postResult.value.map(post => post.author)).toEqual([
+      expect.objectContaining({ name: 'Ava' }),
+      expect.objectContaining({ name: 'Ava' }),
+      expect.objectContaining({ name: 'Nora' }),
+      null,
+    ])
+    expect(postResult.queries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        relation: expect.objectContaining({
+          foreignKey: 'userId',
+          kind: 'belongsToParentKey',
+          ownerKey: 'id',
+          relationKey: 'author',
+          relatedTableName: 'users',
+        }),
+        resultPath: [0],
+        tableName: 'posts',
+      }),
+      expect.objectContaining({
+        emptyRecordValue: null,
+        limit: 1,
+        patchable: true,
+        predicates: [{ column: 'id', operator: '=', value: 1 }],
+        resultPath: [0, 'author'],
+        rowWindowMode: 'single',
+        tableName: 'users',
+      }),
+      expect.objectContaining({
+        aggregate: expect.objectContaining({
+          kind: 'count',
+        }),
+        result: 1,
+        resultPath: [0, 'author_count'],
+        tableName: 'users',
+      }),
+      expect.objectContaining({
+        aggregate: expect.objectContaining({
+          kind: 'count',
+          output: 'boolean',
+        }),
+        result: true,
+        resultPath: [0, 'author_exists'],
+        tableName: 'users',
+      }),
+      expect.objectContaining({
+        aggregate: expect.objectContaining({
+          column: 'id',
+          kind: 'max',
+        }),
+        result: 1,
+        resultPath: [0, 'author_max_id'],
+        tableName: 'users',
+      }),
+    ]))
   })
 
   it('supports nested eager loading and belongsToMany eager loading', async () => {

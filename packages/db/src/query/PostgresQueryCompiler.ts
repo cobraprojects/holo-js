@@ -19,6 +19,10 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
   }
 
   protected override compileInsertSuffix(plan: InsertQueryPlan): string {
+    if (plan.returning === true) {
+      return `${plan.ignoreConflicts ? ' ON CONFLICT DO NOTHING' : ''} RETURNING *`
+    }
+
     const primaryKey = Object.values(plan.source.table?.columns ?? {})
       .find(column => column.primaryKey)?.name
     const returning = primaryKey ? ` RETURNING ${this.quoteIdentifier(primaryKey)}` : ''
@@ -27,6 +31,10 @@ export class PostgresQueryCompiler extends SQLQueryCompiler {
 
   protected override compileUpsertSuffix(plan: UpsertQueryPlan, insertColumns: readonly string[]): string {
     const suffix = super.compileUpsertSuffix(plan, insertColumns)
+    if (plan.returning === true) {
+      return suffix
+    }
+
     const primaryKey = Object.values(plan.source.table?.columns ?? {})
       .find(column => column.primaryKey)?.name
     return primaryKey

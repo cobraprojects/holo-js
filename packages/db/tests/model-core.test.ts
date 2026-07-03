@@ -35,6 +35,7 @@ import {
   type RelationMap,
   type TableDefinition } from '../src'
 import { getGlobalModel } from '../src/model/ModelRegistry'
+import { initializeEntityModelProperties } from '../src/model/entityRuntime'
 import { listMorphModels, registerMorphModel, resolveMorphModel, resolveMorphSelector } from '../src/model/morphRegistry'
 import { defineModelFromTable, defineTable } from './support/internal'
 
@@ -1651,6 +1652,35 @@ describe('model core slice', () => {
     expect(paginated.hasPages()).toBe(true)
     expect(paginated.getPageName()).toBe('page')
 
+    const paginatedJson = await User.query().orderBy('id').paginateJson(2, 2)
+    expect(paginatedJson).toEqual({
+      data: [
+        { id: 3, name: 'Salma', email: 's@example.com' },
+        { id: 4, name: 'Youssef', email: 'y@example.com' },
+      ],
+      meta: {
+        total: 5,
+        perPage: 2,
+        pageName: 'page',
+        currentPage: 2,
+        lastPage: 3,
+        from: 3,
+        to: 4,
+        hasMorePages: true,
+      },
+    })
+    await expect(User.query().where('id', 999).soleJson()).rejects.toThrow(
+      'User query expected exactly one result but found 0.',
+    )
+    await expect(User.query().where('id', '>', 0).soleJson()).rejects.toThrow(
+      'User query expected exactly one result but found 2.',
+    )
+    await expect(User.query().where('id', 1).soleJson()).resolves.toEqual({
+      id: 1,
+      name: 'Mohamed',
+      email: 'm@example.com',
+    })
+
     const emptyPage = await User.query().orderBy('id').paginate(2, 4)
     expect(emptyPage.meta.from).toBeNull()
     expect(emptyPage.meta.to).toBeNull()
@@ -1664,6 +1694,22 @@ describe('model core slice', () => {
     const firstSimple = await User.simplePaginate(2, 1)
     expect(firstSimple.data.map(user => user.get('name'))).toEqual(['Mohamed', 'Amina'])
     expect(firstSimple.meta.hasMorePages).toBe(true)
+
+    const simpleJson = await User.query().orderBy('id').simplePaginateJson(2, 1)
+    expect(simpleJson).toEqual({
+      data: [
+        { id: 1, name: 'Mohamed', email: 'm@example.com' },
+        { id: 2, name: 'Amina', email: 'a@example.com' },
+      ],
+      meta: {
+        perPage: 2,
+        pageName: 'page',
+        currentPage: 1,
+        from: 1,
+        to: 2,
+        hasMorePages: true,
+      },
+    })
 
     const emptySimple = await User.simplePaginate(2, 4)
     expect(emptySimple.meta.from).toBeNull()
@@ -1681,6 +1727,13 @@ describe('model core slice', () => {
     const secondCursorPage = await User.query().orderBy('id').cursorPaginate(2, firstCursorPage.nextCursor)
     expect(secondCursorPage.data.map(user => user.get('name'))).toEqual(['Salma', 'Youssef'])
     expect(secondCursorPage.prevCursor).toBe(firstCursorPage.nextCursor)
+    const secondCursorJson = await User.query().orderBy('id').cursorPaginateJson(2, firstCursorPage.nextCursor)
+    expect(secondCursorJson.data).toEqual([
+      { id: 3, name: 'Salma', email: 's@example.com' },
+      { id: 4, name: 'Youssef', email: 'y@example.com' },
+    ])
+    expect(secondCursorJson.prevCursor).toBe(firstCursorPage.nextCursor)
+    expect(secondCursorJson.nextCursor).toBeTruthy()
     adapter.tables.users?.unshift({ id: 0, name: 'Earlier', email: 'earlier@example.com' })
     const anchoredSecondCursorPage = await User.query().orderBy('id').cursorPaginate(2, firstCursorPage.nextCursor)
     expect(anchoredSecondCursorPage.data.map(user => user.get('name'))).toEqual(['Salma', 'Youssef'])
@@ -3877,6 +3930,76 @@ describe('model core slice', () => {
     expect(plain.hasRelation('profile')).toBe(false)
   })
 
+  it('exposes lazy relation properties as promise-like loaders', async () => {
+    const values = new Map<string, unknown>()
+    const relations = new Map<string, unknown>()
+    const host: {
+      hasRelation(name: string): boolean
+      getRelation<TRelation = unknown>(name: string): TRelation
+      relation(name: string): never
+      setRelation(name: string, value: unknown): unknown
+      get(key: string): unknown
+      set(key: string, value: unknown): unknown
+    } = {
+      hasRelation(name: string) {
+        return relations.has(name)
+      },
+      getRelation<TRelation = unknown>(name: string) {
+        return relations.get(name) as TRelation
+      },
+      relation: vi.fn(() => (() => undefined) as never),
+      setRelation(name: string, value: unknown) {
+        relations.set(name, value)
+        return value
+      },
+      get(key: string) {
+        return values.get(key)
+      },
+      set(key: string, value: unknown) {
+        values.set(key, value)
+        return value
+      },
+    }
+    const repo = {
+      definition: {
+        table: {
+          columns: {
+            name: {},
+          },
+        },
+        relations: {
+          posts: {},
+        },
+      },
+      getRelationNames() {
+        return ['posts']
+      },
+      resolveRelationProperty: vi.fn(async () => ['loaded']),
+    }
+
+    initializeEntityModelProperties(host, repo)
+
+    const propertyHost = host as typeof host & {
+      name: string
+      posts: PromiseLike<unknown> & {
+        catch<TResult = never>(onRejected?: (reason: unknown) => TResult | PromiseLike<TResult>): Promise<unknown | TResult>
+        finally(onFinally?: () => void): Promise<unknown>
+      }
+    }
+    propertyHost.name = 'Amina'
+    expect(values.get('name')).toBe('Amina')
+    expect(propertyHost.name).toBe('Amina')
+    await expect(propertyHost.posts.then(value => value)).resolves.toEqual(['loaded'])
+    await expect(propertyHost.posts.catch(() => 'failed')).resolves.toEqual(['loaded'])
+    let finalized = false
+    await expect(propertyHost.posts.finally(() => {
+      finalized = true
+    })).resolves.toEqual(['loaded'])
+    expect(finalized).toBe(true)
+    Reflect.set(propertyHost, 'posts', ['cached'])
+    expect(relations.get('posts')).toEqual(['cached'])
+  })
+
   it('dispatches trashed, force delete, and replicating lifecycle hooks', async () => {
     const adapter = new InMemoryAdapter({
       users: [
@@ -3963,5 +4086,28 @@ describe('model core slice', () => {
     expect(resolveMorphSelector('Post')).toBe(Post.definition)
     expect(resolveMorphSelector('posts')).toBe(Post.definition)
     expect(resolveMorphSelector('missing')).toBeUndefined()
+  })
+
+  it('resolves string relation targets through the global model registry', () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+    })
+    const posts = defineTable('posts', {
+      id: column.id(),
+      user_id: column.integer(),
+    })
+    const User = defineModelFromTable(users)
+    const Post = defineModelFromTable(posts, {
+      relations: {
+        author: belongsTo('User' as never, 'user_id'),
+      },
+    })
+
+    const relation = Post.definition.relations.author
+    expect(relation.related()).toBe(User)
+    expect(belongsTo('MissingUser' as never, 'user_id').related).toThrow(
+      'Relation target "MissingUser" is not registered.',
+    )
   })
 })

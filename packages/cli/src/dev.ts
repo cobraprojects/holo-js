@@ -122,9 +122,10 @@ export async function runProjectStartServer(
   io: IoStreams,
   projectRoot: string,
   spawnProcess: typeof spawn = spawn,
+  passthroughArgs: readonly string[] = [],
 ): Promise<void> {
   const invocation = resolveFrameworkRunnerInvocation(projectRoot, 'start')
-  const child = spawnProcess(invocation.command, [...invocation.args], {
+  const child = spawnProcess(invocation.command, [...invocation.args, ...passthroughArgs], {
     cwd: projectRoot,
     env: process.env,
     stdio: ['pipe', 'pipe', 'pipe'],

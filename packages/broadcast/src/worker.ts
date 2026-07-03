@@ -66,6 +66,7 @@ type SocketState = {
   readonly close: (code?: number, reason?: string) => void
   readonly subscribedChannels: Set<string>
   readonly realtimeSubscriptions: Map<string, BroadcastRealtimeSubscription>
+  readonly realtimeSubscriptionTokens: Map<string, object>
   active: boolean
   pendingMessage: Promise<void>
 }
@@ -201,6 +202,57 @@ type RealtimeSocketMessage = {
 }
 
 type RealtimeWireErrorKind = 'authorization' | 'transport' | 'runtime'
+
+type RealtimeWireReplacePatchOperation = {
+  readonly op: 'replace'
+  readonly path: readonly (string | number)[]
+  readonly value: unknown
+}
+
+type RealtimeWireMergePatchOperation = {
+  readonly op: 'merge'
+  readonly path: readonly (string | number)[]
+  readonly fields: Readonly<Record<string, unknown>>
+}
+
+type RealtimeWireSplicePatchOperation = {
+  readonly op: 'splice'
+  readonly path: readonly (string | number)[]
+  readonly index: number
+  readonly deleteCount: number
+  readonly values: readonly unknown[]
+}
+
+type RealtimeWireMovePatchOperation = {
+  readonly op: 'move'
+  readonly path: readonly (string | number)[]
+  readonly from: number
+  readonly to: number
+}
+
+type RealtimeWirePatchOperation =
+  | RealtimeWireReplacePatchOperation
+  | RealtimeWireMergePatchOperation
+  | RealtimeWireSplicePatchOperation
+  | RealtimeWireMovePatchOperation
+
+type RealtimeWireSnapshotPatch = {
+  readonly dependencies?: readonly string[]
+  readonly operations: readonly RealtimeWirePatchOperation[]
+  readonly version: number
+}
+
+type BroadcastRealtimeSubscribeOptions = Parameters<BroadcastRealtimeRuntimeBindings['subscribe']>[2] & {
+  readonly onPatch?: (patch: RealtimeWireSnapshotPatch) => void | Promise<void>
+}
+
+type BroadcastPatchCapableRealtimeRuntimeBindings = Omit<BroadcastRealtimeRuntimeBindings, 'subscribe'> & {
+  subscribe(
+    name: string,
+    args: Record<string, unknown>,
+    options: BroadcastRealtimeSubscribeOptions,
+  ): Promise<BroadcastRealtimeSubscription>
+}
 
 type BroadcastRedisScalingConnection = {
   readonly url?: string
@@ -503,6 +555,10 @@ function unsubscribeRealtimeSubscription(socket: SocketState, id: string, subscr
   } catch (error) {
     logRealtimeSubscriptionCleanupError(socket.socketId, id, error)
   }
+}
+
+function isRealtimeSubscriptionCurrent(socket: SocketState, id: string, token: object): boolean {
+  return socket.active && socket.realtimeSubscriptionTokens.get(id) === token
 }
 
 function parseChannelKind(channel: string): { readonly kind: 'public' | 'private' | 'presence', readonly canonical: string } {
@@ -1208,6 +1264,10 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   }
 
   function sendRealtimeMessage(socket: SocketState, event: string, data: Record<string, unknown>): void {
+    if (!socket.active) {
+      return
+    }
+
     socket.send(pusherEvent(event, data))
   }
 
@@ -1289,7 +1349,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   }
 
   async function handleRealtimeMessage(socket: SocketState, data: Record<string, unknown>): Promise<void> {
-    const realtime = options.realtime
+    const realtime = options.realtime as BroadcastPatchCapableRealtimeRuntimeBindings | undefined
     const request = parseRealtimeSocketMessage(data)
     if (!realtime) {
       sendRealtimeError(socket, request.id, new Error('[@holo-js/broadcast] Realtime requires broadcast worker support. Run "holo broadcast:work" from a project with @holo-js/realtime installed.'))
@@ -1298,6 +1358,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
 
     if (request.action === 'unsubscribe') {
       const subscription = socket.realtimeSubscriptions.get(request.id)
+      socket.realtimeSubscriptionTokens.delete(request.id)
       if (subscription) {
         unsubscribeRealtimeSubscription(socket, request.id, subscription)
       }
@@ -1309,6 +1370,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     }
 
     const context = createRealtimeExecutionContext(socket)
+    let pendingSubscriptionToken: object | undefined
     try {
       if (request.action === 'query') {
         const result = await realtime.query(request.name!, request.args, context)
@@ -1334,25 +1396,60 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       }
 
       const previousSubscription = socket.realtimeSubscriptions.get(request.id)
+      socket.realtimeSubscriptionTokens.delete(request.id)
       if (previousSubscription) {
         unsubscribeRealtimeSubscription(socket, request.id, previousSubscription)
         socket.realtimeSubscriptions.delete(request.id)
       }
 
+      const subscriptionToken = {}
+      pendingSubscriptionToken = subscriptionToken
+      socket.realtimeSubscriptionTokens.set(request.id, subscriptionToken)
       const subscription = await realtime.subscribe(request.name!, request.args, {
         context,
         onData(snapshot) {
+          if (!isRealtimeSubscriptionCurrent(socket, request.id, subscriptionToken)) {
+            return
+          }
+
           sendRealtimeMessage(socket, 'holo:realtime:snapshot', {
             id: request.id,
             snapshot,
           })
         },
+        onPatch(patch) {
+          if (!isRealtimeSubscriptionCurrent(socket, request.id, subscriptionToken)) {
+            return
+          }
+
+          sendRealtimeMessage(socket, 'holo:realtime:patch', {
+            id: request.id,
+            patch,
+          })
+        },
         onError(error) {
+          if (!isRealtimeSubscriptionCurrent(socket, request.id, subscriptionToken)) {
+            return
+          }
+
           sendRealtimeError(socket, request.id, error)
         },
       })
+      if (!isRealtimeSubscriptionCurrent(socket, request.id, subscriptionToken)) {
+        unsubscribeRealtimeSubscription(socket, request.id, subscription)
+        return
+      }
+
       socket.realtimeSubscriptions.set(request.id, subscription)
     } catch (error) {
+      if (pendingSubscriptionToken) {
+        if (!isRealtimeSubscriptionCurrent(socket, request.id, pendingSubscriptionToken)) {
+          return
+        }
+
+        socket.realtimeSubscriptionTokens.delete(request.id)
+      }
+
       sendRealtimeError(socket, request.id, error)
     }
   }
@@ -1772,6 +1869,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         close: connection.close,
         subscribedChannels: new Set(),
         realtimeSubscriptions: new Map(),
+        realtimeSubscriptionTokens: new Map(),
         active: true,
         pendingMessage: Promise.resolve(),
       })
@@ -1835,6 +1933,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         unsubscribeRealtimeSubscription(socket, subscriptionId, subscription)
       }
       socket.realtimeSubscriptions.clear()
+      socket.realtimeSubscriptionTokens.clear()
       const channelsToCleanup = [...socket.subscribedChannels]
       const scalingCleanupTasks = channelsToCleanup.map((channel) => {
         const removedPresenceMember = removeSubscriptionLocal(socket.app.appId, socket.socketId, channel)

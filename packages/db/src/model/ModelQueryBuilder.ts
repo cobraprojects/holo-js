@@ -1,5 +1,20 @@
 import { HydrationError, ModelNotFoundException, RelationError } from '../core/errors'
-import type { QueryCacheConfig, QueryCacheTtlInput } from '../cache'
+import {
+  createDatabaseQueryObservation,
+  disableDatabaseQueryObservationPatching,
+  hasActiveDatabaseDependencyCollector,
+  rebindDatabaseQueryObservationHydratedResult,
+  rebindDatabaseQueryObservationAggregate,
+  rebindDatabaseQueryObservationCursorPagination,
+  rebindDatabaseQueryObservationPagination,
+  rebindDatabaseQueryObservationResult,
+  rebindDatabaseQueryObservationScalar,
+  rebindDatabaseQueryObservationScalarList,
+  type DatabaseQueryBelongsToHydrationObservation,
+  type DatabaseQueryRelatedHydrationObservation,
+  type QueryCacheConfig,
+  type QueryCacheTtlInput,
+} from '../cache'
 import {
   createCursorPaginator,
   createPaginator,
@@ -14,6 +29,7 @@ import {
 } from '../query/pagination'
 import { compareChunkValuesAscending, compareChunkValuesDescending } from '../query/chunkOrdering'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
+import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import { resolveMorphSelector } from './morphRegistry'
 import type { ModelCollection } from './collection'
 import type { DatabaseContext } from '../core/DatabaseContext'
@@ -36,10 +52,12 @@ import type {
   ModelColumnName,
   ModelColumnReference,
   ModelJsonColumnPath,
+  ModelDefinitionLike,
   ModelRecord,
   ModelRelationPath,
   ModelSelectableColumn,
   RelatedColumnNameForRelationPath,
+  RelationDefinition,
   RelationMap,
   ResolveEagerLoads,
   SerializedEntityWithLoaded,
@@ -49,6 +67,9 @@ import type { ModelRepository } from './ModelRepository'
 type BuilderCallback<TBuilder> = (query: TBuilder) => unknown
 type ValueBuilderCallback<TBuilder, TValue> = (query: TBuilder, value: TValue) => unknown
 type RelationConstraint = (query: ModelQueryBuilder<TableDefinition>) => unknown
+type QueryableModelReference = ModelDefinitionLike<TableDefinition> & {
+  query(): ModelQueryBuilder<TableDefinition>
+}
 type SubqueryBuilder<TSubTable extends TableDefinition = TableDefinition>
   = TableQueryBuilder<TSubTable, Record<string, unknown>> | ModelQueryBuilder<TSubTable>
 type RelationFilter = {
@@ -875,6 +896,16 @@ export class ModelQueryBuilder<
     ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>
   > {
     const rows = await this.tableQuery.get<ModelRecord<TTable>>()
+    const collection = await this.hydrateRows(rows)
+    this.recordCollectionRelationObservations(collection)
+    this.recordCollectionRelationAggregateObservations(collection)
+    this.rebindRowsToSerializedResult(rows, collection)
+    return collection
+  }
+
+  private async hydrateRows(
+    rows: readonly ModelRecord<TTable>[],
+  ): Promise<ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>> {
     const hasQueryCasts = Object.keys(this.queryCasts).length > 0
     let entities = await Promise.all(
       rows.map(row => (
@@ -892,32 +923,67 @@ export class ModelQueryBuilder<
   }
 
   async getJson(): Promise<SerializedEntityWithLoaded<TTable, TLoaded>[]> {
-    return (await this.get()).toJSON() as SerializedEntityWithLoaded<TTable, TLoaded>[]
+    const rows = await this.tableQuery.get<ModelRecord<TTable>>()
+    const collection = await this.hydrateRows(rows)
+    this.recordCollectionRelationObservations(collection)
+    this.recordCollectionRelationAggregateObservations(collection)
+    const data = collection.toJSON() as SerializedEntityWithLoaded<TTable, TLoaded>[]
+    this.rebindRowsToSerializedResult(rows, data)
+    return data
   }
 
   async first(): Promise<EntityWithLoaded<TTable, TRelations, TLoaded> | undefined> {
-    const [entity] = await this.limit(1).get()
+    const query = this.limit(1)
+    const { collection, rows } = await query.getRowsAndEntities()
+    const entity = collection[0]
+    query.recordSingleRelationObservations(entity)
+    query.recordSingleRelationAggregateObservations(entity)
+    query.rebindRowsToSerializedResult(rows, entity)
     return entity
   }
 
   async firstJson(): Promise<SerializedEntityWithLoaded<TTable, TLoaded> | undefined> {
-    return (await this.first())?.toJSON() as SerializedEntityWithLoaded<TTable, TLoaded> | undefined
+    const query = this.limit(1)
+    const { collection, rows } = await query.getRowsAndEntities()
+    const data = collection[0]?.toJSON() as SerializedEntityWithLoaded<TTable, TLoaded> | undefined
+    query.recordSingleRelationObservations(collection[0])
+    query.recordSingleRelationAggregateObservations(collection[0])
+    query.rebindRowsToSerializedResult(rows, data)
+    return data
   }
 
   async sole(): Promise<EntityWithLoaded<TTable, TRelations, TLoaded>> {
-    const entities = await this.limit(2).get()
-    if (entities.length === 0) {
+    const query = this.limit(2)
+    const { collection, rows } = await query.getRowsAndEntities()
+    if (collection.length === 0) {
       throw new ModelNotFoundException(this.repository.definition.name, `${this.repository.definition.name} query expected exactly one result but found 0.`)
     }
-    if (entities.length !== 1) {
-      throw new HydrationError(`${this.repository.definition.name} query expected exactly one result but found ${entities.length}.`)
+    if (collection.length !== 1) {
+      throw new HydrationError(`${this.repository.definition.name} query expected exactly one result but found ${collection.length}.`)
     }
 
-    return entities[0]!
+    const entity = collection[0]!
+    query.recordSingleRelationObservations(entity)
+    query.recordSingleRelationAggregateObservations(entity)
+    query.rebindRowsToSerializedResult(rows, entity)
+    return entity
   }
 
   async soleJson(): Promise<SerializedEntityWithLoaded<TTable, TLoaded>> {
-    return (await this.sole()).toJSON() as SerializedEntityWithLoaded<TTable, TLoaded>
+    const query = this.limit(2)
+    const { collection, rows } = await query.getRowsAndEntities()
+    if (collection.length === 0) {
+      throw new ModelNotFoundException(this.repository.definition.name, `${this.repository.definition.name} query expected exactly one result but found 0.`)
+    }
+    if (collection.length !== 1) {
+      throw new HydrationError(`${this.repository.definition.name} query expected exactly one result but found ${collection.length}.`)
+    }
+
+    const data = collection[0]!.toJSON() as SerializedEntityWithLoaded<TTable, TLoaded>
+    query.recordSingleRelationObservations(collection[0])
+    query.recordSingleRelationAggregateObservations(collection[0])
+    query.rebindRowsToSerializedResult(rows, data)
+    return data
   }
 
   async paginate(
@@ -929,14 +995,16 @@ export class ModelQueryBuilder<
     assertPositiveInteger(page, 'Page', message => new HydrationError(message))
     const pageName = normalizePaginationParameterName(options.pageName, 'page', message => new HydrationError(message))
 
-    const entities = await this.getUnpaginatedEntities()
+    const { collection: entities, rows } = await this.getUnpaginatedRowsAndEntities()
     const total = entities.length
     const offset = (page - 1) * perPage
     const data = entities.slice(offset, offset + perPage)
     const from = data.length === 0 ? null : offset + 1
     const to = data.length === 0 ? null : offset + data.length
-
-    return createPaginator(this.repository.createCollection(data), {
+    const collection = this.repository.createCollection(data)
+    this.recordPaginatedRelationObservations(collection)
+    this.recordPaginatedRelationAggregateObservations(collection)
+    const result = createPaginator(collection, {
       total,
       perPage,
       pageName,
@@ -946,6 +1014,9 @@ export class ModelQueryBuilder<
       to,
       hasMorePages: offset + data.length < total,
     }) as PaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>
+    this.rebindRowsToPaginatedResult(rows, result.data, result.meta, page, pageName, perPage, total, offset)
+
+    return result
   }
 
   async paginateJson(
@@ -953,10 +1024,34 @@ export class ModelQueryBuilder<
     page = 1,
     options: PaginationOptions = {},
   ): Promise<{ data: readonly SerializedEntityWithLoaded<TTable, TLoaded>[], meta: PaginationMeta }> {
-    return (await this.paginate(perPage, page, options)).toJSON() as {
+    assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
+    assertPositiveInteger(page, 'Page', message => new HydrationError(message))
+    const pageName = normalizePaginationParameterName(options.pageName, 'page', message => new HydrationError(message))
+
+    const { collection, rows } = await this.getUnpaginatedRowsAndEntities()
+    const total = collection.length
+    const offset = (page - 1) * perPage
+    const pageCollection = this.repository.createCollection(collection.slice(offset, offset + perPage))
+    const data = pageCollection.toJSON() as SerializedEntityWithLoaded<TTable, TLoaded>[]
+    this.recordPaginatedRelationObservations(pageCollection)
+    this.recordPaginatedRelationAggregateObservations(pageCollection)
+    const from = data.length === 0 ? null : offset + 1
+    const to = data.length === 0 ? null : offset + data.length
+    const result = createPaginator(data, {
+      total,
+      perPage,
+      pageName,
+      currentPage: page,
+      lastPage: Math.max(1, Math.ceil(total / perPage)),
+      from,
+      to,
+      hasMorePages: offset + data.length < total,
+    }).toJSON() as {
       data: readonly SerializedEntityWithLoaded<TTable, TLoaded>[]
       meta: PaginationMeta
     }
+    this.rebindRowsToPaginatedResult(rows, result.data, result.meta, page, pageName, perPage, total, offset)
+    return result
   }
 
   async simplePaginate(
@@ -968,15 +1063,17 @@ export class ModelQueryBuilder<
     assertPositiveInteger(page, 'Page', message => new HydrationError(message))
     const pageName = normalizePaginationParameterName(options.pageName, 'page', message => new HydrationError(message))
 
-    const entities = await this.getUnpaginatedEntities()
+    const { collection: entities, rows } = await this.getUnpaginatedRowsAndEntities()
     const offset = (page - 1) * perPage
     const pageEntities = entities.slice(offset, offset + perPage + 1)
     const hasMorePages = pageEntities.length > perPage
     const data = hasMorePages ? pageEntities.slice(0, perPage) : pageEntities
     const from = data.length === 0 ? null : offset + 1
     const to = data.length === 0 ? null : offset + data.length
-
-    return createSimplePaginator(this.repository.createCollection(data), {
+    const collection = this.repository.createCollection(data)
+    this.recordPaginatedRelationObservations(collection)
+    this.recordPaginatedRelationAggregateObservations(collection)
+    const result = createSimplePaginator(collection, {
       perPage,
       pageName,
       currentPage: page,
@@ -984,6 +1081,9 @@ export class ModelQueryBuilder<
       to,
       hasMorePages,
     }) as SimplePaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>
+    this.rebindRowsToSimplePaginatedResult(rows, result.data, result.meta, page, pageName, perPage, entities.length, hasMorePages, offset)
+
+    return result
   }
 
   async simplePaginateJson(
@@ -991,10 +1091,33 @@ export class ModelQueryBuilder<
     page = 1,
     options: PaginationOptions = {},
   ): Promise<{ data: readonly SerializedEntityWithLoaded<TTable, TLoaded>[], meta: SimplePaginationMeta }> {
-    return (await this.simplePaginate(perPage, page, options)).toJSON() as {
+    assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
+    assertPositiveInteger(page, 'Page', message => new HydrationError(message))
+    const pageName = normalizePaginationParameterName(options.pageName, 'page', message => new HydrationError(message))
+
+    const { collection, rows } = await this.getUnpaginatedRowsAndEntities()
+    const offset = (page - 1) * perPage
+    const pageEntities = collection.slice(offset, offset + perPage + 1)
+    const hasMorePages = pageEntities.length > perPage
+    const pageCollection = this.repository.createCollection(hasMorePages ? pageEntities.slice(0, perPage) : pageEntities)
+    const data = pageCollection.toJSON() as SerializedEntityWithLoaded<TTable, TLoaded>[]
+    this.recordPaginatedRelationObservations(pageCollection)
+    this.recordPaginatedRelationAggregateObservations(pageCollection)
+    const from = data.length === 0 ? null : offset + 1
+    const to = data.length === 0 ? null : offset + data.length
+    const result = createSimplePaginator(data, {
+      perPage,
+      pageName,
+      currentPage: page,
+      from,
+      to,
+      hasMorePages,
+    }).toJSON() as {
       data: readonly SerializedEntityWithLoaded<TTable, TLoaded>[]
       meta: SimplePaginationMeta
     }
+    this.rebindRowsToSimplePaginatedResult(rows, result.data, result.meta, page, pageName, perPage, collection.length, hasMorePages, offset)
+    return result
   }
 
   async cursorPaginate(
@@ -1007,7 +1130,7 @@ export class ModelQueryBuilder<
     const decodedCursor = decodeValueCursor(cursor, message => new HydrationError(message))
     const orderedQuery = this.prepareCursorPaginationQuery()
     const cursorOrders = orderedQuery.resolveCursorOrders()
-    const entities = await orderedQuery.getUnpaginatedEntities()
+    const { collection: entities, rows } = await orderedQuery.getUnpaginatedRowsAndEntities()
     const filteredEntities = decodedCursor
       ? entities.filter(entity => isRowAfterCursor(
         cursorOrders.map(order => orderedQuery.readCursorColumnValue(entity, order.column)),
@@ -1019,8 +1142,13 @@ export class ModelQueryBuilder<
     const hasMorePages = pageEntities.length > perPage
     const data = hasMorePages ? pageEntities.slice(0, perPage) : pageEntities
     const lastEntity = data.at(-1)
-
-    return createCursorPaginator(this.repository.createCollection(data), {
+    const collection = orderedQuery.repository.createCollection(data)
+    const observedPageRows = orderedQuery.repository
+      .createCollection(pageEntities)
+      .toJSON() as readonly Readonly<Record<string, unknown>>[]
+    orderedQuery.recordPaginatedRelationObservations(collection)
+    orderedQuery.recordPaginatedRelationAggregateObservations(collection)
+    const result = createCursorPaginator(collection, {
       perPage,
       cursorName,
       nextCursor: hasMorePages && lastEntity
@@ -1028,6 +1156,18 @@ export class ModelQueryBuilder<
         : null,
       prevCursor: cursor,
     }) as CursorPaginatedResult<EntityWithLoaded<TTable, TRelations, TLoaded>>
+    if (cursor === null) {
+      orderedQuery.rebindRowsToCursorPaginatedResult(rows, result.data, {
+        cursorName: result.cursorName,
+        nextCursor: result.nextCursor,
+        perPage: result.perPage,
+        prevCursor: result.prevCursor,
+      }, observedPageRows, entities.length, hasMorePages)
+    } else {
+      orderedQuery.rebindRowsToSerializedResult(rows, collection)
+    }
+
+    return result
   }
 
   async cursorPaginateJson(
@@ -1041,13 +1181,54 @@ export class ModelQueryBuilder<
     nextCursor: string | null
     prevCursor: string | null
   }> {
-    return (await this.cursorPaginate(perPage, cursor, options)).toJSON() as {
+    assertPositiveInteger(perPage, 'Per-page value', message => new HydrationError(message))
+    const cursorName = normalizePaginationParameterName(options.cursorName, 'cursor', message => new HydrationError(message))
+    const decodedCursor = decodeValueCursor(cursor, message => new HydrationError(message))
+    const orderedQuery = this.prepareCursorPaginationQuery()
+    const cursorOrders = orderedQuery.resolveCursorOrders()
+    const { collection, rows } = await orderedQuery.getUnpaginatedRowsAndEntities()
+    const filteredEntities = decodedCursor
+      ? collection.filter(entity => isRowAfterCursor(
+        cursorOrders.map(order => orderedQuery.readCursorColumnValue(entity, order.column)),
+        decodedCursor.values,
+        cursorOrders,
+      ))
+      : collection
+    const pageEntities = filteredEntities.slice(0, perPage + 1)
+    const hasMorePages = pageEntities.length > perPage
+    const pageCollection = orderedQuery.repository.createCollection(hasMorePages ? pageEntities.slice(0, perPage) : pageEntities)
+    const data = pageCollection.toJSON() as SerializedEntityWithLoaded<TTable, TLoaded>[]
+    const observedPageRows = orderedQuery.repository
+      .createCollection(pageEntities)
+      .toJSON() as readonly Readonly<Record<string, unknown>>[]
+    const lastEntity = pageCollection.at(-1)
+    orderedQuery.recordPaginatedRelationObservations(pageCollection)
+    orderedQuery.recordPaginatedRelationAggregateObservations(pageCollection)
+    const result = createCursorPaginator(data, {
+      perPage,
+      cursorName,
+      nextCursor: hasMorePages && lastEntity
+        ? encodeValueCursor(cursorOrders.map(order => orderedQuery.readCursorColumnValue(lastEntity, order.column)))
+        : null,
+      prevCursor: cursor,
+    }).toJSON() as {
       data: readonly SerializedEntityWithLoaded<TTable, TLoaded>[]
       perPage: number
       cursorName: string
       nextCursor: string | null
       prevCursor: string | null
     }
+    if (cursor === null) {
+      orderedQuery.rebindRowsToCursorPaginatedResult(rows, result.data, {
+        cursorName: result.cursorName,
+        nextCursor: result.nextCursor,
+        perPage: result.perPage,
+        prevCursor: result.prevCursor,
+      }, observedPageRows, collection.length, hasMorePages)
+    } else {
+      orderedQuery.rebindRowsToSerializedResult(rows, result.data)
+    }
+    return result
   }
 
   async chunk(
@@ -1138,25 +1319,46 @@ export class ModelQueryBuilder<
   }
 
   async count(): Promise<number> {
-    return (await this.get()).length
+    const collection = await this.get()
+    const result = collection.length
+    rebindDatabaseQueryObservationAggregate(collection, result, Object.freeze({ kind: 'count' }))
+    return result
   }
 
   async exists(): Promise<boolean> {
-    return (await this.count()) > 0
+    const count = await this.count()
+    const result = count > 0
+    rebindDatabaseQueryObservationAggregate(count, result, Object.freeze({
+      count,
+      kind: 'count',
+      output: 'boolean',
+    }))
+    return result
   }
 
   async doesntExist(): Promise<boolean> {
-    return !(await this.exists())
+    const count = await this.count()
+    const result = count === 0
+    rebindDatabaseQueryObservationAggregate(count, result, Object.freeze({
+      count,
+      kind: 'count',
+      output: 'inverseBoolean',
+    }))
+    return result
   }
 
   async pluck<TColumn extends ModelAttributeKey<TTable>>(column: TColumn): Promise<Array<ModelRecord<TTable>[TColumn]>> {
-    const entities = await this.get()
-    return entities.map(entity => entity.get(column)) as Array<ModelRecord<TTable>[TColumn]>
+    const { collection, rows } = await this.getRowsAndEntities()
+    const result = collection.map(entity => entity.get(column)) as Array<ModelRecord<TTable>[TColumn]>
+    rebindDatabaseQueryObservationScalarList(rows, result, column)
+    return result
   }
 
   async value<TColumn extends ModelAttributeKey<TTable>>(column: TColumn): Promise<ModelRecord<TTable>[TColumn] | undefined> {
     const entity = await this.first()
-    return entity?.get(column)
+    const value = entity?.get(column)
+    rebindDatabaseQueryObservationScalar(entity, value, column)
+    return value
   }
 
   async valueOrFail<TColumn extends ModelAttributeKey<TTable>>(column: TColumn): Promise<ModelRecord<TTable>[TColumn]> {
@@ -1170,6 +1372,7 @@ export class ModelQueryBuilder<
       throw new HydrationError(`${this.repository.definition.name} query returned no value for column "${column}".`)
     }
 
+    rebindDatabaseQueryObservationScalar(entity, value, column)
     return value
   }
 
@@ -1180,44 +1383,86 @@ export class ModelQueryBuilder<
       throw new HydrationError(`${this.repository.definition.name} query returned no value for column "${column}".`)
     }
 
+    rebindDatabaseQueryObservationScalar(entity, value, column)
     return value
   }
 
   async sum(column: ModelColumnName<TTable>): Promise<number> {
     const entities = await this.get()
     if (entities.length === 0) {
+      if (hasActiveDatabaseDependencyCollector()) {
+        rebindDatabaseQueryObservationAggregate(entities, 0, Object.freeze({ column, kind: 'sum' }))
+      }
       return 0
     }
 
-    return this.extractNumericValues(entities, column, 'sum').reduce((sum, value) => sum + value, 0)
+    const result = this.extractNumericValues(entities, column, 'sum').reduce((sum, value) => sum + value, 0)
+    if (hasActiveDatabaseDependencyCollector()) {
+      rebindDatabaseQueryObservationAggregate(entities, result, Object.freeze({ column, kind: 'sum' }))
+    }
+    return result
   }
 
   async avg(column: ModelColumnName<TTable>): Promise<number | null> {
     const entities = await this.get()
     if (entities.length === 0) {
+      if (hasActiveDatabaseDependencyCollector()) {
+        rebindDatabaseQueryObservationAggregate(entities, null, Object.freeze({ column, count: 0, kind: 'avg', sum: 0 }))
+      }
       return null
     }
 
     const values = this.extractNumericValues(entities, column, 'avg')
-    return values.reduce((sum, value) => sum + value, 0) / values.length
+    const sum = values.reduce((total, value) => total + value, 0)
+    const result = sum / values.length
+    if (hasActiveDatabaseDependencyCollector()) {
+      rebindDatabaseQueryObservationAggregate(entities, result, Object.freeze({ column, count: values.length, kind: 'avg', sum }))
+    }
+    return result
   }
 
   async min(column: ModelColumnName<TTable>): Promise<number | null> {
     const entities = await this.get()
     if (entities.length === 0) {
+      if (hasActiveDatabaseDependencyCollector()) {
+        rebindDatabaseQueryObservationAggregate(entities, null, Object.freeze({ column, kind: 'min' }))
+      }
       return null
     }
 
-    return Math.min(...this.extractNumericValues(entities, column, 'min'))
+    const values = this.extractNumericValues(entities, column, 'min')
+    const result = Math.min(...values)
+    if (hasActiveDatabaseDependencyCollector()) {
+      rebindDatabaseQueryObservationAggregate(entities, result, Object.freeze({
+        column,
+        currentValueCount: values.filter(value => value === result).length,
+        kind: 'min',
+        valueCounts: createAggregateValueCounts(values),
+      }))
+    }
+    return result
   }
 
   async max(column: ModelColumnName<TTable>): Promise<number | null> {
     const entities = await this.get()
     if (entities.length === 0) {
+      if (hasActiveDatabaseDependencyCollector()) {
+        rebindDatabaseQueryObservationAggregate(entities, null, Object.freeze({ column, kind: 'max' }))
+      }
       return null
     }
 
-    return Math.max(...this.extractNumericValues(entities, column, 'max'))
+    const values = this.extractNumericValues(entities, column, 'max')
+    const result = Math.max(...values)
+    if (hasActiveDatabaseDependencyCollector()) {
+      rebindDatabaseQueryObservationAggregate(entities, result, Object.freeze({
+        column,
+        currentValueCount: values.filter(value => value === result).length,
+        kind: 'max',
+        valueCounts: createAggregateValueCounts(values),
+      }))
+    }
+    return result
   }
 
   async firstOrFail(): Promise<EntityWithLoaded<TTable, TRelations, TLoaded>> {
@@ -1725,6 +1970,346 @@ export class ModelQueryBuilder<
     ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>
   > {
     return this.clone(this.tableQuery.limit(undefined).offset(undefined)).get()
+  }
+
+  private async getUnpaginatedRowsAndEntities(): Promise<{
+    readonly collection: ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>
+    readonly rows: readonly ModelRecord<TTable>[]
+  }> {
+    const query = this.clone(this.tableQuery.limit(undefined).offset(undefined))
+    return await query.getRowsAndEntities()
+  }
+
+  private async getRowsAndEntities(): Promise<{
+    readonly collection: ModelCollection<TTable, TRelations, EntityWithLoaded<TTable, TRelations, TLoaded>>
+    readonly rows: readonly ModelRecord<TTable>[]
+  }> {
+    const rows = await this.tableQuery.get<ModelRecord<TTable>>()
+    return {
+      collection: await this.hydrateRows(rows),
+      rows,
+    }
+  }
+
+  private recordCollectionRelationAggregateObservations(
+    collection: readonly Entity<TTable>[],
+  ): void {
+    this.repository.recordRelationAggregateObservations(
+      collection,
+      this.aggregateLoads,
+      (index, key) => Object.freeze([index, key]),
+    )
+  }
+
+  private recordCollectionRelationObservations(
+    collection: readonly Entity<TTable>[],
+  ): void {
+    this.repository.recordRelationObservations(
+      collection,
+      this.eagerLoads,
+      (index, relationName) => Object.freeze([index, relationName]),
+    )
+  }
+
+  private recordSingleRelationObservations(
+    entity: Entity<TTable> | undefined,
+  ): void {
+    if (!entity) {
+      return
+    }
+
+    this.repository.recordRelationObservations(
+      [entity],
+      this.eagerLoads,
+      (_index, relationName) => Object.freeze([relationName]),
+    )
+  }
+
+  private recordPaginatedRelationObservations(
+    collection: readonly Entity<TTable>[],
+  ): void {
+    this.repository.recordRelationObservations(
+      collection,
+      this.eagerLoads,
+      (index, relationName) => Object.freeze(['data', index, relationName]),
+    )
+  }
+
+  private recordSingleRelationAggregateObservations(
+    entity: Entity<TTable> | undefined,
+  ): void {
+    if (!entity) {
+      return
+    }
+
+    this.repository.recordRelationAggregateObservations(
+      [entity],
+      this.aggregateLoads,
+      (_index, key) => Object.freeze([key]),
+    )
+  }
+
+  private recordPaginatedRelationAggregateObservations(
+    collection: readonly Entity<TTable>[],
+  ): void {
+    this.repository.recordRelationAggregateObservations(
+      collection,
+      this.aggregateLoads,
+      (index, key) => Object.freeze(['data', index, key]),
+    )
+  }
+
+  private canBindRowsToSerializedResultBase(): boolean {
+    return Object.keys(this.repository.definition.accessors).length === 0
+      && Object.keys(this.repository.definition.casts).length === 0
+      && Object.keys(this.queryCasts).length === 0
+      && this.repository.definition.appended.length === 0
+      && this.repository.definition.hidden.length === 0
+      && this.repository.definition.visible.length === 0
+      && this.relationFilters.length === 0
+      && this.aggregateLoads.length === 0
+  }
+
+  private canBindRowsToSerializedResult(): boolean {
+    return this.canBindRowsToSerializedResultBase()
+      && this.eagerLoads.length === 0
+  }
+
+  private createPatchableEagerRelationHydrations(): {
+    readonly belongsToHydrations?: readonly DatabaseQueryBelongsToHydrationObservation[]
+    readonly relatedHydrations?: readonly DatabaseQueryRelatedHydrationObservation[]
+  } | undefined {
+    if (!this.canBindRowsToSerializedResultBase() || this.eagerLoads.length === 0) {
+      return undefined
+    }
+
+    const belongsToHydrations: DatabaseQueryBelongsToHydrationObservation[] = []
+    const relatedHydrations: DatabaseQueryRelatedHydrationObservation[] = []
+    for (const load of this.eagerLoads) {
+      if (load.relation.includes('.')) {
+        return undefined
+      }
+
+      const relation = this.repository.getRelationDefinition(load.relation)
+      if (relation.kind === 'belongsTo') {
+        if (relation.constraint || load.constraint) {
+          return undefined
+        }
+
+        const related = relation.related()
+        const relatedDefinition = 'definition' in related ? related.definition : related
+        belongsToHydrations.push(Object.freeze({
+          foreignKey: relation.foreignKey,
+          ownerKey: relation.ownerKey,
+          relationKey: load.relation,
+          relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
+          relatedTableName: relatedDefinition.table.tableName,
+        }))
+        continue
+      }
+
+      if (relation.kind === 'hasMany' || relation.kind === 'hasOne') {
+        const hydrationQuery = this.createPatchableRelatedHydrationQuery(relation, load.constraint)
+        if (!hydrationQuery) {
+          return undefined
+        }
+
+        const related = relation.related()
+        const relatedDefinition = 'definition' in related ? related.definition : related
+        relatedHydrations.push(Object.freeze({
+          foreignKey: relation.foreignKey,
+          kind: relation.kind,
+          localKey: relation.localKey,
+          orderBy: hydrationQuery.orderBy,
+          predicates: hydrationQuery.predicates,
+          relationKey: load.relation,
+          relatedConnectionName: relatedDefinition.connectionName ?? this.getConnectionName(),
+          relatedTableName: relatedDefinition.table.tableName,
+        }))
+        continue
+      }
+
+      return undefined
+    }
+
+    return Object.freeze({
+      belongsToHydrations: belongsToHydrations.length > 0
+        ? Object.freeze(belongsToHydrations)
+        : undefined,
+      relatedHydrations: relatedHydrations.length > 0
+        ? Object.freeze(relatedHydrations)
+        : undefined,
+    })
+  }
+
+  private createPatchableRelatedHydrationQuery(
+    relation: Extract<RelationDefinition, { kind: 'hasMany' | 'hasOne' }>,
+    constraint?: RelationConstraint,
+  ): Pick<DatabaseQueryRelatedHydrationObservation, 'orderBy' | 'predicates'> | undefined {
+    if (!relation.constraint && !constraint) {
+      return Object.freeze({
+        orderBy: Object.freeze([]),
+        predicates: Object.freeze([]),
+      })
+    }
+
+    const related = relation.related()
+    if (!this.isQueryableModelReference(related)) {
+      return undefined
+    }
+
+    let query = related.query()
+    const relationResult = relation.constraint?.(query)
+    query = relationResult instanceof ModelQueryBuilder ? relationResult : query
+
+    if (constraint) {
+      const result = constraint(query)
+      query = result instanceof ModelQueryBuilder ? result : query
+    }
+
+    const plan = query.getTableQueryBuilder().getPlan()
+    const relatedDefinition = 'definition' in related ? related.definition : related
+    const observation = createDatabaseQueryObservation(
+      plan,
+      relatedDefinition.connectionName ?? this.getConnectionName(),
+      Object.freeze([]),
+    )
+    if (!observation?.patchable || typeof observation.limit !== 'undefined' || typeof observation.offset !== 'undefined') {
+      return undefined
+    }
+
+    return Object.freeze({
+      orderBy: observation.orderBy,
+      predicates: observation.predicates,
+    })
+  }
+
+  private isQueryableModelReference(
+    value: ModelDefinitionLike<TableDefinition>,
+  ): value is QueryableModelReference {
+    return 'query' in value && typeof value.query === 'function'
+  }
+
+  private rebindRowsToSerializedResult(
+    rows: readonly ModelRecord<TTable>[],
+    result: unknown,
+  ): void {
+    if (!hasActiveDatabaseDependencyCollector()) {
+      return
+    }
+
+    if (this.canBindRowsToSerializedResult()) {
+      rebindDatabaseQueryObservationResult(rows, result)
+      return
+    }
+
+    const hydrations = this.createPatchableEagerRelationHydrations()
+    if (hydrations) {
+      rebindDatabaseQueryObservationHydratedResult(
+        rows,
+        result,
+        hydrations.belongsToHydrations ?? Object.freeze([]),
+        hydrations.relatedHydrations,
+      )
+      return
+    }
+
+    disableDatabaseQueryObservationPatching(rows)
+  }
+
+  private rebindRowsToPaginatedResult(
+    rows: readonly ModelRecord<TTable>[],
+    data: unknown,
+    meta: PaginationMeta,
+    currentPage: number,
+    pageName: string,
+    perPage: number,
+    total: number,
+    offset: number,
+  ): void {
+    if (!hasActiveDatabaseDependencyCollector()) {
+      return
+    }
+
+    const hydrations = this.createPatchableEagerRelationHydrations()
+    if (!this.canBindRowsToSerializedResult() && !hydrations) {
+      disableDatabaseQueryObservationPatching(rows)
+      return
+    }
+
+    rebindDatabaseQueryObservationPagination(rows, data, meta, Object.freeze({
+      currentPage,
+      kind: 'standard',
+      pageName,
+      perPage,
+      total,
+    }), offset, hydrations?.belongsToHydrations, hydrations?.relatedHydrations)
+  }
+
+  private rebindRowsToSimplePaginatedResult(
+    rows: readonly ModelRecord<TTable>[],
+    data: unknown,
+    meta: SimplePaginationMeta,
+    currentPage: number,
+    pageName: string,
+    perPage: number,
+    rowCount: number,
+    hasMorePages: boolean,
+    offset: number,
+  ): void {
+    if (!hasActiveDatabaseDependencyCollector()) {
+      return
+    }
+
+    const hydrations = this.createPatchableEagerRelationHydrations()
+    if (!this.canBindRowsToSerializedResult() && !hydrations) {
+      disableDatabaseQueryObservationPatching(rows)
+      return
+    }
+
+    rebindDatabaseQueryObservationPagination(rows, data, meta, Object.freeze({
+      currentPage,
+      hasMorePages,
+      kind: 'simple',
+      pageName,
+      perPage,
+      rowCount,
+    }), offset, hydrations?.belongsToHydrations, hydrations?.relatedHydrations)
+  }
+
+  private rebindRowsToCursorPaginatedResult(
+    rows: readonly ModelRecord<TTable>[],
+    data: unknown,
+    meta: {
+      readonly cursorName: string
+      readonly nextCursor: string | null
+      readonly perPage: number
+      readonly prevCursor: string | null
+    },
+    pageRows: readonly Readonly<Record<string, unknown>>[],
+    rowCount: number,
+    hasMorePages: boolean,
+  ): void {
+    if (!hasActiveDatabaseDependencyCollector()) {
+      return
+    }
+
+    const hydrations = this.createPatchableEagerRelationHydrations()
+    if (!this.canBindRowsToSerializedResult() && !hydrations) {
+      disableDatabaseQueryObservationPatching(rows)
+      return
+    }
+
+    rebindDatabaseQueryObservationCursorPagination(rows, data, meta, Object.freeze({
+      cursorName: meta.cursorName,
+      hasMorePages,
+      kind: 'cursor',
+      nextCursor: meta.nextCursor,
+      perPage: meta.perPage,
+      prevCursor: meta.prevCursor,
+      rows: pageRows,
+      rowCount,
+    }), hydrations?.belongsToHydrations, hydrations?.relatedHydrations)
   }
 
   private prepareCursorPaginationQuery(): ModelQueryBuilder<TTable, TRelations, TLoaded> {
