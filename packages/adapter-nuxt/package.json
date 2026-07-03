@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/adapter-nuxt",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Holo-JS Framework - Nuxt adapter",
   "type": "module",
   "license": "MIT",
