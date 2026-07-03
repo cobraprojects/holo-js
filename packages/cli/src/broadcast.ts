@@ -57,6 +57,45 @@ type BroadcastRealtimeSubscriptionSnapshot = BroadcastRealtimeExecutionResult & 
   readonly version: number
 }
 
+type RealtimeReplacePatchOperation = {
+  readonly op: 'replace'
+  readonly path: readonly (string | number)[]
+  readonly value: unknown
+}
+
+type RealtimeMergePatchOperation = {
+  readonly op: 'merge'
+  readonly path: readonly (string | number)[]
+  readonly fields: Readonly<Record<string, unknown>>
+}
+
+type RealtimeSplicePatchOperation = {
+  readonly op: 'splice'
+  readonly path: readonly (string | number)[]
+  readonly index: number
+  readonly deleteCount: number
+  readonly values: readonly unknown[]
+}
+
+type RealtimeMovePatchOperation = {
+  readonly op: 'move'
+  readonly path: readonly (string | number)[]
+  readonly from: number
+  readonly to: number
+}
+
+type RealtimePatchOperation =
+  | RealtimeReplacePatchOperation
+  | RealtimeMergePatchOperation
+  | RealtimeSplicePatchOperation
+  | RealtimeMovePatchOperation
+
+type RealtimeSubscriptionPatch = {
+  readonly dependencies?: readonly string[]
+  readonly operations: readonly RealtimePatchOperation[]
+  readonly version: number
+}
+
 type BroadcastRealtimeSubscription = {
   readonly id: string
   readonly current: BroadcastRealtimeSubscriptionSnapshot
@@ -80,6 +119,7 @@ type BroadcastRealtimeRuntimeBindings = {
     options: {
       readonly context: BroadcastRealtimeExecutionContext
       readonly onData: (snapshot: BroadcastRealtimeSubscriptionSnapshot) => void | Promise<void>
+      readonly onPatch?: (patch: RealtimeSubscriptionPatch) => void | Promise<void>
       readonly onError: (error: unknown) => void | Promise<void>
     },
   ): Promise<BroadcastRealtimeSubscription>
@@ -121,6 +161,7 @@ type RealtimeServerModule = {
     args: Record<string, unknown>,
     options: {
       readonly onData?: (snapshot: BroadcastRealtimeSubscriptionSnapshot) => void | Promise<void>
+      readonly onPatch?: (patch: RealtimeSubscriptionPatch) => void | Promise<void>
       readonly onError?: (error: unknown) => void | Promise<void>
     },
     executionOptions?: { readonly authRequest?: RealtimeAuthRequestAccessors },
@@ -283,6 +324,7 @@ async function createRealtimeWorkerBindings(projectRoot: string): Promise<Broadc
       return await withRealtimeRequest(options.context, async (authRequest) => {
         return await realtime.subscribeRealtimeQuery(await resolveDefinition(name), args, {
           onData: options.onData,
+          onPatch: options.onPatch,
           onError: options.onError,
         }, { authRequest })
       })

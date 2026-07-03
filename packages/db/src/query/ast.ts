@@ -222,12 +222,14 @@ export interface InsertQueryPlan {
   readonly kind: 'insert'
   readonly source: QuerySource
   readonly ignoreConflicts: boolean
+  readonly returning?: boolean
   readonly values: readonly Record<string, unknown>[]
 }
 
 export interface UpsertQueryPlan {
   readonly kind: 'upsert'
   readonly source: QuerySource
+  readonly returning?: boolean
   readonly values: readonly Record<string, unknown>[]
   readonly uniqueBy: readonly string[]
   readonly updateColumns: readonly string[]
@@ -237,6 +239,7 @@ export interface UpdateQueryPlan {
   readonly kind: 'update'
   readonly source: QuerySource
   readonly predicates: readonly QueryPredicateNode[]
+  readonly returning?: boolean
   readonly values: Readonly<Record<string, QueryUpdateValue>>
 }
 
@@ -244,6 +247,7 @@ export interface DeleteQueryPlan {
   readonly kind: 'delete'
   readonly source: QuerySource
   readonly predicates: readonly QueryPredicateNode[]
+  readonly returning?: boolean
 }
 
 export type QueryPlan
@@ -542,12 +546,13 @@ export function withOffset(plan: SelectQueryPlan, offset?: number): SelectQueryP
 export function createInsertQueryPlan(
   source: QuerySource,
   values: readonly Record<string, unknown>[],
-  options: { ignoreConflicts?: boolean } = {},
+  options: { ignoreConflicts?: boolean, returning?: boolean } = {},
 ): InsertQueryPlan {
   return Object.freeze({
     kind: 'insert',
     source,
     ignoreConflicts: options.ignoreConflicts ?? false,
+    returning: options.returning === true,
     values: Object.freeze(values.map(value => Object.freeze({ ...value }))),
   })
 }
@@ -557,10 +562,12 @@ export function createUpsertQueryPlan(
   values: readonly Record<string, unknown>[],
   uniqueBy: readonly string[],
   updateColumns: readonly string[],
+  options: { readonly returning?: boolean } = {},
 ): UpsertQueryPlan {
   return Object.freeze({
     kind: 'upsert',
     source,
+    returning: options.returning === true,
     values: Object.freeze(values.map(value => Object.freeze({ ...value }))),
     uniqueBy: Object.freeze([...uniqueBy]),
     updateColumns: Object.freeze([...updateColumns]),
@@ -571,11 +578,13 @@ export function createUpdateQueryPlan(
   source: QuerySource,
   predicates: readonly QueryPredicateNode[],
   values: Readonly<Record<string, unknown>>,
+  options: { readonly returning?: boolean } = {},
 ): UpdateQueryPlan {
   return Object.freeze({
     kind: 'update',
     source,
     predicates: Object.freeze([...predicates]),
+    returning: options.returning === true,
     values: Object.freeze({ ...values }),
   })
 }
@@ -583,10 +592,12 @@ export function createUpdateQueryPlan(
 export function createDeleteQueryPlan(
   source: QuerySource,
   predicates: readonly QueryPredicateNode[],
+  options: { readonly returning?: boolean } = {},
 ): DeleteQueryPlan {
   return Object.freeze({
     kind: 'delete',
     source,
     predicates: Object.freeze([...predicates]),
+    returning: options.returning === true,
   })
 }

@@ -11,10 +11,13 @@ import {
   configureDB,
   createConnectionManager,
   createCursorPaginator,
+  createDeleteQueryPlan,
+  createInsertQueryPlan,
   createPaginator,
   createSelectQueryPlan,
   createSimplePaginator,
   createTableSource,
+  createUpdateQueryPlan,
   resetDB,
   validateQueryPlan,
   type Dialect,
@@ -23,7 +26,7 @@ import {
   type DriverQueryResult } from '../src'
 import { compareChunkValuesAscending, compareChunkValuesDescending } from '../src/query/chunkOrdering'
 import { defineTable } from './support/internal'
-import type { QueryJsonUpdateOperation } from '../src/query/ast'
+import { createUpsertQueryPlan, type QueryJsonUpdateOperation } from '../src/query/ast'
 
 class QueryAdapter implements DriverAdapter {
   connected = false
@@ -1346,6 +1349,53 @@ describe('query core slice', () => {
     expect(mysql.datePredicate('month')).toContain('EXTRACT(MONTH')
     expect(mysql.datePredicate('day')).toContain('EXTRACT(DAY')
     expect(() => mysql.datePredicate('unknown')).toThrow('Unsupported date predicate part')
+  })
+
+  it('compiles returning clauses for insert, upsert, update, and delete mutation plans', () => {
+    const compiler = new PostgresQueryCompiler(
+      identifier => `"${identifier}"`,
+      index => `$${index}`,
+    )
+    const users = defineTable('users', {
+      id: column.id(),
+      active: column.boolean(),
+    })
+
+    expect(compiler.compile(createInsertQueryPlan(
+      createTableSource(users),
+      [{ active: true }],
+      { returning: true },
+    ))).toEqual(expect.objectContaining({
+      sql: 'INSERT INTO "users" ("active") VALUES ($1) RETURNING *',
+      bindings: [true],
+    }))
+    expect(compiler.compile(createUpsertQueryPlan(
+      createTableSource(users),
+      [{ id: 1, active: true }],
+      ['id'],
+      ['active'],
+      { returning: true },
+    ))).toEqual(expect.objectContaining({
+      sql: 'INSERT INTO "users" ("id", "active") VALUES ($1, $2) ON CONFLICT ("id") DO UPDATE SET "active" = EXCLUDED."active" RETURNING *',
+      bindings: [1, true],
+    }))
+    expect(compiler.compile(createUpdateQueryPlan(
+      createTableSource(users),
+      [{ kind: 'comparison', column: 'id', operator: '=', value: 1 }],
+      { active: true },
+      { returning: true },
+    ))).toEqual(expect.objectContaining({
+      sql: 'UPDATE "users" SET "active" = $1 WHERE "id" = $2 RETURNING *',
+      bindings: [true, 1],
+    }))
+    expect(compiler.compile(createDeleteQueryPlan(
+      createTableSource(users),
+      [{ kind: 'comparison', column: 'id', operator: '=', value: 1 }],
+      { returning: true },
+    ))).toEqual(expect.objectContaining({
+      sql: 'DELETE FROM "users" WHERE "id" = $1 RETURNING *',
+      bindings: [1],
+    }))
   })
 
   it('covers chunk ordering helpers directly', () => {

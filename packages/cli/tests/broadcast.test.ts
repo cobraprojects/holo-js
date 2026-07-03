@@ -343,12 +343,26 @@ describe('@holo-js/cli broadcast worker command', () => {
       readonly dependencies: readonly string[]
       readonly version: number
     }
+    type RealtimePatchForTest = {
+      readonly dependencies?: readonly string[]
+      readonly operations: readonly {
+        readonly op: 'replace'
+        readonly path: readonly (string | number)[]
+        readonly value: unknown
+      }[] | readonly {
+        readonly op: 'merge'
+        readonly path: readonly (string | number)[]
+        readonly fields: Readonly<Record<string, unknown>>
+      }[]
+      readonly version: number
+    }
     type RealtimeBindingForTest = {
       query(name: string, args: Record<string, unknown>, context: RealtimeContextForTest): Promise<unknown>
       mutate(name: string, args: Record<string, unknown>, context: RealtimeContextForTest): Promise<unknown>
       subscribe(name: string, args: Record<string, unknown>, options: {
         readonly context: RealtimeContextForTest
         readonly onData: (snapshot: RealtimeSnapshotForTest) => void | Promise<void>
+        readonly onPatch?: (patch: RealtimePatchForTest) => void | Promise<void>
         readonly onError: (error: unknown) => void | Promise<void>
       }): Promise<unknown>
     }
@@ -411,12 +425,14 @@ describe('@holo-js/cli broadcast worker command', () => {
       '  globalThis.__holoCliRealtimeCacheTest.cookies.push(await executionOptions.authRequest.getCookie(\'sid\'))',
       '  const snapshot = { name: definition.name, data: args, dependencies: [], version: 1 }',
       '  await options.onData(snapshot)',
+      '  await options.onPatch?.({ operations: [{ op: \'replace\', path: [\'page\'], value: 4 }], version: 2 })',
       '  return { id: \'subscription.1\', current: snapshot, unsubscribe() {} }',
       '}',
       '',
     ].join('\n'), 'utf8')
 
     const io = createIo(tempRoot)
+    let forwardedPatch: RealtimePatchForTest | undefined
     const sigintListenersBefore = process.listeners('SIGINT').length
     const promise = runBroadcastWorkCommand(io.io, tempRoot, {
       loadConfig: vi.fn(async () => ({ broadcast: { ok: true }, queue: undefined })) as never,
@@ -429,6 +445,9 @@ describe('@holo-js/cli broadcast worker command', () => {
           await realtime?.subscribe('posts.list', { page: 3 }, {
             context: createRealtimeContext('sid=three'),
             async onData() {},
+            async onPatch(patch) {
+              forwardedPatch = patch
+            },
             async onError(error) {
               throw error
             },
@@ -454,6 +473,16 @@ describe('@holo-js/cli broadcast worker command', () => {
     })
     process.listeners('SIGINT')[sigintListenersBefore]?.('SIGINT')
     await expect(promise).resolves.toBeUndefined()
+    expect(forwardedPatch).toEqual({
+      operations: [
+        {
+          op: 'replace',
+          path: ['page'],
+          value: 4,
+        },
+      ],
+      version: 2,
+    })
 
     const state = (globalThis as typeof globalThis & {
       __holoCliRealtimeCacheTest?: { readonly resolveCount: number, readonly cookies: readonly string[] }
