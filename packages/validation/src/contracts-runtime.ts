@@ -198,12 +198,16 @@ function applyTransformRule(value: unknown, rule: FieldRule): unknown {
   return typeof transformer === 'function' ? transformer(value) : value
 }
 
+function hasOwnProperty(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key)
+}
+
 function resolveConfirmationParent(context: RuntimePostValidationContext, confirmationKey: string, useOutputParent: boolean): unknown {
-  if (useOutputParent && isPlainObject(context.parent) && confirmationKey in context.parent) {
+  if (useOutputParent && isPlainObject(context.parent) && hasOwnProperty(context.parent, confirmationKey)) {
     return context.parent
   }
 
-  if (isPlainObject(context.inputParent) && confirmationKey in context.inputParent) {
+  if (isPlainObject(context.inputParent) && hasOwnProperty(context.inputParent, confirmationKey)) {
     return context.inputParent
   }
 

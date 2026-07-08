@@ -898,14 +898,24 @@ describe('@holo-js/validation contracts', () => {
       expect(confirmedFailure.errors.first('password')).toBe('This field does not match its confirmation.')
     }
 
-    const transformedConfirmedSuccess = await safeParse({
-      password: ' secret ',
-      passwordConfirmation: 'secret',
-    }, confirmedAfterTransform)
-    expect(transformedConfirmedSuccess.valid).toBe(true)
-    if (transformedConfirmedSuccess.valid) {
-      expect(transformedConfirmedSuccess.data.password).toBe('secret')
+    expect(objectPrototypeHas('passwordConfirmation')).toBe(false)
+    Object.defineProperty(Object.prototype, 'passwordConfirmation', {
+      value: 'prototype-secret',
+      configurable: true,
+    })
+    try {
+      const transformedConfirmedSuccess = await safeParse({
+        password: ' secret ',
+        passwordConfirmation: 'secret',
+      }, confirmedAfterTransform)
+      expect(transformedConfirmedSuccess.valid).toBe(true)
+      if (transformedConfirmedSuccess.valid) {
+        expect(transformedConfirmedSuccess.data.password).toBe('secret')
+      }
+    } finally {
+      Reflect.deleteProperty(Object.prototype, 'passwordConfirmation')
     }
+    expect(objectPrototypeHas('passwordConfirmation')).toBe(false)
   })
 
   it('supports custom messages for built-in rules', async () => {
