@@ -28,8 +28,11 @@ import cache, {
   getCacheRuntime,
   getCacheRuntimeBindings,
   isCacheKey,
+  loadCachePluginDriverContracts,
+  loadCachePluginDrivers,
   normalizeCacheTtl,
   resetCacheRuntime,
+  resetCachePluginDriverContracts,
   resolveCacheKey,
   serializeCacheValue,
 } from '../src'
@@ -72,6 +75,870 @@ describe('@holo-js/cache package surface', () => {
     expect(resolveCacheKey(key)).toBe('users.count')
     expect(resolveCacheKey(' users.count ')).toBe('users.count')
     expect(() => defineCacheKey('   ')).toThrow(CacheConfigError)
+  })
+
+  it('ignores plugin cache driver loading before runtime configuration', async () => {
+    await expect(loadCachePluginDrivers()).resolves.toBeUndefined()
+  })
+
+  it('rethrows invalid cache plugin driver contracts after a failed load attempt', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-cache-broken-plugin-'))
+    const missingNameProjectRoot = await mkdtemp(join(tmpdir(), 'holo-cache-missing-name-plugin-'))
+    const namedDriverProjectRoot = await mkdtemp(join(tmpdir(), 'holo-cache-named-driver-plugin-'))
+    const missingDriverProjectRoot = await mkdtemp(join(tmpdir(), 'holo-cache-missing-driver-plugin-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'cache-broken-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-broken-cache'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-broken-cache')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-broken-cache',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'broken-cache-plugin',
+  contributes: {
+    cache: {
+      drivers: {
+        broken: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+export default {
+  driver: 'broken',
+}
+`)
+
+      await expect(loadCachePluginDriverContracts(projectRoot)).rejects.toThrow('must export a matching CacheDriverContract')
+      await expect(loadCachePluginDriverContracts(projectRoot)).rejects.toThrow('must export a matching CacheDriverContract')
+
+      await writeFile(join(missingNameProjectRoot, 'package.json'), JSON.stringify({
+        name: 'cache-missing-name-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(missingNameProjectRoot, 'config'), { recursive: true })
+      await writeFile(join(missingNameProjectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-cache-missing-name'],
+}
+`)
+      const missingNamePluginRoot = join(missingNameProjectRoot, 'node_modules/holo-plugin-cache-missing-name')
+      await mkdir(missingNamePluginRoot, { recursive: true })
+      await writeFile(join(missingNamePluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-cache-missing-name',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(missingNamePluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'cache-missing-name-plugin',
+  contributes: {
+    cache: {
+      drivers: {
+        missingName: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(missingNamePluginRoot, 'driver.mjs'), `
+export default {
+  driver: 'missingName',
+  async get() {
+    return { hit: false }
+  },
+  async put() {
+    return true
+  },
+  async add() {
+    return true
+  },
+  async forget() {
+    return true
+  },
+  async flush() {},
+  async increment() {
+    return 1
+  },
+  async decrement() {
+    return -1
+  },
+  lock(name) {
+    return {
+      name,
+      async get() {
+        return true
+      },
+      async release() {
+        return true
+      },
+      async block() {
+        return true
+      },
+    }
+  },
+}
+`)
+
+      await expect(loadCachePluginDriverContracts(missingNameProjectRoot)).rejects.toThrow('must export a matching CacheDriverContract')
+
+      await writeFile(join(namedDriverProjectRoot, 'package.json'), JSON.stringify({
+        name: 'cache-named-driver-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(namedDriverProjectRoot, 'config'), { recursive: true })
+      await writeFile(join(namedDriverProjectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-cache-named-driver'],
+}
+`)
+      const namedDriverPluginRoot = join(namedDriverProjectRoot, 'node_modules/holo-plugin-cache-named-driver')
+      await mkdir(namedDriverPluginRoot, { recursive: true })
+      await writeFile(join(namedDriverPluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-cache-named-driver',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(namedDriverPluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'cache-named-driver-plugin',
+  contributes: {
+    cache: {
+      drivers: {
+        namedDriver: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(namedDriverPluginRoot, 'driver.mjs'), `
+export const driver = {
+  driver: 'namedDriver',
+}
+`)
+
+      await expect(loadCachePluginDriverContracts(namedDriverProjectRoot)).rejects.toThrow('must export a matching CacheDriverContract')
+
+      await writeFile(join(missingDriverProjectRoot, 'package.json'), JSON.stringify({
+        name: 'cache-missing-driver-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(missingDriverProjectRoot, 'config'), { recursive: true })
+      await writeFile(join(missingDriverProjectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-cache-missing-driver'],
+}
+`)
+      const missingDriverPluginRoot = join(missingDriverProjectRoot, 'node_modules/holo-plugin-cache-missing-driver')
+      await mkdir(missingDriverPluginRoot, { recursive: true })
+      await writeFile(join(missingDriverPluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-cache-missing-driver',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(missingDriverPluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'cache-missing-driver-plugin',
+  contributes: {
+    cache: {
+      drivers: {
+        missingDriver: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(missingDriverPluginRoot, 'driver.mjs'), `
+export const value = 'invalid'
+`)
+
+      await expect(loadCachePluginDriverContracts(missingDriverProjectRoot)).rejects.toThrow('must export a matching CacheDriverContract')
+    } finally {
+      resetCachePluginDriverContracts()
+      await rm(projectRoot, { recursive: true, force: true })
+      await rm(missingNameProjectRoot, { recursive: true, force: true })
+      await rm(namedDriverProjectRoot, { recursive: true, force: true })
+      await rm(missingDriverProjectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('clears cached cache plugin load failures before resetCacheRuntime returns', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-cache-reset-plugin-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'cache-reset-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-cache-reset'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-cache-reset')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-cache-reset',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'cache-reset-plugin',
+  contributes: {
+    cache: {
+      drivers: {
+        reset: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+export default {
+  driver: 'reset',
+}
+`)
+
+      let firstError: unknown
+      try {
+        await loadCachePluginDriverContracts(projectRoot)
+      } catch (error) {
+        firstError = error
+      }
+
+      resetCacheRuntime()
+
+      let secondError: unknown
+      try {
+        await loadCachePluginDriverContracts(projectRoot)
+      } catch (error) {
+        secondError = error
+      }
+
+      expect(firstError).toBeInstanceOf(Error)
+      expect(secondError).toBeInstanceOf(Error)
+      expect(secondError).not.toBe(firstError)
+    } finally {
+      resetCachePluginDriverContracts()
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('loads cache drivers contributed by active Holo plugins into the configured runtime', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-cache-plugin-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'cache-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-cache'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-cache')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-cache',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'cache-plugin',
+  contributes: {
+    cache: {
+      drivers: {
+        plugin: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+const entries = new Map()
+
+export default {
+  name: 'plugin',
+  driver: 'plugin',
+  async get(key) {
+    return entries.get(key) ?? { hit: false }
+  },
+  async put(input) {
+    entries.set(input.key, {
+      hit: true,
+      payload: input.payload,
+      expiresAt: input.expiresAt,
+    })
+    return true
+  },
+  async add(input) {
+    if (entries.has(input.key)) {
+      return false
+    }
+    entries.set(input.key, {
+      hit: true,
+      payload: input.payload,
+      expiresAt: input.expiresAt,
+    })
+    return true
+  },
+  async forget(key) {
+    return entries.delete(key)
+  },
+  async flush() {
+    entries.clear()
+  },
+  async increment() {
+    return 1
+  },
+  async decrement() {
+    return -1
+  },
+  lock(name) {
+    return {
+      name,
+      async get(callback) {
+        return callback ? callback() : true
+      },
+      async release() {
+        return true
+      },
+      async block(_waitSeconds, callback) {
+        return callback ? callback() : true
+      },
+    }
+  },
+}
+`)
+
+      configureCacheRuntime({
+        config: {
+          default: 'memory',
+          drivers: {
+            memory: {
+              driver: 'memory',
+            },
+          },
+        },
+      })
+
+      const firstContracts = await loadCachePluginDriverContracts(projectRoot)
+      const secondContracts = await loadCachePluginDriverContracts(projectRoot)
+      expect(firstContracts.map(driver => driver.driver)).toEqual(['plugin'])
+      expect(secondContracts.map(driver => driver.driver)).toEqual(['plugin'])
+
+      await loadCachePluginDrivers(projectRoot)
+      expect(getCacheRuntimeBindings()?.drivers?.get('plugin')?.driver).toBe('plugin')
+      await expect(loadCachePluginDrivers(projectRoot)).resolves.toBeUndefined()
+    } finally {
+      resetCachePluginDriverContracts()
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('uses plugin cache drivers through normalized runtime config', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-cache-config-plugin-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'cache-config-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-cache-config'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-cache-config')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-cache-config',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'cache-config-plugin',
+  contributes: {
+    cache: {
+      drivers: {
+        plugin: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+const entries = new Map()
+
+export default {
+  name: 'plugin',
+  driver: 'plugin',
+  async get(key) {
+    return entries.get(key) ?? { hit: false }
+  },
+  async put(input) {
+    entries.set(input.key, {
+      hit: true,
+      payload: input.payload,
+      expiresAt: input.expiresAt,
+    })
+    return true
+  },
+  async add(input) {
+    if (entries.has(input.key)) {
+      return false
+    }
+    entries.set(input.key, {
+      hit: true,
+      payload: input.payload,
+      expiresAt: input.expiresAt,
+    })
+    return true
+  },
+  async forget(key) {
+    return entries.delete(key)
+  },
+  async flush() {
+    entries.clear()
+  },
+  async increment() {
+    return 1
+  },
+  async decrement() {
+    return -1
+  },
+  lock(name) {
+    return {
+      name,
+      async get(callback) {
+        return callback ? callback() : true
+      },
+      async release() {
+        return true
+      },
+      async block(_waitSeconds, callback) {
+        return callback ? callback() : true
+      },
+    }
+  },
+}
+`)
+
+      configureCacheRuntime({
+        config: {
+          default: 'primary',
+          drivers: {
+            primary: {
+              driver: 'plugin',
+            },
+          },
+        },
+      })
+      await loadCachePluginDrivers(projectRoot)
+
+      await expect(cache.put('plugin.key', 'cached', 60)).resolves.toBe(true)
+      await expect(cache.get('plugin.key')).resolves.toBe('cached')
+    } finally {
+      resetCachePluginDriverContracts()
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('creates configured plugin cache drivers with their normalized options', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-cache-configured-plugin-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'cache-configured-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-cache-configured'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-cache-configured')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-cache-configured',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'cache-configured-plugin',
+  contributes: {
+    cache: {
+      drivers: {
+        plugin: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+export default {
+  driver: 'plugin',
+  create(config) {
+    const entries = new Map()
+    return {
+      name: config.name,
+      driver: config.driver,
+      bucket: config.bucket,
+      async get(key) {
+        return entries.get(key) ?? { hit: false }
+      },
+      async put(input) {
+        entries.set(input.key, {
+          hit: true,
+          payload: input.payload,
+          expiresAt: input.expiresAt,
+        })
+        return true
+      },
+      async add(input) {
+        if (entries.has(input.key)) {
+          return false
+        }
+        entries.set(input.key, {
+          hit: true,
+          payload: input.payload,
+          expiresAt: input.expiresAt,
+        })
+        return true
+      },
+      async forget(key) {
+        return entries.delete(key)
+      },
+      async flush() {
+        entries.clear()
+      },
+      async increment() {
+        return 1
+      },
+      async decrement() {
+        return -1
+      },
+      lock(name) {
+        return {
+          name,
+          async get(callback) {
+            return callback ? callback() : true
+          },
+          async release() {
+            return true
+          },
+          async block(_waitSeconds, callback) {
+            return callback ? callback() : true
+          },
+        }
+      },
+    }
+  },
+}
+`)
+
+      configureCacheRuntime({
+        config: {
+          default: 'primary',
+          drivers: {
+            primary: {
+              driver: 'plugin',
+              bucket: 'alpha',
+            },
+            secondary: {
+              driver: 'plugin',
+              bucket: 'beta',
+            },
+          },
+        },
+      })
+
+      await loadCachePluginDrivers(projectRoot)
+
+      const primary = getCacheRuntimeBindings()?.drivers.get('primary') as { readonly name: string, readonly driver: string, readonly bucket: string } | undefined
+      const secondary = getCacheRuntimeBindings()?.drivers.get('secondary') as { readonly name: string, readonly driver: string, readonly bucket: string } | undefined
+      expect(primary).toMatchObject({
+        name: 'primary',
+        driver: 'plugin',
+        bucket: 'alpha',
+      })
+      expect(secondary).toMatchObject({
+        name: 'secondary',
+        driver: 'plugin',
+        bucket: 'beta',
+      })
+      expect(primary).not.toBe(secondary)
+      await expect(cache.driver('secondary').put('plugin.key', 'cached', 60)).resolves.toBe(true)
+      await expect(cache.driver('secondary').get('plugin.key')).resolves.toBe('cached')
+    } finally {
+      resetCachePluginDriverContracts()
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('fails fast when configured plugin cache drivers have no contribution', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-cache-missing-configured-plugin-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'cache-missing-configured-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-cache-missing-configured'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-cache-missing-configured')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-cache-missing-configured',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'cache-missing-configured-plugin',
+  contributes: {
+    cache: {
+      drivers: {
+        available: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+export default {
+  name: 'available',
+  driver: 'available',
+  async get() {
+    return { hit: false }
+  },
+  async put() {
+    return true
+  },
+  async add() {
+    return true
+  },
+  async forget() {
+    return true
+  },
+  async flush() {},
+  async increment() {
+    return 1
+  },
+  async decrement() {
+    return -1
+  },
+  lock(name) {
+    return {
+      name,
+      async get(callback) {
+        return callback ? callback() : true
+      },
+      async release() {
+        return true
+      },
+      async block(_waitSeconds, callback) {
+        return callback ? callback() : true
+      },
+    }
+  },
+}
+`)
+
+      configureCacheRuntime({
+        config: {
+          default: 'primary',
+          drivers: {
+            primary: {
+              driver: 'missing',
+            },
+          },
+        },
+      })
+
+      await expect(loadCachePluginDrivers(projectRoot))
+        .rejects.toThrow('Configured cache plugin driver "missing" has no matching plugin contribution')
+      await expect(loadCachePluginDrivers(projectRoot))
+        .rejects.toThrow('Available cache plugin driver contributions: "available"')
+    } finally {
+      resetCachePluginDriverContracts()
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves configured class-based cache driver prototypes', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-cache-class-plugin-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'cache-class-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-cache-class'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-cache-class')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-cache-class',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'cache-class-plugin',
+  contributes: {
+    cache: {
+      drivers: {
+        plugin: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+class PluginCacheDriver {
+  name = 'plugin'
+  driver = 'plugin'
+
+  prototypeMarker() {
+    return this.name
+  }
+
+  async get() {
+    return { hit: false }
+  }
+
+  async put() {
+    return true
+  }
+
+  async add() {
+    return true
+  }
+
+  async forget() {
+    return true
+  }
+
+  async flush() {}
+
+  async increment() {
+    return 1
+  }
+
+  async decrement() {
+    return -1
+  }
+
+  lock(name) {
+    return {
+      name,
+      async get(callback) {
+        return callback ? callback() : true
+      },
+      async release() {
+        return true
+      },
+      async block(_waitSeconds, callback) {
+        return callback ? callback() : true
+      },
+    }
+  }
+}
+
+export default new PluginCacheDriver()
+`)
+
+      configureCacheRuntime({
+        config: {
+          default: 'primary',
+          drivers: {
+            primary: {
+              driver: 'plugin',
+            },
+          },
+        },
+      })
+
+      await loadCachePluginDrivers(projectRoot)
+
+      const driver = getCacheRuntimeBindings()?.drivers.get('primary') as { prototypeMarker(): string } | undefined
+      expect(driver?.prototypeMarker()).toBe('primary')
+    } finally {
+      resetCachePluginDriverContracts()
+      await rm(projectRoot, { recursive: true, force: true })
+    }
   })
 
   it('normalizes ttl values from seconds and dates', () => {
@@ -2054,6 +2921,21 @@ describe('@holo-js/cache package surface', () => {
       drivers: new Map(),
     } as never, 'custom')).toThrow(
       'uses unsupported driver "custom"',
+    )
+    expect(() => cacheRuntimeInternals.resolveConfiguredDriver({
+      config: {
+        default: 'custom',
+        prefix: '',
+        drivers: {
+          custom: {
+            name: 'custom',
+            driver: undefined,
+          },
+        },
+      },
+      drivers: new Map(),
+    } as never, 'custom')).toThrow(
+      'uses unsupported driver "undefined"',
     )
   })
 

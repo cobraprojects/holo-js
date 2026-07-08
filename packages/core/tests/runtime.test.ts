@@ -182,6 +182,23 @@ async function writeQueueConfig(root: string, contents: string): Promise<void> {
   await writeFile(join(root, 'config/queue.ts'), contents, 'utf8')
 }
 
+async function writeRuntimePluginPackage(root: string, packageName: string, pluginContents: string, files: Record<string, string>): Promise<void> {
+  const packageRoot = join(root, 'node_modules', ...packageName.split('/'))
+  await mkdir(packageRoot, { recursive: true })
+  await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
+    name: packageName,
+    type: 'module',
+    holo: {
+      plugin: './plugin.mjs',
+    },
+  }, null, 2), 'utf8')
+  await writeFile(join(packageRoot, 'plugin.mjs'), pluginContents, 'utf8')
+
+  for (const [fileName, contents] of Object.entries(files)) {
+    await writeFile(join(packageRoot, fileName), contents, 'utf8')
+  }
+}
+
 async function writeNotificationsConfig(root: string, contents?: string): Promise<void> {
   await writeFile(join(root, 'config/notifications.ts'), contents ?? `
 import { defineNotificationsConfig } from '@holo-js/notifications'
@@ -1571,6 +1588,99 @@ export default defineQueueConfig({
     await runtime.shutdown()
   })
 
+  it('preserves plugin queue drivers when database failed-job storage is active', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-queue-core'],
+})
+`, 'utf8')
+    await writeQueueConfig(root, `
+import { defineQueueConfig } from ${packageEntry}
+
+export default defineQueueConfig({
+  default: 'plugin',
+  connections: {
+    plugin: {
+      driver: 'plugin',
+      queue: 'plugin-jobs',
+    },
+  },
+})
+`)
+    await writeRuntimePluginPackage(root, 'holo-plugin-queue-core', `
+export default {
+  id: 'queue-core',
+  name: 'Queue Core',
+  contributes: {
+    queue: {
+      drivers: {
+        plugin: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`, {
+      'driver.mjs': `
+export default {
+  driver: 'plugin',
+  create(connection) {
+    return {
+      name: connection.name,
+      driver: connection.driver,
+      mode: 'async',
+      async dispatch(job) {
+        return {
+          jobId: \`plugin:\${job.id}\`,
+          synchronous: false,
+        }
+      },
+      async clear() {
+        return 0
+      },
+      async reserve() {
+        return null
+      },
+      async acknowledge() {},
+      async release() {},
+      async delete() {},
+    }
+  },
+}
+`,
+    })
+
+    const runtime = await initializeHolo(root)
+    registerQueueJob({
+      connection: 'plugin',
+      queue: 'plugin-jobs',
+      async handle() {
+        return 'queued'
+      },
+    }, {
+      name: 'jobs.plugin-core',
+    })
+
+    await expect(Queue.connection().dispatch('jobs.plugin-core', { ok: true })).resolves.toMatchObject({
+      connection: 'plugin',
+      queue: 'plugin-jobs',
+      synchronous: false,
+    })
+
+    await runtime.shutdown()
+  })
+
   it('loads the implicit database failed-job store when queue config is omitted', async () => {
     const root = await createProject()
     await writeBaseConfig(root)
@@ -1859,6 +1969,179 @@ export default defineQueueConfig({
 
     const normalRuntime = await createHolo(root)
     await expect(normalRuntime.initialize()).rejects.toThrow()
+  })
+
+  it('loads plugin boot modules from the runtime config process environment', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig, env } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: env('HOLO_RUNTIME_PLUGINS', '').split(',').filter(Boolean),
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-env-boot', `
+export default {
+  id: 'env-boot',
+  name: 'Env Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export default async function boot({ config }) {
+  globalThis.__holoCoreEnvBoots__ = [
+    ...(globalThis.__holoCoreEnvBoots__ ?? []),
+    config.app.plugins.join(','),
+  ]
+}
+`,
+    })
+
+    const runtimeGlobal = globalThis as typeof globalThis & {
+      __holoCoreEnvBoots__?: string[]
+    }
+    runtimeGlobal.__holoCoreEnvBoots__ = []
+
+    const runtime = await initializeHolo(root, {
+      processEnv: {
+        ...process.env,
+        HOLO_RUNTIME_PLUGINS: 'holo-plugin-env-boot',
+      },
+      preferCache: false,
+    })
+
+    expect(runtime.loadedConfig.app.plugins).toEqual(['holo-plugin-env-boot'])
+    expect(runtimeGlobal.__holoCoreEnvBoots__).toEqual(['holo-plugin-env-boot'])
+
+    await runtime.shutdown()
+    runtimeGlobal.__holoCoreEnvBoots__ = undefined
+  })
+
+  it('runs plugin boot modules once during adapter initialization', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-adapter-boot'],
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-adapter-boot', `
+export default {
+  id: 'adapter-boot',
+  name: 'Adapter Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export default async function boot() {
+  globalThis.__holoCoreAdapterBoots__ = (globalThis.__holoCoreAdapterBoots__ ?? 0) + 1
+}
+`,
+    })
+
+    const runtimeGlobal = globalThis as typeof globalThis & {
+      __holoCoreAdapterBoots__?: number
+    }
+    runtimeGlobal.__holoCoreAdapterBoots__ = 0
+
+    const project = await initializeHoloAdapterProject(root)
+
+    expect(runtimeGlobal.__holoCoreAdapterBoots__).toBe(1)
+
+    await project.runtime.shutdown()
+    runtimeGlobal.__holoCoreAdapterBoots__ = undefined
+  })
+
+  it('ignores plugin boot modules without a callable default export', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeRegistry(root)
+    await writeFile(join(root, 'config/app.ts'), `
+import { defineAppConfig } from ${packageEntry}
+
+export default defineAppConfig({
+  name: 'Runtime App',
+  key: 'base64:key',
+  url: 'https://runtime.test',
+  debug: false,
+  env: 'production',
+  plugins: ['holo-plugin-static-boot'],
+})
+`, 'utf8')
+    await writeRuntimePluginPackage(root, 'holo-plugin-static-boot', `
+export default {
+  id: 'static-boot',
+  name: 'Static Boot',
+  contributes: {
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`, {
+      'boot.mjs': `
+export const boot = 'static'
+`,
+    })
+
+    const runtime = await initializeHolo(root)
+
+    expect(runtime.loadedConfig.app.plugins).toEqual(['holo-plugin-static-boot'])
+
+    await runtime.shutdown()
+  })
+
+  it('resets queue runtime caches when the core runtime shuts down', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+
+    vi.resetModules()
+    const shutdownQueueRuntime = vi.fn(async () => {})
+    const resetQueueRuntime = vi.fn()
+    vi.doMock('@holo-js/queue', async () => {
+      const actual = await vi.importActual('@holo-js/queue') as typeof HoloQueueModule
+      return {
+        ...actual,
+        shutdownQueueRuntime,
+        resetQueueRuntime,
+      }
+    })
+
+    try {
+      const portable = await import('../src/portable')
+      const runtime = await portable.initializeHolo(root)
+
+      await runtime.shutdown()
+
+      expect(shutdownQueueRuntime).toHaveBeenCalled()
+      expect(resetQueueRuntime).toHaveBeenCalled()
+    } finally {
+      vi.doUnmock('@holo-js/queue')
+      vi.resetModules()
+    }
   })
 
   it('disconnects initialized DB connections when queue runtime setup fails after DB boot', async () => {

@@ -249,6 +249,7 @@ export async function serializeProjectConfig(
     url: appConfig.url,
     debug: appConfig.debug,
     env: appConfig.env,
+    plugins: appConfig.plugins,
     paths: config.paths,
   }, null, 2)
 

@@ -16,6 +16,7 @@ import {
   type AuthMigrationSlug,
   type ScaffoldedFile,
 } from './types'
+import { getFrameworkDescriptor } from '../frameworks'
 
 export function renderAuthEnvFiles(
   features: AuthInstallFeatures = {},
@@ -387,9 +388,7 @@ export function createNotificationsMigrationFiles(date = new Date()): readonly S
 }
 
 function resolveFrameworkDefaultUrl(framework: ProjectScaffoldOptions['framework'] | undefined): string {
-  return framework === 'sveltekit'
-    ? 'http://localhost:5173'
-    : 'http://localhost:3000'
+  return framework ? getFrameworkDescriptor(framework).scaffold.defaultUrl : 'http://localhost:3000'
 }
 
 export function renderScaffoldAppConfig(

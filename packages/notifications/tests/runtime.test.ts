@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   configureNotificationsRuntime,
@@ -6,6 +9,7 @@ import {
   getNotificationsRuntime,
   getRegisteredNotificationChannel,
   listRegisteredNotificationChannels,
+  loadNotificationPluginChannels,
   notificationsRuntimeInternals,
   notify,
   notifyMany,
@@ -33,6 +37,11 @@ type InvoicePaidNotifiable = {
 
 declare module '../src/contracts' {
   interface HoloNotificationChannelRegistry {
+    readonly plugin: NotificationChannel<{ readonly token: string }, { readonly text: string }, {
+      readonly channel: string
+      readonly payload: { readonly text: string }
+      readonly route: { readonly token: string }
+    }>
     readonly slack: NotificationChannel<{ readonly webhook: string }, { readonly text: string }, void>
   }
 }
@@ -41,6 +50,56 @@ function asRuntimeNotification<TNotifiable, TBuild extends NotificationBuildFact
   notification: NotificationDefinition<TNotifiable, TBuild>,
 ): NotificationDefinition<unknown, NotificationBuildFactories<unknown>> {
   return notification as unknown as NotificationDefinition<unknown, NotificationBuildFactories<unknown>>
+}
+
+async function writeNotificationPluginProject(
+  projectRoot: string,
+  packageName: string,
+  channelName: string,
+  label: string,
+): Promise<void> {
+  await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+    name: `${label}-notifications-plugin-fixture`,
+    private: true,
+  }, null, 2))
+  await mkdir(join(projectRoot, 'config'), { recursive: true })
+  await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['${packageName}'],
+}
+`)
+  const pluginRoot = join(projectRoot, 'node_modules', packageName)
+  await mkdir(pluginRoot, { recursive: true })
+  await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+    name: packageName,
+    type: 'module',
+    holo: {
+      plugin: './plugin.mjs',
+    },
+  }, null, 2))
+  await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: '${label}-notifications-plugin',
+  contributes: {
+    notifications: {
+      channels: {
+        ${channelName}: {
+          runtime: './channel.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+  await writeFile(join(pluginRoot, 'channel.mjs'), `
+export default {
+  async send() {
+    return {
+      project: '${label}',
+    }
+  },
+}
+`)
 }
 
 const invoicePaidDefinition: NotificationDefinition<
@@ -248,6 +307,40 @@ describe('@holo-js/notifications runtime', () => {
     }))
   })
 
+  it('evaluates notification channels once per target during dispatch', async () => {
+    const mailer = {
+      send: vi.fn(async () => {}),
+    }
+    const via = vi.fn(() => ['email'] as const)
+
+    configureNotificationsRuntime({
+      mailer,
+    })
+
+    await expect(notify({
+      email: 'ava@example.com',
+    }, defineNotification({
+      via,
+      build: {
+        email() {
+          return {
+            subject: 'Hello',
+          }
+        },
+      },
+    }))).resolves.toMatchObject({
+      totalTargets: 1,
+      channels: [
+        {
+          channel: 'email',
+          success: true,
+        },
+      ],
+    })
+
+    expect(via).toHaveBeenCalledOnce()
+  })
+
   it('supports anonymous targets through notifyUsing()', async () => {
     const mailer = {
       send: vi.fn(async () => {}),
@@ -301,6 +394,325 @@ describe('@holo-js/notifications runtime', () => {
       },
       anonymous: true,
     }))
+  })
+
+  it('dispatches registered channels when unrelated plugin channels are broken', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-notifications-broken-plugin-'))
+    const previousCwd = process.cwd()
+    const send = vi.fn(async () => undefined)
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'notifications-broken-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-broken-notifications'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-broken-notifications')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-broken-notifications',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'broken-notifications-plugin',
+  contributes: {
+    notifications: {
+      channels: {
+        broken: {
+          runtime: './missing.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'missing.mjs'), `
+export default {}
+`)
+
+      configureNotificationsRuntime({
+        projectRoot: ` ${projectRoot} `,
+      } as Parameters<typeof configureNotificationsRuntime>[0] & { readonly projectRoot: string })
+      registerNotificationChannel('slack', {
+        send,
+      }, { replaceExisting: true })
+
+      await expect(notifyUsing()
+        .channel('slack', { webhook: 'https://hooks.example.test' })
+        .notify(asRuntimeNotification({
+          type: 'registered-alert',
+          via() {
+            return ['slack']
+          },
+          build: {
+            slack() {
+              return {
+                text: 'Delivered through registered channel.',
+              }
+            },
+          },
+        }))).resolves.toMatchObject({
+        channels: [
+          {
+            channel: 'slack',
+            success: true,
+          },
+        ],
+      })
+      expect(send).toHaveBeenCalledOnce()
+      await expect(loadNotificationPluginChannels(projectRoot)).rejects.toThrow('must export send()')
+      await expect(loadNotificationPluginChannels(projectRoot)).rejects.toThrow('must export send()')
+    } finally {
+      process.chdir(previousCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('dispatches notification channels contributed by active Holo plugins', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-notifications-plugin-'))
+    const previousCwd = process.cwd()
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'notifications-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-notifications'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-notifications')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-notifications',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'notifications-plugin',
+  contributes: {
+    notifications: {
+      channels: {
+        plugin: {
+          runtime: './channel.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'channel.mjs'), `
+export default {
+  async send(context) {
+    return {
+      channel: context.channel,
+      payload: context.payload,
+      route: context.route,
+    }
+  },
+}
+`)
+
+      configureNotificationsRuntime({
+        projectRoot: ` ${projectRoot} `,
+      } as Parameters<typeof configureNotificationsRuntime>[0] & { readonly projectRoot: string })
+
+      const result = await notifyUsing()
+        .channel('plugin', { token: 'plugin-route' })
+        .notify(asRuntimeNotification({
+          type: 'plugin-alert',
+          via() {
+            return ['plugin']
+          },
+          build: {
+            plugin() {
+              return {
+                text: 'Delivered through plugin.',
+              }
+            },
+          },
+        }))
+
+      expect(result.channels).toEqual([
+        expect.objectContaining({
+          channel: 'plugin',
+          success: true,
+          result: {
+            channel: 'plugin',
+            payload: {
+              text: 'Delivered through plugin.',
+            },
+            route: {
+              token: 'plugin-route',
+            },
+          },
+        }),
+      ])
+      await expect(loadNotificationPluginChannels(projectRoot)).resolves.toBeUndefined()
+      await expect(loadNotificationPluginChannels(projectRoot)).resolves.toBeUndefined()
+    } finally {
+      process.chdir(previousCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('clears notification plugin channels when the runtime resets', async () => {
+    const firstRoot = await mkdtemp(join(tmpdir(), 'holo-notifications-plugin-first-'))
+    const secondRoot = await mkdtemp(join(tmpdir(), 'holo-notifications-plugin-second-'))
+
+    try {
+      await writeNotificationPluginProject(firstRoot, 'holo-plugin-notifications-first', 'plugin', 'first')
+      await writeNotificationPluginProject(secondRoot, 'holo-plugin-notifications-second', 'plugin', 'second')
+
+      configureNotificationsRuntime({
+        projectRoot: firstRoot,
+      } as Parameters<typeof configureNotificationsRuntime>[0] & { readonly projectRoot: string })
+
+      const first = await notifyUsing()
+        .channel('plugin', { token: 'first-route' })
+        .notify(asRuntimeNotification({
+          type: 'plugin-alert',
+          via() {
+            return ['plugin']
+          },
+          build: {
+            plugin() {
+              return {
+                text: 'Delivered through first plugin.',
+              }
+            },
+          },
+        }))
+
+      expect(first.channels[0]?.result).toEqual({
+        project: 'first',
+      })
+
+      resetNotificationsRuntime()
+      configureNotificationsRuntime({
+        projectRoot: secondRoot,
+      } as Parameters<typeof configureNotificationsRuntime>[0] & { readonly projectRoot: string })
+
+      const second = await notifyUsing()
+        .channel('plugin', { token: 'second-route' })
+        .notify(asRuntimeNotification({
+          type: 'plugin-alert',
+          via() {
+            return ['plugin']
+          },
+          build: {
+            plugin() {
+              return {
+                text: 'Delivered through second plugin.',
+              }
+            },
+          },
+        }))
+
+      expect(second.channels[0]?.result).toEqual({
+        project: 'second',
+      })
+    } finally {
+      await rm(firstRoot, { recursive: true, force: true })
+      await rm(secondRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('loads plugin channels while delivering queued notifications', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-notifications-queued-plugin-'))
+    const previousCwd = process.cwd()
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'notifications-queued-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-notifications-queued'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-notifications-queued')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-notifications-queued',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'notifications-queued-plugin',
+  contributes: {
+    notifications: {
+      channels: {
+        plugin: {
+          runtime: './channel.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'channel.mjs'), `
+export default {
+  async send(context) {
+    return {
+      channel: context.channel,
+      payload: context.payload,
+      route: context.route,
+    }
+  },
+}
+`)
+
+      configureNotificationsRuntime({
+        projectRoot,
+      } as Parameters<typeof configureNotificationsRuntime>[0] & { readonly projectRoot: string })
+
+      await expect(notificationsRuntimeInternals.runQueuedNotificationDelivery({
+        channel: 'plugin',
+        anonymous: false,
+        notifiable: {
+          id: 'user-1',
+        },
+        route: {
+          token: 'queued-route',
+        },
+        notificationType: 'plugin-alert',
+        payload: {
+          text: 'Delivered through queued plugin.',
+        },
+        targetIndex: 0,
+      })).resolves.toEqual({
+        channel: 'plugin',
+        payload: {
+          text: 'Delivered through queued plugin.',
+        },
+        route: {
+          token: 'queued-route',
+        },
+      })
+    } finally {
+      process.chdir(previousCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
   })
 
   it('exposes typed database notification read and mutation helpers through the configured store', async () => {
@@ -2081,11 +2493,7 @@ describe('@holo-js/notifications runtime', () => {
         },
       },
       options: {},
-    }, [{
-      index: 0,
-      anonymous: false,
-      notifiable: { email: 'ava@example.com' },
-    }], {
+    }, {
       via() {
         return ['email']
       },
@@ -2096,7 +2504,14 @@ describe('@holo-js/notifications runtime', () => {
           }
         },
       },
-    })).resolves.toBeNull()
+    }, [{
+      target: {
+        index: 0,
+        anonymous: false,
+        notifiable: { email: 'ava@example.com' },
+      },
+      channels: ['email'] as const,
+    }])).resolves.toBeNull()
 
     const finallyDispatch = notify({ id: 'user-1', email: 'ava@example.com' }, invoicePaid)
     await expect(finallyDispatch.finally()).resolves.toMatchObject({

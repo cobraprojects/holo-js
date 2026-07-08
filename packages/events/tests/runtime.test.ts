@@ -310,6 +310,37 @@ describe('@holo-js/events runtime', () => {
     )
   })
 
+  it('validates queued payloads before scheduling deferred dispatch', async () => {
+    registerEvent(defineEvent<unknown, 'audit.logged'>({
+      name: 'audit.logged',
+    }))
+
+    const deferredCallbacks: Array<() => Promise<void>> = []
+    const defer = vi.fn((callback: () => Promise<void>) => {
+      deferredCallbacks.push(callback)
+      return true
+    })
+    const queued = vi.fn(async () => {})
+    configureEventsRuntime({
+      defer,
+      dispatchQueuedListener: queued,
+    })
+    registerListener(defineListener({
+      name: 'queue.audit',
+      listensTo: ['audit.logged'],
+      queue: true,
+      afterCommit: true,
+      async handle() {},
+    }))
+
+    await expect(dispatchEvent('audit.logged', {
+      perform() {},
+    })).rejects.toThrow('Event payload at "payload.perform" must be JSON-serializable for queued listeners.')
+    expect(defer).not.toHaveBeenCalled()
+    expect(deferredCallbacks).toHaveLength(0)
+    expect(queued).not.toHaveBeenCalled()
+  })
+
   it('rejects invalid event names, unknown events, and unnamed definitions', async () => {
     registerEvent(defineEvent<{ userId: string }, 'user.registered'>({
       name: 'user.registered',

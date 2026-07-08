@@ -1,7 +1,12 @@
 import { createHash, createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
-import type { NormalizedHoloBroadcastConfig, NormalizedHoloQueueConfig, NormalizedHoloRedisConfig } from '@holo-js/config'
+import type {
+  NormalizedHoloBroadcastConfig,
+  NormalizedHoloQueueConfig,
+  NormalizedHoloRedisConfig,
+  NormalizedQueueRedisConnectionConfig,
+} from '@holo-js/config'
 import {
   authorizeBroadcastChannel,
   resolveBroadcastChannelGuard,
@@ -652,14 +657,15 @@ function resolveRedisScalingConnection(
 ): BroadcastRedisScalingConnection {
   const queueConnection = queueConfig?.connections[connectionName]
   if (queueConnection?.driver === 'redis') {
+    const redisQueueConnection = queueConnection as NormalizedQueueRedisConnectionConfig
     return Object.freeze({
-      ...(typeof queueConnection.redis.url === 'undefined' ? {} : { url: queueConnection.redis.url }),
-      ...(typeof queueConnection.redis.clusters === 'undefined' ? {} : { clusters: queueConnection.redis.clusters }),
-      host: queueConnection.redis.host,
-      port: queueConnection.redis.port,
-      username: queueConnection.redis.username,
-      password: queueConnection.redis.password,
-      db: queueConnection.redis.db,
+      ...(typeof redisQueueConnection.redis.url === 'undefined' ? {} : { url: redisQueueConnection.redis.url }),
+      ...(typeof redisQueueConnection.redis.clusters === 'undefined' ? {} : { clusters: redisQueueConnection.redis.clusters }),
+      host: redisQueueConnection.redis.host,
+      port: redisQueueConnection.redis.port,
+      username: redisQueueConnection.redis.username,
+      password: redisQueueConnection.redis.password,
+      db: redisQueueConnection.redis.db,
     })
   }
 

@@ -2,6 +2,7 @@ import {
   normalizeScaffoldOptionalPackages,
   type ProjectScaffoldOptions,
 } from '../shared'
+import { getFrameworkDescriptor, type FrameworkDescriptor } from '../frameworks'
 import type { AuthInstallFeatures, ScaffoldedFile } from './types'
 
 type HostedAuthProvider = 'clerk' | 'workos'
@@ -795,98 +796,154 @@ function renderSvelteHostedAuthRouteFiles(provider: HostedAuthProvider): readonl
   ]
 }
 
+type FrameworkRenderer = {
+  readonly authProviderRouteFiles: (provider: HostedAuthProvider) => readonly ScaffoldedFile[]
+  readonly authRouteFiles: () => readonly ScaffoldedFile[]
+  readonly frameworkFiles: (options: ProjectScaffoldOptions) => readonly ScaffoldedFile[]
+  readonly managedHostedAuthRouteFiles: (features: AuthInstallFeatures) => readonly ScaffoldedFile[]
+  readonly broadcastInstallFiles: () => readonly ScaffoldedFile[]
+  readonly broadcastAuthSupportFiles: () => readonly ScaffoldedFile[]
+}
+
+const FRAMEWORK_RENDERERS = {
+  nuxt: {
+    authProviderRouteFiles: renderNuxtHostedAuthRouteFiles,
+    authRouteFiles: () => [
+      { path: 'server/api/auth/user.get.ts', contents: renderNuxtCurrentAuthRoute() },
+    ],
+    managedHostedAuthRouteFiles: () => [],
+    broadcastInstallFiles: () => [],
+    broadcastAuthSupportFiles: () => [],
+    frameworkFiles: (options) => {
+      const optionalPackages = normalizeScaffoldOptionalPackages(options.optionalPackages)
+      const authEnabled = optionalPackages.includes('auth')
+
+      return [
+        { path: 'app/app.vue', contents: renderNuxtAppVue(options.projectName) },
+        { path: 'nuxt.config.ts', contents: renderNuxtConfig() },
+        { path: 'shared/.gitkeep', contents: '' },
+        ...(authEnabled ? renderAuthRouteFiles('nuxt') : []),
+      ]
+    },
+  },
+  next: {
+    authProviderRouteFiles: renderNextHostedAuthRouteFiles,
+    authRouteFiles: () => [
+      { path: 'app/api/auth/user/route.ts', contents: renderNextCurrentAuthRoute() },
+      { path: '.holo-js/generated/next/holo.ts', contents: renderNextHoloHelper() },
+      { path: '.holo-js/generated/next/bootstrap.mjs', contents: renderNextRuntimeBootstrap() },
+    ],
+    managedHostedAuthRouteFiles: renderNextManagedHostedAuthRouteFiles,
+    broadcastInstallFiles: () => [
+      { path: '.holo-js/generated/next/holo.ts', contents: renderNextHoloHelper() },
+      { path: 'app/broadcasting/config/route.ts', contents: renderNextBroadcastConfigRoute() },
+      { path: '.holo-js/generated/next/broadcast-config-route.ts', contents: renderNextGeneratedBroadcastConfigRoute() },
+    ],
+    broadcastAuthSupportFiles: () => [
+      { path: 'app/broadcasting/auth/route.ts', contents: renderNextBroadcastAuthRoute() },
+      { path: '.holo-js/generated/next/holo.ts', contents: renderNextHoloHelper() },
+      { path: '.holo-js/generated/next/broadcast-auth-route.ts', contents: renderNextGeneratedBroadcastAuthRoute() },
+    ],
+    frameworkFiles: (options) => {
+      const optionalPackages = normalizeScaffoldOptionalPackages(options.optionalPackages)
+      const storageEnabled = optionalPackages.includes('storage')
+      const authEnabled = optionalPackages.includes('auth')
+      const broadcastEnabled = optionalPackages.includes('broadcast')
+      const realtimeEnabled = optionalPackages.includes('realtime')
+
+      return [
+        { path: 'next.config.ts', contents: renderNextConfig() },
+        { path: 'next-env.d.ts', contents: renderNextEnvDts() },
+        { path: 'app/layout.tsx', contents: renderNextLayout(options.projectName) },
+        { path: 'app/page.tsx', contents: renderNextPage(options.projectName) },
+        ...(authEnabled
+          ? [{ path: 'app/api/auth/user/route.ts', contents: renderNextCurrentAuthRoute() }]
+          : []),
+        ...(storageEnabled
+          ? [{ path: 'app/storage/[[...path]]/route.ts', contents: renderNextStorageRoute() }]
+          : []),
+        ...(broadcastEnabled
+          ? [{ path: 'app/broadcasting/config/route.ts', contents: renderNextBroadcastConfigRoute() }]
+          : []),
+        ...renderNextManagedRouteFiles({ authEnabled, broadcastEnabled, storageEnabled, realtimeEnabled }),
+      ]
+    },
+  },
+  sveltekit: {
+    authProviderRouteFiles: renderSvelteHostedAuthRouteFiles,
+    authRouteFiles: () => [],
+    managedHostedAuthRouteFiles: () => [],
+    broadcastInstallFiles: () => [
+      { path: '.holo-js/generated/sveltekit/holo.ts', contents: renderSvelteHoloHelper() },
+    ],
+    broadcastAuthSupportFiles: () => [
+      { path: '.holo-js/generated/sveltekit/holo.ts', contents: renderSvelteHoloHelper() },
+    ],
+    frameworkFiles: (options) => {
+      const optionalPackages = normalizeScaffoldOptionalPackages(options.optionalPackages)
+      const storageEnabled = optionalPackages.includes('storage')
+      const authEnabled = optionalPackages.includes('auth')
+      const realtimeEnabled = optionalPackages.includes('realtime')
+
+      return [
+        { path: 'svelte.config.js', contents: renderSvelteConfig() },
+        { path: 'vite.config.ts', contents: renderSvelteViteConfig(storageEnabled, realtimeEnabled) },
+        { path: 'src/hooks.ts', contents: renderSvelteUserHooks() },
+        { path: 'src/hooks.server.ts', contents: renderSvelteServerUserHooks() },
+        { path: 'src/app.html', contents: renderSvelteAppHtml() },
+        { path: 'src/routes/+page.svelte', contents: renderSveltePage(options.projectName) },
+        ...(authEnabled ? renderAuthRouteFiles('sveltekit') : []),
+        ...renderSvelteManagedRuntimeFiles(),
+      ]
+    },
+  },
+} satisfies Record<ProjectScaffoldOptions['framework'], FrameworkRenderer>
+
+function getFrameworkRenderer(framework: ProjectScaffoldOptions['framework']): FrameworkRenderer {
+  return FRAMEWORK_RENDERERS[framework]
+}
+
 export function renderAuthProviderRouteFiles(
   framework: ProjectScaffoldOptions['framework'],
   features: AuthInstallFeatures,
 ): readonly ScaffoldedFile[] {
-  return getRequestedHostedAuthProviders(features).flatMap((provider) => {
-    if (framework === 'nuxt') {
-      return renderNuxtHostedAuthRouteFiles(provider)
-    }
-
-    if (framework === 'next') {
-      return renderNextHostedAuthRouteFiles(provider)
-    }
-
-    return renderSvelteHostedAuthRouteFiles(provider)
-  })
+  const renderer = getFrameworkRenderer(framework)
+  return getRequestedHostedAuthProviders(features).flatMap(provider => renderer.authProviderRouteFiles(provider))
 }
 
 export function renderAuthRouteFiles(framework: ProjectScaffoldOptions['framework']): readonly ScaffoldedFile[] {
-  if (framework === 'next') {
-    return [
-      { path: 'app/api/auth/user/route.ts', contents: renderNextCurrentAuthRoute() },
-      { path: '.holo-js/generated/next/holo.ts', contents: renderNextHoloHelper() },
-      { path: '.holo-js/generated/next/bootstrap.mjs', contents: renderNextRuntimeBootstrap() },
-    ]
-  }
+  return getFrameworkRenderer(framework).authRouteFiles()
+}
 
-  if (framework === 'nuxt') {
-    return [
-      { path: 'server/api/auth/user.get.ts', contents: renderNuxtCurrentAuthRoute() },
-    ]
-  }
+export function renderManagedHostedAuthRouteFiles(
+  framework: ProjectScaffoldOptions['framework'],
+  features: AuthInstallFeatures,
+): readonly ScaffoldedFile[] {
+  return getFrameworkRenderer(framework).managedHostedAuthRouteFiles(features)
+}
 
-  return []
+export function renderBroadcastInstallFrameworkFiles(
+  framework: ProjectScaffoldOptions['framework'],
+): readonly ScaffoldedFile[] {
+  return getFrameworkRenderer(framework).broadcastInstallFiles()
+}
+
+export function renderBroadcastAuthSupportFrameworkFiles(
+  framework: ProjectScaffoldOptions['framework'],
+): readonly ScaffoldedFile[] {
+  return getFrameworkRenderer(framework).broadcastAuthSupportFiles()
 }
 
 export function renderFrameworkFiles(options: ProjectScaffoldOptions): readonly ScaffoldedFile[] {
-  const optionalPackages = normalizeScaffoldOptionalPackages(options.optionalPackages)
-  const storageEnabled = optionalPackages.includes('storage')
-  const authEnabled = optionalPackages.includes('auth')
-  const broadcastEnabled = optionalPackages.includes('broadcast')
-  const realtimeEnabled = optionalPackages.includes('realtime')
-
-  if (options.framework === 'nuxt') {
-    return [
-      { path: 'app/app.vue', contents: renderNuxtAppVue(options.projectName) },
-      { path: 'nuxt.config.ts', contents: renderNuxtConfig() },
-      { path: 'shared/.gitkeep', contents: '' },
-      ...(authEnabled
-        ? renderAuthRouteFiles('nuxt')
-        : []),
-    ]
-  }
-
-  if (options.framework === 'next') {
-    return [
-      { path: 'next.config.ts', contents: renderNextConfig() },
-      { path: 'next-env.d.ts', contents: renderNextEnvDts() },
-      { path: 'app/layout.tsx', contents: renderNextLayout(options.projectName) },
-      { path: 'app/page.tsx', contents: renderNextPage(options.projectName) },
-      ...(authEnabled
-        ? [{ path: 'app/api/auth/user/route.ts', contents: renderNextCurrentAuthRoute() }]
-        : []),
-      ...(storageEnabled
-        ? [{ path: 'app/storage/[[...path]]/route.ts', contents: renderNextStorageRoute() }]
-        : []),
-      ...(broadcastEnabled
-        ? [{ path: 'app/broadcasting/config/route.ts', contents: renderNextBroadcastConfigRoute() }]
-        : []),
-      ...renderNextManagedRouteFiles({ authEnabled, broadcastEnabled, storageEnabled, realtimeEnabled }),
-    ]
-  }
-
-  return [
-    { path: 'svelte.config.js', contents: renderSvelteConfig() },
-    { path: 'vite.config.ts', contents: renderSvelteViteConfig(storageEnabled, realtimeEnabled) },
-    { path: 'src/hooks.ts', contents: renderSvelteUserHooks() },
-    { path: 'src/hooks.server.ts', contents: renderSvelteServerUserHooks() },
-    { path: 'src/app.html', contents: renderSvelteAppHtml() },
-    { path: 'src/routes/+page.svelte', contents: renderSveltePage(options.projectName) },
-    ...(authEnabled
-      ? renderAuthRouteFiles('sveltekit')
-      : []),
-    ...renderSvelteManagedRuntimeFiles(),
-  ]
+  return getFrameworkRenderer(options.framework).frameworkFiles(options)
 }
 
 export function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'framework'>): string {
-  const commandName = options.framework === 'nuxt'
-    ? 'nuxt'
-    : options.framework === 'next'
-      ? 'next'
-      : 'vite'
+  return renderFrameworkRunnerForDescriptor(getFrameworkDescriptor(options.framework))
+}
+
+export function renderFrameworkRunnerForDescriptor(descriptor: FrameworkDescriptor): string {
+  const runner = descriptor.runner
   return [
     'import { existsSync, readFileSync, readlinkSync } from \'node:fs\'',
     'import { dirname, resolve } from \'node:path\'',
@@ -900,7 +957,8 @@ export function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'fra
     'const nextRuntimeBootstrapPath = resolve(projectRoot, \'.holo-js/generated/next/bootstrap.mjs\')',
     'const manifest = JSON.parse(readFileSync(manifestPath, \'utf8\'))',
     'const framework = String(manifest.framework ?? \'\')',
-    `const commandName = ${JSON.stringify(commandName)}`,
+    `const runner = ${JSON.stringify(runner)}`,
+    `const commandName = ${JSON.stringify(runner.commandName)}`,
     'const passthroughArgs = process.argv.slice(3)',
     'const binaryPath = resolve(',
     '  projectRoot,',
@@ -909,27 +967,26 @@ export function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'fra
     '  process.platform === \'win32\' ? `${commandName}.cmd` : commandName,',
     ')',
     '',
+    'function resolveProjectPath(value) {',
+    '  return resolve(projectRoot, value)',
+    '}',
+    '',
     'function resolveCommandInvocation() {',
     '  if (mode === \'dev\') {',
     '    return { command: binaryPath, args: [\'dev\'] }',
     '  }',
     '',
     '  if (mode === \'build\') {',
-    '    return { command: binaryPath, args: framework === \'sveltekit\' ? [\'build\', \'--logLevel\', \'error\'] : [\'build\'] }',
+    '    return { command: binaryPath, args: [...runner.buildArgs] }',
     '  }',
     '',
     '  if (mode === \'start\') {',
-    '    if (framework === \'next\') {',
-    '      return { command: binaryPath, args: [\'start\', ...passthroughArgs] }',
+    '    if (runner.startUsesFrameworkBinary) {',
+    '      return { command: binaryPath, args: [...runner.start, ...passthroughArgs] }',
     '    }',
     '',
-    '    if (framework === \'nuxt\') {',
-    '      return { command: process.execPath, args: [resolve(projectRoot, \'.output/server/index.mjs\'), ...passthroughArgs] }',
-    '    }',
-    '',
-    '    if (framework === \'sveltekit\') {',
-    '      return { command: process.execPath, args: [resolve(projectRoot, \'build/index.js\'), ...passthroughArgs] }',
-    '    }',
+    '    const [entry, ...args] = runner.start',
+    '    return { command: process.execPath, args: [resolveProjectPath(entry), ...args, ...passthroughArgs] }',
     '  }',
     '',
     '  return undefined',
@@ -942,7 +999,7 @@ export function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'fra
     '  process.exit(1)',
     '}',
     '',
-    'const suppressedOutput = framework === \'sveltekit\'',
+    'const suppressedOutput = runner.suppressSvelteKitOutput',
     '  ? new Set([',
     '      \'"try_get_request_store" is imported from external module "@sveltejs/kit/internal/server" but never used in ".svelte-kit/adapter-node/index.js".\',',
     '    ])',
@@ -953,7 +1010,7 @@ export function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'fra
     '    return true',
     '  }',
     '',
-    '  return framework === \'sveltekit\'',
+    '  return runner.suppressSvelteKitOutput',
     '    && line.startsWith(\'Circular dependency: \')',
     '    && line.includes(\'/node_modules/semver/\')',
     '}',
@@ -987,7 +1044,7 @@ export function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'fra
     '}',
     '',
     'function extractNextConflictInfo(lines) {',
-    '  if (framework !== \'next\' || mode !== \'dev\') {',
+    '  if (!runner.nextDevServerConflictHandling || mode !== \'dev\') {',
     '    return undefined',
     '  }',
     '',
@@ -1098,12 +1155,12 @@ export function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'fra
     '  return waitForProcessExit(pid)',
     '}',
     '',
-    'if ((mode !== \'start\' || framework === \'next\') && !existsSync(binaryPath)) {',
+    'if ((mode !== \'start\' || runner.startUsesFrameworkBinary) && !existsSync(binaryPath)) {',
     '  console.error(`[holo] Missing framework binary "${commandName}" for "${framework}". Run your package manager install first.`)',
     '  process.exit(1)',
     '}',
     '',
-    'if (mode === \'start\' && framework !== \'next\' && !existsSync(commandInvocation.args[0])) {',
+    'if (mode === \'start\' && !runner.startUsesFrameworkBinary && !existsSync(commandInvocation.args[0])) {',
     '  console.error(`[holo] Missing production server entry "${commandInvocation.args[0]}". Run "holo build" before "holo start".`)',
     '  process.exit(1)',
     '}',
@@ -1149,7 +1206,7 @@ export function renderFrameworkRunner(options: Pick<ProjectScaffoldOptions, 'fra
     '      childEnv.HOLO_INTERNAL_FRAMEWORK_BUILD = \'1\'',
     '    }',
     '    const preloads = [runtimeSchemaPath]',
-    '    if (framework === \'next\') {',
+    '    if (runner.preloadNextRuntime) {',
     '      preloads.push(nextRuntimeBootstrapPath)',
     '    }',
     '    const preloadOptions = preloads',

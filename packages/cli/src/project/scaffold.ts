@@ -68,6 +68,7 @@ import {
   syncBroadcastAuthSupportAfterAuthInstall,
 } from './scaffold/config-renderers'
 import {
+  detectProjectFrameworkDescriptor,
   detectProjectFrameworkFromPackageJson,
   hasLoadedConfigFile,
   inferConnectionDriver,
@@ -89,22 +90,26 @@ import {
 import {
   renderAuthRouteFiles,
   renderAuthProviderRouteFiles,
+  renderBroadcastInstallFrameworkFiles,
   renderFrameworkFiles,
   renderFrameworkRunner,
+  renderFrameworkRunnerForDescriptor,
+  renderManagedHostedAuthRouteFiles,
   renderNextHoloHelper,
-  renderNextManagedHostedAuthRouteFiles,
   renderScaffoldPackageJson,
-  renderSvelteHoloHelper,
   resolvePackageManagerVersion,
   scaffoldProject,
 } from './scaffold/framework'
 import {
   renderNextBroadcastConfigRoute,
-  renderNextGeneratedBroadcastConfigRoute,
   renderNextGeneratedRealtimeDefinitions,
   renderNextRuntimeBootstrap,
   renderSvelteViteConfig,
 } from './scaffold/framework-renderers'
+import {
+  frameworkDescriptorSupportsManagedBroadcastAuthRoute,
+  isSupportedFrameworkId,
+} from './frameworks'
 import {
   createAuthMigrationFiles,
   createNotificationsMigrationFiles,
@@ -332,10 +337,8 @@ async function syncHostedAuthRouteFiles(projectRoot: string, features: AuthInsta
     await writeTextFile(targetPath, file.contents)
   }
 
-  if (framework === 'next') {
-    for (const file of renderNextManagedHostedAuthRouteFiles(features)) {
-      await writeTextFile(resolve(projectRoot, file.path), file.contents)
-    }
+  for (const file of renderManagedHostedAuthRouteFiles(framework, features)) {
+    await writeTextFile(resolve(projectRoot, file.path), file.contents)
   }
 }
 
@@ -898,8 +901,11 @@ export async function installBroadcastIntoProject(
   const broadcastConfigPath = await resolveFirstExistingPath(projectRoot, BROADCAST_CONFIG_FILE_NAMES)
   const authConfigPath = await resolveFirstExistingPath(projectRoot, AUTH_CONFIG_FILE_NAMES)
   const { dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
-  const framework = detectProjectFrameworkFromPackageJson(dependencies, devDependencies)
-  const canCreateBroadcastAuthRoute = framework === 'next' || framework === 'nuxt' || framework === 'sveltekit'
+  const framework = await detectProjectFrameworkDescriptor(projectRoot, dependencies, devDependencies)
+  const frameworkId = framework && isSupportedFrameworkId(framework.id)
+    ? framework.id
+    : undefined
+  const canCreateBroadcastAuthRoute = frameworkDescriptorSupportsManagedBroadcastAuthRoute(framework)
   const broadcastRoot = resolve(projectRoot, 'server/broadcast')
   const channelsRoot = resolve(projectRoot, 'server/channels')
   const broadcastDirectoryExists = await pathExists(broadcastRoot)
@@ -930,24 +936,17 @@ export async function installBroadcastIntoProject(
   const dependencyResult = await upsertBroadcastPackageDependencies(projectRoot)
   let createdFrameworkSetup = false
 
-  if (framework === 'next') {
-    const holoHelperPath = resolve(projectRoot, '.holo-js/generated/next/holo.ts')
-    const broadcastConfigRoutePath = resolve(projectRoot, 'app/broadcasting/config/route.ts')
-    const generatedBroadcastConfigRoutePath = resolve(projectRoot, '.holo-js/generated/next/broadcast-config-route.ts')
-    if (!(await pathExists(holoHelperPath))) {
-      await writeTextFile(holoHelperPath, renderNextHoloHelper())
-      createdFrameworkSetup = true
-    }
-    if (!(await pathExists(broadcastConfigRoutePath))) {
-      await writeTextFile(broadcastConfigRoutePath, renderNextBroadcastConfigRoute())
-      createdFrameworkSetup = true
-    }
-    await writeTextFile(generatedBroadcastConfigRoutePath, renderNextGeneratedBroadcastConfigRoute())
-  } else if (framework === 'sveltekit') {
-    const holoHelperPath = resolve(projectRoot, '.holo-js/generated/sveltekit/holo.ts')
-    if (!(await pathExists(holoHelperPath))) {
-      await writeTextFile(holoHelperPath, renderSvelteHoloHelper())
-      createdFrameworkSetup = true
+  if (frameworkId) {
+    for (const file of renderBroadcastInstallFrameworkFiles(frameworkId)) {
+      const filePath = resolve(projectRoot, file.path)
+      const generated = file.path.startsWith('.holo-js/generated/')
+      if (!(await pathExists(filePath))) {
+        createdFrameworkSetup = true
+      }
+      if (!generated && await pathExists(filePath)) {
+        continue
+      }
+      await writeTextFile(filePath, file.contents)
     }
   }
   const broadcastAuthSupport = await syncBroadcastAuthSupportAfterAuthInstall(projectRoot)
@@ -993,6 +992,7 @@ export {
   renderEnvFileContents,
   renderFrameworkFiles,
   renderFrameworkRunner,
+  renderFrameworkRunnerForDescriptor,
   renderNextBroadcastConfigRoute,
   renderMailConfig,
   renderMailEnvFiles,

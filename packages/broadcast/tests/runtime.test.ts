@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { normalizeBroadcastConfig } from '@holo-js/config'
 import {
@@ -9,6 +12,7 @@ import {
   defineBroadcast,
   presenceChannel,
   privateChannel,
+  loadBroadcastPluginDrivers,
   registerBroadcastDriver,
   resetBroadcastDriverRegistry,
   resetBroadcastRuntime,
@@ -51,6 +55,58 @@ function createConfig() {
       },
     },
   })
+}
+
+async function writeBroadcastPluginProject(
+  projectRoot: string,
+  packageName: string,
+  driverName: string,
+  label: string,
+): Promise<void> {
+  await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+    name: `${label}-broadcast-plugin-fixture`,
+    private: true,
+  }, null, 2))
+  await mkdir(join(projectRoot, 'config'), { recursive: true })
+  await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['${packageName}'],
+}
+`)
+  const pluginRoot = join(projectRoot, 'node_modules', packageName)
+  await mkdir(pluginRoot, { recursive: true })
+  await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+    name: packageName,
+    type: 'module',
+    holo: {
+      plugin: './plugin.mjs',
+    },
+  }, null, 2))
+  await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: '${label}-broadcast-plugin',
+  contributes: {
+    broadcast: {
+      drivers: {
+        ${driverName}: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+  await writeFile(join(pluginRoot, 'driver.mjs'), `
+export default {
+  async send() {
+    return {
+      provider: {
+        project: '${label}',
+      },
+    }
+  },
+}
+`)
 }
 
 afterEach(() => {
@@ -124,6 +180,384 @@ describe('@holo-js/broadcast runtime', () => {
 
     expect(raw.driver).toBe('pusher')
     expect(publish).toHaveBeenCalledTimes(2)
+  })
+
+  it('loads broadcast drivers contributed by active Holo plugins', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-broadcast-plugin-'))
+    const previousCwd = process.cwd()
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'broadcast-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-broadcast'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-broadcast')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-broadcast',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'broadcast-plugin',
+  contributes: {
+    broadcast: {
+      drivers: {
+        plugin: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+export default {
+  async send(input, context) {
+    return {
+      connection: context.connection,
+      driver: context.driver,
+      queued: context.queued,
+      publishedChannels: input.channels,
+    }
+  },
+}
+`)
+
+      configureBroadcastRuntime({
+        config: normalizeBroadcastConfig({
+          default: 'plugin',
+          connections: {
+            plugin: {
+              driver: 'plugin',
+            },
+          },
+        }),
+        projectRoot: ` ${projectRoot} `,
+      } as Parameters<typeof configureBroadcastRuntime>[0] & { readonly projectRoot: string })
+
+      await expect(broadcastRaw({
+        event: 'plugin.loaded',
+        channels: ['plugin.loaded'],
+        payload: {
+          ok: true,
+        },
+      })).resolves.toMatchObject({
+        connection: 'plugin',
+        driver: 'plugin',
+        queued: false,
+        publishedChannels: ['plugin.loaded'],
+      })
+      await expect(loadBroadcastPluginDrivers(projectRoot)).resolves.toBeUndefined()
+      await expect(loadBroadcastPluginDrivers(projectRoot)).resolves.toBeUndefined()
+    } finally {
+      process.chdir(previousCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('clears broadcast plugin drivers when the runtime resets', async () => {
+    const firstRoot = await mkdtemp(join(tmpdir(), 'holo-broadcast-plugin-first-'))
+    const secondRoot = await mkdtemp(join(tmpdir(), 'holo-broadcast-plugin-second-'))
+
+    try {
+      await writeBroadcastPluginProject(firstRoot, 'holo-plugin-broadcast-first', 'shared', 'first')
+      await writeBroadcastPluginProject(secondRoot, 'holo-plugin-broadcast-second', 'shared', 'second')
+
+      configureBroadcastRuntime({
+        config: normalizeBroadcastConfig({
+          default: 'shared',
+          connections: {
+            shared: {
+              driver: 'shared',
+            },
+          },
+        }),
+        projectRoot: firstRoot,
+      } as Parameters<typeof configureBroadcastRuntime>[0] & { readonly projectRoot: string })
+
+      await expect(broadcastRaw({
+        event: 'plugin.first',
+        channels: ['plugin.first'],
+        payload: {},
+      })).resolves.toMatchObject({
+        provider: {
+          project: 'first',
+        },
+      })
+
+      resetBroadcastRuntime()
+      configureBroadcastRuntime({
+        config: normalizeBroadcastConfig({
+          default: 'shared',
+          connections: {
+            shared: {
+              driver: 'shared',
+            },
+          },
+        }),
+        projectRoot: secondRoot,
+      } as Parameters<typeof configureBroadcastRuntime>[0] & { readonly projectRoot: string })
+
+      await expect(broadcastRaw({
+        event: 'plugin.second',
+        channels: ['plugin.second'],
+        payload: {},
+      })).resolves.toMatchObject({
+        provider: {
+          project: 'second',
+        },
+      })
+    } finally {
+      await rm(firstRoot, { recursive: true, force: true })
+      await rm(secondRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('loads plugin drivers while delivering queued broadcasts', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-broadcast-queued-plugin-'))
+    const previousCwd = process.cwd()
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'broadcast-queued-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-broadcast-queued'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-broadcast-queued')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-broadcast-queued',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'broadcast-queued-plugin',
+  contributes: {
+    broadcast: {
+      drivers: {
+        plugin: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+export default {
+  async send(input, context) {
+    return {
+      connection: context.connection,
+      driver: context.driver,
+      queued: context.queued,
+      publishedChannels: input.channels,
+    }
+  },
+}
+`)
+
+      configureBroadcastRuntime({
+        config: normalizeBroadcastConfig({
+          default: 'plugin',
+          connections: {
+            plugin: {
+              driver: 'plugin',
+            },
+          },
+        }),
+        projectRoot,
+      } as Parameters<typeof configureBroadcastRuntime>[0] & { readonly projectRoot: string })
+
+      await expect(broadcastRuntimeInternals.runQueuedBroadcastDelivery({
+        messageId: 'queued-plugin-message',
+        raw: {
+          connection: 'plugin',
+          event: 'plugin.queued',
+          channels: ['plugin.queued'],
+          payload: {
+            ok: true,
+          },
+        },
+        context: {
+          connection: 'plugin',
+          driver: 'plugin',
+        },
+      })).resolves.toMatchObject({
+        connection: 'plugin',
+        driver: 'plugin',
+        queued: true,
+        publishedChannels: ['plugin.queued'],
+      })
+    } finally {
+      process.chdir(previousCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('dispatches built-in drivers when unrelated plugin drivers are broken', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-broadcast-broken-plugin-'))
+    const previousCwd = process.cwd()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'broadcast-broken-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-broken-broadcast'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-broken-broadcast')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-broken-broadcast',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'broken-broadcast-plugin',
+  contributes: {
+    broadcast: {
+      drivers: {
+        broken: {
+          runtime: './missing.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'missing.mjs'), `
+export default {}
+`)
+
+      process.chdir(projectRoot)
+      configureBroadcastRuntime({
+        config: normalizeBroadcastConfig({
+          default: 'log',
+          connections: {
+            log: {
+              driver: 'log',
+            },
+          },
+        }),
+      })
+
+      await expect(broadcastRaw({
+        event: 'built-in.available',
+        channels: ['built-in.available'],
+        payload: {},
+      })).resolves.toMatchObject({
+        connection: 'log',
+        driver: 'log',
+        queued: false,
+        publishedChannels: ['built-in.available'],
+      })
+      expect(warn).toHaveBeenCalledOnce()
+      await expect(loadBroadcastPluginDrivers(projectRoot)).rejects.toThrow('must export send()')
+      await expect(loadBroadcastPluginDrivers(projectRoot)).rejects.toThrow('must export send()')
+    } finally {
+      warn.mockRestore()
+      process.chdir(previousCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves connection resolution errors when active plugin drivers are broken', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-broadcast-missing-connection-broken-plugin-'))
+    const previousCwd = process.cwd()
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'broadcast-missing-connection-broken-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-broken-broadcast'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-broken-broadcast')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-broken-broadcast',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'broken-broadcast-plugin',
+  contributes: {
+    broadcast: {
+      drivers: {
+        broken: {
+          runtime: './missing.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'missing.mjs'), `
+export default {}
+`)
+
+      process.chdir(projectRoot)
+      configureBroadcastRuntime({
+        config: normalizeBroadcastConfig({
+          default: 'log',
+          connections: {
+            log: {
+              driver: 'log',
+            },
+          },
+        }),
+      })
+
+      await expect(broadcastRuntimeInternals.runQueuedBroadcastDelivery({
+        messageId: 'missing-connection-message',
+        raw: {
+          connection: 'missing',
+          event: 'connection.missing',
+          channels: ['connection.missing'],
+          payload: {},
+        },
+        context: {
+          connection: 'missing',
+          driver: 'missing',
+        },
+      })).rejects.toThrow('Broadcast connection "missing" is not configured')
+    } finally {
+      process.chdir(previousCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
   })
 
   it('rejects non-finite raw broadcast payload numbers', async () => {

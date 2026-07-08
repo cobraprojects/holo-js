@@ -312,6 +312,17 @@ function splitListenersForExecution(
   })
 }
 
+function validateQueuedPayloadForExecutionGroups<TPayload>(
+  groups: ListenerExecutionGroups,
+  payload: TPayload,
+): void {
+  if (groups.immediateQueuedListeners.length === 0 && groups.deferredQueuedListeners.length === 0) {
+    return
+  }
+
+  validateQueuedEventPayload(payload)
+}
+
 function scheduleDeferredDispatch(
   callback: () => Promise<void>,
   eventName: string,
@@ -333,6 +344,7 @@ async function executeDispatch<TPayload>(
   const envelope = createEventEnvelope(eventName, payload)
   const listeners = listRegisteredListenersForEvent(eventName)
   const groups = splitListenersForExecution(listeners, options.afterCommit === true)
+  validateQueuedPayloadForExecutionGroups(groups, envelope.payload)
 
   if (options.afterCommit) {
     const scheduled = scheduleDeferredDispatch(async () => {

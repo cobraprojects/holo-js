@@ -30,6 +30,7 @@ import { normalizeQueueConfig, holoQueueDefaults } from './config'
 import { redisQueueDriverFactory } from './drivers/redis'
 import { syncQueueDriverFactory } from './drivers/sync'
 import { getRegisteredQueueJob } from './registry'
+import { loadQueuePluginDriverFactories, resetQueuePluginDriverFactories } from './plugins'
 
 type RuntimeQueueState = {
   config: NormalizedHoloQueueConfig
@@ -401,6 +402,34 @@ function resolveDriverFactory(
   return factory
 }
 
+async function clearCachedDriversForFactoryNames(state: RuntimeQueueState, driverNames: ReadonlySet<string>): Promise<void> {
+  const staleDrivers: QueueDriver[] = []
+
+  for (const [connectionName, driver] of state.drivers.entries()) {
+    const connection = state.config.connections[connectionName]
+    const driverName = connection?.driver ?? driver.driver
+    if (driverNames.has(driverName)) {
+      staleDrivers.push(driver)
+      state.drivers.delete(connectionName)
+    }
+  }
+
+  await closeQueueDrivers(staleDrivers)
+}
+
+export async function loadQueuePluginDrivers(projectRoot = process.cwd()): Promise<void> {
+  const state = getQueueRuntimeState()
+  const loadedDriverNames = new Set<string>()
+  for (const factory of await loadQueuePluginDriverFactories(projectRoot)) {
+    state.driverFactories.set(factory.driver, factory)
+    loadedDriverNames.add(factory.driver)
+  }
+
+  if (loadedDriverNames.size > 0) {
+    await clearCachedDriversForFactoryNames(state, loadedDriverNames)
+  }
+}
+
 function resolveConnectionDriver(connectionName?: string): QueueDriver {
   const state = getQueueRuntimeState()
   const connection = resolveConnectionConfig(state.config, connectionName)
@@ -672,6 +701,7 @@ export function resetQueueRuntime(): void {
   const state = getQueueRuntimeState()
   void closeQueueDrivers(state.drivers.values())
   resetQueueRuntimeState(state)
+  resetQueuePluginDriverFactories()
 }
 
 export function getQueueRuntime(): QueueRuntimeBinding {

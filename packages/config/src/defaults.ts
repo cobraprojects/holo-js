@@ -19,6 +19,7 @@ import type {
   CacheDriverConfig,
   CacheFileDriverConfig,
   CacheMemoryDriverConfig,
+  CachePluginDriverConfig,
   CacheRedisDriverConfig,
   HoloBroadcastConfig,
   HoloCacheConfig,
@@ -47,6 +48,7 @@ import type {
   NormalizedCacheDriverConfig,
   NormalizedCacheFileDriverConfig,
   NormalizedCacheMemoryDriverConfig,
+  NormalizedCachePluginDriverConfig,
   NormalizedCacheRedisDriverConfig,
   NormalizedHoloCacheConfig,
   NormalizedHoloBroadcastConfig,
@@ -62,6 +64,7 @@ import type {
   NormalizedHoloRedisConnectionConfig,
   NormalizedQueueDatabaseConnectionConfig,
   NormalizedQueueFailedStoreConfig,
+  NormalizedQueuePluginConnectionConfig,
   NormalizedHoloAppConfig,
   NormalizedHoloDatabaseConfig,
   NormalizedHoloNotificationsConfig,
@@ -83,6 +86,7 @@ import type {
   QueueConnectionConfig,
   QueueDatabaseConnectionConfig,
   QueueFailedStoreConfig,
+  QueuePluginConnectionConfig,
   QueueRedisConnectionConfig,
   QueueSyncConnectionConfig,
   SecurityLimiterConfig,
@@ -104,6 +108,7 @@ export const holoAppDefaults: Readonly<NormalizedHoloAppConfig> = Object.freeze(
   url: 'http://localhost:3000',
   debug: true,
   env: 'development',
+  plugins: Object.freeze([]),
   paths: Object.freeze({ ...DEFAULT_HOLO_PROJECT_PATHS }),
   models: Object.freeze([]),
   migrations: Object.freeze([]),
@@ -632,8 +637,15 @@ function normalizeCacheDriverConfig(
         prefix: resolveCachePrefix(globalPrefix, databaseConfig.prefix),
       } satisfies NormalizedCacheDatabaseDriverConfig)
     }
-    default:
-      throw new Error(`[Holo Cache] Unsupported cache driver "${String((config as { driver?: unknown }).driver)}" on driver "${name}".`)
+    default: {
+      const { driver, prefix, ...options } = config as CachePluginDriverConfig
+      return Object.freeze({
+        ...options,
+        name,
+        driver: normalizeCacheName(driver, `Cache driver "${name}" driver`),
+        prefix: resolveCachePrefix(globalPrefix, prefix),
+      } satisfies NormalizedCachePluginDriverConfig)
+    }
   }
 }
 
@@ -651,16 +663,20 @@ export function normalizeCacheConfig(
       const normalizedName = normalizeCacheName(name, 'Cache driver name')
       const driverConfig = (() => {
         switch (driver.driver) {
-          case 'redis':
+          case 'redis': {
+            const redisDriver = driver as CacheRedisDriverConfig
             return {
-              ...driver,
-              connection: normalizeCacheOptionalString(driver.connection) ?? defaultRedisConnection,
+              ...redisDriver,
+              connection: normalizeCacheOptionalString(redisDriver.connection) ?? defaultRedisConnection,
             }
-          case 'database':
+          }
+          case 'database': {
+            const databaseDriver = driver as CacheDatabaseDriverConfig
             return {
-              ...driver,
-              connection: normalizeCacheOptionalString(driver.connection) ?? defaultDatabaseConnection,
+              ...databaseDriver,
+              connection: normalizeCacheOptionalString(databaseDriver.connection) ?? defaultDatabaseConnection,
             }
+          }
           default:
             return driver
         }
@@ -1037,6 +1053,20 @@ function normalizeDatabaseConnection(
   })
 }
 
+function normalizePluginQueueConnection(
+  name: string,
+  config: QueuePluginConnectionConfig,
+): NormalizedQueuePluginConnectionConfig {
+  const { driver, queue, ...options } = config
+
+  return Object.freeze({
+    ...options,
+    name,
+    driver: normalizeConnectionName(driver, 'Holo Queue', `queue connection "${name}" driver`),
+    queue: normalizeQueueName(queue),
+  })
+}
+
 function normalizeConnectionConfig(
   name: string,
   config: QueueConnectionConfig,
@@ -1044,13 +1074,13 @@ function normalizeConnectionConfig(
 ): NormalizedQueueConnectionConfig {
   switch (config.driver) {
     case 'sync':
-      return normalizeSyncConnection(name, config)
+      return normalizeSyncConnection(name, config as QueueSyncConnectionConfig)
     case 'redis':
-      return normalizeRedisConnection(name, config, redisConfig)
+      return normalizeRedisConnection(name, config as QueueRedisConnectionConfig, redisConfig)
     case 'database':
-      return normalizeDatabaseConnection(name, config)
+      return normalizeDatabaseConnection(name, config as QueueDatabaseConnectionConfig)
     default:
-      throw new Error(`[Holo Queue] Unsupported queue driver "${String((config as { driver?: unknown }).driver)}" on connection "${name}".`)
+      return normalizePluginQueueConnection(name, config as QueuePluginConnectionConfig)
   }
 }
 
@@ -1117,6 +1147,9 @@ export function normalizeAppConfig(
     url: config.url ?? holoAppDefaults.url,
     debug: debug ?? holoAppDefaults.debug,
     env: normalizeAppEnv(config.env, holoAppDefaults.env),
+    plugins: Object.freeze([...new Set((config.plugins ?? [])
+      .map(plugin => plugin.trim())
+      .filter(plugin => plugin.length > 0))]),
     paths: project.paths,
     models: project.models,
     migrations: project.migrations,

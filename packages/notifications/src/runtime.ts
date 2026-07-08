@@ -24,6 +24,7 @@ import {
   type PendingNotificationDispatch,
 } from './contracts'
 import { getRegisteredNotificationChannel } from './registry'
+import { loadNotificationPluginChannels, resetNotificationPluginChannels } from './plugins'
 import {
   createBuildContext,
   createBuiltInChannels,
@@ -115,8 +116,18 @@ function getRuntimeBindings(): NotificationRuntimeBindings {
 
 type RuntimeState = {
   bindings?: NotificationRuntimeBindings
+  projectRoot?: string
   loadQueueModule?: () => Promise<QueueModule>
   loadDbModule?: () => Promise<DbModule | null>
+}
+
+type RuntimeBindingsWithProjectRoot = NotificationRuntimeBindings & {
+  readonly projectRoot?: string
+}
+
+type ResolvedTargetChannels = {
+  readonly target: ResolvedTarget
+  readonly channels: readonly string[]
 }
 
 function getRuntimeState(): RuntimeState {
@@ -321,7 +332,19 @@ function resolveTargets(target: NotificationDispatchTarget): readonly ResolvedTa
   })])
 }
 
-function resolveChannels(
+function resolveRegisteredChannels(
+  channels: readonly string[],
+): readonly string[] {
+  return Object.freeze(channels.map((channel) => {
+    if (!getNotificationChannel(channel)) {
+      throw new Error(`[@holo-js/notifications] Notification channel "${channel}" is not registered.`)
+    }
+
+    return channel
+  }))
+}
+
+function resolveDeclaredChannels(
   notification: NotificationDefinition,
   target: ResolvedTarget,
 ): readonly string[] {
@@ -335,13 +358,25 @@ function resolveChannels(
       throw new Error(`[@holo-js/notifications] Notification channel at index ${index} must be a string.`)
     }
 
-    const normalized = normalizeOptionalString(channel, 'Notification channel')
-    if (!getNotificationChannel(normalized)) {
-      throw new Error(`[@holo-js/notifications] Notification channel "${normalized}" is not registered.`)
-    }
-
-    return normalized
+    return normalizeOptionalString(channel, 'Notification channel')
   }))
+}
+
+function resolveChannels(
+  notification: NotificationDefinition,
+  target: ResolvedTarget,
+): readonly string[] {
+  return resolveRegisteredChannels(resolveDeclaredChannels(notification, target))
+}
+
+function resolveTargetChannels(
+  notification: NotificationDefinition,
+  targets: readonly ResolvedTarget[],
+): readonly ResolvedTargetChannels[] {
+  return Object.freeze(targets.map(target => Object.freeze({
+    target,
+    channels: resolveDeclaredChannels(notification, target),
+  })))
 }
 
 function resolvePayload(
@@ -569,6 +604,10 @@ function createQueuedDeliveryPayload(context: NotificationSendContext): QueuedNo
 async function runQueuedNotificationDelivery(
   payload: QueuedNotificationDeliveryPayload,
 ): Promise<unknown> {
+  if (!getNotificationChannel(payload.channel)) {
+    await loadNotificationPluginChannels(getRuntimeState().projectRoot)
+  }
+
   return await deliverResolvedNotificationChannel(Object.freeze({
     channel: payload.channel,
     anonymous: payload.anonymous,
@@ -625,8 +664,8 @@ async function dispatchQueuedNotificationChannel(
 
 async function deferDispatchUntilCommit(
   input: NotificationDispatchInput,
-  targets: readonly ResolvedTarget[],
   notification: NotificationDefinition,
+  targetChannels: readonly ResolvedTargetChannels[],
 ): Promise<NotificationDispatchResult | null> {
   const dbModule = await loadDbModule()
   const active = dbModule?.connectionAsyncContext.getActive()?.connection
@@ -635,8 +674,8 @@ async function deferDispatchUntilCommit(
   }
 
   const channels: NotificationChannelDispatchResult[] = []
-  for (const target of targets) {
-    for (const channel of resolveChannels(notification, target)) {
+  for (const { target, channels: resolvedChannels } of targetChannels) {
+    for (const channel of resolvedChannels) {
       const plan = resolveChannelDispatchPlan(notification, target, channel, input.options)
       channels.push(Object.freeze({
         channel,
@@ -653,7 +692,7 @@ async function deferDispatchUntilCommit(
   })
 
   return Object.freeze({
-    totalTargets: targets.length,
+    totalTargets: targetChannels.length,
     channels: Object.freeze(channels),
     deferred: true,
   })
@@ -661,14 +700,14 @@ async function deferDispatchUntilCommit(
 
 function shouldDeferDispatchAfterCommit(
   notification: NotificationDefinition,
-  targets: readonly ResolvedTarget[],
+  targetChannels: readonly ResolvedTargetChannels[],
   options: NotificationDispatchOptions,
 ): boolean {
   if (options.afterCommit) {
     return true
   }
 
-  return targets.some(target => resolveChannels(notification, target).some(channel => {
+  return targetChannels.some(({ target, channels }) => channels.some(channel => {
     try {
       return resolveChannelDispatchPlan(notification, target, channel, options).afterCommit
     } catch {
@@ -683,8 +722,14 @@ async function dispatchNotifications(
 ): Promise<NotificationDispatchResult> {
   const notification = normalizeNotificationDefinition(input.notification)
   const targets = resolveTargets(input.target)
-  if (execution.allowAfterCommitDeferral !== false && shouldDeferDispatchAfterCommit(notification, targets, input.options)) {
-    const deferredResult = await deferDispatchUntilCommit(input, targets, notification)
+  const declaredTargetChannels = resolveTargetChannels(notification, targets)
+  if (hasUnresolvedNotificationChannels(declaredTargetChannels)) {
+    await loadNotificationPluginChannels(getRuntimeState().projectRoot)
+  }
+  const targetChannels = resolveRegisteredTargetChannels(declaredTargetChannels)
+
+  if (execution.allowAfterCommitDeferral !== false && shouldDeferDispatchAfterCommit(notification, targetChannels, input.options)) {
+    const deferredResult = await deferDispatchUntilCommit(input, notification, targetChannels)
     if (deferredResult) {
       return deferredResult
     }
@@ -692,9 +737,7 @@ async function dispatchNotifications(
 
   const results: NotificationChannelDispatchResult[] = []
 
-  for (const target of targets) {
-    const channels = resolveChannels(notification, target)
-
+  for (const { target, channels } of targetChannels) {
     for (const channel of channels) {
       try {
         const context = resolveChannelSendContext(notification, channel, target)
@@ -725,6 +768,21 @@ async function dispatchNotifications(
     totalTargets: targets.length,
     channels: Object.freeze(results),
   })
+}
+
+function hasUnresolvedNotificationChannels(
+  targetChannels: readonly ResolvedTargetChannels[],
+): boolean {
+  return targetChannels.some(({ channels }) => channels.some(channel => !getNotificationChannel(channel)))
+}
+
+function resolveRegisteredTargetChannels(
+  targetChannels: readonly ResolvedTargetChannels[],
+): readonly ResolvedTargetChannels[] {
+  return Object.freeze(targetChannels.map(({ target, channels }) => Object.freeze({
+    target,
+    channels: resolveRegisteredChannels(channels),
+  })))
 }
 
 class PendingDispatch<TResult = NotificationDispatchResult> implements PendingNotificationDispatch<TResult> {
@@ -858,7 +916,19 @@ export interface NotificationRuntimeFacade {
 }
 
 export function configureNotificationsRuntime(bindings?: NotificationRuntimeBindings): void {
-  getRuntimeState().bindings = bindings
+  const state = getRuntimeState()
+  if (!bindings) {
+    state.bindings = undefined
+    state.projectRoot = undefined
+    return
+  }
+
+  const { projectRoot, ...runtimeBindings } = bindings as RuntimeBindingsWithProjectRoot
+  state.bindings = runtimeBindings
+  const normalizedProjectRoot = typeof projectRoot === 'string' ? projectRoot.trim() : ''
+  state.projectRoot = normalizedProjectRoot
+    ? normalizedProjectRoot
+    : undefined
 }
 
 export function getNotificationsRuntimeBindings(): NotificationRuntimeBindings {
@@ -868,8 +938,10 @@ export function getNotificationsRuntimeBindings(): NotificationRuntimeBindings {
 export function resetNotificationsRuntime(): void {
   const state = getRuntimeState()
   state.bindings = undefined
+  state.projectRoot = undefined
   state.loadQueueModule = undefined
   state.loadDbModule = undefined
+  resetNotificationPluginChannels()
 }
 
 type NotificationDefinitionLike<TNotification>

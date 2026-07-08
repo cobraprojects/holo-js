@@ -29,6 +29,22 @@ export type {
   SupportedScaffoldPackageManager,
   SupportedScaffoldStorageDisk,
 } from './project/shared'
+export type {
+  HoloPluginBroadcastContributions,
+  HoloPluginCacheContributions,
+  HoloPluginCliContributions,
+  HoloPluginConfigContributions,
+  HoloPluginContributions,
+  HoloPluginDefinition,
+  HoloPluginDependencyContributions,
+  HoloPluginMailContributions,
+  HoloPluginMigrationContributions,
+  HoloPluginNotificationContributions,
+  HoloPluginQueueContributions,
+  HoloPluginRuntimeContributions,
+  LoadedHoloPlugin,
+  ResolvedProjectPlugin,
+} from './project/plugins'
 
 import {
   defaultProjectConfig,
@@ -97,6 +113,7 @@ import {
   normalizeScaffoldOptionalPackages,
   renderFrameworkFiles,
   renderFrameworkRunner,
+  renderFrameworkRunnerForDescriptor,
   renderAuthConfig,
   renderAuthMigration,
   renderAuthEnvFiles,
@@ -146,6 +163,18 @@ import {
   resolveDefaultArtifactPath,
   stripFileExtension,
 } from './project/shared'
+import {
+  activateProjectPlugin,
+  deactivateProjectPlugin,
+  defineHoloPlugin,
+  loadHoloPluginFromPackage,
+  loadProjectPluginCommands,
+  loadProjectPluginFrameworkDescriptors,
+  normalizeHoloPluginDefinition,
+  readProjectPluginNames,
+  resolveProjectPlugins,
+  writeProjectPluginNames,
+} from './project/plugins'
 
 export function upsertProjectRegistration(
   config: NormalizedHoloProjectConfig,
@@ -172,6 +201,7 @@ export {
   bundleProjectModule,
   CLI_RUNTIME_ROOT,
   defaultProjectConfig,
+  defineHoloPlugin,
   discoverAppCommands,
   ensureGeneratedSchemaPlaceholder,
   ensureProjectConfig,
@@ -188,6 +218,9 @@ export {
   publishAuthNotificationsIntoProject,
   installQueueIntoProject,
   installSecurityIntoProject,
+  loadHoloPluginFromPackage,
+  loadProjectPluginCommands,
+  loadProjectPluginFrameworkDescriptors,
   loadGeneratedProjectRegistry,
   loadProjectConfig,
   loadRegisteredMigrations,
@@ -195,15 +228,19 @@ export {
   loadRegisteredSeeders,
   makeProjectRelativePath,
   prepareProjectDiscovery,
+  readProjectPluginNames,
   readTextFile,
   renderFrameworkRunner,
+  renderFrameworkRunnerForDescriptor,
   resolveDefaultArtifactPath,
   resolveGeneratedSchemaPath,
   resolveProjectPackageImportSpecifier,
+  resolveProjectPlugins,
   scaffoldProject,
   stripFileExtension,
   syncManagedDriverDependencies,
   writeProjectConfig,
+  writeProjectPluginNames,
   writeTextFile,
 }
 
@@ -216,6 +253,7 @@ export const projectInternals = {
   isGeneratedProjectRegistry,
   loadGeneratedProjectRegistry,
   renderFrameworkRunner,
+  renderFrameworkRunnerForDescriptor,
   renderFrameworkFiles,
   renderGeneratedIndexModule,
   renderGeneratedAuthorizationRegistry,
@@ -293,4 +331,7 @@ export const projectInternals = {
   resolveNamedExportEntry,
   upsertProjectRegistration,
   writeGeneratedProjectRegistry,
+  activateProjectPlugin,
+  deactivateProjectPlugin,
+  normalizeHoloPluginDefinition,
 }

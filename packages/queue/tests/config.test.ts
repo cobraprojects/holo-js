@@ -519,14 +519,22 @@ describe('@holo-js/queue config', () => {
     })).toThrow('default queue connection "redis" is not configured')
   })
 
-  it('rejects unsupported drivers and invalid integer-like values', () => {
-    expect(() => normalizeQueueConfig({
+  it('normalizes plugin drivers and rejects invalid integer-like values', () => {
+    const pluginQueueConfig = normalizeQueueConfig({
       connections: {
-        broken: {
+        memory: {
           driver: 'memory' as never,
+          queue: 'memory-jobs',
+          concurrency: 4,
         },
       },
-    })).toThrow('Unsupported queue driver "memory"')
+    })
+    expect(pluginQueueConfig.connections.memory).toMatchObject({
+      name: 'memory',
+      driver: 'memory',
+      queue: 'memory-jobs',
+      concurrency: 4,
+    })
 
     expect(() => normalizeQueueConfig({
       connections: {

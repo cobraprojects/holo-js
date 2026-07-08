@@ -47,6 +47,7 @@ export interface HoloAppConfig extends HoloProjectConfig {
   url?: string
   debug?: boolean
   env?: HoloAppEnv
+  plugins?: readonly string[]
 }
 
 export type HoloDatabaseConnectionConfig = HoloProjectConnectionConfig
@@ -282,7 +283,7 @@ export interface NormalizedHoloBroadcastConfig {
   readonly worker: NormalizedBroadcastWorkerConfig
 }
 
-export type CacheDriver = 'memory' | 'file' | 'redis' | 'database'
+export type CacheDriver = 'memory' | 'file' | 'redis' | 'database' | (string & {})
 
 export interface CacheMemoryDriverConfig {
   readonly driver: 'memory'
@@ -310,11 +311,18 @@ export interface CacheDatabaseDriverConfig {
   readonly prefix?: string
 }
 
+export interface CachePluginDriverConfig {
+  readonly driver: string
+  readonly prefix?: string
+  readonly [key: string]: unknown
+}
+
 export type CacheDriverConfig
   = CacheMemoryDriverConfig
   | CacheFileDriverConfig
   | CacheRedisDriverConfig
   | CacheDatabaseDriverConfig
+  | CachePluginDriverConfig
 
 export interface HoloCacheConfig {
   readonly default?: string
@@ -352,11 +360,19 @@ export interface NormalizedCacheDatabaseDriverConfig {
   readonly prefix: string
 }
 
+export interface NormalizedCachePluginDriverConfig {
+  readonly name: string
+  readonly driver: string
+  readonly prefix: string
+  readonly [key: string]: unknown
+}
+
 export type NormalizedCacheDriverConfig
   = NormalizedCacheMemoryDriverConfig
   | NormalizedCacheFileDriverConfig
   | NormalizedCacheRedisDriverConfig
   | NormalizedCacheDatabaseDriverConfig
+  | NormalizedCachePluginDriverConfig
 
 export interface NormalizedHoloCacheConfig {
   readonly default: string
@@ -822,10 +838,17 @@ export interface QueueSyncConnectionConfig {
   readonly queue?: string
 }
 
+export interface QueuePluginConnectionConfig {
+  readonly driver: string
+  readonly queue?: string
+  readonly [key: string]: unknown
+}
+
 export type QueueConnectionConfig
   = QueueSyncConnectionConfig
   | QueueRedisConnectionConfig
   | QueueDatabaseConnectionConfig
+  | QueuePluginConnectionConfig
 
 export interface HoloQueueConfig {
   readonly default?: string
@@ -873,10 +896,18 @@ export interface NormalizedQueueDatabaseConnectionConfig {
   readonly table: string
 }
 
+export interface NormalizedQueuePluginConnectionConfig {
+  readonly name: string
+  readonly driver: string
+  readonly queue: string
+  readonly [key: string]: unknown
+}
+
 export type NormalizedQueueConnectionConfig
   = NormalizedQueueSyncConnectionConfig
   | NormalizedQueueRedisConnectionConfig
   | NormalizedQueueDatabaseConnectionConfig
+  | NormalizedQueuePluginConnectionConfig
 
 export interface NormalizedHoloQueueConfig {
   readonly default: string
@@ -890,6 +921,7 @@ export interface NormalizedHoloAppConfig {
   readonly url: string
   readonly debug: boolean
   readonly env: HoloAppEnv
+  readonly plugins: readonly string[]
   readonly paths: Readonly<HoloProjectPaths>
   readonly models: readonly string[]
   readonly migrations: readonly string[]

@@ -820,6 +820,104 @@ describe('@holo-js/validation contracts', () => {
     expect(available.valid).toBe(true)
   })
 
+  it('runs custom and confirmed post rules against rule-order values around transforms', async () => {
+    const beforeTransformValues: unknown[] = []
+    const afterTransformValues: unknown[] = []
+    const customBeforeTransform = schema({
+      value: field.string()
+        .required()
+        .custom(value => {
+          beforeTransformValues.push(value)
+          return value.startsWith('A') || 'Name must start with A.'
+        })
+        .transform(value => value.length),
+    })
+    const customAfterTransform = schema({
+      value: field.string()
+        .required()
+        .transform(value => value.length)
+        .custom(value => {
+          afterTransformValues.push(value)
+          return value === 3 || 'Name must be 3 characters.'
+        }),
+    })
+    const confirmedBeforeTransform = schema({
+      password: field.string()
+        .required()
+        .confirmed()
+        .transform(value => value.length),
+    })
+    const confirmedAfterTransform = schema({
+      password: field.string()
+        .required()
+        .transform(value => value.trim())
+        .confirmed(),
+    })
+
+    const beforeSuccess = await safeParse({ value: 'Ava' }, customBeforeTransform)
+    expect(beforeSuccess.valid).toBe(true)
+    if (beforeSuccess.valid) {
+      expect(beforeSuccess.data.value).toBe(3)
+    }
+    expect(beforeTransformValues).toEqual(['Ava'])
+
+    const beforeFailure = await safeParse({ value: 'Mia' }, customBeforeTransform)
+    expect(beforeFailure.valid).toBe(false)
+    if (!beforeFailure.valid) {
+      expect(beforeFailure.errors.first('value')).toBe('Name must start with A.')
+    }
+
+    const afterSuccess = await safeParse({ value: 'Ivy' }, customAfterTransform)
+    expect(afterSuccess.valid).toBe(true)
+    if (afterSuccess.valid) {
+      expect(afterSuccess.data.value).toBe(3)
+    }
+    expect(afterTransformValues).toEqual([3])
+
+    const afterFailure = await safeParse({ value: 'Lina' }, customAfterTransform)
+    expect(afterFailure.valid).toBe(false)
+    if (!afterFailure.valid) {
+      expect(afterFailure.errors.first('value')).toBe('Name must be 3 characters.')
+    }
+
+    const confirmedSuccess = await safeParse({
+      password: 'secret',
+      passwordConfirmation: 'secret',
+    }, confirmedBeforeTransform)
+    expect(confirmedSuccess.valid).toBe(true)
+    if (confirmedSuccess.valid) {
+      expect(confirmedSuccess.data.password).toBe(6)
+    }
+
+    const confirmedFailure = await safeParse({
+      password: 'secret',
+      passwordConfirmation: 'different',
+    }, confirmedBeforeTransform)
+    expect(confirmedFailure.valid).toBe(false)
+    if (!confirmedFailure.valid) {
+      expect(confirmedFailure.errors.first('password')).toBe('This field does not match its confirmation.')
+    }
+
+    expect(objectPrototypeHas('passwordConfirmation')).toBe(false)
+    Object.defineProperty(Object.prototype, 'passwordConfirmation', {
+      value: 'prototype-secret',
+      configurable: true,
+    })
+    try {
+      const transformedConfirmedSuccess = await safeParse({
+        password: ' secret ',
+        passwordConfirmation: 'secret',
+      }, confirmedAfterTransform)
+      expect(transformedConfirmedSuccess.valid).toBe(true)
+      if (transformedConfirmedSuccess.valid) {
+        expect(transformedConfirmedSuccess.data.password).toBe('secret')
+      }
+    } finally {
+      Reflect.deleteProperty(Object.prototype, 'passwordConfirmation')
+    }
+    expect(objectPrototypeHas('passwordConfirmation')).toBe(false)
+  })
+
   it('supports custom messages for built-in rules', async () => {
     const login = schema({
       email: field.string()
@@ -1545,6 +1643,9 @@ describe('@holo-js/validation coverage completeness', () => {
     expect(() => field.number().size(Number.NaN)).toThrow('size must be a finite number.')
     expect(() => field.file().maxSize(Number.NaN)).toThrow('maxSize must be a finite number.')
     expect(() => field.string().max('')).toThrow('max must not be an empty string.')
+    expect(() => field.string().max('5')).toThrow('max string limits are only supported for file fields.')
+    expect(() => field.array(field.string()).max('2')).toThrow('max string limits are only supported for file fields.')
+    expect(() => field.file().max('1kb')).not.toThrow()
   })
 
   it('covers flatToStandardIssues with _root path', async () => {

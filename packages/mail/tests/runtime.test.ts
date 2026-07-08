@@ -1,14 +1,16 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   configureMailRuntime,
   defineMail,
+  getRegisteredMailDriver,
   getMailRuntimeBindings,
   getMailRuntime,
   listFakeSentMails,
   listPreviewMailArtifacts,
+  loadMailPluginDrivers,
   MailSendError,
   previewMail,
   registerMailDriver,
@@ -52,6 +54,62 @@ function getBuiltInDriver(name: BuiltInDriverName): MailDriver {
   }
 
   return driver
+}
+
+async function writeMailPluginProject(
+  projectRoot: string,
+  packageName: string,
+  driverName: string,
+  label: string,
+): Promise<void> {
+  await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+    name: `${label}-mail-plugin-fixture`,
+    private: true,
+  }, null, 2))
+  await mkdir(join(projectRoot, 'config'), { recursive: true })
+  await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['${packageName}'],
+}
+`)
+  const pluginRoot = join(projectRoot, 'node_modules', packageName)
+  await mkdir(pluginRoot, { recursive: true })
+  await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+    name: packageName,
+    type: 'module',
+    holo: {
+      plugin: './plugin.mjs',
+    },
+  }, null, 2))
+  await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: '${label}-mail-plugin',
+  contributes: {
+    mail: {
+      drivers: {
+        ${driverName}: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+  await writeFile(join(pluginRoot, 'driver.mjs'), `
+export default {
+  async send(_mail, context) {
+    return {
+      messageId: '${label}-message',
+      mailer: context.mailer,
+      driver: context.driver,
+      queued: context.queued,
+      provider: {
+        project: '${label}',
+      },
+    }
+  },
+}
+`)
 }
 
 function createQueueModuleStub(options: { readonly autoRun?: boolean } = {}) {
@@ -2279,6 +2337,317 @@ describe('@holo-js/mail runtime', () => {
       html: '<p>Logged</p>',
       text: 'Logged',
     }))
+  })
+
+  it('sends with built-in drivers when unrelated plugin drivers are broken', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-mail-broken-plugin-'))
+    const previousCwd = process.cwd()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const resolvedConfig = mailRuntimeInternals.getResolvedConfig()
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'mail-broken-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-broken-mail'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-broken-mail')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-broken-mail',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'broken-mail-plugin',
+  contributes: {
+    mail: {
+      drivers: {
+        broken: {
+          runtime: './missing.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'missing.mjs'), `
+export default {}
+`)
+
+      process.chdir(projectRoot)
+      configureMailRuntime({
+        config: {
+          ...resolvedConfig,
+          default: 'log',
+          from: { email: 'config@example.com' },
+          mailers: {
+            ...resolvedConfig.mailers,
+            log: {
+              ...getMailerConfig(resolvedConfig, 'log', 'log'),
+              logBodies: false,
+            },
+          },
+        },
+      })
+
+      await expect(sendMail(defineMail({
+        to: 'ava@example.com',
+        subject: 'Built-in log',
+        text: 'Built-in log',
+      }))).resolves.toMatchObject({
+        mailer: 'log',
+        driver: 'log',
+        queued: false,
+      })
+      expect(warn).toHaveBeenCalledWith('[@holo-js/mail] Logged mail send', expect.objectContaining({
+        driver: 'log',
+        subject: 'Built-in log',
+      }))
+      await expect(loadMailPluginDrivers(projectRoot)).rejects.toThrow('must export send()')
+      await expect(loadMailPluginDrivers(projectRoot)).rejects.toThrow('must export send()')
+    } finally {
+      warn.mockRestore()
+      process.chdir(previousCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('loads mail drivers contributed by active Holo plugins', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-mail-plugin-'))
+    const previousCwd = process.cwd()
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'mail-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-mail'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-mail')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-mail',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'mail-plugin',
+  contributes: {
+    mail: {
+      drivers: {
+        plugin: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+export default {
+  async send(_mail, context) {
+    return {
+      messageId: 'plugin-message',
+      mailer: context.mailer,
+      driver: context.driver,
+      queued: context.queued
+    }
+  },
+}
+`)
+
+      process.chdir(projectRoot)
+      await loadMailPluginDrivers(projectRoot)
+      expect(getRegisteredMailDriver('plugin')?.driver.send).toEqual(expect.any(Function))
+      await expect(loadMailPluginDrivers(projectRoot)).resolves.toBeUndefined()
+    } finally {
+      process.chdir(previousCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('clears mail plugin drivers when the runtime resets', async () => {
+    const firstRoot = await mkdtemp(join(tmpdir(), 'holo-mail-plugin-first-'))
+    const secondRoot = await mkdtemp(join(tmpdir(), 'holo-mail-plugin-second-'))
+    const mail = defineMail({
+      to: 'ava@example.com',
+      subject: 'Plugin mail',
+      text: 'Plugin mail',
+    })
+
+    try {
+      await writeMailPluginProject(firstRoot, 'holo-plugin-mail-first', 'shared', 'first')
+      await writeMailPluginProject(secondRoot, 'holo-plugin-mail-second', 'shared', 'second')
+
+      configureMailRuntime({
+        projectRoot: firstRoot,
+        config: {
+          ...mailRuntimeInternals.getResolvedConfig(),
+          default: 'plugin',
+          from: { email: 'config@example.com' },
+          mailers: {
+            ...mailRuntimeInternals.getResolvedConfig().mailers,
+            plugin: {
+              name: 'plugin',
+              driver: 'shared',
+              from: { email: 'config@example.com' },
+              replyTo: { email: 'config@example.com' },
+              queue: {
+                queued: false,
+                connection: undefined,
+                queue: undefined,
+                afterCommit: false,
+              },
+            },
+          },
+        },
+      } as Parameters<typeof configureMailRuntime>[0] & { readonly projectRoot: string })
+
+      await expect(sendMail(mail)).resolves.toMatchObject({
+        provider: {
+          project: 'first',
+        },
+      })
+
+      resetMailRuntime()
+      configureMailRuntime({
+        projectRoot: secondRoot,
+        config: {
+          ...mailRuntimeInternals.getResolvedConfig(),
+          default: 'plugin',
+          from: { email: 'config@example.com' },
+          mailers: {
+            ...mailRuntimeInternals.getResolvedConfig().mailers,
+            plugin: {
+              name: 'plugin',
+              driver: 'shared',
+              from: { email: 'config@example.com' },
+              replyTo: { email: 'config@example.com' },
+              queue: {
+                queued: false,
+                connection: undefined,
+                queue: undefined,
+                afterCommit: false,
+              },
+            },
+          },
+        },
+      } as Parameters<typeof configureMailRuntime>[0] & { readonly projectRoot: string })
+
+      await expect(sendMail(mail)).resolves.toMatchObject({
+        provider: {
+          project: 'second',
+        },
+      })
+    } finally {
+      await rm(firstRoot, { recursive: true, force: true })
+      await rm(secondRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('loads plugin drivers while delivering queued mail', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-mail-queued-plugin-'))
+    const previousCwd = process.cwd()
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'mail-queued-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-mail-queued'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-mail-queued')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-mail-queued',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'mail-queued-plugin',
+  contributes: {
+    mail: {
+      drivers: {
+        plugin: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+export default {
+  async send(_mail, context) {
+    return {
+      messageId: context.messageId,
+      mailer: context.mailer,
+      driver: context.driver,
+      queued: context.queued,
+    }
+  },
+}
+`)
+
+      configureMailRuntime({
+        projectRoot: ` ${projectRoot} `,
+      } as Parameters<typeof configureMailRuntime>[0] & { readonly projectRoot: string })
+      await expect(mailRuntimeInternals.runQueuedMailDelivery({
+        messageId: 'queued-plugin-message',
+        mailer: 'transactional',
+        driver: 'plugin',
+        queued: true,
+        mail: {
+          from: {
+            email: 'from@example.com',
+          },
+          replyTo: {
+            email: 'reply@example.com',
+          },
+          to: [{
+            email: 'to@example.com',
+          }],
+          cc: [],
+          bcc: [],
+          subject: 'Queued plugin mail',
+          text: 'Queued plugin mail',
+          attachments: [],
+          headers: {},
+          tags: [],
+        },
+      })).resolves.toMatchObject({
+        messageId: 'queued-plugin-message',
+        mailer: 'transactional',
+        driver: 'plugin',
+        queued: true,
+      })
+    } finally {
+      process.chdir(previousCwd)
+      await rm(projectRoot, { recursive: true, force: true })
+    }
   })
 
   it('uses registered custom drivers and wraps thrown driver errors', async () => {

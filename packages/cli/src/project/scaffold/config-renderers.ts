@@ -12,9 +12,13 @@ import {
   pathExists,
 } from '../shared'
 import {
-  detectProjectFrameworkFromPackageJson,
+  detectProjectFrameworkDescriptor,
   readPackageJsonDependencyState,
 } from './dependencies'
+import {
+  frameworkDescriptorSupportsManagedBroadcastAuthRoute,
+  isSupportedFrameworkId,
+} from '../frameworks'
 import type {
   AuthInstallFeatures,
   ConfigModuleFormat,
@@ -25,10 +29,7 @@ import {
   writeTextFile,
 } from '../runtime'
 import {
-  renderNextBroadcastAuthRoute,
-  renderNextGeneratedBroadcastAuthRoute,
-  renderNextHoloHelper,
-  renderSvelteHoloHelper,
+  renderBroadcastAuthSupportFrameworkFiles,
 } from './framework-renderers'
 
 export function renderStorageConfig(): string {
@@ -555,11 +556,14 @@ export async function syncBroadcastAuthSupportAfterAuthInstall(projectRoot: stri
   readonly createdBroadcastAuthRoute: boolean
 }> {
   const { dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
-  const framework = detectProjectFrameworkFromPackageJson(dependencies, devDependencies)
-  const canCreateBroadcastAuthRoute = framework === 'next' || framework === 'nuxt' || framework === 'sveltekit'
+  const framework = await detectProjectFrameworkDescriptor(projectRoot, dependencies, devDependencies)
+  const canCreateBroadcastAuthRoute = frameworkDescriptorSupportsManagedBroadcastAuthRoute(framework)
+  const frameworkId = framework && isSupportedFrameworkId(framework.id)
+    ? framework.id
+    : undefined
   const authConfigPath = await resolveFirstExistingPath(projectRoot, AUTH_CONFIG_FILE_NAMES)
   const broadcastConfigPath = await resolveFirstExistingPath(projectRoot, BROADCAST_CONFIG_FILE_NAMES)
-  if (!authConfigPath || !broadcastConfigPath || !canCreateBroadcastAuthRoute) {
+  if (!authConfigPath || !broadcastConfigPath || !frameworkId || !canCreateBroadcastAuthRoute) {
     return {
       updatedBroadcastConfig: false,
       createdBroadcastAuthRoute: false,
@@ -588,26 +592,18 @@ export async function syncBroadcastAuthSupportAfterAuthInstall(projectRoot: stri
     }
   }
 
-  if (framework === 'next') {
-    const authRoutePath = resolve(projectRoot, 'app/broadcasting/auth/route.ts')
-    const holoHelperPath = resolve(projectRoot, '.holo-js/generated/next/holo.ts')
-    const generatedRoutePath = resolve(projectRoot, '.holo-js/generated/next/broadcast-auth-route.ts')
-    if (!(await pathExists(authRoutePath))) {
-      await writeTextFile(authRoutePath, renderNextBroadcastAuthRoute())
+  for (const file of renderBroadcastAuthSupportFrameworkFiles(frameworkId)) {
+    const filePath = resolve(projectRoot, file.path)
+    const generated = file.path.startsWith('.holo-js/generated/')
+    if (!generated && await pathExists(filePath)) {
+      continue
+    }
+
+    if (!generated) {
       createdBroadcastAuthRoute = true
     }
-    await writeTextFile(holoHelperPath, renderNextHoloHelper())
-    await writeTextFile(generatedRoutePath, renderNextGeneratedBroadcastAuthRoute())
 
-    return {
-      updatedBroadcastConfig,
-      createdBroadcastAuthRoute,
-    }
-  }
-
-  if (framework === 'sveltekit') {
-    const holoHelperPath = resolve(projectRoot, '.holo-js/generated/sveltekit/holo.ts')
-    await writeTextFile(holoHelperPath, renderSvelteHoloHelper())
+    await writeTextFile(filePath, file.contents)
   }
 
   return {

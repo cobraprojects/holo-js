@@ -50,6 +50,10 @@ export function getRegisteredNotificationChannel<TChannel extends string>(
   return getRegistry().get(normalizeChannelName(name)) as RegisteredNotificationChannel<TChannel> | undefined
 }
 
+export function unregisterNotificationChannel(name: string): boolean {
+  return getRegistry().delete(normalizeChannelName(name))
+}
+
 export function listRegisteredNotificationChannels(): readonly RegisteredNotificationChannel[] {
   return Object.freeze([...getRegistry().values()])
 }

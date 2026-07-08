@@ -559,7 +559,7 @@ async function evaluateResolvedPolicy(
   }
 
   if (typeof target === 'function' || isAuthorizationTargetModel(target)) {
-    const handler = policy.class?.[action]
+    const handler = resolveRegisteredClassPolicyHandler(policy.class, action)
     if (!handler) {
       throw new AuthorizationErrorClass(
         `[@holo-js/authorization] Policy action "${action}" is not defined for ${missingActionTarget}.`,
@@ -570,7 +570,7 @@ async function evaluateResolvedPolicy(
     return await normalizeResult(handler(context, target))
   }
 
-  const handler = policy.record?.[action]
+  const handler = resolveRegisteredRecordPolicyHandler(policy.record, action)
   if (!handler) {
     throw new AuthorizationErrorClass(
       `[@holo-js/authorization] Policy action "${action}" is not defined for ${missingActionTarget}.`,
@@ -578,6 +578,30 @@ async function evaluateResolvedPolicy(
     )
   }
   return await normalizeResult(handler(context, target))
+}
+
+function resolveRegisteredClassPolicyHandler(
+  handlers: RegisteredPolicy['class'] | undefined,
+  action: string,
+): AuthorizationPolicyClassHandler<object, AuthorizationPolicyTarget> | undefined {
+  if (!handlers || !Object.prototype.hasOwnProperty.call(handlers, action)) {
+    return undefined
+  }
+
+  const handler = handlers[action]
+  return typeof handler === 'function' ? handler : undefined
+}
+
+function resolveRegisteredRecordPolicyHandler(
+  handlers: RegisteredPolicy['record'] | undefined,
+  action: string,
+): AuthorizationPolicyRecordHandler<object, AuthorizationPolicyTarget> | undefined {
+  if (!handlers || !Object.prototype.hasOwnProperty.call(handlers, action)) {
+    return undefined
+  }
+
+  const handler = handlers[action]
+  return typeof handler === 'function' ? handler : undefined
 }
 
 async function evaluatePolicyByTarget(

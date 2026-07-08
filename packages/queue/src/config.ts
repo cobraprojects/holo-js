@@ -6,10 +6,12 @@ import type {
   QueueSharedRedisConnectionConfig,
   NormalizedQueueRedisConnectionConfig,
   NormalizedQueueSyncConnectionConfig,
+  NormalizedQueuePluginConnectionConfig,
   NormalizedHoloQueueConfig,
   QueueConnectionConfig,
   QueueDatabaseConnectionConfig,
   QueueFailedStoreConfig,
+  QueuePluginConnectionConfig,
   QueueRedisConnectionConfig,
   QueueSyncConnectionConfig,
   HoloQueueConfig,
@@ -23,10 +25,12 @@ export type {
   QueueSharedRedisConnectionConfig,
   NormalizedQueueRedisConnectionConfig,
   NormalizedQueueSyncConnectionConfig,
+  NormalizedQueuePluginConnectionConfig,
   NormalizedHoloQueueConfig,
   QueueConnectionConfig,
   QueueDatabaseConnectionConfig,
   QueueFailedStoreConfig,
+  QueuePluginConnectionConfig,
   QueueRedisConnectionConfig,
   QueueSyncConnectionConfig,
   HoloQueueConfig,
@@ -290,6 +294,20 @@ function normalizeDatabaseConnection(
   })
 }
 
+function normalizePluginConnection(
+  name: string,
+  config: QueuePluginConnectionConfig,
+): NormalizedQueuePluginConnectionConfig {
+  const { driver, queue, ...options } = config
+
+  return Object.freeze({
+    ...options,
+    name,
+    driver: normalizeConnectionName(driver, `queue connection "${name}" driver`),
+    queue: normalizeQueueName(queue),
+  })
+}
+
 function normalizeConnectionConfig(
   name: string,
   config: QueueConnectionConfig,
@@ -297,13 +315,13 @@ function normalizeConnectionConfig(
 ): NormalizedQueueConnectionConfig {
   switch (config.driver) {
     case 'sync':
-      return normalizeSyncConnection(name, config)
+      return normalizeSyncConnection(name, config as QueueSyncConnectionConfig)
     case 'redis':
-      return normalizeRedisConnection(name, config, redisConfig)
+      return normalizeRedisConnection(name, config as QueueRedisConnectionConfig, redisConfig)
     case 'database':
-      return normalizeDatabaseConnection(name, config)
+      return normalizeDatabaseConnection(name, config as QueueDatabaseConnectionConfig)
     default:
-      throw new Error(`[Holo Queue] Unsupported queue driver "${String((config as { driver?: unknown }).driver)}" on connection "${name}".`)
+      return normalizePluginConnection(name, config as QueuePluginConnectionConfig)
   }
 }
 

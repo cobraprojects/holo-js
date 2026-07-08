@@ -1,5 +1,8 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { QueueDriverFactory, QueueJsonValue, QueueReservedJob, RegisterableQueueJobDefinition } from '../src'
+import type { QueueDriverFactory, QueueJobEnvelope, QueueJsonValue, QueueReservedJob, RegisterableQueueJobDefinition } from '../src'
 import {
   Queue,
   QueueReleaseUnsupportedError,
@@ -10,12 +13,15 @@ import {
   getQueueRuntime,
   getRegisteredQueueJob,
   listRegisteredQueueJobs,
+  loadQueuePluginDriverFactories,
+  loadQueuePluginDrivers,
   normalizeQueueConfig,
   queueRegistryInternals,
   queueRuntimeInternals,
   registerQueueJob,
   registerQueueJobs,
   resetQueueRegistry,
+  resetQueuePluginDriverFactories,
   resetQueueRuntime,
   shutdownQueueRuntime,
   unregisterQueueJob,
@@ -93,6 +99,529 @@ function registerNamedJob<TPayload extends QueueJsonValue, TResult>(
 }
 
 describe('@holo-js/queue runtime', () => {
+  it('rethrows invalid queue plugin driver factories after a failed load attempt', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-queue-broken-plugin-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'queue-broken-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-broken-queue'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-broken-queue')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-broken-queue',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'broken-queue-plugin',
+  contributes: {
+    queue: {
+      drivers: {
+        broken: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+export default {
+  driver: 'broken',
+}
+`)
+
+      await expect(loadQueuePluginDriverFactories(projectRoot)).rejects.toThrow('must export a matching QueueDriverFactory')
+      await expect(loadQueuePluginDriverFactories(projectRoot)).rejects.toThrow('must export a matching QueueDriverFactory')
+    } finally {
+      resetQueuePluginDriverFactories()
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('clears cached queue plugin load failures before resetQueueRuntime returns', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-queue-reset-plugin-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'queue-reset-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-queue-reset'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-queue-reset')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-queue-reset',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'queue-reset-plugin',
+  contributes: {
+    queue: {
+      drivers: {
+        reset: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+export default {
+  driver: 'reset',
+}
+`)
+
+      let firstError: unknown
+      try {
+        await loadQueuePluginDriverFactories(projectRoot)
+      } catch (error) {
+        firstError = error
+      }
+
+      resetQueueRuntime()
+
+      let secondError: unknown
+      try {
+        await loadQueuePluginDriverFactories(projectRoot)
+      } catch (error) {
+        secondError = error
+      }
+
+      expect(firstError).toBeInstanceOf(Error)
+      expect(secondError).toBeInstanceOf(Error)
+      expect(secondError).not.toBe(firstError)
+    } finally {
+      resetQueuePluginDriverFactories()
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('loads queue drivers contributed by active Holo plugins into the runtime', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-queue-plugin-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'queue-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-queue'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-queue')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-queue',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'queue-plugin',
+  contributes: {
+    queue: {
+      drivers: {
+        plugin: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+export default {
+  driver: 'plugin',
+  create(connection) {
+    return {
+      name: connection.name,
+      driver: connection.driver,
+      mode: 'async',
+      async dispatch(job) {
+        return {
+          jobId: job.id,
+          synchronous: false,
+        }
+      },
+      async clear() {
+        return 0
+      },
+      async reserve() {
+        return null
+      },
+      async acknowledge() {},
+      async release() {},
+      async delete() {},
+    }
+  },
+}
+`)
+
+      const firstFactories = await loadQueuePluginDriverFactories(projectRoot)
+      const secondFactories = await loadQueuePluginDriverFactories(projectRoot)
+      const equivalentPathFactories = await loadQueuePluginDriverFactories(`${projectRoot}/.`)
+      expect(firstFactories.map(factory => factory.driver)).toEqual(['plugin'])
+      expect(secondFactories.map(factory => factory.driver)).toEqual(['plugin'])
+      expect(equivalentPathFactories).toBe(firstFactories)
+
+      await loadQueuePluginDrivers(projectRoot)
+      expect(queueRuntimeInternals.getQueueRuntimeState().driverFactories.get('plugin')?.driver).toBe('plugin')
+      await expect(loadQueuePluginDrivers(projectRoot)).resolves.toBeUndefined()
+    } finally {
+      resetQueuePluginDriverFactories()
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('uses plugin queue drivers through normalized runtime config', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-queue-config-plugin-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'queue-config-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-queue-config'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-queue-config')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-queue-config',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'queue-config-plugin',
+  contributes: {
+    queue: {
+      drivers: {
+        plugin: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+export default {
+  driver: 'plugin',
+  create(connection) {
+    return {
+      name: connection.name,
+      driver: connection.driver,
+      mode: 'async',
+      async dispatch(job) {
+        return {
+          jobId: job.id,
+          synchronous: false,
+        }
+      },
+      async clear() {
+        return 0
+      },
+      async reserve() {
+        return null
+      },
+      async acknowledge() {},
+      async release() {},
+      async delete() {},
+    }
+  },
+}
+`)
+
+      await loadQueuePluginDrivers(projectRoot)
+      configureQueueRuntime({
+        config: {
+          default: 'plugin',
+          connections: {
+            plugin: {
+              driver: 'plugin',
+              queue: 'plugin-jobs',
+            },
+          },
+        },
+      })
+      registerNamedJob('plugin.job', {
+        async handle() {
+          return undefined
+        },
+      })
+
+      await expect(dispatch('plugin.job', {})).resolves.toMatchObject({
+        connection: 'plugin',
+        queue: 'plugin-jobs',
+        synchronous: false,
+      })
+    } finally {
+      resetQueuePluginDriverFactories()
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('invalidates cached connection drivers when plugin driver factories are loaded', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-queue-plugin-invalidation-'))
+    const firstClose = vi.fn(async () => {})
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'queue-plugin-invalidation-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-queue-replacement'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-queue-replacement')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-queue-replacement',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'queue-replacement-plugin',
+  contributes: {
+    queue: {
+      drivers: {
+        plugin: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+export default {
+  driver: 'plugin',
+  create(connection) {
+    return {
+      name: connection.name,
+      driver: connection.driver,
+      mode: 'async',
+      async dispatch(job) {
+        return {
+          jobId: \`plugin:\${job.id}\`,
+          synchronous: false,
+        }
+      },
+      async clear() {
+        return 0
+      },
+      async close() {},
+      async reserve() {
+        return null
+      },
+      async acknowledge() {},
+      async release() {},
+      async delete() {},
+    }
+  },
+}
+`)
+      configureQueueRuntime({
+        config: {
+          default: 'plugin',
+          connections: {
+            plugin: {
+              driver: 'plugin',
+              queue: 'plugin-jobs',
+            },
+          },
+        },
+        driverFactories: [{
+          driver: 'plugin',
+          create(connection) {
+            return {
+              name: connection.name,
+              driver: connection.driver,
+              mode: 'async' as const,
+              async dispatch(job) {
+                return {
+                  jobId: `first:${job.id}`,
+                  synchronous: false,
+                }
+              },
+              async clear() {
+                return 0
+              },
+              close: firstClose,
+              async reserve<TPayload extends QueueJsonValue = QueueJsonValue>() {
+                return null as QueueReservedJob<TPayload> | null
+              },
+              async acknowledge() {},
+              async release() {},
+              async delete() {},
+            }
+          },
+        }],
+      })
+      registerNamedJob('plugin.invalidate', {
+        async handle() {
+          return undefined
+        },
+      })
+
+      await expect(dispatch('plugin.invalidate', {})).resolves.toMatchObject({
+        jobId: expect.stringMatching(/^first:/),
+      })
+
+      await loadQueuePluginDrivers(projectRoot)
+
+      expect(firstClose).toHaveBeenCalledTimes(1)
+      await expect(dispatch('plugin.invalidate', {})).resolves.toMatchObject({
+        jobId: expect.stringMatching(/^plugin:/),
+      })
+    } finally {
+      resetQueuePluginDriverFactories()
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('invalidates cached inline sync drivers when plugin driver factories are loaded', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-queue-sync-plugin-invalidation-'))
+    const firstClose = vi.fn(async () => {})
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'queue-sync-plugin-invalidation-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-sync-replacement'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-sync-replacement')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-sync-replacement',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'sync-replacement-plugin',
+  contributes: {
+    queue: {
+      drivers: {
+        sync: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+export default {
+  driver: 'sync',
+  create(connection) {
+    return {
+      name: connection.name,
+      driver: connection.driver,
+      mode: 'sync',
+      async dispatch(job) {
+        return {
+          jobId: \`plugin:\${job.id}\`,
+          synchronous: true,
+          result: 'plugin',
+        }
+      },
+      async clear() {
+        return 0
+      },
+      async close() {},
+    }
+  },
+}
+`)
+      configureQueueRuntime({
+        driverFactories: [{
+          driver: 'sync',
+          create(connection) {
+            return {
+              name: connection.name,
+              driver: connection.driver,
+              mode: 'sync' as const,
+              async dispatch<TPayload extends QueueJsonValue = QueueJsonValue, TResult = unknown>(
+                job: QueueJobEnvelope<TPayload>,
+              ) {
+                return {
+                  jobId: `first:${job.id}`,
+                  synchronous: true,
+                  result: 'first' as TResult,
+                }
+              },
+              async clear() {
+                return 0
+              },
+              close: firstClose,
+            }
+          },
+        }],
+      })
+      registerNamedJob('sync.invalidate', {
+        async handle() {
+          return 'handled'
+        },
+      })
+
+      await expect(dispatchSync<Record<string, never>, string>('sync.invalidate', {})).resolves.toBe('first')
+
+      await loadQueuePluginDrivers(projectRoot)
+
+      expect(firstClose).toHaveBeenCalledTimes(1)
+      await expect(dispatchSync<Record<string, never>, string>('sync.invalidate', {})).resolves.toBe('plugin')
+    } finally {
+      resetQueuePluginDriverFactories()
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
   it('accepts shared redis config when configuring Redis-backed runtime connections', () => {
     configureQueueRuntime({
       config: {

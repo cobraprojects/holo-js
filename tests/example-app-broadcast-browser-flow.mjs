@@ -121,7 +121,7 @@ async function createPostThroughBrowser(page, title) {
   await page.locator('textarea[name="excerpt"]').fill('Created by the real browser broadcast flow.')
   await page.locator('textarea[name="body"]').fill('This post verifies that Flux receives a broadcast event in a real browser session.')
   await page.locator('select[name="status"]').selectOption('draft')
-  await page.locator('select[name="categoryId"]').selectOption('')
+  await page.locator('select[name="categoryId"]').selectOption({ index: 1 })
 
   const [response] = await Promise.all([
     page.waitForResponse(

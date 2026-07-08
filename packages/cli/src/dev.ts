@@ -9,7 +9,7 @@ import {
   ensureGeneratedSchemaPlaceholder,
   syncManagedDriverDependencies,
   prepareProjectDiscovery,
-  renderFrameworkRunner,
+  renderFrameworkRunnerForDescriptor,
   writeTextFile,
 } from './project'
 import { hasProjectDependency } from './package-json'
@@ -22,6 +22,12 @@ import type {
   SupportedScaffoldPackageManager,
 } from './cli-types'
 import type { LoadedProjectConfig } from './types'
+import {
+  getFrameworkDescriptorByIdFrom,
+  getFrameworkDescriptorsWith,
+  type FrameworkDescriptor,
+} from './project/frameworks'
+import { loadProjectPluginFrameworkDescriptors } from './project/plugins'
 
 async function fileExists(path: string): Promise<boolean> {
   try {
@@ -184,33 +190,10 @@ type ProjectPrepareOptions = {
 }
 
 type FrameworkSyncDefinition = {
-  readonly framework: 'nuxt' | 'sveltekit'
+  readonly framework: string
   readonly commands: Record<SupportedScaffoldPackageManager, readonly [string, ...string[]]>
   readonly errorLabel: string
 }
-
-const FRAMEWORK_SYNC_DEFINITIONS = [
-  {
-    framework: 'nuxt',
-    commands: {
-      bun: ['bun', 'x', 'nuxt', 'prepare'],
-      npm: ['npm', 'exec', '--', 'nuxt', 'prepare'],
-      pnpm: ['pnpm', 'exec', 'nuxt', 'prepare'],
-      yarn: ['yarn', 'run', 'nuxt', 'prepare'],
-    },
-    errorLabel: 'nuxt prepare',
-  },
-  {
-    framework: 'sveltekit',
-    commands: {
-      bun: ['bun', 'x', 'svelte-kit', 'sync'],
-      npm: ['npm', 'exec', '--', 'svelte-kit', 'sync'],
-      pnpm: ['pnpm', 'exec', 'svelte-kit', 'sync'],
-      yarn: ['yarn', 'run', 'svelte-kit', 'sync'],
-    },
-    errorLabel: 'svelte-kit sync',
-  },
-] as const satisfies readonly FrameworkSyncDefinition[]
 
 export async function runProjectPrepare(
   projectRoot: string,
@@ -223,9 +206,13 @@ export async function runProjectPrepare(
   await refreshFrameworkRunner(projectRoot)
 
   const syncFramework = options.syncFramework ?? true
+  const syncDefinitions = syncFramework
+    ? await resolveProjectFrameworkSyncDefinitions(projectRoot)
+    : []
   if (syncFramework) {
-    await runFrameworkSync(projectRoot, FRAMEWORK_SYNC_DEFINITIONS[0])
-    await runFrameworkSync(projectRoot, FRAMEWORK_SYNC_DEFINITIONS[1])
+    for (const definition of syncDefinitions) {
+      await runFrameworkSync(projectRoot, definition)
+    }
   }
 
   const updatedDependencies = await syncManagedDriverDependencies(projectRoot)
@@ -234,8 +221,9 @@ export async function runProjectPrepare(
     await prepareProjectDiscovery(projectRoot, project.config)
     await refreshFrameworkRunner(projectRoot)
     if (syncFramework) {
-      await runFrameworkSync(projectRoot, FRAMEWORK_SYNC_DEFINITIONS[0])
-      await runFrameworkSync(projectRoot, FRAMEWORK_SYNC_DEFINITIONS[1])
+      for (const definition of syncDefinitions) {
+        await runFrameworkSync(projectRoot, definition)
+      }
     }
   }
 }
@@ -247,50 +235,69 @@ async function runProjectHotPrepare(projectRoot: string, io?: IoStreams): Promis
 async function refreshFrameworkRunner(projectRoot: string): Promise<void> {
   const frameworkProjectPath = resolve(projectRoot, '.holo-js/framework/project.json')
   const frameworkRunnerPath = resolve(projectRoot, '.holo-js/framework/run.mjs')
-  const framework = await resolveProjectFramework(projectRoot, frameworkProjectPath)
+  const descriptor = await resolveProjectFramework(projectRoot, frameworkProjectPath)
 
-  if (!framework) {
+  if (!descriptor) {
     return
   }
 
-  await writeTextFile(frameworkProjectPath, `${JSON.stringify({ framework }, null, 2)}\n`)
-  await writeTextFile(frameworkRunnerPath, renderFrameworkRunner({ framework }))
+  await writeTextFile(frameworkProjectPath, `${JSON.stringify({ framework: descriptor.id }, null, 2)}\n`)
+  await writeTextFile(frameworkRunnerPath, renderFrameworkRunnerForDescriptor(descriptor))
 }
 
 async function resolveProjectFramework(
   projectRoot: string,
   frameworkProjectPath: string,
-): Promise<'next' | 'nuxt' | 'sveltekit' | undefined> {
+): Promise<FrameworkDescriptor | undefined> {
+  const pluginDescriptors = await loadProjectPluginFrameworkDescriptors(projectRoot)
   try {
     const content = await readFile(frameworkProjectPath, 'utf8')
     const manifest = JSON.parse(content) as { framework?: unknown }
+    const descriptor = typeof manifest.framework === 'string'
+      ? getFrameworkDescriptorByIdFrom(manifest.framework, pluginDescriptors)
+      : undefined
 
-    if (
-      manifest.framework !== 'next'
-      && manifest.framework !== 'nuxt'
-      && manifest.framework !== 'sveltekit'
-    ) {
-      return
-    }
-
-    return manifest.framework
+    return descriptor ?? resolveProjectFrameworkFromDependencies(projectRoot, pluginDescriptors)
   } catch {
-    // Regenerate ignored framework metadata from dependencies below.
+    return resolveProjectFrameworkFromDependencies(projectRoot, pluginDescriptors)
   }
+}
 
-  if (await hasProjectDependency(projectRoot, 'next')) {
-    return 'next'
-  }
-
-  if (await hasProjectDependency(projectRoot, 'nuxt')) {
-    return 'nuxt'
-  }
-
-  if (await hasProjectDependency(projectRoot, '@sveltejs/kit')) {
-    return 'sveltekit'
+async function resolveProjectFrameworkFromDependencies(
+  projectRoot: string,
+  pluginDescriptors: readonly FrameworkDescriptor[] = [],
+): Promise<FrameworkDescriptor | undefined> {
+  for (const descriptor of getFrameworkDescriptorsWith(pluginDescriptors)) {
+    const matches = await Promise.all(
+      descriptor.detectPackages.map(packageName => hasProjectDependency(projectRoot, packageName)),
+    )
+    if (matches.some(Boolean)) {
+      return descriptor
+    }
   }
 
   return undefined
+}
+
+async function resolveProjectFrameworkSyncDefinitions(projectRoot: string): Promise<readonly FrameworkSyncDefinition[]> {
+  const pluginDescriptors = await loadProjectPluginFrameworkDescriptors(projectRoot)
+  const seen = new Set<string>()
+  const definitions: FrameworkSyncDefinition[] = []
+
+  for (const descriptor of getFrameworkDescriptorsWith(pluginDescriptors)) {
+    if (!descriptor.sync || seen.has(descriptor.id)) {
+      continue
+    }
+
+    seen.add(descriptor.id)
+    definitions.push({
+      framework: descriptor.id,
+      commands: descriptor.sync.commands,
+      errorLabel: descriptor.sync.errorLabel,
+    })
+  }
+
+  return Object.freeze(definitions)
 }
 
 async function runFrameworkSync(projectRoot: string, definition: FrameworkSyncDefinition): Promise<void> {

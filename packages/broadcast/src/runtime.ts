@@ -20,14 +20,20 @@ import {
 } from './contracts'
 import { isPlainObject, normalizeJsonValue } from './json'
 import { getRegisteredBroadcastDriver } from './registry'
+import { loadBroadcastPluginDrivers, resetBroadcastPluginDrivers } from './plugins'
 
 const HOLO_BROADCAST_DELIVER_JOB = 'holo.broadcast.deliver'
 
 type RuntimeState = {
   bindings?: BroadcastRuntimeBindings
+  projectRoot?: string
   loadQueueModule?: () => Promise<QueueModule>
   loadDbModule?: () => Promise<DbModule | null>
   queueJobRegistration?: Promise<QueueModule>
+}
+
+type RuntimeBindingsWithProjectRoot = BroadcastRuntimeBindings & {
+  readonly projectRoot?: string
 }
 
 type MutableDispatchOptions = {
@@ -412,7 +418,7 @@ function resolveDriver(connectionName: string): ResolvedDriver {
 }
 
 async function runQueuedBroadcastDelivery(payload: QueuedBroadcastPayload): Promise<Readonly<BroadcastSendResult>> {
-  const driver = resolveDriver(payload.context.connection)
+  const driver = await resolveDriverWithPluginFallback(payload.context.connection)
   const context = createExecutionContext(payload.messageId, driver, true)
   return await deliverResolvedRawBroadcast(payload.raw, driver, context)
 }
@@ -533,7 +539,7 @@ async function executeResolvedRawBroadcast(
   definition: BroadcastDefinition | null,
   options: Readonly<MutableDispatchOptions>,
 ): Promise<Readonly<BroadcastSendResult>> {
-  const driver = resolveDriver(input.connection)
+  const driver = await resolveDriverWithPluginFallback(input.connection)
   const plan = resolveQueuePlan(definition, options)
   const context = createExecutionContext(randomUUID(), driver, plan.queued)
 
@@ -638,7 +644,19 @@ class PendingDispatch implements PendingBroadcastDispatch<BroadcastSendResult> {
 }
 
 export function configureBroadcastRuntime(bindings?: BroadcastRuntimeBindings): void {
-  getRuntimeState().bindings = bindings
+  const state = getRuntimeState()
+  if (!bindings) {
+    state.bindings = undefined
+    state.projectRoot = undefined
+    return
+  }
+
+  const { projectRoot, ...runtimeBindings } = bindings as RuntimeBindingsWithProjectRoot
+  state.bindings = runtimeBindings
+  const normalizedProjectRoot = typeof projectRoot === 'string' ? projectRoot.trim() : ''
+  state.projectRoot = normalizedProjectRoot
+    ? normalizedProjectRoot
+    : undefined
 }
 
 export function getBroadcastRuntimeBindings(): BroadcastRuntimeBindings {
@@ -648,9 +666,30 @@ export function getBroadcastRuntimeBindings(): BroadcastRuntimeBindings {
 export function resetBroadcastRuntime(): void {
   const state = getRuntimeState()
   state.bindings = undefined
+  state.projectRoot = undefined
   state.loadQueueModule = undefined
   state.loadDbModule = undefined
   state.queueJobRegistration = undefined
+  resetBroadcastPluginDrivers()
+}
+
+function isBroadcastDriverNotRegisteredError(error: unknown): error is Error {
+  return error instanceof Error
+    && error.message.startsWith('[@holo-js/broadcast] Broadcast driver "')
+    && error.message.endsWith('" is not registered.')
+}
+
+async function resolveDriverWithPluginFallback(connectionName: string): Promise<ResolvedDriver> {
+  try {
+    return resolveDriver(connectionName)
+  } catch (error) {
+    if (!isBroadcastDriverNotRegisteredError(error)) {
+      throw error
+    }
+  }
+
+  await loadBroadcastPluginDrivers(getRuntimeState().projectRoot)
+  return resolveDriver(connectionName)
 }
 
 export function broadcast(

@@ -8,14 +8,13 @@ import {
   ESBUILD_PACKAGE_VERSION,
   HOLO_PACKAGE_VERSION,
   SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS,
-  SCAFFOLD_FRAMEWORK_ADAPTER_VERSIONS,
-  SCAFFOLD_FRAMEWORK_RUNTIME_VERSIONS,
-  SCAFFOLD_FRAMEWORK_VERSIONS,
-  SCAFFOLD_NEXT_REACT_VERSIONS,
-  SCAFFOLD_NUXT_DEPENDENCY_VERSIONS,
   SCAFFOLD_PACKAGE_MANAGER_VERSIONS,
-  SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS,
 } from '../../metadata'
+import {
+  getFrameworkBroadcastPackages,
+  getFrameworkDescriptor,
+  getFrameworkRuntimeDependencyVersion,
+} from '../frameworks'
 import { resolveGeneratedSchemaPath } from '../config'
 import { renderGeneratedModelTypes } from '../registry'
 import {
@@ -65,6 +64,7 @@ import {
   renderFrameworkFiles,
   renderFrameworkRunner,
 } from './framework-renderers'
+export { renderFrameworkRunnerForDescriptor } from './framework-renderers'
 
 export {
   renderAuthRouteFiles,
@@ -73,6 +73,9 @@ export {
   renderNextManagedHostedAuthRouteFiles,
   renderNextHoloHelper,
   renderSvelteHoloHelper,
+  renderManagedHostedAuthRouteFiles,
+  renderBroadcastInstallFrameworkFiles,
+  renderBroadcastAuthSupportFrameworkFiles,
 } from './framework-renderers'
 export { renderAuthProviderRouteFiles } from './framework-renderers'
 
@@ -83,6 +86,7 @@ export function resolvePackageManagerVersion(value: SupportedScaffoldPackageMana
 export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): string {
   const packageName = sanitizePackageName(options.projectName) || 'holo-app'
   const optionalPackages = normalizeScaffoldOptionalPackages(options.optionalPackages)
+  const framework = getFrameworkDescriptor(options.framework)
   const dependencies: Record<string, string> = {
     '@holo-js/cli': `^${HOLO_PACKAGE_VERSION}`,
     '@holo-js/config': `^${HOLO_PACKAGE_VERSION}`,
@@ -90,42 +94,17 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
     '@holo-js/db': `^${HOLO_PACKAGE_VERSION}`,
     [DB_DRIVER_PACKAGE_NAMES[options.databaseDriver]]: `^${HOLO_PACKAGE_VERSION}`,
     esbuild: ESBUILD_PACKAGE_VERSION,
+    ...framework.scaffold.dependencies,
   }
   const devDependencies: Record<string, string> = {
     typescript: SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS.typescript,
     '@types/node': SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS['@types/node'],
     eslint: SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS.eslint,
-  }
-
-  if (options.framework === 'nuxt') {
-    dependencies.nuxt = SCAFFOLD_FRAMEWORK_VERSIONS.nuxt
-    dependencies.vue = SCAFFOLD_NUXT_DEPENDENCY_VERSIONS.vue
-    dependencies['vue-router'] = SCAFFOLD_NUXT_DEPENDENCY_VERSIONS['vue-router']
-    dependencies['@holo-js/adapter-nuxt'] = SCAFFOLD_FRAMEWORK_ADAPTER_VERSIONS.nuxt
-    devDependencies['vue-tsc'] = SCAFFOLD_NUXT_DEPENDENCY_VERSIONS['vue-tsc']
-  }
-
-  if (options.framework === 'next') {
-    dependencies.next = SCAFFOLD_FRAMEWORK_VERSIONS.next
-    dependencies.react = SCAFFOLD_NEXT_REACT_VERSIONS.react
-    dependencies['react-dom'] = SCAFFOLD_NEXT_REACT_VERSIONS['react-dom']
-    dependencies['@holo-js/adapter-next'] = SCAFFOLD_FRAMEWORK_ADAPTER_VERSIONS.next
-    devDependencies['@types/react'] = SCAFFOLD_NEXT_REACT_VERSIONS['@types/react']
-    devDependencies['@types/react-dom'] = SCAFFOLD_NEXT_REACT_VERSIONS['@types/react-dom']
-  }
-
-  if (options.framework === 'sveltekit') {
-    dependencies['@holo-js/adapter-sveltekit'] = SCAFFOLD_FRAMEWORK_ADAPTER_VERSIONS.sveltekit
-    dependencies['@sveltejs/adapter-node'] = SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS['@sveltejs/adapter-node']
-    dependencies['@sveltejs/kit'] = SCAFFOLD_FRAMEWORK_VERSIONS.sveltekit
-    dependencies['@sveltejs/vite-plugin-svelte'] = SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS['@sveltejs/vite-plugin-svelte']
-    dependencies.svelte = SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS.svelte
-    dependencies.vite = SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS.vite
-    devDependencies['svelte-check'] = SCAFFOLD_SVELTEKIT_DEPENDENCY_VERSIONS['svelte-check']
+    ...framework.scaffold.devDependencies,
   }
 
   if (optionalPackages.includes('storage')) {
-    dependencies['@holo-js/storage'] = SCAFFOLD_FRAMEWORK_RUNTIME_VERSIONS[options.framework]['@holo-js/storage']
+    dependencies['@holo-js/storage'] = getFrameworkRuntimeDependencyVersion(options.framework, '@holo-js/storage')
   }
 
   if (optionalPackages.includes('events')) {
@@ -166,12 +145,8 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
   if (optionalPackages.includes('broadcast') || optionalPackages.includes('realtime')) {
     dependencies['@holo-js/broadcast'] = `^${HOLO_PACKAGE_VERSION}`
     dependencies['@holo-js/flux'] = `^${HOLO_PACKAGE_VERSION}`
-    if (options.framework === 'next') {
-      dependencies['@holo-js/flux-react'] = `^${HOLO_PACKAGE_VERSION}`
-    } else if (options.framework === 'nuxt') {
-      dependencies['@holo-js/flux-vue'] = `^${HOLO_PACKAGE_VERSION}`
-    } else if (options.framework === 'sveltekit') {
-      dependencies['@holo-js/flux-svelte'] = `^${HOLO_PACKAGE_VERSION}`
+    for (const packageName of getFrameworkBroadcastPackages(options.framework)) {
+      dependencies[packageName] = `^${HOLO_PACKAGE_VERSION}`
     }
   }
 
@@ -193,23 +168,13 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
     type: 'module',
     packageManager: resolvePackageManagerVersion(options.packageManager),
     scripts: {
-      ...(options.framework === 'nuxt'
-        ? { postinstall: 'nuxt prepare' }
-        : {}),
+      ...framework.scaffold.scripts,
       prepare: 'holo key:generate && holo prepare',
       dev: 'holo dev',
       build: 'holo build',
       start: 'holo start',
-      lint: options.framework === 'nuxt'
-        ? 'eslint app config server shared tests *.d.ts --fix --no-warn-ignored --no-error-on-unmatched-pattern'
-        : options.framework === 'next'
-          ? 'eslint app config server tests --fix --no-warn-ignored --no-error-on-unmatched-pattern'
-          : 'eslint src config server tests --fix --no-warn-ignored --no-error-on-unmatched-pattern',
-      typecheck: options.framework === 'nuxt'
-        ? 'nuxt typecheck'
-        : options.framework === 'next'
-          ? 'tsc -p tsconfig.json --noEmit'
-          : 'svelte-kit sync && svelte-check --tsconfig ./tsconfig.json',
+      lint: framework.scaffold.lintScript,
+      typecheck: framework.scaffold.typecheckScript,
       ['config:cache']: 'holo config:cache',
       ['config:clear']: 'holo config:clear',
     },

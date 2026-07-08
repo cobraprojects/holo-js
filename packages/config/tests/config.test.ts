@@ -24,6 +24,9 @@ import {
   loaderInternals,
   loadConfigDirectory,
   loadEnvironment,
+  loadHoloPluginBootModules,
+  loadHoloPluginContributionModules,
+  loadHoloPluginDefinitions,
   normalizeAppConfig,
   normalizeAppEnv,
   normalizeAuthConfig,
@@ -39,7 +42,9 @@ import {
   resolveConfigCachePath,
   resolveEnvPlaceholders,
   resolveAppEnvironment,
+  readActiveHoloPluginNames,
   resolveEnvironmentFileOrder,
+  resolveHoloPluginModulePath,
   useConfig,
   writeConfigCache,
 } from '../src'
@@ -90,6 +95,23 @@ async function createProject(): Promise<string> {
   tempDirs.push(root)
   await mkdir(join(root, 'config'), { recursive: true })
   return root
+}
+
+async function writePluginPackage(
+  projectRoot: string,
+  packageName: string,
+  manifest: Record<string, unknown>,
+  entryContents: string,
+): Promise<string> {
+  const packageRoot = join(projectRoot, 'node_modules', ...packageName.split('/'))
+  await mkdir(packageRoot, { recursive: true })
+  await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
+    name: packageName,
+    type: 'module',
+    ...manifest,
+  }, null, 2))
+  await writeFile(join(packageRoot, 'plugin.mjs'), entryContents)
+  return packageRoot
 }
 
 afterEach(async () => {
@@ -907,13 +929,21 @@ describe('@holo-js/config', () => {
         },
       },
     })).toThrow('must be a non-empty string')
-    expect(() => normalizeQueueConfigForHolo({
+    const pluginQueueConfig = normalizeQueueConfigForHolo({
       connections: {
-        broken: {
+        sqs: {
           driver: 'sqs' as never,
+          queue: 'mail',
+          visibilityTimeout: 30,
         },
       },
-    })).toThrow('Unsupported queue driver "sqs"')
+    })
+    expect(pluginQueueConfig.connections.sqs).toMatchObject({
+      name: 'sqs',
+      driver: 'sqs',
+      queue: 'mail',
+      visibilityTimeout: 30,
+    })
   })
 
   it('rejects invalid redis integer values and ambiguous redis connection modes during normalization', () => {
@@ -1495,6 +1525,309 @@ describe('@holo-js/config', () => {
     expect(normalizeAppConfig({
       debug: ' definitely ' as never,
     }).debug).toBe(true)
+    expect(normalizeAppConfig({
+      plugins: [' cache ', '', 'cache', 'mail'],
+    }).plugins).toEqual(['cache', 'mail'])
+  })
+
+  it('loads async ESM Holo plugin contribution modules', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'package.json'), JSON.stringify({
+      name: 'async-plugin-fixture',
+      private: true,
+    }, null, 2))
+    await writeFile(join(root, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-async'],
+}
+`)
+    const pluginRoot = join(root, 'node_modules/holo-plugin-async')
+    await mkdir(pluginRoot, { recursive: true })
+    await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+      name: 'holo-plugin-async',
+      type: 'module',
+      holo: {
+        plugin: './plugin.mjs',
+      },
+    }, null, 2))
+    await writeFile(join(pluginRoot, 'plugin.mjs'), `
+await Promise.resolve()
+
+export default {
+  id: 'async-plugin',
+  contributes: {
+    cache: {
+      drivers: {
+        async: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+    await writeFile(join(pluginRoot, 'driver.mjs'), `
+const ready = await Promise.resolve(true)
+
+export default {
+  name: 'async',
+  ready,
+}
+`)
+
+    await expect(readActiveHoloPluginNames(root)).resolves.toEqual(['holo-plugin-async'])
+    await expect(loadHoloPluginContributionModules(root, 'cache', 'drivers')).resolves.toMatchObject([{
+      name: 'async',
+      module: {
+        default: {
+          name: 'async',
+          ready: true,
+        },
+      },
+    }])
+  })
+
+  it('loads Holo plugin definitions, boot modules, and package runtime specifiers', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'package.json'), JSON.stringify({
+      name: 'plugin-fixture',
+      private: true,
+    }, null, 2))
+    await writeFile(join(root, 'config/app.ts'), `
+const activePlugins = ['holo-plugin-rich', 'holo-plugin-direct', 'holo-plugin-rich']
+
+export default {
+  plugins: activePlugins,
+}
+`)
+
+    const richRoot = await writePluginPackage(root, 'holo-plugin-rich', {
+      holo: {
+        plugin: './plugin.mjs',
+      },
+    }, `
+export const plugin = {
+  id: 'rich-plugin',
+  contributes: {
+    cache: {
+      drivers: {
+        rich: {
+          runtime: 'holo-plugin-rich/runtime.mjs',
+        },
+        missingRuntime: {},
+        malformed: false,
+      },
+    },
+    runtime: {
+      boot: './boot.mjs',
+    },
+  },
+}
+`)
+    await writeFile(join(richRoot, 'runtime.mjs'), 'export default { rich: true }\n')
+    await writeFile(join(richRoot, 'boot.mjs'), 'export default { booted: true }\n')
+
+    await writePluginPackage(root, 'holo-plugin-direct', {
+      holo: {
+        plugin: './plugin.mjs',
+      },
+    }, `
+export const id = 'direct-plugin'
+`)
+
+    await expect(readActiveHoloPluginNames(root)).resolves.toEqual(['holo-plugin-rich', 'holo-plugin-direct'])
+    const plugins = await loadHoloPluginDefinitions(root)
+    expect(plugins).toHaveLength(2)
+    expect(plugins[0]?.definition.id).toBe('rich-plugin')
+    expect(plugins[1]?.definition.id).toBe('direct-plugin')
+    expect(normalizeTestPath(resolveHoloPluginModulePath(root, plugins[0]!, './boot.mjs'))).toMatch(/holo-plugin-rich\/boot\.mjs$/)
+    expect(normalizeTestPath(resolveHoloPluginModulePath(root, plugins[0]!, 'holo-plugin-rich/runtime.mjs'))).toMatch(/holo-plugin-rich\/runtime\.mjs$/)
+    expect(() => resolveHoloPluginModulePath(root, plugins[0]!, '')).toThrow('empty module specifier')
+    expect(() => resolveHoloPluginModulePath(root, plugins[0]!, '../outside.mjs')).toThrow('must stay inside the package root')
+    expect(() => resolveHoloPluginModulePath(root, plugins[0]!, '/tmp/outside.mjs')).toThrow('absolute module path')
+
+    await expect(loadHoloPluginContributionModules(root, 'cache', 'drivers')).resolves.toMatchObject([{
+      name: 'rich',
+      runtime: 'holo-plugin-rich/runtime.mjs',
+      module: {
+        default: {
+          rich: true,
+        },
+      },
+    }])
+    await expect(loadHoloPluginContributionModules(root, 'mail', 'drivers')).resolves.toEqual([])
+    await expect(loadHoloPluginBootModules(root)).resolves.toMatchObject([{
+      name: 'boot',
+      runtime: './boot.mjs',
+      module: {
+        default: {
+          booted: true,
+        },
+      },
+    }])
+  })
+
+  it('loads Holo plugin package manifests when package exports hide package.json', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'package.json'), JSON.stringify({
+      name: 'plugin-exports-fixture',
+      private: true,
+    }, null, 2))
+    await writeFile(join(root, 'config/app.ts'), `
+export default {
+  plugins: ['holo-plugin-with-exports'],
+}
+`)
+
+    await writePluginPackage(root, 'holo-plugin-with-exports', {
+      exports: {
+        '.': './plugin.mjs',
+      },
+      holo: {
+        plugin: './plugin.mjs',
+      },
+    }, `
+export default {
+  id: 'exports-plugin',
+}
+`)
+
+    await expect(readActiveHoloPluginNames(root)).resolves.toEqual(['holo-plugin-with-exports'])
+    await expect(loadHoloPluginDefinitions(root)).resolves.toMatchObject([{
+      packageName: 'holo-plugin-with-exports',
+      definition: {
+        id: 'exports-plugin',
+      },
+    }])
+  })
+
+  it('rejects invalid Holo plugin package manifests and entries', async () => {
+    const emptyRoot = await createProject()
+    await expect(readActiveHoloPluginNames(emptyRoot)).resolves.toEqual([])
+    await expect(loadHoloPluginDefinitions(emptyRoot)).resolves.toEqual([])
+    await writeFile(join(emptyRoot, 'config/app.ts'), 'export default { name: "No Plugins" }\n')
+    await expect(readActiveHoloPluginNames(emptyRoot)).resolves.toEqual([])
+    await expect(loadHoloPluginDefinitions(emptyRoot)).resolves.toEqual([])
+
+    const missingRoot = await createProject()
+    await writeFile(join(missingRoot, 'package.json'), JSON.stringify({
+      name: 'plugin-fixture',
+      private: true,
+    }, null, 2))
+    await writeFile(join(missingRoot, 'config/app.ts'), `
+export default {
+  plugins: ["holo-plugin-missing"],
+}
+`)
+    await expect(loadHoloPluginDefinitions(missingRoot)).rejects.toThrow('Cannot find module')
+
+    const invalidNameRoot = await createProject()
+    await writeFile(join(invalidNameRoot, 'package.json'), JSON.stringify({
+      name: 'plugin-fixture',
+      private: true,
+    }, null, 2))
+    await writeFile(join(invalidNameRoot, 'config/app.ts'), `
+export default {
+  plugins: ["../holo-plugin-invalid"],
+}
+`)
+    await expect(loadHoloPluginDefinitions(invalidNameRoot)).rejects.toThrow('Invalid plugin package name')
+
+    const invalidManifestRoot = await createProject()
+    await writeFile(join(invalidManifestRoot, 'package.json'), JSON.stringify({
+      name: 'plugin-fixture',
+      private: true,
+    }, null, 2))
+    await writeFile(join(invalidManifestRoot, 'config/app.ts'), `
+export default {
+  plugins: ["holo-plugin-invalid-json"],
+}
+`)
+    const invalidManifestPackageRoot = join(invalidManifestRoot, 'node_modules/holo-plugin-invalid-json')
+    await mkdir(invalidManifestPackageRoot, { recursive: true })
+    await writeFile(join(invalidManifestPackageRoot, 'package.json'), '{')
+    await expect(loadHoloPluginDefinitions(invalidManifestRoot)).rejects.toThrow(SyntaxError)
+
+    const noHoloRoot = await createProject()
+    await writeFile(join(noHoloRoot, 'package.json'), JSON.stringify({
+      name: 'plugin-fixture',
+      private: true,
+    }, null, 2))
+    await writeFile(join(noHoloRoot, 'config/app.ts'), `
+export default {
+  plugins: ["holo-plugin-invalid"],
+}
+`)
+    await writePluginPackage(noHoloRoot, 'holo-plugin-invalid', {}, 'export default { id: "invalid" }\n')
+    await expect(loadHoloPluginDefinitions(noHoloRoot)).rejects.toThrow('does not declare holo.plugin')
+
+    const blankEntryRoot = await createProject()
+    await writeFile(join(blankEntryRoot, 'package.json'), JSON.stringify({
+      name: 'plugin-fixture',
+      private: true,
+    }, null, 2))
+    await writeFile(join(blankEntryRoot, 'config/app.ts'), `
+export default {
+  plugins: ["holo-plugin-blank"],
+}
+`)
+    await writePluginPackage(blankEntryRoot, 'holo-plugin-blank', {
+      holo: {
+        plugin: '   ',
+      },
+    }, 'export default { id: "blank" }\n')
+    await expect(loadHoloPluginDefinitions(blankEntryRoot)).rejects.toThrow('does not declare holo.plugin')
+
+    const absoluteEntryRoot = await createProject()
+    await writeFile(join(absoluteEntryRoot, 'package.json'), JSON.stringify({
+      name: 'plugin-fixture',
+      private: true,
+    }, null, 2))
+    await writeFile(join(absoluteEntryRoot, 'config/app.ts'), `
+export default {
+  plugins: ["holo-plugin-absolute"],
+}
+`)
+    await writePluginPackage(absoluteEntryRoot, 'holo-plugin-absolute', {
+      holo: {
+        plugin: '/tmp/plugin.mjs',
+      },
+    }, 'export default { id: "absolute" }\n')
+    await expect(loadHoloPluginDefinitions(absoluteEntryRoot)).rejects.toThrow('absolute module path')
+
+    const outsideEntryRoot = await createProject()
+    await writeFile(join(outsideEntryRoot, 'package.json'), JSON.stringify({
+      name: 'plugin-fixture',
+      private: true,
+    }, null, 2))
+    await writeFile(join(outsideEntryRoot, 'config/app.ts'), `
+export default {
+  plugins: ["holo-plugin-outside"],
+}
+`)
+    await writePluginPackage(outsideEntryRoot, 'holo-plugin-outside', {
+      holo: {
+        plugin: '../plugin.mjs',
+      },
+    }, 'export default { id: "outside" }\n')
+    await expect(loadHoloPluginDefinitions(outsideEntryRoot)).rejects.toThrow('entry must stay inside the package root')
+
+    const invalidExportRoot = await createProject()
+    await writeFile(join(invalidExportRoot, 'package.json'), JSON.stringify({
+      name: 'plugin-fixture',
+      private: true,
+    }, null, 2))
+    await writeFile(join(invalidExportRoot, 'config/app.ts'), `
+export default {
+  plugins: ["holo-plugin-export"],
+}
+`)
+    await writePluginPackage(invalidExportRoot, 'holo-plugin-export', {
+      holo: {
+        plugin: './plugin.mjs',
+      },
+    }, 'export default false\n')
+    await expect(loadHoloPluginDefinitions(invalidExportRoot)).rejects.toThrow('must export a plugin definition')
   })
 
   it('loads first-party and custom config files with layered env overrides', async () => {
@@ -1623,6 +1956,7 @@ export default defineQueueConfig({
       processEnv: {
         APP_ENV: 'test',
         APP_NAME: 'From Process',
+        IGNORED: undefined,
       },
     })
 
@@ -1968,6 +2302,14 @@ export const config = defineConfig({
   },
 })
 `, 'utf8')
+    await writeFile(join(root, 'config/secondary.ts'), 'export default { value: "primary" }', 'utf8')
+    await writeFile(join(root, 'config/secondary.mjs'), 'export default { value: "secondary" }', 'utf8')
+    await writeFile(join(root, 'config/ordered.js'), 'export default { value: "primary" }', 'utf8')
+    await writeFile(join(root, 'config/ordered.mjs'), 'export default { value: "secondary" }', 'utf8')
+    await loadConfigDirectory(join(root, 'missing'), {
+      processEnv: {},
+      preferCache: false,
+    })
 
     const loaded = await loadConfigDirectory(root, {
       processEnv: {},
@@ -1979,6 +2321,12 @@ export const config = defineConfig({
         mailgun: {
           secret: 'fresh',
         },
+      },
+      secondary: {
+        value: 'primary',
+      },
+      ordered: {
+        value: 'primary',
       },
     })
     expect(loaded.loadedFiles.some(file => file.endsWith('services.ts'))).toBe(true)

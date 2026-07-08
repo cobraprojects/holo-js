@@ -3,6 +3,10 @@ import { extname, join, relative, resolve } from 'node:path'
 import type { BuildOptions, BuildResult } from 'esbuild'
 import type { SupportedDatabaseDriver } from '@holo-js/config'
 import type { HoloAppCommand } from '../types'
+import {
+  SUPPORTED_FRAMEWORK_IDS,
+  type SupportedFrameworkId,
+} from './frameworks'
 
 export type ProjectModuleBundler = (options: BuildOptions) => Promise<BuildResult>
 
@@ -146,7 +150,7 @@ export type GeneratedProjectRegistry = {
   readonly authorizationAbilities: readonly GeneratedAuthorizationAbilityRegistryEntry[]
 }
 
-export type SupportedScaffoldFramework = 'nuxt' | 'next' | 'sveltekit'
+export type SupportedScaffoldFramework = SupportedFrameworkId
 
 export type SupportedScaffoldPackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun'
 
@@ -480,7 +484,7 @@ export const GENERATED_SVELTE_HOOKS_PATH = join(GENERATED_ROOT, 'hooks.ts')
 export const GENERATED_SVELTE_SERVER_HOOKS_PATH = join(GENERATED_ROOT, 'hooks.server.ts')
 export const CONFIG_EXTENSION_PRIORITY = ['.ts', '.mts', '.js', '.mjs', '.cts', '.cjs'] as const
 export const SUPPORTED_CONFIG_EXTENSIONS = new Set<string>(CONFIG_EXTENSION_PRIORITY)
-export const SUPPORTED_SCAFFOLD_FRAMEWORKS = ['nuxt', 'next', 'sveltekit'] as const
+export const SUPPORTED_SCAFFOLD_FRAMEWORKS = SUPPORTED_FRAMEWORK_IDS
 export const SUPPORTED_SCAFFOLD_PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn', 'bun'] as const
 export const SUPPORTED_SCAFFOLD_STORAGE_DISKS = ['local', 'public'] as const
 export const SUPPORTED_SCAFFOLD_OPTIONAL_PACKAGES = ['storage', 'events', 'queue', 'validation', 'forms', 'auth', 'authorization', 'notifications', 'mail', 'broadcast', 'realtime', 'security', 'cache'] as const

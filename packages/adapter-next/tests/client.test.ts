@@ -54,6 +54,10 @@ function createReactHookState(): ReactHookState {
   }
 }
 
+function markClientSubmitControlFlowError(error: unknown): unknown {
+  return error
+}
+
 function createReactHookStateMock(
   state: ReactHookState,
   options: ReactHookStateOptions = {},
@@ -118,6 +122,7 @@ describe('@holo-js/adapter-next client', () => {
 
     vi.doMock('@holo-js/forms/internal/client', () => ({
       createFormClient: vi.fn(() => fakeForm),
+      markClientSubmitControlFlowError,
     }))
 
     vi.doMock('react', () => createReactMock({
@@ -185,6 +190,7 @@ describe('@holo-js/adapter-next client', () => {
         capturedSubmitter = options.submitter
         return fakeForm
       }),
+      markClientSubmitControlFlowError,
     }))
 
     vi.doMock('react', () => createReactHookStateMock(state))
@@ -226,6 +232,51 @@ describe('@holo-js/adapter-next client', () => {
         digest: 'NEXT_HTTP_ERROR_FALLBACK;403',
       })
     }
+  })
+
+  it('rethrows Next redirect submitter errors for the form client control-flow path', async () => {
+    type LoginFormData = {
+      readonly email: string
+    }
+    const state = createReactHookState()
+
+    let capturedSubmitter: UseFormOptions<LoginFormData, unknown>['submitter']
+    const redirectError = Object.assign(new Error('NEXT_REDIRECT'), {
+      digest: 'NEXT_REDIRECT;replace;/admin;303;',
+    })
+    const fakeForm = {
+      subscribe() {
+        return () => {}
+      },
+    }
+
+    vi.doMock('@holo-js/forms/internal/client', () => ({
+      createFormClient: vi.fn((_schema, options: UseFormOptions<LoginFormData, unknown>) => {
+        capturedSubmitter = options.submitter
+        return fakeForm
+      }),
+      markClientSubmitControlFlowError,
+    }))
+
+    vi.doMock('react', () => createReactHookStateMock(state))
+
+    const { useForm } = await import('../src/client')
+    const login = schema({
+      email: field.string().required().email(),
+    })
+
+    const form = useForm(login, {
+      submitter: async () => {
+        throw redirectError
+      },
+    })
+
+    expect(form).toBe(fakeForm)
+    await expect(capturedSubmitter?.({
+      method: 'POST',
+      values: { email: 'ava@example.com' },
+      formData: new FormData(),
+    } satisfies ClientSubmitContext<LoginFormData>)).rejects.toBe(redirectError)
   })
 
   it('returns updated realtime query data by calling the query definition', async () => {
@@ -658,6 +709,7 @@ describe('@holo-js/adapter-next client', () => {
           email: options.initialValues?.email,
         },
       })),
+      markClientSubmitControlFlowError,
     }))
 
     vi.doMock('react', () => createReactHookStateMock(state))
@@ -701,6 +753,7 @@ describe('@holo-js/adapter-next client', () => {
 
     vi.doMock('@holo-js/forms/internal/client', () => ({
       createFormClient: createForm,
+      markClientSubmitControlFlowError,
     }))
 
     vi.doMock('react', () => createReactHookStateMock(state))
@@ -746,6 +799,7 @@ describe('@holo-js/adapter-next client', () => {
 
     vi.doMock('@holo-js/forms/internal/client', () => ({
       createFormClient: createForm,
+      markClientSubmitControlFlowError,
     }))
 
     vi.doMock('react', () => createReactHookStateMock(state))
@@ -814,6 +868,7 @@ describe('@holo-js/adapter-next client', () => {
 
     vi.doMock('@holo-js/forms/internal/client', () => ({
       createFormClient: createForm,
+      markClientSubmitControlFlowError,
     }))
 
     vi.doMock('react', () => createReactHookStateMock(state))
@@ -866,6 +921,7 @@ describe('@holo-js/adapter-next client', () => {
 
     vi.doMock('@holo-js/forms/internal/client', () => ({
       createFormClient: createForm,
+      markClientSubmitControlFlowError,
     }))
 
     vi.doMock('react', () => createReactHookStateMock(state))
@@ -914,6 +970,7 @@ describe('@holo-js/adapter-next client', () => {
 
     vi.doMock('@holo-js/forms/internal/client', () => ({
       createFormClient: createForm,
+      markClientSubmitControlFlowError,
     }))
 
     vi.doMock('react', () => createReactHookStateMock(state))

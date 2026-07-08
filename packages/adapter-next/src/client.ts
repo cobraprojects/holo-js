@@ -9,6 +9,7 @@ import {
   type UseFormOptions,
   type UseFormResult,
   createFormClient,
+  markClientSubmitControlFlowError,
 } from '@holo-js/forms/internal/client'
 import { createNextRenderableError, normalizeNextClientHttpError, renderNextClientHttpErrorPage } from './client-errors'
 
@@ -66,6 +67,14 @@ function areOptionsEqual<TData, TSuccess>(
     && areEqual(left.initialState, right.initialState)
 }
 
+function isNextRedirectError(error: unknown): boolean {
+  if (!error || (typeof error !== 'object' && typeof error !== 'function') || !('digest' in error)) {
+    return false
+  }
+
+  return typeof error.digest === 'string' && error.digest.startsWith('NEXT_REDIRECT')
+}
+
 function createSubmitterBridge<TData, TSuccess>(
   optionsRef: { current: UseFormOptions<TData, TSuccess> | undefined },
   onHttpError: (error: Error) => void,
@@ -82,6 +91,10 @@ function createSubmitterBridge<TData, TSuccess>(
     try {
       return await submitter(context)
     } catch (error) {
+      if (isNextRedirectError(error)) {
+        throw markClientSubmitControlFlowError(error)
+      }
+
       const httpError = normalizeNextClientHttpError(error)
 
       if (httpError) {

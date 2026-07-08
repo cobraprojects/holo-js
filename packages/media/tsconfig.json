@@ -6,6 +6,9 @@
     "declaration": true,
     "declarationMap": true,
     "paths": {
+      "@holo-js/config": [
+        "../config/src/index.ts"
+      ],
       "@holo-js/db": [
         "../db/src/index.ts"
       ],

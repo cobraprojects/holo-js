@@ -1,6 +1,7 @@
 import { createHash, createHmac } from 'node:crypto'
 
 type DriverValue = string | Uint8Array | ArrayBuffer
+const storedValueMarker = '__holo_storage_s3_value_v1'
 
 export interface S3DriverOptions {
   accessKeyId?: string
@@ -141,8 +142,10 @@ function resolveObjectUrl(options: ResolvedS3DriverOptions, key = ''): URL {
   return url
 }
 
-function sortQueryEntries(url: URL): Array<[string, string]> {
-  return Array.from(url.searchParams.entries()).sort(([leftKey, leftValue], [rightKey, rightValue]) => {
+function sortCanonicalQueryEntries(url: URL): Array<readonly [string, string]> {
+  return Array.from(url.searchParams.entries()).map(([key, value]) => {
+    return [encodeRfc3986(key), encodeRfc3986(value)] as const
+  }).sort(([leftKey, leftValue], [rightKey, rightValue]) => {
     if (leftKey === rightKey) {
       return leftValue.localeCompare(rightValue)
     }
@@ -193,8 +196,8 @@ function createSignedRequest(
     .map(([name, value]) => [name.toLowerCase(), normalizeHeaderValue(value)] as const)
     .sort(([leftName], [rightName]) => leftName.localeCompare(rightName))
 
-  const canonicalQueryString = sortQueryEntries(url)
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+  const canonicalQueryString = sortCanonicalQueryEntries(url)
+    .map(([key, value]) => `${key}=${value}`)
     .join('&')
   const signedHeaders = canonicalHeaders.map(([name]) => name).join(';')
   const canonicalRequest = [
@@ -284,11 +287,33 @@ function parseListObjects(xml: string): string[] {
 }
 
 function deserializeStoredValue<T>(value: string): T | string {
+  let parsed: unknown
+
   try {
-    return JSON.parse(value) as T
+    parsed = JSON.parse(value) as unknown
   } catch {
     return value
   }
+
+  if (isStoredValueEnvelope(parsed)) {
+    return parsed.value as T
+  }
+
+  return value
+}
+
+function isStoredValueEnvelope(value: unknown): value is { readonly value?: unknown } {
+  return !!value
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && (value as Record<string, unknown>)[storedValueMarker] === true
+}
+
+function serializeStoredValue(value: unknown): string {
+  return JSON.stringify({
+    [storedValueMarker]: true,
+    value,
+  })
 }
 
 function resolveDriverOptions(options: S3DriverOptions): ResolvedS3DriverOptions {
@@ -363,8 +388,7 @@ export default function createS3Driver(input: S3DriverOptions) {
       return response ? response.arrayBuffer() : null
     },
     async setItem(key: string, value: unknown) {
-      const body = typeof value === 'string' ? value : JSON.stringify(value)
-      await s3Fetch(options, 'PUT', resolveObjectUrl(options, key), body)
+      await s3Fetch(options, 'PUT', resolveObjectUrl(options, key), serializeStoredValue(value))
     },
     async setItemRaw(key: string, value: DriverValue) {
       await s3Fetch(options, 'PUT', resolveObjectUrl(options, key), value)
