@@ -286,7 +286,7 @@ describe('custom s3 storage driver', () => {
     expect(await readRequestBody(fetchMock.mock.calls[0]?.[0] as Request)).toBe('shared-ok')
   })
 
-  it('returns null for missing raw objects and preserves plain string writes', async () => {
+  it('returns null for missing raw objects and stores plain string values as JSON', async () => {
     fetchMock
       .mockResolvedValueOnce(new Response(null, { status: 404 }))
       .mockResolvedValueOnce(new Response(null, { status: 200 }))
@@ -303,7 +303,7 @@ describe('custom s3 storage driver', () => {
     await expect(driver.getItemRaw('reports:missing.bin')).resolves.toBeNull()
     await driver.setItem('reports:plain.txt', 'plain-text')
 
-    expect(await readRequestBody(fetchMock.mock.calls[1]?.[0] as Request)).toBe('plain-text')
+    expect(await readRequestBody(fetchMock.mock.calls[1]?.[0] as Request)).toBe('"plain-text"')
   })
 
   it('returns null metadata for missing objects', async () => {

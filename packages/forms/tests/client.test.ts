@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createFailedSubmission, createSuccessfulSubmission, field, schema, ValidationException, type WebFileLike } from '../src'
-import { createFormClient as useForm, runWithBrowserFormElement } from '../src/internal/client'
+import { createFormClient as useForm, markClientSubmitControlFlowError, runWithBrowserFormElement } from '../src/internal/client'
 import { clearSensitiveInputValues, sanitizeFlashedInput } from '../src/sensitiveInput'
 
 const browserGlobal = globalThis as typeof globalThis & { document?: Document }
@@ -1470,6 +1470,50 @@ describe('@holo-js/forms client', () => {
         _root: ['Unable to submit the form right now. Please try again.'],
       },
     })
+  })
+
+  it('rethrows submitter control-flow errors without converting them into form failures', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+    const redirectError = Object.assign(new Error('NEXT_REDIRECT'), {
+      digest: 'NEXT_REDIRECT;replace;/admin;303;',
+    })
+
+    const client = useForm(login, {
+      initialValues: {
+        email: 'ava@example.com',
+      },
+      async submitter() {
+        throw markClientSubmitControlFlowError(redirectError)
+      },
+    })
+
+    await expect(client.submit()).rejects.toBe(redirectError)
+    expect(client.lastSubmission).toBeUndefined()
+    expect(client.errors.first('_root')).toBeUndefined()
+  })
+
+  it('marks non-extensible submitter control-flow errors without mutating them', async () => {
+    const login = schema({
+      email: field.string().required().email(),
+    })
+    const redirectError = Object.freeze(Object.assign(new Error('NEXT_REDIRECT'), {
+      digest: 'NEXT_REDIRECT;replace;/admin;303;',
+    }))
+
+    const client = useForm(login, {
+      initialValues: {
+        email: 'ava@example.com',
+      },
+      async submitter() {
+        throw markClientSubmitControlFlowError(redirectError)
+      },
+    })
+
+    await expect(client.submit()).rejects.toBe(redirectError)
+    expect(client.lastSubmission).toBeUndefined()
+    expect(client.errors.first('_root')).toBeUndefined()
   })
 
   it('normalizes validation digests thrown across server action transports', async () => {

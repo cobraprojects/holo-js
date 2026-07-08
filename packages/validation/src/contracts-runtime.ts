@@ -32,6 +32,11 @@ import {
   resolveCompiledSchema,
 } from './contracts-support'
 
+type RuntimePostValidationContext = PostValidationContext & {
+  readonly inputParent?: unknown
+  readonly rawInputParent?: unknown
+}
+
 function resolveDateRuleValue(value: unknown): Date | undefined {
   /* v8 ignore next 8 -- public rule builders normalize Date arguments to ISO strings before runtime resolution */
   if (value instanceof Date) {
@@ -109,6 +114,20 @@ function hasRule(definition: FieldDefinition, name: FieldRule['name']): boolean 
   return definition.rules.some(rule => rule.name === name)
 }
 
+function hasRuleBefore(definition: FieldDefinition, selectedRule: FieldRule, name: FieldRule['name']): boolean {
+  for (const rule of definition.rules) {
+    if (rule === selectedRule) {
+      return false
+    }
+
+    if (rule.name === name) {
+      return true
+    }
+  }
+
+  return false
+}
+
 function isMissingValue(value: unknown, kind: FieldKind): boolean {
   if (typeof value === 'undefined' || value === null) {
     return true
@@ -174,14 +193,32 @@ function resolveShapeRuleValue(definition: FieldDefinition, outputValue: unknown
   return inputValue
 }
 
+function applyTransformRule(value: unknown, rule: FieldRule): unknown {
+  const transformer = rule.args[0]
+  return typeof transformer === 'function' ? transformer(value) : value
+}
+
+function resolveConfirmationParent(context: RuntimePostValidationContext, confirmationKey: string, useOutputParent: boolean): unknown {
+  if (useOutputParent) {
+    return context.parent
+  }
+
+  if (isPlainObject(context.inputParent) && confirmationKey in context.inputParent) {
+    return context.inputParent
+  }
+
+  return context.rawInputParent
+}
+
 async function applyPostFieldRules(
   definition: FieldDefinition,
   value: unknown,
   inputValue: unknown,
-  context: PostValidationContext,
+  context: RuntimePostValidationContext,
   issues: Record<string, string[]>,
 ): Promise<void> {
   const shapeRuleValue = resolveShapeRuleValue(definition, value, inputValue)
+  let orderedRuleValue = shapeRuleValue
   const requiredRule = getRule(definition, 'required')
   if (requiredRule && isMissingValue(shapeRuleValue, definition.kind)) {
     prependIssue(issues, context.path, resolveRuleMessage(requiredRule, 'This field is required.'))
@@ -194,17 +231,21 @@ async function applyPostFieldRules(
 
   for (const rule of definition.rules) {
     switch (rule.name) {
+      case 'transform': {
+        orderedRuleValue = applyTransformRule(orderedRuleValue, rule)
+        break
+      }
       case 'custom': {
         const validator = rule.args[0]
         if (typeof validator === 'function') {
-          const result = validator(value)
+          const result = validator(orderedRuleValue)
           if (result === false) {
             pushIssue(issues, context.path, resolveRuleMessage(rule, 'Validation failed.'))
           } else if (typeof result === 'string' && result.trim()) {
             pushIssue(issues, context.path, result)
           }
         } else if (validator === 'image') {
-          const rawMimeType = (value as WebFileLike).type
+          const rawMimeType = (orderedRuleValue as WebFileLike).type
           const mimeType = typeof rawMimeType === 'string' ? rawMimeType : ''
           if (!mimeType.toLowerCase().startsWith('image/')) {
             pushIssue(issues, context.path, resolveRuleMessage(rule, 'The selected file must be an image.'))
@@ -215,7 +256,7 @@ async function applyPostFieldRules(
       case 'customAsync': {
         const validator = rule.args[0]
         if (typeof validator === 'function') {
-          const result = await validator(value)
+          const result = await validator(orderedRuleValue)
           if (result === false) {
             pushIssue(issues, context.path, resolveRuleMessage(rule, 'Validation failed.'))
           } else if (typeof result === 'string' && result.trim()) {
@@ -225,9 +266,10 @@ async function applyPostFieldRules(
         break
       }
       case 'confirmed': {
-        if (context.parent !== null && isPlainObject(context.parent)) {
-          const confirmationKey = `${context.key}Confirmation`
-          if (context.parent[confirmationKey] !== value) {
+        const confirmationKey = `${context.key}Confirmation`
+        const parent = resolveConfirmationParent(context, confirmationKey, hasRuleBefore(definition, rule, 'transform'))
+        if (parent !== null && isPlainObject(parent)) {
+          if (parent[confirmationKey] !== orderedRuleValue) {
             pushIssue(issues, context.path, resolveRuleMessage(rule, 'This field does not match its confirmation.'))
           }
         }
@@ -321,7 +363,7 @@ async function applyPostFieldRulesRecursively(
   definition: FieldDefinition,
   value: unknown,
   inputValue: unknown,
-  context: PostValidationContext,
+  context: RuntimePostValidationContext,
   issues: Record<string, string[]>,
 ): Promise<void> {
   await applyPostFieldRules(definition, value, inputValue, context, issues)
@@ -340,6 +382,8 @@ async function applyPostFieldRulesRecursively(
       await applyPostFieldRulesRecursively(definition.item, item, inputItems[index], {
         root: context.root,
         parent: value,
+        inputParent: inputValue,
+        rawInputParent: context.rawInputParent,
         key,
         path: nextPath,
       }, issues)
@@ -357,9 +401,11 @@ async function applyPostValidation(
   issues: Record<string, string[]>,
   path: readonly string[] = [],
   inputData: unknown = data,
+  rawInputData: unknown = inputData,
 ): Promise<void> {
   const current = isPlainObject(data) ? data : /* v8 ignore next */ {}
   const inputCurrent = isPlainObject(inputData) ? inputData : /* v8 ignore next */ current
+  const rawInputCurrent = isPlainObject(rawInputData) ? rawInputData : inputCurrent
 
   for (const [key, value] of Object.entries(shape)) {
     const isFieldLike = isPlainObject(value)
@@ -371,13 +417,15 @@ async function applyPostValidation(
       await applyPostFieldRulesRecursively(fieldDef.definition, nextValue, inputCurrent[key], {
         root,
         parent: current,
+        inputParent: inputCurrent,
+        rawInputParent: rawInputCurrent,
         key,
         path: nextPath,
       }, issues)
       continue
     }
 
-    await applyPostValidation(value as SchemaInputShape, current[key], root, issues, [...path, key], inputCurrent[key])
+    await applyPostValidation(value as SchemaInputShape, current[key], root, issues, [...path, key], inputCurrent[key], rawInputCurrent[key])
   }
 }
 
@@ -399,7 +447,7 @@ async function runSchemaValidation(
   }
 
   const postTarget = result.success ? result.output : coerced
-  await applyPostValidation(fields, postTarget, postTarget, issues, [], coerced)
+  await applyPostValidation(fields, postTarget, postTarget, issues, [], coerced, rawInput)
 
   if (Object.keys(issues).length > 0) {
     return { success: false, output: postTarget, issues }
@@ -468,6 +516,8 @@ async function applyStandaloneFieldPostRules(
   await applyPostFieldRulesRecursively(definition, value, inputValue, {
     root: value,
     parent: null,
+    inputParent: null,
+    rawInputParent: null,
     key: '_value',
     path: [],
   }, issues)

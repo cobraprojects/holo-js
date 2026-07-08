@@ -102,6 +102,10 @@ export {
   resetPreviewMailArtifacts,
   sendMail,
 } from './runtime'
+export {
+  loadMailPluginDrivers,
+  resetMailPluginDrivers,
+} from './plugins'
 
 const mail = Object.freeze({
   previewMail,

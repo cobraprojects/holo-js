@@ -1,17 +1,23 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { existsSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { createHash, createHmac } from 'node:crypto'
-import { resolve } from 'node:path'
+import { createRequire } from 'node:module'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   config as globalConfig,
   configureConfigRuntime,
   createConfigAccessors,
   loadConfigDirectory,
   resetConfigRuntime,
+  resolveHoloPluginModulePath,
   useConfig as globalUseConfig,
   type AuthHostedIdentityStore,
   type DotPath,
+  type HoloPluginRuntimeModule,
   type LoadedHoloConfig,
+  type LoadedHoloPluginDefinition,
   type HoloConfigMap,
   type ValueAtPath,
 } from '@holo-js/config'
@@ -397,6 +403,7 @@ export type HoloServerViewRenderer = (
 
 type QueueModule = {
   configureQueueRuntime(options: { config: LoadedHoloConfig['queue'], redisConfig?: LoadedHoloConfig['redis'] } & Record<string, unknown>): void
+  loadQueuePluginDrivers?(projectRoot?: string): Promise<void>
   getRegisteredQueueJob(name: string): { sourcePath?: string } | undefined
   getQueueRuntime(): HoloQueueRuntimeBinding
   isQueueJobDefinition(value: unknown): boolean
@@ -406,11 +413,14 @@ type QueueModule = {
     options: { name: string, sourcePath?: string, replaceExisting?: boolean },
   ): void
   shutdownQueueRuntime(): Promise<void>
+  resetQueueRuntime?(): void
   unregisterQueueJob(name: string): void
 }
 
 type QueueDbModule = {
-  createQueueDbRuntimeOptions(): Record<string, unknown>
+  createQueueDbRuntimeOptions(): Record<string, unknown> & {
+    readonly driverFactories?: readonly CoreQueueDriverFactory[]
+  }
 }
 
 type CacheModule = {
@@ -418,8 +428,374 @@ type CacheModule = {
     readonly config: LoadedHoloConfig['cache']
     readonly databaseConfig?: LoadedHoloConfig['database']
     readonly redisConfig?: LoadedHoloConfig['redis']
+    readonly drivers?: CoreCachePluginDriverRegistry
   }): void
+  loadCachePluginDrivers?(projectRoot?: string): Promise<void>
   resetCacheRuntime(): void
+}
+
+type CorePluginManifest = {
+  readonly holo?: unknown
+}
+type CoreQueueDriverFactory = {
+  readonly driver: string
+  create(...parameters: readonly unknown[]): unknown
+}
+type CoreCachePluginDriverConfig = Readonly<Record<string, unknown>> & {
+  readonly name: string
+  readonly driver: string
+}
+type CoreCachePluginDriverRegistry = {
+  readonly size: number
+  get(name: string): unknown
+  has(name: string): boolean
+  entries(): IterableIterator<[string, unknown]>
+  [Symbol.iterator](): IterableIterator<[string, unknown]>
+}
+type CoreCachePluginDriverFactory = {
+  readonly driver: string
+  create(config: CoreCachePluginDriverConfig): unknown
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function normalizePluginString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function assertValidPluginPackageName(packageName: string): void {
+  if (
+    !/^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/i.test(packageName)
+    && !/^[a-z0-9][a-z0-9._-]*$/i.test(packageName)
+  ) {
+    throw new Error(`[Holo Plugins] Invalid plugin package name: ${packageName}.`)
+  }
+}
+
+function assertPackageRelativePluginPath(packageName: string, value: string): void {
+  if (isAbsolute(value)) {
+    throw new Error(`[Holo Plugins] Plugin ${packageName} declared an absolute module path.`)
+  }
+}
+
+function resolveCorePluginPackageJsonPath(projectRoot: string, packageName: string): string {
+  assertValidPluginPackageName(packageName)
+
+  try {
+    return createRequire(join(projectRoot, 'package.json')).resolve(`${packageName}/package.json`)
+  } catch {
+    return join(projectRoot, 'node_modules', ...packageName.split('/'), 'package.json')
+  }
+}
+
+async function readCorePluginManifest(packageName: string, packageJsonPath: string): Promise<CorePluginManifest> {
+  try {
+    return JSON.parse(await readFile(packageJsonPath, 'utf8')) as CorePluginManifest
+  } catch (error) {
+    if (isRecord(error) && error.code === 'ENOENT') {
+      throw new Error(`Cannot find module '${packageName}/package.json'`)
+    }
+
+    throw error
+  }
+}
+
+function resolveCorePluginEntryPath(packageName: string, packageJsonPath: string, manifest: CorePluginManifest): string {
+  if (!isRecord(manifest.holo)) {
+    throw new Error(`[Holo Plugins] Plugin ${packageName} does not declare holo.plugin.`)
+  }
+
+  const entry = normalizePluginString(manifest.holo.plugin)
+  if (!entry) {
+    throw new Error(`[Holo Plugins] Plugin ${packageName} does not declare holo.plugin.`)
+  }
+
+  assertPackageRelativePluginPath(packageName, entry)
+
+  const packageRoot = dirname(packageJsonPath)
+  const entryPath = resolve(packageRoot, entry)
+  const relativeEntryPath = relative(packageRoot, entryPath)
+  if (relativeEntryPath.startsWith('..') || isAbsolute(relativeEntryPath)) {
+    throw new Error(`[Holo Plugins] Plugin ${packageName} entry must stay inside the package root.`)
+  }
+
+  return entryPath
+}
+
+function resolveCorePluginDefinition(moduleValue: unknown): Readonly<Record<string, unknown>> {
+  const candidate = isRecord(moduleValue) && 'default' in moduleValue
+    ? moduleValue.default
+    : isRecord(moduleValue) && 'plugin' in moduleValue
+      ? moduleValue.plugin
+      : moduleValue
+
+  if (!isRecord(candidate)) {
+    throw new Error('[Holo Plugins] Plugin entry must export a plugin definition.')
+  }
+
+  return Object.freeze({ ...candidate })
+}
+
+async function loadCorePluginRuntimeModule(projectRoot: string, modulePath: string): Promise<unknown> {
+  const projectRequire = createRequire(join(resolve(projectRoot), 'package.json'))
+  const resolvedPath = projectRequire.resolve(modulePath)
+  return await import(/* webpackIgnore: true */ `${pathToFileURL(resolvedPath).href}?t=${Date.now()}`) as unknown
+}
+
+async function loadConfiguredHoloPluginDefinitions(
+  projectRoot: string,
+  pluginNames: readonly string[],
+): Promise<readonly LoadedHoloPluginDefinition[]> {
+  const root = resolve(projectRoot)
+  const normalizedPluginNames = [...new Set(pluginNames.map(pluginName => pluginName.trim()).filter(Boolean))]
+  const plugins: LoadedHoloPluginDefinition[] = []
+
+  for (const packageName of normalizedPluginNames) {
+    const packageJsonPath = resolveCorePluginPackageJsonPath(root, packageName)
+    const manifest = await readCorePluginManifest(packageName, packageJsonPath)
+    const entryPath = resolveCorePluginEntryPath(packageName, packageJsonPath, manifest)
+
+    plugins.push(Object.freeze({
+      packageName,
+      packageRoot: dirname(packageJsonPath),
+      definition: resolveCorePluginDefinition(await loadCorePluginRuntimeModule(root, entryPath)),
+    }))
+  }
+
+  return Object.freeze(plugins)
+}
+
+function resolveConfiguredContributionMap(
+  plugin: LoadedHoloPluginDefinition,
+  scope: string,
+  key: string,
+): Readonly<Record<string, { readonly runtime: string }>> {
+  const contributes = plugin.definition.contributes
+  if (!isRecord(contributes) || !isRecord(contributes[scope]) || !isRecord(contributes[scope][key])) {
+    return Object.freeze({})
+  }
+
+  return Object.freeze(Object.fromEntries(
+    Object.entries(contributes[scope][key])
+      .flatMap(([name, contribution]) => {
+        if (!isRecord(contribution)) {
+          return []
+        }
+
+        const runtime = normalizePluginString(contribution.runtime)
+        return runtime ? [[name, { runtime }]] : []
+      }),
+  ))
+}
+
+async function loadConfiguredHoloPluginContributionModules(
+  projectRoot: string,
+  plugins: readonly LoadedHoloPluginDefinition[],
+  scope: string,
+  key: string,
+): Promise<readonly HoloPluginRuntimeModule[]> {
+  const root = resolve(projectRoot)
+  const modules: HoloPluginRuntimeModule[] = []
+
+  for (const plugin of plugins) {
+    for (const [name, contribution] of Object.entries(resolveConfiguredContributionMap(plugin, scope, key))) {
+      const modulePath = resolveHoloPluginModulePath(root, plugin, contribution.runtime)
+      modules.push(Object.freeze({
+        plugin,
+        name,
+        runtime: contribution.runtime,
+        module: await loadCorePluginRuntimeModule(root, modulePath),
+      }))
+    }
+  }
+
+  return Object.freeze(modules)
+}
+
+async function loadConfiguredHoloPluginBootModules(
+  projectRoot: string,
+  plugins: readonly LoadedHoloPluginDefinition[],
+): Promise<readonly HoloPluginRuntimeModule[]> {
+  const root = resolve(projectRoot)
+  const modules: HoloPluginRuntimeModule[] = []
+
+  for (const plugin of plugins) {
+    const contributes = plugin.definition.contributes
+    const runtime = isRecord(contributes) && isRecord(contributes.runtime)
+      ? normalizePluginString(contributes.runtime.boot)
+      : undefined
+    if (!runtime) {
+      continue
+    }
+
+    const modulePath = resolveHoloPluginModulePath(root, plugin, runtime)
+    modules.push(Object.freeze({
+      plugin,
+      name: 'boot',
+      runtime,
+      module: await loadCorePluginRuntimeModule(root, modulePath),
+    }))
+  }
+
+  return Object.freeze(modules)
+}
+
+function resolveCorePluginCandidate(moduleValue: unknown, exportName: string): unknown {
+  return isRecord(moduleValue) && typeof moduleValue.default !== 'undefined'
+    ? moduleValue.default
+    : isRecord(moduleValue) && typeof moduleValue[exportName] !== 'undefined'
+      ? moduleValue[exportName]
+      : moduleValue
+}
+
+function resolveConfiguredQueueDriverFactory(moduleValue: unknown, packageName: string, driverName: string): CoreQueueDriverFactory {
+  const candidate = resolveCorePluginCandidate(moduleValue, 'factory')
+  if (!isRecord(candidate) || candidate.driver !== driverName || typeof candidate.create !== 'function') {
+    throw new Error(`[@holo-js/queue] Plugin ${packageName} queue driver "${driverName}" must export a matching QueueDriverFactory.`)
+  }
+
+  return candidate as unknown as CoreQueueDriverFactory
+}
+
+function mergeQueueRuntimeDriverFactories(
+  ...sources: readonly (readonly CoreQueueDriverFactory[] | undefined)[]
+): readonly CoreQueueDriverFactory[] {
+  const factories = new Map<string, CoreQueueDriverFactory>()
+
+  for (const source of sources) {
+    for (const factory of source ?? []) {
+      factories.set(factory.driver, factory)
+    }
+  }
+
+  return Object.freeze([...factories.values()])
+}
+
+async function loadConfiguredQueuePluginDriverFactories(
+  projectRoot: string,
+  plugins: readonly LoadedHoloPluginDefinition[],
+): Promise<readonly CoreQueueDriverFactory[]> {
+  const contributions = await loadConfiguredHoloPluginContributionModules(projectRoot, plugins, 'queue', 'drivers')
+  return Object.freeze(contributions.map(contribution => resolveConfiguredQueueDriverFactory(
+    contribution.module,
+    contribution.plugin.packageName,
+    contribution.name,
+  )))
+}
+
+function isBuiltInCacheDriverName(driverName: string): boolean {
+  return driverName === 'memory'
+    || driverName === 'file'
+    || driverName === 'redis'
+    || driverName === 'database'
+}
+
+function resolveConfiguredCachePluginDriverConfigs(cacheConfig: LoadedHoloConfig['cache']): readonly CoreCachePluginDriverConfig[] {
+  return Object.entries(cacheConfig.drivers).flatMap(([name, driverConfig]) => {
+    if (!isRecord(driverConfig) || typeof driverConfig.driver !== 'string' || isBuiltInCacheDriverName(driverConfig.driver)) {
+      return []
+    }
+
+    return [{
+      ...driverConfig,
+      name: typeof driverConfig.name === 'string' ? driverConfig.name : name,
+      driver: driverConfig.driver,
+    }]
+  })
+}
+
+function isCachePluginDriverFactory(candidate: unknown, driverName: string): candidate is CoreCachePluginDriverFactory {
+  return isRecord(candidate)
+    && candidate.driver === driverName
+    && typeof candidate.create === 'function'
+}
+
+function assertCoreCacheDriverContract(
+  candidate: unknown,
+  packageName: string,
+  driverName: string,
+  expectedName: string,
+): asserts candidate is Readonly<Record<string, unknown>> {
+  if (
+    !isRecord(candidate)
+    || candidate.driver !== driverName
+    || candidate.name !== expectedName
+    || typeof candidate.get !== 'function'
+    || typeof candidate.put !== 'function'
+    || typeof candidate.add !== 'function'
+    || typeof candidate.forget !== 'function'
+    || typeof candidate.flush !== 'function'
+    || typeof candidate.increment !== 'function'
+    || typeof candidate.decrement !== 'function'
+    || typeof candidate.lock !== 'function'
+  ) {
+    throw new Error(`[@holo-js/cache] Plugin ${packageName} cache driver "${driverName}" must export a matching CacheDriverContract.`)
+  }
+}
+
+function resolveConfiguredCacheDriver(
+  moduleValue: unknown,
+  packageName: string,
+  driverName: string,
+  config: CoreCachePluginDriverConfig,
+): unknown {
+  const candidate = resolveCorePluginCandidate(moduleValue, 'driver')
+  if (isCachePluginDriverFactory(candidate, driverName)) {
+    const driver = candidate.create(config)
+    assertCoreCacheDriverContract(driver, packageName, driverName, config.name)
+    return driver
+  }
+
+  assertCoreCacheDriverContract(candidate, packageName, driverName, driverName)
+  return Object.freeze({
+    ...candidate,
+    name: config.name,
+    driver: driverName,
+  })
+}
+
+function resolveUnconfiguredCacheDriver(moduleValue: unknown, packageName: string, driverName: string): unknown {
+  const candidate = resolveCorePluginCandidate(moduleValue, 'driver')
+  assertCoreCacheDriverContract(candidate, packageName, driverName, driverName)
+  return candidate
+}
+
+async function loadConfiguredCachePluginDriverContracts(
+  projectRoot: string,
+  plugins: readonly LoadedHoloPluginDefinition[],
+  cacheConfig: LoadedHoloConfig['cache'],
+): Promise<CoreCachePluginDriverRegistry> {
+  const contributions = await loadConfiguredHoloPluginContributionModules(projectRoot, plugins, 'cache', 'drivers')
+  const configuredDrivers = resolveConfiguredCachePluginDriverConfigs(cacheConfig)
+  const drivers = new Map<string, unknown>()
+
+  if (configuredDrivers.length > 0) {
+    for (const contribution of contributions) {
+      const matchingConfigs = configuredDrivers.filter(config => config.driver === contribution.name)
+      for (const config of matchingConfigs) {
+        drivers.set(config.name, resolveConfiguredCacheDriver(
+          contribution.module,
+          contribution.plugin.packageName,
+          contribution.name,
+          config,
+        ))
+      }
+    }
+
+    return drivers
+  }
+
+  for (const contribution of contributions) {
+    drivers.set(contribution.name, resolveUnconfiguredCacheDriver(
+      contribution.module,
+      contribution.plugin.packageName,
+      contribution.name,
+    ))
+  }
+
+  return drivers
 }
 
 type EventsModule = {
@@ -553,6 +929,7 @@ function closeSessionRedisAdapter(adapter: SessionRedisAdapter): Promise<void> |
 type NotificationsModule = {
   configureNotificationsRuntime(options?: {
     readonly config: LoadedHoloConfig['notifications']
+    readonly projectRoot?: string
     readonly mailer?: {
       send(message: {
         readonly subject: string
@@ -639,6 +1016,7 @@ type AuthNotificationModule = {
 type BroadcastModule = {
   configureBroadcastRuntime(options?: {
     readonly config: LoadedHoloConfig['broadcast']
+    readonly projectRoot?: string
     readonly publish?: (
       input: {
         readonly connection: string
@@ -688,6 +1066,7 @@ const CORE_BROADCAST_PUBLISHER_MARKER = Symbol.for('holo-js.core.broadcast.publi
 type MailModule = {
   configureMailRuntime(options?: {
     readonly config: LoadedHoloConfig['mail']
+    readonly projectRoot?: string
     readonly renderView?: HoloServerViewRenderer
   }): void
   getMailRuntimeBindings(): {
@@ -1128,6 +1507,45 @@ async function importOptionalModule<TModule>(
 
 const portableRuntimeModuleInternals = {
   importOptionalModule,
+}
+
+function resolveLoadedPluginNames<TCustom extends HoloConfigMap>(loadedConfig: LoadedHoloConfig<TCustom>): readonly string[] {
+  return loadedConfig.app?.plugins ?? []
+}
+
+const bootedHoloPluginModules = new Set<string>()
+
+function resolveHoloPluginBootKey(projectRoot: string, bootModule: HoloPluginRuntimeModule): string {
+  return [
+    resolve(projectRoot),
+    bootModule.plugin.packageName,
+    bootModule.runtime,
+  ].join('\0')
+}
+
+async function bootConfiguredHoloPluginModule<TCustom extends HoloConfigMap>(
+  projectRoot: string,
+  loadedConfig: LoadedHoloConfig<TCustom>,
+  bootModule: HoloPluginRuntimeModule,
+): Promise<void> {
+  const bootKey = resolveHoloPluginBootKey(projectRoot, bootModule)
+  if (bootedHoloPluginModules.has(bootKey)) {
+    return
+  }
+
+  const moduleValue = bootModule.module
+  const candidate = moduleValue && typeof moduleValue === 'object' && 'default' in moduleValue
+    ? (moduleValue as { readonly default?: unknown }).default
+    : moduleValue
+  if (typeof candidate !== 'function') {
+    return
+  }
+
+  await candidate({
+    projectRoot,
+    config: loadedConfig,
+  })
+  bootedHoloPluginModules.add(bootKey)
 }
 
 function hasLoadedConfigFile<TCustom extends HoloConfigMap>(
@@ -3855,14 +4273,18 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
       callback: () => Promise<TValue>,
     ): Promise<TValue>
   }
-}> {
+	}> {
+  const pluginDefinitions = await loadConfiguredHoloPluginDefinitions(projectRoot, resolveLoadedPluginNames(loadedConfig))
   const cacheConfigured = hasLoadedConfigFile(loadedConfig, 'cache')
   const cacheModule = await loadCacheModule(cacheConfigured, projectRoot)
-  if (cacheModule) {
+  const cacheConfig = loadedConfig.cache
+  if (cacheModule && cacheConfig) {
+    const cachePluginDrivers = await loadConfiguredCachePluginDriverContracts(projectRoot, pluginDefinitions, cacheConfig)
     cacheModule.configureCacheRuntime({
-      config: loadedConfig.cache,
+      config: cacheConfig,
       databaseConfig: loadedConfig.database,
       redisConfig: loadedConfig.redis,
+      ...(cachePluginDrivers.size > 0 ? { drivers: cachePluginDrivers } : {}),
     })
   }
 
@@ -3886,10 +4308,17 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     }
     /* v8 ignore stop */
 
+    const queuePluginDriverFactories = await loadConfiguredQueuePluginDriverFactories(projectRoot, pluginDefinitions)
+    const queueDbRuntimeOptions = queueDbModule?.createQueueDbRuntimeOptions() ?? {}
+    const queueDriverFactories = mergeQueueRuntimeDriverFactories(
+      queuePluginDriverFactories,
+      queueDbRuntimeOptions.driverFactories,
+    )
     queueModule.configureQueueRuntime({
       config: loadedConfig.queue,
       redisConfig: loadedConfig.redis,
-      ...(queueDbModule?.createQueueDbRuntimeOptions() ?? {}),
+      ...queueDbRuntimeOptions,
+      ...(queueDriverFactories.length > 0 ? { driverFactories: queueDriverFactories } : {}),
     })
   }
 
@@ -3914,6 +4343,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     mailModule.configureMailRuntime({
       ...existingMailBindings,
       config: loadedConfig.mail,
+      projectRoot,
       ...(options.renderView ?? getRuntimeState().renderView
         ? { renderView: options.renderView ?? getRuntimeState().renderView }
         : {}),
@@ -3929,6 +4359,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     broadcastModule.configureBroadcastRuntime({
       ...existingBroadcastBindings,
       config: loadedConfig.broadcast,
+      projectRoot,
       ...(!existingBroadcastBindings.publish || isCoreBroadcastPublisher(existingBroadcastBindings.publish)
         ? {
             publish: createCoreBroadcastPublisher(loadedConfig.broadcast),
@@ -3946,6 +4377,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     notificationsModule.configureNotificationsRuntime({
       ...existingNotificationsBindings,
       config: loadedConfig.notifications,
+      projectRoot,
       store: existingNotificationsBindings.store ?? createCoreNotificationStore(loadedConfig),
       ...(!existingNotificationsBindings.mailer && mailModule
         ? { mailer: createCoreNotificationMailSender(mailModule) }
@@ -4201,6 +4633,10 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     authorizationModule.authorizationInternals.resetAuthorizationAuthIntegration()
   }
 
+  for (const bootModule of await loadConfiguredHoloPluginBootModules(projectRoot, pluginDefinitions)) {
+    await bootConfiguredHoloPluginModule(projectRoot, loadedConfig, bootModule)
+  }
+
   return Object.freeze({
     /* v8 ignore next -- only toggles shape when queue support is absent */
     ...(queueModule ? { queueModule } : {}),
@@ -4211,6 +4647,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
 }
 
 export async function resetOptionalHoloSubsystems(): Promise<void> {
+  bootedHoloPluginModules.clear()
   const projectRoot = getRuntimeState().current?.projectRoot ?? getRuntimeState().pendingProjectRoot
   await resetOptionalStorageRuntime()
   const cacheModule = await loadCacheModule(false, projectRoot)
@@ -4220,7 +4657,10 @@ export async function resetOptionalHoloSubsystems(): Promise<void> {
     resetCacheRuntimeGlobalsFallback()
   }
   const queueModule = await loadQueueModule()
-  await queueModule?.shutdownQueueRuntime()
+  if (queueModule) {
+    await queueModule.shutdownQueueRuntime()
+    queueModule.resetQueueRuntime?.()
+  }
   const mailModule = await loadMailModule()
   mailModule?.resetMailRuntime()
   const notificationsModule = await loadNotificationsModule()

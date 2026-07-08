@@ -35,6 +35,7 @@ import {
   normalizeMailDefinition,
 } from './contracts'
 import { getRegisteredMailDriver } from './registry'
+import { loadMailPluginDrivers, resetMailPluginDrivers } from './plugins'
 
 const HOLO_MAIL_DELIVER_JOB = 'holo.mail.deliver'
 const LOCAL_ATTACHMENT_ROOTS = Object.freeze([
@@ -44,12 +45,17 @@ const LOCAL_ATTACHMENT_ROOTS = Object.freeze([
 
 type RuntimeState = {
   bindings?: MailRuntimeBindings
+  projectRoot?: string
   fakeSent?: FakeSentMail[]
   previewArtifacts?: MailPreviewArtifact[]
   loadQueueModule?: () => Promise<QueueModule>
   loadDbModule?: () => Promise<DbModule | null>
   loadNodemailerModule?: () => Promise<NodemailerModule>
   loadStorageModule?: () => Promise<StorageModule>
+}
+
+type RuntimeBindingsWithProjectRoot = MailRuntimeBindings & {
+  readonly projectRoot?: string
 }
 
 type MutableSendOptions = {
@@ -1040,6 +1046,27 @@ function resolveDriver(
   })
 }
 
+function isMailDriverNotRegisteredError(error: unknown): error is MailError {
+  return error instanceof MailError && error.code === 'MAIL_DRIVER_NOT_REGISTERED'
+}
+
+async function resolveDriverWithPluginFallback(
+  mail: MailDefinition,
+  options: MutableSendOptions | Readonly<MutableSendOptions>,
+  config: NormalizedHoloMailConfig,
+): Promise<ResolvedDriver> {
+  try {
+    return resolveDriver(mail, options, config)
+  } catch (error) {
+    if (!isMailDriverNotRegisteredError(error)) {
+      throw error
+    }
+  }
+
+  await loadMailPluginDrivers(getRuntimeState().projectRoot)
+  return resolveDriver(mail, options, config)
+}
+
 function resolveDriverByName(
   mailer: string,
   driver: string,
@@ -1066,6 +1093,22 @@ function resolveDriverByName(
     driver,
     implementation: registered.driver,
   })
+}
+
+async function resolveDriverByNameWithPluginFallback(
+  mailer: string,
+  driver: string,
+): Promise<ResolvedDriver> {
+  try {
+    return resolveDriverByName(mailer, driver)
+  } catch (error) {
+    if (!isMailDriverNotRegisteredError(error)) {
+      throw error
+    }
+  }
+
+  await loadMailPluginDrivers(getRuntimeState().projectRoot)
+  return resolveDriverByName(mailer, driver)
 }
 
 function serializeQueuedAttachment(
@@ -1181,7 +1224,7 @@ async function deliverResolvedMail(
 async function runQueuedMailDelivery(
   payload: QueuedMailDeliveryPayload,
 ): Promise<Readonly<MailSendResult>> {
-  const resolvedDriver = resolveDriverByName(payload.mailer, payload.driver)
+  const resolvedDriver = await resolveDriverByNameWithPluginFallback(payload.mailer, payload.driver)
   const context = Object.freeze({
     messageId: payload.messageId,
     mailer: payload.mailer,
@@ -1567,7 +1610,7 @@ class PendingSend implements PendingMailSend<MailSendResult> {
   ): Promise<MailSendResult> {
     const options = Object.freeze({ ...this.#options })
     const config = getResolvedConfig()
-    const resolvedDriver = resolveDriver(this.#mail, options, config)
+    const resolvedDriver = await resolveDriverWithPluginFallback(this.#mail, options, config)
     const plan = resolveQueuePlan(this.#mail, options, resolvedDriver.mailer, config)
     const messageId = randomUUID()
 
@@ -1661,7 +1704,19 @@ function resolveMailInput(
 }
 
 export function configureMailRuntime(bindings?: MailRuntimeBindings): void {
-  getRuntimeState().bindings = bindings
+  const state = getRuntimeState()
+  if (!bindings) {
+    state.bindings = undefined
+    state.projectRoot = undefined
+    return
+  }
+
+  const { projectRoot, ...runtimeBindings } = bindings as RuntimeBindingsWithProjectRoot
+  state.bindings = runtimeBindings
+  const normalizedProjectRoot = typeof projectRoot === 'string' ? projectRoot.trim() : ''
+  state.projectRoot = normalizedProjectRoot
+    ? normalizedProjectRoot
+    : undefined
 }
 
 export function getMailRuntimeBindings(): MailRuntimeBindings {
@@ -1671,12 +1726,14 @@ export function getMailRuntimeBindings(): MailRuntimeBindings {
 export function resetMailRuntime(): void {
   const state = getRuntimeState()
   state.bindings = undefined
+  state.projectRoot = undefined
   state.fakeSent = undefined
   state.previewArtifacts = undefined
   state.loadQueueModule = undefined
   state.loadDbModule = undefined
   state.loadNodemailerModule = undefined
   state.loadStorageModule = undefined
+  resetMailPluginDrivers()
 }
 
 export function sendMail(

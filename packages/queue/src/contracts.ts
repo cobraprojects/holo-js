@@ -679,10 +679,17 @@ export interface QueueSyncConnectionConfig {
   readonly queue?: string
 }
 
+export interface QueuePluginConnectionConfig {
+  readonly driver: string
+  readonly queue?: string
+  readonly [key: string]: unknown
+}
+
 export type QueueConnectionConfig
   = QueueSyncConnectionConfig
   | QueueRedisConnectionConfig
   | QueueDatabaseConnectionConfig
+  | QueuePluginConnectionConfig
 
 export interface HoloQueueConfig {
   readonly default?: string
@@ -754,10 +761,18 @@ export interface NormalizedQueueDatabaseConnectionConfig {
   readonly table: string
 }
 
+export interface NormalizedQueuePluginConnectionConfig {
+  readonly name: string
+  readonly driver: string
+  readonly queue: string
+  readonly [key: string]: unknown
+}
+
 export type NormalizedQueueConnectionConfig
   = NormalizedQueueSyncConnectionConfig
   | NormalizedQueueRedisConnectionConfig
   | NormalizedQueueDatabaseConnectionConfig
+  | NormalizedQueuePluginConnectionConfig
 
 export interface NormalizedHoloQueueConfig {
   readonly default: string

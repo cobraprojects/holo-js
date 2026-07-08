@@ -540,6 +540,9 @@ describe('@holo-js/authorization contracts', () => {
     await expect(current.can('create', LockedProject)).resolves.toBe(false)
     await expect(current.policy('locked-projects').can('create', LockedProject)).resolves.toBe(false)
     await expect(current.can('delete', new Project('user-1'))).rejects.toBeInstanceOf(AuthorizationError)
+    await expect(current.can('toString' as never, new Project('user-1'))).rejects.toBeInstanceOf(AuthorizationError)
+    await expect(current.can('valueOf' as never, Project)).rejects.toBeInstanceOf(AuthorizationError)
+    await expect(current.can('hasOwnProperty' as never, new Project('user-1'))).rejects.toBeInstanceOf(AuthorizationError)
   })
 
   it('supports model-reference targets and entity-instance lookup by repository definition', async () => {

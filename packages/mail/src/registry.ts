@@ -49,6 +49,10 @@ export function getRegisteredMailDriver<TDriver extends string>(
   return getRegistry().get(normalizeDriverName(name)) as RegisteredMailDriver<TDriver> | undefined
 }
 
+export function unregisterMailDriver(name: string): boolean {
+  return getRegistry().delete(normalizeDriverName(name))
+}
+
 export function listRegisteredMailDrivers(): readonly RegisteredMailDriver[] {
   return Object.freeze([...getRegistry().values()])
 }

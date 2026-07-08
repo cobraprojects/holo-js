@@ -291,6 +291,42 @@ describe('@holo-js/flux-react package surface', () => {
     expect(debug.getJoinedChannels()).toEqual([])
   })
 
+  it('subscribes status callbacks added after the initial render', async () => {
+    const client = createFluxClient({
+      connector: fluxInternals.createPusherConnector({ transport: 'mock' }),
+    })
+    const statusHandler = vi.fn()
+
+    function Probe({ enabled }: { enabled: boolean }) {
+      useFluxConnectionStatus({
+        client,
+        ...(enabled ? { onChange: statusHandler } : {}),
+      })
+      return null
+    }
+
+    const { act, create } = await loadRenderer()
+    let renderer: Renderer | undefined
+    await act(async () => {
+      renderer = create(jsx(Probe, { enabled: false }))
+    })
+
+    await act(async () => {
+      renderer!.update(jsx(Probe, { enabled: true }))
+    })
+
+    await act(async () => {
+      await client.connect()
+    })
+
+    expect(statusHandler).toHaveBeenCalledWith('connecting')
+    expect(statusHandler).toHaveBeenCalledWith('connected')
+
+    await act(async () => {
+      renderer!.unmount()
+    })
+  })
+
   it('reacts to Echo-like presence subscriptions without hidden methods', async () => {
     const baseClient = createFluxClient({
       connector: fluxInternals.createPusherConnector({ transport: 'mock' }),

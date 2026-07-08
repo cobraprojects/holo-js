@@ -1,4 +1,5 @@
 import type { ProjectScaffoldOptions } from '../shared'
+import { getFrameworkDescriptor } from '../frameworks'
 
 export function renderScaffoldGitignore(): string {
   return [
@@ -61,13 +62,15 @@ export function renderScaffoldGitignore(): string {
 }
 
 export function renderScaffoldTsconfig(options: Pick<ProjectScaffoldOptions, 'framework'>): string {
-  if (options.framework === 'nuxt') {
+  const framework = getFrameworkDescriptor(options.framework)
+
+  if (framework.scaffold.tsconfig === 'nuxt') {
     return `${JSON.stringify({
       extends: './.nuxt/tsconfig.json',
     }, null, 2)}\n`
   }
 
-  if (options.framework === 'sveltekit') {
+  if (framework.scaffold.tsconfig === 'sveltekit') {
     return `${JSON.stringify({
       extends: './.svelte-kit/tsconfig.json',
       compilerOptions: {
@@ -109,7 +112,9 @@ export function renderScaffoldTsconfig(options: Pick<ProjectScaffoldOptions, 'fr
 }
 
 export function renderVSCodeSettings(options: Pick<ProjectScaffoldOptions, 'framework'>): string | undefined {
-  if (options.framework !== 'nuxt' && options.framework !== 'sveltekit') {
+  const framework = getFrameworkDescriptor(options.framework)
+
+  if (!framework.scaffold.vscodeVueHybridMode && framework.scaffold.tsconfig !== 'sveltekit') {
     return undefined
   }
 
@@ -118,7 +123,7 @@ export function renderVSCodeSettings(options: Pick<ProjectScaffoldOptions, 'fram
     'typescript.enablePromptUseWorkspaceTsdk': true,
   }
 
-  if (options.framework === 'nuxt') {
+  if (framework.scaffold.vscodeVueHybridMode) {
     settings['vue.server.hybridMode'] = true
   }
 

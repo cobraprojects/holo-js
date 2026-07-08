@@ -135,13 +135,20 @@ describe('@holo-js/config cache normalization', () => {
       },
     })).toThrow('maxEntries must be greater than or equal to 1')
 
-    expect(() => normalizeCacheConfig({
+    const pluginCacheConfig = normalizeCacheConfig({
       drivers: {
-        weird: {
+        s3: {
           driver: 's3' as never,
+          bucket: 'cache',
         },
       },
-    })).toThrow('Unsupported cache driver')
+    })
+    expect(pluginCacheConfig.drivers.s3).toMatchObject({
+      name: 's3',
+      driver: 's3',
+      prefix: '',
+      bucket: 'cache',
+    })
   })
 
   it('inherits omitted cache driver connections from top-level redis and database defaults', () => {

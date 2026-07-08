@@ -1,3 +1,5 @@
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { clearConfigCache, resolveConfigCachePath } from '@holo-js/config'
 import {
@@ -21,13 +23,15 @@ import {
 import { generateProjectAppKey } from './app-key'
 import { fileExists } from './fs-utils'
 import { runWithSpinner, supportsSpinner, writeLine } from './io'
-import { hasProjectDependency } from './package-json'
+import { hasProjectDependency, pinProjectDependencyVersions, removeProjectDependency, upsertProjectDependency } from './package-json'
 import type * as DevModule from './dev'
 import type * as ProjectConfigModule from './project/config'
 import type * as ProjectDiscoveryModule from './project/discovery'
+import type * as ProjectPluginsModule from './project/plugins'
 import type * as ProjectRuntimeModule from './project/runtime'
 import type * as ProjectScaffoldModule from './project/scaffold'
 import {
+  APP_CONFIG_FILE_NAMES,
   SUPPORTED_AUTH_SOCIAL_PROVIDERS,
   type SupportedAuthSocialProvider,
 } from './project/shared'
@@ -101,6 +105,14 @@ type BroadcastCommandExecutors = {
 type SecurityCommandExecutors = {
   runRateLimitClearCommand?: typeof SecurityModule.runRateLimitClearCommand
 }
+type FileSnapshot = {
+  readonly path: string
+  readonly contents: string
+}
+type DirectorySnapshot = {
+  readonly path: string
+  readonly snapshotPath?: string
+}
 
 let runtimeModulePromise: Promise<typeof RuntimeModule> | undefined
 let queueModulePromise: Promise<typeof QueueModule> | undefined
@@ -114,6 +126,7 @@ let securityModulePromise: Promise<typeof SecurityModule> | undefined
 let devModulePromise: Promise<typeof DevModule> | undefined
 let projectConfigModulePromise: Promise<typeof ProjectConfigModule> | undefined
 let projectDiscoveryModulePromise: Promise<typeof ProjectDiscoveryModule> | undefined
+let projectPluginsModulePromise: Promise<typeof ProjectPluginsModule> | undefined
 let projectRuntimeModulePromise: Promise<typeof ProjectRuntimeModule> | undefined
 let projectScaffoldModulePromise: Promise<typeof ProjectScaffoldModule> | undefined
 let agentSkillsModulePromise: Promise<typeof AgentSkillsModule> | undefined
@@ -176,6 +189,11 @@ function loadProjectConfigModule(): Promise<typeof ProjectConfigModule> {
 function loadProjectDiscoveryModule(): Promise<typeof ProjectDiscoveryModule> {
   projectDiscoveryModulePromise ??= import('./project/discovery')
   return projectDiscoveryModulePromise
+}
+
+function loadProjectPluginsModule(): Promise<typeof ProjectPluginsModule> {
+  projectPluginsModulePromise ??= import('./project/plugins')
+  return projectPluginsModulePromise
 }
 
 function loadProjectRuntimeModule(): Promise<typeof ProjectRuntimeModule> {
@@ -444,6 +462,163 @@ async function runProjectDependencyInstallForProject(
   await runProjectDependencyInstall(context, projectRoot)
   if (options.writeStatus ?? true) {
     writeLine(context.stdout, '  - installed dependencies')
+  }
+}
+
+function formatPluginLabel(plugin: ProjectPluginsModule.HoloPluginDefinition): string {
+  return plugin.name ? `${plugin.name} (${plugin.id})` : plugin.id
+}
+
+function formatPluginContributionLines(plugin: ProjectPluginsModule.HoloPluginDefinition): readonly string[] {
+  const contributes = plugin.contributes
+  if (!contributes) {
+    return []
+  }
+
+  const lines: string[] = []
+
+  if (contributes.framework) {
+    lines.push(`framework: ${contributes.framework.displayName}`)
+  }
+
+  if (contributes.dependencies?.holo?.length) {
+    lines.push(`holo packages: ${contributes.dependencies.holo.join(', ')}`)
+  }
+
+  if (contributes.dependencies?.runtime?.length) {
+    lines.push(`runtime packages: ${contributes.dependencies.runtime.join(', ')}`)
+  }
+
+  if (contributes.config?.files?.length) {
+    lines.push(`config files: ${contributes.config.files.join(', ')}`)
+  }
+
+  if (contributes.config?.env?.length) {
+    lines.push(`env keys: ${contributes.config.env.join(', ')}`)
+  }
+
+  if (contributes.broadcast?.drivers) {
+    const driverNames = Object.keys(contributes.broadcast.drivers)
+    if (driverNames.length > 0) {
+      lines.push(`broadcast drivers: ${driverNames.join(', ')}`)
+    }
+  }
+
+  if (contributes.cache?.drivers) {
+    const driverNames = Object.keys(contributes.cache.drivers)
+    if (driverNames.length > 0) {
+      lines.push(`cache drivers: ${driverNames.join(', ')}`)
+    }
+  }
+
+  if (contributes.queue?.drivers) {
+    const driverNames = Object.keys(contributes.queue.drivers)
+    if (driverNames.length > 0) {
+      lines.push(`queue drivers: ${driverNames.join(', ')}`)
+    }
+  }
+
+  if (contributes.mail?.drivers) {
+    const driverNames = Object.keys(contributes.mail.drivers)
+    if (driverNames.length > 0) {
+      lines.push(`mail drivers: ${driverNames.join(', ')}`)
+    }
+  }
+
+  if (contributes.notifications?.channels) {
+    const channelNames = Object.keys(contributes.notifications.channels)
+    if (channelNames.length > 0) {
+      lines.push(`notification channels: ${channelNames.join(', ')}`)
+    }
+  }
+
+  if (contributes.runtime?.boot) {
+    lines.push(`runtime boot: ${contributes.runtime.boot}`)
+  }
+
+  if (contributes.cli?.commands) {
+    lines.push(`cli commands: ${contributes.cli.commands}`)
+  }
+
+  if (contributes.migrations?.publish) {
+    lines.push(`migration publisher: ${contributes.migrations.publish}`)
+  }
+
+  return lines
+}
+
+function writePluginDetails(
+  context: InternalCommandContext,
+  loadedPlugin: ProjectPluginsModule.LoadedHoloPlugin,
+): void {
+  writeLine(context.stdout, `Plugin: ${formatPluginLabel(loadedPlugin.definition)}`)
+  writeLine(context.stdout, `  - package: ${loadedPlugin.packageName}`)
+  if (loadedPlugin.definition.description) {
+    writeLine(context.stdout, `  - description: ${loadedPlugin.definition.description}`)
+  }
+
+  const contributionLines = formatPluginContributionLines(loadedPlugin.definition)
+  if (contributionLines.length === 0) {
+    writeLine(context.stdout, '  - contributions: none')
+    return
+  }
+
+  for (const line of contributionLines) {
+    writeLine(context.stdout, `  - ${line}`)
+  }
+}
+
+async function readPackageJsonSnapshot(projectRoot: string): Promise<string> {
+  return await readFile(resolve(projectRoot, 'package.json'), 'utf8')
+}
+
+async function restorePackageJsonSnapshot(projectRoot: string, snapshot: string): Promise<void> {
+  await writeFile(resolve(projectRoot, 'package.json'), snapshot)
+}
+
+async function readAppConfigSnapshot(projectRoot: string): Promise<FileSnapshot | undefined> {
+  for (const fileName of APP_CONFIG_FILE_NAMES) {
+    const path = resolve(projectRoot, fileName)
+    if (await fileExists(path)) {
+      return {
+        path,
+        contents: await readFile(path, 'utf8'),
+      }
+    }
+  }
+
+  return undefined
+}
+
+async function restoreAppConfigSnapshot(snapshot: FileSnapshot | undefined): Promise<void> {
+  if (!snapshot) {
+    return
+  }
+
+  await writeFile(snapshot.path, snapshot.contents)
+}
+
+async function readDirectorySnapshot(projectRoot: string, relativePath: string): Promise<DirectorySnapshot> {
+  const path = resolve(projectRoot, relativePath)
+  if (!await fileExists(path)) {
+    return { path }
+  }
+
+  const snapshotPath = await mkdtemp(resolve(tmpdir(), 'holo-cli-plugin-add-'))
+  await cp(path, snapshotPath, { recursive: true, force: true })
+  return { path, snapshotPath }
+}
+
+async function restoreDirectorySnapshot(snapshot: DirectorySnapshot): Promise<void> {
+  await rm(snapshot.path, { recursive: true, force: true })
+  if (snapshot.snapshotPath) {
+    await cp(snapshot.snapshotPath, snapshot.path, { recursive: true, force: true })
+  }
+}
+
+async function cleanupDirectorySnapshot(snapshot: DirectorySnapshot): Promise<void> {
+  if (snapshot.snapshotPath) {
+    await rm(snapshot.snapshotPath, { recursive: true, force: true })
   }
 }
 
@@ -1008,6 +1183,221 @@ export function createInternalCommands(
         if (result.updatedEnvExample) writeLine(context.stdout, '  - updated .env.example')
         if (result.createdJobsDirectory) writeLine(context.stdout, '  - created server/jobs')
         await runProjectDependencyInstallAfterPackageJsonUpdate(context, projectExecutors, result.updatedPackageJson)
+      },
+    },
+    {
+      name: 'plugin:add',
+      aliases: ['plugins:add'],
+      description: 'Install and activate a Holo plugin package.',
+      usage: 'holo plugin:add <package>',
+      source: 'internal',
+      async prepare(input) {
+        const packageName = await ensureRequiredArg(context, input, 0, 'Plugin package')
+        return { args: [packageName], flags: {} }
+      },
+      async run(commandContext) {
+        const packageName = String(commandContext.args[0] ?? '')
+        const plugins = await loadProjectPluginsModule()
+        const packageJsonSnapshot = await readPackageJsonSnapshot(context.projectRoot)
+        const appConfigSnapshot = await readAppConfigSnapshot(context.projectRoot)
+        const holoDirectorySnapshot = await readDirectorySnapshot(context.projectRoot, '.holo-js')
+        let dependencyInstallSucceeded = false
+        let updatedDependencies = false
+        let updatedPackageJson = false
+        let loadedPlugin: ProjectPluginsModule.LoadedHoloPlugin
+        let contributedDependencies: readonly string[] = []
+        let updatedContributedDependencies = false
+        let activated = false
+
+        try {
+          updatedPackageJson = await upsertProjectDependency(context.projectRoot, packageName)
+          updatedDependencies = updatedPackageJson || updatedDependencies
+
+          if (updatedPackageJson) {
+            await runProjectDependencyInstallForProject(context, projectExecutors, context.projectRoot)
+            dependencyInstallSucceeded = true
+            await pinProjectDependencyVersions(context.projectRoot, [packageName])
+          }
+
+          loadedPlugin = await plugins.loadHoloPluginFromPackage(context.projectRoot, packageName)
+
+          contributedDependencies = [
+            ...(loadedPlugin.definition.contributes?.dependencies?.holo ?? []),
+            ...(loadedPlugin.definition.contributes?.dependencies?.runtime ?? []),
+          ]
+
+          for (const dependencyName of contributedDependencies) {
+            const updatedContributedDependency = await upsertProjectDependency(context.projectRoot, dependencyName)
+            updatedContributedDependencies = updatedContributedDependency
+              || updatedContributedDependencies
+          }
+          updatedDependencies = updatedContributedDependencies || updatedDependencies
+
+          if (updatedContributedDependencies) {
+            await runProjectDependencyInstallForProject(context, projectExecutors, context.projectRoot)
+            dependencyInstallSucceeded = true
+            await pinProjectDependencyVersions(context.projectRoot, contributedDependencies)
+          }
+
+          activated = await plugins.activateProjectPlugin(context.projectRoot, packageName)
+
+          if (activated) {
+            const runProjectPrepare = await resolveProjectExecutor(projectExecutors, 'runProjectPrepare')
+            await runProjectPrepare(context.projectRoot, context)
+          }
+        } catch (error) {
+          await restoreAppConfigSnapshot(appConfigSnapshot)
+          await restorePackageJsonSnapshot(context.projectRoot, packageJsonSnapshot)
+          await restoreDirectorySnapshot(holoDirectorySnapshot)
+          if (updatedDependencies && dependencyInstallSucceeded) {
+            await runProjectDependencyInstallForProject(context, projectExecutors, context.projectRoot).catch(() => undefined)
+          }
+          await cleanupDirectorySnapshot(holoDirectorySnapshot)
+
+          throw error
+        }
+
+        writeLine(context.stdout, `Installed Holo plugin: ${formatPluginLabel(loadedPlugin.definition)}`)
+        writeLine(context.stdout, `  - package: ${updatedPackageJson ? 'added' : 'already present'} ${packageName}`)
+        if (contributedDependencies.length > 0) {
+          writeLine(
+            context.stdout,
+            `  - dependencies: ${updatedContributedDependencies ? 'updated' : 'already present'} ${contributedDependencies.join(', ')}`,
+          )
+        }
+        writeLine(context.stdout, `  - activation: ${activated ? 'updated config/app.ts' : 'already active'}`)
+        if (activated) {
+          writeLine(context.stdout, '  - refreshed generated artifacts')
+        }
+
+        for (const line of formatPluginContributionLines(loadedPlugin.definition)) {
+          writeLine(context.stdout, `  - ${line}`)
+        }
+        await cleanupDirectorySnapshot(holoDirectorySnapshot)
+      },
+    },
+    {
+      name: 'plugin:list',
+      aliases: ['plugins:list'],
+      description: 'List active Holo plugins.',
+      usage: 'holo plugin:list',
+      source: 'internal',
+      async prepare() {
+        return { args: [], flags: {} }
+      },
+      async run() {
+        const plugins = await loadProjectPluginsModule()
+        const resolvedPlugins = await plugins.resolveProjectPlugins(context.projectRoot)
+
+        writeLine(context.stdout, 'Active Holo plugins:')
+        if (resolvedPlugins.length === 0) {
+          writeLine(context.stdout, '  (none)')
+          return
+        }
+
+        for (const resolvedPlugin of resolvedPlugins) {
+          if (resolvedPlugin.loaded) {
+            writeLine(context.stdout, `  - ${resolvedPlugin.packageName}: ${formatPluginLabel(resolvedPlugin.loaded.definition)}`)
+            continue
+          }
+
+          writeLine(context.stdout, `  - ${resolvedPlugin.packageName}: failed`)
+          if (resolvedPlugin.error) {
+            writeLine(context.stdout, `    ${resolvedPlugin.error}`)
+          }
+        }
+      },
+    },
+    {
+      name: 'plugin:remove',
+      aliases: ['plugins:remove'],
+      description: 'Deactivate a Holo plugin package.',
+      usage: 'holo plugin:remove <package> [--uninstall]',
+      source: 'internal',
+      async prepare(input) {
+        const packageName = await ensureRequiredArg(context, input, 0, 'Plugin package')
+        return {
+          args: [packageName],
+          flags: {
+            ...(resolveBooleanFlag(input.flags, 'uninstall') === true ? { uninstall: true } : {}),
+          },
+        }
+      },
+      async run(commandContext) {
+        const packageName = String(commandContext.args[0] ?? '')
+        const plugins = await loadProjectPluginsModule()
+        const deactivated = await plugins.deactivateProjectPlugin(context.projectRoot, packageName)
+        const uninstalled = commandContext.flags.uninstall === true
+          ? await removeProjectDependency(context.projectRoot, packageName)
+          : false
+
+        if (uninstalled) {
+          await runProjectDependencyInstallForProject(context, projectExecutors, context.projectRoot)
+        }
+
+        if (deactivated || uninstalled) {
+          const runProjectPrepare = await resolveProjectExecutor(projectExecutors, 'runProjectPrepare')
+          await runProjectPrepare(context.projectRoot, context)
+        }
+
+        writeLine(context.stdout, deactivated ? 'Removed Holo plugin activation.' : 'Holo plugin was not active.')
+        writeLine(context.stdout, `  - package: ${packageName}`)
+        if (commandContext.flags.uninstall === true) {
+          writeLine(context.stdout, `  - dependency: ${uninstalled ? 'removed from package.json' : 'not present in package.json'}`)
+        } else {
+          writeLine(context.stdout, '  - dependency: left installed')
+        }
+      },
+    },
+    {
+      name: 'plugin:info',
+      aliases: ['plugins:info'],
+      description: 'Show metadata for a Holo plugin package.',
+      usage: 'holo plugin:info <package>',
+      source: 'internal',
+      async prepare(input) {
+        const packageName = await ensureRequiredArg(context, input, 0, 'Plugin package')
+        return { args: [packageName], flags: {} }
+      },
+      async run(commandContext) {
+        const packageName = String(commandContext.args[0] ?? '')
+        const plugins = await loadProjectPluginsModule()
+        const loadedPlugin = await plugins.loadHoloPluginFromPackage(context.projectRoot, packageName)
+
+        writePluginDetails(context, loadedPlugin)
+      },
+    },
+    {
+      name: 'plugin:doctor',
+      aliases: ['plugins:doctor'],
+      description: 'Validate active Holo plugin packages.',
+      usage: 'holo plugin:doctor',
+      source: 'internal',
+      async prepare() {
+        return { args: [], flags: {} }
+      },
+      async run() {
+        const plugins = await loadProjectPluginsModule()
+        const resolvedPlugins = await plugins.resolveProjectPlugins(context.projectRoot)
+        const failedPlugins = resolvedPlugins.filter(resolvedPlugin => !resolvedPlugin.loaded)
+
+        if (resolvedPlugins.length === 0) {
+          writeLine(context.stdout, 'No active Holo plugins.')
+          return
+        }
+
+        for (const resolvedPlugin of resolvedPlugins) {
+          if (resolvedPlugin.loaded) {
+            writeLine(context.stdout, `Loaded ${resolvedPlugin.packageName}: ${formatPluginLabel(resolvedPlugin.loaded.definition)}`)
+            continue
+          }
+
+          writeLine(context.stdout, `Failed ${resolvedPlugin.packageName}: ${resolvedPlugin.error ?? 'Unknown plugin loading error.'}`)
+        }
+
+        if (failedPlugins.length > 0) {
+          throw new Error(`${failedPlugins.length} Holo ${failedPlugins.length === 1 ? 'plugin' : 'plugins'} failed validation.`)
+        }
       },
     },
     {
@@ -1980,6 +2370,9 @@ export async function runCli(argv: readonly string[], io: IoStreams): Promise<nu
     }
     const internalCommands = createInternalCommands(internalContext)
     const registry = [...internalCommands]
+    const requestedInternalCommand = requestedCommandName
+      ? findCommand(registry, requestedCommandName)
+      : undefined
     const canSkipAppDiscovery = requestedCommandName === 'config:cache'
       || requestedCommandName === 'config:clear'
       || requestedCommandName === 'key:generate'
@@ -2008,10 +2401,25 @@ export async function runCli(argv: readonly string[], io: IoStreams): Promise<nu
       || requestedCommandName === 'queue:restart'
       || requestedCommandName === 'queue:clear'
       || requestedCommandName === 'rate-limit:clear'
+      || requestedCommandName === 'plugin:add'
+      || requestedCommandName === 'plugins:add'
+      || requestedCommandName === 'plugin:list'
+      || requestedCommandName === 'plugins:list'
+      || requestedCommandName === 'plugin:remove'
+      || requestedCommandName === 'plugins:remove'
+      || requestedCommandName === 'plugin:info'
+      || requestedCommandName === 'plugins:info'
+      || requestedCommandName === 'plugin:doctor'
+      || requestedCommandName === 'plugins:doctor'
+      || (typeof requestedInternalCommand !== 'undefined' && requestedInternalCommand.name !== 'list')
 
     if (!canSkipAppDiscovery) {
       const initialProject = await loadProject()
-      const appCommands = (await (await loadProjectDiscoveryModule()).discoverAppCommands(projectRoot, initialProject.config))
+      const pluginCommands = await (await loadProjectPluginsModule()).loadProjectPluginCommands(projectRoot)
+      const appCommands = [
+        ...pluginCommands,
+        ...(await (await loadProjectDiscoveryModule()).discoverAppCommands(projectRoot, initialProject.config)),
+      ]
         .map(entry => createAppCommandDefinition(entry))
 
       for (const appCommand of appCommands) {

@@ -141,8 +141,10 @@ function resolveObjectUrl(options: ResolvedS3DriverOptions, key = ''): URL {
   return url
 }
 
-function sortQueryEntries(url: URL): Array<[string, string]> {
-  return Array.from(url.searchParams.entries()).sort(([leftKey, leftValue], [rightKey, rightValue]) => {
+function sortCanonicalQueryEntries(url: URL): Array<readonly [string, string]> {
+  return Array.from(url.searchParams.entries()).map(([key, value]) => {
+    return [encodeRfc3986(key), encodeRfc3986(value)] as const
+  }).sort(([leftKey, leftValue], [rightKey, rightValue]) => {
     if (leftKey === rightKey) {
       return leftValue.localeCompare(rightValue)
     }
@@ -193,8 +195,8 @@ function createSignedRequest(
     .map(([name, value]) => [name.toLowerCase(), normalizeHeaderValue(value)] as const)
     .sort(([leftName], [rightName]) => leftName.localeCompare(rightName))
 
-  const canonicalQueryString = sortQueryEntries(url)
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+  const canonicalQueryString = sortCanonicalQueryEntries(url)
+    .map(([key, value]) => `${key}=${value}`)
     .join('&')
   const signedHeaders = canonicalHeaders.map(([name]) => name).join(';')
   const canonicalRequest = [
@@ -363,8 +365,7 @@ export default function createS3Driver(input: S3DriverOptions) {
       return response ? response.arrayBuffer() : null
     },
     async setItem(key: string, value: unknown) {
-      const body = typeof value === 'string' ? value : JSON.stringify(value)
-      await s3Fetch(options, 'PUT', resolveObjectUrl(options, key), body)
+      await s3Fetch(options, 'PUT', resolveObjectUrl(options, key), JSON.stringify(value))
     },
     async setItemRaw(key: string, value: DriverValue) {
       await s3Fetch(options, 'PUT', resolveObjectUrl(options, key), value)

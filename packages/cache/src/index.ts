@@ -64,7 +64,12 @@ export {
   cacheRuntimeInternals,
   getCacheRuntime,
   getCacheRuntimeBindings,
+  loadCachePluginDrivers,
 } from './runtime'
+export {
+  loadCachePluginDriverContracts,
+  resetCachePluginDriverContracts,
+} from './plugins'
 
 import {
   defineCacheKey,
@@ -77,6 +82,7 @@ import {
   configureCacheRuntime as configureCacheRuntimeInternal,
   getCacheRuntime,
   getCacheRuntimeBindings,
+  loadCachePluginDrivers,
   resetCacheRuntime as resetCacheRuntimeInternal,
 } from './runtime'
 
@@ -97,6 +103,7 @@ const cache = Object.freeze({
   configureCacheRuntime,
   getCacheRuntime,
   getCacheRuntimeBindings,
+  loadCachePluginDrivers,
   resetCacheRuntime,
   ...cacheFacade,
 })

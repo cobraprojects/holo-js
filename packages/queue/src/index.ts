@@ -16,6 +16,7 @@ export type {
   NormalizedQueueConnectionConfig,
   NormalizedQueueDatabaseConnectionConfig,
   NormalizedQueueFailedStoreConfig,
+  NormalizedQueuePluginConnectionConfig,
   QueueSharedRedisConfig,
   QueueSharedRedisConnectionConfig,
   NormalizedQueueRedisConnectionConfig,
@@ -45,6 +46,7 @@ export type {
   QueueJsonValue,
   QueuePendingDispatch,
   QueuePayloadFor,
+  QueuePluginConnectionConfig,
   QueueRedisConnectionConfig,
   QueueRegisteredJob,
   QueueReleaseOptions,
@@ -107,7 +109,12 @@ export {
   resetQueueRuntime,
   shutdownQueueRuntime,
   useQueueConnection,
+  loadQueuePluginDrivers,
 } from './runtime'
+export {
+  loadQueuePluginDriverFactories,
+  resetQueuePluginDriverFactories,
+} from './plugins'
 export {
   flushFailedQueueJobs,
   forgetFailedQueueJob,

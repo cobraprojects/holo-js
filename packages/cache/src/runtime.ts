@@ -1,3 +1,4 @@
+import type { NormalizedCachePluginDriverConfig } from '@holo-js/config'
 import type { CacheRuntimeBindings } from './contracts'
 import { cacheDbInternals } from './db'
 import {
@@ -15,6 +16,10 @@ import {
   normalizeRuntimeConfig,
   resolveConfiguredDriver,
 } from './runtime-shared'
+import {
+  loadConfiguredCachePluginDriverContracts,
+  resetCachePluginDriverContracts,
+} from './plugins'
 
 export { getCacheRuntime, getCacheRuntimeBindings } from './runtime-shared'
 
@@ -47,6 +52,35 @@ export function resetCacheRuntime(): void {
   getCacheRuntimeState().bindings = undefined
   resetDefaultDependencyIndex()
   setGlobalDatabaseQueryCacheBridge(undefined)
+  resetCachePluginDriverContracts()
+}
+
+export async function loadCachePluginDrivers(projectRoot = process.cwd()): Promise<void> {
+  const bindings = getCacheRuntimeState().bindings
+  if (!bindings) {
+    return
+  }
+
+  const pluginDriverConfigs = Object.values(bindings.config.drivers)
+    .filter((driver): driver is NormalizedCachePluginDriverConfig => {
+      return driver.driver !== 'memory'
+        && driver.driver !== 'file'
+        && driver.driver !== 'redis'
+        && driver.driver !== 'database'
+    })
+
+  for (const driver of await loadConfiguredCachePluginDriverContracts(projectRoot, pluginDriverConfigs)) {
+    bindings.drivers.set(driver.name, driver)
+  }
+
+  if (pluginDriverConfigs.length > 0) {
+    return
+  }
+
+  const { loadCachePluginDriverContracts } = await import('./plugins')
+  for (const driver of await loadCachePluginDriverContracts(projectRoot)) {
+    bindings.drivers.set(driver.name, driver)
+  }
 }
 
 export const cacheRuntimeInternals = {

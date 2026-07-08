@@ -40,6 +40,8 @@ import type { LoadedProjectConfig, CommandFlagValue } from './types'
 import type { HoloRuntime } from '@holo-js/core'
 import type { QueueWorkerRunOptions } from '@holo-js/queue'
 
+type QueueMaintenanceConnection = Awaited<ReturnType<typeof loadConfigDirectory>>['queue']['connections'][string]
+
 export const QUEUE_LISTEN_SOURCE_EXTENSIONS = new Set([
   '.cjs',
   '.cts',
@@ -67,6 +69,8 @@ export const QUEUE_LISTEN_IGNORED_PATH_PREFIXES = [
   HOLO_RUNTIME_ROOT,
 ].map(toPosixSlashes)
 
+const BUILT_IN_QUEUE_DRIVER_NAMES = new Set(['database', 'redis', 'sync'])
+
 export async function loadQueueCliModule(projectRoot: string): Promise<QueueCliModule> {
   return await import(resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue')) as QueueCliModule
 }
@@ -81,6 +85,26 @@ export function isIgnoredQueueListenPath(filePath: string): boolean {
     .split('/')
     .filter(Boolean)
     .some(segment => QUEUE_LISTEN_IGNORED_DIRECTORY_NAMES.has(segment))
+}
+
+function resolveQueuePluginDriverLoader(
+  queueModule: QueueCliModule,
+  connectionName: string,
+  connection: QueueMaintenanceConnection | undefined,
+): ((projectRoot?: string) => Promise<void>) | undefined {
+  if (!connection || BUILT_IN_QUEUE_DRIVER_NAMES.has(connection.driver)) {
+    return undefined
+  }
+
+  const loadQueuePluginDrivers = queueModule.loadQueuePluginDrivers?.bind(queueModule)
+  if (loadQueuePluginDrivers) {
+    return loadQueuePluginDrivers
+  }
+
+  throw new Error(
+    `[Holo CLI] Queue connection "${connectionName}" uses plugin driver "${connection.driver}", `
+    + 'but the installed @holo-js/queue package does not support queue plugin drivers.',
+  )
 }
 
 export async function collectQueueWatchTree(
@@ -396,11 +420,21 @@ export async function initializeQueueMaintenanceEnvironment(
   const queueModule = await loadQueueCliModule(projectRoot)
   const resolvedConnectionName = connectionName?.trim() || loadedConfig.queue.default
   const connection = loadedConfig.queue.connections[resolvedConnectionName]
+  const loadQueuePluginDrivers = resolveQueuePluginDriverLoader(queueModule, resolvedConnectionName, connection)
+
   if (!connection || connection.driver !== 'database') {
     queueModule.configureQueueRuntime({
       config: loadedConfig.queue,
       redisConfig: loadedConfig.redis,
     })
+    if (loadQueuePluginDrivers) {
+      try {
+        await loadQueuePluginDrivers(projectRoot)
+      } catch (error) {
+        await queueModule.shutdownQueueRuntime().catch(() => {})
+        throw error
+      }
+    }
 
     return {
       async cleanup() {

@@ -2,6 +2,10 @@ import {
   holoCacheDefaults,
   normalizeCacheConfig,
   type HoloCacheConfig,
+  type NormalizedCacheDatabaseDriverConfig,
+  type NormalizedCacheFileDriverConfig,
+  type NormalizedCacheMemoryDriverConfig,
+  type NormalizedCacheRedisDriverConfig,
   type NormalizedHoloDatabaseConfig,
   type NormalizedHoloCacheConfig,
   type NormalizedHoloRedisConfig,
@@ -133,46 +137,56 @@ export function resolveConfiguredDriver(
 
   switch (driverConfig.driver) {
     case 'file': {
+      const fileConfig = driverConfig as NormalizedCacheFileDriverConfig
       return cacheResolvedDriver(facade, driverName, createFileCacheDriver({
-        name: driverConfig.name,
-        path: driverConfig.path,
-        prefix: driverConfig.prefix,
+        name: fileConfig.name,
+        path: fileConfig.path,
+        prefix: fileConfig.prefix,
       }))
     }
     case 'memory': {
+      const memoryConfig = driverConfig as NormalizedCacheMemoryDriverConfig
       return cacheResolvedDriver(facade, driverName, createMemoryCacheDriver({
-        name: driverConfig.name,
-        maxEntries: driverConfig.maxEntries,
+        name: memoryConfig.name,
+        maxEntries: memoryConfig.maxEntries,
       }))
     }
     case 'redis': {
+      const redisConfig = driverConfig as NormalizedCacheRedisDriverConfig
       const connection = cacheRedisInternals.resolveSharedRedisConnection(
         facade.redisConfig,
-        driverConfig.connection,
+        redisConfig.connection,
       )
       return cacheResolvedDriver(facade, driverName, createRedisCacheDriver({
-        name: driverConfig.name,
+        name: redisConfig.name,
         connectionName: connection.name,
-        prefix: driverConfig.prefix,
+        prefix: redisConfig.prefix,
         redis: connection,
       }))
     }
     case 'database': {
+      const databaseConfig = driverConfig as NormalizedCacheDatabaseDriverConfig
       const connection = cacheDbInternals.resolveSharedDatabaseConnection(
         facade.databaseConfig,
-        driverConfig.connection,
+        databaseConfig.connection,
       )
       return cacheResolvedDriver(facade, driverName, createDatabaseCacheDriver({
-        name: driverConfig.name,
-        connectionName: driverConfig.connection,
-        table: driverConfig.table,
-        lockTable: driverConfig.lockTable,
-        prefix: driverConfig.prefix,
+        name: databaseConfig.name,
+        connectionName: databaseConfig.connection,
+        table: databaseConfig.table,
+        lockTable: databaseConfig.lockTable,
+        prefix: databaseConfig.prefix,
         connection,
       }))
     }
     default:
-      /* v8 ignore next -- config normalization restricts the driver union before runtime resolution. */
+      if (typeof driverConfig.driver === 'string') {
+        const pluginDriver = facade.drivers.get(driverConfig.driver)
+        if (pluginDriver) {
+          return cacheResolvedDriver(facade, driverName, pluginDriver)
+        }
+      }
+
       throw new CacheDriverResolutionError(
         `[@holo-js/cache] Cache driver "${driverName}" uses unsupported driver "${String((driverConfig as { driver?: unknown }).driver)}" in this phase.`,
       )

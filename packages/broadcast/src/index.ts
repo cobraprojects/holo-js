@@ -149,6 +149,10 @@ export {
   resetBroadcastRuntime,
 } from './runtime'
 export {
+  loadBroadcastPluginDrivers,
+  resetBroadcastPluginDrivers,
+} from './plugins'
+export {
   broadcastRegistryInternals,
   getRegisteredBroadcastDriver,
   listRegisteredBroadcastDrivers,

@@ -4,6 +4,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   resolve: {
     alias: {
+      '@holo-js/config': resolve(__dirname, '../config/src/index.ts'),
       '@holo-js/queue-redis': resolve(__dirname, '../queue-redis/src/index.ts'),
     },
   },

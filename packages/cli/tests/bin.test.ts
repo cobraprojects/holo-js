@@ -61,11 +61,13 @@ async function writeCliRuntimeStubs(packageRoot: string): Promise<void> {
     '@holo-js/config',
     [
       'export function clearConfigCache() { return false }',
+      'export function configureEnvRuntime() {}',
       'export function resolveConfigCachePath(root) { return `${root}/.holo-js/config-cache.mjs` }',
       'export async function loadConfigDirectory() { return {} }',
       'export async function loadEnvironment() { return {} }',
       'export function normalizeAppConfig(config) { return config }',
       'export function normalizeDatabaseConfig(config) { return config }',
+      'export function resolveEnvPlaceholders(value) { return value }',
       'export const holoAppDefaults = Object.freeze({})',
       'export const holoDatabaseDefaults = Object.freeze({})',
       'export const holoStorageDefaults = Object.freeze({})',

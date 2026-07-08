@@ -76,6 +76,7 @@ type BrowserFormElement = {
 }
 
 const browserFormSubmitSymbol: unique symbol = Symbol('browserFormSubmit')
+const clientSubmitControlFlowErrors = new WeakSet<object>()
 
 type BrowserFormSubmitter<TData, TSuccess> = {
   readonly [browserFormSubmitSymbol]: (form: BrowserFormElement) => Promise<ClientSubmitResult<TData, TSuccess>>
@@ -96,6 +97,21 @@ export interface UseFormOptions<TData, TSuccess = unknown> {
   readonly submitter?: (
     context: ClientSubmitContext<TData>,
   ) => Promise<ClientSubmitResult<TData, TSuccess> | void> | ClientSubmitResult<TData, TSuccess> | void
+}
+
+export function markClientSubmitControlFlowError(error: unknown): unknown {
+  if (!error || (typeof error !== 'object' && typeof error !== 'function')) {
+    return error
+  }
+
+  clientSubmitControlFlowErrors.add(error)
+  return error
+}
+
+function isClientSubmitControlFlowError(error: unknown): boolean {
+  return !!error
+    && (typeof error === 'object' || typeof error === 'function')
+    && clientSubmitControlFlowErrors.has(error)
 }
 
 export interface FormFieldState<TValue> {
@@ -1011,6 +1027,10 @@ export function createFormClient<TSchema extends FormSchema, TSuccess = unknown>
           formData,
         })
       } catch (error) {
+        if (isClientSubmitControlFlowError(error)) {
+          throw error
+        }
+
         return applyServerState(
           validationExceptionToFailure<TData>(error, state.values)
             ?? createTransportFailure(state.values),

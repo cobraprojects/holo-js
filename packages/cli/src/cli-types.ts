@@ -107,6 +107,7 @@ export type QueueCliModule = {
     config: Awaited<ReturnType<typeof loadConfigDirectory>>['queue']
     redisConfig?: Awaited<ReturnType<typeof loadConfigDirectory>>['redis']
   } & Record<string, unknown>): void
+  loadQueuePluginDrivers?(projectRoot?: string): Promise<void>
   flushFailedQueueJobs(): Promise<number>
   forgetFailedQueueJob(identifier: string): Promise<boolean>
   getRegisteredQueueJob(name: string): { sourcePath?: string } | undefined

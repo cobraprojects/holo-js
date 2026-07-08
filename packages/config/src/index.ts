@@ -67,6 +67,17 @@ export {
   resolveConfigCachePath,
   writeConfigCache,
 } from './loader'
+export {
+  loadHoloPluginBootModules,
+  loadHoloPluginContributionModules,
+  loadHoloPluginDefinitions,
+  readActiveHoloPluginNames,
+  resolveHoloPluginModulePath,
+} from './plugins'
+export type {
+  HoloPluginRuntimeModule,
+  LoadedHoloPluginDefinition,
+} from './plugins'
 export type {
   BroadcastConnectionDriver,
   BroadcastConnectionOptionsConfig,
@@ -78,6 +89,7 @@ export type {
   CacheDriverConfig,
   CacheFileDriverConfig,
   CacheMemoryDriverConfig,
+  CachePluginDriverConfig,
   CacheRedisDriverConfig,
   ConfigFileName,
   DefineConfigValue,
@@ -90,6 +102,7 @@ export type {
   NormalizedCacheDriverConfig,
   NormalizedCacheFileDriverConfig,
   NormalizedCacheMemoryDriverConfig,
+  NormalizedCachePluginDriverConfig,
   NormalizedCacheRedisDriverConfig,
   NormalizedBroadcastConnectionOptionsConfig,
   NormalizedBroadcastWorkerConfig,
@@ -154,6 +167,10 @@ export type {
   AuthWorkosProviderConfig,
   HoloQueueConfig,
   HoloStorageConfig,
+  NormalizedQueueDatabaseConnectionConfig,
+  NormalizedQueuePluginConnectionConfig,
+  NormalizedQueueRedisConnectionConfig,
+  QueuePluginConnectionConfig,
   NormalizedHoloSessionConfig,
   NormalizedHoloSessionCookieConfig,
   NormalizedSessionStoreConfig,

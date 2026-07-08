@@ -111,6 +111,7 @@ import {
   runRateLimitClearCommand,
 } from '../src/security'
 import {
+  cacheCommandInternals,
   initializeCacheMaintenanceEnvironment,
   loadCacheCliModule,
   runCacheClearCommand,
@@ -159,7 +160,7 @@ import {
   runMakeSeeder,
 } from '../src/generators'
 import { ensureAbsent, fileExists } from '../src/fs-utils'
-import { hasProjectDependency } from '../src/package-json'
+import { hasProjectDependency, upsertProjectDependency } from '../src/package-json'
 import {
   getRegistryMigrationSlug,
   hasRegisteredCreateTableMigration,
@@ -179,14 +180,30 @@ import {
   loadRegisteredModels,
   loadRegisteredSeeders,
   loadProjectConfig,
+  loadHoloPluginFromPackage,
+  loadProjectPluginCommands,
+  loadProjectPluginFrameworkDescriptors,
   prepareProjectDiscovery,
   projectInternals,
   readTextFile,
+  readProjectPluginNames,
+  resolveProjectPlugins,
   stripFileExtension,
   upsertProjectRegistration,
   writeProjectConfig,
+  writeProjectPluginNames,
   writeTextFile,
 } from '../src/project'
+import {
+  frameworkDescriptorSupportsManagedBroadcastAuthRoute,
+  frameworkSupportsManagedBroadcastAuthRoute,
+  getFrameworkDescriptor,
+  getFrameworkDescriptorByIdFrom,
+  getFrameworkDescriptorsWith,
+  isSupportedFrameworkId,
+  type FrameworkDescriptor,
+} from '../src/project/frameworks'
+import { normalizeHoloPluginDefinition } from '../src/project/plugins'
 import { renderFrameworkAwareTsconfig, writeGeneratedProjectRegistry } from '../src/project/registry'
 import {
   ensureSuffix,
@@ -420,6 +437,7 @@ function ensureBuiltWorkspacePackagesSync(): BuiltWorkspacePackages {
   linkPackageDependencySync(configPackageRoot, '@holo-js/queue', queuePackageRoot)
   const configBuild = buildWorkspacePackageSync('@holo-js/config', join(configPackageRoot, 'dist'))
   expect(configBuild.status, configBuild.stderr || configBuild.stdout).toBe(0)
+  linkPackageDependencySync(queuePackageRoot, '@holo-js/config', configPackageRoot)
 
   writePackageWrapperSync(resolve(workspaceRoot, 'packages/validation'), validationPackageRoot)
   linkInstalledDependenciesForPackageSync({
@@ -1047,8 +1065,118 @@ import { defineDatabaseConfig } from '@holo-js/config'
 
 export default defineDatabaseConfig({})
 `)
-  await linkWorkspaceConfig(dir)
+  await linkWorkspaceDb(dir)
   return dir
+}
+
+async function writeFakeHoloPluginPackage(
+  projectRoot: string,
+  packageName = 'holo-plugin-demo',
+): Promise<string> {
+  const packageRoot = join(projectRoot, 'node_modules', ...packageName.split('/'))
+  await mkdir(packageRoot, { recursive: true })
+  await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
+    name: packageName,
+    version: '1.2.3',
+    type: 'module',
+    holo: {
+      plugin: './plugin.mjs',
+    },
+  }, null, 2))
+  await writeFile(join(packageRoot, 'plugin.mjs'), `
+export default {
+  id: 'demo',
+  name: 'Demo Plugin',
+  description: 'Adds demo support.',
+  contributes: {
+    dependencies: {
+      runtime: ['ably'],
+      holo: ['@holo-js/broadcast'],
+    },
+    config: {
+      files: ['config/demo.ts'],
+      env: ['DEMO_KEY'],
+    },
+    framework: {
+      id: 'demo-framework',
+      displayName: 'Demo Framework',
+      detectPackages: ['demo-framework'],
+      adapterPackage: '@holo-js/adapter-demo',
+      scaffold: {
+        dependencies: {
+          'demo-framework': '^1.0.0',
+          '@holo-js/adapter-demo': '^1.0.0',
+        },
+        devDependencies: {},
+        scripts: {},
+        lintScript: 'eslint . --fix',
+        typecheckScript: 'tsc -p tsconfig.json --noEmit',
+        defaultUrl: 'http://localhost:4000',
+        tsconfig: 'next',
+      },
+      runner: {
+        commandName: 'demo-framework',
+        buildArgs: ['build'],
+        start: ['start'],
+        startUsesFrameworkBinary: true,
+        preloadNextRuntime: false,
+        suppressSvelteKitOutput: false,
+        nextDevServerConflictHandling: false,
+      },
+      capabilities: {
+        managedBroadcastAuthRoute: false,
+      },
+    },
+    broadcast: {
+      drivers: {
+        ably: {
+          runtime: './broadcast.mjs',
+        },
+      },
+    },
+    runtime: {
+      boot: 'holo-plugin-demo/runtime',
+    },
+    cli: {
+      commands: './commands.mjs',
+    },
+    migrations: {
+      publish: 'holo-plugin-demo/migrations',
+    },
+  },
+}
+`)
+  await writeFile(join(packageRoot, 'commands.mjs'), `
+export default {
+  name: 'demo:sync',
+  description: 'Run demo plugin sync.',
+  async run(context) {
+    context.loadProject
+    context.flags
+    process.stdout.write('demo plugin synced')
+  },
+}
+`)
+  await writeFile(join(packageRoot, 'broadcast.mjs'), `
+export default {
+  async send(input, context) {
+    return {
+      connection: context.connection,
+      driver: context.driver,
+      queued: context.queued,
+      publishedChannels: input.channels,
+    }
+  },
+}
+`)
+  const ablyRoot = join(projectRoot, 'node_modules/ably')
+  await mkdir(ablyRoot, { recursive: true })
+  await writeFile(join(ablyRoot, 'package.json'), JSON.stringify({
+    name: 'ably',
+    version: '2.0.0',
+  }, null, 2))
+
+  return packageRoot
 }
 
 async function createTempDirectory(): Promise<string> {
@@ -1207,6 +1335,622 @@ export default {
     expect(executed.status).toBe(0)
     expect(executed.stdout).toContain('courses reindexed')
   }, 90000)
+
+  it('loads and activates Holo plugin packages from package manifests', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeFakeHoloPluginPackage(projectRoot)
+
+    const loadedPlugin = await loadHoloPluginFromPackage(projectRoot, 'holo-plugin-demo')
+    expect(loadedPlugin.definition).toMatchObject({
+      id: 'demo',
+      name: 'Demo Plugin',
+      description: 'Adds demo support.',
+    })
+    expect(loadedPlugin.definition.contributes?.dependencies?.runtime).toEqual(['ably'])
+    expect(loadedPlugin.definition.contributes?.broadcast?.drivers?.ably).toEqual({
+      runtime: './broadcast.mjs',
+    })
+
+    await expect(readProjectPluginNames(projectRoot)).resolves.toEqual([])
+    await expect(writeProjectPluginNames(projectRoot, ['holo-plugin-demo'])).resolves.toBe(true)
+    await expect(readProjectPluginNames(projectRoot)).resolves.toEqual(['holo-plugin-demo'])
+
+    const appConfig = await readFile(join(projectRoot, 'config/app.ts'), 'utf8')
+    expect(appConfig).toContain('plugins: [')
+    expect(appConfig).toContain('"holo-plugin-demo"')
+
+    const resolvedPlugins = await resolveProjectPlugins(projectRoot)
+    expect(resolvedPlugins).toHaveLength(1)
+    expect(resolvedPlugins[0]?.loaded?.definition.id).toBe('demo')
+
+    const pluginCommands = await loadProjectPluginCommands(projectRoot)
+    expect(pluginCommands).toHaveLength(1)
+    expect(pluginCommands[0]?.name).toBe('demo:sync')
+    expect(pluginCommands[0]?.aliases).toBeUndefined()
+    await expect(pluginCommands[0]?.load()).resolves.toMatchObject({
+      name: 'demo:sync',
+      description: 'Run demo plugin sync.',
+    })
+
+    const pluginFrameworks = await loadProjectPluginFrameworkDescriptors(projectRoot)
+    expect(pluginFrameworks[0]?.id).toBe('demo-framework')
+  }, 90000)
+
+  it('normalizes plugin command aliases before registering commands', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const packageRoot = await writeFakeHoloPluginPackage(projectRoot)
+    await writeFile(join(packageRoot, 'commands.mjs'), `
+export default {
+  name: 'demo:sync',
+  aliases: [' demo ', '', 'demo', 'demo'],
+  description: 'Run demo plugin sync.',
+  async run() {},
+}
+`)
+    await writeProjectPluginNames(projectRoot, ['holo-plugin-demo'])
+
+    const pluginCommands = await loadProjectPluginCommands(projectRoot)
+
+    expect(pluginCommands[0]?.aliases).toEqual(['demo'])
+  }, 90000)
+
+  it('replaces quoted plugin config keys without duplicating the property', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+import { defineAppConfig } from '@holo-js/config'
+
+export default defineAppConfig({
+  "plugins": [
+    "holo-plugin-old",
+  ],
+  paths: {},
+})
+`)
+
+    await expect(writeProjectPluginNames(projectRoot, ['holo-plugin-z', 'holo-plugin-a'])).resolves.toBe(true)
+
+    const appConfig = await readFile(join(projectRoot, 'config/app.ts'), 'utf8')
+    expect(appConfig.match(/plugins/g)).toHaveLength(1)
+    expect(appConfig.indexOf('"holo-plugin-z"')).toBeLessThan(appConfig.indexOf('"holo-plugin-a"'))
+    expect(appConfig).not.toContain('holo-plugin-old')
+  }, 90000)
+
+  it('refuses to rewrite non-literal plugin config without duplicating the property', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+import { defineAppConfig } from '@holo-js/config'
+
+const activePlugins = ['holo-plugin-old']
+
+export default defineAppConfig({
+  plugins: activePlugins,
+  paths: {},
+})
+`)
+
+    await expect(readProjectPluginNames(projectRoot)).resolves.toEqual(['holo-plugin-old'])
+    await expect(writeProjectPluginNames(projectRoot, ['holo-plugin-old', 'holo-plugin-demo']))
+      .rejects.toThrow('Unable to update')
+
+    const appConfig = await readFile(join(projectRoot, 'config/app.ts'), 'utf8')
+    expect(appConfig.match(/plugins/g)).toHaveLength(1)
+    expect(appConfig).not.toContain('holo-plugin-demo')
+  }, 90000)
+
+  it('runs plugin doctor without preloading broken plugin command modules', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const packageRoot = join(projectRoot, 'node_modules/holo-plugin-broken-command')
+    await mkdir(packageRoot, { recursive: true })
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
+      name: 'holo-plugin-broken-command',
+      type: 'module',
+      holo: {
+        plugin: './plugin.mjs',
+      },
+    }, null, 2))
+    await writeFile(join(packageRoot, 'plugin.mjs'), `
+export default {
+  id: 'broken-command',
+  contributes: {
+    cli: {
+      commands: './missing.mjs',
+    },
+  },
+}
+`)
+    await writeProjectPluginNames(projectRoot, ['holo-plugin-broken-command'])
+
+    const io = createIo(projectRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['plugin:doctor'], io.io))).resolves.toBe(0)
+
+    expect(io.read().stdout).toContain('Loaded holo-plugin-broken-command: broken-command')
+  }, 90000)
+
+  it('runs internal commands without preloading broken plugin command modules', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const packageRoot = join(projectRoot, 'node_modules/holo-plugin-broken-command')
+    await mkdir(packageRoot, { recursive: true })
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
+      name: 'holo-plugin-broken-command',
+      type: 'module',
+      holo: {
+        plugin: './plugin.mjs',
+      },
+    }, null, 2))
+    await writeFile(join(packageRoot, 'plugin.mjs'), `
+export default {
+  id: 'broken-command',
+  contributes: {
+    cli: {
+      commands: './missing.mjs',
+    },
+  },
+}
+`)
+    await writeProjectPluginNames(projectRoot, ['holo-plugin-broken-command'])
+    await ensureGeneratedSchemaPlaceholder(projectRoot, defaultProjectConfig())
+
+    const io = createIo(projectRoot)
+    await expect(import('../src/cli').then(module => module.runCli(['make:model', 'PluginSafe'], io.io))).resolves.toBe(0)
+    const model = await readFile(join(projectRoot, 'server/models/PluginSafe.ts'), 'utf8')
+    expect(model).toContain('defineModel(')
+  }, 90000)
+
+  it('installs, lists, inspects, and removes Holo plugins through internal commands', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeFakeHoloPluginPackage(projectRoot)
+
+    const commandIo = createIo(projectRoot)
+    const runProjectDependencyInstall = vi.fn(async () => undefined)
+    const runProjectPrepare = vi.fn(async () => undefined)
+    const commandContext = {
+      ...commandIo.io,
+      projectRoot,
+      registry: [],
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    }
+    const commands = createInternalCommands(
+      commandContext,
+      undefined,
+      {},
+      {
+        runProjectDependencyInstall,
+        runProjectPrepare,
+      },
+    )
+    const addCommand = commands.find(command => command.name === 'plugin:add')
+    const listCommand = commands.find(command => command.name === 'plugin:list')
+    const infoCommand = commands.find(command => command.name === 'plugin:info')
+    const doctorCommand = commands.find(command => command.name === 'plugin:doctor')
+    const removeCommand = commands.find(command => command.name === 'plugin:remove')
+
+    expect(addCommand).toBeDefined()
+    await expect(addCommand!.prepare?.({ args: ['holo-plugin-demo'], flags: {} }, commandContext))
+      .resolves.toEqual({ args: ['holo-plugin-demo'], flags: {} })
+    await expect(addCommand!.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: ['holo-plugin-demo'],
+      flags: {},
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    })).resolves.toBeUndefined()
+
+    expect(runProjectDependencyInstall).toHaveBeenCalledTimes(2)
+    expect(runProjectPrepare).toHaveBeenCalledOnce()
+    const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    expect(packageJson.dependencies?.['holo-plugin-demo']).toBe('^1.2.3')
+    expect(packageJson.dependencies?.ably).toBe('^2.0.0')
+    expect(packageJson.dependencies?.['@holo-js/broadcast']).toBe(`^${HOLO_PACKAGE_VERSION}`)
+    await expect(readProjectPluginNames(projectRoot)).resolves.toEqual(['holo-plugin-demo'])
+
+    expect(listCommand).toBeDefined()
+    await expect(listCommand!.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: [],
+      flags: {},
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    })).resolves.toBeUndefined()
+
+    expect(infoCommand).toBeDefined()
+    await expect(infoCommand!.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: ['holo-plugin-demo'],
+      flags: {},
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    })).resolves.toBeUndefined()
+
+    expect(doctorCommand).toBeDefined()
+    await expect(doctorCommand!.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: [],
+      flags: {},
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    })).resolves.toBeUndefined()
+
+    expect(removeCommand).toBeDefined()
+    await expect(removeCommand!.prepare?.({
+      args: ['holo-plugin-demo'],
+      flags: { uninstall: true },
+    }, commandContext)).resolves.toEqual({
+      args: ['holo-plugin-demo'],
+      flags: { uninstall: true },
+    })
+    await expect(removeCommand!.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: ['holo-plugin-demo'],
+      flags: { uninstall: true },
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    })).resolves.toBeUndefined()
+
+    expect(runProjectDependencyInstall).toHaveBeenCalledTimes(3)
+    expect(runProjectPrepare).toHaveBeenCalledTimes(2)
+    const removedPackageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    expect(removedPackageJson.dependencies?.['holo-plugin-demo']).toBeUndefined()
+    await expect(readProjectPluginNames(projectRoot)).resolves.toEqual([])
+
+    const output = commandIo.read().stdout
+    expect(output).toContain('Installed Holo plugin: Demo Plugin (demo)')
+    expect(output).toContain('Active Holo plugins:')
+    expect(output).toContain('Plugin: Demo Plugin (demo)')
+    expect(output).toContain('Loaded holo-plugin-demo: Demo Plugin (demo)')
+    expect(output).toContain('Removed Holo plugin activation.')
+  }, 90000)
+
+  it('rolls back the package dependency when plugin:add cannot load the plugin manifest', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const packageRoot = join(projectRoot, 'node_modules/holo-plugin-invalid')
+    await mkdir(packageRoot, { recursive: true })
+    await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
+      name: 'holo-plugin-invalid',
+      type: 'module',
+    }, null, 2))
+
+    const commandIo = createIo(projectRoot)
+    const runProjectDependencyInstall = vi.fn(async () => undefined)
+    const runProjectPrepare = vi.fn(async () => undefined)
+    const commandContext = {
+      ...commandIo.io,
+      projectRoot,
+      registry: [],
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    }
+    const addCommand = createInternalCommands(
+      commandContext,
+      undefined,
+      {},
+      {
+        runProjectDependencyInstall,
+        runProjectPrepare,
+      },
+    ).find(command => command.name === 'plugin:add')
+
+    await expect(addCommand!.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: ['holo-plugin-invalid'],
+      flags: {},
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    })).rejects.toThrow('does not declare holo.plugin')
+
+    expect(runProjectDependencyInstall).toHaveBeenCalledTimes(2)
+    expect(runProjectPrepare).not.toHaveBeenCalled()
+    const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    expect(packageJson.dependencies?.['holo-plugin-invalid']).toBeUndefined()
+    await expect(readProjectPluginNames(projectRoot)).resolves.toEqual([])
+  }, 90000)
+
+  it('rolls back plugin:add files when dependency installation fails', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const packageJsonSnapshot = await readFile(join(projectRoot, 'package.json'), 'utf8')
+    const appConfigSnapshot = await readFile(join(projectRoot, 'config/app.ts'), 'utf8')
+
+    const commandIo = createIo(projectRoot)
+    const runProjectDependencyInstall = vi.fn(async () => {
+      throw new Error('install failed')
+    })
+    const runProjectPrepare = vi.fn(async () => undefined)
+    const commandContext = {
+      ...commandIo.io,
+      projectRoot,
+      registry: [],
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    }
+    const addCommand = createInternalCommands(
+      commandContext,
+      undefined,
+      {},
+      {
+        runProjectDependencyInstall,
+        runProjectPrepare,
+      },
+    ).find(command => command.name === 'plugin:add')
+
+    await expect(addCommand!.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: ['holo-plugin-install-failure'],
+      flags: {},
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    })).rejects.toThrow('install failed')
+
+    expect(runProjectDependencyInstall).toHaveBeenCalledTimes(1)
+    expect(runProjectPrepare).not.toHaveBeenCalled()
+    await expect(readFile(join(projectRoot, 'package.json'), 'utf8')).resolves.toBe(packageJsonSnapshot)
+    await expect(readFile(join(projectRoot, 'config/app.ts'), 'utf8')).resolves.toBe(appConfigSnapshot)
+    await expect(readProjectPluginNames(projectRoot)).resolves.toEqual([])
+  }, 90000)
+
+  it('rolls back plugin:add dependencies when plugin activation cannot be written', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeFakeHoloPluginPackage(projectRoot)
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+import { defineAppConfig } from '@holo-js/config'
+
+const activePlugins = []
+
+export default defineAppConfig({
+  plugins: activePlugins,
+})
+`)
+
+    const commandIo = createIo(projectRoot)
+    const runProjectDependencyInstall = vi.fn(async () => undefined)
+    const runProjectPrepare = vi.fn(async () => undefined)
+    const commandContext = {
+      ...commandIo.io,
+      projectRoot,
+      registry: [],
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    }
+    const addCommand = createInternalCommands(
+      commandContext,
+      undefined,
+      {},
+      {
+        runProjectDependencyInstall,
+        runProjectPrepare,
+      },
+    ).find(command => command.name === 'plugin:add')
+
+    await expect(addCommand!.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: ['holo-plugin-demo'],
+      flags: {},
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    })).rejects.toThrow('Unable to update')
+
+    const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    expect(packageJson.dependencies?.['holo-plugin-demo']).toBeUndefined()
+    expect(packageJson.dependencies?.ably).toBeUndefined()
+    expect(packageJson.dependencies?.['@holo-js/broadcast']).toBeUndefined()
+    await expect(readProjectPluginNames(projectRoot)).resolves.toEqual([])
+    expect(runProjectPrepare).not.toHaveBeenCalled()
+  }, 90000)
+
+  it('restores app config and package dependencies when plugin:add prepare fails', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeFakeHoloPluginPackage(projectRoot)
+    const packageJsonSnapshot = await readFile(join(projectRoot, 'package.json'), 'utf8')
+    const appConfigSnapshot = await readFile(join(projectRoot, 'config/app.ts'), 'utf8')
+    const staleArtifactPath = join(projectRoot, '.holo-js/generated/plugin-artifact.txt')
+
+    const commandIo = createIo(projectRoot)
+    const runProjectDependencyInstall = vi.fn(async () => undefined)
+    const runProjectPrepare = vi.fn(async () => {
+      await writeProjectFile(projectRoot, '.holo-js/generated/plugin-artifact.txt', 'stale plugin artifact')
+      throw new Error('prepare failed')
+    })
+    const commandContext = {
+      ...commandIo.io,
+      projectRoot,
+      registry: [],
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    }
+    const addCommand = createInternalCommands(
+      commandContext,
+      undefined,
+      {},
+      {
+        runProjectDependencyInstall,
+        runProjectPrepare,
+      },
+    ).find(command => command.name === 'plugin:add')
+
+    await expect(addCommand!.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: ['holo-plugin-demo'],
+      flags: {},
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    })).rejects.toThrow('prepare failed')
+
+    expect(runProjectDependencyInstall).toHaveBeenCalledTimes(3)
+    expect(runProjectPrepare).toHaveBeenCalledTimes(1)
+    await expect(readFile(join(projectRoot, 'package.json'), 'utf8')).resolves.toBe(packageJsonSnapshot)
+    await expect(readFile(join(projectRoot, 'config/app.ts'), 'utf8')).resolves.toBe(appConfigSnapshot)
+    await expect(readFile(staleArtifactPath, 'utf8')).rejects.toThrow()
+    await expect(readProjectPluginNames(projectRoot)).resolves.toEqual([])
+  }, 90000)
+
+  it('restores existing dependency sections when plugin:add activation fails', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeFakeHoloPluginPackage(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'plugin-existing-dependency-rollback-fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/core': expectedHoloPackageRange,
+      },
+      devDependencies: {
+        '@holo-js/broadcast': '^0.1.0',
+        ably: '^1.0.0',
+        'holo-plugin-demo': '^0.1.0',
+      },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+import { defineAppConfig } from '@holo-js/config'
+
+const activePlugins = []
+
+export default defineAppConfig({
+  plugins: activePlugins,
+})
+`)
+
+    const originalPackageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))
+    const commandIo = createIo(projectRoot)
+    const runProjectDependencyInstall = vi.fn(async () => undefined)
+    const runProjectPrepare = vi.fn(async () => undefined)
+    const commandContext = {
+      ...commandIo.io,
+      projectRoot,
+      registry: [],
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    }
+    const addCommand = createInternalCommands(
+      commandContext,
+      undefined,
+      {},
+      {
+        runProjectDependencyInstall,
+        runProjectPrepare,
+      },
+    ).find(command => command.name === 'plugin:add')
+
+    await expect(addCommand!.run({
+      projectRoot,
+      cwd: projectRoot,
+      args: ['holo-plugin-demo'],
+      flags: {},
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    })).rejects.toThrow('Unable to update')
+
+    const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))
+    expect(packageJson).toEqual(originalPackageJson)
+    await expect(readProjectPluginNames(projectRoot)).resolves.toEqual([])
+    expect(runProjectPrepare).not.toHaveBeenCalled()
+  }, 90000)
+
+  it('preserves existing concrete dependency versions when re-adding dependencies', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-cli-dependency-version-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'dependency-version-fixture',
+        private: true,
+        dependencies: {
+          vite: '^7.2.0',
+        },
+      }, null, 2))
+
+      await expect(upsertProjectDependency(projectRoot, 'vite')).resolves.toBe(false)
+      const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+        dependencies?: Record<string, string>
+      }
+      expect(packageJson.dependencies?.vite).toBe('^7.2.0')
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('writes installed third-party dependency versions instead of latest', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-cli-installed-dependency-version-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'installed-dependency-version-fixture',
+        private: true,
+        dependencies: {},
+      }, null, 2))
+      await mkdir(join(projectRoot, 'node_modules/vite'), { recursive: true })
+      await writeFile(join(projectRoot, 'node_modules/vite/package.json'), JSON.stringify({
+        name: 'vite',
+        version: '7.2.0',
+      }, null, 2))
+
+      await expect(upsertProjectDependency(projectRoot, 'vite')).resolves.toBe(true)
+      const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+        dependencies?: Record<string, string>
+      }
+      expect(packageJson.dependencies?.vite).toBe('^7.2.0')
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects uppercase dependency package names before rewriting package.json', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-cli-invalid-dependency-name-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'invalid-dependency-name-fixture',
+        private: true,
+        dependencies: {},
+      }, null, 2))
+
+      await expect(upsertProjectDependency(projectRoot, 'MyPlugin')).rejects.toThrow('Invalid dependency package name')
+      await expect(upsertProjectDependency(projectRoot, '@Scope/Pkg')).rejects.toThrow('Invalid dependency package name')
+      const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+        dependencies?: Record<string, string>
+      }
+      expect(packageJson.dependencies).toEqual({})
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('prioritizes plugin framework descriptors and rejects malformed framework contributions', () => {
+    const customNextDescriptor: FrameworkDescriptor = {
+      ...getFrameworkDescriptor('next'),
+      displayName: 'Custom Next',
+    }
+    const descriptors = getFrameworkDescriptorsWith([customNextDescriptor])
+
+    expect(getFrameworkDescriptorByIdFrom('next', descriptors)?.displayName).toBe('Custom Next')
+    expect(normalizeHoloPluginDefinition({
+      id: 'broken-framework-plugin',
+      contributes: {
+        framework: {
+          id: 'broken-framework',
+        },
+      },
+    }).contributes?.framework).toBeUndefined()
+  })
+
+  it('only advertises managed broadcast auth routes for frameworks with generated routes', () => {
+    expect(frameworkSupportsManagedBroadcastAuthRoute('next')).toBe(true)
+    expect(frameworkSupportsManagedBroadcastAuthRoute('nuxt')).toBe(false)
+    expect(frameworkSupportsManagedBroadcastAuthRoute('sveltekit')).toBe(false)
+    expect(frameworkDescriptorSupportsManagedBroadcastAuthRoute(getFrameworkDescriptor('next'))).toBe(true)
+    expect(frameworkDescriptorSupportsManagedBroadcastAuthRoute(undefined)).toBe(false)
+    expect(isSupportedFrameworkId('next')).toBe(true)
+    expect(isSupportedFrameworkId('demo-framework')).toBe(false)
+  })
 
   it('fails fast when a required argument is missing in non-interactive mode', async () => {
     const projectRoot = await createTempProject()
@@ -4850,6 +5594,34 @@ export default defineDatabaseConfig({
     })
     expect(JSON.parse(await readFile(join(staleQueuePackagesRoot, 'package.json'), 'utf8')).dependencies['@holo-js/queue-db']).toBeUndefined()
     expect(JSON.parse(await readFile(join(staleQueuePackagesRoot, 'package.json'), 'utf8')).dependencies['@holo-js/queue-redis']).toBeUndefined()
+
+    const pluginFrameworkSyncRoot = await createTempProject()
+    tempDirs.push(pluginFrameworkSyncRoot)
+    await writeFakeHoloPluginPackage(pluginFrameworkSyncRoot)
+    await writeProjectFile(pluginFrameworkSyncRoot, 'package.json', JSON.stringify({
+      name: 'plugin-framework-sync-fixture',
+      private: true,
+      dependencies: {
+        'demo-framework': '^1.0.0',
+      },
+    }, null, 2))
+    await writeProjectPluginNames(pluginFrameworkSyncRoot, ['holo-plugin-demo'])
+    await writeProjectFile(pluginFrameworkSyncRoot, 'config/broadcast.ts', `
+import { defineBroadcastConfig } from '@holo-js/config'
+
+export default defineBroadcastConfig({})
+`)
+
+    await expect(projectInternals.syncManagedDriverDependencies(pluginFrameworkSyncRoot)).resolves.toBe(true)
+    const pluginFrameworkPackageJson = JSON.parse(await readFile(join(pluginFrameworkSyncRoot, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    expect(pluginFrameworkPackageJson.dependencies).toMatchObject({
+      '@holo-js/broadcast': expectedHoloPackageRange,
+      '@holo-js/flux': expectedHoloPackageRange,
+      '@holo-js/adapter-demo': expectedHoloPackageRange,
+    })
+    expect(pluginFrameworkPackageJson.dependencies?.['@holo-js/adapter-next']).toBeUndefined()
   }, 180000)
 
   it('prepares selectable install prompts in-process', async () => {
@@ -5285,7 +6057,7 @@ export default defineDatabaseConfig({
       },
     })
     expect(JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')).dependencies['@holo-js/auth']).toBeUndefined()
-  }, 30000)
+  }, 60000)
 
   it('skips builtin auth social packages when provider runtimes are explicit and no-ops cache dependency sync without cache config files', async () => {
     const authRuntimeRoot = await createTempProject()
@@ -5561,7 +6333,7 @@ export default defineCacheConfig({
       vi.doUnmock('@holo-js/config')
       vi.resetModules()
     }
-  }, 30000)
+  }, 60000)
 
   it('resolves new project input defaults, flags, and storage package defaults', async () => {
     const baseRoot = await createTempDirectory()
@@ -5677,7 +6449,7 @@ export default defineCacheConfig({
     expect(await readFile(join(projectRoot, '.env'), 'utf8')).toContain('MAIL_MAILER=preview')
     expect(await readFile(join(projectRoot, '.env.example'), 'utf8')).toContain('MAIL_MAILER=')
     expect(await readFile(join(projectRoot, 'package.json'), 'utf8')).toContain(`"@holo-js/mail": "${expectedHoloPackageRange}"`)
-  }, 30000)
+  }, 60000)
 
   it('installs security support through the CLI', async () => {
     const projectRoot = await createTempProject()
@@ -5764,7 +6536,7 @@ export const limit = Object.freeze({
     })
     expect(cached.status, cached.stderr || cached.stdout).toBe(0)
     expect(cached.stdout).toContain('Config cached:')
-  }, 30000)
+  }, 60000)
 
   it('runs prepare after installing dependencies for first-party support', async () => {
     const projectRoot = await createTempDirectory()
@@ -6096,6 +6868,111 @@ module.exports = {
     await expect(readFile(join(cjsRoot, 'config/broadcast.cjs'), 'utf8')).resolves.not.toContain("env<'http' | 'https'>(")
     await expect(stat(join(cjsRoot, 'config/broadcast.ts'))).rejects.toThrow()
   }, 30000)
+
+  it('installs broadcast dependencies for active plugin framework descriptors', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeFakeHoloPluginPackage(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'plugin-framework-broadcast-fixture',
+      private: true,
+      dependencies: {
+        'demo-framework': '^1.0.0',
+      },
+    }, null, 2))
+    await writeProjectPluginNames(projectRoot, ['holo-plugin-demo'])
+
+    const result = await projectInternals.installBroadcastIntoProject(projectRoot)
+    const packageJson = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+
+    expect(result.updatedPackageJson).toBe(true)
+    expect(packageJson.dependencies?.['@holo-js/broadcast']).toBe(`^${HOLO_PACKAGE_VERSION}`)
+    expect(packageJson.dependencies?.['@holo-js/flux']).toBe(`^${HOLO_PACKAGE_VERSION}`)
+    expect(packageJson.dependencies?.['@holo-js/adapter-demo']).toBe(`^${HOLO_PACKAGE_VERSION}`)
+    expect(packageJson.dependencies?.['@holo-js/adapter-next']).toBeUndefined()
+    expect(packageJson.dependencies?.['@holo-js/adapter-nuxt']).toBeUndefined()
+    expect(packageJson.dependencies?.['@holo-js/adapter-sveltekit']).toBeUndefined()
+  }, 90000)
+
+  it('uses active plugin framework capabilities when installing broadcast auth support', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'plugin-framework-broadcast-auth-fixture',
+      private: true,
+      dependencies: {
+        next: expectedNextPackageRange,
+      },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'config/auth.ts', 'export default {}\n')
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+import { defineAppConfig } from '@holo-js/config'
+
+export default defineAppConfig({
+  plugins: ['holo-plugin-next-broadcast-override'],
+})
+`)
+    const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-next-broadcast-override')
+    await mkdir(pluginRoot, { recursive: true })
+    await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+      name: 'holo-plugin-next-broadcast-override',
+      type: 'module',
+      holo: {
+        plugin: './plugin.mjs',
+      },
+    }, null, 2))
+    await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'next-broadcast-override',
+  contributes: {
+    framework: {
+      id: 'next',
+      displayName: 'Next Broadcast Override',
+      detectPackages: ['next'],
+      adapterPackage: '@holo-js/adapter-next',
+      fluxPackage: '@holo-js/flux-react',
+      scaffold: {
+        dependencies: {
+          next: '^15.0.0',
+          react: '^19.0.0',
+          'react-dom': '^19.0.0',
+          '@holo-js/adapter-next': '^1.0.0',
+        },
+        devDependencies: {
+          '@types/react': '^19.0.0',
+          '@types/react-dom': '^19.0.0',
+        },
+        scripts: {},
+        lintScript: 'eslint app config server tests --fix',
+        typecheckScript: 'tsc -p tsconfig.json --noEmit',
+        defaultUrl: 'http://localhost:3000',
+        tsconfig: 'next',
+      },
+      runner: {
+        commandName: 'next',
+        buildArgs: ['build'],
+        start: ['start'],
+        startUsesFrameworkBinary: true,
+        preloadNextRuntime: true,
+        suppressSvelteKitOutput: false,
+        nextDevServerConflictHandling: true,
+      },
+      capabilities: {
+        managedBroadcastAuthRoute: false,
+      },
+    },
+  },
+}
+`)
+
+    const result = await projectInternals.installBroadcastIntoProject(projectRoot)
+
+    expect(result.createdBroadcastAuthRoute).toBe(false)
+    await expect(readFile(join(projectRoot, 'config/broadcast.ts'), 'utf8')).resolves.not.toContain('authEndpoint')
+    await expect(stat(join(projectRoot, 'app/broadcasting/auth/route.ts'))).rejects.toThrow()
+  }, 90000)
 
   it('installs broadcast auth routes for supported frameworks via project internals', async () => {
     const nextRoot = await createTempProject()
@@ -10436,6 +11313,236 @@ export default defineDatabaseConfig({})
     expect(await readFile(join(projectRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain('const commandName = "next"')
   }, 60_000)
 
+  it('falls back to package dependencies when framework metadata is stale during prepare', async () => {
+    const projectRoot = await createTempDirectory()
+    tempDirs.push(projectRoot)
+    await linkWorkspaceDb(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'fixture',
+      private: true,
+      dependencies: {
+        '@holo-js/core': '^0.2.2',
+        '@holo-js/db': '^0.2.2',
+        next: '^16.0.0',
+      },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+import { defineAppConfig } from '@holo-js/config'
+
+export default defineAppConfig({})
+`)
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/config'
+
+export default defineDatabaseConfig({})
+`)
+    await writeProjectFile(projectRoot, '.holo-js/framework/project.json', JSON.stringify({
+      framework: 'removed-framework',
+    }, null, 2))
+    await writeProjectFile(projectRoot, '.holo-js/framework/run.mjs', 'export const stale = true\n')
+
+    await runProjectPrepare(projectRoot, undefined, { syncFramework: false })
+
+    expect(await readFile(join(projectRoot, '.holo-js/framework/project.json'), 'utf8')).toContain('"framework": "next"')
+    expect(await readFile(join(projectRoot, '.holo-js/framework/run.mjs'), 'utf8')).toContain('const commandName = "next"')
+  }, 60_000)
+
+  it('runs sync commands contributed by plugin framework descriptors during prepare', async () => {
+    const projectRoot = await createTempDirectory()
+    tempDirs.push(projectRoot)
+    await linkWorkspaceDb(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'plugin-framework-sync-fixture',
+      private: true,
+      packageManager: 'npm@10.0.0',
+      dependencies: {
+        '@holo-js/core': '^0.2.2',
+        '@holo-js/db': '^0.2.2',
+        'demo-framework': '^1.0.0',
+      },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+import { defineAppConfig } from '@holo-js/config'
+
+export default defineAppConfig({
+  plugins: ['holo-plugin-demo-framework'],
+})
+`)
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/config'
+
+export default defineDatabaseConfig({})
+`)
+
+    const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-demo-framework')
+    await mkdir(pluginRoot, { recursive: true })
+    await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+      name: 'holo-plugin-demo-framework',
+      type: 'module',
+      holo: {
+        plugin: './plugin.mjs',
+      },
+    }, null, 2))
+    const syncCommand = [
+      'node',
+      '-e',
+      'require("node:fs").writeFileSync(".holo-js/plugin-framework-sync.txt", "synced\\n")',
+    ]
+    await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'demo-framework-plugin',
+  contributes: {
+    framework: {
+      id: 'demo-framework',
+      displayName: 'Demo Framework',
+      detectPackages: ['demo-framework'],
+      adapterPackage: '@holo-js/adapter-demo',
+      scaffold: {
+        dependencies: {
+          'demo-framework': '^1.0.0',
+          '@holo-js/adapter-demo': '^1.0.0',
+        },
+        devDependencies: {},
+        scripts: {},
+        lintScript: 'eslint . --fix',
+        typecheckScript: 'tsc -p tsconfig.json --noEmit',
+        defaultUrl: 'http://localhost:4000',
+        tsconfig: 'next',
+      },
+      runner: {
+        commandName: 'demo-framework',
+        buildArgs: ['build'],
+        start: ['start'],
+        startUsesFrameworkBinary: true,
+        preloadNextRuntime: false,
+        suppressSvelteKitOutput: false,
+        nextDevServerConflictHandling: false,
+      },
+      sync: {
+        commands: {
+          npm: ${JSON.stringify(syncCommand)},
+          pnpm: ${JSON.stringify(syncCommand)},
+          yarn: ${JSON.stringify(syncCommand)},
+          bun: ${JSON.stringify(syncCommand)},
+        },
+        errorLabel: 'demo framework sync',
+      },
+      capabilities: {
+        managedBroadcastAuthRoute: false,
+      },
+    },
+  },
+}
+`)
+
+    await runProjectPrepare(projectRoot, undefined)
+
+    await expect(readFile(join(projectRoot, '.holo-js/plugin-framework-sync.txt'), 'utf8')).resolves.toBe('synced\n')
+  }, 60_000)
+
+  it('uses plugin sync commands when plugin framework descriptors override built-in frameworks', async () => {
+    const projectRoot = await createTempDirectory()
+    tempDirs.push(projectRoot)
+    await linkWorkspaceDb(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'plugin-framework-override-sync-fixture',
+      private: true,
+      packageManager: 'npm@10.0.0',
+      dependencies: {
+        '@holo-js/core': '^0.2.2',
+        '@holo-js/db': '^0.2.2',
+        nuxt: '^3.0.0',
+      },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+import { defineAppConfig } from '@holo-js/config'
+
+export default defineAppConfig({
+  plugins: ['holo-plugin-nuxt-override'],
+})
+`)
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/config'
+
+export default defineDatabaseConfig({})
+`)
+    await mkdir(join(projectRoot, 'node_modules/.bin'), { recursive: true })
+    await writeFile(join(projectRoot, 'node_modules/.bin/nuxt'), `#!/usr/bin/env node
+require('node:fs').writeFileSync('.holo-js/builtin-nuxt-sync.txt', 'builtin\\n')
+`)
+    await chmod(join(projectRoot, 'node_modules/.bin/nuxt'), 0o755)
+
+    const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-nuxt-override')
+    await mkdir(pluginRoot, { recursive: true })
+    await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+      name: 'holo-plugin-nuxt-override',
+      type: 'module',
+      holo: {
+        plugin: './plugin.mjs',
+      },
+    }, null, 2))
+    const syncCommand = [
+      'node',
+      '-e',
+      'require("node:fs").writeFileSync(".holo-js/plugin-nuxt-sync.txt", "plugin\\n")',
+    ]
+    await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'nuxt-override-plugin',
+  contributes: {
+    framework: {
+      id: 'nuxt',
+      displayName: 'Nuxt Override',
+      detectPackages: ['nuxt'],
+      adapterPackage: '@holo-js/adapter-nuxt',
+      fluxPackage: '@holo-js/flux-vue',
+      scaffold: {
+        dependencies: {
+          nuxt: '^3.0.0',
+          vue: '^3.0.0',
+          'vue-router': '^4.0.0',
+          '@holo-js/adapter-nuxt': '^1.0.0',
+        },
+        devDependencies: {},
+        scripts: {},
+        lintScript: 'eslint . --fix',
+        typecheckScript: 'nuxt typecheck',
+        defaultUrl: 'http://localhost:3000',
+        tsconfig: 'nuxt',
+        vscodeVueHybridMode: true,
+      },
+      runner: {
+        commandName: 'nuxt',
+        buildArgs: ['build'],
+        start: ['.output/server/index.mjs'],
+        startUsesFrameworkBinary: false,
+        preloadNextRuntime: false,
+        suppressSvelteKitOutput: false,
+        nextDevServerConflictHandling: false,
+      },
+      sync: {
+        commands: {
+          npm: ${JSON.stringify(syncCommand)},
+          pnpm: ${JSON.stringify(syncCommand)},
+          yarn: ${JSON.stringify(syncCommand)},
+          bun: ${JSON.stringify(syncCommand)},
+        },
+        errorLabel: 'nuxt override sync',
+      },
+      capabilities: {
+        managedBroadcastAuthRoute: false,
+      },
+    },
+  },
+}
+`)
+
+    await runProjectPrepare(projectRoot, undefined)
+
+    await expect(readFile(join(projectRoot, '.holo-js/plugin-nuxt-sync.txt'), 'utf8')).resolves.toBe('plugin\n')
+    await expect(stat(join(projectRoot, '.holo-js/builtin-nuxt-sync.txt'))).rejects.toThrow()
+  }, 60_000)
+
   it('generates queue, broadcast, and authorization type artifacts during prepare', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
@@ -12977,15 +14084,12 @@ export default defineJob({
         })),
       }
     })
-    vi.doMock(queueModuleSpecifier, async () => {
-      const actual = await vi.importActual('@holo-js/queue') as typeof HoloQueueModule
-      return {
-        ...actual,
-        clearQueueConnection: vi.fn(async () => 2),
-        configureQueueRuntime: vi.fn(),
-        shutdownQueueRuntime: vi.fn(async () => {}),
-      }
-    })
+    vi.doMock(queueModuleSpecifier, () => ({
+      clearQueueConnection: vi.fn(async () => 2),
+      configureQueueRuntime: vi.fn(),
+      loadQueuePluginDrivers: undefined,
+      shutdownQueueRuntime: vi.fn(async () => {}),
+    }))
 
     try {
       const isolatedCliInternals = await import('../src/queue')
@@ -13006,7 +14110,7 @@ export default defineJob({
       vi.doUnmock(queueModuleSpecifier)
       vi.resetModules()
     }
-  }, 30000)
+  }, 60000)
 
   it('boots only the database queue connection for queue:clear when the selected queue driver is database', async () => {
     const projectRoot = await createTempProject()
@@ -13016,6 +14120,10 @@ export default defineJob({
     const queueDbModuleSpecifier = projectInternals.resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue-db')
     const initializeAll = vi.fn(async () => {})
     const disconnectAll = vi.fn(async () => {})
+    const clear = vi.fn(async () => 3)
+    const configureQueueRuntime = vi.fn()
+    const loadQueuePluginDrivers = vi.fn(async () => {})
+    const shutdownQueueRuntime = vi.fn(async () => {})
     const manager = {
       initializeAll,
       disconnectAll,
@@ -13063,15 +14171,12 @@ export default defineJob({
         resolveRuntimeConnectionManagerOptions: vi.fn(() => manager),
       }
     })
-    vi.doMock(queueModuleSpecifier, async () => {
-      const actual = await vi.importActual('@holo-js/queue') as typeof HoloQueueModule
-      return {
-        ...actual,
-        clearQueueConnection: vi.fn(async () => 3),
-        configureQueueRuntime: vi.fn(),
-        shutdownQueueRuntime: vi.fn(async () => {}),
-      }
-    })
+    vi.doMock(queueModuleSpecifier, () => ({
+      clearQueueConnection: vi.fn(async () => 3),
+      configureQueueRuntime,
+      loadQueuePluginDrivers,
+      shutdownQueueRuntime,
+    }))
     vi.doMock(queueDbModuleSpecifier, async () => ({
       createQueueDbRuntimeOptions: vi.fn(() => ({
         driverFactories: [],
@@ -13081,13 +14186,15 @@ export default defineJob({
 
     try {
       const isolatedCliInternals = await import('../src/queue')
-      await expect(isolatedCliInternals.runQueueClearCommand(io.io, projectRoot, 'database', undefined)).resolves.toBeUndefined()
+      await expect(isolatedCliInternals.runQueueClearCommand(io.io, projectRoot, 'database', undefined, {
+        clear,
+      })).resolves.toBeUndefined()
 
       const dbModule = await import('@holo-js/db') as typeof HoloDbModule
-      const queueModule = await import(queueModuleSpecifier)
       const queueDbModule = await import(queueDbModuleSpecifier) as typeof HoloQueueDbModule
 
       expect(vi.mocked(queueDbModule.createQueueDbRuntimeOptions)).toHaveBeenCalledTimes(1)
+      expect(loadQueuePluginDrivers).not.toHaveBeenCalled()
       expect(vi.mocked(dbModule.resolveRuntimeConnectionManagerOptions)).toHaveBeenCalledWith({
         db: {
           defaultConnection: 'primary',
@@ -13101,16 +14208,186 @@ export default defineJob({
       })
       expect(vi.mocked(dbModule.configureDB)).toHaveBeenCalledWith(manager)
       expect(initializeAll).toHaveBeenCalledTimes(1)
-      expect(vi.mocked(queueModule.clearQueueConnection)).toHaveBeenCalledWith('database', {})
-      expect(disconnectAll).toHaveBeenCalledTimes(1)
-      expect(vi.mocked(dbModule.resetDB)).toHaveBeenCalledTimes(1)
-      expect(vi.mocked(queueModule.shutdownQueueRuntime)).toHaveBeenCalledTimes(1)
+      expect(clear).toHaveBeenCalledWith('database', {})
+      expect(disconnectAll).toHaveBeenCalled()
+      expect(vi.mocked(dbModule.resetDB)).toHaveBeenCalled()
+      expect(shutdownQueueRuntime).toHaveBeenCalled()
       expect(io.read().stdout).toContain('Cleared 3 pending job(s).')
     } finally {
       vi.doUnmock('@holo-js/config')
       vi.doUnmock('@holo-js/db')
       vi.doUnmock(queueModuleSpecifier)
       vi.doUnmock(queueDbModuleSpecifier)
+      vi.resetModules()
+    }
+  }, 60000)
+
+  it('loads queue plugin drivers for non-database queue maintenance connections', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const queueModuleSpecifier = projectInternals.resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue')
+
+    vi.resetModules()
+    vi.doMock('@holo-js/config', async () => {
+      const actual = await vi.importActual('@holo-js/config') as typeof HoloConfigModule
+      return {
+        ...actual,
+        loadConfigDirectory: vi.fn(async () => ({
+          queue: {
+            default: 'plugin',
+            failed: false,
+            connections: {
+              plugin: {
+                name: 'plugin',
+                driver: 'plugin',
+                queue: 'default',
+              },
+            },
+          },
+          redis: {
+            default: 'default',
+            connections: {},
+          },
+        })),
+      }
+    })
+    vi.doMock(queueModuleSpecifier, () => ({
+      clearQueueConnection: vi.fn(async () => 2),
+      configureQueueRuntime: vi.fn(),
+      loadQueuePluginDrivers: vi.fn(async () => {}),
+      shutdownQueueRuntime: vi.fn(async () => {}),
+    }))
+
+    try {
+      const isolatedCliInternals = await import('../src/queue')
+      await expect(
+        isolatedCliInternals.runQueueClearCommand(io.io, projectRoot, 'plugin', undefined),
+      ).resolves.toBeUndefined()
+
+      const queueModule = await import(queueModuleSpecifier)
+      expect(vi.mocked(queueModule.loadQueuePluginDrivers)).toHaveBeenCalledWith(projectRoot)
+      expect(vi.mocked(queueModule.clearQueueConnection)).toHaveBeenCalledWith('plugin', {})
+      expect(io.read().stdout).toContain('Cleared 2 pending job(s).')
+    } finally {
+      vi.doUnmock('@holo-js/config')
+      vi.doUnmock(queueModuleSpecifier)
+      vi.resetModules()
+    }
+  }, 30000)
+
+  it('cleans up queue runtime state when plugin driver loading fails during queue:clear', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const queueModuleSpecifier = projectInternals.resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue')
+    const clearQueueConnection = vi.fn(async () => 2)
+    const configureQueueRuntime = vi.fn()
+    const loadQueuePluginDrivers = vi.fn(async () => {
+      throw new Error('plugin driver load failed')
+    })
+    const shutdownQueueRuntime = vi.fn(async () => {})
+
+    vi.resetModules()
+    vi.doMock('@holo-js/config', async () => {
+      const actual = await vi.importActual('@holo-js/config') as typeof HoloConfigModule
+      return {
+        ...actual,
+        loadConfigDirectory: vi.fn(async () => ({
+          queue: {
+            default: 'plugin',
+            failed: false,
+            connections: {
+              plugin: {
+                name: 'plugin',
+                driver: 'plugin',
+                queue: 'default',
+              },
+            },
+          },
+          redis: {
+            default: 'default',
+            connections: {},
+          },
+        })),
+      }
+    })
+    vi.doMock(queueModuleSpecifier, () => ({
+      clearQueueConnection,
+      configureQueueRuntime,
+      loadQueuePluginDrivers,
+      shutdownQueueRuntime,
+    }))
+
+    try {
+      const isolatedCliInternals = await import('../src/queue')
+      await expect(
+        isolatedCliInternals.runQueueClearCommand(io.io, projectRoot, 'plugin', undefined),
+      ).rejects.toThrow('plugin driver load failed')
+
+      expect(configureQueueRuntime).toHaveBeenCalledTimes(1)
+      expect(loadQueuePluginDrivers).toHaveBeenCalledWith(projectRoot)
+      expect(shutdownQueueRuntime).toHaveBeenCalledTimes(1)
+      expect(clearQueueConnection).not.toHaveBeenCalled()
+    } finally {
+      vi.doUnmock('@holo-js/config')
+      vi.doUnmock(queueModuleSpecifier)
+      vi.resetModules()
+    }
+  }, 60000)
+
+  it('reports outdated queue packages when plugin queue maintenance needs plugin drivers', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const queueModuleSpecifier = projectInternals.resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue')
+
+    vi.resetModules()
+    vi.doMock('@holo-js/config', async () => {
+      const actual = await vi.importActual('@holo-js/config') as typeof HoloConfigModule
+      return {
+        ...actual,
+        loadConfigDirectory: vi.fn(async () => ({
+          queue: {
+            default: 'plugin',
+            failed: false,
+            connections: {
+              plugin: {
+                name: 'plugin',
+                driver: 'plugin',
+                queue: 'default',
+              },
+            },
+          },
+          redis: {
+            default: 'default',
+            connections: {},
+          },
+        })),
+      }
+    })
+    vi.doMock(queueModuleSpecifier, () => ({
+      clearQueueConnection: vi.fn(async () => 2),
+      configureQueueRuntime: vi.fn(),
+      loadQueuePluginDrivers: undefined,
+      shutdownQueueRuntime: vi.fn(async () => {}),
+    }))
+
+    try {
+      const isolatedCliInternals = await import('../src/queue')
+      await expect(
+        isolatedCliInternals.runQueueClearCommand(io.io, projectRoot, 'plugin', undefined),
+      ).rejects.toThrow(
+        '[Holo CLI] Queue connection "plugin" uses plugin driver "plugin", but the installed @holo-js/queue package does not support queue plugin drivers.',
+      )
+
+      const queueModule = await import(queueModuleSpecifier)
+      expect(vi.mocked(queueModule.configureQueueRuntime)).not.toHaveBeenCalled()
+      expect(vi.mocked(queueModule.clearQueueConnection)).not.toHaveBeenCalled()
+      expect(vi.mocked(queueModule.shutdownQueueRuntime)).not.toHaveBeenCalled()
+    } finally {
+      vi.doUnmock('@holo-js/config')
+      vi.doUnmock(queueModuleSpecifier)
       vi.resetModules()
     }
   }, 30000)
@@ -13172,15 +14449,12 @@ export default defineJob({
         resolveRuntimeConnectionManagerOptions: vi.fn(() => manager),
       }
     })
-    vi.doMock(queueModuleSpecifier, async () => {
-      const actual = await vi.importActual('@holo-js/queue') as typeof HoloQueueModule
-      return {
-        ...actual,
-        clearQueueConnection: vi.fn(async () => 3),
-        configureQueueRuntime: vi.fn(),
-        shutdownQueueRuntime: vi.fn(async () => {}),
-      }
-    })
+    vi.doMock(queueModuleSpecifier, () => ({
+      clearQueueConnection: vi.fn(async () => 3),
+      configureQueueRuntime: vi.fn(),
+      loadQueuePluginDrivers: vi.fn(async () => {}),
+      shutdownQueueRuntime: vi.fn(async () => {}),
+    }))
     vi.doMock(queueDbModuleSpecifier, async () => ({
       createQueueDbRuntimeOptions: vi.fn(() => ({
         driverFactories: [],
@@ -13197,6 +14471,7 @@ export default defineJob({
       const dbModule = await import('@holo-js/db') as typeof HoloDbModule
       const queueModule = await import(queueModuleSpecifier)
       expect(vi.mocked(queueModule.clearQueueConnection)).not.toHaveBeenCalled()
+      expect(vi.mocked(queueModule.loadQueuePluginDrivers)).not.toHaveBeenCalled()
       expect(disconnectAll).toHaveBeenCalledTimes(1)
       expect(vi.mocked(dbModule.resetDB)).toHaveBeenCalledTimes(1)
       expect(vi.mocked(queueModule.shutdownQueueRuntime)).toHaveBeenCalledTimes(1)
@@ -13254,6 +14529,7 @@ export default defineJob({
     vi.doMock(cacheModuleSpecifier, async () => ({
       default: {
         configureCacheRuntime: vi.fn(),
+        loadCachePluginDrivers: vi.fn(async () => {}),
         resetCacheRuntime: vi.fn(),
         flush,
         forget,
@@ -13273,12 +14549,14 @@ export default defineJob({
       const cacheModule = await import(cacheModuleSpecifier) as {
         default: {
           configureCacheRuntime: ReturnType<typeof vi.fn>
+          loadCachePluginDrivers: ReturnType<typeof vi.fn>
           resetCacheRuntime: ReturnType<typeof vi.fn>
         }
       }
 
       expect(vi.mocked(configModule.loadConfigDirectory)).toHaveBeenCalledTimes(4)
       expect(vi.mocked(cacheModule.default.configureCacheRuntime)).toHaveBeenCalledTimes(4)
+      expect(vi.mocked(cacheModule.default.loadCachePluginDrivers)).not.toHaveBeenCalled()
       expect(flush).toHaveBeenCalledTimes(1)
       expect(forget).toHaveBeenCalledWith('present')
       expect(driver).toHaveBeenCalledWith('memory')
@@ -13333,6 +14611,7 @@ export default defineJob({
     vi.doMock(cacheModuleSpecifier, async () => ({
       default: undefined,
       configureCacheRuntime: vi.fn(),
+      loadCachePluginDrivers: vi.fn(async () => {}),
       resetCacheRuntime: vi.fn(),
       flush,
       forget: vi.fn(async () => true),
@@ -13342,7 +14621,236 @@ export default defineJob({
     try {
       const isolatedCliInternals = await import('../src/cache')
       await isolatedCliInternals.runCacheClearCommand(io.io, projectRoot)
+      const cacheModule = await import(cacheModuleSpecifier) as { loadCachePluginDrivers: ReturnType<typeof vi.fn> }
+      expect(vi.mocked(cacheModule.loadCachePluginDrivers)).not.toHaveBeenCalled()
       expect(flush).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.doUnmock('@holo-js/config')
+      vi.doUnmock(cacheModuleSpecifier)
+      vi.resetModules()
+    }
+  }, 30_000)
+
+  it('clears built-in file cache stores without a cache plugin driver loader', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const cacheModuleSpecifier = projectInternals.resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/cache')
+    const configureCacheRuntime = vi.fn()
+    const resetCacheRuntime = vi.fn()
+    const flush = vi.fn(async () => {})
+    const forget = vi.fn(async () => true)
+
+    vi.resetModules()
+    vi.doMock('@holo-js/config', async () => {
+      const actual = await vi.importActual('@holo-js/config') as typeof HoloConfigModule
+      return {
+        ...actual,
+        loadConfigDirectory: vi.fn(async () => ({
+          cache: {
+            default: 'file',
+            prefix: '',
+            drivers: {
+              file: {
+                name: 'file',
+                driver: 'file',
+                path: './storage/framework/cache/data',
+                prefix: '',
+              },
+            },
+          },
+          database: {
+            defaultConnection: 'default',
+            connections: {},
+          },
+          redis: {
+            default: 'default',
+            connections: {},
+          },
+        })),
+      }
+    })
+    vi.doMock(cacheModuleSpecifier, async () => ({
+      default: {
+        configureCacheRuntime,
+        resetCacheRuntime,
+        flush,
+        forget,
+        driver: vi.fn(),
+      },
+    }))
+
+    try {
+      const isolatedCliInternals = await import('../src/cache')
+
+      await isolatedCliInternals.runCacheClearCommand(io.io, projectRoot)
+      await isolatedCliInternals.runCacheForgetCommand(io.io, projectRoot, 'present')
+
+      expect(configureCacheRuntime).toHaveBeenCalledTimes(2)
+      expect(flush).toHaveBeenCalledTimes(1)
+      expect(forget).toHaveBeenCalledWith('present')
+      expect(resetCacheRuntime).toHaveBeenCalledTimes(2)
+      expect(io.read().stdout).toContain('Cleared the default cache store.')
+      expect(io.read().stdout).toContain('Forgot key "present".')
+    } finally {
+      vi.doUnmock('@holo-js/config')
+      vi.doUnmock(cacheModuleSpecifier)
+      vi.resetModules()
+    }
+  }, 30_000)
+
+  it('does not load unrelated plugin cache drivers when clearing a built-in cache store', async () => {
+    const loadCachePluginDrivers = vi.fn(async () => {})
+    const cache = {
+      configureCacheRuntime: vi.fn(),
+      loadCachePluginDrivers,
+      resetCacheRuntime: vi.fn(),
+      flush: vi.fn(async () => {}),
+      forget: vi.fn(async () => true),
+      driver: vi.fn(),
+    }
+    const drivers = {
+      memory: {
+        name: 'memory',
+        driver: 'memory',
+        prefix: '',
+      },
+      custom: {
+        name: 'custom',
+        driver: 'custom-cache',
+        prefix: '',
+      },
+    }
+    const cacheModule = {
+      ...cache,
+      default: cache,
+    }
+
+    expect(cacheCommandInternals.resolveCachePluginDriverLoader(
+      cacheModule,
+      cache,
+      drivers,
+      'memory',
+      'memory',
+    )).toBeUndefined()
+    expect(loadCachePluginDrivers).not.toHaveBeenCalled()
+  })
+
+  it('resets cache runtime when cache plugin driver loading fails', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const cacheModuleSpecifier = projectInternals.resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/cache')
+    const configureCacheRuntime = vi.fn()
+    const resetCacheRuntime = vi.fn()
+    const loadCachePluginDrivers = vi.fn(async () => {
+      throw new Error('plugin loader failed')
+    })
+    const flush = vi.fn(async () => {})
+
+    vi.resetModules()
+    vi.doMock('@holo-js/config', async () => {
+      const actual = await vi.importActual('@holo-js/config') as typeof HoloConfigModule
+      return {
+        ...actual,
+        loadConfigDirectory: vi.fn(async () => ({
+          cache: {
+            default: 'custom',
+            prefix: '',
+            drivers: {
+              custom: {
+                name: 'custom',
+                driver: 'custom-cache',
+              },
+            },
+          },
+          database: {
+            defaultConnection: 'default',
+            connections: {},
+          },
+          redis: {
+            default: 'default',
+            connections: {},
+          },
+        })),
+      }
+    })
+    vi.doMock(cacheModuleSpecifier, async () => ({
+      default: {
+        configureCacheRuntime,
+        loadCachePluginDrivers,
+        resetCacheRuntime,
+        flush,
+        forget: vi.fn(async () => true),
+        driver: vi.fn(),
+      },
+    }))
+
+    try {
+      const isolatedCliInternals = await import('../src/cache')
+
+      await expect(isolatedCliInternals.runCacheClearCommand(io.io, projectRoot)).rejects.toThrow('plugin loader failed')
+      expect(configureCacheRuntime).toHaveBeenCalledTimes(1)
+      expect(loadCachePluginDrivers).toHaveBeenCalledWith(projectRoot)
+      expect(resetCacheRuntime).toHaveBeenCalledTimes(1)
+      expect(flush).not.toHaveBeenCalled()
+    } finally {
+      vi.doUnmock('@holo-js/config')
+      vi.doUnmock(cacheModuleSpecifier)
+      vi.resetModules()
+    }
+  }, 30_000)
+
+  it('reports outdated cache packages when plugin cache maintenance needs plugin drivers', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+    const io = createIo(projectRoot)
+    const cacheModuleSpecifier = projectInternals.resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/cache')
+    const configureCacheRuntime = vi.fn()
+
+    vi.resetModules()
+    vi.doMock('@holo-js/config', async () => {
+      const actual = await vi.importActual('@holo-js/config') as typeof HoloConfigModule
+      return {
+        ...actual,
+        loadConfigDirectory: vi.fn(async () => ({
+          cache: {
+            default: 'custom',
+            prefix: '',
+            drivers: {
+              custom: {
+                name: 'custom',
+                driver: 'custom-cache',
+              },
+            },
+          },
+          database: {
+            defaultConnection: 'default',
+            connections: {},
+          },
+          redis: {
+            default: 'default',
+            connections: {},
+          },
+        })),
+      }
+    })
+    vi.doMock(cacheModuleSpecifier, async () => ({
+      default: {
+        configureCacheRuntime,
+        resetCacheRuntime: vi.fn(),
+        flush: vi.fn(async () => {}),
+        forget: vi.fn(async () => true),
+        driver: vi.fn(),
+      },
+    }))
+
+    try {
+      const isolatedCliInternals = await import('../src/cache')
+
+      await expect(isolatedCliInternals.runCacheClearCommand(io.io, projectRoot))
+        .rejects.toThrow('does not support cache plugin drivers')
+      expect(configureCacheRuntime).not.toHaveBeenCalled()
     } finally {
       vi.doUnmock('@holo-js/config')
       vi.doUnmock(cacheModuleSpecifier)
@@ -15205,6 +16713,7 @@ export default defineJob({
       (() => {
         throw new Error('watch exploded')
       }) as never,
+      async () => {},
     ))).rejects.toThrow('watch exploded')
 
     const errorChild = new EventEmitter() as EventEmitter & {
@@ -15222,6 +16731,7 @@ export default defineJob({
       {},
       (() => errorChild as never) as never,
       ((_path: string, _options: { recursive?: boolean }, _callback: (eventType: string, fileName: string | Buffer | null) => void) => ({ close: errorWatcherClose }) as unknown as FSWatcher) as never,
+      async () => {},
     ))
 
     while (errorChild.listenerCount('error') === 0) {
@@ -15247,6 +16757,7 @@ export default defineJob({
       {},
       (() => closeChild as never) as never,
       ((_path: string, _options: { recursive?: boolean }, _callback: (eventType: string, fileName: string | Buffer | null) => void) => ({ close: closeWatcher }) as unknown as FSWatcher) as never,
+      async () => {},
     ))
 
     while (closeChild.listenerCount('close') === 0) {
@@ -15506,6 +17017,7 @@ export default defineJob({
 
         return { close() {} } as unknown as FSWatcher
       }) as never,
+      async () => {},
     ))).rejects.toThrow('non-recursive watch exploded')
   })
 
@@ -15547,6 +17059,7 @@ export default {
 
         return { close() {}, on() {}, callback } as unknown as FSWatcher
       }) as never,
+      async () => {},
     ))
 
     while (child.listenerCount('close') === 0) {
@@ -15591,6 +17104,7 @@ export default {
 
         return { close() {}, on() {} } as unknown as FSWatcher
       }) as never,
+      async () => {},
     ))).rejects.toThrow('watch exploded')
   })
 

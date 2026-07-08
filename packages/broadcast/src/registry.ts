@@ -41,6 +41,10 @@ export function getRegisteredBroadcastDriver(name: string): BroadcastDriver | un
   return registeredDrivers.get(normalizeDriverName(name))
 }
 
+export function unregisterBroadcastDriver(name: string): boolean {
+  return registeredDrivers.delete(normalizeDriverName(name))
+}
+
 export function listRegisteredBroadcastDrivers(): readonly RegisteredBroadcastDriver[] {
   return Object.freeze(
     [...registeredDrivers.entries()].map(([name, driver]) => Object.freeze({ name, driver })),

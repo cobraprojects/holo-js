@@ -85,6 +85,10 @@ export {
   resetNotificationsRuntime,
   unreadNotifications,
 } from './runtime'
+export {
+  loadNotificationPluginChannels,
+  resetNotificationPluginChannels,
+} from './plugins'
 
 export function defineNotificationsConfig<const TConfig extends HoloNotificationsConfig>(config: TConfig) {
   return defineBaseNotificationsConfig(config)

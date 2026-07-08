@@ -8,8 +8,10 @@ import {
   type ExportedQueueJobDefinition,
   type NormalizedHoloQueueConfig,
   type QueueDriver,
+  type QueuePluginConnectionConfig,
   type QueueJobDefinition,
   type QueueJobEnvelope,
+  type NormalizedQueuePluginConnectionConfig,
   type QueuePendingDispatch,
   type QueueJsonValue,
   type QueueSharedRedisConfig,
@@ -78,6 +80,17 @@ describe('@holo-js/queue typing', () => {
         },
       },
     }, sharedRedisConfig)
+    const pluginConnection: QueuePluginConnectionConfig = {
+      driver: 'custom-driver',
+      queue: 'custom-jobs',
+    }
+    const normalizedPluginConnection: NormalizedQueuePluginConnectionConfig = {
+      name: 'custom',
+      driver: 'custom-driver',
+      queue: 'custom-jobs',
+      retryAfter: 90,
+      blockFor: 5,
+    }
     const envelope: QueueJobEnvelope<{ reportId: string }> = {
       id: 'job-1',
       name: 'reports.generate',
@@ -148,6 +161,8 @@ describe('@holo-js/queue typing', () => {
     void typedJob
     void normalized
     void normalizedWithSharedRedis
+    void pluginConnection
+    void normalizedPluginConnection
     void envelope
     void driver
     void expectDefinedJobPayloadTypes

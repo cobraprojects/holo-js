@@ -1,5 +1,5 @@
 import { resolve } from 'node:path'
-import { loadConfigDirectory } from '@holo-js/config'
+import { loadConfigDirectory, type NormalizedQueueDatabaseConnectionConfig } from '@holo-js/config'
 import { normalizeMigrationSlug } from '@holo-js/db'
 import {
   ensureProjectConfig,
@@ -24,6 +24,12 @@ export const DEFAULT_FAILED_JOBS_TABLE = 'failed_jobs'
 
 export async function loadQueueConfig(projectRoot: string) {
   return (await loadConfigDirectory(projectRoot)).queue
+}
+
+function isDatabaseQueueConnection(
+  connection: Awaited<ReturnType<typeof loadQueueConfig>>['connections'][string],
+): connection is NormalizedQueueDatabaseConnectionConfig {
+  return connection.driver === 'database'
 }
 
 export function normalizeQueueMigrationName(tableName: string): string {
@@ -98,7 +104,7 @@ export function renderFailedJobsTableMigration(tableName: string): string {
 
 export function resolveDatabaseQueueTables(queueConfig: Awaited<ReturnType<typeof loadQueueConfig>>): readonly string[] {
   const configured = Object.values(queueConfig.connections)
-    .filter(connection => connection.driver === 'database')
+    .filter(isDatabaseQueueConnection)
     .map(connection => connection.table)
 
   return Object.freeze(configured.length > 0 ? [...new Set(configured)] : [DEFAULT_DATABASE_QUEUE_TABLE])

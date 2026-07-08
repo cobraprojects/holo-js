@@ -1,5 +1,12 @@
 import { resolve } from 'node:path'
-import { loadConfigDirectory, type SupportedDatabaseDriver } from '@holo-js/config'
+import {
+  configureEnvRuntime,
+  loadConfigDirectory,
+  loadEnvironment,
+  resolveEnvPlaceholders,
+  type HoloQueueConfig,
+  type SupportedDatabaseDriver,
+} from '@holo-js/config'
 import {
   ESBUILD_PACKAGE_VERSION,
   HOLO_PACKAGE_VERSION,
@@ -13,10 +20,20 @@ import {
   type GeneratedProjectRegistry,
   type SupportedAuthSocialProvider,
   type SupportedCacheInstallerDriver,
+  type SupportedScaffoldFramework,
   type SupportedQueueInstallerDriver,
   pathExists,
 } from '../shared'
 import {
+  detectFrameworkDescriptorFromPackageJson,
+  getFrameworkBroadcastPackagesFromDescriptor,
+  getFrameworkDescriptorsWith,
+  getManagedFrameworkPackageNames,
+  type FrameworkDescriptor,
+} from '../frameworks'
+import { loadProjectPluginFrameworkDescriptors } from '../plugins'
+import {
+  importProjectModule,
   readTextFile,
   resolveFirstExistingPath,
   writeTextFile,
@@ -61,6 +78,69 @@ function resolveManagedHoloPackageVersion(
   ))?.[1]
 
   return workspaceVersion ?? `^${HOLO_PACKAGE_VERSION}`
+}
+
+function resolveQueueConfigModuleValue(moduleValue: unknown): HoloQueueConfig | undefined {
+  if (!moduleValue || typeof moduleValue !== 'object' || Array.isArray(moduleValue)) {
+    return undefined
+  }
+
+  const exports = moduleValue as { readonly default?: unknown, readonly queue?: unknown }
+  const value = typeof exports.default !== 'undefined'
+    ? exports.default
+    : exports.queue
+
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
+
+  return value as HoloQueueConfig
+}
+
+async function loadQueueConfigFile(
+  projectRoot: string,
+  queueConfigPath: string,
+): Promise<HoloQueueConfig | undefined> {
+  const environment = await loadEnvironment({
+    cwd: projectRoot,
+    processEnv: process.env,
+  })
+  const previousEnvEntries = new Map<string, string | undefined>()
+
+  try {
+    configureEnvRuntime(environment.values)
+    for (const [key, value] of Object.entries(environment.values)) {
+      previousEnvEntries.set(key, process.env[key])
+      process.env[key] = value
+    }
+
+    const rawQueueConfig = resolveQueueConfigModuleValue(await importProjectModule(projectRoot, queueConfigPath))
+    if (!rawQueueConfig) {
+      return undefined
+    }
+
+    return resolveEnvPlaceholders(rawQueueConfig, environment.values)
+  } finally {
+    configureEnvRuntime(undefined)
+    for (const [key, value] of previousEnvEntries) {
+      if (typeof value === 'string') {
+        process.env[key] = value
+        continue
+      }
+
+      Reflect.deleteProperty(process.env, key)
+    }
+  }
+}
+
+function queueConnectionUsesDriver(
+  connection: NonNullable<HoloQueueConfig['connections']>[string],
+  driver: 'database' | 'redis',
+): boolean {
+  return typeof connection === 'object'
+    && connection !== null
+    && !Array.isArray(connection)
+    && connection.driver === driver
 }
 
 export async function readPackageJsonDependencyState(projectRoot: string): Promise<{
@@ -356,16 +436,11 @@ export async function syncManagedDriverDependencies(
   if (broadcastConfigured || registryHasBroadcastDefinitions(discoveredRegistry) || hasRealtimeScaffold) {
     requiredPackages.add('@holo-js/broadcast')
     requiredPackages.add('@holo-js/flux')
-    const framework = detectProjectFrameworkFromPackageJson(dependencies, devDependencies)
-    if (framework === 'next') {
-      requiredPackages.add('@holo-js/flux-react')
-      requiredPackages.add('@holo-js/adapter-next')
-    } else if (framework === 'nuxt') {
-      requiredPackages.add('@holo-js/flux-vue')
-      requiredPackages.add('@holo-js/adapter-nuxt')
-    } else if (framework === 'sveltekit') {
-      requiredPackages.add('@holo-js/flux-svelte')
-      requiredPackages.add('@holo-js/adapter-sveltekit')
+    const framework = await detectProjectFrameworkDescriptor(projectRoot, dependencies, devDependencies)
+    if (framework) {
+      for (const packageName of getFrameworkBroadcastPackagesFromDescriptor(framework)) {
+        requiredPackages.add(packageName)
+      }
     }
   }
 
@@ -431,9 +506,7 @@ export async function syncManagedDriverDependencies(
     '@holo-js/cache-redis',
     '@holo-js/events',
     '@holo-js/flux',
-    '@holo-js/flux-react',
-    '@holo-js/flux-svelte',
-    '@holo-js/flux-vue',
+    ...getManagedFrameworkPackageNames(),
     '@holo-js/mail',
     '@holo-js/media',
     '@holo-js/notifications',
@@ -491,11 +564,7 @@ async function upsertQueuePackageDependency(
   const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
   const queueConfigPath = await resolveFirstExistingPath(projectRoot, ['config/queue.ts', 'config/queue.mts', 'config/queue.js', 'config/queue.mjs', 'config/queue.cts', 'config/queue.cjs'])
   const loadedQueueConfig = queueConfigPath
-    ? loadConfigDirectory(projectRoot, {
-        preferCache: false,
-        processEnv: process.env,
-      }).then(config => config.queue)
-        .catch(() => undefined)
+    ? loadQueueConfigFile(projectRoot, queueConfigPath).catch(() => undefined)
     : Promise.resolve(undefined)
   const nextVersion = resolveManagedHoloPackageVersion('@holo-js/queue', dependencies, devDependencies)
   const nextQueueDbVersion = resolveManagedHoloPackageVersion('@holo-js/queue-db', dependencies, devDependencies)
@@ -504,14 +573,18 @@ async function upsertQueuePackageDependency(
   const queueConfig = typeof driver === 'undefined'
     ? await loadedQueueConfig
     : undefined
+  const queueConnections = Object.values(queueConfig?.connections ?? {})
+  const configuredDefaultQueueDriver = queueConfig?.default
+    ? queueConfig.connections?.[queueConfig.default]?.driver
+    : undefined
   const resolvedQueueDriver = driver && driver !== 'sync'
     ? driver
-    : queueConfig?.connections[queueConfig.default]?.driver ?? driver
+    : configuredDefaultQueueDriver ?? driver
   const requiresQueueDb = resolvedQueueDriver === 'database'
-    || (queueConfig?.failed ?? false) !== false
-    || Object.values(queueConfig?.connections ?? {}).some(connection => connection.driver === 'database')
+    || (queueConfig ? (queueConfig.failed ?? true) !== false : false)
+    || queueConnections.some(connection => queueConnectionUsesDriver(connection, 'database'))
   const requiresQueueRedis = resolvedQueueDriver === 'redis'
-    || Object.values(queueConfig?.connections ?? {}).some(connection => connection.driver === 'redis')
+    || queueConnections.some(connection => queueConnectionUsesDriver(connection, 'redis'))
   const currentVersion = dependencies['@holo-js/queue']
   const currentQueueDbVersion = dependencies['@holo-js/queue-db']
   const currentQueueRedisVersion = dependencies['@holo-js/queue-redis']
@@ -674,29 +747,30 @@ async function upsertCachePackageDependencies(
 export function detectProjectFrameworkFromPackageJson(
   dependencies: Record<string, string>,
   devDependencies: Record<string, string>,
-): 'next' | 'nuxt' | 'sveltekit' | undefined {
-  if (dependencies.next || devDependencies.next) {
-    return 'next'
-  }
+): SupportedScaffoldFramework | undefined {
+  return detectFrameworkDescriptorFromPackageJson(dependencies, devDependencies)?.id as SupportedScaffoldFramework | undefined
+}
 
-  if (dependencies.nuxt || devDependencies.nuxt) {
-    return 'nuxt'
-  }
-
-  if (dependencies['@sveltejs/kit'] || devDependencies['@sveltejs/kit']) {
-    return 'sveltekit'
-  }
-
-  return undefined
+export async function detectProjectFrameworkDescriptor(
+  projectRoot: string,
+  dependencies: Record<string, string>,
+  devDependencies: Record<string, string>,
+): Promise<FrameworkDescriptor | undefined> {
+  const pluginDescriptors = await loadProjectPluginFrameworkDescriptors(projectRoot)
+  return detectFrameworkDescriptorFromPackageJson(
+    dependencies,
+    devDependencies,
+    getFrameworkDescriptorsWith(pluginDescriptors),
+  )
 }
 
 export async function upsertBroadcastPackageDependencies(projectRoot: string): Promise<{
   readonly updated: boolean
-  readonly framework: 'next' | 'nuxt' | 'sveltekit' | undefined
+  readonly framework: string | undefined
 }> {
   const { packageJsonPath, parsed, dependencies, devDependencies } = await readPackageJsonDependencyState(projectRoot)
   const nextVersion = resolveManagedHoloPackageVersion('@holo-js/broadcast', dependencies, devDependencies)
-  const framework = detectProjectFrameworkFromPackageJson(dependencies, devDependencies)
+  const framework = await detectProjectFrameworkDescriptor(projectRoot, dependencies, devDependencies)
   let changed = false
 
   const requestedPackages = new Set<string>([
@@ -704,25 +778,13 @@ export async function upsertBroadcastPackageDependencies(projectRoot: string): P
     '@holo-js/flux',
   ])
 
-  if (framework === 'next') {
-    requestedPackages.add('@holo-js/flux-react')
-    requestedPackages.add('@holo-js/adapter-next')
-  } else if (framework === 'nuxt') {
-    requestedPackages.add('@holo-js/flux-vue')
-    requestedPackages.add('@holo-js/adapter-nuxt')
-  } else if (framework === 'sveltekit') {
-    requestedPackages.add('@holo-js/flux-svelte')
-    requestedPackages.add('@holo-js/adapter-sveltekit')
+  if (framework) {
+    for (const packageName of getFrameworkBroadcastPackagesFromDescriptor(framework)) {
+      requestedPackages.add(packageName)
+    }
   }
 
-  const frameworkPackages = new Set<string>([
-    '@holo-js/flux-react',
-    '@holo-js/adapter-next',
-    '@holo-js/flux-vue',
-    '@holo-js/adapter-nuxt',
-    '@holo-js/flux-svelte',
-    '@holo-js/adapter-sveltekit',
-  ])
+  const frameworkPackages = new Set<string>(getManagedFrameworkPackageNames())
   const managedPackages = new Set<string>([
     ...requestedPackages,
     ...frameworkPackages,
@@ -749,14 +811,14 @@ export async function upsertBroadcastPackageDependencies(projectRoot: string): P
   if (!changed) {
     return {
       updated: false,
-      framework,
+      framework: framework?.id,
     }
   }
 
   await writePackageJsonDependencyState(packageJsonPath, parsed, dependencies, devDependencies)
   return {
     updated: true,
-    framework,
+    framework: framework?.id,
   }
 }
 

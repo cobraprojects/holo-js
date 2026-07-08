@@ -377,10 +377,6 @@ export function useFluxConnectionStatus<TManifest extends GeneratedBroadcastMani
   const onUnmountRef = useLatestRef(options.onUnmount)
 
   useEffect(() => {
-    if (!onChangeRef.current) {
-      return
-    }
-
     const unsubscribe = client.onStatusChange((status) => {
       onChangeRef.current?.(status)
     })

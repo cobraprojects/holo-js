@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -15,6 +15,8 @@ async function createProject(): Promise<string> {
   tempDirs.push(root)
 
   await mkdir(join(root, 'config'), { recursive: true })
+  await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
+  await symlink(resolve(import.meta.dirname, '../../db'), join(root, 'node_modules/@holo-js/db'), 'dir')
   await writeFile(join(root, 'package.json'), JSON.stringify({
     name: 'fixture',
     private: true,

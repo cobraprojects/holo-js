@@ -107,6 +107,10 @@ export class ValidationFieldBuilder<TOutput> implements StandardSchemaV1<unknown
       throw new ValidationContractError('max must not be an empty string.')
     }
 
+    if (typeof value === 'string' && this.field.definition.kind !== 'file') {
+      throw new ValidationContractError('max string limits are only supported for file fields.')
+    }
+
     return this.clone(normalizeRule('max', [value], message))
   }
 

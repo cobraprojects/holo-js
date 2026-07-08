@@ -47,6 +47,7 @@ async function runPackageBuild(): Promise<{ outDir: string }> {
       await provisionTempPackage(resolve(repoRoot, 'packages/db'), dbPackageRoot)
       await provisionTempPackage(resolve(repoRoot, 'packages/queue'), queuePackageRoot)
       await provisionTempPackage(packageDir, queueDbPackageRoot)
+      await symlink(resolve(repoRoot, 'packages/config'), join(holoNodeModulesRoot, 'config'))
       await symlink(dbPackageRoot, join(holoNodeModulesRoot, 'db'))
       await symlink(queuePackageRoot, join(holoNodeModulesRoot, 'queue'))
       await linkInstalledDependenciesForPackage({
