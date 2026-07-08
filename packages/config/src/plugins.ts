@@ -95,7 +95,7 @@ function resolvePluginDefinition(moduleValue: unknown): Readonly<Record<string, 
 async function loadRuntimeModule(projectRoot: string, modulePath: string): Promise<unknown> {
   const projectRequire = createRequire(join(resolve(projectRoot), 'package.json'))
   const resolvedPath = projectRequire.resolve(modulePath)
-  return await import(/* webpackIgnore: true */ `${pathToFileURL(resolvedPath).href}?t=${Date.now()}`) as unknown
+  return await import(/* webpackIgnore: true */ pathToFileURL(resolvedPath).href) as unknown
 }
 
 function resolvePluginPackageJsonPath(projectRoot: string, packageName: string): string {

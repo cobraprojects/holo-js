@@ -30,7 +30,7 @@ import { normalizeQueueConfig, holoQueueDefaults } from './config'
 import { redisQueueDriverFactory } from './drivers/redis'
 import { syncQueueDriverFactory } from './drivers/sync'
 import { getRegisteredQueueJob } from './registry'
-import { resetQueuePluginDriverFactories } from './plugins'
+import { loadQueuePluginDriverFactories, resetQueuePluginDriverFactories } from './plugins'
 
 type RuntimeQueueState = {
   config: NormalizedHoloQueueConfig
@@ -419,7 +419,6 @@ async function clearCachedDriversForFactoryNames(state: RuntimeQueueState, drive
 
 export async function loadQueuePluginDrivers(projectRoot = process.cwd()): Promise<void> {
   const state = getQueueRuntimeState()
-  const { loadQueuePluginDriverFactories } = await import('./plugins')
   const loadedDriverNames = new Set<string>()
   for (const factory of await loadQueuePluginDriverFactories(projectRoot)) {
     state.driverFactories.set(factory.driver, factory)

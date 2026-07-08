@@ -1,6 +1,7 @@
 import { createHash, createHmac } from 'node:crypto'
 
 type DriverValue = string | Uint8Array | ArrayBuffer
+const storedValueMarker = '__holo_storage_s3_value_v1'
 
 export interface S3DriverOptions {
   accessKeyId?: string
@@ -286,11 +287,33 @@ function parseListObjects(xml: string): string[] {
 }
 
 function deserializeStoredValue<T>(value: string): T | string {
+  let parsed: unknown
+
   try {
-    return JSON.parse(value) as T
+    parsed = JSON.parse(value) as unknown
   } catch {
     return value
   }
+
+  if (isStoredValueEnvelope(parsed)) {
+    return parsed.value as T
+  }
+
+  return value
+}
+
+function isStoredValueEnvelope(value: unknown): value is { readonly value?: unknown } {
+  return !!value
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && (value as Record<string, unknown>)[storedValueMarker] === true
+}
+
+function serializeStoredValue(value: unknown): string {
+  return JSON.stringify({
+    [storedValueMarker]: true,
+    value,
+  })
 }
 
 function resolveDriverOptions(options: S3DriverOptions): ResolvedS3DriverOptions {
@@ -365,7 +388,7 @@ export default function createS3Driver(input: S3DriverOptions) {
       return response ? response.arrayBuffer() : null
     },
     async setItem(key: string, value: unknown) {
-      await s3Fetch(options, 'PUT', resolveObjectUrl(options, key), JSON.stringify(value))
+      await s3Fetch(options, 'PUT', resolveObjectUrl(options, key), serializeStoredValue(value))
     },
     async setItemRaw(key: string, value: DriverValue) {
       await s3Fetch(options, 'PUT', resolveObjectUrl(options, key), value)

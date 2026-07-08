@@ -1,3 +1,4 @@
+import { resolve } from 'node:path'
 import { loadHoloPluginContributionModules, type HoloPluginRuntimeModule } from '@holo-js/config'
 import type { QueueDriverFactory } from './contracts'
 
@@ -23,16 +24,17 @@ function resolveQueueDriverFactory(moduleValue: unknown, packageName: string, dr
 }
 
 export async function loadQueuePluginDriverFactories(projectRoot = process.cwd()): Promise<readonly QueueDriverFactory[]> {
-  const loadedFactories = loadedFactoriesByProjectRoot.get(projectRoot)
+  const root = resolve(projectRoot)
+  const loadedFactories = loadedFactoriesByProjectRoot.get(root)
   if (loadedFactories) {
     return loadedFactories
   }
 
-  if (failedLoadsByProjectRoot.has(projectRoot)) {
-    throw failedLoadsByProjectRoot.get(projectRoot)
+  if (failedLoadsByProjectRoot.has(root)) {
+    throw failedLoadsByProjectRoot.get(root)
   }
 
-  const contributions: readonly HoloPluginRuntimeModule[] = await loadHoloPluginContributionModules(projectRoot, 'queue', 'drivers')
+  const contributions: readonly HoloPluginRuntimeModule[] = await loadHoloPluginContributionModules(root, 'queue', 'drivers')
   let factories: readonly QueueDriverFactory[]
 
   try {
@@ -42,11 +44,11 @@ export async function loadQueuePluginDriverFactories(projectRoot = process.cwd()
       contribution.name,
     )))
   } catch (error) {
-    failedLoadsByProjectRoot.set(projectRoot, error)
+    failedLoadsByProjectRoot.set(root, error)
     throw error
   }
 
-  loadedFactoriesByProjectRoot.set(projectRoot, factories)
+  loadedFactoriesByProjectRoot.set(root, factories)
   return factories
 }
 

@@ -199,7 +199,7 @@ function applyTransformRule(value: unknown, rule: FieldRule): unknown {
 }
 
 function resolveConfirmationParent(context: RuntimePostValidationContext, confirmationKey: string, useOutputParent: boolean): unknown {
-  if (useOutputParent) {
+  if (useOutputParent && isPlainObject(context.parent) && confirmationKey in context.parent) {
     return context.parent
   }
 

@@ -11543,6 +11543,94 @@ export default {
     await expect(stat(join(projectRoot, '.holo-js/builtin-nuxt-sync.txt'))).rejects.toThrow()
   }, 60_000)
 
+  it('runs built-in sync commands when a plugin framework override has no sync definition', async () => {
+    const projectRoot = await createTempDirectory()
+    tempDirs.push(projectRoot)
+    await linkWorkspaceDb(projectRoot)
+    await writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+      name: 'plugin-framework-override-without-sync-fixture',
+      private: true,
+      packageManager: 'npm@10.0.0',
+      dependencies: {
+        '@holo-js/core': '^0.2.2',
+        '@holo-js/db': '^0.2.2',
+        nuxt: '^3.0.0',
+      },
+    }, null, 2))
+    await writeProjectFile(projectRoot, 'config/app.ts', `
+import { defineAppConfig } from '@holo-js/config'
+
+export default defineAppConfig({
+  plugins: ['holo-plugin-nuxt-no-sync-override'],
+})
+`)
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/config'
+
+export default defineDatabaseConfig({})
+`)
+    await mkdir(join(projectRoot, 'node_modules/.bin'), { recursive: true })
+    await writeFile(join(projectRoot, 'node_modules/.bin/nuxt'), `#!/usr/bin/env node
+require('node:fs').writeFileSync('.holo-js/builtin-nuxt-sync.txt', 'builtin\\n')
+`)
+    await chmod(join(projectRoot, 'node_modules/.bin/nuxt'), 0o755)
+
+    const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-nuxt-no-sync-override')
+    await mkdir(pluginRoot, { recursive: true })
+    await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+      name: 'holo-plugin-nuxt-no-sync-override',
+      type: 'module',
+      holo: {
+        plugin: './plugin.mjs',
+      },
+    }, null, 2))
+    await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'nuxt-no-sync-override-plugin',
+  contributes: {
+    framework: {
+      id: 'nuxt',
+      displayName: 'Nuxt No Sync Override',
+      detectPackages: ['nuxt'],
+      adapterPackage: '@holo-js/adapter-nuxt',
+      fluxPackage: '@holo-js/flux-vue',
+      scaffold: {
+        dependencies: {
+          nuxt: '^3.0.0',
+          vue: '^3.0.0',
+          'vue-router': '^4.0.0',
+          '@holo-js/adapter-nuxt': '^1.0.0',
+        },
+        devDependencies: {},
+        scripts: {},
+        lintScript: 'eslint . --fix',
+        typecheckScript: 'nuxt typecheck',
+        defaultUrl: 'http://localhost:3000',
+        tsconfig: 'nuxt',
+        vscodeVueHybridMode: true,
+      },
+      runner: {
+        commandName: 'nuxt',
+        buildArgs: ['build'],
+        start: ['.output/server/index.mjs'],
+        startUsesFrameworkBinary: false,
+        preloadNextRuntime: false,
+        suppressSvelteKitOutput: false,
+        nextDevServerConflictHandling: false,
+      },
+      capabilities: {
+        managedBroadcastAuthRoute: false,
+      },
+    },
+  },
+}
+`)
+
+    await runProjectPrepare(projectRoot, undefined)
+
+    await expect(readFile(join(projectRoot, '.holo-js/builtin-nuxt-sync.txt'), 'utf8')).resolves.toBe('builtin\n')
+  }, 60_000)
+
   it('generates queue, broadcast, and authorization type artifacts during prepare', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

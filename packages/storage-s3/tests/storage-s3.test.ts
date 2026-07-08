@@ -108,6 +108,22 @@ describe('@holo-js/storage-s3', () => {
     await expect(driver.getItem('values/object')).resolves.toEqual({ active: true })
   })
 
+  it('preserves legacy raw text values that parse as JSON', async () => {
+    const values = ['123', 'true', 'null', '[]', '{}'] as const
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const request = input instanceof Request ? input : new Request(input)
+      const index = request.url.split('/').at(-1)
+      return new Response(values[Number(index)] ?? '', { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const driver = createDriver()
+
+    for (const [index, value] of values.entries()) {
+      await expect(driver.getItem(`values/${index}`)).resolves.toBe(value)
+    }
+  })
+
   it('rejects raw uploads with period-only object key segments', async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)

@@ -731,6 +731,216 @@ export default {
     }
   })
 
+  it('fails fast when configured plugin cache drivers have no contribution', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-cache-missing-configured-plugin-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'cache-missing-configured-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-cache-missing-configured'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-cache-missing-configured')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-cache-missing-configured',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'cache-missing-configured-plugin',
+  contributes: {
+    cache: {
+      drivers: {
+        available: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+export default {
+  name: 'available',
+  driver: 'available',
+  async get() {
+    return { hit: false }
+  },
+  async put() {
+    return true
+  },
+  async add() {
+    return true
+  },
+  async forget() {
+    return true
+  },
+  async flush() {},
+  async increment() {
+    return 1
+  },
+  async decrement() {
+    return -1
+  },
+  lock(name) {
+    return {
+      name,
+      async get(callback) {
+        return callback ? callback() : true
+      },
+      async release() {
+        return true
+      },
+      async block(_waitSeconds, callback) {
+        return callback ? callback() : true
+      },
+    }
+  },
+}
+`)
+
+      configureCacheRuntime({
+        config: {
+          default: 'primary',
+          drivers: {
+            primary: {
+              driver: 'missing',
+            },
+          },
+        },
+      })
+
+      await expect(loadCachePluginDrivers(projectRoot))
+        .rejects.toThrow('Configured cache plugin driver "missing" has no matching plugin contribution')
+      await expect(loadCachePluginDrivers(projectRoot))
+        .rejects.toThrow('Available cache plugin driver contributions: "available"')
+    } finally {
+      resetCachePluginDriverContracts()
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves configured class-based cache driver prototypes', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-cache-class-plugin-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({
+        name: 'cache-class-plugin-fixture',
+        private: true,
+      }, null, 2))
+      await mkdir(join(projectRoot, 'config'), { recursive: true })
+      await writeFile(join(projectRoot, 'config/app.mjs'), `
+export default {
+  plugins: ['holo-plugin-cache-class'],
+}
+`)
+      const pluginRoot = join(projectRoot, 'node_modules/holo-plugin-cache-class')
+      await mkdir(pluginRoot, { recursive: true })
+      await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+        name: 'holo-plugin-cache-class',
+        type: 'module',
+        holo: {
+          plugin: './plugin.mjs',
+        },
+      }, null, 2))
+      await writeFile(join(pluginRoot, 'plugin.mjs'), `
+export default {
+  id: 'cache-class-plugin',
+  contributes: {
+    cache: {
+      drivers: {
+        plugin: {
+          runtime: './driver.mjs',
+        },
+      },
+    },
+  },
+}
+`)
+      await writeFile(join(pluginRoot, 'driver.mjs'), `
+class PluginCacheDriver {
+  name = 'plugin'
+  driver = 'plugin'
+
+  prototypeMarker() {
+    return this.name
+  }
+
+  async get() {
+    return { hit: false }
+  }
+
+  async put() {
+    return true
+  }
+
+  async add() {
+    return true
+  }
+
+  async forget() {
+    return true
+  }
+
+  async flush() {}
+
+  async increment() {
+    return 1
+  }
+
+  async decrement() {
+    return -1
+  }
+
+  lock(name) {
+    return {
+      name,
+      async get(callback) {
+        return callback ? callback() : true
+      },
+      async release() {
+        return true
+      },
+      async block(_waitSeconds, callback) {
+        return callback ? callback() : true
+      },
+    }
+  }
+}
+
+export default new PluginCacheDriver()
+`)
+
+      configureCacheRuntime({
+        config: {
+          default: 'primary',
+          drivers: {
+            primary: {
+              driver: 'plugin',
+            },
+          },
+        },
+      })
+
+      await loadCachePluginDrivers(projectRoot)
+
+      const driver = getCacheRuntimeBindings()?.drivers.get('primary') as { prototypeMarker(): string } | undefined
+      expect(driver?.prototypeMarker()).toBe('primary')
+    } finally {
+      resetCachePluginDriverContracts()
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
   it('normalizes ttl values from seconds and dates', () => {
     expect(normalizeCacheTtl(60, { now: 1_000 })).toEqual({
       seconds: 60,

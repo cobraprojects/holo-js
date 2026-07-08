@@ -70,11 +70,43 @@ function resolveConfiguredCacheDriver(
   }
 
   assertCacheDriverContract(candidate, packageName, driverName, driverName)
-  return Object.freeze({
-    ...candidate,
-    name: config.name,
-    driver: driverName,
+  Object.defineProperties(candidate, {
+    name: {
+      value: config.name,
+      enumerable: true,
+      configurable: true,
+    },
+    driver: {
+      value: driverName,
+      enumerable: true,
+      configurable: true,
+    },
   })
+  return Object.freeze(candidate)
+}
+
+function assertConfiguredCacheDriverContributions(
+  configs: readonly NormalizedCachePluginDriverConfig[],
+  contributions: readonly { readonly name: string }[],
+): void {
+  const availableDrivers = new Set(contributions.map(contribution => contribution.name))
+  const missingDrivers = Array.from(new Set(
+    configs
+      .map(config => config.driver)
+      .filter(driver => !availableDrivers.has(driver)),
+  ))
+
+  if (missingDrivers.length === 0) {
+    return
+  }
+
+  const available = contributions.length > 0
+    ? contributions.map(contribution => `"${contribution.name}"`).join(', ')
+    : 'none'
+  throw new Error(
+    `[@holo-js/cache] Configured cache plugin driver ${missingDrivers.map(driver => `"${driver}"`).join(', ')} `
+    + `has no matching plugin contribution. Available cache plugin driver contributions: ${available}.`,
+  )
 }
 
 export async function loadCachePluginDriverContracts(projectRoot = process.cwd()): Promise<readonly CacheDriverContract[]> {
@@ -114,6 +146,7 @@ export async function loadConfiguredCachePluginDriverContracts(
   }
 
   const contributions = await loadHoloPluginContributionModules(projectRoot, 'cache', 'drivers')
+  assertConfiguredCacheDriverContributions(configs, contributions)
   const drivers: CacheDriverContract[] = []
 
   for (const contribution of contributions) {

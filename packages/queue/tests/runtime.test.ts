@@ -285,8 +285,10 @@ export default {
 
       const firstFactories = await loadQueuePluginDriverFactories(projectRoot)
       const secondFactories = await loadQueuePluginDriverFactories(projectRoot)
+      const equivalentPathFactories = await loadQueuePluginDriverFactories(`${projectRoot}/.`)
       expect(firstFactories.map(factory => factory.driver)).toEqual(['plugin'])
       expect(secondFactories.map(factory => factory.driver)).toEqual(['plugin'])
+      expect(equivalentPathFactories).toBe(firstFactories)
 
       await loadQueuePluginDrivers(projectRoot)
       expect(queueRuntimeInternals.getQueueRuntimeState().driverFactories.get('plugin')?.driver).toBe('plugin')

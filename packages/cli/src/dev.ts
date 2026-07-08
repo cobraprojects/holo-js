@@ -285,15 +285,11 @@ async function resolveProjectFrameworkSyncDefinitions(projectRoot: string): Prom
   const definitions: FrameworkSyncDefinition[] = []
 
   for (const descriptor of getFrameworkDescriptorsWith(pluginDescriptors)) {
-    if (seen.has(descriptor.id)) {
+    if (!descriptor.sync || seen.has(descriptor.id)) {
       continue
     }
 
     seen.add(descriptor.id)
-    if (!descriptor.sync) {
-      continue
-    }
-
     definitions.push({
       framework: descriptor.id,
       commands: descriptor.sync.commands,
