@@ -286,10 +286,20 @@ describe('custom s3 storage driver', () => {
     expect(await readRequestBody(fetchMock.mock.calls[0]?.[0] as Request)).toBe('shared-ok')
   })
 
-  it('returns null for missing raw objects and stores plain string values as JSON', async () => {
+  it('returns null for missing raw objects and round-trips plain string values', async () => {
+    const objects = new Map<string, string>()
     fetchMock
       .mockResolvedValueOnce(new Response(null, { status: 404 }))
-      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockImplementation(async (input: string | URL | Request) => {
+        const request = input instanceof Request ? input : new Request(input)
+
+        if (request.method === 'PUT') {
+          objects.set(request.url, await request.text())
+          return new Response(null, { status: 200 })
+        }
+
+        return new Response(objects.get(request.url) ?? '', { status: 200 })
+      })
 
     const createDriver = await loadDriver()
     const driver = createDriver({
@@ -303,7 +313,7 @@ describe('custom s3 storage driver', () => {
     await expect(driver.getItemRaw('reports:missing.bin')).resolves.toBeNull()
     await driver.setItem('reports:plain.txt', 'plain-text')
 
-    expect(await readRequestBody(fetchMock.mock.calls[1]?.[0] as Request)).toBe('"plain-text"')
+    await expect(driver.getItem('reports:plain.txt')).resolves.toBe('plain-text')
   })
 
   it('returns null metadata for missing objects', async () => {
@@ -321,10 +331,18 @@ describe('custom s3 storage driver', () => {
     await expect(driver.getMeta('reports:missing.txt')).resolves.toBeNull()
   })
 
-  it('stringifies structured values and preserves raw payloads on writes', async () => {
-    fetchMock
-      .mockResolvedValueOnce(new Response(null, { status: 200 }))
-      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+  it('round-trips structured values and preserves raw payloads on writes', async () => {
+    const objects = new Map<string, string>()
+    fetchMock.mockImplementation(async (input: string | URL | Request) => {
+      const request = input instanceof Request ? input : new Request(input)
+
+      if (request.method === 'PUT') {
+        objects.set(request.url, await request.text())
+        return new Response(null, { status: 200 })
+      }
+
+      return new Response(objects.get(request.url) ?? '', { status: 200 })
+    })
 
     const createDriver = await loadDriver()
     const driver = createDriver({
@@ -338,11 +356,12 @@ describe('custom s3 storage driver', () => {
     await driver.setItem('reports:summary.json', { ok: true })
     await driver.setItemRaw('reports:archive.bin', new TextEncoder().encode('raw-data').buffer)
 
-    expect(await readRequestBody(fetchMock.mock.calls[0]?.[0] as Request)).toBe('{"ok":true}')
-    expect(await readRequestBody(fetchMock.mock.calls[1]?.[0] as Request)).toBe('raw-data')
+    await expect(driver.getItem('reports:summary.json')).resolves.toEqual({ ok: true })
+    const rawUpload = fetchMock.mock.calls[1]?.[0] as Request
+    expect(objects.get(rawUpload.url)).toBe('raw-data')
   })
 
-  it('parses structured JSON payloads back through getItem', async () => {
+  it('preserves legacy raw JSON payloads as text through getItem', async () => {
     fetchMock.mockResolvedValueOnce(new Response('{"ok":true,"count":2}', { status: 200 }))
 
     const createDriver = await loadDriver()
@@ -354,10 +373,7 @@ describe('custom s3 storage driver', () => {
       secretAccessKey: 'supersecretkey',
     })
 
-    await expect(driver.getItem('reports:summary.json')).resolves.toEqual({
-      ok: true,
-      count: 2,
-    })
+    await expect(driver.getItem('reports:summary.json')).resolves.toBe('{"ok":true,"count":2}')
   })
 
   it('lists keys with prefixes and follows continuation tokens', async () => {
