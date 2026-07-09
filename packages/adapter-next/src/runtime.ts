@@ -1,4 +1,4 @@
-import { initializeHolo, type CreateHoloOptions } from '@holo-js/core'
+import { initializeHolo, type CreateHoloOptions } from '@holo-js/core/runtime'
 import type { DotPath, HoloConfigMap, LoadedHoloConfig, ValueAtPath } from '@holo-js/config'
 import { getCurrentNextRequest, type NextRequestLike } from './request-context'
 export { runWithNextRequest, type NextRequestLike } from './request-context'

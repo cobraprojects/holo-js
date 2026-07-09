@@ -6,6 +6,7 @@ export default defineConfig({
     alias: {
       '@holo-js/config': resolve(__dirname, '../config/src/index.ts'),
       '@holo-js/core/errors': resolve(__dirname, '../core/src/errors.ts'),
+      '@holo-js/core/runtime': resolve(__dirname, '../core/src/portable/index.ts'),
       '@holo-js/core': resolve(__dirname, '../core/src/index.ts'),
       '@holo-js/db': resolve(__dirname, '../db/src/index.ts'),
       '@holo-js/db-mysql': resolve(__dirname, '../db-mysql/src/index.ts'),

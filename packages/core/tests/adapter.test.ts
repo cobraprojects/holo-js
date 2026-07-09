@@ -1020,16 +1020,18 @@ export default {
       displayName: 'Test',
     })
     const root = await createProjectRoot()
+    const remoteObjects = new Map<string, string>()
     const fetchMock = vi.fn(async (input: FetchInput) => {
       const request = input instanceof Request ? input : new Request(input)
       const key = decodeURIComponent(new URL(request.url).pathname.replace(/^\/+/, ''))
 
       if (request.method === 'PUT') {
+        remoteObjects.set(request.url, await request.text())
         return new Response(null, { status: 200 })
       }
 
       if (request.method === 'GET') {
-        return new Response(JSON.stringify({ ok: true, key }), { status: 200 })
+        return new Response(remoteObjects.get(request.url) ?? JSON.stringify({ ok: true, key }), { status: 200 })
       }
 
       if (request.method === 'HEAD') {
@@ -1110,7 +1112,6 @@ export default defineStorageConfig({
     await expect(mediaStorage.setItem('remote:payload.json', { ok: true })).resolves.toBeUndefined()
     await expect(mediaStorage.getItem('remote:payload.json')).resolves.toEqual({
       ok: true,
-      key: 'remote/payload.json',
     })
     await expect(mediaStorage.getMeta('remote:payload.json')).resolves.toEqual({})
     await expect(mediaStorage.hasItem('remote:payload.json')).resolves.toBe(true)
