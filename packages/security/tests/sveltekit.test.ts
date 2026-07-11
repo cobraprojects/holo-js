@@ -66,6 +66,26 @@ afterEach(() => {
 })
 
 describe('@holo-js/security SvelteKit csrf middleware', () => {
+  it('rejects TRACE before resolving the route', async () => {
+    configureSecurityRuntime({
+      config: defineSecurityConfig({ csrf: { enabled: true } }),
+      csrfSigningKey: 'test-signing-key',
+    })
+    const request = new Request('https://app.test/login')
+    const traceRequest = new Proxy(request, {
+      get(target, property) {
+        return property === 'method' ? 'TRACE' : Reflect.get(target, property, target)
+      },
+    })
+    const { event } = createEvent(traceRequest)
+    const resolve = vi.fn(async () => new Response('ok'))
+    const response = await csrfProtection()({ event, resolve })
+
+    expect(response.status).toBe(405)
+    expect(response.headers.get('allow')).toContain('POST')
+    expect(resolve).not.toHaveBeenCalled()
+  })
+
   it('issues the readable csrf cookie on safe requests before page loads render csrf.input()', async () => {
     configureSecurity()
     const request = new Request('https://app.test/login')

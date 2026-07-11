@@ -130,6 +130,9 @@ Holo-JS falls back to standalone `host`, which may also be a Unix socket path.
 - The default key is `user:<id>` when the current Holo auth runtime can resolve an authenticated user.
 - Otherwise the default key falls back to `ip:<client-ip>` from the incoming request headers.
 - The runtime only reads `x-forwarded-for` and `x-real-ip` when `HOLO_SECURITY_TRUST_PROXY` is truthy.
+- The same trust setting controls `Forwarded` and `x-forwarded-proto` when determining secure requests and cookies.
+- Security middleware rejects `TRACE` with `405`; enable unusual HTTP methods outside the security middleware only
+  when the application deliberately owns their handling.
 - Without trusted proxy headers, guest requests can fall back to `ip:unknown`, which means multiple
   anonymous clients may share the same limiter bucket and get throttled together.
 - If your app sits behind trusted proxies or needs additional identifier scoping, either override the

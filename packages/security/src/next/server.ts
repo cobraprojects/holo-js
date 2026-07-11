@@ -99,6 +99,13 @@ async function issueCsrfCookie(request: NextCsrfRequest): Promise<Response | und
 
 export function csrfProtection(): NextCsrfMiddleware {
   return async (request) => {
+    if (request.method.trim().toUpperCase() === 'TRACE') {
+      return new Response('Method Not Allowed', {
+        status: 405,
+        headers: { Allow: 'GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE' },
+      })
+    }
+
     try {
       await protect(request)
     } catch (error) {

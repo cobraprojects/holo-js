@@ -163,6 +163,10 @@ export interface BroadcastWorkerConfig {
   readonly publicScheme?: BroadcastConnectionScheme
   readonly healthPath?: string
   readonly statsPath?: string
+  readonly allowedOrigins?: readonly string[]
+  readonly maxRequestBytes?: number | string
+  readonly maxMessageBytes?: number | string
+  readonly statsEnabled?: boolean
   readonly scaling?: false | BroadcastWorkerScalingConfig
 }
 
@@ -237,6 +241,10 @@ export interface NormalizedBroadcastWorkerConfig {
   readonly publicScheme: BroadcastConnectionScheme
   readonly healthPath: string
   readonly statsPath: string
+  readonly allowedOrigins: readonly string[]
+  readonly maxRequestBytes: number
+  readonly maxMessageBytes: number
+  readonly statsEnabled: boolean
   readonly scaling: false | NormalizedBroadcastWorkerScalingConfig
 }
 

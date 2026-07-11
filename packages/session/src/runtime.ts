@@ -146,12 +146,37 @@ function normalizeCookieOptions(options: CookieSerializeOptions = {}): Required<
   }
 }
 
+function containsInvalidCookieAttributeCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const codePoint = character.codePointAt(0)!
+    return character === ';' || codePoint <= 31 || codePoint === 127
+  })
+}
+
 export function serializeCookie(name: string, value: string, options: CookieSerializeOptions = {}): string {
   if (!name.trim()) {
     throw new Error('[@holo-js/session] Cookie name must be a non-empty string.')
   }
 
   const normalized = normalizeCookieOptions(options)
+  if (!normalized.path.startsWith('/') || containsInvalidCookieAttributeCharacter(normalized.path)) {
+    throw new Error('[@holo-js/session] Cookie path must start with "/" and must not contain control characters or semicolons.')
+  }
+  if (normalized.domain && (!/^\.?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(normalized.domain) || normalized.domain.includes('..'))) {
+    throw new Error('[@holo-js/session] Cookie domain must be a valid hostname.')
+  }
+  if (normalized.sameSite === 'none' && !normalized.secure) {
+    throw new Error('[@holo-js/session] SameSite=None cookies must use Secure.')
+  }
+  if (normalized.partitioned && !normalized.secure) {
+    throw new Error('[@holo-js/session] Partitioned cookies must use Secure.')
+  }
+  if (name.startsWith('__Secure-') && !normalized.secure) {
+    throw new Error('[@holo-js/session] __Secure- cookies must use Secure.')
+  }
+  if (name.startsWith('__Host-') && (!normalized.secure || normalized.domain || normalized.path !== '/')) {
+    throw new Error('[@holo-js/session] __Host- cookies must use Secure, Path=/, and no Domain.')
+  }
   const attributes = [
     `${encodeURIComponent(name)}=${encodeURIComponent(value)}`,
     `Path=${normalized.path}`,

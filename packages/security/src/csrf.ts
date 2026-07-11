@@ -8,6 +8,7 @@ import {
 } from './contracts'
 import { rateLimit } from './rate-limit'
 import { getSecurityRuntime } from './runtime'
+import { shouldTrustProxyHeaders } from './proxy'
 
 const generatedTokenCache = new WeakMap<Request, string>()
 
@@ -66,7 +67,6 @@ function isSafeMethod(method: string): boolean {
   return normalized === 'GET'
     || normalized === 'HEAD'
     || normalized === 'OPTIONS'
-    || normalized === 'TRACE'
 }
 
 function escapeRegex(value: string): string {
@@ -110,8 +110,8 @@ function getForwardedProto(request: Request): string | undefined {
 }
 
 export function isSecureRequest(request: Request): boolean {
-  return getForwardedProto(request) === 'https'
-    || new URL(request.url).protocol === 'https:'
+  return new URL(request.url).protocol === 'https:'
+    || (shouldTrustProxyHeaders() && getForwardedProto(request) === 'https')
 }
 
 function createCsrfToken(): string {

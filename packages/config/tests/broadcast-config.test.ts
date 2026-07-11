@@ -108,6 +108,10 @@ describe('@holo-js/config broadcast normalization', () => {
         publicScheme: 'https',
         healthPath: '/health',
         statsPath: '/stats',
+        allowedOrigins: ['https://ws.example.com'],
+        maxRequestBytes: 1_048_576,
+        maxMessageBytes: 65_536,
+        statsEnabled: false,
         scaling: {
           driver: 'redis',
           connection: 'broadcast',
@@ -158,6 +162,10 @@ describe('@holo-js/config broadcast normalization', () => {
         publicScheme: 'https',
         healthPath: '/health',
         statsPath: '/stats',
+        allowedOrigins: ['https://127.0.0.1'],
+        maxRequestBytes: 1_048_576,
+        maxMessageBytes: 65_536,
+        statsEnabled: false,
         scaling: false,
       },
     })
@@ -188,6 +196,10 @@ describe('@holo-js/config broadcast normalization', () => {
       publicScheme: 'http',
       healthPath: '/health',
       statsPath: '/stats',
+      allowedOrigins: ['http://127.0.0.1'],
+      maxRequestBytes: 1_048_576,
+      maxMessageBytes: 65_536,
+      statsEnabled: false,
       scaling: false,
     })
   })
@@ -216,6 +228,10 @@ describe('@holo-js/config broadcast normalization', () => {
         publicScheme: 'https',
         healthPath: '/health',
         statsPath: '/stats',
+        allowedOrigins: ['https://127.0.0.1'],
+        maxRequestBytes: 1_048_576,
+        maxMessageBytes: 65_536,
+        statsEnabled: false,
         scaling: false,
       },
     })
@@ -321,6 +337,38 @@ describe('@holo-js/config broadcast normalization', () => {
 
     expect(() => normalizeBroadcastConfig({
       worker: {
+        allowedOrigins: ['https://app.test/path'],
+      },
+    })).toThrow('must not include a path')
+
+    expect(() => normalizeBroadcastConfig({
+      worker: {
+        allowedOrigins: ['not-an-origin'],
+      },
+    })).toThrow('must be "*" or an absolute URL origin')
+
+    expect(() => normalizeBroadcastConfig({
+      worker: {
+        maxRequestBytes: 0,
+      },
+    })).toThrow('broadcast worker maxRequestBytes')
+
+    expect(normalizeBroadcastConfig({
+      worker: {
+        allowedOrigins: ['https://app.test/', '*'],
+        maxRequestBytes: '2048',
+        maxMessageBytes: 1024,
+        statsEnabled: true,
+      },
+    }).worker).toMatchObject({
+      allowedOrigins: ['https://app.test', '*'],
+      maxRequestBytes: 2048,
+      maxMessageBytes: 1024,
+      statsEnabled: true,
+    })
+
+    expect(() => normalizeBroadcastConfig({
+      worker: {
         scaling: {
           driver: 'memory' as never,
         },
@@ -380,6 +428,10 @@ describe('@holo-js/config broadcast normalization', () => {
         publicScheme: 'https',
         healthPath: '/health',
         statsPath: '/stats',
+        allowedOrigins: ['https://127.0.0.1'],
+        maxRequestBytes: 1_048_576,
+        maxMessageBytes: 65_536,
+        statsEnabled: false,
         scaling: {
           driver: 'redis',
           connection: 'default',
@@ -460,6 +512,10 @@ describe('@holo-js/config broadcast normalization', () => {
         publicScheme: 'https',
         healthPath: '/health',
         statsPath: '/stats',
+        allowedOrigins: ['https://127.0.0.1'],
+        maxRequestBytes: 1_048_576,
+        maxMessageBytes: 65_536,
+        statsEnabled: false,
         scaling: false,
       },
     })

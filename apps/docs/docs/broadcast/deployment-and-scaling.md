@@ -37,6 +37,10 @@ platform.
 
 Place websocket traffic behind a reverse proxy / load balancer and terminate TLS at the edge.
 
+The health endpoint is public. The statistics endpoint returns `404` unless `worker.statsEnabled` is explicitly set
+to `true`. When enabled, restrict the statistics path through the reverse proxy, private network, or infrastructure
+authentication; the worker does not authenticate that operational endpoint.
+
 ## Scaling
 
 Redis-backed coordination is required for multi-node self-hosted websocket deployments.
@@ -101,6 +105,7 @@ export default defineBroadcastConfig({
     },
   },
   worker: {
+    allowedOrigins: [env('APP_URL', 'http://localhost:3000')],
     scaling: {
       driver: 'redis',
       connection: env('BROADCAST_REDIS_CONNECTION', 'default'),

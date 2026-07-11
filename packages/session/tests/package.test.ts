@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -180,7 +180,7 @@ describe('@holo-js/session package surface', () => {
         cookie: {
           name: 'my_session',
           path: '/admin',
-          secure: false,
+          secure: true,
           httpOnly: true,
           sameSite: 'strict',
           partitioned: true,
@@ -224,6 +224,12 @@ describe('@holo-js/session package surface', () => {
       maxAge: 5,
     })).toContain('Max-Age=5')
     expect(() => cookie('', '1')).toThrow('Cookie name must be a non-empty string')
+    expect(() => cookie('plain', '1', { path: '/; Secure' })).toThrow('Cookie path')
+    expect(() => cookie('plain', '1', { domain: 'bad domain.test' })).toThrow('Cookie domain')
+    expect(() => cookie('plain', '1', { sameSite: 'none', secure: false })).toThrow('SameSite=None')
+    expect(() => cookie('plain', '1', { partitioned: true, secure: false })).toThrow('Partitioned')
+    expect(() => cookie('__Secure-session', '1', { secure: false, partitioned: false })).toThrow('__Secure-')
+    expect(() => cookie('__Host-session', '1', { secure: true, path: '/admin' })).toThrow('__Host-')
   })
 
   it('keeps cookie helpers explicit and tolerant of malformed request headers', () => {
@@ -665,13 +671,20 @@ describe('@holo-js/session package surface', () => {
     const record = createRecord('file-session')
 
     await store.write(record)
+    await Promise.all(Array.from({ length: 8 }, (_, index) => store.write(createRecord('file-session', {
+      data: { index },
+    }))))
     const reloaded = await store.read('file-session')
-    expect(reloaded).toEqual(record)
+    expect(reloaded?.id).toBe(record.id)
+    expect(typeof reloaded?.data.index).toBe('number')
     expect(fileSessionDriverInternals.getRecordPath(root, 'file-session')).toContain('file-session')
     expect(fileSessionDriverInternals.deserializeRecord(await readFile(
       fileSessionDriverInternals.getRecordPath(root, 'file-session'),
       'utf8',
-    ))).toEqual(record)
+    ))).toEqual(reloaded)
+    expect((await stat(root)).mode & 0o777).toBe(0o700)
+    expect((await stat(fileSessionDriverInternals.getRecordPath(root, 'file-session'))).mode & 0o777).toBe(0o600)
+    expect((await readdir(root)).every(name => !name.endsWith('.tmp') && !name.endsWith('.lock'))).toBe(true)
     await store.delete('file-session')
     expect(await store.read('file-session')).toBeNull()
   })

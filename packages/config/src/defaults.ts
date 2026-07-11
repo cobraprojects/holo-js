@@ -173,6 +173,8 @@ export const DEFAULT_BROADCAST_WORKER_PORT = 8080
 export const DEFAULT_BROADCAST_WORKER_PATH = '/app'
 export const DEFAULT_BROADCAST_HEALTH_PATH = '/health'
 export const DEFAULT_BROADCAST_STATS_PATH = '/stats'
+export const DEFAULT_BROADCAST_MAX_REQUEST_BYTES = 1_048_576
+export const DEFAULT_BROADCAST_MAX_MESSAGE_BYTES = 65_536
 
 export const holoNotificationsDefaults: Readonly<NormalizedHoloNotificationsConfig> = Object.freeze({
   table: DEFAULT_NOTIFICATIONS_TABLE,
@@ -206,6 +208,10 @@ export const holoBroadcastDefaults: Readonly<NormalizedHoloBroadcastConfig> = Ob
     publicScheme: 'https',
     healthPath: DEFAULT_BROADCAST_HEALTH_PATH,
     statsPath: DEFAULT_BROADCAST_STATS_PATH,
+    allowedOrigins: Object.freeze(['https://127.0.0.1']),
+    maxRequestBytes: DEFAULT_BROADCAST_MAX_REQUEST_BYTES,
+    maxMessageBytes: DEFAULT_BROADCAST_MAX_MESSAGE_BYTES,
+    statsEnabled: false,
     scaling: false,
   }),
 })
@@ -1250,6 +1256,14 @@ export function normalizeSessionConfig(
   if (sameSite !== 'lax' && sameSite !== 'strict' && sameSite !== 'none') {
     throw new Error(`[Holo Session] cookie sameSite must be "lax", "strict", or "none".`)
   }
+  const secure = cookie.secure ?? false
+  const partitioned = cookie.partitioned ?? false
+  if (sameSite === 'none' && !secure) {
+    throw new Error('[Holo Session] cookie SameSite=None requires secure: true.')
+  }
+  if (partitioned && !secure) {
+    throw new Error('[Holo Session] partitioned cookies require secure: true.')
+  }
 
   const idleTimeout = parseInteger(config.idleTimeout, DEFAULT_SESSION_IDLE_TIMEOUT, 'Holo Session', 'session idleTimeout', {
     minimum: 0,
@@ -1280,10 +1294,10 @@ export function normalizeSessionConfig(
       name: cookie.name?.trim() || DEFAULT_SESSION_COOKIE_NAME,
       path: cookie.path?.trim() || DEFAULT_SESSION_COOKIE_PATH,
       domain: cookie.domain?.trim() || undefined,
-      secure: cookie.secure ?? false,
+      secure,
       httpOnly: cookie.httpOnly ?? true,
       sameSite,
-      partitioned: cookie.partitioned ?? false,
+      partitioned,
       maxAge: parseInteger(cookie.maxAge, absoluteLifetime, 'Holo Session', 'session cookie maxAge', {
         minimum: 0,
       }),
@@ -1953,22 +1967,48 @@ function normalizeBroadcastWorkerConfig(
     throw new Error('[Holo Broadcast] Broadcast worker scaling driver must be "redis".')
   }
 
+  const publicHost = normalizeOptionalBroadcastString(worker?.publicHost, 'Broadcast worker public host') ?? undefined
+  const publicPort = typeof worker?.publicPort === 'undefined'
+    ? (publicScheme === 'http' ? DEFAULT_BROADCAST_HTTP_PORT : undefined)
+    : normalizeBroadcastPort(
+        worker.publicPort,
+        publicScheme === 'http' ? DEFAULT_BROADCAST_HTTP_PORT : DEFAULT_BROADCAST_HTTPS_PORT,
+        'Broadcast worker public port',
+      )
+  const defaultOriginPort = publicPort ?? connectionOptions?.port
+  const defaultOriginHost = publicHost ?? connectionOptions?.host ?? '127.0.0.1'
+  const defaultOrigin = new URL(`${publicScheme}://${defaultOriginHost}${typeof defaultOriginPort === 'number' ? `:${defaultOriginPort}` : ''}`).origin
+  const allowedOrigins = worker?.allowedOrigins?.map((value, index) => {
+    const normalized = value.trim()
+    if (normalized === '*') {
+      return normalized
+    }
+
+    let origin: string
+    try {
+      origin = new URL(normalized).origin
+    } catch {
+      throw new Error(`[Holo Broadcast] Broadcast worker allowed origin at index ${index} must be "*" or an absolute URL origin.`)
+    }
+    if (origin === 'null' || normalized.replace(/\/$/, '') !== origin) {
+      throw new Error(`[Holo Broadcast] Broadcast worker allowed origin at index ${index} must not include a path, query, or fragment.`)
+    }
+    return origin
+  }) ?? [defaultOrigin]
+
   return Object.freeze({
     host: normalizeOptionalBroadcastString(worker?.host, 'Broadcast worker host') ?? DEFAULT_BROADCAST_WORKER_HOST,
     port: normalizeBroadcastPort(worker?.port, fallbackPort, 'Broadcast worker port'),
     path: normalizeOptionalBroadcastString(worker?.path, 'Broadcast worker path') ?? DEFAULT_BROADCAST_WORKER_PATH,
-    publicHost: normalizeOptionalBroadcastString(worker?.publicHost, 'Broadcast worker public host') ?? undefined,
-    publicPort: typeof worker?.publicPort === 'undefined'
-      ? (publicScheme === 'http' ? DEFAULT_BROADCAST_HTTP_PORT : undefined)
-      : normalizeBroadcastPort(
-          worker.publicPort,
-          /* v8 ignore next -- defensive HTTPS port default; tests only exercise HTTP scheme */
-          publicScheme === 'http' ? DEFAULT_BROADCAST_HTTP_PORT : DEFAULT_BROADCAST_HTTPS_PORT,
-          'Broadcast worker public port',
-        ),
+    publicHost,
+    publicPort,
     publicScheme,
     healthPath: normalizeOptionalBroadcastString(worker?.healthPath, 'Broadcast worker health path') ?? DEFAULT_BROADCAST_HEALTH_PATH,
     statsPath: normalizeOptionalBroadcastString(worker?.statsPath, 'Broadcast worker stats path') ?? DEFAULT_BROADCAST_STATS_PATH,
+    allowedOrigins: Object.freeze(allowedOrigins),
+    maxRequestBytes: parseSecurityInteger(worker?.maxRequestBytes ?? DEFAULT_BROADCAST_MAX_REQUEST_BYTES, DEFAULT_BROADCAST_MAX_REQUEST_BYTES, 'broadcast worker maxRequestBytes', { minimum: 1 }),
+    maxMessageBytes: parseSecurityInteger(worker?.maxMessageBytes ?? DEFAULT_BROADCAST_MAX_MESSAGE_BYTES, DEFAULT_BROADCAST_MAX_MESSAGE_BYTES, 'broadcast worker maxMessageBytes', { minimum: 1 }),
+    statsEnabled: worker?.statsEnabled ?? false,
     scaling: scaling && typeof scaling === 'object'
         ? Object.freeze({
             driver: 'redis' as const,

@@ -161,7 +161,58 @@ type NodeWebSocketServerLike = {
 }
 
 type NodeWebSocketModuleLike = {
-  WebSocketServer: new (options: { noServer: true }) => NodeWebSocketServerLike
+  WebSocketServer: new (options: { noServer: true, maxPayload: number }) => NodeWebSocketServerLike
+}
+
+class BroadcastPayloadTooLargeError extends Error {}
+
+function isAllowedWorkerOrigin(request: Request, allowedOrigins: readonly string[]): boolean {
+  const origin = request.headers.get('origin')
+  if (!origin) {
+    return true
+  }
+
+  try {
+    const normalized = new URL(origin).origin
+    return allowedOrigins.includes('*') || allowedOrigins.includes(normalized)
+  } catch {
+    return false
+  }
+}
+
+async function readLimitedRequestText(request: Request, maxBytes: number): Promise<string> {
+  const contentLength = Number(request.headers.get('content-length'))
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new BroadcastPayloadTooLargeError()
+  }
+
+  if (!request.body) {
+    return ''
+  }
+
+  const reader = request.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  while (true) {
+    const result = await reader.read()
+    if (result.done) {
+      break
+    }
+    size += result.value.byteLength
+    if (size > maxBytes) {
+      await reader.cancel()
+      throw new BroadcastPayloadTooLargeError()
+    }
+    chunks.push(result.value)
+  }
+
+  const bytes = new Uint8Array(size)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return new TextDecoder().decode(bytes)
 }
 
 type BroadcastScalingEventMessage = {
@@ -1747,7 +1798,15 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       return new Response('App not found', { status: 404 })
     }
 
-    const bodyText = await request.text()
+    let bodyText: string
+    try {
+      bodyText = await readLimitedRequestText(request, options.config.worker.maxRequestBytes)
+    } catch (error) {
+      if (error instanceof BroadcastPayloadTooLargeError) {
+        return new Response('Payload Too Large', { status: 413 })
+      }
+      throw error
+    }
     const bodyMd5 = createHash('md5').update(bodyText).digest('hex')
     if (url.searchParams.get('body_md5') !== bodyMd5) {
       return new Response('Invalid body signature', { status: 401 })
@@ -1850,7 +1909,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         })
       }
 
-      if (request.method.toUpperCase() === 'GET' && url.pathname === options.config.worker.statsPath) {
+      if (options.config.worker.statsEnabled && request.method.toUpperCase() === 'GET' && url.pathname === options.config.worker.statsPath) {
         return new Response(JSON.stringify({
           ...this.getStats(),
         }), {
@@ -2028,14 +2087,20 @@ function toNodeRequestUrl(request: IncomingMessage, fallbackHost: string): strin
   return `http://${host}${path}`
 }
 
-async function readNodeRequestBody(request: IncomingMessage): Promise<Buffer | undefined> {
+async function readNodeRequestBody(request: IncomingMessage, maxBytes: number): Promise<Buffer | undefined> {
   if (request.method === 'GET' || request.method === 'HEAD') {
     return undefined
   }
 
   const chunks: Buffer[] = []
+  let size = 0
   for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    size += buffer.byteLength
+    if (size > maxBytes) {
+      throw new BroadcastPayloadTooLargeError()
+    }
+    chunks.push(buffer)
   }
 
   if (chunks.length === 0) {
@@ -2071,6 +2136,16 @@ function decodeNodeWebSocketMessage(message: string | Uint8Array | Buffer | read
     return Buffer.from(message).toString('utf8')
   }
   return String(message)
+}
+
+function getNodeWebSocketMessageBytes(message: string | Uint8Array | Buffer | readonly Buffer[] | ArrayBuffer): number {
+  if (typeof message === 'string') {
+    return Buffer.byteLength(message)
+  }
+  if (message instanceof ArrayBuffer || message instanceof Uint8Array) {
+    return message.byteLength
+  }
+  return message.reduce((size, chunk) => size + chunk.byteLength, 0)
 }
 /* v8 ignore stop */
 
@@ -2162,6 +2237,10 @@ export async function startBroadcastWorker(
             return new Response('Unknown app key', { status: 401 })
           }
 
+          if (!isAllowedWorkerOrigin(request, config.worker.allowedOrigins)) {
+            return new Response('Forbidden', { status: 403 })
+          }
+
           const upgraded = wsServer.upgrade(request, {
             data: {
               socketId: createSocketId(),
@@ -2190,6 +2269,14 @@ export async function startBroadcastWorker(
           })
         },
         message(socket, message) {
+          const messageBytes = typeof message === 'string'
+            ? Buffer.byteLength(message)
+            : message.byteLength
+          if (messageBytes > config.worker.maxMessageBytes) {
+            runtime.disconnectWebSocket(socket.data.socketId)
+            socket.close(1009, 'Message too large')
+            return
+          }
           const value = typeof message === 'string'
             ? message
             : new TextDecoder().decode(message)
@@ -2233,7 +2320,7 @@ export async function startBroadcastWorker(
   }
 
   const requestConnectionInfo = new WeakMap<IncomingMessage, WorkerConnectionInfo>()
-  const wsServer = new WebSocketServer({ noServer: true })
+  const wsServer = new WebSocketServer({ noServer: true, maxPayload: config.worker.maxMessageBytes })
   /* v8 ignore start -- Node websocket connection handler is adapter glue; exercised by real ws integration tests */
   wsServer.on('connection', (socket, request) => {
     const connectionInfo = requestConnectionInfo.get(request)!
@@ -2249,6 +2336,12 @@ export async function startBroadcastWorker(
       },
     })
     socket.on('message', (message) => {
+      const messageBytes = getNodeWebSocketMessageBytes(message)
+      if (messageBytes > config.worker.maxMessageBytes) {
+        runtime.disconnectWebSocket(socketId)
+        socket.close(1009, 'Message too large')
+        return
+      }
       const value = decodeNodeWebSocketMessage(message)
       void runtime.receiveWebSocketMessage(socketId, value).catch((error) => {
         logSocketMessageError(socketId, error)
@@ -2264,7 +2357,17 @@ export async function startBroadcastWorker(
 
   const httpServer = createServer(async (request, response) => {
     const requestUrl = toNodeRequestUrl(request, `${config.worker.host}:${config.worker.port}`)
-    const requestBody = await readNodeRequestBody(request)
+    let requestBody: Buffer | undefined
+    try {
+      requestBody = await readNodeRequestBody(request, config.worker.maxRequestBytes)
+    } catch (error) {
+      if (error instanceof BroadcastPayloadTooLargeError) {
+        response.statusCode = 413
+        response.end('Payload Too Large')
+        return
+      }
+      throw error
+    }
     const requestInit: RequestInit = {
       method: request.method,
       headers: toNodeHeaders(request.headers),
@@ -2292,6 +2395,13 @@ export async function startBroadcastWorker(
     const app = appsByKey[appMatch[1]!]
     if (!app) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+      socket.destroy()
+      return
+    }
+
+    const originRequest = new Request(requestUrl, { headers: toNodeHeaders(request.headers) })
+    if (!isAllowedWorkerOrigin(originRequest, config.worker.allowedOrigins)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
       socket.destroy()
       return
     }
@@ -2361,4 +2471,6 @@ export const workerInternals = {
   parseChannelKind,
   parsePresenceHashMembers,
   parseSocketMessage,
+  isAllowedWorkerOrigin,
+  readLimitedRequestText,
 }

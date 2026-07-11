@@ -4,6 +4,9 @@ const broadcastScheme = env('BROADCAST_SCHEME') === 'https' ? 'https' : 'http'
 
 export default defineBroadcastConfig({
   default: env('BROADCAST_CONNECTION', 'holo'),
+  worker: {
+    allowedOrigins: [env('APP_URL', 'http://localhost:3000')],
+  },
   connections: {
     holo: {
       driver: 'holo',

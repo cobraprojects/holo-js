@@ -429,7 +429,12 @@ describe('@holo-js/security csrf', () => {
         'x-forwarded-proto': 'https',
       },
     })
+    const previousTrustProxy = process.env.HOLO_SECURITY_TRUST_PROXY
+    delete process.env.HOLO_SECURITY_TRUST_PROXY
+    expect(isSecureRequest(proxiedRequest)).toBe(false)
+    process.env.HOLO_SECURITY_TRUST_PROXY = 'true'
     expect(isSecureRequest(proxiedRequest)).toBe(true)
+    expect(isSecureRequest(new Request('http://app.test/register'))).toBe(false)
     await expect(csrf.cookie(proxiedRequest, signedToken)).resolves.toBe(`XSRF-TOKEN=${encodeURIComponent(signedToken)}; Path=/; SameSite=Lax; Secure`)
 
     expect(isSecureRequest(new Request('http://app.test/register', {
@@ -442,6 +447,11 @@ describe('@holo-js/security csrf', () => {
         forwarded: 'for=203.0.113.10;host=app.test',
       },
     }))).toBe(false)
+    if (typeof previousTrustProxy === 'undefined') {
+      delete process.env.HOLO_SECURITY_TRUST_PROXY
+    } else {
+      process.env.HOLO_SECURITY_TRUST_PROXY = previousTrustProxy
+    }
   })
 
   it('generates tokens when no cookie is present', async () => {

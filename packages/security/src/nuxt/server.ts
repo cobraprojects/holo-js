@@ -93,6 +93,13 @@ async function issueCsrfCookie(event: H3Event, request: Request): Promise<void> 
 
 export function csrfProtection(): ReturnType<typeof defineEventHandler> {
   return defineEventHandler(async (event) => {
+    if (getMethod(event).trim().toUpperCase() === 'TRACE') {
+      return new Response('Method Not Allowed', {
+        status: 405,
+        headers: { Allow: 'GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE' },
+      })
+    }
+
     const request = await createRequest(event)
 
     try {
@@ -110,6 +117,7 @@ export function csrfProtection(): ReturnType<typeof defineEventHandler> {
     }
 
     await issueCsrfCookie(event, request)
+    return undefined
   })
 }
 

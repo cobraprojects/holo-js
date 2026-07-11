@@ -1526,11 +1526,23 @@ describe('@holo-js/broadcast worker runtime', () => {
   })
 
   it('exposes health and stats endpoints and rejects invalid publish/auth flows', async () => {
-    const runtime = createBroadcastWorkerRuntime({
+    const hiddenStatsRuntime = createBroadcastWorkerRuntime({
       config: createConfig(),
+    })
+    expect((await hiddenStatsRuntime.fetch(new Request('http://worker.test/statsz'))).status).toBe(404)
+
+    const config = normalizeBroadcastConfig({
+      ...createRawConfig(),
+      worker: {
+        ...createRawConfig().worker,
+        statsEnabled: true,
+      },
+    })
+    const runtime = createBroadcastWorkerRuntime({
+      config,
       fetch: vi.fn(async () => new Response('forbidden', { status: 403 })) as typeof fetch,
     })
-    const app = workerInternals.buildWorkerApps(createConfig())['key-main']!
+    const app = workerInternals.buildWorkerApps(config)['key-main']!
     const socket = createSocket(app)
     runtime.connectWebSocket(socket.socket)
 
@@ -1556,6 +1568,21 @@ describe('@holo-js/broadcast worker runtime', () => {
 
     const unknown = await runtime.fetch(new Request('http://worker.test/nope', { method: 'GET' }))
     expect(unknown.status).toBe(404)
+
+    const limitedRuntime = createBroadcastWorkerRuntime({
+      config: normalizeBroadcastConfig({
+        ...createRawConfig(),
+        worker: {
+          ...createRawConfig().worker,
+          maxRequestBytes: 4,
+        },
+      }),
+    })
+    const oversized = await limitedRuntime.fetch(new Request('http://worker.test/apps/app-main/events', {
+      method: 'POST',
+      body: '12345',
+    }))
+    expect(oversized.status).toBe(413)
 
     expect(workerInternals.parseChannelKind('private-orders.1')).toEqual({
       kind: 'private',
@@ -1797,7 +1824,7 @@ describe('@holo-js/broadcast worker runtime', () => {
       fetch: (request: Request, server: { upgrade(request: Request, options?: { data?: unknown }): boolean }) => Promise<Response>
       websocket: {
         open: (socket: { data: { socketId: string, app: unknown, headers: Headers }, send(value: string): void, close(code?: number, reason?: string): void }) => void
-        message: (socket: { data: { socketId: string } }, message: string | Uint8Array) => void
+        message: (socket: { data: { socketId: string }, close?(code?: number, reason?: string): void }, message: string | Uint8Array) => void
         close: (socket: { data: { socketId: string } }) => void
       }
     } | undefined
@@ -1832,6 +1859,8 @@ describe('@holo-js/broadcast worker runtime', () => {
           ...createRawConfig(),
           worker: {
             ...createRawConfig().worker,
+            allowedOrigins: ['https://app.test'],
+            maxMessageBytes: 64,
             scaling: {
               driver: 'redis',
               connection: 'broadcast',
@@ -1860,6 +1889,17 @@ describe('@holo-js/broadcast worker runtime', () => {
       }), { upgrade })
       expect(upgraded.status).toBe(200)
       expect(upgrade).toHaveBeenCalledOnce()
+
+      const forbiddenOrigin = await captured!.fetch(new Request('http://worker.test/app/key-main', {
+        headers: { origin: 'https://attacker.test' },
+      }), { upgrade })
+      expect(forbiddenOrigin.status).toBe(403)
+      expect(upgrade).toHaveBeenCalledOnce()
+
+      const allowedOrigin = await captured!.fetch(new Request('http://worker.test/app/key-main', {
+        headers: { origin: 'https://app.test' },
+      }), { upgrade })
+      expect(allowedOrigin.status).toBe(200)
 
       const wsData = ((upgrade.mock.calls as unknown as Array<[Request, { data: { socketId: string, app: { key: string }, headers: Headers } }]>)[0]![1]).data
       expect(wsData.app.key).toBe('key-main')
@@ -1891,6 +1931,13 @@ describe('@holo-js/broadcast worker runtime', () => {
       }, JSON.stringify({
         event: 'pusher:ping',
       }))
+      captured!.websocket.message({
+        data: {
+          socketId: wsData.socketId,
+        },
+        close,
+      }, 'x'.repeat(65))
+      expect(close).toHaveBeenCalledWith(1009, 'Message too large')
       captured!.websocket.close({
         data: {
           socketId: wsData.socketId,

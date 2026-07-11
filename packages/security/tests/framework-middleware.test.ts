@@ -147,6 +147,14 @@ describe('@holo-js/security framework csrf middleware', () => {
     const headResponse = await csrfProtection()(headRequest)
     expect(headResponse).toBeUndefined()
 
+    const traceRequest = Object.create(new Request('https://app.test/login'), {
+      method: { value: 'TRACE' },
+      cookies: { value: { get: vi.fn(() => undefined) } },
+    }) as Request
+    const traceResponse = await csrfProtection()(traceRequest)
+    expect(traceResponse?.status).toBe(405)
+    expect(traceResponse?.headers.get('allow')).toContain('POST')
+
     resetSecurityRuntime()
     await expect(csrfProtection()(Object.assign(new Request('https://app.test/login', {
       method: 'POST',
@@ -334,7 +342,13 @@ describe('@holo-js/security framework csrf middleware', () => {
     state.url = new URL('https://app.test/broadcasting/auth')
     await expect(middleware({ node: { req: { headers: {} } } })).resolves.toBeUndefined()
 
+    state.method = 'TRACE'
+    const traceResponse = await middleware({ node: { req: { headers: {} } } })
+    expect(traceResponse).toBeInstanceOf(Response)
+    expect((traceResponse as Response).status).toBe(405)
+
     resetSecurityRuntime()
+    state.method = 'POST'
     state.url = new URL('https://app.test/login')
     await expect(middleware({ node: { req: { headers: {} } } })).rejects.toThrow(/Security runtime/)
   })

@@ -82,6 +82,13 @@ function createCsrfErrorResponse(error: SecurityCsrfError): Response {
 
 export function csrfProtection(): SvelteKitCsrfHandle {
   return async ({ event, resolve }) => {
+    if (event.request.method.trim().toUpperCase() === 'TRACE') {
+      return new Response('Method Not Allowed', {
+        status: 405,
+        headers: { Allow: 'GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE' },
+      })
+    }
+
     try {
       await protect(event.request)
     } catch (error) {

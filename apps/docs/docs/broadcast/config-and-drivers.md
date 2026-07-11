@@ -9,6 +9,12 @@ import { defineBroadcastConfig, env } from '@holo-js/config'
 
 export default defineBroadcastConfig({
   default: env('BROADCAST_CONNECTION', 'holo'),
+  worker: {
+    allowedOrigins: [env('APP_URL', 'http://localhost:3000')],
+    maxRequestBytes: 1_048_576,
+    maxMessageBytes: 65_536,
+    statsEnabled: false,
+  },
   connections: {
     holo: {
       driver: 'holo',
@@ -43,6 +49,11 @@ export default defineBroadcastConfig({
   },
 })
 ```
+
+Browser websocket upgrades use exact origin matching. Add every trusted application origin to `allowedOrigins`; use
+`['*']` only when intentionally allowing every browser origin. Requests from non-browser clients without an `Origin`
+header remain supported. The worker rejects oversized HTTP payloads with `413` and oversized websocket messages with
+close code `1009`.
 
 ## Supported Drivers
 

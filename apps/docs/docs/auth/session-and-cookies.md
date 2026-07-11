@@ -60,6 +60,9 @@ Cookie behavior is fully configurable:
 
 These settings control how session cookies and remember-me cookies are serialized.
 
+`SameSite=None`, `Partitioned`, and `__Secure-` cookies require `secure: true`. `__Host-` cookies additionally require
+`path: '/'` and no domain. Invalid paths, domains, or incompatible attributes fail before a response is emitted.
+
 ## How Sessions Persist Between Routes
 
 For browser-based requests, the normal session flow is:
@@ -72,6 +75,9 @@ For browser-based requests, the normal session flow is:
 
 The cookie preserves the session key between routes. The session payload itself remains in your configured session
 store.
+
+The file store writes session records atomically with private directory and file permissions. Use the database or
+Redis store when multiple hosts need to share sessions.
 
 ## Browser Cookies Vs Server Sessions
 
