@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/storage-s3",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "description": "Holo-JS Framework - S3 storage driver",
   "type": "module",
   "license": "MIT",

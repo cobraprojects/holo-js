@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/cache",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "description": "Holo-JS Framework - cache contracts, config helpers, serialization, and runtime seams",
   "type": "module",
   "license": "MIT",

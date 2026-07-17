@@ -55,10 +55,13 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
+  "___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH": {
+    "onlyUpdatePeerDependentsWhenOutOfRange": true
+  },
   "ignore": [
     "docs-app",
-    "next_test_app",
-    "nuxt_test_app",
-    "svelte_test_app"
+    "blog-next",
+    "blog-nuxt",
+    "blog-sveltekit"
   ]
 }

@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/adapter-shared",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "description": "Holo-JS Framework - shared framework adapter infrastructure",
   "type": "module",
   "license": "MIT",
@@ -13,7 +13,9 @@
   },
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "stub": "tsup",

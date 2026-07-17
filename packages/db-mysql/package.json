@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/db-mysql",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "description": "Holo-JS Framework - MySQL database adapter",
   "type": "module",
   "license": "MIT",
