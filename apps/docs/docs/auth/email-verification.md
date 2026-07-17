@@ -18,8 +18,8 @@ The usual flow is:
 Enable it in `config/auth.ts`:
 
 ```ts
-import { defineAuthConfig, env } from '@holo-js/config'
-
+import { defineAuthConfig } from '@holo-js/auth'
+import { env } from '@holo-js/config'
 export default defineAuthConfig({
   emailVerification: {
     required: true,

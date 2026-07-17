@@ -4,9 +4,12 @@ import {
   loadConfigDirectory,
   loadEnvironment,
   resolveEnvPlaceholders,
-  type HoloQueueConfig,
-  type SupportedDatabaseDriver,
 } from '@holo-js/config'
+import type { SupportedDatabaseDriver } from '@holo-js/db'
+import type {} from '@holo-js/broadcast/config'
+import type {} from '@holo-js/mail/config'
+import type {} from '@holo-js/session/config'
+import type { HoloQueueConfig } from '@holo-js/queue'
 import {
   ESBUILD_PACKAGE_VERSION,
   HOLO_PACKAGE_VERSION,
@@ -285,13 +288,13 @@ function registryHasAuthorizationDefinitions(
 function authConfigUsesSocialProviders(
   loaded: Awaited<ReturnType<typeof loadConfigDirectory>>,
 ): boolean {
-  return Object.keys(loaded.auth.social).length > 0
+  return Object.keys(loaded.auth?.social ?? {}).length > 0
 }
 
 function authConfigUsesWorkosProviders(
   loaded: Awaited<ReturnType<typeof loadConfigDirectory>>,
 ): boolean {
-  return Object.entries(loaded.auth.workos).some(([name, provider]) => (
+  return Object.entries(loaded.auth?.workos ?? {}).some(([name, provider]) => (
     name !== 'provider' && typeof provider === 'object' && provider !== null
   ))
 }
@@ -299,14 +302,14 @@ function authConfigUsesWorkosProviders(
 function authConfigUsesClerkProviders(
   loaded: Awaited<ReturnType<typeof loadConfigDirectory>>,
 ): boolean {
-  return Object.keys(loaded.auth.clerk).length > 0
+  return Object.keys(loaded.auth?.clerk ?? {}).length > 0
 }
 
 function mailConfigUsesQueue(
   loaded: Awaited<ReturnType<typeof loadConfigDirectory>>,
 ): boolean {
-  return loaded.mail.queue.queued
-    || Object.values(loaded.mail.mailers).some(mailer => mailer.queue.queued)
+  return loaded.mail?.queue.queued === true
+    || Object.values(loaded.mail?.mailers ?? {}).some(mailer => mailer.queue.queued)
 }
 
 async function projectHasAuthorizationScaffold(projectRoot: string): Promise<boolean> {
@@ -361,8 +364,13 @@ export async function syncManagedDriverDependencies(
   const cachePackageInstalled = typeof dependencies['@holo-js/cache'] !== 'undefined'
     || typeof devDependencies['@holo-js/cache'] !== 'undefined'
   const cacheDesired = cacheConfigured || cachePackageInstalled
+  const framework = await detectProjectFrameworkDescriptor(projectRoot, dependencies, devDependencies)
 
   requiredPackages.add('@holo-js/core')
+  requiredPackages.add('@holo-js/kernel')
+  if (framework) {
+    requiredPackages.add(framework.adapterPackage)
+  }
 
   for (const connection of Object.values(loaded.database.connections)) {
     const inferredDriver = inferConnectionDriver(connection)
@@ -385,7 +393,7 @@ export async function syncManagedDriverDependencies(
     if (authConfigUsesSocialProviders(loaded)) {
       requiredPackages.add('@holo-js/auth-social')
 
-      for (const [providerName, provider] of Object.entries(loaded.auth.social)) {
+      for (const [providerName, provider] of Object.entries(loaded.auth?.social ?? {})) {
         if (typeof provider.runtime === 'string' && provider.runtime.trim()) {
           continue
         }
@@ -419,7 +427,7 @@ export async function syncManagedDriverDependencies(
   }
 
   if (cacheConfigured) {
-    const cacheDrivers = Object.values(loaded.cache.drivers)
+    const cacheDrivers = Object.values(loaded.cache?.drivers ?? {})
     if (cacheDrivers.some(driver => driver.driver === 'redis')) {
       requiredPackages.add('@holo-js/cache-redis')
     }
@@ -436,7 +444,6 @@ export async function syncManagedDriverDependencies(
   if (broadcastConfigured || registryHasBroadcastDefinitions(discoveredRegistry) || hasRealtimeScaffold) {
     requiredPackages.add('@holo-js/broadcast')
     requiredPackages.add('@holo-js/flux')
-    const framework = await detectProjectFrameworkDescriptor(projectRoot, dependencies, devDependencies)
     if (framework) {
       for (const packageName of getFrameworkBroadcastPackagesFromDescriptor(framework)) {
         requiredPackages.add(packageName)
@@ -457,18 +464,18 @@ export async function syncManagedDriverDependencies(
     requiredPackages.add('@holo-js/queue')
   }
 
-  if (queueConfigured || registryHasJobs(discoveredRegistry) || mailConfigUsesQueue(loaded)) {
+  if (queueConfigured || registryHasJobs(discoveredRegistry) || (mailConfigured && mailConfigUsesQueue(loaded))) {
     requiredPackages.add('@holo-js/queue')
 
     if (queueConfigured) {
-      const queueConnections = Object.values(loaded.queue.connections)
+      const queueConnections = Object.values(loaded.queue?.connections ?? {})
       if (queueConnections.some(connection => connection.driver === 'redis')) {
         requiredPackages.add('@holo-js/queue-redis')
       }
 
       if (
         queueConnections.some(connection => connection.driver === 'database')
-        || loaded.queue.failed !== false
+        || loaded.queue?.failed !== false
       ) {
         requiredPackages.add('@holo-js/queue-db')
       }
@@ -487,7 +494,7 @@ export async function syncManagedDriverDependencies(
   if (storageConfigured) {
     requiredPackages.add('@holo-js/storage')
 
-    if (Object.values(loaded.storage.disks).some(disk => disk.driver === 's3')) {
+    if (Object.values(loaded.storage?.disks ?? {}).some(disk => disk.driver === 's3')) {
       requiredPackages.add('@holo-js/storage-s3')
     }
   }
@@ -495,6 +502,7 @@ export async function syncManagedDriverDependencies(
   let changed = false
   const removableManagedPackages = new Set<string>([
     '@holo-js/core',
+    '@holo-js/kernel',
     ...Object.values(DB_DRIVER_PACKAGE_NAMES),
     '@holo-js/auth',
     '@holo-js/auth-clerk',

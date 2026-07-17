@@ -715,6 +715,90 @@ describe('new core runtime slice', () => {
     expect(order).toEqual(['first-start', 'first-end', 'second-start'])
   })
 
+  it('applies scheduler backpressure to work inside an exclusive scope', async () => {
+    const scheduler = createQueryScheduler({
+      connectionName: 'default',
+      supportsConcurrentQueries: false,
+      supportsWorkerThreads: false,
+      concurrency: { maxConcurrentQueries: 1, queueLimit: 0 },
+    })
+    let releaseFirst!: () => void
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+
+    await scheduler.exclusive(async () => {
+      const first = scheduler.schedule({ transactional: true, withinExclusive: true }, async () => {
+        await firstGate
+      })
+      await Promise.resolve()
+      await expect(scheduler.schedule({ transactional: true, withinExclusive: true }, async () => {}))
+        .rejects.toThrow('Query scheduler queue limit exceeded')
+      releaseFirst()
+      await first
+    })
+  })
+
+  it('keeps root operations outside exclusive transaction work', async () => {
+    const scheduler = createQueryScheduler({
+      connectionName: 'default',
+      supportsConcurrentQueries: false,
+      supportsWorkerThreads: false,
+    })
+    const order: string[] = []
+    let releaseExclusive!: () => void
+    const released = new Promise<void>((resolve) => {
+      releaseExclusive = resolve
+    })
+
+    const exclusive = scheduler.exclusive(async () => {
+      order.push('exclusive-start')
+      await scheduler.schedule({ transactional: true, withinExclusive: true }, async () => {
+        order.push('transaction-query')
+      })
+      await released
+      order.push('exclusive-end')
+    })
+    await Promise.resolve()
+    const root = scheduler.schedule({ transactional: false }, async () => {
+      order.push('root-query')
+    })
+    await Promise.resolve()
+    expect(order).toEqual(['exclusive-start', 'transaction-query'])
+
+    releaseExclusive()
+    await Promise.all([exclusive, root])
+    expect(order).toEqual(['exclusive-start', 'transaction-query', 'exclusive-end', 'root-query'])
+  })
+
+  it('prioritizes a pending exclusive scope over newly queued root operations', async () => {
+    const scheduler = createQueryScheduler({
+      connectionName: 'default',
+      supportsConcurrentQueries: true,
+      supportsWorkerThreads: false,
+      concurrency: { maxConcurrentQueries: 1, queueLimit: 2 },
+    })
+    const order: string[] = []
+    let releaseActive!: () => void
+    const activeGate = new Promise<void>((resolve) => { releaseActive = resolve })
+    const active = scheduler.schedule({ transactional: false }, async () => {
+      order.push('active')
+      await activeGate
+    })
+    await Promise.resolve()
+    const exclusive = scheduler.exclusive(async () => {
+      order.push('exclusive')
+    })
+    const queuedRoot = scheduler.schedule({ transactional: false }, async () => {
+      order.push('root')
+    })
+    await Promise.resolve()
+    expect(order).toEqual(['active'])
+    releaseActive()
+    await Promise.all([active, exclusive, queuedRoot])
+    expect(order).toEqual(['active', 'exclusive', 'root'])
+  })
+
   it('uses worker scheduling mode when the dialect supports it and the connection prefers worker threads', async () => {
     const adapter = new FakeAdapter()
     let schedulingMode: string | undefined
@@ -2074,6 +2158,37 @@ describe('connection manager and facade', () => {
     expect(defaultAdapter.calls).toContain('query:select default:0')
     expect(analyticsAdapter.calls).toContain('query:select analytics:0')
     resetDB()
+  })
+
+  it('uses native concurrent transaction scopes without the exclusive scheduler gate', async () => {
+    const adapter = new FakeAdapter() as FakeAdapter & { supportsConcurrentTransactionScopes: true }
+    Object.defineProperty(adapter, 'supportsConcurrentTransactionScopes', { value: true })
+    const db = createDatabase({
+      connectionName: 'default',
+      adapter,
+      dialect: createDialect(true),
+      security: { allowUnsafeRawSql: true },
+    })
+
+    await expect(db.transaction(async tx => tx.unsafeQuery(unsafeSql('select concurrent'))))
+      .resolves.toEqual(expect.objectContaining({ rows: [expect.objectContaining({ ok: true })] }))
+    expect(adapter.calls).toContain('query:select concurrent:0')
+  })
+
+  it('runs adapter transaction scopes through the exclusive scheduler gate', async () => {
+    const adapter = new FakeAdapter() as FakeAdapter & {
+      runWithTransactionScope<TValue>(callback: () => Promise<TValue>): Promise<TValue>
+    }
+    adapter.runWithTransactionScope = async callback => callback()
+    const db = createDatabase({
+      connectionName: 'default',
+      adapter,
+      dialect: createDialect(true),
+      security: { allowUnsafeRawSql: true },
+    })
+
+    await db.transaction(async tx => tx.unsafeQuery(unsafeSql('select scoped')))
+    expect(adapter.calls).toContain('query:select scoped:0')
   })
 })
 

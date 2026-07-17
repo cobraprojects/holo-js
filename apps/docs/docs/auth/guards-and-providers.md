@@ -18,8 +18,7 @@ Common examples:
 ## Defining Guards
 
 ```ts
-import { defineAuthConfig } from '@holo-js/config'
-
+import { defineAuthConfig } from '@holo-js/auth'
 export default defineAuthConfig({
   defaults: {
     guard: 'web',

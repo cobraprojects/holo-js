@@ -21,8 +21,8 @@ The package does not require hardcoded request fields such as `email`. The crede
 Define a session guard and a provider:
 
 ```ts
-import { defineAuthConfig, env } from '@holo-js/config'
-
+import { defineAuthConfig } from '@holo-js/auth'
+import { env } from '@holo-js/config'
 export default defineAuthConfig({
   defaults: {
     guard: 'web',

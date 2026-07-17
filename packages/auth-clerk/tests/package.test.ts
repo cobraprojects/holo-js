@@ -326,11 +326,14 @@ class InMemoryIdentityStore {
 
 function configureRuntime(options: {
   emailVerificationRequired?: boolean
+  apiUrl?: string
   clerkGuard?: 'web' | 'admin' | 'api'
   includeClerkConfig?: boolean
   configureClerkRuntime?: boolean
   frontendApi?: string
   publishableKey?: string
+  redirectUri?: string
+  secretKey?: string
   responseCookies?: string[]
   redirectResponses?: {
     url: string
@@ -405,10 +408,11 @@ function configureRuntime(options: {
         : {
             provider: 'app',
             app: {
+              apiUrl: options.apiUrl,
               publishableKey: options.publishableKey ?? 'pk_test',
-              secretKey: 'sk_test',
+              secretKey: options.secretKey ?? 'sk_test',
               frontendApi: options.frontendApi ?? 'https://accounts.app.test',
-              redirectUri: 'https://app.test/api/auth/clerk/callback',
+              redirectUri: options.redirectUri ?? 'https://app.test/api/auth/clerk/callback',
               sessionCookie: '__session',
               guard: options.clerkGuard,
               mapToProvider: options.clerkGuard === 'admin' ? 'admins' : undefined,
@@ -487,6 +491,14 @@ function createSignedJwt(
   const signingInput = `${encodedHeader}.${encodedPayload}`
   const signature = signData('RSA-SHA256', Buffer.from(signingInput, 'utf8'), privateKey).toString('base64url')
   return `${signingInput}.${signature}`
+}
+
+function createUnsignedJwt(payload: Readonly<Record<string, unknown>>): string {
+  return [
+    encodeBase64Url(JSON.stringify({ alg: 'none', typ: 'JWT' })),
+    encodeBase64Url(JSON.stringify(payload)),
+    'signature',
+  ].join('.')
 }
 
 function createJwksResponse(publicKey: ReturnType<typeof generateKeyPairSync>['publicKey']): Response {
@@ -768,6 +780,67 @@ describe('@holo-js/auth-clerk', () => {
       },
     }))).rejects.toThrow('authorized party')
     await expect(verifySession(missingExpiration)).rejects.toThrow('expiration')
+  })
+
+  it('rejects expired, unbound, unsigned, and incorrectly signed Clerk JWTs', async () => {
+    const runtime = configureRuntime({
+      configureClerkRuntime: false,
+      apiUrl: 'https://edge-api.clerk.test',
+      frontendApi: 'https://edge.clerk.test',
+    })
+    configureClerkAuthRuntime({ identityStore: runtime.identityStore })
+    const signer = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    const verifier = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    vi.stubGlobal('fetch', async (input: FetchMockInput) => {
+      const url = resolveFetchMockUrl(input)
+      if (url.includes('jwks')) {
+        return createJwksResponse(signer.publicKey)
+      }
+      return new Response(JSON.stringify({ id: 'user', email_addresses: [] }), { status: 200 })
+    })
+    const claims = {
+      azp: 'https://app.test',
+      sub: 'user',
+      sid: 'session',
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }
+    await expect(verifySession(createSignedJwt({ ...claims, exp: 1 }, signer.privateKey))).rejects.toThrow('expired')
+    await expect(verifySession(createSignedJwt({ ...claims, sub: ' ' }, signer.privateKey))).rejects.toThrow('subject')
+    await expect(verifySession(createSignedJwt({ ...claims, sid: undefined }, signer.privateKey))).rejects.toThrow('session id')
+    await expect(verifySession(createSignedJwt({ ...claims, sid: ' ', session_id: 'legacy' }, signer.privateKey))).resolves.toMatchObject({
+      sessionId: 'legacy',
+    })
+    await expect(verifySession(createUnsignedJwt(claims))).rejects.toThrow('Unsupported Clerk JWT algorithm')
+
+    await expect(verifySession(createSignedJwt(claims, verifier.privateKey))).rejects.toThrow('signature verification failed')
+  })
+
+  it('requires a Clerk secret key and readable built-in user profile', async () => {
+    const runtime = configureRuntime({
+      configureClerkRuntime: false,
+      secretKey: '',
+      apiUrl: 'https://credentials-api.clerk.test',
+      frontendApi: 'https://credentials.clerk.test',
+    })
+    configureClerkAuthRuntime({ identityStore: runtime.identityStore })
+    const keyPair = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    const token = createSignedJwt({
+      sub: 'profile', sid: 'session', exp: Math.floor(Date.now() / 1000) + 3600,
+    }, keyPair.privateKey)
+    vi.stubGlobal('fetch', async () => createJwksResponse(keyPair.publicKey))
+    await expect(verifySession(token)).rejects.toThrow('secretKey')
+
+    resetAuthRuntime()
+    configureRuntime({
+      configureClerkRuntime: false,
+      apiUrl: 'https://profile-api.clerk.test',
+      frontendApi: 'https://profile.clerk.test',
+    })
+    configureClerkAuthRuntime({ identityStore: runtime.identityStore })
+    vi.stubGlobal('fetch', async (input: FetchMockInput) => resolveFetchMockUrl(input).includes('jwks')
+      ? createJwksResponse(keyPair.publicKey)
+      : new Response(null, { status: 503 }))
+    await expect(verifySession(token)).rejects.toThrow('Failed to load Clerk user')
   })
 
   it('uses frontendApi JWKS when apiUrl is not configured', async () => {
@@ -1310,6 +1383,7 @@ describe('@holo-js/auth-clerk', () => {
     })
     const sessionId = authRuntimeInternals.getRuntimeBindings().context.getSessionId('web')
     expect(sessionId).toBeTypeOf('string')
+    await expect(result?.user.can('anything', {})).resolves.toBe(false)
   })
 
   it('returns hosted Account Portal redirects for login and register', async () => {
@@ -1561,6 +1635,76 @@ describe('@holo-js/auth-clerk', () => {
     expect(responseCookies).toContainEqual(expect.stringContaining('holo_session='))
   })
 
+  it('handles Clerk SDK handshake retries, signed-out states, and missing credentials', async () => {
+    const responseCookies: string[] = []
+    const runtime = configureRuntime({
+      configureClerkRuntime: false,
+      publishableKey: 'pk_sdk_edges',
+      responseCookies,
+    })
+    configureClerkAuthRuntime({ identityStore: runtime.identityStore })
+    const fallbackHeaders = new Headers({ 'set-cookie': 'first=1; Path=/, second=2; Path=/' })
+    Object.defineProperty(fallbackHeaders, 'getSetCookie', { value: undefined })
+    const authenticateRequest = vi.fn()
+      .mockResolvedValueOnce({
+        status: 'handshake',
+        headers: new Headers({ location: 'https://accounts.app.test/handshake' }),
+      })
+      .mockResolvedValueOnce({ status: 'signed-out', headers: fallbackHeaders })
+    vi.doMock('@clerk/backend', () => ({
+      createClerkClient: () => ({ authenticateRequest }),
+    }))
+
+    await expect(verifyRequest(new Request('https://app.test/api/auth/clerk/callback?__clerk_handshake=1'))).resolves.toBeNull()
+    await expect(verifyRequest(new Request('https://app.test/api/auth/clerk/callback'))).resolves.toBeNull()
+    expect(responseCookies).toEqual(['first=1; Path=/', 'second=2; Path=/'])
+
+    resetAuthRuntime()
+    configureRuntime({ configureClerkRuntime: false, publishableKey: 'pk_sdk_no_cookie_sink' })
+    configureClerkAuthRuntime({ identityStore: runtime.identityStore })
+    authenticateRequest.mockResolvedValueOnce({ status: 'signed-out', headers: new Headers() })
+    await expect(verifyRequest(new Request('https://app.test/api/auth/clerk/callback'))).resolves.toBeNull()
+
+    resetAuthRuntime()
+    configureRuntime({ configureClerkRuntime: false, publishableKey: '' })
+    configureClerkAuthRuntime({ identityStore: runtime.identityStore })
+    await expect(verifyRequest(new Request('https://app.test/api/auth/clerk/callback'))).resolves.toBeNull()
+  })
+
+  it.each(['', '0'])('treats Clerk redirect-count cookie %j as no completed handshake', async (redirectCount) => {
+    const redirects: { url: string, status?: 301 | 302 | 303 | 307 | 308 }[] = []
+    const runtime = configureRuntime({
+      configureClerkRuntime: false,
+      publishableKey: 'pk_redirect_count',
+      redirectResponses: redirects,
+    })
+    configureClerkAuthRuntime({ identityStore: runtime.identityStore })
+    vi.doMock('@clerk/backend', () => ({
+      createClerkClient: () => ({
+        authenticateRequest: async () => ({
+          status: 'handshake',
+          headers: new Headers({ location: 'https://accounts.app.test/handshake' }),
+        }),
+      }),
+    }))
+
+    await expect(completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback', {
+      headers: { cookie: `__clerk_redirect_count=${redirectCount}` },
+    }))).rejects.toThrow('Holo auth response was already handled.')
+    expect(redirects).toHaveLength(1)
+  })
+
+  it('delegates verification to a configured Clerk request verifier', async () => {
+    const runtime = configureRuntime()
+    const requestVerifier = vi.fn(async () => null)
+    configureClerkAuthRuntime({
+      identityStore: runtime.identityStore,
+      providers: { app: { verifyRequest: requestVerifier } },
+    })
+    await expect(verifyRequest(new Request('https://app.test/me'))).resolves.toBeNull()
+    expect(requestVerifier).toHaveBeenCalledOnce()
+  })
+
   it('logs out locally, revokes the Clerk session, and returns a redirect URL', async () => {
     vi.stubGlobal('fetch', async (url: string | URL | Request, init?: RequestInit) => {
       expect(String(url)).toBe('https://api.clerk.com/v1/sessions/sess_logout_callback/revoke')
@@ -1613,6 +1757,34 @@ describe('@holo-js/auth-clerk', () => {
     expect(response.headers.get('set-cookie')).toContain('holo_session=;')
   })
 
+  it('fails safely when Clerk session revocation cannot be authorized or completed', async () => {
+    const missingSecret = configureRuntime({ secretKey: '' })
+    missingSecret.sessions.set('missing-secret-token', {
+      sessionId: 'missing-secret-session',
+      user: { id: 'missing-secret-user', email: 'missing-secret@app.test', emailVerified: true },
+    })
+    await authenticate(new Request('https://app.test/me', {
+      headers: { authorization: 'Bearer missing-secret-token' },
+    }))
+    const unauthorized = await logoutWithClerk(new Request('https://app.test/logout'))
+    expect(unauthorized.status).toBe(500)
+
+    resetClerkAuthRuntime()
+    resetAuthRuntime()
+    resetSessionRuntime()
+    const rejected = configureRuntime()
+    rejected.sessions.set('rejected-token', {
+      sessionId: 'rejected-session',
+      user: { id: 'rejected-user', email: 'rejected@app.test', emailVerified: true },
+    })
+    await authenticate(new Request('https://app.test/me', {
+      headers: { authorization: 'Bearer rejected-token' },
+    }))
+    vi.stubGlobal('fetch', async () => new Response(null, { status: 503 }))
+    const failed = await logoutWithClerk(new Request('https://app.test/logout'))
+    expect(failed.status).toBe(500)
+  })
+
   it('normalizes Clerk logout return URLs to relative or same-origin destinations', async () => {
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ id: 'sess_logout_callback', status: 'revoked' }), {
       status: 200,
@@ -1659,6 +1831,10 @@ describe('@holo-js/auth-clerk', () => {
     await expect(completeAndLogout('https://app.test/settings').then(response => response.headers.get('location'))).resolves.toBe('https://app.test/settings')
     await expect(completeAndLogout('https://evil.test/phish').then(response => response.headers.get('location'))).resolves.toBe('https://app.test/')
     await expect(completeAndLogout('//evil.test/phish').then(response => response.headers.get('location'))).resolves.toBe('https://app.test/')
+    await expect(completeAndLogout('').then(response => response.headers.get('location'))).resolves.toBe('https://app.test/')
+    await expect(completeAndLogout('/login\nheader').then(response => response.headers.get('location'))).resolves.toBe('https://app.test/')
+    await expect(completeAndLogout('http://[').then(response => response.headers.get('location'))).resolves.toBe('https://app.test/')
+    await expect(completeAndLogout('login').then(response => response.headers.get('location'))).resolves.toBe('https://app.test/')
   })
 
   it('returns typed callback failures without combining response behavior', async () => {
@@ -1678,6 +1854,43 @@ describe('@holo-js/auth-clerk', () => {
         code: 'access_denied',
         message: 'Denied',
       },
+    })
+    await expect(completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback?error=cancelled'))).resolves.toMatchObject({
+      data: null,
+      error: { code: 'cancelled', message: 'Clerk authentication failed.' },
+    })
+  })
+
+  it('normalizes non-error callback failures and identity conflicts', async () => {
+    const runtime = configureRuntime()
+    configureClerkAuthRuntime({
+      identityStore: runtime.identityStore,
+      providers: { app: { verifyRequest: async () => { throw 'network failure' } } },
+    })
+    await expect(completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback'))).resolves.toMatchObject({
+      data: null,
+      error: { code: 'clerk_auth_failed', message: 'Clerk authentication failed.', status: 422 },
+    })
+
+    configureClerkAuthRuntime({
+      identityStore: runtime.identityStore,
+      providers: {
+        app: {
+          verifyRequest: async () => ({
+            sessionId: 'conflict-session',
+            user: clerkAuthInternals.normalizeClerkUserProfile({
+              id: 'conflict-user',
+              email: 'callback-conflict@app.test',
+              emailVerified: true,
+            }),
+          }),
+        },
+      },
+    })
+    await runtime.usersProvider.create({ email: 'callback-conflict@app.test' })
+    await expect(completeClerkAuth(new Request('https://app.test/api/auth/clerk/callback'))).resolves.toMatchObject({
+      data: null,
+      error: { code: 'clerk_identity_conflict', status: 409 },
     })
   })
 
@@ -1721,6 +1934,55 @@ describe('@holo-js/auth-clerk', () => {
     expect(firstSessionId ? runtime.sessionStore.records.has(firstSessionId) : false).toBe(true)
   })
 
+  it('does not reuse Holo sessions with mismatched auth or Clerk identities', async () => {
+    const runtime = configureRuntime()
+    runtime.sessions.set('mismatch-token', {
+      sessionId: 'clerk-session',
+      user: { id: 'mismatch-user', email: 'mismatch@app.test', emailVerified: true },
+    })
+    const first = await authenticate(new Request('https://app.test/me', {
+      headers: { authorization: 'Bearer mismatch-token' },
+    }))
+    const firstId = first?.authSession?.sessionId
+    const firstCookie = first?.authSession?.cookies[0]?.split(';', 1)[0]
+    const firstRecord = firstId ? runtime.sessionStore.records.get(firstId) : undefined
+    if (!firstId || !firstCookie || !firstRecord) throw new Error('Expected initial Holo session.')
+    const firstPayload = firstRecord.data.auth as Record<string, unknown>
+    runtime.sessionStore.records.set(firstId, { ...firstRecord, data: { auth: { ...firstPayload, provider: 'admins' } } })
+    authRuntimeInternals.getRuntimeBindings().context.setSessionId('web')
+    const second = await authenticate(new Request('https://app.test/me', {
+      headers: { authorization: 'Bearer mismatch-token', cookie: firstCookie },
+    }))
+    expect(second?.authSession?.sessionId).not.toBe(firstId)
+
+    const secondId = second?.authSession?.sessionId
+    const secondCookie = second?.authSession?.cookies[0]?.split(';', 1)[0]
+    const secondRecord = secondId ? runtime.sessionStore.records.get(secondId) : undefined
+    if (!secondId || !secondCookie || !secondRecord) throw new Error('Expected replacement Holo session.')
+    const secondPayload = secondRecord.data.auth as Record<string, unknown>
+    runtime.sessionStore.records.set(secondId, {
+      ...secondRecord,
+      data: { auth: { ...secondPayload, clerk: { provider: 'other', sessionId: 'clerk-session' } } },
+    })
+    authRuntimeInternals.getRuntimeBindings().context.setSessionId('web')
+    const third = await authenticate(new Request('https://app.test/me', {
+      headers: { authorization: 'Bearer mismatch-token', cookie: secondCookie },
+    }))
+    expect(third?.authSession?.sessionId).not.toBe(secondId)
+
+    const thirdId = third?.authSession?.sessionId
+    const thirdCookie = third?.authSession?.cookies[0]?.split(';', 1)[0]
+    const thirdRecord = thirdId ? runtime.sessionStore.records.get(thirdId) : undefined
+    if (!thirdId || !thirdCookie || !thirdRecord) throw new Error('Expected second replacement Holo session.')
+    const { clerk: _clerk, ...standardPayload } = thirdRecord.data.auth as Record<string, unknown>
+    runtime.sessionStore.records.set(thirdId, { ...thirdRecord, data: { auth: standardPayload } })
+    authRuntimeInternals.getRuntimeBindings().context.setSessionId('web')
+    const fourth = await authenticate(new Request('https://app.test/me', {
+      headers: { authorization: 'Bearer mismatch-token', cookie: thirdCookie },
+    }))
+    expect(fourth?.authSession).toMatchObject({ sessionId: thirdId, provider: 'users', cookies: [] })
+  })
+
   it('clears the Clerk hosted session cookie through the shared logout api', async () => {
     const runtime = configureRuntime()
     runtime.sessions.set('logout-token', {
@@ -1743,6 +2005,37 @@ describe('@holo-js/auth-clerk', () => {
 
     expect(loggedOut.cookies).toContainEqual(expect.stringContaining('holo_session=;'))
     expect(loggedOut.cookies).toContainEqual(expect.stringContaining('__session=;'))
+  })
+
+  it.each([
+    [undefined],
+    [null],
+    ['invalid'],
+    [{ provider: 'other', sessionId: 'session' }],
+    [{ provider: 'app', sessionId: ' ' }],
+  ] as const)('ignores malformed Clerk logout metadata %#', async (clerk) => {
+    const runtime = configureRuntime()
+    const now = new Date()
+    runtime.sessionStore.records.set('malformed-session', {
+      id: 'malformed-session',
+      store: 'database',
+      data: {
+        auth: {
+          guard: 'web',
+          provider: 'users',
+          userId: 1,
+          user: { id: 1 },
+          ...(typeof clerk === 'undefined' ? {} : { clerk }),
+        },
+      },
+      createdAt: now,
+      lastActivityAt: now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    })
+    authRuntimeInternals.getRuntimeBindings().context.setSessionId('web', 'malformed-session')
+    const response = await logoutWithClerk(new Request('https://app.test/logout'))
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toBe('https://app.test/')
   })
 
   it('updates existing linked users on subsequent Clerk syncs and relinks missing local rows', async () => {
@@ -1817,6 +2110,61 @@ describe('@holo-js/auth-clerk', () => {
     }))).rejects.toBeInstanceOf(ClerkAuthConflictError)
   })
 
+  it('relinks an orphaned Clerk identity without an email match', async () => {
+    const runtime = configureRuntime()
+    await runtime.identityStore.save({
+      provider: 'app',
+      providerUserId: 'orphan',
+      guard: 'web',
+      authProvider: 'users',
+      userId: 404,
+      email: undefined,
+      emailVerified: false,
+      profile: {},
+      linkedAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    })
+    const result = await syncIdentity({
+      sessionId: 'orphan-session',
+      user: clerkAuthInternals.normalizeClerkUserProfile({ id: 'orphan' }),
+    }, 'app')
+    expect(result).toMatchObject({
+      status: 'relinked',
+      user: { id: 1, email: 'orphan@clerk.hosted.local' },
+      identity: { userId: 1 },
+    })
+    expect(result.identity.linkedAt).toEqual(new Date('2026-01-01T00:00:00.000Z'))
+  })
+
+  it('updates a linked Clerk identity with no conflicting email', async () => {
+    const runtime = configureRuntime()
+    const user = await runtime.usersProvider.create({ email: 'linked@app.test', name: 'Linked User' })
+    await runtime.identityStore.save({
+      provider: 'app',
+      providerUserId: 'linked-user',
+      guard: 'web',
+      authProvider: 'users',
+      userId: user.id,
+      email: undefined,
+      emailVerified: false,
+      profile: {},
+      linkedAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    })
+    await expect(syncIdentity({
+      sessionId: 'linked-no-email',
+      user: clerkAuthInternals.normalizeClerkUserProfile({ id: 'linked-user' }),
+    }, 'app')).resolves.toMatchObject({ user: { id: user.id } })
+    await expect(syncIdentity({
+      sessionId: 'linked-unique-email',
+      user: clerkAuthInternals.normalizeClerkUserProfile({
+        id: 'linked-user',
+        email: 'unique-linked@app.test',
+        emailVerified: true,
+      }),
+    }, 'app')).resolves.toMatchObject({ status: 'updated' })
+  })
+
   it('claims a Clerk identity once under concurrent first syncs', async () => {
     const runtime = configureRuntime()
     const originalCreate = runtime.usersProvider.create.bind(runtime.usersProvider)
@@ -1852,6 +2200,72 @@ describe('@holo-js/auth-clerk', () => {
       userId: first.user.id,
       email: 'concurrent@app.test',
     })
+  })
+
+  it('saves a new Clerk identity when the identity store has no atomic claim operation', async () => {
+    const runtime = configureRuntime()
+    const bindings = clerkAuthInternals.getBindings()
+    configureClerkAuthRuntime({
+      providers: bindings.providers,
+      identityStore: {
+        findByProviderUserId: runtime.identityStore.findByProviderUserId.bind(runtime.identityStore),
+        findByUserId: runtime.identityStore.findByUserId.bind(runtime.identityStore),
+        save: runtime.identityStore.save.bind(runtime.identityStore),
+      },
+    })
+
+    const result = await syncIdentity({
+      sessionId: 'save-only-session',
+      user: clerkAuthInternals.normalizeClerkUserProfile({ id: 'save-only' }),
+    }, 'app')
+
+    expect(result.status).toBe('created')
+    expect(runtime.identityStore.records.has('app:save-only')).toBe(true)
+  })
+
+  it('uses the identity-store claim winner and deletes the losing local user', async () => {
+    const runtime = configureRuntime()
+    runtime.usersProvider.users.set(99, {
+      id: 99,
+      email: 'winner@app.test',
+      name: 'Claim Winner',
+      role: 'member',
+    })
+    runtime.usersProvider.usersByEmail.set('winner@app.test', 99)
+    const bindings = clerkAuthInternals.getBindings()
+    configureClerkAuthRuntime({
+      providers: bindings.providers,
+      identityStore: {
+        findByProviderUserId: async () => null,
+        findByUserId: async () => null,
+        save: async () => {},
+        claim: async record => ({ ...record, userId: 99 }),
+      },
+    })
+
+    const result = await syncIdentity({
+      sessionId: 'claim-winner-session',
+      user: clerkAuthInternals.normalizeClerkUserProfile({ id: 'claim-winner' }),
+    }, 'app')
+
+    expect(result).toMatchObject({ status: 'linked', user: { id: 99 } })
+    expect(runtime.usersProvider.users.has(1)).toBe(false)
+
+    const authBindings = authRuntimeInternals.getRuntimeBindings()
+    const providerWithoutDelete: AuthProviderAdapter<UserRecord> = {
+      findById: runtime.usersProvider.findById.bind(runtime.usersProvider),
+      findByCredentials: runtime.usersProvider.findByCredentials.bind(runtime.usersProvider),
+      create: runtime.usersProvider.create.bind(runtime.usersProvider),
+      update: runtime.usersProvider.update.bind(runtime.usersProvider),
+      getId: runtime.usersProvider.getId.bind(runtime.usersProvider),
+      serialize: runtime.usersProvider.serialize.bind(runtime.usersProvider),
+    }
+    configureAuthRuntime({ ...authBindings, providers: { users: providerWithoutDelete } })
+    await syncIdentity({
+      sessionId: 'claim-winner-no-delete-session',
+      user: clerkAuthInternals.normalizeClerkUserProfile({ id: 'claim-winner-no-delete' }),
+    }, 'app')
+    expect(runtime.usersProvider.users.has(2)).toBe(true)
   })
 
   it('fails when Clerk sync needs to persist changes without adapter.update()', async () => {
@@ -2131,5 +2545,237 @@ describe('@holo-js/auth-clerk', () => {
       },
     })
     expect(failedLogout.status).toBe(500)
+  })
+
+  it('normalizes Clerk profile and email variants', () => {
+    const camel = clerkAuthInternals.normalizeClerkUserProfile({
+      id: 'camel',
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      imageUrl: 'https://cdn.test/camel.png',
+      primaryEmailAddressId: 'primary',
+      emailAddresses: [
+        { id: 'primary', emailAddress: 'ada@app.test', verificationStatus: 'verified' },
+      ],
+    })
+    expect(camel).toMatchObject({
+      email: 'ada@app.test',
+      emailVerified: true,
+      name: 'Ada Lovelace',
+      imageUrl: 'https://cdn.test/camel.png',
+    })
+
+    const snake = clerkAuthInternals.normalizeClerkUserProfile({
+      id: 'snake',
+      name: 'Snake User',
+      first_name: 'Snake',
+      last_name: 'User',
+      image_url: 'https://cdn.test/snake.png',
+      primary_email_address_id: 'snake-primary',
+      email_addresses: [
+        {
+          id: 'snake-primary',
+          email_address: 'snake@app.test',
+          verification: { status: 'verified' },
+        },
+      ],
+    })
+    expect(snake).toMatchObject({
+      email: 'snake@app.test',
+      emailVerified: true,
+      name: 'Snake User',
+      imageUrl: 'https://cdn.test/snake.png',
+    })
+    expect(clerkAuthInternals.resolvePrimaryEmail({
+      id: 'fallback',
+      email: '',
+      emailVerified: false,
+      name: '',
+      emailAddresses: [{ emailAddress: 'fallback@app.test', verificationStatus: 'verified' }],
+      raw: {},
+    })).toEqual({ email: 'fallback@app.test', emailVerified: true })
+    expect(clerkAuthInternals.resolvePrimaryEmail({
+      id: 'missing', email: '', emailVerified: false, name: '', emailAddresses: [], raw: {},
+    })).toEqual({ email: undefined, emailVerified: false })
+    expect(clerkAuthInternals.resolveEmailForCreation({
+      id: 'missing', email: '', emailVerified: false, name: '', emailAddresses: [], raw: {},
+    })).toBe('missing@clerk.hosted.local')
+    expect(clerkAuthInternals.resolveDisplayName({
+      id: 'display-id', email: '', emailVerified: false, name: '', raw: {},
+    })).toBe('display-id')
+    expect(clerkAuthInternals.normalizeClerkUserProfile({
+      emailAddresses: [{}],
+    })).toMatchObject({ id: '', email: '', name: '' })
+    expect(clerkAuthInternals.getSessionTokenFromRequest(new Request('https://app.test', {
+      headers: { authorization: 'Basic token', cookie: '__session=cookie-token' },
+    }), '__session')).toBe('cookie-token')
+  })
+
+  it.each([
+    ['frontendApi', { frontendApi: '' }, 'frontendApi'],
+    ['redirectUri', { redirectUri: '' }, 'redirectUri'],
+  ] as const)('returns a safe hosted redirect error when %s is missing', async (_field, options, message) => {
+    configureRuntime(options)
+    const response = await loginWithClerk(new Request('https://app.test/login'))
+    expect(response.status).toBe(422)
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'clerk_login_failed',
+      message: expect.stringContaining(message),
+      ok: false,
+    })
+    const registerResponse = await registerWithClerk(new Request('https://app.test/register'))
+    expect(registerResponse.status).toBe(422)
+    await expect(registerResponse.json()).resolves.toMatchObject({ code: 'clerk_register_failed' })
+  })
+
+  it('can explicitly clear Clerk runtime bindings', () => {
+    configureRuntime()
+    configureClerkAuthRuntime()
+    expect(() => clerkAuthInternals.getBindings()).toThrow('not configured yet')
+  })
+
+  it('stores Clerk runtime state on globalThis when process is unavailable', () => {
+    vi.stubGlobal('process', undefined)
+    configureClerkAuthRuntime()
+    expect(Object.getOwnPropertyDescriptor(globalThis, '__holoJsAuthClerkRuntime')).toMatchObject({
+      configurable: true,
+      enumerable: false,
+      writable: true,
+    })
+    delete (globalThis as typeof globalThis & { __holoJsAuthClerkRuntime?: unknown }).__holoJsAuthClerkRuntime
+    vi.unstubAllGlobals()
+  })
+
+  it('fails closed for missing provider capabilities and adapters', async () => {
+    const runtime = configureRuntime()
+    configureClerkAuthRuntime({ providers: { app: {} }, identityStore: runtime.identityStore })
+    await expect(verifySession('token')).rejects.toThrow('does not implement verifySession()')
+    await expect(verifyRequest(new Request('https://app.test/me', {
+      headers: { authorization: 'Bearer token' },
+    }))).rejects.toThrow('does not implement verifySession()')
+
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    configureAuthRuntime({ ...bindings, providers: {} })
+    expect(() => clerkAuthInternals.resolveGuardAndProvider('app')).toThrow('runtime "users" is not configured')
+  })
+
+  it('resolves multiple configured Clerk providers deterministically', () => {
+    const runtime = configureRuntime()
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    configureAuthRuntime({
+      ...bindings,
+      config: defineAuthConfig({
+        ...bindings.config,
+        clerk: {
+          identityStore: runtime.identityStore,
+          alpha: { secretKey: 'alpha' },
+          beta: { secretKey: 'beta' },
+        },
+      }),
+    })
+    expect(() => clerkAuthInternals.resolveConfiguredProviderName()).toThrow('provider name is required')
+    configureAuthRuntime({
+      ...bindings,
+      config: defineAuthConfig({
+        ...bindings.config,
+        clerk: {
+          default: { secretKey: 'default' },
+          beta: { secretKey: 'beta' },
+        },
+      }),
+    })
+    expect(clerkAuthInternals.resolveConfiguredProviderName()).toBe('default')
+  })
+
+  it('rejects malformed users returned by Clerk provider boundaries', async () => {
+    const runtime = configureRuntime()
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const malformedCreate: AuthProviderAdapter<UserRecord> = {
+      findById: async () => null,
+      findByCredentials: async () => null,
+      create: async () => null as never,
+      getId: user => user.id,
+      serialize: user => user,
+    }
+    configureAuthRuntime({ ...bindings, providers: { users: malformedCreate } })
+    await expect(syncIdentity({
+      sessionId: 'malformed-create',
+      user: clerkAuthInternals.normalizeClerkUserProfile({ id: 'malformed-create' }),
+    }, 'app')).rejects.toThrow('create() must return an object user')
+
+    const invalidId: AuthProviderAdapter<UserRecord> = {
+      findById: async () => null,
+      findByCredentials: async () => null,
+      create: async input => ({ id: 1, email: String(input.email), name: 'Invalid Id', role: 'member' }),
+      getId: () => ({}) as never,
+      serialize: user => user,
+    }
+    configureAuthRuntime({ ...bindings, providers: { users: invalidId } })
+    await expect(syncIdentity({
+      sessionId: 'invalid-id',
+      user: clerkAuthInternals.normalizeClerkUserProfile({ id: 'invalid-id' }),
+    }, 'app')).rejects.toThrow('must expose a serializable id')
+    expect(runtime.identityStore.records.size).toBe(0)
+  })
+
+  it('serializes Clerk users when an auth adapter has no serializer', async () => {
+    const runtime = configureRuntime()
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const providerWithoutSerializer = {
+      findById: runtime.usersProvider.findById.bind(runtime.usersProvider),
+      findByCredentials: runtime.usersProvider.findByCredentials.bind(runtime.usersProvider),
+      create: runtime.usersProvider.create.bind(runtime.usersProvider),
+      update: runtime.usersProvider.update.bind(runtime.usersProvider),
+      getId: runtime.usersProvider.getId.bind(runtime.usersProvider),
+    } as unknown as AuthProviderAdapter
+    configureAuthRuntime({ ...bindings, providers: { users: providerWithoutSerializer } })
+    const result = await syncIdentity({
+      sessionId: 'no-serializer',
+      user: clerkAuthInternals.normalizeClerkUserProfile({
+        id: 'no-serializer',
+        email_addresses: [{ email_address: 'no-serializer@app.test', verification: { status: 'verified' } }],
+      }),
+    }, 'app')
+    expect(result.user).toMatchObject({ id: 1, email: 'no-serializer@app.test' })
+  })
+
+  it('returns null authentication when the configured Clerk verifier rejects a token', async () => {
+    configureRuntime()
+    await expect(authenticate(new Request('https://app.test/me', {
+      headers: { authorization: 'Bearer missing-token' },
+    }))).resolves.toBeNull()
+  })
+
+  it('does not reuse a session when the session runtime emits no cookie name', async () => {
+    const runtime = configureRuntime()
+    runtime.sessions.set('cookie-name-token', {
+      sessionId: 'cookie-name-session',
+      user: { id: 'cookie-name-user', email: 'cookie-name@app.test', emailVerified: true },
+    })
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    configureAuthRuntime({
+      ...bindings,
+      session: { ...bindings.session, sessionCookie: () => '' },
+    })
+    await expect(authenticate(new Request('https://app.test/me', {
+      headers: { authorization: 'Bearer cookie-name-token', cookie: 'holo_session=stale' },
+    }))).resolves.toMatchObject({ authSession: { sessionId: expect.any(String) } })
+  })
+
+  it('rejects an unlinked Clerk identity that collides with a local email', async () => {
+    const runtime = configureRuntime()
+    await runtime.usersProvider.create({ email: 'new-collision@app.test' })
+    await expect(syncIdentity({
+      sessionId: 'new-collision',
+      user: clerkAuthInternals.normalizeClerkUserProfile({
+        id: 'new-collision',
+        email_addresses: [{
+          id: 'primary',
+          email_address: 'new-collision@app.test',
+          verification: { status: 'verified' },
+        }],
+        primary_email_address_id: 'primary',
+      }),
+    }, 'app')).rejects.toBeInstanceOf(ClerkAuthConflictError)
   })
 })

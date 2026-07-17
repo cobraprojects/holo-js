@@ -13,8 +13,8 @@ npx holo install auth --clerk
 The command wires the hosted-auth route scaffolding. Keep Account Portal enabled in Clerk so those routes can redirect to Clerk's hosted forms.
 
 ```ts
-import { defineAuthConfig, env } from '@holo-js/config'
-
+import { defineAuthConfig } from '@holo-js/auth'
+import { env } from '@holo-js/config'
 export default defineAuthConfig({
   clerk: {
     provider: env('AUTH_CLERK_PROVIDER', 'app'),
@@ -147,8 +147,8 @@ identity.
 Most apps should not configure an identity store:
 
 ```ts
-import { defineAuthConfig, env } from '@holo-js/config'
-
+import { defineAuthConfig } from '@holo-js/auth'
+import { env } from '@holo-js/config'
 export default defineAuthConfig({
   clerk: {
     provider: env('AUTH_CLERK_PROVIDER', 'app'),
@@ -166,7 +166,8 @@ Add `identityStore` only when Clerk identities live outside the default `auth_id
 does not change the Clerk route API.
 
 ```ts
-import { defineAuthConfig, env, type AuthHostedIdentityRecord, type AuthHostedIdentityStore } from '@holo-js/config'
+import { defineAuthConfig, type AuthHostedIdentityRecord, type AuthHostedIdentityStore } from '@holo-js/auth'
+import { env } from '@holo-js/config'
 import { DB } from '@holo-js/db'
 
 type ExternalIdentityRow = {

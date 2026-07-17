@@ -1,13 +1,7 @@
 import { createConnectionManager, type ConnectionManager } from './connection/ConnectionManager'
-import {
-  createMySQLAdapter,
-  createPostgresAdapter,
-  createSQLiteAdapter,
-  type MySQLAdapterOptions,
-  type PostgresAdapterOptions,
-} from './drivers'
+import { createDeferredDatabaseDriverAdapter } from './drivers/registry'
 import type { DatabaseCapabilities } from './core/capabilities'
-import type { DatabaseContextOptions, DatabaseLogger, Dialect } from './core/types'
+import type { DatabaseContextOptions, DatabaseLogger, Dialect, DriverAdapter } from './core/types'
 
 export type SupportedDatabaseDriver = 'sqlite' | 'postgres' | 'mysql'
 
@@ -290,48 +284,15 @@ export function createDialect(driver: SupportedDatabaseDriver): Dialect {
 export function createAdapter(
   driver: SupportedDatabaseDriver,
   connection: string | RuntimeAdapterConnectionConfig,
-) {
+): DriverAdapter {
+  if (!isSupportedDatabaseDriver(driver)) {
+    throw new Error(`Unsupported Holo database driver "${String(driver)}". Supported drivers are sqlite, postgres, and mysql.`)
+  }
   const target = typeof connection === 'string'
     ? { url: connection }
     : connection
 
-  if (driver === 'postgres') {
-    if (target.url) {
-      return createPostgresAdapter({ connectionString: target.url })
-    }
-
-    const config: PostgresAdapterOptions['config'] = {
-      host: target.host,
-      port: target.port,
-      user: target.username,
-      password: target.password,
-      database: target.database,
-      ssl: target.ssl,
-    }
-    return createPostgresAdapter({ config })
-  }
-
-  if (driver === 'mysql') {
-    if (target.url) {
-      return createMySQLAdapter({ uri: target.url })
-    }
-
-    const config: MySQLAdapterOptions['config'] = {
-      host: target.host,
-      port: target.port,
-      user: target.username,
-      password: target.password,
-      database: target.database,
-      ...(typeof target.ssl === 'undefined' ? {} : { ssl: target.ssl as never }),
-    }
-    return createMySQLAdapter({ config })
-  }
-
-  if (driver === 'sqlite') {
-    return createSQLiteAdapter({ filename: target.url ?? target.database ?? DEFAULT_RUNTIME_CONNECTION.url })
-  }
-
-  throw new Error(`Unsupported Holo database driver "${driver}". Supported drivers are sqlite, postgres, and mysql.`)
+  return createDeferredDatabaseDriverAdapter(driver, target)
 }
 
 export function createRuntimeLogger(enabled: boolean): DatabaseLogger | undefined {

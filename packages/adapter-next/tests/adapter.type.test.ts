@@ -97,13 +97,15 @@ describe('@holo-js/adapter-next typing', () => {
       buildPackage(resolve(packageDir, '../auth'), join(buildRoot, 'auth'))
       buildPackage(packageDir)
 
-      await Promise.all([
-        stagePublishedPackage(resolve(packageDir, '../config'), join(tempHoloNodeModules, 'config'), join(buildRoot, 'config')),
-        stagePublishedPackage(resolve(packageDir, '../validation'), join(tempHoloNodeModules, 'validation'), join(buildRoot, 'validation')),
-        stagePublishedPackage(resolve(packageDir, '../forms'), join(tempHoloNodeModules, 'forms'), join(buildRoot, 'forms')),
-        stagePublishedPackage(resolve(packageDir, '../auth'), join(tempHoloNodeModules, 'auth'), join(buildRoot, 'auth')),
-        stagePublishedPackage(packageDir, join(tempHoloNodeModules, 'adapter-next'), join(packageDir, 'dist')),
-      ])
+      for (const [sourceDir, targetDir, distDir] of [
+        [resolve(packageDir, '../config'), join(tempHoloNodeModules, 'config'), join(buildRoot, 'config')],
+        [resolve(packageDir, '../validation'), join(tempHoloNodeModules, 'validation'), join(buildRoot, 'validation')],
+        [resolve(packageDir, '../forms'), join(tempHoloNodeModules, 'forms'), join(buildRoot, 'forms')],
+        [resolve(packageDir, '../auth'), join(tempHoloNodeModules, 'auth'), join(buildRoot, 'auth')],
+        [packageDir, join(tempHoloNodeModules, 'adapter-next'), join(packageDir, 'dist')],
+      ] as const) {
+        await stagePublishedPackage(sourceDir, targetDir, distDir)
+      }
 
       await writeFile(
         entryPath,

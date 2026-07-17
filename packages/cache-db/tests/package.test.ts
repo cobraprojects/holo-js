@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { sqliteDatabaseDriverFactory } from '@holo-js/db-sqlite'
 import { CacheConfigError, CacheInvalidNumericMutationError, deserializeCacheValue, serializeCacheValue } from '@holo-js/cache'
 import {
   DB,
@@ -15,6 +16,7 @@ import {
   defineGeneratedTable,
   defineModel,
   registerGeneratedTables,
+  registerDatabaseDriverFactory,
   resetDB,
 } from '@holo-js/db'
 import {
@@ -25,6 +27,8 @@ import {
 } from '../src/index'
 
 const tempDirectories: string[] = []
+
+registerDatabaseDriverFactory(sqliteDatabaseDriverFactory)
 
 async function createPreparedDriver(options: {
   readonly table?: string

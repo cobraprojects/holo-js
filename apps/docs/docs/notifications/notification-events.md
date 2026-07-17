@@ -1,86 +1,75 @@
-# Notification Events
+# Notification Delivery Results
 
-When notifications are sent, Holo-JS dispatches events that you can listen to for logging, monitoring, or additional processing.
+Awaited notification dispatches return per-channel results that applications can use for logging, monitoring, and
+analytics.
 
-## Listening to Notification Events
+## Inspecting delivery
 
 ```ts
-import { onNotificationSent, onNotificationFailed } from '@holo-js/notifications'
+import { notify } from '@holo-js/notifications'
 
-// Listen for successful notifications
-onNotificationSent(({ notification, notifiable, channels }) => {
-  console.log(`Sent ${notification.type} to ${notifiable.id} via ${channels.join(', ')}`)
-})
+const result = await notify(user, invoicePaid)
+const successful = result.channels.filter(channel => channel.success)
+const failed = result.channels.filter(channel => !channel.success)
 
-// Listen for failed notifications
-onNotificationFailed(({ notification, notifiable, channel, error }) => {
-  console.error(`Failed to send ${notification.type} to ${notifiable.id} via ${channel}:`, error)
-})
+console.log(`Delivered through ${successful.map(entry => entry.channel).join(', ')}`)
+for (const delivery of failed) console.error(`Failed through ${delivery.channel}`, delivery.error)
 ```
 
-## Event Data Structure
+## Delivery result structure
 
-### Notification Sent Event
+### Successful channel result
 
-The `onNotificationSent` callback receives an object with:
+Successful entries include:
 
-- `notification`: The notification definition that was sent
-- `notifiable`: The entity that received the notification
-- `channels`: Array of channel names that the notification was sent through
+- `channel`: the channel name
+- `targetIndex`: the recipient position
+- `queued`: whether delivery was queued
+- `result`: the channel driver's result
 
-### Notification Failed Event
+### Failed channel result
 
-The `onNotificationFailed` callback receives an object with:
+Failed entries use `success: false` and expose the thrown value through `error`.
 
-- `notification`: The notification definition that failed to send
-- `notifiable`: The entity that was supposed to receive the notification
-- `channel`: The specific channel that failed
-- `error`: The error object that caused the failure
+- `channel`: the channel that failed
+- `targetIndex`: the recipient position
+- `queued`: whether delivery was queued
+- `error`: the value thrown by the channel
 
 ## Use Cases
 
 ### Logging
 
 ```ts
-import { onNotificationSent } from '@holo-js/notifications'
+import { notify } from '@holo-js/notifications'
 
-onNotificationSent(({ notification, notifiable, channels }) => {
+const result = await notify(user, invoicePaid)
+for (const delivery of result.channels) {
   logger.info('Notification sent', {
-    type: notification.type,
-    notifiableId: notifiable.id,
-    channels: channels.join(', ')
+    channel: delivery.channel,
+    success: delivery.success,
+    queued: delivery.queued
   })
-})
+}
 ```
 
 ### Monitoring
 
 ```ts
-import { onNotificationSent, onNotificationFailed } from '@holo-js/notifications'
-
-let sentCount = 0
-let failedCount = 0
-
-onNotificationSent(() => sentCount++)
-onNotificationFailed(() => failedCount++)
-
-// Report metrics periodically
-setInterval(() => {
-  console.log(`Notifications: ${sentCount} sent, ${failedCount} failed`)
-}, 60000)
+const result = await notify(user, invoicePaid)
+metrics.increment('notifications.sent', result.channels.filter(entry => entry.success).length)
+metrics.increment('notifications.failed', result.channels.filter(entry => !entry.success).length)
 ```
 
 ### Analytics Tracking
 
 ```ts
-import { onNotificationSent } from '@holo-js/notifications'
-
-onNotificationSent(({ notification, notifiable }) => {
-  // Track notification delivery in analytics
+const result = await notify(user, invoicePaid)
+for (const delivery of result.channels) {
   analytics.track('notification_sent', {
-    notification_type: notification.type,
-    notifiable_type: notifiable.constructor.name,
-    notifiable_id: notifiable.id
+    channel: delivery.channel,
+    success: delivery.success,
+    target_index: delivery.targetIndex
   })
-})
+}
 ```

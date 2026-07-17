@@ -63,8 +63,8 @@ Built-in drivers are available immediately:
 The default scaffold keeps `preview` as the default mailer and includes an `smtp` mailer entry:
 
 ```ts
-import { defineMailConfig, env } from '@holo-js/config'
-
+import { defineMailConfig } from '@holo-js/mail'
+import { env } from '@holo-js/config'
 export default defineMailConfig({
   default: env('MAIL_MAILER', 'preview'),
   from: {

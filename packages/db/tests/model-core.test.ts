@@ -35,7 +35,8 @@ import {
   type RelationMap,
   type TableDefinition } from '../src'
 import { getGlobalModel } from '../src/model/ModelRegistry'
-import { initializeEntityModelProperties } from '../src/model/entityRuntime'
+import { initializeEntityModelProperties, valuesAreEqual } from '../src/model/entityRuntime'
+import { resolveGeneratedModelTable } from '../src/model/defineModelHelpers'
 import { listMorphModels, registerMorphModel, resolveMorphModel, resolveMorphSelector } from '../src/model/morphRegistry'
 import { defineModelFromTable, defineTable } from './support/internal'
 
@@ -357,6 +358,18 @@ class ConcurrentUniqueInsertAdapter extends InMemoryAdapter {
   }
 }
 
+class UnresolvedUniqueInsertAdapter extends InMemoryAdapter {
+  override async execute(sql: string, bindings: readonly unknown[] = []): Promise<DriverExecutionResult> {
+    if (sql.startsWith('INSERT INTO "users"')) {
+      throw Object.assign(new Error('UNIQUE constraint failed: users.email'), {
+        code: 'SQLITE_CONSTRAINT_UNIQUE',
+      })
+    }
+
+    return super.execute(sql, bindings)
+  }
+}
+
 class LoggingAdapter implements DriverAdapter {
   connected = false
   readonly queries: Array<{ sql: string, bindings: readonly unknown[] }> = []
@@ -431,6 +444,110 @@ function createDialect(name: string): Dialect {
 }
 
 describe('model core slice', () => {
+  it('preserves unexpected runtime schema lookup errors', () => {
+    const getManager = vi.spyOn(DB, 'getManager').mockImplementation(() => {
+      throw new Error('runtime schema unavailable')
+    })
+    expect(() => resolveGeneratedModelTable('unexpected_runtime_table')).toThrow('runtime schema unavailable')
+    getManager.mockRestore()
+  })
+
+  it('compares object shapes and resolves relation properties without a repository loader', async () => {
+    expect(valuesAreEqual({ left: 1 }, { right: 1 })).toBe(false)
+    const relations = new Map<string, unknown>()
+    const host = {
+      hasRelation: (name: string) => relations.has(name),
+      getRelation<TRelation = unknown>(name: string): TRelation {
+        return relations.get(name) as TRelation
+      },
+      relation: vi.fn(() => (() => undefined) as never),
+      setRelation: (name: string, value: unknown) => relations.set(name, value),
+      get: vi.fn(),
+      set: vi.fn(),
+    }
+    initializeEntityModelProperties(host, {
+      definition: { relations: { comments: {} } },
+    })
+    const propertyHost = host as typeof host & { comments: PromiseLike<unknown> }
+    await expect(propertyHost.comments.then(value => value)).resolves.toBeUndefined()
+  })
+
+  it('dispatches fluent relation methods through repository collaborators', async () => {
+    const kinds: Record<string, string> = {
+      owner: 'belongsTo',
+      profile: 'hasOne',
+      posts: 'hasMany',
+      roles: 'belongsToMany',
+      unknown: 'custom',
+    }
+    const repo = {
+      definition: { table: { columns: {} }, relations: {} },
+      getConnectionName: () => 'default',
+      getRelationNames: () => [],
+      getRelationDefinition: (name: string) => kinds[name] ? { kind: kinds[name] } : undefined,
+      associateRelation: vi.fn(),
+      dissociateRelation: vi.fn(),
+      createRelatedEntity: vi.fn(async () => 'created'),
+      createManyRelatedEntities: vi.fn(async () => ['created-many']),
+      saveRelatedEntity: vi.fn(async (_entity, _name, related) => related),
+      saveManyRelatedEntities: vi.fn(async (_entity, _name, related) => related),
+      attachRelation: vi.fn(async () => {}),
+      detachRelation: vi.fn(async () => 1),
+      syncRelation: vi.fn(async () => ({ attached: [], detached: [], updated: [] })),
+      toggleRelation: vi.fn(async () => ({ attached: [], detached: [] })),
+      updateExistingPivot: vi.fn(async () => 1),
+    }
+    const entity = new Entity(repo as never, {}, true)
+    const related = new Entity(repo as never, {}, true)
+    expect(() => entity.relation('missing' as never)).toThrow('is not defined')
+
+    const { getRelationDefinition: _getRelationDefinition, ...repositoryWithoutResolver } = repo
+    const fallbackEntity = new Entity({
+      ...repositoryWithoutResolver,
+      definition: {
+        ...repositoryWithoutResolver.definition,
+        relations: { owner: { kind: 'belongsTo' } },
+      },
+    } as never, {}, true)
+    expect(fallbackEntity.relation('owner' as never)).toBeDefined()
+
+    const owner = entity.relation('owner' as never) as never as { associate(value: unknown): void, dissociate(): void }
+    owner.associate(related)
+    owner.dissociate()
+
+    const profile = entity.relation('profile' as never) as never as { create(values: Record<string, unknown>): Promise<unknown>, save(value: unknown): Promise<unknown> }
+    await profile.create({ name: 'Profile' })
+    await profile.save(related)
+
+    const posts = entity.relation('posts' as never) as never as {
+      create(values: Record<string, unknown>): Promise<unknown>
+      createMany(values: readonly Record<string, unknown>[]): Promise<unknown>
+      save(value: unknown): Promise<unknown>
+      saveMany(values: readonly unknown[]): Promise<unknown>
+    }
+    await posts.create({ title: 'Post' })
+    await posts.createMany([{ title: 'Post' }])
+    await posts.save(related)
+    await posts.saveMany([related])
+
+    const roles = entity.relation('roles' as never) as never as {
+      attach(ids: unknown, attributes?: Record<string, unknown>): Promise<void>
+      detach(ids?: unknown): Promise<number>
+      sync(ids: unknown): Promise<unknown>
+      toggle(ids: unknown): Promise<unknown>
+      updateExistingPivot(id: unknown, attributes: Record<string, unknown>): Promise<number>
+      create(values: Record<string, unknown>): Promise<unknown>
+      save(value: unknown): Promise<unknown>
+    }
+    await roles.attach([1])
+    await roles.detach([1])
+    await roles.sync([1])
+    await roles.toggle([1])
+    await roles.updateExistingPivot(1, { active: true })
+    await roles.create({ name: 'Admin' })
+    await roles.save(related)
+    expect(entity.relation('unknown' as never)).toEqual({})
+  })
   beforeEach(() => {
     resetDB()
     clearGeneratedTables()
@@ -460,6 +577,8 @@ describe('model core slice', () => {
     expect(AuditLog.definition.table.tableName).toBe('audit_logs')
     expect(Object.keys(AuditLog.definition.table.columns)).toEqual(['id', 'message'])
     expect(AuditLog.definition.name).toBe('AuditLog')
+    expect(AuditLog.definition.createdAtColumn).toBeUndefined()
+    expect(AuditLog.definition.updatedAtColumn).toBeUndefined()
   })
 
   it('supports the public defineModel(tableName, options) authoring path from generated schema', () => {
@@ -523,6 +642,8 @@ describe('model core slice', () => {
     expect(AuditLog.definition.table.tableName).toBe('audit_logs')
     expect(Object.keys(AuditLog.definition.table.columns)).toEqual(['id', 'message'])
     expect(AuditLog.definition.name).toBe('AuditLog')
+    expect(AuditLog.definition.createdAtColumn).toBeUndefined()
+    expect(AuditLog.definition.updatedAtColumn).toBeUndefined()
   })
 
   it('supports the public defineModel(tableDefinition, options) overload for internal/generated callers', () => {
@@ -723,6 +844,21 @@ describe('model core slice', () => {
     expect(() => missingTableRegistry.register(conflictingGhost)).toThrow(
       'Model "Ghost" is already registered.',
     )
+    const brokenGhostKey = Object.create(Person.definition, {
+      name: { value: 'Ghost' },
+      morphClass: { value: 'ghost' },
+      primaryKey: {
+        get() {
+          throw new Error('broken primary key metadata')
+        },
+      },
+      table: {
+        get() {
+          throw new SchemaError('Model "ghosts" is not present in the generated schema registry.')
+        },
+      },
+    }) as typeof Person.definition
+    expect(() => missingTableRegistry.register(brokenGhostKey)).toThrow('broken primary key metadata')
   })
 
   it('allows duplicate global registrations for the same model and rejects conflicting models', () => {
@@ -767,12 +903,16 @@ describe('model core slice', () => {
 
   it('defers generated schema table resolution until the model is used', () => {
     const MissingUser = defineModel('missing_users')
+    const Untimestamped = defineModel('untimestamped_records', { timestamps: false })
 
     expect(MissingUser.definition.name).toBe('MissingUser')
     expect(MissingUser.definition.morphClass).toBe('MissingUser')
     expect(() => MissingUser.getTableName()).toThrow(
       'Model "missing_users" is not present in the generated schema registry. Run "holo migrate" to refresh the internal generated schema metadata.',
     )
+    expect(Untimestamped.definition.createdAtColumn).toBeUndefined()
+    expect(Untimestamped.definition.updatedAtColumn).toBeUndefined()
+    expect(() => Untimestamped.definition.uniqueIdConfig).toThrow('not present in the generated schema registry')
   })
 
   it('resolves deferred generated models from the configured runtime schema registry', () => {
@@ -1669,6 +1809,32 @@ describe('model core slice', () => {
         hasMorePages: true,
       },
     })
+    expect(User.orderBy('id').toSQL().sql).toContain('ORDER BY "id" ASC')
+    expect(User.with([]).toSQL().sql).toContain('SELECT')
+    expect(User.with(['missing' as never]).toSQL().sql).toContain('SELECT')
+    await expect(User.findOrFailJson(1)).resolves.toMatchObject({ id: 1 })
+    await expect(User.firstJson()).resolves.toMatchObject({ id: 1 })
+    await expect(User.soleJson()).rejects.toThrow('expected exactly one result')
+    await expect(User.paginateJson(2, 1)).resolves.toMatchObject({ meta: { currentPage: 1 } })
+    await expect(User.simplePaginateJson(2, 1)).resolves.toMatchObject({ meta: { currentPage: 1 } })
+    await expect(User.cursorPaginateJson(2)).resolves.toMatchObject({ cursorName: 'cursor' })
+    await expect(User.paginate(1, 0)).rejects.toThrow('Page must be a positive integer')
+    await expect(User.paginateJson(0, 1)).rejects.toThrow('Per-page value must be a positive integer')
+    await expect(User.paginateJson(1, 0)).rejects.toThrow('Page must be a positive integer')
+    await expect(User.paginateJson(1, 1, { pageName: ' ' })).rejects.toThrow('parameter name')
+    await expect(User.simplePaginate(0, 1)).rejects.toThrow('Per-page value must be a positive integer')
+    await expect(User.simplePaginate(1, 1, { pageName: ' ' })).rejects.toThrow('parameter name')
+    await expect(User.simplePaginateJson(0, 1)).rejects.toThrow('Per-page value must be a positive integer')
+    await expect(User.simplePaginateJson(1, 0)).rejects.toThrow('Page must be a positive integer')
+    await expect(User.simplePaginateJson(1, 1, { pageName: ' ' })).rejects.toThrow('parameter name')
+    await expect(User.cursorPaginate(0)).rejects.toThrow('Per-page value must be a positive integer')
+    await expect(User.cursorPaginateJson(0)).rejects.toThrow('Per-page value must be a positive integer')
+    await expect(User.cursorPaginateJson(1, null, { cursorName: ' ' })).rejects.toThrow('parameter name')
+    await expect(User.cursorPaginateJson(1, 'invalid')).rejects.toThrow('Cursor is malformed')
+    await expect(User.unsafeOrderBy('"id" ASC', []).cursorPaginate()).rejects.toThrow(
+      'Cursor pagination requires column orderBy clauses',
+    )
+    await expect(User.chunkByIdDesc(0, async () => {})).rejects.toThrow('Chunk size must be a positive integer')
     await expect(User.query().where('id', 999).soleJson()).rejects.toThrow(
       'User query expected exactly one result but found 0.',
     )
@@ -1935,6 +2101,42 @@ describe('model core slice', () => {
     expect(user.get('id')).toBe(1)
     expect(user.get('name')).toBe('Concurrent')
     expect(adapter.tables.users).toHaveLength(1)
+  })
+
+  it('preserves non-unique and unresolved unique first-or-create failures', async () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      email: column.string(),
+    })
+
+    const failingAdapter = new FailingInMemoryAdapter({ users: [] }, { users: 0 })
+    failingAdapter.failOnExecution = 1
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: {
+        default: createDatabase({
+          connectionName: 'default',
+          adapter: failingAdapter,
+          dialect: createDialect('sqlite'),
+        }),
+      },
+    }))
+    const FailingUser = defineModelFromTable(users, { fillable: ['email'] })
+    await expect(FailingUser.firstOrCreate({ email: 'failure@example.com' })).rejects.toThrow('execution failed')
+
+    const uniqueAdapter = new UnresolvedUniqueInsertAdapter({ users: [] }, { users: 0 })
+    configureDB(createConnectionManager({
+      defaultConnection: 'default',
+      connections: {
+        default: createDatabase({
+          connectionName: 'default',
+          adapter: uniqueAdapter,
+          dialect: createDialect('sqlite'),
+        }),
+      },
+    }))
+    const UniqueUser = defineModelFromTable(users, { fillable: ['email'] })
+    await expect(UniqueUser.firstOrCreate({ email: 'unique@example.com' })).rejects.toThrow('UNIQUE constraint')
   })
 
   it('supports custom collections per model', async () => {

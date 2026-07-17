@@ -853,6 +853,13 @@ describe('@holo-js/validation contracts', () => {
         .transform(value => value.trim())
         .confirmed(),
     })
+    const confirmedFromOutputParent = schema({
+      passwordConfirmation: field.string().required(),
+      password: field.string()
+        .required()
+        .transform(value => value.trim())
+        .confirmed(),
+    })
 
     const beforeSuccess = await safeParse({ value: 'Ava' }, customBeforeTransform)
     expect(beforeSuccess.valid).toBe(true)
@@ -897,6 +904,12 @@ describe('@holo-js/validation contracts', () => {
     if (!confirmedFailure.valid) {
       expect(confirmedFailure.errors.first('password')).toBe('This field does not match its confirmation.')
     }
+
+    const outputParentSuccess = await safeParse({
+      password: ' secret ',
+      passwordConfirmation: 'secret',
+    }, confirmedFromOutputParent)
+    expect(outputParentSuccess.valid).toBe(true)
 
     expect(objectPrototypeHas('passwordConfirmation')).toBe(false)
     Object.defineProperty(Object.prototype, 'passwordConfirmation', {

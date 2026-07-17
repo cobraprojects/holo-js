@@ -4,10 +4,10 @@ import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import {
   holoMailDefaults,
-  normalizeAppEnv,
+  normalizeMailEnvironment,
   type HoloAppEnv,
   type NormalizedHoloMailConfig,
-} from '@holo-js/config'
+} from './config'
 import {
   createAttachmentMetadata,
   createAttachmentResolutionPlans,
@@ -34,8 +34,21 @@ import {
   mergeMailDefinitionInputs,
   normalizeMailDefinition,
 } from './contracts'
+import { renderMarkdown, renderMarkdownInline, stripMarkdownSyntax } from './markdown'
 import { getRegisteredMailDriver } from './registry'
 import { loadMailPluginDrivers, resetMailPluginDrivers } from './plugins'
+import {
+  MailError,
+  MailPreviewDisabledError,
+  MailPreviewFormatUnavailableError,
+  MailSendError,
+} from './errors'
+import {
+  createMailPreviewHtml,
+  createMailPreviewResponse,
+  escapePreviewHtml,
+  formatPreviewAddress,
+} from './preview'
 
 const HOLO_MAIL_DELIVER_JOB = 'holo.mail.deliver'
 const LOCAL_ATTACHMENT_ROOTS = Object.freeze([
@@ -46,6 +59,7 @@ const LOCAL_ATTACHMENT_ROOTS = Object.freeze([
 type RuntimeState = {
   bindings?: MailRuntimeBindings
   projectRoot?: string
+  pluginNames?: readonly string[]
   fakeSent?: FakeSentMail[]
   previewArtifacts?: MailPreviewArtifact[]
   loadQueueModule?: () => Promise<QueueModule>
@@ -56,6 +70,7 @@ type RuntimeState = {
 
 type RuntimeBindingsWithProjectRoot = MailRuntimeBindings & {
   readonly projectRoot?: string
+  readonly plugins?: readonly string[]
 }
 
 type MutableSendOptions = {
@@ -231,69 +246,6 @@ export interface MailPreviewArtifact {
   readonly mail: Readonly<ResolvedMail>
   readonly context: Readonly<MailDriverExecutionContext>
   readonly result: Readonly<MailSendResult>
-}
-
-export class MailError extends Error {
-  readonly code: string
-
-  constructor(message: string, code = 'MAIL_ERROR', options?: ErrorOptions) {
-    super(message, options)
-    this.name = 'MailError'
-    this.code = code
-  }
-}
-
-export class MailPreviewDisabledError extends MailError {
-  readonly policy: MailPreviewPolicy
-
-  constructor(policy: MailPreviewPolicy) {
-    super(
-      `[@holo-js/mail] Mail preview is disabled for the "${policy.environment}" environment.`,
-      'MAIL_PREVIEW_DISABLED',
-    )
-    this.name = 'MailPreviewDisabledError'
-    this.policy = policy
-  }
-}
-
-export class MailPreviewFormatUnavailableError extends MailError {
-  readonly format: MailPreviewFormat
-
-  constructor(format: MailPreviewFormat) {
-    super(
-      `[@holo-js/mail] Mail ${format} preview is unavailable for this message.`,
-      'MAIL_PREVIEW_FORMAT_UNAVAILABLE',
-    )
-    this.name = 'MailPreviewFormatUnavailableError'
-    this.format = format
-  }
-}
-
-export class MailSendError extends MailError {
-  readonly messageId: string
-  readonly mailer: string
-  readonly driver: string
-
-  constructor(
-    details: {
-      readonly messageId: string
-      readonly mailer: string
-      readonly driver: string
-      readonly message?: string
-    },
-    options?: ErrorOptions,
-  ) {
-    super(
-      details.message
-        ?? `[@holo-js/mail] Mail delivery failed for mailer "${details.mailer}" using driver "${details.driver}".`,
-      'MAIL_SEND_FAILED',
-      options,
-    )
-    this.name = 'MailSendError'
-    this.messageId = details.messageId
-    this.mailer = details.mailer
-    this.driver = details.driver
-  }
 }
 
 function getRuntimeState(): RuntimeState {
@@ -489,7 +441,7 @@ function getResolvedConfig(): NormalizedHoloMailConfig {
 }
 
 function resolveCurrentEnvironment(): HoloAppEnv {
-  return normalizeAppEnv(process.env.APP_ENV ?? process.env.NODE_ENV)
+  return normalizeMailEnvironment(process.env.APP_ENV ?? process.env.NODE_ENV)
 }
 
 function createPreviewPolicy(config: NormalizedHoloMailConfig = getResolvedConfig()): MailPreviewPolicy {
@@ -507,71 +459,22 @@ function assertPreviewEnabled(config: NormalizedHoloMailConfig = getResolvedConf
 }
 
 function createPreviewHtml(preview: MailPreviewResult): string {
-  const header = [
-    `<h1>${escapeHtml(preview.subject)}</h1>`,
-    `<p><strong>From:</strong> ${formatAddress(preview.from)}</p>`,
-    `<p><strong>Reply-To:</strong> ${formatAddress(preview.replyTo)}</p>`,
-    `<p><strong>To:</strong> ${preview.to.map(formatAddress).join(', ')}</p>`,
-    preview.cc.length > 0 ? `<p><strong>Cc:</strong> ${preview.cc.map(formatAddress).join(', ')}</p>` : '',
-    preview.bcc.length > 0 ? `<p><strong>Bcc:</strong> ${preview.bcc.map(formatAddress).join(', ')}</p>` : '',
-  ].filter(Boolean).join('')
-
-  const body = preview.html
-    ? `<pre>${escapeHtml(preview.html)}</pre>`
-    : preview.text
-      ? `<pre>${escapeHtml(preview.text)}</pre>`
-      : '<p>No rendered content is available.</p>'
-
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(preview.subject)}</title></head><body>${header}${body}</body></html>`
+  return createMailPreviewHtml(preview)
 }
 
 function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll('\'', '&#39;')
+  return escapePreviewHtml(value)
 }
 
 function formatAddress(address: { readonly email: string, readonly name?: string }): string {
-  return address.name
-    ? `${escapeHtml(address.name)} &lt;${escapeHtml(address.email)}&gt;`
-    : escapeHtml(address.email)
+  return formatPreviewAddress(address)
 }
 
 function renderPreviewResponse(
   preview: MailPreviewResult,
   format: MailPreviewFormat,
 ): Response {
-  if (format === 'json') {
-    return new Response(JSON.stringify(preview, null, 2), {
-      status: 200,
-      headers: {
-        'content-type': 'application/json; charset=utf-8',
-      },
-    })
-  }
-
-  if (format === 'text') {
-    if (typeof preview.text !== 'string') {
-      throw new MailPreviewFormatUnavailableError(format)
-    }
-
-    return new Response(preview.text, {
-      status: 200,
-      headers: {
-        'content-type': 'text/plain; charset=utf-8',
-      },
-    })
-  }
-
-  return new Response(createPreviewHtml(preview), {
-    status: 200,
-    headers: {
-      'content-type': 'text/html; charset=utf-8',
-    },
-  })
+  return createMailPreviewResponse(preview, format)
 }
 
 function getMailerConfig(mailer: string, config: NormalizedHoloMailConfig = getResolvedConfig()) {
@@ -1063,7 +966,8 @@ async function resolveDriverWithPluginFallback(
     }
   }
 
-  await loadMailPluginDrivers(getRuntimeState().projectRoot)
+  const state = getRuntimeState()
+  await loadMailPluginDrivers(state.projectRoot, state.pluginNames)
   return resolveDriver(mail, options, config)
 }
 
@@ -1107,7 +1011,8 @@ async function resolveDriverByNameWithPluginFallback(
     }
   }
 
-  await loadMailPluginDrivers(getRuntimeState().projectRoot)
+  const state = getRuntimeState()
+  await loadMailPluginDrivers(state.projectRoot, state.pluginNames)
   return resolveDriverByName(mailer, driver)
 }
 
@@ -1316,29 +1221,6 @@ async function renderView(input: MailViewRenderInput): Promise<string> {
   return html
 }
 
-function stripMarkdownSyntax(markdown: string): string {
-  return markdown
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/\*([^*]+)\*/g, '$1')
-    .replace(/^#{1,6}\s+/gm, '')
-    .replace(/^[-*]\s+/gm, '')
-    .trim()
-}
-
-function renderMarkdownInline(markdown: string): string {
-  return escapeHtml(markdown)
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, href: string) => {
-      return isSafeMailHref(href)
-        ? `<a href="${escapeHtml(href)}">${label}</a>`
-        : label
-    })
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-}
-
 async function resolveLocalAttachmentPath(path: string): Promise<string> {
   const resolvedPath = await realpath(path)
   const allowedRoots = await Promise.all(LOCAL_ATTACHMENT_ROOTS.map(async root => await realpath(root).catch(() => null)))
@@ -1347,44 +1229,6 @@ async function resolveLocalAttachmentPath(path: string): Promise<string> {
   }
 
   throw new MailError('[@holo-js/mail] Path attachments must resolve inside an allowed attachment directory.', 'MAIL_ATTACHMENT_UNSAFE_PATH')
-}
-
-function isSafeMailHref(href: string): boolean {
-  const trimmed = href.trim()
-  if (trimmed.startsWith('#') || trimmed.startsWith('/') || trimmed.startsWith('./') || trimmed.startsWith('../')) {
-    return true
-  }
-
-  try {
-    const url = new URL(trimmed)
-    return url.protocol === 'https:' || url.protocol === 'http:' || url.protocol === 'mailto:'
-  } catch {
-    return false
-  }
-}
-
-function renderMarkdown(markdown: string): string {
-  const blocks = markdown.trim().split(/\n\s*\n/g).map(block => block.trim()).filter(Boolean)
-  return blocks.map((block) => {
-    const lines = block.split('\n').map(line => line.trim()).filter(Boolean)
-    /* v8 ignore next 3 -- block normalization above already filters empty blocks */
-    if (lines.length === 0) {
-      return ''
-    }
-
-    if (lines.every(line => /^[-*]\s+/.test(line))) {
-      return `<ul>${lines.map(line => `<li>${renderMarkdownInline(line.replace(/^[-*]\s+/, ''))}</li>`).join('')}</ul>`
-    }
-
-    const heading = lines.length === 1 ? lines[0]!.match(/^(#{1,6})\s+(.+)$/) : null
-    if (heading) {
-      const [, markers, title] = heading
-      const level = markers!.length
-      return `<h${level}>${renderMarkdownInline(title!)}</h${level}>`
-    }
-
-    return `<p>${lines.map(renderMarkdownInline).join('<br />')}</p>`
-  }).join('\n')
 }
 
 function resolveSourceKind(mail: MailDefinition): RenderedContent['kind'] {
@@ -1708,15 +1552,19 @@ export function configureMailRuntime(bindings?: MailRuntimeBindings): void {
   if (!bindings) {
     state.bindings = undefined
     state.projectRoot = undefined
+    state.pluginNames = undefined
     return
   }
 
-  const { projectRoot, ...runtimeBindings } = bindings as RuntimeBindingsWithProjectRoot
+  const { projectRoot, plugins, ...runtimeBindings } = bindings as RuntimeBindingsWithProjectRoot
   state.bindings = runtimeBindings
   const normalizedProjectRoot = typeof projectRoot === 'string' ? projectRoot.trim() : ''
   state.projectRoot = normalizedProjectRoot
     ? normalizedProjectRoot
     : undefined
+  state.pluginNames = Object.freeze([...new Set((plugins ?? [])
+    .map(plugin => plugin.trim())
+    .filter(plugin => plugin.length > 0))])
 }
 
 export function getMailRuntimeBindings(): MailRuntimeBindings {
@@ -1727,6 +1575,7 @@ export function resetMailRuntime(): void {
   const state = getRuntimeState()
   state.bindings = undefined
   state.projectRoot = undefined
+  state.pluginNames = undefined
   state.fakeSent = undefined
   state.previewArtifacts = undefined
   state.loadQueueModule = undefined

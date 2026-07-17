@@ -20,15 +20,16 @@ afterEach(() => {
 })
 
 describe('@holo-js/notifications package surface', () => {
-  it('declares optional peer metadata for dynamic integrations', async () => {
+  it('declares optional queue peer metadata without a database dependency', async () => {
     const packageJsonPath = fileURLToPath(new URL('../package.json', import.meta.url))
     const manifest = JSON.parse(await readFile(packageJsonPath, 'utf8')) as {
       peerDependencies?: Record<string, string>
       peerDependenciesMeta?: Record<string, { optional?: boolean }>
     }
 
-    expect(manifest.peerDependencies?.['@holo-js/db']).toBe('catalog:')
-    expect(manifest.peerDependenciesMeta?.['@holo-js/db']).toEqual({
+    expect(manifest.peerDependencies?.['@holo-js/db']).toBeUndefined()
+    expect(manifest.peerDependencies?.['@holo-js/queue']).toBe('catalog:')
+    expect(manifest.peerDependenciesMeta?.['@holo-js/queue']).toEqual({
       optional: true,
     })
   })

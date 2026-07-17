@@ -1,6 +1,6 @@
 import { initializeHolo, type CreateHoloOptions } from '@holo-js/core/runtime'
-import type { DotPath, HoloConfigMap, LoadedHoloConfig, ValueAtPath } from '@holo-js/config'
-import { getCurrentNextRequest, type NextRequestLike } from './request-context'
+import type { DotPath, HoloConfigMap, HoloConfigValues, ValueAtPath } from '@holo-js/config'
+import { getCurrentNextRequest, setNextAuthRequestRunner, type NextRequestLike } from './request-context'
 export { runWithNextRequest, type NextRequestLike } from './request-context'
 
 export type NextHoloRuntimeOptions = CreateHoloOptions & {
@@ -65,8 +65,8 @@ function safeDecodeCookieSegment(value: string): string {
 }
 
 function parseResponseCookie(cookie: string): ParsedResponseCookie | null {
-  const [nameValue, ...attributes] = cookie.split(';')
-  const separator = nameValue?.indexOf('=') ?? -1
+  const [nameValue = '', ...attributes] = cookie.split(';')
+  const separator = nameValue.indexOf('=')
   if (!nameValue || separator <= 0) {
     return null
   }
@@ -145,6 +145,10 @@ function parseRequestCookies(header: string | null): Map<string, string> {
   return cookies
 }
 
+function isMissingNextRequestScope(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('outside a request scope')
+}
+
 export function createNextRequestContext(request: Request): NextRequestLike {
   const nextRequest = request as NextRequestWithCookies
   const parsedCookies = nextRequest.cookies ? undefined : parseRequestCookies(request.headers.get('cookie'))
@@ -173,9 +177,14 @@ function resolveNextAuthRequestAccessors(): NonNullable<CreateHoloOptions['authR
         return request.cookies.get(name)?.value
       }
 
-      const { cookies } = await import('next/headers.js') as NextHeadersModule
-      const store = await cookies()
-      return store.get(name)?.value
+      try {
+        const { cookies } = await import('next/headers.js') as NextHeadersModule
+        const store = await cookies()
+        return store.get(name)?.value
+      } catch (error) {
+        if (isMissingNextRequestScope(error)) return undefined
+        throw error
+      }
     },
     async getHeader(name: string) {
       const request = getCurrentNextRequest()
@@ -183,9 +192,14 @@ function resolveNextAuthRequestAccessors(): NonNullable<CreateHoloOptions['authR
         return request.headers.get(name) ?? undefined
       }
 
-      const { headers } = await import('next/headers.js') as NextHeadersModule
-      const requestHeaders = await headers()
-      return requestHeaders.get(name) ?? undefined
+      try {
+        const { headers } = await import('next/headers.js') as NextHeadersModule
+        const requestHeaders = await headers()
+        return requestHeaders.get(name) ?? undefined
+      } catch (error) {
+        if (isMissingNextRequestScope(error)) return undefined
+        throw error
+      }
     },
     async appendResponseCookie(cookie: string) {
       const parsed = parseResponseCookie(cookie)
@@ -193,9 +207,13 @@ function resolveNextAuthRequestAccessors(): NonNullable<CreateHoloOptions['authR
         return
       }
 
-      const { cookies } = await import('next/headers.js') as NextHeadersModule
-      const store = await cookies() as MutableNextCookieStore
-      store.set(parsed.name, parsed.value, parsed.options)
+      try {
+        const { cookies } = await import('next/headers.js') as NextHeadersModule
+        const store = await cookies() as MutableNextCookieStore
+        store.set(parsed.name, parsed.value, parsed.options)
+      } catch (error) {
+        if (!isMissingNextRequestScope(error)) throw error
+      }
     },
     async redirectResponse(url: string) {
       const { redirect } = await import('next/navigation.js') as NextNavigationModule
@@ -207,23 +225,28 @@ function resolveNextAuthRequestAccessors(): NonNullable<CreateHoloOptions['authR
 export function createNextHoloHelpers<TCustom extends HoloConfigMap = HoloConfigMap>(
   options: NextHoloRuntimeOptions,
 ) {
-  const resolveRuntime = async () => await initializeHolo<TCustom>(options.projectRoot, {
-    ...options,
-    authRequest: options.authRequest ?? resolveNextAuthRequestAccessors(),
-    authorizationError: options.authorizationError ?? {
-      createError(decision) {
-        if (decision.status === 404) {
-          return createNextHttpAccessFallbackError(404, decision.message ?? 'Resource not found.')
-        }
+  const authRequest = options.authRequest ?? resolveNextAuthRequestAccessors()
+  const resolveRuntime = async () => {
+    const runtime = await initializeHolo<TCustom>(options.projectRoot, {
+      ...options,
+      authRequest,
+      authorizationError: options.authorizationError ?? {
+        createError(decision) {
+          if (decision.status === 404) {
+            return createNextHttpAccessFallbackError(404, decision.message ?? 'Resource not found.')
+          }
 
-        return createNextHttpAccessFallbackError(403, decision.message ?? 'Forbidden')
+          return createNextHttpAccessFallbackError(403, decision.message ?? 'Forbidden')
+        },
       },
-    },
-  })
+    })
+    setNextAuthRequestRunner(callback => runtime.runWithAuthRequestAccessors(authRequest, callback))
+    return runtime
+  }
 
-  const useConfig = async <TPath extends DotPath<LoadedHoloConfig<TCustom>['all']>>(
+  const useConfig = async <TPath extends DotPath<HoloConfigValues<TCustom>>>(
     path: TPath,
-  ): Promise<ValueAtPath<LoadedHoloConfig<TCustom>['all'], TPath>> => {
+  ): Promise<ValueAtPath<HoloConfigValues<TCustom>, TPath>> => {
     const runtime = await resolveRuntime()
     return runtime.config(path)
   }
@@ -256,4 +279,13 @@ export function createNextHoloHelpers<TCustom extends HoloConfigMap = HoloConfig
     useConfig,
     config: useConfig,
   }
+}
+
+export const adapterNextRuntimeInternals = {
+  safeDecodeCookieSegment,
+  parseResponseCookie,
+  parseRequestCookies,
+  isMissingNextRequestScope,
+  resolveNextAuthRequestAccessors,
+  createNextHttpAccessFallbackError,
 }

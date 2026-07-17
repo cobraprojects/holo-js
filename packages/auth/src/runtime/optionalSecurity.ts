@@ -14,6 +14,9 @@ export type OptionalSecurityModule = {
 }
 
 const OPTIONAL_SECURITY_PACKAGE = '@holo-js/security'
+type OptionalSecurityImporter = () => Promise<OptionalSecurityModule>
+const defaultOptionalSecurityImporter: OptionalSecurityImporter = async () => await import('@holo-js/security' as string) as OptionalSecurityModule
+let optionalSecurityImporter = defaultOptionalSecurityImporter
 
 function isMissingOptionalPackageError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -39,8 +42,7 @@ function isMissingOptionalPackageError(error: unknown): boolean {
 }
 
 export async function loadOptionalSecurityModule(): Promise<OptionalSecurityModule | undefined> {
-  return await import('@holo-js/security' as string)
-    .then(module => module as OptionalSecurityModule)
+  return await optionalSecurityImporter()
     .catch(async (error) => {
       if (isMissingOptionalPackageError(error)) {
         return undefined
@@ -48,4 +50,14 @@ export async function loadOptionalSecurityModule(): Promise<OptionalSecurityModu
 
       throw error
     })
+}
+
+export const optionalSecurityInternals = {
+  isMissingOptionalPackageError,
+  resetImporter(): void {
+    optionalSecurityImporter = defaultOptionalSecurityImporter
+  },
+  setImporter(importer: OptionalSecurityImporter): void {
+    optionalSecurityImporter = importer
+  },
 }

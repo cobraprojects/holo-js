@@ -2,7 +2,7 @@ import { readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 
-const rootTargets = ['playground', 'scripts', 'eslint.config.mjs', 'vitest.workspace.ts']
+const rootTargets = ['scripts', 'eslint.config.mjs', 'vitest.workspace.ts']
 const passThroughArgs = process.argv.slice(2)
 const cacheLocation = '.eslintcache-main'
 const eslintBaseArgs = ['eslint', '--cache', '--cache-strategy', 'content', '--cache-location', cacheLocation]

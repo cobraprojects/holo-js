@@ -365,14 +365,12 @@ export class Factory<TModel extends FactoryModelReference = FactoryModelReferenc
     }
 
     const tableName = source.model.definition.table.tableName
-    const sourceRepository = typeof source.model.getRepository === 'function'
-      ? source.model.getRepository() as FactoryRepository
-      : undefined
+    const sourceRepository = source.model.getRepository() as FactoryRepository
     const connectionName = source.model.getConnectionName?.() ?? sourceRepository?.getConnectionName()
     const matches = this.recycledEntities.filter((entity) => {
       const repository = entity.getRepository() as unknown as FactoryRepository
       return repository.definition.table.tableName === tableName
-        && (typeof connectionName === 'undefined' || repository.getConnectionName() === connectionName)
+        && repository.getConnectionName() === connectionName
     })
 
     return matches.slice(0, amount)

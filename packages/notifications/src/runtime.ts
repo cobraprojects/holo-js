@@ -1,4 +1,4 @@
-import { holoNotificationsDefaults } from '@holo-js/config'
+import { holoNotificationsDefaults } from './config'
 import {
   createAnonymousNotificationTarget,
   normalizeNotificationDefinition,
@@ -26,6 +26,11 @@ import {
 import { getRegisteredNotificationChannel } from './registry'
 import { loadNotificationPluginChannels, resetNotificationPluginChannels } from './plugins'
 import {
+  normalizeNotificationDelay,
+  normalizeNotificationQueueOptions,
+  normalizeOptionalNotificationString,
+} from './queueOptions'
+import {
   createBuildContext,
   createBuiltInChannels,
   createNotificationContext,
@@ -45,70 +50,9 @@ import {
 
 const HOLO_NOTIFICATIONS_DELIVER_JOB = 'holo.notifications.deliver'
 
-function normalizeOptionalString(value: string, label: string): string
-function normalizeOptionalString(value: string | undefined, label: string): string | undefined
-function normalizeOptionalString(
-  value: string | undefined,
-  label: string,
-): string | undefined {
-  if (typeof value === 'undefined') {
-    return undefined
-  }
-
-  const normalized = value.trim()
-  if (!normalized) {
-    throw new Error(`[@holo-js/notifications] ${label} must be a non-empty string.`)
-  }
-
-  return normalized
-}
-
-function normalizeDelayValue(value: NotificationDelayValue, label: string): NotificationDelayValue {
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value) || value < 0) {
-      throw new Error(`[@holo-js/notifications] ${label} must be a finite number greater than or equal to 0.`)
-    }
-
-    return value
-  }
-
-  if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
-    throw new Error(`[@holo-js/notifications] ${label} dates must be valid Date instances.`)
-  }
-
-  return value
-}
-
-function normalizeOptionalBoolean(value: boolean | undefined, label: string): boolean | undefined {
-  if (typeof value === 'undefined') {
-    return undefined
-  }
-
-  if (typeof value !== 'boolean') {
-    throw new Error(`[@holo-js/notifications] ${label} must be a boolean.`)
-  }
-
-  return value
-}
-
-function normalizeQueueOptions(
-  value: NotificationQueueOptions | undefined,
-): NotificationQueueOptions | undefined {
-  if (typeof value === 'undefined') {
-    return undefined
-  }
-
-  return Object.freeze({
-    connection: normalizeOptionalString(value.connection, 'Notification queue connection'),
-    queue: normalizeOptionalString(value.queue, 'Notification queue name'),
-    ...(typeof value.delay === 'undefined'
-      ? {}
-      : { delay: normalizeDelayValue(value.delay, 'Notification queue delay') }),
-    ...(typeof normalizeOptionalBoolean(value.afterCommit, 'Notification queue afterCommit') === 'undefined'
-      ? {}
-      : { afterCommit: value.afterCommit }),
-  })
-}
+const normalizeOptionalString = normalizeOptionalNotificationString
+const normalizeDelayValue = normalizeNotificationDelay
+const normalizeQueueOptions = normalizeNotificationQueueOptions
 
 function getRuntimeBindings(): NotificationRuntimeBindings {
   return getRuntimeState().bindings ?? {}
@@ -117,12 +61,13 @@ function getRuntimeBindings(): NotificationRuntimeBindings {
 type RuntimeState = {
   bindings?: NotificationRuntimeBindings
   projectRoot?: string
+  pluginNames?: readonly string[]
   loadQueueModule?: () => Promise<QueueModule>
-  loadDbModule?: () => Promise<DbModule | null>
 }
 
 type RuntimeBindingsWithProjectRoot = NotificationRuntimeBindings & {
   readonly projectRoot?: string
+  readonly plugins?: readonly string[]
 }
 
 type ResolvedTargetChannels = {
@@ -185,44 +130,6 @@ async function loadQueueModule(): Promise<QueueModule> {
   /* v8 ignore stop */
 }
 
-async function loadDbModule(): Promise<DbModule | null> {
-  const override = getRuntimeState().loadDbModule
-  /* v8 ignore next -- direct optional-peer import fallback is covered through loader override tests. */
-  if (override) {
-    try {
-      return await override()
-    } catch (error) {
-      if (
-        error
-        && typeof error === 'object'
-        && 'code' in error
-        && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-      ) {
-        return null
-      }
-
-      throw error
-    }
-  }
-
-  /* v8 ignore start -- native optional-peer import failure is covered through loader override tests. */
-  try {
-    return await dynamicImport<DbModule>('@holo-js/db')
-  } catch (error) {
-    if (
-      error
-      && typeof error === 'object'
-      && 'code' in error
-      && (error as { code?: unknown }).code === 'ERR_MODULE_NOT_FOUND'
-    ) {
-      return null
-    }
-
-    throw error
-  }
-  /* v8 ignore stop */
-}
-
 type MutableDispatchOptions = {
   connection?: string
   queue?: string
@@ -265,12 +172,6 @@ type QueueModule = {
   dispatch(jobName: string, payload: QueuedNotificationDeliveryPayload): QueueDispatchChain
   getRegisteredQueueJob(name: string): unknown
   registerQueueJob(definition: unknown, options: { name: string }): void
-}
-
-type DbModule = {
-  connectionAsyncContext: {
-    getActive(): { connection: { getScope(): { kind: string }, afterCommit(callback: () => Promise<void>): void } } | undefined
-  }
 }
 
 type QueuedNotificationDeliveryPayload = Readonly<{
@@ -605,7 +506,8 @@ async function runQueuedNotificationDelivery(
   payload: QueuedNotificationDeliveryPayload,
 ): Promise<unknown> {
   if (!getNotificationChannel(payload.channel)) {
-    await loadNotificationPluginChannels(getRuntimeState().projectRoot)
+    const state = getRuntimeState()
+    await loadNotificationPluginChannels(state.projectRoot, state.pluginNames)
   }
 
   return await deliverResolvedNotificationChannel(Object.freeze({
@@ -667,9 +569,8 @@ async function deferDispatchUntilCommit(
   notification: NotificationDefinition,
   targetChannels: readonly ResolvedTargetChannels[],
 ): Promise<NotificationDispatchResult | null> {
-  const dbModule = await loadDbModule()
-  const active = dbModule?.connectionAsyncContext.getActive()?.connection
-  if (!active || active.getScope().kind === 'root') {
+  const deferAfterCommit = getRuntimeBindings().deferAfterCommit
+  if (!deferAfterCommit) {
     return null
   }
 
@@ -687,9 +588,12 @@ async function deferDispatchUntilCommit(
     }
   }
 
-  active.afterCommit(async () => {
+  const deferred = deferAfterCommit(async () => {
     await dispatchNotifications(input, { allowAfterCommitDeferral: false })
   })
+  if (!deferred) {
+    return null
+  }
 
   return Object.freeze({
     totalTargets: targetChannels.length,
@@ -724,7 +628,8 @@ async function dispatchNotifications(
   const targets = resolveTargets(input.target)
   const declaredTargetChannels = resolveTargetChannels(notification, targets)
   if (hasUnresolvedNotificationChannels(declaredTargetChannels)) {
-    await loadNotificationPluginChannels(getRuntimeState().projectRoot)
+    const state = getRuntimeState()
+    await loadNotificationPluginChannels(state.projectRoot, state.pluginNames)
   }
   const targetChannels = resolveRegisteredTargetChannels(declaredTargetChannels)
 
@@ -920,15 +825,19 @@ export function configureNotificationsRuntime(bindings?: NotificationRuntimeBind
   if (!bindings) {
     state.bindings = undefined
     state.projectRoot = undefined
+    state.pluginNames = undefined
     return
   }
 
-  const { projectRoot, ...runtimeBindings } = bindings as RuntimeBindingsWithProjectRoot
+  const { projectRoot, plugins, ...runtimeBindings } = bindings as RuntimeBindingsWithProjectRoot
   state.bindings = runtimeBindings
   const normalizedProjectRoot = typeof projectRoot === 'string' ? projectRoot.trim() : ''
   state.projectRoot = normalizedProjectRoot
     ? normalizedProjectRoot
     : undefined
+  state.pluginNames = Object.freeze([...new Set((plugins ?? [])
+    .map(plugin => plugin.trim())
+    .filter(plugin => plugin.length > 0))])
 }
 
 export function getNotificationsRuntimeBindings(): NotificationRuntimeBindings {
@@ -939,8 +848,8 @@ export function resetNotificationsRuntime(): void {
   const state = getRuntimeState()
   state.bindings = undefined
   state.projectRoot = undefined
+  state.pluginNames = undefined
   state.loadQueueModule = undefined
-  state.loadDbModule = undefined
   resetNotificationPluginChannels()
 }
 
@@ -1039,7 +948,6 @@ export const notificationsRuntimeInternals = {
   getNotificationChannel,
   isAnonymousTarget,
   isObject,
-  loadDbModule,
   loadQueueModule,
   normalizeBroadcastRouteFromValue,
   normalizeDatabaseRouteFromValue,
@@ -1059,9 +967,6 @@ export const notificationsRuntimeInternals = {
   resolveRoute,
   runQueuedNotificationDelivery,
   resolveTargets,
-  setDbModuleLoader(loader: (() => Promise<DbModule | null>) | undefined) {
-    getRuntimeState().loadDbModule = loader
-  },
   setQueueModuleLoader(loader: (() => Promise<QueueModule>) | undefined) {
     getRuntimeState().loadQueueModule = loader
   },

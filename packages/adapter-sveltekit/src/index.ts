@@ -94,7 +94,12 @@ function isApiEvent(event: SvelteKitRequestEvent): boolean {
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
 }
 
 function isSerializedValidationException(value: unknown): value is SerializedValidationException {
@@ -172,7 +177,7 @@ function encodeValidationFlashPayload(payload: SerializedValidationException): s
 
 function isSensitiveFlashKey(key: string): boolean {
   const normalized = key.toLowerCase().replace(/[-_\s]/g, '')
-  return normalized.startsWith('_')
+  return key.trimStart().startsWith('_')
     || normalized.includes('password')
     || normalized.includes('token')
     || normalized.includes('secret')
@@ -487,8 +492,26 @@ export async function resetSvelteKitHoloProject(): Promise<void> {
 
 export const adapterSvelteKitInternals = {
   ...svelteKitAdapter.internals,
+  createValidationActionFailureResponse,
+  createValidationActionRedirectResponse,
+  createValidationFlashCookie,
+  encodeValidationFlashPayload,
+  filterFlashValue,
+  filterFlashValues,
+  flashValidationPayload,
+  getValidationActionFailureKey,
+  isPlainObject,
+  isSensitiveFlashKey,
+  isSerializedValidationException,
+  isSvelteKitActionJsonRequest,
   mapValidationActionResponse,
+  normalizeCookiePath,
+  registerValidationExceptionThrower,
+  resolveSvelteKitOptions,
   rememberValidationActionFailure,
+  takeValidationActionFailure,
+  toSvelteKitErrorStatus,
+  toSvelteKitValidationBody,
   isApiEvent,
   serializeValidationException,
   validationFlashCookie,

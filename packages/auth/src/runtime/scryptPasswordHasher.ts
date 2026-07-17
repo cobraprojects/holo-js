@@ -9,7 +9,16 @@ const SCRYPT_KEY_LENGTH = 64
 const SCRYPT_KEY_HEX_LENGTH = SCRYPT_KEY_LENGTH * 2
 const HEX_PATTERN = /^(?:[0-9a-f]{2})+$/i
 type ScryptParams = { readonly N: number, readonly r: number, readonly p: number }
+type ScryptFunction = (
+  password: string,
+  salt: Buffer,
+  keyLength: number,
+  options: ScryptOptions,
+  callback: (error: Error | null, derivedKey: Buffer) => void,
+) => void
 const SCRYPT_TARGET_PARAMS: ScryptParams = { N: SCRYPT_TARGET_N, r: SCRYPT_TARGET_R, p: SCRYPT_TARGET_P }
+const defaultScrypt = nodeScrypt as ScryptFunction
+let scrypt = defaultScrypt
 
 function encodeScryptParams(params: ScryptParams): string {
   return `N=${params.N},r=${params.r},p=${params.p}`
@@ -80,7 +89,7 @@ async function deriveScryptKey(password: string, salt: Buffer, keyLength: number
   const options = { cost: params.N, blockSize: params.r, parallelization: params.p } satisfies ScryptOptions
 
   return await new Promise<Buffer>((resolve, reject) => {
-    nodeScrypt(password, salt, keyLength, options, (error, derivedKey) => {
+    scrypt(password, salt, keyLength, options, (error, derivedKey) => {
       if (error) {
         reject(error)
         return
@@ -127,4 +136,13 @@ export function createScryptPasswordHasher(): AuthPasswordHasher {
         || parsed.params.p < SCRYPT_TARGET_P
     },
   }
+}
+
+export const scryptPasswordHasherInternals = {
+  resetScrypt(): void {
+    scrypt = defaultScrypt
+  },
+  setScrypt(value: ScryptFunction): void {
+    scrypt = value
+  },
 }

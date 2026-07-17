@@ -1,4 +1,7 @@
-import { loadHoloPluginContributionModules } from '@holo-js/config'
+import {
+  loadHoloPluginContributionModules,
+  loadHoloPluginDefinitions,
+} from '@holo-js/kernel'
 import {
   getRegisteredNotificationChannel,
   registerNotificationChannel,
@@ -35,12 +38,21 @@ function resolveNotificationChannel(moduleValue: unknown, packageName: string, c
   }
 }
 
-export async function loadNotificationPluginChannels(projectRoot = process.cwd()): Promise<void> {
+export async function loadNotificationPluginChannels(
+  projectRoot = process.cwd(),
+  pluginNames: readonly string[] = [],
+): Promise<void> {
   if (loadedProjectRoots.has(projectRoot)) {
     return
   }
 
-  const contributions = await loadHoloPluginContributionModules(projectRoot, 'notifications', 'channels')
+  const plugins = await loadHoloPluginDefinitions(projectRoot, pluginNames)
+  const contributions = await loadHoloPluginContributionModules(
+    projectRoot,
+    plugins,
+    'notifications',
+    'channels',
+  )
 
   for (const contribution of contributions) {
     const previous = getRegisteredNotificationChannel(contribution.name)

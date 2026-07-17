@@ -57,7 +57,14 @@ import {
   securityRuntimeInternals,
 } from './runtime'
 
-export { defineSecurityConfig } from '@holo-js/config'
+export {
+  defineCorsConfig,
+  defineSecurityConfig,
+  holoCorsDefaults,
+  holoSecurityDefaults,
+  normalizeCorsConfig,
+  normalizeSecurityConfig,
+} from './config'
 export type {
   HoloSecurityConfig,
   HoloCorsConfig,
@@ -75,7 +82,7 @@ export type {
   SecurityRateLimitKeyResolver,
   SecurityRateLimitMemoryConfig,
   SecurityRateLimitRedisConfig,
-} from '@holo-js/config'
+} from './config'
 
 export {
   createFileRateLimitStoreConfig,

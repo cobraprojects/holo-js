@@ -1,101 +1,57 @@
 # Architecture
 
-Holo-JS is split into a portable backend core plus thin framework adapters. The host framework still owns
-SSR, routing, rendering, and deployment output.
+Holo-JS uses one-way package dependencies. Applications and framework adapters compose concrete capabilities; feature packages never reach upward into adapters or concrete drivers.
 
-## Runtime layers
+## Package layers
 
-1. config and env loading
-2. discovery and generated registries
-3. portable runtime and database context
-4. model, storage, and media behavior
-5. framework adapters
+```text
+@holo-js/kernel
+        ↑
+feature contracts and runtimes
+        ↑
+concrete drivers and framework adapters
+        ↑
+applications
+```
 
-## Config and env loading
+`@holo-js/kernel` is dependency-free and owns project paths, plugin contracts and loading, and runtime lifecycle primitives. `@holo-js/config` owns environment loading, generic config-file loading, typed access, registry composition, and config caching. It does not import feature packages; installed features register their own normalizers when their config modules load.
 
-`@holo-js/config` owns:
+Feature APIs are imported from the package that owns them. For example, use `defineAuthConfig` from `@holo-js/auth`, `defineQueueConfig` from `@holo-js/queue`, and `defineStorageConfig` from `@holo-js/storage`. Environment helpers continue to come from `@holo-js/config`.
 
-- `config/*.ts` loading
-- layered env resolution
-- typed `useConfig(...)`
-- typed `config(...)`
-- config caching
+## Runtime composition
 
-This is the first runtime layer because everything else depends on it.
+`@holo-js/core` is the composition root. It discovers the project registry, loads validated kernel contributions, establishes subsystem order, and coordinates cleanup. Plugin filesystem and module-boundary validation live in the kernel so the CLI, config loader, and runtime follow one security policy.
 
-## Discovery and generated registries
+Runtime contributions declare their dependencies. Initialization follows dependency order; a failed initialization disposes already-started contributions in reverse order.
 
-Holo-JS, not the host framework, owns discovery of canonical directories such as:
+## Drivers
 
-- `server/models`
-- `server/db`
-- `server/commands`
+Abstraction packages do not depend on concrete implementations. Install and import concrete drivers from their own packages:
 
-Discovery turns those directories into generated artifacts under `.holo-js/generated`. `holo dev` and
-`holo build` refresh discovery before starting the framework lifecycle command, and adapters consume the
-generated registries instead of re-scanning the filesystem on every runtime path.
+- `@holo-js/db-sqlite`, `@holo-js/db-postgres`, or `@holo-js/db-mysql`
+- `@holo-js/queue-redis`
+- `@holo-js/storage-s3`
 
-## Portable runtime
-
-`@holo-js/core` owns:
-
-- config normalization
-- runtime boot
-- shared singleton handling
-- database and storage access
-- adapter contracts
-
-The portable runtime is what makes framework support incremental instead of a redesign every time.
-
-## Model, storage, and media packages
-
-`@holo-js/db`, `@holo-js/storage`, and `@holo-js/media` live above the runtime core and below framework
-adapters.
-
-This layer owns:
-
-- schema and query behavior
-- models and relations
-- migrations, factories, and seeders
-- storage disks and media collections
+This direction lets drivers evolve independently and prevents package cycles.
 
 ## Framework adapters
 
-The adapters are intentionally thin:
+The Next, Nuxt, and SvelteKit adapters own only framework-native startup, request, response, cookie, navigation, and build integration. Shared realtime source transformation lives in `@holo-js/adapter-shared` and uses the TypeScript AST, so all adapters accept the same syntax.
 
-- `@holo-js/adapter-nuxt`
-- `@holo-js/adapter-next`
-- `@holo-js/adapter-sveltekit`
+Framework routing, rendering, and deployment output remain owned by the host framework.
 
-They should only solve framework glue:
+## Generated registries
 
-- startup timing
-- runtime access points
-- generated registry consumption
-- framework-specific server integration
+Discovery converts canonical directories such as `server/models`, `server/db`, and `server/commands` into artifacts under `.holo-js/generated`. Adapters consume those registries instead of independently scanning application files.
 
-They should not own database semantics, storage semantics, or their own config model.
+## Architectural enforcement
 
-## Hosting separation
+The repository architecture check rejects:
 
-Framework support and hosting support are separate concerns.
-Deployment planning follows the web-runtime-plus-worker-runtime model described in
-[Deployment](/deployment).
+- workspace dependency cycles
+- undeclared Holo package imports
+- imports from non-exported package subpaths
+- Holo dependencies from the kernel
+- abstraction-package dependencies on concrete drivers
 
-The adapter should stay free of direct assumptions about:
-
-- Vercel
-- Cloudflare
-- VPS process managers
-- Docker
-
-That separation keeps future adapter work focused on framework runtime integration rather than provider
-rewrites.
-
-## Main architectural rule
-
-Do not put framework-only behavior in the portable core, and do not put database or storage semantics in
-the adapters.
-
-If a change belongs to one framework only, keep it in the adapter. If it belongs to every framework,
-keep it in shared packages.
+Run it through `bun run test:dependency-policy`.

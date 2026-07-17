@@ -16,47 +16,38 @@ export default defineMailConfig({
 Then in your tests:
 
 ```ts
-import { sentMailData } from '@holo-js/mail'
+import { listFakeSentMails, resetFakeSentMails } from '@holo-js/mail'
 
 test('sends welcome email when user registers', async () => {
   // Perform user registration
   await registerUser({ email: 'test@example.com' })
   
   // Get the sent emails
-  const sentMails = sentMailData()
+  const sentMails = listFakeSentMails()
   
   // Assert emails were sent
   expect(sentMails).toHaveLength(1)
-  expect(sentMails[0].to).toContainEqual({
+  expect(sentMails[0].mail.to).toContainEqual({
     email: 'test@example.com'
   })
-  expect(sentMails[0].subject).toBe('Welcome!')
+  expect(sentMails[0].mail.subject).toBe('Welcome!')
+
+  resetFakeSentMails()
 })
 ```
 
 ## Fake Mail Data Structure
 
-The `sentMailData()` function returns an array of sent mail objects with the following structure:
+`listFakeSentMails()` returns immutable delivery records. The normalized message is available through each record's
+`mail` property, while `context` and `result` describe the driver execution.
 
 ```ts
-{
-  to: Array<{ email: string, name?: string }>,
-  cc: Array<{ email: string, name?: string }>,
-  bcc: Array<{ email: string, name?: string }>,
-  from: { email: string, name?: string },
-  replyTo: { email: string, name?: string },
-  subject: string,
-  text?: string,
-  html?: string,
-  attachments: Array<{
-    name: string,
-    contentType: string,
-    disposition: 'attachment' | 'inline',
-    contentId?: string
-  }>,
-  headers: Record<string, string>,
-  tags: string[],
-  metadata: Record<string, unknown>
+type FakeSentMail = {
+  messageId: string
+  createdAt: Date
+  mail: ResolvedMail
+  context: MailDriverExecutionContext
+  result: MailSendResult
 }
 ```
 

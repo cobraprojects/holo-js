@@ -470,8 +470,9 @@ export interface QueueEnqueueResult {
 }
 
 export interface QueueReserveInput {
-  readonly queueNames: readonly string[]
-  readonly workerId: string
+  readonly queueNames?: readonly string[]
+  readonly workerId?: string
+  readonly timeout?: number
 }
 
 export interface QueueReservedJob<TPayload extends QueueJsonValue = QueueJsonValue> {

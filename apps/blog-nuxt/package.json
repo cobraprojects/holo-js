@@ -5,16 +5,15 @@
   "packageManager": "bun@1.3.9",
   "scripts": {
     "postinstall": "nuxt prepare",
-    "prepare": "holo prepare",
+    "prepare": "holo key:generate && holo prepare",
     "dev": "holo dev",
     "build": "holo build",
-    "lint": "npx eslint app config server shared tests nuxt.config.ts --fix --no-warn-ignored",
-    "typecheck": "npx nuxi typecheck",
+    "start": "holo start",
+    "lint": "eslint app config server shared tests *.d.ts --fix --no-warn-ignored --no-error-on-unmatched-pattern",
+    "typecheck": "nuxt typecheck",
     "config:cache": "holo config:cache",
     "config:clear": "holo config:clear",
-    "test": "node ./tests/run.mjs",
-    "holo:dev": "node ./.holo-js/framework/run.mjs dev",
-    "holo:build": "node ./.holo-js/framework/run.mjs build"
+    "test": "node ./tests/run.mjs"
   },
   "dependencies": {
     "@holo-js/adapter-nuxt": "workspace:*",
@@ -37,6 +36,7 @@
     "@holo-js/flux": "workspace:*",
     "@holo-js/flux-vue": "workspace:*",
     "@holo-js/forms": "workspace:*",
+    "@holo-js/kernel": "workspace:*",
     "@holo-js/mail": "workspace:*",
     "@holo-js/notifications": "workspace:*",
     "@holo-js/queue": "workspace:*",
@@ -53,8 +53,12 @@
     "vue-router": "catalog:"
   },
   "devDependencies": {
+    "@eslint/js": "catalog:",
     "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "globals": "catalog:",
     "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
     "vue-tsc": "catalog:"
   }
 }

@@ -619,6 +619,13 @@ describe('factory slice', () => {
 
     const unsavedRole = Role.make({ name: 'Unsaved Role' })
     await expect(
+      defineFactory(User, () => ({ name: 'Recycled Attached User' }))
+        .recycle(unsavedRole)
+        .hasAttached(roleFactory.count(1), 'roles')
+        .createOne(),
+    ).rejects.toThrow('Factory.recycle() requires persisted related models when using create().')
+
+    await expect(
       defineFactory(User, () => ({ name: 'Attached User' }))
         .hasAttached(unsavedRole, 'roles')
         .createOne(),

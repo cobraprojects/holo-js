@@ -1,13 +1,47 @@
 import { monotonicFactory } from 'ulid'
 import { v7 as uuidv7 } from 'uuid'
-import { SchemaError } from '../core/errors'
+import { DatabaseError, SchemaError } from '../core/errors'
 import type { TableDefinition } from '../schema/types'
 import type {
   ModelAttributeKey,
+  ModelDefinition,
+  ModelRecord,
   ModelTrait,
   UniqueIdRuntimeConfig,
   UniqueIdTrait,
 } from './types'
+
+export function applyGeneratedUniqueIds<TTable extends TableDefinition>(
+  definition: ModelDefinition<TTable>,
+  values: Partial<ModelRecord<TTable>>,
+  generatedColumns: Set<string>,
+): Partial<ModelRecord<TTable>> {
+  const config = definition.uniqueIdConfig
+  if (!config) return values
+
+  const output: Partial<ModelRecord<TTable>> = { ...values }
+  for (const column of config.columns) {
+    const current = output[column]
+    if (typeof current !== 'undefined' && current !== null && current !== '') continue
+
+    const generated = config.generator()
+    if (typeof generated !== 'string' || generated.trim().length === 0) {
+      throw new DatabaseError(`${definition.name} unique ID generator must return a non-empty string.`, 'INVALID_UNIQUE_ID')
+    }
+    output[column] = generated as ModelRecord<TTable>[typeof column]
+    generatedColumns.add(column)
+  }
+  return output
+}
+
+export function applyPendingModelAttributes<TTable extends TableDefinition>(
+  definition: ModelDefinition<TTable>,
+  values: Partial<ModelRecord<TTable>>,
+): Partial<ModelRecord<TTable>> {
+  return Object.keys(definition.pendingAttributes).length === 0
+    ? values
+    : { ...definition.pendingAttributes, ...values }
+}
 
 export interface UniqueIdTraitOptions<TTable extends TableDefinition = TableDefinition> {
   columns?: readonly ModelAttributeKey<TTable>[]

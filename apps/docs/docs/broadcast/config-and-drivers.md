@@ -5,8 +5,8 @@
 Broadcasting configuration lives in `config/broadcast.ts`:
 
 ```ts
-import { defineBroadcastConfig, env } from '@holo-js/config'
-
+import { defineBroadcastConfig } from '@holo-js/broadcast'
+import { env } from '@holo-js/config'
 export default defineBroadcastConfig({
   default: env('BROADCAST_CONNECTION', 'holo'),
   worker: {

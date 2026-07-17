@@ -162,4 +162,44 @@ describe('@holo-js/queue jobs', () => {
     expect(queueJobInternals.normalizeOptionalHook(undefined, 'Job onCompleted hook')).toBeUndefined()
     expect(queueJobInternals.normalizeBackoff(0)).toBe(0)
   })
+
+  it('resolves cloned job definitions by full and option fingerprints', () => {
+    queueJobInternals.clearQueueJobDefinitionNames()
+    const handler = async (payload: { readonly id: string }) => payload.id
+    const registered = defineJob({ queue: 'reports', handle: handler })
+    queueJobInternals.setQueueJobDefinitionName(registered, 'reports.full')
+
+    const fullClone = defineJob({ queue: 'reports', handle: handler })
+    expect(queueJobInternals.resolveQueueJobDefinitionName(fullClone)).toBe('reports.full')
+
+    const optionClone = defineJob({
+      queue: 'reports',
+      async handle(payload: { readonly id: string }) {
+        return payload.id.toUpperCase()
+      },
+    })
+    expect(queueJobInternals.resolveQueueJobDefinitionName(optionClone)).toBe('reports.full')
+
+    queueJobInternals.deleteQueueJobDefinitionName('reports.full')
+    expect(() => queueJobInternals.resolveQueueJobDefinitionName(fullClone)).toThrow('cannot dispatch before the job is registered')
+  })
+
+  it('rejects ambiguous cloned definitions and ignores non-job fingerprint registration', () => {
+    queueJobInternals.clearQueueJobDefinitionNames()
+    const handler = async () => 'done'
+    const first = defineJob({ handle: handler })
+    const second = defineJob({ handle: handler })
+    queueJobInternals.setQueueJobDefinitionName(first, 'jobs.first')
+    queueJobInternals.setQueueJobDefinitionName(second, 'jobs.second')
+    queueJobInternals.setQueueJobDefinitionName({}, 'plain.object')
+
+    expect(() => queueJobInternals.resolveQueueJobDefinitionName(defineJob({ handle: handler })))
+      .toThrow('dispatch is ambiguous')
+    expect(() => queueJobInternals.resolveQueueJobDefinitionName({})).toThrow('cannot dispatch before the job is registered')
+
+    queueJobInternals.deleteQueueJobDefinitionName('jobs.first')
+    queueJobInternals.deleteQueueJobDefinitionName('jobs.second')
+    queueJobInternals.deleteQueueJobDefinitionName('plain.object')
+    queueJobInternals.clearQueueJobDefinitionNames()
+  })
 })

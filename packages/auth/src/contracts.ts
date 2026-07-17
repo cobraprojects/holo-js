@@ -1,6 +1,5 @@
-export { defineAuthConfig } from '@holo-js/config'
-export type { AuthGuardConfig, AuthProviderConfig, HoloAuthConfig, NormalizedHoloAuthConfig } from '@holo-js/config'
-import type { HoloAuthConfig, NormalizedHoloAuthConfig } from '@holo-js/config'
+export type { AuthGuardConfig, AuthProviderConfig, HoloAuthConfig, NormalizedHoloAuthConfig } from './config'
+import type { HoloAuthConfig, NormalizedHoloAuthConfig } from './config'
 
 export const AUTH_ERROR_CODES = [
   'runtime_unconfigured',

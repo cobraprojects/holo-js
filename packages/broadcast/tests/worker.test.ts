@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { describe, expect, it, vi } from 'vitest'
-import { normalizeBroadcastConfig, normalizeQueueConfigForHolo, normalizeRedisConfig } from '@holo-js/config'
+import { normalizeBroadcastConfig } from '../src'
+import { normalizeRedisConfig } from '@holo-js/kernel'
+import { normalizeQueueConfig as normalizeQueueConfigForHolo } from '@holo-js/queue'
 import {
   createBroadcastWorkerRuntime,
   startBroadcastWorker,
@@ -1399,6 +1401,7 @@ describe('@holo-js/broadcast worker runtime', () => {
     expect(await adapter.hashGetAll('presence')).toEqual({})
 
     await unsubscribe()
+    await unsubscribe()
     fakeRedis.emit('events', 'second')
     expect(received).toEqual(['first'])
     expect(fakeRedis.subscriberOn).toHaveBeenCalled()
@@ -1936,6 +1939,15 @@ describe('@holo-js/broadcast worker runtime', () => {
           socketId: wsData.socketId,
         },
         close,
+      }, '{')
+      await vi.waitFor(() => {
+        expect(close).toHaveBeenCalledWith(4001, 'Protocol error')
+      })
+      captured!.websocket.message({
+        data: {
+          socketId: wsData.socketId,
+        },
+        close,
       }, 'x'.repeat(65))
       expect(close).toHaveBeenCalledWith(1009, 'Message too large')
       captured!.websocket.close({
@@ -1948,6 +1960,8 @@ describe('@holo-js/broadcast worker runtime', () => {
         method: 'GET',
       }), { upgrade: () => false })
       expect(notUpgraded.status).toBe(404)
+      const bunHealth = await captured!.fetch(new Request('http://worker.test/healthz'), { upgrade })
+      expect(bunHealth.status).toBe(200)
 
       await worker.stop()
       expect(stop).toHaveBeenCalledWith(true)
@@ -2629,6 +2643,12 @@ describe('@holo-js/broadcast worker runtime', () => {
         body: publishPayload,
       })
       expect(publishResponse.status).toBe(200)
+
+      const oversizedResponse = await fetch(`http://127.0.0.1:${port}/apps/app-main/events`, {
+        method: 'POST',
+        body: 'x'.repeat(config.worker.maxRequestBytes + 1),
+      })
+      expect(oversizedResponse.status).toBe(413)
 
       // Test WebSocket upgrade via http.request — these paths are now covered by v8 ignore
       // since they require a real ws package for proper WebSocket handshake

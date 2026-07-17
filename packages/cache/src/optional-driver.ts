@@ -1,6 +1,3 @@
-import { createRequire } from 'node:module'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import {
   CacheOptionalPackageError,
   type CacheDriverContract,
@@ -60,32 +57,6 @@ export function normalizeOptionalDriverModuleLoadError(
   }
 
   return error
-}
-
-async function importOptionalDriverModuleFromProject<TModule>(specifier: string): Promise<TModule> {
-  const projectRequire = createRequire(join(process.cwd(), 'package.json'))
-  return await import(pathToFileURL(projectRequire.resolve(specifier)).href) as TModule
-}
-
-export function createOptionalDriverModuleLoader<TModule>(
-  specifier: string,
-  missingPackageMessage: string,
-): OptionalDriverModuleLoader<TModule> {
-  return async () => {
-    try {
-      return await import(/* webpackIgnore: true */ specifier) as TModule
-    } catch (error) {
-      if (!isOptionalDriverModuleNotFoundError(error, specifier)) {
-        throw normalizeOptionalDriverModuleLoadError(error, specifier, missingPackageMessage)
-      }
-
-      try {
-        return await importOptionalDriverModuleFromProject<TModule>(specifier)
-      } catch (fallbackError) {
-        throw normalizeOptionalDriverModuleLoadError(fallbackError, specifier, missingPackageMessage)
-      }
-    }
-  }
 }
 
 type LazyCacheDriverOptions<TModule, TOptions> = {

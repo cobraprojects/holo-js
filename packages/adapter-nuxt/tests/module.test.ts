@@ -22,6 +22,8 @@ type MockCallLog = {
   }
 }
 const packageEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
+const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/index.ts'))
+const storageEntry = JSON.stringify(resolve(import.meta.dirname, '../../storage/src/index.ts'))
 const tempDirs: string[] = []
 
 function getFirstRuntimeOptions(mock: MockCallLog): AuthorizationErrorOptions {
@@ -94,6 +96,7 @@ async function loadAdapterModule() {
 
   return {
     module: mod.default,
+    moduleInternals: mod.moduleInternals,
     addImports,
     addServerHandler,
     addServerImportsDir,
@@ -212,6 +215,7 @@ afterEach(() => {
   vi.doUnmock('nitropack/runtime/plugin')
   vi.doUnmock('nitropack/runtime/config')
   vi.doUnmock('nitropack/runtime/context')
+  vi.doUnmock('h3')
   vi.doUnmock('@holo-js/config')
   vi.doUnmock('@holo-js/db')
   vi.doUnmock('@holo-js/core')
@@ -300,7 +304,8 @@ export default defineAppConfig({
 })
 `, 'utf8')
     await writeFile(join(root, 'config/database.ts'), `
-import { defineDatabaseConfig, env } from ${packageEntry}
+import { env } from ${packageEntry}
+import { defineDatabaseConfig } from ${databaseEntry}
 
 export default defineDatabaseConfig({
   defaultConnection: 'primary',
@@ -401,7 +406,7 @@ export default defineDatabaseConfig({
       useEvent: () => ({
         request: {
           headers: new Headers({
-            cookie: 'broken=%; auth-token=secret%20value',
+            cookie: '%=invalid-key; broken=%; auth-token=secret%20value',
           }),
         },
         node: {
@@ -428,6 +433,52 @@ export default defineDatabaseConfig({
       'holo_session=session-1; Path=/; HttpOnly',
       'holo_session_remember=remember-1; Path=/; HttpOnly',
     ])
+  })
+
+  it('adapts every supported Nitro request and response header shape', async () => {
+    let event: Record<string, unknown> | undefined
+    const sendRedirect = vi.fn(async () => undefined)
+    vi.resetModules()
+    vi.doMock('nitropack/runtime/context', () => ({ useEvent: () => event }))
+    vi.doMock('h3', () => ({ sendRedirect }))
+    const runtime = await import('../src/runtime/composables')
+    const accessors = runtime.createNuxtAuthRequestAccessors()
+
+    await expect(accessors.getHeader('authorization')).resolves.toBeUndefined()
+    await expect(accessors.getCookie('sid')).resolves.toBeUndefined()
+    await expect(accessors.appendResponseCookie?.('sid=one')).resolves.toBeUndefined()
+    await expect(accessors.redirectResponse?.('/login', 303)).rejects.toThrow('active Nitro event')
+
+    event = { headers: new Headers({ authorization: 'Bearer direct' }) }
+    await expect(accessors.getHeader('authorization')).resolves.toBe('Bearer direct')
+    await expect(accessors.getHeader('missing')).resolves.toBeUndefined()
+
+    event = { request: { headers: new Headers({ authorization: 'Bearer request' }) } }
+    await expect(accessors.getHeader('authorization')).resolves.toBe('Bearer request')
+    await expect(accessors.getHeader('missing')).resolves.toBeUndefined()
+
+    const setHeader = vi.fn()
+    const getHeader = vi.fn()
+    event = {
+      node: {
+        req: { headers: { authorization: ['Bearer array'], cookie: 'invalid; other=x' } },
+        res: { getHeader, setHeader },
+      },
+    }
+    await expect(accessors.getHeader('authorization')).resolves.toBe('Bearer array')
+    await expect(accessors.getHeader('missing')).resolves.toBeUndefined()
+    await expect(accessors.getCookie('sid')).resolves.toBeUndefined()
+    await accessors.appendResponseCookie?.('sid=one')
+    expect(setHeader).toHaveBeenLastCalledWith('set-cookie', ['sid=one'])
+
+    getHeader.mockReturnValue('theme=dark')
+    await accessors.appendResponseCookie?.('sid=two')
+    expect(setHeader).toHaveBeenLastCalledWith('set-cookie', ['theme=dark', 'sid=two'])
+    getHeader.mockReturnValue(['theme=dark'])
+    await accessors.appendResponseCookie?.('sid=three')
+    expect(setHeader).toHaveBeenLastCalledWith('set-cookie', ['theme=dark', 'sid=three'])
+    await accessors.redirectResponse?.('/login', 303)
+    expect(sendRedirect).toHaveBeenCalledWith(event, '/login', 303)
   })
 
   it('generates a server import wrapper for model defaults when server models exist', async () => {
@@ -502,7 +553,7 @@ export default defineAppConfig({
   it('registers the built s3 runtime driver path for object storage disks', async () => {
     const root = await createProject()
     await writeFile(join(root, 'config/storage.ts'), `
-import { defineStorageConfig } from ${packageEntry}
+import { defineStorageConfig } from ${storageEntry}
 
 export default defineStorageConfig({
   defaultDisk: 'local',
@@ -539,7 +590,7 @@ export default defineStorageConfig({
   it('fails early when an s3 storage disk is configured without @holo-js/storage-s3', async () => {
     const root = await createProject()
     await writeFile(join(root, 'config/storage.ts'), `
-import { defineStorageConfig } from ${packageEntry}
+import { defineStorageConfig } from ${storageEntry}
 
 export default defineStorageConfig({
   disks: {
@@ -570,11 +621,16 @@ export default defineStorageConfig({
   it('detects Windows-style storage config paths', async () => {
     const mod = await import('../src/module')
 
+    for (const extension of ['ts', 'mts', 'js', 'mjs', 'cts', 'cjs']) {
+      expect(mod.moduleInternals.hasLoadedConfigFile({
+        loadedFiles: [
+          `C:\\workspace\\app\\config\\storage.${extension}`,
+        ],
+      } as never, 'storage')).toBe(true)
+    }
     expect(mod.moduleInternals.hasLoadedConfigFile({
-      loadedFiles: [
-        'C:\\workspace\\app\\config\\storage.ts',
-      ],
-    } as never, 'storage')).toBe(true)
+      loadedFiles: ['C:\\workspace\\app\\config\\mail.ts'],
+    } as never, 'storage')).toBe(false)
   })
 
   it('treats ERR_MODULE_NOT_FOUND storage-s3 imports as absent optional modules', async () => {
@@ -728,6 +784,66 @@ export default defineStorageConfig({
     } finally {
       vi.unstubAllEnvs()
     }
+  })
+
+  it('composes optional storage setup and finalization for every availability state', async () => {
+    const root = await createProject()
+    const { addServerHandler, moduleInternals } = await loadAdapterModule()
+    const baseLoaded = {
+      storage: {
+        defaultDisk: 'local',
+        routePrefix: '/storage',
+        disks: {},
+      },
+      loadedFiles: [],
+    }
+
+    expect(moduleInternals.resolveStorageSetup(undefined, baseLoaded as never)).toEqual({
+      options: undefined,
+      normalized: undefined,
+    })
+    expect(() => moduleInternals.resolveStorageSetup(undefined, {
+      ...baseLoaded,
+      loadedFiles: [join(root, 'config/storage.ts')],
+    } as never)).toThrow('Storage config requires @holo-js/storage')
+
+    const normalized = {
+      defaultDisk: 'local',
+      routePrefix: '/storage',
+      disks: {},
+    }
+    const storageModule = {
+      mergeModuleOptions: vi.fn(() => baseLoaded.storage),
+      normalizeModuleOptions: vi.fn(() => normalized),
+      applyNitroStorageConfig: vi.fn(),
+      hasPublicLocalDisk: vi.fn(() => false),
+    }
+    expect(moduleInternals.resolveStorageSetup(storageModule as never, baseLoaded as never)).toEqual({
+      options: baseLoaded.storage,
+      normalized,
+    })
+    const runtimeConfig: Record<string, unknown> = {}
+    moduleInternals.applyStorageRuntimeConfig(runtimeConfig, undefined)
+    expect(runtimeConfig).toEqual({})
+    moduleInternals.applyStorageRuntimeConfig(runtimeConfig, normalized as never)
+    expect(runtimeConfig.holoStorage).toBe(normalized)
+
+    const opts = createNuxtHarness(root).options
+    Object.assign(opts, { _holoStorageModuleOptions: baseLoaded.storage })
+    moduleInternals.finalizeStorageSetup(storageModule as never, opts as never, {
+      resolve: value => value,
+    }, './s3.js')
+    expect(storageModule.applyNitroStorageConfig).toHaveBeenCalledWith(opts, normalized, './s3.js')
+    expect(addServerHandler).not.toHaveBeenCalled()
+
+    storageModule.hasPublicLocalDisk.mockReturnValue(true)
+    moduleInternals.finalizeStorageSetup(storageModule as never, opts as never, {
+      resolve: value => value,
+    }, './s3.js')
+    expect(addServerHandler).toHaveBeenCalledWith({
+      route: '/storage/**',
+      handler: './runtime/server/routes/storage.get',
+    })
   })
 })
 

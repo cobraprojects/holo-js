@@ -4,11 +4,56 @@
     "outDir": "dist",
     "baseUrl": ".",
     "paths": {
-      "@holo-js/db": [
-        "../db/src/index.ts"
+      "@holo-js/config": ["src/index.ts"],
+      "@holo-js/config/registry": ["src/registry.ts"],
+      "@holo-js/queue/config": ["../queue/src/config.ts"],
+      "@holo-js/kernel": [
+        "../kernel/src/index.ts"
       ],
       "@holo-js/queue": [
         "../queue/src/index.ts"
+      ],
+      "@holo-js/storage": [
+        "../storage/src/index.ts"
+      ],
+      "@holo-js/storage/config": ["../storage/src/config.ts"],
+      "@holo-js/auth/config": ["../auth/src/config.ts"],
+      "@holo-js/auth": [
+        "../auth/src/index.ts"
+      ],
+      "@holo-js/broadcast/config": ["../broadcast/src/config.ts"],
+      "@holo-js/broadcast": [
+        "../broadcast/src/index.ts"
+      ],
+      "@holo-js/cache": [
+        "../cache/src/index.ts"
+      ],
+      "@holo-js/cache/config": ["../cache/src/config.ts"],
+      "@holo-js/db/config": ["../db/src/databaseConfig.ts"],
+      "@holo-js/db": [
+        "../db/src/index.ts"
+      ],
+      "@holo-js/mail": [
+        "../mail/src/index.ts"
+      ],
+      "@holo-js/mail/config": ["../mail/src/config.ts"],
+      "@holo-js/notifications/config": ["../notifications/src/config.ts"],
+      "@holo-js/notifications": [
+        "../notifications/src/index.ts"
+      ],
+      "@holo-js/security": [
+        "../security/src/index.ts"
+      ],
+      "@holo-js/security/config": ["../security/src/config.ts"],
+      "@holo-js/session/config": ["../session/src/config.ts"],
+      "@holo-js/session": [
+        "../session/src/index.ts"
+      ],
+      "@holo-js/media": [
+        "../media/src/index.ts"
+      ],
+      "@holo-js/media/config": [
+        "../media/src/projectConfig.ts"
       ]
     }
   },

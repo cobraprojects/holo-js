@@ -13,6 +13,7 @@ const frameworkSidebar = [
       { text: 'Installation', link: '/installation' },
       { text: 'Agentic Coding', link: '/cli/agents-install' },
       { text: 'Configuration', link: '/configuration' },
+      { text: 'Architecture Upgrade', link: '/upgrade-architecture' },
       { text: 'Directory Structure', link: '/directory-structure' },
     ],
   },
@@ -37,6 +38,7 @@ const frameworkSidebar = [
     text: 'Architecture Concepts',
     items: [
       { text: 'Architecture', link: '/architecture' },
+      { text: 'Plugin Authoring', link: '/plugins' },
       { text: 'Routing', link: '/routing' },
       { text: 'Runtime Services', link: '/runtime-services' },
     ],

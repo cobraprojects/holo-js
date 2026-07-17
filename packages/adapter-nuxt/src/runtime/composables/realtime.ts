@@ -1,5 +1,5 @@
 import { onScopeDispose, reactive } from 'vue'
-import { normalizeHoloHttpError } from '@holo-js/core/errors'
+import { normalizeHoloHttpError } from '@holo-js/adapter-shared'
 import {
   configureRealtimeClientRuntime,
   configureRealtimeClientTransport,
@@ -78,6 +78,12 @@ function replaceRealtimeReactiveValue<TValue>(target: TValue | undefined, value:
   return value
 }
 
+function connectRealtimeStoreInBrowser(store: { connect(): unknown }): void {
+  if ('window' in globalThis) {
+    store.connect()
+  }
+}
+
 function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
   definition: TDefinition,
   args: RealtimeArgsFor<TDefinition>,
@@ -95,9 +101,7 @@ function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
       current = replaceRealtimeReactiveValue(current, nextData)
     }
   })
-  if ('window' in globalThis) {
-    store.connect()
-  }
+  connectRealtimeStoreInBrowser(store)
   onScopeDispose(unsubscribe)
   return current as RealtimeResultFor<TDefinition>
 }
@@ -107,5 +111,14 @@ configureRealtimeClientRuntime({
   useQuery: useReactiveRealtimeQuery,
 })
 configureRealtimeClientTransport(createBroadcastRealtimeTransport())
+
+export const nuxtRealtimeInternals = {
+  emitRealtimeError,
+  replaceReactiveObject,
+  replaceReactiveArray,
+  createRealtimeReactiveValue,
+  replaceRealtimeReactiveValue,
+  connectRealtimeStoreInBrowser,
+}
 
 export {}

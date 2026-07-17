@@ -1,52 +1,113 @@
-import { AsyncLocalStorage } from 'node:async_hooks'
 import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
 import { createHash, createHmac } from 'node:crypto'
-import { createRequire } from 'node:module'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { resolve } from 'node:path'
+import type { AuthHostedIdentityStore } from '@holo-js/auth'
+import type {} from '@holo-js/auth/config'
+import type {} from '@holo-js/broadcast/config'
+import type {} from '@holo-js/cache/config'
+import type {} from '@holo-js/mail/config'
+import type {} from '@holo-js/notifications/config'
+import type {} from '@holo-js/queue/config'
+import type {} from '@holo-js/security/config'
+import type {} from '@holo-js/session/config'
+import type {} from '@holo-js/storage/config'
+import { createRuntimeLifecycle } from '@holo-js/kernel'
 import {
   config as globalConfig,
   configureConfigRuntime,
   createConfigAccessors,
   loadConfigDirectory,
   resetConfigRuntime,
-  resolveHoloPluginModulePath,
   useConfig as globalUseConfig,
-  type AuthHostedIdentityStore,
   type DotPath,
-  type HoloPluginRuntimeModule,
+  type HoloConfigValues,
   type LoadedHoloConfig,
-  type LoadedHoloPluginDefinition,
   type HoloConfigMap,
   type ValueAtPath,
 } from '@holo-js/config'
 import {
+  connectionAsyncContext,
   configureDB,
   DB,
   Entity,
+  registerDatabaseDriverFactory,
   resetDB,
+  unregisterDatabaseDriverFactory,
+  type DatabaseDriverFactory,
 } from '@holo-js/db'
 import { importBundledRuntimeModule, importOptionalRuntimeModule } from '../runtimeModule'
 import { resolveRuntimeConnectionManagerOptions } from './dbRuntime'
 import { loadGeneratedProjectRegistry, type GeneratedProjectRegistry } from './registry'
 import { configurePlainNodeStorageRuntime, resetOptionalStorageRuntime } from '../storageRuntime'
+import { preloadDiscoveredModelModules, preloadGeneratedSchemaModule } from './discoveryRuntime'
+import { loadInstalledFeatureConfigContributions } from './configRuntime'
+import {
+  configureHoloRenderingRuntime,
+  getHoloRenderingRuntime,
+  resetHoloRenderingRuntime,
+  restoreHoloRenderingRuntime,
+  type HoloServerViewRenderer,
+} from './renderingRuntime'
+export type { HoloServerViewRenderInput, HoloServerViewRenderer } from './renderingRuntime'
+export { configureHoloRenderingRuntime, resetHoloRenderingRuntime }
+import {
+  normalizeAccessTokenRecord,
+  normalizeDateValue,
+  normalizeEmailVerificationTokenRecord,
+  normalizeJsonValue,
+  normalizePasswordResetTokenRecord,
+  normalizeStoredUserId,
+  serializeAccessTokenRecord,
+  serializeEmailVerificationTokenRecord,
+  serializePasswordResetTokenRecord,
+} from './authPersistence'
+import {
+  bootConfiguredHoloPluginModule,
+  loadConfiguredHoloPluginBootModules,
+  loadConfiguredHoloPluginDefinitions,
+  mergeQueueRuntimeDriverFactories,
+  resolveLoadedPluginNames,
+  resetBootedHoloPluginModules,
+  type CoreCachePluginDriverRegistry,
+  type CoreQueueDriverFactory,
+} from './pluginRuntime'
+import { createRequestAwareAuthContext } from './authRequestContext'
+import {
+  normalizeNotificationRecordFromRow,
+  normalizeSessionRecordFromRow,
+  serializeNotificationRecordForRow,
+  serializeSessionRecordForRow,
+} from './recordPersistence'
+import { createCoreNotificationStore } from './notificationPersistence'
+import {
+  createAuthActionUrl,
+  createAuthEmailHtml,
+  createAuthMailDeliveryHook,
+  createCoreNotificationMailSender,
+  createNotificationMailText,
+  formatAuthEmailExpiration,
+} from './authMailDelivery'
+import { createOptionalFeatureModuleLoader } from './optionalFeatureLoader'
+import {
+  authConfigUsesClerkProviders,
+  authConfigUsesSocialProviders,
+  authConfigUsesWorkosProviders,
+  hasLoadedConfigFile,
+  queueConfigUsesDatabaseBackedFailedStore,
+  queueConfigUsesDatabaseDriver,
+  queueConfigUsesRedisDriver,
+  registryHasEvents,
+  registryHasJobs,
+} from './featureDetection'
+import {
+  createRuntimeStateAccessors,
+  type OptionalSubsystemRuntimeBindings,
+} from './runtimeState'
 
-type RuntimeConfigRegistry<TCustom extends HoloConfigMap> = LoadedHoloConfig<TCustom>['all']
+type RuntimeConfigRegistry<TCustom extends HoloConfigMap> = HoloConfigValues<TCustom>
 type PortableRuntimeConfig<TCustom extends HoloConfigMap> = {
   readonly db: LoadedHoloConfig<TCustom>['database']
   readonly queue: LoadedHoloConfig<TCustom>['queue']
-}
-
-type CoreNotificationJsonPrimitive = string | number | boolean | null
-type CoreNotificationJsonValue
-  = CoreNotificationJsonPrimitive
-  | readonly CoreNotificationJsonValue[]
-  | { readonly [key: string]: CoreNotificationJsonValue }
-
-interface CoreNotificationDatabaseRoute {
-  readonly id: string | number
-  readonly type: string
 }
 
 type HoloAuthResult<TData> = {
@@ -79,77 +140,6 @@ type CoreHostedIdentityStore = AuthHostedIdentityStore & {
   claim(record: CoreHostedIdentityRecord): Promise<CoreHostedIdentityRecord>
 }
 
-async function preloadGeneratedSchemaModule(
-  projectRoot: string,
-  registry: GeneratedProjectRegistry | undefined,
-): Promise<void> {
-  const entry = registry?.paths.generatedSchema
-  if (!entry) {
-    return
-  }
-
-  const expectedTarget = resolve(projectRoot, entry)
-  if (!existsSync(expectedTarget)) {
-    return
-  }
-
-  try {
-    await importBundledRuntimeModule(projectRoot, entry)
-  } catch (error) {
-    if (
-      error instanceof Error
-      && /Cannot find module|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Failed to load url|Failed to load /.test(error.message)
-    ) {
-      const message = error.message
-      const failedTarget = message.match(/Cannot find module '([^']+)'|Cannot find package '([^']+)'|Failed to load url ([^ ]+)|Failed to load ([^ ]+)\./)?.slice(1)
-        .find((value): value is string => typeof value === 'string')
-      if (failedTarget === expectedTarget) {
-        return
-      }
-    }
-
-    throw error
-  }
-}
-
-async function preloadDiscoveredModelModules(
-  projectRoot: string,
-  registry: GeneratedProjectRegistry | undefined,
-): Promise<void> {
-  if (!registry || registry.models.length === 0) {
-    return
-  }
-
-  for (const entry of registry.models) {
-    const sourcePath = resolve(projectRoot, entry.sourcePath)
-    if (!existsSync(sourcePath)) {
-      continue
-    }
-
-    await importBundledRuntimeModule(projectRoot, sourcePath)
-  }
-}
-
-interface CoreNotificationRecord<TData extends CoreNotificationJsonValue = CoreNotificationJsonValue> {
-  readonly id: string
-  readonly type?: string
-  readonly notifiableType: string
-  readonly notifiableId: string | number
-  readonly data: TData
-  readonly readAt?: Date | null
-  readonly createdAt: Date
-  readonly updatedAt: Date
-}
-
-interface CoreNotificationStore {
-  create(record: CoreNotificationRecord): Promise<void>
-  list(notifiable: CoreNotificationDatabaseRoute): Promise<readonly CoreNotificationRecord[]>
-  unread(notifiable: CoreNotificationDatabaseRoute): Promise<readonly CoreNotificationRecord[]>
-  markAsRead(ids: readonly string[]): Promise<number>
-  markAsUnread(ids: readonly string[]): Promise<number>
-  delete(ids: readonly string[]): Promise<number>
-}
-
 export interface HoloSessionRuntimeBinding {
   create(input?: { readonly store?: string, readonly data?: Readonly<Record<string, unknown>>, readonly id?: string }): Promise<unknown>
   write(record: unknown): Promise<unknown>
@@ -176,13 +166,13 @@ export interface HoloAuthRuntimeBinding {
   login(credentials: Readonly<Record<string, unknown>> & {
     readonly password: string
     readonly remember?: boolean
-  }): Promise<HoloAuthResult<{
+  }): Promise<{
     readonly guard: string
     readonly user: unknown
     readonly sessionId: string
     readonly rememberToken?: string
     readonly cookies: readonly string[]
-  }>>
+  }>
   loginUsing(
     user: unknown,
     options?: {
@@ -257,13 +247,13 @@ export interface HoloAuthRuntimeBinding {
     login(credentials: Readonly<Record<string, unknown>> & {
       readonly password: string
       readonly remember?: boolean
-    }): Promise<HoloAuthResult<{
+    }): Promise<{
       readonly guard: string
       readonly user: unknown
       readonly sessionId: string
       readonly rememberToken?: string
       readonly cookies: readonly string[]
-    }>>
+    }>
     loginUsing(
       user: unknown,
       options?: {
@@ -392,18 +382,10 @@ export interface HoloQueueDriverBinding {
   readonly mode: 'async' | 'sync'
 }
 
-export interface HoloServerViewRenderInput {
-  readonly view: string
-  readonly props?: Readonly<Record<string, unknown>>
-}
-
-export type HoloServerViewRenderer = (
-  input: HoloServerViewRenderInput,
-) => string | Promise<string>
-
 type QueueModule = {
   configureQueueRuntime(options: { config: LoadedHoloConfig['queue'], redisConfig?: LoadedHoloConfig['redis'] } & Record<string, unknown>): void
-  loadQueuePluginDrivers?(projectRoot?: string): Promise<void>
+  loadQueuePluginDriverFactories(projectRoot?: string, pluginNames?: readonly string[]): Promise<readonly CoreQueueDriverFactory[]>
+  loadQueuePluginDrivers?(projectRoot?: string, pluginNames?: readonly string[]): Promise<void>
   getRegisteredQueueJob(name: string): { sourcePath?: string } | undefined
   getQueueRuntime(): HoloQueueRuntimeBinding
   isQueueJobDefinition(value: unknown): boolean
@@ -423,6 +405,10 @@ type QueueDbModule = {
   }
 }
 
+type QueueRedisModule = {
+  readonly redisQueueDriverFactory: CoreQueueDriverFactory
+}
+
 type CacheModule = {
   configureCacheRuntime(options?: {
     readonly config: LoadedHoloConfig['cache']
@@ -430,372 +416,13 @@ type CacheModule = {
     readonly redisConfig?: LoadedHoloConfig['redis']
     readonly drivers?: CoreCachePluginDriverRegistry
   }): void
+  loadConfiguredCachePluginDriverContracts(
+    projectRoot: string,
+    pluginNames: readonly string[],
+    configs: readonly (Readonly<Record<string, unknown>> & { readonly name: string, readonly driver: string })[],
+  ): Promise<readonly (Readonly<Record<string, unknown>> & { readonly name: string })[]>
   loadCachePluginDrivers?(projectRoot?: string): Promise<void>
   resetCacheRuntime(): void
-}
-
-type CorePluginManifest = {
-  readonly holo?: unknown
-}
-type CoreQueueDriverFactory = {
-  readonly driver: string
-  create(...parameters: readonly unknown[]): unknown
-}
-type CoreCachePluginDriverConfig = Readonly<Record<string, unknown>> & {
-  readonly name: string
-  readonly driver: string
-}
-type CoreCachePluginDriverRegistry = {
-  readonly size: number
-  get(name: string): unknown
-  has(name: string): boolean
-  entries(): IterableIterator<[string, unknown]>
-  [Symbol.iterator](): IterableIterator<[string, unknown]>
-}
-type CoreCachePluginDriverFactory = {
-  readonly driver: string
-  create(config: CoreCachePluginDriverConfig): unknown
-}
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
-}
-
-function normalizePluginString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined
-}
-
-function assertValidPluginPackageName(packageName: string): void {
-  if (
-    !/^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/i.test(packageName)
-    && !/^[a-z0-9][a-z0-9._-]*$/i.test(packageName)
-  ) {
-    throw new Error(`[Holo Plugins] Invalid plugin package name: ${packageName}.`)
-  }
-}
-
-function assertPackageRelativePluginPath(packageName: string, value: string): void {
-  if (isAbsolute(value)) {
-    throw new Error(`[Holo Plugins] Plugin ${packageName} declared an absolute module path.`)
-  }
-}
-
-function resolveCorePluginPackageJsonPath(projectRoot: string, packageName: string): string {
-  assertValidPluginPackageName(packageName)
-
-  try {
-    return createRequire(join(projectRoot, 'package.json')).resolve(`${packageName}/package.json`)
-  } catch {
-    return join(projectRoot, 'node_modules', ...packageName.split('/'), 'package.json')
-  }
-}
-
-async function readCorePluginManifest(packageName: string, packageJsonPath: string): Promise<CorePluginManifest> {
-  try {
-    return JSON.parse(await readFile(packageJsonPath, 'utf8')) as CorePluginManifest
-  } catch (error) {
-    if (isRecord(error) && error.code === 'ENOENT') {
-      throw new Error(`Cannot find module '${packageName}/package.json'`)
-    }
-
-    throw error
-  }
-}
-
-function resolveCorePluginEntryPath(packageName: string, packageJsonPath: string, manifest: CorePluginManifest): string {
-  if (!isRecord(manifest.holo)) {
-    throw new Error(`[Holo Plugins] Plugin ${packageName} does not declare holo.plugin.`)
-  }
-
-  const entry = normalizePluginString(manifest.holo.plugin)
-  if (!entry) {
-    throw new Error(`[Holo Plugins] Plugin ${packageName} does not declare holo.plugin.`)
-  }
-
-  assertPackageRelativePluginPath(packageName, entry)
-
-  const packageRoot = dirname(packageJsonPath)
-  const entryPath = resolve(packageRoot, entry)
-  const relativeEntryPath = relative(packageRoot, entryPath)
-  if (relativeEntryPath.startsWith('..') || isAbsolute(relativeEntryPath)) {
-    throw new Error(`[Holo Plugins] Plugin ${packageName} entry must stay inside the package root.`)
-  }
-
-  return entryPath
-}
-
-function resolveCorePluginDefinition(moduleValue: unknown): Readonly<Record<string, unknown>> {
-  const candidate = isRecord(moduleValue) && 'default' in moduleValue
-    ? moduleValue.default
-    : isRecord(moduleValue) && 'plugin' in moduleValue
-      ? moduleValue.plugin
-      : moduleValue
-
-  if (!isRecord(candidate)) {
-    throw new Error('[Holo Plugins] Plugin entry must export a plugin definition.')
-  }
-
-  return Object.freeze({ ...candidate })
-}
-
-async function loadCorePluginRuntimeModule(projectRoot: string, modulePath: string): Promise<unknown> {
-  const projectRequire = createRequire(join(resolve(projectRoot), 'package.json'))
-  const resolvedPath = projectRequire.resolve(modulePath)
-  return await import(/* webpackIgnore: true */ `${pathToFileURL(resolvedPath).href}?t=${Date.now()}`) as unknown
-}
-
-async function loadConfiguredHoloPluginDefinitions(
-  projectRoot: string,
-  pluginNames: readonly string[],
-): Promise<readonly LoadedHoloPluginDefinition[]> {
-  const root = resolve(projectRoot)
-  const normalizedPluginNames = [...new Set(pluginNames.map(pluginName => pluginName.trim()).filter(Boolean))]
-  const plugins: LoadedHoloPluginDefinition[] = []
-
-  for (const packageName of normalizedPluginNames) {
-    const packageJsonPath = resolveCorePluginPackageJsonPath(root, packageName)
-    const manifest = await readCorePluginManifest(packageName, packageJsonPath)
-    const entryPath = resolveCorePluginEntryPath(packageName, packageJsonPath, manifest)
-
-    plugins.push(Object.freeze({
-      packageName,
-      packageRoot: dirname(packageJsonPath),
-      definition: resolveCorePluginDefinition(await loadCorePluginRuntimeModule(root, entryPath)),
-    }))
-  }
-
-  return Object.freeze(plugins)
-}
-
-function resolveConfiguredContributionMap(
-  plugin: LoadedHoloPluginDefinition,
-  scope: string,
-  key: string,
-): Readonly<Record<string, { readonly runtime: string }>> {
-  const contributes = plugin.definition.contributes
-  if (!isRecord(contributes) || !isRecord(contributes[scope]) || !isRecord(contributes[scope][key])) {
-    return Object.freeze({})
-  }
-
-  return Object.freeze(Object.fromEntries(
-    Object.entries(contributes[scope][key])
-      .flatMap(([name, contribution]) => {
-        if (!isRecord(contribution)) {
-          return []
-        }
-
-        const runtime = normalizePluginString(contribution.runtime)
-        return runtime ? [[name, { runtime }]] : []
-      }),
-  ))
-}
-
-async function loadConfiguredHoloPluginContributionModules(
-  projectRoot: string,
-  plugins: readonly LoadedHoloPluginDefinition[],
-  scope: string,
-  key: string,
-): Promise<readonly HoloPluginRuntimeModule[]> {
-  const root = resolve(projectRoot)
-  const modules: HoloPluginRuntimeModule[] = []
-
-  for (const plugin of plugins) {
-    for (const [name, contribution] of Object.entries(resolveConfiguredContributionMap(plugin, scope, key))) {
-      const modulePath = resolveHoloPluginModulePath(root, plugin, contribution.runtime)
-      modules.push(Object.freeze({
-        plugin,
-        name,
-        runtime: contribution.runtime,
-        module: await loadCorePluginRuntimeModule(root, modulePath),
-      }))
-    }
-  }
-
-  return Object.freeze(modules)
-}
-
-async function loadConfiguredHoloPluginBootModules(
-  projectRoot: string,
-  plugins: readonly LoadedHoloPluginDefinition[],
-): Promise<readonly HoloPluginRuntimeModule[]> {
-  const root = resolve(projectRoot)
-  const modules: HoloPluginRuntimeModule[] = []
-
-  for (const plugin of plugins) {
-    const contributes = plugin.definition.contributes
-    const runtime = isRecord(contributes) && isRecord(contributes.runtime)
-      ? normalizePluginString(contributes.runtime.boot)
-      : undefined
-    if (!runtime) {
-      continue
-    }
-
-    const modulePath = resolveHoloPluginModulePath(root, plugin, runtime)
-    modules.push(Object.freeze({
-      plugin,
-      name: 'boot',
-      runtime,
-      module: await loadCorePluginRuntimeModule(root, modulePath),
-    }))
-  }
-
-  return Object.freeze(modules)
-}
-
-function resolveCorePluginCandidate(moduleValue: unknown, exportName: string): unknown {
-  return isRecord(moduleValue) && typeof moduleValue.default !== 'undefined'
-    ? moduleValue.default
-    : isRecord(moduleValue) && typeof moduleValue[exportName] !== 'undefined'
-      ? moduleValue[exportName]
-      : moduleValue
-}
-
-function resolveConfiguredQueueDriverFactory(moduleValue: unknown, packageName: string, driverName: string): CoreQueueDriverFactory {
-  const candidate = resolveCorePluginCandidate(moduleValue, 'factory')
-  if (!isRecord(candidate) || candidate.driver !== driverName || typeof candidate.create !== 'function') {
-    throw new Error(`[@holo-js/queue] Plugin ${packageName} queue driver "${driverName}" must export a matching QueueDriverFactory.`)
-  }
-
-  return candidate as unknown as CoreQueueDriverFactory
-}
-
-function mergeQueueRuntimeDriverFactories(
-  ...sources: readonly (readonly CoreQueueDriverFactory[] | undefined)[]
-): readonly CoreQueueDriverFactory[] {
-  const factories = new Map<string, CoreQueueDriverFactory>()
-
-  for (const source of sources) {
-    for (const factory of source ?? []) {
-      factories.set(factory.driver, factory)
-    }
-  }
-
-  return Object.freeze([...factories.values()])
-}
-
-async function loadConfiguredQueuePluginDriverFactories(
-  projectRoot: string,
-  plugins: readonly LoadedHoloPluginDefinition[],
-): Promise<readonly CoreQueueDriverFactory[]> {
-  const contributions = await loadConfiguredHoloPluginContributionModules(projectRoot, plugins, 'queue', 'drivers')
-  return Object.freeze(contributions.map(contribution => resolveConfiguredQueueDriverFactory(
-    contribution.module,
-    contribution.plugin.packageName,
-    contribution.name,
-  )))
-}
-
-function isBuiltInCacheDriverName(driverName: string): boolean {
-  return driverName === 'memory'
-    || driverName === 'file'
-    || driverName === 'redis'
-    || driverName === 'database'
-}
-
-function resolveConfiguredCachePluginDriverConfigs(cacheConfig: LoadedHoloConfig['cache']): readonly CoreCachePluginDriverConfig[] {
-  return Object.entries(cacheConfig.drivers).flatMap(([name, driverConfig]) => {
-    if (!isRecord(driverConfig) || typeof driverConfig.driver !== 'string' || isBuiltInCacheDriverName(driverConfig.driver)) {
-      return []
-    }
-
-    return [{
-      ...driverConfig,
-      name: typeof driverConfig.name === 'string' ? driverConfig.name : name,
-      driver: driverConfig.driver,
-    }]
-  })
-}
-
-function isCachePluginDriverFactory(candidate: unknown, driverName: string): candidate is CoreCachePluginDriverFactory {
-  return isRecord(candidate)
-    && candidate.driver === driverName
-    && typeof candidate.create === 'function'
-}
-
-function assertCoreCacheDriverContract(
-  candidate: unknown,
-  packageName: string,
-  driverName: string,
-  expectedName: string,
-): asserts candidate is Readonly<Record<string, unknown>> {
-  if (
-    !isRecord(candidate)
-    || candidate.driver !== driverName
-    || candidate.name !== expectedName
-    || typeof candidate.get !== 'function'
-    || typeof candidate.put !== 'function'
-    || typeof candidate.add !== 'function'
-    || typeof candidate.forget !== 'function'
-    || typeof candidate.flush !== 'function'
-    || typeof candidate.increment !== 'function'
-    || typeof candidate.decrement !== 'function'
-    || typeof candidate.lock !== 'function'
-  ) {
-    throw new Error(`[@holo-js/cache] Plugin ${packageName} cache driver "${driverName}" must export a matching CacheDriverContract.`)
-  }
-}
-
-function resolveConfiguredCacheDriver(
-  moduleValue: unknown,
-  packageName: string,
-  driverName: string,
-  config: CoreCachePluginDriverConfig,
-): unknown {
-  const candidate = resolveCorePluginCandidate(moduleValue, 'driver')
-  if (isCachePluginDriverFactory(candidate, driverName)) {
-    const driver = candidate.create(config)
-    assertCoreCacheDriverContract(driver, packageName, driverName, config.name)
-    return driver
-  }
-
-  assertCoreCacheDriverContract(candidate, packageName, driverName, driverName)
-  return Object.freeze({
-    ...candidate,
-    name: config.name,
-    driver: driverName,
-  })
-}
-
-function resolveUnconfiguredCacheDriver(moduleValue: unknown, packageName: string, driverName: string): unknown {
-  const candidate = resolveCorePluginCandidate(moduleValue, 'driver')
-  assertCoreCacheDriverContract(candidate, packageName, driverName, driverName)
-  return candidate
-}
-
-async function loadConfiguredCachePluginDriverContracts(
-  projectRoot: string,
-  plugins: readonly LoadedHoloPluginDefinition[],
-  cacheConfig: LoadedHoloConfig['cache'],
-): Promise<CoreCachePluginDriverRegistry> {
-  const contributions = await loadConfiguredHoloPluginContributionModules(projectRoot, plugins, 'cache', 'drivers')
-  const configuredDrivers = resolveConfiguredCachePluginDriverConfigs(cacheConfig)
-  const drivers = new Map<string, unknown>()
-
-  if (configuredDrivers.length > 0) {
-    for (const contribution of contributions) {
-      const matchingConfigs = configuredDrivers.filter(config => config.driver === contribution.name)
-      for (const config of matchingConfigs) {
-        drivers.set(config.name, resolveConfiguredCacheDriver(
-          contribution.module,
-          contribution.plugin.packageName,
-          contribution.name,
-          config,
-        ))
-      }
-    }
-
-    return drivers
-  }
-
-  for (const contribution of contributions) {
-    drivers.set(contribution.name, resolveUnconfiguredCacheDriver(
-      contribution.module,
-      contribution.plugin.packageName,
-      contribution.name,
-    ))
-  }
-
-  return drivers
 }
 
 type EventsModule = {
@@ -929,7 +556,9 @@ function closeSessionRedisAdapter(adapter: SessionRedisAdapter): Promise<void> |
 type NotificationsModule = {
   configureNotificationsRuntime(options?: {
     readonly config: LoadedHoloConfig['notifications']
+    readonly deferAfterCommit?: (callback: () => Promise<void>) => boolean
     readonly projectRoot?: string
+    readonly plugins?: readonly string[]
     readonly mailer?: {
       send(message: {
         readonly subject: string
@@ -1017,6 +646,7 @@ type BroadcastModule = {
   configureBroadcastRuntime(options?: {
     readonly config: LoadedHoloConfig['broadcast']
     readonly projectRoot?: string
+    readonly plugins?: readonly string[]
     readonly publish?: (
       input: {
         readonly connection: string
@@ -1067,6 +697,7 @@ type MailModule = {
   configureMailRuntime(options?: {
     readonly config: LoadedHoloConfig['mail']
     readonly projectRoot?: string
+    readonly plugins?: readonly string[]
     readonly renderView?: HoloServerViewRenderer
   }): void
   getMailRuntimeBindings(): {
@@ -1320,8 +951,8 @@ export interface HoloRuntime<TCustom extends HoloConfigMap = HoloConfigMap> {
   shutdown(): Promise<void>
   runWithAuthRequestAccessors<TValue>(
     accessors: NonNullable<CreateHoloOptions['authRequest']>,
-    callback: () => Promise<TValue>,
-  ): Promise<TValue>
+    callback: () => TValue,
+  ): TValue
   useConfig<TKey extends Extract<keyof RuntimeConfigRegistry<TCustom>, string>>(
     key: TKey,
   ): RuntimeConfigRegistry<TCustom>[TKey]
@@ -1337,162 +968,11 @@ type MutableHoloRuntime<TCustom extends HoloConfigMap> = {
   -readonly [TKey in keyof HoloRuntime<TCustom>]: HoloRuntime<TCustom>[TKey]
 }
 
-function getRuntimeState(): {
-  current?: HoloRuntime
-  pending?: Promise<HoloRuntime>
-  pendingProjectRoot?: string
-  renderView?: HoloServerViewRenderer
-  securityRedisAdapter?: SecurityRedisAdapter
-  securityRateLimitStoreManaged?: boolean
-  sessionRedisAdapters?: readonly SessionRedisAdapter[]
-} {
-  const runtime = globalThis as typeof globalThis & {
-    __holoRuntime__?: {
-      current?: HoloRuntime
-      pending?: Promise<HoloRuntime>
-      pendingProjectRoot?: string
-      renderView?: HoloServerViewRenderer
-      securityRedisAdapter?: SecurityRedisAdapter
-      securityRateLimitStoreManaged?: boolean
-      sessionRedisAdapters?: readonly SessionRedisAdapter[]
-    }
-  }
-
-  runtime.__holoRuntime__ ??= {}
-  return runtime.__holoRuntime__
-}
-
-export function configureHoloRenderingRuntime(
-  bindings?: {
-    readonly renderView?: HoloServerViewRenderer
-  },
-): void {
-  getRuntimeState().renderView = bindings?.renderView
-}
-
-export function resetHoloRenderingRuntime(): void {
-  getRuntimeState().renderView = undefined
-}
-
-function restoreHoloRenderingRuntime(
-  renderView: HoloServerViewRenderer | undefined,
-): void {
-  if (renderView) {
-    configureHoloRenderingRuntime({
-      renderView,
-    })
-    return
-  }
-
-  resetHoloRenderingRuntime()
-}
-
-type OptionalSubsystemRuntimeBindings = Readonly<{
-  readonly mail?: ReturnType<MailModule['getMailRuntimeBindings']>
-  readonly notifications?: ReturnType<NotificationsModule['getNotificationsRuntimeBindings']>
-  readonly broadcast?: ReturnType<BroadcastModule['getBroadcastRuntimeBindings']>
-  readonly session?: Readonly<{
-    readonly sessionRedisAdapters?: readonly SessionRedisAdapter[]
-  }>
-  readonly security?: Readonly<{
-    readonly bindings?: ReturnType<SecurityModule['getSecurityRuntimeBindings']>
-    readonly securityRedisAdapter?: SecurityRedisAdapter
-    readonly securityRateLimitStoreManaged?: boolean
-  }>
-}>
-
-function snapshotOptionalSubsystemRuntimeBindings(): OptionalSubsystemRuntimeBindings {
-  const state = getRuntimeState()
-  const runtime = globalThis as typeof globalThis & {
-    __holoMailRuntime__?: {
-      bindings?: ReturnType<MailModule['getMailRuntimeBindings']>
-    }
-    __holoNotificationsRuntime__?: {
-      bindings?: ReturnType<NotificationsModule['getNotificationsRuntimeBindings']>
-    }
-    __holoBroadcastRuntime__?: {
-      bindings?: ReturnType<BroadcastModule['getBroadcastRuntimeBindings']>
-    }
-    __holoSecurityRuntime__?: {
-      bindings?: ReturnType<SecurityModule['getSecurityRuntimeBindings']>
-    }
-  }
-
-  return Object.freeze({
-    ...(runtime.__holoMailRuntime__?.bindings ? { mail: runtime.__holoMailRuntime__.bindings } : {}),
-    ...(runtime.__holoNotificationsRuntime__?.bindings ? { notifications: runtime.__holoNotificationsRuntime__.bindings } : {}),
-    ...(runtime.__holoBroadcastRuntime__?.bindings ? { broadcast: runtime.__holoBroadcastRuntime__.bindings } : {}),
-    /* v8 ignore start -- this snapshot branch only applies when restoring externally managed session adapters across runtime swaps */
-    ...(state.sessionRedisAdapters
-      ? {
-          session: Object.freeze({
-            sessionRedisAdapters: state.sessionRedisAdapters,
-          }),
-        }
-      : {}),
-    /* v8 ignore stop */
-    ...(
-      runtime.__holoSecurityRuntime__?.bindings
-      || state.securityRedisAdapter
-      || typeof state.securityRateLimitStoreManaged !== 'undefined'
-        ? {
-            security: Object.freeze({
-              ...(runtime.__holoSecurityRuntime__?.bindings ? { bindings: runtime.__holoSecurityRuntime__.bindings } : {}),
-              ...(state.securityRedisAdapter ? { securityRedisAdapter: state.securityRedisAdapter } : {}),
-              ...(typeof state.securityRateLimitStoreManaged !== 'undefined'
-                ? { securityRateLimitStoreManaged: state.securityRateLimitStoreManaged }
-                : {}),
-            }),
-          }
-        : {}
-    ),
-  })
-}
-
-function restoreOptionalSubsystemRuntimeBindings(
-  bindings: OptionalSubsystemRuntimeBindings,
-): void {
-  const state = getRuntimeState()
-  const runtime = globalThis as typeof globalThis & {
-    __holoMailRuntime__?: {
-      bindings?: ReturnType<MailModule['getMailRuntimeBindings']>
-    }
-    __holoNotificationsRuntime__?: {
-      bindings?: ReturnType<NotificationsModule['getNotificationsRuntimeBindings']>
-    }
-    __holoBroadcastRuntime__?: {
-      bindings?: ReturnType<BroadcastModule['getBroadcastRuntimeBindings']>
-    }
-    __holoSecurityRuntime__?: {
-      bindings?: ReturnType<SecurityModule['getSecurityRuntimeBindings']>
-    }
-  }
-
-  if (bindings.mail || runtime.__holoMailRuntime__) {
-    runtime.__holoMailRuntime__ ??= {}
-    runtime.__holoMailRuntime__.bindings = bindings.mail
-  }
-
-  if (bindings.notifications || runtime.__holoNotificationsRuntime__) {
-    runtime.__holoNotificationsRuntime__ ??= {}
-    runtime.__holoNotificationsRuntime__.bindings = bindings.notifications
-  }
-
-  if (bindings.broadcast || runtime.__holoBroadcastRuntime__) {
-    runtime.__holoBroadcastRuntime__ ??= {}
-    runtime.__holoBroadcastRuntime__.bindings = bindings.broadcast
-  }
-
-  /* v8 ignore next -- restoring external session adapters is only relevant when replaying a prior runtime snapshot */
-  state.sessionRedisAdapters = bindings.session?.sessionRedisAdapters
-
-  if (bindings.security || runtime.__holoSecurityRuntime__) {
-    runtime.__holoSecurityRuntime__ ??= {}
-    runtime.__holoSecurityRuntime__.bindings = bindings.security?.bindings
-    state.securityRedisAdapter = bindings.security?.securityRedisAdapter
-    state.securityRateLimitStoreManaged = bindings.security?.securityRateLimitStoreManaged
-  }
-}
+const {
+  getRuntimeState,
+  restoreOptionalSubsystemRuntimeBindings,
+  snapshotOptionalSubsystemRuntimeBindings,
+} = createRuntimeStateAccessors<HoloRuntime, SecurityRedisAdapter, SessionRedisAdapter>()
 
 const BROADCAST_PUBLISH_TIMEOUT_MS = 10_000
 
@@ -1509,225 +989,89 @@ const portableRuntimeModuleInternals = {
   importOptionalModule,
 }
 
-function resolveLoadedPluginNames<TCustom extends HoloConfigMap>(loadedConfig: LoadedHoloConfig<TCustom>): readonly string[] {
-  return loadedConfig.app?.plugins ?? []
-}
-
-const bootedHoloPluginModules = new Set<string>()
-
-function resolveHoloPluginBootKey(projectRoot: string, bootModule: HoloPluginRuntimeModule): string {
-  return [
-    resolve(projectRoot),
-    bootModule.plugin.packageName,
-    bootModule.runtime,
-  ].join('\0')
-}
-
-async function bootConfiguredHoloPluginModule<TCustom extends HoloConfigMap>(
-  projectRoot: string,
-  loadedConfig: LoadedHoloConfig<TCustom>,
-  bootModule: HoloPluginRuntimeModule,
-): Promise<void> {
-  const bootKey = resolveHoloPluginBootKey(projectRoot, bootModule)
-  if (bootedHoloPluginModules.has(bootKey)) {
-    return
-  }
-
-  const moduleValue = bootModule.module
-  const candidate = moduleValue && typeof moduleValue === 'object' && 'default' in moduleValue
-    ? (moduleValue as { readonly default?: unknown }).default
-    : moduleValue
-  if (typeof candidate !== 'function') {
-    return
-  }
-
-  await candidate({
-    projectRoot,
-    config: loadedConfig,
-  })
-  bootedHoloPluginModules.add(bootKey)
-}
-
-function hasLoadedConfigFile<TCustom extends HoloConfigMap>(
-  loadedConfig: LoadedHoloConfig<TCustom>,
-  configName: string,
-): boolean {
-  return loadedConfig.loadedFiles.some((filePath) => {
-    const normalizedPath = filePath.replaceAll('\\', '/')
-    return normalizedPath.endsWith(`/config/${configName}.ts`)
-      || normalizedPath.endsWith(`/config/${configName}.mts`)
-      || normalizedPath.endsWith(`/config/${configName}.js`)
-      || normalizedPath.endsWith(`/config/${configName}.mjs`)
-      || normalizedPath.endsWith(`/config/${configName}.cts`)
-      || normalizedPath.endsWith(`/config/${configName}.cjs`)
-  })
-}
-
-function queueConfigUsesDatabaseDriver<TCustom extends HoloConfigMap>(
-  loadedConfig: LoadedHoloConfig<TCustom>,
-): boolean {
-  return Object.values(loadedConfig.queue.connections).some(connection => connection.driver === 'database')
-}
-
-function queueConfigUsesDatabaseBackedFailedStore<TCustom extends HoloConfigMap>(
-  loadedConfig: LoadedHoloConfig<TCustom>,
-): boolean {
-  return loadedConfig.queue.failed !== false
-}
-
-function registryHasJobs(registry: GeneratedProjectRegistry | undefined): boolean {
-  return (registry?.jobs.length ?? 0) > 0
-}
-
-function registryHasEvents(registry: GeneratedProjectRegistry | undefined): boolean {
-  return (registry?.events.length ?? 0) > 0 || (registry?.listeners.length ?? 0) > 0
-}
-
-function authConfigUsesSocialProviders<TCustom extends HoloConfigMap>(
-  loadedConfig: LoadedHoloConfig<TCustom>,
-): boolean {
-  return Object.keys(loadedConfig.auth.social).length > 0
-}
-
-function authConfigUsesWorkosProviders<TCustom extends HoloConfigMap>(
-  loadedConfig: LoadedHoloConfig<TCustom>,
-): boolean {
-  return Object.entries(loadedConfig.auth.workos).some(([name, provider]) => (
-    name !== 'provider' && name !== 'identityStore' && typeof provider === 'object' && provider !== null
-  ))
-}
-
-function authConfigUsesClerkProviders<TCustom extends HoloConfigMap>(
-  loadedConfig: LoadedHoloConfig<TCustom>,
-): boolean {
-  return Object.entries(loadedConfig.auth.clerk).some(([name, provider]) => (
-    name !== 'provider' && name !== 'identityStore' && typeof provider === 'object' && provider !== null
-  ))
-}
-
 const HOLO_AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
 
-function attachAuthRequestAccessors<TContext extends {
-  activate(): void
-  getSessionId(guardName: string): string | undefined
-  setSessionId(guardName: string, sessionId?: string): void
-  getCachedUser(guardName: string): unknown
-  setCachedUser(guardName: string, user: unknown): void
-  getAccessToken?(guardName: string): string | undefined
-  setAccessToken?(guardName: string, token?: string): void
-  getRememberToken?(guardName: string): string | undefined
-  setRememberToken?(guardName: string, token?: string): void
-}>(
-  context: TContext,
-  accessors: NonNullable<CreateHoloOptions['authRequest']>,
-): TContext & {
-  getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
-  getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
-  appendResponseCookie?(cookie: string): void | Promise<void>
-  redirectResponse?(url: string, status?: 301 | 302 | 303 | 307 | 308): void | Promise<void>
-} {
-  return Object.freeze({
-    ...context,
-    getRequestCookie: accessors.getCookie,
-    getRequestHeader: accessors.getHeader,
-    appendResponseCookie: accessors.appendResponseCookie,
-    redirectResponse: accessors.redirectResponse,
-  })
+const importOptionalFeature = <TModule>(
+  specifier: string,
+  options?: { readonly projectRoot?: string },
+): Promise<TModule | undefined> => portableRuntimeModuleInternals.importOptionalModule<TModule>(specifier, options)
+
+const loadQueueModule = createOptionalFeatureModuleLoader<QueueModule>(
+  importOptionalFeature,
+  '@holo-js/queue',
+  '[@holo-js/core] Queue support requires @holo-js/queue to be installed.',
+)
+
+async function loadConfiguredDatabaseDrivers<TCustom extends HoloConfigMap>(
+  projectRoot: string,
+  loadedConfig: LoadedHoloConfig<TCustom>,
+): Promise<readonly DatabaseDriverFactory[]> {
+  const packageByDriver = {
+    sqlite: { packageName: '@holo-js/db-sqlite', factoryExport: 'sqliteDatabaseDriverFactory' },
+    postgres: { packageName: '@holo-js/db-postgres', factoryExport: 'postgresDatabaseDriverFactory' },
+    mysql: { packageName: '@holo-js/db-mysql', factoryExport: 'mysqlDatabaseDriverFactory' },
+  } as const
+  const drivers = new Set(Object.values(loadedConfig.database.connections).map((connection) => {
+    if (typeof connection === 'string') {
+      if (connection.startsWith('postgres://') || connection.startsWith('postgresql://')) return 'postgres'
+      if (connection.startsWith('mysql://') || connection.startsWith('mysql2://')) return 'mysql'
+      return 'sqlite'
+    }
+    return connection.driver ?? 'sqlite'
+  }))
+  const factories: DatabaseDriverFactory[] = []
+  for (const driver of drivers) {
+    const contribution = packageByDriver[driver]
+    const { packageName, factoryExport } = contribution
+    const module = await portableRuntimeModuleInternals.importOptionalModule<Record<string, unknown>>(packageName, { projectRoot })
+    if (!module) throw new Error(`[@holo-js/core] Database driver "${driver}" requires ${packageName} to be installed.`)
+    const factory = module[factoryExport] as DatabaseDriverFactory | undefined
+    if (!factory) throw new Error(`[@holo-js/core] Database driver package ${packageName} does not export ${factoryExport}.`)
+    factories.push(factory)
+  }
+  return factories
 }
 
-function createRequestAwareAuthContext<TContext extends {
-  activate(): void
-  getSessionId(guardName: string): string | undefined
-  setSessionId(guardName: string, sessionId?: string): void
-  getCachedUser(guardName: string): unknown
-  setCachedUser(guardName: string, user: unknown): void
-  getAccessToken?(guardName: string): string | undefined
-  setAccessToken?(guardName: string, token?: string): void
-  getRememberToken?(guardName: string): string | undefined
-  setRememberToken?(guardName: string, token?: string): void
-}>(
-  context: TContext,
-  accessors?: CreateHoloOptions['authRequest'],
-): TContext & {
-  getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
-  getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
-  appendResponseCookie?(cookie: string): void | Promise<void>
-  redirectResponse?(url: string, status?: 301 | 302 | 303 | 307 | 308): void | Promise<void>
-  setRequestAccessors(accessors?: CreateHoloOptions['authRequest']): void
-  runWithRequestAccessors<TValue>(
-    accessors: NonNullable<CreateHoloOptions['authRequest']>,
-    callback: () => Promise<TValue>,
-  ): Promise<TValue>
-} {
-  const requestAccessorStorage = new AsyncLocalStorage<{
-    readonly accessors?: CreateHoloOptions['authRequest']
-  }>()
-  type RequestAccessContext = TContext & {
-    getRequestCookie?(name: string): string | undefined | Promise<string | undefined>
-    getRequestHeader?(name: string): string | undefined | Promise<string | undefined>
-    appendResponseCookie?(cookie: string): void | Promise<void>
-    redirectResponse?(url: string, status?: 301 | 302 | 303 | 307 | 308): void | Promise<void>
-  }
-
-  const resolveRequestContext = (): RequestAccessContext => {
-    const requestAccessors = requestAccessorStorage.getStore()
-    const resolvedAccessors = requestAccessors ? requestAccessors.accessors : accessors
-
-    return resolvedAccessors
-      ? attachAuthRequestAccessors(context, resolvedAccessors)
-      : context as RequestAccessContext
-  }
-
-  return Object.freeze({
-    ...context,
-    getRequestCookie(name) {
-      return resolveRequestContext().getRequestCookie?.(name)
-    },
-    getRequestHeader(name) {
-      return resolveRequestContext().getRequestHeader?.(name)
-    },
-    appendResponseCookie(cookie) {
-      return resolveRequestContext().appendResponseCookie?.(cookie)
-    },
-    redirectResponse(url, status) {
-      return resolveRequestContext().redirectResponse?.(url, status)
-    },
-    setRequestAccessors(nextAccessors) {
-      requestAccessorStorage.enterWith({
-        accessors: nextAccessors,
-      })
-    },
-    async runWithRequestAccessors(nextAccessors, callback) {
-      return await requestAccessorStorage.run({
-        accessors: nextAccessors,
-      }, callback)
-    },
-  })
+async function loadQueueDbModule(projectRoot: string): Promise<QueueDbModule | undefined> {
+  return createOptionalFeatureModuleLoader<QueueDbModule>(
+    importOptionalFeature,
+    '@holo-js/queue-db',
+    '[@holo-js/core] Database queues require @holo-js/queue-db to be installed.',
+  )(false, { projectRoot })
 }
 
-async function loadQueueModule(required = false): Promise<QueueModule | undefined> {
-  const queueModule = await portableRuntimeModuleInternals.importOptionalModule<QueueModule>('@holo-js/queue')
-  /* v8 ignore next 3 -- exercised only when the optional package is absent outside the monorepo test graph */
-  if (!queueModule && required) {
-    throw new Error('[@holo-js/core] Queue support requires @holo-js/queue to be installed.')
-  }
-
-  return queueModule
-}
-
-async function loadQueueDbModule(): Promise<QueueDbModule | undefined> {
-  return portableRuntimeModuleInternals.importOptionalModule<QueueDbModule>('@holo-js/queue-db')
+async function loadQueueRedisModule(projectRoot: string): Promise<QueueRedisModule | undefined> {
+  return createOptionalFeatureModuleLoader<QueueRedisModule>(
+    importOptionalFeature,
+    '@holo-js/queue-redis',
+    '[@holo-js/core] Redis queues require @holo-js/queue-redis to be installed.',
+  )(false, { projectRoot })
 }
 
 async function loadCacheModule(required = false, projectRoot?: string): Promise<CacheModule | undefined> {
-  const cacheModule = await portableRuntimeModuleInternals.importOptionalModule<CacheModule>('@holo-js/cache', {
-    projectRoot,
-  })
-  if (!cacheModule && required) {
-    throw new Error('[@holo-js/core] Cache support requires @holo-js/cache to be installed.')
-  }
+  const loader = createOptionalFeatureModuleLoader<CacheModule>(
+    importOptionalFeature,
+    '@holo-js/cache',
+    '[@holo-js/core] Cache support requires @holo-js/cache to be installed.',
+  )
+  return required ? loader(true, { projectRoot }) : loader(false, { projectRoot })
+}
 
-  return cacheModule
+async function loadConfiguredCacheDrivers(
+  projectRoot: string,
+  cacheConfig: NonNullable<LoadedHoloConfig['cache']>,
+): Promise<void> {
+  const packageByDriver = {
+    database: '@holo-js/cache-db',
+    redis: '@holo-js/cache-redis',
+  } as const
+  const drivers = new Set(Object.values(cacheConfig.drivers).map(driver => driver.driver))
+  for (const driver of drivers) {
+    if (driver !== 'database' && driver !== 'redis') continue
+    const packageName = packageByDriver[driver]
+    const module = await portableRuntimeModuleInternals.importOptionalModule(packageName, { projectRoot })
+    if (!module) throw new Error(`[@holo-js/core] Cache driver "${driver}" requires ${packageName} to be installed.`)
+  }
 }
 
 function resetCacheRuntimeGlobalsFallback(): void {
@@ -1756,129 +1100,76 @@ function resetCacheRuntimeGlobalsFallback(): void {
   }
 }
 
-async function loadEventsModule(required = false): Promise<EventsModule | undefined> {
-  const eventsModule = await portableRuntimeModuleInternals.importOptionalModule<EventsModule>('@holo-js/events')
-  /* v8 ignore next 3 -- exercised only when the optional package is absent outside the monorepo test graph */
-  if (!eventsModule && required) {
-    throw new Error('[@holo-js/core] Events support requires @holo-js/events to be installed.')
-  }
-
-  return eventsModule
-}
-
-async function loadSessionModule(required = false): Promise<SessionModule | undefined> {
-  const sessionModule = await portableRuntimeModuleInternals.importOptionalModule<SessionModule>('@holo-js/session')
-  if (!sessionModule && required) {
-    throw new Error('[@holo-js/core] Session support requires @holo-js/session to be installed.')
-  }
-
-  return sessionModule
-}
-
-async function loadSecurityModule(required = false): Promise<SecurityModule | undefined> {
-  const securityModule = await portableRuntimeModuleInternals.importOptionalModule<SecurityModule>('@holo-js/security')
-  if (!securityModule && required) {
-    throw new Error('[@holo-js/core] Security support requires @holo-js/security to be installed.')
-  }
-
-  return securityModule
-}
-
-async function loadSecurityRedisAdapterModule(required: true): Promise<SecurityRedisAdapterModule>
-async function loadSecurityRedisAdapterModule(required?: false): Promise<SecurityRedisAdapterModule | undefined>
-async function loadSecurityRedisAdapterModule(required = false): Promise<SecurityRedisAdapterModule | undefined> {
-  const securityRedisAdapterModule = await portableRuntimeModuleInternals.importOptionalModule<SecurityRedisAdapterModule>('@holo-js/security/drivers/redis-adapter')
-  if (!securityRedisAdapterModule && required) {
-    throw new Error('[@holo-js/core] Redis-backed security rate limits require @holo-js/security/drivers/redis-adapter to be installed.')
-  }
-
-  return securityRedisAdapterModule
-}
-
-async function loadSessionRedisAdapterModule(required: true): Promise<SessionRedisAdapterModule>
-async function loadSessionRedisAdapterModule(required?: false): Promise<SessionRedisAdapterModule | undefined>
-async function loadSessionRedisAdapterModule(required = false): Promise<SessionRedisAdapterModule | undefined> {
-  const sessionRedisAdapterModule = await portableRuntimeModuleInternals.importOptionalModule<SessionRedisAdapterModule>('@holo-js/session/drivers/redis-adapter')
-  if (!sessionRedisAdapterModule && required) {
-    throw new Error('[@holo-js/core] Redis-backed session stores require @holo-js/session/drivers/redis-adapter to be installed.')
-  }
-
-  return sessionRedisAdapterModule
-}
-
-async function loadNotificationsModule(required = false): Promise<NotificationsModule | undefined> {
-  const notificationsModule = await portableRuntimeModuleInternals.importOptionalModule<NotificationsModule>('@holo-js/notifications')
-  if (!notificationsModule && required) {
-    throw new Error('[@holo-js/core] Notifications support requires @holo-js/notifications to be installed.')
-  }
-
-  return notificationsModule
-}
+const loadEventsModule = createOptionalFeatureModuleLoader<EventsModule>(
+  importOptionalFeature,
+  '@holo-js/events',
+  '[@holo-js/core] Events support requires @holo-js/events to be installed.',
+)
+const loadSessionModule = createOptionalFeatureModuleLoader<SessionModule>(
+  importOptionalFeature,
+  '@holo-js/session',
+  '[@holo-js/core] Session support requires @holo-js/session to be installed.',
+)
+const loadSecurityModule = createOptionalFeatureModuleLoader<SecurityModule>(
+  importOptionalFeature,
+  '@holo-js/security',
+  '[@holo-js/core] Security support requires @holo-js/security to be installed.',
+)
+const loadSecurityRedisAdapterModule = createOptionalFeatureModuleLoader<SecurityRedisAdapterModule>(
+  importOptionalFeature,
+  '@holo-js/security/drivers/redis-adapter',
+  '[@holo-js/core] Redis-backed security rate limits require @holo-js/security/drivers/redis-adapter to be installed.',
+)
+const loadSessionRedisAdapterModule = createOptionalFeatureModuleLoader<SessionRedisAdapterModule>(
+  importOptionalFeature,
+  '@holo-js/session/drivers/redis-adapter',
+  '[@holo-js/core] Redis-backed session stores require @holo-js/session/drivers/redis-adapter to be installed.',
+)
+const loadNotificationsModule = createOptionalFeatureModuleLoader<NotificationsModule>(
+  importOptionalFeature,
+  '@holo-js/notifications',
+  '[@holo-js/core] Notifications support requires @holo-js/notifications to be installed.',
+)
 
 async function loadBroadcastModule(required = false, projectRoot?: string): Promise<BroadcastModule | undefined> {
-  const broadcastModule = await portableRuntimeModuleInternals.importOptionalModule<BroadcastModule>('@holo-js/broadcast', {
-    projectRoot,
-  })
-  if (!broadcastModule && required) {
-    throw new Error('[@holo-js/core] Broadcast support requires @holo-js/broadcast to be installed.')
-  }
-
-  return broadcastModule
+  const loader = createOptionalFeatureModuleLoader<BroadcastModule>(
+    importOptionalFeature,
+    '@holo-js/broadcast',
+    '[@holo-js/core] Broadcast support requires @holo-js/broadcast to be installed.',
+  )
+  return required ? loader(true, { projectRoot }) : loader(false, { projectRoot })
 }
 
-async function loadMailModule(required = false): Promise<MailModule | undefined> {
-  const mailModule = await portableRuntimeModuleInternals.importOptionalModule<MailModule>('@holo-js/mail')
-  if (!mailModule && required) {
-    throw new Error('[@holo-js/core] Mail support requires @holo-js/mail to be installed.')
-  }
-
-  return mailModule
-}
-
-async function loadAuthModule(required = false): Promise<AuthModule | undefined> {
-  const authModule = await portableRuntimeModuleInternals.importOptionalModule<AuthModule>('@holo-js/auth')
-  if (!authModule && required) {
-    throw new Error('[@holo-js/core] Auth support requires @holo-js/auth to be installed.')
-  }
-
-  return authModule
-}
-
-async function loadAuthorizationModule(required = false): Promise<AuthorizationModule | undefined> {
-  const authorizationModule = await portableRuntimeModuleInternals.importOptionalModule<AuthorizationModule>('@holo-js/authorization')
-  if (!authorizationModule && required) {
-    throw new Error('[@holo-js/core] Authorization support requires @holo-js/authorization to be installed.')
-  }
-
-  return authorizationModule
-}
-
-async function loadSocialModule(required = false): Promise<SocialModule | undefined> {
-  const socialModule = await portableRuntimeModuleInternals.importOptionalModule<SocialModule>('@holo-js/auth-social')
-  if (!socialModule && required) {
-    throw new Error('[@holo-js/core] Social auth config requires @holo-js/auth-social to be installed.')
-  }
-
-  return socialModule
-}
-
-async function loadWorkosModule(required = false): Promise<WorkosModule | undefined> {
-  const workosModule = await portableRuntimeModuleInternals.importOptionalModule<WorkosModule>('@holo-js/auth-workos')
-  if (!workosModule && required) {
-    throw new Error('[@holo-js/core] WorkOS auth config requires @holo-js/auth-workos to be installed.')
-  }
-
-  return workosModule
-}
-
-async function loadClerkModule(required = false): Promise<ClerkModule | undefined> {
-  const clerkModule = await portableRuntimeModuleInternals.importOptionalModule<ClerkModule>('@holo-js/auth-clerk')
-  if (!clerkModule && required) {
-    throw new Error('[@holo-js/core] Clerk auth config requires @holo-js/auth-clerk to be installed.')
-  }
-
-  return clerkModule
-}
+const loadMailModule = createOptionalFeatureModuleLoader<MailModule>(
+  importOptionalFeature,
+  '@holo-js/mail',
+  '[@holo-js/core] Mail support requires @holo-js/mail to be installed.',
+)
+const loadAuthModule = createOptionalFeatureModuleLoader<AuthModule>(
+  importOptionalFeature,
+  '@holo-js/auth',
+  '[@holo-js/core] Auth support requires @holo-js/auth to be installed.',
+)
+const loadAuthorizationModule = createOptionalFeatureModuleLoader<AuthorizationModule>(
+  importOptionalFeature,
+  '@holo-js/authorization',
+  '[@holo-js/core] Authorization support requires @holo-js/authorization to be installed.',
+)
+const loadSocialModule = createOptionalFeatureModuleLoader<SocialModule>(
+  importOptionalFeature,
+  '@holo-js/auth-social',
+  '[@holo-js/core] Social auth config requires @holo-js/auth-social to be installed.',
+)
+const loadWorkosModule = createOptionalFeatureModuleLoader<WorkosModule>(
+  importOptionalFeature,
+  '@holo-js/auth-workos',
+  '[@holo-js/core] WorkOS auth config requires @holo-js/auth-workos to be installed.',
+)
+const loadClerkModule = createOptionalFeatureModuleLoader<ClerkModule>(
+  importOptionalFeature,
+  '@holo-js/auth-clerk',
+  '[@holo-js/core] Clerk auth config requires @holo-js/auth-clerk to be installed.',
+)
 
 function resolveQueueJobExport(
   queueModule: QueueModule,
@@ -1945,112 +1236,6 @@ function resolveProjectRelativePath(projectRoot: string, value: string): string 
   return value.startsWith('.') || !value.startsWith('/')
     ? resolve(projectRoot, value)
     : value
-}
-
-function normalizeDateLike(value: unknown): Date {
-  /* v8 ignore next -- helper accepts Date or date-like input; runtime paths mostly exercise serialized values */
-  return value instanceof Date ? value : new Date(String(value))
-}
-
-function normalizeSessionRecordFromRow(row: Record<string, unknown>): {
-  readonly id: string
-  readonly store: string
-  readonly data: Readonly<Record<string, unknown>>
-  readonly createdAt: Date
-  readonly lastActivityAt: Date
-  readonly expiresAt: Date
-  readonly rememberTokenHash?: string
-} {
-  /* v8 ignore start -- defensive decoding for driver-specific session row shapes */
-  const decodedData = (() => {
-    if (row.data && typeof row.data === 'object') {
-      return row.data as Record<string, unknown>
-    }
-
-    if (typeof row.data === 'string') {
-      try {
-        const parsed = JSON.parse(row.data) as unknown
-        return parsed && typeof parsed === 'object'
-          ? parsed as Record<string, unknown>
-          : {}
-      } catch {
-        return {}
-      }
-    }
-
-    return {}
-  })()
-  /* v8 ignore stop */
-
-  return Object.freeze({
-    id: String(row.id),
-    /* v8 ignore next -- runtime rows usually carry an explicit store name; this preserves a safe default */
-    store: typeof row.store === 'string' ? row.store : 'database',
-    data: Object.freeze(decodedData),
-    createdAt: normalizeDateLike(row.created_at),
-    lastActivityAt: normalizeDateLike(row.last_activity_at),
-    expiresAt: normalizeDateLike(row.expires_at),
-    rememberTokenHash: typeof row.remember_token_hash === 'string' ? row.remember_token_hash : undefined,
-  })
-}
-
-function serializeSessionRecordForRow(record: {
-  readonly id: string
-  readonly store: string
-  readonly data: Readonly<Record<string, unknown>>
-  readonly createdAt: Date
-  readonly lastActivityAt: Date
-  readonly expiresAt: Date
-  readonly rememberTokenHash?: string
-}): Record<string, unknown> {
-  return {
-    id: record.id,
-    store: record.store,
-    /* v8 ignore next -- record.data is always present in runtime flows; nullish fallback is purely defensive */
-    data: JSON.stringify(record.data ?? {}),
-    created_at: record.createdAt.toISOString(),
-    last_activity_at: record.lastActivityAt.toISOString(),
-    expires_at: record.expiresAt.toISOString(),
-    invalidated_at: null,
-    remember_token_hash: record.rememberTokenHash ?? null,
-  }
-}
-
-function normalizeNotificationRecordFromRow(row: Record<string, unknown>): CoreNotificationRecord<CoreNotificationJsonValue> {
-  const decodedData = normalizeJsonValue(row.data)
-
-  return Object.freeze({
-    id: String(row.id),
-    type: typeof row.type === 'string' ? row.type : undefined,
-    notifiableType: String(row.notifiable_type),
-    notifiableId: typeof row.notifiable_id === 'number' ? row.notifiable_id : String(row.notifiable_id),
-    data: decodedData as CoreNotificationJsonValue,
-    readAt: row.read_at ? normalizeDateLike(row.read_at) : null,
-    createdAt: normalizeDateLike(row.created_at),
-    updatedAt: normalizeDateLike(row.updated_at),
-  })
-}
-
-function serializeNotificationRecordForRow(record: {
-  readonly id: string
-  readonly type?: string
-  readonly notifiableType: string
-  readonly notifiableId: string | number
-  readonly data: unknown
-  readonly readAt?: Date | null
-  readonly createdAt: Date
-  readonly updatedAt: Date
-}): Record<string, unknown> {
-  return {
-    id: record.id,
-    type: record.type ?? null,
-    notifiable_type: record.notifiableType,
-    notifiable_id: String(record.notifiableId),
-    data: JSON.stringify(record.data ?? null),
-    read_at: record.readAt ? record.readAt.toISOString() : null,
-    created_at: record.createdAt.toISOString(),
-    updated_at: record.updatedAt.toISOString(),
-  }
 }
 
 function getEntityAttributes(value: unknown): Record<string, unknown> {
@@ -2219,89 +1404,6 @@ async function createCoreSessionStores<TCustom extends HoloConfigMap>(
   delete(sessionId: string): Promise<void>
 }>>> {
   return (await createCoreManagedSessionStores(projectRoot, loadedConfig, sessionModule)).stores
-}
-
-function createCoreNotificationStore<TCustom extends HoloConfigMap>(
-  loadedConfig: LoadedHoloConfig<TCustom>,
-): CoreNotificationStore {
-  const tableName = loadedConfig.notifications.table
-  const connectionName = loadedConfig.database.defaultConnection
-
-  const store: CoreNotificationStore = {
-    async create(record: CoreNotificationRecord): Promise<void> {
-      await DB.table(tableName, connectionName).insert(serializeNotificationRecordForRow(record))
-    },
-    async list(notifiable: CoreNotificationDatabaseRoute): Promise<readonly CoreNotificationRecord[]> {
-      const rows = await DB.table(tableName, connectionName)
-        .where('notifiable_type', notifiable.type)
-        .where('notifiable_id', String(notifiable.id))
-        .orderBy('created_at', 'desc')
-        .get<Record<string, unknown>>()
-
-      return Object.freeze(rows.map(row => normalizeNotificationRecordFromRow(row)))
-    },
-    async unread(notifiable: CoreNotificationDatabaseRoute): Promise<readonly CoreNotificationRecord[]> {
-      const rows = await DB.table(tableName, connectionName)
-        .where('notifiable_type', notifiable.type)
-        .where('notifiable_id', String(notifiable.id))
-        .whereNull('read_at')
-        .orderBy('created_at', 'desc')
-        .get<Record<string, unknown>>()
-
-      return Object.freeze(rows.map(row => normalizeNotificationRecordFromRow(row)))
-    },
-    async markAsRead(ids: readonly string[]): Promise<number> {
-      if (ids.length === 0) {
-        return 0
-      }
-
-      const result = await DB.table(tableName, connectionName)
-        .whereIn('id', ids)
-        .update({
-          read_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-
-      return result.affectedRows ?? 0
-    },
-    async markAsUnread(ids: readonly string[]): Promise<number> {
-      if (ids.length === 0) {
-        return 0
-      }
-
-      const result = await DB.table(tableName, connectionName)
-        .whereIn('id', ids)
-        .update({
-          read_at: null,
-          updated_at: new Date().toISOString(),
-        })
-
-      return result.affectedRows ?? 0
-    },
-    async delete(ids: readonly string[]): Promise<number> {
-      if (ids.length === 0) {
-        return 0
-      }
-
-      const result = await DB.table(tableName, connectionName)
-        .whereIn('id', ids)
-        .delete()
-
-      return result.affectedRows ?? 0
-    },
-  }
-
-  return Object.freeze(store)
-}
-
-const authEmailDateFormatter = new Intl.DateTimeFormat('en-US', {
-  dateStyle: 'long',
-  timeStyle: 'short',
-  timeZone: 'UTC',
-})
-
-function formatAuthEmailExpiration(expiresAt: Date): string {
-  return `${authEmailDateFormatter.format(expiresAt)} UTC`
 }
 
 const AUTH_EMAIL_VERIFICATION_NOTIFICATION_PATHS = [
@@ -2696,247 +1798,6 @@ function isCoreBroadcastPublisher(
     && CORE_BROADCAST_PUBLISHER_MARKER in value
 }
 
-function createNotificationMailText(message: {
-  readonly greeting?: string
-  readonly lines?: readonly string[]
-  readonly action?: {
-    readonly label: string
-    readonly url: string
-  }
-}): string | undefined {
-  const parts = [
-    typeof message.greeting === 'string' ? message.greeting.trim() : undefined,
-    ...(message.lines ?? []).map(line => line.trim()).filter(Boolean),
-    message.action
-      ? `${message.action.label}: ${message.action.url}`
-      : undefined,
-  ].filter((value): value is string => typeof value === 'string' && value.length > 0)
-
-  return parts.length > 0 ? parts.join('\n\n') : undefined
-}
-
-function createNotificationMailHtml(message: {
-  readonly subject: string
-  readonly greeting?: string
-  readonly lines?: readonly string[]
-  readonly action?: {
-    readonly label: string
-    readonly url: string
-  }
-}): string {
-  const greeting = typeof message.greeting === 'string'
-    ? message.greeting.trim()
-    : undefined
-  const lines = (message.lines ?? [])
-    .map(line => line.trim())
-    .filter(Boolean)
-  const sections = [
-    greeting
-      ? `<p style="margin:0 0 16px;">${escapeAuthEmailHtml(greeting)}</p>`
-      : '',
-    ...lines.map(line => `<p style="margin:0 0 16px;">${escapeAuthEmailHtml(line)}</p>`),
-    message.action
-      ? `<p style="margin:24px 0;">` +
-        `<a href="${escapeAuthEmailHtml(message.action.url)}" ` +
-        `style="display:inline-block;padding:12px 18px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">` +
-        `${escapeAuthEmailHtml(message.action.label)}` +
-        `</a></p>`
-      : '',
-    message.action
-      ? `<p style="margin:0;color:#475569;font-size:14px;">` +
-        `If the button does not work, open this link: ` +
-        `<a href="${escapeAuthEmailHtml(message.action.url)}">${escapeAuthEmailHtml(message.action.url)}</a>` +
-        `</p>`
-      : '',
-  ].join('')
-
-  return [
-    '<!doctype html>',
-    '<html><head><meta charset="utf-8">',
-    `<title>${escapeAuthEmailHtml(message.subject)}</title>`,
-    '</head><body style="margin:0;padding:24px;font-family:Arial,sans-serif;color:#0f172a;background:#f8fafc;">',
-    '<div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:32px;">',
-    `<h1 style="margin:0 0 24px;font-size:24px;line-height:1.3;">${escapeAuthEmailHtml(message.subject)}</h1>`,
-    sections,
-    '</div></body></html>',
-  ].join('')
-}
-
-function joinAppUrl(baseUrl: string, path: string): string {
-  const normalizedBaseUrl = baseUrl.endsWith('/')
-    ? baseUrl.slice(0, -1)
-    : baseUrl
-  const normalizedPath = path.startsWith('/')
-    ? path
-    : `/${path}`
-
-  return `${normalizedBaseUrl}${normalizedPath}`
-}
-
-function createAuthActionUrl(
-  appUrl: string,
-  path: string,
-  token: string,
-): string {
-  const url = new URL(joinAppUrl(appUrl, path))
-  url.searchParams.set('token', token)
-  return url.toString()
-}
-
-function escapeAuthEmailHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
-}
-
-function createAuthEmailHtml(message: {
-  readonly subject: string
-  readonly greeting?: string
-  readonly lines: readonly string[]
-  readonly action: {
-    readonly label: string
-    readonly url: string
-  }
-}): string {
-  return createNotificationMailHtml(message)
-}
-
-function createCoreNotificationMailSender(
-  mailModule: MailModule,
-): {
-  send(message: {
-    readonly subject: string
-    readonly greeting?: string
-    readonly lines?: readonly string[]
-    readonly action?: {
-      readonly label: string
-      readonly url: string
-    }
-    readonly html?: string
-    readonly text?: string
-    readonly metadata?: Readonly<Record<string, unknown>>
-  }, context: {
-    readonly route?: string | { readonly email: string, readonly name?: string }
-  }): Promise<void>
-} {
-  return Object.freeze({
-    async send(message, context): Promise<void> {
-      const route = context.route
-      if (!route) {
-        throw new Error('[@holo-js/core] Email notifications require a resolved email route before bridging into mail.')
-      }
-
-      const fallbackText = createNotificationMailText(message)
-      const fallbackHtml = createNotificationMailHtml(message)
-      await mailModule.sendMail({
-        to: route,
-        subject: message.subject,
-        html: typeof message.html === 'string' ? message.html : fallbackHtml,
-        ...(typeof (message.text ?? fallbackText) === 'string' ? { text: (message.text ?? fallbackText)! } : {}),
-        ...(message.metadata ? { metadata: message.metadata } : {}),
-      })
-    },
-  })
-}
-
-function createAuthMailDeliveryHook(
-  mailModule: MailModule,
-  appUrl: string,
-): {
-  sendEmailVerification(input: {
-    readonly provider: string
-    readonly user: unknown
-    readonly email: string
-    readonly token: {
-      readonly id: string
-      readonly plainTextToken: string
-      readonly expiresAt: Date
-    }
-    readonly route: string
-  }): Promise<void>
-  sendPasswordReset(input: {
-    readonly broker: string
-    readonly provider: string
-    readonly email: string
-    readonly token: {
-      readonly id: string
-      readonly plainTextToken: string
-      readonly expiresAt: Date
-    }
-    readonly route: string
-  }): Promise<void>
-} {
-  return Object.freeze({
-    async sendEmailVerification(input): Promise<void> {
-      const recipientName = typeof (input.user as { name?: unknown })?.name === 'string'
-        ? (input.user as { name?: string }).name?.trim()
-        : undefined
-      const lines = [
-        'Confirm your account to finish signing in.',
-        `This verification link expires at ${formatAuthEmailExpiration(input.token.expiresAt)}.`,
-      ] as const
-      const action = {
-        label: 'Verify email address',
-        url: createAuthActionUrl(appUrl, input.route, input.token.plainTextToken),
-      } as const
-
-      await mailModule.sendMail({
-        to: {
-          email: input.email,
-          ...(recipientName ? { name: recipientName } : {}),
-        },
-        subject: 'Verify your email address',
-        html: createAuthEmailHtml({
-          subject: 'Verify your email address',
-          ...(recipientName ? { greeting: `Hello ${recipientName},` } : {}),
-          lines,
-          action,
-        }),
-        text: createNotificationMailText({
-          ...(recipientName ? { greeting: `Hello ${recipientName},` } : {}),
-          lines,
-          action,
-        }),
-        metadata: {
-          provider: input.provider,
-          tokenId: input.token.id,
-        },
-      })
-    },
-    async sendPasswordReset(input): Promise<void> {
-      const lines = [
-        'Click the link below to choose a new password.',
-        `This reset link expires at ${formatAuthEmailExpiration(input.token.expiresAt)}.`,
-      ] as const
-      const action = {
-        label: 'Reset password',
-        url: createAuthActionUrl(appUrl, input.route, input.token.plainTextToken),
-      } as const
-
-      await mailModule.sendMail({
-        to: input.email,
-        subject: 'Reset your password',
-        html: createAuthEmailHtml({
-          subject: 'Reset your password',
-          lines,
-          action,
-        }),
-        text: createNotificationMailText({
-          lines,
-          action,
-        }),
-        metadata: {
-          provider: input.provider,
-          tokenId: input.token.id,
-        },
-      })
-    },
-  })
-}
-
 async function loadConfiguredSocialProviders<TCustom extends HoloConfigMap>(
   projectRootOrLoadedConfig: string | LoadedHoloConfig<TCustom>,
   maybeLoadedConfig?: LoadedHoloConfig<TCustom>,
@@ -2972,159 +1833,6 @@ async function loadConfiguredSocialProviders<TCustom extends HoloConfigMap>(
   }
 
   return Object.freeze(providers)
-}
-
-function normalizeDateValue(value: unknown): Date {
-  return value instanceof Date ? value : new Date(String(value))
-}
-
-function normalizeJsonValue(value: unknown): unknown {
-  if (typeof value !== 'string') {
-    return value
-  }
-
-  try {
-    return JSON.parse(value) as unknown
-  } catch {
-    return value
-  }
-}
-
-function normalizeStoredUserId(value: unknown): string | number {
-  return typeof value === 'number' ? value : String(value)
-}
-
-function normalizeAccessTokenRecord(row: Record<string, unknown>): {
-  readonly id: string
-  readonly provider: string
-  readonly userId: string | number
-  readonly name: string
-  readonly abilities: readonly string[]
-  readonly tokenHash: string
-  readonly createdAt: Date
-  readonly lastUsedAt?: Date
-  readonly expiresAt?: Date | null
-} {
-  const abilities = normalizeJsonValue(row.abilities)
-  return Object.freeze({
-    id: String(row.id),
-    provider: String(row.provider),
-    userId: normalizeStoredUserId(row.user_id),
-    name: String(row.name),
-    abilities: Array.isArray(abilities) ? Object.freeze([...abilities]) as readonly string[] : Object.freeze([]),
-    tokenHash: String(row.token_hash),
-    createdAt: normalizeDateValue(row.created_at),
-    lastUsedAt: row.last_used_at ? normalizeDateValue(row.last_used_at) : undefined,
-    expiresAt: row.expires_at ? normalizeDateValue(row.expires_at) : null,
-  })
-}
-
-function serializeAccessTokenRecord(record: {
-  readonly id: string
-  readonly provider: string
-  readonly userId: string | number
-  readonly name: string
-  readonly abilities: readonly string[]
-  readonly tokenHash: string
-  readonly createdAt: Date
-  readonly lastUsedAt?: Date
-  readonly expiresAt?: Date | null
-}): Record<string, unknown> {
-  return {
-    id: record.id,
-    provider: record.provider,
-    user_id: String(record.userId),
-    name: record.name,
-    abilities: JSON.stringify(record.abilities),
-    token_hash: record.tokenHash,
-    created_at: record.createdAt.toISOString(),
-    last_used_at: record.lastUsedAt?.toISOString() ?? null,
-    expires_at: record.expiresAt?.toISOString() ?? null,
-    updated_at: new Date().toISOString(),
-  }
-}
-
-function normalizeEmailVerificationTokenRecord(row: Record<string, unknown>): {
-  readonly id: string
-  readonly provider: string
-  readonly userId: string | number
-  readonly email: string
-  readonly tokenHash: string
-  readonly createdAt: Date
-  readonly expiresAt: Date
-} {
-  return Object.freeze({
-    id: String(row.id),
-    provider: String(row.provider),
-    userId: normalizeStoredUserId(row.user_id),
-    email: String(row.email),
-    tokenHash: String(row.token_hash),
-    createdAt: normalizeDateValue(row.created_at),
-    expiresAt: normalizeDateValue(row.expires_at),
-  })
-}
-
-function serializeEmailVerificationTokenRecord(record: {
-  readonly id: string
-  readonly provider: string
-  readonly userId: string | number
-  readonly email: string
-  readonly tokenHash: string
-  readonly createdAt: Date
-  readonly expiresAt: Date
-}): Record<string, unknown> {
-  return {
-    id: record.id,
-    provider: record.provider,
-    user_id: String(record.userId),
-    email: record.email,
-    token_hash: record.tokenHash,
-    created_at: record.createdAt.toISOString(),
-    expires_at: record.expiresAt.toISOString(),
-    used_at: null,
-    updated_at: new Date().toISOString(),
-  }
-}
-
-function normalizePasswordResetTokenRecord(row: Record<string, unknown>): {
-  readonly id: string
-  readonly provider: string
-  readonly email: string
-  readonly table?: string
-  readonly tokenHash: string
-  readonly createdAt: Date
-  readonly expiresAt: Date
-} {
-  return Object.freeze({
-    id: String(row.id),
-    provider: typeof row.provider === 'string' ? row.provider : 'users',
-    email: String(row.email),
-    table: typeof row.__holo_table === 'string' ? row.__holo_table : undefined,
-    tokenHash: String(row.token_hash),
-    createdAt: normalizeDateValue(row.created_at),
-    expiresAt: normalizeDateValue(row.expires_at),
-  })
-}
-
-function serializePasswordResetTokenRecord(record: {
-  readonly id: string
-  readonly provider: string
-  readonly email: string
-  readonly table?: string
-  readonly tokenHash: string
-  readonly createdAt: Date
-  readonly expiresAt: Date
-}): Record<string, unknown> {
-  return {
-    id: record.id,
-    provider: record.provider,
-    email: record.email,
-    token_hash: record.tokenHash,
-    created_at: record.createdAt.toISOString(),
-    expires_at: record.expiresAt.toISOString(),
-    used_at: null,
-    updated_at: new Date().toISOString(),
-  }
 }
 
 async function createCoreSocialBindings<TCustom extends HoloConfigMap>(
@@ -4270,8 +2978,8 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     setRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
     runWithRequestAccessors?<TValue>(
       accessors: NonNullable<CreateHoloOptions['authRequest']>,
-      callback: () => Promise<TValue>,
-    ): Promise<TValue>
+      callback: () => TValue,
+    ): TValue
   }
 	}> {
   const pluginDefinitions = await loadConfiguredHoloPluginDefinitions(projectRoot, resolveLoadedPluginNames(loadedConfig))
@@ -4279,7 +2987,17 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   const cacheModule = await loadCacheModule(cacheConfigured, projectRoot)
   const cacheConfig = loadedConfig.cache
   if (cacheModule && cacheConfig) {
-    const cachePluginDrivers = await loadConfiguredCachePluginDriverContracts(projectRoot, pluginDefinitions, cacheConfig)
+    await loadConfiguredCacheDrivers(projectRoot, cacheConfig)
+    const configuredPluginDrivers = Object.entries(cacheConfig.drivers).flatMap(([name, driver]) => {
+      if (driver.driver === 'memory' || driver.driver === 'file' || driver.driver === 'redis' || driver.driver === 'database') return []
+      return [{ ...driver, name, driver: driver.driver }]
+    })
+    const loadedPluginDrivers = await cacheModule.loadConfiguredCachePluginDriverContracts(
+      projectRoot,
+      resolveLoadedPluginNames(loadedConfig),
+      configuredPluginDrivers,
+    )
+    const cachePluginDrivers = new Map(loadedPluginDrivers.map(driver => [driver.name, driver]))
     cacheModule.configureCacheRuntime({
       config: cacheConfig,
       databaseConfig: loadedConfig.database,
@@ -4299,20 +3017,29 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     const queueUsesImplicitDefaultFailedStore = !queueConfigured
       && queueConfigUsesDatabaseBackedFailedStore(loadedConfig)
     const queueDbModule = (queueUsesExplicitDatabaseFeatures || queueUsesImplicitDefaultFailedStore)
-      ? await loadQueueDbModule()
+      ? await loadQueueDbModule(projectRoot)
       : undefined
+    const queueUsesRedis = queueConfigUsesRedisDriver(loadedConfig)
+    const queueRedisModule = queueUsesRedis ? await loadQueueRedisModule(projectRoot) : undefined
 
     /* v8 ignore start -- exercised only when the optional package is absent outside the monorepo test graph */
     if (queueUsesExplicitDatabaseFeatures && !queueDbModule) {
       throw new Error('[@holo-js/core] Database-backed queue features require @holo-js/queue-db to be installed.')
     }
+    if (queueUsesRedis && !queueRedisModule) {
+      throw new Error('[@holo-js/core] Redis-backed queue connections require @holo-js/queue-redis to be installed.')
+    }
     /* v8 ignore stop */
 
-    const queuePluginDriverFactories = await loadConfiguredQueuePluginDriverFactories(projectRoot, pluginDefinitions)
+    const queuePluginDriverFactories = await queueModule.loadQueuePluginDriverFactories(
+      projectRoot,
+      resolveLoadedPluginNames(loadedConfig),
+    )
     const queueDbRuntimeOptions = queueDbModule?.createQueueDbRuntimeOptions() ?? {}
     const queueDriverFactories = mergeQueueRuntimeDriverFactories(
       queuePluginDriverFactories,
       queueDbRuntimeOptions.driverFactories,
+      queueRedisModule ? [queueRedisModule.redisQueueDriverFactory] : undefined,
     )
     queueModule.configureQueueRuntime({
       config: loadedConfig.queue,
@@ -4330,7 +3057,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
   }
   /* v8 ignore stop */
 
-  if (storageInstalled) {
+  if (storageInstalled && loadedConfig.storage) {
     await configurePlainNodeStorageRuntime(projectRoot, loadedConfig)
   }
 
@@ -4344,8 +3071,9 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
       ...existingMailBindings,
       config: loadedConfig.mail,
       projectRoot,
-      ...(options.renderView ?? getRuntimeState().renderView
-        ? { renderView: options.renderView ?? getRuntimeState().renderView }
+      plugins: loadedConfig.app.plugins,
+      ...(options.renderView ?? getHoloRenderingRuntime().renderView
+        ? { renderView: options.renderView ?? getHoloRenderingRuntime().renderView }
         : {}),
     })
   }
@@ -4360,6 +3088,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
       ...existingBroadcastBindings,
       config: loadedConfig.broadcast,
       projectRoot,
+      plugins: loadedConfig.app.plugins,
       ...(!existingBroadcastBindings.publish || isCoreBroadcastPublisher(existingBroadcastBindings.publish)
         ? {
             publish: createCoreBroadcastPublisher(loadedConfig.broadcast),
@@ -4377,7 +3106,17 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
     notificationsModule.configureNotificationsRuntime({
       ...existingNotificationsBindings,
       config: loadedConfig.notifications,
+      deferAfterCommit(callback) {
+        const connection = connectionAsyncContext.getActive()?.connection
+        if (!connection || connection.getScope().kind === 'root') {
+          return false
+        }
+
+        connection.afterCommit(callback)
+        return true
+      },
       projectRoot,
+      plugins: loadedConfig.app.plugins,
       store: existingNotificationsBindings.store ?? createCoreNotificationStore(loadedConfig),
       ...(!existingNotificationsBindings.mailer && mailModule
         ? { mailer: createCoreNotificationMailSender(mailModule) }
@@ -4647,7 +3386,7 @@ export async function reconfigureOptionalHoloSubsystems<TCustom extends HoloConf
 }
 
 export async function resetOptionalHoloSubsystems(): Promise<void> {
-  bootedHoloPluginModules.clear()
+  resetBootedHoloPluginModules()
   const projectRoot = getRuntimeState().current?.projectRoot ?? getRuntimeState().pendingProjectRoot
   await resetOptionalStorageRuntime()
   const cacheModule = await loadCacheModule(false, projectRoot)
@@ -4711,18 +3450,35 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
   projectRoot: string,
   options: CreateHoloOptions = {},
 ): Promise<HoloRuntime<TCustom>> {
+  await loadInstalledFeatureConfigContributions(projectRoot)
   const loadedConfig = await loadConfigDirectory<TCustom>(projectRoot, {
     envName: options.envName,
     preferCache: options.preferCache,
     processEnv: options.processEnv,
   })
+  const fallbackQueueConfig = Object.freeze({
+    default: 'sync',
+    failed: Object.freeze({
+      driver: 'database' as const,
+      connection: 'default',
+      table: 'failed_jobs',
+    }),
+    connections: Object.freeze({
+      sync: Object.freeze({
+        driver: 'sync' as const,
+        queue: 'default',
+      }),
+    }),
+  })
+  const queueConfig = loadedConfig.queue ?? fallbackQueueConfig
   const runtimeConfig: PortableRuntimeConfig<TCustom> = {
     db: loadedConfig.database,
-    queue: loadedConfig.queue,
+    queue: queueConfig,
   }
+  const databaseDriverFactories = await loadConfiguredDatabaseDrivers(projectRoot, loadedConfig)
   const manager = resolveRuntimeConnectionManagerOptions(runtimeConfig)
   const registry = await loadGeneratedProjectRegistry(projectRoot)
-  const accessors = createConfigAccessors(loadedConfig.all)
+  const accessors = createConfigAccessors<RuntimeConfigRegistry<TCustom>>(loadedConfig.all)
   const runtimeOwnedQueueJobNames: string[] = []
   const runtimeOwnedEventNames: string[] = []
   const runtimeOwnedListenerIds: string[] = []
@@ -4738,17 +3494,117 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     setRequestAccessors?(accessors?: CreateHoloOptions['authRequest']): void
     runWithRequestAccessors?<TValue>(
       accessors: NonNullable<CreateHoloOptions['authRequest']>,
-      callback: () => Promise<TValue>,
-    ): Promise<TValue>
+      callback: () => TValue,
+    ): TValue
   } | undefined
-  let previousOptionalSubsystemBindings: OptionalSubsystemRuntimeBindings | undefined
+  let previousOptionalSubsystemBindings: OptionalSubsystemRuntimeBindings<
+    SecurityRedisAdapter,
+    SessionRedisAdapter
+  > | undefined
   const previousRenderView = options.renderView
-    ? getRuntimeState().renderView
+    ? getHoloRenderingRuntime().renderView
     : undefined
   const fallbackQueueRuntime = Object.freeze({
-    config: loadedConfig.queue,
+    config: queueConfig,
     drivers: new Map<string, HoloQueueDriverBinding>(),
   }) as HoloQueueRuntimeBinding
+
+  const unregisterRuntimeContributions = (): void => {
+    unregisterProjectEventsAndListeners(activeEventsModule, runtimeOwnedEventNames, runtimeOwnedListenerIds)
+    runtimeOwnedEventNames.splice(0)
+    runtimeOwnedListenerIds.splice(0)
+    unregisterProjectAuthorizationDefinitions(activeAuthorizationModule, runtimeOwnedAuthorizationPolicyNames, runtimeOwnedAuthorizationAbilityNames)
+    runtimeOwnedAuthorizationPolicyNames.splice(0)
+    runtimeOwnedAuthorizationAbilityNames.splice(0)
+    unregisterProjectQueueJobs(activeQueueModule, runtimeOwnedQueueJobNames)
+    runtimeOwnedQueueJobNames.splice(0)
+    activeAuthorizationModule = undefined
+    activeEventsModule = undefined
+    activeQueueModule = undefined
+    activeSessionRuntime = undefined
+    activeAuthRuntime = undefined
+    activeAuthContext = undefined
+  }
+
+  const initializeRuntimeServices = async (): Promise<void> => {
+    if (!shouldBootRuntimeServices(options.processEnv)) return
+    const optionalSubsystems = await reconfigureOptionalHoloSubsystems(projectRoot, loadedConfig, {
+      renderView: options.renderView,
+      authRequest: options.authRequest,
+      authorizationError: options.authorizationError,
+    })
+    activeQueueModule = optionalSubsystems.queueModule
+    activeSessionRuntime = optionalSubsystems.session
+    activeAuthRuntime = optionalSubsystems.auth
+    activeAuthContext = optionalSubsystems.authContext
+    const optionalEventsModule = activeQueueModule ? await loadEventsModule() : undefined
+    if (activeQueueModule && optionalEventsModule) {
+      await optionalEventsModule.ensureEventsQueueJobRegisteredAsync?.()
+    }
+    if (registryHasEvents(registry)) {
+      const eventsModule = await loadEventsModule(true)
+      if (!eventsModule) throw new Error('[@holo-js/core] Events support requires @holo-js/events to be installed.')
+      activeEventsModule = eventsModule
+      const eventRegistration = await registerProjectEventsAndListeners(projectRoot, registry, eventsModule, activeQueueModule)
+      runtimeOwnedEventNames.push(...eventRegistration.eventNames)
+      runtimeOwnedListenerIds.push(...eventRegistration.listenerIds)
+    }
+    activeAuthorizationModule = await loadAuthorizationModule()
+    const authorizationRegistration = await registerProjectAuthorizationDefinitions(projectRoot, registry, activeAuthorizationModule)
+    runtimeOwnedAuthorizationPolicyNames.push(...authorizationRegistration.policyNames)
+    runtimeOwnedAuthorizationAbilityNames.push(...authorizationRegistration.abilityNames)
+    if (options.registerProjectQueueJobs !== false && registryHasJobs(registry)) {
+      if (!activeQueueModule) throw new Error('[@holo-js/core] Project jobs require @holo-js/queue to be installed.')
+      runtimeOwnedQueueJobNames.push(...await registerProjectQueueJobs(projectRoot, registry, activeQueueModule))
+    }
+  }
+
+  const runtimeLifecycle = createRuntimeLifecycle([
+    {
+      name: 'configuration',
+      async initialize() {
+        configureConfigRuntime(loadedConfig.all)
+        await preloadGeneratedSchemaModule(projectRoot, registry)
+        await preloadDiscoveredModelModules(projectRoot, registry)
+        previousOptionalSubsystemBindings = snapshotOptionalSubsystemRuntimeBindings()
+        if (options.renderView) configureHoloRenderingRuntime({ renderView: options.renderView })
+      },
+      dispose() {
+        if (options.renderView) restoreHoloRenderingRuntime(previousRenderView)
+        resetConfigRuntime()
+      },
+    },
+    {
+      name: 'database',
+      dependsOn: ['configuration'],
+      async initialize() {
+        for (const factory of databaseDriverFactories) registerDatabaseDriverFactory(factory)
+        configureDB(manager)
+        if (shouldBootRuntimeServices(options.processEnv)) await manager.initializeAll()
+      },
+      async dispose() {
+        try {
+          await manager.disconnectAll()
+        } finally {
+          resetDB()
+          for (const factory of [...databaseDriverFactories].reverse()) unregisterDatabaseDriverFactory(factory)
+        }
+      },
+    },
+    {
+      name: 'optional-subsystems',
+      dependsOn: ['database'],
+      initialize: initializeRuntimeServices,
+      async dispose() {
+        unregisterRuntimeContributions()
+        try {
+          await resetOptionalHoloSubsystems()
+        } finally {
+          if (previousOptionalSubsystemBindings) restoreOptionalSubsystemRuntimeBindings(previousOptionalSubsystemBindings)
+        }
+      },
+    },
+  ])
 
   const runtime: MutableHoloRuntime<TCustom> & {
     setAuthRequestAccessors(accessors?: CreateHoloOptions['authRequest']): void
@@ -4773,156 +3629,21 @@ export async function createHolo<TCustom extends HoloConfigMap = HoloConfigMap>(
     setAuthRequestAccessors(authRequest) {
       activeAuthContext?.setRequestAccessors?.(authRequest)
     },
-    async runWithAuthRequestAccessors(authRequest, callback) {
+    runWithAuthRequestAccessors(authRequest, callback) {
       const runner = activeAuthContext?.runWithRequestAccessors
-      return runner ? await runner(authRequest, callback) : await callback()
+      return runner ? runner(authRequest, callback) : callback()
     },
     async initialize() {
-      if (runtime.initialized) {
-        throw new Error('Holo runtime is already initialized.')
-      }
-
-      if (getRuntimeState().current) {
-        throw new Error('A Holo runtime is already initialized for this process.')
-      }
-
-      configureConfigRuntime(loadedConfig.all)
-      configureDB(manager)
-      await preloadGeneratedSchemaModule(projectRoot, registry)
-      await preloadDiscoveredModelModules(projectRoot, registry)
-      previousOptionalSubsystemBindings = snapshotOptionalSubsystemRuntimeBindings()
-      if (options.renderView) {
-        configureHoloRenderingRuntime({
-          renderView: options.renderView,
-        })
-      }
-
-      try {
-        if (shouldBootRuntimeServices(options.processEnv)) {
-          await manager.initializeAll()
-
-          const optionalSubsystems = await reconfigureOptionalHoloSubsystems(projectRoot, loadedConfig, {
-            renderView: options.renderView,
-            authRequest: options.authRequest,
-            authorizationError: options.authorizationError,
-          })
-          activeQueueModule = optionalSubsystems.queueModule
-          activeSessionRuntime = optionalSubsystems.session
-          activeAuthRuntime = optionalSubsystems.auth
-          activeAuthContext = optionalSubsystems.authContext
-          /* v8 ignore start -- exercised only when optional packages are absent outside the monorepo test graph */
-          const optionalEventsModule = activeQueueModule
-            ? await loadEventsModule()
-            : undefined
-          if (activeQueueModule && optionalEventsModule) {
-            await optionalEventsModule.ensureEventsQueueJobRegisteredAsync?.()
-          }
-          /* v8 ignore stop */
-
-          if (registryHasEvents(registry)) {
-            const eventsModule = await loadEventsModule(true)
-            /* v8 ignore start -- exercised only when the optional package is absent outside the monorepo test graph */
-            if (!eventsModule) {
-              throw new Error('[@holo-js/core] Events support requires @holo-js/events to be installed.')
-            }
-            /* v8 ignore stop */
-            activeEventsModule = eventsModule
-            const eventRegistration = await registerProjectEventsAndListeners(
-              projectRoot,
-              registry,
-              eventsModule,
-              activeQueueModule,
-            )
-            runtimeOwnedEventNames.splice(0, runtimeOwnedEventNames.length, ...eventRegistration.eventNames)
-            runtimeOwnedListenerIds.splice(0, runtimeOwnedListenerIds.length, ...eventRegistration.listenerIds)
-          }
-
-          activeAuthorizationModule = await loadAuthorizationModule()
-          const authorizationRegistration = await registerProjectAuthorizationDefinitions(
-            projectRoot,
-            registry,
-            activeAuthorizationModule,
-          )
-          runtimeOwnedAuthorizationPolicyNames.splice(0, runtimeOwnedAuthorizationPolicyNames.length, ...authorizationRegistration.policyNames)
-          runtimeOwnedAuthorizationAbilityNames.splice(0, runtimeOwnedAuthorizationAbilityNames.length, ...authorizationRegistration.abilityNames)
-
-          if (options.registerProjectQueueJobs !== false && registryHasJobs(registry)) {
-            /* v8 ignore start -- exercised only when the optional package is absent outside the monorepo test graph */
-            if (!activeQueueModule) {
-              throw new Error('[@holo-js/core] Project jobs require @holo-js/queue to be installed.')
-            }
-            /* v8 ignore stop */
-
-            runtimeOwnedQueueJobNames.splice(0, runtimeOwnedQueueJobNames.length)
-            runtimeOwnedQueueJobNames.push(...await registerProjectQueueJobs(projectRoot, registry, activeQueueModule))
-          }
-        }
-
-        runtime.initialized = true
-        getRuntimeState().current = runtime
-      } catch (error) {
-        unregisterProjectEventsAndListeners(activeEventsModule, runtimeOwnedEventNames, runtimeOwnedListenerIds)
-        runtimeOwnedEventNames.splice(0, runtimeOwnedEventNames.length)
-        runtimeOwnedListenerIds.splice(0, runtimeOwnedListenerIds.length)
-        unregisterProjectAuthorizationDefinitions(activeAuthorizationModule, runtimeOwnedAuthorizationPolicyNames, runtimeOwnedAuthorizationAbilityNames)
-        runtimeOwnedAuthorizationPolicyNames.splice(0, runtimeOwnedAuthorizationPolicyNames.length)
-        runtimeOwnedAuthorizationAbilityNames.splice(0, runtimeOwnedAuthorizationAbilityNames.length)
-        unregisterProjectQueueJobs(activeQueueModule, runtimeOwnedQueueJobNames)
-        runtimeOwnedQueueJobNames.splice(0, runtimeOwnedQueueJobNames.length)
-        activeAuthorizationModule = undefined
-        activeEventsModule = undefined
-        activeQueueModule = undefined
-        activeSessionRuntime = undefined
-        activeAuthRuntime = undefined
-        activeAuthContext = undefined
-        await manager.disconnectAll().catch(() => {})
-        resetDB()
-        await resetOptionalHoloSubsystems()
-        if (previousOptionalSubsystemBindings) {
-          restoreOptionalSubsystemRuntimeBindings(previousOptionalSubsystemBindings)
-        }
-        if (options.renderView) {
-          restoreHoloRenderingRuntime(previousRenderView)
-        }
-        resetConfigRuntime()
-        getRuntimeState().current = undefined
-        throw error
-      }
+      if (runtime.initialized) throw new Error('Holo runtime is already initialized.')
+      if (getRuntimeState().current) throw new Error('A Holo runtime is already initialized for this process.')
+      await runtimeLifecycle.initialize({ projectRoot })
+      runtime.initialized = true
+      getRuntimeState().current = runtime
     },
     async shutdown() {
-      try {
-        if (runtime.initialized) {
-          await manager.disconnectAll()
-        }
-      } finally {
-        runtime.initialized = false
-        if (getRuntimeState().current === runtime) {
-          getRuntimeState().current = undefined
-        }
-        unregisterProjectEventsAndListeners(activeEventsModule, runtimeOwnedEventNames, runtimeOwnedListenerIds)
-        runtimeOwnedEventNames.splice(0, runtimeOwnedEventNames.length)
-        runtimeOwnedListenerIds.splice(0, runtimeOwnedListenerIds.length)
-        unregisterProjectAuthorizationDefinitions(activeAuthorizationModule, runtimeOwnedAuthorizationPolicyNames, runtimeOwnedAuthorizationAbilityNames)
-        runtimeOwnedAuthorizationPolicyNames.splice(0, runtimeOwnedAuthorizationPolicyNames.length)
-        runtimeOwnedAuthorizationAbilityNames.splice(0, runtimeOwnedAuthorizationAbilityNames.length)
-        unregisterProjectQueueJobs(activeQueueModule, runtimeOwnedQueueJobNames)
-        runtimeOwnedQueueJobNames.splice(0, runtimeOwnedQueueJobNames.length)
-        activeAuthorizationModule = undefined
-        activeEventsModule = undefined
-        activeQueueModule = undefined
-        activeSessionRuntime = undefined
-        activeAuthRuntime = undefined
-        activeAuthContext = undefined
-        resetDB()
-        await resetOptionalHoloSubsystems()
-        if (previousOptionalSubsystemBindings) {
-          restoreOptionalSubsystemRuntimeBindings(previousOptionalSubsystemBindings)
-        }
-        if (options.renderView) {
-          restoreHoloRenderingRuntime(previousRenderView)
-        }
-        resetConfigRuntime()
-      }
+      runtime.initialized = false
+      if (getRuntimeState().current === runtime) getRuntimeState().current = undefined
+      await runtimeLifecycle.dispose({ projectRoot })
     },
   }
 

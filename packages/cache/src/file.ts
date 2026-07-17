@@ -1,5 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises'
+import {
+  mkdir as defaultMkdir,
+  open,
+  readFile,
+  readdir as defaultReaddir,
+  rename,
+  rm,
+  rmdir as defaultRmdir,
+  writeFile as defaultWriteFile,
+} from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import {
   CacheInvalidNumericMutationError,
@@ -35,6 +44,21 @@ type CreateFileCacheDriverOptions = {
   readonly numericMutationLockSeconds?: number
   readonly numericMutationWaitSeconds?: number
 }
+
+type FileSystemOperations = {
+  readonly mkdir: typeof defaultMkdir
+  readonly readdir: typeof defaultReaddir
+  readonly rmdir: typeof defaultRmdir
+  readonly writeFile: typeof defaultWriteFile
+}
+
+const defaultFileSystemOperations: FileSystemOperations = {
+  mkdir: defaultMkdir,
+  readdir: defaultReaddir,
+  rmdir: defaultRmdir,
+  writeFile: defaultWriteFile,
+}
+let fileSystemOperations = defaultFileSystemOperations
 
 type FileReadResult<TValue> =
   | {
@@ -128,7 +152,7 @@ function isFileCacheLockEnvelope(value: unknown): value is FileCacheLockEnvelope
 }
 
 async function ensureParentDirectory(filePath: string): Promise<void> {
-  await mkdir(dirname(filePath), { recursive: true })
+  await fileSystemOperations.mkdir(dirname(filePath), { recursive: true })
 }
 
 async function removeFileIfPresent(filePath: string): Promise<void> {
@@ -137,7 +161,7 @@ async function removeFileIfPresent(filePath: string): Promise<void> {
 
 async function removeEmptyDirectoryIfPresent(path: string): Promise<void> {
   try {
-    await rmdir(path)
+    await fileSystemOperations.rmdir(path)
   } catch (error) {
     if (
       error instanceof Error
@@ -171,7 +195,7 @@ async function writeFileAtomically(filePath: string, contents: string): Promise<
   await ensureParentDirectory(filePath)
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
 
-  await writeFile(temporaryPath, contents, 'utf8')
+  await fileSystemOperations.writeFile(temporaryPath, contents, 'utf8')
 
   /* v8 ignore start -- This catch requires an OS-level rename failure after a successful temp write in the same directory. */
   try {
@@ -219,7 +243,7 @@ async function readJsonFile(filePath: string): Promise<unknown | typeof MALFORME
 
 async function listFiles(rootPath: string): Promise<readonly string[]> {
   try {
-    const entries = await readdir(rootPath, { withFileTypes: true })
+    const entries = await fileSystemOperations.readdir(rootPath, { withFileTypes: true })
     const nested = await Promise.all(entries.map(async (entry) => {
       const entryPath = join(rootPath, entry.name)
       if (entry.isDirectory()) return listFiles(entryPath)
@@ -264,7 +288,7 @@ async function removeScopedCacheFiles<TValue extends FileCacheEntryEnvelope | Fi
 
   if (!prefix) {
     await rm(rootPath, { recursive: true, force: true })
-    await mkdir(rootPath, { recursive: true })
+    await fileSystemOperations.mkdir(rootPath, { recursive: true })
     return
   }
 
@@ -312,7 +336,7 @@ async function readLock(
   let markerFilePaths: readonly string[]
 
   try {
-    const entries = await readdir(filePath, { withFileTypes: true })
+    const entries = await fileSystemOperations.readdir(filePath, { withFileTypes: true })
     markerFilePaths = entries
       .filter(entry => entry.isFile())
       .map(entry => join(filePath, entry.name))
@@ -421,7 +445,7 @@ function createFileLock(
     await ensureParentDirectory(filePath)
 
     try {
-      await mkdir(filePath)
+      await fileSystemOperations.mkdir(filePath)
     } catch (error) {
       if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
         return false
@@ -431,7 +455,7 @@ function createFileLock(
     }
 
     try {
-      await writeFile(resolveLockMarkerFilePath(filePath, owner), envelope, 'utf8')
+      await fileSystemOperations.writeFile(resolveLockMarkerFilePath(filePath, owner), envelope, 'utf8')
     } catch (error) {
       await removeFileIfPresent(resolveLockMarkerFilePath(filePath, owner))
       await removeEmptyDirectoryIfPresent(filePath)
@@ -651,4 +675,10 @@ export const fileDriverInternals = {
   resolveDriverRoot,
   resolveEntryFilePath,
   resolveLockFilePath,
+  resetFileSystemOperations(): void {
+    fileSystemOperations = defaultFileSystemOperations
+  },
+  setFileSystemOperations(operations: Partial<FileSystemOperations>): void {
+    fileSystemOperations = { ...defaultFileSystemOperations, ...operations }
+  },
 }

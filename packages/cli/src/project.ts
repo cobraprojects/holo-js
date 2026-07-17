@@ -1,4 +1,4 @@
-import { normalizeHoloProjectConfig, type NormalizedHoloProjectConfig } from '@holo-js/db'
+import { normalizeHoloProjectConfig, type NormalizedHoloProjectConfig } from '@holo-js/kernel'
 export type {
   AuthInstallResult,
   AuthNotificationsPublishResult,
@@ -166,7 +166,6 @@ import {
 import {
   activateProjectPlugin,
   deactivateProjectPlugin,
-  defineHoloPlugin,
   loadHoloPluginFromPackage,
   loadProjectPluginCommands,
   loadProjectPluginFrameworkDescriptors,
@@ -201,7 +200,6 @@ export {
   bundleProjectModule,
   CLI_RUNTIME_ROOT,
   defaultProjectConfig,
-  defineHoloPlugin,
   discoverAppCommands,
   ensureGeneratedSchemaPlaceholder,
   ensureProjectConfig,

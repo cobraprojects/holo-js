@@ -199,10 +199,37 @@ function createDialect(name: 'sqlite' | 'mysql' = 'sqlite'): Dialect {
 }
 
 describe('migration service slice', () => {
+  it('preserves non-missing tracking-table failures', async () => {
+    class BrokenTrackingAdapter extends MigrationAdapter {
+      override async query<TRow extends Record<string, unknown>>(): Promise<DriverQueryResult<TRow>> {
+        throw new Error('tracking query failed')
+      }
+    }
+    const adapter = new BrokenTrackingAdapter({ tables: [], records: [] })
+    const db = createDatabase({ connectionName: 'default', adapter, dialect: createDialect() })
+    await expect(createMigrationService(db).migrate()).rejects.toThrow('tracking query failed')
+  })
+
+  it('preserves missing-database failures when the driver cannot create databases', async () => {
+    class MissingWithoutBootstrapAdapter extends MigrationAdapter {
+      override async query<TRow extends Record<string, unknown>>(): Promise<DriverQueryResult<TRow>> {
+        throw Object.assign(new Error('database missing'), { code: '3D000' })
+      }
+
+      isDatabaseMissingError(error: unknown): boolean {
+        return typeof error === 'object' && error !== null && 'code' in error && error.code === '3D000'
+      }
+    }
+    const adapter = new MissingWithoutBootstrapAdapter({ tables: [], records: [] })
+    const db = createDatabase({ connectionName: 'default', adapter, dialect: createDialect() })
+    await expect(createMigrationService(db).migrate()).rejects.toThrow('database missing')
+  })
+
   it('creates a missing database during migrate before retrying migration setup', async () => {
     const adapter = new MissingDatabaseMigrationAdapter({
       tables: [],
       records: [] })
+    adapter.connected = true
     const db = createDatabase({
       connectionName: 'default',
       adapter,
@@ -222,6 +249,24 @@ describe('migration service slice', () => {
     expect(adapter.state.tables).toContain('_holo_migrations')
     expect(adapter.state.tables).toContain('users')
     expect(adapter.isConnected()).toBe(true)
+  })
+
+  it('recognizes wrapped missing-database errors without disconnecting an inactive connection', async () => {
+    class InactiveMissingDatabaseAdapter extends MissingDatabaseMigrationAdapter {
+      override isConnected(): boolean {
+        return false
+      }
+
+      override isDatabaseMissingError(error: unknown): boolean {
+        return error instanceof DatabaseError || super.isDatabaseMissingError(error)
+      }
+    }
+
+    const adapter = new InactiveMissingDatabaseAdapter({ tables: [], records: [] })
+    const db = createDatabase({ connectionName: 'default', adapter, dialect: createDialect() })
+
+    await expect(createMigrationService(db).migrate()).resolves.toEqual([])
+    expect(adapter.ensureDatabaseCalls).toBe(1)
   })
 
   it('registers migrations, reports status, migrates in order, and rolls back the latest batch', async () => {

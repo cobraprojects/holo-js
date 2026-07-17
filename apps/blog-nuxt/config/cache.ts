@@ -1,5 +1,5 @@
-import { defineCacheConfig, env } from '@holo-js/config'
-
+import { defineCacheConfig } from '@holo-js/cache'
+import { env } from '@holo-js/config'
 export default defineCacheConfig({
   default: 'database',
   prefix: env('CACHE_PREFIX', ''),

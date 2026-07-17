@@ -1,4 +1,4 @@
-import { defineNotificationsConfig, type NormalizedHoloNotificationsConfig } from '@holo-js/config'
+import type { NormalizedHoloNotificationsConfig } from './config'
 
 const HOLO_NOTIFICATION_DEFINITION_MARKER = Symbol.for('holo-js.notifications.definition')
 const BUILT_IN_NOTIFICATION_CHANNELS = ['email', 'database', 'broadcast'] as const
@@ -337,6 +337,7 @@ export interface NotificationDispatchInput<
 
 export interface NotificationRuntimeBindings {
   readonly config?: NormalizedHoloNotificationsConfig
+  readonly deferAfterCommit?: (callback: () => Promise<void>) => boolean
   readonly mailer?: NotificationMailSender
   readonly broadcaster?: NotificationBroadcaster
   readonly store?: NotificationStore
@@ -491,5 +492,3 @@ export const notificationsInternals = {
   normalizeOptionalString,
   normalizeQueueOptions,
 }
-
-export { defineNotificationsConfig }

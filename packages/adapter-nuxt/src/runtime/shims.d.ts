@@ -75,15 +75,6 @@ declare global {
     ): Record<string, TModule>
   }
 
-  function createError(input: { statusCode: number, statusMessage: string }): Error
-  function defineNitroErrorHandler<T>(handler: T): T
-  function defineNitroPlugin<T>(plugin: T): T
-  function defineEventHandler<T>(
-    handler: (event: unknown) => T | Promise<T>,
-  ): (event: unknown) => T | Promise<T>
-  function getRequestURL(event: unknown): URL
-  function setResponseHeader(event: unknown, name: string, value: string): void
-  function useRuntimeConfig(): HoloRuntimeConfig
 }
 
 export {}

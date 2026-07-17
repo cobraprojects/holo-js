@@ -1,6 +1,7 @@
 import { basename, extname, resolve } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { loadConfigDirectory } from '@holo-js/config'
+import type {} from '@holo-js/broadcast/config'
 import {
   loadGeneratedProjectRegistry,
   loadProjectConfig,

@@ -11,7 +11,11 @@ import {
   defineNuxtModule,
 } from '@nuxt/kit'
 import { loadConfigDirectory, type LoadedHoloConfig, type HoloConfigMap } from '@holo-js/config'
-import { createRealtimeClientDefinitionModule } from './realtime-definition-transform'
+import '@holo-js/db/config'
+import {
+  createRealtimeClientDefinitionModule,
+  createRealtimeClientDefinitionTransform,
+} from './realtime-definition-transform'
 
 export type ModuleOptions = Record<string, never>
 
@@ -197,10 +201,13 @@ interface NuxtOptionsWithNitro {
   _holoTypesRegistered?: boolean
 }
 
-function hasProjectPackage(rootDir: string, packageName: string): boolean {
-  const projectRequire = createRequire(resolve(rootDir, 'package.json'))
+function hasProjectPackage(
+  rootDir: string,
+  packageName: string,
+  resolvePackage: (packageName: string) => string = createRequire(resolve(rootDir, 'package.json')).resolve,
+): boolean {
   try {
-    projectRequire.resolve(packageName)
+    resolvePackage(packageName)
     return true
   } catch (error) {
     if (isModuleResolutionFailure(error)) {
@@ -246,7 +253,8 @@ function addViteOptimizeDeps(opts: NuxtOptionsWithNitro, deps: readonly string[]
 }
 
 function isRealtimeDefinitionModule(_rootDir: string, id: string): boolean {
-  const normalizedId = id.split('?')[0]?.replaceAll('\\', '/') ?? ''
+  const [sourcePath = ''] = id.split('?')
+  const normalizedId = sourcePath.replaceAll('\\', '/')
   return normalizedId.includes('/server/realtime/')
     && MODEL_FILE_EXTENSIONS.has(extname(normalizedId))
 }
@@ -281,7 +289,7 @@ function resolveRealtimeDefinitionImport(source: string, importer: string | unde
 
   const basePath = source.startsWith('.')
     ? importer
-      ? resolve(dirname(importer.split('?')[0] ?? importer), source)
+      ? resolve(dirname(importer.split('?')[0]!), source)
       : undefined
     : resolve(source)
 
@@ -313,10 +321,7 @@ function createRealtimeDefinitionVitePlugin(rootDir: string): unknown {
         return null
       }
 
-      return {
-        code: createRealtimeClientDefinitionModule(code),
-        map: null,
-      }
+      return createRealtimeClientDefinitionTransform(code)
     },
   }
 }
@@ -402,6 +407,56 @@ function toStorageModuleOptions(
   }
 }
 
+function resolveStorageSetup(
+  storageModule: StorageModule | undefined,
+  loaded: LoadedHoloConfig<HoloConfigMap>,
+): {
+  readonly options: StorageModuleOptions | undefined
+  readonly normalized: HoloStorageRuntimeConfig | undefined
+} {
+  if (!storageModule) {
+    if (hasLoadedConfigFile(loaded, 'storage')) {
+      throw new Error('[@holo-js/adapter-nuxt] Storage config requires @holo-js/storage to be installed.')
+    }
+
+    return { options: undefined, normalized: undefined }
+  }
+
+  const options = storageModule.mergeModuleOptions(undefined, toStorageModuleOptions(loaded))
+  return {
+    options,
+    normalized: storageModule.normalizeModuleOptions(options),
+  }
+}
+
+function finalizeStorageSetup(
+  storageModule: StorageModule,
+  opts: NuxtOptionsWithNitro,
+  resolver: { resolve(path: string): string },
+  s3Driver: string,
+): void {
+  const normalized = storageModule.normalizeModuleOptions(opts._holoStorageModuleOptions as StorageModuleOptions)
+  opts.runtimeConfig = opts.runtimeConfig || {}
+  opts.runtimeConfig.holoStorage = normalized
+  storageModule.applyNitroStorageConfig(opts, normalized, s3Driver)
+
+  if (storageModule.hasPublicLocalDisk(normalized)) {
+    addServerHandler({
+      route: `${normalized.routePrefix}/**`,
+      handler: resolver.resolve('./runtime/server/routes/storage.get'),
+    })
+  }
+}
+
+function applyStorageRuntimeConfig(
+  runtimeConfig: Record<string, unknown>,
+  normalized: HoloStorageRuntimeConfig | undefined,
+): void {
+  if (normalized) {
+    runtimeConfig.holoStorage = normalized
+  }
+}
+
 type ServerModelImportArtifacts = {
   importDir: string
   pluginFile: string
@@ -474,12 +529,12 @@ export default defineNuxtModule<ModuleOptions>({
     const authorizationTypesPath = resolve(rootDir, '.holo-js/generated/authorization/types.d.ts')
     const modelRegistryTypesPath = resolve(rootDir, '.holo-js/generated/model-registry.d.ts')
     addViteOptimizeDeps(opts, resolveClientOptimizeDeps(rootDir))
+    const storageModule = await importOptionalStorageModule()
     const loaded = await loadConfigDirectory(rootDir, {
       preferCache: process.env.NODE_ENV === 'production',
       processEnv: process.env,
     })
-    const storageModule = await importOptionalStorageModule()
-    const loadedStorageOptions = toStorageModuleOptions(loaded)
+    const storageSetup = resolveStorageSetup(storageModule, loaded)
     const s3Driver = resolver.resolve('./runtime/drivers/s3.js')
 
     opts.nitro = opts.nitro || { storage: {} }
@@ -502,15 +557,8 @@ export default defineNuxtModule<ModuleOptions>({
       projectRoot: rootDir,
     }
     opts.runtimeConfig.db = loaded.database
-    const storageConfigured = hasLoadedConfigFile(loaded, 'storage')
-    /* v8 ignore next 3 -- exercised only when the optional package is absent outside the monorepo test graph */
-    if (!storageModule && storageConfigured) {
-      throw new Error('[@holo-js/adapter-nuxt] Storage config requires @holo-js/storage to be installed.')
-    }
-
-    const mergedStorageOptions = storageModule?.mergeModuleOptions(undefined, loadedStorageOptions)
-    /* v8 ignore next 2 -- false branch is equivalent to the already-covered no-storage path above */
-    const normalizedStorage = mergedStorageOptions ? storageModule?.normalizeModuleOptions(mergedStorageOptions) : undefined
+    const mergedStorageOptions = storageSetup.options
+    const normalizedStorage = storageSetup.normalized
     opts._holoStorageModuleOptions = mergedStorageOptions
     /* v8 ignore next 5 -- exercised only when the optional package is absent outside the monorepo test graph */
     if (normalizedStorage && Object.values(normalizedStorage.disks).some(disk => disk.driver === 's3')) {
@@ -518,9 +566,7 @@ export default defineNuxtModule<ModuleOptions>({
         throw new Error('[@holo-js/adapter-nuxt] S3 storage disks require @holo-js/storage-s3 to be installed.')
       }
     }
-    if (normalizedStorage) {
-      opts.runtimeConfig.holoStorage = normalizedStorage
-    }
+    applyStorageRuntimeConfig(opts.runtimeConfig, normalizedStorage)
 
     if (!opts._holoCoreRuntimeRegistered) {
       addServerPlugin(resolver.resolve('./runtime/plugins/init'))
@@ -589,17 +635,7 @@ export default defineNuxtModule<ModuleOptions>({
     if (storageModule && !opts._holoStorageFinalizeRegistered) {
       opts._holoStorageFinalizeRegistered = true
       nuxt.hook('modules:done', () => {
-        const finalNormalized = storageModule.normalizeModuleOptions(opts._holoStorageModuleOptions as StorageModuleOptions)
-        opts.runtimeConfig = opts.runtimeConfig || {}
-        opts.runtimeConfig.holoStorage = finalNormalized
-        storageModule.applyNitroStorageConfig(opts, finalNormalized, s3Driver)
-
-        if (storageModule.hasPublicLocalDisk(finalNormalized)) {
-          addServerHandler({
-            route: `${finalNormalized.routePrefix}/**`,
-            handler: resolver.resolve('./runtime/server/routes/storage.get'),
-          })
-        }
+        finalizeStorageSetup(storageModule, opts, resolver, s3Driver)
       })
     }
 
@@ -620,11 +656,22 @@ export default defineNuxtModule<ModuleOptions>({
 
 export const moduleInternals = {
   addViteOptimizeDeps,
+  addVitePlugin,
+  addNitroErrorHandler,
+  createRealtimeDefinitionVitePlugin,
+  existsFile,
+  hasProjectPackage,
   hasModuleNotFoundCode,
   hasLoadedConfigFile,
   importOptionalStorageS3Module,
+  applyStorageRuntimeConfig,
+  finalizeStorageSetup,
+  resolveStorageSetup,
   isModuleResolutionFailure,
+  isRealtimeDefinitionModule,
   resolveClientOptimizeDeps,
+  resolveExistingRealtimeDefinitionFile,
+  resolveRealtimeDefinitionImport,
 }
 
 export const adapterNuxtInternals = {

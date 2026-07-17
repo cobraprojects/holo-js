@@ -2,8 +2,8 @@ import { mkdir, readdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import {
   normalizeHoloProjectConfig,
-  renderGeneratedSchemaPlaceholder,
-} from '@holo-js/db'
+} from '@holo-js/kernel'
+import { renderGeneratedSchemaPlaceholder } from '@holo-js/db'
 import {
   ESBUILD_PACKAGE_VERSION,
   HOLO_PACKAGE_VERSION,
@@ -57,6 +57,7 @@ import {
 } from './project-renderers'
 import {
   renderScaffoldGitignore,
+  renderScaffoldEslintConfig,
   renderScaffoldTsconfig,
   renderVSCodeSettings,
 } from './workspace-renderers'
@@ -92,6 +93,7 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
     '@holo-js/config': `^${HOLO_PACKAGE_VERSION}`,
     '@holo-js/core': `^${HOLO_PACKAGE_VERSION}`,
     '@holo-js/db': `^${HOLO_PACKAGE_VERSION}`,
+    '@holo-js/kernel': `^${HOLO_PACKAGE_VERSION}`,
     [DB_DRIVER_PACKAGE_NAMES[options.databaseDriver]]: `^${HOLO_PACKAGE_VERSION}`,
     esbuild: ESBUILD_PACKAGE_VERSION,
     ...framework.scaffold.dependencies,
@@ -99,7 +101,10 @@ export function renderScaffoldPackageJson(options: ProjectScaffoldOptions): stri
   const devDependencies: Record<string, string> = {
     typescript: SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS.typescript,
     '@types/node': SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS['@types/node'],
+    '@eslint/js': SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS['@eslint/js'],
     eslint: SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS.eslint,
+    globals: SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS.globals,
+    'typescript-eslint': SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS['typescript-eslint'],
     ...framework.scaffold.devDependencies,
   }
 
@@ -266,6 +271,7 @@ export async function scaffoldProject(
 
   await writeFile(resolve(projectRoot, 'package.json'), renderScaffoldPackageJson(options), 'utf8')
   await writeFile(resolve(projectRoot, '.gitignore'), renderScaffoldGitignore(), 'utf8')
+  await writeFile(resolve(projectRoot, 'eslint.config.mjs'), renderScaffoldEslintConfig(), 'utf8')
   await writeFile(resolve(projectRoot, '.env'), scaffoldEnv, 'utf8')
   await writeFile(resolve(projectRoot, '.env.example'), scaffoldEnvExample, 'utf8')
   await writeFile(resolve(projectRoot, 'config/app.ts'), renderScaffoldAppConfig(options.projectName, options.framework), 'utf8')

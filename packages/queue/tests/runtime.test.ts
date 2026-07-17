@@ -142,8 +142,8 @@ export default {
 }
 `)
 
-      await expect(loadQueuePluginDriverFactories(projectRoot)).rejects.toThrow('must export a matching QueueDriverFactory')
-      await expect(loadQueuePluginDriverFactories(projectRoot)).rejects.toThrow('must export a matching QueueDriverFactory')
+      await expect(loadQueuePluginDriverFactories(projectRoot, ['holo-plugin-broken-queue'])).rejects.toThrow('must export a matching QueueDriverFactory')
+      await expect(loadQueuePluginDriverFactories(projectRoot, ['holo-plugin-broken-queue'])).rejects.toThrow('must export a matching QueueDriverFactory')
     } finally {
       resetQueuePluginDriverFactories()
       await rm(projectRoot, { recursive: true, force: true })
@@ -195,7 +195,7 @@ export default {
 
       let firstError: unknown
       try {
-        await loadQueuePluginDriverFactories(projectRoot)
+        await loadQueuePluginDriverFactories(projectRoot, ['holo-plugin-queue-reset'])
       } catch (error) {
         firstError = error
       }
@@ -204,7 +204,7 @@ export default {
 
       let secondError: unknown
       try {
-        await loadQueuePluginDriverFactories(projectRoot)
+        await loadQueuePluginDriverFactories(projectRoot, ['holo-plugin-queue-reset'])
       } catch (error) {
         secondError = error
       }
@@ -256,7 +256,7 @@ export default {
 }
 `)
       await writeFile(join(pluginRoot, 'driver.mjs'), `
-export default {
+export const factory = {
   driver: 'plugin',
   create(connection) {
     return {
@@ -283,16 +283,16 @@ export default {
 }
 `)
 
-      const firstFactories = await loadQueuePluginDriverFactories(projectRoot)
-      const secondFactories = await loadQueuePluginDriverFactories(projectRoot)
-      const equivalentPathFactories = await loadQueuePluginDriverFactories(`${projectRoot}/.`)
+      const firstFactories = await loadQueuePluginDriverFactories(projectRoot, ['holo-plugin-queue'])
+      const secondFactories = await loadQueuePluginDriverFactories(projectRoot, ['holo-plugin-queue'])
+      const equivalentPathFactories = await loadQueuePluginDriverFactories(`${projectRoot}/.`, ['holo-plugin-queue'])
       expect(firstFactories.map(factory => factory.driver)).toEqual(['plugin'])
       expect(secondFactories.map(factory => factory.driver)).toEqual(['plugin'])
       expect(equivalentPathFactories).toBe(firstFactories)
 
-      await loadQueuePluginDrivers(projectRoot)
+      await loadQueuePluginDrivers(projectRoot, ['holo-plugin-queue'])
       expect(queueRuntimeInternals.getQueueRuntimeState().driverFactories.get('plugin')?.driver).toBe('plugin')
-      await expect(loadQueuePluginDrivers(projectRoot)).resolves.toBeUndefined()
+      await expect(loadQueuePluginDrivers(projectRoot, ['holo-plugin-queue'])).resolves.toBeUndefined()
     } finally {
       resetQueuePluginDriverFactories()
       await rm(projectRoot, { recursive: true, force: true })
@@ -337,9 +337,8 @@ export default {
 }
 `)
       await writeFile(join(pluginRoot, 'driver.mjs'), `
-export default {
-  driver: 'plugin',
-  create(connection) {
+export const driver = 'plugin'
+export function create(connection) {
     return {
       name: connection.name,
       driver: connection.driver,
@@ -360,11 +359,10 @@ export default {
       async release() {},
       async delete() {},
     }
-  },
 }
 `)
 
-      await loadQueuePluginDrivers(projectRoot)
+      await loadQueuePluginDrivers(projectRoot, ['holo-plugin-queue-config'])
       configureQueueRuntime({
         config: {
           default: 'plugin',
@@ -432,9 +430,8 @@ export default {
 }
 `)
       await writeFile(join(pluginRoot, 'driver.mjs'), `
-export default {
-  driver: 'plugin',
-  create(connection) {
+export const driver = 'plugin'
+export function create(connection) {
     return {
       name: connection.name,
       driver: connection.driver,
@@ -456,7 +453,6 @@ export default {
       async release() {},
       async delete() {},
     }
-  },
 }
 `)
       configureQueueRuntime({
@@ -466,6 +462,10 @@ export default {
             plugin: {
               driver: 'plugin',
               queue: 'plugin-jobs',
+            },
+            secondary: {
+              driver: 'sync',
+              queue: 'secondary-jobs',
             },
           },
         },
@@ -505,13 +505,27 @@ export default {
       await expect(dispatch('plugin.invalidate', {})).resolves.toMatchObject({
         jobId: expect.stringMatching(/^first:/),
       })
+      const secondaryDriver = queueRuntimeInternals.resolveConnectionDriver('secondary')
 
-      await loadQueuePluginDrivers(projectRoot)
+      await loadQueuePluginDrivers(projectRoot, ['holo-plugin-queue-replacement'])
 
       expect(firstClose).toHaveBeenCalledTimes(1)
+      expect(queueRuntimeInternals.getQueueRuntimeState().drivers.get('secondary')).toBe(secondaryDriver)
       await expect(dispatch('plugin.invalidate', {})).resolves.toMatchObject({
         jobId: expect.stringMatching(/^plugin:/),
       })
+    } finally {
+      resetQueuePluginDriverFactories()
+      await rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('loads no queue plugin drivers when no plugins contribute factories', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-queue-no-plugin-drivers-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({ private: true }), 'utf8')
+      await expect(loadQueuePluginDrivers(projectRoot, [])).resolves.toBeUndefined()
     } finally {
       resetQueuePluginDriverFactories()
       await rm(projectRoot, { recursive: true, force: true })
@@ -612,7 +626,7 @@ export default {
 
       await expect(dispatchSync<Record<string, never>, string>('sync.invalidate', {})).resolves.toBe('first')
 
-      await loadQueuePluginDrivers(projectRoot)
+      await loadQueuePluginDrivers(projectRoot, ['holo-plugin-sync-replacement'])
 
       expect(firstClose).toHaveBeenCalledTimes(1)
       await expect(dispatchSync<Record<string, never>, string>('sync.invalidate', {})).resolves.toBe('plugin')
@@ -1422,7 +1436,7 @@ export default {
     ]))
 
     expect(queueRuntimeInternals.createDefaultDriverFactories().has('sync')).toBe(true)
-    expect(queueRuntimeInternals.createDefaultDriverFactories().has('redis')).toBe(true)
+    expect(queueRuntimeInternals.createDefaultDriverFactories().has('redis')).toBe(false)
     expect(queueRuntimeInternals.createDefaultDriverFactories().has('database')).toBe(false)
     expect(defaultFactories.has('sync')).toBe(true)
     expect(arrayFactories.get('sync')).toBeDefined()
@@ -1520,7 +1534,7 @@ export default {
     expect(listRegisteredQueueJobs().map(entry => entry.name)).toEqual(['jobs.cleanup'])
     expect(Queue.connection().name).toBe('sync')
     expect(queueRuntimeInternals.getQueueRuntimeState().drivers.size).toBe(0)
-    expect(queueRuntimeInternals.getQueueRuntimeState().driverFactories.size).toBe(2)
+    expect(queueRuntimeInternals.getQueueRuntimeState().driverFactories.size).toBe(1)
     await vi.waitFor(() => {
       expect(close).toHaveBeenCalledTimes(1)
     })

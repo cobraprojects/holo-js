@@ -27,6 +27,7 @@
     "@holo-js/queue": "catalog:"
   },
   "devDependencies": {
+    "@holo-js/db-sqlite": "catalog:",
     "@types/node": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:",

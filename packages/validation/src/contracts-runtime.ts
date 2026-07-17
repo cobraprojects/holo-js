@@ -115,17 +115,8 @@ function hasRule(definition: FieldDefinition, name: FieldRule['name']): boolean 
 }
 
 function hasRuleBefore(definition: FieldDefinition, selectedRule: FieldRule, name: FieldRule['name']): boolean {
-  for (const rule of definition.rules) {
-    if (rule === selectedRule) {
-      return false
-    }
-
-    if (rule.name === name) {
-      return true
-    }
-  }
-
-  return false
+  const selectedRuleIndex = definition.rules.indexOf(selectedRule)
+  return definition.rules.slice(0, selectedRuleIndex).some(rule => rule.name === name)
 }
 
 function isMissingValue(value: unknown, kind: FieldKind): boolean {

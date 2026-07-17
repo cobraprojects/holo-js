@@ -6,6 +6,9 @@
     "declaration": true,
     "declarationMap": true,
     "paths": {
+      "@holo-js/db-sqlite": [
+        "../db-sqlite/src/index.ts"
+      ],
       "@holo-js/config": [
         "../config/src/index.ts"
       ],
@@ -20,6 +23,39 @@
       ],
       "@holo-js/storage/runtime": [
         "../storage/src/runtime/composables/index.ts"
+      ],
+      "@holo-js/kernel": [
+        "../kernel/src/index.ts"
+      ],
+      "@holo-js/notifications": [
+        "../notifications/src/index.ts"
+      ],
+      "@holo-js/storage": [
+        "../storage/src/index.ts"
+      ],
+      "@holo-js/cache": [
+        "../cache/src/index.ts"
+      ],
+      "@holo-js/session": [
+        "../session/src/index.ts"
+      ],
+      "@holo-js/auth": [
+        "../auth/src/index.ts"
+      ],
+      "@holo-js/security": [
+        "../security/src/index.ts"
+      ],
+      "@holo-js/broadcast": [
+        "../broadcast/src/index.ts"
+      ],
+      "@holo-js/mail": [
+        "../mail/src/index.ts"
+      ],
+      "@holo-js/media": [
+        "../media/src/index.ts"
+      ],
+      "@holo-js/media/config": [
+        "../media/src/projectConfig.ts"
       ]
     }
   },

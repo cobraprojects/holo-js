@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vitepress dev docs",
     "dev:host": "vitepress dev docs --host 0.0.0.0",
-    "build": "vitepress build docs",
+    "build": "node ../../scripts/validate-docs.mjs docs && vitepress build docs",
     "preview": "vitepress preview docs"
   },
   "devDependencies": {

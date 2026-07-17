@@ -1,10 +1,10 @@
+import { resolve } from 'node:path'
 import { defineConfig } from 'vitest/config'
-import { fileURLToPath } from 'node:url'
 
 export default defineConfig({
   resolve: {
     alias: {
-      '@holo-js/config': fileURLToPath(new URL('../config/src/index.ts', import.meta.url)),
+      '@holo-js/kernel': resolve(__dirname, '../kernel/src/index.ts'),
     },
   },
   test: {

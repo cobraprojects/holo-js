@@ -1,5 +1,5 @@
-import { defineAuthConfig, env } from '@holo-js/config'
-
+import { defineAuthConfig } from '@holo-js/auth'
+import { env } from '@holo-js/config'
 export default defineAuthConfig({
   defaults: {
     guard: 'web',

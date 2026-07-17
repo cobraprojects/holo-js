@@ -4,9 +4,9 @@ import { resolve } from 'node:path'
 export default defineConfig({
   resolve: {
     alias: {
+      '@holo-js/kernel': resolve(__dirname, '../kernel/src/index.ts'),
       '@holo-js/auth': resolve(import.meta.dirname, '../auth/src/index.ts'),
       '@holo-js/auth-social': resolve(import.meta.dirname, '../auth-social/src/index.ts'),
-      '@holo-js/config': resolve(import.meta.dirname, '../config/src/index.ts'),
     },
   },
   test: {

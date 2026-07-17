@@ -81,7 +81,7 @@ If a provider-backed Clawpatch command fails with a Codex app-server or permissi
 
 Use deslopify mode when the user asks Clawpatch to clean up AI-written, overcomplicated, or style-inconsistent code across the project.
 
-Deslopify campaigns in this repo are package-level only. Do not edit docs, blog apps, playground apps, example apps, route examples, public API docs, or user-facing examples unless the user explicitly approves that exact scope first. Do not introduce, rename, remove, or reshape any user-facing API. User-facing API means the final shape users write against: exported package APIs, documented examples, app code patterns, configuration shape, routes, middleware, environment variables, scaffolding, and integration code. Internal package structure and cross-package implementation reuse are allowed when the exported/user-facing surface stays the same.
+Deslopify campaigns in this repo are package-level only. Do not edit docs, blog apps, example apps, route examples, public API docs, or user-facing examples unless the user explicitly approves that exact scope first. Do not introduce, rename, remove, or reshape any user-facing API. User-facing API means the final shape users write against: exported package APIs, documented examples, app code patterns, configuration shape, routes, middleware, environment variables, scaffolding, and integration code. Internal package structure and cross-package implementation reuse are allowed when the exported/user-facing surface stays the same.
 
 Full-project deslopify loop:
 

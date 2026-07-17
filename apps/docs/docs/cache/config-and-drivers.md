@@ -3,8 +3,8 @@
 ## Basic config
 
 ```ts
-import { defineCacheConfig, env } from '@holo-js/config'
-
+import { defineCacheConfig } from '@holo-js/cache'
+import { env } from '@holo-js/config'
 export default defineCacheConfig({
   default: 'file',
   prefix: env('CACHE_PREFIX', ''),
@@ -65,7 +65,8 @@ Use `redis` for shared cache, shared locks, and horizontal scaling:
 
 ```ts
 // config/redis.ts
-import { defineRedisConfig, env } from '@holo-js/config'
+import { env } from '@holo-js/config'
+import { defineRedisConfig } from '@holo-js/kernel'
 
 export default defineRedisConfig({
   default: 'cache',
@@ -84,8 +85,8 @@ export default defineRedisConfig({
 
 ```ts
 // config/cache.ts
-import { defineCacheConfig, env } from '@holo-js/config'
-
+import { defineCacheConfig } from '@holo-js/cache'
+import { env } from '@holo-js/config'
 export default defineCacheConfig({
   default: 'redis',
   prefix: env('CACHE_PREFIX', ''),
@@ -118,8 +119,8 @@ Redis install requirements:
 Use `database` when you want a shared cache without Redis and you are comfortable storing cache data in SQL:
 
 ```ts
-import { defineCacheConfig, env } from '@holo-js/config'
-
+import { defineCacheConfig } from '@holo-js/cache'
+import { env } from '@holo-js/config'
 export default defineCacheConfig({
   default: 'database',
   prefix: env('CACHE_PREFIX', ''),
@@ -148,8 +149,8 @@ credentials inside `config/cache.ts`.
 Per-driver prefixes let you isolate key spaces:
 
 ```ts
-import { defineCacheConfig, env } from '@holo-js/config'
-
+import { defineCacheConfig } from '@holo-js/cache'
+import { env } from '@holo-js/config'
 export default defineCacheConfig({
   default: 'redis',
   prefix: env('CACHE_PREFIX', 'app:'),

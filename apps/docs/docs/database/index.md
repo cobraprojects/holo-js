@@ -19,8 +19,8 @@ Most applications follow this path:
 Put database setup in `config/database.ts`.
 
 ```ts
-import { defineDatabaseConfig, env } from '@holo-js/config'
-
+import { defineDatabaseConfig } from '@holo-js/db'
+import { env } from '@holo-js/config'
 export default defineDatabaseConfig({
   defaultConnection: 'main',
   connections: {
@@ -38,6 +38,24 @@ export default defineDatabaseConfig({
 
 Use SQLite for local development or switch to MySQL and Postgres by changing the named connection
 definitions.
+
+Install every concrete driver referenced by the configuration:
+
+```bash
+bun add @holo-js/db-sqlite
+# or: bun add @holo-js/db-postgres
+# or: bun add @holo-js/db-mysql
+```
+
+When constructing an adapter directly, import it from its concrete package:
+
+```ts
+import { createPostgresAdapter } from '@holo-js/db-postgres'
+
+const adapter = createPostgresAdapter({
+  connectionString: process.env.DATABASE_URL,
+})
+```
 
 The same application-level query and model code should stay stable while the configured database driver
 changes underneath it.

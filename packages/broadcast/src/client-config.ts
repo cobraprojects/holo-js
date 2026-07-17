@@ -1,4 +1,4 @@
-import type { LoadedHoloConfig } from '@holo-js/config'
+import type { NormalizedHoloBroadcastConfig } from './config'
 
 export type BroadcastClientConfig = {
   readonly key: string
@@ -9,7 +9,7 @@ export type BroadcastClientConfig = {
   readonly authEndpoint?: string
 }
 
-function resolveDefaultHoloConnection(config: LoadedHoloConfig['broadcast']) {
+function resolveDefaultHoloConnection(config: NormalizedHoloBroadcastConfig) {
   const connection = config.connections[config.default]
   if (!connection || connection.driver !== 'holo' || !('key' in connection) || !('options' in connection)) {
     throw new Error('[@holo-js/broadcast] Broadcast client config requires the default broadcast connection to use the "holo" driver.')
@@ -32,7 +32,7 @@ function resolveAuthEndpointPath(authEndpoint: string): string {
   }
 }
 
-export function resolveBroadcastClientConfig(config: LoadedHoloConfig['broadcast']): BroadcastClientConfig {
+export function resolveBroadcastClientConfig(config: NormalizedHoloBroadcastConfig): BroadcastClientConfig {
   const connection = resolveDefaultHoloConnection(config)
   const publicHost = config.worker.publicHost ?? connection.options.host
   const publicPort = config.worker.publicHost
@@ -51,7 +51,7 @@ export function resolveBroadcastClientConfig(config: LoadedHoloConfig['broadcast
   })
 }
 
-export function renderBroadcastClientConfigResponse(config: LoadedHoloConfig['broadcast']): Response {
+export function renderBroadcastClientConfigResponse(config: NormalizedHoloBroadcastConfig): Response {
   return Response.json(resolveBroadcastClientConfig(config), {
     headers: {
       'cache-control': 'no-store',

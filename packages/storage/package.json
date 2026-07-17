@@ -10,15 +10,15 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.mjs",
+      "default": "./dist/config.mjs"
+    },
     "./runtime": {
       "types": "./dist/runtime/composables/index.d.ts",
       "import": "./dist/runtime/composables/index.mjs",
       "default": "./dist/runtime/composables/index.mjs"
-    },
-    "./runtime/drivers/s3": {
-      "types": "./dist/runtime/drivers/s3.d.ts",
-      "import": "./dist/runtime/drivers/s3.mjs",
-      "default": "./dist/runtime/drivers/s3.mjs"
     }
   },
   "main": "./dist/index.mjs",
@@ -35,16 +35,7 @@
   "dependencies": {
     "@holo-js/config": "catalog:"
   },
-  "peerDependencies": {
-    "@holo-js/storage-s3": "catalog:"
-  },
-  "peerDependenciesMeta": {
-    "@holo-js/storage-s3": {
-      "optional": true
-    }
-  },
   "devDependencies": {
-    "@holo-js/storage-s3": "catalog:",
     "@types/node": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:",

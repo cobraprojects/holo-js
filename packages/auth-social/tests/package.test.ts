@@ -443,64 +443,47 @@ describe('@holo-js/auth-social', () => {
     })
   })
 
-  it('allows relative event URLs in development but requires forwarded headers in production', async () => {
+  it('only trusts forwarded event origins when proxy trust is enabled', async () => {
     configureRuntime()
-    const previousNodeEnv = process.env.NODE_ENV
+    const previousTrustProxy = process.env.HOLO_SECURITY_TRUST_PROXY
 
     try {
-      delete process.env.NODE_ENV
-      const developmentResponse = await redirect('google', {
-        method: 'GET',
-        node: {
-          req: {
-            url: '/auth/google',
-            headers: {},
-          },
-        },
-      })
-      expect(developmentResponse.status).toBe(302)
-
-      process.env.NODE_ENV = 'production'
-      await expect(redirect('google', {
-        method: 'GET',
-        node: {
-          req: {
-            url: '/auth/google',
-            headers: {},
-          },
-        },
-      })).rejects.toThrow('Relative request URLs require x-forwarded-proto and x-forwarded-host headers in production')
-
-      await expect(redirect('google', {
+      delete process.env.HOLO_SECURITY_TRUST_PROXY
+      const directResponse = await redirect('google', {
         method: 'GET',
         node: {
           req: {
             url: '/auth/google',
             headers: {
+              host: 'app.test',
+              'x-forwarded-host': 'attacker.test',
               'x-forwarded-proto': 'https',
             },
           },
         },
-      })).rejects.toThrow('Relative request URLs require x-forwarded-proto and x-forwarded-host headers in production')
+      })
+      expect(directResponse.headers.get('set-cookie')).not.toContain('Secure')
 
-      const productionResponse = await redirect('google', {
+      process.env.HOLO_SECURITY_TRUST_PROXY = 'true'
+      const proxiedResponse = await redirect('google', {
         method: 'GET',
         node: {
           req: {
             url: '/auth/google',
             headers: {
+              host: 'internal.test',
               'x-forwarded-host': 'app.test',
               'x-forwarded-proto': 'https',
             },
           },
         },
       })
-      expect(productionResponse.status).toBe(302)
+      expect(proxiedResponse.headers.get('set-cookie')).toContain('Secure')
     } finally {
-      if (typeof previousNodeEnv === 'string') {
-        process.env.NODE_ENV = previousNodeEnv
+      if (typeof previousTrustProxy === 'string') {
+        process.env.HOLO_SECURITY_TRUST_PROXY = previousTrustProxy
       } else {
-        delete process.env.NODE_ENV
+        delete process.env.HOLO_SECURITY_TRUST_PROXY
       }
     }
   })
@@ -1199,5 +1182,168 @@ describe('@holo-js/auth-social', () => {
     }, {
       trustEmail: false,
     })).toBe('provider-2@google.social.local')
+  })
+
+  it('covers OAuth helper normalization and malformed callback inputs', async () => {
+    expect(socialAuthInternals.decryptTokens('plain', 'key')).toBe('plain')
+    expect(() => socialAuthInternals.encryptTokens({ accessToken: 'token' }, '')).toThrow('encryptionKey is required')
+
+    const encrypted = socialAuthInternals.encryptTokens({ accessToken: 'token' }, 'key')
+    expect(socialAuthInternals.decryptTokens(encrypted, 'key')).toEqual({ accessToken: 'token' })
+    await expect(socialAuthInternals.readJsonResponse(new Response(null, { status: 204 }))).resolves.toEqual({})
+    await expect(socialAuthInternals.readJsonResponse(new Response('{"ok":true}'))).resolves.toEqual({ ok: true })
+
+    const context = {
+      code: 'code',
+      codeVerifier: 'verifier',
+      config: {
+        clientId: 'client',
+        clientSecret: 'secret',
+        redirectUri: 'https://app.test/callback',
+      },
+    } as never
+    expect(socialAuthInternals.createAuthorizationCodeTokenBody(context).toString()).toContain('grant_type=authorization_code')
+    expect(socialAuthInternals.createAuthorizationCodeTokenBody(context, {
+      includeCodeVerifier: false,
+      includeGrantType: false,
+    }).toString()).not.toContain('grant_type')
+    expect(socialAuthInternals.createAuthorizationCodeTokenBody({
+      code: 'code',
+      codeVerifier: 'verifier',
+      config: {},
+    } as never).toString()).toContain('client_id=')
+
+    expect(socialAuthInternals.normalizeOAuthTokens({
+      access_token: 'access',
+      expires_in: '60',
+      refresh_token: 'refresh',
+      token_type: 'Bearer',
+      scope: 'openid',
+    })).toMatchObject({
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      tokenType: 'Bearer',
+      scope: 'openid',
+      expiresAt: expect.any(Date),
+    })
+    expect(socialAuthInternals.normalizeOAuthTokens({
+      access_token: 'numeric',
+      expires_in: 30,
+    })).toMatchObject({ expiresAt: expect.any(Date), refreshToken: undefined })
+    expect(socialAuthInternals.normalizeOAuthTokens({
+      access_token: null,
+      expires_in: {},
+    }, {
+      includeRefreshToken: false,
+      includeTokenType: false,
+      includeScope: false,
+      extra: { idToken: 'id-token' },
+    })).toEqual({
+      accessToken: '',
+      expiresAt: undefined,
+      idToken: 'id-token',
+    })
+
+    await expect(callback('google', new Request('https://app.test/callback'))).resolves.toMatchObject({ status: 400 })
+    await expect(callback('google', new Request('https://app.test/callback', {
+      method: 'POST',
+      headers: { 'content-type': 'multipart/form-data' },
+      body: 'malformed',
+    }))).resolves.toMatchObject({ status: 400 })
+    await expect(callback('google', new Request('https://app.test/callback?state=query-state', {
+      method: 'POST',
+      body: new URLSearchParams({ code: '' }),
+    }))).resolves.toMatchObject({ status: 400 })
+
+    resetSocialAuthRuntime()
+    expect(() => socialAuthInternals.getBindings()).toThrow('not configured yet')
+  })
+
+  it('rejects missing browser bindings and malformed state cookies', async () => {
+    const runtime = configureRuntime()
+    await runtime.stateStore.create({
+      provider: 'google',
+      state: 'missing-binding',
+      codeVerifier: 'verifier',
+      guard: 'web',
+      createdAt: new Date(),
+    })
+    await expect(callback('google', new Request(
+      'https://app.test/callback?state=missing-binding&code=code',
+    ))).resolves.toMatchObject({ status: 400 })
+
+    await runtime.stateStore.create({
+      provider: 'google',
+      state: 'malformed-cookie',
+      codeVerifier: 'verifier',
+      guard: 'web',
+      browserBinding: 'binding',
+      createdAt: new Date(),
+    })
+    for (const cookie of [
+      'lonely; other=1',
+      'holo_oauth_state_google=malformed',
+    ]) {
+      await expect(callback('google', new Request(
+        'https://app.test/callback?state=malformed-cookie&code=code',
+        { headers: { cookie } },
+      ))).resolves.toMatchObject({ status: 400 })
+    }
+  })
+
+  it('validates local users, ids, guards, and provider adapters at social boundaries', async () => {
+    let runtime = configureRuntime()
+    runtime.usersProvider.findByCredentials = async () => 'invalid' as never
+    await expect(socialAuthInternals.resolveLinkedUser('google', {
+      id: 'primitive-user',
+      email: 'primitive@example.com',
+      emailVerified: true,
+    }, { accessToken: 'token' })).rejects.toThrow('lookups must return object users')
+
+    runtime = configureRuntime()
+    runtime.usersProvider.create = async () => null as never
+    await expect(socialAuthInternals.resolveLinkedUser('google', {
+      id: 'null-user',
+      email: 'null@example.com',
+      emailVerified: true,
+    }, { accessToken: 'token' })).rejects.toThrow('create() must return an object user')
+
+    for (const [providerUserId, userId, succeeds] of [
+      ['empty-id', ' ', false],
+      ['string-id', ' local-user ', true],
+      ['invalid-id', {}, false],
+    ] as const) {
+      runtime = configureRuntime()
+      runtime.usersProvider.getId = () => userId as never
+      if (succeeds) runtime.usersProvider.serialize = undefined as never
+      const result = socialAuthInternals.resolveLinkedUser('google', {
+        id: providerUserId,
+        email: `${providerUserId}@example.com`,
+        emailVerified: true,
+      }, { accessToken: 'token' })
+      if (succeeds) {
+        await expect(result).resolves.toMatchObject({ user: { id: 'local-user' } })
+      } else {
+        await expect(result).rejects.toThrow('must resolve to a non-empty string or numeric id')
+      }
+    }
+
+    configureAuthRuntime({
+      config: defineAuthConfig({
+        defaults: { guard: 'web', passwords: 'users' },
+        guards: { web: { driver: 'session', provider: 'users' } },
+        providers: { users: { model: 'User' } },
+        social: { google: {} },
+      }),
+      session: getSessionRuntime(),
+      providers: {},
+      tokens: new InMemoryTokenStore(),
+      context: runtime.context,
+    })
+    await expect(socialAuthInternals.resolveLinkedUser('google', {
+      id: 'missing-provider',
+      email: 'provider@example.com',
+      emailVerified: true,
+    }, { accessToken: 'token' })).rejects.toThrow('Auth provider runtime "users" is not configured')
   })
 })

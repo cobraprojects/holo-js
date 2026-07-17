@@ -1,40 +1,20 @@
-import type { DEFAULT_HOLO_PROJECT_PATHS } from '@holo-js/db'
+import type { DEFAULT_HOLO_PROJECT_PATHS } from '@holo-js/kernel'
 import type {
   HoloAppEnv,
-  HoloMediaConfig,
-  NormalizedHoloAppConfig,
-  NormalizedHoloAuthConfig,
-  NormalizedHoloBroadcastConfig,
-  NormalizedHoloCacheConfig,
-  NormalizedHoloCorsConfig,
-  NormalizedHoloDatabaseConfig,
-  NormalizedHoloMailConfig,
-  NormalizedHoloNotificationsConfig,
-  NormalizedHoloQueueConfig,
-  NormalizedHoloRedisConfig,
-  NormalizedHoloSecurityConfig,
-  NormalizedHoloSessionConfig,
-  NormalizedHoloStorageConfig,
 } from './types'
-
-export interface HoloConfigRegistry {
-  app: NormalizedHoloAppConfig
-  database: NormalizedHoloDatabaseConfig
-  redis: NormalizedHoloRedisConfig
-  cache: NormalizedHoloCacheConfig
-  cors: NormalizedHoloCorsConfig
-  storage: NormalizedHoloStorageConfig
-  queue: NormalizedHoloQueueConfig
-  broadcast: NormalizedHoloBroadcastConfig
-  mail: NormalizedHoloMailConfig
-  notifications: NormalizedHoloNotificationsConfig
-  media: HoloMediaConfig
-  session: NormalizedHoloSessionConfig
-  security: NormalizedHoloSecurityConfig
-  auth: NormalizedHoloAuthConfig
-}
+import type { HoloConfigRegistry } from './index'
 
 export type HoloConfigMap = object
+
+type HoloConfigMetadataKey = 'all' | 'custom' | 'environment' | 'loadedFiles' | 'warnings'
+type HoloCustomConfig<TCustom extends HoloConfigMap> = Omit<
+  TCustom,
+  HoloConfigMetadataKey
+>
+
+export type HoloConfigValues<TCustom extends HoloConfigMap = HoloConfigMap> = Readonly<
+  HoloConfigRegistry & HoloCustomConfig<TCustom>
+>
 
 export interface LoadedEnvironment {
   readonly name: HoloAppEnv
@@ -43,23 +23,12 @@ export interface LoadedEnvironment {
   readonly warnings: readonly string[]
 }
 
-export interface LoadedHoloConfig<TCustom extends HoloConfigMap = HoloConfigMap> {
-  readonly app: NormalizedHoloAppConfig
-  readonly database: NormalizedHoloDatabaseConfig
-  readonly redis: NormalizedHoloRedisConfig
-  readonly cache: NormalizedHoloCacheConfig
-  readonly cors: NormalizedHoloCorsConfig
-  readonly storage: NormalizedHoloStorageConfig
-  readonly queue: NormalizedHoloQueueConfig
-  readonly broadcast: NormalizedHoloBroadcastConfig
-  readonly notifications: NormalizedHoloNotificationsConfig
-  readonly mail: NormalizedHoloMailConfig
-  readonly media: HoloMediaConfig
-  readonly session: NormalizedHoloSessionConfig
-  readonly security: NormalizedHoloSecurityConfig
-  readonly auth: NormalizedHoloAuthConfig
+export type LoadedHoloConfig<TCustom extends HoloConfigMap = HoloConfigMap> = Omit<
+  HoloConfigValues<TCustom>,
+  HoloConfigMetadataKey
+> & {
   readonly custom: Readonly<TCustom>
-  readonly all: Readonly<HoloConfigRegistry & TCustom>
+  readonly all: HoloConfigValues<TCustom>
   readonly environment: LoadedEnvironment
   readonly loadedFiles: readonly string[]
   readonly warnings: readonly string[]

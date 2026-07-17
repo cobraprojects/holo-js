@@ -1,7 +1,8 @@
 import { readdir } from 'node:fs/promises'
 import { basename, dirname, extname, join, relative, resolve } from 'node:path'
 import type { loadConfigDirectory } from '@holo-js/config'
-import type { MigrationDefinition, NormalizedHoloProjectConfig, SeederDefinition } from '@holo-js/db'
+import type { MigrationDefinition, SeederDefinition } from '@holo-js/db'
+import type { NormalizedHoloProjectConfig } from '@holo-js/kernel'
 import type { HoloAppCommand } from '../types'
 import { importProjectModule, readTextFile } from './runtime'
 import {

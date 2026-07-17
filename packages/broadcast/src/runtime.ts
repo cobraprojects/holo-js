@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { holoBroadcastDefaults } from '@holo-js/config'
+import { holoBroadcastDefaults } from './config'
 import {
   type BroadcastDefinition,
   type BroadcastDefinitionInput,
@@ -27,6 +27,7 @@ const HOLO_BROADCAST_DELIVER_JOB = 'holo.broadcast.deliver'
 type RuntimeState = {
   bindings?: BroadcastRuntimeBindings
   projectRoot?: string
+  pluginNames?: readonly string[]
   loadQueueModule?: () => Promise<QueueModule>
   loadDbModule?: () => Promise<DbModule | null>
   queueJobRegistration?: Promise<QueueModule>
@@ -34,6 +35,7 @@ type RuntimeState = {
 
 type RuntimeBindingsWithProjectRoot = BroadcastRuntimeBindings & {
   readonly projectRoot?: string
+  readonly plugins?: readonly string[]
 }
 
 type MutableDispatchOptions = {
@@ -648,15 +650,19 @@ export function configureBroadcastRuntime(bindings?: BroadcastRuntimeBindings): 
   if (!bindings) {
     state.bindings = undefined
     state.projectRoot = undefined
+    state.pluginNames = undefined
     return
   }
 
-  const { projectRoot, ...runtimeBindings } = bindings as RuntimeBindingsWithProjectRoot
+  const { projectRoot, plugins, ...runtimeBindings } = bindings as RuntimeBindingsWithProjectRoot
   state.bindings = runtimeBindings
   const normalizedProjectRoot = typeof projectRoot === 'string' ? projectRoot.trim() : ''
   state.projectRoot = normalizedProjectRoot
     ? normalizedProjectRoot
     : undefined
+  state.pluginNames = Object.freeze([...new Set((plugins ?? [])
+    .map(plugin => plugin.trim())
+    .filter(plugin => plugin.length > 0))])
 }
 
 export function getBroadcastRuntimeBindings(): BroadcastRuntimeBindings {
@@ -667,6 +673,7 @@ export function resetBroadcastRuntime(): void {
   const state = getRuntimeState()
   state.bindings = undefined
   state.projectRoot = undefined
+  state.pluginNames = undefined
   state.loadQueueModule = undefined
   state.loadDbModule = undefined
   state.queueJobRegistration = undefined
@@ -688,7 +695,8 @@ async function resolveDriverWithPluginFallback(connectionName: string): Promise<
     }
   }
 
-  await loadBroadcastPluginDrivers(getRuntimeState().projectRoot)
+  const state = getRuntimeState()
+  await loadBroadcastPluginDrivers(state.projectRoot, state.pluginNames)
   return resolveDriver(connectionName)
 }
 

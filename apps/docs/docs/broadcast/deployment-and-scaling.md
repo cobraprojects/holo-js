@@ -67,7 +67,8 @@ BROADCAST_REDIS_CONNECTION=default
 Example `config/redis.ts`:
 
 ```ts
-import { defineRedisConfig, env } from '@holo-js/config'
+import { env } from '@holo-js/config'
+import { defineRedisConfig } from '@holo-js/kernel'
 
 export default defineRedisConfig({
   default: 'default',
@@ -86,8 +87,8 @@ export default defineRedisConfig({
 Example `config/broadcast.ts`:
 
 ```ts
-import { defineBroadcastConfig, env } from '@holo-js/config'
-
+import { defineBroadcastConfig } from '@holo-js/broadcast'
+import { env } from '@holo-js/config'
 export default defineBroadcastConfig({
   default: env('BROADCAST_CONNECTION', 'reverb'),
   connections: {

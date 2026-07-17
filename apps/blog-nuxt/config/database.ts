@@ -1,5 +1,5 @@
-import { defineDatabaseConfig, env } from '@holo-js/config'
-
+import { defineDatabaseConfig } from '@holo-js/db'
+import { env } from '@holo-js/config'
 export default defineDatabaseConfig({
   defaultConnection: 'main',
   connections: {

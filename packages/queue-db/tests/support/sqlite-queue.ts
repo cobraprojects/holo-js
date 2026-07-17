@@ -5,10 +5,12 @@ import {
   createConnectionManager,
   createDialect,
   createSchemaService,
+  registerDatabaseDriverFactory,
   resetDB,
   type ConnectionManager,
   type DatabaseContext,
 } from '@holo-js/db'
+import { sqliteDatabaseDriverFactory } from '@holo-js/db-sqlite'
 import {
   configureQueueRuntime,
   queueRuntimeInternals,
@@ -18,6 +20,8 @@ import {
 } from '@holo-js/queue'
 import { createQueueDbRuntimeOptions } from '../../src'
 import { quoteIdentifierPath } from '../../src/database'
+
+registerDatabaseDriverFactory(sqliteDatabaseDriverFactory)
 
 type SQLiteQueueHarnessOptions = {
   readonly createFailedTable?: boolean

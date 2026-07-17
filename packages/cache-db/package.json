@@ -24,7 +24,8 @@
   },
   "peerDependencies": {
     "@holo-js/cache": "catalog:",
-    "@holo-js/db": "catalog:"
+    "@holo-js/db": "catalog:",
+    "@holo-js/kernel": "catalog:"
   },
   "dependencies": {
     "tslib": "catalog:"
@@ -32,6 +33,8 @@
   "devDependencies": {
     "@holo-js/cache": "catalog:",
     "@holo-js/db": "catalog:",
+    "@holo-js/db-sqlite": "catalog:",
+    "@holo-js/kernel": "catalog:",
     "@types/node": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:",

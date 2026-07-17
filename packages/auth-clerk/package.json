@@ -25,7 +25,6 @@
   "dependencies": {
     "@clerk/backend": "catalog:",
     "@holo-js/auth": "catalog:",
-    "@holo-js/config": "catalog:",
     "@holo-js/session": "catalog:"
   },
   "devDependencies": {

@@ -68,8 +68,8 @@ Start with the auth and session config files:
 
 ```ts
 // config/auth.ts
-import { defineAuthConfig, env } from '@holo-js/config'
-
+import { defineAuthConfig } from '@holo-js/auth'
+import { env } from '@holo-js/config'
 export default defineAuthConfig({
   defaults: {
     guard: 'web',
@@ -109,8 +109,7 @@ export default defineAuthConfig({
 
 ```ts
 // config/session.ts
-import { defineSessionConfig } from '@holo-js/config'
-
+import { defineSessionConfig } from '@holo-js/session'
 export default defineSessionConfig({
   driver: 'database',
   cookie: {

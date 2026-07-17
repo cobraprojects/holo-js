@@ -17,6 +17,7 @@ async function createProject(): Promise<string> {
   await mkdir(join(root, 'config'), { recursive: true })
   await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
   await symlink(resolve(import.meta.dirname, '../../db'), join(root, 'node_modules/@holo-js/db'), 'dir')
+  await symlink(resolve(import.meta.dirname, '../../kernel'), join(root, 'node_modules/@holo-js/kernel'), 'dir')
   await writeFile(join(root, 'package.json'), JSON.stringify({
     name: 'fixture',
     private: true,

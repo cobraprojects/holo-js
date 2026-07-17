@@ -14,6 +14,7 @@ import {
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = resolve(packageDir, '../..')
 const configEntry = JSON.stringify(resolve(packageDir, '../config/src/index.ts'))
+const storageEntry = JSON.stringify(resolve(packageDir, '../storage/src/index.ts'))
 const nitropackPackageDir = resolve(repoRoot, 'node_modules/.bun/node_modules/nitropack')
 const tempDirs: string[] = []
 const tempBuildRoots: string[] = []
@@ -77,8 +78,17 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
     adapterBuildPromise = (async () => {
       const buildRoot = await createTempBuildRoot('adapter-nuxt')
       const dbPackageRoot = join(buildRoot, 'packages/db')
+      const kernelPackageRoot = join(buildRoot, 'packages/kernel')
+      const adapterSharedPackageRoot = join(buildRoot, 'packages/adapter-shared')
+      const authPackageRoot = join(buildRoot, 'packages/auth')
+      const cachePackageRoot = join(buildRoot, 'packages/cache')
       const configPackageRoot = join(buildRoot, 'packages/config')
       const corePackageRoot = join(buildRoot, 'packages/core')
+      const mailPackageRoot = join(buildRoot, 'packages/mail')
+      const mediaPackageRoot = join(buildRoot, 'packages/media')
+      const notificationsPackageRoot = join(buildRoot, 'packages/notifications')
+      const securityPackageRoot = join(buildRoot, 'packages/security')
+      const sessionPackageRoot = join(buildRoot, 'packages/session')
       const validationPackageRoot = join(buildRoot, 'packages/validation')
       const broadcastPackageRoot = join(buildRoot, 'packages/broadcast')
       const eventsPackageRoot = join(buildRoot, 'packages/events')
@@ -123,10 +133,41 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
         packageJsonPath: resolve(packageDir, '../broadcast/package.json'),
         extraDependencyNames: ['@types/ws'],
       })
+      await linkInstalledDependenciesForPackage({
+        repoRoot,
+        nodeModulesRoot: tempRootNodeModules,
+        packageJsonPath: resolve(packageDir, '../auth/package.json'),
+        extraDependencyNames: ['next', 'nuxt', 'react', 'svelte'],
+      })
+      const featureBuildDependencies: Readonly<Record<string, readonly string[]>> = {
+        cache: [],
+        mail: ['nodemailer'],
+        media: [],
+        notifications: [],
+        security: ['h3', 'ioredis', 'next'],
+        session: ['ioredis'],
+      }
+      for (const [packageName, extraDependencyNames] of Object.entries(featureBuildDependencies)) {
+        await linkInstalledDependenciesForPackage({
+          repoRoot,
+          nodeModulesRoot: tempRootNodeModules,
+          packageJsonPath: resolve(packageDir, `../${packageName}/package.json`),
+          extraDependencyNames,
+        })
+      }
 
       await provisionTempPackage(resolve(packageDir, '../db'), dbPackageRoot)
+      await provisionTempPackage(resolve(packageDir, '../kernel'), kernelPackageRoot)
+      await provisionTempPackage(resolve(packageDir, '../adapter-shared'), adapterSharedPackageRoot)
+      await provisionTempPackage(resolve(packageDir, '../auth'), authPackageRoot)
+      await provisionTempPackage(resolve(packageDir, '../cache'), cachePackageRoot)
       await provisionTempPackage(resolve(packageDir, '../config'), configPackageRoot)
       await provisionTempPackage(resolve(packageDir, '../core'), corePackageRoot)
+      await provisionTempPackage(resolve(packageDir, '../mail'), mailPackageRoot)
+      await provisionTempPackage(resolve(packageDir, '../media'), mediaPackageRoot)
+      await provisionTempPackage(resolve(packageDir, '../notifications'), notificationsPackageRoot)
+      await provisionTempPackage(resolve(packageDir, '../security'), securityPackageRoot)
+      await provisionTempPackage(resolve(packageDir, '../session'), sessionPackageRoot)
       await provisionTempPackage(resolve(packageDir, '../validation'), validationPackageRoot)
       await provisionTempPackage(resolve(packageDir, '../broadcast'), broadcastPackageRoot)
       await provisionTempPackage(resolve(packageDir, '../events'), eventsPackageRoot)
@@ -140,8 +181,17 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
 
       await mkdir(tempNodeModulesRoot, { recursive: true })
       await symlink(dbPackageRoot, join(tempNodeModulesRoot, 'db'))
+      await symlink(kernelPackageRoot, join(tempNodeModulesRoot, 'kernel'))
+      await symlink(adapterSharedPackageRoot, join(tempNodeModulesRoot, 'adapter-shared'))
+      await symlink(authPackageRoot, join(tempNodeModulesRoot, 'auth'))
+      await symlink(cachePackageRoot, join(tempNodeModulesRoot, 'cache'))
       await symlink(configPackageRoot, join(tempNodeModulesRoot, 'config'))
       await symlink(corePackageRoot, join(tempNodeModulesRoot, 'core'))
+      await symlink(mailPackageRoot, join(tempNodeModulesRoot, 'mail'))
+      await symlink(mediaPackageRoot, join(tempNodeModulesRoot, 'media'))
+      await symlink(notificationsPackageRoot, join(tempNodeModulesRoot, 'notifications'))
+      await symlink(securityPackageRoot, join(tempNodeModulesRoot, 'security'))
+      await symlink(sessionPackageRoot, join(tempNodeModulesRoot, 'session'))
       await symlink(validationPackageRoot, join(tempNodeModulesRoot, 'validation'))
       await symlink(broadcastPackageRoot, join(tempNodeModulesRoot, 'broadcast'))
       await symlink(eventsPackageRoot, join(tempNodeModulesRoot, 'events'))
@@ -149,12 +199,21 @@ async function runAdapterStub(): Promise<{ adapterOutDir: string }> {
       await symlink(queueDbPackageRoot, join(tempNodeModulesRoot, 'queue-db'))
       await symlink(storagePackageRoot, join(tempNodeModulesRoot, 'storage'))
 
+      await runPackageBuild(resolve(packageDir, '../kernel/node_modules/.bin/tsup'), [], kernelPackageRoot)
+      await runPackageBuild(resolve(packageDir, '../config/node_modules/.bin/tsup'), [], configPackageRoot)
+      await runPackageBuild(resolve(packageDir, '../adapter-shared/node_modules/.bin/tsup'), [], adapterSharedPackageRoot)
       await runPackageBuild(resolve(packageDir, '../db/node_modules/.bin/tsup'), [], dbPackageRoot)
       await runPackageBuild(resolve(packageDir, '../queue/node_modules/.bin/tsup'), [], queuePackageRoot)
       await runPackageBuild(resolve(packageDir, '../queue/node_modules/.bin/tsup'), [], queueDbPackageRoot)
-      await runPackageBuild(resolve(packageDir, '../config/node_modules/.bin/tsup'), [], configPackageRoot)
       await runPackageBuild(resolve(packageDir, '../validation/node_modules/.bin/tsup'), [], validationPackageRoot)
       await runPackageBuild(resolve(packageDir, '../storage/node_modules/.bin/tsup'), [], storagePackageRoot)
+      await runPackageBuild(resolve(packageDir, '../auth/node_modules/.bin/tsup'), [], authPackageRoot)
+      await runPackageBuild(resolve(packageDir, '../cache/node_modules/.bin/tsup'), [], cachePackageRoot)
+      await runPackageBuild(resolve(packageDir, '../mail/node_modules/.bin/tsup'), [], mailPackageRoot)
+      await runPackageBuild(resolve(packageDir, '../media/node_modules/.bin/tsup'), [], mediaPackageRoot)
+      await runPackageBuild(resolve(packageDir, '../notifications/node_modules/.bin/tsup'), [], notificationsPackageRoot)
+      await runPackageBuild(resolve(packageDir, '../security/node_modules/.bin/tsup'), [], securityPackageRoot)
+      await runPackageBuild(resolve(packageDir, '../session/node_modules/.bin/tsup'), [], sessionPackageRoot)
       await runPackageBuild(resolve(packageDir, '../broadcast/node_modules/.bin/tsup'), [], broadcastPackageRoot)
       await runPackageBuild(resolve(packageDir, '../events/node_modules/.bin/tsup'), [], eventsPackageRoot)
       await runPackageBuild(resolve(packageDir, '../core/node_modules/.bin/tsup'), [], corePackageRoot)
@@ -220,6 +279,7 @@ async function loadAdapterModule() {
   vi.resetModules()
 
   const addImports = vi.fn()
+  const addPlugin = vi.fn()
   const addServerImportsDir = vi.fn()
   const addServerHandler = vi.fn()
   const addServerPlugin = vi.fn()
@@ -230,6 +290,7 @@ async function loadAdapterModule() {
       resolve: (value: string) => value,
     }),
     addImports,
+    addPlugin,
     addServerImportsDir,
     addServerHandler,
     addServerPlugin,
@@ -241,6 +302,7 @@ async function loadAdapterModule() {
     module: mod.default,
     moduleInternals: mod.moduleInternals,
     addImports,
+    addPlugin,
     addServerImportsDir,
     addServerHandler,
     addServerPlugin,
@@ -459,7 +521,8 @@ describe('@holo-js/adapter-nuxt module setup', () => {
     const root = await createProject()
     await writeFile(join(root, '.env'), 'STORAGE_DEFAULT_DISK=media\n', 'utf8')
     await writeFile(join(root, 'config/storage.ts'), `
-import { defineStorageConfig, env } from ${configEntry}
+import { env } from ${configEntry}
+import { defineStorageConfig } from ${storageEntry}
 
 export default defineStorageConfig({
   defaultDisk: env('STORAGE_DEFAULT_DISK', 'public'),
@@ -583,10 +646,35 @@ export default defineStorageConfig({
     })
   }, 30000)
 
+  it('registers realtime client transforms once and extends only client Vite configs', async () => {
+    const root = await createProject()
+    await linkHoloPackage(root, 'realtime')
+    const { module, addPlugin } = await loadAdapterModule()
+    const nuxt = createNuxtHarness(root)
+
+    await module.setup({}, nuxt as never)
+    expect(nuxt.options.vite?.plugins).toHaveLength(1)
+    expect(addPlugin).toHaveBeenCalledWith({ src: './runtime/plugins/realtime', mode: 'all' })
+
+    const extend = nuxt.hook.mock.calls.find(([name]) => name === 'vite:extendConfig')?.[1] as (
+      config: { plugins?: unknown[] },
+      context: { isServer: boolean },
+    ) => void
+    const serverConfig: { plugins?: unknown[] } = {}
+    extend(serverConfig, { isServer: true })
+    expect(serverConfig.plugins).toBeUndefined()
+    const clientConfig: { plugins?: unknown[] } = {}
+    extend(clientConfig, { isServer: false })
+    expect(clientConfig.plugins).toHaveLength(1)
+
+    await module.setup({}, nuxt as never)
+    expect(addPlugin).toHaveBeenCalledTimes(1)
+  }, 30000)
+
   it('preserves existing holo nitro storage entries until finalize and skips the public handler when no public local disk exists', async () => {
     const root = await createProject()
     await writeFile(join(root, 'config/storage.ts'), `
-import { defineStorageConfig } from ${configEntry}
+import { defineStorageConfig } from ${storageEntry}
 
 export default defineStorageConfig({
   defaultDisk: 'media',
@@ -661,7 +749,7 @@ export default defineStorageConfig({
   it('initializes nitro storage containers when nitro exists without a storage map', async () => {
     const root = await createProject()
     await writeFile(join(root, 'config/storage.ts'), `
-import { defineStorageConfig } from ${configEntry}
+import { defineStorageConfig } from ${storageEntry}
 
 export default defineStorageConfig({
   disks: {

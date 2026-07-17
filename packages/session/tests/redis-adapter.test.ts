@@ -132,6 +132,24 @@ describe('session redis adapter', () => {
     redisMock.storedValues.clear()
   })
 
+  it('uses the system clock when no clock override is provided', async () => {
+    const adapter = createSessionRedisAdapter({
+      name: 'default',
+      driver: 'redis',
+      connection: 'default',
+      host: '127.0.0.1',
+      port: 6379,
+      db: 0,
+      prefix: '',
+    })
+    const now = new Date()
+    await adapter.set(Object.freeze({
+      ...createRecord(),
+      expiresAt: new Date(now.getTime() + 60_000),
+    }))
+    expect(redisMock.calls.set[0]?.[3]).toBeGreaterThan(0)
+  })
+
   it('serializes round trips and applies the configured prefix', async () => {
     const adapter = createSessionRedisAdapter({
       name: 'cache',

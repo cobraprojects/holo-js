@@ -10,6 +10,11 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.mjs",
+      "default": "./dist/config.mjs"
+    },
     "./drivers/redis-adapter": {
       "types": "./dist/drivers/redis-adapter.d.ts",
       "import": "./dist/drivers/redis-adapter.mjs",
@@ -28,7 +33,8 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "catalog:"
+    "@holo-js/config": "catalog:",
+    "@holo-js/kernel": "catalog:"
   },
   "peerDependencies": {
     "ioredis": "catalog:"

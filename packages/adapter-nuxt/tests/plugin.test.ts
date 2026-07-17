@@ -76,7 +76,7 @@ describe('storage runtime plugin', () => {
 
   it('re-exports the shared s3 runtime driver', async () => {
     const { default: adapterDriver } = await import('../src/runtime/drivers/s3')
-    const { default: storageDriver } = await import('@holo-js/storage/runtime/drivers/s3')
+    const { default: storageDriver } = await import('@holo-js/storage-s3')
 
     expect(adapterDriver).toBe(storageDriver)
   })

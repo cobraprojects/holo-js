@@ -162,3 +162,7 @@ export function applyFormFailureRedirect(
   setHeader(event, response, 'content-type', 'text/html; charset=utf-8')
   appendSetCookie(event, response, serializeFormFailureCookie(failure))
 }
+
+export const formFailureInternals = {
+  appendSetCookie,
+}

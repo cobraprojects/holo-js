@@ -4,17 +4,75 @@
     "outDir": "dist",
     "baseUrl": ".",
     "paths": {
-      "@holo-js/config": ["../config/src/index.ts"],
-      "@holo-js/core": ["../core/src/index.ts"],
-      "@holo-js/core/errors": ["../core/src/errors.ts"],
-      "@holo-js/forms": ["../forms/src/index.ts"],
-      "@holo-js/forms/internal/client": ["../forms/src/internal/client.ts"],
-      "@holo-js/realtime": ["../realtime/src/index.ts"],
-      "@holo-js/realtime/client": ["../realtime/src/client.ts"],
-      "@holo-js/security": ["../security/src/index.ts"],
-      "@holo-js/security/client": ["../security/src/client.ts"],
-      "@holo-js/session": ["../session/src/index.ts"],
-      "@holo-js/validation": ["../validation/src/index.ts"]
+      "@holo-js/config": [
+        "../config/src/index.ts"
+      ],
+      "@holo-js/core": [
+        "../core/src/index.ts"
+      ],
+      "@holo-js/core/errors": [
+        "../core/src/errors.ts"
+      ],
+      "@holo-js/forms": [
+        "../forms/src/index.ts"
+      ],
+      "@holo-js/forms/internal/client": [
+        "../forms/src/internal/client.ts"
+      ],
+      "@holo-js/realtime": [
+        "../realtime/src/index.ts"
+      ],
+      "@holo-js/realtime/client": [
+        "../realtime/src/client.ts"
+      ],
+      "@holo-js/security": [
+        "../security/src/index.ts"
+      ],
+      "@holo-js/security/client": [
+        "../security/src/client.ts"
+      ],
+      "@holo-js/session": [
+        "../session/src/index.ts"
+      ],
+      "@holo-js/validation": [
+        "../validation/src/index.ts"
+      ],
+      "@holo-js/kernel": [
+        "../kernel/src/index.ts"
+      ],
+      "@holo-js/adapter-shared": [
+        "../adapter-shared/src/index.ts"
+      ],
+      "@holo-js/notifications": [
+        "../notifications/src/index.ts"
+      ],
+      "@holo-js/db": [
+        "../db/src/index.ts"
+      ],
+      "@holo-js/storage": [
+        "../storage/src/index.ts"
+      ],
+      "@holo-js/queue": [
+        "../queue/src/index.ts"
+      ],
+      "@holo-js/cache": [
+        "../cache/src/index.ts"
+      ],
+      "@holo-js/auth": [
+        "../auth/src/index.ts"
+      ],
+      "@holo-js/broadcast": [
+        "../broadcast/src/index.ts"
+      ],
+      "@holo-js/mail": [
+        "../mail/src/index.ts"
+      ],
+      "@holo-js/media": [
+        "../media/src/index.ts"
+      ],
+      "@holo-js/media/config": [
+        "../media/src/projectConfig.ts"
+      ]
     }
   },
   "include": [

@@ -28,7 +28,6 @@ import {
   type InferUpdate,
   type MorphedByManyRelationDefinition,
   type MorphManyRelationDefinition,
-  type MySQLAdapterOptions,
   type ModelCollection,
   type ModelQueryBuilder,
   type ModelReference,
@@ -37,10 +36,11 @@ import {
   type MorphToManyRelationDefinition,
   type MorphToRelationDefinition,
   type PaginatedResult,
-  type PostgresAdapterOptions,
   type RelationMap,
   type SimplePaginatedResult } from '../src'
 import type { AnyModelDefinition, BelongsToRelationDefinition, ModelRelationPath } from '../src/model/types'
+import type { MySQLAdapterOptions } from '@holo-js/db-mysql'
+import type { PostgresAdapterOptions } from '@holo-js/db-postgres'
 import { defineModelFromTable, defineTable } from './support/internal'
 
 type IsEqual<A, B>

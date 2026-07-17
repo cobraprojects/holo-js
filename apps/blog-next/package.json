@@ -4,16 +4,15 @@
   "type": "module",
   "packageManager": "bun@1.3.9",
   "scripts": {
-    "prepare": "holo prepare",
+    "prepare": "holo key:generate && holo prepare",
     "dev": "holo dev",
     "build": "holo build",
-    "lint": "npx eslint app config lib server tests next.config.ts vitest.config.ts --fix --no-warn-ignored",
-    "typecheck": "npx tsc -p tsconfig.json --noEmit",
+    "start": "holo start",
+    "lint": "eslint app config lib server tests next.config.ts vitest.config.ts --fix --no-warn-ignored --no-error-on-unmatched-pattern",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "config:cache": "holo config:cache",
     "config:clear": "holo config:clear",
-    "test": "node ./tests/run.mjs",
-    "holo:dev": "node ./.holo-js/framework/run.mjs dev",
-    "holo:build": "node ./.holo-js/framework/run.mjs build"
+    "test": "node ./tests/run.mjs"
   },
   "dependencies": {
     "@holo-js/adapter-next": "workspace:*",
@@ -36,6 +35,7 @@
     "@holo-js/flux": "workspace:*",
     "@holo-js/flux-react": "workspace:*",
     "@holo-js/forms": "workspace:*",
+    "@holo-js/kernel": "workspace:*",
     "@holo-js/mail": "workspace:*",
     "@holo-js/notifications": "workspace:*",
     "@holo-js/queue": "workspace:*",
@@ -51,10 +51,14 @@
     "react-dom": "catalog:"
   },
   "devDependencies": {
+    "@eslint/js": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
+    "eslint": "catalog:",
+    "globals": "catalog:",
     "react-test-renderer": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:"
   }
 }

@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as configModule from '@holo-js/config'
-import { normalizeHoloProjectConfig, renderGeneratedSchemaPlaceholder } from '@holo-js/db'
+import { renderGeneratedSchemaPlaceholder } from '@holo-js/db'
+import { normalizeHoloProjectConfig } from '@holo-js/kernel'
 import { authorizationInternals } from '../../authorization/src/index'
 import { prepareProjectDiscovery } from '../src/project/discovery'
 import { loadGeneratedProjectRegistry, renderGeneratedAuthTypes, renderGeneratedAuthorizationRegistry, renderGeneratedAuthorizationTypes, writeGeneratedProjectRegistry } from '../src/project/registry'
@@ -34,7 +35,7 @@ async function createProject(withAuthorizationFiles = false): Promise<string> {
   await writeFile(join(root, 'config/database.ts'), 'export default {}', 'utf8')
   await writeFile(join(root, '.holo-js/generated/schema.generated.ts'), renderGeneratedSchemaPlaceholder(), 'utf8')
   await writeFile(join(root, 'config/auth.ts'), `
-import { defineAuthConfig } from '@holo-js/config'
+import { defineAuthConfig } from '@holo-js/auth'
 
 export default defineAuthConfig({
   defaults: {
@@ -172,7 +173,7 @@ describe('@holo-js/cli authorization registry discovery', () => {
   it('emits auth guard registry types from auth config', async () => {
     const root = await createProject()
     await writeFile(join(root, 'config/auth.ts'), `
-import { defineAuthConfig } from '@holo-js/config'
+import { defineAuthConfig } from '@holo-js/auth'
 
 export default defineAuthConfig({
   defaults: {

@@ -1,4 +1,4 @@
-import type { SupportedDatabaseDriver } from '@holo-js/config'
+import type { SupportedDatabaseDriver } from '@holo-js/db'
 import {
   createMigrationFileName,
 } from '@holo-js/db'
@@ -434,7 +434,8 @@ export function renderScaffoldDatabaseConfig(
 
   if (options.databaseDriver === 'sqlite') {
     return [
-      'import { defineDatabaseConfig, env } from \'@holo-js/config\'',
+      'import { defineDatabaseConfig } from \'@holo-js/db\'',
+      'import { env } from \'@holo-js/config\'',
       '',
       'export default defineDatabaseConfig({',
       '  defaultConnection: \'main\',',
@@ -456,7 +457,8 @@ export function renderScaffoldDatabaseConfig(
     : undefined
 
   return [
-    'import { defineDatabaseConfig, env } from \'@holo-js/config\'',
+    'import { defineDatabaseConfig } from \'@holo-js/db\'',
+    'import { env } from \'@holo-js/config\'',
     '',
     'export default defineDatabaseConfig({',
     '  defaultConnection: \'main\',',

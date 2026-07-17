@@ -19,7 +19,15 @@ import {
   type DriverQueryResult,
   type SelectQueryPlan,
 } from '../src'
-import { inferDatabaseQueryObservationDependencies, invalidateQueryCacheDependencies } from '../src/cache'
+import {
+  createDatabaseQueryFallbackObservation,
+  inferDatabaseQueryObservationDependencies,
+  invalidateQueryCacheDependencies,
+  readDatabaseQueryObservationCount,
+  rebindDatabaseQueryObservationCursorPagination,
+  rebindDatabaseQueryObservationPagination,
+  truncateDatabaseQueryObservations,
+} from '../src/cache'
 import { ModelRepository } from '../src/model/ModelRepository'
 import { defineModelFromTable, defineTable } from './support/internal'
 
@@ -380,6 +388,7 @@ describe('@holo-js/db query cache integration', () => {
       'db:main:users:',
       'db:',
       'db:main:',
+      'db:main::row',
       'db:main:users:where::%22active%22',
       'db:main:users:where:status:',
       'db:main:users:unknown:status:%22active%22',
@@ -399,6 +408,7 @@ describe('@holo-js/db query cache integration', () => {
         'db:main:users:',
         'db:',
         'db:main:',
+        'db:main::row',
         'db:main:users:where::%22active%22',
         'db:main:users:where:status:',
         'db:main:users:unknown:status:%22active%22',
@@ -978,6 +988,16 @@ describe('@holo-js/db query cache integration', () => {
               __holo_grouped_aggregate_state_row_count: 1,
               __holo_grouped_aggregate_state_value: 10,
             },
+            {
+              __holo_grouped_aggregate_state_group: 'Null',
+              __holo_grouped_aggregate_state_row_count: null,
+              __holo_grouped_aggregate_state_value: null,
+            },
+            {
+              __holo_grouped_aggregate_state_group: 'Big',
+              __holo_grouped_aggregate_state_row_count: 1n,
+              __holo_grouped_aggregate_state_value: 2n,
+            },
           ]
         : [{ name: 'Ava', score_total: 12 }]
 
@@ -1007,8 +1027,16 @@ describe('@holo-js/db query cache integration', () => {
           groupValue: 'Ava',
           rowCount: 2,
         }, {
-          aggregateValue: 10,
-          groupValue: 'Ben',
+        aggregateValue: 10,
+        groupValue: 'Ben',
+        rowCount: 1,
+        }, {
+          aggregateValue: 0,
+          groupValue: 'Null',
+          rowCount: 0,
+        }, {
+          aggregateValue: 2,
+          groupValue: 'Big',
           rowCount: 1,
         }],
         groupColumn: 'name',
@@ -1070,6 +1098,11 @@ describe('@holo-js/db query cache integration', () => {
                 __holo_grouped_aggregate_state_row_count: 1,
                 __holo_grouped_aggregate_state_value: 10,
               },
+              {
+                __holo_grouped_aggregate_state_group: 'NoCounts',
+                __holo_grouped_aggregate_state_row_count: 1,
+                __holo_grouped_aggregate_state_value: 12,
+              },
             ]
           : [{ lowest_score: 5, name: 'Ava' }]
 
@@ -1113,6 +1146,11 @@ describe('@holo-js/db query cache integration', () => {
               count: 1,
               value: 10,
             }],
+          }, {
+            aggregateValue: 12,
+            groupValue: 'NoCounts',
+            rowCount: 1,
+            valueCounts: [],
           }],
         groupColumn: 'name',
         groupResultKey: 'name',
@@ -1134,13 +1172,95 @@ describe('@holo-js/db query cache integration', () => {
     expect(adapter.queries[2]?.sql).not.toContain('HAVING')
   })
 
+  it('omits grouped aggregate state metadata when driver values cannot be represented safely', async () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+      score: column.integer(),
+    })
+    adapter.query = async <TRow extends Record<string, unknown> = Record<string, unknown>>(
+      sql = '',
+    ): Promise<DriverQueryResult<TRow>> => {
+      const rows = sql.includes('__holo_grouped_aggregate_state_value_count')
+        ? []
+        : sql.includes('__holo_grouped_aggregate_state_value')
+          ? [{
+              __holo_grouped_aggregate_state_group: 'Ava',
+              __holo_grouped_aggregate_state_row_count: 1,
+              __holo_grouped_aggregate_state_value: null,
+            }]
+          : [{ lowest_score: null, name: 'Ava' }]
+      return { rowCount: rows.length, rows: rows as unknown as TRow[] }
+    }
+
+    const minimum = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return DB.table(users)
+        .select('name')
+        .addSelectMin('lowest_score', 'score')
+        .groupBy('name')
+        .having('count(*)', '>', 0)
+        .get()
+    })
+    expect(minimum.queries[0]?.groupedAggregate).not.toHaveProperty('aggregateStates')
+
+    adapter.query = async <TRow extends Record<string, unknown> = Record<string, unknown>>(
+      sql = '',
+    ): Promise<DriverQueryResult<TRow>> => {
+      const rows = sql.includes('__holo_grouped_aggregate_state_value')
+        ? [{
+            __holo_grouped_aggregate_state_group: 'Ava',
+            __holo_grouped_aggregate_state_row_count: 1,
+            __holo_grouped_aggregate_state_value: 9007199254740992n,
+          }]
+        : [{ name: 'Ava', score_total: 1 }]
+      return { rowCount: rows.length, rows: rows as unknown as TRow[] }
+    }
+    const sum = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return DB.table(users)
+        .select('name')
+        .addSelectSum('score_total', 'score')
+        .groupBy('name')
+        .having('count(*)', '>', 0)
+        .get()
+    })
+    expect(sum.queries[0]?.groupedAggregate).not.toHaveProperty('aggregateStates')
+
+    for (const value of [Number.POSITIVE_INFINITY, 'not-a-number']) {
+      adapter.query = async <TRow extends Record<string, unknown> = Record<string, unknown>>(
+        sql = '',
+      ): Promise<DriverQueryResult<TRow>> => {
+        const rows = sql.includes('__holo_grouped_aggregate_state_value')
+          ? [{
+              __holo_grouped_aggregate_state_group: 'Ava',
+              __holo_grouped_aggregate_state_row_count: 1,
+              __holo_grouped_aggregate_state_value: value,
+            }]
+          : [{ name: 'Ava', score_total: 1 }]
+        return { rowCount: rows.length, rows: rows as unknown as TRow[] }
+      }
+      const malformed = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+        return DB.table(users)
+          .select('name')
+          .addSelectSum('score_total', 'score')
+          .groupBy('name')
+          .having('count(*)', '>', 0)
+          .get()
+      })
+      expect(malformed.queries[0]?.groupedAggregate).not.toHaveProperty('aggregateStates')
+    }
+  })
+
   it('keeps dependency observation helpers inert when no collector or listener is active', async () => {
+    expect(readDatabaseQueryObservationCount()).toBe(0)
     expect(queryCacheInternals.hasActiveDatabaseDependencyCollector()).toBe(false)
     expect(queryCacheInternals.hasDatabaseDependencyInvalidationListeners()).toBe(false)
     expect(queryCacheInternals.createTablePredicateCacheDependency('main', 'users', 'status', undefined)).toBeUndefined()
 
     queryCacheInternals.recordDatabaseQueryDependencies(['db:main:users'])
     queryCacheInternals.recordDatabaseQueryObservation(undefined)
+    queryCacheInternals.disableDatabaseQueryObservationPatching([])
+    truncateDatabaseQueryObservations(0)
+    await expect(invalidateQueryCacheDependencies(DB.connection(), [])).resolves.toBeUndefined()
     queryCacheInternals.recordDatabaseQueryObservation(queryCacheInternals.createDatabaseQueryObservation(
       (
         new TableQueryBuilder('users', DB.connection())
@@ -1163,6 +1283,78 @@ describe('@holo-js/db query cache integration', () => {
       dependencies: [],
       queries: [],
     })
+  })
+
+  it('rebinds standard and cursor pagination observations by source identity', async () => {
+    const users = defineTable('users', {
+      id: column.id(),
+    })
+    const plan = DB.table(users).orderBy('id').getPlan()
+    const dependencies = ['db:main:users']
+    expect(inferDatabaseQueryObservationDependencies(plan, 'main')).toBeUndefined()
+    expect(createDatabaseQueryFallbackObservation(plan, 'main', [])).toBeUndefined()
+
+    const result = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      const standardSource = [{ id: 1 }]
+      queryCacheInternals.recordDatabaseQueryObservation(
+        queryCacheInternals.createDatabaseQueryObservation(plan, 'main', dependencies, standardSource),
+      )
+      truncateDatabaseQueryObservations(99)
+      rebindDatabaseQueryObservationPagination([], standardSource, {
+        total: 1,
+        perPage: 1,
+        pageName: 'page',
+        currentPage: 1,
+        lastPage: 1,
+        from: 1,
+        to: 1,
+        hasMorePages: false,
+      }, {
+        currentPage: 1,
+        kind: 'standard',
+        pageName: 'page',
+        perPage: 1,
+        total: 1,
+      }, 0)
+      rebindDatabaseQueryObservationPagination(standardSource, standardSource, {
+        total: 1,
+        perPage: 1,
+        pageName: 'page',
+        currentPage: 1,
+        lastPage: 1,
+        from: 1,
+        to: 1,
+        hasMorePages: false,
+      }, {
+        currentPage: 1,
+        kind: 'standard',
+        pageName: 'page',
+        perPage: 1,
+        total: 1,
+      }, 0)
+
+      const cursorSource = [{ id: 1 }]
+      queryCacheInternals.recordDatabaseQueryObservation(
+        queryCacheInternals.createDatabaseQueryObservation(plan, 'main', dependencies, cursorSource),
+      )
+      const cursorMeta = { cursorName: 'cursor', nextCursor: null, perPage: 1, prevCursor: null }
+      const cursor = {
+        cursorName: 'cursor',
+        hasMorePages: false,
+        kind: 'cursor' as const,
+        nextCursor: null,
+        perPage: 1,
+        prevCursor: null,
+        rowCount: 1,
+        rows: cursorSource,
+      }
+      rebindDatabaseQueryObservationCursorPagination([], cursorSource, cursorMeta, cursor)
+      rebindDatabaseQueryObservationCursorPagination(cursorSource, cursorSource, cursorMeta, cursor)
+      return true
+    })
+
+    expect(result.value).toBe(true)
+    expect(result.queries).toHaveLength(4)
   })
 
   it('keeps uncached aggregate reads off the realtime dependency observation path', async () => {
@@ -1203,6 +1395,69 @@ describe('@holo-js/db query cache integration', () => {
       predicates: [{ column: 'status', operator: '=', value: 'published' }],
       result: 12,
     })])
+  })
+
+  it('collects model aggregate observations for empty and populated result sets', async () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      score: column.integer(),
+    })
+    const User = defineModelFromTable(users)
+
+    adapter.queryRows = []
+    const empty = await queryCacheInternals.collectDatabaseQueryDependencies(async () => ({
+      average: await User.avg('score'),
+      maximum: await User.max('score'),
+      minimum: await User.min('score'),
+      total: await User.sum('score'),
+    }))
+    expect(empty.value).toEqual({ average: null, maximum: null, minimum: null, total: 0 })
+    expect(empty.queries).toHaveLength(4)
+
+    adapter.queryRows = [
+      { id: 1, score: 2 },
+      { id: 2, score: 2 },
+      { id: 3, score: 4 },
+    ]
+    const populated = await queryCacheInternals.collectDatabaseQueryDependencies(async () => ({
+      average: await User.avg('score'),
+      maximum: await User.max('score'),
+      minimum: await User.min('score'),
+      total: await User.sum('score'),
+    }))
+    expect(populated.value).toEqual({ average: 8 / 3, maximum: 4, minimum: 2, total: 8 })
+    expect(populated.queries).toHaveLength(4)
+  })
+
+  it('collects table aggregate and existence observations for empty and populated rows', async () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      score: column.integer(),
+    })
+
+    adapter.queryRows = []
+    const empty = await queryCacheInternals.collectDatabaseQueryDependencies(async () => ({
+      average: await DB.table(users).avg('score'),
+      exists: await DB.table(users).exists(),
+      maximum: await DB.table(users).max('score'),
+      minimum: await DB.table(users).min('score'),
+      missing: await DB.table(users).doesntExist(),
+    }))
+    expect(empty.value).toEqual({ average: null, exists: false, maximum: null, minimum: null, missing: true })
+
+    adapter.queryRows = [
+      { id: 1, score: 2 },
+      { id: 2, score: 2 },
+      { id: 3, score: 4 },
+    ]
+    const populated = await queryCacheInternals.collectDatabaseQueryDependencies(async () => ({
+      average: await DB.table(users).avg('score'),
+      exists: await DB.table(users).exists(),
+      maximum: await DB.table(users).max('score'),
+      minimum: await DB.table(users).min('score'),
+      missing: await DB.table(users).doesntExist(),
+    }))
+    expect(populated.value).toEqual({ average: 8 / 3, exists: true, maximum: 4, minimum: 2, missing: false })
   })
 
   it('collects paginated data and metadata observations while collecting dependencies', async () => {
@@ -1696,6 +1951,27 @@ describe('@holo-js/db query cache integration', () => {
     })
   })
 
+  it('handles empty non-returning update and delete mutation captures', async () => {
+    const users = defineTable('users', {
+      id: column.id(),
+      name: column.string(),
+    })
+    const events: unknown[] = []
+    queryCacheInternals.onDatabaseDependencyInvalidated((event) => {
+      events.push(event)
+    })
+    adapter.queryRows = []
+
+    await DB.table(users).where('id', 1).update({ name: 'Missing' })
+    await DB.table(users).where('id', 1).delete()
+
+    expect(events).toHaveLength(2)
+    expect(events).toEqual([
+      expect.objectContaining({ mutations: [expect.objectContaining({ kind: 'update', rows: undefined })] }),
+      expect.objectContaining({ mutations: [expect.objectContaining({ kind: 'delete', rows: undefined })] }),
+    ])
+  })
+
   it('aligns captured upsert previous rows with the input row order', async () => {
     const users = defineTable('users', {
       id: column.id(),
@@ -1730,6 +2006,15 @@ describe('@holo-js/db query cache integration', () => {
         ],
       })],
     }))
+
+    adapter.queryRows = [{ id: 2, name: 'Second', status: 'active' }]
+    await DB.table(users).upsert([
+      { id: 1, name: 'Missing First', status: 'active' },
+    ], ['id'], ['name'])
+    expect(events[1]).toEqual(expect.objectContaining({
+      mutations: [expect.objectContaining({ previousRows: [] })],
+    }))
+
   })
 
   it('captures non-returning JSON update rows with applied JSON values', async () => {
@@ -1786,6 +2071,20 @@ describe('@holo-js/db query cache integration', () => {
               region: 'eu',
             },
           },
+        }],
+      })],
+    }))
+
+    adapter.queryRows = [{ id: 2, name: 'Nora', settings: 'legacy' }]
+    await DB.table(users)
+      .where('id', 2)
+      .updateJson('settings->profile->region', 'eu')
+    expect(events[1]).toEqual(expect.objectContaining({
+      mutations: [expect.objectContaining({
+        rows: [{
+          id: 2,
+          name: 'Nora',
+          settings: { profile: { region: 'eu' } },
         }],
       })],
     }))
@@ -1881,12 +2180,22 @@ describe('@holo-js/db query cache integration', () => {
 
     adapter.queryRows = []
     adapter.queries.length = 0
-    await DB.table(users).insertOrIgnore({ id: 3, name: 'Mina', status: 'active' })
+    const ignoredInsert = await DB.table(users).insertOrIgnore({ id: 3, name: 'Mina', status: 'active' })
+    expect(ignoredInsert.affectedRows).toBe(0)
 
     expect(adapter.queries).toEqual([{
       sql: 'INSERT OR IGNORE INTO "users" ("id", "name", "status") VALUES (?1, ?2, ?3) RETURNING *',
       bindings: [3, 'Mina', 'active'],
     }])
+    expect(events).toHaveLength(3)
+
+    adapter.queries.length = 0
+    const ignoredUpsert = await DB.table(users).upsert(
+      { id: 5, name: 'Ignored', status: 'active' },
+      ['id'],
+      ['name'],
+    )
+    expect(ignoredUpsert.affectedRows).toBe(0)
     expect(events).toHaveLength(3)
 
     adapter.queryRows = [{ id: 4, name: 'Noor', status: 'active', created_at: '2026-06-24T11:00:00.000Z' }]
@@ -1919,6 +2228,13 @@ describe('@holo-js/db query cache integration', () => {
         rows: [{ id: 4, name: 'Noor', status: 'active', created_at: '2026-06-24T11:00:00.000Z' }],
       }],
     }))
+
+    adapter.queryRows = [{ id: true, name: 'Invalid Identifier', status: 'active' }]
+    const invalidIdentifierInsert = await DB.table(users).insert({
+      name: 'Invalid Identifier',
+      status: 'active',
+    })
+    expect(invalidIdentifierInsert.lastInsertId).toBeUndefined()
   })
 
   it('keeps returning-capable normal writes off the realtime mutation row path without listeners', async () => {
@@ -2806,6 +3122,187 @@ describe('@holo-js/db query cache integration', () => {
       'db:main:users',
       'db:main:posts',
     ])
+
+    const compositeFallbackPlan = {
+      ...postsPlan,
+      source: { kind: 'table', tableName: 'users' },
+      joins: [
+        { kind: 'inner', table: 'roles', predicates: [] },
+        { kind: 'inner', subquery: postsPlan, predicates: [] },
+      ],
+      unions: [{ all: true, query: postsPlan }],
+      selections: [{ alias: 'post_count', kind: 'subquery', query: postsPlan }],
+    } as unknown as SelectQueryPlan
+    expect(inferDatabaseQueryObservationDependencies(compositeFallbackPlan, 'main')).toEqual([
+      'db:main:users',
+      'db:main:roles',
+      'db:main:posts',
+    ])
+
+    expect(queryCacheInternals.createDatabaseQueryObservation(rawSelectionPlan, 'main', ['db:main:users']))
+      .toBeUndefined()
+    const rawOrderPlan = {
+      ...postsPlan,
+      orderBy: [{ bindings: [], kind: 'raw', sql: 'RANDOM()' }],
+    } as never
+    expect(createDatabaseQueryFallbackObservation(rawOrderPlan, 'main', ['db:main:users']))
+      .toEqual(expect.objectContaining({ patchable: false }))
+
+    const groupedWrongSelection = {
+      ...postsPlan,
+      selections: [{ kind: 'column', column: 'name' }, { kind: 'column', column: 'status' }],
+      groupBy: ['name'],
+    } as never
+    expect(createDatabaseQueryFallbackObservation(groupedWrongSelection, 'main', ['db:main:posts']))
+      .toEqual(expect.objectContaining({ patchable: false }))
+
+    const groupedWrongOrder = {
+      ...postsPlan,
+      selections: [
+        { kind: 'column', column: 'name' },
+        { alias: 'total', aggregate: 'count', column: '*', kind: 'aggregate' },
+      ],
+      groupBy: ['name'],
+      orderBy: [{ column: 'id', direction: 'asc', kind: 'column' }],
+    } as unknown as SelectQueryPlan
+    expect(createDatabaseQueryFallbackObservation(groupedWrongOrder, 'main', ['db:main:posts']))
+      .toEqual(expect.objectContaining({ patchable: false }))
+
+    const multipleHavingPlan = {
+      ...groupedWrongOrder,
+      orderBy: [],
+      having: [
+        { expression: 'COUNT(*)', operator: '>=', value: 1 },
+        { expression: 'COUNT(*)', operator: '<=', value: 5 },
+      ],
+    } as never
+    expect(inferDatabaseQueryObservationDependencies(multipleHavingPlan, 'main')).toEqual(['db:main:posts'])
+    expect(createDatabaseQueryFallbackObservation(multipleHavingPlan, 'main', ['db:main:posts']))
+      .toEqual(expect.objectContaining({ groupedAggregate: undefined, patchable: false }))
+
+    const invalidHavingPlan = {
+      ...groupedWrongOrder,
+      orderBy: [],
+      having: [{ expression: 'COUNT(*)', operator: '<>', value: 1 }],
+    } as never
+    expect(createDatabaseQueryFallbackObservation(invalidHavingPlan, 'main', ['db:main:posts']))
+      .toEqual(expect.objectContaining({ groupedAggregate: undefined, patchable: false }))
+
+    const groupedPredicatePlan = {
+      ...postsPlan,
+      selections: [
+        { kind: 'column', column: 'name' },
+        { alias: 'total', aggregate: 'count', column: '*', kind: 'aggregate' },
+      ],
+      groupBy: ['name'],
+      predicates: [{ boolean: 'and', column: 'status', kind: 'comparison', operator: '=', value: 'active' }],
+    } as never
+    expect(queryCacheInternals.createDatabaseQueryObservation(groupedPredicatePlan, 'main', ['db:main:posts']))
+      .toEqual(expect.objectContaining({ patchable: true }))
+
+    const nestedExactPlan = new TableQueryBuilder('posts', DB.connection())
+      .where(query => query.where('user_id', 1).where('title', 'Post'))
+      .getPlan()
+    expect(queryCacheInternals.inferAutomaticQueryCacheDependencies(nestedExactPlan, 'main')).toEqual(expect.arrayContaining([
+      'db:main:posts:where:user_id:1',
+      'db:main:posts:where:title:%22Post%22',
+    ]))
+    expect(queryCacheInternals.inferAutomaticQueryCacheInvalidationPlan(
+      nestedExactPlan,
+      'main',
+      { id: 1 },
+      true,
+    ).metadata?.predicates).toHaveLength(3)
+
+    const nestedRangePlan = new TableQueryBuilder('posts', DB.connection())
+      .where(query => query.where('id', '>', 0))
+      .getPlan()
+    expect(queryCacheInternals.inferAutomaticQueryCacheInvalidationPlan(
+      nestedRangePlan,
+      'main',
+      { id: 1 },
+      true,
+    ).metadata?.predicates).toEqual([{
+      columnName: 'id',
+      encodedValue: '1',
+      tableKey: 'db:main:posts',
+    }])
+
+    const fallbackPredicates = [
+      { boolean: 'and', kind: 'subquery', subquery: postsPlan },
+      { bindings: [], boolean: 'and', kind: 'raw', sql: '1 = 1' },
+      { boolean: 'and', column: 'embedding', kind: 'vector', minSimilarity: 0.5, vector: [0.1] },
+      { boolean: 'and', columns: ['title'], kind: 'fulltext', mode: 'natural', value: 'search' },
+    ] as const
+    for (const predicate of fallbackPredicates) {
+      const fallbackPredicatePlan = { ...postsPlan, predicates: [predicate] } as never
+      expect(inferDatabaseQueryObservationDependencies(fallbackPredicatePlan, 'main')).toContain('db:main:posts')
+      expect(createDatabaseQueryFallbackObservation(fallbackPredicatePlan, 'main', ['db:main:posts']))
+        .toEqual(expect.objectContaining({ patchable: false }))
+    }
+
+    const undefinedPredicatePlan = {
+      ...postsPlan,
+      predicates: [{ boolean: 'and', column: 'id', kind: 'comparison', operator: '=', value: undefined }],
+    } as never
+    expect(queryCacheInternals.inferAutomaticQueryCacheInvalidationPlan(
+      undefinedPredicatePlan,
+      'main',
+      { id: undefined },
+      true,
+    ).metadata).toEqual(expect.objectContaining({ exactPredicates: [], predicates: [] }))
+    expect(queryCacheInternals.inferAutomaticQueryCacheDependencies(undefinedPredicatePlan, 'main')).toEqual([
+      'db:main:posts',
+    ])
+    expect(queryCacheInternals.inferAutomaticQueryCacheDependencies(
+      new TableQueryBuilder('posts', DB.connection()).where('id', '>', 0).getPlan(),
+      'main',
+    )).toEqual(['db:main:posts'])
+    expect(queryCacheInternals.inferAutomaticInsertCacheInvalidationDependencies(
+      'main',
+      'posts',
+      [{ id: undefined }],
+    )).toContain('db:main:posts')
+
+    const logs = defineTable('logs', { message: column.string() })
+    expect(queryCacheInternals.inferAutomaticQueryCacheDependencies(
+      new TableQueryBuilder(logs, DB.connection()).where('message', 'entry').getPlan(),
+      'main',
+    )).toContain('db:main:logs')
+
+    const rawMutationPlan = {
+      ...postsPlan,
+      predicates: [{ bindings: [], boolean: 'and', kind: 'raw', sql: '1 = 1' }],
+    } as never
+    expect(queryCacheInternals.inferAutomaticQueryCacheInvalidationPlan(
+      rawMutationPlan,
+      'main',
+      {},
+      true,
+    ).metadata).toBeDefined()
+
+    const disjunctivePlan = new TableQueryBuilder('posts', DB.connection())
+      .where(query => query.where('id', 1).orWhere('id', 2))
+      .getPlan()
+    expect(queryCacheInternals.inferAutomaticQueryCacheInvalidationPlan(
+      disjunctivePlan,
+      'main',
+      {},
+      true,
+    ).metadata).toBeDefined()
+  })
+
+  it('marks direct upsert invalidations as mutation dependencies', async () => {
+    const events: unknown[] = []
+    queryCacheInternals.onDatabaseDependencyInvalidated((event) => {
+      events.push(event)
+    })
+    const mutation = queryCacheInternals.createDatabaseMutationEvent('upsert', 'main', 'users')
+    await invalidateQueryCacheDependencies(DB.connection(), ['db:main:users'], [mutation])
+    const event = events[0] as Record<string, unknown> | undefined
+    expect(event?.[DATABASE_DEPENDENCY_METADATA_KEY]).toEqual(expect.objectContaining({
+      hasMutationDependency: true,
+    }))
   })
 
   it('normalizes object query-cache config invalidation metadata and rejects empty dependencies', () => {

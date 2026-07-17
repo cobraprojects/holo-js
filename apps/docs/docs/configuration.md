@@ -36,8 +36,8 @@ Typical built-in files:
 Example database config:
 
 ```ts
-import { defineDatabaseConfig, env } from '@holo-js/config'
-
+import { defineDatabaseConfig } from '@holo-js/db'
+import { env } from '@holo-js/config'
 export default defineDatabaseConfig({
   defaultConnection: 'main',
   connections: {
@@ -56,8 +56,8 @@ export default defineDatabaseConfig({
 Example storage config:
 
 ```ts
-import { defineStorageConfig, env } from '@holo-js/config'
-
+import { defineStorageConfig } from '@holo-js/storage'
+import { env } from '@holo-js/config'
 export default defineStorageConfig({
   defaultDisk: 'public',
   routePrefix: '/storage',
@@ -85,7 +85,8 @@ export default defineStorageConfig({
 Example Redis config:
 
 ```ts
-import { defineRedisConfig, env } from '@holo-js/config'
+import { env } from '@holo-js/config'
+import { defineRedisConfig } from '@holo-js/kernel'
 
 export default defineRedisConfig({
   default: 'cache',
@@ -105,8 +106,7 @@ export default defineRedisConfig({
 Example queue config:
 
 ```ts
-import { defineQueueConfig } from '@holo-js/config'
-
+import { defineQueueConfig } from '@holo-js/queue'
 export default defineQueueConfig({
   default: 'redis',
   failed: {
@@ -152,7 +152,8 @@ That means:
 ### URL example
 
 ```ts
-import { defineRedisConfig, env } from '@holo-js/config'
+import { env } from '@holo-js/config'
+import { defineRedisConfig } from '@holo-js/kernel'
 
 export default defineRedisConfig({
   default: 'cache',
@@ -172,7 +173,7 @@ export default defineRedisConfig({
 ### Cluster example
 
 ```ts
-import { defineRedisConfig } from '@holo-js/config'
+import { defineRedisConfig } from '@holo-js/kernel'
 
 export default defineRedisConfig({
   default: 'cluster',
@@ -194,7 +195,7 @@ export default defineRedisConfig({
 ### Standalone host or socket example
 
 ```ts
-import { defineRedisConfig } from '@holo-js/config'
+import { defineRedisConfig } from '@holo-js/kernel'
 
 export default defineRedisConfig({
   default: 'cache',

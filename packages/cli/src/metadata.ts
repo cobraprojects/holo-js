@@ -35,7 +35,10 @@ export const SCAFFOLD_NEXT_REACT_VERSIONS = Object.freeze({
 export const SCAFFOLD_BASE_DEV_DEPENDENCY_VERSIONS = Object.freeze({
   typescript: catalogVersion('typescript'),
   '@types/node': catalogVersion('@types/node'),
+  '@eslint/js': catalogVersion('@eslint/js'),
   eslint: catalogVersion('eslint'),
+  globals: catalogVersion('globals'),
+  'typescript-eslint': catalogVersion('typescript-eslint'),
 } as const)
 
 export const SCAFFOLD_NUXT_DEPENDENCY_VERSIONS = Object.freeze({

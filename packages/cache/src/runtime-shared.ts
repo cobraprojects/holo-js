@@ -6,10 +6,10 @@ import {
   type NormalizedCacheFileDriverConfig,
   type NormalizedCacheMemoryDriverConfig,
   type NormalizedCacheRedisDriverConfig,
-  type NormalizedHoloDatabaseConfig,
   type NormalizedHoloCacheConfig,
-  type NormalizedHoloRedisConfig,
-} from '@holo-js/config'
+} from './config'
+import type { NormalizedHoloDatabaseConfig } from '@holo-js/db'
+import type { NormalizedHoloRedisConfig } from '@holo-js/kernel'
 import {
   CacheDriverResolutionError,
   CacheRuntimeNotConfiguredError,

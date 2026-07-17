@@ -1,9 +1,9 @@
 import type {
   DotPath,
   HoloConfigMap,
-  HoloConfigRegistry,
   ValueAtPath,
 } from './types'
+import type { HoloConfigRegistry } from './index'
 
 type RuntimeConfigMap = HoloConfigRegistry & HoloConfigMap
 type UseConfigAccessor<TConfig extends RuntimeConfigMap> = {

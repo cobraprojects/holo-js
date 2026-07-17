@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { defineSecurityConfig } from '@holo-js/config'
 import {
   configureSecurityRuntime,
   csrf,
+  defineSecurityConfig,
   resetSecurityRuntime,
 } from '../src'
 import { SECURITY_CLIENT_CONFIG_COOKIE } from '../src/client-config'

@@ -14,6 +14,7 @@ export type MemoryAuthContext = AuthRuntimeContext & {
 
 export type AsyncAuthContext = AuthRuntimeContext & {
   activate(): void
+  run<TValue>(callback: () => TValue): TValue
 }
 
 function setMapValue(map: Map<string, string>, key: string, value?: string): void {
@@ -63,6 +64,9 @@ export function createAsyncAuthContext(): AsyncAuthContext {
       if (!storage.getStore()) {
         storage.enterWith(createMemoryAuthContext())
       }
+    },
+    run(callback) {
+      return storage.run(createMemoryAuthContext(), callback)
     },
     getSessionId: guardName => resolveContext().getSessionId(guardName),
     setSessionId: (guardName, sessionId) => resolveContext().setSessionId(guardName, sessionId),

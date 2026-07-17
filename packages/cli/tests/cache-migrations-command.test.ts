@@ -35,6 +35,7 @@ async function loadCacheTableCommand(cacheConfig: CacheConfig): Promise<{
     loadConfigDirectory: vi.fn(async () => ({
       cache: cacheConfig,
     })),
+    registerConfigNormalizer: vi.fn(() => () => {}),
   }))
   vi.doMock('../src/dev', () => ({
     runProjectPrepare,

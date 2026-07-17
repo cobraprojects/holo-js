@@ -95,8 +95,8 @@ function createFakeAsyncDriverFactory(
         async close() {},
         async reserve<TPayload extends QueueJsonValue = QueueJsonValue>(input: QueueReserveInput) {
           state.reserveInputs.push({
-            queueNames: input.queueNames,
-            workerId: input.workerId,
+            queueNames: input.queueNames ?? [],
+            workerId: input.workerId ?? '',
           })
           return (state.reserveQueue.shift() ?? null) as QueueReservedJob<TPayload> | null
         },

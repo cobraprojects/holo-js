@@ -3,6 +3,8 @@ import {
   type HoloConfigMap,
   type HoloConfigRegistry,
 } from '../../src'
+import type {} from '@holo-js/media/config'
+import type {} from '@holo-js/storage/config'
 
 type ServicesFixtureConfig = {
   readonly mailgun: {

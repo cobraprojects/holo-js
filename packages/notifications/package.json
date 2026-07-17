@@ -10,6 +10,11 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.mjs",
+      "default": "./dist/config.mjs"
+    },
     "./contracts": {
       "types": "./dist/contracts.d.ts",
       "import": "./dist/contracts.mjs",
@@ -28,16 +33,13 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "catalog:"
+    "@holo-js/config": "catalog:",
+    "@holo-js/kernel": "catalog:"
   },
   "peerDependencies": {
-    "@holo-js/db": "catalog:",
     "@holo-js/queue": "catalog:"
   },
   "peerDependenciesMeta": {
-    "@holo-js/db": {
-      "optional": true
-    },
     "@holo-js/queue": {
       "optional": true
     }

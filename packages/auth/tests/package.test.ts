@@ -872,6 +872,36 @@ describe('@holo-js/auth package runtime', () => {
     ])
   })
 
+  it('activates request-scoped contexts before exposing runtime bindings', () => {
+    const runtime = configureRuntime()
+    const activate = vi.fn()
+    const currentBindings = authRuntimeInternals.getRuntimeBindings()
+    const activatableContext = {
+      ...runtime.context,
+      activate,
+    }
+
+    configureAuthRuntime({
+      ...currentBindings,
+      context: activatableContext,
+    })
+
+    expect(authRuntimeInternals.getRuntimeBindings().context).toBeDefined()
+    expect(activate).toHaveBeenCalledOnce()
+
+    const inactiveContext = {
+      ...runtime.context,
+      activate: false,
+    }
+    configureAuthRuntime({
+      ...currentBindings,
+      context: inactiveContext,
+    })
+
+    expect(authRuntimeInternals.getRuntimeBindings().context).toBeDefined()
+    expect(activate).toHaveBeenCalledOnce()
+  })
+
   it('waits for async response cookie appends during session login and logout', async () => {
     const runtime = configureRuntime()
     const appendedCookies: string[] = []
@@ -4968,6 +4998,12 @@ describe('@holo-js/auth package runtime', () => {
     await expect(restoredCachedUser.can('viewAny', {})).resolves.toBe(false)
     expect(context.getAccessToken?.('api')).toBe('token-value')
     expect(context.getRememberToken?.('web')).toBe('remember-value')
+    context.run(() => {
+      expect(context.getSessionId('web')).toBeUndefined()
+      context.setSessionId('web', 'request-session')
+      expect(context.getSessionId('web')).toBe('request-session')
+    })
+    expect(context.getSessionId('web')).toBe('session-1')
   })
 
   it('covers client internal fallback and tuple-header branches', async () => {
@@ -5985,5 +6021,402 @@ describe('@holo-js/auth package runtime', () => {
       },
     })
     expect(authRuntimeInternals.getRuntimeBindings().context.getSessionId('web')).toBeTypeOf('string')
+  })
+
+  it('defaults authorization checks to false', async () => {
+    const runtime = configureRuntime()
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    configureAuthRuntime({
+      ...bindings,
+      authorization: undefined,
+    })
+    expect(authRuntimeInternals.getRuntimeBindings()).toBeDefined()
+
+    const created = await runtime.usersProvider.create({
+      email: 'authorization-default@app.test',
+      name: 'Authorization Default',
+      password: null,
+    })
+    const session = unwrapAuthResult(await loginUsing(created))
+    await expect(session.user.can('read', {})).resolves.toBe(false)
+  })
+
+  it('fails closed for malformed provider users and missing password brokers', async () => {
+    configureRuntime()
+    expect(() => authRuntimeInternals.getPasswordHash({ getId: () => 1 } as never, null)).toThrow('must be objects')
+
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    configureAuthRuntime({
+      ...bindings,
+      providers: {
+        users: {
+          ...bindings.providers.users!,
+          findByCredentials: async () => 1 as never,
+        },
+      },
+    })
+    await expect(login({ email: 'malformed@app.test', password: 'password' })).rejects.toThrow('Auth provider lookup')
+
+    configureRuntime()
+    await expect(requestPasswordReset({
+      email: 'missing@app.test',
+    }, { broker: 'missing' })).rejects.toMatchObject({ code: 'password_broker_not_configured' })
+  })
+
+  it('maps token-guard credential and registration failures', async () => {
+    configureRuntime()
+    const tokenGuard = getAuthRuntime().guard('api')
+    await expectAuthValidationError(
+      () => tokenGuard.login({ email: 'missing@app.test', password: 'wrong' }),
+      'invalid_credentials',
+      401,
+    )
+    await expectAuthValidationError(() => tokenGuard.register({
+      email: 'token@app.test',
+      password: 'password',
+      passwordConfirmation: 'different',
+    }), 'password_confirmation_mismatch')
+  })
+
+  it('resends verification for the current session and returns no provider without a session id', async () => {
+    const runtime = configureRuntime({ emailVerificationRequired: true })
+    const hashed = await hashPassword('password')
+    const created = await runtime.usersProvider.create({
+      email: 'resend-current@app.test',
+      name: 'Resend Current',
+      password: hashed,
+    })
+    const established = unwrapAuthResult(await loginUsing(created))
+    expect(unwrapAuthResult(await resendEmailVerification())).toMatchObject({ email: 'resend-current@app.test' })
+
+    runtime.context.setCachedUser('web', established.user)
+    runtime.context.setSessionId('web')
+    await expect(getAuthRuntime().guard('web').provider()).resolves.toBeNull()
+    await expect(getAuthRuntime().guard('web').impersonation()).resolves.toBeNull()
+    await expect(getAuthRuntime().guard('web').stopImpersonating()).resolves.toBeNull()
+  })
+
+  it('hydrates token and remember-me guard context from request accessors', async () => {
+    const runtime = configureRuntime()
+    const created = await runtime.usersProvider.create({
+      email: 'hydrate@app.test',
+      name: 'Hydrate',
+      password: null,
+    })
+    const token = await tokens.create(created, { guard: 'api', name: 'hydrate' })
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    configureAuthRuntime({
+      ...bindings,
+      context: {
+        ...bindings.context,
+        getRequestHeader: name => name === 'authorization' ? `Bearer ${token.plainTextToken}` : undefined,
+      },
+    })
+    await expect(getAuthRuntime().guard('api').user()).resolves.toMatchObject({ email: 'hydrate@app.test' })
+    const handle = await getAuthRuntime().guard('api').currentAccessToken()
+    runtime.context.setAccessToken('api')
+    await handle?.delete()
+
+    const current = authRuntimeInternals.getRuntimeBindings()
+    const rememberCookie = authRuntimeInternals.parseSetCookieDefinition(current.session.rememberMeCookie(''))
+    configureAuthRuntime({
+      ...current,
+      session: {
+        ...current.session,
+        consumeRememberMeToken: async () => null,
+      },
+      context: {
+        ...current.context,
+        getRequestCookie: name => name === rememberCookie?.name ? 'invalid-remember-token' : undefined,
+      },
+    })
+    await expect(getAuthRuntime().guard('web').user()).resolves.toBeNull()
+    expect(authRuntimeInternals.getRuntimeBindings().context.getRememberToken?.('web')).toBeUndefined()
+
+    const now = new Date()
+    const wrongGuardSession = {
+      id: 'wrong-guard-session',
+      store: 'database',
+      data: {
+        auth: {
+          guard: 'admin',
+          provider: 'admins',
+          userId: 1,
+          user: { id: 1, email: 'admin@app.test', name: 'Admin', can: () => false },
+        },
+      },
+      createdAt: now,
+      lastActivityAt: now,
+      expiresAt: new Date(now.getTime() + 60_000),
+    }
+    const refreshed = authRuntimeInternals.getRuntimeBindings()
+    refreshed.context.setRememberToken?.('web')
+    configureAuthRuntime({
+      ...refreshed,
+      session: { ...refreshed.session, consumeRememberMeToken: async () => wrongGuardSession },
+      context: {
+        ...refreshed.context,
+        getRequestCookie: name => name === rememberCookie?.name ? 'wrong-guard-token' : undefined,
+      },
+    })
+    await expect(getAuthRuntime().guard('web').user()).resolves.toBeNull()
+  })
+
+  it('rejects trusted token-guard login, invalid user ids, and unverified users without email', async () => {
+    const runtime = configureRuntime({ emailVerificationRequired: true })
+    const created = await runtime.usersProvider.create({ email: '', name: 'No Email', password: null })
+    await expect(loginUsing(created)).resolves.toMatchObject({ user: { id: created.id } })
+
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    configureAuthRuntime({
+      ...bindings,
+      providers: {
+        users: {
+          findById: runtime.usersProvider.findById.bind(runtime.usersProvider),
+          findByCredentials: runtime.usersProvider.findByCredentials.bind(runtime.usersProvider),
+          create: runtime.usersProvider.create.bind(runtime.usersProvider),
+          update: runtime.usersProvider.update.bind(runtime.usersProvider),
+          serialize: runtime.usersProvider.serialize.bind(runtime.usersProvider),
+          matchesUser: () => true,
+          getId: () => ({}) as never,
+        },
+      },
+    })
+    await expect(tokens.create({}, { guard: 'api', name: 'invalid-id' })).rejects.toThrow('serializable id')
+  })
+
+  it('rehydrates session authorization methods after clearing the request cache', async () => {
+    const runtime = configureRuntime()
+    const created = await runtime.usersProvider.create({
+      email: 'rehydrate@app.test',
+      name: 'Rehydrate',
+      password: null,
+    })
+    const established = unwrapAuthResult(await loginUsing(created))
+    runtime.context.cachedUsers.delete('web')
+    const rehydrated = await user()
+    expect(rehydrated?.id).toBe(established.user.id)
+    await expect(rehydrated?.can('read', {})).resolves.toBe(false)
+
+    runtime.context.setCachedUser('api', {
+      id: created.id,
+      email: created.email,
+      name: created.name,
+      can: async () => false,
+    })
+    runtime.context.setAccessToken('api')
+    await expect(getAuthRuntime().guard('api').provider()).resolves.toBeNull()
+
+    runtime.context.setCachedUser('web', established.user)
+    runtime.context.setSessionId('web', 'missing-session')
+    await expect(getAuthRuntime().guard('web').provider()).resolves.toBeNull()
+  })
+
+  it('covers trusted unmarked user ids and existing-session remember hydration', async () => {
+    const runtime = configureRuntime()
+    const created = await runtime.usersProvider.create({
+      email: 'trusted-id@app.test', name: 'Trusted Id', password: null,
+    })
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    configureAuthRuntime({
+      ...bindings,
+      providers: { users: runtime.usersProvider },
+    })
+    await expect(loginUsing({ id: created.id, email: created.email, name: created.name })).resolves.toMatchObject({
+      user: { id: created.id },
+    })
+    await expect(loginUsing({ id: 999, email: 'missing@app.test' })).rejects.toMatchObject({
+      code: 'trusted_login_user_incompatible',
+    })
+    const current = authRuntimeInternals.getRuntimeBindings()
+    const rememberName = authRuntimeInternals.parseSetCookieDefinition(current.session.rememberMeCookie(''))?.name
+    current.context.setRememberToken?.('web')
+    configureAuthRuntime({
+      ...current,
+      context: {
+        ...current.context,
+        getRequestCookie: name => name === rememberName ? 'remember-with-session' : undefined,
+      },
+    })
+    await expect(user()).resolves.toMatchObject({ id: created.id })
+  })
+
+  it('builds the default verification route for a non-string email', async () => {
+    const runtime = configureRuntime({
+      emailVerificationRequired: true,
+      authConfig: defineAuthConfig({
+        providers: {
+          users: { model: 'User', identifiers: ['phone'] },
+          admins: { model: 'Admin' },
+        },
+      }),
+    })
+    const password = await hashPassword('password')
+    const created = await runtime.usersProvider.create({
+      email: 'temporary@app.test', name: 'No Email', phone: '+201000000000', password,
+    })
+    vi.spyOn(runtime.usersProvider, 'findByCredentials').mockResolvedValue(created)
+    created.email = null as never
+    await expect(login({ phone: '+201000000000', password: 'password' })).resolves.toMatchObject({
+      emailVerificationRequired: true,
+      emailVerificationRoute: '/verify-email',
+    })
+  })
+
+  it('maps named session guard login failures', async () => {
+    configureRuntime()
+    await expectAuthValidationError(
+      () => getAuthRuntime().guard('web').login({ email: 'missing@app.test', password: 'wrong' }),
+      'invalid_credentials',
+    )
+  })
+
+  it('covers rollback paths without adapter deletion', async () => {
+    const modelFailure = configureRuntime({
+      emailVerificationRequired: true,
+      delivery: { sendEmailVerification: async () => { throw new Error('delivery failed') } },
+    })
+    const createModel = modelFailure.usersProvider.create.bind(modelFailure.usersProvider)
+    Object.defineProperty(modelFailure.usersProvider, 'delete', { value: undefined, configurable: true })
+    modelFailure.usersProvider.create = vi.fn(async (input) => {
+      const created = await createModel(input)
+      return Object.assign(created, { delete: async () => { throw new Error('model cleanup failed') } })
+    })
+    await expect(register({
+      name: 'No Adapter Model', email: 'no-adapter-model@app.test', password: 'password', passwordConfirmation: 'password',
+    })).rejects.toThrow('delivery failed')
+
+    resetAuthRuntime()
+    resetSessionRuntime()
+    const noCleanup = configureRuntime({
+      emailVerificationRequired: true,
+      delivery: { sendEmailVerification: async () => { throw new Error('delivery failed') } },
+    })
+    Object.defineProperty(noCleanup.usersProvider, 'delete', { value: undefined, configurable: true })
+    await expect(register({
+      name: 'No Cleanup', email: 'no-cleanup@app.test', password: 'password', passwordConfirmation: 'password',
+    })).rejects.toThrow('delivery failed')
+
+    resetAuthRuntime()
+    resetSessionRuntime()
+    const tokenRollback = configureRuntime()
+    vi.spyOn(tokenRollback.tokenStore, 'create').mockRejectedValueOnce(new Error('token failed'))
+    Object.defineProperty(tokenRollback.usersProvider, 'delete', { value: undefined, configurable: true })
+    tokenRollback.usersProvider.findById = vi.fn(async () => null)
+    await expect(auth.guard('api').register({
+      name: 'No Token Cleanup', email: 'no-token-cleanup@app.test', password: 'password', passwordConfirmation: 'password',
+    })).rejects.toThrow('token failed')
+  })
+
+  it('rejects provider updates when only a name mutation is requested', async () => {
+    const runtime = configureRuntime()
+    const created = await runtime.usersProvider.create({ email: 'name-update@app.test', name: 'Old', password: null })
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    configureAuthRuntime({
+      ...bindings,
+      providers: {
+        ...bindings.providers,
+        users: {
+          findById: runtime.usersProvider.findById.bind(runtime.usersProvider),
+          findByCredentials: runtime.usersProvider.findByCredentials.bind(runtime.usersProvider),
+          create: runtime.usersProvider.create.bind(runtime.usersProvider),
+          serialize: runtime.usersProvider.serialize.bind(runtime.usersProvider),
+          getId: runtime.usersProvider.getId.bind(runtime.usersProvider),
+        },
+      },
+    })
+    await expect(authRuntimeInternals.updateUserRecord('users', created.id, { name: 'New' })).rejects.toMatchObject({
+      code: 'provider_update_unsupported',
+    })
+    await expect(authRuntimeInternals.updateUserRecord('users', created.id, {})).resolves.toMatchObject({ id: created.id })
+  })
+
+  it('registers through an explicitly selected session guard', async () => {
+    configureRuntime()
+    await expect(auth.guard('web').register({
+      name: 'Named Session',
+      email: 'named-session@app.test',
+      password: 'password',
+      passwordConfirmation: 'password',
+    })).resolves.toMatchObject({ email: 'named-session@app.test' })
+  })
+
+  it('covers registration rollback model success and nested failures', async () => {
+    const successfulModel = configureRuntime({
+      emailVerificationRequired: true,
+      delivery: { sendEmailVerification: async () => { throw new Error('delivery failed') } },
+    })
+    const originalCreate = successfulModel.usersProvider.create.bind(successfulModel.usersProvider)
+    const originalDelete = successfulModel.usersProvider.delete.bind(successfulModel.usersProvider)
+    successfulModel.usersProvider.create = vi.fn(async (input) => {
+      const created = await originalCreate(input)
+      return Object.assign(created, { delete: async () => originalDelete(created.id) })
+    })
+    await expect(register({
+      name: 'Model Success',
+      email: 'model-success@app.test',
+      password: 'password',
+      passwordConfirmation: 'password',
+    })).rejects.toThrow('delivery failed')
+    expect(successfulModel.usersProvider.users.size).toBe(0)
+
+    resetAuthRuntime()
+    resetSessionRuntime()
+    const nestedFailure = configureRuntime({
+      emailVerificationRequired: true,
+      delivery: { sendEmailVerification: async () => { throw new Error('delivery failed') } },
+    })
+    nestedFailure.emailVerificationTokenStore.deleteByUserId = vi.fn(async () => { throw new Error('token cleanup failed') })
+    nestedFailure.usersProvider.delete = vi.fn(async () => { throw new Error('adapter cleanup failed') })
+    const nestedCreate = nestedFailure.usersProvider.create.bind(nestedFailure.usersProvider)
+    nestedFailure.usersProvider.create = vi.fn(async (input) => {
+      const created = await nestedCreate(input)
+      return Object.assign(created, { delete: async () => { throw new Error('model cleanup failed') } })
+    })
+    await expect(register({
+      name: 'Nested Failure',
+      email: 'nested-failure@app.test',
+      password: 'password',
+      passwordConfirmation: 'password',
+    })).rejects.toThrow('token cleanup failed')
+  })
+
+  it('covers failed token-registration rollback cleanup', async () => {
+    const runtime = configureRuntime()
+    vi.spyOn(runtime.tokenStore, 'create').mockRejectedValueOnce(new Error('token failed'))
+    runtime.usersProvider.delete = vi.fn(async () => { throw new Error('adapter cleanup failed') })
+    await expect(auth.guard('api').register({
+      name: 'Rollback Failure',
+      email: 'rollback-failure@app.test',
+      password: 'password',
+      passwordConfirmation: 'password',
+    })).rejects.toThrow('token failed')
+  })
+
+  it('rejects primitive users returned while consuming verification tokens', async () => {
+    const runtime = configureRuntime()
+    await runtime.usersProvider.create({
+      name: 'Primitive Verification',
+      email: 'primitive-verification@app.test',
+      password: null,
+    })
+    const sent = unwrapAuthResult(await sendEmailVerification('primitive-verification@app.test'))
+    const bindings = authRuntimeInternals.getRuntimeBindings()
+    const primitiveProvider = {
+      findById: async () => 1 as never,
+      findByCredentials: runtime.usersProvider.findByCredentials.bind(runtime.usersProvider),
+      create: runtime.usersProvider.create.bind(runtime.usersProvider),
+      update: async () => 1 as never,
+      getId: runtime.usersProvider.getId.bind(runtime.usersProvider),
+    } as unknown as AuthProviderAdapter
+    configureAuthRuntime({
+      ...bindings,
+      providers: {
+        ...bindings.providers,
+        users: primitiveProvider,
+      },
+    })
+    await expect(verifyEmail(sent.plainTextToken)).rejects.toThrow('Auth provider users must be objects')
+    await expect(verification.create(1, { guard: 'web' })).rejects.toThrow('serializable user object')
   })
 })

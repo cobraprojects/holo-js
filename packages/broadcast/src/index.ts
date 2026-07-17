@@ -30,11 +30,15 @@ import {
   resetBroadcastRuntime,
 } from './runtime'
 
-export { defineBroadcastConfig } from '@holo-js/config'
+export {
+  defineBroadcastConfig,
+  holoBroadcastDefaults,
+  normalizeBroadcastConfig,
+} from './config'
 export type {
   HoloBroadcastConfig,
   NormalizedHoloBroadcastConfig,
-} from '@holo-js/config'
+} from './config'
 
 export {
   authorizeBroadcastChannel,

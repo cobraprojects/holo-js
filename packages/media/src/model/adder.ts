@@ -1,8 +1,13 @@
-import { isIP } from 'node:net'
+import { randomUUID } from 'node:crypto'
+import type { LookupAddress } from 'node:dns'
+import { lookup } from 'node:dns/promises'
+import { readFile, realpath } from 'node:fs/promises'
+import { request as requestHttp } from 'node:http'
+import { request as requestHttps } from 'node:https'
+import { BlockList, isIP } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, resolve, sep } from 'node:path'
-import { readFile, realpath } from 'node:fs/promises'
-import { randomUUID } from 'node:crypto'
+import { Readable } from 'node:stream'
 import { Storage } from '@holo-js/storage/runtime'
 import { connectionAsyncContext, type Entity, type ModelRecord, type TableDefinition } from '@holo-js/db'
 import {
@@ -90,10 +95,30 @@ type DeletedMediaSnapshot = {
 }
 
 const DEFAULT_REMOTE_MEDIA_MAX_SIZE = 10 * 1024 * 1024
+const BLOCKED_REMOTE_MEDIA_ADDRESSES = createBlockedRemoteMediaAddresses()
 const LOCAL_MEDIA_SOURCE_ROOTS = Object.freeze([
   tmpdir(),
   resolve(process.cwd(), 'storage'),
 ])
+
+type RemoteMediaAddressResolver = (hostname: string) => Promise<readonly LookupAddress[]>
+type RemoteMediaDownloader = (url: URL) => Promise<Response>
+
+const defaultRemoteMediaAddressResolver: RemoteMediaAddressResolver = async hostname => await lookup(hostname, {
+  all: true,
+  verbatim: true,
+})
+function createRemoteMediaDownloader(
+  resolver: RemoteMediaAddressResolver,
+  requester: typeof requestRemoteMedia,
+): RemoteMediaDownloader {
+  return async (url) => {
+    const address = await resolveRemoteMediaAddress(url, resolver)
+    return await requester(url, address)
+  }
+}
+const defaultRemoteMediaDownloader = createRemoteMediaDownloader(defaultRemoteMediaAddressResolver, requestRemoteMedia)
+let remoteMediaDownloader = defaultRemoteMediaDownloader
 
 type MediaAddErrorCode
   = | 'max_size_exceeded'
@@ -176,19 +201,11 @@ function resolveImplicitDiskName(): string {
 }
 
 function parseRemoteFileName(url: string): string {
-  try {
-    const parsedUrl = new URL(url)
-    return basename(parsedUrl.pathname) || 'media.bin'
-  } catch {
-    return 'media.bin'
-  }
+  const parsedUrl = new URL(url)
+  return basename(parsedUrl.pathname) || 'media.bin'
 }
 
 function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) {
-    return '0 bytes'
-  }
-
   const units = ['bytes', 'KB', 'MB', 'GB'] as const
   let value = bytes
   let unitIndex = 0
@@ -242,15 +259,15 @@ function createMaxSizeError(
 async function readRemoteMediaContents(
   response: Response,
   fileName: string,
-  maxSize?: number,
-  collectionName?: string,
+  maxSize: number | undefined,
+  collectionName: string,
 ): Promise<Uint8Array> {
   const resolvedMaxSize = typeof maxSize === 'number' ? maxSize : DEFAULT_REMOTE_MEDIA_MAX_SIZE
 
   if (!response.body) {
     const contents = new Uint8Array(await response.arrayBuffer())
     if (contents.byteLength > resolvedMaxSize) {
-      throw createMaxSizeError(fileName, collectionName ?? 'default', resolvedMaxSize, contents.byteLength)
+      throw createMaxSizeError(fileName, collectionName, resolvedMaxSize, contents.byteLength)
     }
 
     return contents
@@ -275,7 +292,7 @@ async function readRemoteMediaContents(
       if (totalSize > resolvedMaxSize) {
         /* v8 ignore next -- reader cancellation failures are intentionally swallowed. */
         await reader.cancel().catch(() => undefined)
-        throw createMaxSizeError(fileName, collectionName ?? 'default', resolvedMaxSize, totalSize)
+        throw createMaxSizeError(fileName, collectionName, resolvedMaxSize, totalSize)
       }
 
       chunks.push(value)
@@ -296,9 +313,9 @@ async function readRemoteMediaContents(
 
 async function resolveMediaSource(
   input: MediaSourceInput,
-  overrideFileName?: string,
-  overrideName?: string,
-  options?: {
+  overrideFileName: string | undefined,
+  overrideName: string | undefined,
+  options: {
     readonly maxSize?: number
     readonly collectionName: string
   },
@@ -308,8 +325,8 @@ async function resolveMediaSource(
       { url: input },
       overrideFileName,
       overrideName,
-      options?.maxSize,
-      options?.collectionName,
+      options.maxSize,
+      options.collectionName,
     )
   }
 
@@ -318,8 +335,8 @@ async function resolveMediaSource(
       input,
       overrideFileName,
       overrideName,
-      options?.maxSize,
-      options?.collectionName,
+      options.maxSize,
+      options.collectionName,
     )
   }
 
@@ -397,27 +414,25 @@ async function resolveRemoteMediaSource(
     readonly mimeType?: string
     readonly name?: string
   },
-  overrideFileName?: string,
-  overrideName?: string,
-  maxSize?: number,
-  collectionName?: string,
+  overrideFileName: string | undefined,
+  overrideName: string | undefined,
+  maxSize: number | undefined,
+  collectionName: string,
 ): Promise<ResolvedMediaSource> {
   const remoteUrl = resolveRemoteMediaUrl(input.url)
-  const response = await fetch(remoteUrl, {
-    redirect: 'manual',
-  })
+  const response = await remoteMediaDownloader(remoteUrl)
   if (response.status >= 300 && response.status < 400) {
     throw new Error('[@holo-js/media] Remote media downloads do not follow redirects.')
   }
 
   if (!response.ok) {
     throw new Error(
-      `[Holo Media] Failed to download media from "${remoteUrl}" (${response.status} ${response.statusText}).`,
+      `[Holo Media] Failed to download media from "${remoteUrl.toString()}" (${response.status} ${response.statusText}).`,
     )
   }
 
   const fileName = sanitizeFileName(
-    overrideFileName ?? input.fileName ?? parseRemoteFileName(remoteUrl),
+    overrideFileName ?? input.fileName ?? parseRemoteFileName(remoteUrl.toString()),
   )
   const responseMimeType = response.headers.get('content-type')?.split(';')[0]
   const contentLengthHeader = response.headers.get('content-length')
@@ -427,7 +442,7 @@ async function resolveRemoteMediaSource(
 
   const resolvedMaxSize = typeof maxSize === 'number' ? maxSize : DEFAULT_REMOTE_MEDIA_MAX_SIZE
   if (Number.isFinite(contentLength) && contentLength > resolvedMaxSize) {
-    throw createMaxSizeError(fileName, collectionName ?? 'default', resolvedMaxSize, contentLength)
+    throw createMaxSizeError(fileName, collectionName, resolvedMaxSize, contentLength)
   }
 
   const contents = await readRemoteMediaContents(
@@ -461,7 +476,7 @@ function isPathWithinRoot(path: string, root: string): boolean {
   return path === root || path.startsWith(`${root}${sep}`)
 }
 
-function resolveRemoteMediaUrl(value: string): string {
+function resolveRemoteMediaUrl(value: string): URL {
   let url: URL
   try {
     url = new URL(value)
@@ -481,36 +496,111 @@ function resolveRemoteMediaUrl(value: string): string {
     throw new Error('[@holo-js/media] Remote media URLs must not target local or private hosts.')
   }
 
-  return url.toString()
+  return url
+}
+
+function createBlockedRemoteMediaAddresses(): BlockList {
+  const blockList = new BlockList()
+  for (const [network, prefix] of [
+    ['0.0.0.0', 8],
+    ['10.0.0.0', 8],
+    ['100.64.0.0', 10],
+    ['127.0.0.0', 8],
+    ['169.254.0.0', 16],
+    ['172.16.0.0', 12],
+    ['192.0.0.0', 24],
+    ['192.0.2.0', 24],
+    ['192.168.0.0', 16],
+    ['198.18.0.0', 15],
+    ['198.51.100.0', 24],
+    ['203.0.113.0', 24],
+    ['224.0.0.0', 4],
+  ] as const) {
+    blockList.addSubnet(network, prefix, 'ipv4')
+  }
+  for (const [network, prefix] of [
+    ['::', 128],
+    ['::1', 128],
+    ['fc00::', 7],
+    ['fe80::', 10],
+    ['ff00::', 8],
+  ] as const) {
+    blockList.addSubnet(network, prefix, 'ipv6')
+  }
+  return blockList
+}
+
+function isBlockedRemoteMediaAddress(address: LookupAddress): boolean {
+  return BLOCKED_REMOTE_MEDIA_ADDRESSES.check(address.address, address.family === 4 ? 'ipv4' : 'ipv6')
+}
+
+async function resolveRemoteMediaAddress(
+  url: URL,
+  resolver: RemoteMediaAddressResolver,
+): Promise<LookupAddress> {
+  const addresses = await resolver(url.hostname)
+  if (addresses.length === 0 || addresses.some(isBlockedRemoteMediaAddress)) {
+    throw new Error('[@holo-js/media] Remote media URLs must not resolve to local or private hosts.')
+  }
+
+  return addresses[0]!
+}
+
+function requestRemoteMedia(url: URL, address: LookupAddress): Promise<Response> {
+  return new Promise((resolveResponse, reject) => {
+    const request = resolveRemoteMediaRequest(url.protocol)(url, {
+      headers: {
+        host: url.host,
+      },
+      lookup: createPinnedRemoteMediaLookup(address),
+    }, (response) => {
+      const headers = new Headers()
+      appendRemoteMediaHeaders(headers, response.headers)
+      resolveResponse(new Response(Readable.toWeb(response) as ReadableStream<Uint8Array>, {
+        status: response.statusCode,
+        statusText: response.statusMessage,
+        headers,
+      }))
+    })
+    request.on('error', reject)
+    request.end()
+  })
+}
+
+function createPinnedRemoteMediaLookup(address: LookupAddress): NonNullable<Parameters<typeof requestHttp>[1]>['lookup'] {
+  return (_hostname, options, callback) => options.all
+    ? callback(null, [address])
+    : callback(null, address.address, address.family)
+}
+
+function appendRemoteMediaHeaders(
+  headers: Headers,
+  source: Readonly<Record<string, string | readonly string[] | undefined>>,
+): void {
+  for (const [name, value] of Object.entries(source)) {
+    if (Array.isArray(value)) {
+      for (const entry of value) headers.append(name, entry)
+    } else if (typeof value === 'string') {
+      headers.set(name, value)
+    }
+  }
+}
+
+function resolveRemoteMediaRequest(protocol: string): typeof requestHttp {
+  return protocol === 'https:' ? requestHttps : requestHttp
 }
 
 function isBlockedRemoteMediaHost(hostname: string): boolean {
-  const normalized = hostname.toLowerCase()
+  const lowerCaseHostname = hostname.toLowerCase()
+  const normalized = lowerCaseHostname.startsWith('[') && lowerCaseHostname.endsWith(']')
+    ? lowerCaseHostname.slice(1, -1)
+    : lowerCaseHostname
   if (normalized === 'localhost' || normalized.endsWith('.localhost')) {
     return true
   }
 
-  const ipVersion = isIP(normalized)
-  if (ipVersion === 4) {
-    const [first = 0, second = 0] = normalized.split('.').map(Number)
-    return first === 0
-      || first === 10
-      || first === 127
-      || (first === 169 && second === 254)
-      || (first === 172 && second >= 16 && second <= 31)
-      || (first === 192 && second === 168)
-      || first >= 224
-  }
-
-  if (ipVersion === 6) {
-    return normalized === '::1'
-      || normalized === '::'
-      || normalized.startsWith('fc')
-      || normalized.startsWith('fd')
-      || normalized.startsWith('fe80:')
-  }
-
-  return false
+  const family = isIP(normalized)
+  return family !== 0 && isBlockedRemoteMediaAddress({ address: normalized, family })
 }
 
 function validateSource(
@@ -681,6 +771,24 @@ async function restoreDeletedMediaSnapshots(
     /* v8 ignore next -- rollback cleanup failures are intentionally swallowed. */
     await restoreDeletedMediaSnapshot(snapshot).catch(() => undefined)
   }
+}
+
+export const mediaAdderInternals = {
+  appendRemoteMediaHeaders,
+  createPinnedRemoteMediaLookup,
+  createRemoteMediaDownloader,
+  defaultRemoteMediaAddressResolver,
+  resetRemoteMediaTransport(): void {
+    remoteMediaDownloader = defaultRemoteMediaDownloader
+  },
+  async resolveRemoteMediaAddress(url: URL, resolver: RemoteMediaAddressResolver): Promise<LookupAddress> {
+    return await resolveRemoteMediaAddress(url, resolver)
+  },
+  requestRemoteMedia,
+  resolveRemoteMediaRequest,
+  setRemoteMediaDownloader(downloader: RemoteMediaDownloader): void {
+    remoteMediaDownloader = downloader
+  },
 }
 
 export class MediaAdder<

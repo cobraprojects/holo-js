@@ -1,10 +1,10 @@
 export {
   BUILT_IN_MAIL_DRIVERS,
-  defineMailConfig,
   HOLO_MAIL_DEFINITION_MARKER,
   MAIL_ATTACHMENT_DISPOSITIONS,
   MAIL_PRIORITY_VALUES,
 } from './contracts-types'
+export { defineMailConfig } from './config'
 export type {
   BuiltInMailDriverRegistry,
   HoloMailDriverRegistry,

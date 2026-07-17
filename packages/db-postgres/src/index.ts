@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { Pool, type PoolConfig, type QueryResult } from 'pg'
 import type {
+  DatabaseDriverFactory,
   DriverAdapter,
   DriverExecutionResult,
   DriverQueryResult,
@@ -27,17 +28,16 @@ export interface PostgresPoolLike extends PostgresQueryableLike {
   end(): Promise<void>
 }
 
-export interface PostgresAdapterOptions {
+export interface PostgresAdapterOptions<TConfig extends PoolConfig = PoolConfig> {
   connectionString?: string
-  config?: PoolConfig
+  config?: TConfig
   client?: PostgresClientLike
   pool?: PostgresPoolLike
-  createPool?: (config?: PoolConfig) => PostgresPoolLike
+  createPool?: (config?: TConfig) => PostgresPoolLike
 }
 
 type ScopedPostgresTransaction = {
   client: PostgresClientLike
-  leased: boolean
 }
 
 type BootstrapTarget = {
@@ -99,23 +99,24 @@ function resolveBootstrapTarget(config?: PoolConfig): BootstrapTarget | undefine
   return undefined
 }
 
-export class PostgresAdapter implements DriverAdapter {
+export class PostgresAdapter<TConfig extends PoolConfig = PoolConfig> implements DriverAdapter {
+  readonly supportsConcurrentTransactionScopes = true
   private pool?: PostgresPoolLike
   private readonly directClient?: PostgresClientLike
-  private readonly createPoolInstance?: (config?: PoolConfig) => PostgresPoolLike
-  private readonly config?: PoolConfig
+  private readonly createPoolInstance?: (config?: TConfig) => PostgresPoolLike
+  private readonly config?: TConfig
   private connected: boolean
   private transactionClient?: PostgresClientLike
   private leasedTransactionClient = false
   private readonly transactionScope = new AsyncLocalStorage<ScopedPostgresTransaction>()
 
-  constructor(options: PostgresAdapterOptions = {}) {
+  constructor(options: PostgresAdapterOptions<TConfig> = {}) {
     this.directClient = options.client
     this.pool = options.pool
     this.createPoolInstance = options.createPool ?? (options.client || options.pool
       ? undefined
       : config => new Pool(config))
-    this.config = options.config ?? (options.connectionString ? { connectionString: options.connectionString } : undefined)
+    this.config = options.config ?? (options.connectionString ? { connectionString: options.connectionString } as TConfig : undefined)
     this.connected = !!(options.client || options.pool)
   }
 
@@ -174,7 +175,6 @@ export class PostgresAdapter implements DriverAdapter {
     if (this.directClient) {
       return this.transactionScope.run({
         client: this.directClient,
-        leased: false,
       }, callback)
     }
 
@@ -184,7 +184,6 @@ export class PostgresAdapter implements DriverAdapter {
 
     const state: ScopedPostgresTransaction = {
       client: await this.pool.connect(),
-      leased: true,
     }
 
     return this.transactionScope.run(state, async () => {
@@ -291,7 +290,7 @@ export class PostgresAdapter implements DriverAdapter {
       return
     }
 
-    const bootstrapPool = this.createPoolInstance(target.config)
+    const bootstrapPool = this.createPoolInstance(target.config as TConfig)
 
     try {
       const existing = await bootstrapPool.query('select 1 from pg_database where datname = $1', [target.database])
@@ -359,10 +358,6 @@ export class PostgresAdapter implements DriverAdapter {
   }
 
   private releaseScopedTransaction(state: ScopedPostgresTransaction): void {
-    if (!state.leased) {
-      return
-    }
-
     state.client.release?.()
   }
 
@@ -375,6 +370,23 @@ export class PostgresAdapter implements DriverAdapter {
   }
 }
 
-export function createPostgresAdapter(options: PostgresAdapterOptions = {}): PostgresAdapter {
+export function createPostgresAdapter<TConfig extends PoolConfig = PoolConfig>(options: PostgresAdapterOptions<TConfig> = {}): PostgresAdapter<TConfig> {
   return new PostgresAdapter(options)
 }
+
+export const postgresDatabaseDriverFactory: DatabaseDriverFactory = Object.freeze({
+  driver: 'postgres',
+  supportsConcurrentTransactionScopes: true,
+  create(connection) {
+    return connection.url
+      ? createPostgresAdapter({ connectionString: connection.url })
+      : createPostgresAdapter({ config: {
+          host: connection.host,
+          port: connection.port,
+          user: connection.username,
+          password: connection.password,
+          database: connection.database,
+          ssl: connection.ssl,
+        } })
+  },
+})

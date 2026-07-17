@@ -33,7 +33,7 @@ export function buildModelTable<
 }
 
 export function inferModelName(tableName: string): string {
-  const unqualifiedName = tableName.split('.').at(-1) ?? tableName
+  const unqualifiedName = tableName.split('.').at(-1)!
   const singular = singularize(unqualifiedName)
   return singular
     .split(/[_-]/g)

@@ -11,6 +11,8 @@ files plus Holo-JS-owned server directories.
 - one of: Nuxt, Next.js, or SvelteKit
 - SQLite, Postgres, or MySQL
 
+The scaffold installs one concrete database driver package matching the selected database: `@holo-js/db-sqlite`, `@holo-js/db-postgres`, or `@holo-js/db-mysql`. Install additional concrete drivers explicitly when an application uses multiple database engines.
+
 ## Create a project interactively
 
 ::: code-group

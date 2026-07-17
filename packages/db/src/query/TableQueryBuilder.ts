@@ -75,16 +75,11 @@ import {
   withoutPredicates,
 } from './ast'
 import { createAggregateValueCounts } from './aggregateValueCounts'
-import { SQLiteQueryCompiler } from './SQLiteQueryCompiler.impl'
-import { PostgresQueryCompiler } from './PostgresQueryCompiler'
-import { MySQLQueryCompiler } from './MySQLQueryCompiler'
 import type { SQLQueryCompiler } from './SQLQueryCompiler'
-import { normalizeDialectWriteValue } from '../schema/normalization'
 import type { CursorPaginatedResult, CursorPaginationOptions, PaginatedResult, PaginationOptions, SimplePaginatedResult } from './types'
 import type { AnyColumnDefinition, InferSelect, TableDefinition } from '../schema/types'
 import type { DriverExecutionResult, DriverQueryResult, UnsafeStatement } from '../core/types'
 import type { DatabaseContext } from '../core/DatabaseContext'
-import type { SchemaDialectName } from '../schema/typeMapping'
 import type {
   QueryAggregateSelection,
   QueryDirection,
@@ -94,6 +89,13 @@ import type {
   QuerySelection,
   SelectQueryPlan,
 } from './ast'
+import {
+  normalizeQueryPredicateValue,
+  normalizeQueryUpdateValues,
+  normalizeQueryWriteRecord,
+  normalizeQueryWriteValue,
+} from './queryValueNormalizer'
+import { createQueryCompiler } from './queryCompilerFactory'
 
 type SelectRow<TTableOrName extends string | TableDefinition>
   = TTableOrName extends TableDefinition ? InferSelect<TTableOrName> : Record<string, unknown>
@@ -1459,10 +1461,7 @@ export class TableQueryBuilder<
   private async readGroupedAverageStates(
     groupedAggregate: DatabaseQueryGroupedAggregateObservation,
   ): Promise<readonly DatabaseQueryGroupedAverageStateObservation[] | undefined> {
-    const aggregateColumn = groupedAggregate.aggregateColumn
-    if (!aggregateColumn) {
-      return undefined
-    }
+    const aggregateColumn = groupedAggregate.aggregateColumn!
 
     const selections: QuerySelection[] = [
       Object.freeze({
@@ -1510,9 +1509,6 @@ export class TableQueryBuilder<
     groupedAggregate: DatabaseQueryGroupedAggregateObservation,
   ): Promise<readonly DatabaseQueryGroupedAggregateStateObservation[] | undefined> {
     const aggregateSelection = this.createGroupedAggregateStateValueSelection(groupedAggregate)
-    if (!aggregateSelection) {
-      return undefined
-    }
 
     const valueCounts = await this.readGroupedAggregateValueCounts(groupedAggregate)
     const selections: QuerySelection[] = [
@@ -1566,10 +1562,7 @@ export class TableQueryBuilder<
       return undefined
     }
 
-    const aggregateColumn = groupedAggregate.aggregateColumn
-    if (!aggregateColumn) {
-      return undefined
-    }
+    const aggregateColumn = groupedAggregate.aggregateColumn!
 
     const metadataPlan = Object.freeze({
       ...this.plan,
@@ -1641,27 +1634,16 @@ export class TableQueryBuilder<
 
   private createGroupedAggregateStateValueSelection(
     groupedAggregate: DatabaseQueryGroupedAggregateObservation,
-  ): QuerySelection | undefined {
+  ): QuerySelection {
     if (groupedAggregate.kind === 'count') {
       return this.createAggregateSelection('count', GROUPED_AGGREGATE_VALUE_KEY, '*')
     }
 
-    if (
-      (
-        groupedAggregate.kind === 'sum'
-        || groupedAggregate.kind === 'min'
-        || groupedAggregate.kind === 'max'
-      )
-      && groupedAggregate.aggregateColumn
-    ) {
-      return this.createAggregateSelection(
-        groupedAggregate.kind,
-        GROUPED_AGGREGATE_VALUE_KEY,
-        groupedAggregate.aggregateColumn,
-      )
-    }
-
-    return undefined
+    return this.createAggregateSelection(
+      groupedAggregate.kind,
+      GROUPED_AGGREGATE_VALUE_KEY,
+      groupedAggregate.aggregateColumn!,
+    )
   }
 
   private normalizeGroupedAggregateStateValue(
@@ -2123,13 +2105,16 @@ export class TableQueryBuilder<
       : await this.connection.executeCompiled(this.getCompiler().compile(
           createInsertQueryPlan(this.source, rows, { ignoreConflicts: true }),
         ))
-    if (!useReturningRows || result.affectedRows !== 0) {
-      await this.invalidateInsertQueries('insert', result.rows?.rows ?? rows, result.lastInsertId)
-    }
-    return {
+    const insertResult = {
       affectedRows: result.affectedRows,
       lastInsertId: result.lastInsertId,
     }
+    if (useReturningRows && result.affectedRows === 0) {
+      return insertResult
+    }
+
+    await this.invalidateInsertQueries('insert', result.rows?.rows ?? rows, result.lastInsertId)
+    return insertResult
   }
 
   async insertGetId(values: Readonly<Record<string, unknown>>): Promise<number | string | undefined> {
@@ -2158,13 +2143,16 @@ export class TableQueryBuilder<
       : await this.connection.executeCompiled(this.getCompiler().compile(
           createUpsertQueryPlan(this.source, rows, uniqueBy, updateColumns),
         ))
-    if (!useReturningRows || result.affectedRows !== 0) {
-      await this.invalidateInsertQueries('upsert', result.rows?.rows ?? rows, result.lastInsertId, previousRows)
-    }
-    return {
+    const upsertResult = {
       affectedRows: result.affectedRows,
       lastInsertId: result.lastInsertId,
     }
+    if (useReturningRows && result.affectedRows === 0) {
+      return upsertResult
+    }
+
+    await this.invalidateInsertQueries('upsert', result.rows?.rows ?? rows, result.lastInsertId, previousRows)
+    return upsertResult
   }
 
   async increment(
@@ -2369,10 +2357,7 @@ export class TableQueryBuilder<
     rows: readonly Readonly<Record<string, unknown>>[],
     uniqueBy: readonly string[],
   ): Promise<readonly Readonly<Record<string, unknown>>[] | undefined> {
-    const firstUniqueColumn = uniqueBy[0]
-    if (!firstUniqueColumn || rows.length === 0 || !rows.every(row => this.hasUniqueByValues(row, uniqueBy))) {
-      return undefined
-    }
+    const firstUniqueColumn = uniqueBy[0]!
 
     const firstColumnValues = Object.freeze([...new Set(rows.map(row => row[firstUniqueColumn]))])
     const query = new TableQueryBuilder<string, Record<string, unknown>>(this.source.tableName, this.connection)
@@ -2388,23 +2373,12 @@ export class TableQueryBuilder<
         continue
       }
 
-      const previousRow = result.rows[resultIndex]
-      if (!previousRow) {
-        continue
-      }
-
+      const previousRow = result.rows[resultIndex]!
       usedResultIndexes.add(resultIndex)
       previousRows.push(Object.freeze({ ...previousRow }))
     }
 
     return Object.freeze(previousRows)
-  }
-
-  private hasUniqueByValues(
-    row: Readonly<Record<string, unknown>>,
-    uniqueBy: readonly string[],
-  ): boolean {
-    return uniqueBy.every(column => Object.prototype.hasOwnProperty.call(row, column))
   }
 
   private rowsMatchUniqueBy(
@@ -2543,32 +2517,7 @@ export class TableQueryBuilder<
   }
 
   private getCompiler(): SQLQueryCompiler {
-    const dialect = this.connection.getDialect()
-
-    if (dialect.name.startsWith('sqlite')) {
-      return new SQLiteQueryCompiler(
-        identifier => dialect.quoteIdentifier(identifier),
-        index => dialect.createPlaceholder(index),
-      )
-    }
-
-    if (dialect.name.startsWith('postgres')) {
-      return new PostgresQueryCompiler(
-        identifier => dialect.quoteIdentifier(identifier),
-        index => dialect.createPlaceholder(index),
-      )
-    }
-
-    if (dialect.name.startsWith('mysql')) {
-      return new MySQLQueryCompiler(
-        identifier => dialect.quoteIdentifier(identifier),
-        index => dialect.createPlaceholder(index),
-      )
-    }
-
-    throw new CompilerError(
-      `The active query compiler does not support dialect "${dialect.name}".`,
-    )
+    return createQueryCompiler(this.connection)
   }
 
   private async getUnpaginatedRows<TRow extends Record<string, unknown>>(): Promise<TRow[]> {
@@ -2733,8 +2682,7 @@ export class TableQueryBuilder<
       return row[column]
     }
 
-    const unqualifiedColumn = column.split('.').at(-1)
-    return unqualifiedColumn ? row[unqualifiedColumn] : undefined
+    return row[column.split('.').at(-1)!]
   }
 
   private async aggregateNumeric(column: string, kind: 'sum'): Promise<number> {
@@ -2766,56 +2714,23 @@ export class TableQueryBuilder<
   private normalizeUpdateValues(
     values: Readonly<Record<string, unknown>>,
   ): Readonly<Record<string, unknown | readonly QueryJsonUpdateOperation[]>> {
-    const normalized: Record<string, unknown | QueryJsonUpdateOperation[]> = {}
-
-    for (const [key, value] of Object.entries(values)) {
-      if (!key.includes('->')) {
-        normalized[key] = this.normalizeWriteValueForColumn(key, value)
-        continue
-      }
-
-      const { column, path } = this.parseJsonPath(key, false, 'update')
-      if (typeof normalized[column] !== 'undefined' && !Array.isArray(normalized[column])) {
-        throw new SecurityError(`Cannot mix direct and nested JSON assignments for column "${column}" in one update.`)
-      }
-
-      const operations = Array.isArray(normalized[column]) ? normalized[column] as QueryJsonUpdateOperation[] : []
-      operations.push(Object.freeze({
-        kind: 'json-set' as const,
-        path,
-        value,
-      }))
-      normalized[column] = operations
-    }
-
-    return Object.freeze(Object.fromEntries(
-      Object.entries(normalized).map(([column, value]) => [
-        column,
-        Array.isArray(value) ? Object.freeze([...value]) : value,
-      ]),
-    ))
-  }
-
-  private normalizeWriteRecord(values: Readonly<Record<string, unknown>>): Record<string, unknown> {
-    return Object.fromEntries(
-      Object.entries(values).map(([key, value]) => [key, this.normalizeWriteValueForColumn(key, value)]),
+    return normalizeQueryUpdateValues(
+      this.source.table,
+      this.connection.getDriver(),
+      values,
+      value => this.parseJsonPath(value, false, 'update'),
     )
   }
 
-  private normalizeWriteValueForColumn(columnName: string, value: unknown): unknown {
-    const column = this.source.table?.columns[columnName]
-    if (!column) {
-      return value
-    }
+  private normalizeWriteRecord(values: Readonly<Record<string, unknown>>): Record<string, unknown> {
+    return normalizeQueryWriteRecord(this.source.table, this.connection.getDriver(), values)
+  }
 
-    return normalizeDialectWriteValue(this.connection.getDriver() as SchemaDialectName, column as AnyColumnDefinition, value)
+  private normalizeWriteValueForColumn(columnName: string, value: unknown): unknown {
+    return normalizeQueryWriteValue(this.source.table, this.connection.getDriver(), columnName, value)
   }
 
   private normalizePredicateValueForColumn(columnName: string, value: unknown): unknown {
-    if (Array.isArray(value)) {
-      return value.map(item => this.normalizeWriteValueForColumn(columnName, item))
-    }
-
-    return this.normalizeWriteValueForColumn(columnName, value)
+    return normalizeQueryPredicateValue(this.source.table, this.connection.getDriver(), columnName, value)
   }
 }

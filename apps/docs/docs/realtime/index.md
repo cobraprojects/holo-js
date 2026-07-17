@@ -316,7 +316,7 @@ unless the behavior itself is dependency normalization.
 
 ```ts
 import { describe, expect, it } from 'vitest'
-import { executeRealtimeQuery } from '@holo-js/realtime'
+import { executeRealtimeQuery } from '@holo-js/realtime/server'
 import { listPosts } from '../server/realtime/posts'
 
 describe('listPosts', () => {

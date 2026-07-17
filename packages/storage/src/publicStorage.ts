@@ -1,7 +1,7 @@
 import { readFile, realpath } from 'node:fs/promises'
 import { extname, resolve, sep } from 'node:path'
 import { normalizeModuleOptions, type RuntimeDiskConfig, type HoloStorageRuntimeConfig } from './config'
-import type { NormalizedHoloStorageConfig } from '@holo-js/config'
+import type { NormalizedHoloStorageConfig } from './config'
 
 const NAMED_PUBLIC_DISK_ROUTE_SEGMENT = '__holo'
 
@@ -59,16 +59,12 @@ function resolveContentType(absolutePath: string): string {
     case '.avif': return 'image/avif'
     case '.css': return 'text/css; charset=utf-8'
     case '.gif': return 'image/gif'
-    case '.html': return 'text/html; charset=utf-8'
     case '.jpeg':
     case '.jpg': return 'image/jpeg'
-    case '.js':
-    case '.mjs': return 'text/javascript; charset=utf-8'
     case '.json': return 'application/json; charset=utf-8'
     case '.mp3': return 'audio/mpeg'
     case '.pdf': return 'application/pdf'
     case '.png': return 'image/png'
-    case '.svg': return 'image/svg+xml'
     case '.txt': return 'text/plain; charset=utf-8'
     case '.webp': return 'image/webp'
     case '.woff': return 'font/woff'
@@ -135,7 +131,7 @@ function resolveNamedPublicStorageRequest(projectRoot: string, config: HoloStora
   const namedPublicDisks = Object.values(config.disks).filter((disk): disk is PublicLocalDisk => isPublicLocalDisk(disk) && disk.name !== 'public')
   const usesReservedNamespace = segments[0] === NAMED_PUBLIC_DISK_ROUTE_SEGMENT
   const diskName = usesReservedNamespace ? segments[1] : segments[0]
-  const disk = diskName ? namedPublicDisks.find(candidate => candidate.name === diskName) : undefined
+  const disk = namedPublicDisks.find(candidate => candidate.name === diskName)
   if (!disk) {
     return null
   }
@@ -149,12 +145,7 @@ function resolveNamedPublicStorageRequest(projectRoot: string, config: HoloStora
   return absolutePath ? { disk, absolutePath } : null
 }
 
-function resolvePublicStorageRequest(projectRoot: string, config: HoloStorageRuntimeConfig, routePath: string): ResolvedPublicStorageRequest | null {
-  const segments = resolveRouteSegments(routePath)
-  if (!segments) {
-    return null
-  }
-
+function resolvePublicStorageRequest(projectRoot: string, config: HoloStorageRuntimeConfig, segments: string[]): ResolvedPublicStorageRequest | null {
   if (usesReservedNamedDiskNamespace(segments)) {
     return resolveNamedPublicStorageRequest(projectRoot, config, segments) ?? resolveDefaultPublicStorageRequest(projectRoot, config, segments)
   }
@@ -189,7 +180,7 @@ export async function createPublicStorageResponse(projectRoot: string, storageCo
     return createMissingFileResponse()
   }
 
-  const resolvedRequest = resolvePublicStorageRequest(projectRoot, normalized, routePath)
+  const resolvedRequest = resolvePublicStorageRequest(projectRoot, normalized, segments)
   if (!resolvedRequest) {
     return createMissingFileResponse()
   }

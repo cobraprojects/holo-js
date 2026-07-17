@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const nextFixtureRoot = resolve(import.meta.dirname, '../../../apps/Next_test_app')
+const nextFixtureRoot = resolve(import.meta.dirname, '../../../apps/blog-next')
 
 type CommandResult = {
   readonly stdout: string
@@ -54,8 +54,8 @@ describe('@holo-js/core authorization real-world feature integration', () => {
 
     const script = `
 import auth, { authRuntimeInternals, configureAuthRuntime } from '@holo-js/auth'
-import authorization, { authorize, can, cannot, inspect } from '@holo-js/authorization'
-import { holo } from './server/holo.ts'
+import { authorize, can, cannot, inspect } from '@holo-js/authorization'
+import { holo } from './.holo-js/generated/next/holo.ts'
 
 const project = await holo.getApp()
 
@@ -63,26 +63,24 @@ const { default: Post } = await import('./server/models/Post.ts')
 const { default: User } = await import('./server/models/User.ts')
 
 let draft = await Post.where('slug', 'authorization-draft').first()
-const alice = await User.where('email', 'alice@matrix.test').firstOrFail()
-const aliceId = alice.toAttributes().id
+const editor = await User.where('email', 'editor@example.com').firstOrFail()
+const editorId = editor.toAttributes().id
 
 if (!draft) {
   draft = await Post.create({
-    user_id: aliceId,
+    user_id: editorId,
     slug: 'authorization-draft',
     title: 'Authorization Draft',
+    excerpt: 'Authorization integration fixture.',
     body: 'Hidden from guests.',
-    views: 0,
-    rating: '4.1',
-    featured: false,
-    metadata: { lane: 'authorization' },
+    status: 'draft',
     published_at: null,
   })
 }
 
-const published = await Post.where('slug', 'matrix-intro').firstOrFail()
+const published = await Post.where('slug', 'shipping-a-real-holo-blog-on-next').firstOrFail()
 
-const session = await auth.loginUsingId(aliceId)
+const session = await auth.loginUsingId(editorId)
 const bindings = authRuntimeInternals.getRuntimeBindings()
 const freshContext = authRuntimeInternals.createAsyncAuthContext()
 configureAuthRuntime({ ...bindings, context: freshContext })
@@ -97,15 +95,6 @@ try {
   const publishedDecision = await inspect('view', published)
   const draftAllowed = await can('view', draft)
   const deleteDenied = await cannot('delete', published)
-  const csvAbility = await authorization.forUser(currentUser).ability('reports.export').can({
-    postId: String(published.get('id')),
-    format: 'csv',
-  })
-  const jsonDecision = await authorization.forUser(currentUser).ability('reports.export').inspect({
-    postId: String(published.get('id')),
-    format: 'json',
-  })
-
   await authorize('view', draft)
 
   console.log(JSON.stringify({
@@ -116,8 +105,6 @@ try {
     publishedDecision,
     draftAllowed,
     deleteDenied,
-    csvAbility,
-    jsonDecision,
   }))
 } finally {
   configureAuthRuntime(bindings)
@@ -147,27 +134,15 @@ try {
         }
         readonly draftAllowed: boolean
         readonly deleteDenied: boolean
-        readonly csvAbility: boolean
-        readonly jsonDecision: {
-          readonly allowed: boolean
-          readonly status: number
-          readonly message?: string
-        }
       }
 
       expect(payload.authUserId).not.toBeNull()
-      expect(payload.authUserEmail).toBe('alice@matrix.test')
+      expect(payload.authUserEmail).toBe('editor@example.com')
       expect(payload.postModelName).toBe('Post')
-      expect(payload.postSlug).toBe('matrix-intro')
+      expect(payload.postSlug).toBe('shipping-a-real-holo-blog-on-next')
       expect(payload.publishedDecision).toEqual({ allowed: true, status: 200 })
       expect(payload.draftAllowed).toBe(true)
       expect(payload.deleteDenied).toBe(true)
-      expect(payload.csvAbility).toBe(true)
-      expect(payload.jsonDecision).toEqual({
-        allowed: false,
-        status: 403,
-        message: 'Only editors can export JSON reports.',
-      })
     })
   }, 300_000)
 })

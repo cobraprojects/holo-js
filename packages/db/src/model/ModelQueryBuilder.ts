@@ -2340,7 +2340,7 @@ export class ModelQueryBuilder<
   }
 
   private readCursorColumnValue(entity: Entity<TTable>, column: string): unknown {
-    const unqualifiedColumn = column.split('.').at(-1) ?? column
+    const unqualifiedColumn = column.split('.').at(-1)!
     return entity.get(unqualifiedColumn as ModelAttributeKey<TTable>)
   }
 }

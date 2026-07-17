@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HoloStorageRuntimeConfig } from '@holo-js/storage'
+import type { H3Event } from 'h3'
 
 const readFile = vi.fn()
 const open = vi.fn()
@@ -15,6 +16,18 @@ vi.mock('node:fs/promises', () => ({
 
 vi.mock('#imports', () => ({
   useRuntimeConfig: () => ({ holoStorage: runtimeConfig }),
+}))
+vi.mock('h3', () => ({
+  createError: (input: { statusCode: number, statusMessage: string }) => (
+    Reflect.get(globalThis, 'createError') as (value: typeof input) => Error
+  )(input),
+  defineEventHandler: (handler: unknown) => handler,
+  getRequestURL: (event: unknown) => (
+    Reflect.get(globalThis, 'getRequestURL') as (value: unknown) => URL
+  )(event),
+  setResponseHeader: (event: unknown, name: string, value: string) => (
+    Reflect.get(globalThis, 'setResponseHeader') as (target: unknown, key: string, header: string) => void
+  )(event, name, value),
 }))
 vi.stubGlobal('defineEventHandler', (handler: unknown) => handler)
 vi.stubGlobal('createError', (input: { statusCode: number, statusMessage: string }) => {
@@ -135,7 +148,7 @@ describe('public storage route resolution', () => {
       throw new Error(`unexpected path: ${path}`)
     })
 
-    await expect(storageHandler({})).resolves.toEqual(Buffer.from('named-logo'))
+    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('named-logo'))
     expect(readFile.mock.calls.map(call => call[0])).toEqual([
       expect.stringContaining('/storage/app/public/assets/logo.png'),
       expect.stringContaining('/storage/assets/logo.png'),
@@ -152,7 +165,7 @@ describe('public storage route resolution', () => {
       throw new Error(`unexpected path: ${path}`)
     })
 
-    await expect(storageHandler({})).resolves.toEqual(Buffer.from('named-logo'))
+    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('named-logo'))
     expect(readFile).toHaveBeenCalledTimes(1)
     expect(readFile).toHaveBeenCalledWith(expect.stringContaining('/storage/assets/logo.png'))
   })
@@ -167,7 +180,7 @@ describe('public storage route resolution', () => {
       throw new Error(`unexpected path: ${path}`)
     })
 
-    await expect(storageHandler({})).resolves.toEqual(Buffer.from('default-logo'))
+    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('default-logo'))
     expect(readFile).toHaveBeenCalledTimes(1)
     expect(readFile).toHaveBeenCalledWith(
       expect.stringContaining('/storage/app/public/__holo/logo.png'),
@@ -188,7 +201,7 @@ describe('public storage route resolution', () => {
       throw new Error(`unexpected path: ${path}`)
     })
 
-    await expect(storageHandler({})).rejects.toMatchObject({
+    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({
       statusCode: 404,
       message: 'Storage file not found.',
     })
@@ -210,7 +223,7 @@ describe('public storage route resolution', () => {
       throw new Error(`unexpected path: ${path}`)
     })
 
-    await expect(storageHandler({})).resolves.toEqual(Buffer.from('public-logo'))
+    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('public-logo'))
     expect(readFile).toHaveBeenCalledTimes(1)
     expect(readFile).toHaveBeenCalledWith(expect.stringContaining('/storage/app/public/assets/logo.png'))
   })
@@ -218,7 +231,7 @@ describe('public storage route resolution', () => {
   it('returns a not-found error when no route can be resolved', async () => {
     vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/'))
 
-    await expect(storageHandler({})).rejects.toMatchObject({
+    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({
       statusCode: 404,
       message: 'Storage file not found.',
     })
@@ -238,7 +251,7 @@ describe('public storage route resolution', () => {
       throw new Error(`unexpected path: ${path}`)
     })
 
-    await expect(storageHandler({})).rejects.toMatchObject({ code: 'EACCES' })
+    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({ code: 'EACCES' })
     expect(readFile).toHaveBeenCalledTimes(1)
     expect(readFile).toHaveBeenCalledWith(expect.stringContaining('/storage/app/public/assets/logo.png'))
   })
@@ -250,7 +263,7 @@ describe('public storage route resolution', () => {
     readFile.mockResolvedValue(Buffer.from('named-logo'))
 
     try {
-      await expect(storageHandler({})).resolves.toEqual(Buffer.from('named-logo'))
+      await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('named-logo'))
       expect(readFile).toHaveBeenCalledWith(expect.stringContaining('/storage/assets/logo.txt'))
     } finally {
       runtimeConfig.disks.public!.visibility = originalVisibility ?? 'public'
@@ -263,7 +276,7 @@ describe('public storage route resolution', () => {
     runtimeConfig.disks.public!.visibility = 'private'
 
     try {
-      await expect(storageHandler({})).rejects.toMatchObject({
+      await expect(storageHandler({} as H3Event)).rejects.toMatchObject({
         statusCode: 404,
         message: 'Storage file not found.',
       })
@@ -277,7 +290,7 @@ describe('public storage route resolution', () => {
     vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/avatars/user-1.png'))
     readFile.mockResolvedValue(Buffer.from('png-data'))
 
-    await expect(storageHandler({})).resolves.toEqual(Buffer.from('png-data'))
+    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('png-data'))
     expect(setResponseHeader).toHaveBeenCalledWith({}, 'content-type', 'image/png')
   })
 
@@ -291,7 +304,7 @@ describe('public storage route resolution', () => {
       throw new Error(`unexpected path: ${path}`)
     })
 
-    await expect(storageHandler({})).resolves.toEqual(Buffer.from('pdf-data'))
+    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('pdf-data'))
     expect(readFile).toHaveBeenCalledWith(
       expect.stringContaining('/storage/app/public/reports/My File #1.pdf'),
     )
@@ -307,7 +320,7 @@ describe('public storage route resolution', () => {
       throw new Error(`unexpected path: ${path}`)
     })
 
-    await expect(storageHandler({})).resolves.toEqual(Buffer.from('raw-escape-data'))
+    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('raw-escape-data'))
     expect(readFile).toHaveBeenCalledWith(
       expect.stringContaining('/storage/app/public/reports/%E0%A4%A.txt'),
     )
@@ -328,7 +341,7 @@ describe('public storage route resolution', () => {
     })
     readFile.mockResolvedValue(Buffer.from('leaked-data'))
 
-    await expect(storageHandler({})).rejects.toMatchObject({
+    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({
       statusCode: 404,
       message: 'Storage file not found.',
     })
@@ -350,7 +363,7 @@ describe('public storage route resolution', () => {
     })
     readFile.mockResolvedValue(Buffer.from('public-report'))
 
-    await expect(storageHandler({})).resolves.toEqual(Buffer.from('public-report'))
+    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('public-report'))
     expect(open).toHaveBeenCalledWith(
       expect.stringContaining('/storage/app/public/linked/report.txt'),
       'r',
@@ -378,7 +391,7 @@ describe('public storage route resolution', () => {
     readFile.mockResolvedValue(Buffer.from('leaked-data'))
     openedHandle.readFile.mockResolvedValue(Buffer.from('public-data'))
 
-    await expect(storageHandler({})).resolves.toEqual(Buffer.from('public-data'))
+    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('public-data'))
     expect(readFile).not.toHaveBeenCalled()
     expect(openedHandle.readFile).toHaveBeenCalledTimes(1)
     expect(openedHandle.close).toHaveBeenCalledTimes(1)
@@ -401,7 +414,7 @@ describe('public storage route resolution', () => {
     stat.mockResolvedValue({ dev: 2, ino: 20 })
     open.mockResolvedValue(openedHandle)
 
-    await expect(storageHandler({})).rejects.toMatchObject({
+    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({
       statusCode: 404,
       message: 'Storage file not found.',
     })
@@ -436,7 +449,7 @@ describe('public storage route resolution', () => {
       vi.stubGlobal('getRequestURL', () => new URL(`https://app.test/storage/${fileName}`))
       readFile.mockResolvedValue(Buffer.from(fileName))
 
-      await expect(storageHandler({})).resolves.toEqual(Buffer.from(fileName))
+      await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from(fileName))
       expect(setResponseHeader).toHaveBeenCalledWith({}, 'content-type', contentType)
       expect(setResponseHeader).toHaveBeenCalledWith({}, 'x-content-type-options', 'nosniff')
       if (['asset.html', 'asset.js', 'asset.mjs', 'asset.svg'].includes(fileName)) {
@@ -459,7 +472,7 @@ describe('public storage route resolution', () => {
       throw new Error(`unexpected path: ${path}`)
     })
 
-    await expect(storageHandler({})).resolves.toEqual(Buffer.from('named-logo'))
+    await expect(storageHandler({} as H3Event)).resolves.toEqual(Buffer.from('named-logo'))
     expect(setResponseHeader).toHaveBeenCalledWith({}, 'content-type', 'text/plain; charset=utf-8')
   })
 
@@ -467,7 +480,7 @@ describe('public storage route resolution', () => {
     vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/assets/logo.png'))
     readFile.mockRejectedValue(createReadError('ENOENT'))
 
-    await expect(storageHandler({})).rejects.toMatchObject({
+    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({
       statusCode: 404,
       message: 'Storage file not found.',
     })
@@ -478,7 +491,7 @@ describe('public storage route resolution', () => {
     vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/avatars'))
     readFile.mockRejectedValue(createReadError('EISDIR'))
 
-    await expect(storageHandler({})).rejects.toMatchObject({
+    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({
       statusCode: 404,
       message: 'Storage file not found.',
     })
@@ -488,7 +501,7 @@ describe('public storage route resolution', () => {
     vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/avatars/logo.png'))
     readFile.mockRejectedValue(createReadError('ENOENT'))
 
-    await expect(storageHandler({})).rejects.toMatchObject({
+    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({
       statusCode: 404,
       message: 'Storage file not found.',
     })
@@ -509,14 +522,14 @@ describe('public storage route resolution', () => {
       throw new Error(`unexpected path: ${path}`)
     })
 
-    await expect(storageHandler({})).rejects.toMatchObject({ code: 'EACCES' })
+    await expect(storageHandler({} as H3Event)).rejects.toMatchObject({ code: 'EACCES' })
   })
 
   it('rethrows primitive read errors without treating them as missing files', async () => {
     vi.stubGlobal('getRequestURL', () => new URL('https://app.test/storage/avatars/logo.png'))
     readFile.mockRejectedValue('boom')
 
-    await expect(storageHandler({})).rejects.toBe('boom')
+    await expect(storageHandler({} as H3Event)).rejects.toBe('boom')
     expect(readFile).toHaveBeenCalledTimes(1)
   })
 

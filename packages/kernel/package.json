@@ -1,0 +1,34 @@
+{
+  "name": "@holo-js/kernel",
+  "version": "0.2.6",
+  "description": "Holo-JS Framework - dependency-free contracts, plugins, and runtime lifecycle",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./http-errors": {
+      "types": "./dist/http-errors.d.ts",
+      "import": "./dist/http-errors.mjs",
+      "default": "./dist/http-errors.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "stub": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest --run"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

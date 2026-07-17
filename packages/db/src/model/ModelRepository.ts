@@ -1,6 +1,6 @@
 import { connectionAsyncContext } from '../concurrency/AsyncConnectionContext'
 import { DB } from '../facade/DB'
-import { ConfigurationError, DatabaseError, HydrationError, ModelNotFoundException, RelationError, SecurityError } from '../core/errors'
+import { ConfigurationError, HydrationError, ModelNotFoundException, RelationError, SecurityError } from '../core/errors'
 import {
   createDatabaseQueryObservation,
   createTableCacheDependency,
@@ -15,22 +15,27 @@ import {
   type DatabaseQueryResultPathSegment,
 } from '../cache'
 import { TableQueryBuilder } from '../query/TableQueryBuilder'
-import { createAggregateValueCounts } from '../query/aggregateValueCounts'
 import { withPredicate, type SelectQueryPlan } from '../query/ast'
 import { Entity } from './Entity'
 import { createModelCollection, type ModelCollection } from './collection'
+import { isUniqueConstraintError } from './constraintErrors'
 import { listDynamicRelationNames, resolveDynamicRelation } from './dynamicRelations'
-import { areModelEventsMuted, areModelGuardsDisabled, withoutModelEvents } from './eventState'
+import { areModelGuardsDisabled, withoutModelEvents } from './eventState'
 import { ModelQueryBuilder } from './ModelQueryBuilder'
+import { ModelEventDispatcher } from './ModelEventDispatcher'
+import { ModelValueTransformer } from './ModelValueTransformer'
+import {
+  RelationAggregateCalculator,
+  type RelationAggregateComputation,
+} from './RelationAggregateCalculator'
 import { listMorphModels, resolveMorphModel } from './morphRegistry'
 import { getModelRuntimeSettings } from './runtimeSettings'
-import { normalizeDialectReadValue, normalizeDialectWriteValue } from '../schema/normalization'
+import { applyGeneratedUniqueIds, applyPendingModelAttributes } from './uniqueIds'
 import type { TableDefinition } from '../schema/types'
 import type { SchemaDialectName } from '../schema/typeMapping'
 import type { DatabaseContext } from '../core/DatabaseContext'
 import type {
   AnyModelDefinition,
-  BuiltInCastName,
   ModelDefinitionLike,
   ModelCastDefinition,
   ModelColumnName,
@@ -70,10 +75,6 @@ type RelationAggregateObservationTarget = {
   readonly connectionName: string
   readonly tableName: string
   readonly value: unknown
-}
-type RelationAggregateComputation = {
-  readonly metadata?: DatabaseQueryAggregateObservation
-  readonly value: number | null
 }
 type BelongsToManyRelatedObservationMetadata = {
   readonly dependencies: readonly string[]
@@ -127,12 +128,17 @@ function resolveActiveConnection(connection: DatabaseContext): DatabaseContext {
 
 export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   readonly definition: ModelDefinition<TTable>
+  private readonly eventDispatcher: ModelEventDispatcher<TTable>
+  private readonly relationAggregateCalculator = new RelationAggregateCalculator()
+  private readonly valueTransformer: ModelValueTransformer<TTable>
 
   constructor(
     definition: ModelDefinition<TTable>,
     private readonly connection: DatabaseContext,
   ) {
     this.definition = definition
+    this.eventDispatcher = new ModelEventDispatcher(definition, this)
+    this.valueTransformer = new ModelValueTransformer(definition, () => this.getConnection().getDriver() as SchemaDialectName)
   }
 
   static from<TTable extends TableDefinition>(
@@ -309,7 +315,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
   }
 
   make(values: Partial<ModelRecord<TTable>> = {}): Entity<TTable> {
-    return new Entity(this, this.sanitizeWritePayload(this.applyPendingAttributes(values), 'create'), false)
+    return new Entity(
+      this,
+      this.sanitizeWritePayload(applyPendingModelAttributes(this.definition, values), 'create'),
+      false,
+    )
   }
 
   hydrate(values: Partial<ModelRecord<TTable>>): Entity<TTable> {
@@ -586,7 +596,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       }
 
       const relation = this.getRelationDefinition(aggregate.relation)
-      const key = this.getAggregateAttributeKey(aggregate)
+      const key = this.relationAggregateCalculator.getAttributeKey(aggregate)
 
       if (aggregate.kind === 'count' || aggregate.kind === 'exists') {
         const counts = await this.getRelationMatchCounts(entities, relation, aggregate.constraint)
@@ -641,7 +651,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       }
 
       const relation = this.getRelationDefinition(aggregate.relation)
-      const key = this.getAggregateAttributeKey(aggregate)
+      const key = this.relationAggregateCalculator.getAttributeKey(aggregate)
 
       for (let index = 0; index < entities.length; index += 1) {
         const entity = entities[index]
@@ -773,12 +783,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         relation.foreignKey,
         parentKey,
       )
-      const dependencies = predicateDependency
-        ? Object.freeze([
-            createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
-            predicateDependency,
-          ])
-        : Object.freeze([createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName)])
+      const dependencies = Object.freeze([
+        createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
+        predicateDependency!,
+      ])
 
       recordDatabaseQueryObservation(Object.freeze({
         connectionName: related.getConnectionName(),
@@ -828,12 +836,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         relation.foreignKey,
         parentKey,
       )
-      const dependencies = predicateDependency
-        ? Object.freeze([
-            createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
-            predicateDependency,
-          ])
-        : Object.freeze([createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName)])
+      const dependencies = Object.freeze([
+        createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
+        predicateDependency!,
+      ])
 
       recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation(Object.freeze({
         connectionName: related.getConnectionName(),
@@ -893,12 +899,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
         relation.ownerKey,
         ownerKey,
       )
-      const dependencies = predicateDependency
-        ? Object.freeze([
-            createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
-            predicateDependency,
-          ])
-        : Object.freeze([createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName)])
+      const dependencies = Object.freeze([
+        createTableCacheDependency(related.getConnectionName(), related.definition.table.tableName),
+        predicateDependency!,
+      ])
 
       recordDatabaseQueryObservation(this.createNullableSingleRecordRelationObservation(Object.freeze({
         connectionName: related.getConnectionName(),
@@ -934,12 +938,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       this.definition.primaryKey,
       parentKey,
     )
-    const dependencies = predicateDependency
-      ? Object.freeze([
-          createTableCacheDependency(this.getConnectionName(), this.definition.table.tableName),
-          predicateDependency,
-        ])
-      : Object.freeze([createTableCacheDependency(this.getConnectionName(), this.definition.table.tableName)])
+    const dependencies = Object.freeze([
+      createTableCacheDependency(this.getConnectionName(), this.definition.table.tableName),
+      predicateDependency!,
+    ])
     const related = this.resolveRelatedRepository(relation.related)
 
     return Object.freeze({
@@ -1042,9 +1044,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       value: parentKey,
     })
     const dependencies = resolveQueryCacheDependencies(parentPlan, related.getConnectionName())
-    return dependencies
-      ? createDatabaseQueryObservation(parentPlan, related.getConnectionName(), dependencies)
-      : undefined
+    return createDatabaseQueryObservation(parentPlan, related.getConnectionName(), dependencies!)
   }
 
   private createBelongsToRelationObservation(
@@ -1064,9 +1064,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       value: ownerKey,
     })
     const dependencies = resolveQueryCacheDependencies(ownerPlan, related.getConnectionName())
-    return dependencies
-      ? createDatabaseQueryObservation(ownerPlan, related.getConnectionName(), dependencies)
-      : undefined
+    return createDatabaseQueryObservation(ownerPlan, related.getConnectionName(), dependencies!)
   }
 
   private recordBelongsToManyRelationObservations(
@@ -1618,7 +1616,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
       }
       const payload = this.sanitizeWritePayload(
         this.applyTimestampDefaults(
-          this.applyGeneratedUniqueIds(this.applyPendingAttributes(values), generatedColumns),
+          applyGeneratedUniqueIds(
+            this.definition,
+            applyPendingModelAttributes(this.definition, values),
+            generatedColumns,
+          ),
           'create',
         ),
         'create',
@@ -2138,11 +2140,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     for (const entity of entities) {
       const loaded = entity.getRelation<unknown>(relationName)
       if (Array.isArray(loaded)) {
-        for (const item of loaded) {
-          if (isEntity(item)) {
-            collected.push(item)
-          }
-        }
+        collected.push(...loaded.filter(isEntity))
         continue
       }
 
@@ -2821,18 +2819,6 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
   }
 
-  private getAggregateAttributeKey(aggregate: AggregateLoad): string {
-    if (aggregate.alias) {
-      return aggregate.alias
-    }
-
-    if (aggregate.kind === 'count' || aggregate.kind === 'exists') {
-      return `${aggregate.relation}_${aggregate.kind}`
-    }
-
-    return `${aggregate.relation}_${aggregate.kind}_${aggregate.column}`
-  }
-
   private async getRelationAggregateValues(
     entities: readonly Entity<TTable>[],
     relation: RelationDefinition,
@@ -2862,89 +2848,10 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     for (const entity of entities) {
       const parentKey = this.getRelationParentValue(entity, relation)
       const relatedEntities = grouped.get(parentKey) ?? []
-      values.set(parentKey, this.computeAggregateValue(aggregate.kind, relatedEntities, column))
+      values.set(parentKey, this.relationAggregateCalculator.computeValue(aggregate.kind, relatedEntities, column))
     }
 
     return values
-  }
-
-  private computeAggregateValue(
-    kind: Exclude<RelationAggregateKind, 'count' | 'exists'>,
-    entities: readonly Entity[],
-    column: string,
-  ): RelationAggregateComputation {
-    const values = entities.map(entity => entity.toAttributes()[column as keyof ReturnType<typeof entity.toAttributes>])
-
-    switch (kind) {
-      case 'sum': {
-        const numbers = values.map(value => this.assertNumericAggregateValue(value, kind, column))
-        return Object.freeze({
-          value: numbers.reduce((sum, value) => sum + value, 0),
-        })
-      }
-      case 'avg': {
-        const numbers = values.map(value => this.assertNumericAggregateValue(value, kind, column))
-        const sum = numbers.reduce((total, value) => total + value, 0)
-        const metadata = Object.freeze({
-          column,
-          count: numbers.length,
-          kind,
-          sum,
-        })
-        if (numbers.length === 0) {
-          return Object.freeze({
-            metadata,
-            value: null,
-          })
-        }
-        return Object.freeze({
-          metadata,
-          value: sum / numbers.length,
-        })
-      }
-      case 'min': {
-        const numbers = values.map(value => this.assertNumericAggregateValue(value, kind, column))
-        return this.computeExtremeAggregateValue(kind, column, numbers)
-      }
-      case 'max': {
-        const numbers = values.map(value => this.assertNumericAggregateValue(value, kind, column))
-        return this.computeExtremeAggregateValue(kind, column, numbers)
-      }
-    }
-  }
-
-  private computeExtremeAggregateValue(
-    kind: 'min' | 'max',
-    column: string,
-    numbers: readonly number[],
-  ): RelationAggregateComputation {
-    const value = numbers.length === 0
-      ? null
-      : kind === 'min' ? Math.min(...numbers) : Math.max(...numbers)
-    const metadata = Object.freeze({
-      column,
-      currentValueCount: typeof value === 'number'
-        ? numbers.filter(number => number === value).length
-        : 0,
-      kind,
-      valueCounts: createAggregateValueCounts(numbers),
-    })
-    return Object.freeze({
-      metadata,
-      value,
-    })
-  }
-
-  private assertNumericAggregateValue(
-    value: unknown,
-    kind: Exclude<RelationAggregateKind, 'count' | 'exists'>,
-    column: string,
-  ): number {
-    if (typeof value !== 'number' || Number.isNaN(value)) {
-      throw new DatabaseError(`Relation aggregate "${kind}" requires numeric values for column "${column}".`)
-    }
-
-    return value
   }
 
   private async getRelatedEntitiesByParentKey(
@@ -4170,10 +4077,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
             continue
           }
 
-          let query = related.query()
-          if (related.getDeletedAtColumn()) {
-            query = query.withTrashed()
-          }
+          const query = related.query().withTrashed()
 
           await query.getTableQueryBuilder()
             .where(relation.ownerKey, ownerId)
@@ -4194,10 +4098,7 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
             continue
           }
 
-          let query = related.query()
-          if (related.getDeletedAtColumn()) {
-            query = query.withTrashed()
-          }
+          const query = related.query().withTrashed()
 
           await query.getTableQueryBuilder()
             .where(related.definition.primaryKey, ownerId)
@@ -4330,69 +4231,11 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     }
   }
 
-  private applyGeneratedUniqueIds(
-    values: Partial<ModelRecord<TTable>>,
-    generatedColumns: Set<string>,
-  ): Partial<ModelRecord<TTable>> {
-    const config = this.definition.uniqueIdConfig
-    if (!config) {
-      return values
-    }
-
-    const output: Partial<ModelRecord<TTable>> = { ...values }
-
-    for (const column of config.columns) {
-      const current = output[column]
-      if (typeof current !== 'undefined' && current !== null && current !== '') {
-        continue
-      }
-
-      const generated = config.generator()
-      if (typeof generated !== 'string' || generated.trim().length === 0) {
-        throw new DatabaseError(`${this.definition.name} unique ID generator must return a non-empty string.`, 'INVALID_UNIQUE_ID')
-      }
-
-      output[column] = generated as ModelRecord<TTable>[typeof column]
-      generatedColumns.add(column)
-    }
-
-    return output
-  }
-
-  private applyPendingAttributes(
-    values: Partial<ModelRecord<TTable>>,
-  ): Partial<ModelRecord<TTable>> {
-    if (Object.keys(this.definition.pendingAttributes).length === 0) {
-      return values
-    }
-
-    return {
-      ...this.definition.pendingAttributes,
-      ...values,
-    }
-  }
-
-  private getObserverInstances(): unknown[] {
-    return this.definition.observers.map((observer) => {
-      if (typeof observer === 'function') {
-        return new (observer as new () => unknown)()
-      }
-
-      return observer
-    })
-  }
-
   private async dispatchCancelableEvent(
     eventName: Extract<ModelLifecycleEventName, 'saving' | 'creating' | 'updating' | 'deleting' | 'restoring' | 'forceDeleting'>,
     entity: Entity<TTable>,
   ): Promise<void> {
-    const results = await this.dispatchEvent(eventName, entity, true)
-    if (results.includes(false)) {
-      throw new DatabaseError(
-        `${this.definition.name} ${eventName} event cancelled the operation.`,
-        'MODEL_EVENT_CANCELLED',
-      )
-    }
+    await this.eventDispatcher.dispatchCancelable(eventName, entity)
   }
 
   private async dispatchEvent(
@@ -4400,440 +4243,46 @@ export class ModelRepository<TTable extends TableDefinition = TableDefinition> {
     entity: Entity<TTable>,
     collectResults = false,
   ): Promise<unknown[]> {
-    if (areModelEventsMuted()) {
-      return []
-    }
-
-    const handlers = this.definition.events[eventName] ?? []
-    const observerHandlers = this.getObserverInstances()
-      .map(observer => (observer as Record<string, unknown>)[eventName])
-      .filter((handler): handler is (...args: unknown[]) => unknown => typeof handler === 'function')
-
-    const results: unknown[] = []
-
-    for (const handler of [...handlers, ...observerHandlers]) {
-      const result = await handler(entity, this)
-      if (collectResults) {
-        results.push(result)
-      }
-    }
-
-    return results
+    return this.eventDispatcher.dispatch(eventName, entity, collectResults)
   }
 
   private dispatchSyncEvent(
     eventName: Extract<ModelLifecycleEventName, 'replicating'>,
     entity: Entity<TTable>,
   ): void {
-    if (areModelEventsMuted()) {
-      return
-    }
-
-    const handlers = this.definition.events[eventName] ?? []
-    const observerHandlers = this.getObserverInstances()
-      .map(observer => (observer as Record<string, unknown>)[eventName])
-      .filter((handler): handler is (...args: unknown[]) => unknown => typeof handler === 'function')
-
-    for (const handler of [...handlers, ...observerHandlers]) {
-      handler(entity, this)
-    }
+    this.eventDispatcher.dispatchSync(eventName, entity)
   }
 
   resolveAttribute(key: string, entity: Entity<TTable>, value: unknown): unknown {
-    const accessor = this.definition.accessors[key]
-    return accessor ? accessor(value, entity) : value
+    return this.valueTransformer.resolveAttribute(key, entity, value)
   }
 
   shouldPreventAccessingMissingAttributes(key: string): boolean {
-    const settings = getModelRuntimeSettings(this.definition)
-    if (!settings.preventAccessingMissingAttributes) {
-      return false
-    }
-
-    return !Object.prototype.hasOwnProperty.call(this.definition.accessors, key)
+    return this.valueTransformer.shouldPreventAccessingMissingAttributes(key)
   }
 
   serializeEntity(entity: Entity<TTable>): Record<string, unknown> {
-    const serializationEntity = entity as Entity<TTable> & {
-      getSerializationConfig?: () => {
-        hidden: ReadonlySet<string>
-        visible: ReadonlySet<string>
-        visibleOnly: readonly string[] | null
-        appended: readonly string[] | null
-      }
-    }
-    const config = typeof serializationEntity.getSerializationConfig === 'function'
-      ? serializationEntity.getSerializationConfig()
-      : null
-    const hidden = new Set(this.definition.hidden)
-    const visible = new Set(config?.visibleOnly ?? this.definition.visible)
-
-    for (const key of config?.hidden ?? []) {
-      hidden.add(key)
-    }
-
-    for (const key of config?.visible ?? []) {
-      hidden.delete(key)
-      visible.add(key)
-    }
-
-    const useVisibleAllowlist = visible.size > 0
-    const output = Object.fromEntries(
-      Object.entries(entity.toAttributes())
-        .filter(([key]) => !hidden.has(key) && (!useVisibleAllowlist || visible.has(key)))
-        .map(([key]) => [
-          key,
-          this.serializeAttributeValue(
-            key,
-            this.resolveAttribute(key, entity, entity.toAttributes()[key as keyof ReturnType<typeof entity.toAttributes>]),
-          ),
-        ]),
-    )
-
-    for (const key of config?.appended ?? this.definition.appended) {
-      if (hidden.has(key)) continue
-      if (useVisibleAllowlist && !visible.has(key)) continue
-      output[key] = this.serializeAttributeValue(
-        key,
-        this.resolveAttribute(key, entity, entity.toAttributes()[key as keyof ReturnType<typeof entity.toAttributes>]),
-      )
-    }
-
-    for (const [relationName, relationValue] of Object.entries(entity.getLoadedRelations())) {
-      if (hidden.has(relationName)) continue
-      if (useVisibleAllowlist && !visible.has(relationName)) continue
-
-      output[relationName] = this.serializeRelationValue(relationValue)
-    }
-
-    return output
-  }
-
-  private serializeRelationValue(value: unknown): unknown {
-    if (value instanceof Entity) {
-      return (value as Entity).toJSON()
-    }
-
-    if (Array.isArray(value)) {
-      return value.map(item => this.serializeRelationValue(item))
-    }
-
-    if (value instanceof Date && this.definition.serializeDate) {
-      return this.definition.serializeDate(value)
-    }
-
-    return value
-  }
-
-  private serializeOutputValue(value: unknown): unknown {
-    if (value instanceof Date && this.definition.serializeDate) {
-      return this.definition.serializeDate(value)
-    }
-
-    return value
+    return this.valueTransformer.serializeEntity(entity)
   }
 
   serializeAttributeValue(key: string, value: unknown): unknown {
-    const builtInCast = this.parseBuiltInCast(this.definition.casts[key])
-    if (
-      value instanceof Date
-      && builtInCast
-      && ['date', 'datetime', 'timestamp'].includes(builtInCast.name)
-      && builtInCast.parameter
-    ) {
-      return this.formatDateCast(value, builtInCast.parameter)
-    }
-
-    return this.serializeOutputValue(value)
+    return this.valueTransformer.serializeAttributeValue(key, value)
   }
 
-  private normalizeFromStorage(
-    values: Partial<ModelRecord<TTable>>,
-    extraCasts: Record<string, ModelCastDefinition> = {},
-  ): Partial<ModelRecord<TTable>> {
-    const casts = { ...this.definition.casts, ...extraCasts }
-    return Object.fromEntries(
-      Object.entries(values).map(([key, value]) => {
-        const normalized = this.applySchemaReadNormalization(key, value)
-        return [key, this.applyCastGet(casts[key], normalized)]
-      }),
-    ) as Partial<ModelRecord<TTable>>
+  private normalizeFromStorage(values: Partial<ModelRecord<TTable>>, extraCasts: Record<string, ModelCastDefinition> = {}): Partial<ModelRecord<TTable>> {
+    return this.valueTransformer.normalizeFromStorage(values, extraCasts)
   }
 
-  private applyTimestampDefaults(
-    values: Partial<ModelRecord<TTable>>,
-    mode: WriteMode,
-  ): Partial<ModelRecord<TTable>> {
-    if (!this.definition.timestamps) {
-      return values
-    }
-
-    const timestamp = new Date().toISOString()
-    const nextValues = { ...values }
-
-    if (mode === 'create' && this.definition.createdAtColumn && typeof nextValues[this.definition.createdAtColumn] === 'undefined') {
-      nextValues[this.definition.createdAtColumn] = timestamp as never
-    }
-
-    if (this.definition.updatedAtColumn && typeof nextValues[this.definition.updatedAtColumn] === 'undefined') {
-      nextValues[this.definition.updatedAtColumn] = timestamp as never
-    }
-
-    return nextValues
+  private applyTimestampDefaults(values: Partial<ModelRecord<TTable>>, mode: WriteMode): Partial<ModelRecord<TTable>> {
+    return this.valueTransformer.applyTimestampDefaults(values, mode)
   }
 
   private normalizeForStorage(key: string, value: unknown): unknown {
-    const mutator = this.definition.mutators[key]
-    const mutated = mutator ? mutator(value) : value
-    const casted = this.applyCastSet(this.definition.casts[key], mutated)
-    return this.applySchemaWriteNormalization(key, casted)
-  }
-
-  private applySchemaReadNormalization(key: string, value: unknown): unknown {
-    const column = this.definition.table.columns[key]
-    if (!column) {
-      return value
-    }
-
-    return normalizeDialectReadValue(this.getSchemaDialectName(), column, value)
-  }
-
-  private applySchemaWriteNormalization(key: string, value: unknown): unknown {
-    const column = this.definition.table.columns[key]
-    if (!column) {
-      return value
-    }
-
-    return normalizeDialectWriteValue(this.getSchemaDialectName(), column, value)
-  }
-
-  private getSchemaDialectName(): SchemaDialectName {
-    return this.getConnection().getDriver() as SchemaDialectName
+    return this.valueTransformer.normalizeForStorage(key, value)
   }
 
   private applyCastGet(cast: ModelCastDefinition | undefined, value: unknown): unknown {
-    const builtInCast = this.parseBuiltInCast(cast)
-    if (builtInCast) {
-      switch (builtInCast.name) {
-        case 'boolean':
-          return value == null ? value : Boolean(value)
-        case 'number':
-          return value == null ? value : Number(value)
-        case 'string':
-          return value == null ? value : String(value)
-        case 'json':
-          /* v8 ignore next -- repository hydration exercises this path, but V8 does not attribute the inline parse expression reliably here. */
-          return typeof value === 'string' ? JSON.parse(value) : value
-        case 'date':
-        case 'datetime':
-        case 'timestamp':
-          return value == null || value instanceof Date ? value : new Date(String(value))
-        case 'vector':
-          return this.parseVectorValue(value, builtInCast.parameter)
-      }
-    }
-
-    cast = this.resolveCastDefinition(cast)
-    if (typeof cast === 'undefined') return value
-
-    if (typeof cast === 'object' && 'kind' in cast && cast.kind === 'enum') {
-      if (value == null) {
-        return value
-      }
-
-      if (!cast.values.includes(value as string | number)) {
-        throw new HydrationError(`Enum cast received unsupported value "${String(value)}".`)
-      }
-
-      return value
-    }
-
-    return (typeof cast === 'object' && 'get' in cast && cast.get) ? cast.get(value) : value
+    return this.valueTransformer.applyCastGet(cast, value)
   }
 
-  private applyCastSet(cast: ModelCastDefinition | undefined, value: unknown): unknown {
-    const builtInCast = this.parseBuiltInCast(cast)
-    if (builtInCast) {
-      switch (builtInCast.name) {
-        case 'boolean':
-          return value == null ? value : Boolean(value)
-        case 'number':
-          return value == null ? value : Number(value)
-        case 'string':
-          return value == null ? value : String(value)
-        case 'json':
-          return typeof value === 'string' ? value : JSON.stringify(value)
-        case 'date':
-        case 'datetime':
-        case 'timestamp':
-          return value instanceof Date ? value.toISOString() : value
-        case 'vector':
-          return this.serializeVectorValue(value, builtInCast.parameter)
-      }
-    }
-
-    cast = this.resolveCastDefinition(cast)
-    if (typeof cast === 'undefined') return value
-
-    if (typeof cast === 'object' && 'kind' in cast && cast.kind === 'enum') {
-      if (value == null) {
-        return value
-      }
-
-      if (!cast.values.includes(value as string | number)) {
-        throw new HydrationError(`Enum cast rejected unsupported value "${String(value)}".`)
-      }
-
-      return value
-    }
-
-    return (typeof cast === 'object' && 'set' in cast && cast.set) ? cast.set(value) : value
-  }
-
-  private resolveCastDefinition(cast: ModelCastDefinition | undefined): Exclude<ModelCastDefinition, { castUsing(): ModelCastDefinition }> | undefined {
-    if (!cast) {
-      return cast
-    }
-
-    if (typeof cast === 'object' && 'castUsing' in cast && typeof cast.castUsing === 'function') {
-      return this.resolveCastDefinition(cast.castUsing()) as Exclude<ModelCastDefinition, { castUsing(): ModelCastDefinition }>
-    }
-
-    return cast as Exclude<ModelCastDefinition, { castUsing(): ModelCastDefinition }>
-  }
-
-  private parseBuiltInCast(
-    cast: ModelCastDefinition | undefined,
-  ): { name: BuiltInCastName, parameter?: string } | null {
-    if (typeof cast !== 'string') {
-      return null
-    }
-
-    const [rawName, ...rest] = cast.split(':')
-    const name = rawName as BuiltInCastName
-
-    const parameter = rest.length > 0 ? rest.join(':').trim() : undefined
-    return { name, parameter: parameter || undefined }
-  }
-
-  private parseVectorValue(value: unknown, parameter?: string): number[] | null | undefined {
-    if (value == null) {
-      return value as null | undefined
-    }
-
-    const numbers = Array.isArray(value)
-      ? value
-      : this.parseVectorString(value)
-
-    if (numbers.some(entry => typeof entry !== 'number' || Number.isNaN(entry))) {
-      throw new HydrationError('Vector casts require numeric array values.')
-    }
-
-    const expectedDimensions = this.parseVectorDimensions(parameter)
-    if (expectedDimensions !== null && numbers.length !== expectedDimensions) {
-      throw new HydrationError(`Vector cast requires exactly ${expectedDimensions} dimensions.`)
-    }
-
-    return [...numbers]
-  }
-
-  private serializeVectorValue(value: unknown, parameter?: string): string | null | undefined {
-    const parsed = this.parseVectorValue(value, parameter)
-    if (parsed == null) {
-      return parsed
-    }
-
-    return `[${parsed.join(',')}]`
-  }
-
-  private parseVectorString(value: unknown): number[] {
-    if (typeof value !== 'string') {
-      throw new HydrationError('Vector casts require an array or string payload.')
-    }
-
-    const trimmed = value.trim()
-    if (!trimmed) {
-      throw new HydrationError('Vector casts require a non-empty payload.')
-    }
-
-    try {
-      const parsed = JSON.parse(trimmed)
-      if (!Array.isArray(parsed)) {
-        throw new TypeError('Vector cast payload must deserialize to an array.')
-      }
-      return parsed.map(entry => Number(entry))
-    } catch {
-      // Fall through to the typed hydration error below.
-    }
-
-    throw new HydrationError('Vector casts require a JSON array or PostgreSQL-style vector literal.')
-  }
-
-  private parseVectorDimensions(parameter?: string): number | null {
-    if (!parameter) {
-      return null
-    }
-
-    const dimensions = Number(parameter)
-    if (!Number.isInteger(dimensions) || dimensions <= 0) {
-      throw new HydrationError(`Vector cast parameter "${parameter}" must be a positive integer.`)
-    }
-
-    return dimensions
-  }
-
-  private formatDateCast(value: Date, parameter: string): number | string {
-    if (parameter === 'unix') {
-      return Math.floor(value.getTime() / 1000)
-    }
-
-    const parts = {
-      Y: value.getUTCFullYear().toString().padStart(4, '0'),
-      m: String(value.getUTCMonth() + 1).padStart(2, '0'),
-      d: String(value.getUTCDate()).padStart(2, '0'),
-      H: String(value.getUTCHours()).padStart(2, '0'),
-      i: String(value.getUTCMinutes()).padStart(2, '0'),
-      s: String(value.getUTCSeconds()).padStart(2, '0'),
-    }
-
-    return parameter.replaceAll(/[YmdHis]/g, token => parts[token as keyof typeof parts])
-  }
-}
-
-function getErrorCode(error: unknown): string | number | undefined {
-  return error && typeof error === 'object' && 'code' in error
-    ? (error as { readonly code?: string | number }).code
-    : undefined
-}
-
-function getErrorCause(error: unknown): unknown {
-  return error && typeof error === 'object' && 'cause' in error
-    ? (error as { readonly cause?: unknown }).cause
-    : undefined
-}
-
-function isUniqueConstraintError(error: unknown): boolean {
-  let current: unknown = error
-  while (current) {
-    const code = getErrorCode(current)
-    if (
-      code === '23505'
-      || code === 1062
-      || code === '1062'
-      || code === 'ER_DUP_ENTRY'
-      || code === 'SQLITE_CONSTRAINT'
-      || code === 'SQLITE_CONSTRAINT_UNIQUE'
-      || code === 'SQLITE_CONSTRAINT_PRIMARYKEY'
-    ) {
-      return true
-    }
-
-    if (current instanceof Error && /unique constraint|duplicate entry|unique constraint failed/i.test(current.message)) {
-      return true
-    }
-
-    current = getErrorCause(current)
-  }
-
-  return false
 }

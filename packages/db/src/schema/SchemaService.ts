@@ -189,10 +189,7 @@ export class SchemaService {
     const tableMap = new Map((tables ?? this.connection.getSchemaRegistry().list()).map(table => [table.tableName, table]))
 
     for (const tableName of plan.tablesToCreate) {
-      const table = tableMap.get(tableName)
-      if (table) {
-        await this.createDefinedTable(table)
-      }
+      await this.createDefinedTable(tableMap.get(tableName)!)
     }
   }
 

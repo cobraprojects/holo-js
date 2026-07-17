@@ -159,3 +159,8 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
 
   return form
 }
+
+export const adapterNextClientInternals = {
+  isNextRedirectError,
+  createSubmitterBridge,
+}

@@ -12,6 +12,7 @@ import {
   resolveRuntimeConnectionManagerOptions,
   type TableDefinition,
 } from '@holo-js/db'
+import { loadProjectDatabaseDrivers } from './database-drivers'
 
 type RuntimeConfigPayload = Parameters<typeof resolveRuntimeConnectionManagerOptions>[0]
 
@@ -341,7 +342,9 @@ function writeOutput(message: string): void {
   process.stdout.write(`${message}\n`)
 }
 
-const manager = resolveRuntimeConnectionManagerOptions(resolveRuntimeConfig(payload.runtimeConfig))
+const resolvedRuntimeConfig = resolveRuntimeConfig(payload.runtimeConfig)
+await loadProjectDatabaseDrivers(payload.projectRoot ?? process.cwd(), resolvedRuntimeConfig.db)
+const manager = resolveRuntimeConnectionManagerOptions(resolvedRuntimeConfig)
 configureDB(manager)
 
 try {

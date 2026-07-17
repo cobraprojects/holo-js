@@ -1,18 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  DEFAULT_HOLO_PROJECT_PATHS,
-  MySQLAdapter,
-  PostgresAdapter,
-  SQLiteAdapter,
   createAdapter,
   createDialect,
   createRuntimeConnectionOptions,
   createRuntimeLogger,
-  defineHoloProject,
   isSupportedDatabaseDriver,
-  normalizeHoloProjectConfig,
   parseDatabaseDriver,
-  resolveRuntimeConnectionManagerOptions } from '../src'
+  resolveRuntimeConnectionManagerOptions,
+  DeferredDatabaseDriverAdapter } from '../src'
+import { DEFAULT_HOLO_PROJECT_PATHS, defineHoloProject, normalizeHoloProjectConfig } from '@holo-js/kernel'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -81,31 +77,31 @@ describe('runtime config helpers', () => {
   })
 
   it('creates adapters and runtime connection options for each driver', () => {
-    expect(createAdapter('postgres', 'postgres://localhost/app')).toBeInstanceOf(PostgresAdapter)
+    expect(createAdapter('postgres', 'postgres://localhost/app')).toBeInstanceOf(DeferredDatabaseDriverAdapter)
     expect(createAdapter('postgres', {
       host: 'localhost',
       port: 5432,
       username: 'holo',
       password: 'secret',
       database: 'app',
-      ssl: { rejectUnauthorized: false } })).toBeInstanceOf(PostgresAdapter)
+      ssl: { rejectUnauthorized: false } })).toBeInstanceOf(DeferredDatabaseDriverAdapter)
 
-    expect(createAdapter('mysql', 'mysql://localhost/app')).toBeInstanceOf(MySQLAdapter)
+    expect(createAdapter('mysql', 'mysql://localhost/app')).toBeInstanceOf(DeferredDatabaseDriverAdapter)
     expect(createAdapter('mysql', {
       host: 'localhost',
       port: 3306,
       username: 'holo',
       password: 'secret',
       database: 'app',
-      ssl: true })).toBeInstanceOf(MySQLAdapter)
+      ssl: true })).toBeInstanceOf(DeferredDatabaseDriverAdapter)
     expect(createAdapter('mysql', {
       host: 'localhost',
-      database: 'app' })).toBeInstanceOf(MySQLAdapter)
+      database: 'app' })).toBeInstanceOf(DeferredDatabaseDriverAdapter)
 
-    expect(createAdapter('sqlite', './data.sqlite')).toBeInstanceOf(SQLiteAdapter)
-    expect(createAdapter('sqlite', { database: ':memory:' })).toBeInstanceOf(SQLiteAdapter)
-    expect(createAdapter('sqlite', {})).toBeInstanceOf(SQLiteAdapter)
-    expect(() => createAdapter('oracle' as never, './db.sqlite')).toThrow('Unsupported Holo database driver "oracle"')
+    expect(createAdapter('sqlite', './data.sqlite')).toBeInstanceOf(DeferredDatabaseDriverAdapter)
+    expect(createAdapter('sqlite', { database: ':memory:' })).toBeInstanceOf(DeferredDatabaseDriverAdapter)
+    expect(createAdapter('sqlite', {})).toBeInstanceOf(DeferredDatabaseDriverAdapter)
+    expect(() => createAdapter('oracle' as never, {})).toThrow('Unsupported Holo database driver')
 
     const sqliteOptions = createRuntimeConnectionOptions('sqlite', './data.sqlite', false, 'main', 'sqlite-main')
     expect(sqliteOptions.connectionName).toBe('sqlite-main')
@@ -256,7 +252,7 @@ describe('runtime config helpers', () => {
             url: './manifest.sqlite' } } } })
 
     expect(manager.getDefaultConnectionName()).toBe('primary')
-    expect((manager.connection().getAdapter() as unknown as { filename: string }).filename).toBe('./manifest.sqlite')
+    expect((manager.connection().getAdapter() as unknown as { connection: { url?: string } }).connection.url).toBe('./manifest.sqlite')
   })
 
   it('infers drivers from urls and rejects incomplete network-only configs', () => {
@@ -320,8 +316,23 @@ describe('runtime config helpers', () => {
       },
     })
     expect((stringPortManager.connection().getAdapter() as unknown as {
-      config: { port?: number }
-    }).config.port).toBe(5432)
+      connection: { port?: number }
+    }).connection.port).toBe(5432)
+
+    const invalidPortManager = resolveRuntimeConnectionManagerOptions({
+      db: {
+        connections: {
+          default: {
+            driver: 'postgres',
+            host: 'localhost',
+            port: 'invalid',
+          },
+        },
+      },
+    } as never)
+    expect((invalidPortManager.connection().getAdapter() as unknown as {
+      connection: { port?: number }
+    }).connection.port).toBeUndefined()
 
     expect(() => resolveRuntimeConnectionManagerOptions({
       db: {

@@ -1,5 +1,5 @@
-import { defineBroadcastConfig, env } from '@holo-js/config'
-
+import { defineBroadcastConfig } from '@holo-js/broadcast'
+import { env } from '@holo-js/config'
 const broadcastScheme = env('BROADCAST_SCHEME') === 'https' ? 'https' : 'http'
 
 export default defineBroadcastConfig({

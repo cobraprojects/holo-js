@@ -1,6 +1,6 @@
 import { onScopeDispose, reactive, shallowRef, watchEffect } from 'vue'
 import { useCookie } from '#app'
-import { normalizeHoloHttpError } from '@holo-js/core/errors'
+import { normalizeHoloHttpError } from '@holo-js/adapter-shared'
 import type { FormSchema, InferFormData } from '@holo-js/forms'
 import { DEFAULT_VALIDATION_BAG, createErrorBag, type ValidationErrorBag } from '@holo-js/validation'
 import {
@@ -31,6 +31,10 @@ type FormValuesGetter = () => FormValuesBridge
 type FlashedValidationPayload = {
   readonly bag?: string
   readonly errors?: Record<string, readonly string[]>
+}
+type ParsedFlashedValidationPayload = {
+  readonly bag: string
+  readonly errors: Record<string, readonly string[]>
 }
 type NuxtCookieValue = string | FlashedValidationPayload | null
 type FormHttpFailure = {
@@ -93,7 +97,7 @@ function readCookie(name: string): NuxtCookieValue | undefined {
   return readBrowserCookie(name)
 }
 
-function parseFlashedValidationPayload(): FlashedValidationPayload | undefined {
+function parseFlashedValidationPayload(): ParsedFlashedValidationPayload | undefined {
   const value = readCookie(FORM_FAILURE_COOKIE)
   if (!value) {
     return undefined
@@ -166,11 +170,11 @@ export function useValidationErrors<TData = Record<string, unknown>>(
   bag = DEFAULT_VALIDATION_BAG,
 ): ValidationErrorBag<TData> {
   const payload = parseFlashedValidationPayload()
-  if (!payload || (payload.bag ?? DEFAULT_VALIDATION_BAG) !== bag) {
+  if (!payload || payload.bag !== bag) {
     return createErrorBag<TData>()
   }
 
-  return createErrorBag<TData>(payload.errors ?? {})
+  return createErrorBag<TData>(payload.errors)
 }
 
 function getValueAtPath(root: unknown, path: string): unknown {
@@ -236,11 +240,9 @@ function createArrayMutationView(
       }
 
       const next = current.slice()
-      const updated = Reflect.set(next, key, value)
-      if (updated) {
-        void getForm().setValue(path, next)
-      }
-      return updated
+      Reflect.set(next, key, value)
+      void getForm().setValue(path, next)
+      return true
     },
     deleteProperty(_target, key) {
       const current = getValueAtPath(getForm().values, path)
@@ -249,11 +251,9 @@ function createArrayMutationView(
       }
 
       const next = current.slice()
-      const deleted = Reflect.deleteProperty(next, key)
-      if (deleted) {
-        void getForm().setValue(path, next)
-      }
-      return deleted
+      Reflect.deleteProperty(next, key)
+      void getForm().setValue(path, next)
+      return true
     },
   })
 
@@ -352,15 +352,9 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
   const rawValues: Record<string, unknown> = {}
   const values = reactive(rawValues) as InferFormData<TSchema>
   const arrayCache = new WeakMap<readonly unknown[], unknown[]>()
-  let activeForm: FormValuesBridge | undefined
+  let activeForm: FormValuesBridge
 
-  const getActiveForm = () => {
-    if (!activeForm) {
-      throw new TypeError('Expected form to be initialized.')
-    }
-
-    return activeForm
-  }
+  const getActiveForm = () => activeForm
 
   const currentForm = () => {
     const current = form.value
@@ -444,4 +438,18 @@ export function useForm<TSchema extends FormSchema, TSuccess = unknown>(
       return currentForm().applyServerState(result)
     },
   }) as UseFormResult<InferFormData<TSchema>, TSuccess, InferFormFieldTree<TSchema>>
+}
+
+export const nuxtFormInternals = {
+  isLeafValue,
+  readBrowserCookie,
+  readCookie,
+  parseFlashedValidationPayload,
+  getHttpFailureMessage,
+  renderFormHttpFailure,
+  createHttpHandledFormOptions,
+  getValueAtPath,
+  createArrayMutationView,
+  defineLeafAccessor,
+  syncValuesView,
 }

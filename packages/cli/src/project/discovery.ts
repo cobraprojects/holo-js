@@ -2,10 +2,9 @@ import { resolve } from 'node:path'
 import { loadConfigDirectory } from '@holo-js/config'
 import {
   normalizeHoloProjectConfig,
-  type MigrationDefinition,
   type NormalizedHoloProjectConfig,
-  type SeederDefinition,
-} from '@holo-js/db'
+} from '@holo-js/kernel'
+import type { MigrationDefinition, SeederDefinition } from '@holo-js/db'
 import { loadGeneratedProjectRegistry, writeGeneratedProjectRegistry } from './registry'
 import {
   loadAuthorizationDiscoveryModule,

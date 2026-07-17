@@ -4,8 +4,12 @@ import {
   sendMail,
 } from './runtime'
 
-export { defineMailConfig } from '@holo-js/config'
-export type { HoloMailConfig, NormalizedHoloMailConfig } from '@holo-js/config'
+export {
+  defineMailConfig,
+  holoMailDefaults,
+  normalizeMailConfig,
+} from './config'
+export type { HoloMailConfig, NormalizedHoloMailConfig } from './config'
 
 export {
   attachContent,
@@ -86,15 +90,17 @@ export {
   resetMailDriverRegistry,
 } from './registry'
 export {
+  MailError,
+  MailPreviewDisabledError,
+  MailPreviewFormatUnavailableError,
+  MailSendError,
+} from './errors'
+export {
   configureMailRuntime,
   getMailRuntimeBindings,
   listFakeSentMails,
   listPreviewMailArtifacts,
   getMailRuntime,
-  MailError,
-  MailPreviewDisabledError,
-  MailPreviewFormatUnavailableError,
-  MailSendError,
   previewMail,
   renderMailPreview,
   resetFakeSentMails,

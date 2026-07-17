@@ -1,5 +1,5 @@
 import type { AuthenticatedAuthUser, AuthEstablishedSession, AuthFieldErrors, AuthLogoutResult, AuthResult } from '@holo-js/auth'
-import type { NormalizedAuthWorkosProviderConfig } from '@holo-js/config'
+import type { NormalizedAuthWorkosProviderConfig } from '@holo-js/auth'
 
 export type WorkosJsonValue =
   | string

@@ -10,6 +10,11 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.mjs",
+      "default": "./dist/config.mjs"
+    },
     "./auth": {
       "types": "./dist/auth.d.ts",
       "import": "./dist/auth.mjs",
@@ -44,6 +49,8 @@
   },
   "dependencies": {
     "@holo-js/config": "catalog:",
+    "@holo-js/kernel": "catalog:",
+    "@holo-js/queue": "catalog:",
     "@holo-js/validation": "catalog:",
     "ws": "catalog:"
   },

@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path'
 
 type PackageManifest = {
   dependencies?: Record<string, string>
+  name?: string
 }
 
 function unique(values: readonly string[]): string[] {
@@ -117,6 +118,30 @@ export async function stagePublishedPackage(
   distDir: string,
 ): Promise<void> {
   await mkdir(targetDir, { recursive: true })
-  await writeFile(join(targetDir, 'package.json'), readFileSync(join(sourceDir, 'package.json'), 'utf8'))
+  const manifestText = readFileSync(join(sourceDir, 'package.json'), 'utf8')
+  const manifest = JSON.parse(manifestText) as PackageManifest
+  await writeFile(join(targetDir, 'package.json'), manifestText)
   await cp(distDir, join(targetDir, 'dist'), { recursive: true })
+
+  const nodeModulesRoot = manifest.name?.startsWith('@')
+    ? resolve(targetDir, '../..')
+    : resolve(targetDir, '..')
+  const repoRoot = resolve(sourceDir, '../..')
+  for (const dependencyName of Object.keys(manifest.dependencies ?? {}).filter(name => !isWorkspaceDependency(name))) {
+    const dependencyRoot = resolveInstalledDependencyRoot(repoRoot, dependencyName)
+    await symlinkPackageDependency(nodeModulesRoot, dependencyName, dependencyRoot)
+  }
+
+  for (const dependencyName of Object.keys(manifest.dependencies ?? {}).filter(isWorkspaceDependency)) {
+    const dependencyDir = resolve(sourceDir, '..', dependencyName.slice('@holo-js/'.length))
+    const dependencyDist = join(dependencyDir, 'dist')
+    if (!existsSync(join(dependencyDir, 'package.json')) || !existsSync(dependencyDist)) {
+      continue
+    }
+    await stagePublishedPackage(
+      dependencyDir,
+      resolve(targetDir, '..', dependencyName.slice('@holo-js/'.length)),
+      dependencyDist,
+    )
+  }
 }

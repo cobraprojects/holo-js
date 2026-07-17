@@ -1,4 +1,4 @@
-import { defineMailConfig, type HoloAppEnv, type NormalizedHoloMailConfig } from '@holo-js/config'
+import type { HoloAppEnv, NormalizedHoloMailConfig } from './config'
 
 export const HOLO_MAIL_DEFINITION_MARKER = Symbol.for('holo-js.mail.definition')
 export const BUILT_IN_MAIL_DRIVERS = ['preview', 'log', 'fake', 'smtp'] as const
@@ -306,5 +306,3 @@ export interface PendingMailSend<TResult = MailSendResult> extends PromiseLike<T
   ): Promise<TResult | TResult1>
   finally(onfinally?: (() => void) | null): Promise<TResult>
 }
-
-export { defineMailConfig }

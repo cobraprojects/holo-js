@@ -113,10 +113,11 @@ function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
   useEffect(() => {
     store.connect()
   }, [store])
+  const getSnapshot = () => store.snapshot
   const snapshot = useSyncExternalStore(
     store.subscribe,
-    () => store.snapshot,
-    () => store.snapshot,
+    getSnapshot,
+    getSnapshot,
   )
 
   return snapshot?.data
@@ -127,5 +128,13 @@ configureRealtimeClientRuntime({
   useQuery: useReactiveRealtimeQuery,
 })
 configureRealtimeClientTransport(createErrorHandlingRealtimeTransport(createBroadcastRealtimeTransport()))
+
+export const adapterNextRealtimeInternals = {
+  subscribeRealtimeError,
+  emitRealtimeError,
+  getRealtimeErrorSnapshot,
+  consumeRealtimeError,
+  createErrorHandlingRealtimeTransport,
+}
 
 export {}

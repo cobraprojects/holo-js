@@ -30,58 +30,42 @@ Scaffolded framework versions are declared in:
 
 - `packages/cli/src/metadata.ts`
 
-Framework fixture apps used for smoke validation live under:
+User-facing framework examples live under:
 
-- `apps/Nuxt_test_app`
-- `apps/Next_test_app`
-- `apps/svelte_test_app`
+- `apps/blog-nuxt`
+- `apps/blog-next`
+- `apps/blog-sveltekit`
 
-When you promote a framework version for users, update the scaffold metadata and the matching fixture app
-so the checked-in smoke target matches the scaffold default.
+Keep their configuration, lifecycle scripts, and framework integration aligned with newly scaffolded projects.
 
 ## Framework smoke validation
 
-Use the built-in smoke suite before introducing a new framework version to users.
+Use the scaffold user-journey smoke before introducing a framework or scaffolder change to users.
 
-Validate all checked-in fixtures:
+The smoke test creates a fresh application for every supported framework:
 
 ```bash
-bun run test:smoke:frameworks
+bun run test:smoke:scaffold
 ```
 
-Validate one framework:
+Run the user-facing feature and API examples separately:
 
 ```bash
-bun run test:smoke:frameworks -- --framework next
-```
-
-Validate a candidate framework version without committing the version bump:
-
-```bash
-bun run test:smoke:frameworks -- --framework next --dep next=^16.0.0
-```
-
-You can override multiple packages when a framework upgrade requires companion changes:
-
-```bash
-bun run test:smoke:frameworks -- --framework sveltekit \
-  --dep @sveltejs/kit=^3.0.0 \
-  --dep vite=^6.0.0
+bun run test:examples
 ```
 
 ## What the smoke test does
 
 The smoke script:
 
-- temporarily patches the selected fixture app `package.json`
-- runs `bun install`
-- runs `holo prepare`
-- runs `holo migrate:fresh --seed --force`
-- builds the framework app
-- boots the app and verifies matrix, storage, and media routes
-- restores the original fixture manifest and `bun.lock`
-
-Use `--dry-run` only to inspect the execution plan. It does not resolve or install the candidate version.
+- builds the local Holo packages
+- runs the public `holo new` command for Nuxt, Next.js, and SvelteKit
+- installs the generated project dependencies
+- verifies the managed `.holo-js` structure
+- adds and runs a database migration
+- runs linting and framework typechecking
+- creates a production build
+- boots each app and verifies its rendered home page
 
 ## Promotion rule
 
@@ -89,7 +73,7 @@ Do not bump scaffold metadata for a new framework version until the matching smo
 
 A safe promotion flow is:
 
-1. test the candidate version with `test:smoke:frameworks`
-2. update `packages/cli/src/metadata.ts`
-3. update the checked-in fixture app version
-4. rerun the normal smoke suite
+1. update `packages/cli/src/metadata.ts`
+2. run `test:smoke:scaffold`
+3. run `test:examples`
+4. run the normal validation suite

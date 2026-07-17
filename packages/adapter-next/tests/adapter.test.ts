@@ -2,7 +2,7 @@ import { createRequire } from 'node:module'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { writeConfigCache } from '@holo-js/config'
 import {
   adapterNextInternals,
@@ -14,6 +14,7 @@ import {
 import { withHolo } from '../src/config'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
+const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/index.ts'))
 const tempDirs: string[] = []
 const requireNextModule = createRequire(import.meta.url)
 
@@ -38,7 +39,7 @@ export default defineAppConfig({
 })
 `, 'utf8')
   await writeFile(join(root, 'config/database.ts'), `
-import { defineDatabaseConfig } from ${configEntry}
+import { defineDatabaseConfig } from ${databaseEntry}
 
 export default defineDatabaseConfig({
   defaultConnection: 'main',
@@ -498,6 +499,46 @@ export default defineConfig({
       ]))
       expect(config.serverExternalPackages).not.toContain('@holo-js/auth')
       expect(config.serverExternalPackages).not.toContain('@holo-js/auth-social')
+    } finally {
+      process.chdir(previousCwd)
+    }
+  })
+
+  it('adds the realtime loader only to client webpack builds', async () => {
+    const root = await createProject()
+    await writeFile(join(root, 'package.json'), JSON.stringify({
+      dependencies: { '@holo-js/realtime': 'workspace:*' },
+    }), 'utf8')
+    const previousCwd = process.cwd()
+    process.chdir(root)
+
+    try {
+      const userWebpack = vi.fn((config: Record<string, unknown>) => ({ ...config, transformed: true }))
+      const config = withHolo({ webpack: userWebpack })
+      const webpack = config.webpack as unknown as (
+        config: Record<string, unknown>,
+        context: { readonly isServer: boolean },
+      ) => Record<string, unknown>
+      const client = webpack({}, { isServer: false }) as {
+        transformed: boolean
+        module: { rules: Array<{ test: RegExp, use: string[] }> }
+      }
+      expect(client.transformed).toBe(true)
+      expect(client.module.rules).toHaveLength(1)
+      expect(client.module.rules[0]?.test.test('server/realtime/posts.ts')).toBe(true)
+      expect(client.module.rules[0]?.use[0]).toContain('realtime-definition-loader')
+
+      const server = webpack({}, { isServer: true })
+      expect(server).toEqual({ transformed: true })
+      expect(userWebpack).toHaveBeenCalledTimes(2)
+
+      const defaultWebpack = withHolo().webpack as unknown as (
+        config: Record<string, unknown>,
+        context: { readonly isServer: boolean },
+      ) => Record<string, unknown>
+      expect(defaultWebpack({}, { isServer: false })).toMatchObject({
+        module: { rules: expect.any(Array) },
+      })
     } finally {
       process.chdir(previousCwd)
     }

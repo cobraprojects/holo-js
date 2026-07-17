@@ -254,19 +254,11 @@ async function diffTable(
 }
 
 function lowerLogicalColumnType(column: AnyColumnDefinition, dialectName: string): string {
-  if (dialectName.startsWith('postgres')) {
-    return resolveDialectComparisonColumnType('postgres', column)
-  }
-
-  if (dialectName.startsWith('mysql')) {
-    return resolveDialectComparisonColumnType('mysql', column)
-  }
-
-  if (dialectName.startsWith('sqlite')) {
-    return resolveDialectComparisonColumnType('sqlite', column)
-  }
-
-  return resolveDialectComparisonColumnType(dialectName as SchemaDialectName, column)
+  const normalizedDialectName = dialectName
+    .replace(/^postgres.*/, 'postgres')
+    .replace(/^mysql.*/, 'mysql')
+    .replace(/^sqlite.*/, 'sqlite') as SchemaDialectName
+  return resolveDialectComparisonColumnType(normalizedDialectName, column)
 }
 
 function normalizeExpectedIndex(

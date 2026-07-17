@@ -1,4 +1,4 @@
-import { normalizeCorsConfig, normalizeSecurityConfig } from '@holo-js/config'
+import { normalizeCorsConfig, normalizeSecurityConfig } from './config'
 import type { SecurityRuntimeBindings, SecurityRuntimeFacade } from './contracts'
 
 type RuntimeSecurityState = {

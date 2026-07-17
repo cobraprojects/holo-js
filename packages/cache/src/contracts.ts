@@ -1,11 +1,9 @@
 import type {
   HoloCacheConfig,
-  HoloDatabaseConfig,
   NormalizedHoloCacheConfig,
-  HoloRedisConfig,
-  NormalizedHoloDatabaseConfig,
-  NormalizedHoloRedisConfig,
-} from '@holo-js/config'
+} from './config'
+import type { HoloDatabaseConfig, NormalizedHoloDatabaseConfig } from '@holo-js/db'
+import type { HoloRedisConfig, NormalizedHoloRedisConfig } from '@holo-js/kernel'
 
 const cacheKeyBrand = Symbol('holo-cache-key-brand')
 

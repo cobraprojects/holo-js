@@ -1,5 +1,5 @@
-import { defineSessionConfig, env } from '@holo-js/config'
-
+import { defineSessionConfig } from '@holo-js/session'
+import { env } from '@holo-js/config'
 const configuredSessionSameSite = env('SESSION_SAME_SITE')
 const sessionSameSite = configuredSessionSameSite === 'strict'
   || configuredSessionSameSite === 'lax'

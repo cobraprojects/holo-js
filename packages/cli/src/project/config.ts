@@ -5,16 +5,18 @@ import { pathToFileURL } from 'node:url'
 import {
   loadConfigDirectory,
   holoAppDefaults,
-  holoDatabaseDefaults,
   loadEnvironment,
   normalizeAppConfig,
-  normalizeDatabaseConfig,
 } from '@holo-js/config'
 import {
   DEFAULT_HOLO_PROJECT_PATHS,
   normalizeHoloProjectConfig,
-  renderGeneratedSchemaPlaceholder,
   type NormalizedHoloProjectConfig,
+} from '@holo-js/kernel'
+import {
+  holoDatabaseDefaults,
+  normalizeDatabaseConfig,
+  renderGeneratedSchemaPlaceholder,
 } from '@holo-js/db'
 import type { LoadedProjectConfig } from '../types'
 import { loadGeneratedProjectRegistry } from './registry'
@@ -128,7 +130,7 @@ async function importProjectConfigFile<TConfig extends object>(
     const importUrl = await resolveProjectConfigImportUrl(filePath, environmentValues)
     const configExtension = extname(filePath)
     const bundled = configExtension === '.ts' || configExtension === '.mts'
-      ? await bundleProjectModule(projectRoot, filePath)
+      ? await bundleProjectModule(projectRoot, filePath, { bundleDependencies: true })
       : undefined
     const resolvedImportUrl = bundled
       ? `${pathToFileURL(bundled.path).href}${new URL(importUrl).search}`
@@ -291,7 +293,7 @@ export async function serializeDatabaseConfig(
   }, null, 2)
 
   return [
-    'import { defineDatabaseConfig } from \'@holo-js/config\'',
+    'import { defineDatabaseConfig } from \'@holo-js/db\'',
     '',
     'export default defineDatabaseConfig(',
     contents,

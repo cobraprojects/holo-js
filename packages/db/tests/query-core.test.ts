@@ -1369,6 +1369,11 @@ describe('query core slice', () => {
       sql: 'INSERT INTO "users" ("active") VALUES ($1) RETURNING *',
       bindings: [true],
     }))
+    expect(compiler.compile(createInsertQueryPlan(
+      createTableSource(users),
+      [{ active: true }],
+      { ignoreConflicts: true, returning: true },
+    )).sql).toBe('INSERT INTO "users" ("active") VALUES ($1) ON CONFLICT DO NOTHING RETURNING *')
     expect(compiler.compile(createUpsertQueryPlan(
       createTableSource(users),
       [{ id: 1, active: true }],
@@ -2784,6 +2789,8 @@ describe('query core slice', () => {
     expect(firstCursorPage.items()).toEqual(firstCursorPage.data)
     expect(firstCursorPage.hasMorePages()).toBe(true)
     expect(firstCursorPage.getCursorName()).toBe('cursor')
+    const qualifiedCursorPage = await DB.table(users).orderBy('users.id').cursorPaginate(2)
+    expect(qualifiedCursorPage.data.map(row => row.id)).toEqual([1, 2])
     expect(firstCursorPage.nextCursorToken()).toBe(firstCursorPage.nextCursor)
     expect(firstCursorPage.previousCursorToken()).toBeNull()
     expect(firstCursorPage.toJSON()).toEqual({
@@ -2900,12 +2907,20 @@ describe('query core slice', () => {
           dialect: createDialect('sqlite') } } }))
 
     await expect(DB.table('users').paginate(0, 1)).rejects.toThrow('Per-page value must be a positive integer.')
+    expect(() => DB.table('users').forPage(0, 1)).toThrow('Page must be a positive integer.')
+    expect(() => DB.table('users').forPage(1, 0)).toThrow('Per-page value must be a positive integer.')
+    await expect(DB.table('users').paginate(1, 0)).rejects.toThrow('Page must be a positive integer.')
+    await expect(DB.table('users').simplePaginate(0, 1)).rejects.toThrow('Per-page value must be a positive integer.')
     await expect(DB.table('users').simplePaginate(1, 0)).rejects.toThrow('Page must be a positive integer.')
+    await expect(DB.table('users').simplePaginate(1, 1, { pageName: '' })).rejects.toThrow('Page parameter name must be a non-empty string.')
+    await expect(DB.table('users').cursorPaginate(0)).rejects.toThrow('Per-page value must be a positive integer.')
+    await expect(DB.table('users').chunkByIdDesc(0, () => {})).rejects.toThrow('Chunk size must be a positive integer.')
     await expect(DB.table('users').cursorPaginate(2, 'broken')).rejects.toThrow('Cursor is malformed.')
     await expect(DB.table('users').paginate(1, 1, { pageName: '' })).rejects.toThrow('Page parameter name must be a non-empty string.')
     await expect(DB.table('users').cursorPaginate(1, null, { cursorName: '' })).rejects.toThrow('Cursor parameter name must be a non-empty string.')
     await expect(DB.table('users').cursorPaginate(1)).rejects.toThrow('Cursor pagination requires an explicit stable orderBy clause.')
     await expect(DB.table('users').inRandomOrder().cursorPaginate(1)).rejects.toThrow('Cursor pagination cannot use random ordering.')
+    await expect(DB.table('users').unsafeOrderBy('id', []).cursorPaginate(1)).rejects.toThrow('requires column orderBy clauses')
     const malformedCursor = Buffer.from(JSON.stringify({ offset: 'bad' }), 'utf8').toString('base64url')
     await expect(DB.table('users').cursorPaginate(2, malformedCursor)).rejects.toThrow('Cursor is malformed.')
     await expect(DB.table('users').chunk(0, () => undefined)).rejects.toThrow('Chunk size must be a positive integer.')

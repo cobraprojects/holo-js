@@ -46,8 +46,7 @@ Use this only when you intentionally want to clear every stored failed job recor
 The default scaffold keeps failed jobs in the database:
 
 ```ts
-import { defineQueueConfig } from '@holo-js/config'
-
+import { defineQueueConfig } from '@holo-js/queue'
 export default defineQueueConfig({
   failed: {
     driver: 'database',
@@ -60,8 +59,7 @@ export default defineQueueConfig({
 Disable failed-job persistence when you do not want to keep failed async jobs:
 
 ```ts
-import { defineQueueConfig } from '@holo-js/config'
-
+import { defineQueueConfig } from '@holo-js/queue'
 export default defineQueueConfig({
   failed: false,
 })

@@ -1,19 +1,18 @@
 import { describe, it } from 'vitest'
 import {
-  defineAuthConfig,
-  defineBroadcastConfig,
-  defineCacheConfig,
   defineConfig,
-  defineMailConfig,
-  defineNotificationsConfig,
-  defineQueueConfig,
-  defineSecurityConfig,
-  defineSessionConfig,
-  type AuthHostedIdentityStore,
   type DotPath,
   type HoloAppEnv,
   type HoloConfigRegistry,
 } from '../src'
+import { defineQueueConfig } from '@holo-js/queue'
+import { defineAuthConfig, type AuthHostedIdentityStore } from '@holo-js/auth'
+import { defineBroadcastConfig } from '@holo-js/broadcast'
+import { defineCacheConfig } from '@holo-js/cache'
+import { defineMailConfig } from '@holo-js/mail'
+import { defineNotificationsConfig } from '@holo-js/notifications'
+import { defineSecurityConfig } from '@holo-js/security'
+import { defineSessionConfig } from '@holo-js/session'
 import { createConfigAccessorFixture } from './support/configAccessors'
 
 declare module '../src/types' {

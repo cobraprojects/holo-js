@@ -1,6 +1,7 @@
 import { open, realpath, stat } from 'node:fs/promises'
 import { extname, resolve, sep } from 'node:path'
 import type { RuntimeDiskConfig, HoloStorageRuntimeConfig } from '@holo-js/storage'
+import { createError, defineEventHandler, getRequestURL, setResponseHeader, type H3Event } from 'h3'
 import { useRuntimeConfig } from '#imports'
 
 const NAMED_PUBLIC_DISK_ROUTE_SEGMENT = '__holo'
@@ -67,14 +68,9 @@ function resolveContentType(absolutePath: string): string {
       return 'text/css; charset=utf-8'
     case '.gif':
       return 'image/gif'
-    case '.html':
-      return 'text/html; charset=utf-8'
     case '.jpeg':
     case '.jpg':
       return 'image/jpeg'
-    case '.js':
-    case '.mjs':
-      return 'text/javascript; charset=utf-8'
     case '.json':
       return 'application/json; charset=utf-8'
     case '.mp3':
@@ -83,8 +79,6 @@ function resolveContentType(absolutePath: string): string {
       return 'application/pdf'
     case '.png':
       return 'image/png'
-    case '.svg':
-      return 'image/svg+xml'
     case '.txt':
       return 'text/plain; charset=utf-8'
     case '.webp':
@@ -110,7 +104,7 @@ function isActiveContentPath(absolutePath: string): boolean {
   }
 }
 
-function setStorageResponseHeaders(event: unknown, absolutePath: string): void {
+function setStorageResponseHeaders(event: H3Event, absolutePath: string): void {
   if (isActiveContentPath(absolutePath)) {
     setResponseHeader(event, 'content-disposition', 'attachment')
     setResponseHeader(event, 'content-type', 'application/octet-stream')
@@ -142,7 +136,7 @@ function isSameFile(left: FileIdentity, right: FileIdentity): boolean {
 }
 
 async function readPublicFile(
-  event: unknown,
+  event: H3Event,
   disk: PublicLocalDisk,
   absolutePath: string,
 ): Promise<Buffer> {
@@ -265,7 +259,7 @@ function resolveFallbackPublicStorageRequest(
   return candidates.find(candidate => candidate && candidate.disk.name !== attemptedDiskName) ?? null
 }
 
-export default defineEventHandler(async (event: unknown) => {
+export default defineEventHandler(async (event) => {
   const runtimeConfig = useRuntimeConfig() as { holoStorage: HoloStorageRuntimeConfig }
   const { holoStorage } = runtimeConfig
   const pathname = getRequestURL(event).pathname

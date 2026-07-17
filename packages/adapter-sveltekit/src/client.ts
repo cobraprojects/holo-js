@@ -224,7 +224,7 @@ function restoreBrowserFormValues(values: Record<string, unknown>): void {
       continue
     }
 
-    control.value = nextValues[0] ?? ''
+    control.value = nextValues[0] as string
   }
 }
 
@@ -830,4 +830,43 @@ export function useValidationErrors<TData = Record<string, unknown>>(
 ): ValidationErrorBag<TData> {
   const payload = takeValidationErrors<TData>(bag)
   return createErrorBag<TData>(payload?.errors ?? {})
+}
+
+export const svelteClientInternals = {
+  clearBrowserCookie,
+  collectSchemaPaths,
+  collectValuePaths,
+  countMatchingFormFields,
+  createInvalidActionFailure,
+  createHttpHandledForm,
+  currentLocationHref,
+  ensureSubmitListener,
+  flattenRestorableValues,
+  getBrowserCookiePath,
+  hydrateActionFormState,
+  isFormFailurePayload,
+  isFormState,
+  isJsonResponse,
+  isNativePostForm,
+  isPlainObject,
+  isSchemaField,
+  isSvelteKitActionForm,
+  isSvelteKitActionResult,
+  normalizeFormDataName,
+  parseValidationFlashCookie,
+  readBrowserCookie,
+  redirectBrowser,
+  registerForm,
+  renderFormHttpFailure,
+  resolveRegisteredForm,
+  resolveSubmittedForm,
+  restoreBrowserFormValues,
+  safeDecodeURIComponent,
+  scheduleBrowserFormValueRestore,
+  stateMatchesSchema,
+  submitNativeForm,
+  submitSvelteKitAction,
+  submitSvelteKitActionForm,
+  takeFlashedValidationState,
+  takeValidationErrors,
 }

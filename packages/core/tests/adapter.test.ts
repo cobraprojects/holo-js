@@ -21,6 +21,10 @@ import { runtimeModuleInternals } from '../src/runtimeModule'
 import { configureStorageRuntime, resetStorageRuntime, useStorage } from '@holo-js/storage/runtime'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
+const authEntry = JSON.stringify(resolve(import.meta.dirname, '../../auth/src/index.ts'))
+const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/index.ts'))
+const sessionEntry = JSON.stringify(resolve(import.meta.dirname, '../../session/src/index.ts'))
+const storageEntry = JSON.stringify(resolve(import.meta.dirname, '../../storage/src/index.ts'))
 const tempDirs: string[] = []
 type FetchInput = Request | URL | string
 type StrictStorageRuntime = {
@@ -59,7 +63,7 @@ export default defineAppConfig({
 })
 `, 'utf8')
   await writeFile(join(root, 'config/database.ts'), `
-import { defineDatabaseConfig } from ${configEntry}
+import { defineDatabaseConfig } from ${databaseEntry}
 
 export default defineDatabaseConfig({
   defaultConnection: 'main',
@@ -890,7 +894,7 @@ export default defineJob({
     const root = await createProjectRoot()
 
     await writeFile(join(root, 'config/session.ts'), `
-import { defineSessionConfig } from ${configEntry}
+import { defineSessionConfig } from ${sessionEntry}
 
 export default defineSessionConfig({
   driver: 'file',
@@ -903,7 +907,7 @@ export default defineSessionConfig({
 })
 `, 'utf8')
     await writeFile(join(root, 'config/auth.ts'), `
-import { defineAuthConfig } from ${configEntry}
+import { defineAuthConfig } from ${authEntry}
 
 export default defineAuthConfig({
   defaults: {
@@ -1046,7 +1050,7 @@ export default {
     })
     vi.stubGlobal('fetch', fetchMock)
     await writeFile(join(root, 'config/storage.ts'), `
-import { defineStorageConfig } from ${configEntry}
+import { defineStorageConfig } from ${storageEntry}
 
 export default defineStorageConfig({
   defaultDisk: 'local',
@@ -1182,7 +1186,7 @@ export default defineStorageConfig({
     })
     const root = await createProjectRoot()
     await writeFile(join(root, 'config/storage.ts'), `
-import { defineStorageConfig } from ${configEntry}
+import { defineStorageConfig } from ${storageEntry}
 
 export default defineStorageConfig({
   defaultDisk: 'local',

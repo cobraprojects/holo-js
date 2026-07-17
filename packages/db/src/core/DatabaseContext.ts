@@ -337,56 +337,54 @@ export class DatabaseContext {
     let tx: DatabaseContext | undefined
     let committed = false
 
-    const runTransaction = async () => {
+    const runTransaction = async (): Promise<T> => {
       await this._logger?.onTransactionStart?.(entry)
-      try {
-        const result = await runWithinScope(async () => {
-          await this._callTransactionHook('begin', () => this._adapter.beginTransaction(options), options)
-          tx = this._createChildContext(
-            { kind: 'transaction', depth: 1 },
-            this._createTransactionCallbackState(),
-          )
+      return runWithinScope(async () => {
+        await this._callTransactionHook('begin', () => this._adapter.beginTransaction(options), options)
+        tx = this._createChildContext(
+          { kind: 'transaction', depth: 1 },
+          this._createTransactionCallbackState(),
+        )
 
+        try {
+          const value = await this._runTransactionCallback(tx, callback)
+          await this._callTransactionHook('commit', () => this._adapter.commit(options), options)
+          return value
+        } catch (error) {
           try {
-            const value = await this._runTransactionCallback(tx, callback)
-            await this._callTransactionHook('commit', () => this._adapter.commit(options), options)
-            committed = true
-            return value
-          } catch (error) {
-            if (committed) {
-              throw error
-            }
-
-            try {
-              await this._callTransactionHook('rollback', () => this._adapter.rollback(options), options)
-            } catch (rollbackError) {
-              await this._logger?.onTransactionRollback?.({ ...entry, error: rollbackError })
-              throw rollbackError
-            }
-
-            throw error
+            await this._callTransactionHook('rollback', () => this._adapter.rollback(options), options)
+          } catch (rollbackError) {
+            await this._logger?.onTransactionRollback?.({ ...entry, error: rollbackError })
+            throw rollbackError
           }
-        })
 
-        await tx?._flushTransactionCallbacks('afterCommit')
-        await this._logger?.onTransactionCommit?.(entry)
-        return result
-      } catch (error) {
-        if (committed) {
           throw error
         }
+      })
+    }
 
-        await tx?._flushTransactionCallbacks('afterRollback')
-        await this._logger?.onTransactionRollback?.({ ...entry, error })
+    try {
+      const result = this._adapter.supportsConcurrentTransactionScopes === true
+        ? await runTransaction()
+        : this._adapter.runWithTransactionScope
+          ? await this._runtime.scheduler.exclusive(runTransaction)
+          : await this._runSerializedRootTransaction(
+              async () => this._runtime.scheduler.exclusive(runTransaction),
+            )
+
+      committed = true
+      await tx?._flushTransactionCallbacks('afterCommit')
+      await this._logger?.onTransactionCommit?.(entry)
+      return result
+    } catch (error) {
+      if (committed) {
         throw error
       }
-    }
 
-    if (this._adapter.runWithTransactionScope) {
-      return runTransaction()
+      await tx?._flushTransactionCallbacks('afterRollback')
+      await this._logger?.onTransactionRollback?.({ ...entry, error })
+      throw error
     }
-
-    return this._runSerializedRootTransaction(runTransaction)
   }
 
   private async _runSerializedRootTransaction<T>(
@@ -616,6 +614,7 @@ export class DatabaseContext {
     const scheduled = await this._runtime.scheduler.schedule({
       transactional: this._scope.kind !== 'root',
       preferWorkerThreads: this._concurrency.workerThreads,
+      withinExclusive: this._scope.kind !== 'root',
     }, async (schedulingMode) => {
       const baseLog: QueryStartLog = {
         kind,

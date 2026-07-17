@@ -1,4 +1,4 @@
-import type { NormalizedHoloSecurityConfig } from '@holo-js/config'
+import type { NormalizedHoloSecurityConfig } from './config'
 import type { SecurityClientConfig } from './contracts'
 
 export const SECURITY_CLIENT_CONFIG_COOKIE = 'HOLO-CSRF-CONFIG'

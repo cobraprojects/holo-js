@@ -27,7 +27,6 @@ import type {
 import { queueJobInternals } from './contracts'
 import { DEFAULT_QUEUE_NAME } from './config'
 import { normalizeQueueConfig, holoQueueDefaults } from './config'
-import { redisQueueDriverFactory } from './drivers/redis'
 import { syncQueueDriverFactory } from './drivers/sync'
 import { getRegisteredQueueJob } from './registry'
 import { loadQueuePluginDriverFactories, resetQueuePluginDriverFactories } from './plugins'
@@ -195,7 +194,6 @@ function normalizeDelay(delay: QueueDelayValue | undefined): number | undefined 
 
 function createDefaultDriverFactories(): Map<string, QueueDriverFactory> {
   return new Map<string, QueueDriverFactory>([
-    [redisQueueDriverFactory.driver, redisQueueDriverFactory],
     [syncQueueDriverFactory.driver, syncQueueDriverFactory],
   ])
 }
@@ -417,10 +415,13 @@ async function clearCachedDriversForFactoryNames(state: RuntimeQueueState, drive
   await closeQueueDrivers(staleDrivers)
 }
 
-export async function loadQueuePluginDrivers(projectRoot = process.cwd()): Promise<void> {
+export async function loadQueuePluginDrivers(
+  projectRoot = process.cwd(),
+  pluginNames: readonly string[] = [],
+): Promise<void> {
   const state = getQueueRuntimeState()
   const loadedDriverNames = new Set<string>()
-  for (const factory of await loadQueuePluginDriverFactories(projectRoot)) {
+  for (const factory of await loadQueuePluginDriverFactories(projectRoot, pluginNames)) {
     state.driverFactories.set(factory.driver, factory)
     loadedDriverNames.add(factory.driver)
   }

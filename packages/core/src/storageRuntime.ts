@@ -66,8 +66,8 @@ type StorageS3Module = {
   }): StorageBackend
 }
 
-async function importOptionalModule<TModule>(specifier: string): Promise<TModule | undefined> {
-  return importOptionalRuntimeModule<TModule>(specifier)
+async function importOptionalModule<TModule>(specifier: string, projectRoot?: string): Promise<TModule | undefined> {
+  return importOptionalRuntimeModule<TModule>(specifier, projectRoot ? { projectRoot } : {})
 }
 
 export function resolveStorageKeyPath(root: string, key: string): string {
@@ -207,8 +207,8 @@ function createFileStorageBackend(root: string): StorageBackend {
 }
 
 /* v8 ignore start -- S3 backend behavior is covered in the split storage-s3 package */
-async function createS3StorageBackend(disk: RuntimeDiskConfig): Promise<StorageBackend> {
-  const storageS3 = await importOptionalModule<StorageS3Module>('@holo-js/storage/runtime/drivers/s3')
+async function createS3StorageBackend(projectRoot: string, disk: RuntimeDiskConfig): Promise<StorageBackend> {
+  const storageS3 = await importOptionalModule<StorageS3Module>('@holo-js/storage-s3', projectRoot)
   if (!storageS3) {
     throw new Error('[@holo-js/core] Storage config references an s3 disk but @holo-js/storage-s3 is not installed.')
   }
@@ -245,7 +245,7 @@ export async function configurePlainNodeStorageRuntime<TCustom extends HoloConfi
 
   for (const [diskName, disk] of Object.entries(normalizedStorage.disks)) {
     const backend = disk.driver === 's3'
-      ? await createS3StorageBackend(disk)
+      ? await createS3StorageBackend(projectRoot, disk)
       : createFileStorageBackend(resolve(projectRoot, disk.root as string))
     backends.set(diskName, backend)
   }
@@ -277,3 +277,4 @@ export async function resetOptionalStorageRuntime(): Promise<void> {
 export const storageRuntimeInternals = {
   importOptionalModule,
 }
+import type {} from '@holo-js/storage/config'

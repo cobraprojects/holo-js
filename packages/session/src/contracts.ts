@@ -1,11 +1,10 @@
-export { defineSessionConfig } from '@holo-js/config'
 export type {
   HoloSessionConfig,
   HoloSessionCookieConfig,
   NormalizedHoloSessionConfig,
   SessionCookieSameSite,
-} from '@holo-js/config'
-import type { NormalizedHoloSessionConfig, SessionCookieSameSite } from '@holo-js/config'
+} from './config'
+import type { NormalizedHoloSessionConfig, SessionCookieSameSite } from './config'
 
 export interface CreateSessionInput {
   readonly store?: string

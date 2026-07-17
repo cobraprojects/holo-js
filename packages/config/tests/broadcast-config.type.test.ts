@@ -1,8 +1,8 @@
 import { describe, it } from 'vitest'
-import {
-  defineBroadcastConfig,
-  type HoloConfigRegistry,
+import type {
+  HoloConfigRegistry,
 } from '../src'
+import { defineBroadcastConfig } from '@holo-js/broadcast'
 import { createConfigAccessorFixture } from './support/configAccessors'
 
 describe('@holo-js/config broadcast typing', () => {

@@ -1,6 +1,5 @@
 import { resolve } from 'node:path'
-import type { HoloSecurityConfig, NormalizedHoloSecurityConfig } from '@holo-js/config'
-import { normalizeSecurityConfig } from '@holo-js/config'
+import { normalizeSecurityConfig, type HoloSecurityConfig, type NormalizedHoloSecurityConfig } from './config'
 import type { SecurityRateLimitStore, SecurityRateLimitStoreFactoryOptions } from './contracts'
 import { createFileRateLimitStore } from './drivers/file'
 import { createMemoryRateLimitStore } from './drivers/memory'

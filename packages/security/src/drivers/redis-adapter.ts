@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type {
   NormalizedSecurityRateLimitRedisConfig,
-} from '@holo-js/config'
+} from '../config'
 import Redis from 'ioredis'
 import type { SecurityRateLimitRedisDriverAdapter } from '../contracts'
 

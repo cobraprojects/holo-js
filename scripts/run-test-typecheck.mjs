@@ -1,6 +1,8 @@
 import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { dirname, join, relative, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { removeStaleGeneratedConfigs } from './remove-stale-test-typecheck-configs.mjs'
 
 const packagesRoot = resolve('packages')
 const generatedConfigsRootPrefix = resolve('.holo-test-typecheck-')
@@ -10,6 +12,7 @@ async function main() {
   let generatedConfigsRootDir
 
   try {
+    await removeStaleGeneratedConfigs(generatedConfigsRootPrefix)
     generatedConfigsRootDir = await mkdtemp(generatedConfigsRootPrefix)
 
     for (const packageDir of packageDirs) {
@@ -161,7 +164,10 @@ function runTypecheck(configPath, packageDir) {
   })
 }
 
-main().catch(error => {
-  console.error(error instanceof Error ? error.message : String(error))
-  process.exit(1)
-})
+const entrypoint = process.argv[1]
+if (typeof entrypoint === 'string' && import.meta.url === pathToFileURL(resolve(entrypoint)).href) {
+  main().catch(error => {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exit(1)
+  })
+}

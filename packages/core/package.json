@@ -35,6 +35,7 @@
   "dependencies": {
     "@holo-js/config": "catalog:",
     "@holo-js/db": "catalog:",
+    "@holo-js/kernel": "catalog:",
     "esbuild": "catalog:"
   },
   "peerDependencies": {
@@ -47,6 +48,7 @@
     "@holo-js/cache": "catalog:",
     "@holo-js/events": "catalog:",
     "@holo-js/mail": "catalog:",
+    "@holo-js/media": "catalog:",
     "@holo-js/notifications": "catalog:",
     "@holo-js/queue": "catalog:",
     "@holo-js/queue-db": "catalog:",
@@ -80,6 +82,9 @@
       "optional": true
     },
     "@holo-js/mail": {
+      "optional": true
+    },
+    "@holo-js/media": {
       "optional": true
     },
     "@holo-js/notifications": {

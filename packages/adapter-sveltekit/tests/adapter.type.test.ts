@@ -175,13 +175,15 @@ describe('@holo-js/adapter-sveltekit typing', () => {
       buildPackage(resolve(packageDir, '../auth'), join(buildRoot, 'auth'))
       buildPackage(packageDir, join(buildRoot, 'adapter-sveltekit'))
 
-      await Promise.all([
-        stagePublishedPackage(resolve(packageDir, '../config'), join(tempHoloNodeModules, 'config'), join(buildRoot, 'config')),
-        stagePublishedPackage(resolve(packageDir, '../validation'), join(tempHoloNodeModules, 'validation'), join(buildRoot, 'validation')),
-        stagePublishedPackage(resolve(packageDir, '../forms'), join(tempHoloNodeModules, 'forms'), join(buildRoot, 'forms')),
-        stagePublishedPackage(resolve(packageDir, '../auth'), join(tempHoloNodeModules, 'auth'), join(buildRoot, 'auth')),
-        stagePublishedPackage(packageDir, join(tempHoloNodeModules, 'adapter-sveltekit'), join(buildRoot, 'adapter-sveltekit')),
-      ])
+      for (const [sourceDir, targetDir, distDir] of [
+        [resolve(packageDir, '../config'), join(tempHoloNodeModules, 'config'), join(buildRoot, 'config')],
+        [resolve(packageDir, '../validation'), join(tempHoloNodeModules, 'validation'), join(buildRoot, 'validation')],
+        [resolve(packageDir, '../forms'), join(tempHoloNodeModules, 'forms'), join(buildRoot, 'forms')],
+        [resolve(packageDir, '../auth'), join(tempHoloNodeModules, 'auth'), join(buildRoot, 'auth')],
+        [packageDir, join(tempHoloNodeModules, 'adapter-sveltekit'), join(buildRoot, 'adapter-sveltekit')],
+      ] as const) {
+        await stagePublishedPackage(sourceDir, targetDir, distDir)
+      }
 
       await writeFile(
         entryPath,

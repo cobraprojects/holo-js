@@ -12,18 +12,17 @@ import {
   createPostgresAdapter as createConcretePostgresAdapter,
 } from '@holo-js/db-postgres'
 import {
-  MySQLAdapter,
-  PostgresAdapter,
-  SQLiteAdapter,
-  TransactionError,
   createCapabilities,
   createDatabase,
-  createMySQLAdapter,
-  createPostgresAdapter,
-  createSQLiteAdapter,
   unsafeSql } from '../src'
-import { driverModuleInternals } from '../src/drivers/index'
 import { runDriverAdapterContractSuite } from './contracts/driverAdapterContract'
+
+const SQLiteAdapter = ConcreteSQLiteAdapter
+const createSQLiteAdapter = createConcreteSQLiteAdapter
+const PostgresAdapter = ConcretePostgresAdapter
+const createPostgresAdapter = createConcretePostgresAdapter
+const MySQLAdapter = ConcreteMySQLAdapter
+const createMySQLAdapter = createConcreteMySQLAdapter
 
 function createSqliteDatabase() {
   const executed: string[] = []
@@ -270,7 +269,7 @@ describe('driver adapters', () => {
 
     expect(adapter.isConnected()).toBe(true)
     await adapter.initialize()
-    await expect(adapter.createSavepoint('bad-name')).rejects.toThrow(TransactionError)
+    await expect(adapter.createSavepoint('bad-name')).rejects.toThrow('Invalid savepoint name')
   })
 
   it('supports explicit SQLite initialization, bigint insert ids, and factory creation', async () => {
@@ -301,47 +300,6 @@ describe('driver adapters', () => {
       affectedRows: 2,
       lastInsertId: 12 })
     expect(executed).toEqual([])
-  })
-
-  it('loads split driver packages through the dynamic driver loader', async () => {
-    const concreteAdapter = {
-      async initialize() {},
-      async disconnect() {},
-      isConnected() {
-        return true
-      },
-      async query() {
-        return {
-          rows: [],
-          rowCount: 0,
-        }
-      },
-      async execute() {
-        return {}
-      },
-      async beginTransaction() {},
-      async commit() {},
-      async rollback() {},
-    }
-    vi.spyOn(driverModuleInternals, 'importDriverModule').mockResolvedValueOnce({
-      createSQLiteAdapter() {
-        return concreteAdapter
-      },
-    })
-
-    const adapter = new SQLiteAdapter()
-    await adapter.initialize()
-
-    expect(adapter.isConnected()).toBe(true)
-  })
-
-  it('wraps missing split driver packages with installation guidance', async () => {
-    vi.spyOn(driverModuleInternals, 'importDriverModule').mockRejectedValueOnce(
-      new Error('[@holo-js/db] SQLite support requires @holo-js/db-sqlite to be installed.'),
-    )
-
-    const adapter = new SQLiteAdapter()
-    await expect(adapter.initialize()).rejects.toThrow('[@holo-js/db] SQLite support requires @holo-js/db-sqlite to be installed.')
   })
 
   it('rethrows non-arity SQLite statement errors', async () => {
@@ -380,6 +338,14 @@ describe('driver adapters', () => {
 
     await expect(missingAdapter.initialize()).rejects.toThrow(
       'Unable to open SQLite database "/tmp/missing.sqlite": Unknown SQLite driver error.',
+    )
+    await expect(new ConcreteSQLiteAdapter({
+      filename: '/tmp/broken.sqlite',
+      createDatabase() {
+        throw new Error('open failed')
+      },
+    }).initialize()).rejects.toThrow(
+      'Unable to open SQLite database "/tmp/broken.sqlite": open failed',
     )
 
     const sqlite = createSqliteDatabase()
@@ -785,6 +751,18 @@ describe('driver adapters', () => {
     await expect(createConcretePostgresAdapter({
       createPool: noTargetCreatePool,
     }).ensureDatabaseExists()).resolves.toBeUndefined()
+    await expect(createConcretePostgresAdapter({
+      config: {},
+      createPool: noTargetCreatePool,
+    }).ensureDatabaseExists()).resolves.toBeUndefined()
+    await expect(createConcretePostgresAdapter({
+      connectionString: 'postgres://localhost/postgres',
+      createPool: noTargetCreatePool,
+    }).ensureDatabaseExists()).resolves.toBeUndefined()
+    await expect(createConcretePostgresAdapter({
+      connectionString: 'postgres://localhost',
+      createPool: noTargetCreatePool,
+    }).ensureDatabaseExists()).resolves.toBeUndefined()
     expect(noTargetCreatePool).not.toHaveBeenCalled()
 
     const configBootstrapQuery = vi.fn(async () => ({
@@ -825,6 +803,18 @@ describe('driver adapters', () => {
       'Postgres database "private"app" could not be found or created. Please create the database and try again. Original error: permission denied',
     )
     expect(failingEnd).toHaveBeenCalledTimes(1)
+    await expect(createConcretePostgresAdapter({
+      config: { database: 'string_failure' },
+      createPool() {
+        return {
+          async query() {
+            throw 'permission denied'
+          },
+          connect: vi.fn(async () => createPostgresClient([]).client),
+          end: vi.fn(async () => {}),
+        }
+      },
+    }).ensureDatabaseExists()).rejects.toThrow('Original error: permission denied')
   })
 
   it('disconnects a direct Postgres client even when it does not expose end()', async () => {
@@ -1076,6 +1066,18 @@ describe('driver adapters', () => {
       'MySQL database "private`app" could not be found or created. Please create the database and try again. Original error: access denied',
     )
     expect(failingEnd).toHaveBeenCalledTimes(1)
+    await expect(createConcreteMySQLAdapter({
+      config: { database: 'string_failure' },
+      createPool() {
+        return {
+          async query() {
+            throw 'access denied'
+          },
+          getConnection: vi.fn(async () => createMySqlClient([]).client),
+          end: vi.fn(async () => {}),
+        }
+      },
+    }).ensureDatabaseExists()).rejects.toThrow('Original error: access denied')
   })
 
   it('disconnects a direct MySQL client even when it does not expose end()', async () => {

@@ -1,4 +1,9 @@
-import { loadHoloPluginContributionModules, type NormalizedCachePluginDriverConfig } from '@holo-js/config'
+import { resolve } from 'node:path'
+import {
+  loadHoloPluginContributionModules,
+  loadHoloPluginDefinitions,
+} from '@holo-js/kernel'
+import type { NormalizedCachePluginDriverConfig } from './config'
 import type { CacheDriverContract } from './contracts'
 
 const loadedContractsByProjectRoot = new Map<string, readonly CacheDriverContract[]>()
@@ -109,17 +114,23 @@ function assertConfiguredCacheDriverContributions(
   )
 }
 
-export async function loadCachePluginDriverContracts(projectRoot = process.cwd()): Promise<readonly CacheDriverContract[]> {
-  const loadedContracts = loadedContractsByProjectRoot.get(projectRoot)
+export async function loadCachePluginDriverContracts(
+  projectRoot = process.cwd(),
+  pluginNames: readonly string[] = [],
+): Promise<readonly CacheDriverContract[]> {
+  const root = resolve(projectRoot)
+  const cacheKey = `${root}\0${[...pluginNames].sort().join('\0')}`
+  const loadedContracts = loadedContractsByProjectRoot.get(cacheKey)
   if (loadedContracts) {
     return loadedContracts
   }
 
-  if (failedLoadsByProjectRoot.has(projectRoot)) {
-    throw failedLoadsByProjectRoot.get(projectRoot)
+  if (failedLoadsByProjectRoot.has(cacheKey)) {
+    throw failedLoadsByProjectRoot.get(cacheKey)
   }
 
-  const contributions = await loadHoloPluginContributionModules(projectRoot, 'cache', 'drivers')
+  const plugins = await loadHoloPluginDefinitions(root, pluginNames)
+  const contributions = await loadHoloPluginContributionModules(root, plugins, 'cache', 'drivers')
   let drivers: readonly CacheDriverContract[]
 
   try {
@@ -129,23 +140,25 @@ export async function loadCachePluginDriverContracts(projectRoot = process.cwd()
       contribution.name,
     )))
   } catch (error) {
-    failedLoadsByProjectRoot.set(projectRoot, error)
+    failedLoadsByProjectRoot.set(cacheKey, error)
     throw error
   }
 
-  loadedContractsByProjectRoot.set(projectRoot, drivers)
+  loadedContractsByProjectRoot.set(cacheKey, drivers)
   return drivers
 }
 
 export async function loadConfiguredCachePluginDriverContracts(
   projectRoot: string,
+  pluginNames: readonly string[],
   configs: readonly NormalizedCachePluginDriverConfig[],
 ): Promise<readonly CacheDriverContract[]> {
   if (configs.length === 0) {
     return Object.freeze([])
   }
 
-  const contributions = await loadHoloPluginContributionModules(projectRoot, 'cache', 'drivers')
+  const plugins = await loadHoloPluginDefinitions(projectRoot, pluginNames)
+  const contributions = await loadHoloPluginContributionModules(projectRoot, plugins, 'cache', 'drivers')
   assertConfiguredCacheDriverContributions(configs, contributions)
   const drivers: CacheDriverContract[] = []
 

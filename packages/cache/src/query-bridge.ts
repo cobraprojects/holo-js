@@ -113,15 +113,12 @@ function resolveDriverContext(driverName?: string): {
 } {
   const runtime = getCacheRuntime()
   const configuredDriverName = driverName?.trim() || runtime.config.default
-  const driverConfig = runtime.config.drivers[configuredDriverName]
-  let normalizedKeyPrefix = runtime.config.prefix
-  if (typeof driverConfig?.prefix === 'string') {
-    normalizedKeyPrefix = driverConfig.prefix
-  }
+  const driver = resolveConfiguredDriver(runtime, configuredDriverName)
+  const normalizedKeyPrefix = runtime.config.drivers[configuredDriverName]!.prefix
 
   return Object.freeze({
     driverName: configuredDriverName,
-    driver: resolveConfiguredDriver(runtime, configuredDriverName),
+    driver,
     normalizedKeyPrefix,
   })
 }

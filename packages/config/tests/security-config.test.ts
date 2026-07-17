@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { normalizeRedisConfig } from '@holo-js/kernel'
 import {
   defineCorsConfig,
   defineSecurityConfig,
   normalizeCorsConfig,
-  normalizeRedisConfig,
   normalizeSecurityConfig,
-} from '../src'
+} from '@holo-js/security'
 
 describe('@holo-js/config security normalization', () => {
   it('defines and normalizes cors config', () => {
@@ -306,7 +306,7 @@ describe('@holo-js/config security normalization', () => {
       rateLimit: {
         driver: 'redis',
       },
-    })).toThrow('but no top-level redis config is loaded')
+    })).toThrow('without top-level Redis config')
 
     expect(normalizeSecurityConfig({
       rateLimit: {

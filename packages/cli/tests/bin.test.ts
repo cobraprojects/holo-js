@@ -66,12 +66,24 @@ async function writeCliRuntimeStubs(packageRoot: string): Promise<void> {
       'export async function loadConfigDirectory() { return {} }',
       'export async function loadEnvironment() { return {} }',
       'export function normalizeAppConfig(config) { return config }',
-      'export function normalizeDatabaseConfig(config) { return config }',
       'export function resolveEnvPlaceholders(value) { return value }',
       'export const holoAppDefaults = Object.freeze({})',
-      'export const holoDatabaseDefaults = Object.freeze({})',
-      'export const holoStorageDefaults = Object.freeze({})',
       'export async function writeConfigCache() {}',
+    ].join('\n'),
+  )
+  await writeStubPackage(
+    packageRoot,
+    '@holo-js/storage',
+    'export const holoStorageDefaults = Object.freeze({ defaultDisk: "local", routePrefix: "/storage" })\n',
+  )
+  await writeStubPackage(
+    packageRoot,
+    '@holo-js/kernel',
+    [
+      'export const DEFAULT_HOLO_PROJECT_PATHS = Object.freeze({ models: "app/models", migrations: "database/migrations", seeders: "database/seeders", commands: "app/commands", jobs: "app/jobs", events: "app/events", listeners: "app/listeners", generatedSchema: ".holo-js/generated/schema.generated.ts" })',
+      'export function normalizeHoloProjectConfig(config = {}) { return { ...config, paths: { ...DEFAULT_HOLO_PROJECT_PATHS, ...(config.paths ?? {}) } } }',
+      'export function normalizeHoloPluginDefinition(value) { return value.default ?? value.plugin ?? value }',
+      'export async function loadHoloPluginDefinitions() { return [] }',
     ].join('\n'),
   )
   await writeStubPackage(
@@ -82,6 +94,8 @@ async function writeCliRuntimeStubs(packageRoot: string): Promise<void> {
       'export function normalizeHoloProjectConfig(config = {}) { return { ...config, paths: { ...DEFAULT_HOLO_PROJECT_PATHS, ...(config.paths ?? {}) } } }',
       'export function renderGeneratedSchemaRuntimeModule() { return "" }',
       'export function renderGeneratedSchemaPlaceholder() { return "" }',
+      'export function normalizeDatabaseConfig(config = {}) { return config }',
+      'export const holoDatabaseDefaults = Object.freeze({ connections: {} })',
       'export function normalizeMigrationSlug(value) { return value }',
       'export function createMigrationFileName(value) { return `${value}.ts` }',
       'export function generateMigrationTemplate() { return "" }',

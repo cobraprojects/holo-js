@@ -7,8 +7,8 @@ Password reset tokens let the application issue one-time credentials for resetti
 Password reset uses the configured broker and local provider:
 
 ```ts
-import { defineAuthConfig, env } from '@holo-js/config'
-
+import { defineAuthConfig } from '@holo-js/auth'
+import { env } from '@holo-js/config'
 export default defineAuthConfig({
   passwords: {
     users: {

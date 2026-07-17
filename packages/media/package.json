@@ -7,7 +7,13 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs"
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./config": {
+      "types": "./dist/projectConfig.d.ts",
+      "import": "./dist/projectConfig.mjs",
+      "default": "./dist/projectConfig.mjs"
     }
   },
   "main": "./dist/index.mjs",
@@ -22,12 +28,14 @@
     "test": "vitest --run"
   },
   "dependencies": {
+    "@holo-js/config": "catalog:",
     "@holo-js/db": "catalog:",
     "@holo-js/queue": "catalog:",
     "@holo-js/storage": "catalog:",
     "sharp": "catalog:"
   },
   "devDependencies": {
+    "@holo-js/db-sqlite": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

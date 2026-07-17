@@ -48,6 +48,7 @@
     "test": "vitest --run"
   },
   "dependencies": {
+    "@holo-js/adapter-shared": "catalog:",
     "@holo-js/config": "catalog:",
     "@holo-js/core": "catalog:",
     "@holo-js/validation": "catalog:",

@@ -2,8 +2,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { defineCacheConfig, normalizeCacheConfig } from '@holo-js/config'
 import { createFileCacheDriver } from '../src/file'
+import { createMemoryCacheDriver } from '../src/memory'
+import { composeRegisteredConfig } from '@holo-js/config/registry'
+import { createFlexibleEnvelope, resolveFlexibleCachedValue } from '../src/flexible'
 import cache, {
   CacheConfigError,
   cacheDbInternals,
@@ -23,6 +25,7 @@ import cache, {
   fileDriverInternals,
   cacheRuntimeInternals,
   configureCacheRuntime,
+  defineCacheConfig,
   defineCacheKey,
   deserializeCacheValue,
   getCacheRuntime,
@@ -30,8 +33,12 @@ import cache, {
   isCacheKey,
   loadCachePluginDriverContracts,
   loadCachePluginDrivers,
+  normalizeCacheConfig,
   normalizeCacheTtl,
+  requireCacheDriverFactory,
   resetCacheRuntime,
+  registerCacheDriverFactory,
+  unregisterCacheDriverFactory,
   resetCachePluginDriverContracts,
   resolveCacheKey,
   serializeCacheValue,
@@ -45,9 +52,160 @@ async function createTempCacheDirectory(name: string): Promise<string> {
 }
 
 describe('@holo-js/cache package surface', () => {
+  it('validates cache driver factory registration and removal', () => {
+    const factory = {
+      driver: 'test-registry',
+      create: ({ name }: { name: string }) => createMemoryCacheDriver({ name }),
+    }
+    const duplicate = { ...factory }
+
+    expect(() => registerCacheDriverFactory({ ...factory, driver: ' ' })).toThrow('non-empty driver name')
+    registerCacheDriverFactory(factory)
+    expect(() => registerCacheDriverFactory(factory)).not.toThrow()
+    expect(() => registerCacheDriverFactory(duplicate)).toThrow('already registered')
+    expect(requireCacheDriverFactory('test-registry', 'missing')).toBe(factory)
+
+    unregisterCacheDriverFactory(duplicate)
+    expect(requireCacheDriverFactory('test-registry', 'missing')).toBe(factory)
+    unregisterCacheDriverFactory(factory)
+    expect(() => requireCacheDriverFactory('test-registry', 'missing registry driver')).toThrow('missing registry driver')
+  })
+
+  it('replaces reloaded cache driver registrations from the same concrete package', () => {
+    const factory = {
+      driver: 'reloadable',
+      registrationKey: '@holo-js/cache-test',
+      create: ({ name }: { name: string }) => createMemoryCacheDriver({ name }),
+    }
+    const reloaded = { ...factory }
+
+    registerCacheDriverFactory(factory)
+    registerCacheDriverFactory(reloaded)
+    expect(requireCacheDriverFactory('reloadable', 'missing')).toBe(reloaded)
+    unregisterCacheDriverFactory(factory)
+    expect(requireCacheDriverFactory('reloadable', 'missing')).toBe(reloaded)
+    unregisterCacheDriverFactory(reloaded)
+  })
+
+  it('rejects invalid normalized cache driver limits, defaults, and plugin names', () => {
+    expect(() => normalizeCacheConfig({
+      drivers: { memory: { driver: 'memory', maxEntries: 0 } },
+    })).toThrow('greater than or equal to 1')
+    expect(() => normalizeCacheConfig({
+      default: 'missing',
+      drivers: { memory: { driver: 'memory' } },
+    })).toThrow('default cache driver "missing" is not configured')
+    expect(() => normalizeCacheConfig({
+      drivers: { plugin: { driver: ' ' } },
+    })).toThrow('must be a non-empty string')
+    expect(() => normalizeCacheConfig({
+      drivers: { memory: { driver: 'memory', maxEntries: 'invalid' } },
+    })).toThrow('must be an integer')
+    expect(() => normalizeCacheConfig({
+      drivers: { memory: { driver: 'memory', maxEntries: ' ' } },
+    })).toThrow('must be an integer')
+  })
+
+  it('composes cache defaults with present and absent Redis project configuration', () => {
+    const database = { defaultConnection: 'main', connections: {} }
+    const redis = { default: 'cache', connections: {} }
+
+    const cache = { drivers: { redis: { driver: 'redis' as const } } }
+
+    expect(composeRegisteredConfig({ cache }, { database, redis }).cache).toMatchObject({
+      drivers: { redis: { connection: 'default' } },
+    })
+    expect(composeRegisteredConfig({ cache, redis: {} }, { database, redis }).cache).toMatchObject({
+      drivers: { redis: { connection: 'cache' } },
+    })
+  })
+
+  it('normalizes every cache driver option and local prefix override', () => {
+    expect(normalizeCacheConfig({
+      default: 'memory',
+      prefix: 'global:',
+      drivers: {
+        memory: { driver: 'memory', prefix: 'memory:', maxEntries: '10' },
+        file: { driver: 'file', prefix: 'file:', path: '/tmp/cache' },
+        redis: { driver: 'redis', prefix: 'redis:', connection: 'sessions' },
+        database: {
+          driver: 'database',
+          prefix: 'database:',
+          connection: 'analytics',
+          table: 'entries',
+          lockTable: 'locks',
+        },
+        plugin: { driver: 'custom', prefix: 'plugin:', option: true },
+      },
+    })).toMatchObject({
+      default: 'memory',
+      drivers: {
+        memory: { prefix: 'memory:', maxEntries: 10 },
+        file: { prefix: 'file:', path: '/tmp/cache' },
+        redis: { prefix: 'redis:', connection: 'sessions' },
+        database: { prefix: 'database:', connection: 'analytics', table: 'entries', lockTable: 'locks' },
+        plugin: { prefix: 'plugin:', driver: 'custom', option: true },
+      },
+    })
+
+    expect(normalizeCacheConfig({
+      drivers: {
+        file: { driver: 'file' },
+        redis: { driver: 'redis' },
+        database: { driver: 'database' },
+      },
+    }, {
+      redis: { default: 'redis-default', connections: {} },
+      database: { defaultConnection: 'database-default', connections: {} },
+    }).drivers).toMatchObject({
+      file: { path: './storage/framework/cache/data' },
+      redis: { connection: 'redis-default' },
+      database: { connection: 'database-default' },
+    })
+  })
+
+  it('returns stale flexible values when background refresh lock acquisition fails', async () => {
+    const cached = createFlexibleEnvelope({ freshSeconds: 1, staleSeconds: 10 }, 'stale', 0)
+    const value = await resolveFlexibleCachedValue({
+      ttl: [1, 10],
+      now: () => 2_000,
+      read: async () => cached,
+      refresh: async () => 'fresh',
+      createLock: () => ({
+        name: 'refresh',
+        get: async () => { throw new Error('lock failed') },
+        release: async () => true,
+        block: async () => false,
+      }),
+    })
+
+    expect(value).toBe('stale')
+  })
+
+  it('forgets and flushes cache values without a dependency index', async () => {
+    configureCacheRuntime({
+      config: {
+        default: 'memory',
+        drivers: { memory: { driver: 'memory' } },
+      },
+    })
+
+    await cache.put('plain', 'value', 60)
+    const configured = getCacheRuntime()
+    cacheRuntimeInternals.getCacheRuntimeState().bindings = {
+      config: configured.config,
+      databaseConfig: configured.databaseConfig,
+      redisConfig: configured.redisConfig,
+      drivers: configured.drivers,
+    }
+    await expect(cache.forget('plain')).resolves.toBe(true)
+    await cache.put('plain', 'value', 60)
+    await expect(cache.flush()).resolves.toBeUndefined()
+  })
   beforeEach(() => {
     vi.useRealTimers()
     resetCacheRuntime()
+    fileDriverInternals.resetFileSystemOperations()
     cacheDbInternals.resetDatabaseDriverModuleLoader()
     cacheRedisInternals.resetRedisDriverModuleLoader()
   })
@@ -55,6 +213,7 @@ describe('@holo-js/cache package surface', () => {
   afterEach(() => {
     vi.useRealTimers()
     resetCacheRuntime()
+    fileDriverInternals.resetFileSystemOperations()
     cacheDbInternals.resetDatabaseDriverModuleLoader()
     cacheRedisInternals.resetRedisDriverModuleLoader()
   })
@@ -79,6 +238,26 @@ describe('@holo-js/cache package surface', () => {
 
   it('ignores plugin cache driver loading before runtime configuration', async () => {
     await expect(loadCachePluginDrivers()).resolves.toBeUndefined()
+  })
+
+  it('reports missing plugin drivers when no contributions are available', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'holo-cache-no-plugin-contributions-'))
+
+    try {
+      await writeFile(join(projectRoot, 'package.json'), JSON.stringify({ private: true }), 'utf8')
+      configureCacheRuntime({
+        config: {
+          default: 'custom',
+          drivers: { custom: { driver: 'unavailable' } },
+        },
+      })
+
+      await expect(loadCachePluginDrivers(projectRoot, []))
+        .rejects.toThrow('Available cache plugin driver contributions: none')
+    } finally {
+      resetCachePluginDriverContracts()
+      await rm(projectRoot, { recursive: true, force: true })
+    }
   })
 
   it('rethrows invalid cache plugin driver contracts after a failed load attempt', async () => {
@@ -127,8 +306,8 @@ export default {
 }
 `)
 
-      await expect(loadCachePluginDriverContracts(projectRoot)).rejects.toThrow('must export a matching CacheDriverContract')
-      await expect(loadCachePluginDriverContracts(projectRoot)).rejects.toThrow('must export a matching CacheDriverContract')
+      await expect(loadCachePluginDriverContracts(projectRoot, ['holo-plugin-broken-cache'])).rejects.toThrow('must export a matching CacheDriverContract')
+      await expect(loadCachePluginDriverContracts(projectRoot, ['holo-plugin-broken-cache'])).rejects.toThrow('must export a matching CacheDriverContract')
 
       await writeFile(join(missingNameProjectRoot, 'package.json'), JSON.stringify({
         name: 'cache-missing-name-plugin-fixture',
@@ -202,7 +381,7 @@ export default {
 }
 `)
 
-      await expect(loadCachePluginDriverContracts(missingNameProjectRoot)).rejects.toThrow('must export a matching CacheDriverContract')
+      await expect(loadCachePluginDriverContracts(missingNameProjectRoot, ['holo-plugin-cache-missing-name'])).rejects.toThrow('must export a matching CacheDriverContract')
 
       await writeFile(join(namedDriverProjectRoot, 'package.json'), JSON.stringify({
         name: 'cache-named-driver-plugin-fixture',
@@ -243,7 +422,7 @@ export const driver = {
 }
 `)
 
-      await expect(loadCachePluginDriverContracts(namedDriverProjectRoot)).rejects.toThrow('must export a matching CacheDriverContract')
+      await expect(loadCachePluginDriverContracts(namedDriverProjectRoot, ['holo-plugin-cache-named-driver'])).rejects.toThrow('must export a matching CacheDriverContract')
 
       await writeFile(join(missingDriverProjectRoot, 'package.json'), JSON.stringify({
         name: 'cache-missing-driver-plugin-fixture',
@@ -282,7 +461,7 @@ export default {
 export const value = 'invalid'
 `)
 
-      await expect(loadCachePluginDriverContracts(missingDriverProjectRoot)).rejects.toThrow('must export a matching CacheDriverContract')
+      await expect(loadCachePluginDriverContracts(missingDriverProjectRoot, ['holo-plugin-cache-missing-driver'])).rejects.toThrow('must export a matching CacheDriverContract')
     } finally {
       resetCachePluginDriverContracts()
       await rm(projectRoot, { recursive: true, force: true })
@@ -337,7 +516,7 @@ export default {
 
       let firstError: unknown
       try {
-        await loadCachePluginDriverContracts(projectRoot)
+        await loadCachePluginDriverContracts(projectRoot, ['holo-plugin-cache-reset'])
       } catch (error) {
         firstError = error
       }
@@ -346,7 +525,7 @@ export default {
 
       let secondError: unknown
       try {
-        await loadCachePluginDriverContracts(projectRoot)
+        await loadCachePluginDriverContracts(projectRoot, ['holo-plugin-cache-reset'])
       } catch (error) {
         secondError = error
       }
@@ -465,14 +644,14 @@ export default {
         },
       })
 
-      const firstContracts = await loadCachePluginDriverContracts(projectRoot)
-      const secondContracts = await loadCachePluginDriverContracts(projectRoot)
+      const firstContracts = await loadCachePluginDriverContracts(projectRoot, ['holo-plugin-cache'])
+      const secondContracts = await loadCachePluginDriverContracts(projectRoot, ['holo-plugin-cache'])
       expect(firstContracts.map(driver => driver.driver)).toEqual(['plugin'])
       expect(secondContracts.map(driver => driver.driver)).toEqual(['plugin'])
 
-      await loadCachePluginDrivers(projectRoot)
+      await loadCachePluginDrivers(projectRoot, ['holo-plugin-cache'])
       expect(getCacheRuntimeBindings()?.drivers?.get('plugin')?.driver).toBe('plugin')
-      await expect(loadCachePluginDrivers(projectRoot)).resolves.toBeUndefined()
+      await expect(loadCachePluginDrivers(projectRoot, ['holo-plugin-cache'])).resolves.toBeUndefined()
     } finally {
       resetCachePluginDriverContracts()
       await rm(projectRoot, { recursive: true, force: true })
@@ -583,7 +762,7 @@ export default {
           },
         },
       })
-      await loadCachePluginDrivers(projectRoot)
+      await loadCachePluginDrivers(projectRoot, ['holo-plugin-cache-config'])
 
       await expect(cache.put('plugin.key', 'cached', 60)).resolves.toBe(true)
       await expect(cache.get('plugin.key')).resolves.toBe('cached')
@@ -708,7 +887,7 @@ export default {
         },
       })
 
-      await loadCachePluginDrivers(projectRoot)
+      await loadCachePluginDrivers(projectRoot, ['holo-plugin-cache-configured'])
 
       const primary = getCacheRuntimeBindings()?.drivers.get('primary') as { readonly name: string, readonly driver: string, readonly bucket: string } | undefined
       const secondary = getCacheRuntimeBindings()?.drivers.get('secondary') as { readonly name: string, readonly driver: string, readonly bucket: string } | undefined
@@ -819,9 +998,9 @@ export default {
         },
       })
 
-      await expect(loadCachePluginDrivers(projectRoot))
+      await expect(loadCachePluginDrivers(projectRoot, ['holo-plugin-cache-missing-configured']))
         .rejects.toThrow('Configured cache plugin driver "missing" has no matching plugin contribution')
-      await expect(loadCachePluginDrivers(projectRoot))
+      await expect(loadCachePluginDrivers(projectRoot, ['holo-plugin-cache-missing-configured']))
         .rejects.toThrow('Available cache plugin driver contributions: "available"')
     } finally {
       resetCachePluginDriverContracts()
@@ -931,7 +1110,7 @@ export default new PluginCacheDriver()
         },
       })
 
-      await loadCachePluginDrivers(projectRoot)
+      await loadCachePluginDrivers(projectRoot, ['holo-plugin-cache-class'])
 
       const driver = getCacheRuntimeBindings()?.drivers.get('primary') as { prototypeMarker(): string } | undefined
       expect(driver?.prototypeMarker()).toBe('primary')
@@ -1725,6 +1904,81 @@ export default new PluginCacheDriver()
 
       await expect(driver.get('directory-error')).rejects.toMatchObject({ code: 'EISDIR' })
     } finally {
+      await rm(cachePath, { recursive: true, force: true })
+    }
+  })
+
+  it('surfaces filesystem failures while acquiring file locks', async () => {
+    const cachePath = await createTempCacheDirectory('file-lock-filesystem-errors')
+
+    try {
+      const driver = createFileCacheDriver({ name: 'file', path: cachePath })
+      const existingLock = driver.lock('read-failure', 1)
+      expect(await existingLock.get()).toBe(true)
+
+      fileDriverInternals.setFileSystemOperations({
+        readdir: async () => { throw new Error('readdir failed') },
+      })
+      await expect(driver.lock('read-failure', 1).get()).rejects.toThrow('readdir failed')
+
+      const notDirectoryError = Object.assign(new Error('not a directory'), { code: 'ENOTDIR' })
+      fileDriverInternals.setFileSystemOperations({
+        readdir: async () => { throw notDirectoryError },
+      })
+      await expect(driver.lock('missing-legacy-lock', 1).release()).resolves.toBe(false)
+
+      fileDriverInternals.setFileSystemOperations({
+        mkdir: (async (path, options) => {
+          if (options) {
+            return mkdir(path, options)
+          }
+
+          throw new Error('mkdir failed')
+        }) as typeof mkdir,
+      })
+      await expect(driver.lock('mkdir-failure', 1).get()).rejects.toThrow('mkdir failed')
+
+      fileDriverInternals.setFileSystemOperations({
+        writeFile: async () => { throw new Error('write failed') },
+      })
+      await expect(driver.lock('write-failure', 1).get()).rejects.toThrow('write failed')
+    } finally {
+      fileDriverInternals.resetFileSystemOperations()
+      await rm(cachePath, { recursive: true, force: true })
+    }
+  })
+
+  it('surfaces unexpected lock-directory cleanup failures', async () => {
+    const cachePath = await createTempCacheDirectory('file-lock-cleanup-error')
+
+    try {
+      const driver = createFileCacheDriver({ name: 'file', path: cachePath })
+      fileDriverInternals.setFileSystemOperations({
+        writeFile: async () => { throw new Error('write failed') },
+        rmdir: async () => { throw new Error('rmdir failed') },
+      })
+
+      await expect(driver.lock('cleanup-failure', 1).get()).rejects.toThrow('rmdir failed')
+    } finally {
+      fileDriverInternals.resetFileSystemOperations()
+      await rm(cachePath, { recursive: true, force: true })
+    }
+  })
+
+  it.each(['ENOENT', 'ENOTEMPTY', 'ENOTDIR'])('ignores benign %s lock-directory cleanup failures', async (code) => {
+    const cachePath = await createTempCacheDirectory(`file-lock-cleanup-${code.toLowerCase()}`)
+
+    try {
+      const driver = createFileCacheDriver({ name: 'file', path: cachePath })
+      const cleanupError = Object.assign(new Error('benign cleanup failure'), { code })
+      fileDriverInternals.setFileSystemOperations({
+        writeFile: async () => { throw new Error('write failed') },
+        rmdir: async () => { throw cleanupError },
+      })
+
+      await expect(driver.lock('cleanup-failure', 1).get()).rejects.toThrow('write failed')
+    } finally {
+      fileDriverInternals.resetFileSystemOperations()
       await rm(cachePath, { recursive: true, force: true })
     }
   })
@@ -2848,6 +3102,11 @@ export default new PluginCacheDriver()
   })
 
   it('loads the optional redis module through the runtime loader and exposes lazy driver metadata', async () => {
+    const factory = {
+      driver: 'redis',
+      create: ({ name }: { name: string }) => createMemoryCacheDriver({ name }),
+    }
+    registerCacheDriverFactory(factory)
     const module = await cacheRedisInternals.loadRedisDriverModule()
 
     expect(typeof module.createRedisCacheDriver).toBe('function')
@@ -2874,9 +3133,16 @@ export default new PluginCacheDriver()
 
     const driver = cacheRuntimeInternals.resolveConfiguredDriver(getCacheRuntime())
     expect(driver.name).toBe('redis')
+    await expect(driver.put({ key: 'registered', payload: '"value"' })).resolves.toBe(true)
+    unregisterCacheDriverFactory(factory)
   })
 
   it('loads the optional database module through the runtime loader and exposes lazy driver metadata', async () => {
+    const factory = {
+      driver: 'database',
+      create: ({ name }: { name: string }) => createMemoryCacheDriver({ name }),
+    }
+    registerCacheDriverFactory(factory)
     const module = await cacheDbInternals.loadDatabaseDriverModule()
 
     expect(typeof module.createDatabaseCacheDriver).toBe('function')
@@ -2904,9 +3170,20 @@ export default new PluginCacheDriver()
 
     const driver = cacheRuntimeInternals.resolveConfiguredDriver(getCacheRuntime())
     expect(driver.name).toBe('database')
+    await expect(driver.put({ key: 'registered', payload: '"value"' })).resolves.toBe(true)
+    unregisterCacheDriverFactory(factory)
   })
 
   it('covers the defensive unsupported-driver branch for malformed runtime config', () => {
+    const pluginDriver = createMemoryCacheDriver({ name: 'plugin' })
+    expect(cacheRuntimeInternals.resolveConfiguredDriver({
+      config: {
+        default: 'custom',
+        prefix: '',
+        drivers: { custom: { name: 'custom', driver: 'plugin' } },
+      },
+      drivers: new Map([['plugin', pluginDriver]]),
+    } as never, 'custom')).toBe(pluginDriver)
     expect(() => cacheRuntimeInternals.resolveConfiguredDriver({
       config: {
         default: 'custom',
@@ -3127,6 +3404,34 @@ export default new PluginCacheDriver()
 
     await cache.flush()
     expect(await dependencyIndex.listRegisteredKeys()).toEqual([])
+  })
+
+  it('preserves dependency registrations owned by another cache driver during flush', async () => {
+    configureCacheRuntime({
+      config: {
+        default: 'memory',
+        drivers: {
+          memory: { driver: 'memory' },
+          secondary: { driver: 'memory' },
+        },
+      },
+    })
+
+    const queryBridge = getCacheRuntime().queryBridge
+    const dependencyIndex = getCacheRuntime().dependencyIndex
+    if (!queryBridge || !dependencyIndex) {
+      throw new Error('Expected cache query bridge bindings.')
+    }
+
+    await queryBridge.put('secondary-value', 'value', {
+      driver: 'secondary',
+      dependencies: ['db:main:users'],
+    })
+    await cache.flush()
+
+    expect(await dependencyIndex.listRegisteredKeys()).toEqual([
+      'secondary\u0000secondary-value',
+    ])
   })
 
   it('covers dependency-index helper edge cases and indexed-key parsing fallbacks', async () => {

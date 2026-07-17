@@ -22,16 +22,11 @@ const invoicePaidMail = defineMail({
 Addresses can be specified in multiple formats:
 
 ```ts
-// Simple string
-to: 'user@example.com'
-
-// Object with name
-to: { email: 'user@example.com', name: 'User Name' }
-
-// Array of recipients
-to: [
+const simpleRecipient = 'user@example.com'
+const namedRecipient = { email: 'user@example.com', name: 'User Name' }
+const multipleRecipients = [
   'user1@example.com',
-  { email: 'user2@example.com', name: 'User Two' }
+  { email: 'user2@example.com', name: 'User Two' },
 ]
 ```
 

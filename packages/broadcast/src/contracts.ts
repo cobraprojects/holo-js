@@ -1,4 +1,4 @@
-import type { NormalizedHoloBroadcastConfig } from '@holo-js/config'
+import type { NormalizedHoloBroadcastConfig } from './config'
 import type { InferSchemaData, ValidationSchema } from '@holo-js/validation'
 import { isPlainObject, normalizeJsonValue as normalizeBroadcastJsonValue } from './json'
 

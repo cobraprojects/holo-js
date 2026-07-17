@@ -554,10 +554,6 @@ async function resolveHoloWebSocketConnectorOptions(
   options: HoloWebSocketConnectorOptions,
   globals: HoloWebSocketGlobals,
 ): Promise<HoloWebSocketConnectorOptions> {
-  if (!canDiscoverHoloWebSocketConnectorOptions(globals)) {
-    return options
-  }
-
   try {
     const response = await globals.fetch(options.configEndpoint ?? '/broadcasting/config', {
       headers: {
@@ -651,15 +647,7 @@ function createHoloWebSocketConnector(options: HoloWebSocketConnectorOptions = {
   }
 
   const authorizeSubscription = async (state: HoloConnectorChannelState): Promise<HoloChannelAuthResponse> => {
-    if (state.kind === 'public') {
-      return Object.freeze({})
-    }
-
-    const endpoint = resolvedOptions?.authEndpoint
-    if (!endpoint) {
-      return Object.freeze({})
-    }
-
+    const endpoint = resolvedOptions!.authEndpoint!
     const globals = globalThis as HoloWebSocketGlobals
     if (!globals.fetch) {
       throw new Error('[@holo-js/flux] Private channel authorization requires fetch support in this runtime.')

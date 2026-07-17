@@ -1,4 +1,6 @@
 import { loadConfigDirectory } from '@holo-js/config'
+import { unregisterDatabaseDriverFactory } from '@holo-js/db'
+import { loadProjectDatabaseDrivers } from './database-drivers'
 import { resolveProjectPackageImportSpecifier } from './project'
 import { writeLine } from './io'
 import type { IoStreams } from './cli-types'
@@ -23,7 +25,7 @@ type CacheCliModule = {
     databaseConfig: Awaited<ReturnType<typeof loadConfigDirectory>>['database']
     redisConfig: Awaited<ReturnType<typeof loadConfigDirectory>>['redis']
   }): void
-  loadCachePluginDrivers?(projectRoot?: string): Promise<void>
+  loadCachePluginDrivers?(projectRoot?: string, pluginNames?: readonly string[]): Promise<void>
   resetCacheRuntime(): void
   default?: CacheRepositoryModule & {
     configureCacheRuntime(options: {
@@ -31,7 +33,7 @@ type CacheCliModule = {
       databaseConfig: Awaited<ReturnType<typeof loadConfigDirectory>>['database']
       redisConfig: Awaited<ReturnType<typeof loadConfigDirectory>>['redis']
     }): void
-    loadCachePluginDrivers?(projectRoot?: string): Promise<void>
+    loadCachePluginDrivers?(projectRoot?: string, pluginNames?: readonly string[]): Promise<void>
     resetCacheRuntime(): void
   }
 }
@@ -44,6 +46,32 @@ type CacheMaintenanceEnvironment = {
 }
 
 const BUILT_IN_CACHE_DRIVER_NAMES = new Set(['database', 'file', 'memory', 'redis'])
+const CONCRETE_CACHE_DRIVER_PACKAGES = {
+  database: '@holo-js/cache-db',
+  redis: '@holo-js/cache-redis',
+} as const
+
+type ConcreteCacheDriverName = keyof typeof CONCRETE_CACHE_DRIVER_PACKAGES
+
+async function loadConfiguredCacheDriverPackages(
+  projectRoot: string,
+  drivers: LoadedCacheConfig['cache']['drivers'],
+  loadPackage: (specifier: string) => Promise<unknown> = specifier => import(specifier),
+): Promise<void> {
+  const configuredDrivers = new Set(Object.values(drivers).map(resolveConfiguredCacheDriverName))
+  for (const driver of configuredDrivers) {
+    if (driver !== 'database' && driver !== 'redis') continue
+    const packageName = CONCRETE_CACHE_DRIVER_PACKAGES[driver satisfies ConcreteCacheDriverName]
+    try {
+      await loadPackage(resolveProjectPackageImportSpecifier(projectRoot, packageName))
+    } catch (error) {
+      throw new Error(
+        `[Holo CLI] Cache driver "${driver}" requires ${packageName} to be installed.`,
+        { cause: error },
+      )
+    }
+  }
+}
 
 function resolveCacheFacade(cacheModule: CacheCliModule): CacheRuntimeFacade {
   const candidate = cacheModule.default
@@ -69,7 +97,7 @@ function resolveCachePluginDriverLoader(
   drivers: LoadedCacheConfig['cache']['drivers'],
   requestedDriverName: string | undefined,
   defaultDriverName: string,
-): ((projectRoot?: string) => Promise<void>) | undefined {
+): ((projectRoot?: string, pluginNames?: readonly string[]) => Promise<void>) | undefined {
   const loadCachePluginDrivers = ('loadCachePluginDrivers' in cache ? cache.loadCachePluginDrivers?.bind(cache) : undefined)
     ?? ('loadCachePluginDrivers' in cacheModule ? cacheModule.loadCachePluginDrivers?.bind(cacheModule) : undefined)
   const storeName = requestedDriverName?.trim() || defaultDriverName
@@ -90,6 +118,7 @@ function resolveCachePluginDriverLoader(
 }
 
 export const cacheCommandInternals = {
+  loadConfiguredCacheDriverPackages,
   resolveCachePluginDriverLoader,
 }
 
@@ -102,8 +131,10 @@ export async function initializeCacheMaintenanceEnvironment(
   driverName?: string,
 ): Promise<CacheMaintenanceEnvironment> {
   const loadedConfig = await loadConfigDirectory(projectRoot) as LoadedCacheConfig
+  const databaseDriverFactories = await loadProjectDatabaseDrivers(projectRoot, loadedConfig.database)
   const cacheModule = await loadCacheCliModule(projectRoot)
   const cache = resolveCacheFacade(cacheModule)
+  await loadConfiguredCacheDriverPackages(projectRoot, loadedConfig.cache.drivers)
   const loadCachePluginDrivers = resolveCachePluginDriverLoader(
     cacheModule,
     cache,
@@ -119,7 +150,7 @@ export async function initializeCacheMaintenanceEnvironment(
   })
   if (loadCachePluginDrivers) {
     try {
-      await loadCachePluginDrivers(projectRoot)
+      await loadCachePluginDrivers(projectRoot, loadedConfig.app.plugins)
     } catch (error) {
       cache.resetCacheRuntime()
       throw error
@@ -130,6 +161,9 @@ export async function initializeCacheMaintenanceEnvironment(
     cache,
     async cleanup() {
       cache.resetCacheRuntime()
+      for (const factory of [...databaseDriverFactories].reverse()) {
+        unregisterDatabaseDriverFactory(factory)
+      }
     },
   }
 }

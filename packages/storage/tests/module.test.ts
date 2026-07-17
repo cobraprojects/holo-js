@@ -507,7 +507,10 @@ describe('normalizeModuleOptions', () => {
 
     const optsWithExistingNitro = {
       nitro: {
-        storage: {},
+        storage: {
+          custom: { driver: 'memory' },
+          'holo:old': { driver: 'fs' },
+        },
       },
       runtimeConfig: {},
       build: { transpile: [] as string[] },
@@ -527,6 +530,7 @@ describe('normalizeModuleOptions', () => {
     }, './runtime/drivers/s3')
 
     expect((optsWithExistingNitro as { nitro: { storage: Record<string, unknown> } }).nitro.storage).toEqual({
+      custom: { driver: 'memory' },
       'holo:local': {
         driver: 'fs',
         base: './storage/app',

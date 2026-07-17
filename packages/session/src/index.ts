@@ -13,7 +13,21 @@ import {
   writeSession,
 } from './runtime'
 
-export { defineSessionConfig } from './contracts'
+export {
+  DEFAULT_SESSION_ABSOLUTE_LIFETIME,
+  DEFAULT_SESSION_COOKIE_NAME,
+  DEFAULT_SESSION_COOKIE_PATH,
+  DEFAULT_SESSION_COOKIE_SAME_SITE,
+  DEFAULT_SESSION_DATABASE_CONNECTION,
+  DEFAULT_SESSION_DATABASE_TABLE,
+  DEFAULT_SESSION_DRIVER,
+  DEFAULT_SESSION_FILE_PATH,
+  DEFAULT_SESSION_IDLE_TIMEOUT,
+  DEFAULT_SESSION_REMEMBER_ME_LIFETIME,
+  defineSessionConfig,
+  holoSessionDefaults,
+  normalizeSessionConfig,
+} from './config'
 export type {
   CookieSerializeOptions,
   CreateSessionInput,

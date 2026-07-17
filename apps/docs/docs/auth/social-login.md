@@ -84,8 +84,7 @@ different upstream permission set.
 ## Configuration
 
 ```ts
-import { defineAuthConfig } from '@holo-js/config'
-
+import { defineAuthConfig } from '@holo-js/auth'
 export default defineAuthConfig({
   social: {
     google: {
@@ -116,8 +115,7 @@ Provider keys map to first-party packages:
 Custom providers can point at any package that exports a social runtime:
 
 ```ts
-import { defineAuthConfig } from '@holo-js/config'
-
+import { defineAuthConfig } from '@holo-js/auth'
 export default defineAuthConfig({
   social: {
     slack: {
@@ -139,8 +137,7 @@ That package must export a `SocialProviderRuntime` as either the default export,
 Configure only the providers your app actually uses:
 
 ```ts
-import { defineAuthConfig } from '@holo-js/config'
-
+import { defineAuthConfig } from '@holo-js/auth'
 export default defineAuthConfig({
   social: {
     google: {
@@ -223,7 +220,7 @@ OAuth state and PKCE verifier so the callback can be validated later.
 At runtime it looks like:
 
 ```ts
-Response {
+const response = {
   status: 302,
   headers: {
     location: 'https://accounts.google.com/o/oauth2/v2/auth?...&state=...&code_challenge=...',

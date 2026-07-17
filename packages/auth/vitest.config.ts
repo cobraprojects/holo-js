@@ -4,7 +4,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   resolve: {
     alias: {
-      '@holo-js/config': resolve(__dirname, '../config/src/index.ts'),
+      '@holo-js/kernel': resolve(__dirname, '../kernel/src/index.ts'),
     },
   },
   test: {

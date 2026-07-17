@@ -10,8 +10,7 @@ serialization. The session package is public, so it can be used by auth or by yo
 ## Configuration
 
 ```ts
-import { defineSessionConfig } from '@holo-js/config'
-
+import { defineSessionConfig } from '@holo-js/session'
 export default defineSessionConfig({
   driver: 'database',
   stores: {
@@ -140,9 +139,9 @@ The created session record looks like:
     step: 'shipping',
     coupon: 'WELCOME10',
   },
-  createdAt: new Date(...),
-  lastActivityAt: new Date(...),
-  expiresAt: new Date(...),
+  createdAt: new Date('2026-01-01T12:00:00Z'),
+  lastActivityAt: new Date('2026-01-01T12:05:00Z'),
+  expiresAt: new Date('2026-01-01T14:00:00Z'),
 }
 ```
 
@@ -192,9 +191,9 @@ Returned value:
     cartId: 'cart_123',
     flow: 'checkout',
   },
-  createdAt: new Date(...),
-  lastActivityAt: new Date(...),
-  expiresAt: new Date(...),
+  createdAt: new Date('2026-01-01T12:00:00Z'),
+  lastActivityAt: new Date('2026-01-01T12:05:00Z'),
+  expiresAt: new Date('2026-01-01T14:00:00Z'),
 }
 ```
 

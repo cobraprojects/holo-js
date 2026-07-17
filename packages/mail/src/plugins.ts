@@ -1,4 +1,7 @@
-import { loadHoloPluginContributionModules } from '@holo-js/config'
+import {
+  loadHoloPluginContributionModules,
+  loadHoloPluginDefinitions,
+} from '@holo-js/kernel'
 import { getRegisteredMailDriver, registerMailDriver, unregisterMailDriver } from './registry'
 import type { MailDriver } from './contracts'
 
@@ -28,12 +31,17 @@ function resolveMailDriver(moduleValue: unknown, packageName: string, driverName
   }
 }
 
-export async function loadMailPluginDrivers(projectRoot = process.cwd()): Promise<void> {
-  if (loadedProjectRoots.has(projectRoot)) {
+export async function loadMailPluginDrivers(
+  projectRoot = process.cwd(),
+  pluginNames: readonly string[] = [],
+): Promise<void> {
+  const loadKey = `${projectRoot}\0${[...pluginNames].sort().join('\0')}`
+  if (loadedProjectRoots.has(loadKey)) {
     return
   }
 
-  const contributions = await loadHoloPluginContributionModules(projectRoot, 'mail', 'drivers')
+  const plugins = await loadHoloPluginDefinitions(projectRoot, pluginNames)
+  const contributions = await loadHoloPluginContributionModules(projectRoot, plugins, 'mail', 'drivers')
 
   for (const contribution of contributions) {
     const previous = getRegisteredMailDriver(contribution.name)
@@ -53,7 +61,7 @@ export async function loadMailPluginDrivers(projectRoot = process.cwd()): Promis
     }
   }
 
-  loadedProjectRoots.add(projectRoot)
+  loadedProjectRoots.add(loadKey)
 }
 
 export function resetMailPluginDrivers(): void {

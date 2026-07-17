@@ -1,5 +1,5 @@
-import { defineStorageConfig, env } from '@holo-js/config'
-
+import { defineStorageConfig } from '@holo-js/storage'
+import { env } from '@holo-js/config'
 export default defineStorageConfig({
   defaultDisk: env('STORAGE_DEFAULT_DISK', 'local'),
   routePrefix: env('STORAGE_ROUTE_PREFIX', '/storage'),

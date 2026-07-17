@@ -9,6 +9,7 @@ export type NextRequestLike = {
 
 type NextRequestGlobals = typeof globalThis & {
   __holoNextAuthRequestStore?: AsyncLocalStorage<NextRequestLike>
+  __holoNextAuthRequestRunner?: <TValue>(callback: () => TValue) => TValue
 }
 
 function getNextRequestStore(): AsyncLocalStorage<NextRequestLike> {
@@ -26,5 +27,12 @@ export function runWithNextRequest<TValue>(
   request: NextRequestLike,
   callback: () => TValue,
 ): TValue {
-  return getNextRequestStore().run(request, callback)
+  return getNextRequestStore().run(request, () => {
+    const runner = (globalThis as NextRequestGlobals).__holoNextAuthRequestRunner
+    return runner ? runner(callback) : callback()
+  })
+}
+
+export function setNextAuthRequestRunner(runner: <TValue>(callback: () => TValue) => TValue): void {
+  (globalThis as NextRequestGlobals).__holoNextAuthRequestRunner = runner
 }

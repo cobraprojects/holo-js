@@ -99,6 +99,12 @@ function replaceRealtimeReactiveValue<TValue>(target: TValue, value: TValue): TV
   return value
 }
 
+function connectRealtimeStoreInBrowser(store: { connect(): void }, browser: boolean): void {
+  if (browser) {
+    store.connect()
+  }
+}
+
 function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
   definition: TDefinition,
   args: RealtimeArgsFor<TDefinition>,
@@ -118,9 +124,7 @@ function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
     store.snapshot?.data as RealtimeResultFor<TDefinition>,
     subscribe,
   )
-  if ('window' in globalThis) {
-    store.connect()
-  }
+  connectRealtimeStoreInBrowser(store, 'window' in globalThis)
   return current
 }
 
@@ -129,5 +133,14 @@ configureRealtimeClientRuntime({
   useQuery: useReactiveRealtimeQuery,
 })
 configureRealtimeClientTransport(createBroadcastRealtimeTransport())
+
+export const svelteRealtimeInternals = {
+  createRealtimeReactiveValue,
+  connectRealtimeStoreInBrowser,
+  emitRealtimeError,
+  isPlainObject,
+  isReactiveObject,
+  replaceRealtimeReactiveValue,
+}
 
 export {}

@@ -5,6 +5,7 @@ import authorization, {
   denyAsNotFound,
   isAuthorizationAbilityDefinition,
   isAuthorizationDecision,
+  isAuthorizationError,
   isAuthorizationPolicyDefinition,
   defineAbility,
   definePolicy,
@@ -113,6 +114,10 @@ describe('@holo-js/authorization package', () => {
     expect(isAuthorizationDecision({ allowed: true, status: 200 })).toBe(true)
     expect(isAuthorizationDecision(null)).toBe(false)
     expect(isAuthorizationDecision({ allowed: true, status: 201 })).toBe(false)
+    expect(isAuthorizationError(new AuthorizationError('Forbidden', deny('Forbidden')))).toBe(true)
+    expect(isAuthorizationError({ name: 'AuthorizationError', message: 'Forbidden', decision: deny('Forbidden') })).toBe(true)
+    expect(isAuthorizationError({ message: 'Forbidden', decision: deny('Forbidden') })).toBe(true)
+    expect(isAuthorizationError({ name: 'AuthorizationError', message: 'Forbidden' })).toBe(false)
     expect(normalizeAuthorizationDecision(undefined, 'fallback')).toEqual(deny('fallback'))
     expect(normalizeAuthorizationDecision(true, 'fallback')).toEqual(allow())
     expect(normalizeAuthorizationDecision(undefined)).toEqual(deny())

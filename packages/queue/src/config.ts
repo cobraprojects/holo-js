@@ -387,3 +387,18 @@ export const holoQueueDefaults = DEFAULT_QUEUE_CONFIG
 export const queueInternals = {
   parseInteger,
 }
+
+registerConfigNormalizer<HoloQueueConfig, NormalizedHoloQueueConfig>({
+  name: 'queue',
+  dependencies: ['redis'],
+  normalize(config, context) {
+    return normalizeQueueConfig(config, context.has('redis') ? context.get<QueueSharedRedisConfig>('redis') : undefined)
+  },
+})
+import type {} from '@holo-js/config'
+import { registerConfigNormalizer } from '@holo-js/config/registry'
+declare module '@holo-js/config' {
+  interface HoloConfigRegistry {
+    queue: NormalizedHoloQueueConfig
+  }
+}

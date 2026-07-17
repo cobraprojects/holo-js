@@ -26,6 +26,50 @@ afterEach(() => {
 })
 
 describe('@holo-js/broadcast channel auth runtime', () => {
+  it('normalizes optional generated registry metadata', () => {
+    expect(broadcastAuthInternals.normalizeRegistryEntry({
+      sourcePath: ' server/channels/orders.ts ',
+      pattern: ' orders.{id} ',
+      type: 'private',
+      params: ['id'],
+      whispers: [],
+      guard: ' web ',
+      exportName: ' ordersChannel ',
+    })).toMatchObject({
+      sourcePath: 'server/channels/orders.ts',
+      pattern: 'orders.{id}',
+      guard: 'web',
+      exportName: 'ordersChannel',
+    })
+  })
+
+  it('does not delete a newer registry cache entry after an older load fails', async () => {
+    let rejectImport: ((error: Error) => void) | undefined
+    const bindings = {
+      registry: {
+        projectRoot: '/virtual/project',
+        channels: [{
+          sourcePath: 'server/channels/orders.ts',
+          pattern: 'orders.{id}',
+          type: 'private' as const,
+          params: ['id'],
+          whispers: [],
+        }],
+      },
+      importModule: vi.fn(async () => await new Promise<never>((_resolve, reject) => {
+        rejectImport = reject
+      })),
+    }
+    const pending = broadcastAuthInternals.loadChannelDefinitions(bindings)
+    broadcastAuthInternals.reset()
+    bindings.importModule = vi.fn(async () => ({
+      default: defineChannel('orders.{id}', { type: 'private', authorize: () => true }),
+    })) as never
+    const replacement = broadcastAuthInternals.loadChannelDefinitions(bindings)
+    rejectImport?.(new Error('old load failed'))
+    await expect(pending).rejects.toThrow('old load failed')
+    await expect(replacement).resolves.toBeDefined()
+  })
   it('authorizes private and presence channels with wildcard params and whisper metadata', async () => {
     configureBroadcastRuntime({
       channelAuth: {
@@ -465,6 +509,21 @@ describe('@holo-js/broadcast channel auth runtime', () => {
       },
       whispers: ['typing.start'],
     })
+
+    const signedResponse = await renderBroadcastAuthResponse(new Request('http://localhost/broadcasting/auth', {
+      method: 'POST',
+      body: new URLSearchParams({
+        channel_name: 'private-orders.ord_5',
+        socket_id: '123.456',
+      }),
+    }), {
+      user: { id: 'ord_5' },
+      appKey: 'app-key',
+      appSecret: 'app-secret',
+    })
+    const signedBody = await signedResponse.json() as Record<string, unknown>
+    expect(signedBody.auth).toMatch(/^app-key:[a-f0-9]{64}$/)
+    expect(signedBody.channel_data).toBe(JSON.stringify({ whispers: ['typing.start'] }))
 
     const nuxtStyleHandler = async (request: Request) => {
       return await renderBroadcastAuthResponse(request, {

@@ -4,8 +4,8 @@
     "outDir": "./dist",
     "baseUrl": ".",
     "paths": {
-      "@holo-js/config": [
-        "../config/src/index.ts"
+      "@holo-js/kernel": [
+        "../kernel/src/index.ts"
       ]
     }
   },

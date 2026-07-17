@@ -24,27 +24,14 @@ import { generateProjectAppKey } from './app-key'
 import { fileExists } from './fs-utils'
 import { runWithSpinner, supportsSpinner, writeLine } from './io'
 import { hasProjectDependency, pinProjectDependencyVersions, removeProjectDependency, upsertProjectDependency } from './package-json'
-import type * as DevModule from './dev'
-import type * as ProjectConfigModule from './project/config'
-import type * as ProjectDiscoveryModule from './project/discovery'
 import type * as ProjectPluginsModule from './project/plugins'
-import type * as ProjectRuntimeModule from './project/runtime'
 import type * as ProjectScaffoldModule from './project/scaffold'
+import type * as AgentSkillsModule from './agent-skills'
 import {
   APP_CONFIG_FILE_NAMES,
   SUPPORTED_AUTH_SOCIAL_PROVIDERS,
   type SupportedAuthSocialProvider,
 } from './project/shared'
-import type * as RuntimeModule from './runtime'
-import type * as QueueModule from './queue'
-import type * as CacheModule from './cache'
-import type * as QueueMigrationsModule from './queue-migrations'
-import type * as CacheMigrationsModule from './cache-migrations'
-import type * as MediaMigrationsModule from './media-migrations'
-import type * as GeneratorsModule from './generators'
-import type * as BroadcastModule from './broadcast'
-import type * as SecurityModule from './security'
-import type * as AgentSkillsModule from './agent-skills'
 import type { LoadedProjectConfig, CommandFlagValue, CommandExecutionContext } from './types'
 import type {
   IoStreams,
@@ -59,6 +46,30 @@ import type {
   ProjectScaffoldOptions,
   DiscoveredAppCommand,
 } from './cli-types'
+import {
+  loadAgentSkillsModule,
+  loadProjectConfigModule,
+  loadProjectDiscoveryModule,
+  loadProjectPluginsModule,
+  loadProjectRuntimeModule,
+  loadProjectScaffoldModule,
+  loadRuntimeModule,
+  loadSecurityModule,
+  resolveBroadcastExecutor,
+  resolveCacheExecutor,
+  resolveGeneratorCommand,
+  resolveMediaExecutor,
+  resolveProjectExecutor,
+  resolveQueueExecutor,
+  resolveRuntimeExecutor,
+  type BroadcastCommandExecutors,
+  type CacheCommandExecutors,
+  type MediaCommandExecutors,
+  type ProjectCommandExecutors,
+  type QueueCommandExecutors,
+  type RuntimeExecutor,
+  type SecurityCommandExecutors,
+} from './command-executors'
 
 const AUTH_INSTALL_FEATURES = ['social', 'workos', 'clerk'] as const
 const AUTH_SOCIAL_PROVIDER_MODES = ['default', 'specific'] as const
@@ -71,40 +82,6 @@ type AuthSocialProviderMode = typeof AUTH_SOCIAL_PROVIDER_MODES[number]
 type EventsQueueAction = typeof EVENTS_QUEUE_ACTIONS[number]
 type ModelGeneratorOption = typeof MODEL_GENERATOR_OPTIONS[number]
 
-type RuntimeExecutor = typeof RuntimeModule.withRuntimeEnvironment
-type ProjectCommandExecutors = {
-  runProjectPrepare?: typeof DevModule.runProjectPrepare
-  runProjectDevServer?: typeof DevModule.runProjectDevServer
-  runProjectBuild?: typeof DevModule.runProjectBuild
-  runProjectStartServer?: typeof DevModule.runProjectStartServer
-  runProjectDependencyInstall?: typeof DevModule.runProjectDependencyInstall
-}
-type QueueCommandExecutors = {
-  runQueueFailedCommand?: typeof QueueModule.runQueueFailedCommand
-  runQueueFailedTableCommand?: typeof QueueMigrationsModule.runQueueFailedTableCommand
-  runQueueFlushCommand?: typeof QueueModule.runQueueFlushCommand
-  runQueueWorkCommand?: typeof QueueModule.runQueueWorkCommand
-  runQueueForgetCommand?: typeof QueueModule.runQueueForgetCommand
-  runQueueListen?: typeof QueueModule.runQueueListen
-  runQueueRestartCommand?: typeof QueueModule.runQueueRestartCommand
-  runQueueRetryCommand?: typeof QueueModule.runQueueRetryCommand
-  runQueueTableCommand?: typeof QueueMigrationsModule.runQueueTableCommand
-  runQueueClearCommand?: typeof QueueModule.runQueueClearCommand
-}
-type CacheCommandExecutors = {
-  runCacheTableCommand?: typeof CacheMigrationsModule.runCacheTableCommand
-  runCacheClearCommand?: typeof CacheModule.runCacheClearCommand
-  runCacheForgetCommand?: typeof CacheModule.runCacheForgetCommand
-}
-type MediaCommandExecutors = {
-  runMediaTableCommand?: typeof MediaMigrationsModule.runMediaTableCommand
-}
-type BroadcastCommandExecutors = {
-  runBroadcastWorkCommand?: typeof BroadcastModule.runBroadcastWorkCommand
-}
-type SecurityCommandExecutors = {
-  runRateLimitClearCommand?: typeof SecurityModule.runRateLimitClearCommand
-}
 type FileSnapshot = {
   readonly path: string
   readonly contents: string
@@ -112,232 +89,6 @@ type FileSnapshot = {
 type DirectorySnapshot = {
   readonly path: string
   readonly snapshotPath?: string
-}
-
-let runtimeModulePromise: Promise<typeof RuntimeModule> | undefined
-let queueModulePromise: Promise<typeof QueueModule> | undefined
-let cacheModulePromise: Promise<typeof CacheModule> | undefined
-let queueMigrationsModulePromise: Promise<typeof QueueMigrationsModule> | undefined
-let cacheMigrationsModulePromise: Promise<typeof CacheMigrationsModule> | undefined
-let mediaMigrationsModulePromise: Promise<typeof MediaMigrationsModule> | undefined
-let generatorsModulePromise: Promise<typeof GeneratorsModule> | undefined
-let broadcastModulePromise: Promise<typeof BroadcastModule> | undefined
-let securityModulePromise: Promise<typeof SecurityModule> | undefined
-let devModulePromise: Promise<typeof DevModule> | undefined
-let projectConfigModulePromise: Promise<typeof ProjectConfigModule> | undefined
-let projectDiscoveryModulePromise: Promise<typeof ProjectDiscoveryModule> | undefined
-let projectPluginsModulePromise: Promise<typeof ProjectPluginsModule> | undefined
-let projectRuntimeModulePromise: Promise<typeof ProjectRuntimeModule> | undefined
-let projectScaffoldModulePromise: Promise<typeof ProjectScaffoldModule> | undefined
-let agentSkillsModulePromise: Promise<typeof AgentSkillsModule> | undefined
-
-function loadRuntimeModule(): Promise<typeof RuntimeModule> {
-  runtimeModulePromise ??= import('./runtime')
-  return runtimeModulePromise
-}
-
-function loadQueueModule(): Promise<typeof QueueModule> {
-  queueModulePromise ??= import('./queue')
-  return queueModulePromise
-}
-
-function loadCacheModule(): Promise<typeof CacheModule> {
-  cacheModulePromise ??= import('./cache')
-  return cacheModulePromise
-}
-
-function loadQueueMigrationsModule(): Promise<typeof QueueMigrationsModule> {
-  queueMigrationsModulePromise ??= import('./queue-migrations')
-  return queueMigrationsModulePromise
-}
-
-function loadCacheMigrationsModule(): Promise<typeof CacheMigrationsModule> {
-  cacheMigrationsModulePromise ??= import('./cache-migrations')
-  return cacheMigrationsModulePromise
-}
-
-function loadMediaMigrationsModule(): Promise<typeof MediaMigrationsModule> {
-  mediaMigrationsModulePromise ??= import('./media-migrations')
-  return mediaMigrationsModulePromise
-}
-
-function loadGeneratorsModule(): Promise<typeof GeneratorsModule> {
-  generatorsModulePromise ??= import('./generators')
-  return generatorsModulePromise
-}
-
-function loadBroadcastModule(): Promise<typeof BroadcastModule> {
-  broadcastModulePromise ??= import('./broadcast')
-  return broadcastModulePromise
-}
-
-function loadSecurityModule(): Promise<typeof SecurityModule> {
-  securityModulePromise ??= import('./security')
-  return securityModulePromise
-}
-
-function loadDevModule(): Promise<typeof DevModule> {
-  devModulePromise ??= import('./dev')
-  return devModulePromise
-}
-
-function loadProjectConfigModule(): Promise<typeof ProjectConfigModule> {
-  projectConfigModulePromise ??= import('./project/config')
-  return projectConfigModulePromise
-}
-
-function loadProjectDiscoveryModule(): Promise<typeof ProjectDiscoveryModule> {
-  projectDiscoveryModulePromise ??= import('./project/discovery')
-  return projectDiscoveryModulePromise
-}
-
-function loadProjectPluginsModule(): Promise<typeof ProjectPluginsModule> {
-  projectPluginsModulePromise ??= import('./project/plugins')
-  return projectPluginsModulePromise
-}
-
-function loadProjectRuntimeModule(): Promise<typeof ProjectRuntimeModule> {
-  projectRuntimeModulePromise ??= import('./project/runtime')
-  return projectRuntimeModulePromise
-}
-
-function loadProjectScaffoldModule(): Promise<typeof ProjectScaffoldModule> {
-  projectScaffoldModulePromise ??= import('./project/scaffold')
-  return projectScaffoldModulePromise
-}
-
-function loadAgentSkillsModule(): Promise<typeof AgentSkillsModule> {
-  agentSkillsModulePromise ??= import('./agent-skills')
-  return agentSkillsModulePromise
-}
-
-type QueueExecutorKey = keyof QueueCommandExecutors
-type QueueExecutorLoaderMap = {
-  [TKey in QueueExecutorKey]: () => Promise<NonNullable<QueueCommandExecutors[TKey]>>
-}
-type CacheExecutorKey = keyof CacheCommandExecutors
-type CacheExecutorLoaderMap = {
-  [TKey in CacheExecutorKey]: () => Promise<NonNullable<CacheCommandExecutors[TKey]>>
-}
-type MediaExecutorKey = keyof MediaCommandExecutors
-type MediaExecutorLoaderMap = {
-  [TKey in MediaExecutorKey]: () => Promise<NonNullable<MediaCommandExecutors[TKey]>>
-}
-type ProjectExecutorKey = keyof ProjectCommandExecutors
-type ProjectExecutorLoaderMap = {
-  [TKey in ProjectExecutorKey]: () => Promise<NonNullable<ProjectCommandExecutors[TKey]>>
-}
-type GeneratorCommandKey =
-  | 'runMakeModel'
-  | 'runMakeMigration'
-  | 'runMakeSeeder'
-  | 'runMakeMail'
-  | 'runMakeJob'
-  | 'runMakeEvent'
-  | 'runMakeBroadcast'
-  | 'runMakeChannel'
-  | 'runMakeListener'
-  | 'runMakeObserver'
-  | 'runMakeFactory'
-type BroadcastExecutorKey = keyof BroadcastCommandExecutors
-type BroadcastExecutorLoaderMap = {
-  [TKey in BroadcastExecutorKey]: () => Promise<NonNullable<BroadcastCommandExecutors[TKey]>>
-}
-
-async function resolveRuntimeExecutor(runtimeExecutor?: RuntimeExecutor): Promise<RuntimeExecutor> {
-  return runtimeExecutor ?? (await loadRuntimeModule()).withRuntimeEnvironment
-}
-
-const projectExecutorLoaders: ProjectExecutorLoaderMap = {
-  runProjectPrepare: async () => (await loadDevModule()).runProjectPrepare,
-  runProjectDevServer: async () => (await loadDevModule()).runProjectDevServer,
-  runProjectBuild: async () => (await loadDevModule()).runProjectBuild,
-  runProjectStartServer: async () => (await loadDevModule()).runProjectStartServer,
-  runProjectDependencyInstall: async () => (await loadDevModule()).runProjectDependencyInstall,
-}
-
-async function resolveExecutor<
-  TExecutors extends Readonly<Record<string, unknown>>,
-  TKey extends keyof TExecutors & string,
->(
-  executors: TExecutors,
-  loaders: { readonly [TLoaderKey in TKey]: () => Promise<NonNullable<TExecutors[TLoaderKey]>> },
-  key: TKey,
-): Promise<NonNullable<TExecutors[TKey]>> {
-  const existing = executors[key]
-  if (existing) {
-    return existing as NonNullable<TExecutors[TKey]>
-  }
-
-  return await loaders[key]()
-}
-
-async function resolveProjectExecutor<TKey extends ProjectExecutorKey>(
-  projectExecutors: ProjectCommandExecutors,
-  key: TKey,
-): Promise<NonNullable<ProjectCommandExecutors[TKey]>> {
-  return await resolveExecutor(projectExecutors, projectExecutorLoaders, key)
-}
-
-const queueExecutorLoaders: QueueExecutorLoaderMap = {
-  runQueueFailedTableCommand: async () => (await loadQueueMigrationsModule()).runQueueFailedTableCommand,
-  runQueueTableCommand: async () => (await loadQueueMigrationsModule()).runQueueTableCommand,
-  runQueueFailedCommand: async () => (await loadQueueModule()).runQueueFailedCommand,
-  runQueueFlushCommand: async () => (await loadQueueModule()).runQueueFlushCommand,
-  runQueueWorkCommand: async () => (await loadQueueModule()).runQueueWorkCommand,
-  runQueueForgetCommand: async () => (await loadQueueModule()).runQueueForgetCommand,
-  runQueueListen: async () => (await loadQueueModule()).runQueueListen,
-  runQueueRestartCommand: async () => (await loadQueueModule()).runQueueRestartCommand,
-  runQueueRetryCommand: async () => (await loadQueueModule()).runQueueRetryCommand,
-  runQueueClearCommand: async () => (await loadQueueModule()).runQueueClearCommand,
-}
-
-const cacheExecutorLoaders: CacheExecutorLoaderMap = {
-  runCacheTableCommand: async () => (await loadCacheMigrationsModule()).runCacheTableCommand,
-  runCacheClearCommand: async () => (await loadCacheModule()).runCacheClearCommand,
-  runCacheForgetCommand: async () => (await loadCacheModule()).runCacheForgetCommand,
-}
-
-const mediaExecutorLoaders: MediaExecutorLoaderMap = {
-  runMediaTableCommand: async () => (await loadMediaMigrationsModule()).runMediaTableCommand,
-}
-
-const broadcastExecutorLoaders: BroadcastExecutorLoaderMap = {
-  runBroadcastWorkCommand: async () => (await loadBroadcastModule()).runBroadcastWorkCommand,
-}
-
-async function resolveQueueExecutor<TKey extends QueueExecutorKey>(
-  queueExecutors: QueueCommandExecutors,
-  key: TKey,
-): Promise<NonNullable<QueueCommandExecutors[TKey]>> {
-  return await resolveExecutor(queueExecutors, queueExecutorLoaders, key)
-}
-
-async function resolveCacheExecutor<TKey extends CacheExecutorKey>(
-  cacheExecutors: CacheCommandExecutors,
-  key: TKey,
-): Promise<NonNullable<CacheCommandExecutors[TKey]>> {
-  return await resolveExecutor(cacheExecutors, cacheExecutorLoaders, key)
-}
-
-async function resolveMediaExecutor<TKey extends MediaExecutorKey>(
-  mediaExecutors: MediaCommandExecutors,
-  key: TKey,
-): Promise<NonNullable<MediaCommandExecutors[TKey]>> {
-  return await resolveExecutor(mediaExecutors, mediaExecutorLoaders, key)
-}
-
-async function resolveBroadcastExecutor<TKey extends BroadcastExecutorKey>(
-  broadcastExecutors: BroadcastCommandExecutors,
-  key: TKey,
-): Promise<NonNullable<BroadcastCommandExecutors[TKey]>> {
-  return await resolveExecutor(broadcastExecutors, broadcastExecutorLoaders, key)
-}
-
-async function resolveGeneratorCommand<TKey extends GeneratorCommandKey>(
-  key: TKey,
-): Promise<typeof GeneratorsModule[TKey]> {
-  return (await loadGeneratorsModule())[key]
 }
 
 export function createCommandContext(

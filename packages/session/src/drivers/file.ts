@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir as defaultMkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { SessionRecord, SessionStore } from '../contracts'
+
+let makeDirectory = defaultMkdir
 
 function serializeRecord(record: SessionRecord): string {
   return JSON.stringify({
@@ -43,7 +45,7 @@ async function acquireRecordLock(recordPath: string): Promise<() => Promise<void
   const deadline = Date.now() + 5_000
   while (true) {
     try {
-      await mkdir(lockPath)
+      await makeDirectory(lockPath)
       return async () => rm(lockPath, { recursive: true, force: true })
     } catch (error) {
       const candidate = error as NodeJS.ErrnoException
@@ -64,7 +66,7 @@ async function acquireRecordLock(recordPath: string): Promise<() => Promise<void
 }
 
 async function writeRecordAtomically(root: string, record: SessionRecord): Promise<void> {
-  await mkdir(root, { recursive: true, mode: 0o700 })
+  await makeDirectory(root, { recursive: true, mode: 0o700 })
   const recordPath = getRecordPath(root, record.id)
   const release = await acquireRecordLock(recordPath)
   const temporaryPath = `${recordPath}.${process.pid}.${randomUUID()}.tmp`
@@ -94,7 +96,7 @@ export function createFileSessionStore(root: string): SessionStore {
       await writeRecordAtomically(root, record)
     },
     async delete(sessionId) {
-      await mkdir(root, { recursive: true, mode: 0o700 })
+      await makeDirectory(root, { recursive: true, mode: 0o700 })
       const recordPath = getRecordPath(root, sessionId)
       const release = await acquireRecordLock(recordPath)
       try {
@@ -110,5 +112,11 @@ export const fileSessionDriverInternals = {
   deserializeRecord,
   getRecordPath,
   serializeRecord,
+  resetMakeDirectory(): void {
+    makeDirectory = defaultMkdir
+  },
+  setMakeDirectory(operation: typeof defaultMkdir): void {
+    makeDirectory = operation
+  },
   writeRecordAtomically,
 }

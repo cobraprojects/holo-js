@@ -8,6 +8,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs"
+    },
+    "./registry": {
+      "types": "./dist/registry.d.ts",
+      "import": "./dist/registry.mjs"
     }
   },
   "main": "./dist/index.mjs",
@@ -22,7 +26,7 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/db": "catalog:"
+    "@holo-js/kernel": "catalog:"
   },
   "devDependencies": {
     "tsup": "catalog:",

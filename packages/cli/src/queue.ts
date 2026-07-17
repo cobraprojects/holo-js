@@ -3,12 +3,13 @@ import { existsSync, watch } from 'node:fs'
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { loadConfigDirectory } from '@holo-js/config'
+import { loadConfigDirectory, type LoadedHoloConfig } from '@holo-js/config'
 import {
   configureDB,
   resetDB,
   resolveRuntimeConnectionManagerOptions,
 } from '@holo-js/db'
+import { loadProjectDatabaseDrivers } from './database-drivers'
 import {
   bundleProjectModule,
   ensureProjectConfig,
@@ -38,7 +39,7 @@ import type {
 } from './cli-types'
 import type { LoadedProjectConfig, CommandFlagValue } from './types'
 import type { HoloRuntime } from '@holo-js/core'
-import type { QueueWorkerRunOptions } from '@holo-js/queue'
+import type { QueueDriverFactory, QueueWorkerRunOptions } from '@holo-js/queue'
 
 type QueueMaintenanceConnection = Awaited<ReturnType<typeof loadConfigDirectory>>['queue']['connections'][string]
 
@@ -75,6 +76,16 @@ export async function loadQueueCliModule(projectRoot: string): Promise<QueueCliM
   return await import(resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue')) as QueueCliModule
 }
 
+async function loadQueueRedisDriverFactory(projectRoot: string): Promise<QueueDriverFactory> {
+  const queueRedis = await import(resolveProjectPackageImportSpecifier(projectRoot, '@holo-js/queue-redis')) as {
+    readonly redisQueueDriverFactory?: QueueDriverFactory
+  }
+  if (!queueRedis.redisQueueDriverFactory) {
+    throw new Error('Queue driver package @holo-js/queue-redis does not export redisQueueDriverFactory.')
+  }
+  return queueRedis.redisQueueDriverFactory
+}
+
 export function isIgnoredQueueListenPath(filePath: string): boolean {
   const normalized = toPosixSlashes(filePath)
   if (QUEUE_LISTEN_IGNORED_PATH_PREFIXES.some(prefix => normalized === prefix || normalized.startsWith(`${prefix}/`))) {
@@ -88,10 +99,10 @@ export function isIgnoredQueueListenPath(filePath: string): boolean {
 }
 
 function resolveQueuePluginDriverLoader(
-  queueModule: QueueCliModule,
+  queueModule: Pick<QueueCliModule, 'loadQueuePluginDrivers'>,
   connectionName: string,
   connection: QueueMaintenanceConnection | undefined,
-): ((projectRoot?: string) => Promise<void>) | undefined {
+): ((projectRoot?: string, pluginNames?: readonly string[]) => Promise<void>) | undefined {
   if (!connection || BUILT_IN_QUEUE_DRIVER_NAMES.has(connection.driver)) {
     return undefined
   }
@@ -415,21 +426,37 @@ export async function runQueueWorkCommand(
 export async function initializeQueueMaintenanceEnvironment(
   projectRoot: string,
   connectionName?: string,
+  dependencies: {
+    readonly loadConfig?: (projectRoot: string) => Promise<{
+      readonly app: Pick<LoadedHoloConfig['app'], 'plugins'>
+      readonly database: LoadedHoloConfig['database']
+      readonly queue: LoadedHoloConfig['queue']
+      readonly redis: LoadedHoloConfig['redis']
+    }>
+    readonly loadQueueModule?: (projectRoot: string) => Promise<Pick<
+      QueueCliModule,
+      'configureQueueRuntime' | 'loadQueuePluginDrivers' | 'shutdownQueueRuntime'
+    >>
+  } = {},
 ): Promise<QueueMaintenanceEnvironment> {
-  const loadedConfig = await loadConfigDirectory(projectRoot)
-  const queueModule = await loadQueueCliModule(projectRoot)
+  const loadedConfig = await (dependencies.loadConfig ?? loadConfigDirectory)(projectRoot)
+  const queueModule = await (dependencies.loadQueueModule ?? loadQueueCliModule)(projectRoot)
   const resolvedConnectionName = connectionName?.trim() || loadedConfig.queue.default
   const connection = loadedConfig.queue.connections[resolvedConnectionName]
   const loadQueuePluginDrivers = resolveQueuePluginDriverLoader(queueModule, resolvedConnectionName, connection)
 
   if (!connection || connection.driver !== 'database') {
+    const driverFactories = connection?.driver === 'redis'
+      ? [await loadQueueRedisDriverFactory(projectRoot)]
+      : undefined
     queueModule.configureQueueRuntime({
       config: loadedConfig.queue,
       redisConfig: loadedConfig.redis,
+      ...(driverFactories ? { driverFactories } : {}),
     })
     if (loadQueuePluginDrivers) {
       try {
-        await loadQueuePluginDrivers(projectRoot)
+        await loadQueuePluginDrivers(projectRoot, loadedConfig.app.plugins)
       } catch (error) {
         await queueModule.shutdownQueueRuntime().catch(() => {})
         throw error
@@ -450,6 +477,7 @@ export async function initializeQueueMaintenanceEnvironment(
     ...createQueueDbRuntimeOptions(),
   })
 
+  await loadProjectDatabaseDrivers(projectRoot, loadedConfig.database)
   const manager = resolveRuntimeConnectionManagerOptions({
     db: loadedConfig.database,
   })

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import Redis from 'ioredis'
 import {
   CacheInvalidNumericMutationError,
+  registerCacheDriverFactory,
   type CacheDriverContract,
   type CacheDriverGetResult,
   type CacheDriverPutInput,
@@ -450,6 +451,14 @@ export function createRedisCacheDriver(options: RedisCacheDriverOptions): CacheD
 
   return driver
 }
+
+export const redisCacheDriverFactory = Object.freeze({
+  driver: 'redis',
+  registrationKey: '@holo-js/cache-redis',
+  create: createRedisCacheDriver,
+})
+
+registerCacheDriverFactory(redisCacheDriverFactory)
 
 export const redisCacheDriverInternals = {
   createRedisClient,

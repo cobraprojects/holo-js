@@ -18,7 +18,7 @@ function findValidationException(error: unknown): ValidationException | undefine
   return findValidationException((error as { readonly cause?: unknown }).cause)
 }
 
-export default defineNitroErrorHandler(async (error: H3Error, event: H3Event) => {
+export default async function handleValidationError(error: H3Error, event: H3Event): Promise<void> {
   const validationError = findValidationException(error)
   if (!validationError) {
     return
@@ -36,4 +36,4 @@ export default defineNitroErrorHandler(async (error: H3Error, event: H3Event) =>
   setResponseStatus(event, payload.status)
   setHeader(event, 'content-type', 'application/json; charset=utf-8')
   await send(event, JSON.stringify(payload), 'application/json')
-})
+}

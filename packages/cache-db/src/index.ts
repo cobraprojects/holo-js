@@ -4,6 +4,7 @@ import {
   CacheInvalidNumericMutationError,
   CacheLockAcquisitionError,
   deserializeCacheValue,
+  registerCacheDriverFactory,
   serializeCacheValue,
   type CacheDriverContract,
   type CacheDriverGetResult,
@@ -18,10 +19,10 @@ import {
   type DatabaseContext,
   type DatabaseContextOptions,
   type DriverExecutionResult,
-  type HoloProjectConnectionConfig,
   type SupportedDatabaseDriver,
   type TableDefinitionBuilder,
 } from '@holo-js/db'
+import type { HoloProjectConnectionConfig } from '@holo-js/kernel'
 
 export const DEFAULT_CACHE_DATABASE_TABLE = 'cache'
 export const DEFAULT_CACHE_DATABASE_LOCK_TABLE = 'cache_locks'
@@ -612,6 +613,14 @@ export function createDatabaseCacheDriver(options: DatabaseCacheDriverOptions): 
     },
   }
 }
+
+export const databaseCacheDriverFactory = Object.freeze({
+  driver: 'database',
+  registrationKey: '@holo-js/cache-db',
+  create: createDatabaseCacheDriver,
+})
+
+registerCacheDriverFactory(databaseCacheDriverFactory)
 
 export const cacheDbInternals = {
   createDatabaseConnection,

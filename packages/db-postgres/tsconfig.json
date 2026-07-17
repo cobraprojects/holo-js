@@ -2,9 +2,9 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": ".",
     "declaration": true,
-    "declarationMap": true
+    "declarationMap": true,
+    "paths": { "@holo-js/db": ["../db/src/index.ts"] }
   },
   "include": [
     "src/**/*",

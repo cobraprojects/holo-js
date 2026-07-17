@@ -1,12 +1,11 @@
 import { createHash, createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto'
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { createServer, type IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import type {
   NormalizedHoloBroadcastConfig,
-  NormalizedHoloQueueConfig,
-  NormalizedHoloRedisConfig,
-  NormalizedQueueRedisConnectionConfig,
-} from '@holo-js/config'
+} from './config'
+import type { NormalizedHoloRedisConfig } from '@holo-js/kernel'
+import type { NormalizedHoloQueueConfig, NormalizedQueueRedisConnectionConfig } from '@holo-js/queue'
 import {
   authorizeBroadcastChannel,
   resolveBroadcastChannelGuard,
@@ -20,6 +19,26 @@ import type {
   BroadcastRuntimeBindings,
 } from './contracts'
 import { isObjectRecord, isPlainObject, parseJsonObject } from './json'
+import {
+  createWorkerPusherSignature as createPusherSignature,
+  normalizeWorkerPublishBody as normalizePublishBody,
+  normalizeWorkerRequiredString as normalizeRequiredString,
+  parseWorkerChannelKind as parseChannelKind,
+  parseWorkerSocketMessage as parseSocketMessage,
+  type WorkerPublishBody as PublishBody,
+  verifyWorkerPusherSignature as verifyPusherSignature,
+} from './workerProtocol'
+import {
+  BroadcastPayloadTooLargeError,
+  decodeNodeWebSocketMessage,
+  getNodeWebSocketMessageBytes,
+  readLimitedRequestText,
+  readNodeRequestBody,
+  toNodeHeaders,
+  toNodeRequestUrl,
+  writeNodeRequestBodyError,
+  writeNodeResponse,
+} from './workerNodeTransport'
 
 type WorkerConnectionInfo = {
   readonly socketId: string
@@ -30,13 +49,6 @@ type WorkerConnectionInfo = {
 type WorkerWebSocketConnection = WorkerConnectionInfo & {
   readonly send: (payload: string) => void
   readonly close: (code?: number, reason?: string) => void
-}
-
-type PublishBody = {
-  readonly name: string
-  readonly channels: readonly string[]
-  readonly data: string
-  readonly socket_id?: string
 }
 
 type ResolvedPublishBody = PublishBody & {
@@ -122,6 +134,16 @@ export interface BroadcastWorkerStats {
   }
 }
 
+function createScalingMessageListener(
+  runtime: Pick<BroadcastWorkerRuntime, 'receiveScalingMessage'>,
+): (payload: string) => void {
+  return (payload) => {
+    void runtime.receiveScalingMessage(payload).catch((error) => {
+      logScalingMessageError(error)
+    })
+  }
+}
+
 export interface StartedBroadcastWorker {
   readonly host: string
   readonly port: number
@@ -164,8 +186,6 @@ type NodeWebSocketModuleLike = {
   WebSocketServer: new (options: { noServer: true, maxPayload: number }) => NodeWebSocketServerLike
 }
 
-class BroadcastPayloadTooLargeError extends Error {}
-
 function isAllowedWorkerOrigin(request: Request, allowedOrigins: readonly string[]): boolean {
   const origin = request.headers.get('origin')
   if (!origin) {
@@ -178,41 +198,6 @@ function isAllowedWorkerOrigin(request: Request, allowedOrigins: readonly string
   } catch {
     return false
   }
-}
-
-async function readLimitedRequestText(request: Request, maxBytes: number): Promise<string> {
-  const contentLength = Number(request.headers.get('content-length'))
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    throw new BroadcastPayloadTooLargeError()
-  }
-
-  if (!request.body) {
-    return ''
-  }
-
-  const reader = request.body.getReader()
-  const chunks: Uint8Array[] = []
-  let size = 0
-  while (true) {
-    const result = await reader.read()
-    if (result.done) {
-      break
-    }
-    size += result.value.byteLength
-    if (size > maxBytes) {
-      await reader.cancel()
-      throw new BroadcastPayloadTooLargeError()
-    }
-    chunks.push(result.value)
-  }
-
-  const bytes = new Uint8Array(size)
-  let offset = 0
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  return new TextDecoder().decode(bytes)
 }
 
 type BroadcastScalingEventMessage = {
@@ -387,32 +372,8 @@ type RedisScalingModuleLike = {
   ) => RedisScalingClientLike
 }
 
-function normalizeRequiredString(value: string, label: string): string {
-  const normalized = value.trim()
-  if (!normalized) {
-    throw new Error(`[@holo-js/broadcast] ${label} must be a non-empty string.`)
-  }
-
-  return normalized
-}
-
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function parseSocketMessage(rawMessage: string): { readonly event: string, readonly channel?: string, readonly data: Record<string, unknown> } {
-  const message = parseJsonObject(rawMessage, 'Websocket message')
-  const event = normalizeRequiredString(String(message.event ?? ''), 'Websocket event')
-  const channel = typeof message.channel === 'string' ? normalizeRequiredString(message.channel, 'Websocket channel') : undefined
-  const data = typeof message.data === 'string'
-    ? parseJsonObject(message.data, 'Websocket message data')
-    : (isPlainObject(message.data) ? message.data : {})
-
-  return Object.freeze({
-    event,
-    ...(typeof channel === 'undefined' ? {} : { channel }),
-    data,
-  })
 }
 
 function normalizeRealtimeAction(value: unknown): RealtimeSocketAction {
@@ -452,75 +413,6 @@ function parseRealtimeSocketMessage(data: Record<string, unknown>): RealtimeSock
     ...(typeof name === 'undefined' ? {} : { name }),
     args: normalizeRealtimeArgs(data.args),
   })
-}
-
-function normalizePublishBody(value: unknown): PublishBody {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('[@holo-js/broadcast] Publish payload must be a JSON object.')
-  }
-
-  const body = value as Record<string, unknown>
-  const name = typeof body.name === 'string'
-    ? normalizeRequiredString(body.name, 'Publish name')
-    : typeof body.event === 'string'
-      ? normalizeRequiredString(body.event, 'Publish event')
-      : ''
-
-  if (!name) {
-    throw new Error('[@holo-js/broadcast] Publish payload must include an event name.')
-  }
-
-  const channels = Array.isArray(body.channels)
-    ? body.channels.map((channel) => {
-        if (typeof channel !== 'string') {
-          throw new Error('[@holo-js/broadcast] Publish channel must be a non-empty string.')
-        }
-
-        return normalizeRequiredString(channel, 'Publish channel')
-      })
-    : typeof body.channel === 'string'
-      ? [normalizeRequiredString(body.channel, 'Publish channel')]
-      : []
-
-  if (channels.length === 0) {
-    throw new Error('[@holo-js/broadcast] Publish payload must include at least one channel.')
-  }
-
-  const data = typeof body.data === 'string'
-    ? body.data
-    : JSON.stringify((body.data ?? {}) as BroadcastJsonObject)
-  const socketId = typeof body.socket_id === 'string'
-    ? normalizeRequiredString(body.socket_id, 'Publish socket_id')
-    : undefined
-
-  return Object.freeze({
-    name,
-    channels: Object.freeze(channels),
-    data,
-    ...(typeof socketId === 'undefined' ? {} : { socket_id: socketId }),
-  })
-}
-
-function createPusherSignature(secret: string, method: string, pathname: string, params: URLSearchParams): string {
-  const sorted = [...params.entries()]
-    .filter(([key]) => key !== 'auth_signature')
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-    .join('&')
-  const payload = `${method.toUpperCase()}\n${pathname}\n${sorted}`
-  return createHmac('sha256', secret).update(payload).digest('hex')
-}
-
-function verifyPusherSignature(providedSignature: string, expectedSignature: string): boolean {
-  if (
-    providedSignature.length !== expectedSignature.length
-    || !/^[a-f0-9]+$/i.test(providedSignature)
-    || !/^[a-f0-9]+$/i.test(expectedSignature)
-  ) {
-    return false
-  }
-
-  return timingSafeEqual(Buffer.from(providedSignature, 'hex'), Buffer.from(expectedSignature, 'hex'))
 }
 
 function logSocketMessageError(socketId: string, error: unknown): void {
@@ -615,27 +507,6 @@ function unsubscribeRealtimeSubscription(socket: SocketState, id: string, subscr
 
 function isRealtimeSubscriptionCurrent(socket: SocketState, id: string, token: object): boolean {
   return socket.active && socket.realtimeSubscriptionTokens.get(id) === token
-}
-
-function parseChannelKind(channel: string): { readonly kind: 'public' | 'private' | 'presence', readonly canonical: string } {
-  if (channel.startsWith('private-')) {
-    return Object.freeze({
-      kind: 'private',
-      canonical: channel.slice('private-'.length),
-    })
-  }
-
-  if (channel.startsWith('presence-')) {
-    return Object.freeze({
-      kind: 'presence',
-      canonical: channel.slice('presence-'.length),
-    })
-  }
-
-  return Object.freeze({
-    kind: 'public',
-    canonical: channel,
-  })
 }
 
 function createSocketId(): string {
@@ -1082,6 +953,59 @@ async function authenticateSubscription(
   })
 }
 
+function resolveRealtimeErrorStatus(error: unknown): number | undefined {
+  if (!isRecord(error)) {
+    return undefined
+  }
+
+  const decision = isRecord(error.decision) ? error.decision : undefined
+  const status = decision?.status ?? error.status ?? error.statusCode
+  if (typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599) {
+    return status
+  }
+
+  const name = typeof error.name === 'string' ? error.name : ''
+  if (name === 'RealtimeUnauthorizedError') {
+    return 401
+  }
+
+  if (name === 'RealtimeForbiddenError') {
+    return 403
+  }
+
+  return undefined
+}
+
+function resolveRealtimeErrorCode(error: unknown): string | undefined {
+  if (!isRecord(error)) {
+    return undefined
+  }
+
+  const decision = isRecord(error.decision) ? error.decision : undefined
+  const code = decision?.code ?? error.code
+  return typeof code === 'string' ? code : undefined
+}
+
+function resolveRealtimeErrorKind(error: unknown, status: number | undefined): RealtimeWireErrorKind {
+  if (!isRecord(error)) {
+    return 'runtime'
+  }
+
+  const name = typeof error.name === 'string' ? error.name : ''
+  if (
+    name === 'AuthorizationError'
+    || name === 'RealtimeUnauthorizedError'
+    || name === 'RealtimeForbiddenError'
+    || status === 401
+    || status === 403
+    || status === 404
+  ) {
+    return 'authorization'
+  }
+
+  return name === 'RealtimeAuthUnavailableError' ? 'transport' : 'runtime'
+}
+
 export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): BroadcastWorkerRuntime {
   const appsByKey = buildWorkerApps(options.config)
   const connectedSockets = new Map<string, SocketState>()
@@ -1094,11 +1018,9 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
   const scalingUnsubscribe = options.scalingUnsubscribe
     ? Promise.resolve(options.scalingUnsubscribe)
     : scaling && options.scalingAutoSubscribe !== false
-      ? scaling.adapter.subscribe(scaling.eventChannel, (payload) => {
-        void handleScalingMessage(payload).catch((error) => {
-          logScalingMessageError(error)
-        })
-      })
+      ? scaling.adapter.subscribe(scaling.eventChannel, createScalingMessageListener({
+          receiveScalingMessage: handleScalingMessage,
+        }))
     : Promise.resolve(async () => {})
 
   function createPresenceSocketRef(channel: string, socketId: string): string {
@@ -1326,59 +1248,6 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     }
 
     socket.send(pusherEvent(event, data))
-  }
-
-  function resolveRealtimeErrorStatus(error: unknown): number | undefined {
-    if (!isRecord(error)) {
-      return undefined
-    }
-
-    const decision = isRecord(error.decision) ? error.decision : undefined
-    const status = decision?.status ?? error.status ?? error.statusCode
-    if (typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599) {
-      return status
-    }
-
-    const name = typeof error.name === 'string' ? error.name : ''
-    if (name === 'RealtimeUnauthorizedError') {
-      return 401
-    }
-
-    if (name === 'RealtimeForbiddenError') {
-      return 403
-    }
-
-    return undefined
-  }
-
-  function resolveRealtimeErrorCode(error: unknown): string | undefined {
-    if (!isRecord(error)) {
-      return undefined
-    }
-
-    const decision = isRecord(error.decision) ? error.decision : undefined
-    const code = decision?.code ?? error.code
-    return typeof code === 'string' ? code : undefined
-  }
-
-  function resolveRealtimeErrorKind(error: unknown, status: number | undefined): RealtimeWireErrorKind {
-    if (!isRecord(error)) {
-      return 'runtime'
-    }
-
-    const name = typeof error.name === 'string' ? error.name : ''
-    if (
-      name === 'AuthorizationError'
-      || name === 'RealtimeUnauthorizedError'
-      || name === 'RealtimeForbiddenError'
-      || status === 401
-      || status === 403
-      || status === 404
-    ) {
-      return 'authorization'
-    }
-
-    return name === 'RealtimeAuthUnavailableError' ? 'transport' : 'runtime'
   }
 
   function sendRealtimeError(socket: SocketState, id: string, error: unknown): void {
@@ -1751,21 +1620,11 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       appId: socket.app.appId,
       socket_id: socket.socketId,
     })
-    await publishToChannels(payload, {
-      fromScaling: false,
-      shouldReplicate: true,
-    })
+    await publishToChannels(payload)
   }
 
   async function publishToChannels(
     body: ResolvedPublishBody,
-    options: {
-      readonly fromScaling: boolean
-      readonly shouldReplicate: boolean
-    } = {
-      fromScaling: false,
-      shouldReplicate: true,
-    },
   ): Promise<PublishDelivery> {
     let deliveredSockets = 0
     const deliveredChannels: string[] = []
@@ -1778,9 +1637,7 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       deliveredSockets += result.deliveredSockets
     }
 
-    if (!options.fromScaling && options.shouldReplicate) {
-      await publishScalingEvent(body)
-    }
+    await publishScalingEvent(body)
 
     return Object.freeze({
       deliveredChannels: Object.freeze(deliveredChannels),
@@ -1876,9 +1733,6 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
       result = await publishToChannels({
         ...publishBody,
         appId: app.appId,
-      }, {
-        fromScaling: false,
-        shouldReplicate: true,
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Broadcast publish failed.'
@@ -2022,11 +1876,8 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
         await Promise.all(scalingCleanupTasks.map(async (task) => {
           await task()
         }))
-      /* v8 ignore next 2 -- defensive guard; pendingMessage is always swallowed by .catch(() => {}) and inner tasks have their own catch handlers */
-      }).catch((error) => {
-        logSocketMessageError(socket.socketId, error)
       })
-      socket.pendingMessage = cleanupTask.catch(() => {})
+      socket.pendingMessage = cleanupTask
     },
     getStats(): BroadcastWorkerStats {
       return Object.freeze({
@@ -2059,95 +1910,6 @@ export function createBroadcastWorkerRuntime(options: WorkerRuntimeOptions): Bro
     },
   })
 }
-
-/* v8 ignore start -- Node HTTP adapter helpers; exercised by real HTTP requests but array/undefined header branches are defensive */
-function toNodeHeaders(headers: IncomingMessage['headers']): Headers {
-  const normalized = new Headers()
-  for (const [key, value] of Object.entries(headers)) {
-    if (typeof value === 'undefined') {
-      continue
-    }
-
-    if (Array.isArray(value)) {
-      for (const item of value) {
-        normalized.append(key, item)
-      }
-      continue
-    }
-
-    normalized.set(key, value)
-  }
-
-  return normalized
-}
-
-function toNodeRequestUrl(request: IncomingMessage, fallbackHost: string): string {
-  const path = request.url ?? '/'
-  const host = request.headers.host ?? fallbackHost
-  return `http://${host}${path}`
-}
-
-async function readNodeRequestBody(request: IncomingMessage, maxBytes: number): Promise<Buffer | undefined> {
-  if (request.method === 'GET' || request.method === 'HEAD') {
-    return undefined
-  }
-
-  const chunks: Buffer[] = []
-  let size = 0
-  for await (const chunk of request) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-    size += buffer.byteLength
-    if (size > maxBytes) {
-      throw new BroadcastPayloadTooLargeError()
-    }
-    chunks.push(buffer)
-  }
-
-  if (chunks.length === 0) {
-    return undefined
-  }
-
-  return Buffer.concat(chunks)
-}
-
-async function writeNodeResponse(response: ServerResponse, value: Response): Promise<void> {
-  response.statusCode = value.status
-  response.statusMessage = value.statusText
-  value.headers.forEach((headerValue, headerName) => {
-    response.setHeader(headerName, headerValue)
-  })
-  const body = await value.arrayBuffer()
-  response.end(Buffer.from(body))
-}
-/* v8 ignore stop */
-
-/* v8 ignore start -- Node websocket adapter glue; requires real ws package for integration testing */
-function decodeNodeWebSocketMessage(message: string | Uint8Array | Buffer | readonly Buffer[] | ArrayBuffer): string {
-  if (typeof message === 'string') {
-    return message
-  }
-  if (message instanceof ArrayBuffer) {
-    return new TextDecoder().decode(new Uint8Array(message))
-  }
-  if (Array.isArray(message)) {
-    return Buffer.concat(message).toString('utf8')
-  }
-  if (message instanceof Uint8Array) {
-    return Buffer.from(message).toString('utf8')
-  }
-  return String(message)
-}
-
-function getNodeWebSocketMessageBytes(message: string | Uint8Array | Buffer | readonly Buffer[] | ArrayBuffer): number {
-  if (typeof message === 'string') {
-    return Buffer.byteLength(message)
-  }
-  if (message instanceof ArrayBuffer || message instanceof Uint8Array) {
-    return message.byteLength
-  }
-  return message.reduce((size, chunk) => size + chunk.byteLength, 0)
-}
-/* v8 ignore stop */
 
 async function handleSubscribeFailure(
   runtime: BroadcastWorkerRuntime,
@@ -2212,12 +1974,10 @@ export async function startBroadcastWorker(
     },
   })
   if (scalingConfig) {
-    scalingUnsubscribe = await scalingConfig.adapter.subscribe(scalingConfig.eventChannel, (payload) => {
-      /* v8 ignore next 3 -- equivalent path is covered via createBroadcastWorkerRuntime auto-subscribe; V8 coverage does not instrument this callback instance */
-      void runtime.receiveScalingMessage(payload).catch((error) => {
-        logScalingMessageError(error)
-      })
-    }).catch((subscribeError: unknown) => handleSubscribeFailure(runtime, subscribeError))
+    scalingUnsubscribe = await scalingConfig.adapter.subscribe(
+      scalingConfig.eventChannel,
+      createScalingMessageListener(runtime),
+    ).catch((subscribeError: unknown) => handleSubscribeFailure(runtime, subscribeError))
   }
   const bun = (globalThis as { Bun?: BroadcastWorkerBunGlobal }).Bun
   const appsByKey = buildWorkerApps(config)
@@ -2361,12 +2121,8 @@ export async function startBroadcastWorker(
     try {
       requestBody = await readNodeRequestBody(request, config.worker.maxRequestBytes)
     } catch (error) {
-      if (error instanceof BroadcastPayloadTooLargeError) {
-        response.statusCode = 413
-        response.end('Payload Too Large')
-        return
-      }
-      throw error
+      writeNodeRequestBodyError(response, error)
+      return
     }
     const requestInit: RequestInit = {
       method: request.method,
@@ -2473,4 +2229,21 @@ export const workerInternals = {
   parseSocketMessage,
   isAllowedWorkerOrigin,
   readLimitedRequestText,
+  normalizeRealtimeAction,
+  normalizeRealtimeArgs,
+  parseRealtimeSocketMessage,
+  logSocketMessageError,
+  logScalingMessageError,
+  logSocketCleanupError,
+  logRealtimeSubscriptionCleanupError,
+  safeEqual,
+  signChannelAuth,
+  parseClientChannelAuth,
+  parseSignedChannelData,
+  verifyClientChannelAuth,
+  resolvePresenceMemberId,
+  resolveRealtimeErrorStatus,
+  resolveRealtimeErrorCode,
+  resolveRealtimeErrorKind,
+  writeNodeRequestBodyError,
 }

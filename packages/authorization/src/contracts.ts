@@ -374,6 +374,13 @@ export class AuthorizationError extends Error {
   }
 }
 
+export function isAuthorizationError(value: unknown): value is AuthorizationError {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as { readonly message?: unknown, readonly decision?: unknown }
+  return typeof candidate.message === 'string'
+    && isAuthorizationDecision(candidate.decision)
+}
+
 export class AuthorizationPolicyNotFoundError extends Error {
   constructor(message = '[@holo-js/authorization] Policy definition was not found.') {
     super(message)

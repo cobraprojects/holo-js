@@ -1,4 +1,4 @@
-import type { NormalizedHoloProjectConfig } from '@holo-js/db'
+import type { NormalizedHoloProjectConfig } from '@holo-js/kernel'
 
 export type CommandFlagValue = string | boolean | number | readonly string[]
 

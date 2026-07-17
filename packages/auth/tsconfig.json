@@ -3,8 +3,26 @@
   "compilerOptions": {
     "outDir": "./dist",
     "paths": {
-      "@holo-js/config": [
-        "../config/src/index.ts"
+      "@holo-js/kernel": [
+        "../kernel/src/index.ts"
+      ],
+      "@holo-js/notifications": [
+        "../notifications/src/index.ts"
+      ],
+      "@holo-js/db": [
+        "../db/src/index.ts"
+      ],
+      "@holo-js/storage": [
+        "../storage/src/index.ts"
+      ],
+      "@holo-js/queue": [
+        "../queue/src/index.ts"
+      ],
+      "@holo-js/cache": [
+        "../cache/src/index.ts"
+      ],
+      "@holo-js/session": [
+        "../session/src/index.ts"
       ]
     }
   },

@@ -25,6 +25,7 @@ import {
   type DriverExecutionResult,
   type DriverQueryResult } from '../src'
 import { defineModelFromTable, defineTable } from './support/internal'
+import { ModelValueTransformer } from '../src/model/ModelValueTransformer'
 
 type Row = Record<string, unknown>
 
@@ -608,26 +609,27 @@ describe('model feature slice', () => {
       fillable: ['embedding'],
       casts: {
         embedding: 'vector:nope' } })
+    const rawVectors = defineTable('raw_vectors', {
+      id: column.id(),
+      embedding: column.string(),
+    })
+    const RawVectorRow = defineModelFromTable(rawVectors, {
+      fillable: ['embedding'],
+      casts: { embedding: 'vector' },
+    })
+    const rawTransformer = new ModelValueTransformer(RawVectorRow.definition, () => 'postgres')
+    expect(rawTransformer.normalizeForStorage('unknown', 'value')).toBe('value')
+    expect(rawTransformer.applyCastGet('json', '{"active":true}')).toEqual({ active: true })
 
     const loose = await LooseVectorRow.create({
       embedding: [0.9, 0.8] as never })
     expect(loose.get('embedding')).toEqual([0.9, 0.8])
     const vectorRepository = loose.getRepository() as unknown as {
-      parseVectorValue(value: unknown, parameter?: string): number[] | null | undefined
-      parseVectorString(value: unknown): number[]
-      applySchemaWriteNormalization(key: string, value: unknown): unknown
       isWritableColumn(column: string): boolean
       definition: {
         hasExplicitFillable?: boolean
       }
     }
-    expect(vectorRepository.parseVectorValue('[0.9,0.8]')).toEqual([0.9, 0.8])
-    expect(() => vectorRepository.parseVectorString(123)).toThrow('Vector casts require an array or string payload.')
-    expect(() => vectorRepository.parseVectorString('   ')).toThrow('Vector casts require a non-empty payload.')
-    expect(() => vectorRepository.parseVectorString('{"value":1}')).toThrow(
-      'Vector casts require a JSON array or PostgreSQL-style vector literal.',
-    )
-    expect(vectorRepository.applySchemaWriteNormalization('missing', 'value')).toBe('value')
     expect(vectorRepository.isWritableColumn.call({
       definition: {
         guarded: [],
@@ -646,10 +648,7 @@ describe('model feature slice', () => {
     const jsonEntity = await JsonRow.create({
       payload: { ok: true } as never,
     })
-    const jsonRepository = jsonEntity.getRepository() as unknown as {
-      applySchemaReadNormalization(key: string, value: unknown): unknown
-    }
-    expect(jsonRepository.applySchemaReadNormalization('payload', '{"ok":true}')).toEqual({ ok: true })
+    expect(jsonEntity.get('payload')).toEqual({ ok: true })
 
     const nullableLoose = await LooseVectorRow.create({
       embedding: null as never })
@@ -664,6 +663,12 @@ describe('model feature slice', () => {
 
     await expect(InvalidVectorConfigRow.create({
       embedding: [0.1, 0.2, 0.3] as never })).rejects.toThrow('Vector cast parameter "nope" must be a positive integer.')
+
+    await expect(RawVectorRow.create({ embedding: 123 as never })).rejects.toThrow('array or string payload')
+    await expect(RawVectorRow.create({ embedding: '   ' })).rejects.toThrow('non-empty payload')
+    await expect(RawVectorRow.create({ embedding: 'not-json' })).rejects.toThrow('JSON array')
+    await expect(RawVectorRow.create({ embedding: '{"value":1}' })).rejects.toThrow('JSON array')
+    await expect(RawVectorRow.create({ embedding: '["1","2"]' })).resolves.toBeDefined()
 
     await expect(VectorRow.create({
       embedding: [0.1, 0.2, 0.3] as never,

@@ -6,6 +6,7 @@ export {
   denyAsNotFound,
   isAuthorizationAbilityDefinition,
   isAuthorizationDecision,
+  isAuthorizationError,
   isAuthorizationPolicyDefinition,
   normalizeAuthorizationDecision,
   AuthorizationAbilityNotFoundError,

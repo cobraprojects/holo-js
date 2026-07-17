@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { normalizeBroadcastConfig } from '@holo-js/config'
+import { normalizeBroadcastConfig } from '../src'
 import {
   broadcast,
   broadcastRaw,
@@ -243,6 +243,7 @@ export default {
           },
         }),
         projectRoot: ` ${projectRoot} `,
+        plugins: ['holo-plugin-broadcast'],
       } as Parameters<typeof configureBroadcastRuntime>[0] & { readonly projectRoot: string })
 
       await expect(broadcastRaw({
@@ -257,8 +258,8 @@ export default {
         queued: false,
         publishedChannels: ['plugin.loaded'],
       })
-      await expect(loadBroadcastPluginDrivers(projectRoot)).resolves.toBeUndefined()
-      await expect(loadBroadcastPluginDrivers(projectRoot)).resolves.toBeUndefined()
+      await expect(loadBroadcastPluginDrivers(projectRoot, ['holo-plugin-broadcast'])).resolves.toBeUndefined()
+      await expect(loadBroadcastPluginDrivers(projectRoot, ['holo-plugin-broadcast'])).resolves.toBeUndefined()
     } finally {
       process.chdir(previousCwd)
       await rm(projectRoot, { recursive: true, force: true })
@@ -272,6 +273,12 @@ export default {
     try {
       await writeBroadcastPluginProject(firstRoot, 'holo-plugin-broadcast-first', 'shared', 'first')
       await writeBroadcastPluginProject(secondRoot, 'holo-plugin-broadcast-second', 'shared', 'second')
+      registerBroadcastDriver('shared', {
+        async send(input, context) {
+          return { ...context, provider: { project: 'previous' }, publishedChannels: input.channels }
+        },
+      })
+      await loadBroadcastPluginDrivers(firstRoot, ['holo-plugin-broadcast-first'])
 
       configureBroadcastRuntime({
         config: normalizeBroadcastConfig({
@@ -283,6 +290,7 @@ export default {
           },
         }),
         projectRoot: firstRoot,
+        plugins: ['holo-plugin-broadcast-first'],
       } as Parameters<typeof configureBroadcastRuntime>[0] & { readonly projectRoot: string })
 
       await expect(broadcastRaw({
@@ -294,6 +302,7 @@ export default {
           project: 'first',
         },
       })
+      await loadBroadcastPluginDrivers(secondRoot, ['holo-plugin-broadcast-second'])
 
       resetBroadcastRuntime()
       configureBroadcastRuntime({
@@ -306,7 +315,9 @@ export default {
           },
         }),
         projectRoot: secondRoot,
+        plugins: ['holo-plugin-broadcast-second'],
       } as Parameters<typeof configureBroadcastRuntime>[0] & { readonly projectRoot: string })
+      await loadBroadcastPluginDrivers(secondRoot, ['holo-plugin-broadcast-second'])
 
       await expect(broadcastRaw({
         event: 'plugin.second',
@@ -317,6 +328,12 @@ export default {
           project: 'second',
         },
       })
+      registerBroadcastDriver('shared', {
+        async send(input, context) {
+          return { ...context, provider: { project: 'override' }, publishedChannels: input.channels }
+        },
+      }, { replace: true })
+      resetBroadcastRuntime()
     } finally {
       await rm(firstRoot, { recursive: true, force: true })
       await rm(secondRoot, { recursive: true, force: true })
@@ -384,6 +401,7 @@ export default {
           },
         }),
         projectRoot,
+        plugins: ['holo-plugin-broadcast-queued'],
       } as Parameters<typeof configureBroadcastRuntime>[0] & { readonly projectRoot: string })
 
       await expect(broadcastRuntimeInternals.runQueuedBroadcastDelivery({
@@ -478,8 +496,8 @@ export default {}
         publishedChannels: ['built-in.available'],
       })
       expect(warn).toHaveBeenCalledOnce()
-      await expect(loadBroadcastPluginDrivers(projectRoot)).rejects.toThrow('must export send()')
-      await expect(loadBroadcastPluginDrivers(projectRoot)).rejects.toThrow('must export send()')
+      await expect(loadBroadcastPluginDrivers(projectRoot, ['holo-plugin-broken-broadcast'])).rejects.toThrow('must export send()')
+      await expect(loadBroadcastPluginDrivers(projectRoot, ['holo-plugin-broken-broadcast'])).rejects.toThrow('must export send()')
     } finally {
       warn.mockRestore()
       process.chdir(previousCwd)
@@ -724,6 +742,52 @@ export default {}
       delay: 25,
     })
     expect(publish).not.toHaveBeenCalled()
+
+    const pending = broadcast(defineBroadcast({
+      name: 'orders.queued',
+      channels: [channel('orders')],
+      payload: { id: 1 },
+      queue: true,
+    })).using('null')
+    const [first, second] = await Promise.all([pending, pending])
+    expect(first).toBe(second)
+    expect(dispatchCalls).toHaveLength(2)
+    expect(dispatchCalls[1]).toMatchObject({
+      connection: undefined,
+      queue: undefined,
+      delay: undefined,
+    })
+  })
+
+  it('preserves a newer queue registration state while an older load settles', async () => {
+    let resolveModule: ((module: never) => void) | undefined
+    const queueModule = {
+      defineJob: (definition: unknown) => definition,
+      getRegisteredQueueJob: () => ({}),
+      registerQueueJob: vi.fn(),
+      dispatch: vi.fn(),
+    }
+    broadcastRuntimeInternals.setLoadQueueModuleForTesting(async () => await new Promise((resolve) => {
+      resolveModule = resolve as (module: never) => void
+    }))
+    const pending = broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered()
+    resetBroadcastRuntime()
+    resolveModule?.(queueModule as never)
+    await expect(pending).resolves.toBe(queueModule)
+  })
+
+  it('does not duplicate a queue job registered during module resolution', async () => {
+    const registeredJob = {}
+    const getRegisteredQueueJob = vi.fn(() => registeredJob)
+    const queueModule = {
+      defineJob: vi.fn(),
+      getRegisteredQueueJob,
+      registerQueueJob: vi.fn(),
+      dispatch: vi.fn(),
+    }
+    broadcastRuntimeInternals.setLoadQueueModuleForTesting(async () => queueModule as never)
+    await expect(broadcastRuntimeInternals.ensureBroadcastQueueJobRegistered()).resolves.toBe(queueModule)
+    expect(queueModule.registerQueueJob).not.toHaveBeenCalled()
   })
 
   it('supports custom drivers, built-in log/null drivers, and immutable inputs/results', async () => {

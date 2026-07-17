@@ -9,6 +9,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.mjs",
+      "default": "./dist/config.mjs"
     }
   },
   "main": "./dist/index.mjs",
@@ -23,25 +28,11 @@
     "test": "vitest --run"
   },
   "dependencies": {
+    "@holo-js/config": "catalog:",
+    "@holo-js/kernel": "catalog:",
     "inflection": "catalog:",
     "ulid": "catalog:",
     "uuid": "catalog:"
-  },
-  "peerDependencies": {
-    "@holo-js/db-mysql": "catalog:",
-    "@holo-js/db-postgres": "catalog:",
-    "@holo-js/db-sqlite": "catalog:"
-  },
-  "peerDependenciesMeta": {
-    "@holo-js/db-mysql": {
-      "optional": true
-    },
-    "@holo-js/db-postgres": {
-      "optional": true
-    },
-    "@holo-js/db-sqlite": {
-      "optional": true
-    }
   },
   "devDependencies": {
     "@holo-js/db-mysql": "catalog:",

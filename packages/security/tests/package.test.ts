@@ -2,6 +2,8 @@ import { access, mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { normalizeRedisConfig } from '@holo-js/kernel'
+import { composeRegisteredConfig } from '@holo-js/config/registry'
 import * as securityExports from '../src'
 import security, {
   clearRateLimit,
@@ -19,6 +21,7 @@ import security, {
   csrf,
   corsInternals,
   defaultRateLimitKey,
+  defineCorsConfig,
   defineRateLimiter,
   defineSecurityConfig,
   defineSecurityRuntimeBindings,
@@ -29,6 +32,8 @@ import security, {
   isSecureRequest,
   limit,
   memoryRateLimitDriverInternals,
+  normalizeCorsConfig,
+  normalizeSecurityConfig,
   protect,
   rateLimit,
   redisRateLimitDriverInternals,
@@ -124,6 +129,12 @@ afterEach(async () => {
 })
 
 describe('@holo-js/security package surface', () => {
+  it('composes security configuration with optional Redis values', () => {
+    const redis = normalizeRedisConfig()
+
+    expect(composeRegisteredConfig({ security: {} }, { redis }).security).toEqual(normalizeSecurityConfig({}, undefined))
+    expect(composeRegisteredConfig({ security: {}, redis: {} }, { redis }).security).toEqual(normalizeSecurityConfig({}, redis))
+  })
   it('keeps redis as an optional peer for non-redis installs', async () => {
     const packageJson = JSON.parse(await readFile(
       new URL('../package.json', import.meta.url),
@@ -249,8 +260,52 @@ describe('@holo-js/security package surface', () => {
     })
     expect(rateLimitError.retryAfterSeconds).toBe(42)
     expect(rateLimitError.snapshot?.limiter).toBe('login')
-    expect('normalizeSecurityConfig' in securityExports).toBe(false)
+    expect('normalizeSecurityConfig' in securityExports).toBe(true)
     expect('createSecurityRedisAdapter' in securityExports).toBe(false)
+  })
+
+  it('normalizes and validates feature-owned security configuration', () => {
+    expect(normalizeCorsConfig().maxAge).toBe(7200)
+    expect(Object.isFrozen(defineCorsConfig({ methods: ['get'] }))).toBe(true)
+    expect(normalizeCorsConfig({ origins: [' https://app.test '], methods: ['post'], maxAge: '0' })).toMatchObject({
+      origins: ['https://app.test'],
+      methods: ['POST'],
+      maxAge: 0,
+    })
+    expect(() => normalizeCorsConfig({ paths: [' '] })).toThrow('paths entry at index 0 must be a non-empty string')
+    expect(() => normalizeCorsConfig({ maxAge: 'invalid' })).toThrow('cors maxAge must be an integer')
+    expect(() => normalizeCorsConfig({ maxAge: ' ' })).toThrow('cors maxAge must be an integer')
+    expect(() => normalizeCorsConfig({ maxAge: -1 })).toThrow('cors maxAge must be greater than or equal to 0')
+
+    const key = () => 'key'
+    expect(normalizeSecurityConfig({
+      csrf: true,
+      rateLimit: {
+        driver: 'file',
+        file: { path: ' ./limits ' },
+        limiters: { login: { maxAttempts: '5', decaySeconds: 60, key } },
+      },
+    })).toMatchObject({
+      csrf: { enabled: true },
+      rateLimit: { driver: 'file', file: { path: './limits' }, limiters: { login: { maxAttempts: 5, key } } },
+    })
+    expect(() => normalizeSecurityConfig({ csrf: { except: [' '] } })).toThrow('csrf except entry at index 0 must be a non-empty string')
+    expect(() => normalizeSecurityConfig({ rateLimit: { driver: 'invalid' as never } })).toThrow('Unsupported rate limit driver "invalid"')
+    expect(() => normalizeSecurityConfig({ rateLimit: { driver: 'redis' } })).toThrow('without top-level Redis config')
+    expect(normalizeSecurityConfig({ rateLimit: { driver: 'redis' } }, normalizeRedisConfig()).rateLimit.redis).toMatchObject({
+      connection: 'default',
+      host: '127.0.0.1',
+    })
+    expect(normalizeSecurityConfig({ rateLimit: { driver: 'redis' } }, normalizeRedisConfig({
+      connections: { default: { url: 'redis://localhost:6379' } },
+    })).rateLimit.redis.url).toBe('redis://localhost:6379')
+    expect(normalizeSecurityConfig({ rateLimit: { driver: 'redis' } }, normalizeRedisConfig({
+      connections: { default: { clusters: [{ host: 'localhost' }] } },
+    })).rateLimit.redis.clusters).toHaveLength(1)
+    expect(() => normalizeSecurityConfig({ rateLimit: { limiters: { ' ': { maxAttempts: 1, decaySeconds: 1 } } } })).toThrow('Rate limiter name must be a non-empty string')
+    expect(() => normalizeSecurityConfig({ rateLimit: { limiters: { login: { maxAttempts: 0, decaySeconds: 1 } } } })).toThrow('maxAttempts must be greater than or equal to 1')
+    expect(() => normalizeSecurityConfig({ rateLimit: { limiters: { login: {} as never } } })).toThrow('maxAttempts must be greater than or equal to 1')
+    expect(() => normalizeSecurityConfig({ rateLimit: { limiters: { login: { maxAttempts: 1, decaySeconds: 1, key: 'invalid' as never } } } })).toThrow('key resolver must be a function')
   })
 
   it('keeps the redis adapter on its dedicated subpath export', async () => {

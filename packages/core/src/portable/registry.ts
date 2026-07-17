@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { DEFAULT_HOLO_PROJECT_PATHS } from '@holo-js/db'
+import { DEFAULT_HOLO_PROJECT_PATHS } from '@holo-js/kernel'
 
 export interface GeneratedModelRegistryEntry {
   readonly sourcePath: string

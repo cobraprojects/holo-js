@@ -5,8 +5,8 @@
 ## Configuration
 
 ```ts
-import { defineAuthConfig, env } from '@holo-js/config'
-
+import { defineAuthConfig } from '@holo-js/auth'
+import { env } from '@holo-js/config'
 export default defineAuthConfig({
   workos: {
     provider: env('AUTH_WORKOS_PROVIDER', 'dashboard'),
@@ -132,8 +132,8 @@ If no mapper is provided, Holo saves `email` and `name` by default. If your mapp
 The default Holo runtime stores WorkOS links in `auth_identities`. Most apps should keep that default:
 
 ```ts
-import { defineAuthConfig, env } from '@holo-js/config'
-
+import { defineAuthConfig } from '@holo-js/auth'
+import { env } from '@holo-js/config'
 export default defineAuthConfig({
   workos: {
     provider: env('AUTH_WORKOS_PROVIDER', 'dashboard'),
@@ -149,7 +149,8 @@ export default defineAuthConfig({
 Add `identityStore` only when WorkOS identities live outside the default `auth_identities` table:
 
 ```ts
-import { defineAuthConfig, env, type AuthHostedIdentityRecord, type AuthHostedIdentityStore } from '@holo-js/config'
+import { defineAuthConfig, type AuthHostedIdentityRecord, type AuthHostedIdentityStore } from '@holo-js/auth'
+import { env } from '@holo-js/config'
 import { DB } from '@holo-js/db'
 
 type ExternalIdentityRow = {

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createFailedSubmission, createSuccessfulSubmission, field, schema, ValidationException, type WebFileLike } from '../src'
 import { createFormClient as useForm, markClientSubmitControlFlowError, runWithBrowserFormElement } from '../src/internal/client'
+import { validationExceptionToFailure } from '../src/internal/validation-exception'
 import { clearSensitiveInputValues, sanitizeFlashedInput } from '../src/sensitiveInput'
 
 const browserGlobal = globalThis as typeof globalThis & { document?: Document }
@@ -1216,6 +1217,40 @@ describe('@holo-js/forms client', () => {
     }
   })
 
+  it('handles malformed and error-shaped SvelteKit action responses', async () => {
+    const login = schema({ email: field.string().required().email() })
+
+    globalThis.fetch = vi.fn(async (): Promise<Response> => createJsonResponse({
+      type: 'failure',
+      status: 422,
+      data: '{malformed',
+    }))
+    const malformedClient = useForm(login, {
+      action: '/login?/default',
+      initialValues: { email: 'ava@example.com' },
+    })
+    const malformedResult = await malformedClient.submit()
+    expect(malformedResult).toBeDefined()
+
+    globalThis.fetch = vi.fn(async (): Promise<Response> => createJsonResponse({
+      type: 'error',
+      error: {
+        ok: false,
+        status: 422,
+        valid: false,
+        values: { email: 'server@example.com' },
+        errors: { email: ['Action failed.'] },
+      },
+    }))
+    const errorClient = useForm(login, {
+      action: '/login?/default',
+      initialValues: { email: 'ava@example.com' },
+    })
+    const errorResult = await errorClient.submit()
+    expect('ok' in errorResult && !errorResult.ok).toBe(true)
+    expect(errorClient.errors.first('email')).toBe('Action failed.')
+  })
+
   it('preserves files from the active browser form during submit', async () => {
     const uploadSchema = schema({
       title: field.string().required(),
@@ -1514,6 +1549,108 @@ describe('@holo-js/forms client', () => {
     await expect(client.submit()).rejects.toBe(redirectError)
     expect(client.lastSubmission).toBeUndefined()
     expect(client.errors.first('_root')).toBeUndefined()
+  })
+
+  it('leaves primitive control-flow markers unchanged', () => {
+    expect(markClientSubmitControlFlowError(undefined)).toBeUndefined()
+    expect(markClientSubmitControlFlowError(null)).toBeNull()
+    expect(markClientSubmitControlFlowError(false)).toBe(false)
+    expect(markClientSubmitControlFlowError('redirect')).toBe('redirect')
+
+    const redirect = () => undefined
+    expect(markClientSubmitControlFlowError(redirect)).toBe(redirect)
+  })
+
+  it('normalizes validation exceptions and nested form failures with retry metadata', () => {
+    const exception = ValidationException.withMessages({ email: ['Invalid email.'] })
+    expect(validationExceptionToFailure(exception, { email: 'fallback@example.com' })).toMatchObject({
+      status: 422,
+      values: { email: 'fallback@example.com' },
+      errors: { email: ['Invalid email.'] },
+    })
+
+    Object.defineProperty(exception, 'toJSON', {
+      value: () => ({
+        ok: false,
+        status: 429,
+        valid: false,
+        message: 'Try later.',
+        bag: 'default',
+        values: { email: 'submitted@example.com' },
+        errors: { _root: ['Try later.'] },
+        retryAfterSeconds: 30,
+        retryAt: '2026-07-12T12:00:00.000Z',
+      }),
+    })
+    expect(validationExceptionToFailure(exception)).toMatchObject({
+      values: { email: 'submitted@example.com' },
+      retryAfterSeconds: 30,
+      retryAt: '2026-07-12T12:00:00.000Z',
+    })
+
+    expect(validationExceptionToFailure({
+      response: {
+        data: {
+          ok: false,
+          status: 429,
+          valid: false,
+          values: {},
+          errors: { _root: ['Try later.'] },
+          retryAfterSeconds: 30,
+          retryAt: '2026-07-12T12:00:00.000Z',
+        },
+      },
+    }, { email: 'fallback@example.com' })).toMatchObject({
+      status: 429,
+      values: { email: 'fallback@example.com' },
+      retryAfterSeconds: 30,
+      retryAt: '2026-07-12T12:00:00.000Z',
+    })
+  })
+
+  it('normalizes unmarked primitive and function submission failures', async () => {
+    const login = schema({ email: field.string().required().email() })
+    const primitiveClient = useForm(login, {
+      initialValues: { email: 'ava@example.com' },
+      submitter() {
+        throw false
+      },
+    })
+    await expect(primitiveClient.submit()).resolves.toMatchObject({ ok: false, status: 500 })
+
+    const functionClient = useForm(login, {
+      initialValues: { email: 'ava@example.com' },
+      submitter() {
+        throw (() => undefined)
+      },
+    })
+    await expect(functionClient.submit()).resolves.toMatchObject({ ok: false, status: 500 })
+  })
+
+  it('normalizes rate-limited failure metadata and empty submitter results', async () => {
+    const login = schema({ email: field.string().required().email() })
+    const rateLimitedClient = useForm(login, {
+      initialValues: { email: 'ava@example.com' },
+      submitter: () => ({
+        ok: false,
+        status: 429,
+        valid: false,
+        values: { email: 'ava@example.com' },
+        errors: { _root: ['Try later.'] },
+        retryAfter: 30,
+        retryAt: '2026-07-12T12:00:00.000Z',
+      }),
+    })
+    await expect(rateLimitedClient.submit()).resolves.toMatchObject({
+      retryAfter: 30,
+      retryAt: '2026-07-12T12:00:00.000Z',
+    })
+
+    const emptyClient = useForm(login, {
+      initialValues: { email: 'ava@example.com' },
+      submitter: () => undefined,
+    })
+    await expect(emptyClient.submit()).resolves.toMatchObject({ ok: true, status: 204 })
   })
 
   it('normalizes validation digests thrown across server action transports', async () => {

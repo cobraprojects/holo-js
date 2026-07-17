@@ -1,4 +1,4 @@
-import type { NormalizedHoloCorsConfig } from '@holo-js/config'
+import type { NormalizedHoloCorsConfig } from './config'
 import type { SecurityCorsFacade } from './contracts'
 import { getSecurityRuntime } from './runtime'
 

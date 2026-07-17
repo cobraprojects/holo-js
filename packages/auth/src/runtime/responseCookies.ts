@@ -3,7 +3,7 @@ import type {
   NormalizedAuthWorkosProviderConfig,
   NormalizedHoloAuthClerkConfig,
   NormalizedHoloAuthWorkosConfig,
-} from '@holo-js/config'
+} from '../config'
 import {
   type CookieOptions,
   type CookieSerializationOptions,

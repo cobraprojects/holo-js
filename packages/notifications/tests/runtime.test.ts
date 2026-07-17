@@ -441,6 +441,7 @@ export default {}
 
       configureNotificationsRuntime({
         projectRoot: ` ${projectRoot} `,
+        plugins: ['holo-plugin-broken-notifications'],
       } as Parameters<typeof configureNotificationsRuntime>[0] & { readonly projectRoot: string })
       registerNotificationChannel('slack', {
         send,
@@ -469,8 +470,8 @@ export default {}
         ],
       })
       expect(send).toHaveBeenCalledOnce()
-      await expect(loadNotificationPluginChannels(projectRoot)).rejects.toThrow('must export send()')
-      await expect(loadNotificationPluginChannels(projectRoot)).rejects.toThrow('must export send()')
+      await expect(loadNotificationPluginChannels(projectRoot, ['holo-plugin-broken-notifications'])).rejects.toThrow('must export send()')
+      await expect(loadNotificationPluginChannels(projectRoot, ['holo-plugin-broken-notifications'])).rejects.toThrow('must export send()')
     } finally {
       process.chdir(previousCwd)
       await rm(projectRoot, { recursive: true, force: true })
@@ -529,6 +530,7 @@ export default {
 
       configureNotificationsRuntime({
         projectRoot: ` ${projectRoot} `,
+        plugins: ['holo-plugin-notifications'],
       } as Parameters<typeof configureNotificationsRuntime>[0] & { readonly projectRoot: string })
 
       const result = await notifyUsing()
@@ -562,8 +564,8 @@ export default {
           },
         }),
       ])
-      await expect(loadNotificationPluginChannels(projectRoot)).resolves.toBeUndefined()
-      await expect(loadNotificationPluginChannels(projectRoot)).resolves.toBeUndefined()
+      await expect(loadNotificationPluginChannels(projectRoot, ['holo-plugin-notifications'])).resolves.toBeUndefined()
+      await expect(loadNotificationPluginChannels(projectRoot, ['holo-plugin-notifications'])).resolves.toBeUndefined()
     } finally {
       process.chdir(previousCwd)
       await rm(projectRoot, { recursive: true, force: true })
@@ -580,6 +582,7 @@ export default {
 
       configureNotificationsRuntime({
         projectRoot: firstRoot,
+        plugins: ['holo-plugin-notifications-first'],
       } as Parameters<typeof configureNotificationsRuntime>[0] & { readonly projectRoot: string })
 
       const first = await notifyUsing()
@@ -605,6 +608,7 @@ export default {
       resetNotificationsRuntime()
       configureNotificationsRuntime({
         projectRoot: secondRoot,
+        plugins: ['holo-plugin-notifications-second'],
       } as Parameters<typeof configureNotificationsRuntime>[0] & { readonly projectRoot: string })
 
       const second = await notifyUsing()
@@ -684,6 +688,7 @@ export default {
 
       configureNotificationsRuntime({
         projectRoot,
+        plugins: ['holo-plugin-notifications-queued'],
       } as Parameters<typeof configureNotificationsRuntime>[0] & { readonly projectRoot: string })
 
       await expect(notificationsRuntimeInternals.runQueuedNotificationDelivery({
@@ -1271,24 +1276,12 @@ export default {
     const afterCommitCallbacks: Array<() => Promise<void>> = []
 
     configureNotificationsRuntime({
+      deferAfterCommit(callback) {
+        afterCommitCallbacks.push(callback)
+        return true
+      },
       mailer,
     })
-    notificationsRuntimeInternals.setDbModuleLoader(async () => ({
-      connectionAsyncContext: {
-        getActive() {
-          return {
-            connection: {
-              getScope() {
-                return { kind: 'transaction' }
-              },
-              afterCommit(callback: () => Promise<void>) {
-                afterCommitCallbacks.push(callback)
-              },
-            },
-          }
-        },
-      },
-    }))
 
     const result = await notify({
       email: 'ava@example.com',
@@ -1335,24 +1328,11 @@ export default {
     }
 
     configureNotificationsRuntime({
+      deferAfterCommit() {
+        return false
+      },
       mailer,
     })
-    notificationsRuntimeInternals.setDbModuleLoader(async () => ({
-      connectionAsyncContext: {
-        getActive() {
-          return {
-            connection: {
-              getScope() {
-                return { kind: 'root' }
-              },
-              afterCommit() {
-                throw new Error('should not be called')
-              },
-            },
-          }
-        },
-      },
-    }))
 
     const result = await notify({
       email: 'ava@example.com',
@@ -1744,20 +1724,6 @@ export default {
     })
     await expect(notificationsRuntimeInternals.loadQueueModule()).rejects.toBe(customQueueError)
     notificationsRuntimeInternals.setQueueModuleLoader(undefined)
-
-    const dbMissing = new Error('db missing') as Error & { code?: string }
-    dbMissing.code = 'ERR_MODULE_NOT_FOUND'
-    notificationsRuntimeInternals.setDbModuleLoader(async () => {
-      throw dbMissing
-    })
-    await expect(notificationsRuntimeInternals.loadDbModule()).resolves.toBeNull()
-
-    const dbFailure = new Error('db failure')
-    notificationsRuntimeInternals.setDbModuleLoader(async () => {
-      throw dbFailure
-    })
-    await expect(notificationsRuntimeInternals.loadDbModule()).rejects.toBe(dbFailure)
-    notificationsRuntimeInternals.setDbModuleLoader(undefined)
 
     expect(() => notificationsRuntimeInternals.normalizeOptionalString('   ', 'label')).toThrow('non-empty string')
     expect(() => notificationsRuntimeInternals.normalizeDelayValue(-1, 'delay')).toThrow('greater than or equal to 0')
@@ -2468,13 +2434,11 @@ export default {
       notifiable: {},
     }, 'email')).toBeUndefined()
 
-    notificationsRuntimeInternals.setDbModuleLoader(async () => ({
-      connectionAsyncContext: {
-        getActive() {
-          return undefined
-        },
+    configureNotificationsRuntime({
+      deferAfterCommit() {
+        return false
       },
-    }))
+    })
     await expect(notificationsRuntimeInternals.deferDispatchUntilCommit({
       target: {
         kind: 'notifiable',

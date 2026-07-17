@@ -13,6 +13,7 @@ import {
 import { configureConfigRuntime, resolveEnvironmentFileOrder } from '@holo-js/config'
 import type {
   DotPath,
+  HoloConfigValues,
   LoadedHoloConfig,
   HoloConfigMap,
   ValueAtPath,
@@ -48,15 +49,15 @@ export interface HoloAdapterProjectAccessors<
   getProject(): Promise<HoloAdapterProject<TCustom>>
   getSession(): Promise<HoloSessionRuntimeBinding | undefined>
   getAuth(): Promise<HoloAuthRuntimeBinding | undefined>
-  useConfig<TKey extends Extract<keyof LoadedHoloConfig<TCustom>['all'], string>>(
+  useConfig<TKey extends Extract<keyof HoloConfigValues<TCustom>, string>>(
     key: TKey,
-  ): Promise<LoadedHoloConfig<TCustom>['all'][TKey]>
-  useConfig<TPath extends DotPath<LoadedHoloConfig<TCustom>['all']>>(
+  ): Promise<HoloConfigValues<TCustom>[TKey]>
+  useConfig<TPath extends DotPath<HoloConfigValues<TCustom>>>(
     path: TPath,
-  ): Promise<ValueAtPath<LoadedHoloConfig<TCustom>['all'], TPath>>
-  config<TPath extends DotPath<LoadedHoloConfig<TCustom>['all']>>(
+  ): Promise<ValueAtPath<HoloConfigValues<TCustom>, TPath>>
+  config<TPath extends DotPath<HoloConfigValues<TCustom>>>(
     path: TPath,
-  ): Promise<ValueAtPath<LoadedHoloConfig<TCustom>['all'], TPath>>
+  ): Promise<ValueAtPath<HoloConfigValues<TCustom>, TPath>>
 }
 
 export interface HoloFrameworkAdapterState<
@@ -200,9 +201,9 @@ export function createHoloProjectAccessors<
       return project.runtime.auth
     },
     useConfig,
-    async config<TPath extends DotPath<LoadedHoloConfig<TCustom>['all']>>(
+    async config<TPath extends DotPath<HoloConfigValues<TCustom>>>(
       path: TPath,
-    ): Promise<ValueAtPath<LoadedHoloConfig<TCustom>['all'], TPath>> {
+    ): Promise<ValueAtPath<HoloConfigValues<TCustom>, TPath>> {
       const project = await resolveProject()
       return project.runtime.config(path)
     },

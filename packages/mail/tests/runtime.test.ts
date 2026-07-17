@@ -2412,8 +2412,8 @@ export default {}
         driver: 'log',
         subject: 'Built-in log',
       }))
-      await expect(loadMailPluginDrivers(projectRoot)).rejects.toThrow('must export send()')
-      await expect(loadMailPluginDrivers(projectRoot)).rejects.toThrow('must export send()')
+      await expect(loadMailPluginDrivers(projectRoot, ['holo-plugin-broken-mail'])).rejects.toThrow('must export send()')
+      await expect(loadMailPluginDrivers(projectRoot, ['holo-plugin-broken-mail'])).rejects.toThrow('must export send()')
     } finally {
       warn.mockRestore()
       process.chdir(previousCwd)
@@ -2473,9 +2473,9 @@ export default {
 `)
 
       process.chdir(projectRoot)
-      await loadMailPluginDrivers(projectRoot)
+      await loadMailPluginDrivers(projectRoot, ['holo-plugin-mail'])
       expect(getRegisteredMailDriver('plugin')?.driver.send).toEqual(expect.any(Function))
-      await expect(loadMailPluginDrivers(projectRoot)).resolves.toBeUndefined()
+      await expect(loadMailPluginDrivers(projectRoot, ['holo-plugin-mail'])).resolves.toBeUndefined()
     } finally {
       process.chdir(previousCwd)
       await rm(projectRoot, { recursive: true, force: true })
@@ -2497,6 +2497,7 @@ export default {
 
       configureMailRuntime({
         projectRoot: firstRoot,
+        plugins: ['holo-plugin-mail-first'],
         config: {
           ...mailRuntimeInternals.getResolvedConfig(),
           default: 'plugin',
@@ -2528,6 +2529,7 @@ export default {
       resetMailRuntime()
       configureMailRuntime({
         projectRoot: secondRoot,
+        plugins: ['holo-plugin-mail-second'],
         config: {
           ...mailRuntimeInternals.getResolvedConfig(),
           default: 'plugin',
@@ -2614,6 +2616,7 @@ export default {
 
       configureMailRuntime({
         projectRoot: ` ${projectRoot} `,
+        plugins: ['holo-plugin-mail-queued'],
       } as Parameters<typeof configureMailRuntime>[0] & { readonly projectRoot: string })
       await expect(mailRuntimeInternals.runQueuedMailDelivery({
         messageId: 'queued-plugin-message',

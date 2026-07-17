@@ -722,13 +722,9 @@ function renderSveltePage(projectName: string): string {
 
 export function renderSvelteHoloHelper(): string {
   return [
-    'import { dirname, resolve } from \'node:path\'',
-    'import { fileURLToPath } from \'node:url\'',
     'import { createSvelteKitHoloHelpers } from \'@holo-js/adapter-sveltekit\'',
     '',
-    'const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), \'../../..\')',
-    '',
-    'export const holo = createSvelteKitHoloHelpers({ projectRoot })',
+    'export const holo = createSvelteKitHoloHelpers()',
     '',
   ].join('\n')
 }

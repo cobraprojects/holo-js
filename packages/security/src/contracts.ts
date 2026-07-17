@@ -5,14 +5,14 @@ import {
   type HoloSecurityConfig,
   type NormalizedHoloCorsConfig,
   type NormalizedHoloSecurityConfig,
-} from '@holo-js/config'
+} from './config'
 import type {
   SecurityLimiterConfig,
   SecurityRateLimitFileConfig,
   SecurityRateLimitKeyResolver,
   SecurityRateLimitMemoryConfig,
   SecurityRateLimitRedisConfig,
-} from '@holo-js/config'
+} from './config'
 
 export type {
   HoloSecurityConfig,
@@ -31,7 +31,7 @@ export type {
   SecurityRateLimitKeyResolver,
   SecurityRateLimitMemoryConfig,
   SecurityRateLimitRedisConfig,
-} from '@holo-js/config'
+} from './config'
 
 export interface SecurityRuntimeBindings {
   readonly config: HoloSecurityConfig | NormalizedHoloSecurityConfig

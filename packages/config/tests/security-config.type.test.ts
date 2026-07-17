@@ -1,9 +1,6 @@
 import { describe, it } from 'vitest'
-import {
-  defineCorsConfig,
-  defineSecurityConfig,
-  type HoloConfigRegistry,
-} from '../src'
+import type { HoloConfigRegistry } from '../src'
+import { defineCorsConfig, defineSecurityConfig } from '@holo-js/security'
 import { createConfigAccessorFixture } from './support/configAccessors'
 
 describe('@holo-js/config security typing', () => {

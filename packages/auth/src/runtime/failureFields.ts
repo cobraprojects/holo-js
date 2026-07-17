@@ -62,7 +62,7 @@ export function createPasswordConfirmationMismatchFailure<
     code,
     message,
     422,
-    createFieldErrors(fields.length > 0 ? fields : [resolveRequiredFieldName(input, ['password'])], message),
+    createFieldErrors(fields, message),
   )
 }
 

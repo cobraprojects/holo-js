@@ -9,6 +9,11 @@ import { configureNotificationsRuntime } from '@holo-js/notifications'
 import { createHolo, holoRuntimeInternals, initializeHolo, resetHoloRuntime } from '../src'
 
 const configEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
+const authEntry = JSON.stringify(resolve(import.meta.dirname, '../../auth/src/index.ts'))
+const databaseEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/index.ts'))
+const mailEntry = JSON.stringify(resolve(import.meta.dirname, '../../mail/src/index.ts'))
+const notificationsEntry = JSON.stringify(resolve(import.meta.dirname, '../../notifications/src/index.ts'))
+const sessionEntry = JSON.stringify(resolve(import.meta.dirname, '../../session/src/index.ts'))
 const securityEntry = JSON.stringify(resolve(import.meta.dirname, '../../security/src/index.ts'))
 const tempDirs: string[] = []
 type VerificationTokenLike = {
@@ -94,7 +99,7 @@ export default defineAppConfig({
 })
 `, 'utf8')
   await writeFile(join(root, 'config/database.ts'), `
-import { defineDatabaseConfig } from ${configEntry}
+import { defineDatabaseConfig } from ${databaseEntry}
 
 export default defineDatabaseConfig({
   defaultConnection: 'main',
@@ -109,7 +114,7 @@ export default defineDatabaseConfig({
 
   if (options.session !== false && (options.session || options.auth)) {
     await writeFile(join(root, 'config/session.ts'), `
-import { defineSessionConfig } from ${configEntry}
+import { defineSessionConfig } from ${sessionEntry}
 
 export default defineSessionConfig({
   driver: '${options.session === 'database' ? 'database' : 'file'}',
@@ -131,7 +136,7 @@ export default defineSessionConfig({
 
   if (options.auth) {
     await writeFile(join(root, 'config/auth.ts'), `
-import { defineAuthConfig, type AuthHostedIdentityStore } from ${configEntry}
+import { defineAuthConfig, type AuthHostedIdentityStore } from ${authEntry}
 
 const hostedIdentityStore = {
   async findByProviderUserId() {
@@ -215,7 +220,7 @@ export default {
 
   if (options.notifications) {
     await writeFile(join(root, 'config/notifications.ts'), `
-import { defineNotificationsConfig } from ${configEntry}
+import { defineNotificationsConfig } from ${notificationsEntry}
 
 export default defineNotificationsConfig({
   table: 'notifications',
@@ -225,7 +230,7 @@ export default defineNotificationsConfig({
 
   if (options.mail) {
     await writeFile(join(root, 'config/mail.ts'), `
-import { defineMailConfig } from ${configEntry}
+import { defineMailConfig } from ${mailEntry}
 
 export default defineMailConfig({
   default: 'fake',
@@ -870,7 +875,7 @@ export default {
       auth: true,
     })
     await writeFile(join(root, 'config/auth.ts'), `
-import { defineAuthConfig } from ${configEntry}
+import { defineAuthConfig } from ${authEntry}
 
 export default defineAuthConfig({
   defaults: {
@@ -1367,7 +1372,7 @@ export default {
       session: 'database',
     })
     await writeFile(join(root, 'config/session.ts'), `
-import { defineSessionConfig } from ${configEntry}
+import { defineSessionConfig } from ${sessionEntry}
 
 export default defineSessionConfig({
   driver: 'database',
@@ -1456,7 +1461,7 @@ export default defineSessionConfig({
       session: 'file',
     })
     await writeFile(join(root, 'config/session.ts'), `
-import { defineSessionConfig } from ${configEntry}
+import { defineSessionConfig } from ${sessionEntry}
 
 export default defineSessionConfig({
   driver: 'file',
@@ -1482,7 +1487,7 @@ export default defineSessionConfig({
       session: 'file',
     })
     await writeFile(join(invalidRoot, 'config/session.ts'), `
-import { defineSessionConfig } from ${configEntry}
+import { defineSessionConfig } from ${sessionEntry}
 
 export default defineSessionConfig({
   driver: 'redis',
@@ -1499,7 +1504,7 @@ export default defineSessionConfig({
     await expect(createHolo(invalidRoot, {
       processEnv: process.env,
       preferCache: false,
-    })).rejects.toThrow('references shared Redis connection "cache" but no top-level redis config is loaded')
+    })).rejects.toThrow('Redis store "redis" references shared connection "cache" without top-level Redis config')
   })
 
   it('loads pending-schema auth model modules without treating them as missing', async () => {
@@ -2837,7 +2842,7 @@ export default {
       session: 'database',
     })
     await writeFile(join(root, 'config/auth.ts'), `
-import { defineAuthConfig } from ${configEntry}
+import { defineAuthConfig } from ${authEntry}
 
 export default defineAuthConfig({
   defaults: {
@@ -2964,7 +2969,7 @@ export default {
       auth: true,
     })
     await writeFile(join(root, 'config/auth.ts'), `
-import { defineAuthConfig } from ${configEntry}
+import { defineAuthConfig } from ${authEntry}
 
 export default defineAuthConfig({
   defaults: {
@@ -3847,7 +3852,7 @@ export default {
       auth: true,
     })
     await writeFile(join(missingModelRoot, 'config/auth.ts'), `
-import { defineAuthConfig } from ${configEntry}
+import { defineAuthConfig } from ${authEntry}
 
 export default defineAuthConfig({
   guards: {

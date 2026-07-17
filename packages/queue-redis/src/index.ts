@@ -7,90 +7,31 @@ import {
 } from 'bullmq'
 import Redis from 'ioredis'
 
-export type QueueJsonValue
-  = null
-  | string
-  | number
-  | boolean
-  | readonly QueueJsonValue[]
-  | { readonly [key: string]: QueueJsonValue }
+import type {
+  NormalizedQueueRedisConnectionConfig,
+  QueueAsyncDriver,
+  QueueDriverDispatchResult,
+  QueueDriverFactory as QueueDriverFactoryContract,
+  QueueDriverFactoryContext,
+  QueueJobEnvelope,
+  QueueJsonValue,
+  QueueReleaseOptions,
+  QueueReservedJob,
+} from '@holo-js/queue'
 
-export interface QueueJobEnvelope<TPayload extends QueueJsonValue = QueueJsonValue> {
-  readonly id: string
-  readonly name: string
-  readonly connection: string
-  readonly queue: string
-  readonly payload: TPayload
-  readonly attempts: number
-  readonly maxAttempts: number
-  readonly createdAt: number
-  readonly availableAt?: number
-}
+export type {
+  NormalizedQueueRedisConnectionConfig,
+  QueueAsyncDriver,
+  QueueDriverDispatchResult,
+  QueueDriverFactoryContext,
+  QueueJobEnvelope,
+  QueueJsonValue,
+  QueueReleaseOptions,
+  QueueReservedJob,
+} from '@holo-js/queue'
 
-export interface QueueDriverDispatchResult<TResult = unknown> {
-  readonly jobId: string
-  readonly synchronous: boolean
-  readonly result?: TResult
-}
-
-export interface QueueReservedJob<TPayload extends QueueJsonValue = QueueJsonValue> {
-  readonly reservationId: string
-  readonly reservedAt: number
-  readonly envelope: QueueJobEnvelope<TPayload>
-}
-
-export interface QueueReleaseOptions {
-  readonly delaySeconds?: number
-}
-
-export interface QueueDriverFactoryContext {
-  execute<TPayload extends QueueJsonValue = QueueJsonValue, TResult = unknown>(job: QueueJobEnvelope<TPayload>): Promise<TResult>
-}
-
-export interface QueueAsyncDriver {
-  readonly name: string
-  readonly driver: 'redis'
-  readonly mode: 'async'
-  dispatch<TPayload extends QueueJsonValue = QueueJsonValue, TResult = unknown>(
-    job: QueueJobEnvelope<TPayload>,
-  ): Promise<QueueDriverDispatchResult<TResult>>
-  reserve<TPayload extends QueueJsonValue = QueueJsonValue>(input: {
-    readonly queueNames?: readonly string[]
-    readonly workerId?: string
-    readonly timeout?: number
-  }): Promise<QueueReservedJob<TPayload> | null>
-  acknowledge(job: QueueReservedJob): Promise<void>
-  release(job: QueueReservedJob, options?: QueueReleaseOptions): Promise<void>
-  delete(job: QueueReservedJob): Promise<void>
-  clear(input?: { readonly queueNames?: readonly string[] }): Promise<number>
-  close(): Promise<void>
-}
-
-export interface NormalizedQueueRedisConnectionConfig {
-  readonly name: string
-  readonly driver: 'redis'
-  readonly connection: string
-  readonly queue: string
-  readonly retryAfter: number
-  readonly blockFor: number
-  readonly redis: {
-    readonly url?: string
-    readonly clusters?: readonly {
-      readonly url?: string
-      readonly host: string
-      readonly port: number
-    }[]
-    readonly host: string
-    readonly port: number
-    readonly password?: string
-    readonly username?: string
-    readonly db: number
-  }
-}
-
-export interface QueueDriverFactory<TConfig extends NormalizedQueueRedisConnectionConfig = NormalizedQueueRedisConnectionConfig> {
-  readonly driver: TConfig['driver']
-  create(connection: TConfig, context: QueueDriverFactoryContext): QueueAsyncDriver
+export interface QueueDriverFactory extends QueueDriverFactoryContract<NormalizedQueueRedisConnectionConfig> {
+  create(connection: NormalizedQueueRedisConnectionConfig, context: QueueDriverFactoryContext): QueueAsyncDriver
 }
 
 type RedisQueuedEnvelope = QueueJobEnvelope<QueueJsonValue>
@@ -652,7 +593,7 @@ export class RedisQueueDriver implements QueueAsyncDriver {
   }
 }
 
-export const redisQueueDriverFactory: QueueDriverFactory<NormalizedQueueRedisConnectionConfig> = {
+export const redisQueueDriverFactory: QueueDriverFactory = {
   driver: 'redis',
   create(connection, context) {
     return new RedisQueueDriver(connection, context)

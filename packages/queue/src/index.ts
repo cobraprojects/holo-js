@@ -89,12 +89,6 @@ export {
   unregisterQueueJob,
 } from './registry'
 export {
-  redisQueueDriverFactory,
-  redisQueueDriverInternals,
-  RedisQueueDriver,
-  RedisQueueDriverError,
-} from './drivers/redis'
-export {
   syncQueueDriverFactory,
   syncQueueDriverInternals,
 } from './drivers/sync'

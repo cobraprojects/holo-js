@@ -90,7 +90,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     await writeFile(join(tempRoot, 'config/database.ts'), 'export default {}\n', 'utf8')
     await writeSchemaPlaceholder(tempRoot)
     await writeFile(join(tempRoot, 'config/broadcast.ts'), [
-      'import { defineBroadcastConfig } from \'@holo-js/config\'',
+      'import { defineBroadcastConfig } from \'@holo-js/broadcast\'',
       '',
       'export default defineBroadcastConfig({',
       '  default: \'null\',',
@@ -379,7 +379,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     await mkdir(join(tempRoot, 'config'), { recursive: true })
     await mkdir(realtimeRoot, { recursive: true })
     await writeFile(join(tempRoot, 'config/database.ts'), [
-      'import { defineDatabaseConfig } from \'@holo-js/config\'',
+      'import { defineDatabaseConfig } from \'@holo-js/db\'',
       '',
       'export default defineDatabaseConfig({',
       '  defaultConnection: \'default\',',
@@ -511,7 +511,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     await writeFile(join(tempRoot, 'config/database.ts'), 'export default {}\n', 'utf8')
     await writeSchemaPlaceholder(tempRoot)
     await writeFile(join(tempRoot, 'config/broadcast.ts'), [
-      'import { defineBroadcastConfig } from \'@holo-js/config\'',
+      'import { defineBroadcastConfig } from \'@holo-js/broadcast\'',
       '',
       'export default defineBroadcastConfig({',
       '  default: \'null\',',
@@ -642,7 +642,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     await writeFile(join(tempRoot, 'config/database.ts'), 'export default {}\n', 'utf8')
     await writeSchemaPlaceholder(tempRoot)
     await writeFile(join(tempRoot, 'config/broadcast.ts'), [
-      'import { defineBroadcastConfig } from \'@holo-js/config\'',
+      'import { defineBroadcastConfig } from \'@holo-js/broadcast\'',
       '',
       'export default defineBroadcastConfig({',
       '  default: \'null\',',
@@ -725,7 +725,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     await writeFile(join(tempRoot, 'config/database.ts'), 'export default {}\n', 'utf8')
     await writeSchemaPlaceholder(tempRoot)
     await writeFile(join(tempRoot, 'config/broadcast.ts'), [
-      'import { defineBroadcastConfig } from \'@holo-js/config\'',
+      'import { defineBroadcastConfig } from \'@holo-js/broadcast\'',
       '',
       'export default defineBroadcastConfig({',
       '  default: \'null\',',
@@ -856,7 +856,7 @@ describe('@holo-js/cli broadcast worker command', () => {
     await writeFile(join(tempRoot, 'config/database.ts'), 'export default {}\n', 'utf8')
     await writeSchemaPlaceholder(tempRoot)
     await writeFile(join(tempRoot, 'config/broadcast.ts'), [
-      'import { defineBroadcastConfig } from \'@holo-js/config\'',
+      'import { defineBroadcastConfig } from \'@holo-js/broadcast\'',
       '',
       'export default defineBroadcastConfig({',
       '  default: \'null\',',

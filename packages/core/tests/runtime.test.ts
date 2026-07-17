@@ -4,7 +4,12 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { config, loadConfigDirectory, useConfig } from '@holo-js/config'
-import { createSchemaService, DB, getDatabaseQueryCacheBridge } from '@holo-js/db'
+import {
+  createSchemaService,
+  DB,
+  getDatabaseDriverFactory,
+  getDatabaseQueryCacheBridge,
+} from '@holo-js/db'
 import {
   broadcastRaw,
   configureBroadcastRuntime,
@@ -39,6 +44,8 @@ import {
   queueRuntimeInternals,
   registerQueueJob,
   resetQueueRegistry,
+  holoQueueDefaults,
+  normalizeQueueConfig,
 } from '@holo-js/queue'
 import {
   configureSecurityRuntime,
@@ -64,8 +71,17 @@ import {
   holoRuntimeInternals,
 } from '../src/portable'
 import { useStorage } from '@holo-js/storage/runtime'
+import { holoStorageDefaults, normalizeStorageConfig } from '@holo-js/storage'
 
 const packageEntry = JSON.stringify(resolve(import.meta.dirname, '../../config/src/index.ts'))
+const authPackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../auth/src/index.ts'))
+const broadcastPackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../broadcast/src/index.ts'))
+const cachePackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../cache/src/index.ts'))
+const databasePackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../db/src/index.ts'))
+const mailPackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../mail/src/index.ts'))
+const queuePackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../queue/src/index.ts'))
+const sessionPackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../session/src/index.ts'))
+const kernelPackageEntry = JSON.stringify(resolve(import.meta.dirname, '../../kernel/src/index.ts'))
 const tempDirs: string[] = []
 
 function getCacheRuntimeBindingsForTest(): unknown {
@@ -135,7 +151,7 @@ export default defineAppConfig({
 })
 `, 'utf8')
   await writeFile(join(root, 'config/database.ts'), `
-import { defineDatabaseConfig } from ${packageEntry}
+import { defineDatabaseConfig } from ${databasePackageEntry}
 
 export default defineDatabaseConfig({
   defaultConnection: 'main',
@@ -164,7 +180,7 @@ export default defineConfig({
 }
 
 async function writeCacheConfig(root: string, contents = `
-import { defineCacheConfig } from ${packageEntry}
+import { defineCacheConfig } from ${cachePackageEntry}
 
 export default defineCacheConfig({
   default: 'memory',
@@ -211,7 +227,7 @@ export default defineNotificationsConfig({
 
 async function writeBroadcastConfig(root: string, contents?: string): Promise<void> {
   await writeFile(join(root, 'config/broadcast.ts'), contents ?? `
-import { defineBroadcastConfig } from ${packageEntry}
+import { defineBroadcastConfig } from ${broadcastPackageEntry}
 
 export default defineBroadcastConfig({
   default: 'log',
@@ -226,7 +242,7 @@ export default defineBroadcastConfig({
 
 async function writeMailConfig(root: string, contents?: string): Promise<void> {
   await writeFile(join(root, 'config/mail.ts'), contents ?? `
-import { defineMailConfig } from ${packageEntry}
+import { defineMailConfig } from ${mailPackageEntry}
 
 export default defineMailConfig({
   default: 'fake',
@@ -266,7 +282,7 @@ export default defineSecurityConfig({
 
 async function writeRedisConfig(root: string, contents?: string): Promise<void> {
   await writeFile(join(root, 'config/redis.ts'), contents ?? `
-import { defineRedisConfig } from ${packageEntry}
+import { defineRedisConfig } from ${kernelPackageEntry}
 
 export default defineRedisConfig({
   default: 'default',
@@ -283,7 +299,7 @@ export default defineRedisConfig({
 
 async function writeAuthConfig(root: string): Promise<void> {
   await writeFile(join(root, 'config/auth.ts'), `
-import { defineAuthConfig } from ${packageEntry}
+import { defineAuthConfig } from ${authPackageEntry}
 
 export default defineAuthConfig({
   defaults: {
@@ -304,7 +320,7 @@ export default defineAuthConfig({
 })
 `, 'utf8')
   await writeFile(join(root, 'config/session.ts'), `
-import { defineSessionConfig } from ${packageEntry}
+import { defineSessionConfig } from ${sessionPackageEntry}
 
 export default defineSessionConfig({
   driver: 'file',
@@ -1388,7 +1404,7 @@ export default {
     const partialRoot = await createProject()
     await writeBaseConfig(partialRoot)
     await writeQueueConfig(partialRoot, `
-import { defineQueueConfig } from ${packageEntry}
+import { defineQueueConfig } from ${queuePackageEntry}
 
 export default defineQueueConfig({
   failed: false,
@@ -1410,7 +1426,7 @@ export default defineQueueConfig({
     const databaseRoot = await createProject()
     await writeBaseConfig(databaseRoot)
     await writeQueueConfig(databaseRoot, `
-import { defineQueueConfig } from ${packageEntry}
+import { defineQueueConfig } from ${queuePackageEntry}
 
 export default defineQueueConfig({
   default: 'database',
@@ -1509,7 +1525,7 @@ export default defineQueueConfig({
     const root = await createProject()
     await writeBaseConfig(root)
     await writeFile(join(root, 'config/database.ts'), `
-import { defineDatabaseConfig } from ${packageEntry}
+import { defineDatabaseConfig } from ${databasePackageEntry}
 
 export default defineDatabaseConfig({
   connections: {
@@ -1522,7 +1538,7 @@ export default defineDatabaseConfig({
 })
 `, 'utf8')
     await writeQueueConfig(root, `
-import { defineQueueConfig } from ${packageEntry}
+import { defineQueueConfig } from ${queuePackageEntry}
 
 export default defineQueueConfig({
   default: 'sync',
@@ -1605,7 +1621,7 @@ export default defineAppConfig({
 })
 `, 'utf8')
     await writeQueueConfig(root, `
-import { defineQueueConfig } from ${packageEntry}
+import { defineQueueConfig } from ${queuePackageEntry}
 
 export default defineQueueConfig({
   default: 'plugin',
@@ -1685,7 +1701,7 @@ export default {
     const root = await createProject()
     await writeBaseConfig(root)
     await writeFile(join(root, 'config/database.ts'), `
-import { defineDatabaseConfig } from ${packageEntry}
+import { defineDatabaseConfig } from ${databasePackageEntry}
 
 export default defineDatabaseConfig({
   connections: {
@@ -1746,7 +1762,7 @@ export default defineDatabaseConfig({
     const root = await createProject()
     await writeBaseConfig(root)
     await writeQueueConfig(root, `
-import { defineQueueConfig } from ${packageEntry}
+import { defineQueueConfig } from ${queuePackageEntry}
 
 export default defineQueueConfig({
   default: 'missing',
@@ -1866,7 +1882,7 @@ export default {
     await writeBaseConfig(root)
     await writeRegistry(root)
     await writeQueueConfig(root, `
-import { defineQueueConfig } from ${packageEntry}
+import { defineQueueConfig } from ${queuePackageEntry}
 
 export default defineQueueConfig({
   default: 'database',
@@ -1946,6 +1962,64 @@ export default defineQueueConfig({
     await expect(failingRuntime.initialize()).rejects.toThrow()
     expect(() => getHolo()).toThrow('Holo runtime is not initialized.')
     expect(() => useConfig('app')).toThrow('Holo config runtime is not configured.')
+  })
+
+  it.each([
+    ['mysql://user:password@localhost/runtime', '@holo-js/db-mysql'],
+    ['mysql2://user:password@localhost/runtime', '@holo-js/db-mysql'],
+    [':memory:', '@holo-js/db-sqlite'],
+  ])('loads the concrete driver package for %s', async (databaseUrl, packageName) => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    await writeFile(join(root, 'config/database.ts'), `
+import { defineDatabaseConfig } from ${databasePackageEntry}
+
+export default defineDatabaseConfig({
+  defaultConnection: 'main',
+  connections: {
+    main: ${JSON.stringify(databaseUrl)},
+  },
+})
+`, 'utf8')
+
+    vi.resetModules()
+
+    try {
+      const portable = await import('../src/portable')
+      const originalImportOptionalModule = portable.holoRuntimeInternals.moduleInternals.importOptionalModule
+      const importOptionalModule = vi.spyOn(
+        portable.holoRuntimeInternals.moduleInternals,
+        'importOptionalModule',
+      ).mockImplementation(async (specifier, options) => {
+        return await originalImportOptionalModule(specifier, options)
+      })
+
+      await portable.createHolo(root)
+
+      expect(importOptionalModule).toHaveBeenCalledWith(packageName, { projectRoot: root })
+    } finally {
+      vi.restoreAllMocks()
+      vi.resetModules()
+    }
+  })
+
+  it('clears database runtime state when disconnecting during shutdown fails', async () => {
+    const root = await createProject()
+    await writeBaseConfig(root)
+    const runtime = await createHolo(root, {
+      processEnv: {
+        ...process.env,
+        HOLO_INTERNAL_FRAMEWORK_BUILD: '1',
+      },
+    })
+    await runtime.initialize()
+    const disconnectFailure = new Error('database disconnect failed')
+    vi.spyOn(runtime.manager, 'disconnectAll').mockRejectedValue(disconnectFailure)
+
+    await expect(runtime.shutdown()).rejects.toBe(disconnectFailure)
+
+    expect(() => DB.getManager()).toThrow('DB facade is not configured')
+    expect(getDatabaseDriverFactory('sqlite')).toBeUndefined()
   })
 
   it('skips eager service boot during generated framework builds', async () => {
@@ -2177,7 +2251,7 @@ export const boot = 'static'
     const root = await createProject()
     await writeBaseConfig(root)
     await writeQueueConfig(root, `
-import { defineQueueConfig } from ${packageEntry}
+import { defineQueueConfig } from ${queuePackageEntry}
 
 export default defineQueueConfig({
   default: 'sync',
@@ -2280,6 +2354,7 @@ export default defineQueueConfig({
         if (specifier === '@holo-js/cache') {
           return {
             configureCacheRuntime,
+            loadConfiguredCachePluginDriverContracts: vi.fn().mockResolvedValue([]),
             resetCacheRuntime,
           }
         }
@@ -2496,6 +2571,7 @@ export default defineQueueConfig({
         if (specifier === '@holo-js/cache') {
           return {
             configureCacheRuntime,
+            loadConfiguredCachePluginDriverContracts: vi.fn().mockResolvedValue([]),
             resetCacheRuntime,
           }
         }
@@ -3293,7 +3369,7 @@ export default defineSecurityConfig({
     await writeBaseConfig(root)
     await writeRedisConfig(root)
     await writeFile(join(root, 'config/session.ts'), `
-import { defineSessionConfig } from ${packageEntry}
+import { defineSessionConfig } from ${sessionPackageEntry}
 
 export default defineSessionConfig({
   driver: 'primary',
@@ -3389,7 +3465,7 @@ export default defineSessionConfig({
     await writeBaseConfig(root)
     await writeRedisConfig(root)
     await writeFile(join(root, 'config/session.ts'), `
-import { defineSessionConfig } from ${packageEntry}
+import { defineSessionConfig } from ${sessionPackageEntry}
 
 export default defineSessionConfig({
   driver: 'primary',
@@ -3495,7 +3571,7 @@ export default defineSessionConfig({
     await writeBaseConfig(root)
     await writeRedisConfig(root)
     await writeFile(join(root, 'config/session.ts'), `
-import { defineSessionConfig } from ${packageEntry}
+import { defineSessionConfig } from ${sessionPackageEntry}
 
 export default defineSessionConfig({
   driver: 'primary',
@@ -3550,7 +3626,7 @@ export default defineSessionConfig({
     const root = await createProject()
     await writeBaseConfig(root)
     await writeFile(join(root, 'config/session.ts'), `
-import { defineSessionConfig } from ${packageEntry}
+import { defineSessionConfig } from ${sessionPackageEntry}
 
 export default defineSessionConfig({
   driver: 'file',
@@ -3593,7 +3669,7 @@ export default defineSessionConfig({
     await writeBaseConfig(root)
     await writeRedisConfig(root)
     await writeFile(join(root, 'config/session.ts'), `
-import { defineSessionConfig } from ${packageEntry}
+import { defineSessionConfig } from ${sessionPackageEntry}
 
 export default defineSessionConfig({
   driver: 'primary',
@@ -4444,7 +4520,7 @@ export default defineSecurityConfig({
     const root = await createProject()
     await writeBaseConfig(root)
     await writeBroadcastConfig(root, `
-import { defineBroadcastConfig } from ${packageEntry}
+import { defineBroadcastConfig } from ${broadcastPackageEntry}
 
 export default defineBroadcastConfig({
   default: 'reverb',
@@ -4565,7 +4641,7 @@ export default defineBroadcastConfig({
     const root = await createProject()
     await writeBaseConfig(root)
     await writeBroadcastConfig(root, `
-import { defineBroadcastConfig } from ${packageEntry}
+import { defineBroadcastConfig } from ${broadcastPackageEntry}
 
 export default defineBroadcastConfig({
   default: 'reverb',
@@ -4615,7 +4691,7 @@ export default defineBroadcastConfig({
     const root = await createProject()
     await writeBaseConfig(root)
     await writeBroadcastConfig(root, `
-import { defineBroadcastConfig } from ${packageEntry}
+import { defineBroadcastConfig } from ${broadcastPackageEntry}
 
 export default defineBroadcastConfig({
   default: 'reverb',
@@ -4659,7 +4735,7 @@ export default defineBroadcastConfig({
     const root = await createProject()
     await writeBaseConfig(root)
     await writeBroadcastConfig(root, `
-import { defineBroadcastConfig } from ${packageEntry}
+import { defineBroadcastConfig } from ${broadcastPackageEntry}
 
 export default defineBroadcastConfig({
   default: 'reverb',
@@ -4699,7 +4775,7 @@ export default defineBroadcastConfig({
       await firstRuntime.shutdown()
 
       await writeBroadcastConfig(root, `
-import { defineBroadcastConfig } from ${packageEntry}
+import { defineBroadcastConfig } from ${broadcastPackageEntry}
 
 export default defineBroadcastConfig({
   default: 'reverb',
@@ -4895,7 +4971,7 @@ export default defineBroadcastConfig({
     const root = await createProject()
     await writeBaseConfig(root)
     await writeBroadcastConfig(root, `
-import { defineBroadcastConfig } from ${packageEntry}
+import { defineBroadcastConfig } from ${broadcastPackageEntry}
 
 export default defineBroadcastConfig({
   default: 'reverb',
@@ -5392,8 +5468,8 @@ export default defineBroadcastConfig({
               },
             },
           },
-          storage: actual.holoStorageDefaults,
-          queue: actual.normalizeQueueConfigForHolo({
+          storage: holoStorageDefaults,
+          queue: normalizeQueueConfig({
             default: 'sync',
             failed: false,
           }),
@@ -5458,7 +5534,7 @@ export default defineBroadcastConfig({
               },
             },
           },
-          storage: actual.normalizeStorageConfig({
+          storage: normalizeStorageConfig({
             disks: {
               local: {
                 driver: 'local',
@@ -5466,7 +5542,7 @@ export default defineBroadcastConfig({
               },
             },
           }),
-          queue: actual.holoQueueDefaultsNormalized,
+          queue: holoQueueDefaults,
           media: {},
           custom: {},
           all: {} as never,
@@ -5586,7 +5662,7 @@ export default defineAppConfig({
 })
 `, 'utf8')
     await writeFile(join(root, 'config/database.ts'), `
-import { defineDatabaseConfig } from ${packageEntry}
+import { defineDatabaseConfig } from ${databasePackageEntry}
 
 export default defineDatabaseConfig({
   defaultConnection: 'main',

@@ -1,4 +1,7 @@
-import { loadHoloPluginContributionModules } from '@holo-js/config'
+import {
+  loadHoloPluginContributionModules,
+  loadHoloPluginDefinitions,
+} from '@holo-js/kernel'
 import { getRegisteredBroadcastDriver, registerBroadcastDriver, unregisterBroadcastDriver } from './registry'
 import type { BroadcastDriver } from './contracts'
 
@@ -28,13 +31,18 @@ function resolveBroadcastDriver(moduleValue: unknown, packageName: string, drive
   }
 }
 
-export async function loadBroadcastPluginDrivers(projectRoot = process.cwd()): Promise<void> {
+export async function loadBroadcastPluginDrivers(
+  projectRoot = process.cwd(),
+  pluginNames: readonly string[] = [],
+): Promise<void> {
   const root = projectRoot
-  if (loadedProjectRoots.has(root)) {
+  const loadKey = `${root}\0${[...pluginNames].sort().join('\0')}`
+  if (loadedProjectRoots.has(loadKey)) {
     return
   }
 
-  const contributions = await loadHoloPluginContributionModules(root, 'broadcast', 'drivers')
+  const plugins = await loadHoloPluginDefinitions(root, pluginNames)
+  const contributions = await loadHoloPluginContributionModules(root, plugins, 'broadcast', 'drivers')
 
   for (const contribution of contributions) {
     const previous = getRegisteredBroadcastDriver(contribution.name)
@@ -51,7 +59,7 @@ export async function loadBroadcastPluginDrivers(projectRoot = process.cwd()): P
     })
   }
 
-  loadedProjectRoots.add(root)
+  loadedProjectRoots.add(loadKey)
 }
 
 export function resetBroadcastPluginDrivers(): void {
@@ -68,4 +76,8 @@ export function resetBroadcastPluginDrivers(): void {
 
   loadedProjectRoots.clear()
   registeredPluginDrivers.clear()
+}
+
+export const broadcastPluginInternals = {
+  resolveBroadcastDriver,
 }

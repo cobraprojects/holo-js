@@ -1,19 +1,25 @@
-export { defineCacheConfig } from '@holo-js/config'
+export {
+  defineCacheConfig,
+  holoCacheDefaults,
+  normalizeCacheConfig,
+} from './config'
 export type {
   CacheDatabaseDriverConfig,
   CacheDriver,
   CacheDriverConfig,
   CacheFileDriverConfig,
   CacheMemoryDriverConfig,
+  CachePluginDriverConfig,
   CacheRedisDriverConfig,
   HoloCacheConfig,
   NormalizedCacheDatabaseDriverConfig,
   NormalizedCacheDriverConfig,
   NormalizedCacheFileDriverConfig,
   NormalizedCacheMemoryDriverConfig,
+  NormalizedCachePluginDriverConfig,
   NormalizedCacheRedisDriverConfig,
   NormalizedHoloCacheConfig,
-} from '@holo-js/config'
+} from './config'
 
 export {
   CacheConfigError,
@@ -61,12 +67,21 @@ export { fileDriverInternals } from './file'
 export { cacheQueryBridgeInternals } from './query-bridge'
 export { cacheRedisInternals } from './redis'
 export {
+  registerCacheDriverFactory,
+  requireCacheDriverFactory,
+  unregisterCacheDriverFactory,
+  type CacheDriverFactory,
+} from './driver-registry'
+export type { DatabaseCacheDriverOptions } from './db'
+export type { RedisCacheDriverOptions } from './redis'
+export {
   cacheRuntimeInternals,
   getCacheRuntime,
   getCacheRuntimeBindings,
   loadCachePluginDrivers,
 } from './runtime'
 export {
+  loadConfiguredCachePluginDriverContracts,
   loadCachePluginDriverContracts,
   resetCachePluginDriverContracts,
 } from './plugins'

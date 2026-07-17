@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeBroadcastConfig } from '@holo-js/config'
+import { normalizeBroadcastConfig } from '../src'
 import {
   renderBroadcastClientConfigResponse,
   resolveBroadcastClientConfig,

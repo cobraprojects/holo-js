@@ -62,7 +62,8 @@ export default defineSecurityConfig({
 `config/cors.ts` controls cross-origin API access:
 
 ```ts
-import { defineCorsConfig, env } from '@holo-js/config'
+import { env } from '@holo-js/config'
+import { defineCorsConfig } from '@holo-js/security'
 
 export default defineCorsConfig({
   paths: ['/api/*', '/broadcasting/config', '/broadcasting/auth'],
@@ -85,7 +86,8 @@ When `rateLimit.driver` is `redis`, `rateLimit.redis.connection` points to a nam
 Example shared Redis config:
 
 ```ts
-import { defineRedisConfig, env } from '@holo-js/config'
+import { env } from '@holo-js/config'
+import { defineRedisConfig } from '@holo-js/kernel'
 
 export default defineRedisConfig({
   default: 'cache',

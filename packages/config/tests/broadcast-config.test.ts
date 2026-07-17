@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  defineBroadcastConfig,
-  normalizeBroadcastConfig,
-} from '../src'
+import { defineBroadcastConfig, normalizeBroadcastConfig } from '@holo-js/broadcast'
 
 describe('@holo-js/config broadcast normalization', () => {
   it('defines and normalizes laravel-style broadcast connections', () => {

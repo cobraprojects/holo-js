@@ -2,8 +2,8 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, dirname, extname, join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { build } from 'esbuild'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { build, type Plugin } from 'esbuild'
 import type {
   AuthorizationDiscoveryModule,
   BroadcastDiscoveryModule,
@@ -18,6 +18,46 @@ import {
 } from './shared'
 
 let projectModuleBundler: ProjectModuleBundler = build
+
+function createHoloPackageBundlerPlugin(projectRoot: string): Plugin {
+  const projectRequire = createRequire(join(projectRoot, 'package.json'))
+  const cliRequire = createRequire(import.meta.url)
+
+  return {
+    name: 'holo-package-bundler',
+    setup(buildContext) {
+      buildContext.onResolve({ filter: /^@holo-js\// }, ({ importer, path }) => {
+        const importerRequire = importer ? createRequire(importer) : undefined
+        const resolvers = [
+          ...(importerRequire ? [importerRequire.resolve.bind(importerRequire)] : []),
+          projectRequire.resolve.bind(projectRequire),
+          cliRequire.resolve.bind(cliRequire),
+        ]
+        for (const resolvePackage of resolvers) {
+          try {
+            const resolved = resolvePackage(path)
+            return {
+              path: resolved.startsWith('file:') ? fileURLToPath(resolved) : resolved,
+              external: true,
+            }
+          } catch {
+            continue
+          }
+        }
+
+        const workspaceSpecifier = resolveWorkspacePackageImportSpecifier(path)
+        if (workspaceSpecifier) {
+          return {
+            path: fileURLToPath(workspaceSpecifier),
+            external: true,
+          }
+        }
+
+        return undefined
+      })
+    },
+  }
+}
 
 function resolveWorkspacePackageImportSpecifier(specifier: string): string | undefined {
   if (!specifier.startsWith('@holo-js/')) {
@@ -131,7 +171,7 @@ async function writeLoaderTsconfig(projectRoot: string, tempDir: string): Promis
 export async function bundleProjectModule(
   projectRoot: string,
   entryPath: string,
-  options: { external?: readonly string[] } = {},
+  options: { bundleDependencies?: boolean, external?: readonly string[] } = {},
 ): Promise<{ path: string, cleanup(): Promise<void> }> {
   const runtimeTempRoot = join(projectRoot, CLI_RUNTIME_ROOT)
   await mkdir(runtimeTempRoot, { recursive: true })
@@ -152,11 +192,12 @@ export async function bundleProjectModule(
       outfile,
       format: 'esm',
       logLevel: 'silent',
-      packages: 'external',
+      packages: options.bundleDependencies ? 'bundle' : 'external',
       platform: 'node',
       target: 'node20',
       tsconfig: tsconfigPath,
       sourcemap: false,
+      plugins: options.bundleDependencies ? [createHoloPackageBundlerPlugin(projectRoot)] : [],
       external: [...(options.external ?? [])],
     })
 

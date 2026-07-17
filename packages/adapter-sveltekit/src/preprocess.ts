@@ -33,7 +33,7 @@ export const HOLO_SVELTE_PREPROCESS_NAME = 'holo-sveltekit'
 function collectUseFormAliases(script: string): readonly string[] {
   const aliases = new Set<string>()
   for (const match of script.matchAll(clientImportPattern)) {
-    const imports = match[1] ?? ''
+    const imports = match[1] as string
     for (const rawSpecifier of imports.split(',')) {
       const specifier = rawSpecifier.trim()
       const aliased = specifier.match(new RegExp(String.raw`^useForm\s+as\s+(${identifier})$`))
@@ -172,13 +172,13 @@ function transformScript(script: string): string {
   const replacements: Replacement[] = []
 
   for (const match of script.matchAll(declarationPattern)) {
-    const indentation = match[2] ?? ''
+    const indentation = match[2] as string
     const variable = match[3]
     if (!variable || script.includes(`${variable}.subscribe(() => { ${variable} = ${variable} })`)) {
       continue
     }
 
-    const constStart = match.index + (match[1]?.length ?? 0) + indentation.length
+    const constStart = match.index + (match[1] as string).length + indentation.length
     const calleeEnd = match.index + match[0].length
     const openingParen = findOpeningParen(script, calleeEnd)
     if (openingParen === -1) {
@@ -228,4 +228,13 @@ export function holoSveltePreprocess(): SveltePreprocessor {
       }
     },
   }
+}
+
+export const sveltePreprocessInternals = {
+  collectScriptBlocks,
+  collectUseFormAliases,
+  findClosingParen,
+  findOpeningParen,
+  skipTypeArguments,
+  transformScript,
 }

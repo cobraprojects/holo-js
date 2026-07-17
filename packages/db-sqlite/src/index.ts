@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3'
 import type {
+  DatabaseDriverFactory,
   DatabaseOperationOptions,
   DriverAdapter,
   DriverExecutionResult,
@@ -189,3 +190,10 @@ export class SQLiteAdapter implements DriverAdapter {
 export function createSQLiteAdapter(options: SQLiteAdapterOptions = {}): SQLiteAdapter {
   return new SQLiteAdapter(options)
 }
+
+export const sqliteDatabaseDriverFactory: DatabaseDriverFactory = Object.freeze({
+  driver: 'sqlite',
+  create(connection) {
+    return createSQLiteAdapter({ filename: connection.url ?? connection.database ?? './data/database.sqlite' })
+  },
+})

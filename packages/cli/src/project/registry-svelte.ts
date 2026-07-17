@@ -594,7 +594,7 @@ async function removeLegacyManagedHoloHelper(path: string, managedContents: stri
   const trimmedContents = contents?.trim()
   const trimmedManagedContents = managedContents.trim()
   const isLegacyManagedHelper = trimmedContents === [
-    'import { createNextHoloHelpers } from \'@holo-js/adapter-next\'',
+    'import { createNextHoloHelpers } from \'@holo-js/adapter-next/runtime\'',
     '',
     'export const holo = createNextHoloHelpers()',
   ].join('\n') || trimmedContents === [

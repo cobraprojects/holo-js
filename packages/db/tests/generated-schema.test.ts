@@ -118,6 +118,13 @@ describe('generated schema helpers', () => {
           name: 'enum_value',
           enumValues: undefined,
         },
+        missing_default: {
+          ...auditEvents.columns.string_value,
+          name: 'missing_default',
+          hasDefault: true,
+          defaultKind: 'value',
+          defaultValue: undefined,
+        },
       },
       indexes: [],
     } as unknown as TableDefinition

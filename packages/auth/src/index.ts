@@ -1,15 +1,36 @@
-import { check, currentAccessToken, getAuthRuntime, hashPassword, id, impersonate, impersonateById, impersonation, login, loginUsing, loginUsingId, logout, needsPasswordRehash, provider, refreshUser, register, requestPasswordReset, resendEmailVerification, resetPassword, sendEmailVerification, stopImpersonating, tokens, user, verification, verifyEmail, verifyPassword } from './runtime'
+import { getAuthRuntime, hashPassword, needsPasswordRehash, resendEmailVerification, sendEmailVerification, verifyPassword } from './runtime'
+import { check, currentAccessToken, id, impersonate, impersonateById, impersonation, login, loginUsing, loginUsingId, logout, provider, refreshUser, register, requestPasswordReset, resetPassword, stopImpersonating, tokens, user, verification, verifyEmail } from './facade'
 import type { AuthFacade } from './contracts'
 
-export { AUTH_ERROR_CODES, AuthError, defineAuthConfig, isAuthError } from './contracts'
+export { AUTH_ERROR_CODES, AuthError, isAuthError } from './contracts'
 export {
-  authRuntimeInternals,
+  defineAuthConfig,
+  holoAuthDefaults,
+  normalizeAuthConfig,
+} from './config'
+export type {
+  AuthClerkProviderConfig,
+  AuthEmailVerificationConfig,
+  AuthHostedIdentityRecord,
+  AuthHostedIdentityStore,
+  AuthPasswordBrokerConfig,
+  AuthPersonalAccessTokenConfig,
+  AuthSocialProviderConfig,
+  AuthWorkosProviderConfig,
+  HoloAuthClerkConfig,
+  HoloAuthWorkosConfig,
+  NormalizedAuthClerkProviderConfig,
+  NormalizedAuthGuardConfig,
+  NormalizedAuthPasswordBrokerConfig,
+  NormalizedAuthProviderConfig,
+  NormalizedAuthSocialProviderConfig,
+  NormalizedAuthWorkosProviderConfig,
+  NormalizedHoloAuthClerkConfig,
+  NormalizedHoloAuthWorkosConfig,
+} from './config'
+export {
   check,
-  configureAuthRuntime,
-  createAsyncAuthContext,
   currentAccessToken,
-  getAuthRuntime,
-  hashPassword,
   id,
   impersonate,
   impersonateById,
@@ -18,20 +39,27 @@ export {
   loginUsing,
   loginUsingId,
   logout,
-  needsPasswordRehash,
   provider,
   refreshUser,
   register,
   requestPasswordReset,
-  resendEmailVerification,
-  resetAuthRuntime,
   resetPassword,
-  sendEmailVerification,
   stopImpersonating,
   tokens,
   user,
   verification,
   verifyEmail,
+} from './facade'
+export {
+  authRuntimeInternals,
+  configureAuthRuntime,
+  createAsyncAuthContext,
+  getAuthRuntime,
+  hashPassword,
+  needsPasswordRehash,
+  resendEmailVerification,
+  resetAuthRuntime,
+  sendEmailVerification,
   verifyPassword,
 } from './runtime'
 export type {

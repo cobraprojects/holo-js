@@ -160,16 +160,16 @@ export function createModelCollection<
       return loadRelationAggregates(relations.map(relation => ({ relation, kind: 'exists' })))
     },
     async loadSum<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>): Promise<ModelCollection<TTable, TRelations, TItem>> {
-      return loadRelationAggregates(relation ? [{ relation, kind: 'sum', column }] : [])
+      return loadRelationAggregates([{ relation, kind: 'sum', column }])
     },
     async loadAvg<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>): Promise<ModelCollection<TTable, TRelations, TItem>> {
-      return loadRelationAggregates(relation ? [{ relation, kind: 'avg', column }] : [])
+      return loadRelationAggregates([{ relation, kind: 'avg', column }])
     },
     async loadMin<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>): Promise<ModelCollection<TTable, TRelations, TItem>> {
-      return loadRelationAggregates(relation ? [{ relation, kind: 'min', column }] : [])
+      return loadRelationAggregates([{ relation, kind: 'min', column }])
     },
     async loadMax<TRelationName extends ModelRelationName<TRelations>>(relation: TRelationName, column: RelatedColumnNameOfRelation<TRelations[TRelationName]>): Promise<ModelCollection<TTable, TRelations, TItem>> {
-      return loadRelationAggregates(relation ? [{ relation, kind: 'max', column }] : [])
+      return loadRelationAggregates([{ relation, kind: 'max', column }])
     },
     async fresh(): Promise<ModelCollection<TTable, TRelations>> {
       const refreshed: Array<Entity<TTable, TRelations> | undefined> = await Promise.all(

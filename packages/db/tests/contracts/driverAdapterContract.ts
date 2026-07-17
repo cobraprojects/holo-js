@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { TransactionError, type DriverAdapter, type DriverExecutionResult, type DriverQueryResult } from '../../src'
+import type { DriverAdapter, DriverExecutionResult, DriverQueryResult } from '../../src'
 
 type LogEntry = {
   sql: string
@@ -102,7 +102,7 @@ export function runDriverAdapterContractSuite(testCase: DriverAdapterContractCas
       expect(testCase.transaction.getLog()).toEqual(testCase.transaction.expectedLog)
 
       await adapter.beginTransaction()
-      await expect(adapter.createSavepoint?.(testCase.transaction.invalidSavepointName)).rejects.toThrow(TransactionError)
+      await expect(adapter.createSavepoint?.(testCase.transaction.invalidSavepointName)).rejects.toThrow('Invalid savepoint name')
       await adapter.rollback()
       await adapter.disconnect()
       testCase.assertTransactionDisconnected?.()

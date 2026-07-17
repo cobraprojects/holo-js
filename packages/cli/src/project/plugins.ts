@@ -1,7 +1,30 @@
 import { createRequire } from 'node:module'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { loadConfigDirectory } from '@holo-js/config'
+import {
+  type HoloPluginBroadcastContributions,
+  type HoloPluginConfigContributions,
+  type HoloPluginContributions,
+  type HoloPluginDefinition,
+  type HoloPluginDependencyContributions,
+  loadHoloPluginDefinitions,
+  normalizeHoloPluginDefinition as normalizeKernelPluginDefinition,
+} from '@holo-js/kernel'
+export type {
+  HoloPluginBroadcastContributions,
+  HoloPluginCacheContributions,
+  HoloPluginCliContributions,
+  HoloPluginConfigContributions,
+  HoloPluginContributions,
+  HoloPluginDefinition,
+  HoloPluginDependencyContributions,
+  HoloPluginMailContributions,
+  HoloPluginMigrationContributions,
+  HoloPluginNotificationContributions,
+  HoloPluginQueueContributions,
+  HoloPluginRuntimeContributions,
+} from '@holo-js/kernel'
 import { APP_CONFIG_FILE_NAMES } from './shared'
 import { pathExists } from './shared'
 import {
@@ -13,74 +36,6 @@ import { normalizeCommandAliases } from './discovery-helpers'
 import type { FrameworkDescriptor, FrameworkTsconfigKind } from './frameworks'
 import type { DiscoveredAppCommand } from './shared'
 import type { HoloAppCommand } from '../types'
-
-type PackageJsonManifest = {
-  readonly name?: unknown
-  readonly holo?: unknown
-}
-
-export type HoloPluginDependencyContributions = {
-  readonly runtime?: readonly string[]
-  readonly holo?: readonly `@holo-js/${string}`[]
-}
-
-export type HoloPluginConfigContributions = {
-  readonly files?: readonly string[]
-  readonly env?: readonly string[]
-}
-
-export type HoloPluginBroadcastContributions = {
-  readonly drivers?: Readonly<Record<string, { readonly runtime: string }>>
-}
-
-export type HoloPluginCacheContributions = {
-  readonly drivers?: Readonly<Record<string, { readonly runtime: string }>>
-}
-
-export type HoloPluginQueueContributions = {
-  readonly drivers?: Readonly<Record<string, { readonly runtime: string }>>
-}
-
-export type HoloPluginMailContributions = {
-  readonly drivers?: Readonly<Record<string, { readonly runtime: string }>>
-}
-
-export type HoloPluginNotificationContributions = {
-  readonly channels?: Readonly<Record<string, { readonly runtime: string }>>
-}
-
-export type HoloPluginRuntimeContributions = {
-  readonly boot?: string
-}
-
-export type HoloPluginCliContributions = {
-  readonly commands?: string
-}
-
-export type HoloPluginMigrationContributions = {
-  readonly publish?: string
-}
-
-export type HoloPluginContributions = {
-  readonly dependencies?: HoloPluginDependencyContributions
-  readonly config?: HoloPluginConfigContributions
-  readonly framework?: FrameworkDescriptor
-  readonly broadcast?: HoloPluginBroadcastContributions
-  readonly cache?: HoloPluginCacheContributions
-  readonly queue?: HoloPluginQueueContributions
-  readonly mail?: HoloPluginMailContributions
-  readonly notifications?: HoloPluginNotificationContributions
-  readonly runtime?: HoloPluginRuntimeContributions
-  readonly cli?: HoloPluginCliContributions
-  readonly migrations?: HoloPluginMigrationContributions
-}
-
-export type HoloPluginDefinition = {
-  readonly id: string
-  readonly name?: string
-  readonly description?: string
-  readonly contributes?: HoloPluginContributions
-}
 
 export type LoadedHoloPlugin = {
   readonly packageName: string
@@ -101,10 +56,6 @@ export type ResolvedProjectPlugin = {
   readonly packageName: string
   readonly loaded?: LoadedHoloPlugin
   readonly error?: string
-}
-
-export function defineHoloPlugin<TPlugin extends HoloPluginDefinition>(plugin: TPlugin): Readonly<TPlugin> {
-  return Object.freeze({ ...plugin })
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -420,95 +371,32 @@ export function normalizeHoloPluginDefinition(value: unknown): HoloPluginDefinit
       ? value.plugin
       : value
 
-  if (!isRecord(candidate)) {
-    throw new Error('Plugin entry must export a Holo plugin definition.')
-  }
-
-  const id = normalizeString(candidate.id)
-  if (!id) {
-    throw new Error('Plugin definition must include a non-empty id.')
-  }
-
-  const name = normalizeString(candidate.name)
-  const description = normalizeString(candidate.description)
-  const contributes = normalizePluginContributions(candidate.contributes)
+  const definition = normalizeKernelPluginDefinition(value)
+  const contributes = normalizePluginContributions(isRecord(candidate) ? candidate.contributes : undefined)
 
   return Object.freeze({
-    id,
-    ...(name ? { name } : {}),
-    ...(description ? { description } : {}),
+    id: definition.id,
+    ...(definition.name ? { name: definition.name } : {}),
+    ...(definition.description ? { description: definition.description } : {}),
     ...(contributes ? { contributes } : {}),
   })
-}
-
-async function readPackageJson(packageJsonPath: string): Promise<PackageJsonManifest> {
-  const contents = await readTextFile(packageJsonPath)
-  if (!contents) {
-    throw new Error(`Missing package manifest: ${packageJsonPath}.`)
-  }
-
-  try {
-    return JSON.parse(contents) as PackageJsonManifest
-  } catch {
-    throw new Error(`Invalid package manifest: ${packageJsonPath}.`)
-  }
-}
-
-function resolveHoloPluginEntry(manifest: PackageJsonManifest, packageJsonPath: string): string {
-  if (!isRecord(manifest.holo)) {
-    throw new Error(`Package ${String(manifest.name ?? packageJsonPath)} does not declare holo.plugin.`)
-  }
-
-  const entry = normalizeString(manifest.holo.plugin)
-  if (!entry) {
-    throw new Error(`Package ${String(manifest.name ?? packageJsonPath)} does not declare holo.plugin.`)
-  }
-
-  if (isAbsolute(entry)) {
-    throw new Error(`Plugin entry must be package-relative: ${entry}.`)
-  }
-
-  const packageRoot = dirname(packageJsonPath)
-  const entryPath = resolve(packageRoot, entry)
-  const relativeEntryPath = relative(packageRoot, entryPath)
-
-  if (relativeEntryPath.startsWith('..') || isAbsolute(relativeEntryPath)) {
-    throw new Error(`Plugin entry must stay inside the package root: ${entry}.`)
-  }
-
-  return entryPath
-}
-
-export function resolvePluginPackageJsonPath(projectRoot: string, packageName: string): string {
-  assertValidPackageName(packageName)
-
-  try {
-    const projectRequire = createRequire(join(projectRoot, 'package.json'))
-    return projectRequire.resolve(`${packageName}/package.json`)
-  } catch {
-    return join(projectRoot, 'node_modules', ...packageName.split('/'), 'package.json')
-  }
 }
 
 export async function loadHoloPluginFromPackage(
   projectRoot: string,
   packageName: string,
 ): Promise<LoadedHoloPlugin> {
-  const packageJsonPath = resolvePluginPackageJsonPath(projectRoot, packageName)
-  const manifest = await readPackageJson(packageJsonPath)
-  const entryPath = resolveHoloPluginEntry(manifest, packageJsonPath)
-
-  if (!(await pathExists(entryPath))) {
-    throw new Error(`Plugin entry does not exist: ${entryPath}.`)
-  }
-
-  const imported = await import(`${pathToFileURL(entryPath).href}?t=${Date.now()}`) as unknown
+  assertValidPackageName(packageName)
+  const [loaded] = await loadHoloPluginDefinitions(projectRoot, [packageName], {
+    moduleVersion: String(Date.now()),
+  })
+  if (!loaded) throw new Error(`Plugin package failed to load: ${packageName}.`)
 
   return {
     packageName,
-    packageRoot: dirname(packageJsonPath),
-    entryPath,
-    definition: normalizeHoloPluginDefinition(imported),
+    packageRoot: loaded.packageRoot,
+    entryPath: loaded.entryPath,
+    definition: normalizeHoloPluginDefinition(loaded.definition),
   }
 }
 

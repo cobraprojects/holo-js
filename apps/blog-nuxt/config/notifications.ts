@@ -1,5 +1,4 @@
-import { defineNotificationsConfig } from '@holo-js/config'
-
+import { defineNotificationsConfig } from '@holo-js/notifications'
 export default defineNotificationsConfig({
   table: 'notifications',
   queue: {

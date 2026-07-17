@@ -30,7 +30,7 @@ describe('cache documentation smoke checks', () => {
     expect(config).toContain("driver: 'file'")
     expect(config).toContain("driver: 'redis'")
     expect(config).toContain("driver: 'database'")
-    expect(config).toContain("import { defineCacheConfig, env } from '@holo-js/config'")
+    expect(config).toContain("import { defineCacheConfig } from '@holo-js/cache'")
     expect(config).not.toContain("import { defineCacheConfig, env } from '@holo-js/cache'")
     expect(config).toContain('config/redis.ts')
     expect(config).toContain('@holo-js/cache-redis')

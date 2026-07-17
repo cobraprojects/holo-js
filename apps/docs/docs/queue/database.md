@@ -41,8 +41,7 @@ npx holo migrate:fresh --seed --force
 The `database` queue connection points at an existing Holo-JS database connection by name:
 
 ```ts
-import { defineQueueConfig } from '@holo-js/config'
-
+import { defineQueueConfig } from '@holo-js/queue'
 export default defineQueueConfig({
   default: 'database',
   failed: {

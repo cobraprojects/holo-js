@@ -9,6 +9,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.mjs",
+      "default": "./dist/config.mjs"
     }
   },
   "main": "./dist/index.mjs",
@@ -23,18 +28,10 @@
     "test": "vitest --run"
   },
   "dependencies": {
-    "@holo-js/config": "catalog:"
-  },
-  "peerDependencies": {
-    "@holo-js/queue-redis": "catalog:"
-  },
-  "peerDependenciesMeta": {
-    "@holo-js/queue-redis": {
-      "optional": true
-    }
+    "@holo-js/config": "catalog:",
+    "@holo-js/kernel": "catalog:"
   },
   "devDependencies": {
-    "@holo-js/queue-redis": "catalog:",
     "@types/node": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:",

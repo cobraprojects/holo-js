@@ -3,20 +3,19 @@ import {
   type HoloRedisConfig,
   type NormalizedHoloRedisConfig,
   type NormalizedHoloRedisConnectionConfig,
-} from '@holo-js/config'
+} from '@holo-js/kernel'
 import {
   CacheDriverResolutionError,
   type CacheDriverContract,
 } from './contracts'
 import {
   createLazyOptionalCacheDriver,
-  createOptionalDriverModuleLoader,
   isOptionalDriverModuleNotFoundError,
   normalizeOptionalDriverModuleLoadError,
   type OptionalDriverModuleLoader,
 } from './optional-driver'
 
-type RedisCacheDriverOptions = {
+export type RedisCacheDriverOptions = {
   readonly name: string
   readonly connectionName: string
   readonly prefix: string
@@ -28,7 +27,6 @@ type RedisCacheDriverModule = {
 }
 
 type RedisDriverModuleLoader = OptionalDriverModuleLoader<RedisCacheDriverModule>
-const REDIS_CACHE_PACKAGE = '@holo-js/cache-redis'
 const REDIS_CACHE_MISSING_MESSAGE = '[@holo-js/cache] Redis cache support requires @holo-js/cache-redis to be installed.'
 
 function isNormalizedRedisConfig(
@@ -87,10 +85,11 @@ function normalizeRedisModuleLoadError(
   return normalizeOptionalDriverModuleLoadError(error, expectedSpecifier, REDIS_CACHE_MISSING_MESSAGE)
 }
 
-const loadRedisDriverModule = createOptionalDriverModuleLoader<RedisCacheDriverModule>(
-  REDIS_CACHE_PACKAGE,
-  REDIS_CACHE_MISSING_MESSAGE,
-)
+const loadRedisDriverModule = async (): Promise<RedisCacheDriverModule> => {
+  const { requireCacheDriverFactory } = await import('./driver-registry')
+  const factory = requireCacheDriverFactory<RedisCacheDriverOptions>('redis', REDIS_CACHE_MISSING_MESSAGE)
+  return { createRedisCacheDriver: options => factory.create(options) }
+}
 
 let redisDriverModuleLoader: RedisDriverModuleLoader = loadRedisDriverModule
 

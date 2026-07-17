@@ -1,5 +1,4 @@
-import { defineQueueConfig } from '@holo-js/config'
-
+import { defineQueueConfig } from '@holo-js/queue'
 export default defineQueueConfig({
   default: 'database',
   failed: {

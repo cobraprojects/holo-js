@@ -1,5 +1,5 @@
 import type { AuthenticatedAuthUser, AuthEstablishedSession, AuthFieldErrors, AuthLogoutResult, AuthResult } from '@holo-js/auth'
-import type { AuthClerkProviderConfig } from '@holo-js/config'
+import type { AuthClerkProviderConfig } from '@holo-js/auth'
 
 export interface ClerkEmailAddress {
   readonly id?: string

@@ -1,4 +1,5 @@
-import { loadConfigDirectory, type NormalizedHoloSecurityConfig } from '@holo-js/config'
+import { loadConfigDirectory } from '@holo-js/config'
+import type { NormalizedHoloSecurityConfig } from '@holo-js/security'
 import { writeLine } from './io'
 import { resolveProjectPackageImportSpecifier } from './project'
 import type { IoStreams } from './cli-types'

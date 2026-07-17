@@ -1,6 +1,6 @@
 import type {
   NormalizedSessionRedisStoreConfig,
-} from '@holo-js/config'
+} from '../config'
 import Redis from 'ioredis'
 import type { SessionRecord } from '../contracts'
 import type { SessionRedisDriverAdapter } from './redis'

@@ -6,7 +6,7 @@ import mysql, {
   type ResultSetHeader,
   type RowDataPacket,
 } from 'mysql2/promise'
-import type { DriverAdapter, DriverExecutionResult, DriverQueryResult } from '@holo-js/db'
+import type { DatabaseDriverFactory, DriverAdapter, DriverExecutionResult, DriverQueryResult } from '@holo-js/db'
 
 export type { DriverAdapter, DriverExecutionResult, DriverQueryResult } from '@holo-js/db'
 
@@ -26,17 +26,16 @@ export interface MySQLPoolLike extends MySQLQueryableLike {
   end(): Promise<void>
 }
 
-export interface MySQLAdapterOptions {
+export interface MySQLAdapterOptions<TConfig extends PoolOptions = PoolOptions> {
   uri?: string
-  config?: PoolOptions
+  config?: TConfig
   client?: MySQLClientLike
   pool?: MySQLPoolLike
-  createPool?: (config: PoolOptions) => MySQLPoolLike
+  createPool?: (config: TConfig) => MySQLPoolLike
 }
 
 type ScopedMySQLTransaction = {
   client: MySQLClientLike
-  leased: boolean
 }
 
 type RawMySQLClientLike = {
@@ -139,23 +138,24 @@ function isMySQLDatabaseMissing(error: unknown): boolean {
     )
 }
 
-export class MySQLAdapter implements DriverAdapter {
+export class MySQLAdapter<TConfig extends PoolOptions = PoolOptions> implements DriverAdapter {
+  readonly supportsConcurrentTransactionScopes = true
   private pool?: MySQLPoolLike
   private readonly directClient?: MySQLClientLike
-  private readonly createPoolInstance?: (config: PoolOptions) => MySQLPoolLike
-  private readonly config: PoolOptions
+  private readonly createPoolInstance?: (config: TConfig) => MySQLPoolLike
+  private readonly config: TConfig
   private connected: boolean
   private transactionClient?: MySQLClientLike
   private leasedTransactionClient = false
   private readonly transactionScope = new AsyncLocalStorage<ScopedMySQLTransaction>()
 
-  constructor(options: MySQLAdapterOptions = {}) {
+  constructor(options: MySQLAdapterOptions<TConfig> = {}) {
     this.directClient = options.client
     this.pool = options.pool
     this.createPoolInstance = options.createPool ?? (options.client || options.pool
       ? undefined
       : config => wrapMySQLPool(mysql.createPool(config)))
-    this.config = options.config ?? (options.uri ? { uri: options.uri } as PoolOptions : {})
+    this.config = options.config ?? (options.uri ? { uri: options.uri } as TConfig : {} as TConfig)
     this.connected = !!(options.client || options.pool)
   }
 
@@ -211,7 +211,6 @@ export class MySQLAdapter implements DriverAdapter {
     if (this.directClient) {
       return this.transactionScope.run({
         client: this.directClient,
-        leased: false,
       }, callback)
     }
 
@@ -221,7 +220,6 @@ export class MySQLAdapter implements DriverAdapter {
 
     const state: ScopedMySQLTransaction = {
       client: await this.pool.getConnection(),
-      leased: true,
     }
 
     return this.transactionScope.run(state, async () => {
@@ -328,7 +326,7 @@ export class MySQLAdapter implements DriverAdapter {
       return
     }
 
-    const bootstrapPool = this.createPoolInstance(target.config)
+    const bootstrapPool = this.createPoolInstance(target.config as TConfig)
 
     try {
       const [existing] = await bootstrapPool.query(
@@ -399,10 +397,6 @@ export class MySQLAdapter implements DriverAdapter {
   }
 
   private releaseScopedTransaction(state: ScopedMySQLTransaction): void {
-    if (!state.leased) {
-      return
-    }
-
     state.client.release?.()
   }
 
@@ -415,6 +409,23 @@ export class MySQLAdapter implements DriverAdapter {
   }
 }
 
-export function createMySQLAdapter(options: MySQLAdapterOptions = {}): MySQLAdapter {
+export function createMySQLAdapter<TConfig extends PoolOptions = PoolOptions>(options: MySQLAdapterOptions<TConfig> = {}): MySQLAdapter<TConfig> {
   return new MySQLAdapter(options)
 }
+
+export const mysqlDatabaseDriverFactory: DatabaseDriverFactory = Object.freeze({
+  driver: 'mysql',
+  supportsConcurrentTransactionScopes: true,
+  create(connection) {
+    return connection.url
+      ? createMySQLAdapter({ uri: connection.url })
+      : createMySQLAdapter({ config: {
+          host: connection.host,
+          port: connection.port,
+          user: connection.username,
+          password: connection.password,
+          database: connection.database,
+          ssl: connection.ssl === true ? {} : connection.ssl || undefined,
+        } })
+  },
+})

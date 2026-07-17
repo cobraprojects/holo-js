@@ -269,15 +269,12 @@ function hasRule(definition: FieldDefinition, name: SupportedRuleFamily): boolea
 }
 
 function makeCompiledArrayItemSchema(item: FieldDefinition['item']): v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> {
-  if (!item) {
-    return v.unknown()
+  const definedItem = item!
+  if (isFieldDefinition(definedItem)) {
+    return makeCompiledFieldSchema(definedItem)
   }
 
-  if (isFieldDefinition(item)) {
-    return makeCompiledFieldSchema(item)
-  }
-
-  return v.objectAsync(compileSchemaShape(item))
+  return v.objectAsync(compileSchemaShape(definedItem))
 }
 
 function makeBaseSchema(definition: FieldDefinition): v.BaseSchema<unknown, unknown, v.BaseIssue<unknown>> | v.BaseSchemaAsync<unknown, unknown, v.BaseIssue<unknown>> {

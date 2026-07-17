@@ -1034,4 +1034,244 @@ describe('@holo-js/auth framework helpers', () => {
     })
     await expect(authSelfRedirect({ path: '/login' }, { path: '/' })).resolves.toBeUndefined()
   })
+
+  it('propagates Next client refresh failures after reporting them', async () => {
+    const failure = new Error('refresh failed')
+    const fetchCurrentUser = vi.fn(async () => { throw failure })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.doMock('../src/client', () => ({ authClientInternals: { fetchCurrentUser } }))
+    vi.doMock('next/navigation.js', () => ({ usePathname: () => '/settings' }))
+    vi.doMock('react', () => createReactMock())
+    const { useAuth } = await import('../src/next/client')
+    const current = useAuth({ endpoint: '/api/auth/current', initialUser: null })
+
+    await expect(current.refreshUser()).rejects.toThrow('refresh failed')
+    expect(error).toHaveBeenCalledWith('Failed to refresh auth user.', failure)
+  })
+
+  it('refreshes the Next client on mount when no initial user is supplied', async () => {
+    const fetchCurrentUser = vi.fn(async () => ({
+      authenticated: false,
+      guard: 'web',
+      provider: null,
+      user: null,
+    }))
+    vi.doMock('../src/client', () => ({ authClientInternals: { fetchCurrentUser } }))
+    vi.doMock('next/navigation.js', () => ({ usePathname: () => '/login' }))
+    vi.doMock('react', () => createReactMock())
+    const { useAuth } = await import('../src/next/client')
+    useAuth()
+    await vi.waitFor(() => expect(fetchCurrentUser).toHaveBeenCalledWith({}, { force: true }))
+  })
+
+  it('returns a safe Next auth state when runtime user resolution fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.doMock('../src/index', () => ({
+      default: { guard: () => ({ user: async () => { throw new Error('failed') }, provider: async () => null }) },
+      authRuntimeInternals: { getRuntimeBindings: () => ({ config: { defaults: { guard: 'web' } } }) },
+      provider: async () => null,
+      user: async () => { throw new Error('failed') },
+    }))
+    const { auth, routeProtectionInternals } = await import('../src/next/server')
+    await expect(auth()).resolves.toEqual({ authenticated: false, guard: 'web', provider: null, user: null })
+    expect(routeProtectionInternals.matchesRoute('/', '/')).toBe(true)
+  })
+
+  it('constructs relative and absolute Nuxt auth URLs with guards', async () => {
+    const useFetch = vi.fn(async () => ({
+      data: { value: { authenticated: false, guard: 'admin', provider: null, user: null } },
+      refresh: vi.fn(),
+    }))
+    vi.doMock('#imports', () => createNuxtImportsMock({ useFetch }))
+    const { useAuth } = await import('../src/nuxt')
+    await useAuth({ endpoint: '/api/auth/user?from=test#hash', guard: 'admin', key: 'relative' })
+    await useAuth({ endpoint: 'https://api.test/auth?from=test', guard: 'admin', key: 'absolute' })
+    expect(useFetch).toHaveBeenNthCalledWith(1, '/api/auth/user?from=test&guard=admin#hash', { key: 'relative:request' })
+    expect(useFetch).toHaveBeenNthCalledWith(2, 'https://api.test/auth?from=test&guard=admin', { key: 'absolute:request' })
+  })
+
+  it('keeps Nuxt auth state empty when fetch data remains unavailable', async () => {
+    const data = { value: undefined }
+    const useFetch = vi.fn(async () => ({ data, refresh: vi.fn(async () => {}) }))
+    vi.doMock('#imports', () => createNuxtImportsMock({ useFetch }))
+    const { useAuth } = await import('../src/nuxt')
+    const current = await useAuth()
+    expect(current.authenticated.value).toBe(false)
+    await expect(current.refreshUser()).resolves.toBeNull()
+    expect(current.authenticated.value).toBe(false)
+  })
+
+  it('deduplicates SvelteKit client refreshes and tolerates missing component context', async () => {
+    let resolveRefresh!: (value: {
+      authenticated: boolean
+      guard: string
+      provider: string
+      user: { id: number, email: string, name: string }
+    }) => void
+    const pending = new Promise<{
+      authenticated: boolean
+      guard: string
+      provider: string
+      user: { id: number, email: string, name: string }
+    }>((resolve) => { resolveRefresh = resolve })
+    const fetchCurrentUser = vi.fn(() => pending)
+    const cleanups: Array<() => void> = []
+    vi.doMock('../src/client', () => ({ authClientInternals: { fetchCurrentUser } }))
+    vi.doMock('svelte', () => ({
+      getContext() { throw new Error('outside component') },
+      setContext() { throw new Error('outside component') },
+    }))
+    vi.doMock('svelte/reactivity', () => ({
+      createSubscriber(start: (update: () => void) => () => void) {
+        let started = false
+        return () => {
+          if (!started) {
+            started = true
+            cleanups.push(start(() => {}))
+          }
+        }
+      },
+    }))
+    const { useAuth } = await import('../src/sveltekit/client')
+    const current = useAuth()
+    expect(current.authenticated).toBe(false)
+    expect(current.provider).toBeNull()
+    expect(current.user).toBeNull()
+    const first = current.refreshUser()
+    const second = current.refreshUser()
+    expect(fetchCurrentUser).toHaveBeenCalledOnce()
+    resolveRefresh({
+      authenticated: true,
+      guard: 'web',
+      provider: 'users',
+      user: { id: 1, email: 'ava@example.com', name: 'Ava' },
+    })
+    await expect(first).resolves.toMatchObject({ id: 1 })
+    await expect(second).resolves.toMatchObject({ id: 1 })
+    expect(current.authenticated).toBe(true)
+    expect(current.provider).toBe('users')
+    cleanups.forEach(cleanup => cleanup())
+    await expect(current.refreshUser()).resolves.toMatchObject({ id: 1 })
+  })
+
+  it('covers SvelteKit route matcher, continuation, self-redirect, and auth failure behavior', async () => {
+    let currentUser: { id: number, email: string, name: string, toJSON?: () => unknown } | null = null
+    let fail = false
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.doMock('../src/index', () => ({
+      default: {
+        guard() {
+          return {
+            provider: async () => currentUser ? 'users' : null,
+            user: async () => {
+              if (fail) throw new Error('auth failed')
+              return currentUser
+            },
+          }
+        },
+      },
+      authRuntimeInternals: {
+        getRuntimeBindings: () => ({ config: { defaults: { guard: 'web' } } }),
+      },
+      provider: async () => currentUser ? 'users' : null,
+      user: async () => {
+        if (fail) throw new Error('auth failed')
+        return currentUser
+      },
+    }))
+    const { auth, authOnly, guestOnly, routeProtectionInternals } = await import('../src/sveltekit/server')
+    expect(routeProtectionInternals.matchesRoutes(undefined, '/anything')).toBe(true)
+    expect(routeProtectionInternals.matchesRoute('/', '/')).toBe(true)
+    expect(routeProtectionInternals.matchesRoute('/admin/*', '/admin/settings/')).toBe(true)
+    expect(routeProtectionInternals.matchesRoute(/^\/admin$/g, '/admin/')).toBe(true)
+    expect(routeProtectionInternals.matchesRoute(path => path === '/admin', '/admin/')).toBe(true)
+    expect(routeProtectionInternals.matchesRoute('/admin', '/public')).toBe(false)
+
+    const resolve = vi.fn(() => new Response('ok'))
+    const basicEvent = { url: new URL('https://app.test/public') }
+    await expect(guestOnly({ routes: ['/login'], redirectTo: '/admin' })({ event: basicEvent, resolve })).resolves.toMatchObject({ status: 200 })
+
+    currentUser = { id: 1, email: 'ava@example.com', name: 'Ava', toJSON: () => ({ id: 1, email: 'safe@app.test', name: 'Safe' }) }
+    await expect(auth()).resolves.toMatchObject({ authenticated: true, user: { email: 'safe@app.test' } })
+    await expect(auth({ guard: 'admin' })).resolves.toMatchObject({ authenticated: true, provider: 'users' })
+    const selfEvent = { url: new URL('https://app.test/login') }
+    await expect(guestOnly({ routes: ['/login'], redirectTo: '/login' })({ event: selfEvent, resolve })).resolves.toMatchObject({ status: 200 })
+
+    currentUser = null
+    await expect(authOnly({ routes: ['/admin'], redirectTo: '/login' })({
+      event: { url: new URL('https://app.test/admin') },
+      resolve,
+    })).resolves.toMatchObject({ status: 303 })
+
+    fail = true
+    await expect(auth({ guard: 'admin' })).resolves.toEqual({
+      authenticated: false,
+      guard: 'admin',
+      provider: null,
+      user: null,
+    })
+  })
+
+  it('restores synchronous fallback Next request context callbacks', async () => {
+    const globals = globalThis as typeof globalThis & { __holoNextAuthRequestStore?: unknown }
+    delete globals.__holoNextAuthRequestStore
+    const { getCurrentNextAuthRequest, runWithNextAuthRequest } = await import('../src/next/request-context')
+    const request = { cookies: { get: vi.fn() }, headers: new Headers() }
+    expect(runWithNextAuthRequest(request, () => getCurrentNextAuthRequest())).toBe(request)
+    expect(getCurrentNextAuthRequest()).toBeUndefined()
+  })
+
+  it('uses a global AsyncLocalStorage implementation for Next request context when available', async () => {
+    const globals = globalThis as typeof globalThis & {
+      AsyncLocalStorage?: new <TValue>() => {
+        getStore(): TValue | undefined
+        run<TResult>(value: TValue, callback: () => TResult): TResult
+      }
+      __holoNextAuthRequestStore?: unknown
+    }
+    delete globals.__holoNextAuthRequestStore
+    class TestStorage<TValue> {
+      value?: TValue
+      getStore(): TValue | undefined { return this.value }
+      run<TResult>(value: TValue, callback: () => TResult): TResult {
+        this.value = value
+        return callback()
+      }
+    }
+    vi.stubGlobal('AsyncLocalStorage', TestStorage)
+    vi.resetModules()
+    const { getCurrentNextAuthRequest, runWithNextAuthRequest } = await import('../src/next/request-context')
+    const request = { cookies: { get: vi.fn() }, headers: new Headers() }
+    expect(runWithNextAuthRequest(request, () => getCurrentNextAuthRequest())).toBe(request)
+  })
+
+  it('derives Next route URLs when nextUrl is absent', async () => {
+    vi.doMock('../src/index', () => ({
+      default: { guard: () => ({ provider: async () => null, user: async () => null }) },
+      authRuntimeInternals: { getRuntimeBindings: () => ({ config: { defaults: { guard: 'web' } } }) },
+      provider: async () => null,
+      user: async () => null,
+    }))
+    const { authOnly } = await import('../src/next/server')
+    const response = await authOnly({ routes: ['/admin'], redirectTo: '/login' })({
+      cookies: { get: vi.fn() },
+      headers: new Headers(),
+      url: 'https://app.test/admin',
+    })
+    expect(response?.status).toBe(303)
+  })
+
+  it('reuses a plain Svelte context without treating it as mutable client state', async () => {
+    const context = {
+      authenticated: true,
+      provider: 'users',
+      user: { id: 1, email: 'plain@app.test', name: 'Plain' },
+      refreshUser: async () => null,
+    }
+    vi.doMock('../src/client', () => ({ authClientInternals: { fetchCurrentUser: vi.fn() } }))
+    vi.doMock('svelte', () => ({ getContext: () => context, setContext: vi.fn() }))
+    vi.doMock('svelte/reactivity', () => ({ createSubscriber: () => () => {} }))
+    const { useAuth } = await import('../src/sveltekit/client')
+    expect(useAuth()).toBe(context)
+  })
 })

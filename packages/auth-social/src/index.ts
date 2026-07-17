@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { authRuntimeInternals } from '@holo-js/auth'
 import type { AuthUserLike } from '@holo-js/auth'
-import type { AuthSocialProviderConfig } from '@holo-js/config'
+import type { AuthSocialProviderConfig } from '@holo-js/auth'
 
 export interface SocialProviderProfile {
   readonly id: string
@@ -151,26 +151,8 @@ function getSocialRuntimeGlobal(): SocialRuntimeGlobal {
   return globalThis as SocialRuntimeGlobal
 }
 
-function isProductionRuntime(): boolean {
-  return process.env.NODE_ENV === 'production'
-}
-
-function createRelativeRequestBaseUrl(headers: Headers): string {
-  const forwardedProtocol = headers.get('x-forwarded-proto')
-  const forwardedHost = headers.get('x-forwarded-host')
-  if (isProductionRuntime() && (!forwardedProtocol || !forwardedHost)) {
-    throw new Error('[@holo-js/auth-social] Relative request URLs require x-forwarded-proto and x-forwarded-host headers in production.')
-  }
-
-  const protocol = forwardedProtocol ?? 'http'
-  const host = forwardedHost ?? headers.get('host') ?? 'localhost'
-  return `${protocol}://${host}`
-}
-
 function normalizeSocialRequest(input: SocialRequestInput): Request {
-  return authRuntimeInternals.normalizeRequestInput(input, {
-    createRelativeRequestBaseUrl,
-  })
+  return authRuntimeInternals.normalizeRequestInput(input)
 }
 
 function requireUserRecord(user: unknown, message: string): Record<string, unknown> {
@@ -446,7 +428,7 @@ function getConfiguredProviderConfig(provider: string): {
     clientId: configured.clientId ?? '',
     clientSecret: configured.clientSecret ?? '',
     redirectUri: configured.redirectUri ?? '',
-    scopes: [...(configured.scopes ?? [])],
+    scopes: [...configured.scopes],
     guard: configured.guard,
     mapToProvider: configured.mapToProvider,
     encryptTokens: configured.encryptTokens,
@@ -471,10 +453,7 @@ function resolveGuardAndProvider(provider: string, providerConfig: ConfiguredSoc
 } {
   const authBindings = authRuntimeInternals.getRuntimeBindings()
   const guardName = providerConfig.guard ?? authBindings.config.defaults.guard
-  const guard = authBindings.config.guards[guardName]
-  if (!guard) {
-    throw new Error(`[@holo-js/auth-social] Guard "${guardName}" is not configured for social provider "${provider}".`)
-  }
+  const guard = authBindings.config.guards[guardName]!
 
   const authProvider = providerConfig.mapToProvider ?? guard.provider
   const adapter = authBindings.providers[authProvider]

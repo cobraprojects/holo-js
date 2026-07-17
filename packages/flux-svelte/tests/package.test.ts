@@ -128,6 +128,9 @@ describe('@holo-js/flux-svelte package surface', () => {
     debug.updatePresenceMembers('chat.1', [{ id: 'user_3' }])
     expect(get(presence.members)).toEqual([{ id: 'user_3' }])
     expect(here.at(-1)).toEqual([{ id: 'user_3' }])
+    presence.leave()
+    presence.listen()
+    presence.leaveChannel()
     const statusStore = useFluxConnectionStatus({
       client,
       onChange(status) {
@@ -150,6 +153,48 @@ describe('@holo-js/flux-svelte package surface', () => {
     unsubscribeStatus()
     unmounts.forEach(cleanup => cleanup())
     expect(debug.getJoinedChannels()).toEqual([])
+  })
+
+  it('ignores inactive joins and leaves and preserves unknown presence members', () => {
+    let here: (members: readonly unknown[]) => void = () => undefined
+    let joining: (member: unknown) => void = () => undefined
+    let leaving: (member: unknown) => void = () => undefined
+    const initialMember = { id: 'initial' }
+    const subscription = {
+      members: [initialMember] as readonly unknown[],
+      here(callback: typeof here) {
+        here = callback
+        return this
+      },
+      joining(callback: typeof joining) {
+        joining = callback
+        return this
+      },
+      leaving(callback: typeof leaving) {
+        leaving = callback
+        return this
+      },
+      leave() {},
+      leaveChannel() {},
+      listen() {},
+      stopListening() {},
+    }
+    const presence = useFluxPresence('chat.manual', {}, {
+      client: { presence: () => subscription } as never,
+      onUnmount() {},
+    })
+
+    leaving(initialMember)
+    joining({ id: 'present' })
+    leaving({ id: 'missing' })
+    leaving(undefined)
+    expect(get(presence.members)).toEqual([{ id: 'present' }])
+
+    presence.stopListening()
+    here([{ id: 'ignored' }])
+    joining({ id: 'ignored' })
+    leaving({ id: 'present' })
+    expect(get(presence.members)).toEqual([{ id: 'present' }])
   })
 
   it('removes connection status listeners when the store unsubscribes', async () => {

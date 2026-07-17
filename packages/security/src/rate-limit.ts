@@ -1,4 +1,4 @@
-import type { NormalizedSecurityLimiterConfig } from '@holo-js/config'
+import type { NormalizedSecurityLimiterConfig } from './config'
 import {
   SecurityRateLimitError,
   ip,

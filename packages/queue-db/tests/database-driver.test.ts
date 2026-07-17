@@ -4,12 +4,24 @@ import { connectionAsyncContext } from '@holo-js/db'
 import { configureQueueRuntime, queueRuntimeInternals } from '@holo-js/queue'
 import {
   createQueueDbRuntimeOptions,
+  databaseQueueDriverInternals,
   DatabaseQueueDriver,
+  DatabaseQueueDriverError,
 } from '../src'
 import { createQueueDatabaseContextMock } from './support/dialect'
 import { createSQLiteQueueHarness, type SQLiteQueueHarness } from './support/sqlite-queue'
+import { runSharedQueueDriverContract } from '../../queue/tests/support/shared-driver-contract'
 
 const harnesses: SQLiteQueueHarness[] = []
+
+describe('@holo-js/queue-db driver internals', () => {
+  it('normalizes database errors and queue-name fallbacks', () => {
+    expect(databaseQueueDriverInternals.normalizeDatabaseErrorMessage('failed')).toBe('failed')
+    const wrapped = new DatabaseQueueDriverError('database', 'reserve a job', 'failed')
+    expect(databaseQueueDriverInternals.wrapDatabaseError('database', 'reserve a job', wrapped)).toBe(wrapped)
+    expect(databaseQueueDriverInternals.normalizeQueueNames([' ', ''], 'default')).toEqual(['default'])
+  })
+})
 
 function createEnvelope(name: string, overrides: Partial<{
   id: string
@@ -361,4 +373,14 @@ describe('@holo-js/queue-db database driver', () => {
 
     spy.mockRestore()
   })
+})
+
+runSharedQueueDriverContract({
+  label: '@holo-js/queue-db',
+  expected: { name: 'database', driver: 'database', mode: 'async' },
+  async createDriver() {
+    const harness = await createSQLiteQueueHarness()
+    harnesses.push(harness)
+    return harness.driver
+  },
 })

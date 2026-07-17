@@ -139,6 +139,15 @@ describe('@holo-js/flux-vue package surface', () => {
     debug.updatePresenceMembers('chat.1', [{ id: 'user_1' }, { id: 'user_2' }])
     await nextTick()
     expect(presence!.members).toEqual([{ id: 'user_1' }, { id: 'user_2' }])
+    debug.updatePresenceMembers('chat.1', [{ id: 'user_2' }, { id: 'user_3' }])
+    await nextTick()
+    expect(presence!.members).toEqual([{ id: 'user_2' }, { id: 'user_3' }])
+
+    presence!.stopListening()
+    presence!.listen()
+    presence!.leave()
+    presence!.listen()
+    presence!.leaveChannel()
     expect(status!.value).toBe('idle')
 
     await client.connect()
@@ -150,5 +159,44 @@ describe('@holo-js/flux-vue package surface', () => {
 
     scope.stop()
     expect(debug.getJoinedChannels()).toEqual([])
+  })
+
+  it('ignores inactive and unknown presence updates from connectors', () => {
+    let here: (members: readonly unknown[]) => void = () => undefined
+    let joining: (member: unknown) => void = () => undefined
+    let leaving: (member: unknown) => void = () => undefined
+    const initialMember = { id: 'initial' }
+    const subscription = {
+      members: [initialMember] as readonly unknown[],
+      here(callback: typeof here) {
+        here = callback
+        return this
+      },
+      joining(callback: typeof joining) {
+        joining = callback
+        return this
+      },
+      leaving(callback: typeof leaving) {
+        leaving = callback
+        return this
+      },
+      leave() {},
+      leaveChannel() {},
+      listen() {},
+      stopListening() {},
+    }
+    const presence = useFluxPresence('chat.manual', {}, {
+      client: { presence: () => subscription } as never,
+      onUnmount() {},
+    })
+
+    leaving(initialMember)
+    joining({ id: 'present' })
+    leaving({ id: 'missing' })
+    leaving(undefined)
+    presence.stopListening()
+    here([{ id: 'ignored' }])
+    joining({ id: 'ignored' })
+    expect(presence.members).toEqual([{ id: 'present' }])
   })
 })

@@ -1,5 +1,5 @@
 import { createHash, createHmac } from 'node:crypto'
-import { normalizeAuthConfig } from '@holo-js/config'
+import { normalizeAuthConfig } from './config'
 import type {
   AuthenticatedAuthUser,
   AuthCredentials,
@@ -79,6 +79,12 @@ import {
 import { authJwtInternals } from './runtime/jwt'
 import { normalizeRequestInput } from './runtime/requestNormalization'
 import {
+  isTokenExpired,
+  normalizeTokenRecord,
+  parsePlainTextToken,
+  tokenHasAbility,
+} from './runtime/tokens'
+import {
   buildLogoutCookies,
   forgetDefaultRememberCookie,
 } from './runtime/responseCookies'
@@ -93,6 +99,18 @@ import {
   verifyTokenSecret,
 } from './runtime/secrets'
 import { parseSetCookieDefinition } from './runtime/setCookieParser'
+import {
+  readSessionPayload,
+  readSessionPayloads,
+  resolveSessionPayloadProvider,
+  stripImpersonation,
+  toSessionPayload,
+  writeSessionPayloads,
+  type SerializedAuthUser,
+  type SessionAuthPayload,
+  type SessionAuthPayloadMap,
+  type SessionImpersonationPayload,
+} from './runtime/sessionPayloads'
 
 const AUTH_PROVIDER_MARKER = Symbol.for('holo-js.auth.provider')
 
@@ -100,10 +118,6 @@ export {
   createAsyncAuthContext,
   createMemoryAuthContext,
 } from './runtime/context'
-
-type SerializedAuthUser = AuthenticatedAuthUser & {
-  readonly id: string | number
-}
 
 type ErasedAuthProviderAdapter = {
   findById(id: string | number): Promise<unknown | null>
@@ -117,25 +131,6 @@ type ErasedAuthProviderAdapter = {
   getEmailVerifiedAt?(user: unknown): Date | string | null | undefined
   serialize?(user: unknown): AuthUser
 }
-
-type SessionIdentityPayload = {
-  readonly guard: string
-  readonly provider: string
-  readonly userId: string | number
-  readonly user: SerializedAuthUser
-}
-
-type SessionImpersonationPayload = {
-  readonly actor: SessionIdentityPayload
-  readonly original?: SessionIdentityPayload
-  readonly startedAt: string
-}
-
-type SessionAuthPayload = SessionIdentityPayload & {
-  readonly impersonation?: SessionImpersonationPayload
-}
-
-type SessionAuthPayloadMap = Readonly<Record<string, SessionAuthPayload>>
 
 type RuntimeBindings = {
   readonly config: ReturnType<typeof normalizeAuthConfig>
@@ -346,33 +341,29 @@ async function hydrateGuardContextFromRequest(guardName: string): Promise<void> 
   }
 
   if (!bindings.context.getSessionId(guardName)) {
-    const sessionCookie = parseSetCookieDefinition(bindings.session.sessionCookie(''))
-    if (sessionCookie) {
-      const sessionId = await resolveRequestCookie(bindings, sessionCookie.name)
-      if (sessionId) {
-        bindings.context.setSessionId(guardName, sessionId)
-      }
+    const sessionCookie = parseSetCookieDefinition(bindings.session.sessionCookie(''))!
+    const sessionId = await resolveRequestCookie(bindings, sessionCookie.name)
+    if (sessionId) {
+      bindings.context.setSessionId(guardName, sessionId)
     }
   }
 
   if (!bindings.context.getRememberToken?.(guardName)) {
-    const rememberCookie = parseSetCookieDefinition(bindings.session.rememberMeCookie(''))
-    if (rememberCookie) {
-      const rememberToken = await resolveRequestCookie(bindings, rememberCookie.name)
-      if (rememberToken) {
-        bindings.context.setRememberToken?.(guardName, rememberToken)
-        if (!bindings.context.getSessionId(guardName)) {
-          const rememberedSession = await bindings.session.consumeRememberMeToken?.(rememberToken)
-          const payload = readSessionPayload(rememberedSession, guardName)
-          if (rememberedSession && payload?.guard === guardName) {
-            bindings.context.setSessionId(guardName, rememberedSession.id)
-            bindings.context.setCachedUser(
-              guardName,
-              rehydrateSerializedUser(payload.user, payload.provider),
-            )
-          } else if (!rememberedSession) {
-            bindings.context.setRememberToken?.(guardName)
-          }
+    const rememberCookie = parseSetCookieDefinition(bindings.session.rememberMeCookie(''))!
+    const rememberToken = await resolveRequestCookie(bindings, rememberCookie.name)
+    if (rememberToken) {
+      bindings.context.setRememberToken?.(guardName, rememberToken)
+      if (!bindings.context.getSessionId(guardName)) {
+        const rememberedSession = await bindings.session.consumeRememberMeToken?.(rememberToken)
+        const payload = readSessionPayload(rememberedSession, guardName)
+        if (rememberedSession && payload?.guard === guardName) {
+          bindings.context.setSessionId(guardName, rememberedSession.id)
+          bindings.context.setCachedUser(
+            guardName,
+            rehydrateSerializedUser(payload.user, payload.provider),
+          )
+        } else if (!rememberedSession) {
+          bindings.context.setRememberToken?.(guardName)
         }
       }
     }
@@ -501,13 +492,6 @@ function getGuardProviderAdapter(
   readonly provider: string
 } {
   const guard = getGuardConfig(guardName)
-  if (guard.driver !== 'session') {
-    throwAuthError('guard_session_login_unsupported', `Auth guard "${guardName}" does not support session login.`, {
-      guard: guardName,
-      driver: guard.driver,
-    })
-  }
-
   const provider = guard.provider
   const { adapter } = getProviderAdapter(provider)
 
@@ -685,14 +669,7 @@ function getEmailVerificationRoute(): string {
 }
 
 function getPasswordBrokerConfig(brokerName: string) {
-  const broker = getRuntimeBindings().config.passwords[brokerName]
-  if (!broker) {
-    throwAuthError('password_broker_not_configured', `Password broker "${brokerName}" is not configured.`, {
-      broker: brokerName,
-    })
-  }
-
-  return broker
+  return getRuntimeBindings().config.passwords[brokerName]!
 }
 
 function getPasswordResetRoute(brokerName: string): string {
@@ -720,164 +697,7 @@ function createEmailVerificationRedirectRoute(user: AuthUser): string {
   return `${url.pathname}${url.search}${url.hash}`
 }
 
-function toSessionIdentityPayload(
-  guard: string,
-  provider: string,
-  user: SerializedAuthUser,
-): SessionIdentityPayload {
-  return Object.freeze({
-    guard,
-    provider,
-    userId: user.id,
-    user,
-  })
-}
-
-function toSessionPayload(
-  guard: string,
-  provider: string,
-  user: SerializedAuthUser,
-  impersonation?: SessionImpersonationPayload,
-): SessionAuthPayload {
-  return Object.freeze({
-    ...toSessionIdentityPayload(guard, provider, user),
-    ...(impersonation ? { impersonation } : {}),
-  })
-}
-
-function isSessionIdentityPayload(value: unknown): value is SessionIdentityPayload {
-  return !!(
-    value
-    && typeof value === 'object'
-    && 'guard' in value
-    && typeof (value as { guard?: unknown }).guard === 'string'
-    && 'provider' in value
-    && typeof (value as { provider?: unknown }).provider === 'string'
-    && 'userId' in value
-    && (
-      typeof (value as { userId?: unknown }).userId === 'string'
-      || typeof (value as { userId?: unknown }).userId === 'number'
-    )
-    && 'user' in value
-    && (value as { user?: unknown }).user !== null
-    && typeof (value as { user?: unknown }).user === 'object'
-  )
-}
-
-function isSessionImpersonationPayload(value: unknown): value is SessionImpersonationPayload {
-  return !!(
-    value
-    && typeof value === 'object'
-    && 'actor' in value
-    && isSessionIdentityPayload((value as { actor?: unknown }).actor)
-    && (
-      !('original' in value)
-      || typeof (value as { original?: unknown }).original === 'undefined'
-      || isSessionIdentityPayload((value as { original?: unknown }).original)
-    )
-    && 'startedAt' in value
-    && typeof (value as { startedAt?: unknown }).startedAt === 'string'
-  )
-}
-
-function isSessionAuthPayload(value: unknown): value is SessionAuthPayload {
-  return isSessionIdentityPayload(value)
-    && (
-      !('impersonation' in (value as Record<string, unknown>))
-      || typeof (value as { impersonation?: unknown }).impersonation === 'undefined'
-      || isSessionImpersonationPayload((value as { impersonation?: unknown }).impersonation)
-    )
-}
-
-function readSessionPayloads(record: AuthSessionRecord | null | undefined): SessionAuthPayloadMap | null {
-  if (!record) {
-    return null
-  }
-
-  const payload = record.data.auth
-  if (!payload) {
-    return null
-  }
-
-  if (isSessionAuthPayload(payload)) {
-    return Object.freeze({
-      [payload.guard]: payload,
-    })
-  }
-
-  if (!payload || typeof payload !== 'object') {
-    return null
-  }
-
-  const entries = Object.entries(payload)
-    .filter((entry): entry is [string, SessionAuthPayload] => isSessionAuthPayload(entry[1]))
-    .map(([, value]) => [value.guard, value] as const)
-
-  if (entries.length === 0) {
-    return null
-  }
-
-  return Object.freeze(Object.fromEntries(entries))
-}
-
-function readSessionPayload(
-  record: AuthSessionRecord | null | undefined,
-  guardName?: string,
-): SessionAuthPayload | null {
-  const payloads = readSessionPayloads(record)
-  if (!payloads) {
-    return null
-  }
-
-  if (guardName) {
-    return payloads[guardName] ?? null
-  }
-
-  /* v8 ignore next -- readSessionPayloads() only returns non-empty payload maps. */
-  return Object.values(payloads)[0] ?? null
-}
-
-function resolveSessionPayloadProvider(payload: SessionAuthPayload): string {
-  const source = payload as SessionAuthPayload & {
-    readonly clerk?: unknown
-    readonly workos?: unknown
-  }
-
-  if (source.workos && typeof source.workos === 'object') {
-    return 'workos'
-  }
-
-  if (source.clerk && typeof source.clerk === 'object') {
-    return 'clerk'
-  }
-
-  return payload.provider
-}
-
-function writeSessionPayloads(
-  currentData: Readonly<Record<string, unknown>>,
-  payloads: SessionAuthPayloadMap,
-): Readonly<Record<string, unknown>> {
-  const nextData = { ...currentData } as Record<string, unknown>
-  const values = Object.values(payloads)
-  if (values.length === 0) {
-    delete nextData.auth
-  } else if (values.length === 1) {
-    nextData.auth = values[0]
-  } else {
-    nextData.auth = Object.freeze(Object.fromEntries(values.map(value => [value.guard, value] as const)))
-  }
-
-  return Object.freeze(nextData)
-}
-
-function stripImpersonation(
-  payload: SessionAuthPayload,
-): SessionIdentityPayload {
-  return toSessionIdentityPayload(payload.guard, payload.provider, payload.user)
-}
-
-function createImpersonationState(
+ function createImpersonationState(
   payload: SessionAuthPayload,
 ): AuthImpersonationState | null {
   const impersonation = payload.impersonation
@@ -895,59 +715,6 @@ function createImpersonationState(
       : null,
     startedAt: new Date(impersonation.startedAt),
   })
-}
-
-function normalizeTokenRecord(record: PersonalAccessTokenRecord): PersonalAccessTokenRecord {
-  return Object.freeze({
-    ...record,
-    abilities: Object.freeze([...record.abilities]),
-    createdAt: new Date(record.createdAt.getTime()),
-    lastUsedAt: record.lastUsedAt ? new Date(record.lastUsedAt.getTime()) : undefined,
-    expiresAt: record.expiresAt ? new Date(record.expiresAt.getTime()) : record.expiresAt,
-  })
-}
-
-function isTokenExpired(record: PersonalAccessTokenRecord): boolean {
-  return record.expiresAt instanceof Date && record.expiresAt.getTime() <= Date.now()
-}
-
-function parsePlainTextToken(token: string): { id: string, secret: string } | null {
-  const separatorIndex = token.indexOf('.')
-  if (separatorIndex <= 0) {
-    return null
-  }
-
-  const id = token.slice(0, separatorIndex).trim()
-  const secret = token.slice(separatorIndex + 1).trim()
-  if (!id || !secret) {
-    return null
-  }
-
-  return { id, secret }
-}
-
-function tokenAbilityMatches(grantedAbility: string, requestedAbility: string): boolean {
-  const granted = grantedAbility.trim()
-  const requested = requestedAbility.trim()
-
-  if (!granted || !requested) {
-    return false
-  }
-
-  if (granted === '*') {
-    return true
-  }
-
-  if (granted.endsWith('.*')) {
-    const prefix = granted.slice(0, -1)
-    return requested.startsWith(prefix) && requested.length > prefix.length
-  }
-
-  return granted === requested
-}
-
-function tokenHasAbility(record: PersonalAccessTokenRecord, ability: string): boolean {
-  return record.abilities.some(grantedAbility => tokenAbilityMatches(grantedAbility, ability))
 }
 
 async function authenticateAccessTokenRecord(
@@ -1581,8 +1348,8 @@ async function logoutForGuard(guardName: string): Promise<AuthLogoutResult> {
       if (Object.keys(payloads).length === 0) {
         await bindings.session.invalidate(sessionId)
         clearSessionCookies = true
-      } else if (record) {
-        await writeExistingSession(bindings, record, writeSessionPayloads(record.data, payloads))
+      } else {
+        await writeExistingSession(bindings, record!, writeSessionPayloads(record!.data, payloads))
       }
     }
   }
@@ -2478,83 +2245,14 @@ export async function providerForGuard(guardName: string): Promise<string | null
   }
 
   if (guard.driver === 'token') {
-    return readMarkedProvider(authenticatedUser) ?? null
+    return readMarkedProvider(authenticatedUser)!
   }
 
-  const sessionId = bindings.context.getSessionId(guardName)
-  if (!sessionId) {
-    return null
-  }
+  const sessionId = bindings.context.getSessionId(guardName)!
 
   const payload = readSessionPayload(await bindings.session.read(sessionId), guardName)
 
-  return payload ? resolveSessionPayloadProvider(payload) : null
-}
-
-export async function check(): Promise<boolean> {
-  return getAuthRuntime().check()
-}
-
-export async function user(): Promise<AuthenticatedAuthUser | null> {
-  return getAuthRuntime().user()
-}
-
-export async function refreshUser(): Promise<AuthenticatedAuthUser | null> {
-  return getAuthRuntime().refreshUser()
-}
-
-export async function provider(): Promise<string | null> {
-  return getAuthRuntime().provider()
-}
-
-export async function id(): Promise<string | number | null> {
-  return getAuthRuntime().id()
-}
-
-export async function currentAccessToken(): Promise<AuthCurrentAccessToken | null> {
-  return getAuthRuntime().currentAccessToken()
-}
-
-export async function login<TCredentials extends AuthCredentials>(
-  credentials: TCredentials,
-): Promise<AuthEstablishedSession> {
-  return getAuthRuntime().login(credentials)
-}
-
-export async function loginUsing(
-  user: unknown,
-  options?: AuthSessionLoginOptions,
-): Promise<AuthEstablishedSession> {
-  return getAuthRuntime().loginUsing(user, options)
-}
-
-export async function loginUsingId(
-  userId: string | number,
-  options?: AuthSessionLoginOptions,
-): Promise<AuthEstablishedSession> {
-  return getAuthRuntime().loginUsingId(userId, options)
-}
-
-export async function impersonate(
-  user: unknown,
-  options?: AuthImpersonationOptions,
-): Promise<AuthEstablishedSession> {
-  return getAuthRuntime().impersonate(user, options)
-}
-
-export async function impersonateById(
-  userId: string | number,
-  options?: AuthImpersonationOptions,
-): Promise<AuthEstablishedSession> {
-  return getAuthRuntime().impersonateById(userId, options)
-}
-
-export async function impersonation(): Promise<AuthImpersonationState | null> {
-  return getAuthRuntime().impersonation()
-}
-
-export async function stopImpersonating(): Promise<AuthenticatedAuthUser | null> {
-  return getAuthRuntime().stopImpersonating()
+  return resolveSessionPayloadProvider(payload!)
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -2578,35 +2276,6 @@ export async function needsPasswordRehash(digest: string): Promise<boolean> {
     : resolveNeedsPasswordRehash(createDefaultPasswordHasher(), digest)
 }
 
-export async function logout(): Promise<AuthLogoutResult> {
-  return getAuthRuntime().logout()
-}
-
-export async function register<TInput extends AuthRegistrationInput>(
-  input: TInput,
-): Promise<AuthenticatedAuthUser> {
-  return getAuthRuntime().register(input)
-}
-
-export async function requestPasswordReset<TInput extends AuthPasswordResetRequestInput>(
-  input: TInput,
-  options?: AuthPasswordResetRequestOptions,
-): Promise<void> {
-  return getAuthRuntime().requestPasswordReset(input, options)
-}
-
-export async function resetPassword<TInput extends AuthPasswordResetInput>(
-  input: TInput,
-): Promise<AuthenticatedAuthUser> {
-  return getAuthRuntime().resetPassword(input)
-}
-
-export function verifyEmail(
-  token: string,
-): Promise<AuthenticatedAuthUser> {
-  return getAuthRuntime().verifyEmail(token)
-}
-
 export function sendEmailVerification(): Promise<EmailVerificationTokenResult>
 export function sendEmailVerification(email: string): Promise<EmailVerificationTokenResult>
 export function sendEmailVerification(email: string | undefined): Promise<EmailVerificationTokenResult>
@@ -2628,39 +2297,6 @@ export function resendEmailVerification(
 ): Promise<EmailVerificationTokenResult> {
   return getAuthRuntime().verification.resend(createEmailVerificationResendInput(email, options))
 }
-
-export const tokens: AuthTokenFacade = Object.freeze({
-  create(user: unknown, options: PersonalAccessTokenCreationOptions) {
-    return getAuthRuntime().tokens.create(user, options)
-  },
-  list(user: unknown, options?: { readonly guard?: string }) {
-    return getAuthRuntime().tokens.list(user, options)
-  },
-  revoke(options?: { readonly guard?: string }) {
-    return getAuthRuntime().tokens.revoke(options)
-  },
-  revokeAll(user: unknown, options?: { readonly guard?: string }) {
-    return getAuthRuntime().tokens.revokeAll(user, options)
-  },
-  authenticate(plainTextToken: string) {
-    return getAuthRuntime().tokens.authenticate(plainTextToken)
-  },
-  can(token: string, ability: string) {
-    return getAuthRuntime().tokens.can(token, ability)
-  },
-})
-
-export const verification: AuthEmailVerificationFacade = Object.freeze({
-  create(user: unknown, options?: { readonly guard?: string, readonly expiresAt?: Date }) {
-    return getAuthRuntime().verification.create(user, options)
-  },
-  resend(options?: { readonly guard?: string, readonly expiresAt?: Date, readonly email?: string }) {
-    return getAuthRuntime().verification.resend(options)
-  },
-  consume(plainTextToken: string) {
-    return getAuthRuntime().verification.consume(plainTextToken)
-  },
-})
 
 export const authRuntimeInternals = {
   createAsyncAuthContext,

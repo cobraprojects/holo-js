@@ -28,17 +28,44 @@
   },
   "dependencies": {
     "@clack/prompts": "catalog:",
+    "@holo-js/auth": "catalog:",
     "@holo-js/cache-db": "catalog:",
     "@holo-js/config": "catalog:",
     "@holo-js/core": "catalog:",
     "@holo-js/db": "catalog:",
+    "@holo-js/kernel": "catalog:",
+    "@holo-js/security": "catalog:",
+    "@holo-js/storage": "catalog:",
     "esbuild": "catalog:",
     "inflection": "catalog:"
   },
+  "peerDependencies": {
+    "@holo-js/broadcast": "catalog:",
+    "@holo-js/mail": "catalog:",
+    "@holo-js/session": "catalog:",
+    "@holo-js/queue": "catalog:"
+  },
+  "peerDependenciesMeta": {
+    "@holo-js/broadcast": {
+      "optional": true
+    },
+    "@holo-js/mail": {
+      "optional": true
+    },
+    "@holo-js/queue": {
+      "optional": true
+    },
+    "@holo-js/session": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@holo-js/broadcast": "catalog:",
     "@holo-js/events": "catalog:",
+    "@holo-js/mail": "catalog:",
     "@holo-js/queue": "catalog:",
     "@holo-js/queue-db": "catalog:",
+    "@holo-js/session": "catalog:",
     "@types/node": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:",

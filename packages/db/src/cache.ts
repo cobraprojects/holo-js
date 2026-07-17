@@ -1082,8 +1082,7 @@ function supportsAutomaticPredicateInvalidation(predicate: QueryPredicateNode): 
 }
 
 function getColumnName(column: string): string {
-  const segments = column.split('.')
-  return segments[segments.length - 1] ?? column
+  return column.split('.').at(-1)!
 }
 
 function getPrimaryKeyColumn(plan: SelectQueryPlan): string {
@@ -1322,10 +1321,6 @@ function isPatchablePredicateObservation(predicate: QueryPredicateNode): boolean
   return predicate.predicates.every(child => isPatchablePredicateObservation(child))
 }
 
-function isColumnSelection(selection: QuerySelection): selection is Extract<QuerySelection, { readonly kind: 'column' }> {
-  return selection.kind === 'column'
-}
-
 function hasRequiredProjectionSelection(
   selections: readonly DatabaseQuerySelectionObservation[],
   column: string,
@@ -1350,10 +1345,6 @@ function isPatchableProjectionObservation(
 
   if (plan.selections.every(selection => selection.kind === 'aggregate')) {
     return true
-  }
-
-  if (!plan.selections.every(selection => isColumnSelection(selection))) {
-    return false
   }
 
   const needsProjectedPrimaryKey = !isExactPrimaryKeySingleResultProjection(plan)
@@ -1449,31 +1440,23 @@ function isSupportedGroupedCountHaving(plan: SelectQueryPlan): boolean {
     return true
   }
 
-  if (plan.groupBy.length === 0 || plan.having.length !== 1) {
-    return false
-  }
-
-  const clause = plan.having[0]
-  return typeof clause !== 'undefined'
-    && clause.expression.replace(/\s+/g, '').toLowerCase() === 'count(*)'
-    && typeof clause.value === 'number'
-    && Number.isFinite(clause.value)
-    && isGroupedCountHavingOperator(clause.operator)
+  return typeof readGroupedCountHavingClause(plan) !== 'undefined'
 }
 
-function readGroupedCountHavingObservation(
+function readGroupedCountHavingClause(
   plan: SelectQueryPlan,
 ): DatabaseQueryGroupedAggregateHavingObservation | undefined {
-  if (!isSupportedGroupedCountHaving(plan) || hasOnlyRedundantGroupedCountHaving(plan)) {
+  if (plan.groupBy.length === 0 || plan.having.length !== 1) {
     return undefined
   }
 
   const clause = plan.having[0]
   if (
     !clause
-    || !isGroupedCountHavingOperator(clause.operator)
+    || clause.expression.replace(/\s+/g, '').toLowerCase() !== 'count(*)'
     || typeof clause.value !== 'number'
     || !Number.isFinite(clause.value)
+    || !isGroupedCountHavingOperator(clause.operator)
   ) {
     return undefined
   }
@@ -1482,6 +1465,16 @@ function readGroupedCountHavingObservation(
     operator: clause.operator,
     value: clause.value,
   })
+}
+
+function readGroupedCountHavingObservation(
+  plan: SelectQueryPlan,
+): DatabaseQueryGroupedAggregateHavingObservation | undefined {
+  if (hasOnlyRedundantGroupedCountHaving(plan)) {
+    return undefined
+  }
+
+  return readGroupedCountHavingClause(plan)
 }
 
 function isGroupedCountHavingOperator(

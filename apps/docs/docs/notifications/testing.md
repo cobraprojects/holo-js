@@ -1,19 +1,19 @@
 # Testing Notifications
 
-When testing your application, you may want to inspect notifications without actually sending them. Holo-JS provides a fake notification driver for this purpose.
+Notification dispatches return a structured result for every target and channel. Tests can assert these results and
+replace external channels with an in-memory registered channel.
 
-## Using the Fake Notification Driver
-
-First, configure your application to use the fake driver in your test environment:
+## Registering a test channel
 
 ```ts
-// config/notifications.ts
-export default defineNotificationsConfig({
-  default: 'fake',
-  channels: {
-    fake: {
-      driver: 'fake'
-    }
+import { registerNotificationChannel } from '@holo-js/notifications'
+
+const deliveries: unknown[] = []
+
+registerNotificationChannel('test', {
+  async send(context) {
+    deliveries.push(context)
+    return { delivered: true }
   }
 })
 ```
@@ -23,56 +23,40 @@ export default defineNotificationsConfig({
 Then in your tests, you can inspect sent notifications:
 
 ```ts
-import { fakeNotificationData } from '@holo-js/notifications'
+import { notify } from '@holo-js/notifications'
 
 test('sends welcome notification when user registers', async () => {
   // Perform user registration
   await registerUser({ email: 'test@example.com' })
   
-  // Get the sent notifications
-  const notifications = fakeNotificationData()
-  
-  // Assert notifications were sent
-  expect(notifications).toHaveLength(1)
-  expect(notifications[0].type).toBe('welcome')
-  expect(notifications[0].to).toContainEqual({
-    email: 'test@example.com'
-  })
+  const result = await notify(user, welcomeNotification)
+
+  expect(result.channels).toContainEqual(expect.objectContaining({
+    channel: 'test',
+    success: true,
+    queued: false
+  }))
 })
 ```
 
-## Fake Notification Data Structure
+## Dispatch result structure
 
-The `fakeNotificationData()` function returns an array of sent notification objects with the following structure:
+Every awaited notification dispatch returns:
 
 ```ts
-{
-  type: string,
-  via: string[], // Array of channels the notification was sent through
-  to: Array<{ 
-    email: string, 
-    name?: string 
-  }>, // For email channel targets
-  userId?: string, // For database channel targets
-  channels: string[], // For broadcast channel targets
-  // ... channel-specific data based on via() return value
+type NotificationDispatchResult = {
+  totalTargets: number
+  channels: Array<{
+    channel: string
+    targetIndex: number
+    queued: boolean
+    success: boolean
+    deferred?: boolean
+    result?: unknown
+    error?: unknown
+  }>
+  deferred?: boolean
 }
-```
-
-## Testing with Different Drivers
-
-You can also test with other drivers by changing your test configuration:
-
-```ts
-// For logging notifications during test
-export default defineNotificationsConfig({
-  default: 'log'
-})
-
-// For storing notifications in database during test
-export default defineNotificationsConfig({
-  default: 'database'
-})
 ```
 
 ## Asserting Notification Content
@@ -80,59 +64,35 @@ export default defineNotificationsConfig({
 You can make detailed assertions about notification content:
 
 ```ts
-import { fakeNotificationData } from '@holo-js/notifications'
+import { notify } from '@holo-js/notifications'
 
 test('notification contains correct data', async () => {
-  // Trigger notification
-  await processInvoicePayment({ invoiceId: 'INV-123', amount: 100 })
-  
-  // Get sent notifications
-  const notifications = fakeNotificationData()
-  
-  // Assert email notification content
-  const emailNotification = notifications.find(n => 
-    n.type === 'invoice-paid' && 
-    n.via.includes('email')
-  )
-  
-  expect(emailNotification).toBeDefined()
-  expect(emailNotification.to).toContainEqual({
-    email: 'customer@example.com'
-  })
-  
-  // Assert database notification content
-  const databaseNotification = notifications.find(n => 
-    n.type === 'invoice-paid' && 
-    n.via.includes('database')
-  )
-  
-  expect(databaseNotification).toBeDefined()
-  expect(databaseNotification.userId).toBe('user-123')
+  const result = await notify(customer, invoicePaid)
+
+  expect(result.channels).toEqual(expect.arrayContaining([
+    expect.objectContaining({ channel: 'email', success: true }),
+    expect.objectContaining({ channel: 'database', success: true })
+  ]))
 })
 ```
 
 ## Testing On-Demand Notifications
 
 ```ts
-import { notifyUsing, fakeNotificationData } from '@holo-js/notifications'
+import { notifyUsing } from '@holo-js/notifications'
 
 test('sends on-demand notification', async () => {
   // Send on-demand notification
-  await notifyUsing()
+  const result = await notifyUsing()
     .channel('email', {
       email: 'admin@example.com',
       name: 'Admin User'
     })
     .notify(invoicePaid)
   
-  // Get sent notifications
-  const notifications = fakeNotificationData()
-  
-  // Assert notification was sent to correct target
-  expect(notifications).toHaveLength(1)
-  expect(notifications[0].to).toContainEqual({
-    email: 'admin@example.com',
-    name: 'Admin User'
-  })
+  expect(result.channels).toContainEqual(expect.objectContaining({
+    channel: 'email',
+    success: true
+  }))
 })
 ```

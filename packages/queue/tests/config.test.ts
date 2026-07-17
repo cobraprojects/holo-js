@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { composeRegisteredConfig } from '@holo-js/config/registry'
 import {
+  defineQueueConfig,
   defineJob,
   normalizeQueueConfig,
   queueInternals,
@@ -38,6 +40,22 @@ const sharedRedisConfig = {
 } as const
 
 describe('@holo-js/queue config', () => {
+  it('defines immutable queue config and composes optional Redis context', () => {
+    expect(Object.isFrozen(defineQueueConfig({ default: 'sync' }))).toBe(true)
+
+    const queue = {
+      connections: {
+        redis: { driver: 'redis' as const },
+      },
+    }
+    const composed = composeRegisteredConfig({ queue, redis: {} }, { redis: sharedRedisConfig })
+    const normalizedQueue = composed.queue as ReturnType<typeof normalizeQueueConfig> | undefined
+    expect(normalizedQueue?.connections.redis)
+      .toMatchObject({ connection: 'default' })
+    expect(() => composeRegisteredConfig({ queue }, { redis: sharedRedisConfig }))
+      .toThrow('requires a shared Redis config')
+  })
+
   it('normalizes the default sync queue config', () => {
     expect(normalizeQueueConfig()).toEqual(holoQueueDefaults)
   })

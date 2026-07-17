@@ -1,7 +1,7 @@
 import { authRuntimeInternals, getAuthRuntime } from '@holo-js/auth'
-import type { AuthenticatedAuthUser, AuthEstablishedSession, AuthUserLike } from '@holo-js/auth'
+import type { AuthenticatedAuthUser, AuthEstablishedSession } from '@holo-js/auth'
 import { parseCookieHeader } from '@holo-js/session'
-import type { AuthClerkProviderConfig, NormalizedAuthClerkProviderConfig } from '@holo-js/config'
+import type { AuthClerkProviderConfig, NormalizedAuthClerkProviderConfig } from '@holo-js/auth'
 export {
   ClerkAuthConflictError,
 } from './contracts'
@@ -87,6 +87,12 @@ interface ClerkRuntimeState {
   bindings?: ConfigureClerkAuthRuntimeOptions
 }
 
+type VerifiedClerkClaims = Readonly<Record<string, unknown>> & {
+  readonly exp: number
+  readonly sessionId: string
+  readonly sub: string
+}
+
 const CLERK_RUNTIME_STATE_KEY = '__holoJsAuthClerkRuntime'
 
 type ClerkRuntimeStateHost = {
@@ -135,7 +141,7 @@ async function verifyClerkSessionToken(
   token: string,
   config: AuthClerkProviderConfig,
   authorizedParties: readonly string[] = [],
-): Promise<Readonly<Record<string, unknown>>> {
+): Promise<VerifiedClerkClaims> {
   const parsed = parseJwt(token)
   const headerKid = typeof parsed.header.kid === 'string' ? parsed.header.kid : undefined
   const jwksUrl = resolveClerkJwksUrl(config)
@@ -172,6 +178,9 @@ async function verifyClerkSessionToken(
   ) {
     throw new Error('[@holo-js/auth-clerk] Clerk token did not include a session id.')
   }
+  const sessionId = typeof parsed.payload.sid === 'string' && parsed.payload.sid.trim()
+    ? parsed.payload.sid.trim()
+    : (parsed.payload.session_id as string).trim()
 
   const nbf = typeof parsed.payload.nbf === 'number' ? parsed.payload.nbf : undefined
   if (typeof nbf === 'number' && (nbf * 1000) > Date.now()) {
@@ -190,7 +199,12 @@ async function verifyClerkSessionToken(
     throw new Error(`[@holo-js/auth-clerk] Clerk token authorized party "${azp}" is not allowed.`)
   }
 
-  return parsed.payload
+  return Object.freeze({
+    ...parsed.payload,
+    exp,
+    sessionId,
+    sub: parsed.payload.sub.trim(),
+  })
 }
 
 function normalizeClerkEmailAddress(value: Readonly<Record<string, unknown>>): ClerkEmailAddress {
@@ -291,13 +305,13 @@ async function fetchClerkUserProfile(
   return normalizeClerkUserProfile(await response.json() as Readonly<Record<string, unknown>>)
 }
 
-function createDefaultProviderRuntime(providerName: string, config: AuthClerkProviderConfig): ClerkProviderRuntime {
+function createDefaultProviderRuntime(providerName: string, config: NormalizedAuthClerkProviderConfig): ClerkProviderRuntime {
   const cacheKey = JSON.stringify([
     providerName,
     config.apiUrl ?? '',
     config.frontendApi ?? '',
     config.secretKey ?? '',
-    [...(config.authorizedParties ?? [])].sort(),
+    [...config.authorizedParties].sort(),
   ])
   const existing = clerkDefaultProviderRuntimeCache.get(cacheKey)
   if (existing) {
@@ -307,20 +321,10 @@ function createDefaultProviderRuntime(providerName: string, config: AuthClerkPro
   const runtime = Object.freeze({
     async verifySession({ token }: ClerkVerifySessionContext): Promise<ClerkVerifiedSession | null> {
       const claims = await verifyClerkSessionToken(token, config, config.authorizedParties)
-      const userId = typeof claims.sub === 'string' ? claims.sub : ''
-      if (!userId) {
-        throw new Error('[@holo-js/auth-clerk] Clerk token did not include a subject.')
-      }
-
-      const profile = await fetchClerkUserProfile(userId, config)
-      const sessionId = typeof claims.sid === 'string'
-        ? claims.sid
-        : typeof claims.session_id === 'string'
-          ? claims.session_id
-          : token
+      const profile = await fetchClerkUserProfile(claims.sub, config)
 
       return Object.freeze({
-        sessionId,
+        sessionId: claims.sessionId,
         user: profile,
         accessToken: token,
         raw: Object.freeze({
@@ -349,8 +353,8 @@ function resolveConfiguredProviderName(provider?: string): string {
     return configuredDefaultProvider
   }
 
-  const configuredProviders = Object.entries(bindings.config.clerk).flatMap(([name, value]) => (
-    name !== 'provider' && name !== 'identityStore' && isNormalizedClerkProviderConfig(value)
+  const configuredProviders = Object.entries(bindings.config.clerk).flatMap(([name]) => (
+    name !== 'provider' && name !== 'identityStore'
       ? [name]
       : []
   ))
@@ -396,7 +400,7 @@ function getConfiguredProviderConfig(provider?: string): {
     frontendApi: configured.frontendApi,
     redirectUri: configured.redirectUri,
     sessionCookie: configured.sessionCookie,
-    authorizedParties: configured.authorizedParties ?? [],
+    authorizedParties: configured.authorizedParties,
     guard: configured.guard,
     mapToProvider: configured.mapToProvider,
   }
@@ -486,7 +490,7 @@ function createClerkErrorResponse(error: unknown, code: string): Response {
     code,
     message: getErrorMessage(error),
   } as const, {
-    status: error instanceof ClerkAuthConflictError ? 409 : 422,
+    status: 422,
   })
 }
 
@@ -498,10 +502,7 @@ function resolveGuardAndProvider(provider?: string): {
   const authBindings = authRuntimeInternals.getRuntimeBindings()
   const providerConfig = getConfiguredProviderConfig(provider)
   const guardName = providerConfig.guard ?? authBindings.config.defaults.guard
-  const guard = authBindings.config.guards[guardName]
-  if (!guard) {
-    throw new Error(`[@holo-js/auth-clerk] Guard "${guardName}" is not configured for Clerk provider "${providerConfig.name}".`)
-  }
+  const guard = authBindings.config.guards[guardName]!
   if (guard.driver !== 'session') {
     throw new Error(`[@holo-js/auth-clerk] Clerk sign-in requires auth guard "${guardName}" to use the session driver.`)
   }
@@ -521,14 +522,10 @@ function resolveGuardAndProvider(provider?: string): {
 
 function requireUserId(
   adapter: RuntimeAuthProviderAdapter,
-  user: unknown,
+  user: Record<string, unknown>,
   message: string,
 ): string | number {
-  if (!user || typeof user !== 'object') {
-    throw new Error(message)
-  }
-
-  const userId = adapter.getId(user as Record<string, unknown>)
+  const userId = adapter.getId(user)
   if (typeof userId !== 'string' && typeof userId !== 'number') {
     throw new Error(message)
   }
@@ -544,22 +541,11 @@ function requireUserRecord(user: unknown, message: string): Record<string, unkno
   return user as Record<string, unknown>
 }
 
-function requireSerializedUser(user: AuthUserLike, message: string): SerializedClerkAuthUser {
-  if (typeof user.id === 'string' || typeof user.id === 'number') {
-    return user as SerializedClerkAuthUser
-  }
-
-  throw new Error(message)
-}
-
 function createClerkSessionPayload(
   authenticated: Pick<ClerkAuthenticationResult, 'guard' | 'authProvider' | 'provider' | 'user'>,
   session: ClerkVerifiedSession,
 ): ClerkSessionPayload {
-  const user = requireSerializedUser(
-    authenticated.user,
-    '[@holo-js/auth-clerk] Clerk-authenticated local users must expose a serializable id.',
-  )
+  const user = authenticated.user as SerializedClerkAuthUser
 
   return Object.freeze({
     guard: authenticated.guard,
@@ -615,7 +601,7 @@ function serializeLocalUser<TUserAttributes extends ClerkUserAttributes = ClerkD
     configurable: true,
   })
   Object.defineProperty(result, 'can', {
-    value: () => false,
+    value: async () => false,
     enumerable: false,
     configurable: true,
   })
@@ -722,12 +708,8 @@ function normalizeHostedProfile(profile: ClerkUserProfile): Readonly<Record<stri
 
 async function findUserByEmail(
   adapter: RuntimeAuthProviderAdapter,
-  email: string | undefined,
+  email: string,
 ): Promise<Record<string, unknown> | null> {
-  if (!email?.trim()) {
-    return null
-  }
-
   const user = await adapter.findByCredentials({ email: email.trim() })
   return user
     ? requireUserRecord(user, '[@holo-js/auth-clerk] Auth provider lookups must return object users.')
@@ -839,10 +821,11 @@ function createIdentityRecord(input: {
 
 async function withIdentitySyncLock<TResult>(key: string, callback: () => Promise<TResult>): Promise<TResult> {
   const previous = clerkIdentitySyncLocks.get(key) ?? Promise.resolve()
-  let release: () => void = () => {}
-  const current = previous.then(() => new Promise<void>((resolve) => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
     release = resolve
-  }))
+  })
+  const current = previous.then(() => gate)
   clerkIdentitySyncLocks.set(key, current)
 
   await previous
@@ -879,7 +862,6 @@ async function resolveClaimedIdentityUser(
   fallback: {
     readonly user: Record<string, unknown>
     readonly userId: string | number
-    readonly deleteOnMismatch?: boolean
   },
 ): Promise<Record<string, unknown>> {
   if (sameUserId(identity.userId, fallback.userId)) {
@@ -891,7 +873,7 @@ async function resolveClaimedIdentityUser(
     '[@holo-js/auth-clerk] Claimed Clerk identities must reference an existing local user.',
   )
 
-  if (fallback.deleteOnMismatch && adapter.delete) {
+  if (adapter.delete) {
     await adapter.delete(fallback.userId)
   }
 
@@ -940,13 +922,9 @@ function isConfiguredClerkRedirectRequest(
     return hasClerkCallbackState(request)
   }
 
-  try {
-    const requestUrl = new URL(request.url)
-    const configuredUrl = new URL(redirectUri, requestUrl.origin)
-    return requestUrl.origin === configuredUrl.origin && requestUrl.pathname === configuredUrl.pathname
-  } catch {
-    return false
-  }
+  const requestUrl = new URL(request.url)
+  const configuredUrl = new URL(redirectUri, requestUrl.origin)
+  return requestUrl.origin === configuredUrl.origin && requestUrl.pathname === configuredUrl.pathname
 }
 
 function splitSetCookieHeader(value: string): readonly string[] {
@@ -1057,7 +1035,7 @@ function resolveRequestAuthorizedParties(
 ): readonly string[] {
   return Object.freeze([
     ...new Set([
-      ...(config.authorizedParties ?? []),
+      ...config.authorizedParties,
       new URL(request.url).origin,
     ]),
   ])
@@ -1073,11 +1051,7 @@ async function verifyDefaultSessionToken(
     authorizedParties,
   }
   const defaultRuntime = createDefaultProviderRuntime(providerConfig.name, config)
-  if (!defaultRuntime.verifySession) {
-    throw new Error(`[@holo-js/auth-clerk] Clerk provider runtime "${providerConfig.name}" does not implement verifySession().`)
-  }
-
-  return defaultRuntime.verifySession({
+  return defaultRuntime.verifySession!({
     provider: providerConfig.name,
     token,
     config,
@@ -1315,7 +1289,6 @@ export async function syncIdentity<TUserAttributes extends ClerkUserAttributes =
     const claimedUser = await resolveClaimedIdentityUser(adapter, claimedIdentity, {
       user: localUser,
       userId: identity.userId,
-      deleteOnMismatch: true,
     })
     const claimedStatus = sameUserId(claimedIdentity.userId, identity.userId) ? 'created' : 'linked'
 

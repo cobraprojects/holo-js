@@ -24,7 +24,7 @@ async function createProject(): Promise<string> {
   await writeFile(join(root, 'config/app.ts'), 'export default {}', 'utf8')
   await writeFile(join(root, 'config/database.ts'), 'export default {}', 'utf8')
   await writeFile(join(root, 'config/auth.ts'), `
-import { defineAuthConfig } from '@holo-js/config'
+import { defineAuthConfig } from '@holo-js/auth'
 
 export default defineAuthConfig({
   defaults: {
@@ -37,6 +37,11 @@ export default defineAuthConfig({
     },
   },
   })
+`, 'utf8')
+  await writeFile(join(root, 'config/session.ts'), `
+import { defineSessionConfig } from '@holo-js/session'
+
+export default defineSessionConfig({})
 `, 'utf8')
   await writeFile(join(root, 'server/models/User.ts'), 'export default {}', 'utf8')
 

@@ -1,4 +1,6 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { createServer, request as requestHttp } from 'node:http'
+import { request as requestHttps } from 'node:https'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import sharp from 'sharp'
@@ -13,11 +15,11 @@ import {
   DB,
   defineGeneratedTable,
   createSchemaService,
-  createSQLiteAdapter,
   defineModel,
   configureDB,
   resetDB,
 } from '@holo-js/db'
+import { createSQLiteAdapter } from '@holo-js/db-sqlite'
 import {
   configureQueueRuntime,
   listRegisteredQueueJobs,
@@ -39,6 +41,7 @@ import {
   conversion,
   createDefaultMediaConversionExecutor,
   dispatchQueuedMediaConversions,
+  defineMediaConfig,
   defineMediaModel,
   ensureMediaQueueJobRegistered,
   getMediaConversionExecutor,
@@ -49,6 +52,7 @@ import {
   MediaItem,
   normalizeCollectionDefinitions,
   normalizeConversionDefinitions,
+  normalizeMediaConfig,
   normalizeMediaDefinition,
   resetMediaPathGenerator,
   resetMediaRuntime,
@@ -69,6 +73,7 @@ import type {
   resolveMediaCollection as resolveRegistryMediaCollection,
 } from '../src/registry'
 import { getContentSize } from '../src/runtime/binary'
+import { mediaAdderInternals } from '../src/model/adder'
 
 const sharedRedisConfig = {
   default: 'default',
@@ -265,6 +270,14 @@ vi.mock('@holo-js/storage/runtime', () => {
         throw new Error('local disks are private')
       }
 
+      if (diskName === 'absolute') {
+        return `/assets/${storageState.normalizePath(path)}`
+      }
+
+      if (diskName === 'relative') {
+        return `assets/${storageState.normalizePath(path)}`
+      }
+
       return `https://cdn.test/${diskName}/${storageState.normalizePath(path)}`
     },
     temporaryUrl(path: string, _options?: { expiresAt?: Date | number | string, expiresIn?: number }) {
@@ -353,7 +366,7 @@ function createAsyncQueueHarness() {
       input: QueueReserveInput,
     ): Promise<QueueReservedJob<TPayload> | null> {
       const index = queued.findIndex((job) => {
-        if (!input.queueNames.includes(job.queue)) {
+        if (input.queueNames && !input.queueNames.includes(job.queue)) {
           return false
         }
 
@@ -512,6 +525,8 @@ async function createImageBuffer(
 
 describe('@holo-js/media', () => {
   beforeEach(async () => {
+    mediaAdderInternals.resetRemoteMediaTransport()
+    mediaAdderInternals.setRemoteMediaDownloader(async url => await fetch(url))
     resetDB()
     resetQueueRegistry()
     await resetQueueRuntime()
@@ -519,6 +534,12 @@ describe('@holo-js/media', () => {
     storageState.reset()
     await bootDatabase()
     configureQueueRuntime()
+  })
+
+  it('defines and normalizes immutable media project configuration', () => {
+    expect(normalizeMediaConfig()).toEqual({})
+    expect(Object.isFrozen(normalizeMediaConfig({ disk: 'public' }))).toBe(true)
+    expect(defineMediaConfig({ disk: 's3' })).toEqual({ disk: 's3' })
   })
 
   it('normalizes media definitions and validates collection references', () => {
@@ -1963,6 +1984,24 @@ describe('@holo-js/media', () => {
 
     const conversionDiskItem = new MediaItem(publicManual)
     expect(conversionDiskItem.getPath('fallback' as never)).toContain('/s3/')
+
+    const { id: _omittedId, ...manualAttributes } = publicManual.toAttributes()
+    const absoluteUrlMedia = await Media.create({
+      ...manualAttributes,
+      uuid: 'absolute-url',
+      disk: 'absolute',
+      path: 'absolute/original.txt',
+      generated_conversions: {},
+    })
+    const relativeUrlMedia = await Media.create({
+      ...manualAttributes,
+      uuid: 'relative-url',
+      disk: 'relative',
+      path: 'relative/original.txt',
+      generated_conversions: {},
+    })
+    expect(new MediaItem(absoluteUrlMedia).getPath()).toBe('/assets/absolute/original.txt')
+    expect(new MediaItem(relativeUrlMedia).getPath()).toBe('/assets/relative/original.txt')
   })
 
   it('supports remote uploads and selective regeneration', async () => {
@@ -2136,7 +2175,7 @@ describe('@holo-js/media', () => {
       status: 200,
       statusText: 'OK',
       headers: new Headers({
-        'content-length': '10',
+        'content-length': '1537',
         'content-type': 'image/jpeg',
       }),
       arrayBuffer,
@@ -2150,7 +2189,7 @@ describe('@holo-js/media', () => {
       collections: [
         collection('images')
           .disk('public')
-          .maxSize(2),
+          .maxSize(1536),
       ],
     })
 
@@ -2159,7 +2198,7 @@ describe('@holo-js/media', () => {
 
       const result = await post.addMediaFromUrl('https://example.test/oversized.jpg').toMediaCollection('images')
       expect(result.data).toBeNull()
-      expect(result.error?.message).toBe('The selected file must be 2 bytes or smaller.')
+      expect(result.error?.message).toBe('The selected file must be 1.5 KB or smaller.')
       expect(arrayBuffer).not.toHaveBeenCalled()
     } finally {
       vi.unstubAllGlobals()
@@ -2187,12 +2226,112 @@ describe('@holo-js/media', () => {
 
     try {
       const post = await Post.create({ title: 'Remote SSRF' })
-      await expect(post.addMediaFromUrl('http://127.0.0.1/private.jpg').toMediaCollection('images')).rejects.toThrow('local or private hosts')
+      await expect(post.addMediaFromUrl('not a url').toMediaCollection('images')).rejects.toThrow('valid absolute URLs')
+      await expect(post.addMediaFromUrl('ftp://example.test/private.jpg').toMediaCollection('images')).rejects.toThrow('use http or https')
+      await expect(post.addMediaFromUrl('https://user:secret@example.test/private.jpg').toMediaCollection('images')).rejects.toThrow('must not include credentials')
+      const blockedHosts = [
+        'localhost',
+        'app.localhost',
+        '0.0.0.1',
+        '10.0.0.1',
+        '127.0.0.1',
+        '169.254.1.1',
+        '172.16.0.1',
+        '192.168.0.1',
+        '224.0.0.1',
+        '[::1]',
+        '[::]',
+        '[fc00::1]',
+        '[fd00::1]',
+        '[fe80::1]',
+        '[febf::1]',
+        '[ff02::1]',
+        '[::ffff:127.0.0.1]',
+      ]
+      for (const host of blockedHosts) {
+        await expect(post.addMediaFromUrl(`http://${host}/private.jpg`).toMediaCollection('images'))
+          .rejects.toThrow('local or private hosts')
+      }
       await expect(post.addMediaFromUrl('https://example.test/redirect.jpg').toMediaCollection('images')).rejects.toThrow('do not follow redirects')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      await expect(mediaAdderInternals.resolveRemoteMediaAddress(
+        new URL('https://public-name.test/private.jpg'),
+        async () => [
+          { address: '93.184.216.34', family: 4 },
+          { address: '169.254.169.254', family: 4 },
+        ],
+      ))
+        .rejects.toThrow('must not resolve to local or private hosts')
+      await expect(mediaAdderInternals.resolveRemoteMediaAddress(
+        new URL('https://public-name.test/image.jpg'),
+        async () => [{ address: '93.184.216.34', family: 4 }],
+      )).resolves.toEqual({ address: '93.184.216.34', family: 4 })
       expect(fetchMock).toHaveBeenCalledTimes(1)
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+
+  it('pins remote media HTTP requests to the validated address', async () => {
+    const server = createServer((_request, response) => {
+      response.setHeader('content-type', 'text/plain')
+      response.setHeader('set-cookie', ['one=1', 'two=2'])
+      response.end('remote media')
+    })
+    await new Promise<void>(resolveListening => server.listen(0, '127.0.0.1', resolveListening))
+    const address = server.address()
+    if (!address || typeof address === 'string') {
+      throw new Error('Expected an assigned HTTP test port.')
+    }
+
+    const url = new URL(`http://media.test:${address.port}/image.txt`)
+    const response = await mediaAdderInternals.requestRemoteMedia(url, {
+      address: '127.0.0.1',
+      family: 4,
+    })
+    expect(await response.text()).toBe('remote media')
+    expect(response.headers.get('content-type')).toBe('text/plain')
+    expect(response.headers.getSetCookie()).toEqual(['one=1', 'two=2'])
+    expect(mediaAdderInternals.resolveRemoteMediaRequest('http:')).toBe(requestHttp)
+    expect(mediaAdderInternals.resolveRemoteMediaRequest('https:')).toBe(requestHttps)
+
+    const lookup = mediaAdderInternals.createPinnedRemoteMediaLookup({ address: '93.184.216.34', family: 4 })!
+    const singleAddressCallback = vi.fn()
+    lookup('media.test', { all: false }, singleAddressCallback)
+    expect(singleAddressCallback).toHaveBeenCalledWith(null, '93.184.216.34', 4)
+    const allAddressesCallback = vi.fn()
+    lookup('media.test', { all: true }, allAddressesCallback)
+    expect(allAddressesCallback).toHaveBeenCalledWith(null, [{ address: '93.184.216.34', family: 4 }])
+
+    const normalizedHeaders = new Headers()
+    mediaAdderInternals.appendRemoteMediaHeaders(normalizedHeaders, {
+      ignored: undefined,
+      'x-values': ['one', 'two'],
+      'x-value': 'value',
+    })
+    expect(normalizedHeaders.get('ignored')).toBeNull()
+    expect(normalizedHeaders.get('x-values')).toBe('one, two')
+    expect(normalizedHeaders.get('x-value')).toBe('value')
+    await expect(mediaAdderInternals.defaultRemoteMediaAddressResolver('localhost'))
+      .resolves.not.toHaveLength(0)
+
+    await new Promise<void>((resolveClosed, reject) => server.close(error => error ? reject(error) : resolveClosed()))
+    await expect(mediaAdderInternals.requestRemoteMedia(url, {
+      address: '127.0.0.1',
+      family: 4,
+    })).rejects.toThrow()
+
+    const requester = vi.fn(async () => new Response('downloaded'))
+    const downloader = mediaAdderInternals.createRemoteMediaDownloader(
+      async () => [{ address: '93.184.216.34', family: 4 }],
+      requester,
+    )
+    await expect(downloader(new URL('https://media.test/file.jpg'))).resolves.toBeInstanceOf(Response)
+    expect(requester).toHaveBeenCalledWith(
+      new URL('https://media.test/file.jpg'),
+      { address: '93.184.216.34', family: 4 },
+    )
   })
 
   it('enforces the default remote upload byte limit when collection max size is not configured', async () => {
@@ -2223,6 +2362,36 @@ describe('@holo-js/media', () => {
       expect(result.data).toBeNull()
       expect(result.error?.message).toBe('The selected file must be 10 MB or smaller.')
       expect(arrayBuffer).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('accepts bounded remote uploads from responses without a body stream', async () => {
+    const contents = new Uint8Array(await createImageBuffer())
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({
+        'content-type': 'image/png',
+      }),
+      body: null,
+      arrayBuffer: async () => contents.buffer,
+    } as Response)))
+
+    const BasePost = defineModel(postsTable, {
+      fillable: ['title'],
+    })
+    const Post = defineMediaModel(BasePost, {
+      collections: [collection('images').disk('public')],
+    })
+
+    try {
+      const post = await Post.create({ title: 'Remote Without Stream' })
+      await expectMediaAdded(
+        post.addMediaFromUrl('https://example.test/no-stream.png').toMediaCollection('images'),
+      )
     } finally {
       vi.unstubAllGlobals()
     }

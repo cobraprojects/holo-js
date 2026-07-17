@@ -37,8 +37,7 @@ Queue does not own event contracts. Event contracts and listener orchestration a
 New apps start with `sync`:
 
 ```ts
-import { defineQueueConfig } from '@holo-js/config'
-
+import { defineQueueConfig } from '@holo-js/queue'
 export default defineQueueConfig({
   default: 'sync',
   failed: {
@@ -81,7 +80,8 @@ Use `redis` for normal asynchronous work:
 
 ```ts
 // config/redis.ts
-import { defineRedisConfig, env } from '@holo-js/config'
+import { env } from '@holo-js/config'
+import { defineRedisConfig } from '@holo-js/kernel'
 
 export default defineRedisConfig({
   default: 'cache',
@@ -100,8 +100,7 @@ export default defineRedisConfig({
 
 ```ts
 // config/queue.ts
-import { defineQueueConfig } from '@holo-js/config'
-
+import { defineQueueConfig } from '@holo-js/queue'
 export default defineQueueConfig({
   default: 'redis',
   failed: {
@@ -143,8 +142,7 @@ npx holo queue:work --connection redis
 Use `database` when you want queue portability and are comfortable polling from your app database:
 
 ```ts
-import { defineQueueConfig } from '@holo-js/config'
-
+import { defineQueueConfig } from '@holo-js/queue'
 export default defineQueueConfig({
   default: 'database',
   failed: {

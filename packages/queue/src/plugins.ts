@@ -1,5 +1,8 @@
 import { resolve } from 'node:path'
-import { loadHoloPluginContributionModules, type HoloPluginRuntimeModule } from '@holo-js/config'
+import {
+  loadHoloPluginContributionModules,
+  loadHoloPluginDefinitions,
+} from '@holo-js/kernel'
 import type { QueueDriverFactory } from './contracts'
 
 const loadedFactoriesByProjectRoot = new Map<string, readonly QueueDriverFactory[]>()
@@ -23,18 +26,23 @@ function resolveQueueDriverFactory(moduleValue: unknown, packageName: string, dr
   return candidate as unknown as QueueDriverFactory
 }
 
-export async function loadQueuePluginDriverFactories(projectRoot = process.cwd()): Promise<readonly QueueDriverFactory[]> {
+export async function loadQueuePluginDriverFactories(
+  projectRoot = process.cwd(),
+  pluginNames: readonly string[] = [],
+): Promise<readonly QueueDriverFactory[]> {
   const root = resolve(projectRoot)
-  const loadedFactories = loadedFactoriesByProjectRoot.get(root)
+  const cacheKey = `${root}\0${[...pluginNames].sort().join('\0')}`
+  const loadedFactories = loadedFactoriesByProjectRoot.get(cacheKey)
   if (loadedFactories) {
     return loadedFactories
   }
 
-  if (failedLoadsByProjectRoot.has(root)) {
-    throw failedLoadsByProjectRoot.get(root)
+  if (failedLoadsByProjectRoot.has(cacheKey)) {
+    throw failedLoadsByProjectRoot.get(cacheKey)
   }
 
-  const contributions: readonly HoloPluginRuntimeModule[] = await loadHoloPluginContributionModules(root, 'queue', 'drivers')
+  const plugins = await loadHoloPluginDefinitions(root, pluginNames)
+  const contributions = await loadHoloPluginContributionModules(root, plugins, 'queue', 'drivers')
   let factories: readonly QueueDriverFactory[]
 
   try {
@@ -44,11 +52,11 @@ export async function loadQueuePluginDriverFactories(projectRoot = process.cwd()
       contribution.name,
     )))
   } catch (error) {
-    failedLoadsByProjectRoot.set(root, error)
+    failedLoadsByProjectRoot.set(cacheKey, error)
     throw error
   }
 
-  loadedFactoriesByProjectRoot.set(root, factories)
+  loadedFactoriesByProjectRoot.set(cacheKey, factories)
   return factories
 }
 

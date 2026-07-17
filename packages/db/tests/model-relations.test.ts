@@ -910,6 +910,166 @@ describe('model relation slice', () => {
       }),
     ]))
 
+    const firstUser = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return User.query().with('profile').withCount('posts').orderBy('id').firstJson()
+    })
+    expect(firstUser.value).toMatchObject({ id: 1, posts_count: 2, profile: { bio: 'Lead' } })
+
+    const paginatedUsers = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return User.query().with('profile').withCount('posts').orderBy('id').paginateJson(1, 1)
+    })
+    expect(paginatedUsers.value.data[0]).toMatchObject({ id: 1, posts_count: 2, profile: { bio: 'Lead' } })
+
+    const simpleUsers = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return User.query().with('profile').withCount('posts').orderBy('id').simplePaginateJson(1, 1)
+    })
+    expect(simpleUsers.value.data[0]).toMatchObject({ id: 1, posts_count: 2, profile: { bio: 'Lead' } })
+
+    const cursorUsers = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return User.query().with('profile').withCount('posts').orderBy('id').cursorPaginateJson(1)
+    })
+    expect(cursorUsers.value.data[0]).toMatchObject({ id: 1, posts_count: 2, profile: { bio: 'Lead' } })
+
+    const patchableFirstUser = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return User.query().with('profile').orderBy('id').firstJson()
+    })
+    expect(patchableFirstUser.value).toMatchObject({ id: 1, profile: { bio: 'Lead' } })
+
+    const patchablePaginatedUsers = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return User.query().with('profile').orderBy('id').paginateJson(1, 1)
+    })
+    expect(patchablePaginatedUsers.value.data[0]).toMatchObject({ id: 1, profile: { bio: 'Lead' } })
+
+    const patchableSimpleUsers = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return User.query().with('profile').orderBy('id').simplePaginateJson(1, 1)
+    })
+    expect(patchableSimpleUsers.value.data[0]).toMatchObject({ id: 1, profile: { bio: 'Lead' } })
+
+    const patchableCursorUsers = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return User.query().with('profile').orderBy('id').cursorPaginateJson(1)
+    })
+    expect(patchableCursorUsers.value.data[0]).toMatchObject({ id: 1, profile: { bio: 'Lead' } })
+
+    const emptyPaginatedUsers = await User.query().with('profile').orderBy('id').paginateJson(1, 99)
+    expect(emptyPaginatedUsers.data).toEqual([])
+    expect(emptyPaginatedUsers.meta.from).toBeNull()
+    expect(emptyPaginatedUsers.meta.to).toBeNull()
+
+    const emptySimpleUsers = await User.query().with('profile').orderBy('id').simplePaginateJson(1, 99)
+    expect(emptySimpleUsers.data).toEqual([])
+    expect(emptySimpleUsers.meta.from).toBeNull()
+    expect(emptySimpleUsers.meta.to).toBeNull()
+
+    const terminalCursorUsers = await User.query().with('profile').orderBy('id').cursorPaginateJson(10)
+    expect(terminalCursorUsers.nextCursor).toBeNull()
+
+    const patchablePost = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return Post.query().with('author').orderBy('id').firstJson()
+    })
+    expect(patchablePost.value).toMatchObject({ id: 20, author: { name: 'Ava' } })
+
+    await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      const path = () => [] as const
+      User.getRepository().recordRelationObservations(
+        [undefined as never],
+        ['posts', 'profile', 'roles', 'posts.author'],
+        path,
+      )
+      Post.getRepository().recordRelationObservations([undefined as never], ['author'], path)
+      User.getRepository().recordRelationAggregateObservations(
+        [undefined as never],
+        [
+          { relation: 'posts', kind: 'count' },
+          { relation: 'posts.author', kind: 'count' },
+        ] as never,
+        path,
+      )
+      const aggregateUser = User.getRepository().hydrate({ id: 1, name: 'Ava' })
+      aggregateUser.setComputed('posts_sum_score', 8)
+      User.getRepository().recordRelationAggregateObservations(
+        [aggregateUser],
+        [
+          { relation: 'posts', kind: 'sum', column: 'score' },
+          { relation: 'posts', kind: 'sum' },
+        ] as never,
+        path,
+      )
+      const fallbackUser = User.getRepository().hydrate({ id: 1, name: 'Ava' })
+      fallbackUser.setRelation('posts', [])
+      fallbackUser.setRelation('profile', null)
+      fallbackUser.setRelation('roles', [{}])
+      User.getRepository().recordRelationObservations(
+        [fallbackUser],
+        ['posts', 'profile', 'roles'],
+        path,
+      )
+      const fallbackPost = Post.getRepository().hydrate({ id: 20, userId: 1, title: 'Post A', score: 5 })
+      fallbackPost.setRelation('author', fallbackUser)
+      Post.getRepository().recordRelationObservations([fallbackPost], ['author'], path)
+      const unsavedUser = User.make({ name: 'Unsaved' })
+      await User.getRepository().loadRelations(
+        [User.getRepository().hydrate({ id: 1, name: 'Ava' }), unsavedUser],
+        [{ relation: 'posts' }],
+        false,
+      )
+      unsavedUser.setRelation('posts', [])
+      unsavedUser.setRelation('profile', null)
+      unsavedUser.setRelation('roles', [Role.make({ name: 'Unsaved Role' })])
+      User.getRepository().recordRelationObservations([unsavedUser], ['posts', 'profile', 'roles'], path)
+      User.getRepository().recordRelationAggregateObservations(
+        [unsavedUser],
+        [{ relation: 'posts', kind: 'count' }],
+        path,
+      )
+      const unsavedPost = Post.make({ userId: 1, title: 'Unsaved', score: 0 })
+      unsavedPost.setRelation('author', fallbackUser)
+      Post.getRepository().recordRelationObservations([unsavedPost], ['author'], path)
+
+      const ScopedPost = defineModelFromTable(posts, {
+        relations: {
+          author: scopeRelation(belongsTo(() => User, 'userId'), query => query),
+        },
+      })
+      const ScopedUser = defineModelFromTable(users, {
+        relations: {
+          posts: scopeRelation(hasMany(() => Post, 'userId'), query => query),
+          profile: scopeRelation(hasOne(() => Profile, 'userId'), query => query),
+          roles: scopeRelation(
+            belongsToMany(() => Role, roleUsers, 'userId', 'roleId'),
+            query => query,
+          ),
+        },
+      })
+      const scopedUser = ScopedUser.getRepository().hydrate({ id: 1, name: 'Ava' })
+      scopedUser.setRelation('posts', [])
+      scopedUser.setRelation('profile', null)
+      scopedUser.setRelation('roles', [])
+      ScopedUser.getRepository().recordRelationObservations(
+        [scopedUser],
+        ['posts', 'profile', 'roles'],
+        path,
+      )
+      const scopedPost = ScopedPost.getRepository().hydrate({ id: 20, userId: 1, title: 'Post A', score: 5 })
+      scopedPost.setRelation('author', scopedUser)
+      ScopedPost.getRepository().recordRelationObservations([scopedPost], ['author'], path)
+      const MorphUser = defineModelFromTable(users, {
+        relations: {
+          images: morphMany(() => Post, 'imageable', 'imageableType', 'imageableId'),
+        },
+      })
+      const morphUser = MorphUser.getRepository().hydrate({ id: 1, name: 'Ava' })
+      morphUser.setRelation('images', [])
+      MorphUser.getRepository().recordRelationObservations([morphUser], ['images'], path)
+      return true
+    })
+
+    const pendingUser = User.getRepository().hydrate({ id: 1, name: 'Ava' })
+    pendingUser.setPendingRelationLoad('profile', Promise.resolve().then(() => {
+      pendingUser.setRelation('profile', null)
+    }))
+    await expect(User.getRepository().resolveRelationProperty(pendingUser, 'profile')).resolves.toBeNull()
+    expect(User.getRepository().serializeAttributeValue('id', 1)).toBe(1)
+
     const postResult = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
       return await Post.query()
         .with('author')
@@ -1045,7 +1205,13 @@ describe('model relation slice', () => {
         author: belongsTo(() => User, 'userId') } })
     Role = defineModelFromTable(roles)
 
-    const loadedUsers = await User.query().with('posts.author', 'roles').orderBy('id').get()
+    const loadedUsers = await User.query().with('posts.author', 'posts.author.roles', 'roles').orderBy('id').get()
+    const nestedObservation = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return User.query().with('posts.author').orderBy('id').getJson()
+    })
+    expect(nestedObservation.value[0]).toMatchObject({ id: 1 })
+    const emptyNestedRelations = await User.query().where('id', 3).with('posts.author').get()
+    expect(emptyNestedRelations[0]?.getRelation<Entity[]>('posts')).toEqual([])
     const firstUserPosts = loadedUsers[0]?.getRelation<Entity<TableDefinition>[]>('posts') ?? []
     const firstUserRoles = loadedUsers[0]?.getRelation<Entity<TableDefinition>[]>('roles') ?? []
     const secondUserRoles = loadedUsers[1]?.getRelation<Entity<TableDefinition>[]>('roles') ?? []
@@ -1069,6 +1235,15 @@ describe('model relation slice', () => {
     expect(loadedUsers[2]?.getRelation<Entity<TableDefinition>[]>('roles')).toEqual([])
     expect(loadedUsers[3]?.getRelation<Entity<TableDefinition>[]>('roles')).toEqual([])
     expect(loadedUsers[4]?.getRelation<Entity<TableDefinition>[]>('roles')).toEqual([])
+
+    const emptyPivotObservation = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return User.query().where('id', 3).with('roles').getJson()
+    })
+    expect(emptyPivotObservation.value[0]?.roles).toEqual([])
+    const nullPivotObservation = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return User.query().where('id', 4).with('roles').getJson()
+    })
+    expect(nullPivotObservation.value[0]?.roles).toEqual([])
 
     const BrokenPivotFilterUser = defineModelFromTable(users, {
       relations: {
@@ -1201,12 +1376,21 @@ describe('model relation slice', () => {
     const User = defineModelFromTable(users, {
       relations: {
         roles: belongsToMany(() => Role, roleUsers, 'userId', 'roleId')
-          .withPivot('grantedAt') } })
+          .withPivot('grantedAt'),
+        stringRoles: belongsToMany(() => Role, 'role_users', 'userId', 'roleId'),
+      },
+    })
 
     const user = await User.findOrFail(1)
+    expect(await user.detach('stringRoles', 999)).toBe(0)
+    const stringPivotObservation = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return User.with('stringRoles').firstJson()
+    })
+    expect(stringPivotObservation.value).toMatchObject({ id: 1 })
 
     await user.attach('roles', null as never)
     await user.attach('roles', 101, { grantedAt: '2026-02-01' })
+    await user.attach('roles', 100, { grantedAt: '2026-01-05' })
     await user.attach('roles', 100, { grantedAt: '2026-01-05' })
     expect(adapter.tables.role_users).toHaveLength(2)
     expect(adapter.tables.role_users!.find(row => row.roleId === 100)?.grantedAt).toBe('2026-01-05')
@@ -1222,6 +1406,15 @@ describe('model relation slice', () => {
       attached: [102],
       detached: [],
       updated: [101] })
+    expect(await user.syncWithoutDetaching('roles', {
+      101: { grantedAt: '2026-04-01' },
+      102: { grantedAt: '2026-05-01' },
+    })).toEqual({ attached: [], detached: [], updated: [] })
+    expect(await user.sync('roles', {
+      100: { grantedAt: '2026-01-05' },
+      101: { grantedAt: '2026-04-01' },
+      102: { grantedAt: '2026-05-01' },
+    })).toEqual({ attached: [], detached: [], updated: [] })
     await expect(user.syncWithoutDetaching('roles', { 101: { userId: 999, roleId: 999 } })).rejects.toThrow(
       'Pivot attribute "userId" on relation "roles" is reserved and cannot be set explicitly.',
     )
@@ -1655,6 +1848,17 @@ describe('model relation slice', () => {
     ])
     expect((pushedUser.getRelation<Entity>('profile')).get('userId')).toBe(2)
     expect((pushedUser.getRelation<Entity[]>('posts')).map(post => post.get('userId'))).toEqual([2, 2])
+
+    const postWithoutParentEntity = Post.make({ title: 'No Parent Entity' })
+    postWithoutParentEntity.setRelation('author', null)
+    await postWithoutParentEntity.push()
+
+    const userWithoutChildEntities = User.make({ name: 'No Child Entities' })
+    userWithoutChildEntities.setRelation('profile', {} as never)
+    userWithoutChildEntities.setRelation('posts', [null] as never)
+    await userWithoutChildEntities.push()
+    expect(postWithoutParentEntity.exists()).toBe(true)
+    expect(userWithoutChildEntities.exists()).toBe(true)
   })
 
   it('supports relation persistence helpers for many-to-many and polymorphic pivot relations', async () => {
@@ -2382,8 +2586,13 @@ describe('model relation slice', () => {
       title: column.string() })
 
     let User: ReturnType<typeof defineModelFromTable<typeof users>>
-    const Post = defineModelFromTable(posts)
+    let Post: ReturnType<typeof defineModelFromTable<typeof posts>>
 
+    Post = defineModelFromTable(posts, {
+      relations: {
+        author: belongsTo(() => User, 'userId'),
+      },
+    })
     User = defineModelFromTable(users, {
       relations: {
         posts: hasMany(() => Post, 'userId') } })
@@ -2403,6 +2612,72 @@ describe('model relation slice', () => {
       posts: query => query.where('title', 'Post B') }).orderBy('id').get()
     expect(usersWithStaticObjectWith[0]?.getRelation<Entity<TableDefinition>[]>('posts').map(post => post.get('title'))).toEqual(['Post B'])
     expect(usersWithStaticObjectWith[1]?.getRelation('posts')).toEqual([])
+
+    const constrainedObservation = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return User.with('posts', query => query.where('title', 'Post A')).orderBy('id').getJson()
+    })
+    expect(constrainedObservation.value[0]).toMatchObject({
+      id: 1,
+      posts: [{ title: 'Post A' }],
+    })
+
+    const limitedObservation = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return User.with('posts', query => query.limit(1)).orderBy('id').getJson()
+    })
+    expect(limitedObservation.value[0]).toMatchObject({ id: 1 })
+
+    const belongsToConstraintObservation = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return Post.with('author', query => query.where('name', 'Mohamed')).orderBy('id').getJson()
+    })
+    expect(belongsToConstraintObservation.value[0]).toMatchObject({ id: 10 })
+
+    const DefinitionUser = defineModelFromTable(users, {
+      relations: {
+        posts: scopeRelation(hasMany(() => Post.definition, 'userId'), query => query),
+      },
+    })
+    const definitionRelationObservation = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return DefinitionUser.with('posts').orderBy('id').getJson()
+    })
+    expect(definitionRelationObservation.value[0]).toMatchObject({ id: 1 })
+
+    const PlainDefinitionUser = defineModelFromTable(users, {
+      relations: {
+        posts: hasMany(() => Post.definition, 'userId'),
+      },
+    })
+    const plainDefinitionObservation = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return PlainDefinitionUser.with('posts').orderBy('id').getJson()
+    })
+    expect(plainDefinitionObservation.value[0]).toMatchObject({ id: 1 })
+
+    const PlainDefinitionPost = defineModelFromTable(posts, {
+      relations: {
+        author: belongsTo(() => User.definition, 'userId'),
+      },
+    })
+    const plainBelongsToObservation = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return PlainDefinitionPost.with('author').orderBy('id').getJson()
+    })
+    expect(plainBelongsToObservation.value[0]).toMatchObject({ id: 10 })
+
+    const noopConstraintObservation = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return User.with('posts', () => undefined).orderBy('id').getJson()
+    })
+    expect(noopConstraintObservation.value[0]).toMatchObject({ id: 1 })
+
+    const QueryableDefinitionUser = defineModelFromTable(users, {
+      relations: {
+        posts: scopeRelation(hasMany(() => ({
+          ...Post.definition,
+          query: () => Post.query(),
+        }), 'userId'), query => query),
+      },
+    })
+    const queryableDefinitionObservation = await queryCacheInternals.collectDatabaseQueryDependencies(async () => {
+      return QueryableDefinitionUser.with('posts').orderBy('id').getJson()
+    })
+    expect(queryableDefinitionObservation.value[0]).toMatchObject({ id: 1 })
 
     const usersWithWhereHas = await User.withWhereHas('posts', query => query.where('title', 'Post C')).get()
     expect(usersWithWhereHas.map(user => user.get('id'))).toEqual([2])
@@ -3340,6 +3615,7 @@ describe('model relation slice', () => {
         { id: 100, imageableType: 'members', imageableId: 1, url: 'rank-null-a.png', rank: null },
         { id: 101, imageableType: 'members', imageableId: 1, url: 'rank-five.png', rank: 5 },
         { id: 103, imageableType: 'members', imageableId: 1, url: 'rank-two.png', rank: 2 },
+        { id: 104, imageableType: 'members', imageableId: 1, url: 'rank-seven.png', rank: 7 },
         { id: 102, imageableType: 'members', imageableId: 1, url: 'rank-null-b.png', rank: null },
       ] })
 

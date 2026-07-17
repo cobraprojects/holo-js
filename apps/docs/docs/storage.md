@@ -8,8 +8,8 @@ through a facade or an explicit disk instance.
 Configure storage in `config/storage.ts`.
 
 ```ts
-import { defineStorageConfig, env } from '@holo-js/config'
-
+import { defineStorageConfig } from '@holo-js/storage'
+import { env } from '@holo-js/config'
 export default defineStorageConfig({
   defaultDisk: 'local',
   routePrefix: '/storage',

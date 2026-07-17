@@ -6,6 +6,11 @@ ensureMediaQueueJobRegistered()
 
 export { defineMediaModel } from './defineMediaModel'
 export {
+  defineMediaConfig,
+  normalizeMediaConfig,
+  type HoloMediaConfig,
+} from './projectConfig'
+export {
   collection,
   normalizeCollectionDefinitions,
   type MediaCollectionBuilder,

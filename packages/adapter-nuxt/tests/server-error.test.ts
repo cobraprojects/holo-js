@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ValidationException } from '@holo-js/validation'
 import type { H3Error, H3Event } from 'h3'
 
-type ErrorHandler = (error: H3Error, event: H3Event) => Promise<void>
 type H3ErrorJson = Pick<H3Error<unknown>, 'data' | 'message' | 'statusCode' | 'statusMessage'>
 
 function createH3Error(error: Error, statusCode = 500): H3Error {
@@ -36,11 +35,6 @@ async function loadErrorHandler() {
     setHeader,
     setResponseStatus,
   }))
-  Object.defineProperty(globalThis, 'defineNitroErrorHandler', {
-    value: (handler: ErrorHandler) => handler,
-    configurable: true,
-  })
-
   const { default: handler } = await import('../src/runtime/server/error')
   return {
     handler,
@@ -53,10 +47,19 @@ async function loadErrorHandler() {
 afterEach(() => {
   vi.resetModules()
   vi.doUnmock('h3')
-  Reflect.deleteProperty(globalThis, 'defineNitroErrorHandler')
 })
 
 describe('Nuxt validation error handler', () => {
+  it('ignores errors without a validation exception in their cause chain', async () => {
+    const { handler, send, setHeader, setResponseStatus } = await loadErrorHandler()
+    const event = {} as H3Event
+    await expect(handler(createH3Error(new Error('ordinary')), event)).resolves.toBeUndefined()
+    await expect(handler(createH3Error(new Error('wrapped', { cause: null })), event)).resolves.toBeUndefined()
+    expect(send).not.toHaveBeenCalled()
+    expect(setHeader).not.toHaveBeenCalled()
+    expect(setResponseStatus).not.toHaveBeenCalled()
+  })
+
   it('serializes validation exceptions wrapped by Nitro error causes', async () => {
     const { handler, send, setHeader, setResponseStatus } = await loadErrorHandler()
     const validationError = ValidationException.withMessages({

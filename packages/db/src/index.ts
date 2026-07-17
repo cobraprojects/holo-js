@@ -1,4 +1,23 @@
 export { DatabaseContext, createDatabase } from './core/DatabaseContext'
+export {
+  defineDatabaseConfig,
+  holoDatabaseDefaults,
+  normalizeDatabaseConfig,
+} from './databaseConfig'
+export type {
+  HoloDatabaseConfig,
+  HoloDatabaseConnectionConfig,
+  NormalizedHoloDatabaseConfig,
+} from './databaseConfig'
+export {
+  DeferredDatabaseDriverAdapter,
+  createDeferredDatabaseDriverAdapter,
+  getDatabaseDriverFactory,
+  registerDatabaseDriverFactory,
+  unregisterDatabaseDriverFactory,
+  type DatabaseDriverConnection,
+  type DatabaseDriverFactory,
+} from './drivers/registry'
 export { QueryScheduler, createQueryScheduler } from './core/QueryScheduler'
 export { unsafeSql } from './core/unsafe'
 export { createCapabilities, DEFAULT_CAPABILITIES } from './core/capabilities'
@@ -38,14 +57,6 @@ export {
   parseDatabaseDriver,
   resolveRuntimeConnectionManagerOptions,
 } from './runtime'
-export {
-  MySQLAdapter,
-  PostgresAdapter,
-  SQLiteAdapter,
-  createMySQLAdapter,
-  createPostgresAdapter,
-  createSQLiteAdapter,
-} from './drivers'
 export {
   SQLQueryCompiler,
   TableQueryBuilder,
@@ -179,11 +190,6 @@ export {
   serializeModels,
   uniqueSlug,
 } from './model'
-export {
-  DEFAULT_HOLO_PROJECT_PATHS,
-  defineHoloProject,
-  normalizeHoloProjectConfig,
-} from './project'
 export type {
   CompiledStatement,
   ConcurrencyOptions,
@@ -232,19 +238,6 @@ export type {
   RelationConstraintDefinition,
 } from './model'
 export type {
-  MySQLAdapterOptions,
-  MySQLClientLike,
-  MySQLPoolLike,
-  MySQLQueryableLike,
-  PostgresAdapterOptions,
-  PostgresClientLike,
-  PostgresPoolLike,
-  PostgresQueryableLike,
-  SQLiteAdapterOptions,
-  SQLiteDatabaseLike,
-  SQLiteStatementLike,
-} from './drivers'
-export type {
   AnyModelDefinition,
   BelongsToManyRelationDefinition,
   BelongsToManyRelationMethods,
@@ -268,13 +261,6 @@ export type {
   MorphToRelationDefinition,
   StaticModelApi,
 } from './model'
-export type {
-  NormalizedHoloProjectConfig,
-  HoloProjectConfig,
-  HoloProjectConnectionConfig,
-  HoloProjectDatabaseConfig,
-  HoloProjectPaths,
-} from './project'
 export type {
   AnyColumnDefinition,
   BoundTableDefinition,

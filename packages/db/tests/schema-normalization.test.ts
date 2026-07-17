@@ -24,6 +24,7 @@ describe('schema normalization rules', () => {
     expect(normalizeDialectReadValue('mysql', booleanColumn, 'false')).toBe(false)
     expect(normalizeDialectReadValue('postgres', booleanColumn, 't')).toBe(true)
     expect(normalizeDialectReadValue('postgres', booleanColumn, 'f')).toBe(false)
+    expect(normalizeDialectReadValue('postgres', booleanColumn, 'yes')).toBe(true)
     expect(normalizeDialectReadValue('postgres', booleanColumn, { enabled: true })).toBe(true)
     expect(normalizeDialectReadValue('postgres', booleanColumn, null)).toBeNull()
     expect(normalizeDialectWriteValue('sqlite', booleanColumn, true)).toBe(1)
@@ -53,6 +54,7 @@ describe('schema normalization rules', () => {
     expect(normalizeDialectWriteValue('mysql', datetimeColumn, date)).toBe('2025-01-02 03:04:05')
     expect(normalizeDialectWriteValue('mysql', timestampColumn, date)).toBe('2025-01-02 03:04:05')
     expect(normalizeDialectWriteValue('mysql', timestampColumn, '2025-01-02T03:04:05.314Z')).toBe('2025-01-02 03:04:05')
+    expect(normalizeDialectWriteValue('mysql', timestampColumn, '2025-99-99T03:04:05.314Z')).toBe('2025-99-99T03:04:05.314Z')
     expect(normalizeDialectWriteValue('mysql', timestampColumn, '2025-01-02 03:04:05')).toBe('2025-01-02 03:04:05')
     expect(normalizeDialectWriteValue('sqlite', timestampColumn, date)).toBe('2025-01-02T03:04:05.000Z')
 

@@ -1,5 +1,5 @@
 import { authRuntimeInternals } from '@holo-js/auth'
-import type { AuthClerkProviderConfig } from '@holo-js/config'
+import type { AuthClerkProviderConfig } from '@holo-js/auth'
 
 export type JwkKey = Parameters<typeof authRuntimeInternals.jwt.verifyJwtSignatureWithJwk>[1]
 

@@ -10,6 +10,11 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.mjs",
+      "default": "./dist/config.mjs"
+    },
     "./client": {
       "types": "./dist/client.d.ts",
       "import": "./dist/client.mjs",
@@ -53,7 +58,8 @@
     "test": "vitest --run --coverage"
   },
   "dependencies": {
-    "@holo-js/config": "catalog:"
+    "@holo-js/config": "catalog:",
+    "@holo-js/kernel": "catalog:"
   },
   "peerDependencies": {
     "h3": "catalog:",

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { runSharedQueueDriverContract } from '../../queue/tests/support/shared-driver-contract'
 
 const bullMqMock = vi.hoisted(() => {
   type FakeJobState = 'waiting' | 'active' | 'completed' | 'delayed' | 'failed'
@@ -163,6 +164,14 @@ const bullMqMock = vi.hoisted(() => {
       })
 
       return { id }
+    }
+
+    async getJobCountByTypes(): Promise<number> {
+      return getQueueJobs(this.queueName).filter(entry => entry.state === 'waiting' || entry.state === 'delayed').length
+    }
+
+    async drain(): Promise<void> {
+      jobsByQueue.set(this.queueName, getQueueJobs(this.queueName).filter(entry => entry.state !== 'waiting' && entry.state !== 'delayed'))
     }
 
     async close(): Promise<void> {}
@@ -617,4 +626,25 @@ describe('@holo-js/queue-redis', () => {
       },
     ])
   })
+})
+
+runSharedQueueDriverContract({
+  label: '@holo-js/queue-redis',
+  expected: { name: 'redis', driver: 'redis', mode: 'async' },
+  async createDriver() {
+    const { redisQueueDriverFactory } = await import('../src')
+    return redisQueueDriverFactory.create({
+      name: 'redis',
+      driver: 'redis',
+      connection: 'default',
+      queue: 'default',
+      retryAfter: 90,
+      blockFor: 0,
+      redis: { host: '127.0.0.1', port: 6379, db: 0 },
+    }, {
+      async execute() {
+        throw new Error('The shared driver contract does not execute jobs.')
+      },
+    })
+  },
 })

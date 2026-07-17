@@ -1,5 +1,5 @@
-import { defineMailConfig, env } from '@holo-js/config'
-
+import { defineMailConfig } from '@holo-js/mail'
+import { env } from '@holo-js/config'
 export default defineMailConfig({
   default: env('MAIL_MAILER', 'preview'),
   from: {

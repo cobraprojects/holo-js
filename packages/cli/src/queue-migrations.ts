@@ -1,5 +1,6 @@
 import { resolve } from 'node:path'
-import { loadConfigDirectory, type NormalizedQueueDatabaseConnectionConfig } from '@holo-js/config'
+import { loadConfigDirectory } from '@holo-js/config'
+import type { NormalizedQueueDatabaseConnectionConfig } from '@holo-js/queue'
 import { normalizeMigrationSlug } from '@holo-js/db'
 import {
   ensureProjectConfig,

@@ -1,6 +1,6 @@
 import { appendFile, mkdir } from 'node:fs/promises'
 import { extname, resolve } from 'node:path'
-import { holoStorageDefaults } from '@holo-js/config'
+import { holoStorageDefaults } from '@holo-js/storage'
 import {
   AUTH_CONFIG_FILE_NAMES,
   BROADCAST_CONFIG_FILE_NAMES,
@@ -34,7 +34,8 @@ import {
 
 export function renderStorageConfig(): string {
   return [
-    'import { defineStorageConfig, env } from \'@holo-js/config\'',
+    'import { defineStorageConfig } from \'@holo-js/storage\'',
+    'import { env } from \'@holo-js/config\'',
     '',
     'export default defineStorageConfig({',
     `  defaultDisk: env('STORAGE_DEFAULT_DISK', '${holoStorageDefaults.defaultDisk}'),`,
@@ -57,7 +58,7 @@ export function renderStorageConfig(): string {
 
 export function renderMediaConfig(): string {
   return [
-    'import { defineMediaConfig } from \'@holo-js/config\'',
+    'import { defineMediaConfig } from \'@holo-js/media/config\'',
     '',
     'export default defineMediaConfig({})',
     '',
@@ -75,7 +76,8 @@ export function renderQueueConfig(
 
   if (driver === 'redis') {
     return [
-      'import { defineQueueConfig, env } from \'@holo-js/config\'',
+      'import { defineQueueConfig } from \'@holo-js/queue\'',
+      'import { env } from \'@holo-js/config\'',
       '',
       'export default defineQueueConfig({',
       '  default: \'redis\',',
@@ -96,7 +98,7 @@ export function renderQueueConfig(
 
   if (driver === 'database') {
     return [
-      'import { defineQueueConfig } from \'@holo-js/config\'',
+      'import { defineQueueConfig } from \'@holo-js/queue\'',
       '',
       'export default defineQueueConfig({',
       '  default: \'database\',',
@@ -121,7 +123,7 @@ export function renderQueueConfig(
   }
 
   return [
-    'import { defineQueueConfig } from \'@holo-js/config\'',
+    'import { defineQueueConfig } from \'@holo-js/queue\'',
     '',
     'export default defineQueueConfig({',
     '  default: \'sync\',',
@@ -143,7 +145,8 @@ export function renderCacheConfig(
   defaultRedisConnection = 'default',
 ): string {
   const lines = [
-    'import { defineCacheConfig, env } from \'@holo-js/config\'',
+    'import { defineCacheConfig } from \'@holo-js/cache\'',
+    'import { env } from \'@holo-js/config\'',
     '',
     'export default defineCacheConfig({',
     `  default: '${driver}',`,
@@ -191,7 +194,8 @@ export function renderCacheConfig(
 
 export function renderRedisConfig(): string {
   return [
-    'import { defineRedisConfig, env } from \'@holo-js/config\'',
+    'import { env } from \'@holo-js/config\'',
+    'import { defineRedisConfig } from \'@holo-js/kernel\'',
     '',
     'export default defineRedisConfig({',
     '  default: \'default\',',
@@ -223,7 +227,7 @@ export async function ensureRedisConfigFile(projectRoot: string): Promise<boolea
 
 export function renderNotificationsConfig(): string {
   return [
-    'import { defineNotificationsConfig } from \'@holo-js/config\'',
+    'import { defineNotificationsConfig } from \'@holo-js/notifications\'',
     '',
     'export default defineNotificationsConfig({',
     '  table: \'notifications\',',
@@ -237,7 +241,8 @@ export function renderNotificationsConfig(): string {
 
 export function renderMailConfig(): string {
   return [
-    'import { defineMailConfig, env } from \'@holo-js/config\'',
+    'import { defineMailConfig } from \'@holo-js/mail\'',
+    'import { env } from \'@holo-js/config\'',
     '',
     'export default defineMailConfig({',
     '  default: env(\'MAIL_MAILER\', \'preview\'),',
@@ -306,7 +311,8 @@ export function renderSecurityConfig(): string {
 
 export function renderCorsConfig(): string {
   return [
-    'import { defineCorsConfig, env } from \'@holo-js/config\'',
+    'import { env } from \'@holo-js/config\'',
+    'import { defineCorsConfig } from \'@holo-js/security\'',
     '',
     'export default defineCorsConfig({',
     '  paths: [\'/api/*\', \'/broadcasting/auth\'],',
@@ -377,7 +383,8 @@ export function renderBroadcastConfig(
 
   if (moduleFormat === 'cjs') {
     return [
-      'const { defineBroadcastConfig, env } = require(\'@holo-js/config\')',
+      'const { defineBroadcastConfig } = require(\'@holo-js/broadcast\')',
+      'const { env } = require(\'@holo-js/config\')',
       '',
       `const broadcastScheme = ${renderBroadcastScheme()}`,
       '',
@@ -419,7 +426,8 @@ export function renderBroadcastConfig(
   }
 
   return [
-    'import { defineBroadcastConfig, env } from \'@holo-js/config\'',
+    'import { defineBroadcastConfig } from \'@holo-js/broadcast\'',
+    'import { env } from \'@holo-js/config\'',
     '',
     `const broadcastScheme = ${renderBroadcastScheme()}`,
     '',
@@ -620,7 +628,8 @@ export async function syncBroadcastAuthSupportAfterAuthInstall(projectRoot: stri
 
 export function renderSessionConfig(defaultDatabaseConnection = 'default'): string {
   return [
-    'import { defineSessionConfig, env } from \'@holo-js/config\'',
+    'import { defineSessionConfig } from \'@holo-js/session\'',
+    'import { env } from \'@holo-js/config\'',
     '',
     "const sessionSameSite = env('SESSION_SAME_SITE') === 'strict'",
     "  ? 'strict'",
@@ -678,12 +687,20 @@ export function renderAuthConfig(
     : socialEnabled
       ? ['google']
       : []
-  const lines = [
-    moduleFormat === 'cjs'
-      ? 'module.exports = {'
-      : 'import { defineAuthConfig, env } from \'@holo-js/config\'',
-    '',
-    ...(moduleFormat === 'cjs' ? [] : ['export default defineAuthConfig({']),
+  const envRequired = socialProviders.length > 0 || features.workos === true || features.clerk === true
+  const lines = moduleFormat === 'cjs'
+    ? [
+        'module.exports = {',
+        '',
+      ]
+    : [
+        'import { defineAuthConfig } from \'@holo-js/auth\'',
+        ...(envRequired ? ['import { env } from \'@holo-js/config\''] : []),
+        '',
+        'export default defineAuthConfig({',
+      ]
+
+  lines.push(
     '  defaults: {',
     '    guard: \'web\',',
     '    passwords: \'users\',',
@@ -721,7 +738,7 @@ export function renderAuthConfig(
     '    required: false,',
     '    route: \'/verify-email\',',
     '  },',
-  ]
+  )
 
   if (socialProviders.length > 0) {
     lines.push('  social: {')

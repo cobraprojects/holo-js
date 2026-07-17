@@ -4,12 +4,12 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
-  defineCacheConfig,
   loadConfigDirectory,
-  normalizeCacheConfig,
 } from '../src'
+import { defineCacheConfig, normalizeCacheConfig } from '@holo-js/cache'
 
 const packageEntry = JSON.stringify(fileURLToPath(new URL('../src/index.ts', import.meta.url)))
+const cachePackageEntry = JSON.stringify(fileURLToPath(new URL('../../cache/src/index.ts', import.meta.url)))
 
 async function createProject(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'holo-config-cache-'))
@@ -217,7 +217,7 @@ export default defineAppConfig({
 `, 'utf8')
 
     await writeFile(join(root, 'config/cache.ts'), `
-import { defineCacheConfig } from ${packageEntry}
+import { defineCacheConfig } from ${cachePackageEntry}
 
 export default defineCacheConfig({
   default: 'memory',

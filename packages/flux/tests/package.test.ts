@@ -471,6 +471,178 @@ describe('@holo-js/flux package surface', () => {
     }
   })
 
+  it('covers Holo websocket discovery and authorization edge cases', async () => {
+    const originalWebSocket = globalThis.WebSocket
+    const originalFetch = globalThis.fetch
+    const originalLocation = globalThis.location
+    const browserGlobal = globalThis as typeof globalThis & { window?: unknown }
+    const originalWindow = browserGlobal.window
+    const sockets: EdgeWebSocket[] = []
+    const sentMessages: unknown[] = []
+
+    class EdgeWebSocket {
+      readyState = 0
+      readonly listeners = new Map<TestWebSocketEventName, Set<TestWebSocketEventMap[TestWebSocketEventName]>>()
+
+      constructor(readonly url: string | URL) {
+        sockets.push(this)
+      }
+
+      send(data: string): void {
+        sentMessages.push(JSON.parse(data) as unknown)
+      }
+
+      close(): void {
+        this.emit('close', undefined)
+      }
+
+      addEventListener<TEvent extends TestWebSocketEventName>(event: TEvent, listener: TestWebSocketEventMap[TEvent]): void {
+        const eventListeners = this.listeners.get(event) ?? new Set<TestWebSocketEventMap[TestWebSocketEventName]>()
+        eventListeners.add(listener)
+        this.listeners.set(event, eventListeners)
+      }
+
+      emit<TEvent extends TestWebSocketEventName>(event: TEvent, payload: Parameters<TestWebSocketEventMap[TEvent]>[0]): void {
+        if (event === 'open') this.readyState = 1
+        if (event === 'close') this.readyState = 3
+        for (const listener of this.listeners.get(event) ?? []) listener(payload as never)
+      }
+    }
+
+    async function open(connector: ReturnType<typeof fluxInternals.createHoloWebSocketConnector>, label: string): Promise<EdgeWebSocket> {
+      const socketCount = sockets.length
+      const connection = connector.connect()
+      await vi.waitFor(() => {
+        if (sockets.length <= socketCount) throw new Error(`Expected ${label} websocket creation.`)
+      })
+      const socket = sockets.at(-1)!
+      socket.emit('open', undefined)
+      await connection
+      return socket
+    }
+
+    function establish(socket: EdgeWebSocket): void {
+      socket.emit('message', {
+        data: JSON.stringify({
+          event: 'pusher:connection_established',
+          data: JSON.stringify({ socket_id: '9.9' }),
+        }),
+      })
+    }
+
+    try {
+      Object.defineProperty(globalThis, 'WebSocket', { configurable: true, writable: true, value: EdgeWebSocket })
+      Object.defineProperty(globalThis, 'location', {
+        configurable: true,
+        value: { hostname: 'browser.test', protocol: 'https:' },
+      })
+      Object.defineProperty(browserGlobal, 'window', { configurable: true, value: {} })
+
+      Object.defineProperty(globalThis, 'fetch', {
+        configurable: true,
+        writable: true,
+        value: async () => ({ ok: true, async json() { return {} } }),
+      })
+      const explicit = fluxInternals.createHoloWebSocketConnector({
+        key: 'explicit-key',
+        host: 'explicit.test',
+        port: 7443,
+        path: '/socket',
+        scheme: 'wss',
+        authEndpoint: '/auth',
+        configEndpoint: '/config',
+      })
+      explicit.subscribe('news', 'public')
+      const explicitSocket = await open(explicit, 'explicit')
+      expect(explicitSocket.url.toString()).toBe('wss://explicit.test:7443/socket/explicit-key')
+      establish(explicitSocket)
+      await explicit.disconnect()
+
+      Object.defineProperty(globalThis, 'fetch', {
+        configurable: true,
+        writable: true,
+        value: async () => ({ ok: true, async json() { return [] } }),
+      })
+      const nonRecordDiscovery = fluxInternals.createHoloWebSocketConnector({
+        key: 'non-record',
+        host: 'non-record.test',
+      })
+      await open(nonRecordDiscovery, 'non-record discovery')
+      await nonRecordDiscovery.disconnect()
+
+      Object.defineProperty(globalThis, 'fetch', {
+        configurable: true,
+        writable: true,
+        value: async () => { throw new Error('discovery failed') },
+      })
+      const failedDiscovery = fluxInternals.createHoloWebSocketConnector({ key: 'fallback', host: 'fallback.test' })
+      const fallbackSocket = await open(failedDiscovery, 'failed discovery')
+      expect(fallbackSocket.url.toString()).toContain('fallback.test')
+      await failedDiscovery.disconnect()
+
+      Object.defineProperty(browserGlobal, 'window', { configurable: true, value: undefined })
+      const serverRuntime = fluxInternals.createHoloWebSocketConnector({ key: 'server', host: 'server.test' })
+      await open(serverRuntime, 'server runtime')
+      await serverRuntime.disconnect()
+
+      Object.defineProperty(browserGlobal, 'window', { configurable: true, value: {} })
+      Object.defineProperty(globalThis, 'fetch', {
+        configurable: true,
+        writable: true,
+        value: async (input: string | URL, init?: RequestInit) => {
+          if (String(input) === '/config') {
+            return { ok: true, async json() { return { key: 'auth-key', host: 'auth.test', authEndpoint: '/auth' } } }
+          }
+
+          const channel = new URLSearchParams(String(init?.body)).get('channel_name')
+          if (channel === 'private-denied') return { ok: false, status: 403 }
+          if (channel === 'private-invalid') return { ok: true, async json() { return {} } }
+          if (channel === 'presence-room') {
+            return { ok: true, async json() { return { auth: 'token', channel_data: '{}' } } }
+          }
+          return { ok: true, async json() { return { auth: 'token' } } }
+        },
+      })
+      const authorized = fluxInternals.createHoloWebSocketConnector({ configEndpoint: '/config' })
+      authorized.subscribe('allowed', 'private')
+      authorized.subscribe('denied', 'private')
+      authorized.subscribe('invalid', 'private')
+      authorized.subscribe('room', 'presence')
+      const authorizedSocket = await open(authorized, 'authorized')
+      authorizedSocket.emit('message', {
+        data: JSON.stringify({
+          event: 'pusher:connection_established',
+          data: JSON.stringify({}),
+        }),
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      establish(authorizedSocket)
+      await vi.waitFor(() => {
+        expect(sentMessages).toContainEqual(expect.objectContaining({
+          event: 'pusher:subscribe',
+          data: expect.objectContaining({ channel: 'private-allowed', auth: 'token' }),
+        }))
+        expect(sentMessages).toContainEqual(expect.objectContaining({
+          event: 'pusher:subscribe',
+          data: expect.objectContaining({ channel: 'presence-room', channel_data: '{}' }),
+        }))
+      })
+      Object.defineProperty(globalThis, 'fetch', { configurable: true, writable: true, value: undefined })
+      authorized.subscribe('missing-fetch', 'private')
+      establish(authorizedSocket)
+      await Promise.resolve()
+      await Promise.resolve()
+      await authorized.disconnect()
+    } finally {
+      Object.defineProperty(globalThis, 'WebSocket', { configurable: true, writable: true, value: originalWebSocket })
+      Object.defineProperty(globalThis, 'fetch', { configurable: true, writable: true, value: originalFetch })
+      Object.defineProperty(globalThis, 'location', { configurable: true, value: originalLocation })
+      Object.defineProperty(browserGlobal, 'window', { configurable: true, value: originalWindow })
+      resetFluxClient()
+    }
+  })
+
   it('handles Holo websocket connection failures and missing browser websocket support', async () => {
     const originalWebSocket = globalThis.WebSocket
     const sockets: TestWebSocket[] = []

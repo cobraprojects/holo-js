@@ -8,8 +8,12 @@ const runRedisIntegration = process.env.HOLO_REDIS_INTEGRATION === '1'
 export default defineConfig({
   resolve: {
     alias: {
+      '@holo-js/kernel': resolve(__dirname, '../kernel/src/index.ts'),
       '@holo-js/cache': resolve(rootDir, '../cache/src/index.ts'),
+      '@holo-js/config/registry': resolve(rootDir, '../config/src/registry.ts'),
       '@holo-js/config': resolve(rootDir, '../config/src/index.ts'),
+      '@holo-js/media/config': resolve(rootDir, '../media/src/projectConfig.ts'),
+      '@holo-js/media': resolve(rootDir, '../media/src/index.ts'),
     },
   },
   test: {

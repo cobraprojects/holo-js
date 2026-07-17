@@ -483,8 +483,7 @@ function jsonResponse(body: BroadcastAuthEndpointBody, status: number): Response
 }
 
 function signBroadcastAuth(appSecret: string, socketId: string, channel: string, channelData: string): string {
-  const value = channelData ? `${socketId}:${channel}:${channelData}` : `${socketId}:${channel}`
-  return createHmac('sha256', appSecret).update(value).digest('hex')
+  return createHmac('sha256', appSecret).update(`${socketId}:${channel}:${channelData}`).digest('hex')
 }
 
 export async function renderBroadcastAuthResponse(
@@ -573,6 +572,7 @@ export const broadcastAuthInternals = {
   importChannelDefinition,
   loadChannelDefinitions,
   matchPattern,
+  normalizeRegistryEntry,
   parseBroadcastAuthEndpointPayload,
   resolveAuthDefinitions,
   resolveChannelMatch,

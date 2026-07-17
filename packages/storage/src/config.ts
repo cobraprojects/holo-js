@@ -1,4 +1,10 @@
 export type StorageDriver = 'local' | 'public' | 's3'
+
+declare module '@holo-js/config' {
+  interface HoloConfigRegistry {
+    storage: NormalizedHoloStorageConfig
+  }
+}
 export type NormalizedStorageDriver = 'local' | 'public' | 's3'
 export type StorageVisibility = 'private' | 'public'
 
@@ -33,6 +39,14 @@ export interface ModuleOptions {
   defaultDisk?: string
   routePrefix?: string
   disks?: Record<string, DiskConfig>
+}
+
+export type HoloStorageConfig = ModuleOptions
+
+export interface NormalizedHoloStorageConfig {
+  readonly defaultDisk?: string
+  readonly routePrefix: string
+  readonly disks: Readonly<Record<string, DiskConfig>>
 }
 
 export interface StorageConfig {
@@ -73,6 +87,20 @@ const DEFAULT_DISKS: Record<string, DiskConfig> = {
     root: './storage/app/public',
     visibility: 'public',
   },
+}
+
+export const holoStorageDefaults: Readonly<NormalizedHoloStorageConfig> = Object.freeze({
+  defaultDisk: 'local',
+  routePrefix: DEFAULT_ROUTE_PREFIX,
+  disks: Object.freeze({ ...DEFAULT_DISKS }),
+})
+
+export function normalizeStorageConfig(config: HoloStorageConfig = {}): NormalizedHoloStorageConfig {
+  return Object.freeze({
+    defaultDisk: config.defaultDisk ?? holoStorageDefaults.defaultDisk,
+    routePrefix: config.routePrefix ?? holoStorageDefaults.routePrefix,
+    disks: Object.freeze({ ...holoStorageDefaults.disks, ...(config.disks ?? {}) }),
+  })
 }
 
 const ENV_MAPPINGS: Record<string, string> = {
@@ -346,3 +374,10 @@ export const storageInternals = {
   mergeModuleOptions,
   normalizeRoutePrefix,
 }
+
+registerConfigNormalizer<HoloStorageConfig, NormalizedHoloStorageConfig>({
+  name: 'storage',
+  normalize: normalizeStorageConfig,
+})
+import type {} from '@holo-js/config'
+import { registerConfigNormalizer } from '@holo-js/config/registry'

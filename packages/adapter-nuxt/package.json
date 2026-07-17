@@ -38,6 +38,7 @@
     "test": "vitest --run"
   },
   "dependencies": {
+    "@holo-js/adapter-shared": "catalog:",
     "@nuxt/kit": "catalog:",
     "@holo-js/config": "catalog:",
     "@holo-js/core": "catalog:",

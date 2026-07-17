@@ -2,7 +2,8 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { normalizeHoloProjectConfig, renderGeneratedSchemaPlaceholder } from '@holo-js/db'
+import { renderGeneratedSchemaPlaceholder } from '@holo-js/db'
+import { normalizeHoloProjectConfig } from '@holo-js/kernel'
 import { prepareProjectDiscovery } from '../src/project/discovery'
 import { loadGeneratedProjectRegistry, writeGeneratedProjectRegistry } from '../src/project/registry'
 
