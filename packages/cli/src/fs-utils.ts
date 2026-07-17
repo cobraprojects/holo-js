@@ -1,4 +1,4 @@
-import { stat } from 'node:fs/promises'
+import { readdir, stat } from 'node:fs/promises'
 import { readTextFile } from './project'
 
 export async function fileExists(path: string): Promise<boolean> {
@@ -14,5 +14,14 @@ export async function ensureAbsent(path: string): Promise<void> {
   const existing = await readTextFile(path)
   if (typeof existing !== 'undefined') {
     throw new TypeError(`Refusing to overwrite existing file: ${path}`)
+  }
+}
+
+export async function ensureEmptyDirectory(path: string, displayPath = path): Promise<void> {
+  const entries = await readdir(path).catch(() => [])
+  if (entries.length > 0) {
+    throw new Error(
+      `The destination "${displayPath}" already exists and is not empty. Choose a different project name or empty that folder first.`,
+    )
   }
 }

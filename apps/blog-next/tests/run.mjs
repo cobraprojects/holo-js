@@ -9,10 +9,10 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { DEFAULT_SESSION_COOKIE_NAME } from '@holo-js/session'
 import Database from 'better-sqlite3'
-import ts from 'typescript'
 import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
 import { closeExampleAppBrowser } from '../../../tests/example-app-browser.mjs'
 import { assertExampleAppBroadcastBrowserFlow } from '../../../tests/example-app-broadcast-browser-flow.mjs'
+import { assertExampleAppProductionFlow } from '../../../tests/example-app-production-flow.mjs'
 import { assertExampleAppRealtimeBrowserFlow, assertExampleAppRealtimeUnavailableBrowserFlow } from '../../../tests/example-app-realtime-browser-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 
@@ -82,104 +82,6 @@ const pngPixel = Uint8Array.from([
 ])
 const oversizedImage = new Uint8Array((2 * 1024 * 1024) + 1)
 let capturedOutput = ''
-
-function getJsxTagName(tagName) {
-  if (ts.isIdentifier(tagName)) {
-    return tagName.text
-  }
-
-  if (ts.isPropertyAccessExpression(tagName)) {
-    return tagName.name.text
-  }
-
-  return tagName.getText()
-}
-
-function isJsxNodeNamed(node, tagName) {
-  if (ts.isJsxElement(node)) {
-    return getJsxTagName(node.openingElement.tagName) === tagName
-  }
-
-  return ts.isJsxSelfClosingElement(node) && getJsxTagName(node.tagName) === tagName
-}
-
-function findJsxElement(node, tagName) {
-  if (ts.isJsxElement(node) && getJsxTagName(node.openingElement.tagName) === tagName) {
-    return node
-  }
-
-  return ts.forEachChild(node, child => findJsxElement(child, tagName))
-}
-
-function containsJsxNode(node, tagName) {
-  if (isJsxNodeNamed(node, tagName)) {
-    return true
-  }
-
-  return ts.forEachChild(node, child => containsJsxNode(child, tagName)) === true
-}
-
-function containsLogoutActionForm(node) {
-  if (
-    ts.isJsxSelfClosingElement(node)
-    && getJsxTagName(node.tagName) === 'form'
-    && node.attributes.properties.some(attribute => (
-      ts.isJsxAttribute(attribute)
-      && attribute.name.text === 'action'
-      && attribute.initializer
-      && ts.isJsxExpression(attribute.initializer)
-      && attribute.initializer.expression
-      && ts.isIdentifier(attribute.initializer.expression)
-      && attribute.initializer.expression.text === 'logoutAction'
-    ))
-  ) {
-    return true
-  }
-
-  if (
-    ts.isJsxElement(node)
-    && getJsxTagName(node.openingElement.tagName) === 'form'
-    && node.openingElement.attributes.properties.some(attribute => (
-      ts.isJsxAttribute(attribute)
-      && attribute.name.text === 'action'
-      && attribute.initializer
-      && ts.isJsxExpression(attribute.initializer)
-      && attribute.initializer.expression
-      && ts.isIdentifier(attribute.initializer.expression)
-      && attribute.initializer.expression.text === 'logoutAction'
-    ))
-  ) {
-    return true
-  }
-
-  return ts.forEachChild(node, containsLogoutActionForm) === true
-}
-
-async function assertRootLayoutSharesAuthProviderState() {
-  const layoutSource = await readFile(join(cwd, 'app/layout.tsx'), 'utf8')
-  const sourceFile = ts.createSourceFile('layout.tsx', layoutSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
-  const authProvider = findJsxElement(sourceFile, 'AuthProvider')
-
-  assert.ok(authProvider, 'Expected app/layout.tsx to render AuthProvider.')
-  assert.ok(
-    containsJsxNode(authProvider, 'AuthNav'),
-    'Expected AuthProvider to contain AuthNav.',
-  )
-  assert.ok(
-    containsJsxNode(authProvider, 'main'),
-    'Expected AuthProvider to wrap the routed page content so login refreshes update the header.',
-  )
-}
-
-async function assertHeaderLogoutRedirectsHome() {
-  const authNavSource = await readFile(join(cwd, 'app/auth-nav.tsx'), 'utf8')
-  const sourceFile = ts.createSourceFile('auth-nav.tsx', authNavSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
-
-  assert.ok(
-    containsLogoutActionForm(sourceFile),
-    'Expected header logout to use the logout server action form.',
-  )
-}
 
 function createChildEnv(overrides = {}) {
   const env = {
@@ -724,9 +626,6 @@ async function startBroadcastWorker(appUrl) {
 
 try {
   await rm(join(cwd, '.next'), { recursive: true, force: true })
-  await assertRootLayoutSharesAuthProviderState()
-  await assertHeaderLogoutRedirectsHome()
-  await run('npx', ['vitest', '--run', 'tests/admin-categories-page.test.mjs', 'tests/admin-posts-page.test.mjs', 'tests/admin-tags-page.test.mjs', 'tests/api-v1-routes.test.mjs', 'tests/auth-nav.test.mjs', 'tests/broadcast-auth-route.test.mjs', 'tests/current-auth-route.test.mjs', 'tests/edit-category-page.test.mjs', 'tests/edit-tag-page.test.mjs', 'tests/forgot-password-route.test.mjs', 'tests/health-route.test.mjs', 'tests/hosted-callback-routes.test.mjs', 'tests/hosted-login-routes.test.mjs', 'tests/hosted-logout-routes.test.mjs', 'tests/hosted-register-routes.test.mjs', 'tests/home-page.test.mjs', 'tests/login-page.test.mjs', 'tests/login-route.test.mjs', 'tests/logout-actions.test.mjs', 'tests/new-post-page.test.mjs', 'tests/package-checks.test.mjs', 'tests/post-detail-page.test.mjs', 'tests/admin-dashboard-page.test.mjs', 'tests/edit-post-page.test.mjs', 'tests/register-page.test.mjs', 'tests/reset-password-page.test.mjs', 'tests/reset-password-route.test.mjs', 'tests/social-auth-routes.test.mjs', 'tests/super-admin-logout-button.test.mjs', 'tests/super-admin-login-page.test.mjs', 'tests/super-admin-login-route.test.mjs', 'tests/super-admin-page.test.mjs', 'tests/super-admin-logout-route.test.mjs', 'tests/verify-email-page.test.mjs', 'tests/verify-email-resend-route.test.mjs', 'tests/verify-email-route.test.mjs', '--reporter=json'])
   await run('bun', ['run', 'prepare'])
   await assertConfigCacheCommands()
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
@@ -773,10 +672,28 @@ try {
   child = null
   await stopProcessTree(broadcastChild)
   broadcastChild = null
+  await closeExampleAppBrowser()
 
   await run('bun', ['run', 'lint'])
   await run('bun', ['run', 'typecheck'])
   await run('bun', ['run', 'build'])
+  await assertExampleAppProductionFlow({
+    cwd,
+    baseUrl: `http://localhost:${port}`,
+    env: createChildEnv({
+      PORT: port,
+      HOST: 'localhost',
+      APP_URL: `http://localhost:${port}`,
+      MAIL_MAILER: 'log',
+      MAIL_LOG_BODIES: 'true',
+    }),
+    expectedTitle: 'Shipping a Real Holo Blog on Next',
+    auth: {
+      appName: 'blog-next-production',
+      sessionCookieName: DEFAULT_SESSION_COOKIE_NAME,
+      loginRequiresCsrf: true,
+    },
+  })
 } finally {
   await closeExampleAppBrowser()
   await writeFile(configPath, originalConfig)

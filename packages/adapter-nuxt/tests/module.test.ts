@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -380,6 +380,7 @@ export default defineDatabaseConfig({
     expect(addServerImportsDir).toHaveBeenCalledWith('./runtime/server/auto-imports')
     expect(addServerImportsDir).toHaveBeenCalledTimes(1)
     expect(nuxt.options.build.transpile).toContain('./runtime')
+    expect(nuxt.options.build.transpile).toContain('@holo-js/auth')
 
     const prepareTypes = nuxt.hook.mock.calls.find(([name]) => name === 'prepare:types')?.[1]
     const references: Array<Record<string, string>> = []
@@ -585,6 +586,80 @@ export default defineStorageConfig({
       region: 'us-east-1',
       endpoint: 'https://s3.us-east-1.amazonaws.com',
     })
+  })
+
+  it('traces installed runtime-loaded packages into Nitro production output', async () => {
+    const root = await createProject()
+    const { moduleInternals } = await loadAdapterModule()
+    const nuxt = createNuxtHarness(root)
+    const nitro = nuxt.options.nitro as typeof nuxt.options.nitro & {
+      externals: {
+        external: string[]
+        inline: string[]
+        traceInclude: string[]
+      }
+    }
+    nitro.externals = {
+      external: ['existing-external'],
+      inline: ['existing-inline'],
+      traceInclude: ['existing-package'],
+    }
+    const installed = new Map([
+      ['@holo-js/db-sqlite', '/app/node_modules/@holo-js/db-sqlite/dist/index.mjs'],
+      ['@holo-js/mail', '/app/node_modules/@holo-js/mail/dist/index.mjs'],
+      ['@holo-js/storage', '/app/node_modules/@holo-js/storage/dist/index.mjs'],
+      ['@holo-js/storage/runtime', '/app/node_modules/@holo-js/storage/dist/runtime/composables/index.mjs'],
+      ['custom-holo-plugin', '/app/node_modules/custom-holo-plugin/index.mjs'],
+    ])
+
+    moduleInternals.addNitroRuntimeTraceIncludes(
+      nuxt.options as never,
+      root,
+      ['custom-holo-plugin', 'missing-holo-plugin'],
+      (_rootDir: string, packageName: string) => installed.get(packageName),
+    )
+
+    expect(nitro.externals.traceInclude).toEqual([
+      'existing-package',
+      '/app/node_modules/@holo-js/db-sqlite/dist/index.mjs',
+      '/app/node_modules/@holo-js/mail/dist/index.mjs',
+      '/app/node_modules/@holo-js/storage/dist/index.mjs',
+      '/app/node_modules/@holo-js/storage/dist/runtime/composables/index.mjs',
+      '/app/node_modules/custom-holo-plugin/index.mjs',
+    ])
+    expect(nitro.externals.external).toEqual(expect.arrayContaining([
+      'existing-external',
+      '@holo-js/core',
+      '@holo-js/db',
+      '@holo-js/security',
+    ]))
+    expect(nitro.externals.inline).toEqual([
+      'existing-inline',
+      '@holo-js/auth/nuxt',
+      '@holo-js/auth/nuxt/server',
+    ])
+  })
+
+  it('leaves workspace-linked runtime packages available without Nitro tracing', async () => {
+    const root = await createProject()
+    const workspacePackage = join(root, 'workspace-core')
+    const installedPackage = join(root, 'node_modules/@holo-js/core')
+    await mkdir(workspacePackage, { recursive: true })
+    await mkdir(join(root, 'node_modules/@holo-js'), { recursive: true })
+    await symlink(workspacePackage, installedPackage, 'dir')
+    const { module, moduleInternals } = await loadAdapterModule()
+    const nuxt = createNuxtHarness(root)
+    await module.setup({}, nuxt as never)
+    const nitro = nuxt.options.nitro as typeof nuxt.options.nitro & {
+      externals?: { trace?: boolean }
+      rollupConfig?: { preserveSymlinks?: boolean }
+    }
+
+    expect(moduleInternals.isProjectPackageLinked(root, '@holo-js/core')).toBe(true)
+    expect(moduleInternals.resolveProjectPackageTraceEntry(root, '@holo-js/core')).toBeUndefined()
+    expect(moduleInternals.resolveProjectPackageTraceEntry(root, '')).toBeUndefined()
+    expect(nitro.externals?.trace).toBe(false)
+    expect(nitro.rollupConfig?.preserveSymlinks).toBe(true)
   })
 
   it('fails early when an s3 storage disk is configured without @holo-js/storage-s3', async () => {

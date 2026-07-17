@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { getExampleAppBrowser } from './example-app-browser.mjs'
+import { getExampleAppBrowser, observeExampleAppPage } from './example-app-browser.mjs'
 
 const realtimePath = '/admin/posts/realtime'
 const postSelector = '[data-post-id]'
@@ -30,42 +30,21 @@ function formatRealtimeFailure(message, sockets, failures) {
 }
 
 function collectPageFailures(page, options = {}) {
-  const failures = []
-  const warnings = []
-
-  page.on('console', (message) => {
-    const text = message.text()
-    if (message.type() === 'warning') {
-      warnings.push(text)
-    }
-
-    if (message.type() === 'error') {
-      if (options.allowWebSocketConnectionErrors && text.includes('WebSocket') && text.includes('/app/')) {
-        return
-      }
-
-      failures.push(text)
-    }
-  })
-  page.on('pageerror', (error) => {
-    failures.push(error.message)
+  const result = observeExampleAppPage(page, {
+    allowConsoleError: text => options.allowWebSocketConnectionErrors
+      && text.includes('WebSocket')
+      && text.includes('/app/'),
+    allowRequestFailure: (url) => options.allowWebSocketConnectionErrors
+      && url.includes('/app/'),
   })
   page.on('request', (request) => {
     const url = request.url()
     if (url.includes('/holo/realtime/')) {
-      failures.push(`Unexpected realtime route request: ${request.method()} ${url}`)
-    }
-  })
-  page.on('response', (response) => {
-    if (response.status() >= 500) {
-      failures.push(`${response.status()} ${response.url()}`)
+      result.failures.push(`Unexpected realtime route request: ${request.method()} ${url}`)
     }
   })
 
-  return {
-    failures,
-    warnings,
-  }
+  return result
 }
 
 function cookieHeaderToBrowserCookies(baseUrl, cookieHeader) {

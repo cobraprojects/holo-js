@@ -366,6 +366,7 @@ export async function resolveNewProjectInput(
     choose: (label, allowed, defaultValue) => promptChoice(io, label, allowed, defaultValue),
     optionalPackages: () => promptOptionalPackages(io),
   },
+  validateProjectName: (projectName: string) => Promise<void> = async () => {},
 ): Promise<NewProjectInput> {
   const flagProjectName = resolveStringFlag(input.flags, 'name')
   const positionalProjectName = input.args[0]?.trim()
@@ -380,6 +381,7 @@ export async function resolveNewProjectInput(
   if (!projectName) {
     throw new Error(interactive ? 'Project creation cancelled.' : 'Missing required argument: Project name.')
   }
+  await validateProjectName(projectName)
 
   const framework = resolveStringFlag(input.flags, 'framework')
     ? normalizeChoice(resolveStringFlag(input.flags, 'framework'), SUPPORTED_NEW_FRAMEWORKS, 'framework')

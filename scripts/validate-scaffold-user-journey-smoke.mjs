@@ -2,11 +2,12 @@ import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
 const rootDir = resolve(import.meta.dirname, '..')
-const optionalPackages = [
+const optionalPackageNames = [
   'storage',
   'events',
   'queue',
@@ -20,7 +21,18 @@ const optionalPackages = [
   'realtime',
   'security',
   'cache',
-].join(',')
+]
+const optionalPackages = optionalPackageNames.join(',')
+const optionalPackageIsolationJourneys = [
+  {
+    name: 'without-optional-packages',
+    packages: [],
+  },
+  {
+    name: 'reported-selection',
+    packages: ['validation', 'forms', 'auth', 'authorization', 'broadcast', 'realtime', 'security', 'cache'],
+  },
+]
 const frameworkJourneys = [
   { framework: 'nuxt', projectName: 'journey-nuxt', port: 4387 },
   { framework: 'next', projectName: 'journey-next', port: 4388 },
@@ -146,6 +158,50 @@ async function overlayLocalPackages(projectRoot) {
     await cp(distPath, join(targetRoot, 'dist'), { recursive: true })
     await cp(manifestPath, join(targetRoot, 'package.json'))
   }
+
+  await removeUndeclaredOptionalPackages(projectRoot)
+}
+
+async function resolveRequiredHoloPackages(projectRoot) {
+  const rootManifest = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))
+  const requiredPackages = new Set()
+  const pendingPackages = [
+    ...Object.keys(rootManifest.dependencies ?? {}),
+    ...Object.keys(rootManifest.devDependencies ?? {}),
+  ].filter(packageName => packageName.startsWith('@holo-js/'))
+
+  while (pendingPackages.length > 0) {
+    const packageName = pendingPackages.pop()
+    if (!packageName || requiredPackages.has(packageName)) continue
+
+    requiredPackages.add(packageName)
+    const manifestPath = join(projectRoot, 'node_modules', ...packageName.split('/'), 'package.json')
+    if (!await pathExists(manifestPath)) continue
+
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+    const optionalPeers = new Set(
+      Object.entries(manifest.peerDependenciesMeta ?? {})
+        .filter(([, metadata]) => metadata?.optional === true)
+        .map(([dependencyName]) => dependencyName),
+    )
+    const dependencies = [
+      ...Object.keys(manifest.dependencies ?? {}),
+      ...Object.keys(manifest.peerDependencies ?? {}).filter(dependencyName => !optionalPeers.has(dependencyName)),
+    ].filter(dependencyName => dependencyName.startsWith('@holo-js/'))
+    pendingPackages.push(...dependencies)
+  }
+
+  return requiredPackages
+}
+
+async function removeUndeclaredOptionalPackages(projectRoot) {
+  const requiredPackages = await resolveRequiredHoloPackages(projectRoot)
+
+  for (const packageName of scaffoldFeatureDependencies) {
+    if (!requiredPackages.has(packageName)) {
+      await rm(join(projectRoot, 'node_modules', ...packageName.split('/')), { recursive: true, force: true })
+    }
+  }
 }
 
 async function copyWorkspaceNativeDependencies(projectRoot) {
@@ -217,11 +273,230 @@ async function assertScaffoldStructure(projectRoot, journey) {
   }
 }
 
+async function assertUndeclaredOptionalPackagesAreAbsent(projectRoot) {
+  const requiredPackages = await resolveRequiredHoloPackages(projectRoot)
+  const undeclaredPackages = scaffoldFeatureDependencies.filter(packageName => !requiredPackages.has(packageName))
+
+  assert.notEqual(undeclaredPackages.length, 0)
+  for (const packageName of undeclaredPackages) {
+    assert.equal(
+      await pathExists(join(projectRoot, 'node_modules', ...packageName.split('/'))),
+      false,
+      `Undeclared optional package ${packageName} must be absent from the smoke project.`,
+    )
+  }
+}
+
 async function assertGeneratedSchema(projectRoot, tableName) {
   const schemaTypeScript = await readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8')
   const schemaRuntime = await readFile(join(projectRoot, '.holo-js/generated/schema.mjs'), 'utf8')
   assert.match(schemaTypeScript, new RegExp(`defineGeneratedTable\\("${tableName}"`))
   assert.match(schemaRuntime, new RegExp(`defineGeneratedTable\\("${tableName}"`))
+}
+
+const managedDriverPackages = [
+  '@holo-js/cache-db',
+  '@holo-js/cache-redis',
+  '@holo-js/db-mysql',
+  '@holo-js/db-postgres',
+  '@holo-js/db-sqlite',
+  '@holo-js/queue-db',
+  '@holo-js/queue-redis',
+  '@holo-js/storage-s3',
+  'ioredis',
+]
+
+async function readProjectDependencies(projectRoot) {
+  const manifest = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8'))
+  return manifest.dependencies ?? {}
+}
+
+async function waitForProjectDependencies(projectRoot, predicate, message) {
+  const deadline = Date.now() + 45000
+  let dependencies = {}
+  while (Date.now() < deadline) {
+    dependencies = await readProjectDependencies(projectRoot)
+    if (await predicate(dependencies)) return dependencies
+    await new Promise(resolvePromise => setTimeout(resolvePromise, 250))
+  }
+
+  throw new Error(`${message}: ${JSON.stringify(dependencies)}`)
+}
+
+async function assertInstalledDriverPackages(projectRoot, packageNames) {
+  const dependencies = await readProjectDependencies(projectRoot)
+  for (const packageName of packageNames) {
+    assert.equal(typeof dependencies[packageName], 'string', `Expected ${packageName} in project dependencies.`)
+    assert.equal(
+      await pathExists(join(projectRoot, 'node_modules', ...packageName.split('/'), 'package.json')),
+      true,
+      `Expected ${packageName} to be installed after the user command.`,
+    )
+  }
+}
+
+async function restoreProjectFiles(files) {
+  for (const [filePath, contents] of files) {
+    if (typeof contents === 'string') {
+      await writeFile(filePath, contents, 'utf8')
+    } else {
+      await rm(filePath, { force: true })
+    }
+  }
+}
+
+async function runConfiguredDriverUserJourney(projectRoot, framework, realNpm, localPackageEnv) {
+  const configPaths = ['database', 'queue', 'cache', 'storage', 'session', 'redis']
+    .map(name => join(projectRoot, 'config', `${name}.ts`))
+  const originalFiles = new Map()
+  for (const configPath of configPaths) {
+    originalFiles.set(configPath, await readFile(configPath, 'utf8').catch(() => undefined))
+  }
+  const originalDependencies = await readProjectDependencies(projectRoot)
+
+  await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  defaultConnection: 'sqlite',
+  connections: {
+    sqlite: { driver: 'sqlite', url: './storage/database.sqlite' },
+    postgres: { driver: 'postgres', url: 'postgres://localhost/holo' },
+    mysql: { driver: 'mysql', url: 'mysql://localhost/holo' },
+  },
+})
+`)
+  await writeProjectFile(projectRoot, 'config/redis.ts', `
+import { defineRedisConfig } from '@holo-js/kernel'
+
+export default defineRedisConfig({
+  default: 'default',
+  connections: {
+    default: { host: '127.0.0.1', port: 6379 },
+  },
+})
+`)
+  await writeProjectFile(projectRoot, 'config/queue.ts', `
+import { defineQueueConfig } from '@holo-js/queue'
+
+export default defineQueueConfig({
+  default: 'sync',
+  failed: false,
+  connections: {
+    sync: { driver: 'sync', queue: 'default' },
+    database: { driver: 'database', connection: 'sqlite', table: 'jobs', queue: 'default' },
+    redis: { driver: 'redis', connection: 'default', queue: 'default' },
+  },
+})
+`)
+  await writeProjectFile(projectRoot, 'config/cache.ts', `
+import { defineCacheConfig } from '@holo-js/cache'
+
+export default defineCacheConfig({
+  default: 'file',
+  drivers: {
+    file: { driver: 'file', path: './storage/framework/cache/data' },
+    database: { driver: 'database', connection: 'sqlite', table: 'cache', lockTable: 'cache_locks' },
+    redis: { driver: 'redis', connection: 'default', prefix: 'cache:' },
+  },
+})
+`)
+  await writeProjectFile(projectRoot, 'config/storage.ts', `
+import { defineStorageConfig } from '@holo-js/storage'
+
+export default defineStorageConfig({
+  defaultDisk: 'local',
+  disks: {
+    local: { driver: 'local', root: './storage/app' },
+    archive: { driver: 's3', bucket: 'holo-smoke', region: 'us-east-1' },
+  },
+})
+`)
+  await writeProjectFile(projectRoot, 'config/session.ts', `
+import { defineSessionConfig } from '@holo-js/session'
+
+export default defineSessionConfig({
+  driver: 'file',
+  stores: {
+    file: { driver: 'file', path: './storage/framework/sessions' },
+    database: { driver: 'database', connection: 'sqlite', table: 'sessions' },
+    redis: { driver: 'redis', connection: 'default', prefix: 'session:' },
+  },
+})
+`)
+
+  run(framework, 'npx', ['holo', 'prepare'], { cwd: projectRoot, env: localPackageEnv })
+  await assertInstalledDriverPackages(projectRoot, managedDriverPackages)
+
+  await restoreProjectFiles(originalFiles)
+  run(framework, 'npx', ['holo', 'prepare'], { cwd: projectRoot, env: localPackageEnv })
+  const restoredDependencies = await readProjectDependencies(projectRoot)
+  for (const packageName of managedDriverPackages) {
+    assert.equal(
+      typeof restoredDependencies[packageName],
+      typeof originalDependencies[packageName],
+      `Expected holo prepare to restore the original ${packageName} dependency state.`,
+    )
+  }
+
+  const databasePath = join(projectRoot, 'config/database.ts')
+  const originalDatabase = originalFiles.get(databasePath)
+  assert.equal(typeof originalDatabase, 'string')
+  const devPort = await new Promise((resolvePromise, reject) => {
+    const server = createServer()
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        reject(new Error('Could not determine an available dev-server port.'))
+        return
+      }
+      server.close(error => error ? reject(error) : resolvePromise(address.port))
+    })
+  })
+  const devServer = spawn(realNpm, ['run', 'dev'], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      ...localPackageEnv,
+      HOST: '127.0.0.1',
+      HOSTNAME: '127.0.0.1',
+      PORT: String(devPort),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  const devJourney = { projectName: projectRoot.split('/').at(-1), port: devPort }
+  try {
+    await waitForRenderedApp(devJourney, devServer)
+    await writeFile(databasePath, `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  defaultConnection: 'main',
+  connections: {
+    main: { driver: 'sqlite', url: './storage/database.sqlite' },
+    analytics: { driver: 'postgres', url: 'postgres://localhost/holo' },
+  },
+})
+`, 'utf8')
+    await waitForProjectDependencies(
+      projectRoot,
+      async dependencies => typeof dependencies['@holo-js/db-postgres'] === 'string'
+        && await pathExists(join(projectRoot, 'node_modules/@holo-js/db-postgres/package.json')),
+      'holo dev did not detect the added Postgres connection',
+    )
+    await assertInstalledDriverPackages(projectRoot, ['@holo-js/db-postgres'])
+    await writeFile(databasePath, originalDatabase, 'utf8')
+    await waitForProjectDependencies(
+      projectRoot,
+      dependencies => typeof dependencies['@holo-js/db-postgres'] === 'undefined',
+      'holo dev did not detect removal of the Postgres connection',
+    )
+    await waitForRenderedApp(devJourney, devServer)
+  } finally {
+    await writeFile(databasePath, originalDatabase, 'utf8')
+    await stopServer(devServer)
+  }
 }
 
 async function waitForRenderedApp(journey, server) {
@@ -285,7 +560,7 @@ async function runFrameworkJourney(tempRoot, journey, cliPath, realNpm, localPac
     env: localPackageEnv,
   })
   assert.match(scaffold.stdout, /Created Holo project:/)
-  assert.match(scaffold.stdout, /installed dependencies/)
+  assert.match(scaffold.stdout, /dependencies installed/i)
 
   await overlayLocalPackages(projectRoot)
   assert.equal(await pathExists(join(projectRoot, 'node_modules/@holo-js/adapter-shared/package.json')), true)
@@ -316,6 +591,9 @@ export default defineMigration({
   await copyWorkspaceNativeDependencies(projectRoot)
   await overlayLocalPackages(projectRoot)
   await assertGeneratedSchema(projectRoot, tableName)
+  if (journey.framework === 'nuxt') {
+    await runConfiguredDriverUserJourney(projectRoot, journey.framework, realNpm, localPackageEnv)
+  }
   run(journey.framework, realNpm, ['run', 'lint'], { cwd: projectRoot, env: localPackageEnv })
   assert.equal(await pathExists(join(projectRoot, 'node_modules/@holo-js/adapter-shared/package.json')), true)
   run(journey.framework, realNpm, ['run', 'typecheck'], { cwd: projectRoot, env: localPackageEnv })
@@ -344,6 +622,41 @@ export default defineMigration({
   }
 
   log(journey.framework, 'passed')
+}
+
+async function runOptionalPackageIsolationJourney(tempRoot, isolationJourney, cliPath, realNpm, localPackageEnv) {
+  const framework = 'nuxt'
+  const projectName = `journey-nuxt-${isolationJourney.name}`
+  const projectRoot = join(tempRoot, projectName)
+  const packageArgs = isolationJourney.packages.length > 0
+    ? ['--package', isolationJourney.packages.join(',')]
+    : []
+  const scaffold = run(framework, 'node', [
+    cliPath,
+    'new',
+    projectName,
+    '--framework',
+    framework,
+    '--database',
+    'sqlite',
+    '--package-manager',
+    'npm',
+    ...packageArgs,
+  ], {
+    cwd: tempRoot,
+    env: localPackageEnv,
+  })
+
+  assert.match(scaffold.stdout, /Created Holo project:/)
+  assert.match(scaffold.stdout, /dependencies installed/i)
+  await overlayLocalPackages(projectRoot)
+  await assertUndeclaredOptionalPackagesAreAbsent(projectRoot)
+  run(framework, realNpm, ['run', 'prepare'], { cwd: projectRoot, env: localPackageEnv })
+  await copyWorkspaceNativeDependencies(projectRoot)
+  await overlayLocalPackages(projectRoot)
+  await assertUndeclaredOptionalPackagesAreAbsent(projectRoot)
+  run(framework, realNpm, ['run', 'build'], { cwd: projectRoot, env: localPackageEnv })
+  log(framework, `${isolationJourney.name} passed`)
 }
 
 const overlayIndex = process.argv.indexOf('--overlay-local-packages')
@@ -376,8 +689,16 @@ try {
   }
   const cliPath = join(rootDir, 'packages/cli/dist/bin/holo.mjs')
 
-  for (const journey of resolveJourneys(process.argv.slice(2))) {
-    await runFrameworkJourney(tempRoot, journey, cliPath, realNpm, localPackageEnv)
+  if (!process.argv.includes('--optional-isolation-only')) {
+    for (const journey of resolveJourneys(process.argv.slice(2))) {
+      await runFrameworkJourney(tempRoot, journey, cliPath, realNpm, localPackageEnv)
+    }
+  }
+
+  if (!process.argv.includes('--skip-optional-isolation')) {
+    for (const isolationJourney of optionalPackageIsolationJourneys) {
+      await runOptionalPackageIsolationJourney(tempRoot, isolationJourney, cliPath, realNpm, localPackageEnv)
+    }
   }
 
   log('success', 'all scaffold user journeys passed')

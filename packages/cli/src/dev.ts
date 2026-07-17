@@ -163,25 +163,42 @@ export async function runProjectStartServer(
 export async function runProjectDependencyInstall(
   io: IoStreams,
   projectRoot: string,
-  spawn: typeof spawnSync = spawnSync,
+  spawnProcess: typeof spawn = spawn,
 ): Promise<void> {
   const invocation = await resolvePackageManagerInstallInvocation(projectRoot)
-  const result = spawn(invocation.command, [...invocation.args], {
+  const child = spawnProcess(invocation.command, [...invocation.args], {
     cwd: projectRoot,
-    encoding: 'utf8',
     env: process.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }) as SpawnProcessLike
+  let stdout = ''
+  let stderr = ''
+
+  child.stdout?.on('data', chunk => stdout += String(chunk))
+  child.stderr?.on('data', chunk => stderr += String(chunk))
+
+  const result = await new Promise<
+    | { kind: 'close', code: number | null }
+    | { kind: 'error', error: Error }
+  >((resolvePromise) => {
+    child.on('error', error => resolvePromise({ kind: 'error', error }))
+    child.on('close', code => resolvePromise({ kind: 'close', code }))
   })
 
-  if (result.stdout) {
-    io.stdout.write(result.stdout)
+  if (result.kind === 'error') {
+    throw result.error
   }
 
-  if (result.stderr) {
-    io.stderr.write(result.stderr)
+  if (stdout) {
+    io.stdout.write(stdout)
   }
 
-  if (result.status !== 0) {
-    throw new Error(result.stderr?.trim() || result.stdout?.trim() || 'Project dependency installation failed.')
+  if (stderr) {
+    io.stderr.write(stderr)
+  }
+
+  if (result.code !== 0) {
+    throw new Error(stderr.trim() || stdout.trim() || 'Project dependency installation failed.')
   }
 }
 

@@ -54,10 +54,11 @@ describe('CLI IO', () => {
   it('runs tasks without a spinner outside a real terminal', async () => {
     const io = createIo({ tty: true })
 
-    await expect(runWithSpinner(io, 'Loading...', async () => 'done')).resolves.toBe('done')
+    await expect(runWithSpinner(io, 'Loading...', async () => 'done', 'Loaded.')).resolves.toBe('done')
 
     expect(supportsSpinner(io)).toBe(false)
     expect(spinnerMock.spinner).not.toHaveBeenCalled()
+    expect(io.stdout.read()?.toString()).toBe('Loading...\nLoaded.\n')
   })
 
   it('starts and stops the spinner for real terminal streams', async () => {

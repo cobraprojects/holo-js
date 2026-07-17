@@ -12,7 +12,10 @@ export async function runWithSpinner<TValue>(
   successMessage = message,
 ): Promise<TValue> {
   if (!supportsSpinner(io)) {
-    return task()
+    writeLine(io.stdout, message)
+    const result = await task()
+    writeLine(io.stdout, successMessage)
+    return result
   }
 
   const loading = spinner({

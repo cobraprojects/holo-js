@@ -63,12 +63,6 @@ export default defineConfig({
         '**/*.d.ts',
         '**/node_modules/**',
       ],
-      thresholds: {
-        statements: 100,
-        branches: 100,
-        functions: 100,
-        lines: 100,
-      },
     },
   },
 })

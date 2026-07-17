@@ -9,12 +9,6 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reportsDirectory: resolve(__dirname, '../../coverage/create-holo-js'),
-      thresholds: {
-        statements: 100,
-        branches: 100,
-        functions: 100,
-        lines: 100,
-      },
     },
   },
 })

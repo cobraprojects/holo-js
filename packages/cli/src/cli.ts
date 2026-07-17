@@ -21,8 +21,8 @@ import {
   SUPPORTED_QUEUE_INSTALL_DRIVERS,
 } from './parsing'
 import { generateProjectAppKey } from './app-key'
-import { fileExists } from './fs-utils'
-import { runWithSpinner, supportsSpinner, writeLine } from './io'
+import { ensureEmptyDirectory, fileExists } from './fs-utils'
+import { runWithSpinner, writeLine } from './io'
 import { hasProjectDependency, pinProjectDependencyVersions, removeProjectDependency, upsertProjectDependency } from './package-json'
 import type * as ProjectPluginsModule from './project/plugins'
 import type * as ProjectScaffoldModule from './project/scaffold'
@@ -402,7 +402,12 @@ export function createInternalCommands(
       usage: 'holo new <name> [--framework <nuxt|next|sveltekit>] [--database <sqlite|mysql|postgres>] [--package-manager <bun|npm|pnpm|yarn>] [--package <storage|events|queue|validation|forms|auth|authorization|notifications|mail|broadcast|realtime|security|cache>] [--storage-default-disk <local|public>]',
       source: 'internal',
       async prepare(input) {
-        const resolved = await resolveNewProjectInput(context, input)
+        const resolved = await resolveNewProjectInput(
+          context,
+          input,
+          undefined,
+          projectName => ensureEmptyDirectory(resolve(context.cwd, projectName), projectName),
+        )
 
         return {
           args: [resolved.projectName],
@@ -446,11 +451,11 @@ export function createInternalCommands(
         writeLine(context.stdout, `Created Holo project: ${targetDir}`)
         await runWithSpinner(
           context,
-          'Installing dependencies...',
+          `Installing dependencies with ${packageManager}...`,
           () => runProjectDependencyInstallForProject(context, projectExecutors, targetDir, {
-            writeStatus: !supportsSpinner(context),
+            writeStatus: false,
           }),
-          'Dependencies installed.',
+          `Dependencies installed with ${packageManager}.`,
         )
         writeLine(context.stdout)
         writeLine(context.stdout, 'Next steps')

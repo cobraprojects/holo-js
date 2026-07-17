@@ -157,7 +157,7 @@ import {
   runMakeObserver,
   runMakeSeeder,
 } from '../src/generators'
-import { ensureAbsent, fileExists } from '../src/fs-utils'
+import { ensureAbsent, ensureEmptyDirectory, fileExists } from '../src/fs-utils'
 import { hasProjectDependency, upsertProjectDependency } from '../src/package-json'
 import {
   getRegistryMigrationSlug,
@@ -4662,6 +4662,76 @@ export default defineCacheConfig({
     })
   })
 
+  it('rejects a non-empty project destination before resolving project options', async () => {
+    const baseRoot = await createTempDirectory()
+    tempDirs.push(baseRoot)
+    await writeProjectFile(baseRoot, 'existing-app/package.json', '{}\n')
+
+    const io = createIo(baseRoot, { tty: true })
+    const choose = vi.fn(async (_label, _allowed, defaultValue) => defaultValue)
+    const optionalPackages = vi.fn(async () => [])
+    const validateProjectName = vi.fn(
+      async projectName => ensureEmptyDirectory(resolve(baseRoot, projectName), projectName),
+    )
+
+    await expect(resolveNewProjectInput(io.io, { args: [], flags: {} }, {
+      prompt: async () => 'existing-app',
+      choose,
+      optionalPackages,
+    }, validateProjectName)).rejects.toThrow(
+      'The destination "existing-app" already exists and is not empty. Choose a different project name or empty that folder first.',
+    )
+    expect(validateProjectName).toHaveBeenCalledWith('existing-app')
+    expect(choose).not.toHaveBeenCalled()
+    expect(optionalPackages).not.toHaveBeenCalled()
+
+    const newCommand = createInternalCommands({
+      ...io.io,
+      projectRoot: baseRoot,
+      registry: [],
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    } as never).find(command => command.name === 'new')
+
+    await expect(newCommand?.prepare?.({ args: ['existing-app'], flags: {} }, {} as never)).rejects.toThrow(
+      'The destination "existing-app" already exists and is not empty. Choose a different project name or empty that folder first.',
+    )
+    await expect(ensureEmptyDirectory(join(baseRoot, 'missing-app'))).resolves.toBeUndefined()
+    await expect(projectInternals.scaffoldProject(resolve(baseRoot, 'existing-app'), {
+      projectName: 'existing-app',
+      framework: 'nuxt',
+      databaseDriver: 'sqlite',
+      packageManager: 'npm',
+      storageDefaultDisk: 'local',
+      optionalPackages: [],
+    })).rejects.toThrow(`The destination "${resolve(baseRoot, 'existing-app')}" already exists and is not empty.`)
+
+    const scaffoldIo = createIo(baseRoot)
+    const runProjectDependencyInstall = vi.fn(async () => {})
+    const scaffoldCommand = createInternalCommands({
+      ...scaffoldIo.io,
+      projectRoot: baseRoot,
+      registry: [],
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    } as never, undefined, {}, { runProjectDependencyInstall }).find(command => command.name === 'new')
+
+    await scaffoldCommand?.run({
+      cwd: baseRoot,
+      projectRoot: baseRoot,
+      args: ['fresh-app'],
+      flags: {
+        framework: 'nuxt',
+        database: 'sqlite',
+        'package-manager': 'npm',
+        'storage-default-disk': 'local',
+      },
+      loadProject: async () => ({ config: defaultProjectConfig() }),
+    } as never)
+
+    expect(scaffoldIo.read().stdout).toContain('Creating project files...\nProject files created.')
+    expect(scaffoldIo.read().stdout).toContain('Installing dependencies with npm...\nDependencies installed with npm.')
+    expect(runProjectDependencyInstall).toHaveBeenCalledWith(expect.anything(), resolve(baseRoot, 'fresh-app'))
+  })
+
   it('installs mail support through the CLI', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)
@@ -8029,28 +8099,45 @@ export default {
       args: ['install'],
     })
     const installIo = createIo(projectRoot)
-    const spawnInstall = vi.fn(() => ({
-      status: 0,
-      stdout: 'installed ok\n',
-      stderr: 'warning\n',
-    }))
+    const createInstallProcess = (
+      stdout: string,
+      stderr: string,
+      result: { readonly code: number | null } | { readonly error: Error },
+    ) => {
+      const stdoutStream = new PassThrough()
+      const stderrStream = new PassThrough()
+      const child = {
+        stdout: stdoutStream,
+        stderr: stderrStream,
+        on(event: 'close' | 'error', listener: (value: number | null | Error) => void) {
+          if (event === 'error' && 'error' in result) {
+            stdoutStream.end(stdout)
+            stderrStream.end(stderr)
+            listener(result.error)
+          }
+          if (event === 'close' && 'code' in result) {
+            stdoutStream.end(stdout)
+            stderrStream.end(stderr)
+            listener(result.code)
+          }
+          return child
+        },
+      }
+      return child
+    }
+    const spawnInstall = vi.fn(() => createInstallProcess('installed ok\n', 'warning\n', { code: 0 }))
     await expect(runProjectDependencyInstall(installIo.io, projectRoot, spawnInstall as never)).resolves.toBeUndefined()
     expect(installIo.read().stdout).toContain('installed ok')
     expect(installIo.read().stderr).toContain('warning')
-    const spawnInstallFailure = vi.fn(() => ({
-      status: 1,
-      stdout: '',
-      stderr: 'install failed',
-    }))
+    const spawnInstallFailure = vi.fn(() => createInstallProcess('', 'install failed', { code: 1 }))
     await expect(runProjectDependencyInstall(installIo.io, projectRoot, spawnInstallFailure as never))
       .rejects.toThrow('install failed')
-    const spawnInstallSilentFailure = vi.fn(() => ({
-      status: 1,
-      stdout: '',
-      stderr: '',
-    }))
+    const spawnInstallSilentFailure = vi.fn(() => createInstallProcess('', '', { code: 1 }))
     await expect(runProjectDependencyInstall(installIo.io, projectRoot, spawnInstallSilentFailure as never))
       .rejects.toThrow('Project dependency installation failed.')
+    const spawnInstallError = vi.fn(() => createInstallProcess('', '', { error: new Error('spawn failed') }))
+    await expect(runProjectDependencyInstall(installIo.io, projectRoot, spawnInstallError as never))
+      .rejects.toThrow('spawn failed')
 
     await expect(fileExists(notePath)).resolves.toBe(true)
     await expect(fileExists(join(projectRoot, 'missing.txt'))).resolves.toBe(false)

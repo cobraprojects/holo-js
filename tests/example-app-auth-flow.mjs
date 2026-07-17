@@ -104,10 +104,14 @@ function appendCookieHeader(headers, cookie) {
 
 async function fetchText(baseUrl, path, options = {}) {
   const headers = new Headers(options.headers ?? {})
+  const method = options.method ?? 'GET'
+  if (method !== 'GET' && method !== 'HEAD' && !headers.has('origin')) {
+    headers.set('origin', new URL(baseUrl).origin)
+  }
   options.jar?.apply(headers)
 
   const response = await fetch(new URL(path, baseUrl), {
-    method: options.method ?? 'GET',
+    method,
     headers,
     body: options.body,
     redirect: 'manual',

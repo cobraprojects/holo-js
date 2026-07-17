@@ -2,12 +2,16 @@ import assert from 'node:assert/strict'
 
 async function fetchJson(baseUrl, path, options = {}) {
   const headers = new Headers(options.headers)
+  const method = options.method ?? 'GET'
+  if (method !== 'GET' && method !== 'HEAD' && !headers.has('origin')) {
+    headers.set('origin', new URL(baseUrl).origin)
+  }
   if (!headers.has('x-forwarded-for')) {
     headers.set('x-forwarded-for', `127.20.0.${Math.floor(Math.random() * 200) + 1}`)
   }
 
   const response = await fetch(new URL(path, baseUrl), {
-    method: options.method ?? 'GET',
+    method,
     headers,
     body: options.body,
     redirect: 'manual',

@@ -21,6 +21,16 @@ test('scaffold smoke owns the complete three-framework user journey', async () =
   assert.match(source, /--overlay-local-packages/)
   assert.match(source, /HOLO_SMOKE_SCRIPT/)
   assert.match(source, /waitForRenderedApp/)
+  assert.match(source, /without-optional-packages/)
+  assert.match(source, /reported-selection/)
+  assert.match(source, /assertUndeclaredOptionalPackagesAreAbsent/)
+  assert.match(source, /runOptionalPackageIsolationJourney/)
+  assert.match(source, /--optional-isolation-only/)
+  assert.match(source, /runConfiguredDriverUserJourney/)
+  assert.match(source, /holo dev did not detect the added Postgres connection/)
+  for (const packageName of ['db-mysql', 'db-postgres', 'queue-db', 'queue-redis', 'cache-db', 'cache-redis', 'storage-s3']) {
+    assert.match(source, new RegExp(`@holo-js/${packageName}`))
+  }
 })
 
 test('blog apps use the scaffold lifecycle contract', async () => {

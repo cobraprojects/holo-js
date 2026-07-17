@@ -11,6 +11,7 @@ import Database from 'better-sqlite3'
 import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
 import { closeExampleAppBrowser } from '../../../tests/example-app-browser.mjs'
 import { assertExampleAppBroadcastBrowserFlow } from '../../../tests/example-app-broadcast-browser-flow.mjs'
+import { assertExampleAppProductionFlow } from '../../../tests/example-app-production-flow.mjs'
 import { assertExampleAppRealtimeBrowserFlow, assertExampleAppRealtimeUnavailableBrowserFlow } from '../../../tests/example-app-realtime-browser-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 
@@ -573,32 +574,6 @@ async function assertAuthenticatedAdminPostFlows(context) {
   await assertAuthenticatedUserCannotDeletePost(context)
 }
 
-async function assertSuperAdminLogoutUsesServerActionForm() {
-  const source = await readFile(join(cwd, 'src/routes/super-admin/+page.svelte'), 'utf8')
-
-  assert.ok(
-    source.includes('<form method="post">'),
-    'Expected super-admin logout to use the page action form.',
-  )
-  assert.ok(
-    source.includes('<button type="submit">Sign out of super admin</button>'),
-    'Expected super-admin logout to submit through the server action.',
-  )
-}
-
-async function assertHeaderLogoutUsesServerRedirectForm() {
-  const source = await readFile(join(cwd, 'src/routes/+layout.svelte'), 'utf8')
-
-  assert.ok(
-    source.includes('<form action="/logout" method="post" class="logout-form">'),
-    'Expected header logout to post to the server redirect route.',
-  )
-  assert.ok(
-    source.includes('<button type="submit" class="logout-button">Logout</button>'),
-    'Expected header logout to submit through a native form.',
-  )
-}
-
 function pipeOutput(stream, target, onLine) {
   if (!stream) {
     return
@@ -719,9 +694,6 @@ async function startBroadcastWorker(appUrl) {
 try {
   await rm(join(cwd, '.svelte-kit'), { recursive: true, force: true })
   await rm(join(cwd, 'build'), { recursive: true, force: true })
-  await assertSuperAdminLogoutUsesServerActionForm()
-  await assertHeaderLogoutUsesServerRedirectForm()
-  await run('npx', ['vitest', '--run', 'tests/auth-page-actions.test.mjs', '--reporter=json'])
   await run('bun', ['run', 'prepare'])
   await assertConfigCacheCommands()
   await run('bun', ['x', 'holo', 'migrate:fresh', '--seed'])
@@ -767,10 +739,30 @@ try {
   child = null
   await stopProcessTree(broadcastChild)
   broadcastChild = null
+  await closeExampleAppBrowser()
 
   await run('bun', ['run', 'lint'])
   await run('bun', ['run', 'typecheck'])
   await run('bun', ['run', 'build'])
+  await assertExampleAppProductionFlow({
+    cwd,
+    baseUrl: `http://localhost:${port}`,
+    env: createChildEnv({
+      PORT: port,
+      HOST: 'localhost',
+      APP_URL: `http://localhost:${port}`,
+      ORIGIN: `http://localhost:${port}`,
+      MAIL_MAILER: 'log',
+      MAIL_LOG_BODIES: 'true',
+    }),
+    expectedTitle: 'Shipping a Real Holo Blog on SvelteKit',
+    auth: {
+      appName: 'blog-sveltekit-production',
+      sessionCookieName: DEFAULT_SESSION_COOKIE_NAME,
+      authSubmissionMode: 'sveltekit-actions',
+      loginRequiresCsrf: true,
+    },
+  })
 } finally {
   await closeExampleAppBrowser()
   await writeFile(configPath, originalConfig)

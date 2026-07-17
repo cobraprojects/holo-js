@@ -1,4 +1,4 @@
-import { mkdir, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import {
   normalizeHoloProjectConfig,
@@ -26,6 +26,7 @@ import {
   type SupportedScaffoldPackageManager,
 } from '../shared'
 import { writeTextFile } from '../runtime'
+import { ensureEmptyDirectory } from '../../fs-utils'
 import {
   ensureRateLimitStorageIgnore,
   renderAuthConfig,
@@ -209,10 +210,7 @@ export async function scaffoldProject(
   projectRoot: string,
   options: ProjectScaffoldOptions,
 ): Promise<void> {
-  const existingEntries = await readdir(projectRoot).catch(() => [] as string[])
-  if (existingEntries.length > 0) {
-    throw new Error(`Refusing to scaffold into a non-empty directory: ${projectRoot}`)
-  }
+  await ensureEmptyDirectory(projectRoot)
 
   const { env, example } = renderScaffoldEnvFiles(options)
   const config = normalizeHoloProjectConfig()

@@ -18,15 +18,27 @@ async function importModule<TModule>(specifier: string): Promise<TModule> {
 
 const runtimeModuleRequire = createRequire(import.meta.url)
 
+function resolveRuntimeModuleSearchPaths(
+  projectRoot: string,
+  runtimeModuleUrl: string = import.meta.url,
+): readonly string[] | undefined {
+  const runtimeModulePath = normalizeImportTarget(runtimeModuleUrl)
+  return runtimeModulePath.includes('/node_modules/@holo-js/core/')
+    ? undefined
+    : [projectRoot]
+}
+
 function resolveOptionalImportSpecifier(specifier: string, projectRoot?: string): string {
   if (!projectRoot) {
     return specifier
   }
 
   try {
-    return pathToFileURL(runtimeModuleRequire.resolve(specifier, {
-      paths: [projectRoot],
-    })).href
+    const paths = resolveRuntimeModuleSearchPaths(projectRoot)
+    const resolved = paths
+      ? runtimeModuleRequire.resolve(specifier, { paths: [...paths] })
+      : runtimeModuleRequire.resolve(specifier)
+    return pathToFileURL(resolved).href
   } catch {
     return specifier
   }
@@ -52,6 +64,19 @@ function normalizeImportTarget(value: string): string {
   return normalizeImportSpecifier(value).replace(/\\/g, '/')
 }
 
+function resolvePackageRootSpecifier(specifier: string): string | undefined {
+  if (specifier.startsWith('@')) {
+    const [scope, packageName] = specifier.split('/')
+    return scope && packageName ? `${scope}/${packageName}` : undefined
+  }
+
+  if (specifier.startsWith('.') || specifier.startsWith('/') || specifier.includes(':')) {
+    return undefined
+  }
+
+  return specifier.split('/')[0]
+}
+
 function matchesRelativeImportTarget(failedTarget: string | undefined, specifier: string): boolean {
   if (!failedTarget || !specifier.startsWith('.')) {
     return false
@@ -68,12 +93,16 @@ function isMissingOptionalModule(error: unknown, specifier: string, resolvedSpec
 
   const message = getErrorMessage(error)
   const failedTarget = getMissingModuleTarget(message)
-  const expectedTargets = new Set([
+  const expectedTargets = new Set<string>([
     specifier,
     resolvedSpecifier,
     normalizeImportTarget(specifier),
     normalizeImportTarget(resolvedSpecifier),
   ])
+  const packageRootSpecifier = resolvePackageRootSpecifier(specifier)
+  if (packageRootSpecifier) {
+    expectedTargets.add(packageRootSpecifier)
+  }
   const normalizedFailedTarget = typeof failedTarget === 'string' ? normalizeImportTarget(failedTarget) : undefined
   const matchesRequestedTarget = typeof normalizedFailedTarget === 'string'
     && (expectedTargets.has(normalizedFailedTarget) || matchesRelativeImportTarget(normalizedFailedTarget, specifier))
@@ -236,8 +265,10 @@ export const runtimeModuleInternals = {
   bundleRuntimeModule,
   importModule,
   importOptionalRuntimeModule,
+  isMissingOptionalModule,
   loadEsbuild,
   pathExists,
+  resolveRuntimeModuleSearchPaths,
   runEsbuild,
   writeLoaderTsconfig,
 }

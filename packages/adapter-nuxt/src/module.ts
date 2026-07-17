@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { lstatSync, readFileSync } from 'node:fs'
 import { access, mkdir, readdir, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { basename, dirname, extname, relative, resolve } from 'node:path'
@@ -96,6 +96,68 @@ const CLIENT_OPTIMIZE_DEPS = [
     include: `${HOLO_PACKAGE_SCOPE}validation > valibot`,
   },
 ] as const
+const NITRO_RUNTIME_TRACE_IMPORTS = [
+  '@holo-js/auth-clerk',
+  '@holo-js/auth-social',
+  '@holo-js/auth-workos',
+  '@holo-js/authorization',
+  '@holo-js/broadcast',
+  '@holo-js/cache',
+  '@holo-js/cache-db',
+  '@holo-js/cache-redis',
+  '@holo-js/db-mysql',
+  '@holo-js/db-postgres',
+  '@holo-js/db-sqlite',
+  '@holo-js/events',
+  '@holo-js/mail',
+  '@holo-js/media',
+  '@holo-js/notifications',
+  '@holo-js/queue',
+  '@holo-js/queue-db',
+  '@holo-js/queue-redis',
+  '@holo-js/security',
+  '@holo-js/security/drivers/redis-adapter',
+  '@holo-js/session',
+  '@holo-js/session/drivers/redis-adapter',
+  '@holo-js/storage',
+  '@holo-js/storage/runtime',
+  '@holo-js/storage-s3',
+] as const
+const NITRO_RUNTIME_EXTERNALS = [
+  '@holo-js/auth',
+  '@holo-js/auth-clerk',
+  '@holo-js/auth-social',
+  '@holo-js/auth-workos',
+  '@holo-js/authorization',
+  '@holo-js/broadcast',
+  '@holo-js/cache',
+  '@holo-js/cache-db',
+  '@holo-js/cache-redis',
+  '@holo-js/config',
+  '@holo-js/core',
+  '@holo-js/db',
+  '@holo-js/db-mysql',
+  '@holo-js/db-postgres',
+  '@holo-js/db-sqlite',
+  '@holo-js/events',
+  '@holo-js/kernel',
+  '@holo-js/mail',
+  '@holo-js/media',
+  '@holo-js/notifications',
+  '@holo-js/queue',
+  '@holo-js/queue-db',
+  '@holo-js/queue-redis',
+  '@holo-js/realtime',
+  '@holo-js/security',
+  '@holo-js/session',
+  '@holo-js/storage',
+  '@holo-js/storage-s3',
+  '@holo-js/validation',
+] as const
+const NITRO_RUNTIME_INLINE_IMPORTS = [
+  '@holo-js/auth/nuxt',
+  '@holo-js/auth/nuxt/server',
+] as const
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -170,6 +232,17 @@ interface NuxtOptionsWithNitro {
   nitro: {
     storage: Record<string, unknown>
     errorHandler?: string | string[]
+    externals?: {
+      external?: unknown[]
+      inline?: unknown[]
+      trace?: boolean
+      traceInclude?: string[]
+      [key: string]: unknown
+    }
+    rollupConfig?: {
+      preserveSymlinks?: boolean
+      [key: string]: unknown
+    }
     virtual?: Record<string, () => string>
     experimental?: {
       asyncContext?: boolean
@@ -206,15 +279,79 @@ function hasProjectPackage(
   packageName: string,
   resolvePackage: (packageName: string) => string = createRequire(resolve(rootDir, 'package.json')).resolve,
 ): boolean {
+  return typeof resolveProjectPackageEntry(rootDir, packageName, resolvePackage) === 'string'
+}
+
+function resolveProjectPackageEntry(
+  rootDir: string,
+  packageName: string,
+  resolvePackage: (packageName: string) => string = createRequire(resolve(rootDir, 'package.json')).resolve,
+): string | undefined {
   try {
-    resolvePackage(packageName)
-    return true
+    return resolvePackage(packageName)
   } catch (error) {
     if (isModuleResolutionFailure(error)) {
-      return false
+      return undefined
     }
 
     throw error
+  }
+}
+
+function resolveProjectPackageTraceEntry(
+  rootDir: string,
+  packageName: string,
+): string | undefined {
+  const packageSegments = packageName.split('/')
+  const packageRootName = packageName.startsWith('@')
+    ? packageSegments.slice(0, 2).join('/')
+    : packageSegments[0]
+  if (!packageRootName) {
+    return undefined
+  }
+
+  if (isProjectPackageLinked(rootDir, packageRootName)) {
+    return undefined
+  }
+
+  return resolveProjectPackageEntry(rootDir, packageName)
+}
+
+function isProjectPackageLinked(rootDir: string, packageRootName: string): boolean {
+  const projectPackageRoot = resolve(rootDir, 'node_modules', packageRootName)
+  return lstatSync(projectPackageRoot, { throwIfNoEntry: false })?.isSymbolicLink() === true
+}
+
+function addNitroRuntimeTraceIncludes(
+  opts: NuxtOptionsWithNitro,
+  rootDir: string,
+  pluginPackages: readonly string[] = [],
+  resolvePackage: (rootDir: string, packageName: string) => string | undefined = resolveProjectPackageTraceEntry,
+): void {
+  const externals = opts.nitro.externals ?? {}
+  const external = new Set(externals.external ?? [])
+  const inline = new Set(externals.inline ?? [])
+  const traceInclude = new Set(externals.traceInclude ?? [])
+  for (const specifier of NITRO_RUNTIME_EXTERNALS) {
+    external.add(specifier)
+  }
+  for (const specifier of NITRO_RUNTIME_INLINE_IMPORTS) {
+    inline.add(specifier)
+  }
+  for (const specifier of [...NITRO_RUNTIME_TRACE_IMPORTS, ...pluginPackages]) {
+    const packageEntry = resolvePackage(rootDir, specifier)
+    if (packageEntry) {
+      traceInclude.add(packageEntry)
+    }
+  }
+  opts.nitro.externals = {
+    ...externals,
+    external: [...external],
+    inline: [...inline],
+    trace: isProjectPackageLinked(rootDir, '@holo-js/core')
+      ? false
+      : externals.trace,
+    traceInclude: [...traceInclude],
   }
 }
 
@@ -539,6 +676,13 @@ export default defineNuxtModule<ModuleOptions>({
 
     opts.nitro = opts.nitro || { storage: {} }
     opts.nitro.storage = opts.nitro.storage || {}
+    if (isProjectPackageLinked(rootDir, '@holo-js/core')) {
+      opts.nitro.rollupConfig = {
+        ...opts.nitro.rollupConfig,
+        preserveSymlinks: true,
+      }
+    }
+    addNitroRuntimeTraceIncludes(opts, rootDir, loaded.app.plugins)
     addNitroErrorHandler(opts, resolver.resolve('./runtime/server/error'))
     opts.nitro.experimental = {
       ...(opts.nitro.experimental || {}),
@@ -628,8 +772,10 @@ export default defineNuxtModule<ModuleOptions>({
     }
 
     const runtimePath = resolver.resolve('./runtime')
-    if (!opts.build.transpile.includes(runtimePath)) {
-      opts.build.transpile.push(runtimePath)
+    for (const packageName of [runtimePath, '@holo-js/auth']) {
+      if (!opts.build.transpile.includes(packageName)) {
+        opts.build.transpile.push(packageName)
+      }
     }
 
     if (storageModule && !opts._holoStorageFinalizeRegistered) {
@@ -658,6 +804,7 @@ export const moduleInternals = {
   addViteOptimizeDeps,
   addVitePlugin,
   addNitroErrorHandler,
+  addNitroRuntimeTraceIncludes,
   createRealtimeDefinitionVitePlugin,
   existsFile,
   hasProjectPackage,
@@ -668,6 +815,9 @@ export const moduleInternals = {
   finalizeStorageSetup,
   resolveStorageSetup,
   isModuleResolutionFailure,
+  resolveProjectPackageEntry,
+  resolveProjectPackageTraceEntry,
+  isProjectPackageLinked,
   isRealtimeDefinitionModule,
   resolveClientOptimizeDeps,
   resolveExistingRealtimeDefinitionFile,

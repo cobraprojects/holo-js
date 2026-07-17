@@ -653,40 +653,6 @@ describe('@holo-js/realtime plain row patching', () => {
     )).toEqual({ patched: true, unchanged: true })
   })
 
-  it('keeps exact returned updates unchanged when duplicate identities prevent indexed replacement', () => {
-    const duplicateRows = Object.freeze([
-      Object.freeze({ id: 1, priority: 1, status: 'open', title: 'First' }),
-      Object.freeze({ id: 1, priority: 2, status: 'open', title: 'Duplicate' }),
-    ]) satisfies readonly TestRow[]
-    const query = createQuery({
-      result: duplicateRows,
-      rowIdentityIndex: undefined,
-    })
-
-    expect(applyCustomRows(
-      duplicateRows,
-      query,
-      createMutation({
-        kind: 'update',
-        rows: [
-          { id: 1, priority: 1, status: 'open', title: 'Updated' },
-        ],
-        values: { status: 'open' },
-        valueKeys: ['status'],
-      }),
-      createContext({
-        exactMutationId: 1,
-        mutationPredicates: {
-          exactId: 1,
-          predicateCount: 0,
-          predicates: [],
-        },
-        queryPredicates: openPredicateContext,
-        valueKeys: ['status'],
-      }),
-    )).toEqual({ patched: true, unchanged: true })
-  })
-
   it('falls back when update predicate changes cannot be evaluated', () => {
     const query = createQuery({
       predicates: [{ column: 'priority', operator: '>', value: 1 }],

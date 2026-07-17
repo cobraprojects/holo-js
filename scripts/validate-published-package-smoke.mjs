@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { cp, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
+import { createServer } from 'node:net'
 
 const rootDir = resolve(import.meta.dirname, '..')
 const dependencySections = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']
 const frameworkApps = [
-  { name: 'next', source: 'apps/blog-next' },
-  { name: 'nuxt', source: 'apps/blog-nuxt' },
-  { name: 'sveltekit', source: 'apps/blog-sveltekit' },
+  { name: 'next', source: 'apps/blog-next', expectedTitle: 'Shipping a Real Holo Blog on Next' },
+  { name: 'nuxt', source: 'apps/blog-nuxt', expectedTitle: 'Shipping a Real Holo Blog on Nuxt' },
+  { name: 'sveltekit', source: 'apps/blog-sveltekit', expectedTitle: 'Shipping a Real Holo Blog on SvelteKit' },
 ]
 
 function log(message) {
@@ -32,6 +33,97 @@ function run(cwd, command, args) {
       result.stdout,
       result.stderr,
     ].filter(Boolean).join('\n'))
+  }
+}
+
+async function getAvailablePort() {
+  return await new Promise((resolvePromise, reject) => {
+    const server = createServer()
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        reject(new Error('Could not determine an available port.'))
+        return
+      }
+
+      server.close((error) => {
+        if (error) {
+          reject(error)
+          return
+        }
+
+        resolvePromise(address.port)
+      })
+    })
+  })
+}
+
+async function stopServer(server) {
+  if (server.exitCode !== null) return
+
+  server.kill('SIGTERM')
+  await Promise.race([
+    new Promise(resolvePromise => server.once('exit', resolvePromise)),
+    new Promise(resolvePromise => setTimeout(resolvePromise, 5000)),
+  ])
+  if (server.exitCode === null) {
+    server.kill('SIGKILL')
+  }
+}
+
+async function assertProductionApp(appRoot, app) {
+  const port = await getAvailablePort()
+  const output = []
+  const server = spawn('bun', ['run', 'start'], {
+    cwd: appRoot,
+    env: {
+      ...process.env,
+      APP_URL: `http://127.0.0.1:${port}`,
+      HOST: '127.0.0.1',
+      HOSTNAME: '127.0.0.1',
+      NITRO_HOST: '127.0.0.1',
+      PORT: String(port),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  server.stdout?.on('data', chunk => output.push(String(chunk)))
+  server.stderr?.on('data', chunk => output.push(String(chunk)))
+
+  const url = `http://127.0.0.1:${port}`
+  const deadline = Date.now() + 45000
+  let lastError
+  try {
+    while (Date.now() < deadline) {
+      if (server.exitCode !== null) {
+        throw new Error(`Production server exited with code ${server.exitCode}.`)
+      }
+
+      try {
+        const response = await fetch(url)
+        const body = await response.text()
+        assert.equal(response.status, 200, body)
+        assert.match(body, new RegExp(app.expectedTitle))
+        assert.doesNotMatch(
+          output.join(''),
+          /UnhandledPromiseRejection|uncaughtException|ReferenceError|TypeError:/,
+        )
+        return
+      } catch (error) {
+        lastError = error
+      }
+
+      await new Promise(resolvePromise => setTimeout(resolvePromise, 250))
+    }
+
+    throw new Error(`Timed out waiting for ${url}: ${lastError instanceof Error ? lastError.message : String(lastError)}`)
+  } catch (error) {
+    throw new Error([
+      error instanceof Error ? error.message : String(error),
+      output.join(''),
+    ].filter(Boolean).join('\n'))
+  } finally {
+    await stopServer(server)
   }
 }
 
@@ -285,7 +377,7 @@ async function createLinkedFrameworkNodeModules(sourceAppRoot, appRoot, stagedNo
   const nodeModulesRoot = join(appRoot, 'node_modules')
   await mkdir(nodeModulesRoot, { recursive: true })
   for (const entry of await readdir(sourceNodeModules)) {
-    if (entry === '.bin' || entry === '@holo-js') {
+    if (entry === '.bin' || entry === '.cache' || entry === '@holo-js') {
       continue
     }
     if (entry.startsWith('@')) {
@@ -318,8 +410,14 @@ async function createLinkedFrameworkNodeModules(sourceAppRoot, appRoot, stagedNo
   await symlink(join(nodeModulesRoot, '@holo-js/cli/dist/bin/holo.mjs'), join(binRoot, 'holo'))
 }
 
-async function buildFrameworkCopies(tempRoot, stagedNodeModules) {
-  for (const app of frameworkApps) {
+async function buildFrameworkCopies(tempRoot, stagedNodeModules, framework) {
+  const selectedApps = framework
+    ? frameworkApps.filter(app => app.name === framework)
+    : frameworkApps
+  if (selectedApps.length === 0) {
+    throw new Error(`Unknown framework "${framework}".`)
+  }
+  for (const app of selectedApps) {
     const sourceAppRoot = join(rootDir, app.source)
     const appRoot = join(tempRoot, `framework-${app.name}`)
     await copyFrameworkApp(sourceAppRoot, appRoot)
@@ -330,6 +428,7 @@ async function buildFrameworkCopies(tempRoot, stagedNodeModules) {
     }
     run(appRoot, 'bun', ['run', 'prepare'])
     run(appRoot, 'bun', ['run', 'build'])
+    await assertProductionApp(appRoot, app)
     await rm(appRoot, { recursive: true, force: true })
   }
 }
@@ -350,12 +449,16 @@ export async function validatePublishedPackageSmoke(options = {}) {
     const stagedNodeModules = await stagePackages(tempRoot, packages, catalog)
     await linkExternalDependencies(stagedNodeModules)
     await verifyPackageImports(tempRoot, packages)
-    await buildFrameworkCopies(tempRoot, stagedNodeModules)
+    await buildFrameworkCopies(tempRoot, stagedNodeModules, options.framework)
   } finally {
     await rm(tempRoot, { recursive: true, force: true })
   }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await validatePublishedPackageSmoke({ skipBuild: process.argv.includes('--skip-build') })
+  const frameworkIndex = process.argv.indexOf('--framework')
+  await validatePublishedPackageSmoke({
+    skipBuild: process.argv.includes('--skip-build'),
+    framework: frameworkIndex === -1 ? undefined : process.argv[frameworkIndex + 1],
+  })
 }

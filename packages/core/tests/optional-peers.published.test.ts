@@ -50,6 +50,7 @@ type HoloPackageName =
   | 'queue'
   | 'queue-db'
   | 'queue-redis'
+  | 'realtime'
   | 'security'
   | 'session'
   | 'storage'
@@ -218,6 +219,10 @@ const cases: readonly PublishedPackageCase[] = [
     imports: ['@holo-js/queue-redis'],
   },
   {
+    packageName: 'realtime',
+    imports: ['@holo-js/realtime', '@holo-js/realtime/client', '@holo-js/realtime/server'],
+  },
+  {
     packageName: 'security',
     imports: ['@holo-js/security', '@holo-js/security/client', '@holo-js/security/contracts'],
   },
@@ -357,6 +362,35 @@ function assertPublicEntrypointsImport(appRoot: string, imports: readonly string
   }
 }
 
+function assertCoreInitializes(appRoot: string): void {
+  const script = `
+import { initializeHolo } from '@holo-js/core'
+
+const runtime = await initializeHolo(process.cwd(), {
+  processEnv: {
+    ...process.env,
+    HOLO_INTERNAL_FRAMEWORK_BUILD: '1',
+  },
+})
+await runtime.shutdown()
+`
+
+  try {
+    execFileSync('node', ['--input-type=module', '--eval', script], {
+      cwd: appRoot,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    })
+  } catch (error) {
+    const execError = error as ExecFileError
+    throw new Error([
+      execError.message,
+      formatExecOutput(execError.stdout),
+      formatExecOutput(execError.stderr),
+    ].filter(Boolean).join('\n'))
+  }
+}
+
 async function stagePackage(
   appRoot: string,
   packageName: HoloPackageName,
@@ -408,4 +442,82 @@ describe('published optional peer behavior', () => {
     const appRoot = await createPublishedApp(packageCase)
     assertPublicEntrypointsImport(appRoot, packageCase.imports)
   }, 120_000)
+
+  const scaffoldFeaturePackages = [
+    undefined,
+    'storage',
+    'events',
+    'queue',
+    'validation',
+    'forms',
+    'auth',
+    'authorization',
+    'notifications',
+    'mail',
+    'broadcast',
+    'realtime',
+    'security',
+    'cache',
+  ] as const satisfies readonly (HoloPackageName | undefined)[]
+
+  it.each(scaffoldFeaturePackages)(
+    'initializes published core with only the %s scaffold feature installed',
+    async (featurePackage) => {
+      const appRoot = await createTempRoot(`holo-core-${featurePackage ?? 'base'}-published-app-`)
+      await mkdir(join(appRoot, 'node_modules', '@holo-js'), { recursive: true })
+      await writeFile(join(appRoot, 'package.json'), JSON.stringify({
+        private: true,
+        type: 'module',
+      }, null, 2))
+
+      const stagedPackages = new Set<HoloPackageName>()
+      await stagePackage(appRoot, 'core', stagedPackages)
+      await stagePackage(appRoot, 'db-sqlite', stagedPackages)
+      if (featurePackage) {
+        await stagePackage(appRoot, featurePackage, stagedPackages)
+      }
+
+      assertCoreInitializes(appRoot)
+    },
+    120_000,
+  )
+
+  const scaffoldFeatureSelections = [
+    {
+      name: 'reported selection',
+      packages: ['validation', 'forms', 'auth', 'authorization', 'broadcast', 'realtime', 'security', 'cache'],
+    },
+    {
+      name: 'all optional packages',
+      packages: scaffoldFeaturePackages.filter(
+        (packageName): packageName is Exclude<(typeof scaffoldFeaturePackages)[number], undefined> =>
+          typeof packageName === 'string',
+      ),
+    },
+  ] as const satisfies readonly {
+    readonly name: string
+    readonly packages: readonly HoloPackageName[]
+  }[]
+
+  it.each(scaffoldFeatureSelections)(
+    'initializes published core with the $name',
+    async (selection) => {
+      const appRoot = await createTempRoot(`holo-core-${selection.name.replaceAll(' ', '-')}-published-app-`)
+      await mkdir(join(appRoot, 'node_modules', '@holo-js'), { recursive: true })
+      await writeFile(join(appRoot, 'package.json'), JSON.stringify({
+        private: true,
+        type: 'module',
+      }, null, 2))
+
+      const stagedPackages = new Set<HoloPackageName>()
+      await stagePackage(appRoot, 'core', stagedPackages)
+      await stagePackage(appRoot, 'db-sqlite', stagedPackages)
+      for (const packageName of selection.packages) {
+        await stagePackage(appRoot, packageName, stagedPackages)
+      }
+
+      assertCoreInitializes(appRoot)
+    },
+    120_000,
+  )
 })

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { getExampleAppBrowser } from './example-app-browser.mjs'
+import { getExampleAppBrowser, observeExampleAppPage } from './example-app-browser.mjs'
 
 const adminPath = '/admin'
 const createPostPath = '/admin/posts/new'
@@ -27,26 +27,6 @@ function formatBroadcastFailure(message, sockets, failures) {
     `Received frames: ${JSON.stringify(sockets.receivedFrames)}`,
     `Page failures: ${JSON.stringify(failures)}`,
   ].join('\n')
-}
-
-function collectPageFailures(page) {
-  const failures = []
-
-  page.on('console', (message) => {
-    if (message.type() === 'error') {
-      failures.push(message.text())
-    }
-  })
-  page.on('pageerror', (error) => {
-    failures.push(error.message)
-  })
-  page.on('response', (response) => {
-    if (response.status() >= 500) {
-      failures.push(`${response.status()} ${response.url()}`)
-    }
-  })
-
-  return failures
 }
 
 function cookieHeaderToBrowserCookies(baseUrl, cookieHeader) {
@@ -149,8 +129,8 @@ export async function assertExampleAppBroadcastBrowserFlow({ baseUrl, appName, c
     await context.addCookies(cookieHeaderToBrowserCookies(baseUrl, cookieHeader))
     const dashboardPage = await context.newPage()
     const createPage = await context.newPage()
-    const dashboardFailures = collectPageFailures(dashboardPage)
-    const createFailures = collectPageFailures(createPage)
+    const dashboardFailures = observeExampleAppPage(dashboardPage).failures
+    const createFailures = observeExampleAppPage(createPage).failures
 
     const activity = await openSubscribedDashboard(dashboardPage, dashboardFailures)
     const title = `Browser broadcast ${appName} ${Date.now()}`

@@ -11,6 +11,7 @@ import Database from 'better-sqlite3'
 import { assertExampleAppAuthFlow } from '../../../tests/example-app-auth-flow.mjs'
 import { closeExampleAppBrowser } from '../../../tests/example-app-browser.mjs'
 import { assertExampleAppBroadcastBrowserFlow } from '../../../tests/example-app-broadcast-browser-flow.mjs'
+import { assertExampleAppProductionFlow } from '../../../tests/example-app-production-flow.mjs'
 import { assertExampleAppRealtimeBrowserFlow, assertExampleAppRealtimeUnavailableBrowserFlow } from '../../../tests/example-app-realtime-browser-flow.mjs'
 import { assertExampleAppTokenAuthFlow } from '../../../tests/example-app-token-auth-flow.mjs'
 
@@ -620,10 +621,29 @@ try {
   child = null
   await stopProcessTree(broadcastChild)
   broadcastChild = null
+  await closeExampleAppBrowser()
 
   await run('bun', ['run', 'lint'])
   await run('bun', ['run', 'typecheck'])
   await run('bun', ['run', 'build'])
+  await assertExampleAppProductionFlow({
+    cwd,
+    baseUrl: `http://localhost:${port}`,
+    env: createChildEnv({
+      PORT: port,
+      HOST: 'localhost',
+      NITRO_HOST: 'localhost',
+      APP_URL: `http://localhost:${port}`,
+      MAIL_MAILER: 'log',
+      MAIL_LOG_BODIES: 'true',
+    }),
+    expectedTitle: 'Shipping a Real Holo Blog on Nuxt',
+    auth: {
+      appName: 'blog-nuxt-production',
+      sessionCookieName: DEFAULT_SESSION_COOKIE_NAME,
+      loginRequiresCsrf: true,
+    },
+  })
 } finally {
   await closeExampleAppBrowser()
   await writeFile(configPath, originalConfig)
