@@ -31,6 +31,10 @@ export type RealtimeDefinitionTransformResult = {
   readonly map: RealtimeDefinitionSourceMap
 }
 
+export type RealtimeDefinitionTransformOptions = {
+  readonly preserveServerHandlers?: boolean
+}
+
 function propertyName(property: ts.ObjectLiteralElementLike): string | undefined {
   if (!('name' in property) || !property.name) return undefined
   return ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)
@@ -128,6 +132,33 @@ function parseRealtimeSource(source: string): ts.SourceFile {
   return ts.createSourceFile('realtime.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
 }
 
+function retargetRealtimeImports(source: string, importTarget: string): string {
+  const sourceFile = parseRealtimeSource(source)
+  const transformer: ts.TransformerFactory<ts.SourceFile> = context => (root) => {
+    const visit: ts.Visitor = (node) => {
+      if (ts.isImportDeclaration(node)
+        && ts.isStringLiteral(node.moduleSpecifier)
+        && node.moduleSpecifier.text === '@holo-js/realtime') {
+        return ts.factory.updateImportDeclaration(
+          node,
+          node.modifiers,
+          node.importClause,
+          ts.factory.createStringLiteral(importTarget),
+          node.attributes,
+        )
+      }
+      return ts.visitEachChild(node, visit, context)
+    }
+    return ts.visitNode(root, visit) as ts.SourceFile
+  }
+  const result = ts.transform(sourceFile, [transformer])
+  try {
+    return ts.createPrinter({ newLine: ts.NewLineKind.LineFeed }).printFile(result.transformed[0] as ts.SourceFile)
+  } finally {
+    result.dispose()
+  }
+}
+
 export function stripRealtimeServerHandlers(source: string): string {
   const sourceFile = parseRealtimeSource(source)
   const transformer: ts.TransformerFactory<ts.SourceFile> = context => (root) => {
@@ -157,7 +188,17 @@ export function createRealtimeClientDefinitionModule(source: string, importTarge
 export function createRealtimeClientDefinitionTransform(
   source: string,
   importTarget: string,
+  options: RealtimeDefinitionTransformOptions = {},
 ): RealtimeDefinitionTransformResult {
+  if (options.preserveServerHandlers) {
+    const code = retargetRealtimeImports(source, importTarget)
+    const sourceLineCount = source.split('\n').length
+    return Object.freeze({
+      code,
+      map: createSourceMap(source, code.split('\n').map((_, index) => Math.min(index, sourceLineCount - 1))),
+    })
+  }
+
   const sourceFile = parseRealtimeSource(source)
   const definitions = collectDefinitions(sourceFile)
   if (definitions.length === 0) {

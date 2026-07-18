@@ -10,6 +10,7 @@ import type { RealtimePatchPathSegment } from '../runtime/result-patching'
 export type RealtimeQueryStore<TResult> = {
   readonly key: string
   readonly snapshot: RealtimeSubscriptionSnapshot<TResult> | undefined
+  load(): Promise<RealtimeSubscriptionSnapshot<TResult>>
   connect(): void
   subscribe(listener: () => void): () => void
 }
@@ -29,7 +30,7 @@ export type RealtimeFrameworkRuntime = {
   useQuery?<TDefinition extends RealtimeQueryDefinition>(
     definition: TDefinition,
     args: RealtimeArgsFor<TDefinition>,
-  ): RealtimeResultFor<TDefinition> | undefined
+  ): RealtimeResultFor<TDefinition>
   handleError?(error: unknown): void
 }
 

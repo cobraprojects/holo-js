@@ -6448,20 +6448,39 @@ export default defineMigration({
     expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
 
     await writeProjectFile(projectRoot, '.holo-js/generated/schema.generated.ts', `
-/* empty stale schema */
-export const tables = {} as const
+import { column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
+
+export const users = defineGeneratedTable('users', {
+  id: column.id(),
+  stale_name: column.string(),
+})
+
+export const tables = { users } as const
+registerGeneratedTables(tables)
 `)
     await writeProjectFile(projectRoot, '.holo-js/generated/schema.mjs', `
-export const tables = Object.freeze({})
+import { column, defineGeneratedTable, registerGeneratedTables } from '@holo-js/db'
+
+export const users = defineGeneratedTable('users', {
+  id: column.id(),
+  stale_name: column.string(),
+})
+
+export const tables = Object.freeze({ users })
+registerGeneratedTables(tables)
 `)
 
     const repaired = runCliProcess(projectRoot, ['migrate'])
     expect(repaired.status, repaired.stderr || repaired.stdout).toBe(0)
     expect(repaired.stdout).toContain('No migrations were executed.')
 
-    await expect(readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8')).resolves.toContain('defineGeneratedTable("users"')
-    await expect(readFile(join(projectRoot, '.holo-js/generated/schema.mjs'), 'utf8')).resolves.toContain('defineGeneratedTable("users"')
-  }, 60000)
+    const generatedTypeScript = await readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8')
+    const generatedRuntime = await readFile(join(projectRoot, '.holo-js/generated/schema.mjs'), 'utf8')
+    expect(generatedTypeScript).toContain('"name": column.string()')
+    expect(generatedTypeScript).not.toContain('stale_name')
+    expect(generatedRuntime).toContain('"name": column.string()')
+    expect(generatedRuntime).not.toContain('stale_name')
+  }, 90000)
 
   it('refreshes generated-schema bundles before running migrate:fresh seeders', async () => {
     const projectRoot = await createTempProject()

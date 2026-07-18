@@ -209,6 +209,7 @@ export default defineConfig({
       ]))
       expect(config.serverExternalPackages).not.toContain('@holo-js/auth')
       expect(config.transpilePackages).toEqual(expect.arrayContaining([
+        '@holo-js/adapter-next',
         '@holo-js/auth',
       ]))
       expect(config.serverExternalPackages).not.toContain('@holo-js/auth-social-github')
@@ -449,7 +450,6 @@ export default defineConfig({
 
       expect(config.serverExternalPackages).toEqual(expect.arrayContaining([
         '@holo-js/core',
-        '@holo-js/adapter-next',
       ]))
       expect(config.serverExternalPackages).not.toContain('@holo-js/auth')
     } finally {
@@ -495,7 +495,6 @@ export default defineConfig({
 
       expect(config.serverExternalPackages).toEqual(expect.arrayContaining([
         '@holo-js/core',
-        '@holo-js/adapter-next',
       ]))
       expect(config.serverExternalPackages).not.toContain('@holo-js/auth')
       expect(config.serverExternalPackages).not.toContain('@holo-js/auth-social')
@@ -504,7 +503,7 @@ export default defineConfig({
     }
   })
 
-  it('adds the realtime loader only to client webpack builds', async () => {
+  it('configures realtime definitions for browser and server rendering builds', async () => {
     const root = await createProject()
     await writeFile(join(root, 'package.json'), JSON.stringify({
       dependencies: { '@holo-js/realtime': 'workspace:*' },
@@ -521,15 +520,26 @@ export default defineConfig({
       ) => Record<string, unknown>
       const client = webpack({}, { isServer: false }) as {
         transformed: boolean
-        module: { rules: Array<{ test: RegExp, use: string[] }> }
+        module: { rules: Array<{ test: RegExp, use: Array<{ loader: string, options: { preserveServerHandlers: boolean } }> }> }
       }
       expect(client.transformed).toBe(true)
       expect(client.module.rules).toHaveLength(1)
       expect(client.module.rules[0]?.test.test('server/realtime/posts.ts')).toBe(true)
-      expect(client.module.rules[0]?.use[0]).toContain('realtime-definition-loader')
+      expect(client.module.rules[0]?.use[0]).toMatchObject({
+        loader: expect.stringContaining('realtime-definition-loader'),
+        options: { preserveServerHandlers: false },
+      })
 
-      const server = webpack({}, { isServer: true })
-      expect(server).toEqual({ transformed: true })
+      const server = webpack({}, { isServer: true }) as {
+        transformed: boolean
+        module: { rules: Array<{ test: RegExp, use: Array<{ loader: string, options: { preserveServerHandlers: boolean } }> }> }
+      }
+      expect(server.transformed).toBe(true)
+      expect(server.module.rules).toHaveLength(1)
+      expect(server.module.rules[0]?.use[0]).toMatchObject({
+        loader: expect.stringContaining('realtime-definition-loader'),
+        options: { preserveServerHandlers: true },
+      })
       expect(userWebpack).toHaveBeenCalledTimes(2)
 
       const defaultWebpack = withHolo().webpack as unknown as (
@@ -538,6 +548,17 @@ export default defineConfig({
       ) => Record<string, unknown>
       expect(defaultWebpack({}, { isServer: false })).toMatchObject({
         module: { rules: expect.any(Array) },
+      })
+      const turbopack = (config as { readonly turbopack?: { readonly rules?: Record<string, unknown> } }).turbopack
+      expect(turbopack?.rules).toMatchObject({
+        '*.{ts,tsx,js,jsx,mts,mjs,cts,cjs}': [
+          expect.objectContaining({
+            loaders: [expect.objectContaining({ options: { preserveServerHandlers: false } })],
+          }),
+          expect.objectContaining({
+            loaders: [expect.objectContaining({ options: { preserveServerHandlers: true } })],
+          }),
+        ],
       })
     } finally {
       process.chdir(previousCwd)

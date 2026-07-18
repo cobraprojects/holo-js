@@ -10,6 +10,8 @@ declare module 'react' {
     props: Record<string, unknown> | null,
     ...children: readonly ReactNode[]
   ): ReactNode
+  export function cache<TFunction extends (...args: never[]) => unknown>(fn: TFunction): TFunction
+  export function use<TValue>(value: PromiseLike<TValue>): TValue
   export function useCallback<TCallback extends (...args: never[]) => unknown>(
     callback: TCallback,
     deps: readonly unknown[],

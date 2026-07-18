@@ -97,4 +97,22 @@ describe('shared realtime definition transform', () => {
       '@holo-js/test/realtime',
     )).toContain('handler: undefined')
   })
+
+  it('retains server handlers while targeting the framework realtime adapter', () => {
+    const source = `
+      import { mutation, query } from '@holo-js/realtime'
+      import Post from '../models/Post'
+
+      export const posts = query({ name: 'posts.list', handler: async () => await Post.get() })
+      export const rename = mutation({ name: 'posts.rename', handler: async () => true })
+    `
+    const output = createRealtimeClientDefinitionTransform(source, '@holo-js/test/realtime', {
+      preserveServerHandlers: true,
+    }).code
+
+    expect(output).toContain("from \"@holo-js/test/realtime\"")
+    expect(output).toContain("from '../models/Post'")
+    expect(output).toContain('handler: async () => await Post.get()')
+    expect(output).toContain('handler: async () => true')
+  })
 })

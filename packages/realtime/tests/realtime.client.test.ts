@@ -1359,6 +1359,7 @@ describe('@holo-js/realtime client runtime', () => {
     failingStore.connect()
     failingStore.connect()
     await Promise.resolve()
+    await Promise.resolve()
     unsubscribeFailing()
     const unsubscribeAfterReset = failingStore.subscribe(() => {})
     unsubscribeAfterReset()

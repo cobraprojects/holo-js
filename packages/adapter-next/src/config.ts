@@ -4,7 +4,6 @@ import { join } from 'node:path'
 
 const HOLO_SERVER_EXTERNAL_PACKAGES = [
   '@holo-js/core',
-  '@holo-js/adapter-next',
   '@holo-js/db',
   '@holo-js/config',
   'esbuild',
@@ -41,6 +40,7 @@ const HOLO_OPTIONAL_SERVER_EXTERNAL_PACKAGES = [
 ] as const
 
 const HOLO_TRANSPILED_PACKAGES = [
+  '@holo-js/adapter-next',
   '@holo-js/auth',
 ] as const
 const HOLO_TRANSPILED_PACKAGE_SET = new Set<string>(HOLO_TRANSPILED_PACKAGES)
@@ -123,24 +123,37 @@ function isOptionalServerExternalPackageInstalled(packageName: string, manifest:
   return PACKAGE_DEPENDENCY_FIELDS.some(field => Boolean(manifest?.[field]?.[packageName]))
 }
 
-function createRealtimeDefinitionWebpackRule(loaderPath: string): Record<string, unknown> {
+function createRealtimeDefinitionWebpackRule(loaderPath: string, preserveServerHandlers: boolean): Record<string, unknown> {
   return {
     test: /(?:^|[\\/])server[\\/]realtime[\\/].+\.[cm]?[jt]sx?$/,
-    use: [loaderPath],
+    use: [{
+      loader: loaderPath,
+      options: { preserveServerHandlers },
+    }],
   }
 }
 
-function createRealtimeDefinitionTurbopackRule(loaderPath: string): Record<string, unknown> {
+function createRealtimeDefinitionTurbopackRule(
+  loaderPath: string,
+  environment: 'browser' | 'server',
+): Record<string, unknown> {
+  const environmentCondition = environment === 'browser'
+    ? 'browser'
+    : { any: ['node', 'edge-light'] }
+
   return {
     condition: {
       all: [
-        'browser',
+        environmentCondition,
         {
           path: /(?:^|[\\/])server[\\/]realtime[\\/]/,
         },
       ],
     },
-    loaders: [loaderPath],
+    loaders: [{
+      loader: loaderPath,
+      options: { preserveServerHandlers: environment === 'server' },
+    }],
     as: '*.js',
   }
 }
@@ -178,7 +191,8 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
       ...(hasRealtime
         ? {
             '*.{ts,tsx,js,jsx,mts,mjs,cts,cjs}': [
-              createRealtimeDefinitionTurbopackRule(realtimeDefinitionLoader),
+              createRealtimeDefinitionTurbopackRule(realtimeDefinitionLoader, 'browser'),
+              createRealtimeDefinitionTurbopackRule(realtimeDefinitionLoader, 'server'),
             ],
           }
         : {}),
@@ -207,14 +221,14 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
     turbopack: mergedTurbopack,
     webpack(config, context) {
       const nextWebpackConfig = userWebpack?.(config, context) ?? config
-      if (!hasRealtime || context.isServer) {
+      if (!hasRealtime) {
         return nextWebpackConfig
       }
 
       nextWebpackConfig.module = nextWebpackConfig.module ?? {}
       nextWebpackConfig.module.rules = [
         ...(nextWebpackConfig.module.rules ?? []),
-        createRealtimeDefinitionWebpackRule(realtimeDefinitionLoader),
+        createRealtimeDefinitionWebpackRule(realtimeDefinitionLoader, context.isServer),
       ]
       return nextWebpackConfig
     },

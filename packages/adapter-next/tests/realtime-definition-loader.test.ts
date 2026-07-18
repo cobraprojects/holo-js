@@ -20,4 +20,15 @@ describe('Next realtime definition loader', () => {
       expect.objectContaining({ sourcesContent: [source] }),
     )
   })
+
+  it('preserves handlers for server rendering builds', () => {
+    const source = `import { query } from '@holo-js/realtime'\nexport const posts = query({ name: 'posts.list', handler: async () => [] })`
+    const output = realtimeDefinitionLoader.call({
+      getOptions: () => ({ preserveServerHandlers: true }),
+    }, source)
+
+    expect(output).toContain('handler: async')
+    expect(output).toContain('=> []')
+    expect(output).toContain('@holo-js/adapter-next/realtime')
+  })
 })

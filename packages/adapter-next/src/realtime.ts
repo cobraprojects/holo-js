@@ -1,12 +1,15 @@
 'use client'
 
-import { useEffect, useSyncExternalStore } from 'react'
+import { cache, createElement, use, useEffect, useSyncExternalStore } from 'react'
+import { useServerInsertedHTML } from 'next/navigation'
 import {
   type RealtimeClientTransport,
   configureRealtimeClientRuntime,
   configureRealtimeClientTransport,
   createBroadcastRealtimeTransport,
   getRealtimeQueryStore,
+  hydrateRealtimeQuery,
+  realtimeClientInternals,
 } from '@holo-js/realtime/client'
 import {
   mutation as createRealtimeMutation,
@@ -21,6 +24,46 @@ import { createNextRenderableError, normalizeNextClientHttpError, renderNextClie
 
 let currentRealtimeError: Error | undefined
 const realtimeErrorListeners = new Set<() => void>()
+
+function isBrowserRuntime(): boolean {
+  return 'window' in globalThis
+}
+
+function createHydrationElementId(definitionName: string, serializedArgs: string): string {
+  let hash = 2166136261
+  const value = `${definitionName}:${serializedArgs}`
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `__holo_realtime_${(hash >>> 0).toString(36)}`
+}
+
+function serializeHydrationData(value: unknown): string {
+  return JSON.stringify({ data: value }).replace(/</g, '\\u003c')
+}
+
+function hydrateRealtimeQueryFromDocument(
+  definition: RealtimeQueryDefinition,
+  args: Record<string, unknown>,
+  elementId: string,
+): void {
+  const runtime = globalThis as typeof globalThis & {
+    readonly document?: {
+      getElementById(id: string): { readonly textContent?: string | null } | null
+    }
+  }
+  const element = runtime.document?.getElementById(elementId)
+  if (!element?.textContent) return
+
+  const parsed = JSON.parse(element.textContent) as { readonly data?: unknown }
+  hydrateRealtimeQuery(definition, args as never, {
+    name: definition.name,
+    data: parsed.data as never,
+    dependencies: [],
+    version: 0,
+  })
+}
 
 function subscribeRealtimeError(listener: () => void): () => void {
   realtimeErrorListeners.add(listener)
@@ -80,7 +123,55 @@ function createErrorHandlingRealtimeTransport(transport: RealtimeClientTransport
   }
 }
 
-export const query = createRealtimeQuery
+const resolveServerRealtimeQuery = cache(async (
+  definition: RealtimeQueryDefinition,
+  serializedArgs: string,
+): Promise<unknown> => {
+  const args = JSON.parse(serializedArgs) as Record<string, unknown>
+  return await Promise.resolve(Reflect.apply(definition, undefined, [args]))
+})
+
+export const query: typeof createRealtimeQuery = ((input) => {
+  const definition = createRealtimeQuery(input)
+  const wrappedDefinition = ((...args: unknown[]) => {
+    const normalizedArgs = args[0] ?? {}
+    const serializedArgs = realtimeClientInternals.stableStringify(normalizedArgs)
+    const hydrationElementId = createHydrationElementId(definition.name, serializedArgs)
+    let serverResult: unknown
+    let hasServerResult = false
+    let hydrationInserted = false
+
+    useServerInsertedHTML(() => {
+      if (!hasServerResult || hydrationInserted) return null
+      hydrationInserted = true
+      return createElement('script', {
+          id: hydrationElementId,
+          type: 'application/json',
+          dangerouslySetInnerHTML: { __html: serializeHydrationData(serverResult) },
+        })
+    })
+
+    if (isBrowserRuntime()) {
+      hydrateRealtimeQueryFromDocument(
+        definition as unknown as RealtimeQueryDefinition,
+        normalizedArgs as Record<string, unknown>,
+        hydrationElementId,
+      )
+      return Reflect.apply(definition, undefined, args) as ReturnType<typeof definition>
+    }
+
+    const result = use(resolveServerRealtimeQuery(
+      definition as unknown as RealtimeQueryDefinition,
+      serializedArgs,
+    ))
+    serverResult = result
+    hasServerResult = true
+    return result as ReturnType<typeof definition>
+  }) as unknown as typeof definition
+
+  Object.defineProperties(wrappedDefinition, Object.getOwnPropertyDescriptors(definition))
+  return wrappedDefinition
+}) as typeof createRealtimeQuery
 
 export const mutation: typeof createRealtimeMutation = ((input) => {
   const definition = createRealtimeMutation(input)
@@ -97,7 +188,15 @@ export const mutation: typeof createRealtimeMutation = ((input) => {
 function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
   definition: TDefinition,
   args: RealtimeArgsFor<TDefinition>,
-): RealtimeResultFor<TDefinition> | undefined {
+): RealtimeResultFor<TDefinition> {
+  const pendingRealtimeError = getRealtimeErrorSnapshot()
+  if (pendingRealtimeError) {
+    consumeRealtimeError()
+    throw pendingRealtimeError
+  }
+
+  const store = getRealtimeQueryStore(definition, args)
+  const initialSnapshot = store.snapshot ?? use(store.load())
   const realtimeError = useSyncExternalStore(
     subscribeRealtimeError,
     getRealtimeErrorSnapshot,
@@ -109,7 +208,6 @@ function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
     throw realtimeError
   }
 
-  const store = getRealtimeQueryStore(definition, args)
   useEffect(() => {
     store.connect()
   }, [store])
@@ -120,14 +218,16 @@ function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
     getSnapshot,
   )
 
-  return snapshot?.data
+  return (snapshot ?? initialSnapshot).data
 }
 
-configureRealtimeClientRuntime({
-  handleError: emitRealtimeError,
-  useQuery: useReactiveRealtimeQuery,
-})
-configureRealtimeClientTransport(createErrorHandlingRealtimeTransport(createBroadcastRealtimeTransport()))
+if (isBrowserRuntime()) {
+  configureRealtimeClientRuntime({
+    handleError: emitRealtimeError,
+    useQuery: useReactiveRealtimeQuery,
+  })
+  configureRealtimeClientTransport(createErrorHandlingRealtimeTransport(createBroadcastRealtimeTransport()))
+}
 
 export const adapterNextRealtimeInternals = {
   subscribeRealtimeError,

@@ -3,6 +3,7 @@ import { dirname } from 'node:path'
 import {
   configureDB,
   createMigrationService,
+  createSchemaRegistry,
   createSchemaService,
   createSeederService,
   registerGeneratedTables,
@@ -265,11 +266,24 @@ async function hydrateGeneratedSchemaFromRanMigrations(
   }
 
   const realConnection = manager.connection()
+  const hydratedRegistry = createSchemaRegistry()
+  for (const table of realConnection.getSchemaRegistry().list()) {
+    hydratedRegistry.replace(table)
+  }
+  const replayRegistry = {
+    register: (table: TableDefinition) => hydratedRegistry.replace(table),
+    has: () => false,
+    replace: (table: TableDefinition) => hydratedRegistry.replace(table),
+    delete: (name: string) => hydratedRegistry.delete(name),
+    get: (name: string) => hydratedRegistry.get(name),
+    list: () => hydratedRegistry.list(),
+    clear: () => hydratedRegistry.clear(),
+  }
   const dryRunConnection: DryRunSchemaConnection = {
     getDialect: () => realConnection.getDialect(),
     getCapabilities: () => realConnection.getCapabilities(),
     getSchemaName: () => realConnection.getSchemaName(),
-    getSchemaRegistry: () => realConnection.getSchemaRegistry(),
+    getSchemaRegistry: () => replayRegistry as never,
     executeCompiled: async () => undefined,
     introspectCompiled: async () => ({ rows: [], rowCount: 0 }),
     transaction: async <TResult>(callback: (connection: typeof dryRunConnection) => TResult | Promise<TResult>) => callback(dryRunConnection),
@@ -280,6 +294,10 @@ async function hydrateGeneratedSchemaFromRanMigrations(
     if (ranNames.has(migration.name)) {
       await migration.up({ db: dryRunConnection, schema } as never)
     }
+  }
+
+  for (const table of hydratedRegistry.list()) {
+    realConnection.getSchemaRegistry().replace(table)
   }
 }
 

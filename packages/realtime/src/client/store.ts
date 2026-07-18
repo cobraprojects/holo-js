@@ -61,6 +61,7 @@ export function createRealtimeQueryStore<TResult>(
   let disposed = false
   let unsubscribe = () => {}
   let startupId = 0
+  let pendingLoad: Promise<RealtimeSubscriptionSnapshot<TResult>> | undefined
 
   const notify = () => {
     for (const listener of listeners) {
@@ -100,6 +101,18 @@ export function createRealtimeQueryStore<TResult>(
     notify()
   }
 
+  const load = (): Promise<RealtimeSubscriptionSnapshot<TResult>> => {
+    if (snapshot) {
+      return Promise.resolve(snapshot)
+    }
+
+    pendingLoad ??= transport.query<TResult>(name, args).then((nextSnapshot) => {
+      setSnapshot(nextSnapshot)
+      return snapshot ?? nextSnapshot
+    })
+    return pendingLoad
+  }
+
   return {
     key: createStoreKey(name, args),
     get snapshot() {
@@ -107,6 +120,7 @@ export function createRealtimeQueryStore<TResult>(
     },
     disconnect,
     dispose,
+    load,
     connect() {
       if (disposed) {
         return
@@ -119,11 +133,7 @@ export function createRealtimeQueryStore<TResult>(
       const currentStartupId = startupId + 1
       startupId = currentStartupId
       let seenLiveSnapshot = false
-      void transport.query<TResult>(name, args).then((nextSnapshot) => {
-        if (startupId === currentStartupId && !seenLiveSnapshot && listeners.size > 0) {
-          setSnapshot(nextSnapshot)
-        }
-      }, (error) => {
+      void load().catch((error) => {
         if (startupId !== currentStartupId || seenLiveSnapshot || listeners.size === 0) {
           return
         }

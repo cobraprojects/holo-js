@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { field, schema } from '@holo-js/forms'
 import type { RealtimeSubscriptionSnapshot } from '@holo-js/realtime'
 import type { ClientSubmitContext, UseFormOptions } from '@holo-js/forms/internal/client'
@@ -17,8 +17,32 @@ type ReactHookStateOptions = {
   readonly onStateChange?: (index: number, value: unknown) => void
 }
 
+type PromiseRecord =
+  | { readonly status: 'pending' }
+  | { readonly status: 'fulfilled', readonly value: unknown }
+  | { readonly status: 'rejected', readonly reason: unknown }
+
+const promiseRecords = new WeakMap<PromiseLike<unknown>, PromiseRecord>()
+
+function readPromise<TValue>(promise: PromiseLike<TValue>): TValue {
+  const record = promiseRecords.get(promise)
+  if (record?.status === 'fulfilled') return record.value as TValue
+  if (record?.status === 'rejected') throw record.reason
+  if (!record) {
+    promiseRecords.set(promise, { status: 'pending' })
+    void promise.then(
+      value => promiseRecords.set(promise, { status: 'fulfilled', value }),
+      reason => promiseRecords.set(promise, { status: 'rejected', reason }),
+    )
+  }
+  throw promise
+}
+
 function createReactMock(overrides: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
   return {
+    cache<TFunction extends (...args: never[]) => unknown>(fn: TFunction) {
+      return fn
+    },
     createContext<TValue>(defaultValue: TValue): MockReactContext<TValue> {
       const context: MockReactContext<TValue> = {
         currentRenderValue: defaultValue,
@@ -42,6 +66,9 @@ function createReactMock(overrides: Readonly<Record<string, unknown>>): Readonly
     },
     useContext<TValue>(context: MockReactContext<TValue>): TValue {
       return context.currentRenderValue
+    },
+    use<TValue>(value: PromiseLike<TValue>): TValue {
+      return readPromise(value)
     },
     ...overrides,
   }
@@ -103,11 +130,20 @@ function createReactHookStateMock(
 }
 
 describe('@holo-js/adapter-next client', () => {
+  beforeEach(() => {
+    vi.stubGlobal('window', {})
+    vi.doMock('next/navigation', () => ({
+      useServerInsertedHTML() {},
+    }))
+  })
+
   afterEach(() => {
     vi.resetModules()
     vi.clearAllMocks()
     vi.doUnmock('react')
+    vi.doUnmock('next/navigation')
     vi.doUnmock('@holo-js/forms/internal/client')
+    vi.unstubAllGlobals()
   })
 
   it('wraps the shared form client with a React subscription bridge', async () => {
@@ -434,10 +470,16 @@ describe('@holo-js/adapter-next client', () => {
       },
     })
 
-    expect(listPosts()).toBeUndefined()
-    expect(listPosts()).toBeUndefined()
-    expect(listPosts()).toBeUndefined()
-    await Promise.resolve()
+    let suspended: PromiseLike<unknown> | undefined
+    try {
+      listPosts()
+    } catch (error) {
+      suspended = error as PromiseLike<unknown>
+    }
+    expect(suspended).toBeDefined()
+    await suspended
+    expect(listPosts()).toEqual([{ id: 1, title: 'First' }])
+    expect(listPosts()).toEqual([{ id: 1, title: 'First' }])
     expect(listPosts()).toEqual([{ id: 1, title: 'First' }])
 
     expect(queryCalls).toEqual(['posts.rerender'])
@@ -445,7 +487,7 @@ describe('@holo-js/adapter-next client', () => {
     resetRealtimeClientRuntime()
   })
 
-  it('returns undefined before the first realtime query snapshot arrives', async () => {
+  it('suspends until the first realtime query snapshot arrives', async () => {
     vi.doMock('react', () => createReactMock({
       useEffect(effect: () => void | (() => void)) {
         return effect()
@@ -503,7 +545,15 @@ describe('@holo-js/adapter-next client', () => {
       },
     })
 
-    expect(listPosts()).toBeUndefined()
+    let suspended: PromiseLike<unknown> | undefined
+    try {
+      listPosts()
+    } catch (error) {
+      suspended = error as PromiseLike<unknown>
+    }
+    expect(suspended).toBeDefined()
+    await suspended
+    expect(listPosts()).toEqual([{ id: 1, title: 'First' }])
     resetRealtimeClientRuntime()
   })
 
@@ -532,7 +582,6 @@ describe('@holo-js/adapter-next client', () => {
       }
     }
 
-    let realtimeErrorSnapshot: Error | undefined
     const originalFetch = globalThis.fetch
     const originalWebSocket = (globalThis as { WebSocket?: unknown }).WebSocket
     const originalLocation = (globalThis as { location?: unknown }).location
@@ -570,11 +619,7 @@ describe('@holo-js/adapter-next client', () => {
           getSnapshot: () => TSnapshot,
         ) {
           subscribe(() => {})
-          const snapshot = getSnapshot()
-          if (snapshot instanceof Error) {
-            realtimeErrorSnapshot = snapshot
-          }
-          return snapshot
+          return getSnapshot()
         },
       }))
 
@@ -590,14 +635,29 @@ describe('@holo-js/adapter-next client', () => {
         handler: async () => [],
       })
 
-      expect(listPosts()).toBeUndefined()
+      let suspended: PromiseLike<unknown> | undefined
+      try {
+        listPosts()
+      } catch (error) {
+        suspended = error as PromiseLike<unknown>
+      }
+      expect(suspended).toBeDefined()
       await Promise.resolve()
       await Promise.resolve()
+      for (let attempt = 0; attempt < 10 && !MockWebSocket.last; attempt += 1) {
+        await Promise.resolve()
+      }
+      expect(MockWebSocket.last).toBeDefined()
       MockWebSocket.last?.listeners.get('open')?.({})
       for (let attempt = 0; attempt < 10 && (MockWebSocket.last?.sentMessages.length ?? 0) === 0; attempt += 1) {
         await Promise.resolve()
       }
-      for (const id of ['realtime.1', 'realtime.2']) {
+      const requestIds = (MockWebSocket.last?.sentMessages ?? []).flatMap((message) => {
+        const parsed = JSON.parse(message) as { readonly data?: { readonly id?: unknown } }
+        return typeof parsed.data?.id === 'string' ? [parsed.data.id] : []
+      })
+      expect(requestIds.length).toBeGreaterThan(0)
+      for (const id of requestIds) {
         MockWebSocket.last?.listeners.get('message')?.({
           data: JSON.stringify({
             event: 'holo:realtime:error',
@@ -610,8 +670,15 @@ describe('@holo-js/adapter-next client', () => {
         })
       }
 
-      expect(() => listPosts()).toThrow('Only the author can update posts.')
-      expect(realtimeErrorSnapshot).toMatchObject({
+      await Promise.resolve(suspended).catch(() => undefined)
+      let renderedError: unknown
+      try {
+        listPosts()
+      } catch (error) {
+        renderedError = error
+      }
+      expect(renderedError).toMatchObject({
+        message: 'Only the author can update posts.',
         digest: 'NEXT_HTTP_ERROR_FALLBACK;403',
       })
       resetRealtimeClientRuntime()
@@ -623,8 +690,6 @@ describe('@holo-js/adapter-next client', () => {
   })
 
   it('throws realtime mutation HTTP errors through the Next render boundary', async () => {
-    let realtimeErrorSnapshot: Error | undefined
-
     vi.doMock('react', () => createReactMock({
       useEffect(effect: () => void | (() => void)) {
         return effect()
@@ -644,11 +709,7 @@ describe('@holo-js/adapter-next client', () => {
         getSnapshot: () => TSnapshot,
       ) {
         subscribe(() => {})
-        const snapshot = getSnapshot()
-        if (snapshot instanceof Error) {
-          realtimeErrorSnapshot = snapshot
-        }
-        return snapshot
+        return getSnapshot()
       },
     }))
 
@@ -688,10 +749,24 @@ describe('@holo-js/adapter-next client', () => {
       },
     })
 
-    expect(listPosts()).toBeUndefined()
+    let suspended: PromiseLike<unknown> | undefined
+    try {
+      listPosts()
+    } catch (error) {
+      suspended = error as PromiseLike<unknown>
+    }
+    expect(suspended).toBeDefined()
+    await suspended
+    expect(listPosts()).toEqual([])
     await expect(renamePost()).rejects.toThrow('Only the author can update posts.')
-    expect(() => listPosts()).toThrow('Only the author can update posts.')
-    expect(realtimeErrorSnapshot).toMatchObject({
+    let renderedError: unknown
+    try {
+      listPosts()
+    } catch (error) {
+      renderedError = error
+    }
+    expect(renderedError).toMatchObject({
+      message: 'Only the author can update posts.',
       digest: 'NEXT_HTTP_ERROR_FALLBACK;403',
     })
     resetRealtimeClientRuntime()
