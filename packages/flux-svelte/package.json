@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/flux-svelte",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Holo-JS Framework - Svelte and SvelteKit Flux helper skeletons",
   "type": "module",
   "license": "MIT",
