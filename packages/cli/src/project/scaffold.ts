@@ -102,7 +102,11 @@ import {
 } from './scaffold/framework'
 import {
   renderNextBroadcastConfigRoute,
+  renderNextGeneratedRealtimeMutationRoute,
+  renderNextGeneratedRealtimeQueryRoute,
   renderNextGeneratedRealtimeDefinitions,
+  renderNextRealtimeMutationRoute,
+  renderNextRealtimeQueryRoute,
   renderNextRuntimeBootstrap,
   renderSvelteViteConfig,
 } from './scaffold/framework-renderers'
@@ -638,9 +642,13 @@ export async function installRealtimeIntoProject(
 
   if (framework === 'next') {
     const routes = [
+      { path: 'app/holo/realtime/query/route.ts', contents: renderNextRealtimeQueryRoute() },
+      { path: 'app/holo/realtime/mutation/route.ts', contents: renderNextRealtimeMutationRoute() },
       { path: '.holo-js/generated/next/holo.ts', contents: renderNextHoloHelper() },
       { path: '.holo-js/generated/next/bootstrap.mjs', contents: renderNextRuntimeBootstrap() },
       { path: '.holo-js/generated/next/realtime-definitions.ts', contents: await renderNextRealtimeDefinitions(projectRoot) },
+      { path: '.holo-js/generated/next/realtime-query-route.ts', contents: renderNextGeneratedRealtimeQueryRoute() },
+      { path: '.holo-js/generated/next/realtime-mutation-route.ts', contents: renderNextGeneratedRealtimeMutationRoute() },
     ] as const
 
     for (const route of routes) {

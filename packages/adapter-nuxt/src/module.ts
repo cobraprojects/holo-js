@@ -760,6 +760,14 @@ export default defineNuxtModule<ModuleOptions>({
         src: resolver.resolve('./runtime/plugins/realtime'),
         mode: 'all',
       })
+      addServerHandler({
+        route: '/holo/realtime/query',
+        handler: resolver.resolve('./runtime/server/routes/realtime-query.post'),
+      })
+      addServerHandler({
+        route: '/holo/realtime/mutation',
+        handler: resolver.resolve('./runtime/server/routes/realtime-mutation.post'),
+      })
       opts._holoRealtimeRouteRegistered = true
     }
 

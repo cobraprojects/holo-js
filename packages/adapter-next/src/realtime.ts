@@ -1,6 +1,6 @@
 'use client'
 
-import { cache, createElement, use, useEffect, useSyncExternalStore } from 'react'
+import { cache, createElement, use, useEffect, useMemo, useSyncExternalStore } from 'react'
 import { useServerInsertedHTML } from 'next/navigation'
 import {
   type RealtimeClientTransport,
@@ -137,18 +137,20 @@ export const query: typeof createRealtimeQuery = ((input) => {
     const normalizedArgs = args[0] ?? {}
     const serializedArgs = realtimeClientInternals.stableStringify(normalizedArgs)
     const hydrationElementId = createHydrationElementId(definition.name, serializedArgs)
-    let serverResult: unknown
-    let hasServerResult = false
-    let hydrationInserted = false
+    const hydration: { result: unknown, hasResult: boolean, inserted: boolean } = {
+      result: undefined,
+      hasResult: false,
+      inserted: false,
+    }
 
     useServerInsertedHTML(() => {
-      if (!hasServerResult || hydrationInserted) return null
-      hydrationInserted = true
+      if (!hydration.hasResult || hydration.inserted) return null
+      hydration.inserted = true
       return createElement('script', {
-          id: hydrationElementId,
-          type: 'application/json',
-          dangerouslySetInnerHTML: { __html: serializeHydrationData(serverResult) },
-        })
+        id: hydrationElementId,
+        type: 'application/json',
+        dangerouslySetInnerHTML: { __html: serializeHydrationData(hydration.result) },
+      })
     })
 
     if (isBrowserRuntime()) {
@@ -164,8 +166,8 @@ export const query: typeof createRealtimeQuery = ((input) => {
       definition as unknown as RealtimeQueryDefinition,
       serializedArgs,
     ))
-    serverResult = result
-    hasServerResult = true
+    hydration.result = result
+    hydration.hasResult = true
     return result as ReturnType<typeof definition>
   }) as unknown as typeof definition
 
@@ -195,8 +197,11 @@ function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
     throw pendingRealtimeError
   }
 
-  const store = getRealtimeQueryStore(definition, args)
-  const initialSnapshot = store.snapshot ?? use(store.load())
+  const serializedArgs = realtimeClientInternals.stableStringify(args)
+  const store = useMemo(
+    () => getRealtimeQueryStore(definition, args),
+    [definition, serializedArgs],
+  )
   const realtimeError = useSyncExternalStore(
     subscribeRealtimeError,
     getRealtimeErrorSnapshot,
@@ -218,7 +223,7 @@ function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
     getSnapshot,
   )
 
-  return (snapshot ?? initialSnapshot).data
+  return snapshot?.data as RealtimeResultFor<TDefinition>
 }
 
 if (isBrowserRuntime()) {

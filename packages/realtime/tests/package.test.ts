@@ -50,6 +50,8 @@ const serverRuntimeExports = [
   'configureRealtimeRuntime',
   'executeRealtimeMutation',
   'executeRealtimeQuery',
+  'handleRealtimeMutationRequest',
+  'handleRealtimeQueryRequest',
   'realtimeRuntimeInternals',
   'realtimeServerInternals',
   'resetRealtimeRuntime',
@@ -91,7 +93,6 @@ describe('@holo-js/realtime package surface', () => {
     const contents = await Promise.all(sourceFiles.map(async path => await readFile(path, 'utf8')))
     const source = contents.join('\n')
 
-    expect(source).not.toContain('/holo/realtime')
     expect(source).not.toContain('EventSource')
     expect(source).not.toContain('text/event-stream')
     expect(source).not.toContain('server-sent')

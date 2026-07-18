@@ -452,6 +452,14 @@ export function renderNextBroadcastConfigRoute(): string {
   return renderNextRouteBridge('../../../.holo-js/generated/next/broadcast-config-route', ['GET'])
 }
 
+export function renderNextRealtimeQueryRoute(): string {
+  return renderNextRouteBridge('../../../../.holo-js/generated/next/realtime-query-route', ['POST'])
+}
+
+export function renderNextRealtimeMutationRoute(): string {
+  return renderNextRouteBridge('../../../../.holo-js/generated/next/realtime-mutation-route', ['POST'])
+}
+
 export function renderNextGeneratedBroadcastConfigRoute(): string {
   return [
     'import { renderBroadcastClientConfigResponse } from \'@holo-js/broadcast/client-config\'',
@@ -503,7 +511,7 @@ export function renderNextGeneratedBroadcastAuthRoute(): string {
 
 export function renderNextGeneratedRealtimeDefinitions(importPaths: readonly string[] = []): string {
   const imports = importPaths.map((importPath, index) => (
-    `import * as realtimeModule${index} from ${JSON.stringify(importPath)}`
+    `import * as realtimeModule${index} from ${JSON.stringify(`${importPath}?holo-realtime-server`)}`
   ))
   const values = importPaths.map((_importPath, index) => `...Object.values(realtimeModule${index})`)
 
@@ -511,6 +519,50 @@ export function renderNextGeneratedRealtimeDefinitions(importPaths: readonly str
     ...imports,
     '',
     `export const realtimeDefinitions = [${values.join(', ')}] as const`,
+    '',
+  ].join('\n')
+}
+
+export function renderNextGeneratedRealtimeServerModules(): string {
+  return [
+    'declare module \'*?holo-realtime-server\' {',
+    '  const realtimeModule: Readonly<Record<string, unknown>>',
+    '  export = realtimeModule',
+    '}',
+    '',
+  ].join('\n')
+}
+
+export function renderNextGeneratedRealtimeQueryRoute(): string {
+  return [
+    'import { handleRealtimeQueryRequest } from \'@holo-js/realtime/server\'',
+    'import { realtimeDefinitions } from \'./realtime-definitions\'',
+    'import { holo } from \'./holo\'',
+    '',
+    'export async function POST(request: Request) {',
+    '  const app = await holo.getApp()',
+    '  return await handleRealtimeQueryRequest(request, {',
+    '    projectRoot: app.projectRoot,',
+    '    definitions: realtimeDefinitions,',
+    '  })',
+    '}',
+    '',
+  ].join('\n')
+}
+
+export function renderNextGeneratedRealtimeMutationRoute(): string {
+  return [
+    'import { handleRealtimeMutationRequest } from \'@holo-js/realtime/server\'',
+    'import { realtimeDefinitions } from \'./realtime-definitions\'',
+    'import { holo } from \'./holo\'',
+    '',
+    'export async function POST(request: Request) {',
+    '  const app = await holo.getApp()',
+    '  return await handleRealtimeMutationRequest(request, {',
+    '    projectRoot: app.projectRoot,',
+    '    definitions: realtimeDefinitions,',
+    '  })',
+    '}',
     '',
   ].join('\n')
 }
@@ -535,7 +587,12 @@ export function renderNextManagedRouteFiles(options: {
       ? [{ path: '.holo-js/generated/next/broadcast-auth-route.ts', contents: renderNextGeneratedBroadcastAuthRoute() }]
       : []),
     ...(options.realtimeEnabled
-      ? [{ path: '.holo-js/generated/next/realtime-definitions.ts', contents: renderNextGeneratedRealtimeDefinitions() }]
+      ? [
+          { path: '.holo-js/generated/next/realtime-definitions.ts', contents: renderNextGeneratedRealtimeDefinitions() },
+          { path: '.holo-js/generated/next/realtime-server-modules.d.ts', contents: renderNextGeneratedRealtimeServerModules() },
+          { path: '.holo-js/generated/next/realtime-query-route.ts', contents: renderNextGeneratedRealtimeQueryRoute() },
+          { path: '.holo-js/generated/next/realtime-mutation-route.ts', contents: renderNextGeneratedRealtimeMutationRoute() },
+        ]
       : []),
   ]
 }
@@ -860,6 +917,12 @@ const FRAMEWORK_RENDERERS = {
           : []),
         ...(broadcastEnabled
           ? [{ path: 'app/broadcasting/config/route.ts', contents: renderNextBroadcastConfigRoute() }]
+          : []),
+        ...(realtimeEnabled
+          ? [
+              { path: 'app/holo/realtime/query/route.ts', contents: renderNextRealtimeQueryRoute() },
+              { path: 'app/holo/realtime/mutation/route.ts', contents: renderNextRealtimeMutationRoute() },
+            ]
           : []),
         ...renderNextManagedRouteFiles({ authEnabled, broadcastEnabled, storageEnabled, realtimeEnabled }),
       ]

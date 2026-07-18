@@ -1,13 +1,76 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { defineRealtimeQuery } from '../src'
+import { defineRealtimeMutation, defineRealtimeQuery } from '../src'
 import {
+  configureRealtimeRuntime,
+  handleRealtimeMutationRequest,
+  handleRealtimeQueryRequest,
   realtimeServerInternals,
+  resetRealtimeRuntime,
   resolveRealtimeDefinition,
 } from '../src/server'
+import { createFakeDatabase } from './helpers/fake-database'
 
 describe('@holo-js/realtime server definition resolution', () => {
+  it('executes query and mutation requests independently of broadcast transport', async () => {
+    const database = createFakeDatabase(() => [])
+    const user = {
+      id: 10,
+      email: 'current@example.com',
+      can: async () => true,
+    }
+    configureRealtimeRuntime({
+      db: () => database.connection,
+      loadAuthModule: async () => ({
+        getAuthRuntime: () => ({
+          user: async () => user,
+          provider: async () => 'local',
+          guard: () => ({
+            user: async () => user,
+            provider: async () => 'local',
+          }),
+        }),
+      }),
+    })
+    const query = defineRealtimeQuery({
+      name: 'posts.list',
+      access: 'public',
+      handler: () => [{ id: 2 }],
+    })
+    const mutation = defineRealtimeMutation({
+      name: 'posts.rename',
+      access: 'authenticated',
+      handler: ({ auth }) => ({ title: 'Renamed', userId: auth.user.id }),
+    })
+    const options = {
+      projectRoot: '/unused',
+      definitions: [query, mutation],
+    }
+
+    const queryResponse = await handleRealtimeQueryRequest(new Request('http://localhost/holo/realtime/query', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'posts.list', args: { page: 2 } }),
+    }), options)
+    const mutationResponse = await handleRealtimeMutationRequest(new Request('http://localhost/holo/realtime/mutation', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'posts.rename', args: { title: 'Renamed' } }),
+    }), options)
+
+    expect(queryResponse.status).toBe(200)
+    await expect(queryResponse.json()).resolves.toMatchObject({
+      name: 'posts.list',
+      data: [{ id: 2 }],
+      version: 1,
+    })
+    expect(mutationResponse.status).toBe(200)
+    await expect(mutationResponse.json()).resolves.toMatchObject({
+      name: 'posts.rename',
+      data: { title: 'Renamed', userId: 10 },
+    })
+    resetRealtimeRuntime()
+  })
+
   it('resolves explicit definitions before scanning files', async () => {
     const directDefinition = defineRealtimeQuery({
       name: 'posts.direct',

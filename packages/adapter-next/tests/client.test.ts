@@ -67,6 +67,9 @@ function createReactMock(overrides: Readonly<Record<string, unknown>>): Readonly
     useContext<TValue>(context: MockReactContext<TValue>): TValue {
       return context.currentRenderValue
     },
+    useMemo<TValue>(factory: () => TValue) {
+      return factory()
+    },
     use<TValue>(value: PromiseLike<TValue>): TValue {
       return readPromise(value)
     },
@@ -470,15 +473,10 @@ describe('@holo-js/adapter-next client', () => {
       },
     })
 
-    let suspended: PromiseLike<unknown> | undefined
-    try {
-      listPosts()
-    } catch (error) {
-      suspended = error as PromiseLike<unknown>
-    }
-    expect(suspended).toBeDefined()
-    await suspended
-    expect(listPosts()).toEqual([{ id: 1, title: 'First' }])
+    expect(listPosts()).toBeUndefined()
+    await vi.waitFor(() => {
+      expect(listPosts()).toEqual([{ id: 1, title: 'First' }])
+    })
     expect(listPosts()).toEqual([{ id: 1, title: 'First' }])
     expect(listPosts()).toEqual([{ id: 1, title: 'First' }])
 
@@ -487,7 +485,7 @@ describe('@holo-js/adapter-next client', () => {
     resetRealtimeClientRuntime()
   })
 
-  it('suspends until the first realtime query snapshot arrives', async () => {
+  it('loads the first realtime query snapshot after the initial client render', async () => {
     vi.doMock('react', () => createReactMock({
       useEffect(effect: () => void | (() => void)) {
         return effect()
@@ -545,15 +543,10 @@ describe('@holo-js/adapter-next client', () => {
       },
     })
 
-    let suspended: PromiseLike<unknown> | undefined
-    try {
-      listPosts()
-    } catch (error) {
-      suspended = error as PromiseLike<unknown>
-    }
-    expect(suspended).toBeDefined()
-    await suspended
-    expect(listPosts()).toEqual([{ id: 1, title: 'First' }])
+    expect(listPosts()).toBeUndefined()
+    await vi.waitFor(() => {
+      expect(listPosts()).toEqual([{ id: 1, title: 'First' }])
+    })
     resetRealtimeClientRuntime()
   })
 
@@ -586,13 +579,23 @@ describe('@holo-js/adapter-next client', () => {
     const originalWebSocket = (globalThis as { WebSocket?: unknown }).WebSocket
     const originalLocation = (globalThis as { location?: unknown }).location
 
-    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
-      key: 'app-key',
-      host: 'localhost',
-      port: 6001,
-      path: '/app',
-      scheme: 'http',
-    }))) as typeof fetch
+    globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/holo/realtime/query') {
+        return Response.json({
+          message: 'Only the author can update posts.',
+          kind: 'authorization',
+          status: 403,
+        }, { status: 403 })
+      }
+
+      return Response.json({
+        key: 'app-key',
+        host: 'localhost',
+        port: 6001,
+        path: '/app',
+        scheme: 'http',
+      })
+    }) as typeof fetch
     ;(globalThis as unknown as { WebSocket?: typeof MockWebSocket }).WebSocket = MockWebSocket
     ;(globalThis as { location?: { readonly protocol: string, readonly hostname: string } }).location = {
       protocol: 'http:',
@@ -627,7 +630,7 @@ describe('@holo-js/adapter-next client', () => {
         resetRealtimeClientRuntime,
       } = await import('@holo-js/realtime/client')
       const { query } = await import('@holo-js/realtime')
-      await import('../src/realtime')
+      const { adapterNextRealtimeInternals } = await import('../src/realtime')
 
       const listPosts = query({
         name: 'posts.denied',
@@ -635,42 +638,16 @@ describe('@holo-js/adapter-next client', () => {
         handler: async () => [],
       })
 
-      let suspended: PromiseLike<unknown> | undefined
-      try {
-        listPosts()
-      } catch (error) {
-        suspended = error as PromiseLike<unknown>
-      }
-      expect(suspended).toBeDefined()
-      await Promise.resolve()
-      await Promise.resolve()
-      for (let attempt = 0; attempt < 10 && !MockWebSocket.last; attempt += 1) {
-        await Promise.resolve()
-      }
-      expect(MockWebSocket.last).toBeDefined()
-      MockWebSocket.last?.listeners.get('open')?.({})
-      for (let attempt = 0; attempt < 10 && (MockWebSocket.last?.sentMessages.length ?? 0) === 0; attempt += 1) {
-        await Promise.resolve()
-      }
-      const requestIds = (MockWebSocket.last?.sentMessages ?? []).flatMap((message) => {
-        const parsed = JSON.parse(message) as { readonly data?: { readonly id?: unknown } }
-        return typeof parsed.data?.id === 'string' ? [parsed.data.id] : []
+      expect(listPosts()).toBeUndefined()
+      await vi.waitFor(() => {
+        expect(globalThis.fetch).toHaveBeenCalledWith(
+          '/holo/realtime/query',
+          expect.objectContaining({ method: 'POST' }),
+        )
       })
-      expect(requestIds.length).toBeGreaterThan(0)
-      for (const id of requestIds) {
-        MockWebSocket.last?.listeners.get('message')?.({
-          data: JSON.stringify({
-            event: 'holo:realtime:error',
-            data: {
-              id,
-              message: 'Only the author can update posts.',
-              status: 403,
-            },
-          }),
-        })
-      }
-
-      await Promise.resolve(suspended).catch(() => undefined)
+      await vi.waitFor(() => {
+        expect(adapterNextRealtimeInternals.getRealtimeErrorSnapshot()).toBeDefined()
+      })
       let renderedError: unknown
       try {
         listPosts()
@@ -717,7 +694,7 @@ describe('@holo-js/adapter-next client', () => {
       configureRealtimeClientTransport,
       resetRealtimeClientRuntime,
     } = await import('@holo-js/realtime/client')
-    const { mutation, query } = await import('../src/realtime')
+    const { adapterNextRealtimeInternals, mutation, query } = await import('../src/realtime')
 
     const listPosts = query({
       name: 'posts.after-mutation-denied',
@@ -749,16 +726,14 @@ describe('@holo-js/adapter-next client', () => {
       },
     })
 
-    let suspended: PromiseLike<unknown> | undefined
-    try {
-      listPosts()
-    } catch (error) {
-      suspended = error as PromiseLike<unknown>
-    }
-    expect(suspended).toBeDefined()
-    await suspended
-    expect(listPosts()).toEqual([])
+    expect(listPosts()).toBeUndefined()
+    await vi.waitFor(() => {
+      expect(listPosts()).toEqual([])
+    })
     await expect(renamePost()).rejects.toThrow('Only the author can update posts.')
+    await vi.waitFor(() => {
+      expect(adapterNextRealtimeInternals.getRealtimeErrorSnapshot()).toBeDefined()
+    })
     let renderedError: unknown
     try {
       listPosts()

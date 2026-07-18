@@ -9,6 +9,8 @@ import {
   renderNextGeneratedRealtimeDefinitions,
   renderNextManagedRouteFiles,
   renderNextHoloHelper,
+  renderNextRealtimeMutationRoute,
+  renderNextRealtimeQueryRoute,
   renderSvelteHoloHelper,
   renderSvelteManagedRuntimeFiles,
 } from './scaffold/framework-renderers'
@@ -16,6 +18,8 @@ import {
 type SvelteManagedFeatures = {
   readonly authEnabled: boolean
   readonly broadcastEnabled: boolean
+  readonly realtimeEnabled: boolean
+  readonly realtimeImportPaths: readonly string[]
   readonly storageEnabled: boolean
   readonly clerkEnabled: boolean
   readonly workosEnabled: boolean
@@ -86,6 +90,12 @@ function renderManagedSvelteServerHooksModule(features: SvelteManagedFeatures): 
     ...(features.storageEnabled
       ? ['import { createPublicStorageResponse } from \'@holo-js/storage\'']
       : []),
+    ...(features.realtimeEnabled
+      ? ['import { handleRealtimeMutationRequest, handleRealtimeQueryRequest } from \'@holo-js/realtime/server\'']
+      : []),
+    ...features.realtimeImportPaths.map((importPath, index) => (
+      `import * as holoRealtimeModule${index} from ${JSON.stringify(importPath)}`
+    )),
     ...(features.clerkEnabled
       ? ['import { completeClerkAuth, loginWithClerk, logoutWithClerk, registerWithClerk } from \'@holo-js/auth-clerk\'']
       : []),
@@ -100,6 +110,7 @@ function renderManagedSvelteServerHooksModule(features: SvelteManagedFeatures): 
     ...(features.authEnabled ? ['handleHoloCurrentAuthRoute'] : []),
     ...(features.storageEnabled ? ['handleHoloStorageRoute'] : []),
     ...(features.broadcastEnabled ? ['handleHoloBroadcastConfigRoute', 'handleHoloBroadcastAuthRoute'] : []),
+    ...(features.realtimeEnabled ? ['handleHoloRealtimeQueryRoute', 'handleHoloRealtimeMutationRoute'] : []),
     ...(features.clerkEnabled
       ? [
           'handleHoloClerkLoginRoute',
@@ -128,6 +139,11 @@ function renderManagedSvelteServerHooksModule(features: SvelteManagedFeatures): 
     '',
     'type HoloApp = Awaited<ReturnType<typeof holo.getApp>>',
     'type HoloRouteHandler = (event: RequestEvent, app: HoloApp) => Promise<Response | undefined>',
+    ...(features.realtimeEnabled
+      ? [
+          `const realtimeDefinitions = [${features.realtimeImportPaths.map((_path, index) => `...Object.values(holoRealtimeModule${index})`).join(', ')}] as const`,
+        ]
+      : []),
     '',
     'function isRoute(event: RequestEvent, method: string, paths: readonly string[]): boolean {',
     '  return event.request.method.toUpperCase() === method && paths.includes(event.url.pathname)',
@@ -235,6 +251,32 @@ function renderManagedSvelteServerHooksModule(features: SvelteManagedFeatures): 
           '        channels: app.registry?.channels ?? [],',
           '      },',
           '    },',
+          '  })',
+          '}',
+          '',
+        ]
+      : []),
+    ...(features.realtimeEnabled
+      ? [
+          'async function handleHoloRealtimeQueryRoute(event: RequestEvent, app: HoloApp): Promise<Response | undefined> {',
+          '  if (!isRoute(event, \'POST\', [\'/holo/realtime/query\'])) {',
+          '    return undefined',
+          '  }',
+          '',
+          '  return await handleRealtimeQueryRequest(event.request, {',
+          '    projectRoot: app.projectRoot,',
+          '    definitions: realtimeDefinitions,',
+          '  })',
+          '}',
+          '',
+          'async function handleHoloRealtimeMutationRoute(event: RequestEvent, app: HoloApp): Promise<Response | undefined> {',
+          '  if (!isRoute(event, \'POST\', [\'/holo/realtime/mutation\'])) {',
+          '    return undefined',
+          '  }',
+          '',
+          '  return await handleRealtimeMutationRequest(event.request, {',
+          '    projectRoot: app.projectRoot,',
+          '    definitions: realtimeDefinitions,',
           '  })',
           '}',
           '',
@@ -697,10 +739,20 @@ async function ensureNextManagedRoutes(projectRoot: string): Promise<void> {
   }
 
   if (realtimeEnabled) {
-    await writeFileIfChanged(
-      resolve(projectRoot, '.holo-js/generated/next/realtime-definitions.ts'),
-      await renderNextRealtimeDefinitions(projectRoot),
-    )
+    await Promise.all([
+      writeFileIfChanged(
+        resolve(projectRoot, '.holo-js/generated/next/realtime-definitions.ts'),
+        await renderNextRealtimeDefinitions(projectRoot),
+      ),
+      writeFileIfChanged(
+        resolve(projectRoot, 'app/holo/realtime/query/route.ts'),
+        renderNextRealtimeQueryRoute(),
+      ),
+      writeFileIfChanged(
+        resolve(projectRoot, 'app/holo/realtime/mutation/route.ts'),
+        renderNextRealtimeMutationRoute(),
+      ),
+    ])
   }
 
   await removeLegacyManagedHoloHelper(resolve(projectRoot, 'server/holo.ts'), renderNextHoloHelper())
@@ -728,10 +780,19 @@ async function readProjectDependencies(projectRoot: string): Promise<ReadonlySet
 
 async function resolveSvelteManagedFeatures(projectRoot: string): Promise<SvelteManagedFeatures> {
   const dependencies = await readProjectDependencies(projectRoot)
+  const realtimeFiles = await collectRealtimeDefinitionFiles(resolve(projectRoot, 'server/realtime'))
+  const generatedRoot = resolve(projectRoot, '.holo-js/generated')
+  const realtimeImportPaths = realtimeFiles.map((filePath) => {
+    const withoutExtension = filePath.slice(0, -extname(filePath).length)
+    const importPath = relative(generatedRoot, withoutExtension).split(sep).join('/')
+    return importPath.startsWith('.') ? importPath : `./${importPath}`
+  })
 
   return {
     authEnabled: dependencies.has('@holo-js/auth'),
     broadcastEnabled: dependencies.has('@holo-js/broadcast'),
+    realtimeEnabled: dependencies.has('@holo-js/realtime'),
+    realtimeImportPaths,
     storageEnabled: dependencies.has('@holo-js/storage'),
     clerkEnabled: dependencies.has('@holo-js/auth-clerk'),
     workosEnabled: dependencies.has('@holo-js/auth-workos'),

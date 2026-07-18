@@ -80,7 +80,7 @@ function stubBroadcastConfig(overrides: Record<string, unknown> = {}): void {
   })
 }
 
-async function readQueryWebsocketUrl(options: {
+async function readSubscriptionWebsocketUrl(options: {
   readonly config?: Record<string, unknown>
   readonly location?: {
     readonly hostname?: string
@@ -99,25 +99,14 @@ async function readQueryWebsocketUrl(options: {
   })))
   vi.stubGlobal('location', options.location)
 
-  const queryPromise = realtimeClientInternals.createBroadcastRealtimeTransport().query<readonly unknown[]>(
+  const unsubscribe = realtimeClientInternals.createBroadcastRealtimeTransport().subscribe<readonly unknown[]>(
     'posts.list',
     {},
+    () => {},
+    () => {},
   )
   await vi.waitUntil(() => harness.sentFrames.length === 1)
-  const queryFrame = JSON.parse(harness.sentFrames[0]!) as { readonly data: { readonly id: string } }
-  harness.emit('message', {
-    event: 'holo:realtime:result',
-    data: JSON.stringify({
-      id: queryFrame.data.id,
-      snapshot: {
-        name: 'posts.list',
-        data: [],
-        dependencies: [],
-        version: 1,
-      },
-    }),
-  })
-  await queryPromise
+  unsubscribe()
 
   const url = harness.websocketUrls[0]
   if (!url) {
@@ -197,27 +186,27 @@ describe('@holo-js/realtime broadcast client transport', () => {
     })
   })
 
-  it('fails queries clearly when websocket or config fetch support is unavailable', async () => {
-    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  it('executes queries without websocket support and requires fetch only for request execution', async () => {
     vi.stubGlobal('WebSocket', undefined)
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      name: 'posts.list',
+      data: [{ id: 1 }],
+      dependencies: [],
+      version: 1,
+    })))
 
     await expect(
       realtimeClientInternals.createBroadcastRealtimeTransport().query('posts.list', {}),
-    ).rejects.toThrow('Realtime live updates require WebSocket support in this runtime.')
+    ).resolves.toMatchObject({ data: [{ id: 1 }] })
 
-    const harness = createSocketHarness()
-    harness.install()
     vi.stubGlobal('fetch', undefined)
 
     await expect(
       realtimeClientInternals.createBroadcastRealtimeTransport().query('posts.list', {}),
-    ).rejects.toThrow('Realtime live updates require fetch support in this runtime.')
-    expect(consoleWarn).toHaveBeenCalledTimes(2)
+    ).rejects.toThrow('Realtime queries and mutations require fetch support in this runtime.')
   })
 
-  it('normalizes non-error query transport failures to the unavailable transport warning', async () => {
-    const harness = createSocketHarness()
-    harness.install()
+  it('preserves request transport failures without reporting a live-update warning', async () => {
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject('offline')))
 
@@ -225,7 +214,7 @@ describe('@holo-js/realtime broadcast client transport', () => {
       realtimeClientInternals.createBroadcastRealtimeTransport().query('posts.list', {}),
     ).rejects.toBe('offline')
 
-    expect(consoleWarn).toHaveBeenCalledWith(`[@holo-js/realtime] ${realtimeClientInternals.unavailableTransportMessage}`)
+    expect(consoleWarn).not.toHaveBeenCalled()
   })
 
   it('normalizes non-error subscription startup failures to the unavailable transport warning', async () => {
@@ -247,47 +236,47 @@ describe('@holo-js/realtime broadcast client transport', () => {
     expect(consoleWarn).toHaveBeenCalledWith(`[@holo-js/realtime] ${realtimeClientInternals.unavailableTransportMessage}`)
   })
 
-  it('rejects failed and malformed broadcast config responses', async () => {
+  it('rejects failed and malformed broadcast config responses for subscriptions', async () => {
     const harness = createSocketHarness()
     harness.install()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 503 })))
 
-    await expect(
-      realtimeClientInternals.createBroadcastRealtimeTransport().query('posts.list', {}),
-    ).rejects.toThrow('Realtime broadcast config failed with HTTP 503.')
+    const firstErrors: unknown[] = []
+    realtimeClientInternals.createBroadcastRealtimeTransport().subscribe('posts.list', {}, () => {}, error => firstErrors.push(error))
+    await vi.waitUntil(() => firstErrors.length === 1)
+    expect(firstErrors[0]).toBeInstanceOf(Error)
+    expect((firstErrors[0] as Error).message).toBe('Realtime broadcast config failed with HTTP 503.')
 
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ key: 'app-key' })))
 
-    await expect(
-      realtimeClientInternals.createBroadcastRealtimeTransport().query('posts.list', {}),
-    ).rejects.toThrow('Realtime broadcast config response is invalid.')
+    const secondErrors: unknown[] = []
+    realtimeClientInternals.createBroadcastRealtimeTransport().subscribe('posts.list', {}, () => {}, error => secondErrors.push(error))
+    await vi.waitUntil(() => secondErrors.length === 1)
+    expect(secondErrors[0]).toBeInstanceOf(Error)
+    expect((secondErrors[0] as Error).message).toBe('Realtime broadcast config response is invalid.')
   })
 
-  it('rejects malformed query and mutation responses after websocket delivery', async () => {
-    const harness = createSocketHarness()
-    harness.install()
-    stubBroadcastConfig()
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-
+  it('executes queries and mutations through same-origin HTTP requests', async () => {
+    const requests: Array<{ readonly input: string, readonly init?: RequestInit }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+      requests.push({ input, init })
+      return input.endsWith('/query')
+        ? Response.json({ name: 'posts.list', data: [], dependencies: [], version: 1 })
+        : Response.json({ name: 'posts.create', data: { id: 1 }, dependencies: [] })
+    }))
     const transport = realtimeClientInternals.createBroadcastRealtimeTransport()
-    const queryPromise = transport.query<readonly unknown[]>('posts.list', {})
-    await vi.waitUntil(() => harness.sentFrames.length === 1)
-    const queryFrame = JSON.parse(harness.sentFrames[0]!) as { readonly data: { readonly id: string } }
-    harness.emit('message', {
-      event: 'holo:realtime:result',
-      data: JSON.stringify({ id: queryFrame.data.id }),
-    })
-    await expect(queryPromise).rejects.toThrow('Realtime query response did not include a snapshot.')
-
-    const mutationPromise = transport.mutate('posts.create', {})
-    await vi.waitUntil(() => harness.sentFrames.length === 2)
-    const mutationFrame = JSON.parse(harness.sentFrames[1]!) as { readonly data: { readonly id: string } }
-    harness.emit('message', {
-      event: 'holo:realtime:result',
-      data: JSON.stringify({ id: mutationFrame.data.id }),
-    })
-    await expect(mutationPromise).rejects.toThrow('Realtime mutation response did not include a result.')
+    await expect(transport.query<readonly unknown[]>('posts.list', { page: 1 })).resolves.toMatchObject({ data: [] })
+    await expect(transport.mutate('posts.create', { title: 'Post' })).resolves.toMatchObject({ data: { id: 1 } })
+    expect(requests.map(request => request.input)).toEqual([
+      '/holo/realtime/query',
+      '/holo/realtime/mutation',
+    ])
+    expect(requests.every(request => request.init?.credentials === 'same-origin')).toBe(true)
+    expect(requests.map(request => JSON.parse(String(request.init?.body)))).toEqual([
+      { name: 'posts.list', args: { page: 1 } },
+      { name: 'posts.create', args: { title: 'Post' } },
+    ])
   })
 
   it('routes subscription startup failures to the subscription error callback', async () => {
@@ -309,58 +298,27 @@ describe('@holo-js/realtime broadcast client transport', () => {
     expect(consoleWarn).toHaveBeenCalledTimes(1)
   })
 
-  it('shares one connecting websocket across concurrent requests', async () => {
+  it('shares one connecting websocket across concurrent subscriptions', async () => {
     const harness = createSocketHarness({ autoOpen: false })
     harness.install()
     stubBroadcastConfig()
 
     const transport = realtimeClientInternals.createBroadcastRealtimeTransport()
-    const queryPromise = transport.query<readonly unknown[]>('posts.list', {})
-    const mutationPromise = transport.mutate('posts.create', {})
+    const firstUnsubscribe = transport.subscribe('posts.list', {}, () => {}, () => {})
+    const secondUnsubscribe = transport.subscribe('posts.featured', {}, () => {}, () => {})
 
     await vi.waitUntil(() => harness.websocketUrls.length === 1)
     expect(harness.websocketUrls).toEqual(['ws://localhost:8080/app/app-key'])
     harness.emit('open')
     await vi.waitUntil(() => harness.sentFrames.length === 2)
 
-    const queryFrame = JSON.parse(harness.sentFrames[0]!) as { readonly data: { readonly id: string } }
-    const mutationFrame = JSON.parse(harness.sentFrames[1]!) as { readonly data: { readonly id: string } }
-    harness.emit('message', {
-      event: 'holo:realtime:result',
-      data: JSON.stringify({
-        id: queryFrame.data.id,
-        snapshot: {
-          name: 'posts.list',
-          data: [],
-          dependencies: [],
-          version: 1,
-        },
-      }),
-    })
-    harness.emit('message', {
-      event: 'holo:realtime:result',
-      data: JSON.stringify({
-        id: mutationFrame.data.id,
-        result: {
-          name: 'posts.create',
-          data: { ok: true },
-          dependencies: [],
-        },
-      }),
-    })
-
-    await expect(queryPromise).resolves.toMatchObject({
-      data: [],
-      version: 1,
-    })
-    await expect(mutationPromise).resolves.toMatchObject({
-      data: { ok: true },
-    })
     expect(harness.websocketUrls).toHaveLength(1)
+    firstUnsubscribe()
+    secondUnsubscribe()
   })
 
   it('normalizes websocket URLs for deployment and browser host variants', async () => {
-    await expect(readQueryWebsocketUrl({
+    await expect(readSubscriptionWebsocketUrl({
       config: {
         host: 'broadcast.example.com',
         port: 443,
@@ -369,20 +327,20 @@ describe('@holo-js/realtime broadcast client transport', () => {
       },
     })).resolves.toBe('wss://broadcast.example.com:443/socket/app-key')
 
-    await expect(readQueryWebsocketUrl({
+    await expect(readSubscriptionWebsocketUrl({
       location: {
         protocol: 'https:',
         hostname: 'localhost',
       },
     })).resolves.toBe('wss://localhost:8080/app/app-key')
 
-    await expect(readQueryWebsocketUrl({
+    await expect(readSubscriptionWebsocketUrl({
       config: {
         host: '0.0.0.0',
       },
     })).resolves.toBe('ws://127.0.0.1:8080/app/app-key')
 
-    await expect(readQueryWebsocketUrl({
+    await expect(readSubscriptionWebsocketUrl({
       config: {
         host: 'broadcast.example.com',
       },
@@ -393,7 +351,7 @@ describe('@holo-js/realtime broadcast client transport', () => {
     })).resolves.toBe('ws://broadcast.example.com:8080/app/app-key')
   })
 
-  it('fans websocket errors out to pending requests and active subscriptions', async () => {
+  it('fans websocket errors out to active subscriptions without affecting requests', async () => {
     const harness = createSocketHarness()
     harness.install()
     stubBroadcastConfig()
@@ -401,18 +359,16 @@ describe('@holo-js/realtime broadcast client transport', () => {
     const errors: unknown[] = []
 
     const transport = realtimeClientInternals.createBroadcastRealtimeTransport()
-    const queryPromise = transport.query<readonly unknown[]>('posts.list', {})
     transport.subscribe<readonly unknown[]>(
       'posts.list',
       {},
       () => {},
       error => errors.push(error),
     )
-    await vi.waitUntil(() => harness.sentFrames.length === 2)
+    await vi.waitUntil(() => harness.sentFrames.length === 1)
 
     harness.emit('error')
 
-    await expect(queryPromise).rejects.toThrow(realtimeClientInternals.unavailableTransportMessage)
     expect(errors).toHaveLength(1)
     expect(errors[0]).toBeInstanceOf(Error)
     expect((errors[0] as Error).message).toBe(realtimeClientInternals.unavailableTransportMessage)

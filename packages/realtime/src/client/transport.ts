@@ -1,4 +1,4 @@
-import type { RealtimeSubscriptionSnapshot } from '../contracts'
+import type { RealtimeExecutionResult, RealtimeSubscriptionSnapshot } from '../contracts'
 import {
   createWireError,
   warnRealtimeOnce,
@@ -13,9 +13,8 @@ import type {
   BroadcastClientConfig,
   RealtimeClientGlobals,
   RealtimeClientTransport,
-  RealtimeWebSocketLike,
-  RealtimeWireAction,
   RealtimeWireResult,
+  RealtimeWebSocketLike,
 } from './types'
 import {
   unavailableTransportMessage,
@@ -86,10 +85,39 @@ async function resolveBroadcastClientConfig(
   }
 }
 
+async function executeRealtimeRequest<TResult>(
+  endpoint: string,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<TResult> {
+  const globals = globalThis as RealtimeClientGlobals
+  if (!globals.fetch) {
+    throw new Error('Realtime queries and mutations require fetch support in this runtime.')
+  }
+
+  const response = await globals.fetch(endpoint, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ name, args }),
+  })
+  const data = await response.json().catch(() => ({})) as Record<string, unknown>
+  if (!response.ok) {
+    throw createWireError({
+      ...data,
+      status: typeof data.status === 'number' ? data.status : response.status,
+    })
+  }
+
+  return data as TResult
+}
+
 export function createBroadcastRealtimeTransport(options: {
   readonly configEndpoint?: string
 } = {}): RealtimeClientTransport {
-  const pending = new Map<string, {
+  const pendingMutations = new Map<string, {
     readonly resolve: (value: RealtimeWireResult<unknown>) => void
     readonly reject: (error: unknown) => void
   }>()
@@ -103,10 +131,10 @@ export function createBroadcastRealtimeTransport(options: {
   let nextRequestId = 0
 
   const rejectPending = (error: unknown): void => {
-    for (const request of pending.values()) {
+    for (const request of pendingMutations.values()) {
       request.reject(error)
     }
-    pending.clear()
+    pendingMutations.clear()
     for (const subscription of subscriptions.values()) {
       subscription.onError(error)
     }
@@ -128,15 +156,15 @@ export function createBroadcastRealtimeTransport(options: {
 
     if (eventName === 'holo:realtime:error') {
       const error = createWireError(data)
-      pending.get(id)?.reject(error)
-      pending.delete(id)
+      pendingMutations.get(id)?.reject(error)
+      pendingMutations.delete(id)
       subscriptions.get(id)?.onError(error)
       return
     }
 
     if (eventName === 'holo:realtime:result') {
-      pending.get(id)?.resolve(data as RealtimeWireResult<unknown>)
-      pending.delete(id)
+      pendingMutations.get(id)?.resolve(data as RealtimeWireResult<unknown>)
+      pendingMutations.delete(id)
       return
     }
 
@@ -225,36 +253,6 @@ export function createBroadcastRealtimeTransport(options: {
     return await connecting
   }
 
-  const send = async <TResult>(
-    action: RealtimeWireAction,
-    name: string,
-    args: Record<string, unknown>,
-    id = `realtime.${++nextRequestId}`,
-  ): Promise<RealtimeWireResult<TResult>> => {
-    try {
-      const connectedSocket = await connect()
-      const response = new Promise<RealtimeWireResult<TResult>>((resolve, reject) => {
-        pending.set(id, {
-          resolve: value => resolve(value as RealtimeWireResult<TResult>),
-          reject,
-        })
-      })
-      connectedSocket.send(JSON.stringify({
-        event: 'holo:realtime',
-        data: {
-          id,
-          action,
-          name,
-          args,
-        },
-      }))
-      return await response
-    } catch (error) {
-      warnRealtimeOnce(error instanceof Error ? error.message : unavailableTransportMessage)
-      throw error
-    }
-  }
-
   const sendSubscription = async (
     name: string,
     args: Record<string, unknown>,
@@ -277,22 +275,61 @@ export function createBroadcastRealtimeTransport(options: {
     }
   }
 
+  const sendMutation = async <TResult>(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<RealtimeExecutionResult<TResult> | undefined> => {
+    if (socket?.readyState !== 1) {
+      return undefined
+    }
+
+    const id = `realtime.${++nextRequestId}`
+    const response = new Promise<RealtimeWireResult<TResult>>((resolve, reject) => {
+      pendingMutations.set(id, {
+        resolve: value => resolve(value as RealtimeWireResult<TResult>),
+        reject,
+      })
+    })
+    try {
+      socket.send(JSON.stringify({
+        event: 'holo:realtime',
+        data: {
+          id,
+          action: 'mutation',
+          name,
+          args,
+        },
+      }))
+    } catch {
+      pendingMutations.delete(id)
+      return undefined
+    }
+
+    const result = (await response).result
+    if (!result) {
+      throw new Error('Realtime mutation response did not include a result.')
+    }
+    return result
+  }
+
   return {
     async query<TResult>(name: string, args: Record<string, unknown>) {
-      const response = await send<TResult>('query', name, args)
-      if (!response.snapshot) {
-        throw new Error('Realtime query response did not include a snapshot.')
-      }
-
-      return response.snapshot
+      return await executeRealtimeRequest<RealtimeSubscriptionSnapshot<TResult>>(
+        '/holo/realtime/query',
+        name,
+        args,
+      )
     },
     async mutate<TResult>(name: string, args: Record<string, unknown>) {
-      const response = await send<TResult>('mutation', name, args)
-      if (!response.result) {
-        throw new Error('Realtime mutation response did not include a result.')
+      const liveResult = await sendMutation<TResult>(name, args)
+      if (liveResult) {
+        return liveResult
       }
-
-      return response.result
+      return await executeRealtimeRequest<RealtimeExecutionResult<TResult>>(
+        '/holo/realtime/mutation',
+        name,
+        args,
+      )
     },
     subscribe<TResult>(
       name: string,

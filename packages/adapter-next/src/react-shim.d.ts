@@ -18,6 +18,7 @@ declare module 'react' {
   ): TCallback
   export function useContext<TValue>(context: Context<TValue>): TValue
   export function useEffect(effect: () => void | (() => void), deps?: readonly unknown[]): void
+  export function useMemo<TValue>(factory: () => TValue, deps: readonly unknown[]): TValue
   export function useRef<TValue>(initialValue?: TValue): { current: TValue | undefined }
   export function useState<TValue>(
     initialState: TValue | (() => TValue),

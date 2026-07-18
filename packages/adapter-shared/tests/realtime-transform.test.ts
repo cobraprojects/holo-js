@@ -110,7 +110,7 @@ describe('shared realtime definition transform', () => {
       preserveServerHandlers: true,
     }).code
 
-    expect(output).toContain("from \"@holo-js/test/realtime\"")
+    expect(output).toContain('from "@holo-js/test/realtime"')
     expect(output).toContain("from '../models/Post'")
     expect(output).toContain('handler: async () => await Post.get()')
     expect(output).toContain('handler: async () => true')

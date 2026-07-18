@@ -29,10 +29,73 @@ export type RealtimeServerOptions = {
 
 type RealtimeResolvedDefinition = RealtimeQueryDefinitionMetadata | RealtimeMutationDefinitionMetadata
 
+type RealtimeRequestBody = {
+  readonly name?: unknown
+  readonly args?: unknown
+}
+
 const realtimeFileExtensions = new Set(['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'])
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function normalizeRequestName(value: unknown): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error('Realtime request must include a query or mutation name.')
+  }
+
+  return value
+}
+
+async function readRealtimeRequest(request: Request): Promise<{
+  readonly name: string
+  readonly args: Record<string, unknown>
+}> {
+  const body = await request.json().catch(() => ({})) as RealtimeRequestBody
+  return {
+    name: normalizeRequestName(body.name),
+    args: isPlainObject(body.args) ? body.args : {},
+  }
+}
+
+function errorStatus(error: unknown): number {
+  if (error instanceof RealtimeUnauthorizedError) {
+    return 401
+  }
+
+  if (error instanceof RealtimeForbiddenError) {
+    return 403
+  }
+
+  if (error instanceof RealtimeAuthUnavailableError) {
+    return 500
+  }
+
+  return 400
+}
+
+function errorResponse(error: unknown, status = errorStatus(error)): Response {
+  const authorization = status === 401 || status === 403
+  return Response.json({
+    message: error instanceof Error ? error.message : 'Realtime request failed.',
+    name: error instanceof Error ? error.name : 'RealtimeError',
+    status,
+    kind: authorization ? 'authorization' : 'runtime',
+  }, {
+    status,
+    headers: {
+      'cache-control': 'no-store',
+    },
+  })
+}
+
+function successResponse(value: unknown): Response {
+  return Response.json(value, {
+    headers: {
+      'cache-control': 'no-store',
+    },
+  })
 }
 
 function resolveRealtimeRoot(options: RealtimeServerOptions): string {
@@ -103,9 +166,49 @@ export async function resolveRealtimeDefinition(
   throw new Error(`Realtime definition "${name}" was not found.`)
 }
 
+export async function handleRealtimeQueryRequest(
+  request: Request,
+  options: RealtimeServerOptions,
+): Promise<Response> {
+  try {
+    const { name, args } = await readRealtimeRequest(request)
+    const definition = await resolveRealtimeDefinition(name, options)
+    if (definition.kind !== 'query') {
+      return errorResponse(new Error(`Realtime definition "${name}" is not a query.`), 404)
+    }
+
+    const result = await executeRealtimeQuery(definition, args as never)
+    return successResponse({
+      ...result,
+      version: 1,
+    })
+  } catch (error) {
+    return errorResponse(error)
+  }
+}
+
+export async function handleRealtimeMutationRequest(
+  request: Request,
+  options: RealtimeServerOptions,
+): Promise<Response> {
+  try {
+    const { name, args } = await readRealtimeRequest(request)
+    const definition = await resolveRealtimeDefinition(name, options)
+    if (definition.kind !== 'mutation') {
+      return errorResponse(new Error(`Realtime definition "${name}" is not a mutation.`), 404)
+    }
+
+    return successResponse(await executeRealtimeMutation(definition, args as never))
+  } catch (error) {
+    return errorResponse(error)
+  }
+}
+
 export const realtimeServerInternals = {
   collectRealtimeFiles,
   findDefinitionInModule,
+  normalizeRequestName,
+  readRealtimeRequest,
 }
 
 export {

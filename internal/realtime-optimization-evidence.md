@@ -5,7 +5,9 @@ This internal note records the current evidence for the realtime sync engine wor
 ## Goal Invariants
 
 - Final user-facing API remains `query`, `mutation`, `defineRealtimeQuery`, `defineRealtimeMutation`, and the existing client helpers.
-- Client realtime does not require SSE or generated user routes.
+- Queries use managed same-origin framework endpoints. Mutations use an established live socket when available and otherwise fall back to the managed endpoint, so request execution does not depend on the broadcast worker.
+- Live updates use the broadcast WebSocket and are the only behavior lost when the worker is unavailable.
+- Client realtime does not require SSE or user-authored routes.
 - Query subscriptions share one canonical server result per query key.
 - Supported mutation shapes patch subscribed results without rerunning the query handler.
 - Unsupported shapes fall back to one shared refresh, not one refresh per subscriber.
@@ -23,7 +25,9 @@ This internal note records the current evidence for the realtime sync engine wor
 | Client structural sharing | `packages/realtime/tests/realtime.client.test.ts` and `packages/realtime/tests/realtime.benchmark.test.ts` cover structural sharing for array rows, nested wrappers, nested relations, merge patches, moves, and paginated wrappers. |
 | Realtime-only DB overhead | `packages/db/tests/query-cache.test.ts` covers normal writes staying off row capture without cache bridge/listeners and dependency helpers staying inert without listeners. |
 | Safe fallback for unsupported queries | `packages/realtime/tests/realtime.benchmark.test.ts` covers unsupported shared fallback without per-subscriber reruns. Runtime fallback is in `packages/realtime/src/runtime/invalidation.ts` and `packages/realtime/src/runtime/patch-delivery.ts`. |
-| No SSE or user route requirement | `tests/example-app-realtime-browser-flow.mjs` fails if `/holo/realtime/` is requested. `bun run test:example:blog-next` covers no-worker fallback and worker-backed browser realtime. |
+| Worker-independent request execution | `packages/realtime/tests/client-transport.test.ts` covers HTTP query and mutation execution without WebSocket support. `packages/realtime/tests/server.test.ts` covers authenticated request execution, and `tests/example-app-realtime-browser-flow.mjs` covers no-worker loading plus client navigation. |
+| Broadcast-only live updates | `packages/realtime/tests/realtime.client.test.ts`, `packages/realtime/tests/client-transport.test.ts`, and the worker-backed browser flow cover WebSocket subscriptions and live mutation invalidation independently from the HTTP fallback. |
+| No SSE or user-authored route requirement | Framework adapters own the internal `/holo/realtime/query` and `/holo/realtime/mutation` endpoints. `packages/realtime/tests/package.test.ts` rejects SSE dependencies, while adapter and CLI tests cover managed route registration and generation. |
 | No final API change | `packages/realtime/tests/realtime.type.test.ts` and `packages/realtime/tests/realtime.declaration.test.ts` cover inferred user-facing query/mutation declarations. |
 
 ## Validation Commands

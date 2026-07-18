@@ -37,13 +37,6 @@ function collectPageFailures(page, options = {}) {
     allowRequestFailure: (url) => options.allowWebSocketConnectionErrors
       && url.includes('/app/'),
   })
-  page.on('request', (request) => {
-    const url = request.url()
-    if (url.includes('/holo/realtime/')) {
-      result.failures.push(`Unexpected realtime route request: ${request.method()} ${url}`)
-    }
-  })
-
   return result
 }
 
@@ -118,7 +111,7 @@ export async function assertExampleAppRealtimeBrowserFlow({ baseUrl, appName, co
     const observerResult = collectPageFailures(observerPage)
     const editorResult = collectPageFailures(editorPage)
     await openRealtimePage(observerPage, observerResult.failures)
-    const editorSockets = await openRealtimePage(editorPage, editorResult.failures)
+    await openRealtimePage(editorPage, editorResult.failures)
     const firstPost = editorPage.locator(postSelector).first()
     const postId = await firstPost.getAttribute('data-post-id')
     assert.ok(postId, 'Expected the realtime page to render post ids.')
@@ -127,10 +120,6 @@ export async function assertExampleAppRealtimeBrowserFlow({ baseUrl, appName, co
     await firstPost.getByRole('button', { name: /edit title/i }).click()
     await editorPage.getByLabel('Realtime post title').fill(title)
     await editorPage.getByRole('button', { name: /save realtime title/i }).click()
-    await waitFor(
-      () => editorSockets.sentFrames.some(frame => frame.includes('holo:realtime') && frame.includes('"action":"mutation"')),
-      formatRealtimeFailure('Expected the realtime mutation to be sent through the websocket runtime.', editorSockets, editorResult.failures),
-    )
     await waitFor(
       async () => (await observerPage.locator(`[data-post-id="${postId}"] h2`).textContent()) === title,
       `Expected realtime subscriber to show updated title "${title}".`,
@@ -154,10 +143,25 @@ export async function assertExampleAppRealtimeUnavailableBrowserFlow({ baseUrl, 
     await page.goto(realtimePath, { waitUntil: 'domcontentloaded' })
     assert.equal(new URL(page.url()).pathname, realtimePath)
     await page.getByRole('heading', { name: /realtime posts/i }).waitFor({ timeout: 20000 })
+    await page.locator(postSelector).first().waitFor({ timeout: 20000 })
     await waitFor(
       () => result.warnings.some(warning => warning.includes(unavailableWorkerWarning)),
       `Expected the realtime page to warn when the broadcast worker is unreachable. Warnings: ${JSON.stringify(result.warnings)}`,
     )
+
+    const firstPost = page.locator(postSelector).first()
+    const postId = await firstPost.getAttribute('data-post-id')
+    assert.ok(postId, 'Expected the realtime query to return posts without a broadcast worker.')
+
+    await page.goto('/admin/posts', { waitUntil: 'domcontentloaded' })
+    const navigationQueryResponsePromise = page.waitForResponse(response => (
+      response.url().includes('/holo/realtime/query')
+      && response.request().method() === 'POST'
+    ))
+    await page.getByRole('link', { name: /realtime demo/i }).click()
+    const navigationQueryResponse = await navigationQueryResponsePromise
+    assert.equal(navigationQueryResponse.status(), 200, 'Expected the realtime query to succeed after client navigation.')
+    await page.locator(postSelector).first().waitFor({ timeout: 20000 })
 
     assert.deepEqual(result.failures, [])
   } finally {

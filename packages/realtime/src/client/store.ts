@@ -102,14 +102,12 @@ export function createRealtimeQueryStore<TResult>(
   }
 
   const load = (): Promise<RealtimeSubscriptionSnapshot<TResult>> => {
-    if (snapshot) {
-      return Promise.resolve(snapshot)
-    }
-
-    pendingLoad ??= transport.query<TResult>(name, args).then((nextSnapshot) => {
-      setSnapshot(nextSnapshot)
-      return snapshot ?? nextSnapshot
-    })
+    pendingLoad ??= snapshot
+      ? Promise.resolve(snapshot)
+      : transport.query<TResult>(name, args).then((nextSnapshot) => {
+          setSnapshot(nextSnapshot)
+          return snapshot ?? nextSnapshot
+        })
     return pendingLoad
   }
 

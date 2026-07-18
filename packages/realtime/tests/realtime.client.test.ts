@@ -65,6 +65,25 @@ afterEach(() => {
 })
 
 describe('@holo-js/realtime client runtime', () => {
+  it('keeps the hydrated store load promise stable across renders', async () => {
+    const transport = createIdleClientTransport()
+    const querySpy = vi.spyOn(transport, 'query')
+    const store = realtimeClientInternals.createRealtimeQueryStore<readonly Post[]>('posts.list', {}, transport)
+    store.setSnapshot({
+      name: 'posts.list',
+      data: [{ id: 1, title: 'First' }],
+      dependencies: [],
+      version: 1,
+    })
+
+    const firstLoad = store.load()
+    const secondLoad = store.load()
+
+    expect(secondLoad).toBe(firstLoad)
+    await expect(firstLoad).resolves.toMatchObject({ data: [{ id: 1, title: 'First' }] })
+    expect(querySpy).not.toHaveBeenCalled()
+  })
+
   it('uses the configured framework runtime when a query definition is called', () => {
     const calls: unknown[] = []
     const listPosts = query({
@@ -1553,7 +1572,7 @@ describe('@holo-js/realtime client runtime', () => {
     expect((errors[0] as Error).message).toBe(realtimeClientInternals.missingTransportMessage)
   })
 
-  it('uses the broadcast websocket transport for query, mutation, and subscriptions', async () => {
+  it('uses HTTP for query and mutation execution and broadcast websocket for subscriptions', async () => {
     const sentFrames: string[] = []
     const websocketUrls: string[] = []
     const listeners = new Map<string, Set<(event?: { readonly data: unknown }) => void>>()
@@ -1589,6 +1608,22 @@ describe('@holo-js/realtime client runtime', () => {
 
     vi.stubGlobal('WebSocket', TestWebSocket)
     const fetchSpy = vi.fn(async (url: string) => {
+      if (url === '/holo/realtime/query') {
+        return Response.json({
+          name: 'posts.list',
+          data: [{ id: 1, title: 'First' }],
+          dependencies: ['table:posts'],
+          version: 1,
+        })
+      }
+      if (url === '/holo/realtime/mutation') {
+        return Response.json({
+          name: 'posts.update',
+          data: { id: 1, title: 'Updated' },
+          dependencies: [],
+        })
+      }
+
       expect(url).toBe('/broadcasting/config')
       return Response.json({
         key: 'app-key',
@@ -1606,44 +1641,15 @@ describe('@holo-js/realtime client runtime', () => {
 
     const transport = realtimeClientInternals.createBroadcastRealtimeTransport()
     const queryPromise = transport.query<readonly Post[]>('posts.list', { page: 1 })
-    await vi.waitUntil(() => sentFrames.length === 1)
-    expect(websocketUrls).toEqual(['ws://localhost:8080/app/app-key'])
-    const queryFrame = JSON.parse(sentFrames[0]!) as { data: { id: string } }
-    emitMessage({
-      event: 'holo:realtime:result',
-      data: JSON.stringify({
-        id: queryFrame.data.id,
-        snapshot: {
-          name: 'posts.list',
-          data: [{ id: 1, title: 'First' }],
-          dependencies: ['table:posts'],
-          version: 1,
-        },
-      }),
-    })
-
     await expect(queryPromise).resolves.toEqual({
       name: 'posts.list',
       data: [{ id: 1, title: 'First' }],
       dependencies: ['table:posts'],
       version: 1,
     })
+    expect(websocketUrls).toEqual([])
 
     const mutationPromise = transport.mutate<Post>('posts.update', { id: 1, title: 'Updated' })
-    await vi.waitUntil(() => sentFrames.length === 2)
-    const mutationFrame = JSON.parse(sentFrames[1]!) as { data: { id: string } }
-    emitMessage({
-      event: 'holo:realtime:result',
-      data: JSON.stringify({
-        id: mutationFrame.data.id,
-        result: {
-          name: 'posts.update',
-          data: { id: 1, title: 'Updated' },
-          dependencies: [],
-        },
-      }),
-    })
-
     await expect(mutationPromise).resolves.toEqual({
       name: 'posts.update',
       data: { id: 1, title: 'Updated' },
@@ -1657,8 +1663,9 @@ describe('@holo-js/realtime client runtime', () => {
       snapshot => snapshots.push(snapshot),
       () => {},
     )
-    await vi.waitUntil(() => sentFrames.length === 3)
-    const subscribeFrame = JSON.parse(sentFrames[2]!) as { data: { id: string } }
+    await vi.waitUntil(() => sentFrames.length === 1)
+    expect(websocketUrls).toEqual(['ws://localhost:8080/app/app-key'])
+    const subscribeFrame = JSON.parse(sentFrames[0]!) as { data: { id: string } }
     emitMessage({
       event: 'holo:realtime:patch',
       data: JSON.stringify({
@@ -1934,24 +1941,6 @@ describe('@holo-js/realtime client runtime', () => {
       {
         event: 'holo:realtime',
         data: {
-          id: queryFrame.data.id,
-          action: 'query',
-          name: 'posts.list',
-          args: { page: 1 },
-        },
-      },
-      {
-        event: 'holo:realtime',
-        data: {
-          id: mutationFrame.data.id,
-          action: 'mutation',
-          name: 'posts.update',
-          args: { id: 1, title: 'Updated' },
-        },
-      },
-      {
-        event: 'holo:realtime',
-        data: {
           id: subscribeFrame.data.id,
           action: 'subscribe',
           name: 'posts.list',
@@ -1967,69 +1956,19 @@ describe('@holo-js/realtime client runtime', () => {
         },
       },
     ])
-    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(fetchSpy).toHaveBeenCalledTimes(3)
   })
 
-  it('recreates structured realtime authorization errors from websocket responses', async () => {
-    const sentFrames: string[] = []
-    const listeners = new Map<string, Set<(event?: { readonly data: unknown }) => void>>()
-
-    class TestWebSocket {
-      readonly readyState = 1
-
-      constructor(_url: string) {}
-
-      send(value: string): void {
-        sentFrames.push(value)
-      }
-
-      close(): void {}
-
-      addEventListener(event: 'open' | 'close' | 'error' | 'message', listener: (payload?: { readonly data: unknown }) => void): void {
-        const eventListeners = listeners.get(event) ?? new Set<(payload?: { readonly data: unknown }) => void>()
-        eventListeners.add(listener)
-        listeners.set(event, eventListeners)
-        if (event === 'open') {
-          queueMicrotask(() => listener())
-        }
-      }
-    }
-
-    const emitMessage = (payload: Record<string, unknown>) => {
-      for (const listener of listeners.get('message') ?? []) {
-        listener({ data: JSON.stringify(payload) })
-      }
-    }
-
-    vi.stubGlobal('WebSocket', TestWebSocket)
+  it('recreates structured realtime authorization errors from HTTP responses', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({
-      key: 'app-key',
-      host: '127.0.0.1',
-      port: 8080,
-      path: '/app',
-      scheme: 'http',
-    })))
-    vi.stubGlobal('location', {
-      protocol: 'http:',
-      hostname: 'localhost',
-    })
-
+      message: 'Only the author, editors, or admins can update posts.',
+      name: 'AuthorizationError',
+      kind: 'authorization',
+      status: 403,
+      code: 'posts.update.denied',
+    }, { status: 403 })))
     const transport = realtimeClientInternals.createBroadcastRealtimeTransport()
     const mutationPromise = transport.mutate<Post>('posts.update', { id: 1 })
-    await vi.waitUntil(() => sentFrames.length === 1)
-    const mutationFrame = JSON.parse(sentFrames[0]!) as { data: { id: string } }
-    emitMessage({
-      event: 'holo:realtime:error',
-      data: JSON.stringify({
-        id: mutationFrame.data.id,
-        message: 'Only the author, editors, or admins can update posts.',
-        name: 'AuthorizationError',
-        kind: 'authorization',
-        status: 403,
-        code: 'posts.update.denied',
-      }),
-    })
-
     await expect(mutationPromise).rejects.toMatchObject({
       name: 'AuthorizationError',
       message: 'Only the author, editors, or admins can update posts.',
