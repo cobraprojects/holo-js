@@ -66,19 +66,16 @@ Registration automatically starts email verification when `emailVerification.req
 then pass the typed form data to `register(...)`:
 
 ```ts
-import { register } from '@holo-js/auth'
-import { validate, ValidationException } from '@holo-js/forms'
+import { loginUsing, register } from '@holo-js/auth'
+import { validate } from '@holo-js/forms'
 
 import { registerForm } from '@/lib/schemas/auth'
 
 export async function POST(request: Request) {
   const data = await validate(request, registerForm)
 
-  const { data: session, error } = await register(data)
-
-  if (error) {
-    throw ValidationException.withMessages(error.fields)
-  }
+  const created = await register(data)
+  const session = await loginUsing(created)
 
   return Response.json({
     ok: true,
@@ -92,8 +89,9 @@ export async function POST(request: Request) {
 }
 ```
 
-Expected registration failures come back in `error`. On success, the local user is created and the verification
-message is delivered automatically through the configured auth delivery integration.
+Expected registration failures throw a `ValidationException`. On success, the local user is created and the
+verification message is delivered automatically through the configured auth delivery integration. `loginUsing(created)`
+establishes the session used to continue the signed-in registration flow.
 
 ::: tip Automatic verification email
 Applications do not need to send the first verification email manually after registration. When
@@ -106,18 +104,14 @@ Unverified users can still sign in. Validate the login payload, then inspect the
 
 ```ts
 import { login } from '@holo-js/auth'
-import { validate, ValidationException } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
 
 import { loginForm } from '@/lib/schemas/auth'
 
 export async function POST(request: Request) {
   const data = await validate(request, loginForm)
 
-  const { data: session, error } = await login(data)
-
-  if (error) {
-    throw ValidationException.withMessages(error.fields)
-  }
+  const session = await login(data)
 
   return Response.json({
     ok: true,
@@ -144,18 +138,14 @@ Verification pages submit the token from the emailed link. Validate the payload,
 
 ```ts
 import { verifyEmail } from '@holo-js/auth'
-import { validate, ValidationException } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
 
 import { verifyEmailForm } from '@/lib/schemas/auth'
 
 export async function POST(request: Request) {
   const data = await validate(request, verifyEmailForm)
 
-  const { data: verifiedUser, error } = await verifyEmail(data.token)
-
-  if (error) {
-    throw ValidationException.withMessages(error.fields)
-  }
+  const verifiedUser = await verifyEmail(data.token)
 
   return Response.json({
     ok: true,
@@ -174,18 +164,14 @@ the typed email string to `resendEmailVerification(email)`:
 
 ```ts
 import { resendEmailVerification } from '@holo-js/auth'
-import { validate, ValidationException } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
 
 import { resendEmailVerificationForm } from '@/lib/schemas/auth'
 
 export async function POST(request: Request) {
   const data = await validate(request, resendEmailVerificationForm)
 
-  const { error } = await resendEmailVerification(data.email)
-
-  if (error) {
-    throw ValidationException.withMessages(error.fields)
-  }
+  await resendEmailVerification(data.email)
 
   return Response.json({
     ok: true,
@@ -202,10 +188,10 @@ When the route is not specifically a resend action, use the same parameter shape
 ```ts
 import { sendEmailVerification } from '@holo-js/auth'
 
-const { error } = await sendEmailVerification(email)
+await sendEmailVerification(email)
 ```
 
-Expected resend failures come back in `error`, for example:
+Expected resend failures throw a `ValidationException`, for example:
 
 - `email_verification_user_missing`
 - `email_already_verified`

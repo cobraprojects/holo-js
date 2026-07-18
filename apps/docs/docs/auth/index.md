@@ -127,7 +127,7 @@ by the form schema before they are sent back to the client:
 
 ```ts
 import { login, logout, refreshUser, register, user } from '@holo-js/auth'
-import { field, schema, validate, ValidationException } from '@holo-js/forms'
+import { field, schema, validate } from '@holo-js/forms'
 
 const registerForm = schema({
   name: field.string().required(),
@@ -145,11 +145,7 @@ const loginForm = schema({
 export async function POST(request: Request) {
   const data = await validate(request, registerForm)
 
-  const { data: created, error: registerError } = await register(data)
-
-  if (registerError) {
-    throw ValidationException.withMessages(registerError.fields)
-  }
+  const created = await register(data)
 
   return Response.json(created, { status: 201 })
 }
@@ -157,11 +153,7 @@ export async function POST(request: Request) {
 export async function PUT(request: Request) {
   const data = await validate(request, loginForm)
 
-  const { data: session, error } = await login(data)
-
-  if (error) {
-    throw ValidationException.withMessages(error.fields)
-  }
+  const session = await login(data)
 
   return Response.json({
     authenticated: true,
@@ -399,40 +391,34 @@ payload to `login()` or `register()`.
 ```ts
 import { login } from '@holo-js/auth'
 
-const { data, error } = await login({
+const session = await login({
   email: 'ava@example.com',
   password: 'secret-secret',
 })
 ```
 
-Successful auth calls put the result in `data`. Expected auth failures come back in `error`.
-
-`error` is plain data:
+Successful auth calls return their typed value directly. Expected auth failures throw a `ValidationException` with an
+HTTP status and field errors. For example, invalid credentials produce a serialized validation payload like:
 
 ```ts
 {
-  code: 'invalid_credentials',
-  message: 'These credentials do not match our records.',
-  status: 401,
-  fields: {
+  ok: false,
+  status: 422,
+  valid: false,
+  errors: {
     email: ['These credentials do not match our records.'],
   },
 }
 ```
 
-That means a form-backed route can throw auth failures as validation exceptions. The forms package keeps
-sensitive values out of the serialized response:
-
-```ts
-if (error) {
-  throw ValidationException.withMessages(error.fields)
-}
-```
+The Forms adapters consume that exception through the same error path as schema validation and keep sensitive values
+out of serialized responses. Unexpected configuration, database, and session failures continue to throw their original
+errors.
 
 The auth runtime uses the validated payload itself. If your credentials are based on `phone`, pass `phone`.
 
 ```ts
-const { data, error } = await login({
+const session = await login({
   phone: '20123456789',
   password: 'secret-secret',
 })

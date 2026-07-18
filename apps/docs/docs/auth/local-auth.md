@@ -136,7 +136,7 @@ Use `register()` inside your route after validation succeeds:
 ```ts
 import { register } from '@holo-js/auth'
 
-const { data: created, error } = await register({
+const created = await register({
   name: body.name,
   email: body.email,
   phone: body.phone,
@@ -147,16 +147,16 @@ const { data: created, error } = await register({
 })
 ```
 
-Expected auth failures come back in `error`. Successful calls put the created user in `data`.
-
-The auth failure object is plain data:
+Successful registration returns the created user directly. Expected registration failures throw a
+`ValidationException` with a status and field errors. For example, a duplicate identifier produces a serialized
+validation payload like:
 
 ```ts
 {
-  code: 'registration_identifier_taken',
-  message: 'A user with this email already exists.',
+  ok: false,
   status: 422,
-  fields: {
+  valid: false,
+  errors: {
     email: ['A user with this email already exists.'],
   },
 }
@@ -172,7 +172,7 @@ Applications do not need to manually send the first verification email.
 If your application uses another identifier, pass that identifier instead:
 
 ```ts
-const { error } = await register({
+const created = await register({
   phone: body.phone,
   country: body.country,
   password: body.password,
@@ -187,7 +187,7 @@ These APIs are server-side APIs from `@holo-js/auth`. They are not available fro
 ```ts
 import { login } from '@holo-js/auth'
 
-const { data: session, error } = await login({
+const session = await login({
   email: body.email,
   password: body.password,
   remember: body.remember === true,
@@ -373,7 +373,7 @@ Typical flow:
 Set `remember: true` during login:
 
 ```ts
-const { error } = await login({
+const session = await login({
   email: body.email,
   password: body.password,
   remember: true,
@@ -425,7 +425,7 @@ Your framework route owns parsing and response formatting. The auth package only
 
 ```ts
 import { login } from '@holo-js/auth'
-import { field, schema, validate, ValidationException } from '@holo-js/forms'
+import { field, schema, validate } from '@holo-js/forms'
 
 const loginForm = schema({
   email: field.string().required().email(),
@@ -435,11 +435,7 @@ const loginForm = schema({
 export async function POST(request: Request) {
   const data = await validate(request, loginForm)
 
-  const { data: session, error } = await login(data)
-
-  if (error) {
-    throw ValidationException.withMessages(error.fields)
-  }
+  const session = await login(data)
 
   return Response.json({
     ok: true,

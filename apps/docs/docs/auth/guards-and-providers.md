@@ -100,17 +100,16 @@ await auth.guard('admin').user()
 await auth.guard('api').currentAccessToken()
 ```
 
-On a token guard, `login()` and `register()` return personal access token results instead of session results:
+On a token guard, both `login()` and `register()` return personal access token results. On a session guard, `login()`
+returns an established session while `register()` returns the created user:
 
 ```ts
-const { data: token, error } = await auth.guard('api').login({
+const token = await auth.guard('api').login({
   email: 'ava@example.com',
   password: 'secret-secret',
 })
 
-if (!error) {
-  token.plainTextToken
-}
+token.plainTextToken
 ```
 
 ## Default Guard

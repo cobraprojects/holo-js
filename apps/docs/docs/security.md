@@ -150,14 +150,14 @@ Validation failures, CSRF failures, and auth failures stay separate:
 - `csrfProtection()` verifies unsafe requests before route handlers run and returns `419` on token mismatch.
 - `validate(...)` throws validation failures such as missing fields, bad formats, and throttling as
   `ValidationException`.
-- `login(...)`, `register(...)`, `verifyEmail(...)`, `requestPasswordReset(...)`, and `resetPassword(...)` return auth failures in `error`.
-- Auth failures are plain data with `status` and `fields`, so routes can throw `ValidationException`
-  when those failures should render as field errors.
+- `login(...)`, `register(...)`, `verifyEmail(...)`, `requestPasswordReset(...)`, and `resetPassword(...)` throw
+  `ValidationException` for expected auth failures.
+- Forms adapters handle those auth exceptions through the same status and field-error path as schema validation.
 
 ### Login
 
 ```ts
-import { field, schema, validate, ValidationException } from '@holo-js/forms'
+import { field, schema, validate } from '@holo-js/forms'
 import { login } from '@holo-js/auth'
 
 const loginForm = schema({
@@ -170,10 +170,7 @@ export async function POST(request: Request) {
     throttle: 'login',
   })
 
-  const { error } = await login(data)
-  if (error) {
-    throw ValidationException.withMessages(error.fields)
-  }
+  await login(data)
 
   return Response.json({
     ok: true,
@@ -185,7 +182,7 @@ export async function POST(request: Request) {
 ### Register
 
 ```ts
-import { field, schema, validate, ValidationException } from '@holo-js/forms'
+import { field, schema, validate } from '@holo-js/forms'
 import { register } from '@holo-js/auth'
 
 const registerUser = schema({
@@ -200,10 +197,7 @@ export async function POST(request: Request) {
     throttle: 'register',
   })
 
-  const { error } = await register(data)
-  if (error) {
-    throw ValidationException.withMessages(error.fields)
-  }
+  await register(data)
 
   return Response.json({
     ok: true,

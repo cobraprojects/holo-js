@@ -62,6 +62,12 @@ describe('auth documentation smoke checks', () => {
     expect(tokens).toContain('tokens.create')
     expect(tokens).toContain('tokens.authenticate')
     expect(tokens).toContain('tokens.can')
+    expect(local).toContain('const session = await login(')
+    expect(local).toContain('const created = await register(')
+    expect(local).not.toContain('const { data: session, error } = await login(')
+    expect(local).not.toContain('const { data: created, error } = await register(')
+    expect(guards).not.toContain('const { data: token, error } = await auth.guard(')
+    expect(tokens).not.toContain('const { data: token, error } = await auth.guard(')
   })
 
   it('covers social, WorkOS, and Clerk integrations', async () => {
@@ -115,5 +121,10 @@ describe('auth documentation smoke checks', () => {
     expect(reset).toContain('APP_URL')
     expect(reset).toContain('@holo-js/mail')
     expect(reset).not.toContain('notifyUsing()')
+    expect(client).not.toContain('const { data: session, error } = await login(')
+    expect(verification).toContain('const verifiedUser = await verifyEmail(')
+    expect(verification).not.toContain('const { data: verifiedUser, error } = await verifyEmail(')
+    expect(reset).toContain('const resetUser = await resetPassword(')
+    expect(reset).not.toContain('const { data: resetUser, error } = await resetPassword(')
   })
 })

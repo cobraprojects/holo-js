@@ -39,19 +39,20 @@ generated link target and delivery URL composition.
 ```ts
 import { requestPasswordReset } from '@holo-js/auth'
 
-const { error } = await requestPasswordReset({
+await requestPasswordReset({
   email: 'ava@example.com',
 })
 ```
 
-If the request fails for an expected auth reason, `error` is plain data:
+If the request fails for an expected auth reason, it throws a `ValidationException`. Its serialized payload contains
+the status and field errors:
 
 ```ts
 {
-  code: 'password_reset_email_required',
-  message: 'Email is required to request a password reset.',
+  ok: false,
   status: 422,
-  fields: {
+  valid: false,
+  errors: {
     email: ['Email is required to request a password reset.'],
   },
 }
@@ -69,15 +70,15 @@ The flow:
 ```ts
 import { resetPassword } from '@holo-js/auth'
 
-const { data: resetUser, error } = await resetPassword({
+const resetUser = await resetPassword({
   token: body.token,
   password: body.password,
   passwordConfirmation: body.passwordConfirmation,
 })
 ```
 
-`error.fields` targets the submitted auth fields directly, such as `token`, `password`, and
-`passwordConfirmation`.
+The thrown `ValidationException` targets the submitted auth fields directly, such as `token`, `password`, and
+`passwordConfirmation`. Successful calls return the updated user.
 
 The reset flow verifies the token, hashes the new password, updates the local user record, and invalidates the used
 token.
@@ -87,7 +88,7 @@ token.
 Use a non-default broker when needed:
 
 ```ts
-const { error } = await requestPasswordReset({
+await requestPasswordReset({
   email: 'admin@example.com',
 }, {
   broker: 'admins',

@@ -52,7 +52,7 @@ routes from `useForm(...)`, then call `refreshUser()` and navigate with the fram
 'use server'
 
 import { login } from '@holo-js/auth'
-import { validate, ValidationException } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { loginForm } from '@/lib/schemas/login'
@@ -62,10 +62,7 @@ export async function loginAction(formData: FormData) {
     throttle: 'login',
   })
 
-  const { data: session, error } = await login(data)
-  if (error) {
-    throw ValidationException.withMessages(error.fields)
-  }
+  const session = await login(data)
 
   revalidatePath('/', 'layout')
   redirect(session.emailVerificationRequired ? session.emailVerificationRoute ?? '/verify-email' : '/admin')
@@ -120,7 +117,7 @@ const form = useForm(loginForm, {
 ```ts [SvelteKit — src/routes/api/login/+server.ts]
 import { json } from '@sveltejs/kit'
 import { login } from '@holo-js/auth'
-import { validate, ValidationException } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
 import { loginForm } from '$lib/schemas/login'
 
 export async function POST({ request }: { request: Request }) {
@@ -128,10 +125,7 @@ export async function POST({ request }: { request: Request }) {
     throttle: 'login',
   })
 
-  const { data: session, error } = await login(data)
-  if (error) {
-    throw ValidationException.withMessages(error.fields)
-  }
+  const session = await login(data)
 
   return json({
     ok: true,

@@ -25,17 +25,10 @@ instead of a session cookie:
 ```ts
 import auth from '@holo-js/auth'
 
-const { data: token, error } = await auth.guard('api').login({
+const token = await auth.guard('api').login({
   email: 'ava@example.com',
   password: 'secret-secret',
 })
-
-if (error) {
-  return Response.json({
-    ok: false,
-    message: 'Invalid credentials.',
-  }, { status: 401 })
-}
 
 return Response.json({
   ok: true,
@@ -53,6 +46,9 @@ For token guards, `auth.guard('api').login(...)` verifies the credentials, creat
 authenticated user, and returns the token result. Token abilities are chosen by trusted server configuration or by
 explicit server-side token creation, not by the login request body.
 
+Invalid token-guard credentials throw a `ValidationException` with status `401`. Handle it through the Forms adapter
+or serialize it at the API boundary with `isValidationException(error)` and `error.toJSON()`.
+
 When no token abilities are provided by the server, personal access tokens use the configured default abilities. The
 default is `['*']`. Set `personalAccessTokens.defaultAbilities` to `[]` when a token should receive no scopes unless
 server code grants them explicitly.
@@ -64,16 +60,12 @@ Use `register()` on a token guard when the registration response should immediat
 ```ts
 import auth from '@holo-js/auth'
 
-const { data: token, error } = await auth.guard('api').register({
+const token = await auth.guard('api').register({
   name: 'Ava',
   email: 'ava@example.com',
   password: 'secret-secret',
   passwordConfirmation: 'secret-secret',
 })
-
-if (error) {
-  return Response.json(error, { status: error.status })
-}
 
 return Response.json({
   ok: true,
@@ -87,9 +79,9 @@ return Response.json({
 })
 ```
 
-For session guards, `login()` and `register()` still return session results. For token guards, they return personal
-access token results. TypeScript infers the guard driver from `config/auth.ts` through generated discovery types,
-so `auth.guard('api')` is token-backed when the `api` guard uses `driver: 'token'`.
+For session guards, `login()` returns an established session and `register()` returns the created user. For token guards,
+both operations return personal access token results. TypeScript infers the guard driver from `config/auth.ts` through
+generated discovery types, so `auth.guard('api')` is token-backed when the `api` guard uses `driver: 'token'`.
 Run `npx holo prepare` after changing guard configuration so those generated types stay current.
 
 ## Sending Tokens On Requests

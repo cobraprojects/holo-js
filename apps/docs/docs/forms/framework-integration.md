@@ -110,7 +110,7 @@ Use `refreshUser()` only for client-side mutations that stay on the current rout
 'use server'
 
 import { login } from '@holo-js/auth'
-import { validate, ValidationException } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { loginForm } from '@/lib/schemas/login'
@@ -120,10 +120,7 @@ export async function loginAction(formData: FormData) {
     throttle: 'login',
   })
 
-  const { data: session, error } = await login(data)
-  if (error) {
-    throw ValidationException.withMessages(error.fields)
-  }
+  const session = await login(data)
 
   revalidatePath('/', 'layout')
   redirect(session.emailVerificationRequired ? session.emailVerificationRoute ?? '/verify-email' : '/admin')
@@ -172,7 +169,7 @@ const form = useForm(loginForm, {
 ```ts [SvelteKit — src/routes/login/+page.server.ts]
 import { redirect } from '@sveltejs/kit'
 import { login } from '@holo-js/auth'
-import { validate, ValidationException } from '@holo-js/forms'
+import { validate } from '@holo-js/forms'
 import { loginForm } from '$lib/schemas/login'
 
 export const actions = {
@@ -181,10 +178,7 @@ export const actions = {
       throttle: 'login',
     })
 
-    const { data: session, error } = await login(data)
-    if (error) {
-      throw ValidationException.withMessages(error.fields)
-    }
+    const session = await login(data)
 
     redirect(303, session.emailVerificationRequired ? session.emailVerificationRoute ?? '/verify-email' : '/admin')
   },
