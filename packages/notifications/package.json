@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/notifications",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Holo-JS Framework - notification contracts, channels, and fluent dispatch helpers",
   "type": "module",
   "license": "MIT",

@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/flux-react",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Holo-JS Framework - React and Next hook skeletons for Flux",
   "type": "module",
   "license": "MIT",
