@@ -6392,6 +6392,55 @@ export default defineMigration({
     expect(generated).not.toContain('defineGeneratedTable("users"')
   }, 30000)
 
+  it('rescans the migration directory before running migrate with an existing registry', async () => {
+    const projectRoot = await createTempProject()
+    tempDirs.push(projectRoot)
+
+    await writeProjectFile(projectRoot, 'config/database.ts', `
+import { defineDatabaseConfig } from '@holo-js/db'
+
+export default defineDatabaseConfig({
+  connections: {
+    default: {
+      driver: 'sqlite',
+      url: './data.sqlite',
+    },
+  },
+})
+`)
+
+    const staleRegistry = await prepareProjectDiscovery(projectRoot)
+    expect(staleRegistry.migrations).toEqual([])
+
+    await writeProjectFile(projectRoot, 'server/db/migrations/2026_01_01_000001_create_rooms.ts', `
+import { defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('rooms', (table) => {
+      table.id()
+      table.string('name')
+    })
+  },
+  async down({ schema }) {
+    await schema.dropTable('rooms')
+  },
+})
+`)
+
+    const migrated = runCliProcess(projectRoot, ['migrate'])
+    expect(migrated.status, migrated.stderr || migrated.stdout).toBe(0)
+
+    const refreshedRegistry = await loadGeneratedProjectRegistry(projectRoot)
+    expect(refreshedRegistry?.migrations).toEqual([
+      expect.objectContaining({
+        sourcePath: 'server/db/migrations/2026_01_01_000001_create_rooms.ts',
+      }),
+    ])
+    await expect(readFile(join(projectRoot, '.holo-js/generated/schema.generated.ts'), 'utf8'))
+      .resolves.toContain('export const rooms = defineGeneratedTable("rooms", {')
+  }, 120000)
+
   it('rebuilds generated schema artifacts from already-ran migrations', async () => {
     const projectRoot = await createTempProject()
     tempDirs.push(projectRoot)

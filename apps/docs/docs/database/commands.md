@@ -124,6 +124,9 @@ npx holo migrate
 npx holo migrate --step 1
 ```
 
+Before running, the command rescans the configured migration directory and refreshes the generated
+registry, including migrations that were created manually.
+
 ### Refresh the database from scratch
 
 ```bash

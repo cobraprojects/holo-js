@@ -491,7 +491,7 @@ export async function withRuntimeEnvironment<T>(
   options: Record<string, unknown>,
   callback: (stdout: string) => Promise<T>,
 ): Promise<T> {
-  if (kind === 'seed') {
+  if (kind === 'migrate' || kind === 'fresh' || kind === 'rollback' || kind === 'seed') {
     const project = await loadProjectConfig(projectRoot, { required: true })
     await prepareProjectDiscovery(projectRoot, project.config)
   }

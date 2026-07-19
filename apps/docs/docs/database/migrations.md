@@ -153,6 +153,9 @@ Run all pending migrations:
 npx holo migrate
 ```
 
+The command rescans `server/db/migrations` before running, so a valid migration created manually is
+included even when an older generated registry already exists.
+
 Run only the next `N` migrations:
 
 ```bash
