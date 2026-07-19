@@ -1,4 +1,6 @@
 declare module 'next/server' {
+  export function connection(): Promise<void>
+
   type NextResponseCookieOptions = {
     readonly path?: string
     readonly secure?: boolean

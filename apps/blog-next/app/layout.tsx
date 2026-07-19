@@ -11,8 +11,6 @@ export const metadata: Metadata = {
   description: 'A reference Holo blog built on Next.js',
 }
 
-export const dynamic = 'force-dynamic'
-
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const currentAuth = await auth()
 

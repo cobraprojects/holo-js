@@ -270,23 +270,19 @@ the visitor is authenticated.
 
 ::: code-group
 
-```tsx [Next.js — app/layout.tsx]
+```tsx [Next.js — app/(authenticated)/layout.tsx]
 import { AuthProvider } from '@holo-js/auth/next/client'
 import { auth } from '@holo-js/auth/next/server'
 import { AuthNav } from './auth-nav'
 
-export default async function RootLayout({ children }: { readonly children: React.ReactNode }) {
+export default async function AuthenticatedLayout({ children }: { readonly children: React.ReactNode }) {
   const currentAuth = await auth()
 
   return (
-    <html lang="en">
-      <body>
-        <AuthProvider initialProvider={currentAuth.provider} initialUser={currentAuth.user}>
-          <AuthNav />
-          {children}
-        </AuthProvider>
-      </body>
-    </html>
+    <AuthProvider initialProvider={currentAuth.provider} initialUser={currentAuth.user}>
+      <AuthNav />
+      {children}
+    </AuthProvider>
   )
 }
 ```
@@ -310,6 +306,10 @@ export async function load() {
 ```
 
 :::
+
+Next.js `auth()` reads request-specific authentication state, so Holo waits for the incoming request internally before
+resolving it. Put the provider in the narrowest layout that needs server-initialized auth state. A root layout is also
+valid when every route needs that state; no `dynamic = 'force-dynamic'` route export is required.
 
 Nuxt's `useAuth()` is async because it uses Nuxt's server/client data fetching state. The composable fetches
 `/api/auth/user` by default and stores the result in a keyed Nuxt state ref.

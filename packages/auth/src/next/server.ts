@@ -1,6 +1,11 @@
+import { connection } from 'next/server'
 import type { HoloAuthUser } from '../contracts'
 import type * as AuthRuntime from '../index'
-import { runWithNextAuthRequest, type NextAuthRequestLike } from './request-context'
+import {
+  getCurrentNextAuthRequest,
+  runWithNextAuthRequest,
+  type NextAuthRequestLike,
+} from './request-context'
 
 type AuthRuntimeModule = typeof AuthRuntime
 const sourceAuthRuntimePath = '../index'
@@ -88,6 +93,10 @@ async function loadAuthRuntime(): Promise<AuthRuntimeModule> {
 }
 
 export async function auth(options: AuthOptions = {}): Promise<AuthState> {
+  if (!getCurrentNextAuthRequest()) {
+    await connection()
+  }
+
   const {
     authRuntimeInternals,
     default: holoAuth,
