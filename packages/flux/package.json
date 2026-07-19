@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/flux",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Holo-JS Framework - framework-agnostic realtime client skeleton for broadcast and presence",
   "type": "module",
   "license": "MIT",

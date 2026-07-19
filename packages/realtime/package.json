@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/realtime",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Holo-JS Framework - realtime query and mutation runtime",
   "type": "module",
   "license": "MIT",
