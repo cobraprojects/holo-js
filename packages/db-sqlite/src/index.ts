@@ -17,6 +17,10 @@ type SQLiteTransactionOptions = DatabaseOperationOptions & {
   readonly mode?: SQLiteTransactionMode
 }
 
+type SQLiteMigrationTransactionState = {
+  readonly foreignKeysWereEnabled: boolean
+}
+
 export interface SQLiteStatementLike {
   all(...params: readonly unknown[]): Record<string, unknown>[]
   run(...params: readonly unknown[]): { changes?: number, lastInsertRowid?: unknown }
@@ -93,6 +97,35 @@ export class SQLiteAdapter implements DriverAdapter {
       if (this.transactionTail === current) {
         this.transactionTail = Promise.resolve()
       }
+    }
+  }
+
+  async beforeMigrationTransaction(): Promise<SQLiteMigrationTransactionState> {
+    const row = this.getDatabase().prepare('PRAGMA foreign_keys').all()[0] as { foreign_keys?: number } | undefined
+    const foreignKeysWereEnabled = row?.foreign_keys === 1
+    if (foreignKeysWereEnabled) {
+      this.getDatabase().exec('PRAGMA foreign_keys = OFF')
+    }
+    return { foreignKeysWereEnabled }
+  }
+
+  async validateMigrationTransaction(): Promise<void> {
+    const violations = this.getDatabase().prepare('PRAGMA foreign_key_check').all()
+    if (violations.length > 0) {
+      throw new Error(
+        `SQLite migration left ${violations.length} foreign key violation${violations.length === 1 ? '' : 's'}.`,
+      )
+    }
+  }
+
+  async afterMigrationTransaction(state: unknown): Promise<void> {
+    if (
+      typeof state === 'object'
+      && state !== null
+      && 'foreignKeysWereEnabled' in state
+      && state.foreignKeysWereEnabled === true
+    ) {
+      this.getDatabase().exec('PRAGMA foreign_keys = ON')
     }
   }
 

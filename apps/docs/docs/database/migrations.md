@@ -451,10 +451,7 @@ Do not use `change()` for:
 
 Those use dedicated table operations instead.
 
-Holo-JS-specific backend rule:
-
-- Postgres and MySQL support column mutation
-- SQLite fails closed for these mutations instead of attempting an implicit table rebuild
+Use the same `.change()` API across supported databases. Holo handles the database-specific migration strategy.
 
 ### UUID, ULID, and Snowflake Keys
 

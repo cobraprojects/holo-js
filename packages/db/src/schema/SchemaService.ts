@@ -1,4 +1,4 @@
-import { CapabilityError } from '../core/errors'
+import { CapabilityError, SchemaError } from '../core/errors'
 import { addColumnOperation, alterColumnOperation, createForeignKeyOperation, createIndexOperation, createTableOperation, dropColumnOperation, dropForeignKeyOperation, dropIndexOperation, dropTableOperation, renameColumnOperation, renameIndexOperation, renameTableOperation } from './ddl'
 import { defineTable } from './defineTable'
 import { assertUniqueResolvedIndexNames, assertValidIndexName, resolveGeneratedForeignKeyName, resolveGeneratedIndexName } from './generatedNames'
@@ -70,6 +70,12 @@ type SQLiteForeignKeyRow = {
   to: string
   on_update: string
   on_delete: string
+}
+
+type SQLiteSchemaObjectRow = {
+  type: 'index' | 'trigger'
+  name: string
+  sql: string
 }
 
 type PostgresColumnRow = {
@@ -494,6 +500,15 @@ export class SchemaService {
     }
   }
 
+  private assertAddColumnCapability(): void {
+    const capabilities = this.connection.getCapabilities()
+    if (!(capabilities.ddlAddColumnSupport ?? capabilities.ddlAlterSupport)) {
+      throw new CapabilityError(
+        `SchemaService does not support adding columns for dialect "${this.connection.getDialect().name}".`,
+      )
+    }
+  }
+
   private assertForeignKeyCapability(action: string): void {
     if (this.isSqlite() || !this.connection.getCapabilities().ddlAlterSupport) {
       throw new CapabilityError(
@@ -554,16 +569,20 @@ export class SchemaService {
   ): Promise<void> {
     switch (operation.kind) {
       case 'addColumn': {
-        this.assertAlterCapability('adding columns')
+        this.assertAddColumnCapability()
         const definition = this.resolveColumnDefinition(operation.columnName, operation.column)
         await this.execute(this.createCompiler().compile(addColumnOperation(tableName, definition)))
         this.updateRegisteredTable(tableName, table => this.withColumn(table, definition))
         return
       }
       case 'alterColumn': {
-        this.assertAlterCapability('altering columns')
         const definition = this.resolveColumnDefinition(operation.columnName, operation.column)
-        await this.execute(this.createCompiler().compile(alterColumnOperation(tableName, definition)))
+        if (this.isSqlite()) {
+          await this.rebuildSqliteTableForAlteredColumn(tableName, definition)
+        } else {
+          this.assertAlterCapability('altering columns')
+          await this.execute(this.createCompiler().compile(alterColumnOperation(tableName, definition)))
+        }
         this.updateRegisteredTable(tableName, table => this.withAlteredColumn(table, definition))
         return
       }
@@ -625,6 +644,57 @@ export class SchemaService {
           table => this.withoutForeignKey(table, operation.constraintName),
         )
         return
+    }
+  }
+
+  private async rebuildSqliteTableForAlteredColumn(
+    tableName: string,
+    column: AnyColumnDefinition,
+  ): Promise<void> {
+    const registered = this.connection.getSchemaRegistry().get(tableName)
+    if (!registered) {
+      throw new SchemaError(
+        `SQLite column changes require table "${tableName}" to be registered before calling change().`,
+      )
+    }
+
+    if (!registered.columns[column.name]) {
+      throw new SchemaError(
+        `SQLite cannot change missing column "${column.name}" on table "${tableName}". Add the column without change() first.`,
+      )
+    }
+
+    const temporaryTableName = `__holo_rebuild_${tableName.replaceAll('.', '_')}`
+    if (await this.hasTable(temporaryTableName)) {
+      throw new SchemaError(
+        `SQLite cannot rebuild table "${tableName}" because temporary table "${temporaryTableName}" already exists.`,
+      )
+    }
+
+    const rebuilt = this.withAlteredColumn(registered, column)
+    const schemaObjects = await this.connection.introspectCompiled<SQLiteSchemaObjectRow>({
+      sql: 'SELECT type, name, sql FROM sqlite_master WHERE tbl_name = ? AND type IN (\'index\', \'trigger\') AND sql IS NOT NULL ORDER BY type, name',
+      bindings: [tableName],
+      source: `schema:sqliteRebuild:objects:${tableName}`,
+    })
+    const temporaryDefinition = defineTable(temporaryTableName, rebuilt.columns)
+    const compiler = this.createCompiler()
+    const quote = (identifier: string) => this.connection.getDialect().quoteIdentifier(identifier)
+    const columns = Object.keys(rebuilt.columns).map(quote).join(', ')
+
+    await this.execute(compiler.compile(createTableOperation(temporaryDefinition)))
+    await this.connection.executeCompiled({
+      sql: `INSERT INTO ${quote(temporaryTableName)} (${columns}) SELECT ${columns} FROM ${quote(tableName)}`,
+      source: `schema:sqliteRebuild:copy:${tableName}`,
+    })
+    await this.execute(compiler.compile(dropTableOperation(tableName)))
+    await this.execute(compiler.compile(renameTableOperation(temporaryTableName, tableName)))
+
+    for (const object of schemaObjects.rows) {
+      await this.connection.executeCompiled({
+        sql: object.sql,
+        source: `schema:sqliteRebuild:restore:${object.type}:${object.name}`,
+      })
     }
   }
 

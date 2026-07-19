@@ -66,11 +66,15 @@ describe('database driver registry', () => {
   it('delegates every optional driver capability and resolves concurrent calls once', async () => {
     const callback = vi.fn(async () => 'scope-result')
     const runWithTransactionScope = vi.fn(async (run: () => Promise<unknown>) => await run()) as NonNullable<DriverAdapter['runWithTransactionScope']>
+    const migrationState = { foreignKeysWereEnabled: true }
     const adapter: DriverAdapter = {
       ...createAdapter(),
       ensureDatabaseExists: vi.fn(async () => {}),
       isDatabaseMissingError: vi.fn(() => true),
       runWithTransactionScope,
+      beforeMigrationTransaction: vi.fn(async () => migrationState),
+      validateMigrationTransaction: vi.fn(async () => {}),
+      afterMigrationTransaction: vi.fn(async () => {}),
       async introspect<TRow extends Record<string, unknown>>(): Promise<DriverQueryResult<TRow>> {
         return { rows: [{ name: 'users' } as unknown as TRow], rowCount: 1 }
       },
@@ -90,6 +94,11 @@ describe('database driver registry', () => {
     expect(factory.create).toHaveBeenCalledOnce()
     expect(deferred.isDatabaseMissingError(new Error('missing'))).toBe(true)
     await expect(deferred.runWithTransactionScope(callback)).resolves.toBe('scope-result')
+    await expect(deferred.beforeMigrationTransaction()).resolves.toBe(migrationState)
+    await deferred.validateMigrationTransaction()
+    await deferred.afterMigrationTransaction(migrationState)
+    expect(adapter.validateMigrationTransaction).toHaveBeenCalledOnce()
+    expect(adapter.afterMigrationTransaction).toHaveBeenCalledWith(migrationState)
     await expect(deferred.introspect('pragma tables')).resolves.toEqual({ rows: [{ name: 'users' }], rowCount: 1 })
     await deferred.createSavepoint?.('sp_1')
     await deferred.rollbackToSavepoint?.('sp_1')
@@ -110,6 +119,9 @@ describe('database driver registry', () => {
     expect(unresolved.isDatabaseMissingError(new Error('missing'))).toBe(false)
     await unresolved.ensureDatabaseExists()
     await expect(unresolved.runWithTransactionScope(async () => 'fallback')).resolves.toBe('fallback')
+    await expect(unresolved.beforeMigrationTransaction()).resolves.toBeUndefined()
+    await expect(unresolved.validateMigrationTransaction()).resolves.toBeUndefined()
+    await expect(unresolved.afterMigrationTransaction(undefined)).resolves.toBeUndefined()
     await expect(unresolved.introspect('select 1')).resolves.toEqual({ rows: [], rowCount: 0 })
     await expect(unresolved.createSavepoint?.('sp_1')).rejects.toThrow('does not support createSavepoint')
     await expect(unresolved.rollbackToSavepoint?.('sp_1')).rejects.toThrow('does not support rollbackToSavepoint')

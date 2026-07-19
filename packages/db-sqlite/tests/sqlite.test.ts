@@ -127,4 +127,77 @@ describe('@holo-js/db-sqlite', () => {
       await adapter.disconnect()
     }
   })
+
+  it('rebuilds SQLite tables for column changes without losing data, indexes, triggers, or foreign keys', async () => {
+    const adapter = createSQLiteAdapter()
+    const createTables = defineMigration({
+      name: '2026_05_31_000001_create_accounts',
+      async up({ schema }) {
+        await schema.createTable('accounts', (table) => {
+          table.id()
+          table.string('email').unique()
+        })
+        await schema.createTable('profiles', (table) => {
+          table.id()
+          table.foreignId('account_id').constrained('accounts')
+        })
+        await schema.createTable('account_audit', (table) => {
+          table.id()
+          table.string('email')
+        })
+      },
+    })
+    const changeEmail = defineMigration({
+      name: '2026_05_31_000002_change_account_email',
+      async up({ schema }) {
+        await schema.table('accounts', (table) => {
+          table.string('email').nullable().default('unknown').change()
+        })
+      },
+    })
+    const db = createDatabase({
+      connectionName: 'main',
+      adapter,
+      dialect: createDialect('sqlite'),
+    })
+    const migrator = createMigrationService(db, [createTables])
+
+    try {
+      await adapter.execute('PRAGMA foreign_keys = ON')
+      await migrator.migrate()
+      await adapter.execute('INSERT INTO accounts (id, email) VALUES (?, ?)', [1, 'ava@example.com'])
+      await adapter.execute('INSERT INTO profiles (id, account_id) VALUES (?, ?)', [1, 1])
+      await adapter.execute('CREATE INDEX accounts_email_lookup ON accounts (email)')
+      await adapter.execute(`CREATE TRIGGER accounts_audit_insert AFTER INSERT ON accounts
+        BEGIN INSERT INTO account_audit (email) VALUES (NEW.email); END`)
+
+      migrator.register(changeEmail)
+      await expect(migrator.migrate()).resolves.toEqual([changeEmail])
+
+      const accounts = await adapter.query<{ id: number, email: string | null }>('SELECT id, email FROM accounts ORDER BY id')
+      const profiles = await adapter.query<{ id: number, account_id: number }>('SELECT id, account_id FROM profiles ORDER BY id')
+      const columns = await adapter.query<{ name: string, notnull: number, dflt_value: string | null }>('PRAGMA table_info("accounts")')
+      const indexes = await adapter.query<{ name: string }>('PRAGMA index_list("accounts")')
+      const triggers = await adapter.query<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'accounts'")
+      const violations = await adapter.query('PRAGMA foreign_key_check')
+      const foreignKeyState = await adapter.query<{ foreign_keys: number }>('PRAGMA foreign_keys')
+
+      expect(accounts.rows).toEqual([{ id: 1, email: 'ava@example.com' }])
+      expect(profiles.rows).toEqual([{ id: 1, account_id: 1 }])
+      expect(columns.rows.find(column => column.name === 'email')).toMatchObject({
+        notnull: 0,
+        dflt_value: "'unknown'",
+      })
+      expect(indexes.rows.map(index => index.name)).toContain('accounts_email_lookup')
+      expect(triggers.rows).toEqual([{ name: 'accounts_audit_insert' }])
+      expect(violations.rows).toEqual([])
+      expect(foreignKeyState.rows).toEqual([{ foreign_keys: 1 }])
+
+      await adapter.execute('INSERT INTO accounts (id, email) VALUES (?, ?)', [2, 'new@example.com'])
+      const audit = await adapter.query<{ email: string }>('SELECT email FROM account_audit ORDER BY id')
+      expect(audit.rows).toEqual([{ email: 'new@example.com' }])
+    } finally {
+      await adapter.disconnect()
+    }
+  })
 })

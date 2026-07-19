@@ -489,6 +489,7 @@ function createSqliteDialect(): Dialect {
       jsonLength: false,
       schemaQualifiedIdentifiers: false,
       nativeUpsert: false,
+      ddlAddColumnSupport: true,
       ddlAlterSupport: false,
       introspection: true },
     quoteIdentifier(identifier: string) {
@@ -1355,11 +1356,12 @@ describe('schema service', () => {
       { name: 'id', type: 'bigint', logicalType: 'bigInteger', notNull: true, defaultValue: null, primaryKey: true },
     ])
 
-    await expect(sqliteSchema.table('users', (table) => {
+    await sqliteSchema.table('users', (table) => {
       table.string('nickname')
-    })).rejects.toThrow(
-      'SchemaService does not support adding columns for dialect "sqlite".',
-    )
+    })
+    expect(await sqliteSchema.getColumns('users')).toMatchObject([
+      { name: 'nickname', type: 'TEXT', logicalType: 'text', notNull: true, defaultValue: null, primaryKey: false },
+    ])
     await expect(sqliteSchema.table('users', (table) => {
       table.dropColumn('nickname')
     })).rejects.toThrow(
@@ -1419,7 +1421,7 @@ describe('schema service', () => {
     ])
   })
 
-  it('alters columns where the active dialect supports alter-table operations and fails closed for unsupported or unsafe alterations', async () => {
+  it('alters columns where supported and requires registered schema metadata for SQLite rebuilds', async () => {
     const postgresAdapter = new SchemaAdapter({ tables: ['users'], columns: {}, indexes: {}, indexColumns: {}, foreignKeys: {} })
     const mysqlAdapter = new SchemaAdapter({ tables: ['users'], columns: {}, indexes: {}, indexColumns: {}, foreignKeys: {} })
     const postgresSchema = createSchemaService(createDatabase({
@@ -1454,7 +1456,7 @@ describe('schema service', () => {
     await expect(sqliteSchema.table('users', (table) => {
       table.string('nickname').change()
     })).rejects.toThrow(
-      'SchemaService does not support altering columns for dialect "sqlite".',
+      'SQLite column changes require table "users" to be registered before calling change().',
     )
 
     await expect(postgresSchema.table('users', (table) => {
