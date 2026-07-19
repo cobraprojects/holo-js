@@ -100,6 +100,24 @@ Inside the migration context:
 - `schema` is the public schema builder you use for tables, columns, indexes, and foreign keys
 - `db` is the active database context when you need explicit SQL or transaction-level work alongside the migration
 
+Use the public `DB` facade when the migration also needs normal query-builder writes, such as inserting
+required reference rows after creating a table:
+
+```ts
+import { DB, defineMigration } from '@holo-js/db'
+
+export default defineMigration({
+  async up({ schema }) {
+    await schema.createTable('rooms', (table) => {
+      table.id()
+      table.string('slug').unique()
+    })
+
+    await DB.table('rooms').insert({ slug: 'general' })
+  },
+})
+```
+
 ### A complete migration example
 
 ```ts
