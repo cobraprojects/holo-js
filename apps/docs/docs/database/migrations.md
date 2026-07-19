@@ -452,6 +452,8 @@ Do not use `change()` for:
 Those use dedicated table operations instead.
 
 Use the same `.change()` API across supported databases. Holo handles the database-specific migration strategy.
+On SQLite, register the table and target column in Holo's schema registry before calling `.change()`; Holo does
+this automatically when they come from an earlier Holo migration.
 
 ### UUID, ULID, and Snowflake Keys
 

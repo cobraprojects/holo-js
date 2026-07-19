@@ -225,16 +225,21 @@ export class MigrationService {
     callback: (connection: DatabaseContext) => Promise<T>,
   ): Promise<T> {
     const adapter = this.connection.getAdapter()
-    const driverState = await adapter.beforeMigrationTransaction?.()
-    try {
-      return await this.connection.transaction(async (tx) => {
-        const result = await callback(tx)
-        await adapter.validateMigrationTransaction?.()
-        return result
-      })
-    } finally {
-      await adapter.afterMigrationTransaction?.(driverState)
-    }
+    const runWithinScope = adapter.runWithTransactionScope?.bind(adapter)
+      ?? (async <TResult>(runner: () => Promise<TResult>) => runner())
+
+    return await runWithinScope(async () => {
+      const driverState = await adapter.beforeMigrationTransaction?.()
+      try {
+        return await this.connection.transaction(async (tx) => {
+          const result = await callback(tx)
+          await adapter.validateMigrationTransaction?.()
+          return result
+        })
+      } finally {
+        await adapter.afterMigrationTransaction?.(driverState)
+      }
+    })
   }
 
   private async ensureTrackingTable(): Promise<void> {

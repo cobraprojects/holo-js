@@ -1,10 +1,12 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import Database from 'better-sqlite3'
-import type {
-  DatabaseDriverFactory,
-  DatabaseOperationOptions,
-  DriverAdapter,
-  DriverExecutionResult,
-  DriverQueryResult,
+import {
+  DatabaseError,
+  type DatabaseDriverFactory,
+  type DatabaseOperationOptions,
+  type DriverAdapter,
+  type DriverExecutionResult,
+  type DriverQueryResult,
 } from '@holo-js/db'
 
 export type { DriverAdapter, DriverExecutionResult, DriverQueryResult } from '@holo-js/db'
@@ -42,6 +44,7 @@ export class SQLiteAdapter implements DriverAdapter {
   private database?: SQLiteDatabaseLike
   private connected: boolean
   private transactionTail: Promise<void> = Promise.resolve()
+  private readonly transactionScope = new AsyncLocalStorage<boolean>()
   private readonly filename: string
   private readonly createDatabaseInstance: (filename: string) => SQLiteDatabaseLike
 
@@ -81,6 +84,10 @@ export class SQLiteAdapter implements DriverAdapter {
   }
 
   async runWithTransactionScope<T>(callback: () => Promise<T>): Promise<T> {
+    if (this.transactionScope.getStore()) {
+      return callback()
+    }
+
     const previous = this.transactionTail
     let release!: () => void
     const current = previous.then(() => new Promise<void>((resolve) => {
@@ -91,7 +98,7 @@ export class SQLiteAdapter implements DriverAdapter {
     await previous
 
     try {
-      return await callback()
+      return await this.transactionScope.run(true, callback)
     } finally {
       release()
       if (this.transactionTail === current) {
@@ -112,8 +119,9 @@ export class SQLiteAdapter implements DriverAdapter {
   async validateMigrationTransaction(): Promise<void> {
     const violations = this.getDatabase().prepare('PRAGMA foreign_key_check').all()
     if (violations.length > 0) {
-      throw new Error(
+      throw new DatabaseError(
         `SQLite migration left ${violations.length} foreign key violation${violations.length === 1 ? '' : 's'}.`,
+        'SQLITE_MIGRATION_FOREIGN_KEY_VIOLATION',
       )
     }
   }

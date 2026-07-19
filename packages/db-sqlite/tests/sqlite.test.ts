@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DatabaseError,
   createDatabase,
   createDialect,
   createMigrationService,
@@ -123,6 +124,26 @@ describe('@holo-js/db-sqlite', () => {
       )
 
       expect(tracked.rows).toEqual([{ name: migration.name }])
+    } finally {
+      await adapter.disconnect()
+    }
+  })
+
+  it('reports migration foreign-key violations as database errors', async () => {
+    const adapter = createSQLiteAdapter()
+
+    try {
+      await adapter.execute('PRAGMA foreign_keys = OFF')
+      await adapter.execute('CREATE TABLE parents (id INTEGER PRIMARY KEY)')
+      await adapter.execute('CREATE TABLE children (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parents(id))')
+      await adapter.execute('INSERT INTO children (id, parent_id) VALUES (?, ?)', [1, 999])
+
+      const error = await adapter.validateMigrationTransaction().catch(error => error)
+      expect(error).toBeInstanceOf(DatabaseError)
+      expect(error).toMatchObject({
+        code: 'SQLITE_MIGRATION_FOREIGN_KEY_VIOLATION',
+        message: 'SQLite migration left 1 foreign key violation.',
+      })
     } finally {
       await adapter.disconnect()
     }
