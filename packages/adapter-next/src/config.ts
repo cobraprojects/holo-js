@@ -45,6 +45,8 @@ const HOLO_TRANSPILED_PACKAGES = [
 ] as const
 const HOLO_TRANSPILED_PACKAGE_SET = new Set<string>(HOLO_TRANSPILED_PACKAGES)
 const NEXT_AUTH_INTERRUPTS_ENV = '__NEXT_EXPERIMENTAL_AUTH_INTERRUPTS'
+const CORE_RUNTIME_CHUNK_PATH = /packages[\\/]core[\\/]dist[\\/].+\.mjs$/
+const OPTIONAL_RUNTIME_IMPORT_ISSUE = /Module not found: Can't resolve (?:'@holo-js\/storage-s3'|<dynamic>)/
 
 type PackageDependencyField = 'dependencies' | 'devDependencies' | 'optionalDependencies' | 'peerDependencies'
 type PackageDependencyMap = Readonly<Record<string, string>>
@@ -199,6 +201,10 @@ export function withHolo<TConfig extends NextConfig>(nextConfig: TConfig = {} as
     },
     ignoreIssue: [
       ...existingIgnoreIssue,
+      {
+        path: CORE_RUNTIME_CHUNK_PATH,
+        title: OPTIONAL_RUNTIME_IMPORT_ISSUE,
+      },
       {
         path: /next\.config\.(ts|mjs|js)$/,
         title: /Encountered unexpected file in NFT list/,

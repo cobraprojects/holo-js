@@ -287,6 +287,10 @@ export default defineConfig({
     expect(config.turbopack?.ignoreIssue).toEqual([
       existingRule,
       {
+        path: /packages[\\/]core[\\/]dist[\\/].+\.mjs$/,
+        title: /Module not found: Can't resolve (?:'@holo-js\/storage-s3'|<dynamic>)/,
+      },
+      {
         path: /next\.config\.(ts|mjs|js)$/,
         title: /Encountered unexpected file in NFT list/,
       },
