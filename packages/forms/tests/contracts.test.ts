@@ -809,6 +809,10 @@ describe('@holo-js/forms contracts', () => {
     })).rejects.toThrow('Security-aware safeParse() options require a Request or request-like event input.')
   })
 
+  it('uses Next.js 16\'s resolvable headers module for server actions', () => {
+    expect(formsInternals.nextHeadersModuleSpecifier).toBe('next/headers.js')
+  })
+
   it('rejects security-aware FormData when ambient Next headers are unavailable', async () => {
     const login = schema({
       email: field.string().required().email(),

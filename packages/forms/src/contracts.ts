@@ -97,7 +97,8 @@ type FormsRuntimeGlobal = typeof globalThis & {
   readonly __holoFormsNextHeadersImport__?: () => Promise<unknown>
 }
 
-const nextHeadersModuleSpecifier = 'next/headers'
+const nextHeadersModuleSpecifier = 'next/headers.js'
+
 const h3RawBodySymbol = Symbol.for('h3RawBody')
 
 type NodeRequestLikeObject = {
@@ -866,6 +867,7 @@ export async function validate<TShape extends SchemaInputShape>(
 export const formsInternals = {
   createSubmission,
   isRequestLikeHeaders,
+  nextHeadersModuleSpecifier,
   normalizeRequestLikeInput,
   normalizeStatus,
   normalizeRequestHeaders,
