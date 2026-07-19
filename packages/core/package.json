@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/core",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Holo-JS Framework - Portable runtime core",
   "type": "module",
   "license": "MIT",

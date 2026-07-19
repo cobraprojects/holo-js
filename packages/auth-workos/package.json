@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/auth-workos",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Holo-JS Framework - WorkOS auth integration contracts",
   "type": "module",
   "license": "MIT",

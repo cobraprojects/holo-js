@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/db-sqlite",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Holo-JS Framework - SQLite database adapter",
   "type": "module",
   "license": "MIT",
