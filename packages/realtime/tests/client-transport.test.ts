@@ -18,12 +18,14 @@ function createSocketHarness(options: {
   readonly autoOpen?: boolean
 } = {}): {
   readonly listeners: Map<SocketEvent, Set<SocketListener>>
+  readonly closedWebsocketUrls: string[]
   readonly sentFrames: string[]
   readonly websocketUrls: string[]
   emit(event: SocketEvent, payload?: Record<string, unknown>): void
   install(): void
 } {
   const listeners = new Map<SocketEvent, Set<SocketListener>>()
+  const closedWebsocketUrls: string[] = []
   const sentFrames: string[] = []
   const websocketUrls: string[] = []
 
@@ -38,7 +40,9 @@ function createSocketHarness(options: {
       sentFrames.push(value)
     }
 
-    close(): void {}
+    close(): void {
+      closedWebsocketUrls.push(this.url)
+    }
 
     addEventListener(event: SocketEvent, listener: SocketListener): void {
       const eventListeners = listeners.get(event) ?? new Set<SocketListener>()
@@ -52,6 +56,7 @@ function createSocketHarness(options: {
 
   return {
     listeners,
+    closedWebsocketUrls,
     sentFrames,
     websocketUrls,
     emit(event, payload) {
@@ -314,6 +319,31 @@ describe('@holo-js/realtime broadcast client transport', () => {
 
     expect(harness.websocketUrls).toHaveLength(1)
     firstUnsubscribe()
+    expect(harness.closedWebsocketUrls).toEqual([])
+    secondUnsubscribe()
+    expect(harness.closedWebsocketUrls).toEqual(['ws://localhost:8080/app/app-key'])
+  })
+
+  it('reconnects after the final subscription leaves so the next connection uses current authentication', async () => {
+    const harness = createSocketHarness()
+    harness.install()
+    stubBroadcastConfig()
+
+    const transport = realtimeClientInternals.createBroadcastRealtimeTransport()
+    const firstUnsubscribe = transport.subscribe('posts.list', {}, () => {}, () => {})
+    await vi.waitUntil(() => harness.sentFrames.length === 1)
+    firstUnsubscribe()
+
+    expect(harness.closedWebsocketUrls).toEqual(['ws://localhost:8080/app/app-key'])
+
+    const secondUnsubscribe = transport.subscribe('posts.list', {}, () => {}, () => {})
+    await vi.waitUntil(() => harness.websocketUrls.length === 2)
+    await vi.waitUntil(() => harness.sentFrames.length === 3)
+
+    expect(harness.websocketUrls).toEqual([
+      'ws://localhost:8080/app/app-key',
+      'ws://localhost:8080/app/app-key',
+    ])
     secondUnsubscribe()
   })
 

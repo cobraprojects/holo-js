@@ -130,6 +130,16 @@ export function createBroadcastRealtimeTransport(options: {
   let connecting: Promise<RealtimeWebSocketLike> | undefined
   let nextRequestId = 0
 
+  const closeSocketIfIdle = (): void => {
+    if (subscriptions.size > 0 || pendingMutations.size > 0 || socket?.readyState !== 1) {
+      return
+    }
+
+    const idleSocket = socket
+    socket = undefined
+    idleSocket.close()
+  }
+
   const rejectPending = (error: unknown): void => {
     for (const request of pendingMutations.values()) {
       request.reject(error)
@@ -159,12 +169,14 @@ export function createBroadcastRealtimeTransport(options: {
       pendingMutations.get(id)?.reject(error)
       pendingMutations.delete(id)
       subscriptions.get(id)?.onError(error)
+      closeSocketIfIdle()
       return
     }
 
     if (eventName === 'holo:realtime:result') {
       pendingMutations.get(id)?.resolve(data as RealtimeWireResult<unknown>)
       pendingMutations.delete(id)
+      closeSocketIfIdle()
       return
     }
 
@@ -231,6 +243,9 @@ export function createBroadcastRealtimeTransport(options: {
         })
         nextSocket.addEventListener('message', handleMessage)
         nextSocket.addEventListener('close', () => {
+          if (socket !== nextSocket) {
+            return
+          }
           socket = undefined
           connecting = undefined
           const error = new Error(unavailableTransportMessage)
@@ -238,6 +253,9 @@ export function createBroadcastRealtimeTransport(options: {
           rejectPending(error)
         })
         nextSocket.addEventListener('error', () => {
+          if (socket !== nextSocket) {
+            return
+          }
           socket = undefined
           connecting = undefined
           const error = new Error(unavailableTransportMessage)
@@ -260,6 +278,10 @@ export function createBroadcastRealtimeTransport(options: {
   ): Promise<void> => {
     try {
       const connectedSocket = await connect()
+      if (!subscriptions.has(id)) {
+        closeSocketIfIdle()
+        return
+      }
       connectedSocket.send(JSON.stringify({
         event: 'holo:realtime',
         data: {
@@ -359,6 +381,7 @@ export function createBroadcastRealtimeTransport(options: {
             },
           }))
         }
+        closeSocketIfIdle()
       }
     },
   }
