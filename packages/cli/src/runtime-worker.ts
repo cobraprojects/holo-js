@@ -14,6 +14,7 @@ import {
   type TableDefinition,
 } from '@holo-js/db'
 import { loadProjectDatabaseDrivers } from './database-drivers'
+import { replayRanMigrationsInDryRunScope } from './runtime-schema-hydration'
 
 type RuntimeConfigPayload = Parameters<typeof resolveRuntimeConnectionManagerOptions>[0]
 
@@ -65,11 +66,13 @@ type FreshDropSchema = {
 }
 
 type DryRunSchemaConnection = {
+  getConnectionName(): string
+  getDriver(): ReturnType<ReturnType<typeof resolveRuntimeConnectionManagerOptions>['connection']>['getDriver'] extends () => infer TDriver ? TDriver : never
   getDialect(): ReturnType<ReturnType<typeof resolveRuntimeConnectionManagerOptions>['connection']>['getDialect'] extends () => infer TDialect ? TDialect : never
   getCapabilities(): ReturnType<ReturnType<typeof resolveRuntimeConnectionManagerOptions>['connection']>['getCapabilities'] extends () => infer TCapabilities ? TCapabilities : never
   getSchemaName(): string | undefined
   getSchemaRegistry(): ReturnType<ReturnType<typeof resolveRuntimeConnectionManagerOptions>['connection']>['getSchemaRegistry'] extends () => infer TRegistry ? TRegistry : never
-  executeCompiled(): Promise<undefined>
+  executeCompiled(): Promise<{ affectedRows: 0 }>
   introspectCompiled(): Promise<{ rows: never[], rowCount: 0 }>
   transaction<TResult>(callback: (connection: DryRunSchemaConnection) => TResult | Promise<TResult>): Promise<TResult>
 }
@@ -280,21 +283,24 @@ async function hydrateGeneratedSchemaFromRanMigrations(
     clear: () => hydratedRegistry.clear(),
   }
   const dryRunConnection: DryRunSchemaConnection = {
+    getConnectionName: () => realConnection.getConnectionName(),
+    getDriver: () => realConnection.getDriver(),
     getDialect: () => realConnection.getDialect(),
     getCapabilities: () => realConnection.getCapabilities(),
     getSchemaName: () => realConnection.getSchemaName(),
     getSchemaRegistry: () => replayRegistry as never,
-    executeCompiled: async () => undefined,
+    executeCompiled: async () => ({ affectedRows: 0 }),
     introspectCompiled: async () => ({ rows: [], rowCount: 0 }),
     transaction: async <TResult>(callback: (connection: typeof dryRunConnection) => TResult | Promise<TResult>) => callback(dryRunConnection),
   }
   const schema = createSchemaService(dryRunConnection as never)
 
-  for (const migration of [...migrations].sort((left, right) => left.name.localeCompare(right.name))) {
-    if (ranNames.has(migration.name)) {
-      await migration.up({ db: dryRunConnection, schema } as never)
-    }
-  }
+  await replayRanMigrationsInDryRunScope(
+    dryRunConnection as never,
+    migrations,
+    ranNames,
+    { db: dryRunConnection, schema },
+  )
 
   for (const table of hydratedRegistry.list()) {
     realConnection.getSchemaRegistry().replace(table)
