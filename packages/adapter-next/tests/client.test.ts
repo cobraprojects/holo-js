@@ -38,6 +38,17 @@ function readPromise<TValue>(promise: PromiseLike<TValue>): TValue {
   throw promise
 }
 
+function captureSuspensePromise(callback: () => unknown): Promise<unknown> {
+  try {
+    callback()
+  } catch (error) {
+    if (error instanceof Promise) return error
+    throw error
+  }
+
+  throw new Error('Expected rendering to suspend with a Promise.')
+}
+
 function createReactMock(overrides: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
   return {
     cache<TFunction extends (...args: never[]) => unknown>(fn: TFunction) {
@@ -473,10 +484,8 @@ describe('@holo-js/adapter-next client', () => {
       },
     })
 
-    expect(listPosts()).toBeUndefined()
-    await vi.waitFor(() => {
-      expect(listPosts()).toEqual([{ id: 1, title: 'First' }])
-    })
+    const pendingSnapshot = captureSuspensePromise(() => listPosts())
+    await pendingSnapshot
     expect(listPosts()).toEqual([{ id: 1, title: 'First' }])
     expect(listPosts()).toEqual([{ id: 1, title: 'First' }])
 
@@ -485,7 +494,7 @@ describe('@holo-js/adapter-next client', () => {
     resetRealtimeClientRuntime()
   })
 
-  it('loads the first realtime query snapshot after the initial client render', async () => {
+  it('suspends the initial client render until the first realtime query snapshot loads', async () => {
     vi.doMock('react', () => createReactMock({
       useEffect(effect: () => void | (() => void)) {
         return effect()
@@ -543,10 +552,9 @@ describe('@holo-js/adapter-next client', () => {
       },
     })
 
-    expect(listPosts()).toBeUndefined()
-    await vi.waitFor(() => {
-      expect(listPosts()).toEqual([{ id: 1, title: 'First' }])
-    })
+    const pendingSnapshot = captureSuspensePromise(() => listPosts())
+    await pendingSnapshot
+    expect(listPosts()).toEqual([{ id: 1, title: 'First' }])
     resetRealtimeClientRuntime()
   })
 
@@ -638,13 +646,12 @@ describe('@holo-js/adapter-next client', () => {
         handler: async () => [],
       })
 
-      expect(listPosts()).toBeUndefined()
-      await vi.waitFor(() => {
-        expect(globalThis.fetch).toHaveBeenCalledWith(
-          '/holo/realtime/query',
-          expect.objectContaining({ method: 'POST' }),
-        )
-      })
+      const pendingSnapshot = captureSuspensePromise(() => listPosts())
+      await expect(pendingSnapshot).rejects.toThrow('Only the author can update posts.')
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        '/holo/realtime/query',
+        expect.objectContaining({ method: 'POST' }),
+      )
       await vi.waitFor(() => {
         expect(adapterNextRealtimeInternals.getRealtimeErrorSnapshot()).toBeDefined()
       })
@@ -726,10 +733,9 @@ describe('@holo-js/adapter-next client', () => {
       },
     })
 
-    expect(listPosts()).toBeUndefined()
-    await vi.waitFor(() => {
-      expect(listPosts()).toEqual([])
-    })
+    const pendingSnapshot = captureSuspensePromise(() => listPosts())
+    await pendingSnapshot
+    expect(listPosts()).toEqual([])
     await expect(renamePost()).rejects.toThrow('Only the author can update posts.')
     await vi.waitFor(() => {
       expect(adapterNextRealtimeInternals.getRealtimeErrorSnapshot()).toBeDefined()

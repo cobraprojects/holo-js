@@ -8,7 +8,7 @@ export default function RealtimePostsDemo() {
   const [selectedPostId, setSelectedPostId] = useState<number | null>(null)
   const [title, setTitle] = useState('')
   const [isPending, startTransition] = useTransition()
-  const posts = data?.posts ?? []
+  const posts = data.posts
 
   function selectPost(post: typeof posts[number]) {
     setSelectedPostId(post.id)

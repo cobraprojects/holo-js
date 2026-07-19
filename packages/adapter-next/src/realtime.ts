@@ -223,7 +223,11 @@ function useReactiveRealtimeQuery<TDefinition extends RealtimeQueryDefinition>(
     getSnapshot,
   )
 
-  return snapshot?.data as RealtimeResultFor<TDefinition>
+  if (!snapshot) {
+    return use(store.load()).data
+  }
+
+  return snapshot.data
 }
 
 if (isBrowserRuntime()) {
