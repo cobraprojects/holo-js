@@ -1,6 +1,6 @@
 {
   "name": "@holo-js/queue",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Holo-JS Framework - queue contracts and config helpers",
   "type": "module",
   "license": "MIT",
