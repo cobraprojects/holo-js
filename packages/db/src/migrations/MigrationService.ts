@@ -134,7 +134,7 @@ export class MigrationService {
       for (const migration of pending) {
         const log = this.createMigrationLog(migration.name, 'up', nextBatch)
         await this.runMigrationLifecycle(log, async () => {
-          await this.connection.transaction(async (tx) => {
+          await this.runMigrationTransaction(async (tx) => {
             const context = this.createContext(tx)
             await migration.up(context)
             await new TableQueryBuilder(migrationsTable, tx).insert({
@@ -194,7 +194,7 @@ export class MigrationService {
 
         const log = this.createMigrationLog(record.name, 'down', record.batch)
         await this.runMigrationLifecycle(log, async () => {
-          await this.connection.transaction(async (tx) => {
+          await this.runMigrationTransaction(async (tx) => {
             const context = this.createContext(tx)
             if (migration.down) {
               await migration.down(context)
@@ -219,6 +219,27 @@ export class MigrationService {
       scope: 'adapter',
       allowsConcurrentMigrations: false,
     }
+  }
+
+  private async runMigrationTransaction<T>(
+    callback: (connection: DatabaseContext) => Promise<T>,
+  ): Promise<T> {
+    const adapter = this.connection.getAdapter()
+    const runWithinScope = adapter.runWithTransactionScope?.bind(adapter)
+      ?? (async <TResult>(runner: () => Promise<TResult>) => runner())
+
+    return await runWithinScope(async () => {
+      const driverState = await adapter.beforeMigrationTransaction?.()
+      try {
+        return await this.connection.transaction(async (tx) => {
+          const result = await callback(tx)
+          await adapter.validateMigrationTransaction?.()
+          return result
+        })
+      } finally {
+        await adapter.afterMigrationTransaction?.(driverState)
+      }
+    })
   }
 
   private async ensureTrackingTable(): Promise<void> {

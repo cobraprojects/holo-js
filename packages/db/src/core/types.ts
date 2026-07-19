@@ -97,6 +97,9 @@ export interface DriverAdapter {
   isDatabaseMissingError?(error: unknown): boolean
   ensureDatabaseExists?(): Promise<void>
   runWithTransactionScope?<T>(callback: () => Promise<T>): Promise<T>
+  beforeMigrationTransaction?(): Promise<unknown>
+  validateMigrationTransaction?(): Promise<void>
+  afterMigrationTransaction?(state: unknown): Promise<void>
   introspect?<TRow extends Record<string, unknown> = Record<string, unknown>>(
     sql: string,
     bindings?: readonly unknown[],

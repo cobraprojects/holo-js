@@ -66,6 +66,9 @@ export class DeferredDatabaseDriverAdapter implements DriverAdapter {
   async ensureDatabaseExists(): Promise<void> { await (await this.resolve()).ensureDatabaseExists?.() }
   isDatabaseMissingError(error: unknown): boolean { return this.adapter?.isDatabaseMissingError?.(error) ?? false }
   async runWithTransactionScope<T>(callback: () => Promise<T>): Promise<T> { return (await this.resolve()).runWithTransactionScope?.(callback) ?? callback() }
+  async beforeMigrationTransaction(): Promise<unknown> { return await (await this.resolve()).beforeMigrationTransaction?.() }
+  async validateMigrationTransaction(): Promise<void> { await (await this.resolve()).validateMigrationTransaction?.() }
+  async afterMigrationTransaction(state: unknown): Promise<void> { await (await this.resolve()).afterMigrationTransaction?.(state) }
   async introspect<TRow extends Record<string, unknown> = Record<string, unknown>>(sql: string, bindings?: readonly unknown[], options?: DatabaseOperationOptions): Promise<DriverQueryResult<TRow>> {
     const adapter = await this.resolve()
     return adapter.introspect ? adapter.introspect<TRow>(sql, bindings, options) : adapter.query<TRow>(sql, bindings, options)

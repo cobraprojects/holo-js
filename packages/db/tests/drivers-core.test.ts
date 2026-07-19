@@ -355,6 +355,9 @@ describe('driver adapters', () => {
     const order: string[] = []
     const first = adapter.runWithTransactionScope(async () => {
       order.push('first:start')
+      await adapter.runWithTransactionScope(async () => {
+        order.push('first:nested')
+      })
       await new Promise<void>((resolveDelay) => {
         setTimeout(resolveDelay, 0)
       })
@@ -367,7 +370,7 @@ describe('driver adapters', () => {
     })
 
     await expect(Promise.all([first, second])).resolves.toEqual(['first', 'second'])
-    expect(order).toEqual(['first:start', 'first:end', 'second'])
+    expect(order).toEqual(['first:start', 'first:nested', 'first:end', 'second'])
 
     await adapter.beginTransaction({ mode: 'immediate' })
     await adapter.beginTransaction({ mode: 'exclusive' })
